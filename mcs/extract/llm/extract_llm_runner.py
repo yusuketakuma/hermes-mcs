@@ -528,6 +528,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     return result
             except cloud_client.CloudNotSent as error:
                 _CALL_NOTES.defer_reason = cloud_client.not_sent_reason(error)
+                # Only the unit's own monotonic observations decide (never the reason text).
+                r["_replacement_eligible"] = provider.replacement_eligible is True
                 if _CALL_NOTES.defer_reason == "checkpoint_unverified":
                     meta["_quality_hold"] = True
                 return _DEFERRED
@@ -941,70 +943,85 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # drainer/tick makes the conflict-update a no-op, so two workers
     # never pay for the same LLM call (F14)
     claimed = []
-    try:
-        for index, candidate in enumerate(rows if cloud_only else jobs):
-            if disk_low:
-                break
-            if cloud_only:
-                if time.monotonic() >= deadline:
+    visit = [0]   # next unvisited candidate: each is visited at most once per pass
+    refilled = 0  # candidates claimed into slots freed by a replacement-eligible refusal
+
+    def _claim_next(wanted, *, release_on_error):
+        """Claim from the next unvisited candidate on, at most ``wanted`` in the cloud
+        pass; returns the newly claimed. A later same-pass wave leaves error cleanup
+        to the execution finally that already owns every claim."""
+        nonlocal skipped, context_blocked, deferred
+        first = len(claimed)
+        source = rows if cloud_only else jobs
+        try:
+            while visit[0] < len(source):
+                index, candidate = visit[0], source[visit[0]]
+                visit[0] += 1
+                if disk_low:
                     break
-                # Lookahead replenishes lost claims without freezing unused attempt frames.
-                row_reasons = {}
-                prepared, row_skipped, row_blocked = _prepare_jobs(
-                    ledger, [candidate], target, prefilter, allow_cloud=allow_cloud,
-                    background=background, cloud_only=True, load_checkpoints=False, deadline=deadline,
-                    blocked_reasons=row_reasons)
-                skipped += row_skipped
-                context_blocked += row_blocked
-                deferred += row_blocked
-                for reason, count in row_reasons.items():
-                    _defer_note(reason, count=count)
-                _defer_note("prepare_blocked", count=row_blocked - sum(row_reasons.values()))
-                if not prepared:
-                    if any(reason in cloud_backlog._HOLD_DEFER_REASONS for reason in row_reasons):
-                        # An unverifiable owned head keeps a bounded claim —
-                        # the next pass sees the tail instead of re-blocking.
-                        _claim(ledger, candidate, _PREPARE_HOLD_S)
-                    if prioritize_patients and time.monotonic() < deadline:
-                        _cloud_priority_discard(ledger, candidate['message_id'])
+                if cloud_only:
+                    if time.monotonic() >= deadline:
+                        break
+                    # Lookahead replenishes lost claims without freezing unused attempt frames.
+                    row_reasons = {}
+                    prepared, row_skipped, row_blocked = _prepare_jobs(
+                        ledger, [candidate], target, prefilter, allow_cloud=allow_cloud,
+                        background=background, cloud_only=True, load_checkpoints=False, deadline=deadline,
+                        blocked_reasons=row_reasons)
+                    skipped += row_skipped
+                    context_blocked += row_blocked
+                    deferred += row_blocked
+                    for reason, count in row_reasons.items():
+                        _defer_note(reason, count=count)
+                    _defer_note("prepare_blocked", count=row_blocked - sum(row_reasons.values()))
+                    if not prepared:
+                        if any(reason in cloud_backlog._HOLD_DEFER_REASONS for reason in row_reasons):
+                            # An unverifiable owned head keeps a bounded claim —
+                            # the next pass sees the tail instead of re-blocking.
+                            _claim(ledger, candidate, _PREPARE_HOLD_S)
+                        if prioritize_patients and time.monotonic() < deadline:
+                            _cloud_priority_discard(ledger, candidate['message_id'])
+                        continue
+                    index = len(jobs)
+                    candidate = prepared[0]
+                    jobs.append(candidate)
+                    metas.append(None)
+                    if time.monotonic() >= deadline:
+                        deferred += 1
+                        _defer_note("deadline")
+                        break
+                r, ctx, saved, hints, qc = candidate
+                if circuit_s and r.get("_cloud_mode") != "on":
                     continue
-                index = len(jobs)
-                candidate = prepared[0]
-                jobs.append(candidate)
-                metas.append(None)
-                if time.monotonic() >= deadline:
-                    deferred += 1
-                    _defer_note("deadline")
-                    break
-            r, ctx, saved, hints, qc = candidate
-            if circuit_s and r.get("_cloud_mode") != "on":
-                continue
-            lease = _claim(ledger, r, max(_EXTRACT_LEASE_S,
-                                          deadline - time.monotonic() + TIMEOUT + 30))
-            if lease is not None:
-                leases[index] = lease
-                claimed.append((index, r, ctx, saved, hints, qc, lease))
-                # Preparation precedes the claim. Another owner may have
-                # advanced a checkpoint in that interval, so read again only
-                # after this worker owns the lease.
-                saved = _capture_checkpoint_state(ledger.db, r, ctx)
-                jobs[index] = (r, ctx, saved, hints, qc)
-                claimed[-1] = (index, r, ctx, saved, hints, qc, lease)
-                # the v3 pass performs the v1/v2 (rule) work simultaneously —
-                # claimed rows mint/refresh their extract_v1 artifact here so
-                # speed-lane readers never wait on the LLM queue
-                _ensure_v1(ledger, r, hints)
-                if cloud_only and len(claimed) >= limit:
-                    break
-            elif cloud_only and prioritize_patients and time.monotonic() < deadline:
-                _cloud_priority_discard(ledger, r['message_id'])
-    except BaseException:
-        # Preparation precedes inference's finally; release its committed
-        # claims too when a rule write fails or the worker is interrupted.
-        if not cloud_only or _writer_current(full=True):
-            for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
-                _release(ledger, r, lease)
-        raise
+                lease = _claim(ledger, r, max(_EXTRACT_LEASE_S,
+                                              deadline - time.monotonic() + TIMEOUT + 30))
+                if lease is not None:
+                    leases[index] = lease
+                    claimed.append((index, r, ctx, saved, hints, qc, lease))
+                    # Preparation precedes the claim. Another owner may have
+                    # advanced a checkpoint in that interval, so read again only
+                    # after this worker owns the lease.
+                    saved = _capture_checkpoint_state(ledger.db, r, ctx)
+                    jobs[index] = (r, ctx, saved, hints, qc)
+                    claimed[-1] = (index, r, ctx, saved, hints, qc, lease)
+                    # the v3 pass performs the v1/v2 (rule) work simultaneously —
+                    # claimed rows mint/refresh their extract_v1 artifact here so
+                    # speed-lane readers never wait on the LLM queue
+                    _ensure_v1(ledger, r, hints)
+                    if cloud_only and len(claimed) - first >= wanted:
+                        break
+                elif cloud_only and prioritize_patients and time.monotonic() < deadline:
+                    _cloud_priority_discard(ledger, r['message_id'])
+        except BaseException:
+            # Preparation precedes inference's finally; release its committed
+            # claims too when a rule write fails or the worker is interrupted.
+            if release_on_error and (not cloud_only or _writer_current(full=True)):
+                for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
+                    _release(ledger, r, lease)
+            raise
+        return claimed[first:]
+
+    _claim_next(limit, release_on_error=True)
 
     if cloud_only:
         parallel = pool_workers > 1 and len(claimed) > 1
@@ -1148,14 +1165,21 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                 futs[nfut] = ("single", [tup])
                                 pending.add(nfut)
         else:
-            for kind, payload in units:
-                if kind == "single":
-                    index, r, ctx, saved, hints, qc, lease = payload
-                    d, chunks_out = _extract(
-                        (index, (r, ctx, saved, hints, qc)))
-                    _handle(r, ctx, d, metas[index], lease, chunks_out,
-                            qc)
-                else:
+            wave = units
+            while wave:
+                freed = 0
+                for kind, payload in wave:
+                    if kind == "single":
+                        index, r, ctx, saved, hints, qc, lease = payload
+                        d, chunks_out = _extract(
+                            (index, (r, ctx, saved, hints, qc)))
+                        _handle(r, ctx, d, metas[index], lease, chunks_out,
+                                qc)
+                        # Handler and cleanup are done: a verified refusal of an already
+                        # settled same request that began no work frees its slot.
+                        if cloud_only and d is _DEFERRED and r.get("_replacement_eligible") is True:
+                            freed += 1
+                        continue
                     res = _exec_batch(payload)
                     for tup in _handle_batch(*res[:3], payload,
                                              *res[3:]):
@@ -1164,6 +1188,14 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             (index, (r, ctx, saved, hints, qc)))
                         _handle(r, ctx, d, metas[index], lease,
                                 chunks_out, qc)
+                wave = []
+                if (freed and time.monotonic() < deadline and not lock_lost and not endpoint_down
+                        and _writer_current(full=True)):
+                    # Same original deadline and finite lookahead; the next unvisited
+                    # candidates take the freed slots (claims stay owned by this pass).
+                    refill = _claim_next(freed, release_on_error=False)
+                    refilled += len(refill)
+                    wave = _plan_units(refill, batch_k)
         if pending_writes:
             tail_lock = (_write_lock(per_write_lock, wait_s=write_wait_s, deadline=deadline)
                          if cloud_only else lock(per_write_lock))
@@ -1219,7 +1251,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             _release(ledger, r, lease)
     if writer_stopped:
         return {'done': done, 'failed': failed, 'held_prior': held_prior, 'left': None,
-                'carried': carried, 'carry': carry_out, 'deferred': deferred,
+                'carried': carried, 'carry': carry_out, 'deferred': deferred, 'refilled': refilled,
                 'defer_reasons': dict(defer_reasons),
                 'pids': sorted(done_pids), 'updated': True}
     for r, local_result, ctx, unit in shadow_tasks:
@@ -1275,7 +1307,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             "left_estimate": max(0, estimate["left"] - estimate["done"]) if estimate is not None else None,
             "left_estimate_age_s": round(time.monotonic() - estimate["at"]) if estimate is not None else None,
             "fresh_selected": fresh_selected,
-            "selected": selected_count, "deferred": deferred,
+            "selected": selected_count, "deferred": deferred, "refilled": refilled,
             "defer_reasons": dict(defer_reasons),
             "context_blocked": context_blocked,
             "skipped": skipped, "lock_lost": lock_lost,

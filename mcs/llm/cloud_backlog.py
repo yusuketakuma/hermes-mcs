@@ -583,6 +583,9 @@ def worker(parent, *, index=None, context_only=False):
                         if sum(reasons.values()) != total:
                             reasons = {"unclassified": total}
                         record["defer_reasons"] = reasons
+                    refilled = result.get("refilled")
+                    if type(refilled) is int and 0 <= refilled <= 64:   # the extract pass's finite lookahead
+                        record["refilled"] = refilled
                     if type(result.get("disk_low")) is bool:
                         record["disk_low"] = result["disk_low"]
                     calls = result.get("llm_calls")

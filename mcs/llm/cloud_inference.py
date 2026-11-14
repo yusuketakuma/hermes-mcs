@@ -142,6 +142,11 @@ class CloudInferenceUnit:
         self.route, self.project_id, self.unit_key = route, project_id, unit_key
         self._possibly_sent = False
         self._unresolved = False
+        # Monotonic in-memory observations for a same-pass replacement: a verified
+        # repeat refusal, and whether any effectful step (recovered answer used,
+        # request slot / reservation / HTTP entered) ever began. Never reset.
+        self._verified_repeat = False
+        self._effect_started = False
         self.discard_reason = discard_reason
         self.ledger = ledger
         self.deadline = deadline
@@ -239,6 +244,7 @@ class CloudInferenceUnit:
             return child
         self.spawn_quality_repair = spawn_quality_repair
         def reserve(body, timeout):
+            self._effect_started = True   # before anything can commit and then fail to return
             # every new attempt (retry, repair, next chunk) is judged against the
             # budget in force now, not the one the unit started under
             try:
@@ -327,6 +333,17 @@ class CloudInferenceUnit:
         """Keep ambiguous sends closed across local fallback and child repair calls."""
         return self._unresolved or any(child.unresolved for child in self._children)
 
+    @property
+    def effect_started(self):
+        return self._effect_started or any(child.effect_started for child in self._children)
+
+    @property
+    def replacement_eligible(self):
+        """This whole unit (every chunk and repair child) only met the guard's verified
+        refusal of an already settled same request and never began new work, so a
+        same-pass runner may give its slot to the next candidate. Grants no resend."""
+        return self._verified_repeat and not self.effect_started
+
     def __call__(self, prompt, *, deadline, max_tokens, **unused):
         try:
             http_deadline = min(self.deadline, deadline) - COMMIT_MARGIN
@@ -356,6 +373,7 @@ class CloudInferenceUnit:
                     raise cloud_client.CloudNotSent("budget_exceeded", "cloud_unit_unresolved") from None
             saved = self.dispatch(recover, result=True)
             if saved is not None:
+                self._effect_started = True   # a recovered paid answer is used
                 evidence, answer = saved
                 answer["reused_response"] = True
                 self.possibly_sent = True
@@ -378,12 +396,15 @@ class CloudInferenceUnit:
                     except (ValueError, TypeError, KeyError, sqlite3.Error, cloud_client.CloudError) as error:
                         _history_read_error("request_send_block_reason", error)
                         self.possibly_sent = True
+                        if getattr(error, "verified_repeat", False) is True:
+                            self._verified_repeat = True
                         raise cloud_client.CloudNotSent("budget_exceeded", "cloud_unit_unresolved") from None
                 if self.dispatch(send_block_reason, result=True):
                     # Only a history-checked fresh request may use caller local fallback.
                     self.commit_guard()
                     raise CloudFallback("cloud_send_blocked")
                 capacity = _current_cloud_settings()["max_concurrency"]
+                self._effect_started = True   # admission to new request work
                 with cloud_backlog.request_slot(HOME, capacity) as held:
                     if not held:
                         raise CloudBusy("cloud_capacity")

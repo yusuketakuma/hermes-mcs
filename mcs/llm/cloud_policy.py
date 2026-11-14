@@ -790,10 +790,14 @@ def unbound_member_history(ledger, *, route, project_id, message_id, unit_key, t
 # the history observation. It never changes the exception, its detail or any decision.
 HISTORY_REFUSALS = frozenset({"repeat_success", "repeat_failed", "repeat_unsettled",
                               "result_missing", "disposition", "receipt_inconsistent"})
+# The guard's final branch after the one validated result of the same request. Only
+# _classified sets verified_repeat, so a converted or foreign exception never carries it.
+REPEAT_REFUSALS = frozenset({"repeat_success", "repeat_failed", "repeat_unsettled"})
 
 
 def _classified(error, refusal):
     error.history_refusal = refusal
+    error.verified_repeat = refusal in REPEAT_REFUSALS
     return error
 
 
