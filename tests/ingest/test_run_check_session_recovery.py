@@ -376,6 +376,8 @@ def test_tick_recovers_session_mid_run_and_notifies(tmp_path, monkeypatch,
     for name in ("ensure_dirs", "recover", "sweep", "publish_flags",
                  "gc", "clear_snapshot_dirty"):
         monkeypatch.setattr((notify_spool if name in {'recover', 'publish_flags', 'ensure_dirs'} else notify_cards), name, lambda *a, **k: None)
+    # sweep returns its result dict (run_check reads result["card_sweep"]["failed"])
+    monkeypatch.setattr(notify_cards, "sweep", lambda *a, **k: {})
     monkeypatch.setattr(notify_cmds, "drain_int_commands",
                         lambda *a, **k: None)
     monkeypatch.setattr(self_identity, "record_self_profile", lambda *a: False)
@@ -481,6 +483,8 @@ def test_main_relogin_budget_covers_run_boundary(tmp_path, monkeypatch,
     for name in ("ensure_dirs", "recover", "sweep", "publish_flags",
                  "gc", "clear_snapshot_dirty"):
         monkeypatch.setattr((notify_spool if name in {'recover', 'publish_flags', 'ensure_dirs'} else notify_cards), name, lambda *a, **k: None)
+    # sweep returns its result dict (run_check reads result["card_sweep"]["failed"])
+    monkeypatch.setattr(notify_cards, "sweep", lambda *a, **k: {})
     monkeypatch.setattr(notify_cmds, "drain_int_commands",
                         lambda *a, **k: None)
     monkeypatch.setattr(self_identity, "record_self_profile", lambda *a: False)
