@@ -63,12 +63,69 @@ def test_all_candidates_refused_is_finite_and_sends_nothing(cloud_candidates, mo
     assert report["deferred"] >= len(seen)
 
 
-def test_a_parallel_pass_keeps_its_original_slots(cloud_candidates, monkeypatch):
+def _in_flight(monkeypatch):
+    """The highest number of cloud requests running at once in the pass."""
+    import threading
+    import extract_llm as worker
+    stub = worker.anthropic_client.AnthropicClient
+    state = {"now": 0, "most": 0}
+    guard = threading.Lock()
+
+    class Counted(stub):
+        def complete(self, prompt, **kwargs):
+            with guard:
+                state["now"] += 1
+                state["most"] = max(state["most"], state["now"])
+            try:
+                return super().complete(prompt, **kwargs)
+            finally:
+                with guard:
+                    state["now"] -= 1
+    monkeypatch.setattr(worker.anthropic_client, "AnthropicClient", Counted)
+    return state
+
+
+def test_a_parallel_pass_gives_a_freed_slot_to_the_next_candidate(cloud_candidates, monkeypatch):
     led, _, calls, reservations, results = cloud_candidates
     head = _select(led, "extract")[0]["message_id"]
     _refuse(monkeypatch, {head}, "repeat_success")
+    state = _in_flight(monkeypatch)
     report = _cloud_pass(led, limit=2)
-    assert report["refilled"] == 0
+    assert report["refilled"] == 1 and report["done"] == 2
+    assert len(calls) == len(reservations) == len(results) == 2 and state["most"] <= 2
+
+
+def test_a_parallel_pass_with_every_claim_refused_stays_finite(cloud_candidates, monkeypatch):
+    led, _, calls, reservations, results = cloud_candidates
+    rows = _select(led, "extract")
+    seen = _refuse(monkeypatch, {row["message_id"] for row in rows}, "repeat_success")
+    report = _cloud_pass(led, limit=2)
+    assert report["done"] == 0 and not calls and len(seen) == len(set(seen))
+    assert report["refilled"] == len(seen) - 2 and report["refilled"] <= 64
+
+
+def test_a_parallel_pass_with_both_first_claims_refused_refills_two(cloud_candidates, monkeypatch):
+    """Several claimed at once: each freed slot is refilled once, never above the limit."""
+    led, _, calls, reservations, results = cloud_candidates
+    rows = _select(led, "extract")
+    _refuse(monkeypatch, {rows[0]["message_id"], rows[1]["message_id"]}, "repeat_success")
+    state = _in_flight(monkeypatch)
+    report = _cloud_pass(led, limit=2)
+    assert report["refilled"] == 2 and report["done"] == 2 and state["most"] <= 2
+
+
+def test_a_parallel_worker_crash_cleans_up_and_never_refills(cloud_candidates, monkeypatch):
+    """A worker that raises never reaches the handler: its rows stay pending, their claims are
+    released by the pass's finally and nothing is refilled."""
+    import extract_llm_runner
+    led, _, calls, reservations, results = cloud_candidates
+
+    def crash(body, **kwargs):
+        raise RuntimeError("synthetic worker crash")
+    monkeypatch.setattr(extract_llm_runner, "llm_extract", crash)
+    report = _cloud_pass(led, limit=2)
+    assert report["refilled"] == 0 and report["done"] == 0 and not calls
+    assert led.db.execute("SELECT COUNT(*) FROM fetch_jobs WHERE kind='extract_claim'").fetchone()[0] == 0
 
 
 def _unit(*, verified, started, children=()):

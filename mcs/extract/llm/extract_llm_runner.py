@@ -1036,6 +1036,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     if cloud_only:
         parallel = pool_workers > 1 and len(claimed) > 1
 
+    def _may_refill():
+        """The pass may still give a freed slot away: cloud only, original deadline left,
+        no lost lock, no endpoint outage and the writer generation unchanged."""
+        return (cloud_only and time.monotonic() < deadline and not lock_lost and not endpoint_down
+                and _writer_current(full=True))
+
     def _exec_batch(tups):
         _CALL_NOTES.transport = _CALL_NOTES.transport_at = None
         with local_slots:   # cloud workers widen the pool, never the local backend
@@ -1168,6 +1174,18 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             d, chunks_out = res
                             _handle(r, ctx, d, metas[index], lease,
                                     chunks_out, qc)
+                            # The same refill as the serial pass: a slot freed only after
+                            # this handler finished goes to one next unvisited candidate,
+                            # so in-flight work never exceeds the original slots.
+                            if d is _DEFERRED and r.get("_replacement_freed") is True and _may_refill():
+                                for refill_kind, refill_payload in _plan_units(
+                                        _claim_next(1, release_on_error=False), batch_k):
+                                    refilled += 1 if refill_kind == "single" else len(refill_payload)
+                                    nfut = (_single_future(pool, refill_payload) if refill_kind == "single"
+                                            else pool.submit(_exec_batch, refill_payload))
+                                    futs[nfut] = ((refill_kind, [refill_payload]) if refill_kind == "single"
+                                                  else (refill_kind, refill_payload))
+                                    pending.add(nfut)
                         else:
                             for tup in _handle_batch(*res[:3], tups,
                                                      *res[3:]):
@@ -1199,8 +1217,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         _handle(r, ctx, d, metas[index], lease,
                                 chunks_out, qc)
                 wave = []
-                if (freed and time.monotonic() < deadline and not lock_lost and not endpoint_down
-                        and _writer_current(full=True)):
+                if freed and _may_refill():
                     # Same original deadline and finite lookahead; the next unvisited
                     # candidates take the freed slots (claims stay owned by this pass).
                     refill = _claim_next(freed, release_on_error=False)
