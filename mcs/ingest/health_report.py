@@ -464,12 +464,17 @@ _JEV_BLOCK_KINDS = ("payment_required", "no_api_key", "budget_exceeded",
 
 
 def jev_block_reason(db) -> str | None:
-    """Why TypeSafe Jev is refusing work, from the newest assessment
-    record: the drainer writes one per status change, so the latest row
-    is the current state. None when the last assessment went through."""
+    """Why TypeSafe Jev is refusing work, from the readable assessment record
+    with the highest artifact_id. None when there is none or it went through.
+
+    The newest-by-time readable row bounds the id scan from below: no row with
+    a smaller id can be the highest, and the id-descending scan sees every row
+    at or above it, so time and id disagreeing changes only how far it reads."""
     row = db.execute(
-        "SELECT json_extract(meta,'$.error_kind') FROM artifacts "
-        "WHERE kind='semantic_assess' AND json_valid(meta) "
+        "SELECT json_extract(meta,'$.error_kind') FROM artifacts NOT INDEXED "
+        "WHERE kind='semantic_assess' AND json_valid(meta) AND artifact_id>=("
+        "SELECT artifact_id FROM artifacts INDEXED BY idx_artifacts_kind_created "
+        "WHERE kind='semantic_assess' AND json_valid(meta) ORDER BY created_at DESC LIMIT 1) "
         "ORDER BY artifact_id DESC LIMIT 1").fetchone()
     kind = row[0] if row else None
     return kind if kind in _JEV_BLOCK_KINDS else None
