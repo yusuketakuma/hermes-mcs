@@ -712,6 +712,9 @@ def apply_tx(db, req: dict, now: float | None = None, *,
     if req["cmd"] in ("ops.cloud_stop", "ops.cloud_resume"):
         from cloud_cli import apply_control_tx
         return apply_control_tx(db, req, current)
+    if req["cmd"] == "ops.cloud_local_rebuild_approve":
+        from extract_llm_local_rebuild import approve_tx
+        return approve_tx(db, req, current)
     if req["cmd"] == "ops.scan":
         return _apply_scan_tx(db, req, current)
     if req["cmd"] == "ops.retry":
