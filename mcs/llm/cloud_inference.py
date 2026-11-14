@@ -32,9 +32,18 @@ _HISTORY_CLOUD_REASONS = frozenset({
     "openai_price_contract_invalid", "input_binding_invalid", "window_tally_invalid",
     "pricing_unverified", "usage_invalid", "duplicate_reservation", "result_invalid",
 })
+_HISTORY_COMPARISONS = frozenset({'same', 'different', 'stored_absent', 'current_absent', 'unknown'})
+_HISTORY_OBSERVATIONS = {
+    **{key + '_cmp': _HISTORY_COMPARISONS for key in (
+        'unit_key', 'binding', 'request_fp', 'model', 'effort', 'profile', 'max_tokens')},
+    'guard_match': frozenset({'logical_equal', 'legacy_low_verified', 'legacy_unproven'}),
+    'primary_reason': frozenset({'recovery_not_requested', 'unit_key_mismatch', 'stored_binding_missing',
+        'input_binding_mismatch', 'request_envelope_mismatch', 'exact_keys_same_unexplained', 'observation_unknown'}),
+    'recovery_path': frozenset({'skipped_binding', 'no_exact_rows', 'confirmed_rejection_only', 'unknown'}),
+}
 
 
-def _history_read_error(phase, error):
+def _history_read_error(phase, error, *, observation=None):
     try:
         if type(phase) is not str or phase not in ("recover_response", "request_send_block_reason"):
             return
@@ -52,6 +61,13 @@ def _history_read_error(phase, error):
             if refusal is not None:
                 values["history_refusal"] = (refusal if type(refusal) is str
                                              and refusal in cloud_policy.HISTORY_REFUSALS else "unknown")
+            compared = getattr(error, 'history_observation', None)
+            if phase == 'request_send_block_reason' and type(compared) is dict:
+                for key, allowed in _HISTORY_OBSERVATIONS.items():
+                    source = observation if key == 'recovery_path' and type(observation) is dict else compared
+                    value = source.get(key)
+                    values[key] = (value if type(value) is str and value in allowed else
+                                   'observation_unknown' if key == 'primary_reason' else 'unknown')
         if isinstance(error, ValueError):
             reason = error.args[0] if type(error) is ValueError and len(error.args) == 1 else None
             values["error_reason"] = (reason if type(reason) is str
@@ -346,6 +362,8 @@ class CloudInferenceUnit:
         return self._verified_repeat and not self.effect_started
 
     def __call__(self, prompt, *, deadline, max_tokens, **unused):
+        observation = ({'recovery_path': 'unknown'}
+                       if self.route == 'reextract' and self.message_id is not None else None)
         try:
             http_deadline = min(self.deadline, deadline) - COMMIT_MARGIN
             if time.monotonic() >= http_deadline:
@@ -356,6 +374,7 @@ class CloudInferenceUnit:
             tokens = max_tokens if selected_tokens is None else selected_tokens
             def recover():
                 if self.input_binding is None:
+                    cloud_policy._observe_recovery(observation, 'skipped_binding')
                     return None
                 self.commit_guard()
                 try:
@@ -363,7 +382,8 @@ class CloudInferenceUnit:
                         project_id=self.project_id, message_id=self.message_id, unit_key=self.unit_key,
                         input_binding=self._input_binding(),
                         request_fp=mcs_util.payload_hash(self.client.body(prompt, tokens, prefix)),
-                        owner=self.owner, scope=self.scope)
+                        owner=self.owner, scope=self.scope,
+                        **({'observation': observation} if observation is not None else {}))
                 except cloud_client.CloudNotSent:
                     raise
                 except (ValueError, TypeError, KeyError, sqlite3.Error, cloud_client.CloudError) as error:
@@ -395,7 +415,7 @@ class CloudInferenceUnit:
                             unit_key=self.unit_key, owner=self.owner, selection=self.selection,
                             input_binding=self._input_binding())
                     except (ValueError, TypeError, KeyError, sqlite3.Error, cloud_client.CloudError) as error:
-                        _history_read_error("request_send_block_reason", error)
+                        _history_read_error("request_send_block_reason", error, observation=observation)
                         self.possibly_sent = True
                         if getattr(error, "verified_repeat", False) is True:
                             self._verified_repeat = True
