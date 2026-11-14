@@ -221,4 +221,6 @@ class AnthropicClient(CloudClient):
                   "model": self.model, "usage": meta["usage"]}
 
 
-CLIENT = AnthropicClient
+def client_class():
+    """This provider's client, read at call time so a replaced AnthropicClient is used."""
+    return AnthropicClient

@@ -285,7 +285,7 @@ class CloudInferenceUnit:
             client_args["post_fn"] = lambda body, timeout: transport(
                 self.client.request, "POST", body, timeout, deadline=self.deadline)
             client_args["wait_fn"] = lambda delay: transport(time.sleep, delay)
-        client = provider_registry.PROVIDER_MODULES[resolved["provider"]].CLIENT
+        client = provider_registry.PROVIDER_MODULES[resolved["provider"]].client_class()
         if resolved["provider"] == "openai" or resolved["effort"] is not None:
             # The original Haiku contract keeps its unchanged constructor call.
             client_args.update(model=self.model, effort=resolved["effort"])
@@ -405,7 +405,7 @@ class CloudInferenceUnit:
 
 
 def _client_class(selection):
-    return provider_registry.PROVIDER_MODULES[selection['provider']].CLIENT
+    return provider_registry.PROVIDER_MODULES[selection['provider']].client_class()
 
 
 def guard_context_local(ledger, cfg, prompt, *, project_id, message_id, unit_key, owner):
