@@ -1,5 +1,6 @@
 """A paid reextract unit with no stored answer is proven, bundle-approved and permitted for local
 rebuild only; the proof, the approval and the permit never send, reserve or change accounting."""
+from contextlib import closing
 import json
 import time
 import uuid
@@ -184,3 +185,61 @@ def test_the_bundle_limit_is_a_fixed_constant():
     plan['bundle_digest'] = payload_hash({k: plan[k] for k in ('schema', 'database', 'units')})
     assert not local_rebuild.valid_plan(plan)
     assert json.dumps(plan)   # the plan file format is plain JSON
+
+
+def test_a_settled_but_unsuccessful_result_is_not_success(legacy, monkeypatch):
+    """A reextract reservation whose only result is a timeout is not a proven success."""
+    import cloud_policy
+    from test_cloud_resend_guard import _reserve, _result
+    ledger, _ = legacy
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    ledger.save_messages([_message(3)])
+    reservation = _reserve(ledger, 'synthetic prompt', route='reextract', unit='3', message_id=3)
+    cloud_policy.record_result(ledger, reservation, _result(reservation, 'timeout', 'timeout'))
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.input_binding') "
+                          "WHERE kind='cloud_usage_reserve' AND message_id=3")
+    with pytest.raises(ValueError, match='^not_success$'):
+        local_rebuild.unit_proof(ledger, 1, 3)
+
+
+def test_a_current_local_result_is_already_current_and_not_offered(legacy):
+    from cloud_selection_progress_testkit import _complete_local_tx
+    ledger, _ = legacy
+    with ledger.db:
+        ledger.db.execute('BEGIN IMMEDIATE')
+        _complete_local_tx(ledger, {'project_id': 1, 'message_id': 1})
+    with pytest.raises(ValueError, match='^already_current$'):
+        local_rebuild.unit_proof(ledger, 1, 1)
+    report = local_rebuild.preview(ledger)
+    assert report['excluded']['already_current'] == 1
+    assert [unit['message_id'] for unit in report['plan']['units']] == [2]
+
+
+def test_the_cli_requires_a_human_confirmation_before_any_write(legacy, capsys):
+    import argparse
+    import cloud_cli
+    parser = argparse.ArgumentParser()
+    cloud_cli.add_parsers(parser.add_subparsers(dest='command'))
+    args = parser.parse_args(['cloud-llm', 'local-rebuild-approve', '--plan', 'synthetic-plan.json',
+                              '--reason', '完全合成の確認'])
+    assert args.cloud_action == 'local-rebuild-approve' and args.confirm_human is False
+    assert args.fn(args) == 1
+    assert '--confirm-human' in capsys.readouterr().out
+    ledger, _ = legacy
+    assert local_rebuild.approved_units(ledger.db) == {}
+    plan = parser.parse_args(['cloud-llm', 'local-rebuild-plan', '--limit', '5'])
+    assert plan.cloud_action == 'local-rebuild-plan' and plan.limit == 5 and plan.out is None
+
+
+def test_a_copied_database_never_inherits_the_approval(legacy, tmp_path):
+    import sqlite3
+    ledger, _ = legacy
+    _approve(ledger, local_rebuild.preview(ledger)['plan'])
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ACTIVE
+    copy_path = str(tmp_path / 'synthetic-copy.db')
+    with sqlite3.connect(copy_path) as target:
+        ledger.db.backup(target)
+    with closing(Ledger(copy_path)) as copied:
+        assert local_rebuild.approved_units(copied.db)        # the receipt itself was copied
+        assert local_rebuild.permit(copied, 1, 1) == local_rebuild.PROOF_CHANGED
