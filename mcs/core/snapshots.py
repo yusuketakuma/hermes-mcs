@@ -64,7 +64,8 @@ def last_failure() -> dict:
 
 
 def last_timing() -> dict:
-    """Return this thread's latest published snapshot timings and marker state."""
+    """Return this thread's latest published snapshot timings and marker state, or the
+    commands retry deferral (retry_reason, retry_after_s) when no copy started."""
     return dict(_status.timing)
 
 

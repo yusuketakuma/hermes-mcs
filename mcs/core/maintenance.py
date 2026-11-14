@@ -827,10 +827,76 @@ def snapshot_published_age_s(now: float | None = None) -> float | None:
     return max(0.0, (time.time() if now is None else now) - mtime)
 
 
+def _source_identity(db_path):
+    """(st_dev, st_ino) of the source ledger; None when it cannot be read."""
+    try:
+        info = os.stat(db_path)
+    except OSError:
+        return None
+    return [info.st_dev, info.st_ino]
+
+
+def _signature_value_valid(key, value) -> bool:
+    """One marker value in the type _content_signature gives that key. No bools and no
+    floats where an int belongs: True == 1 and 1.0 == 1 must never match a marker."""
+    if key == "":
+        return type(value) is int and value >= 0                   # schema_version
+    if key == "patients@content":
+        return type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+    if key == "requests@updated_at":
+        return (value is None or type(value) is int or type(value) is str
+                or type(value) is float and math.isfinite(value))
+    return value is None or type(value) is int and value >= 0       # a table's MAX(rowid)
+
+
+def _same_signature_shape(stored, current) -> bool:
+    """The stored failure signature has the current signature's keys and value types."""
+    return (isinstance(stored, dict) and stored.keys() == current.keys()
+            and all(_signature_value_valid(key, stored[key]) for key in stored))
+
+
+def _commands_retry_wait(prev: dict, sig, db_path: str, now: float):
+    """Seconds left before the commands worker may retry the publish that failed for
+    this same change, or None when no valid failure applies (state missing or
+    malformed, a future time, the source replaced, or a change that is more than
+    appended rows). Only a background retry of the same change waits."""
+    state = prev.get("commands_retry")
+    if (not isinstance(state, dict) or sig is None
+            or not _same_signature_shape(state.get("failed_sig"), sig)):
+        return None
+    failed_at, identity = state.get("failed_at"), state.get("source_identity")
+    if (type(failed_at) not in (int, float) or not math.isfinite(failed_at) or failed_at < 0
+            or not 0 <= now - failed_at < SNAPSHOT_MIN_INTERVAL_S
+            or not isinstance(identity, list) or len(identity) != 2
+            or any(type(part) is not int or part < 0 for part in identity)
+            or _source_identity(db_path) != identity
+            or not _rows_appended_only(state["failed_sig"], sig)):
+        return None
+    # rounded up to the millisecond: a deferral always reports a positive wait
+    return math.ceil((SNAPSHOT_MIN_INTERVAL_S - (now - failed_at)) * 1000) / 1000
+
+
+def _save_commands_retry(prev: dict, sig, identity, db_path: str, failed_at: float, lock_fd) -> None:
+    """Remember a failed commands publish of this change. The success marker
+    (sig, published_at) is kept as it is; nothing is written when the change,
+    the source or the publication fence cannot be confirmed."""
+    if (sig is None or identity is None or _source_identity(db_path) != identity
+            or not snapshots._verified_publication_lock(SNAPSHOT_DIR, lock_fd)):
+        return
+    kept = {key: prev[key] for key in ("sig", "published_at") if key in prev}
+    text = json.dumps({**kept, "commands_retry": {"failed_at": failed_at, "failed_sig": sig,
+                                                  "source_identity": identity}})
+    try:
+        os.makedirs(SNAPSHOT_DIR, mode=0o700, exist_ok=True)
+        atomic_write(_snapshot_sig_path(), lambda f: f.write(text), mode=0o600)
+    except OSError:
+        snapshots._status.failure.setdefault("retry_state", "retry_state_write_failed")
+
+
 def refresh_snapshot(db_path: str, *, force: bool = False, dirty: bool = False,
                      now: float | None = None,
                      deadline: float | None = None,
-                     verification_context=None) -> str | None:
+                     verification_context=None, commands_retry: bool = False) -> str | None:
     """Publish the read-only snapshot when it would differ (H4).
 
     Every tick used to copy and quick_check the whole ledger (144 full
@@ -843,7 +909,13 @@ def refresh_snapshot(db_path: str, *, force: bool = False, dirty: bool = False,
     freshness guarantee when publication fails. Returns 'published',
     'unchanged', 'deferred', or None when a needed publish failed. The
     marker is taken BEFORE the copy: a write landing in between only
-    makes the next tick publish again."""
+    makes the next tick publish again.
+
+    ``commands_retry`` (the commands worker only): after its publish failed, a
+    background retry of the same change (rows only appended since that
+    attempt) waits SNAPSHOT_MIN_INTERVAL_S from the failure and returns
+    'retry_deferred' without copying; an urgent change, ``force`` and every
+    other caller publish as before."""
     snapshots._reset_status()
     total_started = time.perf_counter()
     if deadline is not None and monotonic() >= deadline:
@@ -855,13 +927,15 @@ def refresh_snapshot(db_path: str, *, force: bool = False, dirty: bool = False,
         return _refresh_snapshot_locked(db_path, force=force, dirty=dirty, now=now,
                                         deadline=deadline,
                                         lock_fd=lock_fd, total_started=total_started,
-                                        verification_context=verification_context)
+                                        verification_context=verification_context,
+                                        commands_retry=commands_retry)
 
 
 def _refresh_snapshot_locked(db_path: str, *, force: bool, dirty: bool, now, deadline, lock_fd,
-                             total_started, verification_context=None):
+                             total_started, verification_context=None, commands_retry=False):
     """Check freshness and save its marker under the same publication fence."""
-    now = time.time() if now is None else now
+    clock = time.time if now is None else (lambda: now)
+    now = clock()
     signature_started = time.perf_counter()
     try:
         sig = _content_signature(db_path, deadline=deadline)
@@ -888,8 +962,24 @@ def _refresh_snapshot_locked(db_path: str, *, force: bool, dirty: bool, now, dea
             snapshots._fail("signature_deadline")
             return None
         return skip
+    identity = _source_identity(db_path) if commands_retry else None
+    # A stored failure that is not used for waiting is reported, never treated as proof.
+    retry_note = None
+    if commands_retry and not force:
+        wait = _commands_retry_wait(prev, sig, db_path, now)
+        if wait is None and "commands_retry" in prev:
+            retry_note = "retry_state_not_applied"
+        if wait is not None:
+            snapshots._record_timing(retry_reason="snapshot_retry_cooldown", retry_after_s=wait,
+                                     signature_s=round(signature_s, 3),
+                                     total_s=round(time.perf_counter() - total_started, 3))
+            return "retry_deferred"
     if not publish_snapshot(db_path, deadline=deadline, _lock_fd=lock_fd,
                             verification_context=verification_context):
+        if commands_retry:
+            if retry_note is not None:
+                snapshots._status.failure.setdefault("retry_state", retry_note)
+            _save_commands_retry(prev, sig, identity, db_path, clock(), lock_fd)
         return None
     marker_started = time.perf_counter()
     marker_state = "unavailable"
@@ -905,6 +995,10 @@ def _refresh_snapshot_locked(db_path: str, *, force: bool, dirty: bool, now, dea
             pass  # Publication succeeded; its optional reuse marker did not.
         else:
             marker_state = "saved"
+    if marker_state != "saved" and "commands_retry" in prev:
+        retry_note = "retry_state_not_cleared"   # the old failure record stays until it expires
+    if retry_note is not None:
+        snapshots._record_timing(retry_state=retry_note)
     snapshots._record_timing(signature_s=round(signature_s, 3),
                              marker_s=round(time.perf_counter() - marker_started, 3),
                              marker_state=marker_state,
