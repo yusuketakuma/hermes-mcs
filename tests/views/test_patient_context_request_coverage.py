@@ -91,7 +91,7 @@ def _apply_relations(requests, replies, monkeypatch, *, related=None):
         for source in selected:
             aid = source["artifact_id"]
             calls.append(aid)
-            result.append({**loops[aid], "artifact_id": aid,
+            result.append({**loops[aid], "artifact_id": aid, "unrelated_trigger_ids": [],
                            "relation_events": [{**event, "loop_artifact_id": aid}
                                                for event in loops[aid]["relation_events"]]})
         return result
@@ -138,6 +138,16 @@ def test_reply_relations_match_explicit_evidence_for_mixed_threads_and_times(mon
                 # came first; this does not choose a final business status.
                 if {'done', 'cancel'} <= {kind for _, kind, _ in seen}:
                     row["reply_conflict"] = True
+            else:
+                # changes/patient-context-unknown-not-absent.json: a later post by someone else
+                # in the thread without a current relation evaluation, or a request whose
+                # sender is unknown, makes the reply "unavailable", not "no reply".
+                later = [j for j, (at, other, _) in enumerate(replies.get(root, ()))
+                         if at > ts and (sender is None or other != sender)]
+                unevaluated = [j for j in later if sender is None or (i, j) not in related]
+                if unevaluated:
+                    row["reply_evaluation"] = "unavailable"
+                    row["reply_evaluation_unavailable"] = len(unevaluated)
             expected.append(row)
         original = {root: list(rows) for root, rows in replies.items()}
         calls = _apply_relations(requests, replies, monkeypatch, related=related)

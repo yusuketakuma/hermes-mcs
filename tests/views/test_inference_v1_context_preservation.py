@@ -35,8 +35,13 @@ def projection(monkeypatch):
     db.close()
 
 
+def record_meta():
+    # an analysed, extraction-eligible post, as read_model._message_records builds it
+    return {"extraction_eligible": True, "state": "current"}
+
+
 def record(value):
-    return {"patient_context": [{"category":value['category'],"text":value['text'],
+    return {**record_meta(), "patient_context": [{"category":value['category'],"text":value['text'],
         "evidence":value['quote'],"subject":value['subject'],"details":value['details'],
         "source":{key:value[key] for key in ('message_id','content_hash','posted_at_ts')}}]}
 
@@ -139,7 +144,7 @@ def test_only_contiguous_source_verified_owner_headings_bind_split_attributes(pr
         parsed = extract_context(body)
         for value in parsed:
             value['source'] = {'message_id':mid,'content_hash':f'{mid:064x}','posted_at_ts':T0+mid}
-        state['records'].append({'patient_context':parsed})
+        state['records'].append({**record_meta(), 'patient_context':parsed})
     db.commit()
     before = db.total_changes
     evidence = views.evidence(db,1)
