@@ -19,6 +19,7 @@ import bounded_http
 from anthropic_client import AnthropicError, MODEL
 from anthropic_client import MAX_TOKENS as MAX_TOKENS, validate_usage as validate_usage
 import openai_client
+import provider_registry
 
 from cloud_usage_accounting import (
     PRICE_VERSION as PRICE_VERSION,
@@ -58,6 +59,8 @@ from cloud_usage_accounting import (
     _binding as _binding,
     _receipt_binding as _receipt_binding,
     _reserve_valid as _reserve_valid,
+    PROFILE_MAX_TOKENS as PROFILE_MAX_TOKENS,
+    profile_contract_valid as profile_contract_valid,
     _stored_reservation as _stored_reservation,
     _matching_rows_many as _matching_rows_many,
     _matching_rows as _matching_rows,
@@ -111,7 +114,7 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
     block = cfg.get("cloud_llm", {}) if isinstance(cfg, dict) else {}
     if not isinstance(block, dict):
         return out, ["config: cloud_llm_not_object"]
-    if block.keys() - out.keys() - {"profiles"}:
+    if block.keys() - out.keys() - {"profiles", "provider_profiles"}:
         errors.append("config: cloud_llm_unknown_field")
     mode = block.get("mode", "on" if key_present is True else "off")
     if mode not in ("off", "dry_run", "shadow", "on"):
@@ -166,6 +169,16 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
             errors.append("config: cloud_llm_profiles_invalid")
         else:
             out["profiles"] = dict(profiles)
+    if "provider_profiles" in block:
+        value = block["provider_profiles"]
+        if (not isinstance(value, dict) or value.keys() - provider_registry.PROVIDER_MODULES.keys()
+                or any(not _profile_map_valid(provider_registry.PROVIDER_MODULES[name], mapping)
+                       for name, mapping in value.items())
+                or "openai" in value and "profiles" in block and value["openai"] != block["profiles"]):
+            # The old openai-only "profiles" may repeat provider_profiles.openai, never contradict it.
+            errors.append("config: cloud_llm_profiles_invalid")
+        else:
+            out["provider_profiles"] = {name: dict(mapping) for name, mapping in value.items()}
     routes = block.get("routes", list(ROUTES))
     if (not isinstance(routes, list)
             or any(not isinstance(r, str) or r not in ROUTES for r in routes)):
@@ -338,6 +351,12 @@ def resolve_profile(cfg, *, route, purpose, root=None):
     return profile_for_settings(cfg, settings, route=route, purpose=purpose)
 
 
+def _profile_map_valid(module, mapping):
+    return (isinstance(mapping, dict) and not mapping.keys() - module.PROFILE_PURPOSES
+            and all(isinstance(role, str) and isinstance(value, str) and value in module.PROFILE_DEFINITIONS
+                    for role, value in mapping.items()))
+
+
 def profile_for_settings(cfg, settings, *, route, purpose):
     """Resolve a profile from a provider already selected by the caller."""
     valid_purposes = {"reextract": {"backlog", "quality_repair"},
@@ -349,17 +368,30 @@ def profile_for_settings(cfg, settings, *, route, purpose):
     provider = settings["provider"]
     block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
     block = block if isinstance(block, dict) else {}
+    by_provider = block.get("provider_profiles", {})
+    if not isinstance(by_provider, dict):
+        return None, ["config: cloud_llm_profiles_invalid"]
+    limit = {"backlog": 8192, "patient_context": 16384, "quality_repair": 32768}[purpose]
+    if provider == "anthropic" and "anthropic" in by_provider:
+        # Opt-in purpose profiles; an unnamed purpose takes the owner's default.
+        chosen = by_provider["anthropic"]
+        if not _profile_map_valid(anthropic_client, chosen):
+            return None, ["config: cloud_llm_profiles_invalid"]
+        profile = chosen.get(purpose, anthropic_client.DEFAULT_PROFILES[purpose])
+        model, effort = anthropic_client.PROFILE_DEFINITIONS[profile]
+        return MappingProxyType({"provider": provider, "model": model, "effort": effort,
+            "max_tokens": limit, "price_version": _price_definition(model)["price_version"],
+            "profile": profile}), []
     if provider != "openai":
         return MappingProxyType({"provider": provider, "model": settings["model"], "effort": None,
             "max_tokens": None, "price_version": _price_definition(settings["model"])["price_version"],
             "profile": None}), []
-    profiles = block.get("profiles", {})
-    if not isinstance(profiles, dict):
+    profiles = block.get("profiles", by_provider.get("openai", {}))
+    if not isinstance(profiles, dict) or "openai" in by_provider and by_provider["openai"] != profiles:
         return None, ["config: cloud_llm_profiles_invalid"]
     profile = profiles.get(purpose)
     if profile is None and block.get("model") == openai_client.MODEL:
         model, effort = openai_client.MODEL, "low"
-        limit = {"backlog": 8192, "patient_context": 16384, "quality_repair": 32768}[purpose]
     else:
         profile = profile if profile is not None else (
             "sol-medium" if block.get("model") == openai_client.SOL_MODEL
@@ -367,7 +399,6 @@ def profile_for_settings(cfg, settings, *, route, purpose):
         if profile not in openai_client.PROFILE_DEFINITIONS:
             return None, ["config: cloud_llm_profiles_invalid"]
         model, effort = openai_client.PROFILE_DEFINITIONS[profile]
-        limit = {"backlog": 8192, "patient_context": 16384, "quality_repair": 32768}[purpose]
     return MappingProxyType({"provider": provider, "model": model, "effort": effort,
         "max_tokens": limit, "price_version": _price_definition(model)["price_version"],
         "profile": profile}), []
@@ -1219,14 +1250,8 @@ def _selection_model(settings, selection, max_tokens):
     if (definition["provider"] != settings["provider"] or selection["price_version"] != definition["price_version"]
             or selection["max_tokens"] is not None and selection["max_tokens"] != max_tokens):
         raise AnthropicError("contract_error", "cloud_profile_invalid")
-    if settings["provider"] == "openai":
-        if ((model, effort) not in openai_client.VALID_MODEL_EFFORTS
-                or profile is not None and (openai_client.PROFILE_DEFINITIONS.get(profile) != (model, effort)
-                    or selection["max_tokens"] not in (8192, 16384, 32768))
-                or profile is None and (model != openai_client.MODEL or effort != "low"
-                    or selection["max_tokens"] not in (8192, 16384, 32768))):
-            raise AnthropicError("contract_error", "cloud_profile_invalid")
-    elif effort is not None or profile is not None or model != PROVIDERS["anthropic"]:
+    if (not profile_contract_valid(settings["provider"], model, effort, profile, selection["max_tokens"])
+            or settings["provider"] == "openai" and selection["max_tokens"] not in PROFILE_MAX_TOKENS):
         raise AnthropicError("contract_error", "cloud_profile_invalid")
     return model
 
@@ -1340,6 +1365,9 @@ def _request_identity(c, body, *, route, project_id, unit_key, message_id, owner
     if body.get("model") != model:
         raise AnthropicError("contract_error", "model_not_allowed")
     if selection is not None and c["provider"] == "openai" and body.get("reasoning") != {"effort": selection["effort"]}:
+        raise AnthropicError("contract_error", "cloud_profile_invalid")
+    if (selection is not None and c["provider"] == "anthropic"
+            and body.get("output_config") != {"effort": selection["effort"] or "low"}):
         raise AnthropicError("contract_error", "cloud_profile_invalid")
     if c["provider"] == "openai" and (body.get("service_tier") != "default"
             or body.get("store") is not False or body.get("prompt_cache_options") != {"ttl": "30m"}):

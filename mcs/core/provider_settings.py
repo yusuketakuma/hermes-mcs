@@ -68,11 +68,15 @@ def _jev_values(value, jev_model):
             raise ValueError("provider_config_invalid") from None
 
 
-def _profiles(value):
-    import openai_client
-    if (not isinstance(value, dict) or value.keys() - openai_client.PROFILE_PURPOSES
+def _profiles(value, provider="openai"):
+    """Purpose profiles of one provider, from that provider's finite definitions."""
+    import provider_registry
+    module = provider_registry.provider_module(provider)
+    if module is None:
+        raise ValueError("provider_profiles_invalid")
+    if (not isinstance(value, dict) or value.keys() - module.PROFILE_PURPOSES
             or any(not isinstance(role, str) or not isinstance(profile, str)
-                   or profile not in openai_client.PROFILE_DEFINITIONS for role, profile in value.items())):
+                   or profile not in module.PROFILE_DEFINITIONS for role, profile in value.items())):
         raise ValueError("provider_profiles_invalid")
 
 
@@ -104,6 +108,15 @@ def split_legacy(raw, model_owners, *, jev_model=None):
             profiles = cloud.pop("profiles")
             _profiles(profiles)
             providers["openai"]["profiles"] = deepcopy(profiles)
+        if "provider_profiles" in cloud:
+            by_provider = cloud.pop("provider_profiles")
+            if not isinstance(by_provider, dict) or by_provider.keys() - {"anthropic", "openai"}:
+                raise ValueError("provider_profiles_invalid")
+            for name, profiles in by_provider.items():
+                _profiles(profiles, name)
+                if "profiles" in providers[name] and providers[name]["profiles"] != profiles:
+                    raise ValueError("provider_config_ambiguous")
+                providers[name]["profiles"] = deepcopy(profiles)
         if "provider_budgets" in cloud:
             budgets = cloud["provider_budgets"]
             if not isinstance(budgets, dict) or budgets.keys() - {"anthropic", "openai"}:
@@ -138,15 +151,16 @@ def compose(common, providers, *, selected_provider, model_owners, jev_model=Non
         if name != "jev" and "budget" in value:
             _budget(value["budget"])
         if "profiles" in value:
-            if name != "openai":
+            if name == "jev":
                 raise ValueError("provider_profiles_invalid")
-            _profiles(value["profiles"])
+            _profiles(value["profiles"], name)
         if name == "jev":
             _jev_values(value, jev_model)
     cloud_values = any(providers[name] for name in ("anthropic", "openai"))
     if cloud_values:
         cloud = result.setdefault("cloud_llm", {})
         if (not isinstance(cloud, dict) or "model" in cloud or "profiles" in cloud
+                or "provider_profiles" in cloud
                 or "provider_budgets" in cloud and cloud["provider_budgets"] != {}):
             raise ValueError("provider_config_ambiguous")
         model = providers[selected_provider].get("model")
@@ -154,6 +168,9 @@ def compose(common, providers, *, selected_provider, model_owners, jev_model=Non
             cloud["model"] = model
         if selected_provider == "openai" and "profiles" in providers["openai"]:
             cloud["profiles"] = deepcopy(providers["openai"]["profiles"])
+        # Anthropic purpose profiles are opt-in; "profiles" keeps its OpenAI meaning.
+        if selected_provider == "anthropic" and "profiles" in providers["anthropic"]:
+            cloud["provider_profiles"] = {"anthropic": deepcopy(providers["anthropic"]["profiles"])}
         budgets = {name: deepcopy(providers[name]["budget"]) for name in ("anthropic", "openai")
                    if "budget" in providers[name]}
         if budgets:

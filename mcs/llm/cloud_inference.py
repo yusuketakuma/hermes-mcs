@@ -12,6 +12,7 @@ import time
 
 import anthropic_client
 import openai_client
+import provider_registry
 import bounded_http
 import cloud_backlog
 import cloud_client
@@ -284,11 +285,10 @@ class CloudInferenceUnit:
             client_args["post_fn"] = lambda body, timeout: transport(
                 self.client.request, "POST", body, timeout, deadline=self.deadline)
             client_args["wait_fn"] = lambda delay: transport(time.sleep, delay)
-        if resolved["provider"] == "openai":
-            client = openai_client.OpenAIClient
+        client = provider_registry.PROVIDER_MODULES[resolved["provider"]].CLIENT
+        if resolved["provider"] == "openai" or resolved["effort"] is not None:
+            # The original Haiku contract keeps its unchanged constructor call.
             client_args.update(model=self.model, effort=resolved["effort"])
-        else:
-            client = anthropic_client.AnthropicClient
         self.client = client(key, **client_args)
 
     def discard(self):
@@ -404,6 +404,10 @@ class CloudInferenceUnit:
 
 
 
+def _client_class(selection):
+    return provider_registry.PROVIDER_MODULES[selection['provider']].CLIENT
+
+
 def guard_context_local(ledger, cfg, prompt, *, project_id, message_id, unit_key, owner):
     """Check patient-context paid history using the existing pure wire-body builders."""
     def request():
@@ -414,11 +418,8 @@ def guard_context_local(ledger, cfg, prompt, *, project_id, message_id, unit_key
         if errors or selection is None:
             raise cloud_client.CloudError('budget_exceeded', 'cloud_unit_unresolved')
         tokens = selection['max_tokens'] if selection['max_tokens'] is not None else 1600
-        if selection['provider'] == 'openai':
-            body = openai_client.OpenAIClient.body(
-                SimpleNamespace(model=selection['model'], effort=selection['effort']), prompt, tokens, None)
-        else:
-            body = anthropic_client.AnthropicClient.body(None, prompt, tokens, None)
+        body = _client_class(selection).body(
+            SimpleNamespace(model=selection['model'], effort=selection['effort']), prompt, tokens, None)
         candidate = cloud_policy._request_identity(settings, body, route='patient_context',
             project_id=project_id, message_id=message_id, unit_key=unit_key,
             owner=owner, selection=selection, input_binding=None)
@@ -448,13 +449,9 @@ def guard_reextract_local(ledger, cfg, prompt, *, project_id, message_id, unit_k
         if errors or selection is None:
             raise cloud_client.CloudError('budget_exceeded', 'cloud_unit_unresolved')
         tokens = selection['max_tokens'] if selection['max_tokens'] is not None else 1600
-        if selection['provider'] == 'openai':
-            from types import SimpleNamespace
-            body = openai_client.OpenAIClient.body(
-                SimpleNamespace(model=selection['model'], effort=selection['effort']),
-                prompt, tokens, None)
-        else:
-            body = anthropic_client.AnthropicClient.body(None, prompt, tokens, None)
+        from types import SimpleNamespace
+        body = _client_class(selection).body(
+            SimpleNamespace(model=selection['model'], effort=selection['effort']), prompt, tokens, None)
         candidate = cloud_policy._request_identity(
             settings, body, route='reextract', project_id=project_id,
             message_id=message_id, unit_key=unit_key, owner=owner,
@@ -483,8 +480,7 @@ def resolve_cloud_settings(cfg):
 # versions live in each caller's own contract (EXTRACT_VERSION, the context
 # CONTRACT/plan/rule), so a rule change rebuilds every patient while code
 # releases that leave the rules alone do not re-send or hide results.
-_CLOUD_CONTRACT = {"backend": "anthropic", "model": anthropic_client.MODEL,
-                   "prompt": mcs_util.payload_hash({"system": anthropic_client.SYSTEM, "effort": "low"})[:16]}
+_CLOUD_CONTRACT = anthropic_client.provider_contract(*anthropic_client.ORIGINAL_CONTRACT)
 
 
 def cloud_provider_contract(cfg=None, *, route="reextract", purpose="backlog", selection=None):
@@ -493,24 +489,18 @@ def cloud_provider_contract(cfg=None, *, route="reextract", purpose="backlog", s
         selection, errors = cloud_policy.resolve_profile(cfg, route=route, purpose=purpose, root=HOME)
         if errors or selection is None:
             raise CloudFallback("cloud_profile_invalid")
-    if selection["provider"] == "openai":
-        if (selection["model"], selection["effort"]) not in openai_client.VALID_MODEL_EFFORTS:
-            raise CloudFallback("cloud_profile_invalid")
-        return {"backend": "openai", "model": selection["model"],
-                "prompt": mcs_util.payload_hash({"system": anthropic_client.SYSTEM, "effort": selection["effort"],
-                                               "service_tier": "default", "cache_ttl": "30m"})[:16]}
-    if selection["provider"] != "anthropic" or selection["model"] != anthropic_client.MODEL:
+    module = provider_registry.provider_module(selection["provider"])
+    if module is None or (selection["model"], selection.get("effort")) not in module.VALID_MODEL_EFFORTS:
         raise CloudFallback("cloud_profile_invalid")
-    return dict(_CLOUD_CONTRACT)
+    return module.provider_contract(selection["model"], selection.get("effort"))
 
 
 def supported_cloud_contracts(model=None):
     """Enumerate the existing finite provider contracts, optionally for one model."""
-    contracts = [dict(_CLOUD_CONTRACT)] if model in (None, _CLOUD_CONTRACT["model"]) else []
-    contracts.extend(cloud_provider_contract(selection={"provider": "openai", "model": selected, "effort": effort})
-                     for selected, effort in sorted(openai_client.VALID_MODEL_EFFORTS)
-                     if model is None or selected == model)
-    return tuple(contracts)
+    return tuple(module.provider_contract(selected, effort)
+                 for module in provider_registry.PROVIDER_MODULES.values()
+                 for selected, effort in sorted(module.VALID_MODEL_EFFORTS, key=lambda pair: (pair[0], pair[1] or ""))
+                 if model is None or selected == model)
 
 
 def is_supported_cloud_contract(contract):
@@ -545,10 +535,11 @@ def verify_cloud_repair_evidence(db, *, reservation_artifact_id, reservation_id,
                 or cloud_provider_contract(selection=selected) != contract
                 or selected["provider"] == "openai" and profile is not None
                 and openai_client.PROFILE_DEFINITIONS.get(profile) != (selected["model"], selected["effort"])
-                or selected["provider"] == "openai" and profile is not None
+                or selected["provider"] == "anthropic" and not cloud_policy.profile_contract_valid(
+                    "anthropic", selected["model"], selected["effort"], profile, reservation["max_tokens"])
+                or profile is not None
                 and reservation["max_tokens"] != {"backlog": 8192, "patient_context": 16384,
                                                    "quality_repair": 32768}[purpose]
-                or selected["provider"] == "anthropic" and profile is not None
                 or result.get("answer_text_sha256_v1") != hashlib.sha256(encoded).hexdigest()
                 or result.get("answer_finish_reason_v1") != finish_reason):
             raise ValueError("cloud_repair_evidence_invalid")
