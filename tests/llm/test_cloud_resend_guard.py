@@ -721,6 +721,8 @@ def _refusal_of(ledger, prompt):
 @pytest.mark.parametrize('status,error,usage,expected', [
     ('timeout', 'timeout', None, 'repeat_unsettled'),
     ('http_200', None, {'input_tokens': 10, 'output_tokens': 2}, 'repeat_success'),
+    # a paid answer refused after validation (e.g. a refusal): settled by its usage, not a success
+    ('http_200', 'contract_error', {'input_tokens': 10, 'output_tokens': 2}, 'repeat_failed'),
 ])
 def test_repeat_refusal_carries_its_fixed_class_without_changing_the_refusal(
         tmp_path, monkeypatch, status, error, usage, expected):
@@ -731,6 +733,17 @@ def test_repeat_refusal_carries_its_fixed_class_without_changing_the_refusal(
         reservation = _reserve(ledger, 'synthetic prompt')
         cloud_policy.record_result(ledger, reservation, {**_result(reservation, status, error), 'usage': usage})
         assert _refusal_of(ledger, 'synthetic prompt') == expected
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+def test_disposition_is_classified_apart_from_a_repeat(tmp_path, monkeypatch):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt')
+        ledger.db.execute('BEGIN IMMEDIATE')
+        cloud_policy.record_disposition_tx(ledger, reservation, 'discarded_scope')
+        ledger.db.commit()
+        assert _refusal_of(ledger, 'synthetic prompt') == 'disposition'
         assert len(ledger.artifacts('cloud_usage_reserve')) == 1
 
 

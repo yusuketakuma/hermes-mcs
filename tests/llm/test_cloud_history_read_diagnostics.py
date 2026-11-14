@@ -244,6 +244,7 @@ def test_paid_answer_proof_failure_remains_recoverable_without_resend(
 
 @pytest.mark.parametrize("refusal,expected", [
     ("repeat_success", "repeat_success"), ("receipt_inconsistent", "receipt_inconsistent"),
+    ("repeat_failed", "repeat_failed"), ("repeat_unsettled", "repeat_unsettled"), ("disposition", "disposition"),
     (_SECRET, "unknown"), (["repeat_success"], "unknown"),
     (type("PrivateRefusal", (str,), {})("repeat_success"), "unknown"),
 ])
