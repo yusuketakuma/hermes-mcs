@@ -48,6 +48,10 @@ def _history_read_error(phase, error):
                     ("error_kind", error.kind, _HISTORY_CLOUD_KINDS),
                     ("error_reason", error.detail, _HISTORY_CLOUD_REASONS)):
                 values[field] = value if type(value) is str and value in allowed else "unknown"
+            refusal = getattr(error, "history_refusal", None)
+            if refusal is not None:
+                values["history_refusal"] = (refusal if type(refusal) is str
+                                             and refusal in cloud_policy.HISTORY_REFUSALS else "unknown")
         if isinstance(error, ValueError):
             reason = error.args[0] if type(error) is ValueError and len(error.args) == 1 else None
             values["error_reason"] = (reason if type(reason) is str
