@@ -6,6 +6,11 @@ import pytest
 import mcs_queries
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_testkit import _cfg, _delivery_db, _message, _summary
+from test_patient_context_refresh import _raw_proof_meta
+
+
+# No pharmacy cue: a summary-only extraction can prove there is no hint left to resolve.
+PLAIN_BODY = "合成の生活記録です。本人は自宅で過ごしています。"
 
 
 def _source(led, *, hydrate=True, cfg=None):
@@ -14,14 +19,20 @@ def _source(led, *, hydrate=True, cfg=None):
 
 def _local(led, text="合成の補助要約", *, kind="extract_llm", pid=1, **meta):
     body_hash = led.db.execute("SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0]
+    base, model = {VERSION_KEY: CURRENT_VERSION, "hash": body_hash}, "synthetic-local"
+    if kind == "extract_llm":
+        # a valid strictly proven result first, so an exclusion case fails only on its override
+        base, model = _raw_proof_meta(led, 1, 1)
     return led.artifact_add(kind, json.dumps({"summary": text}, ensure_ascii=False), project_id=pid,
-        message_id=1, model="synthetic-local", meta={VERSION_KEY: CURRENT_VERSION, "hash": body_hash, **meta})
+        message_id=1, model=model, meta={**base, **meta})
 
 
-def test_current_local_full_text_signature_and_hydrate_parity(tmp_path):
-    led = _delivery_db(tmp_path, [_message()])
+# A strictly proven extract_llm summary is at most extract_validation.SUMMARY_MAX_CHARS
+# (60) characters, so the full-text check uses an extract_v1 summary, which needs no proof.
+def test_current_local_signature_and_hydrate_parity(tmp_path):
+    led = _delivery_db(tmp_path, [_message(body=PLAIN_BODY)])
     try:
-        text = "合成補助要約\n" * 3000
+        text = "合成の補助要約です。"
         aid = _local(led, text)
         source = _source(led)
         assert source["derived_summaries"] == [{"kind": "extract_llm", "artifact_id": aid, "text": text}]
@@ -46,11 +57,26 @@ def test_current_local_full_text_signature_and_hydrate_parity(tmp_path):
         led.close()
 
 
+def test_rule_summary_full_text_is_kept_without_truncation(tmp_path):
+    led = _delivery_db(tmp_path, [_message(body=PLAIN_BODY)])
+    try:
+        text = "合成補助要約\n" * 3000
+        aid = _local(led, text, kind="extract_v1")
+        source = _source(led)
+        assert source["derived_summaries"] == [{"kind": "extract_v1", "artifact_id": aid, "text": text}]
+        shallow = _source(led, hydrate=False)
+        assert shallow["derived_summary_sig"] == source["derived_summary_sig"]
+        assert shallow["derived_summaries"] == []
+        assert shallow["derived_summary_chars"] == source["derived_summary_chars"] == len(text)
+    finally:
+        led.close()
+
+
 @pytest.mark.parametrize("override", [{"hash": "stale"}, {VERSION_KEY: "old"},
     {"pid": 2}, {"invalidated": True}, {"error": True},
     {"internal_proof_version": 1, "internal_proof_hash": "0" * 64}])
 def test_stale_foreign_old_or_unproven_local_summary_is_excluded(tmp_path, override):
-    led = _delivery_db(tmp_path, [_message()])
+    led = _delivery_db(tmp_path, [_message(body=PLAIN_BODY)])
     try:
         empty = _source(led)["derived_summary_sig"]
         if override.get("pid") == 2:
@@ -65,7 +91,7 @@ def test_stale_foreign_old_or_unproven_local_summary_is_excluded(tmp_path, overr
 
 
 def test_rule_and_local_summaries_remain_distinct(tmp_path):
-    led = _delivery_db(tmp_path, [_message()])
+    led = _delivery_db(tmp_path, [_message(body=PLAIN_BODY)])
     try:
         aid = _local(led, "ルール", kind="extract_v1")
         bid = _local(led, "局所推論")
@@ -77,7 +103,7 @@ def test_rule_and_local_summaries_remain_distinct(tmp_path):
 
 
 def test_validated_semantic_summary_uses_existing_gate_and_explicit_policy(tmp_path):
-    led = _delivery_db(tmp_path, [_message()])
+    led = _delivery_db(tmp_path, [_message(body=PLAIN_BODY)])
     try:
         _summary(led, claims=20)
         cfg = _cfg("enforce")
@@ -104,7 +130,7 @@ def test_validated_semantic_summary_uses_existing_gate_and_explicit_policy(tmp_p
 @pytest.mark.parametrize("change", [{VERSION_KEY: "old"}, {"fingerprint": "stale"},
     {"publication_mode": "shadow"}, {"invalidated": True}, {"audit_status": "FAIL"}])
 def test_semantic_summary_rejects_stale_or_unverified_receipts(tmp_path, change):
-    led = _delivery_db(tmp_path, [_message()])
+    led = _delivery_db(tmp_path, [_message(body=PLAIN_BODY)])
     try:
         _summary(led)
         saved = led.artifacts("semantic_summary", message_id=1)[-1]
