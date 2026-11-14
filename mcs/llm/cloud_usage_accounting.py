@@ -42,6 +42,9 @@ JST = timezone(timedelta(hours=9))
 
 
 KINDS = ("cloud_usage_reserve", "cloud_usage_result", "cloud_usage_dryrun")
+_ROW_COLUMNS = "artifact_id,kind,project_id,message_id,model,meta,created_at"
+# The scans match only a string-valued member; the index key alone would also match other JSON types.
+_TEXT_ID = " AND json_type(meta,'$.reservation_id')='text'"
 
 
 ROUTES = ("patient_context", "reextract", "semantic_backlog")
@@ -259,6 +262,30 @@ def _validate_accounting_timestamps(db):
         _periods(row[0])
 
 
+def _indexed_rows(db, kinds, reservation_ids, *, columns, where="", args=()):
+    """Rows naming these reservations, through the reservation index, or None.
+
+    None means the write-time guard has not vouched for the retained rows
+    (or these kinds are outside it): the caller's full scan decides instead.
+    The caller holds the read snapshot, so the guard and the rows agree."""
+    import ledger_schema
+    state = ledger_schema.cloud_usage_guard_state(db)
+    if state is None or not state[0] or not set(kinds) <= set(ledger_schema.CLOUD_USAGE_KINDS):
+        return None
+    ids = list(reservation_ids)
+    rows = []
+    for kind in kinds:
+        for offset in range(0, len(ids), 900):
+            group = ids[offset:offset + 900]
+            # The index's own WHERE term is repeated so the planner can prove the partial index applies.
+            rows.extend(db.execute(
+                f"SELECT {columns} FROM artifacts INDEXED BY {ledger_schema.CLOUD_USAGE_INDEX} "
+                f"WHERE kind IN {ledger_schema.CLOUD_USAGE_KINDS_SQL} AND kind=? "
+                f"AND {ledger_schema.CLOUD_USAGE_RESERVATION_SQL} IN ("
+                + ','.join('?' for _ in group) + ')' + where, (kind, *group, *args)))
+    return sorted(rows, key=lambda row: row[0])
+
+
 def _binding(meta):
     return tuple(meta.get(k) for k in _BINDING_KEYS)
 
@@ -340,6 +367,10 @@ def _matching_rows_many(ledger, kind, reservation_ids, *, now=None, _timestamps_
             return _matching_rows_many(ledger, kind, reservation_ids, now=now, _timestamps_checked=True)
     ids = list(dict.fromkeys(reservation_ids))
     cutoff = (time.time() if now is None else now) - 62 * 86400
+    rows = _indexed_rows(ledger.db, (kind,), ids, columns=_ROW_COLUMNS,
+                         where=" AND created_at>=?", args=(cutoff,))
+    if rows is not None:
+        return rows
     rows = []
     if ids and ledger.db.execute(
             "SELECT 1 FROM artifacts WHERE kind=? AND created_at>=? AND "
@@ -370,13 +401,16 @@ def _matching_bound_rows(ledger, kind, reservation_id):
     """Inspect all retained rows naming this reservation, without unrelated accounting rows."""
     if not isinstance(reservation_id, str) or len(reservation_id) != 32:
         raise AnthropicError("pricing_unverified", "reservation_invalid")
-    rows = ledger.db.execute(
-        "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
-        "WHERE kind=? AND CASE WHEN json_valid(meta) THEN EXISTS "
-        "(SELECT 1 FROM json_each(meta) WHERE key='reservation_id' AND type='text' AND value=?) "
-        "WHEN typeof(meta)='text' THEN instr(meta,?)>0 "
-        "WHEN typeof(meta)='blob' THEN instr(meta,CAST(? AS BLOB))>0 ELSE 0 END ORDER BY artifact_id",
-        (kind, reservation_id, reservation_id, reservation_id)).fetchall()
+    with _accounting_snapshot(ledger.db):
+        rows = _indexed_rows(ledger.db, (kind,), [reservation_id], columns=_ROW_COLUMNS, where=_TEXT_ID)
+        if rows is None:
+            rows = ledger.db.execute(
+                "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
+                "WHERE kind=? AND CASE WHEN json_valid(meta) THEN EXISTS "
+                "(SELECT 1 FROM json_each(meta) WHERE key='reservation_id' AND type='text' AND value=?) "
+                "WHEN typeof(meta)='text' THEN instr(meta,?)>0 "
+                "WHEN typeof(meta)='blob' THEN instr(meta,CAST(? AS BLOB))>0 ELSE 0 END ORDER BY artifact_id",
+                (kind, reservation_id, reservation_id, reservation_id)).fetchall()
     for row in rows:
         if not isinstance(row["meta"], str) or len(row["meta"]) > 32768:
             raise AnthropicError("pricing_unverified", "usage_invalid")
@@ -444,25 +478,29 @@ def _reservation_evidence_batch_snapshot(db, ids):
     kinds = (KINDS[0], KINDS[1], 'cloud_usage_disposition')
     # A corrupt row may also have lost its patient/UUID.  It cannot be proved
     # unrelated to this source's disposition, so new adoption evidence holds.
-    bad = db.execute("SELECT CASE WHEN typeof(meta)='text' AND length(meta)<=32768 THEN meta END "
-                  "FROM artifacts WHERE kind IN (?,?,?) AND CASE "
-                  "WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
-                  "WHEN json_type(meta)!='object' THEN 1 "
-                  "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE key IS NOT NULL "
-                  "GROUP BY parent,key HAVING COUNT(*)>1) THEN 1 "
-                  "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE type='real' AND abs(value)>1.7976931348623157e308) THEN 1 "
-                  "ELSE 0 END LIMIT 1", kinds).fetchone()
-    if bad is not None:
-        _receipt_meta(bad[0])
-        raise ValueError("cloud_receipt_invalid")
     wanted = {meta['reservation_id'] for meta, _ in originals.values()}
+    rows = _indexed_rows(db, kinds, sorted(wanted), where=_TEXT_ID, columns=(
+        "artifact_id,kind,project_id,message_id,model,"
+        "CASE WHEN typeof(meta)='text' AND length(meta)<=32768 THEN meta END AS meta,created_at,content"))
+    if rows is None:
+        bad = db.execute("SELECT CASE WHEN typeof(meta)='text' AND length(meta)<=32768 THEN meta END "
+                      "FROM artifacts WHERE kind IN (?,?,?) AND CASE "
+                      "WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
+                      "WHEN json_type(meta)!='object' THEN 1 "
+                      "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE key IS NOT NULL "
+                      "GROUP BY parent,key HAVING COUNT(*)>1) THEN 1 "
+                      "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE type='real' AND abs(value)>1.7976931348623157e308) THEN 1 "
+                      "ELSE 0 END LIMIT 1", kinds).fetchone()
+        if bad is not None:
+            _receipt_meta(bad[0])
+            raise ValueError("cloud_receipt_invalid")
+        rows = db.execute("SELECT artifact_id,kind,project_id,message_id,model,"
+            "CASE WHEN typeof(meta)='text' AND length(meta)<=32768 THEN meta END AS meta,created_at,content FROM artifacts "
+            "WHERE kind IN (?,?,?) AND CASE WHEN json_valid(meta) THEN EXISTS "
+            "(SELECT 1 FROM json_each(meta) m WHERE m.key='reservation_id' AND m.type='text' "
+            "AND m.value IN (SELECT value FROM json_each(?))) END ORDER BY artifact_id",
+            (*kinds, json.dumps(sorted(wanted))))
     rows_by_reservation = {rid: [] for rid in wanted}
-    rows = db.execute("SELECT artifact_id,kind,project_id,message_id,model,"
-        "CASE WHEN typeof(meta)='text' AND length(meta)<=32768 THEN meta END AS meta,created_at,content FROM artifacts "
-        "WHERE kind IN (?,?,?) AND CASE WHEN json_valid(meta) THEN EXISTS "
-        "(SELECT 1 FROM json_each(meta) m WHERE m.key='reservation_id' AND m.type='text' "
-        "AND m.value IN (SELECT value FROM json_each(?))) END ORDER BY artifact_id",
-        (*kinds, json.dumps(sorted(wanted))))
     for row in rows:
         meta = _receipt_meta(row['meta'])
         rows_by_reservation[meta['reservation_id']].append((row, meta))
