@@ -501,6 +501,14 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     return result
 
 
+def _guard_refusal_code(error):
+    """A cloud error's fixed kind, else the exception type name — never its text."""
+    import cloud_client
+    kind = getattr(error, "kind", None)
+    return kind if isinstance(error, cloud_client.CloudError) and isinstance(kind, str) \
+        else type(error).__name__
+
+
 def _selection_lock(db):
     """Non-blocking per-database mutex covering patient selection and claim.
 
@@ -663,6 +671,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     source_quality_skipped = False
     write_proof = [selected_proof]
     readiness_state = ["verified"]
+    # Fixed code of the last guard refusal that became nightly_cloud_not_sent.
+    guard_error = [None]
     selected_source = [None]
     selected_occurrence = [None]
     cloud_input = patient_context_refresh_state._cloud_input_binding(ledger.db, pid, snapshot) if cloud_settings is not None else None
@@ -843,8 +853,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 patient_context_refresh_sources.guard_cloud_sources(ledger, pid, snapshot['sources'],
                     snapshot['contract'], cfg=cfg, deadline=deadline)
         except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error,
-                OSError, RecursionError, OverflowError):
+                OSError, RecursionError, OverflowError) as error:
             generation_uncertain = True
+            guard_error[0] = _guard_refusal_code(error)
             raise patient_context_refresh_state.Deferred("nightly_cloud_not_sent") from None
 
     def guard_local_input(unit_key, mid, prompt):
@@ -855,8 +866,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     message_id=mid, unit_key=unit_key,
                     owner={"night_id": night_id, "source_sig": snapshot["source_sig"]})
         except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error,
-                OSError, RecursionError, OverflowError):
+                OSError, RecursionError, OverflowError) as error:
             generation_uncertain = True
+            guard_error[0] = _guard_refusal_code(error)
             raise patient_context_refresh_state.Deferred("nightly_cloud_not_sent") from None
         if (unit_key, mid, prompt) not in local_checks:
             local_checks.append((unit_key, mid, prompt))
@@ -1278,13 +1290,15 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     guard_summary_sources()
                 except patient_context_refresh_state.Deferred:
                     ledger.db.rollback()
-                    return {"status": "deferred", "done": 0, "reason": "nightly_cloud_not_sent"}
+                    return {"status": "deferred", "done": 0, "reason": "nightly_cloud_not_sent",
+                            "guard_error": guard_error[0]}
             for local_unit, local_mid, local_prompt in local_checks:
                 try:
                     guard_local_input(local_unit, local_mid, local_prompt)
                 except patient_context_refresh_state.Deferred:
                     ledger.db.rollback()
-                    return {"status": "deferred", "done": 0, "reason": "nightly_cloud_not_sent"}
+                    return {"status": "deferred", "done": 0, "reason": "nightly_cloud_not_sent",
+                            "guard_error": guard_error[0]}
             if (quality_identity is not None or source_quality_identity is not None) and (ledger.db.execute("PRAGMA data_version").fetchone()[0] != version
                                                  or ledger.db.total_changes != changes):
                 ledger.db.rollback()
@@ -1564,4 +1578,5 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     return {"status": "failed" if failure else "deferred" if deferred_reason else "progressed",
             "done": int(not failure and deferred_reason is None), "lane": lane,
             **({"reason": failure or deferred_reason} if failure or deferred_reason else {}),
+            **({"guard_error": guard_error[0]} if guard_error[0] is not None else {}),
             "lock_wait_s": waited, **stats}
