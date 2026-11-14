@@ -515,10 +515,17 @@ def _commands_only(lock_fd, deadline) -> int:
             # same interval/urgent-key decision as the tick: a background
             # mark waits out SNAPSHOT_MIN_INTERVAL_S ('deferred' keeps it)
             state = _run_stage(result, "cmd_snapshot", deadline, lambda: maintenance.refresh_snapshot(
-                DB, dirty=True, deadline=deadline), required=True)
-            result["snapshot"] = state is not None
+                DB, dirty=True, deadline=deadline, commands_retry=True), required=True)
+            result["snapshot"] = state is not None and state != "retry_deferred"
             result["snapshot_state"] = state
-            if state == "published":
+            if state == "retry_deferred":
+                # No copy started: the same change failed recently. Not a new failure,
+                # the dirty mark stays and the receipts already applied keep their result.
+                import snapshots
+                timing = snapshots.last_timing()
+                result["snapshot_retry_reason"] = timing.get("retry_reason")
+                result["snapshot_retry_after_s"] = timing.get("retry_after_s")
+            elif state == "published":
                 notify_cards.clear_snapshot_dirty(ledger, dirty)
             elif state is None:
                 result["ok"] = False

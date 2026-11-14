@@ -669,7 +669,7 @@ def test_run_lock_lost_ends_tick_without_later_stages(
 
 
 @pytest.mark.parametrize(("state", "code", "cleared"), [
-    (None, 1, False), ("deferred", 0, False), ("published", 0, True)])
+    (None, 1, False), ("deferred", 0, False), ("published", 0, True), ("retry_deferred", 0, False)])
 def test_commands_snapshot_keeps_original_deadline_and_dirty_on_failure(
         tmp_path, monkeypatch, capsys, state, code, cleared):
     import maintenance
@@ -700,17 +700,31 @@ def test_commands_snapshot_keeps_original_deadline_and_dirty_on_failure(
     monkeypatch.setattr(maintenance, "publish_snapshot",
                         lambda *a, **kw: pytest.fail("bypassed the shared interval decision"))
 
-    def refresh(db, *, dirty, deadline):
-        calls.append((dirty, deadline))
+    import snapshots
+
+    def refresh(db, *, dirty, deadline, commands_retry):
+        calls.append((dirty, deadline, commands_retry))
+        snapshots._reset_status()
+        if state == "retry_deferred":
+            snapshots._record_timing(retry_reason="snapshot_retry_cooldown", retry_after_s=120.5)
         return state
     monkeypatch.setattr(maintenance, "refresh_snapshot", refresh)
     fd = os.open(str(tmp_path / "synthetic.lock"), os.O_CREAT | os.O_RDWR, 0o600)
     deadline = time.monotonic() - 1
     assert run_check._commands_only(fd, deadline) == code
-    assert calls == [(True, deadline)]
+    assert calls == [(True, deadline, True)]       # only the commands worker opts in
     assert bool(clears) is cleared
     out = capsys.readouterr().out
     assert ("snapshot_publish_failed" in out) is (state is None)
+    result = json.loads(out)
+    if state == "retry_deferred":
+        # no copy started: not a publish, not a failure, the dirty mark stays
+        assert result["snapshot"] is False and result["snapshot_state"] == "retry_deferred"
+        assert (result["snapshot_retry_reason"], result["snapshot_retry_after_s"]) \
+            == ("snapshot_retry_cooldown", 120.5)
+        assert result["ok"] is True and not result["errors"]
+    else:
+        assert "snapshot_retry_reason" not in result
     # every step that can hold the writer reports how long it took
     assert set(json.loads(out)["stage_elapsed_s"]) == {
         "cmd_recover", "cmd_drain", "cmd_int_drain", "cmd_int_drain_again", "cmd_card_gc", "cmd_snapshot"}
