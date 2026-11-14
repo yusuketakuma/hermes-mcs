@@ -39,6 +39,7 @@ OpenAIの用途別設定は提供元専用の私有設定に保持します。`m
 
 用途別のprofileはCLIでも変更できます。たとえば `cloud-llm providers --patient-context-profile sol-high` はOpenAIの患者コンテキスト用profileを変更します。OpenAIには `--backlog-profile`・`--patient-context-profile`・`--quality-repair-profile` を使い、`--openai-` から始まる同名の引数も使えます。Anthropicには `--anthropic-backlog-profile`・`--anthropic-patient-context-profile`・`--anthropic-quality-repair-profile` を使います。値は各提供元で定義されたprofile名に限ります。
 指定しなかった用途・提供元・利用先の選択・予算・キーは保持します。分割形式の設定も既存の設定保存経路で更新するため、私有ファイルを直接編集する必要はありません。Anthropicのprofileを初めて設定すると、その提供元の用途別profileが有効になるため、未指定用途にも定義済みの既定値を使います。
+患者コンテキストのprofileを変えると、以前クラウドで作成した患者scanは現在の契約と一致しなくなります。対象患者のscanを新しいprofileでやり直すため、その処理に費用がかかります。既存の記録は削除せず、新しい処理にも日額・月額などの費用上限を適用します。
 
 `cloud_llm.provider` は `anthropic`、`openai`、`auto` から選びます。省略時は `auto` です。
 `auto` は `provider_order` の順に登録済みキーを探します。既定の順はAnthropic、OpenAIです。
