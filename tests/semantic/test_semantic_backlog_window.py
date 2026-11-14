@@ -112,11 +112,13 @@ def test_expired_window_recovers_paid_answer_without_resend_or_local_switch(clou
         pytest.fail("paid answer switched to local")
 
     def ask():
-        with semantic_transport.backlog_inference(
-                ledger, cfg, job, time.monotonic() + 120, lambda: True, direct,
-                local_fallback=forbidden_local) as chat:
-            assert chat is not None
-            return json.loads(chat(prompt))
+        with semantic_transport.inference_targets("synthetic-window-generation"):
+            with semantic_transport.backlog_inference(
+                    ledger, cfg, job, time.monotonic() + 120, lambda: True, direct,
+                    local_fallback=forbidden_local) as chat:
+                assert chat is not None
+                semantic_transport.set_inference_target(job["message_id"])
+                return json.loads(chat(prompt))
 
     assert ask() == {"facts": []}
     assert len(calls) == len(rows(ledger, "cloud_usage_reserve")) == 1

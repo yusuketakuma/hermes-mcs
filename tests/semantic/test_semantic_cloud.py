@@ -1354,8 +1354,8 @@ def test_process_job_owned_scope_proven_on_resolved_settings(cloud, variant, ord
 def test_closed_route_ambiguous_member_history_never_switches_local(cloud, monkeypatch):
     """A strict non-member unit bound to the member's exact request plus a
     duplicated result is ambiguous accounting — never a proven-unbound
-    member: recover_response's cloud_unit_unresolved leaves possibly_sent
-    unset, and the CloudNotSent catch must not slip the member to local."""
+    member: recover_response marks possibly_sent on unverifiable evidence,
+    and the CloudNotSent catch must keep the member unresolved."""
     import mcs_util
     led, cfg, job, calls = cloud
     _mixed_targets(led, job, [3, 2])
@@ -1415,7 +1415,7 @@ def test_closed_route_ambiguous_member_history_never_switches_local(cloud, monke
                                          local_fallback=lambda p, timeout=None: local.append(p),
                                          fallback_current=lambda mid: True) as chat:
             transport.set_inference_target(3)
-            with pytest.raises(transport.runtime.LLMNotSent, match='cloud_fallback_unavailable'):
+            with pytest.raises(transport.runtime.LLMNotSent, match='cloud_unit_unresolved'):
                 chat('synthetic member prompt')
     assert not local and not calls
     assert len(rows(led, 'cloud_usage_reserve')) == 2
