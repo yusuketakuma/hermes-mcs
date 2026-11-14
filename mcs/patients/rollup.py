@@ -238,9 +238,11 @@ def _extraction_source_signature(db, project_id, *, deadline=None):
         f"typeof(a.{field}),octet_length(a.{field}),"
         f"CASE WHEN typeof(a.{field}) NOT IN ('text','blob') THEN a.{field} END"
         for field in fields)
+    # CROSS JOIN fixes the order (the patient's messages first): left to the
+    # planner, every patient walked all extraction rows of the whole ledger.
     for row in db.execute(f"""
         SELECT a.artifact_id,a.message_id,a.project_id,a.kind,{selected},a._rowid_
-        FROM messages m JOIN artifacts a ON a.message_id=m.message_id
+        FROM messages m CROSS JOIN artifacts a ON a.message_id=m.message_id
         WHERE m.project_id=? AND a.kind IN
           ('extract_v1','extract_llm','canonical_projection','semantic_facts_v4')
         ORDER BY a.artifact_id
@@ -972,13 +974,15 @@ def _rollup_patient_ids(db):
 
 
 def _dirty_project_snapshot(db, project_id, now, *, deadline=None):
+    # art_ts names the (kind, project_id) index: the planner otherwise read
+    # every patient's rows of those kinds through the (kind, created_at) one.
     x = db.execute("""
       SELECT p.project_id, r.g AS gen, r.period_version, r.next_check,
         r.projection_version, r.message_sig, r.valid_until,
         EXISTS(SELECT 1 FROM artifacts a WHERE a.project_id=p.project_id
           AND a.kind IN ('canonical_projection','semantic_facts_v4')) AS has_projection,
         r.ref_sig, r.ref_generation, ({sig}) AS cur_ref_sig,
-        (SELECT MAX(a.created_at) FROM artifacts a
+        (SELECT MAX(a.created_at) FROM artifacts a INDEXED BY idx_artifacts_lookup
           WHERE a.project_id=p.project_id
             AND a.kind IN ('extract_v1','extract_llm',
                            'canonical_projection',
