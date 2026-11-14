@@ -345,7 +345,7 @@ def test_profile_cli_preserves_legacy_alias_and_other_purposes(conf, capsys):
         "openai": {"patient_context": "sol-high"}}
 
 
-def test_split_profile_cli_updates_both_providers_without_changing_selection_or_keys(verified_split):
+def test_split_profile_cli_updates_both_providers_without_changing_selection_or_keys(verified_split, capsys):
     conf, _, _, _, key = verified_split
     before = _verified_state(conf)
     key_before = key.read_bytes()
@@ -354,7 +354,8 @@ def test_split_profile_cli_updates_both_providers_without_changing_selection_or_
     after = _verified_state(conf)
     assert after["providers"]["openai"]["profiles"]["patient_context"] == "sol-high"
     assert after["providers"]["anthropic"]["profiles"]["backlog"] == "haiku-medium"
-    assert after["common"]["cloud_llm"]["provider"] == before["common"]["cloud_llm"]["provider"]
+    assert after["common"] == before["common"]
+    assert json.loads(capsys.readouterr().out)["provider"] == "openai"
     assert "profiles" not in after["common"]["cloud_llm"]
     assert "provider_profiles" not in after["common"]["cloud_llm"]
     assert key.read_bytes() == key_before
