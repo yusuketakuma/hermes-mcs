@@ -327,6 +327,16 @@ def test_public_split_profile_edit_is_atomic_and_preserves_other_provider_purpos
         config_edit.apply({"cloud_llm.provider_profiles": {"anthropic": {"backlog": "sol-high"}}})
     assert all(path.read_bytes() == raw and path.stat().st_mode & 0o777 == 0o600
                for path, raw in exact.items())
+    for key in ("profiles", "provider_profiles"):
+        ambiguous = deepcopy(common)
+        ambiguous["cloud_llm"][key] = {}
+        write_private(conf, ambiguous)
+        committed = json.loads(exact[authority])
+        committed["common_policy_sha256"] = provider_settings.common_policy_digest(ambiguous)
+        write_private(authority, committed)
+        for read in (provider_settings.read, provider_settings.read_with_verified_common):
+            with pytest.raises(ValueError, match="provider_config_ambiguous"):
+                read(conf.parent, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
 
 
 def test_provider_failure_keeps_local_user_settings_for_existing_consumers(tmp_path, monkeypatch):

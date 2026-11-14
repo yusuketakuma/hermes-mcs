@@ -561,9 +561,7 @@ def _read(root, *, model_owners, jev_model, config_limit, allow_unavailable):
                             if "budget" in providers[name]:
                                 _budget(providers[name]["budget"])
                             if "profiles" in providers[name]:
-                                if name != "openai":
-                                    raise ValueError("provider_profiles_invalid")
-                                _profiles(providers[name]["profiles"])
+                                _profiles(providers[name]["profiles"], name)
                         if "model" in providers["jev"] and jev_model is None and allow_unavailable:
                             raise ValueError("provider_validation_context_missing")
                         _jev_values(providers["jev"], jev_model)
@@ -576,14 +574,14 @@ def _read(root, *, model_owners, jev_model, config_limit, allow_unavailable):
                     # Without trusted provider documents, reject every possible overlap.
                     if (settings_fd is None or not isinstance(cloud, (dict, type(None)))
                             or not isinstance(semantic, (dict, type(None)))
-                            or isinstance(cloud, dict) and ("model" in cloud or "profiles" in cloud
+                            or isinstance(cloud, dict) and ("model" in cloud or "profiles" in cloud or "provider_profiles" in cloud
                                 or "provider_budgets" in cloud and cloud["provider_budgets"] != {})
                             or isinstance(semantic, dict) and bool(semantic.keys() & _JEV_KEYS)):
                         raise ValueError("provider_config_ambiguous")
                     providers = None
                     mode = "provider_unavailable"
                 else:
-                    if (isinstance(cloud, dict) and ("model" in cloud or "profiles" in cloud
+                    if (isinstance(cloud, dict) and ("model" in cloud or "profiles" in cloud or "provider_profiles" in cloud
                             or "provider_budgets" in cloud and cloud["provider_budgets"] != {})
                             or isinstance(semantic, dict) and bool(semantic.keys() & _JEV_KEYS)):
                         raise ValueError("provider_config_ambiguous")
