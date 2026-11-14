@@ -950,6 +950,29 @@ class _VerificationGate:
         self._db_baseline = db_baseline
         self.engaged = deadline is not None
         self._transport = None
+        self._released = None
+
+    def _unverified(self, reason):
+        """Record the fixed failure reason the run result carries, then
+        build the no-write error."""
+        self._state["reason"] = reason
+        return _SnapshotGateUnverified("snapshot_gate_unverified")
+
+    def _record_since(self, key, start):
+        """Best-effort window seconds: a failing clock drops the value and
+        never skips the reacquire or masks the gate's own failure."""
+        try:
+            if start is not None:
+                self._state[key] = round(time.monotonic() - start, 3)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _now():
+        try:
+            return time.monotonic()
+        except Exception:
+            return None
 
     def _identity_intact(self):
         try:
@@ -967,9 +990,9 @@ class _VerificationGate:
             intact = _db_identity(self._ledger) == self._db_baseline \
                 and bool(_lock_identity(self._lock_fd))
         except (OSError, sqlite3.Error) as error:
-            raise _SnapshotGateUnverified("snapshot_gate_unverified") from error
+            raise self._unverified("precheck_identity_mismatch") from error
         if not intact:
-            raise _SnapshotGateUnverified("snapshot_gate_unverified") from None
+            raise self._unverified("precheck_identity_mismatch") from None
 
     def __enter__(self):
         self._state["attempted"] = True
@@ -978,7 +1001,7 @@ class _VerificationGate:
             return self
         # A non-finite bound cannot fence the unlock window.
         if not math.isfinite(self._deadline):
-            raise _SnapshotGateUnverified("snapshot_gate_unverified") from None
+            raise self._unverified("deadline_unbounded") from None
         # Pre-unlock check against the Ledger-open baseline.
         self.precheck()
         try:
@@ -988,7 +1011,8 @@ class _VerificationGate:
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException as error:
-            raise _SnapshotGateUnverified("snapshot_gate_unverified") from error
+            raise self._unverified("unlock_failed") from error
+        self._released = self._now()
         return self
 
     @staticmethod
@@ -998,11 +1022,18 @@ class _VerificationGate:
     def __exit__(self, exc_type, exc, tb):
         if not self.engaged:
             return False
+        validated = self._now()
+        self._record_since("verify_window_s", self._released)
         try:
             self._transport.__exit__(exc_type, exc, tb)
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException as secondary:
+            self._record_since("reacquire_s", validated)
+            # RunLockLost carries its fixed code (run_lock_timeout,
+            # run_lock_timeout_updated, run_lock_held) as its only arg.
+            self._state["reason"] = (secondary.args[0] if isinstance(
+                secondary, writer_lock.RunLockLost) else "reacquire_error")
             if self._control_exc(exc):
                 # A validator control exception keeps propagating as the
                 # same object; the reacquire failure rides as its cause
@@ -1017,11 +1048,12 @@ class _VerificationGate:
             # and leaves writes forbidden.
             raise _SnapshotGateUnverified("snapshot_gate_unverified") from (
                 exc if exc is not None else secondary)
+        self._record_since("reacquire_s", validated)
         if not self._identity_intact():
             if self._control_exc(exc):
-                exc.__cause__ = _SnapshotGateUnverified("snapshot_gate_unverified")
+                exc.__cause__ = self._unverified("identity_mismatch")
                 return False
-            raise _SnapshotGateUnverified("snapshot_gate_unverified") from exc
+            raise self._unverified("identity_mismatch") from exc
         self._state["allowed"] = True
         return False
 
@@ -1032,7 +1064,7 @@ class _VerificationGate:
         ok = _snapshots._verified_publication_lock(dest_dir, fd)
         if self.engaged and not ok:
             self._state["allowed"] = False
-            raise _SnapshotGateUnverified("snapshot_gate_unverified")
+            raise self._unverified("fence_unverified")
         return ok
 
 
@@ -1042,6 +1074,16 @@ def _verification_context_factory(ledger, lock_fd, state, db_baseline):
     def verification_context(*, deadline):
         return _VerificationGate(ledger, lock_fd, state, deadline, db_baseline)
     return verification_context
+
+
+def _record_gate_failure(result, gate_state):
+    """Carry the gate's fixed reason and window seconds in the printed run
+    result — the only output a no-write gate failure is allowed."""
+    if gate_state is not None:
+        result["snapshot_gate"] = {
+            "reason": gate_state.get("reason", "unclassified"),
+            **{key: gate_state[key] for key in ("verify_window_s", "reacquire_s")
+               if key in gate_state}}
 
 
 def _finish_run(ledger, cfg, result, run_id, deadline, *, run_lock_fd=None,
@@ -1110,15 +1152,18 @@ def _finish_run(ledger, cfg, result, run_id, deadline, *, run_lock_fd=None,
             result["snapshot_failure"] = snapshots.last_failure()
             raise RuntimeError("snapshot_verify_failed")
         if gate_forbade_writes():
+            _record_gate_failure(result, gate_state)
             raise _SnapshotGateUnverified("snapshot_gate_unverified")
         if state == "published":
             import snapshots
             result["snapshot_timing"] = snapshots.last_timing()
             notify_cards.clear_snapshot_dirty(ledger, dirty)
     except _SnapshotGateUnverified:
+        _record_gate_failure(result, gate_state)
         raise
     except Exception as e:
         if gate_forbade_writes():
+            _record_gate_failure(result, gate_state)
             raise _SnapshotGateUnverified("snapshot_gate_unverified") from e
         result["errors"].append(f"snapshot: {type(e).__name__}")
         ledger.finish_run(run_id, "partial",
