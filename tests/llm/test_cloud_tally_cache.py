@@ -366,6 +366,50 @@ def test_transaction_snapshot_and_rollback_never_seed_precheck(tmp_path, now, pe
         assert _read(ledger, period, now).total == original
 
 
+def _cheap_result_meta(reservation):
+    """The settled result row record_result writes for a small billed answer."""
+    definition = c._price_definition(reservation["model"], reservation["price_version"])
+    usage = definition["validate_usage"]({"input_tokens": 10, "output_tokens": 2})
+    result = c._receipt_binding(reservation)
+    result.update(usage=usage, cost_usd=str(c.usage_cost(usage, model=reservation["model"],
+                                                         price_version=reservation["price_version"])),
+                  http_class="http_200", request_id="req_synthetic", error_kind=None)
+    return result
+
+
+def _accounting_rows(ledger):
+    return dict(ledger.db.execute("SELECT kind,COUNT(*) FROM artifacts WHERE kind IN (?,?,?) GROUP BY kind",
+                                  c.KINDS))
+
+
+@pytest.mark.parametrize('period', ['month', 'window'])
+@pytest.mark.parametrize('scope', ['transaction', 'savepoint'])
+def test_rolled_back_cheap_result_restores_the_reserved_maximum(tmp_path, now, period, scope):
+    # A result read inside a writer transaction lowers the tally; rolling it back must bring
+    # the unresolved reservation's maximum back, whether the whole transaction or only a
+    # savepoint inside it is rolled back.
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        reservation = _reserve(ledger)
+        reserved = _read(ledger, period, now).total
+        rows = _accounting_rows(ledger)
+        ledger.db.execute('BEGIN IMMEDIATE')
+        try:
+            if scope == 'savepoint':
+                ledger.db.execute('SAVEPOINT synthetic_result')
+            ledger.artifact_add_tx(c.KINDS[1], '{}', project_id=1, model=MODEL,
+                                   meta=_cheap_result_meta(reservation))
+            assert _read(ledger, period, now).total < reserved
+            if scope == 'savepoint':
+                ledger.db.execute('ROLLBACK TO synthetic_result')
+                ledger.db.execute('RELEASE synthetic_result')
+                assert ledger.db.in_transaction
+                assert _read(ledger, period, now).total == reserved
+        finally:
+            ledger.db.rollback()
+        assert _read(ledger, period, now).total == reserved
+        assert _accounting_rows(ledger) == rows      # the reservation stays unresolved, nothing written
+
+
 def test_commit_during_refresh_is_not_cached_with_new_stamp(tmp_path, monkeypatch, now):
     path = str(tmp_path / 'synthetic.db')
     with closing(Ledger(path)) as ledger:
