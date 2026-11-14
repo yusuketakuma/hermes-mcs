@@ -301,6 +301,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
     transaction_pending()
     # rebuild rollups for patients whose underlying data changed —
     # union of touched-this-run + dirty detection (Oracle B23)
+    rollup_timing = {}
     try:
         import rollup
         touched = set(result.get("extracted_pids", []))
@@ -312,8 +313,16 @@ def stage_derive(ledger, result, deadline, cfg=None,
         # Rollups yield before the remaining signal evaluation slice.
         rollup_deadline = scan_start + max(0, work_deadline - scan_start) * 2 / 3
         scan_deadline = scan_start + max(0, rollup_deadline - scan_start) / 2
-        scan = rollup.scan_fair_dirty_projects(ledger, cfg=cfg, deadline=scan_deadline,
-                                               commit_deadline=rollup_deadline)
+        try:
+            scan = rollup.scan_fair_dirty_projects(ledger, cfg=cfg, deadline=scan_deadline,
+                                                   commit_deadline=rollup_deadline)
+        finally:
+            try:
+                elapsed = time.monotonic() - scan_start
+                if math.isfinite(elapsed):
+                    rollup_timing["scan_s"] = round(max(0, elapsed), 3)
+            except Exception:
+                pass  # Observation must not replace a scan failure.
         touched.difference_update(scan.unknown)
         rebuild_ids = list(dict.fromkeys([*scan.dirty, *sorted(touched)]))
         result["rollup_scan"] = {"state": "unknown" if scan.incomplete else "checked",
@@ -328,9 +337,26 @@ def stage_derive(ledger, result, deadline, cfg=None,
         source_changed = []
         source_unknown = []
         source_unknown_reasons = {}
-        result["rollups"] = rollup.rebuild_many(
-            ledger, rebuild_ids, deadline=rollup_deadline, source_changed=source_changed,
-            source_unknown=source_unknown, source_unknown_reasons=source_unknown_reasons, cfg=cfg)
+        rebuild_start = None
+        try:
+            rebuild_start = time.monotonic()
+            budget = rollup_deadline - rebuild_start
+            if math.isfinite(budget):
+                rollup_timing["rebuild_budget_s"] = round(max(0, budget), 3)
+        except Exception:
+            pass
+        try:
+            result["rollups"] = rollup.rebuild_many(
+                ledger, rebuild_ids, deadline=rollup_deadline, source_changed=source_changed,
+                source_unknown=source_unknown, source_unknown_reasons=source_unknown_reasons,
+                cfg=cfg, timings=rollup_timing)
+        finally:
+            try:
+                elapsed = time.monotonic() - rebuild_start
+                if math.isfinite(elapsed):
+                    rollup_timing["rebuild_s"] = round(max(0, elapsed), 3)
+            except Exception:
+                pass  # Keep the partial counts and the original rebuild outcome.
         if source_changed:
             result["rollup_source_changed"] = len(source_changed)
             result["errors"].append("rollup_source_changed")
@@ -348,6 +374,9 @@ def stage_derive(ledger, result, deadline, cfg=None,
                 result["errors"].append("rollup: source_unknown")
     except Exception as e:
         result["errors"].append(f"rollup: {type(e).__name__}")
+    finally:
+        if rollup_timing:
+            result["rollup_timing"] = rollup_timing
 
     transaction_pending()
     # prospective review candidates — lifecycle-persisted signal_v1
