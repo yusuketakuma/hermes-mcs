@@ -413,3 +413,45 @@ def test_a_reservation_or_a_started_repair_marks_the_whole_unit(routed, monkeypa
     repaired.spawn_quality_repair()
     repaired._verified_repeat = True
     assert repaired.replacement_eligible is False
+
+
+@pytest.mark.parametrize("limit", [1, 2], ids=["serial", "parallel"])
+def test_a_failed_refill_preparation_keeps_the_other_paid_work(cloud_candidates, monkeypatch, limit):
+    """Candidate A is a verified repeat, the preparation of its replacement raises, and in the
+    parallel pass candidate B already holds a paid answer: B is still handled and saved,
+    refilling stops for the pass, and every claim is cleaned up by the existing finally."""
+    import extract_llm_runner
+    led, _, calls, reservations, results = cloud_candidates
+    head = _select(led, "extract")[0]["message_id"]
+    seen = _refuse(monkeypatch, {head}, "repeat_success")
+    prepare = extract_llm_runner._prepare_jobs
+    raised = []
+
+    def failing_after_refusal(*args, **kwargs):
+        if seen:
+            raised.append(True)
+            raise RuntimeError("synthetic preparation failure")
+        return prepare(*args, **kwargs)
+    monkeypatch.setattr(extract_llm_runner, "_prepare_jobs", failing_after_refusal)
+    report = _cloud_pass(led, limit=limit)
+    assert seen == [head] and raised and report["refilled"] == 0
+    assert report["done"] == limit - 1 and len(calls) == len(results) == limit - 1
+    held = led.db.execute("SELECT COUNT(*) FROM fetch_jobs WHERE kind='extract_claim'").fetchone()[0]
+    assert held <= 1            # only the refused unit's bounded claim may remain
+
+
+def test_a_lost_run_lock_during_refill_still_propagates(cloud_candidates, monkeypatch):
+    import extract_llm_runner
+    import writer_lock
+    led, _, calls, reservations, results = cloud_candidates
+    head = _select(led, "extract")[0]["message_id"]
+    seen = _refuse(monkeypatch, {head}, "repeat_success")
+    prepare = extract_llm_runner._prepare_jobs
+
+    def lost_after_refusal(*args, **kwargs):
+        if seen:
+            raise writer_lock.RunLockLost(held=False)
+        return prepare(*args, **kwargs)
+    monkeypatch.setattr(extract_llm_runner, "_prepare_jobs", lost_after_refusal)
+    with pytest.raises(writer_lock.RunLockLost):
+        _cloud_pass(led)

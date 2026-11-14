@@ -955,6 +955,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     claimed = []
     visit = [0]   # next unvisited candidate: each is visited at most once per pass
     refilled = 0  # candidates claimed into slots freed by a replacement-eligible refusal
+    refill_stopped = False
 
     def _claim_next(wanted, *, release_on_error):
         """Claim from the next unvisited candidate on, at most ``wanted`` in the cloud
@@ -1039,8 +1040,19 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     def _may_refill():
         """The pass may still give a freed slot away: cloud only, original deadline left,
         no lost lock, no endpoint outage and the writer generation unchanged."""
-        return (cloud_only and time.monotonic() < deadline and not lock_lost and not endpoint_down
-                and _writer_current(full=True))
+        return (cloud_only and not refill_stopped and time.monotonic() < deadline and not lock_lost
+                and not endpoint_down and _writer_current(full=True))
+
+    def _refill_claims(wanted):
+        """Claim replacements; a preparation failure only stops refilling for this pass, so
+        finished paid work still reaches its handler and the tail. Interrupts and a lost
+        run lock (BaseException) still propagate."""
+        nonlocal refill_stopped
+        try:
+            return _claim_next(wanted, release_on_error=False)
+        except Exception:
+            refill_stopped = True    # claims it made stay in `claimed`: the finally releases them
+            return []
 
     def _exec_batch(tups):
         _CALL_NOTES.transport = _CALL_NOTES.transport_at = None
@@ -1179,7 +1191,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             # so in-flight work never exceeds the original slots.
                             if d is _DEFERRED and r.get("_replacement_freed") is True and _may_refill():
                                 for refill_kind, refill_payload in _plan_units(
-                                        _claim_next(1, release_on_error=False), batch_k):
+                                        _refill_claims(1), batch_k):
                                     refilled += 1 if refill_kind == "single" else len(refill_payload)
                                     nfut = (_single_future(pool, refill_payload) if refill_kind == "single"
                                             else pool.submit(_exec_batch, refill_payload))
@@ -1220,7 +1232,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 if freed and _may_refill():
                     # Same original deadline and finite lookahead; the next unvisited
                     # candidates take the freed slots (claims stay owned by this pass).
-                    refill = _claim_next(freed, release_on_error=False)
+                    refill = _refill_claims(freed)
                     refilled += len(refill)
                     wave = _plan_units(refill, batch_k)
         if pending_writes:
