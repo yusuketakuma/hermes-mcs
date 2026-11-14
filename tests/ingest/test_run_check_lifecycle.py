@@ -681,3 +681,6 @@ def test_commands_snapshot_keeps_original_deadline_and_dirty_on_failure(
     assert bool(clears) is cleared
     out = capsys.readouterr().out
     assert ("snapshot_publish_failed" in out) is (state is None)
+    # every step that can hold the writer reports how long it took
+    assert set(json.loads(out)["stage_elapsed_s"]) == {
+        "cmd_recover", "cmd_drain", "cmd_int_drain", "cmd_int_drain_again", "cmd_card_gc", "cmd_snapshot"}
