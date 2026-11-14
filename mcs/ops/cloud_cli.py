@@ -819,7 +819,18 @@ def command(args):
             raise
         except (OSError, ValueError, TypeError, RecursionError):
             cfg = {}
-        if action in ("stop", "resume"):
+        if action == "local-rebuild-plan":
+            import extract_llm_local_rebuild as local_rebuild
+            with _reader(seconds=FULL_READ_SECONDS) as (db, _deadline):
+                result = local_rebuild.preview(SimpleNamespace(db=db), limit=args.limit)
+            if args.out is not None and result["plan"] is not None:
+                from safe_io import atomic_write
+                atomic_write(str(args.out), lambda f: json.dump(result["plan"], f, ensure_ascii=False), mode=0o600)
+            print(json.dumps({k: v for k, v in result.items() if k != "plan"}
+                             | {"planned": len(result["plan"]["units"]) if result["plan"] else 0},
+                             ensure_ascii=False, indent=2))
+            return 0 if result["state"] == "complete" else 1
+        if action in ("stop", "resume", "local-rebuild-approve"):
             from writer_lock import acquire_run_lock, wait_run_lock, code_stamp
             expected_code = code_stamp()
             if not args.confirm_human or not mcs_util.valid_text(args.reason, 2000):
@@ -831,6 +842,11 @@ def command(args):
             req = {"version": 1, "cmd": "ops.cloud_" + action,
                 "command_id": args.command_id or str(uuid.uuid4()), "actor": args.actor,
                 "human_confirmed": True, "project_id": None, "reason": args.reason}
+            if action == "local-rebuild-approve":
+                # One bundle per human confirmation; the plan file comes from local-rebuild-plan.
+                from safe_io import read_regular_nofollow
+                req["cmd"] = "ops.cloud_local_rebuild_approve"
+                req["plan"] = mcs_util.strict_json(read_regular_nofollow(str(args.plan), 65536, ValueError))
             # Validate before opening a writer; malformed CLI input never creates a ledger.
             error = mcs_requests.validate(req)
             if error:
@@ -856,7 +872,8 @@ def command(args):
                     receipt = mcs_requests.apply_command(ledger, req)
             finally:
                 os.close(lock_fd)
-            print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "control")}, ensure_ascii=False))
+            print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "control", "approved")},
+                             ensure_ascii=False))
             return 0 if receipt["outcome"] == "applied" else 1
         if action == "outstanding":
             import cloud_observation
@@ -1189,3 +1206,14 @@ def add_parsers(sub):
         q.add_argument("--actor", default="local-human")
         q.add_argument("--command-id", help="同じ操作を再試行する場合の承認記録UUID")
         q.set_defaults(fn=command, cloud_action=action)
+    q = actions.add_parser("local-rebuild-plan", help="支払い済みで回答が保存されていない再抽出のうち、ローカルで作り直せる束を確認（送信・変更しない）")
+    q.add_argument("--limit", type=int, default=20, help="1束の件数（20以下）")
+    q.add_argument("--out", type=Path, help="承認に使う束の計画を書き出すファイル")
+    q.set_defaults(fn=command, cloud_action="local-rebuild-plan")
+    q = actions.add_parser("local-rebuild-approve", help="人の確認と記録を伴い、確認した1束のローカルでの作り直しを承認")
+    q.add_argument("--plan", type=Path, required=True)
+    q.add_argument("--confirm-human", action="store_true")
+    q.add_argument("--reason", required=True)
+    q.add_argument("--actor", default="local-human")
+    q.add_argument("--command-id", help="同じ操作を再試行する場合の承認記録UUID")
+    q.set_defaults(fn=command, cloud_action="local-rebuild-approve")
