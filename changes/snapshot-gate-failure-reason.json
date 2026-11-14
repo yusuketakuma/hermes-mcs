@@ -4,7 +4,8 @@
   "summary": "収集の終わりに読取り用スナップショットを公開するとき、検証のあいだ外した実行ロックを取り直せないと、収集は「snapshot_gate_unverified」で止まります。これまでは止まった理由と待った時間が記録に残りませんでした。今後は、収集の結果JSONの snapshot_gate に、決まった理由コードと、検証にかかった秒数・取り直しを待った秒数を入れます。止まったときに健康状態を書かない動作と、終了コードは変わりません。",
   "upgrade": "追加操作は不要です。通常の更新で反映されます。",
   "details": [
-    "理由コードは run_lock_timeout（待ち時間切れ）、run_lock_timeout_updated（待ち時間切れの間に更新が入った）、run_lock_held（取り直したが、待つ間に更新が入った）、identity_mismatch（DBか実行ロックのファイルが入れ替わった）、fence_unverified（公開ロックの確認に失敗した）、precheck_identity_mismatch（ロックを外す前の確認で不一致）、deadline_unbounded、unlock_failed、reacquire_error です。",
+    "理由コードは run_lock_timeout（待ち時間切れ）、run_lock_timeout_updated（待ち時間切れの間に更新が入った）、run_lock_held（取り直したが、待つ間に更新が入った）、identity_mismatch（DBか実行ロックのファイルが入れ替わった）、fence_unverified（公開ロックの確認に失敗した）、precheck_identity_mismatch（ロックを外す前の確認で不一致）、deadline_unbounded、unlock_failed、reacquire_error、unclassified（未分類）です。",
+    "秒数は計測できた値だけを入れ、時刻を取得できなかったときは省きます。",
     "検証の安全条件、待ち時間の上限、書込みの禁止は変えていません。"
   ],
   "refs": [
