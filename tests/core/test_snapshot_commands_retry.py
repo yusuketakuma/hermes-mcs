@@ -2,6 +2,7 @@
 waits SNAPSHOT_MIN_INTERVAL_S without copying; urgent changes, tick, force and every
 malformed or replaced state publish as before. Synthetic ledgers and a stub copier only."""
 import json
+import math
 import os
 import time
 
@@ -194,13 +195,15 @@ def test_a_retry_record_write_failure_keeps_the_original_failure(env, monkeypatc
     assert "commands_retry" not in _state()
 
 
-@pytest.mark.parametrize("left", [0.0001, 0.0000001, 0.4999])
+@pytest.mark.parametrize("left", [0.0001, 0.4999, None])   # None: the last representable instant
 def test_a_deferral_close_to_the_end_still_reports_a_positive_wait(env, left):
     db, path, copies, outcome = env
     now = time.time()
     _fail_then(env, now)
     failed_at = _state()["commands_retry"]["failed_at"]
-    at = failed_at + maintenance.SNAPSHOT_MIN_INTERVAL_S - left
+    end = failed_at + maintenance.SNAPSHOT_MIN_INTERVAL_S
+    # an epoch near 1.8e9 cannot hold a sub-microsecond offset: take the float just before the end
+    at = math.nextafter(end, -math.inf) if left is None else end - left
     assert maintenance.refresh_snapshot(path, dirty=True, now=at, commands_retry=True) == "retry_deferred"
     assert 0 < snapshots.last_timing()["retry_after_s"] <= maintenance.SNAPSHOT_MIN_INTERVAL_S
 
