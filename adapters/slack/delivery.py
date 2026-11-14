@@ -32,7 +32,7 @@ NAME_CACHE_MAX = 1024
 # Match the runner's durable Slack wire budget; old sealed specs may predate it.
 # Body edits pass parse="none": chat.update defaults to "client" (postMessage to
 # "none"), which re-parses the text and can push an in-budget part past the limit.
-BODY_WIRE_MAX = 4000
+BODY_WIRE_MAX = 3500
 _BLOCK_TYPES = frozenset({"section", "divider", "actions", "context", "image", "header",
                           "input", "file", "video", "rich_text", "table", "markdown", "container"})
 _METRIC_MAX_BYTES = 1024 * 1024
