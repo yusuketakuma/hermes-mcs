@@ -836,12 +836,23 @@ def _source_identity(db_path):
     return [info.st_dev, info.st_ino]
 
 
-def _valid_signature(value) -> bool:
-    """A stored change signature in the shape _content_signature builds (no bools:
-    True == 1 must never make two signatures look equal)."""
-    return (isinstance(value, dict) and bool(value)
-            and all(type(key) is str and (value[key] is None or type(value[key]) in (int, float, str))
-                    for key in value))
+def _signature_value_valid(key, value) -> bool:
+    """One marker value in the type _content_signature gives that key. No bools and no
+    floats where an int belongs: True == 1 and 1.0 == 1 must never match a marker."""
+    if key == "":
+        return type(value) is int and value >= 0                   # schema_version
+    if key == "patients@content":
+        return type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+    if key == "requests@updated_at":
+        return (value is None or type(value) is int or type(value) is str
+                or type(value) is float and math.isfinite(value))
+    return value is None or type(value) is int and value >= 0       # a table's MAX(rowid)
+
+
+def _same_signature_shape(stored, current) -> bool:
+    """The stored failure signature has the current signature's keys and value types."""
+    return (isinstance(stored, dict) and stored.keys() == current.keys()
+            and all(_signature_value_valid(key, stored[key]) for key in stored))
 
 
 def _commands_retry_wait(prev: dict, sig, db_path: str, now: float):
@@ -851,7 +862,7 @@ def _commands_retry_wait(prev: dict, sig, db_path: str, now: float):
     appended rows). Only a background retry of the same change waits."""
     state = prev.get("commands_retry")
     if (not isinstance(state, dict) or sig is None
-            or not _valid_signature(state.get("failed_sig"))):
+            or not _same_signature_shape(state.get("failed_sig"), sig)):
         return None
     failed_at, identity = state.get("failed_at"), state.get("source_identity")
     if (type(failed_at) not in (int, float) or not math.isfinite(failed_at) or failed_at < 0
@@ -861,7 +872,8 @@ def _commands_retry_wait(prev: dict, sig, db_path: str, now: float):
             or _source_identity(db_path) != identity
             or not _rows_appended_only(state["failed_sig"], sig)):
         return None
-    return round(SNAPSHOT_MIN_INTERVAL_S - (now - failed_at), 3)
+    # rounded up to the millisecond: a deferral always reports a positive wait
+    return math.ceil((SNAPSHOT_MIN_INTERVAL_S - (now - failed_at)) * 1000) / 1000
 
 
 def _save_commands_retry(prev: dict, sig, identity, db_path: str, failed_at: float, lock_fd) -> None:

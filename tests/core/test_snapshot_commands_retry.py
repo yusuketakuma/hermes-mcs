@@ -118,6 +118,15 @@ def test_the_wait_ends_exactly_at_the_interval(env, offset, expected):
     lambda s: s["commands_retry"].update(source_identity=[1, 2]),                             # replaced
     lambda s: s["commands_retry"].update(failed_sig={key: True for key in s["commands_retry"]["failed_sig"]}),
     lambda s: s.update(commands_retry="broken"),
+    # a marker of the wrong type for its key must not match by == (1.0 == 1)
+    lambda s: s["commands_retry"]["failed_sig"].update(
+        {key: float(value) for key, value in s["commands_retry"]["failed_sig"].items()
+         if type(value) is int and key not in ("", "requests@updated_at")}),
+    lambda s: s["commands_retry"]["failed_sig"].update({"": float(s["commands_retry"]["failed_sig"][""])}),
+    lambda s: s["commands_retry"]["failed_sig"].update({"": "1"}),
+    lambda s: s["commands_retry"]["failed_sig"].update({"patients@content": "not-a-digest"}),
+    lambda s: s["commands_retry"]["failed_sig"].update({"requests@updated_at": float("nan")}),
+    lambda s: s["commands_retry"]["failed_sig"].update({"synthetic_extra_table": 1}),
 ])
 def test_malformed_future_or_replaced_states_never_wait(env, damage):
     db, path, copies, outcome = env
@@ -183,3 +192,59 @@ def test_a_retry_record_write_failure_keeps_the_original_failure(env, monkeypatc
     assert maintenance.refresh_snapshot(path, dirty=True, now=now + 2, commands_retry=True) is None
     assert snapshots.last_failure().get("retry_state") == "retry_state_write_failed"
     assert "commands_retry" not in _state()
+
+
+@pytest.mark.parametrize("left", [0.0001, 0.0000001, 0.4999])
+def test_a_deferral_close_to_the_end_still_reports_a_positive_wait(env, left):
+    db, path, copies, outcome = env
+    now = time.time()
+    _fail_then(env, now)
+    failed_at = _state()["commands_retry"]["failed_at"]
+    at = failed_at + maintenance.SNAPSHOT_MIN_INTERVAL_S - left
+    assert maintenance.refresh_snapshot(path, dirty=True, now=at, commands_retry=True) == "retry_deferred"
+    assert 0 < snapshots.last_timing()["retry_after_s"] <= maintenance.SNAPSHOT_MIN_INTERVAL_S
+
+
+def test_stage_order_commands_fail_defer_then_tick_publishes_and_clears_the_record(env):
+    """The order seen on 11-15: commands fails, commands defers, the tick then publishes;
+    afterwards the commands worker follows the ordinary decisions again."""
+    db, path, copies, outcome = env
+    now = time.time()
+    before = _fail_then(env, now)
+    assert maintenance.refresh_snapshot(path, dirty=True, now=now + 5, commands_retry=True) == "retry_deferred"
+    assert maintenance.refresh_snapshot(path, dirty=True, now=now + 10) == "published"     # the tick
+    assert len(copies) == before + 1 and "commands_retry" not in _state()
+    assert maintenance.refresh_snapshot(path, now=now + 15, commands_retry=True) == "unchanged"
+    assert "retry_reason" not in snapshots.last_timing()        # the status was reset per call
+
+
+@pytest.mark.parametrize("dirty", [False, True])
+def test_code_without_the_option_decides_as_if_the_record_were_absent(env, dirty):
+    """An old worker never passes commands_retry: the extra key changes none of its decisions."""
+    db, path, copies, outcome = env
+    now = time.time()
+    _fail_then(env, now)
+    with_record = _state()
+    db.save_messages([_message(3)])
+    stripped = {key: value for key, value in with_record.items() if key != "commands_retry"}
+    decisions = []
+    for state in (stripped, with_record):
+        with open(maintenance._snapshot_sig_path(), "w", encoding="utf-8") as f:
+            json.dump(state, f)
+        decisions.append(maintenance.refresh_snapshot(path, dirty=dirty, now=now + 20))
+        outcome["ok"] = True
+    assert decisions[0] == decisions[1]
+
+
+def test_a_failed_success_marker_reports_that_the_old_record_may_remain(env, monkeypatch):
+    db, path, copies, outcome = env
+    now = time.time()
+    _fail_then(env, now)
+
+    def broken(*args, **kwargs):
+        raise OSError("synthetic write failure")
+    monkeypatch.setattr(maintenance, "atomic_write", broken)
+    assert maintenance.refresh_snapshot(path, dirty=True, now=now + 10) == "published"
+    timing = snapshots.last_timing()
+    assert timing["marker_state"] == "unavailable" and timing["retry_state"] == "retry_state_not_cleared"
+    assert "commands_retry" in _state()          # the publish result is not falsified
