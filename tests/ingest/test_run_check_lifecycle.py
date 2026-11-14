@@ -485,6 +485,7 @@ def test_entry_keeps_unclassified_writer_refusal_private(tmp_path, monkeypatch, 
 
 def _without_not_started(refusal, mode):
     """Check the not-started observation's fixed shape, then return the original refusal."""
+    refusal = dict(refusal)   # the caller's dict stays whole for its own checks
     observed = {key: refusal.pop(key) for key in ("ts", "mode", "phase", "outcome", "wait_s")}
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", observed["ts"])
     assert (observed["mode"], observed["phase"], observed["outcome"]) == (mode, "run_lock", "not_started")
