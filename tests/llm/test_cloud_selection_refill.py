@@ -459,3 +459,22 @@ def test_a_lost_run_lock_during_refill_still_propagates(cloud_candidates, monkey
     monkeypatch.setattr(extract_llm_runner, "_prepare_jobs", lost_after_refusal)
     with pytest.raises(writer_lock.RunLockLost):
         _cloud_pass(led)
+
+
+def test_work_marked_after_the_refusal_is_rechecked_by_the_handler(cloud_candidates, monkeypatch):
+    """The refusal-time decision is not final: work that lands on the candidate before its
+    handler's terminal deferral (here, during the handler's own currentness check) keeps the slot."""
+    import extract_llm_runner
+    led, _, calls, reservations, results = cloud_candidates
+    head = _select(led, "extract")[0]["message_id"]
+    seen = _refuse(monkeypatch, {head}, "repeat_success")
+    owns = extract_llm_runner._owns_current_source
+
+    def late_work(ledger, r, lease):
+        if seen and r["message_id"] == head:
+            r["_work_seen"] = True
+        return owns(ledger, r, lease)
+    monkeypatch.setattr(extract_llm_runner, "_owns_current_source", late_work)
+    report = _cloud_pass(led)
+    assert seen == [head] and report["refilled"] == 0 and not calls
+    assert "refill_stopped" not in report             # nothing failed: no stop is reported
