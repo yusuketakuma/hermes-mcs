@@ -223,8 +223,19 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
         consent_hold = False
         delegated = False
         hold_mode = None
+        # An interrupt (KeyboardInterrupt, SystemExit) is no settled outcome: the unfinished
+        # journal keeps its update marker for recover_interrupted instead of the finally's cleanup.
+        interrupted = False
 
         def bail(reason: str) -> int:
+            nonlocal interrupted
+            try:
+                return _bail(reason)
+            except BaseException as error:
+                interrupted = interrupted or not isinstance(error, Exception)
+                raise
+
+        def _bail(reason: str) -> int:
             nonlocal rollback_failed, consent_hold, state
             transient = reason.split(":")[0] in _TRANSIENT_BAIL
             stages = [s.get("stage") for s in state.get("stages", [])]
@@ -596,8 +607,11 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             if isinstance(e, UpdateError):
                 return bail(str(e))
             return bail(f"unexpected:{type(e).__name__}")
+        except BaseException:
+            interrupted = True
+            raise
         finally:
-            if quiesced and not consent_hold and not rollback_failed:
+            if quiesced and not consent_hold and not rollback_failed and not interrupted:
                 _remove_marker()
             if borrowed is None:
                 for fd in (run_fd, upd_fd):
@@ -634,6 +648,7 @@ def rollback(command_id: str | None = None) -> int:
     run_fd = None
     quiesced = False
     consent_hold = False
+    interrupted = False   # as in apply(): an interrupted rollback journal keeps its marker
     try:
         state = journal_store.load_state(STATE_PATH)            # fresh view under the lock
         if _release_legacy_hold(state):
@@ -783,10 +798,13 @@ def rollback(command_id: str | None = None) -> int:
                             use_run_lock=run_fd is None, notice_code="rollback_failed")
             print("元の版に戻せませんでした。管理者に確認してください。詳細:", e)
             return 1
+    except BaseException as error:
+        interrupted = not isinstance(error, Exception)
+        raise
     finally:
         # a consent hold keeps BOTH markers: they are what durably holds
         # writers/senders frozen until the bound approval arrives
-        if quiesced and not consent_hold:
+        if quiesced and not consent_hold and not interrupted:
             _remove_marker()
         for fd in (run_fd, upd_fd):
             if fd is not None:
