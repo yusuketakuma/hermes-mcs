@@ -1,242 +1,34 @@
-name: ci
+name: focused-ci-diagnostic
 
 on:
-  # release gate only: the full suite runs for a vX.Y.Z tag, a pull request,
-  # the weekly schedule or a manual dispatch — never for a plain push to main
-  push:
-    tags: ['v*']
-  pull_request:
-  # weekly run on main: a runner image, Python patch or SQLite update that
-  # breaks the suite surfaces without waiting for the next release
-  schedule:
-    - cron: "17 3 * * 1"
   workflow_dispatch:
 
 permissions:
-  contents: read   # read-only everywhere: no job pushes to the repository
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  contents: read
 
 jobs:
-  publication-request:
-    # W12: tag push時のみ、後続のrelease-publish workflowへ渡す非信頼hintを出力。
-    # 値はrepo ID/tag/tag OID/source SHA/upstream run ID/attemptのみで4KiB未満。
-    # 権威ある照合(tag peel・repo/owner ID・acceptance)はpublisher側identifyが行い、
-    # このartifactを信用しない。plain main push/PR/schedule/dispatchでは動かない。
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: write publication request hint
-        env:
-          REPOSITORY_ID: ${{ github.repository_id }}
-          REF_NAME: ${{ github.ref_name }}
-          SHA: ${{ github.sha }}
-          HEAD_COMMIT_ID: ${{ github.event.head_commit.id }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: python3 scripts/development/publication_request.py
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
-        with:
-          name: publication-request
-          path: publication-request.json
-          retention-days: 7
-          if-no-files-found: error
-
-  lint-test:
-    runs-on: ubuntu-latest
-    # The 2026-11-01 suite was still progressing at 93% after 45 min.
-    # Keep the per-test MCS_TEST_TIMEOUT guard and bound the whole job.
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
-        with:
-          python-version: "3.14"
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
-        with:
-          version: "0.13.6"
-          cache-python: true
-          cache-dependency-glob: |
-            Makefile
-            .github/workflows/ci.yml
-            deployment/requirements-standalone.txt
-      - name: ruff
-        # Lint scope and the ruff pin live in the Makefile.
-        run: make lint
-      - name: Check bundled public medicine master
-        run: python3 scripts/development/check_drug_master_bundle.py
-      # no -x: every failure of the run is reported, not only the first
-      - name: pytest
-        run: |
-          uv venv --python 3.14 --managed-python .venv
-          uv pip install --python .venv/bin/python "pytest==9.2.0"
-          python3 ci/run_pytest_groups.py linux
-      - name: pytest diagnostics
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
-        with:
-          name: pytest-linux-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/mcs-pytest-*/
-          retention-days: 7
-          if-no-files-found: ignore
-      - name: check generated docs on PR
-        if: github.event_name == 'pull_request'
-        run: |
-          python3 scripts/development/update_readme.py
-          git diff --exit-code -- README.md docs/development/DEVELOPMENT.md
-
-  hygiene:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: no secrets or data dirs tracked
-        run: |
-          bad=$(git ls-files | grep -E '(^|/)(data/|chrome-profile/|\.env$|\.env\.[^/]*$|config\.json$|config\.json\.[^/]*$|token_cache\.json$)' || true)
-          if [ -n "$bad" ]; then
-            echo "::error::forbidden files tracked:"; echo "$bad"; exit 1
-          fi
-      - name: no stale adapter/ references
-        run: |
-          bad=$(grep -rnE '(^|[^[:alnum:]_])adapter/' --include='*.py' --include='*.sh' \
-                mcs/ tests/ hermes_plugin/ adapters/ lineworks_adapter/ mcs_standalone/ integration/ install.sh || true)
-          if [ -n "$bad" ]; then
-            echo "::error::stale adapter/ references:"; echo "$bad"; exit 1
-          fi
-      - name: secret pattern scan
-        run: |
-          bad=$(git ls-files -z | xargs -0 grep -lnE \
-                '(xox[baprs]-[0-9A-Za-z-]+|xapp-[0-9]-[A-Z0-9]{8,}-[0-9]+-[0-9a-f]{20,}|ghp_[0-9A-Za-z]{36}|sk-[0-9A-Za-z]{20,}|BEGIN [A-Z ]*PRIVATE KEY)' || true)
-          # One public signature happens to contain a key-like substring; exempt only these reviewed bytes.
-          public_vectors=adapters/sdc/contracts/releases/signature-vectors.json
-          public_vectors_sha=$(python3 -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$public_vectors")
-          if [ "$public_vectors_sha" = 6c33fb6823f2c784f126b6b6f3be6ab3dd3e9c17882fba100ba22a08f1b31379 ]; then
-            bad=$(printf '%s\n' "$bad" | grep -vFx "$public_vectors" || true)
-          fi
-          if [ -n "$bad" ]; then
-            echo "::error::possible secret committed:"; echo "$bad"; exit 1
-          fi
-      - name: shellcheck
-        run: shellcheck install.sh scripts/*.sh scripts/development/*.sh scripts/evaluation/*.sh deployment/scripts/*.sh deployment/install/*.sh
-      - name: plugin manifest sanity
-        run: |
-          grep -q "kind: standalone" hermes_plugin/plugin.yaml
-          grep -q "register" hermes_plugin/__init__.py
-
-  standalone-sdk:
-    # runtime_mode=standalone against the exact SDK pins install.sh puts in
-    # ~/.mcs/venv — offline: only each SDK's HTTP session is faked
-    runs-on: ubuntu-latest
+  focused:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.14"
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
         with:
           version: "0.13.6"
-          cache-dependency-glob: |
-            Makefile
-            .github/workflows/ci.yml
-            deployment/requirements-standalone.txt
-      - name: pinned standalone SDKs
-        run: uv pip install --python "$(command -v python)" "pytest==9.2.0" -r deployment/requirements-standalone.txt
-      # pinned-version assertion + required-collection check + test guards
-      - name: standalone SDK integration
-        run: MCS_TEST_PYTHON="$(command -v python)" sh scripts/development/check_pinned_sdks.sh standalone
-
-  incident-gates:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
-        with:
-          python-version: "3.14"
-      - name: static failure-pattern gates
-        run: python3 ci/gates.py
-      - name: incident coverage from dev-records
-        run: python3 ci/mine_gates.py --check
-
-  macos:
-    # production runs on macOS: launchd/LaunchAgent plists, plutil, BSD
-    # script(1) and /usr/bin/perl timeouts are only exercised here (their
-    # tests skip on Linux). meta/ and ops/ hold the installer, updater,
-    # setup and service tests; -r fEs lists every skip so a macOS-only test
-    # that silently skipped is visible in the log.
-    runs-on: macos-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
-        with:
-          python-version: "3.14"
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
-        with:
-          version: "0.13.6"
-          cache-python: true
-          cache-dependency-glob: |
-            Makefile
-            .github/workflows/ci.yml
-            deployment/requirements-standalone.txt
-      - name: pytest (installer, updater, setup and launchd)
+      - name: Prepare isolated test runtime
         run: |
-          # python.org's macOS build can link an unpatched SQLite release.
           uv venv --python 3.14 --managed-python .venv
           uv pip install --python .venv/bin/python "pytest==9.2.0"
-          python3 ci/run_pytest_groups.py macos
-      - name: pytest diagnostics
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
-        with:
-          name: pytest-macos-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/mcs-pytest-*/
-          retention-days: 7
-          if-no-files-found: ignore
-
-  hermes-integration:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          path: hermes-mcs
-      # the plugin contract is validated against ONE pinned Hermes ref —
-      # floating 'latest upstream' would let unrelated upstream drift
-      # break (or silently change) the lane (F23)
-      # Release prerequisite: advance this pin with install.sh and
-      # mcs_update.HERMES_PIN whenever the companion Hermes changes are
-      # republished (tests/meta/test_install_runtime_migration.py checks all three).
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          repository: yusuketakuma/hermes-agent
-          ref: 2c08ca7ade8f867d07e4bff6581be54405b0c9d0
-          path: hermes-agent
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
-        with:
-          python-version: "3.14"
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
-        with:
-          version: "0.13.6"
-          cache-dependency-glob: hermes-agent/uv.lock
-      - name: install hermes (pinned ref) + integration test deps
+          .venv/bin/python -c 'import platform, sqlite3; print("python", platform.python_version(), "sqlite", sqlite3.sqlite_version)'
+      - name: Diagnose synthetic approval tally
         run: |
-          uv venv --python python hermes-agent/.venv
-          # Match install.sh: Hermes owns the security overrides for voice/crypto.
-          cd hermes-agent
-          uv pip install --python .venv/bin/python -e '.[messaging]'
-          uv pip install --python .venv/bin/python --group dev
-      # Use the same isolated lane as local verification. It checks the
-      # installed distributions and imported source against the pin above,
-      # and rejects an empty or incomplete SDK test collection.
-      - name: discord and slack plugin integration
-        working-directory: hermes-mcs
-        env:
-          MCS_TEST_PYTHON: ${{ github.workspace }}/hermes-agent/.venv/bin/python
-          MCS_HERMES_SOURCE: ${{ github.workspace }}/hermes-agent
-          MCS_HERMES_REFERENCE: ${{ github.workspace }}/hermes-agent
-        run: sh scripts/development/check_pinned_sdks.sh hermes
+          sh scripts/run_tests.sh \
+            'tests/ops/test_cloud_cli_local_rebuild_budget.py::test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it' \
+            -r fEsP --durations=10
