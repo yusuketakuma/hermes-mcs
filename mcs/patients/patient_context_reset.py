@@ -36,6 +36,7 @@ IN_FLIGHT_S = 600
 BACKUP_PREFIX = "patient-context-reset-"
 # The CLI takes the backup just before the receipt transaction; an older copy is not this reset's.
 BACKUP_MAX_AGE_S = 3600
+BACKUP_CLOCK_SKEW_S = 300
 # Accounting reads that fail as data, not as a programming error: the reset then refuses.
 _UNVERIFIED = (ValueError, AnthropicError, InvalidOperation)
 QUALITY_OPERATIONS = ("patient_summary_quality", "patient_source_quality")
@@ -49,9 +50,9 @@ ERASED_KINDS = (
     state.QUALITY_REPAIR_CANDIDATE, state.QUALITY_RETRY, state.QUALITY_SKIP,
     state.SOURCE_REPAIR, state.SOURCE_REPAIR_CANDIDATE, *_SOURCE_QUALITY,
 )
-_USAGE_KINDS = ("cloud_usage_reserve", "cloud_usage_result", "cloud_usage_disposition")
 _RID = "CASE WHEN json_valid(meta) THEN json_extract(meta,'$.reservation_id') END"
 _ROUTE = "CASE WHEN json_valid(meta) THEN json_extract(meta,'$.route') END"
+_ROW = "artifact_id,kind,project_id,message_id,model,meta,created_at"
 REFUSALS = frozenset({
     "patient_context_enabled", "cloud_not_paused", "quality_claim_active", "generation_active",
     "cloud_in_flight", "jev_in_flight", "accounting_unverified", "accounting_inconsistent",
@@ -62,44 +63,62 @@ def _placeholders(values):
     return ",".join("?" * len(values))
 
 
-def _patient_context_reservations(db):
-    """route=patient_context reservations as {reservation_id: (meta, row)}; refuses ambiguous rows."""
-    reservations = {}
-    for row in db.execute(f"SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
-                          f"WHERE kind='cloud_usage_reserve' AND {_ROUTE}=?", (ROUTE,)):
+def _accounting(db):
+    """This route's accounting rows, read once: reservations, results by reservation, row ids.
+
+    Results and dispositions whose reservation is gone (pruned history) are erased with the
+    rest, since the tallies count spending by reservation only; one that names another
+    route's reservation is refused as inconsistent.
+    """
+    import ledger_schema
+    reservations, results, ids, stray = {}, {}, [], set()
+    rows = list(db.execute(f"SELECT {_ROW} FROM artifacts WHERE kind IN {ledger_schema.CLOUD_USAGE_KINDS_SQL} "
+                           f"AND {_ROUTE}=? ORDER BY artifact_id", (ROUTE,)))
+    for row in rows:
+        if row["kind"] == "cloud_usage_reserve":
+            meta = cloud_policy._accounting_meta(row["meta"])
+            rid = meta.get("reservation_id")
+            if not isinstance(rid, str) or rid in reservations:
+                raise ValueError("accounting_inconsistent")
+            reservations[rid] = (meta, row)
+    for row in rows:
+        ids.append(row["artifact_id"])
+        if row["kind"] == "cloud_usage_reserve":
+            continue
         meta = cloud_policy._accounting_meta(row["meta"])
         rid = meta.get("reservation_id")
-        if not isinstance(rid, str) or rid in reservations:
+        if rid not in reservations:
+            stray.add(rid)
+        elif row["kind"] == "cloud_usage_result":
+            results.setdefault(rid, []).append((meta, row))
+    named = [rid for rid in stray if isinstance(rid, str)]
+    for start in range(0, len(named), 500):
+        page = named[start:start + 500]
+        # the partial reservation index answers this; any match belongs to another route
+        if db.execute(f"SELECT 1 FROM artifacts WHERE kind IN {ledger_schema.CLOUD_USAGE_KINDS_SQL} "
+                      f"AND kind='cloud_usage_reserve' AND {ledger_schema.CLOUD_USAGE_RESERVATION_SQL} "
+                      f"IN ({_placeholders(page)}) LIMIT 1", page).fetchone():
             raise ValueError("accounting_inconsistent")
-        reservations[rid] = (meta, row)
-    return reservations
-
-
-# Results and dispositions of this route whose reservation is gone (pruned history); the
-# tallies count spending by reservation only, so they are erased with the rest.
-_STRAY = (f"kind IN ('cloud_usage_result','cloud_usage_disposition') AND {_ROUTE}=? AND ({_RID} IS NULL "
-          f"OR {_RID} NOT IN (SELECT {_RID} FROM artifacts WHERE kind='cloud_usage_reserve' AND {_ROUTE}=?))")
+    return SimpleNamespace(reservations=reservations, results=results, ids=ids)
 
 
 def _window_start(cfg):
-    settings, errors = cloud_policy.resolve_settings(cfg)
-    if errors or settings["window_budget_usd"] is None or settings["window_start"] is None:
+    settings = cloud_policy._cfg(cfg)
+    if settings["window_budget_usd"] is None or settings["window_start"] is None:
         return None
     return until_epoch(settings["window_start"])
 
 
-def _carryover(db, reservations, window_start):
+def _carryover(accounting, window_start):
     """Totals by day, period side, provider and settlement for the reservations about to be removed.
 
-    Each total is dated at its latest reservation: the day and the side of the period start
-    stay exact, and a later, earlier period start can only count more spending, never less.
+    Each total is dated at its latest reservation, so its day and its side of the period start
+    stay exact. Moving the period start later can only count more spending, never less.
     """
     groups = {}
-    for rid, (meta, row) in reservations.items():
+    for rid, (meta, row) in accounting.reservations.items():
         maximum = cloud_policy._reserve_valid(meta, row)
-        results = [(cloud_policy._accounting_meta(r["meta"]), r) for r in db.execute(
-            f"SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
-            f"WHERE kind='cloud_usage_result' AND {_RID}=?", (rid,))]
+        results = accounting.results.get(rid)
         cost, settled = cloud_policy._settled(meta, maximum, results) if results else (maximum, False)
         provider = cloud_policy._price_definition(meta["model"], meta["price_version"])["provider"]
         at = row["created_at"]
@@ -126,25 +145,22 @@ def _spend(db, cfg):
     ledger = SimpleNamespace(db=db)
     out = {"day": cloud_policy.usage_report(ledger, period="day"),
            "month": cloud_policy.usage_report(ledger, period="month")}
-    settings, errors = cloud_policy.resolve_settings(cfg)
-    if not errors and settings["window_budget_usd"] is not None:
+    if out["day"]["pricing_unverified"] or out["month"]["pricing_unverified"]:
+        raise ValueError("accounting_unverified")
+    if cloud_policy._cfg(cfg)["window_budget_usd"] is not None:
         out["window"] = cloud_policy.window_spend(ledger, cfg)
     return _amounts(out)
 
 
 def _quality_usage(db):
     """Jev usage rows of patient-context quality checks as (artifact_id, created_at, meta)."""
-    rows = []
-    for row in db.execute("SELECT artifact_id,created_at,meta FROM artifacts WHERE kind='semantic_usage' "
-                          "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.operation') END IN (?,?)",
-                          QUALITY_OPERATIONS):
-        meta = json.loads(row["meta"])
-        rows.append((row["artifact_id"], row["created_at"], meta))
-    return rows
+    return [(row["artifact_id"], row["created_at"], json.loads(row["meta"])) for row in db.execute(
+        "SELECT artifact_id,created_at,meta FROM artifacts WHERE kind='semantic_usage' "
+        "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.operation') END IN (?,?)", QUALITY_OPERATIONS)]
 
 
-def _refusal(db, cfg, now):
-    """The first fixed reason that forbids the reset now, or None."""
+def _work_refusal(db, cfg, now):
+    """The first fixed reason, read without the accounting, that forbids the reset now, or None."""
     if state.options(cfg)["enabled"]:
         return "patient_context_enabled"
     if cloud_policy.global_block_reason(SimpleNamespace(db=db)) != "paused":
@@ -157,42 +173,39 @@ def _refusal(db, cfg, now):
         if (isinstance(doc, dict) and doc.get("state") in ("reserved", "started")
                 and isinstance(doc.get("lease_until"), (int, float)) and doc["lease_until"] > now):
             return "generation_active"
-    report = cloud_policy.usage_report(SimpleNamespace(db=db))
-    # Count every accounting row: a partial count is not evidence that none is unreadable.
-    holds = cloud_policy.evidence_hold_counts(db, now=now, scan_limit=1 << 62)
-    if report["pricing_unverified"] or holds["unattributable_accounting_rows"] != 0:
+    return None
+
+
+def _accounting_refusal(db, now, accounting, quality):
+    if cloud_policy.usage_report(SimpleNamespace(db=db))["pricing_unverified"]:
         return "accounting_unverified"
-    reservations = _patient_context_reservations(db)
-    answered = {row[0] for row in db.execute(
-        f"SELECT {_RID} FROM artifacts WHERE kind='cloud_usage_result' AND {_ROUTE}=?", (ROUTE,))}
-    if any(rid not in answered and row["created_at"] > now - IN_FLIGHT_S
-           for rid, (_meta, row) in reservations.items()):
+    # Count every accounting row: a partial count is not evidence that none is unreadable.
+    if cloud_policy.evidence_hold_counts(db, now=now, scan_limit=1 << 62)["unattributable_accounting_rows"] != 0:
+        return "accounting_unverified"
+    if any(rid not in accounting.results and row["created_at"] > now - IN_FLIGHT_S
+           for rid, (_meta, row) in accounting.reservations.items()):
         return "cloud_in_flight"
-    if any("quality_result" not in meta and created_at > now - IN_FLIGHT_S
-           for _id, created_at, meta in _quality_usage(db)):
+    if any("quality_result" not in meta and created_at > now - IN_FLIGHT_S for _id, created_at, meta in quality):
         return "jev_in_flight"
     return None
 
 
 def _plan(db, cfg, now, stop):
-    """The preview body and the carry-over entries it commits to; `stop` errors propagate."""
+    """(preview, accounting) in one read of each source; `stop` errors propagate unclassified."""
+    accounting, carryover = None, []
     try:
-        refusal = _refusal(db, cfg, now)
-        reservations = _patient_context_reservations(db)
-        carryover = _carryover(db, reservations, _window_start(cfg))
+        refusal = _work_refusal(db, cfg, now)
+        quality = _quality_usage(db)
+        accounting = _accounting(db)
+        refusal = refusal or _accounting_refusal(db, now, accounting, quality)
+        carryover = _carryover(accounting, _window_start(cfg))
     except stop:
         raise
     except _UNVERIFIED as error:
         refusal = str(error) if str(error) in REFUSALS else "accounting_unverified"
-        reservations, carryover = {}, []
+        accounting, quality = None, []
     kinds = {kind: db.execute("SELECT COUNT(*) FROM artifacts WHERE kind=?", (kind,)).fetchone()[0]
              for kind in ERASED_KINDS}
-    rids = list(reservations)
-    accounting = db.execute(f"SELECT COUNT(*) FROM artifacts WHERE {_STRAY}", (ROUTE, ROUTE)).fetchone()[0]
-    for start in range(0, len(rids), 500):
-        page = rids[start:start + 500]
-        accounting += db.execute(f"SELECT COUNT(*) FROM artifacts WHERE kind IN (?,?,?) AND {_RID} IN "
-                                 f"({_placeholders(page)})", (*_USAGE_KINDS, *page)).fetchone()[0]
     from patient_context_refresh_readiness import lane_metrics
     try:
         outcomes = lane_metrics(db)
@@ -202,17 +215,19 @@ def _plan(db, cfg, now, stop):
         outcomes = None
     body = {"refusal": refusal, "kinds": kinds, "quality_claims": db.execute(
                 "SELECT COUNT(*) FROM fetch_jobs WHERE kind=?", (state.QUALITY_CLAIM,)).fetchone()[0],
-            "accounting_rows": accounting, "reservations": len(reservations),
+            "accounting_rows": len(accounting.ids) if accounting else 0,
+            "reservations": len(accounting.reservations) if accounting else 0,
             "unsettled_reservations": sum(entry["requests"] for entry in carryover if not entry["settled"]),
-            "quality_usage_rows": len(_quality_usage(db)), "carryover": carryover, "outcomes": outcomes}
-    return {**body, "preview_hash": payload_hash({key: body[key] for key in body if key != "refusal"})}
+            "quality_usage_rows": len(quality), "carryover": carryover, "outcomes": outcomes}
+    preview = {**body, "preview_hash": payload_hash({key: body[key] for key in body if key != "refusal"})}
+    return preview, accounting, quality
 
 
 def preview(db, *, cfg=None, now, stop=()):
     """Counts of what the reset removes and carries, without identifiers or content.
 
     `stop` are the caller's reader-limit errors: they propagate instead of reading as a refusal."""
-    return _plan(db, load_config() if cfg is None else cfg, now, tuple(stop))
+    return _plan(db, load_config() if cfg is None else cfg, now, tuple(stop))[0]
 
 
 def validate_operation(req, base):
@@ -243,12 +258,13 @@ def apply_tx(db, req, now, *, cfg=None, backup_dir=None):
         return "config_unreadable", {}
     backup = Path(backup_dir or maintenance.BACKUP_DIR) / req["backup"]["name"]
     try:
+        # this reset's own copy: taken by the CLI just before, so modified within the last hour
         if (backup.is_symlink() or not backup.is_file() or os.path.getsize(backup) != req["backup"]["bytes"]
-                or os.path.getmtime(backup) < now - BACKUP_MAX_AGE_S):
+                or not now - BACKUP_MAX_AGE_S <= os.path.getmtime(backup) <= now + BACKUP_CLOCK_SKEW_S):
             return "backup_missing", {}
     except OSError:
         return "backup_missing", {}
-    found = preview(db, cfg=cfg, now=now)
+    found, accounting, quality = _plan(db, cfg, now, ())
     if found["refusal"] is not None:
         return found["refusal"], {}
     if found["preview_hash"] != req["preview_hash"]:
@@ -256,18 +272,15 @@ def apply_tx(db, req, now, *, cfg=None, backup_dir=None):
     db.execute("SAVEPOINT patient_context_reset")
     try:
         before = _spend(db, cfg)
-        rids = list(_patient_context_reservations(db))
-        db.execute(f"DELETE FROM artifacts WHERE {_STRAY}", (ROUTE, ROUTE))
-        for start in range(0, len(rids), 500):
-            page = rids[start:start + 500]
-            db.execute(f"DELETE FROM artifacts WHERE kind IN (?,?,?) AND {_RID} IN ({_placeholders(page)})",
-                       (*_USAGE_KINDS, *page))
+        for start in range(0, len(accounting.ids), 500):
+            page = accounting.ids[start:start + 500]
+            db.execute(f"DELETE FROM artifacts WHERE artifact_id IN ({_placeholders(page)})", page)
         if found["carryover"]:
             db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
                        (cloud_policy.CARRYOVER_KIND, json.dumps({"schema": cloud_policy.CARRYOVER_KIND,
                         "entries": found["carryover"]}), "", json.dumps({"command_id": req["command_id"]}), now))
         today = cloud_policy._periods(now)[0]
-        for artifact_id, created_at, meta in _quality_usage(db):
+        for artifact_id, created_at, meta in quality:
             if created_at >= today:
                 carried = {"operation": CARRIED_JEV_OPERATION, "jev_requests": meta.get("jev_requests", 0)}
                 db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(carried), artifact_id))

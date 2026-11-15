@@ -29,10 +29,12 @@ READ_BYTES = 16 * 1024 * 1024
 # never borrowed from another phase.
 TALLY_READ_ROWS = 200000
 TALLY_READ_BYTES = 640 * 1024 * 1024
-# The patient-context reset preview reads the month's accounting twice (the usage report and the
-# carried reservations' results), so twice the tally phase. Same kind of operating capacity.
+# The patient-context reset preview reads this route's retained accounting once and the month's
+# accounting of every route once (the usage report), so twice the tally phase. Same kind of
+# operating capacity; its values may also exceed the observation reader's 2 MiB length cap.
 RESET_READ_ROWS = 2 * TALLY_READ_ROWS
 RESET_READ_BYTES = 2 * TALLY_READ_BYTES
+RESET_VALUE_BYTES = 64 * 1024 * 1024
 
 
 class _ReaderLimit(ValueError):
@@ -112,12 +114,17 @@ def _context_reset_preview(cfg):
     """The patient-context reset preview under its own read budget; a reader limit is reported, never a refusal."""
     import patient_context_reset
     with _reader(seconds=FULL_READ_SECONDS) as (db, _deadline):
+        db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, RESET_VALUE_BYTES)
         try:
-            with _reader_phase(db, rows=RESET_READ_ROWS, size=RESET_READ_BYTES, reason="tally_budget_exceeded"):
-                return patient_context_reset.preview(db, cfg=cfg, now=time.time(), stop=(_ReaderLimit,))
+            with _reader_phase(db, rows=RESET_READ_ROWS, size=RESET_READ_BYTES, reason="reset_budget_exceeded"):
+                found = patient_context_reset.preview(db, cfg=cfg, now=time.time(), stop=(_ReaderLimit,))
         except (_ReaderLimit, sqlite3.Error) as error:
-            reason = getattr(db.row_factory, "stop_reason", None) or _reader_failure_reason(error)
-            return {"refusal": "read_incomplete", "stop_reason": reason, "preview_hash": None}
+            found = {"stop_reason": _reader_failure_reason(error)}
+        # a limit some reader inside the preview absorbed still leaves its mark here
+        reason = getattr(db.row_factory, "stop_reason", None) or found.get("stop_reason")
+    if reason is not None:
+        return {"refusal": "read_incomplete", "stop_reason": reason, "preview_hash": None}
+    return found
 
 
 def _check_reader(db, deadline):
@@ -917,13 +924,18 @@ def command(args):
                                          (args.command_id,)).fetchone()
                     if old is not None:
                         receipt = json.loads(old["receipt_json"])
+                        if receipt.get("outcome") == "applied" and "erased" not in receipt:
+                            # another operation's id: the shared receipt contract calls this a conflict
+                            receipt = {"command_id": args.command_id, "outcome": "rejected",
+                                       "error": "command_id_conflict"}
                         print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "backup",
                                                                       "erased", "carryover") if k in receipt},
                                          ensure_ascii=False))
                         return 0 if receipt.get("outcome") == "applied" else 1
                 found = _context_reset_preview(cfg)
                 if found["refusal"] is not None or found["preview_hash"] != args.preview_hash:
-                    print(json.dumps({"outcome": "rejected", "error": found["refusal"] or "preview_changed"},
+                    print(json.dumps({"outcome": "rejected", "error": found["refusal"] or "preview_changed"}
+                                     | ({"stop_reason": found["stop_reason"]} if "stop_reason" in found else {}),
                                      ensure_ascii=False))
                     return 1
             if action == "local-rebuild-approve":
@@ -947,6 +959,7 @@ def command(args):
             if lock_fd is None:
                 print("クラウド操作: ほかの保存処理が終わってから再試行してください")
                 return 3
+            copy = None
             try:
                 if (path.parent / "update_in_progress.marker").exists() or code_stamp() != expected_code:
                     raise ValueError("update_in_progress")
@@ -973,8 +986,8 @@ def command(args):
                     # Nothing was erased, so the copy restores nothing; an exception keeps it (below).
                     os.unlink(copy)
             except BaseException:
-                if action == "context-reset" and req["backup"]["sha256"] != "0" * 64:
-                    print(json.dumps({"backup_kept": req["backup"]["name"]}, ensure_ascii=False))
+                if copy is not None:
+                    print(json.dumps({"backup_kept": os.path.basename(copy)}, ensure_ascii=False))
                 raise
             finally:
                 os.close(lock_fd)

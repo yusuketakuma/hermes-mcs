@@ -259,7 +259,7 @@ python3 mcs/ops/mcs_setup.py cloud-llm context-reset --preview-hash <preview_has
 python3 mcs/ops/mcs_setup.py cloud-llm resume --confirm-human --reason '患者コンテキストを作り直す'
 ```
 
-`context-reset-plan` の `refusal` が `null` でない間は消去できません（`read_incomplete` は確認の読取りが上限に達したことを示すので、ほかの処理が少ない時間に再実行します）。
+`context-reset-plan` の `refusal` が `null` でない間は消去できません（`read_incomplete` は確認の読取りが上限に達したことを示します。`stop_reason` が `read_deadline` のときは、ほかの処理が少ない時間に再実行します。それ以外の理由は再実行しても通らないので、開発者に連絡してください）。
 バックアップは手順3の実行時に取り、1時間以内のものだけを使います。拒否されたときのバックアップは削除されます。消去の後は公開中の患者コンテキストがすぐ表示されなくなり、通常の処理で作り直されます。
 結果が分からないまま残っていた送信（`unsettled_reservations`）と同じ内容を、作り直しで改めて送ることがあります。詳しい消去範囲は [患者背景情報の契約](../specs/patient-context.md) を参照してください。
 
