@@ -371,6 +371,12 @@ _DEFER_REASONS.update(_COMMIT_REJECTION_CODES)
 # Defer reasons that keep a bounded claim instead of re-heading the queue:
 # the unit's evidence cannot be proven this pass — an unverifiable head
 # must not starve the tail under a limited claim window.
+# CloudFallback's fixed codes, observed per pass apart from the defer reasons ("other" otherwise).
+_FALLBACK_CODES = frozenset({
+    "cloud_incomplete_response", "cloud_invalid_response", "cloud_owner_stopped", "cloud_validation_failed",
+    "cloud_local_context_unavailable", "cloud_profile_invalid", "cloud_unit_changed", "cloud_repair_invalid",
+    "cloud_send_blocked", "cloud_unit_failed", "other"})
+
 _HOLD_DEFER_REASONS = frozenset(
     {"cloud_unit_unresolved", "cloud_source_unverified", "currentness_unverified",
      "prepare_profile_unavailable", "local_rebuild_proof_changed", "local_rebuild_unverified"})
@@ -584,6 +590,12 @@ def worker(parent, *, index=None, context_only=False):
                         if sum(reasons.values()) != total:
                             reasons = {"unclassified": total}
                         record["defer_reasons"] = reasons
+                    codes = result.get("fallback_codes")
+                    codes = ({key: count for key, count in codes.items()
+                              if key in _FALLBACK_CODES and type(count) is int and count > 0}
+                             if isinstance(codes, dict) else {})
+                    if codes:
+                        record["fallback_codes"] = codes
                     refilled = result.get("refilled")
                     if type(refilled) is int and 0 <= refilled <= 64:   # the extract pass's finite lookahead
                         record["refilled"] = refilled

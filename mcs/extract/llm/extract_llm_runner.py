@@ -329,6 +329,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # pass record must never leak an error class, config value or id here.
     # Carry-settle reasons ride inside carry_settled and merge in here.
     defer_reasons: dict = dict(carry_settled.get("defer_reasons") or {})
+    # The fixed CloudFallback code behind each cloud_fallback defer, apart from the main
+    # classification (an observation only: never a not-sent proof or a resend permission).
+    fallback_codes: dict = {}
 
     def _defer_note(reason, settled=None, count=1):
         if count <= 0:
@@ -527,6 +530,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         _CALL_NOTES.transport = r["_transport"] = None
         _CALL_NOTES.transport_at = r["_transport_at"] = None
         _CALL_NOTES.defer_reason = r["_defer_reason"] = None
+        _CALL_NOTES.fallback_code = r["_fallback_code"] = None
         r.pop("_quality_hold", None)
         if time.monotonic() > deadline:
             r["_defer_reason"] = "deadline"
@@ -541,6 +545,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             r["_transport"] = getattr(_CALL_NOTES, "transport", None)
             r["_transport_at"] = getattr(_CALL_NOTES, "transport_at", None)
             r["_defer_reason"] = getattr(_CALL_NOTES, "defer_reason", None)
+            r["_fallback_code"] = getattr(_CALL_NOTES, "fallback_code", None)
 
     def _extract_call(r, ctx, saved, hints, qc, index, meta, chunks_out):
         provider = None
@@ -588,6 +593,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 _CALL_NOTES.defer_reason = "busy"
                 return _DEFERRED
             except cloud_inference.CloudFallback as error:
+                _CALL_NOTES.fallback_code = str(error)
                 if str(error) == "cloud_unit_changed":
                     provider.discard()
                 # An unknown send keeps its source/backend claim; only a known outcome can fall back.
@@ -842,6 +848,14 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         and r.get("_defer_reason") in cloud_backlog._HOLD_DEFER_REASONS:
                     keep_lease = True
                     keep_claims.add(id(r))
+                if r.get("_defer_reason") == "cloud_fallback":
+                    code = r.get("_fallback_code")
+                    code = code if code in cloud_backlog._FALLBACK_CODES else "other"
+                    fallback_codes[code] = fallback_codes.get(code, 0) + 1
+                    if cloud_only and prioritize_patients:
+                        # It keeps no claim and frees no replacement, so the next priority pass
+                        # would select the same head again: move past it (in-memory ready only).
+                        _cloud_priority_discard(ledger, r["message_id"])
                 if r.get("_cloud_failed"):
                     cloud_retry()
                 # answered then deferred (no time left to repair) is still
@@ -1357,7 +1371,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         return {'done': done, 'failed': failed, 'held_prior': held_prior, 'left': None,
                 'carried': carried, 'carry': carry_out, 'deferred': deferred, 'refilled': refilled,
                 **({'refill_stopped': True, 'refill_stop_error': refill_stop_error} if refill_stopped else {}),
-                'defer_reasons': dict(defer_reasons),
+                'defer_reasons': dict(defer_reasons), 'fallback_codes': dict(fallback_codes),
                 'pids': sorted(done_pids), 'updated': True}
     for r, local_result, ctx, unit in shadow_tasks:
         if deadline - time.monotonic() < _MIN_CALL_S:
@@ -1414,7 +1428,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             "fresh_selected": fresh_selected,
             "selected": selected_count, "deferred": deferred, "refilled": refilled,
             **({"refill_stopped": True, "refill_stop_error": refill_stop_error} if refill_stopped else {}),
-            "defer_reasons": dict(defer_reasons),
+            "defer_reasons": dict(defer_reasons), "fallback_codes": dict(fallback_codes),
             "context_blocked": context_blocked,
             "skipped": skipped, "lock_lost": lock_lost,
             "slow_deferred": slow_deferred,
