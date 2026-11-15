@@ -177,7 +177,7 @@ def _history_proof(ledger, project_id, message_id, stop=()):
                 meta = cloud_policy._receipt_meta(item['meta'])
                 rid, route = meta.get('reservation_id'), meta.get('route')
                 if (not isinstance(rid, str) or re.fullmatch(r'[0-9a-f]{32}', rid) is None
-                        or not isinstance(route, str) or not route or rid in routes):
+                        or route not in cloud_policy.ROUTES or rid in routes):
                     raise _Excluded('receipt_inconsistent')
                 routes[rid] = route
                 if route == ROUTE:
