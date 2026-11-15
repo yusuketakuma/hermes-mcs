@@ -208,10 +208,13 @@ def test_a_multi_piece_body_with_a_quality_repair_stays_local_and_tagged(routed,
             return ["synthetic-missing"]
         return completeness(*args)
     monkeypatch.setattr(worker.extract_quality, "completeness_issues", once)
+    done = 0
     for _ in range(4):
-        if worker.run_pending(ledger, limit=1, budget_s=200)["done"]:
+        done = worker.run_pending(ledger, limit=1, budget_s=200)["done"]
+        if done:
             break
-    assert issued and len(kinds) > len(pieces)                       # every piece plus the repair
+    assert done == 1 and len(_current(ledger)) == 1                   # the run completed and was adopted
+    assert issued and 'repair' in kinds and kinds.count('first') >= len(pieces)   # every piece plus the repair
     assert calls == [] and reserved == [] and results == []
     tags = [json.loads(meta).get('local_rebuild') for (meta,) in ledger.db.execute(
         "SELECT meta FROM artifacts WHERE kind IN ('extract_llm_chunk',?) AND message_id=1", (worker.KIND,))
@@ -278,10 +281,22 @@ def test_a_local_length_stop_splits_the_piece_and_every_split_stays_local_and_ta
         return {"symptoms": [], "patient_context": [{"category": "living", "subject": "patient",
                                                      "text": piece, "evidence": piece}]}
     monkeypatch.setattr(extract_llm_engine, '_llm_call', local)
+    answered = []
+    original = local
+
+    def counted(prompt, **kwargs):
+        answer = original(prompt, **kwargs)
+        answered.append(answer is not None)
+        return answer
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', counted)
+    done = 0
     for _ in range(3):
-        if worker.run_pending(ledger, limit=1, budget_s=180)['done']:
+        done = worker.run_pending(ledger, limit=1, budget_s=180)['done']
+        if done:
             break
-    assert stopped and calls == [] and reserved == [] and results == []
+    assert done == 1 and len(_current(ledger)) == 1                   # the split run completed
+    assert stopped and answered.count(True) >= 2                       # both halves were answered
+    assert calls == [] and reserved == [] and results == []
     splits = [json.loads(meta) for (meta,) in ledger.db.execute(
         "SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' AND message_id=1")]
     assert any('split_size' in meta for meta in splits)                # the split plan was written
