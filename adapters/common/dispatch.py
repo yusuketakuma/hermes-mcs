@@ -134,6 +134,17 @@ def _outcome(reply: str) -> str:
     return "ok"
 
 
+_AUDIT_OPS = frozenset({"status", "read", "request", "control", "summary"})
+_AUDIT_PHASES = frozenset({"preview", "confirm", "receipt"})
+
+
+def _audit_value(value, allowed):
+    """Only the fixed command vocabulary reaches the access log; typed text becomes "other"."""
+    if value is None:
+        return None
+    return value if isinstance(value, str) and value in allowed else "other"
+
+
 def _audited(reply: str, data: dict, settings: dict[str, Any],
              identity: dict[str, str | None]) -> str:
     """Record who touched which patient before an answer leaves the host.
@@ -144,13 +155,16 @@ def _audited(reply: str, data: dict, settings: dict[str, Any],
     """
     bootstrap()
     import access_log
-    phase, op, outcome = data.get("phase"), data.get("op"), _outcome(reply)
+    outcome = _outcome(reply)
+    op = _audit_value(data.get("op"), _AUDIT_OPS)
+    phase = _audit_value(data.get("phase"), _AUDIT_PHASES)
+    kinds = READ_KINDS | {"notification_receipt", "create", "update"} | set(CONTROL_FIELDS)
     try:
         access_log.record(
             Path(settings["inbox"]).parent, via=identity.get("transport") or "discord",
             actor=actor(identity), channel=identity.get("chat_id"),
             op=f"{op}.{phase}" if isinstance(phase, str) else op,
-            kind=data.get("kind") or data.get("action"),
+            kind=_audit_value(data.get("kind") or data.get("action"), kinds),
             project_id=data.get("project_id"), outcome=outcome,
             query="query" in data)
     except (access_log.AccessLogError, OSError, KeyError, TypeError):

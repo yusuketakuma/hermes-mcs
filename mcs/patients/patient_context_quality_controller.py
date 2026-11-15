@@ -580,7 +580,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, base_do
         raise RuntimeError("patient_summary_transaction_active")
     key = semantic_jev.api_key()
     cloud_key = cloud_policy.selected_key(extract_llm.HOME, cfg)
-    scfg, errors = semantic_policy.semantic_config(cfg, key_present=bool(key))
+    scfg, errors = semantic_policy.semantic_config(cfg, key_present=semantic_policy.auto_key_present(key))
     local_quality = bool(isinstance(base_meta, dict) and not base_meta.get('provider')
                          and (base_meta.get('route_contract') or not patient_context_refresh_state._contract(cfg, pid).get('provider')))
     if source is not None:
@@ -657,7 +657,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, base_do
                 ledger.db.execute("BEGIN")
             live = extract_llm.load_config()
             live_key = semantic_jev.api_key()
-            live_semantic, problems = semantic_policy.semantic_config(live, key_present=bool(live_key))
+            live_semantic, problems = semantic_policy.semantic_config(live, key_present=semantic_policy.auto_key_present(live_key))
             if skip_reason is not None:
                 try:
                     semantic_runtime._jev_window_check()
@@ -775,7 +775,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, base_do
             if fd is None:
                 raise patient_context_refresh_state.Deferred("patient_summary_quality_lock")
             try:
-                live_cfg, problems = semantic_policy.semantic_config(extract_llm.load_config(), key_present=bool(key))
+                live_cfg, problems = semantic_policy.semantic_config(extract_llm.load_config(), key_present=semantic_policy.auto_key_present(key))
                 if problems or live_cfg["daily_request_budget"] < scfg["daily_request_budget"]:
                     raise patient_context_refresh_state.Deferred("patient_summary_quality_budget_changed")
                 reservation[0] = reserve(body, timeout)

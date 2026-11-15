@@ -475,7 +475,7 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
             import semantic_runtime
             from semantic_store import jev_usage_today
             key = semantic_jev.api_key()
-            scfg, errs = semantic_policy.semantic_config(cfg, key_present=bool(key))
+            scfg, errs = semantic_policy.semantic_config(cfg, key_present=semantic_policy.auto_key_present(key))
             semantic_runtime._jev_window_check()
             cap = scfg["daily_request_budget"] - math.ceil(
                 scfg["daily_request_budget"] * semantic_policy.BACKLOG_BUDGET_RESERVE)

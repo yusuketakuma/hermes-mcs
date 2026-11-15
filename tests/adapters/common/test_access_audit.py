@@ -36,3 +36,15 @@ def test_unrecorded_read_is_withheld_but_confirmed_write_is_not(tmp_path, monkey
     assert json.loads(read) == {"ok": False, "error": "access_log_unavailable"}
     write = command_dispatch.dispatch({"op": "request", "phase": "confirm"}, settings, IDENTITY)
     assert json.loads(write)["ok"] is True
+
+
+def test_unknown_command_words_are_recorded_as_other_not_as_typed(tmp_path, monkeypatch):
+    monkeypatch.setattr(command_dispatch, "dispatch_operation", lambda *a, **k: deny("bad_read"))
+    for data in ({"op": "read", "kind": "合成太郎"}, {"op": "合成花子", "kind": "search"},
+                 {"op": "control", "phase": "合成次郎", "action": "合成三郎"}):
+        command_dispatch.dispatch(data, _settings(tmp_path), IDENTITY)
+    entries = list(access_log.read(tmp_path))
+    assert [(e["op"], e["kind"]) for e in entries] == [
+        ("read", "other"), ("other", "search"), ("control.other", "other")]
+    raw = b"".join(p.read_bytes() for p in (tmp_path / access_log.DIR_NAME).glob("*.jsonl"))
+    assert "合成".encode() not in raw

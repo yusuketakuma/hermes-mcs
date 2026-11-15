@@ -387,10 +387,12 @@ def _init_save_config(cfg, initial, args):
             return
         if kind == 'missing':
             import external_transfer
+            # A new installation sends nothing to external AI on a key alone; the pending
+            # record is written before the config so a crash in between cannot skip it.
+            pending = external_transfer.require(parent)
             args._config_publication_started = True
             safe_io.publish_new_bytes(CONF_PATH, body.encode('utf-8'))
-            # A new installation sends nothing to external AI on a key alone.
-            if external_transfer.require(parent):
+            if pending:
                 print('外部AIへの送信は、施設の確認を記録するまで自動では始まりません'
                       '（docs/guides/COMPLIANCE.md）')
         else:

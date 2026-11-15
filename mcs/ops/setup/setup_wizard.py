@@ -550,7 +550,7 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
     """Show the selected destinations and writes; require an explicit answer before saving."""
     import stamp_write
     import local_llm
-    from semantic_policy import runtime_config, semantic_config
+    from semantic_policy import auto_key_present, runtime_config, semantic_config
     import cloud_policy
 
     def shown(value):
@@ -564,7 +564,7 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
     scope = ntf.get(interactive) or {}
     digest = cfg.get("daily_digest") or {}
     semantic, _ = (runtime_config(cfg) if key_presence is None else
-                   semantic_config(cfg, key_present=key_presence.get("jev") is True))
+                   semantic_config(cfg, key_present=auto_key_present(key_presence.get("jev") is True)))
     if key_presence is None:
         from mcs_util import private_env_problem
         key_presence = {name: private_env_problem(key) is None for name, key in (

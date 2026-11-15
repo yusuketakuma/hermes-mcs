@@ -68,3 +68,35 @@ def test_history_stays_within_the_readable_size(tmp_path):
     state = external_transfer.status(tmp_path)
     assert state["state"] == "acknowledged"
     assert len(external_transfer._read(tmp_path)["history"]) == external_transfer.HISTORY_LIMIT
+
+
+def test_a_present_key_turns_jev_on_only_after_the_review(tmp_path):
+    assert semantic_policy.auto_key_present("k", tmp_path) is True        # existing installation
+    assert semantic_policy.auto_key_present("", tmp_path) is False
+    external_transfer.require(tmp_path)
+    assert semantic_policy.auto_key_present("k", tmp_path) is False       # new installation, pending
+    assert semantic_policy.semantic_config(
+        {}, key_present=semantic_policy.auto_key_present("k", tmp_path))[0]["mode"] == "off"
+
+
+def test_every_key_based_semantic_config_goes_through_the_review_gate():
+    """A direct key_present=bool(key) would let a patient-summary quality check reach Jev
+    before a new installation's review (the PR #67 review finding)."""
+    import ast
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2] / "mcs"
+    offenders = []
+    for path in root.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not (isinstance(node, ast.Call) and getattr(node.func, "attr", getattr(node.func, "id", None)) == "semantic_config"):
+                continue
+            for kw in node.keywords:
+                value = kw.value
+                gated = (isinstance(value, ast.Constant)
+                         or isinstance(value, ast.Call) and getattr(value.func, "attr", getattr(value.func, "id", None)) == "auto_key_present"
+                         or isinstance(value, ast.BoolOp) and any(
+                             isinstance(v, ast.Call) and getattr(v.func, "attr", getattr(v.func, "id", None)) == "auto_key_present"
+                             for v in value.values))
+                if kw.arg == "key_present" and not gated:
+                    offenders.append(f"{path.relative_to(root)}:{node.lineno}")
+    assert offenders == []

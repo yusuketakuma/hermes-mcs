@@ -203,13 +203,18 @@ def semantic_config(cfg: dict, *, key_present=False) -> tuple[dict, list]:
     return out, errors
 
 
+def auto_key_present(key, root=None) -> bool:
+    """A present Jev key turns an omitted mode on only once a new installation's
+    external-transfer confirmation allows it; every semantic_config caller uses this."""
+    import external_transfer
+    return bool(key) and external_transfer.auto_enable_allowed("jev", root)
+
+
 def runtime_config(cfg: dict, *, root=None) -> tuple[dict, list]:
     """Resolve an omitted Jev mode from this MCS dotenv without widening its scope."""
     block = cfg.get("semantic")
     explicit = isinstance(block, dict) and "mode" in block
-    import external_transfer
-    return semantic_config(cfg, key_present=not explicit and bool(jev.api_key(root))
-                           and external_transfer.auto_enable_allowed("jev", root))
+    return semantic_config(cfg, key_present=not explicit and auto_key_present(jev.api_key(root), root))
 
 
 def policy_fingerprint(scfg: dict) -> str:
