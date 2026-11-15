@@ -254,7 +254,7 @@ def test_backslash_home_and_final_instructions_survive(tmp_path):
     venv_py = hermes_home / "hermes-agent" / "venv" / "bin" / "python"
     assert f"'{venv_py}' '{ROOT}/mcs/ops/mcs_setup.py' init\n" in r.stdout
     assert "後で続ける場合のコマンド:" in r.stdout
-    assert f"'{venv_py}' '{ROOT}/mcs/ops/mcs_setup.py' check" in r.stdout
+    assert f"'{home}/.local/bin/mcs' doctor" in r.stdout
     shim = (home / ".local" / "bin" / "hermes").read_text()
     assert f"exec '{venv_py.parent / 'hermes'}' \"$@\"" in shim
 
@@ -451,10 +451,9 @@ def test_standalone_installer_has_no_hermes_checkout_or_commands(tmp_path):
     first = _run(env, None, "--mode", "standalone", "--no-llm")
     assert first.returncode == 0, first.stdout + first.stderr
     assert json.loads((home / ".mcs/config.json").read_text())["runtime_mode"] == "standalone"
-    for command in ("-m lineworks_adapter init", "-m mcs_standalone status"):
-        assert f"cd '{ROOT}' && " in first.stdout.split(command)[0].splitlines()[-1]
-    assert "専用サービスを別に起動しないでください" in first.stdout
-    assert "-m lineworks_adapter service" not in first.stdout
+    assert f"cd '{ROOT}' && " in first.stdout.split("-m mcs_standalone status")[0].splitlines()[-1]
+    # LINE WORKS steps appear only when LINE WORKS is the chosen target
+    assert "lineworks_adapter" not in first.stdout
     calls = _calls(stub)
     text = "\n".join(calls)
     assert "requirements-standalone.txt" in text
@@ -495,7 +494,9 @@ def test_hermes_install_routes_lineworks_without_plugin_or_gateway(tmp_path):
     """LINE WORKS uses its own adapter: --no-plugin must not claim every
     interactive transport needs the plugin, and the final guidance names
     the lineworks_adapter steps (no secret values are printed)."""
-    home, hermes_home, stub_root, env = _world(tmp_path)
+    home, hermes_home, stub_root, env = _world(tmp_path, configured=True)
+    (home / ".mcs/config.json").write_text(
+        '{"runtime_mode":"hermes","notify_target":"lineworks:synthetic-room"}')
     plan = _run(env, None, "--mode", "hermes", "--dry-run", "--no-plugin", "--no-llm")
     assert "省略（--no-plugin。LINE WORKS では不要）" in plan.stdout
     r = _run(env, hermes_home, "--no-llm", "--no-plugin", "--no-recovery")

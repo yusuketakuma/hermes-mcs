@@ -411,7 +411,7 @@ blocker 一覧と launchd agent の状態は `check` で確認する:
 
 ### 5-5. 動作確認
 
-[専用Chromeとセッション確認](INSTALLATION.md#初回の専用chromeとセッション確認両モード共通)に従い、専用profile準備・本人ログイン・CDP稼働・MCSセッション・初回収集を別状態で確認する。CDP応答だけで認証成功とせず、CDPもtoken cacheもない初回の`bootstrap_error`を自動再ログイン待ちだけで解消すると仮定しない。`manual_required:multi_user_host`は停止を保持し、専用OSユーザー追加だけで解決扱いしない。
+[専用Chromeとセッション確認](INSTALLATION.md#初回の専用chromeとセッション確認両モード共通)に従い、ユーザー端末の`mcs setup browser`で専用profile準備・本人ログイン・MCSセッションを確認し、初回収集は別状態で確認する。CDP応答だけで認証成功とせず、CDPもtoken cacheもない初回の`bootstrap_error`を自動再ログイン待ちだけで解消すると仮定しない。`manual_required:multi_user_host`は停止を保持し、専用OSユーザー追加だけで解決扱いしない。
 実データの取得・通知・既読化が既存の承認範囲に含まれることを確認し、
 範囲外ならその操作の承認だけを得てから実行する。
 

@@ -394,13 +394,36 @@ def cmd_init(args) -> int:
               "更新が中断した場合に限り、mcs recover で復旧を確認してください。")
     else:
         print("初期設定と動作条件の確認が完了しました。"
-              "実際の通知が届くことを、通知先の画面で確認してください。")
+              "\n次は専用ChromeでMCSへログインします。ログインを確認できるまで、定期収集はMCSへ接続できません。")
         if not args.yes:
+            _offer_browser_sign_in()
             from mcs_config import feature_enabled
             # the CSDC guidance is optional; its registration stays a separate consent
             if feature_enabled(cfg, "csdc"):
                 setup_wizard.offer_sdc_enrollment(cfg)
     return result
+
+
+def _offer_browser_sign_in() -> None:
+    """After a completed init, offer the sign-in step that collection still needs."""
+    if sys.platform != "darwin" or not sys.stdin.isatty():
+        print("  ログインのコマンド: mcs setup browser")
+        return
+    print("\n  1) 続けて専用Chromeを開き、MCSへログインする（推奨）\n  2) 後で行う（mcs setup browser）")
+    try:
+        answer = input("  選択 [1・推奨 / 2]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        answer = "2"
+    if answer in ("", "1"):
+        cmd_browser(None)
+    else:
+        print("  後で行う場合のコマンド: mcs setup browser")
+
+
+def cmd_browser(_args) -> int:
+    """Open the dedicated Chrome and confirm the user's own MCS sign-in."""
+    import browser_setup
+    return browser_setup.run()
 
 
 def cmd_slack_channels(args):
@@ -1417,6 +1440,8 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_slack_channels, yes=True)
     p = sub.add_parser("features", help='任意機能のセットアップ案内を表示するかを選びます（CSDCは現在既定で省略）')
     p.set_defaults(fn=cmd_features, yes=False)
+    p = sub.add_parser("browser", help='専用Chromeを開き、本人がMCSへログインしたことを確認します')
+    p.set_defaults(fn=cmd_browser, yes=True)
     p = sub.add_parser("check", help='必要な設定と動作条件を確認し、問題と対処方法を表示します')
     p.set_defaults(fn=cmd_check, yes=True)
     p = sub.add_parser("doctor", help='状態を読取り専用で診断します。未確認は正常扱いしません。設定の修正方法はcheckで確認')
