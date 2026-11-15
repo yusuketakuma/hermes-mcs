@@ -165,7 +165,7 @@ def _history_proof(ledger, project_id, message_id, stop=()):
             "WHERE kind IN (?,?,?) "
             "AND project_id=? AND message_id IS ? ORDER BY artifact_id",
             (*_USAGE_KINDS, project_id, message_id)).fetchall()
-        results, discarded, routes, proven = {}, set(), {}, []
+        results, discarded, routes, proven, foreign = {}, set(), {}, [], {}
         try:
             # Every raw usage row is attributed through its own reservation: reextract rows (every
             # model, unit key, piece and repair) form the proof; rows that link to another route's
@@ -182,6 +182,8 @@ def _history_proof(ledger, project_id, message_id, stop=()):
                 routes[rid] = route
                 if route == ROUTE:
                     proven.append(item)
+                else:
+                    foreign[rid] = (meta, item, [])
             for item in history:
                 if item['kind'] == 'cloud_usage_reserve':
                     continue
@@ -190,6 +192,8 @@ def _history_proof(ledger, project_id, message_id, stop=()):
                 if not isinstance(rid, str) or rid not in routes:
                     raise _Excluded('receipt_inconsistent')   # an orphan or malformed row is never ignored
                 if routes[rid] != ROUTE:
+                    if item['kind'] == 'cloud_usage_result':
+                        foreign[rid][2].append((meta, item))
                     continue
                 proven.append(item)
                 if item['kind'] == 'cloud_usage_disposition':
@@ -227,6 +231,11 @@ def _history_proof(ledger, project_id, message_id, stop=()):
                     raise _Excluded('receipt_inconsistent')
                 if answer:
                     raise _Excluded('answer_stored')
+            # Another route's rows are left out only once they verify as that route's accounting.
+            for meta, item, linked in foreign.values():
+                maximum = cloud_policy._reserve_valid(meta, item)
+                if linked:
+                    cloud_policy._settled(meta, maximum, linked)
         except (_Excluded, *stop):
             raise
         except (cloud_policy.AnthropicError, ArithmeticError, ValueError, TypeError, KeyError, RecursionError):
