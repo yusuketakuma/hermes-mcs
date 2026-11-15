@@ -809,7 +809,7 @@ if [ "$SETUP_STATUS" -eq 0 ]; then
         "$MCS_PY" "$SETUP" slack-channels || SETUP_STATUS=$?
     fi
 fi
-# Show only the follow-up steps that apply to this install.
+# Show follow-up steps for this install.
 printf '\n次にすること（上から順に）:\n'
 printf '    1. 専用ChromeでMCSへログイン（初期設定の最後に済ませた場合は不要）: %s setup browser\n' "$(shell_quote "$MCS_SHIM")"
 printf '    2. 10分ほど待って状態を確認: %s doctor\n' "$(shell_quote "$MCS_SHIM")"
