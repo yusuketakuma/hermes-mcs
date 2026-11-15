@@ -1357,7 +1357,12 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
             add(group.get("anchors") or [group["anchor"]], label)
             add(group["nearby"], f"{day}の前後14日の記録")
             if group["no_record"]:
-                head.append(f"{day}の前後14日で記載なし: "
+                # a missing record is not an absent action: only a completed analysis (the same
+                # condition as the empty-view note below) may say nothing was found
+                found_all = (ev["coverage"].get("inference") or {}).get("complete") is True
+                head.append(f"{day}の前後14日で"
+                            + ("記載が見つかりません: " if found_all
+                               else "記載の有無は未確認（解析・取得が未完了）: ")
                             + "・".join(views.SECTION_LABELS.get(k, (k,))[0] for k in group["no_record"]))
     elif section == "timeline":
         from referral_document import HEADER_FIELDS
