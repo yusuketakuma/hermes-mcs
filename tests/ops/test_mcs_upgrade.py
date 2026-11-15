@@ -388,6 +388,7 @@ def test_post_apply_confirmation_failure_reports_hold_without_reapplying(
                 return subprocess.CompletedProcess(command, 0, '{invalid', '')
         return original(command, **kwargs)
     monkeypatch.setattr(launcher.subprocess, 'run', run)
+    monkeypatch.setattr(launcher, '_run_updater', run)
     assert launcher.main(['--repo', str(repo), '--no-fetch', entry, '--to', 'v1.2.0']) == 1
     assert trace.read_text() == 'apply' and len(applied) == 1
     output = capfd.readouterr().out
@@ -634,6 +635,7 @@ def test_launcher_cleans_staging_on_launch_error_or_cancellation(tmp_path, monke
 
     monkeypatch.setattr(launcher, "extract", extract)
     monkeypatch.setattr(launcher.subprocess, "run", run)
+    monkeypatch.setattr(launcher, "_run_updater", run)
     expected = SystemExit if isinstance(failure, OSError) else KeyboardInterrupt
     with pytest.raises(expected):
         launcher.main(["--repo", str(tmp_path), "--no-fetch", "plan", "--to", "v1.2.0"])
