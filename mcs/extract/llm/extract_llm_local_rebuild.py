@@ -2,34 +2,48 @@
 
 A unit qualifies only when its whole retained cloud history (every model and unit key of
 the message) verifies, every reservation predates input binding (the key is absent) and
-settled as exactly one successful HTTP 200 result whose stored answer is the empty object.
-A human approves a bounded bundle of such units; the approval grants a local attempt from
-the current source only, never a cloud send, reservation or change to accounting.
+settled as exactly one successful HTTP 200 result whose stored answer is the empty object,
+no checkpoint, frame or repair record of any model is left for the current source, and no
+valid material final exists. A human approves a bounded bundle of such units; the approval
+grants a local attempt from the current source only, never a cloud send, reservation or
+change to accounting.
+
+Limit: retention writes its prune mark in the deleting transaction, so a database without
+the mark has never pruned usage rows through that path; any mark at all fails closed, so
+once retention has pruned, no further unit can be approved. A deletion outside that
+maintenance path leaves no evidence and cannot be ruled out.
 """
-import math
+from contextlib import contextmanager
 import os
 import sqlite3
+import time
 from types import SimpleNamespace
 
 import cloud_policy
+import extraction_context
 import inference_dependency_loss
-from extract_llm_qc import pending_pred
-from extract_llm_source_contract import EXTRACT_VERSION, KIND
-from mcs_util import payload_hash, strict_json, valid_hash
+import inference_version as inference
+import mcs_queries
+from extract_llm_context import _context_contract, _pending_frames, _pending_records
+from extract_llm_qc import _current, pending_pred
+from extract_llm_source_contract import KIND, _INFERENCE_VERSION
+from mcs_queries import json_or_null
+from mcs_util import payload_hash, strict_json, valid_hash, valid_text
 
 # Proposed initial bundle size. Raise it only with dry-run evidence that a bundle of
-# the new size verifies every unit's whole history inside the shared read deadline.
+# the new size verifies every unit's whole history inside APPROVE_SECONDS.
 BUNDLE_LIMIT = 20
+APPROVE_SECONDS = 30.0   # the writer transaction's whole re-verification budget
 COMMAND = 'ops.cloud_local_rebuild_approve'
 RECEIPT_KIND = 'cloud_local_rebuild_approval'
-PLAN_SCHEMA = 'cloud_local_rebuild_plan_v1'
+PLAN_SCHEMA = 'cloud_local_rebuild_plan_v2'
 ROUTE = 'reextract'
 # Why a candidate is not eligible (fixed set; never identifiers or values).
 EXCLUSIONS = frozenset({
-    'source_missing', 'already_current', 'tally_invalid', 'history_pruned', 'no_history',
-    'receipt_inconsistent', 'binding_present', 'disposition', 'result_missing',
-    'not_success', 'answer_stored', 'unverified'})
-# What a unit's approval means right now (permit). Only 'active' allows local work.
+    'source_missing', 'already_current', 'not_pending', 'tally_invalid', 'history_pruned',
+    'no_history', 'receipt_inconsistent', 'binding_present', 'disposition', 'result_missing',
+    'not_success', 'answer_stored', 'checkpoint_present', 'frame_present', 'unverified'})
+# What a unit's approval means right now (permit). Only ACTIVE allows local work.
 UNAPPROVED, ACTIVE, ADOPTED = 'unapproved', 'active', 'adopted'
 PROOF_CHANGED, UNVERIFIED = 'local_rebuild_proof_changed', 'local_rebuild_unverified'
 PERMIT_STATES = frozenset({UNAPPROVED, ACTIVE, ADOPTED, PROOF_CHANGED, UNVERIFIED})
@@ -40,37 +54,78 @@ class _Excluded(Exception):
     pass
 
 
-def _history_pruned(db, message_id):
-    """Retention may have deleted this message's oldest usage rows: fail closed."""
-    marks = [row[0] for row in db.execute(
-        "SELECT content FROM artifacts WHERE kind=?", (cloud_policy.PRUNE_MARK_KIND,))]
-    if not marks:
-        return False
+def _message(db, project_id, message_id):
+    row = db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=?",
+                     (project_id, message_id)).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _selected_final(db, row):
+    """The final every reader selects for this message (the progress/material contract's row)."""
+    return db.execute(
+        "SELECT artifact_id,meta FROM artifacts WHERE kind=? AND message_id=? AND (project_id IS NULL OR project_id=?) AND "
+        + inference.current_meta_pred("meta", target=_INFERENCE_VERSION)
+        + " AND COALESCE(json_extract(" + json_or_null("meta") + ",'$.invalidated'),0)=0 "
+        "ORDER BY artifact_id DESC LIMIT 1", (KIND, row["message_id"], row["project_id"])).fetchone()
+
+
+def _valid_material(db, row):
+    final = _selected_final(db, row)
+    return final is not None and mcs_queries.selected_artifact_proof_valid(db, final[0], material=True)
+
+
+def _work_left(db, row, stop):
+    """Checkpoints, frames and quality repair (started/origin) records of every model, read
+    through the canonical pending readers; any of them for the current source keeps the unit."""
+    models = [model for (model,) in db.execute(
+        "SELECT DISTINCT model FROM artifacts WHERE kind IN ('extract_llm_chunk',?) AND project_id=? "
+        "AND message_id=?", (extraction_context.KIND, row["project_id"], row["message_id"]))]
+    target = {**row, "_cloud_mode": "off"}
+    for model in models:
+        try:
+            if _pending_records(db, {**target, "_target": ("", model)}, model):
+                raise _Excluded('checkpoint_present')
+            if _pending_frames(db, {**target, "_target": ("", model)}, model):
+                raise _Excluded('frame_present')
+        except stop:
+            raise
+        except (ValueError, TypeError, KeyError):
+            raise _Excluded('checkpoint_present') from None
+
+
+def _tally_valid(ledger, stop=()):
+    """The month's accounting tally verifies; checked once per dry run, approval or permit."""
     try:
-        cutoffs = [float(mark) for mark in marks]
-    except (TypeError, ValueError):
-        return True
-    if len(cutoffs) != 1 or not math.isfinite(cutoffs[0]):
-        return True
-    seen = db.execute("SELECT first_seen FROM messages WHERE message_id=?", (message_id,)).fetchone()
-    first = seen[0] if seen else None
-    return type(first) not in (int, float) or not math.isfinite(first) or first < cutoffs[0]
+        return not cloud_policy._tally(ledger).invalid
+    except stop:
+        raise
+    except (cloud_policy.AnthropicError, ArithmeticError, ValueError, TypeError, KeyError):
+        return False
 
 
-def _check_unit(ledger, project_id, message_id):
-    """-> (source_binding, history digest); raises _Excluded(reason)."""
+def _history_pruned(db):
+    """Any prune mark (or an unreadable one) fails closed; no mark means never pruned."""
+    return db.execute("SELECT 1 FROM artifacts WHERE kind=? LIMIT 1",
+                      (cloud_policy.PRUNE_MARK_KIND,)).fetchone() is not None
+
+
+def _check_unit(ledger, project_id, message_id, stop=()):
+    """-> (source_binding, history digest); raises _Excluded(reason). The caller has already
+    verified the tally; `stop` are the reader's limit errors, never classified as a reason."""
     db = ledger.db
+    row = _message(db, project_id, message_id)
     binding = inference_dependency_loss.source_binding(db, project_id, message_id)
-    if not isinstance(binding, str) or not binding:
+    if row is None or not isinstance(binding, str) or not binding:
         raise _Excluded('source_missing')
+    if _current(ledger, message_id, row["content_hash"]) or _valid_material(db, row):
+        raise _Excluded('already_current')
     pending = db.execute(f"SELECT ({pending_pred(db)}) FROM messages m WHERE m.project_id=? AND m.message_id=?",
                          (project_id, message_id)).fetchone()
     if pending is None or not pending[0]:
-        raise _Excluded('already_current')
+        raise _Excluded('not_pending')
+    _work_left(db, row, stop)
     with cloud_policy._accounting_snapshot(db):
-        if cloud_policy._tally(ledger).invalid:
-            raise _Excluded('tally_invalid')
-        if _history_pruned(db, message_id):
+        if _history_pruned(db):
             raise _Excluded('history_pruned')
         try:
             rows = cloud_policy._verified_request_history(
@@ -80,24 +135,25 @@ def _check_unit(ledger, project_id, message_id):
         if not rows:
             raise _Excluded('no_history')
         history = db.execute(
-            "SELECT artifact_id,kind,model,meta,content FROM artifacts WHERE kind IN (?,?,?) "
+            "SELECT artifact_id,kind,project_id,message_id,model,meta,content,created_at FROM artifacts "
+            "WHERE kind IN (?,?,?) "
             "AND project_id=? AND message_id IS ? ORDER BY artifact_id",
             (*_USAGE_KINDS, project_id, message_id)).fetchall()
         results, discarded = {}, set()
         try:
-            for row in history:
-                if row['kind'] == 'cloud_usage_reserve':
+            for item in history:
+                if item['kind'] == 'cloud_usage_reserve':
                     continue
-                meta = cloud_policy._receipt_meta(row['meta'])
+                meta = cloud_policy._receipt_meta(item['meta'])
                 rid = meta.get('reservation_id')
                 if not isinstance(rid, str):
                     raise _Excluded('receipt_inconsistent')
-                if row['kind'] == 'cloud_usage_disposition':
+                if item['kind'] == 'cloud_usage_disposition':
                     discarded.add(rid)
                 else:
-                    results.setdefault(rid, []).append((meta, row))
-            for row in rows:
-                reservation = cloud_policy._receipt_meta(row['meta'])
+                    results.setdefault(rid, []).append((meta, item))
+            for item in rows:
+                reservation = cloud_policy._receipt_meta(item['meta'])
                 if reservation.get('route') != ROUTE:
                     raise _Excluded('receipt_inconsistent')
                 if 'input_binding' in reservation:
@@ -110,7 +166,7 @@ def _check_unit(ledger, project_id, message_id):
                     raise _Excluded('result_missing')
                 if len(matches) != 1:
                     raise _Excluded('receipt_inconsistent')
-                maximum = cloud_policy._reserve_valid(reservation, row)
+                maximum = cloud_policy._reserve_valid(reservation, item)
                 _, settled = cloud_policy._settled(reservation, maximum, matches)
                 result, result_row = matches[0]
                 if result.get('disposition'):
@@ -124,23 +180,24 @@ def _check_unit(ledger, project_id, message_id):
                     raise _Excluded('receipt_inconsistent')
                 if answer:
                     raise _Excluded('answer_stored')
-        except _Excluded:
+        except (_Excluded, *stop):
             raise
         except (cloud_policy.AnthropicError, ArithmeticError, ValueError, TypeError, KeyError, RecursionError):
             raise _Excluded('receipt_inconsistent') from None
-        digest = payload_hash([[row['artifact_id'], row['kind'], row['model'], row['meta'], row['content']]
-                               for row in history])
+        digest = payload_hash([[item['artifact_id'], item['kind'], item['model'], item['meta'], item['content']]
+                               for item in history])
     return binding, digest
 
 
-def unit_proof(ledger, project_id, message_id):
-    """-> {'project_id','message_id','source_binding','extract_version','proof'} or raise ValueError(reason)."""
+def unit_proof(ledger, project_id, message_id, stop=()):
+    """-> {'project_id','message_id','source_binding','contract','proof'} or raise ValueError(reason).
+    Verify the tally first (_tally_valid); `stop` errors propagate unclassified."""
     try:
-        binding, digest = _check_unit(ledger, project_id, message_id)
+        binding, digest = _check_unit(ledger, project_id, message_id, stop)
     except _Excluded as excluded:
         raise ValueError(excluded.args[0]) from None
     return {'project_id': project_id, 'message_id': message_id, 'source_binding': binding,
-            'extract_version': EXTRACT_VERSION, 'proof': digest}
+            'contract': _context_contract(), 'proof': digest}
 
 
 def _candidates(db):
@@ -152,30 +209,36 @@ def _candidates(db):
         "ORDER BY message_id DESC", (ROUTE,)).fetchall()
 
 
-def preview(ledger, *, limit=BUNDLE_LIMIT):
+def preview(ledger, *, limit=BUNDLE_LIMIT, stop=(sqlite3.OperationalError,)):
     """Read-only dry run: counts with fixed exclusion reasons and one bundle plan.
 
-    The caller's reader enforces the deadline; an interrupted read leaves the rest
-    unverified (never eligible) and marks the preview partial."""
+    The caller's reader enforces the deadline and budget and names its limit errors in
+    `stop`; hitting one leaves the rest unverified (never eligible) and the preview partial."""
     if type(limit) is not int or not 1 <= limit <= BUNDLE_LIMIT:
         raise ValueError('local_rebuild_limit_invalid')
     db = ledger.db
     excluded = dict.fromkeys(sorted(EXCLUSIONS), 0)
     units, rows, done, eligible, state = [], [], 0, 0, 'complete'
+    stop = tuple(stop) + (sqlite3.OperationalError,)
     try:
         approvals = approved_units(db)
         rows = _candidates(db)
+        tally = _tally_valid(ledger, stop)
         for project_id, message_id in rows:
             try:
-                if _approval_state(ledger, project_id, message_id, approvals) in (ACTIVE, ADOPTED):
+                if not tally:
+                    raise ValueError('tally_invalid')
+                if _approval_state(ledger, project_id, message_id, approvals, stop) in (ACTIVE, ADOPTED):
                     excluded['already_current'] += 1
                 else:
-                    units.append(unit_proof(ledger, project_id, message_id))
+                    units.append(unit_proof(ledger, project_id, message_id, stop))
                     eligible += 1
+            except stop:
+                raise
             except ValueError as error:
                 excluded[str(error) if str(error) in EXCLUSIONS else 'receipt_inconsistent'] += 1
             done += 1
-    except sqlite3.OperationalError:
+    except stop:
         # the reader's deadline interrupted: the rest stays unverified, never eligible
         state = 'partial'
         excluded['unverified'] += len(rows) - done
@@ -183,9 +246,13 @@ def preview(ledger, *, limit=BUNDLE_LIMIT):
     plan = None
     if units:
         plan = {'schema': PLAN_SCHEMA, 'database': _database_identity(db), 'units': units}
-        plan['bundle_digest'] = payload_hash({k: plan[k] for k in ('schema', 'database', 'units')})
+        plan['bundle_digest'] = _bundle_digest(plan)
     return {'state': state, 'candidates': len(rows), 'eligible': eligible,
             'excluded': excluded, 'bundle_limit': BUNDLE_LIMIT, 'plan': plan}
+
+
+def _bundle_digest(plan):
+    return payload_hash({key: plan[key] for key in ('schema', 'database', 'units')})
 
 
 def _database_identity(db):
@@ -197,12 +264,11 @@ def _database_identity(db):
 
 
 def _valid_unit(unit):
-    return (type(unit) is dict and set(unit) == {'project_id', 'message_id', 'source_binding',
-                                                 'extract_version', 'proof'}
+    return (type(unit) is dict and set(unit) == {'project_id', 'message_id', 'source_binding', 'contract', 'proof'}
             and type(unit['project_id']) is int and unit['project_id'] > 0
             and type(unit['message_id']) is int and unit['message_id'] > 0
             and isinstance(unit['source_binding'], str) and 0 < len(unit['source_binding']) <= 128
-            and type(unit['extract_version']) is int and valid_hash(unit['proof']))
+            and valid_hash(unit['contract']) and valid_hash(unit['proof']))
 
 
 def valid_plan(plan):
@@ -214,13 +280,11 @@ def valid_plan(plan):
             or not all(type(value) is int for value in plan['database'])):
         return False
     keys = [(unit['project_id'], unit['message_id']) for unit in plan['units']]
-    return len(set(keys)) == len(keys) and plan['bundle_digest'] == payload_hash(
-        {k: plan[k] for k in ('schema', 'database', 'units')})
+    return len(set(keys)) == len(keys) and plan['bundle_digest'] == _bundle_digest(plan)
 
 
 def validate_operation(req, base):
     """Operation rules for the shared human-confirmed envelope (projectless)."""
-    from mcs_util import valid_text
     if req.get('project_id') is not None:
         return 'bad_project_id'
     if req.keys() - (base | {'reason', 'plan'}):
@@ -230,45 +294,75 @@ def validate_operation(req, base):
     return None if valid_plan(req.get('plan')) else 'local_rebuild_plan_invalid'
 
 
+@contextmanager
+def _bounded(db, seconds):
+    """The approval's whole re-verification runs under one deadline (SELECTs only, so an
+    interrupt never rolls back the caller's write transaction)."""
+    deadline = time.monotonic() + seconds
+    db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+    try:
+        yield deadline
+    finally:
+        db.set_progress_handler(None, 0)
+
+
 def approve_tx(db, req, now):
     """Inside apply_command's BEGIN IMMEDIATE: re-verify every unit; any change rejects the bundle."""
     plan = req['plan']
     ledger = SimpleNamespace(db=db)
     try:
-        if _database_identity(db) != plan['database']:
-            return 'local_rebuild_database_changed', {}
-        approvals = approved_units(db)
-        for unit in plan['units']:
-            if _approval_state(ledger, unit['project_id'], unit['message_id'], approvals) in (ACTIVE, ADOPTED):
-                return 'local_rebuild_already_approved', {}
-            if unit_proof(ledger, unit['project_id'], unit['message_id']) != unit:
-                return 'local_rebuild_bundle_changed', {}
-    except ValueError:
+        with _bounded(db, APPROVE_SECONDS) as deadline:
+            if _database_identity(db) != plan['database']:
+                return 'local_rebuild_database_changed', {}
+            approvals = approved_units(db)
+            if not _tally_valid(ledger):
+                return UNVERIFIED, {}
+            for unit in plan['units']:
+                if time.monotonic() >= deadline:
+                    return UNVERIFIED, {}
+                if _approval_state(ledger, unit['project_id'], unit['message_id'], approvals) in (ACTIVE, ADOPTED):
+                    return 'local_rebuild_already_approved', {}
+                if unit_proof(ledger, unit['project_id'], unit['message_id']) != unit:
+                    return 'local_rebuild_bundle_changed', {}
+    except sqlite3.OperationalError:
+        return UNVERIFIED, {}   # the bundle could not be re-verified in time: reject it whole
+    except (OSError, ValueError):
         return 'local_rebuild_bundle_changed', {}
     return None, {'kind': RECEIPT_KIND, 'reason': req['reason'], 'bundle_digest': plan['bundle_digest'],
                   'database': plan['database'], 'units': plan['units'], 'approved': len(plan['units'])}
 
 
+def _receipt_units(command_id, digest, raw):
+    """The units of one applied approval receipt, or None when any part fails to verify."""
+    try:
+        receipt = strict_json(raw) if isinstance(raw, str) and len(raw) <= 65536 else None
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if (type(receipt) is not dict or receipt.get('kind') != RECEIPT_KIND or receipt.get('outcome') != 'applied'
+            or receipt.get('error') is not None or receipt.get('command_id') != command_id
+            or receipt.get('payload_hash') != digest or not valid_text(receipt.get('actor'), 120)):
+        return None
+    plan = {'schema': PLAN_SCHEMA, 'database': receipt.get('database'), 'units': receipt.get('units'),
+            'bundle_digest': receipt.get('bundle_digest')}
+    if not valid_plan(plan) or receipt.get('approved') != len(plan['units']):
+        return None
+    # The stored payload hash must be the exact human-confirmed envelope that was applied.
+    envelope = {'version': 1, 'cmd': COMMAND, 'command_id': command_id, 'actor': receipt['actor'],
+                'human_confirmed': True, 'project_id': None, 'reason': receipt.get('reason'), 'plan': plan}
+    if payload_hash(envelope) != digest:
+        return None
+    return [{**unit, 'command_id': command_id, 'database': plan['database']} for unit in plan['units']]
+
+
 def approved_units(db):
-    """Latest applied approval per (project_id, message_id), read from command receipts."""
+    """Latest verified approval per (project_id, message_id); a broken receipt grants nothing."""
     units = {}
-    for (raw,) in db.execute(
-            "SELECT receipt_json FROM command_receipts WHERE outcome='applied' AND project_id IS NULL "
-            "AND json_valid(receipt_json) AND json_extract(receipt_json,'$.kind')=? "
-            "ORDER BY processed_at,command_id", (RECEIPT_KIND,)):
-        try:
-            receipt = strict_json(raw)
-        except (ValueError, TypeError, RecursionError):
-            receipt = None
-        listed = receipt.get('units') if type(receipt) is dict else None
-        database = receipt.get('database') if type(receipt) is dict else None
-        if (type(listed) is not list or type(database) is not list or len(database) != 2
-                or not all(type(value) is int for value in database)):
-            continue   # a broken receipt grants nothing and hides nothing
-        for unit in listed:
-            if _valid_unit(unit):
-                units[(unit['project_id'], unit['message_id'])] = {
-                    **unit, 'command_id': receipt.get('command_id'), 'database': database}
+    for command_id, digest, raw in db.execute(
+            "SELECT command_id,payload_hash,receipt_json FROM command_receipts WHERE outcome='applied' "
+            "AND project_id IS NULL AND request_id IS NULL AND json_valid(receipt_json) "
+            "AND json_extract(receipt_json,'$.kind')=? ORDER BY processed_at,command_id", (RECEIPT_KIND,)):
+        for unit in _receipt_units(command_id, digest, raw) or ():
+            units[(unit['project_id'], unit['message_id'])] = unit
     return units
 
 
@@ -282,7 +376,7 @@ def permit(ledger, project_id, message_id, *, approvals=None):
         return UNVERIFIED
 
 
-def _approval_state(ledger, project_id, message_id, approvals):
+def _approval_state(ledger, project_id, message_id, approvals, stop=()):
     unit = approvals.get((project_id, message_id))
     if unit is None:
         return UNAPPROVED
@@ -291,27 +385,35 @@ def _approval_state(ledger, project_id, message_id, approvals):
             return PROOF_CHANGED   # a copied or replaced database never inherits the approval
     except (OSError, ValueError):
         return UNVERIFIED
-    if unit['extract_version'] != EXTRACT_VERSION:
+    if unit['contract'] != _context_contract():
         return PROOF_CHANGED
-    binding = inference_dependency_loss.source_binding(ledger.db, project_id, message_id)
-    if binding != unit['source_binding']:
+    if inference_dependency_loss.source_binding(ledger.db, project_id, message_id) != unit['source_binding']:
         return PROOF_CHANGED
+    if adopted(ledger.db, unit):
+        return ADOPTED
+    if not _tally_valid(ledger, stop):
+        return UNVERIFIED
     try:
-        current = unit_proof(ledger, project_id, message_id)
+        current = unit_proof(ledger, project_id, message_id, stop)
+    except stop:
+        raise
     except ValueError as error:
-        reason = str(error)
-        if reason == 'already_current':
-            return ADOPTED if adopted(ledger.db, unit) else UNAPPROVED
-        return UNVERIFIED if reason in ('unverified', 'tally_invalid') else PROOF_CHANGED
+        return UNVERIFIED if str(error) == 'unverified' else PROOF_CHANGED
     return ACTIVE if current['proof'] == unit['proof'] else PROOF_CHANGED
 
 
 def adopted(db, unit):
-    """A current final extract bound to this approval (never the receipt alone)."""
-    return db.execute(
-        "SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND message_id=? "
-        "AND json_valid(meta) AND json_extract(meta,'$.local_rebuild.command_id')=? "
-        "AND json_extract(meta,'$.local_rebuild.proof')=? "
-        "AND json_extract(meta,'$.extract_version')=? LIMIT 1",
-        (KIND, unit['project_id'], unit['message_id'], unit['command_id'], unit['proof'],
-         EXTRACT_VERSION)).fetchone() is not None
+    """The selected final itself is this approval's local result with a valid material proof
+    for the current source; a tag on any other row, or the receipt alone, never counts."""
+    row = _message(db, unit['project_id'], unit['message_id'])
+    final = _selected_final(db, row) if row is not None else None
+    if final is None:
+        return False
+    try:
+        meta = strict_json(final[1])
+    except (ValueError, TypeError, RecursionError):
+        return False
+    tag = meta.get('local_rebuild') if type(meta) is dict else None
+    return (tag == {'command_id': unit['command_id'], 'proof': unit['proof']}
+            and meta.get('hash') == row['content_hash']
+            and mcs_queries.selected_artifact_proof_valid(db, final[0], material=True))
