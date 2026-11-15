@@ -121,3 +121,14 @@ def test_free_text_codes_become_invalid_and_patient_lists_are_bounded(tmp_path):
     assert entry["patients"] == list(range(access_log.PATIENT_LIMIT))
     assert entry["patients_more"] == 5
     assert access_log.verify(tmp_path)["ok"] is True
+
+
+def test_a_clock_set_back_keeps_appending_after_the_newest_month(tmp_path):
+    december, november = 1_796_083_200, 1_796_083_200 - 3600  # 2026-12-01 / 11-30 UTC
+    _entry(tmp_path, now=december)
+    late = _entry(tmp_path, now=november)
+    _entry(tmp_path, now=december + 60)
+    assert late["at"].startswith("2026-11-30")
+    assert [p.name for p in (tmp_path / access_log.DIR_NAME).glob("access-*.jsonl")] == [
+        "access-2026-12.jsonl"]
+    assert access_log.verify(tmp_path)["ok"] is True

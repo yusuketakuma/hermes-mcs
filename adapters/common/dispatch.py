@@ -123,11 +123,20 @@ def dispatch(data: dict, settings: dict[str, Any],
     return _audited(reply, data, settings, identity)
 
 
+class _Shown(str):
+    """Display text that carries its own access facts, which text cannot reveal."""
+
+    def __new__(cls, text, *, outcome="ok", patients=()):
+        shown = super().__new__(cls, text)
+        shown.outcome, shown.patients = outcome, frozenset(patients)
+        return shown
+
+
 def _parsed(reply: str):
     try:
         return json.loads(reply)
     except ValueError:
-        return None  # the summary answer is display text; its failures are bare codes
+        return None  # display text; a failure there is a bare code
 
 
 def _outcome(reply: str, parsed) -> str:
@@ -173,8 +182,10 @@ def _audited(reply: str, data: dict, settings: dict[str, Any],
     """
     bootstrap()
     import access_log
-    parsed = _parsed(reply)
-    outcome = _outcome(reply, parsed)
+    parsed = None if isinstance(reply, _Shown) else _parsed(reply)
+    outcome = reply.outcome if isinstance(reply, _Shown) else _outcome(reply, parsed)
+    patients = reply.patients if isinstance(reply, _Shown) else _returned_patients(parsed)
+    reply = str(reply)
     op = _audit_value(data.get("op"), _AUDIT_OPS)
     phase = _audit_value(data.get("phase"), _AUDIT_PHASES)
     kinds = READ_KINDS | {"notification_receipt", "create", "update"} | set(CONTROL_FIELDS)
@@ -184,7 +195,7 @@ def _audited(reply: str, data: dict, settings: dict[str, Any],
             actor=actor(identity), channel=identity.get("chat_id"),
             op=f"{op}.{phase}" if isinstance(op, str) and isinstance(phase, str) else op,
             kind=_audit_value(data.get("kind") or data.get("action"), kinds),
-            project_id=data.get("project_id"), patients=_returned_patients(parsed), outcome=outcome,
+            project_id=data.get("project_id"), patients=patients, outcome=outcome,
             query="query" in data)
     except (access_log.AccessLogError, OSError, KeyError, TypeError):
         if outcome == "ok" and phase != "confirm":
@@ -256,7 +267,9 @@ def dispatch_operation(data: dict, settings: dict[str, Any],
         got = summary.answer(settings["snapshot"], data.get("scope", ""),
                              allowed=projects.summary_scope(settings),
                              dialect=dialect, names=False)
-        return got.get("text") or got["error"]
+        if "error" in got:
+            return _Shown(got["error"], outcome="summary_unavailable")
+        return _Shown(got["text"], patients=got.get("project_ids", ()))
     return deny("unknown_operation")
 
 
