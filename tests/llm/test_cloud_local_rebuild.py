@@ -512,3 +512,17 @@ def test_moving_another_routes_row_to_reextract_lifts_the_approval(legacy):
         ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.route','reextract') WHERE "
                           "json_extract(meta,'$.reservation_id')=?", ('d' * 32,))
     assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.PROOF_CHANGED
+
+
+
+def test_a_broken_other_route_reservation_is_not_left_out_of_the_proof(legacy):
+    """Another route's rows are excluded only once they verify as that route's accounting."""
+    ledger, _ = legacy
+    with ledger.db:
+        ledger.db.execute(
+            "INSERT INTO artifacts(kind,project_id,message_id,model,meta,content,created_at) "
+            "SELECT kind,project_id,message_id,model,json_remove(json_set(meta,'$.reservation_id',?,'$.route',"
+            "'semantic_backlog'),'$.max_cost_usd','$.model'),content,created_at FROM artifacts "
+            "WHERE kind='cloud_usage_reserve' AND message_id=1", ('e' * 32,))
+    with pytest.raises(ValueError, match='^receipt_inconsistent$'):
+        local_rebuild.unit_proof(ledger, 1, 1)
