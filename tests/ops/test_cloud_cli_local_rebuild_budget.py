@@ -164,7 +164,12 @@ def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(sca
         import hashlib
         result = {'status': 'unavailable', 'runs': []}
         signatures = []
+        owns_transaction = False
         try:
+            if db.in_transaction:
+                return result
+            with closing(db.execute('BEGIN')):
+                owns_transaction = True
             for label, table in (('current', source), ('not_indexed', 'artifacts NOT INDEXED'),
                                  ('not_indexed', 'artifacts NOT INDEXED'), ('current', source)):
                 digest, count = hashlib.sha256(), 0
@@ -181,9 +186,17 @@ def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(sca
                 seconds = time.monotonic() - started
                 result['runs'].append({'plan': label, 'rows': count, 'seconds': round(seconds, 6)})
                 signatures.append((count, signature))
+            result['status'] = 'match' if all(item == signatures[0] for item in signatures[1:]) else 'mismatch'
         except Exception:
             return result
-        result['status'] = 'match' if all(item == signatures[0] for item in signatures[1:]) else 'mismatch'
+        finally:
+            if owns_transaction:
+                try:
+                    db.rollback()
+                    if db.in_transaction:
+                        result['status'] = 'unavailable'
+                except Exception:
+                    result['status'] = 'unavailable'
         return result
 
     with closing(Ledger(str(scaled))) as ledger:
