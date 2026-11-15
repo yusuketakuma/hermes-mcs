@@ -71,8 +71,11 @@ def test_a_bindingless_answerless_success_is_eligible_and_the_bundle_lists_it(le
 
 
 @pytest.mark.parametrize('damage,reason', [
-    ("UPDATE artifacts SET meta=json_set(meta,'$.input_binding',NULL) "
+    ("UPDATE artifacts SET meta=json_set(meta,'$.input_binding','" + 'a' * 64 + "') "
      "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND message_id=1", 'binding_present'),
+    # an explicit null binding fails the reservation's own validation before any key test
+    ("UPDATE artifacts SET meta=json_set(meta,'$.input_binding',NULL) "
+     "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND message_id=1", 'receipt_inconsistent'),
     ("UPDATE artifacts SET content='{\"text\":\"synthetic\",\"finish_reason\":\"stop\"}' "
      "WHERE kind='cloud_usage_result' AND message_id=1", 'answer_stored'),
     ("UPDATE artifacts SET content='null' WHERE kind='cloud_usage_result' AND message_id=1",
@@ -93,8 +96,9 @@ def test_each_unproven_history_is_excluded_with_its_fixed_reason(legacy, damage,
     report = local_rebuild.preview(ledger)
     planned = [unit['message_id'] for unit in (report['plan'] or {'units': []})['units']]
     assert 1 not in planned
-    # an explicit null binding is not a key-absent candidate, so the dry run never lists it
-    assert report['excluded'][reason] == (0 if reason == 'binding_present' else 1 if reason != 'history_pruned' else 2)
+    # a present binding (null or a hash) is not a key-absent candidate, so the dry run never lists it
+    present = 'input_binding' in damage and 'json_set' in damage
+    assert report['excluded'][reason] == (0 if present else 2 if reason == 'history_pruned' else 1)
 
 
 def test_one_bundle_approval_is_idempotent_and_permits_local_work_only(legacy):
