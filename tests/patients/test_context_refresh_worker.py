@@ -90,7 +90,8 @@ def test_context_dry_run_keeps_existing_local_lane(capacity):
 def test_context_child_stops_admitting_when_owner_disappears(capacity, monkeypatch):
     capacity[1]["cloud_llm"] = {"mode": "on", "project_ids": [1]}
     monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: False)
-    assert run(capacity) == {"status": "deferred", "done": 0}
+    assert run(capacity) == {"status": "deferred", "done": 0,
+                             "reason": "patient_context_admission_deferred"}
     assert not capacity[2]
 
 
@@ -136,6 +137,9 @@ def test_capacity_gates(capacity, monkeypatch, gate):
         assert result == {"status": "source_changed", "done": 0, "run_lock_lost": "updated"}
     else:
         assert result["status"] == "deferred"
+        expected = ("patient_context_capacity_or_deadline" if gate == "expired"
+                    else "patient_context_admission_deferred")
+        assert result["reason"] == expected
     assert not capacity[2]
 
 

@@ -297,7 +297,9 @@ def test_insufficient_time_never_starts_inference(runtime, at, seconds):
 def test_busy_lane_yields_without_work(runtime):
     led, _, calls = runtime
     seed(led)
-    assert step(runtime, admit=lambda: False)['status'] == 'deferred'
+    result = step(runtime, admit=lambda: False)
+    assert result['status'] == 'deferred'
+    assert result['reason'] == 'patient_context_admission_deferred'
     assert not calls and document(led) is None
 
 
