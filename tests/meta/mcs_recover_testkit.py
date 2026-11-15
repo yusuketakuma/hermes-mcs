@@ -75,10 +75,12 @@ def gateway_restarts(rec, monkeypatch):
 
 def _applying(prev, tag="v1.1.0", sha="t" * 40, stage="quiesce",
               ago=4000):
+    now = time.time()
+    applied = now - ago
     return {"v": 1,
             "applying": {"tag": tag, "sha": sha, "prev_sha": prev,
-                         "at": time.time() - ago},
-            "stages": [{"stage": stage, "at": time.time() - ago + 100}],
+                         "at": applied},
+            "stages": [{"stage": stage, "at": applied + min(100, max(0, ago))}],
             "applied": [], "attempts": {}, "executed": {}}
 
 
