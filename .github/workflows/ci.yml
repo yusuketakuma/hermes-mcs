@@ -31,4 +31,4 @@ jobs:
         run: |
           sh scripts/run_tests.sh \
             'tests/ops/test_cloud_cli_local_rebuild_budget.py::test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it' \
-            -r fEs --durations=10
+            -r fEsP --durations=10
