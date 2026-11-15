@@ -110,9 +110,12 @@ def _services_env(monkeypatch, tmp_path, cron_names=frozenset(),
                         lambda label, **_service_kwargs: label in loaded)
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: "/x/hermes")
     _previous_service_load_config_1007 = mcs_util.load_config
+    _previous_service_load_config_checked = mcs_util.load_config_checked
     monkeypatch.setattr(mcs_util, 'load_config',
                         lambda path=None: _previous_service_load_config_1007(path) if path else {})
-    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda **kw: {})
+    monkeypatch.setattr(mcs_util, 'load_config_checked',
+                        lambda path=None, **kw: _previous_service_load_config_checked(path, **kw)
+                        if path is not None else mcs_util.load_config())
     monkeypatch.setattr(service_management, 'inspect_cron', lambda h: entries)
     monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
     monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
