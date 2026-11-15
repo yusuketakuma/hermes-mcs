@@ -94,6 +94,10 @@ def test_a_bindingless_answerless_success_is_eligible_and_the_bundle_lists_it(le
      "VALUES('cloud_usage_result',1,1,'{\"reservation_id\":\"" + 'a' * 32 + "\"}','{}',0)", 'receipt_inconsistent'),
     ("UPDATE artifacts SET meta=json_remove(meta,'$.route') WHERE kind='cloud_usage_reserve' AND message_id=1",
      'receipt_inconsistent'),
+    # an unknown route is never treated as another valid route's row
+    ("INSERT INTO artifacts(kind,project_id,message_id,model,meta,content,created_at) SELECT kind,project_id,"
+     "message_id,model,json_set(meta,'$.reservation_id','" + 'c' * 32 + "','$.route','synthetic_unknown'),content,"
+     "created_at FROM artifacts WHERE kind='cloud_usage_reserve' AND message_id=1", 'receipt_inconsistent'),
     # a disposition with a malformed reservation id is never silently ignored
     ("INSERT INTO artifacts(kind,project_id,message_id,meta,created_at) "
      "VALUES('cloud_usage_disposition',1,1,'{\"reservation_id\":\"not-hex\"}',0)", 'receipt_inconsistent'),
@@ -488,3 +492,23 @@ def test_another_routes_linked_usage_rows_neither_change_the_proof_nor_lift_the_
                 ('b' * 32, kind))
     assert local_rebuild.unit_proof(ledger, 1, 1)['proof'] == before
     assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ACTIVE
+
+
+
+def test_moving_another_routes_row_to_reextract_lifts_the_approval(legacy):
+    """Rows outside the proof only while they link to another valid route: re-routed to
+    reextract they join the proof and the approval lapses."""
+    ledger, _ = legacy
+    _approve(ledger, local_rebuild.preview(ledger)['plan'])
+    with ledger.db:
+        for kind in ('cloud_usage_reserve', 'cloud_usage_result'):
+            ledger.db.execute(
+                "INSERT INTO artifacts(kind,project_id,message_id,model,meta,content,created_at) "
+                "SELECT kind,project_id,message_id,model,json_set(meta,'$.reservation_id',?,'$.route',"
+                "'semantic_backlog'),content,created_at FROM artifacts WHERE kind=? AND message_id=1",
+                ('d' * 32, kind))
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ACTIVE
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.route','reextract') WHERE "
+                          "json_extract(meta,'$.reservation_id')=?", ('d' * 32,))
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.PROOF_CHANGED
