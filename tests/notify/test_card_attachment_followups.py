@@ -466,6 +466,166 @@ def test_two_late_slack_files_survive_one_spec_publish_failure(
     assert all(_late_followup_state(led, eid) == "accepted" for eid in events)
 
 
+def _two_late_files_recovered(led, tmp_path, monkeypatch):
+    """Two late files on one Slack card whose first followup's spec publication failed once and
+    was recovered: the first update's receipts are still to land."""
+    from pathlib import Path
+    import notify_flush
+
+    world, aid, event_id, blob, legacy = _late_slack_file(led, tmp_path, monkeypatch)
+    second_blob = b"completely synthetic second PDF"
+    with led.db:
+        second_aid = led.db.execute(
+            "INSERT INTO attachments(message_id,file_id,name,state) "
+            "VALUES(100,'synthetic-late-second','synthetic-second.pdf','pending')").lastrowid
+    second_source = world.root / "attachments" / str(second_aid)
+    second_source.write_bytes(second_blob)
+    led.attachment_saved(second_aid, str(second_source), len(second_blob),
+                         hashlib.sha256(second_blob).hexdigest())
+    second_event = led.db.execute(
+        "SELECT event_id FROM notify_outbox WHERE kind='attachment_followup' "
+        "AND json_extract(payload,'$.attachment_id')=?", (second_aid,)).fetchone()
+    original_publish = notify_spool.publish_file
+    failed = []
+
+    def fail_once(directory, name, raw):
+        if Path(directory) == world.root / "slack_render" and not failed:
+            failed.append(name)
+            raise OSError("synthetic spec publication failure")
+        return original_publish(directory, name, raw)
+
+    monkeypatch.setattr(notify_spool, "publish_file", fail_once)
+    notify_flush.flush(led)
+    assert notify_spool.recover(led, SLACK, {})["republished"] == 1
+    return world, (event_id, second_event[0]), (blob, second_blob), legacy
+
+
+def _cycle_card_then_thread(world, led, *, before_thread=None):
+    """One worker cycle whose receipts land files first, then the card, then the thread: the
+    order in which the next update is issued while the first update's thread is unproven
+    (receipt files are named by random UUIDs and drained in name order)."""
+    import asyncio
+    import os
+    import notify_cmds
+
+    parked = {}
+
+    def park():
+        for path in (world.root / "cmd_int").glob("*.json"):
+            req = json.loads(path.read_text())
+            row = led.db.execute(
+                "SELECT kind FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+                (req.get("delivery_id"), req.get("part_id"))).fetchone()
+            kind = ("card" if req.get("op") == "transport_receipt"
+                    else "thread" if req.get("op") == "part_receipt" and row is not None and row[0] == "thread"
+                    else None)
+            if kind is not None:
+                parked[kind] = (path, world.root / ("held-" + path.name))
+                os.replace(path, parked[kind][1])
+        assert sorted(parked) == ["card", "thread"]
+
+    def land(kind):
+        path, held = parked.pop(kind)
+        os.replace(held, path)
+        notify_cmds.drain_int_commands(led, {"errors": []}, SLACK, str(world.root))
+
+    try:
+        asyncio.run(_late_slack_cycle(world, led, before_receipt=park))
+        land("card")
+        if before_thread is not None:
+            before_thread()
+        land("thread")
+    finally:
+        for path, held in parked.values():
+            if held.exists():
+                os.replace(held, path)
+
+
+def _parts_dump(led):
+    return json.dumps({
+        "renders": [tuple(row) for row in led.db.execute(
+            "SELECT delivery_id,render_rev,state,spec_published FROM notification_renders")],
+        "parts": [tuple(row) for row in led.db.execute(
+            "SELECT delivery_id,part_id,kind,state,remote_id,error_code FROM notification_render_parts")],
+    }, ensure_ascii=False)
+
+
+def _identity_held(led):
+    return [row[0] for row in led.db.execute(
+        "SELECT r.delivery_id FROM notification_renders r WHERE r.state='held' AND EXISTS("
+        "SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=r.delivery_id "
+        "AND p.error_code='attachment_upload_identity_unverified')")]
+
+
+def test_a_followup_held_before_the_first_updates_thread_receipt_replans_once_it_lands(
+        led, tmp_path, monkeypatch):
+    import asyncio
+    import notify_flush
+    from slack_testkit import ROOT_TS
+
+    world, events, (blob, second_blob), legacy = _two_late_files_recovered(led, tmp_path, monkeypatch)
+    held_seen = []
+    _cycle_card_then_thread(world, led, before_thread=lambda: held_seen.extend(_identity_held(led)))
+    # While the first update's thread was unproven the second followup was held, and
+    # nothing unverified went out: only the first file was uploaded.
+    assert held_seen, _parts_dump(led)
+    assert [call["filename"] for call in world.client.upload_calls] == ["synthetic.png"]
+    monkeypatch.setattr(ledger.time, "time", lambda: NOW + 11 + notify_cards.RESEAT_S)
+    notify_flush.flush(led)
+    asyncio.run(_late_slack_cycle(world, led))
+    notify_flush.flush(led)
+    assert all(_late_followup_state(led, eid) == "accepted" for eid in events), _parts_dump(led)
+    assert not _identity_held(led), _parts_dump(led)
+    held_states = {row[0] for row in led.db.execute(
+        "SELECT state FROM notification_renders WHERE delivery_id IN (%s)" % ",".join("?" * len(held_seen)),
+        held_seen)}
+    assert held_states == {"cancelled"}, _parts_dump(led)     # replaced, never sent
+    expected = {"synthetic.png": blob, "synthetic-second.pdf": second_blob}
+    assert {call["filename"]: call["file"] for call in world.client.upload_calls} == expected
+    assert len(world.client.upload_calls) == 2 and not legacy
+    groups = [call[1] for call in world.client.calls if call[0] == "update" and call[1].get("file_ids")]
+    assert groups and groups[-1]["ts"] == ROOT_TS and len(set(groups[-1]["file_ids"])) == 2
+    # Re-entry and worker resume consume the same receipts and send nothing more.
+    calls = len(world.client.calls)
+    notify_spool.recover(led, SLACK, {})
+    notify_flush.flush(led)
+    asyncio.run(_late_slack_cycle(world, led))
+    assert len(world.client.upload_calls) == 2 and len(world.client.calls) == calls
+    assert all(_late_followup_state(led, eid) == "accepted" for eid in events)
+
+
+def test_a_held_followup_is_not_replanned_while_the_first_updates_file_group_is_unknown(
+        led, tmp_path, monkeypatch):
+    import notify_flush
+
+    world, events, _blobs, legacy = _two_late_files_recovered(led, tmp_path, monkeypatch)
+    first = {}
+
+    def unknown_group():
+        # The first update's file group receipt is not known: its file ids are unproven.
+        [held] = _identity_held(led)
+        first["held"] = held
+        row = led.db.execute(
+            "SELECT r.delivery_id FROM notification_renders r JOIN notification_render_parts p "
+            "ON p.delivery_id=r.delivery_id WHERE r.state='delivered' AND p.kind='file_group' "
+            "ORDER BY r.render_rev DESC LIMIT 1").fetchone()
+        with led.db:
+            led.db.execute("UPDATE notification_render_parts SET state='unknown' "
+                           "WHERE delivery_id=? AND kind='file_group'", (row[0],))
+
+    _cycle_card_then_thread(world, led, before_thread=unknown_group)
+    monkeypatch.setattr(ledger.time, "time", lambda: NOW + 11 + notify_cards.RESEAT_S)
+    revs = None
+    for _ in range(3):           # repeated sweeps neither replan nor churn renders
+        notify_flush.flush(led)
+        now_revs = led.db.execute("SELECT COUNT(*), MAX(render_rev) FROM notification_renders").fetchone()
+        assert revs is None or tuple(now_revs) == revs, _parts_dump(led)
+        revs = tuple(now_revs)
+    assert _identity_held(led) == [first["held"]], _parts_dump(led)
+    assert [call["filename"] for call in world.client.upload_calls] == ["synthetic.png"]
+    assert _late_followup_state(led, events[1]) != "accepted" and not legacy
+
+
 # Slack's thread part binds an existing root without a thread-creation HTTP
 # call. Settle its canonical receipts to model a factual rejected binding.
 def _failed_slack_thread_file(led, tmp_path, monkeypatch, result="not_sent"):
