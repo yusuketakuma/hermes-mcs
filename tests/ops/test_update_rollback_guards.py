@@ -655,7 +655,22 @@ def test_recovery_stage_only_uses_current_split_target(updater, tmp_path, monkey
     monkeypatch.setattr(updater, "_finish_recovery",
                         lambda state, result, removed: finished.append(result) or 0)
     monkeypatch.setattr(update_recovery, '_finish_recovery', updater._finish_recovery)
-    assert updater.recover_interrupted() == 0
+
+    def diagnostic():
+        report = updater._last_report()
+        result = report.get("result")
+        allowed_results = ("provider_rollback_blocked", "corrupt_state", "runtime_restore_blocked",
+                           "restore_consent_blocked", "restore_reconcile_blocked", "escalate")
+        result = result if result in allowed_results else "other_or_missing"
+        detail = report.get("detail")
+        allowed_codes = ("provider_rollback_settings_unverified", "provider_rollback_target_unverified",
+                         "provider_rollback_settings_changed")
+        code = next((name for name in allowed_codes if isinstance(detail, str)
+                     and (detail == name or detail.startswith(name + ":"))), "other_or_missing")
+        return f"report={result} code={code}"
+
+    result = updater.recover_interrupted()
+    assert result == 0, diagnostic()
     assert finished == ["interrupted_pre_merge"]
 
 
