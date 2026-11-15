@@ -13,6 +13,11 @@ the mark has never pruned usage rows through that path; any mark at all fails cl
 once retention has pruned, no further unit can be approved and every existing approval
 turns into PROOF_CHANGED. A deletion outside that
 maintenance path leaves no evidence and cannot be ruled out.
+
+Not a per-wire check: the permit is re-proved before every local call (first, repair, split)
+and inside every checkpoint and adoption transaction, but the local backend's own format probe
+and degrade retries after that guard are not individually re-checked. The local result is
+bound by the existing source/context/frame/piece/leaf proofs, not by a request fingerprint.
 """
 from contextlib import contextmanager
 import os

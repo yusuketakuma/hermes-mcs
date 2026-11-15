@@ -43,8 +43,14 @@ def _paid(ledger, monkeypatch, mid=1, *, result=True):
                           "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND message_id=?", (mid,))
 
 
-def _approved(ledger, monkeypatch, mid=1):
-    old(ledger, mid)
+def _approved(ledger, monkeypatch, mid=1, body=None):
+    if body is None:
+        old(ledger, mid)
+    else:
+        from extract_testkit import _hash, _message
+        ledger.save_messages([_message(mid, body)])
+        ledger.artifact_add(worker.KIND, "{}", project_id=1, message_id=mid,
+            meta={"hash": _hash(ledger, mid), "extract_version": worker.EXTRACT_VERSION - 1})
     _paid(ledger, monkeypatch, mid)
     plan = local_rebuild.preview(ledger)['plan']
     assert [unit['message_id'] for unit in plan['units']] == [mid]
@@ -251,3 +257,32 @@ def test_an_adopted_unit_stays_adopted_when_later_review_evidence_turns_adverse(
     monkeypatch.setattr(extract_llm_progress, '_progress_probe', adverse)
     assert not mcs_queries.selected_artifact_proof_valid(ledger.db, final['artifact_id'], material=True)
     assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ADOPTED
+
+
+def test_a_local_length_stop_splits_the_piece_and_every_split_stays_local_and_tagged(routed, monkeypatch):
+    """The real length-split path (engine: a None answer whose last note stopped at length):
+    the split plan and its children run locally, no cloud unit/reservation/HTTP, and the split
+    checkpoints carry the approval tag."""
+    ledger, cfg, calls, reserved, results = routed
+    body = "".join(f"完全合成の区間{i}の居住記録です。" for i in range(6))   # splittable, as in the checkpoint tests
+    unit = _approved(ledger, monkeypatch, body=body)
+    _no_cloud_unit(monkeypatch)
+    stopped = []
+
+    def local(prompt, **kwargs):
+        if not stopped:
+            stopped.append(True)
+            worker._integrity_note({"status": "ok", "finish_reason": "length"}, kwargs.get("kind", "first"))
+            return None
+        piece = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
+        return {"symptoms": [], "patient_context": [{"category": "living", "subject": "patient",
+                                                     "text": piece, "evidence": piece}]}
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', local)
+    for _ in range(3):
+        if worker.run_pending(ledger, limit=1, budget_s=180)['done']:
+            break
+    assert stopped and calls == [] and reserved == [] and results == []
+    splits = [json.loads(meta) for (meta,) in ledger.db.execute(
+        "SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' AND message_id=1")]
+    assert any('split_size' in meta for meta in splits)                # the split plan was written
+    assert all(meta.get('local_rebuild') == local_rebuild.tag(unit) for meta in splits)
