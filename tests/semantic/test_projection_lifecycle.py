@@ -57,9 +57,9 @@ def test_projection_expiry_and_rollup_eviction_rollback_together(tmp_path):
         ledger.close()
 
 
-def test_projection_expiry_commits_page_by_page(tmp_path, monkeypatch):
-    """Peak memory and lock hold: artifacts are read and committed one page at
-    a time, so a failure on a later page keeps the earlier pages' expiry."""
+def test_projection_expiry_pages_reads_but_commits_once(tmp_path, monkeypatch):
+    """Peak memory: artifacts are read one page at a time, while the decisions
+    still commit in one transaction, so a failure on a later page keeps none."""
     monkeypatch.setattr(semantic_publication, "_INVALIDATE_PAGE", 2)
     ledger = _seeded(tmp_path)
     try:
@@ -77,9 +77,63 @@ def test_projection_expiry_commits_page_by_page(tmp_path, monkeypatch):
             return [json.loads(ledger.db.execute(
                 "SELECT meta FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()[0]).get("invalidated")
                 for aid in ids]
-        assert invalidated() == [True, True, True, True, None]
+        assert invalidated() == [None] * 5
         ledger.db.execute("DROP TRIGGER deny_last")
-        assert semantic_publication.invalidate_projections(ledger.db, {"mode": "off"}) == 1
+        assert semantic_publication.invalidate_projections(ledger.db, {"mode": "off"}) == 5
         assert invalidated() == [True] * 5
+    finally:
+        ledger.close()
+
+
+def test_projection_expiry_scan_is_fixed_at_start(tmp_path, monkeypatch):
+    """A projection published while the scan runs waits for the next scan."""
+    monkeypatch.setattr(semantic_publication, "_INVALIDATE_PAGE", 2)
+    ledger = _seeded(tmp_path)
+    try:
+        for i in range(3):
+            ledger.artifact_add("canonical_projection", "{}", project_id=1, message_id=1,
+                                meta={**_CURRENT, "fingerprint": f"synthetic-{i}", "policy_fingerprint": "p"})
+        late = []
+        transition = semantic_projection.projection_transition
+
+        def publish_during_scan(meta, **kwargs):
+            if not late:
+                late.append(ledger.artifact_add("canonical_projection", "{}", project_id=1, message_id=1,
+                    meta={**_CURRENT, "fingerprint": "synthetic-late", "policy_fingerprint": "p"}))
+            return transition(meta, **kwargs)
+        monkeypatch.setattr(semantic_projection, "projection_transition", publish_during_scan)
+        assert semantic_publication.invalidate_projections(ledger.db, {"mode": "off"}) == 3
+        meta = json.loads(ledger.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", late).fetchone()[0])
+        assert "invalidated" not in meta
+    finally:
+        ledger.close()
+
+
+def test_projection_expiry_page_query_walks_the_rowid_range(tmp_path, monkeypatch):
+    """Each page must be a rowid range seek, not a kind-index scan re-sorted
+    per page (which re-evaluates the JSON predicate for all remaining rows)."""
+    ledger = _seeded(tmp_path)
+    plans = []
+    real = ledger.db
+
+    class Spy:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        def __enter__(self):
+            return real.__enter__()
+
+        def __exit__(self, *exc):
+            return real.__exit__(*exc)
+
+        def execute(self, sql, *args):
+            if "a.artifact_id>?" in sql:
+                plans.append(" ".join(r[3] for r in real.execute("EXPLAIN QUERY PLAN " + sql, *args)))
+            return real.execute(sql, *args)
+    try:
+        ledger.artifact_add("canonical_projection", "{}", project_id=1, message_id=1,
+                            meta={**_CURRENT, "fingerprint": "synthetic", "policy_fingerprint": "p"})
+        semantic_publication.invalidate_projections(Spy(), {"mode": "off"})
+        assert plans and all("SEARCH a USING INTEGER PRIMARY KEY" in p for p in plans), plans
     finally:
         ledger.close()

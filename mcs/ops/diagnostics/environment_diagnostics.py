@@ -321,7 +321,10 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
     # T20 / O6: no production caller opens the admission epoch yet
     # (llm_admission.Broker.open_epoch), so an enabled boundary holds every
     # inference in epoch_closed forever. Until an owner of that reopen step
-    # exists, the opt-in is a setup error rather than a silent stall.
+    # exists, the opt-in is a setup error rather than a silent stall. Unlike the
+    # LINE WORKS warning above, this deliberately surfaces as a new error to an
+    # updater baseline from older code (owner decision O6): such an update fails
+    # its postcheck, so the change record tells the owner to turn it off first.
     import local_llm
     if local_llm.admission_enabled():   # config local_llm.admission first, then the env
         errors.append(

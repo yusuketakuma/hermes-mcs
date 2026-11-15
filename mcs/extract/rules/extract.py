@@ -460,7 +460,9 @@ def _extract_ids(ledger, ids, *, deadline: float | None = None) -> tuple[int, se
     full re-extraction never holds every body in memory at once."""
     done, pids = 0, set()
     for i in range(0, len(ids), _CHUNK):
-        if deadline is not None and time.monotonic() >= deadline:
+        # a moved fence stops the whole pass, as _extract_rows does per chunk
+        if (deadline is not None and time.monotonic() >= deadline
+                or not _writer_current()):
             break
         page = ids[i:i + _CHUNK]
         found = {r["message_id"]: r for r in ledger.db.execute(

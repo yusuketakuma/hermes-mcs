@@ -92,6 +92,22 @@ def test_rule_pass_reads_source_rows_one_chunk_at_a_time(store, monkeypatch):
     assert [mid for page in pages for mid in page] == sorted(_EXPECTED, reverse=True)
 
 
+def test_rule_pass_stops_reading_pages_once_the_fence_moves(store, monkeypatch):
+    """A moved updater/inference fence ends the pass: later pages are not read."""
+    monkeypatch.setattr(extract, "_CHUNK", 3)
+    pages = []
+    real = extract._extract_rows
+
+    def recording(ledger, rows, **kwargs):
+        pages.append(len(rows))
+        monkeypatch.setattr(extract, "_writer_current", lambda: False)
+        return real(ledger, rows, **kwargs)
+
+    monkeypatch.setattr(extract, "_extract_rows", recording)
+    extract.run_pending(store)
+    assert len(pages) == 1
+
+
 @pytest.mark.parametrize("generation", [CURRENT_VERSION, "0.1"])
 def test_stale_rule_cleanup_retains_only_extractable_sources(store, generation):
     for mid, (_, _, _, pid, _) in enumerate(_CASES, 1):

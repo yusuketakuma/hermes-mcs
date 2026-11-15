@@ -1,0 +1,13 @@
+{
+  "category": "breaking",
+  "title": "AIの受付制御を有効にしていると診断がエラーになり、この版への更新が完了しない",
+  "summary": "AIの受付制御（config.json の local_llm.admission または環境変数 MCS_LLM_ADMISSION）を有効にしていると、`mcs_setup.py check` がエラーを出すようになります。この版には受付を再開する処理がなく、有効なままではAI処理がすべて待機し続けるためです。以前は受付停止の警告だけでした。有効のまま更新すると、更新後の検査がこのエラーで失敗し、更新は取り消されるか人の対応待ちで止まります。",
+  "upgrade": "受付制御を有効にしていない場合（既定）は追加操作は不要です。有効にしている場合は、更新する前に config.json の local_llm.admission を false にし、環境変数 MCS_LLM_ADMISSION を外してください。有効なままだと更新後の検査（postcheck）が新しいエラー（new_env_error）として失敗し、更新は取り消されます。",
+  "details": [
+    "受付制御の有効化は、実行枠の登録や受付状態にかかわらず setup check のエラーとする（受付を再開する open_epoch の呼出元が本番コードにないため。所有者の決定 O6）。",
+    "旧版の診断は受付停止を警告、実行枠の不足を別の文言のエラーとして出していたため、更新前の baseline と一致せず、更新後の検査で新しいエラーとして扱われる。"
+  ],
+  "refs": [
+    "mcs/ops/diagnostics/environment_diagnostics.py"
+  ]
+}
