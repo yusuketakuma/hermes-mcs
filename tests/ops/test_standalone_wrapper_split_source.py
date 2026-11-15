@@ -1,4 +1,6 @@
 """Standalone wrappers rendered into a shared root/checkout keep split source verifiable."""
+import hashlib
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -56,6 +58,24 @@ def test_only_rendered_wrapper_names_are_tolerated(updater, tmp_path, monkeypatc
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("# synthetic untracked file\n")
     assert not updater._split_target_source_matches(target)
+
+
+def test_reviewed_rollback_accepts_wrappers_from_both_trees(updater, tmp_path, monkeypatch):  # noqa: F811
+    repo, previous = _shared_checkout(updater, tmp_path, monkeypatch)
+    _git(repo, "rm", "deployment/scripts/mcs_check.sh")
+    (repo / "deployment/scripts").mkdir(parents=True, exist_ok=True)
+    (repo / "deployment/scripts/mcs_new.sh").write_text("#!/bin/bash\n# synthetic new template\n")
+    _git(repo, "add", "deployment/scripts/mcs_new.sh")
+    _git(repo, "commit", "-qm", "synthetic template replacement")
+    tree = update_repository._split_source_tree(previous)
+    witness = hashlib.sha256(json.dumps(tree, ensure_ascii=True, separators=(",", ":")).encode("ascii")).hexdigest()
+    monkeypatch.setattr(update_repository, "_PROVIDER_ROLLBACK_SOURCE_WITNESSES", frozenset({witness}))
+    for name in ("mcs_check.sh", "mcs_new.sh"):
+        (repo / "scripts" / name).write_text("#!/bin/bash\n# synthetic rendered wrapper\n")
+    assert update_repository._split_target_source_matches(previous, allow_reviewed_rollback=True)
+    assert not update_repository._split_target_source_matches(_head(repo))
+    (repo / "scripts/untracked.py").write_text("# synthetic shadow\n")
+    assert not update_repository._split_target_source_matches(previous, allow_reviewed_rollback=True)
 
 
 def test_every_rendered_wrapper_name_is_ignored_and_no_tracked_path_is():
