@@ -191,10 +191,11 @@ def test_a_failed_marker_restore_is_noted_on_the_interrupt_and_left_visible(upda
 
 
 @pytest.mark.parametrize("marker_removed", [False, True])
-def test_an_interrupt_after_bail_saved_the_terminal_journal_is_not_unfinished(
+def test_an_interrupt_during_the_restart_after_bail_leaves_the_restart_to_recovery(
         updater, monkeypatch, marker_removed):
-    """bail saved the aborted journal, then restart_agents was interrupted: nothing is left to
-    recover, so the marker is not recreated."""
+    """bail saved the journal with its stages (applying cleared) and restart_agents was then
+    interrupted: the update is not finished until the drainers run again, so the marker stays
+    and recovery takes the finish_pre_merge route, which restarts them (73245967)."""
     _world(updater, monkeypatch)
     target = _git(Path(updater.REPO), "rev-parse", "v1.1.0^{commit}").stdout.strip()
 
@@ -209,8 +210,21 @@ def test_an_interrupt_after_bail_saved_the_terminal_journal_is_not_unfinished(
     with pytest.raises(KeyboardInterrupt):
         updater.apply("v1.1.0", target, "synthetic-command")
     state = _journal(updater)
-    assert not state["applying"] and not state["stages"]
-    assert not Path(updater.MARKER_PATH).exists()
+    assert not state["applying"] and state["stages"]
+    assert Path(updater.MARKER_PATH).exists()
+    import update_policy
+    assert update_policy.classify_recovery_journal_position(
+        has_applying=False, has_done="done" in [s.get("stage") for s in state["stages"]]) == "finish_pre_merge"
+    # the approval is already consumed: recovery restarts the drainers and it is never re-run
+    assert state["executed"]["synthetic-command"]["result"] == "failed"
+    restarted = []
+    _patch_restart(updater, monkeypatch, lambda **_kw: restarted.append(True) or [])
+    assert updater.recover_interrupted() == 0 and restarted
+    after = _journal(updater)
+    assert after["executed"]["synthetic-command"]["result"] == "failed"
+    import update_execution
+    candidates, _consumed = update_execution.scan_pending_approvals(after)
+    assert all(c["command_id"] != "synthetic-command" for c in candidates)
 
 
 

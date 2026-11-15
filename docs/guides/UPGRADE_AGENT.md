@@ -102,7 +102,7 @@ Hermes経由の導入・更新にはuvが必要です。Hermesのディレクト
 
 ### 1.0.20で追加された更新時の確認
 
-- 独立実行では、更新後に選択したPythonで `mcs/ops/mcs_setup.py services` を1回実行し、監視と本人だけが読み書きできるサービス定義を反映します。hostは再起動し、処理中のLLM抽出は中断されます。既存の `data/standalone.log` の権限は変わらないため、運用者が `chmod 600` を実行してください。サービス定義を手動配置している場合は対応テンプレートも更新します。
+- 独立実行では、更新後に選択したPythonで `mcs/ops/mcs_setup.py services` を1回実行し、監視と本人だけが読み書きできるサービス定義を反映します。hostは再起動し、処理中のLLM抽出は中断されます。既存の `data/standalone.log` の権限は変わらないため、運用者が `chmod 600` を実行してください。サービス定義を手動配置している場合は対応テンプレートも更新します。現行版のhostはログを `data/mcs.log` に書き、旧 `standalone.log` は取込み元として扱います（取込み時に本人だけが読み書きできる権限へ変えます）。現行の `services` はテンプレートを使わずにサービス定義を生成するため、手動で配置した定義は `check` が現在のプログラムとの不一致として表示します。`services` で置き換えてください。
 - Hermes gatewayとLINE WORKSの独立アダプターは、新しいコードを読み込むため更新手順に従って再起動します。セットアップが停止確認・通知フラグの公開に失敗した場合は、原因を解消して `services` を再実行します。
 - 更新前から保留中の通知、自分の投稿の確認で通知されずに保存された履歴、失敗済みの意味解析は自動で再送・再処理しません。必要な対象だけを既存の人承認手順で扱います。
 - モデルを新規取得するときは固定revisionとSHAを照合します。導入済みモデルは今回の更新で再取得・再照合しません。公式医薬品masterの同梱と、私有辞書の承認・有効化は引き続き別操作です。
@@ -110,7 +110,7 @@ Hermes経由の導入・更新にはuvが必要です。Hermesのディレクト
 ### 1.0.17以前から1.0.18以降への更新で確認すること
 
 - 1.0.18以降から1.0.20への更新は実行環境の移行がなく、下記の通常の手順で行えます。以下は1.0.17以前から更新する場合の確認事項です。
-- 1.0.18はPython 3.14以上が必要です。更新は必ず更新ツール（`scripts/mcs_upgrade.py`、下記の手順）で行います。更新ツールは定期処理とworkerを止めた状態のまま、3.14未満の実行環境（venv）を`<venv>.pre-python314`へ退避して3.14で作り直し、Hermesのcheckoutが過去の固定commitにあれば新しい固定commitへ進めます。更新ツールの実行中に失敗した場合は、その場で旧版のコード・旧環境・checkoutへ戻します。電源断や強制終了でinstall.shの途中に止まった場合は、独立の復旧watchdogが自動では再実行も復元もせず`reinstall_incomplete`として管理者へ通知して止まります。このときは`/opt/homebrew/bin/python3.14 "$REPO/mcs/ops/mcs_update.py" recover`（Python 3.10以上の任意のPython）を実行すると、旧版のコード・旧環境・checkoutへ戻してworkerを再開し、更新ツールでの再更新を通知します。退避した旧環境は削除しません。
+- 1.0.18はPython 3.14以上が必要です。更新は必ず更新ツール（`scripts/mcs_upgrade.py`、下記の手順）で行います。更新ツールは定期処理とworkerを止めた状態のまま、3.14未満の実行環境（venv）を`<venv>.pre-python314`へ退避して3.14で作り直し、Hermesのcheckoutが過去の固定commitにあれば新しい固定commitへ進めます。更新ツールの実行中に失敗した場合は、その場で旧版のコード・旧環境・checkoutへ戻します。電源断や強制終了でinstall.shの途中に止まった場合、独立の復旧watchdogは再実行も復元もせず、何も変更しないまま`data/recovery_report.json`に`runtime_migration_pending`を記録して止まります。通知は固定の「更新・復旧の状態確認」（`MCS-UPD-RECOVERY-UNKNOWN`）で、理由の語は含まず、Hermesモードでは端末内（`local`）宛てです。このときは`/opt/homebrew/bin/python3.14 "$REPO/mcs/ops/mcs_update.py" recover`（Python 3.10以上の任意のPython）を実行すると、旧版のコード・旧環境・checkoutへ戻してworkerを再開し、更新ツールでの再更新を通知します。退避した旧環境は削除しません。
 - 1.0.17以前の自動更新（`update.mode=auto`）は実行環境を移行できないため、1.0.18の適用を取り消して元の版に戻り、更新ツールの利用を通知します。通知を受けたら下記の手順で更新ツールを実行してください。
 - Hermesのcheckoutが過去の固定commit・新しい固定commit以外、ブランチ上、またはローカル変更ありの場合は、`plan`の事前確認で`runtime_migration: hermes_checkout_*`として止まり、何も変更しません。checkoutを固定commitへ揃えてから再実行します。1.0.19以降、Python 3.14対応を宣言している独自のcheckout（変更なし）を使い続ける場合は、`plan`と`apply`に`--keep-hermes-checkout <そのcheckoutの40桁のcommit>`を付けると、checkoutを動かさずに実行環境だけを作り直します（commit不一致・変更あり・3.14非対応は`runtime_migration: keep_hermes_checkout_*`などで止まります）。
 - 復旧watchdogのPythonもPython 3.14以上とSQLiteのWAL-reset修正が必要です。既存の選択が`/usr/bin/python3`（3.9系）などの場合、事前確認で`recovery_runtime: runtime Python version unsupported`として止まります。`brew install python@3.14`の後、`mcs_setup.py init --yes --recovery-python /opt/homebrew/bin/python3.14`（実在する絶対パス）で選び直してから更新します。
@@ -149,7 +149,7 @@ Hermes経由の導入・更新にはuvが必要です。Hermesのディレクト
 ### 2026-10-04追記: 現在の更新入口と回帰資産
 
 [共通CLI](../../mcs/ops/mcs_cli.py)の`mcs update plan`は取得済みタグだけを対象にし、
-fetchせずに計画を確認します。対応する導入済みのstandaloneは[対話更新の手順](#1-a-対応する導入済みstandaloneの対話更新)、Hermes連携は既存bootstrapへ進みます。阻害時は非ゼロ終了で、計画の表示だけでは適用可能とは判断しません。既存の`mcs_upgrade.py`・`mcs_update.py`による手順は残ります。
+fetchせずに計画を確認します。対応する導入済みのstandaloneは[対話更新の手順](#1-a-対応する導入済みstandaloneの対話更新)、Hermes連携は既存bootstrapへ進みます。`route=blocked`のときは非ゼロ終了です。HEADが移行先と同じ（`route=noop`）場合は、中断中の更新などの`blockers`があっても終了コード0になるため、終了コードだけでなく`blockers`も確認します。計画の表示だけでは適用可能とは判断しません。既存の`mcs_upgrade.py`・`mcs_update.py`による手順は残ります。
 v1.0.0〜1.0.2は手動更新条件を保持します。standaloneの外部bootstrapによるapply拒否も維持し、対応版を未導入なら新しい経路へ進めず保留します。apply・rollbackには従来の停止・バックアップ・承認契約が適用され、
 schema巻戻しの個別復旧同意を更新承認で代用できません。
 
@@ -226,13 +226,13 @@ git -C "$REPO" show "${TAG}:scripts/mcs_upgrade.py" > "$WORK/mcs_upgrade.py"   #
 
 | 項目 | 意味 |
 |---|---|
-| `route` | `apply`（通常適用）/ `reinstall`（install.sh 再実行を伴う適用）/ `blocked`（§3で解消）/ `noop`（更新済み） |
+| `route` | `apply`（通常適用）/ `reinstall`（install.sh 再実行を伴う適用）/ `blocked`（§3で解消）/ `noop`（更新済み）。`noop` でも `blockers` が付く場合があり、そのときは§3で解消する。HEAD が移行先と同じでも設定の移行が必要で阻害要因が無ければ `apply`（§4） |
 | `current` / `target` | 現在のタグ・SHA・DB schema / 移行先 |
 | `blockers` | 解消が必要なエラートークン |
-| `reinstall` | `install_sh_changed`（install.sh 変更）・`standalone_requirements_changed`（独立モード SDK 固定版の変更） |
+| `reinstall` | `install_sh_changed`（install.sh 変更）・`standalone_requirements_changed`（独立モード SDK 固定版の変更）・`ocr_requirements_changed`（`--with-yomitoku` で導入済みの環境で、OCR の依存・導入処理・モデル契約のファイルが変わる） |
 | `schema_bump` | DB の版変更。あれば事前バックアップからの復元が巻戻しに含まれる |
 | `restarts` | 更新後に必要な再起動（`gateway`・`lineworks_adapter`） |
-| `recovery_tool_changed` | 復旧 watchdog の変更。`reinstall` 経路なら自動で反映（`--no-recovery` を付けた場合を除く）。`apply` 経路では適用後に、承認を得て `./install.sh <opt-out> --no-services` を再実行する |
+| `recovery_tool_changed` | 復旧 watchdog の変更。`reinstall` 経路なら自動で反映（`install_args` の記録か `--install-arg` に `--no-recovery` がある場合を除く）。`apply` 経路では適用後に、承認を得て `./install.sh <opt-out> --no-services` を再実行する |
 | `install_args` | 前回成功した install.sh の opt-out（`~/.mcs/config.json`。未記録時は旧 `data/install_options.json` を参照）。`null` は記録なし、読取不能、形式不正、または新旧の記録が不一致 |
 | `notes` | 現在版より新しく移行先までの各版の「更新時の注意」（CHANGELOG） |
 
@@ -281,7 +281,7 @@ release owner を使わない通常更新で、提供元別設定に未移行の
 
 本番適用後はしばらく運用して確認し、見つかった不具合を修正してからタグ付け・GitHub Release・pushへ進みます。直後の正常な収集や合成テストだけで、運用中の確認が済んだとは扱いません。
 
-後で公開するタグは、検証済みの候補そのもの、または修正を含む子孫コミットを指す必要があります。適用済みのコミットはsquash・rebase・amendで書き換えないでください。祖先を含まない版へは`not_fast_forward`で更新が止まります。別系統へ切り替える場合は直接resetせず、§7の巻戻し条件と承認を確認してから、既存の`rollback`で更新前のコミットへ戻します。候補の運用を続けるだけなら巻戻しは不要です。
+後で公開するタグは、検証済みの候補そのもの、または修正を含む子孫コミットを指す必要があります。適用済みのコミットはsquash・rebase・amendで書き換えないでください。祖先を含まない版へは`not_fast_forward`で更新が止まります。別系統へ切り替える場合は直接resetせず、§7の巻戻し条件と承認を確認してから、既存の`rollback`で更新前のコミットへ戻します（提供元別設定を分離済みの導入先では、§7の条件を満たさない戻り先は拒否されます）。候補の運用を続けるだけなら巻戻しは不要です。
 
 ## 3. 阻害要因の解消
 
@@ -293,8 +293,8 @@ release owner を使わない通常更新で、提供元別設定に未移行の
 | `config: …` / `new_config: …` | 現在 / 移行先の設定検証エラー。キーと理由を示し、承認後に `"$PY" "$REPO/mcs/ops/mcs_setup.py" init --set KEY=JSON` で直す（秘密値は扱わない） |
 | `update_in_progress_or_interrupted` | 前回の更新が途中。`"$PY" "$REPO/mcs/ops/mcs_update.py" status` を確認し、§7の移行先版の更新ツールで復旧してから再計画 |
 | `runtime_migration_pending`（復旧レポート） | Pythonや接続用ライブラリの移行が途中。定期の復旧ツールは環境・更新記録を保持して停止する。通常の復旧を繰り返さず、§7の移行先版の更新ツールを確認する |
-| `restore_consent_pending` | DB 復元の人承認待ち。[バックアップ・復元ガイド §8](BACKUP.md#consent) の損失報告・バックアップhashに束縛された復元承認手順をユーザーが行う |
-| `hermes_not_resolvable` / `standalone_interpreter_unavailable` | 実行基盤が無い。`./install.sh --preflight` の `対処:` を確認しユーザーと対処 |
+| `restore_consent_pending` | DB 復元の人承認待ち。承認待ちの間は通知を出さない。`data/restore_report.json` の `report_id`・`backup_sha256`・`backup_schema` と損失の内容をユーザーが確認し、承認する場合は `/mcs` の `restore_approve`（[plugin手順](../../hermes_plugin/README.md#システム全体の運用承認update--rollback--restore)）を送る。端末からは `mcs_update.py restore-approve --report-id <report_id> --backup-sha256 <backup_sha256> --backup-schema <backup_schema> --confirm-human --reason <理由>` でも同じ承認を送れる（独立実行で `/mcs` が使えない間を含む）。[バックアップ・復元ガイド §8](BACKUP.md#consent) の `mcs_restore.py` は別の機構（新しい配置先へのオフサイト復元の採用）用で、この保留は解除しない |
+| `hermes_not_resolvable` / `standalone_interpreter_unavailable` | 実行基盤が無い。`./install.sh --preflight` の `対処:` に従う。導入済みの環境では install.sh は venv を作り直さないため、**【ユーザー確認】** の上で常駐サービスが止まっていることを確認し、`mv <venv> <venv>.broken` で退避（削除しない）してから `./install.sh` を再実行する。動作する旧版の Python からの移行は更新ツール（§2・§5）で行う |
 | `insufficient_disk` | DBの2倍に、64MiBと設定された空き容量下限の大きい方を加えた空きが必要。下限の既定値は512MiB。原本と必要なバックアップを保護して容量を確保 |
 | `not_fast_forward: …` | checkout が移行先の祖先でない（ローカルコミットや新しすぎる版）。**【ユーザー確認】** |
 | `untracked_collision: …` | 未追跡ファイルが移行先の追跡ファイルと衝突。内容を示し **【ユーザー確認】** |
@@ -302,12 +302,14 @@ release owner を使わない通常更新で、提供元別設定に未移行の
 | `schema_bump_auto_blocked` | `update.mode=auto` では schema 変更を適用しない。ユーザーと方針を決める（`notify` へ変更等） |
 | `standalone_external_apply` | 独立モードは host 経由で更新する（[STANDALONE.md](STANDALONE.md#更新復旧)）。`reinstall` がある場合は同書の再導入手順 |
 | `legacy_source_manual` | v1.0.0〜1.0.2 からの更新。§8 の手動経路へ |
-| `reinstall_incomplete` | 前回の再導入が install.sh の途中で中断した。`status` を示し **【ユーザー確認】** の上で `cd "$REPO" && ./install.sh <前回と同じ opt-out（plan の install_args）> --no-services` → `"$PY" mcs/ops/mcs_setup.py services` → `"$PY" mcs/ops/mcs_update.py reinstall-done`（HEAD が再導入した版のときだけ完了を記録し、残りの後処理を復旧処理で完了）→ `check`。復旧処理は install.sh を無人で再実行しない |
+| `reinstall_incomplete` | 前回の再導入が install.sh の途中で中断した。`status` を示し **【ユーザー確認】** の上で `cd "$REPO" && ./install.sh <前回と同じ opt-out（plan の install_args）> --no-services` → `"$PY" mcs/ops/mcs_setup.py services` → `"$PY" mcs/ops/mcs_update.py reinstall-done`（HEAD が再導入した版のときだけ完了を記録し、残りの後処理を復旧処理で完了）→ `check`。復旧処理は install.sh を無人で再実行しない。独立の復旧監視はこの状態を固定の「更新・復旧の状態確認」通知（Hermesモードは端末内の `local` 宛て）で知らせ、抽出workerを再起動して更新markerを外すため、再導入が終わっていない版のまま収集・抽出が再開する |
 | `reinstall_requires_upgrade_tool` | 1.0.29 以前の `mcs/ops/mcs_update.py` を直接実行して再導入を指定したため、更新の排他制御を引き継げず、再導入を始める前に止めて元の版への復元を試みた。`status` と復旧の結果を確認し、復元できていれば §7 の移行先版の更新ツール（`scripts/mcs_upgrade.py apply --reinstall`）で再実行する |
 | `install_options_unverified` | 承認後の変更か、古い更新記録に照合の根拠がないため、再導入を開始していない。記録を削除せず、現在の状態と導入内容を担当者に確認してもらう |
-| `recovery_incomplete`（復旧レポート） | 抽出処理の起動確認が未完了。中断記録を保持するため、起動失敗の原因を修復して `recover` を再実行する。同じ復旧の再試行では起動済み処理を停止し直さない |
+| `recovery_incomplete`（復旧レポート） | 抽出処理の起動確認が未完了、または旧ログの再取込みを確認できない（`run_log_tail_unverified`。§3-B を参照）。中断記録を保持するため、原因を修復して `recover` を再実行する。同じ復旧の再試行では起動済み処理を停止し直さない |
+| `post_merge_reverted`（復旧レポート） | 完了した復旧。通知は「更新・復旧の処理完了」（`MCS-UPD-RECOVERY-COMPLETED`）で届く |
+| `runtime_restore_blocked`・`provider_rollback_*`（復旧レポート・巻戻しの結果） | 提供元別設定を分離済みの導入先で、戻り先の版を安全と確認できず巻戻しを止めた（§5・§7）。新しいコードのまま書込み処理を止めて保留している。markerや記録を削除せず、`status` と `data/recovery_report.json` を示して **【ユーザー確認】** |
 | `update_state_corrupt` | `data/update_state.json` が読めない。内容を変えずに報告し、ユーザー判断を待つ |
-| `tag_not_fetched` | `git fetch --tags origin` が失敗している。ネットワーク・タグ名を確認 |
+| `tag_not_fetched` | `git fetch --tags origin` が失敗している。ネットワーク・タグ名を確認。§2の起動役（`mcs_upgrade.py`）経由では、取得していないタグや `v` のない表記（実タグは `v1.0.23` なのに `--to 1.0.23`）を指定すると、計画の前の展開で `git ls-tree に失敗しました。接続とアクセス権を確認してください（終了コード 128）` と表示して終わり、このトークンは出ない。タグの取得と表記を確認する |
 | `validate_config_failed` / `preflight_failed: …` | 現在 / 移行先コードで設定検証が実行できない。出力を報告 |
 | `standalone_runtime_missing_in_target` | 移行先が独立モード非対応。対象タグを見直す |
 | `plan_failed: …` | 計画中の検査が失敗した。内容を報告し再試行の可否をユーザーと決める |
@@ -332,6 +334,30 @@ launchctl print "gui/$(id -u)/org.mcs.recovery"
 
 C の適用がコード切替前に失敗した場合は、HEAD が B で、未完了の更新記録がなく、状態を確認できる場合だけ旧い監視を再開できます。コード切替後または切替状態が不明な場合は旧い監視を再開せず、移行先版の正規 `recover` または検証済みの新しい復旧ツールで §7 の保留・復旧手順に従ってください。この順序の実機適用は未確認です。
 
+### 3-B. ログの統合準備で止まった場合
+
+次のどれかに当たる場合に適用します。
+
+- install.sh が `ログの統合準備を確認できません` と、`run_log_prepare_failed: run_log_legacy_missing` または `run_log_prepare_failed: run_log_legacy_changed` を表示して止まった。
+- 更新の記録に `run_log_prepare_failed` または `run_log_tail_unverified` が残った。
+- `data/recovery_report.json` が `recovery_incomplete` と `run_log_tail_unverified` を示している。
+
+記録済みの旧ログの取込み元が消えたか変わったため、ログhelperの移行が止まっています。**【ユーザー確認】** の上で、まず旧ログの原本を確認します。続けて次を実行し、表示された名前を確認してから、止まった操作（`./install.sh`・`mcs update`・`mcs recover`）を再実行します。`MCS_ROOT` は導入先（既定は `~/.mcs`）です。checkout（`$REPO`）が `~/.mcs` と別の場所にある場合は、次のコマンドの `run_log.py` に `"$REPO/mcs/core/run_log.py"` を使います（`--data-dir` は `~/.mcs/data` のままです）。
+
+```bash
+python3 -I "$MCS_ROOT/mcs/core/run_log.py" retire-drifted --data-dir "$MCS_ROOT/data"
+```
+
+導入先のコードがこの修正より前の版のままなら、修正を含むタグ（`$TAG`）から `mcs/core/run_log.py` を取り出し、同じ引数で実行します。
+
+```bash
+WORK="$(mktemp -d)"
+git -C "$REPO" show "refs/tags/$TAG:mcs/core/run_log.py" > "$WORK/run_log.py"
+python3 -I "$WORK/run_log.py" retire-drifted --data-dir "$MCS_ROOT/data"
+```
+
+配置済みのログhelperを置き換える必要はありません。消えた名前は記録を外し、後で同じ名前のファイルができた場合は新しいファイルとして先頭から取り込みます。内容が変わった名前は、現在の内容を取込み済みとして記録します。この内容は `mcs.log` へ写しませんが、写しを `data/mcs-log-backups/` に保持し、以後に増えた分だけを取り込みます。旧ログの原本、これまでに取り込んだ内容、バックアップの写しは削除しません。
+
 ## 4. ユーザー確認
 
 次をまとめて提示し、適用の承認を得る（既に同じ内容で承認済みなら聞き直さない）。
@@ -342,17 +368,19 @@ C の適用がコード切替前に失敗した場合は、HEAD が B で、未�
   その opt-out を使い、確認は不要（空配列は opt-out なし）。`null` のときは記録の欠落・不正・
   不一致を区別できないため、自動更新と再導入を停止し、担当者に確認を依頼する。
   旧記録と中央設定の両方に省略項目がないと確認できた場合は、ユーザーに
-  `--no-llm`（自前 LLM サーバ）・`--no-brew`・`--no-plugin`・`--no-recovery` のどれを使っていたか確認する
-  （`--mode` は不要。設定から自動判定）。`~/.mcs-recovery/` があるなら復旧機能は導入済みなので、
-  `install_args` や回答に `--no-recovery` があっても除き、`notes` が求める場合だけ付ける
-  （付けると復旧ツールが古いまま残る）。
+  `--no-llm`（自前 LLM サーバ）・`--no-brew`・`--no-plugin`・`--no-recovery`、OCR を導入した `--with-yomitoku` のどれを使っていたか確認する
+  （`--mode` は不要。設定から自動判定）。`mcs update apply` の `--install-arg` は `--with-yomitoku` を受け付けないため、
+  渡す必要がある場合は§5の起動役（`mcs_upgrade.py`）を使う。
+  再導入は記録済みの `install_args` と `--install-arg` の両方を合わせて install.sh に渡すため、
+  記録に `--no-recovery` があると `--install-arg` から外しても付き、復旧ツールは古いまま残る。
+  `~/.mcs-recovery/` があり記録に `--no-recovery` がある場合は、そのまま進めず担当者に確認する。
   新しい選択は利用者が install.sh を直接実行して成功したときに記録する。standalone では
   明示指定の有無にかかわらず `--no-plugin` を記録する。通常の更新では、
   検証済みの旧記録があり中央設定に記録がなければ、run.lock を取得後、mergeの前にその値を中央設定へ写す。
   既存の更新条件を満たす場合、最新版であっても移行が必要なら `plan` は `settings_migration: required` と表示し、確認後の更新で写す。
   認証情報と保存データは現在の保存先に保持し、DBの形式変更は既存のバックアップ・移行手順で扱う。
   Python 移行や修復のために足した opt-out は記録しない。
-  旧記録はそのまま保持され、有効な旧記録と異なる opt-out を保存する直接導入は停止する。
+  更新では旧記録をそのまま保持する。install.sh を直接実行して opt-out を変えた場合は、旧記録も同じ内容に置き換え、旧版へ戻したときも最新の選択を使う。
   更新が中断・失敗した場合も、同じ値を写した設定は残る場合がある。
   旧watchdogが `interrupted_pre_merge` と報告しても、設定へのコピーが行われなかった証拠にはならない。
   保存後の同期に失敗した場合は結果を確定できないため、旧記録と設定を保持して担当者に確認を依頼する。
@@ -401,12 +429,23 @@ C の適用がコード切替前に失敗した場合は、HEAD が B で、未�
 既存の LLM 処理を停止する設定ではない。
 
 `--no-fetch` は起動役の事前取得を省くだけで、適用自体はタグの照合のためネットワークを使う。
-適用は移行先版の `mcs_update.apply` が行う: 更新ロック取得 → 検査 → `data/backups/preupdate-*.db` 取得 →
-実行ロック → 常駐処理の停止 → `git merge --ff-only` → 新コードで（再導入 →）サービス再同期 → 再起動 →
-DB を開いて移行（加法 migration）→ 事後検証。失敗時は自動で元の SHA へ戻し、schema 変更があれば DB を復元する
+適用は移行先版の `mcs_update.apply` が行う: 更新ロック取得 → ローカルの検査 → タグの照合・取得 → タグの検査 →
+`provider_update_bridge_required`・`source_untracked_files` の確認 → `data/backups/preupdate-*.db` 取得 →
+実行ロック → 導入設定の移行 → 常駐処理の停止 → `git merge --ff-only` → 新コードで（再導入 →）サービス再同期 → 再起動 →
+DB を開いて移行（加法 migration）→ 事後検証 → 適用の記録 → gateway 再起動の依頼。
+`provider_update_bridge_required`・`source_untracked_files` で拒否した場合は、事前バックアップを取らず `config.json` も書き換えない。HEAD が既に移行先なら、この2つの確認は行わず `already_applied` になる（従来どおり）。
+失敗時は自動で元の SHA へ戻し、schema 変更があれば DB を復元する
 （復元前の損失報告に人承認が必要な場合は保留になる）。移行記録にあるHermesのコードとvenvは退避から戻せるが、brewなど再導入のその他の副作用は巻き戻らない。
+ただし、提供元別設定を分離済みの導入先でコードの切替後に失敗した場合は、戻り先のソースが現在と同じか、
+確認済みの版（v1.1.0・ef091422）で設定読取りのコードが同じときだけ戻す。それ以外は戻さず、
+新しいコードのまま書込み処理を止めて `runtime_restore_blocked` を記録し、保留する（§7）。
 
-【検証】終了コード 0。0 以外は §7。
+【検証】終了コード 0。0 以外は §7。ただし、適用が成功して HEAD が移行先になった後でも、起動役は次の場合に 1 を返す。
+適用後の再計画で `noop` 以外や阻害要因が出た場合（`更新の完了を確認できませんでした…`）と、
+Slack 運用ログ先の準備が未完了の場合（`更新後のSlack運用ログ先の準備は未完了です`。§6）である。
+非0のときは、まず `status` の `applied` の最後と `git -C "$REPO" rev-parse HEAD` を確認する。
+移行先が適用済みなら、§7の巻戻しとして扱わず、Slack の場合は `mcs setup slack-channels` で準備だけを再開する。
+再計画の場合は表示に従い `mcs recover` と `mcs doctor` で状態を確認し、同じ適用を繰り返さない。
 
 ## 6. 後処理と検証
 
@@ -414,8 +453,11 @@ SlackカードとSlackのテキスト通知のどちらも、通常の更新経�
 運用ログ先を準備します。運用先が未設定または患者情報先と同一なら、非公開の`mcslog`を補完します。
 明示済みの別の運用先は保持します。テキスト専用の`interactive=off`も維持します。
 新規作成には、Slackアプリの接続情報・`groups:write`と`groups:read`権限・招待先の操作者IDが必要です。
-権限不足・名前の競合・作成結果不明などで止まった場合は、案内された条件を確認してから
-`mcs setup slack-channels`で準備を再開してください。`install.sh --no-services`で省略した準備も同じコマンドで再開できます。
+権限不足などで止まった場合は、案内された条件を確認してから
+`mcs setup slack-channels`で準備を再開してください。名前の競合や作成・招待の結果不明の記録が残った場合は、
+このコマンドでも再開できないことがあります。その場合は記録を削除せず、担当者に確認してください。
+担当者がSlackで同名のチャンネルの有無を確かめた後は、`mcs setup slack-channels --discard-hold --request-id <記録のrequest_id> --confirm-human --reason <理由>`で記録を退避できます。記録は`data/slack-channel-setup.discarded-<request_id>.json`として残り、承認記録も作られます。作られていたチャンネルを使う場合は、そのIDを通知先に設定してから準備を再開してください。
+`install.sh --no-services`で省略した準備も同じコマンドで再開できます。
 不明な作成・招待を繰り返したり、運用先を患者情報先へ戻したりしません。
 設定の保存と更新後の接続を確認します。カードを使う構成では通常の通知workerの起動確認も必要です。
 
@@ -456,6 +498,11 @@ Hermesのコードが更新開始時・移行先のどちらとも違う場合�
 1.0.24以前の更新ツールが作った古い移行記録が残っている場合も、移行先の版を記録から確認できず停止することがあります。管理担当者が元の更新対象と退避を確認してください。
 
 - apply が非0: `status` の `attempts[$TAG].detail` を報告する。自動巻戻し済みなら checkout は元の SHA。
+  §5の終了コードの注意のとおり、適用済みで 1 を返す場合もあるため、先に `applied` と HEAD を確認する。
+  提供元別設定を分離済みの導入先で `runtime_restore_blocked` が記録された場合は、checkout は新しいコードのまま書込み処理が止まっている。
+  markerや記録を削除せず、`status` と `data/recovery_report.json` を報告してユーザー判断を待つ。戻せない場合の回復は修正版を前へ適用することで、その可否と手順は管理担当者が判断する。
+  バックアップから復元した導入先で、schema を変える更新の適用後確認が失敗した場合は、`restore_marker_adopted` / `restore_incomplete_wrong_head` で保留したままになり、チャットへの通知は出ない。
+  状態は `data/recovery_report.json` でだけ確認できる。この保留の解除方法は未決定（未解決の課題 repair-3）のため、記録を保持して管理担当者の判断を待つ。
   `rollback failed — escalate` の場合は追加操作をせず報告する（復旧 watchdog と人の判断に委ねる）。
   schema 変更を伴う更新で旧版の checkout へ戻した後なら、DB 復元が完了するまで抽出処理と更新 marker を止めたままにする（通知は復旧レポートで行う）。
   以後の `recover` も、復元の保留markerや未完了記録が残る間は処理を強制再開しない。独立した復旧監視のレポートに `writers_stopped` がない場合、保留だけでwriterの停止を確認済みとは扱わず、実際のプロセス状態を確認する。
@@ -468,6 +515,10 @@ Hermesのコードが更新開始時・移行先のどちらとも違う場合�
   配送の保留markerは残し、再開したrunnerが既存の通知記録照合を完了するまで通知を許可しません。版が不明・不一致、記録や定義を読めない場合、および復元の承認待ちは保留を維持します。適合するcheckoutの確認後に同じ `mcs recover` で再確認し、marker削除や追加承認で迂回しないでください。
 - 適用後に問題が見つかり戻す場合（ユーザー承認後）: `"$PY" "$REPO/mcs/ops/mcs_update.py" rollback`。
   schema 変更があった更新は DB 復元を伴い、損失報告への人承認を求められることがある。
+  提供元別設定を分離済みの導入先では、戻り先のソース（`mcs/`・`deployment/`・`scripts/` など）が現在と同じか、
+  確認済みの版（v1.1.0・ef091422）で設定読取りのコードが同じ場合だけ戻せる。それ以外は変更前に
+  `provider_rollback_target_unverified` で拒否され、通知と「元の版に戻せませんでした」の表示が出る。
+  この場合は戻さず、修正版を前へ適用する方法を管理担当者と決める。
 - `rollback_blocked_layout_floor` は保存済みカード形式を戻り先が扱えないことを示します。自動巻戻し・中断復旧にも同じ下限を適用し、旧コードへの切替前に拒否します。1.0.23から旧版へ戻すには、必要な損失確認と人承認を経て更新前backupを復元してください。復元holdは維持し、通常収集や通知を手動で強制再開しません。
 - install.sh が失敗した場合は出力末尾の `要対処` / `対処:` を示し、ユーザーと対処してから §2 からやり直す。
 
@@ -504,7 +555,9 @@ MCS 更新: <現在版> → <移行先>（route=<…>）
 計画/状態のJSONは自動処理との互換性のため維持しています。JSON内の状態コードは翻訳しません。
 
 復旧ツールの使い方だけを確認するときは、
-`python3 ~/.mcs-recovery/mcs_recover.py --help` を使います。
+`"$RECOVERY_PYTHON" -I -B ~/.mcs-recovery/mcs_recover.py --help` を使います（`$RECOVERY_PYTHON` は記録済みの `recovery_python`。§3-A）。
+復旧ツールは実行する Python の版（3.14 以上）と SQLite の修正を自分では確認しないため、
+macOS 標準の `/usr/bin/python3` などで復旧を実行しないでください。
 `--help` / `-h` は復旧を実行しません。不明な引数もエラーで終了し、復旧を開始しません。
 `--status` は引き続き機械処理用JSONを返します。引数なしの実行は復旧処理なので、
 ヘルプの代わりに実行しないでください。配備済みの復旧コピーは通常の更新・同期後に反映されます。

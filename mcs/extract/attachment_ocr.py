@@ -489,13 +489,16 @@ def _sandbox_profile(executable, python, source, hub):
     for path in [*readable, *aliases, source.parent]:
         for alias in _symlink_chain(path):
             metadata.update([alias, *alias.parents])
+    def quote(path):  # SBPL does not decode \uXXXX, so keep non-ASCII path characters literal.
+        return json.dumps(str(path), ensure_ascii=False)
+
     # macOS libignition opens the root directory for openat(); this grants no descendant data.
     return ('(version 1)(allow default)(deny network*)(deny file-read*)(deny file-write*)'
             '(allow file-read* (literal "/"))'
-            + ''.join('(allow file-read* (subpath ' + json.dumps(str(path)) + '))' for path in readable)
-            + ''.join('(allow file-read-metadata (literal ' + json.dumps(str(path)) + '))' for path in sorted(metadata))
-            + ''.join('(allow file-read-data (literal ' + json.dumps(str(path)) + '))' for path in sorted(aliases))
-            + '(allow file-write* (subpath ' + json.dumps(str(source.parent.resolve())) + '))')
+            + ''.join('(allow file-read* (subpath ' + quote(path) + '))' for path in readable)
+            + ''.join('(allow file-read-metadata (literal ' + quote(path) + '))' for path in sorted(metadata))
+            + ''.join('(allow file-read-data (literal ' + quote(path) + '))' for path in sorted(aliases))
+            + '(allow file-write* (subpath ' + quote(source.parent.resolve()) + '))')
 
 
 def _runtime(executable, source, output, timeout, hf):

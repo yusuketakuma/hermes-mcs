@@ -120,8 +120,8 @@ MCSLOGは患者情報を含めず、何が起きたか、影響、次の操作�
 |---|---|
 | `MCS-UPD-APPLIED` | プログラムの更新を適用。通知への対応は不要 |
 | `MCS-UPD-AVAILABLE` | 新しいバージョンを検出。まだ適用していないため、変更点と適用前の確認を読む |
-| `MCS-UPD-ABORTED` / `MCS-UPD-ROLLBACK-FAILED` | 更新の中止、または更新前のバージョンへ戻す処理の失敗。`python3 mcs/ops/mcs_update.py status`で更新記録を確認 |
-| `MCS-UPD-RECOVERY-COMPLETED` | 復旧処理の記録が完了。収集・通知の再開は`python3 mcs/ops/mcs_setup.py check`で別途確認 |
+| `MCS-UPD-ABORTED` / `MCS-UPD-ROLLBACK-FAILED` | 更新の中止、または更新前のバージョンへ戻す処理の失敗。`"$PY" mcs/ops/mcs_update.py status`で更新記録を確認 |
+| `MCS-UPD-RECOVERY-COMPLETED` | 復旧処理の記録が完了。収集・通知の再開は`"$PY" mcs/ops/mcs_setup.py check`で別途確認 |
 | `MCS-UPD-GATEWAY-RESTART-FAILED` / `MCS-UPD-LINEWORKS-RESTART-FAILED` / `MCS-UPD-STANDALONE-RESTART-FAILED` | 常駐処理の再起動要求を確認できない。更新を繰り返さず、通知の確認手順を実行 |
 | `MCS-UPD-DELIVERY-RECONCILE-HELD` | DB復元後に送信済みか確認できない通知が残る。[配送結果の個別確認](NOTIFICATION_RECOVERY.md)へ進み、不明なまま再送しない |
 | `MCS-UPD-UNKNOWN` / `MCS-UPD-RECOVERY-UNKNOWN` | 通知から結果を確認できない。成功・未送信と推測せず、更新記録を確認 |

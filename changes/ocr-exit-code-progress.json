@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "添付OCRの定期ジョブが、処理が進んだ回を失敗として報告しないように変更",
+  "summary": "添付の文字起こしやページ解析が1件以上終わった回は、残りが次回へ持ち越されても定期ジョブを成功（終了コード0）として終えます。これまでは持ち越しが1件でもあると失敗（終了コード1）になり、ほぼ毎回『失敗』と表示されて本当の停止が見分けにくくなっていました。何も進まずに持ち越しだけが残った回と、失敗・例外・スナップショット更新の保留がある回は、従来どおり終了コード1です。",
+  "upgrade": "追加操作は不要です。mcs_ocr.py --run（Hermes の定期ジョブ『MCS attachment OCR』と deployment/scripts/mcs_ocr.sh）の終了コードだけが変わります。attachment_ocr_status.json の内容・持ち越しの数え方・再試行・既読化・クラウド送信の判定は変わりません。反映には稼働中のcheckoutの更新が必要です。",
+  "details": [
+    "mcs_ocr.main は complete または local_done が1以上の回に限り、deferred・local_deferred と理由 memory_deferred を成功として扱います（所有者判断 2026-11-13）。",
+    "failed が1以上、または理由が local_processing_failed・snapshot_deferred・writer_blocked などの回は、進んだ件数があっても終了コード1のままです。"
+  ],
+  "refs": ["mcs/ops/mcs_ocr.py", "tests/ops/test_mcs_ocr_entry.py"]
+}

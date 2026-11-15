@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "設定を確認できないときの mcs update を案内付きの停止に修正",
+  "summary": "提供元別設定の書込みが途中で止まっている、または runtime_mode が不正なときに mcs update（guide・plan・apply）を実行すると、Pythonのエラー表示ではなく「設定を確認できないため、更新を開始しません」と表示して終了コード1で止まります。更新は従来どおり開始しません。",
+  "upgrade": "追加操作は不要です。表示に従い mcs doctor で設定の状態を確認してください。mcs recover と mcs update rollback の動作は変わりません。",
+  "details": [
+    "mcs_cli の update 分岐で runtime_mode の判定時に ValueError と ProviderSettingsUnreadable を捕捉し、案内を表示して1を返す。",
+    "起動時の実行環境選択でも ProviderSettingsUnreadable を不正な実行方法と同じく扱い、doctor が状態を説明できるようにした。"
+  ],
+  "refs": ["mcs/ops/mcs_cli.py", "tests/ops/test_mcs_cli.py"]
+}

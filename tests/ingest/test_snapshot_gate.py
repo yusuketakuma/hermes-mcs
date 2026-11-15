@@ -669,6 +669,41 @@ def test_finish_run_unchanged_without_gate_engagement(tmp_path, monkeypatch, sta
     db.close()
 
 
+def test_released_reserve_holds_a_mid_run_urgent_publish_for_the_next_tick(
+        tmp_path, monkeypatch):
+    """A run that gave its publish reserve to derive never publishes in its
+    finish, even when an urgent key moves meanwhile; the marker and dirty
+    flag stay, so the next run keeps the reserve and publishes."""
+    db, updater, lock_fd, baseline = _finish_env(tmp_path, monkeypatch)
+    path = str(tmp_path / "ledger.db")
+    assert maintenance.refresh_snapshot(path) == "published"
+    marker = open(maintenance._snapshot_sig_path()).read()
+    deadline = time.monotonic() + 400
+    result = {"notify": {}, "errors": [], "incomplete": []}
+    assert run_check._optional_work_deadline(db, result, deadline) == pytest.approx(
+        deadline - snapshots.SNAPSHOT_WORK_TAIL_S)
+    assert result["snapshot_reserve"] == "released"
+    with db.db:                                    # a human operation lands mid-run
+        db.db.execute("INSERT INTO command_receipts VALUES('c1','h',1,NULL,'applied','{}',?)",
+                      (time.time(),))
+    monkeypatch.setattr(notify_cards, "snapshot_dirty", lambda *a: 3)
+    cleared = []
+    monkeypatch.setattr(notify_cards, "clear_snapshot_dirty", lambda *a: cleared.append(a))
+    monkeypatch.setattr(maintenance, "publish_snapshot",
+                        lambda *a, **kw: pytest.fail("published without a reserve"))
+    run_id = db.begin_run(None)
+    assert run_check._finish_run(db, {}, result, run_id, deadline=deadline,
+                                 run_lock_fd=lock_fd, db_baseline=baseline) == "ok"
+    assert result["snapshot_state"] == "deferred" and not result["errors"]
+    assert cleared == [] and open(maintenance._snapshot_sig_path()).read() == marker
+    following = {"errors": []}
+    assert run_check._optional_work_deadline(db, following, deadline) == pytest.approx(
+        run_check._snapshot_work_deadline(db, deadline))
+    assert following["snapshot_reserve"] == "kept"
+    os.close(lock_fd)
+    db.close()
+
+
 def test_main_gate_failure_writes_nothing_terminal(tmp_path, monkeypatch, capsys):
     """Through _main: an updater win during the snapshot window forbids
     every correction — no finish_run rewrite, health, outbox, marker,

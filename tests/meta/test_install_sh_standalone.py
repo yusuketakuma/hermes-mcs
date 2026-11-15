@@ -73,7 +73,7 @@ def test_empty_home_standalone_installs_and_checks_sdk_with_uv_or_pip(tmp_path, 
 
 @pytest.mark.parametrize('missing', ['uv', 'git'])
 def test_standalone_ocr_tools_may_be_supplied_by_brew_before_use(tmp_path, missing):
-    _, _, stub, env = _world(tmp_path)
+    home, _, stub, env = _world(tmp_path)
     _hide_tools(stub, env, missing)
     env['STUB_MISSING_OCR_TOOL'] = missing
     (stub / 'bin/brew').write_text('''#!/bin/sh
@@ -93,6 +93,11 @@ exit 0
     installed = calls.index('brew install ' + missing)
     ocr = next(i for i, call in enumerate(calls) if 'scripts/setup_yomitoku.py' in call)
     assert installed < ocr
+    # The OCR cache under data/ is fetched only after the fresh inventory check.
+    bootstrap = next(i for i, call in enumerate(calls) if 'install_options.py bootstrap-fresh' in call)
+    assert bootstrap < ocr
+    assert (home / '.mcs/data/huggingface').is_dir()
+    assert not (home / '.mcs/data/.provider-bootstrap-fresh.json').exists()
 
 
 @pytest.mark.parametrize('fault', ['', 'missing:slack-bolt', 'missing:yarl',
@@ -330,6 +335,7 @@ def test_rerun_on_an_existing_install_never_prompts_and_keeps_settings(tmp_path)
     assert json.loads(cfg.read_text()) == {'mcs_login_id': 'synthetic',
                                           'install_args': ['--no-brew', '--no-llm']}
     assert not any(c.startswith(f"venv-python - {ROOT} ") for c in _calls(stub_root))
+    assert not any(c == f"venv-python - {cfg}" for c in _calls(stub_root))
 
 
 def test_mode_selection_refuses_a_symlinked_config(tmp_path):

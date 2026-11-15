@@ -7,7 +7,13 @@ import attachment_inference
 import mcs_config
 import mcs_ocr
 import snapshots
+from test_attachment_inference import page_store  # noqa: F401
+from test_cloud_after_local import local_then_cloud  # noqa: F401
+from test_anthropic_runtime import routed  # noqa: F401
 
+__all__ = ['page_store']
+
+_REAL_PENDING = attachment_inference.run_pending
 
 
 @pytest.fixture(autouse=True)
@@ -69,6 +75,23 @@ def test_cli_failure_is_nonzero_and_private_status_is_sanitized(tmp_path, monkey
     assert json.loads(capsys.readouterr().out)["attachment_ocr"]["failed"] == 1
 
 
+@pytest.mark.parametrize("result, code", [
+    ({"local_done": 1, "local_deferred": 1}, 0),
+    ({"complete": 1, "deferred": 1, "local_done": 0, "local_deferred": 0}, 0),
+    ({"complete": 1, "deferred": 1, "reason": "memory_deferred", "local_done": 0, "local_deferred": 0}, 0),
+    ({"local_done": 0, "local_deferred": 1}, 1),
+    ({"complete": 0, "deferred": 1, "reason": "memory_deferred", "local_done": 0, "local_deferred": 0}, 1),
+    ({"local_done": 1, "local_deferred": 0, "complete": 0, "failed": 1}, 1),
+    ({"local_done": 1, "local_deferred": 1, "reason": "local_processing_failed"}, 1),
+    ({"local_done": 1, "local_deferred": 0, "reason": "snapshot_deferred"}, 1),
+])
+def test_cli_exit_code_treats_deferral_beside_progress_as_backlog(tmp_path, monkeypatch, result, code):
+    monkeypatch.setattr(mcs_ocr, "DATA", str(tmp_path))
+    monkeypatch.setattr(mcs_ocr, "run", lambda cfg: dict(result))
+    monkeypatch.setattr(mcs_ocr.sys, "argv", ["mcs_ocr", "--run"])
+    assert mcs_ocr.main() == code
+
+
 def test_configured_long_timeout_is_respected(tmp_path, monkeypatch):
     database = tmp_path / "synthetic.db"
     database.touch()
@@ -87,7 +110,8 @@ def test_configured_long_timeout_is_respected(tmp_path, monkeypatch):
     assert mcs_ocr.run(cfg) == {"complete": 0, "local_done": 0, "local_deferred": 0}
 
 
-def test_saved_ocr_refreshes_snapshot_under_writer_lock(tmp_path, monkeypatch):
+@pytest.mark.parametrize("state", ["published", "deferred"])
+def test_saved_ocr_refreshes_snapshot_under_writer_lock(tmp_path, monkeypatch, state):
     import maintenance
     database = tmp_path / "synthetic.db"
     database.touch()
@@ -102,11 +126,12 @@ def test_saved_ocr_refreshes_snapshot_under_writer_lock(tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_ocr.attachment_ocr, "run_pending", lambda *args, **kwargs: next(pending))
     calls = []
 
-    def refresh(path, *, force, deadline):
-        assert path == str(database) and force and deadline > 0
+    def refresh(path, *, dirty, deadline):
+        # OCR publishes through the shared 15-minute interval (dirty), never force.
+        assert path == str(database) and dirty is True and deadline > 0
         assert mcs_ocr.acquire_run_lock(str(tmp_path / "run.lock")) is None
         calls.append(path)
-        return "published"
+        return state
 
     monkeypatch.setattr(maintenance, "refresh_snapshot", refresh)
     assert mcs_ocr.run(cfg) == {"complete": 1, "local_done": 0, "local_deferred": 0}
@@ -285,7 +310,7 @@ def test_startup_wait_uses_existing_job_budget_and_writer_fence(tmp_path, monkey
     def wait(path, *, wait_s, expected_code_stamp, marker_path):
         waits.append(path)
         assert path == str(tmp_path / "run.lock")
-        assert wait_s == work_deadline - now[0] - 5
+        assert wait_s == min(work_deadline - now[0] - 5, mcs_ocr.START_WAIT_S)
         assert expected_code_stamp == 7
         assert marker_path == str(tmp_path / "update_in_progress.marker")
         if outcome == "cancelled":
@@ -337,3 +362,40 @@ def test_cli_explicit_retry_errors_reaches_only_the_bounded_job(tmp_path, monkey
     monkeypatch.setattr(mcs_ocr.sys, 'argv', ['mcs_ocr', '--run', '--retry-errors'])
     assert mcs_ocr.main() == 0 and calls == [(None, True)]
     assert 'disabled' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('branch', ['memory_guard', 'disk_floor', 'job_lock_busy', 'writer_busy'])
+def test_local_deferral_reason_reaches_status_file_with_unchanged_exit_code(
+        page_store, tmp_path, monkeypatch, capsys, branch):
+    import json
+    import time
+    ledger, cfg, *_ = page_store
+    monkeypatch.setattr(attachment_inference, 'run_pending', _REAL_PENDING)
+    monkeypatch.setattr(mcs_ocr.writer_lock, 'updater_state', lambda: (False, 1))
+    monkeypatch.setattr(mcs_ocr.attachment_ocr, 'run_pending', lambda *args, **kwargs: {'complete': 0})
+    held = []
+    if branch == 'memory_guard':
+        monkeypatch.setattr(attachment_inference.extract_llm, '_context_memory_available', lambda: False)
+    elif branch == 'disk_floor':
+        monkeypatch.setattr(attachment_inference.extract_llm, 'disk_free_mb', lambda db: 0)
+    elif branch == 'job_lock_busy':
+        root = attachment_inference.attachment_ocr._data_root(ledger)
+        held.append(mcs_ocr.acquire_run_lock(str(root / 'attachment_inference_local.lock')))
+        assert held[0] is not None
+    else:
+        monkeypatch.setattr(attachment_inference.writer_lock, 'wait_run_lock', lambda path, **kw: None)
+    status_dir = tmp_path / 'status'
+    status_dir.mkdir()
+    monkeypatch.setattr(mcs_ocr, 'DATA', str(status_dir))
+    monkeypatch.setattr(mcs_ocr, 'run', lambda _cfg: mcs_ocr._drain(
+        ledger, cfg, (False, 1), time.monotonic() + mcs_ocr.DRAIN_BUDGET_S, live_config=False))
+    monkeypatch.setattr(mcs_ocr.sys, 'argv', ['mcs_ocr', '--run'])
+    try:
+        assert mcs_ocr.main() == 1
+    finally:
+        for fd in held:
+            mcs_ocr.os.close(fd)
+    status = json.loads((status_dir / 'attachment_ocr_status.json').read_text())
+    assert status['local_deferred'] == 1 and status['local_done'] == 0
+    assert status['local_deferred_reason'] == branch
+    capsys.readouterr()

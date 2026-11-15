@@ -25,6 +25,8 @@ DATA = str(Path(DB).parent)
 
 DRAIN_BUDGET_S = 900
 LOCAL_CALL_S = 300
+# A busy writer at start is retried by the next per-minute launch instead of holding the cron slot.
+START_WAIT_S = 5
 _RAW_COUNTS = frozenset({'complete', 'empty', 'failed', 'unsupported', 'deferred'})
 
 
@@ -69,6 +71,8 @@ def _drain(ledger, cfg, generation, deadline, *, live_config, retry_failed_befor
                             deadline=min(deadline - 5, time.monotonic() + LOCAL_CALL_S), limit=1)
                     result['local_done'] += local['done']
                     result['local_deferred'] += local['deferred']
+                    if 'deferred_reason' in local:
+                        result['local_deferred_reason'] = local['deferred_reason']
                     if local.get('paid_recovery_pending') is True:
                         result['paid_recovery_pending'] = True
                     active['local'] = local['done'] > 0 and local['deferred'] == 0
@@ -118,6 +122,8 @@ def run(cfg=None, *, retry_errors=False):
     generation = writer_lock.updater_state()
     if generation[0]:
         return {'reason': 'writer_blocked'}
+    if writer_lock.gateway_restart_pause(DATA):
+        return {'reason': 'gateway_restart_pending'}
     job = acquire_run_lock(os.path.join(DATA, 'attachment_ocr_job.lock'))
     if job is None:
         return {'reason': 'busy'}
@@ -130,7 +136,7 @@ def run(cfg=None, *, retry_errors=False):
         work_deadline = snapshots.snapshot_work_deadline(deadline, DB)
         fd = acquire_run_lock(os.path.join(DATA, 'run.lock'))
         if fd is None:
-            remaining = work_deadline - time.monotonic() - 5
+            remaining = min(work_deadline - time.monotonic() - 5, START_WAIT_S)
             fd = (writer_lock.wait_run_lock(os.path.join(DATA, 'run.lock'), wait_s=remaining,
                   expected_code_stamp=generation[1],
                   marker_path=os.path.join(DATA, writer_lock.UPDATE_MARKER_NAME)) if remaining > 0 else None)
@@ -165,7 +171,7 @@ def run(cfg=None, *, retry_errors=False):
                         result['reason'] = 'writer_blocked'
                     else:
                         import maintenance
-                        if maintenance.refresh_snapshot(DB, force=True,
+                        if maintenance.refresh_snapshot(DB, dirty=True,
                                 deadline=deadline) is None:
                             result['reason'] = 'snapshot_deferred'
                             failure = snapshots.last_failure()
@@ -194,15 +200,21 @@ def main():
         result = run(None, retry_errors=True) if args.retry_errors else run(None)
     except (OSError, ValueError, sqlite3.Error):
         result = {"reason": "local_processing_failed"}
-    if result != {"reason": "busy"} and Path(DATA).is_dir():
+    # A yielded run keeps the last recorded OCR evidence, like a busy one.
+    if result.get("reason") not in ("busy", "gateway_restart_pending") and Path(DATA).is_dir():
         try:
             atomic_write(os.path.join(DATA, "attachment_ocr_status.json"),
                          lambda stream: json.dump({"at": time.time(), **result}, stream), mode=0o600)
         except (OSError, ValueError, ProviderSettingsUnreadable):
             result["reason"] = "status_unavailable"
     print(json.dumps({"attachment_ocr": result}, ensure_ascii=False))
-    return 0 if (not result.get("failed", 0) and not result.get("deferred", 0) and not result.get("local_deferred", 0)
-                 and result.get("reason") in (None, "disabled", "writer_busy", "busy")) else 1
+    # Owner 2026-11-13: deferrals beside saved progress are backlog, not a stall; a run with no progress still fails.
+    progressed = bool(result.get("complete", 0) or result.get("local_done", 0))
+    deferred = result.get("deferred", 0) or result.get("local_deferred", 0)
+    accepted = (None, "disabled", "writer_busy", "busy", "gateway_restart_pending") + (
+        ("memory_deferred",) if progressed else ())
+    return 0 if (not result.get("failed", 0) and (progressed or not deferred)
+                 and result.get("reason") in accepted) else 1
 
 
 if __name__ == "__main__":

@@ -163,9 +163,11 @@ def validate(req):
         return "human_confirmation_required"
     if not valid_text(req.get("actor"), 120):
         return "bad_actor"
-    if req.get("cmd") in ("ops.cloud_stop", "ops.cloud_resume", "ops.cloud_local_rebuild_approve",
+    if req.get("cmd") in ("ops.cloud_stop", "ops.cloud_resume", "ops.cloud_release_local",
+                          "ops.cloud_local_rebuild_approve",
                           "ops.update_apply", "ops.update_rollback",
-                          "ops.restore_approve", "ops.drug_alias_apply", "ops.drug_alias_rollback"):
+                          "ops.restore_approve", "ops.drug_alias_apply", "ops.drug_alias_rollback",
+                          "ops.slack_setup_discard", "ops.provider_pending_finalize"):
         # System-wide lifecycle ops are projectless — they govern the
         # whole install, not one patient. The shared identity fields
         # (human_confirmed/actor/command_id) were already checked above;
@@ -218,6 +220,42 @@ def replay_receipt(db, command_id, digest) -> tuple:
     if old["payload_hash"] != digest:
         return True, {"outcome": "rejected", "error": "command_id_conflict"}
     return True, json.loads(old["receipt_json"])
+
+
+def apply_local_operation(req):
+    """Apply one human-confirmed projectless ops.* command from a local CLI.
+
+    Shared by the CLI entries: validate before opening a writer, take run.lock
+    (5 s bounded wait), refuse during an update or restore hold, then the
+    receipt-first transaction. Returns the receipt, or None when the writer
+    stayed busy."""
+    from contextlib import closing
+    from ledger import Ledger
+    import notify_spool
+    from writer_lock import acquire_run_lock, wait_run_lock, code_stamp
+    error = validate(req)
+    if error:
+        raise ValueError(error)
+    expected_code = code_stamp()
+    path = Path(mcs_util.HOME) / "data" / "ledger.db"
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("ledger_unavailable")
+    lock_fd = acquire_run_lock(str(path.parent / "run.lock"))
+    if lock_fd is None:
+        lock_fd = wait_run_lock(str(path.parent / "run.lock"), wait_s=5.0,
+                                expected_code_stamp=expected_code,
+                                marker_path=str(path.parent / "update_in_progress.marker"))
+    if lock_fd is None:
+        return None
+    try:
+        if (path.parent / "update_in_progress.marker").exists() or code_stamp() != expected_code:
+            raise ValueError("update_in_progress")
+        if notify_spool.restore_writer_hold(str(path.parent)) is not None:
+            raise ValueError("restore_in_progress")
+        with closing(Ledger(str(path))) as ledger:
+            return apply_command(ledger, req)
+    finally:
+        os.close(lock_fd)
 
 
 def apply_command(ledger, req, *, cfg=None, data_dir=None):

@@ -89,6 +89,87 @@ def test_writer_restore_hold_does_not_require_an_update_marker(tmp_path, monkeyp
         assert notify_spool.restore_pending(str(data)) is not None
 
 
+def _restore_hold_host(tmp_path, monkeypatch, started):
+    host = _host(tmp_path, monkeypatch)
+    monkeypatch.setattr(runtime.subprocess, "Popen", lambda argv, **kw: started.append(argv) or Child())
+    for job in runtime.COMMANDS:
+        (tmp_path / "data" / job).mkdir()
+    return host, tmp_path / "data"
+
+
+@pytest.mark.parametrize("update_marker", [True, False])
+def test_consent_hold_starts_only_the_approval_intake(tmp_path, monkeypatch, update_marker):
+    import update_journal
+
+    started = []
+    host, data = _restore_hold_host(tmp_path, monkeypatch, started)
+    for job in runtime.COMMANDS:
+        (data / job / "synthetic.json").write_text("{}")
+    if update_marker:
+        # a held schema-bump rollback keeps the marker and its journal
+        (data / UPDATE_MARKER_NAME).write_text("synthetic")
+        state = update_journal.default_state()
+        state["restore_consent"] = {"report_id": "synthetic"}
+        (data / "update_state.json").write_text(json.dumps(state))
+    (data / "restore_pending.json").write_text(json.dumps(
+        {"v": 1, "phase": "awaiting_consent", "by": "mcs_update", "at": QUIET}))
+    host.tick(QUIET)
+    # run_check drains only ops.restore_approve here; no drainer, no slot
+    assert set(host.children) == {"cmd"} and len(started) == 1 and host.fired == {}
+    assert (data / "restore_pending.json").exists()
+    # The other files stay queued: a clean exit keeps the normal backoff.
+    host.children["cmd"]["process"].code = 0
+    host.tick(QUIET + 1)
+    host.tick(QUIET + 2)
+    assert "cmd" not in host.children and len(started) == 1
+    host.tick(QUIET + 1 + runtime.RESTART_BACKOFF_S)
+    assert set(host.children) == {"cmd"} and len(started) == 2
+
+
+@pytest.mark.parametrize("update_marker", [False, True])
+def test_restored_witness_starts_only_the_reconcile_intake(tmp_path, monkeypatch, update_marker):
+    started = []
+    host, data = _restore_hold_host(tmp_path, monkeypatch, started)
+    if update_marker:
+        (data / UPDATE_MARKER_NAME).write_text("synthetic")
+    (data / "restore_pending.json").write_text(json.dumps(
+        {"v": 1, "phase": "restored", "by": "mcs_recover", "at": QUIET, "restored_at": QUIET}))
+    host.tick(QUIET)
+    # --commands-only reconciles and clears the marker; with the update
+    # marker still present run_check would refuse, so nothing starts
+    assert set(host.children) == (set() if update_marker else {"cmd_int"})
+    assert host.fired == {}
+
+
+@pytest.mark.parametrize("witness", ["backup_restore", "unreadable", "journal", "update_child"])
+def test_unresolvable_restore_holds_start_no_intake(tmp_path, monkeypatch, witness):
+    import mcs_restore
+    import update_journal
+
+    started = []
+    host, data = _restore_hold_host(tmp_path, monkeypatch, started)
+    for job in runtime.COMMANDS:
+        (data / job / "synthetic.json").write_text("{}")
+    marker = data / "restore_pending.json"
+    monkeypatch.setattr(mcs_restore, "writers_resumed", lambda destination: False)
+    if witness == "backup_restore":
+        marker.write_text(json.dumps({"v": 1, "phase": "awaiting_consent",
+                                      "by": "mcs_backup_restore", "at": QUIET}))
+    elif witness == "unreadable":
+        marker.write_text("{invalid")
+    elif witness == "journal":
+        state = update_journal.default_state()
+        state["restore_consent"] = {"report_id": "synthetic"}
+        (data / "update_state.json").write_text(json.dumps(state))
+    else:
+        (data / UPDATE_MARKER_NAME).write_text("synthetic")
+        marker.write_text(json.dumps({"v": 1, "phase": "awaiting_consent", "by": "mcs_update", "at": QUIET}))
+        host.children["update"] = {"process": Child(), "kind": "core", "stopping_at": None}
+    host.tick(QUIET)
+    assert set(host.children) == ({"update"} if witness == "update_child" else set())
+    assert not started and host.fired == {}
+
+
 # ---------------------------------------------------------------- H1 connector
 
 def test_connector_failure_backs_off_without_stopping_the_host(tmp_path, monkeypatch):
@@ -369,7 +450,8 @@ def test_first_start_runs_current_ocr_slot_without_replaying_old_slots(tmp_path,
     monkeypatch.setattr(runtime.subprocess, "Popen",
                         lambda argv, **kw: started.append(argv) or Child())
     monkeypatch.setattr(runtime, "BACKGROUND", {})
-    host.tick(QUIET)
+    # 05:15 is a current OCR slot (5,15,...,55) and no other job's current slot
+    host.tick(QUIET + 4 * 60)
     assert len(started) == 1 and set(host.children) == {'mcs_ocr'}
     assert str(tmp_path / 'scripts' / 'mcs_ocr.sh') in started[0]
     assert not any(event == 'slot_catchup' for event, _ in events)

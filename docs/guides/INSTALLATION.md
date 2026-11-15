@@ -5,7 +5,7 @@ Hermes経由の導入・更新にはuvが必要です。Hermesのディレクト
 1.0.25の推奨Hermes agentは **[公式v0.22.2](https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.2)をベースにしたMCS companion** です。導入とCIは同じcommit `2c08ca7ade8f867d07e4bff6581be54405b0c9d0` に固定します。MCS用の本人確認コンテキストと認証設定の互換性を維持した版を使います。既存checkoutの移行は更新手順に従います。この固定版は依存の既知の問題に対処した版です。配布元からの固定SHAの取得と、実SDKによる合成統合テストを別々に確認しています。実サービスへの接続確認は導入後の診断で行います。本番への反映は更新手順で別途行います。
 
 **初めての方は[日本語の対話形式で進める手順](EASY_SETUP.md)を先にお読みください。** このページは設定の詳細と管理担当者向けの補足です。
-今回の初回受入候補であるmacOS・Apple silicon・Slackのstandaloneは、[独立実行ガイド](STANDALONE.md)から進みます。下記Path Aの最短手順はHermes連携用です。新規導入の推奨・既定はstandaloneです。既存の導入方式は変更しません。
+今回の初回受入候補であるmacOS・Apple silicon・Slackのstandaloneは、[独立実行ガイド](STANDALONE.md)から進みます。下記Path Aの最短手順はHermes連携用で、`install.sh` に `--mode hermes` を付けます。新規導入の推奨・既定はstandaloneのため、付けずに実行するとstandaloneで導入します。既存の導入方式は変更しません。
 
 このガイドは現行のinstall/update/setup/doctorと復旧手順に対応します。1.0.25で日本語の対話入口を追加しました。各版の受入状態は版別の受入票で確認してください。
 1.0.25の受入結果は[1.0.25のリリース受入票](../releases/v1.0.25/ACCEPTANCE_1.0.25.md)、1.0.26の受入と公開前の残件は[1.0.26のリリース受入票](../releases/v1.0.26/ACCEPTANCE_1.0.26.md)、版ごとの記録一覧は[リリース記録](../releases/README.md)にあります。過去版の検証記録は[1.0.21のリリース受入票](../releases/v1.0.21/ACCEPTANCE_1.0.21.md)、実機受入の進め方は[開発・受入計画](../releases/v1.0.13/RELEASE_1.0.13.md)を参照してください。
@@ -23,7 +23,7 @@ Hermes経由の導入・更新にはuvが必要です。Hermesのディレクト
 `mcs doctor --json`は既定で通信・秘密取得・患者DBの参照をせず、
 未検査と正常を区別します。選択runtime・配備recoveryのPython/SQLiteとSDK配布metadataの
 表示は[診断実装](../../mcs/ops/mcs_setup.py)に従い、SDKの実接続互換を証明しません。
-`--probe llm`や`--probe services`は明示した対象だけを追加確認します。
+`--probe llm`や`--probe services`は明示した対象だけを追加確認します。`--probe data`は原本DBを読取り専用で開いて収集状況などを追加で表示しますが、範囲別の「保存データ」の行は未確認のまま変わりません。「認証情報」を確かめるprobeはありません。
 launcherの選択runtime追随、backup lifecycle、緊急度の後追い通知は統合検証中です。
 この追記は1.0.13の公開・実機配備・本番有効化の完了を意味しません。
 
@@ -59,11 +59,11 @@ LINE WORKS 通知には Hermes の通知 plugin・gateway は不要です。
 git clone https://github.com/yusuketakuma/hermes-mcs.git
 cd hermes-mcs
 
-./install.sh --preflight   # 1. 読取り専用の事前チェック（何も書き込まない）
-                           #    要対処の行の下の "対処:" を実行し、
-                           #    "事前確認: 導入を妨げる問題 0件" になるまで繰り返す
-./install.sh --dry-run     # 2. （任意）各ステージで何が作られるかを表示
-./install.sh               # 3. 本導入。途中で止まっても直して再実行すれば続きから進む
+./install.sh --mode hermes --preflight   # 1. 読取り専用の事前チェック（何も書き込まない）
+                                         #    要対処の行の下の "対処:" を実行し、
+                                         #    "事前確認: 導入を妨げる問題 0件" になるまで繰り返す
+./install.sh --mode hermes --dry-run     # 2. （任意）各ステージで何が作られるかを表示
+./install.sh --mode hermes               # 3. 本導入。途中で止まっても直して再実行すれば続きから進む
 ```
 
 LLM・復旧設定のファイル配置や一時ファイルの削除に失敗した場合も、`install.sh` は非0で停止する。
@@ -91,7 +91,8 @@ CDP ポート `:9333` 付きで起動してください（§A-5）。
 
 - `--preflight` の最終行が `事前確認: 導入を妨げる問題 0件、注意 N件`（exit 0）
 - `install.sh` が `ソフトの準備が完了しました。まだ利用開始前の初期設定が必要です。` とソフト準備の6ステージ分の結果を表示して終わる。続く初期設定・接続・利用開始の確認は別に行う
-  （途中で止まった場合は `エラー: 導入を中断しました。…` が出る — §7-1）
+  （途中で止まった場合は `エラー: 導入を中断しました。…` などが出る — §7-1）。
+  設定済みの環境で再実行した場合は `ソフトの準備が完了しました。初期設定は済んでいるため、初期設定の開始は不要です。` と表示し、`mcs_setup.py check` と `mcs setup` を案内する
 - `check` の最終行が `設定確認: 正常 （問題0件、注意N件）`（exit 0）。
   `注意:` 行は動作を止めないが、内容は一度確認する
 - `check` が OK であれば `local.mcs-cmd`・`local.mcs-int`・
@@ -106,8 +107,9 @@ CDP ポート `:9333` 付きで起動してください（§A-5）。
 
 hermes-mcs の新規導入手順。導入形態は次の2つ:
 
-- **Path A — hermes-agent アドオン**（installerの既定）: 収集→SQLite→
-  Discord/Slack 通知＋対話カード。`./install.sh` が依存一式を導入する
+- **Path A — hermes-agent アドオン**: 収集→SQLite→
+  Discord/Slack 通知＋対話カード。`./install.sh --mode hermes` が依存一式を導入する
+  （新規導入で `--mode` を省くと Path B になる）
 - **Path B — スタンドアローン**（Hermesなし）: 収集・保存・閲覧・
   抽出・Slack/Discord/LINE WORKS通知と操作・定期実行・監視・更新を独立して実行する。
   `./install.sh --mode standalone`で導入する。[専用手順](STANDALONE.md)を参照
@@ -128,13 +130,13 @@ B は `install.sh --mode standalone`（[STANDALONE.md](STANDALONE.md)）の場�
 | 能力・方式 | 既定・有効条件 | 実装 | 今回確認した範囲 | 残る受入・根拠 |
 |---|---|---|---|---|
 | 1. OS・CPU・メモリ | 初回候補はmacOS・Apple silicon。資源条件は次節 | 導入条件の検査あり | installer条件と版境界の合成確認 | 正式対応版・最小RAM・新Macでの負荷は未確定。[前提条件](#1-共通の前提条件) |
-| 2. 実行方式と定期実行 | 未指定はHermes、既存設定を保持。standaloneは明示選択 | AはHermes cron＋launchd、Bは独立host。収集・保存・解析・通知・操作の共通機能を提供 | 初期設定・モード選択・再開の対象合成確認 | 専用端末の常駐・再起動後復帰は未受入。[独立実行](STANDALONE.md) |
+| 2. 実行方式と定期実行 | 新規導入の既定はstandalone、Hermesは`--mode hermes`で選択。既存設定を保持し、`runtime_mode`未指定の既存設定はHermes | AはHermes cron＋launchd、Bは独立host。収集・保存・解析・通知・操作の共通機能を提供 | 初期設定・モード選択・再開の対象合成確認 | 専用端末の常駐・再起動後復帰は未受入。[独立実行](STANDALONE.md) |
 | 3. Slack・Discord・LINE WORKS | 通知先・許可範囲・資格情報が必要。初回候補はSlack | AのSlack/DiscordはHermes接続、Bは独立SDK。両方式のLINE WORKSは専用接続・Callback・本人1:1操作 | 接続設定・所有者判定の対象合成確認 | 実SDK接続・実配信・全方式同等の受入は未完。[Slack準備](STANDALONE.md#slackとdiscordの接続準備)・[LINE WORKS](LINEWORKS.md) |
 | 4. 収集・保存・全履歴・検索 | 定期収集は10分間隔。Chrome/CDPとMCSセッションが必要。既読化は取得完了とsnapshot timestampの条件を維持 | SQLite保存・履歴取得・FTS5・`mcs_view`閲覧を両方式で提供 | 今回の設定・通知確認を、全MCS APIや全履歴の確認へ拡張しない | 新Macのログイン・取得・未読保持は別受入。[初回接続](#初回の専用chromeとセッション確認両モード共通)・[取得範囲](USER_GUIDE.md) |
 | 5. 通知・カード・タスク・シグナル | Slackは設定にかかわらず元投稿のスレッドに返信カードを配送。Discordは`card_thread=true`かつ`reply_cards`省略または`true`で有効（`card_thread`はinit既定ON、`reply_cards`は省略時ON、LINE WORKS対象外）。Discordの旧カードは形式を保持。シグナル通知は`signals.notify`既定OFF | 原文・返信・添付、確認・担当、本人向け検索、タスク入力・確定、再確認候補を両方式で提供。Slack/Discordの`/mcs`も両方式で対応 | カード・親待ち・配送結果不明・復旧の対象合成確認 | 実配信・通知到着・実アプリ操作は未受入。タスクは人の確定、配送unknownは自動再送しない。[表示・操作](USER_GUIDE.md) |
 | 6. MCSスタンプ | MCS本人ID・1人の操作者・対話通知が揃うと省略時ON。`stamps.enabled=false`で無効。押下者取得は既定OFF | 投稿を指定した本人操作と承認記録で送信・取消 | 今回のカード確認を実MCSへの送信確認としない | 実送信・取消・未読保持・本人照合は別受入。[スタンプ契約](../specs/stamp-management.md) |
 | 7. ローカルAIの抽出・要約 | ローカルLLMを使う。`--no-llm`では別途準備が必要。未解析・処理待ち・失敗を表示。共有brokerは別の明示opt-in（`config.json` の `local_llm.admission`、従来の `MCS_LLM_ADMISSION` も可）で既定OFF | ルール抽出とローカルLLM抽出・要約を両方式で提供 | モデルファイル整合と対象制御の合成確認 | 実モデルの速度・メモリ・生成品質は未測定。医療判断の確定ではない。[抽出の範囲](USER_GUIDE.md) |
-| 8. 患者コンテキスト・原記録の閲覧 | `patient_context`の生成・限定閲覧は省略時ON。不正設定は停止。新着抽出への`patient_state_context`は別設定で既定OFF。登録薬剤・検査GETの`clinical_metadata`も既定OFF | 現行世代で全投稿を解析済みの患者を対象に作成。取得範囲・原文根拠とともに本人向け表示 | 設定・表示条件の対象合成確認 | 実生成・長期負荷・人手品質は未受入。未取得を記録なしとしない。[患者情報](USER_GUIDE.md#患者コンテキスト作成既定は有効) |
+| 8. 患者コンテキスト・原記録の閲覧 | `patient_context`の生成・限定閲覧は省略時ON。不正設定は停止。新着抽出への`patient_state_context`は別設定で既定OFF。登録薬剤・検査GETの`clinical_metadata`も既定OFF | 現行世代で解析済みの資料を単位に作成・公開。患者の全投稿を解析し終えるまで待たない。取得範囲・原文根拠とともに本人向け表示 | 設定・表示条件の対象合成確認 | 実生成・長期負荷・人手品質は未受入。未取得を記録なしとしない。[患者情報](USER_GUIDE.md#患者コンテキスト作成既定は有効) |
 | 9. Jev追加解析・canonical | キーがありmode未指定ならassist・1日10000要求。明示modeで予算省略時は0。`summary_mode`・`loop_mode`・`extract_qc`は既定OFF。本文の外部送信には対象・予算等の条件が必要 | 任意の追加解析経路あり。Jev非採用でもローカル抽出・患者コンテキストは残る | 今回の設定表示確認をJev実行や品質評価としない | canonical昇格・過去参照は未評価のまま有効化しない。brokerの送信制御とは別に判定する。[評価・公開条件](../specs/semantic-facts-v2-rollout.md) |
 | 10. 医薬品照合・公開薬情報 | 辞書は出所・SHA・承認へ束縛。公開マスターの薬品名・一般疾患だけをTinyFish経由で照会。トークンなしの場合は停止 | 辞書照合・照会と限定Web経路を提供。患者本文や私有辞書をWebへ送らない | 旧Exa経路では1品名のPMDA本文と1疾患のMinds検索を限定確認。現行のTinyFish経路の実接続は別途確認が必要 | 全品目・医学的品質・鮮度は未受入。強制再取得不可時の定期確認は未取得。[薬情報の条件](USER_GUIDE.md#公開医薬品情報の照会添付文書ガイドライン) |
 | 11. ローカル診断・共有表示 | `mcs doctor`の既定では追加probeなし。`--share`は固定項目の表示と手動コピー | 通常doctorを維持し、設定値・患者件数・生例外等を除く共有JSONを追加 | 共有射影・不正入力・未知状態・既存終了コードの対象合成確認 | 手動コピーは自動送信や遠隔grantではない。`check`も選択方式の必須条件検査で、実配送の証明ではない。[診断共有](COLLECTION_DIAGNOSTICS.md#サポートへ共有する診断) |
@@ -179,8 +181,8 @@ Jev・Anthropic・OpenAIには患者名を含み得る本文・文脈を匿名�
 ```bash
 git clone https://github.com/yusuketakuma/hermes-mcs.git
 cd hermes-mcs
-./install.sh --preflight   # 読取り専用の事前チェック（正常 / 注意 / 要対処 と 対処: を表示）
-./install.sh               # 冪等: 何度実行しても既存分は skip、中断分は再開
+./install.sh --mode hermes --preflight   # 読取り専用の事前チェック（正常 / 注意 / 要対処 と 対処: を表示）
+./install.sh --mode hermes               # 冪等: 何度実行しても既存分は skip、中断分は再開
 ```
 
 `./install.sh -h` が全オプションを表示する。主なもの:
@@ -189,7 +191,7 @@ cd hermes-mcs
 |---|---|
 | `--preflight`（別名 `--check-only`） | 前提条件を読取り専用で確認し `正常`/`注意`/`要対処` を表示。要対処には `対処:` 行で直し方が付く。要対処が1つでもあれば exit 1。何も書き込まない |
 | `--dry-run` | preflight に加えて、各ステージが何を作成・変更するか（`[新規]`/`[既存]`）を表示。何も書き込まない。要対処があれば exit 1 |
-| `--mode hermes\|standalone` | 実行方式。省略時は既存 `config.json` の `runtime_mode` を引き継ぎ、それも無い初回の対話実行では尋ねる（Enter=hermes）。非対話は hermes。standalone では位置引数 `HERMES_HOME` は指定不可（[STANDALONE.md](STANDALONE.md)） |
+| `--mode hermes\|standalone` | 実行方式。省略時は既存 `config.json` の `runtime_mode` を引き継ぐ。`config.json` が無く `~/.mcs/data` がある場合は hermes。どちらも無い初回は standalone で、対話実行では尋ねる（Enter=standalone）。非対話も standalone。位置引数 `HERMES_HOME` を指定した場合は hermes。standalone では位置引数 `HERMES_HOME` は指定不可（[STANDALONE.md](STANDALONE.md)） |
 | `--recovery-python PATH` | 復旧 watchdog（stage 6）を実行する既存の独立 Python の絶対パス。何かを書き込む前に Python ≥3.14 と SQLite の WAL-reset 修正を検証し、更新されるチェックアウト内の実行ファイルは拒否する。私有 `config.json` の `recovery_python` に保存される（後から `mcs_setup.py init --yes --recovery-python <絶対パス>` でも変更可）。未指定時は `/opt/homebrew/bin/python3.14`・`/usr/local/bin/python3.14`・`/usr/bin/python3.14` の順で最初に実行できるもの。代替 Python の自動選択・導入はしない |
 | `--force-repo` | 別の checkout から導入済みの環境（plugin symlink・`~/.mcs-recovery/repo_path`・services）を、この checkout に切り替えることを許可する（§A-7） |
 | `--no-brew` / `--no-llm` / `--no-plugin` / `--no-services` / `--no-recovery` | ステージ 1 / 4 / 3 / 5 / 6 をスキップ（下記） |
@@ -231,17 +233,19 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 実導入の6ステージは、`install.sh`がhashを確認した`deployment/install/runtime.sh`の私有コピーから実行します。補助スクリプトを含む完全な配布版を使ってください。
 
 `install.sh` が行うこと（6 ステージ）。**失敗したステージで install は
-止まり**（非 0 終了・`エラー: 導入を中断しました。失敗した段階の原因を解消し、install.sh を再実行してください`）、後続ステージは実行されない。原因を直して
+止まり**（非 0 終了・`エラー: 導入を中断しました。失敗した段階の原因を確認してください。<段階>の段階で止まっていました。同じコマンドを再実行すると途中から再開します。`。表示の種類は §7-1）、後続ステージは実行されない。原因を直して
 再実行すると、既存の状態を確認して必要な段階を進める:
 
 | # | 内容 | 再実行・失敗時 |
 |---|---|---|
 | 1 | brew パッケージ: `git` `python@3.14` `uv` `llama.cpp` `google-chrome`(cask)。導入済みは skip | `brew` が無い・`brew install` 失敗で停止 |
-| 2 | hermes-agent を pin 済み commit で `~/.hermes/hermes-agent` に clone・venv 構築。固定依存を使う場合はその導入・照合を行う。それ以外では、Hermesのcheckout内で `uv pip install --python "$VENV_PY" -e ".[messaging]"` を実行する。`~/.local/bin/hermes` shim を作成。既存 checkout は保持し、pin 不一致は警告のみ。MCS のものでない shim ファイルは上書きしない | `uv` が必要。中断した clone/checkout・Python の無い venv・失敗した依存導入は再実行時にやり直す。clone・venv・依存導入の失敗で停止 |
+| 2 | hermes-agent を pin 済み commit で `~/.hermes/hermes-agent` に clone・venv 構築。固定依存を使う場合はその導入・照合を行う。それ以外では、Hermesのcheckout内で `uv pip install --python "$VENV_PY" -e ".[messaging]"` を実行する。`~/.local/bin/hermes` shim を作成。既存 checkout は保持し、pin 不一致は警告のみ。MCS のものでない shim ファイルは上書きしない | `uv` が必要。中断した clone/checkout・失敗した依存導入は再実行時にやり直す。Python の無い venv をやり直すのは初回導入（導入済みの記録 `data/ledger.db`・`service_manifest.json` が無い場合）だけ。導入済みの環境で Python 3.14 が起動しない場合、段階2は venv を作り直さずに停止する。常駐サービスが止まっていることを確認してから `mv <venv> <venv>.broken` で退避（削除しない）し、`./install.sh` を再実行する。clone・venv・依存導入の失敗で停止 |
 | 3 | `~/.hermes/plugins/mcs-discord-commands` をこのリポジトリの `hermes_plugin/` に symlink + `hermes plugins enable`（discord/slack 両対応の1プラグイン。導入済みなら skip） | 同名の非 symlink がある・enable 失敗で停止 |
 | 4 | llama-server を `ai.mcs.llamaserver` LaunchAgent で常駐化（`127.0.0.1:8080`・`-np 3`・Qwen3.5-9B GGUF 約 5.7 GB を `~/.hermes/models/` へ DL）。hermes 管理の `ai.hermes.llamacpp` の plist があれば導入せず、未ロードで `:8080` も無応答なら bootstrap コマンドを警告で案内。plist 内容が変わった場合、サーバが応答中なら再読込せず適用コマンドを警告で案内（処理中の要求を切らない）、無応答なら再読込 | モデルは固定した Hugging Face の revision から DL し、`.part` から続きを再開（`curl -C -`）。DL 後は `install.sh` に記録した sha256 と照合（`MCS_MODEL_SHA256` による上書きは `MCS_ALLOW_MODEL_SHA_OVERRIDE=1` を併せて指定したときだけ有効で、警告を出す）し、不一致なら `.part` を消して停止。`llama-server` 不在・DL 失敗・bootstrap 失敗で停止 |
-| 5 | `~/.mcs/data{,/cmd,/cmd_int}` を作成し、`mcs_setup.py services` — launchd agent 5件 + hermes cronの定期7件（`backup.enabled=true`ならoffsiteを加え8件）の配置・登録（§6 参照） | services が問題を報告したら停止 |
+| 5 | `~/.mcs/data{,/cmd,/cmd_int}` を作成し、`mcs_setup.py services` — launchd agent 6件 + hermes cronの定期6件（`backup.enabled=true`ならoffsiteを加え7件）の配置・登録（§6 参照） | services が問題を報告したら停止 |
 | 6 | 復旧 watchdog `org.mcs.recovery` を独立系統で導入（`~/.mcs-recovery/mcs_recover.py`と補助4ファイルを同じ世代で配置。旧入口の`.prev`と対応する`runtime-<世代hash>`を一体で保持。復旧対象の checkout を `~/.mcs-recovery/repo_path` に記録。15分間隔で中断した update を復旧）。内容・記録が変わった時か未ロード時だけ再読込 | macOS では配備前に復旧用 Python（既定は `/opt/homebrew/bin/python3.14`・`/usr/local/bin/python3.14`・`/usr/bin/python3.14` の順で最初に実行できるもの、または `--recovery-python`）の Python ≥3.14 と SQLite の WAL-reset 修正を検査し、影響版・版不明なら tool・plist を配備せず停止（自動で別 Python へ切り替えない）。bootstrap 失敗でも停止 |
+
+ステージ3の後、ステージ4の前に、オプションにかかわらず実行ログの処理（ログhelper）を `~/.mcs-recovery` へ配置し、`data/mcs.log` と `data/mcs-log-backups/` を用意して旧ログを取り込みます。`--no-recovery`・`--no-services`・`--no-llm` を付けてもこの処理は省略せず、`--dry-run` の導入予定にも表示されません。旧ログの原本は残します。確認できない場合は `ログの統合準備を確認できません` で停止します（[更新手順](UPGRADE_AGENT.md)の対処を参照）。
 
 ステージ2の最後に、接続方法にかかわらず `~/.mcs/config.json` がなければ本人だけが読み書きできる設定ファイルを作成します。既存の設定は保持し、`--preflight` と `--dry-run` では作成しません。ファイルの作成だけでは初期設定は完了しません。
 
@@ -300,7 +304,9 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
     allowlists/scope 一式）
   - `SLACK_BOT_TOKEN`+`SLACK_APP_TOKEN`（Discord は
     `DISCORD_BOT_TOKEN`）を同 profile の `.env` へ（stdin 経由、
-    argv には載せない。既設定済みのトークンは残る）
+    argv には載せない。環境変数に値があると、登録済みのトークンも確認なしでその値に置き換える。
+    環境変数が無ければ登録済みのトークンを残す。外部の秘密情報管理を参照する `.env` や
+    状態を確認できない `.env` には書き込まない）
 
 非対話でも実行できる（CI・再現用）:
 
@@ -309,13 +315,16 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 ~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py init --yes \
     --login-id <ID> --notify-target slack:<チャンネルID> \
     --set 'notify.interactive="slack"' \
-    --set 'notify.slack={"profile":"P","application_id":"A","team_id":"T","channel_id":"C"}' \
+    --set 'notify.slack={"profile":"P","application_id":"A","team_id":"T","channel_id":"C","allowed_user_ids":["<uid>"]}' \
     --plugin-profile <serving profile> \
     --plugin-user-ids <uid> \
     --plugin-project-ids <pid>
 ```
 
-`--set` の値は JSON（文字列は内側の引用符が必要）。Discord の場合は
+`--set` の値は JSON（文字列は内側の引用符が必要）。Slack のチャンネル準備に使う操作者は
+`notify.slack.allowed_user_ids` か、Hermes 側に保存済みの `slack_allowed_user_ids` から読む。
+`--plugin-user-ids` はこの計画に使われないため、初回は同じ ID を `allowed_user_ids` にも指定する
+（無いと `slack_setup_operators_required` で何も保存せずに終了1になる）。Discord の場合は
 `notify.interactive="discord"` +
 `notify.discord={"profile","application_id","guild_id","channel_id"}`・
 `--notify-target discord:<チャンネルID>`・`--plugin-chat-ids`、
@@ -336,7 +345,7 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 - `init` は通知プラグイン設定の後、対話通知を使うときは gateway を同期し、
   `check` を自動実行する。設定書込み・同期・チェックの失敗は成功扱いにしない
 
-設定キー全一覧は §4 を参照。個別キーは `--set KEY=JSON`（例: `--set self_posts=true`）、Jev 連携は `--semantic-mode`（`off`/`shadow`/`enforce`）で指定できる。
+設定キー全一覧は §4 を参照。個別キーは `--set KEY=JSON`（例: `--set self_posts=true`）、Jev 連携は `--semantic-mode`（`auto`/`off`/`shadow`/`assist`/`enforce`）で指定できる。
 
 ### A-4. サービスの再同期と再検証（更新・復旧時）
 
@@ -349,16 +358,19 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 ~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py doctor     # 範囲別の件数だけの読取り診断（不具合報告用）
 ```
 
-- `services` — launchd agent 5件（cmd/cmd_int WatchPaths・extract
-  drainer×2・外部health watch）を配置・bootstrap、hermes cronの定期7件を登録（冪等・
+- `services` — launchd agent 6件（cmd/cmd_int WatchPaths・extract
+  drainer×3（夜間用 `ai.mcs.extract-drainer-night` を含む）・外部health watch）を配置・bootstrap、hermes cronの定期6件を登録（冪等・
   `--dry-run` で確認可。内容差分は reconcile）。`backup.enabled=true`の場合は
-  offsite backupを追加してcron 8件になる。`notify.interactive`
+  offsite backupを追加してcron 7件になる。`notify.interactive`
   が `discord`/`slack` のとき `hermes gateway install` + `start` で
   gateway 常駐化も行う。全 wrapper・plist は
   `~/.hermes/hermes-agent/venv/bin/python` で起動するよう描画される
   ため、このインタプリタが無い（または Python ≥3.14 でない）場合は
-  何も描画せず exit 1 で止まる（install.sh の再実行でステージ 2 が
-  venv を作り直す）
+  何も描画せず exit 1 で止まる。導入済みの環境ではステージ 2 は
+  venv を作り直さない。常駐サービスが止まっていることを確認し、
+  `mv <実行環境> <実行環境>.broken` で退避（削除しない）してから `./install.sh` を
+  再実行し、その後 `services` を実行する。動作する旧版の Python からの移行は
+  [更新手順](UPGRADE_AGENT.md)で行う
 - `check` — 次の順に検証し、エラーを優先度順に並べる:
   1. 定期ジョブの実行基盤: services 用インタプリタ
      （`~/.hermes/hermes-agent/venv/bin/python`）、`hermes` が launchd の
@@ -384,7 +396,9 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
   error/warning の件数だけを表示する（パス・値・メッセージは出さない）。
   `check` は実行しない。`llm`・`services`・`credentials`・`data` は既定で
   `not_checked` で、`not_checked` は正常を意味しない。`--probe llm` /
-  `--probe services` で明示した範囲だけ追加確認する。終了コードは
+  `--probe services` で明示した範囲だけ追加確認する。`--probe data` は原本DBを
+  読取り専用で開いて収集状況などを追加表示するが、範囲の `data` は `not_checked` のまま。
+  `credentials` を確認する probe は無い。終了コードは
   いずれかの範囲が `blocked` のときだけ 1。drift・`hermes` の解決・
   Keychain・launchd agent のロード状態を含む blocker 一覧は `check` で確認する
 
@@ -435,7 +449,7 @@ Discord を使う場合は、対象チャンネルで新着投稿があるとカ
   カードは、旧 worker では配送されず保留される（再起動後に配送）
 - **カードを操作できる人を増やす（Discord）** — 薬局スタッフ全員に
   ロールを付け、そのロール ID を `allowed_role_ids` に入れる:
-  `python3 mcs/ops/mcs_setup.py init --plugin-role-ids <role id>[,<role id>]`
+  `$PY mcs/ops/mcs_setup.py init --yes --plugin-role-ids <role id>[,<role id>]`
   （または `hermes -p <profile> config set
   plugins.entries.mcs-discord-commands.settings.allowed_role_ids
   '["<role id>"]'`）。guild ID（@everyone ロール）は指定できない。
@@ -449,7 +463,8 @@ Discord を使う場合は、対象チャンネルで新着投稿があるとカ
   `slack_team_id`/`slack_application_id`/`slack_channel_id`/
   `slack_allowed_user_ids`/`slack_profile`/`project_ids`/
   `data_root`）と `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` を serving
-  profile に自動で書き込む — 既設定の値は保持される
+  profile に自動で書き込む — トークンは環境変数に値があれば登録済みの値を
+  置き換え、無ければ登録済みの値を保持する（§A-3）
 - **Slack カードを送るのは `slack_profile` で指定した profile だけ** —
   複数 profile を1つの gateway で動かす場合、他の profile が同じ plugin
   settings を引き継いでいても、その Slack 接続はカード配送を始めない。
@@ -480,7 +495,11 @@ wrapper・plist（`__REPO__`）、復旧ツールが復旧する checkout を記
   `この Mac は別フォルダ（<旧パス>）から導入されています。` で始まる案内を表示して停止する
   （preflight では 「既存の導入先は別のフォルダです」 の 要対処）。
   切り替える意図なら `./install.sh --force-repo`、そうでなければ旧 checkout
-  側の `install.sh` を使う。旧パスが既に存在しなければ競合扱いにならない
+  側の `install.sh` を使う。`~/.mcs-recovery/repo_path` の旧パスが既に存在しなければ
+  その記録は競合扱いにならない。ただし `~/.local/bin/mcs` が旧パスを指したまま
+  （Hermes 方式では plugin symlink が旧パスを指したままの場合も）だと、旧パスが無くても
+  `~/.local/bin/mcs は別のフォルダを参照しています` などで停止する。新しい場所へ
+  切り替える場合は `./install.sh --force-repo` を使う
 - 記録のずれは `check` が
   `復旧監視の対象は<パス>です。` で始まる案内で、現在の導入先との違いを警告する
 
@@ -516,7 +535,7 @@ installerは独立venvと公式接続SDK、ローカルLLM、常駐プロセス�
 SlackはBot/App token、DiscordはBot tokenをowner-onlyの専用ファイルへ保存します。
 LINE WORKSの秘密情報・HTTPS Callbackは[LINE WORKS手順](LINEWORKS.md)に従います。
 
-独立hostが既存と同じ7定期ジョブ、cmd/cmd_int取込、抽出worker3本を所有します。昼間（JST 08〜20時）は背景2枠、夜間（20〜08時）は背景3枠を使い、新着が来れば次に空く枠を優先して割り当てます。
+独立hostが既存と同じ6定期ジョブ、cmd/cmd_int取込、抽出worker3本を所有します。昼間（JST 08〜20時）は背景2枠、夜間（20〜08時）は背景3枠を使い、新着が来れば次に空く枠を優先して割り当てます。
 Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないでください。
 既存モードからの切替では`services`が旧manifest所有のMCSジョブだけを停止します。
 手動登録のジョブや別プロセスのLINE WORKSアダプターは、対象を確認して別途停止します。
@@ -528,7 +547,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 ## 4. config.json 設定リファレンス
 
 `~/.mcs/config.json`（0600）。`init` の詳細コースが全項目を案内する
-（`--set KEY=JSON` で非対話設定も可）。必須は `mcs_login_id` と
+（`--yes` と `--set KEY=JSON` を併用すると非対話で設定できる。`--yes` が無いと指定値を反映したうえでウィザードを始める）。必須は `mcs_login_id` と
 `notify_target` の2つのみ。
 
 | キー | 型 | 既定 | 説明 |
@@ -586,7 +605,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `semantic.daily_request_budget` | int | 自動modeは10000、明示modeは0 | 日本時間の1日あたりHTTP要求数。再試行も加算。0は停止、10000超でも実効上限10000 |
 | `semantic.job_budget_seconds` | num | 既定 | 意味解析の1ジョブの時間予算・秒（5〜1260）。バックログでは1220以上で、通信後に実行ロックを取り直す余裕540秒を全量確保 |
 | `update.mode` | choice | `off` | `off`/`notify`/`auto` — 自己更新ポリシー |
-| `update.auto_delay_h` | num | — | auto 時の適用遅延（0=検出次第即適用） |
+| `update.auto_delay_h` | num | `24` | auto 時の適用遅延・時間（0=検出次第即適用） |
 | `update.include_prerelease` | bool | `false` | プレリリースを更新対象に含める |
 | `health.max_missed_runs` | int | `2` | 欠測許容回数。10分間隔の予定実行と完了猶予から判定 |
 
@@ -601,17 +620,17 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 
 ## 6. スケジュール構成（Path A 導入後）
 
-収集ジョブは **hermes cron 7件 + launchd 6件** のハイブリッド
-（services 所有: cron 7件と launchd 5件 `local.mcs-cmd`・`local.mcs-int`・
-`ai.mcs.extract-drainer`・`ai.mcs.extract-drainer-2`・`local.mcs-health`。install.sh 所有:
+収集ジョブは **hermes cron 6件 + launchd 7件** のハイブリッド
+（services 所有: cron 6件と launchd 6件 `local.mcs-cmd`・`local.mcs-int`・
+`ai.mcs.extract-drainer`・`ai.mcs.extract-drainer-2`・`ai.mcs.extract-drainer-night`・`local.mcs-health`。install.sh 所有:
 復旧 watchdog `org.mcs.recovery`。`backup.enabled=true`の場合はoffsite backupも
-cronに追加され8件になる。別に LLM サーバ常駐の
+cronに追加され7件になる。別に LLM サーバ常駐の
 `ai.mcs.llamaserver` / `ai.hermes.llamacpp`）。
 
 ジョブ・スケジュール・実行スクリプトの一覧表は
 [deployment/launchagents/README.md](../../deployment/launchagents/README.md)
 に一本化している。正本は `mcs/core/scheduled_jobs.py` の `CRON_JOBS`
-（hermes cron）と `mcs/ops/mcs_setup.py` の `AGENT_LABELS`（launchd）で、`services` はこれを
+（hermes cron）と `mcs/ops/services/service_contract.py` の `AGENT_LABELS`（launchd）で、`services` はこれを
 登録する。MCSサーバーの負荷対策として、未読収集を5分間隔から、24時間を通じて10分間隔へ変更した。
 `mcs_check.sh` に夜間の間引きはない。
 既存環境では更新後に `mcs setup services` で取得ジョブを再設定する。
@@ -640,20 +659,26 @@ cronに追加され8件になる。別に LLM サーバ常駐の
 | `通信: <接続先> に接続できません` | clone・モデル DL に必要な通信ができない | ネットワーク・プロキシを確認し `curl -I <URL>` で疎通確認 |
 | `ポート8080が AI サーバー以外の処理に使用されています` | 別のプロセスが :8080 を使用 | `lsof -nP -iTCP:8080 -sTCP:LISTEN` で特定して停止、または自前 LLM なら `--no-llm` |
 | 既存の導入先は別のフォルダです | 別の checkout から導入済み | 旧 checkout の `install.sh` を使うか、切り替えるなら `./install.sh --force-repo`（§A-7） |
+| `<パス>/.local/bin/mcs は別のフォルダを参照しています` | `mcs` 起動コマンドが別の checkout（移動・削除した旧パスを含む）を指している | 切り替えるなら `./install.sh --force-repo`（§A-7） |
 | `常駐サービスは独自の HERMES_HOME（<パス>）に対応していません` | `~/.hermes` 以外を引数に指定 | 既定の `~/.hermes` を使うか `--no-services` を付ける |
 | `<パス> は存在しますが Git で取得したフォルダではありません`／`<パス> の現在の版（HEAD）を読み取れません` | hermes-agent ディレクトリが壊れている | `対処:` 行の `mv ... .bak` で退避して再実行（stage 2 が clone し直す） |
-| `Hermes は <現在の版> です。検証済み固定版 <指定版> と異なります（現状を保持します）` | 既存 checkout が検証済み commit と違う（保持される） | そのままでも続行可。揃えるなら `対処:` 行の `git ... checkout --detach <pin>` |
+| `Hermes は <現在の版> です。検証済み固定版 <指定版> と異なります（現状を保持します）` | 既存 checkout が検証済み commit と違う（保持される） | そのままでも続行可。版を揃える場合はリリースの更新手順（[更新ツール](UPGRADE_AGENT.md)）で行う。手作業で checkout すると依存関係が更新されない |
+| `導入済みの実行環境で Python 3.14 を使用できません（段階2では作り直しません）`／`導入済みの Hermes 用 Python 3.14 を使用できません（段階2では作り直しません）` | 導入済みの環境の venv で Python 3.14 が起動しない（`--preflight` の表示） | 常駐サービスが止まっていることを確認し、`mv <venv> <venv>.broken` で退避（削除しない）してから `./install.sh` を再実行する。動作する旧版の Python からの移行は[更新手順](UPGRADE_AGENT.md)で行う |
+| `設定フォルダーのリンク先の親フォルダー` の所有者または書き込み権限を確認できません… | `~/.mcs` がリンクで `config.json` がまだ無い新規導入のとき、ソフトの導入前に出る。導入済み（`config.json` あり）の環境では出ない | リンク先の親フォルダーの所有者と書き込み権限を確認してから再実行する |
+| `既存の Hermes の保存先・定期実行、または MCS の常駐処理を確認できないため、初回導入を確定せず中止しました…` | 新規導入で `~/.hermes` などが残っている、または前回と違う接続方法で再開した。設定はまだ作られていない | 前回 `--mode hermes` や Hermes の保存先を指定して始めた場合は、同じ指定で再実行する。そうでなければ表示された保存先・常駐処理を確認する |
 | `Git の作業用フォルダ（<パス>）から実行しています` | worktree から実行している | main checkout から実行する |
 | Google Chrome が未導入です | Chrome 未導入（brew があれば stage 1 が入れる） | `brew install --cask google-chrome` |
 | `未対応のオプションです: <指定値>` | 存在しないオプション | `./install.sh -h` で確認 |
-| 導入を中断しました。失敗した段階の原因を解消し、install.sh を再実行してください | 直前の `エラー:` 行のステージで停止した | その `エラー:` の指示に従って直し、`./install.sh` を再実行（完了分は skip） |
+| `導入を中断しました。失敗した段階の原因を確認してください。<段階>の段階で止まっていました。同じコマンドを再実行すると途中から再開します。`（段階が不明な場合は `…原因を確認してください。` まで） | 直前の `エラー:` 行のステージで停止した | その `エラー:` の指示に従って直し、`./install.sh` を再実行（完了分は skip）。設定の作成前に止まった場合は `設定はまだ作成していないため、原因を直して最初と同じ指定（--mode など）で再実行すると初回導入を再開します` も表示されるので、最初と同じ指定で再実行する |
+| `導入は保留中です。設定と記録を保持し、担当者に確認してください。` | 提供元別設定の初回準備や保留の記録が残っている | 設定と記録を削除・編集せず、担当者に確認する。保存の最後（全ファイルの保存後）で電源断などにより止まった場合に限り、担当者が `mcs_setup.py provider-pending-finalize --operation <記録のoperation> --confirm-human --reason <理由>` で保留を解除できる。ほかの状態では解除せず、記録は `data/.provider-settings-pending.resolved-<operation>.json` として残る |
+| `更新処理の導入記録が<段階>の段階で残り、完了は記録されていません。…` | 更新の再導入として動いた install.sh が止まった | 再実行せず、`mcs recover` で状態を確認する（[更新手順](UPGRADE_AGENT.md)） |
 | `モデル取得に失敗しました` | モデル DL が途中で失敗 | そのまま `./install.sh` を再実行（`.part` から再開） |
 | `モデルの整合性が確認できません（SHA256: <検証値>）` | DL 結果が `install.sh` 記録の sha256（`MCS_ALLOW_MODEL_SHA_OVERRIDE=1` 指定時は `MCS_MODEL_SHA256`）と不一致 | 通信経路を確認し、上書きしている場合は値を確認して再実行（`.part` は削除済みで最初から DL） |
 | Hermes 導入に失敗しました | Hermesのcheckout内での `uv pip install` の失敗（通信・コンパイラ等） | 上に出たエラーを直して同じフラグで `install.sh` を再実行する（依存導入をやり直す）。Hermes経路では `pip` への自動切替えは行わない |
 | llama-server が見つかりません | llama.cpp 未導入 | `brew install llama.cpp`、または `--no-llm` |
 | プラグインの有効化に失敗しました | hermes CLI・profile 設定の問題 | hermes の設定を直すか profile の `config.yaml` の `plugins.enabled` に `mcs-discord-commands` を追加して再実行 |
 | `常駐サービスの登録に問題があります` | stage 5 の `mcs_setup.py services` が失敗 | 直前の services の出力を確認、`$PY mcs/ops/mcs_setup.py check` の blocker を直して再実行 |
-| `復旧サービスのテンプレートに問題があります: Python の安全条件を満たさないか、確認できません`／`指定した復旧用 Python の安全性が確認できないか、稼働設定と一致しません` | 復旧 watchdog 用 Python（既定は上記の `python3.14` 候補）が Python <3.14、または SQLite の WAL-reset 修正が無い・版不明。導入済みジョブと選択が異なる場合も停止 | 修正済み SQLite をリンクした既存の独立 Python を `--recovery-python <絶対パス>` で指定して再実行するか、`--no-recovery` で stage 6 を省く。既存ジョブとの不一致は `mcs_setup.py init --yes --recovery-python <絶対パス>` で希望を保存し、復旧ジョブが実行中でない時に `mcs_setup.py services` で修復 |
+| `復旧サービスのテンプレートに問題があります: Python の安全条件を満たさないか、確認できません`／`復旧用 Python（--recovery-python を省略した場合は既定の復旧用 Python）の安全性が確認できないか、稼働設定と一致しません` | 復旧 watchdog 用 Python（既定は上記の `python3.14` 候補）が Python <3.14、または SQLite の WAL-reset 修正が無い・版不明。導入済みジョブと選択が異なる場合も停止 | 修正済み SQLite をリンクした既存の独立 Python を `--recovery-python <絶対パス>` で指定して再実行するか、`--no-recovery` で stage 6 を省く。既存ジョブとの不一致は `mcs_setup.py init --yes --recovery-python <絶対パス>` で希望を保存し、復旧ジョブが実行中でない時に `mcs_setup.py services` で修復 |
 | `<パス> が PATH にありません` | shell から `hermes` が見えない | シェルの profile で `~/.local/bin` を PATH に追加（定期ジョブは独自の PATH を使うので影響しない） |
 | `AI サーバーの起動設定を更新しましたが、稼働中の処理は保持しました` | plist 更新時にサーバが応答中だった | 処理が空いた時に表示された `launchctl bootout ...; launchctl bootstrap ...` を実行 |
 | `Hermes 管理の <パス> は未起動で、ポート8080の応答もありません` | hermes 管理の LLM agent が止まっている | 表示された `launchctl bootstrap ...` を実行 |
@@ -665,7 +690,7 @@ cronに追加され8件になる。別に LLM サーバ常駐の
 |---|---|
 | 設定ツールに必要な Python の版を満たしていません | 素の `python3`（3.9 系）や旧 venv で実行した — `$PY`（Python 3.14 の venv）で実行する。1.0.17 以前の venv は更新ツールで移行する（[更新手順](UPGRADE_AGENT.md)） |
 | 実行用または復旧用 Python の SQLite が安全条件を満たしていません | 定期ジョブ（または復旧 watchdog）を実際に動かす Python のリンクする SQLite が影響版。`services`・`update` は変更前に停止し、`doctor` は `checks.runtime` / `checks.recovery_runtime` を blocked にする（`runtimes.*` は事実の表示だけ） — 修正済み SQLite（§1 の要件）をリンクした Python で venv を作り直す。復旧側は `--recovery-python` / `init --recovery-python` で安全な独立 Python を指定する |
-| 実行用 Python が見つからないか、実行できません | 定期ジョブが起動できない — `./install.sh` を再実行（stage 2 が venv を作り直す）→ `$PY mcs/ops/mcs_setup.py services`。`services` もこの状態では何も描画せず止まる（独立モードでは専用venvを診断する） |
+| 実行用 Python が見つからないか、実行できません | 定期ジョブが起動できない — 導入済みの環境では stage 2 は venv を作り直さない。常駐サービスが止まっていることを確認し、`mv <実行環境> <実行環境>.broken` で退避（削除しない）してから `./install.sh` を再実行 → `$PY mcs/ops/mcs_setup.py services`。動作する旧版の Python からの移行は[更新手順](UPGRADE_AGENT.md)で行う。`services` もこの状態では何も描画せず止まる（独立モードでは専用venvを診断する） |
 | 定期実行から Hermes を呼び出せません | 手元の shell では見えるが定期ジョブから見えない — 表示の `ln -s <hermes> ~/.local/bin/hermes`、または `init --set hermes_bin='"<パス>"'` |
 | 設定ファイルを読み取れないか、形式が不正です | `~/.mcs/config.json` を確認して直す。本人所有で内容を確認できる1 MiB以下の通常ファイルまたはシンボリックリンクは、対応環境で `$PY mcs/ops/mcs_setup.py init --yes` により `config.json.corrupt-<日時>` へ退避できる。通常ファイルに複数のハードリンクがある場合や、親フォルダーの権限が退避に適さない場合は停止する。退避を完了できない場合は停止し、表示に従って現在の設定と退避先を確認する |
 | 必須設定（mcs_login_id、notify_target）が不足しています | `init` で再登録（両方とも必須） |
@@ -680,11 +705,11 @@ cronに追加され8件になる。別に LLM サーバ常駐の
 | 配置済みの復旧ツールが配布版と異なります（注意） | 復旧ツールが古い — `./install.sh` を再実行（旧版は `.prev` に残る） |
 | 復旧監視が別の保存先を参照しています（注意） | checkout を移動した・別 checkout から実行している — 正しい checkout で `./install.sh`（§A-7） |
 | 復旧監視の設定はありますが、起動していません | 表示の `launchctl bootstrap gui/<uid> ~/Library/LaunchAgents/org.mcs.recovery.plist` |
-| 常駐処理の設定はありますが、起動していません | MCS の agent が止まっている — `$PY mcs/ops/mcs_setup.py services` |
-| 常駐処理の設定がありません（注意） | `services` 未実行 — `$PY mcs/ops/mcs_setup.py services` |
-| 配置済みのスクリプトが配布版と異なります | 更新後に services を再実行していない — `$PY mcs/ops/mcs_setup.py services` |
-| 定期実行スクリプトが未配置です（注意） | `services` 未実行 — `$PY mcs/ops/mcs_setup.py services` |
-| このセッションから macOS の常駐処理を確認できません（注意） | ssh 等 GUI セッション外で実行している — ログイン中の端末で再実行して確認 |
+| 常駐処理<ラベル>は導入済みですが読み込まれていません | MCS の agent が止まっている — `$PY mcs/ops/mcs_setup.py services` |
+| 常駐処理<ラベル>が未導入です（注意） | `services` 未実行 — `$PY mcs/ops/mcs_setup.py services` |
+| 配備済みの定期処理が配布版と異なります | 更新後に services を再実行していない — `$PY mcs/ops/mcs_setup.py services` |
+| 定期処理が<フォルダー>に未配備です（注意） | `services` 未実行 — `$PY mcs/ops/mcs_setup.py services` |
+| このセッションから常駐処理の管理先gui/<uid>に接続できないため、稼働状態を確認できません（注意） | ssh 等 GUI セッション外で実行している — ログイン中の端末で再実行して確認 |
 | Hermes コマンドが見つかりません | hermes 未導入（Hermesモードのエラー。独立モードならSTANDALONE.mdを確認。Path Aなら `install.sh` 再実行か `hermes_bin` 設定） |
 | Hermes の通知接続が常駐管理されていません | `services` を実行（`hermes gateway install`+`start` で常駐化） |
 | 通知接続が更新前のプログラムで動いています（注意） | `hermes gateway restart`（§A-6） |
@@ -810,10 +835,13 @@ Bot Token Scopes に追加: `chat:write`, `app_mentions:read`,
 
 Slackカードを使う導入・更新（`notify.interactive=slack`）では、この準備を自動で行います。
 新規導入で患者情報先がなければ`mcs`と`mcslog`を作り、操作を許可したユーザーだけを招待します。
-既存の患者情報先と、別に明示された運用先は保持します。`interactive=off`のテキスト専用設定では
-チャンネルを自動作成せず、分離済みの既存IDを`notify_system_target`へ指定します。
-権限不足・名前の競合・作成結果の不明などで止まった場合は、案内された条件を確認してから
-`mcs setup slack-channels`で準備を再開してください。結果が不明な作成・招待は自動で繰り返しません。
+既存の患者情報先と、別に明示された運用先は保持します。`interactive=off`のテキスト専用設定でも、
+患者情報先が`slack:`なら不足する`mcslog`を自動作成します（`interactive=off`は維持します）。
+作成を避ける場合は、分離済みの既存IDを`notify_system_target`へ指定します。
+権限不足などで止まった場合は、案内された条件を確認してから`mcs setup slack-channels`で準備を再開してください。
+名前の競合や作成・招待の結果不明の記録が残った場合は、このコマンドでも再開できないことがあります。
+その場合は記録を削除せず、担当者に確認してください。結果が不明な作成・招待は自動で繰り返しません。
+担当者がSlackで同名のチャンネルの有無を確かめた後は、`mcs setup slack-channels --discard-hold --request-id <記録のrequest_id> --confirm-human --reason <理由>`で記録を退避できます。記録は`data/slack-channel-setup.discarded-<request_id>.json`として残り、承認記録も作られます。作られていたチャンネルを使う場合は、そのIDを通知先に設定してから準備を再開してください。
 
 Slack公式仕様: [チャンネル作成](https://docs.slack.dev/reference/methods/conversations.create/)・[非公開チャンネルの管理権限](https://docs.slack.dev/reference/scopes/groups.write/)・[操作者の招待](https://docs.slack.dev/reference/methods/conversations.invite/)。
 

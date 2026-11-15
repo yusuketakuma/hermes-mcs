@@ -228,7 +228,7 @@ def daily_backup(db_path: str, *, deadline: float | None = None):
     os.close(fd)
     _publish_backup(db_path, tmp, dest, deadline=deadline)
     _write_ok_marker(dest)
-    files = sorted(glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db")))
+    files = _daily_backups()
     for old in files[:-BACKUP_KEEP]:
         for path in (old, old + ".ok"):
             with suppress(OSError):
@@ -236,10 +236,16 @@ def daily_backup(db_path: str, *, deadline: float | None = None):
     prune_preupdate_backups()
 
 
+def _daily_backups() -> list[str]:
+    """Daily backups only: a hand-made ledger-*.db copy is neither rotated nor counted."""
+    return sorted(path for path in glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db"))
+                  if re.fullmatch(r"ledger-\d{8}\.db", os.path.basename(path)))
+
+
 def newest_backup_age_s() -> float | None:
     """Age of the newest daily backup; None when there is none."""
     stamps = []
-    for path in glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db")):
+    for path in _daily_backups():
         with suppress(OSError):   # rotated away mid-scan
             stamps.append(os.path.getmtime(path))
     return time.time() - max(stamps) if stamps else None
@@ -817,6 +823,29 @@ def _rows_appended_only(old, new: dict) -> bool:
     return True
 
 
+def _interval_defers(prev: dict, sig: dict, now: float) -> bool:
+    """An append-only change (or none) within SNAPSHOT_MIN_INTERVAL_S of the
+    last publish waits for the interval."""
+    return (_recent(prev.get("published_at"), now, SNAPSHOT_MIN_INTERVAL_S)
+            and _rows_appended_only(prev.get("sig"), sig))
+
+
+def snapshot_publish_deferrable(db_path: str, *, now: float,
+                                deadline: float | None = None) -> bool:
+    """True when a tick publish at wall time ``now`` would still be held by
+    the interval for what the ledger holds now; False (keep the publish
+    reserve) when the copy or marker is missing, the signature is
+    unreadable or late, or an urgent key already moved."""
+    prev = _load_json(_snapshot_sig_path())
+    if not _plain_file(os.path.join(SNAPSHOT_DIR, "ledger-snapshot.db")):
+        return False
+    try:
+        sig = _content_signature(db_path, deadline=deadline)
+    except _SnapshotSignatureDeadline:
+        return False
+    return sig is not None and _interval_defers(prev, sig, now)
+
+
 def snapshot_published_age_s(now: float | None = None) -> float | None:
     """Seconds since the published copy was last replaced (its mtime);
     None when there is no published copy."""
@@ -894,7 +923,7 @@ def _save_commands_retry(prev: dict, sig, identity, db_path: str, failed_at: flo
 
 
 def refresh_snapshot(db_path: str, *, force: bool = False, dirty: bool = False,
-                     now: float | None = None,
+                     publish: bool = True, now: float | None = None,
                      deadline: float | None = None,
                      verification_context=None, commands_retry: bool = False) -> str | None:
     """Publish the read-only snapshot when it would differ (H4).
@@ -905,7 +934,9 @@ def refresh_snapshot(db_path: str, *, force: bool = False, dirty: bool = False,
     or the copy is SNAPSHOT_MAX_AGE_S old. A change that only appended
     rows, or ``dirty`` (the notification snapshot_dirty flag: never
     'unchanged'), publishes once SNAPSHOT_MIN_INTERVAL_S has passed since
-    the last publish and is 'deferred' before that. The ages trigger another attempt, not a
+    the last publish and is 'deferred' before that. ``publish=False`` (the
+    caller gave its publish reserve away) turns any other needed publish but
+    ``force`` into 'deferred' too. The ages trigger another attempt, not a
     freshness guarantee when publication fails. Returns 'published',
     'unchanged', 'deferred', or None when a needed publish failed. The
     marker is taken BEFORE the copy: a write landing in between only
@@ -924,7 +955,8 @@ def refresh_snapshot(db_path: str, *, force: bool = False, dirty: bool = False,
     with snapshots._publication_lock(SNAPSHOT_DIR) as lock_fd:
         if lock_fd is None:
             return None
-        return _refresh_snapshot_locked(db_path, force=force, dirty=dirty, now=now,
+        return _refresh_snapshot_locked(db_path, force=force, dirty=dirty,
+                                        publish=publish, now=now,
                                         deadline=deadline,
                                         lock_fd=lock_fd, total_started=total_started,
                                         verification_context=verification_context,
@@ -932,7 +964,8 @@ def refresh_snapshot(db_path: str, *, force: bool = False, dirty: bool = False,
 
 
 def _refresh_snapshot_locked(db_path: str, *, force: bool, dirty: bool, now, deadline, lock_fd,
-                             total_started, verification_context=None, commands_retry=False):
+                             total_started, verification_context=None, publish=True,
+                             commands_retry=False):
     """Check freshness and save its marker under the same publication fence."""
     clock = time.time if now is None else (lambda: now)
     now = clock()
@@ -954,9 +987,10 @@ def _refresh_snapshot_locked(db_path: str, *, force: bool, dirty: bool, now, dea
         if (not dirty and prev.get("sig") == sig
                 and _recent(published_at, now, SNAPSHOT_MAX_AGE_S)):
             skip = "unchanged"
-        elif (_recent(published_at, now, SNAPSHOT_MIN_INTERVAL_S)
-              and _rows_appended_only(prev.get("sig"), sig)):
+        elif _interval_defers(prev, sig, now):
             skip = "deferred"   # the marker stays: the wait counts from the last publish
+    if skip is None and not force and not publish:
+        skip = "deferred"   # caller kept no publish reserve; marker and dirty stay
     if skip is not None:
         if deadline is not None and monotonic() >= deadline:
             snapshots._fail("signature_deadline")
@@ -1453,7 +1487,9 @@ def db_maintenance(db_path: str, *, deadline: float | None = None,
     messages_fts. ``deadline`` (time.monotonic) is the caller's hard stop:
     a pass that cannot start with enough time left is skipped and retried
     next tick, and a running statement is interrupted at the deadline
-    (its transaction rolls back). Returns None when nothing was due."""
+    (its transaction rolls back). Returns None when nothing was due.
+    After a successful daily pass whose state was saved, it may also create the
+    optional accounting order index (cloud_usage_order_index in the result)."""
     now = time.time() if now is None else now
     state = _load_json(DB_MAINT_STATE)
     daily = not _recent(state.get("daily_at"), now, DB_MAINT_INTERVAL_S)
@@ -1470,6 +1506,7 @@ def db_maintenance(db_path: str, *, deadline: float | None = None,
         return {"skipped": "deadline"}
     out: dict = {}
     retention_error = None
+    saved = False
     con = sqlite3.connect(db_path, timeout=5)
     try:
         con.execute("PRAGMA busy_timeout=5000")
@@ -1521,4 +1558,33 @@ def db_maintenance(db_path: str, *, deadline: float | None = None,
         text = json.dumps(state)
         with suppress(OSError):
             atomic_write(DB_MAINT_STATE, lambda f: f.write(text), mode=0o600)
+            saved = True
+    if daily:
+        out["cloud_usage_order_index"] = (
+            _cloud_usage_order_index(db_path, deadline) if saved else "state_unpersisted")
     return out
+
+
+def _cloud_usage_order_index(db_path: str, deadline: float | None) -> str:
+    """Create the optional accounting order index on its own bounded connection.
+
+    Only after the daily pass and its state were saved, so a failed or interrupted
+    build waits for the next daily pass instead of repeating every tick."""
+    import ledger_schema
+    if deadline is None or deadline - monotonic() < DB_MAINT_MIN_S:
+        return "deadline"
+    wait_s = min(5.0, max(0.0, deadline - monotonic()))
+    con = sqlite3.connect(db_path, timeout=wait_s)
+    try:
+        con.execute(f"PRAGMA busy_timeout={int(wait_s * 1000)}")
+        con.set_progress_handler(lambda: int(monotonic() >= deadline), 10000)
+        try:
+            return ledger_schema.install_cloud_usage_order_index(con, deadline=deadline)
+        except sqlite3.OperationalError as error:
+            if monotonic() >= deadline:
+                return "deadline"
+            if getattr(error, "sqlite_errorcode", 0) & 0xff in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                return "busy"
+            raise
+    finally:
+        con.close()

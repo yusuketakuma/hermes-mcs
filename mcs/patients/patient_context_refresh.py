@@ -237,7 +237,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     return outcome
 
 
-def _advance_patient_scan(ledger, expected, bookmark, deadline, admit, *, observed_out=None):
+def _advance_patient_scan(ledger, expected, bookmark, deadline, admit, *, scan_idle=None, observed_out=None):
     import extract_llm
 
     def _mark(reason):
@@ -262,7 +262,8 @@ def _advance_patient_scan(ledger, expected, bookmark, deadline, admit, *, observ
                 ledger.db.rollback()
                 return None
             content, meta = expected
-            content = {**content, 'patient_scan': bookmark}
+            content = {**{key: value for key, value in content.items() if key != 'scan_idle'},
+                       'patient_scan': bookmark, **({'scan_idle': scan_idle} if scan_idle is not None else {})}
             patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, 0, content, meta)
             if not extract_llm._writer_current(full=True):
                 _mark('writer_generation')
@@ -325,134 +326,272 @@ def _generation_plan(db, pid, cfg, snapshot, now):
     return {'input_key': key, 'catchup': catchup, 'needed': bool(facts) and not same or quality}
 
 
+_NO_DUE_LANE_CODES = {'A': ('not_needed', 'local_not_ready', 'backoff', 'source_incomplete'),
+                      'B': ('none_incomplete', 'backoff', 'cloud_hold'), 'C': ('none_unaudited', 'backoff')}
+# Each wait_no_due_lane hit adds one code per lane of that scope.
+_NO_DUE_LANE_KEYS = tuple(f'wait_no_due_{lane}_{code}'
+                          for lane, codes in _NO_DUE_LANE_CODES.items() for code in codes)
 _WAIT_COUNTER_KEYS = (
     'wait_no_eligible_sources', 'wait_no_due_lane', 'wait_generation_quota',
-    'wait_readiness_unverified', 'wait_dependency_incomplete',
-)
+    'wait_readiness_unverified', 'wait_dependency_incomplete', 'wait_unit_claimed',
+) + _NO_DUE_LANE_KEYS
+# A selected unit marks its patient so concurrent workers do not pick it and
+# discard each other's paid results. The mark only steers selection.
+_UNIT_CLAIM_SECONDS = 900
+
+
+# Workless rotations thin the scan for every worker through the rotation row;
+# per-worker sleeps cannot, since workers queue on the selection lock.
+_SCAN_IDLE_MAX_SECONDS = 60
+
+
+def _scan_idle(rotation, now):
+    """Return (workless activity cycles, remaining idle seconds) of a well-formed mark.
+
+    A malformed mark counts as absent; a remaining time beyond the maximum
+    (a clock moved backwards) is ignored so the scan runs normally.
+    """
+    idle = rotation.get('scan_idle')
+    if not (isinstance(idle, dict) and set(idle) == {'cycles', 'until'}
+            and type(idle['cycles']) is int and 0 <= idle['cycles'] <= 2
+            and type(idle['until']) in (int, float) and math.isfinite(idle['until'])):
+        return 0, 0
+    remaining = idle['until'] - now
+    return idle['cycles'], remaining if 0 < remaining <= _SCAN_IDLE_MAX_SECONDS else 0
+
+
+def _unit_claimed(progress, now):
+    claim = progress.get('unit_claim')
+    until = claim.get('until') if isinstance(claim, dict) else None
+    return type(until) in (int, float) and math.isfinite(until) and until > now
+
+
+def _release_unit_claim(ledger, pid, token, deadline):
+    """Drop this unit's own selection mark when it ended without its final save."""
+    import extract_llm
+    import notify_spool
+    if ledger.db.in_transaction:
+        return
+    try:
+        with patient_context_refresh_sources._scan_writer_wait(ledger.db, deadline):
+            ledger.db.execute('BEGIN IMMEDIATE')
+            try:
+                content, meta = patient_context_refresh_state._latest(
+                    ledger.db, patient_context_refresh_state.PROGRESS, pid)
+                claim = content.get('unit_claim')
+                # A restored database takes no write before consent; the mark expires.
+                if not (isinstance(claim, dict) and claim.get('token') == token
+                        and extract_llm._writer_current(full=True)
+                        and notify_spool.restore_writer_hold(notify_spool.data_root(ledger)) is None):
+                    ledger.db.rollback()
+                    return
+                patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, pid,
+                    {key: value for key, value in content.items() if key != 'unit_claim'}, meta)
+                if not extract_llm._writer_current(full=True):
+                    ledger.db.rollback()
+                    return
+                ledger.db.commit()
+            except BaseException:
+                ledger.db.rollback()
+                raise
+    except (sqlite3.Error, OSError):
+        # Unreleased marks expire with the unit deadline.
+        if ledger.db.in_transaction:
+            ledger.db.rollback()
 
 
 def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out=None):
-    """Advance a bounded scan before evaluating each patient's current evidence."""
+    """Advance a bounded scan before evaluating each patient's current evidence.
+
+    After two activity-order cycles end without a selection on a slice that
+    could not cover every patient, the rotation row carries a shared idle
+    mark; until it expires every worker returns without scanning and reports
+    the remaining seconds in ``observed_out['scan_idle_s']``. A selecting
+    slice writes nothing after its readiness proof; the claim clears the mark.
+    """
     if observed_out is not None:
         observed_out.update(dict.fromkeys(_WAIT_COUNTER_KEYS, 0))
+    rotation = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.PROGRESS, 0)
+    cycles, idle_s = _scan_idle(rotation[0], now)
+    if idle_s:
+        if observed_out is not None:
+            observed_out['scan_idle_s'] = idle_s
+        return {}, None, rotation, 0, 0, True, 0, 0
     cloud_scan = patient_context_refresh_readiness._cloud_scan_for(ledger, cfg)
     scanned, waiting, seen = 0, 0, set()
     scan_reads, scan_interrupts = 0, 0
     best, selected = {}, None
-    rotation = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.PROGRESS, 0)
+    # The scan holds the selection lock, so the bookmark advances in memory and
+    # is saved once before each patient evaluation (a slow patient can exhaust
+    # the deadline, after which no save is admitted) and once at the end.
+    bookmark = rotation[0].get('patient_scan')
+    # Interim and early-exit saves keep the stored idle mark; only a completed
+    # slice replaces it, so a refused or interrupted scan never advances cycles.
+    idle = rotation[0].get('scan_idle')
+    unsaved = False
+    patients = None
+
+    def persist():
+        nonlocal rotation, unsaved
+        unsaved = False
+        rotation = _advance_patient_scan(ledger, rotation, bookmark, deadline, admit,
+                                         scan_idle=idle, observed_out=observed_out)
+        if rotation is None:
+            raise patient_context_refresh_sources._ScanInterrupted('patient_context_scan_changed')
+
     covered = False
     try:
-        with patient_context_refresh_sources._candidate_reader(ledger, deadline) as reader:
-            for _ in range(8):
-                patient_context_refresh_sources._scan_check(reader.db)
-                original = rotation[0].get('patient_scan')
-                reserved = context_schedule.advance_turn(original)
-                rotation = _advance_patient_scan(ledger, rotation, reserved, deadline, admit,
-                                                 observed_out=observed_out)
-                if rotation is None:
-                    raise patient_context_refresh_sources._ScanInterrupted('patient_context_scan_changed')
-                # Expensive activity ordering must not consume the fair turn's chance.
-                reader.db.scan_until = min(deadline - patient_context_refresh_state.COMMIT_MARGIN, patient_context_refresh_state.time.monotonic() + 1.0)
-                try:
-                    plan = context_schedule.plan(reader.db, original)
-                finally:
-                    reader.db.scan_until = deadline - patient_context_refresh_state.COMMIT_MARGIN
-                rotation = _advance_patient_scan(ledger, rotation, plan['next'], deadline, admit,
-                                                 observed_out=observed_out)
-                if rotation is None:
-                    raise patient_context_refresh_sources._ScanInterrupted('patient_context_scan_changed')
-                pid = plan['project_id']
-                if pid is None or pid in seen:
+        try:
+            with patient_context_refresh_sources._candidate_reader(ledger, deadline) as reader:
+                for _ in range(8):
+                    patient_context_refresh_sources._scan_check(reader.db)
+                    original = bookmark
+                    bookmark, unsaved = context_schedule.advance_turn(original), True
+                    # Expensive activity ordering must not consume the fair turn's chance.
+                    reader.db.scan_until = min(deadline - patient_context_refresh_state.COMMIT_MARGIN, patient_context_refresh_state.time.monotonic() + 1.0)
+                    try:
+                        plan = context_schedule.plan(reader.db, original)
+                    finally:
+                        reader.db.scan_until = deadline - patient_context_refresh_state.COMMIT_MARGIN
+                    bookmark = plan['next']
+                    if plan['reason'] == 'cycle_end' and context_schedule._bookmark(original)['turn'] != 3:
+                        cycles = min(2, cycles + 1)
+                    pid = plan['project_id']
+                    if pid is None or pid in seen:
+                        if _scan_covered(reader.db, seen):
+                            covered = True
+                            break
+                        continue
+                    persist()
+                    seen.add(pid)
+                    scanned += 1
+                    if _unit_claimed(patient_context_refresh_state._latest(
+                            reader.db, patient_context_refresh_state.PROGRESS, pid)[0], now):
+                        if observed_out is not None:
+                            observed_out['wait_unit_claimed'] += 1
+                        waiting += 1
+                        continue
+                    published = patient_context_refresh_state._published_version(reader.db, pid)
+                    whole = patient_context_refresh_sources._snapshot(reader.db, pid, cfg, hydrate=False)
+                    keys = patient_context_refresh_readiness._eligible_source_keys(reader, pid, cfg, whole, deadline=deadline)
+                    if not keys and whole['sources']:
+                        if observed_out is not None:
+                            observed_out['wait_no_eligible_sources'] += 1
+                        waiting += 1
+                        continue
+                    source_keys = list(keys) if keys else None
+                    observed = {}
+                    scan_reads += 1
+                    snapshot, progress, pending = patient_context_refresh_readiness._pending(
+                        reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid),
+                        source_keys=source_keys, observed_out=observed)
+                    if patient_context_refresh_state._out_of_scope(snapshot):
+                        continue
+                    scopes = [(snapshot, progress, pending, source_keys, ('B', 'C'), observed)]
+                    # Same candidate, connection, read transaction, scope,
+                    # contract, cfg and estimate: reuse the stored read
+                    # _pending just made instead of reading it again.
+                    scans = observed["scans"]
+                    summary_keys = [context_plan.source_key(source) for source in snapshot['sources']
+                        if not context_plan.source_usable(source)
+                        or patient_context_refresh_sources._scan_ready(scans.get(context_plan.source_key(source), {}))]
+                    if summary_keys or not snapshot['sources']:
+                        summary_keys = summary_keys or None
+                        if summary_keys == source_keys:
+                            scopes[0] = (snapshot, progress, pending, source_keys, ('A', 'B', 'C'), observed)
+                        else:
+                            scan_reads += 1
+                            summary_observed = {}
+                            summary_snapshot, summary_progress, summary_pending = patient_context_refresh_readiness._pending(
+                                reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid), source_keys=summary_keys,
+                                observed_out=summary_observed)
+                            scopes.append((summary_snapshot, summary_progress, summary_pending, summary_keys, ('A',),
+                                           summary_observed))
+                    for candidate, state, due, scope_keys, lanes, scope_observed in scopes:
+                        blocks = dict(scope_observed.get('lane_blocks') or {})
+                        if ('A' in lanes and due['A']
+                                and (candidate.get('source_coverage', {}).get('unreflected')
+                                     or not candidate['acquisition']['complete'])
+                                and not any(context_plan.source_usable(source) for source in candidate['sources'])):
+                            due['A'] = False
+                            blocks['A'] = 'source_incomplete'
+                        if not any(due[lane] for lane in lanes):
+                            if observed_out is not None:
+                                observed_out['wait_no_due_lane'] += 1
+                                for lane in lanes:
+                                    key = f'wait_no_due_{lane}_{blocks.get(lane)}'
+                                    if key in observed_out:
+                                        observed_out[key] += 1
+                            waiting += int(candidate['unfinished'])
+                            continue
+                        if 'A' in lanes and due['A']:
+                            try:
+                                generation = _generation_plan(reader.db, pid, cfg, candidate, now)
+                                quota = (context_quota.inspect(reader.db, pid, generation['input_key'],
+                                    now=now, catchup=generation['catchup']) if generation['needed'] else {'allowed': True})
+                            except ValueError:
+                                generation, quota = None, {'allowed': False}
+                            candidate['_generation_plan'] = generation
+                            if not quota['allowed']:
+                                if observed_out is not None:
+                                    observed_out['wait_generation_quota'] += 1
+                                due['A'] = False
+                                waiting += 1
+                                if not any(due[lane] for lane in lanes):
+                                    continue
+                        changes = ledger.db.total_changes
+                        ready, proof, _ = patient_context_refresh_readiness._observe_readiness(reader, pid, cfg,
+                            deadline=deadline, complete=complete, allow_dependency_repair=lanes != ('A',), source_keys=scope_keys)
+                        if ledger.db.total_changes != changes:
+                            proof = None
+                        if proof is not None:
+                            proof['writer'] = ledger.db
+                            proof['writer_changes'] = ledger.db.total_changes
+                        candidate['_readiness_proof'] = proof
+                        patient_context_refresh_sources._scan_check(reader.db)
+                        if not candidate['dependencies']['complete']:
+                            if observed_out is not None:
+                                observed_out['wait_dependency_incomplete'] += 1
+                            due['A'] = False
+                        if not ready and observed_out is not None:
+                            observed_out['wait_readiness_unverified'] += 1
+                        waiting += int(candidate['unfinished'] or not ready)
+                        if ready:
+                            best.update({lane: (candidate, state, published) for lane in lanes if due[lane]})
+                    if best:
+                        selected = pid
+                        break
                     if _scan_covered(reader.db, seen):
                         covered = True
                         break
-                    continue
-                seen.add(pid)
-                scanned += 1
-                published = patient_context_refresh_state._published_version(reader.db, pid)
-                whole = patient_context_refresh_sources._snapshot(reader.db, pid, cfg, hydrate=False)
-                keys = patient_context_refresh_readiness._eligible_source_keys(reader, pid, cfg, whole, deadline=deadline)
-                if not keys and whole['sources']:
-                    if observed_out is not None:
-                        observed_out['wait_no_eligible_sources'] += 1
-                    waiting += 1
-                    continue
-                source_keys = list(keys) if keys else None
-                observed = {}
-                scan_reads += 1
-                snapshot, progress, pending = patient_context_refresh_readiness._pending(
-                    reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid),
-                    source_keys=source_keys, observed_out=observed)
-                if patient_context_refresh_state._out_of_scope(snapshot):
-                    continue
-                scopes = [(snapshot, progress, pending, source_keys, ('B', 'C'))]
-                # Same candidate, connection, read transaction, scope,
-                # contract, cfg and estimate: reuse the stored read
-                # _pending just made instead of reading it again.
-                scans = observed["scans"]
-                summary_keys = [context_plan.source_key(source) for source in snapshot['sources']
-                    if not context_plan.source_usable(source)
-                    or patient_context_refresh_sources._scan_ready(scans.get(context_plan.source_key(source), {}))]
-                if summary_keys or not snapshot['sources']:
-                    summary_keys = summary_keys or None
-                    if summary_keys == source_keys:
-                        scopes[0] = (snapshot, progress, pending, source_keys, ('A', 'B', 'C'))
-                    else:
-                        scan_reads += 1
-                        summary_snapshot, summary_progress, summary_pending = patient_context_refresh_readiness._pending(
-                            reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid), source_keys=summary_keys)
-                        scopes.append((summary_snapshot, summary_progress, summary_pending, summary_keys, ('A',)))
-                for candidate, state, due, scope_keys, lanes in scopes:
-                    if ('A' in lanes and due['A']
-                            and (candidate.get('source_coverage', {}).get('unreflected')
-                                 or not candidate['acquisition']['complete'])
-                            and not any(context_plan.source_usable(source) for source in candidate['sources'])):
-                        due['A'] = False
-                    if not any(due[lane] for lane in lanes):
-                        if observed_out is not None:
-                            observed_out['wait_no_due_lane'] += 1
-                        waiting += int(candidate['unfinished'])
-                        continue
-                    if 'A' in lanes and due['A']:
-                        try:
-                            generation = _generation_plan(reader.db, pid, cfg, candidate, now)
-                            quota = (context_quota.inspect(reader.db, pid, generation['input_key'],
-                                now=now, catchup=generation['catchup']) if generation['needed'] else {'allowed': True})
-                        except ValueError:
-                            generation, quota = None, {'allowed': False}
-                        candidate['_generation_plan'] = generation
-                        if not quota['allowed']:
-                            if observed_out is not None:
-                                observed_out['wait_generation_quota'] += 1
-                            due['A'] = False
-                            waiting += 1
-                            if not any(due[lane] for lane in lanes):
-                                continue
-                    changes = ledger.db.total_changes
-                    ready, proof, _ = patient_context_refresh_readiness._observe_readiness(reader, pid, cfg,
-                        deadline=deadline, complete=complete, allow_dependency_repair=lanes != ('A',), source_keys=scope_keys)
-                    if ledger.db.total_changes != changes:
-                        proof = None
-                    if proof is not None:
-                        proof['writer'] = ledger.db
-                        proof['writer_changes'] = ledger.db.total_changes
-                    candidate['_readiness_proof'] = proof
-                    patient_context_refresh_sources._scan_check(reader.db)
-                    if not candidate['dependencies']['complete']:
-                        if observed_out is not None:
-                            observed_out['wait_dependency_incomplete'] += 1
-                        due['A'] = False
-                    if not ready and observed_out is not None:
-                        observed_out['wait_readiness_unverified'] += 1
-                    waiting += int(candidate['unfinished'] or not ready)
-                    if ready:
-                        best.update({lane: (candidate, state, published) for lane in lanes if due[lane]})
-                if best:
-                    selected = pid
-                    break
-                if _scan_covered(reader.db, seen):
-                    covered = True
-                    break
+                if selected is None and not covered and cycles >= 2:
+                    patients = reader.db.execute('SELECT COUNT(*) FROM patients WHERE project_id>0').fetchone()[0]
+        except Exception:
+            # Early exits keep the turns already consumed; the original error
+            # still decides the outcome when this save is refused.
+            if unsaved and rotation is not None:
+                try:
+                    persist()
+                except Exception:
+                    pass
+            raise
+        # A selection leaves the mark to the claim, which drops it in the same
+        # transaction: a write here would outdate the candidate's readiness proof.
+        # A full-coverage slice (whose worker already waits 60 s) clears it.
+        # Otherwise idle long enough that the activity order (6 patients per
+        # slice) still completes a cycle within about 600 s.
+        if selected is None:
+            if covered:
+                fresh = None
+            elif patients is not None:
+                fresh = {'cycles': cycles, 'until': now + min(
+                    _SCAN_IDLE_MAX_SECONDS, max(5, 3600 / max(patients, 1)))}
+            else:
+                fresh = {'cycles': cycles, 'until': 0} if cycles else None
+            if fresh != idle:
+                idle, unsaved = fresh, True
+        if unsaved:
+            persist()
     # scan_interrupts counts every early abort (contention, deadline or
     # read failure) — finite-slice completion keeps it at 0.
     except patient_context_refresh_sources._ScanInterrupted:
@@ -486,9 +625,14 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
 
 def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     """Keep one completed unit's existing save path resumable within its deadline."""
-    returned = []
+    returned, claimed = [], []
     result = yield from _run_due_unit(ledger, cfg, deadline=deadline, admit=admit,
-        complete=complete, local_admit=local_admit, returned=returned)
+        complete=complete, local_admit=local_admit, returned=returned, claimed=claimed)
+    if claimed:
+        try:
+            _release_unit_claim(ledger, *claimed[0])
+        except Exception:
+            pass  # the mark expires; keep the unit's own result
     # A normal return relinquishes only the usable quota lease. Suspended paid
     # work, exceptions and generator close retain their existing ownership.
     if returned:
@@ -534,7 +678,7 @@ def _selection_lock(db):
     return (fd, None) if fd is not None else (None, "patient_context_selection_busy")
 
 
-def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, returned):
+def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, returned, claimed):
     import extract_llm
     import cloud_inference
     import cloud_client
@@ -547,8 +691,10 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     if not patient_context_refresh_state.options(cfg)["enabled"] or not window:
         return {"status": "off", "done": 0}
     workday_id, _ = window
-    if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline or not admit():
-        return {"status": "deferred", "done": 0}
+    if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline:
+        return {"status": "deferred", "done": 0, "reason": "patient_context_capacity_or_deadline"}
+    if not admit():
+        return {"status": "deferred", "done": 0, "reason": "patient_context_admission_deferred"}
     selection_fd, selection_reason = _selection_lock(ledger.db)
     if selection_fd is None:
         return {"status": "deferred", "done": 0, "reason": selection_reason}
@@ -565,6 +711,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             stats['scan_refusal'] = scan_observed['scan_refusal']
         if scan_rotation is None:
             return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
+        if scan_observed.get('scan_idle_s'):
+            return {"status": "deferred", "done": 0, "reason": "patient_context_waiting",
+                    "scan_idle_s": scan_observed['scan_idle_s'], **stats}
         rotation = scan_rotation[0]
         lane, index, next_cursor = context_plan.lane_rotation(best, rotation)
         if lane is None:
@@ -607,16 +756,22 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     # Keep that attempt's retry state bound to its original input.
                     progress, _ = patient_context_refresh_state._latest(
                         ledger.db, patient_context_refresh_state.PROGRESS, pid)
+                claim = {"token": os.urandom(16).hex(), "until": patient_context_refresh_state.time.time() + min(
+                    _UNIT_CLAIM_SECONDS, deadline - patient_context_refresh_state.time.monotonic())}
                 progress = {**progress, "last_attempt": now,
                             "last_attempt_unit": rotation.get("units", 0) + 1,
-                            "workday_id": workday_id,
+                            "workday_id": workday_id, "unit_claim": claim,
                             **({"source_sig": snapshot["source_sig"], "source_scope": source_keys} if lane == "A" else {})}
                 patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, pid, progress, {})
-                patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, 0, {**rotation, "cursor": next_cursor, "units": rotation.get("units", 0) + 1}, scan_rotation[1])
+                # The claim clears the shared scan idle the selection left in place.
+                patient_context_refresh_state._replace(ledger, patient_context_refresh_state.PROGRESS, 0, {
+                    **{k: v for k, v in rotation.items() if k != "scan_idle"},
+                    "cursor": next_cursor, "units": rotation.get("units", 0) + 1}, scan_rotation[1])
                 if not extract_llm._writer_current(full=True):
                     ledger.db.rollback()
                     return {"status": "source_changed", "done": 0, **stats}
                 ledger.db.commit()
+                claimed.append((pid, claim["token"], deadline))
             # Our scheduling write participates in the same publisher fence as later work.
             frozen_ver = patient_context_refresh_state._published_version(ledger.db, pid)
         except (sqlite3.Error, OSError, patient_context_refresh_sources._ScanInterrupted):
@@ -675,6 +830,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     guard_error = [None]
     selected_source = [None]
     selected_occurrence = [None]
+    # Set only when the paid-history guard itself refused local substitution.
+    cloud_unit_refused = False
     cloud_input = patient_context_refresh_state._cloud_input_binding(ledger.db, pid, snapshot) if cloud_settings is not None else None
 
     def current(*, after_commit=False):
@@ -859,7 +1016,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             raise patient_context_refresh_state.Deferred("patient_context_cloud_not_sent") from None
 
     def guard_local_input(unit_key, mid, prompt):
-        nonlocal generation_uncertain
+        nonlocal generation_uncertain, cloud_unit_refused
         try:
             with cloud_policy._accounting_snapshot(ledger.db):
                 cloud_inference.guard_context_local(ledger, cfg, prompt, project_id=pid,
@@ -869,6 +1026,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 OSError, RecursionError, OverflowError) as error:
             generation_uncertain = True
             guard_error[0] = _guard_refusal_code(error)
+            cloud_unit_refused = isinstance(error, cloud_client.CloudError)
             raise patient_context_refresh_state.Deferred("patient_context_cloud_not_sent") from None
         if (unit_key, mid, prompt) not in local_checks:
             local_checks.append((unit_key, mid, prompt))
@@ -1063,6 +1221,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     saved, mode == "on"))
                 if not patient_context_refresh_readiness._ready({} if cloud_pending else saved, now):
                     continue
+                if lane == "B" and patient_context_refresh_readiness._cloud_unit_held(ledger.db, saved, now):
+                    continue
                 if (lane == "B" and (not saved.get("complete") or cloud_pending)) or (
                         lane == "C" and saved.get("complete") and not saved.get("audited")):
                     meta["source_sig"] = context_plan.source_signature(source)
@@ -1173,12 +1333,32 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     except (ValueError, TypeError, KeyError, TimeoutError) as exc:
         failure = safe_error_code(exc)
     if result is None and failure is None and deferred_reason is None:
-        return {"status": "deferred", "done": 0}
-    if patient_context_refresh_state.time.monotonic() >= deadline or not admit():
+        return {"status": "deferred", "done": 0, "reason": "patient_context_waiting"}
+    if patient_context_refresh_state.time.monotonic() >= deadline:
         discard_if_changed()
-        return {"status": "deferred", "done": 0}
+        return {"status": "deferred", "done": 0, "reason": "patient_context_capacity_or_deadline"}
+    if not admit():
+        discard_if_changed()
+        return {"status": "deferred", "done": 0, "reason": "patient_context_admission_deferred"}
+    held_scan = (scans.get(context_plan.source_key(selected_source[0]), {})
+                 if lane == "B" and selected_source[0] is not None else {})
+    # A paid unit that can be neither resent nor run locally holds only this
+    # source for a while so the patient's other sources keep progressing.
+    cloud_hold = (lane == "B" and result is None and failure is None and cloud_unit_refused
+                  and deferred_reason == "patient_context_cloud_not_sent" and selected_source[0] is not None
+                  and not patient_context_refresh_readiness._cloud_unit_held(ledger.db, held_scan, now))
+    if (lane != "A" and result is None and failure is None and deferred_reason is not None
+            and provider is None and shadow_call is None and not estimated_unit and generation_claim is None
+            and not cloud_hold and not (lane == "C" and deferred_reason.startswith("source_quality_"))):
+        # Nothing to save: selection already wrote this unit's progress row,
+        # so a deferral without a result never waits for the run lock.
+        detail = deferred_reason.partition(":")[2]
+        return {"status": "deferred", "done": 0, "lane": lane, "reason": deferred_reason,
+                **({"detail": detail} if detail else {}),
+                **({"guard_error": guard_error[0]} if guard_error[0] is not None else {}), **stats}
     # Rebuild the source signature outside the write lock. A data-version
-    # fence seals the read against any concurrent writer before publication.
+    # fence seals each read; the save transaction re-verifies these inputs
+    # under its writer lock when another connection committed meanwhile.
     quality_fence = None
     source_pass_content = None
     if source_quality_identity is not None:
@@ -1195,7 +1375,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             ledger.db.rollback()
         quality_fence = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
         if quality_fence != before:
-            return {"status": "source_changed", "done": 0}
+            return {"status": "source_changed", "done": 0, "changed": "fence"}
     if quality_identity is not None:
         before = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
         ledger.db.execute("BEGIN")
@@ -1210,20 +1390,20 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             ledger.db.rollback()
         quality_fence = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
         if quality_fence != before:
-            return {"status": "source_changed", "done": 0}
+            return {"status": "source_changed", "done": 0, "changed": "fence"}
     version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
     changes = ledger.db.total_changes
     if quality_fence is not None and quality_fence != (version, changes):
-        return {"status": "source_changed", "done": 0}
+        return {"status": "source_changed", "done": 0, "changed": "fence"}
     _, write_proof[0], ready_snapshot = patient_context_refresh_readiness._capture_readiness(ledger, pid, cfg, deadline=deadline,
         complete=complete, allow_dependency_repair=lane != "A", source_keys=source_keys,
         write_scope={'source_key': context_plan.source_key(selected_source[0]) if selected_source[0] is not None else None,
                      'cloud': cloud_input is not None})
     fresh = ready_snapshot or patient_context_refresh_sources._snapshot(ledger.db, pid, cfg, hydrate=False, source_keys=source_keys)
     scans_now = patient_context_refresh_state._scan_sig(ledger.db, pid, source_keys=source_keys)
-    # A finished inference is worth a short wait: the tick and lane 2 hold
-    # the run lock for minutes, and dropping the result would send the
-    # same prompt again on the next iteration.
+    # Saving waits briefly for the run lock (the tick and lane 2 hold it for
+    # minutes). Only a completed paid A/B success is retained across the
+    # wait; every other outcome is dropped when the wait ends.
     waited = 0
     completed_receipts = None
     completed_cfg = None
@@ -1280,7 +1460,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     try:
         if not admit():
             discard_if_changed()
-            return {"status": "deferred", "done": 0}
+            return {"status": "deferred", "done": 0, "reason": "patient_context_admission_deferred"}
         # BEGIN IMMEDIATE seals the signature check and writes in one brief
         # transaction; no inference is performed while holding a DB/run lock.
         ledger.db.execute("BEGIN IMMEDIATE")
@@ -1299,10 +1479,35 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     ledger.db.rollback()
                     return {"status": "deferred", "done": 0, "reason": "patient_context_cloud_not_sent",
                             "guard_error": guard_error[0]}
-            if (quality_identity is not None or source_quality_identity is not None) and (ledger.db.execute("PRAGMA data_version").fetchone()[0] != version
-                                                 or ledger.db.total_changes != changes):
-                ledger.db.rollback()
-                return {"status": "source_changed", "done": 0}
+            # The quality fence is this patient's inputs, not the whole database:
+            # after any foreign commit they are re-verified under this writer
+            # lock. Own unexpected writes still refuse. ``version`` stays the
+            # pre-lock value for the scan-signature refresh below.
+            quality_version = version
+            if quality_identity is not None or source_quality_identity is not None:
+                if ledger.db.total_changes != changes:
+                    ledger.db.rollback()
+                    return {"status": "source_changed", "done": 0, "changed": "fence"}
+                quality_version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
+                if quality_version != version:
+                    try:
+                        if source_quality_identity is not None and (
+                                not patient_context_refresh_sources._source_quality_verified(
+                                    ledger.db, pid, source, snapshot["contract"], cfg, result)
+                                or not source_quality_skipped and patient_context_quality_receipts._quality_pass_content(
+                                    ledger.db, pid, source_quality_identity) != source_pass_content):
+                            ledger.db.rollback()
+                            return {"status": "source_changed", "done": 0, "changed": "fence"}
+                        if quality_identity is not None:
+                            recaptured = patient_context_refresh_sources._quality_capture(ledger.db, pid, cfg, workday_id, result["summary"],
+                                quality_identity["assessment"], result["temporal_view"], source_keys=source_keys)
+                            if recaptured["identity"] != quality_identity:
+                                ledger.db.rollback()
+                                return {"status": "source_changed", "done": 0, "changed": "fence"}
+                            refreshed_quality = recaptured
+                    except (ValueError, KeyError, TypeError):
+                        ledger.db.rollback()
+                        return {"status": "source_changed", "done": 0, "changed": "fence"}
             if quality_identity is not None:
                 live_cfg = extract_llm.load_config()
                 live_policy, problems = semantic_policy.runtime_config(live_cfg)
@@ -1356,7 +1561,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     if (completed_receipts is None or extract_llm._writer_current(full=True)
                             and notify_spool.restore_writer_hold(notify_spool.data_root(ledger)) is None):
                         provider.discard()
-                    return {"status": "deferred", "done": 0}
+                    return {"status": "deferred", "done": 0, "reason": "patient_context_cloud_source_changed"}
                 except ValueError:
                     ledger.db.rollback()
                     return {"status": "source_changed", "done": 0}
@@ -1376,16 +1581,21 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 if changed and provider is not None:
                     provider.discard()
                 return {"status": "source_changed" if changed else "deferred", "done": 0,
-                        **({"reason": "patient_context_readiness_unverified"} if not changed else {})}
-            moved = (generation_claim is not None and not context_quota.owns(
-                         ledger.db, pid, generation_claim, now=patient_context_refresh_state.time.time())
-                     or fresh["source_sig"] != snapshot["source_sig"] or scans_now != frozen_scan_sig
-                     or patient_context_refresh_state._published_version(ledger.db, pid) != frozen_ver
-                     or snapshot["contract"].get(VERSION_KEY) != patient_context_refresh_state.CURRENT_VERSION
-                     or selected_source[0] is not None and (selected_now is None
-                         or (write_state['occurrence'] if write_state is not None
-                             and write_state['source_key'] == context_plan.source_key(selected_source[0])
-                             else patient_context_refresh_state._digest(patient_context_refresh_sources._source_occurrence(ledger.db, pid, selected_now))) != patient_context_refresh_state._digest(selected_occurrence[0])))
+                        **({"reason": "patient_context_readiness_unverified"} if not changed else {"changed": "source"})}
+            # Evaluated in the original short-circuit order; the first hit
+            # names the fixed cause reported with source_changed.
+            moved = next((code for code, hit in (
+                ('quota', lambda: generation_claim is not None and not context_quota.owns(
+                    ledger.db, pid, generation_claim, now=patient_context_refresh_state.time.time())),
+                ('source', lambda: fresh["source_sig"] != snapshot["source_sig"]),
+                ('scans', lambda: scans_now != frozen_scan_sig),
+                ('version', lambda: patient_context_refresh_state._published_version(ledger.db, pid) != frozen_ver),
+                ('contract', lambda: snapshot["contract"].get(VERSION_KEY) != patient_context_refresh_state.CURRENT_VERSION),
+                ('occurrence', lambda: selected_source[0] is not None and (selected_now is None
+                    or (write_state['occurrence'] if write_state is not None
+                        and write_state['source_key'] == context_plan.source_key(selected_source[0])
+                        else patient_context_refresh_state._digest(patient_context_refresh_sources._source_occurrence(ledger.db, pid, selected_now))) != patient_context_refresh_state._digest(selected_occurrence[0]))),
+            ) if hit()), None)
             if moved or patient_context_refresh_state.time.monotonic() >= deadline:
                 # another publisher (a second lane-3 process) wrote this
                 # patient's context or progress since selection: our
@@ -1393,7 +1603,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 ledger.db.rollback()
                 if provider is not None and moved:
                     provider.discard()
-                return {"status": "source_changed", "done": 0}
+                return {"status": "source_changed", "done": 0, "changed": moved or "deadline"}
             adoption_writes = ([0] if lane == "C" and source_quality_identity is not None else None)
             adoption_before = ledger.db.total_changes
             adoption_epoch = None
@@ -1410,7 +1620,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                      "attempts": attempts, "checks": patient_context_refresh_state._CHECKS,
                      "failure_at": now if failure else None,
                      "next_try": (now + (86400 if attempts >= 5 else 300 * 2 ** attempts)) if failure else 0}
-            progress = {**progress, "last_attempt": now, "last_attempt_unit": rotation.get("units", 0) + 1,
+            progress = {**{key: value for key, value in progress.items() if key != "unit_claim"},
+                        "last_attempt": now, "last_attempt_unit": rotation.get("units", 0) + 1,
                         "workday_id": workday_id,
                         **({"source_sig": snapshot["source_sig"], "source_scope": source_keys} if lane == "A" else {}),
                         **(retry if lane == "A" and deferred_reason is None else {})}
@@ -1423,6 +1634,15 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 progress.pop("quality_state", None)
             if failure and lane != "A":
                 patient_context_refresh_state._replace(ledger, patient_context_refresh_state.SCAN, pid, {**{k: v for k, v in saved.items() if not k.startswith("_")}, **retry}, meta, source["message_id"])
+            if cloud_hold:
+                # Keep the stored scan (content and meta) and add only the hold;
+                # attempts and failure stay unchanged because nothing failed.
+                patient_context_refresh_state._replace(ledger, patient_context_refresh_state.SCAN, pid,
+                    {**{k: v for k, v in held_scan.items() if not k.startswith("_")},
+                     "cloud_unit_hold": {"until": now + 21600, "reason": "patient_context_cloud_not_sent",
+                                         # a later human release ends the hold
+                                         "released_before": cloud_policy._local_release(ledger.db)[1]}},
+                    held_scan.get("_source_meta") or meta, source["message_id"])
             if lane == "C" and deferred_reason and deferred_reason.startswith("source_quality_"):
                 patient_context_refresh_state._replace(ledger, patient_context_refresh_state.SCAN, pid, {**{k: v for k, v in saved.items() if not k.startswith("_")},
                     "audited": False, "quality_state": deferred_reason[len("source_quality_"):],
@@ -1497,11 +1717,11 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     and patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live_policy, [final_source])
                     and context_queries.patient_context_scope(ledger.db, pid).get('fetch_reason') not in ('forbidden', 'permission_denied', 'access_revoked')
                     and admit() and extract_llm._writer_current(full=True) and patient_context_refresh_state.time.monotonic() < deadline
-                    and ledger.db.execute('PRAGMA data_version').fetchone()[0] == version
+                    and ledger.db.execute('PRAGMA data_version').fetchone()[0] == quality_version
                     and ledger.db.total_changes == adoption_before + adoption_writes[0])
                 if not valid_adoption:
                     ledger.db.rollback()
-                    return {"status": "source_changed", "done": 0}
+                    return {"status": "source_changed", "done": 0, "changed": "adoption"}
             if not failure and estimated_unit:
                 cloud_policy.dryrun_tx(ledger, route="patient_context", project_id=pid,
                     unit_key=lane, input_chars=sum(source.get("body_length", 0) for source in snapshot["sources"]),
@@ -1526,6 +1746,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     return {'status': 'source_changed', 'done': 0}
             ledger.db.commit()
             generation_claim = None
+            claimed.clear()  # this save already replaced the marked progress row
         except BaseException:
             ledger.db.rollback()
             raise
@@ -1575,8 +1796,11 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     os.close(audit_fd)
         if lane == 'A' and generation_claim is not None:
             return_generation('complete' if cloud_value is not None else 'unknown')
+    detail = (deferred_reason or "").partition(":")[2]
     return {"status": "failed" if failure else "deferred" if deferred_reason else "progressed",
             "done": int(not failure and deferred_reason is None), "lane": lane,
             **({"reason": failure or deferred_reason} if failure or deferred_reason else {}),
             **({"guard_error": guard_error[0]} if guard_error[0] is not None else {}),
+            # The fixed quality detail code also saved in the scan row's quality_state.
+            **({"detail": detail} if detail and not failure else {}),
             "lock_wait_s": waited, **stats}

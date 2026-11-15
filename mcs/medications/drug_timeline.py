@@ -195,11 +195,12 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
     dictionary = "invalid" if progress and progress.get("invalid") else (
         "unconfigured" if not progress or not progress.get("dictionary") else "derived")
     pin = (cfg or {}).get("drug_map")
-    if pin is not None and drug_map.config_error(pin) is not None:
-        dictionary = "invalid"
-    elif pin is not None and (not progress or not progress.get("dictionary")
-                              or progress["dictionary"][1] != pin["sha256"]):
-        dictionary = "pending"
+    if pin is not None and dictionary != "invalid":
+        pinned, error = drug_map.configured(cfg)
+        # Only an approved pin that derive has not reached yet is still being matched.
+        dictionary = ("invalid" if error else "reference_only" if not pinned.approved
+                      else "pending" if not progress or not progress.get("dictionary")
+                      or progress["dictionary"][1] != pin["sha256"] else "derived")
     active, active_state = drug_map.active_dictionary(view.db, cfg or {})
     query_codes = set()
     if name is not None and active is not None:
@@ -249,7 +250,7 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
                 codes = {c["code"] for c in (ref or {}).get("cands", [])}
                 if (ref or {}).get("status") != "resolved" or not (query_codes & codes):
                     continue
-            if ref is None:
+            if ref is None and known_name and dictionary in ("derived", "pending"):
                 matching_pending += 1
             subject = med.get("subject", "unknown")
             if subject == f"patient:{project_id}":
@@ -270,7 +271,9 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
             items.append({**row, "mention": med, "subject_bucket": subject,
                           "change": change,
                           "source_kind": source[1], "source_artifact_id": source[0],
-                          "candidate": ref, "matching": "current" if ref else "pending",
+                          "candidate": ref, "matching": ("current" if ref else "not_applicable" if not known_name
+                                       else "pending" if dictionary in ("derived", "pending")
+                                       else "not_performed"),
                           "source": provenance})
     replies = incomplete_reply_roots(view.db, project_id)
     coverage = {"period": {"since": since, "until": until},
@@ -305,7 +308,7 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
         states.append("添付解析中")
     if failed or patient[0] == "failed":
         states.append("取得失敗")
-    if dictionary != "derived" or matching_pending:
+    if dictionary == "pending" or matching_pending:
         states.append("照合中")
     return {"kind": "drug_timeline", "items": items, "drug_groups": _groups(items),
             "next_cursor": page["next_cursor"],

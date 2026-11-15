@@ -82,7 +82,7 @@ def _req(action, **kw):
             "reason": "synthetic maintenance", **kw}
 
 
-@pytest.mark.parametrize("action", ["stop", "resume"])
+@pytest.mark.parametrize("action", ["stop", "resume", "release-local"])
 @pytest.mark.parametrize("witness", ["restored", "awaiting", "corrupt", "journal"])
 def test_control_restore_hold_precedes_writer_under_the_lock(world, monkeypatch, action, witness):
     import ledger
@@ -155,6 +155,22 @@ def test_plan_is_readonly_keyless_and_outputs_only_estimates(world):
     assert "message_id" not in raw and "project_id" not in raw and str(root) not in raw
 
 
+def test_plan_warns_when_the_reextract_window_cannot_send(world, capsys):
+    root, _, config = world
+    config["cloud_llm"].update(routes=["patient_context"], window_start="2026-10-26T00:00:00+09:00",
+                               window_budget_usd=60, reextract_backlog_until="2999-01-01T23:59:59+09:00")
+    (root / "config.json").write_text(json.dumps(config))
+    assert cli.observe(config, root=str(root))["reextract_backlog_blockers"] == ["route_missing"]
+    assert mcs_setup.main(["cloud-llm", "plan"]) == 0
+    out = capsys.readouterr().out
+    assert '"route_missing"' in out and "cloud_llm.routes に reextract がありません" in out
+    config["cloud_llm"].update(routes=["patient_context", "reextract"],
+                               reextract_backlog_until="2026-01-01T23:59:59+09:00")
+    assert cli.observe(config, root=str(root))["reextract_backlog_blockers"] == ["window_ended"]
+    del config["cloud_llm"]["reextract_backlog_until"]
+    assert cli.observe(config, root=str(root))["reextract_backlog_blockers"] == []
+
+
 def test_recent_target_is_excluded_from_background_estimate(world):
     root, path, config = world
     with closing(Ledger(str(path))) as db, db.db:
@@ -175,6 +191,29 @@ def test_estimate_has_daily_monthly_oneoff_and_optional_fx(world):
     assert Decimal(daily["estimated_cost_low_jpy"]) == Decimal(daily["estimated_cost_low_usd"]) * 150
     assert report["reextract_backlog_once"]["targets"] == 0
     assert report["new_posts_daily_estimate"] > 0
+
+
+def test_since_sets_the_average_denominator_to_the_days_read(world, capsys):
+    root, _, config = world
+    # 2026-09-27 through the fixed "now" (2026-10-26 JST) is 30 calendar days.
+    report = cli.observe(config, root=str(root), since="2026-09-27")
+    assert report["days"] == report["historical_average_denominator_days"] == 30
+    assert report["new_posts_daily_estimate"] == report["new_posts"] / 30
+    # 63 days exceed the averages' denominator cap of plan/estimate only; log/compare read them.
+    with pytest.raises(ValueError, match="since_invalid"):
+        cli.observe(config, root=str(root), since="2026-08-25", evidence_holds_wanted=True)
+    assert cli.observe(config, root=str(root), since="2026-08-25")["days"] == 63
+    for period, code in (({"since": "2026-10-27"}, "since_invalid"), ({"since": "2026/10/01"}, "since_invalid"),
+                         ({"since": "2026-10-01", "days": 14}, "period_conflict"), ({"days": 63}, "days_invalid")):
+        with pytest.raises(ValueError, match=code):
+            cli.observe(config, root=str(root), **period)
+    capsys.readouterr()
+    assert mcs_setup.main(["cloud-llm", "log", "--since", "2026-08-25"]) == 0
+    assert mcs_setup.main(["cloud-llm", "estimate", "--since", "2026-08-25"]) == 1
+    assert mcs_setup.main(["cloud-llm", "estimate", "--since", "2026/10/01"]) == 1
+    assert "plan・estimate は今日から61日前まで" in capsys.readouterr().out
+    assert mcs_setup.main(["cloud-llm", "estimate", "--days", "7", "--since", "2026-10-20"]) == 1
+    assert "同時に指定できません" in capsys.readouterr().out
 
 
 
@@ -319,7 +358,40 @@ def test_cli_commands_use_nested_parser_and_never_touch_network(world, capsys):
     assert '"outcome": "applied"' in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("action", ["plan", "outstanding", "stop", "resume"])
+def test_release_local_cli_prints_through_and_rejects_when_nothing_is_old_enough(world, capsys):
+    _, path, _ = world
+    args = ["cloud-llm", "release-local", "--confirm-human", "--reason", "synthetic"]
+    assert mcs_setup.main(["cloud-llm", "release-local", "--reason", "synthetic"]) == 1
+    capsys.readouterr()
+    assert mcs_setup.main(args) == 1
+    rejected = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rejected["outcome"] == "rejected" and rejected["error"] == "cloud_release_nothing"
+    assert rejected["through"] is None
+    now = cli.time.time()
+    with closing(Ledger(str(path))) as db:
+        assert not db.artifacts("cloud_local_release")
+        with db.db:
+            # Only the row's kind and age matter to the release cutoff.
+            old, young = (db.db.execute(
+                "INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
+                ("cloud_usage_reserve", "{}", "synthetic", "{}", now - age)).lastrowid
+                for age in (cloud_policy.LOCAL_RELEASE_MIN_AGE_S + 1, 60))
+    command_id = str(uuid.uuid4())
+    assert mcs_setup.main(args + ["--command-id", command_id]) == 0
+    applied = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert old < young and applied == {"command_id": command_id, "outcome": "applied", "error": None,
+                                       "control": "local_release", "through": old}
+    assert mcs_setup.main(args + ["--command-id", command_id]) == 0
+    assert json.loads(capsys.readouterr().out.strip().splitlines()[-1]) == applied
+    with closing(Ledger(str(path))) as db:
+        [release] = db.artifacts("cloud_local_release")
+        assert json.loads(release["meta"]) == {
+            "command_id": command_id, "actor": "local-human", "reason": "synthetic",
+            "through": old, "before": now - cloud_policy.LOCAL_RELEASE_MIN_AGE_S}
+        assert len(db.artifacts("cloud_usage_reserve")) == 2
+
+
+@pytest.mark.parametrize("action", ["plan", "outstanding", "stop", "resume", "release-local"])
 def test_corrupt_provider_settings_never_open_control_or_report(world, monkeypatch, capsys, action):
     import ledger
     root, _, _ = world
@@ -329,7 +401,7 @@ def test_corrupt_provider_settings_never_open_control_or_report(world, monkeypat
     monkeypatch.setattr(ledger, "Ledger", lambda *args, **kwargs: pytest.fail("must not open writer"))
     monkeypatch.setattr(cli, "observe", lambda *args, **kwargs: pytest.fail("must not read reports"))
     args = ["cloud-llm", action]
-    if action in ("stop", "resume"):
+    if action in ("stop", "resume", "release-local"):
         args += ["--confirm-human", "--reason", "synthetic"]
     assert mcs_setup.main(args) != 0
     captured = capsys.readouterr()
@@ -432,7 +504,10 @@ def test_init_secret_storage_uses_dotenv_without_printing_secret_or_path(world, 
     monkeypatch.setattr(setup_integration, "ENV_PATH", str(root / ".env"))
     monkeypatch.setenv("MCS_ANTHROPIC_API_KEY", "synthetic-incoming-key")
     monkeypatch.delenv("MCS_SETUP_PASSWORD", raising=False)
+    # The key is validated with the other secrets but written only after config.json.
     assert mcs_setup._init_store_secrets(SimpleNamespace(yes=True), "synthetic") is None
+    assert not (root / ".env").exists()
+    assert mcs_setup._init_store_api_keys() is None
     assert cloud_policy.api_key(str(root)) == "synthetic-incoming-key"
     output = capsys.readouterr().out
     assert "synthetic-incoming-key" not in output and str(root) not in output
@@ -1113,3 +1188,26 @@ def test_cloud_budget_until_does_not_change_jev_deadline(monkeypatch):
     assert cli.budget_command(SimpleNamespace(until="2026-11-05")) == 0
     assert saved == [{"cloud_llm.until": "2026-11-05T23:59:59+09:00"}]
     assert cfg["semantic"]["until"] == "2026-11-30T23:59:59+09:00"
+
+
+@pytest.mark.parametrize(("given", "stored"), [
+    ("2026-12-31T23:59:59.5Z", "2026-12-31T23:59:59.500000+00:00"),
+    ("2026-12-31T23:59:59+0900", "2026-12-31T23:59:59+09:00"),
+    ("20261231T235959+09:00", "2026-12-31T23:59:59+09:00"),
+    ("2026-12-31T23:59:59+09:00", "2026-12-31T23:59:59+09:00"),
+])
+def test_cloud_budget_saves_times_in_a_form_python39_helpers_can_read(monkeypatch, given, stored):
+    # install.sh reads these with the PATH python3 (3.9), whose fromisoformat
+    # rejects 3.11-only spellings; the saved text must be the canonical form.
+    import config_edit
+
+    cfg = {"cloud_llm": {"mode": "off"}}
+    monkeypatch.setattr(cli, "_settings_for_edit", lambda: cfg)
+    saved = []
+    def apply(changes, defaults):
+        saved.append(changes)
+        return cfg, []
+    monkeypatch.setattr(config_edit, "apply", apply)
+    assert cli.budget_command(SimpleNamespace(until=given)) == 0
+    assert saved == [{"cloud_llm.until": stored}]
+    assert mcs_util.until_epoch(stored) == mcs_util.until_epoch(given)

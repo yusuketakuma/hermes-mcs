@@ -117,6 +117,25 @@ def test_unknown_and_low_memory_do_not_spawn(monkeypatch):
     assert backlog.memory_workers(32) == 0
 
 
+@pytest.mark.parametrize("level", ["1", "2", "4"])
+def test_critical_kernel_pressure_closes_background_admission(monkeypatch, level):
+    import llm_availability
+
+    def fake_run(argv, **kwargs):
+        output = {"/usr/sbin/sysctl": level if argv[-1] == "kern.memorystatus_vm_pressure_level"
+                  else str(16 * 2**30), "/usr/bin/memory_pressure":
+                  "System-wide memory free percentage: 60%\n"}[argv[0]]
+        return subprocess.CompletedProcess(argv, 0, output + "\n", "")
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(llm_availability, "_pressure_critical_last", False)
+    critical = level == "4"
+    # Free memory alone would admit both the shared gate and new pool workers.
+    assert extract_llm_resident._context_memory_available() is not critical
+    assert (backlog.memory_workers(32) == 0) is critical
+
+
 @pytest.mark.parametrize("context_only", [False, True])
 def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch, context_only):
     import extract_llm
@@ -1386,3 +1405,62 @@ def test_the_backlog_workers_spawn_only_while_the_stored_message_backlog_is_reop
     finally:
         owner.close()
     assert all(child.stopped for child in spawned)
+
+
+_CONTEXT_ONLY_WINDOW = {"cloud_llm": {
+    "mode": "on", "project_ids": [1], "provider": "anthropic", "max_concurrency": 4,
+    "routes": ["patient_context"], "window_start": "2026-11-01T00:00:00+09:00",
+    "window_budget_usd": 60, "reextract_backlog_until": "2999-01-01T00:00:00+09:00"}}
+
+
+def test_an_open_window_without_the_reextract_route_plans_no_backlog():
+    import cloud_policy
+    with_route = {"cloud_llm": {**_CONTEXT_ONLY_WINDOW["cloud_llm"], "routes": ["patient_context", "reextract"]}}
+    assert cloud_policy.reextract_backlog_window(_CONTEXT_ONLY_WINDOW)
+    assert not cloud_policy.reextract_planned(_CONTEXT_ONLY_WINDOW)
+    assert cloud_policy.reextract_planned(with_route)
+
+
+def test_indexed_worker_retires_when_the_window_is_open_but_the_route_is_not(carry_worker, monkeypatch, capsys):
+    import extract_llm
+    import mcs_util
+    state, _ = carry_worker
+    monkeypatch.setattr(mcs_util, "load_config", lambda: _CONTEXT_ONLY_WINDOW)
+    monkeypatch.setenv(extract_llm.cloud_policy.BACKLOG_WORKER_ENV, "1")
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: 4)
+    monkeypatch.setattr(extract_llm, "run_pending",
+                        lambda *a, **kw: pytest.fail("closed route admitted extract"))
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+    backlog.worker(991, index=0)
+    assert state.events == [] and state.closed
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert records[-1] == {**records[-1], "event": "cloud_worker_retired", "reason": "cloud_route_closed"}
+
+
+def test_no_backlog_worker_spawns_while_the_window_is_open_but_the_route_is_not(tmp_path, monkeypatch):
+    import extract_llm
+    (tmp_path / "data").mkdir()
+    monkeypatch.setattr(extract_llm.cloud_policy, "api_key", lambda *a: "synthetic-key")
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: min(2, limit))
+    spawned = []
+
+    class Child:
+        def __init__(self, command, **kw):
+            spawned.append("--context-only" in command)
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(backlog.subprocess, "Popen", Child)
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        owner.sync(_CONTEXT_ONLY_WINDOW)
+        assert spawned == [True, True]            # patient-context children only
+    finally:
+        owner.close()

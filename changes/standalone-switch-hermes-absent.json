@@ -1,0 +1,11 @@
+{
+  "category": "added",
+  "title": "Hermes を削除済みの環境で、人の確認に基づいて独立実行へ切り替えられるようにする",
+  "summary": "Hermes 連携から独立実行へ切り替える mcs setup services は、以前の Hermes の定期処理が止まったことを確かめてから独立ホストを登録します。Hermes を先に削除した環境では定期処理の一覧を確認できないため、何度実行しても切り替えられませんでした。今後は、設定された Hermes の実行ファイルがない場合に限り、mcs setup services --hermes-absent --confirm-human --reason <理由> で、以前の定期処理は動いていないものとして切り替えられます。確認の理由と日時は常駐設定の管理記録に残ります。実行ファイルが残っている場合や、人の確認と理由がない場合は、従来どおり何も変更せずに止まり、止まったときはこの指定を案内します。",
+  "upgrade": "この版への更新だけで使えます。",
+  "details": [
+    "service_management.retire_previous_runtime に hermes_absent を追加。inspect_cron が確認できず、かつ実行ファイルが存在しないときだけ使う。",
+    "STANDALONE.md に手順を追記。"
+  ],
+  "refs": ["mcs/ops/services/service_management.py", "mcs/ops/mcs_setup.py", "docs/guides/STANDALONE.md"]
+}

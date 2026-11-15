@@ -216,8 +216,12 @@ def _prepare_context_rejection(stage, error):
 
 def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
                   background=False, cloud_only=False, load_checkpoints=True, deadline=None,
-                  blocked_reasons=None, blocked_rows=None) -> tuple[list, int, int]:
-    """Load contexts/checkpoints on the calling thread; settle prefiltered rows."""
+                  blocked_reasons=None, blocked_rows=None, refuse_owned=False) -> tuple[list, int, int]:
+    """Load contexts/checkpoints on the calling thread; settle prefiltered rows.
+
+    ``refuse_owned`` (the run's local-only pass) blocks a row a durable
+    reservation owns as cloud_unit_unresolved instead of preparing it; a
+    superseded row is never owned here and stays a guarded local attempt."""
     jobs = []
     skipped = 0
     blocked = 0
@@ -286,10 +290,17 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         # A computed 'off' (mode omitted, key unreadable) proves nothing.
         # A superseded row already committed to its local attempt: the old
         # unit's ownership is preserved in place, never restored here.
-        owned = mode == "off" and allow_cloud and not superseded and rebuild_state is None \
+        unit_owned = mode == "off" and (allow_cloud or refuse_owned) and not superseded \
+            and rebuild_state is None \
             and cloud_policy.owns_request(ledger.db, route="reextract",
                                           project_id=r["project_id"], message_id=r["message_id"]) \
             and not cloud_policy.scope_revoked(cfg, "reextract", r["project_id"])
+        if unit_owned and refuse_owned:
+            # A local-only pass never adopts a unit a durable reservation owns:
+            # only the cloud path runs its recovery and unresolved hold.
+            block("cloud_unit_unresolved")
+            continue
+        owned = unit_owned and allow_cloud
         if owned:
             # A closed send route retires new sends, never the unit a prior
             # reservation created: rebuild the provider so recovery, the

@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "ログ処理プログラムの状態が不正なとき mcs_setup.py check が traceback で終わる問題を修正",
+  "summary": "~/.mcs-recovery の権限不正・受領記録の破損・ログ処理プログラムの欠落などで、mcs_setup.py check（mcs doctor を含む）がPythonのエラー表示だけで終わり、ほかの診断結果も表示されない問題を修正しました。「ログ処理プログラムの配置を確認できません（固定のコード）」と install.sh の再実行を問題行として表示し、ほかの確認結果も続けて表示します。",
+  "upgrade": "追加操作は不要です。表示された場合は、導入時の省略オプションを維持して install.sh を再実行してください。",
+  "details": [
+    "service_management の script_drift・check_runtime（独立動作の常駐設定の比較）・check_standalone_health で LogInstallError を捕捉し、固定コードだけを含む問題行を返す。"
+  ],
+  "refs": ["mcs/ops/services/service_management.py", "tests/ops/test_mcs_setup_services.py"]
+}

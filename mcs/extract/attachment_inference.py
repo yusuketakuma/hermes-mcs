@@ -167,24 +167,25 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
     if attachment_ocr.config_error(cfg) or not cfg.get('attachment_ocr', {}).get('enabled', False):
         return counts
     deadline = min(deadline or time.monotonic() + 120, time.monotonic() + 900)
+    # deferred_reason is a fixed code for the last deferral; it is counted, never retried as a failure.
     if ledger.db.in_transaction:
-        return {**counts, 'deferred': 1}
+        return {**counts, 'deferred': 1, 'deferred_reason': 'ledger_in_transaction'}
     generation = writer_lock.updater_state()
     if generation[0] or not extract_llm._writer_current(full=True):
-        return {**counts, 'deferred': 1}
+        return {**counts, 'deferred': 1, 'deferred_reason': 'writer_not_current'}
     if not _recover_paid_results(ledger, generation, deadline=deadline):
         if stage == 'cloud':
-            return {**counts, 'deferred': 1}
+            return {**counts, 'deferred': 1, 'deferred_reason': 'paid_recovery_pending'}
         counts['paid_recovery_pending'] = True
     free = extract_llm.disk_free_mb(ledger.db)
     if free is None or free < extract_llm.disk_floor_mb():
-        return {**counts, 'deferred': 1}
+        return {**counts, 'deferred': 1, 'deferred_reason': 'disk_floor'}
     if not extract_llm._context_memory_available():
-        return {**counts, 'deferred': 1}
+        return {**counts, 'deferred': 1, 'deferred_reason': 'memory_guard'}
     root = attachment_ocr._data_root(ledger)
     fd = writer_lock.acquire_run_lock(str(root / ('attachment_inference_' + stage + '.lock')))
     if fd is None:
-        return {**counts, 'deferred': 1}
+        return {**counts, 'deferred': 1, 'deferred_reason': 'job_lock_busy'}
     try:
         # Alternate recent active patients with a keyset history lane.
         from safe_io import atomic_write, read_json_nofollow
@@ -251,6 +252,7 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
                 history = _history_snapshot(ledger.db, source) if stage == 'cloud' else None
                 if stage == 'cloud' and history is None:
                     counts['deferred'] += 1
+                    counts['deferred_reason'] = 'history_unavailable'
                     continue
                 used += 1
                 after, after_page = position, page['page']
@@ -279,11 +281,14 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
                             or not _save(ledger, source, cfg, generation, stage, result, meta, unit, local,
                                      deadline=deadline)):
                         counts['deferred'] += 1
+                        counts['deferred_reason'] = 'result_held'
                     else:
                         counts['done'] += 1
-                except (cloud_inference.CloudFallback, cloud_client.CloudNotSent, OSError, ValueError, sqlite3.Error):
+                except (cloud_inference.CloudFallback, cloud_client.CloudNotSent, OSError, ValueError, sqlite3.Error) as exc:
                     # Paid response uncertainty is retained by the shared unit; never local-fallback or discard.
                     counts['deferred'] += 1
+                    counts['deferred_reason'] = ('writer_busy' if str(exc) == 'attachment_inference_writer_busy'
+                                                 else 'inference_deferred')
             if finished:
                 after, after_page = position + 1, 0
         if priority:

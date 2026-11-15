@@ -15,7 +15,8 @@ import _mcs_path  # noqa: E402, F401
 from cli_args import JapaneseArgumentParser as _JapaneseParser  # noqa: E402
 import mcs_runtime  # noqa: E402
 from update_policy import release_tag  # noqa: E402
-from mcs_util import HOME, load_config  # noqa: E402
+import install_options_contract  # noqa: E402
+from mcs_util import HOME, ProviderSettingsUnreadable, load_config  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -37,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
             print("復旧ツールが見つかりません。担当者に導入状態の確認を依頼してください。", file=sys.stderr)
             return 1
         import runtime_inspection
-        from run_log_install import helper_path, LogInstallError
+        from run_log_install import verify_installed_helper, LogInstallError
 
         try:
             if not opts.status and "\nINTERACTIVE_GUIDE_VERSION = 1\n" not in tool.read_text(encoding="utf-8"):
@@ -53,8 +54,10 @@ def main(argv: list[str] | None = None) -> int:
             wrapped = command[1:2] == ["-I"]
             if (command[7:] if wrapped else command) != [python, str(tool), "--if-stale"]:
                 raise ValueError
+            # An update promotes the receipt without re-rendering this plist,
+            # so any verified immutable generation is the deployed helper.
             if wrapped and (command[5] != str(Path(HOME).resolve() / "data")
-                    or command[2] != helper_path(HOME, tool.parent, require_installed=True)):
+                    or command[2] != verify_installed_helper(HOME, tool.parent, command[2])):
                 raise ValueError
         except (OSError, ValueError, TypeError, AttributeError, ExpatError, LogInstallError):
             print("独立した復旧用の実行環境を確認できません。担当者に復旧ツールの導入状態を確認してもらってください。")
@@ -69,8 +72,8 @@ def main(argv: list[str] | None = None) -> int:
     if not os.environ.get("MCS_LIFECYCLE_PINNED"):
         try:
             python = mcs_runtime.python_executable(load_config())
-        except ValueError:
-            python = sys.executable  # doctor must explain an invalid mode
+        except (ValueError, ProviderSettingsUnreadable):
+            python = sys.executable  # doctor must explain an invalid mode or unreadable settings
         if os.path.abspath(python) != os.path.abspath(sys.executable):
             if not os.access(python, os.X_OK):
                 if args.command != "doctor":
@@ -117,16 +120,17 @@ def main(argv: list[str] | None = None) -> int:
             update = _JapaneseParser(prog="mcs update", description="更新内容の確認・更新の実行・元の版への復帰を行います。")
             update.add_argument("phase", nargs="?", default="guide", choices=("guide", "plan", "apply", "rollback"), help="guide: 対話形式の更新案内 / plan: 変更せず更新内容を確認（JSON出力） / apply: 更新を実行 / rollback: 元の版に戻す")
             update.add_argument("--to", help="更新する版（例: v1.0.23。省略時: 最新の正式版）")
-            update.add_argument("--no-fetch", action="store_true", help="通信せず、取得済みの版情報を使う（planでは常に有効）")
+            update.add_argument("--no-fetch", action="store_true", help="版情報の事前取得を省き、取得済みの版情報を使う（planでは常に有効。apply の版の照合は通信する）")
             update.add_argument("--reinstall", action="store_true", help="更新時に必要なソフトと設定も再導入する")
-            update.add_argument("--install-arg", action="append", default=[], help="再導入に渡すオプション（例: --install-arg=--no-llm。複数指定可）",
-                                choices=("--no-llm", "--no-brew", "--no-plugin",
-                                         "--no-recovery"))
+            update.add_argument("--install-arg", action="append", default=[], help="再導入に渡すオプション（--reinstall と併用。例: --install-arg=--no-llm。複数指定可）",
+                                choices=sorted(install_options_contract.OPTIONS))
             opts = update.parse_args(rest)
             if opts.to and not release_tag(opts.to):
                 update.error("--to には公開版を指定してください（例: --to v1.0.23）")
             if opts.phase != "apply" and (opts.reinstall or opts.install_arg):
                 update.error("--reinstall と --install-arg は更新の実行（apply）でのみ使えます")
+            if opts.install_arg and not opts.reinstall:
+                update.error("--install-arg は --reinstall と併用してください")
             if opts.phase == "rollback":
                 if opts.to or opts.no_fetch:
                     update.error("元の版に戻す操作（rollback）では --to と --no-fetch は指定できません")
@@ -134,7 +138,13 @@ def main(argv: list[str] | None = None) -> int:
                          str(REPO / "mcs/ops/mcs_update.py"), "rollback"])
             cmd = [sys.executable, str(REPO / "scripts/mcs_upgrade.py"),
                    "--repo", str(REPO)]
-            if mcs_runtime.standalone(load_config()):
+            try:
+                standalone = mcs_runtime.standalone(load_config())
+            except (ValueError, ProviderSettingsUnreadable):
+                print("設定（実行方法または提供元設定）を確認できないため、更新を開始しません。"
+                      "設定を保持したまま mcs doctor で状態を確認してください。", file=sys.stderr)
+                return 1
+            if standalone:
                 cmd.append("--installed-standalone")
             if opts.phase == "plan" or opts.no_fetch:
                 cmd.append("--no-fetch")
@@ -163,7 +173,8 @@ def main(argv: list[str] | None = None) -> int:
                 except (ValueError, RecursionError):
                     print("更新内容の確認結果を読み取れませんでした（JSON形式ではありません）。更新は実行していません。管理者に確認してください。", file=sys.stderr)
                     return 1
-                return 1 if report.get("route") == "blocked" else 0
+                # A noop route can still carry blockers (interrupted update, corrupt record).
+                return 1 if report.get("route") == "blocked" or report.get("blockers") else 0
             os.execv(sys.executable, cmd)
         case _:
             ap.error("この操作には対応していません。--help で操作名を確認してください")

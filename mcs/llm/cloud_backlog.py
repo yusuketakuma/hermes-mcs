@@ -18,7 +18,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     import _mcs_path  # noqa: F401
 
-from run_log_install import helper_path, LogInstallError
+from run_log_install import current_helper, helper_path
 
 _parent = None
 
@@ -182,6 +182,9 @@ def request_slot(root, capacity):
 
 def memory_workers(limit):
     """Bound the pool by free memory after a ten-percent reserve and 256 MiB per worker."""
+    import llm_availability
+    if llm_availability.memory_pressure_critical():
+        return 0
     if sys.platform != "darwin":
         try:
             values = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines())
@@ -203,6 +206,13 @@ def memory_workers(limit):
         except (OSError, ValueError, subprocess.SubprocessError):
             return 0
     return max(0, min(limit, int((available - total / 10) // (256 * 1024 * 1024))))
+
+
+def capacity_reduced(index, limit):
+    """Whether an indexed worker is past the pool's memory target; one worker of
+    hysteresis, because its own resident memory is in the sample."""
+    capacity = memory_workers(limit)
+    return index >= min(limit, capacity + bool(capacity))
 
 
 class CloudBacklogPool:
@@ -268,11 +278,7 @@ class CloudBacklogPool:
         # Keep one worker of hysteresis: its resident memory changes the sample.
         if self.children and target > 0 and abs(target - len(self.children)) <= 1:
             target = min(settings["max_concurrency"], len(self.children))
-        inherited = os.environ.get("MCS_RUN_LOG_HELPER")
-        recovery = str(Path(inherited).parent) if inherited and os.path.isabs(inherited) else None
-        helper = helper_path(self.root, recovery, require_installed=True)
-        if inherited and inherited != helper:
-            raise LogInstallError("run_log_helper_unverified")
+        helper = current_helper(self.root, installed=helper_path)
         for _ in range(max(0, target - len(self.children))):
             index = next(i for i in range(32) if i not in self.indices.values())
             child = subprocess.Popen(
@@ -478,8 +484,7 @@ def worker(parent, *, index=None, context_only=False):
                               or index >= settings["max_concurrency"])
                     if time.monotonic() - capacity_checked >= 60:
                         capacity_checked = time.monotonic()
-                        capacity = memory_workers(settings["max_concurrency"])
-                        retire = retire or index >= min(settings["max_concurrency"], capacity + bool(capacity))
+                        retire = retire or capacity_reduced(index, settings["max_concurrency"])
                     if retire:
                         _event("cloud_worker_retired", reason=(
                             "cloud_mode_off" if settings["mode"] != "on"
@@ -508,6 +513,7 @@ def worker(parent, *, index=None, context_only=False):
                     wait(blocked if blocked in _WAIT_CODES else "cloud_blocked")
                     continue
                 started = time.monotonic()
+                tally_before = dict(cloud_policy.TALLY_COST)
                 try:
                     if phase % 2 == 0:
                         waiting["code"] = None
@@ -573,6 +579,8 @@ def worker(parent, *, index=None, context_only=False):
                         "completion_basis": "saved_work_units_not_patient_clinical_or_delivery_completion",
                         "elapsed_s": round(time.monotonic() - started, 3), "ts": time.time()}
                     record.update(_pass_timing_observation(result))
+                    record["tally_rebuilds"] = cloud_policy.TALLY_COST["rebuilds"] - tally_before["rebuilds"]
+                    record["tally_s"] = round(cloud_policy.TALLY_COST["seconds"] - tally_before["seconds"], 3)
                     if not allow_exit_settle:
                         done = result.get("done")
                         record["done"] = done if type(done) is int and done >= 0 else 0
@@ -683,6 +691,13 @@ _SCAN_REFUSALS = frozenset({
 _REFILL_STOP_CODES = frozenset({"sqlite_error", "os_error", "value_error", "type_error", "key_error",
                                 "runtime_error", "other"})
 
+_SOURCE_CHANGED_CODES = frozenset({
+    "quota", "source", "scans", "version", "contract", "occurrence", "fence", "adoption", "deadline",
+})
+_NO_DUE_LANE_KEYS = tuple(f"wait_no_due_{lane}_{code}" for lane, codes in (
+    ("A", ("not_needed", "local_not_ready", "backoff", "source_incomplete")),
+    ("B", ("none_incomplete", "backoff", "cloud_hold")), ("C", ("none_unaudited", "backoff"))) for code in codes)
+
 
 def _bounded_pass_code(value):
     """Identifier-shaped failure identity only; free text never qualifies."""
@@ -728,13 +743,20 @@ def _context_pass_observation(result):
     covered = result.get("covered")
     if type(covered) is bool:
         record["covered"] = covered
+    changed = result.get("changed")
+    if record["status"] == "source_changed" and changed is not None:
+        record["changed"] = changed if type(changed) is str and changed in _SOURCE_CHANGED_CODES else "unclassified"
+    detail = result.get("detail")
+    if "reason" in record and detail is not None:
+        record["detail"] = detail if _bounded_pass_code(detail) else "unclassified"
     # Real per-pass bounds: one try-wide interrupt, 8 candidates x at most 2
     # waiting additions (quota-fail double count or two single-count scopes),
     # and at most 2 pending reads per candidate.
     for key, limit in (("waiting", 16), ("scan_reads", 16), ("scan_interrupts", 1),
                        ("wait_no_eligible_sources", 8), ("wait_no_due_lane", 16),
                        ("wait_generation_quota", 8), ("wait_readiness_unverified", 16),
-                       ("wait_dependency_incomplete", 16)):
+                       ("wait_dependency_incomplete", 16), ("wait_unit_claimed", 8),
+                       *((key, 16) for key in _NO_DUE_LANE_KEYS)):
         value = result.get(key)
         if type(value) is int and 0 <= value <= limit:
             record[key] = value
@@ -743,12 +765,23 @@ def _context_pass_observation(result):
 
 def _context_retry_delay(result):
     """Backoff for one context pass. selection_busy means another worker
-    holds the selection lock and is doing real work — retrying in seconds
-    just adds convoy noise, so wait longer."""
+    holds the selection lock (usually scanning, not necessarily doing work);
+    a scan that covered every patient and found nothing startable rarely
+    finds work seconds later. A partial slice or a refused scan keeps the
+    short wait so the rotation reaches the remaining patients. A shared scan
+    idle (scan_idle_s) sleeps until it expires, so one worker scans next and
+    the others meet selection_busy."""
     if result.get("done"):
         return 1
-    if result.get("reason") == "patient_context_selection_busy":
+    reason = result.get("reason")
+    if reason == "patient_context_selection_busy":
         return 20
+    idle = result.get("scan_idle_s")
+    if type(idle) in (int, float) and idle > 0:
+        return min(60, max(5, idle))
+    if (reason in ("patient_context_waiting", "patient_context_scan_incomplete")
+            and result.get("covered") is True):
+        return 60
     return 5
 
 
@@ -759,12 +792,19 @@ def _context_worker(ledger, initial, index):
     import writer_lock
     from mcs_util import HOME, load_config
 
+    capacity_checked = float("-inf")
     with local_llm.scheduling_scope(os.path.join(HOME, "data")):
         while owner_alive() and writer_lock.updater_state() == initial and not initial[0]:
             settings = cloud_inference.resolve_cloud_settings(load_config())
             if (settings["mode"] != "on" or index is not None and index >= settings["max_concurrency"]
                     or not extract_llm_resident._context_memory_available()):
                 return
+            # The worker holds no paid result between passes, so retiring here loses none.
+            if index is not None and time.monotonic() - capacity_checked >= 60:
+                capacity_checked = time.monotonic()
+                if capacity_reduced(index, settings["max_concurrency"]):
+                    _event("cloud_worker_retired", reason="capacity_reduced")
+                    return
             with writer_lock.capture_writer_refusal() as diagnostic:
                 result = extract_llm_resident._background_context_refresh(
                     ledger, initial, cloud_worker=True)

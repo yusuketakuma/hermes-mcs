@@ -65,8 +65,12 @@ def test_measurement_result_is_rechecked_before_ephemeral_delivery(tmp_path, mod
                action="list", measurement_view=True, list=view, projects=[123],
                processed_at=time.time() - (10 if mode == "expired" else 0))
         await actions.sweep_followups()
-        if mode in ("expired", "revoked", "route_changed"):
+        if mode == "revoked":
             assert not app.client.messages
+            return
+        if mode in ("expired", "route_changed"):
+            assert [m["text"] for m in app.client.messages] == [
+                "表示を確認できませんでした。もう一度開いてください。"]
             return
         assert len(app.client.messages) == 1
         rendered = json.dumps(app.client.messages, ensure_ascii=False)

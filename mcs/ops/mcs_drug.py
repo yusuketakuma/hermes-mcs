@@ -234,6 +234,7 @@ def bundled_status(cfg, *, directory: Path = BUNDLE, today: date | None = None) 
                       "next_boundary_on": dictionary.source.next_boundary_on}
         as_of, boundary = _build_dates(dictionary.source, today)
     state = ("bundle_unavailable" if bundled is None
+             else "missing" if error == "missing_dictionary"
              else "invalid" if error is not None
              else "unconfigured" if setting is None
              else "missing" if dictionary is None

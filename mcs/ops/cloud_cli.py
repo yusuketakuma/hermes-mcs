@@ -10,6 +10,7 @@ import os
 import re
 from pathlib import Path
 import sqlite3
+import sys
 import time
 from types import SimpleNamespace
 import uuid
@@ -253,6 +254,21 @@ def _backlog_setting_blockers(settings, route):
     if reason:
         reasons.append(reason)
     return reasons
+
+
+_REEXTRACT_BLOCKERS = {
+    "cloud_mode_not_on": "クラウド処理が on ではありません（mode、または mode 省略時のAPIキー）",
+    "route_missing": "cloud_llm.routes に reextract がありません",
+    "window_ended": "終了日時を過ぎています",
+    "project_scope_empty": "project_ids が空です",
+}
+
+
+def _warn_reextract_blockers(blockers):
+    if blockers:
+        print("注意: 保存済み投稿の再抽出の再開期間を設定していますが、次の理由でクラウドへ送信しません: "
+              + "、".join(_REEXTRACT_BLOCKERS.get(code, code) for code in blockers)
+              + "。設定は認証された設定変更経路で見直してください")
 
 
 def _route_counts(db, cfg, settings, deadline):
@@ -503,10 +519,27 @@ def _comparison_report(log):
             "rate_numerators": {label: pair[0] for label, pair in rates.items()}}
 
 
-def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds_wanted=False):
+def observe(cfg, *, root=None, days=None, since=None, project=None, evidence_holds_wanted=False):
     """Compute a single bounded read snapshot without sending or persisting anything."""
-    if type(days) is not int or not 1 <= days <= 62:
-        raise ValueError("days_invalid")
+    now = time.time()
+    if since is not None:
+        if days is not None:
+            raise ValueError("period_conflict")
+        try:
+            first = date.fromisoformat(since)
+        except (TypeError, ValueError):
+            raise ValueError("since_invalid") from None
+        # The averages divide by the JST calendar days actually read, today included;
+        # only plan/estimate (the evidence-hold readers) show them, so only they cap the period.
+        days = (datetime.fromtimestamp(now, policy.JST).date() - first).days + 1
+        if days < 1 or (evidence_holds_wanted and days > 62):
+            raise ValueError("since_invalid")
+        start = datetime.combine(first, datetime.min.time(), policy.JST).timestamp()
+    else:
+        days = 14 if days is None else days
+        if type(days) is not int or not 1 <= days <= 62:
+            raise ValueError("days_invalid")
+        start = now - days * 86400
     settings, errors, key = _settings(cfg, root)
     if policy.blocking_errors(errors):
         raise ValueError("cloud_config_invalid")
@@ -514,10 +547,6 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
     # Estimate the scope that auto mode would enable once a cap is set; whether it may send now is send_decision.
     planning = policy.cloud_config(cfg, key_present=True, require_cost_limit=False)[0]
     planning["provider"], planning["model"] = settings["provider"], settings["model"]
-    now = time.time()
-    start = now - days * 86400
-    if since is not None:
-        start = datetime.combine(date.fromisoformat(since), datetime.min.time(), policy.JST).timestamp()
     if project is not None:
         if type(project) is not int or project <= 0:
             raise ValueError("project_invalid")
@@ -794,6 +823,15 @@ def _incomplete_report(settings, *, key, error, interrupted, completed, accounti
     return report
 
 
+def apply_local_release_tx(db, req, now):
+    """Record the human release of old unresolved requests to local processing, with its receipt."""
+    through = policy.local_release_tx(
+        db, {"command_id": req["command_id"], "actor": req["actor"], "reason": req["reason"]}, now)
+    if through is None:
+        return "cloud_release_nothing", {}
+    return None, {"reason": req["reason"], "control": "local_release", "through": through}
+
+
 def apply_control_tx(db, req, now):
     """Write global control/circuit and its receipt in the caller's existing transaction."""
     try:
@@ -871,16 +909,12 @@ def command(args):
                              | {"planned": len(result["plan"]["units"]) if result["plan"] else 0},
                              ensure_ascii=False, indent=2))
             return 0 if result["state"] in ("complete", "bundle_full") else 1
-        if action in ("stop", "resume", "local-rebuild-approve"):
-            from writer_lock import acquire_run_lock, wait_run_lock, code_stamp
-            expected_code = code_stamp()
+        if action in ("stop", "resume", "release-local", "local-rebuild-approve"):
             if not args.confirm_human or not mcs_util.valid_text(args.reason, 2000):
                 print("--confirm-human と --reason による人の確認が必要です")
                 return 1
-            from ledger import Ledger
             import mcs_requests
-            import notify_spool
-            req = {"version": 1, "cmd": "ops.cloud_" + action,
+            req = {"version": 1, "cmd": "ops.cloud_" + action.replace("-", "_"),
                 "command_id": args.command_id or str(uuid.uuid4()), "actor": args.actor,
                 "human_confirmed": True, "project_id": None, "reason": args.reason}
             if action == "local-rebuild-approve":
@@ -893,28 +927,12 @@ def command(args):
             if error:
                 print("クラウド操作: 指定を確認してください（" + error + "）")
                 return 1
-            path = Path(mcs_util.HOME) / "data" / "ledger.db"
-            if path.is_symlink() or not path.is_file():
-                raise ValueError("ledger_unavailable")
-            lock_fd = acquire_run_lock(str(path.parent / "run.lock"))
-            if lock_fd is None:
-                lock_fd = wait_run_lock(str(path.parent / "run.lock"), wait_s=5.0,
-                    expected_code_stamp=expected_code,
-                    marker_path=str(path.parent / "update_in_progress.marker"))
-            if lock_fd is None:
+            receipt = mcs_requests.apply_local_operation(req)
+            if receipt is None:
                 print("クラウド操作: ほかの保存処理が終わってから再試行してください")
                 return 3
-            try:
-                if (path.parent / "update_in_progress.marker").exists() or code_stamp() != expected_code:
-                    raise ValueError("update_in_progress")
-                if notify_spool.restore_writer_hold(str(path.parent)) is not None:
-                    raise ValueError("restore_in_progress")
-                with closing(Ledger(str(path))) as ledger:
-                    receipt = mcs_requests.apply_command(ledger, req)
-            finally:
-                os.close(lock_fd)
-            print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "control", "approved")},
-                             ensure_ascii=False))
+            print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "control", "approved")
+                              + (("through",) if action == "release-local" else ())}, ensure_ascii=False))
             return 0 if receipt["outcome"] == "applied" else 1
         if action == "outstanding":
             import cloud_observation
@@ -926,7 +944,7 @@ def command(args):
                 result = cloud_observation.unknown("observation_unavailable")
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0 if result["state"] == "complete" else 1
-        report = observe(cfg, days=getattr(args, "days", 14), since=getattr(args, "since", None), project=getattr(args, "project", None),
+        report = observe(cfg, days=getattr(args, "days", None), since=getattr(args, "since", None), project=getattr(args, "project", None),
                          evidence_holds_wanted=action in ("plan", "estimate"))
         log_verified = "artifact_log" in report.get("sections_verified", ("artifact_log",))
         if action == "log":
@@ -940,10 +958,20 @@ def command(args):
                                      for key in ("state", "incomplete_reason", "interrupted_section")}
         print(json.dumps(result, ensure_ascii=False, indent=2))
         print("件数・文字数からの試算です。Unicode文字数は実トークン数ではなく、修復・再試行・追加文脈の量は確定していません。")
+        if action in ("plan", "estimate"):
+            _warn_reextract_blockers(result.get("reextract_backlog_blockers"))
         return 0
-    except (OSError, ValueError, sqlite3.Error, policy.AnthropicError, mcs_util.ProviderSettingsUnreadable):
-        print("クラウド処理: 設定または保存記録を確認できません。本文や認証情報は表示していません")
+    except (OSError, ValueError, sqlite3.Error, policy.AnthropicError, mcs_util.ProviderSettingsUnreadable) as error:
+        print(type(error) is ValueError and _PERIOD_ERRORS.get(str(error))
+              or "クラウド処理: 設定または保存記録を確認できません。本文や認証情報は表示していません")
         return 1
+
+
+_PERIOD_ERRORS = {
+    "days_invalid": "クラウド処理: --days は1〜62の整数で指定してください",
+    "since_invalid": "クラウド処理: --since は今日以前の日本時間の日付（YYYY-MM-DD、plan・estimate は今日から61日前まで）で指定してください",
+    "period_conflict": "クラウド処理: --since と --days は同時に指定できません",
+}
 
 
 _BUDGET_KEYS = {"daily_usd": "daily_cost_limit_usd", "monthly_usd": "monthly_cost_limit_usd"}
@@ -983,7 +1011,9 @@ def _time_value(text, *, end):
         date.fromisoformat(text)
         text += "T23:59:59+09:00" if end else "T00:00:00+09:00"
     mcs_util.until_epoch(text)
-    return text
+    # Save the canonical form: Python 3.9 helpers in install.sh cannot read
+    # 3.11-only spellings such as '.5', '+0900' or the basic format.
+    return datetime.fromisoformat(text).isoformat()
 
 
 def budget_command(args):
@@ -1058,7 +1088,9 @@ def budget_command(args):
     if errors:
         print("設定に誤りがあるため予算を表示していません。mcs_setup.py check で確認してください")
         return 1
+    # API key presence is plan/check's concern; an omitted mode is judged as if a key exists.
     blocker_settings = policy.cloud_config(cfg, key_present=True)[0]
+    _warn_reextract_blockers(_backlog_setting_blockers(blocker_settings, "reextract"))
     print(json.dumps({"daily_cost_limit_usd": settings["daily_cost_limit_usd"],
                       "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
                       "period_budget_usd": settings["window_budget_usd"],
@@ -1084,13 +1116,16 @@ def providers_command(args):
         order = getattr(args, "priority", None)
         if order is not None:
             changes["cloud_llm.provider_order"] = order.split(",")
-            changes["cloud_llm.model"] = None
         cfg = _settings_for_edit()
         if not isinstance(cfg, dict):
             raise ValueError("config_unreadable")
         settings, errors = policy.cloud_config(cfg)
         if errors:
             raise ValueError
+        if order is not None and provider is None and settings["provider"] == "auto":
+            # A single explicit model pins the auto choice; drop it so the new order selects.
+            # A fixed provider ignores the order, so its model (and purpose profiles) stay.
+            changes["cloud_llm.model"] = None
         budgets = {name: dict(caps) for name, caps in settings["provider_budgets"].items()}
         for name in policy.PROVIDERS:
             daily, monthly = (getattr(args, name + suffix, None) for suffix in ("_daily_usd", "_monthly_usd"))
@@ -1148,6 +1183,10 @@ def providers_command(args):
             print("AI利用先: 用途別のモデル設定を確認できません。")
             return 1
         profiles[purpose] = {"model": selection["model"], "effort": selection["effort"]}
+    if order is not None and settings["provider"] != "auto":
+        # Kept for a later switch to auto; say so instead of refusing (GA-cloud-credential-setup-8).
+        print("注意: 利用先が " + settings["provider"] + " に固定されているため、保存した優先順位は"
+              "利用先を auto に切り替えるまで使われません。", file=sys.stderr)
     print(json.dumps({"saved": bool(changes), "provider": settings["provider"], "model": settings["model"],
         "profiles": profiles, "profile_changes": profile_changes,
         "provider_order": settings["provider_order"], "provider_budgets": settings["provider_budgets"],
@@ -1201,12 +1240,18 @@ def provider_dialog(root, *, admission=None, on_saved=None):
 
 
 def add_parsers(sub):
-    p = sub.add_parser("cloud-llm", help="外部AIの件数・費用を送信せずに試算、照会します")
+    p = sub.add_parser("cloud-llm", help="外部AIの試算・照会（送信しない）と、利用先・予算の設定、人の確認を伴う停止・再開を行います")
     actions = p.add_subparsers(dest="cloud_action", required=True)
+    read_only_help = {
+        "plan": "保存済み記録から件数・費用を送信せずに試算（estimate と同じ出力）",
+        "estimate": "保存済み記録から件数・費用を送信せずに試算（plan と同じ出力）",
+        "log": "保存済みの外部AI利用記録を表示（送信しない）",
+        "compare": "ローカルAIと外部AIの抽出結果の比較を集計（送信しない）",
+    }
     for action in ("plan", "estimate", "log", "compare"):
-        q = actions.add_parser(action)
-        q.add_argument("--days", type=int, default=14)
-        q.add_argument("--since", help="日本時間の日付 YYYY-MM-DD")
+        q = actions.add_parser(action, help=read_only_help[action])
+        q.add_argument("--days", type=int, help="集計日数（1〜62、既定14）")
+        q.add_argument("--since", help="日本時間の日付 YYYY-MM-DD（--daysとは併用不可、plan・estimateは61日前まで）")
         if action == "log":
             q.add_argument("--project", type=int)
         q.set_defaults(fn=command)
@@ -1240,8 +1285,11 @@ def add_parsers(sub):
     q.add_argument("--semantic-backlog-until", dest="semantic_backlog_until",
                    help="意味解析の未処理分に限り、この日時までクラウド送信を再開。同じ費用上限が必要。none で終了")
     q.set_defaults(fn=budget_command, cloud_action="budget")
-    for action in ("stop", "resume"):
-        q = actions.add_parser(action, help="人の確認と記録を伴うクラウド処理の" + ("停止" if action == "stop" else "再開"))
+    for action in ("stop", "resume", "release-local"):
+        q = actions.add_parser(action, help=(
+            "結果を確認できない古い外部AI要求を待たず、同じ入力のローカル処理を許可（人の確認と記録を伴う。再送はしない）"
+            if action == "release-local"
+            else "人の確認と記録を伴うクラウド処理の" + ("停止" if action == "stop" else "再開")))
         q.add_argument("--confirm-human", action="store_true")
         q.add_argument("--reason", required=True)
         q.add_argument("--actor", default="local-human")

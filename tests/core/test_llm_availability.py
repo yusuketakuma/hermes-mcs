@@ -2,6 +2,8 @@
 import json
 import sqlite3
 
+import pytest
+
 import llm_availability as availability
 import mcs_queries
 
@@ -82,3 +84,35 @@ def test_a_cooldown_or_down_stamp_ahead_of_the_clock_never_parks_the_lane(tmp_pa
         assert availability.circuit_open_s(db) == 0.0
     finally:
         db.close()
+
+
+def test_critical_memory_pressure_reports_once_and_unknown_never_defers(monkeypatch, capsys):
+    import subprocess
+    levels = iter(["4\n", "4\n", "2\n", "garbage\n"])
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, next(levels), "")
+
+    monkeypatch.setattr(availability.sys, "platform", "darwin")
+    monkeypatch.setattr(availability.subprocess, "run", fake_run)
+    monkeypatch.setattr(availability, "_pressure_critical_last", False)
+    assert availability.memory_pressure_critical()
+    assert availability.memory_pressure_critical()
+    assert not availability.memory_pressure_critical()  # WARN is not critical
+    assert not availability.memory_pressure_critical()  # unreadable adds no deferral
+    assert calls[0] == ["/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"]
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert [(e["event"], e["reason"]) for e in events] == [
+        ("memory_pressure_deferral", "memory_pressure_critical"),
+        ("memory_pressure_cleared", "memory_pressure_critical")]
+
+    def failing_run(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, 2)
+
+    monkeypatch.setattr(availability.subprocess, "run", failing_run)
+    assert not availability.memory_pressure_critical()
+    monkeypatch.setattr(availability.sys, "platform", "linux")
+    monkeypatch.setattr(availability.subprocess, "run", lambda *a, **k: pytest.fail("probed off darwin"))
+    assert not availability.memory_pressure_critical()

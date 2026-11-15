@@ -42,6 +42,31 @@ def test_provider_selection_and_split_preserve_total_and_existing_settings(conf,
     assert shown["provider"] == "openai" and shown["model"] == "gpt-6-luna"
 
 
+def test_legacy_priority_keeps_a_fixed_provider_model_and_unpins_auto(conf):
+    import openai_client
+    base = json.loads(conf.read_text())
+    conf.write_text(json.dumps({**base, "cloud_llm": {**base["cloud_llm"], "provider": "openai",
+                                                      "model": openai_client.SOL_MODEL}}))
+    # A fixed provider ignores the order, so its explicit model must survive.
+    assert cli.providers_command(SimpleNamespace(provider=None, priority="openai,anthropic")) == 0
+    saved = json.loads(conf.read_text())["cloud_llm"]
+    assert saved["model"] == openai_client.SOL_MODEL and saved["provider_order"] == ["openai", "anthropic"]
+    conf.write_text(json.dumps({**base, "cloud_llm": {**base["cloud_llm"], "model": cloud_policy.MODEL}}))
+    # Under auto a single model would pin the choice, so the new order unpins it.
+    assert cli.providers_command(SimpleNamespace(provider=None, priority="openai,anthropic")) == 0
+    saved = json.loads(conf.read_text())["cloud_llm"]
+    assert "model" not in saved and saved["provider_order"] == ["openai", "anthropic"]
+
+
+def test_priority_under_a_fixed_provider_is_saved_with_a_notice(conf, capsys):
+    """GA-cloud-credential-setup-8: the order is kept for a later auto switch, and the user is told."""
+    base = json.loads(conf.read_text())
+    conf.write_text(json.dumps({**base, "cloud_llm": {**base["cloud_llm"], "provider": "openai"}}))
+    assert cli.providers_command(SimpleNamespace(provider=None, priority="anthropic,openai")) == 0
+    assert "auto に切り替えるまで使われません" in capsys.readouterr().err
+    assert json.loads(conf.read_text())["cloud_llm"]["provider_order"] == ["anthropic", "openai"]
+
+
 def test_provider_split_over_total_or_partial_caps_never_saves(conf):
     before = conf.read_bytes()
     assert cli.providers_command(SimpleNamespace(provider="auto", openai_daily_usd="26", openai_monthly_usd="15")) == 1
@@ -377,3 +402,29 @@ def test_profile_parser_aliases_and_finite_values():
     assert args.anthropic_backlog_profile == "haiku-medium"
     with pytest.raises(SystemExit):
         parser.parse_args(["cloud-llm", "providers", "--patient-context-profile", "unknown-profile"])
+
+
+def test_the_reextract_reopening_warns_when_routes_or_mode_would_send_nothing(conf, capsys):
+    def run(**kw):
+        return cli.budget_command(SimpleNamespace(daily_usd=None, monthly_usd=None, **kw))
+    cfg = json.loads(conf.read_text())
+    cfg["cloud_llm"]["routes"] = ["patient_context"]
+    conf.write_text(json.dumps(cfg))
+    assert run(period_usd="60", reextract_backlog_until="2999-01-01") == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert "cloud_llm.routes に reextract がありません" in lines[0]
+    assert json.loads(lines[-1])["reextract_backlog_blockers"] == ["route_missing"]
+    saved = json.loads(conf.read_text())["cloud_llm"]
+    # The window is saved as asked; the paid route is never widened by the budget command.
+    assert saved["routes"] == ["patient_context"]
+    assert saved["reextract_backlog_until"] == "2999-01-01T23:59:59+09:00"
+    cfg = json.loads(conf.read_text())
+    cfg["cloud_llm"].update(routes=["patient_context", "reextract"], mode="off")
+    conf.write_text(json.dumps(cfg))
+    assert run() == 0
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])["reextract_backlog_blockers"] == ["cloud_mode_not_on"]
+    cfg["cloud_llm"]["mode"] = "on"
+    conf.write_text(json.dumps(cfg))
+    assert run() == 0
+    out = capsys.readouterr().out
+    assert "注意" not in out and json.loads(out)["reextract_backlog_blockers"] == []

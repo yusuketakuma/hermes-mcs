@@ -525,6 +525,27 @@ def test_preflight_verdicts_cached_with_chunk(request):
     sf.validate_facts_doc(second["doc"])
 
 
+def test_preflight_guard_fires_before_chunk_llm_work(request):
+    """A Jev guard (budget/reservation) refusing the chunk preflight aborts
+    before the chunk's LLM call, so no generated output is discarded."""
+    import semantic_runtime
+
+    class GuardedJev(_FakeJev):
+        def evaluate(self, state, questions, deadline):
+            self.calls += 1
+            raise semantic_runtime.RuntimeGuardError("jev_budget")
+
+    prompts = []
+    jev = GuardedJev()
+    with pytest.raises(semantic_runtime.RuntimeGuardError):
+        extraction.extract_facts_v2(
+            lambda prompt: prompts.append(prompt) or "{}",
+            _member("一段落目です。" + "あ" * 50), ledger=_FakeLedger(request),
+            source_fingerprint=FP, chunk_size=40, jev_client=jev)
+    assert jev.calls == 1
+    assert prompts == []
+
+
 def test_deadline_between_chunks_leaves_pending():
     body = "あ" * 50 + "\n" + "い" * 50 + "\n" + "う" * 50
 

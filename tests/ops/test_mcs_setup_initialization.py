@@ -33,6 +33,72 @@ def test_init_heals_nondict_semantic(monkeypatch, tmp_path):
     assert cfg["signals"] == {"notify": True}
 
 
+def test_init_project_ids_without_mode_narrow_the_key_default(monkeypatch, tmp_path):
+    """--project-ids alone must reach config: with a key and no semantic block
+    the runtime default is every project."""
+    import semantic_policy
+    _init_env(monkeypatch, tmp_path, {"mcs_login_id": "u1", "notify_target": "local"})
+    monkeypatch.setattr(mcs_setup.sys, "argv",
+                        ["mcs_setup", "init", "--yes", "--project-ids", "101", "102"])
+    assert mcs_setup.main() == 0
+    cfg = json.loads((tmp_path / "c.json").read_text())
+    assert cfg["semantic"] == {"project_ids": [101, 102]}
+    effective, errors = semantic_policy.semantic_config(cfg, key_present=True)
+    assert errors == []
+    assert effective["mode"] == "assist" and effective["project_ids"] == [101, 102]
+
+
+@pytest.mark.parametrize("code,expected", [
+    ("invalid_env_update", "認証情報の形式が正しくありません"),
+    ("env_unreadable", "保存先の種類・所有者・権限を確認できない"),
+    ("env_parent_untrusted", "保存先の種類・所有者・権限を確認できない"),
+    ("env_too_large", "大きさの上限を超える"),
+    ("env_changed", "別の処理が.envを変更した"),
+    ("env_parent_changed", "保存先フォルダーが入れ替わった"),
+    (UnicodeDecodeError("utf-8", b"\xff", 0, 1, "synthetic"), "UTF-8の文字として読み取れない")])
+def test_init_env_refusal_names_the_storage_not_the_value(monkeypatch, tmp_path, capsys, code, expected):
+    _init_env(monkeypatch, tmp_path, {"mcs_login_id": "u1", "notify_target": "local"})
+    monkeypatch.setenv("MCS_SETUP_PASSWORD", "synthetic-password")
+    monkeypatch.setattr(lifecycle_io, "store_keychain", lambda account, password: True)
+
+    def refuse(path, updates):
+        raise code if isinstance(code, ValueError) else ValueError(code)
+
+    monkeypatch.setattr(lifecycle_io, "write_env", refuse)
+    assert mcs_setup.main(["init", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert expected in out and "synthetic-password" not in out
+    # Only the storage refusals point at the file type, owner and permissions.
+    assert ("保存先の種類・所有者・権限" in out) is (code in ("env_unreadable", "env_parent_untrusted"))
+
+
+def _slack_channels_cfg():
+    return {"mcs_login_id": "u1", "notify_target": "slack:C000000098",
+            "notify_system_target": "slack:C000000099",
+            "notify": {"interactive": "slack", "slack": {
+                "profile": "ops", "application_id": "A000000001", "team_id": "T000000001",
+                "channel_id": "C000000098", "allowed_user_ids": ["U000000001"], "project_ids": [1]}}}
+
+
+def test_interactive_slack_init_uses_the_wizard_profile_without_asking(monkeypatch, tmp_path):
+    _init_env(monkeypatch, tmp_path, _slack_channels_cfg())
+    monkeypatch.setattr(setup_wizard, "wizard", lambda cfg, **kwargs: 1)
+    monkeypatch.setattr(setup_wizard, "wizard_optional_features", lambda cfg: None)
+    monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail("profile must not be asked again"))
+    seen = []
+    monkeypatch.setattr(setup_wizard, "confirm_save",
+                        lambda cfg, *, plugin_profile, key_presence=None: seen.append(plugin_profile) or False)
+    assert mcs_setup.main(["init"]) == 130
+    assert seen == ["ops"]
+
+
+def test_init_profile_mismatch_stops_before_any_secret_write(monkeypatch, tmp_path, capsys):
+    _init_env(monkeypatch, tmp_path, _slack_channels_cfg())
+    monkeypatch.setattr(mcs_setup, "_init_store_secrets", lambda *a: pytest.fail("no secret before the profile check"))
+    assert mcs_setup.main(["init", "--yes", "--plugin-profile", "other"]) == 1
+    assert "slack_setup_binding_mismatch" in capsys.readouterr().out
+
+
 def test_init_self_identity_flags(monkeypatch, tmp_path):
     """--self-org/--self-professions write signals.self_* as a manual
     override of the MCS-derived self profile."""

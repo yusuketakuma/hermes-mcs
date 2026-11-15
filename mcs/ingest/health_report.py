@@ -97,7 +97,8 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
         value = strict_json(safe_io.read_private_bytes(path, limit=4096))
         if (not isinstance(value, dict) or set(value) - {
                 "at", "reason", "queue_status", "paid_recovery_pending", *counts, *writer_fields,
-                *failure_fields, *ack_fields, *policy_fields, 'failure_cohort', *snapshot_fields}
+                *failure_fields, *ack_fields, *policy_fields, 'failure_cohort', *snapshot_fields,
+                'local_deferred_reason'}
                 or not finite_number(value.get("at")) or not 0 <= value["at"] <= now):
             raise ValueError("ocr_status_invalid")
         # mcs_ocr records why its publish after new pages was deferred; the
@@ -113,6 +114,9 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
         if any(key in value and (type(value[key]) is not int or value[key] < 0) for key in counts):
             raise ValueError("ocr_status_invalid")
         if reason is None and any(key not in value for key in counts if key not in ("pending_failed", "local_done", "local_deferred")):
+            raise ValueError("ocr_status_invalid")
+        if 'local_deferred_reason' in value and not (type(value['local_deferred_reason']) is str
+                                                     and re.fullmatch(r'[a-z_]{1,40}', value['local_deferred_reason'])):
             raise ValueError("ocr_status_invalid")
         if "queue_status" in value and value["queue_status"] not in ("known", "partial"):
             raise ValueError("ocr_status_invalid")
@@ -168,7 +172,8 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     except (OSError, ValueError, TypeError, RecursionError):
         return {"state": "unknown", "reason": "attachment_ocr_status_corrupt"}
     detail = {"at": value["at"], "age_s": round(now - value["at"], 1),
-              **{key: value[key] for key in (*counts, "paid_recovery_pending", "queue_status", 'failure_cohort') if key in value},
+              **{key: value[key] for key in (*counts, "paid_recovery_pending", "queue_status", 'failure_cohort',
+                                             'local_deferred_reason') if key in value},
               **writer_detail, **failure_detail, **ack_detail, **policy_detail}
     if now - value["at"] > freshness_deadline(cfg):
         return {**detail, "state": "unknown", "reason": "attachment_ocr_status_stale"}
@@ -712,6 +717,29 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
     return reasons
 
 
+def semantic_stall_detail(db, now: float, *, seconds=None) -> dict:
+    """Counts that explain a semantic stall (never part of its verdict):
+    pending user-facing vs reprocess-only jobs, and the resident lanes'
+    last-24 h semantic turns that found the run lock busy. None = unread."""
+    from semantic_due_selection import _ARRIVAL_FIRST_SQL
+    try:
+        user_facing, reprocess = bounded_health_read(db, lambda _check: db.execute(
+            f"SELECT COALESCE(SUM({_ARRIVAL_FIRST_SQL}=0),0), "
+            # CASE order keeps json_extract away from malformed payloads
+            "COALESCE(SUM(CASE WHEN NOT json_valid(payload) THEN 0 "
+            "WHEN COALESCE(json_extract(payload,'$.reprocess_only'),0)=1 THEN 1 ELSE 0 END),0) "
+            "FROM fetch_jobs WHERE kind='semantic' AND state='pending'").fetchone(),
+            seconds=seconds)
+    except Exception:
+        user_facing = reprocess = None
+    try:
+        turns = llm_availability.semantic_turns_24h(db, now=now)
+    except Exception:
+        turns = None
+    return {"user_facing_pending": user_facing, "reprocess_pending": reprocess,
+            "resident_turns_24h": turns}
+
+
 HEALTH_OBSERVATION_S = 0.25
 NOTIFICATION_OBSERVATION_S = 2.0
 HEALTH_SQL_BUDGET_S = 30.0  # one shared window for every SQL read build_health owns
@@ -1092,6 +1120,7 @@ def build_health(db, result: dict, status: str,
             seconds=remaining())
     except Exception:
         _pending_rows = None
+    semantic_detail = semantic_stall_detail(db, now, seconds=remaining())
     source = ledger_key(db)
     coverage = cached_coverage(extract_llm.EXTRACT_VERSION, now, source)
     if coverage is None:
@@ -1340,12 +1369,13 @@ def build_health(db, result: dict, status: str,
                    "held_pinned_attachments": held_pins,
                    "incomplete_parts": incomplete_parts,
                    "part_holds": part_holds},
-        "semantic_jobs": ({"pending": _pending_rows[0]["c"],
-                           "oldest_age_s": (round(now - _pending_rows[0]["o"], 1)
-                                            if _pending_rows[0]["o"] else 0)}
-                          if _pending_rows is not None else
-                          {"pending": None, "oldest_age_s": None,
-                           "status": "unknown", "observed_at": now}),
+        "semantic_jobs": {**({"pending": _pending_rows[0]["c"],
+                              "oldest_age_s": (round(now - _pending_rows[0]["o"], 1)
+                                               if _pending_rows[0]["o"] else 0)}
+                             if _pending_rows is not None else
+                             {"pending": None, "oldest_age_s": None,
+                              "status": "unknown", "observed_at": now}),
+                          **semantic_detail},
         "extract_qc_jobs": ({"pending": _pending_rows[1]["c"],
                              "oldest_age_s": (round(now - _pending_rows[1]["o"], 1)
                                               if _pending_rows[1]["o"] else 0)}

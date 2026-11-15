@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "承認辞書の薬剤参考候補が抽出に届かない問題と、薬剤履歴の「照合中」表示の誤りを修正",
+  "summary": "承認済みの医薬品辞書を設定している場合、ローカル抽出に渡す薬剤の参考候補が1秒の期限内に作れるようになりました。半角の数字や mg で書かれた薬名（例: 60mg）も、全角表記の辞書の別名に一致します。設定した辞書ファイルが無くなった場合は、毎回の処理でエラー「drug_map: missing_dictionary」として記録します。画面には「辞書が設定されていない」ではなく「辞書を読み込めない」と表示します。薬剤言及履歴の「照合中」は、承認辞書の照合がまだ終わっていない場合だけに表示します。辞書の未設定・未承認（参考専用）・設定不正の場合や、薬名が確定しない言及では表示しません。採用薬の登録（formulary-add）では、同じ添付文書を共有する別の名称を記録します。次回からは同じ名称を外部で検索し直しません。",
+  "upgrade": "追加操作は不要です。辞書の承認・有効化は自動では行いません。未承認の辞書は、これまでどおり注釈に使いません。設定済みの辞書ファイルが無い環境では、更新後に drug_map のエラーが毎回記録されます。mcs drug install-bundled で辞書を作り直すか、設定を見直してください。辞書が無い間は、これまでどおり薬剤候補の注釈を表示しません。",
+  "details": [
+    "drug_map.load は、同じパス・SHA256 pin・ファイル識別子（dev・ino・size・mtime・ctime）の辞書を一度だけ解析し、2回目以降は解析済みの内容を再利用します。所有者・権限・サイズの検査は毎回行います。",
+    "drug_mentions は、正規化した別名表を辞書の版ごとに保持します。本文と別名は、抽出検証と同じ NFKC 正規化で比較します。一致した位置は元の本文の位置に戻すので、保存される表記は本文のままです。",
+    "drug_map.configured は、設定済みの辞書ファイルが無い場合に missing_dictionary を返します。active_dictionary の状態は invalid になります。mcs drug status の表示は従来どおり missing です。",
+    "drug_timeline の coverage.dictionary には reference_only（未承認の辞書）を追加しました。言及ごとの matching には not_applicable（薬名が確定しない）と not_performed（照合を行わない状態）を追加しました。",
+    "drug_info の watch.json では、同じ添付文書 URL に属する名称を aliases に記録します。"
+  ],
+  "refs": ["mcs/medications/drug_map.py", "mcs/medications/drug_mentions.py", "mcs/medications/drug_timeline.py", "mcs/medications/drug_info.py", "mcs/ops/mcs_drug.py", "tests/medications/test_bugsweep_drug_hints.py", "tests/medications/test_bugsweep_drug_timeline_states.py"]
+}

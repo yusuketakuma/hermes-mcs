@@ -66,6 +66,13 @@ def runtime(tmp_path, monkeypatch):
 
 
 def _raw_proof(led, pid, mid, *, cloud=False, summary='合成の経過報告'):
+    meta, model = _raw_proof_meta(led, pid, mid, cloud=cloud)
+    return led.artifact_add('extract_llm', json.dumps({'summary': summary}),
+                            project_id=pid, message_id=mid, model=model, meta=meta)
+
+
+def _raw_proof_meta(led, pid, mid, *, cloud=False):
+    """(meta, model) of a strictly proven current extract_llm result for one stored post."""
     import extract_llm
     import inference_dependency_loss
     from inference_version import CURRENT_VERSION, VERSION_KEY
@@ -89,8 +96,7 @@ def _raw_proof(led, pid, mid, *, cloud=False, summary='合成の経過報告'):
                 for i in range(len(chunks))}}}
     if cloud:
         meta.update(contract)
-    return led.artifact_add('extract_llm', json.dumps({'summary': summary}),
-                            project_id=pid, message_id=mid, model=model, meta=meta)
+    return meta, model
 
 
 def _semantic_proof(led, pid, mid, cfg=CFG, *, observation_quote=None):
@@ -297,7 +303,9 @@ def test_insufficient_time_never_starts_inference(runtime, at, seconds):
 def test_busy_lane_yields_without_work(runtime):
     led, _, calls = runtime
     seed(led)
-    assert step(runtime, admit=lambda: False)['status'] == 'deferred'
+    result = step(runtime, admit=lambda: False)
+    assert result['status'] == 'deferred'
+    assert result['reason'] == 'patient_context_admission_deferred'
     assert not calls and document(led) is None
 
 

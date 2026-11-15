@@ -362,6 +362,9 @@ _SQLITE_RW_OK = {"maintenance.py", "llm_admission.py"}
 # The former entrypoints retained these exact writer responsibilities after splitting.
 _SPLIT_LEDGER_WRITERS = {
     "extract/llm/extract_llm_resident.py": {"_open_current_ledger", "_main"},
+    # the human-confirmed local operations (cloud-llm stop/resume/release, Slack setup
+    # discard, provider pending finalize) share one run-lock-guarded writer here
+    "ops/commands/mcs_requests.py": {"apply_local_operation"},
     "ops/update_execution.py": {"_postcheck"},
     "ops/update_lifecycle_context.py": {"_enqueue_notice", "_NOTICE_CHILD"},
     "ops/update_restore.py": {"_reconcile_restored"},
@@ -394,7 +397,7 @@ def gate_snapshot_readonly() -> list[str]:
         ledger_write_lines = {
             node.lineno for fn in tree.body
             if isinstance(fn, ast.FunctionDef) and (
-                (path == MCS / "ops/cloud_cli.py" and fn.name == "command")
+                (path == MCS / "ops/commands/mcs_requests.py" and fn.name == "apply_local_operation")
                 or (path == MCS / "semantic/semantic_jev.py" and fn.name == "_reserve_live_usage"))
             for node in ast.walk(fn)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)

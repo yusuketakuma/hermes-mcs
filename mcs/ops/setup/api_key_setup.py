@@ -182,8 +182,18 @@ def run(root=None, *, admission=None):
         print('\nAPIキーの保存結果を確認できません。既存の認証情報の状態を確認してください。'
               if saving else '\nAPIキーの変更は保存していません。')
         return 130
-    except (OSError, ValueError, UnicodeError, getpass.GetPassWarning):
-        print('APIキーの保存結果を確認できません。本人専用の保存先と現在の設定を確認してください。')
+    except (OSError, ValueError, UnicodeError, getpass.GetPassWarning) as error:
+        if saving:
+            print('APIキーの保存結果を確認できません。本人専用の保存先と現在の設定を確認してください。')
+        elif isinstance(error, getpass.GetPassWarning):
+            print('APIキーは保存していません。この端末では入力を非表示にできません。本人の端末で mcs setup api-keys を実行してください。')
+        elif str(error) == 'configuration_changed':
+            print('APIキーは保存していません。この操作を始めた後に設定が変更されました。現在の設定を確認して再実行してください。')
+        elif isinstance(error, UnicodeError):
+            print('APIキーは保存していません。既存の.envをUTF-8の文字として読み取れません。.envの内容を確認してください。')
+        else:
+            print('APIキーは保存していません。既存の.envが本人だけ読み書きできる通常のファイル（権限0600）か、'
+                  '保存先と現在の設定を確認してください。')
         return 1
     print('選んだAPIキーを保存しました。サービスの利用条件と設定を確認してください。')
     return 0

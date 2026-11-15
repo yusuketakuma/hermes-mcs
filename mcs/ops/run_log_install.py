@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import stat
 import sys
 import uuid
@@ -97,6 +98,12 @@ def _directory(path, *, write=True):
                             dir_fd=fd)
             os.close(fd)
             fd = child
+        info = os.fstat(fd)
+        if (write and stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
+                and not info.st_mode & 0o022 and stat.S_IMODE(info.st_mode) != 0o700):
+            # Installers before v1.0.7 created it 0755. Nobody else could write
+            # into it, so tighten it to the required 0700 instead of refusing.
+            os.fchmod(fd, 0o700)
         _checked(fd, directory=True)
         if not write:
             yield fd
@@ -255,6 +262,21 @@ def verify_installed_helper(root, recovery_dir, helper):
         raise LogInstallError('run_log_helper_unverified') from None
 
 
+def current_helper(root, *, installed=None):
+    """The helper this process was started with while it stays a verified generation.
+
+    install.sh promotes a new generation before it reloads services; until then
+    running hosts keep the generation they inherited instead of refusing every
+    child (IA-018, IA-046). Without an inherited helper, the installed one
+    (``installed`` defaults to helper_path)."""
+    inherited = os.environ.get('MCS_RUN_LOG_HELPER')
+    if inherited:
+        if not os.path.isabs(inherited):
+            raise LogInstallError('run_log_helper_unverified')
+        return verify_installed_helper(root, str(Path(inherited).parent), inherited)
+    return (installed or helper_path)(root, None, require_installed=True)
+
+
 def migrate_installed(root, recovery_dir):
     """Re-import a verified finite tail without depending on the runtime checkout."""
     # Older installations have no pointer. Do not inspect or modify their
@@ -321,4 +343,10 @@ if __name__ == '__main__':
             raise LogInstallError('run_log_install_arguments')
     except LogInstallError as error:
         print(str(error), file=sys.stderr)
+        if len(sys.argv) == 4 and error.helper_code in ('run_log_legacy_missing', 'run_log_legacy_changed'):
+            # Old helpers cannot name the file; the checkout's helper retires it.
+            print('取込み済みの旧ログが削除または変更されています。旧ログの原本を確認し、次を実行してから'
+                  'もう一度実行してください: ' + shlex.join([
+                      sys.executable, '-I', os.path.join(sys.argv[2], 'mcs', 'core', 'run_log.py'),
+                      'retire-drifted', '--data-dir', os.path.join(sys.argv[1], 'data')]), file=sys.stderr)
         raise SystemExit(1) from None

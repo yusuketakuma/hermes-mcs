@@ -187,6 +187,8 @@ def test_tail_command_failure_marks_run_partial(tmp_path, monkeypatch, capsys):
     for name in ("ensure_dirs", "recover", "sweep", "publish_flags",
                  "gc", "clear_snapshot_dirty"):
         monkeypatch.setattr((notify_spool if name in {'recover', 'publish_flags', 'ensure_dirs'} else notify_cards), name, lambda *a, **k: None)
+    # sweep returns its result dict (run_check reads result["card_sweep"]["failed"])
+    monkeypatch.setattr(notify_cards, "sweep", lambda *a, **k: {})
     monkeypatch.setattr(self_identity, "record_self_profile", lambda *a: False)
     monkeypatch.setattr(maintenance, "daily_backup", lambda *a: None)
     monkeypatch.setattr(maintenance, "rotate_log", lambda *a: None)

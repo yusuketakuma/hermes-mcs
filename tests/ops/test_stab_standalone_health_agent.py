@@ -27,6 +27,18 @@ def test_rendered_health_watch_runs_outside_the_host(tmp_path):
     assert "OnUnitActiveSec=300s" in units["mcs-health.timer"]
 
 
+def test_linux_health_unit_keeps_a_literal_dollar_in_its_environment(tmp_path):
+    root = tmp_path / "mcs$data%x"
+    root.mkdir()
+    unit = dict(service.render_health(root, platform="linux"))["mcs-health.service"]
+    lines = unit.splitlines()
+    env = next(line for line in lines if line.startswith("Environment="))
+    exec_line = next(line for line in lines if line.startswith("ExecStart="))
+    # systemd expands "$$" only in ExecStart=; Environment= passes "$" through.
+    assert env == f'Environment="MCS_ROOT={tmp_path}/mcs$data%%x"'
+    assert "mcs$$data%%x" in exec_line
+
+
 def _linux(monkeypatch, tmp_path, active=True):
     monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))

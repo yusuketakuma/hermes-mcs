@@ -26,6 +26,7 @@ import runtime_inspection
 import service_contract as contract
 import owned_process
 import update_launch
+import writer_lock
 import run_log_install
 from mcs_config import recovery_python_problem, validate_notify
 import scheduled_jobs
@@ -277,6 +278,12 @@ def hermes_py_problem(*, paths: ServicePaths) -> str | None:
     """None when HERMES_PY is an executable Python >= 3.14."""
     return runtime_inspection.python_problem(paths.hermes_python)
 
+def log_helper_problem(error, *, paths: ServicePaths) -> str:
+    """A diagnostic line for an unverifiable private log helper (fixed code only)."""
+    return (f'ログ処理プログラムの配置を確認できません（{error.code}）。'
+            + install_fix('導入時の省略オプションを維持してログ処理プログラムを準備', paths=paths) + '。')
+
+
 def install_fix(stage: str, *, paths: ServicePaths) -> str:
     return f"`{os.path.join(paths.checkout, 'install.sh')}`を再実行してください（{stage}）"
 
@@ -311,6 +318,8 @@ def check_runtime(cfg: dict, *, paths: ServicePaths) -> tuple[list[str], list[st
                 _, desired = render(paths.root, platform=paths.platform, recovery_dir=paths.recovery_dir)
                 if Path(path).read_text(encoding='utf-8') != desired:
                     errors.append('独立動作の常駐設定が現在のプログラムと一致しません。`mcs_setup.py services`を実行してください')
+            except run_log_install.LogInstallError as e:
+                errors.append(log_helper_problem(e, paths=paths))
             except (OSError, ValueError):
                 errors.append('独立動作の常駐設定を確認できません')
         if os.path.exists(path):
@@ -401,9 +410,36 @@ def agent_loaded(label: str, *, paths: ServicePaths, deadline=None) -> bool | No
     return r.returncode == 0
 
 def agent_absent(label: str, *, paths: ServicePaths) -> bool:
-    """True only when launchd reports `label` not found (113): any other
-    probe failure is not proof that a booted-out agent stopped."""
-    return lifecycle_io.run_bounded(['launchctl', 'print', f'gui/{paths.uid}/{label}']).returncode == 113
+    """After a bootout: True only once launchd reports `label` not found (113).
+    A job still listed (0) may be draining, so it is polled for STOP_POLLS x 0.5 s;
+    any other probe failure is not proof that a booted-out agent stopped."""
+    for _ in range(STOP_POLLS):
+        rc = lifecycle_io.run_bounded(['launchctl', 'print', f'gui/{paths.uid}/{label}'], timeout=10).returncode
+        if rc != 0:
+            return rc == 113
+        time.sleep(0.5)
+    return False
+
+# Deferred reload: launchd can still be tearing the job down (the standalone host
+# drains for minutes) after bootout returns, so wait for "not found" (113) before a
+# bootstrap that would otherwise fail against the dying job. 750 x 5 s outlasts the
+# host's ExitTimeOut (3660 s).
+AWAIT_RELOAD_SCRIPT = ('i=0; while launchctl print "$2" >/dev/null 2>&1 || [ $? -ne 113 ]; do '
+                       'i=$((i+1)); [ "$i" -ge 750 ] && exit 1; sleep 5; done; '
+                       'i=0; until launchctl bootstrap "$3" "$4"; do '
+                       'i=$((i+1)); [ "$i" -ge 3 ] && exit 1; sleep 1; done')
+RELOAD_SCRIPT = 'while kill -0 "$1" 2>/dev/null; do sleep 5; done; launchctl bootout "$2"; ' + AWAIT_RELOAD_SCRIPT
+STOP_POLLS = 60   # x0.5 s after bootout before a stop counts as unconfirmed
+
+
+def _defer_reload(script: str, label: str, dst: str, *, paths: ServicePaths) -> None:
+    """Hand the reload of `label` to a detached waiter that outlives this run."""
+    uid = paths.uid
+    env = update_launch.without_job_identity(os.environ)
+    waiter = os.environ.get('MCS_JOB_PID') or str(os.getpid())
+    helper = run_log_install.helper_path(paths.root, paths.recovery_dir, require_installed=True)
+    subprocess.Popen([sys.executable, '-I', helper, 'exec', '--data-dir', os.path.join(paths.root, 'data'), '--', '/bin/sh', '-c', script, 'mcs-reload', waiter, f'gui/{uid}/{label}', f'gui/{uid}', dst], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, close_fds=True, start_new_session=True)
+
 
 def agent_reconcile(label: str, dst: str, note, dry: bool, *, paths: ServicePaths) -> bool:
     """Bootout+bootstrap when the plist changed; bootstrap when absent.
@@ -412,17 +448,18 @@ def agent_reconcile(label: str, dst: str, note, dry: bool, *, paths: ServicePath
     if os.environ.get('XPC_SERVICE_NAME') == label:
         note(f'常駐処理{label}: この設定処理の終了後に読み込み直します')
         if not dry:
-            target = f'gui/{uid}/{label}'
-            script = 'while kill -0 "$1" 2>/dev/null; do sleep 5; done; launchctl bootout "$2"; launchctl bootstrap "$3" "$4"'
-            env = update_launch.without_job_identity(os.environ)
-            waiter = os.environ.get('MCS_JOB_PID') or str(os.getpid())
-            helper = run_log_install.helper_path(paths.root, paths.recovery_dir, require_installed=True)
-            subprocess.Popen([sys.executable, '-I', helper, 'exec', '--data-dir', os.path.join(paths.root, 'data'), '--', '/bin/sh', '-c', script, 'mcs-reload', waiter, target, f'gui/{uid}', dst], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, close_fds=True, start_new_session=True)
+            _defer_reload(RELOAD_SCRIPT, label, dst, paths=paths)
         return True
     if agent_loaded(label, paths=paths):
         note(f'常駐処理{label}: 設定が変わったため読み込み直します')
         if not dry:
             lifecycle_io.run_bounded(['launchctl', 'bootout', f'gui/{uid}/{label}'])
+            if not agent_absent(label, paths=paths):
+                # A print answering 0 for the dying job is not a new load, and a later
+                # run sees the written plist as current: the reload must not wait for one.
+                note(f'  常駐処理{label}: 以前の処理が終了処理中のため、終了後に自動で読み込み直します')
+                _defer_reload(AWAIT_RELOAD_SCRIPT, label, dst, paths=paths)
+                return True
     else:
         note(f'常駐処理{label}: 起動します')
     if dry:
@@ -461,6 +498,8 @@ def script_drift(*, paths: ServicePaths) -> tuple[list[str], list[str]]:
     directory = scripts_dir(paths=paths)
     try:
         subs = service_substitutions(mcs_util.load_config(), paths=paths)
+    except run_log_install.LogInstallError as e:
+        return ([log_helper_problem(e, paths=paths) + '定期処理のファイル比較は行っていません'], [])
     except ValueError as e:
         return ([f'設定に問題があります: {e}。定期処理のファイル比較は行っていません'], [])
     for name, body in rendered_scripts(subs, paths=paths):
@@ -640,6 +679,10 @@ def sync_cron(prev, hermes, manifest, note, dry, jobs=None):
                     problems += 1
         else:
             note(f"定期処理'{name}': 登録済みです")
+        if entry.get("state") not in (None, "active"):
+            # Never resumed automatically: an operator may have stopped it on purpose.
+            note(f"  注意: 定期処理'{name}'はHermes側で停止中（{entry['state']}）のため実行されません。"
+                 f"意図した停止でなければ`hermes cron list --all`で確認し、再開してください（ID: {entry['id']}）")
         manifest["cron"].append({"name": name, "schedule": schedule, "script": script, "id": entry["id"]})
     persist = False
     if mutated and not dry:
@@ -716,6 +759,8 @@ def check_standalone_health(*, paths: ServicePaths) -> tuple[list[str], list[str
     try:
         from mcs_standalone.service import render_health
         bodies = render_health(paths.root, platform=paths.platform, recovery_dir=paths.recovery_dir)
+    except run_log_install.LogInstallError as e:
+        return ([log_helper_problem(e, paths=paths)], warnings)
     except ValueError:
         return (errors, warnings)
     installed = True
@@ -792,11 +837,16 @@ def standalone_loaded(*, paths: ServicePaths):
 
 def _known_cron_scripts() -> set:
     """Cron wrapper names MCS owns (read at call time); mcs_recover is not cron."""
-    return {script for _, _, script in scheduled_jobs.CRON_JOBS} | {'mcs_offsite.sh'}
+    # mcs_health.sh left CRON_JOBS; it stays owned so older installs' entries are still retired.
+    return {script for _, _, script in scheduled_jobs.CRON_JOBS} | {'mcs_offsite.sh', 'mcs_health.sh'}
 
 
-def retire_previous_runtime(prev, desired_mode, note, dry, *, paths: ServicePaths):
-    """Stop only the previous manifest's owned jobs before switching runtimes."""
+def retire_previous_runtime(prev, desired_mode, note, dry, *, paths: ServicePaths, hermes_absent=None):
+    """Stop only the previous manifest's owned jobs before switching runtimes.
+
+    ``hermes_absent`` is a human-confirmed reason (IA-048): with no Hermes
+    executable at the configured path its cron cannot be listed, and only then
+    may the switch treat that cron as not running."""
     if not prev or prev.get('runtime_mode', 'hermes') == desired_mode:
         return 0
     if prev.get('runtime_mode') == 'standalone':
@@ -806,6 +856,20 @@ def retire_previous_runtime(prev, desired_mode, note, dry, *, paths: ServicePath
     if dry:
         note('以前のHermes経由のMCS処理を停止します: ' + ', '.join(sorted(labels | scripts)))
         return 0
+    # Observe the cron side before stopping anything: an unknown listing must
+    # leave the previous runtime whole, not half retired with nothing started.
+    if scripts:
+        exe = mcs_util.hermes_exe(mcs_util.load_config())
+        entries = inspect_cron(exe)
+        if entries is None and hermes_absent and not os.path.lexists(exe):
+            note('Hermesの実行ファイルがないため、人の確認（理由: ' + hermes_absent[:200]
+                 + '）に基づき、以前のHermes定期処理は動いていないものとして切り替えます')
+            scripts, entries = set(), []
+        elif entries is None:
+            note('以前のHermes定期処理の状態を確認できないため、以前の処理を停止せず、新しい処理も起動していません'
+                 + ('' if os.path.lexists(exe) else
+                    '。Hermesを削除済みの場合は、mcs setup services --hermes-absent --confirm-human --reason <理由> で切り替えられます'))
+            return 1
     for label in sorted(labels):
         lifecycle_io.run_bounded(['launchctl', 'bootout', f'gui/{paths.uid}/{label}'])
         if not agent_absent(label, paths=paths):
@@ -814,11 +878,6 @@ def retire_previous_runtime(prev, desired_mode, note, dry, *, paths: ServicePath
         with suppress(FileNotFoundError):
             os.unlink(os.path.join(paths.agents_dir, label + '.plist'))
     if scripts:
-        exe = mcs_util.hermes_exe(mcs_util.load_config())
-        entries = inspect_cron(exe)
-        if entries is None:
-            note('以前のHermes定期処理の状態を確認できないため、新しい処理は起動していません')
-            return 1
         for entry in entries:
             if entry.get('script') in scripts:
                 if lifecycle_io.run_bounded([exe, 'cron', 'remove', entry['id']]).returncode:
@@ -850,7 +909,11 @@ def sync_standalone_service(manifest, note, dry, *, paths: ServicePaths):
             if lifecycle_io.run_bounded(['systemctl', '--user', 'daemon-reload']).returncode:
                 return 1
         reload = paths.platform == 'darwin' and running and changed and (current is not None)
-        if running and (not reload):
+        if running and (not reload) and os.path.lexists(os.path.join(paths.root, 'data', writer_lock.UPDATE_MARKER_NAME)):
+            # The host cannot restart while the updater (often its own child) runs, and an
+            # early request blocks the drainers the updater verifies; it restarts after bookkeeping.
+            note('独立動作の常駐処理: 更新処理中のため、再起動は更新の完了後に行います')
+        elif running and (not reload):
             try:
                 request_restart(paths.root)
             except (OSError, ValueError):
@@ -896,7 +959,7 @@ def record_llm_slots(manifest, note, *, paths: ServicePaths) -> None:
     except Exception as e:
         note(f'AIの同時処理枠を管理記録へ保存できません（{type(e).__name__}: {e}）')
 
-def apply_services(cfg, *, paths: ServicePaths, dry_run=False, note):
+def apply_services(cfg, *, paths: ServicePaths, dry_run=False, note, hermes_absent=None):
     dry = dry_run
     message = None
     try:
@@ -930,7 +993,18 @@ def apply_services(cfg, *, paths: ServicePaths, dry_run=False, note):
         return ServiceResult(1, message)
     if sync_recovery(cfg, note, dry, paths=paths):
         return ServiceResult(1, message)
-    if retire_previous_runtime(prev, selected_mode, note, dry, paths=paths):
+    if selected_mode == 'standalone' and not prev and os.path.lexists(paths.manifest_path):
+        # An existing but unreadable record may list Hermes cron jobs this switch
+        # must retire; stop for a human instead of leaving both runtimes (IA-047).
+        return ServiceResult(1, '常駐設定: 管理記録を読み取れないため、以前の定期処理を確実に止められません。'
+                             '変更していません。管理記録（' + paths.manifest_path + '）を確認し、担当者に相談してください')
+    if retire_previous_runtime(prev, selected_mode, note, dry, paths=paths, hermes_absent=hermes_absent):
+        return ServiceResult(1, message)
+    if hermes_absent and not dry:
+        manifest['hermes_absent_confirmed'] = {'reason': hermes_absent[:2000], 'at': time.time()}
+    if selected_mode == 'standalone' and retire_agents(set(contract.AGENT_LABELS) - {contract.HEALTH_LABEL}, note, dry, paths=paths):
+        # Hermes-only agents never belong to the host; a missing or stale manifest
+        # must not leave them running beside it.
         return ServiceResult(1, message)
     sync_scripts(subs, manifest, note, dry, paths=paths)
     if selected_mode == 'standalone':

@@ -67,7 +67,13 @@ class CloudClient:
 
     def response_error(self, status, raw):
         kind, retryable = http_error(status)
-        return kind, retryable, {}
+        # A 5xx may be billed, so the resend guard always refuses its retry: never wait for one.
+        return kind, retryable and status < 500, {}
+
+    def wire(self, body, cache_prefix):
+        """The body as posted. Accounting and resend identity keep using ``body``
+        itself, so a provider may reshape only what goes on the wire."""
+        return body
 
     def complete(self, prompt, *, deadline, max_tokens=8192, before_attempt=None,
                  reserve_fn=None, after_result=None, cache_prefix=None):
@@ -83,6 +89,7 @@ class CloudClient:
         if not isinstance(self.api_key, str) or not self.api_key:
             raise CloudError("no_api_key")
         body = self.body(prompt, max_tokens, cache_prefix)
+        posted = self.wire(body, cache_prefix)
         last = CloudNotSent("budget_exceeded", "deadline", retryable=True)
         for attempt in range(self.max_attempts):
             remaining = deadline - time.monotonic()
@@ -119,9 +126,9 @@ class CloudClient:
             wait = None
             try:
                 if self._post_fn:
-                    status, headers, raw = self._post_fn(body, timeout)
+                    status, headers, raw = self._post_fn(posted, timeout)
                 else:
-                    status, headers, raw = self.request("POST", body, timeout, deadline=deadline)
+                    status, headers, raw = self.request("POST", posted, timeout, deadline=deadline)
                 if type(status) is not int or not 100 <= status <= 599:
                     raise CloudError("protocol_error", "status_invalid")
                 meta["http_class"] = f"http_{status}"
@@ -175,8 +182,9 @@ class CloudClient:
                 raise last
             if attempt + 1 < self.max_attempts:
                 # Retry-After alone when given (as Jev), else bounded exponential backoff
-                delay = min(wait if wait is not None else 2**attempt + random.uniform(0, 0.5),
-                            max(0.0, deadline - time.monotonic()))
+                delay = wait if wait is not None else 2**attempt + random.uniform(0, 0.5)
+                if delay >= deadline - time.monotonic():
+                    raise last   # no retry fits before the deadline: do not hold the slot asleep
                 if delay:
                     (self._wait_fn if self._wait_fn is not None else time.sleep)(delay)
         raise last

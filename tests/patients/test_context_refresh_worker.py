@@ -90,7 +90,8 @@ def test_context_dry_run_keeps_existing_local_lane(capacity):
 def test_context_child_stops_admitting_when_owner_disappears(capacity, monkeypatch):
     capacity[1]["cloud_llm"] = {"mode": "on", "project_ids": [1]}
     monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: False)
-    assert run(capacity) == {"status": "deferred", "done": 0}
+    assert run(capacity) == {"status": "deferred", "done": 0,
+                             "reason": "patient_context_admission_deferred"}
     assert not capacity[2]
 
 
@@ -136,6 +137,9 @@ def test_capacity_gates(capacity, monkeypatch, gate):
         assert result == {"status": "source_changed", "done": 0, "run_lock_lost": "updated"}
     else:
         assert result["status"] == "deferred"
+        expected = ("patient_context_capacity_or_deadline" if gate == "expired"
+                    else "patient_context_admission_deferred")
+        assert result["reason"] == expected
     assert not capacity[2]
 
 
@@ -225,12 +229,19 @@ def test_failure_isolated_and_no_sensitive_error(capacity, monkeypatch):
     assert run(capacity) == {"status": "error", "done": 0, "error": "RuntimeError"}
 
 
-@pytest.mark.parametrize("percent,expected", [(9, False), (10, True), (50, True), (101, False)])
-def test_macos_memory(monkeypatch, percent, expected):
+@pytest.mark.parametrize("percent,level,expected", [
+    (9, 1, False), (10, 1, True), (50, 1, True), (101, 1, False),
+    (50, 4, False),  # kernel-critical pressure defers even with free memory
+])
+def test_macos_memory(monkeypatch, percent, level, expected):
+    import llm_availability
     monkeypatch.setattr(worker.sys, "platform", "darwin")
+    monkeypatch.setattr(llm_availability, "_pressure_critical_last", False)
     def probe(argv, **kwargs):
-        assert argv == ["/usr/bin/memory_pressure", "-Q"]
         assert kwargs["timeout"] == 2
+        if argv == ["/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"]:
+            return SimpleNamespace(stdout=f"{level}\n")
+        assert argv == ["/usr/bin/memory_pressure", "-Q"]
         return SimpleNamespace(stdout=f"System-wide memory free percentage: {percent}%")
     monkeypatch.setattr(worker.subprocess, "run", probe)
     assert worker._context_memory_available() is expected

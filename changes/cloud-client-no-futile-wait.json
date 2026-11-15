@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "送れない再試行を待つ間にクラウド枠を占有しないよう修正",
+  "summary": "クラウドLLMが5xx（Anthropicの529、OpenAIの500・503など）を返したとき、再試行のために約1〜1.5秒待つことをやめ、すぐに失敗として返します。5xxの要求は課金済みの可能性があるため、もともと再送防止で2回目は送られず、待機の間は共有のクラウド枠とワーカーを無駄に占有していました。また、429のRetry-After（または再試行間隔）が単位の期限までの残り時間以上なら、期限まで眠らずにすぐ429として返します。5xxの結果行は従来どおり満額で記録し、5xxの単位をその後どう扱うかも変わりません。",
+  "upgrade": "追加操作は不要です。稼働中のワーカーには、Hermes gateway または独立実行の再起動後に反映されます。429で残り時間内に収まる待機と再試行、401・402・403・その他4xxの扱い、クラウド回路の一時障害判定は変わりません。",
+  "details": [
+    "CloudClient.response_error が HTTP 5xx を retryable=False として返し、complete() は待機も2回目の予約もせずに最初の5xxを返す。llm_retry.http_error は回路判定と再送防止が共有しているので変更しない。",
+    "complete() は待機時間が期限までの残り時間以上なら、眠らずに直前の失敗を返す。",
+    "5xxとtimeoutを再送しない方針（所有者判断 2026-10-28）と、5xxの結果行を満額で計上する扱いは変更しない。5xxで保留になった単位の解放は扱わない。"
+  ],
+  "refs": ["mcs/llm/transport/cloud_client.py", "tests/llm/test_bugsweep_cloud_client_wait.py", "tests/llm/test_anthropic_client.py"]
+}

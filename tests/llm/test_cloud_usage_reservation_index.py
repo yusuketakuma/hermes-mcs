@@ -1,6 +1,7 @@
 """Synthetic reservation-index lookups decide exactly what the retained-history scans decide."""
 from contextlib import closing
 import json
+import re
 
 import pytest
 
@@ -195,6 +196,54 @@ def test_existing_ledger_is_audited_once_and_a_cleared_guard_is_restored(tmp_pat
         assert ledger_schema.cloud_usage_guard_state(ledger.db) == (True, 1)
         statements = _traced(ledger, lambda: ledger_schema.install_cloud_usage_guard(ledger.db))
         assert not any('BEGIN' in sql or 'json_tree' in sql for sql in statements)
+
+
+def _refresh(ledger, now):
+    """A budget check inside a writer transaction, where the unchanged-read cache never applies."""
+    ledger.db.execute('BEGIN IMMEDIATE')
+    try:
+        return c._tally(ledger, now)
+    finally:
+        ledger.db.rollback()
+
+
+def _rereads(statements):
+    # the trace shows bound values expanded (artifact_id<=11), so match the expanded bound
+    return [sql for sql in statements if re.search(r'artifact_id<=\d+', sql)]
+
+
+def test_tally_rereads_history_in_every_writer_transaction(tmp_path, now):
+    # The guard proves the index complete; it never stands in for the history fingerprint.
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        _history(ledger)
+        tally = _refresh(ledger, now)
+        _reserve(ledger, unit='appended')
+        statements = _traced(ledger, lambda: _refresh(ledger, now))
+        assert _rereads(statements) and _refresh(ledger, now) is tally
+        total = tally.total
+        with ledger.db:      # a disposition is outside the tally: counted, re-read, same totals kept
+            ledger.db.execute("UPDATE artifacts SET model=model WHERE kind='cloud_usage_disposition'")
+        statements = _traced(ledger, lambda: _refresh(ledger, now))
+        assert _rereads(statements) and _refresh(ledger, now) is tally and tally.total == total
+        with ledger.db:      # a tallied row changed in place: the tally is rebuilt
+            ledger.db.execute("DELETE FROM artifacts WHERE artifact_id=(SELECT MAX(artifact_id) "
+                              "FROM artifacts WHERE kind='cloud_usage_reserve')")
+        rebuilt = _refresh(ledger, now)
+        assert rebuilt is not tally and rebuilt.total < total
+        assert _rereads(_traced(ledger, lambda: _refresh(ledger, now)))
+
+
+def test_tally_without_the_guard_rereads_history_every_time(tmp_path, now):
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        _history(ledger)
+        with ledger.db:
+            ledger.db.execute('DROP TRIGGER cloud_usage_guard_update')
+        tally = _refresh(ledger, now)
+        assert _rereads(_traced(ledger, lambda: _refresh(ledger, now)))
+        with ledger.db:
+            ledger.db.execute("DELETE FROM artifacts WHERE artifact_id=(SELECT MAX(artifact_id) "
+                              "FROM artifacts WHERE kind='cloud_usage_reserve')")
+        assert _refresh(ledger, now) is not tally
 
 
 def test_paid_result_save_waits_out_a_busy_writer(monkeypatch):

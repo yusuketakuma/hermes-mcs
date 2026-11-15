@@ -1,0 +1,13 @@
+{
+  "category": "changed",
+  "title": "Hermesの定期処理枠を空けるため、ヘルス監視のcron登録をやめ、添付OCRを10分ごとに変更",
+  "summary": "Hermesの定期処理は同時に1本しか動かないため、MCSのジョブが常に待ち行列に並び、未読チェックの開始が遅れていました。今回、同じ health_watch.py を動かしていたHermes側の「MCS health watch」（5分ごと）の登録をやめ、launchd の local.mcs-health（300秒ごと、--send付き）だけで監視します。警報の内容と間隔は変わりません。local.mcs-health が止まった場合は、従来どおり未読チェックが「監視処理の停止」を警報します。保存済み添付のOCR・ローカル解析は毎分から10分ごと（毎時5・15・25・35・45・55分、未読チェックの5分後）に変わります。添付の取得は10分ごとの未読チェックで行われるため、新しい添付の処理開始は最大で約10分遅れることがあります。1回の処理時間の上限（900秒）は変えていません。Hermesの cron.max_parallel_jobs=1 は変更していません。",
+  "upgrade": "更新後に `python3 mcs/ops/mcs_setup.py services` を実行すると反映されます（通常のアップデーターは services を実行します）。services は manifest が所有する「MCS health watch」のcron登録を削除し、「MCS attachment OCR」の実行間隔を `5,15,25,35,45,55 * * * *` へ変更します。services を実行するまでは、Hermes側の登録が従来の間隔のまま残ります。local.mcs-health が読み込まれていることは `mcs_setup.py check` で確認できます。独立実行（runtime_mode=standalone）でも単一hostはヘルス監視を実行せず、既存の独立したヘルス監視（macOS: local.mcs-health、Linux: mcs-health.timer）だけが動きます。定期ジョブは6件（backup.enabled=true なら7件）になります。",
+  "details": [
+    "mcs/core/scheduled_jobs.py の CRON_JOBS から MCS health watch を外し、MCS attachment OCR を `5,15,25,35,45,55 * * * *` にしました。Hermesのcron登録と独立実行の単一hostは、どちらもこの一覧を使います。",
+    "旧版の導入環境に残る mcs_health.sh のcron登録を、実行方式の切替時や導入判定でもMCS所有と認識できるよう、service_management._known_cron_scripts に mcs_health.sh を残しました。復旧処理（KNOWN_CRON_SCRIPTS）の扱いは変えていません。",
+    "wrapper の deployment/scripts/mcs_health.sh は、services 実行前に残っている登録が失敗しないよう配置を続けます。",
+    "OCRの処理内容、ロック待ち、予算、既読化・収集の安全条件は変更していません。"
+  ],
+  "refs": ["mcs/core/scheduled_jobs.py", "mcs/ops/services/service_management.py", "deployment/launchagents/README.md", "tests/ops/test_ten_minute_collection.py"]
+}

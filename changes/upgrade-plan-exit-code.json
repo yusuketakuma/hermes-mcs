@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "scripts/mcs_upgrade.py plan が、更新を進められない計画でも成功として終わる問題を修正",
+  "summary": "導入済みの更新プログラムを使う scripts/mcs_upgrade.py plan は、計画に阻害要因（中断した更新、壊れた記録など）があっても終了コード0で終わっていました。mcs plan（mcs_cli）は同じ場合に1を返すため、終了コードで判断する手順やエージェントが、進めない計画を進められると読み違えるおそれがありました。今後は、route が blocked のときと blockers が1件以上あるときに1を返します。表示する計画の内容は変わりません。",
+  "upgrade": "この版への更新だけで有効になります。plan の終了コードを確認している手順では、1のときは計画の blockers を確認してから進めてください。",
+  "details": [
+    "_installed_update の plan が mcs_cli の plan と同じ条件で終了コードを決める。"
+  ],
+  "refs": ["scripts/mcs_upgrade.py"]
+}

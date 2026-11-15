@@ -187,7 +187,7 @@ Discord利用時はこのCLIのactor自己申告ではなく、上記native plat
 ```text
 /mcs {"op":"control","phase":"preview","action":"update_apply","tag":"v1.0.6","target_sha":"<40桁>","base_sha":"<40桁>","reason":"リリースノートを確認し適用"}
 /mcs {"op":"control","phase":"preview","action":"update_rollback","reason":"適用後の不具合を確認し戻す"}
-/mcs {"op":"control","phase":"preview","action":"restore_approve","report_id":"<通知のreport_id>","backup_sha256":"<通知の値>","backup_schema":7,"reason":"喪失レポートを確認しDB置換を承認"}
+/mcs {"op":"control","phase":"preview","action":"restore_approve","report_id":"<restore_report.jsonのreport_id>","backup_sha256":"<restore_report.jsonの値>","backup_schema":7,"reason":"喪失レポートを確認しDB置換を承認"}
 ```
 
 `update_apply`／`update_rollback`／`restore_approve` は **install 全体**に効く操作で、
@@ -195,7 +195,9 @@ Discord利用時はこのCLIのactor自己申告ではなく、上記native plat
 `project_ids` による project 制限は**かからない**（特定 project だけを許可した利用者でも
 承認できる）。confirm は他の control と同じ preview → 同一 payload/origin/hash の手順。
 `restore_approve` は喪失レポート（`report_id`）とbackupの sha256/schema に束縛され、
-別の承認では代用できない。適用・巻戻し・DB置換の実行と結果は runner 側の receipt と
+別の承認では代用できない。承認待ちの間は、損失報告の内容を変えないよう通知を出さない。
+`report_id`・`backup_sha256`・`backup_schema` は `data/restore_report.json` で確認する
+（更新・巻戻しを実行した端末の出力にも確認番号として `report_id` が表示される）。適用・巻戻し・DB置換の実行と結果は runner 側の receipt と
 運用通知で確認する。
 DB置換はタスクの状態・改訂・操作履歴もbackup時点へ戻す。
 損失報告の件数は投稿・添付と配送履歴の範囲で、DB全体の損失件数ではない。

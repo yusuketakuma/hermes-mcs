@@ -23,6 +23,12 @@ __all__ = ["cloud", "real_cloud", "runtime"]
 _REAL_CLOUD_MODE = extract_llm_provider._cloud_mode
 
 
+@pytest.fixture(autouse=True)
+def ample_memory(monkeypatch):
+    """The capacity retirement never samples this host's memory."""
+    monkeypatch.setattr(cloud_backlog, "memory_workers", lambda limit: limit)
+
+
 @pytest.mark.parametrize("cloud_ready", [True, False])
 def test_context_child_finishes_real_guarded_pipeline(runtime, real_cloud, monkeypatch, tmp_path, cloud_ready):
     ledger, clock, local_calls = runtime
@@ -72,19 +78,40 @@ def test_context_child_does_not_enter_after_source_generation_changes(runtime, r
     assert not posts and not document(ledger)
 
 
-def test_context_retry_delay_backs_off_only_for_selection_busy():
+def test_context_retry_delay_backs_off_for_busy_and_workless_scans():
     assert cloud_backlog._context_retry_delay({"done": 1}) == 1
     assert cloud_backlog._context_retry_delay(
-        {"done": 0, "reason": "patient_context_selection_busy"}) == 20
+        {"done": 1, "reason": "patient_context_waiting"}) == 1
     assert cloud_backlog._context_retry_delay(
-        {"done": 0, "reason": "patient_context_waiting"}) == 5
+        {"done": 0, "reason": "patient_context_selection_busy"}) == 20
+    for reason in ("patient_context_waiting", "patient_context_scan_incomplete"):
+        assert cloud_backlog._context_retry_delay(
+            {"done": 0, "reason": reason, "covered": True}) == 60
+        # A partial slice (or a refused scan) must not stall the rotation.
+        assert cloud_backlog._context_retry_delay(
+            {"done": 0, "reason": reason, "covered": False}) == 5
+        assert cloud_backlog._context_retry_delay(
+            {"done": 0, "reason": reason, "covered": False,
+             "scan_refusal": "bookmark_cas"}) == 5
+        assert cloud_backlog._context_retry_delay({"done": 0, "reason": reason}) == 5
+    assert cloud_backlog._context_retry_delay(
+        {"done": 0, "reason": "run_lock"}) == 5
     assert cloud_backlog._context_retry_delay({"done": 0}) == 5
+    # A shared scan idle sleeps until it expires, within the 5..60 s bounds.
+    idle = {"done": 0, "reason": "patient_context_waiting", "covered": True}
+    assert cloud_backlog._context_retry_delay({**idle, "scan_idle_s": 33}) == 33
+    assert cloud_backlog._context_retry_delay({**idle, "scan_idle_s": 2}) == 5
+    assert cloud_backlog._context_retry_delay({**idle, "scan_idle_s": 500}) == 60
+    assert cloud_backlog._context_retry_delay(idle) == 60
+    assert cloud_backlog._context_retry_delay(
+        {"done": 0, "reason": "patient_context_waiting", "covered": False}) == 5
 
 
 def test_context_pass_reports_only_fixed_bounded_diagnostics():
     result = {"status": "deferred", "done": 0, "reason": "patient_context_waiting",
               "scanned": 8, "scan_ms": 900000, "lane": "B", "project_id": 123,
-              "error": "synthetic private source", "patient": "synthetic private patient"}
+              "error": "synthetic private source", "patient": "synthetic private patient",
+              "scan_idle_s": 33.5}
     assert cloud_backlog._context_pass_observation(result) == {
         "status": "deferred", "done": 0, "reason": "patient_context_waiting",
         "scanned": 8, "scan_ms": 900000, "lane": "B"}
@@ -217,7 +244,7 @@ def test_context_child_captures_only_this_pass_validated_writer_refusal(monkeypa
     monkeypatch.setattr(resident, "_context_memory_available", lambda: True)
     monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: len(events) < 2)
     monkeypatch.setattr(cloud_backlog, "_event", lambda event, **fields: events.append((event, fields)))
-    monkeypatch.setattr(cloud_backlog, "time", SimpleNamespace(sleep=lambda _: None))
+    monkeypatch.setattr(cloud_backlog, "time", SimpleNamespace(sleep=lambda _: None, monotonic=lambda: 0.0))
     def refresh(*args, **kwargs):
         assert kwargs == {"cloud_worker": True}
         if not events:
@@ -231,6 +258,39 @@ def test_context_child_captures_only_this_pass_validated_writer_refusal(monkeypa
                             "writer_reason": "source_generation_changed", "writer_stage": "generation_fence"}
     assert events[1][1] == {"status": "deferred", "done": 0, "reason": "unclassified"}
     assert "synthetic-private" not in json.dumps(events)
+
+
+@pytest.mark.parametrize("index,passes", [(5, 3), (6, 3), (7, 1), (9, 1)])
+def test_context_child_retires_when_memory_capacity_drops(monkeypatch, tmp_path, index, passes):
+    """Ten workers spawned at capacity 10; a drop to 6 retires index 7 and up
+    (one worker of hysteresis, as the backlog workers) at the next 60 s check,
+    after the pass in hand has returned."""
+    events, clock = [], SimpleNamespace(now=0.0)
+    capacity = {"value": 10}
+    initial = (False, "synthetic-current")
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: initial)
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda _: {"mode": "on", "max_concurrency": 10})
+    monkeypatch.setattr(resident, "_context_memory_available", lambda: True)
+    monkeypatch.setattr(cloud_backlog, "memory_workers", lambda limit: min(limit, capacity["value"]))
+    monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: len(events) < 3)
+    monkeypatch.setattr(cloud_backlog, "_event", lambda event, **fields: events.append((event, fields)))
+
+    def sleep(seconds):
+        clock.now += 60
+    monkeypatch.setattr(cloud_backlog, "time", SimpleNamespace(sleep=sleep, monotonic=lambda: clock.now))
+
+    def refresh(*args, **kwargs):
+        capacity["value"] = 6   # memory drops while the first pass runs
+        return {"status": "complete", "done": 1}
+    monkeypatch.setattr(resident, "_background_context_refresh", refresh)
+    cloud_backlog._context_worker(object(), initial, index)
+    assert [name for name, _ in events].count("patient_context_pass") == passes
+    if passes < 3:
+        assert events[-1] == ("cloud_worker_retired", {"reason": "capacity_reduced"})
+    else:
+        assert "cloud_worker_retired" not in [name for name, _ in events]
 
 
 def test_context_child_exits_before_engine_when_import_fence_is_stale(runtime, real_cloud, monkeypatch, tmp_path):
@@ -249,7 +309,8 @@ def test_context_child_exits_before_engine_when_import_fence_is_stale(runtime, r
     monkeypatch.setattr(resident, "_context_memory_available", lambda: True)
     monkeypatch.setattr(cloud_backlog, "_event", lambda event, **fields: events.append((event, fields)))
     monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: len(events) < 2)
-    monkeypatch.setattr(cloud_backlog, "time", SimpleNamespace(sleep=lambda seconds: sleeps.append(seconds)))
+    monkeypatch.setattr(cloud_backlog, "time", SimpleNamespace(
+        sleep=lambda seconds: sleeps.append(seconds), monotonic=lambda: 0.0))
     initial = writer_lock.updater_state()
     monkeypatch.setattr(extract_llm_source_contract, "_WRITER_STATE", (False, "synthetic-prior-generation"))
     cloud_backlog._context_worker(ledger, initial, 0)
@@ -306,3 +367,26 @@ def test_guard_refusal_code_keeps_the_cloud_kind_and_drops_text():
     assert code(cloud_client.CloudNotSent("cloud_budget_blocked")) == "cloud_budget_blocked"
     assert code(ValueError("synthetic private patient")) == "ValueError"
     assert code(sqlite3.OperationalError("database is locked")) == "OperationalError"
+
+
+def test_context_pass_lane_breakdown_keys_match_the_engine():
+    import patient_context_refresh
+    assert cloud_backlog._NO_DUE_LANE_KEYS == patient_context_refresh._NO_DUE_LANE_KEYS
+
+
+def test_context_pass_reports_fixed_change_cause_detail_and_lane_breakdown():
+    result = {"status": "source_changed", "done": 0, "changed": "scans",
+              "wait_no_due_B_none_incomplete": 2, "wait_no_due_A_backoff": 16}
+    assert cloud_backlog._context_pass_observation(result) == {
+        "status": "source_changed", "done": 0, "changed": "scans",
+        "wait_no_due_B_none_incomplete": 2, "wait_no_due_A_backoff": 16}
+    assert cloud_backlog._context_pass_observation(
+        {"status": "source_changed", "changed": "合成の非公開値"})["changed"] == "unclassified"
+    assert "changed" not in cloud_backlog._context_pass_observation({"status": "deferred", "changed": "scans"})
+    assert "wait_no_due_A_backoff" not in cloud_backlog._context_pass_observation(
+        {"status": "deferred", "wait_no_due_A_backoff": 17})
+    record = cloud_backlog._context_pass_observation({
+        "status": "deferred", "reason": "source_quality_unavailable:RuntimeStale", "detail": "RuntimeStale"})
+    assert record == {"status": "deferred", "reason": "source_quality_unavailable", "detail": "RuntimeStale"}
+    assert cloud_backlog._context_pass_observation({
+        "status": "deferred", "reason": "source_quality_unavailable", "detail": "合成 本文"})["detail"] == "unclassified"

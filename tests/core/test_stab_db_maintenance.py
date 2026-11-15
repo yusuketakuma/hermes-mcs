@@ -167,6 +167,36 @@ def test_dirty_flag_waits_out_the_interval_unless_urgent(tmp_path, snapdir):
     db.close()
 
 
+def test_publish_deferrable_matches_the_interval_decision(tmp_path, snapdir):
+    db = _ledger(tmp_path)
+    path = str(tmp_path / "ledger.db")
+    db.save_messages([_message(1)])
+    now = time.time()
+    # no published copy yet: the tick must keep its publish reserve
+    assert maintenance.snapshot_publish_deferrable(path, now=now) is False
+    assert maintenance.refresh_snapshot(path, now=now) == "published"
+    db.save_messages([_message(2)])
+    assert maintenance.snapshot_publish_deferrable(path, now=now + 1) is True
+    later = now + maintenance.SNAPSHOT_MIN_INTERVAL_S
+    assert maintenance.snapshot_publish_deferrable(path, now=later) is False
+    assert maintenance.snapshot_publish_deferrable(
+        path, now=now + 1, deadline=time.monotonic() - 1) is False
+    # an urgent key already moved: keep the reserve so this tick publishes
+    with db.db:
+        db.db.execute("INSERT INTO command_receipts VALUES('c1','h',1,NULL,'applied','{}',?)",
+                      (now,))
+    assert maintenance.snapshot_publish_deferrable(path, now=now + 2) is False
+    # a caller without a publish reserve holds even an urgent change; the
+    # marker stays, so the next reserved publish still sees the move
+    marker = open(maintenance._snapshot_sig_path()).read()
+    assert maintenance.refresh_snapshot(path, publish=False, now=now + 3) == "deferred"
+    assert open(maintenance._snapshot_sig_path()).read() == marker
+    assert maintenance.refresh_snapshot(path, now=now + 4) == "published"
+    os.unlink(maintenance._snapshot_sig_path())
+    assert maintenance.snapshot_publish_deferrable(path, now=now + 5) is False
+    db.close()
+
+
 @pytest.mark.parametrize("change", ["patient", "request", "receipt", "schema",
                                     "rowid_fell", "new_table"])
 def test_urgent_snapshot_changes_skip_the_interval(tmp_path, snapdir, change):

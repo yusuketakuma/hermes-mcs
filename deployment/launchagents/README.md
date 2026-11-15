@@ -1,13 +1,13 @@
 # スケジューリング構成
 
-`runtime_mode=standalone`では`ai.mcs.standalone`の単一hostが下表と同じ7定期ジョブ、
+`runtime_mode=standalone`では`ai.mcs.standalone`の単一hostが下表と同じ6定期ジョブ、
 cmd/cmd_int取込、抽出worker3本と接続を所有する。Hermes cronや個別MCS LaunchAgentは
 併用しない。LLMとrepo外復旧watchdogは別のnative serviceを維持する。
 導入・切替は[独立モードの手順](../../docs/guides/STANDALONE.md)を参照。
 以下のHermes cron構成と配置先は`runtime_mode=hermes`（未指定の既存設定）のもの。
 
-収集ジョブは **hermes cron（標準スケジューラ）7件 + launchd 6件** の
-ハイブリッド。別途、LLM サーバ常駐用の `ai.mcs.llamaserver.plist`
+収集ジョブは **hermes cron（標準スケジューラ）6件 + launchd 7件**（services 所有6件と
+install.sh 所有の `org.mcs.recovery`）のハイブリッド。別途、LLM サーバ常駐用の `ai.mcs.llamaserver.plist`
 （KeepAlive サーバであってジョブではない。install.sh 所有・stage 4 で
 配置）が同ディレクトリにある。
 
@@ -18,8 +18,7 @@ services所有のlaunchdは `mcs/ops/services/service_contract.py` の `AGENT_LA
 | ジョブ | スケジュール | 実行系 |
 |---|---|---|
 | 未読チェック `run_check.py --json --download-files --mark-read` | `*/10 * * * *`（24時間） | hermes cron (`mcs_check.sh`) |
-| 保存済み添付のOCR・ローカル解析 `mcs_ocr.py --run` | `* * * * *` | hermes cron (`mcs_ocr.sh`) |
-| ヘルス監視 `health_watch.py` | `*/5 * * * *` | hermes cron (`mcs_health.sh`) |
+| 保存済み添付のOCR・ローカル解析 `mcs_ocr.py --run` | `5,15,25,35,45,55 * * * *` | hermes cron (`mcs_ocr.sh`) |
 | durable-job drain `run_check.py --json --jobs-only` | `10,40 * * * *` | hermes cron (`mcs_deep.sh`) |
 | 失敗ジョブの bounded retry 登録 | `0 */6 * * *`（解析は常駐worker） | hermes cron (`mcs_llm_catchup.sh`) |
 | llama-server 再起動（idle待ち・最大15分） | `0 4 * * *` | hermes cron (`llamacpp_restart_if_idle.sh`) |
@@ -27,16 +26,18 @@ services所有のlaunchdは `mcs/ops/services/service_contract.py` の `AGENT_LA
 | 更新中断の復旧 `mcs_recover.py --if-stale` | 15分間隔 | launchd `org.mcs.recovery`（独立・install.sh 所有） |
 | コマンド取込 `run_check.py --json --download-files --mark-read` | `data/cmd/` WatchPaths（イベント駆動） | launchd `local.mcs-cmd` |
 | 対話カードコマンド `run_check.py --json --commands-only` | `data/cmd_int/` WatchPathsに加え、StartInterval/ThrottleIntervalを5秒に設定（通常のサービス再配置で反映） | launchd `local.mcs-int` |
-| ヘルス監視の予備 `health_watch.py` | 300秒間隔（hermes cron が詰まっても警報する。flock・重複抑止は cron 側と共有） | launchd `local.mcs-health` |
+| ヘルス監視 `health_watch.py` | 300秒間隔（hermes cron が詰まっても警報する。止まると未読チェックが「監視処理の停止」を警報する） | launchd `local.mcs-health` |
 | 抽出・semantic/QC 常駐drainer（レーン2） | KeepAlive・24時間・待機5〜30秒（次回実行時刻も考慮） | launchd `ai.mcs.extract-drainer` |
 | 抽出・semantic/QC 常駐drainer（レーン3） | KeepAlive・24時間・待機5〜30秒（次回実行時刻も考慮） | launchd `ai.mcs.extract-drainer-2` |
+| 抽出・semantic/QC 夜間用drainer（レーン1） | KeepAlive・昼間（JST 08〜20時）は新しい処理を始めない | launchd `ai.mcs.extract-drainer-night` |
 
 MCSサーバーの負荷対策として、定期的なMCSアクセスを5分から10分間隔へ変更した。
 ヘルス監視はローカルの保管状態を確認するため5分間隔を維持する。
-添付OCRの毎分ジョブも保存済み資料だけを読み、MCSサーバーへ取りに行かない。
+ヘルス監視はhermes cronに登録しない。hermes cronは同時1本で動くため、待ち行列を増やさないようにlaunchdだけで動かす。
+添付OCRのジョブは10分ごと（未読チェックの5分後）に動き、保存済み資料だけを読み、MCSサーバーへ取りに行かない。
 実行中のOCRジョブがあれば重ねず、次回に処理を引き継ぐ。
 
-`runtime_mode: "standalone"`では同じ時刻の7ジョブを単一hostが実行し、
+`runtime_mode: "standalone"`では同じ時刻の6ジョブを単一hostが実行し、
 wrapperは`~/.mcs/scripts/`、Pythonは`~/.mcs/venv/bin/python3`になる。
 通知接続の有無にかかわらず`ai.mcs.standalone`を配置し、個別のcalendar agentは登録しない。
 モード変更時はmanifestの所有ジョブを照合する。Hermesへ戻す際は新cronの検証後に
@@ -49,8 +50,8 @@ wrapperスクリプトの正本は `deployment/scripts/`（`__PYTHON__`/`__REPO_
 ## セットアップ
 
 **自動化（推奨）**: `~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py services` が下記の
-手順をすべて実行する（冪等・`--dry-run` で確認可）。launchd 5件の
-bootstrap と hermes cron 7件の登録は既存分をスキップする。plist 本文・
+手順をすべて実行する（冪等・`--dry-run` で確認可）。launchd 6件の
+bootstrap と hermes cron 6件の登録は既存分をスキップする。plist 本文・
 cron スケジュールの差分は reconcile する（loaded でも内容が違えば
 bootout→bootstrap、schedule 差分は `hermes cron edit`、desired 外の
 所有 agent/cron は削除）。実績は `data/service_manifest.json` に記録
@@ -58,17 +59,20 @@ bootout→bootstrap、schedule 差分は `hermes cron edit`、desired 外の
 `./install.sh` からも自動で呼ばれる（stage 5）。services は全 wrapper・
 plist を `~/.hermes/hermes-agent/venv/bin/python` で起動するよう描画する
 ため、このインタプリタが無ければ何も描画せず exit 1 で止まる
-（`./install.sh` の再実行で stage 2 が venv を作り直す）。
+（導入済みの環境では stage 2 は venv を作り直さない。常駐サービスの停止を確認し、
+`mv <venv> <venv>.broken` で退避してから `./install.sh` を再実行する。手順は
+`docs/guides/INSTALLATION.md` §7-2）。
 描画される `__REPO__` は checkout の絶対パスなので、checkout を移動したら
 新しい場所で `./install.sh` を再実行する（`docs/guides/INSTALLATION.md` §A-7）。
-配置・ロード状態の確認は `mcs_setup.py check`（drift・未ロードを
-エラー表示）/ `doctor --probe services`（サービス診断の状態とエラー・警告件数）。
+配置・ロード状態の確認は `mcs_setup.py check`（wrapperスクリプトのdrift・未ロードを
+エラー表示。Hermesモードの plist 本文は比較せず、独立モードの host・稼働監視の定義は比較する）/ `doctor --probe services`（サービス診断の状態とエラー・警告件数）。
 `doctor`単独ではLLM・サービス・認証情報・データを調べず、未確認の範囲は
 `not_checked`と表示する。
 
 独立モードの`services`は`~/.mcs/venv/bin/python3`・`~/.mcs/scripts/`で描画し、
-単一host serviceを登録する。稼働中はnative hostを強制停止せず、処理完了後の
-再起動を要求する。mode切替は旧manifest所有のMCS cron/agentだけを停止し、
+単一host serviceを登録する。稼働中のhostは、定義が変わらなければ強制停止せず処理完了後の
+再起動を要求する（更新中は要求せず、更新の記録後に要求する）。macOSで定義が変わった場合は
+`launchctl` の bootout+bootstrap で再読込する。mode切替は旧manifest所有のMCS cron/agentだけを停止し、
 停止を検証できなければ新serviceを起動しない。手動登録や共有gatewayは対象外。
 
 **復旧 watchdog（install.sh が別系統で所有）**: `org.mcs.recovery`

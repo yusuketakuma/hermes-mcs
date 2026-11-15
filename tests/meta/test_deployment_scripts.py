@@ -292,7 +292,7 @@ def test_llama_restart_log_path_survives_the_rendered_quoting():
 def test_independent_ocr_schedule_is_not_gated_by_collection_success():
     import scheduled_jobs
 
-    assert ('MCS attachment OCR', '* * * * *', 'mcs_ocr.sh') in scheduled_jobs.CRON_JOBS
+    assert ('MCS attachment OCR', '5,15,25,35,45,55 * * * *', 'mcs_ocr.sh') in scheduled_jobs.CRON_JOBS
     for name in ('mcs_check.sh', 'mcs_deep.sh'):
         assert 'mcs_ocr.py' not in (SCRIPTS / name).read_text()
     assert 'mcs/ops/mcs_ocr.py --run' in (SCRIPTS / 'mcs_ocr.sh').read_text()

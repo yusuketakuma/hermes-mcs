@@ -71,6 +71,25 @@ def _atomic_json(path, value, prefix, suffix=".tmp", **dump_kw):
                 os.unlink(tmp)
 
 
+def _adoption_resumed(data):
+    """Ask the checkout's own writers_resumed about an adopted backup (IA-099).
+
+    Stdlib only and frozen into _GATEWAY_RESTART_PROGRAM: the proof stays in
+    mcs_restore.py instead of a copy here; a missing script, a timeout or any
+    other answer keeps the hold (fail closed)."""
+    import subprocess
+    import sys
+    script = os.path.join(os.path.dirname(os.path.abspath(data)), "mcs", "ops", "mcs_restore.py")
+    if os.path.islink(script) or not os.path.isfile(script):
+        return False
+    try:
+        result = subprocess.run([sys.executable, "-I", "-B", script, "resumed", "--destination", data],
+                                stdin=subprocess.DEVNULL, capture_output=True, timeout=60, cwd="/")
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and result.stdout.strip() == b'{"ok": true, "writers_resumed": true}'
+
+
 def _gateway_restart_report(data, status, request_id=None, **facts):
     """Keep restart requests separate from verified process replacement."""
     os.makedirs(data, exist_ok=True)
@@ -283,7 +302,10 @@ def _gateway_restart_run(data, agents, uid, expected_pid=None, request_id=None,
             if os.path.lexists(marker):
                 restore = _read_local_json(marker)
                 if not isinstance(restore, dict) or not (restore.get("phase") == "restored"
-                        or ("phase" not in restore and "restored_at" in restore)):
+                        or ("phase" not in restore and "restored_at" in restore)
+                        or (restore.get("by") == "mcs_backup_restore"
+                            and restore.get("phase") == "awaiting_consent"
+                            and _adoption_resumed(data))):
                     raise ValueError("gateway_restart_restore_hold")
             found = []
             for domain in ("gui", "user"):
@@ -386,6 +408,7 @@ _GATEWAY_RESTART_PROGRAM = (
     + "\n" + inspect.getsource(_read_regular_bytes)
     + "\n" + inspect.getsource(_read_local_json)
     + "\n" + inspect.getsource(_atomic_json)
+    + "\n" + inspect.getsource(_adoption_resumed)
     + "\n" + inspect.getsource(_gateway_restart_report)
     + "\n" + inspect.getsource(_gateway_restart_run)
     + "\nsys.exit(_gateway_restart_run(*sys.argv[1:]))\n")

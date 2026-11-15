@@ -2,7 +2,7 @@
   "category": "fixed",
   "title": "OCRモデルキャッシュを ~/.cache から ~/.mcs/data 配下へ移し清掃による消失を防止",
   "summary": "添付OCR(yomitoku)のモデルキャッシュは従来 ~/.cache/huggingface に保存され、清掃で削除されると全OCRが engine_load_failed で停止していました。インストール時の取得と推論時の読込の両方で、キャッシュをMCSのデータディレクトリ配下（DATA/huggingface）に統一しました。sandboxプロファイルも新しい場所だけに限定し、offline/local-only動作とpinned revision契約は変更ありません。",
-  "upgrade": "追加操作は不要です。初回適用後、既存キャッシュを DATA/huggingface へ移すか scripts/setup_yomitoku.py を再実行してモデルを再取得してください。移行までは engine_load_failed が継続する場合があります。",
+  "upgrade": "OCR（Yomitoku）を導入していない端末では操作は不要です。導入済みの端末では、モデルを新しい場所（DATA/huggingface）へ取得し直す必要があります。導入記録（install_args）に --with-yomitoku がある場合は、更新時に再導入（ocr_requirements_changed）を求められ、その再導入で取得します。記録が無い場合（scripts/setup_yomitoku.py を直接実行した場合など）は再導入を求められないため、更新後に install.sh を --with-yomitoku 付きで再実行するか、scripts/setup_yomitoku.py --root MCS_ROOT を実行してください。取得するまでは全添付のOCRが engine_load_failed になり、3回失敗した添付は24時間ごとに再試行します。旧 ~/.cache/huggingface のモデルは使わず、自動では削除しません。",
   "details": [
     "mcs/extract/ocr_model_contract.py: hf_home(data_dir) を追加。DATA_DIR/huggingface を返す共有helper。",
     "mcs/extract/attachment_ocr.py: _runtime に hf 引数を追加し環境変数 HF_HOME を新パスへ。_sandbox_profile に hub 引数を追加し readable を新しい hub のみに限定。run_pending で root=_data_root(ledger) から hf=hf_home(root) を導出して _runtime へ渡す。",

@@ -109,6 +109,24 @@ def test_stop_from_a_successful_record_is_ignored(tmp_path):
     assert "止まった処理" not in text and "data/mcs.log の末尾を確認" in text
 
 
+def test_stopped_run_and_semantic_backlog_details_are_both_reported(tmp_path):
+    stop = {"stage": "unread", "category": "network"}
+    path = _health(tmp_path, "failed", stop)
+    with open(path) as stream:
+        health = json.load(stream)
+    health["state_reasons"].append("semantic_backlog_stalled")
+    health["semantic_jobs"] = {"pending": 5, "oldest_age_s": 7200.0,
+                               "user_facing_pending": 2, "reprocess_pending": 3,
+                               "resident_turns_24h": {"attempts": 4, "lock_busy": 1}}
+    with open(path, "w") as stream:
+        json.dump(health, stream)
+    report = health_watch.classify_health(path, 1000, 600)
+    text = "\n".join(health_watch._alert_lines({**report, "alert": True, "disk_alert": False}))
+    assert report["run_stop"] == stop
+    assert report["semantic_detail"]["user_facing_pending"] == 2
+    assert "止まった処理: 未読投稿の取得" in text and "通知対象2件・再処理3件" in text
+
+
 def test_immediate_notice_shows_stage_cause_and_step_without_raw_detail():
     stop = {"stage": "attachments", "category": "storage"}
     text = notify_flush._system_event_text("run_failed", {"run_id": 3, "detail": PRIVATE, "stop": stop})

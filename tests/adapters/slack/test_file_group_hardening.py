@@ -6,7 +6,7 @@ import json
 import pytest
 import notify_cards
 import notify_parts
-from adapters.common import journal
+from adapters.common import journal, worker
 from adapters.common import spec as spec_module
 from adapters.slack import cards as slack_cards
 from adapters.slack import delivery
@@ -108,7 +108,7 @@ def test_sdk_clone_checks_each_request_without_mutating_original():
     async def run():
         token = delivery.RETRY_ALLOWED.set(denied)
         try:
-            with pytest.raises(RuntimeError, match="send_authority_revoked"):
+            with pytest.raises(worker.SendNotAdmitted):
                 await clone.api_call("files.completeUploadExternal")
             assert await original.api_call("unchanged") == "unchanged"
         finally:
@@ -132,7 +132,7 @@ def test_sdk_upload_stops_between_requests_when_authority_changes():
     async def run():
         token = delivery.RETRY_ALLOWED.set(allowed)
         try:
-            with pytest.raises(RuntimeError, match="send_authority_revoked"):
+            with pytest.raises(worker.SendNotAdmitted):
                 await delivery.single_attempt(Client()).files_upload_v2()
         finally:
             delivery.RETRY_ALLOWED.reset(token)
