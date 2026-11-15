@@ -1359,7 +1359,9 @@ def db_maintenance(db_path: str, *, deadline: float | None = None,
     messages_fts. ``deadline`` (time.monotonic) is the caller's hard stop:
     a pass that cannot start with enough time left is skipped and retried
     next tick, and a running statement is interrupted at the deadline
-    (its transaction rolls back). Returns None when nothing was due."""
+    (its transaction rolls back). Returns None when nothing was due.
+    After a successful daily pass whose state was saved, it may also create the
+    optional accounting order index (cloud_usage_order_index in the result)."""
     now = time.time() if now is None else now
     state = _load_json(DB_MAINT_STATE)
     daily = not _recent(state.get("daily_at"), now, DB_MAINT_INTERVAL_S)
@@ -1376,6 +1378,7 @@ def db_maintenance(db_path: str, *, deadline: float | None = None,
         return {"skipped": "deadline"}
     out: dict = {}
     retention_error = None
+    saved = False
     con = sqlite3.connect(db_path, timeout=5)
     try:
         con.execute("PRAGMA busy_timeout=5000")
@@ -1427,4 +1430,33 @@ def db_maintenance(db_path: str, *, deadline: float | None = None,
         text = json.dumps(state)
         with suppress(OSError):
             atomic_write(DB_MAINT_STATE, lambda f: f.write(text), mode=0o600)
+            saved = True
+    if daily:
+        out["cloud_usage_order_index"] = (
+            _cloud_usage_order_index(db_path, deadline) if saved else "state_unpersisted")
     return out
+
+
+def _cloud_usage_order_index(db_path: str, deadline: float | None) -> str:
+    """Create the optional accounting order index on its own bounded connection.
+
+    Only after the daily pass and its state were saved, so a failed or interrupted
+    build waits for the next daily pass instead of repeating every tick."""
+    import ledger_schema
+    if deadline is None or deadline - monotonic() < DB_MAINT_MIN_S:
+        return "deadline"
+    wait_s = min(5.0, max(0.0, deadline - monotonic()))
+    con = sqlite3.connect(db_path, timeout=wait_s)
+    try:
+        con.execute(f"PRAGMA busy_timeout={int(wait_s * 1000)}")
+        con.set_progress_handler(lambda: int(monotonic() >= deadline), 10000)
+        try:
+            return ledger_schema.install_cloud_usage_order_index(con, deadline=deadline)
+        except sqlite3.OperationalError as error:
+            if monotonic() >= deadline:
+                return "deadline"
+            if getattr(error, "sqlite_errorcode", 0) & 0xff in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                return "busy"
+            raise
+    finally:
+        con.close()

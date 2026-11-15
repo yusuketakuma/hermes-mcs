@@ -904,11 +904,23 @@ def usage_report(ledger, *, now=None, period="month"):
                 "unresolved_requests": None, "pricing_unverified": True}
 
 
+def _accounting_order_source(db) -> str:
+    """The table expression for the accounting reads ordered by artifact_id.
+
+    Inside the caller's read snapshot, the exact order index (ledger_schema) lets
+    these reads skip a temporary sort; without it they keep their original plan."""
+    import ledger_schema
+    if ledger_schema.cloud_usage_order_index_state(db) == "present":
+        return f"artifacts INDEXED BY {ledger_schema.CLOUD_USAGE_ORDER_INDEX}"
+    return "artifacts"
+
+
 def _usage_report_snapshot(ledger, *, now=None, period="month"):
     now = time.time() if now is None else now
     day, month = _periods(now)
     rows = list(ledger.db.execute(
-        "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
+        "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
+        f"FROM {_accounting_order_source(ledger.db)} "
         "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') "
         "AND created_at>=? ORDER BY artifact_id", (day if period == "day" else month,)))
     reserves, results = {}, {}
@@ -1029,7 +1041,8 @@ class _Tally:
         """Hash all accounting columns, including reservations outside the period."""
         digest = hashlib.sha256()
         with closing(ledger.db.execute(
-            "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
+            "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
+            f"FROM {_accounting_order_source(ledger.db)} "
             "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND created_at>=? "
             "AND artifact_id<=? ORDER BY artifact_id", (self.month, self.last_id))) as rows:
             prior = _matching_rows_many(ledger, KINDS[0], self.orphans, now=now, _timestamps_checked=True)
@@ -1046,7 +1059,8 @@ class _Tally:
         new_orphans = {}
         changed_orphans = set()
         with closing(ledger.db.execute(
-            "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
+            "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
+            f"FROM {_accounting_order_source(ledger.db)} "
             "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND created_at>=? "
             "AND artifact_id>? ORDER BY artifact_id", (self.month, self.last_id))) as rows:
             for row in rows:
