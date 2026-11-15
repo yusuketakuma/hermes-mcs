@@ -153,7 +153,7 @@ def test_snapshot_gate_checks_the_uri_argument(monkeypatch, tmp_path, call, allo
 
 @pytest.mark.parametrize("relative,function", [
     ("semantic/semantic_jev.py", "_reserve_live_usage"),
-    ("ops/cloud_cli.py", "command"),
+    ("ops/commands/mcs_requests.py", "apply_local_operation"),
 ])
 def test_cloud_writer_exemption_stays_inside_locked_function(monkeypatch, tmp_path, relative, function):
     gates = _load("ci_cloud_writer", "ci/gates.py")
