@@ -213,7 +213,8 @@ def test_unchanged_world_readable_watchdog_files_are_made_private(tmp_path):
     """The pre-umask tool (0755) and plist (0644) also fail the ownership
     check, and stage 5 runs before stage 6 could republish them; files others
     can write are not laundered into private ones."""
-    home, hermes_home, stub_root, env = _world(tmp_path)
+    # An existing watchdog belongs to an existing install, not a fresh bootstrap.
+    home, hermes_home, stub_root, env = _world(tmp_path, configured=True)
     rec = home / ".mcs-recovery"
     rec.mkdir(mode=0o700, parents=True)
     tool, pointer = rec / "mcs_recover.py", rec / "repo_path"

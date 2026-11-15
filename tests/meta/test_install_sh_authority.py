@@ -107,6 +107,11 @@ def test_lockf_usage_failure_is_not_reported_as_a_running_install(tmp_path):
 def test_lockf_fallback_still_detects_a_held_install_lock(tmp_path):
     import fcntl
     home, hermes_home, stub_root, env = _world(tmp_path)
+    python = stub_root / 'bin/python3'
+    stub = python.read_text()
+    inherited_lock = '*mcs-installer-inherited-lock*'
+    assert stub.count(inherited_lock) == 1
+    python.write_text(stub.replace(inherited_lock, inherited_lock + '|*mcs-installer-flock-fallback*'))
     lockf = stub_root / 'bin/lockf'
     lockf.write_text('#!/bin/sh\nexit 64\n')  # EX_USAGE
     lockf.chmod(0o755)
@@ -118,6 +123,7 @@ def test_lockf_fallback_still_detects_a_held_install_lock(tmp_path):
         result = _run(env, hermes_home, '--no-llm')
         assert result.returncode != 0
         assert '別の導入または更新' in result.stderr
+        assert any('mcs-installer-flock-fallback' in call for call in _calls(stub_root))
         assert not (home / '.mcs/config.json').exists()
     finally:
         os.close(fd)
