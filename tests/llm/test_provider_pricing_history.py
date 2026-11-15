@@ -22,7 +22,7 @@ def now(monkeypatch):
 
 
 def _rotate_anthropic(monkeypatch):
-    previous = c.PRICE_DEFINITIONS[(c.MODEL, c.PRICE_VERSION)]
+    previous = c.PRICE_DEFINITIONS[(c.MODEL, c.current_price_version(c.MODEL))]
     model, version = "synthetic-next-model", "synthetic-next-version"
     prices = MappingProxyType({**previous["prices"], "input": "1", "output": "5"})
     successor = MappingProxyType({**previous, "model": model, "price_version": version, "prices": prices})
