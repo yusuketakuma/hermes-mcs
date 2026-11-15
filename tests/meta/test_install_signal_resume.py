@@ -62,7 +62,8 @@ raise SystemExit(result)
         if process.returncode is None:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
+                # macOS may return EPERM for a group with only exiting members.
                 pass
         process.wait(timeout=5)
     (stub / "state/signal-release").touch()
