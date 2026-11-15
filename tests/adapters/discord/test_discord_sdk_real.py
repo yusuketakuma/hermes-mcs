@@ -13,7 +13,9 @@ from pathlib import Path
 
 import pytest
 
-discord = pytest.importorskip("discord")
+from discord_sdk_testkit import require_real_discord
+
+discord = require_real_discord()
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from adapters.common import spec as spec_mod  # noqa: E402
