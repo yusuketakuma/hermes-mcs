@@ -370,6 +370,7 @@ def test_known_cloud_failure_falls_back_locally_while_its_reservation_stays(rout
     assert report["done"] == 1 and local == [True] and len(calls) == 1
 
 
+@pytest.mark.xfail(strict=True, reason="held: the 8399c240 prior gating is not merged on main (Astra A-1 r2, 2026-11-15); main keeps proof-v2 passing the stored prior")
 def test_superseded_row_never_receives_the_stored_protected_prior(routed, monkeypatch):
     """The migrated request guard refuses a repair, so the runner keeps the
     stored prior out of a superseded local attempt; the commit hold decides."""

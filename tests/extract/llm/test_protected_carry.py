@@ -19,6 +19,8 @@ from inference_version import CURRENT_VERSION, VERSION_KEY
 from extract_llm_prompts import _hint_coverage
 from extract_llm_proofs import _quality_record_consistent
 
+HELD_CARRY = pytest.mark.xfail(strict=True, reason="held: the carry_protected completion and the 8399c240 prior gating are not merged on main (Astra A-1 r2, 2026-11-15); main keeps proof-v2 passing the stored prior")
+
 BODY = "本日、発熱はありません。"
 QUOTE = "発熱はありません"
 PRIOR_FEVER = {"text": "発熱", "negated": True, "status": "ongoing", "subject": "patient", "evidence": QUOTE}
@@ -102,6 +104,7 @@ def _model(document, calls):
     return model
 
 
+@HELD_CARRY
 def test_local_extraction_carries_and_its_completeness_claim_matches_the_result(monkeypatch):
     calls = []
     monkeypatch.setattr(extract_llm_engine, "_llm_call", _model(
@@ -116,6 +119,7 @@ def test_local_extraction_carries_and_its_completeness_claim_matches_the_result(
         _hint_coverage(result, extract_llm._rule_hints({"body_text": BODY, "posted_at": None}), BODY))
 
 
+@HELD_CARRY
 def test_local_conflict_leaves_the_candidate_unchanged_and_is_counted(monkeypatch):
     raw = {"summary": "合成", "symptoms": [{**PRIOR_FEVER, "negated": False}]}
     monkeypatch.setattr(extract_llm_engine, "_llm_call", _model(raw, []))
@@ -148,6 +152,7 @@ def test_a_quote_across_a_chunk_boundary_is_not_carried(monkeypatch):
     assert quality.protected_lost({"symptoms": [PRIOR_FEVER]}, result, body) == {"symptoms": 1}
 
 
+@HELD_CARRY
 def test_carried_prior_items_do_not_hide_a_thin_extraction(monkeypatch):
     # Two carried facts reach the thin minimum; the model's own output has none.
     cough = {"text": "咳", "negated": True, "status": "ongoing", "subject": "patient", "evidence": "咳もありません"}
@@ -251,6 +256,7 @@ def _current_keeps_prior_fever(db):
     return quality.protected_lost({"symptoms": [PRIOR_FEVER]}, content, BODY) == {}
 
 
+@HELD_CARRY
 def test_run_pending_carries_the_stored_prior_into_a_short_local_candidate(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     try:
@@ -267,6 +273,7 @@ def test_run_pending_carries_the_stored_prior_into_a_short_local_candidate(tmp_p
         db.close()
 
 
+@HELD_CARRY
 def test_run_pending_keeps_a_disagreeing_local_candidate_held(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     try:
@@ -286,6 +293,7 @@ def test_run_pending_keeps_a_disagreeing_local_candidate_held(tmp_path, monkeypa
         db.close()
 
 
+@HELD_CARRY
 def test_cloud_runs_never_receive_the_stored_prior(routed, monkeypatch):
     led, _cfg, calls, reserved, _results = routed
     _seed_prior(led)
@@ -296,6 +304,7 @@ def test_cloud_runs_never_receive_the_stored_prior(routed, monkeypatch):
     assert all(kwargs.get("provider") is not None and "protected_prior" not in kwargs for kwargs in seen)
 
 
+@HELD_CARRY
 @pytest.mark.parametrize("route", ["qc", "human"])
 def test_qc_and_human_corrections_never_receive_the_stored_prior(tmp_path, monkeypatch, route):
     from adapters.common import envelopes
@@ -319,6 +328,7 @@ def test_qc_and_human_corrections_never_receive_the_stored_prior(tmp_path, monke
         db.close()
 
 
+@HELD_CARRY
 def test_a_carried_save_wait_keeps_the_carried_prior(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     try:
@@ -342,5 +352,27 @@ def test_a_carried_save_wait_keeps_the_carried_prior(tmp_path, monkeypatch):
                                           write_wait_s=1, carry=first["carry"])
         assert resumed["done"] == 1 and resumed["carry"] == []
         assert _current_keeps_prior_fever(db)
+    finally:
+        db.close()
+
+
+@pytest.mark.xfail(strict=True, reason="known on main 883464c0: the stored prior keeps a human correction that omits it in protected-loss repair until the deadline (proof-v2 passes the prior on correction paths); separate from the held carry")
+def test_a_human_correction_that_drops_a_prior_item_is_adopted_as_corrected(tmp_path, monkeypatch):
+    """The model leaves out the reported prior item: the human fix should be adopted without it."""
+    from adapters.common import envelopes
+    import mcs_requests
+    db = _ledger(tmp_path)
+    try:
+        aid = _seed_prior(db)
+        request = envelopes.extract_feedback("synthetic-operator", {"project_id": 1, "extract_ref": {
+            "message_id": 1, "artifact_id": aid}}, "symptoms", "合成の確認結果")
+        assert mcs_requests.apply_command(db, request)["outcome"] == "applied"
+        _local(monkeypatch, {"symptoms": [], "summary": "合成の訂正候補"})
+        res = extract_llm.run_pending(db, limit=1, budget_s=60)
+        assert res["done"] == 1, {k: res.get(k) for k in ("deferred", "defer_reasons", "held_prior", "failed")}
+        adopted = [json.loads(row["content"]) for row in db.artifacts("extract_llm", message_id=1)
+                   if (json.loads(row["meta"]).get("human_fix") or {}).get("applied") is True]
+        assert adopted and not any(item.get("text") == PRIOR_FEVER["text"]
+                                   for item in adopted[-1].get("symptoms") or [])
     finally:
         db.close()
