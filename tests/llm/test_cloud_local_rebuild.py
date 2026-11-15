@@ -404,3 +404,25 @@ def test_an_expired_approval_records_its_rejection_and_clears_the_deadline(legac
     # the approval's progress handler is gone: a later long read on the same connection completes
     assert ledger.db.execute('WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<200000) '
                              'SELECT COUNT(*) FROM n').fetchone()[0] == 200000
+
+
+def test_an_adopted_unit_stays_adopted_only_while_its_usage_history_is_unchanged(legacy, monkeypatch):
+    """ADOPTED suppresses the cloud follow-up; a new unresolved reservation after the local
+    final re-proves the history first and lifts it."""
+    import cloud_policy
+    from cloud_selection_progress_testkit import _complete_local_tx
+    from test_cloud_resend_guard import _reserve
+    ledger, calls = legacy
+    req, receipt = _approve(ledger, local_rebuild.preview(ledger)['plan'])
+    unit = local_rebuild.approved_units(ledger.db)[(1, 1)]
+    with ledger.db:
+        ledger.db.execute('BEGIN IMMEDIATE')
+        _complete_local_tx(ledger, {'project_id': 1, 'message_id': 1})
+        ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.local_rebuild',json(?)) "
+                          "WHERE artifact_id=(SELECT MAX(artifact_id) FROM artifacts WHERE kind='extract_llm' "
+                          "AND message_id=1)", (json.dumps({'command_id': req['command_id'], 'proof': unit['proof']}),))
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ADOPTED
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    _reserve(ledger, 'synthetic later prompt', route='reextract', unit='1', message_id=1)   # no result yet
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.PROOF_CHANGED
+    assert len(calls) == 2
