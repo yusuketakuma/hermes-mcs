@@ -79,7 +79,7 @@ def test_a_settled_apply_failure_keeps_its_existing_cleanup(updater, monkeypatch
 def _applied(updater, monkeypatch):
     previous, target = _world(updater, monkeypatch)
     _post_merge(updater, monkeypatch, in_process_post_merge(updater, monkeypatch))
-    assert updater.apply("v1.1.0", target, "synthetic-apply") == 0
+    assert updater.apply("v1.1.0", target, "synthetic-apply") == 0, Path(updater.REPORT_PATH).read_text()
     state = _journal(updater)
     assert state["applied"][-1]["prev_sha"] == previous and not Path(updater.MARKER_PATH).exists()
     return previous
