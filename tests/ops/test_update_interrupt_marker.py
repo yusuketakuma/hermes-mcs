@@ -190,7 +190,9 @@ def test_a_failed_marker_restore_is_noted_on_the_interrupt_and_left_visible(upda
     assert not Path(updater.MARKER_PATH).exists() and _journal(updater)["applying"]["rollback"] is True
 
 
-def test_an_interrupt_after_bail_saved_the_terminal_journal_is_not_unfinished(updater, monkeypatch):
+@pytest.mark.parametrize("marker_removed", [False, True])
+def test_an_interrupt_after_bail_saved_the_terminal_journal_is_not_unfinished(
+        updater, monkeypatch, marker_removed):
     """bail saved the aborted journal, then restart_agents was interrupted: nothing is left to
     recover, so the marker is not recreated."""
     _world(updater, monkeypatch)
@@ -199,7 +201,11 @@ def test_an_interrupt_after_bail_saved_the_terminal_journal_is_not_unfinished(up
     def post_merge(expected, *, run_lock_fd, **_kw):
         raise updater.UpdateError("post_merge_failed: synthetic")
     _post_merge(updater, monkeypatch, post_merge)
-    _patch_restart(updater, monkeypatch, _released_then_interrupted(updater, []))
+    def before_marker_removal():
+        assert Path(updater.MARKER_PATH).exists()
+        raise KeyboardInterrupt
+    restart = _released_then_interrupted(updater, []) if marker_removed else before_marker_removal
+    _patch_restart(updater, monkeypatch, restart)
     with pytest.raises(KeyboardInterrupt):
         updater.apply("v1.1.0", target, "synthetic-command")
     state = _journal(updater)
