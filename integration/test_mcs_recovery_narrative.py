@@ -26,6 +26,7 @@ only: no real MCS, no real Jev, no platform API, no Keychain, no
 launchctl, no patient DB, no deploy. This file collects without a
 hermes checkout — it never imports gateway.* (see ../conftest.py).
 """
+from semantic_testkit import stage_ledger
 
 import export_contract
 import export_delivery
@@ -469,7 +470,7 @@ def _run_narrative(tmp_path, *, reply_cards=True):
         out2 = _drain(led, _RepairThenPassJev(), llm=semantic_transport.llm_chat)
         fp1 = semantic_store.thread_bundle(led.db, 1, 1)["source_fingerprint"]
         stages = {s["stage"]: s["status"]
-                  for s in v4.stage_ledger(led, 1, fp1)}
+                  for s in stage_ledger(led, 1, fp1)}
         v4row = led.db.execute(
             "SELECT content,meta FROM artifacts WHERE kind=? "
             "AND message_id=1 ORDER BY artifact_id DESC LIMIT 1",

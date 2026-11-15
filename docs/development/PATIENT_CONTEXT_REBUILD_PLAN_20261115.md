@@ -84,7 +84,7 @@
 | S0 | 最新の `main` の上に作り直した。Haiku の料金表 `anthropic-haiku-5-5-2026-11-15`（2026-11-15 に公式ページで再確認、料金は 2026-10-26 版と同じ、期限 2026-12-15）を追加し、旧版は過去の予約の照合用に保持。新しい送信に使う版は日付で選ぶ（`current_price_version`）。期限7日前からの予告を `setup check` に追加 | OpenAI の料金は未確認（developers.openai.com はこの開発環境から接続できない）。`gpt-6-luna`（2026-11-28）・`gpt-6.1-sol`（2026-11-30）の期限前に確認が必要。リリースは未実施 |
 | C1 | `scripts/development/find_unused_code.py`（標準ライブラリの AST による名前ベースの検査）を最新の `main` に戻した | 同名の定義があると検出できない。削除後に再実行すると新たな候補が出る |
 | S1 | ローカル経路の golden テスト（`tests/patients/test_patient_context_golden.py`・期待値 `tests/fixtures/patient_context_golden/local_three_posts.json`）を最新の `main` で生成し直した。2回の実行で一致 | クラウド経路・安全上の不変条件・ローカル枠の規則の判定基準は未作成 |
-| C2 | 古い土台で行った削除は打ち消した。最新の `main` の上で検査からやり直す | 古い土台での判断（自動更新 v2/v3 は対象外、テストが観測に使う薄いラッパーはテスト側へ移してから削除、仕様が名指しする関数・旧Exa経路・`run_log.enable_rotation` は所有者に確認）は引き継ぐ |
+| C2（第1弾） | 最新の `main` の上でやり直した。本番から参照されない定義を削除：`release_apply_owner` の休眠中の v1 native release 一式、`MCSAdapter` の未使用 fetch 3件、admission の未使用 reconcile、評価用 `compare_workflow` 一式、`semantic_relations.classify_pair` ほか。テストが本体の挙動を観測するために使っていた薄いラッパー（`stage_ledger`・`admission_status`・`llm_last_success`・`build_text`・`current_acknowledged`・`has_private`・`failure_roots`）は、テストを本体のAPIかテスト用補助に移してから削除。`SECURITY.md` の公開医薬品情報の照会を、TinyFish だけを使う現行コードに合わせた | `patient_priority.priority_key` は `main` のクラウド選択が使うので残した。対象外として残したもの：自動更新 v2/v3（`release_auto_*`・`adapters/sdc/*`・`release_owner_source.verify_target`・`Runtime.restart_execute`）、仕様が名指しする `semantic_conversion` のcohort関数・`effective_loop_state`・request-following、`run_log.enable_rotation`、`drug_info` の旧Exa経路と `bounded_http` の公開MCP例外 |
 | その他 | 未着手 | — |
 
 最新の `main` の上での検証（2026-11-15、このクラウド開発環境・Python 3.14.6・pytest 9.2.0）：

@@ -419,40 +419,6 @@ def test_preupdate_copy_deadline_aborts_and_removes_its_staging_file(tmp_path, m
     assert list(backups.iterdir()) == []
 
 
-def test_registration_request_owns_fresh_challenge_hmac_and_deadline_without_authority():
-    from adapters.sdc import release_registration_contract as contract
-    gold = __import__('json').loads((Path(__file__).resolve().parents[2] / 'adapters/sdc/contracts/releases/registration-vectors.json').read_text())
-    current = release_apply_owner._ReleaseCurrentness(
-        bootstrap={'release_endpoint': {'origin': 'https://synthetic.invalid', 'audience': gold['expected']['audience'], 'environment': 'synthetic'}, 'registration_pins': gold['pins']},
-        binding={'owner_evidence_sha256': 'd' * 64, 'device_epoch': 1, 'bootstrap_sha256': '1' * 64,
-                 'monitor_binding': {'synthetic': True}, 'support_snapshot_sha256': '2' * 64, 'monitor_snapshot_sha256': '3' * 64},
-        scope={k: v for k, v in gold['expected'].items() if k in contract.SCOPE},
-        identity={k: gold['expected'][k] for k in ('claim_id', 'device_id', 'key_id')}, secret='a1' * 32)
-    first = release_apply_owner._prepare_registration_read(current, expected_registration_id=None, now_ms=gold['now'], deadline=time.monotonic() + 10)
-    second = release_apply_owner._prepare_registration_read(current, expected_registration_id=None, now_ms=gold['now'], deadline=time.monotonic() + 10)
-    assert first.path == contract.PATH and first.body != second.body
-    assert dict(first.headers)['X-SDC-Nonce'] != dict(second.headers)['X-SDC-Nonce']
-    assert current.secret not in repr(current) + repr(first)
-    assert first.device_evidence_sha256 != '0' * 64
-    with pytest.raises(release_apply_owner.ReleaseApplyError, match='REGISTRATION_HOLD'):
-        release_apply_owner._prepare_registration_read(current, expected_registration_id=None, now_ms=gold['now'], deadline=time.monotonic() - 1)
-
-
-def test_registration_response_compares_signed_source_evidence_and_never_yields_an_effect_capability():
-    # Explicit public metadata fixture exercises only the reader, not a live factory issuer.
-    from adapters.sdc import release_registration_contract as contract
-    from adapters.sdc.support_contract import canonical
-    gold = __import__('json').loads((Path(__file__).resolve().parents[2] / 'adapters/sdc/contracts/releases/registration-vectors.json').read_text())
-    prepared = release_apply_owner._PreparedRegistrationRead('https://synthetic.invalid', contract.PATH, b'', (),
-        canonical(gold['expected']).encode(), canonical(gold['pins']).encode(), 'd' * 64, 'c' * 64, time.monotonic() + 10)
-    raw = canonical(dict(schema_version=contract.RESPONSE_VERSION, request_id='00000009-0000-4000-8000-000000000001', proof=gold['envelopes']['registered'])).encode()
-    value = release_apply_owner._verify_registration_read(prepared, raw, now_ms=gold['now'])
-    assert value['status'] == 'registered' and type(value) is dict
-    for changed in (replace(prepared, owner_evidence_sha256='e' * 64), replace(prepared, device_evidence_sha256='f' * 64), replace(prepared, deadline=time.monotonic() - 1)):
-        with pytest.raises(release_apply_owner.ReleaseApplyError, match='REGISTRATION_HOLD'):
-            release_apply_owner._verify_registration_read(changed, raw, now_ms=gold['now'])
-
-
 @pytest.mark.parametrize('mode', ['success', 'timeout', 'lost_reap', 'wait_error', 'wrong_pid', 'interrupt'])
 def test_native_wait_requires_exact_reap_and_never_signals_after_reap_is_lost(monkeypatch, mode):
     from types import SimpleNamespace

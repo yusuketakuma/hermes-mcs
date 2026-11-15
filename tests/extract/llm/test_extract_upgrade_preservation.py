@@ -553,7 +553,6 @@ def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(
     ("semantic_quantities", "_AMOUNT_RE"),
     ("clinical_chunking", "plan_chunks"),
     ("clinical_chunking", "_OUTPUT_BUDGET"),
-    ("semantic_assessment", "_cached_detail"),
     ("semantic_loops", "rejected_relation_pair"),
     ("semantic_jev", "finite_value"),
     ("semantic_transport", "LONG_MIN_CALL_S"),

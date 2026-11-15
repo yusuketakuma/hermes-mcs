@@ -334,21 +334,6 @@ def _wait_slot_idle(request, endpoint: str, slot: int,
         error_out["slot_wait_confirmed"] = int(idle >= SLOT_WAIT_IDLE_SAMPLES)
 
 
-def backend_idle_evidence(endpoint: str = ENDPOINT,
-                          deadline: float | None = None) -> str | None:
-    """Return no retirement evidence: idle slots do not exclude server-queued work."""
-    return None
-
-
-def admission_status(broker_path: str | None = None) -> dict | None:
-    """Broker occupancy for health/alerting (None when admission is off):
-    ``unresolved`` permits and ``oldest_unresolved_age_s`` show width held
-    by completion-unproven requests."""
-    if not admission_enabled() and broker_path is None:
-        return None
-    return _broker(broker_path).status()
-
-
 def admitted_chat(client_route: str, prompt: str, *,
                   broker_path: str | None = None,
                   wait_s: float = 0, deadline: float | None = None,

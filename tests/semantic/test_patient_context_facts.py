@@ -1,4 +1,5 @@
 """Semantic detail attributes remain quote-bound and subject-bound behind existing fences."""
+from semantic_testkit import stage_ledger
 import semantic_facts
 import semantic_assembly as assembly
 import copy
@@ -184,7 +185,7 @@ def test_active_v4_pass_publishes_new_context_through_existing_stage_fences(tmp_
             assert content["patient_context"] and meta["projection_version"] == projection.PROJECTION_VERSION
             assert any(context["subject"] == "patient" for context in content["patient_context"])
             assert all(context["subject"] in ("patient", "unspecified") for context in content["patient_context"])
-            stages = semantic_publication.stage_ledger(db, mid, meta["fingerprint"])
+            stages = stage_ledger(db, mid, meta["fingerprint"])
             assert any(stage["stage"] == "s8_publish" and stage["status"] == "PASS" for stage in stages)
     finally:
         db.close()
