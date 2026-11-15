@@ -411,7 +411,7 @@ def approve_tx(db, req, now):
             if time.monotonic() >= deadline:
                 return UNVERIFIED, {}
     except sqlite3.OperationalError:
-        return UNVERIFIED, {}   # the bundle could not be re-verified in time: reject it whole
+        return UNVERIFIED, {}   # the bundle could not be re-verified: reject it whole
     except (OSError, ValueError):
         return 'local_rebuild_bundle_changed', {}
     return None, {'kind': RECEIPT_KIND, 'reason': req['reason'], 'bundle_digest': plan['bundle_digest'],
