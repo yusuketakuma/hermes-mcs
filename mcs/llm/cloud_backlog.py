@@ -328,7 +328,8 @@ _DEFER_REASONS = {"deadline", "probe_unobserved", "admission", "endpoint_down",
                   "prepare_context_invalid", "prepare_database_unavailable", "other",
                   "prepare_context_load_superseded",
                   "cloud_capacity", "cloud_profile_unavailable", "cloud_source_unverified",
-                  "cloud_target_unverified", "audit_pending", "loops_incomplete"}
+                  "cloud_target_unverified", "audit_pending", "loops_incomplete",
+                  "local_rebuild_proof_changed", "local_rebuild_unverified"}
 # Semantic gates emit only these branch labels; no provider text or source id.
 _SEMANTIC_STOP_REASONS = frozenset({
     "fact_stage_incomplete", "fact_stage_retryable", "fact_stage_hard_fail",
