@@ -21,11 +21,10 @@ import time
 from types import SimpleNamespace
 
 import cloud_policy
-import extraction_context
 import inference_dependency_loss
 import inference_version as inference
 import mcs_queries
-from extract_llm_context import _context_contract, _pending_frames, _pending_records
+from extract_llm_context import _context_contract
 from extract_llm_qc import _current, pending_pred
 from extract_llm_source_contract import KIND, _INFERENCE_VERSION
 from mcs_queries import json_or_null
@@ -47,7 +46,7 @@ ROUTE = 'reextract'
 EXCLUSIONS = frozenset({
     'source_missing', 'already_current', 'not_pending', 'tally_invalid', 'history_pruned',
     'no_history', 'receipt_inconsistent', 'binding_present', 'disposition', 'result_missing',
-    'not_success', 'answer_stored', 'checkpoint_present', 'frame_present', 'unverified'})
+    'not_success', 'answer_stored', 'checkpoint_present', 'unverified'})
 # What a unit's approval means right now (permit). Only ACTIVE allows local work.
 UNAPPROVED, ACTIVE, ADOPTED = 'unapproved', 'active', 'adopted'
 PROOF_CHANGED, UNVERIFIED = 'local_rebuild_proof_changed', 'local_rebuild_unverified'
@@ -79,23 +78,26 @@ def _valid_material(db, row):
     return final is not None and mcs_queries.selected_artifact_proof_valid(db, final[0], material=True)
 
 
-def _work_left(db, row, stop):
-    """Checkpoints, frames and quality repair (started/origin) records of every model, read
-    through the canonical pending readers; any of them for the current source keeps the unit."""
-    models = [model for (model,) in db.execute(
-        "SELECT DISTINCT model FROM artifacts WHERE kind IN ('extract_llm_chunk',?) AND project_id=? "
-        "AND message_id=?", (extraction_context.KIND, row["project_id"], row["message_id"]))]
-    target = {**row, "_cloud_mode": "off"}
-    for model in models:
+def _chunk_tags(db, row):
+    """The local_rebuild tag of every raw checkpoint row of the message (every model, generation
+    and invalidated state, quality repair started/origin records included); None when untagged.
+    A reader's empty answer is never taken as absence: the raw rows decide."""
+    tags = []
+    for (raw,) in db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' AND project_id=? "
+                             "AND message_id=? ORDER BY artifact_id", (row["project_id"], row["message_id"])):
         try:
-            if _pending_records(db, {**target, "_target": ("", model)}, model):
-                raise _Excluded('checkpoint_present')
-            if _pending_frames(db, {**target, "_target": ("", model)}, model):
-                raise _Excluded('frame_present')
-        except stop:
-            raise
-        except (ValueError, TypeError, KeyError):
-            raise _Excluded('checkpoint_present') from None
+            meta = strict_json(raw) if isinstance(raw, str) else None
+        except (ValueError, TypeError, RecursionError):
+            meta = None
+        tags.append(meta.get('local_rebuild') if type(meta) is dict else None)
+    return tags
+
+
+def _work_left(db, row, stop):
+    """Initial eligibility: no checkpoint row of any kind is left. A frame alone is an input, not
+    work, and never excludes."""
+    if _chunk_tags(db, row):
+        raise _Excluded('checkpoint_present')
 
 
 def _tally_valid(ledger, stop=()):
@@ -391,6 +393,14 @@ def permit(ledger, project_id, message_id, *, approvals=None):
         return UNVERIFIED
 
 
+def approval(ledger, project_id, message_id, *, approvals):
+    """-> (permit state, the approved unit or None): the prepare-time verdict for one row."""
+    try:
+        return _approval_state(ledger, project_id, message_id, approvals), approvals.get((project_id, message_id))
+    except sqlite3.Error:
+        return UNVERIFIED, approvals.get((project_id, message_id))
+
+
 def _approval_state(ledger, project_id, message_id, approvals, stop=(), *, tally=None):
     """`tally` is the caller's single check for its whole pass (None: check here once)."""
     unit = approvals.get((project_id, message_id))
@@ -416,13 +426,21 @@ def _approval_state(ledger, project_id, message_id, approvals, stop=(), *, tally
         return PROOF_CHANGED   # e.g. a prune mark appeared: an approved unit stops qualifying
     if adopted(ledger.db, unit):
         return ADOPTED
-    try:
-        current = unit_proof(ledger, project_id, message_id, stop)
-    except stop:
-        raise
-    except ValueError:
+    row = _message(ledger.db, project_id, message_id)
+    if row is None:
         return PROOF_CHANGED
-    return ACTIVE if current['proof'] == unit['proof'] else PROOF_CHANGED
+    # After approval only this approval's own tagged work may exist; any other row (untagged,
+    # another approval, broken meta) or a final this approval did not adopt invalidates it.
+    if any(item != tag(unit) for item in _chunk_tags(ledger.db, row)):
+        return PROOF_CHANGED
+    if _valid_material(ledger.db, row) or _current(ledger, message_id, row["content_hash"]):
+        return PROOF_CHANGED
+    return ACTIVE
+
+
+def tag(unit):
+    """The closed tag every local-rebuild write carries (checkpoints and the final)."""
+    return {'command_id': unit['command_id'], 'proof': unit['proof']}
 
 
 def adopted(db, unit):
@@ -436,7 +454,7 @@ def adopted(db, unit):
         meta = strict_json(final[1])
     except (ValueError, TypeError, RecursionError):
         return False
-    tag = meta.get('local_rebuild') if type(meta) is dict else None
-    return (tag == {'command_id': unit['command_id'], 'proof': unit['proof']}
+    written = meta.get('local_rebuild') if type(meta) is dict else None
+    return (written == tag(unit)
             and meta.get('hash') == row['content_hash']
             and mcs_queries.selected_artifact_proof_valid(db, final[0], material=True))

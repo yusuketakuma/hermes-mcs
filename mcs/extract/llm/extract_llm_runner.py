@@ -16,6 +16,7 @@ import cloud_inference
 import extract_schema
 import extract_validation
 import extract_quality
+import extract_llm_local_rebuild as local_rebuild
 from extraction_provenance import (
     provider_evidence as _provider_evidence,
     EvidenceLeaf as _EvidenceLeaf,
@@ -511,6 +512,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
 
     def _extract_call(r, ctx, saved, hints, qc, index, meta, chunks_out):
         provider = None
+        if r.get("_local_rebuild") is not None and r.get("_cloud_mode") != "off":
+            _CALL_NOTES.defer_reason = local_rebuild.UNVERIFIED   # never build a cloud unit for it
+            return _DEFERRED
         if r.get("_cloud_mode") == "on":
             r["_cloud_lease"] = leases[index]
             provider = _owner_call(lambda: cloud_inference.CloudInferenceUnit(ledger, r["_cloud_config"], route="reextract",
@@ -651,6 +655,18 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     return False
                 return True
             r["_superseded_guard"] = adoption_guard
+        elif r.get("_local_rebuild") is not None:
+            # An approved local rebuild: every local dispatch (first, repair, split) and the
+            # adoption re-prove the same permit; provider stays None so no path reaches cloud.
+            def permitted():
+                return local_rebuild.permit(ledger, r["project_id"], r["message_id"]) == local_rebuild.ACTIVE
+
+            def request_guard(prompt, kind="first"):
+                try:
+                    return None if _owner_call(permitted) else local_rebuild.PROOF_CHANGED
+                except (ValueError, TypeError, KeyError, sqlite3.Error, OSError, RuntimeError):
+                    return local_rebuild.UNVERIFIED
+            r["_superseded_guard"] = permitted   # runs inside the adoption transaction
         with pin_target(r["_target"]):
             return llm_extract(r["body_text"], context=ctx, hints=hints,
                            **({"references": _frame_refs(r)} if _frame_refs(r) else {}),
@@ -705,6 +721,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         # QC-flagged/thin/human-reported rows already hold a current
         # artifact — replacing it is the point of the feedback pass.
         extra = {"thin_retried": True} if r["thin_src"] else {}
+        if r.get("_local_rebuild") is not None:
+            extra["local_rebuild"] = local_rebuild.tag(r["_local_rebuild"])
         if r["human_src"]:
             extra["human_fix"] = {"feedback_id": r["human_src"],
                                   "applied": True}
