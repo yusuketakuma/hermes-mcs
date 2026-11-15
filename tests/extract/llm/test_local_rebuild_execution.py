@@ -245,8 +245,10 @@ def test_a_held_head_keeps_a_bounded_claim_and_the_pass_reaches_the_next_row(rou
     report = worker.run_pending(ledger, limit=1, budget_s=180)
     assert report['done'] == 1 and seen
     assert report['defer_reasons'].get(local_rebuild.PROOF_CHANGED) == 1
-    assert ledger.db.execute("SELECT COUNT(*) FROM fetch_jobs WHERE kind='extract_claim' AND message_id=2 "
-                             "AND next_try>strftime('%s','now')").fetchone()[0] == 1
+    import time
+    [next_try] = ledger.db.execute("SELECT next_try FROM fetch_jobs WHERE kind='extract_claim' "
+                                   "AND message_id=2").fetchone()
+    assert next_try > time.time() + 5 * 3600                          # PROOF_CHANGED waits the long interval
 
 
 def test_an_adopted_unit_stays_adopted_when_later_review_evidence_turns_adverse(routed, monkeypatch):
@@ -406,3 +408,22 @@ def test_tampered_final_content_is_never_an_authentic_adoption(routed, monkeypat
         ledger.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
                           (json.dumps(content, ensure_ascii=False), final['artifact_id']))
     assert local_rebuild.permit(ledger, 1, 1) != local_rebuild.ADOPTED
+
+
+
+def test_the_long_hold_needs_the_same_current_approval_and_unverified_keeps_the_short_one(routed, monkeypatch):
+    """Hold time per reason: PROOF_CHANGED against the still-current approval -> REVIVE_COOLDOWN_S;
+    the same reason against a replaced approval, or UNVERIFIED -> the short prepare hold."""
+    import extract_llm_runner
+    ledger, *_ = routed
+    unit = _approved(ledger, monkeypatch)
+    row = {'project_id': 1, 'message_id': 1, '_local_rebuild_held': unit}
+    assert extract_llm_runner._prepare_hold_s(ledger, row, (local_rebuild.PROOF_CHANGED,)) \
+        == extract_llm_runner.REVIVE_COOLDOWN_S
+    assert extract_llm_runner._prepare_hold_s(ledger, row, (local_rebuild.UNVERIFIED,)) \
+        == extract_llm_runner._PREPARE_HOLD_S
+    replaced = {**row, '_local_rebuild_held': {**unit, 'command_id': str(uuid.uuid4())}}
+    assert extract_llm_runner._prepare_hold_s(ledger, replaced, (local_rebuild.PROOF_CHANGED,)) \
+        == extract_llm_runner._PREPARE_HOLD_S
+    assert extract_llm_runner._prepare_hold_s(ledger, {'project_id': 1, 'message_id': 1},
+                                              (local_rebuild.PROOF_CHANGED,)) == extract_llm_runner._PREPARE_HOLD_S

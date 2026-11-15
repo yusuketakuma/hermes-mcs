@@ -259,6 +259,7 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
             rebuild_state, unit = local_rebuild.approval(ledger, r["project_id"], r["message_id"],
                                                          approvals=rebuilds)
             if rebuild_state in (local_rebuild.PROOF_CHANGED, local_rebuild.UNVERIFIED):
+                r["_local_rebuild_held"] = unit   # the approval the refusal was decided against
                 block(rebuild_state)
                 continue
             if rebuild_state in local_rebuild.RUNNABLE:

@@ -106,6 +106,7 @@ from extract_llm_source_contract import (
     _EXTRACT_LEASE_S,
     _MIN_CALL_S,
     _PREPARE_HOLD_S,
+    REVIVE_COOLDOWN_S,
     _WRITER_STATE,
     _owns_current_source,
     _rule_hints,
@@ -179,6 +180,22 @@ def _run_batch_call(tups, target, deadline: float,
                 extract_validation.apply_vital_policy(v, r["body_text"], vital_policy)
             out[index] = v
     return "ok", out, meta
+
+
+def _prepare_hold_s(ledger, row, reasons):
+    """How long a prepare refusal keeps its bounded claim. A positive mismatch of a local-rebuild
+    approval (PROOF_CHANGED) waits the long revive interval, but only while the approval it was
+    decided against is still the current one; a changed approval, UNVERIFIED and every other
+    refusal keep the short prepare hold. Not terminal: a later re-match is seen after the wait."""
+    held = row.get("_local_rebuild_held")
+    if local_rebuild.PROOF_CHANGED not in reasons or held is None:
+        return _PREPARE_HOLD_S
+    try:
+        current = local_rebuild.approved_units(ledger.db).get((row["project_id"], row["message_id"]))
+    except sqlite3.Error:
+        return _PREPARE_HOLD_S
+    return REVIVE_COOLDOWN_S if current is not None and local_rebuild.tag(current) == local_rebuild.tag(held) \
+        else _PREPARE_HOLD_S
 
 
 def _rebuild_meta(r, extra):
@@ -380,7 +397,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     and time.monotonic() < deadline and _writer_current(full=True):
                 # This CAS is a finite preparation wait, not a sent/failed unit.
                 # Never replace another owner's active claim or discard proof.
-                _claim(ledger, refused_row, _PREPARE_HOLD_S)
+                _claim(ledger, refused_row, _prepare_hold_s(ledger, refused_row, (reason,)))
         if jobs or not any(reason in cloud_backlog._PREPARE_CONTEXT_REJECTION_CODES
                            or reason in cloud_backlog._HOLD_DEFER_REASONS
                            for _, reason in refused) or time.monotonic() >= deadline:
@@ -1026,7 +1043,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         if any(reason in cloud_backlog._HOLD_DEFER_REASONS for reason in row_reasons):
                             # An unverifiable owned head keeps a bounded claim —
                             # the next pass sees the tail instead of re-blocking.
-                            _claim(ledger, candidate, _PREPARE_HOLD_S)
+                            _claim(ledger, candidate, _prepare_hold_s(ledger, candidate, row_reasons))
                         if prioritize_patients and time.monotonic() < deadline:
                             _cloud_priority_discard(ledger, candidate['message_id'])
                         continue
