@@ -218,17 +218,21 @@ def test_an_interrupted_parent_reaps_the_child_then_restores_the_marker_under_ru
                 events.append("child_dropped_marker")
                 raise interrupt("synthetic operator interrupt")
             self.returncode = -9
+            events.append("reaped")
             return "", ""
 
         def wait(self, timeout=None):
             self.returncode = -9
+            events.append("reaped")
             return self.returncode
 
-    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: Child())
-    monkeypatch.setattr(os, "killpg", lambda pid, signum: events.append("reaped"))
+    child = Child()
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: child)
+    monkeypatch.setattr(os, "killpg", lambda pid, signum: events.append("kill_requested"))
     ensure = update_lifecycle_context._ensure_recovery_marker
 
     def restore():
+        assert child.returncode is not None
         events.append("restore")
         fd = writer_lock.acquire_run_lock(updater.RUN_LOCK)
         events.append("run_lock_free" if fd is not None else "run_lock_held")
@@ -240,10 +244,12 @@ def test_an_interrupted_parent_reaps_the_child_then_restores_the_marker_under_ru
     monkeypatch.setattr(update_lifecycle_context, '_ensure_recovery_marker', restore)
     with pytest.raises(interrupt) as caught:
         updater.apply("v1.1.0", target, "synthetic-command")
-    assert events == ["child_dropped_marker", "reaped", "restore", "run_lock_held"]
     fd = writer_lock.acquire_run_lock(updater.RUN_LOCK)
     assert fd is not None                                   # released after the restore
     os.close(fd)
+    events.append("run_lock_released")
+    assert events == ["child_dropped_marker", "kill_requested", "reaped", "restore",
+                      "run_lock_held", "run_lock_released"]
     assert _journal(updater)["applying"]
     if failure == "second_interrupt":
         assert "update_marker_restore_failed:KeyboardInterrupt" in caught.value.__notes__
