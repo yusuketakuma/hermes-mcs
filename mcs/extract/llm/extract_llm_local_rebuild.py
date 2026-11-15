@@ -10,7 +10,8 @@ change to accounting.
 
 Limit: retention writes its prune mark in the deleting transaction, so a database without
 the mark has never pruned usage rows through that path; any mark at all fails closed, so
-once retention has pruned, no further unit can be approved. A deletion outside that
+once retention has pruned, no further unit can be approved and every existing approval
+turns into PROOF_CHANGED. A deletion outside that
 maintenance path leaves no evidence and cannot be ruled out.
 """
 from contextlib import contextmanager
@@ -33,7 +34,9 @@ from mcs_util import payload_hash, strict_json, valid_hash, valid_text
 # Proposed initial bundle size. Raise it only with dry-run evidence that a bundle of
 # the new size verifies every unit's whole history inside APPROVE_SECONDS.
 BUNDLE_LIMIT = 20
-APPROVE_SECONDS = 30.0   # the writer transaction's whole re-verification budget
+# The writer transaction's whole re-verification budget: well under the resident workers'
+# 3-second lock wait, so an approval never starves them. A longer bundle is rejected whole.
+APPROVE_SECONDS = 2.0
 COMMAND = 'ops.cloud_local_rebuild_approve'
 RECEIPT_KIND = 'cloud_local_rebuild_approval'
 PLAN_SCHEMA = 'cloud_local_rebuild_plan_v2'
@@ -228,7 +231,7 @@ def preview(ledger, *, limit=BUNDLE_LIMIT, stop=(sqlite3.OperationalError,)):
             try:
                 if not tally:
                     raise ValueError('tally_invalid')
-                if _approval_state(ledger, project_id, message_id, approvals, stop) in (ACTIVE, ADOPTED):
+                if _approval_state(ledger, project_id, message_id, approvals, stop, tally=tally) in (ACTIVE, ADOPTED):
                     excluded['already_current'] += 1
                 else:
                     units.append(unit_proof(ledger, project_id, message_id, stop))
@@ -320,10 +323,13 @@ def approve_tx(db, req, now):
             for unit in plan['units']:
                 if time.monotonic() >= deadline:
                     return UNVERIFIED, {}
-                if _approval_state(ledger, unit['project_id'], unit['message_id'], approvals) in (ACTIVE, ADOPTED):
+                if _approval_state(ledger, unit['project_id'], unit['message_id'], approvals,
+                                   tally=True) in (ACTIVE, ADOPTED):
                     return 'local_rebuild_already_approved', {}
                 if unit_proof(ledger, unit['project_id'], unit['message_id']) != unit:
                     return 'local_rebuild_bundle_changed', {}
+            if time.monotonic() >= deadline:
+                return UNVERIFIED, {}
     except sqlite3.OperationalError:
         return UNVERIFIED, {}   # the bundle could not be re-verified in time: reject it whole
     except (OSError, ValueError):
@@ -376,7 +382,8 @@ def permit(ledger, project_id, message_id, *, approvals=None):
         return UNVERIFIED
 
 
-def _approval_state(ledger, project_id, message_id, approvals, stop=()):
+def _approval_state(ledger, project_id, message_id, approvals, stop=(), *, tally=None):
+    """`tally` is the caller's single check for its whole pass (None: check here once)."""
     unit = approvals.get((project_id, message_id))
     if unit is None:
         return UNAPPROVED
@@ -391,14 +398,14 @@ def _approval_state(ledger, project_id, message_id, approvals, stop=()):
         return PROOF_CHANGED
     if adopted(ledger.db, unit):
         return ADOPTED
-    if not _tally_valid(ledger, stop):
+    if not (_tally_valid(ledger, stop) if tally is None else tally):
         return UNVERIFIED
     try:
         current = unit_proof(ledger, project_id, message_id, stop)
     except stop:
         raise
-    except ValueError as error:
-        return UNVERIFIED if str(error) == 'unverified' else PROOF_CHANGED
+    except ValueError:
+        return PROOF_CHANGED   # e.g. a prune mark appeared: an approved unit stops qualifying
     return ACTIVE if current['proof'] == unit['proof'] else PROOF_CHANGED
 
 
