@@ -8,13 +8,14 @@ on:
         required: true
         type: string
       mode:
-        description: Regression before fix or relevant notification batch
+        description: Diagnostic test selection
         required: true
         type: choice
         options:
           - red
           - recheck
           - green
+          - refactor
 
 permissions:
   contents: read
@@ -82,4 +83,38 @@ jobs:
             tests/notify/test_slack_reply_attachment_migration.py \
             tests/notify/test_attachment_upload_identity.py \
             tests/adapters/slack/test_slack_reply_cards.py \
+            -r fEs --durations=10
+      - name: Lint refactored modules
+        if: inputs.mode == 'refactor' && matrix.os == 'ubuntu-latest'
+        run: >-
+          uv run --no-project --with "ruff==0.17.3" ruff check
+          mcs/ingest/job_ops.py mcs/notify/notify_parts.py mcs/semantic/semantic_loops.py
+      - name: Validate refactored paths
+        if: inputs.mode == 'refactor'
+        env:
+          MCS_TEST_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: |
+          sh scripts/run_tests.sh \
+            tests/ingest/test_job_drain.py \
+            tests/ingest/test_history_command_deepen.py \
+            tests/ingest/test_initial_history_capture.py \
+            tests/ingest/test_deadline_cut_job_attempts.py \
+            tests/ingest/test_reply_jobs_cmd_quarantine_housekeeping.py \
+            tests/ingest/test_derive_transaction_ownership.py \
+            tests/ingest/test_job_discovery_archive.py \
+            tests/ingest/test_history_session_expiry_not_stall.py \
+            tests/semantic/test_semantic_loop_generations.py \
+            tests/semantic/test_semantic_loop_poison_history.py \
+            tests/semantic/test_update_loops_targets.py \
+            tests/semantic/test_loop_reinterpretation.py \
+            tests/semantic/test_loop_relation_rejected.py \
+            tests/semantic/test_loop_fork_skips_reinterpreted_origin.py \
+            tests/semantic/test_semantic_loop_view.py \
+            tests/semantic/test_loop_only_readiness.py \
+            tests/notify/test_provider_visibility_manifest.py \
+            tests/notify/test_chat_format_v1.py \
+            tests/notify/test_notify_lineworks.py \
+            tests/notify/test_notify_parts.py \
+            tests/notify/test_card_attachment_followups.py \
+            tests/adapters/lineworks/test_lineworks_chat_format.py \
             -r fEs --durations=10
