@@ -19,6 +19,7 @@ from test_anthropic_runtime import routed  # noqa: F401
 __all__ = ['page_store']
 
 CFG = {'attachment_ocr': {'enabled': True, 'executable': '/synthetic/yomitoku'}}
+_REAL_WAIT = mcs_ocr.writer_lock.wait_run_lock
 
 
 @pytest.fixture
@@ -381,3 +382,21 @@ def test_snapshot_deferred_reports_exhausted_publish_window(job, monkeypatch):
     assert result['reason'] == 'snapshot_deferred'
     assert result['snapshot_failure'] == {'reason': 'publish_window_exhausted'}
     assert job.snapshots == 0
+
+
+def test_busy_writer_at_start_ends_in_seconds_without_holding_the_cron_slot(job, monkeypatch):
+    """A run.lock held elsewhere (separate open file, as another process holds it)
+    ends the job as writer_busy after the short start wait, not the ~850s residual."""
+    monkeypatch.setattr(mcs_ocr, 'START_WAIT_S', 0.3)
+    waits = []
+    monkeypatch.setattr(mcs_ocr.writer_lock, 'wait_run_lock',
+                        lambda path, **kwargs: waits.append(kwargs['wait_s']) or _REAL_WAIT(path, **kwargs))
+    fd = os.open(os.path.join(mcs_ocr.DATA, 'run.lock'), os.O_WRONLY | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        started = time.monotonic()
+        assert mcs_ocr.run(CFG) == {'reason': 'writer_busy'}
+        assert time.monotonic() - started < 5
+    finally:
+        os.close(fd)
+    assert waits == [0.3] and not job.closed and job.snapshots == 0
