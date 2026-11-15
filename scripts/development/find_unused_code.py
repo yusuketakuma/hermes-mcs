@@ -51,11 +51,22 @@ def _definitions(tree):
     return found
 
 
+# Decorators that only change how a definition behaves; the definition is still reached by name.
+_PLAIN_DECORATORS = frozenset({"dataclass", "staticmethod", "classmethod", "property", "cached_property",
+                               "contextmanager", "lru_cache", "cache", "wraps", "total_ordering"})
+
+
+def _decorator_name(node):
+    node = node.func if isinstance(node, ast.Call) else node
+    return node.attr if isinstance(node, ast.Attribute) else getattr(node, "id", None)
+
+
 def _decorated(tree):
     """Names registered through a decorator are reached by the registry, not by name."""
     names = set()
     for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.decorator_list:
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                and any(_decorator_name(d) not in _PLAIN_DECORATORS for d in node.decorator_list)):
             names.add(node.name)
     return names
 

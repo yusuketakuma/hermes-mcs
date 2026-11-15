@@ -100,7 +100,9 @@ def current_price_version(model, now=None):
     configured = _configured_price_version(model)
     day = datetime.fromtimestamp(time.time() if now is None else now, JST).date().isoformat()
     chosen = PRICE_DEFINITIONS.get((model, configured))
-    if chosen is not None and chosen.get("price_checked_on", "") <= day:
+    if chosen is None:
+        return configured   # an undefined table stops sending (_price_definition), never a silent fallback
+    if chosen.get("price_checked_on", "") <= day:
         return configured
     earlier = [d for (m, _v), d in PRICE_DEFINITIONS.items()
                if m == model and isinstance(d.get("price_checked_on"), str) and d["price_checked_on"] <= day]
@@ -287,6 +289,20 @@ def carryover_entries(db, since):
             if entry["at"] >= since:
                 entries.append((entry["at"], entry["provider"], entry["requests"], cost, entry["settled"]))
     return entries
+
+
+def expired_carryover_ids(db, cutoff):
+    """Carry-over artifacts whose every entry predates ``cutoff``; unreadable ones stay (they fail closed)."""
+    expired = []
+    for artifact_id, content in db.execute("SELECT artifact_id,content FROM artifacts WHERE kind=?",
+                                           (CARRYOVER_KIND,)):
+        try:
+            entries = strict_json(content)["entries"]
+            if all(type(entry["at"]) in (int, float) and entry["at"] < cutoff for entry in entries):
+                expired.append(artifact_id)
+        except (TypeError, ValueError, KeyError, RecursionError):
+            continue
+    return expired
 
 
 def carryover_marker(db):

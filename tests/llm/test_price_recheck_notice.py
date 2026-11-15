@@ -43,3 +43,26 @@ def test_new_sends_use_the_table_already_rechecked_on_that_day():
     assert accounting.pricing_valid(_at(2026, 11, 26), model=model)
     # Before any table was rechecked nothing is in force.
     assert not accounting.pricing_valid(_at(2026, 10, 1), model=model)
+
+
+def test_an_undefined_configured_table_stops_instead_of_falling_back(monkeypatch):
+    import pytest
+    monkeypatch.setattr(anthropic_client, "PRICE_VERSION", "anthropic-haiku-5-5-undefined")
+    model = anthropic_client.MODEL
+    assert accounting.current_price_version(model, _at(2026, 11, 20)) == "anthropic-haiku-5-5-undefined"
+    with pytest.raises(anthropic_client.AnthropicError):
+        accounting.max_cost(100, input_bound=100, model=model, now=_at(2026, 11, 20))
+
+
+def test_notice_follows_the_configured_model_whose_table_runs_out_first():
+    import cloud_policy
+    import openai_client
+    cfg = {"cloud_llm": {"mode": "on", "provider": "openai", "model": openai_client.SOL_MODEL,
+                         "profiles": {"backlog": "luna-medium"},
+                         "project_ids": [1], "daily_cost_limit_usd": 1, "monthly_cost_limit_usd": 10}}
+    settings, errors = cloud_policy.resolve_settings(cfg)
+    assert not cloud_policy.blocking_errors(errors)
+    models = cloud_policy.configured_models(cfg, settings)
+    assert models == sorted({openai_client.SOL_MODEL, openai_client.MODEL}), "the backlog profile uses Luna"
+    info = cloud_policy.earliest_price_info(cfg, settings, now=_at(2026, 11, 20))
+    assert (info["price_model"], info["price_valid_until"]) == (openai_client.MODEL, openai_client.PRICE_VALID_UNTIL)

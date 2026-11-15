@@ -180,29 +180,6 @@ def _load_release_currentness(control, monitor, *, runtime_home, now_ms, deadlin
         raise ReleaseApplyError('CURRENTNESS_HOLD') from None
 
 
-@dataclass(frozen=True, repr=False)
-class _PreparedRegistrationRead:
-    endpoint: str
-    path: str
-    body: bytes
-    headers: tuple
-    expected: bytes
-    pins: bytes
-    owner_evidence_sha256: str
-    device_evidence_sha256: str
-    deadline: float
-
-
-@dataclass(frozen=True, repr=False)
-class _PreparedApplyControl:
-    endpoint: str
-    path: str
-    body: bytes
-    headers: tuple
-    binding: bytes
-    deadline: float
-
-
 def _read_frozen_plan(control):
     """Read a fixed local report as data only; it cannot restore a grant or a live owner."""
     from adapters.sdc import release_apply_contract as apply, release_contract as release

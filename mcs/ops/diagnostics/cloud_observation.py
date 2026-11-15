@@ -23,6 +23,7 @@ def unknown(reason):
     return {"state": "unknown", "reason": reason, "scope": "retained_records",
             "unresolved_requests": None, "missing_results": None, "unsettled_results": None,
             "settled_requests": None, "oldest_unresolved_age_s": None, "unresolved_over_10m": None,
+            "carried_unresolved_requests": None,
             "observed": None}
 
 
@@ -151,8 +152,17 @@ def observe(db, *, now=None, full=False):
             return {**unknown("invalid_or_unmatched_records"), "state": "partial",
                     "records_scanned": row["records_scanned"],
                     "invalid_groups_observed": row["invalid_groups"]}
+        # A patient-context reset carries its unsettled sends over as counts without rows;
+        # they stay unresolved (never resent) and are reported apart from the retained evidence.
+        try:
+            carried = sum(requests for _at, _provider, requests, _cost, settled
+                          in policy.carryover_entries(db, 0) if not settled)
+        except policy.AnthropicError:
+            return {**unknown("carryover_invalid"), "state": "partial",
+                    "records_scanned": row["records_scanned"]}
         return {"state": "complete", "reason": None, "scope": "retained_records",
                 "records_scanned": row["records_scanned"],
+                "carried_unresolved_requests": carried,
                 "unresolved_requests": row["missing_results"] + row["unsettled_results"],
                 "missing_results": row["missing_results"], "unsettled_results": row["unsettled_results"],
                 "settled_requests": row["settled_requests"],

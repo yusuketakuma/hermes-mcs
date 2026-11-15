@@ -501,12 +501,18 @@ def role_candidates(items) -> list:
     return [role for role in ROLE_ORDER if role in found]
 
 
+# Written by the patient-context reset when it erases every context result. The rebuild finds
+# again the facts in records that existed before it, so those are not new to any reader.
+RESET_MARK_KIND = "patient_context_reset_mark_v1"
+
+
 def changes(db, ev, since_ts) -> dict:
     """前回から変わったこと, from the ledger's own observation record (messages.first_seen,
     message_revisions) so edits and deletions not yet reflected at night still show:
     new_report = first seen and posted since; retrospective = first seen since but posted
     earlier; edited / deleted = a revision observed since (a deleted post returns its id and
-    observation time only); backfill_found = a context fact found since in an older record."""
+    observation time only); backfill_found = a context fact found since in an older record, except
+    one the rebuild after a patient-context reset found again in a record seen before that reset."""
     seen = {r[0]: (r[1], r[2]) for r in db.execute(
         "SELECT message_id, first_seen, posted_at_ts FROM messages WHERE project_id=?", (ev["project_id"],))}
     revised = {}
@@ -521,13 +527,16 @@ def changes(db, ev, since_ts) -> dict:
             "r.body_state IS NOT prior.body_state) GROUP BY r.message_id", (ev["project_id"], since_ts)):
         revised[mid] = (state, at)
 
+    reset_at = db.execute("SELECT MAX(created_at) FROM artifacts WHERE kind=?", (RESET_MARK_KIND,)).fetchone()[0]
+
     def kind(item):
         # the reader's own observation decides first: a post first seen since is new (or
         # retrospective) even when the context refresh scan also tagged it backfill_found
         first, posted = seen.get(item["message_id"], (None, None))
         if isinstance(first, (int, float)) and first >= since_ts:  # unseen before: new to the reader
             return "new_report" if isinstance(posted, (int, float)) and posted >= since_ts else "retrospective"
-        if item["discovery"] == "backfill_found" and (item.get("found_at") or -1) >= since_ts:
+        if (item["discovery"] == "backfill_found" and (item.get("found_at") or -1) >= since_ts
+                and not (reset_at is not None and isinstance(first, (int, float)) and first < reset_at)):
             return "backfill_found"
         return "edited" if item["message_id"] in revised else None
 

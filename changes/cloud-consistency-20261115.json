@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "外部AIの料金表・未精算件数・患者コンテキスト消去後の表示を周辺機能と揃える",
+  "summary": "料金表の版を設定で指定し誤った場合は、古い表へ黙って戻さず新しいクラウド送信を止めます。予約の上限額と記録する料金表は同じ時刻から決めるので、料金表が替わる日の0時をまたいでも記録が不整合になりません。料金表の期限の予告と再開時の確認は、既定のモデルだけでなく、用途ごとに選ばれるモデル（OpenAI の Luna・Sol など）のうち最も早く期限を迎えるものを見ます。患者コンテキストの消去で件数だけを引き継いだ未精算の送信は、cloud-llm outstanding に carried_unresolved_requests として別に表示します。引き継ぎ記録は、すべての項目が保持期間（62日）を過ぎると通常の保守で削除します。消去後の作り直しで、消去の前からある記録に再び見つかった事実は「過去記録から追加発見」に出しません。消去前のバックアップは健康状態のバックアップ容量で専用の分類（patient_context_reset）に数えます。",
+  "upgrade": "追加操作は不要です。料金表の期限が近いときの予告の対象が、用途ごとの設定で使うモデルにも広がります。cloud-llm outstanding の出力に carried_unresolved_requests が加わります（消去をしていなければ0）。",
+  "details": [
+    "current_price_version は、設定された版が料金定義にないとき、その版を返して送信を止めます（以前は旧い表を選んでいました）。",
+    "予約時に時刻を1回だけ読み、max_cost と price_version を同じ日の料金表から求めます。",
+    "cloud_policy.configured_models・earliest_price_info を追加し、cloud-llm check・estimate の料金表の項目と resume の確認に使います。期限の最も早いモデル名は price_model に出します。",
+    "cloud_observation.observe は引き継ぎ記録の未精算件数を数え、記録が壊れていれば carryover_invalid として partial を返します。",
+    "maintenance._prune_cloud_usage は、全項目が保持期間より古い引き継ぎ記録を削除し、読めない記録は残します（送信は止まったままです）。",
+    "患者コンテキストの消去は patient_context_reset_mark_v1 に時刻を残し、patient_context_view.changes がそれを使います。",
+    "未使用になった mcs/semantic/eval/semantic_workflow.py と release_apply_owner の孤立したクラスを削除し、削除時に失われていた関係分類のテストを本体の関数に対して戻しました。"
+  ],
+  "refs": ["mcs/llm/cloud_usage_accounting.py", "mcs/llm/cloud_policy.py", "mcs/ops/cloud_cli.py", "mcs/ops/diagnostics/cloud_observation.py", "mcs/core/maintenance.py", "mcs/views/patient_context_view.py", "mcs/patients/patient_context_reset.py", "mcs/ops/release_apply_owner.py", "tests/semantic/test_semantic_relations.py", "tests/semantic/test_adversarial_valid_time_audit.py"]
+}

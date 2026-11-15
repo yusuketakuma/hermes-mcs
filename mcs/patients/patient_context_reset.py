@@ -288,6 +288,9 @@ def apply_tx(db, req, now, *, cfg=None, backup_dir=None):
                 db.execute("DELETE FROM artifacts WHERE artifact_id=?", (artifact_id,))
         db.execute(f"DELETE FROM artifacts WHERE kind IN ({_placeholders(ERASED_KINDS)})", ERASED_KINDS)
         db.execute("DELETE FROM fetch_jobs WHERE kind=?", (state.QUALITY_CLAIM,))
+        from patient_context_view import RESET_MARK_KIND
+        db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
+                   (RESET_MARK_KIND, "", "", json.dumps({"command_id": req["command_id"]}), now))
         bump_inference_analysis_epoch_tx(db)
         if _spend(db, cfg) != before:
             raise ValueError("spend_changed")

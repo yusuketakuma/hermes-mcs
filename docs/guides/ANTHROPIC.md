@@ -194,7 +194,7 @@ python3 mcs/ops/mcs_setup.py cloud-llm compare --days 14
 python3 mcs/ops/mcs_setup.py cloud-llm outstanding
 ```
 
-`outstanding` は保存されている会計履歴全体から、結果記録がない要求と、結果を精算できない要求の件数・最古の経過時間・10分以上の件数を集計します。本文や患者識別子は表示しません。読取り上限に達した場合は `unknown`、不正・重複・対応しない記録がある場合は `partial` とし、未確定の件数を0とは表示しません。この照会で予約額の解除や再送はしません。
+`outstanding` は保存されている会計履歴全体から、結果記録がない要求と、結果を精算できない要求の件数・最古の経過時間・10分以上の件数を集計します。本文や患者識別子は表示しません。読取り上限に達した場合は `unknown`、不正・重複・対応しない記録がある場合は `partial` とし、未確定の件数を0とは表示しません。この照会で予約額の解除や再送はしません。患者コンテキストの消去で記録を消し、件数だけを引き継いだ未精算の送信は、保存されている記録とは別に `carried_unresolved_requests` として表示します（再送はしません）。
 会計履歴が増えて既定の読取り上限（5秒・10万件）では `unknown` になるときは、`cloud-llm outstanding --full` で上限を広げて全件を確認します。最長で5分かかります。検証の内容は同じで、読取り専用のため収集や解析は止まりません。
 
 `--since YYYY-MM-DD` は日本時間の日付で絞ります。`log` だけは `--project` でも絞れます。
@@ -262,6 +262,21 @@ python3 mcs/ops/mcs_setup.py cloud-llm resume --confirm-human --reason '患者�
 `context-reset-plan` の `refusal` が `null` でない間は消去できません（`read_incomplete` は確認の読取りが上限に達したことを示します。`stop_reason` が `read_deadline` のときは、ほかの処理が少ない時間に再実行します。それ以外の理由は再実行しても通らないので、開発者に連絡してください）。
 バックアップは手順3の実行時に取り、1時間以内のものだけを使います。拒否されたときのバックアップは削除されます。消去の後は公開中の患者コンテキストがすぐ表示されなくなり、通常の処理で作り直されます。
 結果が分からないまま残っていた送信（`unsettled_reservations`）と同じ内容を、作り直しで改めて送ることがあります。詳しい消去範囲は [患者背景情報の契約](../specs/patient-context.md) を参照してください。
+
+拒否されたときの理由と対処は次のとおりです。
+
+| 理由 | 対処 |
+|---|---|
+| `patient_context_enabled` | 設定で `extract.patient_context.enabled` を `false` にする |
+| `cloud_not_paused` | `cloud-llm stop` で外部AIの送信を止める |
+| `quality_claim_active`・`generation_active`・`cloud_in_flight`・`jev_in_flight` | 実行中の処理が終わるまで（10分程度）待って再実行する |
+| `accounting_unverified`・`accounting_inconsistent` | 会計記録を確認できないため消去しない。`cloud-llm check` の内容を開発者に連絡する |
+| `preview_changed`・`spend_changed` | 確認の後に記録が変わった。`context-reset-plan` からやり直す |
+| `backup_missing`・`backup_disk_low` | バックアップを取れない、または確かめられない。空き容量を確保して手順3から再実行する |
+| `config_unreadable` | 設定ファイルを読めない。`setup check` で確認する |
+| `command_id_conflict` | 別の操作の `--command-id` を指定している。指定を外すか新しい値にする |
+
+消去前のバックアップ（`data/backups/patient-context-reset-*.db`）へ戻すときは、通常のバックアップと同じ手順で復元します。復元すると外部AIの送信は自動で止まり、消去の後の作り直しで使った額の記録は復元後のDBにありません。提供元の利用明細を確認してから `cloud-llm resume` で再開してください。
 
 DBをバックアップの状態へ戻したときは、外部AIの新しい送信を自動で停止します。
 復元した時点より後の送信と課金の記録が復元後のDBにないため、再開すると同じ内容を再び送ることがあり、その分は上限の集計にも入りません。

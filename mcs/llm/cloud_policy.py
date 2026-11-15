@@ -415,6 +415,28 @@ def profile_for_settings(cfg, settings, *, route, purpose):
         "profile": profile}), []
 
 
+_ROUTE_PURPOSES = (("reextract", ("backlog", "quality_repair")),
+                   ("semantic_backlog", ("backlog", "quality_repair")),
+                   ("patient_context", ("patient_context", "quality_repair")))
+
+
+def configured_models(cfg, settings):
+    """Every model this configuration can send to: the default and each route purpose's profile."""
+    models = {settings["model"]}
+    for route, purposes in _ROUTE_PURPOSES:
+        for purpose in purposes:
+            selection, errors = profile_for_settings(cfg, settings, route=route, purpose=purpose)
+            if selection is not None and not errors:
+                models.add(selection["model"])
+    return sorted(models)
+
+
+def earliest_price_info(cfg, settings, now=None):
+    """price_info of the configured model whose table runs out first (an expired one first)."""
+    infos = [{**price_info(model, now), "price_model": model} for model in configured_models(cfg, settings)]
+    return min(infos, key=lambda info: (info["price_valid"], info["price_valid_until"], info["price_model"]))
+
+
 def selected_key(root=None, cfg=None):
     if cfg is None:
         from mcs_util import load_config
@@ -1582,13 +1604,15 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
         if ledger.db.in_transaction:
             raise AnthropicError("budget_exceeded", "owner_transaction_active")
         bound, tokens, model = input_bound(body), meta['max_tokens'], meta['model']
+        # one clock read: the maximum and the recorded table must come from the same JST day
+        now = time.time()
         try:
-            maximum = max_cost(tokens, input_bound=bound, model=model)
+            maximum = max_cost(tokens, input_bound=bound, model=model, now=now)
         except AnthropicError as error:
             _circuit_result(ledger, error)
             raise
         meta.update(reservation_id=uuid.uuid4().hex,
-                    price_version=_price_definition(model)["price_version"],
+                    price_version=_price_definition(model, now=now)["price_version"],
                     max_cost_usd=str(maximum), input_bound=bound,
                     input_chars=sum(len(text) for text in _texts(body)), timeout_seconds=float(timeout))
 

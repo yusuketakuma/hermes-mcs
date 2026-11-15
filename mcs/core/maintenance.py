@@ -306,12 +306,14 @@ _ROTATED_BACKUP = re.compile(
     r"(ledger-\d{8}\.db(\.ok)?|preupdate-.*\.db|.*\.tmp(-journal|-wal|-shm)?)")
 
 
-BACKUP_CLASSES = ("daily", "daily_ok", "preupdate", "staging", "manual")
+BACKUP_CLASSES = ("daily", "daily_ok", "preupdate", "patient_context_reset", "staging", "manual")
 
 
 _BACKUP_CLASS_PATTERNS = (("daily", re.compile(r"ledger-\d{8}\.db")),
                           ("daily_ok", re.compile(r"ledger-\d{8}\.db\.ok")),
                           ("preupdate", re.compile(r"preupdate-.*\.db")),
+                          # reset_backup's copies: kept by the owner, never rotated
+                          ("patient_context_reset", re.compile(r"patient-context-reset-.*\.db")),
                           ("staging", re.compile(r".*\.tmp(-journal|-wal|-shm)?")))
 
 
@@ -325,8 +327,8 @@ def _backup_class(name: str) -> str:
 
 def backup_bytes_by_class() -> dict | None:
     """Bytes of regular files in data/backups by the owner that keeps them
-    (daily rotation, its .ok markers, pre-update copies, in-flight staging,
-    hand-made copies). Names and stat only — no DB open. A number for
+    (daily rotation, its .ok markers, pre-update copies, patient-context
+    reset copies, in-flight staging, hand-made copies). Names and stat only — no DB open. A number for
     health only: nothing here deletes. None when the scan is unbounded or
     unreadable; all zero when the directory is missing."""
     totals = dict.fromkeys(BACKUP_CLASSES, 0)
@@ -1293,6 +1295,16 @@ def _prune_cloud_usage(con, cutoff):
     """Keep exact source-repair reservation/result/disposition evidence beyond ordinary accounting retention."""
     total, last_id = 0, 0
     kinds = ('cloud_usage_reserve', 'cloud_usage_result', 'cloud_usage_dryrun', 'cloud_compare_v1', 'cloud_usage_disposition')
+    # Spending a patient-context reset carried over ages out with the rows it replaced.
+    from cloud_usage_accounting import expired_carryover_ids
+    with con:
+        if not con.in_transaction:
+            con.execute('BEGIN IMMEDIATE')
+        expired = expired_carryover_ids(con, cutoff)
+        if expired:
+            _mark_cloud_usage_pruned(con, cutoff)
+        for artifact_id in expired:
+            total += con.execute('DELETE FROM artifacts WHERE artifact_id=?', (artifact_id,)).rowcount
     while True:
         with con:
             if not con.in_transaction:

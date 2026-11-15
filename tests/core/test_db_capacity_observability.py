@@ -24,15 +24,17 @@ def test_backup_bytes_are_classified_by_their_owner(backups, tmp_path):
     (backups / "preupdate-1.0.28-20260101.db").write_bytes(b"p" * 5)
     (backups / "ledger-20260102.db.tmp-wal").write_bytes(b"s" * 3)
     (backups / "hand-copy.db").write_bytes(b"m" * 7)
+    (backups / "patient-context-reset-20261115-120000-ab12.db").write_bytes(b"r" * 4)
     (backups / "subdir").mkdir()
     outside = tmp_path / "outside.db"
     outside.write_bytes(b"x" * 100)
     (backups / "linked.db").symlink_to(outside)
     assert maintenance.backup_bytes_by_class() == {
-        "daily": 10, "daily_ok": 2, "preupdate": 5, "staging": 3, "manual": 7}
+        "daily": 10, "daily_ok": 2, "preupdate": 5, "patient_context_reset": 4, "staging": 3, "manual": 7}
     assert maintenance.manual_backup_bytes() == 7
     assert sorted(os.listdir(backups)) == sorted([      # observation never deletes
         "ledger-20260101.db", "ledger-20260101.db.ok", "preupdate-1.0.28-20260101.db",
+        "patient-context-reset-20261115-120000-ab12.db",
         "ledger-20260102.db.tmp-wal", "hand-copy.db", "subdir", "linked.db"])
 
 

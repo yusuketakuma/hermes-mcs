@@ -195,7 +195,7 @@ def diagnostics(cfg, *, root=None, probe=False):
                 "daily_cost_limit_usd": cloud["daily_cost_limit_usd"],
                 "monthly_cost_limit_usd": cloud["monthly_cost_limit_usd"],
                 "scope": "all" if cloud["project_ids"] is None else "none" if not cloud["project_ids"] else "selected",
-                **policy.price_info(cloud["model"]), "model": cloud["model"],
+                **policy.earliest_price_info(cfg, cloud), "model": cloud["model"],
                 "provider_budgets": cloud["provider_budgets"],
                 "accounting": None, "dry_run": None,
                 "block_reason": "cost_limit_required" if errors and not policy.blocking_errors(errors) else None}}
@@ -762,7 +762,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
         "estimate_excludes": ["unmeasured_repair_retry", "prompt_overhead_and_added_context"],
         "cost_basis": "reference_range_not_budget_reservation_or_invoice",
         "reservation_input_upper_bound_tokens": policy.INPUT_RESERVATION_BOUND,
-        **policy.price_info(settings["model"]),
+        **policy.earliest_price_info(cfg, settings),
         "provider": settings["provider"], "model": settings["model"],
         "provider_budgets": settings["provider_budgets"],
         "usd_jpy": settings["usd_jpy"], "log": log}
@@ -841,7 +841,8 @@ def apply_control_tx(db, req, now):
             return "cloud_config_invalid", {}
         if not key:
             return "no_api_key", {}
-        if not policy.pricing_valid(model=settings["model"]) or policy.usage_report(SimpleNamespace(db=db))["pricing_unverified"]:
+        if (not all(policy.pricing_valid(model=model) for model in policy.configured_models(cfg, settings))
+                or policy.usage_report(SimpleNamespace(db=db))["pricing_unverified"]):
             return "pricing_unverified", {}
         policy.capture_history_tx(db, req["command_id"], now, continuous=True)
         state = {"consecutive_failures": 0, "open_until": 0.0,

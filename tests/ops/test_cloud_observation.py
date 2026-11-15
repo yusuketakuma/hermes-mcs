@@ -311,3 +311,21 @@ def _observe_full(ledger, now):
         return observation.observe(ledger.db, now=now, full=True)
     finally:
         ledger.db.rollback()
+
+
+def test_carried_unsettled_sends_are_reported_apart_from_retained_records(world):
+    """A patient-context reset removes the rows but keeps unsettled sends unresolved."""
+    ledger, _ = world
+    now = 1793240000.0
+    ledger.db.execute('INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)',
+                      (policy.CARRYOVER_KIND, json.dumps({'schema': policy.CARRYOVER_KIND, 'entries': [
+                          {'at': now - 900, 'provider': 'anthropic', 'requests': 2, 'cost_usd': '0.1', 'settled': False},
+                          {'at': now - 900, 'provider': 'anthropic', 'requests': 5, 'cost_usd': '0.2', 'settled': True}]}),
+                       '', '{}', now - 800))
+    result = _observe(ledger, now)
+    assert result['state'] == 'complete' and result['unresolved_requests'] == 0
+    assert result['carried_unresolved_requests'] == 2
+    ledger.db.execute("UPDATE artifacts SET content='{}' WHERE kind=?", (policy.CARRYOVER_KIND,))
+    broken = _observe(ledger, now)
+    assert broken['state'] == 'partial' and broken['reason'] == 'carryover_invalid'
+    assert broken['carried_unresolved_requests'] is None
