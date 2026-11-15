@@ -349,13 +349,13 @@ def gate_plugin_sandbox() -> list[str]:
     return bad
 
 
-# maintenance.py opens backup targets (fresh tmp files) read-write AND,
-# in prune_attachments, the live ledger itself — that write is only safe
-# because run_check._housekeeping calls it under run.lock. The exemption
-# is file-wide, so any new RW connect added there needs the same lock.
+# local_backup.py opens backup targets (fresh tmp files) read-write.
+# maintenance.py opens, in prune_attachments, the live ledger itself — that
+# write is only safe because run_check._housekeeping calls it under run.lock.
+# The exemption is file-wide, so any new RW connect added there needs the same lock.
 # llm_admission.py's broker owns a dedicated admission store
 # (admission.db), not the ledger/snapshot surface.
-_SQLITE_RW_OK = {"maintenance.py", "llm_admission.py"}
+_SQLITE_RW_OK = {"local_backup.py", "maintenance.py", "llm_admission.py"}
 
 
 # The former entrypoints retained these exact writer responsibilities after splitting.

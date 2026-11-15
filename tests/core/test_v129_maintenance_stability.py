@@ -5,6 +5,7 @@ unreferenced view manifests. Temp files and synthetic rows only."""
 import time
 
 import ledger
+import local_backup
 import maintenance
 
 
@@ -30,7 +31,7 @@ def test_rotate_log_still_copytruncates_a_plain_log(tmp_path, monkeypatch):
 
 def test_prune_leftovers_removes_stale_atomic_temporaries(tmp_path, monkeypatch):
     monkeypatch.setattr(maintenance, "HOME", str(tmp_path))
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(tmp_path / "snapshots"))
     data = tmp_path / "data"
     stale = [data / "cmd_results" / ".pub-abc", data / "slack_render" / ".pub-def",
@@ -50,7 +51,7 @@ def test_prune_leftovers_removes_stale_atomic_temporaries(tmp_path, monkeypatch)
 
 def test_prune_snapshot_refuses_symlinked_fence(tmp_path, monkeypatch):
     monkeypatch.setattr(maintenance, "HOME", str(tmp_path))
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(tmp_path / "backups"))
     snaps = tmp_path / "snapshots"
     snaps.mkdir()
     monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(snaps))
@@ -156,7 +157,7 @@ def test_retention_drops_only_unsent_superseded_renders_and_free_manifests(tmp_p
 
 def test_prune_leftovers_never_follows_a_symlinked_spool_directory(tmp_path, monkeypatch):
     monkeypatch.setattr(maintenance, "HOME", str(tmp_path))
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(tmp_path / "snapshots"))
     outside = tmp_path / "outside"
     outside.mkdir()

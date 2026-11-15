@@ -7,7 +7,7 @@ from contextlib import closing
 
 import pytest
 
-import maintenance
+import local_backup
 from ingest_testkit import _ledger, _message
 from ledger import Ledger, SCHEMA_VERSION
 
@@ -95,7 +95,7 @@ def test_existing_schema_installs_missing_replace_guard_on_reopen(tmp_path):
 
 
 def test_prune_retains_each_schema_boundary_but_releases_ordinary_copy(tmp_path, monkeypatch):
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(tmp_path))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(tmp_path))
     records = []
     for number, bump in enumerate((True, True, False)):
         backup = tmp_path / f"preupdate-{number}.db"
@@ -104,5 +104,5 @@ def test_prune_retains_each_schema_boundary_but_releases_ordinary_copy(tmp_path,
         records.append({"schema_bump": bump, "backup_path": str(backup)})
     state = tmp_path / "state.json"
     state.write_text(json.dumps({"applied": records}), encoding="utf-8")
-    assert maintenance.prune_preupdate_backups(str(state)) == 1
+    assert local_backup.prune_preupdate_backups(str(state)) == 1
     assert [os.path.exists(record["backup_path"]) for record in records] == [True, True, False]

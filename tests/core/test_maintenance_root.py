@@ -9,9 +9,9 @@ import _mcs_path
 def test_maintenance_and_admission_paths_follow_mcs_root(tmp_path):
     code = (
         "import _mcs_path\n"
-        "import maintenance, local_llm, os\n"
+        "import maintenance, local_backup, local_llm, os\n"
         "os.environ['MCS_LLM_ADMISSION'] = '1'\n"
-        "print(maintenance.HOME); print(maintenance.BACKUP_DIR)\n"
+        "print(maintenance.HOME); print(local_backup.BACKUP_DIR)\n"
         "print(maintenance.SNAPSHOT_DIR); print(maintenance.LOGFILE)\n"
         "print(local_llm._admission_db_path())\n")
     env = dict(os.environ, MCS_ROOT=str(tmp_path),

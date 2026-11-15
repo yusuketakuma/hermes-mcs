@@ -14,6 +14,7 @@ import pytest
 
 import job_ops
 import ledger
+import local_backup
 import maintenance
 import mcs_adapter
 import notify_flush
@@ -46,18 +47,18 @@ def _tick_world(tmp_path, monkeypatch, failure, *, overdue):
         monkeypatch.setattr(
             collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (health_report if name == "HEALTH_FILE" else run_check),
             name, str(value))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(data / "backups"))
     for name, value in {
-        "BACKUP_DIR": data / "backups", "SNAPSHOT_DIR": data / "snapshots",
-        "LOGFILE": data / "run.log",
+        "SNAPSHOT_DIR": data / "snapshots", "LOGFILE": data / "run.log",
     }.items():
         monkeypatch.setattr(maintenance, name, str(value))
     if overdue:
         old = data / "backups" / "ledger-20000101.db"
         old.write_bytes(b"synthetic old backup")
-        stamp = time.time() - maintenance.BACKUP_OVERDUE_S - 3600
+        stamp = time.time() - local_backup.BACKUP_OVERDUE_S - 3600
         os.utime(old, (stamp, stamp))
     backups = []
-    monkeypatch.setattr(maintenance, "daily_backup",
+    monkeypatch.setattr(local_backup, "daily_backup",
                         lambda db: backups.append(db) or "ok")
     drain = job_ops.drain_commands
     monkeypatch.setattr(job_ops, "drain_commands", lambda db, result:
@@ -106,7 +107,7 @@ def test_backup_failure_after_mcs_failure_keeps_the_run_result(tmp_path, monkeyp
 
     def broken(db):
         raise maintenance.MaintenanceError("backup_verify_failed")
-    monkeypatch.setattr(maintenance, "daily_backup", broken)
+    monkeypatch.setattr(local_backup, "daily_backup", broken)
     assert run_check.main() == code
     out = capsys.readouterr().out
     assert "backup: backup_verify_failed" in out and "network_error" in out
@@ -202,7 +203,7 @@ def test_run_lock_lost_keeps_its_write_contract_when_the_record_fails(
         return real(self, run_id, status, *a, **k)
     monkeypatch.setattr(ledger.Ledger, "finish_run", record)
     backups = []
-    monkeypatch.setattr(maintenance, "daily_backup", lambda db: backups.append(db) or "ok")
+    monkeypatch.setattr(local_backup, "daily_backup", lambda db: backups.append(db) or "ok")
     assert run_check.main() == 1
     out = capsys.readouterr().out
     assert backups == []                               # never housekeeping on lock loss

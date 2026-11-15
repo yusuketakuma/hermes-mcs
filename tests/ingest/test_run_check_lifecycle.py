@@ -27,6 +27,7 @@ from run_check_stage_testkit import _no_disk_guard as _no_disk_guard
 
 
 def test_tick_real_storage_snapshot_and_replay(tmp_path, monkeypatch, capsys):
+    import local_backup
     import maintenance
 
     class Adapter(mcs_adapter.MCSAdapter):
@@ -59,8 +60,9 @@ def test_tick_real_storage_snapshot_and_replay(tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(
             collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (health_report if name == "HEALTH_FILE" else run_check),
             name, str(value))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(data / "backups"))
     for name, value in {
-        "BACKUP_DIR": data / "backups", "SNAPSHOT_DIR": data / "snapshots",
+        "SNAPSHOT_DIR": data / "snapshots",
         "LOGFILE": data / "run.log",
     }.items():
         monkeypatch.setattr(maintenance, name, str(value))
@@ -140,6 +142,7 @@ def test_cli_writer_holds_run_lock(tmp_path, monkeypatch, capsys):
 
 def test_tail_command_failure_marks_run_partial(tmp_path, monkeypatch, capsys):
     import maintenance
+    import local_backup
     import self_identity
     import notify_cards
     import notify_spool
@@ -188,7 +191,7 @@ def test_tail_command_failure_marks_run_partial(tmp_path, monkeypatch, capsys):
                  "gc", "clear_snapshot_dirty"):
         monkeypatch.setattr((notify_spool if name in {'recover', 'publish_flags', 'ensure_dirs'} else notify_cards), name, lambda *a, **k: None)
     monkeypatch.setattr(self_identity, "record_self_profile", lambda *a: False)
-    monkeypatch.setattr(maintenance, "daily_backup", lambda *a: None)
+    monkeypatch.setattr(local_backup, "daily_backup", lambda *a: None)
     monkeypatch.setattr(maintenance, "rotate_log", lambda *a: None)
     monkeypatch.setattr(maintenance, "prune_attachments", lambda *a: 0)
     monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a, **k: True)
@@ -360,7 +363,7 @@ def test_crash_before_config_load_reports_backup_unknown(
 
     monkeypatch.setattr(run_check, "_config", config)
     local = {"state": "missing", "newest_age_s": None}
-    monkeypatch.setattr(run_check.maintenance, "local_backup_status",
+    monkeypatch.setattr(run_check.local_backup, "local_backup_status",
                         lambda **_: local)
     monkeypatch.setattr(sys, "argv", ["run_check", "--no-notify"])
     assert run_check._main() == 1
