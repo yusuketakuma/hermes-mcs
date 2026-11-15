@@ -181,6 +181,20 @@ def _run_batch_call(tups, target, deadline: float,
     return "ok", out, meta
 
 
+def _rebuild_meta(r, extra):
+    """An approved local rebuild's settling write (QC, human report, thin retry) keeps its tag."""
+    if r.get("_local_rebuild") is None:
+        return extra
+    return {**(extra or {}), "local_rebuild": local_rebuild.tag(r["_local_rebuild"])}
+
+
+def _rebuild_guard(ledger, r):
+    """...and re-proves its permit inside the same adoption transaction (other rows: unchanged)."""
+    if r.get("_local_rebuild") is None:
+        return None
+    return lambda: local_rebuild.permit(ledger, r["project_id"], r["message_id"]) in local_rebuild.RUNNABLE
+
+
 def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 admitted_ids: set | None = None,
                 per_write_lock: bool = False, workers: int = 1,
@@ -867,9 +881,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             if held:
                                 _commit_extraction_atomic(
                                     ledger, r, src["content"], ctx, None,
-                                    {"qc": qc["qc"], "applied": False}, None, (),
+                                    {"qc": qc["qc"], "applied": False}, _rebuild_meta(r, None), (),
                                     check_current=False, mark_context=False,
-                                    expected_prior=_prior_identity(prior))
+                                    expected_prior=_prior_identity(prior),
+                                    adoption_guard=_rebuild_guard(ledger, r))
                     return
                 if r["human_src"]:
                     # A failed report re-extract settles like the thin
@@ -890,10 +905,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             if held:
                                 _commit_extraction_atomic(
                                     ledger, r, src["content"], ctx, None, None,
-                                    {"human_fix": {"feedback_id": r["human_src"],
-                                                   "applied": False}}, (),
+                                    _rebuild_meta(r, {"human_fix": {"feedback_id": r["human_src"],
+                                                                    "applied": False}}), (),
                                     check_current=False, mark_context=False,
-                                    expected_prior=_prior_identity(prior))
+                                    expected_prior=_prior_identity(prior),
+                                    adoption_guard=_rebuild_guard(ledger, r))
                     return
                 if r["thin_src"]:
                     # A thin retry that failed still settles: re-mint
@@ -910,9 +926,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             if held:
                                 _commit_extraction_atomic(
                                     ledger, r, content, ctx, None, None,
-                                    {"thin_retried": True}, (),
+                                    _rebuild_meta(r, {"thin_retried": True}), (),
                                     check_current=False, mark_context=False,
-                                    expected_prior=_prior_identity(prior))
+                                    expected_prior=_prior_identity(prior),
+                                    adoption_guard=_rebuild_guard(ledger, r))
                     return
                 with _write_lock(per_write_lock) as held:
                     if held and not _current(ledger, r["message_id"],
