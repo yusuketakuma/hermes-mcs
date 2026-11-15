@@ -595,6 +595,11 @@ def test_lane_two_updated_exits_without_reusing_stale_carry(tmp_path, monkeypatc
     monkeypatch.setattr(extract_llm_runner, '_release', worker._release)
     monkeypatch.setattr(worker, "run_pending", run)
     monkeypatch.setattr(extract_llm_resident, 'run_pending', worker.run_pending)
+    # The synthetic carry row has no source identity, so the semantic turn's own save attempt
+    # (the only call that passes lock_context) leaves it carried; the stale-worker exit settles it.
+    real_settle = extract_llm_resident._settle_carry
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry',
+                        lambda *args, **kwargs: None if 'lock_context' in kwargs else real_settle(*args, **kwargs))
     monkeypatch.setattr(worker, "_background_semantic", lambda *args: events.append("semantic") or {"done": 0})
     monkeypatch.setattr(extract_llm_resident, '_background_semantic', worker._background_semantic)
     monkeypatch.setattr(worker.time, "sleep", lambda seconds: sleeps.append(seconds))

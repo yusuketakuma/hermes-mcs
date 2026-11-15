@@ -316,7 +316,8 @@ def test_semantic_turn_keeps_the_carry_when_the_lock_stays_busy(tmp_path, monkey
         out = capsys.readouterr().out
         semantic = _semantic_records(out)
         assert semantic and all(row['semantic'] == {'skipped': 'lock_busy'} for row in semantic)
-        assert semantic[0]['elapsed_s'] == pytest.approx(3.0)
+        # The fake clock sums 0.2 s polls, so float drift can add one poll to the 3 s window.
+        assert semantic[0]['elapsed_s'] == pytest.approx(3.0, abs=0.2 + 1e-6)
         assert any(row.get('turn') == 'carry' and row.get('carry_waiting') for row in _records(out))
         assert jobs == [] and led.artifacts('extract_llm') == [] and _claims(led) == []
     finally:
