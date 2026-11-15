@@ -4,8 +4,9 @@ The owner decided (2026-11-15) to discard all patient-context processing state, 
 published contexts, quality results, generation slots and the patient_context route's
 cloud accounting, then rebuild from scratch. Accounting of the other cloud routes stays,
 because semantic and attachment results are proven against it. Spending already made is
-carried over as per-day totals (cloud_usage_carryover_v1), so every spending limit keeps
-counting it; quality Jev usage of today keeps counting toward the Jev daily limit.
+carried over as totals per day, provider and settlement (cloud_usage_carryover_v1), split
+at the period start so that budget keeps its count too; every spending limit keeps counting
+it. Quality Jev usage of today keeps counting toward the Jev daily limit.
 
 The operation runs only while patient-context generation is disabled in the
 configuration, cloud sends are paused, nothing is in flight and the accounting is
@@ -14,23 +15,29 @@ rolled back when the reported spending would differ after the reset.
 """
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import cloud_policy
+from anthropic_client import AnthropicError
 import patient_context_quota
 import patient_context_refresh_state as state
 from ledger_semantic_sources import bump_inference_analysis_epoch_tx
-from mcs_util import load_config, payload_hash, valid_hash, valid_text
+from mcs_util import load_config, payload_hash, until_epoch, valid_hash, valid_text
 from patient_context_artifacts import quality_kind
 
 COMMAND = "ops.patient_context_reset"
 ROUTE = "patient_context"
 # A send younger than this may still be on the wire (cloud_observation's 10-minute bucket).
 IN_FLIGHT_S = 600
+BACKUP_PREFIX = "patient-context-reset-"
+# The CLI takes the backup just before the receipt transaction; an older copy is not this reset's.
+BACKUP_MAX_AGE_S = 3600
+# Accounting reads that fail as data, not as a programming error: the reset then refuses.
+_UNVERIFIED = (ValueError, AnthropicError, InvalidOperation)
 QUALITY_OPERATIONS = ("patient_summary_quality", "patient_source_quality")
 CARRIED_JEV_OPERATION = "patient_context_reset_carryover"
 _SOURCE_QUALITY = tuple(quality_kind(kind, {"purpose": "source"}) for kind in (
@@ -42,10 +49,6 @@ ERASED_KINDS = (
     state.QUALITY_REPAIR_CANDIDATE, state.QUALITY_RETRY, state.QUALITY_SKIP,
     state.SOURCE_REPAIR, state.SOURCE_REPAIR_CANDIDATE, *_SOURCE_QUALITY,
 )
-# Records the reset keeps: viewers' "since" positions, sealed notification renders and
-# dependency-loss evidence that rollups and other views also read.
-KEPT_KINDS = ("patient_context_view_checkpoint_v1", "patient_context_progress_snapshot_v1",
-              "inference_dependency_loss")
 _USAGE_KINDS = ("cloud_usage_reserve", "cloud_usage_result", "cloud_usage_disposition")
 _RID = "CASE WHEN json_valid(meta) THEN json_extract(meta,'$.reservation_id') END"
 _ROUTE = "CASE WHEN json_valid(meta) THEN json_extract(meta,'$.route') END"
@@ -69,17 +72,28 @@ def _patient_context_reservations(db):
         if not isinstance(rid, str) or rid in reservations:
             raise ValueError("accounting_inconsistent")
         reservations[rid] = (meta, row)
-    stray = db.execute(f"SELECT COUNT(*) FROM artifacts WHERE kind IN ('cloud_usage_result','cloud_usage_disposition') "
-                       f"AND {_ROUTE}=? AND ({_RID} IS NULL OR {_RID} NOT IN "
-                       f"(SELECT {_RID} FROM artifacts WHERE kind='cloud_usage_reserve' AND {_ROUTE}=?))",
-                       (ROUTE, ROUTE)).fetchone()[0]
-    if stray:
-        raise ValueError("accounting_inconsistent")
     return reservations
 
 
-def _carryover(db, reservations):
-    """Per-day totals by provider and settlement for the reservations about to be removed."""
+# Results and dispositions of this route whose reservation is gone (pruned history); the
+# tallies count spending by reservation only, so they are erased with the rest.
+_STRAY = (f"kind IN ('cloud_usage_result','cloud_usage_disposition') AND {_ROUTE}=? AND ({_RID} IS NULL "
+          f"OR {_RID} NOT IN (SELECT {_RID} FROM artifacts WHERE kind='cloud_usage_reserve' AND {_ROUTE}=?))")
+
+
+def _window_start(cfg):
+    settings, errors = cloud_policy.resolve_settings(cfg)
+    if errors or settings["window_budget_usd"] is None or settings["window_start"] is None:
+        return None
+    return until_epoch(settings["window_start"])
+
+
+def _carryover(db, reservations, window_start):
+    """Totals by day, period side, provider and settlement for the reservations about to be removed.
+
+    Each total is dated at its latest reservation: the day and the side of the period start
+    stay exact, and a later, earlier period start can only count more spending, never less.
+    """
     groups = {}
     for rid, (meta, row) in reservations.items():
         maximum = cloud_policy._reserve_valid(meta, row)
@@ -88,11 +102,23 @@ def _carryover(db, reservations):
             f"WHERE kind='cloud_usage_result' AND {_RID}=?", (rid,))]
         cost, settled = cloud_policy._settled(meta, maximum, results) if results else (maximum, False)
         provider = cloud_policy._price_definition(meta["model"], meta["price_version"])["provider"]
-        key = (cloud_policy._periods(row["created_at"])[0], provider, bool(settled))
-        at, requests, total = groups.get(key, (row["created_at"], 0, Decimal(0)))
-        groups[key] = (max(at, row["created_at"]), requests + 1, total + cost)
+        at = row["created_at"]
+        key = (cloud_policy._periods(at)[0], window_start is not None and at >= window_start,
+               provider, bool(settled))
+        latest, requests, total = groups.get(key, (at, 0, Decimal(0)))
+        groups[key] = (max(latest, at), requests + 1, total + cost)
     return [{"at": at, "provider": provider, "requests": requests, "cost_usd": str(total), "settled": settled}
-            for (_day, provider, settled), (at, requests, total) in sorted(groups.items())]
+            for (_day, _side, provider, settled), (at, requests, total) in sorted(groups.items())]
+
+
+def _amounts(value):
+    """Reported spending with every amount as a number, so equal sums compare equal."""
+    if isinstance(value, dict):
+        return {key: Decimal(item) if key.endswith("_usd") and isinstance(item, str) else _amounts(item)
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [_amounts(item) for item in value]
+    return value
 
 
 def _spend(db, cfg):
@@ -102,8 +128,8 @@ def _spend(db, cfg):
            "month": cloud_policy.usage_report(ledger, period="month")}
     settings, errors = cloud_policy.resolve_settings(cfg)
     if not errors and settings["window_budget_usd"] is not None:
-        out["window"] = str(cloud_policy.window_spend(ledger, cfg))
-    return out
+        out["window"] = cloud_policy.window_spend(ledger, cfg)
+    return _amounts(out)
 
 
 def _quality_usage(db):
@@ -132,7 +158,8 @@ def _refusal(db, cfg, now):
                 and isinstance(doc.get("lease_until"), (int, float)) and doc["lease_until"] > now):
             return "generation_active"
     report = cloud_policy.usage_report(SimpleNamespace(db=db))
-    holds = cloud_policy.evidence_hold_counts(db, now=now)
+    # Count every accounting row: a partial count is not evidence that none is unreadable.
+    holds = cloud_policy.evidence_hold_counts(db, now=now, scan_limit=1 << 62)
     if report["pricing_unverified"] or holds["unattributable_accounting_rows"] != 0:
         return "accounting_unverified"
     reservations = _patient_context_reservations(db)
@@ -147,20 +174,21 @@ def _refusal(db, cfg, now):
     return None
 
 
-def preview(db, *, cfg=None, now):
-    """Counts of what the reset removes and carries, without identifiers or content."""
-    cfg = load_config() if cfg is None else cfg
+def _plan(db, cfg, now, stop):
+    """The preview body and the carry-over entries it commits to; `stop` errors propagate."""
     try:
         refusal = _refusal(db, cfg, now)
         reservations = _patient_context_reservations(db)
-        carryover = _carryover(db, reservations)
-    except ValueError as error:
+        carryover = _carryover(db, reservations, _window_start(cfg))
+    except stop:
+        raise
+    except _UNVERIFIED as error:
         refusal = str(error) if str(error) in REFUSALS else "accounting_unverified"
         reservations, carryover = {}, []
     kinds = {kind: db.execute("SELECT COUNT(*) FROM artifacts WHERE kind=?", (kind,)).fetchone()[0]
              for kind in ERASED_KINDS}
     rids = list(reservations)
-    accounting = 0
+    accounting = db.execute(f"SELECT COUNT(*) FROM artifacts WHERE {_STRAY}", (ROUTE, ROUTE)).fetchone()[0]
     for start in range(0, len(rids), 500):
         page = rids[start:start + 500]
         accounting += db.execute(f"SELECT COUNT(*) FROM artifacts WHERE kind IN (?,?,?) AND {_RID} IN "
@@ -168,6 +196,8 @@ def preview(db, *, cfg=None, now):
     from patient_context_refresh_readiness import lane_metrics
     try:
         outcomes = lane_metrics(db)
+    except stop:
+        raise
     except ValueError:
         outcomes = None
     body = {"refusal": refusal, "kinds": kinds, "quality_claims": db.execute(
@@ -176,6 +206,13 @@ def preview(db, *, cfg=None, now):
             "unsettled_reservations": sum(entry["requests"] for entry in carryover if not entry["settled"]),
             "quality_usage_rows": len(_quality_usage(db)), "carryover": carryover, "outcomes": outcomes}
     return {**body, "preview_hash": payload_hash({key: body[key] for key in body if key != "refusal"})}
+
+
+def preview(db, *, cfg=None, now, stop=()):
+    """Counts of what the reset removes and carries, without identifiers or content.
+
+    `stop` are the caller's reader-limit errors: they propagate instead of reading as a refusal."""
+    return _plan(db, load_config() if cfg is None else cfg, now, tuple(stop))
 
 
 def validate_operation(req, base):
@@ -191,6 +228,7 @@ def validate_operation(req, base):
     backup = req.get("backup")
     if (not isinstance(backup, dict) or set(backup) != {"name", "bytes", "sha256"}
             or not valid_text(backup["name"], 255) or "/" in backup["name"]
+            or not backup["name"].startswith(BACKUP_PREFIX) or not backup["name"].endswith(".db")
             or type(backup["bytes"]) is not int or backup["bytes"] <= 0 or not valid_hash(backup["sha256"])):
         return "bad_backup"
     return None
@@ -205,7 +243,8 @@ def apply_tx(db, req, now, *, cfg=None, backup_dir=None):
         return "config_unreadable", {}
     backup = Path(backup_dir or maintenance.BACKUP_DIR) / req["backup"]["name"]
     try:
-        if backup.is_symlink() or not backup.is_file() or os.path.getsize(backup) != req["backup"]["bytes"]:
+        if (backup.is_symlink() or not backup.is_file() or os.path.getsize(backup) != req["backup"]["bytes"]
+                or os.path.getmtime(backup) < now - BACKUP_MAX_AGE_S):
             return "backup_missing", {}
     except OSError:
         return "backup_missing", {}
@@ -214,11 +253,11 @@ def apply_tx(db, req, now, *, cfg=None, backup_dir=None):
         return found["refusal"], {}
     if found["preview_hash"] != req["preview_hash"]:
         return "preview_changed", {}
-    before = _spend(db, cfg)
-    reservations = _patient_context_reservations(db)
     db.execute("SAVEPOINT patient_context_reset")
     try:
-        rids = list(reservations)
+        before = _spend(db, cfg)
+        rids = list(_patient_context_reservations(db))
+        db.execute(f"DELETE FROM artifacts WHERE {_STRAY}", (ROUTE, ROUTE))
         for start in range(0, len(rids), 500):
             page = rids[start:start + 500]
             db.execute(f"DELETE FROM artifacts WHERE kind IN (?,?,?) AND {_RID} IN ({_placeholders(page)})",
@@ -239,7 +278,7 @@ def apply_tx(db, req, now, *, cfg=None, backup_dir=None):
         bump_inference_analysis_epoch_tx(db)
         if _spend(db, cfg) != before:
             raise ValueError("spend_changed")
-    except ValueError as error:
+    except _UNVERIFIED as error:
         db.execute("ROLLBACK TO patient_context_reset")
         db.execute("RELEASE patient_context_reset")
         return (str(error) if str(error) in REFUSALS else "accounting_unverified"), {}

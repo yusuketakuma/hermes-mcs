@@ -1,13 +1,18 @@
 """Synthetic acceptance of the receipted patient-context reset: erase, carry spending over, rebuild."""
 import copy
+from datetime import datetime
 import json
 from types import SimpleNamespace
 
 import pytest
 
 import cloud_policy
+import patient_context_quota
 import patient_context_refresh_readiness as readiness
+import patient_context_refresh_state as state
 import patient_context_reset as reset
+import semantic_policy
+import semantic_store
 from test_context_cloud_update_identity import cloud, finish, real_cloud, runtime  # noqa: F401  (fixtures)
 
 BACKUP = {"name": "patient-context-reset-synthetic.db", "bytes": 7, "sha256": "a" * 64}
@@ -107,3 +112,173 @@ def test_context_rebuilds_after_reset(built, tmp_path):
 
 def clock_runtime(ledger, clock):
     return ledger, clock, []
+
+
+def _reserves(ledger):
+    return [row["artifact_id"] for row in ledger.artifacts("cloud_usage_reserve")]
+
+
+def test_reset_keeps_a_period_budget_that_starts_mid_day(built, tmp_path):
+    """A period start between two reservations of one day keeps its count: the carry-over is
+    split at that start, so neither the earlier spending joins it nor the later leaves it."""
+    ledger, clock, cfg, _ = built
+    first = min(_reserves(ledger))
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET created_at=? WHERE artifact_id=?", (clock.wall - 3 * 3600, first))
+    start = datetime.fromtimestamp(clock.wall - 3600, cloud_policy.JST).isoformat()
+    off = _disabled(cfg)
+    off["cloud_llm"] = {**off["cloud_llm"], "window_start": start, "window_budget_usd": 50}
+    cloud_policy.stop(ledger)
+    usage = SimpleNamespace(db=ledger.db)
+    window = cloud_policy.window_spend(usage, off)
+    whole_day = copy.deepcopy(off)
+    whole_day["cloud_llm"]["window_start"] = datetime.fromtimestamp(clock.wall - 4 * 3600, cloud_policy.JST).isoformat()
+    assert 0 < window < cloud_policy.window_spend(usage, whole_day), "the earlier reservation is outside the period"
+    blocked = cloud_policy.budget_block_reason(usage, off)
+    found = reset.preview(ledger.db, cfg=off, now=clock.wall)
+    assert sum(entry["requests"] for entry in found["carryover"]) == found["reservations"]
+    assert _apply(ledger, off, _request(found["preview_hash"]), clock.wall, tmp_path)[0] is None
+    assert cloud_policy.window_spend(usage, off) == window
+    assert cloud_policy.budget_block_reason(usage, off) == blocked
+
+
+def test_a_changed_spending_total_rolls_the_whole_reset_back(built, tmp_path, monkeypatch):
+    ledger, clock, cfg, _ = built
+    off = _disabled(cfg)
+    cloud_policy.stop(ledger)
+    found = reset.preview(ledger.db, cfg=off, now=clock.wall)
+    reserves = _reserves(ledger)
+    real, seen = reset._spend, []
+
+    def drifting(db, cfg):
+        seen.append(real(db, cfg))
+        return seen[-1] if len(seen) == 1 else {**seen[-1], "day": None}
+
+    monkeypatch.setattr(reset, "_spend", drifting)
+    assert _apply(ledger, off, _request(found["preview_hash"]), clock.wall, tmp_path) == ("spend_changed", {})
+    assert _reserves(ledger) == reserves and not ledger.artifacts(cloud_policy.CARRYOVER_KIND)
+    assert readiness.context_view_input(ledger.db, 1, cfg=cfg) is not None
+
+
+def _quality_usage(ledger, created_at, requests):
+    meta = {"operation": "patient_summary_quality", "jev_requests": requests, "quality_result": "pass"}
+    with ledger.db:
+        ledger.db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
+                          (semantic_policy.KIND_USAGE, "", "", json.dumps(meta), created_at))
+
+
+def test_todays_quality_jev_requests_keep_counting_after_the_reset(built, tmp_path):
+    ledger, clock, cfg, _ = built
+    existing = len(reset._quality_usage(ledger.db))
+    _quality_usage(ledger, clock.wall - 1200, 2)
+    _quality_usage(ledger, clock.wall - 2 * 86400, 5)
+    before = semantic_store.jev_usage_today(ledger)
+    off = _disabled(cfg)
+    cloud_policy.stop(ledger)
+    found = reset.preview(ledger.db, cfg=off, now=clock.wall)
+    assert found["quality_usage_rows"] == existing + 2
+    assert _apply(ledger, off, _request(found["preview_hash"]), clock.wall, tmp_path)[0] is None
+    vars(ledger).pop("_jev_usage_cache", None)
+    assert semantic_store.jev_usage_today(ledger) == before
+    operations = [json.loads(row["meta"]).get("operation") for row in ledger.artifacts(semantic_policy.KIND_USAGE)]
+    assert operations.count(reset.CARRIED_JEV_OPERATION) >= 1
+    assert not set(operations) & set(reset.QUALITY_OPERATIONS)
+
+
+def _claim(ledger, now):
+    with ledger.db:
+        ledger.db.execute("INSERT INTO fetch_jobs(kind,project_id,message_id,next_try,created_at,updated_at) "
+                          "VALUES(?,?,?,?,?,?)", (state.QUALITY_CLAIM, 1, 0, now + 60, now, now))
+
+
+def _generating(ledger, now):
+    with ledger.db:
+        ledger.db.execute("INSERT INTO artifacts(kind,project_id,content,model,meta,created_at) VALUES(?,?,?,?,?,?)",
+                          (patient_context_quota.KIND, 1, json.dumps({"state": "started", "lease_until": now + 60}),
+                           "", "{}", now))
+
+
+def _sending(ledger, now):
+    reserve = ledger.artifacts("cloud_usage_reserve")[0]
+    meta = {**json.loads(reserve["meta"]), "reservation_id": "e" * 32}
+    with ledger.db:
+        ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+                          "VALUES(?,?,?,?,?,?,?)", (reserve["kind"], reserve["project_id"], reserve["message_id"],
+                                                    reserve["content"], reserve["model"], json.dumps(meta), now))
+
+
+@pytest.mark.parametrize("busy, refusal", [(_claim, "quality_claim_active"), (_generating, "generation_active"),
+                                           (_sending, "cloud_in_flight")])
+def test_reset_refuses_while_work_is_running(built, tmp_path, busy, refusal):
+    ledger, clock, cfg, _ = built
+    off = _disabled(cfg)
+    cloud_policy.stop(ledger)
+    busy(ledger, clock.wall)
+    found = reset.preview(ledger.db, cfg=off, now=clock.wall)
+    assert found["refusal"] == refusal
+    assert _apply(ledger, off, _request(found["preview_hash"]), clock.wall, tmp_path)[0] == refusal
+
+
+def test_backup_must_be_this_resets_recent_copy(built, tmp_path):
+    ledger, clock, cfg, _ = built
+    assert reset.validate_operation(_request("c" * 64, backup={**BACKUP, "name": "other.db"}),
+                                    set(_request("c" * 64)) - {"reason", "preview_hash", "backup"}) == "bad_backup"
+    off = _disabled(cfg)
+    cloud_policy.stop(ledger)
+    found = reset.preview(ledger.db, cfg=off, now=clock.wall)
+    later = clock.wall + reset.BACKUP_MAX_AGE_S + 86400 * 365
+    assert _apply(ledger, off, _request(found["preview_hash"]), later, tmp_path)[0] == "backup_missing"
+
+
+@pytest.fixture
+def cli(built, tmp_path, monkeypatch):
+    """The cloud-llm CLI over a copy of the built ledger in a synthetic home."""
+    import argparse
+    import sqlite3
+    import cloud_cli
+    import maintenance
+    import mcs_util
+    ledger = built[0]
+    root = tmp_path / "synthetic-root"
+    (root / "data").mkdir(parents=True)
+    with sqlite3.connect(str(root / "data" / "ledger.db")) as target:
+        ledger.db.backup(target)
+    monkeypatch.setattr(mcs_util, "HOME", str(root))
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(root / "data" / "backups"))
+    monkeypatch.setattr(cloud_cli, "_context_reset_preview", lambda _cfg: {"refusal": None, "preview_hash": "d" * 64})
+    parser = argparse.ArgumentParser()
+    cloud_cli.add_parsers(parser.add_subparsers(dest="command"))
+
+    def run(*extra):
+        args = parser.parse_args(["cloud-llm", "context-reset", "--preview-hash", "d" * 64, "--confirm-human",
+                                  "--reason", "synthetic rebuild", *extra])
+        return args.fn(args)
+    return run, root
+
+
+def _backups(root):
+    folder = root / "data" / "backups"
+    return sorted(path.name for path in folder.iterdir()) if folder.exists() else []
+
+
+def test_cli_replays_a_known_command_id_without_a_new_backup(cli, capsys):
+    import sqlite3
+    run, root = cli
+    command_id = "00000000-0000-4000-8000-000000000002"
+    receipt = {"command_id": command_id, "outcome": "applied", "backup": {"name": "earlier"}}
+    with sqlite3.connect(str(root / "data" / "ledger.db")) as db:
+        db.execute("INSERT INTO command_receipts(command_id,payload_hash,outcome,receipt_json,processed_at) "
+                   "VALUES(?,?,?,?,?)", (command_id, "f" * 64, "applied", json.dumps(receipt), 1.0))
+    assert run("--command-id", command_id) == 0
+    assert json.loads(capsys.readouterr().out)["backup"] == {"name": "earlier"}
+    assert _backups(root) == []
+
+
+def test_cli_removes_the_backup_of_a_rejected_reset(cli, monkeypatch, capsys):
+    import mcs_requests
+    run, root = cli
+    monkeypatch.setattr(mcs_requests, "apply_command", lambda _ledger, req: {
+        "command_id": req["command_id"], "outcome": "rejected", "error": "preview_changed"})
+    assert run() == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "preview_changed"
+    assert _backups(root) == []

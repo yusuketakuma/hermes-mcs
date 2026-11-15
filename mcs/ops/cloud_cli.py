@@ -29,6 +29,10 @@ READ_BYTES = 16 * 1024 * 1024
 # never borrowed from another phase.
 TALLY_READ_ROWS = 200000
 TALLY_READ_BYTES = 640 * 1024 * 1024
+# The patient-context reset preview reads the month's accounting twice (the usage report and the
+# carried reservations' results), so twice the tally phase. Same kind of operating capacity.
+RESET_READ_ROWS = 2 * TALLY_READ_ROWS
+RESET_READ_BYTES = 2 * TALLY_READ_BYTES
 
 
 class _ReaderLimit(ValueError):
@@ -102,6 +106,18 @@ def _reader_phase(db, *, rows, size, reason):
         yield
     finally:
         factory.budget = outer
+
+
+def _context_reset_preview(cfg):
+    """The patient-context reset preview under its own read budget; a reader limit is reported, never a refusal."""
+    import patient_context_reset
+    with _reader(seconds=FULL_READ_SECONDS) as (db, _deadline):
+        try:
+            with _reader_phase(db, rows=RESET_READ_ROWS, size=RESET_READ_BYTES, reason="tally_budget_exceeded"):
+                return patient_context_reset.preview(db, cfg=cfg, now=time.time(), stop=(_ReaderLimit,))
+        except (_ReaderLimit, sqlite3.Error) as error:
+            reason = getattr(db.row_factory, "stop_reason", None) or _reader_failure_reason(error)
+            return {"refusal": "read_incomplete", "stop_reason": reason, "preview_hash": None}
 
 
 def _check_reader(db, deadline):
@@ -872,9 +888,7 @@ def command(args):
                              ensure_ascii=False, indent=2))
             return 0 if result["state"] in ("complete", "bundle_full") else 1
         if action == "context-reset-plan":
-            import patient_context_reset
-            with _reader(seconds=FULL_READ_SECONDS) as (db, _deadline):
-                result = patient_context_reset.preview(db, cfg=cfg, now=time.time())
+            result = _context_reset_preview(cfg)
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0 if result["refusal"] is None else 1
         if action in ("stop", "resume", "local-rebuild-approve", "context-reset"):
@@ -893,10 +907,21 @@ def command(args):
                 import patient_context_reset
                 req["cmd"] = "ops.patient_context_reset"
                 req["preview_hash"] = args.preview_hash
-                req["backup"] = {"name": "pending", "bytes": 1, "sha256": "0" * 64}
-                # Refuse before copying the database: a refused reset must not leave a backup behind.
-                with _reader(seconds=FULL_READ_SECONDS) as (db, _deadline):
-                    found = patient_context_reset.preview(db, cfg=cfg, now=time.time())
+                # replaced by the real copy under the run lock; the envelope is validated before that
+                req["backup"] = {"name": patient_context_reset.BACKUP_PREFIX + "pending.db", "bytes": 1,
+                                 "sha256": "0" * 64}
+                # Refuse before copying the database: a refused or replayed reset leaves no backup behind.
+                if args.command_id:
+                    with _reader() as (db, _deadline):
+                        old = db.execute("SELECT receipt_json FROM command_receipts WHERE command_id=?",
+                                         (args.command_id,)).fetchone()
+                    if old is not None:
+                        receipt = json.loads(old["receipt_json"])
+                        print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "backup",
+                                                                      "erased", "carryover") if k in receipt},
+                                         ensure_ascii=False))
+                        return 0 if receipt.get("outcome") == "applied" else 1
+                found = _context_reset_preview(cfg)
                 if found["refusal"] is not None or found["preview_hash"] != args.preview_hash:
                     print(json.dumps({"outcome": "rejected", "error": found["refusal"] or "preview_changed"},
                                      ensure_ascii=False))
@@ -931,7 +956,11 @@ def command(args):
                     # The owner's order: back up under the run lock, before the erasing transaction.
                     import hashlib
                     import maintenance
-                    copy = maintenance.reset_backup(str(path))
+                    try:
+                        copy = maintenance.reset_backup(str(path))
+                    except maintenance.MaintenanceError as error:
+                        print(json.dumps({"outcome": "rejected", "error": str(error)}, ensure_ascii=False))
+                        return 1
                     digest = hashlib.sha256()
                     with open(copy, "rb") as stream:
                         for block in iter(lambda: stream.read(1 << 20), b""):
@@ -940,6 +969,13 @@ def command(args):
                                      "sha256": digest.hexdigest()}
                 with closing(Ledger(str(path))) as ledger:
                     receipt = mcs_requests.apply_command(ledger, req)
+                if action == "context-reset" and receipt.get("outcome") != "applied":
+                    # Nothing was erased, so the copy restores nothing; an exception keeps it (below).
+                    os.unlink(copy)
+            except BaseException:
+                if action == "context-reset" and req["backup"]["sha256"] != "0" * 64:
+                    print(json.dumps({"backup_kept": req["backup"]["name"]}, ensure_ascii=False))
+                raise
             finally:
                 os.close(lock_fd)
             print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "control", "approved",
