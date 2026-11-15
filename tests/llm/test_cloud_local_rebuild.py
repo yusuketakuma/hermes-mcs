@@ -349,18 +349,43 @@ def _frame_and_started_checkpoint(ledger, monkeypatch, *, checkpoint):
                                       lease=lease, guard=row['_checkpoint_guard'])
 
 
-@pytest.mark.parametrize('checkpoint,reason', [(False, 'frame_present'), (True, 'checkpoint_present')])
-def test_a_frame_or_started_repair_left_for_the_source_keeps_an_all_success_unit_out(
-        legacy, monkeypatch, checkpoint, reason):
-    """The usage history alone qualifies; the remaining local work record does not."""
+def test_a_frame_alone_is_an_input_and_keeps_the_unit_eligible(legacy, monkeypatch):
+    """A stalled unit leaves its frozen frame on every prepare; the frame is no work record."""
+    ledger, _ = legacy
+    _frame_and_started_checkpoint(ledger, monkeypatch, checkpoint=False)
+    assert local_rebuild.unit_proof(ledger, 1, 1)['message_id'] == 1
+    assert sorted(u['message_id'] for u in local_rebuild.preview(ledger)['plan']['units']) == [1, 2]
+
+
+def test_a_started_repair_checkpoint_keeps_an_all_success_unit_out(legacy, monkeypatch):
+    """The usage history alone qualifies; a raw checkpoint row (a started quality repair here)
+    is left work and excludes the unit."""
     ledger, calls = legacy
     assert local_rebuild.unit_proof(ledger, 1, 1)['message_id'] == 1
-    _frame_and_started_checkpoint(ledger, monkeypatch, checkpoint=checkpoint)
-    with pytest.raises(ValueError, match=f'^{reason}$'):
+    _frame_and_started_checkpoint(ledger, monkeypatch, checkpoint=True)
+    with pytest.raises(ValueError, match='^checkpoint_present$'):
         local_rebuild.unit_proof(ledger, 1, 1)
     report = local_rebuild.preview(ledger)
-    assert report['excluded'][reason] == 1 and [u['message_id'] for u in report['plan']['units']] == [2]
+    assert report['excluded']['checkpoint_present'] == 1 and [u['message_id'] for u in report['plan']['units']] == [2]
     assert len(calls) == 2
+
+
+def test_after_approval_only_this_approvals_tagged_checkpoints_keep_it_active(legacy, monkeypatch):
+    """A checkpoint written after approval without this approval's tag (another writer, another
+    approval, a hand-made tag) invalidates the permit; the same row with the tag keeps it."""
+    ledger, _ = legacy
+    req, _receipt = _approve(ledger, local_rebuild.preview(ledger)['plan'])
+    unit = local_rebuild.approved_units(ledger.db)[(1, 1)]
+    _frame_and_started_checkpoint(ledger, monkeypatch, checkpoint=True)
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.PROOF_CHANGED      # untagged
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.local_rebuild',json(?)) "
+                          "WHERE kind='extract_llm_chunk' AND message_id=1", (json.dumps(local_rebuild.tag(unit)),))
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ACTIVE
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.local_rebuild.command_id',?) "
+                          "WHERE kind='extract_llm_chunk' AND message_id=1", (str(uuid.uuid4()),))
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.PROOF_CHANGED      # another approval
 
 
 def test_the_cli_dry_run_reads_through_the_bounded_read_only_reader(legacy, tmp_path, monkeypatch, capsys):
