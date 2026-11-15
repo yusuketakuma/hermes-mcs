@@ -67,7 +67,10 @@ class CloudClient:
 
     def response_error(self, status, raw):
         kind, retryable = http_error(status)
-        return kind, retryable, {}
+        # A paid provider's 5xx/529 may already be billed, and the reservation guard refuses a
+        # second send of the same request, so waiting only held the slot: the unit goes to the
+        # local contract at once (owner decision 2026-11-15). Jev keeps the shared classes.
+        return kind, retryable and status < 500, {}
 
     def complete(self, prompt, *, deadline, max_tokens=8192, before_attempt=None,
                  reserve_fn=None, after_result=None, cache_prefix=None):
