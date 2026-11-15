@@ -8,13 +8,9 @@ import pytest
 import cloud_cli
 import cloud_inference
 import cloud_policy
-import extract_llm
-import extract_llm_selection
-import semantic_due_selection
 from anthropic_client import AnthropicError, MODEL
 from ledger import Ledger
 from semantic_cloud_testkit import cloud as cloud
-from semantic_testkit import _cfg, _ledger, _message, _patient
 
 
 @pytest.mark.parametrize("route", ["reextract", "semantic_backlog"])
@@ -64,51 +60,11 @@ def test_reservation_and_send_check_deny_closed_routes(tmp_path, route):
         assert not ledger.artifacts("cloud_usage_reserve")
 
 
-def test_extract_cloud_selection_gate_rejects_closed_route(tmp_path, monkeypatch):
-    led = _ledger(tmp_path)
-    _patient(led)
-    led.save_messages([_message()])
-    with led.db:
-        led.db.execute('UPDATE messages SET first_seen=?', (time.time() - 1200,))
-        led.db.execute('UPDATE message_revisions SET observed_at=?', (time.time() - 1200,))
-        cloud_policy.capture_history_tx(led.db, 'synthetic-gate', time.time())
-    cfg = _cfg()
-    cfg["cloud_llm"] = {"mode": "on", "project_ids": [1], "routes": ["reextract"]}
-    monkeypatch.setattr(extract_llm_selection, "load_config", lambda *a: cfg)
-    monkeypatch.setattr(cloud_policy, "api_key", lambda *a: "synthetic-key")
-    result = extract_llm._select_pending(led, 64, None, None, False,
-                                       cloud_only=True, prioritize_patients=True)
-    assert result == ([], 0)
-    # Positive control: the same pending target is selected once the route is
-    # simulated open, so the empty result above comes from the send gate.
-    monkeypatch.setattr(cloud_policy, "send_route", lambda route: True)
-    rows, _new = extract_llm._select_pending(led, 64, None, None, False,
-                                             cloud_only=True, prioritize_patients=True)
-    assert rows
-
-
-def test_semantic_cloud_due_gate_rejects_closed_route(cloud, monkeypatch):
-    led, cfg, _job, _calls = cloud
-    cfg["cloud_llm"]["routes"] = ["semantic_backlog"]
-    result = semantic_due_selection._select_cloud_due(led, "backlog", ("semantic",), False, 1)
-    assert result == ([], [], [], [], {"turn": None})
-    # Positive control: the same due job is selected once the route is open.
-    monkeypatch.setattr(cloud_policy, "send_route", lambda route: True)
-    selected = semantic_due_selection._select_cloud_due(led, "backlog", ("semantic",), False, 1)
-    assert selected[0]
-
-
-def test_route_counts_skip_closed_individual_routes(cloud, monkeypatch):
+def test_route_counts_skip_closed_individual_routes(cloud):
     led, cfg, _job, _calls = cloud
     settings = cloud_inference.resolve_cloud_settings(cfg)
     deadline = time.monotonic() + 60
-    monkeypatch.setattr(cloud_policy, "send_route",
-                        lambda route: route == "patient_context")
+    # A pending semantic job exists, but the closed routes have no estimate at all.
     out = cloud_cli._route_counts(led.db, cfg, settings, deadline)
-    assert out["reextract"]["targets"] == 0
-    assert out["semantic_backlog"]["targets"] == 0
-    # The same pending job is counted once the routes are simulated open, so the
-    # zero above comes from the caller gate rather than an empty fixture.
-    monkeypatch.setattr(cloud_policy, "send_route", lambda route: True)
-    out = cloud_cli._route_counts(led.db, cfg, settings, deadline)
-    assert out["semantic_backlog"]["targets"] >= 1
+    assert out["reextract"]["targets"] == out["semantic_backlog"]["targets"] == 0
+    assert out["reextract"]["requests_estimate"] == out["semantic_backlog"]["requests_estimate"] == 0

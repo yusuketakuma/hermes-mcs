@@ -45,7 +45,7 @@ def real_cloud(runtime, cloud, monkeypatch):
     modules = (worker, completed.extract_llm_context, completed.extract_llm_prepare,
                completed.extract_llm_provider, completed.extract_llm_qc,
                completed.extract_llm_resident, completed.extract_llm_runner,
-               completed.extract_llm_selection, completed.extract_llm_store, cloud_inference)
+               completed.extract_llm_store, cloud_inference)
     for module in modules:
         monkeypatch.setattr(module, 'load_config', lambda: cfg)
     for module in (worker, completed.extract_llm_carry, completed.extract_llm_errors,

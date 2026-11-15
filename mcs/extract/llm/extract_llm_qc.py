@@ -6,7 +6,7 @@ import sys
 from types import SimpleNamespace
 import semantic_store
 import inference_version as inference
-import cloud_backlog
+import defer_reasons
 import extract_quality
 from extraction_provenance import (
     provider_strict_dict as _provider_strict_dict,
@@ -167,10 +167,10 @@ def _commit_rejected(r, reason):
     if isinstance(r, dict):
         if reason == "completeness":
             detail = r.get("_completeness_reject_reason")
-            if type(detail) is str and detail in cloud_backlog._COMPLETENESS_REJECTION_REASONS:
+            if type(detail) is str and detail in defer_reasons.COMPLETENESS_REJECTION_REASONS:
                 reason = detail
         r["_commit_reject_reason"] = ("commit_" + reason
-            if type(reason) is str and reason in cloud_backlog._COMMIT_REJECTION_REASONS else "commit_rejected")
+            if type(reason) is str and reason in defer_reasons.COMMIT_REJECTION_REASONS else "commit_rejected")
     return "rejected"
 
 

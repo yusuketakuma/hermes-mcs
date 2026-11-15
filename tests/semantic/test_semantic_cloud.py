@@ -4,7 +4,6 @@ import extract_llm_carry
 import extract_llm_context
 import extract_llm_errors
 import extract_llm_prepare
-import extract_llm_progress
 import extract_llm_provider
 import extract_llm_qc
 import extract_llm_resident
@@ -12,16 +11,13 @@ import extract_llm_runner
 import extract_llm_selection
 import extract_llm_source_contract
 import extract_llm_store
-import semantic_due_selection
 import semantic_job_processor
 import json
-import os
 import sqlite3
 import time
 from contextlib import contextmanager, nullcontext
 import pytest
 import anthropic_client
-import cloud_history_scope
 import cloud_policy
 import extract_llm
 import cloud_inference
@@ -29,7 +25,7 @@ import inference_dependency_loss
 import semantic_drain
 import semantic_transport as transport
 import writer_lock
-from semantic_testkit import _message, _patient
+from semantic_testkit import _message
 from semantic_cloud_testkit import cloud as cloud, direct as direct, rows as rows, snapshot as snapshot
 from test_cloud_response_recovery import legacy_cloud_routes
 
@@ -261,20 +257,6 @@ def test_cloud_fallback_never_mixes_a_paid_or_existing_partial_unit(cloud, monke
                 assert chat('synthetic input') is None
 
 
-def test_local_only_feedback_is_filtered_before_the_cloud_selection_limit(cloud, monkeypatch):
-    led, cfg, _, _ = cloud
-    led.save_messages([_message(mid=2, body="完全合成の過去記録。")])
-    snapshot(led)
-    monkeypatch.setattr(extract_llm, "_qc_flagged_sql", lambda *a, **kw: "SELECT 1 WHERE m.message_id=1")
-    monkeypatch.setattr(extract_llm_progress, '_qc_flagged_sql', extract_llm._qc_flagged_sql)
-    monkeypatch.setattr(extract_llm_qc, '_qc_flagged_sql', extract_llm._qc_flagged_sql)
-    monkeypatch.setattr(extract_llm_selection, '_qc_flagged_sql', extract_llm._qc_flagged_sql)
-    with legacy_cloud_routes():
-        selected, _ = extract_llm._select_pending(led, 1, None, None, False,
-            cloud_only=True, prioritize_patients=True)
-    assert [row["message_id"] for row in selected] == [2]
-
-
 @pytest.mark.parametrize("denial", ["recent", "off", "cap", "scope", "route"])
 def test_local_boundaries_do_not_send(cloud, denial):
     led, cfg, job, calls = cloud
@@ -311,29 +293,9 @@ def test_eligible_background_job_after_one_hour_uses_cloud(cloud):
         led.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?", (json.dumps(payload), job['job_id']))
     job['payload'] = json.dumps(payload)
     with legacy_cloud_routes():
-        selected = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1)[0]
-    assert [row['job_id'] for row in selected] == [job['job_id']]
-    with legacy_cloud_routes():
         with transport.backlog_inference(led, cfg, job, time.monotonic() + 120, lambda: True, direct) as chat:
             assert chat and json.loads(chat('synthetic historical prompt')) == {'facts': []}
     assert len(calls) == 1
-
-
-def test_observe_counts_history_jobs_without_reporting_realtime_as_cloud(cloud):
-    import cloud_cli
-    led, cfg, job, _ = cloud
-    settings = cloud_policy.cloud_config(cfg)[0]
-    settings["routes"] = ["semantic_backlog"]
-    with legacy_cloud_routes():
-        counts = cloud_cli._route_counts(led.db, cfg, settings, time.monotonic() + 5)
-    assert counts["semantic_backlog"]["targets"] == 1
-    assert counts["semantic_backlog"]["requests_estimate"] == 2
-    with led.db:
-        led.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
-            (json.dumps({**json.loads(job["payload"]), "eligible": True}), job["job_id"]))
-    with legacy_cloud_routes():
-        counts = cloud_cli._route_counts(led.db, cfg, settings, time.monotonic() + 5)
-    assert counts["semantic_backlog"]["targets"] == 1
 
 
 @pytest.mark.parametrize("change", ["new", "edit", "aba", "reply", "missing_scope"])
@@ -435,8 +397,7 @@ def test_real_process_wrapper_selects_cloud_and_resets_model(cloud, monkeypatch)
     assert transport.llm_model() == model
 
 
-@pytest.mark.parametrize("cloud_only", [False, True])
-def test_cloud_stages_remain_current_for_normal_readers_after_context_exit(cloud, monkeypatch, cloud_only):
+def test_cloud_stages_remain_current_for_normal_readers_after_context_exit(cloud, monkeypatch):
     import semantic_store
     import semantic_publication
     from candidate_testkit import approved_config
@@ -451,10 +412,6 @@ def test_cloud_stages_remain_current_for_normal_readers_after_context_exit(cloud
 
     monkeypatch.setattr(anthropic_client.AnthropicClient, "request", request)
     monkeypatch.setattr(transport, "llm_chat", lambda *a, **kw: pytest.fail("local GPU used"))
-    if cloud_only:
-        monkeypatch.setattr(semantic_drain, "reprocess_step", lambda *a, **kw: pytest.fail("worker repeated corpus seed"))
-        monkeypatch.setattr(semantic_publication, "reproject_stale", lambda *a: pytest.fail("worker repeated corpus projection"))
-        monkeypatch.setattr(semantic_drain.llm_availability, "circuit_open_s", lambda *a: 60)
     result = {"errors": []}
     # Dormant-compat only: approval creation, the seeded send and the reader
     # checks stay inside one bounded legacy-route regime so the candidate
@@ -468,8 +425,7 @@ def test_cloud_stages_remain_current_for_normal_readers_after_context_exit(cloud
         led.semantic_seed(1, [1], {"source": "history_import"})
         snapshot(led)
         out = semantic_drain.run_due(led, cfg, result, time.monotonic() + 1200,
-                                    jev_client=_PassJev(), lane="backlog", max_jobs=1,
-                                    cloud_only=cloud_only)
+                                    jev_client=_PassJev(), lane="backlog", max_jobs=1)
         assert out["done"] == 1 and not result["errors"], (out, result)
         assert calls
         fp = semantic_store.thread_bundle(led.db, 1, 1)["source_fingerprint"]
@@ -514,97 +470,6 @@ def test_realtime_process_never_uses_cloud_transport(cloud, monkeypatch):
         lambda *a, **kw: local.append(True) or 'synthetic local', time.monotonic() + 120,
         lane='realtime', diagnostics={}, cloud_transport=direct) == 'done'
     assert local and not calls and not rows(led, 'cloud_usage_reserve')
-    assert not semantic_drain._select_cloud_due(led, 'realtime', ('semantic',), False, 1)[0]
-
-
-def test_cloud_only_process_never_enters_local_stage_when_scope_changes(cloud, monkeypatch):
-    led, cfg, job, calls = cloud
-    cfg["cloud_llm"]["mode"] = "off"
-    monkeypatch.setattr(semantic_drain, "_process_job_inner", lambda *a, **kw: pytest.fail("local fallback"))
-    monkeypatch.setattr(semantic_job_processor, '_process_job_inner', semantic_drain._process_job_inner)
-    assert semantic_drain._process_job(
-        led, semantic_drain.runtime_config(cfg)[0], job, None,
-        lambda *a, **kw: pytest.fail("local GPU used"), time.monotonic() + 120,
-        lane="backlog", diagnostics={}, cloud_transport=direct, cloud_only=True) == "deferred"
-    assert not calls
-
-
-def test_cloud_and_resident_selection_prioritize_active_latest_patient(cloud):
-    led, cfg, _, _ = cloud
-    cfg["cloud_llm"]["project_ids"] = None
-    for pid in (2, 3):
-        _patient(led, pid)
-        led.save_messages([_message(pid, pid=pid)])
-        led.semantic_seed(pid, [pid], {"source": "history_import"})
-    with led.db:
-        led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=3")
-        for mid in (1, 2, 3):
-            led.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=?", (mid * 100, mid))
-    snapshot(led)
-    with legacy_cloud_routes():
-        selected = semantic_drain._select_cloud_due(led, "backlog", ("semantic",), False, 3)[0]
-    assert [r["project_id"] for r in selected] == [2, 1, 3]
-    with legacy_cloud_routes():
-        selected = semantic_drain._select_due(led, "backlog", ("semantic",), False, 3,
-                                             prioritize_patients=True)[0]
-    assert [r["project_id"] for r in selected] == [2, 1, 3]
-    with legacy_cloud_routes():
-        selected, _ = extract_llm._select_pending(led, 3, None, None, False,
-                                                  cloud_only=True, prioritize_patients=True)
-    assert [r["project_id"] for r in selected] == [2, 1, 3]
-
-
-@pytest.mark.parametrize("lane", ["semantic", "extract"])
-def test_selection_reads_receipt_once_for_multiple_candidates(cloud, lane):
-    led, _, _, _ = cloud
-    for mid in range(2, 16):
-        led.save_messages([_message(mid, body="完全合成の記録。")])
-        led.semantic_seed(1, [mid], {"source": "history_import"})
-    snapshot(led)
-    statements = []
-    led.db.set_trace_callback(statements.append)
-    try:
-        if lane == "semantic":
-            with legacy_cloud_routes():
-                selected = semantic_drain._select_cloud_due(led, "backlog", ("semantic",), False, 10)[0]
-        else:
-            with legacy_cloud_routes():
-                selected = extract_llm._select_pending(led, 10, None, None, False,
-                    cloud_only=True, prioritize_patients=True)[0]
-    finally:
-        led.db.set_trace_callback(None)
-    assert len(selected) >= 10
-    assert sum(s.lstrip('- ').startswith("SELECT content,meta FROM (SELECT content,meta FROM artifacts")
-               for s in statements) == 1
-
-
-@pytest.mark.parametrize("lane", ["semantic", "extract"])
-def test_selection_checks_each_thread_once_per_snapshot(cloud, monkeypatch, lane):
-    led, _, _, _ = cloud
-    for mid in range(2, 8):
-        led.save_messages([_message(mid, parent=1, body="完全合成の返信。")])
-        led.semantic_seed(1, [mid], {"source": "history_import"})
-    snapshot(led)
-    checked = []
-    original = cloud_policy._history_thread_allowed
-
-    def count(*args):
-        checked.append(1)
-        return original(*args)
-
-    monkeypatch.setattr(cloud_history_scope, "_history_thread_allowed", count)
-    if lane == "semantic":
-        # Semantic jobs collapse to the thread root, so exercise multiple
-        # member candidates through the same check used by its selector.
-        with cloud_policy.history_selection_check(led.db) as check:
-            selected = [check(1, mid) for mid in range(1, 8)]
-        assert all(selected)
-    else:
-        with legacy_cloud_routes():
-            selected = extract_llm._select_pending(led, 10, None, None, False,
-                cloud_only=True, prioritize_patients=True)[0]
-    assert len(selected) >= 2
-    assert len(checked) == 1
 
 
 def test_selection_failure_preserves_outer_transaction_and_uninstalls_check(cloud, monkeypatch):
@@ -691,65 +556,6 @@ def test_selection_uses_one_snapshot_but_fresh_guard_sees_revocation(cloud):
             other.close()
         assert check(1, 1) == 1
     assert not cloud_policy.history_thread_allowed(led.db, 1, 1)
-
-
-@pytest.mark.parametrize("lane", ["semantic", "extract"])
-def test_selection_preserves_caller_cursor_and_transaction(cloud, lane):
-    led, _, _, _ = cloud
-    progress = []
-    led.db.set_progress_handler(lambda: progress.append(1) and 0, 1)
-    led.db.execute("BEGIN")
-    led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
-    outer = led.db.execute("SELECT 10 UNION ALL SELECT 20 UNION ALL SELECT 30")
-    try:
-        assert outer.fetchone()[0] == 10
-        if lane == "semantic":
-            with legacy_cloud_routes():
-                selected = semantic_drain._select_cloud_due(
-                    led, "backlog", ("semantic",), False, 1, deadline=time.monotonic() + 60)[0]
-        else:
-            with legacy_cloud_routes():
-                selected = extract_llm._select_pending(led, 1, None, None, False,
-                    cloud_only=True, prioritize_patients=True)[0]
-        assert [row["message_id"] for row in selected] == [1]
-        assert [row[0] for row in outer] == [20, 30]
-        assert led.db.in_transaction
-        assert led.db.execute("SELECT is_archived FROM patients WHERE project_id=1").fetchone()[0] == 1
-        before = len(progress)
-        led.db.execute("SELECT 1").fetchone()
-        assert len(progress) > before
-    finally:
-        outer.close()
-        led.db.set_progress_handler(None, 0)
-        led.db.rollback()
-
-
-def test_incomplete_cloud_selection_reports_hold_without_starting_work(cloud, tmp_path, monkeypatch):
-    led, cfg, job, calls = cloud
-    lock_fd = writer_lock.acquire_run_lock(str(tmp_path / "synthetic-run.lock"))
-    assert lock_fd is not None
-    deadline = time.monotonic() + 1200
-    observed = []
-
-    def interrupted(*args, **kwargs):
-        observed.append((kwargs.get("deadline"), kwargs.get("isolated")))
-        raise semantic_drain._CloudSelectionIncomplete("deadline")
-
-    monkeypatch.setattr(semantic_drain, "_select_cloud_due", interrupted)
-    monkeypatch.setattr(semantic_due_selection, '_select_cloud_due', semantic_drain._select_cloud_due)
-    monkeypatch.setattr(semantic_drain, "_process_job_inner",
-                        lambda *args, **kwargs: pytest.fail("incomplete selection started work"))
-    monkeypatch.setattr(semantic_job_processor, '_process_job_inner', semantic_drain._process_job_inner)
-    try:
-        out = semantic_drain.run_due(led, cfg, {"errors": []}, deadline,
-                                     lane="backlog", max_jobs=1, cloud_only=True, run_lock_fd=lock_fd)
-        assert observed == [(deadline, True)]
-        assert out.get("cloud_selection_incomplete") is True
-        assert not out["done"] and not calls and not rows(led, "cloud_usage_reserve")
-        current = led.db.execute("SELECT state,attempts FROM fetch_jobs WHERE job_id=?", (job["job_id"],)).fetchone()
-        assert tuple(current) == ("pending", job["attempts"])
-    finally:
-        os.close(lock_fd)
 
 
 @pytest.mark.parametrize("first", ["local", "cloud"])
@@ -839,7 +645,6 @@ def test_resident_history_turn_selects_cloud_batch_without_expanding_realtime(mo
     monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
-    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     monkeypatch.setattr(extract_llm, "_open_current_ledger",
@@ -889,30 +694,6 @@ def test_resident_history_turn_selects_cloud_batch_without_expanding_realtime(mo
     assert all(r["workers"] == 1 and 0 < r["budget_s"] <= 900 for r in seen)
     assert all(r["limit"] == 1 and r["allow_cloud"] and r["background"]
                for r in seen if not r["oldest_first"])
-
-
-def test_cloud_run_due_keeps_unconsumed_lookahead_across_ticks(cloud, monkeypatch):
-    led, cfg, _, calls = cloud
-    for mid in range(2, 13):
-        led.save_messages([_message(mid)])
-        led.semantic_seed(1, [mid], {'source': 'history_import'})
-    snapshot(led)
-    served = []
-
-    def process(ledger, scfg, job, jev, llm, deadline, **kwargs):
-        served.append(job['message_id'])
-        with ledger.db:
-            ledger.db.execute("UPDATE fetch_jobs SET state='done' WHERE job_id=?", (job['job_id'],))
-        return 'done'
-
-    monkeypatch.setattr(semantic_drain, '_process_job', process)
-    for _ in range(12):
-        with legacy_cloud_routes():
-            out = semantic_drain.run_due(led, cfg, {'errors': []}, time.monotonic() + 1200,
-                                         lane='backlog', max_jobs=1, cloud_only=True)
-        assert out['done'] == 1
-    assert served == list(range(1, 13))
-    assert not calls and not rows(led, 'cloud_usage_reserve')
 
 
 @pytest.mark.parametrize("route,fail", [("fallback", False), ("fallback", True),
@@ -980,7 +761,7 @@ def test_semantic_defer_counts_are_fixed_and_do_not_expose_unknown_reason(cloud,
     monkeypatch.setattr(semantic_drain, '_process_job', process)
     with legacy_cloud_routes():
         out = semantic_drain.run_due(led, cfg, {'errors': []}, time.monotonic() + 1200,
-                                    lane='backlog', max_jobs=1, cloud_only=True)
+                                    lane='backlog', max_jobs=1)
     assert out['deferred'] == 1 and out['defer_reasons'] == {expected: 1}
     assert not calls and not rows(led, 'cloud_usage_reserve')
 

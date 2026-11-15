@@ -373,7 +373,6 @@ def test_selection_fence_rejects_stale_prefilter_input(source, monkeypatch, muta
     monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
-    monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(llm, "_ensure_v1", lambda *_args: pytest.fail("stale rule write"))

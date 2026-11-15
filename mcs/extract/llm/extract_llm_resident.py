@@ -418,7 +418,7 @@ def _main() -> int:
             return legacy_admissions(led, cfg), extract_validation.vital_threshold_policy(cfg)
         except Exception:
             return set(), None
-    cloud_pool = cloud_backlog.CloudBacklogPool(HOME, context_only=True) if args.all and args.lane == 2 else None
+    cloud_pool = cloud_backlog.CloudBacklogPool(HOME) if args.all and args.lane == 2 else None
     try:
         if args.all:
             # Backlog drainer: per-write locking only — holding the run
@@ -495,7 +495,7 @@ def _main() -> int:
                             pause(2)
                             continue
                     if cloud_pool is not None:
-                        cloud_pool.sync(load_config(), ledger=led)
+                        cloud_pool.sync(load_config())
                     if context_lane:
                         # lane 3 serves patient context first; it yields to
                         # semantic/extraction only when nothing is due. A

@@ -6,10 +6,8 @@ import extract_llm_provider
 import extract_llm_qc
 import extract_llm_resident
 import extract_llm_runner
-import extract_llm_selection
 import extract_llm_source_contract
 import extract_llm_store
-import semantic_due_selection
 import semantic_job_processor
 
 import pytest
@@ -418,7 +416,6 @@ def test_settled_cloud_prefix_survives_a_send_cutoff_and_is_reused(tmp_path, mon
         monkeypatch.setattr(extract_llm_prepare, 'HOME', extract_llm.HOME)
         monkeypatch.setattr(extract_llm_provider, 'HOME', extract_llm.HOME)
         monkeypatch.setattr(extract_llm_resident, 'HOME', extract_llm.HOME)
-        monkeypatch.setattr(extract_llm_selection, 'HOME', extract_llm.HOME)
         monkeypatch.setattr(extract_llm_source_contract, 'HOME', extract_llm.HOME)
         monkeypatch.setattr(extract_llm_store, 'HOME', extract_llm.HOME)
         monkeypatch.setattr(extract_llm, "load_config", lambda *a: cfg)
@@ -428,11 +425,9 @@ def test_settled_cloud_prefix_survives_a_send_cutoff_and_is_reused(tmp_path, mon
         monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
         monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
         monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
-        monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
         monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
         monkeypatch.setattr(cloud_inference, 'load_config', lambda *a: cfg)
         monkeypatch.setattr(semantic_drain, "load_config", lambda *a: cfg)
-        monkeypatch.setattr(semantic_due_selection, 'load_config', semantic_drain.load_config)
         monkeypatch.setattr(semantic_job_processor, 'load_config', semantic_drain.load_config)
         monkeypatch.setattr(cloud_policy, "api_key", lambda *a: "synthetic-key")
         monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 1))

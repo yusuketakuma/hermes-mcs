@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-import cloud_backlog
+import defer_reasons
 import extract_llm as worker
 from test_anthropic_runtime import old, routed as routed
 
@@ -71,8 +71,8 @@ def test_prepare_records_one_fixed_reason_without_claiming_or_changing_originals
     assert reached == [1]
     assert jobs == [] and skipped == 0 and blocked == 1
     assert reasons == {expected: 1} and [reason for _row, reason in refused] == [expected]
-    assert expected in cloud_backlog._DEFER_REASONS
-    assert expected in cloud_backlog._PREPARE_CONTEXT_REJECTION_CODES
+    assert expected in defer_reasons.DEFER_REASONS
+    assert expected in defer_reasons.PREPARE_CONTEXT_REJECTION_CODES
     assert [tuple(saved) for saved in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
     assert not ledger.db.execute("SELECT 1 FROM fetch_jobs WHERE kind='extract_claim'").fetchone()
     assert not calls and capsys.readouterr() == ('', '')
@@ -97,8 +97,8 @@ class Unrenderable:
 def test_unknown_or_misplaced_value_error_is_only_fixed_other(stage, error, capsys):
     reason = worker._prepare_context_rejection(stage, error)
     assert reason == 'prepare_context_other'
-    assert reason in cloud_backlog._DEFER_REASONS
-    assert reason in cloud_backlog._PREPARE_CONTEXT_REJECTION_CODES
+    assert reason in defer_reasons.DEFER_REASONS
+    assert reason in defer_reasons.PREPARE_CONTEXT_REJECTION_CODES
     assert 'synthetic-private-detail' not in json.dumps({'reason': reason})
     assert capsys.readouterr() == ('', '')
 

@@ -240,61 +240,6 @@ def _route_counts(db, cfg, settings, deadline):
             item["basic_requests_estimate"] += basic
             item["chunk_extra_requests_estimate"] += max(0, chunks - pending["scan_sources"])
             item["requests_estimate"] += pending["summary_units"] + chunks
-    if "reextract" in settings["routes"] and policy.send_route("reextract"):
-        import extract_llm as extract
-        import cloud_inference
-        selection, errors = policy.profile_for_settings(cfg, settings, route="reextract", purpose="backlog")
-        if errors or selection is None:
-            raise ValueError("cloud_profile_unverified")
-        contract = cloud_inference.cloud_provider_contract(selection=selection)
-        scope, params = _source_scope(settings)
-        scope += (" AND COALESCE(qc_src,0)=0 AND COALESCE(thin_src,0)=0 "
-                  "AND COALESCE(human_src,0)=0 AND attempts=0 "
-                  f"AND NOT EXISTS ({extract._hold_sql()}) AND "
-                  + policy.history_scope_target_sql('m.message_id'))
-        query = extract._selection_sql(db, "DESC", scope, cloud_followup=True).replace(
-            "m.body_text,", "length(m.body_text) AS body_length,")
-        now = time.time()
-        rows = db.execute(query, (extract.KIND, extract.EXTRACT_VERSION, *params,
-            None, None, None, now, extract.KIND, extract.EXTRACT_VERSION, now, READ_ROWS + 1))
-        with policy.history_selection_check(db) as receipt_check:
-            for count, row in enumerate(rows, 1):
-                _checkpoint(deadline, count)
-                if (not policy.history_target_ready(db, row["project_id"], row["message_id"])
-                        or not receipt_check(row["project_id"], row["message_id"])):
-                    continue
-                # Keep the broad scan metadata-only; read one bounded source
-                # only when strict completion needs its original clinical text.
-                source = db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=?",
-                                    (row["project_id"], row["message_id"])).fetchone()
-                completion = extract.cloud_completion(db, source, contract) if source is not None else None
-                _check_reader(db, deadline)  # proof readers may catch a bounded-row interruption
-                if completion in ("complete", "attention"):
-                    continue
-                item = out["reextract"]
-                item["targets"] += 1
-                item["input_chars"] += row["body_length"] or 0
-                requests = max(1, math.ceil((row["body_length"] or 0) / extract._CHUNK_SIZE))
-                item["basic_requests_estimate"] += 1
-                item["chunk_extra_requests_estimate"] += requests - 1
-                item["requests_estimate"] += requests
-    if "semantic_backlog" in settings["routes"] and policy.send_route("semantic_backlog"):
-        scope, params = _source_scope(settings, "j")
-        rows = db.execute(
-            "SELECT j.project_id,j.message_id,length(m.body_text) AS body_length FROM fetch_jobs j "
-            "JOIN messages m ON m.project_id=j.project_id AND m.message_id=j.message_id "
-            "WHERE j.kind='semantic' AND j.state='pending' AND json_valid(j.payload) " + scope, params)
-        item = out["semantic_backlog"]
-        for count, row in enumerate(rows, 1):
-            _checkpoint(deadline, count)
-            if (not policy.history_target_ready(db, row["project_id"], row["message_id"])
-                    or not policy.history_thread_allowed(db, row["project_id"], row["message_id"])):
-                continue
-            item["targets"] += 1
-            item["input_chars"] += row["body_length"] or 0
-        # Planning only: cache reuse, shadow extraction, repairs and thread context vary.
-        item["requests_estimate"] = item["basic_requests_estimate"] = 2 * item["targets"]
-        item["estimate_basis"] = "two_calls_per_pending_job_before_cache_repairs_and_thread_context"
     return out
 
 

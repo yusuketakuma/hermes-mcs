@@ -195,7 +195,6 @@ from extract_llm_source_contract import (
     _STALE_GC_BUDGET_S as _STALE_GC_BUDGET_S,
     _STALE_GC_CURSOR_RESERVE_S as _STALE_GC_CURSOR_RESERVE_S,
     _STALE_GC_CLAIM_PAGE as _STALE_GC_CLAIM_PAGE,
-    _CLOUD_PRIORITY_PAGE as _CLOUD_PRIORITY_PAGE,
     SEMANTIC_FIRST_S as SEMANTIC_FIRST_S,
     _SEMANTIC_RECENT_TURNS as _SEMANTIC_RECENT_TURNS,
     _ARRIVAL_CARRY_S as _ARRIVAL_CARRY_S,
@@ -369,11 +368,7 @@ from extract_llm_selection import (
     _FOCUS_PATIENTS as _FOCUS_PATIENTS,
     _focus_patients as _focus_patients,
     patient_progress_counts as patient_progress_counts,
-    _CloudSelectionIncomplete as _CloudSelectionIncomplete,
-    _cloud_priority_identity as _cloud_priority_identity,
-    _cloud_priority_discard as _cloud_priority_discard,
     _select_pending as _select_pending,
-    _select_pending_impl as _select_pending_impl,
 )
 from extract_llm_proofs import (
     _saved_chunk_size as _saved_chunk_size,
@@ -419,7 +414,6 @@ from extract_llm_admission import (
     _COUNT_KEYS as _COUNT_KEYS,
     _llm_call_stats as _llm_call_stats,
     legacy_admissions as legacy_admissions,
-    cloud_backlog_admissions as cloud_backlog_admissions,
     _admission_closed_last as _admission_closed_last,
     _admission_closed as _admission_closed,
 )

@@ -71,27 +71,3 @@ def test_semantic_resident_next_pass_checks_old_input(cloud, monkeypatch, prior,
             assert json.loads(outputs[0]) == json.loads(outputs[1]) == {'facts': []}
     assert len(calls) == before
     assert len(ledger.artifacts('cloud_usage_reserve')) == 1
-
-
-@pytest.mark.parametrize('barrier', ['budget', 'circuit'])
-def test_cloud_only_fresh_denial_is_wait_without_paid_failure(cloud, monkeypatch, barrier):
-    ledger, cfg, job, calls = cloud
-    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *a, **kw: True)
-    monkeypatch.setattr(cloud_backlog, 'owner_alive', lambda: True)
-    if barrier == 'budget':
-        cfg['cloud_llm']['daily_cost_limit_usd'] = 0
-    else:
-        monkeypatch.setattr(cloud_policy, 'block_reason', lambda *a, **k: 'circuit_open')
-    diagnostics = {}
-    def stages(ledger, scfg, selected, jev, llm, deadline, **kwargs):
-        transport.set_inference_target(selected['message_id'], 'facts')
-        llm('synthetic unsent input', timeout=30)
-        pytest.fail('a refused new request must not finish a generation')
-    monkeypatch.setattr(semantic_drain, '_process_job_inner', stages)
-    monkeypatch.setattr(semantic_job_processor, '_process_job_inner', semantic_drain._process_job_inner)
-    status = semantic_drain._process_job(ledger, semantic_drain.runtime_config(cfg)[0], job, None,
-        lambda *a, **k: pytest.fail('cloud-only denial cannot call local'), time.monotonic() + 180,
-        lane='backlog', diagnostics=diagnostics, cloud_transport=direct, cloud_only=True)
-    assert status == 'deferred' and diagnostics['not_sent'] == 'cloud_scope_or_budget'
-    assert not calls and not ledger.artifacts('cloud_usage_reserve')
-    assert not ledger.artifacts('cloud_usage_result') and not ledger.artifacts('cloud_usage_disposition')

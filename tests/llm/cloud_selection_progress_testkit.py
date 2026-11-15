@@ -6,9 +6,7 @@ import extract_llm_provider
 import extract_llm_qc
 import extract_llm_resident
 import extract_llm_runner
-import extract_llm_selection
 import extract_llm_store
-import semantic_due_selection
 import semantic_job_processor
 from contextlib import contextmanager
 import time
@@ -46,11 +44,9 @@ def blocked_prefix(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
-    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda *a: cfg)
     monkeypatch.setattr(semantic_drain, "load_config", lambda *a: cfg)
-    monkeypatch.setattr(semantic_due_selection, 'load_config', semantic_drain.load_config)
     monkeypatch.setattr(semantic_job_processor, 'load_config', semantic_drain.load_config)
     monkeypatch.setattr(cloud_policy, "api_key", lambda *a: "synthetic-key")
     for pid in range(1, 514):
@@ -71,18 +67,6 @@ def blocked_prefix(tmp_path, monkeypatch):
     led.close()
 
 
-def _select(led, lane, *, deadline=None):
-    # The reextract/semantic lanes are dormant send routes; selection
-    # mechanics are still exercised under the legacy-open gate only.
-    from test_cloud_response_recovery import legacy_cloud_routes
-    with legacy_cloud_routes():
-        if lane == "semantic":
-            return semantic_drain._select_cloud_due(led, "backlog", ("semantic",), False, 1,
-                deadline=deadline, isolated=deadline is not None)[0]
-        return extract_llm._select_pending(led, 64, None, None, False,
-            cloud_only=True, prioritize_patients=True, deadline=deadline)[0]
-
-
 @pytest.fixture
 def cloud_candidates(routed, monkeypatch):
     led, cfg, *_ = routed
@@ -99,13 +83,6 @@ def cloud_candidates(routed, monkeypatch):
     monkeypatch.setattr(extract_llm, "_run_batch_call", lambda *a: pytest.fail("cloud used local batch"))
     monkeypatch.setattr(extract_llm_runner, '_run_batch_call', extract_llm._run_batch_call)
     return routed
-
-
-def _cloud_pass(led, *, limit=1):
-    from test_cloud_response_recovery import legacy_cloud_routes
-    with legacy_cloud_routes():
-        return extract_llm.run_pending(led, limit=limit, budget_s=180, background=True,
-            cloud_only=True, prioritize_patients=True, batch_k=4)
 
 
 def _claim_count(led):

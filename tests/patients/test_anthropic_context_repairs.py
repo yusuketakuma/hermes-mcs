@@ -6,7 +6,6 @@ import extract_llm_provider
 import extract_llm_qc
 import extract_llm_resident
 import extract_llm_runner
-import extract_llm_selection
 import extract_llm_source_contract
 import extract_llm_store
 
@@ -323,7 +322,6 @@ def test_source_repair_rejects_changed_evidence_before_adoption(runtime, source_
         monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
         monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
         monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
-        monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
         monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
         monkeypatch.setattr(cloud_inference, 'load_config', lambda: {**CFG, 'semantic':{**CFG['semantic'], 'daily_request_budget':0}})
     with led.db:
@@ -818,7 +816,6 @@ def test_openai_summary_high_repair_is_audited_published_and_rechecked(runtime, 
     monkeypatch.setattr(extract_llm_prepare, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_provider, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_resident, 'HOME', worker.HOME)
-    monkeypatch.setattr(extract_llm_selection, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_source_contract, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_store, 'HOME', worker.HOME)
     monkeypatch.setattr(cloud_inference, 'resolve_cloud_settings', lambda cfg: worker.cloud_policy.resolve_settings(cfg, worker.HOME)[0])

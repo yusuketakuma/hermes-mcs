@@ -11,7 +11,7 @@ import threading
 import time
 import writer_lock
 import cloud_client
-import cloud_backlog
+from defer_reasons import COMMIT_REJECTION_CODES, DEFER_REASONS, HOLD_DEFER_REASONS, PREPARE_CONTEXT_REJECTION_CODES
 import cloud_inference
 import extract_schema
 import extract_validation
@@ -90,9 +90,7 @@ from extract_llm_qc import (
     _thin_retry_content,
 )
 from extract_llm_selection import (
-    _CloudSelectionIncomplete,
     _batch_need_s,
-    _cloud_priority_discard,
     _gc_stale_artifacts,
     _select_pending,
     _validate_run_args,
@@ -212,7 +210,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 carry: list | None = None,
                 archived_first: bool = False,
                 fair_oldest: bool = False, allow_cloud: bool = True,
-                background: bool = False, cloud_only: bool = False,
+                background: bool = False,
                 prioritize_patients: bool = False, run_lock_fd: int | None = None) -> dict:
     """Extract up to `limit` pending/stale messages with bounded inference.
     Returns {'done': n, 'left': n, 'failed': n}.
@@ -244,7 +242,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     _BATCH_K, itself 0 since batching measured net negative; --batch K
     remains for explicit use."""
     _validate_run_args(limit, budget_s)
-    if run_lock_fd is not None and (per_write_lock or workers != 1 or allow_cloud or cloud_only):
+    if run_lock_fd is not None and (per_write_lock or workers != 1 or allow_cloud):
         raise ValueError("borrowed_run_lock_requires_serial_local")
     if ledger.db.in_transaction:
         return {"done": 0, "failed": 0, "left": None, "deferred": 0,
@@ -287,22 +285,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         if ledger.db.in_transaction:
             raise
         gc_error = 'extract_stale_gc_failed'
-    try:
-        rows, fresh_selected = _select_pending(ledger, limit * 64 if cloud_only else limit, admitted_ids,
-                                               shard, oldest_first,
-                                               archived_first=archived_first,
-                                               fair_oldest=fair_oldest, cloud_only=cloud_only,
-                                               prioritize_patients=prioritize_patients,
-                                               **({'deadline': deadline} if cloud_only else {}))
-    except _CloudSelectionIncomplete as error:
-        return {"done": carry_settled['done'], "failed": 0, "left": None,
-                "deferred": carry_settled['deferred'], "held_prior": carry_settled['held_prior'],
-                "carried": carry_count, "pids": sorted(carry_pids),
-                "carry": carry if carry is not None else [], "selected": None, "fresh_selected": None,
-                "left_estimate": None, "left_estimate_age_s": None,
-                "queue_ages_s": {"oldest": None, "newest": None},
-                "cloud_selection_incomplete": True, "cloud_selection_reason": str(error),
-                **({'gc_error': gc_error} if gc_error else {})}
+    rows, fresh_selected = _select_pending(ledger, limit, admitted_ids, shard, oldest_first,
+                                           archived_first=archived_first, fair_oldest=fair_oldest,
+                                           prioritize_patients=prioritize_patients)
     done, held_prior, deferred = (carry_settled[k] for k in ('done', 'held_prior', 'deferred'))
     failed = lock_lost = 0
     done_pids = set(carry_pids)
@@ -317,7 +302,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     def _defer_note(reason, settled=None, count=1):
         if count <= 0:
             return
-        if reason not in cloud_backlog._DEFER_REASONS:
+        if reason not in DEFER_REASONS:
             reason = "other"
         target = defer_reasons if settled is None else settled.setdefault("defer_reasons", {})
         target[reason] = target.get(reason, 0) + count
@@ -369,26 +354,25 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     candidates = rows
     selected_count = len(rows)
     seen = {row["message_id"] for row in rows}
-    if not cloud_only:
-        rows = []  # local refill retains one candidate page, never all refused bodies
-    while candidates and not cloud_only:
+    rows = []  # local refill retains one candidate page, never all refused bodies
+    while candidates:
         refused = []
         prepared, row_skipped, row_blocked = _prepare_jobs(
             ledger, candidates, target, prefilter, allow_cloud=allow_cloud, background=background,
-            cloud_only=False, load_checkpoints=False, deadline=deadline,
+            load_checkpoints=False, deadline=deadline,
             blocked_reasons=prepare_reasons, blocked_rows=refused)
         jobs.extend(prepared)
         skipped += row_skipped
         context_blocked += row_blocked
         for refused_row, reason in refused:
-            if (reason in cloud_backlog._PREPARE_CONTEXT_REJECTION_CODES
-                    or reason in cloud_backlog._HOLD_DEFER_REASONS) \
+            if (reason in PREPARE_CONTEXT_REJECTION_CODES
+                    or reason in HOLD_DEFER_REASONS) \
                     and time.monotonic() < deadline and _writer_current(full=True):
                 # This CAS is a finite preparation wait, not a sent/failed unit.
                 # Never replace another owner's active claim or discard proof.
                 _claim(ledger, refused_row, _PREPARE_HOLD_S)
-        if jobs or not any(reason in cloud_backlog._PREPARE_CONTEXT_REJECTION_CODES
-                           or reason in cloud_backlog._HOLD_DEFER_REASONS
+        if jobs or not any(reason in PREPARE_CONTEXT_REJECTION_CODES
+                           or reason in HOLD_DEFER_REASONS
                            for _, reason in refused) or time.monotonic() >= deadline:
             break
         # A rejected head must not spend the healthy-job limit. Seeing a source
@@ -414,7 +398,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     checkpoints = queue.SimpleQueue()
     checkpoint_stopped = threading.Event()
     cfg = load_config()
-    cloud_workers = cloud_inference.resolve_cloud_settings(cfg)["max_concurrency"] if cloud_only or any(
+    cloud_workers = cloud_inference.resolve_cloud_settings(cfg)["max_concurrency"] if any(
         r.get("_cloud_mode") == "on" for r, *_ in jobs) else 1
     pool_workers = max(workers, cloud_workers)
     local_slots = threading.BoundedSemaphore(max(1, workers))
@@ -566,7 +550,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 # An unknown send keeps its source/backend claim; only a known outcome can fall back.
                 r["_cloud_failed"] = provider.possibly_sent
                 unresolved = getattr(provider, 'unresolved', provider.possibly_sent)
-                if cloud_only or unresolved or (str(error) == "cloud_send_blocked" and (saved or chunks_out)):
+                if unresolved or (str(error) == "cloud_send_blocked" and (saved or chunks_out)):
                     _CALL_NOTES.defer_reason = "cloud_unit_unresolved" if unresolved else "cloud_fallback"
                     return _DEFERRED
                 if str(error) == "cloud_unit_changed" and r.get("_cloud_owned"):
@@ -733,7 +717,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             elif outcome != "current":
                 deferred += 1
                 reason = r.get("_commit_reject_reason")
-                _defer_note(reason if type(reason) is str and reason in cloud_backlog._COMMIT_REJECTION_CODES
+                _defer_note(reason if type(reason) is str and reason in COMMIT_REJECTION_CODES
                             else "commit_rejected", settled)
                 if settled is not None:
                     settled["deferred"] += 1
@@ -760,8 +744,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     r["_cloud_discard"]()
                 deferred += 1
                 _defer_note("currentness_unverified")
-                if (cloud_only or r.get("_cloud_owned")) \
-                        and not _source_provably_changed(ledger, r):
+                if r.get("_cloud_owned") and not _source_provably_changed(ledger, r):
                     # An unverifiable currentness keeps the bounded claim:
                     # a head that cannot be proven must not re-head the queue.
                     # A provably changed source instead follows the exact-owner
@@ -782,7 +765,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         _fail(ledger, r, r["attempts"], lease=lease)
             if d is _DEFERRED:
                 if (r.pop("_quality_hold", False) is True
-                        or not cloud_only and r.get("_defer_reason") in ("cloud_unit_unresolved", "cloud_guard")):
+                        or r.get("_defer_reason") in ("cloud_unit_unresolved", "cloud_guard")):
                     # Reuse the exact source/owner/lease CAS wait in _release;
                     # an unverified resident unit must also yield to later rows.
                     r["_commit_hold"] = True
@@ -790,8 +773,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 _defer_note(r.get("_defer_reason") or "other")
                 # Keep the existing finite claim for an unresolved paid unit;
                 # repeated refusals must not monopolize a single-job cloud pass.
-                if (cloud_only or r.get("_cloud_owned")) \
-                        and r.get("_defer_reason") in cloud_backlog._HOLD_DEFER_REASONS:
+                if r.get("_cloud_owned") and r.get("_defer_reason") in HOLD_DEFER_REASONS:
                     keep_lease = True
                     keep_claims.add(id(r))
                 if r.get("_cloud_failed"):
@@ -943,7 +925,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             keep_lease = True
             pending_writes.append((r, d, ctx, integrity, qc, lease, tuple(chunks_out)))
         finally:
-            if not keep_lease and (not cloud_only or _writer_current(full=True)):
+            if not keep_lease:
                 _release(ledger, r, lease)
 
     # stability gates before any claim: an open circuit breaker (dead
@@ -959,40 +941,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # never pay for the same LLM call (F14)
     claimed = []
     try:
-        for index, candidate in enumerate(rows if cloud_only else jobs):
+        for index, candidate in enumerate(jobs):
             if disk_low:
                 break
-            if cloud_only:
-                if time.monotonic() >= deadline:
-                    break
-                # Lookahead replenishes lost claims without freezing unused attempt frames.
-                row_reasons = {}
-                prepared, row_skipped, row_blocked = _prepare_jobs(
-                    ledger, [candidate], target, prefilter, allow_cloud=allow_cloud,
-                    background=background, cloud_only=True, load_checkpoints=False, deadline=deadline,
-                    blocked_reasons=row_reasons)
-                skipped += row_skipped
-                context_blocked += row_blocked
-                deferred += row_blocked
-                for reason, count in row_reasons.items():
-                    _defer_note(reason, count=count)
-                _defer_note("prepare_blocked", count=row_blocked - sum(row_reasons.values()))
-                if not prepared:
-                    if any(reason in cloud_backlog._HOLD_DEFER_REASONS for reason in row_reasons):
-                        # An unverifiable owned head keeps a bounded claim —
-                        # the next pass sees the tail instead of re-blocking.
-                        _claim(ledger, candidate, _PREPARE_HOLD_S)
-                    if prioritize_patients and time.monotonic() < deadline:
-                        _cloud_priority_discard(ledger, candidate['message_id'])
-                    continue
-                index = len(jobs)
-                candidate = prepared[0]
-                jobs.append(candidate)
-                metas.append(None)
-                if time.monotonic() >= deadline:
-                    deferred += 1
-                    _defer_note("deadline")
-                    break
             r, ctx, saved, hints, qc = candidate
             if circuit_s and r.get("_cloud_mode") != "on":
                 continue
@@ -1027,20 +978,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 # claimed rows mint/refresh their extract_v1 artifact here so
                 # speed-lane readers never wait on the LLM queue
                 _ensure_v1(ledger, r, hints)
-                if cloud_only and len(claimed) >= limit:
-                    break
-            elif cloud_only and prioritize_patients and time.monotonic() < deadline:
-                _cloud_priority_discard(ledger, r['message_id'])
     except BaseException:
         # Preparation precedes inference's finally; release its committed
         # claims too when a rule write fails or the worker is interrupted.
-        if not cloud_only or _writer_current(full=True):
-            for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
-                _release(ledger, r, lease)
+        for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
+            _release(ledger, r, lease)
         raise
-
-    if cloud_only:
-        parallel = pool_workers > 1 and len(claimed) > 1
 
     def _exec_batch(tups):
         _CALL_NOTES.transport = _CALL_NOTES.transport_at = None
@@ -1198,54 +1141,36 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         _handle(r, ctx, d, metas[index], lease,
                                 chunks_out, qc)
         if pending_writes:
-            tail_lock = (_write_lock(per_write_lock, wait_s=write_wait_s, deadline=deadline)
-                         if cloud_only else lock(per_write_lock))
-            with tail_lock as held:
-                if cloud_only and not _writer_current(full=True):
-                    writer_stopped = True
-                    for r, d, ctx, integrity, qc, lease, used_keys in pending_writes:
-                        carry_out.append((r, lease, functools.partial(
+            with lock(per_write_lock) as held:
+                for r, d, ctx, integrity, qc, lease, used_keys in pending_writes:
+                    # still lock-bound, or the body changed/lease lapsed
+                    # while we waited: the row stays pending for the
+                    # next run — deferred, no attempt burned
+                    if held and _owns_current_source(ledger, r, lease):
+                        _commit(r, d, ctx, integrity, qc, used_keys)
+                    elif carry is not None and not held \
+                            and lease > time.time() + _CARRY_MARGIN_S \
+                            and (renewed := _renew(ledger, r, lease)):
+                        carry_out.append((r, renewed, functools.partial(
                             _commit, r, d, ctx, integrity, qc, used_keys)))
-                else:
-                    for r, d, ctx, integrity, qc, lease, used_keys in pending_writes:
-                        # still lock-bound, or the body changed/lease lapsed
-                        # while we waited: the row stays pending for the
-                        # next run — deferred, no attempt burned
-                        if cloud_only and time.monotonic() >= deadline and carry is not None:
-                            carry_out.append((r, lease, functools.partial(
-                                _commit, r, d, ctx, integrity, qc, used_keys)))
+                        keep_claims.add(id(r))
+                    else:
+                        if r.get("_cloud_discard") and not _owns_current_source(ledger, r, lease):
+                            r["_cloud_discard"]()
+                        deferred += 1
+                        _defer_note("write_unavailable" if not held else "currentness_unverified")
+                        if held and r.get("_cloud_owned"):
                             keep_claims.add(id(r))
-                        elif held and _owns_current_source(ledger, r, lease):
-                            _commit(r, d, ctx, integrity, qc, used_keys)
-                        elif carry is not None and not held \
-                                and lease > time.time() + _CARRY_MARGIN_S \
-                                and (renewed := _renew(ledger, r, lease)):
-                            carry_out.append((r, renewed, functools.partial(
-                                _commit, r, d, ctx, integrity, qc, used_keys)))
-                            keep_claims.add(id(r))
-                        else:
-                            if r.get("_cloud_discard") and not _owns_current_source(ledger, r, lease):
-                                r["_cloud_discard"]()
-                            deferred += 1
-                            _defer_note("write_unavailable" if not held else "currentness_unverified")
-                            if held and (cloud_only or r.get("_cloud_owned")):
-                                keep_claims.add(id(r))
-        if cloud_only and not _writer_current(full=True):
-            writer_stopped = True
     except writer_lock.RunLockLost:
         # A lost writer fence also forbids checkpoint and claim cleanup writes.
         writer_stopped = True
         raise
     finally:
         _CALL_NOTES.transport_context = previous_transport
-        if cloud_only and not _writer_current(full=True):
-            writer_stopped = True
         if not writer_stopped:
             try:
                 _flush_checkpoints()
             finally:
-                if cloud_only and not _writer_current(full=True):
-                    writer_stopped = True
                 if not writer_stopped:
                     for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
                         if id(r) not in keep_claims:
@@ -1295,7 +1220,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 held=int(bool(extract_quality.protected_lost(local_result, cloud_result, r["body_text"]))) if valid else None,
                 repairs=comparison_meta.get("repairs", 0 if valid else None))
     # Restricted selection cannot bound the global backlog, even when it is empty.
-    scoped = cloud_only or admitted_ids is not None or shard is not None
+    scoped = admitted_ids is not None or shard is not None
     left, age_min, age_max, estimate = (None, None, None, None) if scoped else _backlog_report(
         ledger, selected_count, limit, done + skipped + held_prior)
     now_ts = time.time()

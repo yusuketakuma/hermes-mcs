@@ -7,7 +7,6 @@ import extract_llm_provider
 import extract_llm_qc
 import extract_llm_resident
 import extract_llm_runner
-import extract_llm_selection
 import extract_llm_store
 import copy
 import json
@@ -126,7 +125,6 @@ def writer(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
-    monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(llm, "_resolved_llm", lambda: ("synthetic", "synthetic"))
@@ -217,7 +215,6 @@ def test_replay_only_refresh_never_adopts_completed_history_deliveries(writer, m
     monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
-    monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: pytest.fail("replay refresh read config"))
     llm._rerender_cards(ledger, 1, 2 if reply else row["message_id"])

@@ -36,9 +36,6 @@ from extract_llm_context import (
     _medication_reference_current,
     _thread_context,
 )
-from extract_llm_progress import (
-    cloud_completion,
-)
 from extract_llm_prompts import (
     MAX_TOKENS,
     _CTX_TOTAL_MAX,
@@ -478,10 +475,7 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
             if not _checkpoint_state_matches(r, expected, used_keys, state):
                 return _commit_rejected(r, "checkpoint")
             if check_current:
-                required = r.get("_required_cloud_contract")
-                already_current = (cloud_completion(ledger.db, r, required) is not None if required is not None
-                                   else _current(ledger, r["message_id"], r["content_hash"]))
-                if already_current:
+                if _current(ledger, r["message_id"], r["content_hash"]):
                     return "current"
             pinned_prior = r.get("_expected_prior")
             if ((pinned_prior is not None and expected_prior is not None and pinned_prior != expected_prior)

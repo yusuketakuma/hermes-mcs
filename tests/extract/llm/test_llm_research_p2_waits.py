@@ -7,7 +7,6 @@ import extract_llm_provider
 import extract_llm_qc
 import extract_llm_resident
 import extract_llm_runner
-import extract_llm_selection
 import extract_llm_source_contract
 import extract_llm_store
 import writer_lock
@@ -65,7 +64,6 @@ def _loop(db, monkeypatch, flags, result=None, *, carry=None, settle=None):
     monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
-    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))

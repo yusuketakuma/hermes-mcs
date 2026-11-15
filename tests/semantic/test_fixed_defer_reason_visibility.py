@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-import cloud_backlog
+import defer_reasons
 import semantic_drain
 from test_semantic_fairness import _due, _job, _world
 
@@ -18,7 +18,7 @@ from test_semantic_fairness import _due, _job, _world
     ('code', 'fact_stage_synthetic-private-detail', 'unclassified'),
     ('code', 'summary_synthetic-private-detail', 'unclassified'),
     ('not_sent', 'synthetic-private-detail', 'unclassified'),
-] + [('code', reason, reason) for reason in sorted(cloud_backlog._SEMANTIC_STOP_REASONS)])
+] + [('code', reason, reason) for reason in sorted(defer_reasons.SEMANTIC_STOP_REASONS)])
 def test_semantic_drain_keeps_only_exact_fixed_reason(field, reason, expected, tmp_path, monkeypatch):
     ledger = _world(tmp_path, [1])
     try:
@@ -34,6 +34,6 @@ def test_semantic_drain_keeps_only_exact_fixed_reason(field, reason, expected, t
         assert result['done'] == result['failed'] == 0 and result['deferred'] == 1
         assert result['defer_reasons'] == {expected: 1}
         assert ('synthetic-private-detail' not in json.dumps(result['defer_reasons']))
-        assert (reason in cloud_backlog._DEFER_REASONS) is (expected != 'unclassified')
+        assert (reason in defer_reasons.DEFER_REASONS) is (expected != 'unclassified')
     finally:
         ledger.close()

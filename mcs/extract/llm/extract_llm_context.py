@@ -418,8 +418,7 @@ def _pending_superseded_scan(db, r):
         variant = {key: value for key, value in r.items()
                    if key not in ("_provider_contract", "_frame", "_cloud_config",
                                   "_cloud_settings", "_cloud_selection", "_cloud_owned",
-                                  "_cloud_background", "_cloud_history_snapshot",
-                                  "_required_cloud_contract")}
+                                  "_cloud_background", "_cloud_history_snapshot")}
         variant.update(_target=("", model), _cloud_mode="off")
         try:
             records = _pending_records(db, variant, model)

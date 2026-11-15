@@ -81,6 +81,8 @@
 | S0 | Anthropic の料金表を 2026-11-15 に公式ページで再確認（料金は 2026-10-26 版と同じ）。新版 `anthropic-haiku-5-5-2026-11-15`（期限 2026-12-15）を追加し、旧版は過去の予約の照合用に保持。新しい送信に使う版は日付で選ぶ（`current_price_version`）。期限7日前からの予告を `setup check` に追加 | OpenAI の料金ページ（developers.openai.com）はこの開発環境から接続できず未確認。`gpt-6-luna`（2026-11-28）・`gpt-6.1-sol`（2026-11-30）の期限前に確認が必要。リリースは未実施 |
 | C1 | `scripts/development/find_unused_code.py` を追加（標準ライブラリの AST による名前ベースの検査）。初回は68候補 | 同名の定義があると検出できない。削除後に再実行すると新たな候補が出る |
 | S1 | ローカル経路の golden テスト（`tests/patients/test_patient_context_golden.py`・期待値 `tests/fixtures/patient_context_golden/local_three_posts.json`）。合成の3投稿から公開版と10の表示セクションまでを固定 | クラウド経路・安全上の不変条件・ローカル枠の規則の判定基準は未作成 |
+| S2（第1段） | 起動されていなかった旧クラウド経路を削除：`cloud_backlog` の抽出・意味解析ループ、抽出・意味解析の `cloud_only` 選択・準備・実行、添付OCRのクラウド段、`cloud-llm plan` の reextract・semantic_backlog 見積り。理由コード語彙を `mcs/core/defer_reasons.py` へ移動 | 所有済み単位の回復経路（`_cloud_owned`）は、Mac 側で旧route の未精算記録が0件であることを確かめてから削除する |
+| C2（第1弾） | 名前ベースの検査で、本番から参照されない定義を削除中 | 自動更新 v2/v3（`release_auto_*`・`adapters/sdc/*`）は開発途中の機能として対象外。仕様が名指しする `semantic_conversion` のcohort関数・`effective_loop_state` は所有者に確認する |
 | その他 | 未着手 | — |
 
 検証の記録（2026-11-15、このクラウド開発環境・Python 3.14.6・pytest 9.2.0）：
@@ -88,3 +90,11 @@
 - 実行して合格: `tests/llm` 全体（修正後に失敗2件を再検証して合格）、`tests/patients/test_patient_context_golden.py`（2回）、`tests/meta/test_find_unused_code.py`、ruff（変更ファイル）、`ci/mine_gates.py --check`、`update_readme.py`（再生成）。
 - 実行したが変更前から失敗: `tests/ops`・`tests/meta` のインストーラ・リリース系（377件）。変更前のコミット `c55f4c4` の worktree でも同じテストが失敗することを抜き取りで確認した（Linux コンテナでは動かない系統）。`ci/gates.py` の `plugin_sandbox`（`adapters/sdc/telemetry.py` が subprocess を import）も変更前から失敗。
 - 未実行: 全体 suite、`tests/semantic`・`tests/patients`・`tests/extract` の全体、CI の6ジョブ。
+
+S2 第1段（旧クラウド経路の削除）の検証（2026-11-15、同じ環境）：
+
+- 実行: `tests/` の全領域と `integration/` を領域ごとに順に実行した（同時実行なし）。失敗は、変更前のコミット `c55f4c4` の worktree で同じテストIDを流し直して比較した。
+- 変更で生じた失敗は、削除した名前への monkeypatch、旧引数の偽関数、削除した経路を前提とするテストだった。修正・削除した後、該当テストの再実行で合格した。
+- 変更前から失敗していて今回も残るもの: インストーラ・リリース系（Linux コンテナで動かない系統）、`tests/notify` の mcslog 系・性能時間系、`tests/patients`・`tests/views` の一部、`tests/semantic/test_semantic_cloud.py::test_closed_route_ambiguous_member_history_never_switches_local`、`tests/release/test_sync_release_notes.py::SyncTest::test_sync_command_failure_fails_ci`、`ci/gates.py` の `plugin_sandbox`。`tests/notify/test_card_delivery_and_view_regressions.py::test_health_write_failed_alert_is_sent` は1回失敗し、再実行と変更前の両方で合格した（不安定）。
+- 合格: CI と同じ範囲の ruff、`update_readme.py --check`、`ci/mine_gates.py --check`、golden テスト。
+- 未実行: CI の6ジョブ、Hermes 実SDKとの統合（CI の pinned 環境）。

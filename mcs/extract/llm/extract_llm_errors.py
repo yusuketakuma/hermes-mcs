@@ -23,9 +23,6 @@ from extract_llm_context import (
     _frame_meta,
     _thread_context,
 )
-from extract_llm_progress import (
-    cloud_completion,
-)
 from extract_llm_proofs import (
     _checkpoint_identity,
     _delete_checkpoint_keys_tx,
@@ -337,13 +334,9 @@ def _claim(ledger, r, lease_s: float = _EXTRACT_LEASE_S) -> float | None:
         if isinstance(r, dict) and r.get('_cloud_mode') in ('on', 'shadow'):
             now = time.time()
             current = ledger.db.execute(
-                _selection_sql(ledger.db, 'DESC', ' AND m.message_id=?',
-                               cloud_followup=bool(r.get('_required_cloud_contract'))),
+                _selection_sql(ledger.db, 'DESC', ' AND m.message_id=?'),
                 (KIND, EXTRACT_VERSION, r['message_id'], None, 1, 0, now,
                  KIND, EXTRACT_VERSION, now, 1)).fetchone()
-            if (r.get('_required_cloud_contract') and cloud_completion(ledger.db, r, r['_required_cloud_contract']) is not None):
-                ledger.db.commit()
-                return None
             if current is None or any(current[key] != r.get(key)
                                       for key in ('qc_src', 'thin_src', 'human_src', 'attempts')):
                 ledger.db.commit()

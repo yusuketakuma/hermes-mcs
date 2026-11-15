@@ -5,7 +5,6 @@ import extract_llm_prepare
 import extract_llm_provider
 import extract_llm_resident
 import extract_llm_runner
-import extract_llm_selection
 import extract_llm_source_contract
 import extract_llm_store
 import json
@@ -31,7 +30,6 @@ def root(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm_prepare, 'HOME', extract_llm.HOME)
     monkeypatch.setattr(extract_llm_provider, 'HOME', extract_llm.HOME)
     monkeypatch.setattr(extract_llm_resident, 'HOME', extract_llm.HOME)
-    monkeypatch.setattr(extract_llm_selection, 'HOME', extract_llm.HOME)
     monkeypatch.setattr(extract_llm_source_contract, 'HOME', extract_llm.HOME)
     monkeypatch.setattr(extract_llm_store, 'HOME', extract_llm.HOME)
     return data

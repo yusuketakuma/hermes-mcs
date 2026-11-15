@@ -5,7 +5,6 @@ import extract_llm_provider
 import extract_llm_qc
 import extract_llm_resident
 import extract_llm_runner
-import extract_llm_selection
 import extract_llm_store
 import json
 
@@ -76,7 +75,6 @@ def test_closed_individual_dryrun_stays_local_without_usage_estimate(tmp_path, m
         monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
         monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
         monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
-        monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
         monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
         monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
         monkeypatch.setattr(llm, "_rerender_cards", lambda *_args: None)

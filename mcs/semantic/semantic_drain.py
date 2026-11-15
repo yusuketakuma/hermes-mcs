@@ -142,11 +142,6 @@ from semantic_due_selection import (
     _job_lock as _job_lock,
     _select_due as _select_due,
     _select_due_class as _select_due_class,
-    _CloudSelectionIncomplete as _CloudSelectionIncomplete,
-    _cloud_selection_identity as _cloud_selection_identity,
-    _cloud_selection_memory_guard as _cloud_selection_memory_guard,
-    _select_cloud_due as _select_cloud_due,
-    _cloud_selection_page as _cloud_selection_page,
     _refill_due as _refill_due,
     _ARCHIVED_JOB as _ARCHIVED_JOB,
     _ELIGIBLE_SQL as _ELIGIBLE_SQL,
@@ -155,9 +150,6 @@ from semantic_due_selection import (
     _LONG_START_S as _LONG_START_S,
     _BACKLOG_TURN as _BACKLOG_TURN,
     _JOB_LOCK_BUCKETS as _JOB_LOCK_BUCKETS,
-    _cloud_selection_lock as _cloud_selection_lock,
-    _cloud_selection_progress as _cloud_selection_progress,
-    _CLOUD_SELECTION_PAGE as _CLOUD_SELECTION_PAGE,
 )
 from semantic_drain_accounting import (
     _job_metric as _job_metric,
@@ -256,14 +248,10 @@ _invalidated_at: float | None = None
     # Keep the inode: unlinking a flock file can create two lock owners.
 
 
-# One non-authoritative traversal per process. Only IDs and ordering metadata
-# survive a tick; receipt, source and job data are always read again.
-
-
 def run_due(ledger, cfg: dict, result: dict, deadline: float,
             jev_client=None, llm_fn=None, max_jobs: int = 4,
             cfg_path: str | None = None, run_lock_fd=None,
-            lane: str | None = None, cloud_only: bool = False,
+            lane: str | None = None,
             prioritize_patients: bool = False) -> dict:
     """Drain due semantic jobs inside the tick's remaining budget.
     OFF returns immediately — no job creation, no external calls, no
@@ -275,8 +263,6 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     started_wall = time.time()
     if lane not in (None, "realtime", "backlog"):
         raise ValueError("semantic_lane_invalid")
-    if cloud_only and (lane != "backlog" or llm_fn is not None):
-        raise ValueError("semantic_cloud_lane_invalid")
     if type(max_jobs) is not int or not 1 <= max_jobs <= 32:
         raise ValueError("semantic_max_jobs_invalid")
     scfg, errors = runtime_config(cfg)
@@ -306,8 +292,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     # that lane refreshes at most every _BACKLOG_INVALIDATE_S; the tick
     # (_semantic_enabled + realtime lane) still runs it every pass.
     now_m = time.monotonic()
-    if not cloud_only and (lane != "backlog" or _invalidated_at is None \
-            or now_m - _invalidated_at >= _BACKLOG_INVALIDATE_S):
+    if lane != "backlog" or _invalidated_at is None \
+            or now_m - _invalidated_at >= _BACKLOG_INVALIDATE_S:
         from semantic_publication import invalidate_projections
         _phase_t = time.perf_counter()
         invalidate_projections(ledger.db, scfg)
@@ -315,17 +301,16 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         _invalidated_at = time.monotonic()
     if scfg["mode"] == "off":
         return out
-    if not cloud_only:
-        _phase_t = time.perf_counter()
-        try:
-            out['inference_reprocess'] = reprocess_step(
-                ledger, cfg,
-                deadline=min(deadline,
-                             time.monotonic() + REPROCESS_STEP_BUDGET_S))
-        except Exception as error:
-            out['inference_reprocess'] = {'status': 'error', 'complete': False}
-            result['errors'].append(f'semantic_reprocess: {type(error).__name__}')
-        out["reprocess_s"] = round(time.perf_counter() - _phase_t, 3)
+    _phase_t = time.perf_counter()
+    try:
+        out['inference_reprocess'] = reprocess_step(
+            ledger, cfg,
+            deadline=min(deadline,
+                         time.monotonic() + REPROCESS_STEP_BUDGET_S))
+    except Exception as error:
+        out['inference_reprocess'] = {'status': 'error', 'complete': False}
+        result['errors'].append(f'semantic_reprocess: {type(error).__name__}')
+    out["reprocess_s"] = round(time.perf_counter() - _phase_t, 3)
     # Stability guards shared with the extract lane: a nearly-full
     # volume turns per-job artifact writes into an I/O error storm, and
     # an open endpoint breaker means every llm_fn call pays a dead
@@ -339,15 +324,14 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     # endpoint breaker or LLM admission): bring current projection/v4
     # rows minted by an older projection version up to date, a bounded
     # slice per tick, right after this tick's invalidation pass.
-    if not cloud_only:
-        _phase_t = time.perf_counter()
-        try:
-            out["reproject"] = v4.reproject_stale(ledger, scfg)
-        except Exception as e:
-            result["errors"].append(f"semantic_reproject: {type(e).__name__}")
-        out["reproject_s"] = round(time.perf_counter() - _phase_t, 3)
+    _phase_t = time.perf_counter()
+    try:
+        out["reproject"] = v4.reproject_stale(ledger, scfg)
+    except Exception as e:
+        result["errors"].append(f"semantic_reproject: {type(e).__name__}")
+    out["reproject_s"] = round(time.perf_counter() - _phase_t, 3)
     circuit_s = llm_availability.circuit_open_s(ledger.db)
-    if circuit_s and not cloud_only:
+    if circuit_s:
         out["circuit_open_s"] = round(circuit_s)
         return out
     drain_started = time.perf_counter()
@@ -453,7 +437,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         return _unlocked("jev", call, *args, **kwargs)
 
     jev_transport = unlocked_jev_request if run_lock_fd is not None else None
-    if not cloud_only and scfg["mode"] != "off" and scfg["extract_qc"] == "annotate":
+    if scfg["mode"] != "off" and scfg["extract_qc"] == "annotate":
         try:
             qc_cap = scfg["daily_request_budget"]
             if lane == "backlog":
@@ -489,20 +473,12 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     # non-eligible lane.
     hold_lane = lane or 'combined'
     held_after = initial_sched.get('payload_hold_cursors', {}).get(hold_lane)
-    def select_cloud(*args, **kwargs):
-        with unlocked_transport(ledger.db, run_lock_fd, wait_s=reacquire_s, deadline=deadline):
-            return _select_cloud_due(*args, **kwargs, deadline=deadline,
-                                     isolated=run_lock_fd is not None)
     try:
         cursor_arg = {'held_after': held_after} if held_after is not None else {}
-        selector = (select_cloud if cloud_only else
-                    partial(_select_due, prioritize_patients=True) if prioritize_patients else _select_due)
+        selector = (partial(_select_due, prioritize_patients=True) if prioritize_patients
+                    else _select_due)
         first_batch = selector(ledger, lane, kinds, qc_active, max_jobs, long_defers,
                                   **cursor_arg)
-    except _CloudSelectionIncomplete as error:
-        out['cloud_selection_incomplete'] = True
-        out['cloud_selection_reason'] = str(error)
-        return out
     except _SchedulerUnavailable:
         result['errors'].append('semantic: long_defer_reservation_failed')
         out['long_defer_reservation_failed'] = True
@@ -535,7 +511,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     for job, cohort_name, mutation in _refill_due(
             ledger, lane, kinds, qc_active, max_jobs, long_defers,
             first_batch, selected, out, deadline, consumed_turns, held_after,
-            selector=selector if cloud_only or prioritize_patients else None):
+            selector=selector if prioritize_patients else None):
         if llm_health["down"] and job["kind"] == JOB_KIND:
             # the endpoint refused this pass: the remaining model jobs
             # would each only re-defer (and rewrite updated_at); they
@@ -546,32 +522,6 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 out["lock_skipped"][job["kind"]] = \
                     out["lock_skipped"].get(job["kind"], 0) + 1
                 continue
-            if cloud_only:
-                # Selection ran without the writer lock. Re-read the full job
-                # and its live admission before any transition or model call.
-                import cloud_policy
-                import cloud_inference
-                fresh = ledger.db.execute('SELECT * FROM fetch_jobs WHERE job_id=?',
-                                          (job['job_id'],)).fetchone()
-                live_cfg = load_config(cfg_path) if cfg_path is not None else load_config()
-                live_settings = cloud_inference.resolve_cloud_settings(live_cfg)
-                live_scfg, live_errors = runtime_config(live_cfg)
-                project = job['project_id']
-                if (time.monotonic() >= deadline or fresh is None or tuple(fresh) != tuple(job) or live_errors
-                        or live_scfg['mode'] == 'off' or live_settings['mode'] != 'on'
-                        or 'semantic_backlog' not in live_settings['routes']
-                        or not cloud_policy.send_route("semantic_backlog")
-                        or not cloud_policy.selected_key()
-                        or live_settings['project_ids'] is not None and project not in live_settings['project_ids']
-                        or project in live_settings['exclude_project_ids']
-                        or live_scfg['project_ids'] is not None and project not in live_scfg['project_ids']
-                        or not cloud_policy.history_target_ready(ledger.db, project, job['message_id'])
-                        or not mutation.get('cloud_snapshots', {}).get(job['job_id'])
-                        or mutation['cloud_snapshots'][job['job_id']] != _cloud_selection_identity(
-                            ledger.db, project, job['message_id'])):
-                    out['cloud_selection_changed'] = True
-                    continue
-                job = fresh
             if job['kind'] == JOB_KIND:
                 import semantic_intake_hold
                 try:
@@ -852,7 +802,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                         jev_skip=job_skip,
                         jev_transport=jev_transport, jev_timing=jev_timing,
                         cloud_transport=(lambda call, *a, **kw: _unlocked("llm", call, *a, **kw))
-                        if cloud_backlog else None, llm_timing=llm_acc, cloud_only=cloud_only)
+                        if cloud_backlog else None, llm_timing=llm_acc)
             except writer_lock.RunLockLost as e:
                 # An updater won the lock in a transport window (or the
                 # bounded reacquire expired). Make no further writes: the job
@@ -945,9 +895,9 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             if status is None:
                 continue
             if status in ("deferred", "deferred_short", "deferred_backoff", "retry", "stale"):
-                import cloud_backlog
+                import defer_reasons
                 reason = diagnostics.get("not_sent") or diagnostics.get("code")
-                if reason not in cloud_backlog._DEFER_REASONS:
+                if reason not in defer_reasons.DEFER_REASONS:
                     reason = "unclassified"
                 counts = out.setdefault("defer_reasons", {})
                 counts[reason] = counts.get(reason, 0) + 1
@@ -955,7 +905,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                                  budget_short, out):
                 break
             # A binding hold with no new work must not starve independent due jobs.
-            if (lane == 'backlog' and not cloud_only and job['kind'] == JOB_KIND
+            if (lane == 'backlog' and job['kind'] == JOB_KIND
                     and status == 'deferred'
                     and diagnostics.get('code') == 'empty_repair_candidate_binding'
                     and used == 0 and llm_s == 0 and not job_progressed):
@@ -983,17 +933,16 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         # suppression still holds in-process, but a restart repeats
         # the base-ceiling call — surfaced instead of swallowed
         out["long_mark_unsaved"] = unsaved
-    if not cloud_only and scfg["mode"] == "enforce" and scfg["summary_mode"] == "enforce":
+    if scfg["mode"] == "enforce" and scfg["summary_mode"] == "enforce":
         try:
             out["degraded_notices"] = semantic_notice.emit_degraded(ledger, scfg)
         except Exception:
             out["degraded_notices"] = 0
             result["errors"].append("semantic: degraded_scan_failed")
-    if not out.get('cloud_selection_incomplete'):
-        kind_ph = ",".join("?" * len(kinds))
-        out["left"] = ledger.db.execute(
-            f"SELECT COUNT(*) FROM fetch_jobs WHERE kind IN ({kind_ph}) "
-            "AND state='pending' AND next_try<=?", (*kinds, time.time())).fetchone()[0]
+    kind_ph = ",".join("?" * len(kinds))
+    out["left"] = ledger.db.execute(
+        f"SELECT COUNT(*) FROM fetch_jobs WHERE kind IN ({kind_ph}) "
+        "AND state='pending' AND next_try<=?", (*kinds, time.time())).fetchone()[0]
     out["elapsed_s"] = time.perf_counter() - drain_started
     out["observation"] = _observation(
         started_wall, time.time(), cfg_generation, lane, out["job_metrics"])

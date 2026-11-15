@@ -6,7 +6,7 @@ import time
 import pytest
 
 import notify_cards
-from test_cloud_after_local import local_then_cloud, routed, _local_pass, _cloud_pass, _current
+from test_cloud_after_local import local_then_cloud, routed, _local_pass, _current
 from notify_testkit import CFG, NOW, _begin, _card, _dispatch, _intent, _latest_render, _receipt, _settle_bodies
 
 __all__ = ['local_then_cloud', 'routed']
@@ -32,18 +32,6 @@ def _local_card(local_then_cloud):
     assert header['provider_states']['anthropic'] not in ('incomplete', 'attention', 'unverified')
     assert 'Anthropic' not in header['text']
     return ledger, cfg, calls, render
-
-
-def _closed_cloud_is_silent(ledger):
-    financial = [tuple(row) for row in ledger.db.execute(
-        "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result',"
-        "'cloud_usage_disposition','cloud_usage_dryrun') ORDER BY artifact_id")]
-    renders = [tuple(row) for row in ledger.db.execute('SELECT * FROM notification_renders ORDER BY render_rev')]
-    assert _cloud_pass(ledger)['done'] == 0
-    assert [tuple(row) for row in ledger.db.execute(
-        "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result',"
-        "'cloud_usage_disposition','cloud_usage_dryrun') ORDER BY artifact_id")] == financial
-    assert [tuple(row) for row in ledger.db.execute('SELECT * FROM notification_renders ORDER BY render_rev')] == renders
 
 
 def _adopt_local_edit(local_then_cloud):
@@ -78,7 +66,6 @@ def test_local_source_edit_reissues_delivered_card_with_cloud_lane_closed(local_
         reached.append(result)
         return result
     monkeypatch.setattr(notify_cards, 'issue_render', tracked)
-    _closed_cloud_is_silent(ledger)
     assert not calls
     body = _adopt_local_edit(local_then_cloud)
     notify_cards.sweep(ledger, cfg, now=time.time())
@@ -112,7 +99,6 @@ def test_local_source_edit_never_reposts_an_unsettled_card(local_then_cloud, sta
     assert prior['state'] == ('unknown' if state == 'unknown' else 'sending')
     attempts = [tuple(row) for row in ledger.db.execute(
         'SELECT * FROM notification_delivery_attempts ORDER BY attempt_id')]
-    _closed_cloud_is_silent(ledger)
     assert not calls
     _adopt_local_edit(local_then_cloud)
     notify_cards.sweep(ledger, cfg, now=NOW + 1)

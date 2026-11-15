@@ -248,7 +248,6 @@ def test_paid_response_is_settled_when_guard_cannot_read_settings(routed, monkey
     monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
-    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', load)
     monkeypatch.setattr(AnthropicClient, "request", request)
@@ -300,7 +299,6 @@ def test_unreadable_guard_never_posts_and_settles_a_reserved_unsent_attempt(
     monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
-    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', load)
     monkeypatch.setattr(AnthropicClient, "request", lambda *args, **kwargs: pytest.fail("unexpected post"))
@@ -338,7 +336,6 @@ def test_transient_read_error_after_reservation_stays_unsent_without_scope_disca
     monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
-    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', load)
     monkeypatch.setattr(AnthropicClient, "request", lambda *args, **kwargs: pytest.fail("unexpected post"))
@@ -375,7 +372,6 @@ def test_config_read_failure_preserves_previously_settled_response(routed, monke
     monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
-    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', load)
     monkeypatch.setattr(AnthropicClient, "request", request)
@@ -522,10 +518,9 @@ def test_lane_two_updated_exits_without_reusing_stale_carry(tmp_path, monkeypatc
     carried = [(pending, lease, no_commit)]
 
     class Pool:
-        def __init__(self, root, *, context_only):
+        def __init__(self, root):
             assert root == str(tmp_path)
-            assert context_only is True
-        def sync(self, cfg, *, ledger):
+        def sync(self, cfg):
             events.append("pool_sync")
         def close(self):
             events.append("pool_closed")
@@ -556,7 +551,6 @@ def test_lane_two_updated_exits_without_reusing_stale_carry(tmp_path, monkeypatc
     monkeypatch.setattr(extract_llm_prepare, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_provider, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_resident, 'HOME', worker.HOME)
-    monkeypatch.setattr(extract_llm_selection, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_source_contract, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_store, 'HOME', worker.HOME)
     monkeypatch.setattr(worker, "Ledger", lambda *args: ledger)
@@ -570,7 +564,6 @@ def test_lane_two_updated_exits_without_reusing_stale_carry(tmp_path, monkeypatc
     monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
-    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda cfg: {"mode": "off", "max_concurrency": 1})
@@ -620,7 +613,6 @@ def test_paid_carry_survives_lowered_cap_and_blocks_next_send(routed, monkeypatc
     monkeypatch.setattr(extract_llm_prepare, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_provider, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_resident, 'HOME', worker.HOME)
-    monkeypatch.setattr(extract_llm_selection, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_source_contract, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_store, 'HOME', worker.HOME)
     cfg["cloud_llm"]["daily_request_budget"] = 5

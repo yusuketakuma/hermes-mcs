@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import attachment_extraction
 import attachment_inference
 import ledger
 import maintenance
@@ -268,7 +269,7 @@ def test_local_page_budget_completes_two_slow_chunks_in_one_drain(page_store, mo
                             live_config=False)
     assert result['local_done'] == 1 and result['local_deferred'] == 0
     assert len(calls) == 2
-    assert attachment_inference.current(ledger.db, 1, key, cfg=cfg)['ready'] is True
+    assert attachment_extraction.current(ledger.db, 1, key, cfg=cfg)['ready'] is True
 
 
 def _local_once():

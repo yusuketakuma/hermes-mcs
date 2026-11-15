@@ -92,7 +92,8 @@ def test_semantic_http_wait_allows_local_db_commit_and_retakes_run_lock(cloud, t
         with legacy_cloud_routes():
             assert cfg["semantic"]["fact_source_evidence"]["candidate_fingerprint"] == semantic_candidate.candidate_fingerprint(cfg)
             out = semantic_drain.run_due(led, cfg, result, time.monotonic() + 1200,
-                jev_client=_PassJev(), lane="backlog", max_jobs=1, cloud_only=True, run_lock_fd=lock_fd)
+                jev_client=_PassJev(), lane="backlog", max_jobs=1, prioritize_patients=True,
+                run_lock_fd=lock_fd)
         assert out["done"] == 1 and not result["errors"], (out, result)
         assert observed == ["local_committed_during_http"]
         assert writer_lock.updater_state() == generation

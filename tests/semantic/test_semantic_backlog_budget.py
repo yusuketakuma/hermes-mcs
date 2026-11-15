@@ -136,7 +136,6 @@ def _resident(monkeypatch, calls, background, argv_extra=()):
     monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
-    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(extract_llm.sys, "argv",
@@ -219,7 +218,6 @@ def test_direct_background_pass_keeps_the_default_lane(monkeypatch, tmp_path):
     monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
-    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)

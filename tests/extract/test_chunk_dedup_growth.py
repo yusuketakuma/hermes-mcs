@@ -9,7 +9,6 @@ import extract_llm_provider
 import extract_llm_qc
 import extract_llm_resident
 import extract_llm_runner
-import extract_llm_selection
 import extract_llm_source_contract
 import extract_llm_store
 import json
@@ -273,7 +272,6 @@ def test_run_pending_reuses_unconfirmed_checkpoint_without_writing_it_again(sour
     monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
-    monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
     pending, _ = llm._select_pending(ledger, 2, None, None, False)
     jobs, skipped, blocked = llm._prepare_jobs(ledger, pending, llm._resolved_llm(), False, allow_cloud=False)
@@ -303,7 +301,6 @@ def test_claim_refreshes_a_checkpoint_advanced_after_preparation(source, monkeyp
     monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
-    monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
     pending, _ = llm._select_pending(ledger, 1, None, None, False)
     jobs, skipped, blocked = llm._prepare_jobs(ledger, pending, llm._resolved_llm(), False, allow_cloud=False)
@@ -346,7 +343,6 @@ def test_newer_checkpoint_during_replay_defers_before_final_commit(source, monke
     monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
-    monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
     pending, _ = llm._select_pending(ledger, workers, None, None, False)
     jobs, skipped, blocked = llm._prepare_jobs(ledger, pending, llm._resolved_llm(), False, allow_cloud=False)

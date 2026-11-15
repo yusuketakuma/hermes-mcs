@@ -177,25 +177,6 @@ def test_estimate_has_daily_monthly_oneoff_and_optional_fx(world):
     assert report["new_posts_daily_estimate"] > 0
 
 
-
-@pytest.mark.parametrize("public_version", [None, "0.1", inference.CURRENT_VERSION])
-def test_reextract_estimate_includes_local_results_of_each_public_generation(world, public_version):
-    root, path, config = world
-    with closing(Ledger(str(path))) as db:
-        meta = {"hash": _hash(db, 1), "extract_version": extract_llm.EXTRACT_VERSION}
-        if public_version is not None:
-            meta[inference.VERSION_KEY] = public_version
-        db.artifact_add("extract_llm", "{}", project_id=1, message_id=1, meta=meta)
-    before = hashlib.sha256(path.read_bytes()).hexdigest()
-    report = cli.observe(config, root=str(root))
-    assert report["routes"]["reextract"]["targets"] == 0
-    with legacy_cloud_routes():
-        # Local completion never proves the dormant lane's required cloud pass.
-        report = cli.observe(config, root=str(root))
-        assert report["routes"]["reextract"]["targets"] == 1
-    assert hashlib.sha256(path.read_bytes()).hexdigest() == before
-
-
 def test_reextract_estimate_never_uses_legacy_facts_for_a_changed_source(world):
     root, path, config = world
     with closing(Ledger(str(path))) as db:
@@ -551,7 +532,6 @@ def _complete_context(db, config):
     assert not any(context._pending(db.db, 1, config, contract=contract)[2].values())
 
 
-
 @pytest.mark.parametrize("change", ["rule_version", "extraction", "karte"])
 def test_current_context_targets_follow_runtime_signatures_without_message_timestamp_change(world, monkeypatch, change):
     root, path, config = world
@@ -708,7 +688,6 @@ def test_disposition_receipt_is_auditable_without_double_count_or_identity_leak(
     assert report["accounting"]["daily_requests"] == 0
     assert Decimal(report["accounting"]["monthly_cost_usd"]) == 0
     assert "private-" not in json.dumps(receipt)
-
 
 
 def _real_interrupt(monkeypatch):

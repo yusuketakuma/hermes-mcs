@@ -214,7 +214,7 @@ def _prepare_context_rejection(stage, error):
 
 
 def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
-                  background=False, cloud_only=False, load_checkpoints=True, deadline=None,
+                  background=False, load_checkpoints=True, deadline=None,
                   blocked_reasons=None, blocked_rows=None) -> tuple[list, int, int]:
     """Load contexts/checkpoints on the calling thread; settle prefiltered rows."""
     jobs = []
@@ -288,9 +288,6 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
                     continue
                 mode = 'off'
         r["_cloud_background"] = background and mode in ("on", "shadow")
-        if cloud_only and mode != "on":
-            block("prepare_cloud_disabled")
-            continue
         r["_cloud_mode"] = mode
         if mode in ("on", "shadow", "dry_run"):
             r["_cloud_config"] = copy.deepcopy(cfg)
@@ -302,14 +299,12 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
             r["_cloud_selection"] = selection
         if mode == "on":
             r["_provider_contract"] = cloud_inference.cloud_provider_contract(selection=selection)
-            if cloud_only:
-                r["_required_cloud_contract"] = r["_provider_contract"]
             r["_target"] = (target[0], r["_provider_contract"]["model"])
         qc = _qc_feedback(ledger, r["qc_src"]) if r["qc_src"] else None
         if r["qc_src"] and qc is None:
             continue   # flagged in SQL but the audit is gone or clean
         hints = _rule_hints(r)
-        if prefilter and not cloud_only and qc is None and not r["thin_src"] \
+        if prefilter and qc is None and not r["thin_src"] \
                 and not r["human_src"] \
                 and _low_signal(r["body_text"] or "", hints):
             # no clinical signal on either net — settle with a durable

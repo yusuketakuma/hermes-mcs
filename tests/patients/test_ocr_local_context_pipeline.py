@@ -76,7 +76,7 @@ def test_actual_local_ocr_result_becomes_full_context_input_without_individual_c
 
     monkeypatch.setattr(local_llm, 'admitted_probe_format', lambda *args, **kwargs: 'plain')
     monkeypatch.setattr(local_llm, 'admitted_chat', local_chat)
-    result = attachment_inference.run_pending(ledger, cfg, stage='local', deadline=clock.mono + 300)
+    result = attachment_inference.run_pending(ledger, cfg, deadline=clock.mono + 300)
     assert result['done'] == 1 and result['deferred'] == 0, result
     assert bool(result.get('paid_recovery_pending')) is pending_journal
     local = attachment_extraction.current(ledger.db, 1, key, cfg=cfg)
@@ -91,8 +91,6 @@ def test_actual_local_ocr_result_becomes_full_context_input_without_individual_c
     assert source['body_text'] == OCR_TEXT and source['extraction_ready']
     assert source['derived_summaries'] == [{'kind': 'attachment_extract_local',
         'artifact_id': local['artifact_id'], 'text': LOCAL_SUMMARY}]
-    assert attachment_inference.run_pending(ledger, cfg, stage='cloud', deadline=clock.mono + 300)['done'] == 0
-    assert not posts and not receipts(ledger)
     _raw_proof(ledger, 1, 1)
     _semantic_proof(ledger, 1, 1, cfg=cfg)
     finish(runtime, cfg)
@@ -106,7 +104,7 @@ def test_actual_local_ocr_result_becomes_full_context_input_without_individual_c
     assert readiness.context_view_input(ledger.db, 1, cfg=cfg)
     assert tuple(ledger.db.execute('SELECT body_text,content_hash FROM messages WHERE message_id=1').fetchone()) == before_chat
     saved, count = receipts(ledger), len(posts)
-    assert attachment_inference.run_pending(ledger, cfg, stage='local', deadline=clock.mono + 300)['done'] == 0
+    assert attachment_inference.run_pending(ledger, cfg, deadline=clock.mono + 300)['done'] == 0
     assert step(runtime, cfg=cfg, local_admit=lambda: False)['status'] == 'complete'
     assert receipts(ledger) == saved and len(posts) == count and len(local_calls) == local_count
     if pending_journal:
@@ -157,7 +155,7 @@ def test_ready_ocr_page_publishes_scoped_context_while_parent_chat_pending(
 
     monkeypatch.setattr(local_llm, 'admitted_probe_format', lambda *a, **k: 'plain')
     monkeypatch.setattr(local_llm, 'admitted_chat', admitted)
-    result = attachment_inference.run_pending(ledger, cfg, stage='local',
+    result = attachment_inference.run_pending(ledger, cfg,
                                               deadline=time.monotonic() + 300)
     assert result['done'] == 1 and result['deferred'] == 0, result
     local = attachment_extraction.current(ledger.db, 1, key, cfg=cfg)

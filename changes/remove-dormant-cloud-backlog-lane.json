@@ -1,0 +1,14 @@
+{
+  "category": "changed",
+  "title": "起動されていなかった個別投稿・意味解析・添付OCRのクラウド処理経路を削除",
+  "summary": "個別投稿の抽出・意味解析・添付OCRを新しくクラウドへ送る経路は以前から閉じており、その処理を担うクラウドworkerは起動されていませんでした。この使われていない経路（workerの抽出・意味解析ループ、cloud_only の選択・準備・実行、添付OCRのクラウド段、cloud-llm plan の reextract・semantic_backlog 見積り）を削除しました。患者コンテキストのクラウド処理、ローカルでの抽出・意味解析・添付OCR、過去のクラウド結果の読取りと有料応答の回復は変わりません。cloud-llm plan・estimate の reextract・semantic_backlog の件数は、これまでと同じく常に0です。",
+  "upgrade": "追加操作は不要です。ただし抽出・意味解析のコードが変わるため候補指紋（candidate_fingerprint）が変わります。semantic.fact_source を canonical にして承認済みの評価証拠を使っている環境では、更新後に証拠が一致しなくなり、意味解析は legacy・off に戻ります。その場合は現行の評価手順で再評価し、改めて承認してください。更新中に旧版の常駐処理が起動する患者コンテキストworkerの引数（--context-only）は、引き続き受け付けます。",
+  "details": [
+    "cloud_backlog.CloudBacklogPool は患者コンテキスト専用になり、context_only 引数と sync の ledger 引数を削除しました。worker は患者コンテキストの周回だけを実行します。",
+    "抽出・意味解析が共有する理由コードの語彙を cloud_backlog から mcs/core/defer_reasons.py へ移しました。候補指紋の対象にも追加しています。",
+    "extract_llm の run_pending・_select_pending・_prepare_jobs から cloud_only を削除し、それだけが使っていた読取り専用リーダーでの選択・患者優先の走査・cloud_backlog_admissions を削除しました。過去の予約を持つ所有済み単位の回復経路は残しています。",
+    "semantic_drain.run_due・_process_job から cloud_only を削除し、semantic_due_selection のクラウド選択ページ・ロック・進捗を削除しました。",
+    "attachment_inference.run_pending から stage 引数とクラウド段を削除し、attachment_extraction.save をローカル専用にしました。過去のクラウド結果の読取り（attachment_extraction.current）と、保持済みジャーナルの再生は残しています。"
+  ],
+  "refs": ["mcs/llm/cloud_backlog.py", "mcs/core/defer_reasons.py", "mcs/extract/llm/extract_llm_runner.py", "mcs/extract/llm/extract_llm_selection.py", "mcs/extract/llm/extract_llm_prepare.py", "mcs/semantic/semantic_drain.py", "mcs/semantic/semantic_due_selection.py", "mcs/semantic/semantic_job_processor.py", "mcs/extract/attachment_inference.py", "mcs/extract/attachment_extraction.py", "mcs/ops/cloud_cli.py"]
+}

@@ -1,7 +1,6 @@
-"""Journal paid OCR inference callbacks before waiting for the shared database writer."""
+"""Replay retained paid OCR inference journals into the shared database before new local work."""
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 import re
@@ -12,7 +11,7 @@ import attachment_cloud_identity
 import cloud_policy
 import original_source_keys
 from mcs_util import payload_hash, strict_json
-from safe_io import atomic_write, fsync_dir, read_private_bytes
+from safe_io import fsync_dir, read_private_bytes
 
 SCHEMA = 'attachment-paid-result/v1'
 LIMIT = 6 * bounded_http.MAX_RESPONSE_BYTES + 65536
@@ -58,30 +57,6 @@ def _identity(reservation, origin):
     if not isinstance(rid, str) or re.fullmatch(r'[0-9a-f]{32}', rid) is None:
         raise ValueError('attachment_paid_reservation_invalid')
     return rid
-
-
-def preserve(root, origin, reservation, metadata, answer):
-    """Durably retain only the exact response and its already-created reservation."""
-    rid = _identity(reservation, origin)
-    if not isinstance(metadata, dict):
-        raise ValueError('attachment_paid_metadata_invalid')
-    saved = None
-    if answer is not None:
-        saved = cloud_policy._saved_answer(answer, metadata)
-    value = {'schema': SCHEMA, 'origin': origin, 'reservation': reservation,
-             'metadata': metadata, 'answer': saved}
-    value['hash'] = payload_hash(value)
-    text = json.dumps(value, ensure_ascii=False)
-    if len(text.encode('utf-8')) > LIMIT:
-        raise ValueError('attachment_paid_result_too_large')
-    path = _directory(root, create=True) / (rid + '.json')
-    if os.path.lexists(path):
-        prior = strict_json(read_private_bytes(path, LIMIT))
-        if prior != value:
-            raise ValueError('attachment_paid_result_conflict')
-    else:
-        atomic_write(str(path), lambda stream: stream.write(text), mode=0o600, makedirs=False)
-    return path
 
 
 def remove(path):

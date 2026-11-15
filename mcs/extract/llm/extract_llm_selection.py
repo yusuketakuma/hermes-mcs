@@ -2,24 +2,17 @@
 import contextlib
 import json
 import math
-import os
-from pathlib import Path
 import sqlite3
 import sys
 import time
-from types import SimpleNamespace
 import inference_version as inference
-import cloud_policy
-import cloud_inference
 import inference_dependency_loss
-import mcs_util
 import patient_priority
 from mcs_queries import (ELIGIBLE_MESSAGE, current_extract_pred,
                          current_v4_id, json_or_null)
-from mcs_util import HOME, load_config, loads_dict, strict_json
+from mcs_util import loads_dict, strict_json
 
 from extract_llm_progress import (
-    cloud_completion,
     progress_for_message,
 )
 from extract_llm_qc import (
@@ -35,9 +28,7 @@ from extract_llm_source_contract import (
     EXTRACT_VERSION,
     KIND,
     _BATCH_PER_ITEM_S,
-    _CLOUD_PRIORITY_PAGE,
     _INFERENCE_VERSION,
-    _MIN_CALL_S,
     _STALE_GC_BUDGET_S,
     _STALE_GC_CLAIM_PAGE,
     _STALE_GC_CURSOR_RESERVE_S,
@@ -190,15 +181,13 @@ def upgrade_status(db, *, model: str | None) -> dict:
 
 def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
                    archived: bool | None = None, rehold: bool | None = None,
-                   prioritize_patients: bool = False, bounded: bool = True,
-                   cloud_followup: bool = False) -> str:
+                   prioritize_patients: bool = False) -> str:
     """run_pending's due-row selection.
 
     Retry state is read through correlated subqueries instead of a
     LEFT JOIN + GROUP BY over every eligible message. Without patient
     priority, rows can stream in posted_at order and a SQL LIMIT can stop
-    the indexed walk. Cloud selection filters receipts before its Python
-    limit; patient priority adds a sort. The cheap shard/claim tests precede
+    the indexed walk; patient priority adds a sort. The cheap shard/claim tests precede
     the per-message JSON work. The row set equals the former grouped
     query (attempts: MAX(COALESCE(attempts,0)) or 0 without error rows;
     due: COALESCE(MAX(next_try),0) <= now); message_id breaks posted_at
@@ -217,15 +206,6 @@ def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
                           " AND COALESCE(p.is_archived,0)!=0)")
     priority = patient_priority.activity_order_sql('m.project_id') + ', ' if prioritize_patients else ''
     pending = pending_pred(db)
-    if cloud_followup:
-        # A sealed (v4-adopted) source still needs its required cloud pass:
-        # the sealed-source fence lives on the write side, not on selection.
-        # A canonical raw source (v4 row, no extract artifact) is the same
-        # case — it matches through the sealed arm instead of local pending.
-        pending = (f"({pending}) OR ({ELIGIBLE_MESSAGE} AND ({current_v4_id()} IS NOT NULL OR EXISTS ("
-                   f"SELECT 1 FROM artifacts a WHERE a.kind='{KIND}' AND a.message_id=m.message_id "
-                   + current_extract_pred() + f" AND json_extract({json_or_null('a.meta')},'$.extract_version')={EXTRACT_VERSION})))")
-        pending = f"({pending}) AND NOT EXISTS ({_hold_sql()})"
     return f"""
       SELECT m.message_id, m.project_id, {inference_dependency_loss.SOURCE_BINDING_COLUMNS},
              ({_qc_flagged_sql()}) AS qc_src,
@@ -246,7 +226,7 @@ def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
         AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try'))
                       {_ERROR_ROWS_SQL}), 0) <= ?
       ORDER BY {priority}m.posted_at_ts {order}, m.message_id {order}
-      {'LIMIT ?' if bounded else ''}
+      LIMIT ?
     """
 
 
@@ -472,119 +452,11 @@ def patient_progress_counts(db) -> dict:
             "focus_eligible": focus, "focus_targets": min(focus, _FOCUS_PATIENTS)}
 
 
-class _CloudSelectionIncomplete(Exception):
-    """A cloud selection could not finish safely within the current pass."""
-
-
-def _cloud_priority_identity(db, cfg, admitted_ids, shard, oldest_first, archived_first, fair_oldest):
-    """Identify one non-authoritative ordering walk without retaining receipt contents."""
-    scope = db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind='cloud_history_scope' "
-                       "ORDER BY artifact_id DESC LIMIT 1").fetchone()
-    control = db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind='cloud_control' "
-                         "ORDER BY artifact_id DESC LIMIT 1").fetchone()
-    receipt = scoped_control = None
-    if scope is not None:
-        document = cloud_policy._history_document(scope['content'])
-        command_id = document.get('command_id') if isinstance(document, dict) else None
-        if isinstance(command_id, str):
-            receipt = db.execute("SELECT outcome,receipt_json FROM command_receipts WHERE command_id=?",
-                                 (command_id,)).fetchone()
-            scoped_control = db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind='cloud_control' "
-                "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.command_id') END=? "
-                "ORDER BY artifact_id DESC LIMIT 1", (command_id,)).fetchone()
-    return mcs_util.payload_hash({'scope': tuple(scope) if scope is not None else None,
-        'control': tuple(control) if control is not None else None,
-        'scoped_control': tuple(scoped_control) if scoped_control is not None else None,
-        'receipt': tuple(receipt) if receipt is not None else None,
-        'config': cfg, 'admitted': sorted(admitted_ids) if admitted_ids is not None else None,
-        'shard': shard, 'oldest': oldest_first, 'archived': archived_first, 'fair': fair_oldest})
-
-
-def _cloud_priority_discard(ledger, mid):
-    """Move past a candidate that could not be prepared or claimed this pass."""
-    state = getattr(ledger, '_cloud_priority_progress', None)
-    if isinstance(state, dict):
-        state['ready'] = [item for item in state['ready'] if item[0] != mid]
-
-
 def _select_pending(ledger, limit: int, admitted_ids: set | None,
                     shard: tuple[int, int] | None,
                     oldest_first: bool, *, archived_first: bool = False,
                     fair_oldest: bool = False, prioritize_patients: bool = False,
-                    cloud_only: bool = False, deadline: float | None = None,
                     exclude_ids=None) -> tuple[list, int | None]:
-    deadline = deadline if cloud_only else None
-    reader = None
-    owner = ledger
-    if deadline is not None:
-        if time.monotonic() >= deadline:
-            raise _CloudSelectionIncomplete('deadline')
-        if ledger.db.in_transaction:
-            raise _CloudSelectionIncomplete('active_transaction')
-        # A caller-owned cancellation handler remains authoritative on this read.
-        path = ledger.db.execute('PRAGMA database_list').fetchone()[2]
-        if not path:
-            raise _CloudSelectionIncomplete('reader_unavailable')
-    try:
-        if deadline is not None:
-            before = os.stat(path)
-            reader = sqlite3.connect(Path(path).absolute().as_uri() + '?mode=ro', uri=True, timeout=0)
-            after = os.stat(path)
-            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
-                raise _CloudSelectionIncomplete('reader_changed')
-            reader.row_factory = sqlite3.Row
-            reader.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
-            ledger = SimpleNamespace(db=reader, _cloud_state_owner=owner,
-                                     _cloud_db_identity=(before.st_dev, before.st_ino))
-            if prioritize_patients:
-                # Keep the ordinary inference floor available whenever the
-                # pass is long enough, while still allowing short passes to scan.
-                deadline -= min(_MIN_CALL_S, max(0.0, deadline - time.monotonic()) / 2.0)
-        check = (cloud_policy.history_selection_check(ledger.db) if cloud_only
-                 else contextlib.nullcontext(None))
-        with check as receipt_check:
-            result = _select_pending_impl(ledger, limit, admitted_ids, shard, oldest_first,
-                archived_first=archived_first, fair_oldest=fair_oldest,
-                prioritize_patients=prioritize_patients, cloud_only=cloud_only,
-                receipt_check=receipt_check, deadline=deadline,
-                **({"exclude_ids": exclude_ids} if exclude_ids else {}))
-        if deadline is not None and time.monotonic() >= deadline:
-            raise _CloudSelectionIncomplete('deadline')
-    except MemoryError as error:
-        if reader is not None:
-            with contextlib.suppress(sqlite3.Error):
-                reader.close()
-        if hasattr(owner, '_cloud_priority_progress'):
-            owner._cloud_priority_progress = None
-        raise _CloudSelectionIncomplete('memory') from error
-    except BaseException as error:
-        if reader is not None:
-            with contextlib.suppress(sqlite3.Error):
-                reader.close()
-        if deadline is not None and isinstance(error, (sqlite3.OperationalError, OSError)):
-            reason = 'deadline' if time.monotonic() >= deadline else 'reader_unavailable'
-            raise _CloudSelectionIncomplete(reason) from error
-        raise
-    else:
-        if reader is not None:
-            try:
-                reader.close()
-            except sqlite3.Error as error:
-                raise _CloudSelectionIncomplete('reader_close_failed') from error
-        if cloud_only and prioritize_patients and deadline is not None:
-            state = getattr(owner, '_cloud_priority_progress', None)
-            if (isinstance(state, dict) and not state['ready']
-                    and state['phase'] >= state.get('phase_count', 4)):
-                owner._cloud_priority_progress = None
-        return result
-
-
-def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
-                         shard: tuple[int, int] | None,
-                         oldest_first: bool, *, archived_first: bool = False,
-                         fair_oldest: bool = False, prioritize_patients: bool = False,
-                         cloud_only: bool = False, receipt_check=None,
-                         deadline: float | None = None, exclude_ids=None) -> tuple[list, int | None]:
     """Select the claimable pending rows for one run_pending pass ->
     (rows, how many of them are new arrivals; None for oldest_first)."""
     # pending = no current-version artifact, plus retriable CURRENT-
@@ -613,34 +485,10 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
             adm_sql = " AND m.message_id IN (SELECT value FROM json_each(?))"
             adm_params = [json.dumps(sorted(admitted_ids))]
     if exclude_ids:
-        if cloud_only:
-            raise ValueError("cloud_selection_exclusion_invalid")
         # Only pass-local refusals are excluded; admission, source, shard and
         # quality gates remain in this same query before its SQL limit.
         adm_sql += " AND m.message_id NOT IN (SELECT value FROM json_each(?))"
         adm_params.append(json.dumps(sorted(exclude_ids)))
-    required_contract = None
-    if cloud_only:
-        raw_cfg = load_config()
-        cfg = cloud_inference.resolve_cloud_settings(raw_cfg)
-        selection, errors = cloud_policy.resolve_profile(raw_cfg, route="reextract", purpose="backlog", root=HOME)
-        if not errors and selection is not None:
-            required_contract = cloud_inference.cloud_provider_contract(selection=selection)
-        if (cfg["mode"] != "on" or "reextract" not in cfg["routes"]
-                or not cloud_policy.send_route("reextract")):
-            owner = getattr(ledger, '_cloud_state_owner', None)
-            if owner is not None and prioritize_patients:
-                owner._cloud_priority_progress = None
-            return [], 0
-        # Filter unpaid local-only work before LIMIT so it cannot starve cloud history.
-        adm_sql += (" AND COALESCE(qc_src,0)=0 AND COALESCE(thin_src,0)=0 "
-                    "AND COALESCE(human_src,0)=0 AND attempts=0 "
-                    f"AND NOT EXISTS ({_hold_sql()})")
-        adm_sql += ' AND ' + cloud_policy.history_scope_target_sql('m.message_id')
-        for key, exclude in (("project_ids", False), ("exclude_project_ids", True)):
-            if cfg[key] is not None and (cfg[key] or not exclude):
-                adm_sql += " AND m.project_id " + ("NOT " if exclude else "") + "IN (SELECT value FROM json_each(?))"
-                adm_params.append(json.dumps(cfg[key]))
     # QC-flagged rows keep their current artifact but re-enter pending
     # for exactly one feedback re-extract — a meta.qc_fix artifact
     # (applied or declined) ends the loop. Thin artifacts re-pend once
@@ -650,11 +498,9 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
     # never SQLite's unixepoch(), which can disagree with it.
     now = time.time()
     def _select(fresh, n, archived, rehold=None, scope="", scope_params=()):
-        if deadline is not None and time.monotonic() >= deadline:
-            raise _CloudSelectionIncomplete('deadline')
         cursor = ledger.db.execute(_selection_sql(ledger.db, order, adm_sql + scope,
-                                               fresh, archived, rehold, bounded=not cloud_only,
-                                               prioritize_patients=prioritize_patients, cloud_followup=cloud_only), (
+                                               fresh, archived, rehold,
+                                               prioritize_patients=prioritize_patients), (
             KIND, EXTRACT_VERSION,
             *adm_params, *scope_params,
             shard[1] if shard else None,
@@ -662,134 +508,11 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
             shard[0] if shard else 0,
             now,
             KIND, EXTRACT_VERSION,
-            now, *((n,) if not cloud_only else ())))
+            now, n))
         try:
-            if not cloud_only:
-                return cursor.fetchall()
-            selected = []
-            for row in cursor:
-                if deadline is not None and time.monotonic() >= deadline:
-                    raise _CloudSelectionIncomplete('deadline')
-                if (cloud_policy.history_target_ready(ledger.db, row["project_id"], row["message_id"])
-                        and receipt_check(row["project_id"], row["message_id"])
-                        and required_contract is not None
-                        and cloud_completion(ledger.db, row, required_contract) is None):
-                    selected.append(row)
-                    if len(selected) >= n:
-                        break
-            if deadline is not None and time.monotonic() >= deadline:
-                raise _CloudSelectionIncomplete('deadline')
-            return selected
+            return cursor.fetchall()
         finally:
             cursor.close()
-
-    if cloud_only and prioritize_patients and deadline is not None:
-        owner = ledger._cloud_state_owner
-        identity = (ledger._cloud_db_identity,
-                    _cloud_priority_identity(ledger.db, cfg, admitted_ids, shard,
-                                             oldest_first, archived_first, fair_oldest))
-        state = getattr(owner, '_cloud_priority_progress', None)
-        if not isinstance(state, dict) or state.get('identity') != identity:
-            upper = ledger.db.execute('SELECT message_id FROM messages ORDER BY message_id DESC LIMIT 1').fetchone()
-            state = {'identity': identity, 'upper': upper[0] if upper else None, 'after': None,
-                     'maxima': {}, 'ordered': None, 'phase': 0, 'position': 0, 'message_after': None, 'ready': []}
-            owner._cloud_priority_progress = state
-        while state['ordered'] is None:
-            if time.monotonic() >= deadline:
-                raise _CloudSelectionIncomplete('deadline')
-            if state['upper'] is None:
-                page = []
-            elif state['after'] is None:
-                page = ledger.db.execute('SELECT message_id,project_id,posted_at_ts FROM messages '
-                    'WHERE message_id<=? ORDER BY message_id LIMIT ?',
-                    (state['upper'], _CLOUD_PRIORITY_PAGE)).fetchall()
-            else:
-                page = ledger.db.execute('SELECT message_id,project_id,posted_at_ts FROM messages '
-                    'WHERE message_id>? AND message_id<=? ORDER BY message_id LIMIT ?',
-                    (state['after'], state['upper'], _CLOUD_PRIORITY_PAGE)).fetchall()
-            for mid, pid, posted in page:
-                if time.monotonic() >= deadline:
-                    raise _CloudSelectionIncomplete('deadline')
-                if type(mid) is not int or (pid is not None and type(pid) is not int) \
-                        or (posted is not None and (type(posted) not in (int, float) or not math.isfinite(posted))):
-                    raise _CloudSelectionIncomplete('ordering_unverified')
-                state['after'] = mid
-                if pid is None:
-                    continue  # history_target_ready cannot authorize NULL project IDs
-                previous = state['maxima'].setdefault(pid, None)
-                if posted is not None and (previous is None or posted > previous):
-                    state['maxima'][pid] = posted
-            if len(page) < _CLOUD_PRIORITY_PAGE:
-                maxima = state.pop('maxima')
-                state['ordered'] = sorted(maxima, key=lambda project_id:
-                    patient_priority.priority_key(project_id, maxima[project_id]))
-                if time.monotonic() >= deadline:
-                    raise _CloudSelectionIncomplete('deadline')
-
-        phases = [(archived, rehold) for archived in ((True, False) if archived_first else (False, True))
-                  for rehold in ((None,) if oldest_first and fair_oldest else (False, True))]
-        state['phase_count'] = len(phases)
-        selected, ready = [], []
-        # Re-read every previously selected ID under this pass's fresh receipt snapshot.
-        old_ready = state['ready']
-        for offset, (mid, archived, rehold) in enumerate(old_ready):
-            if selected and deadline - time.monotonic() <= 1.0:
-                ready.extend(old_ready[offset:])
-                break
-            found = _select(None, 1, archived, rehold, scope=' AND m.message_id=?', scope_params=(mid,))
-            if found:
-                selected.extend(found)
-                ready.append((mid, archived, rehold))
-        state['ready'] = ready
-        selected = selected[:limit]
-        while len(selected) < limit and state['phase'] < len(phases):
-            if selected and deadline - time.monotonic() <= 1.0:
-                break
-            if time.monotonic() >= deadline:
-                raise _CloudSelectionIncomplete('deadline')
-            if state['position'] >= len(state['ordered']):
-                state['phase'] += 1
-                state['position'] = 0
-                state['message_after'] = None
-                continue
-            pid = state['ordered'][state['position']]
-            scope, params = '', [pid, state['upper']]
-            if state['message_after'] is not None:
-                posted, mid = state['message_after']
-                comparison = '>' if oldest_first else '<'
-                if posted is None:
-                    scope = f' AND ((posted_at_ts IS NULL AND message_id{comparison}?)' + (
-                        ' OR posted_at_ts IS NOT NULL)' if oldest_first else ')')
-                    params.append(mid)
-                else:
-                    scope = f' AND ((posted_at_ts,message_id){comparison}(?,?)' + (
-                        ')' if oldest_first else ' OR posted_at_ts IS NULL)')
-                    params.extend((posted, mid))
-            # Rank patients once; walk each patient's existing time index in bounded pages.
-            page = ledger.db.execute('SELECT message_id,posted_at_ts FROM messages '
-                'WHERE project_id=? AND message_id<=?' + scope +
-                f' ORDER BY posted_at_ts {order},message_id {order} LIMIT ?',
-                (*params, _CLOUD_PRIORITY_PAGE)).fetchall()
-            archived, rehold = phases[state['phase']]
-            for mid, posted in page:
-                if selected and deadline - time.monotonic() <= 1.0:
-                    break
-                if posted is not None and (type(posted) not in (int, float) or not math.isfinite(posted)):
-                    raise _CloudSelectionIncomplete('ordering_unverified')
-                found = _select(None, 1, archived, rehold, scope=' AND m.message_id=?', scope_params=(mid,))
-                state['message_after'] = (posted, mid)
-                if found:
-                    state['ready'].append((mid, archived, rehold))
-                    selected.extend(found)
-                if len(selected) >= limit:
-                    break
-            else:
-                if len(page) < _CLOUD_PRIORITY_PAGE:
-                    state['position'] += 1
-                    state['message_after'] = None
-        if time.monotonic() >= deadline:
-            raise _CloudSelectionIncomplete('deadline')
-        return selected, None if oldest_first else 0
 
     rows, fresh_selected = [], None if oldest_first else 0
     # an admission set (canonical engine) already decides what may run

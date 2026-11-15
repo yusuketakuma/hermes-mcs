@@ -5,7 +5,6 @@ import extract_llm_provider
 import extract_llm_qc
 import extract_llm_resident
 import extract_llm_runner
-import extract_llm_selection
 import extract_llm_store
 
 import patient_context_quality_controller
@@ -606,7 +605,6 @@ def test_context_only_early_return_never_reads_a_runtime_route_or_credentials(ru
     monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
-    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', forbidden)
     monkeypatch.setattr(worker.cloud_policy, 'api_key', forbidden)

@@ -35,6 +35,7 @@ import cloud_policy
 import cloud_usage_accounting
 import cloud_history_scope
 import cloud_backlog
+import defer_reasons
 import cloud_inference
 import llm_retry
 import mcs_config
@@ -107,6 +108,7 @@ _LOADED_SOURCE_PATHS = dict((("extract_llm", str(Path(__file__).with_name("extra
                        ("cloud_usage_accounting", cloud_usage_accounting.__file__),
                        ("cloud_history_scope", cloud_history_scope.__file__),
                        ("cloud_backlog", cloud_backlog.__file__),
+                       ("defer_reasons", defer_reasons.__file__),
                        ("cloud_inference", cloud_inference.__file__),
                        ("llm_retry", llm_retry.__file__),
                        ("mcs_config", mcs_config.__file__),
@@ -272,10 +274,8 @@ def _writer_current(*, full: bool = False) -> bool:
 
 
 def _unsealed_source_pred(r) -> str:
-    """A sealed (v4-adopted) source still admits a required contract-bound
-    cloud write; every other caller keeps the sealed-source fence."""
-    return ("1=1" if isinstance(r, dict) and r.get("_required_cloud_contract")
-            else f"{current_v4_id()} IS NULL")
+    """Keep the sealed-source fence: a v4-adopted source admits no extraction write."""
+    return f"{current_v4_id()} IS NULL"
 
 
 def _source_writable(db, r) -> bool:
@@ -422,9 +422,6 @@ _STALE_GC_CURSOR_RESERVE_S = 0.05
 
 
 _STALE_GC_CLAIM_PAGE = 64
-
-
-_CLOUD_PRIORITY_PAGE = 128
 
 
 SEMANTIC_FIRST_S = 1800.0
