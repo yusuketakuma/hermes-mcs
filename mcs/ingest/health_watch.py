@@ -1374,8 +1374,8 @@ def main(argv: list | None = None) -> int:
         if cfg is None:
             raise ValueError("configuration_unreadable")
     except (ProviderSettingsUnreadable, OSError, ValueError, TypeError, RecursionError):
-        # A settings fault also fails the producer: stopping here would
-        # silence both. Watch on alert-only settings and still exit non-zero.
+        # Keep the fault observable even when settings cannot supply an alert target.
+        # Only the alert-only view may be used; recovery still needs verified settings.
         print(json.dumps({"status": "blocked", "reason": CONFIG_BLOCKED}), file=sys.stderr)
         blocked, cfg = True, alert_only_config(args.config or CONF_PATH)
     # A wedged watcher would hold the lock and turn every later run into a

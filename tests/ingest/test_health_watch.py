@@ -22,11 +22,15 @@ import health_policy
 
 
 @pytest.fixture(autouse=True)
-def no_live_disk_probe(monkeypatch):
+def no_live_disk_probe(monkeypatch, tmp_path):
     # These file-evidence cases cover an unavailable probe; live recovery is
     # exercised separately in test_runtime_budget_fairness.py.
     import health_report
     monkeypatch.setattr(health_report, "attachment_free_mb", lambda path=None: None)
+    config = tmp_path / "watcher-config.json"
+    config.write_text("{}")
+    config.chmod(0o600)
+    monkeypatch.setattr(health_watch, "CONF_PATH", str(config))
 
 
 @pytest.mark.parametrize("marker", ["pending", "authority"])
@@ -188,7 +192,7 @@ def test_known_backup_failure_reaches_operator_alert(tmp_path, capsys, code, mea
                            "backup": {"state": "degraded", "reasons": ["backup_failed"],
                                       "failure_code": code}})
     health_watch.main(["--home", str(tmp_path), "--now", "1000",
-                       "--config", str(tmp_path / "none.json")])
+                       "--config", str(tmp_path / "watcher-config.json")])
     out = capsys.readouterr().out
     assert meaning in out
     assert "コード: degraded backup_not_verified" in out
@@ -253,7 +257,7 @@ def test_non_ok_reasons_and_last_success_reach_status_and_alert(tmp_path, capsys
         "semantic_jobs": {"pending": 3, "oldest_age_s": 60},
         "extract_qc_jobs": {"pending": 0, "oldest_age_s": "bad"}})
     assert health_watch.main(["--home", str(tmp_path), "--now", "1000",
-                              "--config", str(tmp_path / "none.json")]) == 0
+                              "--config", str(tmp_path / "watcher-config.json")]) == 0
     out = capsys.readouterr().out
     assert "コード: degraded notification_held,backup_not_verified" in out
     assert "最終正常 01-01 09:06" in out
@@ -267,7 +271,7 @@ def test_non_ok_reasons_and_last_success_reach_status_and_alert(tmp_path, capsys
         str(tmp_path / "data" / "health.json"), now=1000, deadline_s=900)
     assert r["state_reasons"] is None and r["last_ok_at"] is None
     assert health_watch.main(["--home", str(tmp_path), "--now", "1001",
-                              "--config", str(tmp_path / "none.json")]) == 0
+                              "--config", str(tmp_path / "watcher-config.json")]) == 0
     out = capsys.readouterr().out
     assert "コード: failed unknown" in out and "最終正常 不明" in out
     assert r["held_reasons"] is None
@@ -287,7 +291,7 @@ def test_malformed_reason_fields_stay_unknown(tmp_path, capsys, reasons, held):
                             "state_reasons": reasons,
                             "notify": {"held_reasons": held}})
     assert health_watch.main(["--home", str(tmp_path), "--now", "1000",
-                              "--config", str(tmp_path / "none.json")]) == 0
+                              "--config", str(tmp_path / "watcher-config.json")]) == 0
     assert "理由を特定できません" in capsys.readouterr().out
     st = json.loads((tmp_path / "data" / "health_watch_status.json").read_text())
     assert st["state_reasons"] is None and st["held_reasons"] is None
@@ -319,7 +323,7 @@ def test_stale_never_shows_recorded_none_as_cause(tmp_path, capsys, now,
     (tmp_path / "data" / "health_watch.json").write_text(
         json.dumps({"last": {"status": "failed", "health_at": 1}}))
     assert health_watch.main(["--home", str(tmp_path), "--now", str(now),
-                              "--config", str(tmp_path / "none.json")]) == 0
+                              "--config", str(tmp_path / "watcher-config.json")]) == 0
     output = capsys.readouterr().out
     assert (printed in output) if printed else output == ""
 
@@ -465,7 +469,7 @@ def test_disk_low_alerts_on_transitions_only(tmp_path, capsys):
     _health_file(tmp_path, {"overall": "ok", "at": 5690, "disk_low": True,
                             "disk_free_mb": 800})
     health_watch.main(["--home", str(tmp_path), "--now", "5700",
-                       "--config", str(tmp_path / "none.json")])
+                       "--config", str(tmp_path / "watcher-config.json")])
     assert "（残り 800 MB）" in capsys.readouterr().out
 
 
@@ -969,7 +973,7 @@ def test_alert_witness_write_failure_prevents_send(tmp_path, monkeypatch):
 
     monkeypatch.setattr(safe_io, 'atomic_publish_text', publish)
     _health_file(tmp_path, {"overall": "failed", "at": 990})
-    args = ["--home", str(tmp_path), "--config", str(tmp_path / "none.json")]
+    args = ["--home", str(tmp_path), "--config", str(tmp_path / "watcher-config.json")]
     assert health_watch.main(args + ["--now", "1000"]) == 1
     assert not sent
     assert health_watch.main(args + ["--now", "1001"]) == 0
@@ -979,7 +983,7 @@ def test_alert_witness_write_failure_prevents_send(tmp_path, monkeypatch):
 def test_unknown_delivery_is_not_resent_when_a_reason_drops(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(health_watch, "deliver_alert", lambda *args, config_path=None: calls.append(args))
-    args = ["--home", str(tmp_path), "--config", str(tmp_path / "none.json")]
+    args = ["--home", str(tmp_path), "--config", str(tmp_path / "watcher-config.json")]
     for at in (390, 690, 990):         # transient reasons alert on the third observation
         _health_file(tmp_path, {"overall": "degraded", "at": at,
                                 "state_reasons": ["stage_errors", "collection_incomplete"]})
@@ -1000,7 +1004,7 @@ def test_watcher_crash_after_send_keeps_unknown_witness(tmp_path, monkeypatch):
 
     monkeypatch.setattr(health_watch, "deliver_alert", send)
     _health_file(tmp_path, {"overall": "failed", "at": 990})
-    args = ["--home", str(tmp_path), "--config", str(tmp_path / "none.json")]
+    args = ["--home", str(tmp_path), "--config", str(tmp_path / "watcher-config.json")]
     with pytest.raises(KeyboardInterrupt):
         health_watch.main(args + ["--now", "1000"])
     health_watch.main(args + ["--now", "1060"])
@@ -1022,7 +1026,7 @@ def test_delivery_result_write_failure_reports_error_and_holds_next_send(tmp_pat
 
     monkeypatch.setattr(safe_io, 'atomic_publish_text', publish)
     _health_file(tmp_path, {"overall": "failed", "at": 990})
-    args = ["--home", str(tmp_path), "--config", str(tmp_path / "none.json")]
+    args = ["--home", str(tmp_path), "--config", str(tmp_path / "watcher-config.json")]
     assert health_watch.main(args + ["--now", "1000"]) == 1
     report = json.loads((tmp_path / health_watch.STATUS_REL).read_text())
     assert report["delivery_error"] == "state_persist_failed"
@@ -1045,7 +1049,7 @@ def test_detection_state_write_failure_still_reports_delivery_error(tmp_path, mo
     monkeypatch.setattr(safe_io, 'atomic_publish_text', fail_state)
     _health_file(tmp_path, {"overall": "failed", "at": 990})
     assert health_watch.main(["--home", str(tmp_path), "--now", "1000",
-                              "--config", str(tmp_path / "none.json")]) == 1
+                              "--config", str(tmp_path / "watcher-config.json")]) == 1
     report = json.loads((tmp_path / health_watch.STATUS_REL).read_text())
     assert report["delivery_error"] == "state_persist_failed"
     assert not calls
@@ -1053,7 +1057,7 @@ def test_detection_state_write_failure_still_reports_delivery_error(tmp_path, mo
 
 def test_overlapping_watchers_do_not_send_twice(tmp_path, monkeypatch):
     calls = []
-    args = ["--home", str(tmp_path), "--config", str(tmp_path / "none.json")]
+    args = ["--home", str(tmp_path), "--config", str(tmp_path / "watcher-config.json")]
 
     def send(*unused, config_path=None):
         calls.append(True)
@@ -1070,7 +1074,7 @@ def test_disk_alert_never_echoes_a_non_numeric_producer_field(tmp_path, capsys):
     _health_file(tmp_path, {"overall": "ok", "at": 990, "disk_low": True,
                             "disk_free_mb": "synthetic private free text"})
     health_watch.main(["--home", str(tmp_path), "--now", "1000",
-                       "--config", str(tmp_path / "none.json")])
+                       "--config", str(tmp_path / "watcher-config.json")])
     output = capsys.readouterr().out
     assert "synthetic private free text" not in output
     assert "残り 不明" in output
