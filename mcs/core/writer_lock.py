@@ -1,4 +1,6 @@
 """Own writer-lock descriptors and reject stale generations after transport or waiting."""
+from __future__ import annotations
+
 import fcntl
 import os
 import time
