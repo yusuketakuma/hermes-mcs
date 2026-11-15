@@ -6,7 +6,7 @@
   "details": [
     "記録は月ごとの access-YYYY-MM.jsonl（0600、ディレクトリ0700）に1行ずつ追記し、各行が直前の行のSHA-256を持ちます。行の削除・改変・月ファイルの欠落は mcs_compliance.py access-log verify で検出します。",
     "mcs_compliance.py access-log review は利用者ごとの件数・閲覧患者数・拒否・夜間（JST 20〜7時）の件数を出し、定期確認の対象に印を付けます。保存期間の自動削除はしません。",
-    "外部AIの確認記録は <MCS_ROOT>/external_transfer.json（0600）に、確認者・根拠・対象サービス・日時と過去の確認履歴を保存します。記録が読めない場合は自動有効化しません。"
+    "外部AIの確認記録は MCS_ROOT 直下の external_transfer.json（0600）に、確認者・根拠・対象サービス・日時と過去の確認履歴を保存します。記録が読めない場合は自動有効化しません。"
   ],
   "refs": ["mcs/core/access_log.py", "mcs/core/external_transfer.py", "mcs/ops/mcs_compliance.py", "adapters/common/dispatch.py", "mcs/llm/cloud_policy.py", "mcs/semantic/semantic_policy.py", "mcs/ops/setup/setup_config_snapshot.py"]
 }
