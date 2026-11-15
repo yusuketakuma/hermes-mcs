@@ -87,7 +87,10 @@ def test_original_detail_fields_reach_already_found_without_raw_metadata(tmp_pat
         led.artifact_add("extract_llm", json.dumps({"patient_context": raw}, ensure_ascii=False),
                          project_id=1, message_id=1, meta={"hash": _hash(led),
                          "extract_version": extract_llm.EXTRACT_VERSION})
-        assert next(mcs_queries.patient_context_sources(led.db, 1, mid=1))["items"] == []
+        # Projection contract only, read as before 230c4d15 (no adoption proof): this synthetic
+        # unresolved refers_to can never carry a material proof, and adoption is covered by
+        # the proof tests in test_patient_context_refresh.
+        assert next(mcs_queries.patient_context_sources(led.db, 1, mid=1, material=False))["items"] == []
         led.artifact_add("extract_llm", json.dumps({"patient_context": raw}, ensure_ascii=False),
                          project_id=1, message_id=1, meta={"hash": _hash(led),
                          "extract_version": extract_llm.EXTRACT_VERSION,
@@ -107,7 +110,7 @@ def test_original_detail_fields_reach_already_found_without_raw_metadata(tmp_pat
              "evidence": quotes[2]}], "source": dict(origin)},
         ]
         total_changes = led.db.total_changes
-        source = next(mcs_queries.patient_context_sources(led.db, 1, mid=1))
+        source = next(mcs_queries.patient_context_sources(led.db, 1, mid=1, material=False))
         # The later point-in-time reference feature preserves a structurally
         # resolved identity; it does not assert that the referenced row exists
         # or remains current. The original grounded attributes remain unchanged.
