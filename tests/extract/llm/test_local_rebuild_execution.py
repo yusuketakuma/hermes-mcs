@@ -114,7 +114,7 @@ def test_a_shadow_or_owned_configuration_still_prepares_it_local_only(routed, mo
     jobs, _skipped, blocked = worker._prepare_jobs(ledger, rows, ('', 'synthetic-model'), False,
                                                    load_checkpoints=False)
     assert blocked == 0 and len(jobs) == 1
-    job = jobs[0]
+    job = jobs[0][0]                                    # (row, context, saved, hints, qc)
     assert job['_cloud_mode'] == 'off' and job['_local_rebuild'] is not None
     assert not job.get('_cloud_owned') and not job.get('_superseded_local')
     calls, reserved, results = routed[2], routed[3], routed[4]
@@ -215,7 +215,8 @@ def test_a_multi_piece_body_with_a_quality_repair_stays_local_and_tagged(routed,
     monkeypatch.setattr(worker.extract_quality, "completeness_issues", once)
     done = 0
     for _ in range(4):
-        done = worker.run_pending(ledger, limit=1, budget_s=200)["done"]
+        # the repair needs its own call budget after the remaining pieces' (_MIN_CALL_S each)
+        done = worker.run_pending(ledger, limit=1, budget_s=600)["done"]
         if done:
             break
     assert done == 1 and len(_current(ledger)) == 1                   # the run completed and was adopted
