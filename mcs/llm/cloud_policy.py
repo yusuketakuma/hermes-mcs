@@ -337,7 +337,9 @@ def resolve_settings(cfg, root=None, *, available_providers=None):
         provider = next((name for name in c["provider_order"] if key_present(name)), c["provider_order"][0])
     block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
     if (block is None or isinstance(block, dict) and "mode" not in block) and not errors:
-        c, errors = cloud_config(cfg, key_present=key_present(provider))
+        import external_transfer
+        c, errors = cloud_config(cfg, key_present=key_present(provider)
+                                 and external_transfer.auto_enable_allowed(provider, root))
     c["provider"] = provider
     if isinstance(block, dict) and "model" in block:
         try:

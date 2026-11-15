@@ -482,6 +482,9 @@ def bootstrap_fresh(config_path, legacy_path, proof, data_token, update_fd):
             checked = provider_settings.read(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
             if checked['mode'] != 'split':
                 raise ValueError('fresh_readback_unverified')
+            # A new installation sends nothing to external AI on an API key alone.
+            import external_transfer
+            external_transfer.require(root)
             marker, raw, identity = _fresh_marker_read(root)
             if marker['config'] is not None:
                 raise ValueError('fresh_marker_invalid')

@@ -1,12 +1,14 @@
 """Dispatch authenticated MCS commands with shared read and human-confirmation gates."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
 import re
 from typing import Any
 
 from . import projects
 from .access import (validate_context, resolve_settings, authorize, authorize_system, id_text, actor)
-from .mcs_api import modules, deny, ok
+from .mcs_api import bootstrap, modules, deny, ok
 from .human_commands import (CREATE_FIELDS, UPDATE_FIELDS, CONTROL_FIELDS,
                              build_preview, build_control_preview, confirm)
 
@@ -114,10 +116,47 @@ def dispatch(data: dict, settings: dict[str, Any],
     # an incomplete fetch. Anything that is not a bare code (paths, values)
     # still collapses to operation_failed.
     try:
-        return dispatch_operation(data, settings, identity, authorized=authorized)
+        reply = dispatch_operation(data, settings, identity, authorized=authorized)
     except ValueError as error:
         code = str(error)
-        return deny(code if _DENIAL_CODE.fullmatch(code) else "operation_failed")
+        reply = deny(code if _DENIAL_CODE.fullmatch(code) else "operation_failed")
+    return _audited(reply, data, settings, identity)
+
+
+def _outcome(reply: str) -> str:
+    try:
+        parsed = json.loads(reply)
+    except ValueError:
+        # The summary answer is display text; its failures are bare codes.
+        return reply if _DENIAL_CODE.fullmatch(reply) else "ok"
+    if isinstance(parsed, dict) and parsed.get("ok") is False:
+        return str(parsed.get("error"))
+    return "ok"
+
+
+def _audited(reply: str, data: dict, settings: dict[str, Any],
+             identity: dict[str, str | None]) -> str:
+    """Record who touched which patient before an answer leaves the host.
+
+    A successful read whose record cannot be written is withheld (fail
+    closed). Denials carry no patient data, and a confirmed write already
+    has its own receipt, so those answers are returned unchanged.
+    """
+    bootstrap()
+    import access_log
+    phase, op, outcome = data.get("phase"), data.get("op"), _outcome(reply)
+    try:
+        access_log.record(
+            Path(settings["inbox"]).parent, via=identity.get("transport") or "discord",
+            actor=actor(identity), channel=identity.get("chat_id"),
+            op=f"{op}.{phase}" if isinstance(phase, str) else op,
+            kind=data.get("kind") or data.get("action"),
+            project_id=data.get("project_id"), outcome=outcome,
+            query="query" in data)
+    except (access_log.AccessLogError, OSError, KeyError, TypeError):
+        if outcome == "ok" and phase != "confirm":
+            return deny("access_log_unavailable")
+    return reply
 
 
 def dispatch_operation(data: dict, settings: dict[str, Any],
