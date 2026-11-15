@@ -117,7 +117,7 @@ def _check_unit(ledger, project_id, message_id, stop=()):
     binding = inference_dependency_loss.source_binding(db, project_id, message_id)
     if row is None or not isinstance(binding, str) or not binding:
         raise _Excluded('source_missing')
-    if _current(ledger, message_id, row["content_hash"]) or _valid_material(db, row):
+    if _valid_material(db, row) or _current(ledger, message_id, row["content_hash"]):
         raise _Excluded('already_current')
     pending = db.execute(f"SELECT ({pending_pred(db)}) FROM messages m WHERE m.project_id=? AND m.message_id=?",
                          (project_id, message_id)).fetchone()
