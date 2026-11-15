@@ -286,26 +286,31 @@ def test_a_local_length_stop_splits_the_piece_and_every_split_stays_local_and_ta
         return {"symptoms": [], "patient_context": [{"category": "living", "subject": "patient",
                                                      "text": piece, "evidence": piece}]}
     monkeypatch.setattr(extract_llm_engine, '_llm_call', local)
-    answered = []
-    original = local
+    import extract_llm_runner
+    import extract_llm_store
+    written = {}                                       # checkpoint key -> (split plan?, tag) at write time
+    persist = extract_llm_store._persist_chunks
 
-    def counted(prompt, **kwargs):
-        answer = original(prompt, **kwargs)
-        answered.append(answer is not None)
-        return answer
-    monkeypatch.setattr(extract_llm_engine, '_llm_call', counted)
+    def observe(ledger, r, chunks, context=None, **kwargs):
+        accepted = persist(ledger, r, chunks, context, **kwargs)
+        if accepted:
+            for key in chunks:
+                written[str(key)] = (kwargs.get('split_size') is not None, json.loads(ledger.db.execute(
+                    "SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' AND message_id=1 "
+                    "ORDER BY artifact_id DESC LIMIT 1").fetchone()[0]).get('local_rebuild'))
+        return accepted
+    monkeypatch.setattr(worker, '_persist_chunks', observe)
+    monkeypatch.setattr(extract_llm_runner, '_persist_chunks', worker._persist_chunks)
     done = 0
     for _ in range(3):
         done = worker.run_pending(ledger, limit=1, budget_s=180)['done']
         if done:
             break
     assert done == 1 and len(_current(ledger)) == 1                   # the split run completed
-    assert stopped and answered.count(True) >= 2                       # both halves were answered
-    assert calls == [] and reserved == [] and results == []
-    splits = [json.loads(meta) for (meta,) in ledger.db.execute(
-        "SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' AND message_id=1")]
-    assert any('split_size' in meta for meta in splits)                # the split plan was written
-    assert all(meta.get('local_rebuild') == local_rebuild.tag(unit) for meta in splits)
+    assert stopped and calls == [] and reserved == [] and results == []
+    assert written.get('0', (False,))[0]                               # the split plan, before cleanup
+    assert {'0:0', '0:1'} <= set(written)                              # both children were answered
+    assert all(item[1] == local_rebuild.tag(unit) for item in written.values())
 
 
 def test_a_failed_reprocessing_of_an_adopted_unit_settles_with_the_tag_and_stays_adopted(routed, monkeypatch):
@@ -322,6 +327,9 @@ def test_a_failed_reprocessing_of_an_adopted_unit_settles_with_the_tag_and_stays
         ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,created_at) "
                           "VALUES('extract_feedback_v1',1,1,?,0)", (json.dumps({'artifact_id': final['artifact_id']}),))
     _no_cloud_unit(monkeypatch)
+    import extract_llm_runner
+    monkeypatch.setattr(worker, '_llm_up', lambda **kwargs: True)              # reach the settling branch
+    monkeypatch.setattr(extract_llm_runner, '_llm_up', worker._llm_up)
     monkeypatch.setattr(extract_llm_engine, '_llm_call', lambda prompt, **_kw: None)
     worker.run_pending(ledger, limit=1, budget_s=180)
     [settled] = _current(ledger)
@@ -362,3 +370,38 @@ def test_a_reservation_landing_during_the_local_call_stops_the_adoption_write(ro
     assert worker.run_pending(ledger, limit=1, budget_s=180)['done'] == 0
     assert local.lapsed and not _current(ledger)
     assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.PROOF_CHANGED
+
+
+
+@pytest.mark.parametrize('tamper', [
+    "json_remove(meta,'$.integrity')",
+    "json_remove(meta,'$.integrity.completeness','$.integrity.completeness_chunks')",
+    "json_remove(meta,'$.integrity.completeness_chunks')",
+    "json_set(meta,'$.integrity.completeness_chunks',99)",
+])
+def test_a_tampered_completeness_record_is_never_an_authentic_adoption(routed, monkeypatch, tamper):
+    """The authenticity reader waives only the resolution: missing, one-sided or mismatched
+    completeness evidence on the tagged final is rejected (the tag never stands in for it)."""
+    ledger, *_ = routed
+    _approved(ledger, monkeypatch)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', lambda prompt, **_kw: {'symptoms': [], 'summary': '合成'})
+    assert worker.run_pending(ledger, limit=1, budget_s=180)['done'] == 1
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ADOPTED
+    [final] = _current(ledger)
+    with ledger.db:
+        ledger.db.execute(f"UPDATE artifacts SET meta={tamper} WHERE artifact_id=?", (final['artifact_id'],))
+    assert local_rebuild.permit(ledger, 1, 1) != local_rebuild.ADOPTED
+
+
+def test_tampered_final_content_is_never_an_authentic_adoption(routed, monkeypatch):
+    ledger, *_ = routed
+    _approved(ledger, monkeypatch)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', lambda prompt, **_kw: {'symptoms': [], 'summary': '合成'})
+    assert worker.run_pending(ledger, limit=1, budget_s=180)['done'] == 1
+    [final] = _current(ledger)
+    content = json.loads(final['content'])
+    content['summary'] = '改ざんした合成'
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                          (json.dumps(content, ensure_ascii=False), final['artifact_id']))
+    assert local_rebuild.permit(ledger, 1, 1) != local_rebuild.ADOPTED

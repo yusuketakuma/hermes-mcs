@@ -192,7 +192,7 @@ def _rebuild_guard(ledger, r):
     """...and re-proves its permit inside the same adoption transaction (other rows: unchanged)."""
     if r.get("_local_rebuild") is None:
         return None
-    return lambda: local_rebuild.permit(ledger, r["project_id"], r["message_id"]) in local_rebuild.RUNNABLE
+    return lambda: local_rebuild.permit_for(ledger, r["_local_rebuild"]) in local_rebuild.RUNNABLE
 
 
 def run_pending(ledger, limit: int = 20, budget_s: float = 180,
@@ -668,7 +668,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             # An approved local rebuild: every local dispatch (first, repair, split) and the
             # adoption re-prove the same permit; provider stays None so no path reaches cloud.
             def permitted():
-                return local_rebuild.permit(ledger, r["project_id"], r["message_id"]) in local_rebuild.RUNNABLE
+                return local_rebuild.permit_for(ledger, r["_local_rebuild"]) in local_rebuild.RUNNABLE
 
             def request_guard(prompt, kind="first"):
                 try:

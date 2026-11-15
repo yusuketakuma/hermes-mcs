@@ -231,7 +231,9 @@ def _history_proof(ledger, project_id, message_id, stop=()):
                     raise _Excluded('receipt_inconsistent')
                 if answer:
                     raise _Excluded('answer_stored')
-            # Another route's rows are left out only once they verify as that route's accounting.
+            # Another route's rows are left out only once they verify as that route's accounting
+            # (its reservation, results and dispositions parse and settle as a set); whether that
+            # other send settled is that route's own state and never changes this proof.
             for meta, item, linked in foreign.values():
                 maximum = cloud_policy._reserve_valid(meta, item)
                 if linked:
@@ -444,6 +446,19 @@ def health_counts(db):
             "AND COALESCE(json_extract(meta,'$.auto_retry'),0)>=? END LIMIT 1",
             (KIND, message_id, EXTRACT_VERSION, REVIVE_PER_INPUT)).fetchone() is not None
     return {'approved': len(units), 'written': written, 'exhausted': exhausted}
+
+
+def permit_for(ledger, unit):
+    """permit() for the approval a row was prepared with: a newer or different current approval
+    of the same unit is not this one."""
+    try:
+        approvals = approved_units(ledger.db)
+    except sqlite3.Error:
+        return UNVERIFIED
+    current = approvals.get((unit['project_id'], unit['message_id']))
+    if current is None or tag(current) != tag(unit):
+        return PROOF_CHANGED
+    return permit(ledger, unit['project_id'], unit['message_id'], approvals=approvals)
 
 
 def permit(ledger, project_id, message_id, *, approvals=None):

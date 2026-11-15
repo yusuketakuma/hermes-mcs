@@ -85,7 +85,8 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, re
     ``adverse_review=False`` (material only) asks whether the selected final is still the
     authentic adoption it was, not whether it may be published now: the adverse review, the
     completeness resolution, validation drops and applied=False markers are quality and are
-    not required; every binding, provenance, seal and completeness-claim proof still is.
+    not required; every binding, provenance, seal, the completeness evidence's shape
+    (completeness_shaped) and its claim proof still are.
     Publication readers never pass it."""
     out = {"state": "attention", "completed": 0, "total": 0, "backend": "legacy"}
     if not row:
@@ -221,8 +222,10 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, re
                     for key in ("items_dropped", "evidence_dropped"))):
             return out
         authentic_only = material and not adverse_review
-        if (bound and required_contract is None and not authentic_only
-                and not extract_quality.completeness_resolved(meta)):
+        # The authenticity reader keeps the completeness evidence's shape and claim checks and
+        # waives only its resolution, which is quality.
+        evidenced = extract_quality.completeness_shaped if authentic_only else extract_quality.completeness_resolved
+        if bound and required_contract is None and not evidenced(meta):
             return out
         if (bound and isinstance(integrity, dict)
                 and ("completeness" in integrity or "completeness_chunks" in integrity)):
