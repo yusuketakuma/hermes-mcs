@@ -119,14 +119,22 @@ def test_local_extraction_carries_and_its_completeness_claim_matches_the_result(
         _hint_coverage(result, extract_llm._rule_hints({"body_text": BODY, "posted_at": None}), BODY))
 
 
-@HELD_CARRY
-def test_local_conflict_leaves_the_candidate_unchanged_and_is_counted(monkeypatch):
+def test_local_conflict_leaves_the_candidate_unchanged(monkeypatch):
     raw = {"summary": "合成", "symptoms": [{**PRIOR_FEVER, "negated": False}]}
     monkeypatch.setattr(extract_llm_engine, "_llm_call", _model(raw, []))
     meta = {}
     result = extract_llm.llm_extract(BODY, meta_out=meta, protected_prior={"symptoms": [PRIOR_FEVER]})
-    assert meta["protected_conflict"] >= 1 and "protected_carried" not in meta
+    assert "protected_carried" not in meta
     assert quality.protected_lost({"symptoms": [PRIOR_FEVER]}, result, BODY) == {"symptoms": 1}
+
+
+@HELD_CARRY
+def test_a_local_conflict_is_counted(monkeypatch):
+    raw = {"summary": "合成", "symptoms": [{**PRIOR_FEVER, "negated": False}]}
+    monkeypatch.setattr(extract_llm_engine, "_llm_call", _model(raw, []))
+    meta = {}
+    extract_llm.llm_extract(BODY, meta_out=meta, protected_prior={"symptoms": [PRIOR_FEVER]})
+    assert meta["protected_conflict"] >= 1
 
 
 def test_cloud_results_are_never_carried(monkeypatch):
@@ -273,18 +281,30 @@ def test_run_pending_carries_the_stored_prior_into_a_short_local_candidate(tmp_p
         db.close()
 
 
+def _held_disagreeing_run(db, monkeypatch):
+    aid = _seed_prior(db, body=HOLD_BODY, prior=HOLD_PRIOR)
+    original = dict(db.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (aid,)).fetchone())
+    # A disagreeing item the validator keeps, so the hold receipt sees the same conflict.
+    _local(monkeypatch, HOLD_CANDIDATE)
+    # Above _MIN_REPAIR_S: the protected-loss repair runs instead of deferring on the deadline.
+    return aid, original, extract_llm.run_pending(db, limit=1, budget_s=180)
+
+
 @HELD_CARRY
+def test_a_disagreeing_local_candidate_is_counted_as_a_protected_conflict(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    try:
+        _aid, _original, res = _held_disagreeing_run(db, monkeypatch)
+        assert res["llm_calls"]["protected_conflict"] >= 1
+    finally:
+        db.close()
+
+
 def test_run_pending_keeps_a_disagreeing_local_candidate_held(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     try:
-        aid = _seed_prior(db, body=HOLD_BODY, prior=HOLD_PRIOR)
-        original = dict(db.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (aid,)).fetchone())
-        # A disagreeing item the validator keeps, so the hold receipt sees the same conflict.
-        _local(monkeypatch, HOLD_CANDIDATE)
-        # Above _MIN_REPAIR_S: the protected-loss repair runs instead of deferring on the deadline.
-        res = extract_llm.run_pending(db, limit=1, budget_s=180)
+        aid, original, res = _held_disagreeing_run(db, monkeypatch)
         assert (res["done"], res["held_prior"]) == (0, 1)
-        assert res["llm_calls"]["protected_conflict"] >= 1
         assert dict(db.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()) == original
         [receipt] = db.artifacts(extract_llm.UPGRADE_KIND)
         assert json.loads(receipt["content"])["lost_class"] == {"symptoms": {"conflict": 1, "absent": 1}}
