@@ -9,6 +9,7 @@ import time
 import pytest
 
 import ledger
+import ledger_schema
 import semantic
 import semantic_drain as drain
 import semantic_intake_hold as hold
@@ -377,14 +378,31 @@ def test_release_rechecks_cloud_guard_after_initial_validation(store, monkeypatc
 def test_release_with_negative_accounting_id_keeps_cloud_guard_isolated(store):
     _hold(store)
     with store.db:
-        store.db.execute("INSERT INTO artifacts(artifact_id,kind,meta) VALUES(-1,?,?)",
-                         ('cloud_usage_reserve', json.dumps({'reservation_id': 'synthetic'})))
-    plan = hold.prepare_release(store, 1, 1)
+        store.db.executemany("INSERT INTO artifacts(artifact_id,kind,meta) VALUES(?,?,?)",
+                             [(-index, kind, json.dumps({'reservation_id': 'synthetic'}))
+                              for index, kind in enumerate(ledger_schema.CLOUD_USAGE_KINDS, 1)])
+
+    def accounting_rows():
+        return [tuple(row) for row in store.db.execute(
+            'SELECT * FROM artifacts WHERE kind IN (?,?,?) ORDER BY artifact_id',
+            ledger_schema.CLOUD_USAGE_KINDS)]
+
+    rows = accounting_rows()
+    assert len(rows) == len(ledger_schema.CLOUD_USAGE_KINDS) == 3
+    before_prepare = _state(store)
     before = tuple(store.db.execute('SELECT * FROM main.cloud_usage_guard').fetchone())
-    assert _release(store, plan)['released'] == 1
+    plan = hold.prepare_release(store, 1, 1)
+    assert _state(store) == before_prepare and accounting_rows() == rows
+    assert tuple(store.db.execute('SELECT * FROM main.cloud_usage_guard').fetchone()) == before
+    result = _release(store, plan)
+    assert result['released'] == 1 and accounting_rows() == rows
     after = tuple(store.db.execute('SELECT * FROM main.cloud_usage_guard').fetchone())
     assert after[:2] == before[:2] and after[3] == before[3]
     assert after[2] in (before[2], before[2] + 1)
+    after_release = _state(store)
+    assert _release(store, plan) == result
+    assert _state(store) == after_release and accounting_rows() == rows
+    assert tuple(store.db.execute('SELECT * FROM main.cloud_usage_guard').fetchone()) == after
 
 
 def test_release_commit_failure_rolls_back_cloud_guard_and_intent(store):
@@ -395,9 +413,11 @@ def test_release_commit_failure_rolls_back_cloud_guard_and_intent(store):
     plan = hold.prepare_release(store, 1, 1)
     before = _state(store)
     guard = tuple(store.db.execute('SELECT * FROM main.cloud_usage_guard').fetchone())
+    denied = []
 
     def deny_commit(action, argument, *_):
         if action == sqlite3.SQLITE_TRANSACTION and argument == 'COMMIT':
+            denied.append(True)
             return sqlite3.SQLITE_DENY
         return sqlite3.SQLITE_OK
 
@@ -407,6 +427,7 @@ def test_release_commit_failure_rolls_back_cloud_guard_and_intent(store):
             _release(store, plan)
     finally:
         store.db.set_authorizer(None)
+    assert denied
     assert not store.db.in_transaction
     assert _state(store) == before
     assert tuple(store.db.execute('SELECT * FROM main.cloud_usage_guard').fetchone()) == guard
