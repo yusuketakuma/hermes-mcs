@@ -345,7 +345,7 @@ def test_expired_prices_stop_and_dryrun_is_scope_free(tmp_path, now, monkeypatch
         assert row["project_id"] is None and row["message_id"] is None
         assert "private-id" not in json.dumps(dict(row))
         assert c.usage_report(db)["daily_requests"] == 0
-        monkeypatch.setattr(c.time, "time", lambda: datetime(2026, 11, 26, tzinfo=c.JST).timestamp())
+        monkeypatch.setattr(c.time, "time", lambda: datetime(2026, 12, 16, tzinfo=c.JST).timestamp())
         with pytest.raises(AnthropicError, match="pricing_unverified"):
             _reserve(db)
         assert c.block_reason(db, _cfg(), "patient_context", 1) == "pricing_unverified"
