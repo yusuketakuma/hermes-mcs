@@ -113,7 +113,9 @@ def test_each_unproven_history_is_excluded_with_its_fixed_reason(legacy, damage,
     assert 1 not in planned
     # a present binding (null or a hash) is not a key-absent candidate, so the dry run never lists it
     present = 'input_binding' in damage and 'json_set' in damage
-    assert report['excluded'][reason] == (0 if present else 2 if reason == 'history_pruned' else 1)
+    # a broken usage row can also void the month tally, which the dry run checks first (fail closed)
+    counted = report['excluded'][reason] + (report['excluded']['tally_invalid'] if reason != 'history_pruned' else 0)
+    assert counted == (0 if present else 2 if reason == 'history_pruned' else 1)
 
 
 def test_one_bundle_approval_is_idempotent_and_permits_local_work_only(legacy):
@@ -180,7 +182,7 @@ def test_an_unreadable_permit_is_unverified_never_a_grant(legacy, monkeypatch):
 
     def busy(*_args, **_kwargs):
         raise sqlite3.OperationalError('synthetic interrupt')
-    monkeypatch.setattr(local_rebuild, 'unit_proof', busy)
+    monkeypatch.setattr(local_rebuild, '_history_proof', busy)   # the permit's own history re-proof
     assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.UNVERIFIED
 
 
@@ -213,7 +215,8 @@ def test_a_settled_but_unsuccessful_result_is_not_success(legacy, monkeypatch):
     ledger, _ = legacy
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     ledger.save_messages([_message(3)])
-    reservation = _reserve(ledger, 'synthetic prompt', route='reextract', unit='3', message_id=3)
+    with legacy_cloud_routes():   # reextract sends are closed in the live policy, like the fixture's seed
+        reservation = _reserve(ledger, 'synthetic prompt', route='reextract', unit='3', message_id=3)
     cloud_policy.record_result(ledger, reservation, _result(reservation, 'timeout', 'timeout'))
     with ledger.db:
         ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.input_binding') "
@@ -463,7 +466,8 @@ def test_an_adopted_unit_stays_adopted_only_while_its_usage_history_is_unchanged
                           "AND message_id=1)", (json.dumps({'command_id': req['command_id'], 'proof': unit['proof']}),))
     assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ADOPTED
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
-    _reserve(ledger, 'synthetic later prompt', route='reextract', unit='1', message_id=1)   # no result yet
+    with legacy_cloud_routes():
+        _reserve(ledger, 'synthetic later prompt', route='reextract', unit='1', message_id=1)   # no result yet
     assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.PROOF_CHANGED
     assert len(calls) == 2
 
