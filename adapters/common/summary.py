@@ -52,7 +52,7 @@ def _config(snapshot: Path) -> dict:
 def answer(snapshot, text: str, *, name: str = "", allowed=None,
            dialect: str = "plain", now: float | None = None,
            names: bool = True) -> dict:
-    """{"text", "parts"} for the scope in ``text`` or {"error"}.
+    """{"text", "parts", "project_ids"} for the scope in ``text`` or {"error"}.
     ``names`` False keeps patient names out (project ids only)."""
     path = Path(snapshot)
     if allowed is not None and not list(allowed):
@@ -82,4 +82,5 @@ def answer(snapshot, text: str, *, name: str = "", allowed=None,
     if age > STALE_S:
         parts["footer"].insert(0, {"type": "text", "text":
                                    f"※ 元データは約{int(age // 3600)}時間前のものです。"})
-    return {"text": notify_render.parts_text(parts, dialect), "parts": parts}
+    return {"text": notify_render.parts_text(parts, dialect), "parts": parts,
+            "project_ids": got.get("project_ids", [])}

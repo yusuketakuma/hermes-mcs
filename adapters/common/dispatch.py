@@ -123,11 +123,38 @@ def dispatch(data: dict, settings: dict[str, Any],
     return _audited(reply, data, settings, identity)
 
 
+# Only names this dispatcher itself defines reach the access record; anything
+# else a rejected command carried (possibly a patient name) is stored as invalid.
+_AUDIT_OPS = frozenset({"status", "read", "request", "control", "summary"})
+_AUDIT_PHASES = frozenset({"preview", "confirm", "receipt"})
+_AUDIT_KINDS = READ_KINDS | {"notification_receipt", "create", "update"} | frozenset(CONTROL_FIELDS)
+
+
+def _known(value, names):
+    if value is None:
+        return None
+    return value if isinstance(value, str) and value in names else "invalid"
+
+
+def _audit_op(op, phase):
+    label = _known(op, _AUDIT_OPS)
+    return label if label is None or phase is None else f"{label}.{_known(phase, _AUDIT_PHASES)}"
+
+
+class _Shown(str):
+    """Display text that carries its own access facts, which text cannot reveal."""
+
+    def __new__(cls, text, *, outcome="ok", patients=()):
+        shown = super().__new__(cls, text)
+        shown.outcome, shown.patients = outcome, frozenset(patients)
+        return shown
+
+
 def _parsed(reply: str):
     try:
         return json.loads(reply)
     except ValueError:
-        return None  # the summary answer is display text; its failures are bare codes
+        return None  # display text; a failure there is a bare code
 
 
 def _outcome(reply: str, parsed) -> str:
@@ -162,15 +189,18 @@ def _audited(reply: str, data: dict, settings: dict[str, Any],
     """
     bootstrap()
     import access_log
-    parsed = _parsed(reply)
-    phase, op, outcome = data.get("phase"), data.get("op"), _outcome(reply, parsed)
+    parsed = None if isinstance(reply, _Shown) else _parsed(reply)
+    outcome = reply.outcome if isinstance(reply, _Shown) else _outcome(reply, parsed)
+    patients = reply.patients if isinstance(reply, _Shown) else _returned_patients(parsed)
+    reply = str(reply)
+    phase, op = data.get("phase"), data.get("op")
     try:
         access_log.record(
             Path(settings["inbox"]).parent, via=identity.get("transport") or "discord",
             actor=actor(identity), channel=identity.get("chat_id"),
-            op=f"{op}.{phase}" if isinstance(op, str) and isinstance(phase, str) else op,
-            kind=data.get("kind") or data.get("action"),
-            project_id=data.get("project_id"), patients=_returned_patients(parsed),
+            op=_audit_op(op, phase),
+            kind=_known(data.get("kind") or data.get("action"), _AUDIT_KINDS),
+            project_id=data.get("project_id"), patients=patients,
             outcome=outcome, query="query" in data)
     except (access_log.AccessLogError, OSError, KeyError, TypeError):
         if outcome == "ok" and phase != "confirm":
@@ -242,7 +272,9 @@ def dispatch_operation(data: dict, settings: dict[str, Any],
         got = summary.answer(settings["snapshot"], data.get("scope", ""),
                              allowed=projects.summary_scope(settings),
                              dialect=dialect, names=False)
-        return got.get("text") or got["error"]
+        if "error" in got:
+            return _Shown(got["error"], outcome="summary_unavailable")
+        return _Shown(got["text"], patients=got.get("project_ids", ()))
     return deny("unknown_operation")
 
 

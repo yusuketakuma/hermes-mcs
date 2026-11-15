@@ -353,10 +353,11 @@ def _stale_open_unacked(db, now: float, *, latest=_UNREAD) -> list:
 
 def build(db, cfg, since: float, until: float, flt=None, *,
           names: bool = False, name: str | None = None,
-          allowed=None, private: bool = False) -> dict:
+          allowed=None, private: bool = False, shown: set | None = None) -> dict:
     """The summary display model for [since, until). ``flt`` is a
     parse_scope dict (None = all); ``names`` shows patient names next to
-    project ids; ``allowed`` is the caller's project scope."""
+    project ids; ``allowed`` is the caller's project scope; ``shown``
+    collects every project the model labels, for the access record."""
     import notify_views
     flt = flt or parse_scope("")
     keep = scope_projects(db, flt, name, allowed)
@@ -371,6 +372,8 @@ def build(db, cfg, since: float, until: float, flt=None, *,
         return keep is None or pid in keep
 
     def room(pid) -> str:
+        if shown is not None and type(pid) is int:
+            shown.add(pid)
         name_ = _plain(project_display_name(db, pid)) if names else ""
         # staff read names; the internal id only identifies a room when
         # names are off or missing
@@ -621,9 +624,10 @@ def view(db, cfg, scope_text, *, name=None, allowed=None, now=None,
     if flt["mine"] and not " ".join(str(name or "").split()):
         return {"error": "担当で絞るには名前が必要です。名前欄に入力してください。"}
     now = time.time() if now is None else now
-    return {"parts": build(db, cfg, now - flt["days"] * DAY_S, now, flt,
-                           names=names, name=name, allowed=allowed,
-                           private=True)}
+    shown: set = set()
+    parts = build(db, cfg, now - flt["days"] * DAY_S, now, flt, names=names,
+                  name=name, allowed=allowed, private=True, shown=shown)
+    return {"parts": parts, "project_ids": sorted(shown)}
 
 
 def maybe_enqueue(ledger, cfg, now=None) -> int:

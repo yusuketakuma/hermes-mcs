@@ -146,6 +146,9 @@ def record(data_dir, *, via, actor, op, channel=None, kind=None, project_id=None
     try:
         with _locked(dir_fd):
             names = _files(dir_fd)
+            if names and names[-1] > name:
+                # A clock set back must not insert lines before later ones in file order.
+                name = names[-1]
             previous = None
             for candidate in reversed([n for n in names if n <= name]):
                 previous = _last_line(dir_fd, candidate)

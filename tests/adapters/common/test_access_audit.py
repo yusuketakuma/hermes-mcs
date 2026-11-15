@@ -45,6 +45,23 @@ def test_projectless_list_is_attributed_to_every_returned_patient(tmp_path, monk
     command_dispatch.dispatch({"op": "read", "kind": "signals"}, _settings(tmp_path), IDENTITY)
     monkeypatch.setattr(command_dispatch, "dispatch_operation", lambda *a, **k: deny("bad_read"))
     command_dispatch.dispatch({"op": "read", "kind": "合成 患者 本文"}, _settings(tmp_path), IDENTITY)
-    listed, rejected = access_log.read(tmp_path)
+    command_dispatch.dispatch({"op": "goukei.taro", "kind": "alice.smith", "phase": "x"},
+                              _settings(tmp_path), IDENTITY)
+    listed, rejected, named = access_log.read(tmp_path)
     assert listed["project_id"] is None and listed["patients"] == [4, 9]
     assert rejected["kind"] == "invalid" and rejected["patients"] == []
+    assert (named["op"], named["kind"]) == ("invalid.invalid", "invalid")
+
+
+def test_summary_text_records_shown_patients_and_its_failures(tmp_path, monkeypatch):
+    from adapters.common import summary
+    monkeypatch.setattr(command_dispatch, "authorize_system", lambda *a: None)
+    answers = iter([{"text": "合成サマリー", "parts": {}, "project_ids": [2, 5]},
+                    {"error": "合成の未作成メッセージ"}])
+    monkeypatch.setattr(summary, "answer", lambda *a, **k: next(answers))
+    settings = {**_settings(tmp_path), "snapshot": str(tmp_path / "s.db")}
+    assert command_dispatch.dispatch({"op": "summary"}, settings, IDENTITY) == "合成サマリー"
+    assert command_dispatch.dispatch({"op": "summary"}, settings, IDENTITY) == "合成の未作成メッセージ"
+    shown, failed = access_log.read(tmp_path)
+    assert (shown["outcome"], shown["patients"]) == ("ok", [2, 5])
+    assert (failed["outcome"], failed["patients"]) == ("summary_unavailable", [])
