@@ -34,8 +34,10 @@ from mcs_util import payload_hash, strict_json, valid_hash, valid_text
 # Proposed initial bundle size. Raise it only with dry-run evidence that a bundle of
 # the new size verifies every unit's whole history inside APPROVE_SECONDS.
 BUNDLE_LIMIT = 20
-# The writer transaction's whole re-verification budget: well under the resident workers'
-# 3-second lock wait, so an approval never starves them. A longer bundle is rejected whole.
+# The approval's re-verification budget inside the writer transaction, chosen below the
+# resident workers' 3-second lock wait. Not a hard wall-time bound: SQL is interrupted at the
+# deadline, but Python JSON/hash work between statements is not, so the final check rejects a
+# bundle that finished late instead of guaranteeing the workers were never kept waiting.
 APPROVE_SECONDS = 2.0
 COMMAND = 'ops.cloud_local_rebuild_approve'
 RECEIPT_KIND = 'cloud_local_rebuild_approval'
