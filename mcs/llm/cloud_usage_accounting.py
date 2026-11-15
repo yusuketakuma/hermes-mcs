@@ -253,13 +253,21 @@ def _periods(now):
 
 
 # Spending of accounting rows removed by a receipted patient-context reset. One
-# artifact per reset; each entry keeps only when, which provider, how many requests
-# and how much, so daily, monthly and period limits still count what was spent.
+# artifact per reset holds per-day totals by provider and settlement: when (the
+# day's last reservation), which provider, how many requests, how much, and
+# whether every request of the group settled. Unsettled spending stays at its
+# reserved maximum and keeps counting as unresolved.
 CARRYOVER_KIND = "cloud_usage_carryover_v1"
+_CARRYOVER_FIELDS = frozenset({"at", "provider", "requests", "cost_usd", "settled"})
+
+
+def carryover_providers():
+    return frozenset(definition["provider"] for definition in PRICE_DEFINITIONS.values())
 
 
 def carryover_entries(db, since):
-    """Carried spending at or after ``since`` as (at, provider, requests, cost); malformed rows fail closed."""
+    """Carried totals at or after ``since`` as (at, provider, requests, cost, settled); malformed rows fail closed."""
+    providers = carryover_providers()
     entries = []
     for (content,) in db.execute("SELECT content FROM artifacts WHERE kind=? ORDER BY artifact_id", (CARRYOVER_KIND,)):
         document = strict_json(content) if isinstance(content, str) else None
@@ -267,18 +275,24 @@ def carryover_entries(db, since):
                 or not isinstance(document.get("entries"), list):
             raise AnthropicError("pricing_unverified", "carryover_invalid")
         for entry in document["entries"]:
-            if (not isinstance(entry, dict) or set(entry) != {"at", "provider", "requests", "cost_usd"}
+            if (not isinstance(entry, dict) or set(entry) != _CARRYOVER_FIELDS
                     or type(entry["at"]) not in (int, float) or not math.isfinite(entry["at"])
-                    or entry["provider"] not in ("anthropic", "openai")
-                    or entry["requests"] not in (0, 1)):
+                    or entry["provider"] not in providers or type(entry["settled"]) is not bool
+                    or type(entry["requests"]) is not int or entry["requests"] < 0):
                 raise AnthropicError("pricing_unverified", "carryover_invalid")
             try:
                 cost = _decimal(entry["cost_usd"])
             except ValueError:
                 raise AnthropicError("pricing_unverified", "carryover_invalid") from None
             if entry["at"] >= since:
-                entries.append((entry["at"], entry["provider"], entry["requests"], cost))
+                entries.append((entry["at"], entry["provider"], entry["requests"], cost, entry["settled"]))
     return entries
+
+
+def carryover_marker(db):
+    """Changes whenever a carry-over artifact is added or removed; tallies rebuild on change."""
+    return tuple(db.execute("SELECT COUNT(*), COALESCE(MAX(artifact_id),0) FROM artifacts WHERE kind=?",
+                            (CARRYOVER_KIND,)).fetchone())
 
 
 def _loads(value):

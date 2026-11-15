@@ -243,6 +243,25 @@ python3 mcs/ops/mcs_setup.py cloud-llm resume --confirm-human --reason '設定�
 この場合は同じコマンドIDで再試行してください。開始済みの外部通信を即時に取り消す操作ではありません。
 認証・支払い・料金確認の問題による停止も、原因を解消してから明示的に再開します。
 
+### 患者コンテキストを消去して作り直す
+
+患者コンテキストの結果と、その外部AIの会計記録を消去して、一から作り直せます。すでに使った額は引き継がれ、上限の判定と使用額の表示は消去の前と同じ額を数え続けます。
+
+```bash
+# 1. 設定で extract.patient_context.enabled を false にし、送信を止め、作り直しの見積りを取る
+python3 mcs/ops/mcs_setup.py cloud-llm stop --confirm-human --reason '患者コンテキストの作り直し'
+python3 mcs/ops/mcs_setup.py cloud-llm estimate --days 14
+# 2. 消去の内容と前提を確認する（変更しない）
+python3 mcs/ops/mcs_setup.py cloud-llm context-reset-plan
+# 3. 表示された preview_hash を渡して消去する（バックアップを取ってから消去）
+python3 mcs/ops/mcs_setup.py cloud-llm context-reset --preview-hash <preview_hash> --confirm-human --reason '患者コンテキストを作り直す'
+# 4. enabled を戻して再開する
+python3 mcs/ops/mcs_setup.py cloud-llm resume --confirm-human --reason '患者コンテキストを作り直す'
+```
+
+`context-reset-plan` の `refusal` が `null` でない間は消去できません。消去の後は公開中の患者コンテキストがすぐ表示されなくなり、通常の処理で作り直されます。
+結果が分からないまま残っていた送信（`unsettled_reservations`）と同じ内容を、作り直しで改めて送ることがあります。詳しい消去範囲は [患者背景情報の契約](../specs/patient-context.md) を参照してください。
+
 DBをバックアップの状態へ戻したときは、外部AIの新しい送信を自動で停止します。
 復元した時点より後の送信と課金の記録が復元後のDBにないため、再開すると同じ内容を再び送ることがあり、その分は上限の集計にも入りません。
 停止の理由は健康状態の警告に出ます。提供元の利用明細を確認してから、上の `cloud-llm resume` で再開してください。

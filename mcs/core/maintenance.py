@@ -391,6 +391,20 @@ def preupdate_backup(db_path: str, *, deadline: float | None = None) -> str:
     return dest
 
 
+def reset_backup(db_path: str) -> str:
+    """Verified copy before a patient-context reset; its prefix keeps it out of every automatic rotation."""
+    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
+    os.chmod(BACKUP_DIR, 0o700)
+    if shutil.disk_usage(BACKUP_DIR).free / (1024 * 1024) < _backup_need_mb(db_path):
+        raise MaintenanceError("backup_disk_low")
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    fd, tmp = tempfile.mkstemp(prefix=f"patient-context-reset-{stamp}-", suffix=".db.tmp", dir=BACKUP_DIR)
+    os.close(fd)
+    dest = tmp[:-4]
+    _publish_backup(db_path, tmp, dest)
+    return dest
+
+
 def prune_preupdate_backups(state_path: str | None = None) -> int:
     """Delete only preupdate-* backups NOT referenced by an actionable
     record — reference-based retention (B3): a flapping fetch loop can

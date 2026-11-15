@@ -55,6 +55,7 @@ from cloud_usage_accounting import (
     _periods as _periods,
     CARRYOVER_KIND as CARRYOVER_KIND,
     carryover_entries as carryover_entries,
+    carryover_marker as carryover_marker,
     _loads as _loads,
     _accounting_meta as _accounting_meta,
     _accounting_snapshot as _accounting_snapshot,
@@ -1106,11 +1107,16 @@ def _usage_report_snapshot(ledger, *, now=None, period="month"):
                 _settled(prior[0][0], _reserve_valid(*prior[0]), results[rid])
             except (AnthropicError, ValueError, InvalidOperation, TypeError):
                 invalid = True
-        for at, provider, requests, cost in carryover_entries(ledger.db, day if period == "day" else month):
+        for at, provider, requests, cost, done in carryover_entries(ledger.db, day if period == "day" else month):
             daily += requests * int(at >= day)
             total += cost
-            settled += cost
+            providers.setdefault(provider, {"cost_usd": Decimal(0), "unresolved_requests": 0})
             providers[provider]["cost_usd"] += cost
+            if done:
+                settled += cost
+            else:
+                unknown += requests
+                providers[provider]["unresolved_requests"] += requests
         return {"daily_requests": daily, "monthly_cost_usd": str(total),
                 "settled_cost_usd": str(settled), "max_reserved_cost_usd": str(total - settled),
                 "unresolved_requests": unknown, "pricing_unverified": invalid,
@@ -1180,7 +1186,7 @@ class _Tally:
         self.provider_totals = {}
         self.total = Decimal(0)
         self.invalid = False
-        self.carried = False
+        self.carried = None   # carry-over marker the totals include; None until first read
 
     def _add(self, day, cost, provider):
         self.days.setdefault(day, [0, Decimal(0)])[1] += cost
@@ -1211,13 +1217,14 @@ class _Tally:
         return digest.digest()
 
     def update(self, ledger, now):
-        if not self.carried:
-            # A reset deletes in-period rows, so the changed fingerprint always rebuilds here.
-            for at, provider, requests, cost in carryover_entries(ledger.db, self.month):
+        if self.carried is None:
+            # Rows a reset deleted after this tally's last_id leave no fingerprint
+            # change; _current_tally rebuilds on a changed carry-over marker instead.
+            self.carried = carryover_marker(ledger.db)
+            for at, provider, requests, cost, _settled_group in carryover_entries(ledger.db, self.month):
                 day = _periods(at)[0]
                 self.days.setdefault(day, [0, Decimal(0)])[0] += requests
                 self._add(day, cost, provider)
-            self.carried = True
         last_id = self.last_id
         new_orphans = {}
         changed_orphans = set()
@@ -1308,6 +1315,7 @@ def _current_tally(ledger, start, attribute, now):
         with _accounting_snapshot(ledger.db):
             _validate_accounting_timestamps(ledger.db)
             if (tally is None or tally.connection is not ledger.db or tally.month != start or tally.invalid
+                    or tally.carried != carryover_marker(ledger.db)
                     or (tally.prefix is not None and tally.prefix != tally.fingerprint(ledger, now))):
                 tally = _Tally(start, ledger.db)
                 setattr(ledger, attribute, tally)

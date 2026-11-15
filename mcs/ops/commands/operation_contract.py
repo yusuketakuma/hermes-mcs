@@ -345,6 +345,11 @@ def _v_local_rebuild(req, base):
     return validate_operation(req, base)
 
 
+def _v_patient_context_reset(req, base):
+    from patient_context_reset import validate_operation
+    return validate_operation(req, base)
+
+
 def _v_drug_alias(req, base):
     from drug_alias import validate_operation
     return validate_operation(req, base)
@@ -356,6 +361,7 @@ _OPS_VALIDATORS = {
     "ops.cloud_stop": _v_cloud_control,
     "ops.cloud_resume": _v_cloud_control,
     "ops.cloud_local_rebuild_approve": _v_local_rebuild,
+    "ops.patient_context_reset": _v_patient_context_reset,
     "ops.scan": _v_scan,
     "ops.retry": _v_retry,
     "ops.pause": _v_pause_resume,

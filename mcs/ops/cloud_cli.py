@@ -871,7 +871,13 @@ def command(args):
                              | {"planned": len(result["plan"]["units"]) if result["plan"] else 0},
                              ensure_ascii=False, indent=2))
             return 0 if result["state"] in ("complete", "bundle_full") else 1
-        if action in ("stop", "resume", "local-rebuild-approve"):
+        if action == "context-reset-plan":
+            import patient_context_reset
+            with _reader(seconds=FULL_READ_SECONDS) as (db, _deadline):
+                result = patient_context_reset.preview(db, cfg=cfg, now=time.time())
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result["refusal"] is None else 1
+        if action in ("stop", "resume", "local-rebuild-approve", "context-reset"):
             from writer_lock import acquire_run_lock, wait_run_lock, code_stamp
             expected_code = code_stamp()
             if not args.confirm_human or not mcs_util.valid_text(args.reason, 2000):
@@ -883,6 +889,18 @@ def command(args):
             req = {"version": 1, "cmd": "ops.cloud_" + action,
                 "command_id": args.command_id or str(uuid.uuid4()), "actor": args.actor,
                 "human_confirmed": True, "project_id": None, "reason": args.reason}
+            if action == "context-reset":
+                import patient_context_reset
+                req["cmd"] = "ops.patient_context_reset"
+                req["preview_hash"] = args.preview_hash
+                req["backup"] = {"name": "pending", "bytes": 1, "sha256": "0" * 64}
+                # Refuse before copying the database: a refused reset must not leave a backup behind.
+                with _reader(seconds=FULL_READ_SECONDS) as (db, _deadline):
+                    found = patient_context_reset.preview(db, cfg=cfg, now=time.time())
+                if found["refusal"] is not None or found["preview_hash"] != args.preview_hash:
+                    print(json.dumps({"outcome": "rejected", "error": found["refusal"] or "preview_changed"},
+                                     ensure_ascii=False))
+                    return 1
             if action == "local-rebuild-approve":
                 # One bundle per human confirmation; the plan file comes from local-rebuild-plan.
                 from safe_io import read_regular_nofollow
@@ -909,11 +927,23 @@ def command(args):
                     raise ValueError("update_in_progress")
                 if notify_spool.restore_writer_hold(str(path.parent)) is not None:
                     raise ValueError("restore_in_progress")
+                if action == "context-reset":
+                    # The owner's order: back up under the run lock, before the erasing transaction.
+                    import hashlib
+                    import maintenance
+                    copy = maintenance.reset_backup(str(path))
+                    digest = hashlib.sha256()
+                    with open(copy, "rb") as stream:
+                        for block in iter(lambda: stream.read(1 << 20), b""):
+                            digest.update(block)
+                    req["backup"] = {"name": os.path.basename(copy), "bytes": os.path.getsize(copy),
+                                     "sha256": digest.hexdigest()}
                 with closing(Ledger(str(path))) as ledger:
                     receipt = mcs_requests.apply_command(ledger, req)
             finally:
                 os.close(lock_fd)
-            print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "control", "approved")},
+            print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "control", "approved",
+                                                          "backup", "erased", "carryover") if k in receipt},
                              ensure_ascii=False))
             return 0 if receipt["outcome"] == "applied" else 1
         if action == "outstanding":
@@ -1252,6 +1282,15 @@ def add_parsers(sub):
     q.add_argument("--after", type=int, help="前回の出力の next_after。この message_id より古い候補から確かめる")
     q.add_argument("--out", type=Path, help="承認に使う束の計画を書き出すファイル")
     q.set_defaults(fn=command, cloud_action="local-rebuild-plan")
+    q = actions.add_parser("context-reset-plan", help="患者コンテキストの消去で消える件数・引き継ぐ使用額・実行できない理由を確認（変更しない）")
+    q.set_defaults(fn=command, cloud_action="context-reset-plan")
+    q = actions.add_parser("context-reset", help="人の確認と記録を伴い、バックアップを取ってから患者コンテキストの結果とその外部AI記録を消去")
+    q.add_argument("--preview-hash", required=True, help="context-reset-plan が表示した preview_hash")
+    q.add_argument("--confirm-human", action="store_true")
+    q.add_argument("--reason", required=True)
+    q.add_argument("--actor", default="local-human")
+    q.add_argument("--command-id", help="結果が不明だった同じ消去を確かめる場合の承認記録UUID")
+    q.set_defaults(fn=command, cloud_action="context-reset")
     q = actions.add_parser("local-rebuild-approve", help="人の確認と記録を伴い、確認した1束のローカルでの作り直しを承認")
     q.add_argument("--plan", type=Path, required=True)
     q.add_argument("--confirm-human", action="store_true")
