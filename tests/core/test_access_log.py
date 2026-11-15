@@ -99,3 +99,21 @@ def test_a_clock_set_back_keeps_appending_after_the_newest_month(tmp_path):
     assert [p.name for p in (tmp_path / access_log.DIR_NAME).glob("access-*.jsonl")] == [
         "access-2026-12.jsonl"]
     assert access_log.verify(tmp_path)["ok"] is True
+
+
+def test_an_interrupted_append_is_dropped_before_the_next_record(tmp_path, monkeypatch):
+    _entry(tmp_path, now=1_790_000_000)
+    path, = (tmp_path / access_log.DIR_NAME).glob("access-*.jsonl")
+    complete = path.read_bytes()
+    with open(path, "ab") as stream:
+        stream.write(b'{"v":1,"at":"half')  # a crash mid-write left no newline
+    _entry(tmp_path, now=1_790_000_060)
+    assert path.read_bytes().startswith(complete) and b"half" not in path.read_bytes()
+    assert access_log.verify(tmp_path)["records"] == 2 and len(list(access_log.read(tmp_path))) == 2
+
+    real_write = os.write
+    monkeypatch.setattr(access_log.os, "write", lambda fd, data: real_write(fd, data[:10]))
+    with pytest.raises(access_log.AccessLogError, match="access_log_write_incomplete"):
+        _entry(tmp_path, now=1_790_000_120)
+    monkeypatch.setattr(access_log.os, "write", real_write)
+    assert access_log.verify(tmp_path) == {**access_log.verify(tmp_path), "ok": True, "records": 2}

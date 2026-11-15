@@ -111,6 +111,25 @@ def _last_line(dir_fd, name):
     return lines[-1] if lines else None
 
 
+def _drop_partial_tail(fd) -> int:
+    """Cut a record an interrupted append left without its newline; return the size.
+
+    Such a fragment was never acknowledged, so its answer was withheld; the
+    next record must chain to the last complete line, not to the fragment.
+    """
+    size = os.fstat(fd).st_size
+    if not size or os.pread(fd, 1, size - 1) == b"\n":
+        return size
+    start = max(0, size - 2 * MAX_LINE)
+    end = os.pread(fd, size - start, start).rfind(b"\n")
+    if end < 0 and start:
+        raise AccessLogError("access_log_corrupt")
+    keep = start + end + 1 if end >= 0 else 0
+    os.ftruncate(fd, keep)
+    os.fsync(fd)
+    return keep
+
+
 @contextmanager
 def _locked(dir_fd):
     fd = open_lock_file(LOCK_NAME, dir_fd=dir_fd)
@@ -149,23 +168,28 @@ def record(data_dir, *, via, actor, op, channel=None, kind=None, project_id=None
             if names and names[-1] > name:
                 # A clock set back must not insert lines before later ones in file order.
                 name = names[-1]
-            previous = None
-            for candidate in reversed([n for n in names if n <= name]):
-                previous = _last_line(dir_fd, candidate)
-                if previous is not None:
-                    break
-            entry["prev"] = GENESIS if previous is None else _digest(previous)
-            line = json.dumps(entry, ensure_ascii=False, sort_keys=True,
-                              separators=(",", ":")).encode("utf-8")
-            if len(line) >= MAX_LINE:
-                raise AccessLogError("access_log_record_too_large")
-            fd = os.open(name, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
+            fd = os.open(name, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
                          | os.O_CLOEXEC, 0o600, dir_fd=dir_fd)
             try:
                 _check_private(fd, is_dir=False)
-                if os.write(fd, line + b"\n") != len(line) + 1:
-                    raise AccessLogError("access_log_write_incomplete")
-                os.fsync(fd)
+                size = _drop_partial_tail(fd)
+                previous = None
+                for candidate in reversed([n for n in names + [name] if n <= name]):
+                    previous = _last_line(dir_fd, candidate)
+                    if previous is not None:
+                        break
+                entry["prev"] = GENESIS if previous is None else _digest(previous)
+                line = json.dumps(entry, ensure_ascii=False, sort_keys=True,
+                                  separators=(",", ":")).encode("utf-8")
+                if len(line) >= MAX_LINE:
+                    raise AccessLogError("access_log_record_too_large")
+                try:
+                    if os.write(fd, line + b"\n") != len(line) + 1:
+                        raise AccessLogError("access_log_write_incomplete")
+                    os.fsync(fd)
+                except BaseException:
+                    os.ftruncate(fd, size)  # never leave half a record for the next one
+                    raise
             finally:
                 os.close(fd)
             if name not in names:

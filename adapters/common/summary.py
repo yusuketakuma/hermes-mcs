@@ -84,3 +84,27 @@ def answer(snapshot, text: str, *, name: str = "", allowed=None,
                                    f"※ 元データは約{int(age // 3600)}時間前のものです。"})
     return {"text": notify_render.parts_text(parts, dialect), "parts": parts,
             "project_ids": got.get("project_ids", [])}
+
+
+ACCESS_LOG_UNAVAILABLE = "閲覧記録を書き込めないため、サマリーを表示できません。管理者に連絡してください。"
+
+
+def answer_recorded(settings, text: str, *, transport: str, user, channel=None, scope_id=None,
+                    name: str = "", dialect: str = "plain", names: bool = True) -> dict:
+    """``answer`` for an identified person, recorded in the access log first.
+
+    Every summary entry shares this, so a shown summary always has a record
+    and one that cannot be recorded is withheld.
+    """
+    from .access import record_access
+    from .projects import summary_scope
+    got = answer(settings["snapshot"], text, name=name, allowed=summary_scope(settings),
+                 dialect=dialect, names=names)
+    failed = "error" in got
+    identity = {"transport": transport, "user_id": user, "chat_id": channel, "scope_id": scope_id}
+    recorded = record_access(settings, identity, op="summary",
+                             patients=() if failed else got.get("project_ids", ()),
+                             outcome="summary_unavailable" if failed else "ok")
+    if not recorded and not failed:
+        return {"error": ACCESS_LOG_UNAVAILABLE}
+    return got

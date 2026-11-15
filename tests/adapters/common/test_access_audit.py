@@ -65,3 +65,17 @@ def test_summary_text_records_shown_patients_and_its_failures(tmp_path, monkeypa
     shown, failed = access_log.read(tmp_path)
     assert (shown["outcome"], shown["patients"]) == ("ok", [2, 5])
     assert (failed["outcome"], failed["patients"]) == ("summary_unavailable", [])
+
+
+def test_native_summary_entries_share_the_recorded_answer(tmp_path, monkeypatch):
+    from adapters.common import summary
+    monkeypatch.setattr(summary, "answer", lambda *a, **k: {"text": "合成", "parts": {},
+                                                           "project_ids": [3]})
+    settings = {**_settings(tmp_path), "snapshot": str(tmp_path / "s.db"), "project_ids": frozenset({3})}
+    who = {"transport": "lineworks", "user": "U9", "scope_id": "D1"}
+    assert summary.answer_recorded(settings, "all", **who)["text"] == "合成"
+    entry, = access_log.read(tmp_path)
+    assert (entry["actor"], entry["op"], entry["patients"]) == ("lineworks:D1:U9", "summary", [3])
+    missing = {**settings, "inbox": str(tmp_path / "gone" / "cmd")}
+    assert summary.answer_recorded(missing, "all", **who) == {
+        "error": summary.ACCESS_LOG_UNAVAILABLE}
