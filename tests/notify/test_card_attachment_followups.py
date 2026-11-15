@@ -391,10 +391,13 @@ def test_late_slack_file_never_blindly_adopts_old_text_outcomes(
         assert json.loads(raw).get("sending") == 0
 
 
+@pytest.mark.parametrize("thread_last", [False, True], ids=["receipts-any-order", "thread-receipt-last"])
 def test_two_late_slack_files_survive_one_spec_publish_failure(
-        led, tmp_path, monkeypatch):
+        led, tmp_path, monkeypatch, thread_last):
     import asyncio
+    import os
     from pathlib import Path
+    import notify_cmds
     import notify_flush
     from slack_testkit import ROOT_TS
 
@@ -429,7 +432,45 @@ def test_two_late_slack_files_survive_one_spec_publish_failure(
     # Recover the exact committed render; the other followup waits for
     # the first render's parts instead of claiming a second send owner.
     assert notify_spool.recover(led, SLACK, {})["republished"] == 1
-    asyncio.run(_late_slack_cycle(world, led))
+    parked = {}
+
+    def park_card_and_thread_receipts():
+        # Receipt files are named by random UUIDs and drained in name order, so the first
+        # update's card receipt can land after its file receipts and before its thread
+        # receipt. Park both to drain them in exactly that order.
+        for path in (world.root / "cmd_int").glob("*.json"):
+            req = json.loads(path.read_text())
+            row = led.db.execute(
+                "SELECT kind FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+                (req.get("delivery_id"), req.get("part_id"))).fetchone()
+            kind = ("card" if req.get("op") == "transport_receipt"
+                    else "thread" if req.get("op") == "part_receipt" and row is not None and row[0] == "thread"
+                    else None)
+            if kind is not None:
+                parked[kind] = (path, world.root / ("held-" + path.name))
+                os.replace(path, parked[kind][1])
+        assert sorted(parked) == ["card", "thread"]
+
+    def land(kind):
+        path, held = parked.pop(kind)
+        os.replace(held, path)
+        notify_cmds.drain_int_commands(led, {"errors": []}, SLACK, str(world.root))
+
+    try:
+        asyncio.run(_late_slack_cycle(
+            world, led, before_receipt=park_card_and_thread_receipts if thread_last else None))
+        if thread_last:
+            land("card")
+        # While the first update's thread is still pending, the second followup's update
+        # waits: it is never issued against an unproven thread and held as identity_unverified.
+        assert not led.db.execute(
+            "SELECT 1 FROM notification_render_parts WHERE state='held'").fetchone()
+        if thread_last:
+            land("thread")
+    finally:
+        for path, held in parked.values():
+            if held.exists():
+                os.replace(held, path)
     monkeypatch.setattr(ledger.time, "time", lambda: NOW + 11 + notify_cards.RESEAT_S)
     notify_flush.flush(led)
     asyncio.run(_late_slack_cycle(world, led))
