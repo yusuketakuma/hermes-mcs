@@ -16,6 +16,7 @@ on:
           - recheck
           - green
           - refactor
+          - late
 
 permissions:
   contents: read
@@ -117,4 +118,28 @@ jobs:
             tests/notify/test_notify_parts.py \
             tests/notify/test_card_attachment_followups.py \
             tests/adapters/lineworks/test_lineworks_chat_format.py \
+            -r fEs --durations=10
+      - name: Lint late history modules
+        if: inputs.mode == 'late' && matrix.os == 'ubuntu-latest'
+        run: >-
+          uv run --no-project --with "ruff==0.17.3" ruff check
+          mcs/core/ledger_capture.py mcs/ingest/job_ops.py mcs/ingest/run_check.py
+      - name: Validate late history paths
+        if: inputs.mode == 'late'
+        env:
+          MCS_TEST_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: |
+          sh scripts/run_tests.sh \
+            tests/ingest/test_late_arrival_notify.py \
+            tests/ingest/test_unread_notify_paths.py \
+            tests/ingest/test_run_check_sources.py \
+            tests/ingest/test_run_check_stages.py \
+            tests/ingest/test_job_drain.py \
+            tests/ingest/test_initial_history_capture.py \
+            tests/ingest/test_history_command_deepen.py \
+            tests/ingest/test_reconcile_attempts_per_pass.py \
+            tests/ingest/test_semantic_ingest_revisions.py \
+            tests/core/test_initial_import_state.py \
+            tests/core/test_ledger_reply_recovery.py \
+            tests/core/test_message_revisions.py \
             -r fEs --durations=10
