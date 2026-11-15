@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import re
 from typing import Any
 
 from . import projects
-from .access import (validate_context, resolve_settings, authorize, authorize_system, id_text, actor)
-from .mcs_api import bootstrap, modules, deny, ok
+from .access import (validate_context, resolve_settings, authorize, authorize_system, id_text, actor,
+                     record_access)
+from .mcs_api import modules, deny, ok
 from .human_commands import (CREATE_FIELDS, UPDATE_FIELDS, CONTROL_FIELDS,
                              build_preview, build_control_preview, confirm)
 
@@ -180,8 +180,6 @@ def _audited(reply: str, data: dict, settings: dict[str, Any],
     closed). Denials carry no patient data, and a confirmed write already
     has its own receipt, so those answers are returned unchanged.
     """
-    bootstrap()
-    import access_log
     parsed = None if isinstance(reply, _Shown) else _parsed(reply)
     outcome = reply.outcome if isinstance(reply, _Shown) else _outcome(reply, parsed)
     patients = reply.patients if isinstance(reply, _Shown) else _returned_patients(parsed)
@@ -189,17 +187,13 @@ def _audited(reply: str, data: dict, settings: dict[str, Any],
     op = _audit_value(data.get("op"), _AUDIT_OPS)
     phase = _audit_value(data.get("phase"), _AUDIT_PHASES)
     kinds = READ_KINDS | {"notification_receipt", "create", "update"} | set(CONTROL_FIELDS)
-    try:
-        access_log.record(
-            Path(settings["inbox"]).parent, via=identity.get("transport") or "discord",
-            actor=actor(identity), channel=identity.get("chat_id"),
-            op=f"{op}.{phase}" if isinstance(op, str) and isinstance(phase, str) else op,
-            kind=_audit_value(data.get("kind") or data.get("action"), kinds),
-            project_id=data.get("project_id"), patients=patients, outcome=outcome,
-            query="query" in data)
-    except (access_log.AccessLogError, OSError, KeyError, TypeError):
-        if outcome == "ok" and phase != "confirm":
-            return deny("access_log_unavailable")
+    recorded = record_access(
+        settings, identity, op=f"{op}.{phase}" if op and phase else op,
+        kind=_audit_value(data.get("kind") or data.get("action"), kinds),
+        project_id=data.get("project_id"), patients=patients, outcome=outcome,
+        query="query" in data)
+    if not recorded and outcome == "ok" and phase != "confirm":
+        return deny("access_log_unavailable")
     return reply
 
 
