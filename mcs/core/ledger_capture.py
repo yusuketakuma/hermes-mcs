@@ -280,7 +280,8 @@ class LedgerCaptureMixin:
 
     def _queue_saved_messages_tx(self, project_id, new_ids, changed_ids,
                                   notify_ids, *, notify, semantic, now,
-                                  notify_max_age_s, invalidated_roots: set | None = None):
+                                  notify_max_age_s, invalidated_roots: set | None = None,
+                                  exempt_replies: bool = True):
         """Keep notification eligibility and semantic coverage in the save
         transaction for unread, backfill and reply arrivals alike."""
         history = initial_import_state.classify_tx(
@@ -319,7 +320,7 @@ class LedgerCaptureMixin:
             # Opted-in realtime notification paths cover every new
             # reply. Discovery still age-filters old replies on the first import.
             reply_ids = []
-            if (self.notify_all_replies and new_ids
+            if (exempt_replies and self.notify_all_replies and new_ids
                     and notify.get("source") != "discovery"):
                 replies = self.db.execute(
                     "SELECT message_id FROM messages WHERE message_id IN ("
@@ -376,6 +377,12 @@ class LedgerCaptureMixin:
         self._mark_notified(stale, now)
         return [i for i in ids if i in keep]
 
+    def _posted_after(self, ids: list, ts: float) -> list:
+        """Of ids, the rows with a known posted_at_ts strictly after ts."""
+        return [r[0] for r in self.db.execute(
+            "SELECT message_id FROM messages WHERE message_id IN ("
+            + ",".join("?" * len(ids)) + ") AND posted_at_ts > ?", [*ids, ts])]
+
     def _unnotified(self, ids: list) -> list:
         """Of caller-selected candidates, return rows never notified.
         Caller holds `with self.db`."""
@@ -399,7 +406,8 @@ class LedgerCaptureMixin:
                       semantic: bool = False,
                       notify_max_age_s: float | None = None,
                       notify_all_new: bool = False,
-                      notify_new_after_ts: float | None = None) -> list:
+                      notify_new_after_ts: float | None = None,
+                      notify_late: bool = False) -> list:
         """Backfill path: upsert messages (+reply attachments) without
         touching patient fetch_state. Optional notify intent lands in the
         same transaction. Returns ids of newly-inserted messages.
@@ -415,9 +423,19 @@ class LedgerCaptureMixin:
         and unread gates only when this call supplies a notify template.
         notify_new_after_ts widens eligibility like notify_all_new, but
         only to new rows posted strictly after it (a page-limited
-        self-post probe's cutoff; older history stays quiet)."""
+        self-post probe's cutoff; older history stays quiet).
+        notify_late (reconcile and quiet history walks, no notify template)
+        still announces new rows posted after the patient's newest stored
+        post: once such a row is stored, the unread, probe and backfill
+        paths find it present and never announce it. They notify as
+        'history' under the same age gate, and new replies stay
+        age-bounded on this path."""
         new_ids = []
         now = time.time()
+        late_after = None
+        if notify_late and project_id and notify is None:
+            # 0 = never imported: the initial history stays quiet
+            late_after = self.high_watermark(project_id) or None
         before_semantic = (self._semantic_generation_snapshot(msgs)
                            if semantic or self._needs_semantic_source_tracking() else {})
         invalidated_roots = set()
@@ -442,18 +460,19 @@ class LedgerCaptureMixin:
                     fresh_unread = list(dict.fromkeys(
                         fresh_unread + new_ids))
                 elif notify_new_after_ts is not None and new_ids:
-                    fresh_unread = list(dict.fromkeys(fresh_unread + [
-                        r[0] for r in self.db.execute(
-                            "SELECT message_id FROM messages WHERE message_id IN ("
-                            + ",".join("?" * len(new_ids))
-                            + ") AND posted_at_ts > ?",
-                            [*new_ids, notify_new_after_ts])]))
+                    fresh_unread = list(dict.fromkeys(
+                        fresh_unread + self._posted_after(new_ids, notify_new_after_ts)))
+                late = (self._posted_after(new_ids, late_after)
+                        if late_after is not None and new_ids else [])
+                if late:
+                    notify, fresh_unread = {"source": "history"}, late
                 notify_ids = self._unnotified(fresh_unread) if notify else []
                 self._queue_saved_messages_tx(
                     project_id, new_ids, changed_semantic.get(project_id, []),
                     notify_ids, notify=notify, semantic=semantic, now=now,
                     notify_max_age_s=notify_max_age_s,
-                    invalidated_roots=invalidated_roots)
+                    invalidated_roots=invalidated_roots,
+                    exempt_replies=not late)
             else:
                 # init_data saves mixed projects without requesting individual notifications.
                 grouped = {}
