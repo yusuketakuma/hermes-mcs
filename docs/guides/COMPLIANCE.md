@@ -86,7 +86,9 @@ python3 mcs/ops/mcs_compliance.py status
 「不正が疑われる異常な記録の定期的な確認」を挙げています。
 
 - Slack・Discord・LINE WORKS の `/mcs` 操作は、回答の前に `~/.mcs/data/access_log/access-YYYY-MM.jsonl` へ
-  利用者・チャンネル・操作・患者ID・結果を1行で残します。検索語・本文・患者名は残しません。
+  利用者・チャンネル・操作・患者ID・結果を1行で残します。一覧の回答は、表示した患者のIDも残します
+  （1行200人まで、超えた分は人数だけ）。検索語・本文・患者名は残さず、決まった語以外の操作名や種類は
+  `other` として残します。
 - 記録できないときは閲覧の回答を返しません。確定済みの依頼・操作は別の受付記録があるため回答を返します。
 - 各行は直前の行の SHA-256 を持ち、途中の行の削除・改変・月ファイルの欠落を検出できます。
   末尾の行の削除・改変は連鎖だけでは分からないため、`verify` が出す `records` と `head` を
@@ -97,6 +99,14 @@ python3 mcs/ops/mcs_compliance.py access-log verify --checkpoint 1234:<前回の
 python3 mcs/ops/mcs_compliance.py access-log review --days 30 # 利用者ごとの件数・患者数・拒否・夜間
 python3 mcs/ops/mcs_compliance.py access-log show --project 123
 ```
+
+`review` の `patients` は確認できた患者数の下限です。200人を超えた一覧があると
+`patients_exact` は `false` になり、`patients_unlisted_views` は記録に列挙されなかった延べ人数を示します。
+旧形式の患者指定がない閲覧と、患者指定のないテキスト要約も、成功時には患者IDを特定できません。
+その件数は `patients_unknown_records` に示します。
+`many_patients` は下限が指定人数を超えた場合、`patients_incomplete` は患者IDを特定できない場合に付きます。
+`show --project` は、一覧で未列挙のIDや、患者IDを記録していない閲覧を照合できません。
+一致を判定できない記録の件数は標準エラーに表示します。絞り込まない記録も確認してください。
 
 月1回の確認と記録の保存期間は、運用管理規程で決めてください（自動削除はしません）。
 次は記録の対象外です。運用管理規程の業務日誌で補ってください。

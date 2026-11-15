@@ -113,6 +113,40 @@ def _synthetic_env(root, content):
     path.chmod(0o600)
 
 
+@pytest.mark.parametrize("target_pending", [False, True])
+def test_jev_review_uses_diagnostic_root_not_default(tmp_path, monkeypatch, target_pending):
+    import external_transfer
+    import local_llm
+    import runtime_inspection
+
+    target, default = tmp_path / "target", tmp_path / "default"
+    target.mkdir()
+    default.mkdir()
+    external_transfer.require(target if target_pending else default)
+    monkeypatch.setattr(mcs_util, "HOME", str(default))
+    monkeypatch.setattr(mcs_util, "private_env_value", lambda *args: "synthetic")
+    monkeypatch.setattr(mcs_util, "hermes_exe", lambda cfg: "synthetic")
+    monkeypatch.setattr(runtime_inspection, "executable_available", lambda exe: False)
+    monkeypatch.setattr(environment_diagnostics, "check_llm", lambda cfg: ([], []))
+    monkeypatch.setattr(environment_diagnostics, "cloud_setting_warnings", lambda cfg, root: [])
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    calls = []
+    original = external_transfer.auto_enable_allowed
+
+    def record_check(service, root=None):
+        allowed = original(service, root)
+        calls.append((root, allowed))
+        return allowed
+
+    monkeypatch.setattr(external_transfer, "auto_enable_allowed", record_check)
+    paths = service_management.default_paths(root=str(target), checkout=str(target),
+                                             platform="linux", uid=0)
+    environment_diagnostics.check_environment({}, paths=paths, chrome_bin="synthetic",
+                                              credential_paths=(), agents_dir="synthetic")
+    assert calls and all(root == str(target) and allowed is not target_pending
+                         for root, allowed in calls)
+
+
 def test_openai_only_auto_selection_controls_budget_and_window_warning(tmp_path, monkeypatch):
     _synthetic_env(tmp_path, "MCS_OPENAI_API_KEY=synthetic-secret-canary\n")
     cfg = {"cloud_llm": {"daily_cost_limit_usd": None, "monthly_cost_limit_usd": None}}

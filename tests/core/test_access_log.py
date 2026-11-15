@@ -1,4 +1,5 @@
 """Synthetic checks for the hash-chained patient access log."""
+import hashlib
 import json
 import os
 import stat
@@ -79,3 +80,44 @@ def test_checkpoint_detects_a_dropped_or_edited_newest_record(tmp_path):
     assert access_log.verify(tmp_path, checkpoint=checkpoint)["checkpoint"] == "changed"
     path.write_bytes(lines[0])
     assert access_log.verify(tmp_path, checkpoint=checkpoint)["checkpoint"] == "records_missing"
+
+
+def _legacy_line(tmp_path, extra=None):
+    folder = tmp_path / access_log.DIR_NAME
+    folder.mkdir(mode=0o700)
+    path = folder / "access-2026-09.jsonl"
+    entry = {"v": 1, "at": "2026-09-21T14:13:20Z", "ts": 1_790_000_000,
+             "via": "slack", "actor": "slack:T1:U1", "channel": "C1", "op": "read",
+             "kind": "timeline", "project_id": 7, "outcome": "ok", "query": False,
+             "prev": access_log.GENESIS}
+    entry.update(extra or {})
+    line = json.dumps(entry, sort_keys=True, separators=(",", ":")).encode()
+    path.write_bytes(line + b"\n")
+    os.chmod(path, 0o600)
+    return path, line
+
+
+def test_legacy_log_checkpoint_survives_new_format_append(tmp_path):
+    path, old_line = _legacy_line(tmp_path)
+    checkpoint = (1, hashlib.sha256(old_line).hexdigest())
+    assert access_log.verify(tmp_path, checkpoint=checkpoint)["ok"] is True
+    new_entry = _entry(tmp_path, now=1_792_700_000, patients=[1, 2])
+    assert new_entry["prev"] == checkpoint[1]
+    assert path.read_bytes() == old_line + b"\n"
+    result = access_log.verify(tmp_path, checkpoint=checkpoint)
+    assert (result["ok"], result["files"], result["records"]) == (True, 2, 2)
+
+
+@pytest.mark.parametrize("extra", [{"patients": []}, {"patients_more": 0}, {"unexpected": 1}])
+def test_verify_rejects_partial_and_unknown_legacy_fields(tmp_path, extra):
+    path, _ = _legacy_line(tmp_path, extra)
+    assert access_log.verify(tmp_path)["broken_at"] == {"file": path.name, "line": 1}
+
+
+def test_free_text_codes_become_invalid_and_patient_lists_are_bounded(tmp_path):
+    entry = _entry(tmp_path, op="read", kind="合成 患者 本文", outcome="bad read",
+                   patients=[*range(access_log.PATIENT_LIMIT + 5), "9", True])
+    assert entry["kind"] == "invalid" and entry["outcome"] == "invalid"
+    assert entry["patients"] == list(range(access_log.PATIENT_LIMIT))
+    assert entry["patients_more"] == 5
+    assert access_log.verify(tmp_path)["ok"] is True

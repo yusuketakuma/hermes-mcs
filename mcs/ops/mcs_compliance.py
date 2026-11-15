@@ -24,9 +24,24 @@ def _print(value) -> None:
     print(json.dumps(value, ensure_ascii=False, sort_keys=True))
 
 
+def _patients_of(entry) -> set:
+    ids = {pid for pid in entry.get("patients") or () if type(pid) is int}
+    if type(entry.get("project_id")) is int:
+        ids.add(entry["project_id"])
+    return ids
+
+
+def _patients_unattributed(entry) -> bool:
+    if entry.get("outcome") != "ok" or entry.get("project_id") is not None:
+        return False
+    op = entry.get("op")
+    return op == "summary" or (op == "read" and "patients" not in entry)
+
+
 def review(entries, *, max_patients: int) -> list[dict]:
     """Summarize each actor so a person can spot unusual access without reading every line."""
-    actors = defaultdict(lambda: {"records": 0, "denied": 0, "off_hours": 0, "patients": set()})
+    actors = defaultdict(lambda: {"records": 0, "denied": 0, "off_hours": 0, "patients": set(),
+                                   "unlisted": 0, "unknown_records": 0, "largest_list": 0})
     for entry in entries:
         row = actors[(entry.get("via"), entry.get("actor"))]
         row["records"] += 1
@@ -35,16 +50,25 @@ def review(entries, *, max_patients: int) -> list[dict]:
         hour = datetime.fromtimestamp(entry.get("ts", 0), JST).hour
         if hour >= OFF_HOURS[0] or hour < OFF_HOURS[1]:
             row["off_hours"] += 1
-        if type(entry.get("project_id")) is int:
-            row["patients"].add(entry["project_id"])
+        row["patients"].update(_patients_of(entry))
+        unlisted = entry.get("patients_more") or 0
+        listed = {pid for pid in entry.get("patients") or () if type(pid) is int}
+        row["unlisted"] += unlisted
+        row["unknown_records"] += _patients_unattributed(entry)
+        row["largest_list"] = max(row["largest_list"], len(listed) + unlisted)
     result = []
     for (via, actor), row in sorted(actors.items(), key=lambda item: str(item[0])):
+        patients = max(len(row["patients"]), row["largest_list"])
+        exact = row["unlisted"] == 0 and row["unknown_records"] == 0
         flags = [name for name, hit in (
-            ("many_patients", len(row["patients"]) > max_patients),
+            ("many_patients", patients > max_patients),
+            ("patients_incomplete", not exact),
             ("denied", row["denied"] > 0),
             ("off_hours", row["off_hours"] > 0)) if hit]
         result.append({"via": via, "actor": actor, "records": row["records"],
-                       "patients": len(row["patients"]), "denied": row["denied"],
+                       "patients": patients, "patients_exact": exact,
+                       "patients_unlisted_views": row["unlisted"],
+                       "patients_unknown_records": row["unknown_records"], "denied": row["denied"],
                        "off_hours": row["off_hours"], "flags": flags})
     return result
 
@@ -92,9 +116,15 @@ def main(argv=None) -> int:
         since = time.time() - max(args.days, 0) * 86400
         entries = access_log.read(data_dir, since=since)
         if args.action == "show":
+            unlisted = 0
             for entry in entries:
-                if args.project is None or entry.get("project_id") == args.project:
+                if args.project is None or args.project in _patients_of(entry):
                     _print(entry)
+                elif entry.get("patients_more") or _patients_unattributed(entry):
+                    unlisted += 1
+            if unlisted:
+                print(f"患者IDを特定できない記録が{unlisted}件あります。"
+                      "患者IDで絞らずに記録を確認してください。", file=sys.stderr)
             return 0
         for row in review(entries, max_patients=args.max_patients):
             _print(row)

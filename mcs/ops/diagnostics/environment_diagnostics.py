@@ -263,7 +263,8 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
                 "`hermes gateway restart`で新しいプログラムを読み込んでください")
     from semantic_policy import auto_key_present, semantic_config
     jev_key_present = bool(mcs_util.private_env_value("TYPESAFE_API_KEY", paths.root))
-    sem, _ = semantic_config(cfg, key_present=auto_key_present(jev_key_present, paths.root))
+    sem, _ = semantic_config(cfg, key_present=auto_key_present(jev_key_present, paths.root),
+                             root=paths.root)
     if sem["mode"] != "off" and not jev_key_present:
         # newly diagnosed private-dotenv rule: a warning, so an older updater baseline never sees a new error
         warnings.append("意味解析は有効ですが、TYPESAFE_API_KEYを"

@@ -44,6 +44,8 @@ def test_new_installation_waits_for_a_recorded_review(tmp_path):
     assert record["acknowledged"]["services"] == ["anthropic"]
     assert cloud_policy.resolve_settings({}, tmp_path)[0]["mode"] == "on"
     assert semantic_policy.runtime_config({}, root=tmp_path)[0]["mode"] == "off"
+    # Callers that pass their own key observation share the same gate.
+    assert semantic_policy.semantic_config({}, key_present=True, root=tmp_path)[0]["mode"] == "off"
     again = external_transfer.acknowledge(by="管理者", reason="Jev契約確認", services=["anthropic", "jev"],
                                           confirm_human=True, root=tmp_path)
     assert again["history"] == [record["acknowledged"]]

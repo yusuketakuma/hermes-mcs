@@ -41,10 +41,23 @@ def test_unrecorded_read_is_withheld_but_confirmed_write_is_not(tmp_path, monkey
 def test_unknown_command_words_are_recorded_as_other_not_as_typed(tmp_path, monkeypatch):
     monkeypatch.setattr(command_dispatch, "dispatch_operation", lambda *a, **k: deny("bad_read"))
     for data in ({"op": "read", "kind": "合成太郎"}, {"op": "合成花子", "kind": "search"},
-                 {"op": "control", "phase": "合成次郎", "action": "合成三郎"}):
+                 {"op": "control", "phase": "合成次郎", "action": "合成三郎"},
+                 {"op": "read", "kind": "synthetic_person"}):
         command_dispatch.dispatch(data, _settings(tmp_path), IDENTITY)
     entries = list(access_log.read(tmp_path))
     assert [(e["op"], e["kind"]) for e in entries] == [
-        ("read", "other"), ("other", "search"), ("control.other", "other")]
+        ("read", "other"), ("other", "search"), ("control.other", "other"), ("read", "other")]
     raw = b"".join(p.read_bytes() for p in (tmp_path / access_log.DIR_NAME).glob("*.jsonl"))
-    assert "合成".encode() not in raw
+    assert "合成".encode() not in raw and b"synthetic_person" not in raw
+
+
+def test_projectless_list_is_attributed_to_every_returned_patient(tmp_path, monkeypatch):
+    reply = ok(operation="read", result={"items": [{"project_id": 4}, {"project_id": 9,
+                                                   "nested": [{"project_id": 4}]}]})
+    monkeypatch.setattr(command_dispatch, "dispatch_operation", lambda *a, **k: reply)
+    command_dispatch.dispatch({"op": "read", "kind": "signals"}, _settings(tmp_path), IDENTITY)
+    monkeypatch.setattr(command_dispatch, "dispatch_operation", lambda *a, **k: deny("bad_read"))
+    command_dispatch.dispatch({"op": "read", "kind": "合成 患者 本文"}, _settings(tmp_path), IDENTITY)
+    listed, rejected = access_log.read(tmp_path)
+    assert listed["project_id"] is None and listed["patients"] == [4, 9]
+    assert rejected["kind"] == "other" and rejected["patients"] == []

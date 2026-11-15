@@ -123,11 +123,15 @@ def dispatch(data: dict, settings: dict[str, Any],
     return _audited(reply, data, settings, identity)
 
 
-def _outcome(reply: str) -> str:
+def _parsed(reply: str):
     try:
-        parsed = json.loads(reply)
+        return json.loads(reply)
     except ValueError:
-        # The summary answer is display text; its failures are bare codes.
+        return None  # the summary answer is display text; its failures are bare codes
+
+
+def _outcome(reply: str, parsed) -> str:
+    if parsed is None:
         return reply if _DENIAL_CODE.fullmatch(reply) else "ok"
     if isinstance(parsed, dict) and parsed.get("ok") is False:
         return str(parsed.get("error"))
@@ -145,6 +149,20 @@ def _audit_value(value, allowed):
     return value if isinstance(value, str) and value in allowed else "other"
 
 
+def _returned_patients(parsed) -> set[int]:
+    """Every project id an answer contains, so list views are attributed per patient."""
+    found, stack = set(), [parsed]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            if type(node.get("project_id")) is int:
+                found.add(node["project_id"])
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return found
+
+
 def _audited(reply: str, data: dict, settings: dict[str, Any],
              identity: dict[str, str | None]) -> str:
     """Record who touched which patient before an answer leaves the host.
@@ -155,7 +173,8 @@ def _audited(reply: str, data: dict, settings: dict[str, Any],
     """
     bootstrap()
     import access_log
-    outcome = _outcome(reply)
+    parsed = _parsed(reply)
+    outcome = _outcome(reply, parsed)
     op = _audit_value(data.get("op"), _AUDIT_OPS)
     phase = _audit_value(data.get("phase"), _AUDIT_PHASES)
     kinds = READ_KINDS | {"notification_receipt", "create", "update"} | set(CONTROL_FIELDS)
@@ -163,9 +182,9 @@ def _audited(reply: str, data: dict, settings: dict[str, Any],
         access_log.record(
             Path(settings["inbox"]).parent, via=identity.get("transport") or "discord",
             actor=actor(identity), channel=identity.get("chat_id"),
-            op=f"{op}.{phase}" if isinstance(phase, str) else op,
+            op=f"{op}.{phase}" if isinstance(op, str) and isinstance(phase, str) else op,
             kind=_audit_value(data.get("kind") or data.get("action"), kinds),
-            project_id=data.get("project_id"), outcome=outcome,
+            project_id=data.get("project_id"), patients=_returned_patients(parsed), outcome=outcome,
             query="query" in data)
     except (access_log.AccessLogError, OSError, KeyError, TypeError):
         if outcome == "ok" and phase != "confirm":

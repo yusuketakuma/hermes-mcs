@@ -3,8 +3,9 @@
 The safety-management guideline (MHLW 7.0, system operation chapter 17) asks
 for a log that identifies the user, the time and the medical information
 touched, protected against deletion or alteration. A record here holds the
-actor, channel, operation, patient (project) id and outcome only: no names,
-query text or bodies. Each line carries the SHA-256 of the previous line,
+actor, channel, operation, patient (project) ids and outcome only: no names,
+query text or bodies. Operation, kind and outcome must be short codes, so
+free text a rejected command carried is stored as ``invalid``. Each line carries the SHA-256 of the previous line,
 across monthly files, so a removed or edited earlier line breaks ``verify``;
 the newest lines are checked against the head a reviewer recorded last time.
 """
@@ -28,8 +29,11 @@ GENESIS = "0" * 64
 MAX_LINE = 4096
 _FILE_RE = re.compile(r"access-(\d{4})-(\d{2})\.jsonl")
 _TEXT_LIMIT = 200
+_CODE_RE = re.compile(r"[a-z][a-z0-9_.]{0,63}")
+PATIENT_LIMIT = 200  # ids an answer returned; more are counted, not listed
 FIELDS = ("v", "at", "ts", "via", "actor", "channel", "op", "kind",
-          "project_id", "outcome", "query", "prev")
+          "project_id", "patients", "patients_more", "outcome", "query", "prev")
+_FIELD_SETS = (frozenset(FIELDS), frozenset(FIELDS) - {"patients", "patients_more"})
 
 
 class AccessLogError(RuntimeError):
@@ -45,6 +49,17 @@ def _text(value):
         return None
     text = str(value).replace("\x00", "")[:_TEXT_LIMIT]
     return text or None
+
+
+def _code(value):
+    if value is None:
+        return None
+    return value if isinstance(value, str) and _CODE_RE.fullmatch(value) else "invalid"
+
+
+def _patients(values):
+    ids = sorted({value for value in values or () if type(value) is int})
+    return ids[:PATIENT_LIMIT], max(0, len(ids) - PATIENT_LIMIT)
 
 
 def _check_private(fd, *, is_dir):
@@ -112,15 +127,21 @@ def _digest(line: bytes) -> str:
 
 
 def record(data_dir, *, via, actor, op, channel=None, kind=None, project_id=None,
-           outcome="ok", query=False, now=None) -> dict:
-    """Durably append one record; raise AccessLogError when that is not certain."""
+           patients=(), outcome="ok", query=False, now=None) -> dict:
+    """Durably append one record; raise AccessLogError when that is not certain.
+
+    ``patients`` are the ids an answer actually contained, so a list view
+    is attributed to every patient it showed, not only to the request.
+    """
     now = time.time() if now is None else now
+    listed, more = _patients(patients)
     stamp = datetime.fromtimestamp(now, timezone.utc)
     entry = {"v": 1, "at": stamp.strftime("%Y-%m-%dT%H:%M:%SZ"), "ts": round(now, 3),
-             "via": _text(via), "actor": _text(actor), "channel": _text(channel),
-             "op": _text(op), "kind": _text(kind),
+             "via": _code(via), "actor": _text(actor), "channel": _text(channel),
+             "op": _code(op), "kind": _code(kind),
              "project_id": project_id if type(project_id) is int else None,
-             "outcome": _text(outcome) or "unknown", "query": bool(query)}
+             "patients": listed, "patients_more": more,
+             "outcome": _code(outcome) or "unknown", "query": bool(query)}
     name = stamp.strftime("access-%Y-%m.jsonl")
     dir_fd = _open_dir(data_dir, create=True)
     try:
@@ -206,7 +227,7 @@ def verify(data_dir, *, checkpoint=None) -> dict:
                     entry = json.loads(line)
                 except ValueError:
                     entry = None
-                if (not isinstance(entry, dict) or set(entry) != set(FIELDS)
+                if (not isinstance(entry, dict) or set(entry) not in _FIELD_SETS
                         or entry["prev"] != expected):
                     return {"ok": False, "files": files, "records": count,
                             "broken_at": {"file": name, "line": number}}
