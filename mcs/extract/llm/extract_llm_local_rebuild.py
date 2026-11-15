@@ -274,6 +274,7 @@ def preview(ledger, *, limit=BUNDLE_LIMIT, stop=(sqlite3.OperationalError,)):
         raise ValueError('local_rebuild_limit_invalid')
     db = ledger.db
     excluded = dict.fromkeys(sorted(EXCLUSIONS), 0)
+    approved = dict.fromkeys(sorted(PERMIT_STATES - {UNAPPROVED}), 0)
     units, rows, done, eligible, state = [], [], 0, 0, 'complete'
     stop = tuple(stop) + (sqlite3.OperationalError,)
     try:
@@ -284,8 +285,9 @@ def preview(ledger, *, limit=BUNDLE_LIMIT, stop=(sqlite3.OperationalError,)):
             try:
                 if not tally:
                     raise ValueError('tally_invalid')
-                if _approval_state(ledger, project_id, message_id, approvals, stop, tally=tally) in (ACTIVE, ADOPTED):
-                    excluded['already_current'] += 1
+                if (project_id, message_id) in approvals:
+                    # an approved unit is never offered again, whatever its state (no re-approval)
+                    approved[_approval_state(ledger, project_id, message_id, approvals, stop, tally=tally)] += 1
                 else:
                     units.append(unit_proof(ledger, project_id, message_id, stop))
                     eligible += 1
@@ -304,7 +306,7 @@ def preview(ledger, *, limit=BUNDLE_LIMIT, stop=(sqlite3.OperationalError,)):
         plan = {'schema': PLAN_SCHEMA, 'database': _database_identity(db), 'units': units}
         plan['bundle_digest'] = _bundle_digest(plan)
     return {'state': state, 'candidates': len(rows), 'eligible': eligible,
-            'excluded': excluded, 'bundle_limit': BUNDLE_LIMIT, 'plan': plan}
+            'excluded': excluded, 'approved': approved, 'bundle_limit': BUNDLE_LIMIT, 'plan': plan}
 
 
 def _bundle_digest(plan):
@@ -376,9 +378,8 @@ def approve_tx(db, req, now):
             for unit in plan['units']:
                 if time.monotonic() >= deadline:
                     return UNVERIFIED, {}
-                if _approval_state(ledger, unit['project_id'], unit['message_id'], approvals,
-                                   tally=True) in (ACTIVE, ADOPTED):
-                    return 'local_rebuild_already_approved', {}
+                if (unit['project_id'], unit['message_id']) in approvals:
+                    return 'local_rebuild_already_approved', {}   # no re-approval, in any state
                 if unit_proof(ledger, unit['project_id'], unit['message_id']) != unit:
                     return 'local_rebuild_bundle_changed', {}
             if time.monotonic() >= deadline:
@@ -423,6 +424,26 @@ def approved_units(db):
         for unit in _receipt_units(command_id, digest, raw) or ():
             units[(unit['project_id'], unit['message_id'])] = unit
     return units
+
+
+def health_counts(db):
+    """Cheap counts for health (no identifiers, no history proof): verified approvals, those
+    with a final written under their tag, and those whose retries are exhausted."""
+    from extract_llm_source_contract import EXTRACT_VERSION, REVIVE_PER_INPUT
+    units = approved_units(db)
+    written = exhausted = 0
+    for (project_id, message_id), unit in units.items():
+        written += db.execute(
+            "SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND message_id=? AND CASE WHEN "
+            "json_valid(meta) THEN json_extract(meta,'$.local_rebuild.command_id')=? END LIMIT 1",
+            (KIND, project_id, message_id, unit['command_id'])).fetchone() is not None
+        exhausted += db.execute(
+            "SELECT 1 FROM artifacts WHERE kind=? AND message_id=? AND CASE WHEN json_valid(meta) THEN "
+            "json_extract(meta,'$.error')=1 AND COALESCE(json_extract(meta,'$.extract_version'),0)=? "
+            "AND COALESCE(json_extract(meta,'$.attempts'),0)>=5 "
+            "AND COALESCE(json_extract(meta,'$.auto_retry'),0)>=? END LIMIT 1",
+            (KIND, message_id, EXTRACT_VERSION, REVIVE_PER_INPUT)).fetchone() is not None
+    return {'approved': len(units), 'written': written, 'exhausted': exhausted}
 
 
 def permit(ledger, project_id, message_id, *, approvals=None):
