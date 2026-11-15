@@ -266,7 +266,7 @@ def _candidates(db):
         "SELECT DISTINCT project_id,message_id FROM artifacts WHERE kind='cloud_usage_reserve' "
         "AND typeof(project_id)='integer' AND typeof(message_id)='integer' AND CASE WHEN json_valid(meta) "
         "THEN json_extract(meta,'$.route')=? AND json_type(meta,'$.input_binding') IS NULL END "
-        "ORDER BY message_id DESC", (ROUTE,)).fetchall()
+        "ORDER BY message_id DESC, project_id DESC", (ROUTE,)).fetchall()
 
 
 def preview(ledger, *, limit=BUNDLE_LIMIT, after=None, stop=(sqlite3.OperationalError,), tally_reader=None):
@@ -297,7 +297,10 @@ def preview(ledger, *, limit=BUNDLE_LIMIT, after=None, stop=(sqlite3.Operational
             tally = _tally_valid(ledger, stop)
         stage = 'history'
         for project_id, message_id in rows:
-            if len(units) >= limit:
+            # Stop only between message ids: messages.message_id is the table's primary key, so a
+            # message id can add at most one unit, and every candidate row sharing it is examined
+            # in this run; the next run's `after` (a message id) then never splits a group.
+            if len(units) >= limit and message_id != last:
                 state = 'bundle_full'
                 break
             try:
@@ -307,7 +310,10 @@ def preview(ledger, *, limit=BUNDLE_LIMIT, after=None, stop=(sqlite3.Operational
                     # an approved unit is never offered again, whatever its state (no re-approval)
                     approved[_approval_state(ledger, project_id, message_id, approvals, stop, tally=tally)] += 1
                 else:
-                    units.append(unit_proof(ledger, project_id, message_id, stop))
+                    proof = unit_proof(ledger, project_id, message_id, stop)
+                    if len(units) >= limit:     # a second unit for one message id breaks the key
+                        raise ValueError('receipt_inconsistent')
+                    units.append(proof)
                     eligible += 1
             except stop:
                 raise
@@ -319,7 +325,6 @@ def preview(ledger, *, limit=BUNDLE_LIMIT, after=None, stop=(sqlite3.Operational
         # the reader's deadline or budget interrupted: the rest stays unverified, never eligible
         state = 'partial'
         excluded['unverified'] += len(rows) - done
-    units = units[:limit]
     plan = None
     if units and state != 'partial':   # a partial read never yields a plan (no partial approval)
         plan = {'schema': PLAN_SCHEMA, 'database': _database_identity(db), 'units': units}

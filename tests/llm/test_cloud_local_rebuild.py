@@ -547,6 +547,25 @@ def test_a_full_bundle_stops_the_dry_run_and_the_next_run_resumes_below_it(legac
         local_rebuild.preview(ledger, after=0)
 
 
+def test_a_message_id_held_by_two_projects_is_examined_whole_and_never_split(legacy, monkeypatch):
+    """Candidate rows of one message id in two projects (the g1 guard refuses that only in enforce
+    mode): both are examined in the same run, only the project holding the message yields a unit,
+    `after` resumes below that id, and a second unit for one id is refused, never truncated."""
+    ledger, _ = legacy
+    monkeypatch.setattr(local_rebuild, '_candidates', lambda db: [(2, 2), (1, 2), (1, 1)])
+    first = local_rebuild.preview(ledger, limit=1)
+    assert first['state'] == 'bundle_full' and first['examined'] == 2 and first['next_after'] == 2
+    assert first['eligible'] == 1 and first['excluded']['source_missing'] == 1
+    assert [(u['project_id'], u['message_id']) for u in first['plan']['units']] == [(1, 2)]
+    second = local_rebuild.preview(ledger, limit=1, after=first['next_after'])
+    assert [u['message_id'] for u in second['plan']['units']] == [1] and second['state'] == 'complete'
+    real = local_rebuild.unit_proof
+    monkeypatch.setattr(local_rebuild, 'unit_proof', lambda view, pid, mid, *a: real(view, 1, mid, *a))
+    both = local_rebuild.preview(ledger, limit=1)
+    assert both['eligible'] == 1 and both['excluded']['receipt_inconsistent'] == 1
+    assert both['examined'] == 2 and len(both['plan']['units']) == 1 and both['next_after'] == 2
+
+
 @pytest.mark.parametrize('target,stage', [('_tally_valid', 'tally'), ('unit_proof', 'history')])
 def test_a_reader_limit_names_the_stage_it_stopped_at(legacy, monkeypatch, target, stage):
     class SyntheticLimit(ValueError):

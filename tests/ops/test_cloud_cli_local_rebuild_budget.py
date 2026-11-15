@@ -62,6 +62,9 @@ def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(sca
     rc, report, plan = _plan(capsys, tmp_path)
     assert report['state'] == 'bundle_full' and report['stop_reason'] is None and rc == 0
     assert report['examined'] == report['eligible'] == 20 and report['next_after'] is not None
+    tally = report['tally_read']               # the tally phase's own use, counts only
+    assert set(tally) == {'rows', 'bytes', 'rows_limit', 'bytes_limit'}
+    assert 0 < tally['rows'] <= tally['rows_limit'] and 0 < tally['bytes'] <= tally['bytes_limit']
     assert report['candidates'] == MESSAGES + 2 and report['excluded']['unverified'] == 0
     assert local_rebuild.valid_plan(plan) and len(plan['units']) == 20
     from ledger import Ledger
@@ -95,6 +98,7 @@ def test_the_tally_phase_over_its_own_budget_stops_at_tally_and_leaves_everythin
     rc, report, plan = _plan(capsys, tmp_path)
     assert rc == 1 and report['state'] == 'partial' and plan is None
     assert report['stopped_at'] == 'tally' and report['stop_reason'] == 'tally_budget_exceeded'
+    assert report['tally_read']['bytes'] > report['tally_read']['bytes_limit']   # kept after the phase
     assert report['eligible'] == 0 and report['excluded']['unverified'] == report['candidates']
 
 

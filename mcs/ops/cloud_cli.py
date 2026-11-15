@@ -843,13 +843,23 @@ def command(args):
         if action == "local-rebuild-plan":
             import extract_llm_local_rebuild as local_rebuild
             with _reader(seconds=FULL_READ_SECONDS) as (db, _deadline):
+                tally_budget = []
+
+                @contextmanager
+                def tally_reader():
+                    with _reader_phase(db, rows=TALLY_READ_ROWS, size=TALLY_READ_BYTES,
+                                       reason="tally_budget_exceeded"):
+                        tally_budget.append(db.row_factory.budget)
+                        yield
                 try:
-                    result = local_rebuild.preview(
-                        SimpleNamespace(db=db), limit=args.limit, after=args.after, stop=(_ReaderLimit,),
-                        tally_reader=lambda: _reader_phase(db, rows=TALLY_READ_ROWS, size=TALLY_READ_BYTES,
-                                                           reason="tally_budget_exceeded"))
+                    result = local_rebuild.preview(SimpleNamespace(db=db), limit=args.limit, after=args.after,
+                                                   stop=(_ReaderLimit,), tally_reader=tally_reader)
                 finally:
                     stopped = getattr(db.row_factory, 'stop_reason', None)
+                # the tally phase's measured use against its own limits (counts only)
+                result['tally_read'] = ({'rows': tally_budget[0]['rows_used'], 'bytes': tally_budget[0]['bytes_used'],
+                                         'rows_limit': TALLY_READ_ROWS, 'bytes_limit': TALLY_READ_BYTES}
+                                        if tally_budget else None)
                 result['stop_reason'] = stopped if stopped in (
                     'read_deadline', 'observation_budget_exceeded', 'tally_budget_exceeded') else (
                     None if result['state'] != 'partial' else 'read_interrupted')
