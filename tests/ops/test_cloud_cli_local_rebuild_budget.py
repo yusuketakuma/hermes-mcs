@@ -160,6 +160,32 @@ def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(sca
                 phase['seconds'] += time.monotonic() - started
         return call
 
+    def compare_read_paths(db, source, month):
+        import hashlib
+        result = {'status': 'unavailable', 'runs': []}
+        signatures = []
+        try:
+            for label, table in (('current', source), ('not_indexed', 'artifacts NOT INDEXED'),
+                                 ('not_indexed', 'artifacts NOT INDEXED'), ('current', source)):
+                digest, count = hashlib.sha256(), 0
+                started = time.monotonic()
+                with closing(db.execute(
+                    "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
+                    f"FROM {table} "
+                    "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND created_at>=? "
+                    "AND artifact_id>? ORDER BY artifact_id", (month, 0))) as rows:
+                    for row in rows:
+                        digest.update(f'{row[0]}\n'.encode('ascii'))
+                        count += 1
+                signature = digest.digest()
+                seconds = time.monotonic() - started
+                result['runs'].append({'plan': label, 'rows': count, 'seconds': round(seconds, 6)})
+                signatures.append((count, signature))
+        except Exception:
+            return result
+        result['status'] = 'match' if all(item == signatures[0] for item in signatures[1:]) else 'mismatch'
+        return result
+
     with closing(Ledger(str(scaled))) as ledger:
         with monkeypatch.context() as patch:
             patch.setattr(local_rebuild, '_bounded', bounded)
@@ -179,7 +205,9 @@ def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(sca
             elapsed = time.monotonic() - started
             observed['tally_rebuilds'] = cloud_policy.TALLY_COST['rebuilds'] - tally_before['rebuilds']
             observed['tally_s'] = round(cloud_policy.TALLY_COST['seconds'] - tally_before['seconds'], 6)
-        observed.update(order_index_state='unavailable', plan_index='unavailable', temp_btree='unavailable')
+        observed.update(order_index_state='unavailable', plan_index='unavailable', temp_btree='unavailable',
+                        comparison={'status': 'unavailable', 'runs': []})
+        scan_config = None
         try:
             import re
             import ledger_schema
@@ -194,11 +222,13 @@ def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(sca
                 month = cloud_policy._periods(now)[1]
                 if (source == expected and not ledger.db.in_transaction
                         and month == cloud_policy._periods(now - elapsed)[1]):
-                    details = [row[3].lower() for row in ledger.db.execute(
+                    scan_config = (source, month)
+                    with closing(ledger.db.execute(
                         "EXPLAIN QUERY PLAN SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
                         f"FROM {source} "
                         "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND created_at>=? "
-                        "AND artifact_id>? ORDER BY artifact_id", (month, 0))]
+                        "AND artifact_id>? ORDER BY artifact_id", (month, 0))) as rows:
+                        details = [row[3].lower() for row in rows]
                     if details:
                         indexes = {label for pattern, label in (
                             (r'\bidx_cloud_usage_artifact_order\b', 'order_index'),
@@ -211,6 +241,9 @@ def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(sca
                         observed['temp_btree'] = any('temp b-tree' in detail for detail in details)
         except Exception:
             pass   # diagnostics never replace the approval result
+        if scan_config is not None:
+            observed['comparison'] = compare_read_paths(ledger.db, *scan_config)
+        source = expected = month = details = scan_config = None
     error = receipt.get('error')
     known_errors = (local_rebuild.UNVERIFIED, 'local_rebuild_database_changed',
                     'local_rebuild_already_approved', 'local_rebuild_bundle_changed')
@@ -219,6 +252,7 @@ def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(sca
     print(diagnostic)
     assert receipt['outcome'] == 'applied', diagnostic
     assert receipt['approved'] == 20, diagnostic
+    assert observed['comparison']['status'] != 'mismatch', diagnostic
 
 
 def test_the_month_end_tally_at_production_density_fits_its_own_budget(legacy, tmp_path, capsys, monkeypatch):
