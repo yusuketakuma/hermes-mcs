@@ -36,6 +36,15 @@ def _world(updater, monkeypatch):
     monkeypatch.setattr(updater, "quiesce", quiesce)
     monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
     monkeypatch.setattr(update_recovery, 'quiesce', updater.quiesce)
+
+    def restart():
+        updater._remove_marker()
+        return []
+    monkeypatch.setattr(updater, "restart_agents", restart)
+    monkeypatch.setattr(update_apply, 'restart_agents', restart)
+    monkeypatch.setattr(update_recovery, 'restart_agents', restart)
+    import update_runtime_migration
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', restart)
     return previous, target
 
 
