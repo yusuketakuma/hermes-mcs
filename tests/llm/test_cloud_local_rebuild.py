@@ -305,3 +305,98 @@ def test_an_unreadable_tally_is_a_fixed_reason_for_every_candidate(legacy, monke
     monkeypatch.setattr(cloud_policy, '_tally', broken)
     report = local_rebuild.preview(ledger)
     assert report['excluded']['tally_invalid'] == 2 and report['plan'] is None
+
+
+def _frame_and_started_checkpoint(ledger, monkeypatch, *, checkpoint):
+    """The canonical writers of tests/extract/llm/test_sealed_checkpoint_loss_replay's
+    `uncertain` fixture: a frozen frame for message 1 and, optionally, a started quality
+    repair checkpoint persisted under its claim."""
+    import extract_llm as worker
+    import extract_llm_carry
+    import extract_llm_errors
+    import extract_llm_resident
+    import extract_llm_runner
+    import extract_llm_selection
+    import extract_llm_source_contract
+    import extract_llm_store
+    import extraction_context as frames
+    from inference_dependency_loss import source_binding
+    for module in (worker, extract_llm_carry, extract_llm_errors, extract_llm_resident, extract_llm_runner,
+                   extract_llm_selection, extract_llm_source_contract):
+        monkeypatch.setattr(module, '_writer_current', lambda **kwargs: True)
+    monkeypatch.setattr(worker, '_rerender_cards', lambda *args: None)
+    monkeypatch.setattr(extract_llm_store, '_rerender_cards', worker._rerender_cards)
+    row = dict(ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone())
+    row.update(_source_binding=source_binding(ledger.db, 1, 1), _target=('', 'synthetic-model'),
+               qc_src=None, thin_src=None, human_src=None)
+    row['_frame'] = frames.prepare(ledger, row, model='synthetic-model', contract=worker._context_contract(),
+        attempt={'qc_src': None, 'thin_src': None, 'human_src': None, 'auto_retry': 0},
+        enabled=False, base_context=None, version=worker.EXTRACT_VERSION)
+    if checkpoint:
+        lease = worker._claim(ledger, row)
+        assert lease is not None
+        worker._capture_checkpoint_state(ledger.db, row, None)
+        body = row['body_text']
+        candidate = worker.extract_validation.validate_piece({'symptoms': [], 'patient_context': [
+            {'category': 'living', 'subject': 'patient', 'text': body, 'evidence': body}]}, body, body)
+        value = worker._EvidenceLeaf({**candidate, '_quality_status': 'started'},
+                                     worker._provider_evidence(['local'], True))
+        assert worker._persist_chunks(ledger, row, {0: value}, None, chunk_size=row['_chunk_size'],
+                                      lease=lease, guard=row['_checkpoint_guard'])
+
+
+@pytest.mark.parametrize('checkpoint,reason', [(False, 'frame_present'), (True, 'checkpoint_present')])
+def test_a_frame_or_started_repair_left_for_the_source_keeps_an_all_success_unit_out(
+        legacy, monkeypatch, checkpoint, reason):
+    """The usage history alone qualifies; the remaining local work record does not."""
+    ledger, calls = legacy
+    assert local_rebuild.unit_proof(ledger, 1, 1)['message_id'] == 1
+    _frame_and_started_checkpoint(ledger, monkeypatch, checkpoint=checkpoint)
+    with pytest.raises(ValueError, match=f'^{reason}$'):
+        local_rebuild.unit_proof(ledger, 1, 1)
+    report = local_rebuild.preview(ledger)
+    assert report['excluded'][reason] == 1 and [u['message_id'] for u in report['plan']['units']] == [2]
+    assert len(calls) == 2
+
+
+def test_the_cli_dry_run_reads_through_the_bounded_read_only_reader(legacy, tmp_path, monkeypatch, capsys):
+    """A selected final exists, so the material proof (with its SAVEPOINT) runs on the CLI's
+    query_only reader; stdout carries counts only and the plan file is a valid bundle."""
+    import argparse
+    import sqlite3
+    import cloud_cli
+    import mcs_util
+    from cloud_selection_progress_testkit import _complete_local_tx
+    ledger, _ = legacy
+    with ledger.db:
+        ledger.db.execute('BEGIN IMMEDIATE')
+        _complete_local_tx(ledger, {'project_id': 1, 'message_id': 1})
+    root = tmp_path / 'synthetic-root'
+    (root / 'data').mkdir(parents=True)
+    with sqlite3.connect(str(root / 'data' / 'ledger.db')) as target:
+        ledger.db.backup(target)
+    monkeypatch.setattr(mcs_util, 'HOME', str(root))
+    parser = argparse.ArgumentParser()
+    cloud_cli.add_parsers(parser.add_subparsers(dest='command'))
+    out = tmp_path / 'synthetic-plan.json'
+    args = parser.parse_args(['cloud-llm', 'local-rebuild-plan', '--out', str(out)])
+    assert args.fn(args) == 0
+    printed = json.loads(capsys.readouterr().out.split('\n件数')[0])
+    assert printed['state'] == 'complete' and printed['planned'] == 1
+    assert printed['excluded']['already_current'] == 1 and 'plan' not in printed
+    plan = json.loads(out.read_text())
+    assert local_rebuild.valid_plan(plan) and [u['message_id'] for u in plan['units']] == [2]
+
+
+def test_an_expired_approval_records_its_rejection_and_clears_the_deadline(legacy, monkeypatch):
+    ledger, _ = legacy
+    plan = local_rebuild.preview(ledger)['plan']
+    monkeypatch.setattr(local_rebuild, 'APPROVE_SECONDS', 0.0)
+    req, receipt = _approve(ledger, plan)
+    assert receipt['outcome'] == 'rejected' and receipt['error'] == local_rebuild.UNVERIFIED
+    stored = ledger.db.execute('SELECT outcome,payload_hash FROM command_receipts WHERE command_id=?',
+                               (req['command_id'],)).fetchone()
+    assert tuple(stored) == ('rejected', payload_hash(req))
+    # the approval's progress handler is gone: a later long read on the same connection completes
+    assert ledger.db.execute('WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<200000) '
+                             'SELECT COUNT(*) FROM n').fetchone()[0] == 200000
