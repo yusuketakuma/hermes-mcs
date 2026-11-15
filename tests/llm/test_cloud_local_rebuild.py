@@ -4,6 +4,7 @@ from contextlib import closing
 import json
 import time
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -298,6 +299,94 @@ def test_an_approval_that_cannot_reverify_in_time_rejects_the_whole_bundle(legac
     assert local_rebuild.approved_units(ledger.db) == {}
 
 
+@pytest.mark.parametrize('expire_after', [None, 1, 2], ids=['within-deadline', 'between-units', 'after-last-proof'])
+def test_approval_checks_the_deadline_during_and_after_reproof(legacy, monkeypatch, expire_after):
+    ledger, calls = legacy
+    plan = local_rebuild.preview(ledger)['plan']
+    assert len(plan['units']) == 2 and local_rebuild.APPROVE_SECONDS == 2.0
+    before = [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+    original_proof = local_rebuild.unit_proof
+    now, started, completed = [100.0], [], []
+
+    def proof(*args, **kwargs):
+        started.append((args[1], args[2]))
+        result = original_proof(*args, **kwargs)
+        completed.append((args[1], args[2]))
+        if len(completed) == expire_after:
+            now[0] = 100.0 + local_rebuild.APPROVE_SECONDS
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(local_rebuild, 'time', SimpleNamespace(monotonic=lambda: now[0], time=time.time))
+        patch.setattr(local_rebuild, 'unit_proof', proof)
+        req, receipt = _approve(ledger, plan)
+        assert ledger.db.execute('WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<2000) '
+                                 'SELECT COUNT(*) FROM n').fetchone()[0] == 2000
+
+    assert started == completed == [(unit['project_id'], unit['message_id']) for unit in plan['units'][:expire_after]]
+    expected = 'applied' if expire_after is None else 'rejected'
+    assert receipt['outcome'] == expected
+    assert receipt['error'] == (None if expire_after is None else local_rebuild.UNVERIFIED)
+    stored = ledger.db.execute('SELECT outcome,payload_hash,receipt_json FROM command_receipts WHERE command_id=?',
+                               (req['command_id'],)).fetchone()
+    assert stored['outcome'] == expected and stored['payload_hash'] == payload_hash(req)
+    assert json.loads(stored['receipt_json']) == receipt
+    assert len(local_rebuild.approved_units(ledger.db)) == (2 if expire_after is None else 0) and len(calls) == 2
+    assert [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
+
+
+def test_sqlite_interrupt_during_reproof_rejects_the_whole_bundle(legacy, monkeypatch):
+    import sqlite3
+    ledger, calls = legacy
+    plan = local_rebuild.preview(ledger)['plan']
+    assert len(plan['units']) == 2 and local_rebuild.APPROVE_SECONDS == 2.0
+    before = [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+    original_proof, original_pruned = local_rebuild.unit_proof, local_rebuild._history_pruned
+    now, started, completed, interruptions = [100.0], [], [], []
+    history_checks = []
+
+    def proof(*args, **kwargs):
+        started.append((args[1], args[2]))
+        result = original_proof(*args, **kwargs)
+        completed.append((args[1], args[2]))
+        return result
+
+    def history_pruned(db):
+        history_checks.append(True)
+        if len(history_checks) == 2:
+            now[0] = 100.0 + local_rebuild.APPROVE_SECONDS
+            try:
+                db.execute('WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<10000) '
+                           'SELECT COUNT(*) FROM n').fetchone()
+            except sqlite3.OperationalError as error:
+                interruptions.append((str(error), getattr(error, 'sqlite_errorcode', None), db.in_transaction))
+                raise
+            pytest.fail('the installed deadline handler did not interrupt SQLite')
+        return original_pruned(db)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(local_rebuild, 'time', SimpleNamespace(monotonic=lambda: now[0], time=time.time))
+        patch.setattr(local_rebuild, 'unit_proof', proof)
+        patch.setattr(local_rebuild, '_history_pruned', history_pruned)
+        req, receipt = _approve(ledger, plan)
+        assert ledger.db.execute('WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<2000) '
+                                 'SELECT COUNT(*) FROM n').fetchone()[0] == 2000
+
+    assert started == [(unit['project_id'], unit['message_id']) for unit in plan['units']]
+    assert completed == [(plan['units'][0]['project_id'], plan['units'][0]['message_id'])]
+    assert len(history_checks) == 2 and len(interruptions) == 1
+    assert interruptions[0][0] == 'interrupted'
+    assert interruptions[0][1] is None or interruptions[0][1] == sqlite3.SQLITE_INTERRUPT
+    assert interruptions[0][2] is True
+    assert receipt['outcome'] == 'rejected' and receipt['error'] == local_rebuild.UNVERIFIED
+    stored = ledger.db.execute('SELECT outcome,payload_hash,receipt_json FROM command_receipts WHERE command_id=?',
+                               (req['command_id'],)).fetchone()
+    assert stored['outcome'] == 'rejected' and stored['payload_hash'] == payload_hash(req)
+    assert json.loads(stored['receipt_json']) == receipt
+    assert local_rebuild.approved_units(ledger.db) == {} and len(calls) == 2
+    assert [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
+
+
 def test_a_changed_extraction_contract_turns_the_permit_into_proof_changed(legacy, monkeypatch):
     ledger, _ = legacy
     _approve(ledger, local_rebuild.preview(ledger)['plan'])
@@ -441,12 +530,29 @@ def test_the_cli_dry_run_reads_through_the_bounded_read_only_reader(legacy, tmp_
 def test_an_expired_approval_records_its_rejection_and_clears_the_deadline(legacy, monkeypatch):
     ledger, _ = legacy
     plan = local_rebuild.preview(ledger)['plan']
-    monkeypatch.setattr(local_rebuild, 'APPROVE_SECONDS', 0.0)
-    req, receipt = _approve(ledger, plan)
+    approve, calls = local_rebuild.approve_tx, []
+
+    def approve_once(*args, **kwargs):
+        calls.append(True)
+        if len(calls) > 1:
+            pytest.fail('a rejected receipt must be replayed without re-verification')
+        return approve(*args, **kwargs)
+
+    monkeypatch.setattr(local_rebuild, 'approve_tx', approve_once)
+    with monkeypatch.context() as patch:
+        patch.setattr(local_rebuild, 'APPROVE_SECONDS', 0.0)
+        req, receipt = _approve(ledger, plan)
     assert receipt['outcome'] == 'rejected' and receipt['error'] == local_rebuild.UNVERIFIED
-    stored = ledger.db.execute('SELECT outcome,payload_hash FROM command_receipts WHERE command_id=?',
-                               (req['command_id'],)).fetchone()
-    assert tuple(stored) == ('rejected', payload_hash(req))
+    stored = tuple(ledger.db.execute('SELECT outcome,payload_hash,receipt_json,processed_at FROM command_receipts '
+                                    'WHERE command_id=?', (req['command_id'],)).fetchone())
+    assert stored[:2] == ('rejected', payload_hash(req)) and json.loads(stored[2]) == receipt
+    count = ledger.db.execute('SELECT COUNT(*) FROM command_receipts').fetchone()[0]
+    assert mcs_requests.apply_command(ledger, req) == receipt and calls == [True]
+    assert tuple(ledger.db.execute('SELECT outcome,payload_hash,receipt_json,processed_at FROM command_receipts '
+                                   'WHERE command_id=?', (req['command_id'],)).fetchone()) == stored
+    assert ledger.db.execute('SELECT COUNT(*) FROM command_receipts').fetchone()[0] == count
+    assert local_rebuild.approved_units(ledger.db) == {}
+    assert all(local_rebuild.permit(ledger, 1, mid) == local_rebuild.UNAPPROVED for mid in (1, 2))
     # the approval's progress handler is gone: a later long read on the same connection completes
     assert ledger.db.execute('WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<200000) '
                              'SELECT COUNT(*) FROM n').fetchone()[0] == 200000
