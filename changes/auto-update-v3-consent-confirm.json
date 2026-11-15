@@ -1,7 +1,7 @@
 {
   "category": "added",
   "title": "v3 standing consentの人間確認付き確定コマンドを追加",
-  "summary": "`mcs update consent-preview --proposal-id <id> --output <file>` でConsentPreviewを取得し、`mcs update consent-confirm --preview-file <file>` で人間確認のうえ同意を確定します。確認証拠はpreview内容へ紐付けてローカルに保存され、再試行時も同じ証拠を使います。",
+  "summary": "`mcs update consent-preview --proposal-id ID --output FILE` でConsentPreviewを取得し、`mcs update consent-confirm --preview-file FILE` で人間確認のうえ同意を確定します。確認証拠はpreview内容へ紐付けてローカルに保存され、再試行時も同じ証拠を使います。",
   "upgrade": "追加操作は不要です。v3自動更新はAUTO_ELIGIBLE=falseのまま無効で、中央wire未配線の間はunavailableを返します。",
   "details": [
     "mcs/ops/release_auto_consent.py: ensure_confirmation_receiptを追加 — preview_sha256をkeyにreceipt_id/confirmed_at/reasonをrelease-consent-confirmation.jsonへ耐久化。同一previewは同一receipt_idを返しCONFIRM_CONFLICTを回避。confirm_standing_policyはwire未設定をCONSENT_WIREで拒否。",
