@@ -113,9 +113,12 @@ def test_each_unproven_history_is_excluded_with_its_fixed_reason(legacy, damage,
     assert 1 not in planned
     # a present binding (null or a hash) is not a key-absent candidate, so the dry run never lists it
     present = 'input_binding' in damage and 'json_set' in damage
-    # a broken usage row can also void the month tally, which the dry run checks first (fail closed)
-    counted = report['excluded'][reason] + (report['excluded']['tally_invalid'] if reason != 'history_pruned' else 0)
-    assert counted == (0 if present else 2 if reason == 'history_pruned' else 1)
+    if report['excluded']['tally_invalid']:
+        # a broken usage row can void the month tally, which the dry run checks first: every
+        # candidate fails closed and no bundle is offered
+        assert report['excluded']['tally_invalid'] == report['candidates'] and report['plan'] is None
+    else:
+        assert report['excluded'][reason] == (0 if present else 2 if reason == 'history_pruned' else 1)
 
 
 def test_one_bundle_approval_is_idempotent_and_permits_local_work_only(legacy):
