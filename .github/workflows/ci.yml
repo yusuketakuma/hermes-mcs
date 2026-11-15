@@ -13,6 +13,7 @@ on:
         type: choice
         options:
           - red
+          - recheck
           - green
 
 permissions:
@@ -54,6 +55,17 @@ jobs:
           tests/notify/test_card_attachment_followups.py::test_a_followup_held_before_the_first_updates_thread_receipt_replans_once_it_lands
           tests/notify/test_card_attachment_followups.py::test_a_non_identity_held_update_waits_for_the_delivered_render_before_it
           -r fEs --durations=10
+      - name: Recheck attachment identity failures
+        if: inputs.mode == 'recheck'
+        env:
+          MCS_TEST_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: |
+          sh scripts/run_tests.sh \
+            'tests/notify/test_attachment_upload_identity.py::test_collected_upload_with_insufficient_or_conflicting_evidence_is_held[unknown]' \
+            'tests/notify/test_attachment_upload_identity.py::test_collected_upload_with_insufficient_or_conflicting_evidence_is_held[pending_delivered]' \
+            'tests/notify/test_attachment_upload_identity.py::test_missing_prior_receipt_blocks_new_upload_even_if_later_caption_delivered[unknown_same_part]' \
+            'tests/notify/test_attachment_upload_identity.py::test_missing_prior_receipt_blocks_new_upload_even_if_later_caption_delivered[unknown_same_attachment]' \
+            -r fEs --durations=10
       - name: Validate notification regression batch
         if: inputs.mode == 'green'
         env:
