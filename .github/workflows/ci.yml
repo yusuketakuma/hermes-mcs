@@ -17,6 +17,7 @@ on:
           - green
           - refactor
           - late
+          - late_remaining
 
 permissions:
   contents: read
@@ -142,4 +143,14 @@ jobs:
             tests/core/test_initial_import_state.py \
             tests/core/test_ledger_reply_recovery.py \
             tests/core/test_message_revisions.py \
+            -r fEs --durations=10
+      - name: Validate remaining history paths
+        if: inputs.mode == 'late_remaining'
+        env:
+          MCS_TEST_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: |
+          sh scripts/run_tests.sh \
+            tests/ingest/test_history_walk.py \
+            tests/ingest/test_history_undated_reply.py \
+            tests/core/test_thread_projection_invalidation_batch.py \
             -r fEs --durations=10
