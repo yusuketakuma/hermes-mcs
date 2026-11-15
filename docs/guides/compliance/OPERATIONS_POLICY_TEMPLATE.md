@@ -72,9 +72,11 @@ hermes-mcs（以下「本システム」）で保存・整理・通知するに�
 **第15条（アクセスログ）** 責任者は【毎月第1営業日】に次を実行し、結果を【点検記録】に残す。
 
 ```bash
-python3 mcs/ops/mcs_compliance.py access-log verify
+python3 mcs/ops/mcs_compliance.py access-log verify --checkpoint 【前回の件数】:【前回のhead】
 python3 mcs/ops/mcs_compliance.py access-log review --days 31
 ```
+
+`verify` が表示する `records`（件数）と `head` は点検記録に書き、次回の照合に使う。
 
 `many_patients`・`denied`・`off_hours` の印がある利用者は、業務上の理由を確認する。
 `verify` が失敗した場合は第18条の事故として扱う。

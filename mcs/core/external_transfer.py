@@ -18,6 +18,7 @@ import safe_io
 FILE_NAME = "external_transfer.json"
 SERVICES = ("anthropic", "openai", "jev")
 MAX_BYTES = 16384
+HISTORY_LIMIT = 5  # older reviews belong in the facility's paper record
 _TEXT_LIMIT = 500
 
 
@@ -85,8 +86,10 @@ def acknowledge(*, by: str, reason: str, services, confirm_human: bool, root=Non
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() if now is None else now))
     previous = current.get("acknowledged")
     history = [*current.get("history", []), *([previous] if isinstance(previous, dict) else [])]
-    record = {**current, "history": history,
+    record = {**current, "history": history[-HISTORY_LIMIT:],
               "acknowledged": {"by": by, "reason": reason, "services": chosen, "at": stamp}}
     body = json.dumps(record, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    if len(body.encode("utf-8")) > MAX_BYTES:  # never publish a record status() would refuse
+        raise ValueError("external_transfer_record_invalid")
     safe_io.atomic_write(path(root), lambda stream: stream.write(body), 0o600, makedirs=False)
     return record

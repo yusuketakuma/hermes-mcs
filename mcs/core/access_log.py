@@ -5,7 +5,8 @@ for a log that identifies the user, the time and the medical information
 touched, protected against deletion or alteration. A record here holds the
 actor, channel, operation, patient (project) id and outcome only: no names,
 query text or bodies. Each line carries the SHA-256 of the previous line,
-across monthly files, so a removed or edited line breaks ``verify``.
+across monthly files, so a removed or edited earlier line breaks ``verify``;
+the newest lines are checked against the head a reviewer recorded last time.
 """
 from __future__ import annotations
 
@@ -187,14 +188,18 @@ def read(data_dir, *, since=None):
         os.close(dir_fd)
 
 
-def verify(data_dir) -> dict:
-    """Check the chain across every monthly file; report the first broken line."""
+def verify(data_dir, *, checkpoint=None) -> dict:
+    """Check the chain across every monthly file; report the first broken line.
+
+    The chain proves only that each line follows its predecessor. Dropping
+    or editing the newest lines is visible only against a head and count
+    kept elsewhere, so the result returns both for the reviewer to record;
+    ``checkpoint=(records, head)`` from an earlier run must still be in the chain.
+    """
     dir_fd = _open_dir(data_dir, create=False)
-    if dir_fd is None:
-        return {"ok": True, "files": 0, "records": 0}
     count, files, expected = 0, 0, GENESIS
     try:
-        for name in _files(dir_fd):
+        for name in (_files(dir_fd) if dir_fd is not None else ()):
             files += 1
             for number, line in enumerate(_lines(dir_fd, name), 1):
                 try:
@@ -207,6 +212,11 @@ def verify(data_dir) -> dict:
                             "broken_at": {"file": name, "line": number}}
                 expected = _digest(line)
                 count += 1
+                if checkpoint is not None and count == checkpoint[0] and expected != checkpoint[1]:
+                    return {"ok": False, "files": files, "records": count, "checkpoint": "changed"}
     finally:
-        os.close(dir_fd)
-    return {"ok": True, "files": files, "records": count}
+        if dir_fd is not None:
+            os.close(dir_fd)
+    if checkpoint is not None and count < checkpoint[0]:
+        return {"ok": False, "files": files, "records": count, "checkpoint": "records_missing"}
+    return {"ok": True, "files": files, "records": count, "head": expected}

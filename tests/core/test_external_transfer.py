@@ -58,3 +58,13 @@ def test_unreadable_record_fails_closed(tmp_path):
     os.chmod(path, 0o600)
     assert external_transfer.status(tmp_path)["state"] == "unreadable"
     assert cloud_policy.resolve_settings({}, tmp_path)[0]["mode"] == "off"
+
+
+def test_history_stays_within_the_readable_size(tmp_path):
+    external_transfer.require(tmp_path)
+    for n in range(30):
+        external_transfer.acknowledge(by="管理者" * 50, reason=f"{n}" + "確" * 400,
+                                      services=["anthropic"], confirm_human=True, root=tmp_path)
+    state = external_transfer.status(tmp_path)
+    assert state["state"] == "acknowledged"
+    assert len(external_transfer._read(tmp_path)["history"]) == external_transfer.HISTORY_LIMIT

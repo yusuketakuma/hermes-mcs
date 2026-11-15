@@ -63,6 +63,7 @@ def main(argv=None) -> int:
     log.add_argument("action", choices=("show", "verify", "review"))
     log.add_argument("--days", type=int, default=30, help="対象期間（日、既定30）")
     log.add_argument("--project", type=int, help="show: 患者（project）IDで絞る")
+    log.add_argument("--checkpoint", help="verify: 前回の点検記録に書いた 件数:head（末尾の削除・改変の検出）")
     log.add_argument("--max-patients", type=int, default=20,
                      help="review: この人数を超えて閲覧した利用者に印を付ける")
     args = parser.parse_args(argv)
@@ -79,7 +80,13 @@ def main(argv=None) -> int:
             _print({"ok": True, "acknowledged": record["acknowledged"]})
             return 0
         if args.action == "verify":
-            result = access_log.verify(data_dir)
+            checkpoint = None
+            if args.checkpoint:
+                records, _, head = args.checkpoint.partition(":")
+                if not records.isdigit() or len(head) != 64:
+                    raise ValueError("checkpoint_invalid")
+                checkpoint = (int(records), head)
+            result = access_log.verify(data_dir, checkpoint=checkpoint)
             _print(result)
             return 0 if result["ok"] else 1
         since = time.time() - max(args.days, 0) * 86400

@@ -88,10 +88,12 @@ python3 mcs/ops/mcs_compliance.py status
 - Slack・Discord・LINE WORKS の `/mcs` 操作は、回答の前に `~/.mcs/data/access_log/access-YYYY-MM.jsonl` へ
   利用者・チャンネル・操作・患者ID・結果を1行で残します。検索語・本文・患者名は残しません。
 - 記録できないときは閲覧の回答を返しません。確定済みの依頼・操作は別の受付記録があるため回答を返します。
-- 各行は直前の行の SHA-256 を持ち、行の削除・改変・月ファイルの欠落を検出できます。
+- 各行は直前の行の SHA-256 を持ち、途中の行の削除・改変・月ファイルの欠落を検出できます。
+  末尾の行の削除・改変は連鎖だけでは分からないため、`verify` が出す `records` と `head` を
+  点検記録（端末の外）に書き、次回 `--checkpoint 件数:head` で照合します。
 
 ```bash
-python3 mcs/ops/mcs_compliance.py access-log verify          # 改ざん検査
+python3 mcs/ops/mcs_compliance.py access-log verify --checkpoint 1234:<前回のhead>  # 改ざん検査
 python3 mcs/ops/mcs_compliance.py access-log review --days 30 # 利用者ごとの件数・患者数・拒否・夜間
 python3 mcs/ops/mcs_compliance.py access-log show --project 123
 ```
