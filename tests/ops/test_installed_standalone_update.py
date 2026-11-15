@@ -174,6 +174,7 @@ def _guide_world(updater, monkeypatch, tmp_path, reinstall):
             rc = updater.main(argv[2:])
         return subprocess.CompletedProcess(argv, rc, output.getvalue(), '')
     monkeypatch.setattr(launcher.subprocess, 'run', run)
+    monkeypatch.setattr(launcher, '_run_updater', run)
     return launcher, repo, base, target, config, installs, seen
 
 
