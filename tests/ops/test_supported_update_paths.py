@@ -212,6 +212,8 @@ def _world(tmp_path, monkeypatch, updater, path, *, install=False, schema=None):
     monkeypatch.setattr(update_runtime_migration, '_services_reconcile', updater._services_reconcile)
     monkeypatch.setattr(updater, "_run_post_merge", in_process_post_merge(updater, monkeypatch))
     monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
+    # The in-process child skips the provider guard; its pre-merge bridge mirror is tested separately.
+    monkeypatch.setattr(update_apply, '_provider_bridge_verified', lambda *_a: True)
     monkeypatch.delenv("MCS_UPDATE_REPO", raising=False)
     real_run = subprocess.run
 

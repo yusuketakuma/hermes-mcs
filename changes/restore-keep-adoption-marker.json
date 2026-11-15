@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "バックアップを採用した導入先で、更新の巻戻しが採用マーカーを上書きして収集・通知が止まり続ける問題を修正",
+  "summary": "mcs_backup.py restore と mcs_restore.py で採用した導入先では、スキーマ変更を伴う更新の巻戻し（手動の rollback、適用失敗後の自動巻戻し、復旧による再開）が DB 復元に入る前に止まり、採用時の restore_pending.json を書き換えなくなりました。これまでは更新側の復元マーカーで上書きし、採用の束縛（writers_resumed）が二度と成り立たず、送信・書込み・収集が恒久的に保留されていました。",
+  "upgrade": "追加操作は不要です。採用済みの導入先でスキーマ変更を伴う巻戻しが必要になった場合は、restore_marker_adopted として保留されます。手動の rollback は記録やファイルを変えずに失敗として終わり、自動巻戻し・復旧は常駐処理を止めたまま報告だけを残します。そのまま戻すかどうかは担当者が判断してください。独立復旧監視の変更は、導入先の復旧ツールが更新されたときに反映されます。",
+  "details": [
+    "_restore_db は、採用マーカー（by=mcs_backup_restore）があれば restore_marker_adopted で止まる。",
+    "rollback の事前確認と _rollback_tree の reset 前にも同じ確認を入れ、プログラムを旧版へ戻す前に止める。",
+    "独立復旧監視の _restore_db は、採用マーカーか採用時のファイル（restore.json など）があれば restore_marker_adopted を返し、マーカーを書き換えない。"
+  ],
+  "refs": ["mcs/ops/update_restore.py", "deployment/recovery/mcs_recovery_database.py", "deployment/recovery/mcs_recover.py"]
+}

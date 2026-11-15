@@ -846,3 +846,97 @@ def test_recovery_finish_rechecks_pending_before_marker_and_restart(updater, tmp
     monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     assert updater._finish_recovery(updater.journal_store.default_state(), "synthetic", []) == 1
     assert marker.read_text() == "synthetic hold"
+
+
+def test_standalone_rollback_across_sdk_pins_is_refused_before_changes(
+        updater, tmp_path, monkeypatch):  # noqa: F811
+    """Regression: rolling back across a requirements-standalone.txt change
+    left the new SDKs in the venv, and the older host then refused to start."""
+    repo, _ = _make_repo(tmp_path)
+    for module in (updater, update_apply, update_cli, update_execution, update_lifecycle_context,
+                   update_preflight, update_recovery, update_repository, update_runtime_migration,
+                   update_services):
+        monkeypatch.setattr(module, "REPO", str(repo))
+    before = _head(repo)
+    (repo / "deployment").mkdir()
+    (repo / "deployment" / "requirements-standalone.txt").write_text("synthetic-sdk==2\n")
+    _git(repo, "add", "deployment/requirements-standalone.txt")
+    _git(repo, "commit", "-qm", "synthetic sdk pin")
+    after = _head(repo)
+    state = updater.journal_store.default_state()
+    state["applied"] = [{"tag": "v1.2.0", "sha": after, "prev_sha": before, "schema_bump": False}]
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {"runtime_mode": "standalone"})
+    monkeypatch.setattr(update_apply, "_provider_rollback_preflight", lambda _target: None)
+    monkeypatch.setattr(update_apply, "_rollback_backup_error", lambda _entry: None)
+    monkeypatch.setattr(update_apply, "_rollback_layout_error", lambda _entry: None)
+    monkeypatch.setattr(update_apply, "quiesce", lambda: pytest.fail("no quiesce"))
+    monkeypatch.setattr(update_apply, "_enqueue_notice", lambda *a, **k: True)
+    assert updater.rollback("synthetic-rollback") == 1
+    assert _head(repo) == after
+    current = updater.journal_store.load_state(updater.STATE_PATH)
+    assert current["applying"] is None and current["applied"] == state["applied"]
+    executed = current["executed"]["synthetic-rollback"]
+    assert executed["result"] == "rollback_failed"
+    assert "standalone_sdk_rollback_unsupported" in executed["detail"]
+
+
+def test_interrupted_migration_undo_refuses_sdk_pin_rollback_before_changes(
+        updater, tmp_path, monkeypatch):  # noqa: F811
+    """IA-123: the recovery undo path checks the SDK pins like rollback() does."""
+    repo, _ = _make_repo(tmp_path)
+    for module in (updater, update_apply, update_cli, update_execution, update_lifecycle_context,
+                   update_preflight, update_recovery, update_repository, update_runtime_migration,
+                   update_services):
+        monkeypatch.setattr(module, "REPO", str(repo))
+    before = _head(repo)
+    (repo / "deployment").mkdir()
+    (repo / "deployment" / "requirements-standalone.txt").write_text("synthetic-sdk==2\n")
+    _git(repo, "add", "deployment/requirements-standalone.txt")
+    _git(repo, "commit", "-qm", "synthetic sdk pin")
+    after = _head(repo)
+    applying = {"tag": "synthetic", "sha": after, "prev_sha": before, "schema_bump": False,
+                "runtime_migration": {"synthetic": True}}
+    state = updater.journal_store.default_state()
+    state["applying"] = applying
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {"runtime_mode": "standalone"})
+    monkeypatch.setattr(update_recovery, "quiesce", lambda: pytest.fail("no quiesce"))
+    escalated = []
+    result = updater._undo_interrupted_migration(
+        state, applying, lambda *a: pytest.fail("no drainers"), lambda detail: escalated.append(detail) or 1)
+    assert result == 1 and escalated == ["standalone_sdk_rollback_unsupported"]
+    assert _head(repo) == after
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] == applying
+
+
+def test_runtime_restore_hold_keeps_the_receipt_and_notifies_once(updater, tmp_path, monkeypatch):  # noqa: F811
+    """IA-090: a rollback held by the Hermes checkout tells the approver once, keeps the receipt."""
+    repo, _ = _make_repo(tmp_path)
+    for module in (updater, update_apply, update_cli, update_execution, update_lifecycle_context,
+                   update_preflight, update_recovery, update_repository, update_runtime_migration,
+                   update_services):
+        monkeypatch.setattr(module, "REPO", str(repo))
+    before = _git(repo, "rev-parse", "v1.0.0").stdout.strip()
+    after = _head(repo)
+    state = updater.journal_store.default_state()
+    state["applied"] = [{"tag": "v1.1.0", "sha": after, "prev_sha": before, "schema_bump": False}]
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {"runtime_mode": "hermes"})
+    monkeypatch.setattr(update_apply, "_provider_rollback_preflight", lambda _target: None)
+    monkeypatch.setattr(update_apply, "_rollback_backup_error", lambda _entry: None)
+    monkeypatch.setattr(update_apply, "_rollback_layout_error", lambda _entry: None)
+
+    def blocked(_entry):
+        raise update_lifecycle_context.UpdateError("runtime_restore_checkout_changed")
+
+    monkeypatch.setattr(update_apply, "_check_runtime_restore", blocked)
+    monkeypatch.setattr(update_apply, "quiesce", lambda: pytest.fail("no quiesce"))
+    notices = []
+    monkeypatch.setattr(update_apply, "_enqueue_notice", lambda text, *a, **k: notices.append(k.get("notice_code")) or True)
+    assert updater.rollback("synthetic-rollback") == 1
+    assert updater.rollback("synthetic-rollback") == 1
+    assert notices == ["rollback_failed"]
+    current = updater.journal_store.load_state(updater.STATE_PATH)
+    assert "synthetic-rollback" not in current.get("executed", {})
+    assert current["applied"] == state["applied"] and _head(repo) == after

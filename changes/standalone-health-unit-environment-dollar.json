@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "Linuxの独立ヘルス監視で、データフォルダ名の「$」が二重になる問題を修正",
+  "summary": "Linux の独立実行モードで、導入先フォルダのパスに「$」を含む場合、独立ヘルス監視（mcs-health.service）に設定する MCS_ROOT が「$$」付きの存在しないパスになっていました。この状態では設定や通知先を読めず、ヘルス警告が届かないおそれがありました。今後は Environment= の行で「$」をそのまま書き、正しいパスを渡します。",
+  "upgrade": "Linux で導入先のパスに「$」を含む場合だけ影響があります。更新後に mcs-health.service を書き直すと反映されます。macOS（launchd）と、パスに「$」を含まない導入では変更はなく、追加操作も不要です。",
+  "details": [
+    "systemd では、「$$」で「$」を表す書き方は ExecStart= などのコマンド行だけで有効です。Environment= では変数を展開しないため、「$$」がそのまま残っていました。_systemd_quote に dollar 引数を追加し、Environment= の値だけ「$」を変換しないようにしました。「%」の「%%」への変換と、引用符・バックスラッシュのエスケープはこれまでどおりです。"
+  ],
+  "refs": ["mcs_standalone/service.py", "tests/ops/test_stab_standalone_health_agent.py"]
+}

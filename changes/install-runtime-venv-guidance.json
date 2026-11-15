@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "稼働中の Python 環境の誤った置き換えを防ぎ、実行環境が壊れたときの案内を修正",
+  "summary": "Homebrew の Python で動いている Gateway や独立接続サービスの実行環境を、install.sh が稼働中と判定できずに退避・再作成していた問題を修正しました。稼働中なら置き換えずに停止します。また、導入済みの環境で実行環境の Python が起動しなくなったとき、install.sh と --preflight が「常駐サービスの停止を確認してから実行環境を別名へ退避し、install.sh を再実行する」という実際に通る手順を表示します。--preflight は Hermes の版が固定版と違う場合に、手作業の git checkout ではなく更新手順を案内します。",
+  "upgrade": "追加操作は不要です。導入済みの環境で実行環境を自動で作り直すことはこれまでどおり行いません。案内に従って退避した環境は削除されないため、必要なら元へ戻せます。",
+  "details": [
+    "install.sh preserve_old_venv: 稼働中判定を、ps の行頭一致から行全体での実行環境パスの一致に変更した。Homebrew のフレームワーク版 Python では venv のスクリプトが2番目の引数に現れるため。",
+    "install.sh: 導入済み環境での停止文に、起動しない実行環境を退避してから再実行する手順を加えた。--preflight は導入済みで Python 3.14 を使えない実行環境を「要対処」として同じ手順を表示する（これまでは「段階2で環境を再作成します」と誤って表示していた）。",
+    "install.sh --preflight: Hermes の版が固定版と違う場合の対処を、git checkout --detach から更新手順の案内に変更した。手作業の checkout では依存関係が更新されないため。",
+    "scripts/mcs: Python が見つからないときの案内に、導入済みの場合は表示される退避手順に従うことを加えた。"
+  ],
+  "refs": ["install.sh", "scripts/mcs", "tests/meta/test_install_config_matrix.py", "tests/meta/test_install_sh_software.py"]
+}

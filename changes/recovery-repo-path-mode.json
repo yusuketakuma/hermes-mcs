@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "古い導入で作られた復旧ツール・復旧記録・復旧監視の設定のアクセス権を導入時に直すように修正",
+  "summary": "初期の版で導入した Mac では、~/.mcs-recovery の repo_path（0644）・mcs_recover.py（0755）と復旧監視の plist（0644）が他のユーザーも読めるまま残ることがあり、復旧監視の所有を確認できず recovery_python の切替えが止まっていました。install.sh は段階5の前に、リンクではなく他のユーザーが書き込めない通常ファイルであれば、復旧ツールを 0700、repo_path と plist を 0600 に揃えます。",
+  "upgrade": "install.sh を再実行すると直ります（更新ツールでは --reinstall を指定したときに install.sh が動きます）。--no-recovery・--no-services を指定しても直します。リンクと、他のユーザーが書き込めるファイルはアクセス権を変えず、注意を表示します。他人所有などでアクセス権を変えられない場合も、注意を表示して導入を続けます。その場合は復旧監視の所有確認が通らないため、recovery_python の切替えは止まったままになります。~/.mcs-recovery フォルダー自体が 0755 の場合は、この変更では直りません。",
+  "details": [
+    "復旧監視の所有確認の条件（復旧ツール 0700・repo_path と plist 0600 を要求すること）は変えていません。"
+  ],
+  "refs": [
+    "deployment/install/runtime.sh"
+  ]
+}

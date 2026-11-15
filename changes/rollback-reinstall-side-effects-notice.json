@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "再導入付きの更新を巻き戻したとき、元に戻らない設定と必要な操作を表示",
+  "summary": "再導入（scripts/mcs_upgrade.py apply --reinstall）を伴う更新が失敗して巻き戻ったとき、install.sh が入れ替えたローカルAIの起動設定（ai.mcs.llamaserver.plist）と復旧ツール（~/.mcs-recovery）が新しい版のまま残ることを、更新の出力に表示します。これまでは表示がなく、旧版のプログラムの上で新版の設定と復旧ツールが動き続けていました。巻戻しの範囲は変わりません。",
+  "upgrade": "追加操作は不要です。この表示が出たら、更新前の版のチェックアウトで ./install.sh --no-services を再実行してください。",
+  "details": [
+    "update_restore._rollback_tree が、更新の記録に reinstall がある場合に、ツリーを元の版へ戻した直後に案内を出力する。",
+    "install.sh が途中で失敗した場合も入れ替え済みのことがあるため、reinstall_done の有無を問わず表示する。",
+    "標準出力が閉じている・書けない場合は案内を出さずに巻戻しを続け、データベースの復元とサービスの再同期を省かない。"
+  ],
+  "refs": ["mcs/ops/update_restore.py"]
+}

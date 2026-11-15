@@ -2,6 +2,7 @@
 from __future__ import annotations
 import argparse
 import json
+import math
 import os
 import time
 from contextlib import suppress
@@ -43,6 +44,7 @@ from update_lifecycle_context import (
     _legacy_entry,
     _record_executed,
     _release_legacy_hold,
+    _restore_hold_active,
     _update_mode,
     acquire_update_lock,
 )
@@ -113,7 +115,7 @@ def cmd_check() -> int:
     newer = _tag_is_newer(tag, sha, cur_sha)
     # --- serialized state update + decision --------------------------
     picked = auto = None
-    held = False
+    held = restore_held = False
     upd_fd = acquire_update_lock()
     if upd_fd is None:
         return 0                        # another updater is alive
@@ -143,6 +145,10 @@ def cmd_check() -> int:
             # consent-held restore re-enters here via spawn_detached
             # once its receipt lands)
             held = True
+        elif _restore_hold_active():
+            # A restore owns the DB and writers: no notice, receipt or apply
+            # may join its loss report (same reading as plan and recover).
+            restore_held = True
         elif tag:
             if tag != state.get("latest_tag"):
                 state.update({"latest_tag": tag, "latest_sha": sha,
@@ -163,7 +169,18 @@ def cmd_check() -> int:
                           '"reason":"<理由>"}']
                 if _enqueue_notice("\n".join(lines), use_run_lock=True, notice_code="available", tag=tag):
                     state["notified_at"] = tag
-        if not held:
+        if not (held or restore_held):
+            if state.get("pending_notices"):
+                # abort notices a busy tick made bail defer
+                kept = [notice for notice in state["pending_notices"]
+                        if isinstance(notice, dict) and isinstance(notice.get("text"), str)
+                        and not _enqueue_notice(notice["text"], use_run_lock=True,
+                                                notice_code=notice.get("notice_code"),
+                                                tag=notice.get("tag"))]
+                if kept:
+                    state["pending_notices"] = kept
+                else:
+                    state.pop("pending_notices")
             pendings, consumed = scan_pending_approvals(state)
             for cid, result in consumed:
                 _record_executed(state, cid, result)
@@ -171,7 +188,10 @@ def cmd_check() -> int:
             if not picked and mode == "auto" and newer:
                 delay = upd.get("auto_delay_h", 24)
                 first_seen = state.get("first_seen") or 0
-                if time.time() - first_seen >= delay * 3600 \
+                if type(delay) not in (int, float) or not math.isfinite(delay) or delay < 0:
+                    # A hand-edited value must not crash before the state save.
+                    print("update.auto_delay_h が0以上の数値ではないため、自動更新を行いません。設定を確認してください。")
+                elif time.time() - first_seen >= delay * 3600 \
                         and not state.get("attempts", {}).get(tag):
                     auto = (tag, sha)
             journal_store.save_state(STATE_PATH, state)
@@ -179,6 +199,8 @@ def cmd_check() -> int:
         if upd_fd is not None:
             os.close(upd_fd)
     # public look-ups take minutes; never delay a recovery or an approved apply/rollback
+    if restore_held:
+        return 0
     if not (held or (mode != "off" and (picked or auto))):
         _drug_info_notices(cfg)
     if held:
@@ -306,6 +328,34 @@ _CONSENT_TERM_KEYS = ('scope', 'profile', 'allowed_class', 'timezone', 'windows'
 class _WallClock:
     def wall_ms(self):
         return int(time.time() * 1000)
+
+
+def cmd_restore_approve(args) -> int:
+    """Queue ops.restore_approve from a terminal, like the /mcs command (IA-085).
+
+    The values come from data/restore_report.json after a human read the loss
+    report; the queued command is applied by the same consent-only drain."""
+    import uuid
+    import mcs_requests
+    if args.confirm_human is not True or not mcs_util.valid_text(args.reason, 2000):
+        print("--confirm-human と --reason による人の確認が必要です")
+        return 1
+    req = {"version": 1, "cmd": "ops.restore_approve", "command_id": args.command_id or str(uuid.uuid4()),
+           "actor": args.actor, "human_confirmed": True, "project_id": None,
+           "report_id": args.report_id, "backup_sha256": args.backup_sha256,
+           "backup_schema": args.backup_schema, "reason": args.reason}
+    error = mcs_requests.validate(req)
+    if error:
+        print("復元の承認: 指定を確認してください（" + error + "）")
+        return 1
+    try:
+        receipt = mcs_requests.enqueue(req, os.path.join(mcs_util.HOME, "data", "cmd"))
+    except (OSError, ValueError) as exc:
+        print("復元の承認: 承認を受け付けられませんでした（" + mcs_util.safe_error_code(exc) + "）")
+        return 1
+    print(json.dumps(receipt, ensure_ascii=False))
+    print("承認を受け付けました。次の確認で復元の処理に渡します。結果は mcs_update.py status で確認してください。")
+    return 0 if receipt.get("outcome") == "queued" else 1
 
 
 def cmd_consent_confirm(args) -> int:
@@ -531,6 +581,16 @@ def _build_parser() -> argparse.ArgumentParser:
                       help="consent_termsを確認し同意したことを明示する")
     cc_p.add_argument("--reason", help="人間確認の理由（監査用・必須）")
     cc_p.set_defaults(fn=lambda args: cmd_consent_confirm(args))
+    ra_p = sub.add_parser("restore-approve",
+                          help="DB復元の承認を端末から送る（data/restore_report.json の値を確認して指定）")
+    ra_p.add_argument("--report-id", required=True)
+    ra_p.add_argument("--backup-sha256", required=True)
+    ra_p.add_argument("--backup-schema", type=int, required=True)
+    ra_p.add_argument("--confirm-human", action="store_true")
+    ra_p.add_argument("--reason", required=True)
+    ra_p.add_argument("--actor", default="local-human")
+    ra_p.add_argument("--command-id", help="同じ承認を再送する場合の承認記録UUID")
+    ra_p.set_defaults(fn=lambda args: cmd_restore_approve(args))
     sub.add_parser("rollback", help="直近の更新前の版に戻す（データ復元には承認が必要な場合があります）").set_defaults(fn=lambda args: rollback())
     sub.add_parser("recover", help="更新履歴を確認し、中断した更新を安全に復旧する").set_defaults(
         fn=lambda args: recover_interrupted(_resume_provider_migration=True))

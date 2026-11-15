@@ -28,3 +28,13 @@ uv.lock
 .claude/
 venv/
 ocr-venv/
+# Standalone services renders deployment/scripts/*.sh into <root>/scripts, the
+# checkout in the default layout. Name each one: a glob would cover tracked scripts.
+/scripts/llamacpp_restart_if_idle.sh
+/scripts/mcs_check.sh
+/scripts/mcs_deep.sh
+/scripts/mcs_health.sh
+/scripts/mcs_llm_catchup.sh
+/scripts/mcs_ocr.sh
+/scripts/mcs_offsite.sh
+/scripts/mcs_update.sh

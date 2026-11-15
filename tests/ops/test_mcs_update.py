@@ -1148,3 +1148,88 @@ def test_precheck_tag_rejects_nonregular_runtime_asset(monkeypatch, mode, kind):
     monkeypatch.setattr(update_preflight, '_run_with_lifetime', no_blob_or_probe)
     errors = update_preflight.precheck_tag('v1.2.0')
     assert errors == [f'preflight_failed: bad_entry_type: {mode} {asset}']
+
+
+def test_check_writes_and_applies_nothing_while_a_restore_holds(updater, monkeypatch):
+    """Regression: with an empty journal and a pending restore, the daily
+    check still queued notices and applied approved or auto updates."""
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {
+        "update": {"mode": "auto", "auto_delay_h": 0}})
+    monkeypatch.setattr(update_discovery, 'detect_latest',
+                        lambda pre, **_paths: ("v9.0.0", "a" * 40))
+    monkeypatch.setattr(update_discovery, 'current_version',
+                        lambda **_paths: ("v8.0.0", "b" * 40))
+    monkeypatch.setattr(update_cli, 'fetch_notes', lambda tag: "notes")
+    monkeypatch.setattr(update_cli, 'impact_summary', lambda a, b: [])
+    monkeypatch.setattr(update_cli, '_git',
+                        lambda args, timeout=None: subprocess.CompletedProcess(args, 1, "", ""))
+    monkeypatch.setattr(update_repository, '_git', update_cli._git)
+    monkeypatch.setattr(update_cli, 'scan_pending_approvals',
+                        lambda state: ([{"tag": "v9.0.0", "target_sha": "a" * 40,
+                                         "command_id": "c1"}], []))
+    monkeypatch.setattr(update_cli, '_restore_hold_active', lambda: True)
+    forbidden = []
+    monkeypatch.setattr(update_cli, '_enqueue_notice', lambda *a, **k: forbidden.append("notice"))
+    monkeypatch.setattr(update_cli, '_drug_info_notices', lambda cfg: forbidden.append("drug"))
+    monkeypatch.setattr(update_cli, 'apply', lambda *a, **k: forbidden.append("apply"))
+    monkeypatch.setattr(update_cli, 'recover_interrupted', lambda: forbidden.append("recover"))
+    assert updater.cmd_check() == 0
+    assert forbidden == []
+
+
+def test_apply_starts_nothing_while_a_restore_holds(updater, monkeypatch, capsys):
+    repo = _apply_env(updater, monkeypatch)
+    before = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(update_apply, '_restore_hold_active', lambda: True)
+    assert updater.apply("v1.1.0", "a" * 40, "cid-held") == 2
+    assert 'DBの復元' in capsys.readouterr().out
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["stages"] == [] and "cid-held" not in state.get("executed", {})
+
+
+def test_abort_notice_dropped_by_a_busy_tick_is_sent_by_the_next_check(updater, monkeypatch):
+    """Regression: a pre-lock abort consumed the receipt, then lost its only
+    notice because a collection tick held run.lock at that moment."""
+    _apply_env(updater, monkeypatch)
+    monkeypatch.setattr(update_apply, 'precheck_local', lambda cfg: ["synthetic"])
+    monkeypatch.setattr(update_apply, '_enqueue_notice', lambda *a, **k: False)
+    assert updater.apply("v1.1.0", "a" * 40, "cid-busy") == 1
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["executed"]["cid-busy"]["result"] == "failed"
+    [pending] = state["pending_notices"]
+    assert pending["notice_code"] == "aborted" and "synthetic" in pending["text"]
+
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {"update": {"mode": "notify"}})
+    monkeypatch.setattr(update_discovery, 'detect_latest', lambda pre, **_paths: (None, None))
+    monkeypatch.setattr(update_discovery, 'current_version', lambda **_paths: ("v1.0.0", "b" * 40))
+    monkeypatch.setattr(update_cli, 'scan_pending_approvals', lambda state: ([], []))
+    monkeypatch.setattr(update_cli, '_drug_info_notices', lambda cfg: None)
+    sent = []
+    monkeypatch.setattr(update_cli, '_enqueue_notice', lambda text, **k: sent.append((text, k)) or True)
+    assert updater.cmd_check() == 0
+    assert sent == [(pending["text"], {"use_run_lock": True, "notice_code": "aborted",
+                                       "tag": "v1.1.0"})]
+    assert "pending_notices" not in updater.journal_store.load_state(updater.STATE_PATH)
+
+
+@pytest.mark.parametrize("delay", ["24", None, -1, True])
+def test_invalid_auto_delay_never_crashes_before_the_state_save(updater, monkeypatch, delay):
+    """Regression: a hand-edited auto_delay_h raised TypeError after the
+    notice was queued, so nothing was saved and the notice repeated daily."""
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {
+        "update": {"mode": "auto", "auto_delay_h": delay}})
+    monkeypatch.setattr(update_discovery, 'detect_latest', lambda pre, **_paths: ("v9.0.0", "a" * 40))
+    monkeypatch.setattr(update_discovery, 'current_version', lambda **_paths: ("v8.0.0", "b" * 40))
+    monkeypatch.setattr(update_cli, 'fetch_notes', lambda tag: "notes")
+    monkeypatch.setattr(update_cli, 'impact_summary', lambda a, b: [])
+    monkeypatch.setattr(update_cli, '_git',
+                        lambda args, timeout=None: subprocess.CompletedProcess(args, 1, "", ""))
+    monkeypatch.setattr(update_repository, '_git', update_cli._git)
+    monkeypatch.setattr(update_cli, 'scan_pending_approvals', lambda state: ([], []))
+    monkeypatch.setattr(update_cli, '_drug_info_notices', lambda cfg: None)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', lambda *a, **k: True)
+    monkeypatch.setattr(update_cli, 'apply', lambda *a, **k: pytest.fail("no auto apply"))
+    assert updater.cmd_check() == 0
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["latest_tag"] == "v9.0.0" and state["notified_at"] == "v9.0.0"

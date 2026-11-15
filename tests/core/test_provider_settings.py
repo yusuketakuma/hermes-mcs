@@ -955,6 +955,10 @@ def test_root_directory_replacement_rejects_stale_snapshot(tmp_path, monkeypatch
     assert not (root / "data" / ".provider-settings-pending.json").exists()
 
 
+class _Crash(BaseException):
+    """Synthetic hard stop (power loss, SIGKILL) that no in-process cleanup observes."""
+
+
 @pytest.mark.parametrize("stage", range(1, 6))
 def test_interrupted_replacement_keeps_pending_and_blocks_reader(tmp_path, monkeypatch, stage):
     tree(tmp_path)
@@ -965,10 +969,10 @@ def test_interrupted_replacement_keeps_pending_and_blocks_reader(tmp_path, monke
         result = replace(*args)
         calls.append(True)
         if len(calls) == stage:
-            raise OSError("synthetic interruption")
+            raise _Crash("synthetic interruption")
         return result
     monkeypatch.setattr(settings, "_replace", interrupted)
-    with pytest.raises(OSError, match="synthetic interruption"):
+    with pytest.raises(_Crash, match="synthetic interruption"):
         _commit(tmp_path, monkeypatch, original)
     assert len(calls) == stage
     with pytest.raises(ValueError, match="provider_settings_pending"):
@@ -988,14 +992,121 @@ def test_interrupted_prepublication_keeps_pending_and_source(tmp_path, monkeypat
         if (phase == "pending" and name == ".provider-settings-pending.json"
                 or phase == "backup" and name.startswith(".provider-settings-backup-")
                 or phase == "staged" and name.startswith("new-")):
-            raise OSError("synthetic interruption")
+            raise _Crash("synthetic interruption")
         return result
     monkeypatch.setattr(settings, "_write_new", interrupted)
-    with pytest.raises(OSError, match="synthetic interruption"):
+    with pytest.raises(_Crash, match="synthetic interruption"):
         _commit(tmp_path, monkeypatch, original)
     assert (tmp_path / "config.json").read_bytes() == source
     with pytest.raises(ValueError, match="provider_settings_pending"):
         settings.read(tmp_path)
+
+
+def _interrupt_commit(monkeypatch, point, failure):
+    kind, _, count = point.partition("-")
+    if kind == "replace":
+        replace, calls = settings._replace, []
+        def interrupted(*args):
+            result = replace(*args)
+            calls.append(True)
+            if len(calls) == int(count):
+                raise failure("synthetic interruption")
+            return result
+        monkeypatch.setattr(settings, "_replace", interrupted)
+    elif kind == "link":
+        link, failed = os.link, []
+        def interrupted(src, dst, **kwargs):
+            if dst == "openai.json" and not failed:
+                failed.append(True)
+                raise failure("synthetic interruption")
+            return link(src, dst, **kwargs)
+        monkeypatch.setattr(settings.os, "link", interrupted)
+    else:
+        write_new = settings._write_new
+        def interrupted(parent, name, raw, **kwargs):
+            result = write_new(parent, name, raw, **kwargs)
+            if (kind == "pending" and name == ".provider-settings-pending.json"
+                    or kind == "backup" and name.startswith(".provider-settings-backup-")
+                    or kind == "staged" and name.startswith("new-")):
+                raise failure("synthetic interruption")
+            return result
+        monkeypatch.setattr(settings, "_write_new", interrupted)
+
+
+def _tree_bytes(root):
+    return {str(path.relative_to(root)): path.read_bytes() if path.is_file() else None
+            for path in [root / "config.json", *(root / "data").rglob("*")]}
+
+
+@pytest.mark.parametrize("point", ["pending", "backup", "staged", "replace-1", "replace-3", "replace-5", "link"])
+@pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt])
+@pytest.mark.parametrize("split", [False, True])
+def test_io_failure_during_commit_restores_previous_settings(tmp_path, monkeypatch, capsys, point, failure, split):
+    tree(tmp_path, split=split)
+    original = settings.read(tmp_path)
+    before = _tree_bytes(tmp_path)
+    original["providers"]["openai"] = {"model": "synthetic-openai"}
+    _interrupt_commit(monkeypatch, point, failure)
+    with pytest.raises(failure, match="synthetic interruption"):
+        _commit(tmp_path, monkeypatch, original)
+    assert _tree_bytes(tmp_path) == before
+    assert "provider_settings_rollback_failed" not in capsys.readouterr().err
+    after = settings.read(tmp_path)
+    assert after["mode"] == ("split" if split else "legacy_unverified")
+    assert after["providers"] == {name: {} for name in settings.PROVIDERS}
+    assert ({key: value and value["sha256"] for key, value in after["snapshot"]["files"].items()}
+            == {key: value and value["sha256"] for key, value in original["snapshot"]["files"].items()})
+
+
+def test_unverified_rollback_keeps_pending_and_blocks_reader(tmp_path, monkeypatch, capsys):
+    tree(tmp_path)
+    original = settings.read(tmp_path)
+    _interrupt_commit(monkeypatch, "replace-2", OSError)
+    def refused(*args, **kwargs):
+        raise OSError("synthetic rollback failure")
+    monkeypatch.setattr(settings.os, "rmdir", refused)
+    with pytest.raises(OSError, match="synthetic interruption"):
+        _commit(tmp_path, monkeypatch, original)
+    assert "provider_settings_rollback_failed: OSError" in capsys.readouterr().err
+    assert (tmp_path / "data" / ".provider-settings-pending.json").exists()
+    with pytest.raises(ValueError, match="provider_settings_pending"):
+        settings.read(tmp_path)
+
+
+def test_interrupt_after_receipt_removal_keeps_committed_settings(tmp_path, monkeypatch):
+    tree(tmp_path, split=True)
+    original = settings.read(tmp_path)
+    original["providers"]["openai"] = {"model": "synthetic-openai"}
+    unlink, fired = os.unlink, []
+    def interrupted(name, **kwargs):
+        unlink(name, **kwargs)
+        if name == ".provider-settings-pending.json" and not fired:
+            fired.append(True)
+            raise KeyboardInterrupt("synthetic interruption")
+    monkeypatch.setattr(settings.os, "unlink", interrupted)
+    with pytest.raises(KeyboardInterrupt, match="synthetic interruption"):
+        _commit(tmp_path, monkeypatch, original)
+    assert not (tmp_path / "data" / ".provider-settings-pending.json").exists()
+    after = settings.read(tmp_path)
+    assert after["mode"] == "split" and after["providers"]["openai"] == {"model": "synthetic-openai"}
+
+
+def test_failure_creating_receipt_leaves_settings_untouched(tmp_path, monkeypatch, capsys):
+    tree(tmp_path, split=True)
+    original = settings.read(tmp_path)
+    before = _tree_bytes(tmp_path)
+    original["providers"]["openai"] = {"model": "synthetic-openai"}
+    create = settings.create_exclusive
+    def refused(name, *args, **kwargs):
+        if name == ".provider-settings-pending.json":
+            raise OSError("synthetic interruption")
+        return create(name, *args, **kwargs)
+    monkeypatch.setattr(settings, "create_exclusive", refused)
+    with pytest.raises(OSError, match="synthetic interruption"):
+        _commit(tmp_path, monkeypatch, original)
+    assert _tree_bytes(tmp_path) == before
+    assert "provider_settings_rollback_failed" not in capsys.readouterr().err
+    assert settings.read(tmp_path)["providers"]["openai"] == {}
 
 
 @pytest.mark.parametrize("name", ["config", "anthropic", "openai", "jev", "authority"])
@@ -1468,3 +1579,66 @@ def test_legacy_config_preserves_directory_identity_between_retry_attempts(tmp_p
         mcs_util.load_config(str(tmp_path / 'config.json'))
     assert str(error.value.__cause__) == 'provider_settings_changed'
     assert changed and len(scans) == 1
+
+
+def _committed_with_stale_pending(tmp_path):
+    """A commit that published every file and the authority, then lost power before unlinking pending."""
+    import config_edit
+
+    _fresh_root(tmp_path, {})
+    with config_edit._edit_lock(tmp_path / "config.json") as fd:
+        legacy = settings.read(tmp_path, model_owners=OWNERS)
+        initial = settings.bootstrap_locked(tmp_path, legacy["snapshot"], {}, model_owners=OWNERS, lock_fd=fd)
+        settings.commit_locked(tmp_path, initial["snapshot"], {"mcs_login_id": "synthetic", "notify_target": "local"},
+                               initial["providers"], selected_provider="anthropic", model_owners=OWNERS, lock_fd=fd)
+    data = tmp_path / "data"
+
+    def digest(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    after = {"config": digest(tmp_path / "config.json"),
+             **{name: digest(data / "provider_settings" / (name + ".json")) for name in settings.PROVIDERS}}
+    operation = "0123456789abcdef0123456789abcdef"
+    private_json(data / ".provider-settings-pending.json",
+                 {"version": 1, "operation": operation, "before": dict.fromkeys(after), "after": after,
+                  "authority_before": None})
+    assert settings.probe(tmp_path)["state"] == "pending"
+    return operation, after
+
+
+def test_committed_pending_accepts_only_a_fully_published_commit(tmp_path):
+    """GA-provider-settings-writer-1: the exit exists only for the all-"after" state."""
+    import config_edit
+
+    operation, after = _committed_with_stale_pending(tmp_path)
+    with config_edit._edit_lock(tmp_path / "config.json") as fd:
+        assert settings.committed_pending(tmp_path, fd) == operation
+    pending = tmp_path / "data" / ".provider-settings-pending.json"
+    private_json(pending, {"version": 1, "operation": operation, "before": dict.fromkeys(after),
+                           "after": {**after, "openai": "0" * 64}, "authority_before": None})
+    with config_edit._edit_lock(tmp_path / "config.json") as fd:
+        with pytest.raises(ValueError, match="provider_pending_not_committed"):
+            settings.committed_pending(tmp_path, fd)
+
+
+def test_human_confirmed_finalize_sets_the_pending_record_aside(tmp_path, monkeypatch):
+    import uuid
+    from contextlib import closing
+    import mcs_requests
+    from ledger import Ledger
+
+    operation, _after = _committed_with_stale_pending(tmp_path)
+    monkeypatch.setattr(cloud_policy, "PROVIDERS", {name: model for model, name in OWNERS.items()})
+    req = {"version": 1, "cmd": "ops.provider_pending_finalize", "command_id": str(uuid.uuid4()),
+           "actor": "synthetic-human", "human_confirmed": True, "project_id": None,
+           "reason": "synthetic: compared hashes by hand", "operation": operation}
+    assert mcs_requests.validate(req) is None
+    with closing(Ledger(str(tmp_path / "data" / "ledger.db"))) as ledger:
+        wrong = mcs_requests.apply_command(ledger, {**req, "command_id": str(uuid.uuid4()), "operation": "f" * 32})
+        assert (wrong["outcome"], wrong["error"]) == ("rejected", "provider_pending_changed")
+        receipt = mcs_requests.apply_command(ledger, req)
+    assert receipt["outcome"] == "applied", receipt
+    data = tmp_path / "data"
+    assert not (data / ".provider-settings-pending.json").exists()
+    assert (data / f".provider-settings-pending.resolved-{operation}.json").exists()
+    assert settings.read(tmp_path, model_owners=OWNERS)["mode"] == "split"

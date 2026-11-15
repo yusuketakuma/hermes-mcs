@@ -80,6 +80,30 @@ def test_open_legacy_fd_tail_is_imported_once_without_checkout(tmp_path):
     assert not json.loads((root / 'data/.mcs-log-state.json').read_text())['rotation_ready']
 
 
+@pytest.mark.parametrize('drift', ['missing', 'truncate'])
+def test_retired_drift_unblocks_the_already_installed_helper(tmp_path, drift):
+    """Regression (IA-014): retire-drifted wrote a marker only its own new
+    copy read, so the installed helper kept failing update and mcs recover."""
+    import run_log
+    root, checkout, recovery, _ = layout(tmp_path)
+    original = root / 'data/run.log'
+    put(original, b'synthetic first\n')
+    deploy.prepare(root, checkout, recovery)
+    if drift == 'missing':
+        original.rename(root / 'data/retained-original')
+    else:
+        put(original, b'short')
+    code = 'run_log_legacy_' + ('missing' if drift == 'missing' else 'changed')
+    with pytest.raises(deploy.LogInstallError, match=code):
+        deploy.migrate_installed(root, recovery)
+    with pytest.raises(deploy.LogInstallError, match=code):
+        deploy.prepare(root, checkout, recovery)
+    assert run_log.retire_drifted(root / 'data') == ['run.log']
+    assert deploy.migrate_installed(root, recovery)['imported'] == []
+    assert deploy.prepare(root, checkout, recovery)['imported'] == []
+    assert (root / 'data/mcs.log').read_bytes() == b'synthetic first\n'
+
+
 def test_custom_roots_share_recovery_directory_without_mixing_logs(tmp_path):
     root, checkout, recovery, _ = layout(tmp_path)
     other = tmp_path / 'other-runtime'
@@ -152,6 +176,25 @@ def test_uninstalled_legacy_recovery_directory_is_untouched(tmp_path):
     assert deploy.migrate_installed(tmp_path / 'old-root', recovery)['scope'] == 'unavailable'
     assert list(recovery.iterdir()) == []
     assert recovery.stat().st_mode & 0o777 == 0o755
+
+
+@pytest.mark.parametrize('mode', [0o755, 0o750, 0o775])
+def test_prepare_tightens_only_an_unwritable_legacy_recovery_directory(tmp_path, mode):
+    """Regression: a pre-v1.0.7 0755 recovery directory wedged every update
+    with run_log_helper_untrusted and nothing told the operator to chmod."""
+    root, checkout, recovery, _ = layout(tmp_path)
+    recovery.mkdir()
+    recovery.chmod(mode)
+    with pytest.raises(deploy.LogInstallError):
+        deploy.helper_path(root, recovery, checkout=checkout)   # read-only stays strict
+    assert recovery.stat().st_mode & 0o777 == mode
+    if mode & 0o022:
+        with pytest.raises(deploy.LogInstallError, match='run_log_helper_untrusted'):
+            deploy.prepare(root, checkout, recovery)
+        assert recovery.stat().st_mode & 0o777 == mode
+        return
+    assert deploy.prepare(root, checkout, recovery)['scope'] == 'verified_prefix'
+    assert recovery.stat().st_mode & 0o777 == 0o700
 
 
 def test_ancestor_aliases_use_one_canonical_namespace_without_plan_writes(tmp_path, monkeypatch):
@@ -415,3 +458,30 @@ def test_recovery_reimports_tail_under_both_locks_before_empty_journal_return(mo
     monkeypatch.setattr(update_services, '_remove_marker', mcs_update._remove_marker)
     assert mcs_update.recover_interrupted() == 0
     assert trace == ['update_lock', 'run_lock', 'tail', 'marker']
+
+
+def test_recovery_continues_after_unverified_legacy_log_tail(monkeypatch):
+    from ops_testkit import patch_lifecycle_lookup
+
+    trace, reports = [], []
+    monkeypatch.setattr(mcs_update.journal_store, 'load_state', lambda *_: {})
+    for name, value in (
+            ('acquire_update_lock', lambda: trace.append('update_lock') or os.open(os.devnull, os.O_RDONLY)),
+            ('_acquire_run_lock_wait', lambda **_: trace.append('run_lock') or os.open(os.devnull, os.O_RDONLY)),
+            ('_release_legacy_hold', lambda _: False),
+            ('_restore_writer_hold_marker', lambda: None),
+            ('_remove_marker', lambda: trace.append('marker')),
+            ('_report', lambda result, detail, **_: reports.append((result, detail)))):
+        patch_lifecycle_lookup(monkeypatch, mcs_update, name, value)
+
+    def unverified_tail():
+        trace.append('tail')
+        # An imported legacy source vanished or changed after its import.
+        raise mcs_update.UpdateError('run_log_tail_unverified: run_log_legacy_missing')
+
+    patch_lifecycle_lookup(monkeypatch, mcs_update, '_migrate_log_tail', unverified_tail)
+    assert mcs_update.recover_interrupted() == 0
+    # The orphan update marker is still removed, so collection is not held forever.
+    assert trace == ['update_lock', 'run_lock', 'tail', 'marker']
+    assert reports == [('run_log_tail_unverified',
+                        'run_log_tail_unverified: run_log_legacy_missing — recovery continues')]

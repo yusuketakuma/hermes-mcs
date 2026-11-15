@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 from types import SimpleNamespace
 import uuid
@@ -86,6 +87,9 @@ def case(tmp_path, monkeypatch, request):
     witnesses.mkdir()
     (witnesses / "slack-synthetic.json").write_text(json.dumps({
         "version": cancel.VERSION, "reason": "worker_started", "pid": FAKE_PID}))
+    # Every worker creates its send scope lock; a free one proves it stopped.
+    (data / "slack_state").mkdir(exist_ok=True)
+    (data / "slack_state" / "send-synthetic.lock").touch()
 
     def stopped(pid, signal):
         assert (pid, signal) == (FAKE_PID, 0)
@@ -263,7 +267,8 @@ def test_worker_stop_must_be_proven_before_queue_changes(case, monkeypatch, work
     request = _request(case)
     path = case.data / "worker_status" / "slack-synthetic.json"
     if worker == "missing":
-        path.unlink()
+        # The scope lock is the stop proof; a worker that never created one is unproven.
+        (case.data / "slack_state" / "send-synthetic.lock").unlink()
     elif worker in ("old_version", "bad_reason"):
         record = json.loads(path.read_text())
         record["version" if worker == "old_version" else "reason"] = "invalid-synthetic"
@@ -277,6 +282,85 @@ def test_worker_stop_must_be_proven_before_queue_changes(case, monkeypatch, work
     before = _snapshot(case.led.db)
     with pytest.raises((ValueError, PermissionError)):
         cancel.apply(case.root, request)
+    assert _snapshot(case.led.db) == before
+
+
+def test_standalone_worker_without_witness_is_proven_stopped_by_its_free_scope_lock(case):
+    # The standalone Slack/Discord host records no worker_status witness.
+    (case.data / "worker_status" / "slack-synthetic.json").unlink()
+    (case.data / "worker_status").rmdir()
+    receipt = cancel.apply(case.root, _request(case))
+    assert receipt["event_ids"] == case.events
+    _assert_cancelled(case)
+
+
+def test_running_worker_refuses_even_with_a_stale_dead_witness(case):
+    # A Hermes-era witness whose pid is gone says nothing about a standalone worker.
+    worker = cancel.acquire_run_lock(str(case.data / "slack_state" / "send-synthetic.lock"))
+    request = _request(case)
+    before = _snapshot(case.led.db)
+    try:
+        with pytest.raises(ValueError, match="worker_not_stopped"):
+            cancel.apply(case.root, request)
+    finally:
+        os.close(worker)
+    assert _snapshot(case.led.db) == before
+    assert not (case.data / "notification_cancellations").exists()
+
+
+def _standalone_flags(case):
+    flags = case.data / "flags"
+    flags.mkdir(exist_ok=True)
+    (flags / "notify.json").write_text(json.dumps({"runtime_mode": "standalone"}))
+
+
+@pytest.mark.parametrize("leftover", ["old_version", "bad_reason", "reused_pid"])
+def test_standalone_ignores_a_leftover_hermes_witness_once_the_scope_lock_is_free(
+        case, monkeypatch, leftover):
+    # A Hermes-era witness left after switching to standalone must not block forever.
+    _standalone_flags(case)
+    path = case.data / "worker_status" / "slack-synthetic.json"
+    if leftover == "reused_pid":
+        monkeypatch.setattr(cancel.os, "kill", lambda pid, signal: None)
+    else:
+        record = json.loads(path.read_text())
+        record["version" if leftover == "old_version" else "reason"] = "invalid-synthetic"
+        path.write_text(json.dumps(record))
+    receipt = cancel.apply(case.root, _request(case))
+    assert receipt["event_ids"] == case.events
+    _assert_cancelled(case)
+
+
+def test_standalone_still_refuses_a_worker_holding_the_scope_lock(case, monkeypatch):
+    _standalone_flags(case)
+    monkeypatch.setattr(cancel.os, "kill", lambda pid, signal: None)
+    worker = cancel.acquire_run_lock(str(case.data / "slack_state" / "send-synthetic.lock"))
+    before = _snapshot(case.led.db)
+    try:
+        with pytest.raises(ValueError, match="worker_not_stopped"):
+            cancel.apply(case.root, _request(case))
+    finally:
+        os.close(worker)
+    assert _snapshot(case.led.db) == before
+
+
+@pytest.mark.parametrize("flags", ["hermes", "malformed", "symlink"])
+def test_unproven_standalone_flags_keep_the_witness_check(case, monkeypatch, tmp_path, flags):
+    directory = case.data / "flags"
+    if flags == "symlink":
+        target = tmp_path / "foreign-flags"
+        target.mkdir()
+        (target / "notify.json").write_text(json.dumps({"runtime_mode": "standalone"}))
+        shutil.rmtree(directory, ignore_errors=True)  # dispatch may have created it
+        directory.symlink_to(target)
+    else:
+        directory.mkdir(exist_ok=True)
+        (directory / "notify.json").write_text(
+            "{" if flags == "malformed" else json.dumps({"runtime_mode": "hermes"}))
+    monkeypatch.setattr(cancel.os, "kill", lambda pid, signal: None)
+    before = _snapshot(case.led.db)
+    with pytest.raises(ValueError, match="worker_not_stopped"):
+        cancel.apply(case.root, _request(case))
     assert _snapshot(case.led.db) == before
 
 

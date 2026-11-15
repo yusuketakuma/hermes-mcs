@@ -331,12 +331,15 @@ def _reconcile_membership(snapshot):
             r = subprocess.run([hermes, "cron", "list", "--all"],
                                capture_output=True, text=True,
                                timeout=mcs_recovery_core.T_GIT)
-            if r.returncode != 0:
-                problems.append("cron_list_unverifiable")
-            for block in re.finditer(
+            # = service_contract.parse_cron_listing: strip colours, and only an
+            # explicit "No scheduled jobs" proves an empty listing.
+            listing = re.sub(r"\x1b\[[0-9;]*m", "", r.stdout or "") if r.returncode == 0 else ""
+            blocks = list(re.finditer(
                     r"^\s{2}([0-9a-f]{6,})\s+\[[^\]]*\]\n"
-                    r"((?:\s{4}\S[^\n]*\n?)+)",
-                    r.stdout if r.returncode == 0 else "", re.M):
+                    r"((?:\s{4}\S[^\n]*\n?)+)", listing, re.M))
+            if r.returncode != 0 or (not blocks and not re.search(r"^No scheduled jobs", listing, re.M)):
+                problems.append("cron_list_unverifiable")
+            for block in blocks:
                 jid, body = block.group(1), block.group(2)
                 fields = dict(re.findall(
                     r"^\s{4}(\w[\w ]*?):\s{2,}(.+)$", body, re.M))
@@ -377,6 +380,7 @@ _RECOVERY_COMPLETE_TEXTS = frozenset({
     '[MCS] 更新前後のファイルが混在していたため、更新前の状態に戻しました。',
     '[MCS] プログラムの切り替え前に中断した更新を終了しました。',
     '[MCS] 中断された更新の復旧を完了しました。',
+    '[MCS] 更新前の版への巻戻しが途中で止まっていたため、更新前の版で常駐処理の設定を整え直しました。',
 })
 _RECOVERY_RESTART_FAILED_TEXT = (
     '[MCS] 更新の復旧後に再起動要求を保存・起動できません。'

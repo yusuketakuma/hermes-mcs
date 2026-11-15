@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "独立実行モードで接続SDKの固定版が変わる更新を巻き戻すと、常駐処理が起動できなくなる問題を修正",
+  "summary": "runtime_mode=standalone の導入先で、deployment/requirements-standalone.txt が変わる版へ --reinstall 付きで更新した後に元の版へ戻すと、プログラムだけが旧版へ戻り、~/.mcs/venv の接続SDKは新しい固定版のまま残っていました。旧版の常駐処理は固定版の不一致で起動できず、通知も送れませんでした。今後は、mcs_update.py rollback（チャット承認の rollback を含む）は何も変更せずに rollback_failed: standalone_sdk_rollback_unsupported で中止し、適用後の処理に失敗したときの自動巻戻しと、中断した Python 3.14 移行を元に戻す復旧処理は、巻き戻さずに保留して通知します。",
+  "upgrade": "追加操作は不要です。この理由で中止・保留された導入先では、新しい版のまま復旧するか（mcs recover）、旧版へ戻す必要がある場合は旧版の install.sh を同じ省略オプションで実行して接続SDKを入れ直す手順を管理者と確認してください。Hermes 連携の導入先は対象外です。",
+  "details": [
+    "巻戻し前に、戻り先と現在の版で deployment/requirements-standalone.txt を比較する。差がある、または比較できない場合は巻き戻さない。",
+    "実行モードを判定できない場合は独立実行モードとして扱う。",
+    "中断した移行を元に戻す復旧処理（update_recovery._undo_interrupted_migration）も、更新記録の書換えと処理の停止より前に同じ比較を行い、差があれば変更せずに要手動対応として通知する。"
+  ],
+  "refs": [
+    "mcs/ops/update_apply.py",
+    "mcs/ops/update_preflight.py",
+    "mcs/ops/update_recovery.py"
+  ]
+}

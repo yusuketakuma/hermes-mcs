@@ -362,6 +362,9 @@ _SQLITE_RW_OK = {"maintenance.py", "llm_admission.py"}
 # The former entrypoints retained these exact writer responsibilities after splitting.
 _SPLIT_LEDGER_WRITERS = {
     "extract/llm/extract_llm_resident.py": {"_open_current_ledger", "_main"},
+    # the human-confirmed local operations (cloud-llm stop/resume/release, Slack setup
+    # discard, provider pending finalize) share one run-lock-guarded writer here
+    "ops/commands/mcs_requests.py": {"apply_local_operation"},
     "ops/update_execution.py": {"_postcheck"},
     "ops/update_lifecycle_context.py": {"_enqueue_notice", "_NOTICE_CHILD"},
     "ops/update_restore.py": {"_reconcile_restored"},

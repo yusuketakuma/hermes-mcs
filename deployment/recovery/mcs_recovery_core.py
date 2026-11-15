@@ -522,6 +522,9 @@ def _awaiting_consent():
             data.get("phase") in ("restored", "awaiting_consent")
             or ("phase" not in data and "restored_at" in data)):
         return {"unreadable": True}
+    if (data.get("by") == "mcs_backup_restore" and data.get("phase") == "awaiting_consent"
+            and mcs_recovery_gateway._adoption_resumed(DATA)):
+        return None     # as notify_spool: adoption resumed writers; delivery stays held there
     return data if data.get("phase") == "awaiting_consent" else None
 
 

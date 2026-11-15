@@ -19,6 +19,7 @@ import argparse
 import os
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,10 @@ RUNTIME_ROOT = "~/.mcs"                     # mcs_util.HOME default; never moved
 FALLBACK_SOURCE = "~/.local/share/hermes-mcs"  # when ~/.mcs holds data but no checkout
 RECORDED_REPO = "~/.mcs-recovery/repo_path"  # written by install.sh stage 6
 RUNTIME_ENTRIES = {"config.json", "data", "venv", ".env"}
+# Finder metadata macOS adds to empty folders, by name: (header, max bytes).
+# Only files that match are treated as absent (and removed before a clone).
+OS_COMPANIONS = {".DS_Store": (b"\0\0\0\1Bud1", 1 << 20), ".localized": (b"", 0)}
+APPLEDOUBLE = (b"\0\x05\x16\x07", 1 << 20)  # "._*" files
 # Shown for context only: the decision rests on what the session can reach.
 SANDBOX_HINTS = ("CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED", "SANDBOX_RUNTIME")
 
@@ -51,13 +56,37 @@ def _git(path, *args, check=True):
 
 
 def _is_checkout(path):
+    """True only for the top of its own work tree, not a folder inside another one."""
     if not os.path.isdir(path):
         return False
     try:
-        return subprocess.run(["git", "-C", path, "rev-parse", "--show-toplevel"],
-                              capture_output=True, text=True, timeout=30).returncode == 0
+        result = subprocess.run(["git", "-C", path, "rev-parse", "--show-toplevel"],
+                                capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         raise Refused("git を実行できません（xcode-select --install で導入できます）") from None
+    return result.returncode == 0 and os.path.realpath(result.stdout.strip()) == os.path.realpath(path)
+
+
+def _companion(path, name):
+    """A regular file whose name, size and header match Finder metadata."""
+    header, limit = OS_COMPANIONS.get(name, APPLEDOUBLE if name.startswith("._") else (None, 0))
+    if header is None:
+        return False
+    try:
+        fd = os.open(os.path.join(path, name), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return False
+    try:
+        info = os.fstat(fd)
+        return (stat.S_ISREG(info.st_mode) and info.st_size <= limit
+                and os.read(fd, len(header)) == header)
+    finally:
+        os.close(fd)
+
+
+def _content(path):
+    """Entries other than Finder metadata files, which macOS adds to empty folders."""
+    return {name for name in os.listdir(path) if not _companion(path, name)}
 
 
 def _roots(path):
@@ -135,8 +164,6 @@ def _judge(source, dest, notes):
     if not os.path.isdir(dest):
         raise Refused(f"{dest} はフォルダではありません")
     if _is_checkout(dest):
-        if os.path.realpath(_git(dest, "rev-parse", "--show-toplevel")) != dest:
-            raise Refused(f"{dest} は別のソースフォルダの内側です。ソースフォルダの最上位か空のフォルダを指定してください")
         dest_head, source_head = _git(dest, "rev-parse", "HEAD"), _git(source, "rev-parse", "HEAD")
         if dest_head != source_head:
             if not _roots(source) & _roots(dest):
@@ -147,13 +174,15 @@ def _judge(source, dest, notes):
                           f"{source_head[:8]}）。ここでは導入も版の変更もしません。"
                           "docs/guides/UPGRADE_AGENT.md の手順で移行先の版の更新ツールを使ってください")
         return "reuse", dest
-    entries = set(os.listdir(dest))
+    entries = _content(dest)
     if not entries:
         return "clone", dest
     if entries & RUNTIME_ENTRIES:
         raise DataOnly(f"{dest} には既存の設定・データがありますがソースフォルダではありません。"
                       "データは移動しません。--dest で別の空フォルダを指定してください")
-    raise Refused(f"{dest} は空ではないフォルダです")
+    shown = sorted(entries)
+    raise Refused(f"{dest} は空ではないフォルダです（{'、'.join(map(repr, shown[:3]))}"
+                  f"{' など' if len(shown) > 3 else ''}）")
 
 
 def clone(source, dest):
@@ -177,7 +206,9 @@ def clone(source, dest):
         else:
             _git(staging, "remote", "remove", "origin")
         if os.path.isdir(dest):
-            os.rmdir(dest)   # only an empty dest reaches here
+            for name in set(os.listdir(dest)) - _content(dest):
+                os.unlink(os.path.join(dest, name))
+            os.rmdir(dest)   # only a dest without content reaches here
         os.rename(staging, dest)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
@@ -203,7 +234,7 @@ def main(argv=None, source=None):
     parser.add_argument("--dest", help="恒久的なソースフォルダの置き場所（省略時は既存の導入先、なければ ~/.mcs。"
                                        "~/.mcs に設定・データだけがある場合は ~/.local/share/hermes-mcs）")
     parser.add_argument("--dry-run", action="store_true",
-                        help="計画だけを表示し、何も書き込まない（install.sh --dry-run も実行）")
+                        help="計画だけを表示し、何も書き込まない（既存の置き場所を使うときは install.sh --dry-run も実行。新しく複製する場合は複製の計画だけ）")
     args, passthrough = parser.parse_known_args(argv)
     source = source or os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
     env = environment()

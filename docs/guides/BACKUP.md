@@ -356,16 +356,16 @@ DBの置換・改変・承認との不一致・公開中断は保留を維持す
 実データでの実行は別途確定した人の同意が必要で、サービスは開始しない。
 
 ```bash
-python3 mcs/ops/mcs_restore.py plan \
+"$PY" "$REPO/mcs/ops/mcs_restore.py" plan \
   --destination "$DEST" --source-sha256 "$BUNDLE_SHA"
 
-python3 mcs/ops/mcs_restore.py approve \
+"$PY" "$REPO/mcs/ops/mcs_restore.py" approve \
   --destination "$DEST" --source-sha256 "$BUNDLE_SHA" \
   --plan-sha256 "$PLAN_SHA" --confirm-human \
   --actor "$ACTOR" --reason "$REASON" \
   --custody-ref "$CUSTODY_REF" --delivery-policy hold_all
 
-python3 mcs/ops/mcs_restore.py resume \
+"$PY" "$REPO/mcs/ops/mcs_restore.py" resume \
   --destination "$DEST" --receipt-sha256 "$RECEIPT_SHA" \
   --confirm-human --actor "$ACTOR" --reason "$REASON"
 ```
@@ -391,7 +391,7 @@ receiptと一致させる。別の配置先や古い承認の値を流用しな�
 `scheduled:true` の両方を要求し、更新中の marker があれば起動しない。
 設定からの描画値供給と health の記録接続は上記の実装を確認済みだが、
 `services`は明示した毎日の時刻でHermes cronへ追加し、独立runtimeは同じjob定義を
-単一host内で所有する。既定の6jobは維持し、backup無効化時は所有済みの追加jobだけを除く。
+単一host内で所有する。既定の7jobは維持し、backup無効化時は所有済みの追加jobだけを除く。
 共有jobの維持・追加・無効化と独立hostの所有を合成検証した。
 実機の登録・反映、新端末のサービス開始・hold解除は別工程。
 描画済み wrapper が既にあり、一回の offsite 実行を明示承認した場合だけ、
@@ -452,7 +452,7 @@ receiptと一致させる。別の配置先や古い承認の値を流用しな�
 成功日時や復号結果を作りません。鍵も不要です。
 
 ```bash
-python3 mcs/ops/mcs_backup.py review-drill \
+"$PY" "$REPO/mcs/ops/mcs_backup.py" review-drill \
   --policy "$POLICY" --state-dir "$STATE_DIR" \
   --attempt-id "$OBSERVED_ATTEMPT_ID" \
   --confirm-human --reason "原因と保持物を確認して整理した"

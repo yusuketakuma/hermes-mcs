@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "日次確認やチャット承認から始まる再導入が Homebrew を見つけられず失敗する問題を修正",
+  "summary": "日次の更新確認（自動更新、またはチャットで承認した更新）が install.sh の再導入を伴う場合、これまでは定期処理の固定 PATH に Homebrew が無いため、install.sh が「Homebrew が見つかりません」や Python 3.14・uv の不足で必ず失敗し、更新を巻き戻していました。更新ツールは install.sh を起動するとき、存在する Homebrew の標準フォルダー（/opt/homebrew/bin、/usr/local/bin）を PATH の先頭に補うようになりました。",
+  "upgrade": "追加操作は不要です。端末から更新ツールを実行する場合など、PATH に Homebrew が既にあるときは変わりません。",
+  "details": [
+    "補うのは実在するフォルダーだけで、既に PATH にあるものは重複させない。",
+    "install.sh の事前確認で使う python3 は、端末で実行したときと同じく Homebrew 側が優先される。",
+    "更新ツール自身の PATH と、install.sh 以外の子プロセスの PATH は変えない。"
+  ],
+  "refs": ["mcs/ops/update_runtime_migration.py", "tests/ops/test_python314_runtime_migration.py"]
+}

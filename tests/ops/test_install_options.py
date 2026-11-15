@@ -203,8 +203,33 @@ def test_migrates_matching_legacy_without_changing_it(tmp_path):
     assert install_options.save(config, record, ['--no-llm'], base) == 0
     assert record.read_bytes() == original
     assert json.loads(config.read_text()) == {'other': 1, 'install_args': ['--no-llm']}
-    with pytest.raises(ValueError, match='legacy_rollback_conflict'):
-        install_options.inspect(config, record, [])
+
+
+def test_direct_run_changes_the_selection_in_config_and_legacy_record(tmp_path):
+    # Requirement change (IA-015): a direct install.sh run may change the
+    # selection; the legacy record follows so an old-version rollback repeats it.
+    config, record = tmp_path / 'config.json', tmp_path / 'install_options.json'
+    put(config, {'other': 1, 'install_args': ['--no-llm']})
+    put(record, {'v': 1, 'install_args': ['--no-llm']})
+    base = install_options.inspect(config, record, ['--no-llm', '--with-yomitoku'])
+    assert install_options.save(config, record, ['--no-llm', '--with-yomitoku'], base) == 0
+    assert json.loads(config.read_text())['install_args'] == ['--no-llm', '--with-yomitoku']
+    assert json.loads(record.read_text()) == {'v': 1, 'install_args': ['--no-llm', '--with-yomitoku']}
+    assert install_options.selection(config, record) == ['--no-llm', '--with-yomitoku']
+
+
+def test_same_direct_run_repairs_a_crash_between_the_two_writes(tmp_path):
+    config, record = tmp_path / 'config.json', tmp_path / 'install_options.json'
+    put(config, {'install_args': ['--no-plugin']})       # config written, legacy not yet
+    put(record, {'v': 1, 'install_args': []})
+    with pytest.raises(ValueError, match='record_conflict'):
+        install_options.inspect(config, record)            # the updater still refuses
+    with pytest.raises(ValueError, match='record_conflict'):
+        install_options.inspect(config, record, ['--no-llm'])
+    base = install_options.inspect(config, record, ['--no-plugin'])
+    assert install_options.save(config, record, ['--no-plugin'], base) == 0
+    assert json.loads(record.read_text())['install_args'] == ['--no-plugin']
+    assert install_options.selection(config, record) == ['--no-plugin']
 
 
 def test_update_migrates_only_legacy_value_and_keeps_its_bytes(tmp_path):
@@ -356,6 +381,37 @@ def test_fresh_bootstrap_publishes_checked_split_before_services(tmp_path, monke
         assert state['mode'] == 'split' and state['common'] == {'runtime_mode': 'standalone'}
         assert state['providers'] == {name: {} for name in provider_settings.PROVIDERS}
         assert not (data / '.provider-settings-pending.json').exists()
+    finally:
+        os.close(fd)
+
+
+def test_fresh_bootstrap_after_restored_failure_requires_retaken_proof(tmp_path, monkeypatch):
+    import os
+    root, data, fd, config, token, proof = _fresh_install_fixture(tmp_path)
+    monkeypatch.setattr(install_options, '_fresh_cron_absent', lambda: True)
+    monkeypatch.setattr(install_options, '_fresh_workers_absent', lambda: True)
+    replace, calls = provider_settings._replace, []
+    def full_disk(*args):
+        result = replace(*args)
+        calls.append(True)
+        if len(calls) == 2:
+            raise OSError('synthetic interruption')
+        return result
+    monkeypatch.setattr(provider_settings, '_replace', full_disk)
+    config_before = config.read_bytes()
+    try:
+        with pytest.raises(ValueError, match='fresh_bootstrap_unverified'):
+            install_options.bootstrap_fresh(config, data / 'install_options.json', proof, token, fd)
+        assert config.read_bytes() == config_before
+        assert set(os.listdir(data)) == {'update.lock', '.provider-bootstrap-fresh.json'}
+        monkeypatch.setattr(provider_settings, '_replace', replace)
+        # The rollback restores bytes, not the ctime-bearing identity the old proof pinned.
+        with pytest.raises(ValueError, match='fresh_bootstrap_unverified') as stale:
+            install_options.bootstrap_fresh(config, data / 'install_options.json', proof, token, fd)
+        assert stale.value.__cause__.args == ('fresh_config_changed',)
+        retaken = json.dumps({'identity': provider_settings._identity(config.stat()),
+                              'sha256': hashlib.sha256(config.read_bytes()).hexdigest()})
+        assert install_options.bootstrap_fresh(config, data / 'install_options.json', retaken, token, fd) == 0
     finally:
         os.close(fd)
 

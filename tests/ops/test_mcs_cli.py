@@ -85,6 +85,7 @@ def test_setup_features_routes_to_features(pinned, monkeypatch):
     ["setup", "--password", "synthetic"],
     ["update", "plan", "--reinstall"],
     ["update", "apply", "--install-arg=--no-services"],
+    ["update", "apply", "--install-arg=--no-llm"],
     ["update", "plan", "--to", "HEAD;echo unsafe"],
     ["update", "rollback", "--to", "v1.2.0"],
 ])
@@ -113,13 +114,15 @@ def test_mutating_update_retains_existing_entrypoints(pinned, monkeypatch, phase
         assert argv[1:] == [str(ROOT / "mcs/ops/mcs_update.py"), "rollback"]
 
 
-@pytest.mark.parametrize("route,exit_code", [("apply", 0), ("blocked", 1)])
+@pytest.mark.parametrize("route,blockers,exit_code", [
+    ("apply", [], 0), ("blocked", ["tree_dirty"], 1), ("noop", [], 0),
+    ("noop", ["update_in_progress_or_interrupted"], 1)])
 def test_plan_uses_target_bootstrap_without_fetch_or_live_writes(
-        pinned, monkeypatch, tmp_path, capsys, route, exit_code):
+        pinned, monkeypatch, tmp_path, capsys, route, blockers, exit_code):
     monkeypatch.setattr(mcs_cli, 'load_config', lambda: {'runtime_mode': 'hermes'})
     repo, bare = _make_repo(tmp_path)
     stub = ("import json,os,sys\nprint(json.dumps("
-            f"{{'route':{route!r},'argv':sys.argv[1:],"
+            f"{{'route':{route!r},'blockers':{blockers!r},'argv':sys.argv[1:],"
             "'repo':os.environ['MCS_UPDATE_REPO']}))\n")
     _release(tmp_path / "remote-work", bare, "v1.2.0",
              {"mcs/ops/mcs_update.py": stub, "mcs/_mcs_path.py": ""})
@@ -137,6 +140,23 @@ def test_plan_uses_target_bootstrap_without_fetch_or_live_writes(
     assert seen["repo"] == str(repo)
     assert before == {str(p.relative_to(repo)): p.read_bytes()
                       for p in repo.rglob("*") if p.is_file()}
+
+
+@pytest.mark.parametrize("failure", ["runtime_mode_invalid", "provider_settings_unreadable"])
+@pytest.mark.parametrize("phase", ["guide", "plan", "apply"])
+def test_update_stops_with_guidance_when_settings_are_unverifiable(pinned, monkeypatch, capsys, failure, phase):
+    import mcs_util
+
+    def load():
+        if failure == "runtime_mode_invalid":
+            return {"runtime_mode": "synthetic-invalid"}
+        raise mcs_util.ProviderSettingsUnreadable("provider_settings_unreadable")
+
+    monkeypatch.setattr(mcs_cli, "load_config", load)
+    monkeypatch.setattr(mcs_cli.os, "execv", lambda *a: pytest.fail("update must not start"))
+    monkeypatch.setattr(mcs_cli.subprocess, "run", lambda *a, **k: pytest.fail("update must not start"))
+    assert mcs_cli.main(["update", phase]) == 1
+    assert "更新を開始しません" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize('phase', ['guide', 'plan', 'apply', 'rollback'])
@@ -341,6 +361,22 @@ def test_recovery_cli_uses_verified_inner_python(recovery_command, monkeypatch, 
     assert {p: p.read_bytes() for p in plist.parents[2].rglob("*") if p.is_file()} == before
 
 
+def test_recovery_cli_accepts_an_older_verified_helper_generation(recovery_command, monkeypatch):
+    # An update promotes the receipt to a new helper generation; only install.sh
+    # re-renders the watchdog plist, which keeps naming the retained old generation.
+    import run_log_install
+
+    root, helper, tool, plist = recovery_command
+    source = (ROOT / "mcs/core/run_log.py").read_bytes() + b"\n# synthetic newer generation\n"
+    run_log_install.prepare(root, ROOT, helper.parent, source=source, promote=True)
+    assert run_log_install.helper_path(root, helper.parent, require_installed=True) != str(helper)
+    assert helper.exists()
+    calls = []
+    monkeypatch.setattr(mcs_cli.os, "execv", lambda exe, argv: calls.append((exe, argv)))
+    mcs_cli.main(["recover", "--status"])
+    assert calls == [(sys.executable, [sys.executable, str(tool), "--status"])]
+
+
 @pytest.mark.parametrize("change", ["data", "tool", "helper", "inner_python", "hash", "pointer",
                                    "missing", "shape", "program", "symlink"])
 def test_recovery_cli_rejects_untrusted_wrapper(recovery_command, monkeypatch, change):
@@ -379,3 +415,12 @@ def test_recovery_cli_rejects_untrusted_wrapper(recovery_command, monkeypatch, c
     monkeypatch.setattr(mcs_cli.os, "execv", lambda *args: pytest.fail("untrusted recovery must not execute"))
     assert mcs_cli.main(["recover", "--status"]) == 1
     assert plist.read_bytes() == before
+
+
+def test_reinstall_accepts_every_recorded_install_option(pinned, monkeypatch):
+    """IA-120: --install-arg follows install_options_contract (incl. --with-yomitoku)."""
+    calls = []
+    monkeypatch.setattr(mcs_cli, 'load_config', lambda: {'runtime_mode': 'hermes'})
+    monkeypatch.setattr(mcs_cli.os, "execv", lambda exe, argv: calls.append(argv))
+    mcs_cli.main(["update", "apply", "--to", "v1.2.0", "--reinstall", "--install-arg=--with-yomitoku"])
+    assert calls[0][-2:] == ["--reinstall", "--install-arg=--with-yomitoku"]

@@ -21,10 +21,12 @@ Hermesアドオン形態（Path A）の場合:
 PY=~/.hermes/hermes-agent/venv/bin/python
 ```
 
-Hermesなしの形態（Path B）の場合は、同ガイドのB-1〜B-4で本体・Pythonと
-定期実行を設定し、`PY=python3.14`を使います。LINE WORKSの接続手順は共通です。
-通知を送る実行には`--no-notify`を付けません。カード・操作を使う場合は
+Hermesなしの形態（Path B）の場合は、同ガイドのB-1・B-2で本体・Pythonと
+定期実行を設定し、`PY="$HOME/.mcs/venv/bin/python3"`を使います。LINE WORKSの接続設定（§2〜§4）は共通です。
+通知を送る実行には`--no-notify`を付けません。Path Aでカード・操作を使う場合は
 独立アダプターも常駐させます。テキストだけなら常駐は不要です。
+Path Bで`notify.interactive=lineworks`を設定した場合は、独立hostがアダプターを起動します。
+§5の`run`と常駐サービスの手順は使わず、別のアダプターを起動・登録しないでください。
 
 設定とdataの既定保存先は本体と共通の `~/.mcs` です。checkoutが別の場所でも
 同じ設定を使います。保存先を変更する場合は全コマンドへ `--root <保存先>` を
@@ -113,6 +115,13 @@ Private Key のパスを端末で受け取ります。秘密値は非表示入�
 場合は、この手順の後に本体の `check` を再実行します。
 
 ## 5. 起動し、接続を確認する
+
+この節の`run`・常駐サービス・再起動の手順はHermesアドオン形態（Path A）向けです。
+独立モード（Path B）では独立hostがアダプターを起動し、更新後もhostが再起動します。
+別に起動したアダプターや`ai.mcs.lineworks`のサービスがあると、同じロックを取り合い、
+取れなかった側が起動の失敗を繰り返します。登録済みの場合は対象を確認して停止し、登録を外してください
+（[独立モードの手順](STANDALONE.md)）。Path Bの接続確認は、独立hostの起動中に
+Callbackの転送設定と`check`で行います。
 
 ```bash
 $PY -m lineworks_adapter run
