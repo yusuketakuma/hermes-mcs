@@ -211,6 +211,53 @@ def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(sca
                         observed['temp_btree'] = any('temp b-tree' in detail for detail in details)
         except Exception:
             pass   # diagnostics never replace the approval result
+    observed['profile'] = {'status': 'unavailable'}
+    try:
+        import cProfile
+        import pstats
+        import sys
+        from types import SimpleNamespace
+        if sys.getprofile() is not None:
+            raise RuntimeError('profile_in_use')
+        functions = {
+            'update': ('cloud_policy.py', 'update'),
+            'hash_row': ('cloud_policy.py', '_hash_row'),
+            'canonical': ('mcs_util.py', 'canonical'),
+            'strict_json': ('mcs_util.py', 'strict_json'),
+            'accounting_meta': ('cloud_usage_accounting.py', '_accounting_meta'),
+            'reserve_valid': ('cloud_usage_accounting.py', '_reserve_valid'),
+            'settled': ('cloud_usage_accounting.py', '_settled'),
+            'price_definition': ('cloud_usage_accounting.py', '_price_definition'),
+            'reservation_cost': ('cloud_usage_accounting.py', '_reservation_cost'),
+            'usage_cost': ('cloud_usage_accounting.py', 'usage_cost'),
+            'periods': ('cloud_usage_accounting.py', '_periods'),
+            'decimal': ('cloud_usage_accounting.py', '_decimal'),
+        }
+        with monkeypatch.context() as patch, closing(sqlite3.connect(scaled.resolve().as_uri() + '?mode=ro',
+                                                                    uri=True)) as db:
+            patch.setattr(cloud_policy, 'TALLY_COST', {'rebuilds': 0, 'seconds': 0.0})
+            db.row_factory = sqlite3.Row
+            db.execute('PRAGMA query_only=ON')
+            db.execute('BEGIN')
+            try:
+                profiler = cProfile.Profile()
+                started = time.monotonic()
+                tally = profiler.runcall(cloud_policy._tally, SimpleNamespace(db=db))
+                seconds = time.monotonic() - started
+                stats = pstats.Stats(profiler).stats
+                selected = {}
+                for label, (filename, name) in functions.items():
+                    entries = [entry for (path, _, function), entry in stats.items()
+                               if path.endswith(filename) and function == name]
+                    selected[label] = {'calls': sum(entry[1] for entry in entries),
+                                       'self_s': round(sum(entry[2] for entry in entries), 6),
+                                       'cumulative_s': round(sum(entry[3] for entry in entries), 6)}
+                observed['profile'] = {'status': 'ok', 'seconds': round(seconds, 6),
+                                       'invalid': tally.invalid, 'functions': selected}
+            finally:
+                db.rollback()
+    except Exception:
+        pass   # the post-approval profile is informational only
     error = receipt.get('error')
     known_errors = (local_rebuild.UNVERIFIED, 'local_rebuild_database_changed',
                     'local_rebuild_already_approved', 'local_rebuild_bundle_changed')
