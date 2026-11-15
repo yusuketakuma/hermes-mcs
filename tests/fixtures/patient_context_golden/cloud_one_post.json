@@ -1,0 +1,449 @@
+{
+ "accounting": [
+  [
+   "cloud_usage_reserve",
+   "patient_context",
+   "claude-haiku-5-5",
+   null
+  ],
+  [
+   "cloud_usage_reserve",
+   "patient_context",
+   "claude-haiku-5-5",
+   null
+  ],
+  [
+   "cloud_usage_result",
+   "patient_context",
+   "claude-haiku-5-5",
+   "http_200"
+  ],
+  [
+   "cloud_usage_result",
+   "patient_context",
+   "claude-haiku-5-5",
+   "http_200"
+  ]
+ ],
+ "posts": 2,
+ "published": {
+  "as_of": "<volatile>",
+  "coverage": {
+   "acquisition": {
+    "coverage_ts": null,
+    "fetch_reason": null,
+    "fetch_state": "complete",
+    "history_floor": -1
+   },
+   "analyzed": 1,
+   "attachments": {
+    "analysis": "complete",
+    "analyzed": 0,
+    "count": 0,
+    "extraction_pending": 0,
+    "pages": 0,
+    "processing": {
+     "clinical_pending": 0,
+     "complete": true,
+     "eligible": 0,
+     "excluded": 0,
+     "mode": "on",
+     "ocr_complete": 0,
+     "pending": 0,
+     "signature": "<volatile>",
+     "total": 0
+    },
+    "unscanned": 0
+   },
+   "evidence_supported": 1,
+   "evidence_total": 1,
+   "fetched": 1,
+   "human_accuracy": null,
+   "incomplete": 0,
+   "karte_records": {
+    "analyzed": 0,
+    "historical": 0,
+    "observed_empty": 0,
+    "stored": 0,
+    "unscanned": 0
+   },
+   "observed_empty": 0,
+   "partial": false,
+   "source_coverage": {
+    "acquisition_complete": true,
+    "included": 1,
+    "observed": 1,
+    "unreflected": 0
+   },
+   "unreflected": 0,
+   "unreflected_since": 1792983606.0,
+   "unscanned": 0
+  },
+  "facts": [
+   {
+    "assertion": {
+     "category": "living",
+     "details": [],
+     "evidence": "本人は合成の自宅で生活しています。",
+     "evidence_span": [
+      0,
+      17
+     ],
+     "reported_subject": "unspecified",
+     "text": "本人は合成の自宅で生活しています。"
+    },
+    "category": "living",
+    "content_hash": "78151045437b75c1f48f737069f1e0d4b7b17cb2232d973c536658aa5f366507",
+    "details": [],
+    "discovery": "backfill_found",
+    "evidence": "本人は合成の自宅で生活しています。",
+    "evidence_span": [
+     0,
+     17
+    ],
+    "found_at": 1792983600.0,
+    "found_workday_id": "2026-10-26",
+    "historical": false,
+    "id": "<volatile>",
+    "message_id": 1,
+    "posted_at": "2026-09-19T00:00:00+09:00",
+    "posted_at_ts": 1789743600,
+    "project_id": 1,
+    "quote": "本人は合成の自宅で生活しています。",
+    "quote_span": [
+     0,
+     17
+    ],
+    "reference_context": {
+     "after": "",
+     "after_span": [
+      17,
+      17
+     ],
+     "before": "",
+     "before_span": [
+      0,
+      0
+     ],
+     "leading": "",
+     "leading_span": [
+      0,
+      0
+     ],
+     "span": [
+      0,
+      17
+     ]
+    },
+    "relations": [],
+    "reported_subject": "unspecified",
+    "sender": "sender",
+    "source": "chat",
+    "source_key": 1,
+    "subject": "unspecified",
+    "temporal": {
+     "action": null,
+     "as_of_day": null,
+     "corrections": [],
+     "current_cue": false,
+     "event_day": null,
+     "negated": null,
+     "ongoing": false,
+     "period": "current",
+     "posted_at_ts": 1789743600,
+     "posted_day": "2026-09-19",
+     "resolution": null,
+     "state_day": null,
+     "subject": "patient",
+     "symptom_state": null,
+     "unknown": false,
+     "use_state": null
+    },
+    "temporality": "reported",
+    "text": "本人は合成の自宅で生活しています。",
+    "view_bucket": "unknown"
+   }
+  ],
+  "facts_sig": "e8ada8a90909bdbdbdbbde1a3187cc1265be209234e37ac802a672f29297aaed",
+  "facts_total": 1,
+  "generated_at": "<volatile>",
+  "historical_facts": [],
+  "source_sig": "<volatile>",
+  "summary": [
+   {
+    "fact_ids": [
+     "53d0dbe5857606405dd715229ee939cbd4993ddf822c4fdd51011e98e2273602"
+    ],
+    "text": "本人は合成の自宅で生活しています。"
+   }
+  ],
+  "temporal_view": {
+   "groups": {
+    "conflict": [],
+    "current": [],
+    "history": [],
+    "plan": [],
+    "unknown": [
+     "53d0dbe5857606405dd715229ee939cbd4993ddf822c4fdd51011e98e2273602"
+    ]
+   },
+   "relations": []
+  },
+  "truncated": false,
+  "version": 1
+ },
+ "views": {
+  "background": {
+   "empty": "この範囲で該当する記録は見つかりません",
+   "head": [
+    "関係者: sender",
+    "表示順: 標準",
+    "介入・経過：未取得・未解析などにより、確認できた範囲を表示"
+   ],
+   "items": [
+    {
+     "date": "09/19",
+     "group": "患者コンテキスト · 時点・関係未確認",
+     "project_id": 1,
+     "quotes": [
+      "本人は合成の自宅で生活しています。"
+     ],
+     "source": "09/19 sender #1",
+     "source_key": 1,
+     "source_rest": "sender #1",
+     "text": "本人は合成の自宅で生活しています。　（09/19 sender #1）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    },
+    {
+     "date": "09/19",
+     "group": "生活環境 · 時点・関係未確認",
+     "project_id": 1,
+     "quotes": [
+      "本人は合成の自宅で生活しています。"
+     ],
+     "source": "09/19 sender #1",
+     "source_key": 1,
+     "source_rest": "sender #1",
+     "text": "本人は合成の自宅で生活しています。　（09/19 sender #1）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    },
+    {
+     "group": "関係者・事業者（投稿者から取得）",
+     "project_id": 1,
+     "quotes": [
+      "sender"
+     ],
+     "source": "投稿1件 · 最終投稿 09/19",
+     "text": "sender　（投稿1件 · 最終投稿 09/19）"
+    }
+   ],
+   "layout": "patient_context",
+   "notes": [
+    "患者コンテキストの反映時点: 10/26 12:00",
+    "履歴取得: 完了記録あり",
+    "取込済み 1件 / 点検済み 1件 / 未点検 0件 / 本文未取得・不完全 0件",
+    "原文に対応する引用 1 / 1件",
+    "まとめ未反映 0件"
+   ],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 患者さんの全体像"
+  },
+  "care_events": {
+   "empty": "出来事の記載の有無は確認できません",
+   "head": [
+    "出来事の日付順（日付未確認は後に表示）。投稿間の関係は未照合",
+    "投稿番号の降順で1件を確認（1回最大200件）",
+    "未取得・未解析・添付・対象上限などのため、全履歴の確認は未完了"
+   ],
+   "items": [],
+   "layout": "patient_context",
+   "notes": [],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 出来事の記録"
+  },
+  "changes": {
+   "empty": "この範囲で該当する記録は見つかりません",
+   "head": [
+    "前回の表示依頼: 初回"
+   ],
+   "items": [
+    {
+     "date": "09/19",
+     "group": "新しい報告 · 時点・関係未確認",
+     "project_id": 1,
+     "quotes": [
+      "本人は合成の自宅で生活しています。"
+     ],
+     "source": "09/19 sender #1",
+     "source_key": 1,
+     "source_rest": "sender #1",
+     "text": "本人は合成の自宅で生活しています。　（09/19 sender #1）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    }
+   ],
+   "layout": "patient_context",
+   "notes": [
+    "患者コンテキストの反映時点: 10/26 12:00",
+    "履歴取得: 完了記録あり",
+    "取込済み 1件 / 点検済み 1件 / 未点検 0件 / 本文未取得・不完全 0件",
+    "原文に対応する引用 1 / 1件",
+    "まとめ未反映 0件"
+   ],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 前回から変わったこと"
+  },
+  "discrepancies": {
+   "empty": "この範囲で該当する記録は見つかりません",
+   "head": [],
+   "items": [],
+   "layout": "patient_context",
+   "notes": [
+    "患者コンテキストの反映時点: 10/26 12:00",
+    "履歴取得: 完了記録あり",
+    "取込済み 1件 / 点検済み 1件 / 未点検 0件 / 本文未取得・不完全 0件",
+    "原文に対応する引用 1 / 1件",
+    "まとめ未反映 0件"
+   ],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 記録の食い違い"
+  },
+  "handoff": {
+   "empty": "この範囲で該当する記録は見つかりません",
+   "head": [],
+   "items": [],
+   "layout": "patient_context",
+   "notes": [
+    "患者コンテキストの反映時点: 10/26 12:00",
+    "履歴取得: 完了記録あり",
+    "取込済み 1件 / 点検済み 1件 / 未点検 0件 / 本文未取得・不完全 0件",
+    "原文に対応する引用 1 / 1件",
+    "まとめ未反映 0件"
+   ],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 引継ぎ用の記録"
+  },
+  "observations": {
+   "empty": "この範囲で該当する記録は見つかりません",
+   "head": [
+    "原文に記載された検査・観測値を項目ごとに投稿順で表示",
+    "原文照合: 0 / 0投稿（1回最大50投稿）"
+   ],
+   "items": [],
+   "layout": "patient_context",
+   "notes": [
+    "患者コンテキストの反映時点: 10/26 12:00",
+    "履歴取得: 完了記録あり",
+    "取込済み 1件 / 点検済み 1件 / 未点検 0件 / 本文未取得・不完全 0件",
+    "原文に対応する引用 1 / 1件",
+    "まとめ未反映 0件"
+   ],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 検査・観測の記録"
+  },
+  "previsit": {
+   "empty": "この範囲で該当する記録は見つかりません",
+   "head": [
+    "介入の記載: 投稿番号の降順で1件を対象に走査。定型の記載のみ対象、別投稿による変更は未照合",
+    "介入の記載: 履歴の取得完了は未確認",
+    "介入・経過：未取得・未解析などにより、確認できた範囲を表示"
+   ],
+   "items": [
+    {
+     "date": "09/19",
+     "group": "過去記録から追加発見 · 時点・関係未確認",
+     "project_id": 1,
+     "quotes": [
+      "本人は合成の自宅で生活しています。"
+     ],
+     "source": "09/19 sender #1",
+     "source_key": 1,
+     "source_rest": "sender #1",
+     "text": "本人は合成の自宅で生活しています。　（09/19 sender #1）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    }
+   ],
+   "layout": "patient_context",
+   "notes": [
+    "患者コンテキストの反映時点: 10/26 12:00",
+    "履歴取得: 完了記録あり",
+    "取込済み 1件 / 点検済み 1件 / 未点検 0件 / 本文未取得・不完全 0件",
+    "原文に対応する引用 1 / 1件",
+    "まとめ未反映 0件"
+   ],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 訪問前の確認ノート"
+  },
+  "replies": {
+   "empty": "この範囲で該当する記録は見つかりません",
+   "head": [],
+   "items": [],
+   "layout": "patient_context",
+   "notes": [
+    "患者コンテキストの反映時点: 10/26 12:00",
+    "履歴取得: 完了記録あり",
+    "取込済み 1件 / 点検済み 1件 / 未点検 0件 / 本文未取得・不完全 0件",
+    "原文に対応する引用 1 / 1件",
+    "まとめ未反映 0件"
+   ],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 連絡・返答の確認"
+  },
+  "timeline": {
+   "empty": "この範囲で該当する記録は見つかりません",
+   "head": [
+    "介入・経過：未取得・未解析などにより、確認できた範囲を表示"
+   ],
+   "items": [
+    {
+     "date": "09/19",
+     "group": "時点・関係未確認",
+     "project_id": 1,
+     "quotes": [
+      "本人は合成の自宅で生活しています。"
+     ],
+     "source": "09/19 sender #1",
+     "source_key": 1,
+     "source_rest": "sender #1",
+     "text": "本人は合成の自宅で生活しています。　（09/19 sender #1）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    }
+   ],
+   "layout": "patient_context",
+   "notes": [
+    "紹介状: 確認対象の添付 0件 / 紹介状 0件 / 未解析 0件",
+    "患者コンテキストの反映時点: 10/26 12:00",
+    "履歴取得: 完了記録あり",
+    "取込済み 1件 / 点検済み 1件 / 未点検 0件 / 本文未取得・不完全 0件",
+    "原文に対応する引用 1 / 1件",
+    "まとめ未反映 0件"
+   ],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 経過タイムライン"
+  },
+  "transition_course": {
+   "empty": "この範囲で該当する記録は見つかりません",
+   "head": [],
+   "items": [],
+   "layout": "patient_context",
+   "notes": [
+    "患者コンテキストの反映時点: 10/26 12:00",
+    "履歴取得: 完了記録あり",
+    "取込済み 1件 / 点検済み 1件 / 未点検 0件 / 本文未取得・不完全 0件",
+    "原文に対応する引用 1 / 1件",
+    "まとめ未反映 0件"
+   ],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 退院・移行時の経過"
+  }
+ }
+}
