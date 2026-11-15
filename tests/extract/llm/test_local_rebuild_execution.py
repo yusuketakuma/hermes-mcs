@@ -117,6 +117,11 @@ def test_a_shadow_or_owned_configuration_still_prepares_it_local_only(routed, mo
     job = jobs[0]
     assert job['_cloud_mode'] == 'off' and job['_local_rebuild'] is not None
     assert not job.get('_cloud_owned') and not job.get('_superseded_local')
+    calls, reserved, results = routed[2], routed[3], routed[4]
+    _no_cloud_unit(monkeypatch)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', lambda prompt, **_kw: {'symptoms': [], 'summary': '合成'})
+    assert worker.run_pending(ledger, limit=1, budget_s=180)['done'] == 1     # shadow cfg, adopted locally
+    assert calls == [] and reserved == [] and results == []                   # no shadow follow-up send
 
 
 def test_a_new_paid_row_after_approval_holds_the_unit_without_any_dispatch(routed, monkeypatch):
@@ -325,3 +330,35 @@ def test_a_failed_reprocessing_of_an_adopted_unit_settles_with_the_tag_and_stays
     assert meta['human_fix']['applied'] is False and meta['local_rebuild'] == local_rebuild.tag(unit)
     assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ADOPTED
     assert calls == [] and reserved == [] and results == []
+
+
+
+def test_health_and_dry_run_count_approved_units_by_state(routed, monkeypatch):
+    ledger, *_ = routed
+    _approved(ledger, monkeypatch)
+    assert local_rebuild.health_counts(ledger.db) == {'approved': 1, 'written': 0, 'exhausted': 0}
+    report = local_rebuild.preview(ledger)
+    assert report['approved'][local_rebuild.ACTIVE] == 1 and report['plan'] is None
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', lambda prompt, **_kw: {'symptoms': [], 'summary': '合成'})
+    assert worker.run_pending(ledger, limit=1, budget_s=180)['done'] == 1
+    assert local_rebuild.health_counts(ledger.db) == {'approved': 1, 'written': 1, 'exhausted': 0}
+    assert local_rebuild.preview(ledger)['approved'][local_rebuild.ADOPTED] == 1
+
+
+def test_a_reservation_landing_during_the_local_call_stops_the_adoption_write(routed, monkeypatch):
+    """The permit is re-proved inside the adoption transaction: a new reservation that appears
+    while the local model answers lapses the approval and nothing is adopted."""
+    ledger, *_ = routed
+    _approved(ledger, monkeypatch)
+    _no_cloud_unit(monkeypatch)
+
+    def local(prompt, **_kw):
+        if not local.lapsed:
+            local.lapsed = True
+            _paid(ledger, monkeypatch, result=False)
+        return {'symptoms': [], 'summary': '合成'}
+    local.lapsed = False
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', local)
+    assert worker.run_pending(ledger, limit=1, budget_s=180)['done'] == 0
+    assert local.lapsed and not _current(ledger)
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.PROOF_CHANGED

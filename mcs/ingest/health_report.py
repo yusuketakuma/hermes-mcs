@@ -326,6 +326,15 @@ def early_warnings(db, result: dict, free_mb: float | None) -> dict:
     out["manual_backup_bytes"] = None if backups is None else backups["manual"]
     out["backup_bytes_by_class"] = backups
     out.update(ledger_capacity(db))
+    try:
+        import extract_llm_local_rebuild
+        out["local_rebuild"] = extract_llm_local_rebuild.health_counts(db)
+    except (sqlite3.Error, ValueError, TypeError, ImportError):
+        out["local_rebuild"] = None
+        out["warnings"].append("local_rebuild_unknown")
+    else:
+        if out["local_rebuild"]["exhausted"]:
+            out["warnings"].append("local_rebuild_exhausted")   # held after every retry: needs a human
     deferred = db_maintenance_ages(data, time.time())
     out.update(deferred)
     daily = deferred["db_maintenance_daily_age_s"]
