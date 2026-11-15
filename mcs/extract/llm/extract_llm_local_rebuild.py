@@ -321,7 +321,7 @@ def preview(ledger, *, limit=BUNDLE_LIMIT, after=None, stop=(sqlite3.Operational
         excluded['unverified'] += len(rows) - done
     units = units[:limit]
     plan = None
-    if units:
+    if units and state != 'partial':   # a partial read never yields a plan (no partial approval)
         plan = {'schema': PLAN_SCHEMA, 'database': _database_identity(db), 'units': units}
         plan['bundle_digest'] = _bundle_digest(plan)
     return {'state': state, 'candidates': len(rows), 'examined': done, 'eligible': eligible,

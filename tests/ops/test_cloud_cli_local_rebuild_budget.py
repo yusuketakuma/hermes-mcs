@@ -104,6 +104,7 @@ def test_the_history_phase_keeps_the_shared_budget(scaled, tmp_path, capsys, mon
     rc, report, plan = _plan(capsys, tmp_path)
     assert report['state'] == 'partial' and report['stopped_at'] == 'history'
     assert report['stop_reason'] == 'observation_budget_exceeded' and report['eligible'] < 20
+    assert rc == 1 and plan is None                                    # a partial read offers no bundle
 
 
 def test_a_phase_restores_the_outer_budget_on_every_exit_and_shares_the_deadline(scaled):

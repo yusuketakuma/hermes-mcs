@@ -64,12 +64,15 @@ def _reader(root=None, *, seconds=None):
             if time.monotonic() >= deadline:
                 bounded_row.stop_reason = "read_deadline"
                 raise _ReaderLimit("read_deadline")
-            if budget["rows_used"] > budget["rows"] or budget["bytes_used"] > budget["bytes"]:
+            # the outer budget reads the module limits on every row, as before (None = READ_ROWS/BYTES)
+            rows = READ_ROWS if budget["rows"] is None else budget["rows"]
+            size = READ_BYTES if budget["bytes"] is None else budget["bytes"]
+            if budget["rows_used"] > rows or budget["bytes_used"] > size:
                 bounded_row.stop_reason = budget["reason"]
                 raise _ReaderLimit(budget["reason"])
             return sqlite3.Row(cursor, values)
 
-        bounded_row.budget = {"rows": READ_ROWS, "bytes": READ_BYTES, "rows_used": 0, "bytes_used": 0,
+        bounded_row.budget = {"rows": None, "bytes": None, "rows_used": 0, "bytes_used": 0,
                               "reason": "observation_budget_exceeded"}
 
         def interrupt_on_deadline():
