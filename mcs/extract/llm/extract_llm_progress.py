@@ -227,6 +227,8 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, re
         evidenced = extract_quality.completeness_shaped if authentic_only else extract_quality.completeness_resolved
         if bound and required_contract is None and not evidenced(meta):
             return out
+        if bound and authentic_only and leaf_claims is None:
+            return out   # every local-rebuild final is sealed: an unsealed one is not its authentic adoption
         if (bound and isinstance(integrity, dict)
                 and ("completeness" in integrity or "completeness_chunks" in integrity)):
             # The completeness claim is mutable metadata: the durable copy

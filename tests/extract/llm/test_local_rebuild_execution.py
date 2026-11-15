@@ -347,12 +347,12 @@ def test_a_failed_reprocessing_of_an_adopted_unit_settles_with_the_tag_and_stays
 def test_health_and_dry_run_count_approved_units_by_state(routed, monkeypatch):
     ledger, *_ = routed
     _approved(ledger, monkeypatch)
-    assert local_rebuild.health_counts(ledger.db) == {'approved': 1, 'written': 0, 'exhausted': 0}
+    assert local_rebuild.health_counts(ledger.db) == {'approved': 1, 'written': 0, 'exhausted': 0, 'held_long': 0}
     report = local_rebuild.preview(ledger)
     assert report['approved'][local_rebuild.ACTIVE] == 1 and report['plan'] is None
     monkeypatch.setattr(extract_llm_engine, '_llm_call', lambda prompt, **_kw: {'symptoms': [], 'summary': '合成'})
     assert worker.run_pending(ledger, limit=1, budget_s=180)['done'] == 1
-    assert local_rebuild.health_counts(ledger.db) == {'approved': 1, 'written': 1, 'exhausted': 0}
+    assert local_rebuild.health_counts(ledger.db) == {'approved': 1, 'written': 1, 'exhausted': 0, 'held_long': 0}
     assert local_rebuild.preview(ledger)['approved'][local_rebuild.ADOPTED] == 1
 
 
@@ -500,3 +500,42 @@ def test_a_crash_during_the_repair_keeps_the_tagged_started_record_and_never_res
     assert kinds.count('repair') == repairs                            # the unknown repair is never resent
     assert local_rebuild.permit(ledger, 1, 1) in local_rebuild.RUNNABLE
     assert calls == [] and reserved == [] and results == []
+
+
+@pytest.mark.parametrize('reason', [local_rebuild.PROOF_CHANGED, 'cloud_unit_unresolved'])
+def test_a_sqlite_row_candidate_keeps_the_short_hold_without_failing(routed, monkeypatch, reason):
+    """The cloud path hands sqlite3.Row candidates (no .get): the hold decision checks the reason
+    first and never raises, so ordinary cloud holds keep their bounded claim."""
+    import extract_llm_runner
+    ledger, *_ = routed
+    _approved(ledger, monkeypatch)
+    row = ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone()
+    assert not isinstance(row, dict)
+    assert extract_llm_runner._prepare_hold_s(ledger, row, (reason,)) == extract_llm_runner._PREPARE_HOLD_S
+
+
+def test_an_unsealed_final_with_its_meta_claim_left_is_never_an_authentic_adoption(routed, monkeypatch):
+    """Every local-rebuild final is sealed: removing the content's leaf claims while the meta
+    completeness claim stays is rejected (the floor branch never stands in for the seal)."""
+    ledger, *_ = routed
+    _approved(ledger, monkeypatch)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', lambda prompt, **_kw: {'symptoms': [], 'summary': '合成'})
+    assert worker.run_pending(ledger, limit=1, budget_s=180)['done'] == 1
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ADOPTED
+    [final] = _current(ledger)
+    content = json.loads(final['content'])
+    assert content.pop(worker._INTERNAL_LEAF_CLAIMS, None) is not None
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                          (json.dumps(content, ensure_ascii=False), final['artifact_id']))
+    assert local_rebuild.permit(ledger, 1, 1) != local_rebuild.ADOPTED
+
+
+def test_health_counts_the_long_held_approved_units(routed, monkeypatch):
+    ledger, *_ = routed
+    _approved(ledger, monkeypatch, mid=2)
+    _paid(ledger, monkeypatch, 2, result=False)
+    old(ledger, 1)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', lambda prompt, **_kw: {'symptoms': [], 'summary': '合成'})
+    worker.run_pending(ledger, limit=1, budget_s=180)
+    assert local_rebuild.health_counts(ledger.db)['held_long'] == 1
