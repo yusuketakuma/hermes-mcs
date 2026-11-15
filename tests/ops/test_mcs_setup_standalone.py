@@ -122,8 +122,8 @@ def test_standalone_config_validation():
 
 def _standalone_services(monkeypatch, tmp_path, cfg, **kw):
     calls, args = _services_env(monkeypatch, tmp_path, **kw)
-    _previous_service_load_config_124 = mcs_util.load_config
-    monkeypatch.setattr(mcs_util, 'load_config',
+    _previous_service_load_config_124 = mcs_util.load_config_checked
+    monkeypatch.setattr(mcs_util, 'load_config_checked',
                         lambda path=None: _previous_service_load_config_124(path) if path else cfg)
     monkeypatch.setattr(mcs_runtime, "HOME", str(tmp_path))
     return calls, args

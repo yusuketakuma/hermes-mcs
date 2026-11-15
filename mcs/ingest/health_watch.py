@@ -871,7 +871,7 @@ _REASON_JA = {
                                      "翌日に自動で再開します。上限は semantic.daily_request_budget"),
     "semantic_jev_auth_error": ("TypeSafe Jev の認証に失敗しました",
                                 "TYPESAFE_API_KEY の値と有効期限を確認"),
-    CONFIG_BLOCKED: ("外部AIの提供元別設定を確認できず、外部AI処理と自動復旧を止めています",
+    CONFIG_BLOCKED: ("設定を確認できず、自動復旧を止めています",
                      f"{_CHECK} で設定の状態を確認。設定の変更が途中で止まっている場合は設定を保持したまま管理者へ連絡"),
     "unread_collection_unknown": ("未読収集の状況が記録されていません",
                                   f"次回の収集を待ち、続く場合は {_COLLECTION_LOG} を確認"),
@@ -1370,14 +1370,14 @@ def main(argv: list | None = None) -> int:
         ap.error("now must be a finite number")
     blocked = False
     try:
-        cfg = _load_config(args.config or CONF_PATH) or {}
-    except ProviderSettingsUnreadable:
+        cfg = _load_config(args.config or CONF_PATH)
+        if cfg is None:
+            raise ValueError("configuration_unreadable")
+    except (ProviderSettingsUnreadable, OSError, ValueError, TypeError, RecursionError):
         # A settings fault also fails the producer: stopping here would
         # silence both. Watch on alert-only settings and still exit non-zero.
         print(json.dumps({"status": "blocked", "reason": CONFIG_BLOCKED}), file=sys.stderr)
         blocked, cfg = True, alert_only_config(args.config or CONF_PATH)
-    except (OSError, ValueError, TypeError, RecursionError):
-        cfg = {}
     # A wedged watcher would hold the lock and turn every later run into a
     # silent no-op: the default SIGALRM action ends it. The send witness is
     # already durable as 'unknown' before the wire, so a kill never re-sends.

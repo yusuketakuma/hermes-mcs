@@ -61,7 +61,7 @@ def test_provider_settings_failure_alerts_without_recovery_or_settings_change(
     assert len(sent) == 1
     argv, text = sent[0]
     assert argv[argv.index("--to") + 1] == "slack:C87654321"
-    assert "外部AIの提供元別設定を確認できず" in text and "MCS-HLT-PROVIDER-SETTINGS-UNREADABLE" in text
+    assert "設定を確認できず、自動復旧を止めています" in text and "MCS-HLT-PROVIDER-SETTINGS-UNREADABLE" in text
     assert "secret-canary" not in captured.err + captured.out + text
     assert (config.read_bytes(), witness.read_bytes()) == before
     status = json.loads((tmp_path / health_watch.STATUS_REL).read_text())
