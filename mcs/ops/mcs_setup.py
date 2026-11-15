@@ -97,9 +97,8 @@ from setup_config_snapshot import (
     _init_config_snapshot as _init_config_snapshot,
     _init_split_matches as _init_split_matches,
     _init_split_changes as _init_split_changes,
-    _reviewed_split_current as _reviewed_split_current,
     _publish_split_config as _publish_split_config,
-    _cli_legacy_base as _cli_legacy_base,
+    _locked_current_state as _locked_current_state,
     _init_reselect_provider as _init_reselect_provider,
     _init_save_config as _init_save_config,
 )
@@ -549,13 +548,7 @@ def cmd_fact_source(args) -> int:
         # Match the former writer's ability to create a missing parent directory.
         os.makedirs(os.path.dirname(CONF_PATH) or ".", exist_ok=True)
         with config_edit._edit_lock(CONF_PATH) as lock_fd:
-            def current_state():
-                if split_initial is not None:
-                    return _reviewed_split_current(split_initial)
-                if _cli_legacy_base() != base:
-                    raise config_edit.ConfigConflict("config_changed")
-                return None
-
+            current_state = _locked_current_state(split_initial, base)
             current_state()
             if source == "canonical":
                 approval_attempted = True
@@ -1016,13 +1009,7 @@ def cmd_features(args) -> int:
         if len(body.encode("utf-8")) > mcs_util.CONFIG_MAX_BYTES:
             raise ValueError("config_unreadable")
         with config_edit._edit_lock(CONF_PATH) as lock_fd:
-            def current_state():
-                if split_initial is not None:
-                    return _reviewed_split_current(split_initial)
-                if _cli_legacy_base() != base:
-                    raise config_edit.ConfigConflict("config_changed")
-                return None
-
+            current_state = _locked_current_state(split_initial, base)
             current = current_state()
             if split_initial is not None:
                 prepared = _init_split_changes(split_initial[1], cfg)
