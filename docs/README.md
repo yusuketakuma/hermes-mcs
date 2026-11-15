@@ -16,6 +16,7 @@
 | 既存環境を更新・復旧する | [更新と中断時の復旧](guides/UPGRADE_AGENT.md) · [通知の個別復旧](guides/NOTIFICATION_RECOVERY.md) |
 | バックアップや端末喪失に備える | [鍵の保管と復元](guides/BACKUP.md) |
 | 外部AIの利用・対象・費用を設定する | [Jev・Anthropicの設定と利用状況](guides/ANTHROPIC.md) |
+| 医療情報システムとして法令・ガイドラインに対応する | [法令・ガイドライン対応](guides/COMPLIANCE.md) · [運用管理規程ひな形](guides/compliance/OPERATIONS_POLICY_TEMPLATE.md) |
 
 通知の個別復旧は、読取り専用の計画を確認してから対象を指定する管理者向けの手順です。通知の送信結果が不明な場合や復元の承認待ちは、診断だけで解除されません。
 

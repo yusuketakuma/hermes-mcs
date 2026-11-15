@@ -170,9 +170,9 @@ class Actions:
             await self._say(user, "サマリーの元データが設定されていません。")
             return
         got = await asyncio.to_thread(
-            summary.answer, snapshot, rest[:300],
-            name=self._own_name(user),
-            allowed=projects.summary_scope(self.settings), dialect="plain")
+            summary.answer_recorded, self.settings, rest[:300], transport="lineworks",
+            user=user, scope_id=self.settings.get("team_id"),
+            name=self._own_name(user), dialect="plain")
         for chunk in text.split_body(got.get("text") or got["error"]):
             await self._say(user, chunk)
 

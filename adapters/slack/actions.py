@@ -332,9 +332,9 @@ class Actions:
             if not await current():
                 return
             got = await self._offload(
-                summary.answer, snapshot, str(body.get("text") or "")[:300],
-                name=name, allowed=projects.summary_scope(self._settings),
-                dialect="slack")
+                summary.answer_recorded, self._settings, str(body.get("text") or "")[:300],
+                transport="slack", user=user, channel=channel,
+                scope_id=self._settings.get("team_id"), name=name, dialect="slack")
             if not await current():
                 return
             if "error" in got:

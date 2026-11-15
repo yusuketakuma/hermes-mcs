@@ -1,11 +1,13 @@
 """Dispatch authenticated MCS commands with shared read and human-confirmation gates."""
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
 from . import projects
-from .access import (validate_context, resolve_settings, authorize, authorize_system, id_text, actor)
+from .access import (validate_context, resolve_settings, authorize, authorize_system, id_text, actor,
+                     record_access)
 from .mcs_api import modules, deny, ok
 from .human_commands import (CREATE_FIELDS, UPDATE_FIELDS, CONTROL_FIELDS,
                              build_preview, build_control_preview, confirm)
@@ -114,10 +116,90 @@ def dispatch(data: dict, settings: dict[str, Any],
     # an incomplete fetch. Anything that is not a bare code (paths, values)
     # still collapses to operation_failed.
     try:
-        return dispatch_operation(data, settings, identity, authorized=authorized)
+        reply = dispatch_operation(data, settings, identity, authorized=authorized)
     except ValueError as error:
         code = str(error)
-        return deny(code if _DENIAL_CODE.fullmatch(code) else "operation_failed")
+        reply = deny(code if _DENIAL_CODE.fullmatch(code) else "operation_failed")
+    return _audited(reply, data, settings, identity)
+
+
+# Only names this dispatcher itself defines reach the access record; anything
+# else a rejected command carried (possibly a patient name) is stored as invalid.
+_AUDIT_OPS = frozenset({"status", "read", "request", "control", "summary"})
+_AUDIT_PHASES = frozenset({"preview", "confirm", "receipt"})
+_AUDIT_KINDS = READ_KINDS | {"notification_receipt", "create", "update"} | frozenset(CONTROL_FIELDS)
+
+
+def _known(value, names):
+    if value is None:
+        return None
+    return value if isinstance(value, str) and value in names else "invalid"
+
+
+def _audit_op(op, phase):
+    label = _known(op, _AUDIT_OPS)
+    return label if label is None or phase is None else f"{label}.{_known(phase, _AUDIT_PHASES)}"
+
+
+class _Shown(str):
+    """Display text that carries its own access facts, which text cannot reveal."""
+
+    def __new__(cls, text, *, outcome="ok", patients=()):
+        shown = super().__new__(cls, text)
+        shown.outcome, shown.patients = outcome, frozenset(patients)
+        return shown
+
+
+def _parsed(reply: str):
+    try:
+        return json.loads(reply)
+    except ValueError:
+        return None  # display text; a failure there is a bare code
+
+
+def _outcome(reply: str, parsed) -> str:
+    if parsed is None:
+        return reply if _DENIAL_CODE.fullmatch(reply) else "ok"
+    if isinstance(parsed, dict) and parsed.get("ok") is False:
+        return str(parsed.get("error"))
+    return "ok"
+
+
+def _returned_patients(parsed) -> set[int]:
+    """Every project id an answer contains, so list views are attributed per patient."""
+    found, stack = set(), [parsed]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            if type(node.get("project_id")) is int:
+                found.add(node["project_id"])
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return found
+
+
+def _audited(reply: str, data: dict, settings: dict[str, Any],
+             identity: dict[str, str | None]) -> str:
+    """Record who touched which patient before an answer leaves the host.
+
+    A successful read whose record cannot be written is withheld (fail
+    closed). Denials carry no patient data, and a confirmed write already
+    has its own receipt, so those answers are returned unchanged.
+    """
+    parsed = None if isinstance(reply, _Shown) else _parsed(reply)
+    outcome = reply.outcome if isinstance(reply, _Shown) else _outcome(reply, parsed)
+    patients = reply.patients if isinstance(reply, _Shown) else _returned_patients(parsed)
+    reply = str(reply)
+    phase = data.get("phase")
+    recorded = record_access(
+        settings, identity, op=_audit_op(data.get("op"), phase),
+        kind=_known(data.get("kind") or data.get("action"), _AUDIT_KINDS),
+        project_id=data.get("project_id"), patients=patients,
+        outcome=outcome, query="query" in data)
+    if not recorded and outcome == "ok" and phase != "confirm":
+        return deny("access_log_unavailable")
+    return reply
 
 
 def dispatch_operation(data: dict, settings: dict[str, Any],
@@ -184,7 +266,9 @@ def dispatch_operation(data: dict, settings: dict[str, Any],
         got = summary.answer(settings["snapshot"], data.get("scope", ""),
                              allowed=projects.summary_scope(settings),
                              dialect=dialect, names=False)
-        return got.get("text") or got["error"]
+        if "error" in got:
+            return _Shown(got["error"], outcome="summary_unavailable")
+        return _Shown(got["text"], patients=got.get("project_ids", ()))
     return deny("unknown_operation")
 
 
