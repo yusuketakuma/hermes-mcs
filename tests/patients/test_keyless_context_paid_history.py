@@ -1,6 +1,7 @@
 """Removing credentials never releases an unresolved paid context to local inference."""
 import json
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,13 @@ from test_context_cloud_update_identity import real_cloud, runtime, cloud, finis
 from test_patient_context_refresh import seed, step
 
 __all__ = ['real_cloud', 'runtime', 'cloud']
+
+
+def _wire_body(selection, prompt):
+    """The reservation body exactly as cloud_inference.guard_context_local builds it (8d8580ba)."""
+    tokens = selection['max_tokens'] if selection['max_tokens'] is not None else 1600
+    return cloud_inference._client_class(selection).body(
+        SimpleNamespace(model=selection['model'], effort=selection['effort']), prompt, tokens, None)
 
 
 def test_missing_key_never_replaces_a_paid_context_with_missing_result(runtime, real_cloud, monkeypatch):
@@ -138,7 +146,7 @@ def test_paid_reservation_arriving_after_local_inference_blocks_adoption(runtime
         assert not errors and selection is not None
         reservation = cloud_policy.usage_reserver(ledger, cfg, route='patient_context', project_id=1,
             message_id=1, unit_key='scan:1', owner={}, selection=selection)(
-                anthropic_client.AnthropicClient.body(None, prompt, 1600, None), 120)
+                _wire_body(selection, prompt), 120)
         reservations.append(reservation)
         return result
     monkeypatch.setattr(local_llm, 'admitted_chat', race)
@@ -187,7 +195,7 @@ def test_legacy_summary_without_owner_never_uses_signature_difference_as_fresh_i
                 'source_identity': {'signature': 'a' * 64}}
     reservation = cloud_policy.usage_reserver(ledger, cfg, route='patient_context', project_id=1,
         message_id=None, unit_key='summary', owner={}, selection=selection)(
-            anthropic_client.AnthropicClient.body(None, json.dumps(previous, ensure_ascii=False), 1600, None), 120)
+            _wire_body(selection, json.dumps(previous, ensure_ascii=False)), 120)
     if discarded:
         with ledger.db:
             ledger.db.execute('BEGIN IMMEDIATE')

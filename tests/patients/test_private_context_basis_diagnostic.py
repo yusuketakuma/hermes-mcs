@@ -60,7 +60,8 @@ def test_private_basis_diagnostic(runtime, real_cloud, monkeypatch):
                     if view and not posts:
                         assert captured['identity']['audit_key'] == meta.get('quality_audit_key')
                         assert quality._quality_passed(db, 1, captured['identity'])
-                        baseline_identity = captured['identity']
+                        if baseline_identity is None:   # the first passing publication stays the reference
+                            baseline_identity = captured['identity']
                 except (ValueError, TypeError, KeyError, RuntimeError) as exc:
                     qa['error'] = str(exc)
                 try:
@@ -98,26 +99,21 @@ def test_private_basis_diagnostic(runtime, real_cloud, monkeypatch):
         return outcome
 
     monkeypatch.setattr(scenario, 'step', observed_step)
-    scenario.test_local_context_is_usable_while_cloud_is_blocked_and_recovery_covers_every_input(
+    scenario.test_verified_local_context_covers_every_input_without_cloud_replay_after_recovery(
         runtime, real_cloud, monkeypatch)
-    baseline = [o for o in observations if o['visible'] and not o['posts']][-1]
-    partial = next(o for o in observations if o['posts'] and not o['visible']
-                   and o['current_scan_sig'] != baseline['current_scan_sig'])
-    final = observations[-1]
-    assert baseline['source_scope'] == [1]
-    assert final['source_scope'] == [1]
-    assert baseline['raw'] == partial['raw'] == final['raw']
-    assert baseline['source_sig'] == partial['source_sig'] == final['source_sig']
-    assert baseline['contract'] == partial['contract'] == final['contract']
-    assert baseline['publication_hash'] == partial['publication_hash']
-    assert partial['publication_meta']['scan_sig'] != partial['current_scan_sig']
-    assert not partial['coverage']['summary']['current']
-    assert not partial['coverage']['publication_eligible']
-    assert partial['qa']['error'] == 'patient_summary_quality_source_incomplete'
-    assert partial['qa']['baseline_pass_still_valid']
-    assert final['visible'] and final['coverage']['complete']
-    # Identical reconstructed facts can reuse the original QA only after readiness is restored.
+    # fc4d06fa: after recovery the verified local result is reused without any cloud replay, so
+    # there is no source-incomplete window. Every observation after the first usable publication
+    # must keep its input, its contract and its passing QA (the incomplete-window behaviour itself
+    # is covered by test_anthropic_context_refresh).
+    first = next(i for i, o in enumerate(observations) if o['visible'])
+    baseline, later, final = observations[first], observations[first + 1:], observations[-1]
+    assert later and all(o['posts'] == 0 for o in observations)
+    assert baseline['source_scope'] == [1] and final['source_scope'] == [1]
+    for o in later:
+        assert o['visible'] and o['coverage']['complete'], o['step']
+        assert o['raw'] == baseline['raw'] and o['source_sig'] == baseline['source_sig'], o['step']
+        assert o['contract'] == baseline['contract'], o['step']
+        assert 'error' not in o['qa'] and o['qa']['baseline_pass_still_valid'], (o['step'], o['qa'].get('error'))
     assert final['qa']['identity'] == baseline['qa']['identity']
     before_ids = {a['id'] for a in baseline['artifacts']}
-    partial_new = [a for a in partial['artifacts'] if a['id'] not in before_ids]
-    assert not any('quality_fail' in a['kind'] for a in partial_new)
+    assert not any('quality_fail' in a['kind'] for a in final['artifacts'] if a['id'] not in before_ids)

@@ -455,7 +455,7 @@ def _client_class(selection):
 
 
 def guard_context_local(ledger, cfg, prompt, *, project_id, message_id, unit_key, owner):
-    """Check patient-context paid history using the existing pure wire-body builders."""
+    """Check patient-context paid history against the wire body the selected profile's client would send."""
     def request():
         from types import SimpleNamespace
         settings = resolve_cloud_settings(cfg)

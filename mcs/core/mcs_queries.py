@@ -119,7 +119,9 @@ def selected_artifact_proof_valid(db, artifact_id, *, inference_target=CURRENT_V
     verified too (source binding, frame references, clinical validation), and
     the witness is the material proof — thin or upgrade scheduling alone never
     invalidates it, while actionable QC and human reports still do. The
-    default keeps the strict progress-complete contract for other readers."""
+    default checks marked rows against the strict progress-complete witness
+    and accepts unmarked rows without a proof (the reading before adoption
+    proofs) unless a newer marked extraction exists."""
     if type(artifact_id) is not int or artifact_id <= 0:
         return False
     db.execute('SAVEPOINT selected_artifact_proof')
@@ -1468,8 +1470,9 @@ def patient_context_sources(db, pid, *, hydrate=True, mid=None, cfg=None,
     """Read original records with current derived summaries as supplemental inputs.
 
     ``material`` (default) applies the adoption proof: an exact selected
-    extraction stays usable while only thin or upgrade work is scheduled;
-    pass ``material=False`` for the strict progress-complete contract."""
+    extraction stays usable while only thin or upgrade work is scheduled.
+    ``material=False`` checks marked rows against the progress-complete
+    witness and accepts unmarked rows without a proof."""
     from patient_context import context_items, extract_context, project_context_items
     from patient_context_plan import source_digest
     extractions = {}
