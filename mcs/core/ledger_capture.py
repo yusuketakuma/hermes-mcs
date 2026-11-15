@@ -281,9 +281,11 @@ class LedgerCaptureMixin:
     def _queue_saved_messages_tx(self, project_id, new_ids, changed_ids,
                                   notify_ids, *, notify, semantic, now,
                                   notify_max_age_s, invalidated_roots: set | None = None,
-                                  exempt_replies: bool = True):
+                                  late_only: bool = False):
         """Keep notification eligibility and semantic coverage in the save
-        transaction for unread, backfill and reply arrivals alike."""
+        transaction for unread, backfill and reply arrivals alike.
+        late_only keeps the candidates to notify_ids (save_messages'
+        notify_late rows): no recent-read or all-replies widening."""
         history = initial_import_state.classify_tx(
             self, project_id, [*new_ids, *changed_ids, *notify_ids], now)
         history_updates = sorted(history & (set(new_ids) | set(changed_ids)
@@ -309,7 +311,7 @@ class LedgerCaptureMixin:
             # Recent arrivals also notify when the server already marks
             # them read. A bounded age and known timestamp keep historical
             # imports from announcing old or undated read context.
-            if new_ids and notify_max_age_s is not None:
+            if new_ids and notify_max_age_s is not None and not late_only:
                 recent = self.db.execute(
                     "SELECT message_id FROM messages WHERE message_id IN ("
                     + ",".join("?" * len(new_ids))
@@ -320,7 +322,7 @@ class LedgerCaptureMixin:
             # Opted-in realtime notification paths cover every new
             # reply. Discovery still age-filters old replies on the first import.
             reply_ids = []
-            if (exempt_replies and self.notify_all_replies and new_ids
+            if (not late_only and self.notify_all_replies and new_ids
                     and notify.get("source") != "discovery"):
                 replies = self.db.execute(
                     "SELECT message_id FROM messages WHERE message_id IN ("
@@ -427,9 +429,9 @@ class LedgerCaptureMixin:
         notify_late (reconcile and quiet history walks, no notify template)
         still announces new rows posted after the patient's newest stored
         post: once such a row is stored, the unread, probe and backfill
-        paths find it present and never announce it. They notify as
-        'history' under the same age gate, and new replies stay
-        age-bounded on this path."""
+        paths find it present and never announce it. Only those rows
+        notify, as 'history' under the same age gate; older new rows in
+        the same batch (replies included) stay quiet."""
         new_ids = []
         now = time.time()
         late_after = None
@@ -472,7 +474,7 @@ class LedgerCaptureMixin:
                     notify_ids, notify=notify, semantic=semantic, now=now,
                     notify_max_age_s=notify_max_age_s,
                     invalidated_roots=invalidated_roots,
-                    exempt_replies=not late)
+                    late_only=bool(late))
             else:
                 # init_data saves mixed projects without requesting individual notifications.
                 grouped = {}

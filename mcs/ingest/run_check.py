@@ -712,7 +712,8 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
                   trickle_pages=trickle_pages,
                   max_jobs=8 if args.jobs_only else None,
                   min_margin=30 if args.jobs_only else None,
-                  semantic=sem_on, ack_exclusions=ack_exclusions)
+                  semantic=sem_on, notify_max_age_s=notify_max_age_s,
+                  ack_exclusions=ack_exclusions)
     _require_closed_transaction(ledger, result)
 
     # -- post-import reconcile: edits/deletions below the cutoff ---

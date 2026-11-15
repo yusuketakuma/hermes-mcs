@@ -5,8 +5,9 @@
   "upgrade": "追加操作は不要です。既定値・設定項目は変わりません。この修正の前に黙って保存された投稿は、自動では通知されません。",
   "details": [
     "save_messages に notify_late を追加し、reconcile と通知の指定がない history job だけが使う。",
-    "判定は保存前の患者の最新の投稿時刻より後の新しい行に限り、通知の source は既存の history を使う。",
-    "この経路では、返信をすべて通知する設定（notify_all_replies）でも、新しい返信を古さの上限から外さない。",
+    "通知するのは、保存前の患者の最新の投稿時刻より後の新しい行だけ。通知の source は既存の history を使う。",
+    "同じ保存の中でも、それより古い新しい行（返信を含む）は通知しない。返信をすべて通知する設定（notify_all_replies）でも同じ。",
+    "reconcile と、trickle を含む history job の両方に notify_max_age_s を渡し、設定した古さの上限をこの経路にもかける。",
     "初めて取り込む患者（保存済みの投稿がない）は通知しない。"
   ],
   "refs": ["mcs/core/ledger_capture.py", "mcs/ingest/job_ops.py", "mcs/ingest/run_check.py"]

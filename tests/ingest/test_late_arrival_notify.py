@@ -5,9 +5,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from types import SimpleNamespace
+
 import job_ops
 import ledger
 import mcs_contract
+import run_check
 from ingest_testkit import _ledger, _message
 
 JST = timezone(timedelta(hours=9))
@@ -87,4 +90,56 @@ def test_quiet_save_keeps_a_late_post_older_than_the_age_bound_quiet(tmp_path):
     db.save_messages([_message(mid=13, posted_at=_iso(now - 600))], project_id=1,
                      notify_max_age_s=DAY, notify_late=True)
     assert [e["message_ids"] for e in _events(db)] == [[13]]  # positive control
+    db.close()
+
+
+def test_late_path_notifies_only_rows_newer_than_the_stored_newest(tmp_path):
+    db = _ledger(tmp_path)
+    db.ensure_patient(1)
+    now = time.time()
+    db.save_messages([_message(mid=10, posted_at=_iso(now - 1000))], project_id=1)
+
+    db.save_messages([_message(mid=11, posted_at=_iso(now - 500)),
+                      _message(mid=12, posted_at=_iso(now - 3000))], project_id=1,
+                     notify_max_age_s=DAY, notify_late=True)
+    assert [e["message_ids"] for e in _events(db)] == [[11]]
+    assert db.has_message(12)  # stored, but older than the newest stored post
+
+    db.save_messages([_message(mid=13, posted_at=_iso(now - 4000))], project_id=1,
+                     notify_max_age_s=DAY, notify_late=True)
+    assert len(_events(db)) == 1  # the same kind of row stays quiet alone
+    db.close()
+
+
+def test_every_quiet_history_drain_gets_the_notify_age_bound(tmp_path, monkeypatch):
+    import notify_cmds
+    import notify_spool
+    db = _ledger(tmp_path)
+    seen = []
+    for name in ("drain_commands", "seed_discovery", "run_discovery",
+                 "run_reply_jobs", "seed_trickle"):
+        monkeypatch.setattr(job_ops, name, lambda *a, **k: None)
+    for name in ("run_history_jobs", "run_reconcile_jobs"):
+        monkeypatch.setattr(job_ops, name, lambda *a, _n=name, **k: seen.append(
+            (_n, k.get("trickle", False), k.get("notify_max_age_s"))))
+    monkeypatch.setattr(run_check, "HOME", str(tmp_path))
+    monkeypatch.setattr(notify_spool, "ensure_dirs", lambda *a: None)
+    monkeypatch.setattr(notify_spool, "restore_pending", lambda *a: None)
+    monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **k: None)
+
+    class Adapter:
+        def self_profile(self):
+            return {"sender_id": 1, "name": "synthetic", "professions": [],
+                    "organizations": []}
+
+        def station_staffs(self, stations):
+            return []
+
+    result = {"errors": []}
+    run_check._run_jobs(Adapter(), db, SimpleNamespace(jobs_only=True, download_files=False),
+                        {}, result, time.monotonic() + 300, False, 3600.0)
+    assert result["errors"] == []
+    assert sorted(seen) == [("run_history_jobs", False, 3600.0),
+                            ("run_history_jobs", True, 3600.0),
+                            ("run_reconcile_jobs", False, 3600.0)]
     db.close()
