@@ -134,8 +134,9 @@ def _patch_restart(updater, monkeypatch, restart):
 
 def test_an_interrupt_after_restart_dropped_the_marker_restores_it_before_run_lock_is_released(
         updater, monkeypatch):
-    """apply's post-merge child is interrupted right after restart_agents removed the marker:
-    the marker is back (through _ensure_recovery_marker) while run.lock was still held."""
+    """apply's post-merge stage (run in-process here, not a real child; the real child path is
+    the next test) is interrupted right after restart_agents removed the marker: the marker
+    is back (through _ensure_recovery_marker) while run.lock was still held."""
     import update_runtime_migration
     _, target = _world(updater, monkeypatch)
     seen = []
@@ -189,3 +190,63 @@ def test_an_interrupt_after_bail_saved_the_terminal_journal_is_not_unfinished(up
     state = _journal(updater)
     assert not state["applying"] and not state["stages"]
     assert not Path(updater.MARKER_PATH).exists()
+
+
+
+@pytest.mark.parametrize("failure", [KeyboardInterrupt, SystemExit, "second_interrupt"])
+def test_an_interrupted_parent_reaps_the_child_then_restores_the_marker_under_run_lock(
+        updater, monkeypatch, failure):
+    """The real _run_post_merge with the Popen stand-in of test_update_child_reaping: the child
+    already dropped the marker (its restart_agents) when the parent's wait is interrupted. The
+    parent stops and reaps the child, restores the marker while still holding run.lock, then
+    releases it; a second interrupt during the restore is noted and leaves no marker."""
+    import os
+    import subprocess
+    import update_lifecycle_context
+    import writer_lock
+    _, target = _world(updater, monkeypatch)
+    interrupt = KeyboardInterrupt if failure == "second_interrupt" else failure
+    events = []
+
+    class Child:
+        pid = 4321
+        returncode = None
+
+        def communicate(self, timeout=None):
+            if not events:
+                updater._remove_marker()
+                events.append("child_dropped_marker")
+                raise interrupt("synthetic operator interrupt")
+            self.returncode = -9
+            return "", ""
+
+        def wait(self, timeout=None):
+            self.returncode = -9
+            return self.returncode
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: Child())
+    monkeypatch.setattr(os, "killpg", lambda pid, signum: events.append("reaped"))
+    ensure = update_lifecycle_context._ensure_recovery_marker
+
+    def restore():
+        events.append("restore")
+        fd = writer_lock.acquire_run_lock(updater.RUN_LOCK)
+        events.append("run_lock_free" if fd is not None else "run_lock_held")
+        if fd is not None:
+            os.close(fd)
+        if failure == "second_interrupt":
+            raise KeyboardInterrupt("synthetic second interrupt")
+        return ensure()
+    monkeypatch.setattr(update_lifecycle_context, '_ensure_recovery_marker', restore)
+    with pytest.raises(interrupt) as caught:
+        updater.apply("v1.1.0", target, "synthetic-command")
+    assert events == ["child_dropped_marker", "reaped", "restore", "run_lock_held"]
+    fd = writer_lock.acquire_run_lock(updater.RUN_LOCK)
+    assert fd is not None                                   # released after the restore
+    os.close(fd)
+    assert _journal(updater)["applying"]
+    if failure == "second_interrupt":
+        assert "update_marker_restore_failed:KeyboardInterrupt" in caught.value.__notes__
+        assert not Path(updater.MARKER_PATH).exists()
+    else:
+        assert Path(updater.MARKER_PATH).exists()
