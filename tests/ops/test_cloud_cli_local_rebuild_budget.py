@@ -103,6 +103,8 @@ def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(sca
 
     observed = {'stage': 'before_bounded', 'tally': 'not_reached', 'units': 0,
                 'sqlite': 'none', 'bounded_s': None, 'deadline_reached': None}
+    observed['tally_phases'] = {name: {'started': 0, 'completed': 0, 'seconds': 0.0}
+                                for name in ('timestamps', 'update', 'with_prior')}
     original_bounded, original_tally = local_rebuild._bounded, cloud_policy._tally
 
     @contextmanager
@@ -145,12 +147,29 @@ def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(sca
             return result
         return call
 
+    def tally_phase(name, func):
+        def call(*args, **kwargs):
+            phase = observed['tally_phases'][name]
+            phase['started'] += 1
+            started = time.monotonic()
+            try:
+                result = func(*args, **kwargs)
+                phase['completed'] += 1
+                return result
+            finally:
+                phase['seconds'] += time.monotonic() - started
+        return call
+
     with closing(Ledger(str(scaled))) as ledger:
         with monkeypatch.context() as patch:
             patch.setattr(local_rebuild, '_bounded', bounded)
             patch.setattr(cloud_policy, '_tally', tally_call)
             for name in ('_database_identity', 'approved_units', '_tally_valid', 'unit_proof'):
                 patch.setattr(local_rebuild, name, stage(name, getattr(local_rebuild, name)))
+            for owner, name, phase in ((cloud_policy, '_validate_accounting_timestamps', 'timestamps'),
+                                       (cloud_policy._Tally, 'update', 'update'),
+                                       (cloud_policy._Tally, '_with_prior', 'with_prior')):
+                patch.setattr(owner, name, tally_phase(phase, getattr(owner, name)))
             tally_before = dict(cloud_policy.TALLY_COST)
             started = time.monotonic()
             receipt = mcs_requests.apply_command(ledger, {
