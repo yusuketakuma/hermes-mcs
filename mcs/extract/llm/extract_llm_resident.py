@@ -227,8 +227,10 @@ def _background_context_refresh(ledger, initial_state, stop=None, *, cloud_worke
         cloud_enabled = cloud_cfg["mode"] != "off"
         if (cloud_cfg["mode"] == "on") != cloud_worker:
             return {"status": "off", "done": 0}
-        if time.monotonic() >= deadline or not (admit() if cloud_enabled else local_admit()):
-            result = {"status": "deferred", "done": 0}
+        if time.monotonic() >= deadline:
+            result = {"status": "deferred", "done": 0, "reason": "patient_context_capacity_or_deadline"}
+        elif not (admit() if cloud_enabled else local_admit()):
+            result = {"status": "deferred", "done": 0, "reason": "patient_context_admission_deferred"}
         else:
             with local_llm.pinned_slot(local_llm.LANES[3]):
                 result = patient_context_refresh.run_due(

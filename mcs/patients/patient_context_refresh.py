@@ -691,8 +691,10 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     if not patient_context_refresh_state.options(cfg)["enabled"] or not window:
         return {"status": "off", "done": 0}
     workday_id, _ = window
-    if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline or not admit():
-        return {"status": "deferred", "done": 0}
+    if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline:
+        return {"status": "deferred", "done": 0, "reason": "patient_context_capacity_or_deadline"}
+    if not admit():
+        return {"status": "deferred", "done": 0, "reason": "patient_context_admission_deferred"}
     selection_fd, selection_reason = _selection_lock(ledger.db)
     if selection_fd is None:
         return {"status": "deferred", "done": 0, "reason": selection_reason}
@@ -1331,10 +1333,13 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     except (ValueError, TypeError, KeyError, TimeoutError) as exc:
         failure = safe_error_code(exc)
     if result is None and failure is None and deferred_reason is None:
-        return {"status": "deferred", "done": 0}
-    if patient_context_refresh_state.time.monotonic() >= deadline or not admit():
+        return {"status": "deferred", "done": 0, "reason": "patient_context_waiting"}
+    if patient_context_refresh_state.time.monotonic() >= deadline:
         discard_if_changed()
-        return {"status": "deferred", "done": 0}
+        return {"status": "deferred", "done": 0, "reason": "patient_context_capacity_or_deadline"}
+    if not admit():
+        discard_if_changed()
+        return {"status": "deferred", "done": 0, "reason": "patient_context_admission_deferred"}
     held_scan = (scans.get(context_plan.source_key(selected_source[0]), {})
                  if lane == "B" and selected_source[0] is not None else {})
     # A paid unit that can be neither resent nor run locally holds only this
@@ -1455,7 +1460,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     try:
         if not admit():
             discard_if_changed()
-            return {"status": "deferred", "done": 0}
+            return {"status": "deferred", "done": 0, "reason": "patient_context_admission_deferred"}
         # BEGIN IMMEDIATE seals the signature check and writes in one brief
         # transaction; no inference is performed while holding a DB/run lock.
         ledger.db.execute("BEGIN IMMEDIATE")
@@ -1556,7 +1561,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     if (completed_receipts is None or extract_llm._writer_current(full=True)
                             and notify_spool.restore_writer_hold(notify_spool.data_root(ledger)) is None):
                         provider.discard()
-                    return {"status": "deferred", "done": 0}
+                    return {"status": "deferred", "done": 0, "reason": "patient_context_cloud_source_changed"}
                 except ValueError:
                     ledger.db.rollback()
                     return {"status": "source_changed", "done": 0}
