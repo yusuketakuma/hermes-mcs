@@ -91,7 +91,8 @@ def _on_card(controls):
     more = [b for b in controls.operations if b.get("id") == "more"]
     if more:
         picker = controls.stamp_picker
-        return [*more, *controls.stamps, *([picker] if picker else []), *controls.links]
+        return [*controls.quick, *more, *controls.stamps, *([picker] if picker else []),
+                *controls.links]
     # Legacy cards without a menu must keep their primary operations reachable.
     primary = sorted((b for b in controls.operations if b.get("id") in PRIMARY_ACTIONS),
                      key=lambda b: PRIMARY_ACTIONS.index(b["id"]))
@@ -115,7 +116,7 @@ def heading(spec):
 
 
 def action_buttons(spec):
-    """The card's own buttons: 操作を選ぶ…, the stamp row, 別の投稿, MCSで開く."""
+    """The card's own buttons: 確認する・担当する, 操作を選ぶ…, the stamp row, 別の投稿, MCSで開く."""
     actions = []
     for button in _on_card(plan_controls(spec["parts"])):
         stamp = button.get("ui") != "link" and button.get("id") == STAMP_ROW_ACTION

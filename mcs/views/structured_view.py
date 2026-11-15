@@ -643,10 +643,12 @@ def _request_lines(llm: dict, v1: dict, *, multiline: bool = False) -> list[str]
 
 
 def structured_lines(db, mid: int, *, drug_candidates: bool = True,
-                     plain: bool = False) -> list[str]:
+                     plain: bool = False, request_first: bool = False) -> list[str]:
     """Compact structured summary from extract_v1 + the current fact
     artifact (canonical_projection shadows extract_llm).  Returns []
-    when nothing usable exists (caller falls back to raw only)."""
+    when nothing usable exists (caller falls back to raw only).
+    ``request_first`` (plain only) is the layout-6 card order: 📌 依頼 and
+    薬剤 read before the summary."""
     v1 = mcs_queries.current_message_extract(db, "extract_v1", mid) or {}
     selected = mcs_queries.current_message_facts(db, mid)
     llm = selected or {}
@@ -711,6 +713,11 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
         # owner 2026-10-08: one fixed reading order on new cards and notices
         # (missing items are simply absent); layout-1 cards keep the old order
         ranks = [rank for rank, _ in head] + [_summary_rank(line) for line in lines[len(head):]]
+        if request_first:
+            ranks = [_REQUEST_FIRST.get(rank, rank) if not line.startswith("依頼候補") else rank
+                     for rank, line in zip(ranks, lines)]
+            lines = [REQUEST_MARK + line if at >= len(head) and line.startswith("依頼:") else line
+                     for at, line in enumerate(lines)]
         lines = [line for _, line in sorted(zip(ranks, lines), key=lambda pair: pair[0])]
     return lines
 
@@ -724,6 +731,12 @@ _SUMMARY_ORDER = (
     (5, ("次回予定",)),
     (7, ("区分",)),
 )
+
+
+# owner 2026-11-15 (layout 6 cards): 緊急度 → 依頼 → 薬剤 → 概要・要点 → …
+# Only confirmed requests lead; 依頼候補（未確認） keeps its later slot.
+_REQUEST_FIRST = {2: 0.5, 3: 0.7}
+REQUEST_MARK = "📌 "
 
 
 def _summary_rank(line: str) -> int:
