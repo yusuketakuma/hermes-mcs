@@ -3,6 +3,7 @@ import json
 import pytest
 import config_edit
 import mcs_setup
+import external_transfer
 import safe_io
 import setup_config_snapshot
 from test_mcs_setup import _init_env
@@ -84,12 +85,19 @@ def test_init_interrupt_after_config_publication_reports_unknown(monkeypatch, tm
     _, path = _setup(monkeypatch, tmp_path)
     if not existing:
         path.unlink()
+    # A new installation first writes the external-transfer pending record (its own directory
+    # fsync); the interrupt targets the config publication that follows it.
+    skip = [0 if existing else 1]
     def interrupted(*_a, **_k):
+        if skip[0]:
+            skip[0] -= 1
+            return
         raise KeyboardInterrupt
     monkeypatch.setattr(safe_io, 'fsync_dir', interrupted)
     assert mcs_setup.main(['init', '--yes', '--login-id', 'synthetic', '--notify-target', 'local',
                            '--set', 'self_posts=true']) == 130
     assert json.loads(path.read_text())['self_posts'] is True
+    assert existing or (path.parent / external_transfer.FILE_NAME).exists()
     out = capsys.readouterr().out
     assert 'config.jsonの保存結果を確認できません' in out
     assert '認証情報や辞書の準備が済んでいる場合があります' in out
