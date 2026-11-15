@@ -216,8 +216,9 @@ def test_busy_editor_keeps_legacy_orphan_marker(watchdog):
     fd = os.open(root / "config.json.edit.lock", os.O_RDWR | os.O_CREAT, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        assert watchdog._recover_legacy() == 2
+        assert watchdog._recover_legacy() == 0  # busy editor: preserve the marker and retry
         assert marker.read_text() == "synthetic marker"
+        assert not Path(watchdog.REPORT_PATH).exists()
     finally:
         os.close(fd)
 
