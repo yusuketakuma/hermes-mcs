@@ -23,6 +23,44 @@ from anthropic_runtime_testkit import _assert_legacy_retained as _assert_legacy_
 from test_cloud_response_recovery import legacy_cloud_routes
 
 
+def _openai_wire_prompt(value):
+    if isinstance(value, str):
+        return value
+    assert isinstance(value, list) and len(value) == 1
+    message = value[0]
+    assert isinstance(message, dict) and set(message) == {'role', 'content'} and message['role'] == 'user'
+    blocks = message['content']
+    assert isinstance(blocks, list) and 1 <= len(blocks) <= 2
+    for index, block in enumerate(blocks):
+        keys = {'type', 'text', 'prompt_cache_breakpoint'} if index == 0 else {'type', 'text'}
+        assert isinstance(block, dict) and set(block) == keys
+        assert block['type'] == 'input_text' and isinstance(block['text'], str) and block['text']
+    assert blocks[0]['prompt_cache_breakpoint'] == {'mode': 'explicit'}
+    return ''.join(block['text'] for block in blocks)
+
+
+def test_checkpoint_wire_prompt_matches_openai_input():
+    client = worker.openai_client.OpenAIClient('synthetic-key')
+    prompt = 'synthetic prefix and suffix'
+    for prefix in (None, 'synthetic prefix', prompt):
+        body = client.body(prompt, 100, prefix)
+        assert _openai_wire_prompt(client.wire(body, prefix)['input']) == prompt
+    invalid = [
+        [],
+        [{'role': 'assistant', 'content': []}],
+        [{'role': 'user', 'content': [{'type': 'input_text', 'text': 'x'}]}],
+        [{'role': 'user', 'content': [{'type': 'input_text', 'text': 1,
+                                       'prompt_cache_breakpoint': {'mode': 'explicit'}}]}],
+        [{'role': 'user', 'content': [{'type': 'input_image', 'text': 'x',
+                                       'prompt_cache_breakpoint': {'mode': 'explicit'}}]}],
+        [{'role': 'user', 'content': [{'type': 'input_text', 'text': 'x',
+                                       'prompt_cache_breakpoint': {'mode': 'wrong'}}]}],
+    ]
+    for value in invalid:
+        with pytest.raises(AssertionError):
+            _openai_wire_prompt(value)
+
+
 @pytest.mark.parametrize("change", ["none", "answer", "prompt", "contract", "owner", "unit", "missing_hash", "missing_finish"])
 def test_repair_answer_evidence_requires_exact_settled_request(tmp_path, monkeypatch, change):
     import hashlib
@@ -423,7 +461,7 @@ def test_high_repair_final_proof_survives_checkpoint_cleanup(routed, monkeypatch
     class Client(real_client):
         def request(self, method, request, timeout, **kwargs):
             assert timeout > 0 and not led.db.in_transaction
-            prompt = request['input']
+            prompt = _openai_wire_prompt(request['input'])
             piece = prompt.rsplit('<<<\n', 1)[1].split('\n>>>', 1)[0]
             sends.append((request['model'], request['reasoning']['effort'], piece))
             truncated = (piece == body and (split == 'initial' and request['reasoning']['effort'] != 'high'
