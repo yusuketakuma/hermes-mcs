@@ -79,3 +79,12 @@ def test_checkpoint_detects_a_dropped_or_edited_newest_record(tmp_path):
     assert access_log.verify(tmp_path, checkpoint=checkpoint)["checkpoint"] == "changed"
     path.write_bytes(lines[0])
     assert access_log.verify(tmp_path, checkpoint=checkpoint)["checkpoint"] == "records_missing"
+
+
+def test_free_text_codes_become_invalid_and_patient_lists_are_bounded(tmp_path):
+    entry = _entry(tmp_path, op="read", kind="合成 患者 本文", outcome="bad read",
+                   patients=[*range(access_log.PATIENT_LIMIT + 5), "9", True])
+    assert entry["kind"] == "invalid" and entry["outcome"] == "invalid"
+    assert entry["patients"] == list(range(access_log.PATIENT_LIMIT))
+    assert entry["patients_more"] == 5
+    assert access_log.verify(tmp_path)["ok"] is True

@@ -36,3 +36,15 @@ def test_unrecorded_read_is_withheld_but_confirmed_write_is_not(tmp_path, monkey
     assert json.loads(read) == {"ok": False, "error": "access_log_unavailable"}
     write = command_dispatch.dispatch({"op": "request", "phase": "confirm"}, settings, IDENTITY)
     assert json.loads(write)["ok"] is True
+
+
+def test_projectless_list_is_attributed_to_every_returned_patient(tmp_path, monkeypatch):
+    reply = ok(operation="read", result={"items": [{"project_id": 4}, {"project_id": 9,
+                                                   "nested": [{"project_id": 4}]}]})
+    monkeypatch.setattr(command_dispatch, "dispatch_operation", lambda *a, **k: reply)
+    command_dispatch.dispatch({"op": "read", "kind": "signals"}, _settings(tmp_path), IDENTITY)
+    monkeypatch.setattr(command_dispatch, "dispatch_operation", lambda *a, **k: deny("bad_read"))
+    command_dispatch.dispatch({"op": "read", "kind": "合成 患者 本文"}, _settings(tmp_path), IDENTITY)
+    listed, rejected = access_log.read(tmp_path)
+    assert listed["project_id"] is None and listed["patients"] == [4, 9]
+    assert rejected["kind"] == "invalid" and rejected["patients"] == []

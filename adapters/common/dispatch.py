@@ -123,15 +123,33 @@ def dispatch(data: dict, settings: dict[str, Any],
     return _audited(reply, data, settings, identity)
 
 
-def _outcome(reply: str) -> str:
+def _parsed(reply: str):
     try:
-        parsed = json.loads(reply)
+        return json.loads(reply)
     except ValueError:
-        # The summary answer is display text; its failures are bare codes.
+        return None  # the summary answer is display text; its failures are bare codes
+
+
+def _outcome(reply: str, parsed) -> str:
+    if parsed is None:
         return reply if _DENIAL_CODE.fullmatch(reply) else "ok"
     if isinstance(parsed, dict) and parsed.get("ok") is False:
         return str(parsed.get("error"))
     return "ok"
+
+
+def _returned_patients(parsed) -> set[int]:
+    """Every project id an answer contains, so list views are attributed per patient."""
+    found, stack = set(), [parsed]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            if type(node.get("project_id")) is int:
+                found.add(node["project_id"])
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return found
 
 
 def _audited(reply: str, data: dict, settings: dict[str, Any],
@@ -144,15 +162,16 @@ def _audited(reply: str, data: dict, settings: dict[str, Any],
     """
     bootstrap()
     import access_log
-    phase, op, outcome = data.get("phase"), data.get("op"), _outcome(reply)
+    parsed = _parsed(reply)
+    phase, op, outcome = data.get("phase"), data.get("op"), _outcome(reply, parsed)
     try:
         access_log.record(
             Path(settings["inbox"]).parent, via=identity.get("transport") or "discord",
             actor=actor(identity), channel=identity.get("chat_id"),
-            op=f"{op}.{phase}" if isinstance(phase, str) else op,
+            op=f"{op}.{phase}" if isinstance(op, str) and isinstance(phase, str) else op,
             kind=data.get("kind") or data.get("action"),
-            project_id=data.get("project_id"), outcome=outcome,
-            query="query" in data)
+            project_id=data.get("project_id"), patients=_returned_patients(parsed),
+            outcome=outcome, query="query" in data)
     except (access_log.AccessLogError, OSError, KeyError, TypeError):
         if outcome == "ok" and phase != "confirm":
             return deny("access_log_unavailable")

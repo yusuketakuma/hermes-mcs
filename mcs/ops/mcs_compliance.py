@@ -24,9 +24,17 @@ def _print(value) -> None:
     print(json.dumps(value, ensure_ascii=False, sort_keys=True))
 
 
+def _patients_of(entry) -> set:
+    ids = {pid for pid in entry.get("patients") or () if type(pid) is int}
+    if type(entry.get("project_id")) is int:
+        ids.add(entry["project_id"])
+    return ids
+
+
 def review(entries, *, max_patients: int) -> list[dict]:
     """Summarize each actor so a person can spot unusual access without reading every line."""
-    actors = defaultdict(lambda: {"records": 0, "denied": 0, "off_hours": 0, "patients": set()})
+    actors = defaultdict(lambda: {"records": 0, "denied": 0, "off_hours": 0, "patients": set(),
+                                   "unlisted": 0})
     for entry in entries:
         row = actors[(entry.get("via"), entry.get("actor"))]
         row["records"] += 1
@@ -35,16 +43,16 @@ def review(entries, *, max_patients: int) -> list[dict]:
         hour = datetime.fromtimestamp(entry.get("ts", 0), JST).hour
         if hour >= OFF_HOURS[0] or hour < OFF_HOURS[1]:
             row["off_hours"] += 1
-        if type(entry.get("project_id")) is int:
-            row["patients"].add(entry["project_id"])
+        row["patients"].update(_patients_of(entry))
+        row["unlisted"] += entry.get("patients_more") or 0
     result = []
     for (via, actor), row in sorted(actors.items(), key=lambda item: str(item[0])):
         flags = [name for name, hit in (
-            ("many_patients", len(row["patients"]) > max_patients),
+            ("many_patients", len(row["patients"]) + row["unlisted"] > max_patients),
             ("denied", row["denied"] > 0),
             ("off_hours", row["off_hours"] > 0)) if hit]
         result.append({"via": via, "actor": actor, "records": row["records"],
-                       "patients": len(row["patients"]), "denied": row["denied"],
+                       "patients": len(row["patients"]) + row["unlisted"], "denied": row["denied"],
                        "off_hours": row["off_hours"], "flags": flags})
     return result
 
@@ -93,7 +101,7 @@ def main(argv=None) -> int:
         entries = access_log.read(data_dir, since=since)
         if args.action == "show":
             for entry in entries:
-                if args.project is None or entry.get("project_id") == args.project:
+                if args.project is None or args.project in _patients_of(entry):
                     _print(entry)
             return 0
         for row in review(entries, max_patients=args.max_patients):

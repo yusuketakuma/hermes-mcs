@@ -50,10 +50,13 @@ MODES = ("off", "shadow", "assist", "enforce")
 FACT_SOURCES = ("legacy", "shadow", "canonical")
 
 
-def semantic_config(cfg: dict, *, key_present=False) -> tuple[dict, list]:
+def semantic_config(cfg: dict, *, key_present=False, root=None) -> tuple[dict, list]:
     """Validate config.json's "semantic" block. Unknown/malformed values
     fail CLOSED — mode falls back to off and each error is reported, so a
-    typo can never widen the rollout stage (spec §22.1, AT-067)."""
+    typo can never widen the rollout stage (spec §22.1, AT-067).
+
+    A present key turns an omitted mode on only after the facility's
+    external-transfer review allows Jev, so every caller shares that gate."""
     errors = []
     out = {"mode": "off", "summary_mode": "off", "loop_mode": "off",
            "extract_qc": "off",
@@ -79,6 +82,9 @@ def semantic_config(cfg: dict, *, key_present=False) -> tuple[dict, list]:
         out["daily_request_budget"] = 0
     if block.keys() - out.keys():
         errors.append("config: semantic_unknown_field")
+    if key_present is True and "mode" not in block:
+        import external_transfer
+        key_present = external_transfer.auto_enable_allowed("jev", root)
     mode = block.get("mode", "assist" if key_present is True else "off")
     if mode not in MODES:
         errors.append("config: semantic_mode_invalid")
@@ -207,9 +213,7 @@ def runtime_config(cfg: dict, *, root=None) -> tuple[dict, list]:
     """Resolve an omitted Jev mode from this MCS dotenv without widening its scope."""
     block = cfg.get("semantic")
     explicit = isinstance(block, dict) and "mode" in block
-    import external_transfer
-    return semantic_config(cfg, key_present=not explicit and bool(jev.api_key(root))
-                           and external_transfer.auto_enable_allowed("jev", root))
+    return semantic_config(cfg, key_present=not explicit and bool(jev.api_key(root)), root=root)
 
 
 def policy_fingerprint(scfg: dict) -> str:
