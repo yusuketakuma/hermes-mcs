@@ -1,0 +1,21 @@
+{
+  "category": "changed",
+  "title": "抽出結果・OCR・カード表示の更新だけでは読取り用スナップショットを15分以上あけて公開する",
+  "summary": "閲覧・サマリー・チャット操作が読む公開スナップショットは、抽出結果の反映・OCR・カードの再描画・照合や復旧の後始末だけで付く更新の印なら、新着だけの変更と同じく前回の公開から15分（900秒）たつまで公開を見送ります。これらの結果が閲覧側に出るまで最大約15分余計にかかります。通知カードは書込み側のDBから行うため遅れません。人の操作・患者追加・依頼・スキーマ変更・行の減少等はこれまでどおりその回に公開します。見送った回は1GB規模の複製と検証を行わないため、書込みロックの保持と処理時間が短くなります。",
+  "upgrade": "追加操作は不要です。設定項目は追加していません。収集とコマンド処理の次の起動から反映され、常駐サービスの再起動は要りません。戻すときはこのcommitを取り消します。外部連携のauthで max_snapshot_age_s を約1900秒より短くしている場合は、背景の更新だけが続く時間帯にも snapshot_stale で送付を拒否される回が増えます。",
+  "details": [
+    "maintenance.refresh_snapshot に dirty 引数を追加しました。dirty は内容の署名が同じでも unchanged として飛ばさないことだけを意味し、待ち時間と緊急項目の判定は新着だけの変更と共通です。force=True の意味（常に公開）は変えていません。",
+    "収集の終了段（finish_snapshot）は force=dirty をやめて dirty を渡します。deferred の回は検証ゲートを開かず、更新の印を消しません。",
+    "コマンドだけの処理（run_check --commands-only）は publish_snapshot を直接呼ばず refresh_snapshot を通します。published のときだけ印を消し、公開か検証に失敗したときは従来どおり snapshot_publish_failed を記録します。結果に snapshot_state を追加しました。",
+    "既読化・収集・人承認の経路、公開時の検証（quick_check・検証ゲート）と失敗の扱いは変えていません。独立OCR処理（mcs_ocr）の公開は従来どおり force=True のままです。"
+  ],
+  "refs": [
+    "mcs/core/maintenance.py",
+    "mcs/ingest/run_check.py",
+    "docs/guides/USER_GUIDE.md",
+    "tests/core/test_stab_db_maintenance.py",
+    "tests/ingest/test_snapshot_gate.py",
+    "tests/ingest/test_run_check_lifecycle.py",
+    "tests/ingest/test_stab_health_db.py"
+  ]
+}

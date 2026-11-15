@@ -405,9 +405,16 @@ def wizard(cfg: dict):
           "\nこの後にも追加機能の選択、保存前の確認、必要に応じた辞書・接続設定、診断があります。")
     detailed = ask("setup_detail", "choice:recommended,detailed", "recommended",
                     "設定の進め方", None) == "detailed"
-    basic = {"runtime_mode", "mcs_login_id", "notify_target", "notify_system_target",
+    basic = {"mcs_login_id", "notify_target", "notify_system_target",
              "notify.interactive", "self_posts", "deep_history",
              "notify.card_thread", "signals.digest"}
+    if not detailed and cfg.get("runtime_mode") in ("hermes", "standalone"):
+        # the installer already built this runtime; switching it here alone
+        # would leave the jobs and connections on the other one
+        print(f"\n  実行方法: {_CHOICE_LABELS[cfg['runtime_mode']]}（導入時に選択済み）"
+              "\n  変更する場合は、導入コマンドを --mode を付けて実行し直します。")
+    else:
+        basic.add("runtime_mode")
     sections = [(title, [item for item in items if detailed or item[0] in basic
                         or item[1].startswith("req")
                         or item[0].endswith(("project_ids", "project_ids_auto", "allowed_role_ids"))])

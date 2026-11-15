@@ -161,11 +161,11 @@ def test_concurrent_owner_claim_is_untouched_while_refill_advances(routed, monke
     dangling(ledger, 2)
     real_claim = worker._claim
     foreign = []
-    def competing(ledger, row, lease_s=worker._EXTRACT_LEASE_S):
+    def competing(ledger, row, lease_s=worker._EXTRACT_LEASE_S, **kwargs):
         if row['message_id'] == 2 and not foreign:
             assert real_claim(ledger, dict(row), 120) is not None
             foreign.append(dict(ledger.db.execute("SELECT * FROM fetch_jobs WHERE kind='extract_claim' AND message_id=2").fetchone()))
-        return real_claim(ledger, row, lease_s)
+        return real_claim(ledger, row, lease_s, **kwargs)
     monkeypatch.setattr(worker, '_claim', competing)
     monkeypatch.setattr(extract_llm_runner, '_claim', worker._claim)
     monkeypatch.setattr(worker, 'llm_extract', lambda *a, **k: {})

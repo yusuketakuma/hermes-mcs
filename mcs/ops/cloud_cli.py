@@ -19,8 +19,16 @@ import mcs_util
 import semantic_jev as jev
 
 READ_SECONDS = 5.0
+FULL_READ_SECONDS = 300.0   # `outstanding --full`: a read-only snapshot never blocks the writers
 READ_ROWS = 100000
 READ_BYTES = 16 * 1024 * 1024
+# The local-rebuild dry run's month-tally phase only (Astra c2b-M1-design-r5): about twice the
+# month-end estimate (~80k accounting rows, ~280 MiB observed bytes, strings x4), rounded up to an
+# ordinary unit. An operating capacity, not a proven maximum or a memory bound. Used once per
+# preview; over it the tally stays unverified and the preview partial (tally_budget_exceeded),
+# never borrowed from another phase.
+TALLY_READ_ROWS = 200000
+TALLY_READ_BYTES = 640 * 1024 * 1024
 
 
 class _ReaderLimit(ValueError):
@@ -42,29 +50,31 @@ def _settings(cfg, root=None):
 
 
 @contextmanager
-def _reader(root=None):
+def _reader(root=None, *, seconds=None):
     path = Path(root or mcs_util.HOME) / "data" / "ledger.db"
     if path.is_symlink() or not path.is_file():
         raise ValueError("ledger_unavailable")
     with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=.25)) as db:
-        consumed_rows, consumed_bytes = 0, 0
-        deadline = time.monotonic() + READ_SECONDS
+        deadline = time.monotonic() + (READ_SECONDS if seconds is None else seconds)
 
         def bounded_row(cursor, values):
-            nonlocal consumed_rows, consumed_bytes
-            consumed_rows += 1
-            consumed_bytes += sum(len(value) * 4 if isinstance(value, str) else len(value)
-                                  if isinstance(value, bytes) else 8 for value in values)
+            budget = bounded_row.budget
+            budget["rows_used"] += 1
+            budget["bytes_used"] += sum(len(value) * 4 if isinstance(value, str) else len(value)
+                                        if isinstance(value, bytes) else 8 for value in values)
             if time.monotonic() >= deadline:
                 bounded_row.stop_reason = "read_deadline"
                 raise _ReaderLimit("read_deadline")
-            if consumed_rows > READ_ROWS:
-                bounded_row.stop_reason = "observation_budget_exceeded"
-                raise _ReaderLimit("observation_budget_exceeded")
-            if consumed_bytes > READ_BYTES:
-                bounded_row.stop_reason = "observation_budget_exceeded"
-                raise _ReaderLimit("observation_budget_exceeded")
+            # the outer budget reads the module limits on every row, as before (None = READ_ROWS/BYTES)
+            rows = READ_ROWS if budget["rows"] is None else budget["rows"]
+            size = READ_BYTES if budget["bytes"] is None else budget["bytes"]
+            if budget["rows_used"] > rows or budget["bytes_used"] > size:
+                bounded_row.stop_reason = budget["reason"]
+                raise _ReaderLimit(budget["reason"])
             return sqlite3.Row(cursor, values)
+
+        bounded_row.budget = {"rows": None, "bytes": None, "rows_used": 0, "bytes_used": 0,
+                              "reason": "observation_budget_exceeded"}
 
         def interrupt_on_deadline():
             if time.monotonic() >= deadline:
@@ -79,6 +89,19 @@ def _reader(root=None):
         db.set_progress_handler(interrupt_on_deadline, 1000)
         db.execute("BEGIN")
         yield db, deadline
+
+
+@contextmanager
+def _reader_phase(db, *, rows, size, reason):
+    """Count one narrow phase of a _reader against its own finite budget (same connection, same
+    snapshot, same deadline); the outer budget and its counters are restored on every exit."""
+    factory = db.row_factory
+    outer = factory.budget
+    factory.budget = {"rows": rows, "bytes": size, "rows_used": 0, "bytes_used": 0, "reason": reason}
+    try:
+        yield
+    finally:
+        factory.budget = outer
 
 
 def _check_reader(db, deadline):
@@ -215,6 +238,23 @@ def _source_scope(settings, alias="m"):
     return sql, params
 
 
+def _backlog_setting_blockers(settings, route):
+    """Report settings-only blockers, without claiming accounting or key availability."""
+    key = "semantic_backlog_until" if route == "semantic_backlog" else "reextract_backlog_until"
+    if settings[key] is None:
+        return []
+    window = policy.semantic_backlog_window if route == "semantic_backlog" else policy.reextract_backlog_window
+    reasons = [code for code, blocked in (
+        ("cloud_mode_not_on", settings["mode"] != "on"),
+        ("route_missing", route not in settings["routes"]),
+        ("window_ended", not window(settings)),
+        ("project_scope_empty", settings["project_ids"] == [])) if blocked]
+    reason = policy.setting_block_reason(settings)
+    if reason:
+        reasons.append(reason)
+    return reasons
+
+
 def _route_counts(db, cfg, settings, deadline):
     out = {route: {"targets": 0, "requests_estimate": 0, "input_chars": 0,
                    "basic_requests_estimate": 0, "chunk_extra_requests_estimate": 0}
@@ -240,7 +280,7 @@ def _route_counts(db, cfg, settings, deadline):
             item["basic_requests_estimate"] += basic
             item["chunk_extra_requests_estimate"] += max(0, chunks - pending["scan_sources"])
             item["requests_estimate"] += pending["summary_units"] + chunks
-    if "reextract" in settings["routes"] and policy.send_route("reextract"):
+    if "reextract" in settings["routes"] and policy.reextract_planned(settings):
         import extract_llm as extract
         import cloud_inference
         selection, errors = policy.profile_for_settings(cfg, settings, route="reextract", purpose="backlog")
@@ -278,7 +318,7 @@ def _route_counts(db, cfg, settings, deadline):
                 item["basic_requests_estimate"] += 1
                 item["chunk_extra_requests_estimate"] += requests - 1
                 item["requests_estimate"] += requests
-    if "semantic_backlog" in settings["routes"] and policy.send_route("semantic_backlog"):
+    if policy.semantic_planned(cfg):
         scope, params = _source_scope(settings, "j")
         rows = db.execute(
             "SELECT j.project_id,j.message_id,length(m.body_text) AS body_length FROM fetch_jobs j "
@@ -662,6 +702,8 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
         **({"source_repair_evidence_holds": evidence_holds} if evidence_holds_wanted else {}),
         **({"retained_records_observation": retained_observation} if retained_observation is not None else {}),
         "period_budget": period, "until": settings["until"],
+        "reextract_backlog_blockers": _backlog_setting_blockers(settings, "reextract"),
+        "semantic_backlog_blockers": _backlog_setting_blockers(settings, "semantic_backlog"),
         "days": days, "history_days_observed": len(counts),
         "new_posts": sum(row["posts"] for row in counts.values()),
         "daily_patient_context_requests_estimate": sum(row["patients"] for row in counts.values()) / days,
@@ -735,6 +777,8 @@ def _incomplete_report(settings, *, key, error, interrupted, completed, accounti
                   "settled_cost_usd": None, "max_reserved_cost_usd": None,
                   "unresolved_requests": None, "pricing_unverified": True},
               "period_budget": period if 'period_budget' in completed else None,
+              "reextract_backlog_blockers": _backlog_setting_blockers(settings, "reextract"),
+              "semantic_backlog_blockers": _backlog_setting_blockers(settings, "semantic_backlog"),
               "block_reason": reason if 'block_reason' in completed else None,
               "usage_calibration": ({key: str(value) if isinstance(value, Decimal) else value
                                      for key, value in calibration.items()}
@@ -797,7 +841,37 @@ def command(args):
             raise
         except (OSError, ValueError, TypeError, RecursionError):
             cfg = {}
-        if action in ("stop", "resume"):
+        if action == "local-rebuild-plan":
+            import extract_llm_local_rebuild as local_rebuild
+            with _reader(seconds=FULL_READ_SECONDS) as (db, _deadline):
+                tally_budget = []
+
+                @contextmanager
+                def tally_reader():
+                    with _reader_phase(db, rows=TALLY_READ_ROWS, size=TALLY_READ_BYTES,
+                                       reason="tally_budget_exceeded"):
+                        tally_budget.append(db.row_factory.budget)
+                        yield
+                try:
+                    result = local_rebuild.preview(SimpleNamespace(db=db), limit=args.limit, after=args.after,
+                                                   stop=(_ReaderLimit,), tally_reader=tally_reader)
+                finally:
+                    stopped = getattr(db.row_factory, 'stop_reason', None)
+                # the tally phase's measured use against its own limits (counts only)
+                result['tally_read'] = ({'rows': tally_budget[0]['rows_used'], 'bytes': tally_budget[0]['bytes_used'],
+                                         'rows_limit': TALLY_READ_ROWS, 'bytes_limit': TALLY_READ_BYTES}
+                                        if tally_budget else None)
+                result['stop_reason'] = stopped if stopped in (
+                    'read_deadline', 'observation_budget_exceeded', 'tally_budget_exceeded') else (
+                    None if result['state'] != 'partial' else 'read_interrupted')
+            if args.out is not None and result["plan"] is not None:
+                from safe_io import atomic_write
+                atomic_write(str(args.out), lambda f: json.dump(result["plan"], f, ensure_ascii=False), mode=0o600)
+            print(json.dumps({k: v for k, v in result.items() if k != "plan"}
+                             | {"planned": len(result["plan"]["units"]) if result["plan"] else 0},
+                             ensure_ascii=False, indent=2))
+            return 0 if result["state"] in ("complete", "bundle_full") else 1
+        if action in ("stop", "resume", "local-rebuild-approve"):
             from writer_lock import acquire_run_lock, wait_run_lock, code_stamp
             expected_code = code_stamp()
             if not args.confirm_human or not mcs_util.valid_text(args.reason, 2000):
@@ -809,6 +883,11 @@ def command(args):
             req = {"version": 1, "cmd": "ops.cloud_" + action,
                 "command_id": args.command_id or str(uuid.uuid4()), "actor": args.actor,
                 "human_confirmed": True, "project_id": None, "reason": args.reason}
+            if action == "local-rebuild-approve":
+                # One bundle per human confirmation; the plan file comes from local-rebuild-plan.
+                from safe_io import read_regular_nofollow
+                req["cmd"] = "ops.cloud_local_rebuild_approve"
+                req["plan"] = mcs_util.strict_json(read_regular_nofollow(str(args.plan), 65536, ValueError))
             # Validate before opening a writer; malformed CLI input never creates a ledger.
             error = mcs_requests.validate(req)
             if error:
@@ -834,13 +913,15 @@ def command(args):
                     receipt = mcs_requests.apply_command(ledger, req)
             finally:
                 os.close(lock_fd)
-            print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "control")}, ensure_ascii=False))
+            print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "control", "approved")},
+                             ensure_ascii=False))
             return 0 if receipt["outcome"] == "applied" else 1
         if action == "outstanding":
             import cloud_observation
             try:
-                with _reader() as (db, _deadline):
-                    result = cloud_observation.observe(db)
+                full = getattr(args, "full", False) is True
+                with _reader(seconds=FULL_READ_SECONDS if full else None) as (db, _deadline):
+                    result = cloud_observation.observe(db, full=full)
             except (OSError, ValueError, sqlite3.Error):
                 result = cloud_observation.unknown("observation_unavailable")
             print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -937,6 +1018,14 @@ def budget_command(args):
         until = getattr(args, "until", None)
         if until is not None:
             changes["cloud_llm.until"] = _time_value(until, end=True)
+        reopen = getattr(args, "reextract_backlog_until", None)
+        if reopen is not None:
+            changes["cloud_llm.reextract_backlog_until"] = _time_value(reopen, end=True)
+        reopen = getattr(args, "semantic_backlog_until", None)
+        if reopen is not None:
+            changes["cloud_llm.semantic_backlog_until"] = _time_value(reopen, end=True)
+            if changes["cloud_llm.semantic_backlog_until"] is None:
+                defaults["cloud_llm.semantic_backlog_until"] = None
     except ValueError:
         print("予算: 金額はドル単位の0以上の数値、日時は 2026-10-30 または 2026-10-30T23:59:59+09:00 の形、"
               "解除は none で指定してください")
@@ -969,10 +1058,16 @@ def budget_command(args):
     if errors:
         print("設定に誤りがあるため予算を表示していません。mcs_setup.py check で確認してください")
         return 1
+    blocker_settings = policy.cloud_config(cfg, key_present=True)[0]
     print(json.dumps({"daily_cost_limit_usd": settings["daily_cost_limit_usd"],
                       "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
                       "period_budget_usd": settings["window_budget_usd"],
                       "period_start": settings["window_start"], "until": settings["until"],
+                      "reextract_backlog_until": settings["reextract_backlog_until"],
+                      "semantic_backlog_until": settings["semantic_backlog_until"],
+                      "provider_budgets": settings["provider_budgets"],
+                      "reextract_backlog_blockers": _backlog_setting_blockers(blocker_settings, "reextract"),
+                      "semantic_backlog_blockers": _backlog_setting_blockers(blocker_settings, "semantic_backlog"),
                       "saved": bool(changes)}, ensure_ascii=False))
     return 0
 
@@ -1009,6 +1104,24 @@ def providers_command(args):
                         caps[key] = value
                 budgets[name] = caps
                 changes["cloud_llm.provider_budgets"] = budgets
+        block = cfg.get("cloud_llm", {})
+        profile_maps = {name: dict(mapping) for name, mapping in block.get("provider_profiles", {}).items()}
+        if "profiles" in block:
+            profile_maps.setdefault("openai", {}).update(block["profiles"])
+        profile_changes = {}
+        for name, module in (("openai", policy.openai_client), ("anthropic", policy.anthropic_client)):
+            for purpose in sorted(module.PROFILE_PURPOSES):
+                value = getattr(args, f"{name}_{purpose}_profile", None)
+                if value is None:
+                    continue
+                if type(value) is not str or value not in module.PROFILE_DEFINITIONS:
+                    raise ValueError("provider_profile_invalid")
+                profile_maps.setdefault(name, {})[purpose] = value
+                profile_changes.setdefault(name, {})[purpose] = value
+        if profile_changes:
+            changes["cloud_llm.provider_profiles"] = profile_maps
+            if "profiles" in block and "openai" in profile_changes:
+                changes["cloud_llm.profiles"] = profile_maps["openai"]
         if changes:
             callback_args = {key: getattr(args, key) for key in ("admission", "on_saved")
                              if getattr(args, key, None) is not None}
@@ -1036,7 +1149,8 @@ def providers_command(args):
             return 1
         profiles[purpose] = {"model": selection["model"], "effort": selection["effort"]}
     print(json.dumps({"saved": bool(changes), "provider": settings["provider"], "model": settings["model"],
-        "profiles": profiles, "provider_order": settings["provider_order"], "provider_budgets": settings["provider_budgets"],
+        "profiles": profiles, "profile_changes": profile_changes,
+        "provider_order": settings["provider_order"], "provider_budgets": settings["provider_budgets"],
         "daily_cost_limit_usd": settings["daily_cost_limit_usd"], "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
         "keys": {name: bool(policy.provider_key(name)) for name in policy.PROVIDERS}}, ensure_ascii=False))
     return 0
@@ -1097,6 +1211,8 @@ def add_parsers(sub):
             q.add_argument("--project", type=int)
         q.set_defaults(fn=command)
     q = actions.add_parser("outstanding", help="未精算の外部AI利用記録を確認（送信しない）")
+    q.add_argument("--full", action="store_true",
+                   help="既定の上限（5秒・10万件）では確認しきれないとき、上限を広げて全件を確認（最長5分）")
     q.set_defaults(fn=command, cloud_action="outstanding")
     q = actions.add_parser("providers", help="AI利用先・優先順位・API別予算を表示・設定します")
     q.add_argument("--provider", choices=("anthropic", "openai", "auto"))
@@ -1104,6 +1220,13 @@ def add_parsers(sub):
     for provider in policy.PROVIDERS:
         q.add_argument(f"--{provider}-daily-usd")
         q.add_argument(f"--{provider}-monthly-usd")
+    for provider, module in (("openai", policy.openai_client), ("anthropic", policy.anthropic_client)):
+        for purpose in sorted(module.PROFILE_PURPOSES):
+            label = purpose.replace("_", "-")
+            flags = ([f"--{label}-profile", f"--openai-{label}-profile"] if provider == "openai"
+                     else [f"--anthropic-{label}-profile"])
+            q.add_argument(*flags, dest=f"{provider}_{purpose}_profile",
+                           choices=sorted(module.PROFILE_DEFINITIONS), help=f"{provider} の {purpose} 用profile")
     q.set_defaults(fn=providers_command, cloud_action="providers")
     q = actions.add_parser("budget", help="外部AI合計の費用上限（1日・1か月・期間、ドル）と送信の終了日時を表示・設定します")
     q.add_argument("--daily-usd", dest="daily_usd", help="1日の上限（ドル、設定省略時25）。none でこの上限を解除")
@@ -1112,6 +1235,10 @@ def add_parsers(sub):
                    help="期間全体の上限（ドル）。開始は --from、未指定なら今。none で解除")
     q.add_argument("--from", dest="window_from", help="期間の開始（2026-10-28 または時差付きISO時刻）")
     q.add_argument("--until", help="送信の終了（2026-10-30 はその日の23:59:59）。AnthropicとOpenAIに設定。Jevの期限は変更しません。none で解除")
+    q.add_argument("--reextract-backlog-until", dest="reextract_backlog_until",
+                   help="保存済み投稿の再抽出に限り、この日時までクラウド送信を再開。期間上限、または全体と提供元別の日額・月額上限が必要。none で終了")
+    q.add_argument("--semantic-backlog-until", dest="semantic_backlog_until",
+                   help="意味解析の未処理分に限り、この日時までクラウド送信を再開。同じ費用上限が必要。none で終了")
     q.set_defaults(fn=budget_command, cloud_action="budget")
     for action in ("stop", "resume"):
         q = actions.add_parser(action, help="人の確認と記録を伴うクラウド処理の" + ("停止" if action == "stop" else "再開"))
@@ -1120,3 +1247,15 @@ def add_parsers(sub):
         q.add_argument("--actor", default="local-human")
         q.add_argument("--command-id", help="同じ操作を再試行する場合の承認記録UUID")
         q.set_defaults(fn=command, cloud_action=action)
+    q = actions.add_parser("local-rebuild-plan", help="支払い済みで回答が保存されていない再抽出のうち、ローカルで作り直せる束を確認（送信・変更しない）")
+    q.add_argument("--limit", type=int, default=20, help="1束の件数（20以下）")
+    q.add_argument("--after", type=int, help="前回の出力の next_after。この message_id より古い候補から確かめる")
+    q.add_argument("--out", type=Path, help="承認に使う束の計画を書き出すファイル")
+    q.set_defaults(fn=command, cloud_action="local-rebuild-plan")
+    q = actions.add_parser("local-rebuild-approve", help="人の確認と記録を伴い、確認した1束のローカルでの作り直しを承認")
+    q.add_argument("--plan", type=Path, required=True)
+    q.add_argument("--confirm-human", action="store_true")
+    q.add_argument("--reason", required=True)
+    q.add_argument("--actor", default="local-human")
+    q.add_argument("--command-id", help="結果が不明だった同じ承認を確かめる場合の承認記録UUID。拒否された束は計画を作り直し、新しいUUIDで承認")
+    q.set_defaults(fn=command, cloud_action="local-rebuild-approve")

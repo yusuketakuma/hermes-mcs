@@ -6,6 +6,7 @@ import pytest
 
 import cloud_policy
 import cloud_usage_accounting
+import ledger_schema
 from ledger import Ledger
 from test_cloud_policy import _reserve, _result, now
 
@@ -22,10 +23,16 @@ def _receipts(db, count):
     return ids
 
 
-def test_batch_preserves_individual_witnesses_and_one_global_scan(tmp_path, now):
+# guard=True: the write-time guard vouches for the rows, so lookups go through the reservation
+# index; guard=False: without the guard the full scans decide (the original statement shapes).
+@pytest.mark.parametrize('guard', [True, False])
+def test_batch_preserves_individual_witnesses_and_one_global_scan(tmp_path, now, guard):
     with closing(Ledger(str(tmp_path / 'synthetic.db'))) as db:
         ids = _receipts(db, 3)
         expected = {aid: cloud_policy.reservation_evidence(db.db, aid) for aid in ids}
+        if not guard:
+            db.db.execute('DROP TRIGGER cloud_usage_guard_delete')
+            assert ledger_schema.cloud_usage_guard_state(db.db) is None
         statements = []
         before = db.db.total_changes
         db.db.execute('BEGIN')
@@ -36,9 +43,14 @@ def test_batch_preserves_individual_witnesses_and_one_global_scan(tmp_path, now)
         finally:
             db.db.set_trace_callback(None)
             db.db.rollback()
-        assert sum('FROM artifacts WHERE kind IN' in s and 'json_tree(meta)' in s
-                   for s in statements) == 1
-        assert sum('json_each(meta)' in s and 'reservation_id' in s for s in statements) == 1
+        scans = sum('FROM artifacts WHERE kind IN' in s and 'json_tree(meta)' in s for s in statements)
+        member_checks = sum('json_each(meta)' in s and 'reservation_id' in s for s in statements)
+        indexed = sum('INDEXED BY ' + ledger_schema.CLOUD_USAGE_INDEX in s for s in statements)
+        if guard:
+            # one indexed lookup per accounting kind replaces the global validation scan
+            assert (scans, member_checks, indexed) == (0, 0, len(ledger_schema.CLOUD_USAGE_KINDS))
+        else:
+            assert (scans, member_checks, indexed) == (1, 1, 0)
 
 
 def test_batch_rejects_bool_even_if_equal_to_a_valid_id(tmp_path, now):

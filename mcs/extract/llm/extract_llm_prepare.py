@@ -10,6 +10,7 @@ import cloud_client
 import cloud_policy
 import cloud_inference
 import extract_llm_engine
+import extract_llm_local_rebuild as local_rebuild
 from clinical_chunking import plan_chunks
 import inference_dependency_loss
 import extraction_context
@@ -230,6 +231,12 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
             blocked_rows.append((dict(r), reason))
 
     cfg = load_config()
+    try:
+        rebuilds = local_rebuild.approved_units(ledger.db)
+    except sqlite3.Error:
+        # Unreadable approvals grant nothing. An approved unit then takes the ordinary path, where
+        # its settled-success history makes the resend guard refuse any cloud send.
+        rebuilds = {}
     extract_cfg = cfg.get("extract") if isinstance(cfg, dict) else None
     enabled = isinstance(extract_cfg, dict) and extract_cfg.get("patient_state_context") is True
     for r in rows:
@@ -245,12 +252,24 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
             continue
         r['_source_binding'] = binding
         r["_target"] = target
+        # An approved local rebuild is decided before the superseded and owned paths: it never
+        # sets _superseded_local and never returns to cloud, whatever its permit says.
+        rebuild_state = None
+        if (r["project_id"], r["message_id"]) in rebuilds:
+            rebuild_state, unit = local_rebuild.approval(ledger, r["project_id"], r["message_id"],
+                                                         approvals=rebuilds)
+            if rebuild_state in (local_rebuild.PROOF_CHANGED, local_rebuild.UNVERIFIED):
+                r["_local_rebuild_held"] = unit   # the approval the refusal was decided against
+                block(rebuild_state)
+                continue
+            if rebuild_state in local_rebuild.RUNNABLE:
+                r["_local_rebuild"] = unit
         # Read-only recognition before any owned/provider state is restored:
         # pending work that is entirely retired-generation becomes an
         # independent current-contract local attempt. Its financial guard
         # runs at dispatch against the exact prompt; paid ownership rows
         # stay untouched and never route this attempt back to cloud.
-        superseded = _pending_superseded_scan(ledger.db, r)
+        superseded = rebuild_state is None and _pending_superseded_scan(ledger.db, r)
         if superseded:
             r["_superseded_local"] = True
             if len(plan_chunks(r["body_text"], _CHUNK_SIZE)) > 1:
@@ -258,7 +277,7 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
                 # request; multi-piece bodies keep the superseded hold.
                 block("prepare_context_load_superseded")
                 continue
-        mode = "off" if superseded else (
+        mode = "off" if superseded or rebuild_state is not None else (
             _cloud_mode(ledger, cfg, "reextract", r["project_id"])
             if allow_cloud and _cloud_reextract(ledger, r, background=background) else "off")
         # Ownership is durable and decided before settings: an owned unit
@@ -267,7 +286,7 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         # A computed 'off' (mode omitted, key unreadable) proves nothing.
         # A superseded row already committed to its local attempt: the old
         # unit's ownership is preserved in place, never restored here.
-        owned = mode == "off" and allow_cloud and not superseded \
+        owned = mode == "off" and allow_cloud and not superseded and rebuild_state is None \
             and cloud_policy.owns_request(ledger.db, route="reextract",
                                           project_id=r["project_id"], message_id=r["message_id"]) \
             and not cloud_policy.scope_revoked(cfg, "reextract", r["project_id"])
@@ -309,7 +328,7 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         if r["qc_src"] and qc is None:
             continue   # flagged in SQL but the audit is gone or clean
         hints = _rule_hints(r)
-        if prefilter and not cloud_only and qc is None and not r["thin_src"] \
+        if prefilter and not cloud_only and qc is None and not r["thin_src"] and rebuild_state is None \
                 and not r["human_src"] \
                 and _low_signal(r["body_text"] or "", hints):
             # no clinical signal on either net — settle with a durable
@@ -412,7 +431,9 @@ def _plan_units(claimed: list, batch_k: int) -> list:
         # QC-flagged/thin-retry rows take the single lane — their
         # feedback/repair prompts differ from the shared batch
         # envelope.
+        # an approved local rebuild takes the single lane so every dispatch re-proves its permit
         if batch_k >= 2 and r.get("_cloud_mode") != "on" and qc is None and not r["thin_src"] \
+                and r.get("_local_rebuild") is None \
                 and ctx is None and not saved \
                 and r["_chunk_size"] == _CHUNK_SIZE \
                 and len(plan_chunks(r["body_text"], _CHUNK_SIZE)) <= 1:

@@ -238,9 +238,11 @@ def _extraction_source_signature(db, project_id, *, deadline=None):
         f"typeof(a.{field}),octet_length(a.{field}),"
         f"CASE WHEN typeof(a.{field}) NOT IN ('text','blob') THEN a.{field} END"
         for field in fields)
+    # CROSS JOIN fixes the order (the patient's messages first): left to the
+    # planner, every patient walked all extraction rows of the whole ledger.
     for row in db.execute(f"""
         SELECT a.artifact_id,a.message_id,a.project_id,a.kind,{selected},a._rowid_
-        FROM messages m JOIN artifacts a ON a.message_id=m.message_id
+        FROM messages m CROSS JOIN artifacts a ON a.message_id=m.message_id
         WHERE m.project_id=? AND a.kind IN
           ('extract_v1','extract_llm','canonical_projection','semantic_facts_v4')
         ORDER BY a.artifact_id
@@ -551,8 +553,20 @@ def _publication_source_signature(db, project_id, *, deadline=None):
               ('fetch_jobs', "kind IS NOT 'extract_claim' AND (project_id=? OR " + members + ')',
                (project_id, project_id)),
               ('requests', 'project_id=?', (project_id,)),
-              ('artifacts', 'project_id=? OR ' + members
-               + " OR kind IN ('semantic_policy','med_ref_progress')", (project_id, project_id)),
+              # Keep kind values in SQLite; CROSS JOIN orders message lookup before artifacts.
+              ('artifacts', """_rowid_ IN (
+                  WITH kinds(kind) AS (SELECT DISTINCT kind FROM artifacts), chosen(rid) AS (
+                      SELECT a._rowid_ FROM kinds AS k JOIN artifacts AS a ON a.kind IS k.kind
+                       WHERE a.project_id=?
+                      UNION
+                      SELECT a._rowid_ FROM kinds AS k
+                      CROSS JOIN messages AS m
+                      CROSS JOIN artifacts AS a ON a.kind IS k.kind AND a.message_id=m.message_id
+                       WHERE m.project_id=?
+                      UNION
+                      SELECT _rowid_ FROM artifacts WHERE kind IN ('semantic_policy','med_ref_progress')
+                  ) SELECT rid FROM chosen
+              )""", (project_id, project_id)),
               ('snapshot_meta', '1=1', ()))
     if (schema_text(db.execute('PRAGMA encoding').fetchone()[0]) != 'UTF-8'
             or getattr(db, 'text_factory', str) not in (str, bytes)):
@@ -947,13 +961,15 @@ def _rollup_patient_ids(db):
 
 
 def _dirty_project_snapshot(db, project_id, now, *, deadline=None):
+    # art_ts names the (kind, project_id) index: the planner otherwise read
+    # every patient's rows of those kinds through the (kind, created_at) one.
     x = db.execute("""
       SELECT p.project_id, r.g AS gen, r.period_version, r.next_check,
         r.projection_version, r.message_sig, r.valid_until,
         EXISTS(SELECT 1 FROM artifacts a WHERE a.project_id=p.project_id
           AND a.kind IN ('canonical_projection','semantic_facts_v4')) AS has_projection,
         r.ref_sig, r.ref_generation, ({sig}) AS cur_ref_sig,
-        (SELECT MAX(a.created_at) FROM artifacts a
+        (SELECT MAX(a.created_at) FROM artifacts a INDEXED BY idx_artifacts_lookup
           WHERE a.project_id=p.project_id
             AND a.kind IN ('extract_v1','extract_llm',
                            'canonical_projection',
@@ -1010,17 +1026,28 @@ def _dirty_project_snapshot(db, project_id, now, *, deadline=None):
 
 def rebuild_many(ledger, project_ids, *, deadline: float | None = None,
                  source_changed: list | None = None, source_unknown: list | None = None,
-                 source_unknown_reasons: dict | None = None, cfg=None) -> int:
+                 source_unknown_reasons: dict | None = None, cfg=None, timings=None) -> int:
     """Rebuild patients, optionally reporting unverified inputs and races.
 
     A deadline stops the remaining work; without collectors, source races and
     unverified inputs still raise. Uncommitted work remains eligible for a later scan.
+    Optional timings count completed rebuilds and selected-but-unfinished patients;
+    the maximum includes failed attempts, but excludes the pre-attempt deadline check.
     """
     project_ids = list(project_ids)
     n = 0
+    max_patient_s = 0.0
+    if timings is not None:
+        timings.update(rebuilt=0, deferred=len(project_ids), max_patient_s=0.0)
     for index, pid in enumerate(project_ids):
+        started = None
         try:
             rollup_builder._check_deadline(deadline)
+            if timings is not None and max_patient_s is not None:
+                try:
+                    started = time.monotonic()
+                except Exception:
+                    max_patient_s = None
             rebuild(ledger, pid, cfg=cfg, **({"deadline": deadline} if deadline is not None else {}))
         except rollup_builder.RollupDeadlineExceeded:
             if source_unknown is not None:
@@ -1042,7 +1069,23 @@ def rebuild_many(ledger, project_ids, *, deadline: float | None = None,
                 source_unknown_reasons["source_unverified"] = (
                     source_unknown_reasons.get("source_unverified", 0) + 1)
             continue
-        n += 1
+        else:
+            n += 1
+        finally:
+            if timings is not None:
+                timings.update(rebuilt=n, deferred=len(project_ids) - n)
+                try:
+                    if started is not None:
+                        elapsed = time.monotonic() - started
+                        max_patient_s = (max(max_patient_s, max(0, elapsed))
+                                         if math.isfinite(elapsed) else None)
+                    if max_patient_s is None:
+                        timings.pop("max_patient_s", None)
+                    else:
+                        timings["max_patient_s"] = round(max_patient_s, 3)
+                except Exception:
+                    max_patient_s = None
+                    timings.pop("max_patient_s", None)
     return n
 
 

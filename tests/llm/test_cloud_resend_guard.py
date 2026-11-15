@@ -709,3 +709,57 @@ def test_corrupt_stored_accounting_forces_pricing_stop_without_overwrite(tmp_pat
         assert cloud_policy.usage_report(ledger)['pricing_unverified'] is True
         with pytest.raises(cloud_policy.AnthropicError):
             _reserve(ledger, 'synthetic next prompt', unit='next')
+
+
+def _refusal_of(ledger, prompt):
+    with pytest.raises(anthropic_client.AnthropicError) as caught:
+        _reserve(ledger, prompt)
+    assert (caught.value.kind, caught.value.detail) == ('budget_exceeded', 'cloud_unit_unresolved')
+    return getattr(caught.value, 'history_refusal', None)
+
+
+@pytest.mark.parametrize('status,error,usage,expected', [
+    ('timeout', 'timeout', None, 'repeat_unsettled'),
+    ('http_200', None, {'input_tokens': 10, 'output_tokens': 2}, 'repeat_success'),
+    # a paid answer refused after validation (e.g. a refusal): settled by its usage, not a success
+    ('http_200', 'contract_error', {'input_tokens': 10, 'output_tokens': 2}, 'repeat_failed'),
+])
+def test_repeat_refusal_carries_its_fixed_class_without_changing_the_refusal(
+        tmp_path, monkeypatch, status, error, usage, expected):
+    """The guard's refusal keeps its kind and detail; the class only tells which
+    validated branch refused, and grants nothing (still one reservation)."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt')
+        cloud_policy.record_result(ledger, reservation, {**_result(reservation, status, error), 'usage': usage})
+        assert _refusal_of(ledger, 'synthetic prompt') == expected
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+def test_reservation_without_result_is_result_missing_not_a_broken_receipt(tmp_path, monkeypatch):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        _reserve(ledger, 'synthetic prompt')
+        assert _refusal_of(ledger, 'synthetic prompt') == 'result_missing'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+def test_disposition_is_classified_apart_from_a_repeat(tmp_path, monkeypatch):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt')
+        ledger.db.execute('BEGIN IMMEDIATE')
+        cloud_policy.record_disposition_tx(ledger, reservation, 'discarded_scope')
+        ledger.db.commit()
+        assert _refusal_of(ledger, 'synthetic prompt') == 'disposition'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+def test_inconsistent_receipt_is_classified_apart_from_a_repeat(tmp_path, monkeypatch):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        _reserve(ledger, 'synthetic prompt')
+        with ledger.db:
+            ledger.db.execute("UPDATE artifacts SET meta=? WHERE kind='cloud_usage_reserve'",
+                              ('{"unit_key":"other","unit_key":"synthetic-unit"}',))
+        assert _refusal_of(ledger, 'synthetic prompt') == 'receipt_inconsistent'

@@ -4,9 +4,9 @@ from __future__ import annotations
 from contextlib import closing
 from decimal import Decimal, InvalidOperation
 import hashlib
-from itertools import chain
 import json
 import math
+import os
 import re
 import sqlite3
 import time
@@ -19,6 +19,7 @@ import bounded_http
 from anthropic_client import AnthropicError, MODEL
 from anthropic_client import MAX_TOKENS as MAX_TOKENS, validate_usage as validate_usage
 import openai_client
+import provider_registry
 
 from cloud_usage_accounting import (
     PRICE_VERSION as PRICE_VERSION,
@@ -58,6 +59,8 @@ from cloud_usage_accounting import (
     _binding as _binding,
     _receipt_binding as _receipt_binding,
     _reserve_valid as _reserve_valid,
+    PROFILE_MAX_TOKENS as PROFILE_MAX_TOKENS,
+    profile_contract_valid as profile_contract_valid,
     _stored_reservation as _stored_reservation,
     _matching_rows_many as _matching_rows_many,
     _matching_rows as _matching_rows,
@@ -105,13 +108,14 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
            "max_concurrency": 4, "daily_cost_limit_usd": DEFAULT_DAILY_COST_LIMIT_USD,
            "monthly_cost_limit_usd": DEFAULT_MONTHLY_COST_LIMIT_USD,
            "usd_jpy": None, "until": None,
-           "window_start": None, "window_budget_usd": None}
+           "window_start": None, "window_budget_usd": None, "reextract_backlog_until": None,
+           "semantic_backlog_until": None}
     errors = []
     # an absent block means "unset"; an explicit null is a config error, not an omission
     block = cfg.get("cloud_llm", {}) if isinstance(cfg, dict) else {}
     if not isinstance(block, dict):
         return out, ["config: cloud_llm_not_object"]
-    if block.keys() - out.keys() - {"profiles"}:
+    if block.keys() - out.keys() - {"profiles", "provider_profiles"}:
         errors.append("config: cloud_llm_unknown_field")
     mode = block.get("mode", "on" if key_present is True else "off")
     if mode not in ("off", "dry_run", "shadow", "on"):
@@ -166,6 +170,16 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
             errors.append("config: cloud_llm_profiles_invalid")
         else:
             out["profiles"] = dict(profiles)
+    if "provider_profiles" in block:
+        value = block["provider_profiles"]
+        if (not isinstance(value, dict) or value.keys() - provider_registry.PROVIDER_MODULES.keys()
+                or any(not _profile_map_valid(provider_registry.PROVIDER_MODULES[name], mapping)
+                       for name, mapping in value.items())
+                or "openai" in value and "profiles" in block and value["openai"] != block["profiles"]):
+            # The old openai-only "profiles" may repeat provider_profiles.openai, never contradict it.
+            errors.append("config: cloud_llm_profiles_invalid")
+        else:
+            out["provider_profiles"] = {name: dict(mapping) for name, mapping in value.items()}
     routes = block.get("routes", list(ROUTES))
     if (not isinstance(routes, list)
             or any(not isinstance(r, str) or r not in ROUTES for r in routes)):
@@ -212,6 +226,16 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
             out["window_start"], out["window_budget_usd"] = start, amount
         except (ValueError, OverflowError):
             errors.append("config: cloud_llm_window_invalid")
+    # A retained period remains binding; removing it requires daily/monthly caps.
+    for route in ("reextract", "semantic"):
+        key = route + "_backlog_until"
+        if block.get(key) is None:
+            continue
+        try:
+            until_epoch(block[key])
+            out[key] = block[key]
+        except (ValueError, OverflowError):
+            errors.append(f"config: cloud_llm_{route}_backlog_invalid")
     # A key alone may enable sending, but never without a spending cap.
     budgets = block.get("provider_budgets", {})
     cap_keys = ("daily_cost_limit_usd", "monthly_cost_limit_usd")
@@ -231,6 +255,11 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
         out["provider_budgets"] = {name: dict(caps) for name, caps in budgets.items()}
     except (ValueError, OverflowError):
         errors.append("config: cloud_llm_provider_budgets_invalid")
+    for route in ("reextract", "semantic"):
+        key = route + "_backlog_until"
+        if out[key] is not None and out["window_budget_usd"] is None and not _backlog_caps_configured(out):
+            errors.append(f"config: cloud_llm_{route}_backlog_invalid")
+            out[key] = None
     if (require_cost_limit and key_present is True and "mode" not in block and out["project_ids"] != []
             and out["daily_cost_limit_usd"] is None and out["monthly_cost_limit_usd"] is None
             and out["window_budget_usd"] is None):
@@ -329,6 +358,12 @@ def resolve_profile(cfg, *, route, purpose, root=None):
     return profile_for_settings(cfg, settings, route=route, purpose=purpose)
 
 
+def _profile_map_valid(module, mapping):
+    return (isinstance(mapping, dict) and not mapping.keys() - module.PROFILE_PURPOSES
+            and all(isinstance(role, str) and isinstance(value, str) and value in module.PROFILE_DEFINITIONS
+                    for role, value in mapping.items()))
+
+
 def profile_for_settings(cfg, settings, *, route, purpose):
     """Resolve a profile from a provider already selected by the caller."""
     valid_purposes = {"reextract": {"backlog", "quality_repair"},
@@ -340,17 +375,30 @@ def profile_for_settings(cfg, settings, *, route, purpose):
     provider = settings["provider"]
     block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
     block = block if isinstance(block, dict) else {}
+    by_provider = block.get("provider_profiles", {})
+    if not isinstance(by_provider, dict):
+        return None, ["config: cloud_llm_profiles_invalid"]
+    limit = {"backlog": 8192, "patient_context": 16384, "quality_repair": 32768}[purpose]
+    if provider == "anthropic" and "anthropic" in by_provider:
+        # Opt-in purpose profiles; an unnamed purpose takes the owner's default.
+        chosen = by_provider["anthropic"]
+        if not _profile_map_valid(anthropic_client, chosen):
+            return None, ["config: cloud_llm_profiles_invalid"]
+        profile = chosen.get(purpose, anthropic_client.DEFAULT_PROFILES[purpose])
+        model, effort = anthropic_client.PROFILE_DEFINITIONS[profile]
+        return MappingProxyType({"provider": provider, "model": model, "effort": effort,
+            "max_tokens": limit, "price_version": _price_definition(model)["price_version"],
+            "profile": profile}), []
     if provider != "openai":
         return MappingProxyType({"provider": provider, "model": settings["model"], "effort": None,
             "max_tokens": None, "price_version": _price_definition(settings["model"])["price_version"],
             "profile": None}), []
-    profiles = block.get("profiles", {})
-    if not isinstance(profiles, dict):
+    profiles = block.get("profiles", by_provider.get("openai", {}))
+    if not isinstance(profiles, dict) or "openai" in by_provider and by_provider["openai"] != profiles:
         return None, ["config: cloud_llm_profiles_invalid"]
     profile = profiles.get(purpose)
     if profile is None and block.get("model") == openai_client.MODEL:
         model, effort = openai_client.MODEL, "low"
-        limit = {"backlog": 8192, "patient_context": 16384, "quality_repair": 32768}[purpose]
     else:
         profile = profile if profile is not None else (
             "sol-medium" if block.get("model") == openai_client.SOL_MODEL
@@ -358,7 +406,6 @@ def profile_for_settings(cfg, settings, *, route, purpose):
         if profile not in openai_client.PROFILE_DEFINITIONS:
             return None, ["config: cloud_llm_profiles_invalid"]
         model, effort = openai_client.PROFILE_DEFINITIONS[profile]
-        limit = {"backlog": 8192, "patient_context": 16384, "quality_repair": 32768}[purpose]
     return MappingProxyType({"provider": provider, "model": model, "effort": effort,
         "max_tokens": limit, "price_version": _price_definition(model)["price_version"],
         "profile": profile}), []
@@ -377,9 +424,63 @@ def send_route(route):
     return route == "patient_context"
 
 
+# Set by the pool for its stored-message backlog workers only.
+BACKLOG_WORKER_ENV = "MCS_REEXTRACT_BACKLOG_WORKER"
+
+
+def _backlog_caps_configured(settings):
+    """Require both aggregate and selected-provider daily/monthly spending caps."""
+    providers = (settings["provider_order"] if settings["provider"] == "auto"
+                 else [settings["provider"]])
+    return (all(settings[key] is not None for key in ("daily_cost_limit_usd", "monthly_cost_limit_usd"))
+            and all(name in settings["provider_budgets"] for name in providers))
+
+
+def reextract_backlog_window(cfg, *, now=None):
+    """The owner's bounded reopening of stored-message sends under spending caps."""
+    return _backlog_window(cfg, "reextract_backlog_until", now)
+
+
+def semantic_backlog_window(cfg, *, now=None):
+    """The owner's separate bounded reopening of semantic backlog sends."""
+    return _backlog_window(cfg, "semantic_backlog_until", now)
+
+
+def _backlog_window(cfg, key, now):
+    c, errors = cloud_config(cfg if "cloud_llm" in cfg else {"cloud_llm": cfg})
+    until = c[key]
+    return (not errors and until is not None
+            and (time.time() if now is None else now) < until_epoch(until))
+
+
+def semantic_planned(cfg):
+    """Name the semantic cloud contract from raw config, retaining explicit null."""
+    c, errors = cloud_config(cfg)
+    block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
+    # Explicit null stops sends but retains the declared paid-answer contract.
+    return not errors and "semantic_backlog" in c["routes"] and (
+        send_route("semantic_backlog") or isinstance(block, dict) and "semantic_backlog_until" in block)
+
+
+def reextract_planned(cfg):
+    """Whether stored-message re-extraction goes to the cloud at all, for
+    spawning workers and estimates; route_open decides each send. Card display
+    follows send_route alone, because the window opens in one process only."""
+    return send_route("reextract") or reextract_backlog_window(cfg)
+
+
+def route_open(route, cfg):
+    """send_route, plus stored-message sends inside the bounded window. Only the
+    backlog worker process may make them: its selection is the receipted
+    history scope, so resident and tick passes stay local."""
+    window = {"reextract": reextract_backlog_window, "semantic_backlog": semantic_backlog_window}.get(route)
+    return send_route(route) or (window is not None and os.environ.get(BACKLOG_WORKER_ENV) == "1"
+                               and window(cfg))
+
+
 def eligible(cfg, route, project_id):
-    """Allow new cloud inference only for patient context within its scope."""
-    return send_route(route) and in_scope(cfg, route, project_id)
+    """Allow new cloud inference only for an open route within its scope."""
+    return route_open(route, cfg) and in_scope(cfg, route, project_id)
 
 
 def in_scope(cfg, route, project_id):
@@ -633,7 +734,8 @@ def _verified_request_history(ledger, *, route, project_id, message_id, unit_key
             maximum = _reserve_valid(previous, row)
             reservations.setdefault(previous['reservation_id'], []).append((previous, maximum))
     except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
-        raise AnthropicError('budget_exceeded', 'cloud_unit_unresolved') from None
+        raise _classified(AnthropicError('budget_exceeded', 'cloud_unit_unresolved'),
+                          'receipt_inconsistent') from None
     checked_results = {}
     for row in records:
         if row['kind'] != KINDS[1]:
@@ -645,18 +747,20 @@ def _verified_request_history(ledger, *, route, project_id, message_id, unit_key
                 raise ValueError('result_invalid')
             checked_results.setdefault(rid, []).append((result, row))
         except (InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
-            raise AnthropicError('pricing_unverified', 'cloud_unit_unresolved') from None
+            raise _classified(AnthropicError('pricing_unverified', 'cloud_unit_unresolved'),
+                              'receipt_inconsistent') from None
     for rid, results in checked_results.items():
         matches = reservations.get(rid, [])
         if len(matches) != 1:
-            raise AnthropicError('budget_exceeded', 'cloud_unit_unresolved')
+            raise _classified(AnthropicError('budget_exceeded', 'cloud_unit_unresolved'), 'receipt_inconsistent')
         previous, maximum = matches[0]
         try:
             # Validate the complete result set: two individually valid rows
             # are still ambiguous accounting, including on a same-prompt retry.
             _settled(previous, maximum, results)
         except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
-            raise AnthropicError('pricing_unverified', 'cloud_unit_unresolved') from None
+            raise _classified(AnthropicError('pricing_unverified', 'cloud_unit_unresolved'),
+                              'receipt_inconsistent') from None
     return rows
 
 
@@ -682,6 +786,63 @@ def unbound_member_history(ledger, *, route, project_id, message_id, unit_key, t
         return False
 
 
+# Fixed classification of an accounting refusal, set where it is decided and read only by
+# the history observation. It never changes the exception, its detail or any decision.
+HISTORY_REFUSALS = frozenset({"repeat_success", "repeat_failed", "repeat_unsettled",
+                              "result_missing", "disposition", "receipt_inconsistent"})
+# The guard's final branch after the one validated result of the same request. Only
+# _classified sets verified_repeat, so a converted or foreign exception never carries it.
+REPEAT_REFUSALS = frozenset({"repeat_success", "repeat_failed", "repeat_unsettled"})
+
+
+def _classified(error, refusal):
+    error.history_refusal = refusal
+    error.verified_repeat = refusal in REPEAT_REFUSALS
+    return error
+
+
+def _repeat_comparison(previous, candidate, field):
+    nullable = field in ('effort', 'profile')
+    def valid(value):
+        if field == 'max_tokens':
+            return type(value) is int and value > 0
+        return (value is None and nullable) or type(value) is str
+    if field not in previous and field not in candidate:
+        return 'unknown'
+    if field not in previous:
+        return 'stored_absent' if valid(candidate[field]) else 'unknown'
+    if field not in candidate:
+        return 'current_absent' if valid(previous[field]) else 'unknown'
+    old, new = previous[field], candidate[field]
+    if not valid(old) or not valid(new):
+        return 'unknown'
+    return 'same' if type(old) is type(new) and old == new else 'different'
+
+
+def _repeat_observation(previous, candidate, match):
+    values = {label + '_cmp': _repeat_comparison(previous, candidate, field) for label, field in (
+        ('unit_key', 'unit_key'), ('binding', 'input_binding'), ('request_fp', 'request_fp'),
+        ('model', 'model'), ('effort', 'effort'), ('profile', 'profile'), ('max_tokens', 'max_tokens'))}
+    exact = ('unit_key_cmp', 'binding_cmp', 'request_fp_cmp')
+    # Precedence groups observations; it does not establish why recovery missed.
+    reason = ('recovery_not_requested' if 'input_binding' not in candidate else
+              'unit_key_mismatch' if values['unit_key_cmp'] == 'different' else
+              'stored_binding_missing' if values['binding_cmp'] == 'stored_absent' else
+              'input_binding_mismatch' if values['binding_cmp'] == 'different' else
+              'request_envelope_mismatch' if values['request_fp_cmp'] == 'different' else
+              'exact_keys_same_unexplained' if all(values[key] == 'same' for key in exact) else
+              'observation_unknown')
+    return {**values, 'guard_match': match, 'primary_reason': reason}
+
+
+def _observe_recovery(observation, path):
+    try:
+        if type(observation) is dict:
+            observation['recovery_path'] = path
+    except Exception:
+        pass
+
+
 def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallback=False):
     """Keep an unresolved or already answered logical request from being sent again."""
     rows = _verified_request_history(ledger, route=candidate['route'],
@@ -691,6 +852,8 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
     disposition_ids = None
     candidate_occurrence, occurrence_checked = None, False
     for row in rows:
+        refusal = None
+        guard_match = None
         try:
             previous = _receipt_meta(row['meta'])
             maximum = _reserve_valid(previous, row)
@@ -712,8 +875,12 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                 if old_fp != new_fp:
                     continue
                 prompt_verified = True
+                guard_match = 'logical_equal'
             elif _legacy_luna_low_proven(previous, current_body):
                 prompt_verified = True
+                guard_match = 'legacy_low_verified'
+            else:
+                guard_match = 'legacy_unproven'
             if (candidate['route'] == 'reextract' and candidate.get('message_id') is None
                     and isinstance(candidate.get('owner'), dict)
                     and candidate['owner'].get('source_type') == 'attachment_ocr'):
@@ -745,11 +912,15 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                     else:
                         result_map.setdefault(reservation_id, []).append((result_meta, result_row))
             if previous['reservation_id'] in disposition_ids:
+                refusal = 'disposition'
                 raise ValueError('discarded')
             matches = result_map.get(previous['reservation_id'], [])
+            if not matches:
+                refusal = 'result_missing'   # no result yet: the send's outcome is unknown, not a broken receipt
             _, settled = _settled(previous, maximum, matches)
             result = matches[0][0]
             if result.get('disposition'):
+                refusal = 'disposition'
                 raise ValueError('discarded')
             http_class = result.get('http_class')
             if (local_fallback and isinstance(http_class, str)
@@ -764,9 +935,21 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
             if (not local_fallback and prompt_verified and settled and result.get('usage') is not None and result.get('http_class') == 'http_200'
                     and result.get('error_kind') is None and _selection_differs(previous, candidate, current_body)):
                 continue
+            # The one validated result of the same request: a proven success, a settled
+            # failure, or an unsettled one. Counts only; none of them permits a resend.
+            refusal = ('repeat_unsettled' if not settled else
+                       'repeat_success' if (result.get('usage') is not None and result.get('http_class') == 'http_200'
+                                            and result.get('error_kind') is None) else 'repeat_failed')
             raise ValueError('already_sent_or_unknown')
         except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
-            raise AnthropicError('budget_exceeded', 'cloud_unit_unresolved') from None
+            error = _classified(AnthropicError('budget_exceeded', 'cloud_unit_unresolved'),
+                                refusal or 'receipt_inconsistent')
+            if candidate['route'] == 'reextract' and candidate.get('message_id') is not None and guard_match:
+                try:
+                    error.history_observation = _repeat_observation(previous, candidate, guard_match)
+                except Exception:
+                    error.history_observation = {}
+            raise error from None
 
 
 
@@ -956,6 +1139,14 @@ def global_block_reason(ledger, *, model=MODEL):
     return None
 
 
+def _hash_row(digest, row):
+    try:
+        digest.update(canonical(tuple(row)))
+    except (TypeError, ValueError, UnicodeError):
+        raise AnthropicError('pricing_unverified', 'usage_invalid') from None
+    digest.update(b'\n')
+
+
 class _Tally:
     """usage_report's month totals kept incrementally for the reservation gate:
     unchanged rows are hashed without decoding their metadata again; changed
@@ -967,6 +1158,10 @@ class _Tally:
         self.precheck = None
         self.last_id = 0
         self.prefix = None   # fingerprint of the rows already tallied
+        # sha256 state over the in-period rows up to _main_id (fingerprint's
+        # first part): appended rows extend it instead of re-reading history
+        self._main = hashlib.sha256()
+        self._main_id = 0
         self.open = {}       # rid -> (meta, maximum, day): reserved, no result yet
         self.closed = {}     # rid -> (maximum, cost, settled, day): one result seen
         self.orphans = {}    # rid -> (prior-month reservation rows, results)
@@ -985,30 +1180,40 @@ class _Tally:
         self.provider_totals[provider] = self.provider_totals.get(provider, Decimal(0)) + cost
 
     def fingerprint(self, ledger, now):
-        """Hash all accounting columns, including reservations outside the period."""
+        """Hash all accounting columns, including reservations outside the period.
+
+        Re-reads every in-period row (the same-length mutation check) and keeps
+        the verified state so update() can extend it with appended rows only."""
         digest = hashlib.sha256()
         with closing(ledger.db.execute(
             "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
             "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND created_at>=? "
             "AND artifact_id<=? ORDER BY artifact_id", (self.month, self.last_id))) as rows:
-            prior = _matching_rows_many(ledger, KINDS[0], self.orphans, now=now, _timestamps_checked=True)
-            try:
-                for row in chain(rows, sorted(prior, key=lambda row: row['artifact_id'])):
-                    digest.update(canonical(tuple(row)))
-                    digest.update(b'\n')
-            except (TypeError, ValueError, UnicodeError):
-                raise AnthropicError('pricing_unverified', 'usage_invalid') from None
+            for row in rows:
+                _hash_row(digest, row)
+        self._main, self._main_id = digest.copy(), self.last_id
+        return self._with_prior(digest, ledger, now)
+
+    def _with_prior(self, digest, ledger, now):
+        """Finish a main-row digest with the prior-period reservations, in fingerprint's order."""
+        prior = _matching_rows_many(ledger, KINDS[0], self.orphans, now=now, _timestamps_checked=True)
+        for row in sorted(prior, key=lambda row: row['artifact_id']):
+            _hash_row(digest, row)
         return digest.digest()
 
     def update(self, ledger, now):
         last_id = self.last_id
         new_orphans = {}
         changed_orphans = set()
+        # Extend only a state that covers exactly the rows tallied so far.
+        extend = self._main.copy() if self._main_id == last_id else None
         with closing(ledger.db.execute(
             "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
             "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND created_at>=? "
             "AND artifact_id>? ORDER BY artifact_id", (self.month, self.last_id))) as rows:
             for row in rows:
+                if extend is not None:
+                    _hash_row(extend, row)
                 m = _accounting_meta(row["meta"])
                 rid = m.get("reservation_id")
                 if row["kind"] == "cloud_usage_reserve":
@@ -1060,7 +1265,11 @@ class _Tally:
                 self.invalid = True
         # The caller already verified this prefix in the same read snapshot.
         if self.prefix is None or self.last_id != last_id:
-            self.prefix = self.fingerprint(ledger, now)
+            if extend is not None:
+                self._main, self._main_id = extend.copy(), self.last_id
+                self.prefix = self._with_prior(extend, ledger, now)
+            else:
+                self.prefix = self.fingerprint(ledger, now)
         self.checked_at = now
 
 
@@ -1153,14 +1362,9 @@ def _selection_model(settings, selection, max_tokens):
     if (definition["provider"] != settings["provider"] or selection["price_version"] != definition["price_version"]
             or selection["max_tokens"] is not None and selection["max_tokens"] != max_tokens):
         raise AnthropicError("contract_error", "cloud_profile_invalid")
-    if settings["provider"] == "openai":
-        if ((model, effort) not in openai_client.VALID_MODEL_EFFORTS
-                or profile is not None and (openai_client.PROFILE_DEFINITIONS.get(profile) != (model, effort)
-                    or selection["max_tokens"] not in (8192, 16384, 32768))
-                or profile is None and (model != openai_client.MODEL or effort != "low"
-                    or selection["max_tokens"] not in (8192, 16384, 32768))):
-            raise AnthropicError("contract_error", "cloud_profile_invalid")
-    elif effort is not None or profile is not None or model != PROVIDERS["anthropic"]:
+    if (not profile_contract_valid(settings["provider"], model, effort, profile, selection["max_tokens"])
+            or settings["provider"] == "openai" and selection["max_tokens"] not in PROFILE_MAX_TOKENS
+            or settings["provider"] == "anthropic" and profile is None and model != PROVIDERS["anthropic"]):
         raise AnthropicError("contract_error", "cloud_profile_invalid")
     return model
 
@@ -1180,12 +1384,14 @@ def budget_block_reason(ledger, cfg, *, max_tokens=1600, input_bound=INPUT_RESER
     if not pricing_valid(model=selected_model):
         return "pricing_unverified"
     try:
-        tally = _tally(ledger)
+        now = time.time()
+        tally = _tally(ledger, now)
     except (AnthropicError, ValueError, InvalidOperation):
         return "pricing_unverified"
     if tally.invalid:
         return "pricing_unverified"
-    today = tally.days.get(_periods(time.time())[0], [0, Decimal(0)])
+    day = _periods(now)[0]
+    today = tally.days.get(day, [0, Decimal(0)])
     if c["daily_request_budget"] is not None and today[0] >= c["daily_request_budget"]:
         return "daily_cap"
     cost = max_cost(max_tokens, input_bound=input_bound, model=selected_model)
@@ -1194,13 +1400,14 @@ def budget_block_reason(ledger, cfg, *, max_tokens=1600, input_bound=INPUT_RESER
     limit = c["monthly_cost_limit_usd"]
     if limit is not None and tally.total + cost > _decimal(limit):
         return "monthly_cap"
-    caps = c["provider_budgets"].get(c["provider"])
+    provider = _price_definition(selected_model)["provider"]
+    caps = c["provider_budgets"].get(provider)
     if c["provider_budgets"] and caps is None:
         return "provider_budget_missing"
     if caps is not None:
-        if tally.provider_days.get((c["provider"], _periods(time.time())[0]), Decimal(0)) + cost > _decimal(caps["daily_cost_limit_usd"]):
+        if tally.provider_days.get((provider, day), Decimal(0)) + cost > _decimal(caps["daily_cost_limit_usd"]):
             return "provider_daily_cap"
-        if tally.provider_totals.get(c["provider"], Decimal(0)) + cost > _decimal(caps["monthly_cost_limit_usd"]):
+        if tally.provider_totals.get(provider, Decimal(0)) + cost > _decimal(caps["monthly_cost_limit_usd"]):
             return "provider_monthly_cap"
     if c["window_budget_usd"] is not None:
         if window_history_pruned(ledger, c):
@@ -1218,6 +1425,47 @@ def stop(ledger):
     ledger.artifact_add("cloud_control", "paused")
 
 
+RESTORE_PAUSE = "database_restored"
+
+
+def pause_for_restore(db, restored_at, cfg, now=None) -> bool:
+    """Stop new cloud sends once for one database restore, inside the caller's transaction.
+
+    The replaced database lost every reservation, result and saved answer made
+    after its backup, and the repeat-request guard and the spending caps read
+    nothing else: a paid request could be sent and billed again. Resuming is
+    the existing human-confirmed operation. Only an installation with no
+    reservation, no cloud block and no provider key has nothing to protect."""
+    if type(restored_at) not in (int, float) or not math.isfinite(restored_at):
+        raise ValueError("restore_time_invalid")
+    restore = repr(float(restored_at))      # text: the lookup must not depend on float round-trips
+    if db.execute("SELECT 1 FROM artifacts WHERE kind='cloud_control' AND CASE WHEN json_valid(meta) "
+                  "THEN json_extract(meta,'$.restore') END=? LIMIT 1", (restore,)).fetchone():
+        return False       # already paused for this restore; a later human resume stands
+    if (isinstance(cfg, dict) and "cloud_llm" not in cfg and resolve_settings(cfg)[0]["mode"] == "off"
+            and not db.execute("SELECT 1 FROM artifacts WHERE kind=? LIMIT 1", (KINDS[0],)).fetchone()):
+        return False
+    db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
+               ("cloud_control", "paused", MODEL,
+                json.dumps({"reason": RESTORE_PAUSE, "restore": restore}),
+                time.time() if now is None else now))
+    return True
+
+
+def restore_paused(db) -> bool:
+    """Whether the standing stop is the automatic one a database restore left."""
+    row = db.execute("SELECT content,meta FROM artifacts WHERE kind='cloud_control' "
+                     "AND project_id IS NULL AND message_id IS NULL "
+                     "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    if row is None or row[0] != "paused":
+        return False
+    try:
+        meta = strict_json(row[1])
+    except (ValueError, TypeError, RecursionError):
+        return False
+    return isinstance(meta, dict) and meta.get("reason") == RESTORE_PAUSE
+
+
 def resume(ledger):
     _circuit_result(ledger, None, reset=True)
     ledger.artifact_add("cloud_control", "running")
@@ -1233,6 +1481,9 @@ def _request_identity(c, body, *, route, project_id, unit_key, message_id, owner
     if body.get("model") != model:
         raise AnthropicError("contract_error", "model_not_allowed")
     if selection is not None and c["provider"] == "openai" and body.get("reasoning") != {"effort": selection["effort"]}:
+        raise AnthropicError("contract_error", "cloud_profile_invalid")
+    if (selection is not None and c["provider"] == "anthropic"
+            and body.get("output_config") != {"effort": selection["effort"] or "low"}):
         raise AnthropicError("contract_error", "cloud_profile_invalid")
     if c["provider"] == "openai" and (body.get("service_tier") != "default"
             or body.get("store") is not False or body.get("prompt_cache_options") != {"ttl": "30m"}):
@@ -1272,7 +1523,8 @@ def request_send_block_reason(ledger, cfg, body, *, route, project_id, unit_key,
             # An orphan result cannot prove this is a fresh request. Validate the
             # existing accounting snapshot even when a circuit would short-circuit caps.
             if _tally(ledger).invalid:
-                raise AnthropicError("pricing_unverified", "cloud_unit_unresolved")
+                raise _classified(AnthropicError("pricing_unverified", "cloud_unit_unresolved"),
+                                  "receipt_inconsistent")
             return (block_reason(ledger, c, route, project_id, model=candidate['model'])
                     or setting_block_reason(c)
                     or budget_block_reason(ledger, c, max_tokens=candidate['max_tokens'],
@@ -1372,7 +1624,7 @@ def _saved_answer(answer, metadata):
 
 
 def recover_response(ledger, *, route, project_id, message_id, unit_key, input_binding, request_fp,
-                     owner=None, scope=None):
+                     owner=None, scope=None, observation=None):
     """Read one exact paid answer; ambiguous, discarded or answerless attempts stay closed."""
     with _accounting_snapshot(ledger.db):
         rows = ledger.db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
@@ -1385,6 +1637,8 @@ def recover_response(ledger, *, route, project_id, message_id, unit_key, input_b
             from attachment_cloud_identity import recovery_rows
             rows.extend(recovery_rows(ledger.db, project_id=project_id, unit_key=unit_key,
                 binding=input_binding, request_fp=request_fp, owner=owner, scope=scope))
+        observed = observation if route == 'reextract' and message_id is not None else None
+        _observe_recovery(observed, 'unknown' if rows else 'no_exact_rows')
         saved = None
         for row in rows:
             reservation = _receipt_meta(row['meta'])
@@ -1423,6 +1677,8 @@ def recover_response(ledger, *, route, project_id, message_id, unit_key, input_b
             answer = _saved_answer(answer, evidence['result'])
             saved = (evidence, {'status': 200, **answer, 'model': reservation['model'],
                                 'usage': evidence['result']['usage']})
+        if rows and saved is None:
+            _observe_recovery(observed, 'confirmed_rejection_only')
         return saved
 
 

@@ -1,0 +1,25 @@
+{
+  "category": "fixed",
+  "title": "監視が黙って止まる経路を解消",
+  "summary": "監視処理そのものが止まった場合と、外部AIの提供元別設定を読み取れない場合にも、システム通知先へ警報が届きます。これまでは、どちらの場合も収集や監視が止まったまま警報が出ませんでした。",
+  "upgrade": "追加設定は不要です。更新の適用後、監視処理（local.mcs-health / mcs-health.timer）と収集処理の両方が新しいコードで動いていることを確認してください。監視処理の停止は、最後の観測から30分（health.tick_interval_s × (health.max_missed_runs + 1) の既定値）を超えると検知し、20分の回復確認を経て送信します。同じ警報の再送は6時間に1回までです。",
+  "details": [
+    "収集処理が監視処理の最終観測時刻を確認し、止まっていれば「監視処理の停止」をシステム通知先へ送る。監視が再開していれば送信前に取り下げる。状態は data/health.json の health_watch に記録する。",
+    "提供元別設定を読み取れないとき、監視処理は終了せず警報専用の設定で監視を続ける。外部AI処理は閉じたまま扱い、自動復旧の要求は出さない。終了コードは従来どおり1を返す。",
+    "提供元別設定の読取り失敗だけが理由の場合は、連続3回の観測で警報する。収集の失敗や記録の停止を伴う場合は直ちに警報する。",
+    "監視処理は開始から300秒で打ち切る。応答しない監視処理がロックを持ち続け、以降の監視が何もせず終了する状態を防ぐ。",
+    "異常からの回復は data/health_watch.json の recoveries に最大50件まで記録する。回復の通知は従来どおり送らない。",
+    "ディスクが満杯で監視状態を保存できない場合は、重複送信を防ぐため警報を送らない動作を維持する。空き容量の低下は満杯になる前に disk_low として警報する。"
+  ],
+  "refs": [
+    "mcs/ingest/health_watch.py",
+    "mcs/ingest/health_report.py",
+    "mcs/ingest/run_check.py",
+    "mcs/notify/alert_recovery.py",
+    "mcs/notify/notify_flush.py",
+    "mcs/notify/notify_sender.py",
+    "mcs/core/mcs_util.py",
+    "mcs/core/health_policy.py",
+    "mcs/core/maintenance.py"
+  ]
+}

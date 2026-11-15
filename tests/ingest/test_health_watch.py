@@ -30,24 +30,78 @@ def no_live_disk_probe(monkeypatch):
 
 
 @pytest.mark.parametrize("marker", ["pending", "authority"])
-def test_provider_settings_failure_stops_before_health_changes(tmp_path, monkeypatch, capsys, marker):
+def test_provider_settings_failure_alerts_without_recovery_or_settings_change(
+        tmp_path, monkeypatch, capsys, marker):
+    # The same fault fails the producer, so a watcher that stops here silences both.
+    import health_recovery
+    import notify_sender
     tmp_path.chmod(0o700)
     data = tmp_path / "data"
     data.mkdir(mode=0o700)
     config = tmp_path / "config.json"
-    config.write_text('{"synthetic":"secret-canary"}')
+    config.write_text(json.dumps({"synthetic": "secret-canary", "notify_target": "slack:C12345678",
+                                  "notify_system_target": "slack:C87654321",
+                                  "cloud_llm": {"mode": "on"}}))
     config.chmod(0o600)
     witness = data / (".provider-settings-" + marker + ".json")
     witness.write_text('{"synthetic":"secret-canary"}')
     witness.chmod(0o600)
     before = (config.read_bytes(), witness.read_bytes())
-    monkeypatch.setattr(health_watch, "_watch", lambda *a, **k: pytest.fail("health write or delivery"))
-    assert health_watch.main(["--home", str(tmp_path), "--config", str(config)]) == 1
+    _health_file(tmp_path, {"overall": "failed", "at": time.time() - 10, "state_reasons": ["run_failed"]})
+    sent, seen = [], []
+    monkeypatch.setattr(notify_sender, "send", lambda argv, text, **kw: sent.append((argv, text)))
+    monkeypatch.setattr(health_recovery, "run", lambda *a, **k: pytest.fail("recovery on unverified settings"))
+    evaluate = health_watch.evaluate
+    monkeypatch.setattr(health_watch, "evaluate",
+                        lambda **kw: seen.append(kw["cfg"]) or evaluate(**kw))
+    assert health_watch.main(["--home", str(tmp_path), "--config", str(config), "--send"]) == 1
     captured = capsys.readouterr()
     assert json.loads(captured.err) == {"status": "blocked", "reason": "provider_settings_unreadable"}
-    assert "secret-canary" not in captured.err + captured.out
+    assert seen[0]["cloud_llm"] == {"mode": "off"}
+    assert len(sent) == 1
+    argv, text = sent[0]
+    assert argv[argv.index("--to") + 1] == "slack:C87654321"
+    assert "設定を確認できず、自動復旧を止めています" in text and "MCS-HLT-PROVIDER-SETTINGS-UNREADABLE" in text
+    assert "secret-canary" not in captured.err + captured.out + text
     assert (config.read_bytes(), witness.read_bytes()) == before
-    assert sorted(path.name for path in data.iterdir()) == [witness.name]
+    status = json.loads((tmp_path / health_watch.STATUS_REL).read_text())
+    assert status["state_reasons"] == ["run_failed", "provider_settings_unreadable"]
+    assert status["auto_recovery"] == {"enabled": False, "actions": [],
+                                       "reason": "provider_settings_unreadable"}
+
+
+def test_provider_settings_blip_on_healthy_producer_alerts_only_when_it_persists(tmp_path):
+    reports = []
+    for tick in range(health_watch.STREAK_ALERT):
+        _health_file(tmp_path, {"overall": "ok", "at": 990 + 600 * tick, "state_reasons": []})
+        reports.append(health_watch.evaluate(str(tmp_path), 1000 + 600 * tick, cfg={},
+                                             config_blocked=True))
+    assert [r["status"] for r in reports] == ["degraded"] * health_watch.STREAK_ALERT
+    assert [r["alert"] for r in reports] == [False] * (health_watch.STREAK_ALERT - 1) + [True]
+    # a settings read that works again ends the episode without a notice
+    _health_file(tmp_path, {"overall": "ok", "at": 990 + 600 * health_watch.STREAK_ALERT,
+                            "state_reasons": []})
+    healed = health_watch.evaluate(str(tmp_path), 1000 + 600 * health_watch.STREAK_ALERT, cfg={})
+    assert healed["status"] == "ok" and not healed["alert"]
+
+
+def test_a_wedged_watcher_is_ended_so_the_next_run_can_observe(tmp_path):
+    # launchd has no run timeout: a hung watcher would hold the lock forever
+    # and every later run would exit 0 without observing anything.
+    import signal
+    import subprocess
+    script = ("import sys, time, health_watch as w\n"
+              "w.WATCH_TIMEOUT_S = 1\n"
+              "w._load_config = lambda *a: {}\n"
+              "w._watch = lambda *a, **k: time.sleep(60)\n"
+              "sys.exit(w.main(['--home', sys.argv[1]]))\n")
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
+    wedged = subprocess.run([sys.executable, "-c", script, str(tmp_path)], env=env, timeout=30)
+    assert wedged.returncode == -signal.SIGALRM
+    _health_file(tmp_path, {"overall": "ok", "at": 990, "state_reasons": []})
+    assert health_watch.main(["--home", str(tmp_path), "--now", "1000"]) == 0
+    assert json.loads((tmp_path / health_watch.STATUS_REL).read_text())["watched_at"] == 1000
+    assert signal.alarm(0) == 0                    # the guard never outlives main()
 
 
 def test_lock_path_must_be_a_regular_file(tmp_path, monkeypatch):
@@ -619,6 +673,31 @@ def test_state_without_alerted_reasons_does_not_realert(tmp_path):
         "last": {"status": "degraded", "health_at": 690,
                  "evidence_at": 690}, "alerted_at": 700.0}))
     assert not _eval(tmp_path, 1000.0)["alert"]
+
+
+def test_recovery_needs_a_fresh_ok_file_and_leaves_a_bounded_record(tmp_path):
+    _health_file(tmp_path, {"overall": "failed", "at": 990, "state_reasons": ["run_failed"]})
+    assert _eval(tmp_path, 1000.0)["alert"]
+    # the same failed file growing stale is not a recovery
+    assert "recovered_from" not in _eval(tmp_path, 1000.0 + 7200)
+    state_path = tmp_path / health_watch.STATE_REL
+    assert "recoveries" not in json.loads(state_path.read_text())
+    _health_file(tmp_path, {"overall": "ok", "at": 9000, "state_reasons": []})
+    healed = _eval(tmp_path, 9010.0)
+    assert healed["status"] == "ok" and not healed["alert"] and healed["recovered_from"] == "stale"
+    assert json.loads(state_path.read_text())["recoveries"] == [{
+        "recovered_at": 9010.0, "from": "stale", "health_at": 9000, "detected_at": 8200.0,
+        "reasons": []}]
+    assert "recovered_from" not in _eval(tmp_path, 9020.0)      # ok -> ok is not an event
+    for cycle in range(health_watch.UNKNOWN_HISTORY + 2):
+        at = 20_000 + cycle * 100
+        _health_file(tmp_path, {"overall": "failed", "at": at, "state_reasons": ["run_failed"]})
+        _eval(tmp_path, at + 1.0)
+        _health_file(tmp_path, {"overall": "ok", "at": at + 50, "state_reasons": []})
+        _eval(tmp_path, at + 51.0)
+    kept = json.loads(state_path.read_text())["recoveries"]
+    assert len(kept) == health_watch.UNKNOWN_HISTORY
+    assert kept[-1]["from"] == "failed" and kept[-1]["reasons"] == ["run_failed"]
 
 
 def test_main_delivers_alert_to_system_target(tmp_path, monkeypatch):

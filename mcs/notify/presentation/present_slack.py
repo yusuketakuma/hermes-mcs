@@ -33,7 +33,8 @@ THREAD_HEAD_PATIENT = False    # replies sit under the patient card
 # chat.update documents a 4,000-character text limit (unlike postMessage).
 # Bound encoded bytes conservatively too: source characters and wire text
 # differ after escaping, and a delivered part must remain editable.
-THREAD_PART_WIRE_LIMIT = 4000
+# Plain updates have rejected 4,000 escaped bytes; retain a conservative margin.
+THREAD_PART_WIRE_LIMIT = 3500
 
 
 def thread_part_wire_size(text: str) -> int:

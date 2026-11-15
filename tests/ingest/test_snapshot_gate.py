@@ -80,7 +80,8 @@ def test_gate_releases_run_lock_only_during_child_validation(tmp_path, monkeypat
     monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", validating)
     assert _publish(db, tmp_path, lock_fd, state, baseline) is not None
     assert held["during"] is False                       # run.lock was free in the window
-    assert state == {"allowed": True, "attempted": True}
+    assert {key: state[key] for key in ("allowed", "attempted")} == {"allowed": True, "attempted": True}
+    assert "reason" not in state and state["verify_window_s"] >= 0 and state["reacquire_s"] >= 0
     with pytest.raises(BlockingIOError):                 # and held again afterwards
         fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
     os.close(probe)
@@ -104,7 +105,8 @@ def test_gate_updater_during_window_is_a_gate_failure(tmp_path, monkeypatch):
     # the RunLockLost cause (held: an updater won) is preserved.
     assert isinstance(caught.value.__cause__, writer_lock.RunLockLost) \
         or isinstance(caught.value.__context__, writer_lock.RunLockLost)
-    assert state == {"allowed": False, "attempted": True}
+    assert {key: state[key] for key in ("allowed", "attempted", "reason")} == {
+        "allowed": False, "attempted": True, "reason": "run_lock_held"}
     assert not os.path.exists(_dest())                   # never published
     os.close(lock_fd)
     db.close()
@@ -126,7 +128,65 @@ def test_gate_reacquire_timeout_is_a_gate_failure(tmp_path, monkeypatch):
         _publish(db, tmp_path, lock_fd, state, baseline)
     lost = caught.value.__cause__ or caught.value.__context__
     assert isinstance(lost, writer_lock.RunLockLost) and lost.held is False
-    assert state["allowed"] is False
+    assert state["allowed"] is False and state["reason"] == "run_lock_timeout"
+    # the bounded wait itself is what the result reports: at least the 0.05 s bound
+    assert state["reacquire_s"] >= 0.05 and state["verify_window_s"] >= 0
+    assert not os.path.exists(_dest())
+    fcntl.flock(probe, fcntl.LOCK_UN)
+    os.close(probe)
+    os.close(lock_fd)
+    db.close()
+
+
+def test_gate_reacquire_timeout_with_an_update_reports_updated(tmp_path, monkeypatch):
+    """The bounded wait expires while an updater also ran: the fixed
+    reason tells this apart from a plain lock-contention timeout."""
+    db, updater, lock_fd, baseline = _env(tmp_path, monkeypatch)
+    state = {"allowed": False, "attempted": False}
+    probe = _probe(tmp_path)
+    monkeypatch.setattr(writer_lock, "RUN_LOCK_REACQUIRE_S", 0.05)
+    original = snapshots._valid_snapshot_candidate
+
+    def validating(*args, **kwargs):
+        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)  # the updater holds it
+        updater["state"] = (False, 8)                      # and moved the code stamp
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", validating)
+    with pytest.raises(run_check._SnapshotGateUnverified):
+        _publish(db, tmp_path, lock_fd, state, baseline)
+    assert state["allowed"] is False and state["reason"] == "run_lock_timeout_updated"
+    assert not os.path.exists(_dest())
+    fcntl.flock(probe, fcntl.LOCK_UN)
+    os.close(probe)
+    os.close(lock_fd)
+    db.close()
+
+
+def test_gate_failing_clock_still_reacquires_and_keeps_the_failure(tmp_path, monkeypatch):
+    """The window seconds are diagnostics only: a clock that raises inside
+    the gate drops them, the reacquire still runs and its loss still
+    forbids writes with the fixed reason."""
+    db, updater, lock_fd, baseline = _env(tmp_path, monkeypatch)
+    state = {"allowed": False, "attempted": False}
+    probe = _probe(tmp_path)
+    monkeypatch.setattr(writer_lock, "RUN_LOCK_REACQUIRE_S", 0.05)
+    original = snapshots._valid_snapshot_candidate
+
+    def validating(*args, **kwargs):
+        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)  # another writer holds it
+        return original(*args, **kwargs)
+
+    def broken_clock():
+        raise OSError("synthetic clock failure")
+
+    monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", validating)
+    monkeypatch.setattr(run_check, "time", SimpleNamespace(monotonic=broken_clock))
+    with pytest.raises(run_check._SnapshotGateUnverified) as caught:
+        _publish(db, tmp_path, lock_fd, state, baseline)
+    lost = caught.value.__cause__ or caught.value.__context__
+    assert isinstance(lost, writer_lock.RunLockLost) and lost.held is False
+    assert state == {"allowed": False, "attempted": True, "reason": "run_lock_timeout"}
     assert not os.path.exists(_dest())
     fcntl.flock(probe, fcntl.LOCK_UN)
     os.close(probe)
@@ -148,7 +208,7 @@ def test_gate_db_swap_during_window_fails_no_write(tmp_path, monkeypatch):
     monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", validating)
     with pytest.raises(run_check._SnapshotGateUnverified):
         _publish(db, tmp_path, lock_fd, state, baseline)
-    assert state["allowed"] is False
+    assert state["allowed"] is False and state["reason"] == "identity_mismatch"
     assert not os.path.exists(_dest())
     os.close(lock_fd)
     db.close()
@@ -167,7 +227,7 @@ def test_gate_db_swapped_before_entry_fails_while_lock_held(tmp_path, monkeypatc
         _publish(db, tmp_path, lock_fd, state, baseline)
     # the raised gate error forbids writes by itself; 'attempted' only
     # marks a window where the lock was actually released.
-    assert state == {"allowed": False, "attempted": False}
+    assert state == {"allowed": False, "attempted": False, "reason": "precheck_identity_mismatch"}
     with pytest.raises(BlockingIOError):                 # the run lock was never released
         fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
     assert not os.path.exists(_dest())
@@ -190,7 +250,7 @@ def test_gate_run_lock_path_swap_during_window_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", validating)
     with pytest.raises(run_check._SnapshotGateUnverified):
         _publish(db, tmp_path, lock_fd, state, baseline)
-    assert state["allowed"] is False
+    assert state["allowed"] is False and state["reason"] == "identity_mismatch"
     assert not os.path.exists(_dest())
     os.close(lock_fd)
     db.close()
@@ -229,7 +289,7 @@ def test_gate_validator_error_with_failed_reacquire_chains_both(tmp_path, monkey
     error = caught.value
     assert isinstance(error.__cause__, ValueError)       # in-flight exception kept
     assert isinstance(error.__context__, writer_lock.RunLockLost)
-    assert state["allowed"] is False
+    assert state["allowed"] is False and state["reason"] == "run_lock_held"
     os.close(lock_fd)
     db.close()
 
@@ -321,7 +381,7 @@ def test_gate_non_finite_deadline_is_rejected_without_unlock(tmp_path, monkeypat
     with pytest.raises(run_check._SnapshotGateUnverified):
         with gate:
             pass
-    assert state == {"allowed": False, "attempted": True}
+    assert state == {"allowed": False, "attempted": True, "reason": "deadline_unbounded"}
     with pytest.raises(BlockingIOError):                 # never released
         fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
     os.close(probe)
@@ -342,7 +402,7 @@ def test_gate_broken_publication_fence_fails_no_write(tmp_path, monkeypatch):
     monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", validating)
     with pytest.raises(run_check._SnapshotGateUnverified):
         _publish(db, tmp_path, lock_fd, state, baseline)
-    assert state["allowed"] is False
+    assert state["allowed"] is False and state["reason"] == "fence_unverified"
     assert not os.path.exists(_dest())
     os.close(lock_fd)
     db.close()
@@ -479,6 +539,7 @@ def test_finish_run_gate_failure_forbids_the_partial_correction(
                               run_lock_fd=lock_fd, db_baseline=baseline)
     assert isinstance(caught.value.__cause__, OSError)
     assert recorded == ["ok"]          # only the pre-publish record; no correction
+    assert result["snapshot_gate"]["reason"] == "reacquire_error"
     os.close(lock_fd)
     db.close()
 
@@ -507,6 +568,9 @@ def test_finish_run_gate_failure_keeps_the_dirty_flag(tmp_path, monkeypatch):
                               run_lock_fd=lock_fd, db_baseline=baseline)
     assert cleared == []
     assert not os.path.exists(_dest())
+    gate = result["snapshot_gate"]
+    assert gate["reason"] == "run_lock_timeout" and set(gate) == {
+        "reason", "verify_window_s", "reacquire_s"}
     fcntl.flock(probe, fcntl.LOCK_UN)
     os.close(probe)
     os.close(lock_fd)
@@ -578,18 +642,29 @@ def test_finish_run_raises_gate_error_when_writes_left_forbidden(tmp_path, monke
     db.close()
 
 
-def test_finish_run_unchanged_without_gate_engagement(tmp_path, monkeypatch):
+@pytest.mark.parametrize(("state", "dirty"), [
+    ("unchanged", 0), ("deferred", 0), ("deferred", 3)])
+def test_finish_run_unchanged_without_gate_engagement(tmp_path, monkeypatch, state, dirty):
     db, updater, lock_fd, baseline = _finish_env(tmp_path, monkeypatch)
-    monkeypatch.setattr(notify_cards, "snapshot_dirty", lambda *a: False)
-    # 'unchanged' never reaches the publisher, so the gate stays unrun
-    # and _finish_run must not treat the idle flag as a gate failure.
-    monkeypatch.setattr(maintenance, "refresh_snapshot", lambda *a, **kw: "unchanged")
+    monkeypatch.setattr(notify_cards, "snapshot_dirty", lambda *a: dirty)
+    cleared = []
+    monkeypatch.setattr(notify_cards, "clear_snapshot_dirty",
+                        lambda *a, **kw: cleared.append(a))
+    # 'unchanged'/'deferred' never reach the publisher, so the gate stays
+    # unrun and _finish_run must not treat the idle flag as a gate failure;
+    # a deferred background mark stays set for the next publish.
+    refresh_kw = []
+    monkeypatch.setattr(maintenance, "refresh_snapshot",
+                        lambda *a, **kw: refresh_kw.append(kw) or state)
     result = {"notify": {}, "errors": [], "incomplete": []}
     run_id = db.begin_run(None)
     assert run_check._finish_run(db, {}, result, run_id,
                                  deadline=time.monotonic() + 60,
                                  run_lock_fd=lock_fd, db_baseline=baseline) == "ok"
-    assert result["snapshot_state"] == "unchanged"
+    assert result["snapshot_state"] == state and result["snapshot"] is True
+    assert not result["errors"]
+    assert cleared == [] and refresh_kw[0]["dirty"] is bool(dirty)
+    assert "force" not in refresh_kw[0]
     os.close(lock_fd)
     db.close()
 
@@ -648,6 +723,7 @@ def test_main_gate_failure_writes_nothing_terminal(tmp_path, monkeypatch, capsys
     out = json.loads(capsys.readouterr().out)
     assert out["ok"] is False
     assert "snapshot_gate_unverified" in out["errors"]
+    assert out["snapshot_gate"]["reason"] == "run_lock_held"
     assert len(recorded) == 1                            # pre-publish record only
     assert cleared == []                                 # dirty CAS never ran
     assert not (data / "health.json").exists()           # no health write

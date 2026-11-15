@@ -1,0 +1,22 @@
+{
+  "category": "changed",
+  "title": "新着だけの変更では読取り用スナップショットの公開を15分以上あける",
+  "summary": "閲覧・サマリー・チャット操作が読む公開スナップショットは、新しい投稿や派生結果の行が増えただけの変更なら、前回の公開から15分（900秒）たつまで公開を見送ります。新着がこれらの画面に出るまでの遅れは、これまでの通常約10分から通常約20分に延びます。通知カードは書込み側のDBから行うため遅れません。カードの状態変更・患者追加・依頼・操作の受付結果・スキーマ変更・行の減少等はこれまでどおりその回に公開します。見送った回は1GB規模の複製と検証を行わないため、書込みロックの保持と処理時間が短くなります。",
+  "upgrade": "追加操作は不要です。設定項目は追加していません。戻すときは mcs/core/maintenance.py の SNAPSHOT_MIN_INTERVAL_S を 0 にするか、このcommitを取り消します。外部連携のauthで max_snapshot_age_s を約1900秒より短くしている場合は、新着だけが続く時間帯に snapshot_stale で送付を拒否される回が増えます。",
+  "details": [
+    "公開の判断は従来どおり maintenance.refresh_snapshot の1か所で行い、新しい戻り値 deferred を返します。見送った回は公開記録（.publish-sig.json）を書き換えないため、待ち時間は最後の公開から数えます。",
+    "収集の実行結果の snapshot_state に deferred が記録されます。見送りは失敗として扱わず、notify_dirty も消しません。",
+    "健康記録に公開済みスナップショットの経過秒数 snapshot_age_s を追加し、4800秒（1時間の再公開と2回分の余裕）を超えると warnings に snapshot_stale を出します。status_fields.json にも snapshot_age_s を追加しました。",
+    "閲覧側の snapshot_age_s と snapshot_may_lag_live_state の表示、サマリーの6時間の注記、外部連携の snapshot_stale の拒否は変わりません。",
+    "見送った回でも派生処理（rollup・signals）に回す時間は変わりません。"
+  ],
+  "refs": [
+    "mcs/core/maintenance.py",
+    "mcs/ingest/health_report.py",
+    "mcs/ingest/run_check.py",
+    "mcs/ops/status_fields.json",
+    "tests/core/test_stab_db_maintenance.py",
+    "tests/ingest/test_snapshot_gate.py",
+    "tests/ingest/test_v129_ingest_stability.py"
+  ]
+}

@@ -123,6 +123,8 @@ def cloud_followup(db, project_id, message_id, cfg):
     import cloud_policy
     import extract_llm
 
+    # The bounded backlog reopen is not shown: only its worker process may send,
+    # so any state read from it would differ between the processes drawing one card.
     if not isinstance(cfg, dict) or not cloud_policy.send_route("reextract"):
         return None
     settings = cloud_inference.resolve_cloud_settings(cfg)

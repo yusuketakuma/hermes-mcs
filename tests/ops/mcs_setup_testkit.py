@@ -60,6 +60,7 @@ def _init_env(monkeypatch, tmp_path, cfg):
     # HOME rewrote the live gateway LaunchAgent on 2026-10-04.
     monkeypatch.setattr(service_management, 'sync_gateway', lambda *a, **k: 0)
     monkeypatch.setattr(mcs_util, 'load_config', lambda: dict(cfg))
+    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda **kw: dict(cfg))
     # the dictionary step reads a bundle: generic init tests get none (skipped)
     import mcs_drug
     monkeypatch.setattr(mcs_drug, "BUNDLE", tmp_path / "no-bundle")
@@ -111,6 +112,7 @@ def _services_env(monkeypatch, tmp_path, cron_names=frozenset(),
     _previous_service_load_config_1007 = mcs_util.load_config
     monkeypatch.setattr(mcs_util, 'load_config',
                         lambda path=None: _previous_service_load_config_1007(path) if path else {})
+    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda **kw: {})
     monkeypatch.setattr(service_management, 'inspect_cron', lambda h: entries)
     monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
     monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)

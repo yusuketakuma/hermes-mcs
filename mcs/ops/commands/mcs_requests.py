@@ -163,7 +163,8 @@ def validate(req):
         return "human_confirmation_required"
     if not valid_text(req.get("actor"), 120):
         return "bad_actor"
-    if req.get("cmd") in ("ops.cloud_stop", "ops.cloud_resume", "ops.update_apply", "ops.update_rollback",
+    if req.get("cmd") in ("ops.cloud_stop", "ops.cloud_resume", "ops.cloud_local_rebuild_approve",
+                          "ops.update_apply", "ops.update_rollback",
                           "ops.restore_approve", "ops.drug_alias_apply", "ops.drug_alias_rollback"):
         # System-wide lifecycle ops are projectless — they govern the
         # whole install, not one patient. The shared identity fields

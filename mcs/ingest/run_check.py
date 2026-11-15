@@ -39,6 +39,7 @@ import os
 import sqlite3
 import sys
 import time
+from datetime import datetime, timezone
 from contextlib import suppress
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
@@ -99,6 +100,12 @@ def _write_health(ledger, result: dict, status: str,
         result["health"] = health
         safe_io.atomic_publish_text(
             health_report.HEALTH_FILE, json.dumps(health, ensure_ascii=False))
+        if health["health_watch"]["stalled"]:
+            # the watcher is the alert path for everything else, so only the
+            # producer's own outbox can say that it stopped
+            with suppress(Exception):
+                collection_stages.queue_run_alert(
+                    ledger, "health_watch_stalled", run_id, health["health_watch"]["state"])
     except Exception as e:
         result["errors"].append(
             f"health_write_failed: {type(e).__name__}")
@@ -295,6 +302,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
     transaction_pending()
     # rebuild rollups for patients whose underlying data changed —
     # union of touched-this-run + dirty detection (Oracle B23)
+    rollup_timing = {}
     try:
         import rollup
         touched = set(result.get("extracted_pids", []))
@@ -306,8 +314,16 @@ def stage_derive(ledger, result, deadline, cfg=None,
         # Rollups yield before the remaining signal evaluation slice.
         rollup_deadline = scan_start + max(0, work_deadline - scan_start) * 2 / 3
         scan_deadline = scan_start + max(0, rollup_deadline - scan_start) / 2
-        scan = rollup.scan_fair_dirty_projects(ledger, cfg=cfg, deadline=scan_deadline,
-                                               commit_deadline=rollup_deadline)
+        try:
+            scan = rollup.scan_fair_dirty_projects(ledger, cfg=cfg, deadline=scan_deadline,
+                                                   commit_deadline=rollup_deadline)
+        finally:
+            try:
+                elapsed = time.monotonic() - scan_start
+                if math.isfinite(elapsed):
+                    rollup_timing["scan_s"] = round(max(0, elapsed), 3)
+            except Exception:
+                pass  # Observation must not replace a scan failure.
         touched.difference_update(scan.unknown)
         rebuild_ids = list(dict.fromkeys([*scan.dirty, *sorted(touched)]))
         result["rollup_scan"] = {"state": "unknown" if scan.incomplete else "checked",
@@ -322,9 +338,26 @@ def stage_derive(ledger, result, deadline, cfg=None,
         source_changed = []
         source_unknown = []
         source_unknown_reasons = {}
-        result["rollups"] = rollup.rebuild_many(
-            ledger, rebuild_ids, deadline=rollup_deadline, source_changed=source_changed,
-            source_unknown=source_unknown, source_unknown_reasons=source_unknown_reasons, cfg=cfg)
+        rebuild_start = None
+        try:
+            rebuild_start = time.monotonic()
+            budget = rollup_deadline - rebuild_start
+            if math.isfinite(budget):
+                rollup_timing["rebuild_budget_s"] = round(max(0, budget), 3)
+        except Exception:
+            pass
+        try:
+            result["rollups"] = rollup.rebuild_many(
+                ledger, rebuild_ids, deadline=rollup_deadline, source_changed=source_changed,
+                source_unknown=source_unknown, source_unknown_reasons=source_unknown_reasons,
+                cfg=cfg, timings=rollup_timing)
+        finally:
+            try:
+                elapsed = time.monotonic() - rebuild_start
+                if math.isfinite(elapsed):
+                    rollup_timing["rebuild_s"] = round(max(0, elapsed), 3)
+            except Exception:
+                pass  # Keep the partial counts and the original rebuild outcome.
         if source_changed:
             result["rollup_source_changed"] = len(source_changed)
             result["errors"].append("rollup_source_changed")
@@ -342,6 +375,9 @@ def stage_derive(ledger, result, deadline, cfg=None,
                 result["errors"].append("rollup: source_unknown")
     except Exception as e:
         result["errors"].append(f"rollup: {type(e).__name__}")
+    finally:
+        if rollup_timing:
+            result["rollup_timing"] = rollup_timing
 
     transaction_pending()
     # prospective review candidates — lifecycle-persisted signal_v1
@@ -441,7 +477,7 @@ def _commands_only(lock_fd, deadline) -> int:
             return 0 if result["ok"] else 1
         # startup/periodic recovery: missing spec files, flags,
         # stale-claim visibility — before any command is applied
-        notify_spool.recover(ledger, cfg, result)
+        _run_stage(result, "cmd_recover", deadline, notify_spool.recover, ledger, cfg, result, required=True)
         # a DB restore holds all send grants until the journal-vs-DB
         # reconcile finishes — run it before draining new commands
         if notify_spool.restore_pending(root) is not None:
@@ -456,7 +492,7 @@ def _commands_only(lock_fd, deadline) -> int:
         # dependency order: existing data/cmd traffic first (a resolve
         # may settle an attempt a receipt then reports), then cmd_int
         cmds_before = result.get("command_commands", 0)
-        job_ops.drain_commands(ledger, result)
+        _run_stage(result, "cmd_drain", deadline, job_ops.drain_commands, ledger, result, required=True)
         if result.get("command_commands", 0) > cmds_before:
             # drain_int sweeps after its own applies; data/cmd applies
             # (card_resolve, request.create) drift cards the same way —
@@ -465,22 +501,33 @@ def _commands_only(lock_fd, deadline) -> int:
                 notify_cards.sweep(ledger, cfg)
             except Exception as e:
                 result["errors"].append(f"cmd_sweep:{type(e).__name__}")
-        notify_cmds.drain_int_commands(
+        _run_stage(result, "cmd_int_drain", deadline, lambda: notify_cmds.drain_int_commands(
             ledger, result, cfg, root,
             deadline=min(deadline, time.monotonic() + min(120, max(
-                5, deadline - time.monotonic() - 10))))
+                5, deadline - time.monotonic() - 10)))), required=True)
         # a second drain: commands queued by the first pass's receipts
-        notify_cmds.drain_int_commands(
-            ledger, result, cfg, root, deadline=min(deadline, time.monotonic() + 30))
+        _run_stage(result, "cmd_int_drain_again", deadline, lambda: notify_cmds.drain_int_commands(
+            ledger, result, cfg, root, deadline=min(deadline, time.monotonic() + 30)), required=True)
         notify_spool.publish_flags(cfg, root)
-        notify_cards.gc(ledger, cfg)
+        _run_stage(result, "cmd_card_gc", deadline, notify_cards.gc, ledger, cfg, required=True)
         dirty = notify_cards.snapshot_dirty(ledger)
         if dirty:
-            result["snapshot"] = maintenance.publish_snapshot(
-                DB, deadline=deadline)
-            if result["snapshot"]:
+            # same interval/urgent-key decision as the tick: a background
+            # mark waits out SNAPSHOT_MIN_INTERVAL_S ('deferred' keeps it)
+            state = _run_stage(result, "cmd_snapshot", deadline, lambda: maintenance.refresh_snapshot(
+                DB, dirty=True, deadline=deadline, commands_retry=True), required=True)
+            result["snapshot"] = state is not None and state != "retry_deferred"
+            result["snapshot_state"] = state
+            if state == "retry_deferred":
+                # No copy started: the same change failed recently. Not a new failure,
+                # the dirty mark stays and the receipts already applied keep their result.
+                import snapshots
+                timing = snapshots.last_timing()
+                result["snapshot_retry_reason"] = timing.get("retry_reason")
+                result["snapshot_retry_after_s"] = timing.get("retry_after_s")
+            elif state == "published":
                 notify_cards.clear_snapshot_dirty(ledger, dirty)
-            else:
+            elif state is None:
                 result["ok"] = False
                 result["errors"].append("snapshot_publish_failed")
         print(json.dumps(result, ensure_ascii=False))
@@ -541,8 +588,9 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
     # probe BEFORE backfill: backfill notifies unread rows only, so an
     # own / other-read post on its first pages would be stored silently
     # and the probe would then see the latest id as already stored
+    window = None
     if self_posts:
-        collection_stages.with_relogin(adapter, ledger, result, "self_probe",
+        window = collection_stages.with_relogin(adapter, ledger, result, "self_probe",
                       collection_stages.stage_self_probe, adapter, ledger, result,
                       deadline, run_id, semantic=sem_on,
                       notify_max_age_s=notify_max_age_s, ack_exclusions=ack_exclusions)
@@ -558,7 +606,8 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
                       run_id, semantic=sem_on,
                       notify_max_age_s=notify_max_age_s,
                       notify_all_new=outage_since is not None,
-                      notify_after=probe_after, ack_exclusions=ack_exclusions)
+                      notify_after=probe_after, ack_exclusions=ack_exclusions,
+                      order=window)
         _require_closed_transaction(ledger, result)
     if outage_since is not None:
         collection_stages.seed_outage_catchup(ledger, result, outage_since)
@@ -938,6 +987,29 @@ class _VerificationGate:
         self._db_baseline = db_baseline
         self.engaged = deadline is not None
         self._transport = None
+        self._released = None
+
+    def _unverified(self, reason):
+        """Record the fixed failure reason the run result carries, then
+        build the no-write error."""
+        self._state["reason"] = reason
+        return _SnapshotGateUnverified("snapshot_gate_unverified")
+
+    def _record_since(self, key, start):
+        """Best-effort window seconds: a failing clock drops the value and
+        never skips the reacquire or masks the gate's own failure."""
+        try:
+            if start is not None:
+                self._state[key] = round(time.monotonic() - start, 3)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _now():
+        try:
+            return time.monotonic()
+        except Exception:
+            return None
 
     def _identity_intact(self):
         try:
@@ -955,9 +1027,9 @@ class _VerificationGate:
             intact = _db_identity(self._ledger) == self._db_baseline \
                 and bool(_lock_identity(self._lock_fd))
         except (OSError, sqlite3.Error) as error:
-            raise _SnapshotGateUnverified("snapshot_gate_unverified") from error
+            raise self._unverified("precheck_identity_mismatch") from error
         if not intact:
-            raise _SnapshotGateUnverified("snapshot_gate_unverified") from None
+            raise self._unverified("precheck_identity_mismatch") from None
 
     def __enter__(self):
         self._state["attempted"] = True
@@ -966,7 +1038,7 @@ class _VerificationGate:
             return self
         # A non-finite bound cannot fence the unlock window.
         if not math.isfinite(self._deadline):
-            raise _SnapshotGateUnverified("snapshot_gate_unverified") from None
+            raise self._unverified("deadline_unbounded") from None
         # Pre-unlock check against the Ledger-open baseline.
         self.precheck()
         try:
@@ -976,7 +1048,8 @@ class _VerificationGate:
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException as error:
-            raise _SnapshotGateUnverified("snapshot_gate_unverified") from error
+            raise self._unverified("unlock_failed") from error
+        self._released = self._now()
         return self
 
     @staticmethod
@@ -986,11 +1059,18 @@ class _VerificationGate:
     def __exit__(self, exc_type, exc, tb):
         if not self.engaged:
             return False
+        validated = self._now()
+        self._record_since("verify_window_s", self._released)
         try:
             self._transport.__exit__(exc_type, exc, tb)
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException as secondary:
+            self._record_since("reacquire_s", validated)
+            # RunLockLost carries its fixed code (run_lock_timeout,
+            # run_lock_timeout_updated, run_lock_held) as its only arg.
+            self._state["reason"] = (secondary.args[0] if isinstance(
+                secondary, writer_lock.RunLockLost) else "reacquire_error")
             if self._control_exc(exc):
                 # A validator control exception keeps propagating as the
                 # same object; the reacquire failure rides as its cause
@@ -1005,11 +1085,12 @@ class _VerificationGate:
             # and leaves writes forbidden.
             raise _SnapshotGateUnverified("snapshot_gate_unverified") from (
                 exc if exc is not None else secondary)
+        self._record_since("reacquire_s", validated)
         if not self._identity_intact():
             if self._control_exc(exc):
-                exc.__cause__ = _SnapshotGateUnverified("snapshot_gate_unverified")
+                exc.__cause__ = self._unverified("identity_mismatch")
                 return False
-            raise _SnapshotGateUnverified("snapshot_gate_unverified") from exc
+            raise self._unverified("identity_mismatch") from exc
         self._state["allowed"] = True
         return False
 
@@ -1020,7 +1101,7 @@ class _VerificationGate:
         ok = _snapshots._verified_publication_lock(dest_dir, fd)
         if self.engaged and not ok:
             self._state["allowed"] = False
-            raise _SnapshotGateUnverified("snapshot_gate_unverified")
+            raise self._unverified("fence_unverified")
         return ok
 
 
@@ -1030,6 +1111,16 @@ def _verification_context_factory(ledger, lock_fd, state, db_baseline):
     def verification_context(*, deadline):
         return _VerificationGate(ledger, lock_fd, state, deadline, db_baseline)
     return verification_context
+
+
+def _record_gate_failure(result, gate_state):
+    """Carry the gate's fixed reason and window seconds in the printed run
+    result — the only output a no-write gate failure is allowed."""
+    if gate_state is not None:
+        result["snapshot_gate"] = {
+            "reason": gate_state.get("reason", "unclassified"),
+            **{key: gate_state[key] for key in ("verify_window_s", "reacquire_s")
+               if key in gate_state}}
 
 
 def _finish_run(ledger, cfg, result, run_id, deadline, *, run_lock_fd=None,
@@ -1075,7 +1166,9 @@ def _finish_run(ledger, cfg, result, run_id, deadline, *, run_lock_fd=None,
 
     try:
         # H4: a full copy + quick_check only when the ledger changed, the
-        # notification flag asks for it, or the copy is an hour old
+        # notification flag asks for it, or the copy is an hour old; an
+        # append-only change or the flag within SNAPSHOT_MIN_INTERVAL_S is
+        # 'deferred' and the flag stays set
         dirty = notify_cards.snapshot_dirty(ledger)
         hard = _hard_deadline()
         snapshot_deadline = (None if hard is None else
@@ -1084,7 +1177,7 @@ def _finish_run(ledger, cfg, result, run_id, deadline, *, run_lock_fd=None,
             gate_state = None      # no finite window: legacy held-lock path
         state = _run_stage(result, "finish_snapshot", deadline,
                            lambda: maintenance.refresh_snapshot(
-                               DB, force=dirty, deadline=snapshot_deadline,
+                               DB, dirty=bool(dirty), deadline=snapshot_deadline,
                                verification_context=(
                                    _verification_context_factory(
                                        ledger, run_lock_fd, gate_state, db_baseline)
@@ -1096,15 +1189,18 @@ def _finish_run(ledger, cfg, result, run_id, deadline, *, run_lock_fd=None,
             result["snapshot_failure"] = snapshots.last_failure()
             raise RuntimeError("snapshot_verify_failed")
         if gate_forbade_writes():
+            _record_gate_failure(result, gate_state)
             raise _SnapshotGateUnverified("snapshot_gate_unverified")
         if state == "published":
             import snapshots
             result["snapshot_timing"] = snapshots.last_timing()
             notify_cards.clear_snapshot_dirty(ledger, dirty)
     except _SnapshotGateUnverified:
+        _record_gate_failure(result, gate_state)
         raise
     except Exception as e:
         if gate_forbade_writes():
+            _record_gate_failure(result, gate_state)
             raise _SnapshotGateUnverified("snapshot_gate_unverified") from e
         result["errors"].append(f"snapshot: {type(e).__name__}")
         ledger.finish_run(run_id, "partial",
@@ -1193,6 +1289,15 @@ def _run_stage(result, name, deadline, function, *args, required=False, **kwargs
         }
 
 
+def _not_started(args, lock_started):
+    """Observation of a run that started but never took the run lock: no DB is
+    opened, so this printed line is its only record (the run log keeps stdout)."""
+    mode = "commands" if args.commands_only else "jobs" if args.jobs_only else "collection"
+    return {"ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "mode": mode,
+            "phase": "run_lock", "outcome": "not_started",
+            "wait_s": round(max(0.0, time.monotonic() - lock_started), 3)}
+
+
 def main() -> int:
     import local_llm
     with local_llm.pinned_slot(local_llm.REALTIME_SLOT):
@@ -1228,6 +1333,7 @@ def _main() -> int:
     # Command receipts also wait for short writer windows. The existing
     # generation/update fence applies. Only commands count waiting against
     # their run budget; scheduled collection retains its full work budget.
+    lock_started = time.monotonic()
     lock_fd = acquire_run_lock(LOCKFILE)
     if lock_fd is None:
         with writer_lock.capture_writer_refusal() as diagnostic:
@@ -1240,6 +1346,7 @@ def _main() -> int:
             if diagnostic["writer_reason"] != "writer_refusal_unclassified":
                 refusal.update(writer_reason=diagnostic["writer_reason"],
                                writer_stage=diagnostic["writer_stage"])
+            refusal.update(_not_started(args, lock_started))
             print(json.dumps(refusal))
             return 3
 

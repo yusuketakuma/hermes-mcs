@@ -229,6 +229,22 @@ _LOADED_SOURCE_DIGESTS = {
     for name, path in _LOADED_SOURCE_PATHS.items()}
 
 
+# An automatic hold keeps the verified prior extraction, so running it again
+# only helps when the candidate or its protected-fact comparison can change.
+# Only these loaded sources release holds: the prompt, schema and engine, the
+# rule and medication hints, the frozen context frame, and the clinical
+# interpretation, validation and quality code. Transport, storage, accounting
+# and scheduling sources do not: every production update used to send each
+# held post back through the local model. Bump HOLD_EPOCH to retry them all.
+HOLD_EPOCH = 1
+_HOLD_SOURCES = frozenset({
+    "inference_version", "extract", "extract_schema", "extract_validation", "extract_quality",
+    "extract_llm_engine", "extract_llm_prompts", "extraction_medications", "drug_mentions",
+    "patient_state_context", "patient_context", "clinical_values", "clinical_urgency",
+    "clinical_scope", "clinical_events", "clinical_chunking", "intervention_schedule",
+    "semantic_quantities", "semantic_facts"})
+
+
 _WRITER_STATE = writer_lock.updater_state()
 
 

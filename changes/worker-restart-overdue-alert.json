@@ -1,0 +1,14 @@
+{
+  "category": "added",
+  "title": "更新後に再起動されていない通知workerを警告",
+  "summary": "Hermesのgatewayで動くSlack・Discordの通知workerが、読み込むコードの更新より前に起動したままのとき、健康状態の警告に「通知workerのコード版が更新前です」と出します。更新時の再起動要求が失敗した場合や、再起動なしでコードを書き換えた場合は、古いコードが配送を続けても起動記録だけでは正常に見えていました。",
+  "upgrade": "追加操作は不要です。警告が出たらgatewayを再起動してください。コードの更新から20分を過ぎても再起動されていないときだけ警告します。独立実行モードとLINE WORKSアダプターは対象外です。",
+  "details": [
+    "判定は、gatewayが読み込むソースの最終更新時刻と、通知workerの起動記録にあるプロセス開始時刻の比較です。既存の診断（mcs_setup check）と同じ根拠を使います。",
+    "警告だけを行い、gatewayの自動再起動は行いません。"
+  ],
+  "refs": [
+    "mcs/views/card_worker_status.py",
+    "mcs/ingest/health_report.py"
+  ]
+}

@@ -1065,3 +1065,20 @@ def test_explicit_retry_never_reopens_a_successful_result(setup):
     for _ in range(3):
         assert ocr.run_pending(ledger, cfg, retry_failed_before=10**1000)['complete'] == 0
     assert len(calls) == 1
+
+
+def test_a_deeply_nested_runtime_output_is_one_failed_attachment_not_a_stuck_queue(setup, monkeypatch):
+    # The sandboxed engine writes this file: nesting past the parser's depth
+    # raised out of run_pending before the cursor advanced, so every later
+    # run hit the same attachment again and nothing behind it was read.
+    led, cfg, _, _, _ = setup
+    nested = (b'{"engine_version": "' + ocr.ENGINE_VERSION.encode() + b'", "pages": '
+              + b"[" * 1_000_000 + b"]" * 1_000_000 + b"}")
+    assert len(nested) <= ocr.MAX_OUTPUT            # an output the size limit lets through
+    with pytest.raises(ValueError, match="^output_schema$"):
+        ocr._parse_output(nested)
+    monkeypatch.setattr(ocr, "_runtime", lambda *args: ocr._parse_output(nested))
+    assert ocr.run_pending(led, cfg)["failed"] == 1
+    row = led.db.execute("SELECT content FROM artifacts WHERE kind=?", (ocr.KIND,)).fetchone()[0]
+    assert json.loads(row)["state"] == "failed" and json.loads(row)["reason"] == "output_schema"
+    assert json.loads(row)["attempts"] == 1 and json.loads(row)["pages"] == []

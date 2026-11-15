@@ -277,3 +277,106 @@ def test_first_proven_failure_is_excluded_and_real_selection_still_retries_to_su
     assert ocr.current(case.db, 1)['state'] == 'complete'
     assert ocr.view(case.db, 1, cfg=cfg)['state'] == 'complete'
     assert originals(case)[:-1] == saved
+
+
+def _retry_case(case, monkeypatch, *, attempts=3, reason='output_schema_table_overlap'):
+    bind(case, attempts=attempts, reason=reason)
+    source = ocr._source(case.db, 1)
+    prior = ocr._latest(case.db, source)
+    monkeypatch.setattr(ocr.time, 'time', lambda: prior['_recorded_at'] + ocr.FAILURE_RETRY_S + 1)
+    return source, prior
+
+
+@pytest.mark.parametrize('attempts,expected', [(1, True), (2, True), (3, False)])
+def test_only_exhausted_proven_policy_failures_stop_retrying(case, monkeypatch, attempts, expected):
+    source, prior = _retry_case(case, monkeypatch, attempts=attempts)
+    before, changes = originals(case), case.db.total_changes
+    assert ocr._retry_due(case.db, prior, source, configured()) is expected
+    assert originals(case) == before and case.db.total_changes == changes
+    assert ocr._due(prior, source)   # the pre-existing daily schedule itself stays unchanged
+
+
+@pytest.mark.parametrize('fault', ['policy_off', 'config_missing', 'source_changed', 'runtime_changed',
+                                  'meta_changed', 'timeout', 'stale_selected'])
+def test_changed_or_unproven_policy_exclusions_keep_the_original_retry(case, monkeypatch, fault):
+    source, prior = _retry_case(case, monkeypatch, reason='timeout' if fault == 'timeout' else 'output_schema_table_overlap')
+    cfg = configured()
+    if fault == 'policy_off':
+        cfg['attachment_ocr']['reject_uncertain'] = False
+    elif fault == 'config_missing':
+        cfg = None
+    elif fault == 'source_changed':
+        with case.db:
+            case.db.execute('UPDATE attachments SET downloaded_at=2 WHERE attachment_id=1')
+        source = ocr._source(case.db, 1)
+    elif fault == 'runtime_changed':
+        monkeypatch.setattr(ocr, 'RUNTIME_CONTRACT', 'synthetic-new-runtime')
+    elif fault == 'meta_changed':
+        with case.db:
+            case.db.execute("UPDATE artifacts SET meta='{}' WHERE artifact_id=?", (case.artifact,))
+    elif fault == 'stale_selected':
+        prior = {**prior, 'artifact_id': prior['artifact_id'] + 1}
+    assert ocr._retry_due(case.db, prior, source, cfg)
+
+
+def test_manual_cutoff_bypasses_policy_stop_once_for_the_same_failure(case, monkeypatch):
+    source, prior = _retry_case(case, monkeypatch)
+    cutoff = prior['_recorded_at'] + 1
+    assert ocr._retry_due(case.db, prior, source, configured(), retry_failed_before=cutoff)
+    with case.db:
+        case.db.execute('UPDATE artifacts SET created_at=? WHERE artifact_id=?', (cutoff, case.artifact))
+    latest = ocr._latest(case.db, source)
+    assert not ocr._retry_due(case.db, latest, source, configured(), retry_failed_before=cutoff)
+
+
+@pytest.mark.parametrize('attempts,reason', [(1, 'output_schema_table_overlap'), (2, 'output_schema_table_overlap'), (3, 'timeout')])
+def test_non_target_retry_does_not_read_policy_proof(case, monkeypatch, attempts, reason):
+    source, prior = _retry_case(case, monkeypatch, attempts=attempts, reason=reason)
+    monkeypatch.setattr(ocr, 'rejected_failure', lambda *a, **k: pytest.fail('unrelated retry read policy proof'))
+    assert ocr._retry_due(case.db, prior, source, configured())
+
+
+@pytest.mark.parametrize('pruned', [False, True])
+def test_stopped_or_pruned_source_never_runs_ocr_and_preserves_failures(case, monkeypatch, pruned):
+    source, prior = _retry_case(case, monkeypatch)
+    cfg = configured()
+    monkeypatch.setattr(ocr, 'load_config', lambda: cfg)
+    monkeypatch.setattr(ocr.writer_lock, 'updater_state', lambda: (False, 1))
+    monkeypatch.setattr(ocr.os.path, 'isfile', lambda path: True)
+    monkeypatch.setattr(ocr.os, 'access', lambda *a: True)
+    monkeypatch.setattr(ocr, '_runtime', lambda *a: pytest.fail('stopped source ran OCR'))
+    if pruned:
+        with case.db:
+            case.db.execute("UPDATE attachments SET state='pruned' WHERE attachment_id=1")
+        source = ocr._source(case.db, 1)
+        assert ocr._retry_due(case.db, prior, source, cfg)   # no proof: existing due retained
+    before = originals(case)
+    for _ in range(3):
+        result = ocr.run_pending(case.ledger, cfg)
+        assert result['failed'] == result['complete'] == 0
+    assert originals(case) == before
+    if not pruned:
+        _status(case.data, at=ocr.time.time(), **observed(case, cfg))
+        report = health_report.attachment_ocr_health(str(case.data), cfg, ocr.time.time())
+        assert report['state'] == 'failed' and report['reason'] == 'attachment_ocr_policy_excluded'
+        assert report['alert_required'] is False
+
+
+def test_competing_exhausted_failure_is_rechecked_before_settle(case, monkeypatch):
+    source, prior = _retry_case(case, monkeypatch, attempts=2)
+    cfg = configured()
+    monkeypatch.setattr(ocr, 'load_config', lambda: cfg)
+    monkeypatch.setattr(ocr.writer_lock, 'updater_state', lambda: (False, 1))
+    assert ocr._retry_due(case.db, prior, source, cfg)
+    bind(case, attempts=3)   # a competing writer reaches the policy stop during OCR
+    before = originals(case)
+    proposed = {**prior, 'attempts': 3, 'input_occurrence': ocr._source_occurrence(case.db, source)}
+    assert not ocr._settle(case.ledger, source, proposed, case.data, (False, 1), cfg['attachment_ocr'])
+    assert originals(case) == before
+
+
+def test_waiting_retry_never_reads_rejection_proof(case, monkeypatch):
+    source, prior = _retry_case(case, monkeypatch)
+    monkeypatch.setattr(ocr.time, 'time', lambda: prior['_recorded_at'])
+    monkeypatch.setattr(ocr, 'rejected_failure', lambda *a, **k: pytest.fail('waiting retry read policy proof'))
+    assert not ocr._retry_due(case.db, prior, source, configured())

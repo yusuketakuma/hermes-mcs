@@ -70,8 +70,10 @@ def test_patient_resident_next_pass_checks_old_input(runtime, monkeypatch, prior
             'content': [{'type': 'text', 'text': '{"patient_context":[]}'}],
             'usage': {'input_tokens': 10, 'output_tokens': 2}}).encode()
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', request)
-    def scan(cfg, source, saved, workday_id, deadline, admit, *, provider=None, **kwargs):
-        answers.append(patient_context_quality_controller._ask(cfg, {'source': 'synthetic resident input'}, deadline, admit, provider=provider))
+    def scan(cfg, source, saved, workday_id, deadline, admit, *, provider=None, local_guard=None, **kwargs):
+        # local_guard is the paid-history check the product runs before any local answer (fe132e87)
+        answers.append(patient_context_quality_controller._ask(cfg, {'source': 'synthetic resident input'}, deadline, admit,
+                                                               provider=provider, local_guard=local_guard))
         # Suspend after accounting before persisting this source's scan cursor.
         raise patient_context_refresh_state.Deferred('synthetic_after_answer')
     monkeypatch.setattr(patient_context_quality_controller, '_scan', scan)

@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "専用ChromeでのMCSログインを1つのコマンドで案内",
+  "summary": "初期設定の後に必要だった専用Chromeの起動・本人のMCSログイン・セッション確認を、`mcs setup browser`で順に案内します。長いコマンドの手入力は不要です。初期設定が正常に終わると続けて実行するかを尋ね、認証切れの通知もこのコマンドを案内します。初期設定の推奨コースでは、導入時に選んだ実行方法（Hermes連携かMCS単独か）を質問せず引き継ぎます。導入完了画面は、次にすることを順番に示し、LINE WORKSを選んでいない場合はLINE WORKSの手順を表示しません。",
+  "upgrade": "追加操作は不要です。ログインし直す必要があるときは、端末で `~/.local/bin/mcs setup browser` を実行します。ログイン欄の自動入力は行わず、本人がChromeでログインします。他にログインできるOSアカウントがあるMacでは、従来の自動再ログインと同じ条件でChromeを開かずに止まります。",
+  "details": [
+    "自動再ログインと同じ専用Chromeの起動・セッション確認の経路を共通化し、ログイン案内から使う。",
+    "セッション確認はMCSへの読取り1回で、確認できたトークンは定期収集と同じ本人専用キャッシュへ保存する。既読化・収集は行わない。",
+    "詳細コースでは従来どおり実行方法を確認できる。"
+  ],
+  "refs": ["mcs/ops/setup/browser_setup.py", "mcs/ingest/mcs_authentication.py", "mcs/ops/setup/setup_wizard.py", "deployment/install/runtime.sh", "mcs/notify/notify_flush.py"]
+}

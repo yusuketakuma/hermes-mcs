@@ -24,6 +24,7 @@ import fcntl
 import json
 import os
 import re
+import signal
 import sys
 import time
 
@@ -33,11 +34,13 @@ import _mcs_path  # noqa: F401
 import safe_io  # noqa: E402
 
 from mcs_queries import JST
-from health_policy import HEALTH_REL, STATUS_MAX_BYTES, RUN_GRACE_S, freshness_deadline
-from mcs_util import HOME, CONF_PATH, ProviderSettingsUnreadable, _load_config, load_config
+from health_policy import (CARD_STALL_S, HEALTH_REL, STATUS_MAX_BYTES, RUN_GRACE_S,
+                           WATCH_STATUS_REL, freshness_deadline)
+from mcs_util import (HOME, CONF_PATH, ProviderSettingsUnreadable, _load_config, alert_only_config,
+                      load_config)
 
 STATE_REL = os.path.join("data", "health_watch.json")
-STATUS_REL = os.path.join("data", "health_watch_status.json")
+STATUS_REL = WATCH_STATUS_REL
 
 REALERT_S = 4 * 3600        # unchanged bad state re-alerts every 4h
 # Reasons that usually clear on their own: a degraded verdict made only of
@@ -47,9 +50,12 @@ TRANSIENT_REASONS = frozenset({"stage_errors", "run_deadline_exceeded", "collect
                                "notification_deferred", "notification_parked",
                                "notification_pending", "notification_parts_incomplete",
                                "notification_cards_unavailable",
-                               "notification_pending_unavailable"})
+                               "notification_pending_unavailable",
+                               "provider_settings_unreadable"})
 STREAK_ALERT = 3
+CONFIG_BLOCKED = "provider_settings_unreadable"
 DELIVERY_RETRY_S = 60       # only provably unsent alerts may retry
+WATCH_TIMEOUT_S = 300       # the systemd unit's TimeoutStartSec; launchd has no run timeout
 UNKNOWN_HISTORY = 50        # retained uncertain-delivery records
 
 OVERALL_STATUS = {"ok": "ok", "degraded": "degraded",
@@ -187,13 +193,13 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     tracking = _tracking_parts(parts)
     tracking_present = isinstance(parts, dict) and any(key in parts for key in (
         'active_total', 'acknowledged_unresolved_total', 'unknown_parts_total'))
-    parts_unknown = (isinstance(parts, dict) and parts.get('status') == 'unknown'
+    parts_unknown = (_measurement_unknown(parts, now)
                      or tracking_present and tracking is None)
     parts_active = parts_unknown or bool(tracking and (tracking['total'] or tracking['unknown']))
     if parts_active and report['status'] == 'ok':
         report['status'] = 'degraded'
     cards = h.get('cards')
-    cards_unknown = isinstance(cards, dict) and cards.get('status') == 'unknown'
+    cards_unknown = _measurement_unknown(cards, now)
     if cards_unknown and report['status'] == 'ok':
         report['status'] = 'degraded'
     # a pending count the producer could not observe is unmeasured work,
@@ -395,6 +401,17 @@ def _apply_attachment_ocr(obs: dict, home: str, now: float, cfg: dict) -> None:
     if bad or old is not None:
         obs["state_reasons"] = reasons
 
+def _apply_config_blocked(obs: dict) -> None:
+    """The watcher's own strict settings read failed: name it as current
+    evidence (a settings commit window is brief, so it alerts by streak)."""
+    reasons = list(obs.get("state_reasons") or [])
+    if CONFIG_BLOCKED not in reasons:
+        reasons.append(CONFIG_BLOCKED)
+    obs["state_reasons"] = reasons
+    if obs["status"] == "ok":
+        obs["status"] = "degraded"
+
+
 def _state_unreadable(path: str) -> bool:
     """A present state file that is no regular JSON object.
 
@@ -469,7 +486,7 @@ def _cloud_selection(cfg, root):
 
 
 def evaluate(home: str = HOME, now: float | None = None,
-             cfg: dict | None = None) -> dict:
+             cfg: dict | None = None, *, config_blocked: bool = False) -> dict:
     """Classify current evidence, apply alert dedup, persist state.
 
     Dedup key is (status, evidence_at) for a stale verdict —
@@ -513,6 +530,8 @@ def evaluate(home: str = HOME, now: float | None = None,
     if isinstance(cfg, dict) and cfg.get("runtime_mode") == "standalone":
         _apply_standalone(obs, home, now, cfg)
     _apply_attachment_ocr(obs, home, now, cfg)
+    if config_blocked:
+        _apply_config_blocked(obs)
     state = load_config(state_path)
     last = state.get("last")
     last = last if isinstance(last, dict) else {}
@@ -523,6 +542,20 @@ def evaluate(home: str = HOME, now: float | None = None,
                 else None)
     prior_known = bool(last)
     transition = key != last_key
+    recovered_from = None
+    if transition and obs["status"] == "ok" and isinstance(last.get("status"), str):
+        # Only a fresh in-deadline 'ok' file ends an episode. No notice is
+        # sent (owner decision, 1.0.16); the bounded record is the history.
+        recovered_from = last["status"]
+        history = state.get("recoveries")
+        history = history if isinstance(history, list) else []
+        prior_reasons = state.get("alerted_reasons")
+        state["recoveries"] = [*history, {
+            "recovered_at": now, "from": recovered_from, "health_at": obs.get("health_at"),
+            "detected_at": state.get("detected_at") if finite_number(state.get("detected_at")) else None,
+            "reasons": prior_reasons if isinstance(prior_reasons, list)
+            and all(isinstance(r, str) for r in prior_reasons) else None,
+        }][-UNKNOWN_HISTORY:]
     # a fresh non-ok verdict whose producer codes gain a reason not yet
     # alerted in this episode is news (e.g. degraded by notifications,
     # then also by collection) — a reason that drops and returns stays
@@ -546,7 +579,8 @@ def evaluate(home: str = HOME, now: float | None = None,
     new_reason = bool(prior_known and not transition and gained
                   and obs["status"] != "ok"
                   and (obs["status"] != "stale"
-                       or any(r.startswith(("standalone_", "attachment_ocr_")) for r in gained)))
+                       or any(r.startswith(("standalone_", "attachment_ocr_", CONFIG_BLOCKED))
+                              for r in gained)))
     from mcs_util import valid_hash
     ocr_detail = obs.get('attachment_ocr') or {}
     cohort = ocr_detail.get('failure_cohort')
@@ -608,6 +642,8 @@ def evaluate(home: str = HOME, now: float | None = None,
     report.update({"deadline_s": obs.get("deadline_s", deadline), "alert": alert,
                    "disk_low": disk_low, "disk_alert": disk_alert,
                    "watched_at": now, "alert_held": held})
+    if recovered_from is not None:
+        report["recovered_from"] = recovered_from
     if transient_only and streak and streak["count"]:
         top = max(bases, key=lambda r: streak["count"].get(r, 0))
         report["streak"] = {"count": streak["count"].get(top, 0),
@@ -750,7 +786,7 @@ _REASON_JA = {
     'attachment_ocr_acknowledged_gap': ('過去のOCR警報は受付済みですが、本文は未回収です',
         '原本の確認状況は未確認です。必要な情報は元の添付で確認してください'),
     'attachment_ocr_policy_excluded': ('表構造を検証できない添付を設定に従ってOCR採用対象から除外しています',
-        '原本内容は未評価です。元の投稿から確認してください。日次の再処理は継続します'),
+        '原本内容は未評価です。元の投稿から確認してください。初期の再試行は継続し、上限到達後は入力・方針・版の変更か明示操作で再評価します'),
     'attachment_ocr_ack_unverified': ('OCR警報の受付記録を現在の原資料と照合できません',
         '次回の処理後も続く場合は診断結果と照会コードを開発元へ連絡してください'),
 
@@ -835,6 +871,8 @@ _REASON_JA = {
                                      "翌日に自動で再開します。上限は semantic.daily_request_budget"),
     "semantic_jev_auth_error": ("TypeSafe Jev の認証に失敗しました",
                                 "TYPESAFE_API_KEY の値と有効期限を確認"),
+    CONFIG_BLOCKED: ("設定を確認できず、自動復旧を止めています",
+                     f"{_CHECK} で設定の状態を確認。設定の変更が途中で止まっている場合は設定を保持したまま管理者へ連絡"),
     "unread_collection_unknown": ("未読収集の状況が記録されていません",
                                   f"次回の収集を待ち、続く場合は {_COLLECTION_LOG} を確認"),
     "standalone_host_down": ("独立接続のhostが動いていません",
@@ -886,6 +924,7 @@ def _lineworks_actions() -> dict:
 
 _AREA_JA = (("semantic", "意味チェック（任意機能）"), ("extract_backlog", "要約の抽出"),
             ("cloud_llm", "外部AI処理"),
+            ("provider_settings", "外部AI処理"),
             ("local_llm", "要約の抽出"), ("llm_endpoint", "要約の抽出"),
             ("notification", "通知"), ("card_delivery", "通知"),
             ("collection_incomplete", "一部患者の記録取得"), ("disk_low", "保存"),
@@ -903,6 +942,15 @@ def _jst(ts) -> str:
 
 def _hours(seconds) -> str:
     return f"{seconds / 3600:.1f}時間" if finite_number(seconds) else ""
+
+
+def _measurement_unknown(block, now) -> bool:
+    """An unknown block, or a carried measurement past the render stall age, is unmeasured."""
+    if not isinstance(block, dict):
+        return False
+    observed = block.get('observed_at')
+    return block.get('status') == 'unknown' or block.get('status') == 'stale_measurement' and not (
+        finite_number(observed) and 0 <= now - observed <= CARD_STALL_S)
 
 
 def _part_breakdown(parts, total):
@@ -1043,6 +1091,10 @@ _CLOUD_REASON_JA = {
                                   f"契約・残高を確認し、{_CLOUD_RESUME} で再開"),
     "cloud_llm_pricing_unverified": ("外部AIの料金または使用量を確認できず、処理を停止しました",
                                      f"{_DOCTOR} で料金表と使用量を確認し、問題を解消してから {_CLOUD_RESUME} で再開"),
+    "cloud_llm_restore_paused": ("DBを復元したため、外部AIの新しい送信を止めています",
+                                 "復元時点より後の送信と課金の記録は、復元後のDBにありません。再開すると同じ内容を"
+                                 "再び送ることがあり、その分は上限の集計にも入りません。提供元の利用明細を確認してから "
+                                 f"{_CLOUD_RESUME} で再開"),
     "cloud_llm_circuit_open": ("外部AIへの要求が続けて失敗し、一時停止しています",
                                f"{_DOCTOR} で停止理由を確認し、待機期間後に再確認"),
 }
@@ -1238,9 +1290,12 @@ def _alert_lines(report: dict) -> list[str]:
     return lines
 
 
-def _watch(args, cfg) -> int:
-    report = evaluate(home=args.home, now=args.now, cfg=cfg)
-    if getattr(args, "send", False) and args.now is None:
+def _watch(args, cfg, *, config_blocked: bool = False) -> int:
+    report = evaluate(home=args.home, now=args.now, cfg=cfg, config_blocked=config_blocked)
+    if config_blocked:
+        # recovery requests need verified settings; alerting does not
+        report["auto_recovery"] = {"enabled": False, "actions": [], "reason": CONFIG_BLOCKED}
+    elif getattr(args, "send", False) and args.now is None:
         try:
             from health_recovery import run as auto_recovery
             report["auto_recovery"] = auto_recovery(
@@ -1313,24 +1368,36 @@ def main(argv: list | None = None) -> int:
     args = ap.parse_args(argv)
     if args.now is not None and not finite_number(args.now):
         ap.error("now must be a finite number")
+    blocked = False
     try:
-        cfg = _load_config(args.config or CONF_PATH) or {}
-    except ProviderSettingsUnreadable:
-        print(json.dumps({"status": "blocked", "reason": "provider_settings_unreadable"}), file=sys.stderr)
-        return 1
-    except (OSError, ValueError, TypeError, RecursionError):
-        cfg = {}
+        cfg = _load_config(args.config or CONF_PATH)
+        if cfg is None:
+            raise ValueError("configuration_unreadable")
+    except FileNotFoundError:
+        cfg = {}                         # legacy installs may not have common settings yet
+    except (ProviderSettingsUnreadable, OSError, ValueError, TypeError, RecursionError):
+        # Keep the fault observable even when settings cannot supply an alert target.
+        # Only the alert-only view may be used; recovery still needs verified settings.
+        print(json.dumps({"status": "blocked", "reason": CONFIG_BLOCKED}), file=sys.stderr)
+        blocked, cfg = True, alert_only_config(args.config or CONF_PATH)
+    # A wedged watcher would hold the lock and turn every later run into a
+    # silent no-op: the default SIGALRM action ends it. The send witness is
+    # already durable as 'unknown' before the wire, so a kill never re-sends.
+    signal.alarm(WATCH_TIMEOUT_S)
     try:
         directory = os.path.join(args.home, "data")
         os.makedirs(directory, mode=0o700, exist_ok=True)
         fd = safe_io.open_lock_file(os.path.join(directory, "health_watch.lock"))
         with safe_io.fdopen_owned(fd, "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return _watch(args, cfg)
+            code = _watch(args, cfg, config_blocked=blocked)
+            return 1 if blocked else code
     except BlockingIOError:
         return 0                         # the existing watcher owns this observation
     except OSError:
         return 1                         # unavailable state store is not successful delivery
+    finally:
+        signal.alarm(0)
 
 
 if __name__ == "__main__":

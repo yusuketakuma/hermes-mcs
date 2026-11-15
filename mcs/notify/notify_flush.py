@@ -265,13 +265,15 @@ def _followup_files(ledger, payload: dict, project_id):
 
 _SYSTEM_TEXT = {
     'session_expired': ('🔴 認証切れ', '新しい患者情報を取得できません。',
-                        'MCSへ手動で再ログインしてください。'),
+                        'Macの端末で ~/.local/bin/mcs setup browser を実行し、MCSへログインし直してください。'),
     'session_recovered': ('🟢 自動再ログインで復旧', '認証を復旧しました。収集の完了とは別です。',
                           '次回の収集状況を確認してください。'),
     'run_failed': ('🔴 収集処理の失敗', '新しい患者情報の更新が遅れる可能性があります。',
                    'python3 mcs/ops/mcs_setup.py check で確認してください。'),
     'health_write_failed': ('🔴 監視記録の保存失敗', '最新の稼働状況を確認できません。',
                             '保存先の空き容量と書込み権限を確認してください。'),
+    'health_watch_stalled': ('🔴 監視処理の停止', '収集・通知の異常があっても監視警報が届かない状態です。収集は動いています。',
+                             'python3 mcs/ops/mcs_setup.py check で監視（local.mcs-health / mcs-health.timer）の登録と稼働を確認してください。'),
 }
 
 

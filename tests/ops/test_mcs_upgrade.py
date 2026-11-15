@@ -388,6 +388,7 @@ def test_post_apply_confirmation_failure_reports_hold_without_reapplying(
                 return subprocess.CompletedProcess(command, 0, '{invalid', '')
         return original(command, **kwargs)
     monkeypatch.setattr(launcher.subprocess, 'run', run)
+    monkeypatch.setattr(launcher, '_run_updater', run)
     assert launcher.main(['--repo', str(repo), '--no-fetch', entry, '--to', 'v1.2.0']) == 1
     assert trace.read_text() == 'apply' and len(applied) == 1
     output = capfd.readouterr().out
@@ -634,6 +635,7 @@ def test_launcher_cleans_staging_on_launch_error_or_cancellation(tmp_path, monke
 
     monkeypatch.setattr(launcher, "extract", extract)
     monkeypatch.setattr(launcher.subprocess, "run", run)
+    monkeypatch.setattr(launcher, "_run_updater", run)
     expected = SystemExit if isinstance(failure, OSError) else KeyboardInterrupt
     with pytest.raises(expected):
         launcher.main(["--repo", str(tmp_path), "--no-fetch", "plan", "--to", "v1.2.0"])
@@ -1295,6 +1297,8 @@ def test_extracted_current_updater_imports_with_recovery_helper(tmp_path, monkey
          "import sys; sys.path.insert(0, sys.argv[1]); import _mcs_path; "
          "from semantic_policy import semantic_config; "
          "from semantic_candidate import promotion_problem; "
+         "import semantic_candidate as candidate; "
+         "assert set(candidate._sources()) == set(candidate._MODULES); "
          "cfg = {'semantic': {'fact_source': 'shadow'}, 'cloud_llm': {'mode': 'off'}}; "
          "assert semantic_config(cfg)[1] == []; "
          "assert promotion_problem(cfg, {}) == 'criteria_mismatch'; "

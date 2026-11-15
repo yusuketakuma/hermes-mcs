@@ -1,11 +1,12 @@
 """Call the pinned OpenAI Responses model with the shared guarded attempt lifecycle."""
 from __future__ import annotations
 
+from decimal import Decimal
 from types import MappingProxyType
 
 import bounded_http
 from cloud_client import CloudClient, CloudError, MAX_TOKENS, SYSTEM  # noqa: F401
-from mcs_util import strict_json
+from mcs_util import payload_hash, strict_json
 
 AnthropicError = CloudError
 MODEL = "gpt-6-luna"
@@ -34,7 +35,8 @@ PROFILE_DEFINITIONS = MappingProxyType({
 PROFILE_PURPOSES = frozenset({"backlog", "patient_context", "quality_repair"})
 DEFAULT_PROFILES = MappingProxyType({"backlog": "luna-medium", "patient_context": "sol-medium",
                                      "quality_repair": "sol-high"})
-VALID_MODEL_EFFORTS = frozenset({(MODEL, "low"), *PROFILE_DEFINITIONS.values()})
+ORIGINAL_CONTRACT = (MODEL, "low")
+VALID_MODEL_EFFORTS = frozenset({ORIGINAL_CONTRACT, *PROFILE_DEFINITIONS.values()})
 QUOTA_ERROR_CODES = frozenset({"insufficient_quota", "credit_balance_exhausted",
                                "organization_spend_limit_exceeded", "project_spend_limit_exceeded",
                                "organization_usage_limit_exceeded"})
@@ -130,9 +132,42 @@ PRICE_SNAPSHOTS = MappingProxyType({
 })
 
 
+def provider_contract(model, effort):
+    """Reuse key of one finite Responses request shape."""
+    return {"backend": "openai", "model": model,
+            "prompt": payload_hash({"system": SYSTEM, "effort": effort,
+                                    "service_tier": "default", "cache_ttl": "30m"})[:16]}
+
+
+def reservation_cost(definition, input_bound, max_tokens, *, legacy=False):
+    """Worst-case cost of one request at the reservation rates; no legacy bound exists."""
+    if legacy:
+        raise AnthropicError("pricing_unverified", "reservation_bound_invalid")
+    prices = definition["prices"]
+    return (Decimal(input_bound) * Decimal(prices["reservation_input"])
+            + Decimal(max_tokens) * Decimal(prices["reservation_output"])) / Decimal(1000000)
+
+
+def usage_cost(definition, u, *, input_limit):
+    """Price validated usage; cached and cache-written input are part of input_tokens."""
+    prices = definition["prices"]
+    if u["input_tokens"] > input_limit or u["output_tokens"] > definition["max_tokens"]:
+        raise AnthropicError("pricing_unverified", "usage_bounds")
+    cached, written = (u["input_tokens_details"][k] for k in ("cached_tokens", "cache_write_tokens"))
+    long = u["input_tokens"] > definition["long_input_threshold"]
+    value = (Decimal(u["input_tokens"] - cached - written) * Decimal(prices["input"])
+             + Decimal(cached) * Decimal(prices["cached_input"]) + Decimal(written) * Decimal(prices["cache_write_30m"]))
+    if long:
+        value *= Decimal(prices["long_input_multiplier"])
+    return (value + Decimal(u["output_tokens"]) * Decimal(prices["long_output"] if long else prices["output"])) / Decimal(1000000)
+
+
 class OpenAIClient(CloudClient):
     """Reuse bounded retries, reservations and uncertain-send handling for Responses."""
     MODEL = MODEL
+    # Class defaults keep the original contract for subclasses that replace __init__.
+    model = MODEL
+    effort = "low"
 
     def __init__(self, api_key, *, model=MODEL, effort="low", **kwargs):
         if not isinstance(model, str) or not isinstance(effort, str) or (model, effort) not in VALID_MODEL_EFFORTS:
@@ -216,3 +251,8 @@ class OpenAIClient(CloudClient):
             raise AnthropicError("contract_error", "incomplete_response")
         return {"status": 200, "text": answer, "finish_reason": "length" if length else "stop",
                 "model": self.model, "usage": meta["usage"]}
+
+
+def client_class():
+    """This provider's client, read at call time so a replaced OpenAIClient is used."""
+    return OpenAIClient

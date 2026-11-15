@@ -15,6 +15,9 @@
 バックアップから戻す際は、失われるデータの確認と、その復元への人の承認が必要です。
 承認待ちは自動解除しません。結果は data/recovery_report.json に保存します。
 定期監視では対応不要の場合は何も表示せず、終了コード 0 で終わります。
+復旧を保留した場合は理由を表示し、同じ保留は復旧結果の記録に一度だけ残します。
+定期監視で更新記録が新しい間の提供元設定と導入設定の移行による保留と、
+導入先フォルダーを確認できない場合の保留は記録しません。
 問題を調べるときは、まず --status と復旧結果の記録を確認してください。
 """
 import ast as ast
@@ -305,7 +308,7 @@ def recover(if_stale=False):
             root = mcs_recovery_core._RecoveryRoot(os.path.dirname(mcs_recovery_core.DATA))
         except FileNotFoundError:
             if os.path.lexists(os.path.dirname(mcs_recovery_core.DATA)):
-                return 2
+                return _hold("provider_directory_unverified", 2, trusted=False)
         mcs_recovery_core._RECOVERY_ROOT = root
         # The root anchor precedes the gate and every recovery read.
         with ExitStack() as scope:
@@ -315,8 +318,17 @@ def recover(if_stale=False):
                 return 0
             mcs_recovery_core._check_recovery_root()
             return _recover_legacy(if_stale=if_stale)
-    except (OSError, ValueError, mcs_recovery_core._RecoveryRootChanged):
-        return 2
+    except (OSError, ValueError, mcs_recovery_core._RecoveryRootChanged) as exc:
+        if exc.args != ("release_entry_hold",):
+            return _hold("recovery_unverified", 2, trusted=False)
+        try:
+            trusted = _provider_settings_state() != "provider_directory_unverified"
+        except mcs_recovery_core._RecoveryRootChanged:
+            trusted = False
+        try:
+            return _hold("release_entry_hold", 2, trusted=trusted)
+        except mcs_recovery_core._RecoveryRootChanged:
+            return 2                        # reason printed; the root moved before the record
     finally:
         mcs_recovery_core._RECOVERY_ROOT = previous
         if root is not None:
@@ -365,63 +377,317 @@ def _settings_migration_pending():
         os.close(fd)
 
 
-def _provider_settings_unverified():
-    """Hold recovery whenever split-provider state is present or unprovable."""
+# = provider_settings: PROVIDERS, the private-file limit and the namespace names.
+_PROVIDERS = ("anthropic", "openai", "jev")
+_PROVIDER_FILE_MAX_BYTES = 1024 * 1024
+_PROVIDER_IN_FLIGHT = ('.provider-settings-pending.json', '.provider-bootstrap-fresh.json',
+                       '.provider-bootstrap-complete.json')
+_PROVIDER_FIXED = ('.provider-settings-pending.json', '.provider-settings-authority.json', 'provider_settings')
+_PROVIDER_REMNANTS = ('.provider-settings-backup-', '.provider-settings-stage-')
+# = update_lifecycle_context._SPLIT_SOURCE_ROOTS and the readers that
+# update_repository._split_target_source_matches requires in a split tree.
+_SPLIT_SOURCE_ROOTS = ("mcs", "mcs_standalone", "adapters", "hermes_plugin",
+                       "lineworks_adapter", "deployment", "scripts", "install.sh", "pyproject.toml")
+_SPLIT_READERS = ("mcs/core/mcs_util.py", "mcs/core/provider_settings.py", "mcs/core/mcs_config.py",
+                  "mcs/core/safe_io.py", "mcs/llm/cloud_policy.py", "mcs/semantic/semantic_jev.py")
+
+
+def _file_identity(value):
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_nlink,
+            value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+
+def _private_bytes(parent_fd, name, private=True):
+    """= provider_settings._read_file: stable bytes of a regular (0600 when private) file."""
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=parent_fd)
+    try:
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_size > _PROVIDER_FILE_MAX_BYTES
+                or private and (before.st_uid != os.getuid()
+                                or stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1)):
+            raise ValueError("provider_file_invalid")
+        raw = b""
+        while len(raw) <= _PROVIDER_FILE_MAX_BYTES:
+            chunk = os.read(fd, _PROVIDER_FILE_MAX_BYTES + 1 - len(raw))
+            if not chunk:
+                break
+            raw += chunk
+        after = os.fstat(fd)
+        named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    finally:
+        os.close(fd)
+    if (len(raw) > _PROVIDER_FILE_MAX_BYTES or _file_identity(before) != _file_identity(after)
+            or _file_identity(after) != _file_identity(named)):
+        raise ValueError("provider_file_changed")
+    return raw, _file_identity(after)
+
+
+def _strict_json(raw):
+    """= mcs_util.strict_json: no duplicate keys or nonfinite constants."""
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("provider_json_invalid")
+            value[key] = item
+        return value
+
+    def constant(_name):
+        raise ValueError("provider_json_invalid")
+
+    return json.loads(raw.decode("utf-8"), object_pairs_hook=unique, parse_constant=constant)
+
+
+def _common_policy_digest(common):
+    """= provider_settings.common_policy_digest over mcs_util.canonical."""
+    return hashlib.sha256(json.dumps(
+        {key: value for key, value in common.items() if key not in ("drug_map", "sdc", "install_args")},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")).hexdigest()
+
+
+def _check_common(raw, policy_hash):
+    """Hold unless config.json is the common policy the authority committed.
+
+    = provider_settings._read for verified provider files: the digest must match
+    and config.json must not also carry provider-owned values.
+    """
+    common = _strict_json(raw)
+    if not isinstance(common, dict) or _common_policy_digest(common) != policy_hash:
+        raise ValueError("provider_authority_invalid")
+    cloud, semantic = common.get("cloud_llm"), common.get("semantic")
+    if (isinstance(cloud, dict) and ("model" in cloud or "profiles" in cloud
+            or "provider_budgets" in cloud and cloud["provider_budgets"] != {})
+            or isinstance(semantic, dict) and bool(semantic.keys() & {
+                "model", "daily_request_budget", "until", "attempt_timeout_seconds",
+                "max_attempts_per_try", "max_questions_per_request"})):
+        raise ValueError("provider_config_ambiguous")
+
+
+def _authority_hashes(raw):
+    """Check the committed authority shape that provider_settings._read accepts."""
+    authority = _strict_json(raw)
+    required = {"version", "state", "files", "common_policy_sha256"}
+    digest = re.compile(r"[0-9a-f]{64}")
+    if (not isinstance(authority, dict)
+            or set(authority) not in (required, required | {"configuration_state"})
+            or authority.get("configuration_state", "bootstrap") != "bootstrap"
+            or type(authority["version"]) is not int or authority["version"] != 2
+            or authority["state"] != "committed"
+            or not isinstance(authority["common_policy_sha256"], str)
+            or digest.fullmatch(authority["common_policy_sha256"]) is None
+            or not isinstance(authority["files"], dict) or set(authority["files"]) != set(_PROVIDERS)
+            or any(not isinstance(value, str) or digest.fullmatch(value) is None
+                   for value in authority["files"].values())):
+        raise ValueError("provider_authority_invalid")
+    return authority["files"], authority["common_policy_sha256"]
+
+
+def _provider_snapshot(root_fd, data_fd):
+    """One pass over data/: 'legacy', 'provider_settings_pending' or a split snapshot.
+
+    Only the authority JSON and config.json (already read by _runtime_config)
+    are parsed. Provider files are compared as opaque
+    bytes against its hashes; backup and stage remnants are never opened
+    (they hold earlier settings and are retained by provider_settings._commit).
+    """
+    for name in _PROVIDER_IN_FLIGHT:
+        try:
+            os.stat(name, dir_fd=data_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        return "provider_settings_pending"
+    names = set()
+    for name in _PROVIDER_FIXED:
+        try:
+            os.stat(name, dir_fd=data_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        names.add(name)
+    with os.scandir(data_fd) as entries:
+        for index, entry in enumerate(entries):
+            if index >= 100000:
+                raise ValueError("provider_artifact_scan_limit")
+            if entry.name in _PROVIDER_FIXED or entry.name.startswith(_PROVIDER_REMNANTS):
+                names.add(entry.name)
+    if not names:
+        return "legacy"
+    if '.provider-settings-pending.json' in names or '.provider-settings-authority.json' not in names:
+        raise ValueError("provider_authority_missing")
+    raw, authority = _private_bytes(data_fd, '.provider-settings-authority.json')
+    hashes, policy_hash = _authority_hashes(raw)
+    raw, common = _private_bytes(root_fd, "config.json", private=False)   # missing -> OSError -> hold
+    _check_common(raw, policy_hash)
+    settings_fd = os.open('provider_settings', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                          dir_fd=data_fd)
+    try:
+        held = os.fstat(settings_fd)
+        if held.st_uid != os.getuid() or stat.S_IMODE(held.st_mode) != 0o700:
+            raise ValueError("provider_directory_invalid")
+        files = []
+        for name in _PROVIDERS:
+            raw, identity = _private_bytes(settings_fd, name + ".json")
+            if hashlib.sha256(raw).hexdigest() != hashes[name]:
+                raise ValueError("provider_authority_invalid")
+            files.append(identity)
+        named = os.stat('provider_settings', dir_fd=data_fd, follow_symlinks=False)
+        if _file_identity(named) != _file_identity(held) or _file_identity(os.fstat(settings_fd)) != _file_identity(held):
+            raise ValueError("provider_settings_changed")
+    finally:
+        os.close(settings_fd)
+    return (frozenset(names), authority, common, _file_identity(held), tuple(files))
+
+
+def _provider_settings_state():
+    """'legacy', 'split' (settled and verified), or the reason to hold recovery.
+
+    Pending, bootstrap, incomplete, unprovable and changed-during-scan states
+    hold. 'provider_directory_unverified' means the report path is untrusted.
+    """
+    unverified = "provider_directory_unverified"
     root = os.path.dirname(os.path.abspath(mcs_recovery_core.DATA))
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     try:
         mcs_recovery_core._check_recovery_root()
         root_fd = os.dup(mcs_recovery_core._RECOVERY_ROOT.fd) if mcs_recovery_core._RECOVERY_ROOT is not None else os.open(root, flags)
     except FileNotFoundError:
-        return os.path.lexists(root)
+        return unverified if os.path.lexists(root) else "legacy"
     except OSError:
-        return True
+        return unverified
     try:
         root_info = os.fstat(root_fd)
         root_path = os.stat(root, follow_symlinks=mcs_recovery_core._RECOVERY_ROOT is not None)
         if (root_info.st_uid != os.getuid() or root_info.st_mode & 0o022
                 or (root_info.st_dev, root_info.st_ino) != (root_path.st_dev, root_path.st_ino)):
-            return True
+            return unverified
         try:
             data_fd = os.open(os.path.basename(mcs_recovery_core.DATA), flags, dir_fd=root_fd)
         except FileNotFoundError:
-            return os.path.lexists(mcs_recovery_core.DATA)
+            return unverified if os.path.lexists(mcs_recovery_core.DATA) else "legacy"
         try:
             before = os.fstat(data_fd)
             current = os.stat(mcs_recovery_core.DATA, follow_symlinks=False)
             if (before.st_uid != os.getuid() or before.st_mode & 0o022
                     or (before.st_dev, before.st_ino) != (current.st_dev, current.st_ino)):
-                return True
-            for name in ('.provider-settings-pending.json', '.provider-settings-authority.json', 'provider_settings'):
-                try:
-                    os.stat(name, dir_fd=data_fd, follow_symlinks=False)
-                except FileNotFoundError:
-                    continue
-                return True
-            with os.scandir(data_fd) as entries:
-                for index, entry in enumerate(entries):
-                    if index >= 100000 or entry.name.startswith(
-                            ('.provider-settings-backup-', '.provider-settings-stage-')):
-                        return True
+                return unverified
+            try:
+                first = _provider_snapshot(root_fd, data_fd)
+                second = _provider_snapshot(root_fd, data_fd)
+            except (OSError, ValueError, TypeError, KeyError, RecursionError):
+                return "provider_settings_unverified"
+            if first != second:
+                return "provider_settings_unverified"
             after = os.fstat(data_fd)
             current = os.stat(mcs_recovery_core.DATA, follow_symlinks=False)
-            def identity(value):
-                return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
-                        value.st_mtime_ns, value.st_ctime_ns)
+            # Runtime churn in data/ moves only its times; the provider namespace
+            # and file identities above decide, as in provider_settings._read.
+            def anchor(value):
+                return (value.st_dev, value.st_ino, value.st_mode, value.st_uid)
             root_after = os.fstat(root_fd)
             mcs_recovery_core._check_recovery_root()
             root_current = os.stat(root, follow_symlinks=mcs_recovery_core._RECOVERY_ROOT is not None)
-            def root_identity(value):
-                return (value.st_dev, value.st_ino, value.st_mode, value.st_uid)
-            return (identity(before) != identity(after) or identity(after) != identity(current)
-                    or root_identity(root_info) != root_identity(root_after)
-                    or root_identity(root_after) != root_identity(root_current))
+            if (anchor(before) != anchor(after) or anchor(after) != anchor(current)
+                    or anchor(root_info) != anchor(root_after) or anchor(root_after) != anchor(root_current)):
+                return unverified
+            return first if isinstance(first, str) else "split"
         finally:
             os.close(data_fd)
     except OSError:
-        return True
+        return unverified
     finally:
         os.close(root_fd)
+
+
+def _split_checkout_hold(applying):
+    """Why a settled split install must not take a watchdog route, or None.
+
+    Like update_recovery under split settings: run only the current HEAD with
+    its settings readers and an unmodified tree, so no route switches the tree,
+    and leave rollback (another version's readers) to the target updater.
+    """
+    if isinstance(applying, dict) and applying.get("rollback"):
+        return "provider_rollback_hold"
+    head = mcs_recovery_core._head()
+    if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head) is None:
+        return "provider_checkout_hold"
+    for name in _SPLIT_READERS:
+        found = mcs_recovery_core._git(["cat-file", "-e", head + ":" + name])
+        if found is None or found.returncode != 0:
+            return "provider_checkout_hold"
+    if os.path.lexists(os.path.join(mcs_recovery_core.REPO, ".git", "MERGE_HEAD")):
+        return "provider_checkout_hold"
+    # None (unverifiable, including sha256 object ids) holds as well.
+    if mcs_recovery_core._local_changes_outside(head, head) != []:
+        return "provider_checkout_hold"
+    extras = mcs_recovery_core._git(["ls-files", "--others", "-z", "--", *_SPLIT_SOURCE_ROOTS])
+    if extras is None or extras.returncode != 0 or any(
+            path and not (path.endswith(".pyc") and "__pycache__" in path.split("/"))
+            for path in extras.stdout.split("\0")):
+        return "provider_checkout_hold"
+    return None if mcs_recovery_core._head() == head else "provider_checkout_hold"
+
+
+_HOLD_TEXT = {
+    "settings_migration_hold": ("導入設定の移行結果を確認できません。保留記録と設定を保持し、担当者に確認してください。",
+                                "install options migration result is unverified"),
+    "provider_settings_pending": ("提供元設定の書込みまたは初回導入が完了していないため復旧を保留します。設定と保留記録を保持してください。",
+                                  "provider settings write or bootstrap is pending"),
+    "provider_settings_unverified": ("提供元設定を確認できないため復旧を保留します。設定と保留記録を保持してください。",
+                                     "provider settings are incomplete, unprovable or changed during the check"),
+    "provider_directory_unverified": ("導入先フォルダーを確認できないため復旧を保留します。設定と保留記録を保持してください。",
+                                      "installation directory is unverified"),
+    "provider_editor_lock_invalid": ("設定の編集ロックを確認できないため復旧を保留します。設定と保留記録を保持してください。",
+                                     "config editor lock is unverified"),
+    "provider_checkout_hold": ("提供元別設定の導入先で、プログラムが変更なしの対応版であることを確認できないため復旧を保留します。"
+                               "mcs_update.py recover で確認してください。",
+                               "split settings need an unmodified checkout with settings readers at HEAD"),
+    "provider_rollback_hold": ("提供元別設定の導入先では、独立監視は巻戻しを続けません。mcs_update.py recover で復旧してください。",
+                               "split settings rollback is left to the target updater"),
+    "provider_migration_pending": ("提供元設定の初回分離を確認できないため復旧を保留します。移行先の版の mcs_update.py recover で復旧してください。",
+                                   "provider migration requires target updater recovery; writer status unverified"),
+    "release_entry_hold": ("リリース管理の記録があるか、その管理フォルダーを確認できないため、独立復旧監視は復旧を保留します。"
+                           "記録を削除せず、mcs_update.py status で確認してください。",
+                           "release owner state is present or its control directory is unverified"),
+    "recovery_unverified": ("導入先フォルダーまたは復旧に使うファイルを確認できないため復旧を保留します。"
+                            "設定と保留記録を保持し、--status と復旧結果の記録を確認してください。",
+                            "recovery root or files are unverified"),
+    "provider_migration_hold_unverified": ("復旧の保留記録を確認できません。保留記録と設定を保持し、担当者に確認してください。",
+                                           "provider hold marker could not be verified"),
+}
+
+
+def _carried(last):
+    """Keys of the previous report that a hold record must not drop."""
+    return {key: last[key] for key, kinds in (("drainers_key", (str,)), ("alert_key", (str,)),
+                                              ("notified_at", (int, float)))
+            if type(last.get(key)) in kinds}
+
+
+def _hold(result, code, trusted=True, record=True):
+    """Print the hold and record it once; an unchanged hold is not rewritten."""
+    print(_HOLD_TEXT[result][0])
+    if trusted and record:
+        last = mcs_recovery_core._last_report()
+        if (last.get("result"), last.get("held")) != (result, True):
+            mcs_recovery_core._report(result, _HOLD_TEXT[result][1], held=True, writers_stopped=False,
+                                      **_carried(last))
+    return code
+
+
+def _journal_fresh(state):
+    """The newest journal entry is younger than STALE_S (an apply may still own it)."""
+    applying = state.get("applying")
+    if not applying and not state.get("stages"):
+        return False
+    last = max([s.get("at", 0) for s in state.get("stages", [])]
+               + [(applying or {}).get("at", 0)])
+    return bool(last) and time.time() - last < mcs_recovery_core.STALE_S
+
+
+def _clear_hold():
+    """Record once that an earlier hold no longer applies."""
+    last = mcs_recovery_core._last_report()
+    if last.get("held") is True and _provider_settings_state() != "provider_directory_unverified":
+        mcs_recovery_core._report("hold_cleared", "earlier watchdog hold no longer applies", **_carried(last))
 
 
 def _lock_provider_editor():
@@ -469,13 +735,13 @@ def _lock_provider_editor():
 
 def _recover_legacy(if_stale=False):
     mcs_recovery_core._check_recovery_root()
-    if _settings_migration_pending():
-        print('導入設定の移行結果を確認できません。保留記録と設定を保持し、担当者に確認してください。')
-        return 2
-    if _provider_settings_unverified():
-        print('提供元設定を確認できないため復旧を保留します。設定と保留記録を保持してください。')
-        return 2
     state = mcs_recovery_core._load_state()
+    # Without the locks a running apply looks like a hold: the periodic run
+    # prints it but leaves the record to a stale journal or the locked check.
+    record = not (if_stale and _journal_fresh(state))
+    if _settings_migration_pending():
+        return _hold("settings_migration_hold", 2, record=record,
+                     trusted=_provider_settings_state() != "provider_directory_unverified")
     if state.get("_corrupt"):
         mcs_recovery_core._report("corrupt_state",
                 "update_state.json unreadable — escalate, do nothing")
@@ -487,7 +753,11 @@ def _recover_legacy(if_stale=False):
     stages = [s.get("stage") for s in state.get("stages", [])]
     if not applying and not stages \
             and not os.path.exists(mcs_recovery_core.MARKER_PATH):
-        return 0
+        _clear_hold()
+        return 0                            # nothing to recover in any provider settings state
+    provider_state = _provider_settings_state()
+    if provider_state not in ("legacy", "split"):
+        return _hold(provider_state, 2, record=record, trusted=provider_state != "provider_directory_unverified")
     upd_fd = mcs_recovery_core._try_lock(mcs_recovery_core.UPDATE_LOCK)
     if upd_fd is None:
         return 0                            # an apply is alive
@@ -504,13 +774,17 @@ def _recover_legacy(if_stale=False):
         try:
             editor_fd = _lock_provider_editor()
         except (OSError, ValueError):
-            return 2
-        if editor_fd is None or _provider_settings_unverified():
-            return 2
+            return _hold("provider_editor_lock_invalid", 2)
+        if editor_fd is None:
+            return 2                        # an editor is publishing — retry
         mcs_recovery_core._check_recovery_root()
         state = mcs_recovery_core._load_state()               # fresh view under the locks
+        record = not (if_stale and _journal_fresh(state))
+        provider_state = _provider_settings_state()
+        if provider_state not in ("legacy", "split"):
+            return _hold(provider_state, 2, record=record, trusted=provider_state != "provider_directory_unverified")
         if _settings_migration_pending():
-            return 2
+            return _hold("settings_migration_hold", 2, record=record)
         if state.get("_corrupt"):
             mcs_recovery_core._report("corrupt_state", "update_state.json unreadable under lock")
             return 2
@@ -520,18 +794,13 @@ def _recover_legacy(if_stale=False):
         applying = state.get("applying")
         stages = [s.get("stage") for s in state.get("stages", [])]
 
-        def provider_migration_hold():
+        def provider_migration_hold(result="provider_migration_pending"):
+            # The marker prevents new launches; it is not stop evidence.
             try:
                 mcs_recovery_core._ensure_recovery_marker()
             except (OSError, ValueError):
-                mcs_recovery_core._report("provider_migration_hold_unverified",
-                        "provider migration hold marker could not be verified",
-                        writers_stopped=False)
-                return 1
-            mcs_recovery_core._report("provider_migration_pending",
-                    "provider migration requires target updater recovery; writer status unverified",
-                    writers_stopped=False)
-            return 1
+                return _hold("provider_migration_hold_unverified", 1)
+            return _hold(result, 1)
 
         if isinstance(applying, dict) and "provider_settings_migration_required" in applying:
             required = applying["provider_settings_migration_required"]
@@ -547,11 +816,8 @@ def _recover_legacy(if_stale=False):
                         or not head or head != prev or head == target)
             if hold:
                 return provider_migration_hold()
-        if if_stale and (applying or stages):
-            last = max([s.get("at", 0) for s in state.get("stages", [])]
-                       + [(applying or {}).get("at", 0)])
-            if last and time.time() - last < mcs_recovery_core.STALE_S:
-                return 0                    # newest locked journal is still fresh
+        if if_stale and _journal_fresh(state):
+            return 0                        # newest locked journal is still fresh
         if isinstance(applying, dict) and "runtime_migration" in applying:
             # Only the target updater may change an interrupted source+venv migration.
             _report_alert("runtime_migration_pending", state,
@@ -560,6 +826,16 @@ def _recover_legacy(if_stale=False):
                           "常駐処理の状態は未確認です。移行先の版の更新ツール"
                           "（mcs_update.py recover）で復旧してください")
             return 1
+        if provider_state == "split":
+            reason = _split_checkout_hold(applying)
+            if reason == "provider_checkout_hold":
+                # Keep an existing marker but never create one: an apply that
+                # died before quiesce left writers running, and no tool would
+                # remove a new marker on a tree the updater also refuses.
+                return _hold(reason, 1)
+            if reason is not None:
+                return provider_migration_hold(reason)
+        _clear_hold()
         schema_rollback = (isinstance(applying, dict) and applying.get("rollback")
                            and applying.get("schema_bump") is not False
                            and (applying.get("schema_bump") is not None or applying.get("backup_path")))

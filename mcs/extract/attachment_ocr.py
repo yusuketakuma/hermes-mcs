@@ -256,7 +256,7 @@ def current(db, attachment_id, project_id=None):
 
 
 def rejection_policy(cfg):
-    """Identify an explicit reversible exclusion policy, independently of OCR retries."""
+    """Identify the current reversible structural exclusion policy."""
     if (not isinstance(cfg, dict) or config_error(cfg)
             or cfg.get("attachment_ocr", {}).get("enabled") is not True
             or cfg["attachment_ocr"].get("reject_uncertain") is not True):
@@ -428,7 +428,11 @@ def _document_text(document):
 
 
 def _parse_output(raw):
-    value = json.loads(raw)
+    try:
+        value = json.loads(raw)
+    except RecursionError:
+        # nesting past the parser's depth is a broken structure like any other
+        raise ValueError("output_schema") from None
     if not isinstance(value, dict) or value.get("engine_version") != ENGINE_VERSION:
         raise ValueError("engine_version")
     items = value.get("pages")
@@ -593,6 +597,24 @@ def _due(doc, source, *, retry_failed_before=None):
     return next_try <= time.time()
 
 
+
+def _retry_due(db, doc, source, cfg, *, retry_failed_before=None):
+    """Keep ordinary retry timing; stop only a current proven exhausted policy exclusion."""
+    if not _due(doc, source, retry_failed_before=retry_failed_before):
+        return False
+    if (not _matching(doc, source) or doc.get("state") != "failed"
+            or doc.get("reason") != "output_schema_table_overlap"
+            or type(doc.get("attempts")) is not int or doc["attempts"] != 3):
+        return True
+    # _due already validates both timestamps before a matching failed cutoff can pass.
+    if retry_failed_before is not None and doc["_recorded_at"] < retry_failed_before:
+        return True
+    if rejection_policy(cfg) is None:
+        return True
+    rejected = rejected_failure(db, source["attachment_id"], source["project_id"], cfg=cfg)
+    return rejected is None or rejected["artifact_id"] != doc["artifact_id"]
+
+
 def _settings_current(settings):
     try:
         live = load_config()
@@ -646,7 +668,8 @@ def _settle(ledger, source, doc, root, generation, settings, deadline=None, *, r
                         or any(latest[key] != source[key] for key in ("message_id", "sha256", "bytes"))
                         or doc.get("input_occurrence") is not None
                         and doc["input_occurrence"] != _source_occurrence(ledger.db, latest)
-                        or not _due(_latest(ledger.db, latest), latest, **({"retry_failed_before": retry_failed_before}
+                        or not _retry_due(ledger.db, _latest(ledger.db, latest), latest,
+                            {"attachment_ocr": settings}, **({"retry_failed_before": retry_failed_before}
                             if retry_failed_before is not None else {}))):
                     return False
                 dependencies = capture_dependencies_tx(ledger.db, attachment_id=source["attachment_id"])
@@ -729,7 +752,7 @@ def run_pending(ledger, cfg, *, deadline=None, limit=1, retry_failed_before=None
             if source is None:
                 continue
             prior = _latest(ledger.db, source)
-            if not _due(prior, source, **({"retry_failed_before": retry_failed_before}
+            if not _retry_due(ledger.db, prior, source, cfg, **({"retry_failed_before": retry_failed_before}
                     if retry_failed_before is not None else {})):
                 continue
             occurrence = _source_occurrence(ledger.db, source)

@@ -17,16 +17,17 @@ def test_services_renders_bootstraps_and_registers(monkeypatch, tmp_path):
     # ("MCS job drain" vs canonical "MCS durable drain")
     calls, args = _services_env(
         monkeypatch, tmp_path, cron_names={"mcs_check.sh"})
+    desired = service_contract.desired_agent_labels(mcs_util.load_config())
     assert mcs_setup.cmd_services(args) == 0
     # wrapper scripts rendered with placeholders substituted
     s = (tmp_path / "scripts" / "mcs_check.sh").read_text()
     assert "__PYTHON__" not in s and "/h/venv/bin/python" in s
     # every launchd plist rendered and bootstrapped
-    for label in service_contract.AGENT_LABELS:
+    for label in desired:
         body = (tmp_path / "agents" / f"{label}.plist").read_text()
         assert "__REPO__" not in body
     boots = [a for a in calls if a[:2] == ["launchctl", "bootstrap"]]
-    assert len(boots) == len(service_contract.AGENT_LABELS) == 6
+    assert len(boots) == len(desired) == 7
     # cron: the job whose script is already registered is skipped;
     # the other 6 (incl. OCR and the update check) are created
     creates = [" ".join(a) for a in calls
@@ -44,13 +45,13 @@ def test_services_renders_bootstraps_and_registers(monkeypatch, tmp_path):
     offsite = tmp_path / "scripts" / "mcs_offsite.sh"
     assert offsite.is_file() and "ENABLED=0" in offsite.read_text()
     assert not any("mcs_offsite.sh" in command for command in creates)
-    assert len(manifest["agents"]) == len(service_contract.AGENT_LABELS)
+    assert len(manifest["agents"]) == len(desired)
     assert len(manifest["cron"]) == 7
 
 
 def test_services_skips_loaded_agents_and_existing_cron(
         monkeypatch, tmp_path):
-    loaded = set(service_contract.AGENT_LABELS)
+    loaded = set(service_contract.desired_agent_labels({}))
     calls, args = _services_env(
         monkeypatch, tmp_path, loaded=loaded,
         cron_entries=[{"id": f"{i:06d}", "name": n, "schedule": s,
@@ -60,7 +61,7 @@ def test_services_skips_loaded_agents_and_existing_cron(
     subs = service_management.service_substitutions(
         mcs_util.load_config(), paths=mcs_setup._service_paths())
     (tmp_path / "agents").mkdir(parents=True)
-    for label in service_contract.AGENT_LABELS:
+    for label in loaded:
         body = scheduled_jobs.render_template(
             (Path(mcs_setup.REPO_ROOT) / "deployment/launchagents"
              / f"{label}.plist").read_text(), subs)
@@ -385,10 +386,10 @@ def test_services_installs_gateway_when_interactive(
         monkeypatch, tmp_path,
         loaded=set(service_contract.AGENT_LABELS),
         cron_names={s for _, _, s in scheduled_jobs.CRON_JOBS})
-    _previous_service_load_config_1434 = mcs_util.load_config
+    _previous_service_load_config_1434 = mcs_util.load_config_checked
     monkeypatch.setattr(
-        mcs_util, 'load_config',
-        lambda path=None: _previous_service_load_config_1434(path) if path else
+        mcs_util, 'load_config_checked',
+        lambda path=None, **kw: _previous_service_load_config_1434(path) if path else
         {"notify": {"interactive": "discord"}})
     calls.clear()
     # fake_run returns empty stdout -> "supervised" absent -> install
@@ -404,10 +405,10 @@ def test_services_gateway_supervised_is_noop(monkeypatch, tmp_path):
         monkeypatch, tmp_path,
         loaded=set(service_contract.AGENT_LABELS),
         cron_names={s for _, _, s in scheduled_jobs.CRON_JOBS})
-    _previous_service_load_config_1452 = mcs_util.load_config
+    _previous_service_load_config_1452 = mcs_util.load_config_checked
     monkeypatch.setattr(
-        mcs_util, 'load_config',
-        lambda path=None: _previous_service_load_config_1452(path) if path else
+        mcs_util, 'load_config_checked',
+        lambda path=None, **kw: _previous_service_load_config_1452(path) if path else
         {"notify": {"interactive": "discord"}})
 
     def fake_run(argv, **kw):
@@ -441,8 +442,8 @@ def test_standalone_services_owns_one_host_and_no_hermes_jobs(monkeypatch, tmp_p
     calls, args = _services_env(monkeypatch, tmp_path)
     requests = []
     monkeypatch.setattr(service, "request_restart", lambda root: requests.append(root))
-    _previous_service_load_config_1488 = mcs_util.load_config
-    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: _previous_service_load_config_1488(path) if path else {"runtime_mode": "standalone"})
+    _previous_service_load_config_1488 = mcs_util.load_config_checked
+    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda path=None, **kw: _previous_service_load_config_1488(path) if path else {"runtime_mode": "standalone"})
     monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: pytest.fail("Hermes must not be resolved"))
     assert mcs_setup.cmd_services(args) == 0
@@ -462,8 +463,8 @@ def test_standalone_loaded_host_without_heartbeat_starts_without_kill(monkeypatc
     from mcs_standalone import service
 
     calls, args = _services_env(monkeypatch, tmp_path, loaded={service_contract.STANDALONE_LABEL})
-    _previous_service_load_config_1508 = mcs_util.load_config
-    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: _previous_service_load_config_1508(path) if path else {"runtime_mode": "standalone"})
+    _previous_service_load_config_1508 = mcs_util.load_config_checked
+    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda path=None, **kw: _previous_service_load_config_1508(path) if path else {"runtime_mode": "standalone"})
     monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
     attempts = iter([False, True])
 
@@ -482,8 +483,8 @@ def test_standalone_mode_switch_stops_only_previous_owned_jobs(monkeypatch, tmp_
                                cron_entries=[{"id": "aaaaaa", "name": "old", "schedule": "*/5 * * * *", "script": "mcs_check.sh"},
                                              {"id": "bbbbbb", "name": "other", "schedule": "0 0 * * *", "script": "other.sh"}])
     service_management.save_manifest({'agents': [{'label': 'local.mcs-int'}], 'cron': [{'script': 'mcs_check.sh'}]}, paths=mcs_setup._service_paths())
-    _previous_service_load_config_1527 = mcs_util.load_config
-    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: _previous_service_load_config_1527(path) if path else {"runtime_mode": "standalone"})
+    _previous_service_load_config_1527 = mcs_util.load_config_checked
+    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda path=None, **kw: _previous_service_load_config_1527(path) if path else {"runtime_mode": "standalone"})
     monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
     assert mcs_setup.cmd_services(args) == 0
     assert ["/x/hermes", "cron", "remove", "aaaaaa"] in calls
@@ -570,8 +571,8 @@ def test_changed_standalone_plist_is_reloaded_into_launchd(monkeypatch, tmp_path
 
     monkeypatch.delenv("XPC_SERVICE_NAME", raising=False)
     calls, args = _services_env(monkeypatch, tmp_path, loaded={service_contract.STANDALONE_LABEL})
-    _previous_service_load_config_2348 = mcs_util.load_config
-    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: _previous_service_load_config_2348(path) if path else {"runtime_mode": "standalone"})
+    _previous_service_load_config_2348 = mcs_util.load_config_checked
+    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda path=None, **kw: _previous_service_load_config_2348(path) if path else {"runtime_mode": "standalone"})
     monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
     requests = []
     monkeypatch.setattr(service, "request_restart", lambda root: requests.append(root))

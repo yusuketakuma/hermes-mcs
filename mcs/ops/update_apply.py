@@ -55,6 +55,7 @@ from update_lifecycle_context import (
     _call_legacy,
     _enqueue_notice,
     _ensure_recovery_marker,
+    _hold_after_interrupt,
     _legacy_entry,
     _pin_recovery_marker,
     _record_executed,
@@ -126,6 +127,63 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                         candidate_sha=candidate_sha, confirm_human=confirm_human, reason=reason)
 
 
+def _apply_pre_lock_checks(tag, sha, command_id, base_sha, reinstall,
+                           install_args, *, candidate_sha, confirm_human,
+                           reason):
+    """Non-borrowed entry's pre-lock validation: argument re-check, candidate
+    resolution, runtime/config gates, journal health, install-options pin.
+    Returns the resolved context dict, or an int return code to stop the apply."""
+    rc = _apply_validate_args(tag, sha, command_id, reinstall, install_args,
+                              candidate_sha=candidate_sha, base_sha=base_sha,
+                              confirm_human=confirm_human, reason=reason)
+    if rc is not None:
+        return rc
+    candidate = candidate_sha is not None
+    target_ref = candidate_sha if candidate else f"refs/tags/{tag}"
+    if candidate:
+        try:
+            _candidate_commit(candidate_sha)
+        except UpdateError:
+            print("未公開候補はローカルに存在するコミットだけを指定してください（変更はありません）")
+            return 2
+        tag = "candidate:" + candidate_sha
+        sha = candidate_sha
+    cfg = mcs_util.load_config()
+    expected_runtime = os.environ.get('MCS_UPDATE_RUNTIME_EXPECTED')
+    if expected_runtime is not None and (
+            expected_runtime != 'standalone' or cfg.get('runtime_mode') != expected_runtime):
+        print('確認後に実行モードが変わったか確認できないため、更新を開始しません。mcs update で確認し直してください。')
+        return 2
+    runtime_errors = _apply_runtime_gate_errors(cfg, reinstall, install_args)
+    if runtime_errors:
+        # Even acquiring update.lock or writing local_checks is a mutation.
+        # Keep an existing interrupted journal untouched for safe recovery.
+        print("更新を開始できません。実行環境の問題を解消してください（変更はありません）: " + "; ".join(runtime_errors))
+        return 1
+    state = journal_store.load_state(STATE_PATH)
+    if state.get("_corrupt"):
+        print("更新履歴を読み取れないため停止しました。update_state.jsonを削除せず、管理者に確認してください")
+        return 2
+    if state.get("applying") or state.get("stages"):
+        return recover_interrupted()
+    options_base = None
+    try:
+        options_base, current_options = _install_options_snapshot()
+        encoded_expected = os.environ.get("MCS_UPDATE_OPTIONS_EXPECTED")
+        if encoded_expected is not None:
+            expected_options = json.loads(encoded_expected)
+            if (expected_options is not None and not install_options_contract.valid(expected_options)) \
+                    or current_options != (sorted(set(expected_options)) if expected_options is not None else None):
+                raise ValueError("install_options_changed")
+    except (OSError, ValueError, TypeError, RecursionError):
+        if reinstall or os.environ.get("MCS_UPDATE_OPTIONS_EXPECTED") is not None:
+            print("導入設定が変更されたか確認できないため更新を開始しません。設定を確認してください。")
+            return 1
+    return {"candidate": candidate, "target_ref": target_ref, "tag": tag,
+            "sha": sha, "cfg": cfg, "expected_runtime": expected_runtime,
+            "options_base": options_base, "state": state}
+
+
 def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
           base_sha: str | None = None, reinstall: bool = False,
           install_args: tuple = (), *, candidate_sha: str | None = None,
@@ -155,51 +213,20 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             lifetime.enter_context(_release_git_scope())
             lifetime.enter_context(owned_process.lifetime_fds(borrowed.locks))
         if borrowed is None:
-            rc = _apply_validate_args(tag, sha, command_id, reinstall, install_args,
-                                      candidate_sha=candidate_sha, base_sha=base_sha,
-                                      confirm_human=confirm_human, reason=reason)
-            if rc is not None:
-                return rc
-            candidate = candidate_sha is not None
-            target_ref = candidate_sha if candidate else f"refs/tags/{tag}"
-            if candidate:
-                try:
-                    _candidate_commit(candidate_sha)
-                except UpdateError:
-                    print("未公開候補はローカルに存在するコミットだけを指定してください（変更はありません）")
-                    return 2
-                tag = "candidate:" + candidate_sha
-                sha = candidate_sha
-            cfg = mcs_util.load_config()
-            expected_runtime = os.environ.get('MCS_UPDATE_RUNTIME_EXPECTED')
-            if expected_runtime is not None and (
-                    expected_runtime != 'standalone' or cfg.get('runtime_mode') != expected_runtime):
-                print('確認後に実行モードが変わったか確認できないため、更新を開始しません。mcs update で確認し直してください。')
-                return 2
-            runtime_errors = _apply_runtime_gate_errors(cfg, reinstall, install_args)
-            if runtime_errors:
-                # Even acquiring update.lock or writing local_checks is a mutation.
-                # Keep an existing interrupted journal untouched for safe recovery.
-                print("更新を開始できません。実行環境の問題を解消してください（変更はありません）: " + "; ".join(runtime_errors))
-                return 1
-            state = journal_store.load_state(STATE_PATH)
-            if state.get("_corrupt"):
-                print("更新履歴を読み取れないため停止しました。update_state.jsonを削除せず、管理者に確認してください")
-                return 2
-            if state.get("applying") or state.get("stages"):
-                return recover_interrupted()
-            try:
-                options_base, current_options = _install_options_snapshot()
-                encoded_expected = os.environ.get("MCS_UPDATE_OPTIONS_EXPECTED")
-                if encoded_expected is not None:
-                    expected_options = json.loads(encoded_expected)
-                    if (expected_options is not None and not install_options_contract.valid(expected_options)) \
-                            or current_options != (sorted(set(expected_options)) if expected_options is not None else None):
-                        raise ValueError("install_options_changed")
-            except (OSError, ValueError, TypeError, RecursionError):
-                if reinstall or os.environ.get("MCS_UPDATE_OPTIONS_EXPECTED") is not None:
-                    print("導入設定が変更されたか確認できないため更新を開始しません。設定を確認してください。")
-                    return 1
+            prepared = _apply_pre_lock_checks(
+                tag, sha, command_id, base_sha, reinstall, install_args,
+                candidate_sha=candidate_sha, confirm_human=confirm_human,
+                reason=reason)
+            if isinstance(prepared, int):
+                return prepared
+            candidate = prepared["candidate"]
+            target_ref = prepared["target_ref"]
+            tag = prepared["tag"]
+            sha = prepared["sha"]
+            cfg = prepared["cfg"]
+            expected_runtime = prepared["expected_runtime"]
+            options_base = prepared["options_base"]
+            state = prepared["state"]
 
         else:
             deadline = borrowed.prequiesce_deadline
@@ -223,9 +250,24 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
         consent_hold = False
         delegated = False
         hold_mode = None
+        # An interrupt (KeyboardInterrupt, SystemExit) is no settled outcome: the unfinished
+        # journal keeps its update marker for recover_interrupted instead of the finally's cleanup.
+        interrupted = False
+        terminal = False   # the journal's terminal save happened (bail or success)
 
         def bail(reason: str) -> int:
-            nonlocal rollback_failed, consent_hold, state
+            nonlocal interrupted
+            try:
+                return _bail(reason)
+            except BaseException as error:
+                if not isinstance(error, Exception):
+                    interrupted = True
+                    if quiesced and not terminal:
+                        _hold_after_interrupt(error)
+                raise
+
+        def _bail(reason: str) -> int:
+            nonlocal rollback_failed, consent_hold, state, terminal
             transient = reason.split(":")[0] in _TRANSIENT_BAIL
             stages = [s.get("stage") for s in state.get("stages", [])]
             merged = "merge" in stages or "post_merge" in stages
@@ -352,11 +394,13 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 # check retries
                 state["stages"] = []
                 journal_store.save_state(STATE_PATH, state)
+                terminal = True
                 return 2
             if command_id:
                 _record_executed(state, command_id, "failed", reason)
             _record_attempt(state, tag, "failed", reason)
             journal_store.save_state(STATE_PATH, state)
+            terminal = not rollback_failed   # a failed rollback keeps its applying record
             if rollback_failed and state["applying"].get("restore_incomplete"):
                 # same report-only freeze as recover_interrupted's escalate: an
                 # outbox notice would write the newer-schema DB under the old
@@ -581,6 +625,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 _run_post_merge(sha, run_lock_fd=run_fd, _release_entry=borrowed)
 
             state = _apply_record_success(tag, command_id)
+            terminal = True
             quiesced = False
             # gateway restart is fire-and-forget AFTER applied is durable —
             # a synchronous restart would deadlock when this updater is a
@@ -596,8 +641,13 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             if isinstance(e, UpdateError):
                 return bail(str(e))
             return bail(f"unexpected:{type(e).__name__}")
+        except BaseException as error:
+            interrupted = True
+            if quiesced and not terminal:
+                _hold_after_interrupt(error)
+            raise
         finally:
-            if quiesced and not consent_hold and not rollback_failed:
+            if quiesced and not consent_hold and not rollback_failed and (not interrupted or terminal):
                 _remove_marker()
             if borrowed is None:
                 for fd in (run_fd, upd_fd):
@@ -634,6 +684,8 @@ def rollback(command_id: str | None = None) -> int:
     run_fd = None
     quiesced = False
     consent_hold = False
+    interrupted = False   # as in apply(): an interrupted rollback journal keeps its marker
+    journal_open = False  # the rollback journal is written and its terminal save not yet done
     try:
         state = journal_store.load_state(STATE_PATH)            # fresh view under the lock
         if _release_legacy_hold(state):
@@ -679,6 +731,7 @@ def rollback(command_id: str | None = None) -> int:
             state["applying"] = _rollback_applying(
                 entry, _head_sha(), command_id)
             journal(state, "rollback")
+            journal_open = True
             quiesced = True
             quiesce()
             schema_hold = bool(entry.get("schema_bump") and entry.get("backup_path"))
@@ -755,6 +808,7 @@ def rollback(command_id: str | None = None) -> int:
             if command_id:
                 _record_executed(state, command_id, "rolled_back")
             journal_store.save_state(STATE_PATH, state)
+            journal_open = False
             # gateway restart AFTER the durable save (self-deadlock)
             restart_services(mcs_util.load_config(), entry.get("plugin_changed"))
             _enqueue_notice(f"[MCS] ロールバックしました: "
@@ -779,14 +833,20 @@ def rollback(command_id: str | None = None) -> int:
             if command_id:
                 _record_executed(state, command_id, "rollback_failed", str(e))
                 journal_store.save_state(STATE_PATH, state)
+            journal_open = False   # escalate-like contract: the applying record stays, the hold is released
             _enqueue_notice(f"[MCS] ロールバックに失敗しました: {e}",
                             use_run_lock=run_fd is None, notice_code="rollback_failed")
             print("元の版に戻せませんでした。管理者に確認してください。詳細:", e)
             return 1
+    except BaseException as error:
+        interrupted = not isinstance(error, Exception)
+        if interrupted and journal_open:
+            _hold_after_interrupt(error)
+        raise
     finally:
         # a consent hold keeps BOTH markers: they are what durably holds
         # writers/senders frozen until the bound approval arrives
-        if quiesced and not consent_hold:
+        if quiesced and not consent_hold and not interrupted:
             _remove_marker()
         for fd in (run_fd, upd_fd):
             if fd is not None:

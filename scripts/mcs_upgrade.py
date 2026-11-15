@@ -114,6 +114,26 @@ def _lifetime_fds():
 
 
 
+def _run_updater(command, **kwargs):
+    """Wait for an acquired updater child before propagating parent interrupts.
+
+    Foreground SIGINT already reaches the child; do not send it twice. A parent-only
+    interrupt waits for normal child completion. Signals during Popen and termination
+    signals (SIGTERM/SIGHUP/SIGKILL) are outside this cleanup guarantee.
+    """
+    child = subprocess.Popen(command, **kwargs)
+    try:
+        return subprocess.CompletedProcess(command, child.wait())
+    except (KeyboardInterrupt, SystemExit):
+        while True:
+            try:
+                child.wait()
+                break
+            except (KeyboardInterrupt, SystemExit):
+                continue
+        raise
+
+
 def _git(repo: str, *args: str, binary: bool = False):
     try:
         r = subprocess.run(["git", "-C", repo, *args], capture_output=True,
@@ -438,7 +458,7 @@ def interactive_update(cmd, env, repo, *, installed=False):
         apply_env["MCS_UPDATE_OPTIONS_EXPECTED"] = json.dumps(install_args, separators=(",", ":"))
         apply_cmd.append("--reinstall")
         apply_cmd.extend(f"--install-arg={arg}" for arg in install_args)
-    result = subprocess.run(apply_cmd, env=apply_env, cwd=repo, **_lifetime_fds())
+    result = _run_updater(apply_cmd, env=apply_env, cwd=repo, **_lifetime_fds())
     if result.returncode:
         print("更新は完了していません。繰り返し実行せず、mcs recover で状態を確認してください。")
         return result.returncode
@@ -490,7 +510,7 @@ def _installed_update(args, repo, tag):
         apply_command.append('--reinstall')
     apply_command.extend(f'--install-arg={arg}' for arg in args.install_arg)
     apply_env = dict(env, MCS_UPDATE_RUNTIME_EXPECTED='standalone')
-    result = subprocess.run(apply_command, env=apply_env, cwd=repo, **_lifetime_fds())
+    result = _run_updater(apply_command, env=apply_env, cwd=repo, **_lifetime_fds())
     if result.returncode:
         return result.returncode
     final = _post_apply_plan(command, env, repo, installed=True,
@@ -616,7 +636,7 @@ def _main(argv=None) -> int:
                 if args.cmd == "guide":
                     print(f"更新する版: {tag}")
                     return interactive_update(cmd, env, repo)
-                rc = subprocess.run(cmd, env=env, cwd=repo, **_lifetime_fds()).returncode
+                rc = _run_updater(cmd, env=env, cwd=repo, **_lifetime_fds()).returncode
             except OSError as exc:
                 raise SystemExit(f"更新プログラムを起動できませんでした。Pythonの実行環境を確認してください（{exc.strerror}）") from None
             # The updater also exits 0 when it defers (another update running, recovery pending).

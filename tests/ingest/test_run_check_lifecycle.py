@@ -8,6 +8,7 @@ import update_launch
 import health_report
 import mcs_contract
 import json
+import re
 import os
 import sys
 import time
@@ -415,7 +416,9 @@ def test_lock_held_exit_waits_for_scheduled_and_command_runs(
     finally:
         os.close(held)
     assert bool(waited) is waits
-    assert json.loads(capsys.readouterr().out) == {"ok": False, "error": "lock_held"}
+    assert _without_not_started(json.loads(capsys.readouterr().out),
+                                "commands" if "--commands-only" in argv else "collection") \
+        == {"ok": False, "error": "lock_held"}
 
 
 @pytest.mark.parametrize("mode", ["tick", "commands"])
@@ -444,8 +447,11 @@ def test_entry_reports_only_observed_writer_refusal(
     try:
         assert run_check.main() == 3
         raw = capsys.readouterr().out
-        assert json.loads(raw) == {
+        refusal = json.loads(raw)
+        assert _without_not_started(refusal, "commands" if mode == "commands" else "collection") == {
             "ok": False, "error": "lock_held", "writer_reason": reason, "writer_stage": stage}
+        if cause == "busy":
+            assert refusal["wait_s"] >= run_check.LOCK_WAIT_S   # the fake clock's whole bounded wait
         assert "SYNTHETIC_SECRET_MUST_NOT_APPEAR" not in raw and str(tmp_path) not in raw
         assert not (data / "ledger.db").exists() and not (data / "health.json").exists()
         if cause == "busy":
@@ -473,7 +479,31 @@ def test_entry_keeps_unclassified_writer_refusal_private(tmp_path, monkeypatch, 
     monkeypatch.setattr(writer_lock, "wait_run_lock", wait)
     monkeypatch.setattr(sys, "argv", ["run_check"])
     assert run_check.main() == 3
-    assert json.loads(capsys.readouterr().out) == {"ok": False, "error": "lock_held"}
+    assert _without_not_started(json.loads(capsys.readouterr().out), "collection") \
+        == {"ok": False, "error": "lock_held"}
+
+
+def _without_not_started(refusal, mode):
+    """Check the not-started observation's fixed shape, then return the original refusal."""
+    refusal = dict(refusal)   # the caller's dict stays whole for its own checks
+    observed = {key: refusal.pop(key) for key in ("ts", "mode", "phase", "outcome", "wait_s")}
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", observed["ts"])
+    assert (observed["mode"], observed["phase"], observed["outcome"]) == (mode, "run_lock", "not_started")
+    assert type(observed["wait_s"]) is float and 0 <= observed["wait_s"] < 1e6
+    return refusal
+
+
+@pytest.mark.parametrize("argv, mode", [(["run_check", "--jobs-only"], "jobs"),
+                                        (["run_check", "--commands-only"], "commands")])
+def test_not_started_records_its_mode_without_opening_the_ledger(tmp_path, monkeypatch, capsys, argv, mode):
+    data = _point_run_check_at(tmp_path, monkeypatch)
+    monkeypatch.setattr(run_check, "acquire_run_lock", lambda path: None)
+    monkeypatch.setattr(writer_lock, "wait_run_lock", lambda *args, **kwargs: None)
+    monkeypatch.setattr(run_check, "Ledger", lambda *a, **k: pytest.fail("a not-started run opened the ledger"))
+    monkeypatch.setattr(sys, "argv", argv)
+    assert run_check.main() == 3
+    assert _without_not_started(json.loads(capsys.readouterr().out), mode) == {"ok": False, "error": "lock_held"}
+    assert not (data / "health.json").exists()
 
 
 @pytest.mark.parametrize("fence", [None, "marker", "code_changed"])
@@ -638,7 +668,10 @@ def test_run_lock_lost_ends_tick_without_later_stages(
     os.close(fd)
 
 
-def test_commands_snapshot_keeps_original_deadline_and_dirty_on_failure(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize(("state", "code", "cleared"), [
+    (None, 1, False), ("deferred", 0, False), ("published", 0, True), ("retry_deferred", 0, False)])
+def test_commands_snapshot_keeps_original_deadline_and_dirty_on_failure(
+        tmp_path, monkeypatch, capsys, state, code, cleared):
     import maintenance
     import notify_cards
     import notify_cmds
@@ -662,11 +695,36 @@ def test_commands_snapshot_keeps_original_deadline_and_dirty_on_failure(tmp_path
     monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **kw: None)
     monkeypatch.setattr(notify_cards, "gc", lambda *a, **kw: None)
     monkeypatch.setattr(notify_cards, "snapshot_dirty", lambda ledger: 42)
-    cleared, calls = [], []
-    monkeypatch.setattr(notify_cards, "clear_snapshot_dirty", lambda *a: cleared.append(a))
-    monkeypatch.setattr(maintenance, "publish_snapshot", lambda db, *, deadline: calls.append(deadline) or False)
+    clears, calls = [], []
+    monkeypatch.setattr(notify_cards, "clear_snapshot_dirty", lambda *a: clears.append(a))
+    monkeypatch.setattr(maintenance, "publish_snapshot",
+                        lambda *a, **kw: pytest.fail("bypassed the shared interval decision"))
+
+    import snapshots
+
+    def refresh(db, *, dirty, deadline, commands_retry):
+        calls.append((dirty, deadline, commands_retry))
+        snapshots._reset_status()
+        if state == "retry_deferred":
+            snapshots._record_timing(retry_reason="snapshot_retry_cooldown", retry_after_s=120.5)
+        return state
+    monkeypatch.setattr(maintenance, "refresh_snapshot", refresh)
     fd = os.open(str(tmp_path / "synthetic.lock"), os.O_CREAT | os.O_RDWR, 0o600)
     deadline = time.monotonic() - 1
-    assert run_check._commands_only(fd, deadline) == 1
-    assert calls == [deadline] and not cleared
-    assert "snapshot_publish_failed" in capsys.readouterr().out
+    assert run_check._commands_only(fd, deadline) == code
+    assert calls == [(True, deadline, True)]       # only the commands worker opts in
+    assert bool(clears) is cleared
+    out = capsys.readouterr().out
+    assert ("snapshot_publish_failed" in out) is (state is None)
+    result = json.loads(out)
+    if state == "retry_deferred":
+        # no copy started: not a publish, not a failure, the dirty mark stays
+        assert result["snapshot"] is False and result["snapshot_state"] == "retry_deferred"
+        assert (result["snapshot_retry_reason"], result["snapshot_retry_after_s"]) \
+            == ("snapshot_retry_cooldown", 120.5)
+        assert result["ok"] is True and not result["errors"]
+    else:
+        assert "snapshot_retry_reason" not in result
+    # every step that can hold the writer reports how long it took
+    assert set(json.loads(out)["stage_elapsed_s"]) == {
+        "cmd_recover", "cmd_drain", "cmd_int_drain", "cmd_int_drain_again", "cmd_card_gc", "cmd_snapshot"}

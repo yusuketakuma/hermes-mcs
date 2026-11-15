@@ -316,3 +316,36 @@ def test_nested_unread_recovery_shares_budget_and_keeps_committed_work(tmp_path)
         assert "_unread_counted" not in result
     finally:
         db.close()
+
+
+def test_collect_seconds_total_each_stage_once_across_replay(tmp_path, monkeypatch):
+    """A replayed stage records one total; a nested same-stage call is not added twice."""
+    now = [100.0]
+    monkeypatch.setattr(collection_stages, "time",
+                        SimpleNamespace(monotonic=lambda: now[0], time=time.time))
+    db = _ledger(tmp_path)
+    adapter = SimpleNamespace(auto_login=lambda **kwargs: "ok")
+    result = {"errors": [], "run_id": 1}
+    calls = []
+
+    def listing():
+        now[0] += 1
+
+    def stage():
+        calls.append(1)
+        collection_stages.with_relogin(adapter, db, result, "unread", listing)
+        now[0] += 2
+        if len(calls) == 1:
+            raise mcs_contract.SessionExpired()
+        return "done"
+
+    def backfill():
+        now[0] += 4
+
+    try:
+        assert collection_stages.with_relogin(adapter, db, result, "unread", stage) == "done"
+        collection_stages.with_relogin(adapter, db, result, "backfill", backfill)
+        assert len(calls) == 2
+        assert result["collect_s"] == {"unread": 6.0, "backfill": 4.0}
+    finally:
+        db.close()

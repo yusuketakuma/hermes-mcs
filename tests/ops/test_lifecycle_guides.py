@@ -33,6 +33,7 @@ def test_update_requires_explicit_execution(monkeypatch, answer, expected):
         return SimpleNamespace(returncode=0, stdout=json.dumps(_plan_report("noop", blockers=[]) if len(calls) == 3 else _plan_report("reinstall", install_args=[])))
 
     monkeypatch.setattr(launcher.subprocess, "run", run)
+    monkeypatch.setattr(launcher, "_run_updater", launcher.subprocess.run)
     assert launcher.interactive_update(["python", "updater", "plan", "--tag", "v1.2.0"], {}, "/synthetic") == 0
     assert len(calls) == expected
     if expected == 3:
@@ -248,6 +249,7 @@ def test_reinstall_preserves_previous_optouts(monkeypatch, install_args):
         return SimpleNamespace(returncode=0, stdout=json.dumps(
             _plan_report('noop', blockers=[]) if len(calls) == 3 else report))
     monkeypatch.setattr(launcher.subprocess, 'run', run)
+    monkeypatch.setattr(launcher, "_run_updater", launcher.subprocess.run)
     assert launcher.interactive_update(["python", "updater", "plan"], {}, "/synthetic") == 0
     assert calls[1] == ['python', 'updater', 'apply', '--reinstall',
                         *(f'--install-arg={arg}' for arg in install_args)]
@@ -307,6 +309,7 @@ def test_update_offers_api_keys_using_pinned_runtime(monkeypatch, tmp_path, upda
         return SimpleNamespace(returncode=0, stdout=json.dumps(_plan_report(route)))
 
     monkeypatch.setattr(launcher.subprocess, "run", run)
+    monkeypatch.setattr(launcher, "_run_updater", launcher.subprocess.run)
     assert launcher.interactive_update(["old-python", "updater", "plan"],
                                        {"PYTHONPATH": "ignore", "PYTHONHOME": "ignore"},
                                        repo) == 0
@@ -371,6 +374,7 @@ def test_guided_apply_passes_approved_record_separately(monkeypatch):
         value = _plan_report('noop', blockers=[]) if len(calls) == 3 else report
         return SimpleNamespace(returncode=0, stdout=json.dumps(value))
     monkeypatch.setattr(launcher.subprocess, 'run', run)
+    monkeypatch.setattr(launcher, "_run_updater", launcher.subprocess.run)
     assert launcher.interactive_update(['python', 'updater', 'plan'], {}, '/synthetic') == 0
     assert len(calls) == 3
     assert json.loads(calls[1][1]['env']['MCS_UPDATE_OPTIONS_EXPECTED']) == ['--no-llm']
@@ -386,6 +390,7 @@ def test_guided_non_reinstall_does_not_require_an_install_record(monkeypatch):
         value = _plan_report('noop', blockers=[]) if len(calls) == 3 else _plan_report('apply', install_args=None)
         return SimpleNamespace(returncode=0, stdout=json.dumps(value))
     monkeypatch.setattr(launcher.subprocess, 'run', run)
+    monkeypatch.setattr(launcher, "_run_updater", launcher.subprocess.run)
     assert launcher.interactive_update(['python', 'updater', 'plan'], {}, '/synthetic') == 0
     assert len(calls) == 3
     assert 'MCS_UPDATE_OPTIONS_EXPECTED' not in calls[1][1]['env']
@@ -415,6 +420,7 @@ def test_guide_plan_timeout_does_not_claim_completion(monkeypatch, capsys, after
         return SimpleNamespace(returncode=0, stdout=json.dumps({"route": "apply"}))
 
     monkeypatch.setattr(launcher.subprocess, "run", run)
+    monkeypatch.setattr(launcher, "_run_updater", launcher.subprocess.run)
     assert launcher.interactive_update(["python", "updater", "plan"], {}, "/synthetic") == 1
     assert len(calls) == (3 if after_apply else 1)
     assert ("完了を確認できません" if after_apply else "更新は開始していません") in capsys.readouterr().out
@@ -429,6 +435,7 @@ def test_zero_apply_exit_requires_verified_completion(monkeypatch, report, capsy
     monkeypatch.setattr(launcher.subprocess, "run", lambda cmd, **kw:
                         calls.append(cmd) or SimpleNamespace(returncode=0, stdout=json.dumps(
                             report if len(calls) == 3 else {"route": "apply"})))
+    monkeypatch.setattr(launcher, "_run_updater", launcher.subprocess.run)
     assert launcher.interactive_update(["python", "updater", "plan"], {}, "/synthetic") == 1
     assert "完了を確認できません" in capsys.readouterr().out
 

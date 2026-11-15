@@ -650,3 +650,105 @@ def test_incremental_tally_streams_and_closes_rows(tmp_path, now, interrupted):
             assert len(tally.open) == expected['unresolved_requests'] == 2
         assert len(cursors) == 1 and cursors[0].closed
         assert not ledger.db.in_transaction
+
+
+def test_appended_rows_extend_the_verified_digest_without_a_second_history_read(tmp_path, now):
+    """One full history read per verification: appended rows extend the verified state."""
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        _reserve(ledger)
+        first = c._tally(ledger)
+        first_total = first.total
+        _reserve(ledger, unit='appended')
+        statements = []
+        ledger.db.set_trace_callback(statements.append)
+        try:
+            second = c._tally(ledger)
+        finally:
+            ledger.db.set_trace_callback(None)
+        assert second.total == 2 * first_total
+        assert sum('AND artifact_id<=' in sql for sql in statements) == 1
+        # The extended digest equals a fresh full fingerprint of the same rows.
+        assert second.prefix == second.fingerprint(ledger, now)
+
+
+def test_writer_transaction_verifies_history_once_and_extends_it(tmp_path, now):
+    """A reservation's in-transaction check keeps the full prefix verification, but only once."""
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        _reserve(ledger)
+        c._tally(ledger, now)
+        # a row the cached tally has not seen yet, as when another reservation landed meanwhile
+        _reserve(ledger, unit='appended-before')
+        statements = []
+        ledger.db.set_trace_callback(statements.append)
+        try:
+            _reserve(ledger, unit='appended-in-transaction')
+        finally:
+            ledger.db.set_trace_callback(None)
+        begin = statements.index('BEGIN IMMEDIATE')
+        assert sum('AND artifact_id<=' in sql for sql in statements[begin:]) == 1
+        tally = c._tally(ledger, now)
+        assert tally.prefix == tally.fingerprint(ledger, now)
+
+
+def test_extended_prefix_adds_prior_reservations_after_the_main_rows(tmp_path, now):
+    """A late result of a prior-period reservation: the extension still hashes P, N, then R."""
+    current = now
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        _late_results(ledger, 3, current - 40 * 86400, current - 30)
+        first = c._tally(ledger, current)
+        assert first.orphans
+        _late_results_more = c.usage_reserver(ledger, _cfg(), route='patient_context', project_id=1,
+                                              unit_key='after')
+        _late_results_more({'model': MODEL, 'max_tokens': 100, 'system': 'synthetic system',
+                            'messages': [{'role': 'user', 'content': 'after'}]}, 2)
+        second = c._tally(ledger, current)
+        assert second.prefix == second.fingerprint(ledger, current)
+        fresh = c._Tally(second.month, ledger.db)
+        fresh.update(ledger, current)
+        assert (str(second.total), second.last_id, second.invalid, sorted(second.orphans)) == \
+            (str(fresh.total), fresh.last_id, fresh.invalid, sorted(fresh.orphans))
+        assert second.prefix == fresh.prefix
+
+
+def _cheap_result_meta(reservation):
+    """The settled result row record_result writes for a small billed answer."""
+    definition = c._price_definition(reservation["model"], reservation["price_version"])
+    usage = definition["validate_usage"]({"input_tokens": 10, "output_tokens": 2})
+    result = c._receipt_binding(reservation)
+    result.update(usage=usage, cost_usd=str(c.usage_cost(usage, model=reservation["model"],
+                                                         price_version=reservation["price_version"])),
+                  http_class="http_200", request_id="req_synthetic", error_kind=None)
+    return result
+
+
+def _accounting_rows(ledger):
+    return dict(ledger.db.execute("SELECT kind,COUNT(*) FROM artifacts WHERE kind IN (?,?,?) GROUP BY kind",
+                                  c.KINDS))
+
+
+@pytest.mark.parametrize('period', ['month', 'window'])
+@pytest.mark.parametrize('scope', ['transaction', 'savepoint'])
+def test_rolled_back_cheap_result_restores_the_reserved_maximum(tmp_path, now, period, scope):
+    # A result read inside a writer transaction lowers the tally; rolling it back must bring
+    # the unresolved reservation's maximum back, whether the whole transaction or only a
+    # savepoint inside it is rolled back.
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        reservation = _reserve(ledger)
+        reserved = _read(ledger, period, now).total
+        rows = _accounting_rows(ledger)
+        ledger.db.execute('BEGIN IMMEDIATE')
+        try:
+            if scope == 'savepoint':
+                ledger.db.execute('SAVEPOINT synthetic_result')
+            ledger.artifact_add_tx(c.KINDS[1], '{}', project_id=1, model=MODEL,
+                                   meta=_cheap_result_meta(reservation))
+            assert _read(ledger, period, now).total < reserved
+            if scope == 'savepoint':
+                ledger.db.execute('ROLLBACK TO synthetic_result')
+                ledger.db.execute('RELEASE synthetic_result')
+                assert ledger.db.in_transaction
+                assert _read(ledger, period, now).total == reserved
+        finally:
+            ledger.db.rollback()
+        assert _read(ledger, period, now).total == reserved
+        assert _accounting_rows(ledger) == rows      # the reservation stays unresolved, nothing written

@@ -570,3 +570,19 @@ def test_closed_individual_followup_does_not_resolve_credentials(monkeypatch):
     monkeypatch.setattr(cloud_policy, "send_route", lambda route: True)
     assert processing_route.cloud_followup(object(), 1, 100, CFG) is None
     assert calls == [True]
+
+
+@pytest.mark.parametrize("worker", ["0", "1", None])
+def test_bounded_backlog_reopen_shows_no_followup_in_any_process(monkeypatch, worker):
+    """The reopen sends only from its worker; a card drawn there must equal the one drawn elsewhere."""
+    cfg = {**CFG, "cloud_llm": {"mode": "on", "project_ids": [1],
+                                "window_start": "2026-11-01T00:00:00+09:00", "window_budget_usd": 60,
+                                "reextract_backlog_until": "2999-01-01T00:00:00+09:00"}}
+    if worker is None:
+        monkeypatch.delenv(cloud_policy.BACKLOG_WORKER_ENV, raising=False)
+    else:
+        monkeypatch.setenv(cloud_policy.BACKLOG_WORKER_ENV, worker)
+    assert cloud_policy.reextract_planned(cfg)
+    monkeypatch.setattr(cloud_inference, "resolve_cloud_settings",
+                        lambda cfg: pytest.fail("the reopen must not reach the follow-up read"))
+    assert processing_route.cloud_followup(object(), 1, 100, cfg) is None
