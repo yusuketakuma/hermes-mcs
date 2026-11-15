@@ -1120,6 +1120,61 @@ def _slack_pruned_reuse(db, a, *, inherited_attachments, parent_history,
             "sha256": row["sha256"], "bytes": row["bytes"]}
 
 
+def _reusable_lineworks_card(db, card, spec, parts, content, face_posts,
+                             visible_providers):
+    """The prior remote post that already shows this card's surface, else None.
+
+    LINE WORKS updates reuse the delivered card when every visible field
+    is unchanged, so unchanged containers/footers/actions stay one post.
+    On a match the reused fields are copied into ``parts``."""
+    if card["transport"] != "lineworks" or spec["op"] != "update":
+        return None
+    old = db.execute("SELECT spec_json FROM notification_renders WHERE card_id=? "
+                     "AND state='delivered' ORDER BY render_rev DESC LIMIT 1",
+                     (card["card_id"],)).fetchone()
+    previous = json.loads(old[0]) if old and old[0] else None
+    if not previous or "parts" not in previous:
+        return None
+    try:
+        prior_visible = _provider_visibility(previous["parts"])
+    except ValueError:
+        prior_visible = None
+    old_headers = [c for c in previous["parts"].get("containers", [])
+                   if isinstance(c, dict) and c.get("provider_scope") == "header"]
+    new_headers = [c for c in parts.get("containers", [])
+                   if isinstance(c, dict) and c.get("provider_scope") == "header"]
+    same_v4_header = (parts.get("provider_states_version") != 4
+                      or (len(old_headers) == len(new_headers) == 1
+                          and old_headers[0] == new_headers[0]))
+    def strip_tokens(rows):
+        return [[{k: v for k, v in b.items() if k != "token"}
+                 for b in row] for row in rows]
+    prior_view = db.execute("SELECT shown FROM notification_view_manifests WHERE manifest_id=?",
+                            (previous["parts"]["manifest_id"],)).fetchone()
+    # A versioned chat face carries originals the legacy card never
+    # showed; reusing the old remote card would hide them.
+    same_chat_face = (
+        previous["parts"].get("chat_format_version")
+        == parts.get("chat_format_version")
+        and (previous["parts"].get(card["transport"]) or {}).get("face_posts")
+        == (face_posts or None))
+    if (prior_view and json.loads(prior_view[0]) == content["shown"]
+            and previous["source_generation"] == spec["source_generation"]
+            and previous["ui_revision"] == spec["ui_revision"]
+            and scope_matches(previous["delivery"], stored_scope(card))
+            and previous["parts"].get("provider_states_version") == parts.get("provider_states_version")
+            and previous["parts"].get("processing_display_version") == parts.get("processing_display_version")
+            and same_chat_face
+            and same_v4_header
+            and prior_visible == visible_providers
+            and strip_tokens(previous["parts"]["action_rows"]) == strip_tokens(parts["action_rows"])):
+        for field in ("containers", "footer", "action_rows", "preview_text"):
+            if field in previous["parts"]:
+                parts[field] = previous["parts"][field]
+        return card["message_id"]
+    return None
+
+
 def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                          face_mids=frozenset(), face_posts=(),
                          waiting=frozenset()) -> tuple[dict, str | None]:
@@ -1135,51 +1190,9 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
     notice remains in the thread; earlier body chunks become collected."""
     parts = dict(spec["parts"])
     budget_hold = None
-    reused_card = None
     visible_providers = _provider_visibility(parts)
-    if card["transport"] == "lineworks" and spec["op"] == "update":
-        old = db.execute("SELECT spec_json FROM notification_renders WHERE card_id=? "
-                         "AND state='delivered' ORDER BY render_rev DESC LIMIT 1",
-                         (card["card_id"],)).fetchone()
-        previous = json.loads(old[0]) if old and old[0] else None
-        if previous and "parts" in previous:
-            try:
-                prior_visible = _provider_visibility(previous["parts"])
-            except ValueError:
-                prior_visible = None
-            old_headers = [c for c in previous["parts"].get("containers", [])
-                           if isinstance(c, dict) and c.get("provider_scope") == "header"]
-            new_headers = [c for c in parts.get("containers", [])
-                           if isinstance(c, dict) and c.get("provider_scope") == "header"]
-            same_v4_header = (parts.get("provider_states_version") != 4
-                              or (len(old_headers) == len(new_headers) == 1
-                                  and old_headers[0] == new_headers[0]))
-            def strip_tokens(rows):
-                return [[{k: v for k, v in b.items() if k != "token"}
-                         for b in row] for row in rows]
-            prior_view = db.execute("SELECT shown FROM notification_view_manifests WHERE manifest_id=?",
-                                    (previous["parts"]["manifest_id"],)).fetchone()
-            # A versioned chat face carries originals the legacy card never
-            # showed; reusing the old remote card would hide them.
-            same_chat_face = (
-                previous["parts"].get("chat_format_version")
-                == parts.get("chat_format_version")
-                and (previous["parts"].get(card["transport"]) or {}).get("face_posts")
-                == (face_posts or None))
-            if (prior_view and json.loads(prior_view[0]) == content["shown"]
-                    and previous["source_generation"] == spec["source_generation"]
-                    and previous["ui_revision"] == spec["ui_revision"]
-                    and scope_matches(previous["delivery"], stored_scope(card))
-                    and previous["parts"].get("provider_states_version") == parts.get("provider_states_version")
-                    and previous["parts"].get("processing_display_version") == parts.get("processing_display_version")
-                    and same_chat_face
-                    and same_v4_header
-                    and prior_visible == visible_providers
-                    and strip_tokens(previous["parts"]["action_rows"]) == strip_tokens(parts["action_rows"])):
-                for field in ("containers", "footer", "action_rows", "preview_text"):
-                    if field in previous["parts"]:
-                        parts[field] = previous["parts"][field]
-                reused_card = card["message_id"]
+    reused_card = _reusable_lineworks_card(db, card, spec, parts, content,
+                                         face_posts, visible_providers)
     visible = {"containers": parts["containers"], "footer": parts["footer"],
                "action_rows": parts["action_rows"]}
     if "preview_text" in parts:
