@@ -231,9 +231,10 @@ def _history_proof(ledger, project_id, message_id, stop=()):
                     raise _Excluded('receipt_inconsistent')
                 if answer:
                     raise _Excluded('answer_stored')
-            # Another route's rows are left out only once they verify as that route's accounting
-            # (its reservation, results and dispositions parse and settle as a set); whether that
-            # other send settled is that route's own state and never changes this proof.
+            # Another route's rows are left out only once they verify as that route's accounting:
+            # each row parses and links to a reservation id of a valid route, the reservation passes
+            # _reserve_valid and its results _settled as a set. Its dispositions are only linked,
+            # never settled here, and whether that other send settled never changes this proof.
             for meta, item, linked in foreign.values():
                 maximum = cloud_policy._reserve_valid(meta, item)
                 if linked:
@@ -433,7 +434,8 @@ def health_counts(db):
     with a final written under their tag, and those whose retries are exhausted."""
     from extract_llm_source_contract import EXTRACT_VERSION, REVIVE_PER_INPUT
     units = approved_units(db)
-    written = exhausted = 0
+    written = exhausted = held_long = 0
+    long_until = time.time() + 3600   # a claim this far out is the PROOF_CHANGED long hold
     for (project_id, message_id), unit in units.items():
         written += db.execute(
             "SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND message_id=? AND CASE WHEN "
@@ -445,7 +447,11 @@ def health_counts(db):
             "AND COALESCE(json_extract(meta,'$.attempts'),0)>=5 "
             "AND COALESCE(json_extract(meta,'$.auto_retry'),0)>=? END LIMIT 1",
             (KIND, message_id, EXTRACT_VERSION, REVIVE_PER_INPUT)).fetchone() is not None
-    return {'approved': len(units), 'written': written, 'exhausted': exhausted}
+        held_long += db.execute(
+            "SELECT 1 FROM fetch_jobs WHERE kind='extract_claim' AND project_id=? AND message_id=? "
+            "AND typeof(next_try) IN ('integer','real') AND next_try>? LIMIT 1",
+            (project_id, message_id, long_until)).fetchone() is not None
+    return {'approved': len(units), 'written': written, 'exhausted': exhausted, 'held_long': held_long}
 
 
 def permit_for(ledger, unit):

@@ -189,8 +189,11 @@ def _prepare_hold_s(ledger, row, reasons):
     refusal keep the short prepare hold. Not terminal: a later re-match is seen after the wait.
     Called by _claim inside its writer transaction, so the approval match and the long claim
     commit together."""
+    # the reason first: a sqlite3.Row candidate (the cloud path) has no .get and never holds long
+    if local_rebuild.PROOF_CHANGED not in reasons or not isinstance(row, dict):
+        return _PREPARE_HOLD_S
     held = row.get("_local_rebuild_held")
-    if local_rebuild.PROOF_CHANGED not in reasons or held is None:
+    if held is None:
         return _PREPARE_HOLD_S
     try:
         current = local_rebuild.approved_units(ledger.db).get((row["project_id"], row["message_id"]))
@@ -1046,8 +1049,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         if any(reason in cloud_backlog._HOLD_DEFER_REASONS for reason in row_reasons):
                             # An unverifiable owned head keeps a bounded claim —
                             # the next pass sees the tail instead of re-blocking.
-                            _claim(ledger, candidate, _PREPARE_HOLD_S,
-                                   lease_for=lambda led: _prepare_hold_s(led, candidate, row_reasons))
+                            # approved local rebuilds never reach the cloud selection: the short hold
+                            _claim(ledger, candidate, _PREPARE_HOLD_S)
                         if prioritize_patients and time.monotonic() < deadline:
                             _cloud_priority_discard(ledger, candidate['message_id'])
                         continue
