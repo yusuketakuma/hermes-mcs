@@ -679,6 +679,8 @@ def test_candidate_updater_extracted_to_temp_calls_real_parent_and_child(legacy_
     import shutil
     import maintenance
     import mcs_util
+    import update_apply
+    import update_repository
 
     repo, runtime, data = legacy_entry['repo'], legacy_entry['runtime'], legacy_entry['data']
     # Construct a synthetic installed tree and copy only tracked development source.
@@ -723,6 +725,16 @@ def test_candidate_updater_extracted_to_temp_calls_real_parent_and_child(legacy_
         patch_lifecycle_lookup(monkeypatch, updater, name, str(value))
     monkeypatch.setenv('HOME', str(runtime))
     monkeypatch.setattr(mcs_util, 'load_config', lambda: json.loads((runtime / 'config.json').read_text()))
+    # The parent verifies the bridge before spawning the child: trust only this synthetic prior tree.
+    tree = update_repository._split_source_tree(previous)
+    assert len(tree) == len(_REQUIRED)
+    witness = hashlib.sha256(json.dumps(tree, ensure_ascii=True, separators=(',', ':')).encode('ascii')).hexdigest()
+    assert not update_apply._provider_bridge_verified(previous, target)
+    monkeypatch.setattr(update_repository, '_PROVIDER_PRIOR_SOURCE_WITNESSES',
+                        update_repository._PROVIDER_PRIOR_SOURCE_WITNESSES | {witness})
+    assert update_apply._provider_bridge_verified(previous, target)
+    unrelated = _git(repo, 'commit-tree', previous + '^{tree}', '-m', 'synthetic unrelated target')
+    assert not update_apply._provider_bridge_verified(previous, unrelated)
     patch_lifecycle_lookup(monkeypatch, updater, '_apply_runtime_gate_errors', lambda *_a, **_k: [])
     patch_lifecycle_lookup(monkeypatch, updater, 'precheck_local', lambda *_a, **_k: [])
     patch_lifecycle_lookup(monkeypatch, updater, 'precheck_tag', lambda *_a, **_k: [])
