@@ -198,6 +198,11 @@ def _code(value) -> str | None:
                      and set(value) <= _CODE_CHARS) else None
 
 
+# A part an update builds on is still in flight (alias p): see notify_card_state._parts_in_flight.
+UNSETTLED_PART = ("((p.kind IN ('body_part','attachment_part','file_group') AND p.state IN ('pending','unknown'))"
+                  " OR (p.kind='thread' AND p.state='unknown'))")
+
+
 def _pending_reason(progress_raw, updated_at, delivery_unknown: bool,
                     parts: int = 0) -> str:
     """Why one pending row waits. Current card state first: an intent card
@@ -268,17 +273,17 @@ def pending_breakdown(db, now: float, *, checkpoint=lambda: None) -> dict:
         "  JOIN notification_cards c ON c.card_id=ic.card_id "
         "  WHERE ic.event_id=o.event_id AND ic.state='pending' "
         "    AND c.delivery_state='delivery_unknown'),"
-        # the parts gate of the card's latest render, as _parts_in_flight
+        # the parts gate as an update's admission applies it (every delivered render of a
+        # card bound for update, _card_parts_in_flight), and as before the latest render's
         " (SELECT MAX(CASE WHEN p.state='unknown' THEN 2 ELSE 1 END) "
         "  FROM notification_intent_cards ic "
+        "  JOIN notification_cards c ON c.card_id=ic.card_id "
         "  JOIN notification_renders r ON r.card_id=ic.card_id "
         "  JOIN notification_render_parts p ON p.delivery_id=r.delivery_id "
-        "  WHERE ic.event_id=o.event_id AND ic.state='pending' "
-        "    AND r.state='delivered' AND r.render_rev=(SELECT MAX(render_rev) "
-        "      FROM notification_renders WHERE card_id=ic.card_id) "
-        "    AND ((p.kind IN ('body_part','attachment_part','file_group') "
-        "          AND p.state IN ('pending','unknown')) "
-        "      OR (p.kind='thread' AND p.state='unknown'))), "
+        "  WHERE ic.event_id=o.event_id AND ic.state='pending' AND r.state='delivered' "
+        "    AND ((c.delivery_state!='revoked' AND c.message_id IS NOT NULL) "
+        "      OR r.render_rev=(SELECT MAX(render_rev) FROM notification_renders WHERE card_id=ic.card_id)) "
+        f"    AND {UNSETTLED_PART}), "
         " (SELECT json_extract(c.ui_state,'$.history_latest.phase') FROM notification_intent_cards i "
         "  JOIN notification_cards c ON c.card_id=i.card_id WHERE i.event_id=o.event_id "
         "  AND i.state='pending' AND c.kind='patient_history' AND c.delivery_state='delivered' "

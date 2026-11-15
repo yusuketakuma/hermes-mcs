@@ -4,6 +4,7 @@ import json
 import time
 from mcs_requests import positive
 from mcs_util import valid_hash
+from notify_scope import UNSETTLED_PART
 
 
 LIVE_RENDER = ("queued", "sending", "unknown", "held")
@@ -99,10 +100,16 @@ def _parts_in_flight(db, latest) -> bool:
     if latest is None or latest["state"] != "delivered":
         return False
     return db.execute(
-        "SELECT 1 FROM notification_render_parts WHERE delivery_id=? "
-        "AND ((kind IN ('body_part','attachment_part','file_group') "
-        "AND state IN ('pending','unknown')) OR (kind='thread' AND state='unknown')) "
-        "LIMIT 1", (latest["delivery_id"],)).fetchone() is not None
+        f"SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=? AND {UNSETTLED_PART} LIMIT 1",
+        (latest["delivery_id"],)).fetchone() is not None
+
+
+def _card_parts_in_flight(db, card_id) -> bool:
+    """_parts_in_flight over every delivered render of the card, in one query."""
+    return db.execute(
+        "SELECT 1 FROM notification_renders r JOIN notification_render_parts p ON p.delivery_id=r.delivery_id "
+        f"WHERE r.card_id=? AND r.state='delivered' AND {UNSETTLED_PART} LIMIT 1",
+        (card_id,)).fetchone() is not None
 
 
 def _cancel_render(db, delivery_id, now):
