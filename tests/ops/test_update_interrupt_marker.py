@@ -8,10 +8,16 @@ import service_management
 import update_apply
 import update_discovery
 import update_recovery
-from mcs_update_testkit import _apply_env as _apply_env, updater as updater
+from mcs_update_testkit import (_apply_env as _apply_env, prepared_run_log as prepared_run_log,
+                                updater as updater)
 from ops_testkit import _git, in_process_post_merge
 
-__all__ = ["updater"]
+__all__ = ["updater", "prepared_run_log"]
+
+
+@pytest.fixture(autouse=True)
+def isolated_run_log(prepared_run_log):
+    """Post-merge uses the verified log helper, installed only in the synthetic runtime."""
 
 
 def _world(updater, monkeypatch):
