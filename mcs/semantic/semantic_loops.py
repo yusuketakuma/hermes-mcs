@@ -262,8 +262,8 @@ def _evaluate_relation_pairs(ledger, project_id, bundle, members, member_ids,
                              retry_scope, rejections):
     """Evaluate each current-generation candidate against every target.
 
-    Returns True when all pairs were evaluated (rejections recorded, not
-    counted as failures), False when the pass stopped early."""
+    Returns True only when every pair was evaluated with no rejections.
+    False when the pass stopped early or any pair was rejected."""
     fp = bundle["source_fingerprint"]
     root = bundle["root_id"]
     account = bundle["account_scope"]
