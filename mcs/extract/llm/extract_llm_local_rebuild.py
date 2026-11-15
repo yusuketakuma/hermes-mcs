@@ -268,23 +268,34 @@ def _candidates(db):
         "ORDER BY message_id DESC", (ROUTE,)).fetchall()
 
 
-def preview(ledger, *, limit=BUNDLE_LIMIT, stop=(sqlite3.OperationalError,)):
+def preview(ledger, *, limit=BUNDLE_LIMIT, after=None, stop=(sqlite3.OperationalError,)):
     """Read-only dry run: counts with fixed exclusion reasons and one bundle plan.
 
-    The caller's reader enforces the deadline and budget and names its limit errors in
-    `stop`; hitting one leaves the rest unverified (never eligible) and the preview partial."""
+    Candidates are examined newest first, below ``after`` (the previous run's ``next_after``)
+    when given, and the run stops as soon as the bundle holds ``limit`` units: the counts then
+    cover the examined candidates only (state ``bundle_full``). The caller's reader enforces the
+    deadline and budget and names its limit errors in `stop`; hitting one leaves the rest
+    unverified (never eligible), the preview partial and ``stopped_at`` naming the stage."""
     if type(limit) is not int or not 1 <= limit <= BUNDLE_LIMIT:
         raise ValueError('local_rebuild_limit_invalid')
+    if after is not None and (type(after) is not int or after <= 0):
+        raise ValueError('local_rebuild_after_invalid')
     db = ledger.db
     excluded = dict.fromkeys(sorted(EXCLUSIONS), 0)
     approved = dict.fromkeys(sorted(PERMIT_STATES - {UNAPPROVED}), 0)
-    units, rows, done, eligible, state = [], [], 0, 0, 'complete'
+    units, rows, done, eligible, state, stage, last = [], [], 0, 0, 'complete', 'approvals', None
     stop = tuple(stop) + (sqlite3.OperationalError,)
     try:
         approvals = approved_units(db)
-        rows = _candidates(db)
+        stage = 'candidates'
+        rows = [row for row in _candidates(db) if after is None or row[1] < after]
+        stage = 'tally'
         tally = _tally_valid(ledger, stop)
+        stage = 'history'
         for project_id, message_id in rows:
+            if len(units) >= limit:
+                state = 'bundle_full'
+                break
             try:
                 if not tally:
                     raise ValueError('tally_invalid')
@@ -299,8 +310,9 @@ def preview(ledger, *, limit=BUNDLE_LIMIT, stop=(sqlite3.OperationalError,)):
             except ValueError as error:
                 excluded[str(error) if str(error) in EXCLUSIONS else 'receipt_inconsistent'] += 1
             done += 1
+            last = message_id
     except stop:
-        # the reader's deadline interrupted: the rest stays unverified, never eligible
+        # the reader's deadline or budget interrupted: the rest stays unverified, never eligible
         state = 'partial'
         excluded['unverified'] += len(rows) - done
     units = units[:limit]
@@ -308,8 +320,10 @@ def preview(ledger, *, limit=BUNDLE_LIMIT, stop=(sqlite3.OperationalError,)):
     if units:
         plan = {'schema': PLAN_SCHEMA, 'database': _database_identity(db), 'units': units}
         plan['bundle_digest'] = _bundle_digest(plan)
-    return {'state': state, 'candidates': len(rows), 'eligible': eligible,
-            'excluded': excluded, 'approved': approved, 'bundle_limit': BUNDLE_LIMIT, 'plan': plan}
+    return {'state': state, 'candidates': len(rows), 'examined': done, 'eligible': eligible,
+            'excluded': excluded, 'approved': approved, 'bundle_limit': BUNDLE_LIMIT,
+            'stopped_at': stage if state == 'partial' else None,
+            'next_after': last if state == 'bundle_full' else None, 'plan': plan}
 
 
 def _bundle_digest(plan):

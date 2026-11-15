@@ -533,3 +533,29 @@ def test_a_broken_other_route_reservation_is_not_left_out_of_the_proof(legacy):
             "WHERE kind='cloud_usage_reserve' AND message_id=1", ('e' * 32,))
     with pytest.raises(ValueError, match='^receipt_inconsistent$'):
         local_rebuild.unit_proof(ledger, 1, 1)
+
+
+def test_a_full_bundle_stops_the_dry_run_and_the_next_run_resumes_below_it(legacy):
+    ledger, _ = legacy
+    first = local_rebuild.preview(ledger, limit=1)
+    assert first['state'] == 'bundle_full' and first['examined'] == 1 and first['next_after'] == 2
+    assert [unit['message_id'] for unit in first['plan']['units']] == [2]
+    second = local_rebuild.preview(ledger, limit=1, after=first['next_after'])
+    assert second['state'] == 'complete' and second['next_after'] is None
+    assert [unit['message_id'] for unit in second['plan']['units']] == [1]
+    with pytest.raises(ValueError, match='local_rebuild_after_invalid'):
+        local_rebuild.preview(ledger, after=0)
+
+
+@pytest.mark.parametrize('target,stage', [('_tally_valid', 'tally'), ('unit_proof', 'history')])
+def test_a_reader_limit_names_the_stage_it_stopped_at(legacy, monkeypatch, target, stage):
+    class SyntheticLimit(ValueError):
+        pass
+
+    def limited(*args, **kwargs):
+        raise SyntheticLimit('observation_budget_exceeded')
+    ledger, _ = legacy
+    monkeypatch.setattr(local_rebuild, target, limited)
+    report = local_rebuild.preview(ledger, stop=(SyntheticLimit,))
+    assert report['state'] == 'partial' and report['stopped_at'] == stage
+    assert report['excluded']['unverified'] == report['candidates'] == 2 and report['plan'] is None

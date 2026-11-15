@@ -822,7 +822,13 @@ def command(args):
         if action == "local-rebuild-plan":
             import extract_llm_local_rebuild as local_rebuild
             with _reader(seconds=FULL_READ_SECONDS) as (db, _deadline):
-                result = local_rebuild.preview(SimpleNamespace(db=db), limit=args.limit, stop=(_ReaderLimit,))
+                try:
+                    result = local_rebuild.preview(SimpleNamespace(db=db), limit=args.limit, after=args.after,
+                                                   stop=(_ReaderLimit,))
+                finally:
+                    stopped = getattr(db.row_factory, 'stop_reason', None)
+                result['stop_reason'] = stopped if stopped in ('read_deadline', 'observation_budget_exceeded') else (
+                    None if result['state'] != 'partial' else 'read_interrupted')
             if args.out is not None and result["plan"] is not None:
                 from safe_io import atomic_write
                 atomic_write(str(args.out), lambda f: json.dump(result["plan"], f, ensure_ascii=False), mode=0o600)
@@ -1208,6 +1214,7 @@ def add_parsers(sub):
         q.set_defaults(fn=command, cloud_action=action)
     q = actions.add_parser("local-rebuild-plan", help="支払い済みで回答が保存されていない再抽出のうち、ローカルで作り直せる束を確認（送信・変更しない）")
     q.add_argument("--limit", type=int, default=20, help="1束の件数（20以下）")
+    q.add_argument("--after", type=int, help="前回の出力の next_after。この message_id より古い候補から確かめる")
     q.add_argument("--out", type=Path, help="承認に使う束の計画を書き出すファイル")
     q.set_defaults(fn=command, cloud_action="local-rebuild-plan")
     q = actions.add_parser("local-rebuild-approve", help="人の確認と記録を伴い、確認した1束のローカルでの作り直しを承認")
