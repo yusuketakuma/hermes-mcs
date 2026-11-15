@@ -144,12 +144,21 @@ def test_malformed_future_or_replaced_states_never_wait(env, damage):
 def test_a_removed_row_is_not_a_background_append(env):
     db, path, copies, outcome = env
     now = time.time()
+    with db.db:
+        db.db.execute("INSERT INTO command_receipts VALUES('baseline','h',1,NULL,'applied','{}',?)", (now,))
+    baseline = db.db.execute("SELECT MAX(rowid) FROM command_receipts").fetchone()[0]
 
     def removed(db):
         with db.db:
             db.db.execute("DELETE FROM command_receipts")   # MAX(rowid) falls
-    _fail_then(env, now, change=removed)
+    before = _fail_then(env, now, change=removed)
+    state = _state()
+    assert state["sig"]["command_receipts"] == baseline
+    assert state["commands_retry"]["failed_sig"]["command_receipts"] > baseline
+    assert maintenance._content_signature(path)["command_receipts"] is None
     assert maintenance.refresh_snapshot(path, dirty=True, now=now + 10, commands_retry=True) == "published"
+    assert snapshots.last_timing()["retry_state"] == "retry_state_not_applied"
+    assert len(copies) == before + 1
 
 
 def test_a_failure_without_a_signature_or_the_fence_records_nothing(env, monkeypatch):
