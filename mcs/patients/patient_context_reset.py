@@ -251,12 +251,12 @@ def validate_operation(req, base):
 
 def apply_tx(db, req, now, *, cfg=None, backup_dir=None):
     """Erase patient-context results inside the caller's receipt transaction; return (error, extra)."""
-    import maintenance
+    import local_backup
     try:
         cfg = load_config() if cfg is None else cfg
     except (OSError, ValueError):
         return "config_unreadable", {}
-    backup = Path(backup_dir or maintenance.BACKUP_DIR) / req["backup"]["name"]
+    backup = Path(backup_dir or local_backup.BACKUP_DIR) / req["backup"]["name"]
     try:
         # this reset's own copy: taken by the CLI just before, so modified within the last hour
         if (backup.is_symlink() or not backup.is_file() or os.path.getsize(backup) != req["backup"]["bytes"]

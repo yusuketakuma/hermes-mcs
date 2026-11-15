@@ -969,10 +969,10 @@ def command(args):
                 if action == "context-reset":
                     # The owner's order: back up under the run lock, before the erasing transaction.
                     import hashlib
-                    import maintenance
+                    import local_backup
                     try:
-                        copy = maintenance.reset_backup(str(path))
-                    except maintenance.MaintenanceError as error:
+                        copy = local_backup.reset_backup(str(path))
+                    except local_backup.MaintenanceError as error:
                         print(json.dumps({"outcome": "rejected", "error": str(error)}, ensure_ascii=False))
                         return 1
                     digest = hashlib.sha256()

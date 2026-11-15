@@ -14,6 +14,7 @@ from unittest.mock import Mock
 import pytest
 
 import collection_stages
+import local_backup
 import maintenance
 import notify_cards
 import notify_cmds
@@ -688,7 +689,7 @@ def test_main_gate_failure_writes_nothing_terminal(tmp_path, monkeypatch, capsys
     monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **k: None)
     monkeypatch.setattr(notify_spool, "publish_flags", lambda *a, **k: None)
     monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(tmp_path / "snapshots"))
-    monkeypatch.setattr(maintenance, "backup_overdue", lambda: False)
+    monkeypatch.setattr(local_backup, "backup_overdue", lambda: False)
     cleared = []
     monkeypatch.setattr(notify_cards, "clear_snapshot_dirty",
                         lambda *a, **kw: cleared.append(1))

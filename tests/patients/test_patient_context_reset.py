@@ -263,7 +263,7 @@ def cli(built, tmp_path, monkeypatch):
     import argparse
     import sqlite3
     import cloud_cli
-    import maintenance
+    import local_backup
     import mcs_util
     ledger = built[0]
     root = tmp_path / "synthetic-root"
@@ -271,7 +271,7 @@ def cli(built, tmp_path, monkeypatch):
     with sqlite3.connect(str(root / "data" / "ledger.db")) as target:
         ledger.db.backup(target)
     monkeypatch.setattr(mcs_util, "HOME", str(root))
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(root / "data" / "backups"))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(root / "data" / "backups"))
     monkeypatch.setattr(cloud_cli, "_context_reset_preview", lambda _cfg: {"refusal": None, "preview_hash": "d" * 64})
     parser = argparse.ArgumentParser()
     cloud_cli.add_parsers(parser.add_subparsers(dest="command"))

@@ -10,6 +10,7 @@ import pytest
 
 import mcs_backup as backup
 import backup_evidence
+import held_restore
 from test_mcs_backup import NOW, world as world
 from ops_testkit import _tree
 
@@ -28,8 +29,10 @@ def inspection(world, tmp_path, monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("readonly inspection attempted a write, key or external action")
 
-    for name in ("_keychain_read", "store_keychain", "_openssl", "atomic_write", "publish_tmp", "_copy_private"):
+    for name in ("_keychain_read", "store_keychain", "_openssl", "atomic_write", "publish_tmp"):
         monkeypatch.setattr(backup, name, forbidden)
+    for name in ("copy_private", "atomic_write"):
+        monkeypatch.setattr(held_restore, name, forbidden)
     for name in ("record_lock", "record_success", "record_failure", "atomic_write"):
         monkeypatch.setattr(backup_evidence, name, forbidden)
     monkeypatch.setattr(backup.subprocess, "run", forbidden)
