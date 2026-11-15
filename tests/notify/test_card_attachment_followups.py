@@ -571,8 +571,13 @@ def test_a_followup_held_before_the_first_updates_thread_receipt_replans_once_it
     assert held_seen, _parts_dump(led)
     assert [call["filename"] for call in world.client.upload_calls] == ["synthetic.png"]
     monkeypatch.setattr(ledger.time, "time", lambda: NOW + 11 + notify_cards.RESEAT_S)
+    # The tick's card sweep is what reconsiders a held card (flush does not): with the first
+    # update's receipts all in, it replaces the held update.
+    notify_cards.sweep(led, notify_flush._config())
+    assert not _identity_held(led), _parts_dump(led)
     notify_flush.flush(led)
     asyncio.run(_late_slack_cycle(world, led))
+    notify_cards.sweep(led, notify_flush._config())
     notify_flush.flush(led)
     assert all(_late_followup_state(led, eid) == "accepted" for eid in events), _parts_dump(led)
     assert not _identity_held(led), _parts_dump(led)
@@ -592,6 +597,7 @@ def test_a_followup_held_before_the_first_updates_thread_receipt_replans_once_it
     # Re-entry and worker resume consume the same receipts and send nothing more.
     calls = len(world.client.calls)
     notify_spool.recover(led, SLACK, {})
+    notify_cards.sweep(led, notify_flush._config())
     notify_flush.flush(led)
     asyncio.run(_late_slack_cycle(world, led))
     assert len(world.client.upload_calls) == 2 and len(world.client.calls) == calls
@@ -624,15 +630,18 @@ def test_a_held_followup_is_not_replanned_while_the_first_update_is_unsettled_or
             led.db.execute("UPDATE notification_render_parts SET state=?, error_code=NULL "
                            "WHERE delivery_id=? AND kind=?", (state, first, kind))
     if drift:
-        # A route epoch bump cancels the held update on the next sweep; its replacement must
-        # still wait for the first update, on that sweep and every later one.
+        # A route epoch bump would cancel the held update, but the admission before any cancel
+        # keeps it (and its binding) while the first update is unsettled.
         cfg = notify_flush._config()
         monkeypatch.setattr(notify_flush, "_config", lambda: {
             **cfg, "notify": {**cfg["notify"], "route_epoch": cfg["notify"]["route_epoch"] + 1}})
     monkeypatch.setattr(ledger.time, "time", lambda: NOW + 11 + notify_cards.RESEAT_S)
     held_rev = led.db.execute("SELECT render_rev FROM notification_renders WHERE delivery_id=?", (held,)).fetchone()[0]
+    bound = led.db.execute("SELECT delivery_id FROM notification_intent_cards WHERE event_id=?",
+                           (events[1],)).fetchall()
     seen = None
     for _ in range(3):           # repeated sweeps neither replan nor churn rows, bindings or attempts
+        notify_cards.sweep(led, notify_flush._config())
         notify_flush.flush(led)
         now_seen = (
             tuple(led.db.execute("SELECT COUNT(*), MAX(render_rev) FROM notification_renders").fetchone()),
@@ -643,8 +652,9 @@ def test_a_held_followup_is_not_replanned_while_the_first_update_is_unsettled_or
         assert seen is None or now_seen == seen, _parts_dump(led)
         seen = now_seen
     assert seen[0][1] == held_rev, _parts_dump(led)          # no replacement was issued
-    assert (led.db.execute("SELECT state FROM notification_renders WHERE delivery_id=?", (held,)).fetchone()[0]
-            == ("cancelled" if drift else "held")), _parts_dump(led)
+    assert led.db.execute("SELECT state FROM notification_renders WHERE delivery_id=?",
+                          (held,)).fetchone()[0] == "held", _parts_dump(led)
+    assert seen[1] == [tuple(row) for row in bound], _parts_dump(led)   # the binding never moved
     assert [call["filename"] for call in world.client.upload_calls] == ["synthetic.png"]
     assert _late_followup_state(led, events[1]) != "accepted" and not legacy
 
