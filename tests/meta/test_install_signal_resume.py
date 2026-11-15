@@ -58,10 +58,12 @@ raise SystemExit(result)
         os.killpg(process.pid, sig)
         process.wait(timeout=5)
     finally:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        # Do not signal a process group after reaping its installer.
+        if process.returncode is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         process.wait(timeout=5)
     (stub / "state/signal-release").touch()
     if boundary == "before_config":

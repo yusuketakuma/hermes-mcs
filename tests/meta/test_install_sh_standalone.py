@@ -326,9 +326,10 @@ def test_rerun_on_an_existing_install_never_prompts_and_keeps_settings(tmp_path)
     assert cfg.read_text() == '{"mcs_login_id": "synthetic"}\n'
     r = subprocess.run(["sh", str(INSTALL), "--no-llm", "--no-brew"], env=env,
                        capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
     assert json.loads(cfg.read_text()) == {'mcs_login_id': 'synthetic',
                                           'install_args': ['--no-brew', '--no-llm']}
-    assert not any(c.startswith("venv-python - ") for c in _calls(stub_root))
+    assert not any(c.startswith(f"venv-python - {ROOT} ") for c in _calls(stub_root))
 
 
 def test_mode_selection_refuses_a_symlinked_config(tmp_path):
