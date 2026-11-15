@@ -286,3 +286,27 @@ def test_a_local_length_stop_splits_the_piece_and_every_split_stays_local_and_ta
         "SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' AND message_id=1")]
     assert any('split_size' in meta for meta in splits)                # the split plan was written
     assert all(meta.get('local_rebuild') == local_rebuild.tag(unit) for meta in splits)
+
+
+def test_a_failed_reprocessing_of_an_adopted_unit_settles_with_the_tag_and_stays_adopted(routed, monkeypatch):
+    """A human report re-pends the adopted unit; the local re-extract fails (no answer), so the
+    report settles by re-minting the prior content with human_fix.applied=false. That settling
+    write carries the approval tag inside its re-proved transaction, and the unit stays ADOPTED
+    (applied=false is quality, not authenticity)."""
+    ledger, calls, reserved, results = routed[0], routed[2], routed[3], routed[4]
+    unit = _approved(ledger, monkeypatch)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', lambda prompt, **_kw: {'symptoms': [], 'summary': '合成'})
+    assert worker.run_pending(ledger, limit=1, budget_s=180)['done'] == 1
+    [final] = _current(ledger)
+    with ledger.db:
+        ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,created_at) "
+                          "VALUES('extract_feedback_v1',1,1,?,0)", (json.dumps({'artifact_id': final['artifact_id']}),))
+    _no_cloud_unit(monkeypatch)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', lambda prompt, **_kw: None)
+    worker.run_pending(ledger, limit=1, budget_s=180)
+    [settled] = _current(ledger)
+    meta = json.loads(settled['meta'])
+    assert settled['artifact_id'] != final['artifact_id']
+    assert meta['human_fix']['applied'] is False and meta['local_rebuild'] == local_rebuild.tag(unit)
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ADOPTED
+    assert calls == [] and reserved == [] and results == []

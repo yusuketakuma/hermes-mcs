@@ -82,9 +82,11 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, re
     reads as invalid material. Adverse evidence — actionable QC flags and
     human reports — still blocks through ``review_material``.
 
-    ``adverse_review=False`` (material only) drops exactly that adverse evidence and nothing
-    else: it asks whether the selected final is still the authentic adoption it was, not
-    whether it may be published now. Publication readers never pass it."""
+    ``adverse_review=False`` (material only) asks whether the selected final is still the
+    authentic adoption it was, not whether it may be published now: the adverse review, the
+    completeness resolution, validation drops and applied=False markers are quality and are
+    not required; every binding, provenance, seal and completeness-claim proof still is.
+    Publication readers never pass it."""
     out = {"state": "attention", "completed": 0, "total": 0, "backend": "legacy"}
     if not row:
         return out
@@ -218,7 +220,9 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, re
                     type(validation.get(key)) is not int or validation[key] < 0
                     for key in ("items_dropped", "evidence_dropped"))):
             return out
-        if bound and required_contract is None and not extract_quality.completeness_resolved(meta):
+        authentic_only = material and not adverse_review
+        if (bound and required_contract is None and not authentic_only
+                and not extract_quality.completeness_resolved(meta)):
             return out
         if (bound and isinstance(integrity, dict)
                 and ("completeness" in integrity or "completeness_chunks" in integrity)):
@@ -271,10 +275,11 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, re
         if required_contract is not None and bound and not meta.get("error") and valid is not None:
             out["execution_verified"] = True
         if (bound and not meta.get("error") and valid is not None
-                and extract_quality.completeness_resolved(meta)
-                and not valid.get("_items_dropped") and not valid.get("_evidence_dropped")
-                and not any(isinstance(meta.get(key), dict) and meta[key].get("applied") is False
-                            for key in ("qc_fix", "human_fix"))):
+                and (authentic_only or (
+                    extract_quality.completeness_resolved(meta)
+                    and not valid.get("_items_dropped") and not valid.get("_evidence_dropped")
+                    and not any(isinstance(meta.get(key), dict) and meta[key].get("applied") is False
+                                for key in ("qc_fix", "human_fix"))))):
             out.update(state="complete", completed=out["total"])
             return out
         if not bound or meta.get("error"):
