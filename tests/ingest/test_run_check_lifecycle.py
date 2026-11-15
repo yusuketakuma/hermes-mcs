@@ -7,6 +7,7 @@ import collection_stages
 import update_launch
 import health_report
 import mcs_contract
+import errno
 import json
 import re
 import os
@@ -427,6 +428,7 @@ def test_lock_held_exit_waits_for_scheduled_and_command_runs(
 @pytest.mark.parametrize("cause, reason, stage", [
     ("busy", "run_lock_not_acquired", "write_lock"),
     ("marker", "update_marker_present", "update_restore_fence"),
+    ("marker_after", "update_marker_present", "update_restore_fence"),
     ("source", "source_generation_changed", "generation_fence"),
 ])
 def test_entry_reports_only_observed_writer_refusal(
@@ -440,9 +442,20 @@ def test_entry_reports_only_observed_writer_refusal(
     monkeypatch.setattr(run_check, "acquire_run_lock", lambda path: None)
     fd = (None if cause == "busy" else
           os.open(str(tmp_path / "synthetic-lock"), os.O_CREAT | os.O_RDWR, 0o600))
-    monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda path: fd)
+    attempts, acquired = [], []
+    marker = data / writer_lock.UPDATE_MARKER_NAME
+
+    def acquire(path):
+        attempts.append(path)
+        if fd is not None:
+            acquired.append(fd)
+            if cause == "marker_after":
+                marker.write_text("SYNTHETIC_SECRET_MUST_NOT_APPEAR")
+        return fd
+
+    monkeypatch.setattr(writer_lock, "acquire_run_lock", acquire)
     if cause == "marker":
-        (data / writer_lock.UPDATE_MARKER_NAME).write_text("SYNTHETIC_SECRET_MUST_NOT_APPEAR")
+        marker.write_text("SYNTHETIC_SECRET_MUST_NOT_APPEAR")
     for name in ("Ledger", "MCSAdapter", "_commands_only", "_entry_code_current"):
         monkeypatch.setattr(run_check, name, lambda *a, **k: pytest.fail("entry gate crossed"))
     monkeypatch.setattr(sys, "argv", ["run_check"] + (["--commands-only"] if mode == "commands" else []))
@@ -458,9 +471,16 @@ def test_entry_reports_only_observed_writer_refusal(
         assert not (data / "ledger.db").exists() and not (data / "health.json").exists()
         if cause == "busy":
             assert 100 + run_check.LOCK_WAIT_S <= clock[0] < 100 + run_check.LOCK_WAIT_S + 0.3
-        if fd is not None:
-            with pytest.raises(OSError):
+        if cause == "marker":
+            assert attempts == [] and acquired == []
+            assert os.fstat(fd).st_ino == (tmp_path / "synthetic-lock").stat().st_ino
+        elif fd is not None:
+            assert attempts == [run_check.LOCKFILE] and acquired == [fd]
+            with pytest.raises(OSError) as error:
                 os.fstat(fd)
+            assert error.value.errno == errno.EBADF
+        else:
+            assert attempts and acquired == []
     finally:
         if fd is not None:
             try:
@@ -508,7 +528,7 @@ def test_not_started_records_its_mode_without_opening_the_ledger(tmp_path, monke
     assert not (data / "health.json").exists()
 
 
-@pytest.mark.parametrize("fence", [None, "marker", "code_changed"])
+@pytest.mark.parametrize("fence", [None, "marker", "marker_after", "code_changed"])
 def test_command_worker_catches_short_lock_window_without_crossing_update(
         tmp_path, monkeypatch, capsys, fence):
     data = _point_run_check_at(tmp_path, monkeypatch)
@@ -520,10 +540,21 @@ def test_command_worker_catches_short_lock_window_without_crossing_update(
     monkeypatch.setattr(writer_lock, "code_stamp", lambda: 124 if fence == "code_changed" else 123)
     monkeypatch.setattr(writer_lock, "code_stamp_checked", lambda: 123)
     monkeypatch.setattr(run_check, "acquire_run_lock", lambda path: None)
-    monkeypatch.setattr(writer_lock, "acquire_run_lock",
-                        lambda path: fd if clock[0] >= 100.6 else None)
+    attempts, acquired = [], []
+    marker = data / writer_lock.UPDATE_MARKER_NAME
+
+    def acquire(path):
+        attempts.append(path)
+        if clock[0] < 100.6:
+            return None
+        acquired.append(fd)
+        if fence == "marker_after":
+            marker.write_text("synthetic update")
+        return fd
+
+    monkeypatch.setattr(writer_lock, "acquire_run_lock", acquire)
     if fence == "marker":
-        (data / writer_lock.UPDATE_MARKER_NAME).write_text("synthetic update")
+        marker.write_text("synthetic update")
 
     def commands(held_fd, deadline):
         calls.append((held_fd, deadline, clock[0]))
@@ -541,8 +572,14 @@ def test_command_worker_catches_short_lock_window_without_crossing_update(
             assert capsys.readouterr().out == ""
         else:
             assert calls == []
-        with pytest.raises(OSError):
-            os.fstat(fd)  # every accepted or refused lock is released
+        if fence == "marker":
+            assert attempts == [] and acquired == []
+            assert os.fstat(fd).st_ino == (tmp_path / "synthetic-lock").stat().st_ino
+        else:
+            assert attempts and acquired == [fd]
+            with pytest.raises(OSError) as error:
+                os.fstat(fd)  # the accepted or refused lock is released
+            assert error.value.errno == errno.EBADF
     finally:
         try:
             os.close(fd)
