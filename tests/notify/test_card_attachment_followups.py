@@ -561,7 +561,8 @@ def _snapshot(led):
     """Every stored row a blocked replacement must leave alone."""
     return {table: [tuple(row) for row in led.db.execute(f"SELECT * FROM {table} ORDER BY rowid")]
             for table in ("notification_renders", "notification_render_parts", "notification_intent_cards",
-                          "notification_delivery_attempts", "notification_action_tokens")}
+                          "notification_delivery_attempts", "notification_action_tokens",
+                          "notification_view_manifests")}
 
 
 def test_a_followup_held_before_the_first_updates_thread_receipt_replans_once_it_lands(
@@ -659,9 +660,19 @@ def test_a_held_followup_is_not_replanned_while_the_first_update_is_unsettled_or
         monkeypatch.setattr(notify_flush, "_config", lambda: {
             **cfg, "notify": {**cfg["notify"], "route_epoch": cfg["notify"]["route_epoch"] + 1}})
     elif drift == "source":
-        # The source post changes, so the card's content drifts as well.
+        # The source post is edited (its body and content hash together), so the card's source
+        # fingerprint, not only its presentation, drifts.
+        import notify_render
+        import notify_scope
+        card_id = led.db.execute("SELECT card_id FROM notification_renders WHERE delivery_id=?",
+                                 (held,)).fetchone()[0]
+        fingerprint = notify_render.source_fingerprint(led.db, notify_scope.card_row(led.db, card_id))
+        edited = "合成の本文を編集しました。"
         with led.db:
-            led.db.execute("UPDATE messages SET body_text=body_text || ' 合成の追記' WHERE message_id=100")
+            led.db.execute("UPDATE messages SET body_text=?, content_hash=? WHERE message_id=100",
+                           (edited, hashlib.sha256(edited.encode()).hexdigest()))
+        assert notify_render.source_fingerprint(
+            led.db, notify_scope.card_row(led.db, card_id)) != fingerprint
     for _ in range(3):           # real sweeps and flushes neither replan nor touch any stored row
         notify_cards.sweep(led, notify_flush._config())
         notify_flush.flush(led)
@@ -669,6 +680,53 @@ def test_a_held_followup_is_not_replanned_while_the_first_update_is_unsettled_or
     assert _identity_held(led) == [held], _parts_dump(led)
     assert [call["filename"] for call in world.client.upload_calls] == ["synthetic.png"]
     assert _late_followup_state(led, events[1]) != "accepted" and not legacy
+
+
+def test_a_non_identity_held_update_waits_for_the_delivered_render_before_it(led, tmp_path, monkeypatch):
+    import notify_card_renders
+    import notify_flush
+    import notify_scope
+
+    world, _events, _blobs, _legacy = _two_late_files_recovered(led, tmp_path, monkeypatch)
+    _cycle_card_then_thread(world, led)
+    [held] = _identity_held(led)
+    card_id = led.db.execute("SELECT card_id FROM notification_renders WHERE delivery_id=?", (held,)).fetchone()[0]
+    earlier = led.db.execute(
+        "SELECT r.delivery_id FROM notification_renders r WHERE r.card_id=? AND r.state='delivered' AND EXISTS("
+        "SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=r.delivery_id AND p.kind='file_group') "
+        "ORDER BY r.render_rev DESC LIMIT 1", (card_id,)).fetchone()[0]
+    with led.db:
+        # The latest render is held for another reason, and the delivered one before it has a
+        # file group whose receipt is not known.
+        led.db.execute("UPDATE notification_render_parts SET error_code='part_budget_exceeded' "
+                       "WHERE delivery_id=?", (held,))
+        led.db.execute("UPDATE notification_render_parts SET state='unknown' "
+                       "WHERE delivery_id=? AND kind='file_group'", (earlier,))
+    monkeypatch.setattr(ledger.time, "time", lambda: NOW + 11 + notify_cards.RESEAT_S)
+    cfg = notify_flush._config()
+    drifted = {**cfg, "notify": {**cfg["notify"], "route_epoch": cfg["notify"]["route_epoch"] + 1}}
+    monkeypatch.setattr(notify_flush, "_config", lambda: drifted)
+    before = _snapshot(led)
+    for _ in range(2):           # the route drift would cancel the held update; it waits instead
+        notify_cards.sweep(led, drifted)
+        assert _snapshot(led) == before, _parts_dump(led)
+    card = notify_scope.card_row(led.db, card_id)
+    assert not notify_card_renders._prior_parts_admit(led.db, card)
+    with led.db:
+        led.db.execute("UPDATE notification_render_parts SET state='delivered' "
+                       "WHERE delivery_id=? AND kind='file_group'", (earlier,))
+    # Once that receipt is known, an unpublished queued latest render no longer waits either.
+    assert notify_card_renders._prior_parts_admit(led.db, card)
+    with led.db:
+        led.db.execute("UPDATE notification_renders SET state='queued' WHERE delivery_id=?", (held,))
+    assert notify_card_renders._prior_parts_admit(led.db, notify_scope.card_row(led.db, card_id))
+    with led.db:
+        led.db.execute("UPDATE notification_renders SET state='held' WHERE delivery_id=?", (held,))
+    notify_cards.sweep(led, drifted)
+    assert led.db.execute("SELECT state FROM notification_renders WHERE delivery_id=?",
+                          (held,)).fetchone()[0] == "cancelled", _parts_dump(led)
+    assert led.db.execute("SELECT MAX(render_rev) FROM notification_renders WHERE card_id=?", (card_id,)).fetchone()[0] \
+        > led.db.execute("SELECT render_rev FROM notification_renders WHERE delivery_id=?", (held,)).fetchone()[0]
 
 
 def test_a_replacement_whose_build_fails_after_a_passing_trial_leaves_the_hold_intact(

@@ -78,6 +78,42 @@ def test_late_reply_gets_its_own_card_in_the_root_thread(led, monkeypatch):
     assert notify_cards._stamp_target(led.db, root, root_content)[0] == 100
 
 
+def test_a_reply_cards_identity_replan_waits_on_the_parent_the_planner_selects(led, monkeypatch):
+    import notify_card_renders
+    import notify_parts
+    import notify_scope
+    clock = [NOW]
+    monkeypatch.setattr(notify_cards.time, "time", lambda: clock[0])
+    _seed_thread(led, mids=(100,))
+    assert _dispatch(led, _intent(led), REPLY, now=clock[0])["dispatched"]
+    world = _mkworld(led)
+    _deliver(world, led)
+    clock[0] += 3600
+    _msg(led, 202, parent=100, body="合成の後から届いた返信", ts=int(clock[0]))
+    assert _dispatch(led, _intent(led, payload={"message_ids": [202]}), REPLY, now=clock[0])["dispatched"]
+    notify_spool.publish_flags(REPLY, str(world.root))
+    _deliver(world, led)
+    root, reply = _cards(led)
+    reply_card = notify_scope.card_row(led.db, reply["card_id"])
+    # The replan reads the same parent the planner reuses attachment receipts from.
+    parent, inherited = notify_parts.attachment_history_card(led.db, reply_card, "update")
+    assert inherited and parent["card_id"] == root["card_id"]
+    latest = led.db.execute("SELECT delivery_id FROM notification_renders WHERE card_id=? "
+                            "ORDER BY render_rev DESC LIMIT 1", (reply["card_id"],)).fetchone()[0]
+    assert not notify_card_renders._replan_blocked(led.db, reply_card, latest)
+    root_render = led.db.execute("SELECT delivery_id FROM notification_renders WHERE card_id=? "
+                                 "AND state='delivered' ORDER BY render_rev DESC LIMIT 1",
+                                 (root["card_id"],)).fetchone()[0]
+    with led.db:
+        # The parent's delivered render still has a part whose receipt is not known.
+        led.db.execute("UPDATE notification_render_parts SET state='unknown' WHERE delivery_id=? "
+                       "AND part_id=(SELECT part_id FROM notification_render_parts WHERE delivery_id=? "
+                       "AND kind IN ('thread','body_part','attachment_part','file_group') ORDER BY idx LIMIT 1)",
+                       (root_render, root_render))
+        assert led.db.execute("SELECT changes()").fetchone()[0] == 1
+    assert notify_card_renders._replan_blocked(led.db, reply_card, latest)
+
+
 def test_reply_card_waits_until_the_root_thread_exists(led):
     _seed_thread(led, mids=(100, 101))
     assert _dispatch(led, _intent(led), REPLY, now=NOW)["dispatched"]
