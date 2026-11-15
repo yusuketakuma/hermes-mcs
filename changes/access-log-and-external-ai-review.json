@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "患者情報の閲覧・操作記録と、新規導入時の外部AI送信の施設確認を追加",
+  "summary": "Slack・Discord・LINE WORKSの /mcs 操作は、操作者・チャンネル・操作の種類・患者ID・結果を、改ざんを検知できる記録として data/access_log/ に残してから回答します。記録できない場合、閲覧の回答は返しません（確定済みの依頼・操作は従来どおり返します）。検索語・本文・患者名は記録しません。新しく導入する環境では、APIキーを登録しただけではAnthropic・OpenAI・Jevへの送信が自動で始まらず、施設の責任者が確認を記録した後に始まります。既存の環境の動作は変わりません。",
+  "upgrade": "既存環境は追加操作不要です（external_transfer.json が無いため従来どおりキーで自動有効化します）。Hermesモードは gateway の再起動、LINE WORKS は独立アダプターの再起動で閲覧記録が有効になります。新規導入で外部AIを使う場合は、送信先との契約・患者への周知を確認してから python3 mcs/ops/mcs_compliance.py acknowledge --by 氏名 --reason 根拠 --services anthropic,jev --confirm-human を実行します。config.json で mode を明示した設定は確認記録に関係なく従来どおりです。",
+  "details": [
+    "記録は月ごとの access-YYYY-MM.jsonl（0600、ディレクトリ0700）に1行ずつ追記し、各行が直前の行のSHA-256を持ちます。行の削除・改変・月ファイルの欠落は mcs_compliance.py access-log verify で検出します。",
+    "mcs_compliance.py access-log review は利用者ごとの件数・閲覧患者数・拒否・夜間（JST 20〜7時）の件数を出し、定期確認の対象に印を付けます。保存期間の自動削除はしません。",
+    "外部AIの確認記録は <MCS_ROOT>/external_transfer.json（0600）に、確認者・根拠・対象サービス・日時と過去の確認履歴を保存します。記録が読めない場合は自動有効化しません。"
+  ],
+  "refs": ["mcs/core/access_log.py", "mcs/core/external_transfer.py", "mcs/ops/mcs_compliance.py", "adapters/common/dispatch.py", "mcs/llm/cloud_policy.py", "mcs/semantic/semantic_policy.py", "mcs/ops/setup/setup_config_snapshot.py"]
+}

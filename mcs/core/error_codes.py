@@ -152,6 +152,7 @@ KNOWN_ERROR_CODES = frozenset({
     "tracking_ack_observation_incomplete",
     "tracking_ack_receipt_unverified",
     "worker_transport_invalid",
+    "by_and_reason_required", "confirm_human_required", "external_transfer_not_required", "external_transfer_record_invalid", "services_invalid",
 })
 
 

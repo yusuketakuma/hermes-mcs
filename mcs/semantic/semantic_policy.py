@@ -207,7 +207,9 @@ def runtime_config(cfg: dict, *, root=None) -> tuple[dict, list]:
     """Resolve an omitted Jev mode from this MCS dotenv without widening its scope."""
     block = cfg.get("semantic")
     explicit = isinstance(block, dict) and "mode" in block
-    return semantic_config(cfg, key_present=not explicit and bool(jev.api_key(root)))
+    import external_transfer
+    return semantic_config(cfg, key_present=not explicit and bool(jev.api_key(root))
+                           and external_transfer.auto_enable_allowed("jev", root))
 
 
 def policy_fingerprint(scfg: dict) -> str:
