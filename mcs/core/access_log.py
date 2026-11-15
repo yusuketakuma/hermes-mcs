@@ -37,7 +37,7 @@ _FIELD_SETS = (frozenset(FIELDS), frozenset(FIELDS) - {"patients", "patients_mor
 
 
 class AccessLogError(RuntimeError):
-    """A fixed failure code; the record was not durably appended."""
+    """A fixed failure code; a durable append could not be confirmed."""
 
 
 def directory(data_dir) -> str:
@@ -109,7 +109,7 @@ def _last_line(dir_fd, name):
     finally:
         os.close(fd)
     lines = [line for line in tail.split(b"\n") if line]
-    return lines[-1] if lines else None
+    return (lines[-1] if lines else None), bool(tail) and not tail.endswith(b"\n")
 
 
 @contextmanager
@@ -130,8 +130,7 @@ def record(data_dir, *, via, actor, op, channel=None, kind=None, project_id=None
            patients=(), outcome="ok", query=False, now=None) -> dict:
     """Durably append one record; raise AccessLogError when that is not certain.
 
-    ``patients`` are the ids an answer actually contained, so a list view
-    is attributed to every patient it showed, not only to the request.
+    ``patients`` are ids attributed to an answer; summary ids may be candidates.
     """
     now = time.time() if now is None else now
     listed, more = _patients(patients)
@@ -147,27 +146,41 @@ def record(data_dir, *, via, actor, op, channel=None, kind=None, project_id=None
     try:
         with _locked(dir_fd):
             names = _files(dir_fd)
-            previous = None
-            for candidate in reversed([n for n in names if n <= name]):
-                previous = _last_line(dir_fd, candidate)
-                if previous is not None:
-                    break
-            entry["prev"] = GENESIS if previous is None else _digest(previous)
-            line = json.dumps(entry, ensure_ascii=False, sort_keys=True,
-                              separators=(",", ":")).encode("utf-8")
-            if len(line) >= MAX_LINE:
-                raise AccessLogError("access_log_record_too_large")
-            fd = os.open(name, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
+            if names and names[-1] > name:
+                # A clock set back must not insert lines before later ones in file order.
+                name = names[-1]
+            fd = os.open(name, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
                          | os.O_CLOEXEC, 0o600, dir_fd=dir_fd)
             try:
                 _check_private(fd, is_dir=False)
-                if os.write(fd, line + b"\n") != len(line) + 1:
+                previous, separator = None, b""
+                for candidate in reversed([n for n in names + [name] if n <= name]):
+                    previous, unterminated = _last_line(dir_fd, candidate)
+                    if previous is not None:
+                        if unterminated:
+                            if not verify(data_dir)["ok"]:
+                                raise AccessLogError("access_log_corrupt")
+                            if candidate == name:
+                                separator = b"\n"
+                        break
+                entry["prev"] = GENESIS if previous is None else _digest(previous)
+                line = json.dumps(entry, ensure_ascii=False, sort_keys=True,
+                                  separators=(",", ":")).encode("utf-8")
+                if len(line) >= MAX_LINE:
+                    raise AccessLogError("access_log_record_too_large")
+                payload = separator + line + b"\n"
+                if os.write(fd, payload) != len(payload):
                     raise AccessLogError("access_log_write_incomplete")
                 os.fsync(fd)
             finally:
                 os.close(fd)
-            if name not in names:
-                os.fsync(dir_fd)
+            # A failed earlier append may have left either directory entry unsynced.
+            os.fsync(dir_fd)
+            parent_fd = os.open(os.fspath(data_dir), os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+            try:
+                os.fsync(parent_fd)
+            finally:
+                os.close(parent_fd)
     except OSError as error:
         raise AccessLogError("access_log_unavailable") from error
     finally:

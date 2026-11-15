@@ -50,12 +50,14 @@ def review(entries, *, max_patients: int) -> list[dict]:
         hour = datetime.fromtimestamp(entry.get("ts", 0), JST).hour
         if hour >= OFF_HOURS[0] or hour < OFF_HOURS[1]:
             row["off_hours"] += 1
-        row["patients"].update(_patients_of(entry))
-        unlisted = entry.get("patients_more") or 0
-        listed = {pid for pid in entry.get("patients") or () if type(pid) is int}
-        row["unlisted"] += unlisted
-        row["unknown_records"] += _patients_unattributed(entry)
-        row["largest_list"] = max(row["largest_list"], len(listed) + unlisted)
+        unknown = _patients_unattributed(entry)
+        row["unknown_records"] += unknown
+        if not unknown:
+            row["patients"].update(_patients_of(entry))
+            unlisted = entry.get("patients_more") or 0
+            listed = {pid for pid in entry.get("patients") or () if type(pid) is int}
+            row["unlisted"] += unlisted
+            row["largest_list"] = max(row["largest_list"], len(listed) + unlisted)
     result = []
     for (via, actor), row in sorted(actors.items(), key=lambda item: str(item[0])):
         patients = max(len(row["patients"]), row["largest_list"])
@@ -118,9 +120,11 @@ def main(argv=None) -> int:
         if args.action == "show":
             unlisted = 0
             for entry in entries:
-                if args.project is None or args.project in _patients_of(entry):
+                matched = args.project in _patients_of(entry)
+                if args.project is None or matched:
                     _print(entry)
-                elif entry.get("patients_more") or _patients_unattributed(entry):
+                if args.project is not None and (_patients_unattributed(entry)
+                                                 or (not matched and entry.get("patients_more"))):
                     unlisted += 1
             if unlisted:
                 print(f"患者IDを特定できない記録が{unlisted}件あります。"

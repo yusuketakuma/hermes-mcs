@@ -10,8 +10,8 @@ from pathlib import Path
 import re
 from urllib.parse import urlsplit
 
-from adapters.common import (commands as native_commands, eventlog, paths, projects,
-                             summary, text as display_text, worker)
+from adapters.common import (commands as native_commands, eventlog, paths, summary,
+                             text as display_text, worker)
 from adapters.common.access import CONTEXT_FLAGS
 from adapters.common.dispatch import make_handler
 from mcs_standalone.credential_gate import protected
@@ -289,8 +289,9 @@ class _Commands:
                 if {"mine", "担当"} & set(raw.lower().split()):
                     name = str(getattr(interaction.user, "display_name", "") or "")
                 got = await native_commands.run_native(
-                    summary.answer, self.settings["snapshot"], raw, name=name,
-                    allowed=projects.summary_scope(self.settings), dialect="discord",
+                    summary.answer_recorded, self.settings, raw, transport="discord",
+                    user=identity["user_id"], channel=identity["chat_id"],
+                    scope_id=identity["scope_id"], name=name, dialect="discord",
                     admission=self.native_admission)
                 answer = (got.get("text") or got["error"]) if self.scope.current() \
                     else "接続状態が変更されました。再起動・再接続後にもう一度操作してください。"

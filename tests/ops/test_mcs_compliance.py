@@ -47,7 +47,7 @@ def test_review_exact_count_when_no_ids_are_omitted():
 def test_review_marks_unattributed_summary_and_legacy_list_as_incomplete():
     entry = {"via": "slack", "actor": "c", "ts": 1_790_000_000, "outcome": "ok",
              "project_id": None}
-    summary = {**entry, "op": "summary", "patients": [], "patients_more": 0}
+    summary = {**entry, "op": "summary", "patients": [10, 11], "patients_more": 0}
     legacy_list = {**entry, "op": "read"}
     denied = {**legacy_list, "outcome": "user_not_allowed"}
     row, = mcs_compliance.review([summary, legacy_list, denied], max_patients=2)
@@ -61,12 +61,12 @@ def test_show_project_warns_when_an_omitted_id_cannot_be_excluded(tmp_path, monk
     mcs_compliance.access_log.record(data, via="slack", actor="synthetic", op="read",
                                      patients=range(1, 206), now=1_790_000_000)
     mcs_compliance.access_log.record(data, via="slack", actor="synthetic", op="summary",
-                                     now=1_790_000_000)
+                                     patients=[1, 205], now=1_790_000_000)
     monkeypatch.setattr(mcs_compliance, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_compliance.time, "time", lambda: 1_790_000_000)
     assert mcs_compliance.main(["access-log", "show", "--project", "205"]) == 0
     output = capsys.readouterr()
-    assert output.out == "" and "患者IDを特定できない記録が2件" in output.err
+    assert '"op": "summary"' in output.out and "患者IDを特定できない記録が2件" in output.err
     assert mcs_compliance.main(["access-log", "show", "--project", "1"]) == 0
     output = capsys.readouterr()
     assert '"project_id": null' in output.out and "患者IDを特定できない記録が1件" in output.err

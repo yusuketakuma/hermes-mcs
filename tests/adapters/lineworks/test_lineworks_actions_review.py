@@ -255,6 +255,7 @@ def test_human_receipt_is_tracked_before_publication_can_lose_its_ack(tmp_path, 
 
 
 def test_dm_summary_word_answers_privately_from_the_snapshot(tmp_path, monkeypatch):
+    import access_log
     from adapters.common import summary
     w = world(tmp_path, action="summary")
     seen = []
@@ -276,6 +277,8 @@ def test_dm_summary_word_answers_privately_from_the_snapshot(tmp_path, monkeypat
     assert [(s, r) for s, r, _ in seen] == [
         ("/synthetic/ledger-snapshot.db", "mine name:山田")]
     assert seen[0][2]["allowed"] == [1] and seen[0][2]["dialect"] == "plain"
+    entry, = access_log.read(w.data)
+    assert (entry["actor"], entry["op"]) == ("lineworks:40029600:operator", "summary")
 
 
 @pytest.mark.parametrize("text", ["", "   ", "　　"])

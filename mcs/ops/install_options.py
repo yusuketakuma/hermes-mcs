@@ -495,11 +495,11 @@ def bootstrap_fresh(config_path, legacy_path, proof, data_token, update_fd):
             if (before['mode'] != 'legacy_unverified' or not isinstance(snap, dict)
                     or list(snap['identity']) != expected['identity'] or snap['sha256'] != expected['sha256']):
                 raise ValueError('fresh_config_changed')
-            # A new installation sends nothing to external AI on an API key alone. The pending
-            # record comes first: a crash after the split commit must not leave it unwritten.
+            _fresh_inventory(root, data_token, fd)
+            # A new installation sends nothing to external AI on an API key alone; the
+            # hold precedes the settings so an interrupted bootstrap cannot skip it.
             import external_transfer
             external_transfer.require(root)
-            _fresh_inventory(root, data_token, fd)
             provider_settings.bootstrap_locked(root, before['snapshot'], before['common'],
                                                model_owners=owners, lock_fd=edit_fd,
                                                jev_model=semantic_jev.JEV_MODEL)
