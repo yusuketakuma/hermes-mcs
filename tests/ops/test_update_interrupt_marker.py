@@ -107,3 +107,85 @@ def test_a_settled_rollback_keeps_its_existing_cleanup(updater, monkeypatch):
     state = _journal(updater)
     assert updater._head_sha() == previous and not state["applying"] and state["applied"] == []
     assert not Path(updater.MARKER_PATH).exists()
+
+
+def _released_then_interrupted(updater, seen):
+    """restart_agents' own order (update_services.py): drop the marker before the drainers
+    start, then the operator's Ctrl-C lands before the journal's terminal save. While this
+    process still holds run.lock, another connection cannot take it."""
+    import writer_lock
+
+    def restart():
+        updater._remove_marker()
+        fd = writer_lock.acquire_run_lock(updater.RUN_LOCK)
+        seen.append(fd)
+        if fd is not None:
+            import os
+            os.close(fd)
+        raise KeyboardInterrupt
+    return restart
+
+
+def _patch_restart(updater, monkeypatch, restart):
+    monkeypatch.setattr(updater, "restart_agents", restart)
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+
+
+def test_an_interrupt_after_restart_dropped_the_marker_restores_it_before_run_lock_is_released(
+        updater, monkeypatch):
+    """apply's post-merge child is interrupted right after restart_agents removed the marker:
+    the marker is back (through _ensure_recovery_marker) while run.lock was still held."""
+    import update_runtime_migration
+    _, target = _world(updater, monkeypatch)
+    seen = []
+    restart = _released_then_interrupted(updater, seen)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', restart)
+    _post_merge(updater, monkeypatch, in_process_post_merge(updater, monkeypatch))
+    with pytest.raises(KeyboardInterrupt):
+        updater.apply("v1.1.0", target, "synthetic-command")
+    assert seen == [None]                                    # no collection could start meanwhile
+    assert Path(updater.MARKER_PATH).exists() and _journal(updater)["applying"]
+
+
+def test_an_interrupt_before_the_rollback_terminal_save_restores_the_marker(updater, monkeypatch):
+    _applied(updater, monkeypatch)
+    seen = []
+    _patch_restart(updater, monkeypatch, _released_then_interrupted(updater, seen))
+    with pytest.raises(KeyboardInterrupt):
+        updater.rollback("synthetic-rollback")
+    assert seen == [None]
+    assert Path(updater.MARKER_PATH).exists() and _journal(updater)["applying"]["rollback"] is True
+
+
+def test_a_failed_marker_restore_is_noted_on_the_interrupt_and_left_visible(updater, monkeypatch):
+    """The residual risk stays explicit: run.lock is released with no marker and the
+    original interrupt carries the failure."""
+    import update_lifecycle_context
+    _applied(updater, monkeypatch)
+    _patch_restart(updater, monkeypatch, _released_then_interrupted(updater, []))
+
+    def broken():
+        raise OSError("update_marker_unverifiable")
+    monkeypatch.setattr(update_lifecycle_context, '_ensure_recovery_marker', broken)
+    with pytest.raises(KeyboardInterrupt) as caught:
+        updater.rollback("synthetic-rollback")
+    assert "update_marker_restore_failed:OSError" in getattr(caught.value, '__notes__', [])
+    assert not Path(updater.MARKER_PATH).exists() and _journal(updater)["applying"]["rollback"] is True
+
+
+def test_an_interrupt_after_bail_saved_the_terminal_journal_is_not_unfinished(updater, monkeypatch):
+    """bail saved the aborted journal, then restart_agents was interrupted: nothing is left to
+    recover, so the marker is not recreated."""
+    _world(updater, monkeypatch)
+    target = _git(Path(updater.REPO), "rev-parse", "v1.1.0^{commit}").stdout.strip()
+
+    def post_merge(expected, *, run_lock_fd, **_kw):
+        raise updater.UpdateError("post_merge_failed: synthetic")
+    _post_merge(updater, monkeypatch, post_merge)
+    _patch_restart(updater, monkeypatch, _released_then_interrupted(updater, []))
+    with pytest.raises(KeyboardInterrupt):
+        updater.apply("v1.1.0", target, "synthetic-command")
+    state = _journal(updater)
+    assert not state["applying"] and not state["stages"]
+    assert not Path(updater.MARKER_PATH).exists()
