@@ -127,6 +127,13 @@ def _check_unit(ledger, project_id, message_id, stop=()):
     if pending is None or not pending[0]:
         raise _Excluded('not_pending')
     _work_left(db, row, stop)
+    return binding, _history_proof(ledger, project_id, message_id, stop)
+
+
+def _history_proof(ledger, project_id, message_id, stop=()):
+    """The usage-history proof alone (shared by eligibility and every later re-check): -> digest
+    of every usage row of the message; raises _Excluded(reason). The caller verified the tally."""
+    db = ledger.db
     with cloud_policy._accounting_snapshot(db):
         if _history_pruned(db):
             raise _Excluded('history_pruned')
@@ -189,7 +196,7 @@ def _check_unit(ledger, project_id, message_id, stop=()):
             raise _Excluded('receipt_inconsistent') from None
         digest = payload_hash([[item['artifact_id'], item['kind'], item['model'], item['meta'], item['content']]
                                for item in history])
-    return binding, digest
+    return digest
 
 
 def unit_proof(ledger, project_id, message_id, stop=()):
@@ -396,16 +403,23 @@ def _approval_state(ledger, project_id, message_id, approvals, stop=(), *, tally
         return PROOF_CHANGED
     if inference_dependency_loss.source_binding(ledger.db, project_id, message_id) != unit['source_binding']:
         return PROOF_CHANGED
-    if adopted(ledger.db, unit):
-        return ADOPTED
     if not (_tally_valid(ledger, stop) if tally is None else tally):
         return UNVERIFIED
+    # The usage history is re-proven before any verdict, adopted included: a new reservation
+    # or a changed usage row after the local final lifts the cloud suppression.
+    try:
+        if _history_proof(ledger, project_id, message_id, stop) != unit['proof']:
+            return PROOF_CHANGED
+    except _Excluded:
+        return PROOF_CHANGED   # e.g. a prune mark appeared: an approved unit stops qualifying
+    if adopted(ledger.db, unit):
+        return ADOPTED
     try:
         current = unit_proof(ledger, project_id, message_id, stop)
     except stop:
         raise
     except ValueError:
-        return PROOF_CHANGED   # e.g. a prune mark appeared: an approved unit stops qualifying
+        return PROOF_CHANGED
     return ACTIVE if current['proof'] == unit['proof'] else PROOF_CHANGED
 
 
