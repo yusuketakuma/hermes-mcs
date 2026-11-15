@@ -822,7 +822,7 @@ def command(args):
         if action == "local-rebuild-plan":
             import extract_llm_local_rebuild as local_rebuild
             with _reader(seconds=FULL_READ_SECONDS) as (db, _deadline):
-                result = local_rebuild.preview(SimpleNamespace(db=db), limit=args.limit)
+                result = local_rebuild.preview(SimpleNamespace(db=db), limit=args.limit, stop=(_ReaderLimit,))
             if args.out is not None and result["plan"] is not None:
                 from safe_io import atomic_write
                 atomic_write(str(args.out), lambda f: json.dump(result["plan"], f, ensure_ascii=False), mode=0o600)
