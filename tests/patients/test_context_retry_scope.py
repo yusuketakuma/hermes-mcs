@@ -1,7 +1,7 @@
 """Synthetic overview retries remain bound to their exact selected source cohort."""
 import pytest
 
-import patient_context_plan as context_plan
+import patient_context_schedule as schedule
 import patient_context_refresh as context_refresh
 import patient_context_refresh_readiness as readiness
 import patient_context_refresh_sources as sources
@@ -97,8 +97,8 @@ def test_source_scan_keeps_overview_retry_binding_from_a_narrower_cohort(runtime
     seed(led)
     stored = _failed_progress(led, clock, source_keys=[1])
     seed(led, mid=2)
-    rotate = context_plan.lane_rotation
-    monkeypatch.setattr(context_plan, 'lane_rotation',
+    rotate = schedule.lane_rotation
+    monkeypatch.setattr(schedule, 'lane_rotation',
         lambda best, rotation: rotate({'B': best['B']} if 'B' in best else {}, rotation))
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', lambda *a, **k: {
         'status': 200, 'finish_reason': 'length', 'text': '{}'})

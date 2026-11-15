@@ -15,6 +15,8 @@ from mcs_queries import JST
 from mcs_util import loads_dict, valid_hash
 from inference_version import CURRENT_VERSION, VERSION_KEY, current_meta_pred
 import patient_context_plan as context_plan
+import patient_context_schedule as context_schedule
+import patient_context_selection as context_selection
 import mcs_queries as context_queries
 import patient_context_projection as context_state
 
@@ -74,7 +76,13 @@ CONTRACT = "patient-context-nightly/1"
 CALL_SECONDS = 300
 
 
-_CHECKS = hashlib.sha256(Path(context_plan.__file__).read_bytes()).hexdigest()
+# The source scan plan, the summary selection and the lane rotation moved out
+# of it are one check identity; one file per module, hashed in this order.
+# Temporary: the whole schedule file is hashed, so the bookmark planner plan()
+# is covered too and editing it rebuilds every scan. P0-2a's contract split
+# removes it from context_checks.
+_CHECKS = hashlib.sha256(b"".join(Path(module.__file__).read_bytes()
+                                  for module in (context_plan, context_selection, context_schedule))).hexdigest()
 
 
 _STATE_CODE = hashlib.sha256(Path(context_state.__file__).read_bytes()).hexdigest()

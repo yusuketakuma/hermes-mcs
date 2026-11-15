@@ -184,6 +184,7 @@ P0 は、1回だけ行う消去と作り直しの前に必ず入れる変更で�
 
 1. **P0-1**: 要約側を `patient_context_selection.py` へ移す（純粋な移動。被覆は保つ）。
 2. **P0-2a**: 契約の分割と出所の保存（U0）。添付抽出の契約を切り離す。
+   - P0-1 で `context_checks` が `patient_context_schedule.py` 全体を hash するようになり、レーン巡回だけでなく bookmark の予定組み `plan()` も一時的に被覆に入った。この分割で `plan()` を `context_checks` から外す。
 3. **P0-2b**: D1（入力の内容で結び付ける）。
 4. **P0-2c**: D2（qa_code と、識別値を使う全箇所）。
 5. **P0-3a**: `select_facts` の重み付け（12枠の固定列にし、並べ替えの鍵の型を揃える）。

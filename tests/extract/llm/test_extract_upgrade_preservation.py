@@ -417,7 +417,7 @@ def _patch_loaded_digests(monkeypatch, changed):
     monkeypatch.setattr(extract_llm_resident, '_LOADED_SOURCE_DIGESTS', llm._LOADED_SOURCE_DIGESTS)
 
 
-@pytest.mark.parametrize("source_label", ["mcs_queries", "mcs_util", "semantic_assembly", "llm_availability", "self_identity", "safe_io", "writer_lock", "semantic_store", "semantic_v4", "semantic_v4_cohort", "semantic_audit", "semantic_projection", "semantic_runtime", "semantic_jev", "patient_context_plan", "patient_context_artifacts", "semantic_assessment", "semantic_loops", "semantic_transport", "semantic_notice", "semantic_render", "semantic_send_gate", "patient_context_schedule", "patient_readiness_witness", "cloud_backlog", "cloud_policy", "patient_context_refresh", "local_llm", "extract_llm_runner", "extract_llm_store"])
+@pytest.mark.parametrize("source_label", ["mcs_queries", "mcs_util", "semantic_assembly", "llm_availability", "self_identity", "safe_io", "writer_lock", "semantic_store", "semantic_v4", "semantic_v4_cohort", "semantic_audit", "semantic_projection", "semantic_runtime", "semantic_jev", "patient_context_plan", "patient_context_selection", "patient_context_artifacts", "semantic_assessment", "semantic_loops", "semantic_transport", "semantic_notice", "semantic_render", "semantic_send_gate", "patient_context_schedule", "patient_readiness_witness", "cloud_backlog", "cloud_policy", "patient_context_refresh", "local_llm", "extract_llm_runner", "extract_llm_store"])
 def test_an_update_outside_the_hold_sources_keeps_the_hold_and_the_patient_complete(
         tmp_path, monkeypatch, source_label):
     # Every production update used to release each hold and send the same
@@ -559,9 +559,9 @@ def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(
     ("semantic_conversion", "hold_unbounded_job"),
     ("semantic_conversion", "cohort_document"),
     ("semantic_conversion", "_valid_cohort"),
-    ("patient_context_plan", "select_facts"),
+    ("patient_context_selection", "select_facts"),
     ("patient_context_plan", "scan_items"),
-    ("patient_context_plan", "summary_selection"),
+    ("patient_context_selection", "summary_selection"),
     ("mcs_queries", "source_patient_context"),
     ("mcs_queries", "extraction_kind_map"),
     ("mcs_queries", "_kind_state"),

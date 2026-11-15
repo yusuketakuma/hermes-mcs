@@ -137,7 +137,7 @@ def test_quality_identity_binds_actual_body_and_revision_not_just_stored_hash(tm
         selected, _, state, facts, quality_state = patient_context_refresh_sources._all_facts(
             led.db, 1, snapshot, '2026-10-27', include_all=True)
         assert facts
-        summary = [{'text': refresh.context_plan.summary_text(selected[0]), 'fact_ids': [selected[0]['id']]}]
+        summary = [{'text': refresh.context_selection.summary_text(selected[0]), 'fact_ids': [selected[0]['id']]}]
         original = patient_context_refresh_sources._quality_input(led.db, 1, snapshot, facts, quality_state, summary, {'model': 'synthetic'}, state)
         changed = {**source, 'body_text': source['body_text'] + '\n\n別の合成追記。'}
         changed_snapshot = {**snapshot, 'sources': [changed]}
@@ -175,7 +175,7 @@ def test_quality_identity_includes_fact_outside_selection_cap(tmp_path):
         selected, total, state, all_facts, quality_state = patient_context_refresh_sources._all_facts(
             led.db, 1, snapshot, '2026-10-27', include_all=True)
         assert total == len(all_facts) == 257 and len(selected) == 256
-        summary = [{'text': refresh.context_plan.summary_text(selected[0]), 'fact_ids': [selected[0]['id']]}]
+        summary = [{'text': refresh.context_selection.summary_text(selected[0]), 'fact_ids': [selected[0]['id']]}]
         queries = []
         led.db.set_trace_callback(queries.append)
         try:
@@ -201,7 +201,7 @@ def test_quality_audit_binds_display_order_but_failure_identity_does_not(tmp_pat
         selected, _, state, all_facts, quality_state = patient_context_refresh_sources._all_facts(
             led.db, 1, snapshot, '2026-10-27', include_all=True)
         assert len(selected) == len(all_facts) == 2
-        summary = [{'text': refresh.context_plan.summary_text(fact), 'fact_ids': [fact['id']]}
+        summary = [{'text': refresh.context_selection.summary_text(fact), 'fact_ids': [fact['id']]}
                    for fact in selected]
         first = patient_context_refresh_sources._quality_input(led.db, 1, snapshot, all_facts, quality_state, summary,
                                        {'model': 'synthetic'}, state)
@@ -231,7 +231,7 @@ def test_quality_denominator_keeps_historical_karte(tmp_path):
             led.db, 1, snapshot, '2026-10-27', include_all=True)
         assert total == len(selected) == 1 and len(all_facts) == 2
         assert sum(bool(fact.get('historical')) for fact in all_facts) == 1
-        summary = [{'text': refresh.context_plan.summary_text(selected[0]), 'fact_ids': [selected[0]['id']]}]
+        summary = [{'text': refresh.context_selection.summary_text(selected[0]), 'fact_ids': [selected[0]['id']]}]
         identity = patient_context_refresh_sources._quality_input(led.db, 1, snapshot, all_facts, quality_state, summary,
                                           {'model': 'synthetic'}, state)
         assert len(identity['fact_ids']) == 2

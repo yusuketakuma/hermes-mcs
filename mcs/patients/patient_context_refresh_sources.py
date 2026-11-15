@@ -12,6 +12,7 @@ import patient_context_artifacts as context_artifacts
 from mcs_util import html_to_text, loads_dict, valid_hash
 from inference_version import current_meta_pred, read_version
 import patient_context_plan as context_plan
+import patient_context_selection as context_selection
 import mcs_queries as context_queries
 import patient_context_projection as context_state
 import patient_context_quality_receipts
@@ -452,8 +453,8 @@ def _hydrate_source_body(db, pid, source):
 
 def _summary_valid(db, pid, doc, sources, *, allow_historical=False):
     facts, summary = doc.get("facts"), doc.get("summary")
-    if (not isinstance(facts, list) or len(facts) > context_plan.MAX_FACTS
-            or not isinstance(summary, list) or len(summary) > context_plan.MAX_SUMMARY):
+    if (not isinstance(facts, list) or len(facts) > context_selection.MAX_FACTS
+            or not isinstance(summary, list) or len(summary) > context_selection.MAX_SUMMARY):
         return False
     by_id = {}
     for fact in facts:
@@ -470,7 +471,7 @@ def _summary_valid(db, pid, doc, sources, *, allow_historical=False):
             return False
         ids = sentence["fact_ids"]
         if (not isinstance(ids, list) or len(ids) != 1 or not isinstance(ids[0], str)
-                or ids[0] not in by_id or sentence["text"] != context_plan.summary_text(by_id[ids[0]])):
+                or ids[0] not in by_id or sentence["text"] != context_selection.summary_text(by_id[ids[0]])):
             return False
     return (doc.get("facts_sig") == patient_context_refresh_state._facts_sig(facts)
             and (bool(summary) if facts else summary == []))
@@ -503,7 +504,7 @@ def _all_facts(db, pid, snapshot, workday_id, *, projected=False, include_all=Fa
                 related.setdefault(fid, []).append(relation)
     for fact in facts.values():
         fact["relations"] = related.get(fact["id"], [])
-    selected, total = context_plan.select_facts(facts)
+    selected, total = context_selection.select_facts(facts)
     if include_all:
         combined = {key: dict(value) for key, value in {**facts, **historical}.items()}
         quality_state = context_state.project(dependency_loss.bind_facts(db, combined.values()),
@@ -525,7 +526,7 @@ def _quality_input(db, pid, snapshot, all_facts, state, summary, assessment_cont
     """Bind inputs built within the caller's same active read or write snapshot."""
     if not db.in_transaction:
         raise RuntimeError("patient_summary_snapshot_required")
-    if (not isinstance(summary, list) or len(summary) > context_plan.MAX_SUMMARY
+    if (not isinstance(summary, list) or len(summary) > context_selection.MAX_SUMMARY
             or not isinstance(display_projection, dict)):
         raise ValueError("patient_summary_quality_invalid")
     sources = snapshot["sources"]
@@ -579,7 +580,7 @@ def _quality_input(db, pid, snapshot, all_facts, state, summary, assessment_cont
     for row in summary:
         ids = row.get("fact_ids") if isinstance(row, dict) else None
         if (not isinstance(ids, list) or len(ids) != 1 or ids[0] not in by_id
-                or row.get("text") != context_plan.summary_text(by_id[ids[0]])):
+                or row.get("text") != context_selection.summary_text(by_id[ids[0]])):
             raise ValueError("patient_summary_quality_summary")
         selected.append((ids[0], row["text"]))
     if len({item[0] for item in selected}) != len(selected) or bool(all_facts) != bool(summary):

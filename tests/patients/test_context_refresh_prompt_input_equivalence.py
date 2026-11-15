@@ -16,6 +16,8 @@ import extract_llm
 import inference_version
 import patient_context
 import patient_context_plan as context_plan
+import patient_context_schedule
+import patient_context_selection
 from extract_testkit import _ledger, _message, _hash
 from test_patient_context_refresh import runtime as runtime, seed, finish, document, CFG
 
@@ -192,7 +194,9 @@ def test_detail_key_prompt_invalidates_prior_success_via_existing_checks(runtime
         assert old_scans and all(scan['complete'] for scan in old_scans.values())
         assert not any(patient_context_refresh_readiness._pending(led.db, 1, CFG, now=clock.wall)[2].values())
     new_contract = patient_context_refresh_state._contract(CFG, 1)
-    assert patient_context_refresh_state._CHECKS == hashlib.sha256(Path(context_plan.__file__).read_bytes()).hexdigest()
+    assert patient_context_refresh_state._CHECKS == hashlib.sha256(b''.join(
+        Path(module.__file__).read_bytes()
+        for module in (context_plan, patient_context_selection, patient_context_schedule))).hexdigest()
     assert patient_context_refresh_state._CHECKS != LEGACY_PLAN_CHECKS
     assert new_contract != old_contract
     assert {**old_contract, 'context_checks': patient_context_refresh_state._CHECKS} == new_contract

@@ -25,6 +25,7 @@ MODULES = {
     'patient_context': 'patients/patient_context.py',
     'patient_context_refresh': 'patients/patient_context_refresh.py',
     'patient_context_projection': 'patients/patient_context_projection.py',
+    'patient_context_selection': 'patients/patient_context_selection.py',
     'extraction_context': 'extract/llm/extraction_context.py',
     'semantic_publication': 'semantic/semantic_publication.py',
     'semantic_conversion': 'semantic/semantic_conversion.py',

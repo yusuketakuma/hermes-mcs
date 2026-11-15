@@ -19,6 +19,7 @@ from mcs_queries import JST as JST
 from mcs_util import html_to_text as html_to_text, loads_dict as loads_dict, safe_error_code as safe_error_code, strict_json as strict_json, valid_hash as valid_hash
 from inference_version import VERSION_KEY as VERSION_KEY, current_meta_pred as current_meta_pred, read_version as read_version
 import patient_context_plan as context_plan
+import patient_context_selection as context_selection
 import patient_context_schedule as context_schedule
 import patient_context_quota as context_quota
 import mcs_queries as context_queries
@@ -566,7 +567,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         if scan_rotation is None:
             return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
         rotation = scan_rotation[0]
-        lane, index, next_cursor = context_plan.lane_rotation(best, rotation)
+        lane, index, next_cursor = context_schedule.lane_rotation(best, rotation)
         if lane is None:
             return {"status": "deferred" if waiting or not covered else "complete", "done": 0,
                     **({"reason": "patient_context_waiting" if waiting else "patient_context_scan_incomplete"}
@@ -977,7 +978,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 same = True
             if same:
                 if old_meta.get('local_fallback') is True:
-                    payload, _, _, _ = patient_context_quality_controller._summary_input(facts, snapshot['source_sig'])
+                    payload, _, _, _ = context_selection.summary_input(facts, snapshot['source_sig'])
                     guard_local_input('summary', None, json.dumps(payload, ensure_ascii=False))
                 meta["contract"] = old_meta["contract"]
                 for key in ("route_contract", "quality_repair_ref", "local_fallback", "cloud_receipts"):
@@ -1003,9 +1004,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                         by_id = {fact["id"]: fact for fact in quality_result["facts"]}
                         chosen = [by_id[fid] for fid in quality_result["fact_ids"]]
                         chosen_ids = {fact["id"] for fact in chosen}
-                        selected_facts = (chosen + [fact for fact in facts if fact["id"] not in chosen_ids])[:context_plan.MAX_FACTS]
+                        selected_facts = (chosen + [fact for fact in facts if fact["id"] not in chosen_ids])[:context_selection.MAX_FACTS]
                         repaired = {**old, "facts": selected_facts, "facts_sig": patient_context_refresh_state._facts_sig(selected_facts),
-                            "summary": [{"text": context_plan.summary_text(fact), "fact_ids": [fact["id"]]}
+                            "summary": [{"text": context_selection.summary_text(fact), "fact_ids": [fact["id"]]}
                                         for fact in chosen],
                             "temporal_view": {key: quality_result["state"][key] for key in ("groups", "relations")},
                             "facts_total": len(quality_result["facts"]),

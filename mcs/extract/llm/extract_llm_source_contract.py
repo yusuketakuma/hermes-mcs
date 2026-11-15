@@ -64,6 +64,7 @@ import semantic_facts
 import extraction_context
 import patient_priority
 import patient_context_scan
+import patient_context_selection
 import patient_context_schedule
 import patient_readiness_witness
 import extraction_medications
@@ -165,6 +166,7 @@ _LOADED_SOURCE_PATHS.update({"extraction_medications": extraction_medications.__
                              "drug_mentions": drug_mentions.__file__, "drug_map": drug_map.__file__,
                              "patient_priority": patient_priority.__file__,
                              "patient_context_scan": patient_context_scan.__file__,
+                             "patient_context_selection": patient_context_selection.__file__,
                              "patient_context_schedule": patient_context_schedule.__file__,
                              "patient_readiness_witness": patient_readiness_witness.__file__})
 

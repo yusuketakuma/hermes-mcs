@@ -121,7 +121,7 @@ canonical v3/v4の既存事実にもoptional patient_contextを同じ事実引�
 
 ## 患者コンテキスト作成と本人向け表示（1.0.25。2026-10-18に「夜間の患者背景」から改称）
 
-`patient_context_refresh` が患者コンテキスト作成の入力確認・調査・保存・再開を所有し、`patient_context_plan` が入力の分割と引用の選択・検証を担う。`patient_context_view` が既存read modelから各画面を作る。日中の `patient_rollup` と抽出の固定参照情報を扱う `extraction_context` の契約は変更しない。保存には既存のartifactsを使い、新しいテーブル・外部依存は追加しない。利用手順と設定は [USER_GUIDE](../guides/USER_GUIDE.md)、要件の対応表は [実装・受入計画](../releases/v1.0.25/PATIENT_CONTEXT_1.0.25.md) を参照する。
+`patient_context_refresh` が患者コンテキスト作成の入力確認・調査・保存・再開を所有し、`patient_context_plan` が入力の分割とscanの引用検証、`patient_context_selection` が要約に使う根拠の選択・要約入力・要約の検証、`patient_context_schedule` が一患者scanの予定組みとレーン巡回を担う。`patient_context_view` が既存read modelから各画面を作る。日中の `patient_rollup` と抽出の固定参照情報を扱う `extraction_context` の契約は変更しない。保存には既存のartifactsを使い、新しいテーブル・外部依存は追加しない。利用手順と設定は [USER_GUIDE](../guides/USER_GUIDE.md)、要件の対応表は [実装・受入計画](../releases/v1.0.25/PATIENT_CONTEXT_1.0.25.md) を参照する。
 
 モジュールと内部関数は終日処理を表す名前へ変更した。作業日の境界を返す関数は `workday_window`、レーン3から呼ぶ関数は `extract_llm._background_context_refresh`、限定閲覧の入力は `context_view_input` とする。旧モジュール名でのimportは提供しない。保存識別子も終日処理を表す名前へ改め、新規の記録は設定キー `extract.patient_context`、artifact種別 `patient_context_v1`、作業日id `workday_id`・`found_workday_id`、イベント項目 `context_facts`・`coverage.context`、失敗コード `patient_context_*` を使う。既存データとの互換のため、旧設定キー `extract.patient_context_nightly`（新キー優先）、旧artifact種別 `patient_context_nightly_v1`、保存JSONの `night_id`・`found_night_id`、イベント項目 `nightly_facts`・`coverage.nightly`、失敗コード `nightly_*` は読み取りを継続する。処理契約の文字列 `patient-context-nightly/1` は保存済み契約との一致照合に使う永続識別子のため維持する。これらは夜間だけ処理する指定ではない。
 

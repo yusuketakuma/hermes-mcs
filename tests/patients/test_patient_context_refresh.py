@@ -1093,7 +1093,7 @@ def test_new_backfill_evidence_rearms_exhausted_summary(runtime, monkeypatch):
 
 def test_summary_budget_preserves_complete_source_reports_in_detail(runtime, monkeypatch):
     led, _, _ = runtime
-    monkeypatch.setattr(context_refresh.context_plan, 'MAX_FACTS', 2)
+    monkeypatch.setattr(context_refresh.context_selection, 'MAX_FACTS', 2)
     for mid in range(1, 5):
         seed(led, mid=mid, body=f'生活環境: 合成の独立した過去報告その{mid}。')
     finish(runtime)

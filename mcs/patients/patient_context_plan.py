@@ -8,8 +8,6 @@ from patient_context import CATEGORIES, DETAIL_KEYS, context_items
 import patient_context_projection as context_state
 from mcs_util import locate_quote_span
 
-MAX_FACTS = 256
-MAX_SUMMARY = 12
 MAX_SOURCE_FACTS = 128  # Per accepted chunk, never a cumulative source limit.
 MAX_PROMPT_CHARS = 18000
 # A scan answer quotes every sentence it keeps twice (text and evidence), so a
@@ -31,59 +29,6 @@ SCAN_INSTRUCTION = (
 def scan_schema():
     """List the canonical context categories and grounded detail keys for each scan."""
     return {"categories": sorted(CATEGORIES), "detail_keys": sorted(DETAIL_KEYS)}
-
-
-def select_facts(facts):
-    """Select category-fair reports without changing per-source storage."""
-    # Selection is bounded, storage remains per source. Round robin categories
-    # prevents one busy topic from hiding every older background category.
-    ordered = sorted(facts.values(), key=lambda f: (f.get("posted_at_ts") or 0, f["id"]), reverse=True)
-    buckets = []
-    for bucket in ("current", "conflict", "plan", "unknown", "history"):
-        groups = [[f for f in ordered if f["category"] == c and f.get("view_bucket", "unknown") == bucket]
-                  for c in sorted(CATEGORIES)]
-        buckets.append([group[i] for i in range(max(map(len, groups), default=0)) for group in groups if i < len(group)])
-    selected = [group[i] for i in range(max(map(len, buckets), default=0)) for group in buckets if i < len(group)]
-    return selected[:MAX_FACTS], len(selected)
-
-
-def summary_reports(facts):
-    """Deduplicate source reports within the unchanged prompt budget."""
-    reports, used = [], 0
-    seen = set()
-    for fact in facts:
-        key = fact["id"]
-        if key in seen:
-            continue
-        seen.add(key)
-        item = {k: fact[k] for k in ("id", "project_id", "category", "posted_at", "subject")}
-        item.update(text=summary_text(fact), details=fact.get("details", []),
-                    reported_subject=fact.get("reported_subject"),
-                    evidence_span=fact.get("evidence_span"), reference_context=fact.get("reference_context"),
-                    view_bucket=fact.get("view_bucket", "unknown"), temporal=fact.get("temporal"),
-                    relations=fact.get("relations", []))
-        size = len(json.dumps(item, ensure_ascii=False))
-        if used + size <= MAX_PROMPT_CHARS - 2000:
-            reports.append(item)
-            used += size
-    if not reports:
-        raise ValueError("patient_context_summary_capacity")
-    return reports
-
-
-def summary_text(fact):
-    """Select bounded verbatim context, retaining the atomic assertion separately."""
-    return fact.get("quote") or fact["text"]
-
-
-def summary_selection(answer, reports):
-    """Accept unique known IDs and retain their exact source text."""
-    ids = answer.get("fact_ids")
-    by_id = {f["id"]: f for f in reports}
-    if (set(answer) != {"fact_ids"} or not isinstance(ids, list) or not 1 <= len(ids) <= MAX_SUMMARY
-            or any(not isinstance(i, str) or i not in by_id for i in ids) or len(set(ids)) != len(ids)):
-        raise ValueError("patient_context_unsupported_summary")
-    return [{"text": by_id[i]["text"], "fact_ids": [i]} for i in ids]
 
 
 def scan_plan(source, saved):
@@ -161,16 +106,6 @@ def scan_items(answer, chunk):
             item.get("details", []) != valid.get("details", []) for item, valid in zip(raw, checked)):
         raise ValueError("patient_context_unsupported_items")
     return checked
-
-
-def lane_rotation(best, rotation):
-    """Choose the next available lane with the unchanged six/three/one schedule."""
-    sequence = "AAAAAABBBC"
-    index = rotation.get("cursor", 0) % len(sequence)
-    selected = next(((index + i) % len(sequence) for i in range(len(sequence))
-                     if sequence[(index + i) % len(sequence)] in best), index)
-    lane = sequence[selected] if sequence[selected] in best else None
-    return lane, selected, (selected + 1) % len(sequence)
 
 
 def ranges_complete(ranges, size):

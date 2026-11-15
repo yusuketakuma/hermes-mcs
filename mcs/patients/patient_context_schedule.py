@@ -1,4 +1,4 @@
-"""Plan one bounded patient scan without owning its durable bookmark."""
+"""Plan one bounded patient scan and the next lane without owning their durable bookmark."""
 import math
 
 import patient_priority
@@ -92,3 +92,13 @@ def plan(db, patient_scan):
             raise ValueError('patient_scan_source_invalid')
         state['activity_after'] = [archived, timestamp, pid]
     return {'project_id': pid, 'next': state, 'exhausted': False, 'reason': 'candidate'}
+
+
+def lane_rotation(best, rotation):
+    """Choose the next available lane with the unchanged six/three/one schedule."""
+    sequence = "AAAAAABBBC"
+    index = rotation.get("cursor", 0) % len(sequence)
+    selected = next(((index + i) % len(sequence) for i in range(len(sequence))
+                     if sequence[(index + i) % len(sequence)] in best), index)
+    lane = sequence[selected] if sequence[selected] in best else None
+    return lane, selected, (selected + 1) % len(sequence)

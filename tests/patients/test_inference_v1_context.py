@@ -210,7 +210,7 @@ def test_same_paragraph_preserves_distinct_subjects_attributes_and_absolute_span
     assert [f['details'][0]['value'] for f in facts] == ['3錠','7錠']
     assert all(f['quote'] == body for f in facts)
     assert context_plan.validated_source_facts(source(body),facts) == facts
-    reports = refresh.context_plan.summary_reports(facts)
+    reports = refresh.context_selection.summary_reports(facts)
     assert [r['id'] for r in reports] == [f['id'] for f in facts]
 
 
@@ -259,9 +259,9 @@ def test_long_unbroken_paragraph_is_structured_and_can_be_selected_without_summa
     assert len(facts) > 1 and ''.join(f['evidence'] for f in facts) == body
     assert all(len(f['quote']) <= refresh.context_plan.SCAN_CHUNK for f in facts)
     assert all(f['reference_context']['span'] == [0,len(body)] for f in facts)
-    reports = refresh.context_plan.summary_reports(facts)
+    reports = refresh.context_selection.summary_reports(facts)
     assert reports and sum(len(json.dumps(r,ensure_ascii=False)) for r in reports) <= refresh.context_plan.MAX_PROMPT_CHARS-2000
-    assert refresh.context_plan.summary_selection({'fact_ids':[reports[0]['id']]},reports)
+    assert refresh.context_selection.summary_selection({'fact_ids':[reports[0]['id']]},reports)
 
 
 def test_complete_quote_is_not_a_fact_completeness_proof():
@@ -281,7 +281,7 @@ def test_more_than_128_facts_resume_as_bounded_chunks_without_cumulative_loss(ru
     # One source unit per synthetic fact; this is an independent expected count,
     # not an increase of the production fact or prompt limits.
     monkeypatch.setattr(refresh.context_plan,'plan_chunks',lambda text,size=3000:text.splitlines(keepends=True))
-    monkeypatch.setattr(refresh.context_plan,'MAX_FACTS',12)
+    monkeypatch.setattr(refresh.context_selection,'MAX_FACTS',12)
     for _ in range(64):
         assert step(runtime)['status'] == 'progressed'
     saved = document(led,patient_context_refresh_state.SCAN)
