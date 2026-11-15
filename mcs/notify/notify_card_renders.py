@@ -11,6 +11,7 @@ from mcs_contract import project_url
 from mcs_requests import canonical, payload_hash, positive
 from mcs_util import loads_dict
 from notify_render import (
+    ACTION_FIRST_LAYOUT,
     anchor_keys, card_content, content_fingerprint,
     mmdd, project_display_name, own_post, presenter, reply_source)
 import notify_parts
@@ -577,6 +578,10 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset(), *,
         own["face_posts"] = face_posts
     if present.ACCENT_URGENT and content.get("urgent"):
         own["accent"] = "urgent"
+    elif (present.ACCENT_URGENT and card["kind"] == "thread"
+          and card["layout"] >= ACTION_FIRST_LAYOUT and content.get("card_state")):
+        # the layout-6 heading icon's state, also on the card edge; 🚨 wins
+        own["accent"] = content["card_state"]
     if (spec["parts"].get("slack") or {}).get("file_group"):
         own["file_group"] = True
     if own:

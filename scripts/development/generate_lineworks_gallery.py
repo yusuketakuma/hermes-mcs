@@ -92,12 +92,12 @@ def delivery():
     s.bot(44, 245)
     sender, bullets = POSTS[0]
     summary = [("📋 要約", GREEN, True), *(("・" + b, INK, False) for b in bullets)]
-    y = s.block(66, 286, [(HEADING, INK, True), (META.format(n=1), MUTED, False),
+    y = s.block(66, 286, [(HEADING.format(icon="💬"), INK, True), (META.format(n=1), MUTED, False),
                           (RULE, MUTED, False), (sender, MUTED, False), *summary[1:],
                           (RULE, MUTED, False), ("👤 担当: 田中 · ✅ 確認: 田中", INK, False),
                           ("📝 タスク 1件 · スタンプ 👀2 🙆1 · 自分 1投稿", INK, False)])
-    # cards.CARD_BUTTONS order, as on Slack: menu, stamp row, 別の投稿, MCSで開く
-    y = s.template(66, y, ["操作を選ぶ…"])
+    # cards._on_card order: 確認する・担当する, menu, stamp row, 別の投稿, MCSで開く
+    y = s.template(66, y, ["確認する", "担当する", "操作を選ぶ…"])
     y = s.row(66, y, ["👀", "🙆 ✓", "🙏", "👍", "✅"])
     s.template(66, y, ["別の投稿", "MCSで開く"])
     s.bot(588, 245)
@@ -128,9 +128,9 @@ def task_confirm():
     s.text(44, 252, "「操作を選ぶ…」を押したとき", 16, GREEN, True)
     s.bot(44, 266)
     # cards.secondary keeps notify_cards._action_rows order (open tasks shown);
-    # 確認・担当・タスク作成 lead it now that the card carries only the menu
-    s.template(66, s.block(66, 304, [(HEADING, INK, True)]),
-               ["確認する", "担当する", "タスク作成", "タスク一覧", "患者の記録まとめ",
+    # 確認する・担当する are card buttons, so タスク作成 leads the menu
+    s.template(66, s.block(66, 304, [(HEADING.format(icon="💬"), INK, True)]),
+               ["タスク作成", "タスク一覧", "患者の記録まとめ",
                 "この患者を検索", "誤りを報告"])
     s.text(44, 640, "「タスク作成」を押したとき", 16, GREEN, True)
     s.bot(44, 654)

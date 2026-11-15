@@ -36,10 +36,10 @@
 <text x="236" y="377.8" font-size="17" fill="#087f5b">↳ 返信 1件を保存済み</text>
 <path d="M236 393.0 L633 393.0" stroke="#d5dcd7" fill="none"/>
 <text x="236" y="421.0" font-size="15" fill="#66716f">10-01 09:40 佐藤さん（訪問看護・あおぞら）</text>
-<text x="236" y="443.0" font-size="18" fill="#202124">・次回訪問時に残薬を確認してほしいとの連絡</text>
-<text x="236" y="469.8" font-size="18" fill="#202124">・要点: 残薬の確認 / 服薬カレンダーを共有</text>
-<text x="236" y="496.6" font-size="18" fill="#202124">・依頼: 確認依頼:次回訪問時に残薬を確認(期</text>
-<text x="236" y="525.4" font-size="18" fill="#202124">限:次回訪問時)</text>
+<text x="236" y="443.0" font-size="18" fill="#202124">・📌 依頼: 確認依頼:次回訪問時に残薬を確認</text>
+<text x="236" y="471.8" font-size="18" fill="#202124">(期限:次回訪問時)</text>
+<text x="236" y="498.6" font-size="18" fill="#202124">・次回訪問時に残薬を確認してほしいとの連絡</text>
+<text x="236" y="525.4" font-size="18" fill="#202124">・要点: 残薬の確認 / 服薬カレンダーを共有</text>
 <text x="236" y="552.1999999999999" font-size="18" fill="#202124">・区分: 依頼・添付</text>
 <rect x="228" y="562.9999999999999" width="413" height="38" rx="8" fill="#f3f6f4" stroke="#dce2dd"/>
 <text x="236" y="584.9999999999999" font-size="16" fill="#66716f">▸ 原文（35字）</text>
@@ -48,18 +48,22 @@
 <text x="236" y="657.8" font-size="15" fill="#087f5b">スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · 10-01 </text>
 <text x="236" y="681.8" font-size="15" fill="#087f5b">10:00時点</text>
 <path d="M236 693.8 L633 693.8" stroke="#d5dcd7" fill="none"/>
-<rect x="236" y="721.8" width="173" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
-<text x="250" y="748.8" font-size="18" fill="#202124">操作を選ぶ… ▾</text>
-<text x="236" y="797.8" font-size="18" fill="#1264a3">MCSで開く</text>
-<rect x="228" y="813.8" width="413" height="182" rx="9" fill="#f8faf9" stroke="#dce2dd"/>
-<rect x="236.0" y="821.8" width="192.5" height="94" rx="6" fill="#edf1ee" stroke="#dce2dd"/>
-<rect x="251.0" y="836.8" width="162.5" height="64" rx="5" fill="#dbe9e1"/>
-<text x="260.0" y="876.8" font-size="18" fill="#087f5b">画像</text>
-<text x="241.0" y="941.8" font-size="14" fill="#202124">服薬カレンダー.jpg</text>
-<rect x="440.5" y="821.8" width="192.5" height="94" rx="6" fill="#edf1ee" stroke="#dce2dd"/>
-<rect x="460.5" y="836.8" width="47" height="64" rx="4" fill="#fff" stroke="#d6dfd9"/>
-<text x="465.5" y="875.8" font-size="16" fill="#087f5b" font-weight="bold">PDF</text>
-<text x="445.5" y="941.8" font-size="14" fill="#202124">訪問メモ.pdf</text>
+<rect x="236" y="721.8" width="112" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="250" y="748.8" font-size="18" fill="#202124">確認する</text>
+<rect x="358" y="721.8" width="112" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="372" y="748.8" font-size="18" fill="#202124">担当する</text>
+<rect x="236" y="773.8" width="173" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="250" y="800.8" font-size="18" fill="#202124">操作を選ぶ… ▾</text>
+<text x="236" y="849.8" font-size="18" fill="#1264a3">MCSで開く</text>
+<rect x="228" y="865.8" width="413" height="182" rx="9" fill="#f8faf9" stroke="#dce2dd"/>
+<rect x="236.0" y="873.8" width="192.5" height="94" rx="6" fill="#edf1ee" stroke="#dce2dd"/>
+<rect x="251.0" y="888.8" width="162.5" height="64" rx="5" fill="#dbe9e1"/>
+<text x="260.0" y="928.8" font-size="18" fill="#087f5b">画像</text>
+<text x="241.0" y="993.8" font-size="14" fill="#202124">服薬カレンダー.jpg</text>
+<rect x="440.5" y="873.8" width="192.5" height="94" rx="6" fill="#edf1ee" stroke="#dce2dd"/>
+<rect x="460.5" y="888.8" width="47" height="64" rx="4" fill="#fff" stroke="#d6dfd9"/>
+<text x="465.5" y="927.8" font-size="16" fill="#087f5b" font-weight="bold">PDF</text>
+<text x="445.5" y="993.8" font-size="14" fill="#202124">訪問メモ.pdf</text>
 <text x="689" y="227" font-size="23" fill="#202124" font-weight="bold">スレッド</text>
 <text x="689" y="257" font-size="16" fill="#66716f"># mcs-demo</text>
 <path d="M682 275 L1059 275" stroke="#e3e7e4" fill="none"/>
@@ -84,17 +88,21 @@
 <text x="737" y="622.6" font-size="15" fill="#087f5b">スタンプ 👀3 田中・佐藤・鈴木 / 🙆1 高橋</text>
 <text x="737" y="646.6" font-size="15" fill="#087f5b"> · 10-01 10:30時点</text>
 <path d="M737 658.6 L1059 658.6" stroke="#d5dcd7" fill="none"/>
-<rect x="737" y="686.6" width="173" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
-<text x="751" y="713.6" font-size="18" fill="#202124">操作を選ぶ… ▾</text>
-<text x="737" y="762.6" font-size="18" fill="#1264a3">MCSで開く</text>
-<rect x="729" y="778.6" width="338" height="182" rx="9" fill="#f8faf9" stroke="#dce2dd"/>
-<rect x="737.0" y="786.6" width="155.0" height="94" rx="6" fill="#edf1ee" stroke="#dce2dd"/>
-<rect x="752.0" y="801.6" width="125.0" height="64" rx="5" fill="#dbe9e1"/>
-<text x="761.0" y="841.6" font-size="18" fill="#087f5b">画像</text>
-<text x="742.0" y="906.6" font-size="14" fill="#202124">連絡図.jpg</text>
-<rect x="904.0" y="786.6" width="155.0" height="94" rx="6" fill="#edf1ee" stroke="#dce2dd"/>
-<rect x="924.0" y="801.6" width="47" height="64" rx="4" fill="#fff" stroke="#d6dfd9"/>
-<text x="929.0" y="840.6" font-size="16" fill="#087f5b" font-weight="bold">PDF</text>
-<text x="909.0" y="906.6" font-size="14" fill="#202124">共有メモ.pdf</text>
+<rect x="737" y="686.6" width="112" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="751" y="713.6" font-size="18" fill="#202124">確認する</text>
+<rect x="859" y="686.6" width="112" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="873" y="713.6" font-size="18" fill="#202124">担当する</text>
+<rect x="737" y="738.6" width="173" height="40" rx="6" fill="#fff" stroke="#a9b5ae"/>
+<text x="751" y="765.6" font-size="18" fill="#202124">操作を選ぶ… ▾</text>
+<text x="737" y="814.6" font-size="18" fill="#1264a3">MCSで開く</text>
+<rect x="729" y="830.6" width="338" height="182" rx="9" fill="#f8faf9" stroke="#dce2dd"/>
+<rect x="737.0" y="838.6" width="155.0" height="94" rx="6" fill="#edf1ee" stroke="#dce2dd"/>
+<rect x="752.0" y="853.6" width="125.0" height="64" rx="5" fill="#dbe9e1"/>
+<text x="761.0" y="893.6" font-size="18" fill="#087f5b">画像</text>
+<text x="742.0" y="958.6" font-size="14" fill="#202124">連絡図.jpg</text>
+<rect x="904.0" y="838.6" width="155.0" height="94" rx="6" fill="#edf1ee" stroke="#dce2dd"/>
+<rect x="924.0" y="853.6" width="47" height="64" rx="4" fill="#fff" stroke="#d6dfd9"/>
+<text x="929.0" y="892.6" font-size="16" fill="#087f5b" font-weight="bold">PDF</text>
+<text x="909.0" y="958.6" font-size="14" fill="#202124">共有メモ.pdf</text>
 <text x="192" y="1157" font-size="16" fill="#66716f">添付は各投稿の原文より下にまとめます。プレビュー・操作欄との並びはSlackに従います。</text>
 </svg>

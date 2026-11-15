@@ -7,6 +7,8 @@ from .spec import STAMP_ROW_ACTION
 
 MENU_LABEL = "操作を選ぶ…"
 STAMP_PICKER_LABEL = "別の投稿"
+# The most frequent operations, drawn as buttons beside the menu (owner 2026-11-15)
+QUICK_ACTIONS = ("ack", "assign")
 
 
 class CardControls(NamedTuple):
@@ -23,10 +25,17 @@ class CardControls(NamedTuple):
             if len(self.stamps) == 5 else None
 
     @property
+    def quick(self) -> tuple[dict, ...]:
+        """確認する・担当する in QUICK_ACTIONS order, each drawn as a button."""
+        return tuple(b for action in QUICK_ACTIONS
+                     for b in self.operations if b.get("id") == action)
+
+    @property
     def menu(self) -> tuple[dict, ...]:
-        """Operations not already available beside the complete stamp row."""
+        """Operations not already drawn as quick buttons or beside the complete stamp row."""
         picker = self.stamp_picker
-        return tuple(b for b in self.operations if b is not picker)
+        return tuple(b for b in self.operations
+                     if b is not picker and b.get("id") not in QUICK_ACTIONS)
 
 
 def plan_controls(parts: dict) -> CardControls:
