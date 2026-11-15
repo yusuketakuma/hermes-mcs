@@ -19,6 +19,7 @@ and inside every checkpoint and adoption transaction, but the local backend's ow
 and degrade retries after that guard are not individually re-checked. The local result is
 bound by the existing source/context/frame/piece/leaf proofs, not by a request fingerprint.
 """
+import contextlib
 from contextlib import contextmanager
 import os
 import re
@@ -268,14 +269,16 @@ def _candidates(db):
         "ORDER BY message_id DESC", (ROUTE,)).fetchall()
 
 
-def preview(ledger, *, limit=BUNDLE_LIMIT, after=None, stop=(sqlite3.OperationalError,)):
+def preview(ledger, *, limit=BUNDLE_LIMIT, after=None, stop=(sqlite3.OperationalError,), tally_reader=None):
     """Read-only dry run: counts with fixed exclusion reasons and one bundle plan.
 
     Candidates are examined newest first, below ``after`` (the previous run's ``next_after``)
     when given, and the run stops as soon as the bundle holds ``limit`` units: the counts then
     cover the examined candidates only (state ``bundle_full``). The caller's reader enforces the
     deadline and budget and names its limit errors in `stop`; hitting one leaves the rest
-    unverified (never eligible), the preview partial and ``stopped_at`` naming the stage."""
+    unverified (never eligible), the preview partial and ``stopped_at`` naming the stage.
+    ``tally_reader``, when given, is the caller's context for the single month-tally check (the
+    CLI's own finite tally budget); it is entered exactly once per preview."""
     if type(limit) is not int or not 1 <= limit <= BUNDLE_LIMIT:
         raise ValueError('local_rebuild_limit_invalid')
     if after is not None and (type(after) is not int or after <= 0):
@@ -290,7 +293,8 @@ def preview(ledger, *, limit=BUNDLE_LIMIT, after=None, stop=(sqlite3.Operational
         stage = 'candidates'
         rows = [row for row in _candidates(db) if after is None or row[1] < after]
         stage = 'tally'
-        tally = _tally_valid(ledger, stop)
+        with (tally_reader() if tally_reader is not None else contextlib.nullcontext()):
+            tally = _tally_valid(ledger, stop)
         stage = 'history'
         for project_id, message_id in rows:
             if len(units) >= limit:

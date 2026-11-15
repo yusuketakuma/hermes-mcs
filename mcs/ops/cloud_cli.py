@@ -22,6 +22,12 @@ READ_SECONDS = 5.0
 FULL_READ_SECONDS = 300.0   # `outstanding --full`: a read-only snapshot never blocks the writers
 READ_ROWS = 100000
 READ_BYTES = 16 * 1024 * 1024
+# The local-rebuild dry run's month-tally phase only (Astra c2b-M1-design-r3): a synthetic tally of
+# 67,217 accounting rows counted 200,210,896 observed bytes (strings x4), so 256 MiB is the smallest
+# ordinary unit covering it. Observed bytes, not memory. Used once per preview; over it the tally
+# stays unverified and the preview partial (tally_budget_exceeded), never borrowed from another phase.
+TALLY_READ_ROWS = READ_ROWS
+TALLY_READ_BYTES = 256 * 1024 * 1024
 
 
 class _ReaderLimit(ValueError):
@@ -48,24 +54,23 @@ def _reader(root=None, *, seconds=None):
     if path.is_symlink() or not path.is_file():
         raise ValueError("ledger_unavailable")
     with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=.25)) as db:
-        consumed_rows, consumed_bytes = 0, 0
         deadline = time.monotonic() + (READ_SECONDS if seconds is None else seconds)
 
         def bounded_row(cursor, values):
-            nonlocal consumed_rows, consumed_bytes
-            consumed_rows += 1
-            consumed_bytes += sum(len(value) * 4 if isinstance(value, str) else len(value)
-                                  if isinstance(value, bytes) else 8 for value in values)
+            budget = bounded_row.budget
+            budget["rows_used"] += 1
+            budget["bytes_used"] += sum(len(value) * 4 if isinstance(value, str) else len(value)
+                                        if isinstance(value, bytes) else 8 for value in values)
             if time.monotonic() >= deadline:
                 bounded_row.stop_reason = "read_deadline"
                 raise _ReaderLimit("read_deadline")
-            if consumed_rows > READ_ROWS:
-                bounded_row.stop_reason = "observation_budget_exceeded"
-                raise _ReaderLimit("observation_budget_exceeded")
-            if consumed_bytes > READ_BYTES:
-                bounded_row.stop_reason = "observation_budget_exceeded"
-                raise _ReaderLimit("observation_budget_exceeded")
+            if budget["rows_used"] > budget["rows"] or budget["bytes_used"] > budget["bytes"]:
+                bounded_row.stop_reason = budget["reason"]
+                raise _ReaderLimit(budget["reason"])
             return sqlite3.Row(cursor, values)
+
+        bounded_row.budget = {"rows": READ_ROWS, "bytes": READ_BYTES, "rows_used": 0, "bytes_used": 0,
+                              "reason": "observation_budget_exceeded"}
 
         def interrupt_on_deadline():
             if time.monotonic() >= deadline:
@@ -80,6 +85,19 @@ def _reader(root=None, *, seconds=None):
         db.set_progress_handler(interrupt_on_deadline, 1000)
         db.execute("BEGIN")
         yield db, deadline
+
+
+@contextmanager
+def _reader_phase(db, *, rows, size, reason):
+    """Count one narrow phase of a _reader against its own finite budget (same connection, same
+    snapshot, same deadline); the outer budget and its counters are restored on every exit."""
+    factory = db.row_factory
+    outer = factory.budget
+    factory.budget = {"rows": rows, "bytes": size, "rows_used": 0, "bytes_used": 0, "reason": reason}
+    try:
+        yield
+    finally:
+        factory.budget = outer
 
 
 def _check_reader(db, deadline):
@@ -823,11 +841,14 @@ def command(args):
             import extract_llm_local_rebuild as local_rebuild
             with _reader(seconds=FULL_READ_SECONDS) as (db, _deadline):
                 try:
-                    result = local_rebuild.preview(SimpleNamespace(db=db), limit=args.limit, after=args.after,
-                                                   stop=(_ReaderLimit,))
+                    result = local_rebuild.preview(
+                        SimpleNamespace(db=db), limit=args.limit, after=args.after, stop=(_ReaderLimit,),
+                        tally_reader=lambda: _reader_phase(db, rows=TALLY_READ_ROWS, size=TALLY_READ_BYTES,
+                                                           reason="tally_budget_exceeded"))
                 finally:
                     stopped = getattr(db.row_factory, 'stop_reason', None)
-                result['stop_reason'] = stopped if stopped in ('read_deadline', 'observation_budget_exceeded') else (
+                result['stop_reason'] = stopped if stopped in (
+                    'read_deadline', 'observation_budget_exceeded', 'tally_budget_exceeded') else (
                     None if result['state'] != 'partial' else 'read_interrupted')
             if args.out is not None and result["plan"] is not None:
                 from safe_io import atomic_write
@@ -835,7 +856,7 @@ def command(args):
             print(json.dumps({k: v for k, v in result.items() if k != "plan"}
                              | {"planned": len(result["plan"]["units"]) if result["plan"] else 0},
                              ensure_ascii=False, indent=2))
-            return 0 if result["state"] == "complete" else 1
+            return 0 if result["state"] in ("complete", "bundle_full") else 1
         if action in ("stop", "resume", "local-rebuild-approve"):
             from writer_lock import acquire_run_lock, wait_run_lock, code_stamp
             expected_code = code_stamp()
