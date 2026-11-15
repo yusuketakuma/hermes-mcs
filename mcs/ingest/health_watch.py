@@ -1373,6 +1373,8 @@ def main(argv: list | None = None) -> int:
         cfg = _load_config(args.config or CONF_PATH)
         if cfg is None:
             raise ValueError("configuration_unreadable")
+    except FileNotFoundError:
+        cfg = {}                         # legacy installs may not have common settings yet
     except (ProviderSettingsUnreadable, OSError, ValueError, TypeError, RecursionError):
         # Keep the fault observable even when settings cannot supply an alert target.
         # Only the alert-only view may be used; recovery still needs verified settings.

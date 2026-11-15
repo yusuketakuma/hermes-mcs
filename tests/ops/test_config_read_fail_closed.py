@@ -19,7 +19,7 @@ def test_invalid_settings_block_watch_and_services(tmp_path, monkeypatch, capsys
     assert health_watch.main(["--home", str(tmp_path), "--config", str(config), "--send"]) == 1
     assert json.loads(capsys.readouterr().err)["status"] == "blocked"
     checked = mcs_util.load_config_checked
-    monkeypatch.setattr(mcs_util, "load_config_checked", lambda: checked(str(config)))
+    monkeypatch.setattr(mcs_util, "load_config_checked", lambda **kw: checked(str(config), **kw))
     monkeypatch.setattr(mcs_setup.service_management, "apply_services",
                         lambda *a, **kw: pytest.fail("service mutation on invalid settings"))
     assert mcs_setup.cmd_services(SimpleNamespace(dry_run=False)) == 1
@@ -54,10 +54,41 @@ def test_empty_object_is_valid_for_watch_and_services(tmp_path, monkeypatch):
                         lambda args, cfg, **kw: seen.append((cfg, kw)) or 0)
     assert health_watch.main(["--home", str(tmp_path)]) == 0
     assert seen == [({}, {"config_blocked": False})]
-    monkeypatch.setattr(mcs_util, "load_config_checked", lambda: {})
+    monkeypatch.setattr(mcs_util, "load_config_checked", lambda **kw: {})
     monkeypatch.setattr(mcs_setup, "_service_paths", lambda: "synthetic-paths")
     monkeypatch.setattr(mcs_setup.service_management, "apply_services",
                         lambda cfg, **kw: seen.append((cfg, kw["dry_run"]))
                         or SimpleNamespace(message=None, exit_code=7))
     assert mcs_setup.cmd_services(SimpleNamespace(dry_run=True)) == 7
     assert seen[-1] == ({}, True)
+
+
+def test_missing_common_config_keeps_legacy_empty_defaults(tmp_path, monkeypatch):
+    config = tmp_path / "config.json"
+    assert mcs_util.load_config_checked(str(config)) is None
+    assert mcs_util.load_config_checked(str(config), missing_ok=True) == {}
+    seen = []
+    monkeypatch.setattr(health_watch, "_watch",
+                        lambda args, cfg, **kw: seen.append((cfg, kw)) or 0)
+    assert health_watch.main(["--home", str(tmp_path), "--config", str(config)]) == 0
+    assert seen == [({}, {"config_blocked": False})]
+    checked = mcs_util.load_config_checked
+    monkeypatch.setattr(mcs_util, "load_config_checked", lambda **kw: checked(str(config), **kw))
+    monkeypatch.setattr(mcs_setup, "_service_paths", lambda: "synthetic-paths")
+    monkeypatch.setattr(mcs_setup.service_management, "apply_services",
+                        lambda cfg, **kw: seen.append(cfg)
+                        or SimpleNamespace(message=None, exit_code=0))
+    assert mcs_setup.cmd_services(SimpleNamespace(dry_run=True)) == 0
+    assert seen[-1] == {} and not config.exists()
+
+
+def test_missing_common_config_with_provider_authority_stays_blocked(tmp_path, monkeypatch):
+    config = tmp_path / "config.json"
+    data = tmp_path / "data"
+    data.mkdir(mode=0o700)
+    authority = data / ".provider-settings-authority.json"
+    authority.write_text("{}")
+    authority.chmod(0o600)
+    assert mcs_util.load_config_checked(str(config), missing_ok=True) is None
+    monkeypatch.setattr(health_watch, "_watch", lambda *a, **kw: _blocked_watch(kw))
+    assert health_watch.main(["--home", str(tmp_path), "--config", str(config)]) == 1

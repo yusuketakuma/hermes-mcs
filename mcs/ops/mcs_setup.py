@@ -1464,7 +1464,7 @@ def runtime_gate_errors(cfg, *, repair_recovery=False, update_repo=None, allow_r
 
 
 def cmd_services(args):
-    cfg = mcs_util.load_config_checked()
+    cfg = mcs_util.load_config_checked(missing_ok=True)
     if cfg is None:
         print("設定を読み取れないため、サービスは変更していません。設定を確認してください。")
         return 1

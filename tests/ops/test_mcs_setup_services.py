@@ -388,7 +388,7 @@ def test_services_installs_gateway_when_interactive(
     _previous_service_load_config_1434 = mcs_util.load_config_checked
     monkeypatch.setattr(
         mcs_util, 'load_config_checked',
-        lambda path=None: _previous_service_load_config_1434(path) if path else
+        lambda path=None, **kw: _previous_service_load_config_1434(path) if path else
         {"notify": {"interactive": "discord"}})
     calls.clear()
     # fake_run returns empty stdout -> "supervised" absent -> install
@@ -407,7 +407,7 @@ def test_services_gateway_supervised_is_noop(monkeypatch, tmp_path):
     _previous_service_load_config_1452 = mcs_util.load_config_checked
     monkeypatch.setattr(
         mcs_util, 'load_config_checked',
-        lambda path=None: _previous_service_load_config_1452(path) if path else
+        lambda path=None, **kw: _previous_service_load_config_1452(path) if path else
         {"notify": {"interactive": "discord"}})
 
     def fake_run(argv, **kw):
@@ -442,7 +442,7 @@ def test_standalone_services_owns_one_host_and_no_hermes_jobs(monkeypatch, tmp_p
     requests = []
     monkeypatch.setattr(service, "request_restart", lambda root: requests.append(root))
     _previous_service_load_config_1488 = mcs_util.load_config_checked
-    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda path=None: _previous_service_load_config_1488(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda path=None, **kw: _previous_service_load_config_1488(path) if path else {"runtime_mode": "standalone"})
     monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: pytest.fail("Hermes must not be resolved"))
     assert mcs_setup.cmd_services(args) == 0
@@ -463,7 +463,7 @@ def test_standalone_loaded_host_without_heartbeat_starts_without_kill(monkeypatc
 
     calls, args = _services_env(monkeypatch, tmp_path, loaded={service_contract.STANDALONE_LABEL})
     _previous_service_load_config_1508 = mcs_util.load_config_checked
-    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda path=None: _previous_service_load_config_1508(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda path=None, **kw: _previous_service_load_config_1508(path) if path else {"runtime_mode": "standalone"})
     monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
     attempts = iter([False, True])
 
@@ -483,7 +483,7 @@ def test_standalone_mode_switch_stops_only_previous_owned_jobs(monkeypatch, tmp_
                                              {"id": "bbbbbb", "name": "other", "schedule": "0 0 * * *", "script": "other.sh"}])
     service_management.save_manifest({'agents': [{'label': 'local.mcs-int'}], 'cron': [{'script': 'mcs_check.sh'}]}, paths=mcs_setup._service_paths())
     _previous_service_load_config_1527 = mcs_util.load_config_checked
-    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda path=None: _previous_service_load_config_1527(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda path=None, **kw: _previous_service_load_config_1527(path) if path else {"runtime_mode": "standalone"})
     monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
     assert mcs_setup.cmd_services(args) == 0
     assert ["/x/hermes", "cron", "remove", "aaaaaa"] in calls
@@ -571,7 +571,7 @@ def test_changed_standalone_plist_is_reloaded_into_launchd(monkeypatch, tmp_path
     monkeypatch.delenv("XPC_SERVICE_NAME", raising=False)
     calls, args = _services_env(monkeypatch, tmp_path, loaded={service_contract.STANDALONE_LABEL})
     _previous_service_load_config_2348 = mcs_util.load_config_checked
-    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda path=None: _previous_service_load_config_2348(path) if path else {"runtime_mode": "standalone"})
+    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda path=None, **kw: _previous_service_load_config_2348(path) if path else {"runtime_mode": "standalone"})
     monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
     requests = []
     monkeypatch.setattr(service, "request_restart", lambda root: requests.append(root))

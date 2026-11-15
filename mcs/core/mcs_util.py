@@ -202,10 +202,12 @@ def _load_config(path, *, allow_provider_unavailable=False):
     return raw if isinstance(raw, dict) else None
 
 
-def load_config_checked(path: str = CONF_PATH) -> dict | None:
+def load_config_checked(path: str = CONF_PATH, *, missing_ok: bool = False) -> dict | None:
     """Return validated composite settings, or None when a consistent read fails."""
     try:
         return _load_config(path)
+    except FileNotFoundError:
+        return {} if missing_ok else None
     except (ProviderSettingsUnreadable, OSError, ValueError, TypeError, RecursionError):
         return None
 
