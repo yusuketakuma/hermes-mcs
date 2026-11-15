@@ -1,12 +1,24 @@
 {
   "category": "changed",
   "title": "通知カードで依頼を先頭に表示し、確認・担当をボタンにして、対応状態を見出しで示す",
-  "summary": "新しく作る投稿カード（カード形式6）では、投稿ごとの要約を緊急度の次に「📌 依頼」「薬剤」の順で始め、その後に概要・要点を続けます。未確認の依頼候補は従来の位置のままです。カードの見出しのアイコンは、確認済みなら✅、担当中なら👤、それ以外は💬になります。確認は今の内容に確認ボタンが押された記録で、作業の完了ではありません。新しい返信などで内容が変わって確認が外れると、アイコンも戻ります。Discordでは、カードの縁の色も担当中は黄、確認済みは灰になります。緊急度が高いカードの赤はそのままです。新しい要約の並びと見出しは Slack と、返信カードを使う Discord（既定）の投稿カードが対象です。Slack・Discord・LINE WORKSのすべてのカードで、「確認する」「担当する」を「操作を選ぶ…」から出してボタンとして表示し、1回の操作で押せるようにしました。ほかの操作はこれまでどおりメニューにあります。",
+  "summary": "新しい投稿カードは、要約を緊急度の次に「📌 依頼」「薬剤」の順で始めます。見出しのアイコンは確認済みなら✅、担当中なら👤、それ以外は💬です（確認は作業の完了ではありません）。Slack・Discord・LINE WORKS のすべてのカードで「確認する」「担当する」をボタンにし、1回で押せるようにしました。",
   "upgrade": "設定の変更は不要です。反映には Hermes gateway の再起動（Slack・Discord）と、LINE WORKS 独立アダプターの再起動が必要です。古い worker は新しい縁の色の指定を受け付けず、そのカードを保留します。既に配信したカードは、形式を保ったまま一斉には書き換えません。ボタンの配置は、各カードが次に更新されたときに反映します。カード形式6のカードを作った後は、カード形式5までの版へは更新ツールでロールバックできなくなります（既存のロールバック検査による）。",
   "details": [
+    "新しい要約の並びと見出しは、Slack と返信カードを使う Discord（既定）の投稿カードが対象です。未確認の依頼候補は従来の位置のままです。",
+    "新しい返信などで内容が変わって確認が外れると、アイコンも戻ります。Discordではカードの縁の色も担当中は黄、確認済みは灰になります。緊急度が高いカードの赤はそのままです。ほかの操作はこれまでどおりメニューにあります。",
     "notify_cards.CARD_LAYOUT を6にしました。notify_render.ACTION_FIRST_LAYOUT 以上の投稿カードだけが、新しい要約の並び（structured_view.structured_lines の request_first）と、状態に応じた見出しアイコン（notify_render.STATE_ICONS）を使います。LINE WORKS の投稿カード、返信カードを使わない Discord のカード、アラートカードは従来の形式（3）で作られるため、要約の並びと見出しは変わりません。",
     "見出しアイコンと Discord の縁の色は、状態欄と同じ確認・担当の記録から決めます。縁の色の指定（parts.discord.accent の acked・assigned）は content fingerprint に含めません。",
     "adapters/common/card_controls の QUICK_ACTIONS（ack・assign）を各 adapter がボタンとして描き、メニューからは除きます。Slack は操作行の select の前、Discord は 別の投稿・MCSで開く と同じ行（5個を超える場合はメニューへ戻す）、LINE WORKS は 操作を選ぶ… の前です。ボタンの名前と、押したときの権限・トークン・確認の経路は変わりません。"
   ],
-  "refs": ["mcs/notify/notify_cards.py", "mcs/notify/notify_render.py", "mcs/notify/notify_card_renders.py", "mcs/views/structured_view.py", "adapters/common/card_controls.py", "adapters/common/spec.py", "adapters/slack/cards.py", "adapters/discord/cards.py", "adapters/lineworks/cards.py"]
+  "refs": [
+    "mcs/notify/notify_cards.py",
+    "mcs/notify/notify_render.py",
+    "mcs/notify/notify_card_renders.py",
+    "mcs/views/structured_view.py",
+    "adapters/common/card_controls.py",
+    "adapters/common/spec.py",
+    "adapters/slack/cards.py",
+    "adapters/discord/cards.py",
+    "adapters/lineworks/cards.py"
+  ]
 }
