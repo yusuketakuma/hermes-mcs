@@ -179,10 +179,44 @@ def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(sca
             elapsed = time.monotonic() - started
             observed['tally_rebuilds'] = cloud_policy.TALLY_COST['rebuilds'] - tally_before['rebuilds']
             observed['tally_s'] = round(cloud_policy.TALLY_COST['seconds'] - tally_before['seconds'], 6)
+        observed.update(order_index_state='unavailable', plan_index='unavailable', temp_btree='unavailable')
+        try:
+            import re
+            import ledger_schema
+            state = (ledger_schema.cloud_usage_order_index_state(ledger.db)
+                     if not ledger.db.in_transaction else 'unavailable')
+            if state in ('present', 'absent', 'schema_mismatch'):
+                observed['order_index_state'] = state
+                source = cloud_policy._accounting_order_source(ledger.db)
+                expected = (f"artifacts INDEXED BY {ledger_schema.CLOUD_USAGE_ORDER_INDEX}"
+                            if state == 'present' else 'artifacts')
+                now = time.time()
+                month = cloud_policy._periods(now)[1]
+                if (source == expected and not ledger.db.in_transaction
+                        and month == cloud_policy._periods(now - elapsed)[1]):
+                    details = [row[3].lower() for row in ledger.db.execute(
+                        "EXPLAIN QUERY PLAN SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
+                        f"FROM {source} "
+                        "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND created_at>=? "
+                        "AND artifact_id>? ORDER BY artifact_id", (month, 0))]
+                    if details:
+                        indexes = {label for pattern, label in (
+                            (r'\bidx_cloud_usage_artifact_order\b', 'order_index'),
+                            (r'\bidx_artifacts_kind_created\b', 'kind_created_index'))
+                            if any(re.search(pattern, detail) for detail in details)}
+                        if len(indexes) == 1 and (state == 'present' or 'order_index' not in indexes):
+                            observed['plan_index'] = next(iter(indexes))
+                        else:
+                            observed['plan_index'] = 'other'
+                        observed['temp_btree'] = any('temp b-tree' in detail for detail in details)
+        except Exception:
+            pass   # diagnostics never replace the approval result
     error = receipt.get('error')
     known_errors = (local_rebuild.UNVERIFIED, 'local_rebuild_database_changed',
                     'local_rebuild_already_approved', 'local_rebuild_bundle_changed')
-    diagnostic = f"error={error if error in known_errors else 'other'}, elapsed_s={elapsed:.3f}, {observed}"
+    category = error if error in known_errors else 'none' if error is None else 'other'
+    diagnostic = f"error={category}, elapsed_s={elapsed:.3f}, {observed}"
+    print(diagnostic)
     assert receipt['outcome'] == 'applied', diagnostic
     assert receipt['approved'] == 20, diagnostic
 
