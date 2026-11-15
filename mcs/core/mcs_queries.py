@@ -112,7 +112,7 @@ def current_message_read_scope(db):
 
 
 def selected_artifact_proof_valid(db, artifact_id, *, inference_target=CURRENT_VERSION,
-                                  material=False):
+                                  material=False, adverse_review=True):
     """Check a marked extraction against its exact retained progress witness.
 
     ``material`` is the patient-context adoption contract: unmarked rows are
@@ -161,7 +161,8 @@ def selected_artifact_proof_valid(db, artifact_id, *, inference_target=CURRENT_V
         try:
             if material:
                 result = extract_llm.material_proof_for_message(
-                    db, selected, model=selected['model'], expected_artifact_id=artifact_id)
+                    db, selected, model=selected['model'], expected_artifact_id=artifact_id,
+                    adverse_review=adverse_review)
             else:
                 result = extract_llm.progress_for_message(
                     db, selected, model=selected['model'], expected_artifact_id=artifact_id)

@@ -43,17 +43,17 @@ def _paid(ledger, monkeypatch, mid=1, *, result=True):
                           "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND message_id=?", (mid,))
 
 
-def _approved(ledger, monkeypatch):
-    old(ledger, 1)
-    _paid(ledger, monkeypatch)
+def _approved(ledger, monkeypatch, mid=1):
+    old(ledger, mid)
+    _paid(ledger, monkeypatch, mid)
     plan = local_rebuild.preview(ledger)['plan']
-    assert [unit['message_id'] for unit in plan['units']] == [1]
+    assert [unit['message_id'] for unit in plan['units']] == [mid]
     receipt = mcs_requests.apply_command(ledger, {
         'version': 1, 'cmd': local_rebuild.COMMAND, 'command_id': str(uuid.uuid4()),
         'actor': 'synthetic-human', 'human_confirmed': True, 'project_id': None,
         'reason': '完全合成の確認', 'plan': plan})
     assert receipt['outcome'] == 'applied'
-    return local_rebuild.approved_units(ledger.db)[(1, 1)]
+    return local_rebuild.approved_units(ledger.db)[(1, mid)]
 
 
 def _usage(ledger):
@@ -211,3 +211,43 @@ def test_a_multi_piece_body_with_a_quality_repair_stays_local_and_tagged(routed,
         "SELECT meta FROM artifacts WHERE kind IN ('extract_llm_chunk',?) AND message_id=1", (worker.KIND,))
         if json.loads(meta).get('extract_version', worker.EXTRACT_VERSION) == worker.EXTRACT_VERSION]
     assert tags and all(item == local_rebuild.tag(unit) for item in tags)
+
+
+
+def test_a_held_head_keeps_a_bounded_claim_and_the_pass_reaches_the_next_row(routed, monkeypatch):
+    """The real local prepare loop (runner refill over prepare refusals): a lapsed approval at the
+    head is claimed for the prepare hold and the healthy row behind it is extracted."""
+    ledger, *_ = routed
+    _approved(ledger, monkeypatch, mid=2)                              # newest first: the head
+    _paid(ledger, monkeypatch, 2, result=False)                        # lapses the approval
+    old(ledger, 1)                                                     # a healthy, unapproved row
+    seen = []
+
+    def local(prompt, **_kw):
+        seen.append(prompt)
+        return {'symptoms': [], 'summary': '合成の要約'}
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', local)
+    report = worker.run_pending(ledger, limit=1, budget_s=180)
+    assert report['done'] == 1 and seen
+    assert report['defer_reasons'].get(local_rebuild.PROOF_CHANGED) == 1
+    assert ledger.db.execute("SELECT COUNT(*) FROM fetch_jobs WHERE kind='extract_claim' AND message_id=2 "
+                             "AND next_try>strftime('%s','now')").fetchone()[0] == 1
+
+
+def test_an_adopted_unit_stays_adopted_when_later_review_evidence_turns_adverse(routed, monkeypatch):
+    """Adoption is the authentic past result (material proof without the adverse review probe);
+    publication readers still see the adverse evidence and refuse the material."""
+    import extract_llm_progress
+    ledger, *_ = routed
+    _approved(ledger, monkeypatch)
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', lambda prompt, **_kw: {'symptoms': [], 'summary': '合成'})
+    assert worker.run_pending(ledger, limit=1, budget_s=180)['done'] == 1
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ADOPTED
+    [final] = _current(ledger)
+    probe = extract_llm_progress._progress_probe
+
+    def adverse(db, item):
+        return True if item[0] == 'review_material' else probe(db, item)
+    monkeypatch.setattr(extract_llm_progress, '_progress_probe', adverse)
+    assert not mcs_queries.selected_artifact_proof_valid(ledger.db, final['artifact_id'], material=True)
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ADOPTED

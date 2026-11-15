@@ -73,14 +73,18 @@ def cloud_completion(db, row, contract):
 
 
 def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, required_contract=None,
-                    material=False):
+                    material=False, adverse_review=True):
     """Apply the shared progress decision, yielding only independent SQL probes.
 
     ``material`` verifies the exact selected final artifact for adoption:
     queued/held scheduling probes and the thin-retry clause of the review
     probe are skipped, so a merely scheduled thin or upgrade retry never
     reads as invalid material. Adverse evidence — actionable QC flags and
-    human reports — still blocks through ``review_material``."""
+    human reports — still blocks through ``review_material``.
+
+    ``adverse_review=False`` (material only) drops exactly that adverse evidence and nothing
+    else: it asks whether the selected final is still the authentic adoption it was, not
+    whether it may be published now. Publication readers never pass it."""
     out = {"state": "attention", "completed": 0, "total": 0, "backend": "legacy"}
     if not row:
         return out
@@ -201,8 +205,9 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, re
                 key: meta.get(key) for key in ("context_snapshot", "context_digest", "patient_state_context")}:
             return out
         valid = extract_validation.validate(document, r["body_text"], references=_frame_refs(r)) if isinstance(document, dict) else None
-        review = yield (("review_material" if material else "review"), r["project_id"], r["message_id"])
-        if (bound and (review or any(
+        review = (yield (("review_material" if material else "review"), r["project_id"], r["message_id"])) \
+            if adverse_review or not material else False
+        if (bound and (adverse_review or not material) and (review or any(
                 isinstance(meta.get(key), dict) and meta[key].get("applied") is False
                 for key in ("qc_fix", "human_fix")))):
             return out
@@ -323,14 +328,15 @@ def progress_for_message(db, row, *, model: str | None, expected_artifact_id=Non
     return _finish_progress(db, _progress_steps(db, row, model=model, expected_artifact_id=expected_artifact_id))
 
 
-def material_proof_for_message(db, row, *, model: str | None, expected_artifact_id=None) -> dict:
+def material_proof_for_message(db, row, *, model: str | None, expected_artifact_id=None,
+                               adverse_review=True) -> dict:
     """Exact-final material validity for adoption: the selected artifact's own
     source binding, frame references, clinical validation and marked inline
     proof — with thin or upgrade scheduling separated out. ``state`` reaches
     ``'complete'`` under the same bound/valid/completeness contract as
     progress, minus the scheduling probes that never invalidate material."""
     return _finish_progress(db, _progress_steps(db, row, model=model,
-        expected_artifact_id=expected_artifact_id, material=True))
+        expected_artifact_id=expected_artifact_id, material=True, adverse_review=adverse_review))
 
 
 def _batch_progress_probes(db, probes):

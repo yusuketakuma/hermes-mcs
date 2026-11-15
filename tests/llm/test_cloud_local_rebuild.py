@@ -89,6 +89,11 @@ def test_a_bindingless_answerless_success_is_eligible_and_the_bundle_lists_it(le
     # an explicit null logical fingerprint is not an absent one
     ("UPDATE artifacts SET meta=json_set(meta,'$.logical_request_fp',NULL) "
      "WHERE kind='cloud_usage_reserve' AND message_id=1", 'receipt_inconsistent'),
+    # an orphan result (no reservation of any route) and a reservation without a route fail closed
+    ("INSERT INTO artifacts(kind,project_id,message_id,meta,content,created_at) "
+     "VALUES('cloud_usage_result',1,1,'{\"reservation_id\":\"" + 'a' * 32 + "\"}','{}',0)", 'receipt_inconsistent'),
+    ("UPDATE artifacts SET meta=json_remove(meta,'$.route') WHERE kind='cloud_usage_reserve' AND message_id=1",
+     'receipt_inconsistent'),
     # a disposition with a malformed reservation id is never silently ignored
     ("INSERT INTO artifacts(kind,project_id,message_id,meta,created_at) "
      "VALUES('cloud_usage_disposition',1,1,'{\"reservation_id\":\"not-hex\"}',0)", 'receipt_inconsistent'),
@@ -465,3 +470,21 @@ def test_a_whitespace_empty_answer_is_the_empty_object(legacy):
     with ledger.db:
         ledger.db.execute("UPDATE artifacts SET content='{ }' WHERE kind='cloud_usage_result' AND message_id=1")
     assert local_rebuild.unit_proof(ledger, 1, 1)['message_id'] == 1
+
+
+
+def test_another_routes_linked_usage_rows_neither_change_the_proof_nor_lift_the_approval(legacy):
+    """A semantic_backlog reservation of the same message, with its linked result, is outside the
+    reextract proof: the unit keeps its proof and its permit."""
+    ledger, _ = legacy
+    before = local_rebuild.unit_proof(ledger, 1, 1)['proof']
+    _approve(ledger, local_rebuild.preview(ledger)['plan'])
+    with ledger.db:
+        for kind in ('cloud_usage_reserve', 'cloud_usage_result'):
+            ledger.db.execute(
+                "INSERT INTO artifacts(kind,project_id,message_id,model,meta,content,created_at) "
+                "SELECT kind,project_id,message_id,model,json_set(meta,'$.reservation_id',?,'$.route',"
+                "'semantic_backlog'),content,created_at FROM artifacts WHERE kind=? AND message_id=1",
+                ('b' * 32, kind))
+    assert local_rebuild.unit_proof(ledger, 1, 1)['proof'] == before
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.ACTIVE

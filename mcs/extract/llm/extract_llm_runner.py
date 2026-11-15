@@ -659,7 +659,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             # An approved local rebuild: every local dispatch (first, repair, split) and the
             # adoption re-prove the same permit; provider stays None so no path reaches cloud.
             def permitted():
-                return local_rebuild.permit(ledger, r["project_id"], r["message_id"]) == local_rebuild.ACTIVE
+                return local_rebuild.permit(ledger, r["project_id"], r["message_id"]) in local_rebuild.RUNNABLE
 
             def request_guard(prompt, kind="first"):
                 try:

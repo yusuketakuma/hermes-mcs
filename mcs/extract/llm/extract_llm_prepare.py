@@ -261,7 +261,7 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
             if rebuild_state in (local_rebuild.PROOF_CHANGED, local_rebuild.UNVERIFIED):
                 block(rebuild_state)
                 continue
-            if rebuild_state == local_rebuild.ACTIVE:
+            if rebuild_state in local_rebuild.RUNNABLE:
                 r["_local_rebuild"] = unit
         # Read-only recognition before any owned/provider state is restored:
         # pending work that is entirely retired-generation becomes an
@@ -327,7 +327,7 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         if r["qc_src"] and qc is None:
             continue   # flagged in SQL but the audit is gone or clean
         hints = _rule_hints(r)
-        if prefilter and not cloud_only and qc is None and not r["thin_src"] \
+        if prefilter and not cloud_only and qc is None and not r["thin_src"] and rebuild_state is None \
                 and not r["human_src"] \
                 and _low_signal(r["body_text"] or "", hints):
             # no clinical signal on either net — settle with a durable
