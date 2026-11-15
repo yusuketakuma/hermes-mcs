@@ -4,11 +4,13 @@ its limit, and the approval re-proves everything in its own transaction (fully s
 import argparse
 import json
 import sqlite3
+import time
 import uuid
 
 import pytest
 
 import cloud_cli
+import cloud_policy
 import extract_llm_local_rebuild as local_rebuild
 import mcs_requests
 import mcs_util
@@ -16,12 +18,14 @@ from test_cloud_local_rebuild import legacy as legacy, paid as paid
 
 __all__ = ["legacy", "paid"]
 MESSAGES, PAIRS = 2800, 12          # ~67k accounting rows, as the M1 scale probe
+MONTH_END_PAIRS = 15                # ~84k rows: the month-end estimate (~80k, Astra r5)
+MONTH_END_META = 925                # chars: ~3.7KB observed per row (strings x4), production density
 
 
-@pytest.fixture
-def scaled(legacy, tmp_path, monkeypatch):
-    """The legacy unit's real reservation/result pair cloned to 2800 messages x 12 pairs, then
-    published as the CLI's ledger (data/ledger.db under a synthetic HOME)."""
+def _clone(legacy, tmp_path, monkeypatch, pairs, pad=0):
+    """The legacy unit's real reservation/result pair cloned to 2800 messages x ``pairs``, each meta
+    padded with a synthetic filler to ``pad`` chars, then published as the CLI's ledger
+    (data/ledger.db under a synthetic HOME)."""
     from semantic_testkit import _message
     ledger, calls = legacy
     db = ledger.db
@@ -30,12 +34,34 @@ def scaled(legacy, tmp_path, monkeypatch):
     ledger.save_messages([_message(mid) for mid in range(3, MESSAGES + 3)])
     rows = []
     for mid in range(3, MESSAGES + 3):
-        for _ in range(PAIRS):
+        for _ in range(pairs):
             rid = uuid.uuid4().hex
             for kind, row in seed.items():
                 meta = json.loads(row['meta'])
                 meta.update(reservation_id=rid, message_id=mid, unit_key=str(mid))
-                rows.append((kind, 1, mid, row['model'], json.dumps(meta), row['content'], row['created_at']))
+                text = json.dumps(meta)
+                if pad > len(text):
+                    meta['synthetic_pad'] = 'x' * (pad - len(text) - 20)
+                    text = json.dumps(meta)
+                rows.append((kind, 1, mid, row['model'], text, row['content'], row['created_at']))
+    if pad:
+        # the month edges the tally must still cover: a prior-month reservation whose result came
+        # this month (late), and reservations with no result yet (unsettled), on the oldest
+        # messages so the newest-first bundle never reaches them
+        month = cloud_policy._periods(time.time())[1]
+        for mid in range(3, 13):
+            rid = uuid.uuid4().hex
+            for kind, row in seed.items():
+                meta = json.loads(row['meta'])
+                meta.update(reservation_id=rid, message_id=mid, unit_key=str(mid))
+                rows.append((kind, 1, mid, row['model'], json.dumps(meta), row['content'],
+                             month - 86400 if kind == 'cloud_usage_reserve' else row['created_at']))
+        for mid in range(13, 23):
+            meta = json.loads(seed['cloud_usage_reserve']['meta'])
+            meta.update(reservation_id=uuid.uuid4().hex, message_id=mid, unit_key=str(mid))
+            row = seed['cloud_usage_reserve']
+            rows.append(('cloud_usage_reserve', 1, mid, row['model'], json.dumps(meta), row['content'],
+                         row['created_at']))
     with db:
         db.executemany("INSERT INTO artifacts(kind,project_id,message_id,model,meta,content,created_at) "
                        "VALUES(?,?,?,?,?,?,?)", rows)
@@ -46,6 +72,11 @@ def scaled(legacy, tmp_path, monkeypatch):
         db.backup(target)
     monkeypatch.setattr(mcs_util, 'HOME', str(root))
     return path
+
+
+@pytest.fixture
+def scaled(legacy, tmp_path, monkeypatch):
+    return _clone(legacy, tmp_path, monkeypatch, PAIRS)
 
 
 def _plan(capsys, tmp_path, *extra):
@@ -75,6 +106,20 @@ def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(sca
             'actor': 'synthetic-human', 'human_confirmed': True, 'project_id': None,
             'reason': '完全合成の確認', 'plan': plan})
     assert receipt['outcome'] == 'applied' and receipt['approved'] == 20
+
+
+def test_the_month_end_tally_at_production_density_fits_its_own_budget(legacy, tmp_path, capsys, monkeypatch):
+    """~84k accounting rows at ~3.7KB observed per row (fully synthetic filler, no real meta): the
+    tally passes once inside its own budget and the dry run stops at a full bundle; the measured
+    use is past the former 256 MiB, which the month end would have exceeded."""
+    _clone(legacy, tmp_path, monkeypatch, MONTH_END_PAIRS, pad=MONTH_END_META)
+    rc, report, plan = _plan(capsys, tmp_path)
+    assert rc == 0 and report['state'] == 'bundle_full' and report['stop_reason'] is None
+    assert report['eligible'] == 20 and report['excluded']['unverified'] == 0
+    assert local_rebuild.valid_plan(plan) and len(plan['units']) == 20
+    tally = report['tally_read']
+    assert tally['rows'] >= 80000 and 256 * 1024 * 1024 < tally['bytes'] <= tally['bytes_limit']
+    assert report['candidates'] == MESSAGES + 2      # the late and unsettled rows void nothing
 
 
 def test_a_history_changed_between_plan_and_approval_rejects_the_whole_bundle(scaled, tmp_path, capsys):

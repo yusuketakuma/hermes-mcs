@@ -22,12 +22,13 @@ READ_SECONDS = 5.0
 FULL_READ_SECONDS = 300.0   # `outstanding --full`: a read-only snapshot never blocks the writers
 READ_ROWS = 100000
 READ_BYTES = 16 * 1024 * 1024
-# The local-rebuild dry run's month-tally phase only (Astra c2b-M1-design-r3): a synthetic tally of
-# 67,217 accounting rows counted 200,210,896 observed bytes (strings x4), so 256 MiB is the smallest
-# ordinary unit covering it. Observed bytes, not memory. Used once per preview; over it the tally
-# stays unverified and the preview partial (tally_budget_exceeded), never borrowed from another phase.
-TALLY_READ_ROWS = READ_ROWS
-TALLY_READ_BYTES = 256 * 1024 * 1024
+# The local-rebuild dry run's month-tally phase only (Astra c2b-M1-design-r5): about twice the
+# month-end estimate (~80k accounting rows, ~280 MiB observed bytes, strings x4), rounded up to an
+# ordinary unit. An operating capacity, not a proven maximum or a memory bound. Used once per
+# preview; over it the tally stays unverified and the preview partial (tally_budget_exceeded),
+# never borrowed from another phase.
+TALLY_READ_ROWS = 200000
+TALLY_READ_BYTES = 640 * 1024 * 1024
 
 
 class _ReaderLimit(ValueError):
