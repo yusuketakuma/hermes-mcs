@@ -607,6 +607,110 @@ def _settle_initial_history(ledger, job, payload, cohort):
     return ready
 
 
+def _settle_history_job(ledger, job, pl, *, pid, since, sp, pages, initial,
+                        cohort_id, batch, merged, result):
+    """Advance the initial walk / page cursor and settle the job's durable
+    outcome for this drained page. Returns floored."""
+    action = None
+    invalid_observations = False
+    if initial:
+        try:
+            action = history_walk.advance(pl, batch, pid, cohort_id, sp, pages,
+                                          checkpoint_safe=merged.checkpoint_safe)
+        except ValueError:
+            invalid_observations = True
+        if action in ("progress", "accepted", "rescan", "mismatch"):
+            pl["stalls"] = 0
+        elif not batch.error and not merged.deadline and merged.error is None:
+            pl["stalls"] = pl.get("stalls", 0)+1
+    elif batch.pages and merged.checkpoint_safe:
+        pl["page"] = sp + batch.pages
+        pl["stalls"] = 0
+    elif not batch.error and not merged.deadline and merged.error is None:
+        # a deadline-cut merge or an expired session (raised below) is
+        # unfinished, not a blocker — it resumes via the checkpoint.
+        # same window re-walked with checkpoint unsafe — track stalls
+        # so a permanently unverifiable blocker surfaces instead of
+        # re-fetching identical pages forever
+        pl["stalls"] = pl.get("stalls", 0) + 1
+    floored = False
+    is_head = job["kind"] == "history_head"
+    if initial and invalid_observations:
+        ledger.job_fail(job["job_id"], reason_code="schema_error")
+        result["errors"].append(f"import {pid}: initial_history_observations_invalid")
+    elif initial and action in ("rescan", "mismatch"):
+        ledger.job_defer(job["job_id"], 0 if action == "rescan" and not pl["walk"]["mismatches"] else 300,
+                         payload=pl, reason_code="window_stalled" if pl["walk"]["mismatches"] else None)
+        if pl["walk"]["mismatches"] >= HISTORY_STALL_LIMIT:
+            ledger.job_fail(job["job_id"], reason_code="window_stalled")
+            result["errors"].append(f"import {pid}: window_stalled")
+    elif initial and action == "accepted":
+        floored = _settle_initial_history(ledger, job, pl, cohort_id)
+    elif not initial and batch.reached and not batch.error and merged.checkpoint_safe \
+            and ledger.pending_reply_jobs(pid) == 0:
+        # floor only when the root walk AND all required reply bodies
+        # completed (Oracle B08); non-terminal parent bodies already
+        # forced checkpoint_safe=False inside merge (R3/F9).
+        # The walk verified everything up to the newest stored
+        # message — record it as coverage so a later head sync can
+        # anchor there instead of re-walking the full timeline.
+        # Only when the walked range is contiguous with existing
+        # coverage (since <= cov): a bounded walk starting ABOVE
+        # coverage leaves an unverified gap it must not paper over.
+        # 'history_head' is a bounded final reconciliation — it must
+        # never rewrite the deep-walk floor (R5)
+        if since <= ledger.coverage_ts(pid):
+            ledger.set_coverage(pid, ledger.high_watermark(pid))
+        if is_head:
+            ledger.job_done(job["job_id"])
+        else:
+            ledger.set_history_floor(pid, since)
+            ledger.job_done(job["job_id"])
+            floored = True
+    elif batch.error:
+        # a walk aborted mid-way must consume an attempt like a
+        # raised MCSError does — deferring without one re-walks the
+        # same pages every retry interval forever on a permanent
+        # error (gone project, lost permission), never surfacing
+        # 'failed' (AUDIT-J03). P-2 revival via re-seed still applies.
+        # SessionExpired stays attempt-free (auth aborts the run below,
+        # matching the raised path). A run-deadline cut is unfinished
+        # work: it is bounded by consecutive no-progress cuts (stalls,
+        # reset on progress) instead of attempts, which never reset.
+        if batch.error.kind == "deadline_exceeded":
+            if not (action == "progress" if initial else batch.pages and merged.checkpoint_safe):
+                pl["stalls"] = pl.get("stalls", 0) + 1
+            if pl["stalls"] >= HISTORY_STALL_LIMIT:
+                ledger.job_fail(job["job_id"],
+                                reason_code="deadline_exceeded")
+            else:
+                ledger.job_defer(job["job_id"], 300, payload=pl,
+                                 reason_code="deadline_exceeded")
+        elif isinstance(batch.error, SessionExpired):
+            ledger.job_defer(job["job_id"], 300, payload=pl,
+                             reason_code=_job_failure_reason(batch.error))
+        else:
+            _job_retry(ledger, job["job_id"], batch.error, 300, payload=pl,
+                       reason_code=_job_failure_reason(batch.error))
+    elif pl.get("stalls", 0) >= HISTORY_STALL_LIMIT:
+        # window can never certify (e.g. 'snippet' parent whose full
+        # body has no API surface) — fail visibly; the job is still
+        # revivable by a new import request (P-2)
+        ledger.job_fail(job["job_id"], reason_code="window_stalled")
+        result["errors"].append(f"import {pid}: window_stalled")
+    elif batch.reached:
+        # replies still pending — keep job alive to re-check floor,
+        # backing off as stalls accumulate
+        ledger.job_defer(job["job_id"],
+                         min(3600, 600 * max(1, pl.get("stalls", 0))),
+                         payload=pl, reason_code="waiting_replies")
+    else:
+        # progress checkpoint: resume from this page next tick without
+        # consuming attempts (only real failures do)
+        ledger.job_defer(job["job_id"], 0, payload=pl)
+    return floored
+
+
 def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
                      trickle_pages: int = TRICKLE_PAGES,
                      max_jobs: int | None = None,
@@ -724,103 +828,11 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
             if done_n + failed_saves >= limit:
                 break
             continue
-        action = None
-        invalid_observations = False
-        if initial:
-            try:
-                action = history_walk.advance(pl, batch, pid, initial_state["cohort_id"], sp, pages,
-                                              checkpoint_safe=merged.checkpoint_safe)
-            except ValueError:
-                invalid_observations = True
-            if action in ("progress", "accepted", "rescan", "mismatch"):
-                pl["stalls"] = 0
-            elif not batch.error and not merged.deadline and merged.error is None:
-                pl["stalls"] = pl.get("stalls", 0)+1
-        elif batch.pages and merged.checkpoint_safe:
-            pl["page"] = sp + batch.pages
-            pl["stalls"] = 0
-        elif not batch.error and not merged.deadline and merged.error is None:
-            # a deadline-cut merge or an expired session (raised below) is
-            # unfinished, not a blocker — it resumes via the checkpoint.
-            # same window re-walked with checkpoint unsafe — track stalls
-            # so a permanently unverifiable blocker surfaces instead of
-            # re-fetching identical pages forever
-            pl["stalls"] = pl.get("stalls", 0) + 1
-        floored = False
-        is_head = job["kind"] == "history_head"
-        if initial and invalid_observations:
-            ledger.job_fail(job["job_id"], reason_code="schema_error")
-            result["errors"].append(f"import {pid}: initial_history_observations_invalid")
-        elif initial and action in ("rescan", "mismatch"):
-            ledger.job_defer(job["job_id"], 0 if action == "rescan" and not pl["walk"]["mismatches"] else 300,
-                             payload=pl, reason_code="window_stalled" if pl["walk"]["mismatches"] else None)
-            if pl["walk"]["mismatches"] >= HISTORY_STALL_LIMIT:
-                ledger.job_fail(job["job_id"], reason_code="window_stalled")
-                result["errors"].append(f"import {pid}: window_stalled")
-        elif initial and action == "accepted":
-            floored = _settle_initial_history(ledger, job, pl, initial_state["cohort_id"])
-        elif not initial and batch.reached and not batch.error and merged.checkpoint_safe \
-                and ledger.pending_reply_jobs(pid) == 0:
-            # floor only when the root walk AND all required reply bodies
-            # completed (Oracle B08); non-terminal parent bodies already
-            # forced checkpoint_safe=False inside merge (R3/F9).
-            # The walk verified everything up to the newest stored
-            # message — record it as coverage so a later head sync can
-            # anchor there instead of re-walking the full timeline.
-            # Only when the walked range is contiguous with existing
-            # coverage (since <= cov): a bounded walk starting ABOVE
-            # coverage leaves an unverified gap it must not paper over.
-            # 'history_head' is a bounded final reconciliation — it must
-            # never rewrite the deep-walk floor (R5)
-            if since <= ledger.coverage_ts(pid):
-                ledger.set_coverage(pid, ledger.high_watermark(pid))
-            if is_head:
-                ledger.job_done(job["job_id"])
-            else:
-                ledger.set_history_floor(pid, since)
-                ledger.job_done(job["job_id"])
-                floored = True
-        elif batch.error:
-            # a walk aborted mid-way must consume an attempt like a
-            # raised MCSError does — deferring without one re-walks the
-            # same pages every retry interval forever on a permanent
-            # error (gone project, lost permission), never surfacing
-            # 'failed' (AUDIT-J03). P-2 revival via re-seed still applies.
-            # SessionExpired stays attempt-free (auth aborts the run below,
-            # matching the raised path). A run-deadline cut is unfinished
-            # work: it is bounded by consecutive no-progress cuts (stalls,
-            # reset on progress) instead of attempts, which never reset.
-            if batch.error.kind == "deadline_exceeded":
-                if not (action == "progress" if initial else batch.pages and merged.checkpoint_safe):
-                    pl["stalls"] = pl.get("stalls", 0) + 1
-                if pl["stalls"] >= HISTORY_STALL_LIMIT:
-                    ledger.job_fail(job["job_id"],
-                                    reason_code="deadline_exceeded")
-                else:
-                    ledger.job_defer(job["job_id"], 300, payload=pl,
-                                     reason_code="deadline_exceeded")
-            elif isinstance(batch.error, SessionExpired):
-                ledger.job_defer(job["job_id"], 300, payload=pl,
-                                 reason_code=_job_failure_reason(batch.error))
-            else:
-                _job_retry(ledger, job["job_id"], batch.error, 300, payload=pl,
-                           reason_code=_job_failure_reason(batch.error))
-        elif pl.get("stalls", 0) >= HISTORY_STALL_LIMIT:
-            # window can never certify (e.g. 'snippet' parent whose full
-            # body has no API surface) — fail visibly; the job is still
-            # revivable by a new import request (P-2)
-            ledger.job_fail(job["job_id"], reason_code="window_stalled")
-            result["errors"].append(f"import {pid}: window_stalled")
-        elif batch.reached:
-            # replies still pending — keep job alive to re-check floor,
-            # backing off as stalls accumulate
-            ledger.job_defer(job["job_id"],
-                             min(3600, 600 * max(1, pl.get("stalls", 0))),
-                             payload=pl, reason_code="waiting_replies")
-        else:
-            # progress checkpoint: resume from this page next tick without
-            # consuming attempts (only real failures do)
-            ledger.job_defer(job["job_id"], 0, payload=pl)
+        floored = _settle_history_job(
+            ledger, job, pl, pid=pid, since=since, sp=sp, pages=pages,
+            initial=initial,
+            cohort_id=initial_state["cohort_id"] if initial else None,
+            batch=batch, merged=merged, result=result)
         if batch.error:
             result["errors"].append(f"import {pid}: {batch.error.kind}")
             if isinstance(batch.error, SessionExpired):
