@@ -27,10 +27,8 @@ jobs:
           uv venv --python 3.14 --managed-python .venv
           uv pip install --python .venv/bin/python "pytest==9.2.0"
           .venv/bin/python -c 'import platform, sqlite3; print("python", platform.python_version(), "sqlite", sqlite3.sqlite_version)'
-      - name: Diagnose previously failing synthetic tests
+      - name: Diagnose synthetic approval tally
         run: |
           sh scripts/run_tests.sh \
             'tests/ops/test_cloud_cli_local_rebuild_budget.py::test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it' \
-            'tests/ops/test_runtime_compatibility.py::test_invalid_render_config_is_reported_not_raised' \
-            'tests/core/test_context_receipt_batch.py::test_candidate_checks_multiple_units_with_one_global_receipt_scan' \
             -r fEs --durations=10
