@@ -1,0 +1,19 @@
+{
+  "category": "added",
+  "title": "収集が止まったとき、止まった処理と原因・対処を表示",
+  "summary": "収集の実行全体が失敗したとき、すぐ届く「収集処理の失敗」通知と監視警報に、どの処理で止まったか（例: 未読投稿の取得、通知の送信）と、原因の分類に応じた対処を表示します。これまでは「mcs_setup.py check で確認」「data/mcs.log の末尾を確認」だけで、ログを読めないと原因が分かりませんでした。ログイン切れの通知にも止まった処理を添えます。",
+  "upgrade": "追加操作は不要です。更新後に初めて失敗した収集から表示されます。更新前に記録された失敗や送信待ちの通知は従来の文面のままです。Hermesモードでは通知文の変更はgatewayの再起動後に反映されます。",
+  "details": [
+    "止まった処理と原因は固定の分類コードだけで記録し、例外の原文・患者情報・投稿本文は記録も表示もしません。分類できない失敗は「処理の段階を特定できません」「その他・原因未分類」と表示し、推測で補いません。",
+    "原因の分類と対処の文面は、収集エラーの内訳と同じ表（docs/guides/COLLECTION_DIAGNOSTICS.md）を使います。想定外のプログラム異常（crash）は「実行基盤」に分類します。",
+    "mcs_setup.py doctor --probe data は、直近の記録が失敗のとき「前回の収集は〇〇で止まりました」と原因・対処を表示し、JSON出力の collection.stop に分類コードを出します。",
+    "health.json の run.stop に {stage, category} を記録します（失敗・ログイン切れの回だけ）。"
+  ],
+  "refs": [
+    "mcs/ingest/collection_diagnostics.py",
+    "mcs/ingest/run_check.py",
+    "mcs/ingest/health_watch.py",
+    "mcs/notify/notify_flush.py",
+    "mcs/ops/mcs_setup.py"
+  ]
+}
