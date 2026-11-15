@@ -1087,7 +1087,7 @@ def test_interrupt_after_receipt_removal_keeps_committed_settings(tmp_path, monk
     with pytest.raises(KeyboardInterrupt, match="synthetic interruption"):
         _commit(tmp_path, monkeypatch, original)
     assert not (tmp_path / "data" / ".provider-settings-pending.json").exists()
-    after = settings.read(tmp_path)
+    after = settings.read(tmp_path, model_owners=OWNERS)
     assert after["mode"] == "split" and after["providers"]["openai"] == {"model": "synthetic-openai"}
 
 
