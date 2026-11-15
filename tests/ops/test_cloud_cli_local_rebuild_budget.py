@@ -101,11 +101,14 @@ def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(sca
     from ledger import Ledger
     from contextlib import closing
     with closing(Ledger(str(scaled))) as ledger:
+        started = time.monotonic()
         receipt = mcs_requests.apply_command(ledger, {
             'version': 1, 'cmd': local_rebuild.COMMAND, 'command_id': str(uuid.uuid4()),
             'actor': 'synthetic-human', 'human_confirmed': True, 'project_id': None,
             'reason': '完全合成の確認', 'plan': plan})
-    assert receipt['outcome'] == 'applied' and receipt['approved'] == 20
+        elapsed = time.monotonic() - started
+    assert receipt['outcome'] == 'applied', f"error={receipt.get('error')!r}, elapsed_s={elapsed:.3f}"
+    assert receipt['approved'] == 20
 
 
 def test_the_month_end_tally_at_production_density_fits_its_own_budget(legacy, tmp_path, capsys, monkeypatch):
