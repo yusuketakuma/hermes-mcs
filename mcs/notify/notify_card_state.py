@@ -89,8 +89,8 @@ def unsettled_attempt(db, card_id: int):
 
 
 def _parts_in_flight(db, latest) -> bool:
-    """The card is delivered but its thread identity is unknown, or body
-    chunks/attachments are pending or unknown. An update names the posts that
+    """The card is delivered but its thread, body chunks or attachments are
+    still pending or unknown. An update names the posts that
     already carry each part (``prior_remote_id``) — issued before those
     receipts land it would know none and post every chunk and file a
     second time — so it waits for the parts to settle and a later sweep
@@ -100,8 +100,8 @@ def _parts_in_flight(db, latest) -> bool:
         return False
     return db.execute(
         "SELECT 1 FROM notification_render_parts WHERE delivery_id=? "
-        "AND ((kind IN ('body_part','attachment_part','file_group') "
-        "AND state IN ('pending','unknown')) OR (kind='thread' AND state='unknown')) "
+        "AND kind IN ('thread','body_part','attachment_part','file_group') "
+        "AND state IN ('pending','unknown') "
         "LIMIT 1", (latest["delivery_id"],)).fetchone() is not None
 
 
