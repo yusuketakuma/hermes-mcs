@@ -682,7 +682,8 @@ def test_a_held_followup_is_not_replanned_while_the_first_update_is_unsettled_or
     assert _late_followup_state(led, events[1]) != "accepted" and not legacy
 
 
-def test_a_non_identity_held_update_waits_for_the_delivered_render_before_it(led, tmp_path, monkeypatch):
+@pytest.mark.parametrize("target", ["latest-group", "older-thread"])
+def test_a_non_identity_held_update_waits_for_the_delivered_render_before_it(led, tmp_path, monkeypatch, target):
     import notify_card_renders
     import notify_flush
     import notify_scope
@@ -691,17 +692,21 @@ def test_a_non_identity_held_update_waits_for_the_delivered_render_before_it(led
     _cycle_card_then_thread(world, led)
     [held] = _identity_held(led)
     card_id = led.db.execute("SELECT card_id FROM notification_renders WHERE delivery_id=?", (held,)).fetchone()[0]
-    earlier = led.db.execute(
-        "SELECT r.delivery_id FROM notification_renders r WHERE r.card_id=? AND r.state='delivered' AND EXISTS("
-        "SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=r.delivery_id AND p.kind='file_group') "
-        "ORDER BY r.render_rev DESC LIMIT 1", (card_id,)).fetchone()[0]
+    delivered = [row[0] for row in led.db.execute(
+        "SELECT delivery_id FROM notification_renders WHERE card_id=? AND state='delivered' ORDER BY render_rev",
+        (card_id,))]
+    assert len(delivered) >= 2, _parts_dump(led)
+    # latest-group: the latest delivered update's file group is not known. older-thread: the
+    # first delivered render's thread is not known while a later delivered update is settled,
+    # as an older version could leave behind.
+    earlier, kind = (delivered[-1], "file_group") if target == "latest-group" else (delivered[0], "thread")
     with led.db:
-        # The latest render is held for another reason, and the delivered one before it has a
-        # file group whose receipt is not known.
+        # The latest render is held for another reason.
         led.db.execute("UPDATE notification_render_parts SET error_code='part_budget_exceeded' "
                        "WHERE delivery_id=?", (held,))
-        led.db.execute("UPDATE notification_render_parts SET state='unknown' "
-                       "WHERE delivery_id=? AND kind='file_group'", (earlier,))
+        led.db.execute("UPDATE notification_render_parts SET state='unknown' WHERE delivery_id=? AND kind=?",
+                       (earlier, kind))
+        assert led.db.execute("SELECT changes()").fetchone()[0] == 1
     monkeypatch.setattr(ledger.time, "time", lambda: NOW + 11 + notify_cards.RESEAT_S)
     cfg = notify_flush._config()
     drifted = {**cfg, "notify": {**cfg["notify"], "route_epoch": cfg["notify"]["route_epoch"] + 1}}
@@ -712,9 +717,32 @@ def test_a_non_identity_held_update_waits_for_the_delivered_render_before_it(led
         assert _snapshot(led) == before, _parts_dump(led)
     card = notify_scope.card_row(led.db, card_id)
     assert not notify_card_renders._prior_parts_admit(led.db, card)
+    # Health names the wait the admission applies: an unknown part, so it needs attention.
+    now = NOW + 12 + notify_cards.RESEAT_S
+    breakdown = notify_scope.pending_breakdown(led.db, now)
+    assert breakdown["by_reason"].get("card_parts_unknown", {}).get("count", 0) >= 1, breakdown
+    assert breakdown["attention"] >= 1, breakdown
+    led.db.execute("SAVEPOINT revoked_card")
+    try:
+        # A revoke does not wait on the older delivered renders, so health does not report them
+        # for a revoked card; an unknown part on its latest render, when that one was delivered,
+        # is still reported as before.
+        led.db.execute("UPDATE notification_cards SET delivery_state='revoked' WHERE card_id=?", (card_id,))
+        assert "card_parts_unknown" not in notify_scope.pending_breakdown(led.db, now)["by_reason"]
+        led.db.execute("UPDATE notification_renders SET state='delivered' WHERE delivery_id=?", (held,))
+        led.db.execute("UPDATE notification_render_parts SET state='unknown' WHERE delivery_id=? "
+                       "AND part_id=(SELECT part_id FROM notification_render_parts WHERE delivery_id=? "
+                       "AND kind IN ('body_part','attachment_part','file_group') ORDER BY idx LIMIT 1)",
+                       (held, held))
+        assert led.db.execute("SELECT changes()").fetchone()[0] == 1
+        assert "card_parts_unknown" in notify_scope.pending_breakdown(led.db, now)["by_reason"]
+    finally:
+        led.db.execute("ROLLBACK TO revoked_card")
+        led.db.execute("RELEASE revoked_card")
     with led.db:
         led.db.execute("UPDATE notification_render_parts SET state='delivered' "
-                       "WHERE delivery_id=? AND kind='file_group'", (earlier,))
+                       "WHERE delivery_id=? AND kind=?", (earlier, kind))
+    assert "card_parts_unknown" not in notify_scope.pending_breakdown(led.db, now)["by_reason"]
     # Once that receipt is known, an unpublished queued latest render no longer waits either.
     assert notify_card_renders._prior_parts_admit(led.db, card)
     with led.db:

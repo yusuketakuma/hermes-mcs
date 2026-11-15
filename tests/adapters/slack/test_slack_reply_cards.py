@@ -112,6 +112,19 @@ def test_a_reply_cards_identity_replan_waits_on_the_parent_the_planner_selects(l
                        (root_render, root_render))
         assert led.db.execute("SELECT changes()").fetchone()[0] == 1
     assert notify_card_renders._replan_blocked(led.db, reply_card, latest)
+    # The root card does not reuse the reply's receipts: an unsettled part on the reply's
+    # delivered render does not hold back the root's own update.
+    with led.db:
+        led.db.execute("UPDATE notification_render_parts SET state='delivered' WHERE delivery_id=? "
+                       "AND state='unknown'", (root_render,))
+        led.db.execute("UPDATE notification_render_parts SET state='unknown' WHERE delivery_id=? "
+                       "AND part_id=(SELECT part_id FROM notification_render_parts WHERE delivery_id=? "
+                       "AND kind IN ('thread','body_part','attachment_part','file_group') ORDER BY idx LIMIT 1)",
+                       (latest, latest))
+        assert led.db.execute("SELECT changes()").fetchone()[0] == 1
+    root_card = notify_scope.card_row(led.db, root["card_id"])
+    assert notify_card_renders._prior_parts_admit(led.db, root_card)
+    assert not notify_card_renders._prior_parts_admit(led.db, notify_scope.card_row(led.db, reply["card_id"]))
 
 
 def test_reply_card_waits_until_the_root_thread_exists(led):
