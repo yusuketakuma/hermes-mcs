@@ -1222,6 +1222,14 @@ def cmd_doctor(args) -> int:
             if provider.get("block_reason") == "no_api_key":
                 key_name = "MCS_OPENAI_API_KEY" if name == "openai" else "MCS_ANTHROPIC_API_KEY"
                 print(f"    鍵が未登録のためローカルで処理中です。MCSの.envに{key_name}を権限0600で登録してください。")
+            if provider.get("price_recheck_due") and provider["key_present"] and provider["mode"] != "off":
+                if provider.get("price_valid"):
+                    print(f"    料金表の再確認期限が近づいています（{provider['price_valid_until']}まで、"
+                          f"残り{provider['price_days_remaining']}日）。期限を過ぎると新しいクラウド送信を止めます。"
+                          "公式料金を確認した更新版を適用してください。")
+                else:
+                    print(f"    料金表の再確認期限（{provider['price_valid_until']}）を過ぎたため、新しいクラウド送信を止めています。"
+                          "公式料金を確認した更新版を適用してください。")
             for day in (provider.get("dry_run") or {}).get("days", []):
                 print(f"    ドライラン {day['day']}（JST）: {day['units']}単位・{day['requests']}要求相当、"
                       f"入力{day['input_chars']}字／推定{day['estimated_input_tokens']}tokens、"

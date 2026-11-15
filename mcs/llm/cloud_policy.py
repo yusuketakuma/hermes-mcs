@@ -43,6 +43,7 @@ from cloud_usage_accounting import (
     _BINDING_KEYS as _BINDING_KEYS,
     _decimal as _decimal,
     pricing_valid as pricing_valid,
+    current_price_version as current_price_version,
     price_info as price_info,
     _texts as _texts,
     input_bound as input_bound,
