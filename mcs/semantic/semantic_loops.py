@@ -81,45 +81,31 @@ def _valid_candidate(candidate: dict, meta: dict) -> bool:
                  or isinstance(meta["candidate_fp"], str)))
 
 
-def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
-                 scfg, deadline, *, retry_scope: str = "",
-                 rejections: list | None = None):
-    """Return (created, complete); unfinished relation pairs resume on retry.
+def _candidate_rows(ledger, project_id, member_ids):
+    return ledger.db.execute(
+        "SELECT artifact_id,message_id,content,meta FROM artifacts "
+        "WHERE kind=? AND project_id=? "
+        "AND message_id IN (SELECT value FROM json_each(?)) "
+        "ORDER BY artifact_id",
+        (KIND_LOOP, project_id, member_ids)).fetchall()
 
-    A pair whose answer Jev returned malformed is recorded as rejected for
-    ``retry_scope`` and the remaining pairs are still evaluated; the pass
-    stays incomplete. Within one scope the pair is not re-sent; a new
-    retry scope (human retry command) evaluates it again. Each rejection
-    appends ``{"code", "cached"}`` to ``rejections``.
 
-    A candidate is identified by its evidence revision, not just its wording.
-    Relation results additionally bind the trigger and context generation.
-    No function in this module writes to requests or command receipts.
-    """
+def _refresh_candidates(ledger, project_id, bundle, members, member_ids,
+                        policy, facts_by_target):
+    """Create/revive/invalidate this generation's candidates.
 
-    policy = semantic_policy.policy_fingerprint(scfg)
-    members = {m["message_id"]: m for m in bundle["members"]}
+    Reads each re-evaluated target message's facts: an item the facts
+    still yield keeps (or revives) its row, one they no longer yield
+    stops being current but stays as history. Returns (created,
+    seen_candidate_fps) for the promotion pass."""
     fp = bundle["source_fingerprint"]
     root = bundle["root_id"]
     account = bundle["account_scope"]
-    # Candidates are stored on (and keyed by) their origin message, and
-    # every use below drops rows outside the bundle — read only this
-    # thread's rows instead of the patient's whole loop history.
-    member_ids = json.dumps(sorted(members))
-
-    def _candidate_rows():
-        return ledger.db.execute(
-            "SELECT artifact_id,message_id,content,meta FROM artifacts "
-            "WHERE kind=? AND project_id=? "
-            "AND message_id IN (SELECT value FROM json_each(?)) "
-            "ORDER BY artifact_id",
-            (KIND_LOOP, project_id, member_ids)).fetchall()
-
     # One snapshot serves every target: the loop below only writes rows of
     # the message it is processing, never another target's rows.
     rows_by_mid = {}
     seen_candidates = set()
-    for r in _candidate_rows():
+    for r in _candidate_rows(ledger, project_id, member_ids):
         rows_by_mid.setdefault(r["message_id"], []).append(r)
         if isinstance(key := _object(r["meta"]).get("candidate_fp"), str):
             seen_candidates.add(key)
@@ -195,14 +181,22 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                     "'$.invalidated',json('true'),'$.invalidated_reason',"
                     "'reinterpreted') WHERE artifact_id=?",
                     [(aid,) for aid in dropped])
-    # The first snapshot served only the targets; drop every reference to
-    # its rows (index and loop variables) before the re-reads below.
-    rows_by_mid = r = row = None
+    return created, seen_candidates
 
-    # A new sibling/reply changes the whole-thread fingerprint.  Preserve
-    # the historical candidate, but materialize a current-generation copy
-    # for a still-valid origin so a new reply can resolve it in the view.
-    candidate_rows = _candidate_rows()
+
+def _promote_prior_candidates(ledger, project_id, bundle, members, member_ids,
+                              policy, facts_by_target, seen_candidates):
+    """Promote still-valid prior-generation candidates to this generation.
+
+    A new sibling/reply changes the whole-thread fingerprint.  Preserve
+    the historical candidate, but materialize a current-generation copy
+    for a still-valid origin so a new reply can resolve it in the view.
+    Returns the number of candidates created."""
+    fp = bundle["source_fingerprint"]
+    root = bundle["root_id"]
+    account = bundle["account_scope"]
+    created = 0
+    candidate_rows = _candidate_rows(ledger, project_id, member_ids)
     current_identities = {
         _candidate_identity(_object(row["content"]))
         for row in candidate_rows
@@ -260,10 +254,19 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
         seen_candidates.add(key)
         current_identities.add(identity)
         created += 1
+    return created
 
-    if jev_client is None:
-        return created, True
 
+def _evaluate_relation_pairs(ledger, project_id, bundle, members, member_ids,
+                             policy, scfg, jev_client, deadline,
+                             retry_scope, rejections):
+    """Evaluate each current-generation candidate against every target.
+
+    Returns True when all pairs were evaluated (rejections recorded, not
+    counted as failures), False when the pass stopped early."""
+    fp = bundle["source_fingerprint"]
+    root = bundle["root_id"]
+    account = bundle["account_scope"]
     seen_pairs = set()
     # only this generation's events can match a pair key (fp is part of it)
     for row in ledger.db.execute(
@@ -293,7 +296,7 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
         rejections = []
     rejections_before = len(rejections)
 
-    candidates = _candidate_rows()
+    candidates = _candidate_rows(ledger, project_id, member_ids)
     targets = [m for m in members.values() if m["role"] == "target"]
     pairs = 0
     for row in candidates:
@@ -325,7 +328,7 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                 rejections.append({"code": code, "cached": True})
                 continue
             if pairs >= _PAIR_CAP or time.monotonic() >= deadline:
-                return created, False
+                return False
             qid = "relation"
             question = jev.choice_question(
                 "Evaluate state.target only. The open item is state.context[0]; "
@@ -357,13 +360,13 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                     detail = str(getattr(error, "detail", "") or "")
                     # Envelope and transport failures stop the pass.
                     if not jev.is_answer_defect(error):
-                        return created, False
+                        return False
                     pairs += 1                   # every sent call counts
                     if asked == 0 and (pairs >= _PAIR_CAP
                                        or time.monotonic() >= deadline):
                         # no room to ask again: leave the pair unevaluated
                         # (no receipt) so a later pass asks it afresh
-                        return created, False
+                        return False
             # A defect can be transient (a re-ask answered validly): only a
             # second malformed answer in the same pass is recorded.
             if answer is None:
@@ -412,4 +415,41 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                       "jev_requests": asked + 1})
             seen_pairs.add(key)
             pairs += 1
-    return created, len(rejections) == rejections_before
+    return len(rejections) == rejections_before
+
+
+def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
+                 scfg, deadline, *, retry_scope: str = "",
+                 rejections: list | None = None):
+    """Return (created, complete); unfinished relation pairs resume on retry.
+
+    A pair whose answer Jev returned malformed is recorded as rejected for
+    ``retry_scope`` and the remaining pairs are still evaluated; the pass
+    stays incomplete. Within one scope the pair is not re-sent; a new
+    retry scope (human retry command) evaluates it again. Each rejection
+    appends ``{"code", "cached"}`` to ``rejections``.
+
+    A candidate is identified by its evidence revision, not just its wording.
+    Relation results additionally bind the trigger and context generation.
+    No function in this module writes to requests or command receipts.
+    """
+
+    policy = semantic_policy.policy_fingerprint(scfg)
+    members = {m["message_id"]: m for m in bundle["members"]}
+    # Candidates are stored on (and keyed by) their origin message, and
+    # every use below drops rows outside the bundle — read only this
+    # thread's rows instead of the patient's whole loop history.
+    member_ids = json.dumps(sorted(members))
+
+    created, seen_candidates = _refresh_candidates(
+        ledger, project_id, bundle, members, member_ids, policy,
+        facts_by_target)
+    created += _promote_prior_candidates(
+        ledger, project_id, bundle, members, member_ids, policy,
+        facts_by_target, seen_candidates)
+    if jev_client is None:
+        return created, True
+    complete = _evaluate_relation_pairs(
+        ledger, project_id, bundle, members, member_ids, policy,
+        scfg, jev_client, deadline, retry_scope, rejections)
+    return created, complete
