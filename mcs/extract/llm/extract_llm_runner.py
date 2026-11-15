@@ -16,6 +16,7 @@ import cloud_inference
 import extract_schema
 import extract_validation
 import extract_quality
+import extract_llm_local_rebuild as local_rebuild
 from extraction_provenance import (
     provider_evidence as _provider_evidence,
     EvidenceLeaf as _EvidenceLeaf,
@@ -106,6 +107,7 @@ from extract_llm_source_contract import (
     _EXTRACT_LEASE_S,
     _MIN_CALL_S,
     _PREPARE_HOLD_S,
+    REVIVE_COOLDOWN_S,
     _WRITER_STATE,
     _owns_current_source,
     _rule_hints,
@@ -199,6 +201,41 @@ def _resume_admission_refused(r, saved, hints):
         r["_resume_refused"] = True
         return True
     return False
+
+
+def _prepare_hold_s(ledger, row, reasons):
+    """How long a prepare refusal keeps its bounded claim. A positive mismatch of a local-rebuild
+    approval (PROOF_CHANGED) waits the long revive interval, but only while the approval it was
+    decided against is still the current one; a changed approval, UNVERIFIED and every other
+    refusal keep the short prepare hold. Not terminal: a later re-match is seen after the wait.
+    Called by _claim inside its writer transaction, so the approval match and the long claim
+    commit together."""
+    # the reason first: a sqlite3.Row candidate (the cloud path) has no .get and never holds long
+    if local_rebuild.PROOF_CHANGED not in reasons or not isinstance(row, dict):
+        return _PREPARE_HOLD_S
+    held = row.get("_local_rebuild_held")
+    if held is None:
+        return _PREPARE_HOLD_S
+    try:
+        current = local_rebuild.approved_units(ledger.db).get((row["project_id"], row["message_id"]))
+    except sqlite3.Error:
+        return _PREPARE_HOLD_S
+    return REVIVE_COOLDOWN_S if current is not None and local_rebuild.tag(current) == local_rebuild.tag(held) \
+        else _PREPARE_HOLD_S
+
+
+def _rebuild_meta(r, extra):
+    """An approved local rebuild's settling write (QC, human report, thin retry) keeps its tag."""
+    if r.get("_local_rebuild") is None:
+        return extra
+    return {**(extra or {}), "local_rebuild": local_rebuild.tag(r["_local_rebuild"])}
+
+
+def _rebuild_guard(ledger, r):
+    """...and re-proves its permit inside the same adoption transaction (other rows: unchanged)."""
+    if r.get("_local_rebuild") is None:
+        return None
+    return lambda: local_rebuild.permit_for(ledger, r["_local_rebuild"]) in local_rebuild.RUNNABLE
 
 
 def run_pending(ledger, limit: int = 20, budget_s: float = 180,
@@ -313,6 +350,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # pass record must never leak an error class, config value or id here.
     # Carry-settle reasons ride inside carry_settled and merge in here.
     defer_reasons: dict = dict(carry_settled.get("defer_reasons") or {})
+    # The fixed CloudFallback code behind each cloud_fallback defer, apart from the main
+    # classification (an observation only: never a not-sent proof or a resend permission).
+    fallback_codes: dict = {}
 
     def _defer_note(reason, settled=None, count=1):
         if count <= 0:
@@ -386,7 +426,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     and time.monotonic() < deadline and _writer_current(full=True):
                 # This CAS is a finite preparation wait, not a sent/failed unit.
                 # Never replace another owner's active claim or discard proof.
-                _claim(ledger, refused_row, _PREPARE_HOLD_S)
+                _claim(ledger, refused_row, _PREPARE_HOLD_S,
+                       lease_for=lambda led, row=refused_row, why=(reason,): _prepare_hold_s(led, row, why))
         if jobs or not any(reason in cloud_backlog._PREPARE_CONTEXT_REJECTION_CODES
                            or reason in cloud_backlog._HOLD_DEFER_REASONS
                            for _, reason in refused) or time.monotonic() >= deadline:
@@ -425,6 +466,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
 
     def _checkpoint(index, chunk, value, split=False, receipt=None, replay=False):
         r, ctx = jobs[index][0], jobs[index][1]
+        r["_work_seen"] = True   # before a write that can commit and then fail to return
         saved = False
         try:
             # Only a start precedes a dispatch; releasing an unsent start back
@@ -455,6 +497,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 receipt["event"].set()
 
     def _queue_checkpoint(index, chunk, value, split=False, replay=False):
+        jobs[index][0]["_work_seen"] = True   # a new checkpoint or repair start is work
         if (not replay and not split and "_quality_status" not in value
                 and getattr(value, "repair_proof", None) is None):
             checkpoints.put((index, chunk, value, split, None, replay))
@@ -508,6 +551,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         _CALL_NOTES.transport = r["_transport"] = None
         _CALL_NOTES.transport_at = r["_transport_at"] = None
         _CALL_NOTES.defer_reason = r["_defer_reason"] = None
+        _CALL_NOTES.fallback_code = r["_fallback_code"] = None
         r.pop("_quality_hold", None)
         if time.monotonic() > deadline:
             r["_defer_reason"] = "deadline"
@@ -522,9 +566,13 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             r["_transport"] = getattr(_CALL_NOTES, "transport", None)
             r["_transport_at"] = getattr(_CALL_NOTES, "transport_at", None)
             r["_defer_reason"] = getattr(_CALL_NOTES, "defer_reason", None)
+            r["_fallback_code"] = getattr(_CALL_NOTES, "fallback_code", None)
 
     def _extract_call(r, ctx, saved, hints, qc, index, meta, chunks_out):
         provider = None
+        if r.get("_local_rebuild") is not None and r.get("_cloud_mode") != "off":
+            _CALL_NOTES.defer_reason = local_rebuild.UNVERIFIED   # never build a cloud unit for it
+            return _DEFERRED
         if r.get("_cloud_mode") == "on":
             r["_cloud_lease"] = leases[index]
             provider = _owner_call(lambda: cloud_inference.CloudInferenceUnit(ledger, r["_cloud_config"], route="reextract",
@@ -549,6 +597,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     return result
             except cloud_client.CloudNotSent as error:
                 _CALL_NOTES.defer_reason = cloud_client.not_sent_reason(error)
+                # Only the unit's own monotonic observations decide (never the reason text),
+                # and only when no saved paid chunk was used or produced for this candidate.
+                r["_replacement_eligible"] = (provider.replacement_eligible is True
+                                              and not saved and not chunks_out and not r.get("_splits")
+                                              and not r.get("_work_seen"))
                 if _CALL_NOTES.defer_reason == "checkpoint_unverified":
                     meta["_quality_hold"] = True
                 return _DEFERRED
@@ -561,6 +614,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 _CALL_NOTES.defer_reason = "busy"
                 return _DEFERRED
             except cloud_inference.CloudFallback as error:
+                _CALL_NOTES.fallback_code = str(error)
                 if str(error) == "cloud_unit_changed":
                     provider.discard()
                 # An unknown send keeps its source/backend claim; only a known outcome can fall back.
@@ -575,6 +629,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     _CALL_NOTES.defer_reason = "currentness_unverified"
                     return _DEFERRED
                 # A posting is the provider unit: partial cloud chunks never seed local work.
+                local_blocked = {}
                 def reset_local():
                     r.pop("_provider_contract", None)
                     r.pop("_cloud_guard", None)
@@ -583,7 +638,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     r["_cloud_mode"] = "off"
                     r["_target"] = target
                     fresh, _, _ = _prepare_jobs(ledger, [r], target, False, allow_cloud=False,
-                                               load_checkpoints=False, deadline=deadline)
+                                               load_checkpoints=False, deadline=deadline,
+                                               blocked_reasons=local_blocked)
                     if not fresh:
                         raise cloud_inference.CloudFallback("cloud_local_context_unavailable")
                     local_r, local_ctx, local_saved, _, _ = fresh[0]
@@ -591,7 +647,13 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     local_saved = _capture_checkpoint_state(ledger.db, r, local_ctx)
                     jobs[index] = (r, local_ctx, local_saved, hints, qc)
                     return local_ctx, local_saved
-                ctx, saved = _owner_call(reset_local)
+                try:
+                    ctx, saved = _owner_call(reset_local)
+                except cloud_inference.CloudFallback:
+                    # A refused local context (e.g. a held financial candidate)
+                    # defers this row; it must not abort the whole pass.
+                    _CALL_NOTES.defer_reason = next(iter(local_blocked), "cloud_fallback")
+                    return _DEFERRED
                 chunks_out.clear()
                 meta.clear()
         with local_slots:
@@ -652,6 +714,18 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     return False
                 return True
             r["_superseded_guard"] = adoption_guard
+        elif r.get("_local_rebuild") is not None:
+            # An approved local rebuild: every local dispatch (first, repair, split) and the
+            # adoption re-prove the same permit; provider stays None so no path reaches cloud.
+            def permitted():
+                return local_rebuild.permit_for(ledger, r["_local_rebuild"]) in local_rebuild.RUNNABLE
+
+            def request_guard(prompt, kind="first"):
+                try:
+                    return None if _owner_call(permitted) else local_rebuild.PROOF_CHANGED
+                except (ValueError, TypeError, KeyError, sqlite3.Error, OSError, RuntimeError):
+                    return local_rebuild.UNVERIFIED
+            r["_superseded_guard"] = permitted   # runs inside the adoption transaction
         with pin_target(r["_target"]):
             return llm_extract(r["body_text"], context=ctx, hints=hints,
                            **({"references": _frame_refs(r)} if _frame_refs(r) else {}),
@@ -710,6 +784,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         # QC-flagged/thin/human-reported rows already hold a current
         # artifact — replacing it is the point of the feedback pass.
         extra = {"thin_retried": True} if r["thin_src"] else {}
+        if r.get("_local_rebuild") is not None:
+            extra["local_rebuild"] = local_rebuild.tag(r["_local_rebuild"])
         if r["human_src"]:
             extra["human_fix"] = {"feedback_id": r["human_src"],
                                   "applied": True}
@@ -754,6 +830,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         nonlocal breaker_fed
         ctx = r.get("_context", ctx)
         keep_lease = False
+        # The terminal outcome decides a freed slot: only the plain deferral below may set it.
+        eligible = r.pop("_replacement_eligible", False) is True
+        r["_replacement_freed"] = False
         try:
             if not _owns_current_source(ledger, r, lease):
                 if r.get("_cloud_discard"):
@@ -794,6 +873,14 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         and r.get("_defer_reason") in cloud_backlog._HOLD_DEFER_REASONS:
                     keep_lease = True
                     keep_claims.add(id(r))
+                if r.get("_defer_reason") == "cloud_fallback":
+                    code = r.get("_fallback_code")
+                    code = code if code in cloud_backlog._FALLBACK_CODES else "other"
+                    fallback_codes[code] = fallback_codes.get(code, 0) + 1
+                    if cloud_only and prioritize_patients:
+                        # It keeps no claim and frees no replacement, so the next priority pass
+                        # would select the same head again: move past it (in-memory ready only).
+                        _cloud_priority_discard(ledger, r["message_id"])
                 if r.get("_cloud_failed"):
                     cloud_retry()
                 # answered then deferred (no time left to repair) is still
@@ -802,6 +889,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 # the health marker the stall alert reads
                 if transport in ("answered", "unreachable", "unavailable"):
                     _observe(transport, at)
+                r["_replacement_freed"] = (eligible and r.get("_defer_reason") == "cloud_unit_unresolved"
+                                           and not r.get("_cloud_failed") and transport is None
+                                           and not r.get("_work_seen"))
                 return  # budget ran out mid-message — stays pending
             if d is None:
                 failed += 1
@@ -853,9 +943,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             if held:
                                 _commit_extraction_atomic(
                                     ledger, r, src["content"], ctx, None,
-                                    {"qc": qc["qc"], "applied": False}, None, (),
+                                    {"qc": qc["qc"], "applied": False}, _rebuild_meta(r, None), (),
                                     check_current=False, mark_context=False,
-                                    expected_prior=_prior_identity(prior))
+                                    expected_prior=_prior_identity(prior),
+                                    adoption_guard=_rebuild_guard(ledger, r))
                     return
                 if r["human_src"]:
                     # A failed report re-extract settles like the thin
@@ -876,10 +967,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             if held:
                                 _commit_extraction_atomic(
                                     ledger, r, src["content"], ctx, None, None,
-                                    {"human_fix": {"feedback_id": r["human_src"],
-                                                   "applied": False}}, (),
+                                    _rebuild_meta(r, {"human_fix": {"feedback_id": r["human_src"],
+                                                                    "applied": False}}), (),
                                     check_current=False, mark_context=False,
-                                    expected_prior=_prior_identity(prior))
+                                    expected_prior=_prior_identity(prior),
+                                    adoption_guard=_rebuild_guard(ledger, r))
                     return
                 if r["thin_src"]:
                     # A thin retry that failed still settles: re-mint
@@ -896,9 +988,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             if held:
                                 _commit_extraction_atomic(
                                     ledger, r, content, ctx, None, None,
-                                    {"thin_retried": True}, (),
+                                    _rebuild_meta(r, {"thin_retried": True}), (),
                                     check_current=False, mark_context=False,
-                                    expected_prior=_prior_identity(prior))
+                                    expected_prior=_prior_identity(prior),
+                                    adoption_guard=_rebuild_guard(ledger, r))
                     return
                 with _write_lock(per_write_lock) as held:
                     if held and not _current(ledger, r["message_id"],
@@ -958,89 +1051,128 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # drainer/tick makes the conflict-update a no-op, so two workers
     # never pay for the same LLM call (F14)
     claimed = []
-    try:
-        for index, candidate in enumerate(rows if cloud_only else jobs):
-            if disk_low:
-                break
-            if cloud_only:
-                if time.monotonic() >= deadline:
+    visit = [0]   # next unvisited candidate: each is visited at most once per pass
+    refilled = 0  # candidates claimed into slots freed by a replacement-eligible refusal
+    refill_stopped = False
+    refill_stop_error = None   # fixed class of the failure that stopped refilling
+
+    def _claim_next(wanted, *, release_on_error):
+        """Claim from the next unvisited candidate on, at most ``wanted`` in the cloud
+        pass; returns the newly claimed. A later same-pass wave leaves error cleanup
+        to the execution finally that already owns every claim."""
+        nonlocal skipped, context_blocked, deferred
+        first = len(claimed)
+        source = rows if cloud_only else jobs
+        try:
+            while visit[0] < len(source):
+                index, candidate = visit[0], source[visit[0]]
+                visit[0] += 1
+                if disk_low:
                     break
-                # Lookahead replenishes lost claims without freezing unused attempt frames.
-                row_reasons = {}
-                prepared, row_skipped, row_blocked = _prepare_jobs(
-                    ledger, [candidate], target, prefilter, allow_cloud=allow_cloud,
-                    background=background, cloud_only=True, load_checkpoints=False, deadline=deadline,
-                    blocked_reasons=row_reasons)
-                skipped += row_skipped
-                context_blocked += row_blocked
-                deferred += row_blocked
-                for reason, count in row_reasons.items():
-                    _defer_note(reason, count=count)
-                _defer_note("prepare_blocked", count=row_blocked - sum(row_reasons.values()))
-                if not prepared:
-                    if any(reason in cloud_backlog._HOLD_DEFER_REASONS for reason in row_reasons):
-                        # An unverifiable owned head keeps a bounded claim —
-                        # the next pass sees the tail instead of re-blocking.
-                        _claim(ledger, candidate, _PREPARE_HOLD_S)
-                    if prioritize_patients and time.monotonic() < deadline:
-                        _cloud_priority_discard(ledger, candidate['message_id'])
+                if cloud_only:
+                    if time.monotonic() >= deadline:
+                        break
+                    # Lookahead replenishes lost claims without freezing unused attempt frames.
+                    row_reasons = {}
+                    prepared, row_skipped, row_blocked = _prepare_jobs(
+                        ledger, [candidate], target, prefilter, allow_cloud=allow_cloud,
+                        background=background, cloud_only=True, load_checkpoints=False, deadline=deadline,
+                        blocked_reasons=row_reasons)
+                    skipped += row_skipped
+                    context_blocked += row_blocked
+                    deferred += row_blocked
+                    for reason, count in row_reasons.items():
+                        _defer_note(reason, count=count)
+                    _defer_note("prepare_blocked", count=row_blocked - sum(row_reasons.values()))
+                    if not prepared:
+                        if any(reason in cloud_backlog._HOLD_DEFER_REASONS for reason in row_reasons):
+                            # An unverifiable owned head keeps a bounded claim —
+                            # the next pass sees the tail instead of re-blocking.
+                            # approved local rebuilds never reach the cloud selection: the short hold
+                            _claim(ledger, candidate, _PREPARE_HOLD_S)
+                        if prioritize_patients and time.monotonic() < deadline:
+                            _cloud_priority_discard(ledger, candidate['message_id'])
+                        continue
+                    index = len(jobs)
+                    candidate = prepared[0]
+                    jobs.append(candidate)
+                    metas.append(None)
+                    if time.monotonic() >= deadline:
+                        deferred += 1
+                        _defer_note("deadline")
+                        break
+                r, ctx, saved, hints, qc = candidate
+                if circuit_s and r.get("_cloud_mode") != "on":
                     continue
-                index = len(jobs)
-                candidate = prepared[0]
-                jobs.append(candidate)
-                metas.append(None)
-                if time.monotonic() >= deadline:
-                    deferred += 1
-                    _defer_note("deadline")
-                    break
-            r, ctx, saved, hints, qc = candidate
-            if circuit_s and r.get("_cloud_mode") != "on":
-                continue
-            if _resume_admission_refused(r, saved, hints):
-                # Prepare already proved this job's saved resume evidence
-                # cannot be admitted; defer before any claim or side effect.
-                deferred += 1
-                _defer_note("quality_checkpoint_unverified")
-                continue
-            lease = _claim(ledger, r, max(_EXTRACT_LEASE_S,
-                                          deadline - time.monotonic() + TIMEOUT + 30))
-            if lease is not None:
-                leases[index] = lease
-                claimed.append((index, r, ctx, saved, hints, qc, lease))
-                # Preparation precedes the claim. Another owner may have
-                # advanced a checkpoint in that interval, so read again only
-                # after this worker owns the lease.
-                saved = _capture_checkpoint_state(ledger.db, r, ctx)
-                jobs[index] = (r, ctx, saved, hints, qc)
-                claimed[-1] = (index, r, ctx, saved, hints, qc, lease)
                 if _resume_admission_refused(r, saved, hints):
-                    # First detected after the claim: stop before _ensure_v1,
-                    # provider construction or any checkpoint write. The claim
-                    # itself may already have written, so this is not a
-                    # zero-write guarantee — only a pre-side-effect stop.
-                    claimed.pop()
-                    _release(ledger, r, lease)
+                    # Prepare already proved this job's saved resume evidence
+                    # cannot be admitted; defer before any claim or side effect.
                     deferred += 1
                     _defer_note("quality_checkpoint_unverified")
                     continue
-                # the v3 pass performs the v1/v2 (rule) work simultaneously —
-                # claimed rows mint/refresh their extract_v1 artifact here so
-                # speed-lane readers never wait on the LLM queue
-                _ensure_v1(ledger, r, hints)
-                if cloud_only and len(claimed) >= limit:
-                    break
-            elif cloud_only and prioritize_patients and time.monotonic() < deadline:
-                _cloud_priority_discard(ledger, r['message_id'])
-    except BaseException:
-        # Preparation precedes inference's finally; release its committed
-        # claims too when a rule write fails or the worker is interrupted.
-        if not cloud_only or _writer_current(full=True):
-            for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
-                _release(ledger, r, lease)
-        raise
+                lease = _claim(ledger, r, max(_EXTRACT_LEASE_S,
+                                              deadline - time.monotonic() + TIMEOUT + 30))
+                if lease is not None:
+                    leases[index] = lease
+                    claimed.append((index, r, ctx, saved, hints, qc, lease))
+                    # Preparation precedes the claim. Another owner may have
+                    # advanced a checkpoint in that interval, so read again only
+                    # after this worker owns the lease.
+                    saved = _capture_checkpoint_state(ledger.db, r, ctx)
+                    jobs[index] = (r, ctx, saved, hints, qc)
+                    claimed[-1] = (index, r, ctx, saved, hints, qc, lease)
+                    if _resume_admission_refused(r, saved, hints):
+                        # First detected after the claim: stop before _ensure_v1,
+                        # provider construction or any checkpoint write. The claim
+                        # itself may already have written, so this is not a
+                        # zero-write guarantee — only a pre-side-effect stop.
+                        claimed.pop()
+                        _release(ledger, r, lease)
+                        deferred += 1
+                        _defer_note("quality_checkpoint_unverified")
+                        continue
+                    # the v3 pass performs the v1/v2 (rule) work simultaneously —
+                    # claimed rows mint/refresh their extract_v1 artifact here so
+                    # speed-lane readers never wait on the LLM queue
+                    _ensure_v1(ledger, r, hints)
+                    if cloud_only and len(claimed) - first >= wanted:
+                        break
+                elif cloud_only and prioritize_patients and time.monotonic() < deadline:
+                    _cloud_priority_discard(ledger, r['message_id'])
+        except BaseException:
+            # Preparation precedes inference's finally; release its committed
+            # claims too when a rule write fails or the worker is interrupted.
+            if release_on_error and (not cloud_only or _writer_current(full=True)):
+                for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
+                    _release(ledger, r, lease)
+            raise
+        return claimed[first:]
+
+    _claim_next(limit, release_on_error=True)
 
     if cloud_only:
         parallel = pool_workers > 1 and len(claimed) > 1
+
+    def _may_refill():
+        """The pass may still give a freed slot away: cloud only, original deadline left,
+        no lost lock, no endpoint outage and the writer generation unchanged."""
+        return (cloud_only and not refill_stopped and time.monotonic() < deadline and not lock_lost
+                and not endpoint_down and _writer_current(full=True))
+
+    def _refill_claims(wanted):
+        """Claim replacements; a preparation failure only stops refilling for this pass, so
+        finished paid work still reaches its handler and the tail. Interrupts and a lost
+        run lock (BaseException) still propagate."""
+        nonlocal refill_stopped, refill_stop_error
+        try:
+            return _claim_next(wanted, release_on_error=False)
+        except Exception as error:
+            refill_stopped = True    # claims it made stay in `claimed`: the finally releases them
+            # Class objects belong in function code, not the semantic witness's module constants.
+            stop_errors = ((sqlite3.Error, "sqlite_error"), (OSError, "os_error"), (ValueError, "value_error"),
+                           (TypeError, "type_error"), (KeyError, "key_error"), (RuntimeError, "runtime_error"))
+            refill_stop_error = next((name for kind, name in stop_errors if isinstance(error, kind)), "other")
+            return []
 
     def _exec_batch(tups):
         _CALL_NOTES.transport = _CALL_NOTES.transport_at = None
@@ -1174,6 +1306,18 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             d, chunks_out = res
                             _handle(r, ctx, d, metas[index], lease,
                                     chunks_out, qc)
+                            # The same refill as the serial pass: a slot freed only after
+                            # this handler finished goes to one next unvisited candidate,
+                            # so in-flight work never exceeds the original slots.
+                            if d is _DEFERRED and r.get("_replacement_freed") is True and _may_refill():
+                                for refill_kind, refill_payload in _plan_units(
+                                        _refill_claims(1), batch_k):
+                                    refilled += 1 if refill_kind == "single" else len(refill_payload)
+                                    nfut = (_single_future(pool, refill_payload) if refill_kind == "single"
+                                            else pool.submit(_exec_batch, refill_payload))
+                                    futs[nfut] = ((refill_kind, [refill_payload]) if refill_kind == "single"
+                                                  else (refill_kind, refill_payload))
+                                    pending.add(nfut)
                         else:
                             for tup in _handle_batch(*res[:3], tups,
                                                      *res[3:]):
@@ -1181,14 +1325,21 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                 futs[nfut] = ("single", [tup])
                                 pending.add(nfut)
         else:
-            for kind, payload in units:
-                if kind == "single":
-                    index, r, ctx, saved, hints, qc, lease = payload
-                    d, chunks_out = _extract(
-                        (index, (r, ctx, saved, hints, qc)))
-                    _handle(r, ctx, d, metas[index], lease, chunks_out,
-                            qc)
-                else:
+            wave = units
+            while wave:
+                freed = 0
+                for kind, payload in wave:
+                    if kind == "single":
+                        index, r, ctx, saved, hints, qc, lease = payload
+                        d, chunks_out = _extract(
+                            (index, (r, ctx, saved, hints, qc)))
+                        _handle(r, ctx, d, metas[index], lease, chunks_out,
+                                qc)
+                        # Handler and cleanup are done: a verified refusal of an already
+                        # settled same request that began no work frees its slot.
+                        if cloud_only and d is _DEFERRED and r.get("_replacement_freed") is True:
+                            freed += 1
+                        continue
                     res = _exec_batch(payload)
                     for tup in _handle_batch(*res[:3], payload,
                                              *res[3:]):
@@ -1197,6 +1348,13 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             (index, (r, ctx, saved, hints, qc)))
                         _handle(r, ctx, d, metas[index], lease,
                                 chunks_out, qc)
+                wave = []
+                if freed and _may_refill():
+                    # Same original deadline and finite lookahead; the next unvisited
+                    # candidates take the freed slots (claims stay owned by this pass).
+                    refill = _refill_claims(freed)
+                    refilled += len(refill)
+                    wave = _plan_units(refill, batch_k)
         if pending_writes:
             tail_lock = (_write_lock(per_write_lock, wait_s=write_wait_s, deadline=deadline)
                          if cloud_only else lock(per_write_lock))
@@ -1252,8 +1410,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             _release(ledger, r, lease)
     if writer_stopped:
         return {'done': done, 'failed': failed, 'held_prior': held_prior, 'left': None,
-                'carried': carried, 'carry': carry_out, 'deferred': deferred,
-                'defer_reasons': dict(defer_reasons),
+                'carried': carried, 'carry': carry_out, 'deferred': deferred, 'refilled': refilled,
+                **({'refill_stopped': True, 'refill_stop_error': refill_stop_error} if refill_stopped else {}),
+                'defer_reasons': dict(defer_reasons), 'fallback_codes': dict(fallback_codes),
                 'pids': sorted(done_pids), 'updated': True}
     for r, local_result, ctx, unit in shadow_tasks:
         if deadline - time.monotonic() < _MIN_CALL_S:
@@ -1311,8 +1470,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             "left_estimate": max(0, estimate["left"] - estimate["done"]) if estimate is not None else None,
             "left_estimate_age_s": round(time.monotonic() - estimate["at"]) if estimate is not None else None,
             "fresh_selected": fresh_selected,
-            "selected": selected_count, "deferred": deferred,
-            "defer_reasons": dict(defer_reasons),
+            "selected": selected_count, "deferred": deferred, "refilled": refilled,
+            **({"refill_stopped": True, "refill_stop_error": refill_stop_error} if refill_stopped else {}),
+            "defer_reasons": dict(defer_reasons), "fallback_codes": dict(fallback_codes),
             "context_blocked": context_blocked,
             "skipped": skipped, "lock_lost": lock_lost,
             "slow_deferred": slow_deferred,

@@ -112,7 +112,31 @@ def test_read_failure_logs_only_the_rejecting_phase_without_send_or_history_chan
         expected["sqlite_primary_code"] = code & 0xff if code is not None else "unknown"
     if kind == "value_error":
         expected["error_reason"] = "ValueError"
+    if kind == "cloud_error":
+        expected.update(error_kind="unknown", error_reason="unknown")
     assert _events(capsys) == [expected]
+
+
+@pytest.mark.parametrize("phase", _READS)
+@pytest.mark.parametrize("kind,detail,expected_kind,expected_reason", [
+    ("budget_exceeded", "cloud_unit_unresolved", "budget_exceeded", "cloud_unit_unresolved"),
+    ("pricing_unverified", "cloud_unit_unresolved", "pricing_unverified", "cloud_unit_unresolved"),
+    ("contract_error", "cloud_profile_invalid", "contract_error", "cloud_profile_invalid"),
+    (_SECRET, _SECRET, "unknown", "unknown"),
+    (["budget_exceeded"], ["cloud_unit_unresolved"], "unknown", "unknown"),
+    (type("PrivateCode", (str,), {})("budget_exceeded"),
+     type("PrivateDetail", (str,), {})("cloud_unit_unresolved"), "unknown", "unknown"),
+])
+def test_cloud_history_reason_codes_are_fixed_and_never_format_private_text(
+        capsys, phase, kind, detail, expected_kind, expected_reason):
+    class PrivateError(cloud_client.CloudError):
+        def __str__(self):
+            pytest.fail("private exception formatted")
+
+    cloud_inference._history_read_error(phase, PrivateError(kind, detail))
+    assert _events(capsys) == [{"event": "cloud_history_read_error", "phase": phase,
+                               "error_category": "cloud_error", "error_kind": expected_kind,
+                               "error_reason": expected_reason}]
 
 
 @pytest.mark.parametrize("code,name", [
@@ -216,3 +240,19 @@ def test_paid_answer_proof_failure_remains_recoverable_without_resend(
     if error_class is ValueError:
         expected["error_reason"] = "ValueError"
     assert _events(capsys) == [expected]
+
+
+@pytest.mark.parametrize("refusal,expected", [
+    ("repeat_success", "repeat_success"), ("receipt_inconsistent", "receipt_inconsistent"),
+    ("repeat_failed", "repeat_failed"), ("repeat_unsettled", "repeat_unsettled"), ("disposition", "disposition"),
+    ("result_missing", "result_missing"),
+    (_SECRET, "unknown"), (["repeat_success"], "unknown"),
+    (type("PrivateRefusal", (str,), {})("repeat_success"), "unknown"),
+])
+def test_history_refusal_class_is_fixed_and_only_logged_when_set(capsys, refusal, expected):
+    error = cloud_client.CloudError("budget_exceeded", "cloud_unit_unresolved")
+    error.history_refusal = refusal
+    cloud_inference._history_read_error("request_send_block_reason", error)
+    assert _events(capsys) == [{"event": "cloud_history_read_error", "phase": "request_send_block_reason",
+                               "error_category": "cloud_error", "error_kind": "budget_exceeded",
+                               "error_reason": "cloud_unit_unresolved", "history_refusal": expected}]

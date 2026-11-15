@@ -21,7 +21,7 @@ SEND_MIN_BUDGET_S = 30
 
 SYSTEM_ALERT_KINDS = frozenset({
     "session_expired", "session_recovered", "run_failed", "update_notice",
-    "health_write_failed",
+    "health_write_failed", "health_watch_stalled",
 })
 
 # Restore-time exemption subset: run_failed keeps its system-alert

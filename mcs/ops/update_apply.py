@@ -55,6 +55,7 @@ from update_lifecycle_context import (
     _call_legacy,
     _enqueue_notice,
     _ensure_recovery_marker,
+    _hold_after_interrupt,
     _legacy_entry,
     _pin_recovery_marker,
     _record_executed,
@@ -223,9 +224,24 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
         consent_hold = False
         delegated = False
         hold_mode = None
+        # An interrupt (KeyboardInterrupt, SystemExit) is no settled outcome: the unfinished
+        # journal keeps its update marker for recover_interrupted instead of the finally's cleanup.
+        interrupted = False
+        terminal = False   # the journal's terminal save happened (bail or success)
 
         def bail(reason: str) -> int:
-            nonlocal rollback_failed, consent_hold, state
+            nonlocal interrupted
+            try:
+                return _bail(reason)
+            except BaseException as error:
+                if not isinstance(error, Exception):
+                    interrupted = True
+                    if quiesced and not terminal:
+                        _hold_after_interrupt(error)
+                raise
+
+        def _bail(reason: str) -> int:
+            nonlocal rollback_failed, consent_hold, state, terminal
             transient = reason.split(":")[0] in _TRANSIENT_BAIL
             stages = [s.get("stage") for s in state.get("stages", [])]
             merged = "merge" in stages or "post_merge" in stages
@@ -352,11 +368,13 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 # check retries
                 state["stages"] = []
                 journal_store.save_state(STATE_PATH, state)
+                terminal = True
                 return 2
             if command_id:
                 _record_executed(state, command_id, "failed", reason)
             _record_attempt(state, tag, "failed", reason)
             journal_store.save_state(STATE_PATH, state)
+            terminal = not rollback_failed   # a failed rollback keeps its applying record
             if rollback_failed and state["applying"].get("restore_incomplete"):
                 # same report-only freeze as recover_interrupted's escalate: an
                 # outbox notice would write the newer-schema DB under the old
@@ -581,6 +599,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 _run_post_merge(sha, run_lock_fd=run_fd, _release_entry=borrowed)
 
             state = _apply_record_success(tag, command_id)
+            terminal = True
             quiesced = False
             # gateway restart is fire-and-forget AFTER applied is durable —
             # a synchronous restart would deadlock when this updater is a
@@ -596,8 +615,13 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             if isinstance(e, UpdateError):
                 return bail(str(e))
             return bail(f"unexpected:{type(e).__name__}")
+        except BaseException as error:
+            interrupted = True
+            if quiesced and not terminal:
+                _hold_after_interrupt(error)
+            raise
         finally:
-            if quiesced and not consent_hold and not rollback_failed:
+            if quiesced and not consent_hold and not rollback_failed and (not interrupted or terminal):
                 _remove_marker()
             if borrowed is None:
                 for fd in (run_fd, upd_fd):
@@ -634,6 +658,8 @@ def rollback(command_id: str | None = None) -> int:
     run_fd = None
     quiesced = False
     consent_hold = False
+    interrupted = False   # as in apply(): an interrupted rollback journal keeps its marker
+    journal_open = False  # the rollback journal is written and its terminal save not yet done
     try:
         state = journal_store.load_state(STATE_PATH)            # fresh view under the lock
         if _release_legacy_hold(state):
@@ -679,6 +705,7 @@ def rollback(command_id: str | None = None) -> int:
             state["applying"] = _rollback_applying(
                 entry, _head_sha(), command_id)
             journal(state, "rollback")
+            journal_open = True
             quiesced = True
             quiesce()
             schema_hold = bool(entry.get("schema_bump") and entry.get("backup_path"))
@@ -755,6 +782,7 @@ def rollback(command_id: str | None = None) -> int:
             if command_id:
                 _record_executed(state, command_id, "rolled_back")
             journal_store.save_state(STATE_PATH, state)
+            journal_open = False
             # gateway restart AFTER the durable save (self-deadlock)
             restart_services(mcs_util.load_config(), entry.get("plugin_changed"))
             _enqueue_notice(f"[MCS] ロールバックしました: "
@@ -779,14 +807,20 @@ def rollback(command_id: str | None = None) -> int:
             if command_id:
                 _record_executed(state, command_id, "rollback_failed", str(e))
                 journal_store.save_state(STATE_PATH, state)
+            journal_open = False   # escalate-like contract: the applying record stays, the hold is released
             _enqueue_notice(f"[MCS] ロールバックに失敗しました: {e}",
                             use_run_lock=run_fd is None, notice_code="rollback_failed")
             print("元の版に戻せませんでした。管理者に確認してください。詳細:", e)
             return 1
+    except BaseException as error:
+        interrupted = not isinstance(error, Exception)
+        if interrupted and journal_open:
+            _hold_after_interrupt(error)
+        raise
     finally:
         # a consent hold keeps BOTH markers: they are what durably holds
         # writers/senders frozen until the bound approval arrives
-        if quiesced and not consent_hold:
+        if quiesced and not consent_hold and not interrupted:
             _remove_marker()
         for fd in (run_fd, upd_fd):
             if fd is not None:

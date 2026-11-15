@@ -11,6 +11,10 @@ from mcs_util import strict_json
 # Bound retained evidence independently of the reader's time and output budgets.
 MAX_ROWS = 100000
 MAX_PROOF_BYTES = 16 * 1024 * 1024
+# `outstanding --full`: an operator's explicit whole-ledger check runs the same
+# proofs under wider bounds, since the defaults stop short of a grown ledger.
+FULL_ROWS = 2_000_000
+FULL_PROOF_BYTES = 8 * 1024 ** 3
 _VALID_META = ("CASE WHEN typeof(meta)='text' AND length(CAST(meta AS BLOB))<=32768 "
                "AND json_valid(meta) THEN CASE WHEN json_type(meta)='object' THEN meta END END")
 
@@ -53,8 +57,9 @@ def _record(meta, project_id, message_id, model, created, now):
                    "model": model, "created_at": created}
 
 
-def observe(db, *, now=None):
+def observe(db, *, now=None, full=False):
     """Validate bounded retained reservations and return aggregate counts only."""
+    max_rows, max_proof_bytes = (FULL_ROWS, FULL_PROOF_BYTES) if full else (MAX_ROWS, MAX_PROOF_BYTES)
     now = time.time() if now is None else now
     if type(now) not in (int, float) or not math.isfinite(now):
         raise ValueError("observation_time_invalid")
@@ -68,7 +73,7 @@ def observe(db, *, now=None):
         nonlocal proof_bytes, proof_exceeded
         proof_bytes += sum(len(value.encode("utf-8")) for value in (values[0], values[5])
                            if isinstance(value, str))
-        if proof_bytes > MAX_PROOF_BYTES:
+        if proof_bytes > max_proof_bytes:
             # UDF errors surface as OperationalError; the flag keeps the real reason.
             proof_exceeded = True
             raise ValueError("observation_proof_budget_exceeded")
@@ -128,12 +133,12 @@ def observe(db, *, now=None):
     """
     db.create_function("mcs_cloud_observe", 12, classify)
     try:
-        row = db.execute(query, (MAX_ROWS + 1, now, now)).fetchone()
-        if row["records_scanned"] > MAX_ROWS:
+        row = db.execute(query, (max_rows + 1, now, now)).fetchone()
+        if row["records_scanned"] > max_rows:
             # Prefix-only sample: a reserve whose result sits past the bound is not
             # a lower bound on unresolved; global counts stay unverified (None).
             return {**unknown("observation_limit"),
-                    "observed": {"coverage": "artifact_id_prefix", "scan_limit": MAX_ROWS,
+                    "observed": {"coverage": "artifact_id_prefix", "scan_limit": max_rows,
                                  "records_scanned": row["records_scanned"],
                                  "reserves_scanned": row["reserves_scanned"],
                                  "results_scanned": row["results_scanned"],

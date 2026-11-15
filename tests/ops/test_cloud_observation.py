@@ -268,3 +268,46 @@ def test_internal_proof_budget_is_bounded_and_does_not_write(world, monkeypatch)
     assert ledger.db.total_changes == before
     monkeypatch.setattr(observation, 'MAX_PROOF_BYTES', 16 * 1024 * 1024)
     assert _observe(ledger, now)['missing_results'] == 3
+
+
+def test_full_check_runs_the_same_proofs_past_the_default_bounds(world, monkeypatch, capsys):
+    ledger, root = world
+    now = time.time()
+    _result(ledger, _reserve(ledger, now - 800), now - 790)
+    _reserve(ledger, now - 700)
+    monkeypatch.setattr(observation, 'MAX_ROWS', 1)
+    monkeypatch.setattr(observation, 'MAX_PROOF_BYTES', 1)
+    assert _observe(ledger, now)['state'] == 'unknown'
+    ledger.db.commit()
+    ledger.db.execute('BEGIN')
+    try:
+        full = observation.observe(ledger.db, now=now, full=True)
+    finally:
+        ledger.db.rollback()
+    assert (full['state'], full['settled_requests'], full['missing_results']) == ('complete', 1, 1)
+    monkeypatch.setattr(observation, 'FULL_ROWS', 1)   # the wider bound is still a bound
+    assert _observe_full(ledger, now)['reason'] == 'observation_limit'
+    monkeypatch.undo()
+
+    monkeypatch.setattr(observation, 'MAX_ROWS', 1)
+    monkeypatch.setattr(cloud_cli.mcs_util, 'HOME', str(root))
+    monkeypatch.setattr(cloud_cli.mcs_util, 'load_config', lambda: {})
+    seen = []
+    reader = cloud_cli._reader
+    monkeypatch.setattr(cloud_cli, '_reader', lambda root=None, *, seconds=None: seen.append(seconds) or reader(root, seconds=seconds))
+    import argparse
+    parser = argparse.ArgumentParser()
+    cloud_cli.add_parsers(parser.add_subparsers(dest='command', required=True))
+    assert parser.parse_args(['cloud-llm', 'outstanding']).full is False
+    args = parser.parse_args(['cloud-llm', 'outstanding', '--full'])
+    assert args.fn(args) == 0 and seen == [cloud_cli.FULL_READ_SECONDS]
+    assert json.loads(capsys.readouterr().out)['unresolved_requests'] == 1
+
+
+def _observe_full(ledger, now):
+    ledger.db.commit()
+    ledger.db.execute('BEGIN')
+    try:
+        return observation.observe(ledger.db, now=now, full=True)
+    finally:
+        ledger.db.rollback()

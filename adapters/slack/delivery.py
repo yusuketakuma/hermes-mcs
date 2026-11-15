@@ -30,7 +30,9 @@ _log = eventlog.make_logger(__name__)
 NAME_NEG_S = 900
 NAME_CACHE_MAX = 1024
 # Match the runner's durable Slack wire budget; old sealed specs may predate it.
-BODY_WIRE_MAX = 4000
+# Body edits pass parse="none": chat.update defaults to "client" (postMessage to
+# "none"), which re-parses the text and can push an in-budget part past the limit.
+BODY_WIRE_MAX = 3500
 _BLOCK_TYPES = frozenset({"section", "divider", "actions", "context", "image", "header",
                           "input", "file", "video", "rich_text", "table", "markdown", "container"})
 _METRIC_MAX_BYTES = 1024 * 1024
@@ -786,7 +788,7 @@ class DeliveryWorker(_BaseWorker):
         try:
             response = await self._blocks_call(
                 sender.chat_update, blocks, _metric_method="update", channel=self._settings["channel_id"],
-                ts=ts, text=text, link_names=False, mrkdwn=False)
+                ts=ts, text=text, parse="none", link_names=False, mrkdwn=False)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -838,7 +840,7 @@ class DeliveryWorker(_BaseWorker):
             response = await self._blocks_call(
                 sender.chat_update, blocks, _metric_method="update",
                 channel=self._settings["channel_id"], ts=prior, text=text,
-                link_names=False, mrkdwn=False)
+                parse="none", link_names=False, mrkdwn=False)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

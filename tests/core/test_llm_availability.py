@@ -58,3 +58,27 @@ def test_search_registration_borrows_a_readonly_connection(tmp_path):
         assert db.execute("SELECT COUNT(*) FROM sentinel").fetchone() == (0,)
     finally:
         db.close()
+
+
+def test_a_cooldown_or_down_stamp_ahead_of_the_clock_never_parks_the_lane(tmp_path, monkeypatch):
+    # No call runs while the breaker is open, so nothing would ever clear a
+    # stamp left ahead of a stepped-back clock or written by a damaged file.
+    db = sqlite3.connect(tmp_path / "ledger.db")
+    try:
+        now = [1_000_000.0]
+        monkeypatch.setattr(availability.time, "time", lambda: now[0])
+        for _ in range(availability._CIRCUIT_TRIP):
+            availability.circuit_failure(db)
+        assert 0 < availability.circuit_open_s(db) <= availability._CIRCUIT_MAX_S
+        assert availability.llm_down_for_s(db) == 0
+        now[0] -= 86400                                   # the clock steps back a day
+        assert availability.circuit_open_s(db) == 0.0
+        assert availability.llm_down_for_s(db) is None    # unknown, not "down for 0 s"
+        availability.circuit_failure(db)                  # the next real failure restamps it
+        assert availability.llm_down_since(db) == now[0]
+        now[0] += 3600
+        assert availability.llm_down_for_s(db) == 3600
+        availability.circuit_state_path(db).write_text(json.dumps({"open_until": now[0] + 1e9}))
+        assert availability.circuit_open_s(db) == 0.0
+    finally:
+        db.close()

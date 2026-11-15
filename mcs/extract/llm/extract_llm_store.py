@@ -585,6 +585,13 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
             return False
         if (replay and lease is None) or (lease is not None and not _owns_current_source(ledger, r, lease)):
             return False
+        rebuild = r.get("_local_rebuild")
+        if rebuild is not None:
+            # The first and every later checkpoint of an approved local rebuild re-prove the
+            # permit inside this writer transaction, so a new reservation stops it here too.
+            import extract_llm_local_rebuild as local_rebuild
+            if local_rebuild.permit_for(ledger, rebuild) not in local_rebuild.RUNNABLE:
+                return False
         for key, value in chunks_out.items():
             guarded = guard is not None and guard is r.get("_checkpoint_guard")
             if guarded:
@@ -630,6 +637,8 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                     "piece_sha256": hashlib.sha256(piece.encode()).hexdigest(),
                     "actual_model": _actual_model(r),
                     "plan_version": PLAN_VERSION}
+            if rebuild is not None:
+                meta["local_rebuild"] = local_rebuild.tag(rebuild)
             if split_size is not None:
                 meta["split_size"] = split_size
                 meta["checkpoint_provider_contract"] = r.get("_provider_contract")

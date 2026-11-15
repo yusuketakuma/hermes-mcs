@@ -203,23 +203,39 @@ def repair_issues(drops: dict, v: dict | None) -> list[str]:
 _QUALITY_CHECKPOINT = "completeness-v1"
 
 
-def completeness_resolved(meta: dict) -> bool:
-    """Require explicit per-leaf checks for current inference; only legacy may omit them."""
+def _completeness_entries(meta: dict):
+    """The per-leaf completeness entries in their required shape, or None (current inference
+    needs one entry per chunk; only legacy may omit them)."""
     version = inference.read_version(meta)
     if version not in (inference.LEGACY_VERSION, inference.CURRENT_VERSION):
-        return False
+        return None
     integrity = meta.get("integrity", {})
     quality = integrity.get("completeness", {}) if isinstance(integrity, dict) else None
     if version == inference.CURRENT_VERSION:
         chunks = integrity.get("completeness_chunks") if isinstance(integrity, dict) else None
         if (type(chunks) is not int or chunks < 1 or not isinstance(quality, dict)
                 or len(quality) != chunks):
-            return False
-    return isinstance(quality, dict) and all(
-        isinstance(entry, dict) and entry.get("state") == "hint_gaps_resolved"
-        # bool/float zero and missing counts cannot establish resolution.
-        and type(entry.get("remaining_hint_candidates")) is int
-        and entry["remaining_hint_candidates"] == 0 for entry in quality.values())
+            return None
+    if not isinstance(quality, dict) or not all(
+            # bool/float counts cannot establish a count.
+            isinstance(entry, dict) and isinstance(entry.get("state"), str)
+            and type(entry.get("remaining_hint_candidates")) is int
+            and entry["remaining_hint_candidates"] >= 0 for entry in quality.values()):
+        return None
+    return list(quality.values())
+
+
+def completeness_shaped(meta: dict) -> bool:
+    """The per-leaf completeness evidence is present and well-formed, resolved or not."""
+    return _completeness_entries(meta) is not None
+
+
+def completeness_resolved(meta: dict) -> bool:
+    """Require explicit per-leaf checks for current inference; only legacy may omit them."""
+    entries = _completeness_entries(meta)
+    return entries is not None and all(
+        entry["state"] == "hint_gaps_resolved" and entry["remaining_hint_candidates"] == 0
+        for entry in entries)
 
 
 def _current_cue(body, surface):

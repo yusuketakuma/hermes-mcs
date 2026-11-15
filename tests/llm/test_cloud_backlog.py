@@ -580,6 +580,21 @@ def test_semantic_lock_yield_rechecks_fence_before_extract(carry_worker, tmp_pat
     ({'llm_calls': {'calls': 1.5}}, {}),
     ({'llm_calls': {'calls': 'synthetic-private-detail'}}, {}),
     ({'llm_calls': {'private': 'synthetic-private-detail'}}, {}),
+    # same-pass replacement: a bounded count and a fixed stop class only
+    ({'refilled': 0}, {'refilled': 0}),
+    ({'refilled': 64}, {'refilled': 64}),
+    ({'refilled': True}, {}), ({'refilled': -1}, {}), ({'refilled': 65}, {}), ({'refilled': 1.5}, {}),
+    ({'refill_stopped': True, 'refill_stop_error': 'runtime_error'},
+     {'refill_stopped': True, 'refill_stop_error': 'runtime_error'}),
+    ({'refill_stopped': True, 'refill_stop_error': 'synthetic-private-detail'},
+     {'refill_stopped': True, 'refill_stop_error': 'unclassified'}),
+    ({'refill_stopped': True, 'refill_stop_error': ['runtime_error']},
+     {'refill_stopped': True, 'refill_stop_error': 'unclassified'}),
+    ({'refill_stopped': True, 'refill_stop_error': type('PrivateCode', (str,), {})('runtime_error')},
+     {'refill_stopped': True, 'refill_stop_error': 'unclassified'}),
+    ({'refill_stopped': False, 'refill_stop_error': 'runtime_error'}, {}),
+    ({'refill_stopped': 1, 'refill_stop_error': 'runtime_error'}, {}),
+    ({'refill_stop_error': 'runtime_error'}, {}),
 ])
 def test_worker_logs_only_safe_existing_diagnostics(carry_worker, monkeypatch, capsys, diagnostics, expected):
     import extract_llm
@@ -597,7 +612,8 @@ def test_worker_logs_only_safe_existing_diagnostics(carry_worker, monkeypatch, c
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     passes = [item for item in records if item['event'] == 'cloud_backlog_pass']
     assert len(passes) == 1 and state.closed
-    keys = {'failed', 'held_prior', 'carried', 'disk_low', 'llm_calls'}
+    keys = {'failed', 'held_prior', 'carried', 'disk_low', 'llm_calls', 'refilled',
+            'refill_stopped', 'refill_stop_error'}
     assert {key: passes[0][key] for key in keys if key in passes[0]} == expected
     assert 'private' not in passes[0] and 'pids' not in passes[0]
     assert 'synthetic-private-detail' not in json.dumps(records)
@@ -1256,3 +1272,117 @@ def test_ocr_failure_yields_the_next_extract_turn_to_chat(carry_worker, monkeypa
         backlog.worker(991)
     assert state.events == ['ocr', 'semantic', 'extract']
     assert state.closed
+
+
+def test_worker_runs_only_message_extraction_while_the_backlog_is_reopened(carry_worker, monkeypatch, capsys):
+    """The owner's bounded reopening covers stored messages: never a semantic turn."""
+    import extract_llm
+    import mcs_util
+    import semantic_drain
+    state, _ = carry_worker
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "window_start": "2026-11-01T00:00:00+09:00",
+                         "window_budget_usd": 60, "reextract_backlog_until": "2999-01-01T00:00:00+09:00"}}
+    monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
+    monkeypatch.setenv(extract_llm.cloud_policy.BACKLOG_WORKER_ENV, "1")
+    passes = []
+
+    def extract(*a, **kw):
+        passes.append(kw.get("cloud_only"))
+        if len(passes) == 3:
+            state.alive = False
+        return {"done": 1}
+
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+    monkeypatch.setattr(semantic_drain, "run_due",
+                        lambda *a, **kw: pytest.fail("the semantic backlog is not reopened"))
+    backlog.worker(991)
+    assert passes == [True, True, True] and state.closed
+    phases = [json.loads(line).get("phase") for line in capsys.readouterr().out.splitlines()
+              if '"cloud_backlog_pass"' in line]
+    assert phases == ["extract", "extract", "extract"]
+    # past its end the worker waits like under the closed policy
+    cfg["cloud_llm"]["reextract_backlog_until"] = "2026-11-02T00:00:00+09:00"
+    state.alive, state.closed = True, False
+    waits = []
+
+    def sleep(seconds):
+        waits.append(seconds)
+        state.alive = False
+
+    monkeypatch.setattr(backlog.time, "sleep", sleep)
+    monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: pytest.fail("expired window admitted extract"))
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+    backlog.worker(991)
+    assert waits == [10] and state.closed
+
+
+def test_worker_runs_only_semantic_when_only_its_window_is_open(carry_worker, monkeypatch):
+    import extract_llm
+    import mcs_util
+    import semantic_drain
+    state, _ = carry_worker
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "provider": "anthropic",
+        "semantic_backlog_until": "2999-01-01T00:00:00+09:00",
+        "daily_cost_limit_usd": 30, "monthly_cost_limit_usd": 300,
+        "provider_budgets": {"anthropic": {"daily_cost_limit_usd": 15, "monthly_cost_limit_usd": 150}}}}
+    monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
+    monkeypatch.setenv(extract_llm.cloud_policy.BACKLOG_WORKER_ENV, "1")
+    monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: pytest.fail("reextract window is closed"))
+    monkeypatch.setattr(extract_llm_resident, "run_pending", extract_llm.run_pending)
+
+    def semantic(*args, **kwargs):
+        state.events.append("semantic")
+        state.alive = False
+        return {"done": 1}
+
+    monkeypatch.setattr(semantic_drain, "run_due", semantic)
+    backlog.worker(991)
+    assert state.events == ["semantic"] and state.closed
+
+
+def test_the_backlog_workers_spawn_only_while_the_stored_message_backlog_is_reopened(tmp_path, monkeypatch):
+    import extract_llm
+    (tmp_path / "data").mkdir()
+    monkeypatch.setattr(extract_llm.cloud_policy, "api_key", lambda *a: "synthetic-key")
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: min(2, limit))
+    spawned = []
+
+    class Child:
+        def __init__(self, command, **kw):
+            self.context_only = "--context-only" in command
+            # only the stored-message workers may make the reopened sends
+            assert kw["env"][extract_llm.cloud_policy.BACKLOG_WORKER_ENV] == ("0" if self.context_only else "1")
+            self.stopped = False
+            spawned.append(self)
+
+        def poll(self):
+            return 0 if self.stopped else None
+
+        def terminate(self):
+            self.stopped = True
+
+        def wait(self, timeout=None):
+            return 0
+
+    def kinds():
+        return [child.context_only for child in spawned]
+
+    monkeypatch.setattr(backlog.subprocess, "Popen", Child)
+    closed = {"cloud_llm": {"mode": "on", "project_ids": [1], "provider": "anthropic", "max_concurrency": 4}}
+    reopened = {"cloud_llm": {**closed["cloud_llm"], "window_start": "2026-11-01T00:00:00+09:00",
+                              "window_budget_usd": 60, "reextract_backlog_until": "2999-01-01T00:00:00+09:00"}}
+    ended = {"cloud_llm": {**reopened["cloud_llm"], "reextract_backlog_until": "2026-11-02T00:00:00+09:00"}}
+    # the resident owns one context pool; the stored-message workers hang off it
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        for cfg in (closed, ended):
+            owner.sync(cfg)
+            assert kinds() == [True, True]            # patient-context children only
+            owner.last_sync -= 11
+            owner.backlog.last_sync -= 11
+        owner.sync(reopened)
+        assert kinds() == [True, True, False, False]
+    finally:
+        owner.close()
+    assert all(child.stopped for child in spawned)

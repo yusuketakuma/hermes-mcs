@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import inference_version as inference
 import cloud_policy
 import cloud_inference
+import extract_llm_local_rebuild as local_rebuild
 import inference_dependency_loss
 import mcs_util
 import patient_priority
@@ -627,7 +628,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
         if not errors and selection is not None:
             required_contract = cloud_inference.cloud_provider_contract(selection=selection)
         if (cfg["mode"] != "on" or "reextract" not in cfg["routes"]
-                or not cloud_policy.send_route("reextract")):
+                or not cloud_policy.route_open("reextract", cfg)):
             owner = getattr(ledger, '_cloud_state_owner', None)
             if owner is not None and prioritize_patients:
                 owner._cloud_priority_progress = None
@@ -649,6 +650,13 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
     # time.time(), so it is compared against the same Python clock —
     # never SQLite's unixepoch(), which can disagree with it.
     now = time.time()
+    # Every approved local rebuild (active, adopted or lapsed and held) stays off the cloud
+    # follow-up: an approval never hands its unit back to the cloud.
+    try:
+        rebuilds = local_rebuild.approved_units(ledger.db) if cloud_only else {}
+    except sqlite3.Error:
+        raise _CloudSelectionIncomplete('reader_unavailable') from None
+
     def _select(fresh, n, archived, rehold=None, scope="", scope_params=()):
         if deadline is not None and time.monotonic() >= deadline:
             raise _CloudSelectionIncomplete('deadline')
@@ -673,7 +681,8 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                 if (cloud_policy.history_target_ready(ledger.db, row["project_id"], row["message_id"])
                         and receipt_check(row["project_id"], row["message_id"])
                         and required_contract is not None
-                        and cloud_completion(ledger.db, row, required_contract) is None):
+                        and cloud_completion(ledger.db, row, required_contract) is None
+                        and (row["project_id"], row["message_id"]) not in rebuilds):
                     selected.append(row)
                     if len(selected) >= n:
                         break

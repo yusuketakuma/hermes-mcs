@@ -1464,10 +1464,14 @@ def runtime_gate_errors(cfg, *, repair_recovery=False, update_repo=None, allow_r
 
 
 def cmd_services(args):
+    cfg = mcs_util.load_config_checked(missing_ok=True)
+    if cfg is None:
+        print("設定を読み取れないため、サービスは変更していません。設定を確認してください。")
+        return 1
     dry = getattr(args, "dry_run", False)
     def note(message):
         print(("  [変更予定のみ] " if dry else "  ") + message)
-    result = service_management.apply_services(mcs_util.load_config(), paths=_service_paths(), dry_run=dry, note=note)
+    result = service_management.apply_services(cfg, paths=_service_paths(), dry_run=dry, note=note)
     if result.message is not None:
         print(result.message)
     return result.exit_code

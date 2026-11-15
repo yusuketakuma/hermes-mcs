@@ -437,8 +437,7 @@ def test_card_phase_markers_add_no_sql_or_delivery_changes(stored):
     assert observation == {"phase": "result_assembly"}
 
 
-@pytest.mark.parametrize("helper,phase", [("layout_migration_counts", "layout_inventory"),
-                                         ("_delivery_latency", "delivery_latency")])
+@pytest.mark.parametrize("helper,phase", [("layout_migration_counts", "layout_inventory")])
 def test_failed_card_phase_is_fixed_and_preserves_unknown(stored, monkeypatch, helper, phase):
     clock = [100.0]
     monkeypatch.setattr(health_report.time, "monotonic", lambda: clock[0])
@@ -456,6 +455,23 @@ def test_failed_card_phase_is_fixed_and_preserves_unknown(stored, monkeypatch, h
     assert cards["pending"] is None and cards["completion"]["reason"] == "observation_unavailable"
     assert "SYNTHETIC_PRIVATE_ERROR" not in json.dumps(cards)
     assert cards["recovery_parts"] is None
+
+
+def test_failed_latency_sample_keeps_card_verdict(stored, monkeypatch):
+    """The informational latency sample can fail alone; the card counts stay recorded."""
+    def unavailable(*args):
+        raise ValueError("SYNTHETIC_PRIVATE_ERROR")
+
+    monkeypatch.setattr(notify_scope, "_delivery_latency", unavailable)
+    report = health_report.build_health(stored, {"errors": [], "notify": {}}, "ok", cfg={})
+    cards = report["cards"]
+    assert cards.get("status") is None and cards["pending"] == 0 and cards["observed_at"] == NOW
+    assert cards["observation"]["stop"] == "complete"
+    assert cards["completion"]["status"] == "recorded"
+    assert cards["completion"]["latency"] == {"status": "unavailable", "observed_at": NOW,
+                                              "reason": "observation_unavailable"}
+    assert "SYNTHETIC_PRIVATE_ERROR" not in json.dumps(report)
+    assert "notification_cards_unavailable" not in report["state_reasons"]
 
 
 @pytest.mark.parametrize("failure,stop,reason", [

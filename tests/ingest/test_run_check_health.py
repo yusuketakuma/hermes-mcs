@@ -322,6 +322,70 @@ def test_health_write_binds_run_and_survives_failure(tmp_path, monkeypatch):
     db.close()
 
 
+def _watch_health(tmp_path, monkeypatch, db, now, cfg=OCR_DISABLED_CFG):
+    monkeypatch.setattr(run_check.time, "time", lambda: now)
+    result = {"errors": [], "notify": {}}
+    run_check._write_health(db, result, "ok", run_id=7, cfg=cfg)
+    assert result["errors"] == []
+    return json.loads((tmp_path / "health.json").read_text())
+
+
+def _stall_alerts(db):
+    return [tuple(row) for row in db.db.execute(
+        "SELECT state, json_extract(payload,'$.detail') FROM notify_outbox "
+        "WHERE kind='health_watch_stalled' ORDER BY event_id")]
+
+
+def test_health_names_a_watcher_that_stopped_observing_and_alerts_from_the_outbox(
+        tmp_path, monkeypatch):
+    """The watcher is the alert path for every other fault; only the producer can see it stop."""
+    monkeypatch.setattr(health_report, "HEALTH_FILE", str(tmp_path / "health.json"))
+    status = tmp_path / "health_watch_status.json"
+    db = _ledger(tmp_path)
+    try:
+        status.write_text(json.dumps({"watched_at": 10_000.0}))
+        fresh = _watch_health(tmp_path, monkeypatch, db, 10_000.0 + 1800)
+        assert fresh["health_watch"] == {
+            "state": "ok", "deadline_s": 1800, "observed_at": 11_800.0, "bad_since": None,
+            "watched_at": 10_000.0, "stalled": False}
+        assert _stall_alerts(db) == []
+        stale = _watch_health(tmp_path, monkeypatch, db, 10_000.0 + 1801)
+        assert stale["health_watch"]["state"] == "stale" and stale["health_watch"]["stalled"]
+        # beside the verdict: a watcher reading this file has disproved its own stall
+        assert stale["overall"] == "ok" and stale["state_reasons"] == []
+        assert _stall_alerts(db) == [("pending", "stale")]
+        _watch_health(tmp_path, monkeypatch, db, 10_000.0 + 2401)
+        assert _stall_alerts(db) == [("pending", "stale")]      # throttled per kind
+        status.write_text(json.dumps({"watched_at": 12_500.0}))
+        healed = _watch_health(tmp_path, monkeypatch, db, 12_600.0)
+        assert healed["health_watch"]["state"] == "ok" and not healed["health_watch"]["stalled"]
+        assert healed["stall_marks"]["health_watch_bad_since"] is None
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("content,state", [
+    (None, "missing"), ("{", "unreadable"), ("[]", "unreadable"),
+    ('{"watched_at":"x"}', "unreadable"), ('{"watched_at":999999999}', "unreadable")])
+def test_a_watcher_status_never_written_or_unreadable_stalls_only_after_the_deadline(
+        tmp_path, monkeypatch, content, state):
+    monkeypatch.setattr(health_report, "HEALTH_FILE", str(tmp_path / "health.json"))
+    if content is not None:
+        (tmp_path / "health_watch_status.json").write_text(content)
+    db = _ledger(tmp_path)
+    try:
+        first = _watch_health(tmp_path, monkeypatch, db, 10_000.0)
+        assert first["health_watch"]["state"] == state and not first["health_watch"]["stalled"]
+        assert first["health_watch"]["bad_since"] == 10_000.0
+        waiting = _watch_health(tmp_path, monkeypatch, db, 10_000.0 + 1799)
+        assert not waiting["health_watch"]["stalled"] and _stall_alerts(db) == []
+        late = _watch_health(tmp_path, monkeypatch, db, 10_000.0 + 1800)
+        assert late["health_watch"]["bad_since"] == 10_000.0 and late["health_watch"]["stalled"]
+        assert _stall_alerts(db) == [("pending", state)]
+    finally:
+        db.close()
+
+
 def test_deeply_nested_previous_health_does_not_block_fresh_publication(tmp_path, monkeypatch):
     import health_watch
 

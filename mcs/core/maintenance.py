@@ -51,6 +51,15 @@ BACKUP_CHECK_SLACK_S = 5.0  # overrun of the same-day check before a replacement
 # H4: the read-only snapshot is republished only when the ledger changed
 # (cheap marker, see _content_signature) or the published copy is this old
 SNAPSHOT_MAX_AGE_S = 3600
+# RC4: a change that only appended rows, and a background snapshot_dirty
+# flag (extraction refresh, OCR, card redraw), waits this long after the last
+# publish (about every other 10-minute tick) instead of copying ~1 GB each
+# tick; 0 restores publish-on-every-change. Urgent changes skip the wait.
+SNAPSHOT_MIN_INTERVAL_S = 900
+# marker keys a human acts on right away (schema, patient display fields,
+# requests and command receipts): any move publishes without the wait
+SNAPSHOT_URGENT_KEYS = frozenset({"", "patients@content", "requests@updated_at",
+                                  "command_receipts"})
 SNAPSHOT_SIG_NAME = ".publish-sig.json"
 # bookkeeping every tick writes; alone it never warrants a full copy
 SNAPSHOT_SIG_IGNORED = frozenset({"runs", "snapshot_meta"})
@@ -69,7 +78,7 @@ RETENTION_BATCH = 5000
 # or history evidence (semantic_notice delivery keys, signal cooldowns,
 # urgent daily caps, digest supersession, attachment followups)
 RETAINED_ALERT_KINDS = ("session_expired", "session_recovered", "run_failed",
-                        "health_write_failed")
+                        "health_write_failed", "health_watch_stalled")
 # held sends older than this that still pin expired attachments are
 # surfaced in health (the files are kept: a release may still send them)
 HELD_PIN_WARN_S = 30 * 86400
@@ -792,21 +801,121 @@ def _recent(at, now: float, interval: float) -> bool:
             and 0 <= now - at < interval)
 
 
-def refresh_snapshot(db_path: str, *, force: bool = False,
+def _rows_appended_only(old, new: dict) -> bool:
+    """True when every marker move since ``old`` is a table's MAX(rowid)
+    growing and no urgent key moved. A table added or dropped, a lower or
+    vanished MAX(rowid) (restore, rollback) or any other change is False."""
+    if not isinstance(old, dict) or old.keys() != new.keys():
+        return False
+    for key, value in new.items():
+        before = old[key]
+        if before == value:
+            continue
+        if key in SNAPSHOT_URGENT_KEYS or type(value) is not int \
+                or not (before is None or (type(before) is int and value > before)):
+            return False
+    return True
+
+
+def snapshot_published_age_s(now: float | None = None) -> float | None:
+    """Seconds since the published copy was last replaced (its mtime);
+    None when there is no published copy."""
+    try:
+        mtime = os.stat(os.path.join(SNAPSHOT_DIR, "ledger-snapshot.db")).st_mtime
+    except OSError:
+        return None
+    return max(0.0, (time.time() if now is None else now) - mtime)
+
+
+def _source_identity(db_path):
+    """(st_dev, st_ino) of the source ledger; None when it cannot be read."""
+    try:
+        info = os.stat(db_path)
+    except OSError:
+        return None
+    return [info.st_dev, info.st_ino]
+
+
+def _signature_value_valid(key, value) -> bool:
+    """One marker value in the type _content_signature gives that key. No bools and no
+    floats where an int belongs: True == 1 and 1.0 == 1 must never match a marker."""
+    if key == "":
+        return type(value) is int and value >= 0                   # schema_version
+    if key == "patients@content":
+        return type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+    if key == "requests@updated_at":
+        return (value is None or type(value) is int or type(value) is str
+                or type(value) is float and math.isfinite(value))
+    return value is None or type(value) is int and value >= 0       # a table's MAX(rowid)
+
+
+def _same_signature_shape(stored, current) -> bool:
+    """The stored failure signature has the current signature's keys and value types."""
+    return (isinstance(stored, dict) and stored.keys() == current.keys()
+            and all(_signature_value_valid(key, stored[key]) for key in stored))
+
+
+def _commands_retry_wait(prev: dict, sig, db_path: str, now: float):
+    """Seconds left before the commands worker may retry the publish that failed for
+    this same change, or None when no valid failure applies (state missing or
+    malformed, a future time, the source replaced, or a change that is more than
+    appended rows). Only a background retry of the same change waits."""
+    state = prev.get("commands_retry")
+    if (not isinstance(state, dict) or sig is None
+            or not _same_signature_shape(state.get("failed_sig"), sig)):
+        return None
+    failed_at, identity = state.get("failed_at"), state.get("source_identity")
+    if (type(failed_at) not in (int, float) or not math.isfinite(failed_at) or failed_at < 0
+            or not 0 <= now - failed_at < SNAPSHOT_MIN_INTERVAL_S
+            or not isinstance(identity, list) or len(identity) != 2
+            or any(type(part) is not int or part < 0 for part in identity)
+            or _source_identity(db_path) != identity
+            or not _rows_appended_only(state["failed_sig"], sig)):
+        return None
+    # rounded up to the millisecond: a deferral always reports a positive wait
+    return math.ceil((SNAPSHOT_MIN_INTERVAL_S - (now - failed_at)) * 1000) / 1000
+
+
+def _save_commands_retry(prev: dict, sig, identity, db_path: str, failed_at: float, lock_fd) -> None:
+    """Remember a failed commands publish of this change. The success marker
+    (sig, published_at) is kept as it is; nothing is written when the change,
+    the source or the publication fence cannot be confirmed."""
+    if (sig is None or identity is None or _source_identity(db_path) != identity
+            or not snapshots._verified_publication_lock(SNAPSHOT_DIR, lock_fd)):
+        return
+    kept = {key: prev[key] for key in ("sig", "published_at") if key in prev}
+    text = json.dumps({**kept, "commands_retry": {"failed_at": failed_at, "failed_sig": sig,
+                                                  "source_identity": identity}})
+    try:
+        os.makedirs(SNAPSHOT_DIR, mode=0o700, exist_ok=True)
+        atomic_write(_snapshot_sig_path(), lambda f: f.write(text), mode=0o600)
+    except OSError:
+        snapshots._status.failure.setdefault("retry_state", "retry_state_write_failed")
+
+
+def refresh_snapshot(db_path: str, *, force: bool = False, dirty: bool = False,
                      now: float | None = None,
                      deadline: float | None = None,
-                     verification_context=None) -> str | None:
+                     verification_context=None, commands_retry: bool = False) -> str | None:
     """Publish the read-only snapshot when it would differ (H4).
 
     Every tick used to copy and quick_check the whole ledger (144 full
-    copies a day). Now a publish happens when ``force`` (the notification
-    snapshot_dirty flag), the content marker moved since the last
-    publish, no published copy exists, or the copy is SNAPSHOT_MAX_AGE_S
-    old. That age triggers another attempt, not a freshness guarantee
-    when publication fails. Returns 'published',
-    'unchanged', or None when a needed publish failed. The marker is
-    taken BEFORE the copy: a write landing in between only makes the
-    next tick publish again."""
+    copies a day). Now a publish happens when ``force``, an urgent marker
+    key moved or any MAX(rowid) fell, no published copy or marker exists,
+    or the copy is SNAPSHOT_MAX_AGE_S old. A change that only appended
+    rows, or ``dirty`` (the notification snapshot_dirty flag: never
+    'unchanged'), publishes once SNAPSHOT_MIN_INTERVAL_S has passed since
+    the last publish and is 'deferred' before that. The ages trigger another attempt, not a
+    freshness guarantee when publication fails. Returns 'published',
+    'unchanged', 'deferred', or None when a needed publish failed. The
+    marker is taken BEFORE the copy: a write landing in between only
+    makes the next tick publish again.
+
+    ``commands_retry`` (the commands worker only): after its publish failed, a
+    background retry of the same change (rows only appended since that
+    attempt) waits SNAPSHOT_MIN_INTERVAL_S from the failure and returns
+    'retry_deferred' without copying; an urgent change, ``force`` and every
+    other caller publish as before."""
     snapshots._reset_status()
     total_started = time.perf_counter()
     if deadline is not None and monotonic() >= deadline:
@@ -815,15 +924,18 @@ def refresh_snapshot(db_path: str, *, force: bool = False,
     with snapshots._publication_lock(SNAPSHOT_DIR) as lock_fd:
         if lock_fd is None:
             return None
-        return _refresh_snapshot_locked(db_path, force=force, now=now, deadline=deadline,
+        return _refresh_snapshot_locked(db_path, force=force, dirty=dirty, now=now,
+                                        deadline=deadline,
                                         lock_fd=lock_fd, total_started=total_started,
-                                        verification_context=verification_context)
+                                        verification_context=verification_context,
+                                        commands_retry=commands_retry)
 
 
-def _refresh_snapshot_locked(db_path: str, *, force: bool, now, deadline, lock_fd, total_started,
-                             verification_context=None):
+def _refresh_snapshot_locked(db_path: str, *, force: bool, dirty: bool, now, deadline, lock_fd,
+                             total_started, verification_context=None, commands_retry=False):
     """Check freshness and save its marker under the same publication fence."""
-    now = time.time() if now is None else now
+    clock = time.time if now is None else (lambda: now)
+    now = clock()
     signature_started = time.perf_counter()
     try:
         sig = _content_signature(db_path, deadline=deadline)
@@ -836,15 +948,38 @@ def _refresh_snapshot_locked(db_path: str, *, force: bool, now, deadline, lock_f
     if deadline is not None and monotonic() >= deadline:
         snapshots._fail("signature_deadline")
         return None
-    if (not force and sig is not None and prev.get("sig") == sig
-            and _recent(prev.get("published_at"), now, SNAPSHOT_MAX_AGE_S)
-            and _plain_file(dest)):
+    skip = None
+    if not force and sig is not None and _plain_file(dest):
+        published_at = prev.get("published_at")
+        if (not dirty and prev.get("sig") == sig
+                and _recent(published_at, now, SNAPSHOT_MAX_AGE_S)):
+            skip = "unchanged"
+        elif (_recent(published_at, now, SNAPSHOT_MIN_INTERVAL_S)
+              and _rows_appended_only(prev.get("sig"), sig)):
+            skip = "deferred"   # the marker stays: the wait counts from the last publish
+    if skip is not None:
         if deadline is not None and monotonic() >= deadline:
             snapshots._fail("signature_deadline")
             return None
-        return "unchanged"
+        return skip
+    identity = _source_identity(db_path) if commands_retry else None
+    # A stored failure that is not used for waiting is reported, never treated as proof.
+    retry_note = None
+    if commands_retry and not force:
+        wait = _commands_retry_wait(prev, sig, db_path, now)
+        if wait is None and "commands_retry" in prev:
+            retry_note = "retry_state_not_applied"
+        if wait is not None:
+            snapshots._record_timing(retry_reason="snapshot_retry_cooldown", retry_after_s=wait,
+                                     signature_s=round(signature_s, 3),
+                                     total_s=round(time.perf_counter() - total_started, 3))
+            return "retry_deferred"
     if not publish_snapshot(db_path, deadline=deadline, _lock_fd=lock_fd,
                             verification_context=verification_context):
+        if commands_retry:
+            if retry_note is not None:
+                snapshots._status.failure.setdefault("retry_state", retry_note)
+            _save_commands_retry(prev, sig, identity, db_path, clock(), lock_fd)
         return None
     marker_started = time.perf_counter()
     marker_state = "unavailable"
@@ -860,6 +995,10 @@ def _refresh_snapshot_locked(db_path: str, *, force: bool, now, deadline, lock_f
             pass  # Publication succeeded; its optional reuse marker did not.
         else:
             marker_state = "saved"
+    if marker_state != "saved" and "commands_retry" in prev:
+        retry_note = "retry_state_not_cleared"   # the old failure record stays until it expires
+    if retry_note is not None:
+        snapshots._record_timing(retry_state=retry_note)
     snapshots._record_timing(signature_s=round(signature_s, 3),
                              marker_s=round(time.perf_counter() - marker_started, 3),
                              marker_state=marker_state,

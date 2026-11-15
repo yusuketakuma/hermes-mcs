@@ -36,6 +36,12 @@ _RUNTIME_ERROR_CODES = frozenset({
     "patient_summary_transaction_active", "patient_context_source_transaction_required",
     "patient_context_read_changed", "patient_summary_snapshot_required",
 })
+# CloudFallback carries one of these fixed codes (never provider text).
+_CLOUD_FALLBACK_CODES = frozenset({
+    "cloud_profile_invalid", "cloud_unit_changed", "cloud_repair_invalid", "cloud_send_blocked",
+    "cloud_unit_failed", "cloud_incomplete_response", "cloud_invalid_response",
+    "cloud_owner_stopped", "cloud_validation_failed", "cloud_local_context_unavailable",
+})
 _SQLITE_ERROR_PRIMARY = frozenset({
     "SQLITE_ERROR", "SQLITE_INTERNAL", "SQLITE_PERM", "SQLITE_ABORT", "SQLITE_BUSY",
     "SQLITE_LOCKED", "SQLITE_NOMEM", "SQLITE_READONLY", "SQLITE_INTERRUPT", "SQLITE_IOERR",
@@ -54,6 +60,9 @@ def _exception_observation(error):
     record = {"class": type(error).__name__}
     if (type(error) is RuntimeError and len(error.args) == 1
             and type(error.args[0]) is str and error.args[0] in _RUNTIME_ERROR_CODES):
+        record["error_code"] = error.args[0]
+    elif (type(error).__name__ == "CloudFallback" and len(error.args) == 1
+            and type(error.args[0]) is str and error.args[0] in _CLOUD_FALLBACK_CODES):
         record["error_code"] = error.args[0]
     elif isinstance(error, sqlite3.Error):
         try:
@@ -205,11 +214,16 @@ class CloudBacklogPool:
         self.indices = {}
         self.lock = None
         self.last_sync = 0.0
+        # The context pool's owner also keeps the stored-message workers of a
+        # bounded reopening: they spawn only while that window is open.
+        self.backlog = CloudBacklogPool(root) if context_only else None
 
     def sync(self, cfg, *, ledger=None):
         import cloud_inference
         import cloud_policy
         import extract_llm
+        if self.backlog is not None:
+            self.backlog.sync(cfg, ledger=ledger)
         now = time.monotonic()
         if now - self.last_sync < 10:
             return
@@ -227,13 +241,16 @@ class CloudBacklogPool:
             # Cloud availability is decided inside run_due. A missing key or
             # a spend hold must not hide its existing local fallback/recovery.
         else:
-            if not (cloud_policy.send_route("reextract") and cloud_policy.send_route("semantic_backlog")):
+            extract_open = cloud_policy.reextract_planned(settings)
+            semantic_open = ("semantic_backlog" in settings["routes"]
+                             and cloud_policy.semantic_backlog_window(settings))
+            if not (extract_open or semantic_open):
                 # Existing workers settle paid carry before retiring.
                 return
             if not cloud_policy.selected_key(self.root):
                 return
             selection, errors = cloud_policy.resolve_profile(
-                cfg, route="reextract", purpose="backlog", root=self.root)
+                cfg, route="reextract" if extract_open else "semantic_backlog", purpose="backlog", root=self.root)
             if errors or selection is None:
                 return
             limit = selection["max_tokens"] if selection["max_tokens"] is not None else extract_llm.MAX_TOKENS
@@ -263,11 +280,13 @@ class CloudBacklogPool:
                  sys.executable, str(Path(__file__).resolve()), "--parent", str(os.getpid()),
                  "--index", str(index), *(["--context-only"] if self.context_only else [])],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                close_fds=True)
+                close_fds=True, env={**os.environ, cloud_policy.BACKLOG_WORKER_ENV: "0" if self.context_only else "1"})
             self.children.append(child)
             self.indices[child] = index
 
     def close(self):
+        if self.backlog is not None:
+            self.backlog.close()
         for child in self.children:
             if child.poll() is None:
                 child.terminate()
@@ -307,8 +326,10 @@ _DEFER_REASONS = {"deadline", "probe_unobserved", "admission", "endpoint_down",
                   "prepare_deadline", "prepare_source_changed", "prepare_cloud_disabled",
                   "prepare_profile_unavailable", "prepare_medication_changed",
                   "prepare_context_invalid", "prepare_database_unavailable", "other",
+                  "prepare_context_load_superseded",
                   "cloud_capacity", "cloud_profile_unavailable", "cloud_source_unverified",
-                  "cloud_target_unverified", "audit_pending", "loops_incomplete"}
+                  "cloud_target_unverified", "audit_pending", "loops_incomplete",
+                  "local_rebuild_proof_changed", "local_rebuild_unverified"}
 # Semantic gates emit only these branch labels; no provider text or source id.
 _SEMANTIC_STOP_REASONS = frozenset({
     "fact_stage_incomplete", "fact_stage_retryable", "fact_stage_hard_fail",
@@ -350,9 +371,15 @@ _DEFER_REASONS.update(_COMMIT_REJECTION_CODES)
 # Defer reasons that keep a bounded claim instead of re-heading the queue:
 # the unit's evidence cannot be proven this pass — an unverifiable head
 # must not starve the tail under a limited claim window.
+# CloudFallback's fixed codes, observed per pass apart from the defer reasons ("other" otherwise).
+_FALLBACK_CODES = frozenset({
+    "cloud_incomplete_response", "cloud_invalid_response", "cloud_owner_stopped", "cloud_validation_failed",
+    "cloud_local_context_unavailable", "cloud_profile_invalid", "cloud_unit_changed", "cloud_repair_invalid",
+    "cloud_send_blocked", "cloud_unit_failed", "other"})
+
 _HOLD_DEFER_REASONS = frozenset(
     {"cloud_unit_unresolved", "cloud_source_unverified", "currentness_unverified",
-     "prepare_profile_unavailable"})
+     "prepare_profile_unavailable", "local_rebuild_proof_changed", "local_rebuild_unverified"})
 
 
 def worker(parent, *, index=None, context_only=False):
@@ -442,8 +469,10 @@ def worker(parent, *, index=None, context_only=False):
                     wait("provider_settings_unreadable")
                     continue
                 settings = cloud_inference.resolve_cloud_settings(cfg)
-                routes_open = (cloud_policy.send_route("reextract")
-                               and cloud_policy.send_route("semantic_backlog"))
+                extract_open = cloud_policy.reextract_planned(settings)
+                semantic_open = ("semantic_backlog" in settings["routes"]
+                                 and cloud_policy.route_open("semantic_backlog", settings))
+                routes_open = extract_open or semantic_open
                 if index is not None:
                     retire = (settings["mode"] != "on" or not routes_open
                               or index >= settings["max_concurrency"])
@@ -457,8 +486,10 @@ def worker(parent, *, index=None, context_only=False):
                             else "cloud_route_closed" if not routes_open
                             else "capacity_reduced"))
                         return
+                if routes_open and not (semantic_open if phase % 2 else extract_open):
+                    phase += 1
                 selection, errors = cloud_policy.resolve_profile(
-                    cfg, route="reextract", purpose="backlog")
+                    cfg, route="semantic_backlog" if phase % 2 else "reextract", purpose="backlog")
                 limit = (selection["max_tokens"] if selection is not None and selection["max_tokens"] is not None
                          else extract_llm.MAX_TOKENS)
                 if settings["mode"] != "on":
@@ -483,7 +514,9 @@ def worker(parent, *, index=None, context_only=False):
                         with _phase_progress("extract"):
                             result = None
                             try_ocr, ocr_turn = ocr_turn, not ocr_turn
-                            if (try_ocr and not carry and isinstance(cfg.get('attachment_ocr'), dict)
+                            # attachment pages never reopen with the stored-message backlog
+                            if (try_ocr and not carry and cloud_policy.send_route("reextract")
+                                    and isinstance(cfg.get('attachment_ocr'), dict)
                                     and cfg['attachment_ocr'].get('enabled') is True):
                                 import attachment_inference
                                 ocr = attachment_inference.run_pending(ledger, cfg, stage='cloud',
@@ -557,6 +590,21 @@ def worker(parent, *, index=None, context_only=False):
                         if sum(reasons.values()) != total:
                             reasons = {"unclassified": total}
                         record["defer_reasons"] = reasons
+                    codes = result.get("fallback_codes")
+                    codes = ({key: count for key, count in codes.items()
+                              if key in _FALLBACK_CODES and type(count) is int and count > 0}
+                             if isinstance(codes, dict) else {})
+                    if codes:
+                        record["fallback_codes"] = codes
+                    refilled = result.get("refilled")
+                    if type(refilled) is int and 0 <= refilled <= 64:   # the extract pass's finite lookahead
+                        record["refilled"] = refilled
+                    if result.get("refill_stopped") is True:
+                        # a failed replacement preparation stopped refilling: never silent
+                        code = result.get("refill_stop_error")
+                        record["refill_stopped"] = True
+                        record["refill_stop_error"] = (code if type(code) is str and code in _REFILL_STOP_CODES
+                                                        else "unclassified")
                     if type(result.get("disk_low")) is bool:
                         record["disk_low"] = result["disk_low"]
                     calls = result.get("llm_calls")
@@ -632,6 +680,10 @@ _SCAN_REFUSALS = frozenset({
 })
 
 
+_REFILL_STOP_CODES = frozenset({"sqlite_error", "os_error", "value_error", "type_error", "key_error",
+                                "runtime_error", "other"})
+
+
 def _bounded_pass_code(value):
     """Identifier-shaped failure identity only; free text never qualifies."""
     return (type(value) is str and value.isascii() and value.isidentifier()
@@ -662,6 +714,14 @@ def _context_pass_observation(result):
     lane = result.get("lane")
     if type(lane) is str and lane in ("A", "B", "C"):
         record["lane"] = lane
+    # Save-stage detail: seconds spent waiting for the run lock (the wait
+    # stops at 60) and the fixed code of a guard refusal.
+    wait = result.get("lock_wait_s")
+    if type(wait) is int and 0 < wait <= 60:
+        record["lock_wait_s"] = wait
+    guard = result.get("guard_error")
+    if guard is not None:
+        record["guard_error"] = guard if _bounded_pass_code(guard) else "unclassified"
     refusal = result.get("scan_refusal")
     if refusal is not None:
         record["scan_refusal"] = refusal if type(refusal) is str and refusal in _SCAN_REFUSALS else "unclassified"

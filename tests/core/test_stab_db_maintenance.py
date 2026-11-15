@@ -122,14 +122,120 @@ def test_snapshot_publishes_only_on_change_dirty_or_age(tmp_path, snapdir):
     db.finish_run(db.begin_run(None), "ok")
     assert maintenance.refresh_snapshot(path) == "unchanged"
     assert (snapdir / "ledger-snapshot.db").stat().st_ino == first
+    # RC4: appended rows wait out the interval, then publish
     db.save_messages([_message(2)])
-    assert maintenance.refresh_snapshot(path) == "published"
+    assert maintenance.refresh_snapshot(path) == "deferred"
+    assert (snapdir / "ledger-snapshot.db").stat().st_ino == first
+    interval = time.time() + maintenance.SNAPSHOT_MIN_INTERVAL_S + 1
+    assert maintenance.refresh_snapshot(path, now=interval) == "published"
     assert maintenance.refresh_snapshot(path, force=True) == "published"
     later = time.time() + maintenance.SNAPSHOT_MAX_AGE_S + 1
     assert maintenance.refresh_snapshot(path, now=later) == "published"
     (snapdir / "ledger-snapshot.db").unlink()
     assert maintenance.refresh_snapshot(path, now=later) == "published"
     db.close()
+
+
+def test_dirty_flag_waits_out_the_interval_unless_urgent(tmp_path, snapdir):
+    db = _ledger(tmp_path)
+    path = str(tmp_path / "ledger.db")
+    db.save_messages([_message(1)])
+    now = time.time()
+    assert maintenance.refresh_snapshot(path, now=now) == "published"
+    copy = snapdir / "ledger-snapshot.db"
+    first = copy.stat().st_ino
+    # a background mark (extraction refresh, OCR, card redraw) never reads
+    # as 'unchanged', but waits like an append-only change
+    assert maintenance.refresh_snapshot(path, dirty=True, now=now + 1) == "deferred"
+    db.save_messages([_message(2)])
+    assert maintenance.refresh_snapshot(path, dirty=True, now=now + 2) == "deferred"
+    assert copy.stat().st_ino == first
+    later = now + maintenance.SNAPSHOT_MIN_INTERVAL_S + 1
+    assert maintenance.refresh_snapshot(path, dirty=True, now=later) == "published"
+    second = copy.stat().st_ino
+    assert second != first
+    assert maintenance.refresh_snapshot(path, dirty=True, now=later + 1) == "deferred"
+    # a human operation writes a command receipt: publish without the wait
+    with db.db:
+        db.db.execute("INSERT INTO command_receipts VALUES('c1','h',1,NULL,'applied','{}',?)",
+                      (later,))
+    assert maintenance.refresh_snapshot(path, dirty=True, now=later + 2) == "published"
+    assert maintenance.refresh_snapshot(path, force=True, now=later + 3) == "published"
+    # an unreadable last-publish record publishes right away
+    os.unlink(maintenance._snapshot_sig_path())
+    assert maintenance.refresh_snapshot(path, dirty=True, now=later + 4) == "published"
+    db.close()
+
+
+@pytest.mark.parametrize("change", ["patient", "request", "receipt", "schema",
+                                    "rowid_fell", "new_table"])
+def test_urgent_snapshot_changes_skip_the_interval(tmp_path, snapdir, change):
+    db = _ledger(tmp_path)
+    path = str(tmp_path / "ledger.db")
+    db.save_messages([_message(1)])
+    with db.db:
+        db.db.execute("CREATE TABLE synthetic_rows(x)")
+        db.db.execute("INSERT INTO synthetic_rows VALUES(1),(2)")
+    now = time.time()
+    assert maintenance.refresh_snapshot(path, now=now) == "published"
+    first = (snapdir / "ledger-snapshot.db").stat().st_ino
+    db.save_messages([_message(2)])     # an append alone would wait
+    with db.db:
+        if change == "patient":
+            db.db.execute("INSERT INTO patients(project_id,patient_name) VALUES(77,'合成 太郎')")
+        elif change == "request":
+            db.db.execute("INSERT INTO requests(project_id,source_message_id,source_hash,title,"
+                          "status,revision,created_at,updated_at) "
+                          "VALUES(1,1,'h','合成の依頼','open',1,?,?)", (now, now))
+        elif change == "receipt":
+            db.db.execute("INSERT INTO command_receipts VALUES('c1','h',1,NULL,'applied','{}',?)",
+                          (now,))
+        elif change == "schema":
+            db.db.execute("CREATE INDEX synthetic_idx ON synthetic_rows(x)")
+        elif change == "rowid_fell":
+            db.db.execute("DELETE FROM synthetic_rows WHERE rowid=2")
+        else:
+            db.db.execute("CREATE TABLE synthetic_extra(x)")
+    assert maintenance.refresh_snapshot(path, now=now + 1) == "published"
+    assert (snapdir / "ledger-snapshot.db").stat().st_ino != first
+    db.close()
+
+
+def test_appended_rows_publish_without_a_usable_marker(tmp_path, snapdir):
+    db = _ledger(tmp_path)
+    path = str(tmp_path / "ledger.db")
+    db.save_messages([_message(1)])
+    now = time.time()
+    assert maintenance.refresh_snapshot(path, now=now) == "published"
+    db.save_messages([_message(2)])
+    # a clock that went back is not "recent": publish toward fresh
+    assert maintenance.refresh_snapshot(path, now=now - 10) == "published"
+    db.save_messages([_message(3)])
+    (snapdir / maintenance.SNAPSHOT_SIG_NAME).unlink()
+    assert maintenance.refresh_snapshot(path, now=now) == "published"
+    db.close()
+
+
+def test_rows_appended_only_rules():
+    old = {"": 5, "messages": 3, "jobs": None, "patients@content": "a"}
+    assert maintenance._rows_appended_only(old, {**old, "messages": 4, "jobs": 1})
+    assert not maintenance._rows_appended_only(old, {**old, "messages": 2})
+    assert not maintenance._rows_appended_only(old, {**old, "messages": None})
+    assert not maintenance._rows_appended_only(old, {**old, "patients@content": "b"})
+    assert not maintenance._rows_appended_only(old, {**old, "": 6})
+    assert not maintenance._rows_appended_only(old, {**old, "extra": 1})
+    assert not maintenance._rows_appended_only(None, old)
+    assert not maintenance._rows_appended_only({**old, "messages": True}, {**old, "messages": 4})
+
+
+def test_published_age_reads_the_copy_mtime(tmp_path, snapdir):
+    assert maintenance.snapshot_published_age_s() is None
+    snapdir.mkdir()
+    copy = snapdir / "ledger-snapshot.db"
+    copy.write_bytes(b"")
+    os.utime(copy, (1000.0, 1000.0))
+    assert maintenance.snapshot_published_age_s(now=1600.0) == 600.0
+    assert maintenance.snapshot_published_age_s(now=900.0) == 0.0
 
 
 def test_snapshot_failed_publish_is_reported(tmp_path, snapdir, monkeypatch):

@@ -378,7 +378,18 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
     marker = notify_spool.restore_pending(root) or {}
     if marker.get("unreadable"):
         raise ValueError("restore_marker_unreadable")
-    if marker.get("phase") == "awaiting_consent":
+    consent = marker.get("phase") == "awaiting_consent"
+    # Every restore path reaches the senders through this reconcile, and the
+    # paid-request records rewound with the deliveries: cloud sends stop here
+    # too, before the marker can be cleared. An adopted backup keeps its
+    # consent marker for good while its writers run, so it is paused by "at".
+    # A reconcile_incomplete marker is this module's own, not a restore.
+    if ("restored_at" in marker and marker.get("by") != "reconcile_incomplete"
+            or consent and notify_spool.restore_awaiting_consent(root) is None):
+        import cloud_policy
+        with db:
+            cloud_policy.pause_for_restore(db, marker.get("restored_at", marker.get("at")), cfg, now)
+    if consent:
         # Consent-hold marker: no swap has happened, so there is nothing
         # to reconcile — and clearing it here would silently drop the
         # sender hold the consent gate relies on.

@@ -12,6 +12,7 @@ import time
 
 import anthropic_client
 import openai_client
+import provider_registry
 import bounded_http
 import cloud_backlog
 import cloud_client
@@ -25,9 +26,24 @@ _HISTORY_ERROR_REASONS = frozenset({
     "cloud_result_missing", "cloud_result_discarded", "cloud_result_unsettled",
     "cloud_receipt_invalid", "cloud_answer_invalid", "cloud_answer_unresolved",
 })
+_HISTORY_CLOUD_KINDS = frozenset({"budget_exceeded", "pricing_unverified", "contract_error"})
+_HISTORY_CLOUD_REASONS = frozenset({
+    "cloud_unit_unresolved", "cloud_profile_invalid", "model_not_allowed",
+    "openai_price_contract_invalid", "input_binding_invalid", "window_tally_invalid",
+    "pricing_unverified", "usage_invalid", "duplicate_reservation", "result_invalid",
+})
+_HISTORY_COMPARISONS = frozenset({'same', 'different', 'stored_absent', 'current_absent', 'unknown'})
+_HISTORY_OBSERVATIONS = {
+    **{key + '_cmp': _HISTORY_COMPARISONS for key in (
+        'unit_key', 'binding', 'request_fp', 'model', 'effort', 'profile', 'max_tokens')},
+    'guard_match': frozenset({'logical_equal', 'legacy_low_verified', 'legacy_unproven'}),
+    'primary_reason': frozenset({'recovery_not_requested', 'unit_key_mismatch', 'stored_binding_missing',
+        'input_binding_mismatch', 'request_envelope_mismatch', 'exact_keys_same_unexplained', 'observation_unknown'}),
+    'recovery_path': frozenset({'skipped_binding', 'no_exact_rows', 'confirmed_rejection_only', 'unknown'}),
+}
 
 
-def _history_read_error(phase, error):
+def _history_read_error(phase, error, *, observation=None):
     try:
         if type(phase) is not str or phase not in ("recover_response", "request_send_block_reason"):
             return
@@ -36,6 +52,22 @@ def _history_read_error(phase, error):
             (TypeError, "type_error"), (KeyError, "key_error"),
             (cloud_client.CloudError, "cloud_error")) if isinstance(error, cls)), "read_error")
         values = {"phase": phase, "error_category": category}
+        if isinstance(error, cloud_client.CloudError):
+            for field, value, allowed in (
+                    ("error_kind", error.kind, _HISTORY_CLOUD_KINDS),
+                    ("error_reason", error.detail, _HISTORY_CLOUD_REASONS)):
+                values[field] = value if type(value) is str and value in allowed else "unknown"
+            refusal = getattr(error, "history_refusal", None)
+            if refusal is not None:
+                values["history_refusal"] = (refusal if type(refusal) is str
+                                             and refusal in cloud_policy.HISTORY_REFUSALS else "unknown")
+            compared = getattr(error, 'history_observation', None)
+            if phase == 'request_send_block_reason' and type(compared) is dict:
+                for key, allowed in _HISTORY_OBSERVATIONS.items():
+                    source = observation if key == 'recovery_path' and type(observation) is dict else compared
+                    value = source.get(key)
+                    values[key] = (value if type(value) is str and value in allowed else
+                                   'observation_unknown' if key == 'primary_reason' else 'unknown')
         if isinstance(error, ValueError):
             reason = error.args[0] if type(error) is ValueError and len(error.args) == 1 else None
             values["error_reason"] = (reason if type(reason) is str
@@ -71,6 +103,22 @@ def _current_cloud_settings():
         raise
     except Exception:
         raise CloudObservationIncomplete("cloud_config_unverified") from None
+
+
+_RESULT_SAVE_TRIES = 5
+
+
+def _save_result(save):
+    """Wait out a busy writer: until this write lands, the answer already paid
+    for exists only in memory, and giving up leaves the unit unresolved for good.
+    Each try already waits the connection's busy timeout; saving is idempotent."""
+    for attempt in range(_RESULT_SAVE_TRIES):
+        try:
+            return save()
+        except sqlite3.OperationalError as error:
+            busy = getattr(error, "sqlite_errorcode", 0) & 0xff in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+            if not busy or attempt == _RESULT_SAVE_TRIES - 1:
+                raise
 
 
 class CloudInferenceUnit:
@@ -110,6 +158,11 @@ class CloudInferenceUnit:
         self.route, self.project_id, self.unit_key = route, project_id, unit_key
         self._possibly_sent = False
         self._unresolved = False
+        # Monotonic in-memory observations for a same-pass replacement: a verified
+        # repeat refusal, and whether any effectful step (recovered answer used,
+        # request slot / reservation / HTTP entered) ever began. Never reset.
+        self._verified_repeat = False
+        self._effect_started = False
         self.discard_reason = discard_reason
         self.ledger = ledger
         self.deadline = deadline
@@ -195,6 +248,7 @@ class CloudInferenceUnit:
                 child.commit_guard()
         self.commit_guard = commit_guard
         def spawn_quality_repair():
+            self._effect_started = True   # a started repair is work, even before its child sends
             if route != "reextract" or purpose != "backlog":
                 raise CloudFallback("cloud_repair_invalid")
             child = CloudInferenceUnit(ledger, raw_cfg, route=route, project_id=project_id,
@@ -207,6 +261,7 @@ class CloudInferenceUnit:
             return child
         self.spawn_quality_repair = spawn_quality_repair
         def reserve(body, timeout):
+            self._effect_started = True   # before anything can commit and then fail to return
             # every new attempt (retry, repair, next chunk) is judged against the
             # budget in force now, not the one the unit started under
             try:
@@ -242,8 +297,8 @@ class CloudInferenceUnit:
                     outcome = {**metadata, "disposition": self.final_disposition}
                 else:
                     outcome = dict(metadata)
-                value = cloud_policy.record_result(ledger, reservation, outcome,
-                    **({"answer": answer} if answer is not None else {}))
+                value = _save_result(lambda: cloud_policy.record_result(ledger, reservation, outcome,
+                    **({"answer": answer} if answer is not None else {})))
                 if isinstance(metadata.get('http_class'), str) and re.fullmatch(r'http_[1-5][0-9]{2}', metadata['http_class']):
                     self._unresolved = False
                 self.completed_reservations.append(reservation)
@@ -257,11 +312,10 @@ class CloudInferenceUnit:
             client_args["post_fn"] = lambda body, timeout: transport(
                 self.client.request, "POST", body, timeout, deadline=self.deadline)
             client_args["wait_fn"] = lambda delay: transport(time.sleep, delay)
-        if resolved["provider"] == "openai":
-            client = openai_client.OpenAIClient
+        client = provider_registry.PROVIDER_MODULES[resolved["provider"]].client_class()
+        if resolved["provider"] == "openai" or resolved["effort"] is not None:
+            # The original Haiku contract keeps its unchanged constructor call.
             client_args.update(model=self.model, effort=resolved["effort"])
-        else:
-            client = anthropic_client.AnthropicClient
         self.client = client(key, **client_args)
 
     def discard(self):
@@ -296,7 +350,20 @@ class CloudInferenceUnit:
         """Keep ambiguous sends closed across local fallback and child repair calls."""
         return self._unresolved or any(child.unresolved for child in self._children)
 
+    @property
+    def effect_started(self):
+        return self._effect_started or any(child.effect_started for child in self._children)
+
+    @property
+    def replacement_eligible(self):
+        """This whole unit (every chunk and repair child) only met the guard's verified
+        refusal of an already settled same request and never began new work, so a
+        same-pass runner may give its slot to the next candidate. Grants no resend."""
+        return self._verified_repeat and not self.effect_started
+
     def __call__(self, prompt, *, deadline, max_tokens, **unused):
+        observation = ({'recovery_path': 'unknown'}
+                       if self.route == 'reextract' and self.message_id is not None else None)
         try:
             http_deadline = min(self.deadline, deadline) - COMMIT_MARGIN
             if time.monotonic() >= http_deadline:
@@ -307,6 +374,7 @@ class CloudInferenceUnit:
             tokens = max_tokens if selected_tokens is None else selected_tokens
             def recover():
                 if self.input_binding is None:
+                    cloud_policy._observe_recovery(observation, 'skipped_binding')
                     return None
                 self.commit_guard()
                 try:
@@ -314,7 +382,8 @@ class CloudInferenceUnit:
                         project_id=self.project_id, message_id=self.message_id, unit_key=self.unit_key,
                         input_binding=self._input_binding(),
                         request_fp=mcs_util.payload_hash(self.client.body(prompt, tokens, prefix)),
-                        owner=self.owner, scope=self.scope)
+                        owner=self.owner, scope=self.scope,
+                        **({'observation': observation} if observation is not None else {}))
                 except cloud_client.CloudNotSent:
                     raise
                 except (ValueError, TypeError, KeyError, sqlite3.Error, cloud_client.CloudError) as error:
@@ -325,6 +394,7 @@ class CloudInferenceUnit:
                     raise cloud_client.CloudNotSent("budget_exceeded", "cloud_unit_unresolved") from None
             saved = self.dispatch(recover, result=True)
             if saved is not None:
+                self._effect_started = True   # a recovered paid answer is used
                 evidence, answer = saved
                 answer["reused_response"] = True
                 self.possibly_sent = True
@@ -345,14 +415,17 @@ class CloudInferenceUnit:
                             unit_key=self.unit_key, owner=self.owner, selection=self.selection,
                             input_binding=self._input_binding())
                     except (ValueError, TypeError, KeyError, sqlite3.Error, cloud_client.CloudError) as error:
-                        _history_read_error("request_send_block_reason", error)
+                        _history_read_error("request_send_block_reason", error, observation=observation)
                         self.possibly_sent = True
+                        if getattr(error, "verified_repeat", False) is True:
+                            self._verified_repeat = True
                         raise cloud_client.CloudNotSent("budget_exceeded", "cloud_unit_unresolved") from None
                 if self.dispatch(send_block_reason, result=True):
                     # Only a history-checked fresh request may use caller local fallback.
                     self.commit_guard()
                     raise CloudFallback("cloud_send_blocked")
                 capacity = _current_cloud_settings()["max_concurrency"]
+                self._effect_started = True   # admission to new request work
                 with cloud_backlog.request_slot(HOME, capacity) as held:
                     if not held:
                         raise CloudBusy("cloud_capacity")
@@ -377,6 +450,10 @@ class CloudInferenceUnit:
 
 
 
+def _client_class(selection):
+    return provider_registry.PROVIDER_MODULES[selection['provider']].client_class()
+
+
 def guard_context_local(ledger, cfg, prompt, *, project_id, message_id, unit_key, owner):
     """Check patient-context paid history using the existing pure wire-body builders."""
     def request():
@@ -387,11 +464,8 @@ def guard_context_local(ledger, cfg, prompt, *, project_id, message_id, unit_key
         if errors or selection is None:
             raise cloud_client.CloudError('budget_exceeded', 'cloud_unit_unresolved')
         tokens = selection['max_tokens'] if selection['max_tokens'] is not None else 1600
-        if selection['provider'] == 'openai':
-            body = openai_client.OpenAIClient.body(
-                SimpleNamespace(model=selection['model'], effort=selection['effort']), prompt, tokens, None)
-        else:
-            body = anthropic_client.AnthropicClient.body(None, prompt, tokens, None)
+        body = _client_class(selection).body(
+            SimpleNamespace(model=selection['model'], effort=selection['effort']), prompt, tokens, None)
         candidate = cloud_policy._request_identity(settings, body, route='patient_context',
             project_id=project_id, message_id=message_id, unit_key=unit_key,
             owner=owner, selection=selection, input_binding=None)
@@ -421,13 +495,9 @@ def guard_reextract_local(ledger, cfg, prompt, *, project_id, message_id, unit_k
         if errors or selection is None:
             raise cloud_client.CloudError('budget_exceeded', 'cloud_unit_unresolved')
         tokens = selection['max_tokens'] if selection['max_tokens'] is not None else 1600
-        if selection['provider'] == 'openai':
-            from types import SimpleNamespace
-            body = openai_client.OpenAIClient.body(
-                SimpleNamespace(model=selection['model'], effort=selection['effort']),
-                prompt, tokens, None)
-        else:
-            body = anthropic_client.AnthropicClient.body(None, prompt, tokens, None)
+        from types import SimpleNamespace
+        body = _client_class(selection).body(
+            SimpleNamespace(model=selection['model'], effort=selection['effort']), prompt, tokens, None)
         candidate = cloud_policy._request_identity(
             settings, body, route='reextract', project_id=project_id,
             message_id=message_id, unit_key=unit_key, owner=owner,
@@ -456,8 +526,7 @@ def resolve_cloud_settings(cfg):
 # versions live in each caller's own contract (EXTRACT_VERSION, the context
 # CONTRACT/plan/rule), so a rule change rebuilds every patient while code
 # releases that leave the rules alone do not re-send or hide results.
-_CLOUD_CONTRACT = {"backend": "anthropic", "model": anthropic_client.MODEL,
-                   "prompt": mcs_util.payload_hash({"system": anthropic_client.SYSTEM, "effort": "low"})[:16]}
+_CLOUD_CONTRACT = anthropic_client.provider_contract(*anthropic_client.ORIGINAL_CONTRACT)
 
 
 def cloud_provider_contract(cfg=None, *, route="reextract", purpose="backlog", selection=None):
@@ -466,24 +535,18 @@ def cloud_provider_contract(cfg=None, *, route="reextract", purpose="backlog", s
         selection, errors = cloud_policy.resolve_profile(cfg, route=route, purpose=purpose, root=HOME)
         if errors or selection is None:
             raise CloudFallback("cloud_profile_invalid")
-    if selection["provider"] == "openai":
-        if (selection["model"], selection["effort"]) not in openai_client.VALID_MODEL_EFFORTS:
-            raise CloudFallback("cloud_profile_invalid")
-        return {"backend": "openai", "model": selection["model"],
-                "prompt": mcs_util.payload_hash({"system": anthropic_client.SYSTEM, "effort": selection["effort"],
-                                               "service_tier": "default", "cache_ttl": "30m"})[:16]}
-    if selection["provider"] != "anthropic" or selection["model"] != anthropic_client.MODEL:
+    module = provider_registry.provider_module(selection["provider"])
+    if module is None or (selection["model"], selection.get("effort")) not in module.VALID_MODEL_EFFORTS:
         raise CloudFallback("cloud_profile_invalid")
-    return dict(_CLOUD_CONTRACT)
+    return module.provider_contract(selection["model"], selection.get("effort"))
 
 
 def supported_cloud_contracts(model=None):
     """Enumerate the existing finite provider contracts, optionally for one model."""
-    contracts = [dict(_CLOUD_CONTRACT)] if model in (None, _CLOUD_CONTRACT["model"]) else []
-    contracts.extend(cloud_provider_contract(selection={"provider": "openai", "model": selected, "effort": effort})
-                     for selected, effort in sorted(openai_client.VALID_MODEL_EFFORTS)
-                     if model is None or selected == model)
-    return tuple(contracts)
+    return tuple(module.provider_contract(selected, effort)
+                 for module in provider_registry.PROVIDER_MODULES.values()
+                 for selected, effort in sorted(module.VALID_MODEL_EFFORTS, key=lambda pair: (pair[0], pair[1] or ""))
+                 if model is None or selected == model)
 
 
 def is_supported_cloud_contract(contract):
@@ -518,10 +581,11 @@ def verify_cloud_repair_evidence(db, *, reservation_artifact_id, reservation_id,
                 or cloud_provider_contract(selection=selected) != contract
                 or selected["provider"] == "openai" and profile is not None
                 and openai_client.PROFILE_DEFINITIONS.get(profile) != (selected["model"], selected["effort"])
-                or selected["provider"] == "openai" and profile is not None
+                or selected["provider"] == "anthropic" and not cloud_policy.profile_contract_valid(
+                    "anthropic", selected["model"], selected["effort"], profile, reservation["max_tokens"])
+                or profile is not None
                 and reservation["max_tokens"] != {"backlog": 8192, "patient_context": 16384,
                                                    "quality_repair": 32768}[purpose]
-                or selected["provider"] == "anthropic" and profile is not None
                 or result.get("answer_text_sha256_v1") != hashlib.sha256(encoded).hexdigest()
                 or result.get("answer_finish_reason_v1") != finish_reason):
             raise ValueError("cloud_repair_evidence_invalid")

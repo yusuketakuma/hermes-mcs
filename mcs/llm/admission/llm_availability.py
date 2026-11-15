@@ -44,7 +44,10 @@ def circuit_open_s(db) -> float:
     corrupt state file fails closed-open — it never blocks the lane."""
     # A negative stamp reads as unknown here and as already past before: 0 either way.
     until = _finite_ts(_circuit_state(db).get("open_until"))
-    return 0.0 if until is None else max(0.0, until - time.time())
+    remaining = 0.0 if until is None else until - time.time()
+    # No cooldown is ever written longer than _CIRCUIT_MAX_S: a longer one is a
+    # stepped-back clock or a damaged file, and no call would run to clear it.
+    return remaining if 0.0 < remaining <= _CIRCUIT_MAX_S else 0.0
 
 
 @contextmanager
@@ -111,9 +114,10 @@ def llm_down_for_s(db, now: float | None = None) -> float | None:
     """Seconds the endpoint has been observed down with no answered call
     since; None when it is not currently observed down."""
     since = llm_down_since(db)
-    if since is None:
+    now = time.time() if now is None else now
+    if since is None or since > now:    # a future stamp is unknown, never "down for 0 s"
         return None
-    return max(0.0, (time.time() if now is None else now) - since)
+    return now - since
 
 
 def _health_write(path, state: dict) -> None:
@@ -133,9 +137,10 @@ def _mark_llm_success(db) -> None:
 
 def _mark_llm_down(db) -> None:
     current = llm_health(db)
-    if current["down_since"] is not None:
+    now = time.time()
+    if current["down_since"] is not None and current["down_since"] <= now:
         return
-    state = {"down_since": time.time()}
+    state = {"down_since": now}    # also replaces a stamp left ahead of a stepped-back clock
     if current["last_success"] is not None:
         state["last_success"] = current["last_success"]
     _health_write(llm_health_path(db), state)

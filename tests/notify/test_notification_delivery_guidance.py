@@ -144,7 +144,7 @@ def test_latency_samples_bound_root_to_full_plan_receipt_confirmation(led, monke
     _complete_render(led)
     monkeypatch.setattr(notify_scope.time, 'time', lambda: EVENT_NOW + 30)
     before = led.db.total_changes
-    latency = notify_scope.health_cards(led.db, CFG)['completion']['latency']
+    latency = notify_scope.health_cards(led.db, CFG, latency=True)['completion']['latency']
     assert latency['status'] == 'recorded'
     assert latency['examined'] == latency['count'] == 1
     assert latency['min_s'] == latency['max_s'] == latency['p50_s'] == latency['p95_s'] == 30
@@ -173,7 +173,7 @@ def test_latency_unknowns_are_not_zero_or_success(led, monkeypatch, damage, reas
     else:
         led.db.execute("UPDATE notification_renders SET manifest_id=NULL WHERE delivery_id=?", (render['delivery_id'],))
     monkeypatch.setattr(notify_scope.time, 'time', lambda: EVENT_NOW + 30)
-    report = notify_scope.health_cards(led.db, CFG)['completion']
+    report = notify_scope.health_cards(led.db, CFG, latency=True)['completion']
     assert report['all_parts_delivered'] == 1  # recorded delivery is independent of current source validity
     latency = report['latency']
     assert latency['status'] == 'unavailable' and latency['count'] == 0
@@ -185,7 +185,7 @@ def test_latency_examines_at_most_twenty_current_complete_renders(stored):
     for _ in range(21):
         _, delivery = _render(stored, [('card', 'delivered', None)])
         _state(stored, delivery, 'complete')
-    latency = notify_scope.health_cards(stored, SLACK)['completion']['latency']
+    latency = notify_scope.health_cards(stored, SLACK, latency=True)['completion']['latency']
     assert latency['examined'] == latency['sample_limit'] == 20
     assert latency['count'] == 0 and latency['p50_s'] is None
     assert latency['unavailable_by_reason'] == {'source_binding_unverified': 20}

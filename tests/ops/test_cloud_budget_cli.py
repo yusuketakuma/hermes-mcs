@@ -1,5 +1,6 @@
 """cloud-llm budget writes shared cloud cost caps into config.json (synthetic only)."""
 import hashlib
+import argparse
 import json
 from types import SimpleNamespace
 
@@ -264,3 +265,115 @@ def test_split_provider_cli_expected_detects_concurrent_change(verified_split, m
     state = _verified_state(conf)
     assert state["common"]["cloud_llm"]["mode"] == "off" and state["providers"] == providers
     assert all(path.read_bytes() == raw for path, raw in previous.items())
+
+
+def test_the_reextract_reopening_needs_a_period_budget_and_can_be_ended(conf, capsys):
+    def run(**kw):
+        return cli.budget_command(SimpleNamespace(daily_usd=None, monthly_usd=None, **kw))
+    before = conf.read_bytes()
+    assert run(reextract_backlog_until="2999-01-01") == 1          # no period budget: nothing saved
+    assert conf.read_bytes() == before
+    assert run(period_usd="60", reextract_backlog_until="2999-01-01") == 0
+    saved = json.loads(conf.read_text())["cloud_llm"]
+    assert saved["window_budget_usd"] == 60.0 and saved["reextract_backlog_until"] == "2999-01-01T23:59:59+09:00"
+    shown = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert shown["reextract_backlog_until"] == "2999-01-01T23:59:59+09:00" and shown["saved"] is True
+    assert cloud_policy.reextract_backlog_window(json.loads(conf.read_text()))
+    assert run(period_usd="none") == 1                              # the cap cannot go while the reopening stays
+    assert json.loads(conf.read_text())["cloud_llm"]["window_budget_usd"] == 60.0
+    assert run(reextract_backlog_until="none") == 0
+    assert "reextract_backlog_until" not in json.loads(conf.read_text())["cloud_llm"]
+    assert not cloud_policy.reextract_backlog_window(json.loads(conf.read_text()))
+
+
+def test_daily_monthly_caps_allow_both_windows_after_explicit_period_removal(conf, capsys):
+    cfg = json.loads(conf.read_text())
+    cfg["cloud_llm"].update(provider="anthropic", daily_cost_limit_usd=30, monthly_cost_limit_usd=300,
+        provider_budgets={name: {"daily_cost_limit_usd": 15, "monthly_cost_limit_usd": 150}
+                          for name in ("anthropic", "openai")})
+    conf.write_text(json.dumps(cfg))
+
+    def run(**options):
+        return cli.budget_command(SimpleNamespace(**options))
+
+    assert run(period_usd="60", reextract_backlog_until="2999-01-01",
+               semantic_backlog_until="2999-01-01") == 0
+    assert run(period_usd="none") == 0
+    saved = json.loads(conf.read_text())["cloud_llm"]
+    assert "window_budget_usd" not in saved and "window_start" not in saved
+    assert saved["provider_budgets"] == cfg["cloud_llm"]["provider_budgets"]
+    shown = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert shown["semantic_backlog_until"] == shown["reextract_backlog_until"]
+    assert shown["provider_budgets"] == saved["provider_budgets"]
+    before = conf.read_bytes()
+    assert run(daily_usd="none") == 1 and conf.read_bytes() == before
+    assert run(semantic_backlog_until="none") == 0
+    ended = json.loads(conf.read_text())
+    assert "semantic_backlog_until" in ended["cloud_llm"]
+    assert ended["cloud_llm"]["semantic_backlog_until"] is None
+    assert cloud_policy.semantic_planned(ended)
+    assert not cloud_policy.semantic_backlog_window(ended)
+    assert run(monthly_usd="300") == 0
+    assert json.loads(conf.read_text())["cloud_llm"]["semantic_backlog_until"] is None
+
+
+@pytest.mark.parametrize("route", ["reextract", "semantic_backlog"])
+def test_backlog_setting_blockers_do_not_claim_live_key_or_accounting_status(monkeypatch, route):
+    key = "semantic_backlog_until" if route == "semantic_backlog" else "reextract_backlog_until"
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "provider": "anthropic",
+        "window_start": "2026-11-01T00:00:00+09:00", "window_budget_usd": 60,
+        key: "2999-01-01T00:00:00+09:00"}}
+    monkeypatch.setattr(cloud_policy, "provider_key", lambda *a: pytest.fail("not a key observation"))
+    settings = cloud_policy.cloud_config(cfg)[0]
+    assert cli._backlog_setting_blockers(settings, route) == []
+    settings.update(mode="off", routes=[], project_ids=[])
+    assert cli._backlog_setting_blockers(settings, route) == [
+        "cloud_mode_not_on", "route_missing", "project_scope_empty"]
+    settings[key] = "2000-01-01T00:00:00+09:00"
+    assert "window_ended" in cli._backlog_setting_blockers(settings, route)
+
+
+def test_profile_cli_preserves_legacy_alias_and_other_purposes(conf, capsys):
+    cfg = json.loads(conf.read_text())
+    cfg["cloud_llm"].update(provider="openai", profiles={"backlog": "sol-medium"})
+    conf.write_text(json.dumps(cfg))
+    assert cli.providers_command(SimpleNamespace(openai_patient_context_profile="sol-high")) == 0
+    saved = json.loads(conf.read_text())["cloud_llm"]
+    assert saved["profiles"] == {"backlog": "sol-medium", "patient_context": "sol-high"}
+    assert saved["provider_profiles"]["openai"] == saved["profiles"]
+    assert json.loads(capsys.readouterr().out)["profile_changes"] == {
+        "openai": {"patient_context": "sol-high"}}
+
+
+def test_split_profile_cli_updates_both_providers_without_changing_selection_or_keys(verified_split, capsys):
+    conf, _, _, _, key = verified_split
+    before = _verified_state(conf)
+    key_before = key.read_bytes()
+    assert cli.providers_command(SimpleNamespace(openai_patient_context_profile="sol-high",
+        anthropic_backlog_profile="haiku-medium")) == 0
+    after = _verified_state(conf)
+    assert after["providers"]["openai"]["profiles"]["patient_context"] == "sol-high"
+    assert after["providers"]["anthropic"]["profiles"]["backlog"] == "haiku-medium"
+    assert after["common"] == before["common"]
+    assert json.loads(capsys.readouterr().out)["provider"] == "openai"
+    assert "profiles" not in after["common"]["cloud_llm"]
+    assert "provider_profiles" not in after["common"]["cloud_llm"]
+    assert key.read_bytes() == key_before
+
+
+def test_invalid_provider_profile_is_refused_before_saving(conf):
+    before = conf.read_bytes()
+    assert cli.providers_command(SimpleNamespace(openai_patient_context_profile="haiku-medium")) == 1
+    assert conf.read_bytes() == before
+
+
+def test_profile_parser_aliases_and_finite_values():
+    parser = argparse.ArgumentParser()
+    cli.add_parsers(parser.add_subparsers())
+    for option in ("--patient-context-profile", "--openai-patient-context-profile"):
+        args = parser.parse_args(["cloud-llm", "providers", option, "sol-high"])
+        assert args.openai_patient_context_profile == "sol-high"
+    args = parser.parse_args(["cloud-llm", "providers", "--anthropic-backlog-profile", "haiku-medium"])
+    assert args.anthropic_backlog_profile == "haiku-medium"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["cloud-llm", "providers", "--patient-context-profile", "unknown-profile"])

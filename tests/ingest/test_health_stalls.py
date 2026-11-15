@@ -471,3 +471,15 @@ def test_observation_kwarg_records_last_phase_on_success(db):
     observed = {}
     health_report.backlog_stalls(db.db, {}, time.time(), observation=observed)
     assert observed["phase"] == "extract_backlog"
+
+
+def test_worker_older_than_its_code_is_reported_without_a_delivery_stall(db, monkeypatch):
+    import card_worker_status
+    now = time.time()
+    seen = []
+    monkeypatch.setattr(card_worker_status, "restart_overdue",
+                        lambda root, cfg, at: seen.append((cfg, at)) or True)
+    assert health_report.backlog_stalls(db.db, SLACK, now).count("worker_restart_required") == 1
+    assert seen == [(SLACK, now)]
+    monkeypatch.setattr(card_worker_status, "restart_overdue", lambda *args: False)
+    assert "worker_restart_required" not in health_report.backlog_stalls(db.db, SLACK, now)

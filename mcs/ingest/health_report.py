@@ -3,13 +3,15 @@ from __future__ import annotations
 import llm_availability
 
 import os
+import re
 import shutil
 import sqlite3
 import stat
 import time
 from contextlib import closing, suppress
 
-from health_policy import HEALTH_REL, STATUS_MAX_BYTES, freshness_deadline
+from health_policy import (CARD_STALL_S, HEALTH_REL, STATUS_MAX_BYTES, RUN_GRACE_S,
+                           WATCH_STATUS_REL, freshness_deadline)
 from stats_math import finite_number
 import safe_io
 from mcs_queries import ELIGIBLE_MESSAGE
@@ -22,6 +24,9 @@ ATTACH_DISK_MARGIN_MB = 2048
 DISK_WARN_MARGIN_MB = 2 * ATTACH_DISK_MARGIN_MB   # warn before disk_low
 WAL_WARN_BYTES = 256 * 1024 * 1024
 SNAPSHOT_VERIFY_WARN_RATIO = 0.6
+# the hourly forced republish plus two ticks of slack: an older published
+# copy means publishing is failing, not merely waiting out the interval
+SNAPSHOT_STALE_WARN_S = maintenance.SNAPSHOT_MAX_AGE_S + 1200
 DB_MAINT_OVERDUE_FACTOR = 2        # two missed daily runs, not one late tick
 DB_MAINT_STATE_MAX_BYTES = 65536
 
@@ -58,6 +63,16 @@ def _ocr_ack_current(data, value, cfg=None):
         return False
 
 
+def _diagnostic_block(value) -> bool:
+    """A producer diagnostic of fixed codes and numbers only — never a path or text."""
+    code = re.compile(r"[a-z0-9_]{1,64}")
+    return isinstance(value, dict) and len(value) <= 16 and all(
+        isinstance(key, str) and code.fullmatch(key)
+        and (item is None or type(item) in (bool, int) or finite_number(item)
+             or isinstance(item, str) and code.fullmatch(item))
+        for key, item in value.items())
+
+
 def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     """Read bounded private OCR evidence without exposing source IDs, paths or text."""
     import attachment_ocr
@@ -77,12 +92,17 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     ack_fields = ('acknowledged_exhausted', 'unacknowledged_pending_failed')
     policy_fields = ('policy_binding', 'policy_rejected_failed',
                      'policy_rejected_exhausted', 'policy_rejected_unacknowledged')
+    snapshot_fields = ("snapshot_failure", "snapshot_timing")
     try:
         value = strict_json(safe_io.read_private_bytes(path, limit=4096))
         if (not isinstance(value, dict) or set(value) - {
                 "at", "reason", "queue_status", "paid_recovery_pending", *counts, *writer_fields,
-                *failure_fields, *ack_fields, *policy_fields, 'failure_cohort'}
+                *failure_fields, *ack_fields, *policy_fields, 'failure_cohort', *snapshot_fields}
                 or not finite_number(value.get("at")) or not 0 <= value["at"] <= now):
+            raise ValueError("ocr_status_invalid")
+        # mcs_ocr records why its publish after new pages was deferred; the
+        # verdict below comes from 'reason', these are checked and not exposed.
+        if any(key in value and not _diagnostic_block(value[key]) for key in snapshot_fields):
             raise ValueError("ocr_status_invalid")
         reason = value.get("reason")
         known = {None, "disabled", "busy", "writer_busy", "writer_blocked", "config_invalid",
@@ -291,6 +311,10 @@ def early_warnings(db, result: dict, free_mb: float | None) -> dict:
     out["snapshot_verify_slow_runs"] = slow
     if slow >= 2:
         out["warnings"].append("snapshot_verify_near_budget")
+    age = maintenance.snapshot_published_age_s()
+    out["snapshot_age_s"] = None if age is None else round(age)
+    if age is not None and age > SNAPSHOT_STALE_WARN_S:
+        out["warnings"].append("snapshot_stale")
     floor = disk_floor_mb()
     if floor and free_mb is not None and not attachment_disk_low(free_mb) \
             and free_mb < floor + DISK_WARN_MARGIN_MB:
@@ -302,6 +326,15 @@ def early_warnings(db, result: dict, free_mb: float | None) -> dict:
     out["manual_backup_bytes"] = None if backups is None else backups["manual"]
     out["backup_bytes_by_class"] = backups
     out.update(ledger_capacity(db))
+    try:
+        import extract_llm_local_rebuild
+        out["local_rebuild"] = extract_llm_local_rebuild.health_counts(db)
+    except (sqlite3.Error, ValueError, TypeError, ImportError):
+        out["local_rebuild"] = None
+        out["warnings"].append("local_rebuild_unknown")
+    else:
+        if out["local_rebuild"]["exhausted"]:
+            out["warnings"].append("local_rebuild_exhausted")   # held after every retry: needs a human
     deferred = db_maintenance_ages(data, time.time())
     out.update(deferred)
     daily = deferred["db_maintenance_daily_age_s"]
@@ -429,7 +462,6 @@ def backup_health(cfg: dict, now: float) -> dict:
                 "last_restore_at", "source_last_successful_run", "max_rpo_seconds")}}
 
 
-CARD_STALL_S = 1800        # a queued render this old on the live transport
 BACKLOG_STALL_S = 6 * 3600  # untouched due work AND no progress this long
 DUE_SLACK_S = 900           # next_try this close counts as due (defer cycles)
 LOCAL_LLM_DOWN_S = 3600     # llm_down_for_s at or past this, with due work, alerts
@@ -441,12 +473,17 @@ _JEV_BLOCK_KINDS = ("payment_required", "no_api_key", "budget_exceeded",
 
 
 def jev_block_reason(db) -> str | None:
-    """Why TypeSafe Jev is refusing work, from the newest assessment
-    record: the drainer writes one per status change, so the latest row
-    is the current state. None when the last assessment went through."""
+    """Why TypeSafe Jev is refusing work, from the readable assessment record
+    with the highest artifact_id. None when there is none or it went through.
+
+    The newest-by-time readable row bounds the id scan from below: no row with
+    a smaller id can be the highest, and the id-descending scan sees every row
+    at or above it, so time and id disagreeing changes only how far it reads."""
     row = db.execute(
-        "SELECT json_extract(meta,'$.error_kind') FROM artifacts "
-        "WHERE kind='semantic_assess' AND json_valid(meta) "
+        "SELECT json_extract(meta,'$.error_kind') FROM artifacts NOT INDEXED "
+        "WHERE kind='semantic_assess' AND json_valid(meta) AND artifact_id>=("
+        "SELECT artifact_id FROM artifacts INDEXED BY idx_artifacts_kind_created "
+        "WHERE kind='semantic_assess' AND json_valid(meta) ORDER BY created_at DESC LIMIT 1) "
         "ORDER BY artifact_id DESC LIMIT 1").fetchone()
     kind = row[0] if row else None
     return kind if kind in _JEV_BLOCK_KINDS else None
@@ -465,7 +502,8 @@ def cloud_stop_reason(db, cfg) -> str | None:
     key_present = bool(cloud_policy.provider_key(settings["provider"]))
     reason = cloud_policy.global_block_reason(SimpleNamespace(db=db), model=settings["model"])
     if reason == "paused":
-        return None
+        # a human stop is intended; the stop a database restore left needs a human
+        return "restore_paused" if cloud_policy.restore_paused(db) else None
     if not key_present:
         return "no_api_key"
     if reason is None:
@@ -482,6 +520,34 @@ def carried_since(key: str, active: bool, now: float) -> float | None:
     marks = prev_health().get("stall_marks")
     at = marks.get(key) if isinstance(marks, dict) else None
     return at if finite_number(at) and 0 <= at <= now else now
+
+
+def watcher_health(data_dir: str, cfg, now: float) -> dict:
+    """Is the independent watcher itself still observing?
+
+    Nothing else reads its status file, so a watcher that never starts, hangs
+    or cannot save would leave every later incident unannounced. The bound is
+    the watcher's own staleness rule for this producer (freshness_deadline):
+    six missed 300 s watcher runs by default. A status that was never written
+    or cannot be read is given the same time before it counts as stalled."""
+    deadline = freshness_deadline(cfg if isinstance(cfg, dict) else {})
+    path = os.path.join(data_dir, os.path.basename(WATCH_STATUS_REL))
+    watched = None
+    try:
+        doc = safe_io.read_json_nofollow(path, STATUS_MAX_BYTES)
+        watched = doc.get("watched_at") if isinstance(doc, dict) else None
+        state = "unreadable"
+        if finite_number(watched) and watched <= now + RUN_GRACE_S:
+            state = "ok" if now - watched <= deadline else "stale"
+    except FileNotFoundError:
+        state = "unreadable" if os.path.lexists(path) else "missing"
+    except (OSError, ValueError, RecursionError):
+        state = "unreadable"
+    since = carried_since("health_watch_bad_since", state != "ok", now)
+    block = {"state": state, "deadline_s": deadline, "observed_at": now, "bad_since": since,
+             "watched_at": watched if state in ("ok", "stale") else None,
+             "stalled": state == "stale" or (since is not None and now - since >= deadline)}
+    return block
 
 
 def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
@@ -523,6 +589,7 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
     if cloud_reason:
         reasons.append(f"cloud_llm_{cloud_reason}")
     if notify_scope.interactive_enabled(cfg):
+        import card_worker_status
         transport = notify_scope.active_transport(cfg)
         _phase("card_queue_oldest")
         oldest = db.execute(
@@ -551,10 +618,13 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
                                        if v is not None and v <= now), default=None)
             if latest_progress is None or now - latest_progress > CARD_STALL_S:
                 reasons.append("card_delivery_stalled")
-                import card_worker_status
                 worker = card_worker_status.diagnose(notify_spool.data_root(db), cfg)
                 if worker["state"] in ("unknown", "disabled"):
                     reasons.append(worker["reason"])
+        _phase("card_worker_restart")
+        if ("worker_restart_required" not in reasons
+                and card_worker_status.restart_overdue(notify_spool.data_root(db), cfg, now)):
+            reasons.append("worker_restart_required")
         _phase("card_restore_holds")
         if db.execute("SELECT 1 FROM notification_restore_holds "
                       "WHERE released_at IS NULL LIMIT 1").fetchone():
@@ -851,6 +921,32 @@ def incomplete_parts_health(db, now, cfg=None, seconds=None) -> dict:
     return {**report, "status": "recorded"}
 
 
+def delivery_latency_health(db, cfg, now, seconds) -> dict:
+    """Sample delivery latency apart from the card verdict, so a slow sample hides no counts."""
+    import notify_scope
+    try:
+        return bounded_health_read(db, lambda _check: notify_scope._delivery_latency(
+            db, notify_scope.retired_transports(cfg), now), seconds=seconds)
+    except Exception as exc:
+        return {"status": "unavailable", "observed_at": now, "reason": _observation_failure(exc)}
+
+
+def carried_measurement(current: dict, previous, now: float) -> dict:
+    """Keep the previous complete measurement, marked stale, when this read stopped at its bound."""
+    if current.get("status") != "unknown" or current.get("reason") != "observation_limit":
+        return current
+    observed = previous.get("observed_at") if isinstance(previous, dict) else None
+    if (previous is None or previous.get("status") not in (None, "recorded", "stale_measurement")
+            or not finite_number(observed) or not 0 <= now - observed <= CARD_STALL_S
+            # every field the unknown block would publish must be carried
+            or any(k not in previous for k in current if k not in ("status", "reason"))):
+        return current
+    # The original observed_at is kept so chained carries still expire.
+    return {**previous, **{k: current[k] for k in ("observation",) if k in current},
+            "status": "stale_measurement", "reason": "observation_limit",
+            "age_s": round(now - observed, 1)}
+
+
 def build_health(db, result: dict, status: str,
             run_id: int | None = None, *, cfg: dict | None = None,
             deadline: float | None = None) -> dict:
@@ -887,6 +983,7 @@ def build_health(db, result: dict, status: str,
     # waiting by design, not pending delivery — everything else counts
     # from its creation, including retries with a future next_try
     card_observation = {}
+    card_started = time.monotonic()
     try:
         cards_health = bounded_health_read(
             db, lambda _check: notify_scope.health_cards(db, cfg, observation=card_observation),
@@ -904,9 +1001,20 @@ def build_health(db, result: dict, status: str,
                                         "reason": _observation_failure(exc)})
         if card_observation.get("stop") == "complete":
             card_observation["stop"] = "read_unavailable"
+    else:
+        cards_health["observed_at"] = now
+        if isinstance(cards_health.get("completion"), dict):
+            # Only what is left of the same card window: the sample never adds time.
+            cards_health["completion"]["latency"] = delivery_latency_health(
+                db, cfg, now, min(remaining(), max(0.0, NOTIFICATION_OBSERVATION_S
+                                                   - (time.monotonic() - card_started))))
     cards_health["observation"] = card_observation
+    cards_health = carried_measurement(cards_health, prev_health().get("cards"), now)
     cards_unknown = cards_health.get("status") == "unknown"
-    incomplete_parts = incomplete_parts_health(db, now, cfg, seconds=min(NOTIFICATION_OBSERVATION_S, remaining()))
+    previous_notify = prev_health().get("notify")
+    incomplete_parts = carried_measurement(
+        incomplete_parts_health(db, now, cfg, seconds=min(NOTIFICATION_OBSERVATION_S, remaining())),
+        previous_notify.get("incomplete_parts") if isinstance(previous_notify, dict) else None, now)
     parts_incomplete = incomplete_parts['status'] == 'unknown' or bool(
         incomplete_parts.get('active_total', incomplete_parts['total'])) or bool(
         incomplete_parts.get('unknown_parts_total', 0))
@@ -1160,6 +1268,8 @@ def build_health(db, result: dict, status: str,
     backup_bad = backup["state"] not in ("ok", "disabled")
     import notify_spool
     ocr = attachment_ocr_health(notify_spool.data_root(db), cfg if checked else None, now)
+    watch = watcher_health(notify_spool.data_root(db), cfg if checked else None, now)
+    stall_marks["health_watch_bad_since"] = watch["bad_since"]
     ocr_bad = ocr["state"] not in ("ok", "disabled")
     skipped = result.get("backup_skipped")
     disk_low = attachment_disk_low(free_mb) or skipped == "disk_low"
@@ -1247,6 +1357,9 @@ def build_health(db, result: dict, status: str,
             db, cfg if checked else None, now, source, seconds=remaining()),
         "stall_marks": stall_marks,
         "stall_check": stall_check,
+        # reported beside the verdict, not in it: a watcher that reads this
+        # file again has by that act disproved its own stall
+        "health_watch": watch,
         **early_warnings(db, result, free_mb),
         "errors": list(result.get("errors") or []),
     }

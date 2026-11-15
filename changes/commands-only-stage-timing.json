@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "対話コマンドの取込で、段ごとの所要時間を記録し、期限切れトークンの削除を索引で行う",
+  "summary": "対話カードの操作を取り込む実行（run_check --commands-only）は、復旧確認・コマンドの適用・カードの整理・スナップショットの公開を順に行いますが、どの段に時間がかかったかを記録していませんでした。この実行が保存の順番を10〜35秒握ることがあり、原因の段を特定できませんでした。収集の実行と同じ形（stage_elapsed_s と run）で、段ごとの所要時間を実行結果に出すようにしました。処理の内容と順序は変えていません。",
+  "upgrade": "追加操作は不要です。次の対話コマンドの取込から記録されます。",
+  "details": [
+    "記録する段は cmd_recover・cmd_drain・cmd_int_drain・cmd_int_drain_again・cmd_card_gc・cmd_snapshot です。秒数だけを記録し、本文や識別子は記録しません。",
+    "期限を過ぎていても各段は従来どおり実行します（先送りはしません）。",
+    "期限切れの操作トークンの削除は、保存の順番を握った直後に約10万件の表を毎回すべて読んでいました。期限の索引（idx_ntokens_expires）を追加し、期限切れの行だけを読むようにしました。削除の対象は変えていません。"
+  ],
+  "refs": [
+    "mcs/ingest/run_check.py",
+    "tests/ingest/test_run_check_lifecycle.py",
+    "mcs/core/ledger_schema.py"
+  ]
+}

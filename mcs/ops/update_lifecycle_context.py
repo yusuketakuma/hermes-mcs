@@ -464,6 +464,17 @@ def _restore_writer_hold_marker() -> dict | None:
     return notify_spool.restore_writer_hold(DATA)
 
 
+def _hold_after_interrupt(interrupt: BaseException) -> None:
+    """An interrupt (KeyboardInterrupt, SystemExit) left a non-terminal journal: restore the
+    update marker while the caller still holds run.lock, which run_check re-reads under that
+    lock. A failed restore (or a second interrupt) is noted on the original interrupt, which
+    the caller re-raises; SIGTERM, SIGHUP/terminal closure, SIGKILL and power loss are not covered."""
+    try:
+        _ensure_recovery_marker()
+    except BaseException as error:
+        interrupt.add_note("update_marker_restore_failed:" + type(error).__name__)
+
+
 def _remove_marker() -> None:
     with suppress(OSError):
         os.unlink(MARKER_PATH)

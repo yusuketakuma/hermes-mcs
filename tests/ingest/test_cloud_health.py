@@ -127,3 +127,50 @@ def test_keyless_warning_never_resets_terminal_cloud_failure(db, monkeypatch):
     monkeypatch.setattr(cloud_policy, "api_key", lambda root=None: "synthetic-private-key")
     assert health_report.cloud_stop_reason(db.db, cfg) == "auth_error"
     assert "synthetic-private-key" not in str(health_watch._CLOUD_REASON_JA["cloud_llm_no_api_key"])
+
+
+def test_database_restore_stops_cloud_sends_once_until_a_human_resumes(db, monkeypatch):
+    monkeypatch.setattr(cloud_policy, "api_key", lambda root=None: "synthetic-key")
+    monkeypatch.setattr(cloud_policy, "pricing_valid", lambda now=None, **kw: True)
+    restored_at = 1_790_000_000.123457
+    with db.db:
+        assert cloud_policy.pause_for_restore(db.db, restored_at, CFG) is True
+        assert cloud_policy.pause_for_restore(db.db, restored_at, CFG) is False
+    assert cloud_policy.global_block_reason(db) == "paused"
+    assert health_report.cloud_stop_reason(db.db, CFG) == "restore_paused"
+    assert health_report.backlog_stalls(db.db, CFG, time.time()) == ["cloud_llm_restore_paused"]
+    summary, action = health_watch._CLOUD_REASON_JA["cloud_llm_restore_paused"]
+    assert "復元" in summary and "cloud-llm resume --confirm-human" in action
+    cloud_policy.resume(db)
+    with db.db:   # the same restore never overrides the human decision
+        assert cloud_policy.pause_for_restore(db.db, restored_at, CFG) is False
+    assert cloud_policy.global_block_reason(db) is None
+    assert health_report.cloud_stop_reason(db.db, CFG) is None
+    with db.db:   # a later restore loses records again
+        assert cloud_policy.pause_for_restore(db.db, restored_at + 60, CFG) is True
+    cloud_policy.stop(db)   # a human stop on top is intended, not an alarm
+    assert health_report.cloud_stop_reason(db.db, CFG) is None
+
+
+@pytest.mark.parametrize(("cfg", "key", "reserved", "paused"), [
+    ({}, None, False, False),                              # never configured, never used
+    ({}, "synthetic-key", False, True),                    # a key alone turns the cloud on
+    ({}, None, True, True),                                # paid requests are on record
+    ({"cloud_llm": {"mode": "off"}}, None, False, True),   # configured: use after the backup is unknown
+    (None, None, False, True),                             # unreadable config
+])
+def test_restore_spares_only_an_installation_without_any_cloud_trace(db, monkeypatch, cfg, key, reserved, paused):
+    monkeypatch.setattr(cloud_policy, "provider_key", lambda name, root=None: key)
+    if reserved:
+        db.artifact_add(cloud_policy.KINDS[0], "{}")
+    with db.db:
+        assert cloud_policy.pause_for_restore(db.db, 1_790_000_000, cfg) is paused
+    assert cloud_policy.restore_paused(db.db) is paused
+
+
+@pytest.mark.parametrize("restored_at", [True, None, "1790000000", float("nan"), float("inf")])
+def test_restore_pause_refuses_an_unusable_restore_time(db, restored_at):
+    before = db.db.total_changes
+    with pytest.raises(ValueError, match="restore_time_invalid"):
+        cloud_policy.pause_for_restore(db.db, restored_at, CFG)
+    assert db.db.total_changes == before

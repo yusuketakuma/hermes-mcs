@@ -695,9 +695,10 @@ def _incomplete_part_rows(db, cfg=None, *, delivery_ids=None, proof_state=None):
         "WHERE r.state='delivered' AND c.revoked_at IS NULL "
         "AND c.delivery_state NOT IN ('revoked','message_deleted') "
         "AND p.kind!='card' AND p.state IN ('pending','unknown','not_sent','held') "
+        # c.card_id (=r.card_id) defers this proof until revoked/deleted cards are filtered out.
         "AND NOT EXISTS (SELECT 1 FROM notification_renders done "
         " JOIN notification_render_parts sent ON sent.delivery_id=done.delivery_id "
-        " WHERE done.card_id=r.card_id AND done.render_rev>r.render_rev "
+        " WHERE done.card_id=c.card_id AND done.render_rev>r.render_rev "
         " AND done.state='delivered' AND done.transport IS r.transport "
         f" AND ({proof_scope}) "
         " AND done.profile IS r.profile AND done.application_id IS r.application_id "
@@ -857,7 +858,7 @@ def _delivery_latency(db, retired, now):
             "p50_s": percentile(samples, .5), "p95_s": percentile(samples, .95)}
 
 
-def _delivery_completion(db, cfg, now, observation=None):
+def _delivery_completion(db, cfg, now, observation=None, *, latency=True):
     """Count latest render delivery evidence, separately from clinical validity or readership."""
     if observation is not None:
         observation["phase"] = "completion_counts"
@@ -879,9 +880,11 @@ def _delivery_completion(db, cfg, now, observation=None):
         "COALESCE(SUM(l.state='delivered' AND p.n IS NULL),0) parts_unobserved "
         "FROM latest l LEFT JOIN parts p ON p.delivery_id=l.delivery_id", retired).fetchone()
     complete = row['all_parts_delivered']
-    if observation is not None:
-        observation["phase"] = "delivery_latency"
-    latency = _delivery_latency(db, retired, now)
+    sample = {}
+    if latency:
+        if observation is not None:
+            observation["phase"] = "delivery_latency"
+        sample["latency"] = _delivery_latency(db, retired, now)
     return {"status": "recorded", "observed_at": now,
             "scope": "latest_create_or_update_render_per_card_nonretired_transport",
             "basis": "stored_delivery_receipts_not_current_clinical_validity_or_readership",
@@ -891,15 +894,16 @@ def _delivery_completion(db, cfg, now, observation=None):
             "unknown": row['unknown'], "incomplete": row['total'] - complete,
             "parts_unobserved": row['parts_unobserved'],
             "reason": "part_plan_unobserved" if row['parts_unobserved'] else None,
-            "latency": latency}
+            **sample}
 
 
-def health_cards(db, cfg=None, *, observation=None) -> dict:
+def health_cards(db, cfg=None, *, observation=None, latency=False) -> dict:
     """The health.json 'cards' section — counts and ages plus the
     bounded unsettled-attempt worklist an operator resolves via
     ops.card_resolve (ids only, no patient data). Attempts on a retired
     transport (after a notify.interactive switch) are reported only as
-    ``retired_unsettled`` and leave the live counts."""
+    ``retired_unsettled`` and leave the live counts. ``latency=True`` adds
+    the delivery-latency sample, which the health report reads separately."""
     now = time.time()
     from notify_recovery import recovery_guidance, recovery_worklist
     retired = retired_transports(cfg)
@@ -998,7 +1002,7 @@ def health_cards(db, cfg=None, *, observation=None) -> dict:
     if observation is not None:
         observation["phase"] = "layout_inventory"
     inventory = layout_migration_counts(db)
-    completion = _delivery_completion(db, cfg, now, observation)
+    completion = _delivery_completion(db, cfg, now, observation, latency=latency)
     if observation is not None:
         observation["phase"] = "result_assembly"
     return {

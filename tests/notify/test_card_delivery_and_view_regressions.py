@@ -287,6 +287,26 @@ def test_health_write_failed_alert_is_sent(led, monkeypatch):
                           "kind='health_write_failed'").fetchone()[0] == "accepted"
 
 
+def test_health_watch_stalled_alert_is_sent_as_a_system_alert(led, monkeypatch):
+    monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: sys.executable)
+    targets = []
+    monkeypatch.setattr(notify_sender, 'send_argv', lambda cfg, target, *a, kind=None: [target])
+    monkeypatch.setattr(notify_flush, "_config", lambda: {
+        "notify_target": "slack:C12345678", "notify_system_target": "slack:C87654321"})
+    sent = []
+    monkeypatch.setattr(notify_sender, 'send',
+                        lambda argv, content, *a, **k: (targets.append(argv), sent.append(content)))
+    led.outbox_add("health_watch_stalled", None, {"detail": "stale", "run_id": 7})
+    notify_flush.flush(led)
+    assert targets == [["slack:C87654321"]]
+    (text,) = sent
+    assert text.startswith("[MCSLOG]") and "監視処理の停止" in text
+    assert "影響:" in text and "次の操作:" in text and "実行: run 7" in text
+    assert text.endswith("コード: health_watch_stalled")
+    assert led.db.execute("SELECT state FROM notify_outbox WHERE "
+                          "kind='health_watch_stalled'").fetchone()[0] == "accepted"
+
+
 # 9 ---------------------------------------------------------------------
 
 @pytest.mark.parametrize("actor", ["slack:T1:U1", "lineworks:T1:U1", "unknown"])

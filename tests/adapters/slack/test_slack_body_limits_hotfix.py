@@ -65,9 +65,9 @@ def _run(world, spec, text, part):
         "thread_id": ROOT_TS, "history": None, "consumed": set()}, part))
 
 
-@pytest.mark.parametrize("text", [MULTIBYTE, ESCAPED, "😀" * 1900,
+@pytest.mark.parametrize("text", [MULTIBYTE, ESCAPED, "😀" * 1900, "x" * 3500, "x" * 3501, "&" * 700, "&" * 701,
                                   "合成\n" + "&<😀>" * 1400 + "\n" + "本文" * 1600 + "\n末尾"],
-                         ids=["multibyte_1899", "escaped", "emoji", "mixed_multiline"])
+                         ids=["multibyte_1899", "escaped", "emoji", "wire_exact", "wire_above", "escape_exact", "escape_above", "mixed_multiline"])
 def test_existing_splitter_bounds_encoded_wire_without_losing_characters(text):
     chunks = notify_parts.split_body_chunks(
         text, wire_limit=present_slack.THREAD_PART_WIRE_LIMIT,
@@ -76,7 +76,7 @@ def test_existing_splitter_bounds_encoded_wire_without_losing_characters(text):
     assert all(0 < len(chunk) <= notify_parts.THREAD_PART_LIMIT for chunk in chunks)
     assert all(len(escape(chunk, quote=False).encode("utf-8")) <= delivery.BODY_WIRE_MAX
                for chunk in chunks)
-    assert present_slack.THREAD_PART_WIRE_LIMIT == delivery.BODY_WIRE_MAX == 4000
+    assert present_slack.THREAD_PART_WIRE_LIMIT == delivery.BODY_WIRE_MAX == 3500
 
 
 def test_character_boundaries_stay_unchanged_when_wire_already_fits():
@@ -103,7 +103,8 @@ def test_wire_boundary_whitespace_is_rebalanced_losslessly(text):
 
 
 @pytest.mark.parametrize("mode", ["create", "exact", "legacy"])
-@pytest.mark.parametrize("text", [MULTIBYTE, ESCAPED], ids=["multibyte_1899", "escaped"])
+@pytest.mark.parametrize("text", [MULTIBYTE, ESCAPED, "x" * 3501, "&" * 701],
+                         ids=["multibyte_1899", "escaped", "wire_above", "escape_above"])
 def test_old_oversized_sealed_part_is_not_sent_or_split_by_worker(world, mode, text):
     prior = "1790000000.000010"
     world.client.replies[ROOT_TS] = [
@@ -211,7 +212,7 @@ def test_sweep_replans_known_length_rejection_once_and_preserves_prior(led, monk
     spec = json.loads(repaired["spec_json"])
     validate(spec)
     assert "".join(_source_chunks(spec)) == text
-    assert all(present_slack.thread_part_wire_size(chunk) <= 4000 for chunk in _source_chunks(spec))
+    assert all(present_slack.thread_part_wire_size(chunk) <= delivery.BODY_WIRE_MAX for chunk in _source_chunks(spec))
     first = next(part for part in _body_parts(spec) if part.get("name") == "m:100#1")
     assert first["prior_remote_id"] == prior and first["edit_only"] is True
     world.client.chat_update = native_update

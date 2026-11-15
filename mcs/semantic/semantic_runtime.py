@@ -134,7 +134,7 @@ def payload_generation(payload: dict) -> str:
 # job's answer is interpreted: editing them must not discard results already received.
 CLOUD_OPERATING_LIMITS = ("daily_request_budget", "daily_cost_limit_usd", "monthly_cost_limit_usd",
                           "max_concurrency", "usd_jpy", "window_budget_usd", "window_start", "until",
-                          "provider_budgets")
+                          "provider_budgets", "reextract_backlog_until", "semantic_backlog_until")
 _GENERATION_EXEMPT = {"semantic": ("until",), "cloud_llm": CLOUD_OPERATING_LIMITS}
 
 
@@ -143,7 +143,10 @@ def config_generation(cfg: dict) -> str:
     cfg = dict(cfg) if isinstance(cfg, dict) else {}
     for section, keys in _GENERATION_EXEMPT.items():
         if isinstance(cfg.get(section), dict):
+            declared = section == "cloud_llm" and "semantic_backlog_until" in cfg[section]
             cfg[section] = {k: v for k, v in cfg[section].items() if k not in keys}
+            if declared:
+                cfg[section]["semantic_backlog_until"] = True  # Contract presence, never its deadline.
             if not cfg[section]:
                 # first adding only an exempt key must not look like a new section
                 del cfg[section]

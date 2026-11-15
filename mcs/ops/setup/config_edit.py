@@ -87,11 +87,55 @@ def _split_changes(state, cfg, touched, selected, owners):
     import provider_settings
     import semantic_jev
 
-    split_common, split_providers = provider_settings.split_legacy(cfg, owners, jev_model=semantic_jev.JEV_MODEL)
     common, providers = deepcopy(state["common"]), deepcopy(state["providers"])
+    profile_keys = {"cloud_llm.profiles", "cloud_llm.provider_profiles"} & touched
+    if profile_keys:
+        updates = {}
+        cloud = cfg.get("cloud_llm", {})
+        for dotted in sorted(profile_keys):
+            key = dotted.split(".", 1)[1]
+            value = cloud.get(key)
+            if key == "profiles":
+                by_provider = {"openai": value}
+            elif value is None:
+                before = provider_settings.compose(state["common"], state["providers"],
+                    selected_provider=selected, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+                by_provider = {name: None for name in before.get("cloud_llm", {}).get("provider_profiles", {})}
+            elif isinstance(value, dict) and not value.keys() - {"anthropic", "openai"}:
+                by_provider = value
+            else:
+                raise ValueError("provider_profiles_invalid")
+            for name, profiles in by_provider.items():
+                if profiles is None and key == "provider_profiles" and value is not None:
+                    raise ValueError("provider_profiles_invalid")
+                if profiles is not None:
+                    provider_settings._profiles(profiles, name)
+                if name in updates:
+                    prior = updates[name]
+                    if prior is None or profiles is None:
+                        if prior != profiles:
+                            raise ValueError("provider_config_ambiguous")
+                    elif any(purpose in prior and prior[purpose] != profile
+                             for purpose, profile in profiles.items()):
+                        raise ValueError("provider_config_ambiguous")
+                    else:
+                        profiles = {**prior, **profiles}
+                updates[name] = profiles
+        for name, profiles in updates.items():
+            if profiles is None:
+                providers[name].pop("profiles", None)
+            else:
+                providers[name]["profiles"] = {**providers[name].get("profiles", {}), **profiles}
+        # The execution view exposes only the selected provider; keep other profiles from the locked state.
+        cfg = deepcopy(cfg)
+        cfg["cloud_llm"].pop("profiles", None)
+        cfg["cloud_llm"].pop("provider_profiles", None)
+    split_common, split_providers = provider_settings.split_legacy(cfg, owners, jev_model=semantic_jev.JEV_MODEL)
     for dotted in touched:
         section, key = dotted.split(".", 1)
-        if section == "cloud_llm" and key == "model":
+        if dotted in profile_keys:
+            common.setdefault(section, {}).pop(key, None)
+        elif section == "cloud_llm" and key == "model":
             value = cfg.get(section, {}).get(key)
             if value is not None:
                 provider = provider_settings._owner(value, owners)
