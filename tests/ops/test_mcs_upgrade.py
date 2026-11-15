@@ -1295,6 +1295,8 @@ def test_extracted_current_updater_imports_with_recovery_helper(tmp_path, monkey
          "import sys; sys.path.insert(0, sys.argv[1]); import _mcs_path; "
          "from semantic_policy import semantic_config; "
          "from semantic_candidate import promotion_problem; "
+         "import semantic_candidate as candidate; "
+         "assert set(candidate._sources()) == set(candidate._MODULES); "
          "cfg = {'semantic': {'fact_source': 'shadow'}, 'cloud_llm': {'mode': 'off'}}; "
          "assert semantic_config(cfg)[1] == []; "
          "assert promotion_problem(cfg, {}) == 'criteria_mismatch'; "

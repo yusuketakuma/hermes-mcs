@@ -180,11 +180,6 @@ def _run_batch_call(tups, target, deadline: float,
     return "ok", out, meta
 
 
-# Fixed classes of a refill preparation failure: the pass reports which, never its text.
-REFILL_STOP_ERRORS = ((sqlite3.Error, "sqlite_error"), (OSError, "os_error"), (ValueError, "value_error"),
-                      (TypeError, "type_error"), (KeyError, "key_error"), (RuntimeError, "runtime_error"))
-
-
 def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 admitted_ids: set | None = None,
                 per_write_lock: bool = False, workers: int = 1,
@@ -1059,8 +1054,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             return _claim_next(wanted, release_on_error=False)
         except Exception as error:
             refill_stopped = True    # claims it made stay in `claimed`: the finally releases them
-            refill_stop_error = next((name for kind, name in REFILL_STOP_ERRORS if isinstance(error, kind)),
-                                     "other")
+            # Class objects belong in function code, not the semantic witness's module constants.
+            stop_errors = ((sqlite3.Error, "sqlite_error"), (OSError, "os_error"), (ValueError, "value_error"),
+                           (TypeError, "type_error"), (KeyError, "key_error"), (RuntimeError, "runtime_error"))
+            refill_stop_error = next((name for kind, name in stop_errors if isinstance(error, kind)), "other")
             return []
 
     def _exec_batch(tups):
