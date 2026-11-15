@@ -18,20 +18,20 @@ from test_cloud_response_recovery import legacy_cloud_routes, paid as paid
 __all__ = ["paid"]
 
 
-def _paid_unit(ledger, cfg, message_id):
-    """One real paid send through the routed client, then the legacy shape: the reservation
-    predates input binding and the result kept no answer."""
+def _paid_unit(ledger, cfg, message_id, *, drop_fp=False):
+    """One real paid send through the routed client, then the legacy shape of
+    test_cloud_response_recovery's 'legacy' damage: neither row carries input binding and
+    the result kept no answer. ``drop_fp`` also removes the logical fingerprint."""
     provider = cloud_inference.CloudInferenceUnit(ledger, cfg, route='reextract', project_id=1,
         message_id=message_id, unit_key=str(message_id), deadline=time.monotonic() + 120,
         current=lambda: True, dispatch=lambda fn, **_kw: fn(), owner={'lease': 'synthetic'},
         input_binding=payload_hash('synthetic-input'))
     with legacy_cloud_routes():
         provider('synthetic prompt', deadline=time.monotonic() + 60, max_tokens=100)
+    removed = "'$.input_binding','$.logical_request_fp'" if drop_fp else "'$.input_binding'"
     with ledger.db:
-        ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.input_binding','$.logical_request_fp') "
-                          "WHERE kind='cloud_usage_reserve' AND message_id=?", (message_id,))
-        ledger.db.execute("UPDATE artifacts SET content='{}' WHERE kind='cloud_usage_result' AND message_id=?",
-                          (message_id,))
+        ledger.db.execute(f"UPDATE artifacts SET meta=json_remove(meta,{removed}),content='{{}}' "
+                          "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND message_id=?", (message_id,))
 
 
 @pytest.fixture
@@ -40,7 +40,7 @@ def legacy(paid):
     ledger = Ledger(path)
     ledger.save_messages([_message(2)])
     for message_id in (1, 2):
-        _paid_unit(ledger, cfg, message_id)
+        _paid_unit(ledger, cfg, message_id, drop_fp=message_id == 2)   # a missing fp never excludes
     assert len(calls) == 2
     yield ledger, calls
     ledger.close()
@@ -65,14 +65,14 @@ def test_a_bindingless_answerless_success_is_eligible_and_the_bundle_lists_it(le
     assert report['state'] == 'complete' and report['candidates'] == report['eligible'] == 2
     units = report['plan']['units']
     assert [unit['message_id'] for unit in units] == [2, 1]
-    assert all(unit['extract_version'] == local_rebuild.EXTRACT_VERSION for unit in units)
+    assert all(unit['contract'] == local_rebuild._context_contract() for unit in units)
     assert local_rebuild.valid_plan(report['plan'])
     assert _usage(ledger) == before and len(calls) == 2
 
 
 @pytest.mark.parametrize('damage,reason', [
-    ("UPDATE artifacts SET meta=json_set(meta,'$.input_binding',NULL) WHERE kind='cloud_usage_reserve' "
-     "AND message_id=1", 'binding_present'),
+    ("UPDATE artifacts SET meta=json_set(meta,'$.input_binding',NULL) "
+     "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND message_id=1", 'binding_present'),
     ("UPDATE artifacts SET content='{\"text\":\"synthetic\",\"finish_reason\":\"stop\"}' "
      "WHERE kind='cloud_usage_result' AND message_id=1", 'answer_stored'),
     ("UPDATE artifacts SET content='null' WHERE kind='cloud_usage_result' AND message_id=1",
@@ -179,7 +179,7 @@ def test_the_bundle_limit_is_a_fixed_constant():
     assert local_rebuild.BUNDLE_LIMIT == 20
     with pytest.raises(ValueError, match='local_rebuild_limit_invalid'):
         local_rebuild.preview(None, limit=21)
-    units = [{'project_id': 1, 'message_id': mid, 'source_binding': 's', 'extract_version': 1,
+    units = [{'project_id': 1, 'message_id': mid, 'source_binding': 's', 'contract': 'b' * 64,
               'proof': 'a' * 64} for mid in range(1, 22)]
     plan = {'schema': local_rebuild.PLAN_SCHEMA, 'database': [1, 2], 'units': units}
     plan['bundle_digest'] = payload_hash({k: plan[k] for k in ('schema', 'database', 'units')})
@@ -198,7 +198,7 @@ def test_a_settled_but_unsuccessful_result_is_not_success(legacy, monkeypatch):
     cloud_policy.record_result(ledger, reservation, _result(reservation, 'timeout', 'timeout'))
     with ledger.db:
         ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.input_binding') "
-                          "WHERE kind='cloud_usage_reserve' AND message_id=3")
+                          "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND message_id=3")
     with pytest.raises(ValueError, match='^not_success$'):
         local_rebuild.unit_proof(ledger, 1, 3)
 
@@ -243,3 +243,65 @@ def test_a_copied_database_never_inherits_the_approval(legacy, tmp_path):
     with closing(Ledger(copy_path)) as copied:
         assert local_rebuild.approved_units(copied.db)        # the receipt itself was copied
         assert local_rebuild.permit(copied, 1, 1) == local_rebuild.PROOF_CHANGED
+
+
+@pytest.mark.parametrize('field,value', [
+    ('payload_hash', 'f' * 64), ('receipt_reason', '別の理由'), ('receipt_units', []),
+    ('receipt_bundle', 'e' * 64),
+])
+def test_a_receipt_that_does_not_reproduce_its_envelope_grants_nothing(legacy, field, value):
+    ledger, _ = legacy
+    _approve(ledger, local_rebuild.preview(ledger)['plan'])
+    assert len(local_rebuild.approved_units(ledger.db)) == 2
+    with ledger.db:
+        if field == 'payload_hash':
+            ledger.db.execute("UPDATE command_receipts SET payload_hash=?", (value,))
+        else:
+            path = {'receipt_reason': '$.reason', 'receipt_units': '$.units', 'receipt_bundle': '$.bundle_digest'}[field]
+            ledger.db.execute(f"UPDATE command_receipts SET receipt_json=json_set(receipt_json,'{path}',json(?))",
+                              (json.dumps(value),))
+    assert local_rebuild.approved_units(ledger.db) == {}          # one broken part voids the whole bundle
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.UNAPPROVED
+
+
+def test_an_approval_that_cannot_reverify_in_time_rejects_the_whole_bundle(legacy, monkeypatch):
+    ledger, _ = legacy
+    plan = local_rebuild.preview(ledger)['plan']
+    monkeypatch.setattr(local_rebuild, 'APPROVE_SECONDS', 0.0)
+    _, receipt = _approve(ledger, plan)
+    assert receipt['outcome'] == 'rejected' and receipt['error'] == local_rebuild.UNVERIFIED
+    assert local_rebuild.approved_units(ledger.db) == {}
+
+
+def test_a_changed_extraction_contract_turns_the_permit_into_proof_changed(legacy, monkeypatch):
+    ledger, _ = legacy
+    _approve(ledger, local_rebuild.preview(ledger)['plan'])
+    monkeypatch.setattr(local_rebuild, '_context_contract', lambda: 'c' * 64)
+    assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.PROOF_CHANGED
+
+
+def test_a_reader_limit_leaves_the_rest_unverified_and_the_preview_partial(legacy, monkeypatch):
+    class SyntheticLimit(ValueError):
+        pass
+    ledger, _ = legacy
+    proof = local_rebuild.unit_proof
+
+    def limited(ledger, project_id, message_id, stop=()):
+        if message_id == 1:
+            raise SyntheticLimit('read_deadline')
+        return proof(ledger, project_id, message_id, stop)
+    monkeypatch.setattr(local_rebuild, 'unit_proof', limited)
+    report = local_rebuild.preview(ledger, stop=(SyntheticLimit,))
+    assert report['state'] == 'partial' and report['excluded']['unverified'] == 1
+    assert report['excluded']['receipt_inconsistent'] == 0 and report['eligible'] == 1
+
+
+def test_an_unreadable_tally_is_a_fixed_reason_for_every_candidate(legacy, monkeypatch):
+    import cloud_policy
+    ledger, _ = legacy
+
+    def broken(*_args, **_kwargs):
+        raise cloud_policy.AnthropicError('pricing_unverified', 'synthetic')
+    monkeypatch.setattr(cloud_policy, '_tally', broken)
+    report = local_rebuild.preview(ledger)
+    assert report['excluded']['tally_invalid'] == 2 and report['plan'] is None
