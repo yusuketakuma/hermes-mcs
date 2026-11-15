@@ -674,8 +674,38 @@ def _persist_render(db, card, spec, op, rev, now):
          rev, now, card["card_id"]))
 
 
-def _manual_attachment_hold_ready(db, card, latest, content, gens, cfg, now, waiting):
-    """Recheck an unpublished identity hold without retaining a trial plan."""
+# Proofs that may reopen an unpublished identity hold: an operator's edit, or a native upload
+# sealed by its own delivered receipts. A collected, unavailable or unproven upload never does.
+_REPLAN_PROOFS = ("operator_edit", "private_operator_edit", "file", "private_stage")
+
+
+def _latest_delivered(db, card_id):
+    return db.execute("SELECT * FROM notification_renders WHERE card_id=? AND state='delivered' "
+                      "ORDER BY render_rev DESC LIMIT 1", (card_id,)).fetchone()
+
+
+def _replan_prior_in_flight(db, card_id, held_delivery_id) -> bool:
+    """Whether an earlier render of this card can still change what the held update would
+    prove: a send in flight, a delivered render whose thread, body, file or file group is
+    pending or unknown, or a held part with no code that a late receipt can still settle."""
+    return db.execute(
+        "SELECT 1 FROM notification_renders r WHERE r.card_id=? AND r.delivery_id<>? AND "
+        "(r.state IN ('sending','unknown') OR (r.state='delivered' AND EXISTS("
+        "SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=r.delivery_id "
+        "AND p.kind IN ('thread','body_part','attachment_part','file_group') "
+        "AND p.state IN ('pending','unknown'))) OR (r.state IN ('sending','unknown','delivered') "
+        "AND EXISTS(SELECT 1 FROM notification_render_parts h WHERE h.delivery_id=r.delivery_id "
+        "AND h.state='held' AND h.error_code IS NULL))) LIMIT 1",
+        (card_id, held_delivery_id)).fetchone() is not None
+
+
+def _manual_attachment_hold_ready(db, card, latest, content, gens, cfg, now, waiting, progress_cfg):
+    """Recheck an unpublished identity hold without retaining a trial plan.
+
+    Its proof may land after the hold: an operator's edit, or the earlier update's own receipts
+    (its thread receipt can land after its card receipt). Nothing is reopened while that card or
+    a reply's parent still has a send or parts in flight, and the trial is the real replacement
+    (the cancel included), rolled back, so it decides exactly what the next issue builds."""
     if (card["transport"] != "slack" or card["delivery_state"] != "update_failed"
             or latest is None or latest["state"] != "held" or latest["op"] != "update"
             or latest["spec_published"] != 0 or latest["first_published_at"] is not None
@@ -690,14 +720,22 @@ def _manual_attachment_hold_ready(db, card, latest, content, gens, cfg, now, wai
                          for p in parts)):
         return False
     held_attachments = {p["part_id"] for p in parts if p["kind"] == "attachment_part"}
-    _, _, identities = notify_parts._same_thread_delivered_parts(db, card)
-    if not any(proof is not None and proof[0] in held_attachments and proof[5] in ("operator_edit", "private_operator_edit")
-               for proofs in identities.values() for proof in proofs):
+    history_card, inherited = notify_parts.attachment_history_card(db, card, "update")
+    sources = [c for c in (history_card, card if inherited else None) if c is not None]
+    for source in sources:
+        if (unsettled_attempt(db, source["card_id"]) is not None
+                or _replan_prior_in_flight(db, source["card_id"], latest["delivery_id"])):
+            return False
+    if not any(proof is not None and proof[0] in held_attachments and proof[5] in _REPLAN_PROOFS
+               for source in sources
+               for proofs in notify_parts._same_thread_delivered_parts(db, source)[2].values()
+               for proof in proofs):
         return False
     db.execute("SAVEPOINT manual_attachment_replan")
     try:
+        _cancel_open_renders(db, card["card_id"], now)     # as the issue below does
         _, hold = _build_spec(db, {**card, **gens}, content, "update", latest["render_rev"] + 1,
-                              cfg, now, waiting)
+                              cfg, now, waiting, progress_cfg=progress_cfg)
     finally:
         db.execute("ROLLBACK TO manual_attachment_replan")
         db.execute("RELEASE manual_attachment_replan")
@@ -832,18 +870,9 @@ def issue_render(db, card_id, cfg, now, specs, force=False, *, _preflight_candid
     # Rebuild only a proven oversized failed plan; pending/unknown parts still
     # pass through the existing in-flight gate below without being released.
     force = force or notify_parts.needs_wire_replan(db, card, latest)
-    if _manual_attachment_hold_ready(db, card, latest, content, render_gens, cfg, now, waiting):
-        _cancel_render(db, latest["delivery_id"], now)
-        latest = db.execute("SELECT * FROM notification_renders WHERE delivery_id=?",
-                            (latest["delivery_id"],)).fetchone()
-        force = True
-    if not _render_needed(db, card, latest, gens, cfg, now, force, waiting):
-        return None                        # delivered/terminal & no drift
-    if op == "update" and _parts_in_flight(db, latest):
-        return None                        # a later sweep issues it
-    rev = (latest["render_rev"] + 1) if latest is not None else 1
-    _cancel_open_renders(db, card_id, now)
-    card = {**card, **render_gens}
+    # A held latest render may be replaced in this call (proof landed, or its content drifted);
+    # it never proves that the earlier update's parts settled.
+    held_before = latest is not None and latest["state"] == "held"
     progress_cfg = cfg
     if "visible_providers" in content_options:
         import cloud_policy
@@ -852,6 +881,19 @@ def issue_render(db, card_id, cfg, now, specs, force=False, *, _preflight_candid
         settings, errors = cloud_policy.resolve_settings(cfg, available_providers=available)
         progress_cfg = ({} if errors else {**cfg, "cloud_llm": {
             **(cfg.get("cloud_llm") or {}), **settings}})
+    if _manual_attachment_hold_ready(db, card, latest, content, render_gens, cfg, now, waiting,
+                                     progress_cfg):
+        _cancel_render(db, latest["delivery_id"], now)
+        latest = db.execute("SELECT * FROM notification_renders WHERE delivery_id=?",
+                            (latest["delivery_id"],)).fetchone()
+        force = True
+    if not _render_needed(db, card, latest, gens, cfg, now, force, waiting):
+        return None                        # delivered/terminal & no drift
+    if op == "update" and _parts_in_flight(db, _latest_delivered(db, card_id) if held_before else latest):
+        return None                        # a later sweep issues it
+    rev = (latest["render_rev"] + 1) if latest is not None else 1
+    _cancel_open_renders(db, card_id, now)
+    card = {**card, **render_gens}
     spec, budget_hold = _build_spec(db, card, content, op, rev, cfg, now, waiting,
                                     progress_cfg=progress_cfg)
     _persist_render(db, card, spec, op, rev, now)
