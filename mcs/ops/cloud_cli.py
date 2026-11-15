@@ -307,7 +307,7 @@ def _route_counts(db, cfg, settings, deadline):
                 item["basic_requests_estimate"] += 1
                 item["chunk_extra_requests_estimate"] += requests - 1
                 item["requests_estimate"] += requests
-    if "semantic_backlog" in settings["routes"] and policy.send_route("semantic_backlog"):
+    if policy.semantic_planned(settings):
         scope, params = _source_scope(settings, "j")
         rows = db.execute(
             "SELECT j.project_id,j.message_id,length(m.body_text) AS body_length FROM fetch_jobs j "
@@ -984,6 +984,9 @@ def budget_command(args):
         reopen = getattr(args, "reextract_backlog_until", None)
         if reopen is not None:
             changes["cloud_llm.reextract_backlog_until"] = _time_value(reopen, end=True)
+        reopen = getattr(args, "semantic_backlog_until", None)
+        if reopen is not None:
+            changes["cloud_llm.semantic_backlog_until"] = _time_value(reopen, end=True)
     except ValueError:
         print("予算: 金額はドル単位の0以上の数値、日時は 2026-10-30 または 2026-10-30T23:59:59+09:00 の形、"
               "解除は none で指定してください")
@@ -1025,6 +1028,7 @@ def budget_command(args):
                       "period_start": settings["window_start"], "until": settings["until"],
                       "reextract_backlog_until": settings["reextract_backlog_until"],
                       "reextract_backlog_blockers": blockers,
+                      "semantic_backlog_until": settings["semantic_backlog_until"],
                       "saved": bool(changes)}, ensure_ascii=False))
     return 0
 
@@ -1168,6 +1172,8 @@ def add_parsers(sub):
     q.add_argument("--until", help="送信の終了（2026-10-30 はその日の23:59:59）。AnthropicとOpenAIに設定。Jevの期限は変更しません。none で解除")
     q.add_argument("--reextract-backlog-until", dest="reextract_backlog_until",
                    help="保存済み投稿の再抽出に限り、この日時までクラウド送信を再開（期間の上限額の設定が必要）。none で終了")
+    q.add_argument("--semantic-backlog-until", dest="semantic_backlog_until",
+                   help="意味解析の未処理分に限り、この日時までクラウド送信を再開（期間の上限額の設定が必要）。none で終了")
     q.set_defaults(fn=budget_command, cloud_action="budget")
     for action in ("stop", "resume", "release-local"):
         q = actions.add_parser(action, help=(

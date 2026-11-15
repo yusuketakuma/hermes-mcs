@@ -236,7 +236,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
 
     switched = False
     possibly_sent_targets = set()
-    send_capable = cloud_policy.send_route("semantic_backlog")
+    send_capable = cloud_policy.route_open("semantic_backlog", cfg if isinstance(cfg, dict) else {})
 
     def target_id():
         target = _inference_target.get()

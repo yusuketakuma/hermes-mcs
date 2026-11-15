@@ -191,7 +191,9 @@ def loaded_source_contract():
 
 def _cloud_contract(cfg):
     import cloud_policy
-    if not cloud_policy.send_route("semantic_backlog"):
+    # Planned, not route_open: only the backlog worker may send, but every
+    # process must name the same contract or stored results flip between them.
+    if not cloud_policy.semantic_planned(cfg if isinstance(cfg, dict) else {}):
         return None
     block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
     _, errors = cloud_policy.cloud_config(cfg)

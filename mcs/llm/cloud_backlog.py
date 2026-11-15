@@ -251,7 +251,7 @@ class CloudBacklogPool:
             # Cloud availability is decided inside run_due. A missing key or
             # a spend hold must not hide its existing local fallback/recovery.
         else:
-            if not cloud_policy.reextract_planned(settings):
+            if not (cloud_policy.reextract_planned(settings) or cloud_policy.semantic_planned(settings)):
                 # Existing workers settle paid carry before retiring.
                 return
             if not cloud_policy.selected_key(self.root):
@@ -469,8 +469,9 @@ def worker(parent, *, index=None, context_only=False):
                     wait("provider_settings_unreadable")
                     continue
                 settings = cloud_inference.resolve_cloud_settings(cfg)
-                routes_open = cloud_policy.reextract_planned(settings)
-                semantic_open = cloud_policy.send_route("semantic_backlog")
+                extract_open = cloud_policy.reextract_planned(settings)
+                semantic_open = cloud_policy.route_open("semantic_backlog", settings)
+                routes_open = extract_open or semantic_open
                 if index is not None:
                     retire = (settings["mode"] != "on" or not routes_open
                               or index >= settings["max_concurrency"])
@@ -505,8 +506,8 @@ def worker(parent, *, index=None, context_only=False):
                 started = time.monotonic()
                 tally_before = dict(cloud_policy.TALLY_COST)
                 try:
-                    if phase % 2 and not semantic_open:
-                        phase += 1      # only the stored-message backlog is open: no semantic turn
+                    if not (semantic_open if phase % 2 else extract_open):
+                        phase += 1      # only the other backlog is open: skip this turn
                         continue
                     if phase % 2 == 0:
                         waiting["code"] = None

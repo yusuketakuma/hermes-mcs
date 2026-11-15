@@ -105,7 +105,8 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
            "max_concurrency": 4, "daily_cost_limit_usd": DEFAULT_DAILY_COST_LIMIT_USD,
            "monthly_cost_limit_usd": DEFAULT_MONTHLY_COST_LIMIT_USD,
            "usd_jpy": None, "until": None,
-           "window_start": None, "window_budget_usd": None, "reextract_backlog_until": None}
+           "window_start": None, "window_budget_usd": None, "reextract_backlog_until": None,
+           "semantic_backlog_until": None}
     errors = []
     # an absent block means "unset"; an explicit null is a config error, not an omission
     block = cfg.get("cloud_llm", {}) if isinstance(cfg, dict) else {}
@@ -221,6 +222,15 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
             out["reextract_backlog_until"] = block["reextract_backlog_until"]
         except (ValueError, OverflowError):
             errors.append("config: cloud_llm_reextract_backlog_invalid")
+    # The semantic backlog reopens the same way: only inside a period budget.
+    if block.get("semantic_backlog_until") is not None:
+        try:
+            until_epoch(block["semantic_backlog_until"])
+            if out["window_budget_usd"] is None:
+                raise ValueError
+            out["semantic_backlog_until"] = block["semantic_backlog_until"]
+        except (ValueError, OverflowError):
+            errors.append("config: cloud_llm_semantic_backlog_invalid")
     # A key alone may enable sending, but never without a spending cap.
     budgets = block.get("provider_budgets", {})
     cap_keys = ("daily_cost_limit_usd", "monthly_cost_limit_usd")
@@ -395,11 +405,28 @@ def reextract_backlog_window(cfg, *, now=None):
 
     Open only while reextract_backlog_until lies ahead and a period budget
     (window_start + window_budget_usd) caps every cloud spend made in it.
-    Attachment pages and the semantic backlog stay closed."""
+    Attachment pages stay closed; the semantic backlog has its own window."""
+    return _backlog_window(cfg, "reextract_backlog_until", now)
+
+
+def semantic_backlog_window(cfg, *, now=None):
+    """The owner's bounded reopening of sends for the semantic backlog, under
+    the same period budget as stored-message re-extraction."""
+    return _backlog_window(cfg, "semantic_backlog_until", now)
+
+
+def _backlog_window(cfg, key, now):
     c = _cfg(cfg)
-    until = c["reextract_backlog_until"]
+    until = c[key]
     return (until is not None and c["window_budget_usd"] is not None
             and (time.time() if now is None else now) < until_epoch(until))
+
+
+def semantic_planned(cfg):
+    """Whether the semantic backlog goes to the cloud at all (workers, estimates);
+    route_open decides each send. A route list without it keeps it closed."""
+    return "semantic_backlog" in _cfg(cfg)["routes"] and (
+        send_route("semantic_backlog") or semantic_backlog_window(cfg))
 
 
 def reextract_planned(cfg):
@@ -414,8 +441,9 @@ def route_open(route, cfg):
     """send_route, plus stored-message sends inside the bounded window. Only the
     backlog worker process may make them: its selection is the receipted
     history scope, so resident and tick passes stay local."""
-    return send_route(route) or (route == "reextract" and os.environ.get(BACKLOG_WORKER_ENV) == "1"
-                                 and reextract_backlog_window(cfg))
+    window = {"reextract": reextract_backlog_window, "semantic_backlog": semantic_backlog_window}.get(route)
+    return send_route(route) or (window is not None and os.environ.get(BACKLOG_WORKER_ENV) == "1"
+                                 and window(cfg))
 
 
 def eligible(cfg, route, project_id):

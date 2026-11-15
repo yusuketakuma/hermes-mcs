@@ -1,0 +1,22 @@
+{
+  "category": "added",
+  "title": "意味解析の未処理分を、期限と期間予算を指定したあいだだけクラウドで処理できるようにする",
+  "summary": "クラウドでの意味解析は送信を止めたままで、未処理分がたまっていました。保存済み投稿の再抽出と同じ形で、期限（cloud_llm.semantic_backlog_until）と期間の上限額を指定したあいだだけ、未処理分の意味解析をクラウドへ送れるようにしました。指定しなければ従来どおり送信しません。再送防止、予算の上限、対象患者の範囲の確認は変えていません。患者名を含む本文が外部のAIへ送信されます。",
+  "upgrade": "既定では何も変わりません。再開するには `cloud-llm budget --semantic-backlog-until <日時>` で期限を指定します。期間の上限額（--period-usd）が設定されていること、cloud_llm.routes に semantic_backlog が含まれていることが条件です。none を指定すると終了します。",
+  "details": [
+    "送信できるのは、未処理分を処理する専用のプロセスだけです。収集や常駐の処理からは送信しません。",
+    "費用は、再抽出と同じ期間の上限額に合算されます。上限に達すると、どちらも送信を止めます。",
+    "期限を過ぎると、新しい送信を止めます。受け取り済みの結果の保存は続けます。",
+    "使うモデルは、用途別の設定（cloud_llm.profiles.backlog、既定は luna-medium）に従います。"
+  ],
+  "refs": [
+    "mcs/llm/cloud_policy.py",
+    "mcs/llm/cloud_backlog.py",
+    "mcs/semantic/semantic_candidate.py",
+    "mcs/semantic/semantic_drain.py",
+    "mcs/semantic/semantic_due_selection.py",
+    "mcs/semantic/semantic_transport.py",
+    "mcs/semantic/semantic_runtime.py",
+    "mcs/ops/cloud_cli.py"
+  ]
+}
