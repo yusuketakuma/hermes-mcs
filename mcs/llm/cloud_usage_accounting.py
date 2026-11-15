@@ -252,6 +252,35 @@ def _periods(now):
         raise AnthropicError("pricing_unverified", "usage_timestamp_invalid") from None
 
 
+# Spending of accounting rows removed by a receipted patient-context reset. One
+# artifact per reset; each entry keeps only when, which provider, how many requests
+# and how much, so daily, monthly and period limits still count what was spent.
+CARRYOVER_KIND = "cloud_usage_carryover_v1"
+
+
+def carryover_entries(db, since):
+    """Carried spending at or after ``since`` as (at, provider, requests, cost); malformed rows fail closed."""
+    entries = []
+    for (content,) in db.execute("SELECT content FROM artifacts WHERE kind=? ORDER BY artifact_id", (CARRYOVER_KIND,)):
+        document = strict_json(content) if isinstance(content, str) else None
+        if not isinstance(document, dict) or document.get("schema") != CARRYOVER_KIND \
+                or not isinstance(document.get("entries"), list):
+            raise AnthropicError("pricing_unverified", "carryover_invalid")
+        for entry in document["entries"]:
+            if (not isinstance(entry, dict) or set(entry) != {"at", "provider", "requests", "cost_usd"}
+                    or type(entry["at"]) not in (int, float) or not math.isfinite(entry["at"])
+                    or entry["provider"] not in ("anthropic", "openai")
+                    or entry["requests"] not in (0, 1)):
+                raise AnthropicError("pricing_unverified", "carryover_invalid")
+            try:
+                cost = _decimal(entry["cost_usd"])
+            except ValueError:
+                raise AnthropicError("pricing_unverified", "carryover_invalid") from None
+            if entry["at"] >= since:
+                entries.append((entry["at"], entry["provider"], entry["requests"], cost))
+    return entries
+
+
 def _loads(value):
     try:
         result = json.loads(value)

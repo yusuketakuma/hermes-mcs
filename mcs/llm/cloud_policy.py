@@ -53,6 +53,8 @@ from cloud_usage_accounting import (
     usage_cost as usage_cost,
     _unbilled as _unbilled,
     _periods as _periods,
+    CARRYOVER_KIND as CARRYOVER_KIND,
+    carryover_entries as carryover_entries,
     _loads as _loads,
     _accounting_meta as _accounting_meta,
     _accounting_snapshot as _accounting_snapshot,
@@ -1104,6 +1106,11 @@ def _usage_report_snapshot(ledger, *, now=None, period="month"):
                 _settled(prior[0][0], _reserve_valid(*prior[0]), results[rid])
             except (AnthropicError, ValueError, InvalidOperation, TypeError):
                 invalid = True
+        for at, provider, requests, cost in carryover_entries(ledger.db, day if period == "day" else month):
+            daily += requests * int(at >= day)
+            total += cost
+            settled += cost
+            providers[provider]["cost_usd"] += cost
         return {"daily_requests": daily, "monthly_cost_usd": str(total),
                 "settled_cost_usd": str(settled), "max_reserved_cost_usd": str(total - settled),
                 "unresolved_requests": unknown, "pricing_unverified": invalid,
@@ -1173,6 +1180,7 @@ class _Tally:
         self.provider_totals = {}
         self.total = Decimal(0)
         self.invalid = False
+        self.carried = False
 
     def _add(self, day, cost, provider):
         self.days.setdefault(day, [0, Decimal(0)])[1] += cost
@@ -1203,6 +1211,13 @@ class _Tally:
         return digest.digest()
 
     def update(self, ledger, now):
+        if not self.carried:
+            # A reset deletes in-period rows, so the changed fingerprint always rebuilds here.
+            for at, provider, requests, cost in carryover_entries(ledger.db, self.month):
+                day = _periods(at)[0]
+                self.days.setdefault(day, [0, Decimal(0)])[0] += requests
+                self._add(day, cost, provider)
+            self.carried = True
         last_id = self.last_id
         new_orphans = {}
         changed_orphans = set()
