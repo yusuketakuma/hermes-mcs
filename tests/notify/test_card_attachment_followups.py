@@ -594,15 +594,17 @@ def test_a_followup_held_before_the_first_updates_thread_receipt_replans_once_it
     assert all(_late_followup_state(led, eid) == "accepted" for eid in events)
 
 
-def test_a_held_followup_is_not_replanned_while_the_first_updates_file_group_is_unknown(
-        led, tmp_path, monkeypatch):
+@pytest.mark.parametrize("state", ["unknown", "held"], ids=["group-unknown", "group-held-without-code"])
+def test_a_held_followup_is_not_replanned_while_the_first_updates_file_group_is_unsettled(
+        led, tmp_path, monkeypatch, state):
     import notify_flush
 
     world, events, _blobs, legacy = _two_late_files_recovered(led, tmp_path, monkeypatch)
     first = {}
 
     def unknown_group():
-        # The first update's file group receipt is not known: its file ids are unproven.
+        # The first update's file group receipt is not known (or still held with no code, so a
+        # late receipt can still settle it): its file ids are unproven.
         [held] = _identity_held(led)
         first["held"] = held
         row = led.db.execute(
@@ -610,8 +612,8 @@ def test_a_held_followup_is_not_replanned_while_the_first_updates_file_group_is_
             "ON p.delivery_id=r.delivery_id WHERE r.state='delivered' AND p.kind='file_group' "
             "ORDER BY r.render_rev DESC LIMIT 1").fetchone()
         with led.db:
-            led.db.execute("UPDATE notification_render_parts SET state='unknown' "
-                           "WHERE delivery_id=? AND kind='file_group'", (row[0],))
+            led.db.execute("UPDATE notification_render_parts SET state=?, error_code=NULL "
+                           "WHERE delivery_id=? AND kind='file_group'", (state, row[0]))
 
     _cycle_card_then_thread(world, led, before_thread=unknown_group)
     monkeypatch.setattr(ledger.time, "time", lambda: NOW + 11 + notify_cards.RESEAT_S)
