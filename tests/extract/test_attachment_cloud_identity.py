@@ -239,7 +239,9 @@ def test_corrupt_paid_journal_keeps_cloud_closed_but_allows_local(page_store):
     assert len(local_calls) == 1 and not cloud_calls
     cfg['cloud_llm']['mode'] = 'on'
     with legacy_cloud_routes():
-        assert run(ledger, cfg, 'cloud') == {'done': 0, 'deferred': 1}
+        assert run(ledger, cfg, 'cloud') == {
+            'done': 0, 'deferred': 1, 'deferred_reason': 'paid_recovery_pending'}
+    assert not cloud_calls
     assert (directory / 'invalid-name').read_text() == 'synthetic corrupt journal'
     with legacy_cloud_routes():
         assert not worker.current(ledger.db, 1, key, cfg=cfg)['ready']
