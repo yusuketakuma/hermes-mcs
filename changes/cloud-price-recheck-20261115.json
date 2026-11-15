@@ -1,0 +1,21 @@
+{
+  "category": "fixed",
+  "title": "クラウドの料金表を再確認し、期限切れによる送信停止を回避",
+  "summary": "Anthropic（claude-haiku-5-5）とOpenAI（gpt-6-luna・gpt-6.1-sol）の料金表を2026-11-15に公式ページで再確認し、再確認期限をいずれも2026-12-15へ延ばしました。料金と出力上限は変わっていません。これで、11月下旬以降にクラウド送信が料金未確認として止まることはなくなります。あわせて、期限の7日前から mcs_setup.py check が再確認期限を予告し、期限を過ぎたら送信を止めていることを表示します。",
+  "upgrade": "更新するだけで有効になり、追加操作は不要です。新しい送信は、その日までに確認済みの料金表で予約・精算します。以前の版で予約した送信は、引き続き当時の料金表で精算します。claude-sonnet-5-5 の料金表は2026-11-15確認・2026-12-15期限のまま変わりません。",
+  "details": [
+    "anthropic_client に料金表 anthropic-haiku-5-5-2026-11-15、openai_client に openai-gpt-6-luna-2026-11-15 と openai-gpt-6.1-sol-2026-11-15 を追加しました（確認日2026-11-15・期限2026-12-15）。旧版の定義は過去の予約の照合用に残しています。",
+    "同じ料金で版だけを足せるよう、各提供元の料金表の定義を1つの関数から作る形に整理しました。",
+    "cloud_usage_accounting.current_price_version が、新しい送信に使う料金表を日付で選びます。設定上の最新版はその確認日から使い、それより前の日は、その日までに確認済みの最新版を使います。",
+    "price_info に price_days_remaining と price_recheck_due を追加し、mcs_setup.py check がその値で期限を予告します。"
+  ],
+  "refs": [
+    "docs/guides/ANTHROPIC.md",
+    "mcs/llm/cloud_policy.py",
+    "mcs/llm/cloud_usage_accounting.py",
+    "mcs/llm/providers/anthropic_client.py",
+    "mcs/llm/providers/openai_client.py",
+    "mcs/ops/mcs_setup.py",
+    "tests/llm/test_price_recheck_notice.py"
+  ]
+}

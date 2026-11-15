@@ -66,3 +66,16 @@ def test_notice_follows_the_configured_model_whose_table_runs_out_first():
     assert models == sorted({openai_client.SOL_MODEL, openai_client.MODEL}), "the backlog profile uses Luna"
     info = cloud_policy.earliest_price_info(cfg, settings, now=_at(2026, 11, 20))
     assert (info["price_model"], info["price_valid_until"]) == (openai_client.MODEL, openai_client.PRICE_VALID_UNTIL)
+
+
+def test_openai_recheck_adds_versions_with_identical_prices():
+    import openai_client
+    for model, older, current in ((openai_client.MODEL, "openai-gpt-6-luna-2026-10-29", openai_client.PRICE_VERSION),
+                                  (openai_client.SOL_MODEL, "openai-gpt-6.1-sol-2026-10-31",
+                                   openai_client.SOL_PRICE_VERSION)):
+        before = accounting.PRICE_DEFINITIONS[(model, older)]
+        after = accounting.PRICE_DEFINITIONS[(model, current)]
+        assert dict(before["prices"]) == dict(after["prices"])
+        assert (after["price_checked_on"], after["price_valid_until"]) == ("2026-11-15", "2026-12-15")
+        assert accounting.current_price_version(model, _at(2026, 11, 14)) == older
+        assert accounting.current_price_version(model, _at(2026, 11, 20)) == current

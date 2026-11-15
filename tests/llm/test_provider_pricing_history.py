@@ -16,7 +16,7 @@ from test_cloud_policy import _cfg, _reserve, _result
 
 @pytest.fixture
 def now(monkeypatch):
-    value = datetime(2026, 11, 1, 12, tzinfo=c.JST).timestamp()
+    value = datetime(2026, 11, 15, 12, tzinfo=c.JST).timestamp()
     monkeypatch.setattr(c.time, "time", lambda: value)
     return value
 
