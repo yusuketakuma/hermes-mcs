@@ -19,7 +19,7 @@ HELPERS = (
     'patient_context_refresh_state', 'patient_context_quality_receipts',
     'patient_context_refresh_sources', 'patient_context_refresh_readiness',
     'patient_context_quality_controller', 'rollup_builder', 'cloud_usage_accounting',
-    'cloud_history_scope', 'semantic_usage_receipts',
+    'cloud_history_scope', 'semantic_usage_receipts', 'cloud_send_admission',
 )
 CFG = {'cloud_llm': {'mode': 'off'}}
 

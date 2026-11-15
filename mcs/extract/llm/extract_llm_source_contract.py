@@ -36,6 +36,7 @@ import cloud_usage_accounting
 import cloud_history_scope
 import cloud_backlog
 import cloud_inference
+import cloud_send_admission
 import llm_retry
 import mcs_config
 import clinical_values
@@ -108,6 +109,7 @@ _LOADED_SOURCE_PATHS = dict((("extract_llm", str(Path(__file__).with_name("extra
                        ("cloud_history_scope", cloud_history_scope.__file__),
                        ("cloud_backlog", cloud_backlog.__file__),
                        ("cloud_inference", cloud_inference.__file__),
+                       ("cloud_send_admission", cloud_send_admission.__file__),
                        ("llm_retry", llm_retry.__file__),
                        ("mcs_config", mcs_config.__file__),
                        ("mcs_queries", mcs_queries.__file__),

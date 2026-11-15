@@ -17,6 +17,8 @@ import bounded_http
 import cloud_backlog
 import cloud_client
 import cloud_policy
+import cloud_send_admission
+from cloud_send_admission import CloudBusy, CloudFallback, CloudObservationIncomplete  # noqa: F401  (public names)
 import mcs_util
 import writer_lock
 from mcs_util import HOME, load_config
@@ -79,18 +81,6 @@ def _history_read_error(phase, error, *, observation=None):
                           "ts": time.time(), **values}), file=sys.stderr, flush=True)
     except Exception:
         pass  # Diagnostics must never replace the existing fail-closed refusal.
-
-
-class CloudFallback(Exception):
-    """Discard this provider's unit and retry under the local contract."""
-
-
-class CloudBusy(CloudFallback):
-    """No shared cloud capacity was reserved or sent."""
-
-
-class CloudObservationIncomplete(CloudFallback):
-    """Defer adoption without discarding a received answer or starting a fallback."""
 
 
 def _current_cloud_settings():
@@ -171,25 +161,6 @@ class CloudInferenceUnit:
 
         reserved_caps = {}
 
-        def caps(settings):
-            out = {k: settings[k] for k in ("daily_request_budget", "daily_cost_limit_usd",
-                                            "monthly_cost_limit_usd", "window_budget_usd")}
-            # an earlier period start counts more spending, like a lower cap
-            start = settings["window_start"]
-            out["window_start"] = None if start is None else mcs_util.until_epoch(start)
-            budgets = settings["provider_budgets"]
-            provider_caps = budgets.get(settings["provider"], {})
-            for key in ("daily_cost_limit_usd", "monthly_cost_limit_usd"):
-                out["provider_" + key] = provider_caps.get(key, 0 if budgets else None)
-            return out
-
-        def tightened(now):
-            # a cap set or lowered after this attempt's reservation stops the send it
-            # has not made yet; the reservation itself stays counted at its maximum
-            return any(reserved_caps.get(k, now[k]) is None and now[k] is not None
-                       or None not in (reserved_caps.get(k), now[k]) and now[k] < reserved_caps[k]
-                       for k in now)
-
         def guard(*, inference=True):
             # A denial observed after the response is sticky for this unit:
             # restoring the old source/scope cannot make its response current.
@@ -219,7 +190,7 @@ class CloudInferenceUnit:
                 if not denied and inference:
                     try:
                         waiting = (not cloud_backlog.owner_alive() or time.monotonic() >= deadline
-                                   or tightened(caps(now)) or cloud_policy.setting_block_reason(now)
+                                   or cloud_send_admission.tightened(reserved_caps, cloud_send_admission.caps(now)) or cloud_policy.setting_block_reason(now)
                                    or cloud_policy.block_reason(ledger, now, route, project_id, model=self.model))
                     except Exception:
                         raise CloudObservationIncomplete("cloud_admission_unverified") from None
@@ -266,7 +237,7 @@ class CloudInferenceUnit:
             # budget in force now, not the one the unit started under
             try:
                 current_cfg = {"cloud_llm": _current_cloud_settings()}
-                current_caps = caps(current_cfg["cloud_llm"])
+                current_caps = cloud_send_admission.caps(current_cfg["cloud_llm"])
             except CloudFallback:
                 raise
             except Exception:

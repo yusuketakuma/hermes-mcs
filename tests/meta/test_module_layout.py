@@ -16,6 +16,7 @@ MODULES = {
     'llm_retry': 'llm/transport/llm_retry.py',
     'llm_admission': 'llm/admission/llm_admission.py',
     'llm_availability': 'llm/admission/llm_availability.py',
+    'cloud_send_admission': 'llm/admission/cloud_send_admission.py',
     'extract': 'extract/rules/extract.py',
     'extract_llm': 'extract/llm/extract_llm.py',
     'clinical_values': 'extract/clinical/clinical_values.py',
