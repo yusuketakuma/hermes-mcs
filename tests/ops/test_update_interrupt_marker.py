@@ -79,7 +79,7 @@ def test_a_settled_apply_failure_keeps_its_existing_cleanup(updater, monkeypatch
 def _applied(updater, monkeypatch):
     previous, target = _world(updater, monkeypatch)
     _post_merge(updater, monkeypatch, in_process_post_merge(updater, monkeypatch))
-    assert updater.apply("v1.1.0", target, "synthetic-apply") == 0, Path(updater.REPORT_PATH).read_text()
+    assert updater.apply("v1.1.0", target, "synthetic-apply") == 0, _journal(updater)
     state = _journal(updater)
     assert state["applied"][-1]["prev_sha"] == previous and not Path(updater.MARKER_PATH).exists()
     return previous
@@ -227,7 +227,14 @@ def test_an_interrupted_parent_reaps_the_child_then_restores_the_marker_under_ru
             return self.returncode
 
     child = Child()
-    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: child)
+    original_popen = subprocess.Popen
+
+    def start(argv, *args, **kwargs):
+        if "--post-merge" in argv and any(Path(arg).name == "mcs_update.py" for arg in argv):
+            return child
+        return original_popen(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", start)
     monkeypatch.setattr(os, "killpg", lambda pid, signum: events.append("kill_requested"))
     ensure = update_lifecycle_context._ensure_recovery_marker
 
