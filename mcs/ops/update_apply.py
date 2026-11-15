@@ -436,13 +436,19 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                         # newer schema: recovery keeps writers stopped until the
                         # restore completes (no consent report exists to hold on)
                         state["applying"]["restore_incomplete"] = True
-            problems = restart_agents() if quiesced and not rollback_failed else []
-            if problems:
-                reason += " restart:" + ",".join(problems)
             if not rollback_failed:
                 # keep remnants when the rollback itself failed — recovery
                 # must still be able to see and escalate the wedged state
                 state["applying"] = None
+            if quiesced and not rollback_failed:
+                # The update is unfinished until the drainers are restarted: save the journal with
+                # its stages first, so an interrupt during the restart keeps the marker and
+                # recovery (finish_pre_merge) restarts them, as it does after a failed restart.
+                journal_store.save_state(STATE_PATH, state)
+            problems = restart_agents() if quiesced and not rollback_failed else []
+            if problems:
+                reason += " restart:" + ",".join(problems)
+            if not rollback_failed:
                 # a failed restart keeps the stages: recovery then restarts
                 # the drainers instead of seeing a finished journal
                 state["stages"] = state["stages"] if problems else []
