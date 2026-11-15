@@ -215,6 +215,16 @@ def test_an_interrupt_during_the_restart_after_bail_leaves_the_restart_to_recove
     import update_policy
     assert update_policy.classify_recovery_journal_position(
         has_applying=False, has_done="done" in [s.get("stage") for s in state["stages"]]) == "finish_pre_merge"
+    # the approval is already consumed: recovery restarts the drainers and it is never re-run
+    assert state["executed"]["synthetic-command"]["result"] == "failed"
+    restarted = []
+    _patch_restart(updater, monkeypatch, lambda **_kw: restarted.append(True) or [])
+    assert updater.recover_interrupted() == 0 and restarted
+    after = _journal(updater)
+    assert after["executed"]["synthetic-command"]["result"] == "failed"
+    import update_execution
+    candidates, _consumed = update_execution.scan_pending_approvals(after)
+    assert all(c["command_id"] != "synthetic-command" for c in candidates)
 
 
 

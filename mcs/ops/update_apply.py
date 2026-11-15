@@ -444,6 +444,10 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 # The update is unfinished until the drainers are restarted: save the journal with
                 # its stages first, so an interrupt during the restart keeps the marker and
                 # recovery (finish_pre_merge) restarts them, as it does after a failed restart.
+                # A non-transient abort consumes its command in that same save, so the approval
+                # never becomes a candidate again once applying is cleared.
+                if command_id and not transient:
+                    _record_executed(state, command_id, "failed", reason)
                 journal_store.save_state(STATE_PATH, state)
             problems = restart_agents() if quiesced and not rollback_failed else []
             if problems:
