@@ -34,7 +34,7 @@
 
 | # | 要件 | 実装前の状態 | 今回の対応 | 区分 |
 |---|---|---|---|---|
-| G1 | アクセスログ（誰が・いつ・どの患者） | `/mcs` 閲覧の記録なし（受付記録は書き込み操作だけ） | **実装**: `/mcs` の全操作を回答前にハッシュ連鎖の JSONL へ記録。書けなければ閲覧を返さない。`mcs_compliance.py access-log verify/review/show` | コード |
+| G1 | アクセスログ（誰が・いつ・どの患者） | `/mcs` 閲覧の記録なし（受付記録は書き込み操作だけ） | **実装**: `/mcs` の全操作を回答前にハッシュ連鎖の JSONL へ記録（末尾は前回の件数・head と照合）。書けなければ閲覧を返さない。`mcs_compliance.py access-log verify/review/show` | コード |
 | G2 | 外国の事業者への要配慮個人情報の提供に施設の判断がない | APIキーがあるだけで Anthropic・OpenAI・Jev を自動有効化 | **実装**（Yusukeさんの決定: 新規導入だけ）: 新規導入は確認記録（確認者・根拠・対象・日時）まで自動有効化しない。既存環境は変更なし | コード＋施設 |
 | G3 | 責任分界・データフロー・チェックリスト対応 | 文書なし | **追加**: `docs/guides/COMPLIANCE.md` | 文書 |
 | G4 | 運用管理規程・BCP・連絡体制 | なし | **追加**: 規程ひな形（25条） | 文書＋施設 |
@@ -59,6 +59,6 @@
 
 - `mcs/core/access_log.py`: 記録・読取り・連鎖検査。
 - `adapters/common/dispatch.py`: Hermes・独立 Slack/Discord・LINE WORKS 共通の入口で記録。
-- `mcs/core/external_transfer.py`、`cloud_policy.resolve_settings`・`semantic_policy.runtime_config` の自動有効化条件、`mcs setup init` の新規作成時に確認待ちを記録。
+- `mcs/core/external_transfer.py`、`cloud_policy.resolve_settings`・`semantic_policy.runtime_config` の自動有効化条件、`install.sh` の初回導入（bootstrap-fresh）と `mcs setup init` の新規作成時に確認待ちを記録。
 - `mcs/ops/mcs_compliance.py`: status / acknowledge / access-log。
 - 適用には Hermes gateway の再起動（LINE WORKS は独立アダプターの再起動）が必要。実機では未検証。
