@@ -22,7 +22,7 @@ __all__ = ['real_cloud', 'runtime', 'cloud']
 def _wire_body(selection, prompt):
     """The reservation body exactly as cloud_inference.guard_context_local builds it (8d8580ba)."""
     tokens = selection['max_tokens'] if selection['max_tokens'] is not None else 1600
-    return anthropic_client.AnthropicClient.body(
+    return cloud_inference._client_class(selection).body(
         SimpleNamespace(model=selection['model'], effort=selection['effort']), prompt, tokens, None)
 
 
