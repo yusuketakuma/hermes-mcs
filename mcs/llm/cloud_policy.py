@@ -1722,23 +1722,6 @@ def _saved_answer(answer, metadata):
     return {key: answer[key] for key in ('text', 'finish_reason')}
 
 
-def history_closed(db, project_id, message_id, *, route):
-    """True when a reservation of this message on ``route`` has no result or a
-    disposition: recover_response refuses those (cloud_result_missing /
-    cloud_result_discarded) and no fresh send is allowed, so selecting the row
-    only defers it again. Read-only; release stays a human operation."""
-    return db.execute(
-        "SELECT 1 FROM artifacts r WHERE r.kind=? AND r.project_id=? AND r.message_id IS ? "
-        "AND CASE WHEN json_valid(r.meta) THEN json_extract(r.meta,'$.route')=? END "
-        "AND (NOT EXISTS (SELECT 1 FROM artifacts x WHERE x.kind=? AND x.project_id=r.project_id "
-        "AND x.message_id IS r.message_id AND CASE WHEN json_valid(x.meta) THEN "
-        "json_extract(x.meta,'$.reservation_id')=json_extract(r.meta,'$.reservation_id') END) "
-        "OR EXISTS (SELECT 1 FROM artifacts d WHERE d.kind='cloud_usage_disposition' "
-        "AND d.project_id=r.project_id AND d.message_id IS r.message_id AND CASE WHEN json_valid(d.meta) "
-        "THEN json_extract(d.meta,'$.reservation_id')=json_extract(r.meta,'$.reservation_id') END)) LIMIT 1",
-        (KINDS[0], project_id, message_id, route, KINDS[1])).fetchone() is not None
-
-
 def recover_response(ledger, *, route, project_id, message_id, unit_key, input_binding, request_fp,
                      owner=None, scope=None, observation=None):
     """Read one exact paid answer; ambiguous, discarded or answerless attempts stay closed."""
