@@ -159,3 +159,55 @@ def test_a_checkpoint_write_after_a_new_reservation_is_refused_in_its_transactio
     before = ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0]
     assert extract_llm_store._persist_chunks(ledger, row, {0: {'symptoms': []}}, None) is False
     assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0] == before
+
+
+def test_a_multi_piece_body_with_a_quality_repair_stays_local_and_tagged(routed, monkeypatch):
+    """Pieces (completeness_quality_testkit's small _CHUNK_SIZE) and one local quality repair,
+    whose started/origin checkpoints are written: no cloud unit, reservation or HTTP, and every
+    checkpoint and the final carry the approval tag."""
+    import extract_llm_context
+    import extract_llm_prepare
+    import extract_llm_proofs
+    import extract_llm_store
+    from extract_testkit import _hash, _message
+    ledger, cfg, calls, reserved, results = routed
+    pieces = [f"本人に合成{tag}の発熱と咳があります。\n" for tag in "ABC"]
+    ledger.save_messages([_message(1, "".join(pieces))])
+    ledger.artifact_add(worker.KIND, "{}", project_id=1, message_id=1,
+        meta={"hash": _hash(ledger, 1), "extract_version": worker.EXTRACT_VERSION - 1})
+    for module in (worker, extract_llm_context, extract_llm_engine, extract_llm_prepare,
+                   extract_llm_proofs, extract_llm_store):
+        monkeypatch.setattr(module, '_CHUNK_SIZE', len(pieces[0]))
+    _paid(ledger, monkeypatch)
+    plan = local_rebuild.preview(ledger)['plan']
+    receipt = mcs_requests.apply_command(ledger, {
+        'version': 1, 'cmd': local_rebuild.COMMAND, 'command_id': str(uuid.uuid4()),
+        'actor': 'synthetic-human', 'human_confirmed': True, 'project_id': None,
+        'reason': '完全合成の確認', 'plan': plan})
+    assert receipt['outcome'] == 'applied'
+    unit = local_rebuild.approved_units(ledger.db)[(1, 1)]
+    _no_cloud_unit(monkeypatch)
+    kinds, issued = [], []
+
+    def local(prompt, **kwargs):
+        kinds.append(kwargs.get('kind', 'first'))
+        piece = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
+        return {"symptoms": [{"text": text, "evidence": piece} for text in ("発熱", "咳")]}
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', local)
+    completeness = worker.extract_quality.completeness_issues
+
+    def once(*args):
+        if not issued:
+            issued.append(True)
+            return ["synthetic-missing"]
+        return completeness(*args)
+    monkeypatch.setattr(worker.extract_quality, "completeness_issues", once)
+    for _ in range(4):
+        if worker.run_pending(ledger, limit=1, budget_s=200)["done"]:
+            break
+    assert issued and len(kinds) > len(pieces)                       # every piece plus the repair
+    assert calls == [] and reserved == [] and results == []
+    tags = [json.loads(meta).get('local_rebuild') for (meta,) in ledger.db.execute(
+        "SELECT meta FROM artifacts WHERE kind IN ('extract_llm_chunk',?) AND message_id=1", (worker.KIND,))
+        if json.loads(meta).get('extract_version', worker.EXTRACT_VERSION) == worker.EXTRACT_VERSION]
+    assert tags and all(item == local_rebuild.tag(unit) for item in tags)
