@@ -309,6 +309,138 @@ def test_unverified_dependencies_refuse_prepare(store, problem):
     assert _state(store) == before
 
 
+@pytest.mark.parametrize('problem', [
+    'altered_cloud_trigger', 'missing_cloud_trigger', 'cloud_guard_trigger', 'temp_cloud_guard_trigger',
+    'temp_cloud_guard_shadow', 'altered_guard_table', 'guard_index_and_cascade',
+    'guard_counter_overflow',
+])
+def test_unverified_cloud_guards_refuse_prepare(store, problem):
+    _hold(store)
+    with store.db:
+        if problem == 'altered_cloud_trigger':
+            store.db.execute('DROP TRIGGER cloud_usage_guard_update')
+            store.db.execute('CREATE TRIGGER cloud_usage_guard_update AFTER UPDATE ON artifacts '
+                             'BEGIN SELECT 1; END')
+        elif problem == 'missing_cloud_trigger':
+            store.db.execute('DROP TRIGGER cloud_usage_guard_update')
+        elif problem == 'cloud_guard_trigger':
+            store.db.execute("CREATE TRIGGER synthetic_guard AFTER UPDATE ON cloud_usage_guard "
+                             "BEGIN UPDATE fetch_jobs SET state='failed'; END")
+        elif problem == 'temp_cloud_guard_trigger':
+            store.db.execute("CREATE TEMP TRIGGER synthetic_guard AFTER UPDATE ON main.cloud_usage_guard "
+                             "BEGIN UPDATE fetch_jobs SET state='failed'; END")
+        elif problem == 'temp_cloud_guard_shadow':
+            store.db.execute('CREATE TEMP TABLE cloud_usage_guard(mutations INTEGER)')
+        elif problem == 'altered_guard_table':
+            store.db.execute('DROP TABLE cloud_usage_guard')
+            store.db.execute('CREATE TABLE cloud_usage_guard(singleton INTEGER PRIMARY KEY, '
+                             'verified INTEGER, mutations INTEGER, audited_at REAL)')
+            store.db.execute('INSERT INTO cloud_usage_guard VALUES(1,1,0,0)')
+        elif problem == 'guard_index_and_cascade':
+            store.db.execute('CREATE UNIQUE INDEX synthetic_guard_epoch ON cloud_usage_guard(mutations)')
+            store.db.execute('CREATE TABLE synthetic_guard_child(id INTEGER PRIMARY KEY, '
+                             'epoch INTEGER REFERENCES cloud_usage_guard(mutations) ON UPDATE CASCADE)')
+            store.db.execute('INSERT INTO synthetic_guard_child SELECT 1,mutations FROM cloud_usage_guard')
+            store.db.execute("CREATE TRIGGER synthetic_child AFTER UPDATE ON synthetic_guard_child "
+                             "BEGIN UPDATE fetch_jobs SET state='failed'; END")
+        else:
+            store.db.execute('UPDATE cloud_usage_guard SET mutations=?', (2**63 - 1,))
+    before = _state(store)
+    guard = tuple(store.db.execute('SELECT * FROM main.cloud_usage_guard').fetchone())
+    with pytest.raises(sqlite3.DatabaseError, match='semantic_release_(schema|trigger)_unverified'):
+        hold.prepare_release(store, 1, 1)
+    assert _state(store) == before
+    assert tuple(store.db.execute('SELECT * FROM main.cloud_usage_guard').fetchone()) == guard
+
+
+def test_release_rechecks_cloud_guard_after_initial_validation(store, monkeypatch):
+    _hold(store)
+    plan = hold.prepare_release(store, 1, 1)
+    original = hold._release_schema
+    calls, after_insert = [], []
+
+    def insert_after_check(db):
+        calls.append(1)
+        original(db)
+        if len(calls) == 1:
+            with db:
+                db.execute('CREATE UNIQUE INDEX synthetic_guard_epoch ON cloud_usage_guard(mutations)')
+            after_insert.append(_state(store))
+
+    monkeypatch.setattr(hold, '_release_schema', insert_after_check)
+    with pytest.raises(sqlite3.DatabaseError, match='semantic_release_trigger_unverified'):
+        _release(store, plan)
+    assert len(calls) == 2
+    assert _state(store) == after_insert[0]
+
+
+def test_release_with_negative_accounting_id_keeps_cloud_guard_isolated(store):
+    _hold(store)
+    with store.db:
+        store.db.execute("INSERT INTO artifacts(artifact_id,kind,meta) VALUES(-1,?,?)",
+                         ('cloud_usage_reserve', json.dumps({'reservation_id': 'synthetic'})))
+    plan = hold.prepare_release(store, 1, 1)
+    before = tuple(store.db.execute('SELECT * FROM main.cloud_usage_guard').fetchone())
+    assert _release(store, plan)['released'] == 1
+    after = tuple(store.db.execute('SELECT * FROM main.cloud_usage_guard').fetchone())
+    assert after[:2] == before[:2] and after[3] == before[3]
+    assert after[2] in (before[2], before[2] + 1)
+
+
+def test_release_commit_failure_rolls_back_cloud_guard_and_intent(store):
+    _hold(store)
+    with store.db:
+        store.db.execute("INSERT INTO artifacts(artifact_id,kind,meta) VALUES(-1,?,?)",
+                         ('cloud_usage_reserve', json.dumps({'reservation_id': 'synthetic'})))
+    plan = hold.prepare_release(store, 1, 1)
+    before = _state(store)
+    guard = tuple(store.db.execute('SELECT * FROM main.cloud_usage_guard').fetchone())
+
+    def deny_commit(action, argument, *_):
+        if action == sqlite3.SQLITE_TRANSACTION and argument == 'COMMIT':
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    store.db.set_authorizer(deny_commit)
+    try:
+        with pytest.raises(sqlite3.DatabaseError):
+            _release(store, plan)
+    finally:
+        store.db.set_authorizer(None)
+    assert not store.db.in_transaction
+    assert _state(store) == before
+    assert tuple(store.db.execute('SELECT * FROM main.cloud_usage_guard').fetchone()) == guard
+
+
+def test_release_rolls_back_if_cloud_guard_reaches_counter_limit(store, monkeypatch):
+    _hold(store)
+    plan = hold.prepare_release(store, 1, 1)
+    before = _state(store)
+    guard = tuple(store.db.execute('SELECT * FROM main.cloud_usage_guard').fetchone())
+    seed = store.semantic_seed_tx
+
+    def reach_limit(*args, **kwargs):
+        seed(*args, **kwargs)
+        store.db.execute('UPDATE main.cloud_usage_guard SET mutations=?', (2**63 - 1,))
+
+    monkeypatch.setattr(store, 'semantic_seed_tx', reach_limit)
+    with pytest.raises(sqlite3.DatabaseError, match='semantic_release_trigger_unverified'):
+        _release(store, plan)
+    assert not store.db.in_transaction
+    assert _state(store) == before
+    assert tuple(store.db.execute('SELECT * FROM main.cloud_usage_guard').fetchone()) == guard
+
+
+def test_legacy_release_without_cloud_guard_triggers_stays_supported(store):
+    with store.db:
+        for suffix in ('replace', 'insert', 'update', 'delete'):
+            store.db.execute(f'DROP TRIGGER cloud_usage_guard_{suffix}')
+    _hold(store)
+    before = _state(store)
+    assert hold.prepare_release(store, 1, 1)['job_sha256']
+    assert _state(store) == before
+
+
 def test_recovery_notice_dispatch_uses_per_target_authority(store):
     store.save_messages([_message(3, parent=1), _message(4, parent=1)], project_id=1,
                         notify={'source': 'unread'})
