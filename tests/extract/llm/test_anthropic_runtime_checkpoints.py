@@ -423,7 +423,8 @@ def test_high_repair_final_proof_survives_checkpoint_cleanup(routed, monkeypatch
     class Client(real_client):
         def request(self, method, request, timeout, **kwargs):
             assert timeout > 0 and not led.db.in_transaction
-            prompt = request['input']
+            raw = request['input']   # OpenAIClient.wire sends the fixed head as its own cache block
+            prompt = raw if isinstance(raw, str) else ''.join(part['text'] for part in raw[0]['content'])
             piece = prompt.rsplit('<<<\n', 1)[1].split('\n>>>', 1)[0]
             sends.append((request['model'], request['reasoning']['effort'], piece))
             truncated = (piece == body and (split == 'initial' and request['reasoning']['effort'] != 'high'

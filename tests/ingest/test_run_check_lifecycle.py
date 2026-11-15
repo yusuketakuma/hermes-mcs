@@ -458,9 +458,11 @@ def test_entry_reports_only_observed_writer_refusal(
         assert not (data / "ledger.db").exists() and not (data / "health.json").exists()
         if cause == "busy":
             assert 100 + run_check.LOCK_WAIT_S <= clock[0] < 100 + run_check.LOCK_WAIT_S + 0.3
-        if fd is not None:
+        if fd is not None and cause != "marker":
             with pytest.raises(OSError):
                 os.fstat(fd)
+        elif fd is not None:
+            os.fstat(fd)   # IA-078: a wait that sees the marker never takes the lock
     finally:
         if fd is not None:
             try:
@@ -541,8 +543,11 @@ def test_command_worker_catches_short_lock_window_without_crossing_update(
             assert capsys.readouterr().out == ""
         else:
             assert calls == []
-        with pytest.raises(OSError):
-            os.fstat(fd)  # every accepted or refused lock is released
+        if fence == "marker":
+            os.fstat(fd)  # IA-078: a wait that sees the marker never takes the lock
+        else:
+            with pytest.raises(OSError):
+                os.fstat(fd)  # every accepted or refused lock is released
     finally:
         try:
             os.close(fd)
