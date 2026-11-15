@@ -5,7 +5,7 @@
   "upgrade": "追加操作は不要です。走査がrepair失敗や形式不正で止まっていたソースは、次回の走査単位から自動で細かい塊に分割されて処理が再開されます。検証条件・公開条件・会計の扱いは変更していません。",
   "details": [
     "patient_context_scan.scan_source で、unsupported_items に対する1回のbounded repairが失敗した場合（repair回答がscan_itemsを通らない、または既にgroundingできた項目を保持できない）に、context_plan.split_scan でより細かい分割計画へ再開します。",
-    "nightly_invalid_items（JSON構造の不正）についても、source_repair経路でない通常の走査で、細分化できる場合は同じ finer plan へ再開します。repairは行わず即座に細分化を試みます。",
+    "patient_context_invalid_items（JSON構造の不正）についても、source_repair経路でない通常の走査で、細分化できる場合は同じ finer plan へ再開します。repairは行わず即座に細分化を試みます。",
     "細分化は MAX_SCAN_SPLIT=3 を上限とし、これ以上分割できない場合は元の例外をそのまま再送出します。失敗理由・attempts・next_try のバックオフ規則は変更していません。scan_capacity の再開（factsを空に戻す既存仕様）とは異なり、完了済み塊のfactsは保持します。",
     "各細分塊は独立して scan_items の逐語grounding検証と（unsupported_itemsの場合）1回のrepairを受けるため、検証を緩める変更ではありません。"
   ],
