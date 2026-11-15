@@ -82,7 +82,7 @@
 | C1 | `scripts/development/find_unused_code.py` を追加（標準ライブラリの AST による名前ベースの検査）。初回は68候補 | 同名の定義があると検出できない。削除後に再実行すると新たな候補が出る |
 | S1 | ローカル経路の golden テスト（`tests/patients/test_patient_context_golden.py`・期待値 `tests/fixtures/patient_context_golden/local_three_posts.json`）。合成の3投稿から公開版と10の表示セクションまでを固定 | クラウド経路・安全上の不変条件・ローカル枠の規則の判定基準は未作成 |
 | S2（第1段） | 起動されていなかった旧クラウド経路を削除：`cloud_backlog` の抽出・意味解析ループ、抽出・意味解析の `cloud_only` 選択・準備・実行、添付OCRのクラウド段、`cloud-llm plan` の reextract・semantic_backlog 見積り。理由コード語彙を `mcs/core/defer_reasons.py` へ移動 | 所有済み単位の回復経路（`_cloud_owned`）は、Mac 側で旧route の未精算記録が0件であることを確かめてから削除する |
-| C2（第1弾） | 名前ベースの検査で、本番から参照されない定義を削除中 | 自動更新 v2/v3（`release_auto_*`・`adapters/sdc/*`）は開発途中の機能として対象外。仕様が名指しする `semantic_conversion` のcohort関数・`effective_loop_state` は所有者に確認する |
+| C2（第1弾） | 本番から参照されない定義を削除：`release_apply_owner` の休眠中の v1 native release 一式、`MCSAdapter` の未使用 fetch 3件、admission の未使用 reconcile、評価用 `compare_workflow` 一式、`semantic_relations.classify_pair` ほか。テストが本体の挙動を観測するために使っていた薄いラッパー（`stage_ledger`・`admission_status`・`llm_last_success`・`build_text`・`current_acknowledged`・`has_private`・`priority_key`・`failure_roots`）は、テストを本体のAPIかテスト用補助に移してから削除 | 対象外として残したもの：自動更新 v2/v3（`release_auto_*`・`adapters/sdc/*`・`release_owner_source.verify_target`・`Runtime.restart_execute`）、仕様が名指しする `semantic_conversion` のcohort関数・`effective_loop_state`・request-following、`run_log.enable_rotation`（保守テストの前提で、ローテーションの有効化経路の確認が必要）、`drug_info` の旧Exa経路と `bounded_http` の公開MCP例外（応答解析のテストを TinyFish 経路へ移してから削除する） |
 | その他 | 未着手 | — |
 
 検証の記録（2026-11-15、このクラウド開発環境・Python 3.14.6・pytest 9.2.0）：

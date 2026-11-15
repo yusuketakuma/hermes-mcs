@@ -311,22 +311,6 @@ def record_stage(ledger, pid: int, mid: int, fp: str, policy: str,
               "stage": stage, "engine_version": ENGINE_VERSION})
 
 
-def stage_ledger(ledger, mid: int, fp: str) -> list:
-    """Ordered S0–S8 receipts for one generation — the replayable
-    evidence that repair was reserved before dispatch, audits were
-    evaluated, and publication only followed an all-PASS chain."""
-    out = []
-    for r in ledger.db.execute(
-            "SELECT content,meta FROM artifacts WHERE kind=? "
-            "AND message_id=? ORDER BY artifact_id",
-            (KIND_V4_STAGE, mid)):
-        meta, content = loads_dict(r["meta"]), loads_dict(r["content"])
-        if isinstance(meta, dict) and is_current(meta) and isinstance(content, dict) \
-                and meta.get("fingerprint") == fp:
-            out.append({"stage": meta.get("stage"), **content})
-    return out
-
-
 def current_v4(ledger, mid: int, content_hash: str):
     """Newest valid published v4 row bound to the CURRENT source hash
     — mirrors ``current_projection_pred`` (error-free, hash-current,
@@ -954,10 +938,6 @@ def _hold_upgraded_repairs(ledger, scfg: dict, limit: int, out: dict) -> None:
         _count(out, f"repair_absence:{verdict}")
 
 
-
-
-
-
 def diagnostic(ledger, pid: int, mid: int, fp: str, policy: str,
                status: str, findings: list, doc_hash=None,
                tx: bool = False) -> None:
@@ -1133,7 +1113,6 @@ def publish_fact_projection(ledger, member, pid, mid, fp, policy,
         record_stage(ledger, pid, mid, fp, policy,
                         "s5_projection", "reused",
                         doc_hash=doc_hash)
-
 
 
 def _publish_skipped(ledger, pid, mid, fp, policy, member, doc):

@@ -97,11 +97,6 @@ def llm_health(db) -> dict:
             "down_since": _finite_ts(state.get("down_since"))}
 
 
-def llm_last_success(db) -> float | None:
-    """Wall-clock time the local LLM last answered a lane call, or None."""
-    return llm_health(db)["last_success"]
-
-
 def llm_down_since(db) -> float | None:
     """Start of the current endpoint-down/timeout streak, or None."""
     return llm_health(db)["down_since"]

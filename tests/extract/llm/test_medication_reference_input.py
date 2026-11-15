@@ -77,7 +77,7 @@ def test_unapproved_dictionary_does_not_supply_candidates(store, tmp_path):
                                                           False, drug_map.RESOLVER_VERSION], "cursor": 0})
     value = references.build(store.db, cfg, body, private=True, deadline=time.monotonic() + 10)
     assert references.valid(value, body) and value["status"] == "inactive"
-    assert not references.has_private(value)
+    assert not _has_private(value)
     assert "架空成分甲" not in references.block(value, body, 0, body, private=True)
 
 
@@ -273,3 +273,7 @@ def test_transport_reference_change_does_not_poison_endpoint_health(monkeypatch)
     assert extract_llm._llm_call("synthetic prompt") is extract_llm._DEFERRED
     assert extract_llm._CALL_NOTES.transport is None
     assert extract_llm._CALL_NOTES.defer_reason == "currentness_unverified"
+
+
+def _has_private(snapshot):
+    return bool(snapshot and any(part["hint"]["matches"] for part in snapshot["parts"]))
