@@ -621,7 +621,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 _hold_after_interrupt(error)
             raise
         finally:
-            if quiesced and not consent_hold and not rollback_failed and not interrupted:
+            if quiesced and not consent_hold and not rollback_failed and (not interrupted or terminal):
                 _remove_marker()
             if borrowed is None:
                 for fd in (run_fd, upd_fd):
