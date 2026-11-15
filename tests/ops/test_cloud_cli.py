@@ -380,7 +380,7 @@ def test_release_local_cli_prints_through_and_rejects_when_nothing_is_old_enough
     assert mcs_setup.main(args + ["--command-id", command_id]) == 0
     applied = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert old < young and applied == {"command_id": command_id, "outcome": "applied", "error": None,
-                                       "control": "local_release", "through": old}
+                                       "control": "local_release", "approved": None, "through": old}
     assert mcs_setup.main(args + ["--command-id", command_id]) == 0
     assert json.loads(capsys.readouterr().out.strip().splitlines()[-1]) == applied
     with closing(Ledger(str(path))) as db:
