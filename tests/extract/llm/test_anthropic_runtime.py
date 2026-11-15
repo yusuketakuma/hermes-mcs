@@ -8,6 +8,7 @@ import extract_llm_provider
 import extract_llm_qc
 import extract_llm_resident
 import extract_llm_runner
+import extract_llm_selection
 import extract_llm_source_contract
 import extract_llm_store
 from contextlib import contextmanager
@@ -480,9 +481,10 @@ def test_resident_checks_source_before_config_and_stop(tmp_path, monkeypatch, mo
     clock = [100.0]
 
     class Pool:
-        def __init__(self, root):
+        def __init__(self, root, *, context_only):
             assert root == str(tmp_path)
-        def sync(self, cfg):
+            assert context_only is True
+        def sync(self, cfg, *, ledger):
             events.append("pool_sync")
         def close(self):
             events.append("pool_closed")
@@ -520,6 +522,7 @@ def test_resident_checks_source_before_config_and_stop(tmp_path, monkeypatch, mo
     monkeypatch.setattr(extract_llm_prepare, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_provider, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_resident, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_selection, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_source_contract, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_store, 'HOME', worker.HOME)
     monkeypatch.setattr(worker.writer_lock, "HOME", str(tmp_path))
@@ -541,6 +544,7 @@ def test_resident_checks_source_before_config_and_stop(tmp_path, monkeypatch, mo
     monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', load)
     monkeypatch.setattr(worker, "legacy_admissions", lambda *args: None)

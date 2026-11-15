@@ -48,7 +48,7 @@ flowchart TD
 
 抽出17、意味解析7、患者コンテキスト6、クラウド会計・履歴2、Jev証拠1の計33補助モジュールを、読み込んだコードのdigestと候補IDの変更検知に含めます。関数コードと臨床定数を保持し、実行時のpath、slot、lock、cache、threadlocal、writer世代などは実際の所有先と借用先ごとに明示して除外します。
 
-`_CHUNK_SIZE`、`MAX_TOKENS`、固定の形式降格表`_NEXT_FMT`などは除外しません。`_LOADED_SOURCE_DIGESTS`は定数一覧から除外しても、候補IDの`loaded_extract`に含めます。補助モジュールのコードやdigestの変更を見失わないためです。配置変更に伴う再照合も従来の採用・課金済み応答の復旧契約を通します。
+`_CHUNK_SIZE`、`MAX_TOKENS`、`_CLOUD_SELECTION_PAGE`、固定の形式降格表`_NEXT_FMT`などは除外しません。`_LOADED_SOURCE_DIGESTS`は定数一覧から除外しても、候補IDの`loaded_extract`に含めます。補助モジュールのコードやdigestの変更を見失わないためです。配置変更に伴う再照合も従来の採用・課金済み応答の復旧契約を通します。
 
 ## 導入物と独立復旧
 

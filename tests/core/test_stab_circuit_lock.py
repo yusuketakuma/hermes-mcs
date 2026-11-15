@@ -31,13 +31,13 @@ def test_health_marker_tracks_outage_and_recovery(tmp_path, monkeypatch):
     assert llm_availability.llm_health(None) == {"last_success": None, "down_since": None}
     assert llm_availability.llm_down_for_s(None) is None
     llm_availability.circuit_success(None)
-    first_ok = llm_availability.llm_health(None)["last_success"]
+    first_ok = llm_availability.llm_last_success(None)
     assert first_ok is not None and llm_availability.llm_down_since(None) is None
     llm_availability.circuit_failure(None)
     since = llm_availability.llm_down_since(None)
     llm_availability.circuit_failure(None)
     assert llm_availability.llm_down_since(None) == since          # streak start kept
-    assert llm_availability.llm_health(None)["last_success"] == first_ok     # history kept
+    assert llm_availability.llm_last_success(None) == first_ok     # history kept
     assert llm_availability.llm_down_for_s(None, now=since + 7200) == 7200
     llm_availability.circuit_success(None)
     assert llm_availability.llm_down_since(None) is None

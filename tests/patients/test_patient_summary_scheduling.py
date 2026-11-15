@@ -76,6 +76,7 @@ def test_partial_cloud_draft_uses_only_audited_sources_then_expands(cloud_schedu
     monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     monkeypatch.setattr(worker, '_writer_current', lambda **_kwargs: True)

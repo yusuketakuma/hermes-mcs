@@ -4,6 +4,7 @@ import extract_llm_prepare
 import extract_llm_provider
 import extract_llm_resident
 import extract_llm_runner
+import extract_llm_selection
 import extract_llm_source_contract
 import extract_llm_store
 
@@ -54,6 +55,7 @@ def test_qc_proof_replays_after_atomic_replacement(routed, monkeypatch, tmp_path
     monkeypatch.setattr(extract_llm_prepare, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_provider, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_resident, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_selection, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_source_contract, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_store, 'HOME', worker.HOME)
     monkeypatch.setattr(cloud_policy, "provider_key", lambda *_args: "synthetic-key")
@@ -215,6 +217,7 @@ def _repair_run(routed, monkeypatch, tmp_path, repair_vitals, *, new_contract=Fa
     monkeypatch.setattr(extract_llm_prepare, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_provider, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_resident, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_selection, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_source_contract, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_store, 'HOME', worker.HOME)
     monkeypatch.setattr(cloud_policy, "provider_key", lambda *_args: "synthetic-key")

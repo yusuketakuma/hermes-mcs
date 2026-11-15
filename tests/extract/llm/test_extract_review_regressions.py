@@ -6,6 +6,7 @@ import extract_llm_provider
 import extract_llm_qc
 import extract_llm_resident
 import extract_llm_runner
+import extract_llm_selection
 import extract_llm_store
 import extract_quality
 import json
@@ -197,6 +198,7 @@ def test_configured_local_llm_is_used_for_every_extract_probe(monkeypatch):
     monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
     monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
@@ -246,5 +248,6 @@ def test_disallowed_local_llm_endpoint_is_unavailable_without_a_request(monkeypa
     monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     assert extract_llm._llm_up() is False

@@ -315,7 +315,7 @@ def test_digest_counts_observation_window_not_post_time_or_shadow(led):
     _metadata(led, 106, [_react()], at=NOW - 10)
     _metadata(led, 107, [_react()], at=NOW - 10)
     led.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=107")
-    text = notify_digest.parts_text(notify_digest.fit_parts(notify_digest.daily_parts(led.db, CFG, NOW - 20, NOW), notify_digest.NOTICE_BUDGET), "plain")
+    text = notify_digest.build_text(led.db, CFG, NOW - 20, NOW)
     assert "■ MCS 本人スタンプ: 2投稿" in text
     assert "完了 1" in text and "見ました 1" in text
     assert "押下時刻・操作件数・業務完了を表しません" not in text

@@ -12,8 +12,8 @@ import snapshots
 
 @pytest.fixture(autouse=True)
 def isolated_local_inference(monkeypatch):
-    def pending(ledger, cfg, *, deadline, limit):
-        deadline > 0 and limit == 1
+    def pending(ledger, cfg, *, stage, deadline, limit):
+        assert stage == "local" and deadline > 0 and limit == 1
         return {"done": 0, "deferred": 0}
     monkeypatch.setattr(attachment_inference, "run_pending", pending)
 
@@ -125,9 +125,9 @@ def test_local_inference_runs_before_ocr_without_ingestion_lock(tmp_path, monkey
     monkeypatch.setattr(mcs_ocr.attachment_ocr, "run_pending", lambda *args, **kwargs:
                         events.append("ocr") or {"complete": 0})
 
-    def local(ledger, settings, *, deadline, limit):
+    def local(ledger, settings, *, stage, deadline, limit):
         assert events == [] and settings is cfg
-        deadline > mcs_ocr.time.monotonic() and limit == 1
+        assert stage == "local" and deadline > mcs_ocr.time.monotonic() and limit == 1
         fd = mcs_ocr.acquire_run_lock(str(tmp_path / "run.lock"))
         assert fd is not None
         mcs_ocr.os.close(fd)
@@ -181,8 +181,8 @@ def test_local_inference_deadline_uses_the_extended_page_budget(tmp_path, monkey
     monkeypatch.setattr(mcs_ocr.time, "monotonic", lambda: now[0])
     received = []
 
-    def local(ledger, settings, *, deadline, limit):
-        limit == 1
+    def local(ledger, settings, *, stage, deadline, limit):
+        assert stage == "local" and limit == 1
         received.append(deadline - now[0])
         return {"done": 0, "deferred": 1}
 
@@ -200,7 +200,7 @@ def test_local_inference_deadline_never_exceeds_the_remaining_job_budget(monkeyp
     monkeypatch.setattr(mcs_ocr.writer_lock, "updater_state", lambda: (False, 1))
     received = []
 
-    def local(ledger, settings, *, deadline, limit):
+    def local(ledger, settings, *, stage, deadline, limit):
         received.append(deadline - now[0])
         return {"done": 0, "deferred": 1}
 
@@ -227,7 +227,7 @@ def test_large_raw_timeout_runs_original_ocr_before_local_inference(tmp_path, mo
     monkeypatch.setattr(mcs_ocr.time, "monotonic", lambda: now[0])
     events = []
 
-    def local(ledger, settings, *, deadline, limit):
+    def local(ledger, settings, *, stage, deadline, limit):
         events.append("local")
         return {"done": 0, "deferred": 0}
 

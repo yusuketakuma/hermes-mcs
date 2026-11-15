@@ -3,6 +3,7 @@ import extract_llm_engine
 import extract_llm_prepare
 import extract_llm_provider
 import extract_llm_resident
+import extract_llm_selection
 import extract_llm_source_contract
 import extract_llm_store
 import hashlib
@@ -535,6 +536,7 @@ def test_patient_context_retry_wait_releases_writer_lock_after_settlement(cloud,
     monkeypatch.setattr(extract_llm_prepare, 'HOME', extract_llm.HOME)
     monkeypatch.setattr(extract_llm_provider, 'HOME', extract_llm.HOME)
     monkeypatch.setattr(extract_llm_resident, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_selection, 'HOME', extract_llm.HOME)
     monkeypatch.setattr(extract_llm_source_contract, 'HOME', extract_llm.HOME)
     monkeypatch.setattr(extract_llm_store, 'HOME', extract_llm.HOME)
     monkeypatch.setattr(cloud_inference, "HOME", str(tmp_path))

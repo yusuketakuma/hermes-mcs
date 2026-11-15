@@ -1,11 +1,11 @@
 """Synthetic patient scheduling plans are bounded, durable and read-only."""
-from patient_priority_testkit import priority_key
 import json
 import sqlite3
 
 import pytest
 
 import patient_context_schedule as schedule
+import patient_priority
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ def test_activity_order_matches_shared_key_with_null_ties_and_archives(db):
     for pid, archived, timestamp in rows:
         add(db, pid, archived, timestamp)
     expected = [pid for pid, archived, timestamp in sorted(rows, key=lambda r:
-        priority_key(r[0], r[2], archived=bool(r[1])))]
+        patient_priority.priority_key(r[0], r[2], archived=bool(r[1])))]
     state, actual = None, []
     while True:
         turn = state['turn'] if state is not None else 0

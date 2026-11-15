@@ -50,8 +50,8 @@ def test_new_arrival_on_unstored_root_keeps_new_intent_held(tmp_path):
 def test_undeterminable_or_large_input_marks_scope_unknown(tmp_path, messages):
     db = _seeded(tmp_path)
     try:
-        assert (hold._failure_scope(messages, 1) or [None])[0] is None
-        hold.record_unstored(db, 1, roots=(hold._failure_scope(messages, 1) or [None])[0])
+        assert hold.failure_roots(messages, 1) is None
+        hold.record_unstored(db, 1, roots=hold.failure_roots(messages, 1))
         assert hold.has_unstored_root(db.db, 1, 1)
         assert hold.has_unstored_root(db.db, 1, 999)
     finally:

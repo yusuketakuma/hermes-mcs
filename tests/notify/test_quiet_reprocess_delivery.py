@@ -1,5 +1,4 @@
 """Synthetic replay across the real producer, publication and receipt boundaries."""
-from semantic_testkit import stage_ledger
 import json
 import time
 from pathlib import Path
@@ -122,7 +121,7 @@ def test_quiet_reprocess_avoids_semantic_notice_but_sweep_updates_thread(led, mo
     meta = json.loads(v4["meta"])
     assert meta["source_binding"] == source_before
     assert meta["fingerprint"] == fp and meta["policy_fingerprint"] == policy
-    stage = [s for s in stage_ledger(led, 1, fp) if s["stage"] == "s8_publish"]
+    stage = [s for s in semantic_publication.stage_ledger(led, 1, fp) if s["stage"] == "s8_publish"]
     assert stage[-1]["status"] == "PASS" and stage[-1]["artifact_id"] == v4["artifact_id"]
     assert structured_view.fact_generations(led.db, [1])[1]["semantic_facts_v4"] == v4["artifact_id"]
     assert led.db.execute("SELECT COUNT(*) FROM notify_outbox WHERE kind='semantic_notice'").fetchone()[0] == notices_before

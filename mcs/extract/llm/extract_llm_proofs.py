@@ -8,7 +8,7 @@ import re
 import sqlite3
 from types import SimpleNamespace
 import inference_version as inference
-import defer_reasons
+import cloud_backlog
 import cloud_inference
 import extract_validation
 import extract_quality
@@ -800,7 +800,7 @@ def _verify_completeness_claim(db, r, context, content, integrity, used_keys,
         r.pop("_completeness_reject_reason", None)
 
     def reject(reason):
-        if isinstance(r, dict) and reason in defer_reasons.COMPLETENESS_REJECTION_REASONS:
+        if isinstance(r, dict) and reason in cloud_backlog._COMPLETENESS_REJECTION_REASONS:
             r["_completeness_reject_reason"] = reason
         return False
 

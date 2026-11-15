@@ -98,6 +98,106 @@ def test_sync_uses_real_normalizers_storage_and_safe_get(store, dataset, key, pi
                                  "project" if dataset == "care_team" else "karte")
 
 
+def test_readers_keep_one_snapshot_and_validate_counts():
+    # Given
+    client, calls = adapter([page("users", [MEMBER], has_next=True, total_entries=2),
+                            page("users", [{**MEMBER, "id": 45}], number=2, total_entries=2)])
+    # When
+    result = client.fetch_project_members(1, per_page=20)
+    # Then
+    assert result["complete"] and len(result["rows"]) == 2
+    first, second = [urllib.parse.parse_qs(urllib.parse.urlsplit(c["url"]).query) for c in calls]
+    assert "timestamp" not in first and second["timestamp"] == ["12345"]
+
+
+@pytest.mark.parametrize("defect,reason", [
+    ("timestamp", "schema_error"), ("duplicate", "schema_error"),
+    ("page", "schema_error"), ("total", "schema_error"),
+    ("missing_snapshot", "snapshot_missing"), ("empty_continued", "schema_error"),
+    ("page_limit", "page_limit"), ("session", "session_expired"), ("forbidden", "forbidden"),
+])
+def test_incomplete_walk_never_exposes_partial_member_set(defect, reason):
+    # Given
+    first = page("users", [MEMBER], has_next=True, total_entries=2)
+    second = page("users", [{**MEMBER, "id": 45}], number=2, total_entries=2)
+    max_pages = 5
+    if defect == "timestamp":
+        second = page("users", [{**MEMBER, "id": 45}], number=2,
+                      timestamp=12346, total_entries=2)
+    elif defect == "duplicate":
+        second = page("users", [MEMBER], number=2, total_entries=2)
+    elif defect == "page":
+        second = page("users", [{**MEMBER, "id": 45}], total_entries=2)
+    elif defect == "total":
+        second = page("users", [{**MEMBER, "id": 45}], number=2, total_entries=3)
+    elif defect == "missing_snapshot":
+        first = page("users", [MEMBER], has_next=True, timestamp=None, total_entries=2)
+    elif defect == "empty_continued":
+        first = page("users", [], has_next=True, total_entries=2)
+    elif defect == "page_limit":
+        max_pages = 1
+    elif defect == "session":
+        second = (401, {})
+    else:
+        second = (403, {})
+    responses = [first, second] + ([{}] if defect == "forbidden" else [])
+    client, calls = adapter(responses)
+    # When
+    result = client.fetch_project_members(1, max_pages=max_pages, per_page=20)
+    # Then
+    assert not result["complete"] and result["reason"] == reason and result["rows"] == []
+    assert len(calls) <= 3
+
+
+@pytest.mark.parametrize("bad", [None, {}, [None], [{"id": True}], [{"id": 1, "is_self": "yes"}]])
+def test_malformed_members_do_not_become_empty(bad):
+    # Given
+    client, _ = adapter([page("users", bad)])
+    # When
+    result = client.fetch_project_members(1, per_page=20)
+    # Then
+    assert not result["complete"] and result["reason"] == "schema_error"
+
+
+def test_owner_names_are_opt_in_and_contacts_are_always_dropped():
+    # Given
+    client, _ = adapter([page("users", [MEMBER])])
+    # When
+    result = client.fetch_project_members(1, per_page=20, retain_names=True)
+    # Then
+    assert result["rows"][0]["last_name"] == "NAME_CANARY"
+    assert "CONTACT_CANARY" not in json.dumps(result) and "PHOTO_CANARY" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("components", [
+    {"scalar": 0}, {"max": 120, "min": 80}, {"left": 1.5, "right": 1.6}])
+def test_observation_values_keep_typed_components_and_definition(components):
+    # Given
+    raw = page("observation_values", [{"observation_issued_at": "2026-10-04T10:00:00+09:00",
+                                     "message": {"comment": "BODY_CANARY"}, **components}])
+    raw["observation_item"] = LAB
+    client, calls = adapter([raw])
+    # When
+    result = client.fetch_observation_values(10, 55, per_page=20)
+    # Then
+    assert result["complete"] and result["definition"]["lab_test_item"]["unit"] == "synthetic-unit"
+    for key, value in components.items():
+        assert result["rows"][0][key] == value
+    assert "BODY_CANARY" not in json.dumps(result)
+    assert "/kartes/10/observation_items/55/values?" in calls[0]["url"]
+
+
+def test_values_cannot_use_definition_from_another_item():
+    # Given
+    raw = page("observation_values", [])
+    raw["observation_item"] = LAB
+    client, _ = adapter([raw])
+    # When
+    result = client.fetch_observation_values(10, 56, per_page=20)
+    # Then
+    assert not result["complete"] and result["definition"] is None
+
+
 @pytest.mark.parametrize("dataset,raw", [
     ("medication_periods", {"medicine_informations": [{"id": 1}] * 21}),
     ("observation_items", {**LAB, "upper_reference_limit_scalar": "100"}),
@@ -132,6 +232,25 @@ def test_sync_requires_cached_session_without_bootstrap(store):
     result = sync_metadata(store, client, 1, "care_team", enabled=True)
     # Then
     assert result["reason"] == "cached_session_required" and calls == []
+
+
+@pytest.mark.parametrize("options", [{"max_pages": 0}, {"per_page": 51}, {"retain_names": 1}])
+def test_invalid_reader_bounds_fail_before_io(options):
+    # Given
+    client, calls = adapter([])
+    # When / Then
+    with pytest.raises(ValueError):
+        client.fetch_project_members(1, **options)
+    assert not calls
+
+
+def test_consultation_reader_rejects_patient_scope():
+    # Given
+    client, calls = adapter([])
+    # When / Then
+    with pytest.raises(ValueError):
+        client.fetch_group_consultations(1, project_type="medical")
+    assert not calls
 
 
 def test_network_failure_is_safe_and_not_empty(store):

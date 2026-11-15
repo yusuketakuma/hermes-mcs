@@ -1,11 +1,25 @@
 """Receipt-bound continuous history scopes with synthetic source occurrences."""
+import extract_llm_context
+import extract_llm_prepare
+import extract_llm_provider
+import extract_llm_qc
+import extract_llm_resident
+import extract_llm_runner
+import extract_llm_selection
+import extract_llm_store
+import semantic_due_selection
+import semantic_job_processor
 import json
 import time
 
 import pytest
 
 import cloud_policy
-from semantic_testkit import _ledger, _message, _patient
+import extract_llm
+import cloud_inference
+import semantic_drain
+from semantic_testkit import _cfg, _ledger, _message, _patient
+from test_cloud_response_recovery import legacy_cloud_routes
 
 
 @pytest.fixture
@@ -106,6 +120,46 @@ def test_scope_snapshot_changes_after_new_resume_even_with_same_members(history)
     before = cloud_policy.history_thread_snapshot(history.db, 1, 1)
     _continuous(history, 'synthetic-other-resume')
     assert cloud_policy.history_thread_snapshot(history.db, 1, 1) != before
+
+
+@pytest.mark.parametrize('lane', ['extract', 'semantic'])
+def test_continuous_scope_selects_history_with_a_later_reply(history, monkeypatch, lane):
+    cfg = _cfg('assist', fact_source='shadow', summary_mode='shadow', loop_mode='shadow')
+    cfg['cloud_llm'] = {'mode': 'on', 'project_ids': [1]}
+    monkeypatch.setattr(extract_llm, 'load_config', lambda *args: cfg)
+    monkeypatch.setattr(extract_llm_context, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda *args: cfg)
+    monkeypatch.setattr(semantic_drain, 'load_config', lambda *args: cfg)
+    monkeypatch.setattr(semantic_due_selection, 'load_config', semantic_drain.load_config)
+    monkeypatch.setattr(semantic_job_processor, 'load_config', semantic_drain.load_config)
+    monkeypatch.setattr(cloud_policy, 'api_key', lambda *args: 'synthetic-key')
+    history.semantic_seed(1, [1], {'source': 'history_import'})
+    _continuous(history)
+    history.save_messages([_message(2, parent=1, body='synthetic reply')])
+    # Under the real closed policy this same non-empty fixture selects nothing;
+    # local progression is the live path (covered by the local+POST0 contract
+    # tests). The open-route branch only inspects the dormant selector's scope
+    # binding for historical paid work.
+    if lane == 'semantic':
+        assert not semantic_drain._select_cloud_due(history, 'backlog', ('semantic',), False, 4)[0]
+    else:
+        closed, _ = extract_llm._select_pending(history, 4, None, None, False,
+                                                cloud_only=True, prioritize_patients=True)
+        assert not closed
+    with legacy_cloud_routes():
+        if lane == 'semantic':
+            rows = semantic_drain._select_cloud_due(history, 'backlog', ('semantic',), False, 4)[0]
+        else:
+            rows, _ = extract_llm._select_pending(history, 4, None, None, False,
+                                                   cloud_only=True, prioritize_patients=True)
+    assert any(row['message_id'] == 1 for row in rows)
 
 
 def test_snapshot_reuses_exact_authorized_occurrences_once(history, monkeypatch):

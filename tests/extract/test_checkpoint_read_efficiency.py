@@ -8,6 +8,7 @@ import extract_llm_provider
 import extract_llm_qc
 import extract_llm_resident
 import extract_llm_runner
+import extract_llm_selection
 import extract_llm_store
 import pytest
 
@@ -67,6 +68,7 @@ def test_resident_loads_checkpoints_only_after_a_successful_claim(source, monkey
     monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
     reads, original = [], llm._saved_chunk_state
     def read(db, row, *args, **kwargs):

@@ -10,6 +10,7 @@ import extract_llm_provider
 import extract_llm_qc
 import extract_llm_resident
 import extract_llm_runner
+import extract_llm_selection
 import extract_llm_source_contract
 import extract_llm_store
 
@@ -51,6 +52,7 @@ def test_checkpoint_changed_after_replay_ack_is_not_committed(tmp_path, monkeypa
         monkeypatch.setattr(extract_llm_qc, 'load_config', llm.load_config)
         monkeypatch.setattr(extract_llm_resident, 'load_config', llm.load_config)
         monkeypatch.setattr(extract_llm_runner, 'load_config', llm.load_config)
+        monkeypatch.setattr(extract_llm_selection, 'load_config', llm.load_config)
         monkeypatch.setattr(extract_llm_store, 'load_config', llm.load_config)
         pending, _ = llm._select_pending(ledger, workers, None, None, False)
         jobs, skipped, blocked = llm._prepare_jobs(

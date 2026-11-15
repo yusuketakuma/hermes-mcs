@@ -827,6 +827,27 @@ class Broker:
 
     # ---------- reconciliation ----------
 
+    def _aged_unresolved(self, epoch: int, now: float) -> list:
+        return [r["permit_id"] for r in self.db.execute(
+            "SELECT permit_id FROM permits WHERE epoch=? AND state IN"
+            f" ({','.join('?' * len(UNRESOLVED))})"
+            " AND COALESCE(sent_at,admitted_at,created_at)<?"
+            " ORDER BY permit_id LIMIT ?",
+            (epoch, *UNRESOLVED, now - UNKNOWN_HOLD_S, RECLAIM_BATCH))]
+
+    def reconcile_unknown(self, evidence) -> dict:
+        """Report held permits without trusting caller-supplied retirement evidence.
+
+        This compatibility callback has no request-bound verification
+        contract. Neither a proof string nor idle slots exclude server-queued
+        work, so leave completion-unproven permits to terminal or epoch fences.
+        """
+        with self._mutex:
+            epoch = self._meta()["epoch"]
+            candidates = self._aged_unresolved(epoch, time.time())
+        if not candidates:
+            return {"reconciled": 0}
+        return {"reconciled": 0, "held": len(candidates)}
 
     # ---------- observability ----------
 

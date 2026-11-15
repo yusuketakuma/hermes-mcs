@@ -3,6 +3,7 @@ import extract_llm_admission
 import extract_llm_engine
 import extract_llm_resident
 import extract_llm_runner
+import extract_llm_selection
 import json
 
 import pytest
@@ -30,6 +31,7 @@ def test_slow_rules_and_llm_leave_medication_rollup_and_signal_slices(tmp_path, 
     monkeypatch.setattr(extract_llm, "_MIN_CALL_S", 1)
     monkeypatch.setattr(extract_llm_engine, '_MIN_CALL_S', extract_llm._MIN_CALL_S)
     monkeypatch.setattr(extract_llm_runner, '_MIN_CALL_S', extract_llm._MIN_CALL_S)
+    monkeypatch.setattr(extract_llm_selection, '_MIN_CALL_S', extract_llm._MIN_CALL_S)
     monkeypatch.setattr(extract_llm, "pinned_slot_busy", lambda _: False)
     monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: None)
     monkeypatch.setattr(extract_llm_admission, 'legacy_admissions', extract_llm.legacy_admissions)

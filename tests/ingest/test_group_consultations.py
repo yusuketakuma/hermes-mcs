@@ -109,6 +109,20 @@ def test_generic_consultation_fetch_requires_group_evidence_before_get():
     assert calls == []
 
 
+@pytest.mark.parametrize("kind", [None, "", "medical", "unknown"])
+def test_inventory_and_adapter_refuse_non_group_before_get(group_store, group_wire, kind):
+    # Given
+    group_store.db.execute("UPDATE patients SET project_type=? WHERE project_id=?", (kind, GROUP_ID))
+    client, pending, calls = group_wire([])
+    # When
+    result = sync_metadata(group_store, client, GROUP_ID, "consultations", enabled=True, now=100)
+    # Then
+    assert result["state"] == "unknown" and result["reason"] == "association_unverified"
+    with pytest.raises(ValueError):
+        client.fetch_group_consultations(GROUP_ID, project_type=kind)
+    assert not pending and not calls and not group_store.artifacts(ARTIFACT_KIND)
+
+
 def test_default_sync_and_missing_session_do_not_communicate(group_store, group_wire):
     # Given
     client, _, calls = group_wire([])
@@ -173,3 +187,43 @@ def test_inventory_change_during_get_cannot_capture_complete_group(group_store, 
     assert not pending and len(calls) == 1
 
 
+@pytest.mark.parametrize("defect,reason", [
+    ("timestamp", "schema_error"), ("duplicate", "schema_error"),
+    ("page", "schema_error"), ("total", "schema_error"), ("terminal", "schema_error"),
+    ("empty_continued", "schema_error"), ("missing_snapshot", "snapshot_missing"),
+    ("page_limit", "page_limit"), ("session", "session_expired"),
+    ("not_found", "http_error"), ("malformed", "schema_error")])
+def test_bounded_group_walk_never_returns_partial_rows(group_wire, defect, reason):
+    # Given
+    first = consultation_page([ROW], has_next=True, total_entries=2, total_pages=2)
+    second = consultation_page([{**ROW, "id": 900000078}], page=2, total_entries=2, total_pages=2)
+    max_pages = 5
+    if defect == "timestamp":
+        second["paginate"]["timestamp"] = 1900000001
+    elif defect == "duplicate":
+        second["consultations"] = [ROW]
+    elif defect == "page":
+        second["paginate"]["current_page"] = 1
+    elif defect == "total":
+        second["paginate"]["total_entries"] = 3
+    elif defect == "terminal":
+        second["paginate"]["total_pages"] = 3
+    elif defect == "empty_continued":
+        first["consultations"] = []
+    elif defect == "missing_snapshot":
+        first["paginate"]["timestamp"] = None
+    elif defect == "page_limit":
+        max_pages = 1
+    elif defect == "session":
+        second = 401
+    elif defect == "not_found":
+        second = 404
+    else:
+        second["consultations"] = [{"id": True}]
+    client, _, calls = group_wire([first, second])
+    # When
+    result = client.fetch_group_consultations(
+        GROUP_ID, project_type="group", max_pages=max_pages)
+    # Then
+    assert result["complete"] is False and result["rows"] == [] and result["reason"] == reason
+    assert len(calls) <= 2

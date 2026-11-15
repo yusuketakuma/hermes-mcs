@@ -6,7 +6,9 @@ Contradictions, temporal order, and repetition are all preserved as
 typed relations between surviving facts.
 """
 import copy
+from datetime import datetime
 
+import pytest
 
 import semantic_facts as sf
 import semantic_relations as sr
@@ -25,6 +27,241 @@ def _fact(fid, statement, *, kind="medication_event", subject="patient:1",
     if kind == "medication_event":
         fact["action"] = action
     return fact
+
+
+def test_exact_duplicate_same_statement():
+    left = _fact("fact_aaaa", "アムロジピン5mg継続")
+    right = _fact("fact_bbbb", "アムロジピン5mg継続")
+    rel = sr.classify_pair(left, right)
+    assert rel["type"] == "EXACT_DUPLICATE"
+    sf.validate_relation(rel)
+
+
+def test_reconciliation_reuses_tokens_without_changing_pairs_or_fingerprint(monkeypatch):
+    active = [_fact("fact_active", "合成薬剤投与", action="start")]
+    new = [_fact(f"fact_new{i}", text, action=action)
+           for i, (text, action) in enumerate([
+               ("合成薬剤投与", "start"), ("合成薬剤中止", "stop"),
+               ("OtherEntity", "unknown"), ("OtherEntity", "stop")])]
+    from itertools import chain, combinations, product
+    expected = {}
+    for left, right in chain(product(active, new), combinations(new, 2)):
+        relation = sr.classify_pair(left, right)
+        if relation is not None:
+            expected[relation["relation_id"]] = relation
+    expected = sorted(expected.values(), key=lambda relation: relation["relation_id"])
+    calls = []
+    real = sf.entity_tokens
+
+    def counted(statement):
+        calls.append(statement)
+        return real(statement)
+
+    monkeypatch.setattr(sf, "entity_tokens", counted)
+    compared = []
+    real_classify = sr._classify_pair
+
+    def classify(left, right, token_cache=None):
+        compared.append((left["fact_id"], right["fact_id"]))
+        return real_classify(left, right, token_cache)
+
+    monkeypatch.setattr(sr, "_classify_pair", classify)
+    before = copy.deepcopy((active, new))
+    result = sr.reconcile_facts(active, new)
+    assert result["relations"] == expected
+    assert result["fingerprint"] == sr.relation_set_fingerprint(expected)
+    assert (active, new) == before
+    assert len(compared) == len(active) * len(new) + len(new) * (len(new) - 1) // 2
+    assert sorted(calls) == sorted({fact["statement"] for fact in active + new})
+    calls.clear()
+    assert sr.reconcile_facts(active, new) == result
+    assert len(calls) == 3  # per-call reuse only; no cross-call cache
+
+
+@pytest.mark.parametrize("changed", [
+    {"subject": "person:family01"}, {"actor": "sender:s2"},
+    {"polarity": "negated"}, {"epistemic": "suspected"},
+    {"workflow_status": "planned"}, {"event_time": "2026-09-02"},
+    {"valid_time": "2026-09-02"}, {"quantity": "10mg"},
+    {"action": "stop"},
+])
+def test_same_statement_preserves_distinct_clinical_attributes(changed):
+    left = _fact("fact_aaaa", "アムロジピン服用", action="start")
+    right = {**_fact("fact_bbbb", "アムロジピン服用", action="start"), **changed}
+    relation = sr.classify_pair(left, right)
+    assert relation is not None
+    assert relation["type"] != "EXACT_DUPLICATE"
+
+
+def test_ordered_action_pair_supersedes():
+    left = _fact("fact_aaaa", "アムロジピン開始", action="start",
+                 event_time="2026-09-01")
+    right = _fact("fact_bbbb", "アムロジピン中止", action="stop",
+                  event_time="2026-09-10")
+    rel = sr.classify_pair(left, right)
+    assert rel["type"] == "EXPLICIT_SUPERSESSION"
+    assert rel["left_fact_id"] == "fact_aaaa"
+    assert rel["right_fact_id"] == "fact_bbbb"
+
+
+@pytest.mark.parametrize("axis", ["event_time", "valid_time"])
+@pytest.mark.parametrize("first,second,earlier", [
+    ("2026-09-01T00:30:00+09:00", "2026-08-31T16:00:00+00:00", "fact_aaaa"),
+    ("2026-08-31T16:00:00+00:00", "2026-09-01T00:30:00+09:00", "fact_bbbb"),
+    ("2026-09-01T00:00:00+09:00", "2026-08-31T15:00:00Z", None),
+    ("2026-09-01-invalid", "2026-09-02", None),
+    ("2026-02-30", "2026-09-02", None),
+    ("2026-09-01T09:00:00", "2026-09-02T09:00:00+09:00", None),
+    ("2026-09-01", "2026-09-01T09:00:00+09:00", None),
+])
+def test_temporal_relations_require_valid_comparable_instants(axis, first, second, earlier):
+    left = _fact("fact_aaaa", "合成薬剤A開始", action="start")
+    right = _fact("fact_bbbb", "合成薬剤A中止", action="stop")
+    left[axis], right[axis] = first, second
+    rel = sr.classify_pair(left, right)
+    if earlier is None:
+        assert rel["type"] == "CONTRADICTION"
+    else:
+        assert rel["type"] == "EXPLICIT_SUPERSESSION"
+        assert rel["left_fact_id"] == earlier
+
+
+@pytest.mark.parametrize("axis", ["event_time", "valid_time"])
+@pytest.mark.parametrize("first,second,earlier", [
+    ("2026-10-04T01:00:00.100Z", "2026-10-04T10:00:00.200+09:00", "fact_aaaa"),
+    ("2026-10-04T10:00:00.200+09:00", "2026-10-04T01:00:00.100Z", "fact_bbbb"),
+    ("2026-10-04T01:00:00.100Z", "2026-10-04T10:00:00.100+09:00", None),
+])
+def test_utc_suffix_keeps_relation_order_on_python310(monkeypatch, axis, first, second, earlier):
+    class Python310Datetime(datetime):
+        @classmethod
+        def fromisoformat(cls, value):
+            if value.endswith("Z"):
+                raise ValueError("Python 3.10 rejects terminal Z")
+            return super().fromisoformat(value)
+
+    monkeypatch.setattr(sr, "datetime", Python310Datetime)
+    left = _fact("fact_aaaa", "合成薬剤A開始", action="start")
+    right = _fact("fact_bbbb", "合成薬剤A中止", action="stop")
+    left[axis], right[axis] = first, second
+    relation = sr.classify_pair(left, right)
+    assert relation["type"] == ("EXPLICIT_SUPERSESSION" if earlier else "CONTRADICTION")
+    if earlier:
+        assert relation["left_fact_id"] == earlier
+
+
+def test_reversed_temporal_order_swaps_relation_direction():
+    left = _fact("fact_aaaa", "アムロジピン中止", action="stop",
+                 event_time="2026-09-10")
+    right = _fact("fact_bbbb", "アムロジピン開始", action="start",
+                  event_time="2026-09-01")
+    rel = sr.classify_pair(left, right)
+    assert rel["type"] == "EXPLICIT_SUPERSESSION"
+    # The temporally earlier fact is always the superseding source.
+    assert rel["left_fact_id"] == "fact_bbbb"
+    assert rel["right_fact_id"] == "fact_aaaa"
+
+
+def test_unordered_action_pair_is_contradiction_not_latest_wins():
+    left = _fact("fact_aaaa", "アムロジピン開始", action="start")
+    right = _fact("fact_bbbb", "アムロジピン中止", action="stop")
+    rel = sr.classify_pair(left, right)
+    assert rel["type"] == "CONTRADICTION"
+    assert rel["reason"] == "unordered_action_pair"
+
+
+def test_polarity_conflict_orders_or_contradicts():
+    affirmed = _fact("fact_aaaa", "頭痛あり", kind="symptom_state",
+                     polarity="affirmed", event_time="2026-09-01")
+    negated = _fact("fact_bbbb", "頭痛なし", kind="symptom_state",
+                    polarity="negated", event_time="2026-09-05")
+    # Shared entity token 頭痛, ordered affirmed->negated.
+    rel = sr.classify_pair(affirmed, negated)
+    assert rel["type"] == "EXPLICIT_SUPERSESSION"
+    unordered = _fact("fact_cccc", "頭痛あり", kind="symptom_state",
+                      polarity="affirmed")
+    rel = sr.classify_pair(unordered, negated)
+    assert rel["type"] == "CONTRADICTION"
+
+
+def test_workflow_progression_is_transition():
+    planned = _fact("fact_aaaa", "CT検査予定", kind="care_event",
+                    workflow="planned", event_time="2026-09-01")
+    done = _fact("fact_bbbb", "CT検査実施", kind="care_event",
+                 workflow="done", event_time="2026-09-03")
+    rel = sr.classify_pair(planned, done)
+    assert rel["type"] == "TRANSITION"
+
+
+@pytest.mark.parametrize("axis", ["event_time", "valid_time"])
+@pytest.mark.parametrize("planned_at,done_at,expected", [
+    ("2026-10-23", "2026-10-20", "COMPLEMENTS"),
+    ("2026-10-20", "2026-10-23", "TRANSITION"),
+    ("2026-10-20", "2026-10-20", "TRANSITION"),
+    ("unknown", "2026-10-20", "TRANSITION"),
+    ("2026-10-20", "unknown", "TRANSITION"),
+    ("2026-10-20", "2026-10-20T09:00:00+09:00", "TRANSITION"),
+    ("2026-10-20T09:00:00", "2026-10-20T08:00:00+09:00", "TRANSITION"),
+    ("2026-10-20T09:00:00+09:00", "2026-10-19T23:00:00Z", "COMPLEMENTS"),
+])
+def test_workflow_progression_does_not_complete_a_later_plan(axis, planned_at, done_at, expected):
+    planned = _fact("fact_aaaa", "CT検査予定", kind="care_event", workflow="planned")
+    done = _fact("fact_bbbb", "CT検査実施", kind="care_event", workflow="done")
+    planned[axis], done[axis] = planned_at, done_at
+    original = copy.deepcopy((planned, done))
+    relation = sr.classify_pair(planned, done)
+    assert relation["type"] == expected
+    assert relation["left_fact_id"] == planned["fact_id"]
+    assert relation["right_fact_id"] == done["fact_id"]
+    sf.validate_relation(relation)
+    result = sr.reconcile_facts([planned], [done])
+    assert result["relations"] == [relation]
+    assert result["active_preserved"] == result["new_preserved"] == 1
+    assert (planned, done) == original
+
+
+@pytest.mark.parametrize("kind", ["workflow", "action", "polarity"])
+@pytest.mark.parametrize("event_left,event_right,earlier", [
+    ("2026-10-23", "2026-10-20T09:00:00+09:00", "fact_bbbb"),
+    ("2026-10-23T09:00:00", "2026-10-20T09:00:00+09:00", "fact_bbbb"),
+    ("2026-10-20", "2026-10-23", "fact_aaaa"),
+    ("2026-10-23", "2026-10-20", "fact_bbbb"),
+    ("2026-10-20", "2026-10-20", None),
+])
+def test_temporal_order_uses_first_comparable_axis(kind, event_left, event_right, earlier):
+    if kind == "workflow":
+        left = _fact("fact_aaaa", "CT検査予定", kind="care_event", workflow="planned")
+        right = _fact("fact_bbbb", "CT検査実施", kind="care_event", workflow="done")
+    elif kind == "action":
+        left = _fact("fact_aaaa", "合成薬剤A開始", action="start")
+        right = _fact("fact_bbbb", "合成薬剤A中止", action="stop")
+    else:
+        left = _fact("fact_aaaa", "頭痛あり", kind="symptom_state", polarity="affirmed")
+        right = _fact("fact_bbbb", "頭痛なし", kind="symptom_state", polarity="negated")
+    left.update(event_time=event_left, valid_time="2026-10-23")
+    right.update(event_time=event_right, valid_time="2026-10-20")
+    relation = sr.classify_pair(left, right)
+    if kind == "workflow":
+        assert relation["type"] == ("COMPLEMENTS" if earlier == "fact_bbbb" else "TRANSITION")
+    elif earlier is None:
+        assert relation["type"] == "CONTRADICTION"
+    else:
+        assert relation["type"] == "EXPLICIT_SUPERSESSION"
+        assert relation["left_fact_id"] == earlier
+    sf.validate_relation(relation)
+
+
+def test_complements_for_distinct_same_entity_facts():
+    left = _fact("fact_aaaa", "アムロジピン5mg継続", action="continue")
+    right = _fact("fact_bbbb", "アムロジピン朝食後服用", action="continue")
+    rel = sr.classify_pair(left, right)
+    assert rel["type"] == "COMPLEMENTS"
+
+
+def test_unrelated_facts_have_no_relation():
+    left = _fact("fact_aaaa", "アムロジピン継続")
+    right = _fact("fact_bbbb", "散歩を実施", kind="care_event")
+    assert sr.classify_pair(left, right) is None
 
 
 def test_reconcile_preserves_everything_and_fingerprints():
@@ -71,3 +308,43 @@ def test_intra_batch_contradiction_captured():
     assert result["relations"][0]["type"] == "CONTRADICTION"
 
 
+def test_relation_evidence_unions_both_facts():
+    left = _fact("fact_aaaa", "アムロジピン開始", action="start",
+                 event_time="2026-09-01", evidence=["ev_1"])
+    right = _fact("fact_bbbb", "アムロジピン中止", action="stop",
+                  event_time="2026-09-10", evidence=["ev_2"])
+    rel = sr.classify_pair(left, right)
+    assert rel["evidence_ids"] == ["ev_1", "ev_2"]
+    assert rel["status"] == "candidate"
+
+
+def test_different_subjects_do_not_supersede():
+    left = _fact("fact_aaaa", "アムロジピン開始", action="start",
+                 subject="patient:1", event_time="2026-09-01")
+    right = _fact("fact_bbbb", "アムロジピン中止", action="stop",
+                  subject="person:family01", event_time="2026-09-10")
+    rel = sr.classify_pair(left, right)
+    assert rel["type"] == "COMPLEMENTS"
+
+
+def test_malformed_inputs_are_safe():
+    assert sr.classify_pair(None, {}) is None
+    assert sr.classify_pair({"fact_id": "a"}, {"fact_id": "a"}) is None
+    result = sr.reconcile_facts([{"bad": 1}], [{"fact_id": "fact_x"}])
+    assert result["relations"] == []
+    assert sr.relation_set_fingerprint(None).startswith("relset_")
+
+
+def test_generic_action_word_is_not_a_shared_entity():
+    """U07-F05: two different drugs sharing only a generic action word
+    (投与) are unrelated — a stop of one must not supersede the other."""
+    left = _fact("fact_aaaa", "アムロジピンを投与", action="start",
+                 event_time="2026-09-01", evidence=("ev_a",))
+    right = _fact("fact_bbbb", "ロキソニンの投与を中止", action="stop",
+                  event_time="2026-09-02", evidence=("ev_b",))
+    assert sr.classify_pair(left, right) is None
+    # the same drug still links through its name
+    same = _fact("fact_cccc", "アムロジピンの投与を中止", action="stop",
+                 event_time="2026-09-02", evidence=("ev_c",))
+    rel = sr.classify_pair(left, same)
+    assert rel is not None and rel["type"] == "EXPLICIT_SUPERSESSION"

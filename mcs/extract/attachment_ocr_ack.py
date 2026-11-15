@@ -179,6 +179,14 @@ def acknowledged(db, current, *, deadline=None):
     return found == 1
 
 
+def current_acknowledged(db, artifact_id, *, deadline=None):
+    """Refuse stale, incomplete or damaged evidence without accepting an old alert."""
+    try:
+        return acknowledged(db, target(db, artifact_id), deadline=deadline)
+    except (ValueError, TypeError, KeyError, OSError, sqlite3.Error, RecursionError):
+        return False
+
+
 def build_plan(db, artifact_ids):
     """Plan at most twenty exact current failures without altering the caller's transaction."""
     if (type(artifact_ids) is not list or not 1 <= len(artifact_ids) <= MAX_TARGETS

@@ -6,7 +6,7 @@ import pytest
 import mcs_util
 import patient_context_refresh as refresh
 from extract_testkit import _message
-from test_cloud_after_local import local_then_cloud, routed, _local_pass
+from test_cloud_after_local import local_then_cloud, routed, _local_pass, _cloud_pass
 from test_patient_context_refresh import runtime, seed, finish, CFG
 
 __all__ = ['local_then_cloud', 'routed', 'runtime']
@@ -39,6 +39,9 @@ def test_patient_readiness_accepts_local_final_extraction(local_then_cloud):
     # route adds no readiness requirement, reservation or send.
     assert refresh._inference_ready(ledger, 1, cfg, deadline=deadline)
     assert not calls
+    assert _cloud_pass(ledger)['done'] == 0
+    assert refresh._inference_ready(ledger, 1, cfg, deadline=deadline)
+    assert not calls
     assert not ledger.artifacts('cloud_usage_reserve') and not ledger.artifacts('cloud_usage_result')
 
 
@@ -59,6 +62,10 @@ def test_local_final_context_gate_uses_real_saved_proofs(local_then_cloud, fault
     assert refresh._raw_extraction_current(ledger.db, source, cfg)[0]
     assert refresh._cloud_extraction_ready(ledger.db, 1, cfg)
     assert ledger.db.total_changes == before and not calls
+    assert _cloud_pass(ledger)['done'] == 0
+    assert refresh._raw_extraction_current(ledger.db, source, cfg)[0]
+    assert refresh._cloud_extraction_ready(ledger.db, 1, cfg)
+    assert not calls
     assert not ledger.artifacts('cloud_usage_reserve') and not ledger.artifacts('cloud_usage_result')
     # Tampered evidence must never read as current: a real source edit or a
     # stale stored proof breaks the binding and the gate closes again.

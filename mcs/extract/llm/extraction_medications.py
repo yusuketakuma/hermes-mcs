@@ -110,6 +110,10 @@ def valid(snapshot, body):
             and snapshot["status"] == expected)
 
 
+def has_private(snapshot):
+    return bool(snapshot and any(part["hint"]["matches"] for part in snapshot["parts"]))
+
+
 def uses_dictionary(snapshot):
     return bool(snapshot and any(part["hint"]["status"] in ("active", "partial")
                                  for part in snapshot["parts"]))

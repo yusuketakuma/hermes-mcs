@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import defer_reasons
+import cloud_backlog
 import semantic_fact_stages as facts
 import semantic_job_processor as processor
 import semantic_summary_stages as summary
@@ -77,7 +77,7 @@ def test_empty_repair_first_failed_gate_is_read_only(empty_candidate, where, key
     assert summary._empty_repair_candidate(db, 1, 1, 'fp', 'policy', 'revision', 'assist', [],
                                          reason_out=diag) == (None, True)
     assert diag == {'code': 'empty_repair_' + reason}
-    assert diag['code'] in defer_reasons.SEMANTIC_STOP_REASONS
+    assert diag['code'] in cloud_backlog._SEMANTIC_STOP_REASONS
     assert observed == calls
     assert db.total_changes == before
     assert len(statements) == 2 and all(s.startswith('SELECT ') for s in statements)

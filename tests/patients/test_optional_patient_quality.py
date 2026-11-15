@@ -5,6 +5,7 @@ import extract_llm_provider
 import extract_llm_qc
 import extract_llm_resident
 import extract_llm_runner
+import extract_llm_selection
 import extract_llm_store
 from test_patient_summary_quality import quality_owner as quality_owner
 from test_patient_context_refresh import runtime as runtime
@@ -128,6 +129,7 @@ def test_post_semantic_and_qc_skips_admit_patient_context(runtime, cloud, monkey
     monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda *args: cfg)
     import json

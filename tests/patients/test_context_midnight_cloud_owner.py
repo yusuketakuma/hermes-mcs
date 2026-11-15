@@ -58,6 +58,7 @@ def test_real_owner_reservation_and_response_across_midnight(runtime, cloud, mon
     monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     monkeypatch.setattr(cloud_inference, 'resolve_cloud_settings', lambda _cfg: settings)

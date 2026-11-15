@@ -1,5 +1,4 @@
 """Shared SQL and Python ordering retain active, latest, tie and NULL semantics."""
-from patient_priority_testkit import priority_key
 from contextlib import closing
 import sqlite3
 
@@ -21,11 +20,11 @@ def test_python_and_sql_share_activity_order_and_archive_cohorts():
     expected = [1, 2, 4, 5, 3, 9]
     assert actual == expected
     assert [row[0] for row in sorted(rows, key=lambda row:
-        priority_key(row[0], row[2], archived=bool(row[1])))] == expected
+        patient_priority.priority_key(row[0], row[2], archived=bool(row[1])))] == expected
 
 
 def test_null_project_has_sql_ascending_tie_order_without_becoming_a_patient():
-    assert priority_key(None, 10) < priority_key(1, 10)
+    assert patient_priority.priority_key(None, 10) < patient_priority.priority_key(1, 10)
 
 
 @pytest.mark.parametrize('column', ['patient', 'm.project_id DESC', 'm.project_id; DROP TABLE patients'])

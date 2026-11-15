@@ -6,6 +6,7 @@ import extract_llm_provider
 import extract_llm_qc
 import extract_llm_resident
 import extract_llm_runner
+import extract_llm_selection
 import extract_llm_source_contract
 import extract_llm_store
 import json
@@ -349,6 +350,7 @@ def test_failed_cloud_falls_back_to_local_without_cloud_evidence(tmp_path, monke
         monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
         monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
         monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+        monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
         monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
         monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
         monkeypatch.setattr(worker, "_cloud_reextract", lambda *a, **kw: True)

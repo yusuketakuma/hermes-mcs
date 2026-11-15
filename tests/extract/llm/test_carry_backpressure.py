@@ -96,6 +96,7 @@ def test_paid_save_wait_keeps_receipt_and_never_posts_again(routed, monkeypatch,
     monkeypatch.setattr(extract_llm_prepare, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_provider, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_resident, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_selection, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_source_contract, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_store, 'HOME', worker.HOME)
     cfg['cloud_llm']['daily_request_budget'] = 5
@@ -153,8 +154,8 @@ def test_resident_waits_for_save_before_context_or_semantic(tmp_path, monkeypatc
         def close(self):
             closed.append(True)
     class Pool:
-        def __init__(self, root):
-            pass
+        def __init__(self, root, *, context_only):
+            assert context_only is True
         def sync(self, *args, **kwargs):
             assert not active[0]
         def close(self):
@@ -164,6 +165,7 @@ def test_resident_waits_for_save_before_context_or_semantic(tmp_path, monkeypatc
     monkeypatch.setattr(extract_llm_prepare, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_provider, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_resident, 'HOME', worker.HOME)
+    monkeypatch.setattr(extract_llm_selection, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_source_contract, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_store, 'HOME', worker.HOME)
     monkeypatch.setattr(worker, '_open_current_ledger', lambda **_: Ledger())
@@ -183,6 +185,7 @@ def test_resident_waits_for_save_before_context_or_semantic(tmp_path, monkeypatc
     monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
     monkeypatch.setattr(cloud_inference, 'resolve_cloud_settings',
                         lambda cfg: {'mode': 'off', 'max_concurrency': 1})

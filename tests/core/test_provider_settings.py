@@ -80,6 +80,7 @@ def test_openai_profiles_refuse_invalid_values(profiles):
         settings.split_legacy({'cloud_llm': {'profiles': profiles}}, OWNERS)
 
 
+
 def test_root_link_replacement_with_same_target_rejects_stale_snapshot(tmp_path, monkeypatch):
     tmp_path.chmod(0o700)
     target = tmp_path / "target"
@@ -709,6 +710,19 @@ def test_retained_remnants_with_valid_authority_do_not_block_split(tmp_path):
     (data / ".provider-settings-stage-synthetic").mkdir()
     assert settings.probe(tmp_path)["state"] == "requires_checked_read"
     assert settings.read(tmp_path, model_owners=OWNERS)["common"] == common
+
+
+def test_nonmutating_probe_and_canonical_path(tmp_path):
+    tmp_path.chmod(0o700)
+    assert settings.probe(tmp_path) == {"state": "uninitialized_or_legacy_unverified", "config_present": False}
+    assert list(tmp_path.iterdir()) == []
+    assert settings.is_canonical_config(tmp_path / "config.json", tmp_path)
+    assert not settings.is_canonical_config(tmp_path / "other.json", tmp_path)
+    assert not settings.is_canonical_config("config.json", tmp_path)
+    tree(tmp_path)
+    assert settings.probe(tmp_path) == {"state": "legacy_unverified", "config_present": True}
+    private_json(tmp_path / "data" / ".provider-settings-pending.json", {"synthetic": True})
+    assert settings.probe(tmp_path) == {"state": "pending", "config_present": True}
 
 
 def test_probe_never_calls_split_without_checked_read(tmp_path):

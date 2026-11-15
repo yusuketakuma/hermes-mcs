@@ -341,6 +341,7 @@ def test_resident_stop_after_bounds_startup_wait(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(extract_llm_prepare, 'HOME', extract_llm.HOME)
     monkeypatch.setattr(extract_llm_provider, 'HOME', extract_llm.HOME)
     monkeypatch.setattr(extract_llm_resident, 'HOME', extract_llm.HOME)
+    monkeypatch.setattr(extract_llm_selection, 'HOME', extract_llm.HOME)
     monkeypatch.setattr(extract_llm_source_contract, 'HOME', extract_llm.HOME)
     monkeypatch.setattr(extract_llm_store, 'HOME', extract_llm.HOME)
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **_: True)

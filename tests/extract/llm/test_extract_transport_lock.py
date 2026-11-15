@@ -98,7 +98,7 @@ def test_lost_transport_lock_never_flushes_or_releases_claims(locked, monkeypatc
 
 
 @pytest.mark.parametrize("options", [{"workers": 2}, {"allow_cloud": True},
-                                      {"per_write_lock": True}])
+                                      {"per_write_lock": True}, {"cloud_only": True}])
 def test_borrowed_lock_rejects_parallel_or_cloud_dispatch_before_writes(locked, options):
     ledger, fd, _, _ = locked
     before = ledger.db.total_changes

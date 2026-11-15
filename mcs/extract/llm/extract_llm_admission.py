@@ -104,6 +104,30 @@ def legacy_admissions(ledger, cfg) -> set | None:
         return set()
 
 
+def cloud_backlog_admissions(ledger, cfg) -> set | None:
+    """Admission set for the resident cloud backlog worker's cloud_only pass.
+
+    A cloud_only pass performs no legacy inference, so the canonical legacy
+    closure (conversion cohorts only) must not starve required cloud work:
+    under a validated config the receipted human history scope, selected
+    contract, holds and paid gates inside run_pending are the admission
+    gates — unrestricted (None) is the safe canonical expression. Any config
+    error keeps the fail-closed empty set, identical to legacy_admissions."""
+    base = legacy_admissions(ledger, cfg)
+    if base is None:
+        return None
+    try:
+        if not isinstance(cfg, dict):
+            return base
+        import semantic_policy
+        policy, error = semantic_policy.runtime_config(cfg)
+        if error or policy.get("fact_source") != "canonical":
+            return base
+        return None
+    except Exception:
+        return base
+
+
 _admission_closed_last = None
 
 

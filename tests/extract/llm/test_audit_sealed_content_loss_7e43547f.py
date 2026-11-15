@@ -6,6 +6,7 @@ import extract_llm_provider
 import extract_llm_qc
 import extract_llm_resident
 import extract_llm_runner
+import extract_llm_selection
 import extract_llm_store
 import copy
 import json
@@ -42,6 +43,7 @@ def test_sealed_normal_final_rejects_content_only_vital_loss(tmp_path, monkeypat
     monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm, "_llm_call", local_stub)
     monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)
@@ -116,6 +118,7 @@ def test_sealed_final_rejects_undigestable_content_with_null_meta_hash(tmp_path,
     monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm, "_llm_call", local_stub)
     monkeypatch.setattr(extract_llm_engine, '_llm_call', extract_llm._llm_call)

@@ -34,7 +34,7 @@ def test_actual_ready_reader_medication_button_and_document_source(page_store, m
     assert list(attachment_extraction.iter_sources(ledger.db, 1, cfg=cfg)) == []
     pending = notify_views.meds_view(ledger.db, 1, 1, cfg=cfg)
     assert not pending['items'] and '解析待ち' in pending['empty']
-    assert run(ledger, cfg)['done'] == 1
+    assert run(ledger, cfg, 'local')['done'] == 1
     source, = attachment_extraction.iter_sources(ledger.db, 1, cfg=cfg)
     assert source['source_key'] == key and source['message_id'] == 0
     assert source['posted_at_ts'] is None and source['extraction_artifact_id'] > source['artifact_id']
@@ -54,7 +54,7 @@ def test_actual_ready_pharmacy_reports_recheck_original_and_do_not_need_cached_r
     quote = '本人の合成薬Aは残薬3錠。'
     _page(ledger, key, quote)
     answers['local'] = {'symptoms': [], **pharmacy_document(quote)}
-    assert run(ledger, cfg)['done'] == 1
+    assert run(ledger, cfg, 'local')['done'] == 1
     lines = notify_views._pharmacy_state_lines(ledger.db, 1, {}, cfg=cfg)
     text = '\n'.join(lines)
     assert quote in text and '文書日時未確認' in text

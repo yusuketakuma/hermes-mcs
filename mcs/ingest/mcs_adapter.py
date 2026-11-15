@@ -45,7 +45,7 @@ from contextlib import suppress
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    pass
+    from project_metadata_contract import MetadataFetch
 
 from mcs_util import RETRY_LATER_4XX
 from safe_io import atomic_write, fsync_dir
@@ -706,6 +706,42 @@ class MCSAdapter(MCSAuthenticationMixin):
             self.set_deadline(previous_deadline)
         return result
 
+    def fetch_project_members(self, project_id: int, *, max_pages: int = 5,
+                              per_page: int = 50, retain_names: bool = False) -> MetadataFetch:
+        """Bounded current membership GET; no photos, contacts or departed members.
+
+        Kept since 1.0.13 as a compatibility entry point for callers outside
+        the scheduler; production paths call project_metadata.fetch_metadata.
+        """
+        from project_metadata import fetch_metadata
+        return fetch_metadata(self._get, "care_team", project_id,
+                              max_pages=max_pages, per_page=per_page,
+                              retain_names=retain_names)
+
+    def fetch_observation_values(self, karte_id: int, lab_test_item_id: int, *,
+                                 max_pages: int = 5, per_page: int = 50) -> MetadataFetch:
+        """Read one evidenced lab-test item's values without fetching full karte data.
+
+        Kept since 1.0.13 as a compatibility entry point for callers outside
+        the scheduler; production paths call project_metadata.fetch_metadata.
+        """
+        from project_metadata import fetch_metadata
+        return fetch_metadata(self._get, "observation_values", karte_id,
+                              item_id=lab_test_item_id,
+                              max_pages=max_pages, per_page=per_page)
+
+    def fetch_group_consultations(self, project_id: int, *, project_type: str,
+                                  max_pages: int = 5, per_page: int = 20) -> MetadataFetch:
+        """Read group consultation metadata only; never infer patient associations.
+
+        Kept since 1.0.13 as a compatibility entry point for callers outside
+        the scheduler; production paths call project_metadata.fetch_metadata.
+        """
+        from project_metadata import fetch_metadata
+        if project_type != "group":
+            raise ValueError("group project evidence required")
+        return fetch_metadata(self._get, "consultations", project_id,
+                              max_pages=max_pages, per_page=per_page, project_type=project_type)
 
     def fetch_memo_summary(self, karte_id: int) -> dict | None:
         """Read the patient's 連携サマリー (memo_summary); None when none is registered.

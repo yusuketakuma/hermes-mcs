@@ -3,7 +3,6 @@ import json
 
 import pytest
 
-import attachment_extraction
 import attachment_inference as worker
 import attachment_ocr as ocr
 import original_source_keys
@@ -24,9 +23,9 @@ def _long_page(ledger, key, text):
 
 
 def _run(ledger, cfg):
-    result = worker.run_pending(ledger, cfg)
+    result = worker.run_pending(ledger, cfg, stage='local')
     if not result['done'] and not result['deferred']:
-        result = worker.run_pending(ledger, cfg)
+        result = worker.run_pending(ledger, cfg, stage='local')
     return result
 
 
@@ -54,7 +53,7 @@ def test_120_second_local_pass_resumes_two_chunks_and_only_then_is_ready(page_st
     monkeypatch.setattr(worker.extract_llm.local_llm, 'chat', slow)
     monkeypatch.setattr(worker.extract_llm.local_llm, 'admitted_chat', lambda client, prompt, **kw: slow(prompt, **kw))
     assert _run(ledger, cfg)['deferred'] == 1
-    assert attachment_extraction.current(ledger.db, 1, key, cfg=cfg) is None
+    assert worker.current(ledger.db, 1, key, cfg=cfg) is None
     assert ledger.artifacts(worker._CHECKPOINT_KIND)
     source = original_source_keys.source(ledger.db, 1, key)
     kwargs = worker._local_checkpoints(ledger, source, cfg, worker.writer_lock.updater_state())
@@ -66,7 +65,7 @@ def test_120_second_local_pass_resumes_two_chunks_and_only_then_is_ready(page_st
     first_call_count = len(calls)
     assert _run(ledger, cfg)['done'] == 1
     assert len(calls) == first_call_count + 1
-    assert attachment_extraction.current(ledger.db, 1, key, cfg=cfg)['ready'] is True
+    assert worker.current(ledger.db, 1, key, cfg=cfg)['ready'] is True
 
 
 def test_explicit_300_second_deadline_resumes_remaining_chunk_without_resend(page_store, monkeypatch):
@@ -89,23 +88,23 @@ def test_explicit_300_second_deadline_resumes_remaining_chunk_without_resend(pag
         return response
     monkeypatch.setattr(worker.extract_llm.local_llm, 'chat', slow)
     monkeypatch.setattr(worker.extract_llm.local_llm, 'admitted_chat', lambda client, prompt, **kw: slow(prompt, **kw))
-    first = worker.run_pending(ledger, cfg, deadline=clock[0] + 120)
+    first = worker.run_pending(ledger, cfg, stage='local', deadline=clock[0] + 120)
     assert first['deferred'] == 1
     source = original_source_keys.source(ledger.db, 1, key)
     kwargs = worker._local_checkpoints(ledger, source, cfg, worker.writer_lock.updater_state())
     assert list(kwargs['chunks_in']) == [0]
     calls_after_first = len(calls)
-    second = worker.run_pending(ledger, cfg, deadline=clock[0] + 300)
+    second = worker.run_pending(ledger, cfg, stage='local', deadline=clock[0] + 300)
     assert second['done'] == 1
     assert len(calls) == calls_after_first + 1
-    assert attachment_extraction.current(ledger.db, 1, key, cfg=cfg)['ready'] is True
+    assert worker.current(ledger.db, 1, key, cfg=cfg)['ready'] is True
 
 
 def test_checkpoint_split_and_pending_candidate_stay_bound_and_pending(page_store, monkeypatch):
     ledger, cfg, key, *_ = page_store
     assert _run(ledger, cfg)['done'] == 1
     source = original_source_keys.source(ledger.db, 1, key)
-    result = attachment_extraction.current(ledger.db, 1, key, cfg=cfg)
+    result = worker.current(ledger.db, 1, key, cfg=cfg)
     generation = worker.writer_lock.updater_state()
     checkpoint = worker._local_checkpoints(ledger, source, cfg, generation)
     leaf = worker.extract_llm._EvidenceLeaf(result['document'], {'providers': ['local'], 'complete': True})
@@ -161,16 +160,16 @@ def test_recent_patient_priority_alternates_with_history_and_deferred_does_not_s
         attempted.append(body)
         return worker.extract_llm._DEFERRED
     monkeypatch.setattr(worker.extract_llm, 'llm_extract', defer)
-    assert worker.run_pending(ledger, cfg, limit=1)['deferred'] == 1
+    assert worker.run_pending(ledger, cfg, stage='local', limit=1)['deferred'] == 1
     assert attempted == ['最近の患者の合成OCR']
-    assert worker.run_pending(ledger, cfg, limit=1)['deferred'] == 1
+    assert worker.run_pending(ledger, cfg, stage='local', limit=1)['deferred'] == 1
     assert attempted[-1] == '完全合成の経過記録です。'
     for _ in range(4):
         before = len(attempted)
-        worker.run_pending(ledger, cfg, limit=1)
+        worker.run_pending(ledger, cfg, stage='local', limit=1)
         assert len(attempted) - before <= 1
     assert attempted.count('最近の患者の合成OCR') >= 2
     assert attempted.count('完全合成の経過記録です。') >= 2
     before = len(attempted)
-    worker.run_pending(ledger, cfg, deadline=worker.time.monotonic() - 1)
+    worker.run_pending(ledger, cfg, stage='local', deadline=worker.time.monotonic() - 1)
     assert len(attempted) == before

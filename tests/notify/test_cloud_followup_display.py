@@ -2,6 +2,9 @@
 from unittest.mock import Mock
 
 import cloud_client
+import extract_llm_errors
+import extract_llm_selection
+import extract_llm_store
 import pytest
 
 import cloud_inference
@@ -26,6 +29,9 @@ def test_legacy_cloud_reader_has_no_invented_transport_status(led, monkeypatch, 
     calls = []
     monkeypatch.setattr(extract_llm, "cloud_completion", lambda db, row, selected: calls.append(
         (row["project_id"], row["message_id"], selected)) or completion)
+    monkeypatch.setattr(extract_llm_errors, 'cloud_completion', extract_llm.cloud_completion)
+    monkeypatch.setattr(extract_llm_selection, 'cloud_completion', extract_llm.cloud_completion)
+    monkeypatch.setattr(extract_llm_store, 'cloud_completion', extract_llm.cloud_completion)
     reserve, post = Mock(side_effect=AssertionError("display reserved cloud")), Mock(side_effect=AssertionError("display sent cloud"))
     monkeypatch.setattr(cloud_policy, "usage_reserver", reserve)
     monkeypatch.setattr(cloud_client.CloudClient, "complete", post)
@@ -61,6 +67,9 @@ def test_legacy_cloud_reader_respects_history_permission(led, monkeypatch):
     monkeypatch.setattr(cloud_policy, "eligible", lambda *args: True)
     monkeypatch.setattr(cloud_policy, "history_thread_allowed", lambda *args: False)
     monkeypatch.setattr(extract_llm, "cloud_completion", lambda *args: pytest.fail("unapproved source read"))
+    monkeypatch.setattr(extract_llm_errors, 'cloud_completion', extract_llm.cloud_completion)
+    monkeypatch.setattr(extract_llm_selection, 'cloud_completion', extract_llm.cloud_completion)
+    monkeypatch.setattr(extract_llm_store, 'cloud_completion', extract_llm.cloud_completion)
     assert processing_route.cloud_followup(led.db, 1, 100, CFG) is None
     with monkeypatch.context() as legacy:
         legacy.setattr(cloud_policy, "send_route", lambda route: route == "reextract")

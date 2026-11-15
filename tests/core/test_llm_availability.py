@@ -33,7 +33,7 @@ def test_availability_owns_files_without_settling_borrowed_transaction(tmp_path,
         assert (tmp_path / "llm_health.json").read_bytes() == original
         monkeypatch.setattr(availability.time, "time", lambda: 1061.0)
         availability.circuit_success(db)
-        assert availability.llm_health(db)["last_success"] == 1061.0
+        assert availability.llm_last_success(db) == 1061.0
         assert db.in_transaction
         assert db.execute("SELECT value FROM sentinel").fetchone() == ("synthetic pending",)
         db.rollback()

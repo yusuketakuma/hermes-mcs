@@ -216,28 +216,57 @@ def history_snapshot(db, source, *, require_ready=False):
         return None
 
 
-def save(ledger, source, cfg, document, meta, *, contract_for, write):
-    """Store one validated local result for an OCR page under the caller's write lock."""
+def input_binding(source, local):
+    return attachment_cloud_identity.input_binding(source)
+
+
+def save(ledger, source, cfg, stage, document, meta, unit=None, local=None, *, contract_for, write):
     proof = meta.get('_provider_evidence')
     quality = {key: meta.get(key) for key in ('completeness', 'completeness_chunks')}
     if (not isinstance(proof, dict) or proof.get('complete') is not True
-            or proof.get('providers') != ['local']
             or not validated(document, source['body_text'], quality)):
         return False
+    provider = 'local' if unit is None else unit.contract['backend']
+    if proof.get('providers') != [provider]:
+        return False
+    receipts = []
+    if unit is not None:
+        unit.commit_guard()
+        if history_snapshot(ledger.db, source) is None:
+            return False
+        pending = [unit]
+        while pending:
+            member = pending.pop()
+            pending.extend(member._children)
+            for receipt in member.completed_reservations:
+                rows = ledger.db.execute("SELECT artifact_id FROM artifacts WHERE kind='cloud_usage_reserve' "
+                    "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.reservation_id') END=?",
+                    (receipt['reservation_id'],)).fetchall()
+                if len(rows) != 1:
+                    return False
+                receipts.append(rows[0][0])
+        if not receipts:
+            return False
+        cloud_policy.reservation_evidence_batch(ledger.db, receipts)
     value = {'schema': SCHEMA, 'source_key': source['source_key'], 'source_binding': source['_source_binding'],
-        'stage': 'local', 'contract': contract_for(cfg), 'document': document, 'result_hash': payload_hash(document),
-        'quality': quality, 'provider_evidence': proof, 'provider_contract': None,
-        'local_artifact_id': None, 'reservation_artifact_ids': []}
+        'stage': stage, 'contract': contract_for(cfg), 'document': document, 'result_hash': payload_hash(document),
+        'quality': quality,
+        'provider_evidence': proof, 'provider_contract': unit.contract if unit else None,
+        'local_artifact_id': local['artifact_id'] if local else None, 'reservation_artifact_ids': receipts}
 
     def save():
+        if unit is not None:
+            unit.commit_guard()
         with ledger.db:
-            if stored(ledger.db, source['project_id'], source['source_key'], 'local', cfg,
-                      contract_for=contract_for) is not None:
+            if unit is not None and history_snapshot(ledger.db, source) is None:
+                return False
+            if stored(ledger.db, source['project_id'], source['source_key'], stage, cfg, contract_for=contract_for) is not None:
                 return False
             ledger.artifact_add_tx(KIND, json.dumps(value, ensure_ascii=False), project_id=source['project_id'],
-                message_id=source['parent_message_id'], model=local_llm.resolve(cfg)[1],
-                meta={'source_key': source['source_key'], 'stage': 'local'})
+                message_id=source['parent_message_id'], model=unit.model if unit else local_llm.resolve(cfg)[1],
+                meta={'source_key': source['source_key'], 'stage': stage})
             import notify_cards
             notify_cards.mark_snapshot_dirty(ledger.db)
         return True
-    return write(save)
+    return (unit.dispatch(save) if unit is not None
+            else write(save))

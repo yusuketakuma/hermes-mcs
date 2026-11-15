@@ -25,7 +25,7 @@ def test_removing_every_candidate_is_not_a_verified_empty_scan(store, tmp_path):
     emptied = deepcopy(value)
     emptied["parts"][0]["hint"]["matches"] = []
     assert references.valid(emptied, body)
-    assert not _has_private(emptied) and references.uses_dictionary(emptied)
+    assert not references.has_private(emptied) and references.uses_dictionary(emptied)
     assert not references.current(store.db, cfg, emptied, body=body)
 
 
@@ -34,7 +34,7 @@ def test_genuine_empty_scan_still_checks_its_dictionary_generation(store, tmp_pa
     cfg = configured(store, tmp_path)
     value = references.build(store.db, cfg, body, private=True, deadline=time.monotonic() + 5)
     assert references.valid(value, body) and references.uses_dictionary(value)
-    assert not _has_private(value)
+    assert not references.has_private(value)
     assert references.current(store.db, cfg, value, body=body)
     assert not references.current(store.db, {}, value, body=body)
 
@@ -125,7 +125,3 @@ def test_corrupt_unknown_checkpoint_is_not_reclassified_as_an_unsent_local_attem
         extract_llm._pending_context_frame(store.db, row, attempt={"auto_retry": 0}, enabled=False)
     kept = store.db.execute("SELECT content,meta FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()
     assert kept["content"] == "7" and json.loads(kept["meta"]) == meta
-
-
-def _has_private(snapshot):
-    return bool(snapshot and any(part["hint"]["matches"] for part in snapshot["parts"]))

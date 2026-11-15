@@ -78,6 +78,14 @@ def _cached_details(db, project_id, target_id, source_fp, policy_fp,
     return found
 
 
+def _cached_detail(db, project_id, target_id, source_fp, policy_fp,
+                   fact_id, dimension, options: dict) -> dict | None:
+    if not isinstance(fact_id, str) or not isinstance(dimension, str):
+        return None
+    return _cached_details(db, project_id, target_id, source_fp, policy_fp,
+                           {(fact_id, dimension): options}).get((fact_id, dimension))
+
+
 def _persist_detail(ledger, project_id, target_id, source_fp, policy_fp,
                     fact_id, dimension, choice, confidence) -> None:
     if ledger is None:

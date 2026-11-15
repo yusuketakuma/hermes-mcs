@@ -63,8 +63,8 @@ def _fact_stop_reason(stage):
 
 
 def _fixed_stop_reason(reason, fallback):
-    import defer_reasons
-    return (reason if isinstance(reason, str) and reason in defer_reasons.SEMANTIC_STOP_REASONS
+    import cloud_backlog
+    return (reason if isinstance(reason, str) and reason in cloud_backlog._SEMANTIC_STOP_REASONS
             else fallback)
 
 
@@ -1242,6 +1242,7 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                  config_generation: str | None = None,
                  reserve_fn=None, lane: str | None = None, *,
                        jev_transport=None, jev_timing=None, cloud_transport=None, llm_timing=None,
+                       cloud_only=False,
                  diagnostics: dict, shadow_stats: dict | None = None,
                  jev_skip: str | None = None) -> str:
     """Preserve stale workers while bounding timeouts after dispatched work."""
@@ -1301,7 +1302,10 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                 cloud = stack.enter_context(semantic_transport.backlog_inference(
                     ledger, load_config() if cfg_path is None else load_config(cfg_path),
                     job, runtime.job_deadline(scfg, deadline), current, cloud_transport,
-                    local_fallback=local_llm_fn, fallback_current=fallback_current))
+                    local_fallback=local_llm_fn if not cloud_only else None,
+                    fallback_current=fallback_current if not cloud_only else None))
+                if cloud_only and cloud is None:
+                    raise runtime.LLMNotSent("cloud_scope_or_budget")
                 if cloud is not None:
                     def cloud_call(prompt, timeout=None):
                         started = time.perf_counter()

@@ -6,6 +6,7 @@ import extract_llm_provider
 import extract_llm_qc
 import extract_llm_resident
 import extract_llm_runner
+import extract_llm_selection
 import extract_llm_store
 from copy import deepcopy
 from dataclasses import replace
@@ -77,7 +78,7 @@ def test_unapproved_dictionary_does_not_supply_candidates(store, tmp_path):
                                                           False, drug_map.RESOLVER_VERSION], "cursor": 0})
     value = references.build(store.db, cfg, body, private=True, deadline=time.monotonic() + 10)
     assert references.valid(value, body) and value["status"] == "inactive"
-    assert not _has_private(value)
+    assert not references.has_private(value)
     assert "架空成分甲" not in references.block(value, body, 0, body, private=True)
 
 
@@ -252,6 +253,7 @@ def test_expired_run_does_not_prepare_a_new_dictionary_frame(store, monkeypatch)
     monkeypatch.setattr(extract_llm_qc, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_resident, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_runner, 'load_config', extract_llm.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(extract_llm_store, 'load_config', extract_llm.load_config)
     monkeypatch.setattr(references, "build", lambda *a, **k: pytest.fail("prepared after deadline"))
     jobs, skipped, blocked = extract_llm._prepare_jobs(store, [{}, {}], ("", "model"), False,
@@ -273,7 +275,3 @@ def test_transport_reference_change_does_not_poison_endpoint_health(monkeypatch)
     assert extract_llm._llm_call("synthetic prompt") is extract_llm._DEFERRED
     assert extract_llm._CALL_NOTES.transport is None
     assert extract_llm._CALL_NOTES.defer_reason == "currentness_unverified"
-
-
-def _has_private(snapshot):
-    return bool(snapshot and any(part["hint"]["matches"] for part in snapshot["parts"]))

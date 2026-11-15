@@ -1,15 +1,17 @@
-"""Run bounded patient-context cloud workers under the existing lane-2 resident lifecycle."""
+"""Run bounded cloud-only backlog workers under the existing resident lifecycle."""
 from __future__ import annotations
 
 from contextlib import contextmanager, closing
 import fcntl
 import json
+import math
 import os
 from pathlib import Path
 import sqlite3
 import stat
 import subprocess
 import sys
+import threading
 import time
 
 if __name__ == "__main__":
@@ -65,10 +67,53 @@ def _exception_observation(error):
     return record
 
 
+_TRANSPORT_SECONDS = ("llm_transport_s", "llm_reacquire_s", "jev_transport_s", "jev_reacquire_s")
+
+
+def _pass_timing_observation(result):
+    """Forward only measured transport/reacquire seconds and fixed lock-loss detail."""
+    def seconds(value):
+        return (value if type(value) in (int, float)
+                and 0 <= value <= sys.float_info.max and math.isfinite(value) else None)
+    transport = result.get("transport")
+    transport = transport if isinstance(transport, dict) else {}
+    record = {"transport": {key: seconds(transport.get(key)) for key in _TRANSPORT_SECONDS},
+              "transport_basis": "unlocked_call_wall_not_gpu_or_http_only",
+              "request_slot_wait_s": None, "worker_rss_bytes": None,
+              "run_lock_lost_detail": None}
+    detail = result.get("run_lock_lost_detail")
+    if isinstance(detail, dict) and detail.get("kind") in ("llm", "jev"):
+        record["run_lock_lost_detail"] = {
+            "kind": detail["kind"], **{key: seconds(detail.get(key))
+                for key in ("transport_s", "reacquire_s", "window_s")}}
+    return record
+
 
 def _event(event, **values):
     print(json.dumps({"event": event, "pid": os.getpid(), "ts": time.time(), **values}), flush=True)
 
+
+@contextmanager
+def _phase_progress(phase):
+    started = time.monotonic()
+    stopped = threading.Event()
+
+    def report():
+        while not stopped.wait(60):
+            try:
+                _event("cloud_backlog_progress", phase=phase,
+                       elapsed_s=round(time.monotonic() - started, 3))
+            except OSError:
+                return
+
+    _event("cloud_backlog_phase", phase=phase)
+    reporter = threading.Thread(target=report, daemon=True)
+    reporter.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        reporter.join(timeout=0.1)
 
 
 def owner_alive():
@@ -153,16 +198,18 @@ def memory_workers(limit):
 
 class CloudBacklogPool:
     """Own child processes only while the normal lane-2 resident is alive."""
-    def __init__(self, root):
+    def __init__(self, root, *, context_only=False):
         self.root = Path(root)
+        self.context_only = context_only
         self.children = []
         self.indices = {}
         self.lock = None
         self.last_sync = 0.0
 
-    def sync(self, cfg):
+    def sync(self, cfg, *, ledger=None):
         import cloud_inference
-        import patient_context_refresh
+        import cloud_policy
+        import extract_llm
         now = time.monotonic()
         if now - self.last_sync < 10:
             return
@@ -170,13 +217,32 @@ class CloudBacklogPool:
         settings = cloud_inference.resolve_cloud_settings(cfg)
         self.children = [p for p in self.children if p.poll() is None]
         self.indices = {p: index for p, index in self.indices.items() if p in self.children}
-        # Cloud availability is decided inside run_due. A missing key or a spend
-        # hold must not hide its existing local fallback/recovery.
-        if settings["mode"] != "on" or not patient_context_refresh.options(cfg)["enabled"]:
+        if settings["mode"] != "on":
+            # Workers retire at the idle boundary after paid carry is settled.
             return
+        if self.context_only:
+            import patient_context_refresh
+            if not patient_context_refresh.options(cfg)["enabled"]:
+                return
+            # Cloud availability is decided inside run_due. A missing key or
+            # a spend hold must not hide its existing local fallback/recovery.
+        else:
+            if not (cloud_policy.send_route("reextract") and cloud_policy.send_route("semantic_backlog")):
+                # Existing workers settle paid carry before retiring.
+                return
+            if not cloud_policy.selected_key(self.root):
+                return
+            selection, errors = cloud_policy.resolve_profile(
+                cfg, route="reextract", purpose="backlog", root=self.root)
+            if errors or selection is None:
+                return
+            limit = selection["max_tokens"] if selection["max_tokens"] is not None else extract_llm.MAX_TOKENS
+            if ledger is not None and (cloud_policy.global_block_reason(ledger, model=selection["model"])
+                    or cloud_policy.budget_block_reason(ledger, settings, max_tokens=limit, selection=selection)):
+                return
         directory = self.root / "data"
         if self.lock is None:
-            self.lock = _lock(directory / "context_pool.lock")
+            self.lock = _lock(directory / ("context_pool.lock" if self.context_only else "cloud_pool.lock"))
             if self.lock is None:
                 return
         self.children = [p for p in self.children if p.poll() is None]
@@ -195,7 +261,7 @@ class CloudBacklogPool:
             child = subprocess.Popen(
                 [sys.executable, "-I", helper, "exec", "--data-dir", str(directory), "--",
                  sys.executable, str(Path(__file__).resolve()), "--parent", str(os.getpid()),
-                 "--index", str(index)],
+                 "--index", str(index), *(["--context-only"] if self.context_only else [])],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 close_fds=True)
             self.children.append(child)
@@ -219,20 +285,97 @@ class CloudBacklogPool:
             self.lock = None
 
 
-def worker(parent, *, index=None):
-    """Run guarded patient-context passes with an independent ledger while the parent lives."""
+# Fixed waiting-reason codes: a worker may only report one of these — never a
+# raw block reason, config value, id or any provider detail.
+_WAIT_CODES = {"paused", "circuit_open", "pricing_unverified", "profile_invalid",
+               "daily_cap", "daily_cost_cap", "monthly_cap", "provider_budget_missing",
+               "provider_daily_cap", "provider_monthly_cap", "window_history_unverified",
+               "window_cap"}
+
+# Fixed defer-reason vocabulary reported by extract_llm.run_pending — a raw
+# error class, config value or id is never a valid reason in the pass record.
+_DEFER_REASONS = {"deadline", "probe_unobserved", "admission", "endpoint_down",
+                  "not_sent", "busy", "cloud_fallback", "circuit_open",
+                  "prepare_blocked", "currentness_unverified", "cloud_guard",
+                  "commit_rejected", "prior_unavailable", "worker_error", "write_unavailable",
+                  "update_fence", "lease_renewal_failed", "checkpoint_unverified", "quality_checkpoint_unverified",
+                  "repair_unavailable", "unclassified",
+                  "cloud_unit_unresolved", "cloud_owner_transaction", "cloud_deadline",
+                  "cloud_budget_blocked", "cloud_pricing_unverified",
+                  "cloud_not_sent", "cloud_scope_or_budget", "llm_turn_busy", "budget_short",
+                  "paused", "mode_off", "out_of_scope", "jev_skip_unverified",
+                  "prepare_deadline", "prepare_source_changed", "prepare_cloud_disabled",
+                  "prepare_profile_unavailable", "prepare_medication_changed",
+                  "prepare_context_invalid", "prepare_database_unavailable", "other",
+                  "cloud_capacity", "cloud_profile_unavailable", "cloud_source_unverified",
+                  "cloud_target_unverified", "audit_pending", "loops_incomplete"}
+# Semantic gates emit only these branch labels; no provider text or source id.
+_SEMANTIC_STOP_REASONS = frozenset({
+    "fact_stage_incomplete", "fact_stage_retryable", "fact_stage_hard_fail",
+    "fact_repaired_producer_unverified", "fact_repaired_contract_changed",
+    "fact_cached_rebuild_unverified",
+    "fact_extract_deadline", "fact_extract_model", "fact_extract_incomplete",
+    "fact_coverage_incomplete", "fact_audit_incomplete", "fact_audit_deadline",
+    "fact_audit_wait", "fact_repair_deadline", "empty_repair_unverified",
+    "empty_repair_marker_missing", "empty_repair_marker_invalid",
+    "empty_repair_marker_binding", "empty_repair_marker_currentness",
+    "empty_repair_candidate_missing", "empty_repair_candidate_invalid",
+    "empty_repair_candidate_currentness", "empty_repair_candidate_binding",
+    "empty_repair_marker_link", "empty_repair_claims_invalid",
+    "empty_repair_claim_binding", "empty_repair_prior_unverified",
+    "empty_repair_provenance_unverified", "empty_repair_audit_not_ready",
+    "empty_repair_validation_unavailable",
+})
+_DEFER_REASONS.update(_SEMANTIC_STOP_REASONS)
+_PREPARE_CONTEXT_REJECTION_CODES = frozenset({
+    "prepare_context_invalid", "prepare_context_other", "prepare_context_load_unverifiable",
+    "prepare_context_load_superseded", "prepare_context_load_reference_changed",
+    "prepare_context_medication_input_invalid",
+    "prepare_context_medication_snapshot_invalid", "prepare_context_prepare_transaction_owned",
+    "prepare_context_prepare_options_invalid", "prepare_context_prepare_budget_exceeded",
+    "prepare_context_prepare_medication_invalid", "prepare_context_prepare_source_changed",
+    "prepare_context_prepare_snapshot_invalid",
+})
+_DEFER_REASONS.update(_PREPARE_CONTEXT_REJECTION_CODES)
+_COMMIT_REJECTION_REASONS = frozenset({
+    "transaction", "source_or_owner", "checkpoint", "prior_changed", "quality_proof",
+    "completeness", "context", "reference", "medication", "retained_proof", "result_seal",
+    "insert_fence", "cloud_guard", "superseded_guard",
+})
+_COMPLETENESS_REJECTION_REASONS = frozenset("completeness_" + reason for reason in (
+    "shape", "layout", "pending", "adopted", "terminal", "coverage", "validation"))
+_COMMIT_REJECTION_REASONS |= _COMPLETENESS_REJECTION_REASONS
+_COMMIT_REJECTION_CODES = frozenset("commit_" + reason for reason in _COMMIT_REJECTION_REASONS)
+_DEFER_REASONS.update(_COMMIT_REJECTION_CODES)
+# Defer reasons that keep a bounded claim instead of re-heading the queue:
+# the unit's evidence cannot be proven this pass — an unverifiable head
+# must not starve the tail under a limited claim window.
+_HOLD_DEFER_REASONS = frozenset(
+    {"cloud_unit_unresolved", "cloud_source_unverified", "currentness_unverified",
+     "prepare_profile_unavailable"})
+
+
+def worker(parent, *, index=None, context_only=False):
+    """Alternate guarded cloud extraction and semantic jobs with an independent ledger."""
     global _parent
     _parent = parent
+    import cloud_inference
+    import cloud_policy
     import extract_llm
+    import semantic_drain
+    import semantic_runtime
     import writer_lock
+    from writer_lock import acquire_run_lock
     from ledger import Ledger
-    from mcs_util import DB
+    from mcs_util import DB, CONF_PATH, ProviderSettingsUnreadable, load_config
     initial = writer_lock.updater_state()
+    phase = 0
+    ocr_turn = True
     _event("cloud_worker_started", parent=parent, source_digests=extract_llm._LOADED_SOURCE_DIGESTS)
     while os.getppid() == parent and writer_lock.updater_state() == initial and not initial[0]:
         if not extract_llm._context_memory_available():
             return
-        startup_lock = writer_lock.acquire_run_lock()
+        startup_lock = acquire_run_lock()
         if startup_lock is not None:
             break
         time.sleep(1)
@@ -245,7 +388,218 @@ def worker(parent, *, index=None):
     finally:
         os.close(startup_lock)
     with closing(ledger):
-        _context_worker(ledger, initial, index)
+        if context_only:
+            _context_worker(ledger, initial, index)
+            return
+        carry = []
+        allow_exit_settle = True
+        waiting = {"code": None, "at": 0.0}
+        carry_failures = 0
+        semantic_lock_failures = 0
+        capacity_checked = float("-inf")
+
+        def wait(code):
+            # A persistent hold emits a heartbeat, not one event per retry.
+            if code != waiting["code"] or time.monotonic() - waiting["at"] >= 60:
+                waiting.update(code=code, at=time.monotonic())
+                _event("cloud_backlog_deferred", reason=code)
+            time.sleep(10)
+
+        def settle_carry():
+            deadline = time.monotonic() + 3.0
+            extract_llm._settle_carry(
+                ledger, carry, final=False, fence=initial,
+                lock_context=extract_llm._write_lock(True, wait_s=1, deadline=deadline),
+                preserve_on_fence_loss=True, deadline=deadline)
+
+        try:
+            while os.getppid() == parent and writer_lock.updater_state() == initial and not initial[0]:
+                if carry:
+                    try:
+                        settle_carry()
+                    except writer_lock.RunLockLost:
+                        return
+                    except Exception as error:
+                        carry_failures += 1
+                        delay = min(60, 2 ** min(carry_failures, 6))
+                        _event("cloud_carry_settle_error", **_exception_observation(error),
+                               retry_s=delay, failures=carry_failures)
+                        time.sleep(delay)
+                        continue
+                    carry_failures = 0
+                    if writer_lock.updater_state() != initial or not extract_llm._writer_current(full=True):
+                        return
+                    if carry:
+                        if not extract_llm._context_memory_available():
+                            return
+                        time.sleep(2)
+                        continue
+                if not extract_llm._context_memory_available():
+                    return
+                try:
+                    cfg = load_config()
+                except ProviderSettingsUnreadable:
+                    wait("provider_settings_unreadable")
+                    continue
+                settings = cloud_inference.resolve_cloud_settings(cfg)
+                routes_open = (cloud_policy.send_route("reextract")
+                               and cloud_policy.send_route("semantic_backlog"))
+                if index is not None:
+                    retire = (settings["mode"] != "on" or not routes_open
+                              or index >= settings["max_concurrency"])
+                    if time.monotonic() - capacity_checked >= 60:
+                        capacity_checked = time.monotonic()
+                        capacity = memory_workers(settings["max_concurrency"])
+                        retire = retire or index >= min(settings["max_concurrency"], capacity + bool(capacity))
+                    if retire:
+                        _event("cloud_worker_retired", reason=(
+                            "cloud_mode_off" if settings["mode"] != "on"
+                            else "cloud_route_closed" if not routes_open
+                            else "capacity_reduced"))
+                        return
+                selection, errors = cloud_policy.resolve_profile(
+                    cfg, route="reextract", purpose="backlog")
+                limit = (selection["max_tokens"] if selection is not None and selection["max_tokens"] is not None
+                         else extract_llm.MAX_TOKENS)
+                if settings["mode"] != "on":
+                    wait("cloud_mode_off")
+                    continue
+                if not routes_open:
+                    wait("cloud_route_closed")
+                    continue
+                if errors or selection is None:
+                    wait("cloud_profile_unavailable")
+                    continue
+                blocked = (cloud_policy.global_block_reason(ledger, model=selection["model"])
+                           or cloud_policy.budget_block_reason(
+                               ledger, settings, max_tokens=limit, selection=selection))
+                if blocked:
+                    wait(blocked if blocked in _WAIT_CODES else "cloud_blocked")
+                    continue
+                started = time.monotonic()
+                try:
+                    if phase % 2 == 0:
+                        waiting["code"] = None
+                        with _phase_progress("extract"):
+                            result = None
+                            try_ocr, ocr_turn = ocr_turn, not ocr_turn
+                            if (try_ocr and not carry and isinstance(cfg.get('attachment_ocr'), dict)
+                                    and cfg['attachment_ocr'].get('enabled') is True):
+                                import attachment_inference
+                                ocr = attachment_inference.run_pending(ledger, cfg, stage='cloud',
+                                    deadline=time.monotonic() + 120, limit=1)
+                                if ocr['done'] or ocr['deferred']:
+                                    result = {**ocr, 'attachment_pages': True}
+                            if result is None:
+                                result = extract_llm.run_pending(ledger, limit=1, budget_s=900,
+                                    per_write_lock=True, workers=1, background=True,
+                                    cloud_only=True, prioritize_patients=True,
+                                    admitted_ids=extract_llm.cloud_backlog_admissions(ledger, cfg), carry=carry)
+                        carry = result.get("carry", carry)
+                        if result.get("updated"):
+                            allow_exit_settle = False
+                    else:
+                        lock = writer_lock.acquire_run_lock()
+                        if lock is None:
+                            # Give a brief lock contention time to clear, but
+                            # do not indefinitely starve the extract turn.
+                            if (waiting["code"] != "writer_lock_busy"
+                                    or time.monotonic() - waiting["at"] >= 60):
+                                waiting.update(code="writer_lock_busy", at=time.monotonic())
+                                _event("cloud_backlog_deferred", reason="writer_lock_busy", phase="semantic")
+                            semantic_lock_failures += 1
+                            time.sleep(1)
+                            if semantic_lock_failures >= 3:
+                                semantic_lock_failures = 0
+                                phase += 1
+                                _event("cloud_backlog_deferred", reason="writer_lock_yield", phase="semantic")
+                            continue
+                        semantic_lock_failures = 0
+                        waiting["code"] = None
+                        try:
+                            # The loop guards ran before the lock wait: a
+                            # parent exit or update generation change in that
+                            # window must not enter run_due holding the run
+                            # lock.
+                            if (os.getppid() != parent
+                                    or writer_lock.updater_state() != initial
+                                    or initial[0]):
+                                return
+                            scfg = semantic_drain.runtime_config(cfg)[0]
+                            with _phase_progress("semantic"):
+                                result = semantic_drain.run_due(ledger, cfg, {"errors": []},
+                                    time.monotonic() + scfg["job_budget_seconds"] + 30,
+                                    max_jobs=1, cfg_path=CONF_PATH, run_lock_fd=lock,
+                                    lane="backlog", cloud_only=True)
+                        finally:
+                            os.close(lock)
+                    record = {"event": "cloud_backlog_pass", "pid": os.getpid(),
+                        "phase": "extract" if phase % 2 == 0 else "semantic", "done": result.get("done", 0),
+                        "done_unit": ("pages" if result.get('attachment_pages')
+                                      else "messages" if phase % 2 == 0 else "jobs"),
+                        "completion_basis": "saved_work_units_not_patient_clinical_or_delivery_completion",
+                        "elapsed_s": round(time.monotonic() - started, 3), "ts": time.time()}
+                    record.update(_pass_timing_observation(result))
+                    if not allow_exit_settle:
+                        done = result.get("done")
+                        record["done"] = done if type(done) is int and done >= 0 else 0
+                        record["updated"] = True
+                    record.update({key: result[key] for key in
+                        ("selected", "deferred", "context_blocked", "skipped", "lock_lost", "slow_deferred",
+                         "failed", "held_prior", "carried")
+                        if type(result.get(key)) is int and result[key] >= 0})
+                    reasons = result.get("defer_reasons")
+                    total = record.get("deferred")
+                    if type(total) is int and total > 0:
+                        reasons = ({key: count for key, count in reasons.items()
+                                    if key in _DEFER_REASONS and type(count) is int and count > 0}
+                                   if isinstance(reasons, dict) else {})
+                        if sum(reasons.values()) != total:
+                            reasons = {"unclassified": total}
+                        record["defer_reasons"] = reasons
+                    if type(result.get("disk_low")) is bool:
+                        record["disk_low"] = result["disk_low"]
+                    calls = result.get("llm_calls")
+                    if isinstance(calls, dict) and type(calls.get("calls")) is int and calls["calls"] >= 0:
+                        record["llm_calls"] = {"calls": calls["calls"]}
+                    if result.get("cloud_selection_incomplete") is True:
+                        record["cloud_selection_incomplete"] = True
+                        record["reason"] = {
+                            "deadline": "cloud_selection_deadline",
+                            "active_transaction": "cloud_selection_active_transaction",
+                            "reader_unavailable": "cloud_selection_reader_unavailable",
+                            "reader_changed": "cloud_selection_reader_changed",
+                            "reader_close_failed": "cloud_selection_reader_close_failed",
+                            "memory": "cloud_selection_memory",
+                            "selection_busy": "cloud_selection_busy",
+                        }.get(result.get("cloud_selection_reason"), "cloud_selection_incomplete")
+                    elif phase % 2 and result.get("budget_exhausted") is True:
+                        record["reason"] = "jev_backlog_budget_reserved"
+                        record["jev_effect"] = "skipped_if_eligible"
+                    print(json.dumps(record), flush=True)
+                    if not allow_exit_settle:
+                        return
+                    if not result.get("done"):
+                        time.sleep(2)
+                except writer_lock.RunLockLost:
+                    return
+                except semantic_runtime.RuntimeGuardError:
+                    time.sleep(2)
+                except Exception as error:
+                    _event("cloud_backlog_error", **_exception_observation(error),
+                           phase="extract" if phase % 2 == 0 else "semantic")
+                    if not allow_exit_settle:
+                        return
+                    time.sleep(10)
+                phase += 1
+        finally:
+            if (carry and allow_exit_settle and owner_alive()
+                    and writer_lock.updater_state() == initial
+                    and extract_llm._writer_current(full=True)):
+                try:
+                    settle_carry()
+                except Exception as error:
+                    _event("cloud_carry_settle_error", **_exception_observation(error))
 
 
 _CONTEXT_PASS_REASONS = frozenset({
@@ -368,12 +722,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--parent", type=int, required=True)
     parser.add_argument("--index", type=int, choices=range(32))
-    # A resident started before this version still passes the former pool flag.
-    parser.add_argument("--context-only", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--context-only", action="store_true")
     args = parser.parse_args()
     if args.parent != os.getppid():
         return 2
-    worker(args.parent, index=args.index)
+    worker(args.parent, index=args.index, context_only=args.context_only)
     return 0
 
 

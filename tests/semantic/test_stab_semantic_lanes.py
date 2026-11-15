@@ -72,7 +72,7 @@ def test_answered_semantic_call_clears_outage(tmp_path):
         _run(db, lambda *_a, **_k: "{}")
         assert not llm_availability.circuit_state_path(db.db).exists()
         assert llm_availability.llm_down_since(db.db) is None
-        assert llm_availability.llm_health(db.db)["last_success"] is not None
+        assert llm_availability.llm_last_success(db.db) is not None
     finally:
         db.close()
 

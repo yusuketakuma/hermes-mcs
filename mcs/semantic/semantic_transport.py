@@ -399,7 +399,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
                 return local(prompt, timeout)
             if str(error) == 'cloud_send_blocked':
                 # A history-checked fresh request denied before reservation is
-                # a wait, never a failed paid generation.
+                # a wait in the cloud-only lane, never a failed paid generation.
                 # For an owned member the wait is bound to its own unit, not
                 # the job: stage it so one member's hold cannot stop siblings.
                 raise runtime.LLMNotSent('cloud_unit_unresolved'

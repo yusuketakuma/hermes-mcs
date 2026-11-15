@@ -103,6 +103,8 @@ def fact_generations(db, mids: list) -> dict:
     return result
 
 
+
+
 RX_LABEL = {"start": "開始", "stop": "中止", "change": "変更",
             "none": "変更なし", "no_change": "変更なし",
             "increase": "増量", "decrease": "減量"}
@@ -221,6 +223,14 @@ def _canonical_finding_lines(llm: dict, *, context=(None, None, "patient")) -> l
 URGENCY_LABEL_PLAIN = {"llm": "🚨 緊急度高", "rule": "🚨"}   # one spelling on every surface
 
 
+
+
+
+
+
+
+
+
 _QC_URGENCY_SUFFIX = {"routine": "（監査では通常判定）",
                       "unclear": "（監査では判断保留）"}
 
@@ -235,6 +245,11 @@ def urgency_qc_suffix(db, mid: int) -> str:
 
 
 _VFLAG_LABEL = {"spo2": "SpO2", "sbp": "収縮期BP", "bs": "BS"}
+
+
+def _head_lines(llm: dict | None, v1: dict, urgency: str | None = None,
+                urgency_suffix: str = "") -> list[str]:
+    return [line for _, line in _head_ranked(llm, v1, urgency, urgency_suffix)]
 
 
 def _head_ranked(llm: dict | None, v1: dict, urgency: str | None = None,

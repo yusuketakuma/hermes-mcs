@@ -63,13 +63,16 @@ def test_split_runtime_namespaces_do_not_change_clinical_sources(monkeypatch):
                 monkeypatch.setattr(module, key, value)
                 changed.add(key)
     assert set(values) <= changed
+    selection = importlib.import_module('semantic_due_selection')
+    monkeypatch.setattr(selection, '_cloud_selection_lock', object())
+    monkeypatch.setattr(selection, '_cloud_selection_progress', {'cursor': 'synthetic'})
     assert candidate._sources() == before
 
 
 @pytest.mark.parametrize('name,key,value', [
     ('extract_llm_source_contract', '_CHUNK_SIZE', 3001),
     ('extract_llm_prompts', 'MAX_TOKENS', 4097),
-    ('semantic_due_selection', 'BACKLOG_COMMIT_RESERVE_S', 541.0),
+    ('semantic_due_selection', '_CLOUD_SELECTION_PAGE', 129),
     ('extract_llm_provider', '_NEXT_FMT', {'schema': 'plain', 'object': 'plain'}),
 ])
 def test_split_fixed_interpretation_and_bounds_remain_bound(monkeypatch, name, key, value):

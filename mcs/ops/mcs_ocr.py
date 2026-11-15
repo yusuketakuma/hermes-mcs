@@ -65,7 +65,7 @@ def _drain(ledger, cfg, generation, deadline, *, live_config, retry_failed_befor
             try:
                 if stage == 'local':
                     with writer_lock.capture_writer_refusal() as diagnostic:
-                        local = attachment_inference.run_pending(ledger, cfg,
+                        local = attachment_inference.run_pending(ledger, cfg, stage='local',
                             deadline=min(deadline - 5, time.monotonic() + LOCAL_CALL_S), limit=1)
                     result['local_done'] += local['done']
                     result['local_deferred'] += local['deferred']

@@ -1,5 +1,4 @@
 """Unreadable stored JSON stays isolated at receipt, publication, send and reporting boundaries."""
-from semantic_testkit import stage_ledger
 import semantic_notice
 import semantic_send_gate
 import semantic_transport
@@ -31,7 +30,7 @@ def test_stage_receipt_can_replace_unreadable_previous_receipt(ledger):
     ledger.db.execute("UPDATE artifacts SET content=? WHERE kind=?", (poison_json(ledger), v4.KIND_V4_STAGE))
     ledger.db.commit()
     v4.record_stage(ledger, 1, 1, "fp", "policy", "s0_prep", "done")
-    assert len(stage_ledger(ledger, 1, "fp")) == 1
+    assert len(v4.stage_ledger(ledger, 1, "fp")) == 1
 
 
 def test_cohort_history_ignores_unreadable_siblings(ledger):

@@ -1,12 +1,17 @@
 """Legacy table text is re-read from retained originals without erasing paid evidence."""
+import json
 
 import pytest
 
+import attachment_inference
 import attachment_ocr as ocr
+import attachment_paid_results as journal
 from test_attachment_ocr import setup as setup
-from test_attachment_inference import page_store as page_store
+from test_attachment_inference import page_store as page_store, run
+from test_attachment_inference_recovery import _lose_accounting_lock
 from test_cloud_after_local import local_then_cloud  # noqa: F401
 from test_anthropic_runtime import routed  # noqa: F401
+from test_cloud_response_recovery import legacy_cloud_routes
 
 LEGACY = 'yomitoku-0.16.0-cpu-lite-text-first/v1'
 
@@ -51,3 +56,19 @@ def test_pruned_legacy_source_stays_unavailable_without_reprocessing(setup):
     assert len(calls) == 1
 
 
+def test_legacy_source_paid_journal_settles_without_adoption_or_resend(page_store, monkeypatch):
+    ledger, cfg, key, _, sends, _ = page_store
+    assert run(ledger, cfg, 'local')['done'] == 1
+    cfg['cloud_llm']['mode'] = 'on'
+    unavailable = _lose_accounting_lock(ledger, sends, monkeypatch)
+    with legacy_cloud_routes():
+        assert run(ledger, cfg, 'cloud')['deferred'] == 1
+    assert len(sends) == 1 and len(journal.pending(ocr._data_root(ledger))) == 1
+    _legacy(ledger.db)
+    unavailable[0] = False
+    assert run(ledger, cfg, 'cloud')['done'] == 0
+    assert len(sends) == len(ledger.artifacts('cloud_usage_result')) == 1
+    disposition, = ledger.artifacts('cloud_usage_disposition')
+    assert json.loads(disposition['meta'])['disposition'] == 'discarded_scope'
+    assert not journal.pending(ocr._data_root(ledger))
+    assert attachment_inference.current(ledger.db, 1, key, cfg=cfg) is None
