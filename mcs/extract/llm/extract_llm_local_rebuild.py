@@ -3,8 +3,8 @@
 A unit qualifies only when its whole retained cloud history (every model and unit key of
 the message) verifies, every reservation predates input binding (the key is absent) and
 settled as exactly one successful HTTP 200 result whose stored answer is the empty object,
-no checkpoint, frame or repair record of any model is left for the current source, and no
-valid material final exists. A human approves a bounded bundle of such units; the approval
+no checkpoint row of any model, generation or state is left (a frame alone is an input and
+does not count), and no valid material final exists. A human approves a bounded bundle of such units; the approval
 grants a local attempt from the current source only, never a cloud send, reservation or
 change to accounting.
 
@@ -16,6 +16,7 @@ maintenance path leaves no evidence and cannot be ruled out.
 """
 from contextlib import contextmanager
 import os
+import re
 import sqlite3
 import time
 from types import SimpleNamespace
@@ -52,6 +53,9 @@ UNAPPROVED, ACTIVE, ADOPTED = 'unapproved', 'active', 'adopted'
 PROOF_CHANGED, UNVERIFIED = 'local_rebuild_proof_changed', 'local_rebuild_unverified'
 PERMIT_STATES = frozenset({UNAPPROVED, ACTIVE, ADOPTED, PROOF_CHANGED, UNVERIFIED})
 _USAGE_KINDS = ('cloud_usage_reserve', 'cloud_usage_result', 'cloud_usage_disposition')
+
+
+_ABSENT = object()
 
 
 class _Excluded(Exception):
@@ -160,8 +164,8 @@ def _history_proof(ledger, project_id, message_id, stop=()):
                     continue
                 meta = cloud_policy._receipt_meta(item['meta'])
                 rid = meta.get('reservation_id')
-                if not isinstance(rid, str):
-                    raise _Excluded('receipt_inconsistent')
+                if not isinstance(rid, str) or re.fullmatch(r'[0-9a-f]{32}', rid) is None:
+                    raise _Excluded('receipt_inconsistent')   # a malformed disposition is never ignored
                 if item['kind'] == 'cloud_usage_disposition':
                     discarded.add(rid)
                 else:
@@ -172,6 +176,9 @@ def _history_proof(ledger, project_id, message_id, stop=()):
                     raise _Excluded('receipt_inconsistent')
                 if 'input_binding' in reservation:
                     raise _Excluded('binding_present')
+                fingerprint = reservation.get('logical_request_fp', _ABSENT)
+                if fingerprint is not _ABSENT and not valid_hash(fingerprint):
+                    raise _Excluded('receipt_inconsistent')   # an explicit null or malformed fp is not absent
                 rid = reservation['reservation_id']
                 if rid in discarded:
                     raise _Excluded('disposition')
@@ -218,8 +225,8 @@ def _candidates(db):
     """Messages with a reextract reservation that predates input binding (key absent)."""
     return db.execute(
         "SELECT DISTINCT project_id,message_id FROM artifacts WHERE kind='cloud_usage_reserve' "
-        "AND typeof(project_id)='integer' AND typeof(message_id)='integer' AND json_valid(meta) "
-        "AND json_extract(meta,'$.route')=? AND json_type(meta,'$.input_binding') IS NULL "
+        "AND typeof(project_id)='integer' AND typeof(message_id)='integer' AND CASE WHEN json_valid(meta) "
+        "THEN json_extract(meta,'$.route')=? AND json_type(meta,'$.input_binding') IS NULL END "
         "ORDER BY message_id DESC", (ROUTE,)).fetchall()
 
 
@@ -376,8 +383,8 @@ def approved_units(db):
     units = {}
     for command_id, digest, raw in db.execute(
             "SELECT command_id,payload_hash,receipt_json FROM command_receipts WHERE outcome='applied' "
-            "AND project_id IS NULL AND request_id IS NULL AND json_valid(receipt_json) "
-            "AND json_extract(receipt_json,'$.kind')=? ORDER BY processed_at,command_id", (RECEIPT_KIND,)):
+            "AND project_id IS NULL AND request_id IS NULL AND CASE WHEN json_valid(receipt_json) "
+            "THEN json_extract(receipt_json,'$.kind')=? END ORDER BY processed_at,command_id", (RECEIPT_KIND,)):
         for unit in _receipt_units(command_id, digest, raw) or ():
             units[(unit['project_id'], unit['message_id'])] = unit
     return units
