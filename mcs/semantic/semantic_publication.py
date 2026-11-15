@@ -966,28 +966,31 @@ def diagnostic(ledger, pid: int, mid: int, fp: str, policy: str,
               "diagnostic": True})
 
 
+_INVALIDATE_PAGE = 500   # artifacts read (and committed) per page
+
+
 def invalidate_projections(db, scfg: dict) -> int:
     """Persist source/policy expiry for readers of the published snapshot."""
     from semantic_projection import projection_transition
     policy = policy_fingerprint(scfg)
     off = scfg.get("mode") == "off"
     enabled = not off and scfg.get("fact_source") == "canonical"
-    rows = db.execute("""
-      SELECT a.artifact_id,a.project_id,a.meta,m.parent_id,a.message_id
+    candidate = """
       FROM artifacts a LEFT JOIN messages m ON m.message_id=a.message_id
       WHERE a.kind IN ('canonical_projection','semantic_facts_v4')
         AND CASE WHEN json_valid(a.meta) AND json_type(a.meta)='object' THEN
              COALESCE(json_extract(a.meta,'$.invalidated'),0)=0
              OR (? AND json_extract(a.meta,'$.invalidated')=1
                  AND json_extract(a.meta,'$.invalidated_reason')='fact_source')
-             END
-    """, (enabled or off,)).fetchall()
-    metas = [loads_dict(r["meta"]) for r in rows]
+             END"""
     current_ids = set()
-    if enabled and any(meta and meta.get("invalidated") for meta in metas):
+    if enabled and db.execute(
+            "SELECT 1" + candidate + " AND json_extract(a.meta,'$.invalidated')=1 LIMIT 1",
+            (True,)).fetchone():
         from mcs_queries import current_projection_id, current_v4_id
         # Evaluate the normal reader predicates against a prospective snapshot,
         # without exposing any row before source/policy and PASS checks succeed.
+        # Taken once before any page writes, so every page decides against it.
         current_ids = {r[0] for r in db.execute(f"""
           WITH artifacts AS (
             SELECT artifact_id,kind,project_id,message_id,content,
@@ -1006,59 +1009,74 @@ def invalidate_projections(db, scfg: dict) -> int:
             AND a.artifact_id=CASE WHEN a.kind='canonical_projection'
                 THEN {current_projection_id(require_version=False)} ELSE {current_v4_id(require_version=False)} END
         """)}
-    bundles, expired, revived, adopted_projects = {}, [], [], set()
+    bundles = {}
     local_model = None
-    for row, meta in zip(rows, metas):
-        key = (row["project_id"], row["parent_id"] or row["message_id"])
-        source_fingerprint = None
-        revivable = False
-        # These predicates bound source/document I/O only; the pure projection
-        # contract below owns the actual keep/expire/revive decision.
-        if enabled and meta is not None and meta.get("policy_fingerprint") == policy:
-            if key not in bundles:
-                if local_model is None:
-                    # one config read per scan, not one per thread
-                    local_model = semantic_transport.llm_model()
-                bundle = semantic_store.thread_bundle(db, *key, local_model=local_model)
-                bundles[key] = bundle["source_fingerprint"] if bundle else None
-            source_fingerprint = bundles[key]
-            if (source_fingerprint is not None
-                    and meta.get("fingerprint") == source_fingerprint
-                    and meta.get("invalidated")
-                    and row["artifact_id"] in current_ids):
-                doc, _ = reproject_doc(db, row["message_id"], meta)
-                revivable = doc is not None
-        action, reason = projection_transition(meta, off=off, enabled=enabled,
-            policy=policy, source_fingerprint=source_fingerprint, revivable=revivable)
-        if action == "keep":
-            continue
-        if action == "revive":
-            revived.append((row["artifact_id"],))
-        else:
-            expired.append((reason, row["artifact_id"]))
-        if is_current(meta):
-            adopted_projects.add(row['project_id'])
-    if expired or revived:
-        with db:
-            if not db.in_transaction:
-                db.execute('BEGIN IMMEDIATE')
-            import inference_dependency_loss as dependency_loss
-            expiring = {artifact_id for _, artifact_id in expired}
-            footprints = [dependency_loss.capture_tx(db, row['project_id'], row['message_id'], artifact_ids=[row['artifact_id']])
-                          for row in rows if row['artifact_id'] in expiring]
-            db.executemany(
-                "UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true'),"
-                "'$.invalidated_reason',?) "
-                "WHERE artifact_id=?", expired)
-            db.executemany(
-                "UPDATE artifacts SET meta=json_remove(meta,'$.invalidated',"
-                "'$.invalidated_reason') WHERE artifact_id=?", revived)
-            for footprint in footprints:
-                dependency_loss.record_tx(db, footprint)
-            from ledger import bump_inference_analysis_epoch_tx
-            for pid in adopted_projects:
-                bump_inference_analysis_epoch_tx(db, pid)
-    return len(expired)
+    total, cursor = 0, 0
+    while True:
+        rows = db.execute(
+            "SELECT a.artifact_id,a.project_id,a.meta,m.parent_id,a.message_id" + candidate
+            + " AND a.artifact_id>? ORDER BY a.artifact_id LIMIT ?",
+            (enabled or off, cursor, _INVALIDATE_PAGE)).fetchall()
+        if not rows:
+            return total
+        cursor = rows[-1]["artifact_id"]
+        expired, revived, adopted_projects = [], [], set()
+        for row in rows:
+            meta = loads_dict(row["meta"])
+            key = (row["project_id"], row["parent_id"] or row["message_id"])
+            source_fingerprint = None
+            revivable = False
+            # These predicates bound source/document I/O only; the pure projection
+            # contract below owns the actual keep/expire/revive decision.
+            if enabled and meta is not None and meta.get("policy_fingerprint") == policy:
+                if key not in bundles:
+                    if local_model is None:
+                        # one config read per scan, not one per thread
+                        local_model = semantic_transport.llm_model()
+                    bundle = semantic_store.thread_bundle(db, *key, local_model=local_model)
+                    bundles[key] = bundle["source_fingerprint"] if bundle else None
+                source_fingerprint = bundles[key]
+                if (source_fingerprint is not None
+                        and meta.get("fingerprint") == source_fingerprint
+                        and meta.get("invalidated")
+                        and row["artifact_id"] in current_ids):
+                    doc, _ = reproject_doc(db, row["message_id"], meta)
+                    revivable = doc is not None
+            action, reason = projection_transition(meta, off=off, enabled=enabled,
+                policy=policy, source_fingerprint=source_fingerprint, revivable=revivable)
+            if action == "keep":
+                continue
+            if action == "revive":
+                revived.append((row["artifact_id"],))
+            else:
+                expired.append((reason, row["artifact_id"]))
+            if is_current(meta):
+                adopted_projects.add(row['project_id'])
+        if expired or revived:
+            _write_projection_transitions(db, rows, expired, revived, adopted_projects)
+        total += len(expired)
+
+
+def _write_projection_transitions(db, rows, expired, revived, adopted_projects) -> None:
+    with db:
+        if not db.in_transaction:
+            db.execute('BEGIN IMMEDIATE')
+        import inference_dependency_loss as dependency_loss
+        expiring = {artifact_id for _, artifact_id in expired}
+        footprints = [dependency_loss.capture_tx(db, row['project_id'], row['message_id'], artifact_ids=[row['artifact_id']])
+                      for row in rows if row['artifact_id'] in expiring]
+        db.executemany(
+            "UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true'),"
+            "'$.invalidated_reason',?) "
+            "WHERE artifact_id=?", expired)
+        db.executemany(
+            "UPDATE artifacts SET meta=json_remove(meta,'$.invalidated',"
+            "'$.invalidated_reason') WHERE artifact_id=?", revived)
+        for footprint in footprints:
+            dependency_loss.record_tx(db, footprint)
+        from ledger import bump_inference_analysis_epoch_tx
+        for pid in adopted_projects:
+            bump_inference_analysis_epoch_tx(db, pid)
 
 
 def publish_fact_projection(ledger, member, pid, mid, fp, policy,

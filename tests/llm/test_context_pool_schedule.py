@@ -306,3 +306,30 @@ def test_guard_refusal_code_keeps_the_cloud_kind_and_drops_text():
     assert code(cloud_client.CloudNotSent("cloud_budget_blocked")) == "cloud_budget_blocked"
     assert code(ValueError("synthetic private patient")) == "ValueError"
     assert code(sqlite3.OperationalError("database is locked")) == "OperationalError"
+
+
+def test_context_child_waits_through_unreadable_provider_settings(monkeypatch, tmp_path):
+    events, sleeps, reads = [], [], []
+    initial = (False, "synthetic-current")
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: initial)
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+
+    def load():
+        reads.append(True)
+        if len(reads) <= 2:
+            raise mcs_util.ProviderSettingsUnreadable("synthetic-private")
+        return {}
+    monkeypatch.setattr(mcs_util, "load_config", load)
+    monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda _: {"mode": "on", "max_concurrency": 1})
+    monkeypatch.setattr(resident, "_context_memory_available", lambda: True)
+    monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: not any(e == "patient_context_pass" for e, _ in events))
+    monkeypatch.setattr(cloud_backlog, "_event", lambda event, **fields: events.append((event, fields)))
+    monkeypatch.setattr(cloud_backlog.time, "sleep", sleeps.append)
+    monkeypatch.setattr(resident, "_background_context_refresh",
+                        lambda *a, **kw: {"status": "complete", "done": 0})
+    # A settings commit in progress must not end the child (the parent restarts it only later).
+    cloud_backlog._context_worker(object(), initial, 0)
+    assert len(reads) == 3 and sleeps[:2] == [10, 10]
+    assert [e for e, _ in events] == ["cloud_backlog_deferred", "patient_context_pass"]
+    assert events[0][1] == {"reason": "provider_settings_unreadable"}
+    assert "synthetic-private" not in json.dumps(events)

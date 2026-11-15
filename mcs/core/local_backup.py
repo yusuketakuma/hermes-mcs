@@ -10,7 +10,6 @@ import glob
 import json
 import math
 import os
-import re
 import shutil
 import sqlite3
 import stat
@@ -20,6 +19,7 @@ from contextlib import closing, suppress
 from pathlib import Path
 from time import monotonic
 
+from backup_names import BACKUP_CLASSES, backup_class
 from ledger import valid_mcs_db
 from llm_availability import disk_floor_mb
 from maintenance_errors import MaintenanceError
@@ -256,25 +256,6 @@ def local_backup_status(*, now: float) -> dict:
     return out("verified" if marker_matches(path, st) else "unverified", age)
 
 
-BACKUP_CLASSES = ("daily", "daily_ok", "preupdate", "patient_context_reset", "staging", "manual")
-
-
-_BACKUP_CLASS_PATTERNS = (("daily", re.compile(r"ledger-\d{8}\.db")),
-                          ("daily_ok", re.compile(r"ledger-\d{8}\.db\.ok")),
-                          ("preupdate", re.compile(r"preupdate-.*\.db")),
-                          # reset_backup's copies: kept by the owner, never rotated
-                          ("patient_context_reset", re.compile(r"patient-context-reset-.*\.db")),
-                          ("staging", re.compile(r".*\.tmp(-journal|-wal|-shm)?")))
-
-
-def _backup_class(name: str) -> str:
-    # Names the rotation and prunes own; anything else is a hand-made copy.
-    for owner, pattern in _BACKUP_CLASS_PATTERNS:
-        if pattern.fullmatch(name):
-            return owner
-    return "manual"
-
-
 def backup_bytes_by_class() -> dict | None:
     """Bytes of regular files in data/backups by the owner that keeps them
     (daily rotation, its .ok markers, pre-update copies, patient-context
@@ -291,7 +272,7 @@ def backup_bytes_by_class() -> dict | None:
                 with suppress(FileNotFoundError):
                     st = entry.stat(follow_symlinks=False)
                     if stat.S_ISREG(st.st_mode):
-                        totals[_backup_class(entry.name)] += st.st_size
+                        totals[backup_class(entry.name)] += st.st_size
     except FileNotFoundError:
         return totals
     except OSError:
@@ -418,7 +399,7 @@ def generations() -> list[tuple[str, str, os.stat_result]]:
     try:
         with os.scandir(BACKUP_DIR) as entries:
             for entry in entries:
-                kind = _backup_class(entry.name)
+                kind = backup_class(entry.name)
                 if kind not in ("daily", "preupdate"):
                     continue
                 with suppress(FileNotFoundError):   # rotated away mid-scan

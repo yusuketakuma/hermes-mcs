@@ -55,3 +55,31 @@ def test_projection_expiry_and_rollup_eviction_rollback_together(tmp_path):
         assert ledger.db.execute("SELECT 1").fetchone()[0] == 1
     finally:
         ledger.close()
+
+
+def test_projection_expiry_commits_page_by_page(tmp_path, monkeypatch):
+    """Peak memory and lock hold: artifacts are read and committed one page at
+    a time, so a failure on a later page keeps the earlier pages' expiry."""
+    monkeypatch.setattr(semantic_publication, "_INVALIDATE_PAGE", 2)
+    ledger = _seeded(tmp_path)
+    try:
+        ids = [ledger.artifact_add("canonical_projection", "{}", project_id=1, message_id=1,
+                                   meta={**_CURRENT, "fingerprint": f"synthetic-{i}",
+                                         "policy_fingerprint": "p"}) for i in range(5)]
+        ledger.db.execute(
+            "CREATE TEMP TRIGGER deny_last BEFORE UPDATE ON artifacts "
+            f"WHEN OLD.artifact_id={ids[-1]} BEGIN SELECT RAISE(ABORT, 'synthetic page failure'); END")
+        with pytest.raises(sqlite3.IntegrityError, match="synthetic page failure"):
+            semantic_publication.invalidate_projections(ledger.db, {"mode": "off"})
+        assert not ledger.db.in_transaction
+
+        def invalidated():
+            return [json.loads(ledger.db.execute(
+                "SELECT meta FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()[0]).get("invalidated")
+                for aid in ids]
+        assert invalidated() == [True, True, True, True, None]
+        ledger.db.execute("DROP TRIGGER deny_last")
+        assert semantic_publication.invalidate_projections(ledger.db, {"mode": "off"}) == 1
+        assert invalidated() == [True] * 5
+    finally:
+        ledger.close()

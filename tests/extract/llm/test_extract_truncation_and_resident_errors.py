@@ -218,3 +218,86 @@ def test_resident_stays_after_a_failure_only_pass(monkeypatch):
     sleeps = _resident(monkeypatch, {"done": 0, "failed": 2, "left": 2,
                                      "selected": 2, "deferred": 0})
     assert sleeps[:3] == [120, 120, 120]
+
+
+def _stub_resident_loop(monkeypatch, argv):
+    """Stub config, clock and ledger for a bounded resident --all loop; return the clock."""
+    now = [0.0]
+    for module in (extract_llm, extract_llm_context, extract_llm_prepare, extract_llm_provider,
+                   extract_llm_qc, extract_llm_resident, extract_llm_runner, extract_llm_selection,
+                   extract_llm_store, cloud_inference):
+        monkeypatch.setattr(module, 'load_config', lambda: {})
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(extract_llm.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", *argv])
+    monkeypatch.setattr(extract_llm_resident, 'Ledger',
+                        lambda *a: type("DB", (), {"close": lambda self: None})())
+    monkeypatch.setattr(extract_llm_resident, '_next_retry', lambda led, **kw: None)
+    monkeypatch.setattr(extract_llm_resident.extract_llm_call_context, '_SLOT_OVERRIDE',
+                        extract_llm_resident.extract_llm_call_context._SLOT_OVERRIDE)
+    monkeypatch.setenv("MCS_LLM_SLOT", "0")
+    monkeypatch.setenv(extract_llm_resident.local_llm.TURN_LOCK_ENV, "")
+    return now
+
+
+def test_lane1_daytime_carry_settle_lock_keeps_the_resident(monkeypatch, capsys):
+    import llm_slot_schedule
+    now = _stub_resident_loop(monkeypatch, ["--lane", "1", "--stop-after", "100"])
+    monkeypatch.setattr(llm_slot_schedule, "night", lambda: False)
+    settles = []
+
+    def settle(*args, **kwargs):
+        settles.append(kwargs)
+        if len(settles) == 1:
+            raise sqlite3.OperationalError("synthetic-private-error-detail")
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', settle)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending',
+                        lambda *a, **k: pytest.fail("lane 1 extracted in the daytime"))
+    # A 'database is locked' settle in the daytime branch is a transient loop error.
+    assert extract_llm.main() == 0
+    assert len(settles) >= 2 and now[0] >= 30
+    output = capsys.readouterr().err
+    events = [json.loads(line) for line in output.splitlines()]
+    assert any(item.get("event") == "extract_loop_error" and item["class"] == "OperationalError"
+               for item in events)
+    assert "synthetic-private-error-detail" not in output
+
+
+def test_cloud_pool_sync_failure_still_runs_the_lane_once_logged(monkeypatch, capsys):
+    import cloud_backlog
+    import run_log_install
+    now = _stub_resident_loop(monkeypatch, ["--stop-after", "100"])
+    syncs, passes = [], []
+
+    class Pool:
+        # Like the real pool: a call within 10 s of the last returns without deciding.
+        last_sync = float("-inf")
+
+        def __init__(self, root, *, context_only=False):
+            assert context_only
+
+        def sync(self, cfg, *, ledger=None):
+            syncs.append(now[0])
+            if now[0] - self.last_sync < 10:
+                return
+            self.last_sync = now[0]
+            raise run_log_install.LogInstallError("synthetic-private-error-detail")
+
+        def close(self):
+            pass
+    monkeypatch.setattr(cloud_backlog, "CloudBacklogPool", Pool)
+
+    def run_pending(*args, **kwargs):
+        passes.append(1)
+        now[0] += 4   # each pass takes a few seconds: throttled syncs sit between failures
+        return {"done": 1, "failed": 0, "left": 1, "selected": 1}
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', run_pending)
+    assert extract_llm.main() == 0
+    # The pool is extra capacity: its failure never starves this lane's own pass.
+    assert len(passes) == len(syncs) and syncs[-1] - syncs[0] >= 30
+    output = capsys.readouterr().err
+    events = [json.loads(line) for line in output.splitlines()]
+    failures = [item for item in events if item.get("event") == "cloud_pool_sync_error"]
+    assert len(failures) == 1 and failures[0]["class"] == "LogInstallError"
+    assert not any(item.get("event") == "extract_loop_error" for item in events)
+    assert "synthetic-private-error-detail" not in output

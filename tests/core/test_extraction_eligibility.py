@@ -75,6 +75,23 @@ def test_rule_llm_and_read_model_agree_on_stored_body_boundary(store):
     assert extract.run_pending(store) == {"done": 0, "pids": []}
 
 
+def test_rule_pass_reads_source_rows_one_chunk_at_a_time(store, monkeypatch):
+    """Peak memory: run_pending holds only ordered ids; bodies reach the
+    writer in _CHUNK-sized pages, newest first, and every page is written."""
+    monkeypatch.setattr(extract, "_CHUNK", 3)
+    pages = []
+    real = extract._extract_rows
+
+    def recording(ledger, rows, **kwargs):
+        pages.append([row["message_id"] for row in rows])
+        return real(ledger, rows, **kwargs)
+
+    monkeypatch.setattr(extract, "_extract_rows", recording)
+    assert extract.run_pending(store) == {"done": len(_EXPECTED), "pids": [1, 2]}
+    assert pages and all(len(page) <= 3 for page in pages)
+    assert [mid for page in pages for mid in page] == sorted(_EXPECTED, reverse=True)
+
+
 @pytest.mark.parametrize("generation", [CURRENT_VERSION, "0.1"])
 def test_stale_rule_cleanup_retains_only_extractable_sources(store, generation):
     for mid, (_, _, _, pid, _) in enumerate(_CASES, 1):

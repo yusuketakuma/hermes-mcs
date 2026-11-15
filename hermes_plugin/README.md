@@ -262,12 +262,17 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   へ segment 回転)と scope 別 registry(`registry-*.json`)は fsync 永続化。
   再起動時に未レポート結果の receipt 再送と未完 attempt の保守的決済を行う。
   閉じた journal は起動時と回転時に圧縮するが、落とすのは決済済み・unknown 以外・
-  claim も未送 part もない attempt で、かつ `data/backups/*.db` の最古 backup の
-  1日前より古い行だけ。backup ディレクトリが無い場合や `.db` が無い場合は、
-  現在から90日前を基準に、さらに1日の余白を引いた91日前より古い行だけを削減する。
-  backup 一覧を読めない場合と restore 保留中は削減しない。
-  restore 後の照合証拠を残すための条件であり、`data/backups` 外の複製から
-  restore する運用はこの保証の対象外。
+  claim も未送 part もない attempt で、かつ基準時刻の1日前より古い行だけ。
+  基準は `data/backups` の復元に使える `.db`（日次・更新前・患者コンテキスト
+  リセット前・手作業の複製。作業中の `.tmp` と `.ok` は除く）の最古 mtime だが、
+  90日前より古くはしない（backup が無い場合も90日前）。backup 一覧を読めない場合と
+  restore 保留中は削減しない。90日より古い backup から restore した場合は journal で
+  照合できないため、照合時に復元時点までに作られた未確定の render と保留中の操作カード
+  通知を hold し、人が `ops.card_resolve` で確認・解除する（attempt の無い hold は
+  `attempt_id` に `delivery_id` を指定する）。この全件 hold は復元マーカーに
+  backup のパスが残る復元（mcs_update の復元）だけが対象で、`mcs_backup` の復元・
+  手動の `mark_restored` は従来どおりの照合になり、90日を超えた journal の根拠は
+  残らない。`data/backups` 外の複製から restore する運用はこの保証の対象外。
   scope ごとの fcntl lock で同一配送先の sender は1つ。
 - runner と常駐 worker は別々に更新される。worker が知らない spec key
   （新機能）を含む render は、カードだけ送って機能を落とすのではなく丸ごと保留し
@@ -279,9 +284,10 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
 - DB 復元後は `data/restore_pending.json` が全 grant を止め、runner の各 tick が
   journal と復元 DB を照合する（`restore_reconcile.json` に結果、held があれば
   ops 通知は新しい hold を記録した回だけ1回）。journal に解析できない行があると
-  その file は tainted となり、marker は自動では外れない。復旧手順:
-  1. Hermes gateway を停止して worker の追記を止め、該当 `journal-*.jsonl`
-     （`discord_state/`・`slack_state/`）を別の場所へ複製保存する（原本の証跡を失わない）。
+  その file は tainted となり、marker は自動では外れない。`mcs_setup.py check` は
+  そのような file を注意として表示する（読取りのみ。隔離や修復はしない）。復旧手順:
+  1. Hermes gateway（LINE WORKS は独立アダプター）を停止して worker の追記を止め、該当 `journal-*.jsonl`
+     （`discord_state/`・`slack_state/`・`lineworks_state/`）を別の場所へ複製保存する（原本の証跡を失わない）。
   2. `restore_reconcile.json` の `held` と壊れた行の前後の `attempt_id` を照合し、
      該当 scope が配送先 channel に投稿済みかを人が確認する。
   3. 壊れた行だけを journal から取り除く（他の行は順序ごと保持）。
