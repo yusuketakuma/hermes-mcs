@@ -585,6 +585,10 @@ def test_a_followup_held_before_the_first_updates_thread_receipt_replans_once_it
     assert len(world.client.upload_calls) == 2 and not legacy
     groups = [call[1] for call in world.client.calls if call[0] == "update" and call[1].get("file_ids")]
     assert groups and groups[-1]["ts"] == ROOT_TS and len(set(groups[-1]["file_ids"])) == 2
+    # Each file group publication is a new set of files: the first update's group is never
+    # published again, and the replacement publishes both files once.
+    sets = [tuple(sorted(group["file_ids"])) for group in groups]
+    assert len(sets) == len(set(sets)), sets
     # Re-entry and worker resume consume the same receipts and send nothing more.
     calls = len(world.client.calls)
     notify_spool.recover(led, SLACK, {})
@@ -594,36 +598,53 @@ def test_a_followup_held_before_the_first_updates_thread_receipt_replans_once_it
     assert all(_late_followup_state(led, eid) == "accepted" for eid in events)
 
 
-@pytest.mark.parametrize("state", ["unknown", "held"], ids=["group-unknown", "group-held-without-code"])
-def test_a_held_followup_is_not_replanned_while_the_first_updates_file_group_is_unsettled(
-        led, tmp_path, monkeypatch, state):
+@pytest.mark.parametrize("kind,state,drift", [
+    ("file_group", "unknown", False), ("file_group", "held", False), ("attachment_part", "unknown", False),
+    ("thread", "pending", False), ("file_group", "unknown", True), ("attachment_part", "wrong-hash", False)],
+    ids=["group-unknown", "group-held-without-code", "file-unknown", "thread-pending",
+         "group-unknown-route-drift", "file-hash-mismatch"])
+def test_a_held_followup_is_not_replanned_while_the_first_update_is_unsettled_or_unproven(
+        led, tmp_path, monkeypatch, kind, state, drift):
     import notify_flush
 
     world, events, _blobs, legacy = _two_late_files_recovered(led, tmp_path, monkeypatch)
-    first = {}
-
-    def unknown_group():
-        # The first update's file group receipt is not known (or still held with no code, so a
-        # late receipt can still settle it): its file ids are unproven.
-        [held] = _identity_held(led)
-        first["held"] = held
-        row = led.db.execute(
-            "SELECT r.delivery_id FROM notification_renders r JOIN notification_render_parts p "
-            "ON p.delivery_id=r.delivery_id WHERE r.state='delivered' AND p.kind='file_group' "
-            "ORDER BY r.render_rev DESC LIMIT 1").fetchone()
-        with led.db:
+    _cycle_card_then_thread(world, led)
+    [held] = _identity_held(led)
+    first = led.db.execute(
+        "SELECT r.delivery_id FROM notification_renders r WHERE r.state='delivered' AND EXISTS("
+        "SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=r.delivery_id AND p.kind='file_group') "
+        "ORDER BY r.render_rev DESC LIMIT 1").fetchone()[0]
+    with led.db:
+        # The first update's part is not settled (pending, unknown, or held with no code that a
+        # late receipt can still move), or its sealed file does not match the held update's.
+        if state == "wrong-hash":
+            led.db.execute("UPDATE notification_render_parts SET payload_sha256=? "
+                           "WHERE delivery_id=? AND kind=?", ("0" * 64, first, kind))
+        else:
             led.db.execute("UPDATE notification_render_parts SET state=?, error_code=NULL "
-                           "WHERE delivery_id=? AND kind='file_group'", (state, row[0]))
-
-    _cycle_card_then_thread(world, led, before_thread=unknown_group)
+                           "WHERE delivery_id=? AND kind=?", (state, first, kind))
+    if drift:
+        # A route epoch bump cancels the held update on the next sweep; its replacement must
+        # still wait for the first update, on that sweep and every later one.
+        cfg = notify_flush._config()
+        monkeypatch.setattr(notify_flush, "_config", lambda: {
+            **cfg, "notify": {**cfg["notify"], "route_epoch": cfg["notify"]["route_epoch"] + 1}})
     monkeypatch.setattr(ledger.time, "time", lambda: NOW + 11 + notify_cards.RESEAT_S)
-    revs = None
-    for _ in range(3):           # repeated sweeps neither replan nor churn renders
+    held_rev = led.db.execute("SELECT render_rev FROM notification_renders WHERE delivery_id=?", (held,)).fetchone()[0]
+    seen = None
+    for _ in range(3):           # repeated sweeps neither replan nor churn rows, bindings or attempts
         notify_flush.flush(led)
-        now_revs = led.db.execute("SELECT COUNT(*), MAX(render_rev) FROM notification_renders").fetchone()
-        assert revs is None or tuple(now_revs) == revs, _parts_dump(led)
-        revs = tuple(now_revs)
-    assert _identity_held(led) == [first["held"]], _parts_dump(led)
+        now_seen = (
+            tuple(led.db.execute("SELECT COUNT(*), MAX(render_rev) FROM notification_renders").fetchone()),
+            led.db.execute("SELECT delivery_id FROM notification_intent_cards WHERE event_id=?",
+                           (events[1],)).fetchall(),
+            led.db.execute("SELECT COUNT(*) FROM notification_delivery_attempts").fetchone()[0])
+        now_seen = (now_seen[0], [tuple(row) for row in now_seen[1]], now_seen[2])
+        assert seen is None or now_seen == seen, _parts_dump(led)
+        seen = now_seen
+    assert seen[0][1] == held_rev, _parts_dump(led)          # no replacement was issued
+    assert (led.db.execute("SELECT state FROM notification_renders WHERE delivery_id=?", (held,)).fetchone()[0]
+            == ("cancelled" if drift else "held")), _parts_dump(led)
     assert [call["filename"] for call in world.client.upload_calls] == ["synthetic.png"]
     assert _late_followup_state(led, events[1]) != "accepted" and not legacy
 
