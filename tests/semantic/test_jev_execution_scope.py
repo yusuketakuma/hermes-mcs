@@ -65,7 +65,8 @@ def test_retry_wait_releases_run_lock_but_hooks_keep_it(retry_lock, monkeypatch,
         sent.append(body)
         if len(sent) == 1:
             if failure == "transport":
-                raise OSError("synthetic transport failure")
+                # only a provably unsent failure is retried (a sent request is never resent)
+                raise ConnectionRefusedError("synthetic transport failure")
             return 429, {"Retry-After": "7"}, b"{}"
         return answer(body)
 
@@ -109,7 +110,8 @@ def test_update_during_retry_wait_refuses_reacquire_without_another_post(retry_l
         assert _run_lock_available(path)
         sent.append(True)
         if failure == "transport":
-            raise OSError("synthetic unknown send")
+            # only a provably unsent failure reaches the retry wait
+            raise ConnectionRefusedError("synthetic refused send")
         return 429, {"Retry-After": "7"}, b"{}"
 
     monkeypatch.setattr(client, "request", request)

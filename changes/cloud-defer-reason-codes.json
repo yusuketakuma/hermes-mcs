@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "クラウド再抽出が後回しになった理由を、固定の理由コードで記録する",
+  "summary": "保存済み投稿のクラウド再抽出は、同じ入力の過去の送信や予算などを確かめてから送ります。この確認で止められた場合、記録には「確認できなかった（cloud_error）」や「送信を止めた（cloud_fallback）」としか残らず、何が止めているのかを記録から特定できませんでした。今後は、確認の失敗には種類と理由のコード（error_kind・error_reason）を、送信を止めた場合には止めた理由のコードを cloud_send_blocked として記録します。記録するのは固定の英字のコードだけで、本文・応答・秘密値は含めず、決まった形でない値は unclassified と書きます。送信するかどうかの判定は変えていません。",
+  "upgrade": "この版への更新と、常駐の再抽出処理の再起動で有効になります。",
+  "details": [
+    "cloud_inference._history_read_error が CloudError の kind・detail を固定コードとして記録する。",
+    "cloud_inference._send_blocked を追加し、request_send_block_reason が返した理由を記録する。"
+  ],
+  "refs": ["mcs/llm/cloud_inference.py"]
+}

@@ -798,6 +798,36 @@ def test_interrupted_rt_wait_is_not_masked_by_a_failing_cancel(
         local_llm.admitted_chat("gbrain.query", "p", wait_s=1)
 
 
+def test_admitted_probe_reports_only_a_lost_gpu_turn_as_busy(admitted_env, monkeypatch):
+    """A scheduled probe whose GPU turn never came says "busy" (the caller's
+    short defer); an admission hold stays an unclassified not-sent probe."""
+    import local_llm
+    from contextlib import contextmanager
+
+    @contextmanager
+    def no_turn(*args, **kw):
+        yield None
+
+    calls = []
+    broker = _live_broker(admitted_env)
+    backlog = broker.acquire("mcs.extract", "BACKLOG")
+    assert broker.sent(backlog["permit_id"])["sent"]
+    held = {}
+    assert local_llm.admitted_probe_format(
+        "gbrain.query", local_llm.ENDPOINT, "synthetic", None, error_out=held,
+        request_fn=lambda *args: calls.append(args)) is None
+    assert held.get("kind") != "busy"
+    broker.terminal(backlog["permit_id"], "done")
+    monkeypatch.setattr(local_llm, "scheduling_enabled", lambda: True)
+    monkeypatch.setattr(local_llm, "_request_turn", no_turn)
+    busy = {}
+    assert local_llm.admitted_probe_format(
+        "mcs.semantic", local_llm.ENDPOINT, "synthetic", None, error_out=busy,
+        request_fn=lambda *args: calls.append(args)) is None
+    assert busy == {"kind": "busy"}
+    assert calls == []
+
+
 def test_admitted_probe_rt_deferral_releases_waiting_flag(admitted_env):
     import local_llm
     broker = _live_broker(admitted_env)

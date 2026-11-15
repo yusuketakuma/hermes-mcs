@@ -69,6 +69,23 @@ def test_cli_failure_is_nonzero_and_private_status_is_sanitized(tmp_path, monkey
     assert json.loads(capsys.readouterr().out)["attachment_ocr"]["failed"] == 1
 
 
+@pytest.mark.parametrize("result, code", [
+    ({"local_done": 1, "local_deferred": 1}, 0),
+    ({"complete": 1, "deferred": 1, "local_done": 0, "local_deferred": 0}, 0),
+    ({"complete": 1, "deferred": 1, "reason": "memory_deferred", "local_done": 0, "local_deferred": 0}, 0),
+    ({"local_done": 0, "local_deferred": 1}, 1),
+    ({"complete": 0, "deferred": 1, "reason": "memory_deferred", "local_done": 0, "local_deferred": 0}, 1),
+    ({"local_done": 1, "local_deferred": 0, "complete": 0, "failed": 1}, 1),
+    ({"local_done": 1, "local_deferred": 1, "reason": "local_processing_failed"}, 1),
+    ({"local_done": 1, "local_deferred": 0, "reason": "snapshot_deferred"}, 1),
+])
+def test_cli_exit_code_treats_deferral_beside_progress_as_backlog(tmp_path, monkeypatch, result, code):
+    monkeypatch.setattr(mcs_ocr, "DATA", str(tmp_path))
+    monkeypatch.setattr(mcs_ocr, "run", lambda cfg: dict(result))
+    monkeypatch.setattr(mcs_ocr.sys, "argv", ["mcs_ocr", "--run"])
+    assert mcs_ocr.main() == code
+
+
 def test_configured_long_timeout_is_respected(tmp_path, monkeypatch):
     database = tmp_path / "synthetic.db"
     database.touch()
@@ -87,7 +104,8 @@ def test_configured_long_timeout_is_respected(tmp_path, monkeypatch):
     assert mcs_ocr.run(cfg) == {"complete": 0, "local_done": 0, "local_deferred": 0}
 
 
-def test_saved_ocr_refreshes_snapshot_under_writer_lock(tmp_path, monkeypatch):
+@pytest.mark.parametrize("state", ["published", "deferred"])
+def test_saved_ocr_refreshes_snapshot_under_writer_lock(tmp_path, monkeypatch, state):
     import maintenance
     database = tmp_path / "synthetic.db"
     database.touch()
@@ -102,11 +120,12 @@ def test_saved_ocr_refreshes_snapshot_under_writer_lock(tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_ocr.attachment_ocr, "run_pending", lambda *args, **kwargs: next(pending))
     calls = []
 
-    def refresh(path, *, force, deadline):
-        assert path == str(database) and force and deadline > 0
+    def refresh(path, *, dirty, deadline):
+        # OCR publishes through the shared 15-minute interval (dirty), never force.
+        assert path == str(database) and dirty is True and deadline > 0
         assert mcs_ocr.acquire_run_lock(str(tmp_path / "run.lock")) is None
         calls.append(path)
-        return "published"
+        return state
 
     monkeypatch.setattr(maintenance, "refresh_snapshot", refresh)
     assert mcs_ocr.run(cfg) == {"complete": 1, "local_done": 0, "local_deferred": 0}

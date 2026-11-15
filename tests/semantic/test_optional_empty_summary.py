@@ -80,6 +80,45 @@ def test_empty_repair_refunds_only_proven_pre_dispatch_stop(tmp_path, monkeypatc
         db.close()
 
 
+@pytest.mark.parametrize('stage', ['cloud_capacity', 'cloud_guard'])
+def test_member_hold_in_empty_repair_is_marked_beyond_first_code(tmp_path, monkeypatch, stage):
+    import semantic_runtime
+    from semantic_testkit import _FakeJev
+
+    db = _seeded(tmp_path)
+    original = semantic_drain.summarize
+    process = semantic_drain._process_job
+    seen = []
+
+    def summarize(llm, bundle, mid, *args, **kwargs):
+        if mid == 1 and kwargs.get('feedback'):
+            raise semantic_runtime.LLMNotSent(stage)
+        result = original(llm, bundle, mid, *args, **kwargs)
+        if mid == 1 and isinstance(result, tuple) and result[0] is not None:
+            result[0]['claims'] = []
+        return result
+
+    def observed(*args, **kwargs):
+        try:
+            return process(*args, **kwargs)
+        finally:
+            seen.append(dict(kwargs['diagnostics']))
+
+    monkeypatch.setattr(semantic_drain, 'summarize', summarize)
+    monkeypatch.setattr(semantic_summary_stages, 'summarize', semantic_drain.summarize)
+    monkeypatch.setattr(semantic_drain, '_process_job', observed)
+    try:
+        cfg = _cfg('assist', budget=100, loop_mode='off')
+        semantic_drain.run_due(db, cfg, {'errors': []}, time.monotonic() + 300,
+                               jev_client=_FakeJev(), llm_fn=_llm)
+        # The swallowed transient hold stays visible to the free-hold check
+        # even though _why kept the earlier first-cause code.
+        assert seen and seen[0]['member_hold'] == stage
+        assert seen[0]['not_sent'] is None
+    finally:
+        db.close()
+
+
 def test_empty_repair_never_publishes_after_source_change(tmp_path, monkeypatch):
     from semantic_testkit import _FakeJev, _message
 

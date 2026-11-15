@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 import safe_io  # noqa: E402
+import writer_lock  # noqa: E402
 
 from mcs_queries import JST
 from health_policy import (CARD_STALL_S, HEALTH_REL, STATUS_MAX_BYTES, RUN_GRACE_S,
@@ -132,8 +133,18 @@ def _optional_blocks(h: dict) -> dict:
     if (isinstance(last, dict) and _is_code(last.get("reason"))
             and finite_number(last.get("detected_at"))):
         interrupt = {"reason": last["reason"], "detected_at": last["detected_at"]}
+    jobs = h.get("semantic_jobs") if isinstance(h.get("semantic_jobs"), dict) else {}
+    turns = jobs.get("resident_turns_24h")
+    semantic_detail = {
+        "user_facing_pending": jobs.get("user_facing_pending")
+        if _count(jobs.get("user_facing_pending")) else None,
+        "reprocess_pending": jobs.get("reprocess_pending")
+        if _count(jobs.get("reprocess_pending")) else None,
+        "resident_turns_24h": turns
+        if isinstance(turns, dict) and _count(turns.get("attempts")) and turns["attempts"]
+        and _count(turns.get("lock_busy")) and turns["lock_busy"] <= turns["attempts"] else None}
     return {"notify_wait": wait, "backup_local": backup_local,
-            "last_interrupt": interrupt}
+            "last_interrupt": interrupt, "semantic_detail": semantic_detail}
 
 
 
@@ -642,6 +653,10 @@ def evaluate(home: str = HOME, now: float | None = None,
     report.update({"deadline_s": obs.get("deadline_s", deadline), "alert": alert,
                    "disk_low": disk_low, "disk_alert": disk_alert,
                    "watched_at": now, "alert_held": held})
+    # Informational only: why scheduled collection is yielding right now.
+    pause = writer_lock.gateway_restart_pause(os.path.join(home, "data"), now)
+    if pause:
+        report["gateway_restart_pause"] = pause
     if recovered_from is not None:
         report["recovered_from"] = recovered_from
     if transient_only and streak and streak["count"]:
@@ -944,6 +959,20 @@ def _hours(seconds) -> str:
     return f"{seconds / 3600:.1f}時間" if finite_number(seconds) else ""
 
 
+def _semantic_stall_text(age: str, detail, recorded: bool) -> str:
+    """Oldest age plus the recorded split and lock-busy share; unread parts are left out."""
+    parts = [f"最古 {age}"] if age else []
+    detail = detail if isinstance(detail, dict) and not recorded else {}
+    user, again = detail.get("user_facing_pending"), detail.get("reprocess_pending")
+    if user is not None and again is not None:
+        parts.append(f"通知対象{user}件・再処理{again}件")
+    turns = detail.get("resident_turns_24h")
+    if turns:
+        parts.append(f"直近24時間の背景処理{turns['attempts']}回のうち実行ロック待ち"
+                     f"{turns['lock_busy']}回（{turns['lock_busy'] * 100 // turns['attempts']}%）")
+    return f"（{'／'.join(parts)}）" if parts else ""
+
+
 def _measurement_unknown(block, now) -> bool:
     """An unknown block, or a carried measurement past the render stall age, is unmeasured."""
     if not isinstance(block, dict):
@@ -1028,6 +1057,7 @@ _WAIT_JA = {
     "alert_render_live": "緊急通知の送信中",
     "alert_render_issued": "緊急通知の作成待ち",
     "signals_off_sealed": "設定によりシグナル通知を保留",
+    "signals_interactive_off": "カード表示が無効のためシグナル通知を保留",
     "intent_cards_unsettled": "カードの配信完了待ち",
     "intent_cards_issued": "カードの作成待ち",
     "intent_card_delivery_unknown": "カードの配信結果が不明",
@@ -1174,8 +1204,10 @@ def _reason_rows(report: dict, reasons) -> list[str]:
         elif base in ("backup_not_verified", "backup_deferred_deadline"):
             extra = ("" if report.get("observations_recorded")
                      else _backup_local_text(report.get("backup_local")))
-        elif base == "semantic_backlog_stalled" and _hours(oldest.get("semantic_jobs")):
-            extra = f"（最古 {_hours(oldest.get('semantic_jobs'))}）"
+        elif base == "semantic_backlog_stalled":
+            extra = _semantic_stall_text(_hours(oldest.get("semantic_jobs")),
+                                         report.get("semantic_detail"),
+                                         report.get("observations_recorded", False))
         elif base == "disk_low":
             free = report.get("disk_free_mb")
             extra = f"（残り {free} MB）" if finite_number(free) else "（残り 不明）"

@@ -329,6 +329,7 @@ def test_deadline_lock_wait_is_bounded_with_real_contended_lock(tmp_path, monkey
         sleeps.clear()
         with extract_llm._write_lock(True, wait_s=wait_s) as held:
             assert not held
-        assert sleeps == [1]  # unchanged historical polling, even for zero and fractions
+        # without a deadline: poll every 0.2 s up to wait_s, no sleep after the last attempt
+        assert sleeps == pytest.approx({0: [], 0.04: [0.04], 0.5: [0.2, 0.2, 0.1]}[wait_s])
     finally:
         os.close(owner)

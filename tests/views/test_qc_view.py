@@ -301,6 +301,7 @@ def test_qc_view_separates_age_scope_from_unfinished_work(tmp_path, monkeypatch)
         assert {r[0] for r in db.db.execute(
             "SELECT message_id FROM fetch_jobs WHERE kind='extract_qc'")} == {1, 4}
         view = _view(db, tmp_path)
+        view.meta["generated_at"] = now  # the view scopes at its snapshot generation time
         try:
             summary = view.read("qc", project=1)["summary"]
             assert summary["pending"] == 2
@@ -313,6 +314,7 @@ def test_qc_view_separates_age_scope_from_unfinished_work(tmp_path, monkeypatch)
             _qc(db, mid, {"qc": "done", "items": []})
         assert semantic_qc._qc_seed(db, now) == 0
         view = _view(db, tmp_path)
+        view.meta["generated_at"] = now  # the view scopes at its snapshot generation time
         try:
             summary = view.read("qc", project=1)["summary"]
             assert summary["pending"] == 0

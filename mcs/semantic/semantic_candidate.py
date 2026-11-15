@@ -81,7 +81,7 @@ _RUNTIME_STATE.update({
     'extract_llm_prepare': frozenset({'HOME', '_LEFT_ESTIMATE'}),
     'extract_llm_provider': frozenset({'HOME', '_CALL_NOTES', '_DEFERRED', '_FMT_MODE', '_FMT_TS'}),
     'extract_llm_qc': frozenset({'_LOADED_SOURCE_DIGESTS'}),
-    'extract_llm_resident': frozenset({'CONF_PATH', 'DB', 'HOME', '_LOADED_SOURCE_DIGESTS', '_LOADED_SOURCE_PATHS', '_RESIDENT_FENCE_LOST', '_RESIDENT_SOURCE_ROOT'}),
+    'extract_llm_resident': frozenset({'CONF_PATH', 'DB', 'HOME', '_LOADED_SOURCE_DIGESTS', '_LOADED_SOURCE_PATHS', '_RESIDENT_FENCE_LOST', '_RESIDENT_SOURCE_ROOT', '_WRITER_STATE'}),
     'extract_llm_runner': frozenset({'_CALL_NOTES', '_DEFERRED', '_WRITER_STATE'}),
     'extract_llm_selection': frozenset({'HOME', '_FOCUS', '_LEFT_ESTIMATE'}),
     'extract_llm_source_contract': frozenset({'DB', 'HOME', '_DEFERRED', '_INFERENCE_SOURCE_STAT', '_LOADED_SOURCE_DIGESTS', '_LOADED_SOURCE_PATHS', '_WRITER_STATE'}),

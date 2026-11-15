@@ -134,7 +134,7 @@ B は `install.sh --mode standalone`（[STANDALONE.md](STANDALONE.md)）の場�
 | 5. 通知・カード・タスク・シグナル | Slackは設定にかかわらず元投稿のスレッドに返信カードを配送。Discordは`card_thread=true`かつ`reply_cards`省略または`true`で有効（`card_thread`はinit既定ON、`reply_cards`は省略時ON、LINE WORKS対象外）。Discordの旧カードは形式を保持。シグナル通知は`signals.notify`既定OFF | 原文・返信・添付、確認・担当、本人向け検索、タスク入力・確定、再確認候補を両方式で提供。Slack/Discordの`/mcs`も両方式で対応 | カード・親待ち・配送結果不明・復旧の対象合成確認 | 実配信・通知到着・実アプリ操作は未受入。タスクは人の確定、配送unknownは自動再送しない。[表示・操作](USER_GUIDE.md) |
 | 6. MCSスタンプ | MCS本人ID・1人の操作者・対話通知が揃うと省略時ON。`stamps.enabled=false`で無効。押下者取得は既定OFF | 投稿を指定した本人操作と承認記録で送信・取消 | 今回のカード確認を実MCSへの送信確認としない | 実送信・取消・未読保持・本人照合は別受入。[スタンプ契約](../specs/stamp-management.md) |
 | 7. ローカルAIの抽出・要約 | ローカルLLMを使う。`--no-llm`では別途準備が必要。未解析・処理待ち・失敗を表示。共有brokerは別の明示opt-in（`config.json` の `local_llm.admission`、従来の `MCS_LLM_ADMISSION` も可）で既定OFF | ルール抽出とローカルLLM抽出・要約を両方式で提供 | モデルファイル整合と対象制御の合成確認 | 実モデルの速度・メモリ・生成品質は未測定。医療判断の確定ではない。[抽出の範囲](USER_GUIDE.md) |
-| 8. 患者コンテキスト・原記録の閲覧 | `patient_context`の生成・限定閲覧は省略時ON。不正設定は停止。新着抽出への`patient_state_context`は別設定で既定OFF。登録薬剤・検査GETの`clinical_metadata`も既定OFF | 現行世代で全投稿を解析済みの患者を対象に作成。取得範囲・原文根拠とともに本人向け表示 | 設定・表示条件の対象合成確認 | 実生成・長期負荷・人手品質は未受入。未取得を記録なしとしない。[患者情報](USER_GUIDE.md#患者コンテキスト作成既定は有効) |
+| 8. 患者コンテキスト・原記録の閲覧 | `patient_context`の生成・限定閲覧は省略時ON。不正設定は停止。新着抽出への`patient_state_context`は別設定で既定OFF。登録薬剤・検査GETの`clinical_metadata`も既定OFF | 現行世代で解析済みの資料を単位に作成・公開。患者の全投稿を解析し終えるまで待たない。取得範囲・原文根拠とともに本人向け表示 | 設定・表示条件の対象合成確認 | 実生成・長期負荷・人手品質は未受入。未取得を記録なしとしない。[患者情報](USER_GUIDE.md#患者コンテキスト作成既定は有効) |
 | 9. Jev追加解析・canonical | キーがありmode未指定ならassist・1日10000要求。明示modeで予算省略時は0。`summary_mode`・`loop_mode`・`extract_qc`は既定OFF。本文の外部送信には対象・予算等の条件が必要 | 任意の追加解析経路あり。Jev非採用でもローカル抽出・患者コンテキストは残る | 今回の設定表示確認をJev実行や品質評価としない | canonical昇格・過去参照は未評価のまま有効化しない。brokerの送信制御とは別に判定する。[評価・公開条件](../specs/semantic-facts-v2-rollout.md) |
 | 10. 医薬品照合・公開薬情報 | 辞書は出所・SHA・承認へ束縛。公開マスターの薬品名・一般疾患だけをTinyFish経由で照会。トークンなしの場合は停止 | 辞書照合・照会と限定Web経路を提供。患者本文や私有辞書をWebへ送らない | 旧Exa経路では1品名のPMDA本文と1疾患のMinds検索を限定確認。現行のTinyFish経路の実接続は別途確認が必要 | 全品目・医学的品質・鮮度は未受入。強制再取得不可時の定期確認は未取得。[薬情報の条件](USER_GUIDE.md#公開医薬品情報の照会添付文書ガイドライン) |
 | 11. ローカル診断・共有表示 | `mcs doctor`の既定では追加probeなし。`--share`は固定項目の表示と手動コピー | 通常doctorを維持し、設定値・患者件数・生例外等を除く共有JSONを追加 | 共有射影・不正入力・未知状態・既存終了コードの対象合成確認 | 手動コピーは自動送信や遠隔grantではない。`check`も選択方式の必須条件検査で、実配送の証明ではない。[診断共有](COLLECTION_DIAGNOSTICS.md#サポートへ共有する診断) |
@@ -240,7 +240,7 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 | 2 | hermes-agent を pin 済み commit で `~/.hermes/hermes-agent` に clone・venv 構築。固定依存を使う場合はその導入・照合を行う。それ以外では、Hermesのcheckout内で `uv pip install --python "$VENV_PY" -e ".[messaging]"` を実行する。`~/.local/bin/hermes` shim を作成。既存 checkout は保持し、pin 不一致は警告のみ。MCS のものでない shim ファイルは上書きしない | `uv` が必要。中断した clone/checkout・Python の無い venv・失敗した依存導入は再実行時にやり直す。clone・venv・依存導入の失敗で停止 |
 | 3 | `~/.hermes/plugins/mcs-discord-commands` をこのリポジトリの `hermes_plugin/` に symlink + `hermes plugins enable`（discord/slack 両対応の1プラグイン。導入済みなら skip） | 同名の非 symlink がある・enable 失敗で停止 |
 | 4 | llama-server を `ai.mcs.llamaserver` LaunchAgent で常駐化（`127.0.0.1:8080`・`-np 3`・Qwen3.5-9B GGUF 約 5.7 GB を `~/.hermes/models/` へ DL）。hermes 管理の `ai.hermes.llamacpp` の plist があれば導入せず、未ロードで `:8080` も無応答なら bootstrap コマンドを警告で案内。plist 内容が変わった場合、サーバが応答中なら再読込せず適用コマンドを警告で案内（処理中の要求を切らない）、無応答なら再読込 | モデルは固定した Hugging Face の revision から DL し、`.part` から続きを再開（`curl -C -`）。DL 後は `install.sh` に記録した sha256 と照合（`MCS_MODEL_SHA256` による上書きは `MCS_ALLOW_MODEL_SHA_OVERRIDE=1` を併せて指定したときだけ有効で、警告を出す）し、不一致なら `.part` を消して停止。`llama-server` 不在・DL 失敗・bootstrap 失敗で停止 |
-| 5 | `~/.mcs/data{,/cmd,/cmd_int}` を作成し、`mcs_setup.py services` — launchd agent 5件 + hermes cronの定期7件（`backup.enabled=true`ならoffsiteを加え8件）の配置・登録（§6 参照） | services が問題を報告したら停止 |
+| 5 | `~/.mcs/data{,/cmd,/cmd_int}` を作成し、`mcs_setup.py services` — launchd agent 5件 + hermes cronの定期6件（`backup.enabled=true`ならoffsiteを加え7件）の配置・登録（§6 参照） | services が問題を報告したら停止 |
 | 6 | 復旧 watchdog `org.mcs.recovery` を独立系統で導入（`~/.mcs-recovery/mcs_recover.py`と補助4ファイルを同じ世代で配置。旧入口の`.prev`と対応する`runtime-<世代hash>`を一体で保持。復旧対象の checkout を `~/.mcs-recovery/repo_path` に記録。15分間隔で中断した update を復旧）。内容・記録が変わった時か未ロード時だけ再読込 | macOS では配備前に復旧用 Python（既定は `/opt/homebrew/bin/python3.14`・`/usr/local/bin/python3.14`・`/usr/bin/python3.14` の順で最初に実行できるもの、または `--recovery-python`）の Python ≥3.14 と SQLite の WAL-reset 修正を検査し、影響版・版不明なら tool・plist を配備せず停止（自動で別 Python へ切り替えない）。bootstrap 失敗でも停止 |
 
 ステージ2の最後に、接続方法にかかわらず `~/.mcs/config.json` がなければ本人だけが読み書きできる設定ファイルを作成します。既存の設定は保持し、`--preflight` と `--dry-run` では作成しません。ファイルの作成だけでは初期設定は完了しません。
@@ -350,9 +350,9 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 ```
 
 - `services` — launchd agent 5件（cmd/cmd_int WatchPaths・extract
-  drainer×2・外部health watch）を配置・bootstrap、hermes cronの定期7件を登録（冪等・
+  drainer×2・外部health watch）を配置・bootstrap、hermes cronの定期6件を登録（冪等・
   `--dry-run` で確認可。内容差分は reconcile）。`backup.enabled=true`の場合は
-  offsite backupを追加してcron 8件になる。`notify.interactive`
+  offsite backupを追加してcron 7件になる。`notify.interactive`
   が `discord`/`slack` のとき `hermes gateway install` + `start` で
   gateway 常駐化も行う。全 wrapper・plist は
   `~/.hermes/hermes-agent/venv/bin/python` で起動するよう描画される
@@ -516,7 +516,7 @@ installerは独立venvと公式接続SDK、ローカルLLM、常駐プロセス�
 SlackはBot/App token、DiscordはBot tokenをowner-onlyの専用ファイルへ保存します。
 LINE WORKSの秘密情報・HTTPS Callbackは[LINE WORKS手順](LINEWORKS.md)に従います。
 
-独立hostが既存と同じ7定期ジョブ、cmd/cmd_int取込、抽出worker3本を所有します。昼間（JST 08〜20時）は背景2枠、夜間（20〜08時）は背景3枠を使い、新着が来れば次に空く枠を優先して割り当てます。
+独立hostが既存と同じ6定期ジョブ、cmd/cmd_int取込、抽出worker3本を所有します。昼間（JST 08〜20時）は背景2枠、夜間（20〜08時）は背景3枠を使い、新着が来れば次に空く枠を優先して割り当てます。
 Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないでください。
 既存モードからの切替では`services`が旧manifest所有のMCSジョブだけを停止します。
 手動登録のジョブや別プロセスのLINE WORKSアダプターは、対象を確認して別途停止します。
@@ -601,11 +601,11 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 
 ## 6. スケジュール構成（Path A 導入後）
 
-収集ジョブは **hermes cron 7件 + launchd 6件** のハイブリッド
-（services 所有: cron 7件と launchd 5件 `local.mcs-cmd`・`local.mcs-int`・
+収集ジョブは **hermes cron 6件 + launchd 6件** のハイブリッド
+（services 所有: cron 6件と launchd 5件 `local.mcs-cmd`・`local.mcs-int`・
 `ai.mcs.extract-drainer`・`ai.mcs.extract-drainer-2`・`local.mcs-health`。install.sh 所有:
 復旧 watchdog `org.mcs.recovery`。`backup.enabled=true`の場合はoffsite backupも
-cronに追加され8件になる。別に LLM サーバ常駐の
+cronに追加され7件になる。別に LLM サーバ常駐の
 `ai.mcs.llamaserver` / `ai.hermes.llamacpp`）。
 
 ジョブ・スケジュール・実行スクリプトの一覧表は

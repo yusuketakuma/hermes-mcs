@@ -255,6 +255,21 @@ def _backlog_setting_blockers(settings, route):
     return reasons
 
 
+_REEXTRACT_BLOCKERS = {
+    "cloud_mode_not_on": "クラウド処理が on ではありません（mode、または mode 省略時のAPIキー）",
+    "route_missing": "cloud_llm.routes に reextract がありません",
+    "window_ended": "終了日時を過ぎています",
+    "project_scope_empty": "project_ids が空です",
+}
+
+
+def _warn_reextract_blockers(blockers):
+    if blockers:
+        print("注意: 保存済み投稿の再抽出の再開期間を設定していますが、次の理由でクラウドへ送信しません: "
+              + "、".join(_REEXTRACT_BLOCKERS.get(code, code) for code in blockers)
+              + "。設定は認証された設定変更経路で見直してください")
+
+
 def _route_counts(db, cfg, settings, deadline):
     out = {route: {"targets": 0, "requests_estimate": 0, "input_chars": 0,
                    "basic_requests_estimate": 0, "chunk_extra_requests_estimate": 0}
@@ -794,6 +809,15 @@ def _incomplete_report(settings, *, key, error, interrupted, completed, accounti
     return report
 
 
+def apply_local_release_tx(db, req, now):
+    """Record the human release of old unresolved requests to local processing, with its receipt."""
+    through = policy.local_release_tx(
+        db, {"command_id": req["command_id"], "actor": req["actor"], "reason": req["reason"]}, now)
+    if through is None:
+        return "cloud_release_nothing", {}
+    return None, {"reason": req["reason"], "control": "local_release", "through": through}
+
+
 def apply_control_tx(db, req, now):
     """Write global control/circuit and its receipt in the caller's existing transaction."""
     try:
@@ -871,7 +895,7 @@ def command(args):
                              | {"planned": len(result["plan"]["units"]) if result["plan"] else 0},
                              ensure_ascii=False, indent=2))
             return 0 if result["state"] in ("complete", "bundle_full") else 1
-        if action in ("stop", "resume", "local-rebuild-approve"):
+        if action in ("stop", "resume", "release-local", "local-rebuild-approve"):
             from writer_lock import acquire_run_lock, wait_run_lock, code_stamp
             expected_code = code_stamp()
             if not args.confirm_human or not mcs_util.valid_text(args.reason, 2000):
@@ -880,7 +904,7 @@ def command(args):
             from ledger import Ledger
             import mcs_requests
             import notify_spool
-            req = {"version": 1, "cmd": "ops.cloud_" + action,
+            req = {"version": 1, "cmd": "ops.cloud_" + action.replace("-", "_"),
                 "command_id": args.command_id or str(uuid.uuid4()), "actor": args.actor,
                 "human_confirmed": True, "project_id": None, "reason": args.reason}
             if action == "local-rebuild-approve":
@@ -913,8 +937,8 @@ def command(args):
                     receipt = mcs_requests.apply_command(ledger, req)
             finally:
                 os.close(lock_fd)
-            print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "control", "approved")},
-                             ensure_ascii=False))
+            print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "control", "approved")
+                              + (("through",) if action == "release-local" else ())}, ensure_ascii=False))
             return 0 if receipt["outcome"] == "applied" else 1
         if action == "outstanding":
             import cloud_observation
@@ -940,6 +964,8 @@ def command(args):
                                      for key in ("state", "incomplete_reason", "interrupted_section")}
         print(json.dumps(result, ensure_ascii=False, indent=2))
         print("件数・文字数からの試算です。Unicode文字数は実トークン数ではなく、修復・再試行・追加文脈の量は確定していません。")
+        if action in ("plan", "estimate"):
+            _warn_reextract_blockers(result.get("reextract_backlog_blockers"))
         return 0
     except (OSError, ValueError, sqlite3.Error, policy.AnthropicError, mcs_util.ProviderSettingsUnreadable):
         print("クラウド処理: 設定または保存記録を確認できません。本文や認証情報は表示していません")
@@ -1058,7 +1084,9 @@ def budget_command(args):
     if errors:
         print("設定に誤りがあるため予算を表示していません。mcs_setup.py check で確認してください")
         return 1
+    # API key presence is plan/check's concern; an omitted mode is judged as if a key exists.
     blocker_settings = policy.cloud_config(cfg, key_present=True)[0]
+    _warn_reextract_blockers(_backlog_setting_blockers(blocker_settings, "reextract"))
     print(json.dumps({"daily_cost_limit_usd": settings["daily_cost_limit_usd"],
                       "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
                       "period_budget_usd": settings["window_budget_usd"],
@@ -1240,8 +1268,11 @@ def add_parsers(sub):
     q.add_argument("--semantic-backlog-until", dest="semantic_backlog_until",
                    help="意味解析の未処理分に限り、この日時までクラウド送信を再開。同じ費用上限が必要。none で終了")
     q.set_defaults(fn=budget_command, cloud_action="budget")
-    for action in ("stop", "resume"):
-        q = actions.add_parser(action, help="人の確認と記録を伴うクラウド処理の" + ("停止" if action == "stop" else "再開"))
+    for action in ("stop", "resume", "release-local"):
+        q = actions.add_parser(action, help=(
+            "結果を確認できない古い外部AI要求を待たず、同じ入力のローカル処理を許可（人の確認と記録を伴う。再送はしない）"
+            if action == "release-local"
+            else "人の確認と記録を伴うクラウド処理の" + ("停止" if action == "stop" else "再開")))
         q.add_argument("--confirm-human", action="store_true")
         q.add_argument("--reason", required=True)
         q.add_argument("--actor", default="local-human")

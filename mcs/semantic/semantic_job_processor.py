@@ -519,6 +519,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             # The member's own paid unit or provenance held — never a local
             # result and never a job-level stop: other targets still run.
             _why(diagnostics, error.stage)
+            diagnostics["member_hold"] = error.stage
             incomplete = resource_wait = True
             continue
         if stage["outcome"] is not None:
@@ -687,6 +688,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 # member-bound hold (own paid unit/provenance): this target
                 # waits without a summary or PENDING write — later targets run
                 _why(diagnostics, sent_error.stage)
+                diagnostics["member_hold"] = sent_error.stage
                 incomplete = resource_wait = True
                 continue
             not_sent = sent_error
@@ -1024,6 +1026,9 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             # member-bound hold in the reserved repair path: this target
             # waits without consuming audit state — later targets still run
             _why(diagnostics, held_error.stage)
+            # _why keeps an earlier code (e.g. audit_empty_unverified): mark
+            # the transient hold so it never takes the hourly free-hold wait.
+            diagnostics["member_hold"] = held_error.stage
             incomplete = resource_wait = True
             continue
         if empty_repair and status == "PENDING":
@@ -1336,8 +1341,9 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
     except runtime.LLMNotSent as e:
         diagnostics["not_sent"] = getattr(e, "stage", None)
         if diagnostics["not_sent"] == "llm_turn_busy":
-            # the other lane held the GPU turn: the endpoint is healthy
-            # and the next pass normally gets it, so no hourly backoff
+            # the other lane held the GPU turn (for the call or its format
+            # probe): the endpoint is healthy and the next pass normally
+            # gets it, so no hourly backoff
             return "deferred"
         # admission hold / refused connection: the LLM request never
         # left, so no attempt is consumed — but Jev calls this pass

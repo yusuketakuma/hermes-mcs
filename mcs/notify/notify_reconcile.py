@@ -83,7 +83,7 @@ def _spec_events(spec) -> list:
 def _apply_hold(db, aid, delivery_id, reason, dirs, now,
                 scope=None) -> dict:
     """Freeze one disputed scope — render held, card delivery_unknown,
-    pending linked intents quarantined — plus a durable
+    due linked intents quarantined — plus a durable
     notification_restore_holds row the operator resolves against."""
     render = notify_scope.render_row(db, delivery_id) if delivery_id else None
     card = card_row(db, render["card_id"]) \
@@ -119,7 +119,8 @@ def _apply_hold(db, aid, delivery_id, reason, dirs, now,
             db.execute(
                 "UPDATE notify_outbox SET state='failed',next_try=NULL,"
                 f"{HOLD_PROGRESS_SET},updated_at=? "
-                "WHERE event_id=? AND state='pending'",
+                "WHERE event_id=? AND state IN ('pending','failed') "
+                "AND next_try IS NOT NULL",
                 ("restore_hold", now, eid))
         existing = db.execute(
             "SELECT 1 FROM notification_restore_holds WHERE "
@@ -439,7 +440,8 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
         mass_held = db.execute(
             "UPDATE notify_outbox SET state='failed',next_try=NULL,"
             f"{HOLD_PROGRESS_SET},updated_at=? "
-            "WHERE state='pending' AND route='interactive' "
+            "WHERE state IN ('pending','failed') AND next_try IS NOT NULL "
+            "AND route='interactive' "
             "AND (? IS NULL OR created_at IS NULL OR created_at <= ?)",
             ("restore_unlinked", now, restored_at, restored_at)).rowcount
         db.commit()

@@ -192,7 +192,7 @@ def test_finish_run_publishes_by_change_and_clears_dirty_only_on_publish(
     monkeypatch.setattr(notify_cards, "clear_snapshot_dirty",
                         lambda _l, _g: calls.setdefault("cleared", True))
 
-    def refresh(_path, *, dirty, deadline=None, verification_context=None):
+    def refresh(_path, *, dirty, deadline=None, verification_context=None, publish=True):
         calls["dirty"] = dirty
         calls["deadline"] = deadline
         return state

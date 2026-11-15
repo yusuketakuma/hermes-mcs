@@ -570,7 +570,8 @@ def test_resident_checks_source_before_config_and_stop(tmp_path, monkeypatch, mo
         assert worker.main() == 0
         assert len(calls) == (2 if mode == "unchanged" else 1)
         assert events.count("pool_sync") == 1  # resuming carry admits no new pool work
-        assert events.count("discard") == events.count("release") == 1
+        # A code update fences the old worker: it releases without closing the paid answer.
+        assert events.count("discard") == 0 and events.count("release") == 1
         assert events[-2:] == ["pool_closed", "ledger_closed"]
         assert [dict(row) for row in ledger.artifacts("synthetic_paid_result")] == saved
     finally:

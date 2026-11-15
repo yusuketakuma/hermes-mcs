@@ -102,7 +102,8 @@ def _settle_file_group_members(db, render, surface, remote_id,
                 "UPDATE notification_render_parts SET state='delivered',error_code=NULL,"
                 "remote_id=?,remote_file_id=?,attempt_id=?,updated_at=? "
                 "WHERE delivery_id=? AND part_id=? AND "
-                "(state='pending' OR (state IN ('held','unknown') AND attempt_id=?))",
+                "(state='pending' OR (state IN ('held','unknown') AND attempt_id=?) "
+                "OR (state='held' AND error_code='card_revoked' AND attempt_id IS NULL))",
                 (remote_id, file_id, attempt_id, now, render["delivery_id"], pid, attempt_id))
         return all(db.execute(
             "SELECT state='delivered' AND remote_id=? AND attempt_id=? "
@@ -219,7 +220,8 @@ def _settle_group_dependents(db, render, surface, result, attempt_id,
             "UPDATE notification_render_parts SET state=?,remote_id=NULL,remote_file_id=NULL,"
             "error_code=?,attempt_id=?,updated_at=? "
             "WHERE delivery_id=? AND part_id=? AND (state='pending' "
-            "OR (state IN ('unknown','held') AND attempt_id=?))",
+            "OR (state IN ('unknown','held') AND attempt_id=?) "
+            "OR (state='held' AND error_code='card_revoked' AND attempt_id IS NULL))",
             (result, error_code, attempt_id, now,
              render["delivery_id"], pid, attempt_id))
 
@@ -484,7 +486,11 @@ def apply_transport_begin_tx(ledger, req, cfg, now, specs, unlinks) -> dict:
             "updated_at=? WHERE delivery_id=? AND state='queued'",
             (now, req["delivery_id"]))
     reissued = []
-    if reason == "slack_thread_policy_changed":
+    if reason == "urgent_thread_changed":
+        # the worker tombstones a denied spec: retire this never-granted
+        # queued notice so the next dispatch re-targets the current thread
+        cards._cancel_render(db, req["delivery_id"], now)
+    if reason in ("slack_thread_policy_changed", "source_thread_changed"):
         stale = render_row(db, req["delivery_id"])
         card_id = stale["card_id"] if stale is not None else None
         started = db.execute(
@@ -552,7 +558,8 @@ def _denial_is_final(db, delivery_id, reason) -> bool:
     may simply be addressed to another worker — keep the file."""
     if reason in _FINAL_DENIALS:
         return True
-    if reason in ("not_queued", "reply_thread_changed"):
+    if reason in ("not_queued", "reply_thread_changed", "source_thread_changed",
+                  "urgent_thread_changed"):
         r = db.execute(
             "SELECT state FROM notification_renders WHERE delivery_id=?",
             (delivery_id,)).fetchone()
@@ -743,7 +750,24 @@ def apply_transport_receipt_tx(ledger, req, cfg, now, specs) -> dict:
                        "delivery_id": attempt["delivery_id"],
                        "attempt_state": result}
             if render["card_id"] is not None:
-                cards.issue_render(db, render["card_id"], cfg, now, specs)
+                # the successor plan must never undo the settled fact
+                kept = len(specs)
+                db.execute("SAVEPOINT receipt_successor")
+                try:
+                    cards.issue_render(db, render["card_id"], cfg, now, specs)
+                except sqlite3.Error as exc:
+                    if not isinstance(exc, (sqlite3.IntegrityError, sqlite3.DataError)):
+                        raise  # transient storage failure: retry the whole receipt
+                    failed = exc
+                except Exception as exc:
+                    failed = exc
+                else:
+                    failed = None
+                if failed is not None:
+                    db.execute("ROLLBACK TO receipt_successor")
+                    del specs[kept:]
+                    receipt["successor_error"] = f"crash:{type(failed).__name__}"
+                db.execute("RELEASE receipt_successor")
     return receipt
 
 
@@ -838,7 +862,7 @@ def settle_part_receipt(db, req, now) -> dict:
                    "delivery_id": req["delivery_id"],
                    "part_id": req["part_id"]}
     elif part["state"] in ("delivered", "not_sent") or (
-            part["state"] == "held" and part["error_code"] is not None):
+            part["state"] == "held" and part["error_code"] not in (None, "card_revoked")):
         # terminal already: same fact is idempotent, a different
         # fact is a conflict — never silently overwrite
         prior = part["state"]
@@ -935,7 +959,7 @@ def settle_part_receipt(db, req, now) -> dict:
                         "JOIN attachments a ON a.attachment_id=p.attachment_id "
                         "JOIN messages m ON m.message_id=a.message_id "
                         "WHERE p.delivery_id=? AND p.kind='attachment_part' "
-                        "AND p.state='held' AND NOT EXISTS("
+                        "AND p.state='held' AND p.error_code IS NOT 'card_revoked' AND NOT EXISTS("
                         "SELECT 1 FROM notification_render_parts d "
                         "WHERE d.attachment_id=p.attachment_id "
                         "AND d.kind='attachment_part' AND d.state='delivered')",
@@ -970,13 +994,18 @@ def _part_receipt_check(db, render, part, req) -> str | None:
     err = _sealed_echo(render, req)
     if err:
         return err
-    if part["state"] == "held" and part["error_code"] is None:
+    if part["state"] == "held" and part["error_code"] in (None, "card_revoked"):
         expected = f"p:{render['delivery_id'].replace('-', '')}:{part['part_id']}"
         if req.get("attempt_id") != expected or part["attempt_id"] not in (None, expected):
             return "attempt_mismatch"
         card = card_row(db, render["card_id"]) if render["card_id"] is not None else None
-        if render["state"] not in ("delivered", "unknown") or (
-                card is not None and card["delivery_state"] == "revoked"):
+        revoked = card is not None and card["delivery_state"] == "revoked"
+        if part["error_code"] == "card_revoked":
+            # revoke held a part the worker may already have been sending:
+            # its own sealed attempt records the fact; the card stays revoked
+            if not revoked or render["state"] not in ("sending", "delivered", "unknown"):
+                return "part_conflict"
+        elif render["state"] not in ("delivered", "unknown") or revoked:
             return "part_conflict"
     if req["result"] == "delivered" \
             and not (isinstance(req.get("remote_id"), str)

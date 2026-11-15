@@ -6,7 +6,11 @@ import pytest
 import mcs_queries
 from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_testkit import _cfg, _delivery_db, _message, _summary
-from test_patient_context_refresh import _raw_proof
+from test_patient_context_refresh import _raw_proof, _raw_proof_meta
+
+
+# No pharmacy cue: a summary-only extraction can prove there is no hint left to resolve.
+PLAIN_BODY = "合成の生活記録です。本人は自宅で過ごしています。"
 
 
 def _source(led, *, hydrate=True, cfg=None):
@@ -15,12 +19,16 @@ def _source(led, *, hydrate=True, cfg=None):
 
 def _local(led, text="合成の補助要約", *, kind="extract_llm", pid=1, **meta):
     body_hash = led.db.execute("SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0]
+    base, model = {VERSION_KEY: CURRENT_VERSION, "hash": body_hash}, "synthetic-local"
+    if kind == "extract_llm":
+        # a valid strictly proven result first, so an exclusion case fails only on its override
+        base, model = _raw_proof_meta(led, 1, 1)
     return led.artifact_add(kind, json.dumps({"summary": text}, ensure_ascii=False), project_id=pid,
-        message_id=1, model="synthetic-local", meta={VERSION_KEY: CURRENT_VERSION, "hash": body_hash, **meta})
+        message_id=1, model=model, meta={**base, **meta})
 
 
 def test_current_local_full_text_signature_and_hydrate_parity(tmp_path):
-    led = _delivery_db(tmp_path, [_message()])
+    led = _delivery_db(tmp_path, [_message(body=PLAIN_BODY)])
     try:
         text = "合成補助要約\n" * 3000
         # Proof-bound extract_llm summaries cap at 60 chars; large ones arrive via extract_v1.
@@ -52,7 +60,7 @@ def test_current_local_full_text_signature_and_hydrate_parity(tmp_path):
     {"pid": 2}, {"invalidated": True}, {"error": True},
     {"internal_proof_version": 1, "internal_proof_hash": "0" * 64}])
 def test_stale_foreign_old_or_unproven_local_summary_is_excluded(tmp_path, override):
-    led = _delivery_db(tmp_path, [_message()])
+    led = _delivery_db(tmp_path, [_message(body=PLAIN_BODY)])
     try:
         empty = _source(led)["derived_summary_sig"]
         if override.get("pid") == 2:
@@ -79,7 +87,7 @@ def test_rule_and_local_summaries_remain_distinct(tmp_path):
 
 
 def test_validated_semantic_summary_uses_existing_gate_and_explicit_policy(tmp_path):
-    led = _delivery_db(tmp_path, [_message()])
+    led = _delivery_db(tmp_path, [_message(body=PLAIN_BODY)])
     try:
         _summary(led, claims=20)
         cfg = _cfg("enforce")
@@ -106,7 +114,7 @@ def test_validated_semantic_summary_uses_existing_gate_and_explicit_policy(tmp_p
 @pytest.mark.parametrize("change", [{VERSION_KEY: "old"}, {"fingerprint": "stale"},
     {"publication_mode": "shadow"}, {"invalidated": True}, {"audit_status": "FAIL"}])
 def test_semantic_summary_rejects_stale_or_unverified_receipts(tmp_path, change):
-    led = _delivery_db(tmp_path, [_message()])
+    led = _delivery_db(tmp_path, [_message(body=PLAIN_BODY)])
     try:
         _summary(led)
         saved = led.artifacts("semantic_summary", message_id=1)[-1]

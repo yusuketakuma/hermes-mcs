@@ -2,9 +2,9 @@
   "category": "added",
   "title": "保存済み投稿の再抽出に限り、期間と上限額を付けてクラウド送信を再開できる",
   "summary": "過去の投稿を現行の抽出世代へ上書きする処理を、所有者が指定した終了日時と期間予算の範囲でクラウドへ送れます。既定はOFFで、指定しない限り送信先と費用は変わりません。再開中は、患者名を含む投稿本文を外部APIへ送ります。",
-  "upgrade": "既定では何も変わりません。再開するときは `python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd 60 --reextract-backlog-until 2026-11-20` のように、期間予算と終了日を指定します。期間予算は患者コンテキストを含む期間内の利用額の合計に適用され、上限に達すると患者コンテキストのクラウド送信も止まります。終了するときは `--reextract-backlog-until none` を指定します。",
+  "upgrade": "既定では何も変わりません。再開するときは、`cloud_llm.routes` に `reextract` を含めたうえで、`python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd 60 --reextract-backlog-until 2026-11-20` のように期間予算と終了日を指定します。このコマンドは `routes` を変更しないため、`routes` に `reextract` が無いと送信しません。期間予算は患者コンテキストを含む期間内の利用額の合計に適用され、上限に達すると患者コンテキストのクラウド送信も止まります。終了するときは `--reextract-backlog-until none` を指定します。",
   "details": [
-    "`cloud_llm.reextract_backlog_until` が未来の日時で、期間予算（`window_budget_usd`）が設定されている間だけ、`reextract` 経路の新規送信を許可します。期間予算の無い指定は設定エラーとし、クラウド送信をすべて止めます。",
+    "`cloud_llm.routes` に `reextract` があり、`cloud_llm.reextract_backlog_until` が未来の日時で、期間予算（`window_budget_usd`）が設定されている間だけ、`reextract` 経路の新規送信を許可します。期間予算の無い指定は設定エラーとし、クラウド送信をすべて止めます。",
     "対象は、人の確認を経て記録した履歴の範囲と対象患者の範囲に含まれる保存済み投稿です。添付ページの解析と意味解析バックログ（`semantic_backlog`）は閉じたままです。",
     "旧抽出を保持する保留が有効な投稿は送信しません。同じ要求への再課金を防ぐ検査と、1日・1か月・提供元別の上限は従来どおり適用します。",
     "終了日時を過ぎると新しい送信を始めません。送信済みの要求の結果は、従来の保存条件を満たす場合に保存します。",

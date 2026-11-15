@@ -11,6 +11,7 @@ import semantic_store
 import difflib
 import sqlite3
 
+from mcs_queries import current_message_artifact_query, selected_artifact_proof_valid
 from mcs_requests import parse_command, payload_hash, positive, validate
 from mcs_util import loads_dict, valid_hash
 
@@ -211,13 +212,25 @@ def _adoption_rows(db, project_id: int, message_id: int,
 
 def _load_baseline(db, project_id: int, message_id: int,
                    source_full: bool, source_hash, reasons: list):
-    """Latest extract_llm artifact + its staleness classification."""
-    row = db.execute(
-        "SELECT artifact_id,content,meta FROM artifacts "
-        "WHERE kind=? AND project_id=? AND message_id=? "
-        "ORDER BY artifact_id DESC LIMIT 1",
-        ("extract_llm", project_id, message_id),
-    ).fetchone()
+    """Current extract_llm artifact (latest one if none) + its staleness classification."""
+    # The same current-version / newer-marked / proof contract as every other reader.
+    current = db.execute(current_message_artifact_query(field="artifact_id"),
+                         ("extract_llm", message_id)).fetchone()
+    current_id = current[0] if current and selected_artifact_proof_valid(db, current[0]) else None
+    row = None
+    if current_id is not None:
+        row = db.execute(
+            "SELECT artifact_id,content,meta FROM artifacts "
+            "WHERE artifact_id=? AND kind=? AND project_id=? AND message_id=?",
+            (current_id, "extract_llm", project_id, message_id),
+        ).fetchone()
+    if row is None:
+        row = db.execute(
+            "SELECT artifact_id,content,meta FROM artifacts "
+            "WHERE kind=? AND project_id=? AND message_id=? "
+            "ORDER BY artifact_id DESC LIMIT 1",
+            ("extract_llm", project_id, message_id),
+        ).fetchone()
     if row is None:
         reasons.append("baseline_missing")
         return None
@@ -227,7 +240,8 @@ def _load_baseline(db, project_id: int, message_id: int,
     baseline_error = bool(baseline["meta"].get("error")
                           or baseline["content"].get("_error"))
     baseline["current"] = bool(
-        baseline_ok and baseline_has_text and not baseline_error and source_full
+        baseline["artifact_id"] == current_id
+        and baseline_ok and baseline_has_text and not baseline_error and source_full
         and valid_hash(source_hash)
         and baseline["meta"].get("hash") == source_hash)
     if baseline_error:

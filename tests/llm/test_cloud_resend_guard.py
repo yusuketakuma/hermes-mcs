@@ -763,3 +763,176 @@ def test_inconsistent_receipt_is_classified_apart_from_a_repeat(tmp_path, monkey
             ledger.db.execute("UPDATE artifacts SET meta=? WHERE kind='cloud_usage_reserve'",
                               ('{"unit_key":"other","unit_key":"synthetic-unit"}',))
         assert _refusal_of(ledger, 'synthetic prompt') == 'receipt_inconsistent'
+
+
+def _clock(monkeypatch):
+    """One explicit clock for reservations, receipts and the release cutoff."""
+    clock = [time.time()]
+    monkeypatch.setattr(time, 'time', lambda: clock[0])
+    return clock
+
+
+def _local_guard(ledger, prompt='synthetic prompt'):
+    """The patient-context local substitution check, built like guard_context_local."""
+    cfg = {'cloud_llm': {'mode': 'on', 'project_ids': [1], 'provider': 'anthropic'}}
+    body = anthropic_client.AnthropicClient('synthetic').body(prompt, 100, None)
+
+    def request():
+        return cloud_policy._request_identity(
+            cloud_policy._cfg(cfg), body, route='patient_context', project_id=1, message_id=1,
+            unit_key='local-unit', owner={}, selection=None, input_binding=None), body
+    cloud_policy.guard_local_fallback(ledger, route='patient_context', project_id=1, message_id=1,
+                                      unit_key='local-unit', request_factory=request)
+
+
+def _local_held(ledger, prompt='synthetic prompt'):
+    with pytest.raises(anthropic_client.AnthropicError) as caught:
+        _local_guard(ledger, prompt)
+    return caught.value.detail == 'cloud_unit_unresolved'
+
+
+def _release(ledger, **changes):
+    req = {'version': 1, 'cmd': 'ops.cloud_release_local', 'command_id': str(uuid.uuid4()),
+           'actor': 'synthetic human', 'human_confirmed': True, 'project_id': None,
+           'reason': 'synthetic approval', **changes}
+    return req, mcs_requests.apply_command(ledger, req)
+
+
+def _accounting(ledger):
+    return [tuple(row) for row in ledger.db.execute(
+        "SELECT * FROM artifacts WHERE kind LIKE 'cloud_usage_%' ORDER BY artifact_id")]
+
+
+def _unresolved(ledger, state, prompt='synthetic prompt', unit='old-unit'):
+    reservation = _reserve(ledger, prompt, route='patient_context', unit=unit)
+    if state == 'timeout':
+        cloud_policy.record_result(ledger, reservation, _result(reservation, 'timeout', 'timeout'))
+    elif state in ('discarded', 'answered'):
+        cloud_policy.record_result(ledger, reservation, {
+            **_result(reservation, 'http_200', None), 'usage': {'input_tokens': 10, 'output_tokens': 2}})
+    if state == 'discarded':
+        with ledger.db:
+            ledger.db.execute('BEGIN')
+            cloud_policy.record_disposition_tx(ledger, reservation, 'discarded_scope')
+    return reservation
+
+
+@pytest.mark.parametrize('state', ['missing', 'discarded', 'timeout'])
+def test_human_release_allows_local_work_but_never_another_send(tmp_path, monkeypatch, state):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    clock = _clock(monkeypatch)
+    with closing(_db(tmp_path)) as ledger:
+        _unresolved(ledger, state)
+        before = _accounting(ledger)
+        clock[0] += 2 * cloud_policy.LOCAL_RELEASE_MIN_AGE_S
+        assert _local_held(ledger)
+        denied = _release(ledger, human_confirmed=False)[1]
+        assert denied['outcome'] == 'rejected' and denied['error'] == 'human_confirmation_required'
+        assert _local_held(ledger) and not ledger.artifacts('cloud_local_release')
+        receipt = _release(ledger)[1]
+        assert receipt['outcome'] == 'applied' and receipt['control'] == 'local_release'
+        assert receipt['through'] == ledger.artifacts('cloud_usage_reserve')[0]['artifact_id']
+        _local_guard(ledger)
+        # The paid request stays charged, kept and closed to the cloud.
+        assert _accounting(ledger) == before
+        with pytest.raises(anthropic_client.AnthropicError) as caught:
+            _reserve(ledger, 'synthetic prompt', route='patient_context', unit='new-unit')
+        assert caught.value.detail == 'cloud_unit_unresolved'
+        cfg = {'cloud_llm': {'mode': 'on', 'project_ids': [1], 'provider': 'anthropic'}}
+        with pytest.raises(anthropic_client.AnthropicError) as caught:
+            cloud_policy.request_send_block_reason(
+                ledger, cfg, anthropic_client.AnthropicClient('synthetic').body('synthetic prompt', 100, None),
+                route='patient_context', project_id=1, unit_key='new-unit', message_id=1)
+        assert caught.value.detail == 'cloud_unit_unresolved'
+        assert _accounting(ledger) == before
+
+
+def test_human_release_keeps_a_clean_paid_answer_held(tmp_path, monkeypatch):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    clock = _clock(monkeypatch)
+    with closing(_db(tmp_path)) as ledger:
+        _unresolved(ledger, 'answered')
+        clock[0] += 2 * cloud_policy.LOCAL_RELEASE_MIN_AGE_S
+        assert _release(ledger)[1]['outcome'] == 'applied'
+        assert _local_held(ledger)
+
+
+def test_human_release_never_covers_a_reservation_younger_than_the_floor(tmp_path, monkeypatch):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    clock = _clock(monkeypatch)
+    with closing(_db(tmp_path)) as ledger:
+        old = _unresolved(ledger, 'missing', 'synthetic other prompt', 'other-unit')
+        clock[0] += 2 * cloud_policy.LOCAL_RELEASE_MIN_AGE_S - 60
+        _unresolved(ledger, 'missing')
+        clock[0] += 60
+        receipt = _release(ledger)[1]
+        old_id, young_id = [row['artifact_id'] for row in ledger.artifacts('cloud_usage_reserve')]
+        assert json.loads(ledger.artifacts('cloud_usage_reserve')[0]['meta'])['reservation_id'] == old['reservation_id']
+        assert receipt['outcome'] == 'applied' and receipt['through'] == old_id
+        _local_guard(ledger, 'synthetic other prompt')
+        assert _local_held(ledger)
+        # A later approval covers it once it is old enough; the widest valid release applies.
+        clock[0] += cloud_policy.LOCAL_RELEASE_MIN_AGE_S
+        assert _release(ledger)[1]['through'] == young_id
+        _local_guard(ledger)
+        _local_guard(ledger, 'synthetic other prompt')
+
+
+@pytest.mark.parametrize('change', ['no_receipt', 'rejected_receipt', 'other_command', 'wider_through',
+                                    'later_before', 'other_actor', 'other_reason', 'unreadable'])
+def test_release_without_its_exact_applied_receipt_releases_nothing(tmp_path, monkeypatch, change):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    clock = _clock(monkeypatch)
+    with closing(_db(tmp_path)) as ledger:
+        _unresolved(ledger, 'missing')
+        clock[0] += 2 * cloud_policy.LOCAL_RELEASE_MIN_AGE_S
+        assert _release(ledger)[1]['outcome'] == 'applied'
+        _local_guard(ledger)
+        meta = {'other_command': ("json_set(meta,'$.command_id',?)", str(uuid.uuid4())),
+                'wider_through': ("json_set(meta,'$.through',json_extract(meta,'$.through')+?)", 1000),
+                'later_before': ("json_set(meta,'$.before',json_extract(meta,'$.before')+?)", 60),
+                'other_actor': ("json_set(meta,'$.actor',?)", 'synthetic other'),
+                'other_reason': ("json_set(meta,'$.reason',?)", 'synthetic other'),
+                'unreadable': ('?', '{"through":1,"through":1}')}
+        with ledger.db:
+            if change == 'no_receipt':
+                ledger.db.execute('DELETE FROM command_receipts')
+            elif change == 'rejected_receipt':
+                ledger.db.execute("UPDATE command_receipts SET outcome='rejected'")
+            else:
+                ledger.db.execute("UPDATE artifacts SET meta=" + meta[change][0] + " WHERE kind='cloud_local_release'",
+                                  (meta[change][1],))
+        assert _local_held(ledger)
+
+
+@pytest.mark.parametrize('age', [None, 60])
+def test_release_with_nothing_old_enough_is_rejected_without_a_row(tmp_path, monkeypatch, age):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    clock = _clock(monkeypatch)
+    with closing(_db(tmp_path)) as ledger:
+        if age is not None:
+            _unresolved(ledger, 'missing')
+            clock[0] += age
+        before = _accounting(ledger)
+        receipt = _release(ledger)[1]
+        assert receipt['outcome'] == 'rejected' and receipt['error'] == 'cloud_release_nothing'
+        assert not ledger.artifacts('cloud_local_release') and _accounting(ledger) == before
+        assert [row[0] for row in ledger.db.execute('SELECT outcome FROM command_receipts')] == ['rejected']
+        if age is not None:
+            assert _local_held(ledger)
+
+
+def test_release_replay_is_idempotent_and_bound_to_its_payload(tmp_path, monkeypatch):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    clock = _clock(monkeypatch)
+    with closing(_db(tmp_path)) as ledger:
+        _unresolved(ledger, 'missing')
+        clock[0] += 2 * cloud_policy.LOCAL_RELEASE_MIN_AGE_S
+        req, receipt = _release(ledger)
+        clock[0] += cloud_policy.LOCAL_RELEASE_MIN_AGE_S
+        assert mcs_requests.apply_command(ledger, req) == receipt
+        conflict = mcs_requests.apply_command(ledger, {**req, 'reason': 'synthetic other approval'})
+        assert conflict['outcome'] == 'rejected' and conflict['error'] == 'command_id_conflict'
+        assert len(ledger.artifacts('cloud_local_release')) == 1
+        assert ledger.db.execute('SELECT COUNT(*) FROM command_receipts').fetchone()[0] == 1
+        _local_guard(ledger)

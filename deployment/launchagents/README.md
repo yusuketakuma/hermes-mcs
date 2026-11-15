@@ -1,12 +1,12 @@
 # スケジューリング構成
 
-`runtime_mode=standalone`では`ai.mcs.standalone`の単一hostが下表と同じ7定期ジョブ、
+`runtime_mode=standalone`では`ai.mcs.standalone`の単一hostが下表と同じ6定期ジョブ、
 cmd/cmd_int取込、抽出worker3本と接続を所有する。Hermes cronや個別MCS LaunchAgentは
 併用しない。LLMとrepo外復旧watchdogは別のnative serviceを維持する。
 導入・切替は[独立モードの手順](../../docs/guides/STANDALONE.md)を参照。
 以下のHermes cron構成と配置先は`runtime_mode=hermes`（未指定の既存設定）のもの。
 
-収集ジョブは **hermes cron（標準スケジューラ）7件 + launchd 6件** の
+収集ジョブは **hermes cron（標準スケジューラ）6件 + launchd 6件** の
 ハイブリッド。別途、LLM サーバ常駐用の `ai.mcs.llamaserver.plist`
 （KeepAlive サーバであってジョブではない。install.sh 所有・stage 4 で
 配置）が同ディレクトリにある。
@@ -18,8 +18,7 @@ services所有のlaunchdは `mcs/ops/services/service_contract.py` の `AGENT_LA
 | ジョブ | スケジュール | 実行系 |
 |---|---|---|
 | 未読チェック `run_check.py --json --download-files --mark-read` | `*/10 * * * *`（24時間） | hermes cron (`mcs_check.sh`) |
-| 保存済み添付のOCR・ローカル解析 `mcs_ocr.py --run` | `* * * * *` | hermes cron (`mcs_ocr.sh`) |
-| ヘルス監視 `health_watch.py` | `*/5 * * * *` | hermes cron (`mcs_health.sh`) |
+| 保存済み添付のOCR・ローカル解析 `mcs_ocr.py --run` | `5,15,25,35,45,55 * * * *` | hermes cron (`mcs_ocr.sh`) |
 | durable-job drain `run_check.py --json --jobs-only` | `10,40 * * * *` | hermes cron (`mcs_deep.sh`) |
 | 失敗ジョブの bounded retry 登録 | `0 */6 * * *`（解析は常駐worker） | hermes cron (`mcs_llm_catchup.sh`) |
 | llama-server 再起動（idle待ち・最大15分） | `0 4 * * *` | hermes cron (`llamacpp_restart_if_idle.sh`) |
@@ -27,16 +26,17 @@ services所有のlaunchdは `mcs/ops/services/service_contract.py` の `AGENT_LA
 | 更新中断の復旧 `mcs_recover.py --if-stale` | 15分間隔 | launchd `org.mcs.recovery`（独立・install.sh 所有） |
 | コマンド取込 `run_check.py --json --download-files --mark-read` | `data/cmd/` WatchPaths（イベント駆動） | launchd `local.mcs-cmd` |
 | 対話カードコマンド `run_check.py --json --commands-only` | `data/cmd_int/` WatchPathsに加え、StartInterval/ThrottleIntervalを5秒に設定（通常のサービス再配置で反映） | launchd `local.mcs-int` |
-| ヘルス監視の予備 `health_watch.py` | 300秒間隔（hermes cron が詰まっても警報する。flock・重複抑止は cron 側と共有） | launchd `local.mcs-health` |
+| ヘルス監視 `health_watch.py` | 300秒間隔（hermes cron が詰まっても警報する。止まると未読チェックが「監視処理の停止」を警報する） | launchd `local.mcs-health` |
 | 抽出・semantic/QC 常駐drainer（レーン2） | KeepAlive・24時間・待機5〜30秒（次回実行時刻も考慮） | launchd `ai.mcs.extract-drainer` |
 | 抽出・semantic/QC 常駐drainer（レーン3） | KeepAlive・24時間・待機5〜30秒（次回実行時刻も考慮） | launchd `ai.mcs.extract-drainer-2` |
 
 MCSサーバーの負荷対策として、定期的なMCSアクセスを5分から10分間隔へ変更した。
 ヘルス監視はローカルの保管状態を確認するため5分間隔を維持する。
-添付OCRの毎分ジョブも保存済み資料だけを読み、MCSサーバーへ取りに行かない。
+ヘルス監視はhermes cronに登録しない。hermes cronは同時1本で動くため、待ち行列を増やさないようにlaunchdだけで動かす。
+添付OCRのジョブは10分ごと（未読チェックの5分後）に動き、保存済み資料だけを読み、MCSサーバーへ取りに行かない。
 実行中のOCRジョブがあれば重ねず、次回に処理を引き継ぐ。
 
-`runtime_mode: "standalone"`では同じ時刻の7ジョブを単一hostが実行し、
+`runtime_mode: "standalone"`では同じ時刻の6ジョブを単一hostが実行し、
 wrapperは`~/.mcs/scripts/`、Pythonは`~/.mcs/venv/bin/python3`になる。
 通知接続の有無にかかわらず`ai.mcs.standalone`を配置し、個別のcalendar agentは登録しない。
 モード変更時はmanifestの所有ジョブを照合する。Hermesへ戻す際は新cronの検証後に
@@ -50,7 +50,7 @@ wrapperスクリプトの正本は `deployment/scripts/`（`__PYTHON__`/`__REPO_
 
 **自動化（推奨）**: `~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py services` が下記の
 手順をすべて実行する（冪等・`--dry-run` で確認可）。launchd 5件の
-bootstrap と hermes cron 7件の登録は既存分をスキップする。plist 本文・
+bootstrap と hermes cron 6件の登録は既存分をスキップする。plist 本文・
 cron スケジュールの差分は reconcile する（loaded でも内容が違えば
 bootout→bootstrap、schedule 差分は `hermes cron edit`、desired 外の
 所有 agent/cron は削除）。実績は `data/service_manifest.json` に記録

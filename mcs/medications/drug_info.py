@@ -467,7 +467,9 @@ def _valid_item(item):
             and all(finite_number(item.get(k)) for k in ("added_at", "last_checked"))
             and item.get("last") in _LAST
             and all(item.get(k) is None or isinstance(item[k], str)
-                    for k in ("revision", "etag", "observed_sha256", "observed_revision")))
+                    for k in ("revision", "etag", "observed_sha256", "observed_revision"))
+            and isinstance(item.get("aliases", []), list)
+            and all(isinstance(a, str) and a for a in item.get("aliases", [])))
 
 
 def _load(path):
@@ -510,6 +512,9 @@ def register(result, entry, root=None):
     def change(data):
         existing = next((x for x in data["inserts"] if x["url"] == result["url"]), None)
         if existing is not None:
+            # Remember the other strength's name so later runs do not search it again.
+            if entry["name"] != existing["name"] and entry["name"] not in existing.setdefault("aliases", []):
+                existing["aliases"].append(entry["name"])
             return "already_watched_url"
         data["inserts"].append({"name": entry["name"], "code": entry["code"], "url": result["url"],
                                 "sha256": result["sha256"], "revision": result["revision"],
@@ -523,7 +528,7 @@ def formulary_add(names, rows, limit=10, root=None):
     """Resolve every line locally first; unknown/ambiguous lines are never sent."""
     lines = [n.strip() for n in names if n.strip() and not n.strip().startswith("#")]
     resolved = [(name,) + tuple(resolve(name, rows)) for name in lines]
-    watched = {x["name"] for x in load_watch(root)["inserts"]}
+    watched = {name for x in load_watch(root)["inserts"] for name in [x["name"], *x.get("aliases", [])]}
     report, done, stopped = [], 0, False
     for name, entries, suggestions in resolved:
         if len(entries) != 1:

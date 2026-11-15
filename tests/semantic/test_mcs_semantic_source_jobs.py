@@ -426,33 +426,27 @@ def test_replay_seed_records_source(tmp_path):
     db.close()
 
 
-def test_eligible_priority_survives_compact_payload(tmp_path):
+@pytest.mark.parametrize("separators", [None, (",", ":")])
+def test_eligible_priority_survives_compact_payload(tmp_path, separators):
     """Drain ordering must not depend on json.dumps whitespace — a
     payload serialised with compact separators still ranks an
     arrival-descended job ahead of import/replay seeds."""
+    import semantic_due_selection
     db = _ledger(tmp_path)
     _patient(db)
     db.save_messages([_message(10), _message(20)], project_id=1)
-    db.job_add("semantic", 1, 10, payload={
-        "targets": [10], "origin": {"source": "history_import"}})
-    now = time.time()
-    db.db.execute(
-        "INSERT INTO fetch_jobs(kind,project_id,message_id,parent_id,"
-        "payload,state,next_try,created_at,updated_at) "
-        "VALUES('semantic',1,20,NULL,?,'pending',0,?,?)",
-        (json.dumps({"targets": [20],
-                     "origin": {"source": "unread", "event_id": 1},
-                     "eligible": True}, separators=(",", ":")),
-         now, now))
+    now = time.time() - 10
+    for mid, extra in ((10, {"origin": {"source": "history_import"}}),
+                       (20, {"origin": {"source": "unread", "event_id": 1}, "eligible": True})):
+        payload = {VERSION_KEY: CURRENT_VERSION, "targets": [mid], "generation": f"g{mid}", **extra}
+        db.db.execute(
+            "INSERT INTO fetch_jobs(kind,project_id,message_id,parent_id,"
+            "payload,state,next_try,created_at,updated_at) "
+            "VALUES('semantic',1,?,NULL,?,'pending',0,?,?)",
+            (mid, json.dumps(payload, separators=separators), now, now))
     db.db.commit()
-    out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
-                           time.monotonic() + 300,
-                           jev_client=_FakeJev(), llm_fn=_llm,
-                           max_jobs=1)
-    assert out["done"] == 1
-    rows = {r["message_id"]: r["state"] for r in db.db.execute(
-        "SELECT message_id,state FROM fetch_jobs WHERE kind='semantic'")}
-    assert rows[20] == "done" and rows[10] == "pending"
+    due = semantic_due_selection._select_due(db, None, ("semantic",), False, 1, {})[0]
+    assert [row["message_id"] for row in due] == [20]
     db.close()
 
 
