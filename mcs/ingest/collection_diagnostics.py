@@ -1,4 +1,4 @@
-"""Summarize bounded collection failures and incomplete parent bodies without identifying data."""
+"""Summarize bounded collection failures, where a run stopped and incomplete bodies without identifying data."""
 from __future__ import annotations
 
 import re
@@ -127,8 +127,19 @@ _CODES = {
     "config": "config",
     **dict.fromkeys(("extract", "extract_llm", "drug_map", "rollup", "signals",
                      "semantic_init", "stall_check_failed"), "postprocess"),
-    **dict.fromkeys(("run_lock_lost", "run_record_failed", "crash_site",
+    **dict.fromkeys(("run_lock_lost", "run_record_failed", "crash", "crash_site",
                      "snapshot_publish_failed", "code_changed"), "runtime"),
+}
+# Where a failed run stopped: run_check stage names and with_relogin steps, in plain words.
+STAGES = {
+    "fetch": "MCSからの取得", "unread": "未読投稿の取得", "self_probe": "自分の投稿の確認",
+    "backfill": "過去の投稿の補完", "jobs": "取得待ちの処理", "discovery": "新しい患者の確認",
+    "reply_jobs": "返信の取得", "history_jobs": "履歴の取得", "thread_read": "既読化",
+    "attachments": "添付の取得", "trickle_jobs": "空き時間の履歴取得",
+    "reconcile": "編集・削除の照合", "derive": "要約・薬剤照合などの収集後の処理",
+    "deliver": "通知の送信", "karte_summary": "連携サマリーの取得", "semantic": "意味チェック",
+    "metadata_shadow": "患者情報の補助取得", "housekeeping": "バックアップ・整理",
+    "finish": "実行記録の保存", "unknown": "処理の段階を特定できません",
 }
 
 
@@ -149,6 +160,38 @@ def classify(error) -> str:
     if code.startswith("coverage_stalled_"):
         return "incomplete"
     return _CODES.get(code, "other")
+
+
+def mark_stage(error: BaseException, stage: str) -> None:
+    """Remember the innermost stage an exception escaped from; outer stages keep it."""
+    if stage in STAGES and getattr(error, "_mcs_stage", None) is None:
+        try:
+            error._mcs_stage = stage
+        except AttributeError:
+            pass
+
+
+def stop_point(error: BaseException, detail) -> dict:
+    """Fixed stage and category codes for the failure that ended a run; never its text."""
+    stage = getattr(error, "_mcs_stage", None)
+    return {"stage": stage if stage in STAGES else "unknown", "category": classify(detail)}
+
+
+def valid_stop(value) -> dict | None:
+    """Whitelist a persisted stop point before an alert or doctor displays it."""
+    if (isinstance(value, dict) and set(value) == {"stage", "category"}
+            and value["stage"] in STAGES and value["category"] in CATEGORIES):
+        return dict(value)
+    return None
+
+
+def stop_explanation(value) -> tuple[str, str, str, str] | None:
+    """(stopped stage, cause label, what happened, what to do) for a valid stop point."""
+    value = valid_stop(value)
+    if value is None:
+        return None
+    label, _bucket, _transient, what, todo = CATEGORIES[value["category"]]
+    return STAGES[value["stage"]], label, what, todo
 
 
 def error_counts(errors) -> dict:
