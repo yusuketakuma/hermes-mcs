@@ -76,6 +76,10 @@ def _clone(legacy, tmp_path, monkeypatch, pairs, pad=0):
 
 @pytest.fixture
 def scaled(legacy, tmp_path, monkeypatch):
+    # The approval's wall-clock limit is a performance observation, not this file's contract:
+    # a slow runner must not turn a correct re-proof into a timeout (the limit itself is tested
+    # with APPROVE_SECONDS=0 in test_cloud_local_rebuild).
+    monkeypatch.setattr(local_rebuild, 'APPROVE_SECONDS', 60.0)
     return _clone(legacy, tmp_path, monkeypatch, PAIRS)
 
 
@@ -134,7 +138,8 @@ def test_a_history_changed_between_plan_and_approval_rejects_the_whole_bundle(sc
             'version': 1, 'cmd': local_rebuild.COMMAND, 'command_id': str(uuid.uuid4()),
             'actor': 'synthetic-human', 'human_confirmed': True, 'project_id': None,
             'reason': '完全合成の確認', 'plan': plan})
-        assert receipt['outcome'] == 'rejected' and local_rebuild.approved_units(ledger.db) == {}
+        assert receipt['outcome'] == 'rejected' and receipt['error'] == 'local_rebuild_bundle_changed'
+        assert local_rebuild.approved_units(ledger.db) == {}
 
 
 def test_the_tally_phase_over_its_own_budget_stops_at_tally_and_leaves_everything_unverified(
