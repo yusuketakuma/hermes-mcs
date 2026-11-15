@@ -1215,5 +1215,5 @@ def add_parsers(sub):
     q.add_argument("--confirm-human", action="store_true")
     q.add_argument("--reason", required=True)
     q.add_argument("--actor", default="local-human")
-    q.add_argument("--command-id", help="同じ操作を再試行する場合の承認記録UUID")
+    q.add_argument("--command-id", help="結果が不明だった同じ承認を確かめる場合の承認記録UUID。拒否された束は計画を作り直し、新しいUUIDで承認")
     q.set_defaults(fn=command, cloud_action="local-rebuild-approve")
