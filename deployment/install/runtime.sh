@@ -823,20 +823,8 @@ if [ "$RUNTIME_MODE" = standalone ]; then
     printf '詳しい説明: docs/guides/STANDALONE.md\n'
 fi
 # LINE WORKS needs its own connection steps; other targets never see them.
-if "$MCS_PY" - "$MCS_ROOT/config.json" <<'PYLINEWORKS'
-import json
-import sys
-try:
-    with open(sys.argv[1], encoding="utf-8") as handle:
-        cfg = json.load(handle)
-except (OSError, ValueError):
-    sys.exit(1)
-ntf = cfg.get("notify") if isinstance(cfg, dict) else None
-target = cfg.get("notify_target") if isinstance(cfg, dict) else None
-sys.exit(0 if isinstance(ntf, dict) and ntf.get("interactive") == "lineworks"
-         or isinstance(target, str) and target.startswith("lineworks:") else 1)
-PYLINEWORKS
-then
+# Display-only hint: a plain text match keeps this read free of interpreter runs.
+if grep -Eqs '"interactive"[[:space:]]*:[[:space:]]*"lineworks"|"notify_target"[[:space:]]*:[[:space:]]*"lineworks:' "$MCS_ROOT/config.json"; then
     printf '\nLINE WORKS の接続設定も必要です（詳しい説明: docs/guides/LINEWORKS.md）\n'
     for sub in init check; do
         printf '    %s %s -m lineworks_adapter %s\n' "$INREPO" "$PYQ" "$sub"
