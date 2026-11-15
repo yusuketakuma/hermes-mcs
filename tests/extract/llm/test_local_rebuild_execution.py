@@ -427,3 +427,76 @@ def test_the_long_hold_needs_the_same_current_approval_and_unverified_keeps_the_
         == extract_llm_runner._PREPARE_HOLD_S
     assert extract_llm_runner._prepare_hold_s(ledger, {'project_id': 1, 'message_id': 1},
                                               (local_rebuild.PROOF_CHANGED,)) == extract_llm_runner._PREPARE_HOLD_S
+
+
+@pytest.mark.parametrize('replaced', [False, True])
+def test_the_long_hold_is_decided_inside_the_claims_own_transaction(routed, monkeypatch, replaced):
+    """The real _claim: lease_for runs inside its BEGIN IMMEDIATE, so the approval match and the
+    6-hour lease commit together; an approval swapped before that transaction gets the short hold."""
+    import time
+    import extract_llm_errors
+    import extract_llm_runner
+    ledger, *_ = routed
+    unit = _approved(ledger, monkeypatch)
+    row = {**dict(ledger.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone()),
+           '_local_rebuild_held': unit}
+    if replaced:
+        swapped = {**unit, 'command_id': str(uuid.uuid4())}
+        monkeypatch.setattr(local_rebuild, 'approved_units', lambda db: {(1, 1): swapped})
+    assert extract_llm_errors._claim(ledger, row, extract_llm_runner._PREPARE_HOLD_S,
+        lease_for=lambda led: extract_llm_runner._prepare_hold_s(led, row, (local_rebuild.PROOF_CHANGED,)))
+    [next_try] = ledger.db.execute("SELECT next_try FROM fetch_jobs WHERE kind='extract_claim' "
+                                   "AND message_id=1").fetchone()
+    if replaced:
+        assert next_try < time.time() + 2 * extract_llm_runner._PREPARE_HOLD_S
+    else:
+        assert next_try > time.time() + 5 * 3600
+
+
+def test_a_permit_lapsing_after_prepare_stops_every_local_dispatch(routed, monkeypatch):
+    """request_guard re-proves the permit before each local call: lapsed after prepare, no call is
+    made and nothing is written."""
+    ledger, *_ = routed
+    _approved(ledger, monkeypatch)
+    monkeypatch.setattr(local_rebuild, 'permit_for', lambda ledger, unit: local_rebuild.PROOF_CHANGED)
+
+    def local(prompt, **_kw):
+        pytest.fail('a lapsed permit dispatched a local call')
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', local)
+    assert worker.run_pending(ledger, limit=1, budget_s=180)['done'] == 0
+    assert not _current(ledger)
+    assert not ledger.db.execute("SELECT 1 FROM artifacts WHERE kind='extract_llm_chunk' AND message_id=1").fetchone()
+
+
+def test_a_crash_during_the_repair_keeps_the_tagged_started_record_and_never_resends_it(routed, monkeypatch):
+    """The first answer lacks completeness, so a started repair checkpoint (tagged) is written
+    and the process dies inside the repair call. The next pass resumes from the saved records and
+    never dispatches that unknown repair again (started stays unknown, no cloud)."""
+    ledger, calls, reserved, results = routed[0], routed[2], routed[3], routed[4]
+    unit = _approved(ledger, monkeypatch)
+    _no_cloud_unit(monkeypatch)
+    kinds = []
+
+    class Crash(BaseException):
+        pass
+
+    def local(prompt, **kwargs):
+        kinds.append(kwargs.get('kind', 'first'))
+        if kwargs.get('kind') == 'repair':
+            raise Crash()
+        return {'symptoms': [], 'summary': '合成'}
+    monkeypatch.setattr(extract_llm_engine, '_llm_call', local)
+    monkeypatch.setattr(worker.extract_quality, 'completeness_issues', lambda *args: ['synthetic-missing'])
+    with pytest.raises(Crash):
+        worker.run_pending(ledger, limit=1, budget_s=600)
+    started = [json.loads(meta) for (meta,) in ledger.db.execute(
+        "SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' AND message_id=1")
+        if json.loads(meta).get('quality_status') == 'started']
+    assert started and all(meta['local_rebuild'] == local_rebuild.tag(unit) for meta in started)
+    with ledger.db:
+        ledger.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='extract_claim'")
+    repairs = kinds.count('repair')
+    worker.run_pending(ledger, limit=1, budget_s=600)
+    assert kinds.count('repair') == repairs                            # the unknown repair is never resent
+    assert local_rebuild.permit(ledger, 1, 1) in local_rebuild.RUNNABLE
+    assert calls == [] and reserved == [] and results == []
