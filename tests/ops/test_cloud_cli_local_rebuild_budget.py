@@ -89,7 +89,7 @@ def _plan(capsys, tmp_path, *extra):
     return rc, report, (json.loads(out.read_text()) if out.exists() else None)
 
 
-def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(scaled, tmp_path, capsys):
+def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(scaled, tmp_path, capsys, monkeypatch):
     rc, report, plan = _plan(capsys, tmp_path)
     assert report['state'] == 'bundle_full' and report['stop_reason'] is None and rc == 0
     assert report['examined'] == report['eligible'] == 20 and report['next_after'] is not None
@@ -99,16 +99,73 @@ def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(sca
     assert report['candidates'] == MESSAGES + 2 and report['excluded']['unverified'] == 0
     assert local_rebuild.valid_plan(plan) and len(plan['units']) == 20
     from ledger import Ledger
-    from contextlib import closing
-    with closing(Ledger(str(scaled))) as ledger:
+    from contextlib import closing, contextmanager
+
+    observed = {'stage': 'before_bounded', 'tally': 'not_reached', 'units': 0,
+                'sqlite': 'none', 'bounded_s': None, 'deadline_reached': None}
+    original_bounded, original_tally = local_rebuild._bounded, cloud_policy._tally
+
+    @contextmanager
+    def bounded(db, seconds):
         started = time.monotonic()
-        receipt = mcs_requests.apply_command(ledger, {
-            'version': 1, 'cmd': local_rebuild.COMMAND, 'command_id': str(uuid.uuid4()),
-            'actor': 'synthetic-human', 'human_confirmed': True, 'project_id': None,
-            'reason': '完全合成の確認', 'plan': plan})
-        elapsed = time.monotonic() - started
-    assert receipt['outcome'] == 'applied', f"error={receipt.get('error')!r}, elapsed_s={elapsed:.3f}"
-    assert receipt['approved'] == 20
+        try:
+            with original_bounded(db, seconds) as deadline:
+                try:
+                    yield deadline
+                finally:
+                    ended = time.monotonic()
+                    observed['bounded_s'] = round(ended - started, 6)
+                    observed['deadline_reached'] = ended >= deadline
+        except sqlite3.OperationalError as error:
+            code = getattr(error, 'sqlite_errorcode', None)
+            kinds = {sqlite3.SQLITE_INTERRUPT: 'interrupt', sqlite3.SQLITE_BUSY: 'busy',
+                     sqlite3.SQLITE_LOCKED: 'locked'}
+            observed['sqlite'] = kinds.get(code & 0xff, 'other') if isinstance(code, int) else 'unknown'
+            raise
+
+    def tally_call(*args, **kwargs):
+        try:
+            return original_tally(*args, **kwargs)
+        except (cloud_policy.AnthropicError, ArithmeticError, ValueError, TypeError, KeyError) as error:
+            kinds = ((cloud_policy.AnthropicError, 'anthropic'), (ArithmeticError, 'arithmetic'),
+                     (ValueError, 'value'), (TypeError, 'type'), (KeyError, 'key'))
+            observed['tally'] = next(name for kind, name in kinds if isinstance(error, kind))
+            raise
+
+    def stage(name, func):
+        def call(*args, **kwargs):
+            observed['stage'] = name
+            if name == '_tally_valid':
+                observed['tally'] = 'running'
+            result = func(*args, **kwargs)
+            if name == '_tally_valid' and observed['tally'] == 'running':
+                observed['tally'] = 'valid' if result else 'invalid'
+            if name == 'unit_proof':
+                observed['units'] += 1
+            return result
+        return call
+
+    with closing(Ledger(str(scaled))) as ledger:
+        with monkeypatch.context() as patch:
+            patch.setattr(local_rebuild, '_bounded', bounded)
+            patch.setattr(cloud_policy, '_tally', tally_call)
+            for name in ('_database_identity', 'approved_units', '_tally_valid', 'unit_proof'):
+                patch.setattr(local_rebuild, name, stage(name, getattr(local_rebuild, name)))
+            tally_before = dict(cloud_policy.TALLY_COST)
+            started = time.monotonic()
+            receipt = mcs_requests.apply_command(ledger, {
+                'version': 1, 'cmd': local_rebuild.COMMAND, 'command_id': str(uuid.uuid4()),
+                'actor': 'synthetic-human', 'human_confirmed': True, 'project_id': None,
+                'reason': '完全合成の確認', 'plan': plan})
+            elapsed = time.monotonic() - started
+            observed['tally_rebuilds'] = cloud_policy.TALLY_COST['rebuilds'] - tally_before['rebuilds']
+            observed['tally_s'] = round(cloud_policy.TALLY_COST['seconds'] - tally_before['seconds'], 6)
+    error = receipt.get('error')
+    known_errors = (local_rebuild.UNVERIFIED, 'local_rebuild_database_changed',
+                    'local_rebuild_already_approved', 'local_rebuild_bundle_changed')
+    diagnostic = f"error={error if error in known_errors else 'other'}, elapsed_s={elapsed:.3f}, {observed}"
+    assert receipt['outcome'] == 'applied', diagnostic
+    assert receipt['approved'] == 20, diagnostic
 
 
 def test_the_month_end_tally_at_production_density_fits_its_own_budget(legacy, tmp_path, capsys, monkeypatch):
