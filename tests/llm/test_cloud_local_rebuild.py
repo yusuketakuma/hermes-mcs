@@ -86,6 +86,12 @@ def test_a_bindingless_answerless_success_is_eligible_and_the_bundle_lists_it(le
      "WHERE kind='cloud_usage_reserve' AND message_id=1", 'disposition'),
     ("INSERT INTO artifacts(kind,content,created_at) VALUES('cloud_usage_pruned_before','1e300',0)",
      'history_pruned'),
+    # an explicit null logical fingerprint is not an absent one
+    ("UPDATE artifacts SET meta=json_set(meta,'$.logical_request_fp',NULL) "
+     "WHERE kind='cloud_usage_reserve' AND message_id=1", 'receipt_inconsistent'),
+    # a disposition with a malformed reservation id is never silently ignored
+    ("INSERT INTO artifacts(kind,project_id,message_id,meta,created_at) "
+     "VALUES('cloud_usage_disposition',1,1,'{\"reservation_id\":\"not-hex\"}',0)", 'receipt_inconsistent'),
 ])
 def test_each_unproven_history_is_excluded_with_its_fixed_reason(legacy, damage, reason):
     ledger, _ = legacy
@@ -451,3 +457,11 @@ def test_an_adopted_unit_stays_adopted_only_while_its_usage_history_is_unchanged
     _reserve(ledger, 'synthetic later prompt', route='reextract', unit='1', message_id=1)   # no result yet
     assert local_rebuild.permit(ledger, 1, 1) == local_rebuild.PROOF_CHANGED
     assert len(calls) == 2
+
+
+
+def test_a_whitespace_empty_answer_is_the_empty_object(legacy):
+    ledger, _ = legacy
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET content='{ }' WHERE kind='cloud_usage_result' AND message_id=1")
+    assert local_rebuild.unit_proof(ledger, 1, 1)['message_id'] == 1
