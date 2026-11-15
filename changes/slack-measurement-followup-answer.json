@@ -8,5 +8,5 @@
     "確認要求の公開時刻を followup に記録し、鮮度を公開時刻から測る。連携処理の1周期が長くても、新しい再確認の結果を捨てない。",
     "期限切れの確認要求は、送信元・利用者・ボタンの確認を通った後で固定文を返して破棄する。確認を通らない送信元には返答しない。"
   ],
-  "refs": ["adapters/slack/actions.py", "tests/adapters/test_bugsweep_slack_measurement_followup.py"]
+  "refs": ["adapters/slack/actions.py", "tests/adapters/common/test_bugsweep_slack_measurement_followup.py"]
 }

@@ -10,5 +10,5 @@
     "hermes_plugin/card_workers.py: 配送処理が後任なしに終了した場合（ロックを取得できない場合や処理の異常終了を含む）、起動状態の記録をworker_start_failedへ更新します。ホストによる停止や取消では更新しません。",
     "hermes_plugin/card_workers.py: Slackチャンネル作成の準備は、Hermesが保持するworkspaceごとのclientから設定先team_idのclientを選んで使います。見つからない場合は準備の要求を消費せず、blockedも保存しません。"
   ],
-  "refs": ["adapters/common/worker.py", "adapters/slack/tasks.py", "adapters/discord/tasks.py", "hermes_plugin/card_workers.py", "tests/adapters/test_bugsweep_supervisor_handoff.py"]
+  "refs": ["adapters/common/worker.py", "adapters/slack/tasks.py", "adapters/discord/tasks.py", "hermes_plugin/card_workers.py", "tests/adapters/common/test_bugsweep_supervisor_handoff.py"]
 }
