@@ -186,7 +186,9 @@ def _prepare_hold_s(ledger, row, reasons):
     """How long a prepare refusal keeps its bounded claim. A positive mismatch of a local-rebuild
     approval (PROOF_CHANGED) waits the long revive interval, but only while the approval it was
     decided against is still the current one; a changed approval, UNVERIFIED and every other
-    refusal keep the short prepare hold. Not terminal: a later re-match is seen after the wait."""
+    refusal keep the short prepare hold. Not terminal: a later re-match is seen after the wait.
+    Called by _claim inside its writer transaction, so the approval match and the long claim
+    commit together."""
     held = row.get("_local_rebuild_held")
     if local_rebuild.PROOF_CHANGED not in reasons or held is None:
         return _PREPARE_HOLD_S
@@ -397,7 +399,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     and time.monotonic() < deadline and _writer_current(full=True):
                 # This CAS is a finite preparation wait, not a sent/failed unit.
                 # Never replace another owner's active claim or discard proof.
-                _claim(ledger, refused_row, _prepare_hold_s(ledger, refused_row, (reason,)))
+                _claim(ledger, refused_row, _PREPARE_HOLD_S,
+                       lease_for=lambda led, row=refused_row, why=(reason,): _prepare_hold_s(led, row, why))
         if jobs or not any(reason in cloud_backlog._PREPARE_CONTEXT_REJECTION_CODES
                            or reason in cloud_backlog._HOLD_DEFER_REASONS
                            for _, reason in refused) or time.monotonic() >= deadline:
@@ -1043,7 +1046,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         if any(reason in cloud_backlog._HOLD_DEFER_REASONS for reason in row_reasons):
                             # An unverifiable owned head keeps a bounded claim —
                             # the next pass sees the tail instead of re-blocking.
-                            _claim(ledger, candidate, _prepare_hold_s(ledger, candidate, row_reasons))
+                            _claim(ledger, candidate, _PREPARE_HOLD_S,
+                                   lease_for=lambda led: _prepare_hold_s(led, candidate, row_reasons))
                         if prioritize_patients and time.monotonic() < deadline:
                             _cloud_priority_discard(ledger, candidate['message_id'])
                         continue

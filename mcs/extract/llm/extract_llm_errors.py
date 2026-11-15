@@ -321,12 +321,14 @@ def _write_lock(enabled: bool, wait_s: float = 60, *, deadline=None):
             os.close(fd)
 
 
-def _claim(ledger, r, lease_s: float = _EXTRACT_LEASE_S) -> float | None:
+def _claim(ledger, r, lease_s: float = _EXTRACT_LEASE_S, *, lease_for=None) -> float | None:
     """Atomically claim a pending row via a fetch_jobs lease (F14).
     Returns this worker's lease expiry on success, None when another
     worker's live lease already covers the row — the ON CONFLICT
     conditional update is a single statement, so the check-and-set is
-    race-free."""
+    race-free. ``lease_for(ledger)``, when given, decides the lease length
+    inside the same writer transaction (its reads see what the claim writes
+    against)."""
     if ledger.db.in_transaction:
         return None
     ledger.db.execute("BEGIN IMMEDIATE")
@@ -351,6 +353,8 @@ def _claim(ledger, r, lease_s: float = _EXTRACT_LEASE_S) -> float | None:
         if isinstance(r, dict):
             from inference_dependency_loss import source_binding
             r['_source_binding'] = source_binding(ledger.db, r['project_id'], r['message_id'])
+        if lease_for is not None:
+            lease_s = lease_for(ledger)
         now = time.time()
         lease = now + lease_s
         token = os.urandom(16).hex() if isinstance(r, dict) else None
