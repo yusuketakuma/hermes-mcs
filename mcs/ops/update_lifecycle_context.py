@@ -468,7 +468,8 @@ def _hold_after_interrupt(interrupt: BaseException) -> None:
     """An interrupt (KeyboardInterrupt, SystemExit) left a non-terminal journal: restore the
     update marker while the caller still holds run.lock, which run_check re-reads under that
     lock. A failed restore (or a second interrupt) is noted on the original interrupt, which
-    the caller re-raises; SIGKILL or power loss are not covered."""
+    the caller re-raises. Only KeyboardInterrupt and SystemExit reach here: SIGTERM, SIGHUP,
+    a closed terminal, SIGKILL and power loss have no handler and are not covered."""
     try:
         _ensure_recovery_marker()
     except BaseException as error:

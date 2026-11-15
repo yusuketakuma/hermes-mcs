@@ -175,16 +175,22 @@ def test_a_failed_marker_restore_is_noted_on_the_interrupt_and_left_visible(upda
     assert not Path(updater.MARKER_PATH).exists() and _journal(updater)["applying"]["rollback"] is True
 
 
-def test_an_interrupt_after_bail_saved_the_terminal_journal_is_not_unfinished(updater, monkeypatch):
-    """bail saved the aborted journal, then restart_agents was interrupted: nothing is left to
-    recover, so the marker is not recreated."""
+@pytest.mark.parametrize("dropped", [True, False], ids=["after_marker_removal", "during_bounce"])
+def test_an_interrupt_after_bail_saved_the_terminal_journal_is_not_unfinished(updater, monkeypatch, dropped):
+    """bail saved the aborted journal, then restart_agents was interrupted, either after it removed
+    the marker or during its bounce before that: nothing is left to recover, so the marker is
+    neither recreated nor left behind."""
     _world(updater, monkeypatch)
     target = _git(Path(updater.REPO), "rev-parse", "v1.1.0^{commit}").stdout.strip()
 
     def post_merge(expected, *, run_lock_fd, **_kw):
         raise updater.UpdateError("post_merge_failed: synthetic")
     _post_merge(updater, monkeypatch, post_merge)
-    _patch_restart(updater, monkeypatch, _released_then_interrupted(updater, []))
+
+    def bounce_interrupted():
+        raise KeyboardInterrupt                             # the marker is still there
+    _patch_restart(updater, monkeypatch, _released_then_interrupted(updater, []) if dropped
+                   else bounce_interrupted)
     with pytest.raises(KeyboardInterrupt):
         updater.apply("v1.1.0", target, "synthetic-command")
     state = _journal(updater)
@@ -227,8 +233,21 @@ def test_an_interrupted_parent_reaps_the_child_then_restores_the_marker_under_ru
             return self.returncode
 
     child = Child()
-    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: child)
-    monkeypatch.setattr(os, "killpg", lambda pid, signum: events.append("kill_requested"))
+    # Only the post-merge spawn and its stop are stand-ins: apply's own git calls (owned_process)
+    # keep the real subprocess and os modules.
+    import types
+    import update_execution
+    monkeypatch.setattr(update_execution, "subprocess", types.SimpleNamespace(
+        Popen=lambda *args, **kwargs: child, PIPE=subprocess.PIPE, TimeoutExpired=subprocess.TimeoutExpired))
+
+    class _Os:
+        def __getattr__(self, name):
+            return getattr(os, name)
+
+        @staticmethod
+        def killpg(pid, signum):
+            events.append("kill_requested")
+    monkeypatch.setattr(update_lifecycle_context, "os", _Os())
     ensure = update_lifecycle_context._ensure_recovery_marker
 
     def restore():
