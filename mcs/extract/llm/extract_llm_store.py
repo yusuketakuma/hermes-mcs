@@ -582,7 +582,7 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
             # The first and every later checkpoint of an approved local rebuild re-prove the
             # permit inside this writer transaction, so a new reservation stops it here too.
             import extract_llm_local_rebuild as local_rebuild
-            if local_rebuild.permit(ledger, r["project_id"], r["message_id"]) != local_rebuild.ACTIVE:
+            if local_rebuild.permit(ledger, r["project_id"], r["message_id"]) not in local_rebuild.RUNNABLE:
                 return False
         for key, value in chunks_out.items():
             guarded = guard is not None and guard is r.get("_checkpoint_guard")

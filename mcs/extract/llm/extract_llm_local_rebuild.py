@@ -52,6 +52,9 @@ EXCLUSIONS = frozenset({
 UNAPPROVED, ACTIVE, ADOPTED = 'unapproved', 'active', 'adopted'
 PROOF_CHANGED, UNVERIFIED = 'local_rebuild_proof_changed', 'local_rebuild_unverified'
 PERMIT_STATES = frozenset({UNAPPROVED, ACTIVE, ADOPTED, PROOF_CHANGED, UNVERIFIED})
+# The states whose unit runs under its approval's own local guards and tag: an adopted unit that
+# QC, a human report or a thin retry makes pending again is re-processed the same way.
+RUNNABLE = frozenset({ACTIVE, ADOPTED})
 _USAGE_KINDS = ('cloud_usage_reserve', 'cloud_usage_result', 'cloud_usage_disposition')
 
 
@@ -140,7 +143,7 @@ def _check_unit(ledger, project_id, message_id, stop=()):
 
 def _history_proof(ledger, project_id, message_id, stop=()):
     """The usage-history proof alone (shared by eligibility and every later re-check): -> digest
-    of every usage row of the message; raises _Excluded(reason). The caller verified the tally."""
+    of the message's reextract usage rows; raises _Excluded(reason). The caller verified the tally."""
     db = ledger.db
     with cloud_policy._accounting_snapshot(db):
         if _history_pruned(db):
@@ -157,15 +160,33 @@ def _history_proof(ledger, project_id, message_id, stop=()):
             "WHERE kind IN (?,?,?) "
             "AND project_id=? AND message_id IS ? ORDER BY artifact_id",
             (*_USAGE_KINDS, project_id, message_id)).fetchall()
-        results, discarded = {}, set()
+        results, discarded, routes, proven = {}, set(), {}, []
         try:
+            # Every raw usage row is attributed through its own reservation: reextract rows (every
+            # model, unit key, piece and repair) form the proof; rows that link to another route's
+            # valid reservation are outside it; an unknown route, a broken reservation or an
+            # orphan result/disposition fails closed instead of being filtered away.
+            for item in history:
+                if item['kind'] != 'cloud_usage_reserve':
+                    continue
+                meta = cloud_policy._receipt_meta(item['meta'])
+                rid, route = meta.get('reservation_id'), meta.get('route')
+                if (not isinstance(rid, str) or re.fullmatch(r'[0-9a-f]{32}', rid) is None
+                        or not isinstance(route, str) or not route or rid in routes):
+                    raise _Excluded('receipt_inconsistent')
+                routes[rid] = route
+                if route == ROUTE:
+                    proven.append(item)
             for item in history:
                 if item['kind'] == 'cloud_usage_reserve':
                     continue
                 meta = cloud_policy._receipt_meta(item['meta'])
                 rid = meta.get('reservation_id')
-                if not isinstance(rid, str) or re.fullmatch(r'[0-9a-f]{32}', rid) is None:
-                    raise _Excluded('receipt_inconsistent')   # a malformed disposition is never ignored
+                if not isinstance(rid, str) or rid not in routes:
+                    raise _Excluded('receipt_inconsistent')   # an orphan or malformed row is never ignored
+                if routes[rid] != ROUTE:
+                    continue
+                proven.append(item)
                 if item['kind'] == 'cloud_usage_disposition':
                     discarded.add(rid)
                 else:
@@ -206,7 +227,7 @@ def _history_proof(ledger, project_id, message_id, stop=()):
         except (cloud_policy.AnthropicError, ArithmeticError, ValueError, TypeError, KeyError, RecursionError):
             raise _Excluded('receipt_inconsistent') from None
         digest = payload_hash([[item['artifact_id'], item['kind'], item['model'], item['meta'], item['content']]
-                               for item in history])
+                               for item in sorted(proven, key=lambda item: item['artifact_id'])])
     return digest
 
 
@@ -431,15 +452,15 @@ def _approval_state(ledger, project_id, message_id, approvals, stop=(), *, tally
             return PROOF_CHANGED
     except _Excluded:
         return PROOF_CHANGED   # e.g. a prune mark appeared: an approved unit stops qualifying
-    if adopted(ledger.db, unit):
-        return ADOPTED
     row = _message(ledger.db, project_id, message_id)
     if row is None:
         return PROOF_CHANGED
-    # After approval only this approval's own tagged work may exist; any other row (untagged,
-    # another approval, broken meta) or a final this approval did not adopt invalidates it.
+    # After approval only this approval's own tagged work may exist, adopted or not; any other
+    # row (untagged, another approval, broken meta) or a final it did not adopt invalidates it.
     if any(item != tag(unit) for item in _chunk_tags(ledger.db, row)):
         return PROOF_CHANGED
+    if adopted(ledger.db, unit):
+        return ADOPTED
     if _valid_material(ledger.db, row) or _current(ledger, message_id, row["content_hash"]):
         return PROOF_CHANGED
     return ACTIVE
@@ -451,8 +472,10 @@ def tag(unit):
 
 
 def adopted(db, unit):
-    """The selected final itself is this approval's local result with a valid material proof
-    for the current source; a tag on any other row, or the receipt alone, never counts."""
+    """The selected final itself is this approval's local result, still authentic for the current
+    source and contract (the material proof without the adverse QC/human review, which decides
+    re-processing, never the adoption itself); a tag on any other row, or the receipt alone,
+    never counts."""
     row = _message(db, unit['project_id'], unit['message_id'])
     final = _selected_final(db, row) if row is not None else None
     if final is None:
@@ -464,4 +487,4 @@ def adopted(db, unit):
     written = meta.get('local_rebuild') if type(meta) is dict else None
     return (written == tag(unit)
             and meta.get('hash') == row['content_hash']
-            and mcs_queries.selected_artifact_proof_valid(db, final[0], material=True))
+            and mcs_queries.selected_artifact_proof_valid(db, final[0], material=True, adverse_review=False))
