@@ -761,9 +761,16 @@ def test_pin_refresh_restore_preserves_source_drift_and_both_environments(
     def forbidden(*args, **kwargs):
         pytest.fail("source drift must stop before journals, venvs, or workers change")
 
-    for name in ("_clean_stale_git_locks", "_services_reconcile", "restart_agents",
-                 "_enqueue_notice", "quiesce", "_reinstall"):
+    for name in ("_clean_stale_git_locks", "_services_reconcile", "restart_agents", "quiesce", "_reinstall"):
         patch_lifecycle_lookup(monkeypatch, updater, name, forbidden)
+    notices = []
+
+    def notice(*args, **kwargs):
+        if operation != "rollback":     # IA-090: only a held rollback tells the approver
+            forbidden()
+        notices.append(kwargs.get("notice_code"))
+        return True
+    patch_lifecycle_lookup(monkeypatch, updater, "_enqueue_notice", notice)
     for attempt in range(2):
         if operation == "restore":
             with pytest.raises(updater.UpdateError, match="runtime_restore_checkout_changed"):
@@ -781,6 +788,8 @@ def test_pin_refresh_restore_preserves_source_drift_and_both_environments(
         assert not list(runtime.glob("venv.python314-aside*"))
         assert Path(updater.MARKER_PATH).read_text() == "synthetic writer freeze"
         assert order == (["runtime"] * (attempt + 1) if operation == "restore" else [])
+    # the held rollback's notice is due once per condition across both attempts (IA-090)
+    assert notices == (["rollback_failed"] if operation == "rollback" else [])
 
 
 def test_pin_refresh_restore_keeps_explicitly_confirmed_clean_branch(

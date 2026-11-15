@@ -216,7 +216,7 @@ def test_busy_editor_keeps_legacy_orphan_marker(watchdog):
     fd = os.open(root / "config.json.edit.lock", os.O_RDWR | os.O_CREAT, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        assert watchdog._recover_legacy() == 2
+        assert watchdog._recover_legacy() == 0   # an editor is publishing: a retry, not a failure (035c5e95)
         assert marker.read_text() == "synthetic marker"
     finally:
         os.close(fd)

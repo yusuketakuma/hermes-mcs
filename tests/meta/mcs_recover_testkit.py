@@ -77,8 +77,8 @@ def _applying(prev, tag="v1.1.0", sha="t" * 40, stage="quiesce",
               ago=4000):
     return {"v": 1,
             "applying": {"tag": tag, "sha": sha, "prev_sha": prev,
-                         "at": time.time() - ago},
-            "stages": [{"stage": stage, "at": time.time() - ago + 100}],
+                         "at": time.time() - ago - 100},
+            "stages": [{"stage": stage, "at": time.time() - ago}],
             "applied": [], "attempts": {}, "executed": {}}
 
 
