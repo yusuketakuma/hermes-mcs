@@ -367,7 +367,7 @@ def _split_target_source_matches(target: str, *, allow_reviewed_rollback=False) 
     # Ignore index hide flags and metadata caches: hash each actual file.
     if _git_out(["status", "--porcelain=v1", "-z", "--untracked-files=no", "--", *_SPLIT_SOURCE_ROOTS]):
         return False
-    if _split_source_extras(current + candidate):
+    if _split_source_extras((current, candidate)):
         return False
     root = os.open(REPO, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
