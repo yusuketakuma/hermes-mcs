@@ -715,7 +715,7 @@ def test_pin_refresh_restore_preserves_source_drift_and_both_environments(
     from ops_testkit import _git
     from test_python314_runtime_migration import _checkout, _interrupted
 
-    _repo, _prev, venv, runtime, order, _notices = _interrupted(
+    _repo, _prev, venv, runtime, order, notices = _interrupted(
         updater, tmp_path, monkeypatch)
     backup = Path(str(venv) + ".pre-python314")
     (backup / "dependencies").write_text("old-installed-dependencies")
@@ -762,8 +762,15 @@ def test_pin_refresh_restore_preserves_source_drift_and_both_environments(
         pytest.fail("source drift must stop before journals, venvs, or workers change")
 
     for name in ("_clean_stale_git_locks", "_services_reconcile", "restart_agents",
-                 "_enqueue_notice", "quiesce", "_reinstall"):
+                 "quiesce", "_reinstall"):
         patch_lifecycle_lookup(monkeypatch, updater, name, forbidden)
+    if operation == "rollback":
+        def capture_notice(_text, **fields):
+            notices.append(fields.get("notice_code"))
+            return True
+        patch_lifecycle_lookup(monkeypatch, updater, "_enqueue_notice", capture_notice)
+    else:
+        patch_lifecycle_lookup(monkeypatch, updater, "_enqueue_notice", forbidden)
     for attempt in range(2):
         if operation == "restore":
             with pytest.raises(updater.UpdateError, match="runtime_restore_checkout_changed"):
@@ -781,6 +788,7 @@ def test_pin_refresh_restore_preserves_source_drift_and_both_environments(
         assert not list(runtime.glob("venv.python314-aside*"))
         assert Path(updater.MARKER_PATH).read_text() == "synthetic writer freeze"
         assert order == (["runtime"] * (attempt + 1) if operation == "restore" else [])
+        assert notices == (["rollback_failed"] if operation == "rollback" else [])
 
 
 def test_pin_refresh_restore_keeps_explicitly_confirmed_clean_branch(
