@@ -158,15 +158,18 @@ def _record_prior_facts(db, now):
     """Keep, per patient, the keys of the facts its newest published context held (no text)."""
     from patient_context_view import RESET_PRIOR_KIND, reset_fact_key
     db.execute("DELETE FROM artifacts WHERE kind=?", (RESET_PRIOR_KIND,))
-    pids = [row[0] for row in db.execute(
-        "SELECT DISTINCT project_id FROM artifacts WHERE kind IN (?,?) AND project_id IS NOT NULL",
-        (state.KIND, state.LEGACY_KIND))]
+    # every patient with records gets a row: an empty one says its context held nothing, so a
+    # fact the rebuild finds in its older records is new, not something the reset erased
+    pids = sorted({row[0] for row in db.execute(
+        "SELECT DISTINCT project_id FROM messages WHERE project_id IS NOT NULL")}
+        | {row[0] for row in db.execute(
+            "SELECT DISTINCT project_id FROM artifacts WHERE kind IN (?,?) AND project_id IS NOT NULL",
+            (state.KIND, state.LEGACY_KIND))})
     for pid in pids:
         doc, meta = state._latest(db, state.KIND, pid)
         facts = doc.get("facts") if meta.get("published") is True else None
-        if not isinstance(facts, list):
-            continue
-        keys = sorted({reset_fact_key(fact) for fact in facts if isinstance(fact, dict)})
+        keys = sorted({reset_fact_key(fact) for fact in facts if isinstance(fact, dict)}) \
+            if isinstance(facts, list) else []
         db.execute("INSERT INTO artifacts(kind,project_id,content,model,meta,created_at) VALUES(?,?,?,?,?,?)",
                    (RESET_PRIOR_KIND, pid, json.dumps(keys), "", "{}", now))
 

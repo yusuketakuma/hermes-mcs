@@ -65,3 +65,10 @@ def test_a_chat_fact_keeps_its_identity_when_the_view_drops_its_source_key():
     assert view.reset_fact_key(stored) == view.reset_fact_key({k: v for k, v in _found(1).items() if k != "source"})
     ocr = {**_found(1), "source": "attachment_ocr", "source_key": "attachment_ocr:a"}
     assert view.reset_fact_key(ocr) != view.reset_fact_key({**ocr, "source_key": "attachment_ocr:b"})
+
+
+def test_an_empty_prior_shows_every_fact_first_found_after_the_reset():
+    db = _db(reset_at=500.0)
+    _prior(db)   # the patient had records but no published context when the reset ran
+    groups = _changes(db)
+    assert [item["message_id"] for item in groups["backfill_found"]] == [1]

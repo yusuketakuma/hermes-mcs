@@ -110,9 +110,12 @@ def test_reset_keeps_the_identity_of_each_patients_published_facts(built, tmp_pa
     cloud_policy.stop(ledger)
     found = reset.preview(ledger.db, cfg=off, now=clock.wall)
     assert _apply(ledger, off, _request(found["preview_hash"]), clock.wall, tmp_path)[0] is None
-    rows = ledger.artifacts(view.RESET_PRIOR_KIND)
-    assert [(row["project_id"], json.loads(row["content"])) for row in rows] == [(1, expected)]
-    assert all(fact.get("text") not in row["content"] for row in rows for fact in doc["facts"] if fact.get("text"))
+    rows = {row["project_id"]: json.loads(row["content"]) for row in ledger.artifacts(view.RESET_PRIOR_KIND)}
+    assert rows[1] == expected
+    unpublished = {row[0] for row in ledger.db.execute("SELECT DISTINCT project_id FROM messages")} - {1}
+    assert all(rows[pid] == [] for pid in unpublished), "a patient without a context holds no known facts"
+    assert all(fact.get("text") not in json.dumps(keys) for keys in rows.values() for fact in doc["facts"]
+               if fact.get("text"))
 
 
 def test_context_rebuilds_after_reset(built, tmp_path):
