@@ -143,6 +143,12 @@ gh secret set OPENAI_API_KEY --repo $R
 - Claude GitHub App をこのリポジトリにインストールします（https://github.com/apps/claude）。
 - `merge-gate` を main-protect の必須チェックに足すのは、合成の試験 PR でゲートの不合格を確かめてからにします。
 - 自動マージを使うときは、Settings → General の Allow auto-merge をオンにします。
+- GitHub は 2026-12-02 から、公開リポジトリの `pull_request_target` で起動するワークフローを既定で止めます。
+  このため Settings → Actions → Policies に、Actions event policy（`allow-pull-request-target-for-control-workflows`）を1つ作成済みです。
+  対象は `agent-control.yml` と `labeler.yml` の2本、許可イベントは `pull_request_target`・`workflow_run`・`issues` です。
+- この policy が無いと、2本が起動時に失敗（startup failure）します。push 直後の `merge-gate` の「実行待ち」表示、担当ラベルの整理、
+  PR ラベルの自動付与が止まります。CI 完了後の `merge-gate` の判定は止まりません。
+- `pull_request_target` を使うワークフローを増やすとき、または `agent-control.yml` の起動イベントを増やすときは、この policy も合わせて更新します。
 
 ## データの扱い
 
