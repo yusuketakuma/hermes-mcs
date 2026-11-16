@@ -23,7 +23,9 @@ def _main_files():
     found = set()
     for path in ROOT.rglob('__main__.py'):
         rel = path.relative_to(ROOT).as_posix()
-        if '.git' in rel.split('/') or '__pycache__' in rel.split('/'):
+        parts = rel.split('/')
+        # hidden directories (.git, a checkout-local .venv) and caches hold no repository entry point
+        if any(part.startswith('.') for part in parts[:-1]) or '__pycache__' in parts:
             continue
         found.add(rel)
     return found
