@@ -90,11 +90,23 @@ P0 は、1回だけ行う消去と作り直しの前に必ず入れる変更で�
 
 `_context_scan_cloud_pins` を新設し、次の受領行を残します。
 
-- 対象は、現行で無効になっていない scan chunk・scan・公開版の meta の `cloud_receipts` が参照する予約です。
-- その予約の reserve・result・disposition の各行を、まとめて残します。
-- meta が不正な患者は、その患者の行をすべて残します。
+- 対象は、現行の版（`current_meta_pred` と同じ判定）の scan chunk・scan・公開版の meta の `cloud_receipts` が参照する予約です。`invalidated` は見ません（改訂 5）。
+- 要約修復の予約も残します。`quality_repair_ref` は予約を直接指さず、修復候補の行（`{artifact_id, digest}`）を指します。予約は、同じ `input_key` を持つ `patient_context_summary_quality_repair_v1` の meta（`reservation_artifact_id`・`reservation_id`）から取ります。現行の版の修復行は、公開版に `quality_repair_ref` が無くても残します（`_profiled_summary_repair_exists` が同じ予約を読むため）。
+- その予約の reserve・result・disposition の各行を、`reservation_id` で追ってまとめて残します。同じ `reservation_id` を持つ別患者の行も、矛盾の証拠として残します。
+- meta が不正な患者（JSON として読めない・重複キー・版の値が不正・`cloud_receipts` や `quality_repair_ref` の形が不正・`quality_repair_ref` から予約へ辿れない）は、その患者の reserve・result・disposition をすべて残します。
+- `cloud_receipts` キーが無いクラウド由来の行は、指し先が無いので残しません。旧形式の行のほか、現行の版でも回答済みの予約が無い単位はこのキーを持ちません（`patient_context_refresh.py` は `answered_reservations` が空のとき書かない）。
+  この行は62日後に受領行が消えると、`guard_context_origins` が履歴0件として `patient_context_cloud_source_unverified` で拒否します（`test_summary_without_receipt_refs_is_refused_after_retention` が固定）。患者単位で受領行を残すか、作り直しで解消するかは所有者の判断待ちです。
+- 参照が残る限り、受領行は削除されません。置き換えられた古い chunk・過去の公開版も現行の版なら参照として数えるので、古い行の整理（P0-5）か消去をするまで受領行は増えます。
 
-使用額・集計・再送防止の判定は日付の窓で絞って読むので、影響しません。
+使用額と月次・期間の集計は日付の窓で絞って読むので、残した行は影響しません。
+再送防止（`cloud_policy._verified_request_history`）は窓なしで読むので、残した行は同じ入力の判定に使われ続けます。
+result だけが残ると `cloud_unit_unresolved` で送信が止まるため、予約単位で丸ごと残します。
+
+再現テストは `tests/patients/test_context_receipt_retention.py` です。pin が無いと、次の3か所が受領行の欠落で拒否します。
+
+- 要約の作り直し・更新: `guard_cloud_sources` → `guard_context_origins` → `reservation_evidence_batch` が `ValueError` を出し、`patient_context_cloud_not_sent`（`guard_error=ValueError`）で先送りになる。
+- 公開版の再確認: `guard_context_origins`（unit `summary`）が `ValueError` を出す。
+- 修復済みの要約の表示: `_summary_repair_publication` → `verify_cloud_repair_evidence` が通らず、`context_view_input` が None を返す。
 
 ## 所有者の決定（未決）
 
@@ -126,7 +138,7 @@ P0 は、1回だけ行う消去と作り直しの前に必ず入れる変更で�
 - 設計書は、契約に入るのを plan・projection・dependency_loss のhashだけとしています。しかし実際には、`patient_context_scan.py` は契約に入っておらず、品質確認は `_quality_code` を通じてほぼ全コードに結び付いています。
 - 設計書は projection を要約側として扱っていますが、scan 側の `annotate` を含んでいます。
 - `PATIENT_CONTEXT_VERSION` は `extract_llm_source_contract.py:40` で定義され、`extract_llm.PATIENT_CONTEXT_VERSION` として参照されています。
-- `CLOUD_SEND_FOUNDATION_DESIGN_20261115.md` §6 の maintenance の行番号がずれています（実際は修復の pin が :1093、添付OCRの pin が :1225）。
+- `CLOUD_SEND_FOUNDATION_DESIGN_20261115.md` §6 の maintenance の行番号がずれています（修復の pin は `_source_repair_cloud_pins`、添付OCRの pin は `_attachment_cloud_pins`、患者コンテキストの pin は `_context_scan_cloud_pins`。行番号は変わるので関数名で参照する）。
 
 ## 改訂（2026-11-15、計画レビュー・切替レビュー・安定性レビューと所有者の決定の反映）
 
