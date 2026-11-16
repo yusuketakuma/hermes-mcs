@@ -65,6 +65,7 @@ def _reprocess_proof_generation(ledger, cfg, scfg):
     import patient_context_refresh
     import rollup
     import cloud_inference
+    import local_llm
     cloud = cfg.get('cloud_llm', {})
     cloud = cloud if isinstance(cloud, dict) else {'mode': 'invalid'}
     contract_cfg = dict(cfg)
@@ -79,7 +80,11 @@ def _reprocess_proof_generation(ledger, cfg, scfg):
         'execution': runtime.execution_generation(scfg),
         'semantic': {key: scfg.get(key) for key in ('mode', 'summary_mode', 'loop_mode',
                      'extract_qc', 'project_ids', 'candidate_fingerprint')},
-        'context': patient_context_refresh._contract(cfg),
+        # Scan and summary contracts keep dependency coverage; the local model
+        # only rechecks completion, it never invalidates an artifact.
+        'context': {'scan': patient_context_refresh._contract(),
+                    'summary': patient_context_refresh._summary_contract(),
+                    'local_model': local_llm.resolve(cfg)[1]},
         'context_options': patient_context_refresh.options(cfg),
         'cloud': {key: cloud.get(key) for key in ('mode', 'routes', 'project_ids', 'exclude_project_ids', 'model')},
         'cloud_contract': cloud_inference.cloud_provider_contract(contract_cfg),

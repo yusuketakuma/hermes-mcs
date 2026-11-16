@@ -4,6 +4,7 @@ import patient_context_refresh_readiness
 import patient_context_refresh_sources
 import patient_context_refresh_state
 import patient_context_plan as context_plan
+import patient_context_selection
 import mcs_queries
 import copy
 from contextlib import closing
@@ -308,7 +309,7 @@ def test_missing_chunk_cannot_leave_a_complete_checkpoint(runtime):
     with led.db:
         led.db.execute('DELETE FROM artifacts WHERE kind=?',(patient_context_refresh_state.CHUNK,))
     snapshot,_,pending = patient_context_refresh_readiness._pending(led.db,1,CFG)
-    scan = patient_context_refresh_sources._current_scans(led.db,1,snapshot['sources'],snapshot['contract'])[1]
+    scan = patient_context_refresh_sources._current_scans(led.db,1,snapshot['sources'],snapshot['route'])[1]
     assert not scan['complete'] and scan['cursor'] == 0 and pending['B']
 
 
@@ -361,7 +362,7 @@ def test_sticky_invalidated_context_never_reenters_scan_or_published_fact_reader
     with led.db:
         led.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true')) WHERE kind=?",(kind,))
     snapshot, _, pending = patient_context_refresh_readiness._pending(led.db,1,CFG)
-    scans = patient_context_refresh_sources._current_scans(led.db,1,snapshot['sources'],snapshot['contract'])
+    scans = patient_context_refresh_sources._current_scans(led.db,1,snapshot['sources'],snapshot['route'])
     assert pending['B'] and not scans.get(1,{}).get('complete')
     hydrated = patient_context_refresh_sources._snapshot(led.db,1,CFG)
     facts, total = patient_context_refresh_sources._all_facts(led.db,1,hydrated,'synthetic')
@@ -523,7 +524,7 @@ def _clinical_source(led, mid, body, day, *, pid=1, dose=None):
     item = assertion(body, details=details)
     row = led.db.execute('SELECT content_hash FROM messages WHERE message_id=?', (mid,)).fetchone()
     led.artifact_add('extract_v1', json.dumps({'patient_context':[item]}), project_id=pid, message_id=mid,
-        meta={VERSION_KEY:patient_context_refresh_state.CURRENT_VERSION, 'hash':row[0], 'rule_version':patient_context_refresh_state._contract(CFG)['rule']})
+        meta={VERSION_KEY:patient_context_refresh_state.CURRENT_VERSION, 'hash':row[0], 'rule_version':patient_context_refresh_state._contract()['rule']})
     _raw_proof(led, pid, mid)
     _semantic_proof(led, pid, mid)
     return next(mcs_queries.patient_context_sources(led.db,pid,mid=mid)), item
@@ -532,7 +533,8 @@ def _clinical_source(led, mid, body, day, *, pid=1, dose=None):
 def _delete_supported_stop(led, mid=2, *, pid=1):
     raw, item = _clinical_source(led, mid, '本人は本日薬剤Aを中止しました。', '2026-10-02', pid=pid)
     facts = context_plan.source_facts(raw, [item], workday_id='synthetic', discovery='backfill_found', found_at=patient_context_refresh_state.time.time())
-    assert facts[0]['temporal']['use_state'] == 'stopped'
+    assert 'temporal' not in facts[0]
+    assert state.with_temporal(facts[0], raw['body_text'])['temporal']['use_state'] == 'stopped'
     with led.db:
         aid = led.artifact_add_tx(patient_context_refresh_state.CHUNK, json.dumps({'facts':facts}), project_id=pid, message_id=mid,
                                  meta={VERSION_KEY:patient_context_refresh_state.CURRENT_VERSION})
@@ -603,13 +605,17 @@ def test_dependency_rule_code_is_a_real_contract_input_and_invalidates_completio
     finish(runtime)
     before = patient_context_refresh_readiness.inference_coverage(led.db,1,CFG)
     assert before['complete']
-    assert before['contract']['dependency_code'] == patient_context_refresh_state._DEPENDENCY_CODE
-    assert patient_context_refresh_state._DEPENDENCY_CODE == hashlib.sha256(Path(loss.__file__).read_bytes()).hexdigest()
-    monkeypatch.setattr(patient_context_refresh_state,'_DEPENDENCY_CODE','f'*64 if patient_context_refresh_state._DEPENDENCY_CODE != 'f'*64 else 'e'*64)
+    # Dependency loss is summary-side: its code is in the summary contract only.
+    assert before['summary_contract']['code'] == patient_context_refresh_state._SUMMARY_CODE
+    assert 'dependency_code' not in before['contract']
+    assert patient_context_refresh_state._SUMMARY_CODE == hashlib.sha256(b''.join(Path(module.__file__).read_bytes()
+        for module in (patient_context_selection, state, loss))).hexdigest()
+    monkeypatch.setattr(patient_context_refresh_state,'_SUMMARY_CODE','f'*64 if patient_context_refresh_state._SUMMARY_CODE != 'f'*64 else 'e'*64)
     after = patient_context_refresh_readiness.inference_coverage(led.db,1,CFG)
     assert after['source_sig'] != before['source_sig']
     assert not after['complete'] and not after['publication_eligible']
-    assert after['sources']['scanned'] == 0 and not after['summary']['current']
+    # Only the summary is rebuilt: every source scan stays current.
+    assert after['sources']['scanned'] == before['sources']['scanned'] and not after['summary']['current']
     assert patient_context_refresh_readiness.context_view_input(led.db,1,cfg=CFG) is None
 
 
@@ -775,7 +781,7 @@ def _retain_context_as_legacy(led):
             meta = json.loads(raw_meta)
             assert meta[VERSION_KEY] == CURRENT_VERSION
             meta[VERSION_KEY] = LEGACY_VERSION
-            for key in ('contract', 'route_contract'):
+            for key in ('contract',):
                 if isinstance(meta.get(key), dict):
                     meta[key] = {**meta[key], VERSION_KEY: LEGACY_VERSION}
             led.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?',
@@ -898,6 +904,7 @@ def test_karte_relative_time_uses_only_aware_original_time_and_keeps_the_origina
     assert raw['content_hash'] == patient_context_refresh_state._digest(json.loads(row[1]))
     item = assertion(body, details=[{'key':'drug_name','value':'薬剤A','evidence':body}])
     fact = context_plan.source_facts(raw,[item],workday_id='synthetic',discovery='backfill_found', found_at=patient_context_refresh_state.time.time())[0]
+    fact = state.with_temporal(fact, raw['body_text'])
     assert fact['temporal']['event_day'] == expected
     assert fact['temporal']['posted_day'] == expected
     assert (raw['posted_at_ts'] is None) == (expected is None)

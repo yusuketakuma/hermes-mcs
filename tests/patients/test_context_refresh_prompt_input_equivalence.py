@@ -16,8 +16,7 @@ import extract_llm
 import inference_version
 import patient_context
 import patient_context_plan as context_plan
-import patient_context_schedule
-import patient_context_selection
+import patient_context_scan
 from extract_testkit import _ledger, _message, _hash
 from test_patient_context_refresh import runtime as runtime, seed, finish, document, CFG
 
@@ -181,30 +180,30 @@ def test_detail_key_prompt_invalidates_prior_success_via_existing_checks(runtime
     with monkeypatch.context() as legacy:
         # Pin the actual previous plan bytes and the previous scan payload.
         # Stored successes are produced through the normal synthetic worker.
-        legacy.setattr(patient_context_refresh_state, '_CHECKS', LEGACY_PLAN_CHECKS)
+        legacy.setattr(patient_context_refresh_state, '_SCAN_CODE', LEGACY_PLAN_CHECKS)
         legacy.setattr(context_plan, 'scan_schema', lambda: {'categories': EXPECTED_CATEGORIES[:]})
         legacy.setattr(context_plan, 'SCAN_INSTRUCTION', LEGACY_INSTRUCTION)
-        old_contract = patient_context_refresh_state._contract(CFG, 1)
+        old_route = patient_context_refresh_state._route(CFG, 1)
         finish(runtime)
         old_document = document(led)
         assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is not None
         old_snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG)
         old_scans = patient_context_refresh_sources._current_scans(
-            led.db, 1, old_snapshot['sources'], old_contract, cfg=CFG)
+            led.db, 1, old_snapshot['sources'], old_route, cfg=CFG)
         assert old_scans and all(scan['complete'] for scan in old_scans.values())
         assert not any(patient_context_refresh_readiness._pending(led.db, 1, CFG, now=clock.wall)[2].values())
-    new_contract = patient_context_refresh_state._contract(CFG, 1)
-    assert patient_context_refresh_state._CHECKS == hashlib.sha256(b''.join(
-        Path(module.__file__).read_bytes()
-        for module in (context_plan, patient_context_selection, patient_context_schedule))).hexdigest()
-    assert patient_context_refresh_state._CHECKS != LEGACY_PLAN_CHECKS
-    assert new_contract != old_contract
-    assert {**old_contract, 'context_checks': patient_context_refresh_state._CHECKS} == new_contract
+    new_route = patient_context_refresh_state._route(CFG, 1)
+    # The scan contract covers the planner and the scan transformer only.
+    assert patient_context_refresh_state._SCAN_CODE == hashlib.sha256(b''.join(
+        Path(module.__file__).read_bytes() for module in (context_plan, patient_context_scan))).hexdigest()
+    assert patient_context_refresh_state._SCAN_CODE != LEGACY_PLAN_CHECKS
+    assert new_route['contract'] != old_route['contract']
+    assert {**old_route['contract'], 'scan_code': patient_context_refresh_state._SCAN_CODE} == new_route['contract']
     assert inference_version.CURRENT_VERSION == '1.0'
     assert inference_version.LLM_EXTRACT_VERSION == extract_llm.EXTRACT_VERSION == 11
     snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG)
     assert patient_context_refresh_sources._current_scans(
-        led.db, 1, snapshot['sources'], new_contract, cfg=CFG) == {}
+        led.db, 1, snapshot['sources'], new_route, cfg=CFG) == {}
     assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
     assert patient_context_refresh_readiness._pending(led.db, 1, CFG, now=clock.wall)[2]['B'] is True
     assert document(led) == old_document

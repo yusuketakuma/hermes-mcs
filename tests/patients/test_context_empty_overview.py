@@ -118,9 +118,10 @@ def test_nonempty_source_with_no_facts_still_runs_source_and_summary_quality(run
     # the real audit receipts while reproducing only that stored backend form.
     _, meta = state._latest(led.db, state.KIND, 1)
     audit_key = meta['quality_audit_key']
-    meta['contract'] = meta.pop('route_contract')
-    meta['provider'] = meta['contract']['provider']
+    meta.pop('local_fallback')
+    meta['provider'] = meta.pop('route_provider')
     meta['model'] = meta['provider']['model']
+    meta['provenance'] = {'backend': meta['provider']['backend'], 'model': meta['model'], 'profile': None}
     meta.pop('quality_schedule_key')
     with led.db:
         led.db.execute('UPDATE artifacts SET meta=? WHERE kind=? AND project_id=1',

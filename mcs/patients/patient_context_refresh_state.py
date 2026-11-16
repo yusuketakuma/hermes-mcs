@@ -15,7 +15,7 @@ from mcs_queries import JST
 from mcs_util import loads_dict, valid_hash
 from inference_version import CURRENT_VERSION, VERSION_KEY, current_meta_pred
 import patient_context_plan as context_plan
-import patient_context_schedule as context_schedule
+import patient_context_scan as context_scan
 import patient_context_selection as context_selection
 import mcs_queries as context_queries
 import patient_context_projection as context_state
@@ -73,22 +73,30 @@ _INTERNAL_PROOF = "__mcs_internal_proof_v1"
 CONTRACT = "patient-context-nightly/1"
 
 
+SUMMARY_CONTRACT = "patient-context-summary/1"
+
+
 CALL_SECONDS = 300
 
 
-# The source scan plan, the summary selection and the lane rotation moved out
-# of it are one check identity; one file per module, hashed in this order.
-# Temporary: the whole schedule file is hashed, so the bookmark planner plan()
-# is covered too and editing it rebuilds every scan. P0-2a's contract split
-# removes it from context_checks.
-_CHECKS = hashlib.sha256(b"".join(Path(module.__file__).read_bytes()
-                                  for module in (context_plan, context_selection, context_schedule))).hexdigest()
+def _code(*modules):
+    return hashlib.sha256(b"".join(Path(module.__file__).read_bytes() for module in modules)).hexdigest()
 
 
-_STATE_CODE = hashlib.sha256(Path(context_state.__file__).read_bytes()).hexdigest()
+# Scan contract: the code that plans chunks, asks for and quotes source facts.
+# Facts store no read-time interpretation (temporal is computed on reading).
+_SCAN_CODE = _code(context_plan, context_scan)
 
 
-_DEPENDENCY_CODE = hashlib.sha256(Path(dependency_loss.__file__).read_bytes()).hexdigest()
+# Attachment scan items are seeded at read time through the clinical state
+# adapter; source_signature binds only the extraction artifact. Until D1 binds
+# the actual scan input, that interpretation stays a scan dependency.
+_ATTACHMENT_ITEMS_CODE = _code(context_state)
+
+
+# Summary contract: fact selection, read-time temporal projection and
+# dependency loss. Lane rotation and the bookmark planner only schedule work.
+_SUMMARY_CODE = _code(context_selection, context_state, dependency_loss)
 
 
 COMMIT_MARGIN = cloud_inference.COMMIT_MARGIN
@@ -158,8 +166,28 @@ def _artifact_meta(kind, meta, mid):
         meta.setdefault("source_key", mid if mid is not None else 0)
     if kind == SCAN:
         meta['backend_slot'] = _digest([meta.get('contract'), meta.get('provider'),
-                                        meta.get('source_binding')])
+                                        meta.get('source_binding'), _local_producer(meta)])
     return meta
+
+
+def _local_producer(meta):
+    """The local model of a locally produced row; a cloud row never depends on it."""
+    return None if meta.get("provider") else (meta.get("provenance") or {}).get("model")
+
+
+def _unit_key(source_sig, chunk_span, contract, provider, local_model, occurrence):
+    """One source unit per input, scan contract and producing backend.
+
+    `provider` is the route's provider (a local fallback keeps its cloud route),
+    so a fallback unit never collides with a plain local unit of the same model."""
+    return _digest([source_sig, chunk_span, contract, provider, local_model, occurrence])
+
+
+def _stored_unit_key(meta, chunk_span):
+    """The unit key of a stored source unit, from its own backend identity."""
+    return _unit_key(meta["source_sig"], chunk_span, meta["contract"],
+                     meta.get("provider") or meta.get("route_provider"),
+                     _local_producer(meta), meta["source_occurrence"])
 
 
 def _replace(ledger, kind, pid, content, meta, mid=None, *, write_count=None):
@@ -189,7 +217,7 @@ def _save_source_chunk_tx(ledger, pid, mid, source_key, chunk_span, facts, meta)
     """Replace one source unit and its dependency record within the borrowed writer transaction."""
     if not ledger.db.in_transaction:
         raise RuntimeError("patient_context_source_transaction_required")
-    unit_key = _digest([meta["source_sig"], chunk_span, meta["contract"], meta.get("provider"), meta["source_occurrence"]])
+    unit_key = _stored_unit_key(meta, chunk_span)
     parts = max(1, math.ceil(len(facts) / context_plan.MAX_SOURCE_FACTS))
     # A unit's complete shard set and cursor advance have one owner TX.
     # An empty successful unit still proves its source interval was visited.
@@ -234,22 +262,62 @@ def _adoption_epoch_expected(db):
     return row[0], expected
 
 
-def _contract(cfg, pid=None):
+def _contract():
+    """Scan contract: code and versions only, never a backend or model name."""
     import extract_llm
+    import extract
+    return {"version": CONTRACT, VERSION_KEY: CURRENT_VERSION, "chunks": PLAN_VERSION, "facts": 2,
+            "scan_code": _SCAN_CODE, "attachment_items_code": _ATTACHMENT_ITEMS_CODE,
+            "rule": extract.RULE_VERSION, "llm": extract_llm.EXTRACT_VERSION,
+            "context": extract_llm.PATIENT_CONTEXT_VERSION}
+
+
+def _summary_contract():
+    """Summary contract: selection, read-time projection and dependency loss."""
+    return {"version": SUMMARY_CONTRACT, "code": _SUMMARY_CODE}
+
+
+def _checks():
+    """Retry marker: a contract code change reopens exhausted retries."""
+    return _digest([_SCAN_CODE, _SUMMARY_CODE])
+
+
+def _route(cfg, pid=None):
+    """Accepted provenance for this patient: the scan contract, the eligible cloud provider and the local model."""
     import cloud_inference
     import cloud_policy
-    import extract
-    contract = {"version": CONTRACT, VERSION_KEY: CURRENT_VERSION, "chunks": PLAN_VERSION,
-            "facts": 2, "context_checks": _CHECKS, "state_code": _STATE_CODE, "dependency_code": _DEPENDENCY_CODE,
-            "rule": extract.RULE_VERSION, "llm": extract_llm.EXTRACT_VERSION,
-            "context": extract_llm.PATIENT_CONTEXT_VERSION,
-            "model": local_llm.resolve(cfg)[1]}
+    route = {"contract": _contract(), "provider": None,
+             "local_model": local_llm.resolve(cfg)[1], "local_model_pinned": True}
     if pid is not None:
         settings = cloud_inference.resolve_cloud_settings(cfg)
         if (settings["mode"] == "on"
                 and cloud_policy.eligible(settings, "patient_context", pid)):
-            contract["provider"] = cloud_inference.cloud_provider_contract(cfg, route="patient_context", purpose="patient_context")
-    return contract
+            route["provider"] = cloud_inference.cloud_provider_contract(cfg, route="patient_context", purpose="patient_context")
+    return route
+
+
+def _local_provenance(cfg):
+    return {"backend": "local", "model": local_llm.resolve(cfg)[1], "profile": None}
+
+
+def _cloud_provenance(provider_contract, model, selection):
+    return {"backend": provider_contract.get("backend"), "model": model,
+            "profile": (selection or {}).get("profile")}
+
+
+# Backend identity of one artifact, copied as a whole whenever a row is reused.
+_BACKEND_KEYS = ("contract", "provider", "route_provider", "local_fallback", "model", "provenance")
+
+
+def _record_backend(meta, provenance, *, provider=None, route_provider=None):
+    """Record which backend produced this artifact; a local result under a cloud route is a fallback."""
+    for key in ("provider", "route_provider", "local_fallback"):
+        meta.pop(key, None)
+    if provider is not None:
+        meta["provider"] = provider
+    elif route_provider is not None:
+        meta.update(route_provider=route_provider, local_fallback=True)
+    meta.update(model=provenance["model"], provenance=provenance)
 
 
 def _sources_intact(sources):
@@ -269,11 +337,12 @@ def _cloud_input_binding(db, pid, snapshot):
             bindings.append(dependency_loss.source_binding(db, pid, 0, source_key=context_plan.source_key(source)))
     if any(not valid_hash(binding) for binding in bindings):
         raise ValueError('patient_context_cloud_source_changed')
-    return _digest([snapshot['source_sig'], snapshot['contract'], bindings,
+    # The scan-side signature: a summary-only code change keeps paid scan units.
+    return _digest([snapshot['scan_source_sig'], snapshot['contract'], snapshot['route']['provider'], bindings,
                     [(context_plan.source_key(s), s.get('first_seen')) for s in snapshot['sources']]])
 
 
-_route_contract = context_artifacts.route_contract
+route_accepts = context_artifacts.route_accepts
 
 
 def _quality_code():

@@ -680,10 +680,11 @@ def _sealed_context(store, source, facts, *, original_facts=(), repair_input_key
     model, effort = anthropic_client.ORIGINAL_CONTRACT
     provider = cloud_inference.cloud_provider_contract(selection={
         'provider': 'anthropic', 'model': model, 'effort': effort})
-    contract = {'model': 'synthetic-local', 'provider': provider}
+    contract = {'synthetic': 'scan-contract'}
     origin = {VERSION_KEY: CURRENT_VERSION, 'repair_input_key': repair_input_key or 'd' * 64, 'source_key': source_key,
         'source_sig': source_sig or 'a' * 64, 'source_binding': binding, 'contract': contract,
-        'provider': provider, 'model': provider['model']}
+        'provider': provider, 'model': provider['model'],
+        'provenance': {'backend': provider['backend'], 'model': provider['model'], 'profile': None}}
     scope = dict(store.db.execute('SELECT project_id,project_type,karte_id,is_archived FROM patients WHERE project_id=?', (pid,)).fetchone())
     origin.update(source_occurrence={'source_binding': binding, 'first_seen': source.get('first_seen'), 'scope': scope},
                   source_occurrence_version=1, body_length=len(source['body_text']))
@@ -887,7 +888,7 @@ def test_staging_range_mode_is_explicit_and_split_slots_do_not_supply_facts(stor
         doc['phase'] = 'split'
         store.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(doc), fixture['candidate']))
     args = {'source_sig': origin['source_sig'], 'source_binding': origin['source_binding'],
-            'contract': origin['contract'], 'body_size': len(source['body_text'])}
+            'binding': context_artifacts.quality_binding(origin), 'body_size': len(source['body_text'])}
     assert len(context_artifacts.staged_rows(store.db, 1, 1, fixture['ref']['repair_input_key'], require_complete=False, **args)) == 1
     with pytest.raises(ValueError):
         context_artifacts.staged_rows(store.db, 1, 1, fixture['ref']['repair_input_key'], **args)
@@ -1184,7 +1185,8 @@ def test_cloud_candidate_capture_requires_genuine_source_qa_evidence(store, kind
     descriptor = {'v':1, 'assessment':assessment, 'policy': {key:policy.get(key) for key in
         ('model','match_threshold','nomatch_threshold','calibration_version','fact_source','candidate_fingerprint')}}
     model, effort = anthropic_client.ORIGINAL_CONTRACT
-    contract = {'model':'synthetic-local', 'provider':cloud_inference.cloud_provider_contract(selection={
+    # The source-QA identity binds the scan contract and the provider, never a local model.
+    contract = {'contract': {'synthetic': 'scan-contract'}, 'provider':cloud_inference.cloud_provider_contract(selection={
         'provider':'anthropic', 'model':model, 'effort':effort})}
     initial, _ = semantic_audit.patient_source_quality_identity(source, facts, occurrence, contract, '0' * 64, assessment)
     fixture = _sealed_context(store, source, facts, repair_input_key=initial['source_input_key'],
@@ -1229,7 +1231,8 @@ def test_cloud_candidate_capture_requires_genuine_source_qa_evidence(store, kind
             'text':correction_text, 'evidence':correction_text, 'subject':'patient',
             'details':[{'key':'drug_name','value':'合成薬A','evidence':correction_text}]}],
             workday_id='synthetic', discovery='new_report', found_at=1790000000.0)
-        assert len(correction_facts) == 1 and correction_facts[0]['temporal']['corrections']
+        assert len(correction_facts) == 1 and 'temporal' not in correction_facts[0]
+        assert state.with_temporal(correction_facts[0], correction_text)['temporal']['corrections']
         correction_id = store.artifact_add(context_artifacts.ORIGINAL_KIND, json.dumps({'facts':correction_facts}),
             project_id=1, message_id=2, meta={VERSION_KEY:CURRENT_VERSION,
                 'source_binding':loss.source_binding(store.db, 1, 2)})

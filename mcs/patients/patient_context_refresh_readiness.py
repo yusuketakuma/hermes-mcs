@@ -5,6 +5,8 @@ import math
 import sqlite3
 import cloud_inference
 import inference_dependency_loss as dependency_loss
+import local_llm
+import patient_context_artifacts as context_artifacts
 from mcs_util import html_to_text, loads_dict, valid_hash
 from inference_version import VERSION_KEY, current_meta_pred
 import patient_context_plan as context_plan
@@ -22,7 +24,7 @@ def inference_coverage(db, pid, cfg):
         return _inference_coverage(db, pid, cfg, snapshot, read_proof=proof_for(snapshot, cfg), proof_for=proof_for)
 
 
-def _summary_repair_publication(db, pid, cfg, doc, meta, captured, assessment, contract, *, read_proof=None):
+def _summary_repair_publication(db, pid, cfg, doc, meta, captured, assessment, route, *, read_proof=None):
     identity = captured['identity']
     rows = db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? "
         "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.input_key') END=? "
@@ -51,7 +53,7 @@ def _summary_repair_publication(db, pid, cfg, doc, meta, captured, assessment, c
         return False
     original_summary = [{'text': context_selection.summary_text(by_id[fid]), 'fact_ids': [fid]} for fid in ids]
     original = patient_context_refresh_sources._quality_capture(db, pid, cfg, proof.get('workday_id') or proof.get('night_id'), original_summary, assessment,
-                                doc['temporal_view'], contract=contract, read_proof=read_proof,
+                                doc['temporal_view'], route=route, read_proof=read_proof,
                                 source_keys=meta.get('source_scope'))['identity']
     if not patient_context_quality_receipts._quality_failed(db, pid, original):
         return False
@@ -94,8 +96,8 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta, *, read_proof=None):
     try:
         # Key availability controls new calls; cached evidence uses the configured scope.
         policy, errors = semantic_policy.semantic_config(cfg, key_present=True)
-        contract = _publication_contract(cfg, meta)
-        if errors or contract is None or not patient_context_quality_receipts._quality_scope_allowed(db, pid, policy):
+        route = _publication_route(cfg, meta)
+        if errors or route is None or not patient_context_quality_receipts._quality_scope_allowed(db, pid, policy):
             return False
         assessment = patient_context_refresh_state._quality_assessment(policy)
         owns_read = not db.in_transaction
@@ -107,14 +109,14 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta, *, read_proof=None):
                 return False
             patient_context_quality_receipts._quality_integrity(db, pid)
             captured = patient_context_refresh_sources._quality_capture(db, pid, cfg, meta.get("workday_id") or meta.get("night_id"), doc.get("summary"), assessment,
-                                        doc.get("temporal_view"), contract=contract, read_proof=read_proof, source_keys=meta.get('source_scope'))
+                                        doc.get("temporal_view"), route=route, read_proof=read_proof, source_keys=meta.get('source_scope'))
             if not patient_context_quality_receipts._quality_scope_allowed(db, pid, policy, captured["sources"]):
                 return False
             identity = captured["identity"]
             if (meta.get("quality_audit_key") != identity["audit_key"]
                     or semantic_runtime.patient_summary_request_problem(db, pid, identity, identity["fact_ids"])
                     or patient_context_quality_receipts._quality_failed(db, pid, identity)
-                    or not _summary_repair_publication(db, pid, cfg, doc, meta, captured, assessment, contract,
+                    or not _summary_repair_publication(db, pid, cfg, doc, meta, captured, assessment, route,
                                                        read_proof=read_proof)):
                 return False
             selected = {row["fact_ids"][0] for row in doc["summary"]}
@@ -145,8 +147,8 @@ def _needs_cloud_scan(scan, cloud_scan):
 
 def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None, proof_for=None):
     sources = snapshot["sources"]
-    scans = patient_context_refresh_sources._scans_from_read(db, pid, sources, snapshot["contract"], cfg, read_proof)
-    cloud_scanned = (not snapshot["contract"].get("provider") or all(
+    scans = patient_context_refresh_sources._scans_from_read(db, pid, sources, snapshot["route"], cfg, read_proof)
+    cloud_scanned = (not snapshot["route"]["provider"] or all(
         not _needs_cloud_scan(scans.get(context_plan.source_key(source), {}), True)
         for source in sources if context_plan.source_usable(source)))
     counts = dict.fromkeys(("total", "eligible", "scanned", "audited", "skipped", "pending", "held", "failed",
@@ -177,7 +179,7 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None, proof_for=No
     if source_keys is None and meta.get('source_scope') is not None:
         try:
             published_snapshot = patient_context_refresh_sources._snapshot(
-                db, pid, cfg, hydrate=False, contract=snapshot['contract'], source_keys=meta['source_scope'])
+                db, pid, cfg, hydrate=False, route=snapshot['route'], source_keys=meta['source_scope'])
             snapshots[patient_context_refresh_sources._source_scope(meta['source_scope'])] = published_snapshot
             publication = _inference_coverage(db, pid, cfg, published_snapshot,
                 read_proof=proof_for(published_snapshot, cfg) if proof_for is not None else None,
@@ -186,7 +188,7 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None, proof_for=No
             pass
     progress_current = _bound_signature_matches(db, pid, cfg, progress, snapshot, snapshots)
     current = (meta.get("summary_checked") is True and meta.get("source_sig") == snapshot["source_sig"]
-               and patient_context_refresh_state._route_contract(meta) == snapshot["contract"]
+               and patient_context_refresh_state.route_accepts(snapshot["route"], meta)
                and (source_keys is None or len(sources) == len(source_keys))
                and meta.get("scan_sig") == patient_context_refresh_state._scan_sig(db, pid, source_keys=source_keys)
                and patient_context_refresh_sources._summary_valid(db, pid, doc, {context_plan.source_key(s): s for s in sources},
@@ -256,7 +258,8 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None, proof_for=No
             "attachments": snapshot["attachment_coverage"],
             "dependencies": {key: snapshot["dependencies"][key] for key in ("complete", "gaps", "signature", "coverage")
                              if key in snapshot["dependencies"]},
-            "source_sig": snapshot["source_sig"], "contract": snapshot["contract"]}
+            "source_sig": snapshot["source_sig"], "contract": snapshot["contract"],
+            "summary_contract": snapshot["summary_contract"]}
 
 
 def _saved_cloud_contract(provider):
@@ -267,22 +270,25 @@ def _saved_cloud_contract(provider):
     return contract if cloud_inference.is_supported_cloud_contract(contract) else None
 
 
-def _publication_contract(cfg, meta):
-    stored = patient_context_refresh_state._route_contract(meta)
-    if stored is None:
+def _publication_route(cfg, meta):
+    """Accept a published generation by its stored provenance, not by the runtime route.
+
+    A cloud generation stays acceptable while its provider contract is current:
+    a cloud mode or key switch, or a local model change, never hides it. A local
+    generation (including a local fallback under a cloud route) is pinned to the
+    configured local model; a snapshot reader without settings accepts the stored
+    one, the scan signature still pinning every row read. Changing the local model
+    therefore hides a cloud generation only while its local fallback sources rebuild."""
+    contract = patient_context_refresh_state._contract()
+    if context_artifacts.provenance(meta) is None or meta.get("contract") != contract:
         return None
-    # A snapshot reader uses the generation's pinned contract; live callers
-    # supply cfg and reject a changed rule version or local model. The stored
-    # backend stays acceptable while its request shape is current: a cloud
-    # mode or key switch alone must not hide a published context.
-    pinned = patient_context_refresh_state._contract(cfg or {})
-    if cfg is None:
-        pinned["model"] = stored.get("model")
-    if "provider" in stored:
-        if _saved_cloud_contract(stored["provider"]) != stored["provider"]:
-            return None
-        pinned["provider"] = stored["provider"]
-    return pinned if stored == pinned else None
+    provider = meta.get("provider") if meta.get("provider") is not None else meta.get("route_provider")
+    if provider is not None and _saved_cloud_contract(provider) != provider:
+        return None
+    route = {"contract": contract, "provider": provider, "local_model": None, "local_model_pinned": False}
+    if cfg is not None:
+        route.update(local_model=local_llm.resolve(cfg)[1], local_model_pinned=True)
+    return route if context_artifacts.route_accepts(route, meta) else None
 
 
 def context_view_input(db, pid, *, cfg=None):
@@ -311,17 +317,17 @@ def _context_view_input(db, pid, *, cfg, proof_for):
     as_of = doc.get("as_of")
     if type(as_of) not in (float, int) or not math.isfinite(as_of):
         return None
-    pinned = _publication_contract(cfg, meta)
+    pinned = _publication_route(cfg, meta)
     if pinned is None:
         return None
     try:
         source_keys = patient_context_refresh_sources._source_scope(meta.get('source_scope'))
-        current = patient_context_refresh_sources._snapshot(db, pid, cfg or {}, hydrate=False, contract=pinned, source_keys=source_keys)
+        current = patient_context_refresh_sources._snapshot(db, pid, cfg or {}, hydrate=False, route=pinned, source_keys=source_keys)
     except (ValueError, TypeError):
         return None
     if current["source_sig"] != meta.get("source_sig"):
         return None
-    # The pinned publication contract can differ from the runtime route.
+    # The pinned publication route can differ from the runtime route.
     proof = proof_for(current, cfg or {})
     if not _inference_coverage(db, pid, cfg or {}, current, read_proof=proof, proof_for=proof_for)["publication_eligible"]:
         return None
@@ -352,13 +358,13 @@ def _context_view_input(db, pid, *, cfg, proof_for):
     # current chunk remains available, while older original karte records are
     # returned explicitly as history, never substituted for the latest one.
     historical = {}
-    scans = patient_context_refresh_sources._scans_from_read(db, pid, current["sources"], current["contract"], cfg or {}, proof)
+    scans = patient_context_refresh_sources._scans_from_read(db, pid, current["sources"], current["route"], cfg or {}, proof)
     for key, source in sources.items():
         if not scans.get(key, {}).get("complete"):
             continue
         if "body_text" not in source:
             source["body_text"] = patient_context_refresh_sources._hydrate_source_body(db, pid, source)
-        for fact in patient_context_refresh_sources._scan_facts(db, pid, source, current["contract"], scans.get(key, {})):
+        for fact in patient_context_refresh_sources._scan_facts(db, pid, source, current["route"], scans.get(key, {})):
             if type(fact.get("found_at")) in (int, float) and fact["found_at"] <= as_of:
                 (historical if source.get("historical") else by_id).setdefault(fact["id"], fact)
     projection = context_state.project(dependency_loss.bind_facts(db, by_id.values()),
@@ -368,7 +374,7 @@ def _context_view_input(db, pid, *, cfg, proof_for):
         fact["view_bucket"] = buckets[fact["id"]]
     return {**doc, "facts": list(by_id.values()), "historical_facts": list(historical.values()),
             "temporal_view": projection,
-            "coverage": {**patient_context_refresh_sources._coverage(db, pid, current["sources"], current["contract"], list(by_id.values()),
+            "coverage": {**patient_context_refresh_sources._coverage(db, pid, current["sources"], current["route"], list(by_id.values()),
                 cfg=cfg or {}, read_proof=proof),
             "unreflected_since": as_of,
             "unreflected": current.get('source_coverage', {}).get('unreflected',
@@ -387,7 +393,7 @@ def _ready(progress, now):
     if (type(attempts) is not int or attempts < 0 or type(next_try) not in (int, float)
             or next_try < 0 or type(next_try) is float and not math.isfinite(next_try)):
         return False
-    if attempts >= 5 and progress.get("checks") == patient_context_refresh_state._CHECKS:
+    if attempts >= 5 and progress.get("checks") == patient_context_refresh_state._checks():
         last_attempt = progress.get("failure_at", next_try)
         if (not progress.get("failure") or type(last_attempt) not in (int, float)
                 or last_attempt < 0 or type(last_attempt) is float and not math.isfinite(last_attempt)):
@@ -434,14 +440,14 @@ def _bound_signature_matches(db, pid, cfg, record, snapshot, snapshots):
     # have to match; a hash-format change alone never re-arms the same retry.
     if recorded_scope not in snapshots:
         snapshots[recorded_scope] = patient_context_refresh_sources._snapshot(
-            db, pid, cfg, hydrate=False, contract=snapshot['contract'], source_keys=recorded_scope)
+            db, pid, cfg, hydrate=False, route=snapshot['route'], source_keys=recorded_scope)
     bound = snapshots[recorded_scope]
     return (tuple(context_plan.source_key(source) for source in bound['sources']) == keys
             and record.get('source_sig') == bound['source_sig'])
 
 
-def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for=None, cloud_scan=False, source_keys=None, observed_out=None):
-    snapshot = patient_context_refresh_sources._snapshot(db, pid, cfg, hydrate=False, contract=contract, source_keys=source_keys)
+def _pending(db, pid, cfg, *, now=None, route=None, estimate=False, proof_for=None, cloud_scan=False, source_keys=None, observed_out=None):
+    snapshot = patient_context_refresh_sources._snapshot(db, pid, cfg, hydrate=False, route=route, source_keys=source_keys)
     snapshots = {patient_context_refresh_sources._source_scope(snapshot.get('source_scope')): snapshot}
     progress, _ = patient_context_refresh_state._latest(db, patient_context_refresh_state.PROGRESS, pid)
     if not _bound_signature_matches(db, pid, cfg, progress, snapshot, snapshots):
@@ -453,7 +459,7 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
     estimate_cfg = (None if estimate and (not isinstance(block, dict)
                     or block.get("fact_source", "legacy") != "legacy") else cfg)
     proof = proof_for(snapshot, estimate_cfg) if proof_for is not None else None
-    stored = patient_context_refresh_sources._scans_from_read(db, pid, snapshot["sources"], snapshot["contract"], estimate_cfg, proof)
+    stored = patient_context_refresh_sources._scans_from_read(db, pid, snapshot["sources"], snapshot["route"], estimate_cfg, proof)
     if observed_out is not None:
         observed_out["scans"] = stored
     scans, required_scans = [], []
@@ -500,7 +506,7 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
                     or quality_changed
                     or progress.get("summary_pending", False))
     cloud_summary_needed = (cloud_scan and bool(old.get('facts'))
-                            and meta.get("provider") != snapshot["contract"].get("provider")
+                            and meta.get("provider") != snapshot["route"]["provider"]
                             and meta.get("local_fallback") is not True)
     local_ready = (not quality_required
                    or (source_keys is not None or snapshot["acquisition"]["complete"]) and snapshot["dependencies"]["complete"]
@@ -519,21 +525,21 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
     return snapshot, progress, pending
 
 
-def pending_estimate(db, pid, cfg, *, now=None, contract=None):
+def pending_estimate(db, pid, cfg, *, now=None, route=None):
     """Estimate pending work on a borrowed connection without reserving external requests."""
     empty = dict.fromkeys(("targets", "summary_units", "scan_sources", "scan_chunks_estimate", "input_chars"), 0)
     if not patient_context_refresh_state.options(cfg)["enabled"]:
         return empty
     from types import SimpleNamespace
-    cloud_scan = (bool(contract.get("provider")) if contract is not None else
+    cloud_scan = (bool(route["provider"]) if route is not None else
                   _cloud_scan_for(SimpleNamespace(db=db), cfg)(pid))
-    snapshot, _, pending = _pending(db, pid, cfg, now=now, contract=contract, estimate=True,
+    snapshot, _, pending = _pending(db, pid, cfg, now=now, route=route, estimate=True,
                                     cloud_scan=cloud_scan)
     if patient_context_refresh_state._out_of_scope(snapshot):
         return empty
     block = cfg.get("semantic", {}) if isinstance(cfg, dict) else {}
     estimate_cfg = None if not isinstance(block, dict) or block.get("fact_source", "legacy") != "legacy" else cfg
-    scans = patient_context_refresh_sources._current_scans(db, pid, snapshot["sources"], snapshot["contract"], cfg=estimate_cfg)
+    scans = patient_context_refresh_sources._current_scans(db, pid, snapshot["sources"], snapshot["route"], cfg=estimate_cfg)
     totals = {**empty, "targets": int(any(pending.values())), "summary_units": int(pending["A"])}
     for source in snapshot["sources"]:
         if not context_plan.source_usable(source):
@@ -967,7 +973,8 @@ def _readiness_environment(cfg, pid, *, dictionary=False, db=None):
     state = [semantic_runtime.config_generation(cfg),
              semantic_runtime.config_generation({'semantic': policy}),
              extract_llm.resolved_model(cfg), _required_cloud_extraction_contract(cfg, pid),
-             patient_context_refresh_state._contract(cfg, pid), patient_context_refresh_state.CURRENT_VERSION]
+             patient_context_refresh_state._route(cfg, pid), patient_context_refresh_state._summary_contract(),
+             patient_context_refresh_state.CURRENT_VERSION]
     if policy['mode'] != 'off':
         state.append(bool(semantic_jev.api_key()))
     if dictionary:

@@ -498,7 +498,7 @@ def test_requested_cloud_with_missing_key_falls_back_to_local(runtime, monkeypat
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: None)
     result = refresh.run_due(led, cfg, deadline=runtime[1].mono + 600, admit=lambda: True)
     assert result['status'] == 'progressed' and local_calls
-    assert patient_context_refresh_state._contract(cfg, 1).get('provider') == cloud_inference.cloud_provider_contract()
+    assert patient_context_refresh_state._route(cfg, 1)['provider'] == cloud_inference.cloud_provider_contract()
     for _ in range(60):
         result = step(runtime, cfg=cfg)
         if result['status'] == 'complete':

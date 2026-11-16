@@ -285,16 +285,16 @@ def _route_counts(db, cfg, settings, deadline):
     if "patient_context" in settings["routes"]:
         import patient_context_refresh as context
         import cloud_inference
-        # Resolve the semantic contract without consulting installation credentials.
-        contract = context._contract({**cfg, "cloud_llm": {"mode": "off"}})
+        # Resolve the accepted route without consulting installation credentials.
+        context_route = context._route({**cfg, "cloud_llm": {"mode": "off"}})
         if settings["mode"] == "on":
-            contract["provider"] = cloud_inference.cloud_provider_contract({"cloud_llm": settings})
+            context_route["provider"] = cloud_inference.cloud_provider_contract({"cloud_llm": settings})
         scope, params = _source_scope(settings, "p")
         rows = db.execute("SELECT p.project_id FROM patients p WHERE COALESCE(p.is_archived,0)=0"
                           + scope + " ORDER BY p.project_id", params)
         for count, row in enumerate(rows, 1):
             _checkpoint(deadline, count)
-            pending = context.pending_estimate(db, row["project_id"], cfg, now=time.time(), contract=contract)
+            pending = context.pending_estimate(db, row["project_id"], cfg, now=time.time(), route=context_route)
             item = out["patient_context"]
             item["targets"] += pending["targets"]
             item["input_chars"] += pending["input_chars"]

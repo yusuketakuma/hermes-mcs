@@ -270,6 +270,11 @@ def annotate(fact, body):
             "use_state": use_state, "current_cue": current_cue, "unknown": unknown, "corrections": corrections}
 
 
+def with_temporal(fact, body):
+    """Attach the read-time temporal interpretation; stored scan facts never carry it."""
+    return {**fact, "temporal": annotate(fact, body)}
+
+
 def _entity(fact):
     temporal = fact.get("temporal") or {}
     names = {(d["key"], d["value"]) for d in fact.get("details", [])

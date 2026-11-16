@@ -48,7 +48,7 @@ def test_generation_change_rejects_completed_scan_and_rescans(runtime, monkeypat
     # The original records are unchanged; extraction-derived signature fields
     # legitimately move with the new generation's proof validity.
     assert old_meta["original_source_sig"] == context_plan.original_source_signature(current["sources"][0])
-    assert context_refresh._current_scans(led.db, 1, current["sources"], current["contract"]) == {}
+    assert context_refresh._current_scans(led.db, 1, current["sources"], current["route"]) == {}
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
     pending = context_refresh._pending(led.db, 1, CFG, now=clock.wall)[2]
     assert pending["A"] and pending["B"]
@@ -61,6 +61,6 @@ def test_generation_change_rejects_completed_scan_and_rescans(runtime, monkeypat
     after = context_refresh._latest(led.db, context_refresh.SCAN, 1, 1)
     scan, meta = after
     assert scan["complete"] and scan["audited"]
-    assert meta["contract"] == context_refresh._contract(CFG)
+    assert meta["contract"] == context_refresh._contract()
     assert sum("source" in call for call in calls) == 1
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is not None

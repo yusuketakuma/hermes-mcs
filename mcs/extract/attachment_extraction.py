@@ -27,9 +27,21 @@ SCHEMA = 'attachment-inference/v1'
 _FACADE_CODE = hashlib.sha256(Path(__file__).with_name('attachment_inference.py').read_bytes()).hexdigest()
 
 
+# Patient-context-only modules: attachment extraction never runs them, so their
+# scan and summary contract changes must not re-extract every attachment page.
+# The extraction inputs ``patient_context`` and ``patient_state_context`` stay.
+_CONTEXT_ONLY_SOURCES = frozenset({
+    "patient_context_artifacts", "patient_context_plan", "patient_context_state", "patient_context_refresh",
+    "patient_context_scan", "patient_context_selection", "patient_context_schedule",
+    "patient_context_refresh_state", "patient_context_quality_receipts", "patient_context_refresh_sources",
+    "patient_context_refresh_readiness", "patient_context_quality_controller"})
+
+
 def contract(cfg, *, code_digest=None):
+    sources = {name: digest for name, digest in extract_llm._LOADED_SOURCE_DIGESTS.items()
+               if name not in _CONTEXT_ONLY_SOURCES}
     return attachment_inference_contract.contract(cfg, code_digest=code_digest or _FACADE_CODE,
-        source_digests=extract_llm._LOADED_SOURCE_DIGESTS,
+        source_digests=sources,
         inference_version=inference_version.CURRENT_VERSION, extract_version=extract_llm.EXTRACT_VERSION,
         context_version=extract_llm.PATIENT_CONTEXT_VERSION)
 

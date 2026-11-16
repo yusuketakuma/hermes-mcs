@@ -14,6 +14,7 @@ import local_llm as local_llm
 import initial_import_state as initial_import_state
 import cloud_inference as cloud_inference
 import inference_dependency_loss as dependency_loss
+import patient_context_artifacts as context_artifacts
 from clinical_chunking import PLAN_VERSION as PLAN_VERSION
 from mcs_queries import JST as JST
 from mcs_util import html_to_text as html_to_text, loads_dict as loads_dict, safe_error_code as safe_error_code, strict_json as strict_json, valid_hash as valid_hash
@@ -48,19 +49,21 @@ from patient_context_refresh_state import (
     SCAN as SCAN,
     SOURCE_REPAIR as SOURCE_REPAIR,
     SOURCE_REPAIR_CANDIDATE as SOURCE_REPAIR_CANDIDATE,
-    _CHECKS as _CHECKS,
-    _DEPENDENCY_CODE as _DEPENDENCY_CODE,
+    _ATTACHMENT_ITEMS_CODE as _ATTACHMENT_ITEMS_CODE,
     _INTERNAL_PROOF as _INTERNAL_PROOF,
-    _STATE_CODE as _STATE_CODE,
+    _SCAN_CODE as _SCAN_CODE,
+    _SUMMARY_CODE as _SUMMARY_CODE,
     _adoption_artifact_matches as _adoption_artifact_matches,
     _adoption_epoch_expected as _adoption_epoch_expected,
     _artifact_meta as _artifact_meta,
+    _checks as _checks,
     _cloud_input_binding as _cloud_input_binding,
     _comparison_context as _comparison_context,
     _contract as _contract,
     _digest as _digest,
     _facts_sig as _facts_sig,
     _latest as _latest,
+    _local_provenance as _local_provenance,
     _out_of_scope as _out_of_scope,
     _published_version as _published_version,
     _quality_assessment as _quality_assessment,
@@ -68,13 +71,15 @@ from patient_context_refresh_state import (
     _quality_expected as _quality_expected,
     _quality_kind as _quality_kind,
     _replace as _replace,
-    _route_contract as _route_contract,
+    _route as _route,
     _save_source_chunk_tx as _save_source_chunk_tx,
     _scan_sig as _scan_sig,
     _source_quality_hold_key as _source_quality_hold_key,
     _sources_intact as _sources_intact,
+    _summary_contract as _summary_contract,
     acquire_run_lock as acquire_run_lock,
     options as options,
+    route_accepts as route_accepts,
     time as time,
     workday_window as workday_window
 )
@@ -154,7 +159,7 @@ from patient_context_refresh_readiness import (
     _inference_ready as _inference_ready,
     _observe_readiness as _observe_readiness,
     _pending as _pending,
-    _publication_contract as _publication_contract,
+    _publication_route as _publication_route,
     _quality_publication_allowed as _quality_publication_allowed,
     _raw_extraction_current as _raw_extraction_current,
     _readiness_environment as _readiness_environment,
@@ -283,15 +288,19 @@ def _scan_covered(db, seen):
 
 
 def _generation_input(snapshot, facts):
+    # A cloud route generates without the local model; a local one counts a
+    # model change as a new generation against the quota.
+    route = snapshot['route']
+    producer = route['provider'] if route['provider'] else {'local_model': route['local_model']}
     return patient_context_refresh_state._digest([
         "patient_context_generation_v1", snapshot['source_sig'],
-        patient_context_refresh_state._facts_sig(facts), snapshot['contract']])
+        patient_context_refresh_state._facts_sig(facts), snapshot['contract'], producer])
 
 
 def _generation_plan(db, pid, cfg, snapshot, now):
     """Observe quota for the same hydrated input used by the overview caller."""
     hydrated = patient_context_refresh_sources._snapshot(
-        db, pid, cfg, contract=snapshot['contract'], source_keys=snapshot.get('source_scope'))
+        db, pid, cfg, route=snapshot['route'], source_keys=snapshot.get('source_scope'))
     if hydrated['source_sig'] != snapshot['source_sig']:
         raise ValueError('patient_context_source_changed')
     workday_id, _ = patient_context_refresh_state.workday_window(now)
@@ -299,7 +308,7 @@ def _generation_plan(db, pid, cfg, snapshot, now):
     old, meta = patient_context_refresh_state._latest(db, patient_context_refresh_state.KIND, pid)
     same = (bool(old) and old.get('facts_sig') == patient_context_refresh_state._facts_sig(facts)
         and meta.get('source_sig') == snapshot['source_sig']
-        and patient_context_refresh_state._route_contract(meta) == snapshot['contract'])
+        and patient_context_refresh_state.route_accepts(snapshot['route'], meta))
     quality = patient_context_quality_receipts._summary_quality_required(db, pid, snapshot)
     key = _generation_input(snapshot, facts)
     prior_coverage = meta.get('source_coverage')
@@ -314,7 +323,7 @@ def _generation_plan(db, pid, cfg, snapshot, now):
     catchup = False
     if partial and full:
         scans = patient_context_refresh_sources._current_scans(
-            db, pid, snapshot['sources'], snapshot['contract'], cfg=cfg)
+            db, pid, snapshot['sources'], snapshot['route'], cfg=cfg)
         full = all(patient_context_refresh_sources._scan_ready(scans.get(context_plan.source_key(source), {}))
                    for source in snapshot['sources'] if context_plan.source_usable(source))
         taken = db.execute("SELECT json_extract(content,'$.catchup_generation') FROM artifacts WHERE kind=? "
@@ -636,8 +645,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             return {"status": "source_changed", "done": 0, **stats}
         snapshot = hydrated
     frozen_scan_sig = patient_context_refresh_state._scan_sig(ledger.db, pid, source_keys=source_keys)
-    meta = {"source_sig": snapshot["source_sig"], "contract": snapshot["contract"],
-            "model": snapshot["contract"]["model"], "workday_id": workday_id}
+    meta = {"source_sig": snapshot["source_sig"], "workday_id": workday_id}
+    patient_context_refresh_state._record_backend(meta, patient_context_refresh_state._local_provenance(cfg))
+    meta["contract"] = snapshot["contract"]
     if lane == 'A' and source_keys is not None:
         meta.update(source_scope=source_keys, source_coverage=snapshot['source_coverage'])
     result = None
@@ -651,7 +661,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     generation_contacted = False
     generation_quality = False
     mode = extract_llm._cloud_mode(ledger, cfg, "patient_context", pid)
-    cloud_requested = bool(snapshot["contract"].get("provider"))
+    cloud_requested = bool(snapshot["route"]["provider"])
     quality_required = patient_context_quality_receipts._summary_quality_required(ledger.db, pid, snapshot)
     cloud_settings = cloud_inference.resolve_cloud_settings(cfg) if mode in ("on", "shadow", "dry_run") else None
     cloud_selection = None
@@ -838,21 +848,29 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
 
     def local_route():
         # the unit's record is written under the local backend; a cloud route
-        # contract is kept beside it so the selection still recognises the row
-        meta.pop("provider", None)
+        # provider is kept beside it so the selection still recognises the row
         meta.pop("cloud_receipts", None)
-        if "provider" in snapshot["contract"]:
-            meta["route_contract"] = snapshot["contract"]
-            meta["local_fallback"] = True
-            meta["contract"] = {key: value for key, value in snapshot["contract"].items() if key != "provider"}
-        meta["model"] = local_llm.resolve(cfg)[1]
+        patient_context_refresh_state._record_backend(meta, patient_context_refresh_state._local_provenance(cfg),
+                                                      route_provider=snapshot["route"]["provider"])
+
+    def cloud_route(unit):
+        patient_context_refresh_state._record_backend(meta, patient_context_refresh_state._cloud_provenance(
+            unit.contract, unit.model, cloud_selection), provider=unit.contract)
+
+    def saved_route(saved_meta):
+        # A reused row keeps the exact backend identity that produced it.
+        for key in patient_context_refresh_state._BACKEND_KEYS:
+            if key in saved_meta:
+                meta[key] = saved_meta[key]
+            else:
+                meta.pop(key, None)
 
     def guard_summary_sources():
         nonlocal generation_uncertain
         try:
             with cloud_policy._accounting_snapshot(ledger.db):
                 patient_context_refresh_sources.guard_cloud_sources(ledger, pid, snapshot['sources'],
-                    snapshot['contract'], cfg=cfg, deadline=deadline)
+                    snapshot['route'], cfg=cfg, deadline=deadline)
         except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error,
                 OSError, RecursionError, OverflowError) as error:
             generation_uncertain = True
@@ -888,8 +906,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     saved.clear()
                 value = fn(provider, reset)
                 guard_provider(provider)
-                meta["provider"] = provider.contract
-                meta["model"] = provider.model
+                cloud_route(provider)
                 if getattr(provider, 'answered_reservations', None):
                     evidence = _completed_cloud_receipts(ledger, provider, answered_only=True)
                     meta['cloud_receipts'] = [{'artifact_id': aid, 'witness': proof['witness']}
@@ -911,8 +928,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 if changed:
                     provider.discard()
                     if paid:
-                        meta['provider'] = provider.contract
-                        meta['model'] = provider.model
+                        cloud_route(provider)
                     provider = None
                     if paid:
                         raise ValueError('patient_context_cloud_failed') from error
@@ -921,8 +937,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     # A fresh unsent remainder does not release a persisted cloud cursor.
                     raise patient_context_refresh_state.Deferred("patient_context_cloud_budget") from error
                 if paid:
-                    meta["provider"] = provider.contract
-                    meta["model"] = provider.model
+                    cloud_route(provider)
                 provider = None
                 if paid and (unresolved or not local_admit()):
                     # a paid attempt failed and local cannot take over now: record
@@ -931,8 +946,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     # would resume the cloud cursor locally); a fresh unit is
                     # recorded under the local route, where selection finds it.
                     if saved and saved.get("_provider_contract"):
-                        meta["provider"] = saved["_provider_contract"]
-                        meta["model"] = saved["_provider_contract"]["model"]
+                        saved_route(saved["_source_meta"])
                     elif not cloud_requested:
                         local_route()
                     if isinstance(error, ValueError):
@@ -963,16 +977,16 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             if generation_plan is None or generation_plan['input_key'] != _generation_input(snapshot, facts):
                 raise patient_context_refresh_state.Deferred('patient_context_source_changed')
             summary_scans = patient_context_refresh_sources._current_scans(
-                ledger.db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
+                ledger.db, pid, snapshot["sources"], snapshot["route"], cfg=cfg)
             cloud_sources_ready = all(scan.get("_provider_contract") for scan in summary_scans.values())
             same_backend = (not facts or mode != "on" or old_meta.get("local_fallback") is True
-                            or old_meta.get("provider") == snapshot["contract"].get("provider")
+                            or old_meta.get("provider") == snapshot["route"]["provider"]
                             or not cloud_sources_ready and not old_meta.get("provider"))
             same = (old.get("facts_sig") == changed and old_meta.get("source_sig") == snapshot["source_sig"]
-                    and patient_context_refresh_state._route_contract(old_meta) == snapshot["contract"]
+                    and patient_context_refresh_state.route_accepts(snapshot["route"], old_meta)
                     and same_backend)
             if (same_backend and old_meta.get("quality_audit_key") and old_meta.get("source_sig") == snapshot["source_sig"]
-                    and old_meta.get("scan_sig") == frozen_scan_sig and patient_context_refresh_state._route_contract(old_meta) == snapshot["contract"]
+                    and old_meta.get("scan_sig") == frozen_scan_sig and patient_context_refresh_state.route_accepts(snapshot["route"], old_meta)
                     and patient_context_refresh_sources._summary_valid(ledger.db, pid, old, {context_plan.source_key(s): s for s in snapshot["sources"]},
                                        allow_historical=True)):
                 same = True
@@ -980,8 +994,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 if old_meta.get('local_fallback') is True:
                     payload, _, _, _ = context_selection.summary_input(facts, snapshot['source_sig'])
                     guard_local_input('summary', None, json.dumps(payload, ensure_ascii=False))
-                meta["contract"] = old_meta["contract"]
-                for key in ("route_contract", "quality_repair_ref", "local_fallback", "cloud_receipts"):
+                saved_route(old_meta)
+                for key in ("quality_repair_ref", "cloud_receipts"):
                     if key in old_meta:
                         meta[key] = old_meta[key]
             if facts and not same or quality_required:
@@ -989,11 +1003,6 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 begin_generation()
             if same and quality_required:
                 generation_quality = True
-                if old_meta.get("provider"):
-                    meta["provider"] = old_meta["provider"]
-                    meta["model"] = old_meta["provider"]["model"]
-                else:
-                    meta['model'] = old_meta['model']
                 try:
                     quality_status, quality_result = patient_context_quality_controller._quality_step(
                         ledger, pid, cfg, workday_id, old, deadline, generation_admit, base_meta=old_meta)
@@ -1053,9 +1062,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                       "facts_total": total, "truncated": total > len(facts),
                       "as_of": now, "generated_at": old.get("generated_at", now) if same else now,
                       "source_sig": snapshot["source_sig"],
-                      "coverage": patient_context_refresh_sources._coverage(ledger.db, pid, snapshot["sources"], snapshot["contract"], facts, cfg=cfg)}
+                      "coverage": patient_context_refresh_sources._coverage(ledger.db, pid, snapshot["sources"], snapshot["route"], facts, cfg=cfg)}
         else:
-            scans = patient_context_refresh_sources._current_scans(ledger.db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
+            scans = patient_context_refresh_sources._current_scans(ledger.db, pid, snapshot["sources"], snapshot["route"], cfg=cfg)
             for source in snapshot["sources"]:
                 if not context_plan.source_usable(source):
                     continue
@@ -1076,8 +1085,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     selected_occurrence[0] = patient_context_refresh_sources._source_occurrence(ledger.db, pid, source)
                     if lane == 'C' and isinstance(saved.get('_source_meta'), dict):
                         prior_meta = saved['_source_meta']
-                        for key in ('contract', 'route_contract', 'provider', 'model', 'source_binding',
-                                    'source_occurrence', 'source_occurrence_version', 'local_fallback', 'cloud_receipts'):
+                        saved_route(prior_meta)
+                        for key in ('source_binding', 'source_occurrence', 'source_occurrence_version', 'cloud_receipts'):
                             if key in prior_meta:
                                 meta[key] = prior_meta[key]
                             else:
@@ -1092,8 +1101,11 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                                     source_binding=selected_occurrence[0]["source_binding"])
                         planned, planned_cursor, _, _, _ = context_plan.scan_plan(source, saved)
                         planned_span = [sum(map(len, planned[:planned_cursor])), sum(map(len, planned[:planned_cursor + 1]))]
-                        prior_unit = patient_context_refresh_state._digest([meta["source_sig"], planned_span, meta["contract"],
-                                              snapshot["contract"].get("provider"), selected_occurrence[0]])
+                        route = snapshot["route"]
+                        # The fresh unit this route would write; a local fallback
+                        # unit keeps its cloud provider and is never this one.
+                        prior_unit = patient_context_refresh_state._unit_key(meta["source_sig"], planned_span, meta["contract"],
+                            route["provider"], None if route["provider"] else route["local_model"], selected_occurrence[0])
                         del planned
                         if ledger.db.execute("SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND "
                                 + current_meta_pred("meta", target=patient_context_refresh_state.CURRENT_VERSION)
@@ -1110,17 +1122,12 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                             unit_key="scan:" + str(context_plan.source_key(source)), mid=source["message_id"] or None, saved=saved)
                         result.update(source_occurrence_version=1, source_occurrence=selected_occurrence[0])
                     else:
+                        # The audit keeps the scan's own backend identity (copied above).
                         result = {**saved, "audited": True, "audited_chunks_sig": saved["_chunks_sig"]}
-                        if not saved.get("_provider_contract") and "provider" in snapshot["contract"]:
-                            meta["route_contract"] = snapshot["contract"]
-                            meta["contract"] = {key: value for key, value in snapshot["contract"].items() if key != "provider"}
-                        if saved.get("_provider_contract"):
-                            meta["provider"] = saved["_provider_contract"]
-                            meta["model"] = saved["_provider_contract"]["model"]
                         # Reconstruct all quotations, refusing stored polarity or
                         # subject rewrites; confidence scores are not evidence.
                         audited_ids = []
-                        for part in patient_context_refresh_sources._source_chunks(ledger.db, pid, source, snapshot["contract"], saved):
+                        for part in patient_context_refresh_sources._source_chunks(ledger.db, pid, source, snapshot["route"], saved):
                             if len(context_plan.validated_source_facts(source, part.get("facts"))) != len(part.get("facts", [])):
                                 raise ValueError("patient_context_audit_mismatch")
                             audited_ids.append(part["_artifact_id"])
@@ -1149,7 +1156,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                                 result["accepted_candidate_ref"] = accepted
                                 result["source_occurrence_version"] = 1
                                 result["source_occurrence"] = patient_context_refresh_sources._source_occurrence(ledger.db, pid, source)
-                                staged = patient_context_refresh_sources._source_repair_chunks(ledger.db, pid, source, snapshot["contract"], accepted)
+                                staged = patient_context_refresh_sources._source_repair_chunks(
+                                    ledger.db, pid, source, context_artifacts.quality_binding(snapshot["route"]), accepted)
                                 result["_audited_chunk_ids"] = [part["_artifact_id"] for part in staged]
                                 result["facts"] = [fact for part in staged for fact in part["facts"]][:context_plan.MAX_SOURCE_FACTS]
                                 result["_chunks_sig"] = accepted["chunks_sig"]
@@ -1186,7 +1194,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         before = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
         ledger.db.execute("BEGIN")
         try:
-            if not patient_context_refresh_sources._source_quality_verified(ledger.db, pid, source, snapshot["contract"], cfg, result):
+            if not patient_context_refresh_sources._source_quality_verified(ledger.db, pid, source, snapshot["route"], cfg, result):
                 return {"status": "source_changed", "done": 0}
             source_pass_content = (patient_context_quality_receipts._quality_pass_content(ledger.db, pid, source_quality_identity)
                                    if not source_quality_skipped else None)
@@ -1311,7 +1319,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 try:
                     repair_verified = patient_context_refresh_readiness._summary_repair_publication(
                         ledger.db, pid, cfg, result, meta, refreshed_quality,
-                        quality_identity['assessment'], snapshot['contract'])
+                        quality_identity['assessment'], snapshot['route'])
                 except (ValueError, TypeError, KeyError, UnicodeError, RecursionError, RuntimeError):
                     repair_verified = False
                 if (problems or not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live_policy, fresh["sources"])
@@ -1408,7 +1416,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             prior = progress if lane == "A" else saved
             attempts = prior.get("attempts", 0) + 1 if failure else 0
             retry = {"failure": failure, "held": failure in ("patient_context_unsplittable_assertion", "patient_context_original_unit_unverified"),
-                     "attempts": attempts, "checks": patient_context_refresh_state._CHECKS,
+                     "attempts": attempts, "checks": patient_context_refresh_state._checks(),
                      "failure_at": now if failure else None,
                      "next_try": (now + (86400 if attempts >= 5 else 300 * 2 ** attempts)) if failure else 0}
             progress = {**progress, "last_attempt": now, "last_attempt_unit": rotation.get("units", 0) + 1,
@@ -1436,10 +1444,10 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     proof_changed = (prior_meta.get("summary_checked") is not True
                         or prior_meta.get("source_sig") != snapshot["source_sig"]
                         or prior_meta.get("scan_sig") != frozen_scan_sig
-                        or patient_context_refresh_state._route_contract(prior_meta) != snapshot["contract"]
+                        or not patient_context_refresh_state.route_accepts(snapshot["route"], prior_meta)
                         or prior_doc.get("facts_sig") != result.get("facts_sig")
                         or prior_doc.get("summary") != result.get("summary"))
-                    saved_scans = patient_context_refresh_sources._current_scans(ledger.db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
+                    saved_scans = patient_context_refresh_sources._current_scans(ledger.db, pid, snapshot["sources"], snapshot["route"], cfg=cfg)
                     audited = all(patient_context_refresh_sources._scan_ready(saved_scans.get(context_plan.source_key(s), {}))
                                   for s in snapshot["sources"] if context_plan.source_usable(s))
                     intact = patient_context_refresh_state._sources_intact(snapshot["sources"]) and snapshot["attachment_coverage"]["complete"]

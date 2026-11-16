@@ -7,6 +7,7 @@ import pytest
 import mcs_queries
 import original_source_keys
 import patient_context_plan as plan
+import patient_context_projection as context_projection
 import patient_context_refresh as refresh
 import semantic_audit
 from mcs_util import payload_hash
@@ -43,7 +44,8 @@ def test_ocr_paid_binding_preserves_retention_and_rejects_changed_content(source
     led, key, result = source_store
     result['ready'] = True
     sources = list(mcs_queries.patient_context_sources(led.db, 1, mid=key))
-    snapshot = {'sources': sources, 'source_sig': payload_hash(['sources']), 'contract': 'synthetic'}
+    snapshot = {'sources': sources, 'scan_source_sig': payload_hash(['sources']), 'contract': 'synthetic',
+                'route': {'provider': None}}
     before = refresh._cloud_input_binding(led.db, 1, snapshot)
     led.db.execute('UPDATE attachments SET downloaded_at=2 WHERE attachment_id=1')
     assert refresh._cloud_input_binding(led.db, 1, snapshot) == before
@@ -232,7 +234,8 @@ def test_clinical_medication_seed_preserves_quote_subject_and_negation(subject, 
     assert len(items) == 1 and items[0]['subject'] == subject
     assert items[0]['evidence'] == items[0]['text'] == quote
     assert items[0]['details'] == [{'key': 'drug_name', 'value': '合成薬A', 'evidence': quote}]
-    facts = plan.source_facts(source, items, workday_id='synthetic', discovery='seed', found_at=1)
+    facts = [context_projection.with_temporal(fact, source['body_text']) for fact in
+             plan.source_facts(source, items, workday_id='synthetic', discovery='seed', found_at=1)]
     assert facts and facts[0]['source_key'] == source['source_key']
     assert facts[0]['posted_at_ts'] is facts[0]['sender'] is None
     assert facts[0]['temporal']['event_day'] == '2026-10-01'

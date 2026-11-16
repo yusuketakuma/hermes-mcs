@@ -214,7 +214,7 @@ def _finish_sources(runtime, cfg):
     for _ in range(20):
         step(runtime, cfg=cfg)
         snapshot = refresh._snapshot(ledger.db, 1, cfg, hydrate=False)
-        scans = refresh._current_scans(ledger.db, 1, snapshot['sources'], snapshot['contract'], cfg=cfg)
+        scans = refresh._current_scans(ledger.db, 1, snapshot['sources'], snapshot['route'], cfg=cfg)
         if scans and all(refresh._scan_ready(scan) for scan in scans.values()):
             assert all(scan.get('_provider_contract') for scan in scans.values())
             assert not ledger.artifacts(state.KIND)

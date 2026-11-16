@@ -16,7 +16,7 @@ SAFE_CFG = {**CFG, 'cloud_llm': {'mode': 'off', 'provider': 'anthropic'}}
 def observed(monkeypatch):
     db = SimpleNamespace(scan_until=progress.state.time.monotonic() + 60)
     source = {'message_id': 1, 'source_key': 1, 'body_length': 100, 'derived_summary_chars': 0}
-    snapshot = {'source_sig': '1' * 64, 'sources': [source], 'contract': {},
+    snapshot = {'source_sig': '1' * 64, 'sources': [source], 'contract': {}, 'route': {'contract': {}, 'provider': None},
                 'acquisition': {'complete': True}, 'attachment_coverage': {'complete': True},
                 'dependencies': {'complete': True}}
     scans = {1: {'complete': False, 'audited': False, 'cursor': 100}}

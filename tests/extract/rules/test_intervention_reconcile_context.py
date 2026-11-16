@@ -45,7 +45,7 @@ def test_intervention_repair_keeps_receipts_but_requires_a_new_context_scan(runt
     assert led.db.execute(hold_query).fetchone()[0] == 1
 
     before, _, pending = refresh._pending(led.db, 1, CFG, now=clock.wall)
-    old_scan = refresh._current_scans(led.db, 1, before["sources"], before["contract"])[1]
+    old_scan = refresh._current_scans(led.db, 1, before["sources"], before["route"])[1]
     assert old_scan["complete"] and old_scan["audited"] and not pending["B"]
     assert refresh.context_view_input(led.db, 1, cfg=CFG) is not None
     protected_kinds = (refresh.KIND, refresh.SCAN, refresh.CHUNK, extract_llm.UPGRADE_KIND)
@@ -72,7 +72,7 @@ def test_intervention_repair_keeps_receipts_but_requires_a_new_context_scan(runt
     after, _, pending = refresh._pending(led.db, 1, CFG, now=clock.wall)
     assert after["sources"][0]["content_hash"] == before["sources"][0]["content_hash"]
     assert after["sources"][0]["extraction_sig"] != before["sources"][0]["extraction_sig"]
-    assert refresh._current_scans(led.db, 1, after["sources"], after["contract"]) == {}
+    assert refresh._current_scans(led.db, 1, after["sources"], after["route"]) == {}
     assert pending["B"] is True
     assert refresh.context_view_input(led.db, 1, cfg=CFG) is None
     assert [tuple(row) for row in led.db.execute(

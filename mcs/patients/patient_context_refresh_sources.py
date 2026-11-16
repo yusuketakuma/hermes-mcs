@@ -30,7 +30,7 @@ def _source_scope(value):
     return tuple(value)
 
 
-def _snapshot(db, pid, cfg, *, cutoff=None, hydrate=True, contract=None, source_keys=None):
+def _snapshot(db, pid, cfg, *, cutoff=None, hydrate=True, route=None, source_keys=None):
     source_keys = _source_scope(source_keys)
     owns_read = not db.in_transaction
     if owns_read:
@@ -52,7 +52,8 @@ def _snapshot(db, pid, cfg, *, cutoff=None, hydrate=True, contract=None, source_
             if cutoff is None or (source.get("first_seen") or 0) <= cutoff:
                 signed.append((context_plan.source_key(source), context_plan.source_signature(source),
                                bool(source.get("historical"))))
-        contract = patient_context_refresh_state._contract(cfg, pid) if contract is None else contract
+        route = patient_context_refresh_state._route(cfg, pid) if route is None else route
+        contract, summary_contract = route["contract"], patient_context_refresh_state._summary_contract()
         dependencies = dependency_loss.read(db, pid, **({'source_keys': source_keys} if source_keys is not None else {}))
         acquisition = initial_import_state.acquisition_status(db, pid)
         if source_keys is None:
@@ -65,13 +66,18 @@ def _snapshot(db, pid, cfg, *, cutoff=None, hydrate=True, contract=None, source_
         if signed_scope is not None:
             signed_scope["permission_refusal"] = scope.get("fetch_reason") if scope.get("fetch_reason") in (
                 "forbidden", "permission_denied", "access_revoked") else None
-        signature_parts = [signed_scope, contract, signed, dependencies["signature"],
+        # The accepted cloud provider is signed as before; the local model and
+        # each artifact's actual backend are matched by provenance instead.
+        signature_parts = [signed_scope, contract, route["provider"], signed, dependencies["signature"],
                            acquisition["signature"] if source_keys is None else ['source_scope_v1', list(source_keys)]]
         if attachment_coverage["mode"] != "off":
             signature_parts.append(attachment_coverage["signature"])
-        result = {"scope": scope, "sources": sources, "contract": contract, "dependencies": dependencies,
+        scan_source_sig = patient_context_refresh_state._digest(signature_parts)
+        result = {"scope": scope, "sources": sources, "contract": contract, "summary_contract": summary_contract,
+                "route": route, "dependencies": dependencies,
                 "acquisition": acquisition, "attachment_coverage": attachment_coverage,
-                "source_sig": patient_context_refresh_state._digest(signature_parts)}
+                "scan_source_sig": scan_source_sig,
+                "source_sig": patient_context_refresh_state._digest([scan_source_sig, summary_contract])}
         if source_keys is not None:
             result.update(source_scope=list(source_keys), source_coverage={
                 'included': len(sources), 'observed': observed_count,
@@ -82,8 +88,8 @@ def _snapshot(db, pid, cfg, *, cutoff=None, hydrate=True, contract=None, source_
             db.rollback()
 
 
-def _scan_read_binding(sources, contract, cfg):
-    return patient_context_refresh_state._digest([contract, cfg, [(context_plan.source_key(source), context_plan.source_signature(source), bool(source.get("historical")))
+def _scan_read_binding(sources, route, cfg):
+    return patient_context_refresh_state._digest([route, cfg, [(context_plan.source_key(source), context_plan.source_signature(source), bool(source.get("historical")))
                                    for source in sources]])
 
 
@@ -97,12 +103,12 @@ def _scan_read_owner(db, pid):
     def proof_for(snapshot, cfg):
         if not active[0] or not db.in_transaction or db.total_changes != changes:
             raise RuntimeError("patient_context_read_changed")
-        binding = _scan_read_binding(snapshot["sources"], snapshot["contract"], cfg)
+        binding = _scan_read_binding(snapshot["sources"], snapshot["route"], cfg)
         code = patient_context_refresh_state._quality_code()
         version = db.execute("PRAGMA data_version").fetchone()[0]
         key = (binding, code, version)
         if key not in proofs:
-            scans = _current_scans(db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
+            scans = _current_scans(db, pid, snapshot["sources"], snapshot["route"], cfg=cfg)
             if db.total_changes != changes:
                 raise RuntimeError("patient_context_read_changed")
             proofs[key] = (db, pid, binding, code, version, changes, active, scans)
@@ -127,13 +133,13 @@ def _scan_read_owner(db, pid):
         db.execute("RELEASE context_read_scans")
 
 
-def _scans_from_read(db, pid, sources, contract, cfg, proof):
+def _scans_from_read(db, pid, sources, route, cfg, proof):
     if proof is None:
-        return _current_scans(db, pid, sources, contract, cfg=cfg)
+        return _current_scans(db, pid, sources, route, cfg=cfg)
     connection, patient, binding, code, version, changes, active, scans = proof
     if (connection is not db or patient != pid or not active[0] or not db.in_transaction
             or changes != db.total_changes or version != db.execute("PRAGMA data_version").fetchone()[0]
-            or code != patient_context_refresh_state._quality_code() or binding != _scan_read_binding(sources, contract, cfg)):
+            or code != patient_context_refresh_state._quality_code() or binding != _scan_read_binding(sources, route, cfg)):
         raise RuntimeError("patient_context_read_changed")
     return scans
 
@@ -148,7 +154,7 @@ def _source_chunk_marker_matches(meta, scan):
             and patient_context_refresh_state._digest(meta.get("source_occurrence")) == patient_context_refresh_state._digest(scan.get("source_occurrence")))
 
 
-def _source_occurrence_disposition(db, pid, source, contract, scan):
+def _source_occurrence_disposition(db, pid, source, scan):
     """Recognize new raw input only after the stored selection is self-consistent."""
     if type(scan.get("source_occurrence_version")) is not int or scan["source_occurrence_version"] != 1:
         raise ValueError("patient_context_source_repair_invalid")
@@ -162,7 +168,7 @@ def _source_occurrence_disposition(db, pid, source, contract, scan):
         if header is None or patient_context_refresh_state._digest(header["meta"].get("source_occurrence")) != patient_context_refresh_state._digest(stored):
             raise ValueError("patient_context_source_repair_invalid")
         context_artifacts.candidate_rows(db, pid, context_plan.source_key(source), ref,
-            source_sig=header["meta"].get("source_sig"), contract=header["meta"].get("contract"),
+            source_sig=header["meta"].get("source_sig"), binding=context_artifacts.quality_binding(header["meta"]),
             source_binding=stored.get("source_binding"), source_occurrence=stored,
             body_size=header["meta"].get("body_length"))
     else:
@@ -171,11 +177,11 @@ def _source_occurrence_disposition(db, pid, source, contract, scan):
     return True, actual
 
 
-def _current_scans(db, pid, sources, contract, *, cfg=None, check_quality=True):
+def _current_scans(db, pid, sources, route, *, cfg=None, check_quality=True):
     # Proofs are shared only inside this read snapshot, never across calls.
     db.execute('SAVEPOINT context_scan_read')
     try:
-        result = _current_scans_snapshot(db, pid, sources, contract, cfg=cfg, check_quality=check_quality)
+        result = _current_scans_snapshot(db, pid, sources, route, cfg=cfg, check_quality=check_quality)
     except BaseException:
         try:
             db.execute('RELEASE context_scan_read')
@@ -186,7 +192,11 @@ def _current_scans(db, pid, sources, contract, *, cfg=None, check_quality=True):
     return result
 
 
-def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quality=True):
+def _binding(meta):
+    return {key: meta.get(key) for key in context_artifacts.BINDING_KEYS}
+
+
+def _current_scans_snapshot(db, pid, sources, route, *, cfg=None, check_quality=True):
     changes = db.total_changes
     stored = {}
     prior_failure = False
@@ -205,7 +215,7 @@ def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quali
             if type(key) not in (int, str):
                 continue
             source = by_key.get(key)
-            if source and meta.get("source_sig") == context_plan.source_signature(source) and patient_context_refresh_state._route_contract(meta) == contract:
+            if source and meta.get("source_sig") == context_plan.source_signature(source) and context_artifacts.route_accepts(route, meta):
                 prior = stored.get(key)
                 if (prior and prior[1].get("provider") and not meta.get("provider")
                         and meta.get("local_fallback") is not True):
@@ -214,9 +224,9 @@ def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quali
     result = {}
     for key, source in by_key.items():
         doc, meta = stored.get(key, ({}, {}))
-        if meta.get("source_sig") == context_plan.source_signature(source) and patient_context_refresh_state._route_contract(meta) == contract:
+        if meta.get("source_sig") == context_plan.source_signature(source) and context_artifacts.route_accepts(route, meta):
             result[key] = {**doc, "_source_meta":meta,
-                           "_binding": {k: meta.get(k) for k in ("contract", "provider")},
+                           "_binding": _binding(meta),
                            **({"_provider_contract": meta["provider"]} if meta.get("provider") else {})}
     # Coverage and content digests are batched; fact JSON is decoded only
     # when the caller consumes a completed source.
@@ -236,8 +246,8 @@ def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quali
             if type(key) not in (int, str):
                 continue
             source, scan = by_key.get(key), result.get(key, {})
-            if (source and meta.get("source_sig") == context_plan.source_signature(source) and patient_context_refresh_state._route_contract(meta) == contract
-                    and {k: meta.get(k) for k in ("contract", "provider")} == scan.get("_binding")
+            if (source and meta.get("source_sig") == context_plan.source_signature(source) and context_artifacts.route_accepts(route, meta)
+                    and _binding(meta) == scan.get("_binding")
                     and _source_chunk_marker_matches(meta, scan)):
                 proofs.setdefault(key, []).append(patient_context_refresh_state._digest([meta.get("chunk_key"), row[5]]))
                 try:
@@ -261,7 +271,7 @@ def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quali
     # the proof query. Preserve its membership, including physical-message
     # mismatches and duplicate JSON keys, without reading chunk bodies here.
     hydrate_ids = {}
-    quality_required = bool(contract.get("provider") or prior_failure)
+    quality_required = bool(route["provider"] or prior_failure)
     if (check_quality and quality_required and cfg is not None
             and any(scan.get("audited") or scan.get("source_quality_state") == "skipped"
                     for scan in result.values())):
@@ -276,8 +286,8 @@ def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quali
                 if (source and meta.get("invalidated") in (None, False, 0)
                         and meta.get("source_key") == context_plan.source_key(source)
                         and meta.get("source_sig") == context_plan.source_signature(source)
-                        and patient_context_refresh_state._route_contract(meta) == contract
-                        and {k: meta.get(k) for k in ("contract", "provider")} == scan.get("_binding")
+                        and context_artifacts.route_accepts(route, meta)
+                        and _binding(meta) == scan.get("_binding")
                         and _source_chunk_marker_matches(meta, scan)):
                     hydrate_ids.setdefault(context_plan.source_key(source), []).append(row[0])
     for key, scan in result.items():
@@ -287,7 +297,7 @@ def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quali
         occurrence = None
         if "source_occurrence_version" in scan or "source_occurrence" in scan:
             try:
-                changed, occurrence = _source_occurrence_disposition(db, pid, by_key[key], contract, scan)
+                changed, occurrence = _source_occurrence_disposition(db, pid, by_key[key], scan)
                 if changed:
                     result[key] = {"complete":False, "audited":False, "cursor":0, "_chunks_sig":"",
                         "_binding":scan["_binding"], "_source_meta":scan["_source_meta"],
@@ -299,7 +309,7 @@ def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quali
                 continue
         if scan.get("accepted_candidate_ref") is not None:
             try:
-                selected = _source_repair_chunks(db, pid, by_key[key], contract, scan["accepted_candidate_ref"],
+                selected = _source_repair_chunks(db, pid, by_key[key], context_artifacts.quality_binding(route), scan["accepted_candidate_ref"],
                                                   occurrence=occurrence)
                 ranges[key] = [chunk["chunk_span"] for chunk in selected if chunk["part"] == 0]
                 scan["_chunks_sig"] = scan["accepted_candidate_ref"]["chunks_sig"]
@@ -321,15 +331,15 @@ def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quali
             if not scan["_quality_held"]:
                 scan["quality_state"] = None
         if (check_quality and quality_required and scan.get("audited")
-                and (cfg is None or not _source_quality_verified(db, pid, by_key[key], contract, cfg, scan,
-                    scan_proof=(db, pid, context_plan.source_signature(by_key[key]), contract, changes, scan, hydrate_ids.get(key, []))))):
+                and (cfg is None or not _source_quality_verified(db, pid, by_key[key], route, cfg, scan,
+                    scan_proof=(db, pid, context_plan.source_signature(by_key[key]), route, changes, scan, hydrate_ids.get(key, []))))):
             scan["audited"] = False
         if (check_quality and quality_required and cfg is not None
                 and scan.get("source_quality_state") == "skipped"
                 and scan.get("audited_chunks_sig") == scan["_chunks_sig"]):
             scan["_audit_skipped"] = _source_quality_verified(
-                db, pid, by_key[key], contract, cfg, scan,
-                scan_proof=(db, pid, context_plan.source_signature(by_key[key]), contract,
+                db, pid, by_key[key], route, cfg, scan,
+                scan_proof=(db, pid, context_plan.source_signature(by_key[key]), route,
                             changes, scan, hydrate_ids.get(key, [])))
     return result
 
@@ -339,25 +349,25 @@ def _scan_ready(scan):
                 and (scan.get("audited") or scan.get("_audit_skipped") is True))
 
 
-def _source_chunks(db, pid, source, contract, scan, *, artifact_ids=None):
+def _source_chunks(db, pid, source, route, scan, *, artifact_ids=None):
     """Read the explicit stored selection; unadopted stage never substitutes for original chunks."""
     if scan.get("accepted_candidate_ref") is not None:
-        yield from _source_repair_chunks(db, pid, source, contract, scan["accepted_candidate_ref"])
+        yield from _source_repair_chunks(db, pid, source, context_artifacts.quality_binding(route), scan["accepted_candidate_ref"])
         return
     meta = scan.get("_source_meta") or {"source_sig":context_plan.source_signature(source), **scan.get("_binding", {})}
     rows = context_artifacts.original_rows(db, pid, context_plan.source_key(source), meta, scan,
         artifact_ids=artifact_ids, body_size=source.get("body_length"), current_only=True)
     yield from _source_chunk_rows(((row["content"], row["meta"], row["artifact_id"]) for row in rows),
-                                 source, contract, scan)
+                                 source, route, scan)
 
 
-def _source_chunk_rows(rows, source, contract, scan):
+def _source_chunk_rows(rows, source, route, scan):
     for row in rows:
         doc, meta = loads_dict(row[0]) or {}, loads_dict(row[1]) or {}
         if (meta.get("invalidated") in (None, False, 0)
                 and meta.get("source_key") == context_plan.source_key(source) and meta.get("source_sig") == context_plan.source_signature(source)
-                and patient_context_refresh_state._route_contract(meta) == contract
-                and {k: meta.get(k) for k in ("contract", "provider")} == scan.get("_binding")):
+                and context_artifacts.route_accepts(route, meta)
+                and _binding(meta) == scan.get("_binding")):
             if not isinstance(doc.get("facts"), list) or len(doc["facts"]) > context_plan.MAX_SOURCE_FACTS:
                 yield {"chunk_span": None, "facts": []}
             else:
@@ -365,11 +375,11 @@ def _source_chunk_rows(rows, source, contract, scan):
 
 
 
-def guard_cloud_sources(ledger, pid, sources, contract, *, cfg, deadline):
+def guard_cloud_sources(ledger, pid, sources, route, *, cfg, deadline):
     """Revalidate paid origins of the source chunks consumed by context processing."""
     import cloud_policy
     origins = []
-    scans = _current_scans(ledger.db, pid, sources, contract, cfg=cfg, check_quality=False)
+    scans = _current_scans(ledger.db, pid, sources, route, cfg=cfg, check_quality=False)
     for source in sources:
         _scan_check(ledger.db)
         if patient_context_refresh_state.time.monotonic() >= deadline:
@@ -381,15 +391,14 @@ def guard_cloud_sources(ledger, pid, sources, contract, *, cfg, deadline):
         if not scan.get('complete'):
             raise ValueError('patient_context_cloud_source_unverified')
         # Accepted repairs retain their existing financial checks as well.
-        list(_source_chunks(ledger.db, pid, source, contract, scan))
+        list(_source_chunks(ledger.db, pid, source, route, scan))
         meta = scan['_source_meta']
         rows = context_artifacts.original_rows(ledger.db, pid, key, meta, scan,
             body_size=source.get('body_length'), current_only=True)
         selected = 0
         for row in rows:
             origin = context_artifacts.decode_document(row['meta'], metadata=True)
-            if (patient_context_refresh_state._route_contract(origin) != contract
-                    or {name: origin.get(name) for name in ('contract', 'provider')} != scan.get('_binding')):
+            if (not context_artifacts.route_accepts(route, origin) or _binding(origin) != scan.get('_binding')):
                 continue
             selected += 1
             unit = 'scan:' + str(key)
@@ -402,17 +411,18 @@ def guard_cloud_sources(ledger, pid, sources, contract, *, cfg, deadline):
         raise ValueError('patient_context_cloud_source_unverified')
 
 
-def _scan_facts(db, pid, source, contract, scan):
+def _scan_facts(db, pid, source, route, scan):
+    """Read stored facts with their read-time temporal interpretation (summary side)."""
     if not scan.get("complete"):
         return
-    for doc in _source_chunks(db, pid, source, contract, scan):
+    for doc in _source_chunks(db, pid, source, route, scan):
         for fact in context_plan.validated_source_facts(source, doc.get("facts")):
-            yield {**fact, "historical": source.get("historical", False)}
+            yield context_state.with_temporal({**fact, "historical": source.get("historical", False)}, source["body_text"])
 
 
-def _coverage(db, pid, sources, contract, facts, *, cfg=None, read_proof=None):
+def _coverage(db, pid, sources, route, facts, *, cfg=None, read_proof=None):
     messages = [s for s in sources if s["source"] == "chat"]
-    scans = _scans_from_read(db, pid, sources, contract, cfg, read_proof)
+    scans = _scans_from_read(db, pid, sources, route, cfg, read_proof)
     complete = sum(bool(scans.get(context_plan.source_key(s), {}).get("complete")) for s in messages if context_plan.source_usable(s))
     patient = db.execute("SELECT history_floor,coverage_ts,fetch_state,fetch_reason FROM patients "
                          "WHERE project_id=?", (pid,)).fetchone()
@@ -480,17 +490,17 @@ def _summary_valid(db, pid, doc, sources, *, allow_historical=False):
 def _all_facts(db, pid, snapshot, workday_id, *, projected=False, include_all=False, cfg=None, read_proof=None):
     facts = {}
     historical = {}
-    scans = _scans_from_read(db, pid, snapshot["sources"], snapshot["contract"], cfg, read_proof)
+    scans = _scans_from_read(db, pid, snapshot["sources"], snapshot["route"], cfg, read_proof)
     for source in snapshot["sources"]:
         if not context_plan.source_usable(source) or (source.get("historical") and not include_all):
             continue
         dest = historical if source.get("historical") else facts
         # Cloud C audits the selected chunk set. Rejected source.items must
         # not re-enter A through a union outside that accepted set.
-        if not snapshot["contract"].get("provider"):
+        if not snapshot["route"]["provider"]:
             for fact in context_plan.source_facts(source, source["items"], workday_id=workday_id, discovery="new_report", found_at=patient_context_refresh_state.time.time()):
-                dest[fact["id"]] = fact
-        for fact in _scan_facts(db, pid, source, snapshot["contract"], scans.get(context_plan.source_key(source), {})):
+                dest[fact["id"]] = context_state.with_temporal(fact, source["body_text"])
+        for fact in _scan_facts(db, pid, source, snapshot["route"], scans.get(context_plan.source_key(source), {})):
             dest[fact["id"]] = fact
     state = context_state.project(dependency_loss.bind_facts(db, facts.values()),
                                   dependency_losses=snapshot["dependencies"]["losses"])
@@ -604,11 +614,11 @@ def _quality_input(db, pid, snapshot, all_facts, state, summary, assessment_cont
                 raw_occurrences])}
 
 
-def _quality_capture(db, pid, cfg, workday_id, summary, assessment_contract, display_projection, *, contract=None, read_proof=None, source_keys=None):
+def _quality_capture(db, pid, cfg, workday_id, summary, assessment_contract, display_projection, *, route=None, read_proof=None, source_keys=None):
     """Read and validate quality inputs within an already-open SQLite snapshot."""
     if not db.in_transaction:
         raise RuntimeError("patient_summary_snapshot_required")
-    snapshot = _snapshot(db, pid, cfg, hydrate=True, contract=contract, source_keys=source_keys)
+    snapshot = _snapshot(db, pid, cfg, hydrate=True, route=route, source_keys=source_keys)
     scope = snapshot.get("scope") or {}
     if (patient_context_refresh_state._out_of_scope(snapshot) or scope.get("is_archived")
             or source_keys is None and not snapshot["acquisition"]["complete"]
@@ -616,7 +626,7 @@ def _quality_capture(db, pid, cfg, workday_id, summary, assessment_contract, dis
             or not snapshot["dependencies"]["complete"] or not patient_context_refresh_state._sources_intact(snapshot["sources"])
             or not snapshot["attachment_coverage"]["complete"]):
         raise ValueError("patient_summary_quality_source_incomplete")
-    scans = _scans_from_read(db, pid, snapshot["sources"], snapshot["contract"], cfg, read_proof)
+    scans = _scans_from_read(db, pid, snapshot["sources"], snapshot["route"], cfg, read_proof)
     for source in snapshot["sources"]:
         if source.get("body_state") not in (None, "full", "deleted"):
             raise ValueError("patient_summary_quality_source_incomplete")
@@ -631,7 +641,7 @@ def _quality_capture(db, pid, cfg, workday_id, summary, assessment_contract, dis
     return {"identity": identity, "sources": snapshot["sources"], "facts": facts, "state": state}
 
 
-def _source_quality_capture(db, pid, cfg, source_key, assessment, *, contract=None, scan_proof=None, candidate_ref=None):
+def _source_quality_capture(db, pid, cfg, source_key, assessment, *, route=None, scan_proof=None, candidate_ref=None):
     """Capture one original and its complete accepted chunks in the caller's snapshot."""
     import semantic_audit
     if not db.in_transaction:
@@ -659,23 +669,25 @@ def _source_quality_capture(db, pid, cfg, source_key, assessment, *, contract=No
         if revision is not None and (type(revision) is not int or revision < 1):
             raise ValueError("patient_source_quality_source")
         source["_source_revision"] = revision if revision is not None else 1
-    contract = patient_context_refresh_state._contract(cfg, pid) if contract is None else contract
+    route = patient_context_refresh_state._route(cfg, pid) if route is None else route
+    qa_binding = context_artifacts.quality_binding(route)
     artifact_ids = None
     if scan_proof is None:
-        scan = _current_scans(db, pid, sources, contract, check_quality=False).get(source_key, {})
+        scan = _current_scans(db, pid, sources, route, check_quality=False).get(source_key, {})
     else:
-        proof_db, proof_pid, proof_sig, proof_contract, changes, scan, artifact_ids = scan_proof
+        proof_db, proof_pid, proof_sig, proof_route, changes, scan, artifact_ids = scan_proof
         if (proof_db is not db or proof_pid != pid or proof_sig != context_plan.source_signature(source)
-                or proof_contract != contract or changes != db.total_changes):
+                or proof_route != route or changes != db.total_changes):
             raise ValueError("patient_source_quality_source_changed")
     if not scan.get("complete") or scan.get("failure"):
         raise ValueError("patient_source_quality_incomplete")
     if candidate_ref is not None:
-        selected = _source_repair_chunks(db, pid, source, contract, candidate_ref)
+        selected = _source_repair_chunks(db, pid, source, qa_binding, candidate_ref)
         scan = {**scan, "accepted_candidate_ref":candidate_ref, "_chunks_sig":candidate_ref["chunks_sig"]}
         artifact_ids = [part["_artifact_id"] for part in selected]
     facts_by_id = {}
-    with closing(_source_chunks(db, pid, source, contract, scan, artifact_ids=artifact_ids)) as chunks:
+    # Source QA reads the stored facts exactly; no read-time interpretation is added.
+    with closing(_source_chunks(db, pid, source, route, scan, artifact_ids=artifact_ids)) as chunks:
         for chunk in chunks:
             values = chunk.get("facts")
             if not isinstance(values, list) or len(context_plan.validated_source_facts(source, values)) != len(values):
@@ -694,7 +706,7 @@ def _source_quality_capture(db, pid, cfg, source_key, assessment, *, contract=No
     occurrence = {"source_binding": binding, "first_seen": source.get("first_seen"),
                   "scope": {key: scope.get(key) for key in ("project_id", "project_type", "karte_id", "is_archived")}}
     identity, pages = semantic_audit.patient_source_quality_identity(source, facts,
-        occurrence, contract, scan["_chunks_sig"], assessment)
+        occurrence, qa_binding, scan["_chunks_sig"], assessment)
     selected_ref = candidate_ref or scan.get("accepted_candidate_ref")
     if selected_ref is not None and selected_ref.get("repair_input_key") != identity["source_input_key"]:
         raise ValueError("patient_source_quality_source_changed")
@@ -702,7 +714,7 @@ def _source_quality_capture(db, pid, cfg, source_key, assessment, *, contract=No
             "chunks_sig": scan["_chunks_sig"]}
 
 
-def _source_quality_verified(db, pid, source, contract, cfg, scan, *, scan_proof=None):
+def _source_quality_verified(db, pid, source, route, cfg, scan, *, scan_proof=None):
     import semantic_policy
     try:
         policy, errors = semantic_policy.semantic_config(cfg, key_present=True)
@@ -711,7 +723,7 @@ def _source_quality_verified(db, pid, source, contract, cfg, scan, *, scan_proof
         db.execute("SAVEPOINT source_quality_read")
         try:
             captured = _source_quality_capture(db, pid, cfg, context_plan.source_key(source),
-                                               patient_context_refresh_state._quality_assessment(policy), contract=contract, scan_proof=scan_proof,
+                                               patient_context_refresh_state._quality_assessment(policy), route=route, scan_proof=scan_proof,
                                                candidate_ref=scan.get("accepted_candidate_ref"))
             identity = captured["identity"]
             if (context_plan.source_signature(captured["sources"][0]) != context_plan.source_signature(source)
@@ -783,13 +795,13 @@ def _source_repair_units(db, pid, repair_input_key):
     return rows
 
 
-def _source_repair_chunks(db, pid, source, contract, candidate_ref, *, occurrence=None):
+def _source_repair_chunks(db, pid, source, binding, candidate_ref, *, occurrence=None):
     """Add clinical checks to the shared sealed rows and their original financial proof."""
     occurrence = occurrence or _source_occurrence(db, pid, source)
     rows = context_artifacts.candidate_rows(db, pid, context_plan.source_key(source), candidate_ref,
-        source_sig=context_plan.source_signature(source), contract=contract, source_binding=occurrence["source_binding"],
+        source_sig=context_plan.source_signature(source), binding=binding, source_binding=occurrence["source_binding"],
         source_occurrence=occurrence, body_size=source.get("body_length"))
-    chunks, facts, signature = _source_repair_parts(db, pid, source, contract,
+    chunks, facts, signature = _source_repair_parts(db, pid, source, binding,
         candidate_ref["repair_input_key"], rows=rows, occurrence=occurrence)
     if (patient_context_refresh_state._digest(sorted(patient_context_refresh_state._facts_sig([fact]) for fact in facts.values())) != candidate_ref["candidate_key"]
             or signature != candidate_ref["chunks_sig"]):
@@ -797,14 +809,14 @@ def _source_repair_chunks(db, pid, source, contract, candidate_ref, *, occurrenc
     return chunks
 
 
-def _source_repair_parts(db, pid, source, contract, repair_input_key, *, require_complete=True,
+def _source_repair_parts(db, pid, source, binding, repair_input_key, *, require_complete=True,
                          rows=None, occurrence=None):
     occurrence = occurrence or _source_occurrence(db, pid, source)
     if rows is None:
         header = _source_repair_header(db, pid, repair_input_key)
         repair_provider = header['meta'].get('repair_provider') if header is not None else None
         rows = context_artifacts.staged_rows(db, pid, context_plan.source_key(source), repair_input_key,
-            source_sig=context_plan.source_signature(source), contract=contract, source_binding=occurrence["source_binding"],
+            source_sig=context_plan.source_signature(source), binding=binding, source_binding=occurrence["source_binding"],
             source_occurrence=occurrence, body_size=source.get("body_length"), require_complete=require_complete,
             repair_provider=repair_provider)
     if "body_text" not in source:

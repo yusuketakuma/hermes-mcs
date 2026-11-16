@@ -153,7 +153,7 @@ def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim
     if errors or selection is None:
         return "deferred", None
     distinct = (selection['provider'] == 'openai' and selection['profile'] is not None
-                or cloud_inference.cloud_provider_contract(selection=selection) != patient_context_refresh_state._contract(cfg, pid).get("provider"))
+                or cloud_inference.cloud_provider_contract(selection=selection) != patient_context_refresh_state._route(cfg, pid)["provider"])
     selected_tokens = selection["max_tokens"] if selection["max_tokens"] is not None else 1600
     if not spent and cloud_policy.budget_block_reason(
             ledger, cloud_inference.resolve_cloud_settings(cfg), max_tokens=selected_tokens,
@@ -281,6 +281,7 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
     if ledger.db.in_transaction or not current():
         return 'deferred', None
     occurrence = patient_context_refresh_sources._source_occurrence(ledger.db, pid, source)
+    route = patient_context_refresh_state._route(cfg, pid)
     selection, errors = cloud_policy.resolve_profile(
         cfg, route='patient_context', purpose='quality_repair', root=extract_llm.HOME)
     if errors or selection is None:
@@ -311,7 +312,7 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
         if len(reserved_units) > 1:
             return 'unknown', None
         if existing_units and not reserved_units:
-            patient_context_refresh_sources._source_repair_parts(ledger.db, pid, source, patient_context_refresh_state._contract(cfg, pid), repair_key, require_complete=False)
+            patient_context_refresh_sources._source_repair_parts(ledger.db, pid, source, context_artifacts.quality_binding(route), repair_key, require_complete=False)
     finally:
         ledger.db.rollback()
     if before != (ledger.db.execute('PRAGMA data_version').fetchone()[0], ledger.db.total_changes):
@@ -320,11 +321,12 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
         'source_sig':context_plan.source_signature(source),
         'original_source_sig':context_plan.original_source_signature(source), 'source_binding':occurrence['source_binding'],
         'source_occurrence_version':1, 'source_occurrence':occurrence, 'body_length':source['body_length'],
-        'contract':patient_context_refresh_state._contract(cfg, pid), 'original_audit_key':identity['audit_key'], 'original_failure_key':identity['failure_key'],
+        'contract':route['contract'], 'original_audit_key':identity['audit_key'], 'original_failure_key':identity['failure_key'],
         'original_chunks_sig':captured['chunks_sig'], 'protected_sig':patient_context_refresh_state._facts_sig(sorted(protected, key=lambda f:f['id'])),
         'original_receipts_sig':receipt_sig, 'plan':PLAN_VERSION}
-    if origin['contract'].get('provider'):
-        origin.update(provider=origin['contract']['provider'], model=origin['contract']['provider']['model'])
+    if route['provider']:
+        origin.update(provider=route['provider'], model=route['provider']['model'])
+    binding = context_artifacts.quality_binding(origin)
     repair_provider = cloud_inference.cloud_provider_contract(selection=selection)
     distinct = (selection['provider'] == 'openai' and selection['profile'] is not None
                 or repair_provider != origin.get('provider'))
@@ -342,10 +344,10 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
         if header['phase'] == 'ready':
             ref = {'repair_artifact_id':header['artifact_id'],'repair_input_key':repair_key,
                    'candidate_key':header['candidate_key'],'chunks_sig':header['chunks_sig']}
-            patient_context_refresh_sources._source_repair_chunks(ledger.db, pid, source, origin['contract'], ref)
+            patient_context_refresh_sources._source_repair_chunks(ledger.db, pid, source, binding, ref)
             return 'source_candidate', ref
     if header and header['phase'] == 'sealing':
-        return _source_repair_seal(ledger, pid, source, origin['contract'], protected, header, identity, claim, current, deadline)
+        return _source_repair_seal(ledger, pid, source, binding, protected, header, identity, claim, current, deadline)
     saved = {key:header[key] for key in ('cursor','split') if header and key in header}
     chunks, cursor, saved, _, _ = context_plan.scan_plan(source, saved)
     span = [sum(map(len, chunks[:cursor])), sum(map(len, chunks[:cursor + 1]))]
@@ -502,7 +504,7 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
                            'cursor':result['cursor'],'split':result.get('split',0)}
             patient_context_refresh_sources._source_repair_update_tx(ledger.db, header, next_header)
             if distinct:
-                patient_context_refresh_sources._source_repair_parts(ledger.db, pid, source, origin['contract'], repair_key, require_complete=False)
+                patient_context_refresh_sources._source_repair_parts(ledger.db, pid, source, binding, repair_key, require_complete=False)
             stored_header = patient_context_refresh_sources._source_repair_header(ledger.db, pid, repair_key)
             if (ledger.db.total_changes - before_writes != expected_writes
                     or stored_header is None or stored_header['meta'] != header['meta']
@@ -518,18 +520,18 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
     if not result['complete']:
         return 'pending', None
     header = patient_context_refresh_sources._source_repair_header(ledger.db, pid, repair_key)
-    status, ref = _source_repair_seal(ledger, pid, source, origin['contract'], protected, header, identity, claim, current, deadline)
+    status, ref = _source_repair_seal(ledger, pid, source, binding, protected, header, identity, claim, current, deadline)
     # The final unit was durably saved. Resume its seal on the next tick;
     # a later attempt that makes no progress keeps the ordinary backoff.
     return ('pending' if status == 'deferred' else status), ref
 
 
-def _source_repair_seal(ledger, pid, source, contract, protected, header, identity, claim, current, deadline):
+def _source_repair_seal(ledger, pid, source, binding, protected, header, identity, claim, current, deadline):
     """Seal only a complete verified pass; this checkpoint resumes without another POST."""
     repair_key = identity['source_input_key']
     if not header or header['phase'] != 'sealing' or not current():
         return 'deferred', None
-    chunks, facts, signature = patient_context_refresh_sources._source_repair_parts(ledger.db, pid, source, contract, repair_key)
+    chunks, facts, signature = patient_context_refresh_sources._source_repair_parts(ledger.db, pid, source, binding, repair_key)
     if any(fid not in facts or patient_context_refresh_state._facts_sig([facts[fid]]) != patient_context_refresh_state._facts_sig([fact]) for fid, fact in
            ((fact['id'],fact) for fact in protected)):
         return 'held', None
@@ -560,7 +562,7 @@ def _source_repair_seal(ledger, pid, source, contract, protected, header, identi
         os.close(fd)
     ref = {'repair_artifact_id':header['artifact_id'],'repair_input_key':repair_key,
            'candidate_key':next_header['candidate_key'],'chunks_sig':next_header['chunks_sig']}
-    patient_context_refresh_sources._source_repair_chunks(ledger.db, pid, source, contract, ref)
+    patient_context_refresh_sources._source_repair_chunks(ledger.db, pid, source, binding, ref)
     return 'source_candidate', ref
 
 
@@ -582,14 +584,16 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, base_do
     key = semantic_jev.api_key()
     cloud_key = cloud_policy.selected_key(extract_llm.HOME, cfg)
     scfg, errors = semantic_policy.semantic_config(cfg, key_present=bool(key))
+    route = patient_context_refresh_state._route(cfg, pid)
+    # A locally produced artifact (a local fallback or a local route) has optional quality checks.
     local_quality = bool(isinstance(base_meta, dict) and not base_meta.get('provider')
-                         and (base_meta.get('route_contract') or not patient_context_refresh_state._contract(cfg, pid).get('provider')))
+                         and (base_meta.get('route_provider') or not route['provider']))
     if source is not None:
-        scan = patient_context_refresh_sources._current_scans(ledger.db, pid, [source], patient_context_refresh_state._contract(cfg, pid), check_quality=False).get(
+        scan = patient_context_refresh_sources._current_scans(ledger.db, pid, [source], route, check_quality=False).get(
             context_plan.source_key(source), {})
         actual = scan.get('_source_meta', {})
         local_quality = bool(not actual.get('provider')
-                             and (actual.get('route_contract') or not patient_context_refresh_state._contract(cfg, pid).get('provider')))
+                             and (actual.get('route_provider') or not route['provider']))
     if errors:
         return "deferred", None
     optional_quality = local_quality
@@ -598,7 +602,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, base_do
             with cloud_policy._accounting_snapshot(ledger.db):
                 if source is not None:
                     patient_context_refresh_sources.guard_cloud_sources(ledger, pid, [source],
-                        patient_context_refresh_state._contract(cfg, pid), cfg=cfg, deadline=deadline)
+                        route, cfg=cfg, deadline=deadline)
                 elif isinstance(base_meta, dict) and base_meta.get('provider'):
                     cloud_policy.guard_context_origins(ledger, pid,
                         [(None, 'summary', base_meta['provider']['model'], base_meta)])

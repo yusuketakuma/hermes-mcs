@@ -471,16 +471,17 @@ def _complete_context(db, config):
     with db.db:
         db.db.execute("UPDATE patients SET fetch_state='complete',fetch_reason=NULL,history_floor=-1 "
                       "WHERE project_id=1")
-    contract = context._contract({**config, "cloud_llm": {"mode": "off"}})
-    contract["provider"] = cloud_inference.cloud_provider_contract()
+    route = context._route({**config, "cloud_llm": {"mode": "off"}})
+    route["provider"] = cloud_inference.cloud_provider_contract()
     policy, errors = semantic_policy.semantic_config(config, key_present=True)
     assert not errors
     assessment = context._quality_assessment(policy)
-    snapshot = context._snapshot(db.db, 1, config, hydrate=False, contract=contract)
+    snapshot = context._snapshot(db.db, 1, config, hydrate=False, route=route)
     assert len(snapshot["sources"]) == 1
     source = snapshot["sources"][0]
-    meta = {"source_sig": context_plan.source_signature(source), "contract": contract,
-            "provider": contract["provider"], "model": cloud_policy.MODEL}
+    provenance = {"backend": route["provider"]["backend"], "model": cloud_policy.MODEL, "profile": None}
+    meta = {"source_sig": context_plan.source_signature(source), "contract": route["contract"],
+            "provider": route["provider"], "model": cloud_policy.MODEL, "provenance": provenance}
     span = [0, source["body_length"]]
     unit = context._digest([context_plan.source_key(source), meta["source_sig"], span])
     chunk = {"chunk_span": span, "part": 0, "parts": 1, "facts": []}
@@ -494,7 +495,7 @@ def _complete_context(db, config):
     db.db.execute("BEGIN")
     try:
         captured = context._source_quality_capture(db.db, 1, config, context_plan.source_key(source),
-                                                    assessment, contract=contract)
+                                                    assessment, route=route)
     finally:
         db.db.rollback()
     identity = captured["identity"]
@@ -529,7 +530,7 @@ def _complete_context(db, config):
     db.db.execute("BEGIN")
     try:
         summary = context._quality_capture(db.db, 1, config, "synthetic", [], assessment, projection,
-                                           contract=contract)
+                                           route=route)
     finally:
         db.db.rollback()
     summary_identity = summary["identity"]
@@ -542,13 +543,13 @@ def _complete_context(db, config):
             meta={inference.VERSION_KEY: inference.CURRENT_VERSION, **{key: summary_identity[key] for key in
                 ("input_key", "candidate_key", "audit_key")}})
         context._replace(db, context.KIND, 1, {"facts": [], "summary": [], "temporal_view": projection},
-            {"source_sig": snapshot["source_sig"], "contract": contract,
-             "provider": contract["provider"], "model": cloud_policy.MODEL,
+            {"source_sig": snapshot["source_sig"], "contract": route["contract"],
+             "provider": route["provider"], "model": cloud_policy.MODEL, "provenance": provenance,
              "published": context.options(config)["publication"], "summary_checked": True,
              "quality_audit_key": summary_identity["audit_key"],
              "quality_schedule_key": context._digest([config, assessment["code"]]),
              "scan_sig": context._scan_sig(db.db, 1)})
-    assert not any(context._pending(db.db, 1, config, contract=contract)[2].values())
+    assert not any(context._pending(db.db, 1, config, route=route)[2].values())
 
 
 

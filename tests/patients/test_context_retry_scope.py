@@ -13,7 +13,7 @@ def _failed_progress(led, clock, *, source_keys=None):
     snapshot = sources._snapshot(led.db, 1, CFG, hydrate=False, source_keys=source_keys)
     progress = {'source_sig': snapshot['source_sig'], 'attempts': 3,
                 'next_try': clock.wall + 3600, 'failure': 'patient_context_length_stop',
-                'held': True, 'checks': state._CHECKS, 'quality_state': 'held'}
+                'held': True, 'checks': state._checks(), 'quality_state': 'held'}
     if source_keys is not None:
         progress['source_scope'] = source_keys
     with led.db:
@@ -62,18 +62,18 @@ def test_legacy_retry_compatibility_rechecks_current_bindings(runtime, changed):
     led, clock, _ = runtime
     seed(led)
     stored = _failed_progress(led, clock)
-    contract = sources._snapshot(led.db, 1, CFG, hydrate=False)['contract']
+    route = sources._snapshot(led.db, 1, CFG, hydrate=False)['route']
     if changed == 'acquisition':
         with led.db:
             led.db.execute("UPDATE patients SET fetch_state='partial',history_floor=NULL WHERE project_id=1")
     elif changed == 'contract':
-        contract = {**contract, 'model': 'synthetic-other-model'}
+        route = {**route, 'contract': {**route['contract'], 'facts': 3}}
     else:
         seed(led, body='生活環境: 更新された合成の居住記録。')
-    current = sources._snapshot(led.db, 1, CFG, hydrate=False, contract=contract)
+    current = sources._snapshot(led.db, 1, CFG, hydrate=False, route=route)
     assert current['source_sig'] != stored['source_sig']
     _, progress, _ = readiness._pending(led.db, 1, CFG, now=clock.wall,
-                                       contract=contract, source_keys=[1])
+                                       route=route, source_keys=[1])
     assert not progress['held'] and progress['attempts'] == 0 and progress['failure'] is None
     assert document(led, state.PROGRESS) == stored
 

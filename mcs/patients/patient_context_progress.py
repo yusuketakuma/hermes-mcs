@@ -21,11 +21,11 @@ def observation(percent=None, stage='unknown', *, held=False, source_sig=None):
             'held': held, 'source_sig': source_sig}
 
 
-def _covered(db, pid, source, contract, scan):
+def _covered(db, pid, source, route, scan):
     """Count complete accepted storage units, never a checkpoint cursor."""
     length = source['body_length']
     units = {}
-    for chunk in sources._source_chunks(db, pid, source, contract, scan):
+    for chunk in sources._source_chunks(db, pid, source, route, scan):
         sources._scan_check(db)
         span, part, count = (chunk.get(key) for key in ('chunk_span', 'part', 'parts'))
         if (not isinstance(span, list) or len(span) != 2 or any(type(n) is not int for n in span)
@@ -123,7 +123,7 @@ def _read(db, pid, cfg):
             if keys:
                 try:
                     scoped = sources._snapshot(db, pid, cfg, hydrate=False,
-                                               contract=snapshot['contract'], source_keys=keys)
+                                               route=snapshot['route'], source_keys=keys)
                     with sources._scan_read_owner(db, pid) as proof_for:
                         coverage = readiness._inference_coverage(
                             db, pid, cfg, scoped,
@@ -152,14 +152,14 @@ def _read(db, pid, cfg):
             return result(5, 'local')
     with sources._scan_read_owner(db, pid) as proof_for:
         proof = proof_for(snapshot, cfg)
-        scans = sources._scans_from_read(db, pid, observed, snapshot['contract'], cfg, proof)
+        scans = sources._scans_from_read(db, pid, observed, snapshot['route'], cfg, proof)
         covered, audited = 0, 0
         for source in targets:
             scan = scans.get(plan.source_key(source), {})
             held |= bool(scan.get('held') or scan.get('failure') or scan.get('_quality_held'))
-            if snapshot['contract'].get('provider') and not scan.get('_provider_contract'):
+            if snapshot['route']['provider'] and not scan.get('_provider_contract'):
                 continue
-            covered += _covered(db, pid, source, snapshot['contract'], scan) if scan else 0
+            covered += _covered(db, pid, source, snapshot['route'], scan) if scan else 0
             audited += int(sources._scan_ready(scan))
         if covered < total:
             return result(10 + 70 * covered // total, 'sources')

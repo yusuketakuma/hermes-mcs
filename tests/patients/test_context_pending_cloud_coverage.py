@@ -82,7 +82,7 @@ def test_patient_selection_resolves_once_after_out_of_scope_patient(runtime, mon
         if observed_out is not None:
             observed_out["scans"] = {}
         observed.append((pid, cloud_scan))
-        return {'contract': state._contract(cfg, pid), 'sources': [],
+        return {'contract': state._contract(), 'route': state._route(cfg, pid), 'sources': [],
                 'dependencies': {'complete': True}, 'unfinished': False}, {}, {
                     'A': False, 'B': cloud_scan, 'C': False}
     monkeypatch.setattr(readiness, '_pending', pending)
@@ -121,10 +121,10 @@ def test_status_reuses_availability_only_for_its_own_phase(runtime, monkeypatch)
 def test_pinned_estimate_never_resolves_availability(runtime, monkeypatch):
     led, _, _ = runtime
     seed(led)
-    contract = state._contract(CFG, 1)
+    route = state._route(CFG, 1)
     monkeypatch.setattr(extract_llm, '_cloud_mode', lambda *args: (_ for _ in ()).throw(
         AssertionError('pinned estimate must not resolve credentials')))
-    result = readiness.pending_estimate(led.db, 1, CFG, contract=contract)
+    result = readiness.pending_estimate(led.db, 1, CFG, route=route)
     assert result['scan_sources'] == 1
 
 

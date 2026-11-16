@@ -45,7 +45,7 @@ def test_verified_local_scan_does_not_rearm_overview_retry_when_cloud_returns(
     known = plan.source_facts(source, source['items'], workday_id='synthetic',
                               discovery='new_report', found_at=clock.wall)
     known_ids = {fact['id'] for fact in known}
-    assert known_ids and snapshot['contract'].get('provider')
+    assert known_ids and snapshot['route']['provider']
     assert worker._cloud_mode(led, cfg, 'patient_context', 1) == 'off'
 
     def known_answer(payload):
@@ -73,7 +73,7 @@ def test_verified_local_scan_does_not_rearm_overview_retry_when_cloud_returns(
     monkeypatch.setattr(refresh.local_llm, 'admitted_chat', local)
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', cloud_wire)
     for _ in range(60):
-        scans = sources._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=cfg)
+        scans = sources._current_scans(led.db, 1, snapshot['sources'], snapshot['route'], cfg=cfg)
         if sources._scan_ready(scans.get(1, {})):
             break
         result = step(runtime, cfg=cfg)
@@ -82,7 +82,7 @@ def test_verified_local_scan_does_not_rearm_overview_retry_when_cloud_returns(
                 == ('deferred', 'C', 'source_quality_pending')), result
     else:
         pytest.fail('real source scan and quotation audit did not become ready')
-    scans = sources._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=cfg)
+    scans = sources._current_scans(led.db, 1, snapshot['sources'], snapshot['route'], cfg=cfg)
     assert sources._scan_ready(scans[1]) and not scans[1].get('_provider_contract')
     assert scans[1]['_source_meta']['local_fallback'] is True
     assert led.synthetic_jev_requests and not posts
@@ -90,8 +90,8 @@ def test_verified_local_scan_does_not_rearm_overview_retry_when_cloud_returns(
     assert local_chunks
     for row in local_chunks:
         meta = json.loads(row['meta'])
-        assert 'provider' not in meta and 'provider' not in meta['contract']
-        assert meta['route_contract'] == snapshot['contract']
+        assert 'provider' not in meta and meta['contract'] == snapshot['contract']
+        assert meta['route_provider'] == snapshot['route']['provider'] and meta['provenance']['backend'] == 'local'
 
     for index in range(attempts):
         if index:

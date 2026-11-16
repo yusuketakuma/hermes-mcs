@@ -80,13 +80,15 @@ def test_source_normal_fail_repairs_all_units_preserving_original_chunks_and_sup
                                                 (patient_context_refresh_state.CHUNK,))] == originals
     assert len(led.artifacts(patient_context_refresh_state.SOURCE_REPAIR, project_id=1)) == 1
     snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG)
-    scan = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)[1]
+    scan = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['route'], cfg=CFG)[1]
     assert scan['accepted_candidate_ref'] and scan['audited']
-    facts = list(patient_context_refresh_sources._scan_facts(led.db, 1, snapshot['sources'][0], snapshot['contract'], scan))
+    facts = list(patient_context_refresh_sources._scan_facts(led.db, 1, snapshot['sources'][0], snapshot['route'], scan))
     assert {fact['text'] for fact in facts} == {_REPAIR_HOME, _REPAIR_BED}
     for fid, fact in supported.items():
         actual = next(value for value in facts if value['id'] == fid)
-        assert patient_context_refresh_state._facts_sig([actual]) == patient_context_refresh_state._facts_sig([fact])
+        # The read adds its temporal interpretation; the stored fact itself is unchanged.
+        stored = {key: value for key, value in actual.items() if key != 'temporal'}
+        assert patient_context_refresh_state._facts_sig([stored]) == patient_context_refresh_state._facts_sig([fact])
     reserves = led.artifacts('cloud_usage_reserve', project_id=1)
     assert len(reserves) == 2
     assert len({json.loads(row['meta'])['unit_key'] for row in reserves}) == 2
@@ -111,7 +113,7 @@ def test_deterministic_source_repair_scan_refusal_holds_instead_of_paid_retries(
         clock.wall += 61
         snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG, hydrate=False)
         scans = patient_context_refresh_sources._current_scans(
-            led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+            led.db, 1, snapshot['sources'], snapshot['route'], cfg=CFG)
         for scan in scans.values():
             if scan.get('quality_state') == 'held':
                 held = scan
@@ -385,10 +387,10 @@ def test_historical_karte_repair_retains_original_question_and_answer(runtime, c
     record = {'category': 'living', 'subject': 'patient', 'text': _REPAIR_HOME, 'evidence': _REPAIR_HOME, 'details': []}
     facts = context_plan.source_facts(source, [record], workday_id='synthetic', discovery='new_report', found_at=patient_context_refresh_state.time.time())
     assert len(facts) == 1 and facts[0]['historical'] is False
-    contract = patient_context_refresh_state._contract(CFG, 1)
+    route = patient_context_refresh_state._route(CFG, 1)
     occurrence = patient_context_refresh_sources._source_occurrence(led.db, 1, source)
     meta = {'source_key': context_plan.source_key(source), 'source_sig': context_plan.source_signature(source),
-            'contract': contract, 'provider': contract['provider'], 'model': contract['provider']['model'],
+            'contract': route['contract'], 'provider': route['provider'], 'model': route['provider']['model'], 'provenance': {'backend': route['provider']['backend'], 'model': route['provider']['model'], 'profile': None},
             'source_occurrence_version': 1, 'source_occurrence': occurrence,
             'source_binding': occurrence['source_binding'], 'unit_key': '1' * 64, 'chunk_key': '2' * 64}
     checkpoint = {'complete': True, 'audited': False, 'cursor': 1, 'chunks': 1,

@@ -5,7 +5,6 @@ from itertools import accumulate
 
 from clinical_chunking import plan_chunks
 from patient_context import CATEGORIES, DETAIL_KEYS, context_items
-import patient_context_projection as context_state
 from mcs_util import locate_quote_span
 
 MAX_SOURCE_FACTS = 128  # Per accepted chunk, never a cumulative source limit.
@@ -226,7 +225,6 @@ def source_facts(source, items, *, workday_id, discovery, found_at, offset=0, ch
                      "discovery": discovery, "found_workday_id": workday_id, "found_at": found_at}
             value["assertion"] = {key: value[key] for key in
                                   ("category", "text", "evidence", "evidence_span", "reported_subject", "details")}
-            value["temporal"] = context_state.annotate(value, body)
             value["id"] = source_digest({key: value[key] for key in
                 ("source", "source_key", "project_id", "message_id", "content_hash", "assertion")})
             result.setdefault(value["id"], value)
@@ -254,7 +252,7 @@ def validated_source_facts(source, facts):
                          offset=span[0], chunk=body[span[0]:span[1]])
         if rebuilt and all(rebuilt[0][key] == fact.get(key) for key in
                 ("id", "text", "quote", "quote_span", "details", "subject", "temporality", "assertion",
-                 "source_key", "reference_context", "sender", "posted_at", "posted_at_ts", "temporal")):
+                 "source_key", "reference_context", "sender", "posted_at", "posted_at_ts")):
             valid.append(fact)
     return valid
 

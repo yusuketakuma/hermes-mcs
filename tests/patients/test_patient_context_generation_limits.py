@@ -39,7 +39,7 @@ def _ready_sources(runtime, *, cfg=CFG, pid=1, keys=None):
             lambda best, state: rotation({key: value for key, value in best.items() if key != 'A'}, state)):
         for _ in range(20):
             snapshot = sources._snapshot(led.db, pid, cfg, hydrate=False, source_keys=keys)
-            scans = sources._current_scans(led.db, pid, snapshot['sources'], snapshot['contract'], cfg=cfg)
+            scans = sources._current_scans(led.db, pid, snapshot['sources'], snapshot['route'], cfg=cfg)
             if all(sources._scan_ready(scans.get(plan.source_key(source), {}))
                    for source in snapshot['sources'] if plan.source_usable(source)):
                 return
@@ -189,7 +189,7 @@ def test_first_full_catchup_is_identified_once_for_the_patient(runtime):
     assert step(runtime)['lane'] == 'A'
     for _ in range(8):
         snapshot = sources._snapshot(led.db, 1, CFG, hydrate=False, source_keys=[1])
-        scans = sources._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+        scans = sources._current_scans(led.db, 1, snapshot['sources'], snapshot['route'], cfg=CFG)
         if sources._scan_ready(scans.get(1, {})):
             break
         assert step(runtime)['status'] == 'progressed'

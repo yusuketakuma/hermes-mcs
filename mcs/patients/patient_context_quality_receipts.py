@@ -30,7 +30,7 @@ def _has_prior_quality_failure(db, pid, *, purpose=None):
 
 def _summary_quality_required(db, pid, snapshot):
     """Keep substantive zero-fact sources and prior failures subject to summary quality checks."""
-    return bool(snapshot['contract'].get('provider')
+    return bool(snapshot['route']['provider']
         and any(context_plan.source_usable(source) for source in snapshot['sources'])
         or _has_prior_quality_failure(db, pid))
 
