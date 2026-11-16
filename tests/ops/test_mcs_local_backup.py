@@ -82,15 +82,20 @@ def test_restore_places_a_held_copy_that_mcs_restore_can_plan(world, capsys):
     assert notify_spool.restore_awaiting_consent(str(target))
     assert file_sha256(source) == live
     assert sorted(os.listdir(parent)) == ["data"]       # no plaintext work dir left
-    plan = mcs_restore.plan(str(target), source_sha256=report["sha256"])
+    # The documented procedure moves the held copy to its final place BEFORE
+    # consent: the approval binds the destination path, so it is never moved after.
+    final = parent / "live-data"
+    target.rename(final)
+    plan = mcs_restore.plan(str(final), source_sha256=report["sha256"])
     approval = mcs_restore.approve(
-        str(target), source_sha256=report["sha256"], plan_sha256=plan["plan_sha256"],
+        str(final), source_sha256=report["sha256"], plan_sha256=plan["plan_sha256"],
         confirm_human=True, actor="synthetic-operator", reason="synthetic drill",
         custody_ref="synthetic-ref", delivery_policy="hold_all")
     resumed = mcs_restore.resume(
-        str(target), receipt_sha256=approval["receipt_sha256"], confirm_human=True,
+        str(final), receipt_sha256=approval["receipt_sha256"], confirm_human=True,
         actor="synthetic-operator", reason="synthetic drill")
     assert resumed["writers_resumed"] is True and resumed["delivery_policy"] == "hold_all"
+    assert notify_spool.restore_writer_hold(str(final)) is None
 
 
 @pytest.mark.parametrize("name", ["../ledger.db", "ledger.db", "hand-made.db", "ledger-2026.db"])

@@ -85,11 +85,20 @@ sidecar 付き・壊れたファイルは拒否します。親ディレクトリ
 行ってから、同意待ちのマーカーと `restore.json` を DB より先に置き、`ledger.db` を排他的に配置します。
 稼働中の `data/ledger.db` と backup は置換・削除しません。サービスの停止・起動もしません。
 
-結果の `sha256` を `BUNDLE_SHA` として、[同意・稼働再開の境界](#consent)の
-`mcs_restore.py plan → approve → resume` へ進みます。再開するのは収集だけで、配送は `hold_all` の
-ままです。日次 backup の時点から後の投稿・タスク・操作履歴・配送記録は戻した DB にありません。
-`last_successful_run` と件数で失われる範囲を確かめてから承認し、稼働中のデータディレクトリと
-入れ替える手順は承認後に人が行います。
+日次 backup の時点から後の投稿・タスク・操作履歴・配送記録は戻した DB にありません。
+結果の `inventory`（`last_successful_run` と件数）で失われる範囲を先に確かめます。
+
+承認は配置先の絶対パスに束縛され、承認後に移したディレクトリは再び保留になります。
+稼働中のデータディレクトリと入れ替える場合は、**承認の前に**最終の場所へ移します。
+
+1. 常駐サービスを人が止める。
+2. `$MCS_ROOT/data` を別名（例 `data.before-restore`）へ移す。手元の `backups/` もそこに残る。
+3. `NEW_DATA_DIR` を `$MCS_ROOT/data` へ移す（同じファイルシステム内の改名にするため、
+   `NEW_DATA_DIR` は `$MCS_ROOT` の直下に作る）。
+4. 結果の `sha256` を `BUNDLE_SHA`、`$MCS_ROOT/data` を `DEST` として、
+   [同意・稼働再開の境界](#consent)の `mcs_restore.py plan → approve → resume` を行う。
+
+再開するのは収集だけで、配送は `hold_all` のままです。
 
 日次 backup が2日以上更新されていないと、健康状態は `backup_local_overdue` で要確認になります
 （収集の制限時間による見送りは従来どおり `backup_deferred_deadline`）。
