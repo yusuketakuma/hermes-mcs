@@ -38,6 +38,19 @@ def test_unrecorded_read_is_withheld_but_confirmed_write_is_not(tmp_path, monkey
     assert json.loads(write)["ok"] is True
 
 
+def test_unrecorded_failure_carrying_patient_content_is_withheld(tmp_path, monkeypatch):
+    settings = {"inbox": str(tmp_path / "missing" / "cmd")}
+    carried = json.dumps({"ok": False, "error": "summary_not_adoptable",
+                          "comparison": {"candidate": {"text": "合成 臨床内容"}}})
+    monkeypatch.setattr(command_dispatch, "dispatch_operation", lambda *a, **k: carried)
+    data = {"op": "control", "action": "adopt_summary", "phase": "preview", "project_id": 1}
+    assert json.loads(command_dispatch.dispatch(data, settings, IDENTITY)) == {
+        "ok": False, "error": "access_log_unavailable"}
+    monkeypatch.setattr(command_dispatch, "dispatch_operation",
+                        lambda *a, **k: deny("project_not_allowed"))
+    assert json.loads(command_dispatch.dispatch(data, settings, IDENTITY))["error"] == "project_not_allowed"
+
+
 def test_projectless_list_is_attributed_to_every_returned_patient(tmp_path, monkeypatch):
     reply = ok(operation="read", result={"items": [{"project_id": 4}, {"project_id": 9,
                                                    "nested": [{"project_id": 4}]}]})
