@@ -113,7 +113,9 @@ def _carryover(accounting, window_start):
     """Totals by day, period side, provider and settlement for the reservations about to be removed.
 
     Each total is dated at its latest reservation, so its day and its side of the period start
-    stay exact. Moving the period start later can only count more spending, never less.
+    stay exact. Moving the period start afterwards, in either direction, can count a whole group
+    whose latest reservation is inside the new period: the period budget then reads more spending,
+    never less (fail closed), and stays exact until the start is moved.
     """
     groups = {}
     for rid, (meta, row) in accounting.reservations.items():
