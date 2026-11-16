@@ -35,7 +35,7 @@ python3 ci/mine_gates.py --check
 
 - `make lint`・`make readme`・`make check` も使える（uv があれば ephemeral 実行）。`integration/` も同じ runner に対象を指定する。
 - `run_tests.sh` は `MCS_TEST_PYTHON`→`$VIRTUAL_ENV`→repo 直下の `.venv` の順に Python を選ぶ。worktree には `.venv` が無いので、pytest の入った Python を `MCS_TEST_PYTHON` に指定する。
-- ユーザー指示（2026-10-31）により、失敗項目を修正して再検証が通れば、既存結果と合わせて全体を合格扱いとし、全体 suite・同一SHAの全6ジョブの再実行は必須にしない。実行済み・失敗後に再検証済み・未実行を区別し、実行していないCIを実測成功と記録しない。記録方法は `docs/development/RELEASE_NOTES.md` に従う。
+- ユーザー指示（2026-10-31）により、失敗項目を修正して再検証が通れば、既存結果と合わせて全体を合格扱いとし、全体 suite・同一SHAの全ジョブの再実行は必須にしない。実行済み・失敗後に再検証済み・未実行を区別し、実行していないCIを実測成功と記録しない。記録方法は `docs/development/RELEASE_NOTES.md` に従う。
 - 導入先 `~/.mcs`（`MCS_ROOT`）は稼働中の checkout で、原本DB・設定を持つ。開発・検証は git worktree で行い、そこの未commit変更を巻き込まない。
 - 全体 suite はこの Mac では走らせない（所有者 2026-11-15）。稼働中の収集とディスク・メモリを取り合い、収集が止まるため。既存の承認範囲で統合用のブランチ（main 以外）を push し、既存の `ci.yml` を `gh workflow run ci.yml --ref <branch>` で実行する。Linux・macOS の検証用の job が走る。Actions の利用条件と課金はリポジトリやランナーの設定に従う。公開用の `publication-request` と、pull request だけで動く生成物の検査は走らないので、公開へは進まず、生成物の検査は上の `update_readme.py --check` をローカルで実行する。main の push・merge・tag・本番適用は別の承認が要る。
 - この Mac で対象を絞った pytest を走らせる前に、収集（`run_check.py --json --download-files`）か別の pytest が動いていないかを確かめる。動いていれば上限を決めて待ち、空かなければ始めない。検出を表示するだけで続行しない。
