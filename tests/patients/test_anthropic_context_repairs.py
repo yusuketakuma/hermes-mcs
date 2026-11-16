@@ -127,8 +127,18 @@ def test_deterministic_source_repair_scan_refusal_holds_instead_of_paid_retries(
     assert not source_repair['sent']
 
 
-@pytest.mark.parametrize('stop', ['none', 'length', 'capacity'])
-@pytest.mark.parametrize('tamper', ['answer', 'missing_proof', 'duplicate_proof', 'strip_provider'])
+# Not the full 3 x 4 product: the stop only changes the first send during the
+# drain (the run then sends and stores more parts, asserted below), while every
+# tamper rewrites the stored proof after the drain and is checked before any
+# phase-specific replay. Every tamper runs on the plain answer; each cut answer
+# keeps two tampers. This is a reduced sample of the product, not equivalent
+# coverage: the plain-answer cases are the strong tamper checks. Each case
+# takes about 10-13 s, so the four dropped pairs would add roughly 45 s.
+@pytest.mark.parametrize('stop,tamper', [
+    ('none', 'answer'), ('none', 'missing_proof'), ('none', 'duplicate_proof'), ('none', 'strip_provider'),
+    ('length', 'answer'), ('length', 'strip_provider'),
+    ('capacity', 'answer'), ('capacity', 'duplicate_proof'),
+])
 def test_openai_source_repair_replays_high_response_before_publication(runtime, source_repair, monkeypatch, stop, tamper):
     from contextlib import nullcontext
 
@@ -190,6 +200,8 @@ def test_openai_source_repair_replays_high_response_before_publication(runtime, 
                          and body['max_output_tokens'] == 32768 for body in sends)
     slots = led.artifacts(patient_context_refresh_state.SOURCE_REPAIR_CANDIDATE, project_id=1)
     assert slots and all(json.loads(row['meta'])['repair_provider']['model'] == 'gpt-6.1-sol' for row in slots)
+    # The stop path was taken: a cut first answer leads to more sends and stored parts.
+    assert len(sends) == len(slots) == (2 if stop == 'none' else 4)
     import mcs_view
     for row in slots:
         stored = json.loads(row['content'])

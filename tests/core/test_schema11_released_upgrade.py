@@ -40,6 +40,7 @@ def test_schema11_preserves_released_v110_parts_and_adds_group_only_after_commit
             finally:
                 db.set_authorizer(None)
             assert db.execute("PRAGMA user_version").fetchone()[0] == 10
+            assert db.execute("SELECT 1 FROM sqlite_master WHERE name='notification_render_parts_v10'").fetchone() is None
             with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
                 db.execute("INSERT INTO notification_render_parts(delivery_id,part_id,kind,idx,state) "
                            "VALUES('synthetic-group','file_group','file_group',0,'unknown')")
