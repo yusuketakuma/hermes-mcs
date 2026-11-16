@@ -191,6 +191,7 @@ AIが緊急度を高と判定した投稿で元の本文を取得できていな
 
 | ローカルで確認できる支援 | 入口と適用条件 |
 |---|---|
+| 日次ローカルbackupの一覧・完全検査・別配置への復元 | `mcs_local_backup.py`。鍵・policyは不要。復元は新しい私有ディレクトリへの配置だけで、同意待ちで停止し、採用は`mcs_restore.py`の承認、配送は保留のまま。[ローカル日次 backup の確認と復元](docs/guides/BACKUP.md#local) |
 | 暗号化offsite・鍵escrow・別配置への復元 | `mcs_backup.py`。保存先・鍵・独立SHA receipt・保持のオーナー承認が必要。定期運用は明示opt-in、新端末の復元は同意待ちで停止。[バックアップ・端末喪失ガイド](docs/guides/BACKUP.md) |
 | 構造化薬歴・観測値とチャット候補の別出典閲覧 | `project_metadata.py`（明示sync）と`mcs_view.py`のsnapshot読取り。表示は`--publication`で明示し、`include_chat`は既定off。同一項目・正本・対応完了を自動判定しません。GETはsession・未読保持・権限の実受入後に承認。[MCS連携データの条件](docs/roadmap/mcs-api-survey.md) |
 | 薬剤の表層名とは独立した候補注釈・照会 | 私有辞書の出所・SHA・承認に束縛した成分・一般名処方・製品候補を併記し、`mcs drug`で照会・参考検索・更新差分を確認できます。別名の薬剤行を統合せず、総称や複数候補を成分に確定しません。公式master原本は[システム更新に同梱](resources/drug-master/README.md)し、`mcs drug install-bundled`で運用者の確認日・確認者を入力して私有辞書を作れます。辞書の承認・有効化は運用者が行います。[抽出の範囲と残条件](docs/roadmap/extraction.md) |

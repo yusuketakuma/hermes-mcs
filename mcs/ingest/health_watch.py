@@ -861,6 +861,9 @@ _REASON_JA = {
                           f"llama-server の稼働と {_COLLECTION_LOG} を確認"),
     "backup_deferred_deadline": ("収集の制限時間内に日次バックアップを取れず、1日以上更新されていません",
                                  f"DBの大きさと収集の所要時間を確認。続く場合は {_CHECK}"),
+    "backup_local_overdue": ("日次ローカルバックアップが2日以上更新されていません",
+                             f"{_COLLECTION_LOG} の backup のエラーと空き容量を確認。"
+                             "手元の世代は mcs/ops/mcs_local_backup.py list --verify で確認"),
     "stall_check_failed": ("停滞の有無を今回の監視で確認できませんでした",
                            "次回の収集で再判定します。続く場合は data/health.json の stall_check を確認"),
     "semantic_jev_payment_required": ("TypeSafe Jev が支払い未了（HTTP 402）を返しています",
@@ -1171,7 +1174,7 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             closed = report.get('notify_tracking_closed_parts')
             if _count(closed) and closed:
                 extra += f"／別に運用終了・未回収 {closed}件"
-        elif base in ("backup_not_verified", "backup_deferred_deadline"):
+        elif base in ("backup_not_verified", "backup_deferred_deadline", "backup_local_overdue"):
             extra = ("" if report.get("observations_recorded")
                      else _backup_local_text(report.get("backup_local")))
         elif base == "semantic_backlog_stalled" and _hours(oldest.get("semantic_jobs")):

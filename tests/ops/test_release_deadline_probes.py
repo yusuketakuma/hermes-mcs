@@ -12,6 +12,7 @@ import pytest
 
 import environment_diagnostics
 import lifecycle_io
+import local_backup
 import maintenance
 import mcs_update
 import owned_process
@@ -139,7 +140,7 @@ def test_busy_backup_stops_within_budget_and_does_not_publish_a_partial_file(tmp
     start = time.monotonic()
     try:
         with pytest.raises((maintenance.MaintenanceError, sqlite3.OperationalError)):
-            maintenance._publish_backup(str(source), str(staging), str(destination), deadline=start + .25)
+            local_backup.publish_backup(str(source), str(staging), str(destination), deadline=start + .25)
         assert time.monotonic() - start < 3
         assert not staging.exists() and not destination.exists()
     finally:

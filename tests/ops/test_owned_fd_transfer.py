@@ -10,6 +10,7 @@ import pytest
 
 import mcs_backup as backup
 import backup_evidence
+import held_restore
 import mcs_operations
 import mcs_repair
 
@@ -233,7 +234,7 @@ def test_shared_owned_stream_failure_closes_at_actual_entry(tmp_path, monkeypatc
             elif cut == "inspection_hash":
                 backup_evidence._inspection_hash(source, 4096)
             elif cut in ("copy_source", "copy_target"):
-                backup._copy_private(source, target, 4096)
+                held_restore.copy_private(source, target, 4096)
             elif cut == "encrypted_publish":
                 backup.offsite(str(source), policy, lambda: bytes(range(32)))
             elif cut == "atomic_text":

@@ -297,23 +297,24 @@ def test_prune_removes_alias_from_previous_attachment_name(tmp_path):
 def test_preupdate_backups_in_same_second_keep_both_generations(
         tmp_path, monkeypatch):
     import maintenance
+    import local_backup
     source = tmp_path / "ledger.db"
     db = ledger.Ledger(str(source))
     db.ensure_patient(1)
     db.close()
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setattr(maintenance.time, "strftime",
                         lambda _fmt: "20260925-010203")
 
-    first = maintenance.preupdate_backup(str(source))
+    first = local_backup.preupdate_backup(str(source))
     db = ledger.Ledger(str(source))
     db.ensure_patient(2)
     db.close()
-    second = maintenance.preupdate_backup(str(source))
+    second = local_backup.preupdate_backup(str(source))
 
     assert first != second
-    assert maintenance.valid_mcs_db(first)
-    assert maintenance.valid_mcs_db(second)
+    assert local_backup.valid_mcs_db(first)
+    assert local_backup.valid_mcs_db(second)
     with (closing(sqlite3.connect(first)) as older,
           closing(sqlite3.connect(second)) as newer, older, newer):
         assert older.execute("SELECT COUNT(*) FROM patients").fetchone()[0] == 1
@@ -324,15 +325,15 @@ def test_preupdate_backups_in_same_second_keep_both_generations(
                                  {"applied": [None]}, {"applied": [], "applying": []},
                                  {"applied": [{"backup_path": 7}]}])
 def test_corrupt_update_state_never_prunes_recovery_backups(tmp_path, monkeypatch, state):
-    import maintenance
+    import local_backup
     backups = tmp_path / "backups"
     backups.mkdir()
     saved = backups / "preupdate-synthetic.db"
     saved.write_bytes(b"recovery point")
     state_path = tmp_path / "update_state.json"
     state_path.write_text(json.dumps(state))
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
-    assert maintenance.prune_preupdate_backups(str(state_path)) == 0
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backups))
+    assert local_backup.prune_preupdate_backups(str(state_path)) == 0
     assert saved.read_bytes() == b"recovery point"
 
 
@@ -384,12 +385,13 @@ def test_backup_publish_fsyncs_copy_and_directory(tmp_path, monkeypatch,
     """A verified backup is durable before it becomes a rollback point:
     the copy is fsynced before os.replace and the directory after."""
     import maintenance
+    import local_backup
     source = tmp_path / "ledger.db"
     db = ledger.Ledger(str(source))
     db.ensure_patient(1)
     db.close()
     backups = tmp_path / "backups"
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backups))
     events = []
     real_fsync, real_replace = os.fsync, os.replace
 
@@ -404,9 +406,9 @@ def test_backup_publish_fsyncs_copy_and_directory(tmp_path, monkeypatch,
     monkeypatch.setattr(maintenance.os, "fsync", fsync)
     monkeypatch.setattr(maintenance.os, "replace", replace)
     if make == "daily":
-        maintenance.daily_backup(str(source))
+        local_backup.daily_backup(str(source))
     else:
-        maintenance.preupdate_backup(str(source))
+        local_backup.preupdate_backup(str(source))
     i = events.index(("replace", None))
     assert ("fsync", False) in events[:i]
     assert ("fsync", True) in events[i + 1:]

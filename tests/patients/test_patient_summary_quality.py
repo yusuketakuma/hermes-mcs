@@ -556,7 +556,7 @@ def repair(tmp_path, monkeypatch):
         return {'identity': {**identity, 'candidate_key': key,
                  'failure_key': patient_context_refresh_state._digest([input_key, key, assessment]), 'audit_key': 'e' * 64}}
     monkeypatch.setattr(patient_context_refresh_sources, '_quality_capture', capture)
-    def request(_client, method, body, timeout, *, deadline):
+    def request(_client, method, body, timeout, *, deadline, max_bytes):
         assert method == 'POST' and timeout > 0 and not led.db.in_transaction and current[0]
         [logical] = led.artifacts(patient_context_refresh_state.QUALITY_REPAIR, project_id=1)
         [financial] = led.artifacts('cloud_usage_reserve', project_id=1)

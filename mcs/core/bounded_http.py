@@ -7,7 +7,7 @@ loopback llama.cpp server (local_llm) and the public drug-information
 lookups (drug_info). Each request runs in a fresh
 interpreter: the JSON body and credential travel over stdin (never
 argv), the worker follows no proxy and no redirect, reads at most
-``MAX_RESPONSE_BYTES + 1`` bytes, and the parent enforces an absolute
+``MAX_RESPONSE_BYTES + 1`` bytes (unless the caller raises the bound), and the parent enforces an absolute
 deadline with kill/reap so a wedged socket can never outlive the
 caller's budget.
 
@@ -42,6 +42,9 @@ from mcs_util import NoRedirect, no_proxy_opener
 import worker_process
 
 MAX_RESPONSE_BYTES = 262144
+# A caller may raise its own read bound up to this ceiling (cloud answers size
+# theirs from the request's output limit); every other caller keeps the default.
+MAX_RESPONSE_BYTES_CEILING = 8 * 1024 * 1024
 
 ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages"
 _HTTP_WORKER_ARG = "--http-worker"
@@ -114,7 +117,9 @@ def _http_worker_main() -> int:
         public_mcp = envelope.get("public_mcp", False)
         auth = envelope.get("auth", "bearer")
         reservation_day = envelope.get("reservation_day")
+        max_bytes = envelope.get("max_bytes", MAX_RESPONSE_BYTES)
         if (not isinstance(endpoint, str)
+                or not _valid_max_bytes(max_bytes)
                 or not isinstance(allowed, list)
                 or not all(isinstance(e, str) for e in allowed)
                 or not _worker_endpoint_allowed(endpoint, allowed)
@@ -159,7 +164,7 @@ def _http_worker_main() -> int:
         except urllib.error.HTTPError as error:
             response = error
         try:
-            payload = response.read(MAX_RESPONSE_BYTES + 1)
+            payload = response.read(max_bytes + 1)
             result = {
                 "ok": True,
                 "status": int(getattr(response, "status",
@@ -203,6 +208,10 @@ def _jst_day(timestamp):
     return math.floor((timestamp + 9 * 3600) / 86400) * 86400 - 9 * 3600
 
 
+def _valid_max_bytes(value):
+    return type(value) is int and MAX_RESPONSE_BYTES <= value <= MAX_RESPONSE_BYTES_CEILING
+
+
 def _valid_reservation_day(day):
     return type(day) is int and abs(day) <= 2**53 and (day + 9 * 3600) % 86400 == 0
 
@@ -211,7 +220,7 @@ def bounded_http_request(endpoint: str, method: str, body,
                          timeout: float, api_key: str | None = None,
                          deadline: float | None = None,
                          allowed_endpoints=(), _public_mcp=False, auth="bearer",
-                         reservation_day=None):
+                         reservation_day=None, max_bytes=MAX_RESPONSE_BYTES):
     """Make one bounded request through a short-lived, reaped worker.
 
     An ``api_key`` request must target ``allowed_endpoints`` — the
@@ -219,13 +228,16 @@ def bounded_http_request(endpoint: str, method: str, body,
     ``api_key=None`` request is restricted to an unauthenticated
     loopback URL unless explicit public-MCP mode is selected. Request bodies
     and credentials are sent through stdin only; the worker follows neither proxies nor redirects and returns
-    at most ``MAX_RESPONSE_BYTES + 1`` bytes so callers can reject an
+    at most ``max_bytes + 1`` bytes (``MAX_RESPONSE_BYTES`` unless the caller
+    raises it, up to ``MAX_RESPONSE_BYTES_CEILING``) so callers can reject an
     oversized response without retaining an unbounded body.
     """
     if not isinstance(endpoint, str) or method not in ("GET", "POST"):
         raise ValueError("request_invalid")
     if reservation_day is not None and not _valid_reservation_day(reservation_day):
         raise ValueError("reservation_day_invalid")
+    if not _valid_max_bytes(max_bytes):
+        raise ValueError("max_bytes_invalid")
     allowed = {e for e in allowed_endpoints if isinstance(e, str)}
     if (auth not in ("bearer", "anthropic")
             or (auth == "anthropic" and (endpoint != ANTHROPIC_ENDPOINT
@@ -266,6 +278,7 @@ def bounded_http_request(endpoint: str, method: str, body,
         "public_mcp": _public_mcp,
         "auth": auth,
         "reservation_day": reservation_day,
+        "max_bytes": max_bytes,
     }
     payload = json.dumps(envelope, ensure_ascii=False,
                          allow_nan=False).encode("utf-8")
@@ -314,7 +327,7 @@ def bounded_http_request(endpoint: str, method: str, body,
     except (KeyError, TypeError, ValueError) as error:
         raise OSError("http worker response invalid") from error
     if (status < 100 or status > 599 or not isinstance(headers, dict)
-            or len(raw) > MAX_RESPONSE_BYTES + 1):
+            or len(raw) > max_bytes + 1):
         raise OSError("http worker response invalid")
     return status, headers, raw
 
