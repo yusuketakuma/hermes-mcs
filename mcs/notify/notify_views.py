@@ -21,6 +21,7 @@ from drug_map import candidate_note
 from rollup import current_cached_refs
 from mcs_queries import karte_summary_block
 from patient_context import DETAIL_LABELS, LABELS, context_items, extract_context, pharmacy_state_items
+import patient_context_status
 from mcs_contract import project_url
 from mcs_queries import JST, incomplete_reply_roots
 from mcs_util import fold_map, search_fold
@@ -1441,16 +1442,14 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         sources = inference.get("sources") or {}
         status.append(f"解析未完了: 未解析 {sources.get('pending', 0)}件 / 保留 {sources.get('held', 0)}件 / "
                       f"解析失敗 {sources.get('failed', 0)}件 / 本文不完全 {sources.get('incomplete', 0)}件")
-        reason = {"unacquired": "原文の取得完了を未確認",
-                  "acquisition_incomplete": "履歴の取得は未完了",
-                  "dependency_gap": "変更前の根拠が不足しています",
-                  "summary_pending": "患者コンテキストの更新待ち",
-                  "quality_unknown": "要約の照合結果を確認できません",
-                  "quality_held": "要約の照合を保留しています",
-                  "cloud_extraction_pending": "クラウド解析が未完了",
-                  "audit_pending": "原文の根拠照合待ち"}.get(inference.get("status"))
-        if reason:
-            status.append(reason)
+        # every coverage state has wording; an unrecognised one is shown as unknown, never dropped
+        status.append(patient_context_status.status_text(inference.get("status")))
+        gap = (inference.get("dependencies") or {}).get("coverage")
+        if inference.get("status") == "dependency_gap" and isinstance(gap, dict) and all(
+                type(gap.get(key)) is int and gap[key] >= 0 for key in ("terminal", "repairable")):
+            status.append(f"根拠不足の内訳: 復元できない記録 {gap['terminal']}件 / 原本の再点検待ち {gap['repairable']}件"
+                          + ("（復元できない記録があるため、再点検だけでは解消しません）"
+                             if gap["terminal"] and gap["repairable"] else ""))
     if context_coverage:
         status.append(f"取込済み {context_coverage.get('fetched', 0)}件 / 点検済み {context_coverage.get('analyzed', 0)}件 / 未点検 {context_coverage.get('unscanned', 0)}件 / 本文未取得・不完全 {context_coverage.get('incomplete', 0)}件")
         status.append(f"原文に対応する引用 {context_coverage.get('evidence_supported', 0)} / {context_coverage.get('evidence_total', 0)}件")

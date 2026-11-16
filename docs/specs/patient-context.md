@@ -182,6 +182,12 @@ canonical v3/v4の既存事実にもoptional patient_contextを同じ事実引�
 
 前回からの変化は、閲覧者と通知先の識別値をhash化したキーと表示依頼時刻で比較する。これは送信成功・既読・臨床上の確認完了の記録ではない。新着・遡及取得はfirst_seen、訂正・削除は既存改訂履歴、過去記録の追加発見はfound_atを使う。削除した本文は表示しない。共有チャットへの自動配信は追加しない。
 
+### 状態別件数と表示の文言
+
+`doctor --probe data` の `patient_context.states`（`patient_context_status.state_counts`）は、保存済みの最後の結果（`basis: "last_stored_outcome"`）を数える。現在の `_inference_coverage` の再計算ではなく、作業待ちの件数 `counts`（患者ごとの走査、1秒で打ち切り）とは別に、1秒の上限で読む。アーカイブしていない患者を `invalid`（読めない記録あり）→`held`→`failed`→`dependency_gap`（依存の不足が未解消。依存喪失の記録を持つ患者について `inference_dependency_loss.read` が未完了と返す場合で、監査済みの coverage 行で解消した gap は含まない）→`published`→`in_progress`（記録あり・未公開）→`no_record`（未着手）の優先順でちょうど1区分へ入れ、合計を `patients_total` と一致させる。gap でも coverage でもない依存喪失の記録（恒久的な否定利用の障壁）を持つ患者は `dependency_loss.patients` に別に数え、解除可否は `unclassified` とし、区分にも注意にも使わない。読み手は `sqlite3.Row` で列名参照するため、`state_counts` は呼出し中だけ接続の row factory を `sqlite3.Row` にして元へ戻す。読めない行・型の誤り・不正な原典キーは `invalid_rows` に数え、完了側へは数えない。資料の保留・失敗は、投稿が削除・空本文になった場合と、保存時の `source_binding` が現在の原文と異なる場合は数えない（その患者は `in_progress` に残る）。`source_binding` を持たない旧行は保存された結果のまま数える。失敗コードは登録済みの `patient_context_*`（旧 `nightly_*` は読み替え）だけを出し、ほかは `other` にまとめる。照合の保留は `quality_held` とする。患者名・本文・個別の患者IDは出さない。読取りに失敗した場合は `states` を `null` とし0件とは扱わない。`counts`・`lanes`・`states` はどの経路（未確認・失敗・設定不正）でも同じキーを持つ。保留・失敗・未解消の依存不足・読めない記録が1件以上あれば注意、`states` か `counts` のどちらかが得られなければ確認できません、両方が得られて問題がなければ正常とする（`lanes` は状態判定に使わない）。
+
+🧾 の状態行は `_inference_coverage` の全状態（`patient_context_status.COVERAGE_STATES`）に日本語を持ち、未知の値は「解析状況を確認できません」と表示して省かない。保留・失敗は事実だけを示し、再開・再試行の予告は付けない。`dependency_gap` で依存の内訳（`terminal`・`repairable` の整数）がある場合だけ「復元できない記録／原本の再点検待ち」の件数を添え、内訳がない場合は0件と表示しない。復元できない記録がある間は再点検だけでは解消しない（`_inference_ready` は `terminal` が0の場合だけ再点検を許す）。
+
 ### 段階的な評価（生成だけの評価はpublication=falseを明示）
 
 - R0: 一時DBと完全合成の本文・応答で、境界時刻、次の周回での再開、競合、失敗、失効、表示・認可を検証する。実患者DB・Keychain・実LLM・通知先へ接続しない。
