@@ -49,6 +49,12 @@ def test_runner_lists_ci_jobs_in_order():
                             text=True, timeout=10, check=True).stdout.split()
     assert listed == list(_ci_jobs())
     assert len(listed) == 8
+    runner = RUNNER.read_text()
+    assert '全${job_count} job pass' in runner
+    count_line = next(line.strip() for line in runner.splitlines() if line.strip().startswith("job_count="))
+    result = subprocess.run(["bash", "-c", count_line + '; printf "%s" "$job_count"'],
+                            env={"JOBS": " ".join(listed)}, text=True, capture_output=True, check=True)
+    assert int(result.stdout) == len(listed)
 
 
 def test_runner_contains_every_ci_run_line():
@@ -257,17 +263,17 @@ def test_hermes_checkout_with_source_edits_is_not_runnable(tmp_path, dirty):
 
 @pytest.mark.parametrize("all_pass", ["0", "1"])
 def test_final_report_preserves_success_exit_and_exact_sha(tmp_path, all_pass):
-    # Exercise the real reporting tail without repeating the six expensive jobs.
+    # Exercise the real reporting tail without repeating the expensive jobs.
     reporting = RUNNER.read_text().split('if [ "$all_pass" = 1 ]; then', 1)[1]
     sha = "a" * 40
     result = subprocess.run(
         ["bash", "-u", "-c", 'if [ "$all_pass" = 1 ]; then' + reporting],
         env={"PATH": "/usr/bin:/bin", "LC_ALL": "en_US.UTF-8", "all_pass": all_pass, "sha": sha,
-             "out": str(tmp_path)}, capture_output=True, text=True, errors="replace", timeout=10)
+             "out": str(tmp_path), "JOBS": " ".join(_ci_jobs())}, capture_output=True, text=True, errors="replace", timeout=10)
     assert result.returncode == (0 if all_pass == "1" else 1), result.stderr
     assert "CI の実行成功ではない" in result.stdout
     if all_pass == "1":
-        assert f"全6 job pass（{sha}）" in result.stdout
+        assert f"全8 job pass（{sha}）" in result.stdout
     else:
         assert "未成立" in result.stdout
     assert (tmp_path / "meta.txt").read_text() == result.stdout
