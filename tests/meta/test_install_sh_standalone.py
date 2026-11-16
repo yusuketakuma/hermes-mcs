@@ -292,8 +292,11 @@ def test_interactive_install_asks_for_the_runtime(tmp_path, setup_answer, setup_
     if setup_status:
         assert "初期設定は完了していません".encode() in output
         assert "導入が途中で停止しました".encode() not in output
-    assert "LINE WORKS を選んだ場合".encode() in output
-    assert "自動実行の登録を省略した場合".encode() in output
+    assert "次にすること（上から順に）".encode() in output
+    assert "setup browser".encode() in output
+    # steps for other targets or skipped stages stay out of the summary
+    assert "LINE WORKS の接続設定も必要です".encode() not in output
+    assert "自動実行の登録を省略した".encode() not in output
     assert any("mcs_setup.py init" in call for call in _calls(stub_root)) == (setup_answer == b"1\n")
     config = home / ".mcs/config.json"
     saved = config.read_bytes()

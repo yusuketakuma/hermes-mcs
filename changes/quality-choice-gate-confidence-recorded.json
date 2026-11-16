@@ -1,7 +1,7 @@
 {
   "category": "changed",
   "title": "患者コンテキスト品質判定をchoice基準へ変更しconfidenceを記録へ",
-  "summary": "患者コンテキストのJev品質監査は、これまで全factで『期待どおりのchoice』かつ『confidenceが閾値以上』を要求していました。Jevのconfidenceは監査全体で0.3〜0.9に広く分布し、複数factのソースでは統計的にほぼパスしない構造でした。今回、判定はchoiceのみで行い、confidenceは合格レシートのlow_confidence欄と監査所見に記録する形へ変更しました。choiceが期待と異なる・ambiguous・missing・不正回答・技術的unknownの場合は従来どおり不合格・保留・延期となり、confidenceが低いだけでは不合格になりません。",
+  "summary": "患者コンテキストのJev品質監査は、全factで『期待どおりのchoice』かつ『confidenceが閾値以上』を要求していましたが、Jevのconfidenceは0.3〜0.9に広く分布し、複数factのソースではほぼパスしない構造でした。判定はchoiceのみで行い、confidenceは合格レシートのlow_confidence欄と監査所見に記録する形へ変更しました。choiceが期待と異なる場合等は従来どおり不合格・保留・延期で、confidenceが低いだけでは不合格になりません。",
   "upgrade": "追加操作は不要です。既存の回答・合格/不合格レシートはそのまま監査可能です。ソース品質PASSのcontentにlow_confidence欄が加わるため、本変更前に発行されたソースPASSは存在しないため互換上の問題はありません（発行実績0件）。summary目的のPASS形式は変更していません。",
   "details": [
     "mcs/patients/patient_context_quality_receipts.py: _quality_skip_evidence・_quality_store_answersの不合格記録・_quality_mark_passの完了検証をchoice一致のみに変更しました。",
@@ -10,5 +10,12 @@
     "mcs/semantic/semantic_usage_receipts.py: patient_source_pass_contentの再検証をchoice一致のみにし、閾値未満のconfidenceを持つfact_idをlow_confidence欄へ記録します。confidenceの改竄は従来どおりPASS内容の不一致として検出されます。",
     "semantic_auditのfindings（*_low_confidence等）はシグナルとして従来どおり記録されます。semantic側のevaluate_source_fact_coverageは別経路のため変更していません。"
   ],
-  "refs": ["mcs/patients/patient_context_quality_receipts.py", "mcs/patients/patient_context_quality_controller.py", "mcs/patients/patient_context_refresh_readiness.py", "mcs/semantic/semantic_usage_receipts.py", "tests/patients/test_patient_summary_quality.py", "tests/patients/test_anthropic_context_sources.py"]
+  "refs": [
+    "mcs/patients/patient_context_quality_receipts.py",
+    "mcs/patients/patient_context_quality_controller.py",
+    "mcs/patients/patient_context_refresh_readiness.py",
+    "mcs/semantic/semantic_usage_receipts.py",
+    "tests/patients/test_patient_summary_quality.py",
+    "tests/patients/test_anthropic_context_sources.py"
+  ]
 }

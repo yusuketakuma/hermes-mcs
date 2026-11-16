@@ -1,7 +1,7 @@
 {
   "category": "fixed",
   "title": "患者コンテキスト処理パスの失敗・エラー理由が観測ログで「unclassified」に潰れる問題を修正",
-  "summary": "患者コンテキストの処理パスが failed/error で終わった際、観測イベント patient_context_pass の reason 欄は固定語彙のホワイトリストだけを通し、それ以外はすべて「unclassified」にしていました。safe_error_code 化により artifact の failure 欄には実コードが残るようになりましたが、パスイベント側では cloud_result_discarded などの登録済みコードや例外クラス名が依然として判別不能でした。error ステータスは例外クラス名を error キーに持ちながら観測側がそのキーを読まず、常に unclassified になっていました。failed/error ステータスに限り、識別子形（ASCII の Python 識別子・80文字以内）の失敗コード・型名をそのまま記録するようにしました。deferred の理由は従来どおり固定語彙のみで、自由文・パス・SQL が混入しない境界は維持されます。",
+  "summary": "患者コンテキストの処理パスが failed/error で終わった際、観測イベント patient_context_pass の reason 欄は固定語彙しか通さず、cloud_result_discarded など登録済みコードや例外クラス名が unclassified に潰れていました。failed/error ステータスに限り、識別子形（ASCII・80文字以内）の失敗コード・型名をそのまま記録するようにしました。deferred の理由は従来どおり固定語彙のみで、自由文・パス・SQL が混入しない境界は維持されます。",
   "upgrade": "追加操作は不要です。適用後、failed/error のパスイベントには登録済みコードや例外クラス名（例: cloud_result_discarded、ValueError、RuntimeError）が記録され、deferred ではこれまで unclassified に潰れていた世代クォータ・要約品質ロック等の既知理由も実名で記録されます。既存イベントの解釈は変わりません。",
   "details": [
     "cloud_backlog._context_pass_observation で status=error のとき result の error キー（extract_llm_resident が type(exc).__name__ を格納）を理由の取得元として読み、failed/error ステータスでは識別子形の値を reason へそのまま記録するようにしました。",
@@ -9,5 +9,8 @@
     "記録される値は ASCII 識別子・80文字以内に限定されるため、空白・記号・パス・自由文は従来どおり unclassified に畳まれます。",
     "回帰テストを追加し、failed/error のコード透過・既知 deferred 理由の verbatim 記録・deferred の厳格さ・自由文拒否を検証しました。"
   ],
-  "refs": ["mcs/llm/cloud_backlog.py", "tests/llm/test_context_pool_schedule.py"]
+  "refs": [
+    "mcs/llm/cloud_backlog.py",
+    "tests/llm/test_context_pool_schedule.py"
+  ]
 }

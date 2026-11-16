@@ -290,6 +290,23 @@ def _cli_legacy_base():
         raise config_edit.ConfigConflict('config_changed') from None
 
 
+def _locked_current_state(split_initial, base):
+    """Re-verify, inside the config edit lock, that what the command read is still current.
+
+    A split-provider generation is re-matched wholesale; a legacy config is
+    pinned by the snapshot's base token. Returns a zero-arg check for use at
+    each write/commit point inside ``config_edit._edit_lock``."""
+    import config_edit
+
+    def current_state():
+        if split_initial is not None:
+            return _reviewed_split_current(split_initial)
+        if _cli_legacy_base() != base:
+            raise config_edit.ConfigConflict('config_changed')
+        return None
+    return current_state
+
+
 def _init_reselect_provider(cfg, initial, set_args):
     if initial[0] != 'split':
         return

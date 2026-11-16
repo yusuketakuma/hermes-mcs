@@ -396,42 +396,15 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 
 CDPは同じMacの別ユーザーからも到達できるため、他にログイン可能なアカウントがある、または確認できない環境では、以下のCDP起動・セッション確認へ進まず管理者に相談します。`manual_required:multi_user_host`が出た場合は停止を保持します。専用OSユーザーを追加しただけで解消したとせず、アカウントの削除や安全ゲートの解除で回避しません。
 
-1. 導入時に選んだMCS保存先の`chrome-profile`を専用プロファイルとして使います。普段のChromeプロファイルをコピーしません。次のplaceholderをその絶対パスへ置き換えます。すでに同じプロファイルのChromeが動いている場合は重ねて起動せず、本人が保存中の作業を確認してから対処します。
+1. 本人の端末で次を実行します。導入時のMCS保存先にある`chrome-profile`を専用プロファイルとして、MCSのログイン画面を専用Chromeで開きます（普段のChromeプロファイルはコピーしません）。同じプロファイルのChromeがすでに動いていればそれを使い、重ねて起動しません。
 
    ```bash
-   MCS_CHROME_PROFILE="/absolute/path/to/mcs-root/chrome-profile"
-   mkdir -p "$MCS_CHROME_PROFILE"
-   chmod 700 "$MCS_CHROME_PROFILE"
-   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-     --remote-debugging-port=9333 --user-data-dir="$MCS_CHROME_PROFILE" \
-     --no-first-run --no-default-browser-check \
-     --disable-features=OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationGuideOnDeviceModel \
-     https://www.medical-care.net/authentication/login
+   ~/.local/bin/mcs setup browser
    ```
 
-2. 開いた専用Chromeで、本人がMCSへログインします。ID・パスワード・Cookie・トークンをチャットへ貼りません。MCSの画面を開けたことを確認し、ログイン操作の代行や秘密値の表示は行いません。
-3. 別のターミナルで`curl --noproxy '*' --max-redirs 0 -sf -m 3 http://127.0.0.1:9333/json/version`がJSONを返すことを確認します。これはChromeの稼働確認で、MCSセッションの有効性とは別です。
-4. MCSへの認証確認が許可された範囲で、同じcheckoutのルートから次を実行します。`PY`は導入時に選んだMCS用Pythonの絶対パスへ置き換えます。既存アダプターでセッションの可否だけを確認し、トークン・患者情報を表示せず、トークンキャッシュも保存しません。
-
-   ```bash
-   PY="/absolute/path/to/selected-mcs-python"
-   "$PY" - <<'PYSESSION'
-   import sys
-   sys.path.insert(0, "mcs")
-   import _mcs_path
-   from mcs_adapter import MCSAdapter
-   from mcs_contract import MCSError
-   adapter = MCSAdapter()
-   try:
-       adapter.bootstrap_token()
-       ok = adapter.check_session()
-   except MCSError as error:
-       print("MCS session: " + error.kind)
-       raise SystemExit(1) from None
-   print("MCS session: " + ("ok" if ok else "unavailable"))
-   raise SystemExit(0 if ok else 1)
-   PYSESSION
-   ```
+2. 開いた専用Chromeで、本人がMCSへログインします。ID・パスワード・Cookie・トークンを端末やチャットへ入力・貼付けしません。コマンドはログイン欄を自動入力しません。
+3. ログインできたら端末でEnterを押します。コマンドは既存アダプターで1回だけ読取りのセッション確認を行い、「ログインした状態を確認しました」と表示したら完了です。確認できたトークンは定期収集と同じ本人専用のキャッシュへ保存し、トークン・患者情報は表示しません。まだ確認できなければ、ログインを済ませて再度Enterを押します（`q`で中止）。
+4. `停止:`と表示された場合は、続く`対処:`に従います。他にログインできるOSアカウントがあると`manual_required:multi_user_host`と同じ理由でChromeを開かずに止まります。初期設定（`mcs setup`）が正常に終わると、続けてこの手順へ進むかを尋ねます。
 
 5. セッション確認が成功してから、承認した範囲の初回収集と通知到着を確認します。未実施・失敗なら、その段階を未確認として残します。standaloneは[独立モード](STANDALONE.md)のPythonを使います。
 
