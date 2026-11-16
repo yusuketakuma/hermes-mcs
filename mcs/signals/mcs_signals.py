@@ -119,9 +119,10 @@ def _med_followup(db, now, th, sig_cfg):
 
     Episode-level keys keep one candidate per drug per room instead of
     one per message — repeated mentions of the same med were stacking
-    into duplicate signals. The scan is deliberately unbounded over
-    artifact history: the qualifying condition is time-dependent, and
-    trickle imports can land old posts inside any past window.
+    into duplicate signals. There is no incremental watermark: the
+    qualifying condition is time-dependent and trickle imports can land
+    old posts inside any past window, so every run rescans the mentions
+    within followup_max_age_d.
 
     Exclusions beyond the shared patient-current predicate: mentions
     authored by configured self_organizations (our own reports are not
@@ -131,6 +132,8 @@ def _med_followup(db, now, th, sig_cfg):
     orgs, _, _ = self_sets(sig_cfg, db)
     self_pred, self_params = _self_author_pred(orgs)
     excludes = _med_excludes(sig_cfg)
+    # streamed: one statement consumed before any other read, so the
+    # snapshot is the same as fetchall without holding every Row
     rows = db.execute(
         f"""WITH med_msgs AS MATERIALIZED (
                 SELECT m.project_id AS pid, m.message_id AS mid,
@@ -189,7 +192,7 @@ def _med_followup(db, now, th, sig_cfg):
          now - th["followup_days"] * DAY_S,
          th["followup_days"] * DAY_S,
          now - th["followup_days"] * DAY_S,
-         th["followup_days"] * DAY_S)).fetchall()
+         th["followup_days"] * DAY_S))
     episodes = {}
     for pid, med, mid in rows:
         if re.sub(r"\s+", "", med) in excludes:
@@ -208,6 +211,7 @@ def _med_followup(db, now, th, sig_cfg):
 def _comm_concentration(db, now, th, sig_cfg):
     """Non-archived rooms whose post count in the last 72h exceeds a
     fixed threshold. Volume is not severity."""
+    # fetchall kept: GROUP BY project_id yields at most one row per room
     rows = db.execute(
         """SELECT m.project_id, COUNT(*) FROM messages m
            JOIN patients p ON p.project_id=m.project_id
@@ -227,6 +231,7 @@ def _comm_concentration(db, now, th, sig_cfg):
 
 def _request_overdue(db, now, th, sig_cfg):
     """Formal register fact: open/in_progress requests past due_date."""
+    # fetchall kept: each row yields at most one signal, so streaming saves nothing
     rows = db.execute(
         "SELECT request_id, project_id, due_date FROM requests "
         "WHERE status IN ('open','in_progress') AND due_date IS NOT NULL"
@@ -252,6 +257,7 @@ def _request_overdue(db, now, th, sig_cfg):
 def _request_aging(db, now, th, sig_cfg):
     """Open register items whose created_at is older than the aging
     threshold — regardless of due_date (register fact only)."""
+    # fetchall kept: each row yields at most one signal, so streaming saves nothing
     rows = db.execute(
         "SELECT request_id, project_id, created_at FROM requests "
         "WHERE status IN ('open','in_progress') AND created_at <= ?",
@@ -392,6 +398,8 @@ def _pharmacist_request(db, now, th, sig_cfg):
     # Empty/不明 targets never count as pharmacist-addressed.
     tgt_pred = (f" OR json_extract({JSON_OBJECT_SQL},'$.to') IN "
                 f"({','.join('?' * len(targets))})") if targets else ""
+    # streamed: one statement consumed before any other read, so the
+    # snapshot is the same as fetchall without holding every Row
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, m.posted_at_ts,
                    json_extract({JSON_OBJECT_SQL},'$.action') AS act
@@ -412,7 +420,7 @@ def _pharmacist_request(db, now, th, sig_cfg):
             ORDER BY m.project_id, m.message_id""",
         (now - th["fyi_max_age_d"] * DAY_S,
          now - th["request_response_days"] * DAY_S,
-         *targets)).fetchall()
+         *targets))
     groups = {}
     for pid, mid, ts, act in rows:
         groups.setdefault((pid, mid, ts), []).append(act)
@@ -442,6 +450,8 @@ def _rx_request_visibility(db, now, th, sig_cfg):
     addressed requests belong to pharmacist_request_unanswered."""
     orgs, profs, targets = self_sets(sig_cfg, db)
     extra = "".join(",?" for _ in targets)
+    # streamed: one statement consumed before any other read, so the
+    # snapshot is the same as fetchall without holding every Row
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, m.posted_at_ts,
                    json_extract({JSON_OBJECT_SQL},'$.to') AS rto,
@@ -466,7 +476,7 @@ def _rx_request_visibility(db, now, th, sig_cfg):
                    OR json_extract({JSON_OBJECT_SQL},'$.action') LIKE '%残薬%'
                    OR json_extract({JSON_OBJECT_SQL},'$.action') LIKE '%一包化%')
             ORDER BY m.project_id, m.message_id""",
-        (now - th["fyi_max_age_d"] * DAY_S, *targets)).fetchall()
+        (now - th["fyi_max_age_d"] * DAY_S, *targets))
     groups = {}
     for pid, mid, ts, rto, act in rows:
         groups.setdefault((pid, mid, ts), []).append((rto, act))
@@ -541,6 +551,8 @@ def _adherence_concern(db, now, th, sig_cfg):
     self_pred, self_params = _self_author_pred(orgs)
     horizon = now - th["fyi_max_age_d"] * DAY_S
     groups = {}
+    # streamed: one statement consumed before any other read, so the
+    # snapshot is the same as fetchall without holding every Row
     rows = db.execute(
         f"""SELECT m.project_id, m.message_id, m.posted_at_ts,
                    TRIM(json_extract({JSON_OBJECT_SQL},'$.name')) AS med
@@ -565,7 +577,7 @@ def _adherence_concern(db, now, th, sig_cfg):
               AND (json_extract({JSON_OBJECT_SQL},'$.negated') IS 1
                    OR NOT ({MED_NOT_CAPABILITY_SQL}))
             ORDER BY m.project_id, m.message_id""",
-        (_patient_fact_keys(db, "meds", horizon), horizon, *self_params)).fetchall()
+        (_patient_fact_keys(db, "meds", horizon), horizon, *self_params))
     for pid, mid, ts, med in rows:
         groups.setdefault((pid, mid, ts), []).append(med)
     # SQL-side prefilter narrows the Python phrase scan to rows that
@@ -622,6 +634,8 @@ def _discharge_notice(db, now, th, sig_cfg):
     covered = {mid for mid, (pid, mids) in grouped.items()
                if _patient_transition(db, pid, mid)
                and any(_patient_change_message(db, pid, item) for item in mids)}
+    # fetchall kept: the rows are iterated twice (engagement checker, then the
+    # loop) and the loop reads the database per row
     rows = db.execute(
         f"""SELECT DISTINCT d.project_id, d.message_id, d.posted_at_ts
             FROM messages d
