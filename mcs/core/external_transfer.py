@@ -64,12 +64,16 @@ def status(root=None) -> dict:
     return {"state": "acknowledged", "auto_enable": True, "acknowledged": ack}
 
 
-def auto_enable_allowed(service: str, root=None) -> bool:
-    """True when a present key may switch ``service`` on without an explicit mode."""
-    state = status(root)
+def service_allowed(state: dict, service: str) -> bool:
+    """True when ``state`` (from :func:`status`) lets a present key switch ``service`` on."""
     if state["state"] != "acknowledged":
         return state["auto_enable"]
     return service in state["acknowledged"].get("services", ())
+
+
+def auto_enable_allowed(service: str, root=None) -> bool:
+    """True when a present key may switch ``service`` on without an explicit mode."""
+    return service_allowed(status(root), service)
 
 
 def require(root=None) -> bool:

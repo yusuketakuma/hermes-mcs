@@ -60,7 +60,7 @@
   患者名・タスク内容・担当者名を含むテキストで送る。
   閲覧用 snapshot と `mcs_view` 出力にも PHI が含まれ得るため、閲覧権限と転送先を管理する
 - MCSの私有 `.env` にキーがありmode未指定なら、Jevはassist、選択したAnthropicまたはOpenAIはonで自動使用する。
-  ただし新規導入の環境は `external_transfer.json` に施設の確認を記録するまで自動使用しない（[法令・ガイドライン対応](docs/guides/COMPLIANCE.md)）。既定の優先順はAnthropic、OpenAIとする。
+  ただし新規導入の環境は `external_transfer.json` に施設の確認を記録するまで自動使用しない（[法令・ガイドライン対応](docs/guides/COMPLIANCE.md)）。既定の優先順はAnthropic、OpenAIとし、確認を記録した環境では許可されたサービスだけから順に選ぶ（[法令・ガイドライン対応 4節](docs/guides/COMPLIANCE.md)）。
   本文・患者文脈には患者名等が含まれ得る。匿名化はしない。明示OFF・対象・低い予算は維持する。
   キーの登録前に送信先・対象と契約を確認する（[設定と保持条件](docs/guides/ANTHROPIC.md)）
 - 公開医薬品情報の照会はローカルTinyFishゲートウェイだけを使う。トークンファイルがない場合・不正な場合、

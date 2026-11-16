@@ -196,3 +196,23 @@ def test_after_save_interruption_keeps_partial_configuration(monkeypatch, tmp_pa
     assert mcs_setup.main(["init"]) == 130
     assert json.loads((tmp_path / "c.json").read_text())["trickle_pages"] == 2
     assert "途中まで保存した設定は残っています" in capsys.readouterr().out
+
+
+def test_preview_names_the_approved_auto_provider(monkeypatch, capsys, tmp_path):
+    import external_transfer
+    import mcs_util
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    external_transfer.require(tmp_path)
+    external_transfer.acknowledge(by="管理者", reason="契約確認", services=["openai"],
+                                  confirm_human=True, root=tmp_path, command_id="o")
+    monkeypatch.setattr("builtins.input", lambda prompt: "2")
+    keys = {"anthropic": True, "openai": True, "jev": False}
+    setup_wizard.confirm_save({"notify_target": "slack:C123"}, plugin_profile=None, key_presence=keys)
+    output = capsys.readouterr().out
+    assert "AI利用先: openai" in output
+    assert "外部AI追加処理: on" in output and "OpenAIのAPIへ送信" in output
+    external_transfer.acknowledge(by="管理者", reason="取消", services=["jev"],
+                                  confirm_human=True, root=tmp_path, command_id="j")
+    setup_wizard.confirm_save({"notify_target": "slack:C123"}, plugin_profile=None, key_presence=keys)
+    output = capsys.readouterr().out
+    assert "AI利用先: anthropic" in output and "外部AI追加処理: off" in output

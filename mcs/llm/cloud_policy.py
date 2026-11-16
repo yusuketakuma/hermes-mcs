@@ -327,7 +327,7 @@ def provider_key(provider, root=None):
 
 
 def resolve_settings(cfg, root=None, *, available_providers=None):
-    """Choose a configured provider by key availability; never retry a paid unit elsewhere."""
+    """Choose a configured provider by key availability and facility approval; never retry a paid unit elsewhere."""
     if available_providers is not None and (
             type(available_providers) is not tuple
             or any(type(name) is not str or name not in PROVIDERS for name in available_providers)
@@ -336,15 +336,35 @@ def resolve_settings(cfg, root=None, *, available_providers=None):
     def key_present(name):
         return (bool(provider_key(name, root)) if available_providers is None
                 else name in available_providers)
+    import external_transfer
+    return select_settings(cfg, key_present, external_transfer.status(root))
+
+
+def select_settings(cfg, key_present, transfer):
+    """Pick the provider and automatic mode from key presence and a review status without reading any key.
+
+    ``transfer`` is :func:`external_transfer.status`. Without an explicit mode
+    a present key switches the cloud on only for a provider the review allows;
+    ``auto`` prefers the first keyed, allowed provider in ``provider_order`` and
+    otherwise keeps the key-only pick with the mode off. A changed review can
+    therefore change the auto provider and the scope generation."""
+    import external_transfer
     c, errors = cloud_config(cfg)
+    block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
+    gate = None
+    if (block is None or isinstance(block, dict) and "mode" not in block) and not errors:
+        def gate(name):
+            return key_present(name) and external_transfer.service_allowed(transfer, name)
     provider = c["provider"]
     if provider == "auto":
-        provider = next((name for name in c["provider_order"] if key_present(name)), c["provider_order"][0])
-    block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
-    if (block is None or isinstance(block, dict) and "mode" not in block) and not errors:
-        import external_transfer
-        c, errors = cloud_config(cfg, key_present=key_present(provider)
-                                 and external_transfer.auto_enable_allowed(provider, root))
+        order = c["provider_order"]
+        provider = None
+        if gate is not None:
+            provider = next((name for name in order if gate(name)), None)
+        if provider is None:
+            provider = next((name for name in order if key_present(name)), order[0])
+    if gate is not None:
+        c, errors = cloud_config(cfg, key_present=gate(provider))
     c["provider"] = provider
     if isinstance(block, dict) and "model" in block:
         try:

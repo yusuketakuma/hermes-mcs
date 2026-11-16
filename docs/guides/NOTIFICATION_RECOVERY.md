@@ -264,6 +264,7 @@ CLIが既存契約に従ってDiscord=1・Slack=2・LINE WORKS=3の版を付け�
 `card_resolve`の受付時にはsnapshot上のrenderの存在を追加条件にしません。
 復元でrenderやattemptが失われた場合も、適用時に既存の復元保留・保存scope・journalを照合します。
 90日より古いバックアップからの復元で、送信記録（attempt）の無いまま保留されたrenderは、`attempt_id`に`delivery_id`と同じ値を指定します。`mark_not_sent`で解除すると、そのカードの次のrenderを発行します。
+同じ復元で、カード本体は届いたもののスレッド・本文・添付の結果が記録されていない部品は、`restore_beyond_journal_horizon`の`unknown`になります（各カードの最新renderだけが対象です。以前のrenderは次の更新を止めないため変更しません）。`card_part_plan`で計画を出し、`card_part_resolve`で確認・解除すると、カードの次の更新を発行できます。記録が無いことは未送信の証拠ではないため、`not_sent`にはしません。Discordの添付のまとまり（file_group）は、載せる面（カードか本文）と同じattemptで照合するため、まとまり全体を1つの計画で解除します。Slackの未着手のfile_groupは従来どおり`no_journal_started`で解除します。
 受付できたことは、保留の解除や証拠の成立を意味しません。
 
 ## 4. 未発行の通知を送らず取り消す（Slack・Discord・LINE WORKS）

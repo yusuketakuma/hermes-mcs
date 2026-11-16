@@ -458,7 +458,7 @@ PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
                      "workspace_unverified", "sdk_capability_missing", "retry_policy_unknown",
                      "prefetch_failed", "unsupported_part", "slack_attachment_incomplete",
                      "scope_mismatch", "no_target", "bad_render", "bad_slack_response",
-                     "operator_part_resolve")
+                     "operator_part_resolve", "restore_beyond_journal_horizon")
 
 
 # non-card part kinds an operator recovery command can name

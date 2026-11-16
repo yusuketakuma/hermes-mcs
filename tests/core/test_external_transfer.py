@@ -122,3 +122,47 @@ def test_receipt_state_names_the_published_record(tmp_path):
     external_transfer.acknowledge(by="管理者", reason="再確認", services=["anthropic"],
                                   confirm_human=True, root=tmp_path, command_id="b")
     assert external_transfer.receipt_state(receipt, tmp_path) == "external_transfer_superseded"
+
+
+def _both_keys(root):
+    env = root / ".env"
+    env.write_text("MCS_ANTHROPIC_API_KEY=synthetic-a\nMCS_OPENAI_API_KEY=synthetic-o\n")
+    os.chmod(env, 0o600)
+
+
+def _resolved(cfg, root):
+    settings, errors = cloud_policy.resolve_settings(cfg, root)
+    return settings["mode"], settings["provider"], errors
+
+
+def test_auto_provider_skips_a_keyed_provider_the_facility_did_not_approve(tmp_path):
+    _both_keys(tmp_path)
+    assert _resolved({}, tmp_path)[:2] == ("on", "anthropic")      # no record: unchanged first-keyed pick
+    external_transfer.require(tmp_path)
+    assert _resolved({}, tmp_path)[:2] == ("off", "anthropic")     # review pending: nothing qualifies
+    external_transfer.acknowledge(by="管理者", reason="契約確認", services=["openai"],
+                                  confirm_human=True, root=tmp_path, command_id="o")
+    assert _resolved({}, tmp_path)[:2] == ("on", "openai")
+    # The same choice when the caller observes the keys itself.
+    settings, _ = cloud_policy.resolve_settings({}, tmp_path, available_providers=("anthropic", "openai"))
+    assert (settings["mode"], settings["provider"]) == ("on", "openai")
+    # An explicit provider is the operator's choice and is not swapped for an approved one.
+    assert _resolved({"cloud_llm": {"provider": "anthropic"}}, tmp_path)[:2] == ("off", "anthropic")
+    # An explicit mode keeps the key-only pick and is not gated.
+    explicit = {"cloud_llm": {"mode": "on", "project_ids": [1]}}
+    assert _resolved(explicit, tmp_path)[:2] == ("on", "anthropic")
+    external_transfer.acknowledge(by="管理者", reason="契約確認", services=["anthropic"],
+                                  confirm_human=True, root=tmp_path, command_id="a")
+    assert _resolved({}, tmp_path)[:2] == ("on", "anthropic")
+
+
+def test_auto_provider_reads_the_review_once(tmp_path, monkeypatch):
+    _both_keys(tmp_path)
+    external_transfer.require(tmp_path)
+    external_transfer.acknowledge(by="管理者", reason="契約確認", services=["openai"],
+                                  confirm_human=True, root=tmp_path, command_id="o")
+    calls = []
+    real = external_transfer.status
+    monkeypatch.setattr(external_transfer, "status", lambda root=None: calls.append(root) or real(root))
+    assert _resolved({}, tmp_path)[:2] == ("on", "openai")
+    assert len(calls) == 1

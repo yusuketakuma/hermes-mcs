@@ -569,18 +569,12 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
         from mcs_util import private_env_problem
         key_presence = {name: private_env_problem(key) is None for name, key in (
             ("anthropic", "MCS_ANTHROPIC_API_KEY"), ("openai", "MCS_OPENAI_API_KEY"))}
-    cloud, cloud_errors = cloud_policy.cloud_config(cfg)
+    # The runtime's own choice (keys and facility review), so the preview names where data goes.
+    import external_transfer
+    cloud, _ = cloud_policy.select_settings(cfg, lambda name: key_presence.get(name) is True,
+                                            external_transfer.status())
     provider = cloud["provider"]
-    if provider == "auto":
-        provider = next((name for name in cloud["provider_order"] if key_presence.get(name) is True),
-                        cloud["provider_order"][0])
     cloud_key = key_presence.get(provider) is True
-    block = cfg.get("cloud_llm")
-    if (block is None or isinstance(block, dict) and "mode" not in block) and not cloud_errors:
-        cloud, _ = cloud_policy.cloud_config(cfg, key_present=cloud_key)
-    cloud["provider"] = provider
-    if not isinstance(block, dict) or "model" not in block:
-        cloud["model"] = cloud_policy.PROVIDERS[provider]
     print("\n【保存前の確認】設定した送り先と、この後に保存する内容を確認してください。"
           "\n  ここで中止すると、今回の設定・認証情報・辞書は保存しません。")
     print(f"  実行方法: {shown(mode)}"

@@ -62,6 +62,8 @@ Slack・Discord・米国の AI 事業者は「外国にある第三者」に当�
 
 新しく導入した環境は `~/.mcs/external_transfer.json` に「確認待ち」を記録し、APIキーを登録しても
 Anthropic・OpenAI・Jev へ自動では送りません。次を確認したうえで、責任者が記録します。
+`cloud_llm.provider` が `auto`（既定）なら、キーがあり確認で許可されたサービスを `provider_order` の順に選ぶため、
+OpenAI だけを許可した場合も Anthropic のキーが残っていれば OpenAI が使われます。
 
 1. 送信先との契約で、入力が学習に使われず、保存期間と削除が定められていること
    （Anthropic の Zero Data Retention や OpenAI の保持条件は、組織ごとの契約が必要です。[ANTHROPIC.md](ANTHROPIC.md)）。
