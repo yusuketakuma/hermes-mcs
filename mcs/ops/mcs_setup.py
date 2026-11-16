@@ -785,6 +785,26 @@ def _queue_warnings(cfg: dict | None = None) -> list[str]:
     return out
 
 
+def _journal_warnings() -> list[str]:
+    """Name delivery journals with a torn or unparsable line (read-only).
+
+    Such a file keeps every send of its worker held (fail closed); recovery
+    is the manual procedure in hermes_plugin/README.md, never automatic."""
+    import notify_journal
+    import notify_spool
+    try:
+        tainted = notify_journal.tainted_journal_files(
+            notify_spool.notify_dirs(os.path.join(HOME, "data")),
+            deadline=time.monotonic() + 2)
+    except (OSError, ValueError) as e:
+        return [f"配送記録（journal）を確認できません（{type(e).__name__}）"]
+    if not tainted:
+        return []
+    return ["配送記録（journal）に途中で切れた行または読めない行があり、該当する送信を保留しています: "
+            + ", ".join(os.path.relpath(path, HOME) for path in tainted)
+            + "。hermes_plugin/README.md の復旧手順（ファイルの複製保存と人による照合）に従ってください"]
+
+
 _INSTALL_PROGRESS_STAGE_JA = {
     "brew": "基本ソフトの準備（Homebrew）",
     "runtime": "実行環境",
@@ -866,7 +886,7 @@ def cmd_check(args) -> int:
     e2, w2 = check_environment(cfg)
     e3, w3 = service_management.script_drift(paths=_service_paths()) if cfg.get("runtime_mode", "hermes") in ("hermes", "standalone") else ([], [])
     errors = e0 + e1 + e2 + e3
-    warnings = w0 + w1 + w2 + w3 + _queue_warnings(cfg)
+    warnings = w0 + w1 + w2 + w3 + _queue_warnings(cfg) + _journal_warnings()
     progress_warning = _install_progress_warning()
     if progress_warning is not None:
         warnings.append(progress_warning)

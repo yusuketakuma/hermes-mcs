@@ -157,10 +157,15 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
                     if error is None:
                         error = _journal_contradiction(ledger, req)
         if error is None and hold is not None:
+            survived = render_row(db, req["delivery_id"]) is not None
             _rebind_apply(db, req, hold, card, now)
             cards.release_holds(db, delivery_id=req["delivery_id"],
                                 card_id=hold["card_id"],
                                 command_id=req["command_id"], now=now)
+            if survived and card is not None:
+                # the same follow-up as an attempt-row resolve: the settled
+                # render's card issues its next render once unfrozen
+                cards.issue_render(db, card["card_id"], cfg, now, specs)
             receipt["scope"] = json.loads(hold["scope_json"] or "{}")
             receipt["projects"] = (
                 [card["project_id"]]
@@ -225,9 +230,17 @@ def hold_events(hold) -> list[int] | None:
 def _rebind_check(hold, card, req) -> str | None:
     """Verify an attempt-lost resolve against the scope reconcile
     captured when it held the scope — the render row is gone, so the
-    hold record is the identity witness."""
-    if hold["attempt_id"] != req["attempt_id"]:
+    hold record is the identity witness. A hold with no attempt (a
+    render that never began, held because the journal cannot vouch
+    for its backup) is named by its delivery_id instead, and needs proof
+    independent of the journal — the rows that could witness its send
+    may be the ones compacted away."""
+    if (hold["attempt_id"] if hold["attempt_id"] is not None
+            else hold["delivery_id"]) != req["attempt_id"]:
         return "attempt_mismatch"
+    if hold["attempt_id"] is None and req["result"] == "mark_not_sent" \
+            and req["evidence"].get("proof") == "no_journal_started":
+        return "journal_cannot_vouch"
     if hold_events(hold) is None:
         return "hold_events_corrupt"
     try:

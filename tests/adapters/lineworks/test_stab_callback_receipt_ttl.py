@@ -49,3 +49,25 @@ def test_processed_receipt_still_expires_after_the_short_window(tmp_path):
     os.utime(done, (now[0] - 1201, now[0] - 1201))
     box.expire()
     assert not done.exists()
+
+
+def test_stranded_atomic_tmp_is_unlinked_after_the_short_window(tmp_path, monkeypatch):
+    now = [NOW]
+    box = _box(tmp_path, now)
+    stale = box.directory / ".atomic-stranded.tmp"
+    fresh = box.directory / ".atomic-inflight.tmp"
+    other = box.directory / "operator-note.tmp"
+    for path in (stale, fresh, other):
+        path.write_bytes(b"SYNTHETIC-PARTIAL-BODY")
+    old = now[0] - 1201
+    for path in (stale, other):
+        os.utime(path, (old, old))
+    os.utime(fresh, (now[0] - 10, now[0] - 10))
+    opened = []
+    real_open = Path.open
+    monkeypatch.setattr(Path, "open", lambda self, *a, **k: (
+        opened.append(self.name), real_open(self, *a, **k))[1])
+    box.expire()
+    assert not stale.exists()
+    assert fresh.exists() and other.exists()
+    assert ".atomic-stranded.tmp" not in opened   # removed without reading it

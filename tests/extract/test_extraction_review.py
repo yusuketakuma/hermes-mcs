@@ -501,8 +501,18 @@ def test_rule_revision_cut_by_deadline_keeps_old_artifact(db, monkeypatch):
         db.artifact_add('extract_v1', json.dumps({'urgency': 'high'}),
                         project_id=1, message_id=mid,
                         meta={VERSION_KEY: CURRENT_VERSION, 'hash': h, 'rule_version': extract.RULE_VERSION - 1})
-    clock = iter([0, 0, 10, 10, 10])
-    monkeypatch.setattr(extract.time, 'monotonic', lambda: next(clock))
+    # The deadline passes once the first message is extracted, however many
+    # times the pass reads the clock before and after it.
+    now = [0]
+    real_extract = extract.extract_message
+
+    def extract_then_expire(*args, **kwargs):
+        out = real_extract(*args, **kwargs)
+        now[0] = 10
+        return out
+
+    monkeypatch.setattr(extract, 'extract_message', extract_then_expire)
+    monkeypatch.setattr(extract.time, 'monotonic', lambda: now[0])
     assert extract.run_pending(db, deadline=5)['done'] == 1
     metas = sorted(json.loads(a['meta'])['rule_version']
                    for a in db.artifacts('extract_v1'))

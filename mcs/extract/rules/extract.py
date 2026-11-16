@@ -423,8 +423,10 @@ def run_pending(ledger, *, deadline: float | None = None) -> dict:
     if ledger.db.in_transaction:
         raise ValueError("extract_transaction_owned")
     _delete_stale(ledger)
-    rows = ledger.db.execute(f"""
-      SELECT m.message_id, m.project_id, {dependency_loss.SOURCE_BINDING_COLUMNS}
+    # Only the ordered ids are held across the pass; bodies and source
+    # fences are read one _CHUNK at a time by _extract_ids.
+    ids = [r[0] for r in ledger.db.execute(f"""
+      SELECT m.message_id
       FROM messages m
       WHERE {ELIGIBLE_MESSAGE}
         AND NOT EXISTS (SELECT 1 FROM artifacts a
@@ -434,8 +436,8 @@ def run_pending(ledger, *, deadline: float | None = None) -> dict:
       ORDER BY EXISTS (SELECT 1 FROM patients p
                        WHERE p.project_id=m.project_id AND p.is_archived),
                m.posted_at_ts DESC
-    """, (KIND, RULE_VERSION)).fetchall()
-    done, pids = _extract_rows(ledger, rows, deadline=deadline)
+    """, (KIND, RULE_VERSION))]
+    done, pids = _extract_ids(ledger, ids, deadline=deadline)
     reconciled, reconciled_pids, reconcile_error = _reconcile_intervention_page(ledger, deadline=deadline)
     result = {"done": done + reconciled, "pids": sorted(pids | reconciled_pids)}
     if reconcile_error:
@@ -444,6 +446,33 @@ def run_pending(ledger, *, deadline: float | None = None) -> dict:
 
 
 _CHUNK = 200   # rows per commit; keep each writer lock hold bounded
+
+
+def _writer_current() -> bool:
+    """True while this loaded writer still matches the updater and inference fence."""
+    return (writer_lock.updater_state() == _WRITER_STATE and not _WRITER_STATE[0]
+            and inference.CURRENT_VERSION == _INFERENCE_VERSION)
+
+
+def _extract_ids(ledger, ids, *, deadline: float | None = None) -> tuple[int, set[int]]:
+    """Run _extract_rows over ``ids`` in their given order, reading each
+    _CHUNK of source rows (bodies included) only when it is processed, so a
+    full re-extraction never holds every body in memory at once."""
+    done, pids = 0, set()
+    for i in range(0, len(ids), _CHUNK):
+        # a moved fence stops the whole pass, as _extract_rows does per chunk
+        if (deadline is not None and time.monotonic() >= deadline
+                or not _writer_current()):
+            break
+        page = ids[i:i + _CHUNK]
+        found = {r["message_id"]: r for r in ledger.db.execute(
+            f"SELECT m.message_id, m.project_id, {dependency_loss.SOURCE_BINDING_COLUMNS} "
+            f"FROM messages m WHERE m.message_id IN ({','.join('?' * len(page))})", page)}
+        n, touched = _extract_rows(ledger, [found[m] for m in page if m in found],
+                                   deadline=deadline)
+        done += n
+        pids |= touched
+    return done, pids
 
 
 def intervention_source_payload_tx(db, row, binding):
@@ -536,8 +565,7 @@ def _extract_rows(ledger, rows, *, deadline: float | None = None) -> tuple[int, 
     pids = set()
     done = 0
     for i in range(0, len(rows), _CHUNK):
-        if (writer_lock.updater_state() != _WRITER_STATE or _WRITER_STATE[0]
-                or inference.CURRENT_VERSION != _INFERENCE_VERSION):
+        if not _writer_current():
             return done, pids
         with ledger.db:
             for r in rows[i:i + _CHUNK]:
@@ -915,13 +943,12 @@ def main() -> int:
     try:
         led = LedgerReader(DB) if args.stats else Ledger(DB)
         try:
-            q = f"""SELECT m.message_id, m.project_id, {dependency_loss.SOURCE_BINDING_COLUMNS}
-           FROM messages m WHERE {ELIGIBLE_MESSAGE}"""
+            q = f"SELECT m.message_id FROM messages m WHERE {ELIGIBLE_MESSAGE}"
             params: list = []
             if args.project:
                 q += " AND m.project_id=?"
                 params.append(args.project)
-            rows = led.db.execute(q + " ORDER BY m.posted_at_ts", params).fetchall()
+            ids = [r[0] for r in led.db.execute(q + " ORDER BY m.posted_at_ts", params)]
 
             # Same stale handling as the tick path: a hash-drifted artifact
             # (edited body, or a legacy row without a pinned hash) must not
@@ -930,15 +957,15 @@ def main() -> int:
             done = {r["message_id"] for r in led.db.execute(
                 "SELECT message_id FROM artifacts WHERE kind=? "
                 "AND message_id IS NOT NULL", (KIND,))} - stale
-            todo = [r for r in rows if r["message_id"] not in done]
+            todo = [m for m in ids if m not in done]
             if args.stats:
                 todo = []
             if args.limit:
                 todo = todo[:args.limit]
 
-            n, _ = _extract_rows(led, todo)
+            n, _ = _extract_ids(led, todo)
             print(json.dumps({"extracted": n, "skipped_existing": len(done),
-                              "total_msgs": len(rows)}, ensure_ascii=False))
+                              "total_msgs": len(ids)}, ensure_ascii=False))
 
             # aggregate stats over all extract_v1 artifacts
             import collections
