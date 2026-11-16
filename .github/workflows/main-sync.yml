@@ -1,0 +1,88 @@
+name: main sync
+
+# main が進むたびに、PR どうしの衝突の元を減らす。
+# 1. dev-doc: DEVELOPMENT.md の生成表を main で作り直して commit する。PR はこの表を含めない
+#    （ci.yml の hygiene が検査）。push は environment main-docs の deploy key で行い、
+#    main-protect はこの deploy key だけを迂回させる。鍵が未設定なら何もしない。
+# 2. update-prs: main より遅れている同一リポジトリの PR へ main を merge（GitHub の Update branch）し、
+#    CI を workflow_dispatch で起動する。衝突などで取り込めない PR には手順をコメントする。
+# どちらも main 側の定義と main のコードだけを使い、PR のコードは checkout も実行もしない。
+# 設定と停止手順: docs/development/AUTOMATION.md
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: main-sync
+  cancel-in-progress: false
+
+jobs:
+  dev-doc:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The deploy key lives only in this environment, which admits only main:
+    # a workflow added or changed by a PR cannot read it.
+    environment: main-docs
+    permissions:
+      contents: read
+    steps:
+      - name: deploy key configured
+        id: key
+        env:
+          KEY: ${{ secrets.DEV_DOC_DEPLOY_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then echo "present=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::DEV_DOC_DEPLOY_KEY is not set; DEVELOPMENT.md is not regenerated"; fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: steps.key.outputs.present == 'true'
+        with:
+          ref: main
+          ssh-key: ${{ secrets.DEV_DOC_DEPLOY_KEY }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        if: steps.key.outputs.present == 'true'
+        with:
+          python-version: "3.14"
+      - name: regenerate and commit DEVELOPMENT.md
+        if: steps.key.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          python3 scripts/development/update_readme.py --dev-doc
+          changed=$(git status --porcelain)
+          if [ -z "$changed" ]; then echo "already up to date"; exit 0; fi
+          # Only the generated tables may be committed by this job.
+          if [ "$changed" != " M docs/development/DEVELOPMENT.md" ]; then
+            echo "::error::unexpected changes:"; echo "$changed"; exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -m "docs: DEVELOPMENT.md の生成表を更新" -m "main $(git rev-parse --short HEAD) から scripts/development/update_readme.py --dev-doc で生成。" \
+            -- docs/development/DEVELOPMENT.md
+          # A newer push to main is handled by its own run: do not retry or force.
+          if ! git push origin HEAD:main; then
+            echo "::notice::main moved during regeneration; the run for the newer push regenerates"
+          fi
+
+  update-prs:
+    needs: dev-doc
+    if: ${{ !cancelled() }}   # a failed regeneration must not keep PRs behind
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write       # update-branch merge commit on the PR branch
+      pull-requests: write  # comment, withdraw auto-merge
+      actions: write        # workflow_dispatch of ci.yml on the PR branch
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: merge main into open PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: python3 ci/pr_branch_sync.py --repo "$GH_REPO" --base "$DEFAULT_BRANCH"

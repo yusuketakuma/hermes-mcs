@@ -1,5 +1,6 @@
 """CI workflow guards: bounded jobs, complete failure output, a weekly run
 and a macOS lane."""
+import os
 import re
 import subprocess
 import textwrap
@@ -9,7 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = [ROOT / ".github/workflows" / name
-             for name in ("ci.yml", "release-notes.yml")]
+             for name in ("ci.yml", "release-notes.yml", "main-sync.yml")]
 
 
 def _jobs(text):
@@ -94,6 +95,10 @@ def test_ci_secret_scan_exempts_only_exact_public_vector_bytes(tmp_path, changed
         assert 'possible secret committed' in result.stdout
 
 
+DOCS_EVENTS = ("if: ${{ !cancelled() && (github.event_name == 'pull_request' "
+               "|| github.event_name == 'workflow_dispatch') }}")
+
+
 def test_documentation_drift_is_checked_in_independent_fast_lane():
     text = (ROOT / ".github/workflows/ci.yml").read_text()
     jobs = _jobs(text)
@@ -103,35 +108,71 @@ def test_documentation_drift_is_checked_in_independent_fast_lane():
     assert "runs-on: ubuntu-latest" in hygiene
     assert "needs:" not in hygiene  # no dependency on slow or failing tests
     assert "continue-on-error" not in hygiene
+    assert "fetch-depth: 0" in hygiene  # the merge base must be reachable
     setup, drift = hygiene.split("      - uses: actions/setup-python@", 1)[1].split(
         "      - name: check generated docs on PR", 1)
     assert setup.startswith("6d4fd22b20465ccc0f7354476588e8df7c9ca0e0")
     assert 'python-version: "3.14"' in setup
+    # workflow_dispatch: main-sync re-runs CI that way after updating a PR branch
     for block in (setup, drift):
-        assert "if: ${{ !cancelled() && github.event_name == 'pull_request' }}" in block
-    assert "python3 scripts/development/update_readme.py" in drift
-    assert "git diff --exit-code -- README.md docs/development/DEVELOPMENT.md" in drift
+        assert DOCS_EVENTS in block
+    assert "BASE_REF: ${{ github.base_ref || github.event.repository.default_branch }}" in drift
+    assert 'python3 scripts/development/update_readme.py --check --base "$base"' in drift
+    assert "git diff --exit-code" not in drift  # DEVELOPMENT.md is not regenerated in PRs
 
 
-@pytest.mark.parametrize("target", [None, "README.md", "docs/development/DEVELOPMENT.md"])
-def test_fast_documentation_step_keeps_drift_failure(tmp_path, target):
+@pytest.mark.parametrize("generator_exit", [0, 1])
+def test_fast_documentation_step_checks_against_the_merge_base(tmp_path, generator_exit):
     # Execute the unchanged workflow shell against a synthetic generator/repo.
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     step = workflow.split("      - name: check generated docs on PR\n", 1)[1]
     block = step.split("        run: |\n", 1)[1].split("\n  standalone-sdk:", 1)[0]
     generator = tmp_path / "scripts/development/update_readme.py"
     generator.parent.mkdir(parents=True)
-    generator.write_text("from pathlib import Path\n" + (
-        f"Path({target!r}).write_text('changed\\n')\n" if target else "pass\n"))
-    for name in ("README.md", "docs/development/DEVELOPMENT.md"):
-        path = tmp_path / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("baseline\n")
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    result = subprocess.run(["sh", "-eu", "-c", textwrap.dedent(block)],
-                            cwd=tmp_path, capture_output=True, text=True)
-    assert result.returncode == (1 if target else 0), result.stdout + result.stderr
+    generator.write_text("import sys\nfrom pathlib import Path\n"
+                         "Path('args').write_text(' '.join(sys.argv[1:]))\n"
+                         f"sys.exit({generator_exit})\n")
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t",
+                               "-c", "user.email=t@example.invalid", *args],
+                              check=True, capture_output=True, text=True).stdout.strip()
+    git("init", "-q", "-b", "main")
+    git("add", ".")
+    git("commit", "-q", "-m", "base")
+    base = git("rev-parse", "HEAD")
+    git("update-ref", "refs/remotes/origin/main", base)
+    git("checkout", "-q", "-b", "pr")
+    git("commit", "-q", "--allow-empty", "-m", "pr")
+    result = subprocess.run(["bash", "-eu", "-c", textwrap.dedent(block)], cwd=tmp_path,
+                            env={"PATH": os.environ["PATH"], "BASE_REF": "main"},
+                            capture_output=True, text=True)
+    assert result.returncode == generator_exit, result.stdout + result.stderr
+    assert (tmp_path / "args").read_text() == f"--check --base {base}"
+
+
+def test_main_sync_keeps_its_push_key_on_main_and_never_runs_pr_code():
+    text = (ROOT / ".github/workflows/main-sync.yml").read_text()
+    head, _ = text.split("\njobs:\n", 1)
+    assert "  push:\n    branches: [main]" in head
+    assert "pull_request" not in head  # no PR-triggered run can reach the key
+    assert "permissions: {}" in head
+    jobs = _jobs(text)
+    assert set(jobs) == {"dev-doc", "update-prs"}
+    for name, block in jobs.items():
+        assert re.search(r"^    timeout-minutes: \d+$", block, re.M), name
+        assert "ref: main" in block, name
+    doc = jobs["dev-doc"]
+    assert "if: github.ref == 'refs/heads/main'" in doc
+    assert "environment: main-docs" in doc
+    assert "contents: read" in doc and "write" not in doc.split("steps:")[0]
+    assert "update_readme.py --dev-doc" in doc
+    assert '" M docs/development/DEVELOPMENT.md"' in doc  # nothing else is committed
+    assert "--force" not in doc and "push -f" not in doc
+    sync = jobs["update-prs"]
+    assert "persist-credentials: false" in sync
+    assert "if: ${{ !cancelled() }}" in sync
+    assert "python3 ci/pr_branch_sync.py" in sync
 
 
 def test_linux_shards_keep_the_required_check_fail_closed():

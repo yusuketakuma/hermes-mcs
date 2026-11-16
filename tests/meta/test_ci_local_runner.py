@@ -10,11 +10,11 @@ ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "scripts/development/ci_local.sh"
 WORKFLOW = ROOT / ".github/workflows/ci.yml"
 
-# setup lines replaced by prerequisite checks, and the PR-only regenerate+diff
-# step replaced by update_readme.py --check (the runner never writes the tree)
+# setup lines replaced by prerequisite checks, and the PR-only generated-docs
+# step (it needs the PR's merge base) replaced by update_readme.py --check
 SETUP = re.compile(
     r"^(pip install|python3? -m pip install|python -m pip install|uv |cd hermes-agent$|#"
-    r"|git diff --exit-code|python3 scripts/development/update_readme\.py$)")
+    r"|base=\$\(git merge-base |python3 scripts/development/update_readme\.py --check --base )")
 
 
 def _ci_jobs():

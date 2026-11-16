@@ -29,7 +29,7 @@ READMEは、MCS通知を使うスタッフ・導入を判断する責任者・�
 ```bash
 python3 scripts/development/readme_release.py          # READMEの最新変更を同期
 python3 scripts/development/readme_release.py --check  # 同期・見直し記録・リンクを検査
-python3 scripts/development/update_readme.py           # README要約 + DEVELOPMENTの生成表
+python3 scripts/development/update_readme.py           # README要約（DEVELOPMENTの生成表は main-sync が main で更新）
 ```
 
 `release_notes.py build`は新しいCHANGELOGとREADMEの要約を同じ作業で更新する。
