@@ -893,6 +893,23 @@ _REASON_JA = {
     "standalone_check_stalled": ("hostの未読収集が成功していません",
                                  f"{_COLLECTION_LOG} を確認。続く場合は {_CHECK}"),
 }
+# attachment_ocr_local_inference_deferred: the writer record or the re-check
+# right after an admission-time deferral (fixed codes from
+# attachment_inference_deferral) and the next step; 'unclassified' keeps the
+# generic guidance. writer_refused covers every writer refusal code (update
+# marker, run lock contention, source generation, ...), so its text stays neutral.
+_OCR_LOCAL_DEFER_JA = {
+    "writer_refused": ("書込みの確認で止まっていました",
+                       f"次回実行で再開します。続く場合は {_DOCTOR} で書込みの確認結果を確認してください"),
+    "disk_unknown": ("保存先の空き容量を確認できませんでした", "保存先の状態と空き容量を確認してください"),
+    "disk_low": ("保存先の空き容量が下限未満でした", "保存先の空き容量を確認してください"),
+    "memory_unknown": ("メモリーの余裕を確認できませんでした", "メモリーの使用状況を確認してください"),
+    "memory_low": ("メモリーの余裕が下限未満でした", "メモリーの使用状況と同時に動いている処理を確認してください"),
+    "inference_lock_busy": ("別のページ解析が実行中でした",
+                            f"次回実行で再開します。続く場合は {_DOCTOR} で確認してください"),
+    "local_stage_error": ("ローカル解析の処理で異常を記録しました",
+                          f"{_DOCTOR} で直近の実行結果を確認してください"),
+}
 # runtime_mode=standalone: the host owns the connection and the workers,
 # so the Hermes gateway / per-agent hints do not apply
 _STANDALONE_ACTION = {
@@ -1185,6 +1202,13 @@ def _reason_rows(report: dict, reasons) -> list[str]:
         elif base == "disk_low":
             free = report.get("disk_free_mb")
             extra = f"（残り {free} MB）" if finite_number(free) else "（残り 不明）"
+        elif base == "attachment_ocr_local_inference_deferred":
+            ocr = report.get("attachment_ocr")
+            cause = ocr.get("local_deferred_primary") if isinstance(ocr, dict) else None
+            if isinstance(cause, str) and cause in _OCR_LOCAL_DEFER_JA:
+                observed, todo = _OCR_LOCAL_DEFER_JA[cause]
+                extra = f"（直近の実行の再確認: {observed}）"
+                action = f"{todo}。文字起こしの失敗を示すものではありません"
         elif base == "attachment_ocr_processing_failed":
             ocr = report.get("attachment_ocr")
             if (isinstance(ocr, dict)

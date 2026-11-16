@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
 
+import attachment_inference_deferral  # noqa: E402
 import attachment_ocr  # noqa: E402
 from ledger import Ledger  # noqa: E402
 from mcs_util import DB, ProviderSettingsUnreadable, load_config  # noqa: E402
@@ -26,9 +27,49 @@ DATA = str(Path(DB).parent)
 DRAIN_BUDGET_S = 900
 LOCAL_CALL_S = 300
 _RAW_COUNTS = frozenset({'complete', 'empty', 'failed', 'unsupported', 'deferred'})
+STATUS_LIMIT = 4096
+# A page run that returns within this window deferred at admission (before any
+# LLM call), so a re-check right after it observes the same conditions. A
+# longer run may have deferred mid-page; a later re-check would not name its cause.
+ADMISSION_WINDOW_S = 5
+
+
+def _local_defer_reason(ledger, diagnostic, elapsed_s):
+    """Classify one local deferral by its writer record or, for an admission-time deferral, a re-check."""
+    if diagnostic is not None and diagnostic['writer_reason'] != 'writer_refusal_unclassified':
+        return 'writer_refused'
+    if not (type(elapsed_s) in (int, float) and 0 <= elapsed_s <= ADMISSION_WINDOW_S):
+        return attachment_inference_deferral.UNCLASSIFIED
+    try:
+        import extract_llm
+        code = attachment_inference_deferral.disk_reason(
+            extract_llm.disk_free_mb(ledger.db), extract_llm.disk_floor_mb())
+        if code is None:
+            import cloud_backlog
+            code = attachment_inference_deferral.memory_reason(cloud_backlog.memory_headroom())
+        if code is None:
+            path = str(attachment_ocr._data_root(ledger) / 'attachment_inference_local.lock')
+            fd = writer_lock.acquire_run_lock(path)
+            if fd is None:
+                code = 'inference_lock_busy'
+            else:
+                os.close(fd)
+    except Exception:  # an observation failure must never change the job's own outcome
+        return attachment_inference_deferral.UNCLASSIFIED
+    return code or attachment_inference_deferral.UNCLASSIFIED
 
 
 def _drain(ledger, cfg, generation, deadline, *, live_config, retry_failed_before=None):
+    reasons = {}
+    result = _drain_stages(ledger, cfg, generation, deadline, reasons, live_config=live_config,
+                           retry_failed_before=retry_failed_before)
+    if result.get('local_deferred', 0) > 0:
+        result['local_deferred_reasons'] = attachment_inference_deferral.normalize(
+            reasons, result['local_deferred'])
+    return result
+
+
+def _drain_stages(ledger, cfg, generation, deadline, reasons, *, live_config, retry_failed_before=None):
     import attachment_inference
 
     result = {'local_done': 0, 'local_deferred': 0}
@@ -64,6 +105,7 @@ def _drain(ledger, cfg, generation, deadline, *, live_config, retry_failed_befor
             diagnostic = None
             try:
                 if stage == 'local':
+                    started = time.monotonic()
                     with writer_lock.capture_writer_refusal() as diagnostic:
                         local = attachment_inference.run_pending(ledger, cfg, stage='local',
                             deadline=min(deadline - 5, time.monotonic() + LOCAL_CALL_S), limit=1)
@@ -73,6 +115,9 @@ def _drain(ledger, cfg, generation, deadline, *, live_config, retry_failed_befor
                         result['paid_recovery_pending'] = True
                     active['local'] = local['done'] > 0 and local['deferred'] == 0
                     local_blocked |= local['deferred'] > 0
+                    if type(local['deferred']) is int and local['deferred'] > 0:
+                        code = _local_defer_reason(ledger, diagnostic, time.monotonic() - started)
+                        reasons[code] = reasons.get(code, 0) + local['deferred']
                 else:
                     with writer_lock.capture_writer_refusal() as diagnostic:
                         raw = attachment_ocr.run_pending(ledger, cfg, limit=1, deadline=deadline - 5,
@@ -92,11 +137,20 @@ def _drain(ledger, cfg, generation, deadline, *, live_config, retry_failed_befor
                 active[stage] = False
                 if stage == 'local':
                     local_blocked = True
+                    reasons['local_stage_error'] = reasons.get('local_stage_error', 0) + 1
             if diagnostic is not None and diagnostic['writer_reason'] != 'writer_refusal_unclassified':
                 result.update(diagnostic, writer_job_stage=stage)
     if limited or any(active.values()):
         result['queue_status'] = 'partial'
     return result
+
+
+def _status_text(result, at):
+    """Serialize the status record; the optional deferral breakdown yields to the reader's size limit."""
+    data = json.dumps({"at": at, **result})
+    if len(data.encode()) > STATUS_LIMIT and 'local_deferred_reasons' in result:
+        data = json.dumps({"at": at, **{k: v for k, v in result.items() if k != 'local_deferred_reasons'}})
+    return data
 
 
 def run(cfg=None, *, retry_errors=False):
@@ -197,7 +251,7 @@ def main():
     if result != {"reason": "busy"} and Path(DATA).is_dir():
         try:
             atomic_write(os.path.join(DATA, "attachment_ocr_status.json"),
-                         lambda stream: json.dump({"at": time.time(), **result}, stream), mode=0o600)
+                         lambda stream: stream.write(_status_text(result, time.time())), mode=0o600)
         except (OSError, ValueError, ProviderSettingsUnreadable):
             result["reason"] = "status_unavailable"
     print(json.dumps({"attachment_ocr": result}, ensure_ascii=False))
