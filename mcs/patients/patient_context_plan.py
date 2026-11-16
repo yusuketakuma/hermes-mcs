@@ -273,8 +273,13 @@ def original_source_signature(source):
 
 
 def source_signature(source, *, legacy=False):
+    """Bind the original and the derived scan input: its items, readiness and summaries.
+
+    ``legacy`` keeps the field set of artifacts written before
+    ``original_source_sig``; its ``extraction_sig`` is the current item digest."""
     fields = {**_source_identity(source), **{key: source.get(key) for key in
         ("extraction_sig", "canonical_context")}}
     if not legacy:
         fields["derived_summary_sig"] = source.get("derived_summary_sig")
+        fields["extraction_ready"] = source.get("extraction_ready")
     return source_digest(fields)

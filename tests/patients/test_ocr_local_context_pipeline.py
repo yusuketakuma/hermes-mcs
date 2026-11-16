@@ -99,7 +99,7 @@ def test_actual_local_ocr_result_becomes_full_context_input_without_individual_c
     ocr_posts = [payload for payload in posts if payload.get('source_identity', {}).get('key') == key]
     assert ocr_posts and ''.join(payload['source'] for payload in ocr_posts) == OCR_TEXT
     assert ''.join(page['text'] for payload in ocr_posts for page in payload.get('derived_summaries', [])
-                   if page['artifact_id'] == local['artifact_id']) == LOCAL_SUMMARY
+                   if page['kind'] == 'attachment_extract_local') == LOCAL_SUMMARY
     reserves = ledger.artifacts('cloud_usage_reserve')
     assert reserves and len(reserves) == len(posts)
     assert {json.loads(row['meta'])['route'] for row in reserves} == {'patient_context'}

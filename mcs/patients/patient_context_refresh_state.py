@@ -19,6 +19,7 @@ import patient_context_scan as context_scan
 import patient_context_selection as context_selection
 import mcs_queries as context_queries
 import patient_context_projection as context_state
+import patient_context_quality_identity as quality_identity
 
 
 
@@ -88,12 +89,6 @@ def _code(*modules):
 _SCAN_CODE = _code(context_plan, context_scan)
 
 
-# Attachment scan items are seeded at read time through the clinical state
-# adapter; source_signature binds only the extraction artifact. Until D1 binds
-# the actual scan input, that interpretation stays a scan dependency.
-_ATTACHMENT_ITEMS_CODE = _code(context_state)
-
-
 # Summary contract: fact selection, read-time temporal projection and
 # dependency loss. Lane rotation and the bookmark planner only schedule work.
 _SUMMARY_CODE = _code(context_selection, context_state, dependency_loss)
@@ -106,9 +101,7 @@ _quality_kind = context_artifacts.quality_kind
 
 
 def _quality_expected(identity, fid, selected):
-    if identity.get("purpose", "summary") == "source":
-        return identity["passing_choices"][fid]
-    return "supports" if fid in selected else "omission_ok"
+    return quality_identity.patient_quality_expected(identity, fid, selected)
 
 
 class Deferred(Exception):
@@ -263,13 +256,14 @@ def _adoption_epoch_expected(db):
 
 
 def _contract():
-    """Scan contract: code and versions only, never a backend or model name."""
+    """Scan contract: code and versions only, never a backend or model name.
+
+    Extraction generations are not part of it: each source signature binds the
+    items and summaries the scan reads. ``context`` stays for the item
+    derivation code that the signature does not hash."""
     import extract_llm
-    import extract
     return {"version": CONTRACT, VERSION_KEY: CURRENT_VERSION, "chunks": PLAN_VERSION, "facts": 2,
-            "scan_code": _SCAN_CODE, "attachment_items_code": _ATTACHMENT_ITEMS_CODE,
-            "rule": extract.RULE_VERSION, "llm": extract_llm.EXTRACT_VERSION,
-            "context": extract_llm.PATIENT_CONTEXT_VERSION}
+            "scan_code": _SCAN_CODE, "context": extract_llm.PATIENT_CONTEXT_VERSION}
 
 
 def _summary_contract():
@@ -345,24 +339,22 @@ def _cloud_input_binding(db, pid, snapshot):
 route_accepts = context_artifacts.route_accepts
 
 
-def _quality_code():
-    """Read code identity without probing provider credentials."""
-    import extract_llm
-    import semantic_candidate
-    return _digest([extract_llm._LOADED_SOURCE_DIGESTS, semantic_candidate.loaded_source_contract()])
+def _quality_assessment_code():
+    """Read the quality-checking code identity without probing provider credentials."""
+    return quality_identity.patient_quality_assessment_code()
 
 
 def _quality_assessment(scfg):
-    """Bind interpretation code and policy without spending or publication toggles."""
+    """Bind quality-checking code and policy without spending or publication toggles."""
     import semantic_policy
-    return {"code": _quality_code(), "policy": semantic_policy.policy_fingerprint(scfg)}
+    return {"code": _quality_assessment_code(), "policy": semantic_policy.policy_fingerprint(scfg)}
 
 
 def _source_quality_hold_key(db, pid, cfg, source, chunks_sig):
     binding = dependency_loss.source_binding(db, pid, source["message_id"],
         **({"source_key": context_plan.source_key(source)} if isinstance(context_plan.source_key(source), str) else {}))
     scope = context_queries.patient_context_scope(db, pid)
-    return _digest([cfg, _quality_code(), scope, binding, source.get("first_seen"),
+    return _digest([cfg, _quality_assessment_code(), scope, binding, source.get("first_seen"),
                     context_plan.source_signature(source), chunks_sig])
 
 

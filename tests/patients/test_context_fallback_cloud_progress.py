@@ -21,7 +21,7 @@ def test_verified_local_context_covers_every_input_without_cloud_replay_after_re
     summary = '完全合成の補助要約。' * 1500
     # Proof-bound extract_llm summaries cap at 60 chars; large ones arrive via extract_v1.
     body_hash = ledger.db.execute("SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0]
-    artifact = ledger.artifact_add("extract_v1", json.dumps({"summary": summary}, ensure_ascii=False),
+    ledger.artifact_add("extract_v1", json.dumps({"summary": summary}, ensure_ascii=False),
         project_id=1, message_id=1, model="synthetic-rules",
         meta={VERSION_KEY: CURRENT_VERSION, "hash": body_hash})
     expected = next(mcs_queries.patient_context_sources(ledger.db, 1, cfg=cfg))
@@ -57,7 +57,7 @@ def test_verified_local_context_covers_every_input_without_cloud_replay_after_re
     spans = {tuple(payload['source_identity']['span']): payload['source'] for payload in observed}
     assert ''.join(spans[span] for span in sorted(spans)) == body
     pages = {tuple(page['span']): page['text'] for payload in observed
-             for page in payload.get('derived_summaries', []) if page['artifact_id'] == artifact}
+             for page in payload.get('derived_summaries', []) if page['kind'] == 'extract_v1'}
     assert ''.join(pages[span] for span in sorted(pages)) == summary
     assert all(payload['source_identity']['signature'] == plan.source_signature(expected) for payload in observed)
     assert readiness.inference_coverage(ledger.db, 1, cfg)['complete']

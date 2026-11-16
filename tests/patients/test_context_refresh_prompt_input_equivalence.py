@@ -134,7 +134,7 @@ def test_original_detail_fields_reach_already_found_without_raw_metadata(tmp_pat
         identity_fields = {key: source.get(key) for key in (
             "project_id", "message_id", "source", "content_hash", "body_length", "body_state",
             "posted_at", "posted_at_ts", "sender_id", "sender_name", "parent_id", "source_key",
-            "empty", "extraction_sig", "canonical_context", "derived_summary_sig")}
+            "empty", "extraction_sig", "canonical_context", "derived_summary_sig", "extraction_ready")}
         signature = hashlib.sha256(json.dumps(identity_fields, sort_keys=True, ensure_ascii=False,
                                               separators=(",", ":")).encode()).hexdigest()
         prompt = {"instruction": EXPECTED_INSTRUCTION, "categories": EXPECTED_CATEGORIES,

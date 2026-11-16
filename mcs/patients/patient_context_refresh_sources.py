@@ -104,7 +104,7 @@ def _scan_read_owner(db, pid):
         if not active[0] or not db.in_transaction or db.total_changes != changes:
             raise RuntimeError("patient_context_read_changed")
         binding = _scan_read_binding(snapshot["sources"], snapshot["route"], cfg)
-        code = patient_context_refresh_state._quality_code()
+        code = patient_context_refresh_state._quality_assessment_code()
         version = db.execute("PRAGMA data_version").fetchone()[0]
         key = (binding, code, version)
         if key not in proofs:
@@ -139,7 +139,7 @@ def _scans_from_read(db, pid, sources, route, cfg, proof):
     connection, patient, binding, code, version, changes, active, scans = proof
     if (connection is not db or patient != pid or not active[0] or not db.in_transaction
             or changes != db.total_changes or version != db.execute("PRAGMA data_version").fetchone()[0]
-            or code != patient_context_refresh_state._quality_code() or binding != _scan_read_binding(sources, route, cfg)):
+            or code != patient_context_refresh_state._quality_assessment_code() or binding != _scan_read_binding(sources, route, cfg)):
         raise RuntimeError("patient_context_read_changed")
     return scans
 

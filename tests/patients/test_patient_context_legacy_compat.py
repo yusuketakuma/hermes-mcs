@@ -124,3 +124,21 @@ def test_safe_error_code_echoes_legacy_failure_family(code):
     'nightly_cloud_not_sent', 'nightly_source_repair_lock'])
 def test_context_pass_reasons_cover_both_failure_families(reason):
     assert reason in cloud_backlog._CONTEXT_PASS_REASONS
+
+
+def test_legacy_source_signature_keeps_its_pre_original_field_set():
+    import patient_context_plan
+
+    source = {'project_id': 1, 'message_id': 1, 'source': 'chat', 'content_hash': 'a' * 64,
+              'body_length': 3, 'body_state': 'full', 'extraction_sig': 'b' * 64,
+              'canonical_context': False, 'derived_summary_sig': 'c' * 64, 'extraction_ready': None}
+    legacy = patient_context_plan.source_signature(source, legacy=True)
+    current = patient_context_plan.source_signature(source)
+    # Fields added after original_source_sig never enter the legacy signature.
+    for field, value in (('derived_summary_sig', 'd' * 64), ('extraction_ready', False)):
+        changed = {**source, field: value}
+        assert patient_context_plan.source_signature(changed, legacy=True) == legacy
+        assert patient_context_plan.source_signature(changed) != current
+    # Its extraction_sig is today's item digest: a retained artifact signed with
+    # the artifact-bound digest of earlier releases fails closed.
+    assert patient_context_plan.source_signature({**source, 'extraction_sig': 'e' * 64}, legacy=True) != legacy

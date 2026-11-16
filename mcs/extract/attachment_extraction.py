@@ -34,7 +34,8 @@ _CONTEXT_ONLY_SOURCES = frozenset({
     "patient_context_artifacts", "patient_context_plan", "patient_context_state", "patient_context_refresh",
     "patient_context_scan", "patient_context_selection", "patient_context_schedule",
     "patient_context_refresh_state", "patient_context_quality_receipts", "patient_context_refresh_sources",
-    "patient_context_refresh_readiness", "patient_context_quality_controller"})
+    "patient_context_refresh_readiness", "patient_context_quality_controller",
+    "patient_context_quality_identity"})
 
 
 def contract(cfg, *, code_digest=None):

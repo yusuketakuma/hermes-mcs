@@ -1,0 +1,25 @@
+{
+  "category": "changed",
+  "title": "患者コンテキストの走査を、抽出の世代ではなく走査が読む項目と補助要約で束縛する",
+  "summary": "この版を入れると、全患者の資料の走査が一度だけ無効になり、作り直しが終わるまで概況は表示されません。以後は再抽出・再解析で走査が読む項目と補助要約が同じなら保存済みの走査を再利用し、変わった資料だけをやり直します。時点解釈の変更でも走査はやり直しません（P0-2a の注記を解消）。",
+  "upgrade": "P0-2a と同じく単独で配備せず、P0 の各版と v2 をまとめて配備した後の1回の消去と作り直しで回収します。配備から作り直しまでは extract.patient_context.enabled=false と、人の確認つきの cloud-llm stop（--confirm-human・--reason）を保ってください。gateway の再起動が必要です。この版は資料の署名と走査契約を変えるため、クラウドで作った分を含む全資料の走査が1回無効になります。mcs_queries.py の変更で添付の抽出の契約も1回変わり、同じ配備で添付の抽出が通常の処理で再実行されます。",
+  "details": [
+    "走査契約から抽出の世代（rule・llm）と添付の項目変換のhash（attachment_items_code）を外す。項目を作る処理の版 context は残す。",
+    "extraction_sig は走査が読む項目の分類・本文・引用・主体・見出し由来・属性だけのhashにし、成果物のid・モデル・世代・余分な欄を含めない。チャットは採用した抽出に保存された項目、添付は最終の項目を束縛する。",
+    "derived_summary_sig は補助要約の種類と本文だけのhashにし、走査に送る補助要約から成果物のidを外す。添付解析の段階が変わると同じ本文でも走査をやり直す。",
+    "extraction_ready を資料の署名の独立した欄にし、項目のない解析済みと解析待ちを区別する。",
+    "抽出の世代を上げた直後、旧い抽出の採用判定が成り立たない間は、その投稿を走査せず概況も表示しない。再抽出で同じ入力が戻れば保存済みの走査を再び使う。",
+    "浅い読取りでも本文の再照合をせずに同じ署名を作り、採用判定の証明は投稿ごとに成果物1件につき1回にする。",
+    "添付は項目を保存しないため、浅い読取りでも解析済みの頁ごとに1回だけ項目を作る。解析待ちの頁では作らない。",
+    "項目を作る処理（patient_context.py）の出力を変えるときは PATIENT_CONTEXT_VERSION を上げる。合成の資料で出力を版ごとに固定するテストを加えた。上げ忘れた場合、保存済みの extract_v1 が作り直されるまで走査入力の変化が署名に表れない。",
+    "original_source_sig を持たない旧い品質確認・修復の成果物は、extraction_sig の意味が変わったため一致しなくなり、安全側に不採用になる。"
+  ],
+  "refs": [
+    "mcs/core/mcs_queries.py",
+    "mcs/patients/patient_context_plan.py",
+    "mcs/patients/patient_context_scan.py",
+    "mcs/patients/patient_context_refresh_state.py",
+    "mcs/patients/patient_context_refresh.py",
+    "docs/specs/patient-context.md"
+  ]
+}

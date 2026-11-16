@@ -224,6 +224,7 @@ _LOADED_SOURCE_PATHS.update({
     'patient_context_refresh_sources': str(Path(__file__).resolve().parents[2] / 'patients' / 'patient_context_refresh_sources.py'),
     'patient_context_refresh_readiness': str(Path(__file__).resolve().parents[2] / 'patients' / 'patient_context_refresh_readiness.py'),
     'patient_context_quality_controller': str(Path(__file__).resolve().parents[2] / 'patients' / 'patient_context_quality_controller.py'),
+    'patient_context_quality_identity': str(Path(__file__).resolve().parents[2] / 'patients' / 'patient_context_quality_identity.py'),
     'rollup_builder': str(Path(__file__).resolve().parents[2] / 'patients' / 'rollup_builder.py'),
 })
 

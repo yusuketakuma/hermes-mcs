@@ -1,4 +1,4 @@
-"""Synthetic scan/summary contract split and per-artifact provenance (P0-2a)."""
+"""Synthetic scan/summary contract split and per-artifact provenance (P0-2a, P0-2b)."""
 import hashlib
 import json
 from pathlib import Path
@@ -34,8 +34,8 @@ def _rows(led, kind):
 
 def test_contracts_hold_code_and_versions_but_no_backend_name():
     contract, summary = state._contract(), state._summary_contract()
-    assert set(contract) == {'version', state.VERSION_KEY, 'chunks', 'facts', 'scan_code',
-                             'attachment_items_code', 'rule', 'llm', 'context'}
+    # Extraction generations and the item adapters are bound per source (P0-2b).
+    assert set(contract) == {'version', state.VERSION_KEY, 'chunks', 'facts', 'scan_code', 'context'}
     assert set(summary) == {'version', 'code'} and summary['version'] == 'patient-context-summary/1'
     assert contract['version'] == 'patient-context-nightly/1'
     assert not {'model', 'provider', 'context_checks', 'state_code', 'dependency_code'} & set(contract)
@@ -84,13 +84,14 @@ def test_scan_code_change_reopens_the_scans(runtime, monkeypatch):
     assert sources._current_scans(led.db, 1, after['sources'], after['route'], cfg=CFG) == {}
 
 
-def test_attachment_item_interpretation_stays_a_scan_dependency_until_inputs_are_bound(runtime, monkeypatch):
-    led, _, _ = runtime
-    seed(led)
-    finish(runtime)
-    monkeypatch.setattr(state, '_ATTACHMENT_ITEMS_CODE', 'd' * 64)
-    after = sources._snapshot(led.db, 1, CFG)
-    assert sources._current_scans(led.db, 1, after['sources'], after['route'], cfg=CFG) == {}
+@pytest.mark.parametrize('name', ['mcs_queries', 'patient_context', 'extract_llm'])
+def test_loaded_extraction_code_enters_neither_patient_context_contract(monkeypatch, name):
+    # mcs_queries (the source reader) and the item adapters change often; the
+    # scan input they produce is bound per source instead of by their code.
+    contract, summary = state._contract(), state._summary_contract()
+    assert name in extract_llm._LOADED_SOURCE_DIGESTS
+    monkeypatch.setitem(extract_llm._LOADED_SOURCE_DIGESTS, name, '0' * 64)
+    assert state._contract() == contract and state._summary_contract() == summary
 
 
 def test_stored_scan_facts_carry_no_temporal_and_reads_compute_it(runtime):

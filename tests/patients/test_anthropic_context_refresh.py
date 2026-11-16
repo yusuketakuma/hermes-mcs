@@ -23,7 +23,7 @@ import extract_llm as worker
 import cloud_inference
 import patient_context_refresh as context_refresh
 from extract_testkit import _message
-from test_patient_context_refresh import _prepare_summary, _semantic_proof, document, seed, stamp
+from test_patient_context_refresh import _prepare_summary, _raw_proof, _semantic_proof, document, seed, stamp
 from anthropic_context_testkit import (
     _SOURCE_REPAIR_PROVIDER as _SOURCE_REPAIR_PROVIDER,
     _SOURCE_REPAIR_JEV as _SOURCE_REPAIR_JEV,
@@ -373,7 +373,8 @@ def test_partial_cloud_scan_requires_same_rules_and_provider_contract(runtime, c
     monkeypatch.setattr(extract_llm_qc, '_upgrade_contract', worker._upgrade_contract)
     monkeypatch.setattr(extract_llm_store, '_upgrade_contract', worker._upgrade_contract)
     assert patient_context_refresh_sources._snapshot(led.db, 1, CFG)["contract"] == snapshot["contract"]
-    # an inference rule version change rebuilds it
+    # an extraction generation change is not part of the scan contract; the
+    # source signature alone decides (test_context_refresh_generation_reuse)
     monkeypatch.setattr(worker, "EXTRACT_VERSION", worker.EXTRACT_VERSION + 1)
     monkeypatch.setattr(extract_llm_context, 'EXTRACT_VERSION', worker.EXTRACT_VERSION)
     monkeypatch.setattr(extract_llm_errors, 'EXTRACT_VERSION', worker.EXTRACT_VERSION)
@@ -385,9 +386,15 @@ def test_partial_cloud_scan_requires_same_rules_and_provider_contract(runtime, c
     monkeypatch.setattr(extract_llm_resident, 'EXTRACT_VERSION', worker.EXTRACT_VERSION)
     monkeypatch.setattr(extract_llm_selection, 'EXTRACT_VERSION', worker.EXTRACT_VERSION)
     monkeypatch.setattr(extract_llm_store, 'EXTRACT_VERSION', worker.EXTRACT_VERSION)
-    changed, _, pending = patient_context_refresh_readiness._pending(led.db, 1, CFG)
-    assert pending["B"] and changed["contract"] != snapshot["contract"]
-    assert not patient_context_refresh_sources._current_scans(led.db, 1, changed["sources"], changed["route"])
+    assert patient_context_refresh_sources._snapshot(led.db, 1, CFG)["contract"] == snapshot["contract"]
+    # Re-extraction under the new generation reproduces the same scan input,
+    # so the partial scan with the same provider contract is current again.
+    _raw_proof(led, 1, 1)
+    changed = patient_context_refresh_sources._snapshot(led.db, 1, CFG)
+    assert changed["contract"] == snapshot["contract"]
+    assert context_plan.source_signature(changed["sources"][0]) == meta["source_sig"]
+    assert patient_context_refresh_sources._current_scans(
+        led.db, 1, changed["sources"], changed["route"])[1]["cursor"] == 1
 
 
 def test_scope_is_rechecked_after_writer_acquisition(runtime, cloud, monkeypatch):
@@ -535,6 +542,10 @@ def test_saved_cloud_context_survives_budget_changes_but_not_code_change(runtime
     monkeypatch.setattr(extract_llm_resident, 'EXTRACT_VERSION', worker.EXTRACT_VERSION)
     monkeypatch.setattr(extract_llm_selection, 'EXTRACT_VERSION', worker.EXTRACT_VERSION)
     monkeypatch.setattr(extract_llm_store, 'EXTRACT_VERSION', worker.EXTRACT_VERSION)
+    # The scan contract stays; the old extraction's material proof no longer
+    # holds, so its summary is not read and the view waits for re-extraction.
+    assert patient_context_refresh_sources._snapshot(led.db, 1, CFG)["contract"] == \
+        patient_context_refresh_state._contract()
     assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
 
 
