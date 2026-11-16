@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Turn a read-only code scan into a bounded, de-duplicated list of issues to file.
 
-The scanning model only reads the checkout and writes a findings file. This script picks the
+The scanning model only reads the checkout and returns its findings. This script picks the
 area it looks at, then decides what reaches the public issue tracker: findings must name a
 file that exists, fit the size limits, and not repeat an issue filed before (open or closed,
 so a finding the owner rejected stays rejected). Stdlib only, like the rest of ci/.
@@ -103,11 +103,8 @@ def issues_to_file(findings, existing, area, root=ROOT, limit=MAX_ISSUES):
     return issues
 
 
-def _load(path, default):
-    try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return default
+def _load(path):
+    return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 def main(argv=None):
@@ -117,7 +114,7 @@ def main(argv=None):
     area.add_argument("--run-number", type=int, required=True)
     area.add_argument("--requested", default="")
     issues = commands.add_parser("issues", help="print the issues to file as JSON")
-    issues.add_argument("--findings", required=True)
+    issues.add_argument("--result", required=True, help="the scan's structured output: {\"findings\": [...]}")
     issues.add_argument("--existing", required=True)
     issues.add_argument("--area", required=True)
     args = parser.parse_args(argv)
@@ -128,9 +125,16 @@ def main(argv=None):
             print(error, file=sys.stderr)
             return 2
         return 0
-    # A missing or malformed findings file means the scan found nothing it could state.
-    print(json.dumps(issues_to_file(_load(args.findings, []), _load(args.existing, []), args.area),
-                     ensure_ascii=False))
+    try:
+        findings = _load(args.result)["findings"]
+        existing = _load(args.existing)
+        if args.area not in areas() or not isinstance(findings, list) or not isinstance(existing, list):
+            raise ValueError("unknown area, or findings/existing is not a list")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        # A scan that returned nothing readable failed; it did not find the code clean.
+        print(f"scan result unusable: {error}", file=sys.stderr)
+        return 2
+    print(json.dumps(issues_to_file(findings, existing, args.area), ensure_ascii=False))
     return 0
 
 

@@ -79,16 +79,24 @@ def test_issues_are_bounded_and_ping_nobody(repo):
     assert "\n" not in long_title and len(long_title) <= scan.MAX_TITLE + len("スキャン: ")
 
 
-def test_cli_reads_files_and_tolerates_a_missing_findings_file(repo, tmp_path, capsys, monkeypatch):
-    monkeypatch.setattr(scan, "ROOT", ROOT)
+def test_cli_files_a_result_and_refuses_an_unusable_one(tmp_path, capsys):
     assert scan.main(["area", "--run-number", "0"]) == 0
-    assert capsys.readouterr().out.strip() == scan.areas()[0]
+    area = capsys.readouterr().out.strip()
+    assert area == scan.areas()[0]
     assert scan.main(["area", "--run-number", "0", "--requested", "nowhere"]) == 2
-    capsys.readouterr()
     existing = tmp_path / "existing.json"
     existing.write_text("[]", encoding="utf-8")
-    assert scan.main(["issues", "--findings", str(tmp_path / "none.json"), "--existing", str(existing), "--area", "mcs/notify"]) == 0
+    result = tmp_path / "result.json"
+    arguments = ["issues", "--result", str(result), "--existing", str(existing), "--area", area]
+    for unusable in (None, "", "[]", '{"findings": "none"}'):
+        if unusable is not None:
+            result.write_text(unusable, encoding="utf-8")
+        assert scan.main(arguments) == 2
+    capsys.readouterr()
+    result.write_text('{"findings": []}', encoding="utf-8")
+    assert scan.main(arguments) == 0
     assert json.loads(capsys.readouterr().out) == []
+    assert scan.main([*arguments[:-1], ""]) == 2
 
 
 def test_workflow_keeps_the_scanning_job_read_only():
@@ -96,8 +104,11 @@ def test_workflow_keeps_the_scanning_job_read_only():
     scan_job, file_job = text.split("\n  file:\n")
     assert "vars.AUTOMATION_ENABLED == 'true'" in scan_job
     assert "contents: read\n      issues: read" in scan_job and "write" not in scan_job.split("jobs:")[1].split("steps:")[0]
-    assert '--allowedTools "Read,Glob,Grep,Write(/tmp/agent-scan/**)"' in scan_job
-    assert "Bash" not in scan_job.split("claude_args:")[1].split("- id: issues")[0]
+    # Read-only tools: the result comes back as structured output, not as a file the model writes.
+    assert '--allowedTools "Read,Glob,Grep"\n' in scan_job and "--json-schema" in scan_job
+    assert "steps.claude.outputs.structured_output" in scan_job
+    assert 'area=$(python3 ci/agent_scan.py area' in scan_job and 'echo "area=$(' not in scan_job
+    assert "gh api --paginate --slurp" in scan_job
     assert "anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe" in scan_job
     assert "issues: write" in file_job and "contents" not in file_job
     assert f'--label "{scan.SCAN_LABEL}" --label "{scan.TRIAGE_LABEL}"' in file_job
