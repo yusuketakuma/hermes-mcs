@@ -29,7 +29,7 @@ def evidence(tmp_path, monkeypatch):
 def test_no_probe_reads_no_file_or_database(monkeypatch):
     monkeypatch.setattr(health_watch, 'classify_health', lambda *_: pytest.fail('unrequested file read'))
     monkeypatch.setattr(sqlite3, 'connect', lambda *_a, **_k: pytest.fail('database read'))
-    assert mcs_setup._doctor_collection({}, probe=False) == {'status': 'not_checked', 'counts': None}
+    assert mcs_setup._doctor_collection({}, probe=False) == {'status': 'not_checked', 'counts': None, 'stop': None}
 
 
 def test_probe_reads_published_counts_without_opening_database(evidence, monkeypatch):
@@ -102,7 +102,7 @@ def test_doctor_cli_preserves_probe_and_invalid_config_boundaries(evidence, tmp_
     cfg = {'mcs_login_id': 'synthetic', 'notify_target': 'local'}
     monkeypatch.setattr(mcs_setup, '_diagnostic_config', lambda: cfg)
     assert mcs_setup.main(['doctor', '--json']) == 0
-    assert json.loads(capsys.readouterr().out)['collection'] == {'status': 'not_checked', 'counts': None}
+    assert json.loads(capsys.readouterr().out)['collection'] == {'status': 'not_checked', 'counts': None, 'stop': None}
     assert mcs_setup.main(['doctor', '--json', '--probe', 'data']) == 0
     observed = json.loads(capsys.readouterr().out)['collection']
     assert observed['status'] == 'warning'

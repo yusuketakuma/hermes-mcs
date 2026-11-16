@@ -1,4 +1,4 @@
-"""Validate native command identity, shared configuration and patient allowlists."""
+"""Validate native command identity, shared configuration and patient allowlists, and record access."""
 
 from __future__ import annotations
 
@@ -156,3 +156,27 @@ def confirmation_origin(identity: dict[str, str | None]) -> dict[str, str | None
         origin.update({key: identity[key] for key in (
             "transport", "application_id", "route_epoch")})
     return origin
+
+
+def record_access(settings: Mapping[str, Any], identity: Mapping[str, Any], *, op, kind=None,
+                  project_id=None, patients=(), outcome="ok", query=False) -> bool:
+    """Append one access record for an answer that may carry patient data.
+
+    False means it could not be recorded, so a caller holding patient data
+    must withhold it (fail closed). The log lives beside the command inbox.
+    """
+    from pathlib import Path
+    from .mcs_api import bootstrap
+    from .paths import data_root
+    bootstrap()
+    import access_log
+    try:
+        inbox = settings.get("inbox")
+        root = Path(inbox).parent if inbox else data_root(dict(settings))
+        access_log.record(root, via=identity.get("transport") or "discord",
+                          actor=actor(identity), channel=identity.get("chat_id"), op=op,
+                          kind=kind, project_id=project_id, patients=patients,
+                          outcome=outcome, query=query)
+    except (access_log.AccessLogError, OSError, ValueError, KeyError, TypeError):
+        return False
+    return True

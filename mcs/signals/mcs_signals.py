@@ -573,6 +573,7 @@ def _adherence_concern(db, now, th, sig_cfg):
     like_pred = " OR ".join(
         ["m.body_text LIKE ?"] * (len(ADHERENCE_PATTERNS)
                                 + len(ADHERENCE_TERMINAL)))
+    # streamed: only phrase hits are kept, never every matching body
     phrase_rows = db.execute(
         f"""SELECT m.project_id, m.message_id, m.posted_at_ts,
                    m.body_text, p.patient_name
@@ -585,7 +586,7 @@ def _adherence_concern(db, now, th, sig_cfg):
               {self_pred}""",
         (horizon,
          *(f"%{p}%" for p in ADHERENCE_PATTERNS + ADHERENCE_TERMINAL),
-         *self_params)).fetchall()
+         *self_params))
     for pid, mid, ts, body, name in phrase_rows:
         hits = _adherence_phrases(body or "", patient_name=name)
         if hits:
@@ -670,8 +671,10 @@ def _symptom_after_med(db, now, th, sig_cfg):
               AND COALESCE(p.is_archived,0)=0
               {self_pred}
             ORDER BY m.project_id, m.message_id""",
-        (now - th["fyi_max_age_d"] * DAY_S, *self_params)).fetchall()
-    engaged = _engagement_checker(db, (row[:3] for row in rows), profs, orgs)
+        (now - th["fyi_max_age_d"] * DAY_S, *self_params))
+    # Stream the content/body rows and keep only the coupled findings, so
+    # the window's documents are never all held at once.
+    found = []
     for pid, mid, ts, content_s, body, name in rows:
         try:
             content = json.loads(content_s)
@@ -699,8 +702,10 @@ def _symptom_after_med(db, now, th, sig_cfg):
                  and s.get("subject", "patient") in ("patient", None)
                  and patient_item_scope(s, body, patient_name=name, surface=s.get("text")) == "patient"
                  and isinstance(s.get("text"), str) and s["text"].strip()]
-        if not symps:
-            continue
+        if symps:
+            found.append((pid, mid, ts, meds, symps))
+    engaged = _engagement_checker(db, (row[:3] for row in found), profs, orgs)
+    for pid, mid, ts, meds, symps in found:
         if engaged(pid, mid, ts):
             continue
         yield _key("symptom_after_med_change", pid, mid), {

@@ -37,6 +37,8 @@
 [3レーン構成](../../deployment/launchagents/README.md#3レーン構成)を参照してください。
 
 共有brokerは `config.json` の `local_llm.admission: true`（または従来の環境変数 `MCS_LLM_ADMISSION`）によるopt-inです。
+受付を再開する`open_epoch`の呼出元が本番コードにまだないため、有効にすると全推論が待機したままになります。
+それまでは`mcs_setup check`が有効化をエラーとして報告します。
 [llm_admission.DEFAULT_ROUTES](../../mcs/llm/admission/llm_admission.py)では、MCSのextract・semantic・QC・benchは
 `BACKLOG`、Hermes対話等は`RT`へ束縛されます。レーン1という名前からbrokerの`RT`や有効状態を推測しません。
 送信後のtimeoutや`unknown`はbackendの終了証拠と区別し、permitを無条件に再利用しません。

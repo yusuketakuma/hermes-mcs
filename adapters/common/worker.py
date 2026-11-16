@@ -47,10 +47,8 @@ EXPIRE_EVERY_S = 300.0         # registry TTL sweep cadence (TTLs are
                                # check expiry on access anyway)
 RECONCILE_EVERY_S = 300.0      # retry receipt recovery without restarting the sender
 STARTUP_RETRY_MAX_S = 300.0    # cap on the supervisor start-up retry backoff
-RESTORE_MARGIN_S = 86400.0     # journal rows this much older than the oldest
-                               # restorable backup are no longer restore evidence
-NO_BACKUP_HORIZON_S = 90 * 86400.0  # with no local backup set, settled rows
-                               # older than this are not restore evidence either
+RESTORE_MARGIN_S = 86400.0     # journal rows this much older than the restore
+                               # horizon are no longer restore evidence
 
 # HTTP statuses that prove the send was rejected outright — never
 # committed server-side. Timeouts/cancellations are unknown instead.
@@ -259,25 +257,15 @@ class DeliveryWorker:
     # -- journal growth bound ------------------------------------------
 
     def _restore_horizon(self) -> float | None:
-        """mtime of the oldest backup a restore could rewind to — journal
-        rows newer than that are the post-restore reconcile's only
-        witness. With no backup set at all (absent directory or no .db)
-        the horizon falls back to NO_BACKUP_HORIZON_S ago so the journal
-        cannot grow forever; an unreadable backup set prunes nothing."""
-        backups = os.path.join(self._root, "backups")
-        try:
-            names = [n for n in os.listdir(backups) if n.endswith(".db")]
-        except FileNotFoundError:
-            names = []
-        except OSError:
-            return None
-        if not names:
-            return time.time() - NO_BACKUP_HORIZON_S
-        try:
-            return min(os.stat(os.path.join(backups, n)).st_mtime
-                       for n in names)
-        except OSError:
-            return None
+        """mtime of the oldest backup a restore could rewind to, capped at
+        backup_names.JOURNAL_HORIZON_MAX_S ago (the cap alone with no backup
+        set) — journal rows newer than that are the post-restore reconcile's
+        only witness. An unreadable backup set prunes nothing."""
+        from . import mcs_api
+        mcs_api.bootstrap()
+        import backup_names
+        return backup_names.journal_horizon(
+            os.path.join(self._root, "backups"), time.time())
 
     def _compact_journal(self, claims: set, done: set) -> int:
         # while a restore is pending, its backup may be about to vanish
@@ -743,14 +731,18 @@ class DeliveryWorker:
                 continue
             if "started" in phases:
                 continue              # unknown — reconcile reports it
-            blocked_group = kind == "file_group" and any(
-                    p.get("kind") == "attachment_part" and not p.get("unavailable")
-                    and p["part_id"] not in ctx.get("part_remotes", {}) for p in manifest)
+            missing = [p for p in manifest
+                       if p.get("kind") == "attachment_part" and not p.get("unavailable")
+                       and p["part_id"] not in ctx.get("part_remotes", {})]
+            blocked_group = kind == "file_group" and bool(missing)
             if blocked_group and not (self.transport == "slack" and ctx.get("_fresh_primary_drive") is True
                                       and claim.get("worker_id") == self._worker_id):
-                return  # Legacy absence never proves a group was not sent.
+                # Legacy absence never proves a group was not sent.
+                self._settle_blocked_group(spec, manifest, missing, ctx, records)
+                return
             if kind != "thread" and not ctx.get("thread_id"):
                 if blocked_group:
+                    self._settle_blocked_group(spec, manifest, missing, ctx, records)
                     return
                 continue              # held — dependents need a thread
             # revocation withdraws the spec file (the worker never reads
@@ -764,6 +756,25 @@ class DeliveryWorker:
             if blocked_group:
                 return  # The local stage_receipt_missing result is durable; stages remain unknown.
         self._reg.put_parts_done(spec["delivery_id"])
+
+    def _settle_blocked_group(self, spec: dict, manifest: list, missing: list,
+                              ctx: dict, records: dict) -> None:
+        """A file group whose missing attachments can never gain their
+        remotes records that blocked end, so resume stops rescanning it
+        every tick; the group itself is never attempted. An attachment is
+        final once it carries a journal phase (no settled or started part
+        is ever resent), and an unattempted one is too when it waits for a
+        thread whose own part is final without a thread id."""
+        final = {"started", "result", "receipt", "denied"}
+
+        def journaled(part):
+            aid = envelopes.part_attempt_id(spec["delivery_id"], part["part_id"])
+            return bool({r.get("phase") for r in records.get(aid, ())} & final)
+
+        threadless = not ctx.get("thread_id") and any(
+            p.get("kind") == "thread" and journaled(p) for p in manifest)
+        if threadless or all(journaled(p) for p in missing):
+            self._reg.put_parts_done(spec["delivery_id"])
 
     async def _republish_part_receipt(self, claim: dict, part: dict,
                                       rows: list) -> None:
