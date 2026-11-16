@@ -128,6 +128,26 @@ def test_enforce_under_a_hold_publishes_as_skipped_never_as_passed(home, monkeyp
         db.close()
 
 
+def test_enforce_under_a_hold_renders_generated_never_as_checked(home):
+    from semantic_testkit import _canonical_cfg, _llm_v2, _seeded_two
+    _review(home, ["openai"])
+    db = _seeded_two(home)
+    fake = _FakeJev()
+    try:
+        out = semantic_drain.run_due(db, _canonical_cfg(), {"errors": []}, time.monotonic() + 300,
+                                     jev_client=fake, llm_fn=_llm_v2)
+        assert out["done"] == 1 and fake.requests_made == 0
+        rows = db.db.execute("SELECT payload FROM notify_outbox WHERE kind='semantic_notice'").fetchall()
+        assert rows
+        for row in rows:
+            text = json.loads(row["payload"])["text"]
+            assert "要約：生成済み" in text
+            for checked in ("自動検査完了", "自動検査済", "監査済み"):
+                assert checked not in text
+    finally:
+        db.close()
+
+
 def test_withdrawal_mid_drain_stops_jev_at_the_next_request(home):
     _review(home, ["jev"])
     db = _ledger(home)

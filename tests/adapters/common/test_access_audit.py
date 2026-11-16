@@ -108,3 +108,31 @@ def test_native_summary_entries_share_the_recorded_answer(tmp_path, monkeypatch)
     missing = {**settings, "inbox": str(tmp_path / "gone" / "cmd")}
     assert summary.answer_recorded(missing, "all", **who) == {
         "error": summary.ACCESS_LOG_UNAVAILABLE}
+
+
+def test_confirm_reply_without_an_access_record_carries_only_the_receipt(tmp_path):
+    """A confirmed operation is queued before its record is attempted, so the
+    reply stays, but it holds no patient information and a preview is withheld."""
+    root = tmp_path
+    settings = {**_settings(root), "allowed_user_ids": {"U1"}, "allowed_chat_ids": {"C1"}}
+    identity = {**IDENTITY, "application_id": "A1", "route_epoch": 1}
+    marker = "完全合成の確認理由"
+    preview = json.loads(command_dispatch.dispatch(
+        {"op": "control", "phase": "preview", "action": "update_rollback",
+         "tag": "v1.0.11", "reason": marker}, settings, identity))
+    assert preview["ok"] is True
+    (root / access_log.DIR_NAME).chmod(0o755)   # judged untrusted: no record can be written
+    confirm = {"op": "control", "phase": "confirm", "payload": preview["payload"],
+               "payload_hash": preview["payload_hash"], "origin": preview["origin"]}
+    reply = command_dispatch.dispatch(confirm, settings, identity)
+    parsed = json.loads(reply)
+    assert set(parsed) == {"ok", "operation", "phase", "receipt", "payload_hash"} and parsed["ok"] is True
+    assert set(parsed["receipt"]) <= {"command_id", "payload_hash", "outcome", "error"}
+    assert command_dispatch._returned_patients(parsed) == set()
+    assert marker not in reply and "project_id" not in reply
+    assert len(list((root / "cmd").glob("*.json"))) == 1
+    withheld = command_dispatch.dispatch(
+        {"op": "control", "phase": "preview", "action": "update_rollback",
+         "tag": "v1.0.11", "reason": marker}, settings, identity)
+    assert json.loads(withheld) == {"ok": False, "error": "access_log_unavailable"}
+    assert len(list((root / "cmd").glob("*.json"))) == 1

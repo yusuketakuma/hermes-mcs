@@ -383,8 +383,8 @@ def verified_skipped_summary_current(db, project_id, message_id, fingerprint, po
 def current_summary(db, project_id: int, message_id: int,
                      bundle, policy: str, *, fact_source=None):
     """The newest semantic_summary for this message when it is publishable
-    on the CURRENT generation (PASS, not stale, enforce, same policy,
-    whole-thread fingerprint and target revision), else None. The single
+    on the CURRENT generation (PASS or SKIPPED, not stale, enforce, same
+    policy, whole-thread fingerprint and target revision), else None. The single
     predicate shared by the send gate, render state and summary block.
     Returns ``{artifact_id, content, meta}``. ``bundle`` may be a dict or
     a zero-arg callable resolved only after the cheap row/meta checks pass
@@ -702,7 +702,7 @@ def semantic_gate(db, ev, payload: dict, cfg: dict,
 
 
 def semantic_render_state(db, ev, cfg: dict) -> tuple:
-    """Current identities of audited summaries attached to a raw notice."""
+    """Current identities of publishable summaries attached to a raw notice."""
     with semantic_transport.config_model_scope(cfg):
         return _render_state(db, ev, cfg)
 
