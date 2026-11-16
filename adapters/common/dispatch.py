@@ -202,10 +202,16 @@ def _audited(reply: str, data: dict, settings: dict[str, Any],
     patients = reply.patients if isinstance(reply, _Shown) else _returned_patients(parsed)
     reply = str(reply)
     phase = data.get("phase")
+    kind, project_id = data.get("kind") or data.get("action"), data.get("project_id")
+    payload = data.get("payload")
+    if phase == "confirm" and outcome == "ok" and isinstance(payload, dict):
+        # A confirmation names its patient and action only inside the payload
+        # that confirm() has just validated against its hash and actor.
+        kind = str(payload.get("cmd") or "").rpartition(".")[2] or None
+        project_id = payload.get("project_id")
     recorded = record_access(
         settings, identity, op=_audit_op(data.get("op"), phase),
-        kind=_known(data.get("kind") or data.get("action"), _AUDIT_KINDS),
-        project_id=data.get("project_id"), patients=patients,
+        kind=_known(kind, _AUDIT_KINDS), project_id=project_id, patients=patients,
         outcome=outcome, query="query" in data)
     if not recorded and phase != "confirm" and not _bare_denial(reply, parsed, outcome):
         return deny("access_log_unavailable")

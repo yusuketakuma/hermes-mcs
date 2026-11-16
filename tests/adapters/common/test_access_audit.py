@@ -51,6 +51,22 @@ def test_unrecorded_failure_carrying_patient_content_is_withheld(tmp_path, monke
     assert json.loads(command_dispatch.dispatch(data, settings, IDENTITY))["error"] == "project_not_allowed"
 
 
+def test_confirmation_is_attributed_to_the_patient_in_its_payload(tmp_path, monkeypatch):
+    monkeypatch.setattr(command_dispatch, "dispatch_operation",
+                        lambda *a, **k: ok(operation="request", receipt="r1"))
+    payload = {"cmd": "ops.adopt_summary", "project_id": 7, "actor": "slack:T1:U1"}
+    command_dispatch.dispatch({"op": "control", "phase": "confirm", "payload": payload,
+                               "payload_hash": "h", "origin": {}}, _settings(tmp_path), IDENTITY)
+    monkeypatch.setattr(command_dispatch, "dispatch_operation",
+                        lambda *a, **k: deny("payload_hash_mismatch"))
+    command_dispatch.dispatch({"op": "request", "phase": "confirm",
+                               "payload": {"cmd": "request.create", "project_id": 8}},
+                              _settings(tmp_path), IDENTITY)
+    done, refused = access_log.read(tmp_path)
+    assert (done["op"], done["kind"], done["project_id"]) == ("control.confirm", "adopt_summary", 7)
+    assert (refused["kind"], refused["project_id"]) == (None, None)
+
+
 def test_projectless_list_is_attributed_to_every_returned_patient(tmp_path, monkeypatch):
     reply = ok(operation="read", result={"items": [{"project_id": 4}, {"project_id": 9,
                                                    "nested": [{"project_id": 4}]}]})
