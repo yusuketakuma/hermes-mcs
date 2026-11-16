@@ -52,11 +52,11 @@ def caption_update(led, monkeypatch, cfg, error, kind="attachment_part"):
     _seed_thread(led)
     _attach(led, 100, name="synthetic.pdf")
     monkeypatch.setattr(notify_parts, "_attachment_captions",
-                        lambda db, card, attachments: {a["attachment_id"]: "synthetic before" for a in attachments})
+                        lambda db, card, attachments, cfg=None: {a["attachment_id"]: "synthetic before" for a in attachments})
     assert _dispatch(led, _intent(led), cfg)["dispatched"]
     settle(led, cfg, _latest_render(led))
     monkeypatch.setattr(notify_parts, "_attachment_captions",
-                        lambda db, card, attachments: {a["attachment_id"]: "synthetic after" for a in attachments})
+                        lambda db, card, attachments, cfg=None: {a["attachment_id"]: "synthetic after" for a in attachments})
     specs = []
     with led.db:
         notify_cards.issue_render(led.db, 1, cfg, NOW + 1, specs, force=True)

@@ -49,3 +49,41 @@ def test_minimal_verified_post_keeps_urgency_and_request_without_identifiers(led
         led.db, {'kind': 'thread', 'project_id': 1}, {'shown': [100]},
         _urgencies={100: 'llm'}, cfg={'notify': {'preview_privacy': 'minimal'}})
     assert preview == notify_render.URGENCY_PLAIN['llm'] + ' · MCS: 新しい投稿（依頼あり）'
+
+
+@pytest.mark.parametrize('privacy', ['full', 'initial', 'minimal'])
+def test_task_reminder_text_follows_preview_privacy(led, privacy):
+    import notify_cards
+    from notify_testkit import CFG, _add_request, _at, _delivered_card
+    _delivered_card(led)
+    cfg = {**CFG, 'notify': {**CFG['notify'], 'preview_privacy': privacy}}
+    assert notify_cards.task_reminders(led, cfg, now=_at('2026-09-20')) == 0
+    _add_request(led, title='SYNTHETIC reminder', due='2026-10-01')
+    assert notify_cards.task_reminders(led, cfg, now=_at('2026-10-01')) == 1
+    text = led.db.execute(
+        "SELECT payload FROM notify_outbox WHERE kind='task_reminder'").fetchone()[0]
+    label = notify_render.patient_label(led.db, 1)
+    if privacy == 'full':
+        assert label in text and 'SYNTHETIC reminder' in text
+    else:
+        assert label not in text
+    if privacy == 'initial':
+        assert notify_render.masked_name(label) in text
+    if privacy == 'minimal':
+        assert 'SYNTHETIC reminder' not in text and '担当' not in text
+        assert '期限リマインド' in text and 'MCS' in text
+
+
+@pytest.mark.parametrize('privacy', ['initial', 'minimal'])
+def test_attachment_caption_follows_preview_privacy(led, privacy):
+    import notify_parts
+    _patient(led, name='合成 花子')
+    _msg(led, 100, body='合成の本文', sender='合成職員', org='合成所属')
+    led.db.execute("INSERT INTO attachments(attachment_id, message_id, name) VALUES(7, 100, '合成.pdf')")
+    captions = notify_parts._attachment_captions(
+        led.db, {'transport': 'lineworks', 'project_id': 1},
+        [{'attachment_id': 7, 'name': '合成.pdf'}],
+        {'notify': {'preview_privacy': privacy}})
+    assert '合成 花子' not in captions[7] and '合成職員' not in captions[7]
+    if privacy == 'minimal':
+        assert captions[7] == '📎 MCS: 添付ファイル'

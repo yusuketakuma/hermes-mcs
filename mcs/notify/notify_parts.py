@@ -10,7 +10,8 @@ from functools import partial
 
 from mcs_requests import canonical, positive
 from mcs_util import payload_hash, strict_json, text_sha256, valid_hash
-from notify_render import SECTION_RULE, card_body_text, own_post, preview_header, notification_preview, presenter
+from notify_render import (SECTION_RULE, card_body_text, notification_preview, own_post, presenter,
+                           preview_header, preview_privacy)
 from notify_scope import (active_transport, interactive_enabled, notify_cfg,
                           scope_fields, scope_keys_allowed, scope_matches,
                           stored_scope,
@@ -433,7 +434,7 @@ def _prior_body_sha(db, card) -> dict:
     return out
 
 
-def _attachment_captions(db, card, attachments) -> dict:
+def _attachment_captions(db, card, attachments, cfg=None) -> dict:
     """添付の同一投稿内captionに元投稿の5項目表示を付け、取得失敗を区別する。"""
     if not attachments:
         return {}
@@ -444,17 +445,23 @@ def _attachment_captions(db, card, attachments) -> dict:
             FROM attachments a JOIN messages m ON m.message_id=a.message_id
             WHERE a.attachment_id IN ({ph})""", ids).fetchall()
     where = {r["attachment_id"]: r for r in rows}
+    privacy = preview_privacy(cfg)
     out = {}
     for a in attachments:
         r = where.get(a["attachment_id"])
+        if privacy == "minimal":
+            # the caption rides the push preview; minimal names neither the
+            # patient, the sender nor the file
+            out[a["attachment_id"]] = "📎 MCS: 添付ファイル"
+            continue
         if a.get("unavailable"):
             tail = "取得失敗"
         elif r is not None and presenter(card["transport"]).CAPTION == "header":
-            tail = preview_header(db, r["project_id"], r)
+            tail = preview_header(db, r["project_id"], r, privacy)
         elif r is not None:
             tail = notification_preview(
                 db, {"kind": "thread", "project_id": r["project_id"]},
-                {"shown": [r["message_id"]]}, limit=260)
+                {"shown": [r["message_id"]]}, limit=260, cfg=cfg)
         else:
             tail = ""
         name = a["name"]
@@ -1354,7 +1361,7 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                                 parent_history=parent_history, own_history=own_history,
                                 parent_attachment_ids=parent_attachment_ids)
             for a in attachments]
-    captions = _attachment_captions(db, card, attachments)
+    captions = _attachment_captions(db, card, attachments, cfg)
     att_entries = []
     for a in attachments:
         inherited_part = inherited_attachments and (

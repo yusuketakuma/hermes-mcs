@@ -117,7 +117,7 @@ from mcs_util import loads_dict, strict_json, valid_hash, valid_text
 from safe_io import read_private_bytes
 from notify_render import (
     card_content as card_content, content_fingerprint as content_fingerprint,
-    anchor_keys, preview_header, preview_line, fit_parts,
+    anchor_keys, preview_header, preview_line, preview_privacy, fit_parts,
     plain_notice, presenter, reply_layout, reply_source, own_post as own_post)
 import notify_parts
 import notify_action_tokens as action_tokens
@@ -1070,13 +1070,17 @@ def task_reminders(ledger, cfg, now=None, limit=REMINDER_LIMIT) -> int:
                       r.due_date, m.sender_name, m.organization, m.posted_at {pending}
                ORDER BY r.due_date, r.request_id LIMIT ?""",
             (*args, limit)).fetchall()
+        privacy = preview_privacy(cfg)
         for r in rows:
             stage = "due" if r["due_date"] == today else "overdue"
             head = (f"⏰ 期限リマインド（本日 {r['due_date']}）" if stage == "due"
                     else f"⚠ 期限切れ（期限 {r['due_date']}）")
-            header = preview_header(db, r["project_id"], r)
-            text = (plain_notice(preview_line(header, f"{_plain(r['title'])} — {head}"), 600)
-                    + f" — 担当 {_plain(r['assignee'] or '未設定')}")
+            if privacy == "minimal":
+                text = f"{head} MCS: 依頼の期限"
+            else:
+                header = preview_header(db, r["project_id"], r, privacy)
+                text = (plain_notice(preview_line(header, f"{_plain(r['title'])} — {head}"), 600)
+                        + f" — 担当 {_plain(r['assignee'] or '未設定')}")
             eid = ledger.outbox_add_tx(
                 "task_reminder", r["project_id"],
                 {"text": text, "request_id": r["request_id"],
