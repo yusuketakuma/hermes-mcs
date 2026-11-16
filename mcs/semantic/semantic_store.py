@@ -691,8 +691,7 @@ def _classification_only_state(ledger, row, scfg, cfg, bundle, fp, policy):
                             or semantic_audit.audit_status_for(findings, findings, True, True) != 'PASS'):
                         return 'held'
                 elif kind == KIND_AUDIT and (meta.get('jev_evaluated') is not False or meta.get('code_checks') != 'passed'
-                      or meta.get('jev_skip_reason') not in ('not_configured', 'disabled', 'daily_budget',
-                          'backlog_reserved', 'service_unavailable', 'circuit_open')
+                      or meta.get('jev_skip_reason') not in jev.SKIP_REASONS
                       or any(item['code'] != 'support_unevaluated' for item in findings)):
                     return 'held'
         assessment, previous = _primary_assessment_history(db, pid, mid, fp, policy)
@@ -707,8 +706,7 @@ def _classification_only_state(ledger, row, scfg, cfg, bundle, fp, policy):
             if meta.get('registry') != jev.REGISTRY_VERSION or meta.get('model') != jev.JEV_MODEL:
                 return 'held'
             return 'current'
-        if (meta.get('technical_status') != 'skipped' or meta.get('jev_skip_reason') not in
-                ('not_configured', 'disabled', 'daily_budget', 'backlog_reserved', 'service_unavailable', 'circuit_open')):
+        if meta.get('technical_status') != 'skipped' or meta.get('jev_skip_reason') not in jev.SKIP_REASONS:
             return 'held'
         return 'current_skipped'
     except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
@@ -748,8 +746,7 @@ def _loop_only_state(ledger, row, scfg, cfg, bundle, fp, policy, deadline=None):
             return 'held'
         if status == 'SKIPPED':
             reason = content.get('skip_reason')
-            if (reason not in ('not_configured', 'disabled', 'daily_budget', 'backlog_reserved',
-                               'service_unavailable', 'circuit_open')
+            if (reason not in jev.SKIP_REASONS
                     or content.get('skip_ref') is None
                     or content['skip_ref'] != _loop_skip_ref(db, pid, bundle['root_id'], fp, policy, reason)):
                 return 'held'

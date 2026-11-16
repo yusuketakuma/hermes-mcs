@@ -379,7 +379,9 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     cloud_backlog = llm_fn is None and lane == "backlog"
     if llm_fn is None:
         llm_fn = semantic_transport.llm_chat
-    if jev_client is None and scfg["daily_request_budget"] > 0:
+    # A facility review that does not cover Jev withholds only Jev; the jobs
+    # still run locally with the review_held skip (semantic_policy.semantic_config).
+    if jev_client is None and scfg["daily_request_budget"] > 0 and not scfg["jev_held"]:
         jev_key = jev.api_key()
         jev_client = jev.JevClient(
             api_key=jev_key, key_current=lambda: bool(jev_key) and jev.api_key() == jev_key,
@@ -459,7 +461,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             qc_cap = scfg["daily_request_budget"]
             if lane == "backlog":
                 qc_cap -= math.ceil(qc_cap * BACKLOG_BUDGET_RESERVE)
-            qc_skip_mode = (jev_client is None or
+            qc_skip_mode = (jev_client is None or scfg["jev_held"] or
                             not getattr(jev_client, "api_key", True) or
                             runtime.circuit_open(ledger) or jev_usage_today(ledger) >= qc_cap)
             if qc_skip_mode:
@@ -749,7 +751,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             lane_cap = scfg["daily_request_budget"]
             if lane == "backlog":
                 lane_cap -= math.ceil(lane_cap * BACKLOG_BUDGET_RESERVE)
-            if jev_client is None:
+            if scfg["jev_held"]:
+                # re-read per job (cfg_path), so a withdrawn review stops Jev at the next job
+                job_skip = job_skip or jev.REVIEW_HELD
+            elif jev_client is None:
                 job_skip = job_skip or "disabled"
             elif not getattr(jev_client, "api_key", True):
                 job_skip = job_skip or "not_configured"

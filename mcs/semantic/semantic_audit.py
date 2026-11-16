@@ -541,8 +541,7 @@ def audit_status_for(code_findings: list, jev_findings: list,
 def optional_audit_status(code_findings: list, jev_findings: list,
                           skip_reason: str | None, repaired: bool) -> str:
     """Keep concrete findings when Jev could not finish its evaluation."""
-    if skip_reason not in {"not_configured", "daily_budget", "backlog_reserved",
-                           "disabled", "service_unavailable", "circuit_open"}:
+    if skip_reason not in jev.SKIP_REASONS:
         return audit_status_for(code_findings, jev_findings, False, repaired)
     permitted = {"support_unevaluated", "claim_not_supported", "claim_contradicts",
                  "claim_ambiguous", "claim_low_confidence"}
@@ -601,8 +600,7 @@ def optional_fact_audit(doc, member, source_fingerprint, reason, previous=None,
     """Check the full source-bound fact contract without fabricating a Jev verdict."""
     import semantic_assembly
     import semantic_facts
-    allowed = {"not_configured", "disabled", "daily_budget", "backlog_reserved",
-               "service_unavailable", "circuit_open"}
+    allowed = jev.SKIP_REASONS
     result = {"status": "NEEDS_REVIEW", "evaluated": False,
               "findings": [{"code": "fact_optional_validation_failed"}], "fact_verdicts": {}}
     if reason not in allowed or not isinstance(member, dict) or not _probability(match_threshold):

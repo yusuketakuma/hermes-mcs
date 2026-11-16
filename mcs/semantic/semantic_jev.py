@@ -66,6 +66,12 @@ DAILY_REQUEST_BUDGET_MAX = 100000
 JEV_MODELS_URL = "https://api.typesafe.ai/v1/models"
 JEV_ALLOWED_ENDPOINTS = frozenset({JEV_ENDPOINT})
 REGISTRY_VERSION = "2026-09-20"
+# Why a job ran without Jev. Every stored SKIPPED receipt and its readers use
+# this one set; REVIEW_HELD is the facility review not covering Jev
+# (external_transfer), kept apart from a missing key ("not_configured").
+REVIEW_HELD = "review_held"
+SKIP_REASONS = frozenset({"not_configured", "disabled", "daily_budget", "backlog_reserved",
+                          "service_unavailable", "circuit_open", REVIEW_HELD})
 
 # provisional shadow-display thresholds only — never feed these into
 # automatic control decisions (spec §14.2)
@@ -980,8 +986,10 @@ def wire_smoke(api_key: str, timeout: float = 30.0) -> dict:
     or message data is ever sent. A successful evaluation is followed by
     one models-list GET. The reported `noul` is informational
     only — the gate is contract conformance, not the model's answer.
-    This explicit operator action bypasses semantic mode/scope, while
-    every POST and model-list GET consumes the shared MCS daily budget."""
+    This explicit operator action bypasses semantic mode/scope and the
+    facility review (external_transfer: only this fixed synthetic fixture
+    is sent, never patient data), while every POST and model-list GET
+    consumes the shared MCS daily budget and stops after semantic.until."""
     target = {"id": "smoke", "role": "target",
               "posted_at": "2026-01-01T00:00:00",
               "sender": {"type": "synthetic", "profession": ""},

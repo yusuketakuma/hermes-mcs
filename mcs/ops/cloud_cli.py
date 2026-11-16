@@ -49,10 +49,14 @@ def pending_key_presence(root=None):
 
 
 def _settings(cfg, root=None):
+    return _selection(cfg, root)[:3]
+
+
+def _selection(cfg, root=None):
     # an unreadable config arrives as {}: fail closed like the runtime, never auto-enable
-    settings, errors = policy.resolve_settings(cfg if cfg else {"cloud_llm": {"mode": "off"}}, root)
+    settings, errors, held = policy.resolve_selection(cfg if cfg else {"cloud_llm": {"mode": "off"}}, root)
     key = bool(policy.provider_key(settings["provider"], root))
-    return settings, errors, key
+    return settings, errors, key, held
 
 
 @contextmanager
@@ -179,13 +183,14 @@ def _dryrun_report(db, deadline, now, provider="anthropic"):
 
 def diagnostics(cfg, *, root=None, probe=False):
     """Return only effective modes, key presence, budgets and optional safe accounting."""
-    cloud, errors, key = _settings(cfg, root)
+    cloud, errors, key, held = _selection(cfg, root)
     from semantic_policy import BACKLOG_BUDGET_RESERVE, runtime_config
     semantic, sem_errors = runtime_config(cfg, root=root)
     jev_key = bool(jev.api_key(root))
     out = {
         "jev": {"mode": semantic["mode"], "key_present": jev_key,
-                "status": "invalid" if sem_errors else "local" if not jev_key or semantic["mode"] == "off" else "configured",
+                "status": "invalid" if sem_errors else "local" if (
+                    not jev_key or semantic["mode"] == "off" or semantic["jev_held"]) else "configured",
                 "daily_request_budget": semantic["daily_request_budget"],
                 "scope": "all" if semantic["project_ids"] is None else "none" if not semantic["project_ids"] else "selected",
                 "backlog_budget": None},
@@ -199,6 +204,12 @@ def diagnostics(cfg, *, root=None, probe=False):
                 "provider_budgets": cloud["provider_budgets"],
                 "accounting": None, "dry_run": None,
                 "block_reason": "cost_limit_required" if errors and not policy.blocking_errors(errors) else None}}
+    import external_transfer
+    from semantic_policy import runtime_review_held
+    if held:
+        out["anthropic"]["block_reason"] = external_transfer.HOLD_CODE
+    if cfg and runtime_review_held(cfg, root=root):
+        out["jev"]["block_reason"] = external_transfer.HOLD_CODE
     eligible_scope = cloud["project_ids"] is None or bool(set(cloud["project_ids"]) - set(cloud["exclude_project_ids"]))
     window_reason = policy.setting_block_reason(cloud) if not errors else None
     if key and cloud["mode"] in ("on", "shadow") and window_reason:
@@ -237,7 +248,10 @@ def diagnostics(cfg, *, root=None, probe=False):
                 out["anthropic"]["accounting"] = policy.usage_report(borrowed)
                 out["anthropic"]["dry_run"] = _dryrun_report(db, deadline, time.time(), cloud["provider"])
                 reason = policy.global_block_reason(borrowed, model=cloud["model"]) or policy.budget_block_reason(borrowed, cloud)
-                if reason == "paused":
+                if reason and held:
+                    # the review hold stays the reason shown; the probe's own reason is kept beside it
+                    out["anthropic"]["also_block_reason"] = reason
+                elif reason == "paused":
                     out["anthropic"].update(status="local", block_reason=reason)
                 elif reason:
                     out["anthropic"].update(status="blocked", block_reason=reason)

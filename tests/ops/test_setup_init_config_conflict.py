@@ -165,3 +165,42 @@ def test_broken_symlink_backup_keeps_the_target(monkeypatch, tmp_path):
     (backup,) = tmp_path.glob('c.json.corrupt-*')
     assert backup.is_symlink() and target.read_text() == 'synthetic'
     assert json.loads(path.read_text())['notify_target'] == 'local'
+
+
+@pytest.mark.parametrize('existing', [True, False])
+def test_init_preview_knows_whether_this_save_writes_the_review(monkeypatch, tmp_path, existing):
+    cfg, path = _setup(monkeypatch, tmp_path)
+    if not existing:
+        path.unlink()
+    seen = []
+    monkeypatch.setattr(mcs_setup.setup_wizard, 'wizard', lambda current: current.update(cfg) or 1)
+    monkeypatch.setattr(mcs_setup.setup_wizard, 'wizard_optional_features', lambda *_a, **_k: None)
+    monkeypatch.setattr(mcs_setup.setup_wizard, 'confirm_save',
+                        lambda *_a, **k: seen.append(k['new_installation']) and False)
+    assert mcs_setup.main(['init']) == 130
+    assert seen == [not existing]
+
+
+@pytest.mark.parametrize('kind', ['missing', 'broken', 'symlink', 'valid'])
+def test_a_fresh_config_is_published_with_the_pending_review(monkeypatch, tmp_path, capsys, kind):
+    import external_transfer
+    import mcs_util
+    _, path = _setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(mcs_util, 'HOME', str(tmp_path))
+    if kind == 'missing':
+        path.unlink()
+    elif kind == 'broken':
+        path.write_text('{broken')
+    elif kind == 'symlink':
+        path.unlink()
+        path.symlink_to(tmp_path / 'absent.json')
+    assert mcs_setup.main(['init', '--yes', '--login-id', 'synthetic', '--notify-target', 'local']) == 0
+    record = tmp_path / external_transfer.FILE_NAME
+    if kind == 'valid':
+        # an existing readable config is an existing installation: no record is added
+        assert not record.exists()
+        return
+    assert external_transfer.status(tmp_path)['state'] == 'pending'
+    assert json.loads(path.read_text())['notify_target'] == 'local'
+    out = capsys.readouterr().out
+    assert '施設の確認を記録するまで送信しません' in out and '自動では' not in out

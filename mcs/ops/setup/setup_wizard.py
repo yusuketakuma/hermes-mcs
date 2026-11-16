@@ -546,11 +546,17 @@ def offer_sdc_enrollment(cfg: dict) -> None:
         print('状態監視の登録は未完了です。同意記録と本体設定は保持します。mcs connect で再開できます。')
 
 
-def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
-    """Show the selected destinations and writes; require an explicit answer before saving."""
+def confirm_save(cfg: dict, *, plugin_profile, key_presence=None, new_installation=False) -> bool:
+    """Show the selected destinations and writes; require an explicit answer before saving.
+
+    ``new_installation``: this save publishes the first config, which also
+    writes the pending facility review record (setup_config_snapshot), so the
+    preview applies that pending review instead of today's missing record."""
+    import external_transfer
     import stamp_write
     import local_llm
-    from semantic_policy import runtime_config, semantic_config
+    import semantic_policy
+    from semantic_policy import semantic_config
     import cloud_policy
 
     def shown(value):
@@ -563,24 +569,22 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
     interactive = ntf.get("interactive", "off")
     scope = ntf.get(interactive) or {}
     digest = cfg.get("daily_digest") or {}
-    semantic, _ = (runtime_config(cfg) if key_presence is None else
-                   semantic_config(cfg, key_present=key_presence.get("jev") is True))
+    def transfer_status():
+        state = external_transfer.status()
+        return external_transfer.PENDING if new_installation and state["state"] == "not_required" else state
+    jev_key = (semantic_policy.runtime_key_present(cfg, None) if key_presence is None
+               else key_presence.get("jev") is True)
+    semantic, _ = semantic_config(cfg, key_present=jev_key, transfer_status=transfer_status)
+    jev_held = semantic_policy.review_held(cfg.get("semantic"), jev_key, transfer_status)
     if key_presence is None:
         from mcs_util import private_env_problem
         key_presence = {name: private_env_problem(key) is None for name, key in (
             ("anthropic", "MCS_ANTHROPIC_API_KEY"), ("openai", "MCS_OPENAI_API_KEY"))}
-    cloud, cloud_errors = cloud_policy.cloud_config(cfg)
+    # The runtime's own choice (keys and facility review), so the preview names where data goes.
+    cloud, _, cloud_held = cloud_policy.select_settings(
+        cfg, lambda name: key_presence.get(name) is True, transfer_status)
     provider = cloud["provider"]
-    if provider == "auto":
-        provider = next((name for name in cloud["provider_order"] if key_presence.get(name) is True),
-                        cloud["provider_order"][0])
     cloud_key = key_presence.get(provider) is True
-    block = cfg.get("cloud_llm")
-    if (block is None or isinstance(block, dict) and "mode" not in block) and not cloud_errors:
-        cloud, _ = cloud_policy.cloud_config(cfg, key_present=cloud_key)
-    cloud["provider"] = provider
-    if not isinstance(block, dict) or "model" not in block:
-        cloud["model"] = cloud_policy.PROVIDERS[provider]
     print("\n【保存前の確認】設定した送り先と、この後に保存する内容を確認してください。"
           "\n  ここで中止すると、今回の設定・認証情報・辞書は保存しません。")
     print(f"  実行方法: {shown(mode)}"
@@ -606,7 +610,9 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
           + shown(endpoint))
     project_scope = "全対象" if semantic["project_ids"] is None else shown(semantic["project_ids"])
     features = ("mode", "summary_mode", "loop_mode", "extract_qc")
-    if any(semantic[key] != "off" for key in features) and semantic["daily_request_budget"] > 0:
+    if jev_held:
+        print("  外部Jev追加解析: 無効。" + external_transfer.hold_message("Jev", transfer_status()))
+    elif any(semantic[key] != "off" for key in features) and semantic["daily_request_budget"] > 0:
         print(f"  外部Jev追加解析: 対象プロジェクト {project_scope} の投稿本文を、"
               "機能ごとの許可条件がそろった場合にJev APIへ送ります。患者名を含む本文は匿名化しません。")
     else:
@@ -628,6 +634,10 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
               f"患者名を含む投稿本文・参考文脈を匿名化せず選択した{'OpenAI' if provider == 'openai' else 'Anthropic'}のAPIへ送信します。通常のAPI保持条件が適用されます。"
               "キー登録だけではZDRやHIPAAに関する契約は確認できません。保持条件と契約を利用者側で確認してください。"
               "詳細: docs/guides/ANTHROPIC.md")
+    elif cloud_held:
+        print(f"  外部AI追加処理: {cloud['mode']}。"
+              + external_transfer.hold_message({"openai": "OpenAI"}.get(cloud_held, "Anthropic"),
+                                               transfer_status()))
     else:
         print(f"  外部AI追加処理: {cloud['mode']} / キー未登録・off・dry_runの場合は外部送信しません。")
     print("  OpenAI・Anthropicへの個別の投稿・添付OCR・意味解析の新規送信は行いません。"

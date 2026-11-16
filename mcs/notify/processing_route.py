@@ -100,8 +100,8 @@ def _extract_jev_state(db, project_id, message_id, source_id, source_hash, versi
                         or type(score) not in (int, float) or not math.isfinite(score) or not 0 <= score <= 1):
                     return "unknown"
             return "done"
-        if (data.get("status") != "SKIPPED" or data.get("reason") not in {
-                "not_configured", "disabled", "daily_budget", "backlog_reserved", "circuit_open", "service_unavailable"}):
+        from semantic_jev import SKIP_REASONS
+        if data.get("status") != "SKIPPED" or data.get("reason") not in SKIP_REASONS:
             return "unknown"
         partial = data.get("partial_answers", {})
         if not isinstance(partial, dict) or set(partial) - set(questions):

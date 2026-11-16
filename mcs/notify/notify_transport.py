@@ -866,6 +866,11 @@ def settle_part_receipt(db, req, now) -> dict:
              req.get("error_code"), req.get("attempt_id"), now,
              render["delivery_id"], part["part_id"]))
         if '"file_group"' in (render["spec_json"] or ""):
+            if render["transport"] == "discord" and part["kind"] == "body_part":
+                # group parts a restore left without this surface's attempt
+                # take it now, so this receipt settles them as it would have
+                import notify_reconcile
+                notify_reconcile.promote_group_parts(db, now, render["delivery_id"])
             if req["result"] == "delivered":
                 # a body_part surface's file group fans out from this
                 # same receipt — members and the anchor settle with this

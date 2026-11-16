@@ -269,7 +269,12 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   restore 保留中は削減しない。90日より古い backup から restore した場合は journal で
   照合できないため、照合時に復元時点までに作られた未確定の render と保留中の操作カード
   通知を hold し、人が `ops.card_resolve` で確認・解除する（attempt の無い hold は
-  `attempt_id` に `delivery_id` を指定する）。この全件 hold は復元マーカーに
+  `attempt_id` に `delivery_id` を指定する）。カード本体が届いて thread・本文・添付の
+  結果が無い部品（各カードの最新 render のみ）は `restore_beyond_journal_horizon` の
+  unknown にし、`ops.card_part_resolve` で確認・解除する（送信待ちの thread も次の更新を
+  止める）。Discord の添付のまとまりで面の attempt と照合できないものは `restore_group_*` の
+  unknown になり、照合 receipt の `parts_unresolvable` に載る（個別調査。解除コマンドは無く、
+  そのカードの更新を止め続ける。面の結果が後から記録されると解除できる unknown に移る）。この全件 hold は復元マーカーに
   backup のパスが残る復元（mcs_update の復元）だけが対象で、`mcs_backup` の復元・
   手動の `mark_restored` は従来どおりの照合になり、90日を超えた journal の根拠は
   残らない。`data/backups` 外の複製から restore する運用はこの保証の対象外。

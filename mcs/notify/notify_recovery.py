@@ -458,7 +458,9 @@ PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
                      "workspace_unverified", "sdk_capability_missing", "retry_policy_unknown",
                      "prefetch_failed", "unsupported_part", "slack_attachment_incomplete",
                      "scope_mismatch", "no_target", "bad_render", "bad_slack_response",
-                     "operator_part_resolve")
+                     "operator_part_resolve", "restore_beyond_journal_horizon",
+                     "restore_group_spec_unverified", "restore_group_surface_missing",
+                     "restore_group_surface_unresolvable")
 
 
 # non-card part kinds an operator recovery command can name
@@ -892,6 +894,26 @@ def _preflight_journal_error(attempts, incomplete, req, render, part, *, result=
     return None
 
 
+def discord_bound_spec(db, render, card=None):
+    """The validated wire spec of a Discord card render, bound to its card,
+    scope and sealed payload hash; ValueError (or a lookup error) otherwise.
+    Group recovery and restore reconcile trust a file_group manifest only
+    through this check."""
+    from adapters.common import spec as wire_spec
+    from mcs_util import strict_json
+    spec = wire_spec.validate(strict_json(render["spec_json"]))
+    card = card_row(db, render["card_id"]) if card is None else card
+    if (card is None or render["card_id"] != card["card_id"]
+            or not scope_matches(render, stored_scope(card))
+            or spec["card_key"] != card["card_key"] or spec["logical_intent_id"] != card["card_key"]
+            or payload_hash(spec) != render["payload_hash"]
+            or any(spec.get(key) != render[key] for key in ("delivery_id", "render_rev", "op"))
+            or not scope_matches(render, spec["delivery"])
+            or any(spec["delivery"].get(key) != render[key] for key in ("route_epoch", "correlation"))):
+        raise ValueError("unbound spec")
+    return spec
+
+
 def _discord_recovery_group(db, req):
     # Logical group parts share their surface's wire attempt, not a journal of their own.
     render = render_row(db, req["delivery_id"])
@@ -906,17 +928,7 @@ def _discord_recovery_group(db, req):
     if not db.execute("SELECT 1 FROM notification_render_parts WHERE delivery_id=? "
                       "AND kind='file_group' LIMIT 1", (req["delivery_id"],)).fetchone():
         return None
-    from adapters.common import spec as wire_spec
-    from mcs_util import strict_json
-    spec = wire_spec.validate(strict_json(render["spec_json"]))
-    card = card_row(db, render["card_id"])
-    if (card is None or not scope_matches(render, stored_scope(card))
-            or spec["card_key"] != card["card_key"] or spec["logical_intent_id"] != card["card_key"]
-            or payload_hash(spec) != render["payload_hash"]
-            or any(spec.get(key) != render[key] for key in ("delivery_id", "render_rev", "op"))
-            or not scope_matches(render, spec["delivery"])
-            or any(spec["delivery"].get(key) != render[key] for key in ("route_epoch", "correlation"))):
-        raise ValueError("unbound spec")
+    spec = discord_bound_spec(db, render)
     groups = [item for item in spec["parts"]["manifest"]
               if item["kind"] == "file_group" and
               (item["part_id"] == req["part_id"] or req["part_id"] in item["members"])]
@@ -1260,19 +1272,10 @@ def _discord_file_group_resolution_error(db, render, card, group_row, req):
     (card or one body_part), not a slack-style thread file set — re-check
     the render↔spec↔card identity, then delegate surface/member binding
     to the transport's shared validator."""
-    from adapters.common import spec as _spec
-    from mcs_util import strict_json
     try:
-        spec = _spec.validate(strict_json(render["spec_json"]))
-        if (card is None or render["card_id"] != card["card_id"]
-                or not scope_matches(render, stored_scope(card))
-                or payload_hash(spec) != render["payload_hash"]
-                or any(spec.get(key) != render[key] for key in ("delivery_id", "render_rev", "op"))
-                or not scope_matches(render, spec["delivery"])
-                or any(spec["delivery"].get(key) != render[key] for key in ("route_epoch", "correlation"))
-                or spec["card_key"] != card["card_key"] or spec["logical_intent_id"] != card["card_key"]
-                or card["delivery_state"] != "delivered"):
+        if card is None or card["delivery_state"] != "delivered":
             return "file_group_identity_unverified"
+        discord_bound_spec(db, render, card)
     except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
         return "file_group_identity_unverified"
     return notify_transport._discord_group_part_error(db, render, group_row, req)

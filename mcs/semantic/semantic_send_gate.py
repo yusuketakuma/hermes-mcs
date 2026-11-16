@@ -1,4 +1,5 @@
 """Recheck semantic send eligibility and current audited summaries at each delivery boundary."""
+import semantic_jev
 import semantic_policy
 import semantic_store
 import semantic_transport
@@ -305,7 +306,7 @@ def skipped_summary_current(db, project_id, message_id, fingerprint, policy, rev
     summary_receipt, audit_receipt = pair
     summary, smeta = summary_receipt["content"], summary_receipt["meta"]
     audit, ameta = audit_receipt["content"], audit_receipt["meta"]
-    reasons = {"not_configured", "disabled", "daily_budget", "backlog_reserved", "service_unavailable", "circuit_open"}
+    reasons = semantic_jev.SKIP_REASONS
     findings = audit.get("findings")
     return (all(meta.get("jev_evaluated") is False and meta.get("code_checks") == "passed"
                 for meta in (smeta, ameta))

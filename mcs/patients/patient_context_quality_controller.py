@@ -596,8 +596,10 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, base_do
                              and (actual.get('route_provider') or not route['provider']))
     if errors:
         return "deferred", None
+    # Jev cannot be asked: semantic off, or the facility review withholds Jev.
+    jev_off = scfg["mode"] == "off" or scfg["jev_held"]
     optional_quality = local_quality
-    if not local_quality and (not cloud_key or scfg["mode"] == "off"):
+    if not local_quality and (not cloud_key or jev_off):
         try:
             with cloud_policy._accounting_snapshot(ledger.db):
                 if source is not None:
@@ -612,7 +614,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, base_do
         except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error,
                 OSError, RecursionError, OverflowError):
             return "unknown", None
-    if (not cloud_key and not optional_quality or scfg["mode"] == "off" and not optional_quality
+    if (not cloud_key and not optional_quality or jev_off and not optional_quality
             or scfg["project_ids"] is not None and pid not in scfg["project_ids"]):
         return "deferred", None
     lane_cap = scfg["daily_request_budget"] - math.ceil(
@@ -624,6 +626,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, base_do
     except (semantic_jev.JevError, ValueError, sqlite3.Error):
         return "deferred", None
     skip_reason = ("disabled" if optional_quality and scfg['mode'] == 'off' else
+                   semantic_jev.REVIEW_HELD if scfg["jev_held"] else
                    "not_configured" if not key else
                    "disabled" if scfg["daily_request_budget"] <= 0 else
                    "backlog_reserved" if used >= lane_cap else None)
@@ -670,6 +673,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, base_do
                     live_cap = live_semantic["daily_request_budget"] - math.ceil(
                         live_semantic["daily_request_budget"] * semantic_policy.BACKLOG_BUDGET_RESERVE)
                     still_skipped = ((skip_reason == "not_configured" and not live_key)
+                                     or (skip_reason == semantic_jev.REVIEW_HELD and live_semantic["jev_held"])
                                      or (skip_reason == "disabled" and (live_semantic["daily_request_budget"] <= 0
                                          or local_quality and live_semantic['mode'] == 'off'))
                                      or (skip_reason == "backlog_reserved" and live_used >= live_cap)
@@ -685,7 +689,10 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, base_do
                     denied = True
                     return False
             if (patient_context_refresh_state.time.monotonic() >= deadline or not admit() or not extract_llm._writer_current(full=True)
-                    or live_key != key or problems or live_semantic["mode"] == "off" and not local_quality or paused(ledger.db, pid)
+                    or live_key != key or problems or live_semantic["mode"] == "off" and not local_quality
+                    # a run that asks Jev stops once the live config no longer lets Jev be asked
+                    or skip_reason is None and (live_semantic["mode"] == "off" or live_semantic["jev_held"])
+                    or paused(ledger.db, pid)
                     or cloud_policy.selected_key(extract_llm.HOME, live) != cloud_key
                     or live_semantic["project_ids"] is not None and pid not in live_semantic["project_ids"]
                     or patient_context_refresh_state._quality_assessment(live_semantic) != assessment):

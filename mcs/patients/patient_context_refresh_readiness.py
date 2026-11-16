@@ -487,7 +487,7 @@ def _pending(db, pid, cfg, *, now=None, route=None, estimate=False, proof_for=No
             cap = scfg["daily_request_budget"] - math.ceil(
                 scfg["daily_request_budget"] * semantic_policy.BACKLOG_BUDGET_RESERVE)
             view = SimpleNamespace(db=db)
-            recheck_available = bool(key and not errs and scfg["mode"] != "off"
+            recheck_available = bool(key and not errs and scfg["mode"] != "off" and not scfg["jev_held"]
                                      and cap > jev_usage_today(view)
                                      and not semantic_runtime.circuit_open(view))
         except (ValueError, TypeError, sqlite3.Error, semantic_jev.JevError):

@@ -326,7 +326,12 @@ def provider_key(provider, root=None):
 
 
 def resolve_settings(cfg, root=None, *, available_providers=None):
-    """Choose a configured provider by key availability; never retry a paid unit elsewhere."""
+    """Choose a configured provider by key availability and facility approval; never retry a paid unit elsewhere."""
+    return resolve_selection(cfg, root, available_providers=available_providers)[:2]
+
+
+def resolve_selection(cfg, root=None, *, available_providers=None):
+    """:func:`select_settings` on this installation's keys and review record."""
     if available_providers is not None and (
             type(available_providers) is not tuple
             or any(type(name) is not str or name not in PROVIDERS for name in available_providers)
@@ -335,15 +340,56 @@ def resolve_settings(cfg, root=None, *, available_providers=None):
     def key_present(name):
         return (bool(provider_key(name, root)) if available_providers is None
                 else name in available_providers)
+    import external_transfer
+    return select_settings(cfg, key_present, lambda: external_transfer.status(root))
+
+
+def select_settings(cfg, key_present, transfer_status):
+    """Pick the provider and mode from a key-presence check and the facility review.
+
+    Returns ``(settings, errors, held)``. ``key_present(name)`` may read a key
+    file; it is asked at most once per provider. ``transfer_status()`` returns
+    :func:`external_transfer.status` and is read only when the cloud could be
+    on. While a review record exists, a provider the facility has not
+    approved never sends, whether the mode is omitted or explicit: its mode
+    resolves to ``off`` and ``held`` names it. ``auto`` prefers the first
+    provider in ``provider_order`` with both a key and approval and otherwise
+    keeps the key-only pick. Without a record (installations from before the
+    review) the review allows every provider, so nothing changes there; an
+    explicit ``off`` always stays off. A changed review can therefore change
+    the auto provider and the scope generation."""
+    import external_transfer
     c, errors = cloud_config(cfg)
+    block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
+    explicit = isinstance(block, dict) and "mode" in block
+    seen, review = {}, []
+
+    def keyed(name):
+        if name not in seen:
+            seen[name] = bool(key_present(name))
+        return seen[name]
+
+    def allowed(name):
+        if not review:
+            review.append(transfer_status())
+        return external_transfer.service_allowed(review[0], name)
+    automatic = not explicit and not errors
+    wanted = automatic or explicit and c["mode"] != "off"
     provider = c["provider"]
     if provider == "auto":
-        provider = next((name for name in c["provider_order"] if key_present(name)), c["provider_order"][0])
-    block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
-    if (block is None or isinstance(block, dict) and "mode" not in block) and not errors:
-        import external_transfer
-        c, errors = cloud_config(cfg, key_present=key_present(provider)
-                                 and external_transfer.auto_enable_allowed(provider, root))
+        order = c["provider_order"]
+        provider = None
+        if wanted:
+            provider = next((name for name in order if keyed(name) and allowed(name)), None)
+        if provider is None:
+            provider = next((name for name in order if keyed(name)), order[0])
+    held = None
+    if automatic:
+        on = keyed(provider) and allowed(provider)
+        c, errors = cloud_config(cfg, key_present=on)
+        held = provider if keyed(provider) and not on else None
+    elif wanted and not allowed(provider):
+        c["mode"], held = "off", provider
     c["provider"] = provider
     if isinstance(block, dict) and "model" in block:
         try:
@@ -353,7 +399,7 @@ def resolve_settings(cfg, root=None, *, available_providers=None):
             errors.append("config: cloud_llm_model_invalid")
     else:
         c["model"] = PROVIDERS[provider]
-    return c, errors
+    return c, errors, held
 
 
 def resolve_profile(cfg, *, route, purpose, root=None):

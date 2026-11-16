@@ -10,7 +10,6 @@ from functools import wraps
 import json
 import hashlib
 from contextlib import ExitStack, nullcontext
-import math
 import sqlite3
 import time
 from mcs_util import load_config, loads_dict, strict_json
@@ -21,7 +20,7 @@ import semantic_publication as v4
 import semantic_conversion as cohort
 from semantic_audit import audit_code, audit_status_for
 from semantic_loops import update_loops
-from semantic_policy import (BACKLOG_BUDGET_RESERVE, KIND_ASSESS, KIND_AUDIT,
+from semantic_policy import (KIND_ASSESS, KIND_AUDIT,
                              KIND_BUNDLE, KIND_CANDIDATE, KIND_COVERAGE,
                              KIND_DRAIN_RUN, KIND_FACT_PROJ,
                              KIND_FACTS, KIND_FACTS_V2,
@@ -32,7 +31,7 @@ from semantic_policy import (BACKLOG_BUDGET_RESERVE, KIND_ASSESS, KIND_AUDIT,
                              SCHEMA_VERSION, SCHED_KIND,
                              policy_fingerprint, runtime_config)
 import semantic_notice
-from semantic_store import current_artifact, jev_state, jev_usage_today
+from semantic_store import current_artifact, jev_state
 
 from semantic_due_selection import (
     _backlog_commit_reserve,
@@ -342,18 +341,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 # Even a skipped call must not bypass a malformed/expired
                 # authorization window or an unreadable usage ledger.
                 try:
-                    runtime._jev_window_check(config_path=cfg_path)
-                    used = jev_usage_today(ledger)
-                    cap = scfg["daily_request_budget"]
-                    if lane == "backlog":
-                        cap -= math.ceil(cap * BACKLOG_BUDGET_RESERVE)
-                    if ((jev_skip in ("daily_budget", "backlog_reserved") and used < cap)
-                            or (jev_skip == "disabled" and scfg["daily_request_budget"] > 0)
-                            or (jev_skip == "not_configured" and jev.api_key())
-                            or (jev_skip == "circuit_open" and (not runtime.circuit_open(ledger)
-                                or runtime._circuit_state(ledger)["failure_class"]
-                                   not in runtime._CIRCUIT_FAILURE_CLASSES))):
-                        raise ValueError("semantic_skip_reason_stale")
+                    runtime.verify_jev_skip(ledger, jev_skip, scfg, lane=lane, cfg_path=cfg_path)
                 except (jev.JevError, ValueError, sqlite3.Error):
                     raise runtime.RuntimeOff(stage + ':jev_unverified') from None
             runtime.guard(

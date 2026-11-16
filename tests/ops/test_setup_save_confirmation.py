@@ -196,3 +196,67 @@ def test_after_save_interruption_keeps_partial_configuration(monkeypatch, tmp_pa
     assert mcs_setup.main(["init"]) == 130
     assert json.loads((tmp_path / "c.json").read_text())["trickle_pages"] == 2
     assert "途中まで保存した設定は残っています" in capsys.readouterr().out
+
+
+def test_preview_names_the_approved_auto_provider(monkeypatch, capsys, tmp_path):
+    import external_transfer
+    import mcs_util
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    external_transfer.require(tmp_path)
+    external_transfer.acknowledge(by="管理者", reason="契約確認", services=["openai"],
+                                  confirm_human=True, root=tmp_path, command_id="o")
+    monkeypatch.setattr("builtins.input", lambda prompt: "2")
+    keys = {"anthropic": True, "openai": True, "jev": False}
+    setup_wizard.confirm_save({"notify_target": "slack:C123"}, plugin_profile=None, key_presence=keys)
+    output = capsys.readouterr().out
+    assert "AI利用先: openai" in output
+    assert "外部AI追加処理: on" in output and "OpenAIのAPIへ送信" in output
+    external_transfer.acknowledge(by="管理者", reason="取消", services=["jev"],
+                                  confirm_human=True, root=tmp_path, command_id="j")
+    setup_wizard.confirm_save({"notify_target": "slack:C123"}, plugin_profile=None, key_presence=keys)
+    output = capsys.readouterr().out
+    assert "AI利用先: anthropic" in output and "外部AI追加処理: off" in output
+
+
+def test_first_save_previews_the_pending_review_it_writes(monkeypatch, capsys, tmp_path):
+    import external_transfer
+    import mcs_util
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    monkeypatch.setattr("builtins.input", lambda prompt: "2")
+    keys = {"anthropic": True, "openai": False, "jev": True}
+    cfg = {"notify_target": "slack:C123"}
+    # An existing installation without the record keeps sending on a key alone.
+    setup_wizard.confirm_save(cfg, plugin_profile=None, key_presence=keys)
+    output = capsys.readouterr().out
+    assert "外部AI追加処理: on" in output and external_transfer.HOLD_CODE not in output
+    # The first config is published together with the pending review record.
+    setup_wizard.confirm_save(cfg, plugin_profile=None, key_presence=keys, new_installation=True)
+    output = capsys.readouterr().out
+    assert "外部AI追加処理: off" in output
+    assert external_transfer.hold_message("Anthropic", external_transfer.PENDING) in output
+    assert "外部Jev追加解析: 無効。" + external_transfer.hold_message("Jev", external_transfer.PENDING) in output
+    assert not (tmp_path / external_transfer.FILE_NAME).exists()     # the preview writes nothing
+    # A record that already exists is what the save keeps, so the preview reads it.
+    external_transfer.require(tmp_path)
+    external_transfer.acknowledge(by="管理者", reason="契約確認", services=["anthropic", "jev"],
+                                  confirm_human=True, root=tmp_path, command_id="a")
+    setup_wizard.confirm_save(cfg, plugin_profile=None, key_presence=keys, new_installation=True)
+    output = capsys.readouterr().out
+    assert "外部AI追加処理: on" in output and external_transfer.HOLD_CODE not in output
+
+
+def test_preview_reports_an_explicit_mode_the_review_holds(monkeypatch, capsys, tmp_path):
+    import external_transfer
+    import mcs_util
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    external_transfer.require(tmp_path)
+    external_transfer.acknowledge(by="管理者", reason="契約確認", services=["openai"],
+                                  confirm_human=True, root=tmp_path, command_id="o")
+    monkeypatch.setattr("builtins.input", lambda prompt: "2")
+    cfg = {"notify_target": "slack:C123",
+           "cloud_llm": {"mode": "on", "provider": "anthropic", "project_ids": [1]}}
+    setup_wizard.confirm_save(cfg, plugin_profile=None,
+                              key_presence={"anthropic": True, "openai": True, "jev": False})
+    output = capsys.readouterr().out
+    assert "外部AI追加処理: off" in output
+    assert external_transfer.hold_message("Anthropic", external_transfer.status(tmp_path)) in output
