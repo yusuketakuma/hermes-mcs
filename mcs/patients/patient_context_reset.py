@@ -10,8 +10,11 @@ it. Quality Jev usage of today keeps counting toward the Jev daily limit.
 
 The operation runs only while patient-context generation is disabled in the
 configuration, cloud sends are paused, nothing is in flight and the accounting is
-readable. All writes happen in one SAVEPOINT inside the receipt transaction and are
-rolled back when the reported spending would differ after the reset.
+readable. Generation records the quota module cannot read, or stamped after the clock,
+hold no processing right: they are erased with the rest and only counted in the preview,
+never read as an accounting failure. All writes happen in one SAVEPOINT inside the
+receipt transaction and are rolled back when the reported spending would differ after
+the reset.
 """
 from __future__ import annotations
 
@@ -181,7 +184,7 @@ def _quality_usage(db):
         "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.operation') END IN (?,?)", QUALITY_OPERATIONS)]
 
 
-def _work_refusal(db, cfg, now):
+def _work_refusal(db, cfg, now, generations):
     """The first fixed reason, read without the accounting, that forbids the reset now, or None."""
     if state.options(cfg)["enabled"]:
         return "patient_context_enabled"
@@ -190,11 +193,9 @@ def _work_refusal(db, cfg, now):
     if db.execute("SELECT 1 FROM fetch_jobs WHERE kind=? AND next_try>? LIMIT 1",
                   (state.QUALITY_CLAIM, now)).fetchone():
         return "quality_claim_active"
-    for (content,) in db.execute("SELECT content FROM artifacts WHERE kind=?", (patient_context_quota.KIND,)):
-        doc = json.loads(content) if isinstance(content, str) else None
-        if (isinstance(doc, dict) and doc.get("state") in ("reserved", "started")
-                and isinstance(doc.get("lease_until"), (int, float)) and doc["lease_until"] > now):
-            return "generation_active"
+    # a claim its owner's fence accepts now; unreadable and future-stamped records hold none
+    if generations["live"]:
+        return "generation_active"
     return None
 
 
@@ -215,8 +216,10 @@ def _accounting_refusal(db, now, accounting, quality):
 def _plan(db, cfg, now, stop):
     """(preview, accounting) in one read of each source; `stop` errors propagate unclassified."""
     accounting, carryover = None, []
+    # read apart from the accounting: an unreadable generation record is erased, not unverified
+    generations = patient_context_quota.census(db, now=now)
     try:
-        refusal = _work_refusal(db, cfg, now)
+        refusal = _work_refusal(db, cfg, now, generations)
         quality = _quality_usage(db)
         accounting = _accounting(db)
         refusal = refusal or _accounting_refusal(db, now, accounting, quality)
@@ -235,7 +238,8 @@ def _plan(db, cfg, now, stop):
             "accounting_rows": len(accounting.ids) if accounting else 0,
             "reservations": len(accounting.reservations) if accounting else 0,
             "unsettled_reservations": sum(entry["requests"] for entry in carryover if not entry["settled"]),
-            "quality_usage_rows": len(quality), "carryover": carryover, "outcomes": outcomes}
+            "quality_usage_rows": len(quality), "carryover": carryover, "outcomes": outcomes,
+            "generation_records": {key: generations[key] for key in ("unreadable", "future")}}
     preview = {**body, "preview_hash": payload_hash({key: body[key] for key in body if key != "refusal"})}
     return preview, accounting, quality
 
@@ -320,5 +324,6 @@ def apply_tx(db, req, now, *, cfg=None, backup_dir=None):
     return None, {"reason": req["reason"], "backup": req["backup"],
                   "erased": {"kinds": found["kinds"], "quality_claims": found["quality_claims"],
                              "accounting_rows": found["accounting_rows"],
-                             "quality_usage_rows": found["quality_usage_rows"]},
+                             "quality_usage_rows": found["quality_usage_rows"],
+                             "generation_records": found["generation_records"]},
                   "carryover": found["carryover"], "outcomes": found["outcomes"]}

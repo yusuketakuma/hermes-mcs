@@ -244,11 +244,33 @@ def _claim(ledger, now):
                           "VALUES(?,?,?,?,?,?)", (state.QUALITY_CLAIM, 1, 0, now + 60, now, now))
 
 
-def _generating(ledger, now):
+GENERATING = 900   # a synthetic patient without records, so its generation slot is the only row
+
+
+def _reserve_generation(ledger, at, *, lease=60, started=False):
+    """A readable generation claim written by the quota module itself, as a worker writes it."""
     with ledger.db:
-        ledger.db.execute("INSERT INTO artifacts(kind,project_id,content,model,meta,created_at) VALUES(?,?,?,?,?,?)",
-                          (patient_context_quota.KIND, 1, json.dumps({"state": "started", "lease_until": now + 60}),
-                           "", "{}", now))
+        ledger.db.execute("BEGIN IMMEDIATE")
+        claim = patient_context_quota.reserve_tx(ledger.db, GENERATING, "c" * 64, now=at,
+                                                 lease_until=at + lease)["claim"]
+        assert claim is not None
+        if started:
+            assert patient_context_quota.begin_tx(ledger.db, GENERATING, claim, now=at)
+    return claim
+
+
+def _generating(ledger, now):
+    _reserve_generation(ledger, now)
+
+
+def _generating_started(ledger, now):
+    _reserve_generation(ledger, now, started=True)
+
+
+def _generation_row(ledger, content, now, *, meta="{}"):
+    with ledger.db:
+        ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+                          "VALUES(?,?,NULL,?,?,?,?)", (patient_context_quota.KIND, GENERATING, content, "", meta, now))
 
 
 def _sending(ledger, now):
@@ -261,6 +283,7 @@ def _sending(ledger, now):
 
 
 @pytest.mark.parametrize("busy, refusal", [(_claim, "quality_claim_active"), (_generating, "generation_active"),
+                                           (_generating_started, "generation_active"),
                                            (_sending, "cloud_in_flight")])
 def test_reset_refuses_while_work_is_running(built, tmp_path, busy, refusal):
     ledger, clock, cfg, _ = built
@@ -270,6 +293,129 @@ def test_reset_refuses_while_work_is_running(built, tmp_path, busy, refusal):
     found = reset.preview(ledger.db, cfg=off, now=clock.wall)
     assert found["refusal"] == refusal
     assert _apply(ledger, off, _request(found["preview_hash"]), clock.wall, tmp_path)[0] == refusal
+
+
+def _live_body(now, **change):
+    body = {"version": 1, "input_key": "c" * 64, "token": "0" * 32, "state": "started", "reserved_at": now,
+            "lease_until": now + 600, "started_at": now, "finished_at": None, "resumes": 0}
+    return json.dumps({**body, **change})
+
+
+# Generation records the quota module cannot read: none holds a processing right, so none is a live claim.
+UNREADABLE = {
+    "not_json": lambda now: ("x", "{}"),
+    "deeply_nested": lambda now: ("[" * 100000, "{}"),
+    "not_an_object": lambda now: ("[]", "{}"),
+    "missing_fields": lambda now: (json.dumps({"state": "started", "lease_until": now + 600}), "{}"),
+    "wrong_types": lambda now: (json.dumps({"state": ["started"], "lease_until": "later"}), "{}"),
+    "nonfinite_lease": lambda now: ('{"state":"reserved","lease_until":Infinity}', "{}"),
+    "huge_lease": lambda now: (json.dumps({"state": "reserved", "lease_until": 1e18}), "{}"),
+    "huge_int_lease": lambda now: (_live_body(now, lease_until=10**400), "{}"),
+    "huge_int_reserved": lambda now: (_live_body(now, reserved_at=10**400), "{}"),
+    "live_body_wrong_columns": lambda now: (_live_body(now), "null"),
+    "live_body_bad_token": lambda now: (_live_body(now, token="unverified"), "{}"),
+}
+
+
+@pytest.mark.parametrize("damage", sorted(UNREADABLE))
+def test_unreadable_generation_records_are_erased_not_refused(built, tmp_path, damage):
+    """An unreadable generation record is what the reset recovers, never an accounting failure."""
+    ledger, clock, cfg, _ = built
+    off = _disabled(cfg)
+    cloud_policy.stop(ledger)
+    content, meta = UNREADABLE[damage](clock.wall)
+    _generation_row(ledger, content, clock.wall, meta=meta)
+    found = reset.preview(ledger.db, cfg=off, now=clock.wall)
+    assert found["refusal"] is None
+    assert found["generation_records"] == {"unreadable": 1, "future": 0}
+    assert "lease_until" not in json.dumps(found), "the preview shows counts only"
+    error, extra = _apply(ledger, off, _request(found["preview_hash"]), clock.wall, tmp_path)
+    assert error is None and extra["erased"]["generation_records"] == {"unreadable": 1, "future": 0}
+    assert not ledger.artifacts(patient_context_quota.KIND)
+    assert readiness.context_view_input(ledger.db, 1, cfg=cfg) is None
+
+
+def test_a_future_dated_reservation_is_erased_not_refused(built, tmp_path):
+    """A claim stamped after the current clock has no processing right now (its owner fence refuses it)."""
+    ledger, clock, cfg, _ = built
+    off = _disabled(cfg)
+    cloud_policy.stop(ledger)
+    claim = _reserve_generation(ledger, clock.wall + 3600, lease=7 * 86400)
+    assert not patient_context_quota.owns(ledger.db, GENERATING, claim, now=clock.wall)
+    found = reset.preview(ledger.db, cfg=off, now=clock.wall)
+    assert found["refusal"] is None and found["generation_records"] == {"unreadable": 0, "future": 1}
+    assert _apply(ledger, off, _request(found["preview_hash"]), clock.wall, tmp_path)[0] is None
+    assert not ledger.artifacts(patient_context_quota.KIND)
+
+
+def test_a_live_claim_still_refuses_beside_unreadable_records(built, tmp_path):
+    ledger, clock, cfg, _ = built
+    off = _disabled(cfg)
+    cloud_policy.stop(ledger)
+    _reserve_generation(ledger, clock.wall - 30, started=True)
+    _generation_row(ledger, "x", clock.wall)
+    found = reset.preview(ledger.db, cfg=off, now=clock.wall)
+    assert found["refusal"] == "generation_active" and found["generation_records"]["unreadable"] == 1
+    assert _apply(ledger, off, _request(found["preview_hash"]), clock.wall, tmp_path)[0] == "generation_active"
+    assert len(ledger.artifacts(patient_context_quota.KIND)) > 1, "a refused reset changes nothing"
+    # the same claim stops refusing once its lease ends, as the quota module itself judges it
+    later = clock.wall + 600
+    os.utime(tmp_path / BACKUP["name"], (later, later))
+    found = reset.preview(ledger.db, cfg=off, now=later)
+    assert found["refusal"] is None
+    assert _apply(ledger, off, _request(found["preview_hash"]), later, tmp_path)[0] is None
+
+
+def test_unreadable_generation_records_never_mask_an_accounting_failure(built, tmp_path):
+    ledger, clock, cfg, _ = built
+    off = _disabled(cfg)
+    cloud_policy.stop(ledger)
+    _generation_row(ledger, "x", clock.wall)
+    reserve = ledger.artifacts("cloud_usage_reserve")[0]
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                          (json.dumps({**json.loads(reserve["meta"]), "reservation_id": 7}), reserve["artifact_id"]))
+    found = reset.preview(ledger.db, cfg=off, now=clock.wall)
+    assert found["refusal"] in ("accounting_unverified", "accounting_inconsistent")
+    assert found["generation_records"] == {"unreadable": 1, "future": 0}
+    assert _apply(ledger, off, _request(found["preview_hash"]), clock.wall, tmp_path)[0] == found["refusal"]
+
+
+def test_the_preview_hash_binds_the_unreadable_generation_count(built, tmp_path):
+    """A record that became unreadable after the preview, or a preview without the count, erases nothing."""
+    from mcs_util import payload_hash
+    ledger, clock, cfg, _ = built
+    off = _disabled(cfg)
+    cloud_policy.stop(ledger)
+    found = reset.preview(ledger.db, cfg=off, now=clock.wall)
+    body = {key: found[key] for key in found if key not in ("refusal", "preview_hash", "generation_records")}
+    kinds = {kind: len(ledger.artifacts(kind)) for kind in reset.ERASED_KINDS}
+    assert _apply(ledger, off, _request(payload_hash(body)), clock.wall, tmp_path)[0] == "preview_changed"
+    victim = ledger.artifacts(patient_context_quota.KIND)[0]
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET content='x' WHERE artifact_id=?", (victim["artifact_id"],))
+    assert reset.preview(ledger.db, cfg=off, now=clock.wall)["kinds"] == found["kinds"]
+    assert _apply(ledger, off, _request(found["preview_hash"]), clock.wall, tmp_path)[0] == "preview_changed"
+    assert {kind: len(ledger.artifacts(kind)) for kind in reset.ERASED_KINDS} == kinds
+
+
+def test_generation_counts_restart_after_the_reset_whether_records_were_readable_or_not(built, tmp_path):
+    """The reset carries spending over, not generation slots: every patient's daily count starts again."""
+    ledger, clock, cfg, _ = built
+    off = _disabled(cfg)
+    cloud_policy.stop(ledger)
+    _generation_row(ledger, "x", clock.wall - 60)
+    readable = {row["project_id"] for row in ledger.artifacts(patient_context_quota.KIND)} - {GENERATING}
+    assert readable, "the synthetic build used generation slots"
+    blocked = patient_context_quota.inspect(ledger.db, GENERATING, "d" * 64, now=clock.wall)
+    assert blocked["used"] == 1 and blocked["unverified_records"] == 1
+    before = _usage(ledger)
+    found = reset.preview(ledger.db, cfg=off, now=clock.wall)
+    assert _apply(ledger, off, _request(found["preview_hash"]), clock.wall, tmp_path)[0] is None
+    for pid in readable | {GENERATING}:
+        after = patient_context_quota.inspect(ledger.db, pid, "d" * 64, now=clock.wall)
+        assert after["allowed"] and after["used"] == 0 and after["unverified_records"] == 0
+    assert _usage(ledger) == before, "spending limits keep counting what was spent"
 
 
 @pytest.mark.parametrize("age, error", [(reset.BACKUP_MAX_AGE_S + 1, "backup_missing"),

@@ -263,7 +263,8 @@ python3 mcs/ops/mcs_setup.py cloud-llm resume --confirm-human --reason '患者�
 
 `context-reset-plan` の `refusal` が `null` でない間は消去できません（`read_incomplete` は確認の読取りが上限に達したことを示します。`stop_reason` が `read_deadline` のときは、ほかの処理が少ない時間に再実行します。それ以外の理由は再実行しても通らないので、開発者に連絡してください）。
 バックアップは手順3の実行時に取り、1時間以内のものだけを使います。拒否されたときのバックアップは削除されます。消去の後は公開中の患者コンテキストがすぐ表示されなくなり、通常の処理で作り直されます。
-結果が分からないまま残っていた送信（`unsettled_reservations`）と同じ内容を、作り直しで改めて送ることがあります。詳しい消去範囲は [患者背景情報の契約](../specs/patient-context.md) を参照してください。
+結果が分からないまま残っていた送信（`unsettled_reservations`）と同じ内容を、作り直しで改めて送ることがあります。
+`context-reset-plan` の `generation_records` は、消去で消える生成枠の記録のうち読めないもの（`unreadable`）と未来の時刻のもの（`future`）の件数です。これらは消去を止めません。`future` の件数は時刻とともに変わるため、確認から実行までの間に `preview_changed` になることがあります。そのときは `context-reset-plan` からやり直します。消去の後は、全患者の概況作成の1日の回数が0から数え直されます（その日に4回使った患者もすぐ作り直せます。使った額は引き継ぎます）。詳しい消去範囲は [患者背景情報の契約](../specs/patient-context.md) を参照してください。
 
 拒否されたときの理由と対処は次のとおりです。
 
@@ -271,7 +272,7 @@ python3 mcs/ops/mcs_setup.py cloud-llm resume --confirm-human --reason '患者�
 |---|---|
 | `patient_context_enabled` | 設定で `extract.patient_context.enabled` を `false` にする |
 | `cloud_not_paused` | `cloud-llm stop` で外部AIの送信を止める |
-| `quality_claim_active`・`generation_active`・`cloud_in_flight`・`jev_in_flight` | 実行中の処理が終わるまで（10分程度）待って再実行する |
+| `quality_claim_active`・`generation_active`・`cloud_in_flight`・`jev_in_flight` | 実行中の処理が終わるまで（10分程度）待って再実行する。`generation_active` は、今も有効な概況作成の担当があるときだけ出ます。読めない生成枠の記録や未来の時刻の記録では出ず、それらは消去で消えます |
 | `accounting_unverified`・`accounting_inconsistent` | 会計記録を確認できないため消去しない。`cloud-llm check` の内容を開発者に連絡する |
 | `preview_changed`・`spend_changed` | 確認の後に記録が変わった。`context-reset-plan` からやり直す |
 | `backup_missing`・`backup_disk_low` | バックアップを取れない、または確かめられない。空き容量を確保して手順3から再実行する |

@@ -556,3 +556,51 @@ def test_returned_unknown_input_cannot_reclaim_another_live_owner(db):
     assert not quota.finish_tx(db, 1, first, now=BASE + 2, outcome='complete')
     db.commit()
     assert document(db, first)['state'] == 'unknown'
+
+
+def test_census_counts_live_claims_exactly_as_the_owner_fence_accepts_them(db):
+    """context-reset refuses only on what `owns` accepts; unreadable and future rows are counted apart."""
+    live = reserve(db, 1, pid=1, lease=600)["claim"]
+    started = reserve(db, 2, pid=2, lease=600)["claim"]
+    db.execute("BEGIN IMMEDIATE")
+    assert quota.begin_tx(db, 2, started, now=BASE)
+    db.commit()
+    expired = reserve(db, 3, pid=3, lease=60)["claim"]
+    done = reserve(db, 4, pid=4, lease=600)["claim"]
+    assert finish(db, done, pid=4)
+    future = reserve(db, 5, pid=5, now=BASE + YEAR, lease=2 * YEAR)["claim"]
+    damaged = reserve(db, 6, pid=6, lease=600)["claim"]
+    db.execute("UPDATE artifacts SET meta='null' WHERE artifact_id=?", (damaged["artifact_id"],))
+    insert(db, "x", BASE, pid=7)
+    insert(db, json.dumps({"state": "started", "lease_until": BASE + YEAR}), BASE, pid=8)
+    now = BASE + 100
+    claims = {1: live, 2: started, 3: expired, 4: done, 5: future, 6: damaged}
+    owned = sum(quota.owns(db, pid, claim, now=now) for pid, claim in claims.items())
+    assert owned == 2
+    assert quota.census(db, now=now) == {"live": owned, "unreadable": 3, "future": 1}
+    kept = rows(db)
+    assert quota.census(db, now=BASE + 600) == {"live": 0, "unreadable": 3, "future": 1}
+    assert rows(db) == kept, "the census only reads"
+
+
+@pytest.mark.parametrize("field", ["reserved_at", "lease_until", "started_at"])
+def test_an_integer_too_large_for_a_float_is_an_unreadable_record(db, field):
+    """A stamp beyond float range is unreadable and a used slot, never an OverflowError."""
+    claim = reserve(db, lease=600)["claim"]
+    db.execute("BEGIN IMMEDIATE")
+    assert quota.begin_tx(db, 1, claim, now=BASE)
+    db.commit()
+    doc = document(db, claim)
+    doc[field] = 10**400
+    db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (json.dumps(doc), claim["artifact_id"]))
+    assert quota.census(db, now=BASE + 1) == {"live": 0, "unreadable": 1, "future": 0}
+    assert not quota.owns(db, 1, claim, now=BASE + 1)
+    denied = quota.inspect(db, 1, key(2), now=BASE + 61)
+    assert denied["reason"] == "patient_context_generation_interval"
+    assert denied["used"] == 1 and denied["unverified_records"] == 1
+
+
+@pytest.mark.parametrize("now", [None, "now", float("nan"), -1.0, 10**400])
+def test_census_rejects_an_invalid_clock(db, now):
+    with pytest.raises(ValueError, match="patient_context_generation_input_invalid"):
+        quota.census(db, now=now)
