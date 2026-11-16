@@ -37,26 +37,29 @@ def test_ci_reports_every_failure_and_runs_weekly():
 def test_ci_has_a_macos_lane_with_the_pinned_actions():
     text = (ROOT / ".github/workflows/ci.yml").read_text()
     jobs = _jobs(text)
-    mac = [block for block in jobs.values() if "runs-on: macos-latest" in block]
-    assert len(mac) == 1
-    linux = jobs["lint-test"]
+    mac = [name for name, block in jobs.items() if "runs-on: macos-latest" in block]
+    # only the test slices pay macOS minutes; the macos gate judges on ubuntu
+    assert mac == ["pytest-macos"]
+    assert "runs-on: ubuntu-latest" in jobs["macos"]
+    linux = jobs["pytest-linux"]
     for action in ("actions/checkout@", "actions/setup-python@"):
         pin = re.search(re.escape(action) + r"[0-9a-f]{40}", linux)[0]
-        assert pin in mac[0]
-    assert 'python-version: "3.14"' in mac[0]
-    assert "python3 ci/run_pytest_groups.py macos" in mac[0]
+        assert pin in jobs["pytest-macos"]
+    assert 'python-version: "3.14"' in jobs["pytest-macos"]
+    assert "python3 ci/run_pytest_groups.py macos" in jobs["pytest-macos"]
 
 
 def test_parallel_test_lanes_keep_diagnostics_and_pinned_dependency_caches():
     jobs = _jobs((ROOT / ".github/workflows/ci.yml").read_text())
     setup_uv = "astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2"
-    for name in ("lint-test", "macos", "standalone-sdk", "hermes-integration"):
+    for name in ("lint", "pytest-linux", "pytest-macos", "standalone-sdk", "hermes-integration"):
         assert setup_uv in jobs[name]
         assert 'version: "0.13.6"' in jobs[name]
         # Keep setup-uv's event-aware cache policy; never cache venvs or results.
         assert "enable-cache: true" not in jobs[name]
-    assert setup_uv not in jobs["hygiene"] and setup_uv not in jobs["incident-gates"]
-    for name, lane in (("lint-test", "linux"), ("macos", "macos")):
+    for name in ("hygiene", "incident-gates", "scope", "lint-test", "macos"):
+        assert setup_uv not in jobs[name]
+    for name, lane in (("pytest-linux", "linux"), ("pytest-macos", "macos")):
         block = jobs[name]
         assert f"python3 ci/run_pytest_groups.py {lane}" in block
         assert "uv venv --python 3.14 --managed-python .venv" in block
@@ -66,6 +69,8 @@ def test_parallel_test_lanes_keep_diagnostics_and_pinned_dependency_caches():
         assert "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" in diagnostics
         assert "path: ${{ runner.temp }}/mcs-pytest-*/" in diagnostics
         assert "retention-days: 7" in diagnostics and "if-no-files-found: ignore" in diagnostics
+        # each re-run attempt keeps its own diagnostics under a new name
+        assert f"name: pytest-{lane}-${{{{ matrix.slice }}}}-${{{{ github.run_attempt }}}}" in diagnostics
 
 
 @pytest.mark.parametrize('changed_vector,other_key,expected', [

@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Rebuild a lane's per-file pytest seconds from that lane's CI junit XML files.
 
-Use the shard-*.xml files of one complete CI run of the same lane (the
-"pytest diagnostics" artifact), for example:
+Use the shard-*.xml files of one complete CI run of the same lane: every
+slice's "pytest diagnostics" artifact (pytest-<lane>-<slice>-<attempt>)
+together, from a tag, schedule or manual run. A pull-request run deselects
+the perf tests, so its table would record their files as cheap and
+unbalance the full runs that include them. For example:
 
-    python3 ci/update_pytest_durations.py --output ci/pytest_durations.linux.json shard-*.xml
+    python3 ci/update_pytest_durations.py --output ci/pytest_durations.linux.json */shard-*.xml
 
 The XML must come from the runner (junit_family=xunit1 writes each test's
 file). A run with failures or errors is refused, because a test that stops

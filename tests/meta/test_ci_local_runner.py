@@ -10,11 +10,15 @@ ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "scripts/development/ci_local.sh"
 WORKFLOW = ROOT / ".github/workflows/ci.yml"
 
-# setup lines replaced by prerequisite checks, and the PR-only regenerate+diff
-# step replaced by update_readme.py --check (the runner never writes the tree)
+# setup lines replaced by prerequisite checks, the PR-only regenerate+diff
+# step replaced by update_readme.py --check (the runner never writes the tree),
+# and the CI-only decisions: ci_scope.py classifies pull requests (a local run
+# is always full) and ci_gate.py judges the needed jobs' results, for which the
+# local runner's own pass/fail per job is the verdict
 SETUP = re.compile(
     r"^(pip install|python3? -m pip install|python -m pip install|uv |cd hermes-agent$|#"
-    r"|git diff --exit-code|python3 scripts/development/update_readme\.py$)")
+    r"|git diff --exit-code|python3 scripts/development/update_readme\.py$"
+    r"|python3 ci/ci_scope\.py$|python3 ci/ci_gate\.py (lint-test|macos)$)")
 
 
 def _ci_jobs():
@@ -48,7 +52,7 @@ def test_runner_lists_ci_jobs_in_order():
     listed = subprocess.run(["bash", str(RUNNER), "--list-jobs"], capture_output=True,
                             text=True, timeout=10, check=True).stdout.split()
     assert listed == list(_ci_jobs())
-    assert len(listed) == 7
+    assert len(listed) == 11
 
 
 def test_runner_contains_every_ci_run_line():
@@ -82,6 +86,12 @@ def test_runner_rejects_unknown_job():
 # ---------- L08-R1: the evidence is bound to the recorded SHA ----------
 
 SYNTHETIC_WORKFLOW = """jobs:
+  scope:
+    runs-on: ubuntu-latest
+  lint:
+    runs-on: ubuntu-latest
+  pytest-linux:
+    runs-on: ubuntu-latest
   lint-test:
     runs-on: ubuntu-latest
   hygiene:
@@ -98,8 +108,10 @@ SYNTHETIC_WORKFLOW = """jobs:
         with:
           version: "0.13.1"
       - run: pip install "pytest==9.1.1"
-  macos:
+  pytest-macos:
     runs-on: macos-latest
+  macos:
+    runs-on: ubuntu-latest
   hermes-integration:
     runs-on: ubuntu-latest
     steps:
@@ -256,17 +268,31 @@ def test_hermes_checkout_with_source_edits_is_not_runnable(tmp_path, dirty):
 
 @pytest.mark.parametrize("all_pass", ["0", "1"])
 def test_final_report_preserves_success_exit_and_exact_sha(tmp_path, all_pass):
-    # Exercise the real reporting tail without repeating the six expensive jobs.
+    # Exercise the real reporting tail without repeating the expensive jobs.
     reporting = RUNNER.read_text().split('if [ "$all_pass" = 1 ]; then', 1)[1]
     sha = "a" * 40
+    jobs = subprocess.run(["bash", str(RUNNER), "--list-jobs"], capture_output=True,
+                          text=True, timeout=10, check=True).stdout.split()
     result = subprocess.run(
         ["bash", "-u", "-c", 'if [ "$all_pass" = 1 ]; then' + reporting],
         env={"PATH": "/usr/bin:/bin", "LC_ALL": "en_US.UTF-8", "all_pass": all_pass, "sha": sha,
-             "out": str(tmp_path)}, capture_output=True, text=True, errors="replace", timeout=10)
+             "out": str(tmp_path), "JOBS": " ".join(jobs)},
+        capture_output=True, text=True, errors="replace", timeout=10)
     assert result.returncode == (0 if all_pass == "1" else 1), result.stderr
     assert "CI の実行成功ではない" in result.stdout
     if all_pass == "1":
-        assert f"全6 job pass（{sha}）" in result.stdout
+        assert f"全{len(jobs)} job pass（{sha}）" in result.stdout
     else:
         assert "未成立" in result.stdout
     assert (tmp_path / "meta.txt").read_text() == result.stdout
+
+
+def test_local_gates_wait_for_the_serial_pytest_run(tmp_path):
+    repo, stub = _synthetic_repo(tmp_path, 0)
+    out = tmp_path / "out"
+    _run(repo, stub, out, "lint-test", "macos", "scope")
+    rows = {row.split("\t")[0]: row.split("\t") for row in (out / "summary.tsv").read_text().splitlines()[1:]}
+    # without the pytest job's shard reports a gate is 実行不能, never pass
+    assert rows["lint-test"][1] == "実行不能" and "pytest-linux が実行されていない" in rows["lint-test"][-1]
+    assert rows["macos"][1] == "実行不能" and "pytest-macos が実行されていない" in rows["macos"][-1]
+    assert rows["scope"][1] == "pass" and rows["scope"][-1].startswith("判定のみ")

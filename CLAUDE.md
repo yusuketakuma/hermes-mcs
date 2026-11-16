@@ -72,6 +72,10 @@ python3 ci/mine_gates.py --check
   全体 suite は同じ Mac の稼働処理と I/O を取り合うので、Mac 上では同時に複数走らせない。稼働環境と切り離されたクラウドの実行環境では並列に走らせてよい（所有者 2026-11-16）。
 - macOS の BSD `sed` は `\b` を扱わない。単語境界の置換は `perl -pi` を使う。改名後の呼出元確認は `git grep` の結果を切り詰めずに全件見る。
 - Hermes 実SDKとの統合は CI の pinned Hermes 環境で別に検証される。ローカル pytest の成功と区別する。
+- CI（`ci.yml`）は `scope` job が mode を決める。タグ・schedule・手動実行は常に full。pull request は `full-ci` label か docs 集合外の変更で full、
+  文書だけなら docs（lint 等と文書関連テストのみ）、下書きは draft（テストなし）。下書きの PR には `full-ci` label を付けない限りテスト結果が付かない。
+  テストは `pytest-linux`（4 slice×2 shard）・`pytest-macos`（2×3）の matrix が流し、`lint-test`・`macos` は shard 報告を照合する gate。
+  「全6ジョブ」はこの名前を保った6 lane を指す。`perf` marker のテストは PR の CI だけが外す。詳細は `docs/development/DEVELOPMENT.md`「CIの構成と実行範囲」。
 - `python3 mcs/ops/mcs_setup.py check` / `make setup-check` は実機診断。合成 fixture のテストの代わりに実行しない。
 
 ## 構成
