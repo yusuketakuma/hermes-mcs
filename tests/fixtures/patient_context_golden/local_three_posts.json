@@ -138,89 +138,6 @@
    },
    {
     "assertion": {
-     "category": "history",
-     "details": [],
-     "evidence": "既往歴: 合成の既往として高血圧の記載があります。",
-     "evidence_span": [
-      0,
-      25
-     ],
-     "reported_subject": "unspecified",
-     "text": "合成の既往として高血圧の記載があります。"
-    },
-    "category": "history",
-    "content_hash": "db13dc55f20f95c19cc1a7a7530e5cb735dcb03487a82f726166ade88a186db2",
-    "details": [],
-    "discovery": "new_report",
-    "evidence": "既往歴: 合成の既往として高血圧の記載があります。",
-    "evidence_span": [
-     0,
-     25
-    ],
-    "found_at": 1792245601.0,
-    "found_workday_id": "2026-10-17",
-    "historical": false,
-    "id": "<volatile>",
-    "message_id": 2,
-    "posted_at": "2026-09-19T00:00:00+09:00",
-    "posted_at_ts": 1789743600,
-    "project_id": 1,
-    "quote": "既往歴: 合成の既往として高血圧の記載があります。",
-    "quote_span": [
-     0,
-     25
-    ],
-    "reference_context": {
-     "after": "",
-     "after_span": [
-      25,
-      25
-     ],
-     "before": "",
-     "before_span": [
-      0,
-      0
-     ],
-     "leading": "",
-     "leading_span": [
-      0,
-      0
-     ],
-     "span": [
-      0,
-      25
-     ]
-    },
-    "relations": [],
-    "reported_subject": "unspecified",
-    "sender": "sender",
-    "source": "chat",
-    "source_key": 2,
-    "subject": "unspecified",
-    "temporal": {
-     "action": null,
-     "as_of_day": null,
-     "corrections": [],
-     "current_cue": false,
-     "event_day": null,
-     "negated": null,
-     "ongoing": false,
-     "period": "past",
-     "posted_at_ts": 1789743600,
-     "posted_day": "2026-09-19",
-     "resolution": null,
-     "state_day": null,
-     "subject": "patient",
-     "symptom_state": null,
-     "unknown": false,
-     "use_state": null
-    },
-    "temporality": "reported",
-    "text": "合成の既往として高血圧の記載があります。",
-    "view_bucket": "history"
-   },
-   {
-    "assertion": {
      "category": "medication_management",
      "details": [],
      "evidence": "服薬: 合成の降圧薬を朝1回服用と記載されています。",
@@ -301,89 +218,6 @@
     "temporality": "reported",
     "text": "合成の降圧薬を朝1回服用と記載されています。",
     "view_bucket": "unknown"
-   },
-   {
-    "assertion": {
-     "category": "living",
-     "details": [],
-     "evidence": "既往歴: 合成の既往として高血圧の記載があります。",
-     "evidence_span": [
-      0,
-      25
-     ],
-     "reported_subject": "unspecified",
-     "text": "既往歴: 合成の既往として高血圧の記載があります。"
-    },
-    "category": "living",
-    "content_hash": "db13dc55f20f95c19cc1a7a7530e5cb735dcb03487a82f726166ade88a186db2",
-    "details": [],
-    "discovery": "backfill_found",
-    "evidence": "既往歴: 合成の既往として高血圧の記載があります。",
-    "evidence_span": [
-     0,
-     25
-    ],
-    "found_at": 1792245601.0,
-    "found_workday_id": "2026-10-17",
-    "historical": false,
-    "id": "<volatile>",
-    "message_id": 2,
-    "posted_at": "2026-09-19T00:00:00+09:00",
-    "posted_at_ts": 1789743600,
-    "project_id": 1,
-    "quote": "既往歴: 合成の既往として高血圧の記載があります。",
-    "quote_span": [
-     0,
-     25
-    ],
-    "reference_context": {
-     "after": "",
-     "after_span": [
-      25,
-      25
-     ],
-     "before": "",
-     "before_span": [
-      0,
-      0
-     ],
-     "leading": "",
-     "leading_span": [
-      0,
-      0
-     ],
-     "span": [
-      0,
-      25
-     ]
-    },
-    "relations": [],
-    "reported_subject": "unspecified",
-    "sender": "sender",
-    "source": "chat",
-    "source_key": 2,
-    "subject": "unspecified",
-    "temporal": {
-     "action": null,
-     "as_of_day": null,
-     "corrections": [],
-     "current_cue": false,
-     "event_day": null,
-     "negated": null,
-     "ongoing": false,
-     "period": "past",
-     "posted_at_ts": 1789743600,
-     "posted_day": "2026-09-19",
-     "resolution": null,
-     "state_day": null,
-     "subject": "patient",
-     "symptom_state": null,
-     "unknown": false,
-     "use_state": null
-    },
-    "temporality": "reported",
-    "text": "既往歴: 合成の既往として高血圧の記載があります。",
-    "view_bucket": "history"
    },
    {
     "assertion": {
@@ -550,9 +384,175 @@
     "temporality": "reported",
     "text": "合成の居住記録。本人は自宅で生活しています。",
     "view_bucket": "unknown"
+   },
+   {
+    "assertion": {
+     "category": "history",
+     "details": [],
+     "evidence": "既往歴: 合成の既往として高血圧の記載があります。",
+     "evidence_span": [
+      0,
+      25
+     ],
+     "reported_subject": "unspecified",
+     "text": "合成の既往として高血圧の記載があります。"
+    },
+    "category": "history",
+    "content_hash": "db13dc55f20f95c19cc1a7a7530e5cb735dcb03487a82f726166ade88a186db2",
+    "details": [],
+    "discovery": "new_report",
+    "evidence": "既往歴: 合成の既往として高血圧の記載があります。",
+    "evidence_span": [
+     0,
+     25
+    ],
+    "found_at": 1792245601.0,
+    "found_workday_id": "2026-10-17",
+    "historical": false,
+    "id": "<volatile>",
+    "message_id": 2,
+    "posted_at": "2026-09-19T00:00:00+09:00",
+    "posted_at_ts": 1789743600,
+    "project_id": 1,
+    "quote": "既往歴: 合成の既往として高血圧の記載があります。",
+    "quote_span": [
+     0,
+     25
+    ],
+    "reference_context": {
+     "after": "",
+     "after_span": [
+      25,
+      25
+     ],
+     "before": "",
+     "before_span": [
+      0,
+      0
+     ],
+     "leading": "",
+     "leading_span": [
+      0,
+      0
+     ],
+     "span": [
+      0,
+      25
+     ]
+    },
+    "relations": [],
+    "reported_subject": "unspecified",
+    "sender": "sender",
+    "source": "chat",
+    "source_key": 2,
+    "subject": "unspecified",
+    "temporal": {
+     "action": null,
+     "as_of_day": null,
+     "corrections": [],
+     "current_cue": false,
+     "event_day": null,
+     "negated": null,
+     "ongoing": false,
+     "period": "past",
+     "posted_at_ts": 1789743600,
+     "posted_day": "2026-09-19",
+     "resolution": null,
+     "state_day": null,
+     "subject": "patient",
+     "symptom_state": null,
+     "unknown": false,
+     "use_state": null
+    },
+    "temporality": "reported",
+    "text": "合成の既往として高血圧の記載があります。",
+    "view_bucket": "history"
+   },
+   {
+    "assertion": {
+     "category": "living",
+     "details": [],
+     "evidence": "既往歴: 合成の既往として高血圧の記載があります。",
+     "evidence_span": [
+      0,
+      25
+     ],
+     "reported_subject": "unspecified",
+     "text": "既往歴: 合成の既往として高血圧の記載があります。"
+    },
+    "category": "living",
+    "content_hash": "db13dc55f20f95c19cc1a7a7530e5cb735dcb03487a82f726166ade88a186db2",
+    "details": [],
+    "discovery": "backfill_found",
+    "evidence": "既往歴: 合成の既往として高血圧の記載があります。",
+    "evidence_span": [
+     0,
+     25
+    ],
+    "found_at": 1792245601.0,
+    "found_workday_id": "2026-10-17",
+    "historical": false,
+    "id": "<volatile>",
+    "message_id": 2,
+    "posted_at": "2026-09-19T00:00:00+09:00",
+    "posted_at_ts": 1789743600,
+    "project_id": 1,
+    "quote": "既往歴: 合成の既往として高血圧の記載があります。",
+    "quote_span": [
+     0,
+     25
+    ],
+    "reference_context": {
+     "after": "",
+     "after_span": [
+      25,
+      25
+     ],
+     "before": "",
+     "before_span": [
+      0,
+      0
+     ],
+     "leading": "",
+     "leading_span": [
+      0,
+      0
+     ],
+     "span": [
+      0,
+      25
+     ]
+    },
+    "relations": [],
+    "reported_subject": "unspecified",
+    "sender": "sender",
+    "source": "chat",
+    "source_key": 2,
+    "subject": "unspecified",
+    "temporal": {
+     "action": null,
+     "as_of_day": null,
+     "corrections": [],
+     "current_cue": false,
+     "event_day": null,
+     "negated": null,
+     "ongoing": false,
+     "period": "past",
+     "posted_at_ts": 1789743600,
+     "posted_day": "2026-09-19",
+     "resolution": null,
+     "state_day": null,
+     "subject": "patient",
+     "symptom_state": null,
+     "unknown": false,
+     "use_state": null
+    },
+    "temporality": "reported",
+    "text": "既往歴: 合成の既往として高血圧の記載があります。",
+    "view_bucket": "history"
    }
   ],
-  "facts_sig": "1340439b1db48a4f5ee054ff014a67c7109ff78c5706de9612400c2ce1a12a61",
+  "facts_sig": "8d288cba97dccc1e32ea05a3ca0864fa426a9542b3f5d09b9a350d4a911353e2",
   "facts_total": 6,
   "generated_at": "<volatile>",
   "historical_facts": [],
@@ -566,21 +566,9 @@
    },
    {
     "fact_ids": [
-     "bb3bddb497d9f9a0ccd381b52ebaeb5535996028185983727c207ba952b39361"
-    ],
-    "text": "既往歴: 合成の既往として高血圧の記載があります。"
-   },
-   {
-    "fact_ids": [
      "7613aacf99201b3a6354796c9835889536297554406e137594edd17597c2fa27"
     ],
     "text": "服薬: 合成の降圧薬を朝1回服用と記載されています。"
-   },
-   {
-    "fact_ids": [
-     "240591e59df8d704d9eafad1be5b1c7ac20b84d82530226b5c3705a0470b6b24"
-    ],
-    "text": "既往歴: 合成の既往として高血圧の記載があります。"
    },
    {
     "fact_ids": [
@@ -593,6 +581,18 @@
      "0bc6030f17eeb215e681b459b7cf435aed6f8f94c7b8e612e12ee4c8e6694f5c"
     ],
     "text": "生活環境: 合成の居住記録。本人は自宅で生活しています。"
+   },
+   {
+    "fact_ids": [
+     "bb3bddb497d9f9a0ccd381b52ebaeb5535996028185983727c207ba952b39361"
+    ],
+    "text": "既往歴: 合成の既往として高血圧の記載があります。"
+   },
+   {
+    "fact_ids": [
+     "240591e59df8d704d9eafad1be5b1c7ac20b84d82530226b5c3705a0470b6b24"
+    ],
+    "text": "既往歴: 合成の既往として高血圧の記載があります。"
    }
   ],
   "temporal_view": {
@@ -623,7 +623,7 @@
     "関係者: sender",
     "表示順: 標準",
     "介入・経過：未取得・未解析などにより、確認できた範囲を表示",
-    "全12件中 1〜8件目"
+    "全10件中 1〜8件目"
    ],
    "items": [
     {
@@ -641,45 +641,6 @@
     },
     {
      "date": "09/19",
-     "group": "患者コンテキスト · 履歴",
-     "project_id": 1,
-     "quotes": [
-      "既往歴: 合成の既往として高血圧の記載があります。"
-     ],
-     "source": "09/19 sender #2",
-     "source_key": 2,
-     "source_rest": "sender #2",
-     "text": "既往歴: 合成の既往として高血圧の記載があります。　（09/19 sender #2）",
-     "url": "https://www.medical-care.net/projects/medical/1"
-    },
-    {
-     "date": "09/19",
-     "group": "患者コンテキスト · 時点・関係未確認",
-     "project_id": 1,
-     "quotes": [
-      "服薬: 合成の降圧薬を朝1回服用と記載されています。"
-     ],
-     "source": "09/19 sender #3",
-     "source_key": 3,
-     "source_rest": "sender #3",
-     "text": "服薬: 合成の降圧薬を朝1回服用と記載されています。　（09/19 sender #3）",
-     "url": "https://www.medical-care.net/projects/medical/1"
-    },
-    {
-     "date": "09/19",
-     "group": "患者コンテキスト · 履歴",
-     "project_id": 1,
-     "quotes": [
-      "既往歴: 合成の既往として高血圧の記載があります。"
-     ],
-     "source": "09/19 sender #2",
-     "source_key": 2,
-     "source_rest": "sender #2",
-     "text": "既往歴: 合成の既往として高血圧の記載があります。　（09/19 sender #2）",
-     "url": "https://www.medical-care.net/projects/medical/1"
-    },
-    {
-     "date": "09/19",
      "group": "患者コンテキスト · 時点・関係未確認",
      "project_id": 1,
      "quotes": [
@@ -702,6 +663,19 @@
      "source_key": 1,
      "source_rest": "sender #1",
      "text": "生活環境: 合成の居住記録。本人は自宅で生活しています。　（09/19 sender #1）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    },
+    {
+     "date": "09/19",
+     "group": "患者コンテキスト · 履歴",
+     "project_id": 1,
+     "quotes": [
+      "既往歴: 合成の既往として高血圧の記載があります。"
+     ],
+     "source": "09/19 sender #2",
+     "source_key": 2,
+     "source_rest": "sender #2",
+     "text": "既往歴: 合成の既往として高血圧の記載があります。　（09/19 sender #2）",
      "url": "https://www.medical-care.net/projects/medical/1"
     },
     {
@@ -728,6 +702,32 @@
      "source_key": 3,
      "source_rest": "sender #3",
      "text": "服薬: 合成の降圧薬を朝1回服用と記載されています。　（09/19 sender #3）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    },
+    {
+     "date": "09/19",
+     "group": "生活環境 · 履歴",
+     "project_id": 1,
+     "quotes": [
+      "既往歴: 合成の既往として高血圧の記載があります。"
+     ],
+     "source": "09/19 sender #2",
+     "source_key": 2,
+     "source_rest": "sender #2",
+     "text": "既往歴: 合成の既往として高血圧の記載があります。　（09/19 sender #2）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    },
+    {
+     "date": "09/19",
+     "group": "生活環境 · 時点・関係未確認",
+     "project_id": 1,
+     "quotes": [
+      "合成の居住記録。本人は自宅で生活しています。"
+     ],
+     "source": "09/19 sender #1",
+     "source_key": 1,
+     "source_rest": "sender #1",
+     "text": "合成の居住記録。本人は自宅で生活しています。　（09/19 sender #1）",
      "url": "https://www.medical-care.net/projects/medical/1"
     }
    ],
