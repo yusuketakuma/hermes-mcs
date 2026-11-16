@@ -281,40 +281,41 @@ def lock_conflict(labels, added):
 
 def acceptance_criteria(body):
     """The text under the issue's first filled-in acceptance heading, or "" when it has none yet."""
-    lines = _outside_fences((body or "").splitlines())
-    for index, line in enumerate(lines):
-        level = _heading_level(line)
+    lines = _markdown_lines(body or "")
+    for index, (line, level) in enumerate(lines):
         if level and any(title in line for title in ACCEPTANCE_HEADINGS):
             section = []
-            for following in lines[index + 1:]:
-                if 0 < _heading_level(following) <= level:
+            for following, following_level in lines[index + 1:]:
+                if 0 < following_level <= level:
                     break
-                section.append(following)
-            # A subsection title alone is not a criterion.
-            text = "\n".join(part for part in section if not _heading_level(part)).strip()
+                # A subsection title alone is not a criterion.
+                if not following_level:
+                    section.append(following)
+            text = "\n".join(section).strip()
             if text and text != "_No response_":
                 return text
     return ""
 
 
-def _heading_level(line):
-    """1-6 for an ATX heading line, 0 for anything else."""
-    match = _HEADING.match(line)
-    return len(match.group(1)) if match else 0
+def _markdown_lines(text):
+    """(line, heading level) pairs: 1-6 for an ATX heading, 0 for body text.
 
-
-def _outside_fences(lines):
-    """Drop fenced code blocks: a heading quoted as an example is not the issue's own section."""
-    kept, fence = [], None
-    for line in lines:
+    A fenced block is body text whatever it holds (a quoted "## 受入条件" is an example, not a
+    section), and the fence marks themselves are dropped.
+    """
+    pairs, fence = [], None
+    for line in text.splitlines():
         marker = _FENCE.match(line)
         if fence is None and marker:
             fence = marker.group(1)
         elif fence is None:
-            kept.append(line)
-        elif marker and marker.group(1)[0] == fence[0] and len(marker.group(1)) >= len(fence) and not line.strip(" `~"):
+            heading = _HEADING.match(line)
+            pairs.append((line, len(heading.group(1)) if heading else 0))
+        elif marker and marker.group(1)[0] == fence[0] and len(marker.group(1)) >= len(fence) and not line[marker.end():].strip():
             fence = None
-    return kept
+        else:
+            pairs.append((line, 0))
+    return pairs
 
 
 def assignment_refusal(issue, sender, owner):
