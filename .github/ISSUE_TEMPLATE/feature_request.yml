@@ -8,7 +8,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        患者名・投稿本文・秘密値は書かないでください。例は完全な架空のものにしてください。
+        患者名・投稿本文・秘密値は書かないでください。実投稿を匿名化した例や画面・添付も載せず、例は完全合成にしてください。
   - type: textarea
     id: summary
     attributes:
@@ -29,6 +29,12 @@ body:
     attributes:
       label: 案
       description: 期待する動き。分かる範囲で。
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 完了と判断する条件
+      description: 何を確認できれば改善したと言えるか。分かる範囲で。
+      placeholder: 完全合成データで期待する表示と既存の安全条件を確認できる。
   - type: textarea
     id: tasks
     attributes:
