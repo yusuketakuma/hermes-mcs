@@ -57,7 +57,7 @@ python3 ci/mine_gates.py --check
 - `run_tests.sh` は `MCS_TEST_PYTHON`→`$VIRTUAL_ENV`→repo 直下の `.venv` の順に Python を選ぶ。worktree には `.venv` が無いので、pytest の入った Python を `MCS_TEST_PYTHON` に指定する。
 - ユーザー指示（2026-10-31）により、失敗項目を修正して再検証が通れば、既存結果と合わせて全体を合格扱いとし、全体 suite・同一SHAの全6ジョブの再実行は必須にしない。実行済み・失敗後に再検証済み・未実行を区別し、実行していないCIを実測成功と記録しない。記録方法は `docs/development/RELEASE_NOTES.md` に従う。
 - 導入先 `~/.mcs`（`MCS_ROOT`）は稼働中の checkout で、原本DB・設定を持つ。開発・検証は git worktree で行い、そこの未commit変更を巻き込まない。
-  全体 suite は同じ Mac の稼働処理と I/O を取り合うので、同時に複数走らせない。
+  全体 suite は同じ Mac の稼働処理と I/O を取り合うので、Mac 上では同時に複数走らせない。稼働環境と切り離されたクラウドの実行環境では並列に走らせてよい（所有者 2026-11-16）。
 - macOS の BSD `sed` は `\b` を扱わない。単語境界の置換は `perl -pi` を使う。改名後の呼出元確認は `git grep` の結果を切り詰めずに全件見る。
 - Hermes 実SDKとの統合は CI の pinned Hermes 環境で別に検証される。ローカル pytest の成功と区別する。
 - `python3 mcs/ops/mcs_setup.py check` / `make setup-check` は実機診断。合成 fixture のテストの代わりに実行しない。

@@ -22,7 +22,8 @@
 
 - Bashツールの `grep` は ugrep ラッパーで `.gitignore` 対象を飛ばす。改名・削除の呼出元網羅は `git grep` を使う。
 - auto mode は共有資源への merge・fast-forward を拒否することがある。拒否されたら回避せずユーザーの明示承認を得る。
-- サブエージェントにテストを並行して走らせない。
+- 稼働中の Mac（ローカル）ではサブエージェントにテストを並行して走らせない。クラウドの実行環境では、可能な最大数まで並列に走らせてよい（所有者 2026-11-16）。
+- テストの実行は Haiku のサブエージェントに任せる（所有者 2026-11-16）。失敗の原因調査と修正は担当のモデルが行う。
 - 圧縮時は worktree・ブランチ・最新SHA・変更ファイル・実行テストと結果・未実施検証を残す。
 
 <!-- Codex は ~/.codex/AGENTS.md と合わせて project_doc_max_bytes（既定32KiB）までしか読まない。追記は短くし、詳細は docs/ に置く。 -->
@@ -64,7 +65,7 @@ python3 ci/mine_gates.py --check
 - `run_tests.sh` は `MCS_TEST_PYTHON`→`$VIRTUAL_ENV`→repo 直下の `.venv` の順に Python を選ぶ。worktree には `.venv` が無いので、pytest の入った Python を `MCS_TEST_PYTHON` に指定する。
 - ユーザー指示（2026-10-31）により、失敗項目を修正して再検証が通れば、既存結果と合わせて全体を合格扱いとし、全体 suite・同一SHAの全6ジョブの再実行は必須にしない。実行済み・失敗後に再検証済み・未実行を区別し、実行していないCIを実測成功と記録しない。記録方法は `docs/development/RELEASE_NOTES.md` に従う。
 - 導入先 `~/.mcs`（`MCS_ROOT`）は稼働中の checkout で、原本DB・設定を持つ。開発・検証は git worktree で行い、そこの未commit変更を巻き込まない。
-  全体 suite は同じ Mac の稼働処理と I/O を取り合うので、同時に複数走らせない。
+  全体 suite は同じ Mac の稼働処理と I/O を取り合うので、Mac 上では同時に複数走らせない。稼働環境と切り離されたクラウドの実行環境では並列に走らせてよい（所有者 2026-11-16）。
 - macOS の BSD `sed` は `\b` を扱わない。単語境界の置換は `perl -pi` を使う。改名後の呼出元確認は `git grep` の結果を切り詰めずに全件見る。
 - Hermes 実SDKとの統合は CI の pinned Hermes 環境で別に検証される。ローカル pytest の成功と区別する。
 - `python3 mcs/ops/mcs_setup.py check` / `make setup-check` は実機診断。合成 fixture のテストの代わりに実行しない。
