@@ -676,11 +676,12 @@ def hold_tx(ledger, project_id, root, message_ids, origin, *, eligible_ids=None,
 
 
 def _release_schema(db):
-    """Reject shadow tables and write triggers other than the exact relation guards."""
-    from ledger_schema import _GUARD_RELATIONS
+    """Reject shadow tables and unverified write triggers."""
+    from ledger_schema import (CLOUD_USAGE_GUARD_DDL, _CLOUD_USAGE_DDL,
+                               _GUARD_RELATIONS, cloud_usage_guard_state)
     if db.execute("SELECT 1 FROM temp.sqlite_schema WHERE type IN ('table','view') "
                   "AND lower(name) IN ('fetch_jobs','artifacts','notify_outbox','messages',"
-                  "'attachments','message_revisions','patients') LIMIT 1").fetchone():
+                  "'attachments','message_revisions','patients','cloud_usage_guard') LIMIT 1").fetchone():
         raise sqlite3.DatabaseError('semantic_release_schema_unverified')
     allowed = {}
     condition = _GUARD_RELATIONS[0][2].replace('a.', 'NEW.')
@@ -692,11 +693,32 @@ def _release_schema(db):
           UPDATE ledger_relation_guards SET shadow_count=shadow_count+1
           WHERE relation='artifacts' AND mode='shadow'; END"""
         allowed[name] = ' '.join(ddl.split())
+    cloud_allowed = {name: _CLOUD_USAGE_DDL[name] for name in (
+        'cloud_usage_guard_replace', 'cloud_usage_guard_insert',
+        'cloud_usage_guard_update', 'cloud_usage_guard_delete')}
+    has_cloud_guard = False
     for schema in ('main', 'temp'):
         for row in db.execute(f"SELECT name,sql FROM {schema}.sqlite_schema WHERE type='trigger' "
-                              "AND lower(tbl_name) IN ('fetch_jobs','artifacts','notify_outbox')"):
-            if schema != 'main' or ' '.join((row['sql'] or '').split()) != allowed.get(row['name']):
+                              "AND lower(tbl_name) IN ('fetch_jobs','artifacts','notify_outbox',"
+                              "'cloud_usage_guard')"):
+            name = row['name']
+            if schema != 'main':
                 raise sqlite3.DatabaseError('semantic_release_trigger_unverified')
+            if name in cloud_allowed:
+                if row['sql'] != cloud_allowed[name]:
+                    raise sqlite3.DatabaseError('semantic_release_trigger_unverified')
+                has_cloud_guard = True
+            elif ' '.join((row['sql'] or '').split()) != allowed.get(name):
+                raise sqlite3.DatabaseError('semantic_release_trigger_unverified')
+    if has_cloud_guard:
+        guard = db.execute("SELECT type,sql FROM main.sqlite_schema WHERE name='cloud_usage_guard'").fetchone()
+        # Added indexes could permit cascading foreign keys on mutable guard columns.
+        if (guard is None or guard['type'] != 'table' or guard['sql'] != CLOUD_USAGE_GUARD_DDL
+                or db.execute("PRAGMA main.index_list('cloud_usage_guard')").fetchone() is not None):
+            raise sqlite3.DatabaseError('semantic_release_trigger_unverified')
+        state = cloud_usage_guard_state(db)
+        if state is None or state[1] >= 2**63 - 1:
+            raise sqlite3.DatabaseError('semantic_release_trigger_unverified')
     validate_indexes(db)
     _unstored_unique_index(db)
     if any(not _rowid_primary_key(db, table, key) for table, key in (
