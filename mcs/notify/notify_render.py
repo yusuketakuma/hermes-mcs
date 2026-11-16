@@ -49,6 +49,13 @@ import structured_view
 from notify_scope import latest_signals, notify_cfg
 import clinical_urgency
 
+# Card layout 6 (notify_cards.CARD_LAYOUT): each post's summary leads with
+# 📌 依頼 and 薬剤, and the heading icon follows the card state.
+ACTION_FIRST_LAYOUT = 6
+# heading icon by card state on layout-6 thread cards (owner 2026-11-15):
+# 確認 is the ack record of the current content, not completed work
+STATE_ICONS = {"acked": "✅", "assigned": "👤", None: "💬"}
+
 PAGE_DIGEST = 5           # digest candidates per page (count cap)
 PAGE_THREAD = 8           # messages per page on a thread card (count cap)
 # Components V2 hard ceiling: 4000 chars summed over all TextDisplay
@@ -329,7 +336,7 @@ def _thread_context(db, card, msgs, waiting=frozenset(), *, legacy_scope=False) 
     return " · ".join(parts)
 
 
-def structured_block(db, mid, plain=False) -> dict | None:
+def structured_block(db, mid, plain=False, request_first=False) -> dict | None:
     """Per-message 📋 要約 block with dictionary details kept on demand.
 
     Raw medication facts use the shared extractor view. Artifact freshness and the
@@ -337,7 +344,7 @@ def structured_block(db, mid, plain=False) -> dict | None:
     must never sink the card."""
     try:
         lines = structured_view.structured_lines(db, mid, drug_candidates=False,
-                                                 plain=plain)
+                                                 plain=plain, request_first=request_first)
     except Exception:
         return None
     if not lines:
@@ -385,11 +392,12 @@ def _page_processing_status(progresses):
 
 
 def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True,
-                   include_progress=True, compact_progress=True, legacy_ocr=False) -> dict:
+                   include_progress=True, compact_progress=True, legacy_ocr=False,
+                   request_first=False) -> dict:
     """📋 要約 of one post, or its visible empty state — a post with no
     usable extraction says whether it is still queued or exhausted its
     retries instead of silently showing nothing."""
-    block = structured_block(db, mid, plain=not label)
+    block = structured_block(db, mid, plain=not label, request_first=request_first)
     if block and not label:
         # layout 2: the post line above already heads the summary
         block = dict(block, text=block["text"].removeprefix("📋 要約\n"))
@@ -753,7 +761,8 @@ def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None,
     if include_summary:
         # the same plain wording and item rows as the card face
         out.append(_summary_block(db, mid, cfg=cfg, label=layout < 2,
-                                  include_progress=include_progress)["text"])
+                                  include_progress=include_progress,
+                                  request_first=layout >= ACTION_FIRST_LAYOUT)["text"])
     stamp_line = ""
     if stamps:
         stamp_line = thread_stamp_row(
@@ -965,7 +974,8 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
                 blocks.append(_summary_block(db, m["message_id"], cfg=cfg,
                                              progress_by_mid=progress_by_mid,
                                              label=layout < 2, include_progress=(layout < 2 if _provider_version == 0 else _provider_version in (1, 2)),
-                                             compact_progress=_provider_version >= 4, legacy_ocr=True))
+                                             compact_progress=_provider_version >= 4, legacy_ocr=True,
+                                             request_first=layout >= ACTION_FIRST_LAYOUT))
             rendered.append(_fit_item(blocks))
         item_shown = [[m["message_id"]] for m in msgs]
         max_count = PAGE_THREAD
@@ -1063,6 +1073,9 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
     pages = len(pages_idx)
     page = _page(ui, pages, default=pages - 1 if kind == "thread" else 0)
     shown, footer, toggles = page_states[page]
+    state = "acked" if toggles["acked"] else "assigned" if toggles["assigned"] else None
+    if kind == "thread" and layout >= ACTION_FIRST_LAYOUT:
+        containers[0]["text"] = STATE_ICONS[state] + containers[0]["text"].removeprefix("💬")
     if pages > 1:
         _add_page_marker(containers, page, pages)
     if header_placeholder is not None:
@@ -1135,7 +1148,10 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
             # outside content_fingerprint: a presentation hint (accent colour),
             # from the computed urgency verdict — never from text, which
             # may quote a staff-typed 🚨
-            "urgent": urgent}
+            "urgent": urgent,
+            # likewise outside the fingerprint (the footer carries it): the
+            # ack/assign state for a transport's state accent
+            "card_state": state}
     if layout >= 3:
         content["thread_layout"] = "native-summary-stamps-body/v3"
     elif "transport" in card.keys() and card["transport"] in ("slack", "discord"):

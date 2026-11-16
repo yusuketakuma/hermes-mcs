@@ -1,0 +1,98 @@
+# GitHub の使い方（ラベル・版・issue・PR）
+
+この文書は、hermes-mcs の今後の更新を GitHub の issue・PR・ラベルで管理するための約束です。
+ラベルの定義の正本は [`.github/labels.json`](../../.github/labels.json) です。
+
+## まず見る場所
+
+| 知りたいこと | 開く場所 |
+|---|---|
+| 全体の計画 | ラベル [`roadmap`](https://github.com/yusuketakuma/hermes-mcs/issues?q=is%3Aopen+label%3Aroadmap) の issue |
+| 自分（Yusukeさん）がやること | [`要オーナー対応`](https://github.com/yusuketakuma/hermes-mcs/issues?q=is%3Aopen+label%3A%E8%A6%81%E3%82%AA%E3%83%BC%E3%83%8A%E3%83%BC%E5%AF%BE%E5%BF%9C) |
+| 今すぐ出すもの | [`即時適用`](https://github.com/yusuketakuma/hermes-mcs/issues?q=is%3Aopen+label%3A%E5%8D%B3%E6%99%82%E9%81%A9%E7%94%A8) |
+| 次の版に入るもの | [`v1.1.3`](https://github.com/yusuketakuma/hermes-mcs/issues?q=is%3Aopen+label%3Av1.1.3)・[`v1.1.4`](https://github.com/yusuketakuma/hermes-mcs/issues?q=is%3Aopen+label%3Av1.1.4) |
+| Mac での作業が要るもの | [`要実機作業`](https://github.com/yusuketakuma/hermes-mcs/issues?q=is%3Aopen+label%3A%E8%A6%81%E5%AE%9F%E6%A9%9F%E4%BD%9C%E6%A5%AD) |
+| まだ振り分けていない issue | [`要トリアージ`](https://github.com/yusuketakuma/hermes-mcs/issues?q=is%3Aopen+label%3A%E8%A6%81%E3%83%88%E3%83%AA%E3%82%A2%E3%83%BC%E3%82%B8) |
+
+## ラベルの種類
+
+ラベルは版・対応・変更箇所・大きさ・種別に分かれます。1つの issue・PR に、軸ごとに必要なものを付けます。
+
+| 軸 | ラベル | 付け方 |
+|---|---|---|
+| **版**（どの版で出すか） | `即時適用`・`v1.1.3`・`v1.1.4`・`版未定` | 人が1つだけ付ける。版が決まったら付け替える |
+| **対応**（誰が何をするか） | `要オーナー対応`・`要実機作業`・`要再起動`・`要トリアージ`・`安全ゲート` | 人が必要なだけ付ける。`安全ゲート` は `ci/gates.py` などの変更で自動でも付く |
+| **領域**（どこを変えるか） | `収集`・`抽出`・`患者コンテキスト`・`意味解析`・`LLM`・`通知`・`スタンプ`・`保存基盤`・`運用・導入`・`文書`・`CI・開発` | PR は変更したファイルから自動（[`.github/labeler.yml`](../../.github/labeler.yml)）。issue は人が付ける |
+| **大きさ** | `size: XS`〜`size: XL` | PR の変更行数から自動（50・200・500・1000行で区切る） |
+
+種別も `.github/labels.json` で色・説明を管理します。`bug` は不具合、`enhancement` は新規機能、`improvement` は既存改善、`refactor` は挙動不変の整理です。性能改善には `performance` を併用できます。`documentation` は文書作業という種別、`文書` は変更箇所です。
+
+### 版のラベルの意味
+
+- `即時適用`: 期限切れや停止を避けるため、通常の版を待たずに出すもの。例: クラウド料金表の再確認。
+- `v1.1.3`・`v1.1.4`: その版に入れると決めたもの。版のラベルと同名のマイルストーンもあり、完了率を見られます。
+- `版未定`: 計画には入っているが、版はまだ決めていないもの。
+
+ラベルを付けても merge・リリース・配備の承認にはなりません。それらは今までどおり Yusukeさんが明示した範囲だけ行います。
+
+## 作業の流れ
+
+1. **issue を作る**: テンプレート（不具合・機能/改善）を選ぶと `要トリアージ` が付きます。患者名・投稿本文・秘密値は書きません。
+2. **振り分ける**: 版・領域・対応のラベルを付け、`要トリアージ` を外します。大きな計画は `roadmap` の issue の子 issue（sub-issue）にします。
+3. **PR を出す**: テンプレートの「概要・関連・取り込み先・利用者への影響・更新時の操作・検証」を埋めます。default branch 向けで issue 全体を解決する場合だけ本文に `Closes #番号`、補助PR・一部対応は `Related: #番号` を書きます。版のラベルを1つ付けます。領域と size は自動で付きます。
+4. **merge・リリース**: default branch 向けの解決キーワード付きPRをそこへmergeすると、対応するissueが自動で閉じます。別branch向けの補助PRではキーワードが無視され、自動で閉じません。リリースは `release-mcs` skill と [RELEASE_NOTES.md](RELEASE_NOTES.md) の手順に従います。
+5. **配備**: `要実機作業`・`要再起動` の付いた変更は、配備のあとに gateway・LINE WORKS アダプターの再起動まで済んだか確認します。
+
+## 補助PR・検証結果の管理
+
+- 上流PRのbranchをbaseにする補助PRは、上流番号、基準head、取り込み順を記載します。上流PRには `Related: #番号` を使い、誤って閉じるおそれのある `Closes/Fixes #PR番号` は使いません。
+- 上流が更新されたら差分・競合・検証対象を再確認します。旧headのCI成功を新headの成功として扱いません。
+- ローカル検証・GitHub CI・実機検証を分け、成功/失敗/未実行と対象headを残します。既存失敗は同じ条件でbaseと比較します。
+- Issueには実ログ・画面・添付や匿名化した実投稿を載せず、固定エラーコード・時刻・件数・技術状態と完全合成の再現例だけを記載します。
+- PR作成やCI成功はmerge・配備の承認ではありません。取り込み前に最新headと承認範囲を確認します。
+
+根拠: [GitHub公式: PRとissueの関連付け](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue)（2026-11-16確認）。
+
+## ラベルの追加・変更
+
+`.github/labels.json` を編集して main に入れると、[`labels-sync`](../../.github/workflows/labels-sync.yml) が GitHub のラベルの色・説明を揃え、無いマイルストーンを作ります。
+定義から外したラベルとマイルストーンは自動では消しません（付いている issue を失わないため）。不要になったら GitHub の画面で消します。
+次の版（例: v1.1.5）を足すときは、`labels` と `milestones` の両方に1行ずつ足します。
+
+自動付与のワークフロー（[`labeler`](../../.github/workflows/labeler.yml)）は `pull_request_target` で動き、base 側の設定だけを読みます。PR のコードは checkout も実行もしません。
+
+## 色と状態の読み方
+
+- 青: 変更箇所（収集・抽出・通知など）。名前の「領域:」接頭辞は付けません。
+- 紫: リリース予定版。緊急の「即時適用」は赤。
+- 黄: 対応・待機状態。「CI待ち」「修正待ち」「依存PR待ち」は現状を確認して付け、解消後に外します。
+- 赤: 安全上の注意。緑: マージ前の確認済み判定。これらの名前・付与条件・承認要件は変えません。
+- 青緑: 計画・整理の種別。灰色の濃淡: 変更規模（XSからXL）。色だけで判定せず名前・説明を読みます。
+
+`rename_from` のある定義は、同期時に既存ラベルそのものを改名します。削除・再作成しないため、過去のIssue/PRとの紐づけを保持します。
+旧名と新名が両方存在する場合は同期を停止し、付与先を確認するまで統合・削除しません。
+ロールバックは同じ方式で新名から旧名へ戻し、自動付与設定も同じ変更で戻します。
+
+
+### 移行の検証と同時操作の制約
+
+`python3 scripts/development/check_labels_sync.py` で実際の同期Bashを状態付きの偽`gh`に対して実行します（bash・jqが必要）。CIのhygieneでも実行し、旧名・移行済み・空一覧・名前衝突・一覧取得失敗・改名失敗・部分移行後の再実行・一覧取得後の宛先作成競合を検証します。実サービスへのアクセスやラベル変更はしません。
+
+同期は複数ラベルを一括で確定するトランザクションではありません。途中失敗時は成功済みの改名が残り、再実行は最新一覧から残りを処理します。改名後に旧名が別途作られた場合など、新旧名が併存すれば再実行も停止します。付与先を確認せず削除・統合しません。
+
+`concurrency: labels-sync` はこのワークフロー同士だけを直列化し、GitHub画面・API・labelerなど別の書き手をロックしません。移行中はラベル定義の手動編集・外部同期を避け、進行中の旧設定labelerがあれば完了を待ってください。実行直前の一覧確認後の競合も完全には排除できず、色・説明は定義を正として上書きします。移行後に旧名の再作成とIssue/PRの付与先を確認してください。上記の競合テストは宛先名が新規作成される場合の停止だけを保証し、すべての並行操作や実GitHub上での整合性を保証するものではありません。
+
+
+### 種別の選び方と検索
+
+調査は `research`、検証作業は `QA`、依存更新は `dependencies`、リリース準備は `release`、互換性を壊す変更は `breaking change` を使います。変更箇所・版・待機状態とは別軸で、意味のあるものだけを併用します。検証・リリースのラベルは合格や実行許可を示しません。`performance` は改善前後の測定条件と結果、`breaking change` は影響と移行・復旧方法を本文に記載します。
+
+種別の色は不具合・互換性注意が赤、新規機能・リリース準備が緑系、改善・文書が青、調査・性能が紫系、検証が橙、依存更新が灰です。緑色だけでマージ可と判断しません。
+
+検索例:
+- `is:open label:bug` 不具合（緊急とは限らない）
+- `is:open label:research` 調査中
+- `is:open label:"breaking change"` 移行判断が必要
+- `is:pr is:open label:"CI待ち"` CI待ち
+
+参考: [GitHubラベル管理術（Qiita）](https://qiita.com/tzp/items/76a8e7dd5f0f1305d5ae)（2025-12-24更新、2026-11-16確認）。種別の区別・説明と色の統一・検索を採用しました。`STORY/projects` は既存 `roadmap` と子Issueで代替し、環境ラベル `to develop/staging/master` は現在の実運用と一致しないため追加しません。未使用期間だけを理由にラベルを自動削除せず、管理時間の削減率など記事の効果は当プロジェクトで未検証です。

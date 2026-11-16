@@ -23,7 +23,8 @@ MUTED = "#66716f"
 GREEN = "#087f5b"
 FONT = "Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif"
 # Fully fictional example shared by every screen (no real or anonymised posts).
-HEADING = "💬 山田 花子（あおぞら）"
+# layout 6: the heading icon follows the card state (💬 / 👤 担当中 / ✅ 確認済み)
+HEADING = "{icon} 山田 花子（あおぞら）"
 # layout 2: the line under the title — start date, then counts
 META = "10-01〜 · {n}投稿 · 📎 2 · @自分宛て"
 SENDER = "佐藤さん（訪問看護・あおぞら）"
@@ -37,6 +38,14 @@ POSTS = (
      ("確認結果を担当者会議で共有してほしいとの連絡",
       "区分: 連絡")),
 )
+
+
+def request_first(bullets):
+    """Layout-6 Slack cards (structured_view request_first): 📌 依頼 leads."""
+    pinned = [f"📌 {b}" for b in bullets if b.startswith("依頼:")]
+    return pinned + [b for b in bullets if not b.startswith("依頼:")]
+
+
 STAMPS = ("スタンプ 👀2 田中・佐藤 / 🙆1 鈴木 · 10-01 10:00時点",
           "スタンプ 👀3 田中・佐藤・鈴木 / 🙆1 高橋 · 10-01 10:30時点")
 STATE = ("👤 担当: 田中 · ✅ 確認: 田中",
@@ -128,19 +137,27 @@ class Screen:
         self.line(x, y - 12, x + width, y - 12, "#d5dcd7")
         return y + 16
 
-    def actions(self, x, y):
-        """Ordinary actions stay separate from the stamp area's select."""
-        self.button(x, y, "操作を選ぶ… ▾", 173)
+    def actions(self, x, y, width=770):
+        """確認する・担当する as buttons, then the other operations' select,
+        wrapping like a narrow Slack pane; the stamp area's select is separate."""
+        cx = x
+        for label, w in (("確認する", 112), ("担当する", 112), ("操作を選ぶ… ▾", 173)):
+            if cx > x and cx + w > x + width:
+                cx, y = x, y + 52
+            self.button(cx, y, label, w)
+            cx += w + 10
         self.text(x, y + 76, "MCSで開く", 18, "#1264a3")
         return y + 100
 
-    def card(self, x, y, width=770, full=False, stamp_controls=False, post=0, replies=0):
+    def card(self, x, y, width=770, full=False, stamp_controls=False, post=0, replies=0,
+             acked=False):
         """Card zones top to bottom: patient title, meta line, per post a
         small time/sender line over its summary and folded source text,
         then one area for observed stamps and their sending menu.
         Reply cards (layout 4) show one post each: the root card adds
         "↳ 返信 N件を保存済み", a reply card (post>0) sits in the thread."""
-        y = self.paragraph(x, y, HEADING if post == 0 else "↳ " + HEADING, width, 21, INK, True)
+        heading = HEADING.format(icon="✅" if acked else "💬")
+        y = self.paragraph(x, y, heading if post == 0 else "↳ " + heading, width, 21, INK, True)
         y = self.paragraph(x, y - 4, META.format(n=2 if full else 1), width, 17, MUTED)
         y = self.provider_row(x, y - 5, post, width)
         if full:
@@ -152,14 +169,14 @@ class Screen:
         for (sender, bullets), stamps in zip(shown, STAMPS[0 if full else post:]):
             y = self.rule(x, y, width)
             y = self.paragraph(x, y, sender, width, 15, MUTED)
-            summary = (bullets if status == "complete" else
+            summary = (request_first(bullets) if status == "complete" else
                        ("要約 要確認",) if status == "attention" else ("要約 処理待ち",))
             for bullet in summary:
                 text = bullet if bullet.startswith("要約 ") else "・" + bullet
                 y = self.paragraph(x, y - 2, text, width, 18)
             y = self.fold(x, y, width, 16)
         y = self.rule(x, y, width)
-        for line in STATE if full else ("📝 タスク 1件",):
+        for line in STATE if full or acked else ("📝 タスク 1件",):
             y = self.paragraph(x, y - 2, line, width, 17, MUTED)
         for (sender, _), stamps in zip(shown, STAMPS[0 if full else post:]):
             if full:
@@ -218,13 +235,13 @@ def overview():
     s = Screen(1, "原文も添付も、その投稿のカードに。", "元投稿はチャンネル、返信はスレッド内へ。各カードに画像・PDFをまとめて表示。", 1280)
     s.line(662, 194, 662, 1199)
     x, y = s.app(188, 227)
-    y = s.actions(x, s.card(x, y, 397, replies=1))
+    y = s.actions(x, s.card(x, y, 397, replies=1), 397)
     s.file_group(x, y, 397, ("服薬カレンダー.jpg", "訪問メモ.pdf"))
     s.text(689, 227, "スレッド", 23, INK, True)
     s.text(689, 257, "# mcs-demo", 16, MUTED)
     s.line(682, 275, 1059, 275)
     tx, ty = s.app(689, 297)
-    y = s.actions(tx, s.card(tx, ty, 322, post=1))
+    y = s.actions(tx, s.card(tx, ty, 322, post=1), 322)
     s.file_group(tx, y, 322, ("連絡図.jpg", "共有メモ.pdf"))
     s.text(192, 1157, "添付は各投稿の原文より下にまとめます。プレビュー・操作欄との並びはSlackに従います。", 16, MUTED)
     return s.finish()
@@ -233,7 +250,7 @@ def overview():
 def notification():
     s = Screen(2, "返信ごとのカードで、確認と担当を共有。", "投稿の処理状態と、カード作成時点の文脈の進捗を区別します。", 1300)
     x, y = s.app()
-    y = s.actions(x, s.card(x, y, replies=1))
+    y = s.actions(x, s.card(x, y, replies=1, acked=True))
     s.text(x, y + 40, "スレッド内の返信カード", 17, MUTED, True)
     s.card(x, y + 76, post=1)
     return s.finish()
@@ -245,7 +262,7 @@ def menu():
     y = s.card(x, y, stamp_controls=True)
     s.actions(x, y)
     labels = ("👀 見ました", "🙆 承知 ✓（取消）", "🙏 感謝", "👍 いいね", "✅ 完了")
-    mx, my = x + 405, y - 65
+    mx, my = x + 435, y - 65
     s.text(mx, my - 15, "開いたスタンプメニュー（説明図）", 15, MUTED)
     s.rect(mx, my, 330, 18 + 42 * len(labels), "#fff", 8, "#aebbb2")
     for i, label in enumerate(labels):

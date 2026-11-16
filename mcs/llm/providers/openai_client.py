@@ -13,16 +13,18 @@ MODEL = "gpt-6-luna"
 SOL_MODEL = "gpt-6.1-sol"
 ENDPOINT = "https://api.openai.com/v1/responses"
 KEY_ENV = "MCS_OPENAI_API_KEY"
-PRICE_VERSION = "openai-gpt-6-luna-2026-10-29"
-PRICE_CHECKED_ON = "2026-10-29"
-PRICE_VALID_UNTIL = "2026-11-28"
+PRICE_VERSION = "openai-gpt-6-luna-2026-11-15"
+PRICE_CHECKED_ON = "2026-11-15"
+PRICE_VALID_UNTIL = "2026-12-15"
 PRICE_SOURCES = ("https://developers.openai.com/api/docs/models/gpt-6-luna",)
 LONG_INPUT_THRESHOLD = 272000
 PRICES_20261029 = MappingProxyType({"input": "0.1", "output": "0.5", "cached_input": "0.01",
     "cache_write_30m": "0.125", "long_input_multiplier": "2", "long_output": "0.75",
     "reservation_input": "0.25", "reservation_output": "0.75"})
 PRICES = PRICES_20261029
-SOL_PRICE_VERSION = "openai-gpt-6.1-sol-2026-10-31"
+SOL_PRICE_VERSION = "openai-gpt-6.1-sol-2026-11-15"
+SOL_PRICE_SOURCES = ("https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+                     "https://developers.openai.com/api/docs/pricing")
 SOL_PRICES_20261031 = MappingProxyType({"input": "2", "output": "10", "cached_input": "0.10",
     "cache_write_30m": "2.50", "long_input_multiplier": "2", "long_output": "15",
     "reservation_input": "5", "reservation_output": "15"})
@@ -111,24 +113,26 @@ def _validate_usage_20261029(value):
 validate_usage = _validate_usage_20261029
 
 
+def _snapshot(model, price_version, checked_on, valid_until, sources, prices):
+    return MappingProxyType({
+        "provider": "openai", "model": model, "price_version": price_version,
+        "price_checked_on": checked_on, "price_valid_until": valid_until, "price_sources": sources,
+        "prices": prices, "long_input_threshold": LONG_INPUT_THRESHOLD,
+        "validate_usage": _validate_usage_20261029, "max_tokens": 128000, "legacy_reservation": False,
+    })
+
+
+# A recheck with unchanged prices adds a version; older versions stay so stored
+# reservations keep resolving to the definition they were priced with.
 PRICE_SNAPSHOTS = MappingProxyType({
-    ("gpt-6-luna", "openai-gpt-6-luna-2026-10-29"): MappingProxyType({
-        "provider": "openai", "model": "gpt-6-luna",
-        "price_version": "openai-gpt-6-luna-2026-10-29",
-        "price_checked_on": "2026-10-29", "price_valid_until": "2026-11-28",
-        "price_sources": ("https://developers.openai.com/api/docs/models/gpt-6-luna",),
-        "prices": PRICES_20261029, "long_input_threshold": 272000,
-        "validate_usage": _validate_usage_20261029, "max_tokens": 128000, "legacy_reservation": False,
-    }),
-    ("gpt-6.1-sol", "openai-gpt-6.1-sol-2026-10-31"): MappingProxyType({
-        "provider": "openai", "model": "gpt-6.1-sol",
-        "price_version": "openai-gpt-6.1-sol-2026-10-31",
-        "price_checked_on": "2026-10-31", "price_valid_until": "2026-11-30",
-        "price_sources": ("https://developers.openai.com/api/docs/models/gpt-6.1-sol",
-                          "https://developers.openai.com/api/docs/pricing"),
-        "prices": SOL_PRICES_20261031, "long_input_threshold": 272000,
-        "validate_usage": _validate_usage_20261029, "max_tokens": 128000, "legacy_reservation": False,
-    }),
+    (MODEL, "openai-gpt-6-luna-2026-10-29"): _snapshot(
+        MODEL, "openai-gpt-6-luna-2026-10-29", "2026-10-29", "2026-11-28", PRICE_SOURCES, PRICES_20261029),
+    (MODEL, PRICE_VERSION): _snapshot(
+        MODEL, PRICE_VERSION, PRICE_CHECKED_ON, PRICE_VALID_UNTIL, PRICE_SOURCES, PRICES_20261029),
+    (SOL_MODEL, "openai-gpt-6.1-sol-2026-10-31"): _snapshot(
+        SOL_MODEL, "openai-gpt-6.1-sol-2026-10-31", "2026-10-31", "2026-11-30", SOL_PRICE_SOURCES, SOL_PRICES_20261031),
+    (SOL_MODEL, SOL_PRICE_VERSION): _snapshot(
+        SOL_MODEL, SOL_PRICE_VERSION, "2026-11-15", "2026-12-15", SOL_PRICE_SOURCES, SOL_PRICES_20261031),
 })
 
 

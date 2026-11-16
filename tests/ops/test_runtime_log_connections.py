@@ -136,7 +136,13 @@ def test_cloud_pool_exec_preserves_parent_and_worker_arguments(tmp_path, monkeyp
     import extract_llm
     (tmp_path / "data").mkdir()
     cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 1}}
-    monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda cfg: cfg["cloud_llm"])
+
+    def resolve_settings(cfg):
+        settings, errors = extract_llm.cloud_policy.resolve_settings(cfg, available_providers=("anthropic",))
+        assert errors == []
+        return settings
+
+    monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", resolve_settings)
     monkeypatch.setattr(extract_llm.cloud_policy, "selected_key", lambda *a, **k: "synthetic")
     monkeypatch.setattr(cloud_backlog, "memory_workers", lambda limit: 1)
     monkeypatch.delenv("MCS_RUN_LOG_HELPER", raising=False)

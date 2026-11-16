@@ -20,11 +20,13 @@ def test_render_keeps_body_private_and_preserves_buttons():
     assert "非公開の合成本体" not in text + json.dumps(blocks, ensure_ascii=False)
     actions = [b for b in blocks if b["type"] == "actions"]
     assert len(actions) == 1
-    # All ordinary actions share one select, with the same durable tokens.
-    menu, = actions[0]["elements"]
+    # 確認 is a button; the other ordinary actions share one select,
+    # all with the same durable tokens.
+    ack, menu = actions[0]["elements"]
+    assert (ack["type"], ack["action_id"], ack["value"]) == ("button", "mcs:a:" + "c" * 32, "c" * 32)
     assert menu["type"] == "static_select"
     assert menu["action_id"] == "mcs:menu"
-    assert [o["value"] for o in menu["options"]] == ["b" * 32, "c" * 32]
+    assert [o["value"] for o in menu["options"]] == ["b" * 32]
     assert any(b["type"] == "header" for b in blocks)
 
 
@@ -91,7 +93,7 @@ def test_select_click_resolves_the_same_token_as_a_button():
 
 
 def test_full_card_preserves_every_ordinary_action_in_one_select():
-    """Moving primary actions into the menu preserves all tokens and order."""
+    """確認・担当 as buttons, the rest in the menu: all tokens, in order."""
     spec = _spec()
     ids = ("ack", "assign", "request", "tasks_done", "summary", "report",
            "mytasks", "unacked", "search", "prev", "next")
@@ -103,10 +105,11 @@ def test_full_card_preserves_every_ordinary_action_in_one_select():
     _, blocks = render(spec)
     actions = [b for b in blocks if b["type"] == "actions"]
     assert len(actions) == 1
-    kinds = [e["type"] for e in actions[0]["elements"]]
-    assert kinds == ["static_select"]
-    assert [o["value"] for o in actions[0]["elements"][0]["options"]] == [
-        b["token"] for b in buttons]
+    *quick, menu = actions[0]["elements"]
+    assert [(e["type"], e["value"]) for e in quick] == [
+        ("button", b["token"]) for b in buttons[:2]]
+    assert menu["type"] == "static_select"
+    assert [o["value"] for o in menu["options"]] == [b["token"] for b in buttons[2:]]
 
 
 def test_link_label_and_query_escape_slack_markup_without_changing_link():
