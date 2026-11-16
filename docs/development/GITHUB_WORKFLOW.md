@@ -39,9 +39,19 @@
 
 1. **issue を作る**: テンプレート（不具合・機能/改善）を選ぶと `要トリアージ` が付きます。患者名・投稿本文・秘密値は書きません。
 2. **振り分ける**: 版・領域・対応のラベルを付け、`要トリアージ` を外します。大きな計画は `roadmap` の issue の子 issue（sub-issue）にします。
-3. **PR を出す**: テンプレートの「概要・利用者への影響・更新時の操作・検証」を埋め、本文に `Closes #番号` を書きます。版のラベルを1つ付けます。領域と size は自動で付きます。
-4. **merge・リリース**: merge で issue が自動で閉じます。リリースは `release-mcs` skill と [RELEASE_NOTES.md](RELEASE_NOTES.md) の手順に従います。
+3. **PR を出す**: テンプレートの「概要・関連・取り込み先・利用者への影響・更新時の操作・検証」を埋めます。default branch 向けで issue 全体を解決する場合だけ本文に `Closes #番号`、補助PR・一部対応は `Related: #番号` を書きます。版のラベルを1つ付けます。領域と size は自動で付きます。
+4. **merge・リリース**: default branch 向けの解決キーワード付きPRをそこへmergeすると、対応するissueが自動で閉じます。別branch向けの補助PRではキーワードが無視され、自動で閉じません。リリースは `release-mcs` skill と [RELEASE_NOTES.md](RELEASE_NOTES.md) の手順に従います。
 5. **配備**: `要実機作業`・`要再起動` の付いた変更は、配備のあとに gateway・LINE WORKS アダプターの再起動まで済んだか確認します。
+
+## 補助PR・検証結果の管理
+
+- 上流PRのbranchをbaseにする補助PRは、上流番号、基準head、取り込み順を記載します。上流PRには `Related: #番号` を使い、誤って閉じるおそれのある `Closes/Fixes #PR番号` は使いません。
+- 上流が更新されたら差分・競合・検証対象を再確認します。旧headのCI成功を新headの成功として扱いません。
+- ローカル検証・GitHub CI・実機検証を分け、成功/失敗/未実行と対象headを残します。既存失敗は同じ条件でbaseと比較します。
+- Issueには実ログ・画面・添付や匿名化した実投稿を載せず、固定エラーコード・時刻・件数・技術状態と完全合成の再現例だけを記載します。
+- PR作成やCI成功はmerge・配備の承認ではありません。取り込み前に最新headと承認範囲を確認します。
+
+根拠: [GitHub公式: PRとissueの関連付け](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue)（2026-11-16確認）。
 
 ## ラベルの追加・変更
 
