@@ -388,7 +388,9 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         raise ValueError("payload_invalid")
     if ev["kind"] in notify_sender.SYSTEM_ALERT_KINDS:
         import alert_recovery
-        reason = alert_recovery.suppression_reason(ledger.db, ev)
+        # without a ledger (a preview) recovery cannot be proven: the alert is not suppressed
+        reason = (alert_recovery.suppression_reason(ledger.db, ev)
+                  if ledger is not None else None)
         if reason is not None:
             raise semantic_send_gate.StaleSend(reason)
         return _system_event_text(ev["kind"], payload), []
