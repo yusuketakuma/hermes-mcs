@@ -108,7 +108,7 @@ PR どうしの衝突を減らすため、`.github/workflows/main-sync.yml` が 
   手書き部分の変更は PR に含めてかまいません。`README.md` の `GENERATED:release` はこれまでどおり PR で作り直します。
 - **PR への main の取り込み（`update-prs`）**: main より遅れている、このリポジトリのブランチの PR へ、GitHub の Update branch で main を merge します。
   rebase や force-push はしません。GITHUB_TOKEN で作った commit では PR の CI が起動しないため、続けて CI を `workflow_dispatch` で起動し、
-  その完了で `agent-control.yml` が `merge-gate` を出します。自動マージの予約は取り込みの前に外し、新しい head の判定で付け直します。
+  その完了で `agent-control.yml` が `merge-gate` を出します。起動に失敗した head は、次の実行で（このジョブの merge commit に CI が無いことを確かめて）起動し直します。自動マージの予約は取り込みの前に外し、新しい head の判定で付け直します。
   衝突、または `.github/workflows/` の変更（GITHUB_TOKEN では書けません）で取り込めない PR には、手で取り込む手順を1件だけコメントし、以降はそのコメントを書き換えます。
   fork の PR は対象外です。
 

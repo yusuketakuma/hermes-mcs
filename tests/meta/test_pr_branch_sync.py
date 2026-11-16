@@ -27,8 +27,10 @@ def _pr(number=7, head_repo=REPO, auto_merge=None):
 class FakeGitHub:
     """Answers the calls Sync makes and records every write."""
 
-    def __init__(self, prs, behind=3, refuse=None, comments=(), head_after=NEW):
+    def __init__(self, prs, behind=3, refuse=None, comments=(), head_after=NEW,
+                 head_author="someone", ci_runs=1):
         self.prs, self.behind, self.refuse = prs, behind, refuse
+        self.head_author, self.ci_runs = head_author, ci_runs
         self.comments = [dict(c) for c in comments]
         self.head_after = head_after
         self.writes = []
@@ -52,6 +54,10 @@ class FakeGitHub:
             pr = dict(self.prs[0])
             pr["head"] = dict(pr["head"], sha=self.head_after)
             return pr
+        if path.startswith(f"repos/{REPO}/commits/"):
+            return {"author": {"login": self.head_author}}
+        if "/runs?head_sha=" in path:
+            return {"total_count": self.ci_runs}
         if "/comments?" in path:
             return [self.comments]
         return {}
@@ -72,7 +78,7 @@ def test_behind_pr_is_merged_with_its_head_pinned_and_ci_dispatched():
 
 
 @pytest.mark.parametrize("pr, behind", [(_pr(head_repo="someone/fork"), 3), (_pr(), 0)])
-def test_fork_and_up_to_date_prs_are_left_alone(pr, behind):
+def test_fork_and_up_to_date_prs_are_left_alone(pr, behind):  # head by a person, CI ran
     fake = FakeGitHub([pr], behind=behind)
     assert _run(fake) == 0
     assert fake.writes == []
@@ -127,3 +133,15 @@ def test_one_failing_pr_does_not_stop_the_others():
     fake = Flaky([_pr(1), _pr(2)])
     assert _run(fake) == 1
     assert any(p == f"repos/{REPO}/pulls/2/update-branch" for _, p, _ in fake.writes)
+
+
+@pytest.mark.parametrize("author, runs, dispatched", [
+    ("github-actions[bot]", 0, True),    # our merge whose dispatch was lost
+    ("github-actions[bot]", 1, False),   # CI already ran on it
+    ("someone", 0, False),               # a person's push starts CI itself
+])
+def test_up_to_date_sync_merge_without_ci_is_dispatched_again(author, runs, dispatched):
+    fake = FakeGitHub([_pr()], behind=0, head_author=author, ci_runs=runs)
+    assert _run(fake) == 0
+    assert fake.writes == ([("POST", f"repos/{REPO}/actions/workflows/ci.yml/dispatches",
+                             ("-f", "ref=feature-7"))] if dispatched else [])

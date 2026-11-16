@@ -15,6 +15,8 @@ imports nothing from the application. Standard library only.
   required checks would never report on the new head. CI is started with
   workflow_dispatch on the head branch instead (GITHUB_TOKEN may do that);
   agent-control.yml then publishes merge-gate for that head as usual.
+  If that dispatch failed or the new head appeared too late, the next run
+  finds this job's merge commit without any CI run and dispatches again.
 - An auto-merge reservation is withdrawn first: it was decided for the old
   head, and agent-control.yml re-reserves after judging the new one.
 See docs/development/AUTOMATION.md.
@@ -31,6 +33,7 @@ from agent_control import same_repository  # ci/ is this script's import root
 
 MARKER = "<!-- main-sync:update-branch -->"
 CI_WORKFLOW = "ci.yml"
+SYNC_AUTHOR = "github-actions[bot]"  # author of an update-branch merge made with GITHUB_TOKEN
 HEAD_WAIT_SECONDS = 60
 HEAD_POLL_SECONDS = 3
 
@@ -100,12 +103,28 @@ class Sync:
                 return pr
         return None
 
+    def dispatch_ci(self, ref: str) -> None:
+        self.api("-X", "POST", f"repos/{self.repo}/actions/workflows/{CI_WORKFLOW}/dispatches",
+                 "-f", f"ref={ref}")
+
+    def missing_sync_ci(self, sha: str) -> bool:
+        """True when `sha` is this job's merge commit and CI never ran on it."""
+        author = (self.api(f"repos/{self.repo}/commits/{sha}").get("author") or {}).get("login")
+        if author != SYNC_AUTHOR:
+            return False  # a person's push starts CI by itself
+        runs = self.api(f"repos/{self.repo}/actions/workflows/{CI_WORKFLOW}/runs?head_sha={sha}&per_page=1")
+        return not runs.get("total_count")
+
     def sync_one(self, pr: dict, base_sha: str) -> str:
         number, head = pr["number"], pr["head"]
         if not same_repository(pr):
             return "skip: fork"
         behind = self.api(f"repos/{self.repo}/compare/{base_sha}...{head['sha']}")["behind_by"]
         if not behind:
+            if self.missing_sync_ci(head["sha"]):
+                # an earlier run merged but its dispatch failed or timed out
+                self.dispatch_ci(head["ref"])
+                return "up to date; CI re-dispatched for an unchecked sync merge"
             return "skip: up to date"
         if pr.get("auto_merge"):
             self.api("graphql", "-f",
@@ -120,8 +139,7 @@ class Sync:
         updated = self.wait_for_new_head(number, head["sha"])
         if updated is None:
             return "merged, but the new head did not appear in time; CI not started"
-        self.api("-X", "POST", f"repos/{self.repo}/actions/workflows/{CI_WORKFLOW}/dispatches",
-                 "-f", f"ref={updated['head']['ref']}")
+        self.dispatch_ci(updated["head"]["ref"])
         self.comment(number, success_body(self.base, base_sha), only_if_exists=True)
         return f"merged {base_sha[:7]} -> {updated['head']['sha'][:7]}, CI dispatched"
 
