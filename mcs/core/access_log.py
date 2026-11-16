@@ -196,8 +196,9 @@ def record(data_dir, *, via, actor, op, channel=None, kind=None, project_id=None
                     raise
             finally:
                 os.close(fd)
-            if name not in names:
-                os.fsync(dir_fd)
+            # Every time: a monthly file left by an earlier failed directory sync
+            # would otherwise be acknowledged without a durable directory entry.
+            os.fsync(dir_fd)
     except OSError as error:
         raise AccessLogError("access_log_unavailable") from error
     finally:
