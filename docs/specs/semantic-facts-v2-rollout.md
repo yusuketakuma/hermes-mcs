@@ -267,9 +267,81 @@ The Jev incremental-value experiment is a separate synthetic comparison; its rep
   which is `execution_generation` computed with the shipped default
   model. `execution_generation` itself still names the local model and
   re-queues reprocess-stamped jobs after a model change.
-- A job that wrote facts in this run does not reuse a summary or
-  candidate of the same fingerprint (`fresh_facts`), so a cloud summary
-  over redone local facts is redone with them.
+- Fact binding: a local model change can rewrite the facts of an
+  unchanged fingerprint, so everything derived from them is judged on
+  every attempt from durable state, never from what one pass remembers.
+  `semantic_store.claim_input_binding` (claims + projected facts) is
+  recorded on the summary audit, the pre-audit candidate and the
+  empty-repair candidate; `semantic_store.fact_input_binding` on the
+  source coverage evaluation. `semantic_store.built_over_current_facts`
+  compares the recorded binding with the current facts; a row without
+  one (written before bindings, an oversize stub, a PENDING
+  `summary_unavailable` audit or a fact-stage park receipt) counts only
+  while no current fact row was written after it.
+  - Summary: the job processor (`_summary_built_over_current`) judges
+    the current summary by the audit written with it
+    (`semantic_store.paired_audit`, found through `summary_artifact_id`),
+    so a later PENDING stub of a failed regeneration does not hide which
+    facts it had. A summary reused as is (PASS/NEEDS_REVIEW) must also
+    have been published with the current fact document: the latest S8
+    receipt (`semantic_publication.published_doc_hash`) carries the
+    document hash it was rendered and published with, the same document
+    the send gate's `semantic_facts_v4` chain requires. A found S8
+    receipt without a `doc_hash` (missing or null, e.g. written while
+    the target had no document) counts as another document; with no S8
+    receipt the summary counts only while no current fact row was written
+    after it. Any other summary is dropped and taken through the
+    candidate path below (a cloud summary over redone local facts
+    included), never re-verified as is or deferred. Identically redone
+    facts keep a summary that is still current for its producer with no
+    call; a summary whose producer is not current (a local or unproven
+    repaired summary after a local model change) is redone even then.
+    The send gate (`_claim_binding_current`, `_canonical_chain_current`)
+    stays the publication check, so a reused PASS no longer meets
+    `prior_pass_unverified` for a fact change.
+  - Cost when only the S8 check drops a summary (its facts' projection
+    unchanged, e.g. an S8 receipt without `doc_hash`), per target, at its
+    next same-fingerprint run (reprocess, pending resume or hint rebuild;
+    never at upgrade itself): with a usable candidate, one Jev
+    claim-audit request and no summarizer call; without one, one
+    summarizer call and one Jev claim-audit request. A paid cloud call is possible only in the second case and
+    only when the summary route is cloud. It is one-time: the result
+    commit writes an S8 receipt with the current `doc_hash` (an
+    identical result keeps the stored summary row).
+  - Candidate: a pre-audit candidate whose claims are bound to the
+    current projected facts is audited and rendered with the current
+    document (no summarizer call), also after a document change that
+    leaves the projection unchanged — except a candidate a repair was
+    reserved after (`_bound_candidate`): its audit rejected it, so the
+    summarizer runs once without a repair (the spent repair is not
+    repeated; a rejection again is NEEDS_REVIEW). An empty-repair
+    candidate is written after its reservation and stays usable. Any
+    other candidate is replaced.
+  - Empty repair: a reservation reserves nothing once a final
+    (PASS/NEEDS_REVIEW) result of its candidate was committed
+    (`empty_repair_consumed`: an audit after the candidate counting the
+    repair, paired by id and hash with a summary carrying the candidate's
+    claims), or when it was made before the current fact row and its
+    candidate is not bound to the current facts
+    (`empty_repair_over_earlier_facts`). The target then takes the
+    ordinary path: a bound candidate is audited again, otherwise it is
+    summarized again; the spent repair stays recorded on its marker (no
+    refund, no second repair; an empty result again is the usual
+    permanent hold). Remaining holds: an interrupted empty repair whose
+    recorded prior summary/audit pair no longer matches without a
+    committed result (`empty_repair_prior_unverified`), and a crash
+    between the candidate's `inflight` and `ready` writes
+    (`empty_repair_audit_not_ready`, a Jev audit may have been
+    dispatched); neither recovers automatically.
+  - Stage boundaries: facts → fact audit/projection (bound to the
+    document hash) → medication details (fact id and options) →
+    coverage (binding) → candidate (binding) → audit → repair
+    reservation (`repair_count`/marker) → result commit (summary, audit,
+    S8 and `semantic_facts_v4` in one transaction). An interruption at
+    any boundary leaves only rows these checks judge again on the next
+    attempt; `semantic_facts_v4` is republished in the result commit,
+    which a summary over another document now always reaches. Chunks are
+    bound to their producer.
 - Legacy `semantic_facts` rows now carry `provider_provenance`
   (`stage: facts_v1`); rows written before it are judged as local.
 

@@ -55,10 +55,6 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
     # facts: reuse a stored set for this fingerprint, else extract.
     fact_source = scfg.get("fact_source", "legacy")
     v2_doc = None
-    # Facts written in this run say nothing for a summary built on earlier
-    # ones (a local model change redoes local facts at the same fingerprint).
-    fresh = current_artifact(ledger.db, KIND_FACTS_V2 if fact_source == "canonical" else KIND_FACTS,
-                             mid, fp) is None
     if fact_source != "legacy":
         early, v2_doc, doc_build = _fact_v2_document(
             ledger, member, pid, mid, fp, policy, fact_source,
@@ -82,7 +78,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                                     llm_fn, deadline)
         if early is not None:
             return early
-    return {"outcome": None, "facts": facts, "v2_doc": v2_doc, "fresh_facts": fresh}
+    return {"outcome": None, "facts": facts, "v2_doc": v2_doc}
 
 
 def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,

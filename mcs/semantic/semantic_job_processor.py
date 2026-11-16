@@ -182,8 +182,54 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
     return target_verdicts, flag
 
 
+def _fact_kind(scfg) -> str:
+    return KIND_FACTS_V2 if scfg.get("fact_source", "legacy") == "canonical" else KIND_FACTS
+
+
+def _bound_candidate(db, scfg, pid, mid, fp, policy, revision, facts):
+    """The current candidate when it was written from the facts current now and
+    not rejected by its audit, else None.
+
+    A repair reserved after the candidate means its audit rejected it (the
+    repaired text is not a candidate); an empty-repair candidate is written
+    after its own reservation and stays usable."""
+    candidate = current_artifact(db, KIND_CANDIDATE, mid, fp, policy)
+    repair = semantic_store.current_row_id(db, KIND_REPAIR, mid, fp)
+    if candidate is None or (repair is not None and repair > semantic_store.current_row_id(
+            db, KIND_CANDIDATE, mid, fp, policy)) or not semantic_store.built_over_current_facts(
+            db, KIND_CANDIDATE, mid, fp, policy, candidate["meta"].get("claim_input_binding"),
+            _claim_input_binding(pid, mid, fp, policy, revision, candidate["content"], facts),
+            _fact_kind(scfg)):
+        return None
+    return candidate
+
+
+def _summary_built_over_current(db, scfg, pid, mid, fp, policy, revision, summary, facts, doc):
+    """Whether the current stored summary was built over the inputs current now.
+
+    Judged on every attempt from durable state. Its claims must be bound to
+    the current facts by the audit written with it (a later PENDING stub
+    cannot erase that record). A summary reused as is (PASS/NEEDS_REVIEW)
+    was also rendered and published with a fact document, which must be the
+    current one; any other summary is re-rendered from the current document
+    when it is re-audited."""
+    audit = semantic_store.paired_audit(db, mid, fp, policy)
+    if not semantic_store.built_over_current_facts(
+            db, KIND_SUMMARY, mid, fp, policy, audit["meta"].get("claim_input_binding") if audit else None,
+            _claim_input_binding(pid, mid, fp, policy, revision, summary["content"], facts),
+            _fact_kind(scfg)):
+        return False
+    if doc is None or summary["meta"].get("audit_status") not in ("PASS", "NEEDS_REVIEW"):
+        return True
+    found, published = v4.published_doc_hash(db, mid, fp, policy)
+    if found:
+        return published == semantic_facts.doc_hash(doc)
+    return not semantic_store.facts_rewritten_after(
+        db, _fact_kind(scfg), mid, fp, semantic_store.current_row_id(db, KIND_SUMMARY, mid, fp, policy))
+
+
 def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
-                    facts, verdicts, existing, deadline, *, diagnostics: dict, reuse_candidate=True):
+                    facts, verdicts, existing, deadline, *, diagnostics: dict):
     """Stored, candidate, or freshly generated summary for one target, with
     the one reserved format repair.
 
@@ -201,7 +247,7 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
         if existing["meta"].get("input_oversize"):
             summary["_input_oversize"] = True
     else:
-        candidate = current_artifact(ledger.db, KIND_CANDIDATE, mid, fp, policy) if reuse_candidate else None
+        candidate = _bound_candidate(ledger.db, scfg, pid, mid, fp, policy, revision, facts)
         if candidate and candidate["meta"].get("publication_mode") == scfg["summary_mode"]:
             summary = candidate["content"]
             producer = _summary_producer(candidate, fp, policy, revision, db=ledger.db, bundle=bundle)
@@ -408,7 +454,6 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     members = {m["message_id"]: m for m in bundle["members"]}
     fact_source = scfg.get("fact_source", "legacy")
     facts_by_target: dict[int, list] = {}
-    fresh_facts: set[int] = set()
     v2_docs_by_target: dict[int, dict] = {}
     coverage_by_target: dict[int, list] = {}
     detail_findings: dict[int, list] = {}
@@ -533,8 +578,6 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         if stage["v2_doc"] is not None:
             v2_docs_by_target[mid] = stage["v2_doc"]
         facts_by_target[mid] = facts
-        if stage.get("fresh_facts"):
-            fresh_facts.add(mid)
         from semantic_assessment import evaluate_medication_events
         event_details = evaluate_medication_events(
             ledger, bundle, mid, facts, jev_client, scfg, deadline - 5,
@@ -567,7 +610,12 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             update_loops(ledger, pid, bundle, {mid: facts}, None, scfg, deadline)
         if scfg["summary_mode"] != "off":
             previous = current_artifact(ledger.db, KIND_COVERAGE, mid, fp, policy)
-            coverage = previous["content"] if previous else None
+            # evaluated over the facts current now (a local model change can
+            # rewrite them at the same fingerprint), never over earlier ones
+            fact_binding = semantic_store.fact_input_binding(pid, mid, fp, policy, member["revision"], facts)
+            coverage = previous["content"] if previous and semantic_store.built_over_current_facts(
+                ledger.db, KIND_COVERAGE, mid, fp, policy, previous["meta"].get("fact_input_binding"),
+                fact_binding, _fact_kind(scfg)) else None
             if not coverage or not coverage.get("evaluated"):
                 from semantic_audit import evaluate_source_fact_coverage
                 if jev_skip is not None:
@@ -590,11 +638,13 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 guard("coverage_result")
                 # an identical unevaluated re-run is a durable wait, not new
                 # information — record the outcome once (FIX-SD1)
-                if previous is None or previous["content"] != coverage:
+                if (previous is None or previous["content"] != coverage
+                        or previous["meta"].get("fact_input_binding") != fact_binding):
                     ledger.artifact_add(
                         KIND_COVERAGE, json.dumps(coverage, ensure_ascii=False),
                         project_id=pid, message_id=mid, model=jev.JEV_MODEL,
                         meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy,
+                              "fact_input_binding": fact_binding,
                               "technical_status": "complete" if coverage["evaluated"] else "pending"})
             coverage_by_target[mid] = ([] if coverage.get("status") == "SKIPPED"
                                        else coverage["findings"])
@@ -634,9 +684,14 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         if existing and existing["meta"].get("publication_mode") != scfg["summary_mode"]:
             existing = None
             prev_audit = None
-        if mid in fresh_facts:
-            # A summary of earlier facts (a cloud one over redone local facts)
-            # is not reused; its spent repair stays recorded on prev_audit.
+        revision = members[mid]["revision"]
+        if existing is not None and not _summary_built_over_current(
+                ledger.db, scfg, pid, mid, fp, policy, revision, existing, facts,
+                v4.target_doc(ledger.db, mid, fp, v2_docs_by_target) if fact_source == "canonical" else None):
+            # A summary of earlier facts or of an earlier fact document (a
+            # cloud one over redone local facts) is regenerated, never
+            # re-verified, re-audited or deferred; its spent repair stays
+            # recorded on prev_audit.
             existing = None
         prev_status = (prev_audit["meta"].get("audit_status")
                        if prev_audit else None)
@@ -664,7 +719,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         empty_reason = {}
         recovered, empty_reserved = _empty_repair_candidate(
             ledger.db, pid, mid, fp, policy, members[mid]['revision'], scfg['summary_mode'], facts,
-            reason_out=empty_reason)
+            reason_out=empty_reason, fact_kind=_fact_kind(scfg))
         if empty_reserved and recovered is None:
             _why(diagnostics, _fixed_stop_reason(empty_reason.get('code'), 'empty_repair_unverified'))
             held_empty_targets.add(mid)
@@ -676,8 +731,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         else:
             summary, summary_reason, summary_error, sent_error, producer = _obtain_summary(
                 ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
-                facts, verdicts, existing, deadline, diagnostics=diagnostics,
-                reuse_candidate=mid not in fresh_facts)
+                facts, verdicts, existing, deadline, diagnostics=diagnostics)
         if sent_error is not None:
             if getattr(sent_error, "stage", None) in semantic_transport.MEMBER_HOLD_STAGES:
                 # member-bound hold (own paid unit/provenance): this target
@@ -720,7 +774,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                             else "done")
         # Preserve the pre-audit output for the fixed-bundle comparison (§24.1).
         # It is never eligible for publication or automatic adoption.
-        if existing is None and current_artifact(ledger.db, KIND_CANDIDATE, mid, fp, policy) is None:
+        if existing is None and _bound_candidate(ledger.db, scfg, pid, mid, fp, policy, revision, facts) is None:
             guard("candidate_snapshot")
             ledger.artifact_add(
                 KIND_CANDIDATE, json.dumps(summary, ensure_ascii=False),
@@ -729,6 +783,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                       "schema": SCHEMA_VERSION, "stage": "pre_audit",
                       "publication_mode": scfg["summary_mode"],
                       "target_revision": members[mid]["revision"],
+                      "claim_input_binding": _claim_input_binding(pid, mid, fp, policy, revision, summary, facts),
                       "provider_provenance": _summary_provenance(producer, fp, policy,
                                                                   members[mid]["revision"], summary)})
         # Reserve before dispatch: a crash cannot refund the repair (INV-10).

@@ -567,7 +567,7 @@ def test_long_output_then_hold_at_real_partial_guard_keeps_reservation(tmp_path,
         monkeypatch.setattr(semantic_job_processor, 'current_artifact', semantic_drain.current_artifact)
         monkeypatch.setattr(semantic_summary_stages, 'current_artifact', semantic_drain.current_artifact)
         def reject_after_hold(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
-                              facts, verdicts, existing, deadline, *, diagnostics, reuse_candidate=True):
+                              facts, verdicts, existing, deadline, *, diagnostics):
             assert mid == 2
             with ledger.db:
                 hold.hold_tx(ledger, 1, 1, [2], {'source': 'history_import', 'notification_free': True},

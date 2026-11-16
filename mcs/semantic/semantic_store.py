@@ -219,6 +219,69 @@ def local_redo_pending(db, message_id: int, fp: str, policy) -> bool:
         KIND_SUMMARY, found[0]["model"] if "model" in found[0].keys() else None, found[1])
 
 
+def claim_input_binding(project_id, message_id, fp, policy, revision, summary, facts) -> str:
+    """Bind a summary's exact claims to the facts it was written from or audited against."""
+    return payload_hash({"project_id": project_id, "message_id": message_id, "fingerprint": fp,
+                         "policy": policy, "revision": revision,
+                         "claims": summary.get("claims"), "facts": facts})
+
+
+def fact_input_binding(project_id, message_id, fp, policy, revision, facts) -> str:
+    """Bind a fact-level evaluation (source coverage) to the facts it evaluated."""
+    return payload_hash({"project_id": project_id, "message_id": message_id, "fingerprint": fp,
+                         "policy": policy, "revision": revision, "facts": facts})
+
+
+def current_row_id(db, kind: str, message_id: int, fp: str, policy=None):
+    """Id of the row ``current_artifact`` returns (the latest matching one), or None."""
+    found = _latest_matching(db, kind, message_id, fp, policy)
+    return found[0]["artifact_id"] if found is not None else None
+
+
+def facts_rewritten_after(db, fact_kind: str, message_id: int, fp: str, artifact_id) -> bool:
+    """Whether the current fact row of this input was written after row ``artifact_id``.
+
+    With no fact row there is no rewrite; a row id that cannot be read
+    (``None``) counts as rewritten once a fact row exists."""
+    facts = current_row_id(db, fact_kind, message_id, fp)
+    return facts is not None and (artifact_id is None or facts > artifact_id)
+
+
+def paired_audit(db, message_id: int, fp: str, policy):
+    """The audit written with the current summary of this input, or None.
+
+    It records which facts the summary was audited over; a later audit of
+    another summary or a PENDING stub without a summary does not replace it."""
+    summary_id = current_row_id(db, KIND_SUMMARY, message_id, fp, policy)
+    if summary_id is None:
+        return None
+    for r in db.execute(
+            "SELECT * FROM artifacts WHERE kind=? AND message_id=? AND artifact_id>? "
+            "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.summary_artifact_id')=? ELSE 0 END "
+            "ORDER BY artifact_id DESC", (KIND_AUDIT, message_id, summary_id, summary_id)):
+        meta = loads_dict(r["meta"])
+        if (meta is not None and is_current(meta) and not meta.get("invalidated")
+                and meta.get("fingerprint") == fp and meta.get("policy_fingerprint") == policy):
+            content = loads_dict(r["content"])
+            return None if content is None else {"content": content, "meta": meta}
+    return None
+
+
+def built_over_current_facts(db, kind: str, message_id: int, fp: str, policy, recorded,
+                             binding: str, fact_kind: str) -> bool:
+    """Whether the current ``kind`` row was derived from the facts that are current now.
+
+    A local model change can rewrite the facts of an unchanged input, so a
+    row derived from them is judged on every attempt from durable state:
+    the binding ``recorded`` for it decides. A row without one (written
+    before bindings were recorded, or an unaudited oversize stub) counts
+    only while no current fact row was written after it."""
+    if recorded is not None:
+        return recorded == binding
+    return not facts_rewritten_after(db, fact_kind, message_id, fp,
+                                     current_row_id(db, kind, message_id, fp, policy))
+
+
 def refresh_cards_allowed(db, project_id, message_id):
     """Replay-only extraction does not adopt old external card deliveries."""
     if db is None or getattr(db, 'in_transaction', True):
