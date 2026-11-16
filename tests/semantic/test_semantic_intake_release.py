@@ -288,7 +288,18 @@ def test_live_and_quiet_holds_preserve_per_target_rights(store, live_first):
     assert not hold.notification_allowed(store, payload, 1, 3)
 
 
-@pytest.mark.parametrize('problem', ['shadow', 'trigger', 'event_missing', 'event_in_flight', 'source_changed'])
+def test_installed_accounting_guard_triggers_do_not_block_release(store):
+    import ledger_schema
+    triggers = {name for name, ddl in ledger_schema._CLOUD_USAGE_DDL.items() if ddl.startswith('CREATE TRIGGER ')}
+    installed = {row[0] for row in store.db.execute("SELECT name FROM main.sqlite_schema WHERE type='trigger' "
+                                                     "AND tbl_name='artifacts'")}
+    assert triggers and triggers <= installed
+    assert ledger_schema.cloud_usage_guard_state(store.db) is not None
+    hold._release_schema(store.db)
+
+
+@pytest.mark.parametrize('problem', ['shadow', 'trigger', 'accounting_trigger_changed', 'event_missing',
+                                     'event_in_flight', 'source_changed'])
 def test_unverified_dependencies_refuse_prepare(store, problem):
     event = store.db.execute("SELECT MAX(event_id) FROM notify_outbox WHERE kind='new_messages'").fetchone()[0]
     _hold(store, event_id=event)
@@ -297,6 +308,11 @@ def test_unverified_dependencies_refuse_prepare(store, problem):
             store.db.execute('CREATE TEMP TABLE messages(message_id INTEGER)')
         elif problem == 'trigger':
             store.db.execute("CREATE TRIGGER synthetic_modify AFTER UPDATE ON fetch_jobs BEGIN SELECT 1; END")
+        elif problem == 'accounting_trigger_changed':
+            # Same name as an allowed accounting guard, different body: the exact-DDL check must refuse it.
+            store.db.execute('DROP TRIGGER cloud_usage_guard_delete')
+            store.db.execute("CREATE TRIGGER cloud_usage_guard_delete AFTER DELETE ON artifacts "
+                             "BEGIN DELETE FROM fetch_jobs WHERE kind='semantic'; END")
         elif problem == 'event_missing':
             store.db.execute('DELETE FROM notify_outbox WHERE event_id=?', (event,))
         elif problem == 'event_in_flight':

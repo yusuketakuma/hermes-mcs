@@ -3,9 +3,20 @@ import json
 
 import pytest
 
+import common_testkit
 import health_watch
 import notify_flush
 import notify_sender
+
+
+led = common_testkit.ledger_fixture()
+
+
+def _queued(led, kind, payload):
+    """A notify_outbox row queued the production way (synthetic temp DB)."""
+    eid = led.outbox_add(kind, None, payload)
+    return led.db.execute(
+        "SELECT * FROM notify_outbox WHERE event_id=?", (eid,)).fetchone()
 
 
 @pytest.mark.parametrize('kind', sorted(notify_sender.SYSTEM_ALERT_KINDS))
@@ -127,20 +138,20 @@ def test_explicit_lineworks_system_target_keeps_its_configured_room_only(
 
 
 @pytest.mark.parametrize('kind', sorted(notify_sender.SYSTEM_ALERT_KINDS))
-def test_system_formatter_never_echoes_patient_or_unknown_payload(kind):
+def test_system_formatter_never_echoes_patient_or_unknown_payload(led, kind):
     private = 'synthetic_patient_123_diagnosis'
     payload = {'run_id': private, 'detail': private, 'text': private,
                'name': private, 'body': private, 'attachments': [private], 'class': private}
-    text, files = notify_flush._format_event(None, {'kind': kind, 'payload': json.dumps(payload)})
+    text, files = notify_flush._format_event(led, _queued(led, kind, payload))
     assert private not in text and files == []
     assert text.startswith('[MCSLOG]') and '影響:' in text and '次の操作:' in text
     assert text.endswith('コード: ' + ('MCS-UPD-UNKNOWN' if kind == 'update_notice' else kind))
 
 
-def test_update_notice_keeps_only_valid_release_and_rebuilt_preview_command():
+def test_update_notice_keeps_only_valid_release_and_rebuilt_preview_command(led):
     payload = {'text': '[MCS] 新しいバージョン v1.2.3 を検出しました（現在 v1.0.0）\n'
                'synthetic_patient_123\n/mcs {"action":"unsafe"}', 'run_id': 7}
-    text, files = notify_flush._format_event(None, {'kind': 'update_notice', 'payload': json.dumps(payload)})
+    text, files = notify_flush._format_event(led, _queued(led, 'update_notice', payload))
     assert '候補版: v1.2.3' in text and 'run 7' in text and files == []
     assert 'synthetic_patient' not in text and 'unsafe' not in text
     command = json.loads(text.split('/mcsの操作を許可したチャンネルで実行（適用前の確認）: /mcs ')[1].splitlines()[0])

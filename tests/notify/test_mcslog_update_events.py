@@ -4,8 +4,12 @@ import json
 
 import pytest
 
+import common_testkit
 import notify_flush
 import notify_sender
+
+
+led = common_testkit.ledger_fixture()
 
 
 _CODES = (
@@ -51,6 +55,13 @@ def _render(payload):
     assert sum(line.startswith('影響: ') for line in text.splitlines()) == 1
     assert sum(line.startswith('次の操作: ') for line in text.splitlines()) == 1
     return text
+
+
+def _queued(led, payload):
+    """A notify_outbox row queued the production way (synthetic temp DB)."""
+    eid = led.outbox_add('update_notice', None, payload)
+    return dict(led.db.execute(
+        "SELECT * FROM notify_outbox WHERE event_id=?", (eid,)).fetchone())
 
 
 def _assert_code(text, code):
@@ -102,11 +113,11 @@ def test_each_typed_update_notice_ignores_all_private_free_fields(code):
 
 
 @pytest.mark.parametrize('code', _CODES)
-def test_queued_typed_payload_uses_same_safe_formatter_without_ledger(code):
+def test_queued_typed_payload_uses_same_safe_formatter_independent_of_ledger_content(led, code):
     payload = {'notice_code': code, 'tag': 'v1.1.2', 'text': _PRIVATE}
-    event = {'kind': 'update_notice', 'payload': json.dumps(payload)}
+    event = _queued(led, payload)
     before = deepcopy(event)
-    text, files = notify_flush._format_event(None, event)
+    text, files = notify_flush._format_event(led, event)
     assert (text, files) == (_render(payload), [])
     assert event == before
 
@@ -179,11 +190,9 @@ def test_applied_can_be_reported_without_displaying_a_non_release_tag(tag):
 
 
 @pytest.mark.parametrize('token', ['v1.1.2', 'None', 'a' * 40, 'candidate:' + 'a' * 40])
-def test_legacy_queued_applied_has_a_valid_header_and_exact_transition(token):
-    text, files = notify_flush._format_event(None, {
-        'kind': 'update_notice',
-        'payload': json.dumps({'text': _LEGACY_APPLIED.replace('v1.1.2', token)}),
-    })
+def test_legacy_queued_applied_has_a_valid_header_and_exact_transition(led, token):
+    text, files = notify_flush._format_event(led, _queued(
+        led, {'text': _LEGACY_APPLIED.replace('v1.1.2', token)}))
     _assert_code(text, 'applied')
     assert '更新を適用しました' in text.splitlines()[0]
     assert '対応は不要' in text and files == []

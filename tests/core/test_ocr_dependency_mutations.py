@@ -71,7 +71,7 @@ def test_ocr_replacement_keeps_old_dependency_and_rolls_back_atomically(tmp_path
         replacement = {k: v for k, v in previous.items() if k not in ('artifact_id', 'project_id', 'message_id')}
         replacement.update(state='failed', pages=[])
         # Existing valid completions are normally not due; exercise the replacement boundary itself.
-        monkeypatch.setattr(ocr, '_due', lambda *args: True)
+        monkeypatch.setattr(ocr, '_due', lambda *args, **kwargs: True)
         monkeypatch.setattr(ocr.writer_lock, 'updater_state', lambda: (False, 1))
         settings = {'enabled': True, 'executable': '/synthetic/yomitoku', 'timeout_seconds': 120}
         monkeypatch.setattr(ocr, 'load_config', lambda: {'attachment_ocr': dict(settings)})

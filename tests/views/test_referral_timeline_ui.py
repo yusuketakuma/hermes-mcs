@@ -8,6 +8,15 @@ import mcs_view
 import notify_views
 import patient_context_view as views
 import referral_document
+from ledger import Ledger
+
+
+@pytest.fixture
+def db(tmp_path):
+    # Empty synthetic ledger: the views open their consistency SAVEPOINT on a real connection.
+    ledger = Ledger(str(tmp_path / 'synthetic.db'))
+    yield ledger.db
+    ledger.db.close()
 
 
 def _date(value, precision='day', role='event'):
@@ -78,7 +87,7 @@ def test_real_parser_keeps_correction_in_the_dated_timeline_record():
     assert 'これは誤記で、病名Aは否定された。' in events[0]['text']
 
 
-def test_ui_and_cli_share_projection_and_preserve_source_and_literal_text(monkeypatch, projection):
+def test_ui_and_cli_share_projection_and_preserve_source_and_literal_text(monkeypatch, projection, db):
     ev = {'items': [], 'coverage': {}}
     calls = []
 
@@ -92,12 +101,13 @@ def test_ui_and_cli_share_projection_and_preserve_source_and_literal_text(monkey
     monkeypatch.setattr(notify_views, '_coverage_line', lambda *args: '')
     monkeypatch.setattr(notify_views, 'patient_label', lambda *args: '合成患者')
     cli = mcs_view.View.__new__(mcs_view.View)
-    cli.db, cli.meta = None, {'generated_at': 1}
+    cli.db, cli.meta = db, {'generated_at': 1}
     result = cli._patient_context(1, 'timeline', None, '', '')
-    ui = notify_views.patient_context_list(None, 1, 'timeline', cfg={'synthetic': True}, since=0, now=1)
+    ui = notify_views.patient_context_list(db, 1, 'timeline', cfg={'synthetic': True}, since=0, now=1)
     assert len(calls) == 2
     assert calls[0] == calls[1]
-    assert result == views.timeline(ev, documents=projection, pumps={"events": [], "coverage": {}})
+    care = views.care_events(db, 1, cfg={'synthetic': True})
+    assert result == views.timeline(ev, documents=projection, pumps={"events": [], "coverage": {}}, care=care)
     dated = [row for row in ui['items'] if row['group'] == '紹介状の記載（日付順）']
     unknown = [row for row in ui['items'] if row['group'] == '紹介状の記載（時点不明）']
     fields = [row for row in ui['items'] if row['group'] == '紹介状の基本情報']
@@ -115,13 +125,13 @@ def test_ui_and_cli_share_projection_and_preserve_source_and_literal_text(monkey
 
 @pytest.mark.parametrize(('state', 'expected'), [('disabled', 'OCR無効・内容未点検'),
                                                ('unknown', '解析状況不明')])
-def test_unavailable_document_coverage_is_visible(monkeypatch, state, expected):
+def test_unavailable_document_coverage_is_visible(monkeypatch, db, state, expected):
     payload = {'documents': [], 'events': [], 'coverage': {'state': state}}
     monkeypatch.setattr(views, 'document_timelines', lambda *a, **k: (payload, {'events': [], 'coverage': {}}))
     monkeypatch.setattr(views, 'evidence', lambda *a, **k: {'items': [], 'coverage': {}})
     monkeypatch.setattr(notify_views, '_coverage_line', lambda *a: '')
     monkeypatch.setattr(notify_views, 'patient_label', lambda *a: '合成患者')
-    ui = notify_views.patient_context_list(None, 1, 'timeline', cfg={}, since=0, now=1)
+    ui = notify_views.patient_context_list(db, 1, 'timeline', cfg={}, since=0, now=1)
     assert f'紹介状: {expected}' in ui['notes']
 
 

@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "意味解析の保留を人承認で解除（release）できなくなっていた問題を修正",
+  "summary": "課金記録の点検用トリガーの追加後、意味解析の保留解除（prepare_release・release）が常に semantic_release_trigger_unverified で拒否されていました。このトリガーを定義どおりの形に限って許可し、保留解除が再び使えるようにしました。",
+  "upgrade": "追加操作は不要です。更新後に実行する intake-prepare・intake-release から反映されます。",
+  "details": [
+    "許可するのは cloud_usage_guard_{replace,insert,update,delete} の4件で、台帳が導入する定義と完全に一致する場合だけです。名前が同じでも内容が異なるトリガーや、一時スキーマのトリガー・表がある場合は、従来どおり保留解除を拒否します。",
+    "そのほかの保留解除の確認条件は変えていません。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_intake_hold.py",
+    "tests/semantic/test_semantic_intake_release.py"
+  ]
+}

@@ -29,9 +29,20 @@ def _spec(part, *, update=False):
             "parts": {"post_source_id": 202, "manifest": [part]}}
 
 
+NEAR_BUDGET_WIRE = delivery.BODY_WIRE_MAX - 2
+
+
+def _near_budget_text(unit):
+    """Return text whose escaped UTF-8 wire size is exactly NEAR_BUDGET_WIRE."""
+    width = len(escape(unit, quote=False).encode("utf-8"))
+    count = NEAR_BUDGET_WIRE // width - 1
+    return unit * count + "a" * (NEAR_BUDGET_WIRE - count * width)
+
+
 @pytest.mark.parametrize("mode", ["create", "edit", "legacy"])
-@pytest.mark.parametrize("text", ["あ" * 1332 + "ab", "&" * 799 + "abc", "😀" * 999 + "ab"])
-def test_3998_byte_body_preserves_wire_text_for_post_and_updates(world, mode, text):
+@pytest.mark.parametrize("unit", ["あ", "&", "😀"])
+def test_near_budget_body_preserves_wire_text_for_post_and_updates(world, mode, unit):
+    text = _near_budget_text(unit)
     prior = "1790000000.000020"
     part = {"kind": "body_part", "name": "m:202#1"}
     spec = _spec(part, update=mode != "create")
@@ -51,7 +62,7 @@ def test_3998_byte_body_preserves_wire_text_for_post_and_updates(world, mode, te
     assert len(writes) == 1 and op == ("create" if mode == "create" else "update")
     assert "blocks" not in payload
     assert payload["text"] == escape(text, quote=False)
-    assert len(payload["text"].encode("utf-8")) == 3998
+    assert len(payload["text"].encode("utf-8")) == NEAR_BUDGET_WIRE
     assert json.loads(json.dumps(payload))["text"] == payload["text"]
 
 
@@ -69,12 +80,12 @@ def test_under_budget_failure_is_never_split_or_resent(world, failure):
 
     world.client.chat_postMessage = rejected
     part = {"kind": "body_part", "name": "m:202#1"}
-    out = asyncio.run(world.worker._body_part(_spec(part), "あ" * 1332 + "ab",
+    out = asyncio.run(world.worker._body_part(_spec(part), _near_budget_text("あ"),
         {"thread_id": ROOT_TS, "history": None, "consumed": set()}, part))
     assert out == {"result": "not_sent" if failure == "msg_too_long" else "unknown",
                    "error_code": "msg_too_long" if failure == "msg_too_long" else "timeouterror"}
     assert len(attempts) == 1
-    assert len(attempts[0]["text"].encode("utf-8")) == 3998
+    assert len(attempts[0]["text"].encode("utf-8")) == NEAR_BUDGET_WIRE
 
 
 def _file_part(size=10):

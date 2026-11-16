@@ -15,7 +15,7 @@ import pytest
 
 import mcs_repair as repair
 from extract import RULE_VERSION
-from ledger_schema import REQUEST_SCHEMA as SCHEMA
+from ledger_schema import ARTIFACTS_LOOKUP_INDEX_SQL, REQUEST_SCHEMA as SCHEMA
 from rollup import PERIOD_CHECK_VERSION
 from test_ledger_audit import _database
 import drug_map
@@ -43,6 +43,7 @@ def world(tmp_path):
     snapshot = _database(tmp_path)
     with closing(sqlite3.connect(snapshot)) as db:
         db.executescript(SCHEMA)
+        db.executescript(ARTIFACTS_LOOKUP_INDEX_SQL)
         db.executescript("""
           ALTER TABLE patients ADD COLUMN history_floor INTEGER;
           ALTER TABLE patients ADD COLUMN coverage_ts INTEGER;

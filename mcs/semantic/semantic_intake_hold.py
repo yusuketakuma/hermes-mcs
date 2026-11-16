@@ -670,8 +670,8 @@ def hold_tx(ledger, project_id, root, message_ids, origin, *, eligible_ids=None,
 
 
 def _release_schema(db):
-    """Reject shadow tables and write triggers other than the exact relation guards."""
-    from ledger_schema import _GUARD_RELATIONS
+    """Reject shadow tables and write triggers other than the exact relation and accounting guards."""
+    from ledger_schema import _CLOUD_USAGE_DDL, _GUARD_RELATIONS
     if db.execute("SELECT 1 FROM temp.sqlite_schema WHERE type IN ('table','view') "
                   "AND lower(name) IN ('fetch_jobs','artifacts','notify_outbox','messages',"
                   "'attachments','message_revisions','patients') LIMIT 1").fetchone():
@@ -686,6 +686,9 @@ def _release_schema(db):
           UPDATE ledger_relation_guards SET shadow_count=shadow_count+1
           WHERE relation='artifacts' AND mode='shadow'; END"""
         allowed[name] = ' '.join(ddl.split())
+    # The accounting guard only counts changes in its own table; its exact DDL is allowed as installed.
+    allowed.update((name, ' '.join(ddl.split())) for name, ddl in _CLOUD_USAGE_DDL.items()
+                   if ddl.startswith('CREATE TRIGGER '))
     for schema in ('main', 'temp'):
         for row in db.execute(f"SELECT name,sql FROM {schema}.sqlite_schema WHERE type='trigger' "
                               "AND lower(tbl_name) IN ('fetch_jobs','artifacts','notify_outbox')"):

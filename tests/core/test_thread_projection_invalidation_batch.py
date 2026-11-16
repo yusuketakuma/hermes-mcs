@@ -68,16 +68,41 @@ def _invalidated(store, ids):
             for aid in ids]
 
 
+class _InvalidationCountingDB:
+    """Count executed invalidation UPDATEs per call, not per trace report.
+
+    sqlite3's trace callback re-reports the outer statement every time a row
+    trigger on ``artifacts`` runs, so it cannot count statement executions.
+    """
+    PREFIX = "UPDATE ARTIFACTS SET META=JSON_SET(META,'$.INVALIDATED'"
+
+    def __init__(self, db):
+        self._db = db
+        self.count = 0
+
+    def execute(self, sql, *args, **kwargs):
+        self.count += " ".join(sql.upper().split()).startswith(self.PREFIX)
+        return self._db.execute(sql, *args, **kwargs)
+
+    def __enter__(self):
+        return self._db.__enter__()
+
+    def __exit__(self, *exc):
+        return self._db.__exit__(*exc)
+
+    def __getattr__(self, name):
+        return getattr(self._db, name)
+
+
 def _save_invalidation_count(store, path, messages, semantic):
-    statements = []
-    store.db.set_trace_callback(statements.append)
+    db = store.db
+    counter = store.db = _InvalidationCountingDB(db)
     try:
         assert _save(store, path, messages, semantic) == []
     finally:
-        store.db.set_trace_callback(None)
+        store.db = db
     # Count the complete save, including semantic seeding after changed IDs.
-    prefix = "UPDATE ARTIFACTS SET META=JSON_SET(META,'$.INVALIDATED'"
-    return sum(" ".join(sql.upper().split()).startswith(prefix) for sql in statements)
+    return counter.count
 
 
 def _saved_state(store):

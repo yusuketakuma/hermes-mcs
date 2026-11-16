@@ -173,7 +173,7 @@ def test_derive_reports_source_changed_without_disclosing_patient_id(tmp_path, m
         monkeypatch.setattr(rollup, 'scan_dirty_projects', lambda ledger, **kw: rollup.RollupScan((17, 18, 19), (), False))
 
         def rebuild(_ledger, pids, *, deadline, source_changed, source_unknown,
-                    source_unknown_reasons, cfg):
+                    source_unknown_reasons, cfg, timings=None):
             assert set(pids) == {17, 18, 19}
             source_changed.append(17)
             source_unknown.append(18)

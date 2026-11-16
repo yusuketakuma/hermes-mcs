@@ -13,6 +13,7 @@ import sqlite3
 
 import pytest
 
+import anthropic_client
 import cloud_policy
 import cloud_inference
 import cloud_client
@@ -676,8 +677,9 @@ def _sealed_context(store, source, facts, *, original_facts=(), repair_input_key
     source_key = source.get('source_key', mid)
     binding = loss.source_binding(store.db, pid, mid,
         **({'source_key': source_key} if type(source_key) is str else {}))
+    model, effort = anthropic_client.ORIGINAL_CONTRACT
     provider = cloud_inference.cloud_provider_contract(selection={
-        'provider': 'anthropic', 'model': cloud_policy.MODEL, 'effort': 'low'})
+        'provider': 'anthropic', 'model': model, 'effort': effort})
     contract = {'model': 'synthetic-local', 'provider': provider}
     origin = {VERSION_KEY: CURRENT_VERSION, 'repair_input_key': repair_input_key or 'd' * 64, 'source_key': source_key,
         'source_sig': source_sig or 'a' * 64, 'source_binding': binding, 'contract': contract,
@@ -1181,8 +1183,9 @@ def test_cloud_candidate_capture_requires_genuine_source_qa_evidence(store, kind
                   'policy':semantic_policy.policy_fingerprint(policy)}
     descriptor = {'v':1, 'assessment':assessment, 'policy': {key:policy.get(key) for key in
         ('model','match_threshold','nomatch_threshold','calibration_version','fact_source','candidate_fingerprint')}}
+    model, effort = anthropic_client.ORIGINAL_CONTRACT
     contract = {'model':'synthetic-local', 'provider':cloud_inference.cloud_provider_contract(selection={
-        'provider':'anthropic', 'model':cloud_policy.MODEL, 'effort':'low'})}
+        'provider':'anthropic', 'model':model, 'effort':effort})}
     initial, _ = semantic_audit.patient_source_quality_identity(source, facts, occurrence, contract, '0' * 64, assessment)
     fixture = _sealed_context(store, source, facts, repair_input_key=initial['source_input_key'],
                               source_sig=plan.source_signature(source, legacy=True))

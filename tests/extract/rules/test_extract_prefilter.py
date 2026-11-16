@@ -216,7 +216,7 @@ def test_prefilter_still_settles_when_circuit_open(tmp_path, monkeypatch):
     db.save_messages([_message(mid=1, body="こんにちは。"),
                       _message(mid=2, body="体温38度です")])
     llm_availability.circuit_state_path(db.db).write_text(
-        json.dumps({"open_until": time.time() + 3600}))
+        json.dumps({"open_until": time.time() + llm_availability._CIRCUIT_MAX_S / 2}))
     calls = []
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: calls.append(body))

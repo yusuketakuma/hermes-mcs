@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+import ledger_schema
 import patient_context_artifacts as artifacts
 from test_inference_dependency_loss import (
     _context_receipt, _reseal_context, _sealed_context, row, save, store,
@@ -40,10 +41,27 @@ def test_candidate_checks_multiple_units_with_one_global_receipt_scan(store):
     finally:
         store.db.set_trace_callback(None)
     assert len(selected) == 2 and store.db.total_changes == before
-    assert sum('FROM artifacts WHERE kind IN' in sql and 'json_tree(meta)' in sql for sql in statements) == 1
+    # Vouched receipts are read through the reservation index: one lookup per receipt kind, not per unit.
+    assert _indexed_lookups(statements) == len(ledger_schema.CLOUD_USAGE_KINDS)
+    assert _global_receipt_scans(statements) == 0
     foreign = store.artifact_add('cloud_usage_disposition', '{}', project_id=2)
     with store.db:
         store.db.execute("UPDATE artifacts SET meta='{broken' WHERE artifact_id=?", (foreign,))
-    with pytest.raises(ValueError):
-        artifacts.candidate_rows(store.db, 1, 1, fixture['ref'],
-                                 source_binding=fixture['origin']['source_binding'])
+    statements.clear()
+    store.db.set_trace_callback(statements.append)
+    try:
+        with pytest.raises(ValueError):
+            artifacts.candidate_rows(store.db, 1, 1, fixture['ref'],
+                                     source_binding=fixture['origin']['source_binding'])
+    finally:
+        store.db.set_trace_callback(None)
+    # A row the guard no longer vouches for falls back to one global scan for both units.
+    assert _indexed_lookups(statements) == 0 and _global_receipt_scans(statements) == 1
+
+
+def _indexed_lookups(statements):
+    return sum(f'INDEXED BY {ledger_schema.CLOUD_USAGE_INDEX}' in sql for sql in statements)
+
+
+def _global_receipt_scans(statements):
+    return sum('FROM artifacts WHERE kind IN' in sql and 'json_tree(meta)' in sql for sql in statements)

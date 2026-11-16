@@ -135,7 +135,9 @@ def test_runtime_refuses_an_unverified_helper_before_start(tmp_path, monkeypatch
 def test_cloud_pool_exec_preserves_parent_and_worker_arguments(tmp_path, monkeypatch):
     import extract_llm
     (tmp_path / "data").mkdir()
-    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 1}}
+    # Resolved settings always carry routes; use the normalized default set.
+    cfg = {"cloud_llm": {"mode": "on", "routes": list(extract_llm.cloud_policy.ROUTES),
+                         "project_ids": [1], "max_concurrency": 1}}
     monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda cfg: cfg["cloud_llm"])
     monkeypatch.setattr(extract_llm.cloud_policy, "selected_key", lambda *a, **k: "synthetic")
     monkeypatch.setattr(cloud_backlog, "memory_workers", lambda limit: 1)

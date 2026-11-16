@@ -31,6 +31,7 @@ import extract_llm as worker
 import ledger as ledger_module
 import notify_spool
 import semantic_runtime
+from anthropic_context_testkit import priced_wall
 from test_anthropic_context_refresh import cloud as cloud, _SOURCE_REPAIR_PROVIDER
 from test_patient_context_refresh import CFG, document, runtime as runtime, seed, step
 
@@ -71,6 +72,8 @@ def _completed(runtime, cloud, monkeypatch, lane):
 
     monkeypatch.setattr(worker.cloud_backlog, "request_slot", slot)
     seed(led, body="見出しのない完全合成の居住記録。")
+
+    clock.wall = priced_wall(clock.wall)
 
     def sleep(seconds):
         clock.mono += seconds

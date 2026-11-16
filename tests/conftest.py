@@ -308,6 +308,22 @@ def _collecting_cards_unless_requested():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _private_health_file():
+    """health_report.HEALTH_FILE is bound at import to the session-wide temp
+    HOME, so a health.json published by one test would otherwise be read back
+    by later ones (e.g. as proof that a queued health_write_failed recovered).
+    Each test gets its own empty location; tests needing a specific path
+    still monkeypatch it."""
+    import health_report
+    directory = tempfile.mkdtemp(prefix="health-", dir=_TEST_HOME)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(health_report, "HEALTH_FILE",
+                      os.path.join(directory, "health.json"))
+        yield
+    shutil.rmtree(directory, ignore_errors=True)
+
+
 @pytest.fixture
 def legacy_chat_format():
     """Suites written before chat_format_version keep the legacy Discord/

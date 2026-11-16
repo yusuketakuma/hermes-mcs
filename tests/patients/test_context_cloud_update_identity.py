@@ -21,7 +21,7 @@ import semantic_jev
 import semantic_runtime
 import semantic_store
 import test_context_completed_carry as completed
-from anthropic_context_testkit import CFG, cloud, runtime, _REAL_SOURCE_FINANCIAL_GUARD
+from anthropic_context_testkit import CFG, cloud, price_window, runtime, _REAL_SOURCE_FINANCIAL_GUARD
 import patient_context_refresh_sources as context_sources
 from test_context_summary_sources import _ocr_local
 from test_patient_context_refresh import _raw_proof, _semantic_proof, document, seed, stamp, step
@@ -59,7 +59,7 @@ def real_cloud(runtime, cloud, monkeypatch):
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_args: nullcontext(True))
     monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
-    clock.wall = stamp('2026-10-26T12:00:00')
+    clock.wall = stamp(f'{price_window()[0]}T12:00:00')
     fake_time = SimpleNamespace(time=lambda: clock.wall, monotonic=lambda: clock.mono,
                                perf_counter=lambda: clock.mono,
                                sleep=lambda seconds: setattr(clock, 'mono', clock.mono + seconds))
