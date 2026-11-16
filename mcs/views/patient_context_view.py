@@ -504,6 +504,28 @@ def role_candidates(items) -> list:
 # Written by the patient-context reset when it erases every context result. The rebuild finds
 # again the facts in records that existed before it, so those are not new to any reader.
 RESET_MARK_KIND = "patient_context_reset_mark_v1"
+# One row per patient, written in the same reset: the facts its published context held, so the
+# rebuild hides only what it found again and still shows what it found for the first time.
+RESET_PRIOR_KIND = "patient_context_reset_prior_v1"
+
+
+def reset_fact_key(fact) -> str:
+    """Identity of one context fact across a rebuild: its record, revision and category.
+
+    The wording is rewritten by the rebuild, so it is not part of the identity."""
+    values = [fact.get(key) for key in ("source", "message_id", "content_hash", "category", "source_key")]
+    return hashlib.sha256(json.dumps(values, ensure_ascii=False).encode("utf-8")).hexdigest()[:32]
+
+
+def _reset_prior(db, project_id):
+    """The fact keys this patient's context held before the latest reset; None when unrecorded."""
+    row = db.execute("SELECT content FROM artifacts WHERE kind=? AND project_id=? "
+                     "ORDER BY artifact_id DESC LIMIT 1", (RESET_PRIOR_KIND, project_id)).fetchone()
+    try:
+        keys = json.loads(row[0]) if row else None
+    except (TypeError, ValueError):
+        return None
+    return set(keys) if isinstance(keys, list) and all(isinstance(k, str) for k in keys) else None
 
 
 def changes(db, ev, since_ts) -> dict:
@@ -512,7 +534,8 @@ def changes(db, ev, since_ts) -> dict:
     new_report = first seen and posted since; retrospective = first seen since but posted
     earlier; edited / deleted = a revision observed since (a deleted post returns its id and
     observation time only); backfill_found = a context fact found since in an older record, except
-    one the rebuild after a patient-context reset found again in a record seen before that reset."""
+    one the rebuild after a patient-context reset found again: a record seen before that reset whose
+    fact (record, revision, category) the erased context already held."""
     seen = {r[0]: (r[1], r[2]) for r in db.execute(
         "SELECT message_id, first_seen, posted_at_ts FROM messages WHERE project_id=?", (ev["project_id"],))}
     revised = {}
@@ -528,6 +551,12 @@ def changes(db, ev, since_ts) -> dict:
         revised[mid] = (state, at)
 
     reset_at = db.execute("SELECT MAX(created_at) FROM artifacts WHERE kind=?", (RESET_MARK_KIND,)).fetchone()[0]
+    prior = _reset_prior(db, ev["project_id"]) if reset_at is not None else None
+
+    def found_again(item, first):
+        # found in a record seen before the reset and already in the context it erased
+        return (reset_at is not None and isinstance(first, (int, float)) and first < reset_at
+                and (prior is None or reset_fact_key(item) in prior))
 
     def kind(item):
         # the reader's own observation decides first: a post first seen since is new (or
@@ -536,7 +565,7 @@ def changes(db, ev, since_ts) -> dict:
         if isinstance(first, (int, float)) and first >= since_ts:  # unseen before: new to the reader
             return "new_report" if isinstance(posted, (int, float)) and posted >= since_ts else "retrospective"
         if (item["discovery"] == "backfill_found" and (item.get("found_at") or -1) >= since_ts
-                and not (reset_at is not None and isinstance(first, (int, float)) and first < reset_at)):
+                and not found_again(item, first)):
             return "backfill_found"
         return "edited" if item["message_id"] in revised else None
 

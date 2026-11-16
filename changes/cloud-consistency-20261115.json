@@ -12,7 +12,7 @@
     "cloud_policy.configured_models・earliest_price_info を追加し、cloud-llm check・estimate の料金表の項目と resume の確認に使います。期限の最も早いモデル名は price_model に出します。",
     "cloud_observation.observe は引き継ぎ記録の未精算件数を数え、記録が壊れていれば carryover_invalid として partial を返します。",
     "maintenance._prune_cloud_usage は、全項目が保持期間より古い引き継ぎ記録を削除し、読めない記録は残します（送信は止まったままです）。",
-    "患者コンテキストの消去は patient_context_reset_mark_v1 に時刻を残し、patient_context_view.changes がそれを使います。",
+    "患者コンテキストの消去は patient_context_reset_mark_v1 に時刻を、patient_context_reset_prior_v1 に患者ごとの消去前の事実の識別値（本文は含めない）を残し、patient_context_view.changes がそれを使います。作り直しで初めて見つかった分類の事実は、消去前からある記録でも「過去記録から追加発見」に出ます。",
     "未使用になった mcs/semantic/eval/semantic_workflow.py と release_apply_owner の孤立したクラスを削除し、削除時に失われていた関係分類のテストを本体の関数に対して戻しました。"
   ],
   "refs": [

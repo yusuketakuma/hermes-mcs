@@ -154,6 +154,23 @@ def _spend(db, cfg):
     return _amounts(out)
 
 
+def _record_prior_facts(db, now):
+    """Keep, per patient, the keys of the facts its newest published context held (no text)."""
+    from patient_context_view import RESET_PRIOR_KIND, reset_fact_key
+    db.execute("DELETE FROM artifacts WHERE kind=?", (RESET_PRIOR_KIND,))
+    pids = [row[0] for row in db.execute(
+        "SELECT DISTINCT project_id FROM artifacts WHERE kind IN (?,?) AND project_id IS NOT NULL",
+        (state.KIND, state.LEGACY_KIND))]
+    for pid in pids:
+        doc, meta = state._latest(db, state.KIND, pid)
+        facts = doc.get("facts") if meta.get("published") is True else None
+        if not isinstance(facts, list):
+            continue
+        keys = sorted({reset_fact_key(fact) for fact in facts if isinstance(fact, dict)})
+        db.execute("INSERT INTO artifacts(kind,project_id,content,model,meta,created_at) VALUES(?,?,?,?,?,?)",
+                   (RESET_PRIOR_KIND, pid, json.dumps(keys), "", "{}", now))
+
+
 def _quality_usage(db):
     """Jev usage rows of patient-context quality checks as (artifact_id, created_at, meta)."""
     return [(row["artifact_id"], row["created_at"], json.loads(row["meta"])) for row in db.execute(
@@ -288,6 +305,7 @@ def apply_tx(db, req, now, *, cfg=None, backup_dir=None):
                 db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(carried), artifact_id))
             else:
                 db.execute("DELETE FROM artifacts WHERE artifact_id=?", (artifact_id,))
+        _record_prior_facts(db, now)
         db.execute(f"DELETE FROM artifacts WHERE kind IN ({_placeholders(ERASED_KINDS)})", ERASED_KINDS)
         db.execute("DELETE FROM fetch_jobs WHERE kind=?", (state.QUALITY_CLAIM,))
         from patient_context_view import RESET_MARK_KIND

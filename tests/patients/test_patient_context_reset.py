@@ -100,6 +100,21 @@ def test_reset_erases_results_and_accounting_but_keeps_spending(built, tmp_path)
     assert _usage(ledger) == before, "every limit keeps counting what was already spent"
 
 
+def test_reset_keeps_the_identity_of_each_patients_published_facts(built, tmp_path):
+    import patient_context_view as view
+    ledger, clock, cfg, _ = built
+    doc, _meta = state._latest(ledger.db, state.KIND, 1)
+    expected = sorted({view.reset_fact_key(fact) for fact in doc["facts"]})
+    assert expected
+    off = _disabled(cfg)
+    cloud_policy.stop(ledger)
+    found = reset.preview(ledger.db, cfg=off, now=clock.wall)
+    assert _apply(ledger, off, _request(found["preview_hash"]), clock.wall, tmp_path)[0] is None
+    rows = ledger.artifacts(view.RESET_PRIOR_KIND)
+    assert [(row["project_id"], json.loads(row["content"])) for row in rows] == [(1, expected)]
+    assert all(fact.get("text") not in row["content"] for row in rows for fact in doc["facts"] if fact.get("text"))
+
+
 def test_context_rebuilds_after_reset(built, tmp_path):
     ledger, clock, cfg, posts = built
     sent = len(posts)
