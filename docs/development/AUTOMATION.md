@@ -33,6 +33,23 @@ push・ブランチ・PR・ラベルの変更はしません。使うトーク�
 内容が固まったら、担当ラベルを付けて実装に進めます。Codex の呼び出しに `@codex` を使わないのは、Codex の GitHub 連携（レビュー）と衝突させないためです。
 相談のやり取りも公開されます。実データ・実ログは書きません。
 
+## 自動スキャン（コードを調べて Issue にする）
+
+`.github/workflows/agent-scan.yml` が、2時間おき（1日12回）と手動実行で動きます。Claude が読み取り専用でコードを調べ、
+見つけた点を Issue にします。直すところまではしません。
+
+- 1回に調べるのは3領域です。領域は `mcs/` の各サブパッケージと `adapters`・`hermes_plugin`・`lineworks_adapter`・`mcs_standalone` です。
+  最近1週間に変更の多かった領域を2つまで先に選び、残りは順番に回します。変更されたファイルと、その呼び出し元・呼び出し先を重点的に読みます。
+  手動実行では1領域を指定できます: `gh workflow run agent-scan.yml -f area=mcs/notify`
+- 起票は1回に最大3件です。Issue には `自動スキャン` と `要トリアージ` が付き、担当ラベルは付きません。
+  AI の実装は始まらないので、内容を確かめ、進めるものだけ会話で詰めてから担当を決めます。
+- 開いたままの `自動スキャン` Issue が20件に達している間は、調べずに終わります。手動で領域を指定したときは、20件に達していても調べて起票します。
+  確かめるか閉じるかして減らすと再開します。
+- 当たらない指摘は閉じます。閉じた指摘も記録として読むので、同じファイルの同じ指摘は再起票されません。題名を言い換えただけの指摘も同じとみなします。題名が同じでも似ていても、行が40行より離れていれば別の指摘として扱います。
+- 調べる job は Issue もファイルも書けません（道具は読み取りだけで、結果は構造化出力で返します）。起票する job は、`ci/agent_scan.py` が検査した結果
+  （実在するファイルを指す、長さの上限内、既存と重複しない、トークンに見える長い文字列を含まない）だけを受け取ります。
+- 指摘は AI がコードを読んだ推定です。確かめる前に事実として扱いません。
+
 ## マージ判定ゲート（`merge-gate`）
 
 `agent-control.yml` が CI 完了のたびに、PR の現在の head に `merge-gate` の commit status を出します。
@@ -79,6 +96,27 @@ AI ブランチ（`agent/`・`copilot/`・`codex/`）の CI が失敗すると�
 基盤・利用枠・原因不明と判断したときは、コードを変えずに PR へ一度だけコメントします。
 Copilot と Dots の PR は自動では再起動しません（Copilot は所有者が PR で `@copilot` と書きます）。
 同じブランチの書き手を1つに保つため、CodeRabbit などレビューツールの自動修正（Autofix）は使いません。
+
+## main の取り込みと生成表（`main-sync`）
+
+PR どうしの衝突を減らすため、`.github/workflows/main-sync.yml` が main への push のたびに2つの処理をします。
+
+- **生成表の更新（`dev-doc`）**: `docs/development/DEVELOPMENT.md` の生成表（`GENERATED:modules` など）は PR に含めません。
+  ほぼすべての PR がこの表を変えるため、含めると1本マージされるたびに残りの PR がすべて衝突するからです。
+  main に入ったあと、このジョブが `update_readme.py --dev-doc` で作り直して main に commit します。
+  PR 側の `hygiene` は、生成器が動くことと、PR が生成表を main（merge base）のまま残していることだけを確かめます。
+  手書き部分の変更は PR に含めてかまいません。`README.md` の `GENERATED:release` はこれまでどおり PR で作り直します。
+- **PR への main の取り込み（`update-prs`）**: main より遅れている、このリポジトリのブランチの PR へ、GitHub の Update branch で main を merge します。
+  rebase や force-push はしません。GITHUB_TOKEN で作った commit では PR の CI が起動しないため、続けて CI と、`release-notes.yml` の読み取りだけの PR 検査（`action=pr_check`、変更記録の検査を含む）を `workflow_dispatch` で起動し、
+  その完了で `agent-control.yml` が `merge-gate` を出します。起動に失敗した head は、次の実行で（このジョブの merge commit に CI が無いことを確かめて）起動し直します。自動マージの予約は取り込みの前に外し、新しい head の判定で付け直します。
+  衝突、または `.github/workflows/` の変更（GITHUB_TOKEN では書けません）で取り込めない PR には、手で取り込む手順を1件だけコメントし、以降はそのコメントを書き換えます。
+  fork の PR は対象外です。
+
+生成表の commit は、environment `main-docs` に置いた deploy key で push します。environment は main だけに使わせるので、
+PR が足したワークフローからは鍵を読めません。main-protect はこの deploy key だけを迂回させます。
+鍵が未設定の間、`dev-doc` は何もせず成功し、生成表は更新されません（`update-prs` は動きます）。
+
+止めるときは `gh workflow disable main-sync.yml --repo yusuketakuma/hermes-mcs` を実行します。
 
 ## 停止スイッチ
 
@@ -143,6 +181,28 @@ gh secret set OPENAI_API_KEY --repo $R
 - Claude GitHub App をこのリポジトリにインストールします（https://github.com/apps/claude）。
 - `merge-gate` を main-protect の必須チェックに足すのは、合成の試験 PR でゲートの不合格を確かめてからにします。
 - 自動マージを使うときは、Settings → General の Allow auto-merge をオンにします。
+
+`main-sync` の生成表 commit に使う deploy key は次の手順で設定します（鍵は手元で作り、秘密鍵は secret に入れたあと消します）。
+
+```bash
+R=yusuketakuma/hermes-mcs
+gh repo deploy-key list --repo $R   # 既存の書込み可能な deploy key があれば、下の迂回の対象になる
+ssh-keygen -t ed25519 -N "" -C "hermes-mcs main-sync" -f ./main-sync-key
+gh repo deploy-key add ./main-sync-key.pub --repo $R --allow-write --title "main-sync (DEVELOPMENT.md)"
+# environment main-docs: main からの実行だけが鍵を読める
+gh api -X PUT repos/$R/environments/main-docs --input - <<'JSON'
+{"deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
+JSON
+gh api -X POST repos/$R/environments/main-docs/deployment-branch-policies -f name=main -f type=branch
+gh secret set DEV_DOC_DEPLOY_KEY --env main-docs --repo $R < ./main-sync-key
+rm ./main-sync-key ./main-sync-key.pub
+# main-protect の迂回に deploy key を足す（既存の Repository admin はそのまま）
+id=$(gh api repos/$R/rulesets --jq '.[] | select(.name == "main-protect") | .id')
+gh api repos/$R/rulesets/$id |
+  jq '{name, target, enforcement, conditions, rules,
+       bypass_actors: (.bypass_actors + [{"actor_id": null, "actor_type": "DeployKey", "bypass_mode": "always"}])}' |
+  gh api -X PUT repos/$R/rulesets/$id --input -
+```
 
 ## データの扱い
 

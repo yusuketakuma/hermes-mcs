@@ -12,7 +12,7 @@ from mcs_requests import canonical, payload_hash, positive
 from mcs_util import loads_dict
 from notify_render import (
     ACTION_FIRST_LAYOUT,
-    anchor_keys, card_content, content_fingerprint,
+    anchor_keys, card_content, content_fingerprint, masked_name, preview_privacy,
     mmdd, project_display_name, own_post, presenter, reply_source)
 import notify_parts
 import notify_action_context as action_context
@@ -517,6 +517,7 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset(), *,
     set_provider_version(spec["parts"])
     if spec["parts"].get("provider_states_version") == 4:
         spec["parts"]["processing_display_version"] = (3 if any('context_progress' in c for c in containers) else 2)
+        spec["parts"]["processing_header_quiet"] = 1   # owner decision 2026-11-16
     if card["layout"] >= 3 and op != "revoke":
         spec["parts"]["section_divider_version"] = 1
     post_source_id = own_post(card)
@@ -539,7 +540,7 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset(), *,
     if thread_on:
         spec["parts"]["thread_name"] = (_digest_thread_name(now)
                                         if card["kind"] == "digest"
-                                        else _thread_name(db, card))
+                                        else _thread_name(db, card, cfg if isinstance(cfg, dict) else None))
     # the body travels inside the spec as individually journaled
     # durable parts — the card stays a summary surface while the
     # thread carries the untruncated shown-set text (T7). Where the
@@ -561,6 +562,7 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset(), *,
     set_provider_version(spec["parts"])
     if spec["parts"].get("provider_states_version") != 4:
         spec["parts"].pop("processing_display_version", None)
+        spec["parts"].pop("processing_header_quiet", None)
     if any(b["id"] == "meds" for row in spec["parts"]["action_rows"] for b in row):
         spec["parts"]["drug_view_navigation"] = True
     if present.THREAD_DRUG_ACTIONS and spec["parts"].get("thread_body_parts"):
@@ -873,9 +875,14 @@ def issue_render(db, card_id, cfg, now, specs, force=False, *, _preflight_candid
     return spec["delivery_id"]
 
 
-def _thread_name(db, card) -> str:
-    name = project_display_name(db, card["project_id"]) \
+def _thread_name(db, card, cfg=None) -> str:
+    """The thread title shown in channel lists, masked like the push
+    preview under notify.preview_privacy (initial: 山○ 花○, minimal: id)."""
+    privacy = preview_privacy(cfg)
+    name = (project_display_name(db, card["project_id"]) if privacy != "minimal" else "") \
         or f"project {card['project_id']}"
+    if privacy == "initial":
+        name = masked_name(name)
     d = None
     if card["root_message_id"]:
         r = db.execute("SELECT posted_at FROM messages WHERE message_id=?",

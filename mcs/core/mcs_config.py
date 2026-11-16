@@ -274,6 +274,9 @@ def validate_notify(ntf: dict) -> list[str]:
         errors.append("notify.card_thread: true（有効）かfalse（無効）を指定してください")
     if "reply_cards" in ntf and type(ntf["reply_cards"]) is not bool:
         errors.append("notify.reply_cards: true（有効）かfalse（無効）を指定してください")
+    if "preview_privacy" in ntf and ntf["preview_privacy"] not in ("full", "initial", "minimal"):
+        errors.append('notify.preview_privacy: "full"（氏名を表示・既定）、'
+                      '"initial"（氏名の1文字目だけ）、"minimal"（患者情報なし）から選んでください')
     for key in ("route_epoch", "card_thread_archive_min"):
         if key in ntf:
             err = _int_range(1, 10 ** 9)(ntf[key])

@@ -211,7 +211,7 @@ job_scope() {
 job_lint() {
     make lint
     python3 scripts/development/check_drug_master_bundle.py
-    # PR-only step regenerates and diffs; --check proves the same without writing
+    # the PR-only step also compares DEVELOPMENT.md's tables with the merge base
     python3 scripts/development/update_readme.py --check
 }
 job_pytest_linux() {

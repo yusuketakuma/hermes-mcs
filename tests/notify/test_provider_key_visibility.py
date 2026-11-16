@@ -14,6 +14,11 @@ from slack_testkit import SLACK
 from test_notify_slack import _command, _drain, _settle_parts
 
 
+# A local problem keeps the whole compact header on the card (owner decision
+# 2026-11-16), so the provider marks below stay observable.
+SHOWN = {**dict.fromkeys(processing_route.PROVIDERS, "done"), "local": "attention"}
+
+
 @pytest.mark.parametrize("cloud", [(), ("anthropic",), ("openai",), ("anthropic", "openai")])
 def test_registered_providers_flow_from_writer_to_slack(led, monkeypatch, cloud):
     requested = []
@@ -24,7 +29,7 @@ def test_registered_providers_flow_from_writer_to_slack(led, monkeypatch, cloud)
         return None if key_names[name] in cloud else "missing"
 
     monkeypatch.setattr(mcs_util, "private_env_problem", key_problem)
-    states = dict.fromkeys(processing_route.PROVIDERS, "done")
+    states = dict(SHOWN)
     monkeypatch.setattr(processing_route, "provider_states", lambda *a, **k: states.copy())
     _seed_thread(led, mids=(100,))
     _dispatch(led, _intent(led, payload={"message_ids": [100]}), SLACK)
@@ -72,7 +77,7 @@ def test_removed_key_hides_provider_despite_used_evidence(led, monkeypatch):
 def test_registered_cloud_logos_stay_hidden_when_cloud_mode_is_off(led, monkeypatch, provider):
     monkeypatch.setattr(mcs_util, "private_env_problem", lambda name, root=None: None)
     monkeypatch.setattr(processing_route, "provider_states",
-                        lambda *a, **k: dict.fromkeys(processing_route.PROVIDERS, "done"))
+                        lambda *a, **k: dict(SHOWN))
     cfg = {**SLACK, "cloud_llm": {"mode": "off", "provider": provider}}
     _seed_thread(led, mids=(100,))
     _dispatch(led, _intent(led, payload={"message_ids": [100]}), cfg)
@@ -85,7 +90,7 @@ def test_registered_cloud_logos_stay_hidden_when_cloud_mode_is_off(led, monkeypa
     assert "context_progress" in header
     assert "👤" in header["text"] and "☁" not in header["text"]
     assert "採用結果の処理順" not in header["text"]
-    assert header["provider_states"] == dict.fromkeys(processing_route.PROVIDERS, "done")
+    assert header["provider_states"] == SHOWN
     blocks = render_parts(spec["parts"], card_kind="thread")
     images = [element["alt_text"].split()[0] for block in blocks
               for element in block.get("elements", []) if element.get("type") == "image"]
@@ -100,7 +105,7 @@ def test_removing_registered_key_redraws_delivered_card_on_sweep(led, monkeypatc
     registered = {"anthropic", "openai"}
     monkeypatch.setattr(mcs_util, "private_env_problem",
                         lambda name, root=None: None if key_names[name] in registered else "key_missing")
-    states = dict.fromkeys(processing_route.PROVIDERS, "done")
+    states = dict(SHOWN)
     monkeypatch.setattr(processing_route, "provider_states", lambda *a, **k: states.copy())
     _seed_thread(led, mids=(100,))
     _dispatch(led, _intent(led, payload={"message_ids": [100]}), SLACK)

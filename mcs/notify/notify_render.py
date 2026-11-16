@@ -49,9 +49,23 @@ import structured_view
 from notify_scope import latest_signals, notify_cfg
 import clinical_urgency
 
-# Card layout 6 (notify_cards.CARD_LAYOUT): each post's summary leads with
-# 📌 依頼 and 薬剤, and the heading icon follows the card state.
+# Card layouts 6 and 7: each post's summary leads with 📌 依頼 and 薬剤,
+# and the heading icon follows the card state. Layouts 4-6 are reply-card
+# threads (a card per post); 1-3 and 7 cover their whole thread, so the
+# action-first features stay a linear ``layout >= ACTION_FIRST_LAYOUT``.
 ACTION_FIRST_LAYOUT = 6
+REPLY_LAYOUTS = frozenset({4, 5, 6})
+# Layout 7 is the face-card counterpart of 6 (LINE WORKS, Discord without
+# reply cards, signal and digest cards). On LINE WORKS a stamp-only change
+# no longer issues a new post there (owner decision 2026-11-16).
+QUIET_STAMP_LAYOUT = 7
+
+
+def reply_layout(layout) -> bool:
+    """Whether a card of ``layout`` is one post's reply card (or its root)."""
+    return (layout or 1) in REPLY_LAYOUTS
+
+
 # heading icon by card state on layout-6 thread cards (owner 2026-11-15):
 # 確認 is the ack record of the current content, not completed work
 STATE_ICONS = {"acked": "✅", "assigned": "👤", None: "💬"}
@@ -78,13 +92,42 @@ def _preview_post(text) -> str:
     return inline_text(raw, 220)
 
 
-def preview_header(db, pid, message) -> str:
-    """保存済み投稿だけから短い5項目表示のヘッダーを作り、欠測を明示する。"""
-    patient = patient_label(db, pid)
+# notify.preview_privacy: how much patient detail a push/lock-screen
+# preview, the Discord thread name and the LINE WORKS altText carry. The
+# card body never changes. Default full (owner decision 2026-11-16).
+PREVIEW_PRIVACY = ("full", "initial", "minimal")
+
+
+def preview_privacy(cfg=None) -> str:
+    """The configured preview level; ``cfg=None`` reads the saved config."""
+    if cfg is None:
+        from mcs_util import load_config
+        cfg = load_config()
+    value = notify_cfg(cfg).get("preview_privacy", "full")
+    return value if value in PREVIEW_PRIVACY else "full"
+
+
+def masked_name(label: str) -> str:
+    """Keep the first character of each name part: 山田 花子 -> 山○ 花○."""
+    if label.startswith("project "):
+        return label
+    return " ".join(part[0] + "○" * (len(part) - 1) for part in label.split())
+
+
+def preview_patient(db, pid, privacy="full") -> str:
+    label = patient_label(db, pid)
+    return masked_name(label) if privacy != "full" else label
+
+
+def preview_header(db, pid, message, privacy="full") -> str:
+    """保存済み投稿だけから短い5項目表示のヘッダーを作り、欠測を明示する。
+    ``initial`` masks the patient and leaves the sender's name out."""
+    patient = preview_patient(db, pid, privacy)
     sender = (inline_text(message["sender_name"], 24) if message else "") or "発信者未取得"
     organization = (inline_text(message["organization"], 24) if message else "") or "所属未取得"
     posted = message["posted_at"] if message else None
-    return f"{patient} / {sender}（{organization}） / {posted_time_label(posted)}"
+    source = organization if privacy != "full" else f"{sender}（{organization}）"
+    return f"{patient} / {source} / {posted_time_label(posted)}"
 
 
 def preview_line(header, summary, limit=600):
@@ -93,8 +136,11 @@ def preview_line(header, summary, limit=600):
     return f"{patient}: {summary} / {source}"
 
 
-def notification_preview(db, card, content, *, limit=600, _urgencies=None) -> str:
-    """表示対象の患者・発信者・所属・時刻・内容を通知プレビュー向けに短く示す。"""
+def notification_preview(db, card, content, *, limit=600, _urgencies=None, cfg=None) -> str:
+    """表示対象の患者・発信者・所属・時刻・内容を通知プレビュー向けに短く示す。
+    ``notify.preview_privacy`` minimal keeps only the urgency, MCS and
+    whether a request is present; initial masks the patient's name."""
+    privacy = preview_privacy(cfg)
     if card["kind"] == "thread":
         rows = []                                   # newest first
         for mid in reversed(content["shown"]):
@@ -107,7 +153,9 @@ def notification_preview(db, card, content, *, limit=600, _urgencies=None) -> st
             if message:
                 rows.append((mid, message))
         if not rows:
-            patient = patient_label(db, card["project_id"])
+            if privacy == "minimal":
+                return "MCS: 新しい投稿"
+            patient = preview_patient(db, card["project_id"], privacy)
             return f"{patient}: 投稿本文を確認できません。"
         urgencies = dict(_urgencies or {})  # this preview owns its bounded read cache
 
@@ -121,7 +169,12 @@ def notification_preview(db, card, content, *, limit=600, _urgencies=None) -> st
                              if row["body_state"] != "deleted"
                              and urgency_of(m) == "llm"),
                             rows[0])
-        header = preview_header(db, card["project_id"], message)
+        # Unavailable/unverified content must not fall back to an identifying
+        # header when the owner selected a minimal preview.
+        if privacy == "minimal" and (message["body_state"] != "full"
+                                     or not valid_hash(message["content_hash"])):
+            return "MCS: 新しい投稿"
+        header = preview_header(db, card["project_id"], message, privacy)
         if message["body_state"] == "deleted":
             return preview_line(header, "表示対象の投稿は削除済みです。", limit)
         if message["body_state"] != "full" or not valid_hash(message["content_hash"]):
@@ -149,8 +202,13 @@ def notification_preview(db, card, content, *, limit=600, _urgencies=None) -> st
             badge += structured_view.urgency_qc_suffix(db, mid)
         if badge:
             badge += " · "
+        if privacy == "minimal":
+            request = block and any(line.startswith("依頼:") for line in facts)
+            return badge + "MCS: 新しい投稿" + ("（依頼あり）" if request else "")
         return preview_line(header, badge + inline_text(main, 260), limit)
     signals = latest_signals(db, content["shown"], card["project_id"])
+    if privacy == "minimal":
+        return f"MCS: 確認候補 {len(signals)}件" if signals else "MCS: 確認候補"
     items = []
     for entry in signals.values():
         signal = entry["content"]
@@ -158,10 +216,10 @@ def notification_preview(db, card, content, *, limit=600, _urgencies=None) -> st
         summary = f"{signal_label(signal)}{inline_text(signal.get('note'), 120)}{signal_state_suffix(signal)}"
         if mid is None:
             # a register alert has no post by design: no sender/time to be 未取得
-            patient = patient_label(db, signal.get("project_id"))
+            patient = preview_patient(db, signal.get("project_id"), privacy)
             items.append(f"{patient}: {summary}")
             continue
-        header = preview_header(db, signal.get("project_id"), message)
+        header = preview_header(db, signal.get("project_id"), message, privacy)
         items.append(preview_line(header, summary))
     if not items:
         return "確認候補: 現在の表示対象を確認できません。"
@@ -666,7 +724,7 @@ def own_post(card, *, legacy_scope=False):
     layout = (card["layout"] if "layout" in card.keys() else 1) or 1
     if not legacy_scope and "transport" in card.keys() and card["transport"] == "slack":
         return reply_source(card) or card["root_message_id"]
-    return (reply_source(card) or card["root_message_id"]) if layout >= 4 else None
+    return (reply_source(card) or card["root_message_id"]) if reply_layout(layout) else None
 
 
 def anchor_keys(card) -> list:
@@ -876,7 +934,7 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
     kind = card["kind"]
     if kind == "patient_history":
         import notify_history
-        return notify_history.content(db, card)
+        return notify_history.content(db, card, cfg if isinstance(cfg, dict) else None)
     ui = card["ui_state"]
     progress_by_mid = None
     preview_urgencies = {}
@@ -1039,7 +1097,12 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
     containers = _fit_item(containers, CARD_TEXT_BUDGET - PAGE_TEXT_BUDGET - divider_cost(containers))
     budget = PAGE_TEXT_BUDGET
     pages_idx = _pack_pages([_blocks_len(b) + divider_cost(b) for b in rendered], max_count)
-    stamp_details = (kind == "thread" and layout >= 3
+    # LINE WORKS cannot edit a post: on layout 7 its per-post stamp rows
+    # refresh with the next render for another reason, and a stamp-only
+    # change neither enters the fingerprint nor the footer aggregate
+    quiet_stamps = (kind == "thread" and layout >= QUIET_STAMP_LAYOUT and "transport" in card.keys()
+                    and getattr(presenter(card["transport"]), "QUIET_STAMPS", False))
+    stamp_details = quiet_stamps or (kind == "thread" and layout >= 3
                      and "transport" in card.keys()
                      and getattr(presenter(card["transport"]), "STAMP_DETAILS", False)
                      and notify_cfg(cfg).get("card_thread") is True
@@ -1135,6 +1198,13 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
         if layout < 3:
             # Retain the deployed fingerprint: upgrading alone must not resend.
             reactions.append((mid, actor_line(actors)))
+        elif quiet_stamps:
+            # only a failed stamp read (counts or who pressed) still owes
+            # the room a new post; recovering from it does too
+            failed = [name for name, bad in (("counts", meta["last_error"]),
+                                             ("actors", actors["state"] == "failed")) if bad]
+            if failed:
+                reactions.append((mid, "stamp_error", *failed))
         else:
             stamp = (thread_stamp_line(meta, actors, observed_time=stamp_time)
                      if stamp_counts(meta) != {} or meta["last_error"] else "")
@@ -1163,7 +1233,8 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
             (mid, progress_by_mid[mid]) for mid in sorted(progress_by_mid)])
     content["preview_text"] = notification_preview(
         db, card, content, _urgencies={mid: preview_urgencies[mid]
-                                     for mid in shown if mid in preview_urgencies})
+                                     for mid in shown if mid in preview_urgencies},
+        cfg=cfg if isinstance(cfg, dict) else None)
     return content
 
 

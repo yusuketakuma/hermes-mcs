@@ -14,16 +14,24 @@ the code itself, so the docs track feature additions automatically:
 Technical tables live in docs/development/DEVELOPMENT.md; the release overview lives
 in README.md. Manual feature descriptions are reviewed at each release.
 
-Usage:
-    python3 scripts/development/update_readme.py           # rewrite docs in place
-    python3 scripts/development/update_readme.py --check   # exit 1 if any doc is stale
+The two targets have different owners. README.md's block changes only with
+CHANGELOG, so a pull request regenerates and commits it. DEVELOPMENT.md's
+tables change with almost every code change; a pull request does not commit
+them (every merge would conflict with every other open PR), and
+.github/workflows/main-sync.yml regenerates them on main after each merge.
 
-CI regenerates on pull requests and fails on any diff (git diff --exit-code);
-nothing is committed automatically.
+Usage:
+    python3 scripts/development/update_readme.py            # rewrite README.md (commit it in the PR)
+    python3 scripts/development/update_readme.py --check    # README.md fresh, every generator runs
+    python3 scripts/development/update_readme.py --check --base REV
+        # also: DEVELOPMENT.md's generated blocks equal REV's (the PR left them alone)
+    python3 scripts/development/update_readme.py --dev-doc  # also rewrite DEVELOPMENT.md (main-sync only)
+
 Keep module/function docstrings' first line a one-line summary — it is
 published.
 """
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
@@ -165,22 +173,62 @@ def render(readme: str) -> tuple[str, list[str]]:
     return out, failed
 
 
+def generated_blocks(text: str) -> dict[str, str]:
+    """Body of every well-formed generated block, by name."""
+    blocks = {}
+    for name in GENERATORS:
+        begin = f"<!-- BEGIN GENERATED:{name} -->"
+        end = f"<!-- END GENERATED:{name} -->"
+        if text.count(begin) == 1 and text.count(end) == 1 \
+                and text.index(begin) < text.index(end):
+            blocks[name] = text.split(begin, 1)[1].split(end, 1)[0]
+    return blocks
+
+
+def _text_at(rev: str, path: Path) -> str | None:
+    """`path` as committed at `rev`; None when `rev` has no such file."""
+    def git(*args):
+        return subprocess.run(["git", "-C", str(ROOT), *args],
+                              capture_output=True, text=True)
+    if git("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}").returncode:
+        # an unknown base must not pass as "nothing touched"
+        raise ValueError(f"base revision not found: {rev}")
+    rel = path.relative_to(ROOT).as_posix()
+    result = git("show", f"{rev}:{rel}")
+    return result.stdout if result.returncode == 0 else None
+
+
+def touched_dev_blocks(current: str, base: str | None) -> list[str]:
+    """Generated blocks of DEVELOPMENT.md whose body differs from the base's."""
+    if base is None:
+        return []  # the base has no such file: nothing to conflict with
+    old = generated_blocks(base)
+    new = generated_blocks(current)
+    return [name for name in old if name in new and new[name] != old[name]]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true",
-                    help="fail when a doc differs from generated output")
+                    help="fail when a committed doc differs from generated output")
+    ap.add_argument("--dev-doc", action="store_true",
+                    help="also rewrite/check DEVELOPMENT.md (main-sync on main only)")
+    ap.add_argument("--base", metavar="REV",
+                    help="fail when DEVELOPMENT.md's generated blocks differ from REV's")
     args = ap.parse_args()
-    targets = [p for p in (README, DEV_DOC) if p.exists()]
+    # (path, whether its blocks are written/compared in this mode)
+    targets = [(p, owned) for p, owned in ((README, True), (DEV_DOC, args.dev_doc))
+               if p.exists()]
     if not targets:
         print("error: no documentation targets — freshness cannot be verified",
               file=sys.stderr)
         return 1
     rendered = []
     failed_all = []
-    for path in targets:
+    for path, owned in targets:
         old = path.read_text(encoding="utf-8")
         new, failed = render(old)
-        rendered.append((path, old, new))
+        rendered.append((path, owned, old, new))
         failed_all.extend(f"{path.name}:{name}" for name in failed)
     if failed_all:
         # a failed generator keeps its old block — under --check that made
@@ -190,11 +238,25 @@ def main() -> int:
         print("error: generator(s) failed — doc freshness cannot be "
               f"verified: {', '.join(failed_all)}", file=sys.stderr)
         return 1
-    stale = [(p, new) for p, old, new in rendered if new != old]
+    if args.base and DEV_DOC.exists():
+        try:
+            base_text = _text_at(args.base, DEV_DOC)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        touched = touched_dev_blocks(DEV_DOC.read_text(encoding="utf-8"), base_text)
+        if touched:
+            print("error: DEVELOPMENT.md の生成部分は PR に含めません "
+                  f"({', '.join(touched)})。main への合流後に main-sync が作り直します。"
+                  f"手書き部分を変えていなければ git checkout {args.base} -- "
+                  "docs/development/DEVELOPMENT.md で戻せます。", file=sys.stderr)
+            return 1
+    stale = [(p, new) for p, owned, old, new in rendered if owned and new != old]
     if args.check:
         if stale:
             print("generated blocks are stale — "
                   "run: python3 scripts/development/update_readme.py "
+                  f"{'--dev-doc ' if args.dev_doc else ''}"
                   f"({', '.join(p.name for p, _ in stale)})",
                   file=sys.stderr)
             return 1

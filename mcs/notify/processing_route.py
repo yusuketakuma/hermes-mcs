@@ -319,32 +319,59 @@ def _route(row, meta, content):
                        and cloud_inference.is_supported_cloud_contract(contract)) else None
 
 
-def compact_header_parts(header):
-    """Sealed compact header -> (display prefix, ordered provider keys)."""
+# Provider states a reader must see even when the post itself completed.
+PROBLEM_STATES = frozenset({"attention", "unverified", "failed"})
+
+
+def quiet_header(parts) -> bool:
+    """Whether a spec opted into the problem-only header (processing_header_quiet)."""
+    return parts.get("processing_header_quiet") == 1
+
+
+def header_problem(header):
+    """True when a sealed v4 header reports something the reader must see:
+    an attention, unknown or missing status, a failed or unconfirmed
+    provider, or a held or unknown patient context (未取得・失敗は必ず表示)."""
+    progress = header.get("context_progress")
+    return (header.get("processing_status") not in ("complete", "processing", "preparing")
+            or any(header["provider_states"][key] in PROBLEM_STATES for key in header["visible_providers"])
+            or (progress is not None and (progress["held"] or progress["stage"] == "unknown")))
+
+
+def compact_header_parts(header, quiet=False):
+    """Sealed compact header -> (display prefix, ordered provider keys).
+
+    Owner decision 2026-11-16 (``quiet``, a spec's processing_header_quiet):
+    without a problem the header keeps only its own prefix (time and count),
+    plus ◐ while posts are still processed. A spec sealed before that keeps
+    its full compact header, so its stored LINE WORKS overflow split holds."""
     states = header["provider_states"]
     visible = header["visible_providers"]
     sequence = header.get("provider_sequence")
     fallback = provider_text(states, visible, sequence)
-    prefix = header["text"][:-len(fallback)].removesuffix(" · ")
+    text = header["text"][:-len(fallback)].removesuffix(" · ")
     if 'context_progress' in header:
         # The frozen context value remains text on every transport.
-        for label, short in COMPACT_STATUS_LABELS.items():
-            prefix = prefix.replace(label + ' · ', short + ' · ', 1)
-            if prefix == label:
-                prefix = short
-        return prefix, [key for key in visible if key in ('jev', 'local')]
-    prefix = prefix.partition(" · 採用結果の処理順: ")[0]
+        ordered = [key for key in visible if key in ('jev', 'local')]
+    else:
+        text = text.partition(" · 採用結果の処理順: ")[0]
+        ordered = list(sequence or []) + [key for key in visible if key not in (sequence or [])]
     for label, short in COMPACT_STATUS_LABELS.items():
-        if prefix == label or prefix.endswith(" · " + label):
-            prefix = prefix[:-len(label)] + short
+        base, found, rest = text.rpartition(label)
+        if found and (not base or base.endswith(" · ")) and (not rest or rest.startswith(" · ")):
             break
-    return prefix, list(sequence or []) + [key for key in visible if key not in (sequence or [])]
+    else:
+        return text, ordered
+    if not quiet or header_problem(header):
+        return base + short + rest, ordered
+    quiet = short if short.startswith("◐") else ""
+    return " · ".join(part for part in (base.removesuffix(" · "), quiet) if part), []
 
 
-def compact_header(header):
+def compact_header(header, quiet=False):
     """Render a validated processing header without claiming live execution."""
     states = header["provider_states"]
-    prefix, ordered = compact_header_parts(header)
+    prefix, ordered = compact_header_parts(header, quiet)
     providers = "  ".join(f"{PROVIDER_NAMES[key]} {COMPACT_MARKS[states[key]]}"
                           for key in ordered if states[key] in COMPACT_MARKS)
     return prefix + (" · " + providers if providers else "")

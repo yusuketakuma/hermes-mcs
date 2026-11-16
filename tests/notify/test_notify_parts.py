@@ -1055,7 +1055,7 @@ def test_unchanged_attachment_updates_old_summary_caption_without_reupload(led, 
     file.write_bytes(b"synthetic attachment")
     _attach(led, 100, local_path=str(file), sha256=hashlib.sha256(file.read_bytes()).hexdigest(), nbytes=file.stat().st_size)
     original_captions = notify_parts._attachment_captions
-    monkeypatch.setattr(notify_parts, "_attachment_captions", lambda db, card, attachments: {a["attachment_id"]: "OLD-GENERATED-SUMMARY" for a in attachments})
+    monkeypatch.setattr(notify_parts, "_attachment_captions", lambda db, card, attachments, cfg=None: {a["attachment_id"]: "OLD-GENERATED-SUMMARY" for a in attachments})
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
     first = _latest_render(led)
     _deliver_bodies(led, first, "original", n=1700)

@@ -106,11 +106,6 @@ jobs:
         run: make lint
       - name: Check bundled public medicine master
         run: python3 scripts/development/check_drug_master_bundle.py
-      - name: check generated docs on PR
-        if: github.event_name == 'pull_request'
-        run: |
-          python3 scripts/development/update_readme.py
-          git diff --exit-code -- README.md docs/development/DEVELOPMENT.md
 
   pytest-linux:
     # tests/ and integration/ as slices x shards. The partition is fixed here
@@ -224,6 +219,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0   # the generated-docs step compares with the merge base
       - name: offline label migration regression
         run: python3 scripts/development/check_labels_sync.py
       - name: no secrets or data dirs tracked
@@ -258,6 +255,22 @@ jobs:
         run: |
           grep -q "kind: standalone" hermes_plugin/plugin.yaml
           grep -q "register" hermes_plugin/__init__.py
+      # Keep the existing Python version and commands, but do not wait for the
+      # long Linux suite (or let its failure hide documentation drift).
+      # workflow_dispatch is how main-sync re-runs CI after merging main into a PR.
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') }}
+        with:
+          python-version: "3.14"
+      # README.md must be regenerated in the PR; DEVELOPMENT.md's generated
+      # tables must be left as the base has them (main-sync rewrites them on main).
+      - name: check generated docs on PR
+        if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') }}
+        env:
+          BASE_REF: ${{ github.base_ref || github.event.repository.default_branch }}
+        run: |
+          base=$(git merge-base HEAD "origin/$BASE_REF")
+          python3 scripts/development/update_readme.py --check --base "$base"
 
   standalone-sdk:
     # runtime_mode=standalone against the exact SDK pins install.sh puts in

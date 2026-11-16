@@ -45,7 +45,9 @@ def test_real_context_adoption_drives_new_slack_card_progress(runtime, real_clou
     assert header['visible_providers'] == ['jev', 'local']
     blocks = render_parts(spec['parts'], card_kind='thread')
     shown = json.dumps(blocks, ensure_ascii=False)
-    assert '👤 100%' in shown
+    # sealed in the header; nothing needs attention, so the card shows no
+    # processing row (owner decision 2026-11-16)
+    assert '👤 100%' in header['text'] and '👤' not in shown
     images = [element['alt_text'].split()[0] for block in blocks
               for element in block.get('elements', []) if element.get('type') == 'image']
     assert 'Anthropic' not in images and 'OpenAI' not in images

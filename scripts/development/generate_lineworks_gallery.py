@@ -57,10 +57,15 @@ class TalkScreen(Screen):
         self.paragraph(x + 15, y + 28, value, width=390, size=17)
 
     def block(self, x, y, lines, size=15):
-        """A bot text post sized to its (value, color, bold) lines; returns its bottom."""
+        """A bot text post sized to its (value, color, bold[, size]) lines; returns
+        its bottom. RULE draws the Flex separator (cards.SEPARATOR) as a line."""
         mark, end = len(self.parts), y + 30
-        for value, color, bold in lines:
-            end = self.paragraph(x + 16, end, value, 390, size, color, bold)
+        for value, color, bold, *own in lines:
+            if value == RULE:
+                self.line(x + 16, end - 10, x + 406, end - 10, "#d5e1e5")
+                end += 8
+                continue
+            end = self.paragraph(x + 16, end, value, 390, own[0] if own else size, color, bold)
         self.rect(x, y, 422, end - y - 10, "#fff", 9, "#d5e1e5")
         self.parts.insert(mark, self.parts.pop())
         return end - 10
@@ -88,14 +93,16 @@ def delivery():
     s = TalkScreen(1, "同じトークルームで、要約・原文・添付を確認。",
                    "新規カードは要約・スタンプと原文を分けて投稿。更新は変わった区画だけ。")
     s.panel(24, "① 共有トークルーム", "MCS Botからの新着通知カード")
-    s.panel(568, "② 同じトークルームの続き", "新しい表示形式3 / 要約は抜粋")
+    s.panel(568, "② 同じトークルームの続き", "新しい表示形式 / 要約は抜粋")
     s.bot(44, 245)
     sender, bullets = POSTS[0]
     summary = [("📋 要約", GREEN, True), *(("・" + b, INK, False) for b in bullets)]
-    y = s.block(66, 286, [(HEADING.format(icon="💬"), INK, True), (META.format(n=1), MUTED, False),
-                          (RULE, MUTED, False), (sender, MUTED, False), *summary[1:],
+    # Layout 7 (cards.HEADING_STYLE / META_STYLE): a bold heading, small grey
+    # post time and sender, and no footer stamp aggregate.
+    y = s.block(66, 286, [(HEADING.format(icon="💬"), INK, True, 19), (META.format(n=1), MUTED, False),
+                          (RULE, MUTED, False), (sender, MUTED, False, 13), *summary[1:],
                           (RULE, MUTED, False), ("👤 担当: 田中 · ✅ 確認: 田中", INK, False),
-                          ("📝 タスク 1件 · スタンプ 👀2 🙆1 · 自分 1投稿", INK, False)])
+                          ("📝 タスク 1件", INK, False)])
     # cards._on_card order: 確認する・担当する, menu, stamp row, 別の投稿, MCSで開く
     y = s.template(66, y, ["確認する", "担当する", "操作を選ぶ…"])
     y = s.row(66, y, ["👀", "🙆 ✓", "🙏", "👍", "✅"])
@@ -110,13 +117,11 @@ def delivery():
     s.rect(610, y + 14, 422, 74, "#fff", 9, "#d5e1e5")
     s.text(626, y + 43, "添付ファイル", 17, INK, True)
     s.text(626, y + 70, "服薬カレンダー.jpg", 16, MUTED)
-    s.text(588, y + 125, "③ 後からスタンプが変わったとき", 16, GREEN, True)
-    y = s.block(610, y + 143, [(f"↳ 更新 山田 花子 · 10-01 09:40 {SENDER}", INK, True),
-                              ("・次回訪問時に残薬を確認してほしいとの連絡", INK, False),
-                              ("スタンプ 👀3 🙆1 · 投稿時点", MUTED, False),
-                              (RULE, MUTED, False),
-                              ("（本文は変更なし）", MUTED, False)])
-    s.paragraph(588, y + 35, "この更新では原文・添付・カードを再投稿しません。", 468, 15, GREEN)
+    s.text(588, y + 125, "③ 後からスタンプだけが変わったとき", 16, GREEN, True)
+    # Owner decision 2026-11-16: a stamp-only change never reposts (L5).
+    y = s.paragraph(588, y + 160, "スタンプだけの変化では再投稿しません。要約・返信などの更新で"
+                    "その投稿を出し直すときに、最新のスタンプを反映します。", 468, 15, INK)
+    s.paragraph(588, y + 10, "スタンプの取得に失敗したときは再投稿して表示します。", 468, 15, GREEN)
     return s.finish()
 
 

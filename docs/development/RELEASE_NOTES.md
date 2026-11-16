@@ -120,6 +120,7 @@ python3 scripts/development/release_notes.py export --version X.Y.Z \
 ```
 
 `build`はCHANGELOGとREADMEの最新変更要約を更新し、入力記録を`changes/archive/<version>/`へ移す。
+`update_readme.py`が更新するのはREADMEだけで、`docs/development/DEVELOPMENT.md`の生成表はmainへの合流後に`main-sync`が更新する。tagは、その更新commitが入ったmainに付ける。
 既存versionの上書き、空の変更記録、手書きUnreleased、形式不正では停止する。
 生成後にソースと説明を照合する。CIは文章の事実性まで保証しない。
 毎回、README本文の機能・画面例・導入・安全・導線を見直し、確認内容と根拠を

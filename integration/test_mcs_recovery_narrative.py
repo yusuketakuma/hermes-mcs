@@ -565,7 +565,7 @@ def _run_narrative(tmp_path, *, reply_cards=True):
         slack_ok = (
             render["parts_state"] == "complete"
             and len(slack_cards) == 2 and reply is not None
-            and all(card["delivery_state"] == "delivered" and card["layout"] == notify_cards.CARD_LAYOUT
+            and all(card["delivery_state"] == "delivered" and card["layout"] == notify_cards.REPLY_LAYOUT
                     for card in slack_cards)
             and reply["thread_id"] == card_ts and reply["message_id"] != card_ts
             and reply_render["parts_state"] == "complete"
@@ -640,7 +640,7 @@ def _run_narrative(tmp_path, *, reply_cards=True):
         N.check("discord_card_full_thread_file_parts",
                 len(discord_cards) == (2 if reply_cards else 1)
                 and all(card["delivery_state"] == "delivered" and card["layout"] == (
-                        notify_cards.CARD_LAYOUT if reply_cards else notify_cards.FACE_LAYOUT)
+                        notify_cards.REPLY_LAYOUT if reply_cards else notify_cards.FACE_LAYOUT)
                         for card in discord_cards)
                 and dcard["delivery_state"] == "delivered"
                 and drender["parts_state"] == "complete"

@@ -24,7 +24,8 @@ def test_local_indicator_is_compact_without_changing_legacy_text():
 
 def test_compact_icons_keep_alt_text_and_do_not_claim_running():
     states = {"anthropic": "unused", "openai": "done", "jev": "pending", "local": "unused"}
-    block = _provider_context(states, "1投稿 · 解析中 · 採用結果の処理順: OpenAI → Jev",
+    # the prefix arrives compacted by processing_route.compact_header_parts
+    block = _provider_context(states, "1投稿 · ◐ 未完了",
                               ["anthropic", "openai", "jev", "local"], ["openai", "jev"], compact=True)
     assert block["elements"][0]["text"] == "1投稿 · ◐ 未完了"
     images = [e for e in block["elements"] if e["type"] == "image"]
