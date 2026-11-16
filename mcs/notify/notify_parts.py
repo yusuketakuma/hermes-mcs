@@ -1168,6 +1168,8 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                     and previous["parts"].get("provider_states_version") == parts.get("provider_states_version")
                     and previous["parts"].get("processing_display_version") == parts.get("processing_display_version")
                     and previous["parts"].get("processing_header_quiet") == parts.get("processing_header_quiet")
+                    # a changed preview_privacy must not restore the old push text
+                    and previous["parts"].get("preview_text") == parts.get("preview_text")
                     and same_chat_face
                     and same_v4_header
                     and prior_visible == visible_providers

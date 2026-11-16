@@ -92,3 +92,15 @@ def test_attachment_caption_follows_preview_privacy(led, privacy):
         [{'attachment_id': 7, 'name': '合成.pdf', 'unavailable': True}],
         {'notify': {'preview_privacy': privacy}})
     assert '取得失敗' in failed[7]
+
+
+
+@pytest.mark.parametrize('privacy', ['full', 'initial', 'minimal'])
+def test_history_card_survives_a_null_patient_name(monkeypatch, privacy):
+    import notify_history
+    monkeypatch.setattr(notify_history, '_patient_identity', lambda *a, **k: ([None], None))
+    card = {'project_id': 1, 'ui_state': '{}', 'message_id': 1}
+    monkeypatch.setattr(notify_history, 'anchor', lambda c: {'cohort_id': 1})
+    out = notify_history.content(None, card, {'notify': {'preview_privacy': privacy}})
+    assert out['containers'][0]['text'].startswith('患者 — ')
+    assert 'None' not in out['preview_text']
