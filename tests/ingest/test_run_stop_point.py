@@ -120,7 +120,7 @@ def test_immediate_notice_shows_stage_cause_and_step_without_raw_detail():
     session = notify_flush._system_event_text(
         "session_expired", {"stop": {"stage": "unread", "category": "login"}})
     assert "止まった処理: 未読投稿の取得" in session
-    assert "次の操作: MCSへ手動で再ログインしてください。" in session
+    assert "次の操作: " + notify_flush._SYSTEM_TEXT["session_expired"][2] in session
     legacy = notify_flush._system_event_text("run_failed", {"stop": {"stage": PRIVATE}})
     assert "止まった処理" not in legacy and "mcs_setup.py check" in legacy
 
