@@ -174,6 +174,9 @@ def test_repair_needs_every_linked_issue_to_be_claude_s_alone_and_unheld():
     assert ac.repair_refusal({**pr, "state": "closed"}, ok, True)
     assert ac.repair_refusal({**_pr(branch="copilot/x"), "state": "open"}, ok, True)
     assert ac.repair_refusal({**_pr(head_repo="outsider/hermes-mcs"), "state": "open"}, ok, True)
+    held = {**ok, "6": ["担当:claude", "失敗:不明"]}
+    assert ac.repair_refusal(pr, held, True, owner_request=True) is None
+    assert ac.repair_refusal(pr, exhausted, True, owner_request=True)
 
 
 def test_cli_lists_linked_issues_and_judges_a_repair(tmp_path, capsys):
@@ -220,7 +223,8 @@ def test_labels_and_workflows_agree_with_the_module():
     assert "actions: read" in repair.split("additional_permissions")[1]
     assert "group: agent-claude-writer" in repair and "group: agent-claude-writer" in claude
     assert "--match-head-commit" in control
-    assert "agent_control.py assigned" in claude
+    assert '"$control" assigned' in claude and '"$control" repair' in claude and "--owner-request" in claude
+    assert claude.index("default_branch") < claude.index("name: Check the assignment")
     consult = (ROOT / ".github/workflows/agent-consult.yml").read_text()
     assert "contents: write" not in consult and "pull-requests:" not in consult
     assert "sandbox: read-only" in consult and "github_token: ${{ github.token }}" in consult

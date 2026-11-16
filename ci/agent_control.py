@@ -204,11 +204,12 @@ def next_attempt(labels):
     return remove, add, exhausted
 
 
-def repair_refusal(pr, issue_labels, automation_enabled):
-    """Why Claude may not repair `pr` now, or None. `issue_labels` maps each linked issue to its current labels.
+def repair_refusal(pr, issue_labels, automation_enabled, owner_request=False):
+    """Why Claude may not work on `pr` now, or None. `issue_labels` maps each linked issue to its current labels.
 
-    Every linked issue must still be Claude's alone and unheld: one exhausted or
-    reassigned issue stops the repair of the whole PR.
+    Every linked issue must still be Claude's alone: one exhausted or reassigned
+    issue stops the whole PR. An automatic repair also stops on a hold label;
+    the owner's own @claude on the PR (`owner_request`) may proceed past a hold.
     """
     if not automation_enabled:
         return "自動化の停止中"
@@ -223,7 +224,7 @@ def repair_refusal(pr, issue_labels, automation_enabled):
             return f"#{number} のラベルを取得できない"
         if not assigned_to(labels, REPAIR_AGENT_LABEL):
             return f"#{number} の担当が Claude だけではない"
-        held = [name for name in labels if name == OWNER_LABEL or name in HOLD_LABELS]
+        held = [name for name in labels if name == OWNER_LABEL or (name in HOLD_LABELS and not owner_request)]
         if held:
             return f"#{number} が保留中（{', '.join(held)}）"
     return None
@@ -310,6 +311,7 @@ def main(argv=None):
     repair.add_argument("--pr", required=True)
     repair.add_argument("--issue-labels", required=True, help="JSON object: issue number -> label names")
     repair.add_argument("--automation", default="")
+    repair.add_argument("--owner-request", action="store_true", help="the owner asked with @claude on the PR")
     lock = sub.add_parser("lock")
     lock.add_argument("--labels", required=True, help="JSON list of label names")
     lock.add_argument("--added", required=True)
@@ -326,7 +328,8 @@ def main(argv=None):
     elif args.command == "linked":
         plan = {"issues": linked_issues(_load(args.pr).get("body"))}
     elif args.command == "repair":
-        refusal = repair_refusal(_load(args.pr), _load(args.issue_labels), args.automation == "true")
+        refusal = repair_refusal(_load(args.pr), _load(args.issue_labels), args.automation == "true",
+                                 args.owner_request)
         plan = {"allowed": refusal is None, "reason": refusal or ""}
     elif args.command == "assigned":
         plan = {"assigned": assigned_to(json.loads(args.labels), args.agent)}
