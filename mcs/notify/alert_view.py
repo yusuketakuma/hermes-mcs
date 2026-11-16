@@ -14,7 +14,7 @@ def _when(value):
     return datetime.fromtimestamp(value, JST).strftime("%m-%d %H:%M")
 
 
-def render_parts(checked, db=None):
+def render_parts(checked, db=None, cfg=None):
     """検証済み候補を、見出し → 対象 → 理由の引用 → 発信者・時点 → 注記の順で表示する。
 
     患者名と投稿日時は1回だけ出し、理由（原文引用）を発信者より先に置く。"""
@@ -55,11 +55,18 @@ def render_parts(checked, db=None):
     if positive(pid):
         parts["footer"].append({"type": "text", "text":
             f"原本確認: MCSで開く {project_url(pid)} · 投稿 #{mid}"})
-    header = (notify_render.preview_header(db, pid, message) if db is not None and positive(pid)
-              else f"患者記録 / {sender}（{organization}） / {posted}")
-    main = next((part["text"] for part in parts["containers"] if part["type"] == "quote"), "緊急理由の引用は未取得")
     # the push/notification line: urgency first, so a lock screen tells
-    # it apart from a routine request
+    # it apart from a routine request; notify.preview_privacy decides how
+    # much of the patient, sender and quotation it carries
+    privacy = notify_render.preview_privacy(cfg)
+    if privacy == "minimal":
+        parts["preview_text"] = "🚨 緊急度高 MCS: 再確認候補"
+        return parts
+    header = (notify_render.preview_header(db, pid, message, privacy) if db is not None and positive(pid)
+              else f"患者記録 / {organization if privacy != 'full' else f'{sender}（{organization}）'} / {posted}")
+    main = next((part["text"] for part in parts["containers"] if part["type"] == "quote"), "緊急理由の引用は未取得")
+    if privacy != "full":
+        main = "原文はMCSで確認"
     parts["preview_text"] = "🚨 緊急度高 " + notify_render.preview_line(
         header, f"再確認候補（{subject}）: {main}", limit=393)
     return parts

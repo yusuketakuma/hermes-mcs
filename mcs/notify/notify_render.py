@@ -934,7 +934,7 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
     kind = card["kind"]
     if kind == "patient_history":
         import notify_history
-        return notify_history.content(db, card)
+        return notify_history.content(db, card, cfg if isinstance(cfg, dict) else None)
     ui = card["ui_state"]
     progress_by_mid = None
     preview_urgencies = {}

@@ -687,7 +687,7 @@ def _dispatch_urgent_notice(ledger, ev, cfg, now):
                        ",updated_at=? WHERE event_id=?", ("resend_exhausted", now, event_id))
             return {"error": "resend_exhausted"}
         else:
-            parts = alert_view.render_parts(checked, db)
+            parts = alert_view.render_parts(checked, db, cfg)
             present = presenter(notify_scope.active_transport(cfg))
             if not present.SOURCE_THREAD:
                 parts = present.urgent_room_head(parts)

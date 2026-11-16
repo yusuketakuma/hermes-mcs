@@ -104,3 +104,20 @@ def test_lineworks_validator_accepts_only_the_drawn_emphasis():
             lineworks_client._validate_content(_flex([bad]))
     with pytest.raises(lineworks_client.ClientError):
         lineworks_client._validate_content(_flex(styled, header={**band, "backgroundColor": "#000000"}))
+
+
+@pytest.mark.parametrize("privacy,expected", [
+    ("full", "再確認候補（患者本人）: 緊急理由の引用は未取得"),
+    ("initial", "再確認候補（患者本人）: 原文はMCSで確認"), ("minimal", "MCS: 再確認候補")])
+def test_urgent_notice_and_history_previews_follow_preview_privacy(privacy, expected):
+    import alert_view
+    import notify_history
+    cfg = {"notify": {"preview_privacy": privacy}}
+    checked = {"project_id": None, "message_id": None, "subject": "patient"}
+    preview = alert_view.render_parts(checked, None, cfg)["preview_text"]
+    assert preview.startswith("🚨 緊急度高 ") and expected in preview
+    assert ("発信者未取得" in preview) is (privacy == "full")
+    history = notify_history._preview("合成 花子", "合成 花子 — 初回履歴を取得中", ["保存済み 1件"], cfg)
+    assert history == {"full": "合成 花子 — 初回履歴を取得中\n保存済み 1件",
+                       "initial": "合○ 花○ — 初回履歴を取得中\n保存済み 1件",
+                       "minimal": "MCS: 初回履歴"}[privacy]

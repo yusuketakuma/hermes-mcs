@@ -200,7 +200,7 @@ def refresh(db, card, cfg, now, *, force=False):
     return {**dict(card), "ui_state": json.dumps(ui)}
 
 
-def content(db, card):
+def content(db, card, cfg=None):
     """Render adopted counts only, without reading histories, bodies or attachments."""
     ui = loads_dict(card["ui_state"]) or {}
     snap = ui.get("history_snapshot") or {}
@@ -228,7 +228,18 @@ def content(db, card):
             "footer": [], "shown": [anchor(card)["cohort_id"]], "shown_kind": "cohort_ids",
             "page": 0, "pages": 1, "source_fp": ui.get("history_source_fp", payload_hash([])),
             "toggles": {"acked": False, "assigned": False, "has_tasks": False},
-            "preview_text": (title + "\n" + "\n".join(text))[:600]}
+            "preview_text": _preview(name[0] if name else "患者", title, text, cfg)}
+
+
+def _preview(patient, title, text, cfg):
+    """The push line under notify.preview_privacy; the card keeps the full title."""
+    from notify_render import masked_name, preview_privacy
+    privacy = preview_privacy(cfg)
+    if privacy == "minimal":
+        return "MCS: 初回履歴"
+    if privacy == "initial":
+        title = masked_name(patient) + title[len(patient):]
+    return (title + "\n" + "\n".join(text))[:600]
 
 
 def actions(card):
