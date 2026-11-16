@@ -701,7 +701,7 @@ def _apply_restore_op_tx(db, req, current) -> tuple[str | None, dict]:
 def apply_tx(db, req: dict, now: float | None = None, *,
              filesystem_changes=None, cfg=None, data_dir=None) -> tuple[str | None, dict]:
     """Apply one validated operation without committing its transaction."""
-    db = getattr(db, "db", db)
+    owner, db = db, getattr(db, "db", db)
     current = time.time() if now is None else float(now)
     if req["cmd"] == "ops.mcs_reaction":
         from stamp_write import enqueue_tx
@@ -714,7 +714,7 @@ def apply_tx(db, req: dict, now: float | None = None, *,
         return apply_control_tx(db, req, current)
     if req["cmd"] == "ops.cloud_local_rebuild_approve":
         from extract_llm_local_rebuild import approve_tx
-        return approve_tx(db, req, current)
+        return approve_tx(owner, req, current)
     if req["cmd"] == "ops.patient_context_reset":
         from patient_context_reset import apply_tx as reset_tx
         return reset_tx(db, req, current)

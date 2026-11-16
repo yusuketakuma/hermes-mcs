@@ -390,10 +390,23 @@ def _bounded(db, seconds):
         db.set_progress_handler(None, 0)
 
 
-def approve_tx(db, req, now):
-    """Inside apply_command's BEGIN IMMEDIATE: re-verify every unit; any change rejects the bundle."""
+def warm_tally(ledger):
+    """Before apply_command's BEGIN IMMEDIATE: build the month tally on this ledger, so the
+    approval re-checks it incrementally instead of recounting the whole month under the lock.
+    Any failure is left for the approval itself, which recounts and fails closed."""
+    try:
+        cloud_policy._tally(ledger)
+    except (sqlite3.Error, cloud_policy.AnthropicError, ArithmeticError, ValueError, TypeError, KeyError):
+        pass
+
+
+def approve_tx(owner, req, now):
+    """Inside apply_command's BEGIN IMMEDIATE: re-verify every unit; any change rejects the bundle.
+
+    ``owner`` is the Ledger (its tally warmed by warm_tally) or a bare connection."""
     plan = req['plan']
-    ledger = SimpleNamespace(db=db)
+    db = getattr(owner, 'db', owner)
+    ledger = owner if owner is not db else SimpleNamespace(db=db)
     try:
         with _bounded(db, APPROVE_SECONDS) as deadline:
             if _database_identity(db) != plan['database']:
