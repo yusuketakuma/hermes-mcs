@@ -195,6 +195,19 @@ def test_only_one_agent_label_per_issue():
     assert not ac.lock_conflict(["担当:claude"], "bug")
 
 
+def test_only_the_owner_and_listed_dispatchers_may_assign(capsys):
+    assert ac.may_assign("Owner", "owner")
+    assert not ac.may_assign("stranger", "owner")
+    assert not ac.may_assign("", "owner", "dots")
+    assert ac.may_assign("Dots[bot]", "owner", "someone, dots[bot]")
+    assert not ac.may_assign("dots", "owner", "dots[bot]")
+    ac.main(["lock", "--labels", '["担当:claude"]', "--added", "担当:claude", "--sender", "dots", "--owner", "owner"])
+    assert json.loads(capsys.readouterr().out) == {"conflict": False, "authorized": False}
+    ac.main(["assigned", "--labels", '["担当:claude"]', "--agent", "担当:claude",
+             "--sender", "dots", "--owner", "owner", "--dispatchers", "dots"])
+    assert json.loads(capsys.readouterr().out) == {"assigned": True, "authorized": True}
+
+
 def test_cli_reads_paginated_gh_output(tmp_path, capsys):
     (tmp_path / "pr.json").write_text(json.dumps(_pr()))
     (tmp_path / "checks.json").write_text(json.dumps([{"total_count": 6, "check_runs": _green()}]))
@@ -216,6 +229,11 @@ def test_labels_and_workflows_agree_with_the_module():
     assert "branch_prefix: agent/" in claude
     assert "vars.AUTOMATION_ENABLED == 'true'" in claude
     assert "github.repository_owner" in claude
+    # Who may assign is decided by the module in both places, from the same repository variable.
+    for workflow in (control, claude):
+        assert '--sender "$SENDER" --owner "$OWNER" --dispatchers "${DISPATCHERS:-}"' in workflow
+        assert "DISPATCHERS: ${{ vars.AGENT_DISPATCHERS }}" in workflow
+    assert "github.event.sender.login == github.repository_owner &&\n          contains(github.event.comment.body" in claude
     assert "--draft" not in claude, "PRs are opened ready for review, never as drafts"
     repair = (ROOT / ".github/workflows/agent-claude-repair.yml").read_text()
     assert "agent-claude-repair.yml" in control

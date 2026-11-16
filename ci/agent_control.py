@@ -12,8 +12,10 @@ imports nothing from the application. Standard library only.
   linked   the issues a PR closes (Fixes #N and the like)
   repair   whether Claude may repair a failed PR now, from the PR and the
            current labels of its linked issues
-  lock     whether a newly added 担当:* label conflicts with another one
-  assigned whether an agent label is the issue's only assignment
+  lock     whether a newly added 担当:* label conflicts with another one,
+           and whether its sender may assign agents
+  assigned whether an agent label is the issue's only assignment,
+           and whether its sender may assign agents
 
 The verdict is evidence, not trust in "CI is green": every required job must
 have run on the current head and succeeded (GitHub counts skipped and neutral
@@ -272,6 +274,16 @@ def lock_conflict(labels, added):
     return any(name.startswith(AGENT_LABEL_PREFIX) and name != added for name in labels)
 
 
+def may_assign(sender, owner, dispatchers=""):
+    """True when `sender` may put a 担当:* label on an issue: the owner, or a login the owner listed.
+
+    `dispatchers` is the repository variable AGENT_DISPATCHERS (logins separated by commas or spaces).
+    Only an administrator can change a repository variable, so the list is the owner's own delegation.
+    """
+    allowed = {owner.lower()} | {name.lower() for name in re.split(r"[\s,]+", dispatchers or "") if name}
+    return bool(sender) and sender.lower() in allowed
+
+
 def _load(path):
     with open(path, encoding="utf-8") as handle:
         return json.load(handle)
@@ -291,6 +303,12 @@ def _flatten(data):
     if data and isinstance(data[0], list):
         return [item for page in data for item in page]
     return data
+
+
+def _add_sender_arguments(command):
+    command.add_argument("--sender", required=True, help="login that added the label")
+    command.add_argument("--owner", required=True, help="repository owner login")
+    command.add_argument("--dispatchers", default="", help="vars.AGENT_DISPATCHERS")
 
 
 def main(argv=None):
@@ -315,9 +333,11 @@ def main(argv=None):
     lock = sub.add_parser("lock")
     lock.add_argument("--labels", required=True, help="JSON list of label names")
     lock.add_argument("--added", required=True)
+    _add_sender_arguments(lock)
     assigned = sub.add_parser("assigned")
     assigned.add_argument("--labels", required=True, help="JSON list of label names")
     assigned.add_argument("--agent", required=True)
+    _add_sender_arguments(assigned)
     args = parser.parse_args(argv)
     if args.command == "gate":
         plan = decide_gate(_load(args.pr), _flatten_checks(_load(args.checks)), _flatten(_load(args.files)),
@@ -332,9 +352,11 @@ def main(argv=None):
                                  args.owner_request)
         plan = {"allowed": refusal is None, "reason": refusal or ""}
     elif args.command == "assigned":
-        plan = {"assigned": assigned_to(json.loads(args.labels), args.agent)}
+        plan = {"assigned": assigned_to(json.loads(args.labels), args.agent),
+                "authorized": may_assign(args.sender, args.owner, args.dispatchers)}
     else:
-        plan = {"conflict": lock_conflict(json.loads(args.labels), args.added)}
+        plan = {"conflict": lock_conflict(json.loads(args.labels), args.added),
+                "authorized": may_assign(args.sender, args.owner, args.dispatchers)}
     json.dump(plan, sys.stdout, ensure_ascii=False)
     sys.stdout.write("\n")
     return 0
