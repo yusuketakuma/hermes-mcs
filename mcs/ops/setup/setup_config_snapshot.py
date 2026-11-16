@@ -386,6 +386,13 @@ def _init_save_config(cfg, initial, args):
             print(f'設定ファイルの元の内容を {backup} に退避しました')
             return
         if kind == 'missing':
+            import external_transfer
+            # A new installation sends nothing to external AI on a key alone. The hold is
+            # written before the config, so an interrupted init can never leave a config
+            # without it (a rerun sees an existing config and would not add it).
+            if external_transfer.require(parent):
+                print('外部AIへの送信は、施設の確認を記録するまで自動では始まりません'
+                      '（docs/guides/COMPLIANCE.md）')
             args._config_publication_started = True
             safe_io.publish_new_bytes(CONF_PATH, body.encode('utf-8'))
         else:

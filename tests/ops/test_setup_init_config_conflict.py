@@ -84,7 +84,12 @@ def test_init_interrupt_after_config_publication_reports_unknown(monkeypatch, tm
     _, path = _setup(monkeypatch, tmp_path)
     if not existing:
         path.unlink()
-    def interrupted(*_a, **_k):
+    fsync_dir = safe_io.fsync_dir
+
+    def interrupted(*a, **k):
+        # A new install records the pending facility review before config.json; interrupt only after config.json exists.
+        if not path.exists():
+            return fsync_dir(*a, **k)
         raise KeyboardInterrupt
     monkeypatch.setattr(safe_io, 'fsync_dir', interrupted)
     assert mcs_setup.main(['init', '--yes', '--login-id', 'synthetic', '--notify-target', 'local',

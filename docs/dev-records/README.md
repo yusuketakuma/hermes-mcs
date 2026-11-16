@@ -32,6 +32,7 @@
 | [lineworks-review-20261001.md](lineworks-review-20261001.md) | 2026-10-01 | LINE WORKS全経路・既存接続・導入の再レビューと修正・最終回帰 |
 | [lineworks-impact-20261001.md](lineworks-impact-20261001.md) | 2026-10-01 | LINE WORKS追加・adapter整理の他領域への集中影響レビューと回帰修正 |
 | [repo-review-20261001.md](repo-review-20261001.md) / [確認一覧](repo-review-20261001-progress.json) | 2026-10-01 | 全リポジトリへの追加レビュー・5件の修正・領域間契約と最終検証 |
+| [compliance-gap-analysis-20261115.md](compliance-gap-analysis-20261115.md) | 2026-11-15 | 医療情報システムとしての法令・ガイドライン対応のギャップ分析（法的助言ではない）。現在の対応手順は[法令・ガイドライン対応](../guides/COMPLIANCE.md) |
 
 - [構成整理（2026-10-01）](structure-20261001.md) — 接続共通基盤・開発ツール・文書・テストの配置と検証。
 

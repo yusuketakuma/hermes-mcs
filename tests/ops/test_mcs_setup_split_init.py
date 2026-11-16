@@ -315,3 +315,28 @@ def test_split_init_rejects_replaced_root_link_to_same_target(split, monkeypatch
     assert alias.resolve() == root
     assert {path: path.read_bytes() for path in watched} == before
     assert not (root / 'data' / '.provider-settings-pending.json').exists()
+
+
+
+def test_new_config_is_published_only_after_the_external_ai_hold(tmp_path, monkeypatch):
+    import external_transfer
+    import safe_io
+
+    tmp_path.chmod(0o700)
+    conf = tmp_path / 'config.json'
+    monkeypatch.setattr(mcs_setup, 'CONF_PATH', str(conf))
+    monkeypatch.setattr(setup_config_snapshot, 'CONF_PATH', str(conf))
+    monkeypatch.setattr(mcs_setup, 'HOME', str(tmp_path))
+    cfg, initial = mcs_setup._init_config_snapshot()
+    assert initial[0] == 'missing'
+    publish = safe_io.publish_new_bytes
+
+    def interrupted_config(path, raw, *args, **kwargs):
+        if str(path) == str(conf):
+            raise KeyboardInterrupt  # the init stops between the two writes
+        return publish(path, raw, *args, **kwargs)
+    monkeypatch.setattr(safe_io, 'publish_new_bytes', interrupted_config)
+    with pytest.raises(KeyboardInterrupt):
+        mcs_setup._init_save_config(cfg, initial, SimpleNamespace(_config_publication_started=False))
+    assert not conf.exists()
+    assert external_transfer.status(tmp_path)['state'] == 'pending'
