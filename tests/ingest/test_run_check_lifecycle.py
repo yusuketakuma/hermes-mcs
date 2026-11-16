@@ -628,12 +628,16 @@ def test_code_changed_is_recorded_once(monkeypatch):
     assert result["errors"] == ["code_changed"]
 
 
-@pytest.mark.parametrize("held, status", [(True, "partial"),
-                                          (False, "running")])
+@pytest.mark.parametrize("held, updated, status, reason", [
+    (True, False, "partial", None), (True, True, "partial", None),
+    (False, False, "running", None), (False, True, "running", "update_preempted")])
 def test_run_lock_lost_ends_tick_without_later_stages(
-        tmp_path, monkeypatch, capsys, held, status):
+        tmp_path, monkeypatch, capsys, held, updated, status, reason):
     """Held: the run is recorded partial. Not held: no DB write at all —
-    the next begin_run closes the row as crashed."""
+    the next begin_run closes the row as crashed, naming the update only
+    when the lost wait saw the update state change."""
+    import run_interrupt
+    from ledger import Ledger
     import sqlite3
     from unittest.mock import Mock
     from writer_lock import RunLockLost
@@ -651,7 +655,7 @@ def test_run_lock_lost_ends_tick_without_later_stages(
             name, lambda *a, **k: None)
 
     def lost(*a, **k):
-        raise RunLockLost(held=held)
+        raise RunLockLost(held=held, updated=updated)
 
     monkeypatch.setattr(run_check, "_run_semantic", lost)
     later = Mock()
@@ -669,6 +673,15 @@ def test_run_lock_lost_ends_tick_without_later_stages(
     fd = run_check.acquire_run_lock(str(data / "run.lock"))
     assert fd is not None          # the run lock was released on exit
     os.close(fd)
+    with closing(Ledger(str(data / "ledger.db"))) as ledger:
+        ledger.begin_run(None, interrupt_reason=run_interrupt.Classifier(
+            str(data), boot_time=lambda: None))
+        first = ledger.db.execute(
+            "SELECT status,error FROM runs ORDER BY run_id").fetchone()
+    if held:
+        assert first[0] == "partial"
+    else:
+        assert tuple(first) == ("crashed", reason)
 
 
 @pytest.mark.parametrize(("state", "code", "cleared"), [
