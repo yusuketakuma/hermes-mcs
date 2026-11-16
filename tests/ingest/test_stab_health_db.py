@@ -4,11 +4,13 @@ backup deadline skips and the change-gated snapshot. Temp ledger,
 temp health file and stubs only."""
 import llm_availability
 import health_report
+import health_watch
 import json
 import time
 
 import pytest
 
+import local_backup
 import maintenance
 import run_check
 from inference_version import CURRENT_VERSION, VERSION_KEY
@@ -138,7 +140,7 @@ def test_housekeeping_passes_the_watchdog_deadline_and_records_a_skip(
     def backup(db_path, **kw):
         seen.update(kw)
         return "skipped_deadline"
-    monkeypatch.setattr(maintenance, "daily_backup", backup)
+    monkeypatch.setattr(local_backup, "daily_backup", backup)
     monkeypatch.setattr(maintenance, "db_maintenance", lambda *a, **k: None)
     monkeypatch.setattr(maintenance, "rotate_log", lambda: None)
     monkeypatch.setattr(maintenance, "prune_attachments", lambda *a: 0)
@@ -150,16 +152,40 @@ def test_housekeeping_passes_the_watchdog_deadline_and_records_a_skip(
     assert seen["deadline"] == pytest.approx(
         run_check._WATCHDOG_EXIT_AT - run_check.HARD_DEADLINE_MARGIN_S)
     db = _ledger(tmp_path)
-    monkeypatch.setattr(maintenance, "newest_backup_age_s", lambda: None)
+    monkeypatch.setattr(local_backup, "newest_backup_age_s", lambda: None)
     health = health_report.build_health(db.db, dict(result, notify={}), "ok", cfg={})
     assert "backup_deferred_deadline" in health["state_reasons"]
     assert health["disk_low"] is False and health["overall"] == "degraded"
     # a same-day backup exists: one late tick is not an incident
-    monkeypatch.setattr(maintenance, "newest_backup_age_s", lambda: 3 * H)
+    monkeypatch.setattr(local_backup, "newest_backup_age_s", lambda: 3 * H)
     health = health_report.build_health(db.db, dict(result, notify={}), "ok", cfg={})
     assert "backup_deferred_deadline" not in health["state_reasons"]
     db.close()
 
+
+
+@pytest.mark.parametrize("age, alerted", [
+    (None, False), (local_backup.BACKUP_OVERDUE_S - 60, False),
+    (local_backup.BACKUP_OVERDUE_S + 60, True)])
+def test_a_stale_daily_backup_degrades_health_whatever_the_cause(
+        tmp_path, health_file, monkeypatch, age, alerted):
+    db = _ledger(tmp_path)
+    monkeypatch.setattr(local_backup, "local_backup_status", lambda *, now: {
+        "state": "missing" if age is None else "verified", "newest_age_s": age,
+        "observed_at": now})
+    health = health_report.build_health(db.db, {"errors": [], "notify": {}}, "ok", cfg={})
+    assert ("backup_local_overdue" in health["state_reasons"]) is alerted
+    if alerted:
+        assert health["overall"] == "degraded"
+        rows = health_watch._reason_rows(health, ["backup_local_overdue"])
+        assert rows[0].startswith("・日次ローカルバックアップが2日以上更新されていません")
+        assert "mcs_local_backup.py list --verify" in rows[1]
+    # a deadline skip already reports the stale copy under its own reason
+    monkeypatch.setattr(local_backup, "newest_backup_age_s", lambda: age)
+    health = health_report.build_health(
+        db.db, {"errors": [], "notify": {}, "backup_skipped": "deadline"}, "ok", cfg={})
+    assert "backup_local_overdue" not in health["state_reasons"]
+    db.close()
 
 def test_disarm_clears_the_hard_deadline(monkeypatch):
     run_check._arm_watchdog(time.monotonic() + 600, 60)

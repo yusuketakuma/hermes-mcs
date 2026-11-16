@@ -13,6 +13,7 @@ import time
 from dataclasses import replace
 import pytest
 import ledger
+import local_backup
 import maintenance
 import update_journal
 import owned_process
@@ -378,27 +379,27 @@ def test_shared_legacy_lifetime_and_exclusive_owner_are_mutually_exclusive(tmp_p
 
 def test_preupdate_deadline_refuses_before_directory_creation(tmp_path, monkeypatch):
     backups = tmp_path / 'backups'
-    monkeypatch.setattr(maintenance, 'BACKUP_DIR', str(backups))
+    monkeypatch.setattr(local_backup, 'BACKUP_DIR', str(backups))
     for deadline in (0, time.monotonic() + 0.01):
         with pytest.raises(maintenance.MaintenanceError, match='^backup_deadline_exceeded$'):
-            maintenance.preupdate_backup(str(tmp_path / 'missing.db'), deadline=deadline)
+            local_backup.preupdate_backup(str(tmp_path / 'missing.db'), deadline=deadline)
         assert not backups.exists()
 
 
 @pytest.mark.parametrize('deadline', [True, float('inf'), float('nan'), '120'])
 def test_preupdate_deadline_rejects_invalid_types_without_effects(tmp_path, monkeypatch, deadline):
-    monkeypatch.setattr(maintenance, 'BACKUP_DIR', str(tmp_path / 'backups'))
+    monkeypatch.setattr(local_backup, 'BACKUP_DIR', str(tmp_path / 'backups'))
     with pytest.raises(maintenance.MaintenanceError, match='^backup_deadline_invalid$'):
-        maintenance.preupdate_backup(str(tmp_path / 'missing.db'), deadline=deadline)
+        local_backup.preupdate_backup(str(tmp_path / 'missing.db'), deadline=deadline)
     assert not (tmp_path / 'backups').exists()
 
 
 def test_legacy_and_bounded_preupdate_backup_are_verified(tmp_path, monkeypatch):
     source = tmp_path / 'ledger.db'
     ledger.Ledger(str(source)).close()
-    monkeypatch.setattr(maintenance, 'BACKUP_DIR', str(tmp_path / 'backups'))
+    monkeypatch.setattr(local_backup, 'BACKUP_DIR', str(tmp_path / 'backups'))
     for options in ({}, {'deadline': time.monotonic() + 120}):
-        backup = maintenance.preupdate_backup(str(source), **options)
+        backup = local_backup.preupdate_backup(str(source), **options)
         assert ledger.valid_mcs_db(backup)
         assert Path(backup).stat().st_size == source.stat().st_size
 
@@ -411,11 +412,11 @@ def test_preupdate_copy_deadline_aborts_and_removes_its_staging_file(tmp_path, m
         db.execute('CREATE TABLE synthetic_load(value BLOB)')
         db.executemany('INSERT INTO synthetic_load VALUES(?)', [(b'x' * 4096,)] * 2048)
     backups = tmp_path / 'backups'
-    monkeypatch.setattr(maintenance, 'BACKUP_DIR', str(backups))
+    monkeypatch.setattr(local_backup, 'BACKUP_DIR', str(backups))
     clock = iter([0.0, 0.0, 121.0])
-    monkeypatch.setattr(maintenance, 'monotonic', lambda: next(clock, 121.0))
+    monkeypatch.setattr(local_backup, 'monotonic', lambda: next(clock, 121.0))
     with pytest.raises(maintenance.MaintenanceError, match='^backup_deadline_exceeded$'):
-        maintenance.preupdate_backup(str(source), deadline=120.0)
+        local_backup.preupdate_backup(str(source), deadline=120.0)
     assert list(backups.iterdir()) == []
 
 

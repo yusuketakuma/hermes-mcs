@@ -498,10 +498,10 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 return bail('settings_migration_requires_manual_update')
 
             journal(state, "backup")
-            import maintenance
+            import local_backup
             try:
-                bpath = maintenance.preupdate_backup(LEDGER, **before_args)
-            except maintenance.MaintenanceError as e:
+                bpath = local_backup.preupdate_backup(LEDGER, **before_args)
+            except local_backup.MaintenanceError as e:
                 return bail(str(e))
             snap = _read_manifest_snapshot(**before_args)
             state["baseline_check"] = _baseline_check(cfg, **before_args)
