@@ -101,6 +101,22 @@ def test_filed_findings_are_not_filed_again_even_when_closed(repo):
     assert [issue["title"] for issue in scan.issues_to_file(again, closed, ["mcs/notify"], root=repo)] == ["スキャン: 別の指摘"]
 
 
+def test_a_reworded_title_about_the_same_file_is_the_same_finding(repo):
+    (first,) = scan.issues_to_file([_finding()], [], ["mcs/notify", "adapters"], root=repo)
+    closed = [{"state": "closed", **first}]
+    again = [
+        _finding(title="空の一覧を開くと例外になる"),
+        _finding(title="空の一覧を開くと例外になる", path="adapters/slack/send.py"),
+        _finding(title="再送のたびに重複して記録される"),
+        _finding(title="再送するたび重複して記録される"),
+    ]
+    filed = scan.issues_to_file(again, closed, ["mcs/notify", "adapters"], root=repo)
+    assert [issue["body"].split("`")[3] + " " + issue["title"] for issue in filed] == [
+        "adapters/slack/send.py スキャン: 空の一覧を開くと例外になる",
+        "mcs/notify/cards.py スキャン: 再送のたびに重複して記録される",
+    ]
+
+
 def test_a_backlog_of_open_scan_issues_limits_what_is_filed(repo):
     backlog = [{"state": "open", "body": ""}] * (scan.MAX_OPEN - 1) + [{"state": "CLOSED", "body": ""}]
     findings = [_finding(title="一つ目"), _finding(title="二つ目", path="adapters/slack/send.py")]
@@ -156,6 +172,7 @@ def test_workflow_keeps_the_scanning_job_read_only():
     assert "gh api --paginate --slurp" in scan_job
     assert "anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe" in scan_job
     assert "issues: write" in file_job and "contents" not in file_job
+    assert "vars.AUTOMATION_ENABLED == 'true'" in file_job
     assert f'--label "{scan.SCAN_LABEL}" --label "{scan.TRIAGE_LABEL}"' in file_job
     assert "担当:" not in file_job
     assert f"最大{scan.MAX_ISSUES}件" in scan_job

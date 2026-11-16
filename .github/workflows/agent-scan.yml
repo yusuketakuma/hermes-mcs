@@ -97,7 +97,10 @@ jobs:
 
   file:
     needs: scan
-    if: needs.scan.outputs.issues != '' && needs.scan.outputs.issues != '[]'
+    # The switch is asked again: a scan that was running when it was turned off files nothing.
+    if: >-
+      vars.AUTOMATION_ENABLED == 'true' &&
+      needs.scan.outputs.issues != '' && needs.scan.outputs.issues != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

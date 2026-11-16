@@ -4,10 +4,12 @@
 The scanning model only reads the checkout and returns its findings. This script plans what
 it looks at (areas with recent commits first, then the rotation) and decides what reaches the
 public issue tracker: findings must name a file that exists, fit the size limits, and not
-repeat an issue filed before (open or closed, so a finding the owner rejected stays rejected).
+repeat an issue filed before, even reworded (open or closed, so a finding the owner rejected
+stays rejected).
 A backlog of unanswered scan issues pauses the scan. Stdlib only, like the rest of ci/.
 """
 import argparse
+import difflib
 import hashlib
 import json
 import re
@@ -31,6 +33,10 @@ MAX_TEXT = 1500
 # Packages beside mcs/ that hold runtime code; mcs/ contributes one area per subpackage.
 TOP_LEVEL_AREAS = ("adapters", "hermes_plugin", "lineworks_adapter", "mcs_standalone")
 _MARKER = re.compile(r"<!-- agent-scan:([0-9a-f]{12}) -->")
+_PLACE = re.compile(r"^## 場所\n`([^`\n]+)`", re.M)
+TITLE_PREFIX = "スキャン: "
+# Two titles about one file this alike are the same finding reworded.
+SAME_TITLE = 0.75
 
 
 def areas(root=ROOT):
@@ -87,13 +93,32 @@ def open_count(issues):
 
 def fingerprint(path, title):
     """Identity of a finding across runs: the file plus the title without spacing or case."""
-    key = path + "\n" + "".join(title.split()).lower()
+    key = path + "\n" + _key(title)
     return hashlib.sha256(key.encode()).hexdigest()[:12]
 
 
 def filed_fingerprints(issues):
     """Fingerprints of the scan issues already in the tracker."""
     return {mark for issue in issues for mark in _MARKER.findall(issue.get("body") or "")}
+
+
+def _key(title):
+    return "".join(title.split()).lower()
+
+
+def filed_titles(issues):
+    """{path: [title keys]} of the scan issues already in the tracker."""
+    filed = {}
+    for issue in issues:
+        place = _PLACE.search(issue.get("body") or "")
+        if place:
+            filed.setdefault(place.group(1), []).append(_key((issue.get("title") or "").removeprefix(TITLE_PREFIX)))
+    return filed
+
+
+def _reworded(title, earlier):
+    """True when `title` says what one of the `earlier` titles about the same file said."""
+    return any(difflib.SequenceMatcher(None, _key(title), other).ratio() >= SAME_TITLE for other in earlier)
 
 
 def _text(value, limit):
@@ -119,6 +144,7 @@ def _repo_file(path, scanned, root):
 def issues_to_file(findings, existing, scanned, root=ROOT):
     """Issues ({title, body}) for the valid, new findings, within the per-run and backlog limits."""
     seen = filed_fingerprints(existing)
+    titles = filed_titles(existing)
     limit = min(MAX_ISSUES, MAX_OPEN - open_count(existing))
     issues = []
     for finding in findings if isinstance(findings, list) else []:
@@ -133,9 +159,10 @@ def issues_to_file(findings, existing, scanned, root=ROOT):
         if not (path and title and problem and evidence):
             continue
         mark = fingerprint(path, title)
-        if mark in seen:
+        if mark in seen or _reworded(title, titles.get(path, ())):
             continue
         seen.add(mark)
+        titles.setdefault(path, []).append(_key(title))
         line = finding.get("line")
         place = f"`{path}`" + (f" {line} 行目付近" if isinstance(line, int) and line > 0 else "")
         body = [
@@ -147,7 +174,7 @@ def issues_to_file(findings, existing, scanned, root=ROOT):
         if suggestion:
             body += ["", "## 直し方の案", suggestion]
         body += ["", f"<!-- agent-scan:{mark} -->"]
-        issues.append({"title": f"スキャン: {title}", "body": "\n".join(body)})
+        issues.append({"title": TITLE_PREFIX + title, "body": "\n".join(body)})
     return issues
 
 
