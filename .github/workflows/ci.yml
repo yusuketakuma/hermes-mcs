@@ -82,11 +82,6 @@ jobs:
           path: ${{ runner.temp }}/mcs-pytest-*/
           retention-days: 7
           if-no-files-found: ignore
-      - name: check generated docs on PR
-        if: github.event_name == 'pull_request'
-        run: |
-          python3 scripts/development/update_readme.py
-          git diff --exit-code -- README.md docs/development/DEVELOPMENT.md
 
   hygiene:
     runs-on: ubuntu-latest
@@ -125,6 +120,17 @@ jobs:
         run: |
           grep -q "kind: standalone" hermes_plugin/plugin.yaml
           grep -q "register" hermes_plugin/__init__.py
+      # Keep the existing Python version and commands, but do not wait for the
+      # long Linux suite (or let its failure hide documentation drift).
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        with:
+          python-version: "3.14"
+      - name: check generated docs on PR
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        run: |
+          python3 scripts/development/update_readme.py
+          git diff --exit-code -- README.md docs/development/DEVELOPMENT.md
 
   standalone-sdk:
     # runtime_mode=standalone against the exact SDK pins install.sh puts in

@@ -92,3 +92,43 @@ def test_ci_secret_scan_exempts_only_exact_public_vector_bytes(tmp_path, changed
     assert result.returncode == expected, result.stdout + result.stderr
     if expected:
         assert 'possible secret committed' in result.stdout
+
+
+def test_documentation_drift_is_checked_in_independent_fast_lane():
+    text = (ROOT / ".github/workflows/ci.yml").read_text()
+    jobs = _jobs(text)
+    assert text.count("- name: check generated docs on PR") == 1
+    assert "check generated docs on PR" not in jobs["lint-test"]
+    hygiene = jobs["hygiene"]
+    assert "runs-on: ubuntu-latest" in hygiene
+    assert "needs:" not in hygiene  # no dependency on slow or failing tests
+    assert "continue-on-error" not in hygiene
+    setup, drift = hygiene.split("      - uses: actions/setup-python@", 1)[1].split(
+        "      - name: check generated docs on PR", 1)
+    assert setup.startswith("6d4fd22b20465ccc0f7354476588e8df7c9ca0e0")
+    assert 'python-version: "3.14"' in setup
+    for block in (setup, drift):
+        assert "if: ${{ !cancelled() && github.event_name == 'pull_request' }}" in block
+    assert "python3 scripts/development/update_readme.py" in drift
+    assert "git diff --exit-code -- README.md docs/development/DEVELOPMENT.md" in drift
+
+
+@pytest.mark.parametrize("target", [None, "README.md", "docs/development/DEVELOPMENT.md"])
+def test_fast_documentation_step_keeps_drift_failure(tmp_path, target):
+    # Execute the unchanged workflow shell against a synthetic generator/repo.
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    step = workflow.split("      - name: check generated docs on PR\n", 1)[1]
+    block = step.split("        run: |\n", 1)[1].split("\n  standalone-sdk:", 1)[0]
+    generator = tmp_path / "scripts/development/update_readme.py"
+    generator.parent.mkdir(parents=True)
+    generator.write_text("from pathlib import Path\n" + (
+        f"Path({target!r}).write_text('changed\\n')\n" if target else "pass\n"))
+    for name in ("README.md", "docs/development/DEVELOPMENT.md"):
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("baseline\n")
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    result = subprocess.run(["sh", "-eu", "-c", textwrap.dedent(block)],
+                            cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == (1 if target else 0), result.stdout + result.stderr
