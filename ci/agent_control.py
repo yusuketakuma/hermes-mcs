@@ -8,8 +8,10 @@ imports nothing from the application. Standard library only.
   gate     verdict for the `merge-gate` commit status of a PR head, whether
            the PR needs a person, auto-merge eligibility, and the attempt
            labels to set on the linked issue after a failed CI run
-  attempt  the attempt labels after one more failure, and whether the
-           assigned agent may be re-run on the failure (repair)
+  attempt  the attempt labels after one more failure
+  linked   the issues a PR closes (Fixes #N and the like)
+  repair   whether Claude may repair a failed PR now, from the PR and the
+           current labels of its linked issues
   lock     whether a newly added 担当:* label conflicts with another one
   assigned whether an agent label is the issue's only assignment
 
@@ -202,11 +204,29 @@ def next_attempt(labels):
     return remove, add, exhausted
 
 
-def may_repair(branch, labels, exhausted, automation_enabled):
-    """True when the assigned Claude may be re-run on a CI failure of `branch`."""
-    return (automation_enabled and not exhausted and branch.startswith(REPAIR_PREFIX)
-            and REPAIR_AGENT_LABEL in labels and OWNER_LABEL not in labels
-            and not any(name in HOLD_LABELS for name in labels))
+def repair_refusal(pr, issue_labels, automation_enabled):
+    """Why Claude may not repair `pr` now, or None. `issue_labels` maps each linked issue to its current labels.
+
+    Every linked issue must still be Claude's alone and unheld: one exhausted or
+    reassigned issue stops the repair of the whole PR.
+    """
+    if not automation_enabled:
+        return "自動化の停止中"
+    if pr.get("state") != "open" or not same_repository(pr) or not pr["head"]["ref"].startswith(REPAIR_PREFIX):
+        return "このリポジトリの開いた agent/claude- ブランチではない"
+    issues = linked_issues(pr.get("body"))
+    if not issues:
+        return "結ばれた Issue がない"
+    for number in issues:
+        labels = issue_labels.get(str(number), issue_labels.get(number))
+        if labels is None:
+            return f"#{number} のラベルを取得できない"
+        if not assigned_to(labels, REPAIR_AGENT_LABEL):
+            return f"#{number} の担当が Claude だけではない"
+        held = [name for name in labels if name == OWNER_LABEL or name in HOLD_LABELS]
+        if held:
+            return f"#{number} が保留中（{', '.join(held)}）"
+    return None
 
 
 def decide_gate(pr, check_runs, files, behind_by, automation_enabled, ci_conclusion=None):
@@ -284,8 +304,12 @@ def main(argv=None):
     gate.add_argument("--ci-conclusion", default="")
     attempt = sub.add_parser("attempt")
     attempt.add_argument("--labels", required=True, help="JSON list of label names")
-    attempt.add_argument("--branch", default="")
-    attempt.add_argument("--automation", default="")
+    linked = sub.add_parser("linked")
+    linked.add_argument("--pr", required=True)
+    repair = sub.add_parser("repair")
+    repair.add_argument("--pr", required=True)
+    repair.add_argument("--issue-labels", required=True, help="JSON object: issue number -> label names")
+    repair.add_argument("--automation", default="")
     lock = sub.add_parser("lock")
     lock.add_argument("--labels", required=True, help="JSON list of label names")
     lock.add_argument("--added", required=True)
@@ -297,10 +321,13 @@ def main(argv=None):
         plan = decide_gate(_load(args.pr), _flatten_checks(_load(args.checks)), _flatten(_load(args.files)),
                            args.behind_by, args.automation == "true", args.ci_conclusion or None)
     elif args.command == "attempt":
-        labels = json.loads(args.labels)
-        remove, add, exhausted = next_attempt(labels)
-        plan = {"remove": remove, "add": add, "exhausted": exhausted,
-                "repair": may_repair(args.branch, labels, exhausted, args.automation == "true")}
+        remove, add, exhausted = next_attempt(json.loads(args.labels))
+        plan = {"remove": remove, "add": add, "exhausted": exhausted}
+    elif args.command == "linked":
+        plan = {"issues": linked_issues(_load(args.pr).get("body"))}
+    elif args.command == "repair":
+        refusal = repair_refusal(_load(args.pr), _load(args.issue_labels), args.automation == "true")
+        plan = {"allowed": refusal is None, "reason": refusal or ""}
     elif args.command == "assigned":
         plan = {"assigned": assigned_to(json.loads(args.labels), args.agent)}
     else:

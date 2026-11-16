@@ -82,11 +82,9 @@ jobs:
             gh api -X POST "repos/$GH_REPO/statuses/$sha" -f context=merge-gate -f state="$state" \
               -f description="$(jq -r .description "$work/plan.json")" > /dev/null
             branch=$(jq -r .head.ref "$work/pr.json")
-            repair=false
             for issue in $(jq -r '.attempts[].issue' "$work/plan.json"); do
               labels=$(gh api "repos/$GH_REPO/issues/$issue" --jq '[.labels[].name]')
-              step=$(python3 ci/agent_control.py attempt --labels "$labels" --branch "$branch" --automation "${AUTOMATION:-}")
-              if [[ "$(jq -r .repair <<< "$step")" == "true" ]]; then repair=true; fi
+              step=$(python3 ci/agent_control.py attempt --labels "$labels")
               for name in $(jq -r '.remove[]' <<< "$step"); do
                 gh api -X DELETE "repos/$GH_REPO/issues/$issue/labels/$(jq -rn --arg n "$name" '$n|@uri')" > /dev/null || true
               done
@@ -96,7 +94,9 @@ jobs:
               fi
             done
             # GITHUB_TOKEN may start workflow_dispatch; the repair run pushes as the Claude App, so CI runs again.
-            if [[ "$repair" == "true" ]]; then
+            # The repair workflow re-reads every linked issue and refuses if any is exhausted, reassigned or held.
+            if [[ "$(jq '.attempts | length' "$work/plan.json")" != "0" && "$branch" == agent/claude-* &&
+                  "${AUTOMATION:-}" == "true" ]]; then
               gh workflow run agent-claude-repair.yml --ref "$DEFAULT_BRANCH" -f pr="$pr"
             fi
             last_pr="$pr"; last_sha="$sha"
