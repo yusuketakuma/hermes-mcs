@@ -371,21 +371,49 @@ def _empty_repair_prior(db, pid, mid):
     return refs
 
 
+def _empty_repair_consumed(db, pid, mid, fp, policy, candidate_id, content) -> bool:
+    """Whether a final result of this empty-repair candidate was committed after it.
+
+    Proof is a PASS/NEEDS_REVIEW audit written after the candidate, counting
+    the one repair, for this input and policy, paired (by id and hash) with a
+    summary written after the candidate that has the candidate's claims."""
+    for audit in db.execute('SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? '
+                            'AND message_id=? AND artifact_id>? ORDER BY artifact_id DESC',
+                            (KIND_AUDIT, pid, mid, candidate_id)):
+        audit_content, meta = strict_json(audit['content']), strict_json(audit['meta'])
+        if (not isinstance(audit_content, dict) or not isinstance(meta, dict) or not is_current(meta)
+                or meta.get('fingerprint') != fp or meta.get('policy_fingerprint') != policy
+                or meta.get('repair_count') != 1 or audit_content.get('status') not in ('PASS', 'NEEDS_REVIEW')
+                or meta.get('audit_status') != audit_content['status']
+                or type(meta.get('summary_artifact_id')) is not int or meta['summary_artifact_id'] <= candidate_id):
+            continue
+        summary = db.execute('SELECT content FROM artifacts WHERE artifact_id=? AND kind=? AND project_id=? '
+                             'AND message_id=?', (meta['summary_artifact_id'], KIND_SUMMARY, pid, mid)).fetchone()
+        summary = strict_json(summary['content']) if summary is not None else None
+        if (isinstance(summary, dict) and meta.get('summary_hash') == mcs_util.payload_hash(summary)
+                and summary.get('claims') == content.get('claims')):
+            return True
+    return False
+
+
 def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, reason_out=None,
                             fact_kind=None):
     """Recover only the latest source-bound, reserved empty repair candidate.
 
-    With ``fact_kind``, a reservation made before the current facts were
-    written (a local model change redid them) whose candidate is not bound
-    to them reserves nothing: the target is summarized again from the
-    current facts, and the spent repair stays recorded on its marker."""
+    A reservation reserves nothing once its result was committed (the
+    summary is later dropped, e.g. over another fact document or a redone
+    local model) and, with ``fact_kind``, when it was made before the
+    current facts were written (a local model change redid them) and its
+    candidate is not bound to them. The target then takes the ordinary
+    path; the spent repair stays recorded on its marker, so it is neither
+    refunded nor repeated and nothing is published without a new audit."""
     def held(reason, reserved=True):
         if reason_out is not None:
             reason_out['code'] = reason
         return None, reserved
 
     try:
-        row = db.execute('SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? '
+        row = db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? '
                          'AND message_id=? ORDER BY artifact_id DESC LIMIT 1',
                          (KIND_CANDIDATE, pid, mid)).fetchone()
         content, meta = (strict_json(row['content']), strict_json(row['meta'])) if row else (None, None)
@@ -405,6 +433,10 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
             return held('empty_repair_marker_binding', candidate_bound)
         if not is_current(marker_meta) or marker_meta.get('invalidated') or marker_meta.get('stale'):
             return held('empty_repair_marker_currentness')
+        if (candidate_bound and isinstance(content, dict) and type(meta.get('repair_artifact_id')) is int
+                and meta['repair_artifact_id'] == marker['artifact_id']
+                and _empty_repair_consumed(db, pid, mid, fp, policy, row['artifact_id'], content)):
+            return held('empty_repair_consumed', False)
         if (fact_kind is not None
                 and semantic_store.facts_rewritten_after(db, fact_kind, mid, fp, marker['artifact_id'])
                 and not (candidate_bound and isinstance(content, dict)

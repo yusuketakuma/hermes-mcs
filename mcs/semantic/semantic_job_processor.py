@@ -188,9 +188,16 @@ def _fact_kind(scfg) -> str:
 
 
 def _bound_candidate(db, scfg, pid, mid, fp, policy, revision, facts):
-    """The current pre-audit candidate when it was written from the facts current now, else None."""
+    """The current candidate when it was written from the facts current now and
+    not rejected by its audit, else None.
+
+    A repair reserved after the candidate means its audit rejected it (the
+    repaired text is not a candidate); an empty-repair candidate is written
+    after its own reservation and stays usable."""
     candidate = current_artifact(db, KIND_CANDIDATE, mid, fp, policy)
-    if candidate is None or not semantic_store.built_over_current_facts(
+    repair = semantic_store.current_row_id(db, KIND_REPAIR, mid, fp)
+    if candidate is None or (repair is not None and repair > semantic_store.current_row_id(
+            db, KIND_CANDIDATE, mid, fp, policy)) or not semantic_store.built_over_current_facts(
             db, KIND_CANDIDATE, mid, fp, policy, candidate["meta"].get("claim_input_binding"),
             _claim_input_binding(pid, mid, fp, policy, revision, candidate["content"], facts),
             _fact_kind(scfg)):

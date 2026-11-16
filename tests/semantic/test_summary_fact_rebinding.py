@@ -246,14 +246,33 @@ class _FailSummary(_Model):
 
 
 @pytest.mark.parametrize("mode,fails", [("model", 2), ("not_sent", 1)])
-def test_failed_regeneration_is_regenerated_on_resume_not_reaudited(cloud_over_local, monkeypatch, mode, fails):
-    """A PENDING stub written by a failed regeneration does not hide which facts the old summary had."""
+@pytest.mark.parametrize("restored", [False, True])
+def test_failed_regeneration_is_regenerated_on_resume_not_reaudited(
+        cloud_over_local, monkeypatch, mode, fails, restored):
+    """A PENDING stub written by a failed regeneration does not hide which facts the old summary had.
+
+    The audit written with the summary decides, not the later stub: when the
+    earlier local model is restored and redoes the same facts, the earlier
+    summary is current again and re-audited (the stub is PENDING) without a
+    summarizer call, although no candidate is left to fall back on."""
     db, before = cloud_over_local
     _change_local_model(db, monkeypatch)
     model = _FailSummary(fails, mode)
     _run(db, model)
     assert _state(db) == "pending" and _summary(db, 1) is None
+    stub = _kind_rows(db, semantic_policy.KIND_AUDIT, 1)[-1]
+    assert json.loads(stub["content"])["status"] == "PENDING"
+    assert "claim_input_binding" not in json.loads(stub["meta"])
     failed = model.summaries()
+    if restored:
+        db.db.execute("DELETE FROM artifacts WHERE kind=? AND message_id=1", (semantic_policy.KIND_CANDIDATE,))
+        db.db.commit()
+        monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-a")
+        db.semantic_seed(1, [1, 2], {"source": "history_import"})
+        jev = _run(db, model, rounds=2)
+        assert _state(db) == "done" and model.summaries() == failed and _claim_audits(jev) == 1
+        assert _summary(db, 2) == before[2] and _claims(db, _summary(db, 1)) == _claims(db, before[1])
+        return
     _run(db, model, rounds=3)
     after = _summary(db, 1)
     assert _state(db) == "done" and after and after != before[1]
@@ -297,14 +316,31 @@ def test_same_projected_facts_in_another_document_republish(cloud_over_local, mo
     after = _summary(db, 1)
     assert _state(db) == "done" and after and after != before[1]
     assert "prior_pass_unverified" not in reasons and model.summaries() == 0
-    assert jev.requests_made >= 1        # the candidate was audited again
+    assert _claim_audits(jev) == 1       # the candidate was audited again, once
     assert _claims(db, after) == _claims(db, before[1])
     assert {mid: _summary(db, mid) for mid in (2,)} == {2: before[2]}
 
 
-@pytest.mark.parametrize("variant", ["reword", "identical", "nochange"])
-def test_empty_repair_candidate_over_earlier_facts(tmp_path, monkeypatch, variant):
-    """An empty repair reserved over earlier facts holds nothing once the facts are redone."""
+class _LocalSummaryModel(_Model):
+    """Facts from the cloud, summaries from the local model."""
+
+    def __call__(self, prompt):
+        self.calls.append(prompt)
+        semantic_transport._record_inference("local" if "要約器" in prompt else "anthropic")
+        return _llm_v2(prompt)
+
+
+@pytest.mark.parametrize("variant,stage", [
+    ("reword", "interrupted"), ("identical", "interrupted"), ("nochange", "interrupted"),
+    ("action", "completed"), ("local_summary", "completed")])
+def test_empty_repair_candidate_over_earlier_facts(tmp_path, monkeypatch, variant, stage):
+    """An empty repair holds nothing once its facts are redone or its result was committed.
+
+    ``interrupted``: the audit of the repaired text never ran. ``completed``:
+    the repaired text was audited and its PASS committed, then the summary
+    is dropped — by a fact document change that leaves the projection
+    unchanged (``action``), or because a local summary is redone after a
+    local model change while the cloud facts stay (``local_summary``)."""
     import semantic_summary_stages
     monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-a")
     db = _seeded_two(tmp_path)
@@ -322,27 +358,39 @@ def test_empty_repair_candidate_over_earlier_facts(tmp_path, monkeypatch, varian
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
     monkeypatch.setattr(semantic_summary_stages, "summarize", semantic_drain.summarize)
     real_audit = semantic_audit.audit_claims
-    stop = [True]
+    stop = [stage == "interrupted"]
 
     def audit(client, bundle, summary, *args, **kwargs):
         if stop[0] and summary["target_message_id"] == 1:
             raise runtime.LLMNotSent("synthetic_audit_stop")
         return real_audit(client, bundle, summary, *args, **kwargs)
     monkeypatch.setattr(semantic_audit, "audit_claims", audit)
+
+    def model():
+        if variant == "local_summary":
+            return _LocalSummaryModel()
+        return _ActionModel() if variant == "action" else _Model(reword=variant == "reword")
     try:
-        _run(db, _Model(), rounds=2)
-        assert calls == [(1, False), (1, True)] and _state(db) == "pending"
+        _run(db, model(), rounds=2)
+        if stage == "interrupted":
+            assert calls == [(1, False), (1, True)] and _state(db) == "pending"
+        else:
+            assert calls == [(1, False), (1, True), (2, False)] and _state(db) == "done"
+            assert _summary(db, 1)
         stop[0] = False
         if variant != "nochange":
             _change_local_model(db, monkeypatch)
         reasons = _reasons(monkeypatch)
         del calls[:]
-        _run(db, _Model(reword=variant == "reword"), rounds=3)
+        _run(db, model(), rounds=1 if stage == "completed" else 3)
         assert _state(db) == "done" and _summary(db, 1) and not reasons
-        # reworded facts: summarized once more from them, never repaired again;
-        # otherwise the repaired candidate bound to the current facts is audited
-        assert [call for call in calls if call[0] == 1] == ([(1, False)] if variant == "reword" else [])
+        # reworded facts or a redone local summary: summarized once more,
+        # never repaired again; otherwise the repaired candidate bound to
+        # the current facts is audited
+        assert [call for call in calls if call[0] == 1] == (
+            [(1, False)] if variant in ("reword", "local_summary") else [])
         assert (_B_STATEMENT in _claims(db, _summary(db, 1))) is (variant == "reword")
+        assert len(_kind_rows(db, semantic_policy.KIND_REPAIR, 1)) == 1
     finally:
         db.close()
 
@@ -390,15 +438,208 @@ def test_legacy_fact_source_interrupted_after_a_model_change(tmp_path, monkeypat
         db.close()
 
 
-def test_rows_without_bindings_rerun_without_calls(cloud_over_local):
-    """Candidate and coverage rows written before bindings existed: nothing changed, no call."""
+@pytest.mark.parametrize("consulted", [False, True])
+def test_rows_without_bindings_rerun_without_calls(cloud_over_local, consulted):
+    """Candidate and coverage rows written before bindings existed: nothing changed, no call.
+
+    ``consulted``: member 1's publication receipt lacks its document hash, so
+    the summary is judged again and the unbound candidate (no fact row
+    written after it) is audited instead of summarizing again."""
     db, before = cloud_over_local
     for kind, key in ((semantic_policy.KIND_COVERAGE, "fact_input_binding"),
                       (semantic_policy.KIND_CANDIDATE, "claim_input_binding")):
         db.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$." + key + "') WHERE kind=?", (kind,))
+    if consulted:
+        db.db.execute("UPDATE artifacts SET content=json_remove(content,'$.doc_hash') WHERE kind='v4_stage' "
+                      "AND message_id=1 AND json_extract(meta,'$.stage')='s8_publish'")
     db.db.commit()
     db.semantic_seed(1, [1, 2], {"source": "history_import"})
     model = _Model()
     jev = _run(db, model, rounds=2)
-    assert _state(db) == "done" and not model.calls and jev.requests_made == 0
+    assert _state(db) == "done" and model.summaries() == 0
+    assert (_claim_audits(jev), jev.requests_made > 0) == ((1, True) if consulted else (0, False))
+    assert not model.calls or consulted
     assert {mid: _summary(db, mid) for mid in (1, 2)} == before
+
+
+_UNSUPPORTED = "（未確認の追記）"
+
+
+class _RejectMarkedJev(_PassJev):
+    """Claims carrying ``_UNSUPPORTED`` are judged not supported (the audit asks for a repair)."""
+
+    def evaluate(self, state, questions, deadline):
+        out = super().evaluate(state, questions, deadline)
+        for claim in ((state or {}).get("target") or {}).get("claims") or []:
+            if _UNSUPPORTED in claim.get("text", "") and claim["id"] in out["answers"]:
+                out["answers"][claim["id"]]["choice"] = "not_supported"
+        return out
+
+
+class _RepairedModel(_ActionModel):
+    """Member 1's first summary carries an unsupported addition; the repair drops it."""
+
+    def __init__(self, action=False):
+        super().__init__(reword=False)
+        self.action, self.marked = action, False
+        self.repairs = 0
+
+    def __call__(self, prompt):
+        if "要約器" in prompt:
+            self.calls.append(prompt)
+            semantic_transport._record_inference("anthropic")
+            out = json.loads(_llm_v2(prompt))
+            target = prompt.split("事実候補(番号付き):")[1][:200]
+            self.repairs += "前回の出力は監査で不合格でした" in prompt
+            if "アムロジピン" in prompt and "メトホルミン500mgが出ています" not in target:
+                if not self.marked:
+                    self.marked = True
+                    for claim in out["claims"]:
+                        claim["text"] += _UNSUPPORTED
+            return json.dumps(out, ensure_ascii=False)
+        if self.action:
+            return super().__call__(prompt)
+        return _Model.__call__(self, prompt)
+
+
+def _mark_cloud(db, status):
+    """Record member 1's repaired summary as cloud-produced (a proven cloud repair)."""
+    db.db.execute(
+        "UPDATE artifacts SET meta=json_set(meta,'$.provider_provenance.providers',"
+        "json('[\"anthropic\"]'),'$.provider_provenance.complete',json('true')) "
+        "WHERE kind=? AND message_id=1 AND json_extract(meta,'$.audit_status')=?",
+        (semantic_policy.KIND_SUMMARY, status))
+    db.db.commit()
+
+
+@pytest.mark.parametrize("case", ["document_changed_cloud_current", "identical_unproven_repair"])
+def test_repaired_summary_is_not_replaced_by_its_rejected_candidate(tmp_path, monkeypatch, case):
+    """The pre-audit candidate of a repaired summary was rejected by its audit: never reused.
+
+    When the repaired PASS summary is dropped (its fact document changed, or
+    the local model changed and the repair has no proven repair evidence),
+    the summarizer runs once without a repair; the spent repair is not repeated."""
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-a")
+    db = _seeded_two(tmp_path)
+    try:
+        model = _RepairedModel()
+        _run(db, model, rounds=3, jev=_RejectMarkedJev())
+        assert _state(db) == "done" and model.marked
+        repaired = _summary(db, 1)
+        assert repaired and _UNSUPPORTED not in _claims(db, repaired)
+        repairs = len(_kind_rows(db, semantic_policy.KIND_REPAIR, 1))
+        assert repairs >= 1
+        candidates = _kind_rows(db, semantic_policy.KIND_CANDIDATE, 1)
+        assert _UNSUPPORTED in candidates[-1]["content"]
+        if case == "document_changed_cloud_current":
+            # the repaired summary counts as cloud-produced: kept across the model change
+            _mark_cloud(db, "PASS")
+        _change_local_model(db, monkeypatch)
+        model = _RepairedModel(action=case == "document_changed_cloud_current")
+        model.marked = True
+        _run(db, model, rounds=2, jev=_RejectMarkedJev())
+        after = _summary(db, 1)
+        assert _state(db) == "done" and after and after != repaired
+        assert model.summaries() == 1 and model.repairs == 0
+        row = db.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (after,)).fetchone()
+        assert json.loads(row[0])["audit_status"] == "PASS"
+        assert _UNSUPPORTED not in _claims(db, after)
+        assert len(_kind_rows(db, semantic_policy.KIND_REPAIR, 1)) == repairs
+    finally:
+        db.close()
+
+
+def _claim_audits(jev):
+    return sum(any(qid.startswith("claim") for qid in questions) for questions in jev.calls)
+
+
+def _s8(db, mid):
+    return db.db.execute(
+        "SELECT artifact_id, content FROM artifacts WHERE kind='v4_stage' AND message_id=? "
+        "AND json_extract(meta,'$.stage')='s8_publish' ORDER BY artifact_id", (mid,)).fetchall()
+
+
+def _latest_summary(db, mid):
+    row = _kind_rows(db, semantic_policy.KIND_SUMMARY, mid)[-1]
+    return row["artifact_id"], json.loads(row["meta"])["audit_status"]
+
+
+@pytest.mark.parametrize("candidate", [True, False])
+def test_publication_receipt_without_document_hash_is_republished_once(
+        cloud_over_local, monkeypatch, candidate):
+    """An S8 receipt without ``doc_hash`` cannot show the summary's document: judged again once.
+
+    With a usable candidate: one claim audit and no summarizer call; without
+    one: one summarizer call and one claim audit. An identical result keeps
+    the stored summary row; the new S8 receipt carries the hash."""
+    db, before = cloud_over_local
+    receipts = len(_s8(db, 1))
+    for row_id, content in _s8(db, 1):
+        stripped = {k: v for k, v in json.loads(content).items() if k != "doc_hash"}
+        db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (json.dumps(stripped), row_id))
+    if not candidate:
+        db.db.execute("DELETE FROM artifacts WHERE kind=? AND message_id=1", (semantic_policy.KIND_CANDIDATE,))
+    db.db.commit()
+    db.semantic_seed(1, [1, 2], {"source": "history_import"})
+    model = _Model()
+    jev = _run(db, model, rounds=2)
+    after = _summary(db, 1)
+    assert _state(db) == "done" and after == before[1] and _summary(db, 2) == before[2]
+    assert model.summaries() == (0 if candidate else 1) and _claim_audits(jev) == 1
+    assert len(_s8(db, 1)) == receipts + 1 and "doc_hash" in json.loads(_s8(db, 1)[-1][1])
+    # one-time: the next re-run reuses the republished summary without a call
+    db.semantic_seed(1, [1, 2], {"source": "history_import"})
+    model, jev = _Model(), _PassJev()
+    _run(db, model, jev=jev)
+    assert _state(db) == "done" and not model.calls and jev.requests_made == 0 and _summary(db, 1) == after
+
+
+@pytest.mark.parametrize("rewritten", [False, True])
+def test_without_publication_receipt_the_fact_order_decides(cloud_over_local, monkeypatch, rewritten):
+    """No S8 receipt: the summary is reused only while no fact row was written after it."""
+    db, before = cloud_over_local
+    db.db.execute("DELETE FROM artifacts WHERE kind='v4_stage' AND message_id=1 "
+                  "AND json_extract(meta,'$.stage')='s8_publish'")
+    db.db.commit()
+    if rewritten:
+        _change_local_model(db, monkeypatch)       # identical projection, another document
+        model = _ActionModel()
+    else:
+        db.semantic_seed(1, [1, 2], {"source": "history_import"})
+        model = _Model()
+    jev = _run(db, model, rounds=2)
+    assert _state(db) == "done"
+    if rewritten:
+        assert _latest_summary(db, 1)[0] != before[1] and _claim_audits(jev) >= 1
+    else:
+        assert not model.calls and jev.requests_made == 0 and _latest_summary(db, 1)[0] == before[1]
+
+
+def test_needs_review_summary_over_another_document_is_regenerated(tmp_path, monkeypatch):
+    """A reused NEEDS_REVIEW summary must also match the current fact document."""
+    class Reject(_PassJev):
+        def evaluate(self, state, questions, deadline):
+            out = super().evaluate(state, questions, deadline)
+            target = (state or {}).get("target") or {}
+            for claim in target.get("claims") or []:
+                if "アムロジピン" in claim.get("text", "") and claim["id"] in out["answers"]:
+                    out["answers"][claim["id"]]["choice"] = "not_supported"
+            return out
+
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-a")
+    db = _seeded_two(tmp_path)
+    try:
+        _run(db, _Model(), rounds=3, jev=Reject())
+        before, status = _latest_summary(db, 1)
+        assert status == "NEEDS_REVIEW"
+        repairs = len(_kind_rows(db, semantic_policy.KIND_REPAIR, 1))
+        _mark_cloud(db, "NEEDS_REVIEW")      # kept across the model change by its producer
+        _change_local_model(db, monkeypatch)
+        model = _ActionModel()
+        _run(db, model, rounds=2, jev=Reject())
+        after, status = _latest_summary(db, 1)
+        # regenerated over the current document; the spent repair is not repeated
+        assert after != before and status == "NEEDS_REVIEW" and model.summaries() == 1
+        assert len(_kind_rows(db, semantic_policy.KIND_REPAIR, 1)) == repairs
+    finally:
+        db.close()
