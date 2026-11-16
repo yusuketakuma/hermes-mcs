@@ -1486,6 +1486,47 @@ def test_pool_does_not_back_off_after_children_retire_by_policy(tmp_path, monkey
         pool.close()
 
 
+def test_a_long_lived_exit_clears_an_earlier_restart_wait(tmp_path, monkeypatch):
+    (tmp_path / "data").mkdir()
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 2}}
+    now = [1000.0]
+    monkeypatch.setattr(backlog, "time", SimpleNamespace(monotonic=lambda: now[0], sleep=lambda _: None))
+    monkeypatch.setattr(backlog, "memory_workers", lambda _: 2)
+    monkeypatch.setattr(backlog, "helper_path", lambda *a, **kw: "/synthetic/helper")
+    started, alive = [], []
+
+    class Child:
+        def __init__(self, command, **kwargs):
+            started.append(now[0])
+            alive.append(self)
+
+        def poll(self):
+            return None if self in alive else 0
+
+        def terminate(self):
+            pass
+
+        def wait(self, **kwargs):
+            return 0
+    monkeypatch.setattr(backlog.subprocess, "Popen", Child)
+    pool = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        pool.sync(cfg)
+        long_lived, quick = alive
+        now[0] += 11
+        alive.remove(quick)       # exits right after starting: a restart wait is set
+        pool.sync(cfg)
+        assert pool.retry_at > now[0]
+        now[0] += 89
+        alive.remove(long_lived)  # a child that ran for minutes exits normally
+        before = len(started)
+        pool.sync(cfg)
+        assert pool.quick_exits == 0 and pool.retry_at == 0.0
+        assert len(started) == before + 2   # both slots refilled without waiting
+    finally:
+        pool.close()
+
+
 @pytest.mark.parametrize("platform,total_kb,available_kb", [
     ("linux", 4194304, 838861), ("linux", 4194304, 1310720), ("linux", 6291456, 1153434),
     ("linux", 16777216, 2097152), ("linux", 4194304, 1048576), ("darwin", 4194304, 838861),
