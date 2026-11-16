@@ -127,6 +127,8 @@ WIZARD = [
          "同じ患者の通知を1つのスレッドにまとめますか？", lambda cfg: _slack_on(cfg) or _discord_on(cfg)),
         ("notify.card_thread_archive_min", "int", 10080,
          "スレッドをアーカイブするまでの時間（分。10080分=7日）", lambda cfg: _slack_on(cfg) or _discord_on(cfg)),
+        ("notify.preview_privacy", "choice:full,initial,minimal", "full",
+         "ロック画面などの通知プレビューに出す患者情報（full=氏名、initial=氏名の1文字目だけ、minimal=患者情報なし）", _cards_on),
         ("notify.route_epoch", "int", 1,
          "通知先の変更を区別する番号（通常はそのまま。通知先を変更する場合のみ1増やす）", _cards_on),
         ("notify_bot_profile", "opt", None,

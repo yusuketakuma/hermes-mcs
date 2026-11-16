@@ -118,7 +118,7 @@ from safe_io import read_private_bytes
 from notify_render import (
     card_content as card_content, content_fingerprint as content_fingerprint,
     anchor_keys, preview_header, preview_line, fit_parts,
-    plain_notice, presenter, reply_source, own_post as own_post)
+    plain_notice, presenter, reply_layout, reply_source, own_post as own_post)
 import notify_parts
 import notify_action_tokens as action_tokens
 
@@ -141,10 +141,14 @@ DISPATCH_GROUP_LIMIT = 10  # the ordinary flush window, without a new configurat
 # thread. Layout 5 retains that format and adds initial-history summaries.
 # Layout 6 (notify_render.ACTION_FIRST_LAYOUT) retains that format, leads
 # each post summary with 📌 依頼 and shows the card state as the heading icon.
+# Layout 7 brings the layout-6 face to every card that is not a reply-card
+# thread (they were layout 3) and quiets LINE WORKS stamp-only reposts;
+# notify_render.reply_layout tells the two families apart.
 # CARD_LAYOUT is the newest layout this code can write; rollback checks the
 # stored layout on the DB selected by the updater's schema/backup contract.
-CARD_LAYOUT = 6
-FACE_LAYOUT = 3               # every card that is not a reply-card thread
+CARD_LAYOUT = 7
+REPLY_LAYOUT = 6              # reply-card threads and patient history
+FACE_LAYOUT = 7               # every card that is not a reply-card thread
 
 
 # ---------- cards / renders ----------
@@ -216,7 +220,8 @@ def _card_for(db, target, scope, now) -> int:
          scope.get("guild_id"), scope.get("channel_id"),
          scope.get("transport", "discord"), scope.get("team_id"),
          "{}", now, now,
-         CARD_LAYOUT if target.get("reply_layout") or target["kind"] == "patient_history" else min(CARD_LAYOUT, FACE_LAYOUT)))
+         min(CARD_LAYOUT, REPLY_LAYOUT if target.get("reply_layout") or target["kind"] == "patient_history"
+             else FACE_LAYOUT)))
     return cur.lastrowid
 
 
@@ -261,7 +266,7 @@ def _split_reply_targets(db, targets, scope, cfg):
         # the stored layout decides an existing root (a layout-4 root shows no
         # replies itself, even after the switch is turned off); the switch
         # only decides whether a new root is created as layout 4
-        if scope.get("transport") != "slack" and ((row["layout"] or 1) < 4 if row is not None else not on):
+        if scope.get("transport") != "slack" and (not reply_layout(row["layout"]) if row is not None else not on):
             out.append(target)
             continue
         root = target["root_message_id"]
@@ -300,7 +305,8 @@ def _resolve_targets(db, ev, payload, *, cfg=None) -> list:
                  AND NOT EXISTS(SELECT 1 FROM patients patient
                      WHERE patient.project_id=m.project_id AND patient.is_archived=1)
                  AND c.kind='thread'
-                 AND NOT (c.layout>=4 AND m.message_id<>c.root_message_id
+                 -- reply-card layouts: notify_render.REPLY_LAYOUTS
+                 AND NOT (c.layout IN (4,5,6) AND m.message_id<>c.root_message_id
                           AND (NOT json_valid(c.anchor_key)
                                OR json_extract(c.anchor_key,'$.source') IS NULL))
                  AND c.delivery_state IN ('delivered','update_failed')

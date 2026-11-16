@@ -89,7 +89,11 @@ def urgent_room_head(parts) -> dict:
                                     {"type": "text", "rule": True, "text": head["text"]}, *rest]}
 
 POST_ACTIONS = False          # one text bubble: no per-post controls
-ACCENT_URGENT = False
+ACCENT_URGENT = True           # urgent: the heading on a red header band
+# Layout 7: a post cannot be edited, so a stamp-only change waits for the
+# next repost (owner decision 2026-11-16); per-post rows replace the
+# footer aggregate (notify_render.QUIET_STAMP_LAYOUT).
+QUIET_STAMPS = True
 
 
 def mark_reposted(containers) -> list:

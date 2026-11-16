@@ -94,7 +94,7 @@ PARTS_KEYS = frozenset({
 # what each transport namespace may hold
 TRANSPORT_PART_KEYS = {"slack": frozenset({"post_actions", "face_posts", "file_group"}),
                        "discord": frozenset({"post_actions", "accent", "face_posts"}),
-                       "lineworks": frozenset({"face_posts"})}
+                       "lineworks": frozenset({"accent", "face_posts"})}
 # discord card edge: 🚨 urgent, else the layout-6 card state (ack / assign)
 ACCENTS = frozenset({"urgent", "acked", "assigned"})
 POST_ACTION_IDS = frozenset({"meds"})   # read-only, clicker-scoped views

@@ -209,13 +209,20 @@ class Screen:
         return y + 194
 
     def provider_row(self, x, y, post, width):
-        """Keep per-post processing separate from the frozen, fictional context percent."""
+        """Keep per-post processing separate from the frozen, fictional context percent.
+
+        Owner decision 2026-11-16 (processing_route.compact_header_parts):
+        without a problem the row is omitted, or shows ◐ alone while processing."""
         labels = {"processing": "◐ 未完了", "preparing": "◐ 未完了", "complete": "✓ 完了",
                   "attention": "! 要確認", "unknown": "? 状況未取得"}
         status = self.processing[post]
+        if status == "complete":
+            return y + 5
         self.text(x, y + 18, labels[status], 15, MUTED)
+        if status in ("processing", "preparing"):
+            return y + 48
         self.text(x + 110, y + 18, "👤 " + ("73%" if post == 0 else "5%"), 15, MUTED)
-        providers = ("jev", "local") if status == "complete" else ()
+        providers = ("jev", "local") if status == "attention" else ()
         for index, provider in enumerate(providers):
             left = x + 210 + index * 75
             if provider == "local":

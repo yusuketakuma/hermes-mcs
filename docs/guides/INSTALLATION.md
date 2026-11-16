@@ -546,6 +546,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `notify.operator` | str | なし | 運用者の Discord ユーザーID |
 | `notify.card_thread` | bool | `true`（ウィザード既定。キー未設定のconfigではオフ） | 患者スレッドごとにカードのコンパニオンスレッドを立て本文・添付を配送。Slackの投稿カードはこの設定にかかわらず元投稿のスレッドを使用 |
 | `notify.card_thread_archive_min` | int | `10080` | 設定キーのみ（自動アーカイブは未実装） |
+| `notify.preview_privacy` | `full` / `initial` / `minimal` | `full` | ロック画面などの通知プレビューに出す患者情報。`initial` は氏名を伏せ字にして発信者を省き、`minimal` は「MCS: 新しい投稿」だけ。Discordのスレッド名・LINE WORKSの通知文も同じ扱い。カード本文は変わらない |
 | `notify.route_epoch` | int | `1` | 配送先を変えたとき +1 する番号 |
 | `notify_bot_profile` | str | なし | 通知投稿に使う hermes プロファイル（`[a-z0-9_-]+`）。自動作成したMCSLOGだけは、現在の送り先・接続設定と一致する作成記録のprofileを使う。患者情報と既存の明示した運用先のprofileは変更しない |
 | `notify_system_target` | str | なし | 稼働状況・エラー・復旧などの送り先。患者情報の本文・カードにSlackを使う場合は、各送り先と分離を確認できる明示先が必要。それ以外は空欄で`notify_target`と同じ。[分離の条件](STANDALONE.md#患者情報と運用通知の送り先) |

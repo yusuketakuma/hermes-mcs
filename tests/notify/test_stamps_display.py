@@ -514,7 +514,8 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
     if platform != "slack":
         specs = [spec]
     footer = "\n".join(item["text"] for item in spec["parts"]["footer"] if item["type"] == "text")
-    assert ("スタンプ 👀3 · 自分 2投稿" in footer) == (platform == "lineworks")
+    # every platform shows per-post rows instead (LINE WORKS from layout 7)
+    assert "スタンプ 👀3 · 自分 2投稿" not in footer
     assert "MCS 👀" not in footer
     assert "合成本人" not in footer and "合成他者" not in footer
     if platform == "slack":
@@ -557,7 +558,10 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
         shown = lineworks_cards.render(spec)
         visible = (shown["contents"]["body"]["contents"][0]["text"]
                    if shown["type"] == "flex" else shown.get("contentText", shown.get("text", "")))
-        assert "スタンプ 👀3" in visible
+        assert "スタンプ 👀3" not in visible
+        # per-post rows ride the header posts, which LINE WORKS reposts anyway
+        posts = "\n".join(spec["parts"]["thread_body_parts"])
+        assert "合成他者100" in posts and "再取得失敗" in posts and "<@" not in posts
 
     calls = []
 

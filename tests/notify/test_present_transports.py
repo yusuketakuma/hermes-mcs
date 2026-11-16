@@ -83,7 +83,7 @@ def test_discord_literal_only_escapes_line_leading_markers():
                              DRUG_ROW_NEEDS_THREAD=False, SOURCE_THREAD=False,
                              THREAD_DRUG_ACTIONS=False, CAPTION="preview",
                              THREAD_HEAD_PATIENT=True, POST_ACTIONS=False,
-                             ACCENT_URGENT=False)),
+                             ACCENT_URGENT=True, QUIET_STAMPS=True)),
 ], ids=["slack", "discord", "lineworks"])
 def test_card_behaviour_flags(present, expected):
     assert {name: getattr(present, name) for name in expected} == expected

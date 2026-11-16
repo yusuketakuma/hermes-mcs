@@ -26,7 +26,7 @@ def test_new_header_is_independent_from_long_original(led):
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
     spec = json.loads(_latest_render(led)["spec_json"])
     parts = spec["parts"]
-    assert _card(led)["layout"] == 3
+    assert _card(led)["layout"] == cards.FACE_LAYOUT == 7
     assert parts["manifest"][2]["name"] == "m:100:header#1"
     assert parts["thread_body_parts"][0].endswith("\n" + notify_render.SECTION_RULE)
     assert "".join(parts["thread_body_parts"][1:]) == "合成" * 2300

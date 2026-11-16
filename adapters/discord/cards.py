@@ -95,9 +95,13 @@ def _zones(spec: dict, esc, *, face=False) -> tuple:
         if t == "meta":
             continue                       # correlation — not displayed
         if spec["parts"].get("processing_display_version") in (1, 2, 3) and c.get("provider_scope") == "header":
-            from processing_route import compact_header
-            c = {**c, "text": compact_header(c),
-                 "header_jev": c["provider_states"].get("jev")}
+            from processing_route import compact_header, compact_header_parts
+            ordered = compact_header_parts(c)[1]
+            text = compact_header(c)
+            if not text:
+                continue                 # a quiet header without its own prefix
+            c = {**c, "text": text,
+                 "header_jev": c["provider_states"].get("jev") if "jev" in ordered else None}
         if c.get("rule") and cur:
             zones.append(cur + rows)
             cur = []
