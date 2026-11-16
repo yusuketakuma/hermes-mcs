@@ -156,3 +156,59 @@ def test_cloud_selection_pages_over_existing_ids_not_gaps(cloud, monkeypatch):
     assert {row['job_id'] for row in selected} == {job['job_id'], 1000000}
     assert len(pages) == 1
     assert not calls
+
+
+def test_cloud_selection_ttl_starts_after_the_eligibility_traversal(cloud, monkeypatch):
+    led, _, job, calls = cloud
+    _seed(led, [2, 3])
+    snapshot(led)
+    clock = _clock(monkeypatch)
+    # PK collection finishes in one page, then the deadline stops the
+    # eligibility traversal after its first job.
+    original = semantic_due_selection._cloud_selection_identity
+
+    def slow_identity(*args):
+        clock[0] += 1.0
+        return original(*args)
+
+    monkeypatch.setattr(semantic_due_selection, '_cloud_selection_identity', slow_identity)
+    with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
+        _select(led, 1.0, max_jobs=8)
+    progress = semantic_due_selection._cloud_selection_progress
+    assert progress['rows'] and progress['scanned'] is None
+    # however long the traversal takes, it is resumed rather than rebuilt
+    clock[0] += semantic_due_selection._CLOUD_SELECTION_TTL_S
+    monkeypatch.setattr(semantic_due_selection, '_cloud_selection_identity', original)
+    selected = _select(led, clock[0] + 10.0, max_jobs=8)
+    assert {row['job_id'] for row in selected} == {job['job_id'], _job_id(led, 2), _job_id(led, 3)}
+    assert semantic_due_selection._cloud_selection_progress is None or \
+        semantic_due_selection._cloud_selection_progress['scanned'] is not None
+    assert not calls
+
+
+def test_cloud_selection_unfinished_arrival_scan_does_not_expire(cloud, monkeypatch):
+    led, _, job, calls = cloud
+    _seed(led, [2, 3])
+    snapshot(led)
+    with led.db:
+        led.db.execute("DELETE FROM fetch_jobs WHERE job_id IN (?,?)", (_job_id(led, 2), _job_id(led, 3)))
+    monkeypatch.setattr(semantic_due_selection, '_CLOUD_SELECTION_PAGE', 1)
+    clock = _clock(monkeypatch)
+    _select(led, 10.0)
+    progress = semantic_due_selection._cloud_selection_progress
+    assert progress is not None and progress['scanned'] is not None
+    led.semantic_seed(1, [2, 3], {'source': 'history_import'})
+    # the deadline stops the arrival scan, then the TTL passes
+    led.db.set_trace_callback(lambda sql: clock.__setitem__(0, clock[0] + 1.0)
+        if sql.startswith(_PAGE_SQL) else None)
+    try:
+        with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
+            _select(led, clock[0] + 0.5)
+    finally:
+        led.db.set_trace_callback(None)
+    assert semantic_due_selection._cloud_selection_progress is progress and progress['collecting']
+    clock[0] += semantic_due_selection._CLOUD_SELECTION_TTL_S
+    selected = _select(led, clock[0] + 10.0, max_jobs=3)
+    assert {row['job_id'] for row in selected} == {job['job_id'], _job_id(led, 2), _job_id(led, 3)}
+    assert semantic_due_selection._cloud_selection_progress in (None, progress)
+    assert not calls

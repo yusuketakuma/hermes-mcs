@@ -519,11 +519,13 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
     # a tainted journal keeps the marker, so reconcile re-runs every
     # tick — alert only when this run recorded a new hold, never repeat
     # the same notice for holds already announced
-    if (held and _hold_rows(db) > holds_before) or new_text_holds:
+    # mass_held counts only events this run moved out of pending
+    if (held and _hold_rows(db) > holds_before) or new_text_holds or mass_held:
         ledger.outbox_add("update_notice", None, {
             "notice_code": "delivery_reconcile_held",
             "text": "[MCS] DB復元後の配送照合で未解決の配送があります"
-                    f"（card held={len(held)}件、text held={len(text_held)}件）。"
+                    f"（card held={len(held)}件、text held={len(text_held)}件、"
+                    f"未配送の操作通知 held={mass_held}件）。"
                     "restore_reconcile.json を確認してください。"
                     "カードは ops.card_resolve で確認・解除し、"
                     "text は個別の配送確認と復旧方針の判断が必要です。"})

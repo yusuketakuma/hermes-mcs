@@ -685,10 +685,11 @@ def _cloud_selection_page(db, kinds, max_jobs, settings, semantic_scope, exclude
     progress = _cloud_selection_progress if binding is not None else None
     # Rows below the cursor that return to pending (ON CONFLICT re-queue or
     # automatic retry of a failed job) are only seen by a rebuild, so a
-    # retained progress expires a TTL after its full scan finished; an
-    # unfinished full scan never expires, so it always reaches selection.
+    # retained progress expires a TTL after its full scan and eligibility
+    # traversal finished; an unfinished one (including a scan of new
+    # arrivals) never expires, so it always reaches selection.
     if (progress is None or progress['binding'] != binding
-            or (progress['scanned'] is not None
+            or (progress['scanned'] is not None and not progress['collecting']
                 and time.monotonic() - progress['scanned'] >= _CLOUD_SELECTION_TTL_S)):
         progress = {'binding': binding, 'upper': 0, 'cursor': 0,
                     'rows': [], 'pending': [], 'collecting': True,
@@ -730,8 +731,6 @@ def _cloud_selection_page(db, kinds, max_jobs, settings, semantic_scope, exclude
         progress['cursor'] = bound
         if bound >= progress['upper']:
             progress['collecting'] = False
-            if progress['scanned'] is None:
-                progress['scanned'] = time.monotonic()
     check_deadline()
     selected, snapshots = [], {}
     pending = progress['pending']
@@ -794,6 +793,10 @@ def _cloud_selection_page(db, kinds, max_jobs, settings, semantic_scope, exclude
             progress['yield_early'] = True
         raise
     progress['yield_early'] = False
+    if not progress['rows'] and progress['scanned'] is None:
+        # the TTL starts once every collected row has been ranked for
+        # eligibility, so a long traversal is never discarded half-way
+        progress['scanned'] = time.monotonic()
     if not progress['rows'] and not pending and binding is not None:
         _cloud_selection_progress = None
     semantic = [r for r in selected if r['kind'] == JOB_KIND]

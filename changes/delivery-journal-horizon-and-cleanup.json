@@ -14,7 +14,8 @@
     "ops.card_resolve の _rebind_check は、attempt_id が NULL の hold を delivery_id で照合し、mark_not_sent の proof=no_journal_started を journal_cannot_vouch で拒否する（送信を示す journal 行が圧縮で消えている可能性があるため）。",
     "file_group の不足している添付がすべて started・result・receipt・denied のいずれかを journal に持つとき、または thread_id が無く manifest の thread part がそれらの phase を持つ（thread 待ちの添付が送られることがない）ときは、その delivery を parts_done として記録する。未着手の添付が送られうる場合は従来どおり次の周回で確認する。",
     "mcs_setup.py check は notify_journal.tainted_journal_files で discord_state・slack_state・lineworks_state の journal を読み、切れた行のあるファイルを注意に出す。fail-closed（該当送信の保留）は変えない。人承認での隔離は既存の承認・受領記録の経路に合うものがないため入れず、hermes_plugin/README.md の手作業の復旧手順に LINE WORKS の state の場所と check の表示を加えた。",
-    "LINE WORKS の CallbackInbox.expire は、同じロック区間で mtime が1200秒を超えた .atomic-*.tmp を開かずに unlink する。"
+    "LINE WORKS の CallbackInbox.expire は、同じロック区間で mtime が1200秒を超えた .atomic-*.tmp を開かずに unlink する。",
+    "90日より古いバックアップからの復元で、まだ render になっていない操作カード通知だけを止めた場合も、DB復元後の照合の通知（delivery_reconcile_held）を出し、止めた件数を「未配送の操作通知 held」として示す。再実行で新たに止めた通知が無ければ繰り返さない。"
   ],
   "refs": [
     "mcs/core/backup_names.py",
