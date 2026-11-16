@@ -17,7 +17,8 @@ _FIELDS = {"version", "input_key", "token", "state", "reserved_at", "lease_until
 
 
 def _time(value):
-    return type(value) in (int, float) and math.isfinite(value) and 0 <= value < 253402268400
+    """Whether `value` is a stored epoch second; total, so an int too large for a float is just False."""
+    return type(value) in (int, float) and 0 <= value < 253402268400 and math.isfinite(value)
 
 
 def _arguments(pid, input_key, now):
@@ -74,6 +75,7 @@ def _stamps(doc):
 
 
 def _live(doc, now):
+    """Whether a readable record holds the processing right at `now`: the one test of a live claim."""
     return doc["state"] in ("reserved", "started") and max(_stamps(doc)) <= now < doc["lease_until"]
 
 
@@ -142,8 +144,7 @@ def _decision(history, input_key, now, catchup):
     keys = [doc["input_key"] for _, doc in retained]
     result = {"allowed": False, "reason": None, "resume": False, "used": used, "next_at": None,
               "unverified_records": len(unresolved) + len(keys) - len(set(keys))}
-    active = next((doc for _, doc in retained if doc["state"] in ("reserved", "started")
-                   and doc["lease_until"] > now), None)
+    active = next((doc for _, doc in retained if _live(doc, now)), None)
     if active:
         return {**result, "reason": "patient_context_generation_active",
                 "next_at": active["lease_until"] if active["input_key"] == input_key else None}
@@ -172,6 +173,27 @@ def inspect(db, pid, input_key, *, now, catchup=False):
     if type(catchup) is not bool:
         raise ValueError("patient_context_generation_input_invalid")
     return _decision(_history(db, pid, now), input_key, now, catchup)
+
+
+def census(db, *, now):
+    """Counts, never content, of all patients' records: live claims, unreadable, stamped after `now`.
+
+    A live claim is exactly what `owns` accepts for its owner at `now`. An unreadable or
+    future-stamped record holds no processing right; it is only ever counted as a used slot.
+    """
+    if not _time(now):
+        raise ValueError("patient_context_generation_input_invalid")
+    counts = dict.fromkeys(("live", "unreadable", "future"), 0)
+    for row in db.execute("SELECT artifact_id,content,created_at,model,meta,message_id FROM artifacts "
+                          "WHERE kind=?", (KIND,)):
+        doc = _readable(row)
+        if doc is None:
+            counts["unreadable"] += 1
+        elif _live(doc, now):
+            counts["live"] += 1
+        elif max(_stamps(doc)) > now:
+            counts["future"] += 1
+    return counts
 
 
 def _replace(db, pid, row, doc):
