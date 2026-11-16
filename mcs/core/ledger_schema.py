@@ -663,6 +663,13 @@ CLOUD_USAGE_KINDS_SQL = "('cloud_usage_reserve','cloud_usage_result','cloud_usag
 CLOUD_USAGE_RESERVATION_SQL = "CASE WHEN json_valid(meta) THEN json_extract(meta,'$.reservation_id') END"
 CLOUD_USAGE_INDEX = "idx_cloud_usage_reservation"
 CLOUD_USAGE_RECHECK_S = 3600.0
+_CLOUD_USAGE_GUARD_TABLE = (
+    "cloud_usage_guard("
+    "singleton INTEGER PRIMARY KEY CHECK(singleton=1), "
+    "verified INTEGER NOT NULL CHECK(verified IN (0,1)), "
+    "mutations INTEGER NOT NULL, audited_at REAL NOT NULL)"
+)
+CLOUD_USAGE_GUARD_DDL = "CREATE TABLE " + _CLOUD_USAGE_GUARD_TABLE
 
 
 def _cloud_usage_malformed(meta: str) -> str:
@@ -759,11 +766,7 @@ def install_cloud_usage_guard(db) -> None:
     with db:
         if settled():   # another process finished the same work while this one waited
             return
-        db.execute(
-            "CREATE TABLE IF NOT EXISTS cloud_usage_guard("
-            "singleton INTEGER PRIMARY KEY CHECK(singleton=1), "
-            "verified INTEGER NOT NULL CHECK(verified IN (0,1)), "
-            "mutations INTEGER NOT NULL, audited_at REAL NOT NULL)")
+        db.execute("CREATE TABLE IF NOT EXISTS " + _CLOUD_USAGE_GUARD_TABLE)
         installed = _cloud_usage_installed(db)
         for name, ddl in _CLOUD_USAGE_DDL.items():
             if installed.get(name) != ddl:
