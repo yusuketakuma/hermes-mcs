@@ -159,11 +159,13 @@ def evidence(check_runs, head_sha, files):
     """(state, problems): state is success, pending or failure for the required jobs on head_sha."""
     runs = _latest_runs(check_runs, head_sha)
     problems, pending = [], []
-    for name in REQUIRED_JOBS + EVIDENCE_JOBS:
+    # A matrix job reports one check run per leg, named "pytest-linux (1)" and so on.
+    legs = [(job, name) for job in EVIDENCE_JOBS for name in sorted(runs)
+            if name == job or name.startswith(job + " (")]
+    for job, name in [(name, name) for name in REQUIRED_JOBS] + legs:
         run = runs.get(name)
         if run is None:
-            if name in REQUIRED_JOBS:
-                pending.append(name)
+            pending.append(name)
             continue
         if (run.get("app") or {}).get("slug") != ACTIONS_APP:
             problems.append(f"{name}: GitHub Actions 以外の結果")
@@ -171,7 +173,7 @@ def evidence(check_runs, head_sha, files):
             pending.append(name)
         elif run.get("conclusion") == "success":
             continue
-        elif name == "pytest-macos" and run.get("conclusion") == "skipped" and docs_only(files):
+        elif job == "pytest-macos" and run.get("conclusion") == "skipped" and docs_only(files):
             continue
         else:
             problems.append(f"{name}: {run.get('conclusion')}")
