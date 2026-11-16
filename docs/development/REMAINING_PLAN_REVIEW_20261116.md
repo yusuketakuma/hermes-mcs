@@ -42,7 +42,7 @@
    - 意味解析: `bundle_fingerprint` に `local_model` が入っている（`mcs/semantic/semantic_store.py`）。モデルを変えると全件が再実行され、補助要約の本文が変わり、クラウドの走査が失効する。
    - 添付: 契約に `local_llm.resolve(cfg)` が入っている（`mcs/extract/attachment_inference_contract.py`）。
    所有者の決定「ローカルのモデルを変えてもクラウドの成果物を失効させない」を満たすために必要です。
-3. **scan 契約から `rule`・`llm` を外す**（P0-2b に含める）。P0-2a の時点では残っています。D1 の変更箇所は、チャット・添付・補助要約の3か所です。
+3. **scan 契約から `rule`・`llm` を外す**（P0-2b に含める）。P0-2a の時点では残っています。D1 の変更箇所は、チャット・添付・補助要約の3か所です。（2026-11-16 追記・HEAD 306bfff: P0-2b（fb6ffbf）で除去済み。現行の走査契約は `patient_context_refresh_state._contract()` の version・VERSION_KEY・chunks・facts・scan_code・context だけです）
 4. **消去で消えない「依存喪失」の扱いを決める。**
    消去コマンドは依存喪失の記録を残すので、作り直しても止まったままの患者が残ります。作り直しの前に該当数を数え、扱いを所有者が決めます。
 5. **見積りと dry-run。** 過去投稿の再抽出（B3）、抽出の品質確認の日数、添付の再推論、ローカル代替時の日数を出す手段がありません。
@@ -60,7 +60,7 @@ API レビューの次の2点も、作り直しの前に入れます。呼出し
 
 **PR #76（ここで区切り、CI を通してマージ）**
 
-1. P0-2a 契約の分割と出所の保存（実装中）
+1. P0-2a 契約の分割と出所の保存（実装中）（追記: P0-2a は 560aeca、P0-2b・2c は fb6ffbf で実装済み）
 2. P0-2b D1。`rule`・`llm` の除去と、添付・補助要約の分岐を含む
 3. P0-2c D2
 
@@ -107,10 +107,10 @@ P0-2a 以降を含む版は、`extract.patient_context.enabled=false` と `cloud
 
 ## 文書とコードの食い違い
 
-- P0 計画は scan 契約から `rule`・`llm` を削除するとしていますが、コードには残っています（`patient_context_refresh_state.py`）。
+- P0 計画は scan 契約から `rule`・`llm` を削除するとしていますが、コードには残っています（`patient_context_refresh_state.py`）。（2026-11-16 追記・HEAD 306bfff: fb6ffbf で除去済みで、この食い違いは解消しました）
 - 推論改版計画は「P0-2a の切り離しが済めば添付の推論は失効しない」としています。実際は添付の契約が抽出・文脈の世代を直接 hash するので、Blk-X で全件が失効します。
-- 「全体像 v2」の時期が3つの文書で違います（時系列設計は P0、P0 計画は「P0 では不要」、推論改版計画は作り直しの前）。
+- 「全体像 v2」の時期が3つの文書で違います（時系列設計は P0、P0 計画は「P0 では不要」、推論改版計画は作り直しの前）。（2026-11-16 追記: 3文書へ追記し、この文書（B4b は作り直しの後）に揃えました。時系列設計 :107 の所有者の決定（2026-11-15）を所有者が改めたかは未記録で、未決の確認事項です）
 - 作り直し計画は「エラー状態をすべて破棄」としていますが、消去コマンドは依存喪失を残します。
-- P0 計画の行番号がずれています（`PATIENT_CONTEXT_VERSION` は `extract_llm_source_contract.py:101`、maintenance の pin は `:708`・`:833`・`:909`）。
+- P0 計画の行番号がずれています（`PATIENT_CONTEXT_VERSION` は `extract_llm_source_contract.py:101`、maintenance の pin は `:708`・`:833`・`:909`）。（2026-11-16 追記: 行番号は変わるので、関数名 `maintenance._source_repair_cloud_pins`・`_attachment_cloud_pins`・`_context_scan_cloud_pins` で参照する）
 - P0 計画は `extraction_sig` が「artifact の id と版」に結び付くとしていますが、チャット投稿は内容・モデル・meta の hash で、id に結び付くのは添付と補助要約です。
 - 新しい送信の土台の設計は5モジュールですが、あるのは `mcs/llm/admission/cloud_send_admission.py` だけです。

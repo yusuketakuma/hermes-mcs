@@ -5,6 +5,18 @@ Anthropic の公式資料（料金・effort・thinking・errors・versioning）�
 
 健全と確認した点: 予約なしで送る経路はない。少なく計上する経路はない（不明な分は最大額に寄せる）。proxy は使わず、redirect は拒否し、TLS は既定の検証を使う。API キーは stdin でだけ渡り、ログやエラーに出ない。
 
+## 状況の追記（2026-11-16、HEAD 306bfff）
+
+- 必ず直す 2・直した方がよい 1: 051cc12・f776ff4 で対応済みです。直した方がよい 2 は決定のうえ実装済みです。
+- 「文書とコードの食い違い」1（5xx の再試行）: 5xx・529 は再送しない仕様に決まり（所有者の決定 2026-11-15、`cloud_client.response_error`）、429 だけが再試行されます。`docs/guides/ANTHROPIC.md` はこの内容に直りました。
+- 同 2（上限の引き下げ）: ANTHROPIC.md を、未送信として0円で精算する記述へ直しました。コード側の `cloud_send_admission.tightened` の docstring（「予約は最大額のまま計上」）は実装と合わず、未修正です。この経路を確かめる回帰テストもありません。
+- 同 3（README の再抽出の説明）: README・SECURITY・USER_GUIDE・ANTHROPIC を、期限付きの再開期間中だけクラウドへ送る内容に直しました。
+- 同 8（医薬品情報の経路）: SECURITY の記述（TinyFish だけ）が正しく、`mcs/medications/drug_info.py` に到達できない Exa 経路が残っています（コード側の課題）。
+- 同 9（SECURITY の秘密値一覧）: `MCS_ANTHROPIC_API_KEY`・`MCS_OPENAI_API_KEY` を SECURITY.md に追記して解消しました。
+- 同 10（CLOUD_SEND の設計メモ）: `CLOUD_SEND_FOUNDATION_DESIGN_20261115.md` に注記しました。
+- 同 5（料金期限の通知）: `cloud_cli` が `policy.earliest_price_info` を設定済みモデルに対して使うため解消済みと見られます（コミット未特定・未検証）。
+- 同 4（キャッシュ）: 未確認のままです。
+
 ## 必ず直す
 
 1. **料金表の期限とリリース**（2026-11-15 追記: PR #69 で OpenAI の Luna・Sol も 2026-11-15 に再確認し、期限を 2026-12-15 に延ばした版をこのブランチへ取り込んだ。残る対応は 11-25 より前のリリースと配備）

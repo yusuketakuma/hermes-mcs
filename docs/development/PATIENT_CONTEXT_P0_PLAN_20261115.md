@@ -18,6 +18,7 @@ P0 は、1回だけ行う消去と作り直しの前に必ず入れる変更で�
    - 添付OCR用の `_attachment_cloud_pins` と同じ形です。
 4. **v2 の文書形式は P0 では不要**
    - 分割の後なら、v2 は要約契約の変更だけで入れられます（A の作り直しだけで済みます）。
+   - （2026-11-16 追記: [残り計画の組み直し](REMAINING_PLAN_REVIEW_20261116.md)は、全体像 v2（B4b）を作り直しの後へ回す案とした。所有者の確認は未記録。変わるのは要約契約だけで、走査はやり直さず、要約の作り直し1回分の費用がかかる）
    - v2 が必要とする項目は、保存済みの scan 事実と台帳にすでにあります。
 
 ## 契約の分割
@@ -30,6 +31,8 @@ P0 は、1回だけ行う消去と作り直しの前に必ず入れる変更で�
  "scan_code": sha256[plan.py（scan 部分）, patient_context_scan.py, patient_context_temporal.py],
  "model": ..., ["provider": ...]}
 ```
+
+（2026-11-16 追記・HEAD 306bfff: 実装では改訂1・2により、temporal と model・provider は契約に入りません。`scan_code` は `patient_context_plan.py`・`patient_context_scan.py` のhashです。現行は `patient_context_refresh_state._contract()` を参照）
 
 ### 要約契約（`snapshot["summary_contract"]`、新設）
 
@@ -138,7 +141,7 @@ result だけが残ると `cloud_unit_unresolved` で送信が止まるため、
 
 - 設計書は、契約に入るのを plan・projection・dependency_loss のhashだけとしています。しかし実際には、`patient_context_scan.py` は契約に入っておらず、品質確認は `_quality_code` を通じてほぼ全コードに結び付いていました（P0-2c で品質確認のコードだけに狭めました）。
 - 設計書は projection を要約側として扱っていますが、scan 側の `annotate` を含んでいます。
-- `PATIENT_CONTEXT_VERSION` は `extract_llm_source_contract.py:40` で定義され、`extract_llm.PATIENT_CONTEXT_VERSION` として参照されています。
+- `PATIENT_CONTEXT_VERSION` は `extract_llm_source_contract.py` のモジュール定数で、`extract_llm.PATIENT_CONTEXT_VERSION` として参照されています。
 - `CLOUD_SEND_FOUNDATION_DESIGN_20261115.md` §6 の maintenance の行番号がずれています（修復の pin は `_source_repair_cloud_pins`、添付OCRの pin は `_attachment_cloud_pins`、患者コンテキストの pin は `_context_scan_cloud_pins`。行番号は変わるので関数名で参照する）。
 
 ## 改訂（2026-11-15、計画レビュー・切替レビュー・安定性レビューと所有者の決定の反映）
@@ -165,7 +168,7 @@ result だけが残ると `cloud_unit_unresolved` で送信が止まるため、
 3. **添付抽出の契約から patient_context_* のモジュールを外す**（計画レビュー M3）
    - 配備の後、添付の抽出が落ち着くまでは、作り直しを始めない。
 4. **D2 の識別値を使う箇所を全部変える**（計画レビュー M4）
-   - `semantic_usage_receipts.py:634-637`
+   - `semantic_usage_receipts.patient_source_pass_content` の assessment 照合
    - `_source_quality_hold_key`
    - `quality_schedule_key`
    - `_scans_from_read` の proof の鍵
@@ -207,3 +210,5 @@ result だけが残ると `cloud_unit_unresolved` で送信が止まるため、
 9. **P0-6**: 送信先の判断の統一（理由の分類・route 関数・レーン3の担当・夜の2並列）。S2 ②③と合わせて入れる。
 
 作り直し（消去）は、P0 と v2 の配備の後に1回だけ行う。
+
+（2026-11-16 追記: [残り計画の組み直し](REMAINING_PLAN_REVIEW_20261116.md)は、全体像 v2（B4b）を作り直しの後へ回す案とした。所有者の確認は未記録。変わるのは要約契約だけで、走査はやり直さず、要約の作り直し1回分の費用がかかる）

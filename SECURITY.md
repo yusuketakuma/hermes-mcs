@@ -7,7 +7,7 @@
 - 患者・利用者の氏名・本文・添付ファイル（`data/`、`chrome-profile/`）
 - 認証情報・トークン（`.env`、`config.json`、`token_cache.json`、
   Keychain 登録内容、`DISCORD_BOT_TOKEN`・`SLACK_BOT_TOKEN`・`SLACK_APP_TOKEN`、
-  `TYPESAFE_API_KEY`）
+  `TYPESAFE_API_KEY`・`MCS_ANTHROPIC_API_KEY`・`MCS_OPENAI_API_KEY`）
 - `mcs_view` の閲覧出力（本文・投稿者を含む）— 共有ログ・外部LLM・
   公開リポジトリへの転送禁止
 
@@ -62,6 +62,8 @@
 - MCSの私有 `.env` にキーがありmode未指定なら、Jevはassist、選択したAnthropicまたはOpenAIはonで自動使用する。
   ただし新規導入の環境は `external_transfer.json` に施設の確認を記録するまで自動使用しない（[法令・ガイドライン対応](docs/guides/COMPLIANCE.md)）。既定の優先順はAnthropic、OpenAIとする。
   本文・患者文脈には患者名等が含まれ得る。匿名化はしない。明示OFF・対象・低い予算は維持する。
+  APIキーを使う送信・診断は、実行時にプロセスの環境変数から読まず、MCS導入先の `.env`（実行ユーザー所有の通常ファイル・0600・symlink不可・キーは1行・`export` 接頭辞なし）からだけ読む。
+  同名の環境変数（`MCS_ANTHROPIC_API_KEY`・`MCS_OPENAI_API_KEY`・`TYPESAFE_API_KEY`）は、導入時の init が `.env` へ書き込む入力と、その事前表示にだけ使う。
   キーの登録前に送信先・対象と契約を確認する（[設定と保持条件](docs/guides/ANTHROPIC.md)）
 - 公開医薬品情報の照会はローカルTinyFishゲートウェイだけを使う。トークンファイルがない場合・不正な場合、
   認証拒否・上限・通信障害では照会を停止し、別の外部経路へ切り替えない。同梱公開マスターと一致した薬品名、
@@ -98,7 +100,7 @@ README「現在の機能・運用上の制約」から移設。
 
 - 患者一覧（rollup）は取得済み投稿から作る暫定集約です。未取得・未抽出・
   訂正前の記録があり得るため、確定した処方一覧や依頼台帳の代わりにはなりません。
-- 添付は保存・通知とメタ情報の管理までで、画像・PDF等の内容は意味解析していません。
+- 添付は保存・通知とメタ情報の管理までで、画像・PDF等の内容は意味解析していません（添付OCR（任意・既定は無効）を有効にした場合だけ、ローカルで文字起こし・項目整理します。[添付OCR](docs/guides/ATTACHMENT_OCR.md)）。
 - 長文の構造化抽出は分割処理しますが、要約は本文と文脈を含む入力上限を超えると
   生成を止めて `input_oversize`／`NEEDS_REVIEW` とします。全件の要約完了は保証しません。
 - 日次 SQLite backup と暗号化 offsite は別です。offsite は明示した媒体と
@@ -129,7 +131,7 @@ Discord等の設定先へ送ります。Jev・Anthropic・OpenAIは、このMCS�
 患者の記録をどこへ送るかは重要なので、使うAIと送付先を明示します。
 
 - **文章の整理**（要約・薬名や症状の拾い上げ）— このマシンの中だけで
-  動くローカルAI（Qwen3.5-9B）が基本経路です。AnthropicまたはOpenAIが有効な場合、患者文脈の更新と旧版投稿の再抽出は外部APIへ送ります。失敗時のローカル処理も従来の受付・期限条件に従います
+  動くローカルAI（Qwen3.5-9B）が基本経路です。AnthropicまたはOpenAIが有効な場合、患者文脈の作成・更新とその品質修復は外部APIへ送ります。保存済み投稿の再抽出と意味解析の未処理分は、所有者が期限付きの再開期間（`reextract_backlog_until`・`semantic_backlog_until`）と費用上限を設定した間だけ送ります。添付ページの解析は送りません。失敗時のローカル処理も従来の受付・期限条件に従います
 - **整理結果の意味チェック** — TypeSafe Jev APIへ確認用の設問と本文を送ります。
   `TYPESAFE_API_KEY` がありmode未指定なら `assist`、キーがなければ `off` です。
   自動有効化時の上限は再試行を含め日本時間の1日10000要求です。明示した `off` や低い予算は維持し、

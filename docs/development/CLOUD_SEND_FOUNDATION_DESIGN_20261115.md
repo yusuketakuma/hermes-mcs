@@ -46,6 +46,8 @@
 | `mcs/llm/cloud_send.py` | 実行。`CloudClient` への配線、同時実行枠、例外の対応付け | `CloudSendUnit`・`guard_local()` |
 | `mcs/llm/cloud_adoption.py` | 採用。受領の再確認、採用と破棄 | `receipts()`・`adopt_tx()`・`commit_check()` |
 
+（2026-11-16 追記: この表のうち、HEAD 306bfff にあるのは `cloud_send_admission.py` だけです。`cloud_request_plan`・`cloud_request_record`・`cloud_send`・`cloud_adoption` は設計上の予定名で、実在しません。実際の送信は `cloud_client`・`cloud_inference` が担います）
+
 `CloudSendUnit` の属性・例外・例外メッセージは、患者コンテキストが今使っている形（`patient_context_refresh.py:876-955`、`patient_context_quality_controller.py:177-193, 406-423`）と同じにする。
 通信部分は再利用し、`CloudClient.complete` に省略可能な `before_send=None` だけを足す。provider と `bounded_http` は変えない（no-redirect/no-proxy を維持）。
 
