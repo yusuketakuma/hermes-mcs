@@ -9,8 +9,8 @@ PNGはREADME表示用、SVGは編集用のソース。配置・書体・絵文�
 
 | 画面 | 根拠 |
 |---|---|
-| `01-delivery` | `adapters/lineworks/cards.py`（共通`card_controls.py`の分類を使い、接続先の順序で`操作を選ぶ…`・横1列のスタンプ5個（自分のスタンプに✓）・`別の投稿`・`MCSで開く`を並べるFlexメッセージ）、`mcs/notify/notify_render.py`の`display_text`（区画を`────────────`で区切ったカード本文）・`_message_post`（見出し・要約・スタンプ・原文の本文を作成）、`mcs/notify/notify_parts.py`の`build_manifest`（表示形式3ではヘッダと原文を別投稿に分離）、`adapters/lineworks/delivery.py`（同じトークルームへカード・ヘッダ・原文・添付を連続投稿し、変更したヘッダだけを追加） |
-| `02-task-confirm` | `adapters/lineworks/actions.py`（`_more`による「操作を選ぶ…」の1:1メニュー。項目はカードのボタン行の順で`確認する`・`担当する`・`タスク作成`が先頭、未完了タスクがあれば`タスク一覧`が続き、本人の1:1トークへの項目別入力・確認・確定）、`adapters/common/forms.py`（入力ラベル・検証）、`adapters/common/text.py`（確認本文・結果の文言） |
+| `01-delivery` | `adapters/lineworks/cards.py`（共通`card_controls.py`の分類を使い、接続先の順序で`確認する`・`担当する`・`操作を選ぶ…`・横1列のスタンプ5個（自分のスタンプに✓）・`別の投稿`・`MCSで開く`を並べるFlexメッセージ）、`mcs/notify/notify_render.py`の`display_text`（区画を`────────────`で区切ったカード本文）・`_message_post`（見出し・要約・スタンプ・原文の本文を作成）、`mcs/notify/notify_parts.py`の`build_manifest`（表示形式3ではヘッダと原文を別投稿に分離）、`adapters/lineworks/delivery.py`（同じトークルームへカード・ヘッダ・原文・添付を連続投稿し、変更したヘッダだけを追加） |
+| `02-task-confirm` | `adapters/lineworks/actions.py`（`_more`による「操作を選ぶ…」の1:1メニュー。項目はカードのボタン行の順で`タスク作成`が先頭（`確認する`・`担当する`はカードのボタン）、未完了タスクがあれば`タスク一覧`が続き、本人の1:1トークへの項目別入力・確認・確定）、`adapters/common/forms.py`（入力ラベル・検証）、`adapters/common/text.py`（確認本文・結果の文言） |
 
 ボタンの種類とCallbackは[公式Flex仕様](https://developers.worksmobile.com/jp/docs/bot-send-flex)・[Flexボタン](https://developers.worksmobile.com/jp/docs/bot-send-flex-button)とも照合。
 Flexの`altText`には患者・発信者・所属・時間・要約を送る。本文は図の表示を保持し、

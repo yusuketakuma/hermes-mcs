@@ -13,7 +13,7 @@ PNGは日本語フォントやSVGの描画差に左右されず表示できるRE
 
 文脈の割合はカード作成時点の記録で、後の進捗だけを理由に既存カードを更新しない。後から作る返信カードには、その返信カードの作成時点の割合を表示する。新しい入力が加わると対象範囲と処理段階が変わり、割合が下がることがある。01・02の返信は、新しい入力のローカル処理と品質確認がまだ揃わず5%の例で、先に作成した元投稿カードの73%は変えない。投稿の処理完了や文脈の進捗は、医療上の情報や対応がすべて揃ったことを意味しない。
 
-◐は投稿の処理が未完了、!は要確認、?は状況未確認を表し、送信前の待機と実行中を推測で区別しない。✓は実行を確認済み、●は複数投稿のうち使用を確認できたことを表す。投稿の処理状態・サービスの実行状態・文脈の進捗は区別する。カード最上部は固定アイコン💬を使う。
+◐は投稿の処理が未完了、!は要確認、?は状況未確認を表し、送信前の待機と実行中を推測で区別しない。✓は実行を確認済み、●は複数投稿のうち使用を確認できたことを表す。投稿の処理状態・サービスの実行状態・文脈の進捗は区別する。カード最上部のアイコンは、カード形式6以降のカードでは状態に合わせて💬（未確認・担当なし）・👤（担当中）・✅（今の内容が確認済み）になる。確認は確認ボタンの記録で、作業の完了ではない。01は💬、02の元投稿は担当・確認済みの✅の例。
 
 01は元投稿と返信のそれぞれに、架空の画像とPDFをまとめて表示した例です。ファイルのプレビューと操作欄との厳密な順序は実Slackで未確認で、画像内の並びを実UIの保証には使いません。送信する全集合と、非公開の準備・表示完了・結果不明の区別は[Slackの原文と添付の配送](../../specs/semantic-evaluation.md#slackの原文と添付の配送)に従います。
 
@@ -46,8 +46,8 @@ PNGは日本語フォントやSVGの描画差に左右されず表示できるRE
 | 画面 | 根拠 |
 |---|---|
 | `01-overview` | `mcs/notify/notify_cards.py`の`_split_reply_targets`・`_bind_reply_thread`と`notify_render.reply_source`（元の投稿のカードと、スレッド内の返信カード）、`docs/guides/USER_GUIDE.md`、`adapters/slack/delivery.py`の`_attachment_part`・`_file_group`（非公開の準備と、同じカードへのファイル群表示）、`mcs/notify/notify_parts.py`の`face_posts`（投稿ごとの要約と原文をカード本文へ。スタンプは下部の共通エリアに集約。見出しの添付件数と、要約を含まない投稿見出し）、`adapters/slack/presentation.py`の`render_parts`・`_folded_original`（スタンプ行は小さな補足表示、原文は`原文（N字）`の折りたたみブロック）、`present_slack.face_block_count`（収まらない投稿はスレッド本文へ）、`mcs/notify/processing_route.py`の`context_progress_text`・`compact_header`と`notify_card_renders._frozen_context_progress`（投稿処理とは別に、初回カード作成時の文脈の進捗を保持） |
-| `02-notification` | `mcs/notify/notify_render.py`の`card_content`・`_thread_context`・`_footer`（概要・投稿ごとの要約・状態の区画）、`adapters/slack/cards.py`（区画間の区切り線、確認・担当・タスク作成も含めた「操作を選ぶ…」、`MCSで開く`のテキストリンク）、`mcs/notify/notify_action_tokens.py`の`ACTIONS`、`mcs/stamps/stamp_format.py`（スタンプの件数・表示）、`mcs/views/message_metadata.py`（自分の投稿数） |
-| `03-actions` | `notify_cards._stamp_target`・`_action_rows`・`adapters/slack/cards.py`（観測済みスタンプのエリアに送信用`static_select`を配置。メニュー展開→最新投稿への種類選択の2段階。runnerのラベルで絵文字と名前を表示し、自分の種類は`✓（取消）`）。1投稿を示す新形式では5種類だけを表示する。「🗂 別の投稿」は複数投稿をまとめた従来形式に保持する。通常操作は確認・担当・タスク作成を含め元の順で選択メニューへ。患者の検索は常に含み、全体の新着集計・自分のタスク・未確認一覧は集計カードだけ。その他の表示項目は状態・設定に依存 |
+| `02-notification` | `mcs/notify/notify_render.py`の`card_content`・`_thread_context`・`_footer`（概要・投稿ごとの要約・状態の区画）、`adapters/slack/cards.py`（区画間の区切り線、`確認する`・`担当する`のボタンと、タスク作成などの「操作を選ぶ…」、`MCSで開く`のテキストリンク）、`notify_render.STATE_ICONS`（見出しのアイコン）、`structured_view.structured_lines`の`request_first`（`📌 依頼`を要約の先頭に）、`mcs/notify/notify_action_tokens.py`の`ACTIONS`、`mcs/stamps/stamp_format.py`（スタンプの件数・表示）、`mcs/views/message_metadata.py`（自分の投稿数） |
+| `03-actions` | `notify_cards._stamp_target`・`_action_rows`・`adapters/slack/cards.py`（観測済みスタンプのエリアに送信用`static_select`を配置。メニュー展開→最新投稿への種類選択の2段階。runnerのラベルで絵文字と名前を表示し、自分の種類は`✓（取消）`）。1投稿を示す新形式では5種類だけを表示する。「🗂 別の投稿」は複数投稿をまとめた従来形式に保持する。`確認する`・`担当する`はボタン、タスク作成などの通常操作は元の順で選択メニューへ。患者の検索は常に含み、全体の新着集計・自分のタスク・未確認一覧は集計カードだけ。その他の表示項目は状態・設定に依存 |
 | `04-task-form` | `adapters/common/forms.py`の`modal_fields`、`adapters/slack/actions.py`の`_open_modal` |
 | `05-task-preview` | `adapters/common/text.py`の`preview_text`、`adapters/slack/actions.py`の`_preview`（本人向け、確定する／取消） |
 | `06-task-list` | `adapters/slack/actions.py`の`_task_blocks`・`_task_text`（本人向けの一覧。各タスクの直後にその状態操作） |

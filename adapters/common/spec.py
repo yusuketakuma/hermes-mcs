@@ -95,6 +95,8 @@ PARTS_KEYS = frozenset({
 TRANSPORT_PART_KEYS = {"slack": frozenset({"post_actions", "face_posts", "file_group"}),
                        "discord": frozenset({"post_actions", "accent", "face_posts"}),
                        "lineworks": frozenset({"face_posts"})}
+# discord card edge: 🚨 urgent, else the layout-6 card state (ack / assign)
+ACCENTS = frozenset({"urgent", "acked", "assigned"})
 POST_ACTION_IDS = frozenset({"meds"})   # read-only, clicker-scoped views
 MAX_POST_ACTIONS = 5
 PART_ENTRY_KEYS = frozenset({
@@ -325,7 +327,7 @@ def _transport_parts_cost(spec, parts) -> int:
         if name != transport or not isinstance(own, dict) or not own:
             _err("bad_transport_parts")
         _known_keys(own, allowed, f"{name}_parts")
-        if "accent" in own and own["accent"] != "urgent":
+        if "accent" in own and own["accent"] not in ACCENTS:
             _err("bad_accent")
         if "face_posts" in own:
             if name == "lineworks" and parts.get("chat_format_version") != 1:

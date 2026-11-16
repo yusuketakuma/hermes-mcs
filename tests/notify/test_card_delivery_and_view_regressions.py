@@ -133,7 +133,7 @@ def test_layout_one_card_keeps_legacy_face_and_new_cards_use_layout_two(led):
     card = _card(led)
     # Post-scoped reply cards use the newest layout; ordinary faces retain layout three.
     assert card["layout"] == notify_cards.FACE_LAYOUT == 3
-    assert notify_cards.CARD_LAYOUT == 5
+    assert notify_cards.CARD_LAYOUT == 6
     new = notify_cards.card_content(led.db, card)
     legacy = notify_cards.card_content(led.db, {**card, "layout": 1})
     assert " · 起点 " in legacy["containers"][0]["text"]
