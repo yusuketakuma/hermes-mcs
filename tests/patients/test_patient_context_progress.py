@@ -221,3 +221,23 @@ def test_real_progress_reader_accepts_publicly_resolved_implicit_mode(runtime, m
     assert result["percent"] == 10
     assert result["stage"] == "sources"
     assert led.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("block", [None, {"mode": "off"}])
+def test_real_progress_reader_works_for_local_only_resolved_settings(runtime, monkeypatch, block):
+    """Local-only settings (no keys) still show numeric progress once resolved without reading keys."""
+    import cloud_policy
+    led, _, _ = runtime
+    seed(led)
+    cfg = dict(CFG)
+    cfg.pop("cloud_llm", None)
+    if block is not None:
+        cfg["cloud_llm"] = block
+    def forbidden(*args, **kwargs):
+        pytest.fail("display must not inspect credentials")
+    monkeypatch.setattr(cloud_policy, "provider_key", forbidden)
+    settings, errors = cloud_policy.resolve_settings(cfg, available_providers=())
+    assert not errors and settings["mode"] in ("off", "on")
+    effective = {**cfg, "cloud_llm": {**(cfg.get("cloud_llm") or {}), **settings}}
+    result = progress.read(led.db, 1, effective)
+    assert result["percent"] == 10 and result["stage"] == "sources"
