@@ -15,7 +15,6 @@ from types import MappingProxyType
 import uuid
 
 import anthropic_client
-import bounded_http
 import cloud_client
 from anthropic_client import AnthropicError, MODEL
 from anthropic_client import MAX_TOKENS as MAX_TOKENS, validate_usage as validate_usage
@@ -1662,12 +1661,12 @@ def _confirmed_rejection(result, settled, model):
             and result.get('usage') is None or _confirmed_openai_quota(result, model))
 
 
-def _saved_answer(answer, metadata):
+def _saved_answer(answer, metadata, reservation):
     if (not isinstance(answer, dict) or not isinstance(answer.get('text'), str)
             or answer.get('finish_reason') not in ('stop', 'length')):
         raise ValueError('cloud_answer_invalid')
     encoded = answer['text'].encode('utf-8')
-    if (len(encoded) > bounded_http.MAX_RESPONSE_BYTES
+    if (len(encoded) > cloud_client.response_limit(reservation["max_tokens"])
             or metadata.get('answer_text_sha256_v1') != hashlib.sha256(encoded).hexdigest()
             or metadata.get('answer_finish_reason_v1') != answer['finish_reason']):
         raise ValueError('cloud_answer_invalid')
@@ -1721,11 +1720,11 @@ def recover_response(ledger, *, route, project_id, message_id, unit_key, input_b
             evidence = reservation_evidence(ledger.db, row['artifact_id'])
             raw = ledger.db.execute("SELECT CASE WHEN typeof(content)='text' AND length(content)<=? "
                                    "THEN content END FROM artifacts WHERE artifact_id=?",
-                                   (6 * bounded_http.MAX_RESPONSE_BYTES + 128, results[0]['artifact_id'])).fetchone()[0]
+                                   (6 * cloud_client.response_limit(reservation["max_tokens"]) + 128, results[0]['artifact_id'])).fetchone()[0]
             answer = strict_json(raw)
             if not isinstance(answer, dict) or set(answer) != {'text', 'finish_reason'} or saved is not None:
                 raise ValueError('cloud_answer_unresolved')
-            answer = _saved_answer(answer, evidence['result'])
+            answer = _saved_answer(answer, evidence['result'], reservation)
             saved = (evidence, {'status': 200, **answer, 'model': reservation['model'],
                                 'usage': evidence['result']['usage']})
         if rows and saved is None:
@@ -1801,7 +1800,7 @@ def record_result(ledger, reservation, metadata, *, answer=None):
             if metadata["disposition"] not in ("discarded_scope", "discarded_workday"):
                 raise AnthropicError("pricing_unverified", "disposition_invalid")
             result["disposition"] = metadata["disposition"]
-        content = (json.dumps(_saved_answer(answer, result), ensure_ascii=False)
+        content = (json.dumps(_saved_answer(answer, result, reservation), ensure_ascii=False)
                    if answer is not None and reservation.get('input_binding') is not None else '{}')
     except (AnthropicError, ValueError, KeyError, TypeError, InvalidOperation):
         _circuit_result(ledger, AnthropicError("pricing_unverified"))

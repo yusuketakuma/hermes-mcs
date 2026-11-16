@@ -13,7 +13,6 @@ import time
 import anthropic_client
 import openai_client
 import provider_registry
-import bounded_http
 import cloud_backlog
 import cloud_client
 import cloud_policy
@@ -285,7 +284,8 @@ class CloudInferenceUnit:
         client_args = {} if max_attempts is None else {"max_attempts": max_attempts}
         if transport is not None:
             client_args["post_fn"] = lambda body, timeout: transport(
-                self.client.request, "POST", body, timeout, deadline=self.deadline)
+                self.client.request, "POST", body, timeout, deadline=self.deadline,
+                max_bytes=cloud_client.response_limit(body.get("max_tokens", body.get("max_output_tokens"))))
             client_args["wait_fn"] = lambda delay: transport(time.sleep, delay)
         client = provider_registry.PROVIDER_MODULES[resolved["provider"]].client_class()
         if resolved["provider"] == "openai" or resolved["effort"] is not None:
@@ -541,10 +541,10 @@ def verify_cloud_repair_evidence(db, *, reservation_artifact_id, reservation_id,
         raise ValueError("cloud_repair_evidence_invalid")
     try:
         encoded = answer_text.encode("utf-8")
-        if len(encoded) > bounded_http.MAX_RESPONSE_BYTES:
-            raise ValueError("cloud_repair_evidence_invalid")
         evidence = cloud_policy.reservation_evidence(db, reservation_artifact_id)
         reservation, result = evidence["reservation"], evidence["result"]
+        if len(encoded) > cloud_client.response_limit(reservation["max_tokens"]):
+            raise ValueError("cloud_repair_evidence_invalid")
         selected = {"provider": contract["backend"], "model": reservation["model"],
                     "effort": reservation["effort"]}
         profile = reservation["profile"]

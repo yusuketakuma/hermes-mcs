@@ -27,7 +27,7 @@ MCS の医療・介護チャットを収集・解析するローカルシステ�
 
 ## 絶対ルール
 
-- push・PR（下書きを含む）・merge・tag・Release 公開・配備・常駐サービスの再起動・本番DBや実データの変更は、ユーザーが明示した範囲だけ行う。
+- push・PR・merge・tag・Release 公開・配備・常駐サービスの再起動・本番DBや実データの変更は、ユーザーが明示した範囲だけ行う。
   この文書はそれらの承認にならない。worktree の作成、読取り、ローカルの検証は確認なしで進めてよい。
 - 収集・解析コアは標準ライブラリのみ。新しい外部依存を足さない。例外（Hermes 同梱 `discord.py` の関数内遅延 import、
   `runtime_mode=standalone` の `adapters/{slack,discord}/standalone.py` が使う `deployment/requirements-standalone.txt` の固定版 SDK、
@@ -61,7 +61,7 @@ python3 ci/mine_gates.py --check
 - macOS の BSD `sed` は `\b` を扱わない。単語境界の置換は `perl -pi` を使う。改名後の呼出元確認は `git grep` の結果を切り詰めずに全件見る。
 - Hermes 実SDKとの統合は CI の pinned Hermes 環境で別に検証される。ローカル pytest の成功と区別する。
 - CI（`ci.yml`）は `scope` job が mode を決める。タグ・schedule・手動実行は常に full。pull request は `full-ci` label か docs 集合外の変更で full、
-  文書だけなら docs（lint 等と文書関連テストのみ）、下書きは draft（テストなし）。下書きの PR には `full-ci` label を付けない限りテスト結果が付かない。
+  文書だけなら docs（lint 等と文書関連テストのみ）。PR は下書きにしないが、下書きのまま届いた PR は draft（テストなし）で、Ready for review か `full-ci` label までテスト結果が付かない。
   テストは `pytest-linux`（4 slice×2 shard）・`pytest-macos`（2×3）の matrix が流し、`lint-test`・`macos` は shard 報告を照合する gate。
   「全6ジョブ」はこの名前を保った6 lane を指す。`perf` marker のテストは PR の CI だけが外す。詳細は `docs/development/DEVELOPMENT.md`「CIの構成と実行範囲」。
 - `python3 mcs/ops/mcs_setup.py check` / `make setup-check` は実機診断。合成 fixture のテストの代わりに実行しない。
@@ -116,6 +116,6 @@ python3 ci/mine_gates.py --check
 
 agmsg team `devflow-mcs` と devflow の運用は廃止済み（2026-10-02）。その座席・受信コマンド・フックを使わず、中央設定を推測で再作成しない。
 同じ Herdr タブの Codex・Claude 連携はユーザー全体設定の規約に従う。レビューの受入は技術的な受入で、merge・配備の許可ではない。
-GitHub 上の AI 実装（Claude Code Action・Copilot・Dots/Codex）は `docs/development/AUTOMATION.md` に従う。所有者が Issue に付けた `担当:*` ラベルは、その Issue の範囲で `agent/`・`copilot/`・`codex/` ブランチへ push し下書きPRを作る明示指示とみなす。merge・tag・Release・配備の許可は含まない。
+GitHub 上の AI 実装（Claude Code Action・Copilot・Dots/Codex）は `docs/development/AUTOMATION.md` に従う。所有者が Issue に付けた `担当:*` ラベルは、その Issue の範囲で `agent/`・`copilot/`・`codex/` ブランチへ push しPRを作る明示指示とみなす。PRは下書きにしない（所有者 2026-11-17）。merge・tag・Release・配備の許可は含まない。
 
 ドキュメントと既存のコードが食い違うときはコードの書き方に従い、見つけた食い違いを最後の返答ですべて挙げること

@@ -53,6 +53,12 @@ def test_runner_lists_ci_jobs_in_order():
                             text=True, timeout=10, check=True).stdout.split()
     assert listed == list(_ci_jobs())
     assert len(listed) == 11
+    runner = RUNNER.read_text()
+    assert '全${job_count} job pass' in runner
+    count_line = next(line.strip() for line in runner.splitlines() if line.strip().startswith("job_count="))
+    result = subprocess.run(["bash", "-c", count_line + '; printf "%s" "$job_count"'],
+                            env={"JOBS": " ".join(listed)}, text=True, capture_output=True, check=True)
+    assert int(result.stdout) == len(listed)
 
 
 def test_runner_contains_every_ci_run_line():

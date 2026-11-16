@@ -15,7 +15,7 @@ from mcs_util import payload_hash, strict_json
 from safe_io import atomic_write, fsync_dir, read_private_bytes
 
 SCHEMA = 'attachment-paid-result/v1'
-LIMIT = 6 * bounded_http.MAX_RESPONSE_BYTES + 65536
+LIMIT = 6 * bounded_http.MAX_RESPONSE_BYTES_CEILING + 65536
 
 
 def _directory(root, *, create=False):
@@ -67,7 +67,7 @@ def preserve(root, origin, reservation, metadata, answer):
         raise ValueError('attachment_paid_metadata_invalid')
     saved = None
     if answer is not None:
-        saved = cloud_policy._saved_answer(answer, metadata)
+        saved = cloud_policy._saved_answer(answer, metadata, reservation)
     value = {'schema': SCHEMA, 'origin': origin, 'reservation': reservation,
              'metadata': metadata, 'answer': saved}
     value['hash'] = payload_hash(value)

@@ -97,3 +97,15 @@ def test_ci_secret_scan_exempts_only_exact_public_vector_bytes(tmp_path, changed
     assert result.returncode == expected, result.stdout + result.stderr
     if expected:
         assert 'possible secret committed' in result.stdout
+
+
+def test_test_matrices_finish_every_slice_with_their_own_artifacts():
+    # Each slice is a separate hosted runner: one failing slice must not cancel
+    # the others, and every slice keeps its own report and diagnostics. The
+    # gates' fail-closed verdicts are pinned in test_ci_scope_gates.py.
+    jobs = _jobs((ROOT / ".github/workflows/ci.yml").read_text())
+    for lane in ("linux", "macos"):
+        block = jobs[f"pytest-{lane}"]
+        assert "fail-fast: false" in block
+        assert f"name: pytest-report-{lane}-${{{{ matrix.slice }}}}" in block
+        assert f"name: pytest-{lane}-${{{{ matrix.slice }}}}-${{{{ github.run_attempt }}}}" in block

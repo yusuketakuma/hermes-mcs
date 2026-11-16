@@ -338,7 +338,8 @@ clean_after=$(git -C "$src" status --porcelain --untracked-files=all)
 column -t -s "$(printf '\t')" "$summary" 2>/dev/null || cat "$summary"
 echo "evidence: $out"
 if [ "$all_pass" = 1 ]; then
-    result="ローカル同等チェック: 全$(echo "$JOBS" | wc -w | tr -d ' ') job pass（${sha}）"
+    job_count=$(printf '%s\n' "$JOBS" | awk '{print NF}')
+    result="ローカル同等チェック: 全${job_count} job pass（${sha}）"
 else
     result="ローカル同等チェック: 未成立（fail・実行不能・未実行・dirty のいずれかあり）"
 fi

@@ -113,6 +113,9 @@ def test_limit_grows_with_output_and_stops_at_the_ceiling():
     assert cloud_client.response_limit(1) > bounded_http.MAX_RESPONSE_BYTES
     assert cloud_client.response_limit(32768) > cloud_client.response_limit(16384)
     assert cloud_client.response_limit(cloud_client.MAX_TOKENS) <= bounded_http.MAX_RESPONSE_BYTES_CEILING
+    for invalid in (0, cloud_client.MAX_TOKENS + 1, True, "1", None):
+        with pytest.raises(ValueError, match="max_tokens_invalid"):
+            cloud_client.response_limit(invalid)
 
 
 @pytest.mark.parametrize("provider", sorted(PROVIDERS))
@@ -169,18 +172,17 @@ def test_a_200_response_that_is_not_bytes_stays_a_protocol_error(provider):
 
 
 @pytest.mark.parametrize("provider", sorted(PROVIDERS))
-def test_an_answer_text_past_the_stored_bound_keeps_its_validated_usage(provider):
+def test_an_answer_text_past_the_default_bound_is_returned_with_its_hash(provider):
+    # The stored and recovered answer share the read bound (cloud_policy._saved_answer),
+    # and a decoded answer is never longer than the body it came in.
     results = []
     text = "x" * (bounded_http.MAX_RESPONSE_BYTES + 1)
     raw = json.dumps(_reply(provider, text=text)).encode()
     assert len(raw) <= cloud_client.response_limit(LARGE_TOKENS)
     client = CLIENTS[provider]("synthetic", post_fn=lambda body, timeout: (200, {}, raw))
-    with pytest.raises(cloud_client.CloudError) as error:
-        _complete(client, results, max_tokens=LARGE_TOKENS)
-    assert error.value.kind == "response_too_large" and error.value.detail == "answer_too_large"
-    assert results[0]["http_class"] == "http_200" and results[0]["usage"] is not None
-    assert results[0]["error_kind"] == "response_too_large"
-    assert "answer_text_sha256_v1" not in results[0] and "answer_finish_reason_v1" not in results[0]
+    assert _complete(client, results, max_tokens=LARGE_TOKENS)["text"] == text
+    assert results[0]["http_class"] == "http_200" and results[0]["error_kind"] is None
+    assert results[0]["answer_text_sha256_v1"] and results[0]["usage"] is not None
 
 
 def _reserve(ledger, provider, unit="synthetic", prompt="synthetic", max_tokens=100):
@@ -217,22 +219,6 @@ def test_an_oversized_response_holds_only_its_unit_at_the_reserved_maximum(provi
         with pytest.raises(cloud_client.CloudError):
             _reserve(ledger, provider)
         assert len(ledger.artifacts("cloud_usage_reserve")) == 2
-
-
-@pytest.mark.parametrize("provider", sorted(PROVIDERS))
-def test_an_oversized_answer_settles_at_its_actual_cost_without_a_global_stop(provider, tmp_path, monkeypatch):
-    monkeypatch.setattr(policy, "pricing_valid", lambda *args, **kwargs: True)
-    with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
-        reservation = _reserve(ledger, provider)
-        usage = _reply(provider)["usage"]
-        policy.record_result(ledger, reservation, _result(reservation, usage=usage))
-        meta = json.loads(ledger.artifacts("cloud_usage_result")[0]["meta"])
-        assert meta["error_kind"] == "response_too_large" and meta["usage"] is not None
-        assert 0 < Decimal(meta["cost_usd"]) < Decimal(reservation["max_cost_usd"])
-        assert policy.usage_report(ledger)["unresolved_requests"] == 0
-        assert policy.global_block_reason(ledger, model=reservation["model"]) is None
-        with pytest.raises(cloud_client.CloudError):
-            _reserve(ledger, provider)
 
 
 @pytest.mark.parametrize("provider", sorted(PROVIDERS))
@@ -289,38 +275,3 @@ def test_a_unit_whose_response_was_too_large_stays_held_like_an_unanswered_send(
     assert held.value.detail == "cloud_unit_unresolved" and len(calls) == 1
     refusal = _local_fallback_refusal(ledger, cfg, unit, calls[0])
     assert refusal.detail == "cloud_unit_unresolved" and refusal.history_refusal == "repeat_unsettled"
-
-
-def test_a_unit_whose_answer_text_was_too_large_is_settled_but_never_answered_again(cloud, monkeypatch):
-    ledger, cfg, _, _ = cloud
-    monkeypatch.setattr(policy, "pricing_valid", lambda *args, **kwargs: True)
-    calls = []
-    raw = json.dumps(_reply("anthropic", text="x" * (bounded_http.MAX_RESPONSE_BYTES + 1))).encode()
-
-    def request(self, method, body, timeout, **kwargs):
-        calls.append(body)
-        assert len(raw) <= cloud_client.response_limit(body["max_tokens"])
-        return 200, {}, raw
-
-    monkeypatch.setattr(anthropic_client.AnthropicClient, "request", request)
-    deadline = time.monotonic() + 10
-    unit = _unit(ledger, cfg, deadline)
-    with pytest.raises(cloud_inference.CloudFallback, match="cloud_unit_failed"):
-        unit("synthetic", deadline=deadline, max_tokens=LARGE_TOKENS)
-    # the usage was read, so the unit itself is not left holding an unknown send
-    assert len(calls) == 1 and unit.possibly_sent and not unit.unresolved
-    reserves, results = rows(ledger, "cloud_usage_reserve"), rows(ledger, "cloud_usage_result")
-    assert len(reserves) == len(results) == 1
-    saved = json.loads(results[0]["meta"])
-    assert saved["error_kind"] == "response_too_large" and saved["usage"] is not None
-    assert saved["http_class"] == "http_200" and "answer_text_sha256_v1" not in saved
-    assert 0 < Decimal(saved["cost_usd"]) < Decimal(json.loads(reserves[0]["meta"])["max_cost_usd"])
-    assert policy.usage_report(ledger)["unresolved_requests"] == 0
-    assert not rows(ledger, "cloud_circuit")
-    assert policy.global_block_reason(ledger, model=unit.model) is None
-    # the settled failure still answers for this request: no local substitute, no resend
-    refusal = _local_fallback_refusal(ledger, cfg, unit, calls[0])
-    assert refusal.detail == "cloud_unit_unresolved" and refusal.history_refusal == "repeat_failed"
-    with pytest.raises(cloud_client.CloudNotSent) as held:
-        unit("synthetic", deadline=deadline, max_tokens=LARGE_TOKENS)
-    assert held.value.detail == "cloud_unit_unresolved" and len(calls) == 1

@@ -38,6 +38,8 @@ class CloudNotSent(CloudError):
 
 def response_limit(max_tokens):
     """Return the read bound for one answer with ``max_tokens`` of output."""
+    if type(max_tokens) is not int or not 1 <= max_tokens <= MAX_TOKENS:
+        raise ValueError("max_tokens_invalid")
     return min(bounded_http.MAX_RESPONSE_BYTES + max_tokens * RESPONSE_BYTES_PER_TOKEN,
                bounded_http.MAX_RESPONSE_BYTES_CEILING)
 
@@ -170,10 +172,6 @@ class CloudClient:
                     raise CloudError("contract_error", "answer_text_invalid") from None
                 if answer.get("finish_reason") not in ("stop", "length"):
                     raise CloudError("contract_error", "finish_reason_invalid")
-                if len(encoded_text) > bounded_http.MAX_RESPONSE_BYTES:
-                    # The stored-answer bound is unchanged. Usage was validated, so this
-                    # attempt settles at its actual cost and is never used as an answer.
-                    raise CloudError(RESPONSE_TOO_LARGE, "answer_too_large")
                 meta["answer_text_sha256_v1"] = hashlib.sha256(encoded_text).hexdigest()
                 meta["answer_finish_reason_v1"] = answer["finish_reason"]
                 result = answer
