@@ -53,6 +53,7 @@ def test_run_stage_and_relogin_step_tag_the_escaping_error():
 @pytest.mark.parametrize("value", [
     None, "deliver", {"stage": "deliver"}, {"stage": PRIVATE, "category": "network"},
     {"stage": "deliver", "category": PRIVATE}, {"stage": "deliver", "category": "network", "x": 1},
+    {"stage": ["deliver"], "category": "network"}, {"stage": "deliver", "category": {"x": 1}},
 ])
 def test_malformed_stop_points_are_never_explained(value):
     assert diagnostics.valid_stop(value) is None
@@ -101,6 +102,12 @@ def test_alert_names_the_stopped_stage_and_the_cause_specific_step(tmp_path):
     assert "data/mcs.log の末尾を確認" not in text
 
 
+def test_unhashable_stop_in_a_failed_record_does_not_break_monitoring(tmp_path):
+    report = health_watch.classify_health(
+        _health(tmp_path, "failed", {"stage": ["unread"], "category": {}}), 1000, 600)
+    assert report["run_stop"] is None
+
+
 def test_stop_from_a_successful_record_is_ignored(tmp_path):
     report = health_watch.classify_health(
         _health(tmp_path, "ok", {"stage": "unread", "category": "network"}), 1000, 600)
@@ -120,7 +127,7 @@ def test_immediate_notice_shows_stage_cause_and_step_without_raw_detail():
     session = notify_flush._system_event_text(
         "session_expired", {"stop": {"stage": "unread", "category": "login"}})
     assert "止まった処理: 未読投稿の取得" in session
-    assert "次の操作: Macの端末で ~/.local/bin/mcs setup browser を実行し、MCSへログインし直してください。" in session
+    assert "次の操作: " + notify_flush._SYSTEM_TEXT["session_expired"][2] in session
     legacy = notify_flush._system_event_text("run_failed", {"stop": {"stage": PRIVATE}})
     assert "止まった処理" not in legacy and "mcs_setup.py check" in legacy
 
