@@ -117,3 +117,16 @@ def test_an_interrupted_append_is_dropped_before_the_next_record(tmp_path, monke
         _entry(tmp_path, now=1_790_000_120)
     monkeypatch.setattr(access_log.os, "write", real_write)
     assert access_log.verify(tmp_path) == {**access_log.verify(tmp_path), "ok": True, "records": 2}
+
+
+def test_new_log_directory_is_made_durable_before_the_first_record(tmp_path, monkeypatch):
+    synced = []
+    monkeypatch.setattr(access_log, "fsync_dir", lambda path, **_k: synced.append(os.fspath(path)))
+    access_log.record(tmp_path, via="slack", actor="a", op="read")
+    assert os.fspath(tmp_path) in synced
+
+    def broken(path, **_k):
+        raise OSError("synthetic")
+    monkeypatch.setattr(access_log, "fsync_dir", broken)
+    with pytest.raises(access_log.AccessLogError, match="access_log_unavailable"):
+        access_log.record(tmp_path, via="slack", actor="a", op="read")
