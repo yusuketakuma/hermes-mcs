@@ -99,6 +99,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: offline label migration regression
+        run: python3 scripts/development/check_labels_sync.py
       - name: no secrets or data dirs tracked
         run: |
           bad=$(git ls-files | grep -E '(^|/)(data/|chrome-profile/|\.env$|\.env\.[^/]*$|config\.json$|config\.json\.[^/]*$|token_cache\.json$)' || true)
