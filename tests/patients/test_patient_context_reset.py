@@ -129,6 +129,23 @@ def test_context_rebuilds_after_reset(built, tmp_path):
     assert len(posts) == sent, "the rebuild sends the same work again"
 
 
+def test_the_rebuilt_view_finds_again_exactly_the_facts_the_reset_recorded(built, tmp_path):
+    import patient_context_view as view
+    ledger, clock, cfg, posts = built
+    before = [item for item in view.evidence(ledger.db, 1, cfg=cfg)["items"] if item.get("discovery")]
+    assert before, "the synthetic context publishes facts the view merges into its items"
+    cloud_policy.stop(ledger)
+    off = _disabled(cfg)
+    found = reset.preview(ledger.db, cfg=off, now=clock.wall)
+    assert _apply(ledger, off, _request(found["preview_hash"]), clock.wall, tmp_path)[0] is None
+    prior = set(json.loads(ledger.artifacts(view.RESET_PRIOR_KIND)[0]["content"]))
+    posts.clear()   # the synthetic wire counts reservations against its own sends since the reset
+    cloud_policy.resume(ledger)
+    finish(clock_runtime(ledger, clock), cfg)
+    after = [item for item in view.evidence(ledger.db, 1, cfg=cfg)["items"] if item.get("discovery")]
+    assert after and all(view.reset_fact_key(item) in prior for item in after + before)
+
+
 def clock_runtime(ledger, clock):
     return ledger, clock, []
 

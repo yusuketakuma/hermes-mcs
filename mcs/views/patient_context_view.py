@@ -513,7 +513,10 @@ def reset_fact_key(fact) -> str:
     """Identity of one context fact across a rebuild: its record, revision and category.
 
     The wording is rewritten by the rebuild, so it is not part of the identity."""
-    values = [fact.get(key) for key in ("source", "message_id", "content_hash", "category", "source_key")]
+    source = fact.get("source") or "chat"
+    # a chat fact's source_key is its own post id and is not kept when the view merges it
+    key = None if source == "chat" else fact.get("source_key")
+    values = [source, fact.get("message_id"), fact.get("content_hash"), fact.get("category"), key]
     return hashlib.sha256(json.dumps(values, ensure_ascii=False).encode("utf-8")).hexdigest()[:32]
 
 

@@ -58,3 +58,10 @@ def test_the_identity_ignores_the_rewritten_wording():
     worded = {**_found(1), "text": "rebuilt wording", "quote": "other quote"}
     assert view.reset_fact_key(worded) == view.reset_fact_key(_found(1))
     assert view.reset_fact_key({**_found(1), "content_hash": "edited"}) != view.reset_fact_key(_found(1))
+
+
+def test_a_chat_fact_keeps_its_identity_when_the_view_drops_its_source_key():
+    stored = {**_found(1), "source_key": 1}
+    assert view.reset_fact_key(stored) == view.reset_fact_key({k: v for k, v in _found(1).items() if k != "source"})
+    ocr = {**_found(1), "source": "attachment_ocr", "source_key": "attachment_ocr:a"}
+    assert view.reset_fact_key(ocr) != view.reset_fact_key({**ocr, "source_key": "attachment_ocr:b"})
