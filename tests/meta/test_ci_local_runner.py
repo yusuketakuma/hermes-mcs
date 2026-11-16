@@ -45,7 +45,7 @@ def _norm(text):
 
 
 def test_runner_lists_ci_jobs_in_order():
-    listed = subprocess.run(["bash", str(RUNNER), "--list-jobs"], capture_output=True,
+    listed = subprocess.run([str(RUNNER), "--list-jobs"], capture_output=True,
                             text=True, timeout=10, check=True).stdout.split()
     assert listed == list(_ci_jobs())
     assert len(listed) == 8
