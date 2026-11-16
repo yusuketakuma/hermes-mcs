@@ -35,6 +35,9 @@ TOP_LEVEL_AREAS = ("adapters", "hermes_plugin", "lineworks_adapter", "mcs_standa
 _MARKER = re.compile(r"<!-- agent-scan:([0-9a-f]{12}) -->")
 _PLACE = re.compile(r"^## 場所\n`([^`\n]+)`(?: (\d+) 行目付近)?", re.M)
 TITLE_PREFIX = "スキャン: "
+# A long unbroken run of letters with a digit reads as a token or a hash; a finding carrying one
+# is dropped whole. This lowers the chance of publishing a secret; it does not rule it out.
+_SECRET = re.compile(r"(?=[A-Za-z_\-]*\d)[A-Za-z0-9_\-]{32,}")
 # Two titles about one file this alike are the same finding reworded. Same or reworded, a finding
 # is another one when both name a line and the lines are further apart than SAME_PLACE.
 SAME_TITLE = 0.75
@@ -66,9 +69,9 @@ def recent_files(root=ROOT, days=RECENT_DAYS):
 
 
 def plan(run_number, changed, open_issues=0, requested="", root=ROOT):
-    """What this run scans: {"areas": [...], "recent": [...]}; no areas while the backlog is full.
+    """What this run scans: {"areas": [...], "recent": [...], "manual": bool}; no areas while the backlog is full.
 
-    A requested area is scanned alone. Otherwise the areas with the most recently changed
+    A requested area is scanned alone, backlog or not: the owner asked for it. Otherwise the areas with the most recently changed
     files come first and the rotation fills the rest, so quiet areas are still reached.
     """
     known = areas(root)
@@ -85,7 +88,7 @@ def plan(run_number, changed, open_issues=0, requested="", root=ROOT):
         rotation = [known[(offset + step) % len(known)] for step in range(len(known))]
         chosen += [area for area in rotation if area not in chosen][:AREAS_PER_RUN - len(chosen)]
     recent = [path for path in changed if _area_of(path, chosen)][:MAX_RECENT_FILES]
-    return {"areas": chosen, "recent": recent}
+    return {"areas": chosen, "recent": recent, "manual": bool(requested)}
 
 
 def open_count(issues):
@@ -143,10 +146,10 @@ def _repo_file(path, scanned, root):
     return relative if _area_of(relative, scanned) else None
 
 
-def issues_to_file(findings, existing, scanned, root=ROOT):
-    """Issues ({title, body}) for the valid, new findings, within the per-run and backlog limits."""
+def issues_to_file(findings, existing, scanned, root=ROOT, manual=False):
+    """Issues ({title, body}) for the valid, new findings, within the per-run limit and, unless `manual`, the backlog."""
     earlier = filed(existing)
-    limit = min(MAX_ISSUES, MAX_OPEN - open_count(existing))
+    limit = MAX_ISSUES if manual else min(MAX_ISSUES, MAX_OPEN - open_count(existing))
     issues = []
     for finding in findings if isinstance(findings, list) else []:
         if len(issues) >= limit:
@@ -157,7 +160,8 @@ def issues_to_file(findings, existing, scanned, root=ROOT):
         title = " ".join(_text(finding.get("title"), MAX_TITLE).split())
         problem = _text(finding.get("problem"), MAX_TEXT)
         evidence = _text(finding.get("evidence"), MAX_TEXT)
-        if not (path and title and problem and evidence):
+        suggestion = _text(finding.get("suggestion"), MAX_TEXT)
+        if not (path and title and problem and evidence) or _SECRET.search("\n".join((title, problem, evidence, suggestion))):
             continue
         line = finding.get("line")
         line = line if isinstance(line, int) and not isinstance(line, bool) and line > 0 else None
@@ -171,7 +175,6 @@ def issues_to_file(findings, existing, scanned, root=ROOT):
             "内容を確かめ、進めるなら会話で詰めてから担当を決めます。当たらなければ閉じてください（同じ指摘は再起票されません）。",
             "", "## 場所", place, "", "## 問題", problem, "", "## 根拠", evidence,
         ]
-        suggestion = _text(finding.get("suggestion"), MAX_TEXT)
         if suggestion:
             body += ["", "## 直し方の案", suggestion]
         body += ["", f"<!-- agent-scan:{mark} -->"]
@@ -202,11 +205,12 @@ def main(argv=None):
         if args.command == "plan":
             result = plan(args.run_number, recent_files(), open_count(existing), args.requested)
         else:
-            scanned = _load(args.plan)["areas"]
+            planned = _load(args.plan)
+            scanned = planned["areas"]
             findings = _load(args.result)["findings"]
             if not scanned or not set(scanned) <= set(areas()) or not isinstance(findings, list):
                 raise ValueError("unknown area, or findings is not a list")
-            result = issues_to_file(findings, existing, scanned)
+            result = issues_to_file(findings, existing, scanned, manual=planned.get("manual") is True)
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
         # An unreadable plan or result is a failed scan; it did not find the code clean.
         print(f"scan unusable: {error}", file=sys.stderr)

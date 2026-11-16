@@ -35,16 +35,16 @@ def test_plan_puts_recently_changed_areas_first_and_rotates_the_rest(repo, monke
     monkeypatch.setattr(scan, "RECENT_AREAS", 1)
     changed = ["mcs/notify/cards.py", "mcs/notify/other.py", "adapters/slack/send.py", "README.md"]
     first = scan.plan(0, changed, root=repo)
-    assert first == {"areas": ["mcs/notify", "mcs/core"], "recent": ["mcs/notify/cards.py", "mcs/notify/other.py"]}
+    assert first == {"areas": ["mcs/notify", "mcs/core"], "recent": ["mcs/notify/cards.py", "mcs/notify/other.py"], "manual": False}
     assert [scan.plan(number, changed, root=repo)["areas"][1] for number in range(1, 4)] == ["adapters", "adapters", "mcs/core"]
     assert [scan.plan(number, [], root=repo)["areas"] for number in range(2)] == [["mcs/core", "mcs/notify"], ["mcs/notify", "adapters"]]
 
 
 def test_plan_scans_a_requested_area_alone_and_waits_on_a_full_backlog(repo):
-    assert scan.plan(0, ["mcs/core/db.py"], requested="adapters", root=repo) == {"areas": ["adapters"], "recent": []}
+    assert scan.plan(0, ["mcs/core/db.py"], requested="adapters", root=repo) == {"areas": ["adapters"], "recent": [], "manual": True}
     with pytest.raises(ValueError):
         scan.plan(0, [], requested="../etc", root=repo)
-    assert scan.plan(0, ["mcs/core/db.py"], open_issues=scan.MAX_OPEN, root=repo) == {"areas": [], "recent": []}
+    assert scan.plan(0, ["mcs/core/db.py"], open_issues=scan.MAX_OPEN, root=repo) == {"areas": [], "recent": [], "manual": False}
     assert scan.plan(0, [], open_issues=scan.MAX_OPEN, requested="adapters", root=repo)["areas"] == ["adapters"]
 
 
@@ -137,7 +137,16 @@ def test_a_backlog_of_open_scan_issues_limits_what_is_filed(repo):
     findings = [_finding(title="一つ目"), _finding(title="二つ目", path="adapters/slack/send.py")]
     filed = scan.issues_to_file(findings, backlog, ["mcs/notify", "adapters"], root=repo)
     assert [issue["title"] for issue in filed] == ["スキャン: 一つ目"]
-    assert scan.issues_to_file(findings, backlog + [{"state": "OPEN", "body": ""}], ["mcs/notify", "adapters"], root=repo) == []
+    full = backlog + [{"state": "OPEN", "body": ""}]
+    assert scan.issues_to_file(findings, full, ["mcs/notify", "adapters"], root=repo) == []
+    assert len(scan.issues_to_file(findings, full, ["mcs/notify", "adapters"], root=repo, manual=True)) == 2
+
+
+def test_a_finding_carrying_a_token_like_string_is_dropped(repo):
+    token = "tok" + "A1b2" * 10
+    findings = [_finding(evidence=f"環境に {token} がある"), _finding(title="別の指摘", suggestion=token),
+                _finding(title="長い名前", evidence="test_a_like_worded_finding_far_away_in_the_file_is_its_own_finding")]
+    assert [issue["title"] for issue in scan.issues_to_file(findings, [], ["mcs/notify"], root=repo)] == ["スキャン: 長い名前"]
 
 
 def test_issues_are_bounded_and_ping_nobody(repo):
