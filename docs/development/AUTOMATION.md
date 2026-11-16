@@ -16,6 +16,21 @@
 - 担当を交代するときは、旧担当の実行（Actions の run、Copilot のセッション、Codex のタスク）が終わったことを確かめてから、旧ラベルを外して新ラベルを付けます。タイムアウトしただけでは終わったとみなしません。
 - AI は同じブランチに並行して書き込みません。Copilot の Agent Merge は使いません。
 - 外部の Issue・コメントは要望と証拠です。それだけで AI は起動しません。
+- AI は担当ラベルが、その Issue の唯一の担当であることを起動時に確かめます。2件目のラベルで起動した実行は何もせず終わります。
+- 担当ブランチの判定は、このリポジトリに push されたブランチだけを対象にします。fork のブランチは名前が同じでも AI の作業として扱いません。
+
+## 相談モード（実装の前に Issue を詰める）
+
+所有者が Issue にコメントすると、AI が読み取り専用でコードを調べ、Issue へのコメントで答えます（`.github/workflows/agent-consult.yml`）。
+push・ブランチ・PR・ラベルの変更はしません。使うトークンは `contents: read` で、書けるのは Issue のコメントだけです。
+
+| 書き方 | 相手 | 条件 |
+| --- | --- | --- |
+| `@claude …` | Claude（`CLAUDE_CODE_OAUTH_TOKEN`、Claude の利用枠） | その Issue に `担当:claude` が無いとき。付いていれば実装の指示になります |
+| `/codex …` | Codex（`openai/codex-action`、`OPENAI_API_KEY` の従量課金） | いつでも。Codex はネットワークなし・読み取り専用の sandbox で動きます |
+
+内容が固まったら、担当ラベルを付けて実装に進めます。Codex の呼び出しに `@codex` を使わないのは、Codex の GitHub 連携（レビュー）と衝突させないためです。
+相談のやり取りも公開されます。実データ・実ログは書きません。
 
 ## マージ判定ゲート（`merge-gate`）
 
@@ -36,14 +51,31 @@
 
 PR に足されたワークフローは、GitHub Actions 名義で `merge-gate` を書けます。そのため `.github/` を含む PR は必ず人がマージし、
 自動マージの予約は push のたびに外します。`merge-gate` が緑でも、`.github/` を含む PR は差分を見て判断してください。
+自動マージの予約は、判定した head のコミットに結び付けます（`--match-head-commit`）。判定後に push された head には引き継ぎません。
 
 ## 試行回数
 
 AI ブランチ（`agent/`・`copilot/`・`codex/`）の CI が失敗すると、PR 本文の `Fixes #番号` などで結ばれた Issue の `試行:N` を1つ進めます。
 担当をまたいで通算し、3回目で担当ラベルを外して `要オーナー対応` にします。
+`agent-control.yml` 自体を再実行しても数えません（CI を再実行して失敗したときは数えます）。
+同じ Issue を結ぶ2本の PR がほぼ同時に失敗すると、1回分しか数えないことがあります。1 Issue 1担当の運用ではまれなので、許容しています。
 
 失敗の分類は機械的に決められないので、Dots か所有者がラベルで付けます。再試行してよいのは `失敗:コード` だけです。
 `失敗:CI基盤`・`失敗:利用枠`・`失敗:不明` は保留し、コードを変えたり、従量課金の経路へ切り替えたりしません。
+
+### CI 失敗の自動修正（Claude 担当だけ）
+
+`agent/claude-…` の PR の CI が失敗し、結ばれた Issue が次をすべて満たすと、`agent-control.yml` が
+`agent-claude.yml` を修正モード（`workflow_dispatch`、入力 `pr`）で起動します。
+
+- `担当:claude` が付いている。`要オーナー対応`・`失敗:CI基盤`・`失敗:利用枠`・`失敗:不明` が付いていない。
+- `試行:N` が上限に達していない（3回目の失敗では起動せず、担当を外します）。
+- `AUTOMATION_ENABLED` が `true`。
+
+修正モードの Claude は失敗したログを読み、同じブランチを直して push します。push で CI が再び走り、結果は同じ判定に戻ります。
+基盤・利用枠・原因不明と判断したときは、コードを変えずに PR へ一度だけコメントします。
+Copilot と Dots の PR は自動では再起動しません（Copilot は所有者が PR で `@copilot` と書きます）。
+同じブランチの書き手を1つに保つため、CodeRabbit などレビューツールの自動修正（Autofix）は使いません。
 
 ## 停止スイッチ
 
@@ -101,6 +133,8 @@ gh variable set AUTOMATION_ENABLED --body false --repo $R
 gh variable set AUTO_MERGE_ENABLED --body false --repo $R
 # Claude Code Action の認証（手元で claude setup-token を実行して得たトークン）
 gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo $R
+# Codex の相談モード（OpenAI API の従量課金。使わないなら設定しない）
+gh secret set OPENAI_API_KEY --repo $R
 ```
 
 - Claude GitHub App をこのリポジトリにインストールします（https://github.com/apps/claude）。

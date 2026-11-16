@@ -8,7 +8,10 @@ imports nothing from the application. Standard library only.
   gate     verdict for the `merge-gate` commit status of a PR head, whether
            the PR needs a person, auto-merge eligibility, and the attempt
            labels to set on the linked issue after a failed CI run
+  attempt  the attempt labels after one more failure, and whether the
+           assigned agent may be re-run on the failure (repair)
   lock     whether a newly added 担当:* label conflicts with another one
+  assigned whether an agent label is the issue's only assignment
 
 The verdict is evidence, not trust in "CI is green": every required job must
 have run on the current head and succeeded (GitHub counts skipped and neutral
@@ -48,6 +51,11 @@ ATTEMPT_LIMIT = 3
 ATTEMPT_PREFIX = "試行:"
 OWNER_LABEL = "要オーナー対応"
 AGENT_LABEL_PREFIX = "担当:"
+# Only Claude can be re-run from a workflow; its branches start with this.
+REPAIR_PREFIX = "agent/claude-"
+REPAIR_AGENT_LABEL = "担当:claude"
+# A failure classified as one of these is held for a person, never retried.
+HOLD_LABELS = ("失敗:CI基盤", "失敗:利用枠", "失敗:不明")
 # A dependabot Actions bump rewrites only pinned `uses:` lines.
 _USES_LINE = re.compile(r"^[+-]\s*(-\s+)?uses:\s+[\w.-]+/[\w./-]+@[0-9a-f]{40}(\s+#.*)?$")
 _TEST_SKIP = re.compile(r"pytest\.mark\.(skip|skipif|xfail)|pytest\.(skip|xfail)\(|unittest\.skip|@skip\b")
@@ -57,6 +65,18 @@ _LINKED_ISSUE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+
 
 def is_agent_branch(branch):
     return branch.startswith(AGENT_PREFIXES)
+
+
+def same_repository(pr):
+    """True when the head branch lives in the base repository (a fork can name any branch)."""
+    head = (pr.get("head") or {}).get("repo") or {}
+    base = (pr.get("base") or {}).get("repo") or {}
+    return bool(head.get("full_name")) and head.get("full_name") == base.get("full_name")
+
+
+def assigned_to(labels, agent_label):
+    """True when `agent_label` is the issue's only 担当:* label."""
+    return [name for name in labels if name.startswith(AGENT_LABEL_PREFIX)] == [agent_label]
 
 
 def _matches(path, patterns):
@@ -182,12 +202,20 @@ def next_attempt(labels):
     return remove, add, exhausted
 
 
+def may_repair(branch, labels, exhausted, automation_enabled):
+    """True when the assigned Claude may be re-run on a CI failure of `branch`."""
+    return (automation_enabled and not exhausted and branch.startswith(REPAIR_PREFIX)
+            and REPAIR_AGENT_LABEL in labels and OWNER_LABEL not in labels
+            and not any(name in HOLD_LABELS for name in labels))
+
+
 def decide_gate(pr, check_runs, files, behind_by, automation_enabled, ci_conclusion=None):
     """The plan for one PR head: commit status, auto-merge eligibility and attempt bookkeeping."""
     head = pr["head"]["sha"]
     branch = pr["head"]["ref"]
     author = (pr.get("user") or {}).get("login", "")
-    agent = is_agent_branch(branch)
+    # Only branches pushed to this repository count as agent work; outsiders cannot push here.
+    agent = is_agent_branch(branch) and same_repository(pr)
     state, notes = evidence(check_runs, head, files)
     if agent and not automation_enabled:
         state, notes = "failure", ["自動化の停止中（AUTOMATION_ENABLED が true ではない）"]
@@ -256,16 +284,25 @@ def main(argv=None):
     gate.add_argument("--ci-conclusion", default="")
     attempt = sub.add_parser("attempt")
     attempt.add_argument("--labels", required=True, help="JSON list of label names")
+    attempt.add_argument("--branch", default="")
+    attempt.add_argument("--automation", default="")
     lock = sub.add_parser("lock")
     lock.add_argument("--labels", required=True, help="JSON list of label names")
     lock.add_argument("--added", required=True)
+    assigned = sub.add_parser("assigned")
+    assigned.add_argument("--labels", required=True, help="JSON list of label names")
+    assigned.add_argument("--agent", required=True)
     args = parser.parse_args(argv)
     if args.command == "gate":
         plan = decide_gate(_load(args.pr), _flatten_checks(_load(args.checks)), _flatten(_load(args.files)),
                            args.behind_by, args.automation == "true", args.ci_conclusion or None)
     elif args.command == "attempt":
-        remove, add, exhausted = next_attempt(json.loads(args.labels))
-        plan = {"remove": remove, "add": add, "exhausted": exhausted}
+        labels = json.loads(args.labels)
+        remove, add, exhausted = next_attempt(labels)
+        plan = {"remove": remove, "add": add, "exhausted": exhausted,
+                "repair": may_repair(args.branch, labels, exhausted, args.automation == "true")}
+    elif args.command == "assigned":
+        plan = {"assigned": assigned_to(json.loads(args.labels), args.agent)}
     else:
         plan = {"conflict": lock_conflict(json.loads(args.labels), args.added)}
     json.dump(plan, sys.stdout, ensure_ascii=False)

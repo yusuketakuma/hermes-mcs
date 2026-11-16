@@ -24,8 +24,12 @@ def _green(sha=HEAD):
     return [_run(name, sha=sha) for name in ac.REQUIRED_JOBS]
 
 
-def _pr(branch="agent/claude-issue-5", draft=False, body="Fixes #5", author="claude[bot]"):
-    return {"head": {"sha": HEAD, "ref": branch}, "draft": draft, "body": body, "user": {"login": author}}
+REPO = "yusuketakuma/hermes-mcs"
+
+
+def _pr(branch="agent/claude-issue-5", draft=False, body="Fixes #5", author="claude[bot]", head_repo=REPO):
+    return {"head": {"sha": HEAD, "ref": branch, "repo": {"full_name": head_repo}},
+            "base": {"repo": {"full_name": REPO}}, "draft": draft, "body": body, "user": {"login": author}}
 
 
 def _file(name, status="modified", patch="@@\n+text"):
@@ -140,6 +144,43 @@ def test_attempts_are_counted_across_agents_and_stop_at_the_limit():
     assert exhausted and "担当:copilot" in remove and add == ["試行:3", "要オーナー対応"]
 
 
+def test_a_fork_branch_named_like_an_agent_is_not_agent_work():
+    fork = _pr(branch="codex/docs", author="outsider", head_repo="outsider/hermes-mcs")
+    assert not ac.decide_gate(fork, _green(), DOC, 0, True)["auto_merge_eligible"]
+    assert ac.decide_gate(fork, _green(), CODE, 0, True, "failure")["attempts"] == []
+    assert ac.decide_gate(fork, _green(), DOC, 0, False)["state"] == "success"
+    deleted = _pr(head_repo=None)
+    deleted["head"]["repo"] = None
+    assert not ac.decide_gate(deleted, _green(), DOC, 0, True)["auto_merge_eligible"]
+
+
+def test_an_agent_starts_only_as_the_issue_s_single_assignment():
+    assert ac.assigned_to(["担当:claude", "bug"], "担当:claude")
+    assert not ac.assigned_to(["担当:copilot", "担当:claude"], "担当:claude")
+    assert not ac.assigned_to(["bug"], "担当:claude")
+
+
+def test_repair_reruns_only_an_assigned_claude_within_budget():
+    labels = ["担当:claude", "試行:1"]
+    assert ac.may_repair("agent/claude-issue-7", labels, False, True)
+    assert not ac.may_repair("agent/claude-issue-7", labels, False, False)
+    assert not ac.may_repair("agent/claude-issue-7", labels, True, True)
+    assert not ac.may_repair("copilot/fix-7", ["担当:copilot"], False, True)
+    assert not ac.may_repair("agent/claude-issue-7", ["担当:copilot"], False, True)
+    assert not ac.may_repair("agent/claude-issue-7", [*labels, "失敗:利用枠"], False, True)
+    assert not ac.may_repair("agent/claude-issue-7", [*labels, "要オーナー対応"], False, True)
+
+
+def test_cli_attempt_reports_whether_to_repair(capsys):
+    ac.main(["attempt", "--labels", json.dumps(["担当:claude"]), "--branch", "agent/claude-issue-7",
+             "--automation", "true"])
+    step = json.loads(capsys.readouterr().out)
+    assert step == {"remove": [], "add": ["試行:1"], "exhausted": False, "repair": True}
+    ac.main(["attempt", "--labels", json.dumps(["担当:claude", "試行:2"]), "--branch", "agent/claude-issue-7",
+             "--automation", "true"])
+    assert json.loads(capsys.readouterr().out)["repair"] is False
+
+
 def test_only_one_agent_label_per_issue():
     assert ac.lock_conflict(["担当:claude", "担当:copilot"], "担当:copilot")
     assert not ac.lock_conflict(["担当:claude", "bug"], "担当:claude")
@@ -167,3 +208,9 @@ def test_labels_and_workflows_agree_with_the_module():
     assert "branch_prefix: agent/" in claude
     assert "vars.AUTOMATION_ENABLED == 'true'" in claude
     assert "github.repository_owner" in claude
+    assert "agent-claude.yml" in control and "workflow_dispatch" in claude
+    assert "--match-head-commit" in control
+    assert "agent_control.py assigned" in claude
+    consult = (ROOT / ".github/workflows/agent-consult.yml").read_text()
+    assert "contents: write" not in consult and "pull-requests:" not in consult
+    assert "sandbox: read-only" in consult and "github_token: ${{ github.token }}" in consult
