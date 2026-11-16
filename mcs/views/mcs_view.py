@@ -1057,8 +1057,10 @@ def main(argv=None):
         elif args["kind"] == "recovery_parts":
             from mcs_util import load_config_checked
             from notify_recovery import recovery_worklist
-            result = recovery_worklist(view.db, load_config_checked(),
-                                       limit=args["limit"], offset=args["offset"])
+            from notify_recovery_breakdown import recovery_summary
+            cfg = load_config_checked()
+            result = recovery_worklist(view.db, cfg, limit=args["limit"], offset=args["offset"])
+            result["summary"] = recovery_summary(view.db, cfg)
         elif args["kind"] == "card_part_check":
             if (not requests.valid_uuid(args["delivery_id"])
                     or not valid_text(args["part_id"], 64)):

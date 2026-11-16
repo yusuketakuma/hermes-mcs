@@ -914,14 +914,21 @@ def part_holds_health(db, now, seconds=None) -> dict:
     return {**report, "status": "recorded", "observed_at": now}
 
 
-def incomplete_parts_health(db, now, cfg=None, seconds=None) -> dict:
-    """Observe unfinished notification counts within the existing reader budget."""
+def incomplete_parts_health(db, now, cfg=None, seconds=None, active_rows=None) -> dict:
+    """Observe unfinished notification counts within the existing reader budget.
+
+    ``active_rows``, when a list, is extended only after a complete read with
+    the active rows that read counted; a stopped read leaves it untouched."""
     import notify_scope
+    collected = []
+    sink = {} if active_rows is None else {"active_rows": collected}
     try:
         report = bounded_health_read(
-            db, lambda _check: notify_scope.incomplete_parts_health(db, now, cfg),
+            db, lambda _check: notify_scope.incomplete_parts_health(db, now, cfg, **sink),
             seconds=NOTIFICATION_OBSERVATION_S if seconds is None
             else min(seconds, NOTIFICATION_OBSERVATION_S))
+        if active_rows is not None:
+            active_rows.extend(collected)
     except Exception as exc:
         return {"total": None, "cards": None,
                 "by_state": dict.fromkeys(("pending", "unknown", "not_sent", "held")),
@@ -929,6 +936,38 @@ def incomplete_parts_health(db, now, cfg=None, seconds=None) -> dict:
                 "oldest_age_s": None, "observed_at": now,
                 "status": "unknown", "reason": _observation_failure(exc)}
     return {**report, "status": "recorded"}
+
+
+RECOVERY_BREAKDOWN_S = 1.0
+
+
+def incomplete_parts_breakdown_health(db, parts, active_rows, cfg, now, seconds=None):
+    """Counts only: active unfinished parts by fixed code and applicable recovery plan.
+
+    Classifies ``active_rows``, the rows the verdict's own read counted, so the
+    unfinished-part scan and tracking-ack reproof are not repeated here. Runs
+    in its own bounded window after every other observation and never changes
+    the incomplete-part verdict. Omitted when the measured report is not
+    current or has no active unknown/not_sent/held part; a stopped read is
+    'unknown' with no counts, never zero."""
+    import notify_recovery_breakdown
+    active = parts.get("active_by_state") if parts.get("status") == "recorded" else None
+    if not isinstance(active, dict) or not any(active.get(state) for state in
+                                               notify_recovery_breakdown.CLASSIFIED_STATES):
+        return None
+    try:
+        report = bounded_health_read(
+            db, lambda check: notify_recovery_breakdown.recovery_breakdown(
+                db, cfg, active_rows, checkpoint=check),
+            seconds=RECOVERY_BREAKDOWN_S if seconds is None else min(seconds, RECOVERY_BREAKDOWN_S))
+    except Exception as exc:
+        return {"status": "unknown", "reason": _observation_failure(exc), "observed_at": now}
+    # Never publish counts for a population other than the one the verdict
+    # measured (e.g. rows that were not handed over with the report).
+    if (report["total"] != sum(active.get(state) or 0 for state in notify_recovery_breakdown.CLASSIFIED_STATES)
+            or report["pending_not_classified"] != (active.get("pending") or 0)):
+        return {"status": "unknown", "reason": "population_mismatch", "observed_at": now}
+    return {**report, "observed_at": now}
 
 
 def delivery_latency_health(db, cfg, now, seconds) -> dict:
@@ -1022,8 +1061,10 @@ def build_health(db, result: dict, status: str,
     cards_health = carried_measurement(cards_health, prev_health().get("cards"), now)
     cards_unknown = cards_health.get("status") == "unknown"
     previous_notify = prev_health().get("notify")
+    active_part_rows = []
     incomplete_parts = carried_measurement(
-        incomplete_parts_health(db, now, cfg, seconds=min(NOTIFICATION_OBSERVATION_S, remaining())),
+        incomplete_parts_health(db, now, cfg, seconds=min(NOTIFICATION_OBSERVATION_S, remaining()),
+                                active_rows=active_part_rows),
         previous_notify.get("incomplete_parts") if isinstance(previous_notify, dict) else None, now)
     parts_incomplete = incomplete_parts['status'] == 'unknown' or bool(
         incomplete_parts.get('active_total', incomplete_parts['total'])) or bool(
@@ -1329,7 +1370,7 @@ def build_health(db, result: dict, status: str,
             ("backup_deferred_deadline", backup_deferred),
             ("backup_local_overdue", backup_local_overdue),
         ) if present] + stalls
-    return {
+    report = {
         "overall": overall, "run_status": status,
         "last_ok_at": last_ok_at,
         "state_reasons": state_reasons,
@@ -1383,6 +1424,20 @@ def build_health(db, result: dict, status: str,
         **early_warnings(db, result, free_mb),
         "errors": list(result.get("errors") or []),
     }
+    # Diagnostic only and last: it never takes time from the sections above.
+    if incomplete_parts.get("status") == "stale_measurement":
+        carried = incomplete_parts.pop("recovery_breakdown", None)
+        if isinstance(carried, dict) and carried.get("status") in ("recorded", "partial", "stale_measurement"):
+            incomplete_parts["recovery_breakdown"] = {
+                **carried, "status": "stale_measurement",
+                "age_s": incomplete_parts.get("age_s")}
+    else:
+        incomplete_parts.pop("recovery_breakdown", None)
+        breakdown = incomplete_parts_breakdown_health(
+            db, incomplete_parts, active_part_rows, cfg, now, seconds=remaining())
+        if breakdown is not None:
+            incomplete_parts["recovery_breakdown"] = breakdown
+    return report
 
 
 def ledger_key(db) -> str:

@@ -461,12 +461,27 @@ PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
                      "operator_part_resolve")
 
 
+# non-card part kinds an operator recovery command can name
+RECOVERY_PART_KINDS = ("thread", "body_part", "attachment_part", "file_group")
+
+
+def fixed_error_code(error_code) -> str:
+    """Map a stored part error code onto the fixed reporting vocabulary."""
+    if error_code is None:
+        return "not_recorded"
+    return error_code if error_code in PART_HOLD_REASONS else "unknown"
+
+
+def preflight_proof_applies(transport, kind, error_code) -> bool:
+    """True when a Slack attachment edit pre-check refusal may name local_preflight_rejected."""
+    return transport == "slack" and kind == "attachment_part" and error_code in _PREFLIGHT_ERRORS
+
+
 def recovery_guidance(kind, transport, error_code, attempt_id) -> dict:
     """Describe existing recovery requirements without creating an approval payload."""
-    known = PART_HOLD_REASONS
-    code = error_code if error_code in known else "not_recorded" if error_code is None else "unknown"
+    code = fixed_error_code(error_code)
     card = kind == "card"
-    available = (transport in SUPPORTED_TRANSPORTS and kind in ("card", "thread", "body_part", "attachment_part", "file_group")
+    available = (transport in SUPPORTED_TRANSPORTS and kind in ("card", *RECOVERY_PART_KINDS)
                  and (kind != "file_group" or transport in ("slack", "discord"))
                  and isinstance(attempt_id, str) and bool(attempt_id.strip()))
     not_sent = {"worker_stopped": True,
@@ -529,6 +544,29 @@ def part_hold_report(ledger) -> dict:
                       "kept_for_edit_check": spec[2]}}
 
 
+def _worklist_where(cfg):
+    # One candidate predicate for the worklist page and its population counts.
+    retired = retired_transports(cfg)
+    marks = ",".join("?" * len(retired))
+    live = f" AND r.transport NOT IN ({marks})" if retired else ""
+    where = ("p.kind!='card' AND r.state!='cancelled'" + live +
+             " AND (p.state='unknown' "
+             "OR (p.state='held' AND p.error_code='attachment_upload_identity_unverified') "
+             "OR (p.state='not_sent' AND p.kind='file_group' AND p.error_code=?))")
+    return where, (*retired, _DEPENDENCY_ERROR)
+
+
+def recovery_worklist_keys(db, cfg=None, *, checkpoint=lambda: None) -> list:
+    """Read (delivery_id, part_id, state) of every worklist candidate without planning or writing."""
+    where, params = _worklist_where(cfg)
+    keys = []
+    for row in db.execute("SELECT p.delivery_id,p.part_id,p.state FROM notification_render_parts p "
+                          "JOIN notification_renders r USING(delivery_id) WHERE " + where, params):
+        checkpoint()
+        keys.append((row["delivery_id"], row["part_id"], row["state"]))
+    return keys
+
+
 def recovery_worklist(db, cfg=None, *, limit=20, offset=0) -> dict:
     """Bounded operator worklist of parts awaiting human-reviewed recovery.
 
@@ -548,14 +586,7 @@ def recovery_worklist(db, cfg=None, *, limit=20, offset=0) -> dict:
             or type(offset) is not int or offset < 0:
         raise ValueError("bad_page")
     now = time.time()
-    retired = retired_transports(cfg)
-    marks = ",".join("?" * len(retired))
-    live = f" AND r.transport NOT IN ({marks})" if retired else ""
-    where = ("p.kind!='card' AND r.state!='cancelled'" + live +
-             " AND (p.state='unknown' "
-             "OR (p.state='held' AND p.error_code='attachment_upload_identity_unverified') "
-             "OR (p.state='not_sent' AND p.kind='file_group' AND p.error_code=?))")
-    params = (*retired, _DEPENDENCY_ERROR)
+    where, params = _worklist_where(cfg)
     total = db.execute(
         "SELECT COUNT(*) FROM notification_render_parts p "
         "JOIN notification_renders r USING(delivery_id) WHERE " + where,
@@ -652,9 +683,7 @@ def card_part_check(ledger, data_dir, delivery_id, part_id) -> dict:
         proofs = [_DEPENDENCY_PROOF]
     else:
         proofs = list(_CARD_PART_CHECK_PROOFS)
-        if (plan["transport"] == "slack" and part is not None
-                and part["kind"] == "attachment_part"
-                and part["error_code"] in _PREFLIGHT_ERRORS):
+        if part is not None and preflight_proof_applies(plan["transport"], part["kind"], part["error_code"]):
             proofs.append(_PREFLIGHT_PROOF)
     try:
         attempts, incomplete = notify_journal.scan_journals(
