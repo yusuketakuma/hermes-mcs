@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "長いクラウド回答でクラウド送信が全体に止まる問題を修正",
+  "summary": "外部AIの回答が256KiBを超えても、その送信の出力上限から決めた大きさまで読み切り、実際の使用量で精算します。これまでは使用量が読めず料金未確認として扱われ、人が再開するまで全てのクラウド送信が止まっていました。上限を超える回答は従来どおり拒否します。",
+  "upgrade": "更新するだけで有効になり、追加操作は不要です。設定項目と既定値は変わりません。対象はAnthropicとOpenAIへの送信だけで、ローカルLLM・Jev・薬剤情報の取得は従来の256KiBのままです。",
+  "details": [
+    "bounded_http_request に読取り上限 max_bytes を追加しました。既定は従来の256KiBで、呼出し元が8MiBまで引き上げられます。",
+    "CloudClient は送信ごとに 256KiB + 出力上限×32バイト（8MiBで頭打ち）を読取り上限にします。上限を超えた200応答は従来どおり protocol_error として最大額で精算し、送信を止めます。"
+  ],
+  "refs": [
+    "mcs/core/bounded_http.py",
+    "mcs/llm/transport/cloud_client.py",
+    "mcs/llm/providers/anthropic_client.py",
+    "mcs/llm/providers/openai_client.py"
+  ]
+}
