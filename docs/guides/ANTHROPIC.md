@@ -276,7 +276,7 @@ python3 mcs/ops/mcs_setup.py cloud-llm resume --confirm-human --reason '患者�
 | `config_unreadable` | 設定ファイルを読めない。`setup check` で確認する |
 | `command_id_conflict` | 別の操作の `--command-id` を指定している。指定を外すか新しい値にする |
 
-消去前のバックアップ（`data/backups/patient-context-reset-*.db`）へ戻すときは、通常のバックアップと同じ手順で復元します。復元すると外部AIの送信は自動で止まり、消去の後の作り直しで使った額の記録は復元後のDBにありません。提供元の利用明細を確認してから `cloud-llm resume` で再開してください。
+消去前のバックアップ（`data/backups/patient-context-reset-*.db`）へ戻すときは、通常のバックアップと同じ手順（[ローカル backup の復元](BACKUP.md#local)の `mcs_local_backup.py restore`）で復元します。復元すると外部AIの送信は自動で止まり、消去の後の作り直しで使った額の記録は復元後のDBにありません。提供元の利用明細を確認してから `cloud-llm resume` で再開してください。
 
 DBをバックアップの状態へ戻したときは、外部AIの新しい送信を自動で停止します。
 復元した時点より後の送信と課金の記録が復元後のDBにないため、再開すると同じ内容を再び送ることがあり、その分は上限の集計にも入りません。

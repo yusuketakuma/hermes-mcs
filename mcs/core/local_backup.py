@@ -392,15 +392,18 @@ def staging_patterns() -> list[str]:
             for suffix in ("", "-journal", "-wal", "-shm")]
 
 
+_GENERATION_ORDER = ("daily", "preupdate", "patient_context_reset")
+
+
 def generations() -> list[tuple[str, str, os.stat_result]]:
-    """(name, kind, lstat) of the regular daily then pre-update backups,
-    newest name first within each kind. Names and stat only — no DB open."""
+    """(name, kind, lstat) of the daily, pre-update and pre-reset backups,
+    in that kind order and newest name first within each. Names and stat only — no DB open."""
     found = []
     try:
         with os.scandir(BACKUP_DIR) as entries:
             for entry in entries:
                 kind = backup_class(entry.name)
-                if kind not in ("daily", "preupdate"):
+                if kind not in _GENERATION_ORDER:
                     continue
                 with suppress(FileNotFoundError):   # rotated away mid-scan
                     st = entry.stat(follow_symlinks=False)
@@ -409,4 +412,4 @@ def generations() -> list[tuple[str, str, os.stat_result]]:
     except FileNotFoundError:
         return []
     found.sort(key=lambda item: item[0], reverse=True)
-    return sorted(found, key=lambda item: item[1] != "daily")
+    return sorted(found, key=lambda item: _GENERATION_ORDER.index(item[1]))

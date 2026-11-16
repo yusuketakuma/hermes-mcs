@@ -234,7 +234,7 @@
 | `mcs/ops/mcs_cli.py` | MCSの導入・更新・初期設定・診断・医薬品マスター確認・状態監視・公開構成・遠隔支援同意の接続を行います。 |
 | `mcs/ops/mcs_compliance.py` | 外部AI送信の施設確認と、患者情報への閲覧・操作記録の確認・改ざん検査を行います。 |
 | `mcs/ops/mcs_drug.py` | 薬剤言及履歴・辞書照会と人承認付きの別名切替を扱う。 |
-| `mcs/ops/mcs_local_backup.py` | List, fully verify and held-restore the local daily and pre-update ledger backups. |
+| `mcs/ops/mcs_local_backup.py` | List, fully verify and held-restore the local daily, pre-update and pre-reset ledger backups. |
 | `mcs/ops/mcs_ocr.py` | 添付の文字起こしを独立して処理し、チャット原文とは分けて保存する。 |
 | `mcs/ops/mcs_refstats.py` | Approved reference set statistics workflow (ops tooling). |
 | `mcs/ops/mcs_repair.py` | Plan read-only repair observations and append private operator audit metadata. |

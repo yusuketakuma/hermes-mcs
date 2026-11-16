@@ -9,7 +9,7 @@
     "新モジュール mcs/patients/patient_context_reset.py が、前提条件・消去・使用額の引き継ぎ・Jev 使用記録の整理を受け持ちます。人承認の操作 ops.patient_context_reset として登録しました。",
     "引き継ぎ記録 cloud_usage_carryover_v1 を集計に加えました。日・期間予算の開始時刻の前後・提供元・精算の別に合計するので、1日の途中から始まる期間予算も消去の前と同じ額を数えます。記録が増減すると集計を作り直し、壊れていれば送信を止めます。",
     "消去は1つのセーブポイントの中で行い、前後で使用額の報告が一致しなければ取り消します。",
-    "maintenance.reset_backup が patient-context-reset-*.db を作ります。自動のバックアップ整理では削除しません。",
+    "local_backup.reset_backup が patient-context-reset-*.db を作ります。自動のバックアップ整理では削除しません。mcs_local_backup.py の list・list --verify・restore で、日次・更新前のバックアップと同じように確認・復元できます。",
     "context-reset はバックアップの前に前提と同じ command-id の記録を確認し、拒否された消去のバックアップは削除します。確認の読取りが上限に達したときは read_incomplete と表示します。"
   ],
   "refs": [
@@ -22,6 +22,8 @@
     "mcs/ops/commands/mcs_requests.py",
     "mcs/ops/commands/mcs_operations.py",
     "tests/patients/test_patient_context_reset.py",
-    "tests/llm/test_cloud_usage_carryover.py"
+    "tests/llm/test_cloud_usage_carryover.py",
+    "mcs/core/local_backup.py",
+    "mcs/ops/mcs_local_backup.py"
   ]
 }

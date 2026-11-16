@@ -137,7 +137,23 @@ def test_restore_requires_a_private_parent(world, capsys):
 
 def test_generations_lists_daily_before_preupdate(world):
     _, backups, _ = world
-    for name in ("ledger-20261001.db", "preupdate-20261002-000000-x.db"):
+    for name in ("patient-context-reset-20261002-000000-ab.db", "ledger-20261001.db",
+                 "preupdate-20261002-000000-x.db"):
         Path(backups / name).write_bytes(b"synthetic")
     assert [n for n, _, _ in local_backup.generations()] == [
-        "ledger-20261003.db", "ledger-20261001.db", "preupdate-20261002-000000-x.db"]
+        "ledger-20261003.db", "ledger-20261001.db", "preupdate-20261002-000000-x.db",
+        "patient-context-reset-20261002-000000-ab.db"]
+
+
+def test_restore_accepts_the_copy_taken_before_a_patient_context_reset(world, capsys):
+    source, _, parent = world
+    reset = Path(local_backup.reset_backup(str(source)))
+    code, out = _cli(capsys, "list", "--verify")
+    assert code == 0
+    assert {r["name"]: (r["kind"], r["check"]) for r in out["backups"]}[reset.name] == (
+        "patient_context_reset", "ok")
+    target = parent / "data"
+    code, report = _cli(capsys, "restore", "--backup", reset.name, "--destination", str(target))
+    assert code == 0 and report["restore_pending"] is True
+    assert report["sha256"] == file_sha256(reset)
+    assert notify_spool.restore_awaiting_consent(str(target))

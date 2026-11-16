@@ -59,7 +59,8 @@ Keychain、ブラウザ profile、配送 journal、サービス設定も bundle 
 <a id="local"></a>
 ## ローカル日次 backup の確認と復元
 
-日次の `ledger-YYYYMMDD.db`（7世代）と更新前の `preupdate-*.db` は `data/backups` にあります。
+日次の `ledger-YYYYMMDD.db`（7世代）、更新前の `preupdate-*.db`、患者コンテキストの消去前の
+`patient-context-reset-*.db`（自動では削除しません）は `data/backups` にあります。
 鍵・policy・外部媒体は使いません。
 
 ```bash
@@ -80,7 +81,7 @@ schema の照合を行い、`check`・`sha256`・`schema`・`last_successful_run
   --backup ledger-YYYYMMDD.db --destination "$NEW_DATA_DIR"
 ```
 
-受け付けるのは `ledger-YYYYMMDD.db` と `preupdate-*.db` の名前だけです。symlink・SQLite の
+受け付けるのは `ledger-YYYYMMDD.db`・`preupdate-*.db`・`patient-context-reset-*.db` の名前だけです。symlink・SQLite の
 sidecar 付き・壊れたファイルは拒否します。親ディレクトリ内の一時コピーで SHA-256 と完全検査を
 行ってから、同意待ちのマーカーと `restore.json` を DB より先に置き、`ledger.db` を排他的に配置します。
 稼働中の `data/ledger.db` と backup は置換・削除しません。サービスの停止・起動もしません。
