@@ -243,7 +243,7 @@ def test_apply_never_bails_a_foreign_journal_when_recover_raises(
 
 def test_failed_bail_rollback_is_not_finished_as_pre_merge(
         updater, tmp_path, monkeypatch):  # noqa: F811
-    import maintenance
+    import local_backup
     monkeypatch.setattr(updater, "_provider_migration_needed", lambda: False)
     monkeypatch.setattr(update_apply, '_provider_migration_needed', updater._provider_migration_needed)
     monkeypatch.setattr(update_recovery, '_provider_migration_needed', updater._provider_migration_needed)
@@ -284,7 +284,7 @@ def test_failed_bail_rollback_is_not_finished_as_pre_merge(
                         lambda t: ["schema_bump:7->8"])
     monkeypatch.setattr(update_execution, 'precheck_tag', mcs_update.precheck_tag)
     monkeypatch.setattr(update_planning, 'precheck_tag', mcs_update.precheck_tag)
-    monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: str(back))
+    monkeypatch.setattr(local_backup, "preupdate_backup", lambda p: str(back))
     monkeypatch.setattr(mcs_update, "_baseline_check", lambda c: [])
     monkeypatch.setattr(update_apply, '_baseline_check', mcs_update._baseline_check)
     monkeypatch.setattr(mcs_update, "quiesce",

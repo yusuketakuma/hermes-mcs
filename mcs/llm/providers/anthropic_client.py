@@ -173,10 +173,12 @@ class AnthropicClient(CloudClient):
         self.model = model
         self.effort = effort
 
-    def request(self, method, body, timeout, *, deadline=None):
+    def request(self, method, body, timeout, *, deadline=None,
+                max_bytes=bounded_http.MAX_RESPONSE_BYTES):
         return bounded_http.bounded_http_request(
             ENDPOINT, method, body, timeout, api_key=self.api_key,
-            deadline=deadline, allowed_endpoints=(ENDPOINT,), auth="anthropic")
+            deadline=deadline, allowed_endpoints=(ENDPOINT,), auth="anthropic",
+            max_bytes=max_bytes)
 
     def body(self, prompt, max_tokens, cache_prefix):
         content = prompt

@@ -95,7 +95,7 @@ def test_real_owner_reservation_and_response_across_midnight(runtime, cloud, mon
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     calls = []
 
-    def request(_client, method, body, timeout, *, deadline):
+    def request(_client, method, body, timeout, *, deadline, max_bytes):
         assert method == 'POST' and timeout > 0 and deadline > clock.mono
         reserved = led.artifacts('cloud_usage_reserve')
         assert len(reserved) == 1 and reserved[0]['created_at'] == clock.wall

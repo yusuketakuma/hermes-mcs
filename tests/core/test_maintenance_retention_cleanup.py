@@ -15,19 +15,20 @@ from types import SimpleNamespace
 import pytest
 
 import ledger
+import local_backup
 import maintenance
 from ingest_testkit import _ledger, _message
 
 
 def _old(path, age=None):
-    t = time.time() - (age or maintenance.PREUPDATE_GRACE_S + 60)
+    t = time.time() - (age or local_backup.PREUPDATE_GRACE_S + 60)
     os.utime(path, (t, t))
 
 
 def test_prune_keeps_only_actionable_preupdate_backups(tmp_path, monkeypatch):
     backups = tmp_path / "backups"
     backups.mkdir()
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backups))
     names = ["old-bump", "new-bump", "plain", "applying", "consent", "orphan"]
     paths = {n: backups / f"preupdate-{n}.db" for n in names}
     for p in paths.values():
@@ -44,7 +45,7 @@ def test_prune_keeps_only_actionable_preupdate_backups(tmp_path, monkeypatch):
     }
     state_path = tmp_path / "update_state.json"
     state_path.write_text(json.dumps(state))
-    assert maintenance.prune_preupdate_backups(str(state_path)) == 2
+    assert local_backup.prune_preupdate_backups(str(state_path)) == 2
     assert sorted(p.name for p in backups.iterdir()) == [
         "preupdate-applying.db", "preupdate-consent.db", "preupdate-new-bump.db",
         "preupdate-old-bump.db"]
@@ -53,23 +54,23 @@ def test_prune_keeps_only_actionable_preupdate_backups(tmp_path, monkeypatch):
 def test_preupdate_backup_refuses_when_disk_is_low(tmp_path, monkeypatch):
     src = tmp_path / "ledger.db"
     ledger.Ledger(str(src)).close()
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setattr(maintenance.shutil, "disk_usage",
                         lambda p: SimpleNamespace(free=0))
     with pytest.raises(maintenance.MaintenanceError, match="backup_disk_low"):
-        maintenance.preupdate_backup(str(src))
+        local_backup.preupdate_backup(str(src))
     assert os.listdir(tmp_path / "backups") == []
 
 
 def test_backup_overdue_only_with_a_stale_newest_backup(tmp_path, monkeypatch):
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(tmp_path))
-    assert maintenance.backup_overdue() is False          # fresh install
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(tmp_path))
+    assert local_backup.backup_overdue() is False          # fresh install
     old = tmp_path / "ledger-20260101.db"
     old.write_bytes(b"x")
-    _old(old, maintenance.BACKUP_OVERDUE_S + 60)
-    assert maintenance.backup_overdue() is True
+    _old(old, local_backup.BACKUP_OVERDUE_S + 60)
+    assert local_backup.backup_overdue() is True
     (tmp_path / "ledger-20260102.db").write_bytes(b"x")
-    assert maintenance.backup_overdue() is False
+    assert local_backup.backup_overdue() is False
 
 
 def test_prune_attachments_commits_before_unlinking(tmp_path, monkeypatch):
@@ -191,7 +192,7 @@ def test_rotate_log_keeps_rotated_copy_private_under_loose_umask(monkeypatch, tm
 def test_prune_leftovers_removes_stranded_backup_and_snapshot_copies(tmp_path, monkeypatch):
     monkeypatch.setattr(maintenance, "HOME", str(tmp_path))
     backups, snaps = tmp_path / "backups", tmp_path / "snapshots"
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backups))
     monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(snaps))
     backups.mkdir()
     snaps.mkdir()
@@ -211,7 +212,7 @@ def test_prune_leftovers_removes_stranded_backup_and_snapshot_copies(tmp_path, m
 def test_prune_leftovers_removes_stranded_staging_sidecars(tmp_path, monkeypatch):
     monkeypatch.setattr(maintenance, "HOME", str(tmp_path))
     backups, snaps = tmp_path / "backups", tmp_path / "snapshots"
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backups))
     monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(snaps))
     backups.mkdir()
     snaps.mkdir()
@@ -233,7 +234,7 @@ def test_prune_leftovers_removes_stranded_staging_sidecars(tmp_path, monkeypatch
 
 def test_prune_leftovers_keeps_snapshot_candidates_while_child_holds_fence(tmp_path, monkeypatch):
     monkeypatch.setattr(maintenance, "HOME", str(tmp_path))
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(tmp_path / "backups"))
     snaps = tmp_path / "snapshots"
     snaps.mkdir()
     monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(snaps))
@@ -290,9 +291,9 @@ def test_daily_backup_staging_copy_is_private_from_creation(tmp_path, monkeypatc
     writer.ensure_patient(1)
     writer.close()
     backups = tmp_path / "backups"
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
-    monkeypatch.setattr(maintenance, "disk_floor_mb", lambda: 0)
-    real_valid = maintenance.valid_mcs_db
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(local_backup, "disk_floor_mb", lambda: 0)
+    real_valid = local_backup.valid_mcs_db
     staged = []
 
     def spy(path, **kwargs):
@@ -300,10 +301,10 @@ def test_daily_backup_staging_copy_is_private_from_creation(tmp_path, monkeypatc
             staged.append(os.stat(path).st_mode & 0o777)
         return real_valid(path, **kwargs)
 
-    monkeypatch.setattr(maintenance, "valid_mcs_db", spy)
+    monkeypatch.setattr(local_backup, "valid_mcs_db", spy)
     old = os.umask(0o022)
     try:
-        maintenance.daily_backup(str(source))
+        local_backup.daily_backup(str(source))
     finally:
         os.umask(old)
     assert staged == [0o600]
@@ -336,15 +337,15 @@ def _source(tmp_path):
 
 def test_unrecorded_fresh_preupdate_backup_survives_prune(tmp_path, monkeypatch):
     backups = tmp_path / "backups"
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backups))
     state = tmp_path / "update_state.json"
     state.write_text(json.dumps({"applied": [], "applying": None}))
-    fresh = maintenance.preupdate_backup(_source(tmp_path))
+    fresh = local_backup.preupdate_backup(_source(tmp_path))
     stale = backups / "preupdate-old.db"
     stale.write_bytes(b"x")
-    old = time.time() - maintenance.PREUPDATE_GRACE_S - 60
+    old = time.time() - local_backup.PREUPDATE_GRACE_S - 60
     os.utime(stale, (old, old))
-    assert maintenance.prune_preupdate_backups(str(state)) == 1
+    assert local_backup.prune_preupdate_backups(str(state)) == 1
     assert os.path.exists(fresh)
     assert not stale.exists()
 
@@ -352,7 +353,7 @@ def test_unrecorded_fresh_preupdate_backup_survives_prune(tmp_path, monkeypatch)
 @pytest.mark.parametrize("fn", ["preupdate_backup", "daily_backup"])
 def test_failed_backup_removes_tmp(tmp_path, monkeypatch, fn):
     backups = tmp_path / "backups"
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backups))
     src = _source(tmp_path)
     real_connect = sqlite3.connect
 
@@ -375,7 +376,7 @@ def test_failed_backup_removes_tmp(tmp_path, monkeypatch, fn):
 
     monkeypatch.setattr(maintenance.sqlite3, "connect", connect)
     with pytest.raises(sqlite3.OperationalError):
-        getattr(maintenance, fn)(src)
+        getattr(local_backup, fn)(src)
     assert [p for p in os.listdir(backups) if p.endswith(".tmp")] == []
 
 

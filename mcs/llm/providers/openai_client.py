@@ -180,10 +180,12 @@ class OpenAIClient(CloudClient):
         self.model = model
         self.effort = effort
 
-    def request(self, method, body, timeout, *, deadline=None):
+    def request(self, method, body, timeout, *, deadline=None,
+                max_bytes=bounded_http.MAX_RESPONSE_BYTES):
         return bounded_http.bounded_http_request(
             ENDPOINT, method, body, timeout, api_key=self.api_key,
-            deadline=deadline, allowed_endpoints=(ENDPOINT,), auth="bearer")
+            deadline=deadline, allowed_endpoints=(ENDPOINT,), auth="bearer",
+            max_bytes=max_bytes)
 
     def response_error(self, status, raw):
         if status != 429:

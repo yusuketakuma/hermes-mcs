@@ -55,7 +55,7 @@ def paid_external(runtime, source_repair, request, monkeypatch):
         _semantic_proof(ledger, 1, 1, cfg=cfg)
     monkeypatch.setattr(anthropic_client, 'AnthropicClient', _SOURCE_REPAIR_CLIENT)
 
-    def transport(_client, method, request_body, timeout, *, deadline):
+    def transport(_client, method, request_body, timeout, *, deadline, max_bytes):
         assert method == 'POST' and timeout > 0 and not ledger.db.in_transaction
         payload = json.loads(request_body['input'])
         posts.append(payload)

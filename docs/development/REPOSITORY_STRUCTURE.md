@@ -38,6 +38,8 @@
 | `mcs/export/` | C1 schema・レコード選択、`export_contract`の承認/envelope/receipt検証、`export_delivery`のjournal/配送/撤回/health | 純粋な検証と専用保存先への配送を区別。`ext_contract`は操作CLI・参照受信入口に限定。viewは呼出元の同一snapshotを借用し、搬出処理のために再openしない |
 | `mcs/ops/` | 設定対話・診断・導入・更新・backup/restore・repair・CLI | `setup_wizard`は対話、`lifecycle_io`は秘密値/安全I/O、`runtime_inspection`は読取観測、`service_contract`は管理対象・実行環境選択・cron計画、`service_management`は実際の照合・適用・管理記録、`update_policy`は判断、`update_journal`は更新記録。`owned_process`は所有する子プロセスの停止/回収、`update_discovery`は期限付きGit実行と版探索、`update_launch`はwrapper起動を所有 |
 | `mcs/ops/diagnostics/environment_diagnostics.py` | 接続・認証・プロセス源泉の診断 | 有限のpath/実行環境を受け、既存の期限付き観測を実行する。setupは対話・結果表示、updaterはbaseline比較を所有。旧setup診断入口は旧updater互換だけに残す |
+| `mcs/core/local_backup.py` | 日次・更新前のローカルbackupの作成/検証/保持と、health用の読取り観測 | 原本はread-onlyで複製し、私有stagingの検証後に公開。`maintenance`はログ回転・掃除・snapshot・DB整備だけを持つ |
+| `mcs/ops/backup/held_restore.py` | 暗号化bundleとローカルbackupに共通の、同意待ちでの新規配置 | 同意待ちの記録をDBより先に永続化し、既存のledgerを置換・削除しない。採用は`mcs_restore`のplan/approve/resume |
 | `mcs/ops/backup/backup_evidence.py`・`restore_evidence` | backup記録/inventory/復元準備と、損失report/一致する人承認receipt | 専用read-only接続の終了と、終了後のhash/atomic公開を所有。暗号化・操作を囲むロックはbackup統括、hold・journal・DB置換はupdaterが引き続き所有 |
 | `adapters/common/` | 接続先共通の認可・患者scope・command/preview/confirm・配送worker | workerがscope lock/claim/再試行、registryが永続slot記録、journalが配送事実を所有 |
 | `adapters/common/forms.py`・`card_controls.py` | フォーム定義と入力値検証、カード操作の分類とスタンプ表示名 | runnerが発行した選択肢・tokenを借用する純粋処理。フォームの保管・期限は各actions/registry、最終認可・適用はrunnerが所有 |
@@ -54,7 +56,7 @@
 |---|---|
 | `mcs/ops/setup/` | 設定対話、APIキー入力、設定の保存・退避、安全な導入時I/O |
 | `mcs/ops/update/` | 更新方針、版の探索、起動、移行、journalと移行receipt |
-| `mcs/ops/backup/` | バックアップ設定、記録の照合、復元準備と人承認の証明 |
+| `mcs/ops/backup/` | バックアップ設定、記録の照合、同意待ちの新規配置、復元準備と人承認の証明 |
 | `mcs/ops/diagnostics/` | 添付・クラウド・環境・実行状態の読取り診断 |
 | `mcs/ops/commands/` | 操作・依頼・失敗ジョブのCLIと共通契約 |
 | `mcs/ops/services/` | 常駐処理の構成と照合・適用 |

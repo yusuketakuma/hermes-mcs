@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 import health_report
+import local_backup
 import maintenance
 import run_check
 from common_testkit import make_ledger
@@ -38,7 +39,7 @@ def test_scope_hold_reports_partial_and_still_attempts_checkpoint(tmp_path, monk
     monkeypatch.setattr(maintenance, 'DB_MAINT_STATE', str(state_path))
     monkeypatch.setattr(run_check, 'DB', str(tmp_path / 'ledger.db'))
     monkeypatch.setattr(run_check, '_hard_deadline', lambda: None)
-    monkeypatch.setattr(maintenance, 'daily_backup', lambda *_a, **_k: None)
+    monkeypatch.setattr(local_backup, 'daily_backup', lambda *_a, **_k: None)
     monkeypatch.setattr(maintenance, 'prune_attachments', lambda *_a, **_k: 0)
     monkeypatch.setattr(maintenance, 'prune_leftovers', lambda: None)
     calls = []

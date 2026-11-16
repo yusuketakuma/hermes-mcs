@@ -1,0 +1,19 @@
+{
+  "category": "added",
+  "title": "日次バックアップの一覧・完全検査・保留付き復元と、更新が止まったときの警告を追加",
+  "summary": "手元の日次バックアップと更新前のコピーを mcs_local_backup.py で一覧し、--verify で整合性・スキーマ・SHA-256 を読取り専用で確かめられます。restore は1世代を検証して新しい私有ディレクトリへ通知保留付きで置き、稼働中の DB とバックアップは変えません。採用は mcs_restore.py の承認で行い、配送は保留のままです。日次バックアップが2日以上古いと健康状態が要確認（backup_local_overdue）になります。",
+  "upgrade": "追加操作は不要です。新しい警告は更新後の最初の収集から有効です。既に日次バックアップが2日以上古い環境では、更新直後に警告が出ます。復元コマンドは人が明示して実行したときだけ動き、定期処理には登録されません。",
+  "details": [
+    "日次・更新前バックアップの処理を maintenance.py から mcs/core/local_backup.py へ移した。maintenance.py はログの回転・掃除・読取り用 snapshot・DB の定期整備だけを持つ。",
+    "暗号化 bundle の復元と日次バックアップの復元は、同じ held_restore の配置処理（同意待ちの記録を先に永続化し、DB を排他的に link する）を通る。配置した DB の SHA-256 を link 前に照合する。",
+    "restore が受け付けるのは data/backups の ledger-YYYYMMDD.db と preupdate-*.db の名前だけで、symlink・SQLite の sidecar 付き・壊れたファイルは拒否する。",
+    "deadline による見送りを既存の backup_deferred_deadline で報告している間は、backup_local_overdue を重ねて出さない。"
+  ],
+  "refs": [
+    "mcs/core/local_backup.py",
+    "mcs/ops/mcs_local_backup.py",
+    "mcs/ops/backup/held_restore.py",
+    "mcs/ingest/health_report.py",
+    "mcs/ingest/health_watch.py"
+  ]
+}
