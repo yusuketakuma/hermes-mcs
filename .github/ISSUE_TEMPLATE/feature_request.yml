@@ -1,0 +1,50 @@
+name: 機能・改善の提案
+description: 新しい機能、表示や操作の改善、計画中の作業を登録する
+title: "[改善]: "
+labels:
+  - enhancement
+  - 要トリアージ
+body:
+  - type: markdown
+    attributes:
+      value: |
+        患者名・投稿本文・秘密値は書かないでください。例は完全な架空のものにしてください。
+  - type: textarea
+    id: summary
+    attributes:
+      label: やりたいこと
+      description: 1文で。
+      placeholder: 通知カードに、その患者の前回から変わったことを数行出す。
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: 困っていること・理由
+      description: 誰が、どの場面で、どれくらい困っているか。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 案
+      description: 期待する動き。分かる範囲で。
+  - type: textarea
+    id: tasks
+    attributes:
+      label: タスク
+      description: チェックリストにすると進み具合が一覧で見えます。
+      placeholder: |
+        - [ ] 仕様を決める
+        - [ ] 実装と完全合成のテスト
+        - [ ] changes/*.json と文書
+  - type: checkboxes
+    id: needs
+    attributes:
+      label: 必要になりそうなこと
+      description: 当てはまるものだけ。後で対応ラベルに反映します。
+      options:
+        - label: Yusukeさんの判断・承認や外部とのやり取り（要オーナー対応）
+        - label: Mac への配備・実データの操作（要実機作業）
+        - label: Hermes gateway・LINE WORKS アダプターの再起動（要再起動）
+        - label: 既読化・通信制限・人承認・依存の許可リストに触れる（安全ゲート）
