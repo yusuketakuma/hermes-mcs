@@ -41,7 +41,7 @@ def _cited(ledger, kind):
 def _guard_sources(runtime, cfg):
     ledger, clock, _ = runtime
     snapshot = refresh._snapshot(ledger.db, 1, cfg, hydrate=False)
-    context_sources.guard_cloud_sources(ledger, 1, snapshot['sources'], snapshot['contract'],
+    context_sources.guard_cloud_sources(ledger, 1, snapshot['sources'], snapshot['route'],
                                         cfg=cfg, deadline=clock.mono + 600)
 
 
