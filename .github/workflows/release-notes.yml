@@ -15,7 +15,9 @@ on:
         required: true
         default: sync_existing
         type: choice
-        options: [sync_existing, draft]
+        # pr_check: the PR checks only, on the dispatched branch (main-sync
+        # starts it after merging main into a PR, where pull_request never fires)
+        options: [sync_existing, draft, pr_check]
       tag:
         description: Existing stable tag for draft (vX.Y.Z)
         required: false
@@ -26,9 +28,9 @@ permissions:
 
 concurrency:
   # PR checks have separate queues; release writes remain serialized.
-  group: japanese-release-notes-${{ github.event_name == 'pull_request' && github.ref || 'publish' }}
+  group: japanese-release-notes-${{ (github.event_name == 'pull_request' || inputs.action == 'pr_check') && github.ref || 'publish' }}
   # Superseded PR checks are disposable; never interrupt release writes.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || inputs.action == 'pr_check' }}
 
 jobs:
   check:
@@ -37,8 +39,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          # PRs test their merge ref; non-PR events use the canonical main.
-          ref: ${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+          # PRs test their merge ref (pr_check: the PR branch); other events use the canonical main.
+          ref: ${{ (github.event_name == 'pull_request' || inputs.action == 'pr_check') && github.ref || 'main' }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
@@ -55,10 +57,13 @@ jobs:
       - name: Check synthetic LINE WORKS SVG and PNG pairs
         run: python3 scripts/development/generate_lineworks_gallery.py --check
       - name: Require runtime change notes on PR
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || inputs.action == 'pr_check'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python3 scripts/development/release_notes.py check --base "$BASE_SHA"
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          base="${BASE_SHA:-$(git merge-base HEAD "origin/$DEFAULT_BRANCH")}"
+          python3 scripts/development/release_notes.py check --base "$base"
       - name: Test generation, validation and safe synchronization
         run: python3 -m unittest discover -s tests/release -v
 

@@ -13,7 +13,8 @@ imports nothing from the application. Standard library only.
   later runs, saying how to merge by hand. A later success edits it again.
 - A commit made with GITHUB_TOKEN starts no pull_request workflow, so the
   required checks would never report on the new head. CI is started with
-  workflow_dispatch on the head branch instead (GITHUB_TOKEN may do that);
+  workflow_dispatch on the head branch instead (GITHUB_TOKEN may do that),
+  with release-notes.yml's read-only pr_check for the change-record check;
   agent-control.yml then publishes merge-gate for that head as usual.
   If that dispatch failed or the new head appeared too late, the next run
   finds this job's merge commit without any CI run and dispatches again.
@@ -33,6 +34,7 @@ from agent_control import same_repository  # ci/ is this script's import root
 
 MARKER = "<!-- main-sync:update-branch -->"
 CI_WORKFLOW = "ci.yml"
+NOTES_WORKFLOW = "release-notes.yml"
 SYNC_AUTHOR = "github-actions[bot]"  # author of an update-branch merge made with GITHUB_TOKEN
 HEAD_WAIT_SECONDS = 60
 HEAD_POLL_SECONDS = 3
@@ -106,6 +108,10 @@ class Sync:
     def dispatch_ci(self, ref: str) -> None:
         self.api("-X", "POST", f"repos/{self.repo}/actions/workflows/{CI_WORKFLOW}/dispatches",
                  "-f", f"ref={ref}")
+        # the change-record check runs on pull_request only; pr_check runs it
+        # (and nothing that writes) on the branch
+        self.api("-X", "POST", f"repos/{self.repo}/actions/workflows/{NOTES_WORKFLOW}/dispatches",
+                 "-f", f"ref={ref}", "-f", "inputs[action]=pr_check")
 
     def missing_sync_ci(self, sha: str) -> bool:
         """True when `sha` is this job's merge commit and CI never ran on it."""

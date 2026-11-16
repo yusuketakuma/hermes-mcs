@@ -72,9 +72,12 @@ def test_behind_pr_is_merged_with_its_head_pinned_and_ci_dispatched():
     assert _run(fake) == 0
     methods = [(m, p) for m, p, _ in fake.writes]
     assert methods == [("PUT", f"repos/{REPO}/pulls/7/update-branch"),
-                       ("POST", f"repos/{REPO}/actions/workflows/ci.yml/dispatches")]
+                       ("POST", f"repos/{REPO}/actions/workflows/ci.yml/dispatches"),
+                       ("POST", f"repos/{REPO}/actions/workflows/release-notes.yml/dispatches")]
     assert fake.writes[0][2] == ("-f", f"expected_head_sha={OLD}")
     assert fake.writes[1][2] == ("-f", "ref=feature-7")
+    # only the read-only PR check of release-notes.yml, never its default sync
+    assert fake.writes[2][2] == ("-f", "ref=feature-7", "-f", "inputs[action]=pr_check")
 
 
 @pytest.mark.parametrize("pr, behind", [(_pr(head_repo="someone/fork"), 3), (_pr(), 0)])
@@ -143,5 +146,6 @@ def test_one_failing_pr_does_not_stop_the_others():
 def test_up_to_date_sync_merge_without_ci_is_dispatched_again(author, runs, dispatched):
     fake = FakeGitHub([_pr()], behind=0, head_author=author, ci_runs=runs)
     assert _run(fake) == 0
-    assert fake.writes == ([("POST", f"repos/{REPO}/actions/workflows/ci.yml/dispatches",
-                             ("-f", "ref=feature-7"))] if dispatched else [])
+    assert [p for _, p, _ in fake.writes] == ([
+        f"repos/{REPO}/actions/workflows/ci.yml/dispatches",
+        f"repos/{REPO}/actions/workflows/release-notes.yml/dispatches"] if dispatched else [])
