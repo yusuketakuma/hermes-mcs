@@ -40,6 +40,23 @@ KIND_DRAIN_RUN = "semantic_drain_run"
 # stayed incomplete (the incomplete document itself is never stored).
 KIND_SHADOW_V2 = "semantic_shadow_v2"
 
+# Interpretation results a semantic LLM writes. Their row ``model`` is the
+# configured local model, so a row not proven cloud-produced is current only
+# for that model (extraction_provenance.local_producer_current); a cloud
+# result keeps its identity when only the local model changes. Chunk kinds
+# are gated by the chunk cache, the others by semantic_store.current_artifact.
+LOCAL_MODEL_GATED_KINDS = frozenset({
+    KIND_FACTS, KIND_FACTS_V2, KIND_FACT_PROJ, "semantic_facts_v4", KIND_SUMMARY, KIND_CANDIDATE,
+    "semantic_extraction_chunk", "semantic_extraction_chunk_v2"})
+# Jev results, reservation receipts (a spent repair is never refunded),
+# completion receipts and bookkeeping: not decided by the local model.
+LOCAL_MODEL_UNGATED_KINDS = frozenset({
+    KIND_BUNDLE, KIND_ASSESS, KIND_FACT_AUDIT, KIND_FACT_REPAIR, KIND_MANIFEST, KIND_AUDIT,
+    KIND_LOOP, KIND_LOOP_EVENT, KIND_PLAN, KIND_USAGE, KIND_COVERAGE, KIND_REPAIR,
+    KIND_SUMMARY_FORMAT_REPAIR, KIND_POLICY, KIND_DRAIN_RUN, KIND_SHADOW_V2,
+    "semantic_loop_completion", "loop_relation_rejected", "semantic_facts_v4_skipped", "v4_stage",
+    "v4_diagnostic", "v4_retire_cohort", "v4_retire_item"})
+
 MODES = ("off", "shadow", "assist", "enforce")
 # Which extraction path produces the fact set consumed downstream.
 # "legacy" keeps the v1 extractor authoritative; "shadow" runs the

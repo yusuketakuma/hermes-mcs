@@ -49,6 +49,12 @@ def _covered(db, pid, source, route, scan):
 
 def _local_sources_ready(db, pid, cfg):
     """Recheck local source/QC evidence independently of a paused scheduling control."""
+    import semantic_transport
+    with semantic_transport.config_model_scope(cfg):
+        return _local_sources_ready_scoped(db, pid, cfg)
+
+
+def _local_sources_ready_scoped(db, pid, cfg):
     import semantic_intake_hold
     import semantic_policy
     import semantic_store

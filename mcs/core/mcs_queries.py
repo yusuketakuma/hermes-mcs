@@ -1500,6 +1500,7 @@ def _context_derived_summaries(db, message, rows, cfg, *, proof_state=None,
         import semantic_policy
         import semantic_send_gate
         import semantic_store
+        import semantic_transport
 
         # An omitted mode must not resolve credentials during this borrowed read.
         scfg, errors = semantic_policy.semantic_config(cfg)
@@ -1507,9 +1508,10 @@ def _context_derived_summaries(db, message, rows, cfg, *, proof_state=None,
         root = message["parent_id"] or mid
         if (not errors and semantic_send_gate.enforce_block_reason(db, scfg, pid) is None
                 and not semantic_send_gate.intake_root_held(db, pid, root)):
-            summary = semantic_send_gate.current_summary(db, pid, mid,
-                lambda: semantic_store.thread_bundle(db, pid, root, [mid]),
-                semantic_policy.policy_fingerprint(scfg))
+            with semantic_transport.config_model_scope(cfg):
+                summary = semantic_send_gate.current_summary(db, pid, mid,
+                    lambda: semantic_store.thread_bundle(db, pid, root, [mid]),
+                    semantic_policy.policy_fingerprint(scfg))
             if summary is not None:
                 text = json.dumps(summary["content"], ensure_ascii=False, sort_keys=True)
                 summaries.append({"kind": "semantic_summary", "artifact_id": summary["artifact_id"], "text": text})

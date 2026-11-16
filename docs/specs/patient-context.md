@@ -133,7 +133,8 @@ canonical v3/v4の既存事実にもoptional patient_contextを同じ事実引�
 - `original_source_sig` を持たない旧い成果物の照合（`source_signature(..., legacy=True)`）は、その時点の欄の集合（`derived_summary_sig`・`extraction_ready` を含めない）を保つ。ただし `extraction_sig` の意味が変わったため、旧い署名で保存した成果物は一致しなくなり、安全側に不採用になる。
 - 要約契約（`snapshot["summary_contract"]`、`_summary_contract()`）は、根拠の選択・読取り時の時点解釈・依存喪失（`patient_context_selection.py`・`patient_context_projection.py`・`inference_dependency_loss.py`）を持つ。入力署名 `source_sig` は要約契約を含むので、概況の同一判定・公開判定・生成枠は要約契約に結び付く。走査レーンのクラウド入力の束縛は要約契約を含まない署名（`scan_source_sig`）を使い、要約側だけの変更で有料の走査単位を捨てない。レーン巡回と一患者scanの予定組み（`patient_context_schedule.py`）は出力に影響しないため、どちらの契約にも含めない。再試行の上限の印（`_checks()`）は走査と要約の処理hashから作る。
 - 出所：調査結果・保存片・概況の各成果物は `provenance {backend, model, profile}` を保存する。照合は `patient_context_artifacts.route_accepts` が、設定から決まる「受け入れる出所」（`_route(cfg, pid)`：走査契約・対象のクラウド処理先・ローカルのモデル）と行う。クラウドの成果物は処理先の契約だけで照合し、ローカルのモデルを変えてもクラウドの成果物は失効しない。ローカルで作った成果物（クラウドの経路でのローカル代替 `local_fallback` を含む）は設定のローカルのモデルと一致する場合だけ採用する。このため、ローカルのモデルを変えると、クラウドで作った概況でもローカル代替の資料を含む場合は、その資料を作り直すまで表示しない。設定を持たない閲覧（スナップショットの読取り）は保存された出所を受け入れ、走査の署名が読む行を固定する。原典の品質確認と修復の識別値は走査契約と処理先（クラウド、またはローカル代替の経路の処理先）から作り、ローカルのモデル名を含めない。保存片の単位識別値（`unit_key`）は入力・区間・走査契約・処理先（ローカル代替は経路のクラウド処理先）・ローカルのモデルから作る。ローカル代替の単位は通常のローカル単位と別になり、ローカル経路へ戻ったときの再走査は過去の同一入力の再送として保留しない。
-- 添付抽出の契約は、患者コンテキスト専用のモジュール（`attachment_extraction._CONTEXT_ONLY_SOURCES`）を除いたコードの識別値から作る。抽出の入力として使う `patient_context` と `patient_state_context` は残す。資料を読む `mcs_queries.py` は除外の対象ではないため、その変更は添付の抽出を1回やり直させる。走査契約と要約契約は `mcs_queries.py` を含まず、再解析で同じ入力が戻れば走査は再利用する。
+- 補助要約（意味解析の要約）と添付の解析結果も、ローカルのモデルを入力の識別値に含めない。意味解析の要約はクラウドだけで作った完全な出所なら設定のローカルのモデルに関係なく現在の結果で（`semantic.fact_source` が `legacy` の場合。`shadow`・`canonical` では下の未決項目のとおり方針の識別値が変わり、クラウドの要約も1回作り直す）、それ以外は行のモデルが設定のローカルのモデルと同じときだけ現在の結果とする（`semantic_store.producer_current`）。添付の結果はローカル段なら行のモデル、クラウド段なら参照先のローカル行（同じ原本・同じ契約）で照合する。どちらも閲覧時に設定のローカルのモデルで照合する（設定を渡す読取りはその設定のモデル、渡さない読取りはホストの設定を1回だけ読む）ため、設定を持たない閲覧が保存された出所をそのまま受け入れる走査・概況（`route_accepts` の `local_model_pinned=False`）とは非対称になる。ローカルのモデルを変えると、作り直した要約の文面が変わった資料だけ、走査が再実行される。
+- 添付抽出の契約は、患者コンテキスト専用のモジュール（`attachment_extraction._CONTEXT_ONLY_SOURCES`）を除いたコードの識別値から作る。ローカルの接続先とモデルは含めない（互換のため出荷時の既定の組を固定値として残す）。抽出の入力として使う `patient_context` と `patient_state_context` は残す。資料を読む `mcs_queries.py` は除外の対象ではないため、その変更は添付の抽出を1回やり直させる。走査契約と要約契約は `mcs_queries.py` を含まず、再解析で同じ入力が戻れば走査は再利用する。
 
 ### 品質確認の識別値（P0-2c）
 
@@ -144,7 +145,7 @@ canonical v3/v4の既存事実にもoptional patient_contextを同じ事実引�
 - docstring は bytecode の定数に入るので、対象関数の docstring の変更でも識別値が変わる。bytecode は Python のマイナー版と `-O` の段階で変わるため、識別値はこの2つを明示的に含む。Python を更新したとき、または別の `-O` 段階で起動した worker があるときは、品質確認が1回失効し、異なる段階の process 同士は互いの PASS を採用しない。
 - このモジュールは患者コンテキスト専用（`_CONTEXT_ONLY_SOURCES`）なので、`QA_VERSION` を上げても添付の抽出契約は変わらない。`semantic_audit.py`・`semantic_jev.py`・`semantic_candidate.py`・`semantic_usage_receipts.py` は専用ではなく、その変更は従来どおり添付の抽出を1回やり直させる。
 - 計算は1回あたり約0.2ms（関数の hash は、関数・コード・既定値の各オブジェクトが同じ間だけ再利用する）。以前の約0.08msとの差は、資料数×呼出し回数でも無視できる大きさ（合成環境で計測）。
-- 未決（所有者の決定待ち）：`semantic.fact_source` が `legacy` 以外（`shadow`・`canonical`）の場合、`assessment.policy` が `candidate_fingerprint` を含み、それは読み込んだ全コードを hash する。このため、その設定では関係のないコード変更でも品質確認が失効し、P0-2c の効果はない。既定は `legacy`。現在の挙動はテストで固定している。
+- 未決（所有者の決定待ち）：`semantic.fact_source` が `legacy` 以外（`shadow`・`canonical`）の場合、`assessment.policy` が `candidate_fingerprint` を含み、それは読み込んだ全コードと、ローカルのモデル（`local_llm.resolve(cfg)`）・`local_llm` の設定全体を hash する。このため、その設定では関係のないコード変更でも品質確認が失効し、P0-2c の効果はない。既定は `legacy`。現在の挙動はテストで固定している。
 
 ### 要約に使う根拠の選択（P0-3a）
 

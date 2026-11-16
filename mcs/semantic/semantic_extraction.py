@@ -13,6 +13,7 @@ from inference_dependency_loss import fatal_read_error
 import clinical_values
 from mcs_queries import iter_artifacts
 import mcs_util
+import extraction_provenance
 import semantic_llm
 import semantic_transport
 
@@ -47,11 +48,18 @@ def _chunk_generation(model: str, prompt_template: str, *, chunk_size: int = 300
     return f"inference:{CURRENT_VERSION}|{model}|{sf.text_sha256(prompt_template)[:16]}|plan:{clinical_chunking.PLAN_VERSION}|size:{chunk_size}"
 
 
-def v2_generation() -> str:
+def v2_generation(model: str | None = None) -> str:
     """Identity of the default v2 extraction (model + prompt + chunk plan);
-    a change means an earlier attempt says nothing about a new one."""
+    a change means an earlier attempt says nothing about a new one.
+    ``model`` defaults to the configured local model."""
     import semantic_llm
-    return _chunk_generation(semantic_transport.llm_model(), semantic_llm._FACT_V2_PROMPT)
+    return _chunk_generation(semantic_transport.llm_model() if model is None else model,
+                             semantic_llm._FACT_V2_PROMPT)
+
+
+def _row_generation(prompt_template: str, chunk_size: int = 3000):
+    """Generation a cached chunk must carry, computed from the model that wrote its row."""
+    return lambda model: _chunk_generation(model, prompt_template, chunk_size=chunk_size)
 
 
 def _chunk_prompt(template, spec, manifest, source, chunk_size):
@@ -176,7 +184,9 @@ def _preflight_verdict(jev_client, text: str, deadline, chunk_id):
         return "failed"
 
 
-def _provider_input(row, expected_model):
+def _provider_input(row):
+    # The local model decides only locally produced rows (_chunk_candidates),
+    # so it is no input here: a cloud chunk is bound by its own receipt.
     try:
         import cloud_policy
         meta = mcs_util.strict_json(row["meta"])
@@ -190,7 +200,7 @@ def _provider_input(row, expected_model):
         if (proof.get("binding_hash") != mcs_util.payload_hash(binding)
                 or type(proof.get("version")) is not int or proof["version"] != 1
                 or proof.get("stage") != "chunk" or proof.get("result_hash") != result_hash
-                or not isinstance(row["model"], str) or row["model"] != expected_model):
+                or not isinstance(row["model"], str) or not row["model"]):
             return None
         if provider == "local":
             return (meta, provider, actual, rid) if (actual == row["model"]
@@ -248,11 +258,11 @@ def _provider_from_reservation(row, prepared, reservation):
         return None
 
 
-def _cached_provider(db, row, expected_model):
+def _cached_provider(db, row):
     """Keep the single-candidate provider oracle for direct and ordered fallback reads."""
     try:
         import cloud_policy
-        prepared = _provider_input(row, expected_model)
+        prepared = _provider_input(row)
         if prepared is None or prepared[1] == "local":
             return None if prepared is None else "local"
         artifact_id = _provider_reservation_id(db, row, prepared[3])
@@ -268,10 +278,10 @@ def _cached_provider(db, row, expected_model):
         return None
 
 
-def _cached_providers(db, rows, expected_model):
+def _cached_providers(db, rows):
     """Validate one bounded page against one financial read, preserving single outcomes."""
     import cloud_policy
-    prepared = [_provider_input(row, expected_model) for row in rows]
+    prepared = [_provider_input(row) for row in rows]
     references = {}
     try:
         for row, candidate in zip(rows, prepared):
@@ -285,7 +295,7 @@ def _cached_providers(db, rows, expected_model):
     except ValueError:
         # One missing/unknown receipt must not hide another candidate's valid
         # proof. Replay the original decisions in their original order.
-        return [_cached_provider(db, row, expected_model) for row in rows]
+        return [_cached_provider(db, row) for row in rows]
     result = []
     for row, candidate in zip(rows, prepared):
         if candidate is None or candidate[1] == "local":
@@ -314,13 +324,18 @@ def _cached_chunks(db, project_id, message_id, source_fp, body_hash,
                    revision, specs, source: str, *,
                    kind: str = KIND_CHUNK,
                    schema: str = SCHEMA_VERSION,
-                   extra=None, generation: str | None = None, expected_model=None,
-                   expected_provider=None, expected_contract=None) -> dict[int, dict]:
+                   extra=None, generation=None, expected_model=None,
+                   expected_provider=None, expected_contract=None, local_model=None) -> dict[int, dict]:
+    """Reuse persisted chunks. ``generation`` maps a row's model to the
+    generation it must carry; a row not claimed by a cloud producer is
+    reused only when written for ``local_model`` (default ``expected_model``;
+    a read naming neither keeps every row's own model)."""
     if db is None:
         return {}
     options = dict(kind=kind, schema=schema, extra=extra, generation=generation,
                    expected_model=expected_model, expected_provider=expected_provider,
-                   expected_contract=expected_contract)
+                   expected_contract=expected_contract,
+                   local_model=expected_model if local_model is None else local_model)
     if expected_model is not None and hasattr(db, "execute"):
         # Candidate rows, reservation references and every financial page
         # share one view. No proof survives this read or commits a caller TX.
@@ -333,7 +348,14 @@ def _cached_chunks(db, project_id, message_id, source_fp, body_hash,
                                revision, specs, source, **options)
 
 
-def _chunk_candidates(rows, specs, source, source_fp, body_hash, revision, schema, generation, extra):
+def _claims_cloud(meta):
+    import cloud_policy
+    proof = meta.get("provider_provenance")
+    return isinstance(proof, dict) and proof.get("provider") in cloud_policy.PROVIDERS
+
+
+def _chunk_candidates(rows, specs, source, source_fp, body_hash, revision, schema, generation, extra,
+                      local_model=None):
     wanted = {spec["index"]: spec for spec in specs}
     for row in rows:
         try:
@@ -342,8 +364,13 @@ def _chunk_candidates(rows, specs, source, source_fp, body_hash, revision, schem
                 continue
             index = meta["chunk_index"]
             spec = wanted[index]
+            row_model = row["model"] if "model" in row.keys() else None
+            if (local_model is not None and not _claims_cloud(meta)
+                    and not extraction_provenance.local_producer_current(None, row_model, local_model)):
+                continue  # locally produced (or unproven) under another local model
             if (not is_current(meta) or meta.get("schema") != schema
-                    or meta.get("generation") != generation
+                    or meta.get("generation") != (generation(row_model) if callable(generation)
+                                                  else generation)
                     or meta.get("status") != "complete"
                     or meta.get("source_fingerprint") != source_fp
                     or meta.get("source_hash") != body_hash
@@ -408,14 +435,20 @@ def _chunk_candidate_pages(candidates):
 
 
 def _read_cached_chunks(db, project_id, message_id, source_fp, body_hash, revision, specs, source, *,
-                        kind, schema, extra, generation, expected_model, expected_provider, expected_contract):
+                        kind, schema, extra, generation, expected_model, expected_provider, expected_contract,
+                        local_model):
     cached = {}
     rows = iter_artifacts(db, kind, project_id=project_id, message_id=message_id)
-    candidates = _chunk_candidates(rows, specs, source, source_fp, body_hash, revision, schema, generation, extra)
+    candidates = _chunk_candidates(rows, specs, source, source_fp, body_hash, revision, schema, generation, extra,
+                                   local_model)
     for page in _chunk_candidate_pages(candidates):
-        providers = (_cached_providers(db, [item[0] for item in page], expected_model)
+        providers = (_cached_providers(db, [item[0] for item in page])
                      if expected_model is not None else [None] * len(page))
-        for (_, meta, content, index), provider in zip(page, providers):
+        for (row, meta, content, index), provider in zip(page, providers):
+            if (expected_model is not None and provider in (None, "local")
+                    and not extraction_provenance.local_producer_current(
+                        None, row["model"] if "model" in row.keys() else None, local_model)):
+                continue  # a cloud claim its receipt does not prove is judged as local
             _adopt_cached_chunk(cached, index, content, meta, provider, expected_provider, expected_contract)
     return cached
 
@@ -537,20 +570,20 @@ def progress_for_message(db, row, *, model, policy_fingerprint, chunk_size=3000)
             or not isinstance(model, str) or not model or not isinstance(policy_fingerprint, str)):
         return None
     pid, mid = row["project_id"], row["message_id"]
-    bundle = thread_bundle(db, pid, row.get("parent_id") or mid, local_model=model)
+    bundle = thread_bundle(db, pid, row.get("parent_id") or mid)
     if bundle is None:
         return None
     fp = bundle["source_fingerprint"]
     manifest = assembly.build_manifest(source, fp, chunk_size)
     specs = assembly.manifest_specs(manifest)
     expected = assembly.manifest_content(manifest, len(source))
-    persisted = db.execute("SELECT content,model FROM artifacts WHERE kind=? AND project_id=? "
+    persisted = db.execute("SELECT content FROM artifacts WHERE kind=? AND project_id=? "
                            "AND message_id=? ORDER BY artifact_id DESC LIMIT 1",
                            (KIND_MANIFEST, pid, mid)).fetchone()
     if persisted is None:
         return None
     out = {"state": "attention", "completed": 0, "total": len(specs), "backend": "semantic"}
-    if persisted["model"] != model or loads_dict(persisted["content"]) != expected:
+    if loads_dict(persisted["content"]) != expected:
         return out
     publication_blocked = False
     for publication in db.execute(
@@ -560,9 +593,15 @@ def progress_for_message(db, row, *, model, policy_fingerprint, chunk_size=3000)
         if not meta and publication["model"] == model:
             publication_blocked = True
             break
-        if (not meta or not is_current(meta) or publication["model"] != model or meta.get("hash") != row["content_hash"]
+        if (not meta or not is_current(meta) or meta.get("hash") != row["content_hash"]
                 or meta.get("fingerprint") != fp or meta.get("policy_fingerprint") != policy_fingerprint):
             continue
+        if not extraction_provenance.local_producer_current(
+                meta.get("provider_provenance"), publication["model"], model):
+            # a local result awaiting its redo for the configured model: the
+            # chunks are being redone (processing), and an older row behind
+            # it is never current (strict latest, as current_artifact)
+            break
         publication_blocked = True
         if meta.get("invalidated") or meta.get("projection_version") != PROJECTION_VERSION:
             break
@@ -584,10 +623,11 @@ def progress_for_message(db, row, *, model, policy_fingerprint, chunk_size=3000)
                 and loads_dict(publication["content"]) == project_v2_doc_legacy(clean)):
             return {**out, "state": "complete", "completed": len(specs)}
         break
-    generation = _chunk_generation(model, semantic_llm._FACT_V2_PROMPT, chunk_size=chunk_size)
     cached = _cached_chunks(db, pid, mid, fp, sf.text_sha256(source), row["content_hash"], specs, source,
                             kind=KIND_CHUNK_V2, schema=SCHEMA_VERSION_V2,
-                            extra=assembly.v2_chunk_ok, generation=generation)
+                            extra=assembly.v2_chunk_ok,
+                            generation=_row_generation(semantic_llm._FACT_V2_PROMPT, chunk_size),
+                            local_model=model)
     completed = len(cached)
     return {**out, "completed": completed,
             "state": "processing" if not publication_blocked and completed < len(specs) else "attention"}
@@ -677,7 +717,7 @@ def extract_facts_resumable(llm_fn, member: dict,
     generation = _chunk_generation(model, semantic_llm._FACT_PROMPT, chunk_size=chunk_size)
     cached = _cached_chunks((ledger.db if ledger is not None else None), project_id, message_id, source_fp,
                             body_hash, revision, specs, source,
-                            generation=generation, expected_model=model,
+                            generation=_row_generation(semantic_llm._FACT_PROMPT, chunk_size), expected_model=model,
                             expected_provider=semantic_transport.inference_provider(),
                             expected_contract=semantic_transport.inference_contract())
 
@@ -687,6 +727,7 @@ def extract_facts_resumable(llm_fn, member: dict,
     failed = []
     failed_dropped = 0
     failure_reason = None
+    providers = {}
     for spec in specs:
         index = spec["index"]
         cached_chunk = cached.get(index)
@@ -694,6 +735,8 @@ def extract_facts_resumable(llm_fn, member: dict,
             facts.extend(cached_chunk["facts"])
             completed.append(index)
             reused.append(index)
+            if cached_chunk.get("provider") is not None:
+                providers[index] = cached_chunk["provider"]
             continue
         if deadline is not None and time.monotonic() > deadline:
             failed.append(index)
@@ -725,6 +768,8 @@ def extract_facts_resumable(llm_fn, member: dict,
                        source_fp,
                        body_hash, revision, spec, chunk_facts, chunk_dropped,
                        len(specs), generation=generation, provider=observed[-1] if observed else None)
+        if observed:
+            providers[index] = observed[-1]
         facts.extend(chunk_facts)
         completed.append(index)
 
@@ -732,6 +777,8 @@ def extract_facts_resumable(llm_fn, member: dict,
     return {
         "facts": facts,
         "complete": complete,
+        "producer_evidence": {"providers": sorted(set(providers.values())),
+                              "complete": bool(specs) and len(providers) == len(specs)},
         **assembly.chunk_progress(specs, completed, reused, failed,
                           failure_reason, failed_dropped, source_fp),
     }
@@ -919,7 +966,8 @@ def extract_facts_v2(llm_fn, member: dict,
     cached = _cached_chunks((ledger.db if ledger is not None else None), project_id, message_id, source_fp,
                             body_hash, revision, specs, source,
                             kind=KIND_CHUNK_V2, schema=cache_schema,
-                            extra=assembly.v2_chunk_ok, generation=generation, expected_model=model,
+                            extra=assembly.v2_chunk_ok, generation=_row_generation(prompt_template, chunk_size),
+                            expected_model=model,
                             expected_provider=semantic_transport.inference_provider(),
                             expected_contract=semantic_transport.inference_contract())
 
@@ -1098,7 +1146,7 @@ def rebuild_facts_v2_cached(member: dict, db, source_fingerprint: str,
                             specs, source, kind=KIND_CHUNK_V2,
                             schema=SCHEMA_VERSION_V2 + ("/coverage-retry" if retry else ""),
                             extra=assembly.v2_chunk_ok,
-                            generation=v2_generation(),
+                            generation=_row_generation(semantic_llm._FACT_V2_PROMPT),
                             expected_model=semantic_transport.llm_model(),
                             expected_provider=expected_provider)
     if any(spec["index"] not in cached for spec in specs):
@@ -1395,10 +1443,12 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
 def extract_facts(llm_fn, member: dict,
                   deadline: float | None = None,
                   return_reason: bool = False, *, ledger=None,
-                  source_fingerprint=None, project_id=None) -> tuple:
+                  source_fingerprint=None, project_id=None, producer_out=None) -> tuple:
     """Whole-source extraction; durable chunks when called by the worker."""
     result = extract_facts_resumable(
         llm_fn, member, deadline, ledger=ledger,
         source_fingerprint=source_fingerprint, project_id=project_id)
+    if producer_out is not None:
+        producer_out.update(result["producer_evidence"])
     values = (result["facts"], result["complete"], result["dropped"])
     return (*values, result["failure_reason"]) if return_reason else values

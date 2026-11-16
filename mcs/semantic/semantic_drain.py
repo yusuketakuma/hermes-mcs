@@ -260,6 +260,7 @@ _invalidated_at: float | None = None
 # survive a tick; receipt, source and job data are always read again.
 
 
+@semantic_transport.with_local_model_scope
 def run_due(ledger, cfg: dict, result: dict, deadline: float,
             jev_client=None, llm_fn=None, max_jobs: int = 4,
             cfg_path: str | None = None, run_lock_fd=None,

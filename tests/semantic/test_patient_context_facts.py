@@ -93,9 +93,9 @@ def test_new_prompt_changes_bundle_identity_and_never_reuses_old_chunks(request,
     prompt = semantic_llm._FACT_V2_PROMPT
     ledger = _FakeLedger(request)
     member = _member(BODY)
-    new_fingerprint = bundle_fingerprint([member], local_model="synthetic-model")
+    new_fingerprint = bundle_fingerprint([member])
     monkeypatch.setattr(semantic_llm, "_FACT_V2_PROMPT", "synthetic legacy fact prompt: %s")
-    old_fingerprint = bundle_fingerprint([member], local_model="synthetic-model")
+    old_fingerprint = bundle_fingerprint([member])
     # A genuine old producer omitted the optional key, rather than emitting null.
     fact = _fact()
     fact.pop("patient_context")

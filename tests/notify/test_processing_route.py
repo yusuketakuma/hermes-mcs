@@ -353,12 +353,11 @@ def test_projection_states_require_current_thread_policy_and_source(led):
     import semantic_policy
     import semantic_projection
     import semantic_store
-    import semantic_transport
     from notify_testkit import _msg
 
     _seed_thread(led, mids=(100,))
     cfg = {**CFG, 'semantic': {'mode': 'assist', 'fact_source': 'legacy', 'project_ids': [1]}}
-    bundle = semantic_store.thread_bundle(led.db, 1, 100, [100], local_model=semantic_transport.llm_model(cfg))
+    bundle = semantic_store.thread_bundle(led.db, 1, 100, [100])
     scfg, errors = semantic_policy.semantic_config(cfg)
     assert not errors
     policy = semantic_policy.policy_fingerprint(scfg)

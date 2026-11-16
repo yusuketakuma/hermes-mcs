@@ -6,7 +6,7 @@ import sys
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
-from functools import partial
+from functools import partial, wraps
 
 import local_llm
 import semantic_runtime as runtime
@@ -22,6 +22,7 @@ _inference_generation = ContextVar("semantic_inference_generation", default=None
 _inference_purpose = ContextVar("semantic_inference_purpose", default="backlog")
 _job_providers = ContextVar("semantic_job_providers", default=None)
 _member_dispatch = ContextVar("semantic_member_dispatch", default=None)
+_local_model_scope = ContextVar("semantic_local_model_scope", default=None)
 
 
 @contextmanager
@@ -88,6 +89,48 @@ def llm_conf(cfg: dict | None = None) -> tuple[str, str]:
 
 def llm_model(cfg: dict | None = None) -> str:
     return llm_conf(cfg)[1]
+
+
+@contextmanager
+def local_model_scope(model: str | None = None):
+    """Fix the local model for one operation; an unnamed one is read at most once, on first use.
+
+    A nested unnamed scope shares the enclosing value."""
+    outer = _local_model_scope.get()
+    if model is None and outer is not None:
+        yield
+        return
+    token = _local_model_scope.set({"model": model})
+    try:
+        yield
+    finally:
+        _local_model_scope.reset(token)
+
+
+def config_model_scope(cfg: dict | None):
+    """Scope the local model of a supplied config without opening host configuration.
+
+    With no config the host's is read at most once, on first use."""
+    return local_model_scope(None if cfg is None else llm_model(cfg))
+
+
+def with_local_model_scope(fn):
+    """Run one scan under a single lazily read local model."""
+    @wraps(fn)
+    def scoped(*args, **kwargs):
+        with local_model_scope():
+            return fn(*args, **kwargs)
+    return scoped
+
+
+def scoped_local_model() -> str:
+    """The local model that decides whether a locally produced artifact is current."""
+    holder = _local_model_scope.get()
+    if holder is None:
+        return llm_model()
+    if holder["model"] is None:
+        holder["model"] = llm_model()
+    return holder["model"]
 
 
 def inference_model() -> str:

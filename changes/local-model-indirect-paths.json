@@ -1,0 +1,41 @@
+{
+  "category": "changed",
+  "title": "ローカルのモデルを変えても、クラウドで作った意味解析・添付の結果を作り直さないよう変更",
+  "summary": "設定のローカルのモデル（local_llm.model）や接続先（local_llm.url）を変えても、クラウドで作った意味解析・添付の結果と、それを元にした患者コンテキストのクラウド走査は作り直しません。ローカルで作った結果は、作ったときのモデルでだけ現在の結果として扱い、モデルを変えると新しいモデルで作り直します。作り直した要約の文面が変われば、それを入力にした患者コンテキストのクラウド走査も再実行されます。添付のローカル結果は接続先を変えただけなら作り直しません。意味解析についてのこの保証は semantic.fact_source が既定の legacy の場合だけです。shadow・canonical では、ローカルのモデルや接続先を変えると方針の識別値（候補の識別値を含む）が変わり、クラウドで作った要約・射影も含めて1回作り直します。canonical ではさらに承認の証拠が一致しなくなり、承認を取り直すまで意味解析は legacy・off で動きます（従来どおり。扱いは所有者の決定待ち）。",
+  "upgrade": "配備時の作り直しは次のとおりです。(1) 添付の解析結果は全件を1回ローカルで解析し直します。解析条件の作り方は従来の値と hash 互換ですが、解析条件に含まれる読み込み済みコードの識別値が、今回編集したモジュールの分だけ変わるためです。抽出の改版（EXTRACT_VERSION 11→12、PATIENT_CONTEXT_VERSION 4→5）と同じリリースで配備してください。この変更だけを先に配備すると、作り直しが2回になります。(2) 意味解析は、local_llm.model が既定の Qwen3.5-9B なら失効しません。既定以外のモデルを設定している場合と、semantic.fact_source が legacy 以外（shadow・canonical）の場合は、全件を1回作り直します（canonical は承認の取り直しも必要です）。(3) 意味解析を作り直す場合は、患者コンテキストの消去と作り直しより先に意味解析の再処理を終えてください。補助要約の文面が途中で変わると、該当する資料の走査が2回走ります。(4) 添付は、ローカルの再解析を終えてから患者コンテキストを作り直してください。配備前に extract.patient_context.enabled=false と cloud-llm stop を済ませてください。",
+  "details": [
+    "意味解析の入力の識別値（source fingerprint）はローカルのモデル名を含まなくなりました。既存の値との互換のため、出荷時の既定のモデル名を固定値として残しています。",
+    "要約・事実・射影・チャンクは、出所の記録がクラウドだけで完全なら、ローカルのモデルに関係なく現在の結果として扱います。ローカル・混在・不完全・出所不明の行は、行のモデルが今のローカルのモデルと同じときだけ現在の結果です。モデルを記録していない古い行は、従来どおり識別値だけで判定します。",
+    "同じ識別値で最新の行がローカルのモデルの条件を満たさないときは、古い行へさかのぼらず「現在の結果なし」とします。",
+    "修正の予約記録（semantic_repair・semantic_summary_format_repair・semantic_facts_repair）・Jev の評価・ループの完了記録はローカルのモデルに結び付けません。使用済みの修正はモデルを変えても使い直しません。",
+    "ループの完了記録は、ローカルのモデルを含まない解釈の世代で照合します。ジョブの再投入に使う世代（execution_generation）は従来どおりローカルのモデルを含みます。",
+    "従来の事実（semantic_facts）に出所の記録を追加しました。この変更より前に作った行は出所が分からないため、次にローカルのモデルを変えたときに作り直します。",
+    "ローカルで作った要約が作り直し待ちの投稿は、患者コンテキストでは古い要約の監査を待たず、要約なしの資料として扱います（従来、モデル変更で識別値が変わったときと同じ扱い）。",
+    "その回の実行で事実を作り直した対象では、前の事実を元にした要約を使い回さず作り直します。",
+    "添付のローカル結果と途中保存はローカルのモデルに結び付け、クラウド結果は参照先のローカル行（同じ原本・同じ解析条件）で確かめます。クラウド結果が現在の添付ページでは、ローカル段の解析を飛ばします。",
+    "設定を渡して読む処理（患者コンテキストの準備判定と進捗・通知の要約欄と描画状態・資料の補助要約・集計）は、渡された設定のローカルのモデルで判定し、投稿ごとにホストの設定ファイルを読みません。意味解析の実行と再処理（drain・reprocess）は、書き込みやジョブの世代と同じくホストの設定を1回の実行で1回だけ読みます。",
+    "画面の処理状況（canonical の投稿）で、ローカルで作った結果がモデル変更後の作り直し待ちの投稿は「処理中」と表示します（「要確認」にはしません）。",
+    "クラウドへの送信ができずローカルへ切り替える判定は、確認できたクラウドの途中結果か、今のローカルのモデルで作った出所不明の途中結果があるときだけ止めます。別のモデルで作った出所不明の途中結果は、どちらの側も再利用しないため切替えを止めません。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_store.py",
+    "mcs/semantic/semantic_extraction.py",
+    "mcs/semantic/semantic_send_gate.py",
+    "mcs/semantic/semantic_runtime.py",
+    "mcs/semantic/semantic_job_processor.py",
+    "mcs/semantic/semantic_fact_stages.py",
+    "mcs/semantic/semantic_policy.py",
+    "mcs/semantic/semantic_transport.py",
+    "mcs/extract/llm/extraction_provenance.py",
+    "mcs/extract/attachment_inference_contract.py",
+    "mcs/extract/attachment_extraction.py",
+    "mcs/extract/attachment_inference_checkpoints.py",
+    "mcs/extract/attachment_inference.py",
+    "mcs/patients/patient_context_refresh_readiness.py",
+    "mcs/core/mcs_queries.py",
+    "mcs/semantic/semantic_render.py",
+    "mcs/semantic/semantic_metrics.py",
+    "mcs/semantic/semantic_reprocess.py",
+    "mcs/patients/patient_context_progress.py"
+  ]
+}

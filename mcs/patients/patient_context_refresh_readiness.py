@@ -769,6 +769,15 @@ def _extraction_qc_ready(db, pid, policy, *, deadline=None, message_id=None, mes
 
 
 def _message_ready(ledger, row, cfg, policy, *, deadline, attachment_mode, material=False):
+    # locally produced summaries are judged by the supplied config's local
+    # model, never by a host configuration read per message
+    import semantic_transport
+    with semantic_transport.config_model_scope(cfg):
+        return _message_ready_scoped(ledger, row, cfg, policy, deadline=deadline,
+                                     attachment_mode=attachment_mode, material=material)
+
+
+def _message_ready_scoped(ledger, row, cfg, policy, *, deadline, attachment_mode, material):
     import semantic_intake_hold
     import semantic_policy
     import semantic_store
@@ -827,9 +836,12 @@ def _message_ready(ledger, row, cfg, policy, *, deadline, attachment_mode, mater
         bundle = semantic_store.thread_bundle(db, pid, row['parent_id'] or mid, [mid])
         if bundle is None:
             return False
-        return semantic_store.current_artifact(
-            db, semantic_policy.KIND_AUDIT, mid, bundle['source_fingerprint'],
-            semantic_store.policy_fingerprint(policy)) is None
+        policy_fp = semantic_store.policy_fingerprint(policy)
+        # A summary awaiting a redo for the configured local model restarts
+        # its evaluation: the audit of the old summary does not block.
+        return (semantic_store.current_artifact(
+            db, semantic_policy.KIND_AUDIT, mid, bundle['source_fingerprint'], policy_fp) is None
+            or semantic_store.local_redo_pending(db, mid, bundle['source_fingerprint'], policy_fp))
     if policy['mode'] == 'off':
         return _raw_extraction_current(db, row, cfg)[0]
     return semantic_store.reprocess_target_state(ledger, row, policy, cfg=cfg,

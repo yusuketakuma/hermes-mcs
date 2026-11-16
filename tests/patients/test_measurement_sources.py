@@ -572,7 +572,6 @@ def test_audited_canonical_measurement_uses_fact_and_exact_evidence_not_legacy(t
     import semantic_facts
     import semantic_policy
     import semantic_store
-    import semantic_transport
     import semantic_publication
     from semantic_testkit import _cfg, facts_llm
 
@@ -583,7 +582,7 @@ def test_audited_canonical_measurement_uses_fact_and_exact_evidence_not_legacy(t
         scfg, errors = semantic_policy.semantic_config(cfg)
         assert not errors
         policy = semantic_policy.policy_fingerprint(scfg)
-        bundle = semantic_store.thread_bundle(ledger.db, 1, 1, local_model=semantic_transport.llm_model(cfg))
+        bundle = semantic_store.thread_bundle(ledger.db, 1, 1)
         member = bundle["members"][0]
         llm = facts_llm([{"statement": "Cr 1.0 mg/dL", "kind": "vital_lab", "subject_role": "patient",
                           "polarity": "affirmed", "workflow_status": "reported", "importance": "T1",

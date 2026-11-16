@@ -84,8 +84,16 @@ Per target message, inside the shared drain queue:
    bounded local-LLM transport.  Evidence resolves only inside the
    owning chunk; a quote that lives elsewhere stays `unverified`.
    Completed chunks persist before the next request; cached chunks are
-   reused only when fingerprint, revision, hash, boundaries, and schema
-   all match.  Deterministic `extract_v1` hints merge as a union.
+   reused only when fingerprint, revision, hash, boundaries, schema and
+   the generation computed from the row's own model all match, and the
+   producer is proven (a cloud chunk by its own receipt; a local or
+   unproven chunk only when its row model is the configured local model).
+   The source fingerprint does not name the local model (it keeps the
+   shipped default `Qwen3.5-9B` as a hash-compatibility constant), so a
+   local model change keeps cloud chunks, facts, projections and
+   summaries and redoes locally produced ones while `fact_source` is
+   `legacy` (the exception for `shadow`/`canonical` is in "Local model
+   change" below).  Deterministic `extract_v1` hints merge as a union.
    Duplicate facts across chunks merge by stable `fact_id`.
 4. **Obligations** — every (chunk, mandatory category) pair carries a
    deterministic obligation plus the Jev `jev_pre` obligation.
@@ -203,3 +211,65 @@ actually evaluated).  Without `TYPESAFE_API_KEY` the audit cannot run
 and the report records `evaluated: false` — never a synthetic pass.
 
 The Jev incremental-value experiment is a separate synthetic comparison; its report is not the sealed v2 activation evidence described above.
+
+## Local model change
+
+- Scope: the guarantee below (a configured `local_llm.model` or
+  `local_llm.url` change keeps cloud results) holds for
+  `semantic.fact_source=legacy`, the default. For `shadow` and
+  `canonical`, `semantic_policy.policy_fingerprint` includes
+  `candidate_fingerprint`, which hashes `local_llm.resolve(cfg)` and the
+  whole `local_llm` block. A local model or URL change there changes the
+  policy fingerprint, so every policy-bound artifact (summary, audit,
+  candidate, projection, v4), cloud-produced ones included, is redone
+  once. For `canonical` the approval evidence is bound to the same
+  fingerprint: the change is a config error
+  (`semantic_fact_source_evidence_mismatch`, semantic falls back to
+  `legacy`/off) until the candidate is approved again. Whether the
+  candidate fingerprint should drop the local model is an open owner
+  decision (the same open item as in `docs/specs/patient-context.md`,
+  "品質確認の識別値（P0-2c）"); a strict xfail test
+  (`tests/semantic/test_local_model_change_semantic.py::test_shadow_policy_ignores_a_configured_local_model_change`)
+  marks it.
+- Readers that hold a config (patient-context readiness and progress,
+  the notice summary block and render state, derived summaries, metrics)
+  judge locally produced rows by that config's local model
+  (`semantic_transport.config_model_scope`), never by a host
+  configuration read per message. The drain, the reprocess pass and job
+  (`run_due`, `reprocess_step`, `reprocess_job`) and the other
+  scope-decorated entries read the host configuration at most once per
+  call (`with_local_model_scope`), as their writers and
+  `execution_generation` do.
+- Progress (`progress_for_message`): a current publication that awaits
+  its local redo shows `processing` while its chunks are redone, not
+  `attention`.
+- Fallback: `semantic_job_processor.local_fallback_allowed` lets a member
+  fall back to the local model unless a proven cloud chunk, or an
+  unproven chunk of the configured local model, exists for it; an
+  unproven chunk of another local model is reused by neither side.
+- Input identity: `semantic_store.bundle_fingerprint` names no backend.
+  The `local_model` key holds `_LEGACY_FINGERPRINT_LOCAL_MODEL`
+  (`Qwen3.5-9B`) only so that existing fingerprints stay equal.
+- Producer rule: `semantic_policy.LOCAL_MODEL_GATED_KINDS` (facts v1/v2,
+  projections, v4, summary, candidate, both chunk kinds) are current only
+  while `extraction_provenance.local_producer_current` accepts the row:
+  a complete proof naming only cloud providers is always accepted; any
+  other row is accepted only when its `model` column equals the
+  configured local model. A row that never recorded a model keeps its
+  earlier fingerprint-only identity. `current_artifact` and the send gate
+  (`_paired_summary`) apply it to the latest matching row and never fall
+  back to an older one.
+- Not gated (`LOCAL_MODEL_UNGATED_KINDS`): Jev results, repair and format
+  repair reservations (a spent repair is never refunded), loop
+  completion receipts and bookkeeping kinds. A guard test classifies
+  every `KIND_*` constant.
+- Loop completion receipts compare `runtime.interpretation_generation`,
+  which is `execution_generation` computed with the shipped default
+  model. `execution_generation` itself still names the local model and
+  re-queues reprocess-stamped jobs after a model change.
+- A job that wrote facts in this run does not reuse a summary or
+  candidate of the same fingerprint (`fresh_facts`), so a cloud summary
+  over redone local facts is redone with them.
+- Legacy `semantic_facts` rows now carry `provider_provenance`
+  (`stage: facts_v1`); rows written before it are judged as local.
+
