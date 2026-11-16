@@ -296,3 +296,5 @@ searchは正規化した名称・別名・識別子の部分一致で参照候�
 対象回帰は[CLI](../../tests/ops/test_mcs_drug.py)と
 [世代連動](../../tests/notify/test_summary_drug_generation.py)。成功件数は親の同タスクの隔離結果で、
 未確認の最終一式や実辞書の採用・公開・配備の成功へ転用しない。
+
+**2026-11-16 アレルギー・副作用歴と ACP の評価資産（Blk-EVAL）**: 合成資料 `evaluation/extract_cases_safety_history.json` と世代11の基準値、保存済み出力を採点する `extract_bench.py score` を追加した。使い方は [DEVELOPMENT.md の「抽出品質の評価」](../development/DEVELOPMENT.md#抽出品質の評価)、未測定の範囲は [evaluation/README.md](../../evaluation/README.md)。
