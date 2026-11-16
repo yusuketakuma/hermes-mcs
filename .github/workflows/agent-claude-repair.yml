@@ -29,32 +29,53 @@ jobs:
       id-token: write
       actions: read
     steps:
-      - name: Resolve the PR branch
+      # The check runs from the default branch's ci/agent_control.py, before any PR code is checked out.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          path: control
+          sparse-checkout: ci
+          persist-credentials: false
+      - name: Check the PR and its linked issues now
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR: ${{ inputs.pr }}
+          AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
         run: |
           set -euo pipefail
-          info=$(gh api "repos/$GH_REPO/pulls/$PR")
-          branch=$(jq -r .head.ref <<< "$info")
-          # Only open, same-repository Claude branches are repaired.
-          if [[ "$(jq -r .state <<< "$info")" != "open" || "$branch" != agent/claude-* ||
-                "$(jq -r .head.repo.full_name <<< "$info")" != "$GH_REPO" ]]; then
-            echo "not a repairable PR: #$PR ($branch)" >&2
-            exit 1
+          work=$(mktemp -d)
+          gh api "repos/$GH_REPO/pulls/$PR" > "$work/pr.json"
+          echo '{}' > "$work/labels.json"
+          for issue in $(python3 control/ci/agent_control.py linked --pr "$work/pr.json" | jq -r '.issues[]'); do
+            labels=$(gh api "repos/$GH_REPO/issues/$issue" --jq '[.labels[].name]')
+            jq --arg n "$issue" --argjson l "$labels" '.[$n] = $l' "$work/labels.json" > "$work/next.json"
+            mv "$work/next.json" "$work/labels.json"
+          done
+          verdict=$(python3 control/ci/agent_control.py repair --pr "$work/pr.json" \
+            --issue-labels "$work/labels.json" --automation "${AUTOMATION:-}")
+          echo "$verdict"
+          if [[ "$(jq -r .allowed <<< "$verdict")" != "true" ]]; then
+            echo "::notice::repair refused: $(jq -r .reason <<< "$verdict")"
+            echo "allowed=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+          echo "allowed=true" >> "$GITHUB_OUTPUT"
+          echo "branch=$(jq -r .head.ref "$work/pr.json")" >> "$GITHUB_OUTPUT"
+      - if: steps.pr.outputs.allowed == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ steps.pr.outputs.branch }}
           fetch-depth: 1
           persist-credentials: false
-      - uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
+      - if: steps.pr.outputs.allowed == 'true'
+        uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: "github-actions[bot]"
+          # The Claude App token needs this too, to read the failed CI logs.
+          additional_permissions: |
+            actions: read
           prompt: >-
             PR #${{ inputs.pr }}（ブランチ ${{ steps.pr.outputs.branch }}）の CI が失敗した。
             gh run list と gh run view --log-failed で失敗したジョブのログを読み、原因を特定して直し、

@@ -160,25 +160,30 @@ def test_an_agent_starts_only_as_the_issue_s_single_assignment():
     assert not ac.assigned_to(["bug"], "担当:claude")
 
 
-def test_repair_reruns_only_an_assigned_claude_within_budget():
-    labels = ["担当:claude", "試行:1"]
-    assert ac.may_repair("agent/claude-issue-7", labels, False, True)
-    assert not ac.may_repair("agent/claude-issue-7", labels, False, False)
-    assert not ac.may_repair("agent/claude-issue-7", labels, True, True)
-    assert not ac.may_repair("copilot/fix-7", ["担当:copilot"], False, True)
-    assert not ac.may_repair("agent/claude-issue-7", ["担当:copilot"], False, True)
-    assert not ac.may_repair("agent/claude-issue-7", [*labels, "失敗:利用枠"], False, True)
-    assert not ac.may_repair("agent/claude-issue-7", [*labels, "要オーナー対応"], False, True)
+def test_repair_needs_every_linked_issue_to_be_claude_s_alone_and_unheld():
+    pr = {**_pr(body="Fixes #5, fixes #6"), "state": "open"}
+    ok = {"5": ["担当:claude", "試行:1"], "6": ["担当:claude"]}
+    assert ac.repair_refusal(pr, ok, True) is None
+    assert ac.repair_refusal(pr, ok, False)
+    exhausted = {**ok, "5": ["試行:3", "要オーナー対応"]}
+    assert "#5" in ac.repair_refusal(pr, exhausted, True)
+    assert "#6" in ac.repair_refusal(pr, {**ok, "6": ["担当:claude", "失敗:利用枠"]}, True)
+    assert "#6" in ac.repair_refusal(pr, {**ok, "6": ["担当:copilot"]}, True)
+    assert ac.repair_refusal(pr, {"5": ok["5"]}, True)  # labels of #6 missing
+    assert ac.repair_refusal({**pr, "body": "no link"}, ok, True)
+    assert ac.repair_refusal({**pr, "state": "closed"}, ok, True)
+    assert ac.repair_refusal({**_pr(branch="copilot/x"), "state": "open"}, ok, True)
+    assert ac.repair_refusal({**_pr(head_repo="outsider/hermes-mcs"), "state": "open"}, ok, True)
 
 
-def test_cli_attempt_reports_whether_to_repair(capsys):
-    ac.main(["attempt", "--labels", json.dumps(["担当:claude"]), "--branch", "agent/claude-issue-7",
+def test_cli_lists_linked_issues_and_judges_a_repair(tmp_path, capsys):
+    (tmp_path / "pr.json").write_text(json.dumps({**_pr(body="Fixes #7"), "state": "open"}))
+    (tmp_path / "labels.json").write_text(json.dumps({"7": ["担当:claude"]}))
+    ac.main(["linked", "--pr", str(tmp_path / "pr.json")])
+    assert json.loads(capsys.readouterr().out) == {"issues": [7]}
+    ac.main(["repair", "--pr", str(tmp_path / "pr.json"), "--issue-labels", str(tmp_path / "labels.json"),
              "--automation", "true"])
-    step = json.loads(capsys.readouterr().out)
-    assert step == {"remove": [], "add": ["試行:1"], "exhausted": False, "repair": True}
-    ac.main(["attempt", "--labels", json.dumps(["担当:claude", "試行:2"]), "--branch", "agent/claude-issue-7",
-             "--automation", "true"])
-    assert json.loads(capsys.readouterr().out)["repair"] is False
+    assert json.loads(capsys.readouterr().out) == {"allowed": True, "reason": ""}
 
 
 def test_only_one_agent_label_per_issue():
@@ -211,6 +216,8 @@ def test_labels_and_workflows_agree_with_the_module():
     repair = (ROOT / ".github/workflows/agent-claude-repair.yml").read_text()
     assert "agent-claude-repair.yml" in control
     assert "workflow_dispatch" in repair and "issue_comment" not in repair and "pull_request" not in repair.split("jobs:")[0]
+    assert repair.index("agent_control.py repair") < repair.index("ref: ${{ steps.pr.outputs.branch }}")
+    assert "actions: read" in repair.split("additional_permissions")[1]
     assert "--match-head-commit" in control
     assert "agent_control.py assigned" in claude
     consult = (ROOT / ".github/workflows/agent-consult.yml").read_text()
