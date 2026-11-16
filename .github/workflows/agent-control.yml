@@ -2,7 +2,7 @@ name: Agent control
 
 # merge-gate: 必須ジョブが現在の head で実際に実行・成功したかを commit status に出す。
 # 担当ロック: 1 Issue に 担当:* は1件だけ。試行回数: AIブランチの CI 失敗をIssueへ通算する。
-# 自動修正: 上限前の失敗で、担当が Claude なら agent-claude.yml を修正モードで起動する。
+# 自動修正: 上限前の失敗で、担当が Claude なら agent-claude-repair.yml を起動する。
 # 自動マージ: vars.AUTO_MERGE_ENABLED が true のときだけ、対象の変更に予約する。
 # どのジョブも main 側の定義と ci/agent_control.py だけを使い、PR のコードは checkout も実行もしない。
 # 運用と停止手順: docs/development/AUTOMATION.md
@@ -31,7 +31,7 @@ jobs:
       statuses: write
       pull-requests: read
       issues: write
-      actions: write   # workflow_dispatch of agent-claude.yml for a repair run
+      actions: write   # workflow_dispatch of agent-claude-repair.yml
     outputs:
       pr: ${{ steps.plan.outputs.pr }}
       eligible: ${{ steps.plan.outputs.eligible }}
@@ -97,7 +97,7 @@ jobs:
             done
             # GITHUB_TOKEN may start workflow_dispatch; the repair run pushes as the Claude App, so CI runs again.
             if [[ "$repair" == "true" ]]; then
-              gh workflow run agent-claude.yml --ref "$DEFAULT_BRANCH" -f pr="$pr"
+              gh workflow run agent-claude-repair.yml --ref "$DEFAULT_BRANCH" -f pr="$pr"
             fi
             last_pr="$pr"; last_sha="$sha"
             eligible=$(jq -r .auto_merge_eligible "$work/plan.json")

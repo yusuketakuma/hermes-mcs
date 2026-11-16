@@ -208,7 +208,9 @@ def test_labels_and_workflows_agree_with_the_module():
     assert "branch_prefix: agent/" in claude
     assert "vars.AUTOMATION_ENABLED == 'true'" in claude
     assert "github.repository_owner" in claude
-    assert "agent-claude.yml" in control and "workflow_dispatch" in claude
+    repair = (ROOT / ".github/workflows/agent-claude-repair.yml").read_text()
+    assert "agent-claude-repair.yml" in control
+    assert "workflow_dispatch" in repair and "issue_comment" not in repair and "pull_request" not in repair.split("jobs:")[0]
     assert "--match-head-commit" in control
     assert "agent_control.py assigned" in claude
     consult = (ROOT / ".github/workflows/agent-consult.yml").read_text()

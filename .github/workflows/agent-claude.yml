@@ -4,8 +4,7 @@ name: Agent Claude
 # 所有者が担当中の Issue・PR に書いた @claude にだけ反応させる。
 # 停止スイッチ vars.AUTOMATION_ENABLED が true でなければ起動しない（既定は停止）。
 # 書くのは agent/claude- ブランチと下書きPRだけ。マージ・タグ・配備はしない。
-# repair: agent-control.yml が、試行上限前の CI 失敗で workflow_dispatch から起動する。
-#   失敗ログを読み、同じブランチに修正を push する（試行回数は agent-control が通算）。
+# CI 失敗の修正は agent-claude-repair.yml（workflow_dispatch だけで起動）。
 # 運用と停止手順: docs/development/AUTOMATION.md
 on:
   issues:
@@ -14,12 +13,6 @@ on:
     types: [created]
   pull_request_review_comment:
     types: [created]
-  workflow_dispatch:
-    inputs:
-      pr:
-        description: "CI が失敗した agent/claude- ブランチの PR 番号"
-        required: true
-        type: number
 
 permissions: {}
 
@@ -27,7 +20,6 @@ jobs:
   claude:
     # The event decides only whether to look; the "Check the assignment" step decides whether to run.
     if: >-
-      github.event_name != 'workflow_dispatch' &&
       vars.AUTOMATION_ENABLED == 'true' &&
       github.event.sender.login == github.repository_owner &&
       (
@@ -84,53 +76,3 @@ jobs:
             --max-turns 40
             --allowedTools "Bash(gh pr create --draft:*),Bash(git:*),Bash(ruff:*),Bash(python3:*),Bash(scripts/run_tests.sh:*)"
             --append-system-prompt "このリポジトリの AGENTS.md と docs/development/AUTOMATION.md に従う。作業は対象 Issue の範囲だけ。終わったら本文に Fixes #番号 を書いて gh pr create --draft で下書きPRを作る。テストの削除・skip・閾値の緩和で成功を作らない。患者データ・実ログ・秘密値を書かない。マージ・タグ・リリースはしない。"
-
-  repair:
-    if: github.event_name == 'workflow_dispatch' && vars.AUTOMATION_ENABLED == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    concurrency:
-      group: agent-claude-${{ inputs.pr }}
-      cancel-in-progress: false
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-      id-token: write
-      actions: read
-    steps:
-      - name: Resolve the PR branch
-        id: pr
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          PR: ${{ inputs.pr }}
-        run: |
-          set -euo pipefail
-          info=$(gh api "repos/$GH_REPO/pulls/$PR")
-          branch=$(jq -r .head.ref <<< "$info")
-          # Only open, same-repository Claude branches are repaired.
-          if [[ "$(jq -r .state <<< "$info")" != "open" || "$branch" != agent/claude-* ||
-                "$(jq -r .head.repo.full_name <<< "$info")" != "$GH_REPO" ]]; then
-            echo "not a repairable PR: #$PR ($branch)" >&2
-            exit 1
-          fi
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          ref: ${{ steps.pr.outputs.branch }}
-          fetch-depth: 1
-          persist-credentials: false
-      - uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          allowed_bots: "github-actions[bot]"
-          prompt: >-
-            PR #${{ inputs.pr }}（ブランチ ${{ steps.pr.outputs.branch }}）の CI が失敗した。
-            gh run list と gh run view --log-failed で失敗したジョブのログを読み、原因を特定して直し、
-            同じブランチにコミットして push する。失敗が CI 基盤の障害・利用枠不足・原因不明なら、コードを変えずに
-            PR にその旨を1回コメントして終える。
-          claude_args: >-
-            --max-turns 40
-            --allowedTools "Bash(gh run list:*),Bash(gh run view:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(git:*),Bash(ruff:*),Bash(python3:*),Bash(scripts/run_tests.sh:*),Edit,Write,Read,Glob,Grep"
-            --append-system-prompt "このリポジトリの AGENTS.md と docs/development/AUTOMATION.md に従う。直すのは CI の失敗の原因だけ。テストの削除・skip・閾値の緩和・CI 設定の変更で成功を作らない。患者データ・実ログ・秘密値を書かない。マージ・タグ・リリースはしない。"
