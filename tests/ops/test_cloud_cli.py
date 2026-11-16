@@ -1119,3 +1119,13 @@ def test_cloud_budget_until_does_not_change_jev_deadline(monkeypatch):
     assert cli.budget_command(SimpleNamespace(until="2026-11-05")) == 0
     assert saved == [{"cloud_llm.until": "2026-11-05T23:59:59+09:00"}]
     assert cfg["semantic"]["until"] == "2026-11-30T23:59:59+09:00"
+
+
+@pytest.mark.parametrize("kind", ["cloud_usage_disposition", "cloud_usage_result"])
+def test_safe_log_reports_a_superseded_local_disposition(kind):
+    meta = {"disposition": "superseded_local", "reservation_id": "synthetic-private", "route": "patient_context"}
+    safe = cli._safe_log({"kind": kind, "created_at": 1, "model": None}, meta)
+    assert safe["disposition"] == "superseded_local"
+    assert "synthetic-private" not in json.dumps(safe)
+    unknown = cli._safe_log({"kind": kind, "created_at": 1, "model": None}, {**meta, "disposition": "synthetic"})
+    assert "disposition" not in unknown

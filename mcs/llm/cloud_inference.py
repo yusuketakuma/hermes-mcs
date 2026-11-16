@@ -25,7 +25,7 @@ from mcs_util import HOME, load_config
 COMMIT_MARGIN = 5
 _HISTORY_ERROR_REASONS = frozenset({
     "cloud_result_missing", "cloud_result_discarded", "cloud_result_unsettled",
-    "cloud_receipt_invalid", "cloud_answer_invalid", "cloud_answer_unresolved",
+    "cloud_receipt_invalid", "cloud_answer_invalid", "cloud_answer_unresolved", "cloud_result_superseded",
 })
 _HISTORY_CLOUD_KINDS = frozenset({"budget_exceeded", "pricing_unverified", "contract_error"})
 _HISTORY_CLOUD_REASONS = frozenset({
@@ -97,6 +97,32 @@ def _current_cloud_settings():
 _RESULT_SAVE_TRIES = 5
 
 
+def _after_send_code(metadata):
+    """The classifier's after-send code for one attempt's result metadata; None for a clean answer."""
+    http_class, kind = metadata.get("http_class"), metadata.get("error_kind")
+    if kind == cloud_client.RESPONSE_TOO_LARGE:
+        return cloud_client.RESPONSE_TOO_LARGE
+    if not isinstance(http_class, str):
+        return "unknown"
+    if http_class == "http_200":
+        # A 200 whose usage could not be priced (the client's pricing_unverified) or is
+        # absent is an unknown result, charged at its reserved maximum.
+        if kind == "pricing_unverified" or kind is None and metadata.get("usage") is None:
+            return "usage_unknown"
+        if kind is not None:
+            return kind if type(kind) is str else "unknown"
+        return None
+    if http_class in ("http_429", "http_529"):
+        return http_class
+    if re.fullmatch(r"http_5[0-9]{2}", http_class):
+        return "http_5xx"
+    if re.fullmatch(r"http_4[0-9]{2}", http_class):
+        return "http_4xx"
+    if http_class == "transport":
+        return kind if kind in ("transport", "timeout") else "transport"
+    return "unknown"
+
+
 def _save_result(save):
     """Wait out a busy writer: until this write lands, the answer already paid
     for exists only in memory, and giving up leaves the unit unresolved for good.
@@ -157,8 +183,25 @@ class CloudInferenceUnit:
         self.deadline = deadline
         self.discarded = False
         self.final_disposition = None
+        # Why the latest call stopped, as (stage, code) for cloud_send_admission.classify_refusal;
+        # None for a clean answer or a stop with no classified reason. Every call starts from
+        # None. A guard denial also names its stop when commit_guard() runs outside a call, and
+        # a paid answer discarded after sending (mode off mid-flight) keeps stage pre_send with
+        # possibly_sent true; its verdict is the same.
+        self.refusal = None
 
         reserved_caps = {}
+
+        def refuse(stage, code):
+            if stage == "after_send" and code is None:
+                self.refusal = None   # a clean answer
+                return
+            # A sent attempt carries the outcome of its call; a later pre-send stop in the same
+            # call (a retry refused at reservation) does not replace it.
+            if stage != "after_send" and self.refusal is not None and self.refusal[0] == "after_send":
+                return
+            self.refusal = (stage, code if code in cloud_send_admission.REFUSAL_CODES else "unknown")
+        self._refuse = refuse
 
         def guard(*, inference=True):
             # A denial observed after the response is sticky for this unit:
@@ -170,6 +213,7 @@ class CloudInferenceUnit:
                 if not isinstance(live, dict) or not live:
                     raise CloudObservationIncomplete('cloud_config_unverified')
                 if isinstance(live.get('cloud_llm'), dict) and live['cloud_llm'].get('mode') == 'off':
+                    refuse('pre_send', 'mode_off')
                     raise CloudFallback('cloud_unit_changed')
                 now = resolve_cloud_settings(live)
                 chosen, errors = cloud_policy.resolve_profile(live, route=route, purpose=purpose, root=HOME)
@@ -186,6 +230,12 @@ class CloudInferenceUnit:
                           or cloud_policy.scope_generation({"cloud_llm": now}) != scope
                           # A paid result is kept while its scope holds, even if the send window closes.
                           or not cloud_policy.in_scope(now, route, project_id))
+                if denied:
+                    try:
+                        if not cloud_policy.in_scope(now, route, project_id):
+                            refuse('pre_send', self._blocked_code('scope', live))
+                    except Exception:
+                        pass   # naming the stop never changes the refusal
                 if not denied and inference:
                     try:
                         waiting = (not cloud_backlog.owner_alive() or time.monotonic() >= deadline
@@ -210,6 +260,7 @@ class CloudInferenceUnit:
                 except Exception:
                     allowed = False
                 if not allowed:
+                    refuse('pre_send', 'checkpoint_unverified')
                     raise cloud_client.CloudNotSent("not_sent", "checkpoint_unverified")
         self.guard = lambda: dispatch(guard)
         def commit_guard():
@@ -244,9 +295,22 @@ class CloudInferenceUnit:
             reserved_caps.clear()
             reserved_caps.update(current_caps)
             hook = {"on_reserved_tx": on_reserved_tx} if on_reserved_tx is not None else {}
-            return cloud_policy.usage_reserver(ledger, current_cfg, route=route, project_id=project_id,
-                unit_key=unit_key, message_id=self.message_id, owner=self.owner,
-                selection=self.selection, input_binding=self._input_binding(), **hook)(body, timeout)
+            try:
+                return cloud_policy.usage_reserver(ledger, current_cfg, route=route, project_id=project_id,
+                    unit_key=unit_key, message_id=self.message_id, owner=self.owner,
+                    selection=self.selection, input_binding=self._input_binding(), **hook)(body, timeout)
+            except cloud_client.CloudError as error:
+                history = getattr(error, "history_refusal", None)
+                if history is not None:
+                    refuse("history", history if type(history) is str else "unknown")
+                else:
+                    # A kind shares names with block codes but not their meaning: only a
+                    # declared detail, or an unverified price, names the stop.
+                    detail = error.detail if type(error.detail) is str else None
+                    code = (detail if detail in cloud_send_admission.PRE_SEND_VERDICTS
+                            else error.kind if error.kind == "pricing_unverified" else "unknown")
+                    refuse("pre_send", self._blocked_code(code, settings=current_cfg["cloud_llm"]))
+                raise
         self.reserve = lambda body, timeout: (reserve_dispatch or dispatch)(lambda: reserve(body, timeout))
         def record(reservation, metadata, *, answer=None):
             # The callback also settles a reservation rejected before sending.
@@ -255,6 +319,8 @@ class CloudInferenceUnit:
             not_sent = metadata.get("http_class") == "not_sent"
             if not not_sent:
                 self.possibly_sent = True
+                # Named before the write: saving a 200 without usage raises.
+                refuse("after_send", _after_send_code(metadata))
             def write():
                 try:
                     guard(inference=False)
@@ -292,6 +358,20 @@ class CloudInferenceUnit:
             # The original Haiku contract keeps its unchanged constructor call.
             client_args.update(model=self.model, effort=resolved["effort"])
         self.client = client(key, **client_args)
+
+    def _blocked_code(self, reason, cfg=None, *, settings=None):
+        """A send-block code named for the classifier; ``cfg`` is the raw configuration the stop
+        was observed under and ``settings`` the resolved settings it was judged under. Only the
+        codes cloud_policy refines read them, loading the configuration when ``cfg`` is absent."""
+        if type(reason) is not str:
+            return "unknown"
+        if reason not in cloud_policy.REFINED_CODES:
+            return reason
+        try:
+            return cloud_policy.refusal_code(load_config() if cfg is None else cfg, reason,
+                                             model=self.model, root=HOME, settings=settings)
+        except Exception:
+            return {"window_history_unverified": "window_history_pruned", "scope": "unknown"}.get(reason, reason)
 
     def discard(self):
         """Append the unit's final disposition without mutating financial results."""
@@ -339,6 +419,7 @@ class CloudInferenceUnit:
     def __call__(self, prompt, *, deadline, max_tokens, **unused):
         observation = ({'recovery_path': 'unknown'}
                        if self.route == 'reextract' and self.message_id is not None else None)
+        self.refusal = None
         try:
             http_deadline = min(self.deadline, deadline) - COMMIT_MARGIN
             if time.monotonic() >= http_deadline:
@@ -363,6 +444,11 @@ class CloudInferenceUnit:
                     raise
                 except (ValueError, TypeError, KeyError, sqlite3.Error, cloud_client.CloudError) as error:
                     _history_read_error("recover_response", error)
+                    # Only a reason recover_response proves names the stop; a read error
+                    # (a locked database, say) may be gone by the next pass.
+                    reason = error.args[0] if type(error) is ValueError and len(error.args) == 1 else None
+                    self._refuse("history", reason if type(reason) is str and reason in _HISTORY_ERROR_REASONS
+                                 else "unknown")
                     # An unreadable recovery history cannot prove no prior
                     # paid send: hold the unit like a blocked send check.
                     self.possibly_sent = True
@@ -374,28 +460,37 @@ class CloudInferenceUnit:
                 answer["reused_response"] = True
                 self.possibly_sent = True
                 self._unresolved = False
+                self.refusal = None
                 if evidence['reservation'] not in self.completed_reservations:
                     self.completed_reservations.append(evidence['reservation'])
                 if evidence['reservation'] not in self.answered_reservations:
                     self.answered_reservations.append(evidence['reservation'])
             else:
+                judged = {}
                 def send_block_reason():
                     # An exact recovery miss is not proof of no prior send: old
                     # envelopes and incomplete receipts use the reservation guard.
                     self.commit_guard()
                     try:
+                        judged["cloud_llm"] = _current_cloud_settings()
                         return cloud_policy.request_send_block_reason(self.ledger,
-                            {"cloud_llm": _current_cloud_settings()}, self.client.body(prompt, tokens, prefix),
+                            {"cloud_llm": judged["cloud_llm"]}, self.client.body(prompt, tokens, prefix),
                             route=self.route, project_id=self.project_id, message_id=self.message_id,
                             unit_key=self.unit_key, owner=self.owner, selection=self.selection,
                             input_binding=self._input_binding())
                     except (ValueError, TypeError, KeyError, sqlite3.Error, cloud_client.CloudError) as error:
                         _history_read_error("request_send_block_reason", error, observation=observation)
+                        # Only the guard's own classification names the stop; any other
+                        # error (a locked database, say) may be gone by the next pass.
+                        refusal = getattr(error, "history_refusal", None)
+                        self._refuse("history", refusal if type(refusal) is str else "unknown")
                         self.possibly_sent = True
                         if getattr(error, "verified_repeat", False) is True:
                             self._verified_repeat = True
                         raise cloud_client.CloudNotSent("budget_exceeded", "cloud_unit_unresolved") from None
-                if self.dispatch(send_block_reason, result=True):
+                blocked = self.dispatch(send_block_reason, result=True)
+                if blocked:
+                    self._refuse("pre_send", self._blocked_code(blocked, settings=judged.get("cloud_llm")))
                     # Only a history-checked fresh request may use caller local fallback.
                     self.commit_guard()
                     raise CloudFallback("cloud_send_blocked")
@@ -403,6 +498,7 @@ class CloudInferenceUnit:
                 self._effect_started = True   # admission to new request work
                 with cloud_backlog.request_slot(HOME, capacity) as held:
                     if not held:
+                        self._refuse("pre_send", "cloud_capacity")
                         raise CloudBusy("cloud_capacity")
                     answer = self.client.complete(prompt, deadline=http_deadline, max_tokens=tokens,
                         before_attempt=self.guard, reserve_fn=self.reserve, after_result=self.result,

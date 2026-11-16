@@ -442,14 +442,17 @@ def _costs(item, ratio, fx=None, *, output_limit=1600, output_per_request=None, 
     return item
 
 
+_DISPOSITIONS = ("discarded_scope", "discarded_workday", policy.SUPERSEDED_LOCAL)
+
+
 def _safe_log(row, meta):
     result = {"kind": row["kind"], "at": row["created_at"]}
     if row["kind"] == "cloud_usage_disposition":
-        if meta.get("disposition") in ("discarded_scope", "discarded_workday"):
+        if meta.get("disposition") in _DISPOSITIONS:
             result["disposition"] = meta["disposition"]
         return result
     for key, allowed in (("route", policy.ROUTES), ("model", tuple({model for model, _ in policy.PRICE_DEFINITIONS})),
-                         ("disposition", ("discarded_scope", "discarded_workday"))):
+                         ("disposition", _DISPOSITIONS)):
         if meta.get(key) in allowed:
             result[key] = meta[key]
     kinds = {"auth_error", "payment_required", "pricing_unverified", "budget_exceeded", "no_api_key",

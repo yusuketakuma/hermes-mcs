@@ -351,6 +351,8 @@ _CIRCUIT_RETRYABLE_KINDS = frozenset({"rate_limited", "transport", "timeout"})
 _CIRCUIT_FAILURE_CLASSES = _CIRCUIT_RETRYABLE_KINDS | {
     "http_402", "http_429", "http_529", "http_5xx"
 }
+# Classes only the cloud circuit records: contract errors count; the other three latch.
+_CLOUD_CIRCUIT_CLASSES = frozenset({"auth_error", "payment_required", "pricing_unverified", "contract_error"})
 
 
 def _circuit_now(now) -> float:
@@ -424,8 +426,7 @@ def _circuit_state(ledger, now=None, *, kind=_CIRCUIT_ARTIFACT_KIND) -> dict:
                 or not math.isfinite(float(open_until))
                 or (failure_class is not None
                     and failure_class not in (_CIRCUIT_FAILURE_CLASSES |
-                        ({"auth_error", "payment_required", "pricing_unverified", "contract_error"}
-                         if kind == "cloud_circuit" else set())))
+                        (_CLOUD_CIRCUIT_CLASSES if kind == "cloud_circuit" else set())))
                 or (kind == "cloud_circuit"
                     and failure_class in {"auth_error", "payment_required", "pricing_unverified"}
                     and open_until <= _circuit_now(now))):

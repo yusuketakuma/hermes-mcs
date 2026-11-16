@@ -428,14 +428,16 @@ def _reserve_valid(meta, row):
     return maximum
 
 
-def _stored_reservation(ledger, reservation, *, bound_only=False):
-    """The one retained reservation row matching ``reservation``, validated."""
+def _stored_reservation(ledger, reservation, *, bound_only=False, retained=True):
+    """The one retained reservation row matching ``reservation``, validated.
+
+    ``retained=False`` (with ``bound_only``) also accepts a row older than the usage window."""
     rid = reservation.get("reservation_id")
     rows = (_matching_bound_rows(ledger, KINDS[0], rid) if bound_only
             else _matching_rows(ledger, KINDS[0], rid))
     if len(rows) != 1:
         raise AnthropicError("pricing_unverified", "reservation_missing")
-    if bound_only and rows[0]["created_at"] < time.time() - 62 * 86400:
+    if bound_only and retained and rows[0]["created_at"] < time.time() - 62 * 86400:
         raise AnthropicError("pricing_unverified", "reservation_missing")
     stored = _accounting_meta(rows[0]["meta"])
     _reserve_valid(stored, rows[0])
