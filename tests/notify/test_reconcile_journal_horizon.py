@@ -272,6 +272,34 @@ def test_late_receipt_with_the_worker_attempt_settles_a_held_part(world):
     assert (part["state"], part["remote_id"]) == ("delivered", "synthetic-late")
 
 
+
+def test_beyond_horizon_part_rejects_a_journal_only_absence_proof(world):
+    world.seed()
+    world.dispatch()
+    render = _deliver_card_only(world)
+    _restore_from(world, backup_names.JOURNAL_HORIZON_MAX_S + 86400)
+    notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW)
+    plan = notify_recovery.card_part_resolve_plan(world.led, render["delivery_id"], "body:0001")
+    assert "error" not in plan
+    guidance = notify_recovery.recovery_guidance("body_part", "discord", _HOLD, plan["attempt_id"])
+    assert guidance["requirements"]["mark_not_sent"]["proof_any_of"] == ["api_rejected", "remote_absent"]
+    check = notify_recovery.card_part_check(world.led, str(world.data), render["delivery_id"], "body:0001")
+    # no journal row survives for the part, so the read-only check never passes
+    assert (check["journal"]["state"], check["journal_check"]) == ("absent", "unknown")
+
+    def resolve(proof, n):
+        req = {**plan, "command_id": str(uuid.UUID(int=6000 + n)), "actor": "op-user",
+               "human_confirmed": True, "reason": "合成の復元後確認", "result": "mark_not_sent",
+               "evidence": {"method": "synthetic", "ref": "channel-check", "proof": proof,
+                            "worker_stopped": True}}
+        return notify_recovery.apply_card_part_resolve(world.led, req, CFG, now=NOW + n)
+    # the journal rows that could witness the part's send may be compacted away
+    receipt = resolve("no_journal_started", 1)
+    assert (receipt["outcome"], receipt["error"]) == ("rejected", "journal_cannot_vouch")
+    assert _parts(world, render["delivery_id"])["body:0001"]["state"] == "unknown"
+    assert resolve("remote_absent", 2)["outcome"] == "applied"
+    assert _parts(world, render["delivery_id"])["body:0001"]["state"] == "not_sent"
+
 def test_inside_the_cap_pending_parts_are_left_to_the_journal(world):
     world.seed()
     world.dispatch()

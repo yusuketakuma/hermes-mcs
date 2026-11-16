@@ -369,7 +369,7 @@ def _reconcile_attempt(ledger, db, cfg, aid, info, dirs, now) -> dict:
                               result, dirs, now)
 
 
-BEYOND_HORIZON = "restore_beyond_journal_horizon"
+BEYOND_HORIZON = notify_recovery.BEYOND_HORIZON
 # A Discord file_group part that cannot share a verified surface attempt is
 # made ``unknown`` without one: ops.card_part_resolve cannot plan it, and the
 # receipt, notice and part_hold_report name why it needs manual investigation.

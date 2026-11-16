@@ -448,6 +448,8 @@ def card_part_resolve_plan(ledger, delivery_id, part_id, *, include_related=Fals
 
 
 # every fixed reason a producer stores on a held or unknown part; others count as 'unknown'
+# a part made unknown by a restore beyond the journal horizon (notify_reconcile)
+BEYOND_HORIZON = "restore_beyond_journal_horizon"
 PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
                      "blank_part_unrepresentable", "attachment_upload_identity_unverified", "card_revoked",
                      *_PREFLIGHT_ERRORS, _DEPENDENCY_ERROR,
@@ -463,7 +465,7 @@ PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
                      "workspace_unverified", "sdk_capability_missing", "retry_policy_unknown",
                      "prefetch_failed", "unsupported_part", "slack_attachment_incomplete",
                      "scope_mismatch", "no_target", "bad_render", "bad_slack_response",
-                     "operator_part_resolve", "restore_beyond_journal_horizon",
+                     "operator_part_resolve", BEYOND_HORIZON,
                      "restore_group_spec_unverified", "restore_group_surface_missing",
                      "restore_group_surface_unresolvable")
 
@@ -502,6 +504,8 @@ def recovery_guidance(kind, transport, error_code, attempt_id) -> dict:
         not_sent["conditional_proof_requires_current_sealed_preflight"] = True
     if kind == "file_group" and transport == "slack" and code == _DEPENDENCY_ERROR:
         not_sent["proof_any_of"] = [_DEPENDENCY_PROOF]
+    if not card and code == BEYOND_HORIZON:
+        not_sent["proof_any_of"] = ["api_rejected", "remote_absent"]
     return {"error_code": code, "available": available,
             "reason": None if available else "attempt_or_transport_unverified",
             "command": "ops.card_resolve" if card else "ops.card_part_resolve",
@@ -1005,6 +1009,12 @@ def _part_resolution_journal_error(ledger, req, *, journal_evidence=None):
     proof = req["evidence"]["proof"]
     if proof == "no_journal_started" and any(row.get("phase") == "started" for row in rows):
         return "journal_contradicts_proof"
+    if proof == "no_journal_started" and cards.connection(ledger).execute(
+            "SELECT 1 FROM notification_render_parts WHERE delivery_id=? AND part_id=? "
+            "AND error_code=?", (req["delivery_id"], req["part_id"], BEYOND_HORIZON)).fetchone():
+        # as for an attempt-less render hold (_rebind_check): the rows that
+        # could witness this part's send may be the ones compacted away
+        return "journal_cannot_vouch"
     if proof == "api_rejected" and not any(row.get("phase") == "result" and row.get("result") == "not_sent" for row in rows):
         return "api_rejection_unproven"
     return None
