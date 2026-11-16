@@ -100,6 +100,9 @@ python3 mcs/ops/mcs_compliance.py access-log review --days 30 # 利用者ごと�
 python3 mcs/ops/mcs_compliance.py access-log show --project 123
 ```
 
+`review` の患者数は、記録に残った患者IDの重複を除いた人数です。1行に載らなかった分（`patients_more`）は
+人数しか残らず行をまたいで重複を除けないため、`patients_at_least: true` のときは「少なくともこの人数」と読みます。
+
 月1回の確認と記録の保存期間は、運用管理規程で決めてください（自動削除はしません）。
 次は記録の対象外です。運用管理規程の業務日誌で補ってください。
 
