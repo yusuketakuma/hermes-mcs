@@ -25,18 +25,18 @@ MCS の医療・介護チャットを収集・解析するローカルシステ�
 ## コマンド
 
 ```bash
-scripts/run_tests.sh                     # tests/・integration/ 一式（一時HOME・認証環境の隔離）。絞るときも scripts/run_tests.sh tests/<領域>/
+scripts/run_tests.sh tests/notify/       # 対象を絞って実行（一時HOME・認証環境の隔離）
 ruff check mcs/ tests/ hermes_plugin/ adapters/ lineworks_adapter/ mcs_standalone/ integration/ ci/ scripts/ deployment/ conftest.py  # CIと同じ範囲
-python3 scripts/development/update_readme.py [--check]   # 生成ブロックの再生成 / drift 検査
+python3 scripts/development/update_readme.py --check     # 生成ブロックの drift 検査（再生成は --check なし）
 python3 ci/gates.py
 python3 ci/mine_gates.py --check
 ```
 
-- `make test|lint|readme|check` も使える（uv があれば ephemeral 実行）。`integration/` も同じ runner に対象を指定する。
+- `make lint`・`make readme`・`make check` も使える（uv があれば ephemeral 実行）。`integration/` も同じ runner に対象を指定する。
 - `run_tests.sh` は `MCS_TEST_PYTHON`→`$VIRTUAL_ENV`→repo 直下の `.venv` の順に Python を選ぶ。worktree には `.venv` が無いので、pytest の入った Python を `MCS_TEST_PYTHON` に指定する。
 - ユーザー指示（2026-10-31）により、失敗項目を修正して再検証が通れば、既存結果と合わせて全体を合格扱いとし、全体 suite・同一SHAの全6ジョブの再実行は必須にしない。実行済み・失敗後に再検証済み・未実行を区別し、実行していないCIを実測成功と記録しない。記録方法は `docs/development/RELEASE_NOTES.md` に従う。
 - 導入先 `~/.mcs`（`MCS_ROOT`）は稼働中の checkout で、原本DB・設定を持つ。開発・検証は git worktree で行い、そこの未commit変更を巻き込まない。
-- 全体 suite はこの Mac では走らせない（所有者 2026-11-15）。稼働中の収集とディスク・メモリを取り合い、収集が止まるため。統合用のブランチ（main 以外）を push し、既存の `ci.yml` を `gh workflow run ci.yml --ref <branch>` で実行する。Linux・macOS の検証用の job が走り、Actions の実行時間が課金される。公開用の `publication-request` と、pull request だけで動く生成物の検査は走らないので、公開へは進まず、生成物の検査は上の `update_readme.py --check` をローカルで実行する。main の push・merge・tag・本番適用は別の承認が要る。
+- 全体 suite はこの Mac では走らせない（所有者 2026-11-15）。稼働中の収集とディスク・メモリを取り合い、収集が止まるため。既存の承認範囲で統合用のブランチ（main 以外）を push し、既存の `ci.yml` を `gh workflow run ci.yml --ref <branch>` で実行する。Linux・macOS の検証用の job が走る。Actions の利用条件と課金はリポジトリやランナーの設定に従う。公開用の `publication-request` と、pull request だけで動く生成物の検査は走らないので、公開へは進まず、生成物の検査は上の `update_readme.py --check` をローカルで実行する。main の push・merge・tag・本番適用は別の承認が要る。
 - この Mac で対象を絞った pytest を走らせる前に、収集（`run_check.py --json --download-files`）か別の pytest が動いていないかを確かめる。動いていれば上限を決めて待ち、空かなければ始めない。検出を表示するだけで続行しない。
 - macOS の BSD `sed` は `\b` を扱わない。単語境界の置換は `perl -pi` を使う。改名後の呼出元確認は `git grep` の結果を切り詰めずに全件見る。
 - Hermes 実SDKとの統合は CI の pinned Hermes 環境で別に検証される。ローカル pytest の成功と区別する。
