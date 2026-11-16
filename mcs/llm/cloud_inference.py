@@ -270,7 +270,11 @@ class CloudInferenceUnit:
                     outcome = dict(metadata)
                 value = _save_result(lambda: cloud_policy.record_result(ledger, reservation, outcome,
                     **({"answer": answer} if answer is not None else {})))
-                if isinstance(metadata.get('http_class'), str) and re.fullmatch(r'http_[1-5][0-9]{2}', metadata['http_class']):
+                if (isinstance(metadata.get('http_class'), str)
+                        and re.fullmatch(r'http_[1-5][0-9]{2}', metadata['http_class'])
+                        # A 200 without usage is charged at the maximum and unsettled in the
+                        # receipts: the unit stays held like a send with no response.
+                        and not (metadata['http_class'] == 'http_200' and metadata.get('usage') is None)):
                     self._unresolved = False
                 self.completed_reservations.append(reservation)
                 if answer is not None:

@@ -16,6 +16,7 @@ import uuid
 
 import anthropic_client
 import bounded_http
+import cloud_client
 from anthropic_client import AnthropicError, MODEL
 from anthropic_client import MAX_TOKENS as MAX_TOKENS, validate_usage as validate_usage
 import openai_client
@@ -1741,7 +1742,10 @@ def record_result(ledger, reservation, metadata, *, answer=None):
     from semantic_runtime import reserve_artifact, _record_cloud_circuit_result_tx
     error_kind = metadata.get("error_kind")
     http_class = metadata.get("http_class")
-    if http_class == "http_200" and metadata.get("usage") is None:
+    if (http_class == "http_200" and metadata.get("usage") is None
+            and error_kind != cloud_client.RESPONSE_TOO_LARGE):
+        # An oversized response is the reader's own bound, not a failed price check: it is
+        # charged at the reserved maximum and stays unsettled without stopping other sends.
         error_kind = "pricing_unverified"
     error = None
     if error_kind:
