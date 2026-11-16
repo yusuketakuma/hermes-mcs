@@ -381,3 +381,95 @@ def test_slack_unstarted_file_group_keeps_its_no_journal_started_path(led, tmp_p
     assert group["part_id"] not in {p["part_id"] for p in receipt["parts_held"]}
     plan = notify_recovery.card_part_resolve_plan(led, render["delivery_id"], group["part_id"])
     assert plan["expected_state"] == "pending"
+
+
+# ---------- Discord group parts that cannot share a verified surface attempt ----------
+
+def _delivered_body_render(led):
+    render, spec = _body_render(led)
+    claim = _claim(led, render, spec)
+    assert notify_transport.apply_transport_receipt(
+        led, envelopes.transport_receipt(claim, "delivered", message_id="card-msg"),
+        TK_CFG, now=NOW)["applied"]
+    return render, spec
+
+
+def _assert_reported(led, receipt, render, part_ids, reason):
+    rows = _rows(led, render["delivery_id"])
+    for pid in part_ids:
+        assert (rows[pid]["state"], rows[pid]["error_code"], rows[pid]["attempt_id"]) == (
+            "unknown", reason, None), pid
+        # never planned: no attempt id to settle and no evidence was invented
+        assert "error" in notify_recovery.card_part_resolve_plan(led, render["delivery_id"], pid)
+    listed = {p["part_id"]: p["reason"] for p in receipt["parts_unresolvable"]}
+    assert all(listed[pid] == reason for pid in part_ids)
+    assert not set(part_ids) & {p["part_id"] for p in receipt["parts_held"]}
+    assert reason in notify_recovery.PART_HOLD_REASONS
+    report = notify_recovery.part_hold_report(led)
+    assert report["parts"]["unknown"][reason] == len(part_ids)
+    notice = led.db.execute("SELECT payload FROM notify_outbox WHERE kind='update_notice'").fetchone()
+    assert f"part 要調査={len(receipt['parts_unresolvable'])}件" in notice["payload"]
+    assert "個別調査が必要" in notice["payload"]
+
+
+def test_unbound_group_spec_is_reported_not_left_pending(led):
+    render, spec = _delivered_body_render(led)
+    groups = _groups(spec)
+    # a non-string surface must neither crash reconcile nor bind a sqlite parameter
+    tampered = json.loads(render["spec_json"])
+    next(p for p in tampered["parts"]["manifest"] if p["kind"] == "file_group")["surface"] = {"x": 1}
+    with led.db:
+        led.db.execute("UPDATE notification_renders SET spec_json=? WHERE delivery_id=?",
+                       (json.dumps(tampered), render["delivery_id"]))
+    receipt = _restore_led(led)
+    grouped = [pid for g in groups for pid in (g["part_id"], *g["members"])]
+    _assert_reported(led, receipt, render, grouped, notify_reconcile.GROUP_SPEC_UNVERIFIED)
+    # the surfaces themselves stay operator-resolvable with their own attempt
+    for g in groups:
+        assert _rows(led, render["delivery_id"])[g["surface"]]["attempt_id"] == \
+            envelopes.part_attempt_id(render["delivery_id"], g["surface"])
+
+
+def test_group_spec_with_a_changed_payload_hash_is_reported(led):
+    render, spec = _delivered_body_render(led)
+    groups = _groups(spec)
+    tampered = json.loads(render["spec_json"])
+    tampered["parts"]["manifest"][0]["name"] = "synthetic-other"     # sealed hash no longer matches
+    with led.db:
+        led.db.execute("UPDATE notification_renders SET spec_json=? WHERE delivery_id=?",
+                       (json.dumps(tampered), render["delivery_id"]))
+    receipt = _restore_led(led)
+    _assert_reported(led, receipt, render, [pid for g in groups for pid in (g["part_id"], *g["members"])],
+                     notify_reconcile.GROUP_SPEC_UNVERIFIED)
+
+
+def test_missing_or_unsettled_surface_is_reported_and_rerun_announces_once(led):
+    render, spec = _delivered_body_render(led)
+    first, second = _groups(spec)
+    with led.db:
+        led.db.execute("DELETE FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+                       (render["delivery_id"], first["surface"]))
+        led.db.execute("UPDATE notification_render_parts SET state='held' WHERE delivery_id=? AND part_id=?",
+                       (render["delivery_id"], second["surface"]))
+    (Path(notify_spool.data_root(led)) / "discord_state").mkdir(parents=True, exist_ok=True)
+    (Path(notify_spool.data_root(led)) / "discord_state" / "journal-w1.jsonl").write_text("{broken\n")
+    receipt = _restore_led(led)
+    _assert_reported(led, receipt, render, [first["part_id"], *first["members"]],
+                     notify_reconcile.GROUP_SURFACE_MISSING)
+    _assert_reported(led, receipt, render, [second["part_id"], *second["members"]],
+                     notify_reconcile.GROUP_SURFACE_UNRESOLVABLE)
+    again = notify_reconcile.reconcile_after_restore(led, TK_CFG, now=NOW + 1)
+    assert again["parts_unresolvable"] == receipt["parts_unresolvable"]
+    assert led.db.execute("SELECT COUNT(*) FROM notify_outbox WHERE kind='update_notice'").fetchone()[0] == 1
+
+
+def test_ungrouped_discord_parts_do_not_need_a_manifest(world):
+    world.seed()
+    world.dispatch()
+    render = _deliver_card_only(world)
+    with world.led.db:
+        world.led.db.execute("UPDATE notification_renders SET spec_json='{' WHERE delivery_id=?",
+                             (render["delivery_id"],))
+    _restore_from(world, backup_names.JOURNAL_HORIZON_MAX_S + 86400)
+    receipt = notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW)
+    assert receipt["parts_unresolvable"] == [] and len(receipt["parts_held"]) == 3

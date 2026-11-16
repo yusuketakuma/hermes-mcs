@@ -60,10 +60,10 @@ Slack・Discord・米国の AI 事業者は「外国にある第三者」に当�
 
 ## 4. 外部AI送信の施設確認（新規導入）
 
-新しく導入した環境は `~/.mcs/external_transfer.json` に「確認待ち」を記録し、APIキーを登録しても
-Anthropic・OpenAI・Jev へ自動では送りません。次を確認したうえで、責任者が記録します。
-`cloud_llm.provider` が `auto`（既定）なら、キーがあり確認で許可されたサービスを `provider_order` の順に選ぶため、
-OpenAI だけを許可した場合も Anthropic のキーが残っていれば OpenAI が使われます。
+新しく導入した環境は `~/.mcs/external_transfer.json` に「確認待ち」を記録し、APIキーを登録しても、
+`mode` を明示しても、Anthropic・OpenAI・Jev へは送りません。次を確認したうえで、責任者が記録します。
+`cloud_llm.provider` が `auto`（既定）なら、`mode` の明示の有無にかかわらず、キーがあり確認で許可されたサービスを
+`provider_order` の順に選ぶため、OpenAI だけを許可した場合は Anthropic のキーが残っていても OpenAI が使われます。
 
 1. 送信先との契約で、入力が学習に使われず、保存期間と削除が定められていること
    （Anthropic の Zero Data Retention や OpenAI の保持条件は、組織ごとの契約が必要です。[ANTHROPIC.md](ANTHROPIC.md)）。
@@ -99,8 +99,13 @@ python3 mcs/ops/mcs_compliance.py status
 再実行で `external_transfer_superseded` が出たときは、その確認より後に別の確認が記録されています。
 
 確認記録は確認者・根拠・対象サービス・日時を残し、再確認したときは前回の記録を履歴（直近5回）に移します。
-`config.json` で `mode` を明示した設定は、施設の判断として確認記録に関係なく従います。
-既存の環境（このファイルが無い環境）はこれまでどおりキーで自動有効化するので、
+このファイルがある環境では、`config.json` で `mode` を明示した場合も、確認に含まれないサービスへは送りません
+（`mode` は off として扱います。明示した `off` は常に off です）。`provider` を `auto` にしていれば、キーがあり確認に
+含まれる提供元を `provider_order` の順に選び、`provider` を明示していれば、そのサービスが確認に含まれるまで送りません。
+止めている間は `mcs_setup.py check` の注意・`mcs_setup.py doctor` の `providers` の `block_reason`・`mcs setup` の保存前の確認が、
+エラーコード `external_transfer_review_required` で理由を示します。続ける場合は `--services` にそのサービスを含めて
+確認を記録し直してください。確認待ち・記録を読めない状態も同じく送信しません。
+既存の環境（このファイルが無い環境）はこれまでどおり、`mode` を省略すればキーで自動有効化し、明示すればその設定に従うので、
 同じ確認を済ませていない場合は `mode=off` を明示してください。
 
 ## 5. 閲覧・操作の記録（アクセスログ）

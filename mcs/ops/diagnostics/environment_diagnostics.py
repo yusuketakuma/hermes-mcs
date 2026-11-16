@@ -118,8 +118,15 @@ def cloud_setting_warnings(cfg: dict, root) -> list[str]:
         if reason in _KEY_REASONS:   # present but rejected; plain absence is reported elsewhere
             out.append(f"{key}（{label}）を使えません: {_KEY_REASONS[reason]}。"
                        f"このキーは使われず、{label}への送信は行いません。エラーコード: {reason}")
-    cloud, errors = (cloud_policy.resolve_settings(cfg, root) if cfg else cloud_policy.cloud_config({}))
+    cloud, errors, held = (cloud_policy.resolve_selection(cfg, root) if cfg
+                           else (*cloud_policy.cloud_config({}), None))
     provider = {"anthropic": "Anthropic", "openai": "OpenAI"}.get(cloud.get("provider"), "外部AI")
+    import external_transfer
+    import semantic_policy
+    if held:
+        out.append(external_transfer.hold_message(provider))
+    if cfg and semantic_policy.runtime_review_held(cfg, root=root):
+        out.append(external_transfer.hold_message("Jev"))
     if "config: cloud_llm_cost_limit_required" in errors:
         out.append(f"{provider}のキーはありますが、日・月の費用上限を両方解除し、期間予算もないため送信していません。"
                    "`mcs_setup.py cloud-llm budget --daily-usd 金額 --monthly-usd 金額`、または期間予算"

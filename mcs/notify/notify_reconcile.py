@@ -27,7 +27,9 @@ marker — which blocks all send grants — clears only after the receipt
 is durable. Holds release via ``ops.card_resolve`` (operator-verified
 rebind/resume) or a factual receipt settling the attempt; parts made
 ``unknown`` by a restore beyond the journal horizon release via
-``ops.card_part_resolve`` or their own late receipt.
+``ops.card_part_resolve`` or their own late receipt, except Discord group
+parts with no verifiable surface attempt, which the receipt lists under
+``parts_unresolvable`` for manual investigation.
 
 A tainted journal keeps the marker (reconcile re-runs every tick and
 alerts only for newly recorded holds). Nothing here clears it
@@ -52,6 +54,7 @@ from mcs_util import loads_dict
 import notify_transport
 import notify_journal
 import notify_parts
+import notify_recovery
 
 _RESULT_VALUES = ("delivered", "not_sent", "unknown")
 _TERMINAL = ("delivered", "not_sent", "cancelled")
@@ -366,22 +369,43 @@ def _reconcile_attempt(ledger, db, cfg, aid, info, dirs, now) -> dict:
 
 
 BEYOND_HORIZON = "restore_beyond_journal_horizon"
+# A Discord file_group part that cannot share a verified surface attempt is
+# made ``unknown`` without one: ops.card_part_resolve cannot plan it, and the
+# receipt, notice and part_hold_report name why it needs manual investigation.
+GROUP_SPEC_UNVERIFIED = "restore_group_spec_unverified"
+GROUP_SURFACE_MISSING = "restore_group_surface_missing"
+GROUP_SURFACE_UNRESOLVABLE = "restore_group_surface_unresolvable"
+UNRESOLVABLE = (GROUP_SPEC_UNVERIFIED, GROUP_SURFACE_MISSING, GROUP_SURFACE_UNRESOLVABLE)
 
 
-def _discord_group_surfaces(render) -> dict | None:
+def _discord_group_surfaces(db, delivery_id):
     """part_id -> surface for every Discord ``file_group`` anchor and member
-    (they share the surface's wire attempt); ``None`` if the sealed manifest
-    cannot be read, so grouped parts are never given an attempt of their own."""
-    try:
-        manifest = json.loads(render["spec_json"])["parts"]["manifest"]
-        out = {}
-        for item in manifest:
-            if item.get("kind") == "file_group":
-                for pid in (item["part_id"], *(item.get("members") or ())):
-                    out[pid] = item["surface"]
-        return out
-    except (KeyError, TypeError, ValueError, AttributeError):
+    (they share the surface's wire attempt); ``None`` when the render has no
+    group; GROUP_SPEC_UNVERIFIED when its spec does not bind to the sealed
+    render and card the way group recovery requires, so no grouped part is
+    given an attempt of its own."""
+    if not db.execute("SELECT 1 FROM notification_render_parts WHERE delivery_id=? "
+                      "AND kind='file_group' LIMIT 1", (delivery_id,)).fetchone():
         return None
+    try:
+        spec = notify_recovery.discord_bound_spec(db, notify_scope.render_row(db, delivery_id))
+        return {pid: item["surface"] for item in spec["parts"]["manifest"]
+                if item["kind"] == "file_group"
+                for pid in (item["part_id"], *item["members"])}
+    except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+        return GROUP_SPEC_UNVERIFIED
+
+
+def _surface_attempt(db, delivery_id, surface):
+    """(attempt_id, None) when the group can be resolved through its surface —
+    a delivered surface, or an unknown one resolved first — else (None, reason)."""
+    row = db.execute("SELECT state,attempt_id FROM notification_render_parts "
+                     "WHERE delivery_id=? AND part_id=?", (delivery_id, surface)).fetchone()
+    if row is None:
+        return None, GROUP_SURFACE_MISSING
+    if row["state"] not in ("delivered", "unknown") or not row["attempt_id"]:
+        return None, GROUP_SURFACE_UNRESOLVABLE
+    return row["attempt_id"], None
 
 
 def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
@@ -390,21 +414,25 @@ def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
 
     No receipt for them can arrive from a journal that no longer reaches the
     backup, and pending parts of the latest render block every later update
-    (notify_card_state.PARTS_IN_FLIGHT_SQL). ``unknown`` with the worker's own
-    part attempt id makes them operator-resolvable through
+    (notify_card_state.PARTS_IN_FLIGHT_SQL). A pending thread is marked too,
+    although only an unknown one blocks: it may already exist remotely, and
+    an update issued past it could create a second thread. ``unknown`` with
+    the worker's own part attempt id makes them operator-resolvable through
     ``ops.card_part_resolve`` while a real late receipt still settles them.
     A Discord file group's anchor and members take their surface's attempt id
     (the card's, or the body_part's after it is marked), exactly as the
-    surface's own receipt would settle them; with no surface attempt or an
-    unreadable manifest they stay pending. Older superseded renders never
-    block an update and are left alone; a Slack file_group that never started
-    keeps its own ``no_journal_started`` path. A missing record is not proof
-    of non-delivery, so nothing becomes not_sent. Returns the parts this run
+    surface's own receipt would settle them. When the spec does not bind,
+    the surface row is missing, or the surface is neither delivered nor
+    unknown with an attempt, they become ``unknown`` with no attempt and a
+    reason in UNRESOLVABLE: still blocking, never planned, and reported for
+    manual investigation. Older superseded renders never block an update and
+    are left alone; a Slack file_group that never started keeps its own
+    ``no_journal_started`` path. A missing record is not proof of
+    non-delivery, so nothing becomes not_sent. Returns the parts this run
     changed; re-runs find no pending parts left and change nothing."""
     from adapters.common import envelopes
     rows = db.execute(
-        "SELECT p.delivery_id,p.part_id,p.kind,p.attempt_id,r.card_id,"
-        "r.transport,r.spec_json "
+        "SELECT p.delivery_id,p.part_id,p.kind,p.attempt_id,r.card_id,r.transport "
         "FROM notification_render_parts p JOIN notification_renders r "
         "ON r.delivery_id=p.delivery_id WHERE r.state='delivered' "
         "AND r.card_id IS NOT NULL AND (? IS NULL OR r.created_at <= ?) "
@@ -414,33 +442,29 @@ def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
         "AND p.state='pending' AND NOT (r.transport='slack' "
         "AND p.kind='file_group' AND p.attempt_id IS NULL) "
         "ORDER BY p.delivery_id,p.idx", (restored_at, restored_at)).fetchall()
-    held = []
+    marked = []
 
-    def mark(row, aid):
+    def mark(row, aid, reason=BEYOND_HORIZON):
         changed = db.execute(
             "UPDATE notification_render_parts SET state='unknown',"
             "error_code=?,attempt_id=?,updated_at=? "
             "WHERE delivery_id=? AND part_id=? AND state='pending'",
-            (BEYOND_HORIZON, aid, now, row["delivery_id"],
-             row["part_id"])).rowcount
+            (reason, aid, now, row["delivery_id"], row["part_id"])).rowcount
         if changed:
-            held.append({"delivery_id": row["delivery_id"],
-                         "part_id": row["part_id"], "kind": row["kind"],
-                         "card_id": row["card_id"], "attempt_id": aid,
-                         "reason": BEYOND_HORIZON})
+            marked.append(_part_entry(row, aid, reason))
 
     with db:
         db.execute("BEGIN IMMEDIATE")
-        grouped = []
-        surfaces = {}
+        grouped, unresolvable, surfaces = [], [], {}
         for row in rows:
             if row["transport"] == "discord" and row["kind"] in ("attachment_part", "file_group"):
                 if row["delivery_id"] not in surfaces:
-                    surfaces[row["delivery_id"]] = _discord_group_surfaces(row)
+                    surfaces[row["delivery_id"]] = _discord_group_surfaces(db, row["delivery_id"])
                 group = surfaces[row["delivery_id"]]
-                if group is None:
+                if group == GROUP_SPEC_UNVERIFIED:
+                    unresolvable.append((row, group))
                     continue
-                if row["part_id"] in group:
+                if group is not None and row["part_id"] in group:
                     grouped.append((row, group[row["part_id"]]))
                     continue
             mark(row, row["attempt_id"] or envelopes.part_attempt_id(
@@ -448,29 +472,37 @@ def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
         # surfaces first (above), so a pending body_part surface already
         # carries the attempt id its group shares
         for row, surface in grouped:
-            found = db.execute(
-                "SELECT attempt_id FROM notification_render_parts "
-                "WHERE delivery_id=? AND part_id=?",
-                (row["delivery_id"], surface)).fetchone()
-            if found is not None and found["attempt_id"]:
-                mark(row, found["attempt_id"])
-        for delivery_id in sorted({h["delivery_id"] for h in held}):
+            aid, reason = _surface_attempt(db, row["delivery_id"], surface)
+            if reason:
+                unresolvable.append((row, reason))
+            else:
+                mark(row, aid)
+        for row, reason in unresolvable:
+            mark(row, None, reason)
+        for delivery_id in sorted({h["delivery_id"] for h in marked}):
             notify_parts.update_state(db, delivery_id, now)
-    return held
+    return marked
 
 
-def _beyond_horizon_parts(db) -> list:
+def _part_entry(row, aid, reason):
+    return {"delivery_id": row["delivery_id"], "part_id": row["part_id"],
+            "kind": row["kind"], "card_id": row["card_id"], "attempt_id": aid,
+            "reason": reason}
+
+
+def _beyond_horizon_parts(db) -> tuple[list, list]:
     """Every part still ``unknown`` from a restore beyond the journal horizon,
-    so a re-run's receipt still lists what awaits ``ops.card_part_resolve``."""
-    return [{"delivery_id": r["delivery_id"], "part_id": r["part_id"],
-             "kind": r["kind"], "card_id": r["card_id"],
-             "attempt_id": r["attempt_id"], "reason": BEYOND_HORIZON}
-            for r in db.execute(
-                "SELECT p.delivery_id,p.part_id,p.kind,p.attempt_id,r.card_id "
-                "FROM notification_render_parts p JOIN notification_renders r "
-                "ON r.delivery_id=p.delivery_id WHERE p.state='unknown' "
-                "AND p.error_code=? ORDER BY p.delivery_id,p.idx",
-                (BEYOND_HORIZON,)).fetchall()]
+    so a re-run's receipt still lists what awaits ``ops.card_part_resolve``
+    (first) and what it cannot plan and needs manual investigation (second)."""
+    codes = (BEYOND_HORIZON, *UNRESOLVABLE)
+    parts = [_part_entry(r, r["attempt_id"], r["error_code"]) for r in db.execute(
+        "SELECT p.delivery_id,p.part_id,p.kind,p.attempt_id,p.error_code,r.card_id "
+        "FROM notification_render_parts p JOIN notification_renders r "
+        "ON r.delivery_id=p.delivery_id WHERE p.state='unknown' "
+        f"AND p.error_code IN ({','.join('?' * len(codes))}) "
+        "ORDER BY p.delivery_id,p.idx", codes).fetchall()]
+    return ([p for p in parts if p["reason"] == BEYOND_HORIZON],
+            [p for p in parts if p["reason"] != BEYOND_HORIZON])
 
 
 def _hold_rows(db) -> int:
@@ -562,9 +594,9 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
             verdicts.append(v)
             held.append(v)
         parts_marked = _unknown_beyond_horizon_parts(db, restored_at, now)
-        parts_held = _beyond_horizon_parts(db)
+        parts_held, parts_unresolvable = _beyond_horizon_parts(db)
     else:
-        parts_marked, parts_held = [], []
+        parts_marked, parts_held, parts_unresolvable = [], [], []
     # an unlinked delivered/unknown effect means the spec file that
     # would map delivery->intent is gone — hold every pending
     # interactive event rather than guess which would duplicate
@@ -625,6 +657,7 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
                         + mass_held + len(text_held),
         "text_held": text_held,
         "parts_held": parts_held,
+        "parts_unresolvable": parts_unresolvable,
         "journal_incomplete": journal_incomplete,
     }
     notify_spool.publish_file(root, notify_spool.RESTORE_RECEIPT,
@@ -643,10 +676,13 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
             "notice_code": "delivery_reconcile_held",
             "text": "[MCS] DB復元後の配送照合で未解決の配送があります"
                     f"（card held={len(held)}件、part unknown={len(parts_held)}件、"
+                    f"part 要調査={len(parts_unresolvable)}件、"
                     f"text held={len(text_held)}件）。"
                     "restore_reconcile.json を確認してください。"
                     "カードは ops.card_resolve、スレッド・本文・添付は "
                     "ops.card_part_resolve で確認・解除し、"
+                    "要調査の添付は送信記録と照合できないため ops.card_part_resolve では解除できず、"
+                    "送信先と通知ワーカーの記録の個別調査が必要です。"
                     "text は個別の配送確認と復旧方針の判断が必要です。"})
         cards.mark_snapshot_dirty(db)
         db.commit()

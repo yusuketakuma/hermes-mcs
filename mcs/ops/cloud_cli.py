@@ -49,10 +49,14 @@ def pending_key_presence(root=None):
 
 
 def _settings(cfg, root=None):
+    return _selection(cfg, root)[:3]
+
+
+def _selection(cfg, root=None):
     # an unreadable config arrives as {}: fail closed like the runtime, never auto-enable
-    settings, errors = policy.resolve_settings(cfg if cfg else {"cloud_llm": {"mode": "off"}}, root)
+    settings, errors, held = policy.resolve_selection(cfg if cfg else {"cloud_llm": {"mode": "off"}}, root)
     key = bool(policy.provider_key(settings["provider"], root))
-    return settings, errors, key
+    return settings, errors, key, held
 
 
 @contextmanager
@@ -179,7 +183,7 @@ def _dryrun_report(db, deadline, now, provider="anthropic"):
 
 def diagnostics(cfg, *, root=None, probe=False):
     """Return only effective modes, key presence, budgets and optional safe accounting."""
-    cloud, errors, key = _settings(cfg, root)
+    cloud, errors, key, held = _selection(cfg, root)
     from semantic_policy import BACKLOG_BUDGET_RESERVE, runtime_config
     semantic, sem_errors = runtime_config(cfg, root=root)
     jev_key = bool(jev.api_key(root))
@@ -199,6 +203,12 @@ def diagnostics(cfg, *, root=None, probe=False):
                 "provider_budgets": cloud["provider_budgets"],
                 "accounting": None, "dry_run": None,
                 "block_reason": "cost_limit_required" if errors and not policy.blocking_errors(errors) else None}}
+    import external_transfer
+    from semantic_policy import runtime_review_held
+    if held:
+        out["anthropic"]["block_reason"] = external_transfer.HOLD_CODE
+    if cfg and runtime_review_held(cfg, root=root):
+        out["jev"]["block_reason"] = external_transfer.HOLD_CODE
     eligible_scope = cloud["project_ids"] is None or bool(set(cloud["project_ids"]) - set(cloud["exclude_project_ids"]))
     window_reason = policy.setting_block_reason(cloud) if not errors else None
     if key and cloud["mode"] in ("on", "shadow") and window_reason:

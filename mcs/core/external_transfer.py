@@ -1,10 +1,11 @@
 """Hold the facility's recorded review before patient data may be sent to an external AI automatically.
 
-A new installation writes an unacknowledged record. Until a person records
-the review (who, when, why, which services), a registered API key no longer
-turns Anthropic, OpenAI or Jev on by itself. Installations without the record
-keep their previous behaviour. An explicit ``mode`` in config.json is an
-operator decision and is not changed here. A review is recorded only by the
+A new installation writes an unacknowledged record. While the record exists,
+Anthropic, OpenAI and Jev send only when a person has recorded the review
+(who, when, why, which services) and it names that service — with an omitted
+or an explicit ``mode`` in config.json alike (cloud_policy.select_settings,
+semantic_policy.semantic_config). Installations without the record keep their
+previous behaviour. A review is recorded only by the
 human-confirmed ``ops.external_transfer_acknowledge`` command, whose receipt
 names the same command id as the published record.
 """
@@ -64,16 +65,27 @@ def status(root=None) -> dict:
     return {"state": "acknowledged", "auto_enable": True, "acknowledged": ack}
 
 
+PENDING = {"state": "pending", "auto_enable": False}
+HOLD_CODE = "external_transfer_review_required"
+
+
 def service_allowed(state: dict, service: str) -> bool:
-    """True when ``state`` (from :func:`status`) lets a present key switch ``service`` on."""
+    """True when ``state`` (from :func:`status`) lets ``service`` send."""
     if state["state"] != "acknowledged":
         return state["auto_enable"]
     return service in state["acknowledged"].get("services", ())
 
 
 def auto_enable_allowed(service: str, root=None) -> bool:
-    """True when a present key may switch ``service`` on without an explicit mode."""
+    """True when this installation's review lets ``service`` send."""
     return service_allowed(status(root), service)
+
+
+def hold_message(label: str) -> str:
+    """The operator wording for a service the review keeps from sending."""
+    return (f"{label}への送信は、施設の確認を記録するまで始まりません（記録された確認に{label}が含まれていません）。"
+            f"`mcs_compliance.py acknowledge --services` で{label}を含めて確認を記録してください"
+            f"（docs/guides/COMPLIANCE.md）。エラーコード: {HOLD_CODE}")
 
 
 def require(root=None) -> bool:

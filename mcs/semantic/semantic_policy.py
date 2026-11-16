@@ -50,13 +50,27 @@ MODES = ("off", "shadow", "assist", "enforce")
 FACT_SOURCES = ("legacy", "shadow", "canonical")
 
 
-def semantic_config(cfg: dict, *, key_present=False, root=None) -> tuple[dict, list]:
+def review_held(block, key_present, transfer_status) -> bool:
+    """True when Jev would run (an explicit mode other than off, or an omitted
+    mode with a present key) but the facility review does not cover Jev.
+    Without a review record every service is allowed, so nothing is held."""
+    import external_transfer
+    if isinstance(block, dict) and "mode" in block:
+        wanted = block["mode"] in MODES and block["mode"] != "off"
+    else:
+        wanted = key_present is True and (block is None or isinstance(block, dict))
+    return wanted and not external_transfer.service_allowed(transfer_status(), "jev")
+
+
+def semantic_config(cfg: dict, *, key_present=False, root=None,
+                    transfer_status=None) -> tuple[dict, list]:
     """Validate config.json's "semantic" block. Unknown/malformed values
     fail CLOSED — mode falls back to off and each error is reported, so a
     typo can never widen the rollout stage (spec §22.1, AT-067).
 
-    A present key turns an omitted mode on only after the facility's
-    external-transfer review allows Jev, so every caller shares that gate."""
+    While a facility review record exists, Jev runs only when the review
+    covers it, whether the mode is omitted or explicit; every caller shares
+    that gate. ``transfer_status()`` defaults to the record under ``root``."""
     errors = []
     out = {"mode": "off", "summary_mode": "off", "loop_mode": "off",
            "extract_qc": "off",
@@ -82,9 +96,14 @@ def semantic_config(cfg: dict, *, key_present=False, root=None) -> tuple[dict, l
         out["daily_request_budget"] = 0
     if block.keys() - out.keys():
         errors.append("config: semantic_unknown_field")
-    if key_present is True and "mode" not in block:
+    if transfer_status is None:
         import external_transfer
-        key_present = external_transfer.auto_enable_allowed("jev", root)
+
+        def transfer_status():
+            return external_transfer.status(root)
+    held = review_held(block, key_present, transfer_status)
+    if held and "mode" not in block:
+        key_present = False
     mode = block.get("mode", "assist" if key_present is True else "off")
     if mode not in MODES:
         errors.append("config: semantic_mode_invalid")
@@ -203,17 +222,31 @@ def semantic_config(cfg: dict, *, key_present=False, root=None) -> tuple[dict, l
     if not errors and fact_source != 'legacy':
         from semantic_candidate import candidate_fingerprint
         out['candidate_fingerprint'] = candidate_fingerprint(cfg)
+    if held:
+        out["mode"] = "off"
     if errors:
         out["fact_source"] = "legacy"
         out["mode"] = "off"
     return out, errors
 
 
-def runtime_config(cfg: dict, *, root=None) -> tuple[dict, list]:
-    """Resolve an omitted Jev mode from this MCS dotenv without widening its scope."""
+def runtime_key_present(cfg, root) -> bool:
+    """Whether this MCS dotenv's Jev key can switch an omitted mode on."""
     block = cfg.get("semantic")
     explicit = isinstance(block, dict) and "mode" in block
-    return semantic_config(cfg, key_present=not explicit and bool(jev.api_key(root)), root=root)
+    return not explicit and bool(jev.api_key(root))
+
+
+def runtime_config(cfg: dict, *, root=None) -> tuple[dict, list]:
+    """Resolve an omitted Jev mode from this MCS dotenv without widening its scope."""
+    return semantic_config(cfg, key_present=runtime_key_present(cfg, root), root=root)
+
+
+def runtime_review_held(cfg: dict, *, root=None) -> bool:
+    """True when this installation's facility review keeps Jev from running."""
+    import external_transfer
+    return review_held(cfg.get("semantic"), runtime_key_present(cfg, root),
+                       lambda: external_transfer.status(root))
 
 
 def policy_fingerprint(scfg: dict) -> str:

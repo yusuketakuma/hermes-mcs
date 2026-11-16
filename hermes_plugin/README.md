@@ -271,7 +271,9 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   通知を hold し、人が `ops.card_resolve` で確認・解除する（attempt の無い hold は
   `attempt_id` に `delivery_id` を指定する）。カード本体が届いて thread・本文・添付の
   結果が無い部品（各カードの最新 render のみ）は `restore_beyond_journal_horizon` の
-  unknown にし、`ops.card_part_resolve` で確認・解除する。この全件 hold は復元マーカーに
+  unknown にし、`ops.card_part_resolve` で確認・解除する（送信待ちの thread も次の更新を
+  止める）。Discord の添付のまとまりで面の attempt と照合できないものは `restore_group_*` の
+  unknown になり、照合 receipt の `parts_unresolvable` に載る（個別調査）。この全件 hold は復元マーカーに
   backup のパスが残る復元（mcs_update の復元）だけが対象で、`mcs_backup` の復元・
   手動の `mark_restored` は従来どおりの照合になり、90日を超えた journal の根拠は
   残らない。`data/backups` 外の複製から restore する運用はこの保証の対象外。

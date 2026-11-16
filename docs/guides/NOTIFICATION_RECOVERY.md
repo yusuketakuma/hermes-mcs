@@ -264,7 +264,9 @@ CLIが既存契約に従ってDiscord=1・Slack=2・LINE WORKS=3の版を付け�
 `card_resolve`の受付時にはsnapshot上のrenderの存在を追加条件にしません。
 復元でrenderやattemptが失われた場合も、適用時に既存の復元保留・保存scope・journalを照合します。
 90日より古いバックアップからの復元で、送信記録（attempt）の無いまま保留されたrenderは、`attempt_id`に`delivery_id`と同じ値を指定します。`mark_not_sent`で解除すると、そのカードの次のrenderを発行します。
-同じ復元で、カード本体は届いたもののスレッド・本文・添付の結果が記録されていない部品は、`restore_beyond_journal_horizon`の`unknown`になります（各カードの最新renderだけが対象です。以前のrenderは次の更新を止めないため変更しません）。`card_part_plan`で計画を出し、`card_part_resolve`で確認・解除すると、カードの次の更新を発行できます。記録が無いことは未送信の証拠ではないため、`not_sent`にはしません。Discordの添付のまとまり（file_group）は、載せる面（カードか本文）と同じattemptで照合するため、まとまり全体を1つの計画で解除します。Slackの未着手のfile_groupは従来どおり`no_journal_started`で解除します。
+同じ復元で、カード本体は届いたもののスレッド・本文・添付の結果が記録されていない部品は、`restore_beyond_journal_horizon`の`unknown`になります（各カードの最新renderだけが対象です。以前のrenderは次の更新を止めないため変更しません）。`card_part_plan`で計画を出し、`card_part_resolve`で確認・解除すると、カードの次の更新を発行できます。記録が無いことは未送信の証拠ではないため、`not_sent`にはしません。送信待ちのスレッドは作成済みの可能性があり、次の更新で2つ目のスレッドを作り得るため、従来は更新を止めなかった場合も`unknown`にして、確認まで次の更新を止めます。Discordの添付のまとまり（file_group）は、載せる面（カードか本文）と同じattemptで照合するため、まとまり全体を1つの計画で解除します。本文の面も結果不明なら、面を先に解除します。Slackの未着手のfile_groupは従来どおり`no_journal_started`で解除します。
+Discordのまとまりで、保存済みの計画がrender・カード・payload hashと一致しない、面の部品が無い、面が配送済みでも結果不明でもないか送信記録が無い場合は、面のattemptで照合できないため`card_part_plan`の計画は作れません。これらはattemptを持たない`unknown`になり、`error_code`がそれぞれ`restore_group_spec_unverified`・`restore_group_surface_missing`・`restore_group_surface_unresolvable`になります。`restore_reconcile.json`では`parts_held`と別の`parts_unresolvable`に理由とともに載り、`delivery_reconcile_held`の通知に要調査の件数、部品の保留件数（`by_error_code`・`part_hold_report`）にも理由別に出ます。送信先とワーカーの記録を個別に調べて対応してください。
+部品の固定エラーコードには、これらと`restore_beyond_journal_horizon`が含まれます。
 受付できたことは、保留の解除や証拠の成立を意味しません。
 
 ## 4. 未発行の通知を送らず取り消す（Slack・Discord・LINE WORKS）

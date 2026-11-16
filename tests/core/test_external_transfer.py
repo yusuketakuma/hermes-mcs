@@ -29,9 +29,9 @@ def test_new_installation_waits_for_a_recorded_review(tmp_path):
     assert stat.S_IMODE(os.stat(external_transfer.path(tmp_path)).st_mode) == 0o600
     assert cloud_policy.resolve_settings({}, tmp_path)[0]["mode"] == "off"
     assert semantic_policy.runtime_config({}, root=tmp_path)[0]["mode"] == "off"
-    # An explicit operator mode is a decision of its own and is left alone.
+    # An explicit mode does not bypass the pending review either.
     explicit = {"cloud_llm": {"mode": "on", "project_ids": [1]}}
-    assert cloud_policy.resolve_settings(explicit, tmp_path)[0]["mode"] == "on"
+    assert cloud_policy.resolve_settings(explicit, tmp_path)[0]["mode"] == "off"
 
     with pytest.raises(ValueError, match="confirm_human_required"):
         external_transfer.acknowledge(by="管理者", reason="契約確認", services=["anthropic"],
@@ -148,9 +148,9 @@ def test_auto_provider_skips_a_keyed_provider_the_facility_did_not_approve(tmp_p
     assert (settings["mode"], settings["provider"]) == ("on", "openai")
     # An explicit provider is the operator's choice and is not swapped for an approved one.
     assert _resolved({"cloud_llm": {"provider": "anthropic"}}, tmp_path)[:2] == ("off", "anthropic")
-    # An explicit mode keeps the key-only pick and is not gated.
+    # An explicit mode chooses among approved providers too.
     explicit = {"cloud_llm": {"mode": "on", "project_ids": [1]}}
-    assert _resolved(explicit, tmp_path)[:2] == ("on", "anthropic")
+    assert _resolved(explicit, tmp_path)[:2] == ("on", "openai")
     external_transfer.acknowledge(by="管理者", reason="契約確認", services=["anthropic"],
                                   confirm_human=True, root=tmp_path, command_id="a")
     assert _resolved({}, tmp_path)[:2] == ("on", "anthropic")
@@ -166,3 +166,101 @@ def test_auto_provider_reads_the_review_once(tmp_path, monkeypatch):
     monkeypatch.setattr(external_transfer, "status", lambda root=None: calls.append(root) or real(root))
     assert _resolved({}, tmp_path)[:2] == ("on", "openai")
     assert len(calls) == 1
+
+
+_EXPLICIT = {"cloud_llm": {"mode": "on", "project_ids": [1]}}
+
+
+def _selection(cfg, root):
+    settings, errors, held = cloud_policy.resolve_selection(cfg, root)
+    return settings["mode"], settings["provider"], held
+
+
+def test_explicit_mode_without_a_record_is_unchanged(tmp_path):
+    _both_keys(tmp_path)
+    assert _selection(_EXPLICIT, tmp_path) == ("on", "anthropic", None)
+    pinned = {"cloud_llm": {**_EXPLICIT["cloud_llm"], "provider": "openai"}}
+    assert _selection(pinned, tmp_path) == ("on", "openai", None)
+    jev_on = {"semantic": {"mode": "assist", "project_ids": [1]}}
+    assert semantic_policy.runtime_config(jev_on, root=tmp_path)[0]["mode"] == "assist"
+    assert semantic_policy.runtime_review_held(jev_on, root=tmp_path) is False
+
+
+def test_explicit_mode_sends_only_to_an_approved_provider(tmp_path):
+    _both_keys(tmp_path)
+    external_transfer.require(tmp_path)
+    assert _selection(_EXPLICIT, tmp_path) == ("off", "anthropic", "anthropic")   # pending
+    external_transfer.acknowledge(by="管理者", reason="契約確認", services=["openai"],
+                                  confirm_human=True, root=tmp_path, command_id="o")
+    assert _selection(_EXPLICIT, tmp_path) == ("on", "openai", None)
+    pinned = {"cloud_llm": {**_EXPLICIT["cloud_llm"], "provider": "anthropic"}}
+    assert _selection(pinned, tmp_path) == ("off", "anthropic", "anthropic")
+    # resolved settings stay resolved when a sender re-reads them
+    settings = cloud_policy.resolve_settings(pinned, tmp_path)[0]
+    assert cloud_policy.resolve_settings({"cloud_llm": settings}, tmp_path)[0]["mode"] == "off"
+    assert not cloud_policy.in_scope(settings, "patient_context", 1)
+    # an explicit off stays off and is never reported as held
+    assert _selection({"cloud_llm": {"mode": "off"}}, tmp_path) == ("off", "anthropic", None)
+
+
+def test_unreadable_record_holds_an_explicit_mode(tmp_path):
+    _both_keys(tmp_path)
+    path = external_transfer.path(tmp_path)
+    with open(path, "w") as stream:
+        stream.write("{")
+    os.chmod(path, 0o600)
+    assert _selection(_EXPLICIT, tmp_path)[::2] == ("off", "anthropic")
+
+
+def test_explicit_jev_mode_needs_the_review(tmp_path):
+    _keys(tmp_path)
+    jev_on = {"semantic": {"mode": "assist", "project_ids": [1]}}
+    external_transfer.require(tmp_path)
+    assert semantic_policy.runtime_config(jev_on, root=tmp_path)[0]["mode"] == "off"
+    assert semantic_policy.runtime_review_held(jev_on, root=tmp_path) is True
+    assert semantic_policy.runtime_review_held({}, root=tmp_path) is True        # omitted mode, key present
+    external_transfer.acknowledge(by="管理者", reason="契約確認", services=["anthropic"],
+                                  confirm_human=True, root=tmp_path, command_id="a")
+    assert semantic_policy.semantic_config(jev_on, root=tmp_path)[0]["mode"] == "off"
+    external_transfer.acknowledge(by="管理者", reason="Jev確認", services=["jev"],
+                                  confirm_human=True, root=tmp_path, command_id="j")
+    assert semantic_policy.runtime_config(jev_on, root=tmp_path)[0]["mode"] == "assist"
+    assert semantic_policy.runtime_review_held(jev_on, root=tmp_path) is False
+    off = {"semantic": {"mode": "off"}}
+    external_transfer.acknowledge(by="管理者", reason="取消", services=["openai"],
+                                  confirm_human=True, root=tmp_path, command_id="x")
+    assert semantic_policy.runtime_review_held(off, root=tmp_path) is False
+
+
+def test_selection_reads_each_key_once_and_the_review_only_when_needed(tmp_path, monkeypatch):
+    _both_keys(tmp_path)
+    external_transfer.require(tmp_path)
+    keys, reviews = [], []
+    real_key, real_status = cloud_policy.provider_key, external_transfer.status
+    monkeypatch.setattr(cloud_policy, "provider_key", lambda name, root=None: keys.append(name) or real_key(name, root))
+    monkeypatch.setattr(external_transfer, "status", lambda root=None: reviews.append(root) or real_status(root))
+    cloud_policy.resolve_settings({}, tmp_path)
+    assert sorted(keys) == ["anthropic", "openai"] and len(reviews) == 1
+    keys.clear(), reviews.clear()
+    cloud_policy.resolve_settings({"cloud_llm": {"mode": "off"}}, tmp_path)
+    assert reviews == []
+
+
+def test_doctor_and_status_name_the_review_hold(tmp_path):
+    import cloud_cli
+    from environment_diagnostics import cloud_setting_warnings
+    _both_keys(tmp_path)
+    cfg = {"mcs_login_id": "synthetic",
+           "cloud_llm": {"mode": "on", "provider": "anthropic", "project_ids": [1]},
+           "semantic": {"mode": "assist", "project_ids": [1]}}
+    assert not any(external_transfer.HOLD_CODE in w for w in cloud_setting_warnings(cfg, tmp_path))
+    assert cloud_cli.diagnostics(cfg, root=tmp_path)["anthropic"]["block_reason"] is None
+    external_transfer.require(tmp_path)
+    external_transfer.acknowledge(by="管理者", reason="契約確認", services=["openai"],
+                                  confirm_human=True, root=tmp_path, command_id="o")
+    warnings = cloud_setting_warnings(cfg, tmp_path)
+    assert external_transfer.hold_message("Anthropic") in warnings
+    assert external_transfer.hold_message("Jev") in warnings
+    report = cloud_cli.diagnostics(cfg, root=tmp_path)
+    assert report["anthropic"]["mode"] == "off"
+    assert report["anthropic"]["block_reason"] == report["jev"]["block_reason"] == external_transfer.HOLD_CODE

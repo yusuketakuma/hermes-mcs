@@ -165,3 +165,17 @@ def test_broken_symlink_backup_keeps_the_target(monkeypatch, tmp_path):
     (backup,) = tmp_path.glob('c.json.corrupt-*')
     assert backup.is_symlink() and target.read_text() == 'synthetic'
     assert json.loads(path.read_text())['notify_target'] == 'local'
+
+
+@pytest.mark.parametrize('existing', [True, False])
+def test_init_preview_knows_whether_this_save_writes_the_review(monkeypatch, tmp_path, existing):
+    cfg, path = _setup(monkeypatch, tmp_path)
+    if not existing:
+        path.unlink()
+    seen = []
+    monkeypatch.setattr(mcs_setup.setup_wizard, 'wizard', lambda current: current.update(cfg) or 1)
+    monkeypatch.setattr(mcs_setup.setup_wizard, 'wizard_optional_features', lambda *_a, **_k: None)
+    monkeypatch.setattr(mcs_setup.setup_wizard, 'confirm_save',
+                        lambda *_a, **k: seen.append(k['new_installation']) and False)
+    assert mcs_setup.main(['init']) == 130
+    assert seen == [not existing]

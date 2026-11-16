@@ -261,8 +261,10 @@ def cmd_init(args) -> int:
         if not mcs_runtime.standalone(cfg) and interactive in ("slack", "discord"):
             args.plugin_profile = _plugin_profile(args, interactive)
         import cloud_cli
+        # a missing config is published with the pending facility review (_init_save_config)
         if not setup_wizard.confirm_save(cfg, plugin_profile=getattr(args, "plugin_profile", None),
-                                         key_presence=cloud_cli.pending_key_presence(HOME)):
+                                         key_presence=cloud_cli.pending_key_presence(HOME),
+                                         new_installation=initial_config[0] == "missing"):
             print("設定を中止しました。設定ファイル・辞書・認証情報は保存していません。")
             return 130
         args._init_side_effects_started = True
