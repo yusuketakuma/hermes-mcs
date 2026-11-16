@@ -77,3 +77,18 @@ def test_jev_observation_is_independent_of_cloud_accounting_failure(world, monke
     assert out['anthropic']['status'] == 'unknown'
     assert out['jev']['backlog_budget']['state'] == 'recorded'
     assert out['jev']['backlog_budget']['reason'] == 'backlog_budget_reserved'
+
+
+@pytest.mark.parametrize('probe_reason', ['paused', 'daily_budget'])
+def test_probe_keeps_the_review_hold_beside_its_own_reason(world, monkeypatch, probe_reason):
+    import os
+    import external_transfer
+    _ledger, root = world
+    (root / '.env').write_text('MCS_ANTHROPIC_API_KEY=synthetic-a\n')
+    os.chmod(root / '.env', 0o600)
+    external_transfer.require(root)
+    monkeypatch.setattr(cloud_cli.policy, 'global_block_reason', lambda *a, **k: probe_reason)
+    cfg = {'cloud_llm': {'mode': 'on', 'provider': 'anthropic', 'project_ids': [1]}}
+    out = cloud_cli.diagnostics(cfg, root=root, probe=True)['anthropic']
+    assert out['block_reason'] == external_transfer.HOLD_CODE
+    assert out['also_block_reason'] == probe_reason and out['status'] == 'local'

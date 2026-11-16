@@ -566,8 +566,7 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
     skip_meta = {}
     if final_status == "SKIPPED":
         reason = r.get("jev_skip_reason")
-        if reason not in {"not_configured", "daily_budget", "backlog_reserved", "disabled",
-                          "service_unavailable", "circuit_open"}:
+        if reason not in jev.SKIP_REASONS:
             raise ValueError("semantic_skip_reason_invalid")
         skip_meta = {"jev_skip_reason": reason, "jev_evaluated": False,
                      "code_checks": "passed", "summary_hash": mcs_util.payload_hash(summary)}

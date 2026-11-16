@@ -70,7 +70,13 @@ def semantic_config(cfg: dict, *, key_present=False, root=None,
 
     While a facility review record exists, Jev runs only when the review
     covers it, whether the mode is omitted or explicit; every caller shares
-    that gate. ``transfer_status()`` defaults to the record under ``root``."""
+    that gate. An explicit mode stays as configured and only Jev is
+    withheld: ``jev_held`` is True, every Jev client honours it and jobs run
+    with the skip reason ``semantic_jev.REVIEW_HELD`` (local processing,
+    the cloud backlog route and enforce publication behave as with any other
+    unavailable Jev). An omitted mode exists only because of the Jev key, so
+    a hold leaves it off. ``transfer_status()`` defaults to the record under
+    ``root``."""
     errors = []
     out = {"mode": "off", "summary_mode": "off", "loop_mode": "off",
            "extract_qc": "off",
@@ -91,6 +97,7 @@ def semantic_config(cfg: dict, *, key_present=False, root=None,
     block = cfg.get("semantic", {})
     if not isinstance(block, dict):
         out["daily_request_budget"] = 0
+        out["jev_held"] = False
         return out, ["config: semantic_not_object"]
     if "mode" in block:
         out["daily_request_budget"] = 0
@@ -222,8 +229,7 @@ def semantic_config(cfg: dict, *, key_present=False, root=None,
     if not errors and fact_source != 'legacy':
         from semantic_candidate import candidate_fingerprint
         out['candidate_fingerprint'] = candidate_fingerprint(cfg)
-    if held:
-        out["mode"] = "off"
+    out["jev_held"] = held   # set after the unknown-field check: never a config key
     if errors:
         out["fact_source"] = "legacy"
         out["mode"] = "off"

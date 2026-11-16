@@ -29,7 +29,8 @@ rebind/resume) or a factual receipt settling the attempt; parts made
 ``unknown`` by a restore beyond the journal horizon release via
 ``ops.card_part_resolve`` or their own late receipt, except Discord group
 parts with no verifiable surface attempt, which the receipt lists under
-``parts_unresolvable`` for manual investigation.
+``parts_unresolvable`` for manual investigation; they become resolvable when
+their surface later settles or is resolved (promote_group_parts).
 
 A tainted journal keeps the marker (reconcile re-runs every tick and
 alerts only for newly recorded holds). Nothing here clears it
@@ -408,6 +409,44 @@ def _surface_attempt(db, delivery_id, surface):
     return row["attempt_id"], None
 
 
+def promote_group_parts(db, now, delivery_id=None) -> list:
+    """Re-evaluate report-only Discord group parts (``unknown``, an UNRESOLVABLE
+    reason, no attempt) inside the caller's transaction.
+
+    Once their sealed spec binds and their surface carries a usable attempt
+    (it settled late, or an operator resolved it), they take that attempt with
+    ``restore_beyond_journal_horizon``: exactly what a resolvable surface gave
+    them at reconcile, so the surface's receipt or ``ops.card_part_resolve``
+    settles them. Runs from every beyond-horizon reconcile and from every
+    settled Discord surface (notify_transport.settle_part_receipt); a part
+    already promoted, or still unresolvable, is left unchanged."""
+    codes = UNRESOLVABLE
+    rows = db.execute(
+        "SELECT p.delivery_id,p.part_id,p.kind,p.error_code,r.card_id "
+        "FROM notification_render_parts p JOIN notification_renders r "
+        "ON r.delivery_id=p.delivery_id WHERE r.transport='discord' "
+        "AND p.state='unknown' AND p.attempt_id IS NULL "
+        f"AND p.error_code IN ({','.join('?' * len(codes))}) "
+        "AND (? IS NULL OR p.delivery_id=?) ORDER BY p.delivery_id,p.idx",
+        (*codes, delivery_id, delivery_id)).fetchall()
+    promoted, surfaces = [], {}
+    for row in rows:
+        if row["delivery_id"] not in surfaces:
+            surfaces[row["delivery_id"]] = _discord_group_surfaces(db, row["delivery_id"])
+        group = surfaces[row["delivery_id"]]
+        if not isinstance(group, dict) or row["part_id"] not in group:
+            continue
+        aid, reason = _surface_attempt(db, row["delivery_id"], group[row["part_id"]])
+        if reason is None and db.execute(
+                "UPDATE notification_render_parts SET error_code=?,attempt_id=?,updated_at=? "
+                "WHERE delivery_id=? AND part_id=? AND state='unknown' AND attempt_id IS NULL "
+                "AND error_code=?",
+                (BEYOND_HORIZON, aid, now, row["delivery_id"], row["part_id"],
+                 row["error_code"])).rowcount:
+            promoted.append(_part_entry(row, aid, BEYOND_HORIZON))
+    return promoted
+
+
 def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
     """Mark the pending thread/body/attachment/file-group parts of each card's
     latest delivered render from the restored backup ``unknown``.
@@ -425,7 +464,7 @@ def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
     the surface row is missing, or the surface is neither delivered nor
     unknown with an attempt, they become ``unknown`` with no attempt and a
     reason in UNRESOLVABLE: still blocking, never planned, and reported for
-    manual investigation. Older superseded renders never block an update and
+    manual investigation until promote_group_parts finds their surface usable. Older superseded renders never block an update and
     are left alone; a Slack file_group that never started keeps its own
     ``no_journal_started`` path. A missing record is not proof of
     non-delivery, so nothing becomes not_sent. Returns the parts this run
@@ -479,7 +518,10 @@ def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
                 mark(row, aid)
         for row, reason in unresolvable:
             mark(row, None, reason)
-        for delivery_id in sorted({h["delivery_id"] for h in marked}):
+        # a re-run (the marker stays while the journal is incomplete) finds no
+        # pending parts left, but a surface may have become usable since
+        promoted = promote_group_parts(db, now)
+        for delivery_id in sorted({h["delivery_id"] for h in (*marked, *promoted)}):
             notify_parts.update_state(db, delivery_id, now)
     return marked
 

@@ -611,7 +611,7 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None, new_installati
     project_scope = "全対象" if semantic["project_ids"] is None else shown(semantic["project_ids"])
     features = ("mode", "summary_mode", "loop_mode", "extract_qc")
     if jev_held:
-        print("  外部Jev追加解析: 無効。" + external_transfer.hold_message("Jev"))
+        print("  外部Jev追加解析: 無効。" + external_transfer.hold_message("Jev", transfer_status()))
     elif any(semantic[key] != "off" for key in features) and semantic["daily_request_budget"] > 0:
         print(f"  外部Jev追加解析: 対象プロジェクト {project_scope} の投稿本文を、"
               "機能ごとの許可条件がそろった場合にJev APIへ送ります。患者名を含む本文は匿名化しません。")
@@ -636,7 +636,8 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None, new_installati
               "詳細: docs/guides/ANTHROPIC.md")
     elif cloud_held:
         print(f"  外部AI追加処理: {cloud['mode']}。"
-              + external_transfer.hold_message({"openai": "OpenAI"}.get(cloud_held, "Anthropic")))
+              + external_transfer.hold_message({"openai": "OpenAI"}.get(cloud_held, "Anthropic"),
+                                               transfer_status()))
     else:
         print(f"  外部AI追加処理: {cloud['mode']} / キー未登録・off・dry_runの場合は外部送信しません。")
     print("  OpenAI・Anthropicへの個別の投稿・添付OCR・意味解析の新規送信は行いません。"

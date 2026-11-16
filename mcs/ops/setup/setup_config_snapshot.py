@@ -356,6 +356,13 @@ def _init_reselect_provider(cfg, initial, set_args):
             after.pop(key, None)
 
 
+def _require_review(root):
+    import external_transfer
+    if external_transfer.require(root):
+        print('外部AI（Anthropic・OpenAI・Jev）へは、施設の確認を記録するまで送信しません'
+              '（設定で mode を指定しても同じです。docs/guides/COMPLIANCE.md）')
+
+
 def _init_save_config(cfg, initial, args):
     """Publish the reviewed config under the shared short-lived edit lock."""
     import config_backup
@@ -380,19 +387,19 @@ def _init_save_config(cfg, initial, args):
                 selected_provider=selected, model_owners=current[1]['owners'], jev_model=semantic_jev.JEV_MODEL,
                 lock_fd=lock_fd)
             return
-        elif kind == 'invalid_backup':
+        if kind in ('missing', 'invalid_backup'):
+            # Both publish a fresh config from the reviewed answers, so both start with the
+            # pending review: nothing goes to an external AI, whatever mode the config names,
+            # until the facility records it. The hold is written before the config, so an
+            # interrupted init can never leave a fresh config without it (a rerun sees an
+            # existing config and would not add it).
+            _require_review(parent)
+        if kind == 'invalid_backup':
             args._config_publication_started = True
             backup = config_backup.archive_and_create(CONF_PATH, initial[1], body.encode('utf-8'))
             print(f'設定ファイルの元の内容を {backup} に退避しました')
             return
         if kind == 'missing':
-            import external_transfer
-            # A new installation sends nothing to external AI on a key alone. The hold is
-            # written before the config, so an interrupted init can never leave a config
-            # without it (a rerun sees an existing config and would not add it).
-            if external_transfer.require(parent):
-                print('外部AIへの送信は、施設の確認を記録するまで自動では始まりません'
-                      '（docs/guides/COMPLIANCE.md）')
             args._config_publication_started = True
             safe_io.publish_new_bytes(CONF_PATH, body.encode('utf-8'))
         else:

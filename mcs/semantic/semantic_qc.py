@@ -49,8 +49,7 @@ def skipped_current(db, project_id, message_id, source_id, source_hash, version,
                 continue
             matched = True
             if (not isinstance(content, dict) or content.get("status") != "SKIPPED"
-                    or content.get("reason") not in {"not_configured", "disabled", "daily_budget", "backlog_reserved",
-                                                     "circuit_open", "service_unavailable"}
+                    or content.get("reason") not in jev.SKIP_REASONS
                     or type(meta.get("extract_version")) is not int or meta["extract_version"] != version):
                 return False
             partial = content.get("partial_answers", {})
@@ -286,21 +285,8 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
 
     def guard(stage):
         if skip_reason is not None:
-            from semantic_store import jev_usage_today
             try:
-                runtime._jev_window_check(config_path=cfg_path)
-                used = jev_usage_today(ledger)
-                cap = scfg["daily_request_budget"]
-                if lane == "backlog":
-                    from semantic_policy import BACKLOG_BUDGET_RESERVE
-                    cap -= math.ceil(cap * BACKLOG_BUDGET_RESERVE)
-                if ((skip_reason in ("daily_budget", "backlog_reserved") and used < cap)
-                        or (skip_reason == "disabled" and scfg["daily_request_budget"] > 0)
-                        or (skip_reason == "not_configured" and jev.api_key())
-                        or (skip_reason == "circuit_open" and (not runtime.circuit_open(ledger)
-                            or runtime._circuit_state(ledger)["failure_class"]
-                               not in runtime._CIRCUIT_FAILURE_CLASSES))):
-                    raise ValueError("semantic_skip_reason_stale")
+                runtime.verify_jev_skip(ledger, skip_reason, scfg, lane=lane, cfg_path=cfg_path)
             except (jev.JevError, ValueError):
                 raise runtime.RuntimeOff(stage + ':jev_unverified') from None
         def current_source():
@@ -336,7 +322,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
     def write_skip(reason, partial):
         nonlocal skip_reason
         skip_reason = reason
-        if skip_reason not in {"not_configured", "disabled", "daily_budget", "backlog_reserved", "circuit_open", "service_unavailable"}:
+        if skip_reason not in jev.SKIP_REASONS:
             return "deferred"
         if not isinstance(partial, dict) or set(partial) - set(questions):
             return "failed"

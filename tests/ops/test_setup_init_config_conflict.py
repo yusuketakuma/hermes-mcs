@@ -179,3 +179,28 @@ def test_init_preview_knows_whether_this_save_writes_the_review(monkeypatch, tmp
                         lambda *_a, **k: seen.append(k['new_installation']) and False)
     assert mcs_setup.main(['init']) == 130
     assert seen == [not existing]
+
+
+@pytest.mark.parametrize('kind', ['missing', 'broken', 'symlink', 'valid'])
+def test_a_fresh_config_is_published_with_the_pending_review(monkeypatch, tmp_path, capsys, kind):
+    import external_transfer
+    import mcs_util
+    _, path = _setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(mcs_util, 'HOME', str(tmp_path))
+    if kind == 'missing':
+        path.unlink()
+    elif kind == 'broken':
+        path.write_text('{broken')
+    elif kind == 'symlink':
+        path.unlink()
+        path.symlink_to(tmp_path / 'absent.json')
+    assert mcs_setup.main(['init', '--yes', '--login-id', 'synthetic', '--notify-target', 'local']) == 0
+    record = tmp_path / external_transfer.FILE_NAME
+    if kind == 'valid':
+        # an existing readable config is an existing installation: no record is added
+        assert not record.exists()
+        return
+    assert external_transfer.status(tmp_path)['state'] == 'pending'
+    assert json.loads(path.read_text())['notify_target'] == 'local'
+    out = capsys.readouterr().out
+    assert '施設の確認を記録するまで送信しません' in out and '自動では' not in out

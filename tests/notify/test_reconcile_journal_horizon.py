@@ -473,3 +473,67 @@ def test_ungrouped_discord_parts_do_not_need_a_manifest(world):
     _restore_from(world, backup_names.JOURNAL_HORIZON_MAX_S + 86400)
     receipt = notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW)
     assert receipt["parts_unresolvable"] == [] and len(receipt["parts_held"]) == 3
+
+
+def _held_surface_restore(led, *, keep_marker=False):
+    render, spec = _delivered_body_render(led)
+    _first, second = _groups(spec)
+    with led.db:
+        led.db.execute("UPDATE notification_render_parts SET state='held' WHERE delivery_id=? AND part_id=?",
+                       (render["delivery_id"], second["surface"]))
+    if keep_marker:
+        (Path(notify_spool.data_root(led)) / "discord_state").mkdir(parents=True, exist_ok=True)
+        (Path(notify_spool.data_root(led)) / "discord_state" / "journal-w1.jsonl").write_text("{broken\n")
+    receipt = _restore_led(led)
+    group_parts = [second["part_id"], *second["members"]]
+    _assert_reported(led, receipt, render, group_parts, notify_reconcile.GROUP_SURFACE_UNRESOLVABLE)
+    return render, spec, second, group_parts
+
+
+@pytest.mark.parametrize("files", [True, False])
+def test_unresolvable_group_takes_its_surface_attempt_once_the_surface_settles(led, files):
+    render, spec, group, parts = _held_surface_restore(led)
+    claim = {"spec": spec, "attempt_id": "c" * 16, "worker_id": "b" * 16,
+             "payload_hash": render["payload_hash"]}
+    surface = next(p for p in spec["parts"]["manifest"] if p["part_id"] == group["surface"])
+    late = notify_transport.apply_part_receipt(led, envelopes.part_receipt(
+        claim, surface, "delivered", remote_id="remote-late",
+        files=_echo(spec, group) if files else None), TK_CFG, now=NOW + 1)
+    assert late["applied"], late
+    rows = _rows(led, render["delivery_id"])
+    aid = rows[group["surface"]]["attempt_id"]
+    assert aid == envelopes.part_attempt_id(render["delivery_id"], group["surface"])
+    if files:
+        # the surface's own receipt settles the promoted group, as a reconcile-time attempt would
+        for pid in parts:
+            assert (rows[pid]["state"], rows[pid]["remote_id"], rows[pid]["attempt_id"]) == (
+                "delivered", "remote-late", aid), pid
+    else:
+        for pid in parts:
+            assert (rows[pid]["state"], rows[pid]["error_code"], rows[pid]["attempt_id"]) == (
+                "unknown", notify_reconcile.BEYOND_HORIZON, aid), pid
+        plan = notify_recovery.card_part_resolve_plan(led, render["delivery_id"], group["members"][0])
+        assert "error" not in plan, plan
+        assert plan["part_id"] == group["part_id"] and plan["attempt_id"] == aid
+    with led.db:
+        assert notify_reconcile.promote_group_parts(led.db, NOW + 2) == []     # idempotent
+    assert _rows(led, render["delivery_id"]) == rows
+
+
+def test_reconcile_rerun_promotes_a_group_whose_surface_became_usable(led):
+    render, _spec, group, parts = _held_surface_restore(led, keep_marker=True)
+    aid = envelopes.part_attempt_id(render["delivery_id"], group["surface"])
+    with led.db:   # the surface settled through a path that predates the promotion
+        led.db.execute("UPDATE notification_render_parts SET state='delivered',remote_id='remote-late',"
+                       "attempt_id=? WHERE delivery_id=? AND part_id=?",
+                       (aid, render["delivery_id"], group["surface"]))
+    again = notify_reconcile.reconcile_after_restore(led, TK_CFG, now=NOW + 1)
+    held = {p["part_id"]: p for p in again["parts_held"]}
+    assert all(held[pid]["reason"] == notify_reconcile.BEYOND_HORIZON and held[pid]["attempt_id"] == aid
+               for pid in parts)
+    assert not set(parts) & {p["part_id"] for p in again["parts_unresolvable"]}
+    assert "error" not in notify_recovery.card_part_resolve_plan(led, render["delivery_id"], group["part_id"])
+    third = notify_reconcile.reconcile_after_restore(led, TK_CFG, now=NOW + 2)
+    assert third["parts_held"] == again["parts_held"]
+    assert third["parts_unresolvable"] == again["parts_unresolvable"]
+    assert led.db.execute("SELECT COUNT(*) FROM notify_outbox WHERE kind='update_notice'").fetchone()[0] == 1

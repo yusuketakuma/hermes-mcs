@@ -233,8 +233,8 @@ def test_first_save_previews_the_pending_review_it_writes(monkeypatch, capsys, t
     setup_wizard.confirm_save(cfg, plugin_profile=None, key_presence=keys, new_installation=True)
     output = capsys.readouterr().out
     assert "外部AI追加処理: off" in output
-    assert external_transfer.hold_message("Anthropic") in output
-    assert "外部Jev追加解析: 無効。" + external_transfer.hold_message("Jev") in output
+    assert external_transfer.hold_message("Anthropic", external_transfer.PENDING) in output
+    assert "外部Jev追加解析: 無効。" + external_transfer.hold_message("Jev", external_transfer.PENDING) in output
     assert not (tmp_path / external_transfer.FILE_NAME).exists()     # the preview writes nothing
     # A record that already exists is what the save keeps, so the preview reads it.
     external_transfer.require(tmp_path)
@@ -258,4 +258,5 @@ def test_preview_reports_an_explicit_mode_the_review_holds(monkeypatch, capsys, 
     setup_wizard.confirm_save(cfg, plugin_profile=None,
                               key_presence={"anthropic": True, "openai": True, "jev": False})
     output = capsys.readouterr().out
-    assert "外部AI追加処理: off" in output and external_transfer.hold_message("Anthropic") in output
+    assert "外部AI追加処理: off" in output
+    assert external_transfer.hold_message("Anthropic", external_transfer.status(tmp_path)) in output

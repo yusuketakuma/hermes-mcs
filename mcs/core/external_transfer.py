@@ -1,4 +1,4 @@
-"""Hold the facility's recorded review before patient data may be sent to an external AI automatically.
+"""Hold the facility's recorded review that must name an external AI before patient data is sent to it.
 
 A new installation writes an unacknowledged record. While the record exists,
 Anthropic, OpenAI and Jev send only when a person has recorded the review
@@ -36,13 +36,41 @@ def path(root=None) -> str:
     return os.path.join(root or mcs_util.HOME, FILE_NAME)
 
 
+_RECORD_KEYS = {"v", "required", "acknowledged", "history"}
+_REVIEW_KEYS = {"by", "reason", "services", "at"}
+
+
+def _review_valid(review) -> bool:
+    """One review as the writer records it; unknown service names are kept but never match."""
+    return (isinstance(review, dict) and _REVIEW_KEYS <= review.keys() <= _REVIEW_KEYS | {"command_id"}
+            and all(isinstance(review[key], str) for key in ("by", "reason", "at"))
+            and isinstance(review["services"], list)
+            and all(isinstance(name, str) for name in review["services"])
+            and isinstance(review.get("command_id", ""), str))
+
+
+def _record_valid(record) -> bool:
+    """The shape require() and _replacement() publish, and nothing else."""
+    if (not isinstance(record, dict) or not record.keys() <= _RECORD_KEYS
+            or type(record.get("v")) is not int or record["v"] != 1 or record.get("required") is not True):
+        return False
+    ack, history = record.get("acknowledged"), record.get("history", [])
+    return ((ack is None or _review_valid(ack)) and isinstance(history, list)
+            and all(_review_valid(old) for old in history))
+
+
 def _current(root):
     try:
         raw = safe_io.read_private_bytes(path(root), MAX_BYTES)
     except FileNotFoundError:
         return None, None
-    record = json.loads(raw.decode("utf-8"))
-    if not isinstance(record, dict) or record.get("v") != 1 or record.get("required") is not True:
+    try:
+        record = json.loads(raw.decode("utf-8"))
+    except RecursionError:
+        raise ValueError("external_transfer_record_invalid") from None
+    # Every reader (status, the writer, receipts) refuses a hand-edited shape: a string,
+    # mapping or null where a list of names belongs must never decide what is sent.
+    if not _record_valid(record):
         raise ValueError("external_transfer_record_invalid")
     return raw, record
 
@@ -51,12 +79,17 @@ def _read(root):
     return _current(root)[1]
 
 
+PENDING = {"state": "pending", "auto_enable": False}
+UNREADABLE = {"state": "unreadable", "auto_enable": False}
+HOLD_CODE = "external_transfer_review_required"
+
+
 def status(root=None) -> dict:
     """Describe the review state without exposing anything beyond the record itself."""
     try:
         record = _read(root)
     except (OSError, ValueError, UnicodeError):
-        return {"state": "unreadable", "auto_enable": False}
+        return dict(UNREADABLE)
     if record is None:
         return {"state": "not_required", "auto_enable": True}
     ack = record.get("acknowledged")
@@ -65,15 +98,11 @@ def status(root=None) -> dict:
     return {"state": "acknowledged", "auto_enable": True, "acknowledged": ack}
 
 
-PENDING = {"state": "pending", "auto_enable": False}
-HOLD_CODE = "external_transfer_review_required"
-
-
 def service_allowed(state: dict, service: str) -> bool:
     """True when ``state`` (from :func:`status`) lets ``service`` send."""
     if state["state"] != "acknowledged":
-        return state["auto_enable"]
-    return service in state["acknowledged"].get("services", ())
+        return state["auto_enable"] is True
+    return service in state["acknowledged"]["services"]
 
 
 def auto_enable_allowed(service: str, root=None) -> bool:
@@ -81,9 +110,22 @@ def auto_enable_allowed(service: str, root=None) -> bool:
     return service_allowed(status(root), service)
 
 
-def hold_message(label: str) -> str:
-    """The operator wording for a service the review keeps from sending."""
-    return (f"{label}への送信は、施設の確認を記録するまで始まりません（記録された確認に{label}が含まれていません）。"
+def hold_message(label: str, state: dict) -> str:
+    """The operator wording for a service the review in ``state`` (from :func:`status`) keeps from sending."""
+    record = state.get("state") if isinstance(state, dict) else "unreadable"
+    if record == "unreadable":
+        # acknowledge refuses a broken record (external_transfer_record_invalid, or
+        # external_transfer_io_error for a link), so it has to be repaired first.
+        return (f"施設の確認記録（{FILE_NAME}）を読み取れないため、{label}への送信を止めています。"
+                "削除すると確認記録の無い既存環境と同じ扱いに戻るため、削除しないでください。"
+                "記録が壊れている間は確認の記録も external_transfer_record_invalid で拒否されます。"
+                "先に、MCSを動かすユーザーが所有する権限0600の通常ファイルに戻し、内容を"
+                '{"v": 1, "required": true, "acknowledged": null} にしてから、'
+                f"`mcs_compliance.py acknowledge --services` で{label}を含めて確認を記録し直してください"
+                f"（docs/guides/COMPLIANCE.md）。エラーコード: {HOLD_CODE}")
+    why = ("施設の確認がまだ記録されていない" if record == "pending"
+           else f"記録された施設の確認に{label}が含まれていない")
+    return (f"{why}ため、{label}への送信を止めています。"
             f"`mcs_compliance.py acknowledge --services` で{label}を含めて確認を記録してください"
             f"（docs/guides/COMPLIANCE.md）。エラーコード: {HOLD_CODE}")
 

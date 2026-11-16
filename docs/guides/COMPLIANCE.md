@@ -60,7 +60,8 @@ Slack・Discord・米国の AI 事業者は「外国にある第三者」に当�
 
 ## 4. 外部AI送信の施設確認（新規導入）
 
-新しく導入した環境は `~/.mcs/external_transfer.json` に「確認待ち」を記録し、APIキーを登録しても、
+新しく導入した環境（`config.json` が無い状態、または読めない `config.json` を退避して新しく作る
+`mcs setup init`、および `install.sh` の初回導入）は `~/.mcs/external_transfer.json` に「確認待ち」を記録し、APIキーを登録しても、
 `mode` を明示しても、Anthropic・OpenAI・Jev へは送りません。次を確認したうえで、責任者が記録します。
 `cloud_llm.provider` が `auto`（既定）なら、`mode` の明示の有無にかかわらず、キーがあり確認で許可されたサービスを
 `provider_order` の順に選ぶため、OpenAI だけを許可した場合は Anthropic のキーが残っていても OpenAI が使われます。
@@ -99,12 +100,36 @@ python3 mcs/ops/mcs_compliance.py status
 再実行で `external_transfer_superseded` が出たときは、その確認より後に別の確認が記録されています。
 
 確認記録は確認者・根拠・対象サービス・日時を残し、再確認したときは前回の記録を履歴（直近5回）に移します。
-このファイルがある環境では、`config.json` で `mode` を明示した場合も、確認に含まれないサービスへは送りません
-（`mode` は off として扱います。明示した `off` は常に off です）。`provider` を `auto` にしていれば、キーがあり確認に
-含まれる提供元を `provider_order` の順に選び、`provider` を明示していれば、そのサービスが確認に含まれるまで送りません。
+このファイルがある環境では、`config.json` で `mode` を明示した場合も、確認に含まれないサービスへは送りません。
+Anthropic・OpenAI は `cloud_llm.mode` を off として扱います（明示した `off` は常に off です）。`provider` を `auto` に
+していれば、キーがあり確認に含まれる提供元を `provider_order` の順に選び、`provider` を明示していれば、そのサービスが
+確認に含まれるまで送りません。
+
+Jev が確認に含まれない場合は、明示した `semantic.mode` をそのまま保ち、Jev への送信だけを止めます。このMacでの
+意味解析・`semantic_backlog` の外部AI経路（Anthropic・OpenAI の確認に従います）・公開条件の確認は続き、Jev を使えない
+ほかの場合（キー未登録・予算0など）と同じく、Jev の確認結果は `SKIPPED`、理由 `review_held` として記録します
+（`not_configured` とは区別します）。`enforce` の公開も同じで、Jev の確認を通ったもの（`PASS`）としては扱わず、
+コードによる確認を通った `SKIPPED` として扱います。`mode` を省略した環境の意味解析は Jev のキーで有効になる設定なので、
+確認に Jev が含まれるまで off のままです。患者文脈の品質監査を含む実行中の処理は、確認から Jev が外れると次の Jev
+への要求の前に止まります。手動の合成データ検証（`semantic_jev.py` の配線確認・`mcs_setup.py jev-value`・`semantic_bench`・
+`semantic_shadow_e2e`）は配布されている完全合成のデータだけを送り患者情報を送らないため、この確認の対象外です
+（Jevの日次上限・`semantic.until` には従います）。
 止めている間は `mcs_setup.py check` の注意・`mcs_setup.py doctor` の `providers` の `block_reason`・`mcs setup` の保存前の確認が、
-エラーコード `external_transfer_review_required` で理由を示します。続ける場合は `--services` にそのサービスを含めて
+エラーコード `external_transfer_review_required` で理由を示します（`doctor --probe` で停止・予算の理由も見つかったときは、
+それを `also_block_reason` に並べます）。続ける場合は `--services` にそのサービスを含めて
 確認を記録し直してください。確認待ち・記録を読めない状態も同じく送信しません。
+
+確認を狭めたとき、すでに送信の予約（利用記録）を持っている Anthropic・OpenAI の処理単位は、そのまま保留されます。
+保留の間は新しい送信をしませんが、予約は残り、このMacでの処理へも切り替えません（送信済みかもしれない要求を
+二重に扱わないためです）。保留が解けるのは、`--services` にそのサービスを含めて確認を記録し直したとき（その処理単位が
+外部AIで続きます）か、`config.json` で `cloud_llm.mode` を `off` と明示したとき（その処理単位は外部AIの対象から外れ、
+このMacでの処理に戻ります）のどちらかです。`mode` を省略しただけでは保留は解けません。
+
+`external_transfer.json` を読めない（形式が違う・権限が0600でない・リンクやディレクトリになっている）間は、
+すべての外部AIへの送信を止め、`acknowledge` も `external_transfer_record_invalid`（リンクでは `external_transfer_io_error`）
+で受け付けません。このファイルは削除しないでください（削除すると確認記録の無い既存環境と同じ扱いに戻ります）。
+MCSを動かすユーザーが所有する権限0600の通常ファイルに戻し、内容を `{"v": 1, "required": true, "acknowledged": null}`
+（確認待ち）にしてから、確認を記録し直してください。
 既存の環境（このファイルが無い環境）はこれまでどおり、`mode` を省略すればキーで自動有効化し、明示すればその設定に従うので、
 同じ確認を済ませていない場合は `mode=off` を明示してください。
 

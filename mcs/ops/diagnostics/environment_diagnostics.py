@@ -124,9 +124,9 @@ def cloud_setting_warnings(cfg: dict, root) -> list[str]:
     import external_transfer
     import semantic_policy
     if held:
-        out.append(external_transfer.hold_message(provider))
+        out.append(external_transfer.hold_message(provider, external_transfer.status(root)))
     if cfg and semantic_policy.runtime_review_held(cfg, root=root):
-        out.append(external_transfer.hold_message("Jev"))
+        out.append(external_transfer.hold_message("Jev", external_transfer.status(root)))
     if "config: cloud_llm_cost_limit_required" in errors:
         out.append(f"{provider}のキーはありますが、日・月の費用上限を両方解除し、期間予算もないため送信していません。"
                    "`mcs_setup.py cloud-llm budget --daily-usd 金額 --monthly-usd 金額`、または期間予算"

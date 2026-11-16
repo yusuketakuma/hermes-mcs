@@ -693,6 +693,43 @@ def _jev_window_check(retryable: bool = False, *, config_path=None):
         raise JevError("budget_exceeded", "semantic_until_expired", retryable=retryable)
 
 
+def verify_jev_skip(ledger, skip_reason, scfg, *, lane=None, cfg_path=None) -> None:
+    """Confirm a job's recorded Jev skip still holds before it is written.
+
+    Raises ValueError("semantic_skip_reason_stale") when the reason no longer
+    holds (Jev became available), and JevError, ValueError or sqlite3.Error
+    when it cannot be verified; callers treat both as "do not write"."""
+    from semantic_jev import REVIEW_HELD, api_key
+    from semantic_policy import BACKLOG_BUDGET_RESERVE
+    from semantic_store import jev_usage_today
+    _jev_window_check(config_path=cfg_path)
+    used = jev_usage_today(ledger)
+    cap = scfg["daily_request_budget"]
+    if lane == "backlog":
+        cap -= math.ceil(cap * BACKLOG_BUDGET_RESERVE)
+    if ((skip_reason in ("daily_budget", "backlog_reserved") and used < cap)
+            or (skip_reason == "disabled" and scfg["daily_request_budget"] > 0)
+            or (skip_reason == "not_configured" and api_key())
+            or (skip_reason == REVIEW_HELD and not _live_jev_held(scfg, cfg_path))
+            or (skip_reason == "circuit_open" and (not circuit_open(ledger)
+                or _circuit_state(ledger)["failure_class"] not in _CIRCUIT_FAILURE_CLASSES))):
+        raise ValueError("semantic_skip_reason_stale")
+
+
+def _live_jev_held(scfg, cfg_path) -> bool:
+    """The facility review hold on Jev as the live config resolves it now."""
+    if cfg_path is None:
+        return scfg.get("jev_held") is True
+    from mcs_util import load_config
+    from semantic_policy import runtime_config
+    return runtime_config(load_config(cfg_path))[0].get("jev_held") is True
+
+
+# Guard stages right before a Jev request is reserved or sent ("jev_result",
+# after a response arrived, is not one: an answer already paid for is kept).
+JEV_SEND_STAGES = ("jev_attempt", "jev_reserve", "jev_reserved")
+
+
 def _check_reservation_day(ledger, artifact_id, day):
     """Reject a reservation whose check and durable timestamp span JST days."""
     from semantic_jev import JevError
@@ -890,6 +927,9 @@ def guard(ledger, token: JobToken, *, deadline: float,
         current_scfg, _ = parse_cfg(current_cfg)
         if current_scfg.get("mode") == "off":
             raise RuntimeOff(stage)
+        if stage in JEV_SEND_STAGES and current_scfg.get("jev_held") is True:
+            # a review withdrawn mid-job stops the next Jev request, not local work
+            raise RuntimeOff(stage + ":jev_review")
         projects = current_scfg.get('project_ids')
         if projects is not None and token.project_id not in projects:
             raise RuntimeOff(stage + ':scope')

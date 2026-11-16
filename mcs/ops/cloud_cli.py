@@ -189,7 +189,8 @@ def diagnostics(cfg, *, root=None, probe=False):
     jev_key = bool(jev.api_key(root))
     out = {
         "jev": {"mode": semantic["mode"], "key_present": jev_key,
-                "status": "invalid" if sem_errors else "local" if not jev_key or semantic["mode"] == "off" else "configured",
+                "status": "invalid" if sem_errors else "local" if (
+                    not jev_key or semantic["mode"] == "off" or semantic["jev_held"]) else "configured",
                 "daily_request_budget": semantic["daily_request_budget"],
                 "scope": "all" if semantic["project_ids"] is None else "none" if not semantic["project_ids"] else "selected",
                 "backlog_budget": None},
@@ -247,7 +248,10 @@ def diagnostics(cfg, *, root=None, probe=False):
                 out["anthropic"]["accounting"] = policy.usage_report(borrowed)
                 out["anthropic"]["dry_run"] = _dryrun_report(db, deadline, time.time(), cloud["provider"])
                 reason = policy.global_block_reason(borrowed, model=cloud["model"]) or policy.budget_block_reason(borrowed, cloud)
-                if reason == "paused":
+                if reason and held:
+                    # the review hold stays the reason shown; the probe's own reason is kept beside it
+                    out["anthropic"]["also_block_reason"] = reason
+                elif reason == "paused":
                     out["anthropic"].update(status="local", block_reason=reason)
                 elif reason:
                     out["anthropic"].update(status="blocked", block_reason=reason)

@@ -216,15 +216,18 @@ def test_explicit_jev_mode_needs_the_review(tmp_path):
     _keys(tmp_path)
     jev_on = {"semantic": {"mode": "assist", "project_ids": [1]}}
     external_transfer.require(tmp_path)
-    assert semantic_policy.runtime_config(jev_on, root=tmp_path)[0]["mode"] == "off"
+    # the configured mode stays; only Jev is withheld
+    held = semantic_policy.runtime_config(jev_on, root=tmp_path)[0]
+    assert (held["mode"], held["jev_held"]) == ("assist", True)
     assert semantic_policy.runtime_review_held(jev_on, root=tmp_path) is True
     assert semantic_policy.runtime_review_held({}, root=tmp_path) is True        # omitted mode, key present
     external_transfer.acknowledge(by="管理者", reason="契約確認", services=["anthropic"],
                                   confirm_human=True, root=tmp_path, command_id="a")
-    assert semantic_policy.semantic_config(jev_on, root=tmp_path)[0]["mode"] == "off"
+    assert semantic_policy.semantic_config(jev_on, root=tmp_path)[0]["jev_held"] is True
     external_transfer.acknowledge(by="管理者", reason="Jev確認", services=["jev"],
                                   confirm_human=True, root=tmp_path, command_id="j")
-    assert semantic_policy.runtime_config(jev_on, root=tmp_path)[0]["mode"] == "assist"
+    allowed = semantic_policy.runtime_config(jev_on, root=tmp_path)[0]
+    assert (allowed["mode"], allowed["jev_held"]) == ("assist", False)
     assert semantic_policy.runtime_review_held(jev_on, root=tmp_path) is False
     off = {"semantic": {"mode": "off"}}
     external_transfer.acknowledge(by="管理者", reason="取消", services=["openai"],
@@ -259,8 +262,126 @@ def test_doctor_and_status_name_the_review_hold(tmp_path):
     external_transfer.acknowledge(by="管理者", reason="契約確認", services=["openai"],
                                   confirm_human=True, root=tmp_path, command_id="o")
     warnings = cloud_setting_warnings(cfg, tmp_path)
-    assert external_transfer.hold_message("Anthropic") in warnings
-    assert external_transfer.hold_message("Jev") in warnings
+    state = external_transfer.status(tmp_path)
+    assert external_transfer.hold_message("Anthropic", state) in warnings
+    assert external_transfer.hold_message("Jev", state) in warnings
     report = cloud_cli.diagnostics(cfg, root=tmp_path)
     assert report["anthropic"]["mode"] == "off"
     assert report["anthropic"]["block_reason"] == report["jev"]["block_reason"] == external_transfer.HOLD_CODE
+
+
+def _jev_withheld(scfg):
+    return scfg["mode"] == "off" or scfg.get("jev_held") is True
+
+
+def _hand_edited(root, services):
+    path = external_transfer.path(root)
+    record = {"v": 1, "required": True,
+              "acknowledged": {"by": "管理者", "reason": "契約確認", "services": services,
+                               "at": "2026-11-01T00:00:00Z", "command_id": "a"}}
+    with open(path, "w") as stream:
+        stream.write(__import__("json").dumps(record))
+    os.chmod(path, 0o600)
+
+
+def _assert_fails_closed(root):
+    import cloud_cli
+    from environment_diagnostics import cloud_setting_warnings
+    jev_on = {"semantic": {"mode": "assist", "project_ids": [1]}}
+    assert external_transfer.status(root) == {"state": "unreadable", "auto_enable": False}
+    for service in external_transfer.SERVICES:
+        assert external_transfer.auto_enable_allowed(service, root) is False
+    assert cloud_policy.resolve_settings({}, root)[0]["mode"] == "off"
+    assert cloud_policy.resolve_settings(_EXPLICIT, root)[0]["mode"] == "off"
+    assert _jev_withheld(semantic_policy.runtime_config({}, root=root)[0])
+    assert _jev_withheld(semantic_policy.runtime_config(jev_on, root=root)[0])
+    assert _jev_withheld(semantic_policy.semantic_config(jev_on, key_present=True, root=root)[0])
+    # check / doctor report the hold instead of raising
+    warnings = cloud_setting_warnings({**_EXPLICIT, **jev_on}, root)
+    assert external_transfer.hold_message("Jev", external_transfer.UNREADABLE) in warnings
+    report = cloud_cli.diagnostics({**_EXPLICIT, **jev_on}, root=root)
+    assert report["jev"]["block_reason"] == external_transfer.HOLD_CODE
+
+
+@pytest.mark.parametrize("services", ["anthropic,openai,jev", {"anthropic": 1, "openai": 1, "jev": 1},
+                                      None, 7, ["anthropic", 1], [["jev"]]])
+def test_a_hand_edited_service_list_fails_closed(tmp_path, services):
+    _both_keys(tmp_path)
+    _keys(tmp_path)
+    _hand_edited(tmp_path, services)
+    _assert_fails_closed(tmp_path)
+
+
+@pytest.mark.parametrize("record", [
+    {"v": 1, "required": True, "acknowledged": None, "extra": True},
+    {"v": True, "required": True, "acknowledged": None},
+    {"v": 1, "required": True, "acknowledged": None, "history": {"a": 1}},
+    {"v": 1, "required": True, "acknowledged": None, "history": [{"services": ["jev"]}]},
+    {"v": 1, "required": True, "acknowledged": {"services": ["jev"]}},
+    {"v": 1, "required": True, "acknowledged": []},
+    [1],
+])
+def test_an_unexpected_record_shape_fails_closed(tmp_path, record):
+    import json
+    _keys(tmp_path)
+    path = external_transfer.path(tmp_path)
+    with open(path, "w") as stream:
+        stream.write(json.dumps(record))
+    os.chmod(path, 0o600)
+    _assert_fails_closed(tmp_path)
+
+
+def test_unknown_service_names_in_a_written_record_are_ignored(tmp_path):
+    _both_keys(tmp_path)
+    _hand_edited(tmp_path, ["anthropic", "other"])
+    assert external_transfer.status(tmp_path)["state"] == "acknowledged"
+    assert _selection(_EXPLICIT, tmp_path) == ("on", "anthropic", None)
+    assert external_transfer.auto_enable_allowed("openai", tmp_path) is False
+
+
+def test_the_writers_own_records_stay_readable(tmp_path):
+    external_transfer.require(tmp_path)
+    assert external_transfer.status(tmp_path)["state"] == "pending"
+    external_transfer.acknowledge(by="管理者", reason="契約確認", services=["anthropic"],
+                                  confirm_human=True, root=tmp_path, now=1_790_000_000)
+    external_transfer.acknowledge(by="管理者", reason="再確認", services=["jev", "openai"],
+                                  confirm_human=True, root=tmp_path, command_id="b")
+    state = external_transfer.status(tmp_path)
+    assert state["state"] == "acknowledged" and state["acknowledged"]["services"] == ["jev", "openai"]
+
+
+@pytest.mark.parametrize("kind", ["symlink", "mode_0644", "directory", "deep_json"])
+def test_a_record_that_is_not_a_private_regular_file_fails_closed(tmp_path, kind):
+    _both_keys(tmp_path)
+    _keys(tmp_path)
+    path = external_transfer.path(tmp_path)
+    if kind == "directory":
+        os.mkdir(path, 0o700)
+    else:
+        target = tmp_path / "elsewhere.json" if kind == "symlink" else path
+        external_transfer.require(tmp_path)
+        external_transfer.acknowledge(by="管理者", reason="契約確認", services=list(external_transfer.SERVICES),
+                                      confirm_human=True, root=tmp_path)
+        if kind == "symlink":
+            os.rename(path, target)
+            os.symlink(target, path)
+        elif kind == "mode_0644":
+            os.chmod(path, 0o644)
+        else:
+            with open(path, "w") as stream:
+                stream.write("[" * 8000 + "]" * 8000)
+    _assert_fails_closed(tmp_path)
+
+
+@pytest.mark.parametrize("state, wording", [
+    (external_transfer.PENDING, "施設の確認がまだ記録されていない"),
+    ({"state": "acknowledged", "auto_enable": True, "acknowledged": {"services": ["openai"]}},
+     "記録された施設の確認にJevが含まれていない"),
+    (external_transfer.UNREADABLE, "external_transfer_record_invalid"),
+])
+def test_hold_message_names_the_state(state, wording):
+    message = external_transfer.hold_message("Jev", state)
+    assert wording in message and "送信を止めています" in message and "始まりません" not in message
+    assert external_transfer.HOLD_CODE in message
+    if state is external_transfer.UNREADABLE:
+        assert "削除しないでください" in message and '"acknowledged": null' in message
