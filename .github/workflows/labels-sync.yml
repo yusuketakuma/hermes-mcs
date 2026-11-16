@@ -5,7 +5,7 @@ name: Sync labels and milestones
 on:
   push:
     branches: [main]
-    paths: [.github/labels.json]
+    paths: [.github/labels.json, .github/workflows/labels-sync.yml]
   workflow_dispatch:
 
 permissions: {}
@@ -31,6 +31,24 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          # Rename objects, never delete/recreate: existing Issue/PR associations survive.
+          existing=$(gh api "repos/$GH_REPO/labels?per_page=100" --paginate --jq '.[].name')
+          # Check all collisions before the first write. A later race still fails safely.
+          jq -c '.labels[] | select(.rename_from != null)' .github/labels.json | while IFS= read -r label; do
+            old=$(jq -r .rename_from <<< "$label")
+            new=$(jq -r .name <<< "$label")
+            if grep -qxF "$old" <<< "$existing" && grep -qxF "$new" <<< "$existing"; then
+              echo "Label rename collision: $old -> $new. No labels have been changed." >&2
+              exit 1
+            fi
+          done
+          jq -c '.labels[] | select(.rename_from != null)' .github/labels.json | while IFS= read -r label; do
+            old=$(jq -r .rename_from <<< "$label")
+            new=$(jq -r .name <<< "$label")
+            if grep -qxF "$old" <<< "$existing"; then
+              gh label edit "$old" --name "$new"
+            fi
+          done
           jq -c '.labels[]' .github/labels.json | while IFS= read -r label; do
             gh label create "$(jq -r .name <<< "$label")" \
               --color "$(jq -r .color <<< "$label")" \
