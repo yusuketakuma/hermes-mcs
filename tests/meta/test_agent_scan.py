@@ -77,7 +77,7 @@ def test_a_finding_becomes_an_issue_with_its_place_and_marker(repo):
     assert issue["title"] == "スキャン: 空の一覧で例外になる"
     assert "`mcs/notify/cards.py` 12 行目付近" in issue["body"] and "対象 `mcs/notify`" in issue["body"]
     assert "## 直し方の案\n- 空を先に返す" in issue["body"]
-    assert scan.filed_fingerprints([issue]) == {scan.fingerprint("mcs/notify/cards.py", "空の一覧で例外になる")}
+    assert scan.filed([issue]) == [({scan.fingerprint("mcs/notify/cards.py", "空の一覧で例外になる")}, "mcs/notify/cards.py", "空の一覧で例外になる", 12)]
 
 
 def test_findings_outside_the_area_or_incomplete_are_dropped(repo):
@@ -124,9 +124,12 @@ def test_a_like_worded_finding_far_away_in_the_file_is_its_own_finding(repo):
         _finding(title="通知の更新時に本文が欠落する", line=100),
         _finding(title="通知の更新時に本文が欠落する", line=30),
         _finding(title="通知の更新時に本文が欠落する", line=None),
+        _finding(title="通知の作成時に本文が欠落する", line=20),
+        _finding(title="通知の作成時に本文が欠落する", line=200),
     ]
     filed = scan.issues_to_file(again, closed, ["mcs/notify"], root=repo)
-    assert [issue["body"].split("## 場所\n")[1].splitlines()[0] for issue in filed] == ["`mcs/notify/cards.py` 100 行目付近"]
+    assert [issue["body"].split("## 場所\n")[1].splitlines()[0] for issue in filed] == [
+        "`mcs/notify/cards.py` 100 行目付近", "`mcs/notify/cards.py` 200 行目付近"]
 
 
 def test_a_backlog_of_open_scan_issues_limits_what_is_filed(repo):

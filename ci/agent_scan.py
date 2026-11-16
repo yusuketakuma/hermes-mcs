@@ -35,8 +35,8 @@ TOP_LEVEL_AREAS = ("adapters", "hermes_plugin", "lineworks_adapter", "mcs_standa
 _MARKER = re.compile(r"<!-- agent-scan:([0-9a-f]{12}) -->")
 _PLACE = re.compile(r"^## 場所\n`([^`\n]+)`(?: (\d+) 行目付近)?", re.M)
 TITLE_PREFIX = "スキャン: "
-# Two titles about one file this alike are the same finding reworded, unless both name a line
-# and the lines are further apart than SAME_PLACE (a like-worded finding elsewhere in the file).
+# Two titles about one file this alike are the same finding reworded. Same or reworded, a finding
+# is another one when both name a line and the lines are further apart than SAME_PLACE.
 SAME_TITLE = 0.75
 SAME_PLACE = 40
 
@@ -99,32 +99,28 @@ def fingerprint(path, title):
     return hashlib.sha256(key.encode()).hexdigest()[:12]
 
 
-def filed_fingerprints(issues):
-    """Fingerprints of the scan issues already in the tracker."""
-    return {mark for issue in issues for mark in _MARKER.findall(issue.get("body") or "")}
-
-
 def _key(title):
     return "".join(title.split()).lower()
 
 
-def filed_titles(issues):
-    """{path: [(title key, line or None)]} of the scan issues already in the tracker."""
-    filed = {}
+def filed(issues):
+    """(fingerprints, path, title key, line or None) of each scan issue already in the tracker."""
+    found = []
     for issue in issues:
-        place = _PLACE.search(issue.get("body") or "")
-        if place:
-            title = _key((issue.get("title") or "").removeprefix(TITLE_PREFIX))
-            filed.setdefault(place.group(1), []).append((title, int(place.group(2)) if place.group(2) else None))
-    return filed
+        body = issue.get("body") or ""
+        place = _PLACE.search(body)
+        path, line = (place.group(1), int(place.group(2)) if place.group(2) else None) if place else (None, None)
+        found.append((set(_MARKER.findall(body)), path, _key((issue.get("title") or "").removeprefix(TITLE_PREFIX)), line))
+    return found
 
 
-def _reworded(title, line, earlier):
-    """True when `title` says what one of the `earlier` findings about the same file and place said."""
+def _filed_before(mark, path, title, line, earlier):
+    """True when an `earlier` finding is this one: the same or a reworded title, at the same place."""
     return any(
         (line is None or other_line is None or abs(line - other_line) <= SAME_PLACE)
-        and difflib.SequenceMatcher(None, _key(title), other).ratio() >= SAME_TITLE
-        for other, other_line in earlier)
+        and (mark in marks or (path == other_path
+                               and difflib.SequenceMatcher(None, _key(title), other).ratio() >= SAME_TITLE))
+        for marks, other_path, other, other_line in earlier)
 
 
 def _text(value, limit):
@@ -149,8 +145,7 @@ def _repo_file(path, scanned, root):
 
 def issues_to_file(findings, existing, scanned, root=ROOT):
     """Issues ({title, body}) for the valid, new findings, within the per-run and backlog limits."""
-    seen = filed_fingerprints(existing)
-    titles = filed_titles(existing)
+    earlier = filed(existing)
     limit = min(MAX_ISSUES, MAX_OPEN - open_count(existing))
     issues = []
     for finding in findings if isinstance(findings, list) else []:
@@ -167,10 +162,9 @@ def issues_to_file(findings, existing, scanned, root=ROOT):
         line = finding.get("line")
         line = line if isinstance(line, int) and not isinstance(line, bool) and line > 0 else None
         mark = fingerprint(path, title)
-        if mark in seen or _reworded(title, line, titles.get(path, ())):
+        if _filed_before(mark, path, title, line, earlier):
             continue
-        seen.add(mark)
-        titles.setdefault(path, []).append((_key(title), line))
+        earlier.append(({mark}, path, _key(title), line))
         place = f"`{path}`" + (f" {line} 行目付近" if line else "")
         body = [
             f"自動スキャン（対象 `{_area_of(path, scanned)}`、読み取り専用）が見つけた点です。まだ誰も確かめていません。",
