@@ -141,7 +141,8 @@ def _lose_accounting_lock(ledger, cloud_calls, monkeypatch):
     return unavailable
 
 
-def test_known_paid_response_survives_writer_timeout_and_recovers_without_post(page_store, monkeypatch):
+@pytest.mark.parametrize('padding', ['', ' ' * 270000, ' ' * 260000 + '\t' * 10000], ids=['short', 'long-ascii', 'long-escaped'])
+def test_known_paid_response_survives_writer_timeout_and_recovers_without_post(page_store, monkeypatch, padding):
     import attachment_paid_results as journal
     import attachment_ocr
     from pathlib import Path
@@ -150,6 +151,15 @@ def test_known_paid_response_survives_writer_timeout_and_recovers_without_post(p
     ledger, cfg, key, _, cloud_calls, _ = page_store
     assert run(ledger, cfg, 'local')['done'] == 1
     cfg['cloud_llm']['mode'] = 'on'
+    request = AnthropicClient.request
+
+    def padded(self, method, body, timeout, **kwargs):
+        status, headers, raw = request(self, method, body, timeout, **kwargs)
+        value = json.loads(raw)
+        value['content'][0]['text'] += padding
+        return status, headers, json.dumps(value).encode()
+
+    monkeypatch.setattr(AnthropicClient, 'request', padded)
     unavailable = _lose_accounting_lock(ledger, cloud_calls, monkeypatch)
     with legacy_cloud_routes():
         report = run(ledger, cfg, 'cloud')
@@ -161,7 +171,7 @@ def test_known_paid_response_survives_writer_timeout_and_recovers_without_post(p
     saved = json.loads(read_private_bytes(files[0], journal.LIMIT))
     assert saved['origin']['source_key'] == key
     assert saved['reservation']['reservation_id'] == files[0].stem
-    assert saved['answer']['text'] == '{"symptoms": []}'
+    assert saved['answer']['text'] == '{"symptoms": []}' + padding
     assert worker.current(ledger.db, 1, key, cfg=cfg)['ready'] is False
     unavailable[0] = False
     assert run(ledger, cfg, 'cloud')['done'] == 1

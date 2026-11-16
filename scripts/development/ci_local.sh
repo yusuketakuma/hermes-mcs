@@ -19,10 +19,10 @@
 #   MCS_CI_PYTHON             Python of ci.yml python-version with the ci.yml pytest
 #   MCS_CI_STANDALONE_PYTHON  same, plus deployment/requirements-standalone.txt
 #   MCS_CI_HERMES_AGENT       hermes-agent checkout at the ci.yml ref, with .venv
-# Exit: 0 only when all seven jobs pass on a clean clone; 1 otherwise; 2 usage.
+# Exit: 0 only when all eight jobs pass on a clean clone; 1 otherwise; 2 usage.
 set -u
 
-JOBS="publication-request lint-test hygiene standalone-sdk incident-gates macos hermes-integration"
+JOBS="publication-request linux-tests lint-test hygiene standalone-sdk incident-gates macos hermes-integration"
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)
 out=""
@@ -126,6 +126,7 @@ python_ready() {
 }
 
 # --- prerequisites: a missing one makes the job 実行不能, never pass ---
+prereq_linux_tests() { python_ready; }
 prereq_lint_test() {
     python_ready || return 1
     if command -v uv >/dev/null 2>&1; then
@@ -187,12 +188,22 @@ job_publication_request() {
     HEAD_COMMIT_ID='' RUN_ID=1 RUN_ATTEMPT=1 \
         python3 scripts/development/publication_request.py
 }
+job_linux_tests() {
+    # Local evidence is serial, not a hosted-runner speed measurement.
+    rc=0
+    for group in lifecycle patients rest; do
+        python3 ci/run_pytest_groups.py linux --group "$group" || rc=1
+    done
+    return "$rc"
+}
 job_lint_test() {
     make lint
     python3 scripts/development/check_drug_master_bundle.py
-    python3 ci/run_pytest_groups.py linux
     # PR-only step regenerates and diffs; --check proves the same without writing
     python3 scripts/development/update_readme.py --check
+    # Only evidence from this invocation's preceding Linux job counts.
+    SHARDS_RESULT=$(awk -F '\t' '$1 == "linux-tests" && $2 == "pass" {print "success"}' "$summary")
+    test "$SHARDS_RESULT" = success
 }
 job_hygiene() {
     python3 scripts/development/check_labels_sync.py
@@ -287,7 +298,8 @@ clean_after=$(git -C "$src" status --porcelain --untracked-files=all)
 column -t -s "$(printf '\t')" "$summary" 2>/dev/null || cat "$summary"
 echo "evidence: $out"
 if [ "$all_pass" = 1 ]; then
-    result="ローカル同等チェック: 全6 job pass（${sha}）"
+    job_count=$(printf '%s\n' "$JOBS" | awk '{print NF}')
+    result="ローカル同等チェック: 全${job_count} job pass（${sha}）"
 else
     result="ローカル同等チェック: 未成立（fail・実行不能・未実行・dirty のいずれかあり）"
 fi

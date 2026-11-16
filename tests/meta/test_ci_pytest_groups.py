@@ -33,9 +33,10 @@ def _test_files(arguments):
     ("macos", ("tests/meta", "tests/ops")),
 ])
 def test_fixed_groups_cover_every_test_file_once(lane, targets):
-    left, right = [_test_files(args) for args in groups.GROUPS[lane].values()]
-    assert left and right and not left & right
-    assert left | right == _test_files(targets)
+    parts = [_test_files(args) for args in groups.GROUPS[lane].values()]
+    assert all(parts)
+    assert sum(map(len, parts)) == len(set().union(*parts))
+    assert set().union(*parts) == _test_files(targets)
     # Directory discovery keeps root collect_ignore_glob active for Hermes tests.
     assert all((ROOT / arg).is_dir() for args in groups.GROUPS[lane].values()
                for arg in args if not arg.startswith("-"))
@@ -55,7 +56,8 @@ root = report.parent
 (root / (name + ".args.json")).write_text(json.dumps(args))
 (root / (name + ".started")).write_text(json.dumps({"pid": os.getpid(), "pgid": os.getpgrp()}))
 deadline = time.monotonic() + 10
-while len(list(root.glob("*.started"))) < 2:
+expected_groups = 2 if name in {"meta", "ops"} else 3
+while len(list(root.glob("*.started"))) < expected_groups:
     if time.monotonic() > deadline:
         raise SystemExit("the other group never started")
     time.sleep(0.01)
@@ -91,7 +93,7 @@ def _synthetic_repo(tmp_path):
     return script, tmp_path / "reports"
 
 
-@pytest.mark.parametrize("failed,expected", [(None, 0), ("lifecycle", 1), ("rest", 1)])
+@pytest.mark.parametrize("failed,expected", [(None, 0), ("lifecycle", 1), ("patients", 1), ("rest", 1)])
 def test_both_groups_finish_and_every_exit_is_checked(tmp_path, failed, expected):
     script, output = _synthetic_repo(tmp_path)
     env = dict(os.environ, SYNTHETIC_GROUP_FAIL=failed or "")
@@ -108,7 +110,7 @@ def test_both_groups_finish_and_every_exit_is_checked(tmp_path, failed, expected
         assert f"{name}: exit={code}" in result.stdout
         assert "synthetic result " + name in (output / (name + ".log")).read_text()
         assert (output / (name + ".xml")).is_file()
-    assert starts[0]["pgid"] != starts[1]["pgid"]
+    assert len({start["pgid"] for start in starts}) == len(starts)
     assert all(start["pid"] == start["pgid"] for start in starts)
 
 
@@ -152,7 +154,7 @@ def test_exited_worker_cannot_hang_the_run_with_an_orphaned_output_pipe(tmp_path
                             text=True, capture_output=True, timeout=20)
     assert result.returncode == 1, result.stdout + result.stderr
     pids = [int(path.read_text()) for path in output.glob("*.child")]
-    assert len(pids) == 2
+    assert len(pids) == 3
     deadline = time.monotonic() + 5
     while any(_running(pid) for pid in pids) and time.monotonic() < deadline:
         time.sleep(0.02)
@@ -167,7 +169,7 @@ def test_interruption_reaps_both_process_groups_and_their_children(tmp_path, sig
                                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:
         deadline = time.monotonic() + 15
-        while len(list(output.glob("*.child"))) < 2:
+        while len(list(output.glob("*.child"))) < 3:
             assert process.poll() is None
             assert time.monotonic() < deadline
             time.sleep(0.02)
@@ -188,3 +190,25 @@ def test_interruption_reaps_both_process_groups_and_their_children(tmp_path, sig
                 os.killpg(json.loads(marker.read_text())["pgid"], signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+@pytest.mark.parametrize("name", ["lifecycle", "patients", "rest"])
+@pytest.mark.parametrize("fail", [False, True])
+def test_selected_group_runs_only_its_targets(tmp_path, name, fail):
+    script, output = _synthetic_repo(tmp_path)
+    stub = script.parents[1] / "scripts/synthetic_group.py"
+    stub.write_text(STUB.replace(' < expected_groups:', ' < 1:'))
+    result = subprocess.run([sys.executable, str(script), "linux", "--group", name,
+                             "--output-dir", str(output)],
+                            env=dict(os.environ, SYNTHETIC_GROUP_FAIL=name if fail else ""),
+                            text=True, capture_output=True, timeout=15)
+    assert result.returncode == int(fail), result.stdout + result.stderr
+    assert {p.stem for p in output.glob("*.xml")} == {name}
+
+
+def test_unknown_group_fails_without_starting_any_tests(tmp_path):
+    script, output = _synthetic_repo(tmp_path)
+    result = subprocess.run([sys.executable, str(script), "linux", "--group", "typo",
+                             "--output-dir", str(output)], capture_output=True)
+    assert result.returncode == 2
+    assert not output.exists()
