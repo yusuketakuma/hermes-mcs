@@ -404,6 +404,27 @@ class MCSAuthenticationMixin:
                      last_failed_at=time.time())
         self._write_login_state(state)
 
+    def open_browser_session(self, profile_dir: str = "", chrome_bin: str = "") -> str:
+        """Open this profile's CDP Chrome and reuse a live MCS session without touching the login form.
+
+        Returns 'ok' | 'login_needed' | 'failed' |
+        'manual_required:multi_user_host'. Shared by auto_login and the
+        guided first sign-in (mcs setup browser), where the user signs
+        in by hand and no credential is filled."""
+        # per-attempt journal facts (run_check records them)
+        self.healed_tabs, self.chrome_restarted = 0, False
+        if _other_login_accounts():
+            # the CDP port is reachable by every local account: never open
+            # it or type the password while another account can log in
+            return "manual_required:multi_user_host"
+        try:
+            self._ensure_chrome(profile_dir, chrome_bin)
+        except (MCSError, OSError):  # incl. deadline_exceeded
+            return "failed"
+        # cheapest recovery first — before touching the login form at
+        # all, a live session (fresh token + valid API check) ends it
+        return "ok" if self._recover_session() else "login_needed"
+
     def auto_login(self, profile_dir: str = "", chrome_bin: str = "",
                    wait_s: int = 45) -> str:
         """Recover the session, filling the login form only when needed.
@@ -434,20 +455,9 @@ class MCSAuthenticationMixin:
         another local account can log in, so the CDP Chrome is not used. Credentials are filled only into a CDP
         listener verified as this profile's Chrome (_cdp_peer_owned);
         any other peer ends the attempt as 'failed'."""
-        # per-attempt journal facts (run_check records them)
-        self.healed_tabs, self.chrome_restarted = 0, False
-        if _other_login_accounts():
-            # the CDP port is reachable by every local account: never open
-            # it or type the password while another account can log in
-            return "manual_required:multi_user_host"
-        try:
-            self._ensure_chrome(profile_dir, chrome_bin)
-        except (MCSError, OSError):  # incl. deadline_exceeded
-            return "failed"
-        # cheapest recovery first — before touching the login form at
-        # all, a live session (fresh token + valid API check) ends it
-        if self._recover_session():
-            return "ok"
+        state = self.open_browser_session(profile_dir, chrome_bin)
+        if state != "login_needed":
+            return state
         try:
             page = self._login_page()
             ws = page["webSocketDebuggerUrl"]

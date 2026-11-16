@@ -1,7 +1,7 @@
 {
   "category": "changed",
   "title": "保護対象の旧抽出参照をproof v2へ埋め込み、採用まで同一性を照合",
-  "summary": "保護属性を持つ旧抽出を修復・再利用する経路で、固定した保護prior参照が推論受付・チャンク永続化・原子コミット・proof埋め込みの各時点で現在の原文束縛へ再解決できることを確認するようにしました。参照が解決できない場合はprior_changed/extract_proof_prior_missingで拒否し、leaf metaへprotected_prior_refを引き継ぎます。proof形式はprotected_priorを含む場合にversion 2となり、recordは厳密なPROTECTED_PRIOR_FIELDS集合と参照再計算で検証します。",
+  "summary": "保護属性を持つ旧抽出を修復・再利用する経路で、固定した保護prior参照が推論受付・チャンク永続化・原子コミット・proof埋め込みの各時点で現在の原文束縛へ再解決できるか確認します。参照が解決できない場合はprior_changed/extract_proof_prior_missingで拒否し、leaf metaへprotected_prior_refを引き継ぎます。proof形式はprotected_priorを含む場合にversion 2となり、recordは厳密なPROTECTED_PRIOR_FIELDS集合と参照再計算で検証します。",
   "upgrade": "追加操作は不要です。保護priorを持つ修復対象で原文側の参照が変化していた場合、従来は採用され得たものがprior_changedで拒否され、単回修復の受付条件へ戻ります。",
   "details": [
     "mcs/extract/llm/extract_llm_qc.py: _protected_prior_currentを追加し、固定参照がlive sourceで解決できるかを判定。",
