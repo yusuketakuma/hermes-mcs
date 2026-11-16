@@ -66,7 +66,7 @@ AI ブランチ（`agent/`・`copilot/`・`codex/`）の CI が失敗すると�
 ### CI 失敗の自動修正（Claude 担当だけ）
 
 `agent/claude-…` の PR の CI が失敗し、結ばれた Issue が次をすべて満たすと、`agent-control.yml` が
-`agent-claude.yml` を修正モード（`workflow_dispatch`、入力 `pr`）で起動します。
+`agent-claude-repair.yml`（`workflow_dispatch` だけで起動、入力 `pr`）を起動します。
 
 - `担当:claude` が付いている。`要オーナー対応`・`失敗:CI基盤`・`失敗:利用枠`・`失敗:不明` が付いていない。
 - `試行:N` が上限に達していない（3回目の失敗では起動せず、担当を外します）。
