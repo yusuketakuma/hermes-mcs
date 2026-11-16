@@ -1,9 +1,11 @@
 """Apply card commands and private-view checkpoints atomically before publishing resulting renders."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import math
+import sys
 from pathlib import Path
 import sqlite3
 import time
@@ -15,11 +17,11 @@ import notify_spool
 import notify_action_context as action_context
 import notify_action_tokens as tokens
 from mcs_requests import canonical, payload_hash, positive
-from mcs_util import loads_dict
+from mcs_util import loads_dict, safe_error_code
 from notify_render import (anchor_keys, card_body_text, card_content, own_post,
                            parts_text, source_fingerprint)
 from notify_scope import card_row, latest_signals, scope_matches
-from notify_views import (drug_search_available, drug_search_view, meds_view, my_tasks_view,
+from notify_views import (CONTEXT_SECTIONS, drug_search_available, drug_search_view, meds_view, my_tasks_view,
                           patient_search_view, patient_summary_text, unacked_view)
 
 # Live source text/prefill/navigation is never copied into durable receipts.
@@ -398,12 +400,19 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
             db.execute("SAVEPOINT patient_context")
             opened = True
             result = _context_navigation(db, base, card, params or {}, cfg, now, legacy, measurement=measurement)
-        except Exception:  # a broken context refresh view must never hide the existing summary
+        except Exception as error:  # a broken context refresh view must never hide the existing summary
             if opened:
                 db.execute("ROLLBACK TO patient_context")
             result = legacy()
             result["body"] = ("患者の記録まとめを読み込めなかったため、基本のまとめを表示しています。"
                               "もう一度、元のカードから開いてください。\n\n" + result["body"])
+            # Run-log event with fixed fields only (never message text, project or patient ids). It is
+            # best-effort and written after the fallback exists, so a broken stderr cannot hide the summary.
+            section = (params or {}).get("section")
+            with contextlib.suppress(OSError, ValueError):
+                print(json.dumps({"event": "patient_context_view_fallback", "error": safe_error_code(error),
+                                  "section": section if type(section) is str and section in CONTEXT_SECTIONS else None}),
+                      file=sys.stderr)
         if opened:
             db.execute("RELEASE patient_context")
         return result
@@ -561,7 +570,7 @@ def _private_button(db, base, card, now, navigation, token_ctx, action, label, p
 
 
 def _context_navigation(db, base, card, params, cfg, now, legacy, *, measurement=None):
-    from notify_views import CONTEXT_ROLES, CONTEXT_SECTIONS, patient_context_list
+    from notify_views import CONTEXT_ROLES, patient_context_list
     section, role, page = params.get("section", "background"), params.get("role", ""), params.get("page", 0)
     history = params.get("intervention_history", False)
     cursor = params.get("intervention_cursor")

@@ -338,6 +338,72 @@ def test_broken_context_refresh_view_falls_back_to_existing_summary(led, monkeyp
     assert "synthetic context refresh failure" not in result["body"]
 
 
+def _fallback_events(capsys):
+    events = []
+    for line in capsys.readouterr().err.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get("event") == "patient_context_view_fallback":
+            events.append(event)
+    return events
+
+
+def test_context_fallback_logs_only_the_exception_class(led, monkeypatch, capsys):
+    import patient_context_view
+    spec = _delivered_card(led)
+    entry = click(led, _token_for(spec, "summary"))["navigation"][0]["token"]
+    def broken(*a, **k):
+        raise RuntimeError("合成患者 架空太郎 本文")
+    monkeypatch.setattr(patient_context_view, "evidence", broken)
+    capsys.readouterr()
+    result = click(led, entry, now=NOW + 1)
+    assert result["body"].startswith("患者の記録まとめを読み込めなかったため")
+    events = _fallback_events(capsys)
+    assert len(events) == 1
+    assert events[0] == {"event": "patient_context_view_fallback",
+                         "error": "RuntimeError", "section": "background"}
+    # the message text must not appear anywhere (stderr was drained above; re-run to check)
+    click(led, entry, now=NOW + 2)
+    assert "架空太郎" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("known", [True, False])
+def test_context_fallback_logs_registered_value_error_code(led, monkeypatch, capsys, known):
+    import patient_context_view
+    from error_codes import KNOWN_ERROR_CODES
+    from mcs_util import safe_error_code
+    spec = _delivered_card(led)
+    entry = click(led, _token_for(spec, "summary"))["navigation"][0]["token"]
+    raised = ValueError(sorted(KNOWN_ERROR_CODES)[0] if known else "合成の本文")
+    def broken(*a, **k):
+        raise raised
+    monkeypatch.setattr(patient_context_view, "evidence", broken)
+    capsys.readouterr()
+    click(led, entry, now=NOW + 1)
+    events = _fallback_events(capsys)
+    assert len(events) == 1 and events[0]["error"] == safe_error_code(raised)
+    assert (events[0]["error"] == "ValueError") is (not known)
+
+
+def test_context_fallback_survives_a_broken_stderr(led, monkeypatch):
+    import patient_context_view
+    spec = _delivered_card(led)
+    entry = click(led, _token_for(spec, "summary"))["navigation"][0]["token"]
+    def broken(*a, **k):
+        raise RuntimeError("synthetic")
+    class DeadStderr:
+        def write(self, *_):
+            raise BrokenPipeError("synthetic")
+        def flush(self):
+            raise BrokenPipeError("synthetic")
+    monkeypatch.setattr(patient_context_view, "evidence", broken)
+    monkeypatch.setattr("sys.stderr", DeadStderr())
+    result = click(led, entry, now=NOW + 1)
+    assert result["body"].startswith("患者の記録まとめを読み込めなかったため")
+
+
 def test_later_click_by_same_user_on_same_card_advances_checkpoint(led):
     from adapters.common import envelopes
     spec = _delivered_card(led)
