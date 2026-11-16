@@ -21,7 +21,7 @@ def stored(tmp_path, monkeypatch):
     monkeypatch.setattr(health_report.time, 'time', lambda: NOW)
     monkeypatch.setattr(health_report, 'HEALTH_FILE', str(tmp_path / 'health.json'))
     monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10_000)
-    monkeypatch.setattr(health_report.maintenance, 'local_backup_status',
+    monkeypatch.setattr(health_report.local_backup, 'local_backup_status',
                         lambda **_: {'state': 'verified', 'newest_age_s': 50, 'observed_at': NOW})
     try:
         yield ledger.db

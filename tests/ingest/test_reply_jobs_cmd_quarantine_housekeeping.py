@@ -86,6 +86,7 @@ def test_torn_cmd_file_is_quarantined_after_an_hour(db, tmp_path):
 def test_overdue_backup_makes_housekeeping_run_past_the_deadline(
         tmp_path, monkeypatch, capsys):
     import maintenance
+    import local_backup
     import notify_cards
     import notify_cmds
     data = tmp_path / "data"
@@ -114,7 +115,7 @@ def test_overdue_backup_makes_housekeeping_run_past_the_deadline(
             collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (health_report if name == "HEALTH_FILE" else run_check),
             name, later)
     monkeypatch.setattr(run_check, "_housekeeping", housekeeping)
-    monkeypatch.setattr(maintenance, "backup_overdue", lambda: True)
+    monkeypatch.setattr(local_backup, "backup_overdue", lambda: True)
     monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **k: None)
     for name in ("publish_flags", "clear_snapshot_dirty"):
         monkeypatch.setattr((notify_spool if name in {'publish_flags'} else notify_cards), name, lambda *a, **k: None)

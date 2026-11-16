@@ -7,6 +7,7 @@ import time
 import pytest
 
 import health_report
+import local_backup
 import maintenance
 
 
@@ -14,7 +15,7 @@ import maintenance
 def backups(tmp_path, monkeypatch):
     path = tmp_path / "backups"
     path.mkdir()
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(path))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(path))
     return path
 
 
@@ -28,9 +29,9 @@ def test_backup_bytes_are_classified_by_their_owner(backups, tmp_path):
     outside = tmp_path / "outside.db"
     outside.write_bytes(b"x" * 100)
     (backups / "linked.db").symlink_to(outside)
-    assert maintenance.backup_bytes_by_class() == {
+    assert local_backup.backup_bytes_by_class() == {
         "daily": 10, "daily_ok": 2, "preupdate": 5, "staging": 3, "manual": 7}
-    assert maintenance.manual_backup_bytes() == 7
+    assert local_backup.manual_backup_bytes() == 7
     assert sorted(os.listdir(backups)) == sorted([      # observation never deletes
         "ledger-20260101.db", "ledger-20260101.db.ok", "preupdate-1.0.28-20260101.db",
         "ledger-20260102.db.tmp-wal", "hand-copy.db", "subdir", "linked.db"])
@@ -39,11 +40,11 @@ def test_backup_bytes_are_classified_by_their_owner(backups, tmp_path):
 def test_missing_directory_is_zero_and_an_unbounded_scan_is_unknown(backups, monkeypatch):
     for n in range(3):
         (backups / f"copy-{n}.db").write_bytes(b"x")
-    monkeypatch.setattr(maintenance, "LOCAL_STATUS_SCAN_MAX", 2)
-    assert maintenance.backup_bytes_by_class() is None
-    assert maintenance.manual_backup_bytes() is None
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups / "absent"))
-    assert maintenance.backup_bytes_by_class() == dict.fromkeys(maintenance.BACKUP_CLASSES, 0)
+    monkeypatch.setattr(local_backup, "LOCAL_STATUS_SCAN_MAX", 2)
+    assert local_backup.backup_bytes_by_class() is None
+    assert local_backup.manual_backup_bytes() is None
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backups / "absent"))
+    assert local_backup.backup_bytes_by_class() == dict.fromkeys(local_backup.BACKUP_CLASSES, 0)
 
 
 def test_ledger_capacity_reads_page_totals_from_the_borrowed_handle(tmp_path):
@@ -98,8 +99,8 @@ def test_checkpoint_flag_is_bool_or_unknown(tmp_path, flag, expected):
 def test_a_scan_finishing_past_its_budget_is_unknown(backups, monkeypatch):
     (backups / "hand.db").write_bytes(b"m" * 5)
     clock = iter([0.0, 0.0, 1.0])          # start, the entry check, the end check
-    monkeypatch.setattr(maintenance, "monotonic", lambda: next(clock))
-    assert maintenance.backup_bytes_by_class() is None
+    monkeypatch.setattr(local_backup, "monotonic", lambda: next(clock))
+    assert local_backup.backup_bytes_by_class() is None
 
 
 @pytest.mark.parametrize("content", ["{broken", "[]", "x" * (health_report.DB_MAINT_STATE_MAX_BYTES + 1)])

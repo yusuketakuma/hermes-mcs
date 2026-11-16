@@ -54,10 +54,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: E402,F401
 from safe_io import atomic_write, fsync_dir, publish_tmp
 from mcs_util import file_sha256, has_sqlite_sidecars
-from safe_io import create_exclusive, fdopen_owned  # noqa: E402
+from safe_io import fdopen_owned  # noqa: E402
 import notify_spool
 from lifecycle_io import store_keychain  # noqa: E402
 import backup_evidence  # noqa: E402
+import held_restore  # noqa: E402
 
 MAGIC = b"MCSBKP1\n"
 ITERATIONS = 600000
@@ -89,26 +90,6 @@ class Receipt(TypedDict):
     created_at: float
     policy_id: str
     last_successful_run: float | None
-
-
-class Verification(TypedDict):
-    v: int
-    sha256: str
-    plain_sha256: str
-    verified_at: float
-    inventory: backup_evidence.Inventory
-    restore_pending: bool
-    attachment_payloads_included: bool
-
-
-def _report(expected_sha256: str, manifest: dict, *,
-            restore_pending: bool) -> Verification:
-    """Build the verification report; mcs_restore fences its exact key set."""
-    return {"v": 1, "sha256": expected_sha256,
-            "plain_sha256": manifest["plain_sha256"],
-            "verified_at": time.time(), "inventory": manifest["inventory"],
-            "restore_pending": restore_pending,
-            "attachment_payloads_included": False}
 
 
 class KeychainStore(Protocol):
@@ -232,23 +213,6 @@ def _canonical(value) -> bytes:
                       allow_nan=False).encode("ascii")
 
 
-def _copy_private(source: Path, target: Path, limit: int) -> None:
-    """Bound even a changing/untrusted source; never follow symlinks or FIFOs."""
-    fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with fdopen_owned(fd, "rb") as src:
-        st = os.fstat(src.fileno())
-        if not stat.S_ISREG(st.st_mode) or st.st_size > limit:
-            raise backup_evidence.BackupError("backup_copy_size_or_type_invalid")
-        fd = create_exclusive(target, 0o600, nofollow=False)
-        with fdopen_owned(fd, "wb") as dst:
-            remaining = limit
-            while chunk := src.read(min(CHUNK, remaining + 1)):
-                if len(chunk) > remaining:
-                    raise backup_evidence.BackupError("backup_copy_limit_exceeded")
-                dst.write(chunk)
-                remaining -= len(chunk)
-
-
 def offsite(snapshot: str, policy: backup_evidence.BackupPolicy,
             passphrase_provider: Callable[[], bytes]) -> Receipt:
     """Encrypt one explicit static daily backup; return an escrowable receipt."""
@@ -265,7 +229,7 @@ def offsite(snapshot: str, policy: backup_evidence.BackupPolicy,
     with tempfile.TemporaryDirectory(prefix="mcs-backup-", dir=policy.scratch_dir) as work:
         work = Path(work)
         plain = work / "ledger.db"
-        _copy_private(source, plain, policy.max_snapshot_bytes)
+        held_restore.copy_private(source, plain, policy.max_snapshot_bytes)
         plain_sha256 = file_sha256(plain)
         if file_sha256(source) != plain_sha256:
             raise backup_evidence.BackupError("backup_source_changed")
@@ -333,7 +297,7 @@ def _decode(bundle: Path, expected_sha256: str, key: bytes,
     if (bundle.is_symlink() or not stat.S_ISREG(bundle.stat().st_mode)
             or bundle.stat().st_size > backup_evidence.bundle_ceiling(policy)):
         raise backup_evidence.BackupError("backup_bundle_size_or_type_invalid")
-    _copy_private(bundle, frozen, backup_evidence.bundle_ceiling(policy))
+    held_restore.copy_private(bundle, frozen, backup_evidence.bundle_ceiling(policy))
     if not hmac.compare_digest(file_sha256(frozen), expected_sha256):
         raise backup_evidence.BackupError("backup_receipt_mismatch")
     with frozen.open("rb") as src:
@@ -410,7 +374,7 @@ def _decode(bundle: Path, expected_sha256: str, key: bytes,
 def verify(bundle: str, expected_sha256: str, policy: backup_evidence.BackupPolicy,
            passphrase_provider: Callable[[], bytes], *,
            drill_destination: str | None = None, max_steps: int | None = None,
-           deadline: float | None = None, retained_work_dir: str | None = None) -> Verification:
+           deadline: float | None = None, retained_work_dir: str | None = None) -> held_restore.Verification:
     """Verify recovery, optionally retaining a NEW isolated held drill copy."""
     policy.validate()
     if (max_steps is not None and (type(max_steps) is not int or not 100 <= max_steps <= 1_000_000_000)
@@ -436,8 +400,8 @@ def verify(bundle: str, expected_sha256: str, policy: backup_evidence.BackupPoli
             Path(bundle), expected_sha256, key, policy, Path(work), **(
                 {"max_steps": max_steps, "deadline": deadline}
                 if max_steps is not None else {}))
-        report = _report(expected_sha256, manifest,
-                         restore_pending=target is not None)
+        report = held_restore.report(expected_sha256, manifest["plain_sha256"],
+                                     manifest["inventory"], restore_pending=target is not None)
         if deadline is not None and time.monotonic() >= deadline:
             raise backup_evidence.BackupError("backup_inspection_budget_exhausted")
         if target is not None:
@@ -468,54 +432,17 @@ def verify(bundle: str, expected_sha256: str, policy: backup_evidence.BackupPoli
 
 def restore(bundle: str, expected_sha256: str, policy: backup_evidence.BackupPolicy,
             passphrase_provider: Callable[[], bytes], *,
-            destination: str) -> Verification:
+            destination: str) -> held_restore.Verification:
     """Publish only into a NEW private directory, with consent hold before the DB."""
     policy.validate()
-    target = Path(destination)
-    parent = target.parent
-    if (not target.is_absolute() or target.resolve() != target
-            or os.path.lexists(target) or target.name in ("", ".", "..")
-            or target.is_relative_to(Path(policy.destination))):
-        raise backup_evidence.BackupError("backup_restore_requires_new_local_directory")
-    backup_evidence.require_private_directory(parent)
-    pinned = parent.stat()
+    target, pinned = held_restore.new_destination(destination, outside=Path(policy.destination))
     key = _key(passphrase_provider)
     with tempfile.TemporaryDirectory(prefix="mcs-restore-", dir=policy.scratch_dir) as work:
         plain, manifest = _decode(
             Path(bundle), expected_sha256, key, policy, Path(work))
-        backup_evidence.require_private_directory(parent)
-        current = parent.stat()
-        if (current.st_dev, current.st_ino) != (pinned.st_dev, pinned.st_ino):
-            raise backup_evidence.BackupError("backup_restore_parent_changed")
-        target.mkdir(mode=0o700)
-        published = False
-        staging = target / (".restore-" + os.urandom(16).hex())
-        try:
-            notify_spool.mark_restored(
-                str(target), by="mcs_backup_restore", phase="awaiting_consent",
-                report_id=expected_sha256)
-            report = _report(expected_sha256, manifest, restore_pending=True)
-            atomic_write(str(target / "restore.json"),
-                         lambda stream: json.dump(report, stream, sort_keys=True),
-                         mode=0o600)
-            # Copy within the NEW destination filesystem, then link exclusively:
-            # neither os.replace nor a cross-device move can overwrite a ledger.
-            _copy_private(plain, staging, policy.max_snapshot_bytes)
-            with staging.open("rb") as stream:
-                os.fsync(stream.fileno())
-            os.link(staging, target / "ledger.db")
-            published = True
-            staging.unlink()
-            fsync_dir(target)
-            return report
-        except (OSError, backup_evidence.BackupError):
-            # A concurrent ledger collision belongs to somebody else. Keep
-            # both it and the consent hold; never delete it as our cleanup.
-            if not published and os.path.lexists(target / "ledger.db"):
-                staging.unlink(missing_ok=True)
-            else:
-                shutil.rmtree(target)
-            raise
+        report = held_restore.report(expected_sha256, manifest["plain_sha256"],
+                                     manifest["inventory"], restore_pending=True)
+        return held_restore.place(target, pinned, plain, report, policy.max_snapshot_bytes)
 
 
 def _periodic_drill(records, policy, key, *, key_source):

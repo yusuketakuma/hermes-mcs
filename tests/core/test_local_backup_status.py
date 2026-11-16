@@ -6,6 +6,7 @@ import time
 
 import pytest
 
+import local_backup
 import maintenance
 
 NOW = 2_000_000_000.0
@@ -15,7 +16,7 @@ NOW = 2_000_000_000.0
 def backups(tmp_path, monkeypatch):
     d = tmp_path / "backups"
     d.mkdir()
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(d))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(d))
     monkeypatch.setattr(sqlite3, "connect", lambda *a, **k: pytest.fail("status opened a DB"))
     return d
 
@@ -25,17 +26,17 @@ def _backup(d, day, age_s, *, marker=True):
     path.write_bytes(b"synthetic backup bytes")
     os.utime(path, (NOW - age_s, NOW - age_s))
     if marker:
-        maintenance._write_ok_marker(str(path))
+        local_backup._write_ok_marker(str(path))
     return path
 
 
 def _status():
-    return maintenance.local_backup_status(now=NOW)
+    return local_backup.local_backup_status(now=NOW)
 
 
 def test_no_backup_directory_or_file_is_missing(backups, monkeypatch):
     assert _status() == {"state": "missing", "newest_age_s": None, "observed_at": NOW}
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups / "absent"))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backups / "absent"))
     assert _status()["state"] == "missing"
 
 
@@ -66,13 +67,13 @@ def test_a_failed_daily_attempt_keeps_the_previous_verified_backup(backups, monk
     _backup(backups, "20260101", 86400)
     db = tmp_path / "ledger.db"
     db.write_bytes(b"synthetic")
-    monkeypatch.setattr(maintenance, "_valid", lambda *_: False)
+    monkeypatch.setattr(local_backup, "_valid", lambda *_: False)
     def broken(_db, tmp, _dest, deadline=None):
         os.unlink(tmp)
         raise maintenance.MaintenanceError("backup_verify_failed")
-    monkeypatch.setattr(maintenance, "_publish_backup", broken)
+    monkeypatch.setattr(local_backup, "publish_backup", broken)
     with pytest.raises(maintenance.MaintenanceError):
-        maintenance.daily_backup(str(db))
+        local_backup.daily_backup(str(db))
     assert _status()["state"] == "verified"
 
 
@@ -124,7 +125,7 @@ def test_a_hostile_marker_is_unverified_without_blocking(backups, tmp_path, kind
     if kind == "fifo":
         os.mkfifo(marker)                                 # a blocking open would hang here
     elif kind == "huge":
-        marker.write_text(good + " " * (maintenance.OK_MARKER_MAX + 10))
+        marker.write_text(good + " " * (local_backup.OK_MARKER_MAX + 10))
     elif kind == "symlink":
         target = tmp_path / "elsewhere"
         target.write_text(good)
@@ -132,7 +133,7 @@ def test_a_hostile_marker_is_unverified_without_blocking(backups, tmp_path, kind
     else:
         marker.mkdir()
     assert _status()["state"] == "unverified"
-    assert maintenance._verified_unchanged(str(path)) is False
+    assert local_backup._verified_unchanged(str(path)) is False
 
 
 def test_a_symlinked_backup_is_not_a_backup(backups, tmp_path):
@@ -144,31 +145,31 @@ def test_a_symlinked_backup_is_not_a_backup(backups, tmp_path):
 
 def test_the_scan_is_bounded(backups, monkeypatch):
     _backup(backups, "20260101", 60)
-    monkeypatch.setattr(maintenance, "LOCAL_STATUS_SCAN_MAX", 1)  # .db + .ok exceed it
+    monkeypatch.setattr(local_backup, "LOCAL_STATUS_SCAN_MAX", 1)  # .db + .ok exceed it
     assert _status() == {"state": "unknown", "newest_age_s": None, "observed_at": NOW}
-    monkeypatch.setattr(maintenance, "LOCAL_STATUS_SCAN_MAX", 256)
+    monkeypatch.setattr(local_backup, "LOCAL_STATUS_SCAN_MAX", 256)
     clock = iter([0.0])
-    monkeypatch.setattr(maintenance, "monotonic", lambda: next(clock, 10.0))
+    monkeypatch.setattr(local_backup, "monotonic", lambda: next(clock, 10.0))
     assert _status()["state"] == "unknown"
 
 
 def test_a_deadline_abort_then_the_next_run_publishes_a_verified_backup(tmp_path, monkeypatch):
     backups = tmp_path / "backups"
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backups))
     src = tmp_path / "ledger.db"
     with sqlite3.connect(src) as con:
         con.execute("CREATE TABLE t(x)")
         con.executemany("INSERT INTO t VALUES(?)", [("x" * 2000,)] * 200)
     con.close()
-    monkeypatch.setattr(maintenance, "BACKUP_STEP_PAGES", 1)
-    monkeypatch.setattr(maintenance, "backup_time_needed_s", lambda _p: 0)
-    monkeypatch.setattr(maintenance, "_valid", lambda p, d: os.path.exists(p))
+    monkeypatch.setattr(local_backup, "BACKUP_STEP_PAGES", 1)
+    monkeypatch.setattr(local_backup, "backup_time_needed_s", lambda _p: 0)
+    monkeypatch.setattr(local_backup, "_valid", lambda p, d: os.path.exists(p))
     clock = iter([0.0])
-    monkeypatch.setattr(maintenance, "monotonic", lambda: next(clock, 100.0))
+    monkeypatch.setattr(local_backup, "monotonic", lambda: next(clock, 100.0))
     with pytest.raises(maintenance.MaintenanceError, match="backup_deadline_exceeded"):
-        maintenance.daily_backup(str(src), deadline=50.0)
-    assert maintenance.local_backup_status(now=time.time())["state"] == "missing"
-    monkeypatch.setattr(maintenance, "monotonic", time.monotonic)
-    assert maintenance.daily_backup(str(src)) is None
-    status = maintenance.local_backup_status(now=time.time())
+        local_backup.daily_backup(str(src), deadline=50.0)
+    assert local_backup.local_backup_status(now=time.time())["state"] == "missing"
+    monkeypatch.setattr(local_backup, "monotonic", time.monotonic)
+    assert local_backup.daily_backup(str(src)) is None
+    status = local_backup.local_backup_status(now=time.time())
     assert status["state"] == "verified" and 0 <= status["newest_age_s"] < 60

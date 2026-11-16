@@ -9,7 +9,8 @@ Responsibility split:
 - ledger.py      : schema, migrations, writes, outbox, jobs table
 - job_ops.py     : cmd ingest, fetch_jobs drains, discovery, trickle
                    deep-import seeding, thread merge
-- maintenance.py : daily verified backup, log rotation, snapshot publish
+- local_backup.py: daily verified backup
+- maintenance.py : log rotation, pruning, snapshot publish, DB upkeep
 - extract*/rollup/notify_flush : derived-data + delivery stages
 
 Exit codes:
@@ -60,6 +61,7 @@ from writer_lock import RUN_LOCK, UPDATE_MARKER_NAME, RunLockLost, acquire_run_l
 import job_ops
 import collection_stages
 import health_report
+import local_backup
 import maintenance
 import notify_flush
 
@@ -893,8 +895,8 @@ def _housekeeping(result):
     (M7); a skipped backup is recorded, not silently dropped."""
     hard = _hard_deadline()
     try:
-        skipped = (maintenance.daily_backup(DB) if hard is None
-                   else maintenance.daily_backup(DB, deadline=hard))
+        skipped = (local_backup.daily_backup(DB) if hard is None
+                   else local_backup.daily_backup(DB, deadline=hard))
         if skipped == "skipped_disk_low":
             result["backup_skipped"] = "disk_low"
         elif skipped == "skipped_deadline":
@@ -941,7 +943,7 @@ def _overdue_housekeeping(result) -> None:
     housekeeping — no MCS request, no send — and keep its errors."""
     _rotate_logs(result)
     try:
-        if maintenance.backup_overdue():
+        if local_backup.backup_overdue():
             _housekeeping(result)
     except Exception as e:
         result["errors"].append(f"housekeeping: {type(e).__name__}")
@@ -1477,7 +1479,7 @@ def _main() -> int:
         # — once the daily backup is overdue it runs past the deadline
         _rotate_logs(result)
         _run_stage(result, "housekeeping", deadline, _housekeeping, result,
-                   required=maintenance.backup_overdue())
+                   required=local_backup.backup_overdue())
         status = _run_stage(result, "finish", deadline, _finish_run,
                             ledger, cfg, result, run_id, deadline,
                             run_lock_fd=lock_fd, db_baseline=db_baseline,

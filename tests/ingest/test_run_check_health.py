@@ -577,7 +577,8 @@ def test_health_reports_disk_state(tmp_path, monkeypatch):
 
 def test_backup_skip_is_recorded(monkeypatch):
     import maintenance
-    monkeypatch.setattr(maintenance, "daily_backup",
+    import local_backup
+    monkeypatch.setattr(local_backup, "daily_backup",
                         lambda *a: "skipped_disk_low")
     monkeypatch.setattr(maintenance, "db_maintenance", lambda *a, **k: None)
     monkeypatch.setattr(maintenance, "rotate_log", lambda: None)
