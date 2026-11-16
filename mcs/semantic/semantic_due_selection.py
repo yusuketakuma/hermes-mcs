@@ -700,16 +700,22 @@ def _cloud_selection_page(db, kinds, max_jobs, settings, semantic_scope, exclude
     if upper > progress['upper']:
         progress['upper'] = upper
         progress['collecting'] = True
-    # Each page is a PK range of at most _CLOUD_SELECTION_PAGE job ids, so a
-    # long run of settled jobs never makes one statement scan it whole (an
-    # interrupted statement would leave the cursor in place and repeat the
-    # same scan every tick). The correlated MAX uses idx_messages_project_time
-    # and is evaluated only for pending rows of the requested kinds.
+    # Each page is the PK range of the next _CLOUD_SELECTION_PAGE existing
+    # jobs, so a long run of settled jobs never makes one statement scan it
+    # whole (an interrupted statement would leave the cursor in place and
+    # repeat the same scan every tick), and gaps in job_id cost nothing. The
+    # correlated MAX uses idx_messages_project_time and is evaluated only
+    # for pending rows of the requested kinds.
     # A page is adopted only after its statement has fully completed.
     marks = ','.join('?' for _ in kinds)
     while progress['collecting']:
         check_deadline()
-        bound = min(progress['cursor'] + _CLOUD_SELECTION_PAGE, progress['upper'])
+        bound = db.execute(
+            'SELECT MAX(job_id) FROM (SELECT job_id FROM fetch_jobs '
+            'WHERE job_id>? AND job_id<=? ORDER BY job_id LIMIT ?)',
+            (progress['cursor'], progress['upper'], _CLOUD_SELECTION_PAGE)).fetchone()[0]
+        if bound is None or bound >= progress['upper']:
+            bound = progress['upper']
         rows = db.execute(
             'SELECT j.job_id,j.project_id,COALESCE(p.is_archived,0), '
             + patient_priority.latest_activity_sql('j.project_id') + ' '

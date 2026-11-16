@@ -136,3 +136,23 @@ def test_cloud_selection_long_full_scan_does_not_expire(cloud, monkeypatch):
     assert ticks > 2
     assert {row['job_id'] for row in selected} == {job['job_id'], _job_id(led, 2), _job_id(led, 3)}
     assert not calls
+
+
+def test_cloud_selection_pages_over_existing_ids_not_gaps(cloud, monkeypatch):
+    led, _, job, calls = cloud
+    _seed(led, [2])
+    with led.db:
+        # AUTOINCREMENT leaves gaps: conflict updates consume ids and
+        # expired claims are deleted.
+        led.db.execute("UPDATE fetch_jobs SET job_id=1000000 WHERE job_id=?", (_job_id(led, 2),))
+    snapshot(led)
+    _clock(monkeypatch)
+    pages = []
+    led.db.set_trace_callback(lambda sql: pages.append(sql) if sql.startswith(_PAGE_SQL) else None)
+    try:
+        selected = _select(led, 10.0, max_jobs=2)
+    finally:
+        led.db.set_trace_callback(None)
+    assert {row['job_id'] for row in selected} == {job['job_id'], 1000000}
+    assert len(pages) == 1
+    assert not calls
