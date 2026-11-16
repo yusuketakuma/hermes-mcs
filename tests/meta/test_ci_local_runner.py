@@ -48,7 +48,7 @@ def test_runner_lists_ci_jobs_in_order():
     listed = subprocess.run(["bash", str(RUNNER), "--list-jobs"], capture_output=True,
                             text=True, timeout=10, check=True).stdout.split()
     assert listed == list(_ci_jobs())
-    assert len(listed) == 7
+    assert len(listed) == 8
 
 
 def test_runner_contains_every_ci_run_line():
@@ -57,6 +57,7 @@ def test_runner_contains_every_ci_run_line():
         body = runner.split(f"job_{job.replace('-', '_')}() {{\n", 1)[1].split("\n}\n", 1)[0]
         for line in lines:
             if line and not SETUP.match(line):
+                line = line.replace("${{ matrix.group }}", "$group")
                 assert _norm(line) in _norm(body), f"{job}: ci.yml line missing: {line}"
 
 
