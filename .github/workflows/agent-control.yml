@@ -2,6 +2,7 @@ name: Agent control
 
 # merge-gate: 必須ジョブが現在の head で実際に実行・成功したかを commit status に出す。
 # 担当ロック: 1 Issue に 担当:* は1件だけ。試行回数: AIブランチの CI 失敗をIssueへ通算する。
+# 自動修正: 上限前の失敗で、担当が Claude なら agent-claude.yml を修正モードで起動する。
 # 自動マージ: vars.AUTO_MERGE_ENABLED が true のときだけ、対象の変更に予約する。
 # どのジョブも main 側の定義と ci/agent_control.py だけを使い、PR のコードは checkout も実行もしない。
 # 運用と停止手順: docs/development/AUTOMATION.md
@@ -30,9 +31,11 @@ jobs:
       statuses: write
       pull-requests: read
       issues: write
+      actions: write   # workflow_dispatch of agent-claude.yml for a repair run
     outputs:
       pr: ${{ steps.plan.outputs.pr }}
       eligible: ${{ steps.plan.outputs.eligible }}
+      sha: ${{ steps.plan.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -45,19 +48,23 @@ jobs:
           EVENT: ${{ github.event_name }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
           RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          CONTROL_ATTEMPT: ${{ github.run_attempt }}
           PR_FROM_EVENT: ${{ github.event.pull_request.number }}
           AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           work=$(mktemp -d)
           if [[ "$EVENT" == "workflow_run" ]]; then
             prs=$(gh api "repos/$GH_REPO/commits/$RUN_SHA/pulls" --jq '[.[] | select(.state == "open") | .number] | join(" ")')
             ci_conclusion="$RUN_CONCLUSION"
+            # Re-running this workflow must not count the same CI failure again; a re-run of ci itself does.
+            if [[ "$CONTROL_ATTEMPT" != "1" ]]; then ci_conclusion=""; fi
           else
             prs="$PR_FROM_EVENT"
             ci_conclusion=""
           fi
-          last_pr=""; eligible=false
+          last_pr=""; eligible=false; last_sha=""
           for pr in $prs; do
             gh api "repos/$GH_REPO/pulls/$pr" > "$work/pr.json"
             sha=$(jq -r .head.sha "$work/pr.json")
@@ -74,9 +81,12 @@ jobs:
             state=$(jq -r .state "$work/plan.json")
             gh api -X POST "repos/$GH_REPO/statuses/$sha" -f context=merge-gate -f state="$state" \
               -f description="$(jq -r .description "$work/plan.json")" > /dev/null
+            branch=$(jq -r .head.ref "$work/pr.json")
+            repair=false
             for issue in $(jq -r '.attempts[].issue' "$work/plan.json"); do
               labels=$(gh api "repos/$GH_REPO/issues/$issue" --jq '[.labels[].name]')
-              step=$(python3 ci/agent_control.py attempt --labels "$labels")
+              step=$(python3 ci/agent_control.py attempt --labels "$labels" --branch "$branch" --automation "${AUTOMATION:-}")
+              if [[ "$(jq -r .repair <<< "$step")" == "true" ]]; then repair=true; fi
               for name in $(jq -r '.remove[]' <<< "$step"); do
                 gh api -X DELETE "repos/$GH_REPO/issues/$issue/labels/$(jq -rn --arg n "$name" '$n|@uri')" > /dev/null || true
               done
@@ -85,11 +95,16 @@ jobs:
                 gh issue comment "$issue" --body "AIによる試行が上限に達したため、担当を外して要オーナー対応にしました（PR #$pr の CI 失敗）。"
               fi
             done
-            last_pr="$pr"
+            # GITHUB_TOKEN may start workflow_dispatch; the repair run pushes as the Claude App, so CI runs again.
+            if [[ "$repair" == "true" ]]; then
+              gh workflow run agent-claude.yml --ref "$DEFAULT_BRANCH" -f pr="$pr"
+            fi
+            last_pr="$pr"; last_sha="$sha"
             eligible=$(jq -r .auto_merge_eligible "$work/plan.json")
           done
           echo "pr=$last_pr" >> "$GITHUB_OUTPUT"
           echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
+          echo "sha=$last_sha" >> "$GITHUB_OUTPUT"
 
   auto-merge:
     needs: gate
@@ -107,10 +122,12 @@ jobs:
           GH_REPO: ${{ github.repository }}
           PR: ${{ needs.gate.outputs.pr }}
           ELIGIBLE: ${{ needs.gate.outputs.eligible }}
+          SHA: ${{ needs.gate.outputs.sha }}
         run: |
           set -euo pipefail
           if [[ "$ELIGIBLE" == "true" ]]; then
-            gh pr merge "$PR" --auto --squash
+            # Bound to the evaluated head: a push after the decision cannot inherit this reservation.
+            gh pr merge "$PR" --auto --squash --match-head-commit "$SHA"
           else
             gh pr merge "$PR" --disable-auto 2>/dev/null || true
           fi
