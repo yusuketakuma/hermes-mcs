@@ -286,10 +286,8 @@ def _claim_binding_current(db, project_id, message_id, fingerprint, policy, revi
         facts = _binding_facts(db, project_id, message_id, fingerprint, policy, member, fact_source)
         if facts is None:
             return False
-        binding = payload_hash({"project_id": project_id, "message_id": message_id,
-                                "fingerprint": fingerprint, "policy": policy, "revision": revision,
-                                "claims": summary["content"].get("claims"), "facts": facts})
-        return binding == audit["meta"].get("claim_input_binding")
+        return audit["meta"].get("claim_input_binding") == semantic_store.claim_input_binding(
+            project_id, message_id, fingerprint, policy, revision, summary["content"], facts)
     except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
         return False
 

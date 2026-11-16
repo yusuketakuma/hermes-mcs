@@ -3,6 +3,7 @@ from __future__ import annotations
 import mcs_util
 import semantic_audit
 import semantic_render
+import semantic_store
 import semantic_transport
 import json
 import hashlib
@@ -142,9 +143,7 @@ def _summarize_observed(*args, **kwargs):
 
 def _claim_input_binding(pid, mid, fp, policy, revision, summary, facts):
     """Bind the exact claims and evidence supplied to the claim audit."""
-    return mcs_util.payload_hash({"project_id": pid, "message_id": mid, "fingerprint": fp,
-                                  "policy": policy, "revision": revision,
-                                  "claims": summary.get("claims"), "facts": facts})
+    return semantic_store.claim_input_binding(pid, mid, fp, policy, revision, summary, facts)
 
 
 def _summary_repair_pending(db, bundle, summary, evidence, fp, policy, revision, *, completed_id):
@@ -372,8 +371,14 @@ def _empty_repair_prior(db, pid, mid):
     return refs
 
 
-def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, reason_out=None):
-    """Recover only the latest source-bound, reserved empty repair candidate."""
+def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, reason_out=None,
+                            fact_kind=None):
+    """Recover only the latest source-bound, reserved empty repair candidate.
+
+    With ``fact_kind``, a reservation made before the current facts were
+    written (a local model change redid them) whose candidate is not bound
+    to them reserves nothing: the target is summarized again from the
+    current facts, and the spent repair stays recorded on its marker."""
     def held(reason, reserved=True):
         if reason_out is not None:
             reason_out['code'] = reason
@@ -400,6 +405,12 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
             return held('empty_repair_marker_binding', candidate_bound)
         if not is_current(marker_meta) or marker_meta.get('invalidated') or marker_meta.get('stale'):
             return held('empty_repair_marker_currentness')
+        if (fact_kind is not None
+                and semantic_store.facts_rewritten_after(db, fact_kind, mid, fp, marker['artifact_id'])
+                and not (candidate_bound and isinstance(content, dict)
+                         and meta.get('claim_input_binding') == _claim_input_binding(
+                    pid, mid, fp, policy, revision, content, facts))):
+            return held('empty_repair_over_earlier_facts', False)
         if row is None:
             return held('empty_repair_candidate_missing')
         if not isinstance(content, dict) or not isinstance(meta, dict):

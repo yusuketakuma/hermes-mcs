@@ -1260,6 +1260,33 @@ def current_skipped(db, pid, mid, fp, policy, member):
         return None
 
 
+def target_doc(db, mid: int, fp: str, v2_docs_by_target: dict):
+    """The canonical fact document a target's outcome is published with."""
+    from semantic_store import current_artifact
+    doc = v2_docs_by_target.get(mid)
+    if doc is None:
+        prev_v2 = current_artifact(db, KIND_FACTS_V2, mid, fp)
+        # never publish from a document the hint rebuild could not re-derive
+        doc = prev_v2["content"] if prev_v2 and prev_v2["meta"].get(
+            "hint_rebuild") in (None, "same") else None
+    return doc
+
+
+def published_doc_hash(db, mid: int, fp: str, policy: str):
+    """``(found, doc_hash)`` of the latest S8 receipt: the fact document the
+    target's latest outcome was published (and its summary rendered) with."""
+    meta_doc = json_object_or_null("meta")
+    row = db.execute(
+        "SELECT content FROM artifacts WHERE kind=? AND message_id=? "
+        f"AND {current_meta_pred('meta')} "
+        f"AND json_extract({meta_doc},'$.stage')='s8_publish' "
+        f"AND json_extract({meta_doc},'$.fingerprint')=? "
+        f"AND json_extract({meta_doc},'$.policy_fingerprint')=? "
+        "ORDER BY artifact_id DESC LIMIT 1", (KIND_V4_STAGE, mid, fp, policy)).fetchone()
+    content = loads_dict(row["content"]) if row is not None else None
+    return (False, None) if content is None else (True, content.get("doc_hash"))
+
+
 def publish_target_tx(ledger, pid: int, mid: int, fp: str, policy: str,
                 members: dict, v2_docs_by_target: dict,
                 final_status: str, findings: list,
@@ -1270,15 +1297,9 @@ def publish_target_tx(ledger, pid: int, mid: int, fp: str, policy: str,
     ``semantic_facts_v4`` read model. Eligible fully-bound SKIPPED results
     mint ``semantic_facts_v4_skipped``; other outcomes leave a
     ``v4_diagnostic`` receipt that no extraction reader can select."""
-    from semantic_store import current_artifact
     if fact_source != "canonical":
         return
-    doc = v2_docs_by_target.get(mid)
-    if doc is None:
-        prev_v2 = current_artifact(ledger.db, KIND_FACTS_V2, mid, fp)
-        # never publish from a document the hint rebuild could not re-derive
-        doc = prev_v2["content"] if prev_v2 and prev_v2["meta"].get(
-            "hint_rebuild") in (None, "same") else None
+    doc = target_doc(ledger.db, mid, fp, v2_docs_by_target)
     doc_hash = semantic_facts.doc_hash(doc) if doc else None
     if final_status == "SKIPPED" and doc is not None:
         vid = _publish_skipped(ledger, pid, mid, fp, policy, members[mid], doc)
