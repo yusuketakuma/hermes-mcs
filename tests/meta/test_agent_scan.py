@@ -117,6 +117,18 @@ def test_a_reworded_title_about_the_same_file_is_the_same_finding(repo):
     ]
 
 
+def test_a_like_worded_finding_far_away_in_the_file_is_its_own_finding(repo):
+    (first,) = scan.issues_to_file([_finding(title="通知の作成時に本文が欠落する", line=10)], [], ["mcs/notify"], root=repo)
+    closed = [{"state": "closed", **first}]
+    again = [
+        _finding(title="通知の更新時に本文が欠落する", line=100),
+        _finding(title="通知の更新時に本文が欠落する", line=30),
+        _finding(title="通知の更新時に本文が欠落する", line=None),
+    ]
+    filed = scan.issues_to_file(again, closed, ["mcs/notify"], root=repo)
+    assert [issue["body"].split("## 場所\n")[1].splitlines()[0] for issue in filed] == ["`mcs/notify/cards.py` 100 行目付近"]
+
+
 def test_a_backlog_of_open_scan_issues_limits_what_is_filed(repo):
     backlog = [{"state": "open", "body": ""}] * (scan.MAX_OPEN - 1) + [{"state": "CLOSED", "body": ""}]
     findings = [_finding(title="一つ目"), _finding(title="二つ目", path="adapters/slack/send.py")]

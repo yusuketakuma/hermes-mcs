@@ -33,10 +33,12 @@ MAX_TEXT = 1500
 # Packages beside mcs/ that hold runtime code; mcs/ contributes one area per subpackage.
 TOP_LEVEL_AREAS = ("adapters", "hermes_plugin", "lineworks_adapter", "mcs_standalone")
 _MARKER = re.compile(r"<!-- agent-scan:([0-9a-f]{12}) -->")
-_PLACE = re.compile(r"^## 場所\n`([^`\n]+)`", re.M)
+_PLACE = re.compile(r"^## 場所\n`([^`\n]+)`(?: (\d+) 行目付近)?", re.M)
 TITLE_PREFIX = "スキャン: "
-# Two titles about one file this alike are the same finding reworded.
+# Two titles about one file this alike are the same finding reworded, unless both name a line
+# and the lines are further apart than SAME_PLACE (a like-worded finding elsewhere in the file).
 SAME_TITLE = 0.75
+SAME_PLACE = 40
 
 
 def areas(root=ROOT):
@@ -107,18 +109,22 @@ def _key(title):
 
 
 def filed_titles(issues):
-    """{path: [title keys]} of the scan issues already in the tracker."""
+    """{path: [(title key, line or None)]} of the scan issues already in the tracker."""
     filed = {}
     for issue in issues:
         place = _PLACE.search(issue.get("body") or "")
         if place:
-            filed.setdefault(place.group(1), []).append(_key((issue.get("title") or "").removeprefix(TITLE_PREFIX)))
+            title = _key((issue.get("title") or "").removeprefix(TITLE_PREFIX))
+            filed.setdefault(place.group(1), []).append((title, int(place.group(2)) if place.group(2) else None))
     return filed
 
 
-def _reworded(title, earlier):
-    """True when `title` says what one of the `earlier` titles about the same file said."""
-    return any(difflib.SequenceMatcher(None, _key(title), other).ratio() >= SAME_TITLE for other in earlier)
+def _reworded(title, line, earlier):
+    """True when `title` says what one of the `earlier` findings about the same file and place said."""
+    return any(
+        (line is None or other_line is None or abs(line - other_line) <= SAME_PLACE)
+        and difflib.SequenceMatcher(None, _key(title), other).ratio() >= SAME_TITLE
+        for other, other_line in earlier)
 
 
 def _text(value, limit):
@@ -158,13 +164,14 @@ def issues_to_file(findings, existing, scanned, root=ROOT):
         evidence = _text(finding.get("evidence"), MAX_TEXT)
         if not (path and title and problem and evidence):
             continue
+        line = finding.get("line")
+        line = line if isinstance(line, int) and not isinstance(line, bool) and line > 0 else None
         mark = fingerprint(path, title)
-        if mark in seen or _reworded(title, titles.get(path, ())):
+        if mark in seen or _reworded(title, line, titles.get(path, ())):
             continue
         seen.add(mark)
-        titles.setdefault(path, []).append(_key(title))
-        line = finding.get("line")
-        place = f"`{path}`" + (f" {line} 行目付近" if isinstance(line, int) and line > 0 else "")
+        titles.setdefault(path, []).append((_key(title), line))
+        place = f"`{path}`" + (f" {line} 行目付近" if line else "")
         body = [
             f"自動スキャン（対象 `{_area_of(path, scanned)}`、読み取り専用）が見つけた点です。まだ誰も確かめていません。",
             "内容を確かめ、進めるなら会話で詰めてから担当を決めます。当たらなければ閉じてください（同じ指摘は再起票されません）。",
