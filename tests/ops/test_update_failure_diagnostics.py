@@ -61,8 +61,8 @@ def test_post_merge_failure_survives_early_recovery_hold(
     monkeypatch.setattr(update_runtime_migration, '_head_sha', updater._head_sha)
     monkeypatch.setattr(updater, "_apply_tag_gate", lambda *_a: (None, []))
     monkeypatch.setattr(update_apply, '_apply_tag_gate', updater._apply_tag_gate)
-    import maintenance
-    monkeypatch.setattr(maintenance, "preupdate_backup", lambda *_a, **_k: None)
+    import local_backup
+    monkeypatch.setattr(local_backup, "preupdate_backup", lambda *_a, **_k: None)
     monkeypatch.setattr(updater, "_read_manifest_snapshot", lambda **_k: {})
     monkeypatch.setattr(update_apply, '_read_manifest_snapshot', updater._read_manifest_snapshot)
     monkeypatch.setattr(updater, "_baseline_check", lambda *_a, **_k: {})

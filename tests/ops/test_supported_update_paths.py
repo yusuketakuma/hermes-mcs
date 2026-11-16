@@ -29,7 +29,7 @@ import time
 import pytest
 
 import ledger
-import maintenance
+import local_backup
 import notify_spool
 import notify_transport
 import mcs_setup
@@ -187,7 +187,7 @@ def _world(tmp_path, monkeypatch, updater, path, *, install=False, schema=None):
     monkeypatch.setattr(update_runtime_migration, '_git', updater._git)
     monkeypatch.setattr(update_discovery, "git", objects.run)
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: objects.after)
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", updater.BACKUP_DIR)
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", updater.BACKUP_DIR)
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda *a: "synthetic-hermes")
     monkeypatch.setattr(runtime_inspection, "executable_available", lambda *a: True)
     monkeypatch.setattr(runtime_inspection, "python_problem", lambda exe: None)
@@ -514,7 +514,7 @@ def test_legacy_manual_reinstall_migration_and_restore(
     monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(updater, "restart_gateway", lambda cfg: restarts.append(("gateway", None)))
     monkeypatch.setattr(update_services, 'restart_gateway', updater.restart_gateway)
-    backup = maintenance.preupdate_backup(updater.LEDGER)
+    backup = local_backup.preupdate_backup(updater.LEDGER)
     backup_hash = _sha(Path(backup))
     # The documented operator route has no automatic apply/rollback promise.
     objects.run(["merge", "--ff-only", f"refs/tags/{objects.target}"])

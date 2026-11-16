@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 import ledger
+import local_backup
 import maintenance
 import mcs_view
 from mcs_contract import Attachment, Message
@@ -139,14 +140,14 @@ def test_interrupted_backup_retains_last_verified_generation(tmp_path, monkeypat
     """RT-034: an interrupted candidate cannot replace the valid generation."""
     source, _ = _build_fixture(tmp_path)
     backup_dir = tmp_path / "backups"
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backup_dir))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backup_dir))
     stamps = iter(("20260920", "20260921", "20260922"))
     monkeypatch.setattr(maintenance.time, "strftime", lambda _fmt: next(stamps))
 
-    maintenance.daily_backup(str(source))
+    local_backup.daily_backup(str(source))
     previous = backup_dir / "ledger-20260920.db"
     previous_bytes = previous.read_bytes()
-    assert maintenance.valid_mcs_db(str(previous))
+    assert local_backup.valid_mcs_db(str(previous))
 
     real_connect = maintenance.sqlite3.connect
 
@@ -158,48 +159,48 @@ def test_interrupted_backup_retains_last_verified_generation(tmp_path, monkeypat
 
     monkeypatch.setattr(maintenance.sqlite3, "connect", interrupted_connect)
     with pytest.raises(sqlite3.DatabaseError, match="synthetic_backup_interrupt"):
-        maintenance.daily_backup(str(source))
+        local_backup.daily_backup(str(source))
 
     # The failed run was for a new generation. The previously published file
     # remains byte-for-byte unchanged and still passes the static validator.
     assert previous.read_bytes() == previous_bytes
-    assert maintenance.valid_mcs_db(str(previous))
+    assert local_backup.valid_mcs_db(str(previous))
     assert not (backup_dir / "ledger-20260921.db").exists()
     assert list(backup_dir.glob("*.tmp")) == []
 
     # The failed run removed its own candidate; a subsequent run can publish the
     # next generation once the source path is healthy again.
     monkeypatch.setattr(maintenance.sqlite3, "connect", real_connect)
-    maintenance.daily_backup(str(source))
-    assert maintenance.valid_mcs_db(str(backup_dir / "ledger-20260922.db"))
+    local_backup.daily_backup(str(source))
+    assert local_backup.valid_mcs_db(str(backup_dir / "ledger-20260922.db"))
 
 
 
 def test_backup_skipped_when_disk_cannot_hold_two_copies(tmp_path, monkeypatch):
     source, _ = _build_fixture(tmp_path)
     backup_dir = tmp_path / "backups"
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backup_dir))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backup_dir))
     monkeypatch.setenv("MCS_DISK_GUARD_MB", "512")
     usage = shutil.disk_usage(tmp_path)
     need = source.stat().st_size * 2 + 512 * 1024 * 1024
     monkeypatch.setattr(maintenance.shutil, "disk_usage",
                         lambda _p: usage._replace(free=need - 1))
-    assert maintenance.daily_backup(str(source)) == "skipped_disk_low"
+    assert local_backup.daily_backup(str(source)) == "skipped_disk_low"
     assert list(backup_dir.iterdir()) == []
     monkeypatch.setattr(maintenance.shutil, "disk_usage",
                         lambda _p: usage._replace(free=need + 1))
-    assert maintenance.daily_backup(str(source)) is None
+    assert local_backup.daily_backup(str(source)) is None
     assert len(list(backup_dir.glob("ledger-*.db"))) == 1
 
 
 def _counting_validator(monkeypatch):
     calls: list[str] = []
-    real = maintenance.valid_mcs_db
+    real = local_backup.valid_mcs_db
 
     def valid(path):
         calls.append(os.path.basename(path))
         return real(path)
-    monkeypatch.setattr(maintenance, "valid_mcs_db", valid)
+    monkeypatch.setattr(local_backup, "valid_mcs_db", valid)
     return calls
 
 
@@ -207,49 +208,49 @@ def test_same_day_backup_skips_quick_check_while_unchanged(tmp_path,
                                                            monkeypatch):
     source, _ = _build_fixture(tmp_path)
     backup_dir = tmp_path / "backups"
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backup_dir))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backup_dir))
     monkeypatch.setattr(maintenance.time, "strftime", lambda _f: "20260920")
-    maintenance.daily_backup(str(source))
+    local_backup.daily_backup(str(source))
     dest = backup_dir / "ledger-20260920.db"
     assert (backup_dir / "ledger-20260920.db.ok").exists()
     calls = _counting_validator(monkeypatch)
-    maintenance.daily_backup(str(source))
+    local_backup.daily_backup(str(source))
     assert calls == []
     # a changed (here: corrupted) file no longer matches the marker, is
     # re-validated and replaced by a fresh verified backup (B24)
     dest.write_bytes(b"not a database" * 100)
-    maintenance.daily_backup(str(source))
+    local_backup.daily_backup(str(source))
     assert calls[0] == "ledger-20260920.db"
-    assert maintenance.valid_mcs_db(str(dest))
+    assert local_backup.valid_mcs_db(str(dest))
     calls.clear()
-    maintenance.daily_backup(str(source))
+    local_backup.daily_backup(str(source))
     assert calls == []
 
 
 def test_backup_without_marker_is_still_validated(tmp_path, monkeypatch):
     source, _ = _build_fixture(tmp_path)
     backup_dir = tmp_path / "backups"
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backup_dir))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backup_dir))
     monkeypatch.setattr(maintenance.time, "strftime", lambda _f: "20260920")
-    maintenance.daily_backup(str(source))
+    local_backup.daily_backup(str(source))
     (backup_dir / "ledger-20260920.db.ok").unlink()
     calls = _counting_validator(monkeypatch)
-    maintenance.daily_backup(str(source))
+    local_backup.daily_backup(str(source))
     assert calls == ["ledger-20260920.db"]
 
 
 def test_backup_rotation_removes_markers(tmp_path, monkeypatch):
     source, _ = _build_fixture(tmp_path)
     backup_dir = tmp_path / "backups"
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backup_dir))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backup_dir))
     stamps = iter(f"202609{d:02d}" for d in range(1, 20))
     monkeypatch.setattr(maintenance.time, "strftime",
                         lambda _f: next(stamps))
-    for _ in range(maintenance.BACKUP_KEEP + 2):
-        maintenance.daily_backup(str(source))
+    for _ in range(local_backup.BACKUP_KEEP + 2):
+        local_backup.daily_backup(str(source))
     dbs = sorted(p.name for p in backup_dir.glob("ledger-*.db"))
     oks = sorted(p.name[:-3] for p in backup_dir.glob("ledger-*.db.ok"))
-    assert len(dbs) == maintenance.BACKUP_KEEP
+    assert len(dbs) == local_backup.BACKUP_KEEP
     assert oks == dbs
 
 
@@ -261,7 +262,7 @@ def test_independent_restore_preserves_relations_fts_snapshot_and_attachment_has
     source_root.mkdir()
     source, fixture = _build_fixture(source_root)
     backup_dir = source_root / "backups"
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backup_dir))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backup_dir))
     monkeypatch.setattr(maintenance.time, "strftime", lambda _fmt: "20260920")
 
     backup_calls: list[str] = []
@@ -275,7 +276,7 @@ def test_independent_restore_preserves_relations_fts_snapshot_and_attachment_has
 
     monkeypatch.setattr(maintenance.sqlite3, "connect", counting_connect)
     started = time.monotonic()
-    maintenance.daily_backup(str(source))
+    local_backup.daily_backup(str(source))
     backup = backup_dir / "ledger-20260920.db"
 
     restore_root = tmp_path / "restore"

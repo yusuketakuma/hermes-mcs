@@ -677,7 +677,7 @@ def test_candidate_updater_extracted_to_temp_calls_real_parent_and_child(legacy_
     """Keep the parent/child FD path real; redirect only child argv to stub effects."""
     import importlib.util
     import shutil
-    import maintenance
+    import local_backup
     import mcs_util
 
     repo, runtime, data = legacy_entry['repo'], legacy_entry['runtime'], legacy_entry['data']
@@ -737,7 +737,7 @@ def test_candidate_updater_extracted_to_temp_calls_real_parent_and_child(legacy_
     patch_lifecycle_lookup(monkeypatch, updater, '_rollback_tree', lambda *_a, **_k: parent_effects.append('rollback'))
     reports = []
     patch_lifecycle_lookup(monkeypatch, updater, '_report', lambda result, detail, **extra: reports.append((result, extra)))
-    monkeypatch.setattr(maintenance, 'preupdate_backup', lambda *_a, **_k: str(data / 'synthetic-backup'))
+    monkeypatch.setattr(local_backup, 'preupdate_backup', lambda *_a, **_k: str(data / 'synthetic-backup'))
 
     # The real _run_post_merge owns spawning and passes its actual locked FDs.
     # Only argv is redirected to the child driver so OS/service effects can be stubbed.

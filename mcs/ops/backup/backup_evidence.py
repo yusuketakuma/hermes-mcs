@@ -24,7 +24,7 @@ from typing import TypedDict
 
 from ledger import SCHEMA_VERSION, valid_mcs_db
 from ledger_schema import static_contract_ok
-from maintenance import MaintenanceError
+from maintenance_errors import MaintenanceError
 from mcs_queries import REPLY_GAP
 from stats_math import finite_number
 from safe_io import atomic_write, fdopen_owned
@@ -86,6 +86,7 @@ FAILURE_CODES = frozenset({
     "backup_static_snapshot_required", "backup_truncated",
     "backup_trusted_receipt_required", "backup_periodic_state_unverified",
     "backup_periodic_capacity", "backup_periodic_hold",
+    "backup_local_name_invalid", "backup_restore_copy_mismatch", "backup_restore_disk_low",
 })
 
 

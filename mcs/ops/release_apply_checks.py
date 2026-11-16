@@ -263,7 +263,7 @@ def _initial_provider_source(control, repository, *, deadline):
 
 def _observe_existing_backup(directory, *, deadline):
     """Verify and hash an existing static backup without creating or repairing one."""
-    import maintenance
+    import local_backup
     import mcs_update
     directory_fd = descriptor = None
     try:
@@ -276,7 +276,7 @@ def _observe_existing_backup(directory, *, deadline):
         with os.scandir(directory_fd) as entries:
             for count, entry in enumerate(entries):
                 mcs_update._bounded_timeout(None, deadline)
-                if count >= maintenance.LOCAL_STATUS_SCAN_MAX:
+                if count >= local_backup.LOCAL_STATUS_SCAN_MAX:
                     raise ReleaseApplyError('BACKUP_UNVERIFIED')
                 if not (entry.name.startswith('ledger-') and entry.name.endswith('.db')):
                     continue
@@ -302,7 +302,7 @@ def _observe_existing_backup(directory, *, deadline):
                 continue
             raise ReleaseApplyError('BACKUP_UNVERIFIED')
         path = str(Path(directory) / name)
-        if not maintenance._valid(path, deadline):
+        if not local_backup._valid(path, deadline):
             raise ReleaseApplyError('BACKUP_UNVERIFIED')
         digest = hashlib.sha256()
         while part := os.read(descriptor, 65536):
@@ -326,7 +326,7 @@ def _observe_existing_backup(directory, *, deadline):
 def _native_preflight(control, *, runtime_home, repository, deadline):
     """Build preconditions from actual current code, SDK, schema, space and existing backup."""
     import platform as host_platform
-    import maintenance
+    import local_backup
     import mcs_update
     import mcs_runtime
     import runtime_inspection
@@ -335,7 +335,7 @@ def _native_preflight(control, *, runtime_home, repository, deadline):
             or os.path.realpath(repository) != os.path.realpath(mcs_update.REPO)
             or Path(mcs_update.__file__).resolve() != Path(repository).resolve() / 'mcs/ops/mcs_update.py'
             or control.root != _control_root(runtime_home)
-            or os.path.realpath(maintenance.BACKUP_DIR) != os.path.realpath(Path(runtime_home) / 'data/backups')):
+            or os.path.realpath(local_backup.BACKUP_DIR) != os.path.realpath(Path(runtime_home) / 'data/backups')):
         raise ReleaseApplyError('PREFLIGHT_HOLD')
     observed_at = int(time.time() * 1000)
     provider = _initial_provider_source(control, repository, deadline=deadline)
@@ -352,7 +352,7 @@ def _native_preflight(control, *, runtime_home, repository, deadline):
         venv, host = mcs_update._runtime_venv(configuration)
         observed = _observe_installed(repository, python=python, venv=venv, runtime_mode=mcs_runtime.mode(configuration),
             platform=platform, ledger_path=mcs_update.LEDGER, deadline=deadline, host_source=host)
-        backup = _observe_existing_backup(maintenance.BACKUP_DIR, deadline=deadline)
+        backup = _observe_existing_backup(local_backup.BACKUP_DIR, deadline=deadline)
         filesystem = os.statvfs(runtime_home)
         preconditions = dict(current_commit=observed['commit'], hand_edited=observed['hand_edited'],
             installed_lock_sha256=observed['lock_sha256'], free_bytes=filesystem.f_bavail * filesystem.f_frsize,

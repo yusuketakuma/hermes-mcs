@@ -322,6 +322,7 @@ def test_tick_recovers_session_mid_run_and_notifies(tmp_path, monkeypatch,
     point and the run completes; the session_recovered intent is queued
     for delivery (flush suppressed by --no-notify)."""
     import maintenance
+    import local_backup
     import self_identity
     import notify_cards
     import notify_spool
@@ -379,7 +380,7 @@ def test_tick_recovers_session_mid_run_and_notifies(tmp_path, monkeypatch,
     monkeypatch.setattr(notify_cmds, "drain_int_commands",
                         lambda *a, **k: None)
     monkeypatch.setattr(self_identity, "record_self_profile", lambda *a: False)
-    monkeypatch.setattr(maintenance, "daily_backup", lambda *a: None)
+    monkeypatch.setattr(local_backup, "daily_backup", lambda *a: None)
     monkeypatch.setattr(maintenance, "rotate_log", lambda *a: None)
     monkeypatch.setattr(maintenance, "prune_attachments", lambda *a: 0)
     monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a, **k: True)
@@ -431,6 +432,7 @@ def test_main_relogin_budget_covers_run_boundary(tmp_path, monkeypatch,
     auto_login, no extra session_recovered, a session_expired alert,
     exit 2, and the exhaustion is recorded in the run row and health."""
     import maintenance
+    import local_backup
     import self_identity
     import notify_cards
     import notify_spool
@@ -484,7 +486,7 @@ def test_main_relogin_budget_covers_run_boundary(tmp_path, monkeypatch,
     monkeypatch.setattr(notify_cmds, "drain_int_commands",
                         lambda *a, **k: None)
     monkeypatch.setattr(self_identity, "record_self_profile", lambda *a: False)
-    monkeypatch.setattr(maintenance, "daily_backup", lambda *a: None)
+    monkeypatch.setattr(local_backup, "daily_backup", lambda *a: None)
     monkeypatch.setattr(maintenance, "rotate_log", lambda *a: None)
     monkeypatch.setattr(maintenance, "prune_attachments", lambda *a: 0)
     monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a, **k: True)
