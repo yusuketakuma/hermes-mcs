@@ -316,7 +316,7 @@ class CloudBacklogPool:
         alive = [p for p in self.children if p.poll() is None]
         lifetimes = [now - self.started.pop(child, float("-inf")) for child in self.children if child not in alive]
         if any(lifetime >= _QUICK_EXIT_S for lifetime in lifetimes):
-            self.quick_exits = 0
+            self.quick_exits, self.retry_at = 0, 0.0
         elif lifetimes:
             # Children that exit together are one failure, not one per child.
             self.quick_exits += 1

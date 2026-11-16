@@ -232,10 +232,15 @@ def _rebind_check(hold, card, req) -> str | None:
     captured when it held the scope — the render row is gone, so the
     hold record is the identity witness. A hold with no attempt (a
     render that never began, held because the journal cannot vouch
-    for its backup) is named by its delivery_id instead."""
+    for its backup) is named by its delivery_id instead, and needs proof
+    independent of the journal — the rows that could witness its send
+    may be the ones compacted away."""
     if (hold["attempt_id"] if hold["attempt_id"] is not None
             else hold["delivery_id"]) != req["attempt_id"]:
         return "attempt_mismatch"
+    if hold["attempt_id"] is None and req["result"] == "mark_not_sent" \
+            and req["evidence"].get("proof") == "no_journal_started":
+        return "journal_cannot_vouch"
     if hold_events(hold) is None:
         return "hold_events_corrupt"
     try:

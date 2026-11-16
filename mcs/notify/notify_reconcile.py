@@ -712,14 +712,17 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
     # tick — alert only when this run recorded a new hold, never repeat
     # the same notice for holds already announced
     # (a stop between the part writes and this notice is not re-announced,
-    # as for render holds; the receipt and part_hold_report still list them)
-    if (held and _hold_rows(db) > holds_before) or new_text_holds or parts_marked:
+    # as for render holds; the receipt and part_hold_report still list them);
+    # mass_held counts only events this run moved out of pending
+    if ((held and _hold_rows(db) > holds_before) or new_text_holds or parts_marked
+            or mass_held):
         ledger.outbox_add("update_notice", None, {
             "notice_code": "delivery_reconcile_held",
             "text": "[MCS] DB復元後の配送照合で未解決の配送があります"
                     f"（card held={len(held)}件、part unknown={len(parts_held)}件、"
                     f"part 要調査={len(parts_unresolvable)}件、"
-                    f"text held={len(text_held)}件）。"
+                    f"text held={len(text_held)}件、"
+                    f"未配送の操作通知 held={mass_held}件）。"
                     "restore_reconcile.json を確認してください。"
                     "カードは ops.card_resolve、スレッド・本文・添付は "
                     "ops.card_part_resolve で確認・解除し、"

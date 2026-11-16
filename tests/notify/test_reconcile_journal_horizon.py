@@ -64,6 +64,26 @@ def test_backup_older_than_the_cap_holds_every_unsettled_render(world):
     assert len(world.holds()) == len(holds)
 
 
+def test_undispatched_events_held_beyond_the_cap_alert_the_operator(world):
+    world.seed()
+    eid = world.led.outbox_add("new_messages", 1, {"message_ids": [100, 101]})
+    world.led.db.commit()
+    _restore_from(world, backup_names.JOURNAL_HORIZON_MAX_S + 86400)
+    receipt = notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW)
+    ev = world.led.db.execute(
+        "SELECT state,next_try FROM notify_outbox WHERE event_id=?", (eid,)).fetchone()
+    assert (ev["state"], ev["next_try"]) == ("failed", None)
+    assert world.holds() == [] and receipt["events_held"] == 1
+    notices = world.led.db.execute(
+        "SELECT payload FROM notify_outbox WHERE kind='update_notice'").fetchall()
+    assert len(notices) == 1
+    assert "未配送の操作通知 held=1件" in json.loads(notices[0]["payload"])["text"]
+    # a rerun moves nothing new, so the notice is not repeated
+    notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW + 1)
+    assert world.led.db.execute(
+        "SELECT COUNT(*) FROM notify_outbox WHERE kind='update_notice'").fetchone()[0] == 1
+
+
 def test_backup_inside_the_cap_keeps_the_journal_reading(world):
     world.seed()
     world.dispatch()
@@ -104,6 +124,20 @@ def test_card_resolve_releases_an_attempt_less_horizon_hold(world, result, extra
         assert world.render()["card_id"] == render["card_id"]
         assert world.render()["delivery_id"] != render["delivery_id"]
         assert world.render()["state"] == "queued"
+
+
+def test_horizon_hold_rejects_a_journal_only_absence_proof(world):
+    world.seed()
+    world.dispatch()
+    render = world.render()
+    _restore_from(world, backup_names.JOURNAL_HORIZON_MAX_S + 86400)
+    notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW)
+    # the journal rows that could witness the send may be compacted away
+    receipt = _resolve(world, render["delivery_id"], "mark_not_sent",
+                       evidence={"method": "synthetic", "ref": "journal",
+                                 "proof": "no_journal_started", "worker_stopped": True})
+    assert (receipt["outcome"], receipt["error"]) == ("rejected", "journal_cannot_vouch")
+    assert world.render()["state"] == "held"
 
 
 def test_renders_after_the_restore_are_not_held_on_rerun(world):

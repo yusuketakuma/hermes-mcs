@@ -62,13 +62,14 @@ def test_restore_pending_still_pauses_fallback_pruning(tmp_path):
 
 
 def test_an_owner_kept_ancient_copy_no_longer_stops_compaction(tmp_path):
-    """A reset or hand-made copy older than the cap used to pin the horizon
+    """A reset, schema-bump or hand-made copy older than the cap used to pin the horizon
     to its mtime, so nothing was ever pruned again."""
     w, state = _seed(tmp_path)
     backups = tmp_path / "backups"
     backups.mkdir()
     old = time.time() - 400 * 86400
-    for name in ("patient-context-reset-20250101-000000-x.db", "hand-copy.db"):
+    for name in ("patient-context-reset-20250101-000000-x.db", "preupdate-20250101-000000-x.db",
+                 "hand-copy.db"):
         (backups / name).write_bytes(b"synthetic")
         os.utime(backups / name, (old, old))
     asyncio.run(w.maintain_journal(rotate=True))

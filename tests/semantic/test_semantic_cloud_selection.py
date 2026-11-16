@@ -280,7 +280,7 @@ def test_cloud_selection_resumes_pages_and_preserves_sql_order(cloud, monkeypatc
     for _ in range(3):
         clock[0] = 0.0
         led.db.set_trace_callback(lambda sql: clock.__setitem__(0, 1.0)
-            if sql.startswith('SELECT j.job_id,j.kind') else None)
+            if sql.startswith('SELECT j.job_id,j.project_id,COALESCE') else None)
         try:
             with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
                 with legacy_cloud_routes():
@@ -312,7 +312,7 @@ def test_cloud_selection_rechecks_scope_and_deleted_job_after_incomplete(cloud, 
     monkeypatch.setattr(semantic_due_selection, 'time', semantic_drain.time)
     monkeypatch.setattr(cloud_inference, 'time', semantic_drain.time)
     led.db.set_trace_callback(lambda sql: clock.__setitem__(0, 1.0)
-        if sql.startswith('SELECT j.job_id,j.kind') else None)
+        if sql.startswith('SELECT j.job_id,j.project_id,COALESCE') else None)
     try:
         with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
             with legacy_cloud_routes():
@@ -398,7 +398,7 @@ def test_cloud_selection_invalidates_progress_when_config_changes(cloud, monkeyp
     monkeypatch.setattr(semantic_due_selection, 'time', semantic_drain.time)
     monkeypatch.setattr(cloud_inference, 'time', semantic_drain.time)
     led.db.set_trace_callback(lambda sql: clock.__setitem__(0, 1.0)
-        if sql.startswith('SELECT j.job_id,j.kind') else None)
+        if sql.startswith('SELECT j.job_id,j.project_id,COALESCE') else None)
     try:
         with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
             with legacy_cloud_routes():
@@ -489,7 +489,7 @@ def test_cloud_selection_resume_adds_jobs_above_highwater(cloud, monkeypatch):
     monkeypatch.setattr(semantic_due_selection, 'time', semantic_drain.time)
     monkeypatch.setattr(cloud_inference, 'time', semantic_drain.time)
     led.db.set_trace_callback(lambda sql: clock.__setitem__(0, 1.0)
-        if sql.startswith('SELECT j.job_id,j.kind') else None)
+        if sql.startswith('SELECT j.job_id,j.project_id,COALESCE') else None)
     try:
         with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
             with legacy_cloud_routes():
@@ -530,7 +530,7 @@ def test_cloud_selection_invalidates_replaced_database_inode(cloud, tmp_path, mo
     def interrupt_after_page():
         clock[0] = 0.0
         led.db.set_trace_callback(lambda sql: clock.__setitem__(0, 1.0)
-            if sql.startswith('SELECT j.job_id,j.kind') else None)
+            if sql.startswith('SELECT j.job_id,j.project_id,COALESCE') else None)
         try:
             with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
                 with legacy_cloud_routes():
