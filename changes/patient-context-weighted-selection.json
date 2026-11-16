@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "患者コンテキストの要約に使う根拠を、区分の重みと新しさで選ぶ",
+  "summary": "患者コンテキストの要約に渡す根拠を、現在4・不一致3・予定2・未確認2・履歴1の12枠の周期で、状態の日付が新しい順に選びます。履歴が要約の候補を占めにくくなります。要約契約が変わるため、全患者の概況が一度作り直され、品質確認の識別値と意味解析の候補指紋も変わります。",
+  "upgrade": "単独では配備せず、P0 の一連の変更と合わせて配備してください。追加の操作は不要です。配備後、各患者の概況は作り直しが済むまで表示されないことがあります。",
+  "details": [
+    "要約契約（summary_contract）は patient_context_selection.py のhashを含むため変わり、入力署名 source_sig を通じて各患者の概況が一度作り直されます。生成枠（1日4回）の扱いは従来どおりです。",
+    "資料ごとの調査（scan）の走査契約と添付の抽出の契約には patient_context_selection を含まないため、調査と添付の抽出はやり直しません。",
+    "抽出の読込み元一覧（_LOADED_SOURCE_DIGESTS）と意味解析の読込み元（semantic_candidate.loaded_source_contract）に patient_context_selection が含まれるため、患者コンテキストの品質確認の識別値（_quality_code と、それを含む資料ごとの品質保留の識別値）と意味解析の候補指紋（candidate_fingerprint）が変わります。",
+    "区分内では分類を交互に取り、分類内は state_day、なければ posted_day、なければ投稿時刻の日付、次に投稿時刻、最後にIDの降順で並べます。読めない日付・時刻は最も古い扱いにします。",
+    "空いた枠は現在・不一致・予定・未確認の順で埋め、履歴以外が尽きたら残りを履歴で埋めます。上限256件と総数の数え方、5区分以外・既知の分類以外の事実を除く扱いは変わりません。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_selection.py",
+    "docs/specs/patient-context.md",
+    "tests/patients/test_patient_context_selection.py"
+  ]
+}

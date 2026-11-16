@@ -1,25 +1,75 @@
 """Select bounded patient-context reports for the summary and validate its verbatim choices without I/O."""
+from datetime import date, datetime, timedelta, timezone
 import json
+import math
+import re
 
 from patient_context import CATEGORIES
 import patient_context_plan as context_plan
 
 MAX_FACTS = 256
 MAX_SUMMARY = 12
+_JST = timezone(timedelta(hours=9))
+_ISO_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+# One 12-slot cycle: current 4, conflict 3, plan 2, unknown 2, history 1.
+_CYCLE = ("current", "conflict", "plan", "current", "unknown", "conflict",
+          "current", "plan", "unknown", "conflict", "current", "history")
+# An empty slot borrows in this order; history only fills once these run out.
+_FALLBACK = ("current", "conflict", "plan", "unknown", "history")
 
 
 def select_facts(facts):
-    """Select category-fair reports without changing per-source storage."""
+    """Select recent reports in a weighted bucket cycle that keeps categories alternating."""
     # Selection is bounded, storage remains per source. Round robin categories
     # prevents one busy topic from hiding every older background category.
-    ordered = sorted(facts.values(), key=lambda f: (f.get("posted_at_ts") or 0, f["id"]), reverse=True)
-    buckets = []
-    for bucket in ("current", "conflict", "plan", "unknown", "history"):
+    # Facts outside these five buckets or outside CATEGORIES stay excluded
+    # from both the selection and the total, as before.
+    ordered = sorted(facts.values(), key=_recency, reverse=True)
+    queues = {}
+    for bucket in _FALLBACK:
         groups = [[f for f in ordered if f["category"] == c and f.get("view_bucket", "unknown") == bucket]
                   for c in sorted(CATEGORIES)]
-        buckets.append([group[i] for i in range(max(map(len, groups), default=0)) for group in groups if i < len(group)])
-    selected = [group[i] for i in range(max(map(len, buckets), default=0)) for group in buckets if i < len(group)]
-    return selected[:MAX_FACTS], len(selected)
+        queues[bucket] = [group[i] for i in range(max(map(len, groups), default=0)) for group in groups if i < len(group)]
+    total = sum(map(len, queues.values()))
+    taken = dict.fromkeys(queues, 0)
+    selected = []
+    for position in range(min(total, MAX_FACTS)):
+        bucket = next(b for b in (_CYCLE[position % len(_CYCLE)], *_FALLBACK) if taken[b] < len(queues[b]))
+        selected.append(queues[bucket][taken[bucket]])
+        taken[bucket] += 1
+    return selected, total
+
+
+def _recency(fact):
+    """Order by clinical day, then posting time, then id; unreadable values sort as oldest."""
+    stamp = _timestamp(fact.get("posted_at_ts"))
+    temporal = fact.get("temporal") if isinstance(fact.get("temporal"), dict) else {}
+    day = _ordinal(temporal.get("state_day")) or _ordinal(temporal.get("posted_day"))
+    if day is None and stamp is not None:
+        try:
+            day = datetime.fromtimestamp(stamp, _JST).date().toordinal()
+        except (OverflowError, OSError, ValueError):
+            day = None
+    return (day or 0, stamp or 0.0, str(fact["id"]))
+
+
+def _timestamp(value):
+    """Read a finite numeric posting time; bools, text and huge or non-finite numbers are unreadable."""
+    try:
+        stamp = float(value) if type(value) in (int, float) else None
+    except OverflowError:
+        return None
+    return stamp if stamp is not None and math.isfinite(stamp) else None
+
+
+def _ordinal(value):
+    """Read a strict YYYY-MM-DD day; other spellings and types are unreadable."""
+    if type(value) is not str or not _ISO_DAY.fullmatch(value):
+        return None
+    try:
+        return date.fromisoformat(value).toordinal()
+    except ValueError:
+        return None
 
 
 def summary_reports(facts):
