@@ -119,5 +119,6 @@ python3 ci/mine_gates.py --check
 
 agmsg team `devflow-mcs` と devflow の運用は廃止済み（2026-10-02）。その座席・受信コマンド・フックを使わず、中央設定を推測で再作成しない。
 同じ Herdr タブの Codex・Claude 連携はユーザー全体設定の規約に従う。レビューの受入は技術的な受入で、merge・配備の許可ではない。
+GitHub 上の AI 実装（Claude Code Action・Copilot・Dots/Codex）は `docs/development/AUTOMATION.md` に従う。所有者が Issue に付けた `担当:*` ラベルは、その Issue の範囲で `agent/`・`copilot/`・`codex/` ブランチへ push し下書きPRを作る明示指示とみなす。merge・tag・Release・配備の許可は含まない。
 
 ドキュメントと既存のコードが食い違うときはコードの書き方に従い、見つけた食い違いを最後の返答ですべて挙げること
