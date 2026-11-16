@@ -21,7 +21,7 @@ import re
 import stat
 import time
 
-from safe_io import open_lock_file
+from safe_io import fsync_dir, open_lock_file
 
 DIR_NAME = "access_log"
 LOCK_NAME = ".lock"
@@ -72,9 +72,13 @@ def _open_dir(data_dir, *, create):
     path = directory(data_dir)
     if create:
         try:
-            os.mkdir(path, 0o700)  # the data root itself must already exist
-        except FileExistsError:
-            pass
+            try:
+                os.mkdir(path, 0o700)  # the data root itself must already exist
+            except FileExistsError:
+                pass
+            # The directory entry must be durable before any access is acknowledged;
+            # repeated every time so a failed earlier fsync cannot be skipped.
+            fsync_dir(os.path.dirname(path))
         except OSError as error:
             raise AccessLogError("access_log_unavailable") from error
     try:
@@ -205,8 +209,9 @@ def record(data_dir, *, via, actor, op, channel=None, kind=None, project_id=None
                     raise
             finally:
                 os.close(fd)
-            if name not in names:
-                os.fsync(dir_fd)
+            # Every time: a monthly file left by an earlier failed directory sync
+            # would otherwise be acknowledged without a durable directory entry.
+            os.fsync(dir_fd)
     except OSError as error:
         raise AccessLogError("access_log_unavailable") from error
     finally:

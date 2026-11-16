@@ -227,8 +227,9 @@ def _own_unreacted(db, until, ok, room, self_id) -> list:
             invalid += meta["reactions_status"] == "invalid"
             unfetched += meta["reactions_status"] != "invalid"
         elif others == 0:
-            rows.append(f"・{room(r['project_id'])} "
-                        f"{_ago(until - r['posted_at_ts'])}・{_observed(meta)}")
+            rows.append((f"・{room(r['project_id'])} "
+                         f"{_ago(until - r['posted_at_ts'])}・{_observed(meta)}",
+                         {r["project_id"]}))
     head = [f"反応なし {len(rows)}投稿"]
     if unfetched or invalid:
         head.append(_stamp_gaps(unfetched, invalid))
@@ -299,7 +300,7 @@ def _addressed_unanswered(db, until, ok, room, self_id, signals_on,
                 rows.append((r["project_id"], f"・{room(r['project_id'])} "
                              f"自分宛・{_ago(until - r['posted_at_ts'])}・{state}"))
     # stable: each class keeps its signal-then-mention order before MAX_LIST
-    rows = [t for _pid, t in sorted(rows, key=lambda r: r[0] in archived)]
+    rows = [(t, {pid}) for pid, t in sorted(rows, key=lambda r: r[0] in archived)]
     notes = [] if self_id is not None else [
         "本人の送信者IDが不明のためメンションは判定していません。"]
     if station:
@@ -357,7 +358,8 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     """The summary display model for [since, until). ``flt`` is a
     parse_scope dict (None = all); ``names`` shows patient names next to
     project ids; ``allowed`` is the caller's project scope; ``shown``
-    collects every project the model labels, for the access record."""
+    collects the projects whose source rows survive into the final model, for
+    the access record (rows cut by the list or size limits are not shown)."""
     import notify_views
     flt = flt or parse_scope("")
     keep = scope_projects(db, flt, name, allowed)
@@ -372,13 +374,12 @@ def build(db, cfg, since: float, until: float, flt=None, *,
         return keep is None or pid in keep
 
     def room(pid) -> str:
-        if shown is not None and type(pid) is int:
-            shown.add(pid)
         name_ = _plain(project_display_name(db, pid)) if names else ""
         # staff read names; the internal id only identifies a room when
         # names are off or missing
-        return (name_ or f"project {pid}") \
+        label = (name_ or f"project {pid}") \
             + (notify_views.ARCHIVED_MARK if pid in archived else "")
+        return label
 
     start = datetime.fromtimestamp(since, JST)
     end = datetime.fromtimestamp(until, JST)
@@ -452,27 +453,37 @@ def build(db, cfg, since: float, until: float, flt=None, *,
         {"type": "text", "text": f"対象: {_scope_label(flt, name)} {patients}人・{span}"
                                  f"\n{summary}"}]
 
+    line_projects = {}
+
+    def text_container(lines, fold=False):
+        texts, refs = [], []
+        for line in lines:
+            text, pids = line if isinstance(line, tuple) else (line, set())
+            texts.append(text)
+            refs.extend([pids] * len(text.split("\n")))
+        line_projects[len(containers)] = refs
+        containers.append({"type": "text", "fold": fold, "text": "\n".join(texts)})
+
     def section(head, lines, fold=False):
         if lines:
-            containers.append({"type": "text", "fold": fold,
-                               "text": "\n".join([f"■ {head}", *lines])})
+            text_container([f"■ {head}", *lines], fold)
 
     self_id = self_identity.self_sender_id(db)
     todo = []
     for label, pids in (("期限切れタスク", late), ("本日期限タスク", due)):
         if pids:
             rooms_ = sorted(dict.fromkeys(pids), key=lambda p: p in archived)
-            todo.append(f"・{label} {len(pids)}件（{len(rooms_)}人）: "
-                        + _ids(rooms_, room))
+            todo.append((f"・{label} {len(pids)}件（{len(rooms_)}人）: "
+                         + _ids(rooms_, room), set(rooms_[:MAX_LIST])))
     for mark, counts in by_class(stale_by):
         todo.append(f"・滞留アラート（{STALE_ALERT_D}日超・未確認）{mark}"
                     f"{sum(counts.values())}件: " + "・".join(
                         f"{_signal_ja(k)} {n}" for k, n in sorted(counts.items())))
     section("要対応", todo)
     section(f"緊急度高 {len(urgent)}件", [
-        f"・{room(p)} {_posted_hhmm(db, m)}" + (
+        (f"・{room(p)} {_posted_hhmm(db, m)}" + (
             " 🚨" + structured_view.urgency_qc_suffix(db, m)
-            if u == "llm" else " 🚨")
+            if u == "llm" else " 🚨"), {p})
         for p, m, u in urgent], fold=True)
     section(f"自分宛で返信の記録なし（直近{OWN_POST_DAYS}日）",
             _addressed_unanswered(db, until, ok, room, self_id, signals_on,
@@ -486,9 +497,9 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     ranked = sorted(per.items(), key=lambda kv: (kv[0] in archived,
                                                  -sum(kv[1].values()), kv[0]))
     section(f"新着（患者別 {len(per)}人）", [
-        f"・{room(pid)} {sum(p.values())}件（" + "・".join(
+        (f"・{room(pid)} {sum(p.values())}件（" + "・".join(
             f"{k} {n}" for k, n in sorted(p.items(), key=lambda x: -x[1]))
-        + "）" for pid, p in ranked], fold=True)
+        + "）", {pid}) for pid, p in ranked], fold=True)
 
     section("確認待ちのアラート", [
         "・" + "・".join(f"{_signal_ja(k)} {n}" for k, n in sorted(counts.items())) + mark
@@ -523,15 +534,17 @@ def build(db, cfg, since: float, until: float, flt=None, *,
             summaries.append(r["project_id"])
     # count rooms, not artifacts — one room refetched twice is one update
     updated = sorted(dict.fromkeys(summaries), key=lambda p: p in archived)
-    section("連携サマリー更新", [f"・{len(updated)}件: " + _ids(updated, room)]
+    section("連携サマリー更新", [(f"・{len(updated)}件: " + _ids(updated, room),
+                              set(updated[:MAX_LIST]))]
             if updated else [])
 
     gaps = coverage_gaps(db)
     cov = []
     incomplete = [r for r in gaps["incomplete_rooms"] if ok(r[0])]
     if incomplete:
-        cov.append(f"・取得未完了のルーム {len(incomplete)}件: " + _ids(
-            incomplete, lambda r: f"{room(r[0])}（{notify_views.fetch_reason_ja(r[1])}）"))
+        cov.append((f"・取得未完了のルーム {len(incomplete)}件: " + _ids(
+            incomplete, lambda r: f"{room(r[0])}（{notify_views.fetch_reason_ja(r[1])}）"),
+            {r[0] for r in incomplete[:MAX_LIST]}))
     else:
         cov.append("・未完了として記録されたルーム: なし")
     scoped = "（全体）" if keep is not None else ""
@@ -551,13 +564,20 @@ def build(db, cfg, since: float, until: float, flt=None, *,
                       "state='failed' AND next_try IS NULL").fetchone()[0]
     if held:
         cov.append(f"・送信保留の通知（全体）: {held}件")
-    containers.append({"type": "text",
-                       "text": "\n".join(["■ 取得状況", *cov])})
+    text_container(["■ 取得状況", *cov])
     footer = []
     if flt["mine"]:
         footer.append("※ 担当: 担当者欄が表示名と一致する未完了タスク")
-    return fit_parts({"containers": containers,
-                      "footer": [{"type": "text", "text": t} for t in footer]})
+    retained = {}
+    model = fit_parts({"containers": containers,
+                       "footer": [{"type": "text", "text": t} for t in footer]},
+                      retained_lines=retained)
+    if shown is not None:
+        for i, refs in line_projects.items():
+            for n in retained.get(i, []):
+                shown.update(pid for pid in refs[n] if type(pid) is int)
+    return model
+
 
 
 def _nonzero(parts) -> str:

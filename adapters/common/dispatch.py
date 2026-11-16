@@ -165,6 +165,15 @@ def _outcome(reply: str, parsed) -> str:
     return "ok"
 
 
+def _bare_denial(reply: str, parsed, outcome: str) -> bool:
+    """True only for a failure that carries nothing but its code."""
+    if outcome == "ok":
+        return False
+    if parsed is None:
+        return True  # a bare code, or a summary's fixed unavailable notice
+    return isinstance(parsed, dict) and set(parsed) <= {"ok", "error"}
+
+
 def _returned_patients(parsed) -> set[int]:
     """Every project id an answer contains, so list views are attributed per patient."""
     found, stack = set(), [parsed]
@@ -183,21 +192,28 @@ def _audited(reply: str, data: dict, settings: dict[str, Any],
              identity: dict[str, str | None]) -> str:
     """Record who touched which patient before an answer leaves the host.
 
-    A successful read whose record cannot be written is withheld (fail
-    closed). Denials carry no patient data, and a confirmed write already
-    has its own receipt, so those answers are returned unchanged.
+    An answer whose record cannot be written is withheld (fail closed),
+    including a failure that still carries patient content. Bare denials
+    carry no patient data, and a confirmed write already has its own
+    receipt, so those answers are returned unchanged.
     """
     parsed = None if isinstance(reply, _Shown) else _parsed(reply)
     outcome = reply.outcome if isinstance(reply, _Shown) else _outcome(reply, parsed)
     patients = reply.patients if isinstance(reply, _Shown) else _returned_patients(parsed)
     reply = str(reply)
     phase = data.get("phase")
+    kind, project_id = data.get("kind") or data.get("action"), data.get("project_id")
+    payload = data.get("payload")
+    if phase == "confirm" and outcome == "ok" and isinstance(payload, dict):
+        # A confirmation names its patient and action only inside the payload
+        # that confirm() has just validated against its hash and actor.
+        kind = str(payload.get("cmd") or "").rpartition(".")[2] or None
+        project_id = payload.get("project_id")
     recorded = record_access(
         settings, identity, op=_audit_op(data.get("op"), phase),
-        kind=_known(data.get("kind") or data.get("action"), _AUDIT_KINDS),
-        project_id=data.get("project_id"), patients=patients,
+        kind=_known(kind, _AUDIT_KINDS), project_id=project_id, patients=patients,
         outcome=outcome, query="query" in data)
-    if not recorded and outcome == "ok" and phase != "confirm":
+    if not recorded and phase != "confirm" and not _bare_denial(reply, parsed, outcome):
         return deny("access_log_unavailable")
     return reply
 

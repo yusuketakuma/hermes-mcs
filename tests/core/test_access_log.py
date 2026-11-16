@@ -130,3 +130,34 @@ def test_an_interrupted_append_at_month_end_is_dropped_before_the_next_month(tmp
     assert path.read_bytes() == complete
     assert access_log.verify(tmp_path)["ok"] is True
     assert len(list(access_log.read(tmp_path))) == 2
+
+
+def test_new_log_directory_is_made_durable_before_the_first_record(tmp_path, monkeypatch):
+    synced = []
+    monkeypatch.setattr(access_log, "fsync_dir", lambda path, **_k: synced.append(os.fspath(path)))
+    access_log.record(tmp_path, via="slack", actor="a", op="read")
+    assert os.fspath(tmp_path) in synced
+
+    def broken(path, **_k):
+        raise OSError("synthetic")
+    monkeypatch.setattr(access_log, "fsync_dir", broken)
+    with pytest.raises(access_log.AccessLogError, match="access_log_unavailable"):
+        access_log.record(tmp_path, via="slack", actor="a", op="read")
+
+
+def test_log_directory_is_synced_again_after_a_failed_publication(tmp_path, monkeypatch):
+    real_fsync, synced, fail = os.fsync, [], [True]
+    log_dir = tmp_path / access_log.DIR_NAME
+
+    def fsync(fd):
+        info = os.fstat(fd)
+        if stat.S_ISDIR(info.st_mode) and log_dir.exists() and info.st_ino == log_dir.stat().st_ino:
+            synced.append(fd)
+            if fail.pop() if fail else False:
+                raise OSError("synthetic")
+        return real_fsync(fd)
+    monkeypatch.setattr(access_log.os, "fsync", fsync)
+    with pytest.raises(access_log.AccessLogError):
+        access_log.record(tmp_path, via="slack", actor="a", op="read")
+    access_log.record(tmp_path, via="slack", actor="a", op="read")
+    assert len(synced) == 2  # the retry synced the log directory again

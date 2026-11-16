@@ -101,7 +101,7 @@ def acknowledge(args) -> int:
 def review(entries, *, max_patients: int) -> list[dict]:
     """Summarize each actor so a person can spot unusual access without reading every line."""
     actors = defaultdict(lambda: {"records": 0, "denied": 0, "off_hours": 0, "patients": set(),
-                                   "unlisted": 0})
+                                   "widest": 0, "partial": False})
     for entry in entries:
         row = actors[(entry.get("via"), entry.get("actor"))]
         row["records"] += 1
@@ -110,17 +110,23 @@ def review(entries, *, max_patients: int) -> list[dict]:
         hour = datetime.fromtimestamp(entry.get("ts", 0), JST).hour
         if hour >= OFF_HOURS[0] or hour < OFF_HOURS[1]:
             row["off_hours"] += 1
-        row["patients"].update(_patients_of(entry))
-        row["unlisted"] += entry.get("patients_more") or 0
+        ids = _patients_of(entry)
+        more = entry.get("patients_more") or 0
+        row["patients"].update(ids)
+        # IDs past the per-record limit are only counted, so they cannot be deduplicated across
+        # records: the widest single access is a lower bound, never a sum of overflows.
+        row["widest"] = max(row["widest"], len(ids) + more)
+        row["partial"] = row["partial"] or more > 0
     result = []
     for (via, actor), row in sorted(actors.items(), key=lambda item: str(item[0])):
+        patients = max(len(row["patients"]), row["widest"])
         flags = [name for name, hit in (
-            ("many_patients", len(row["patients"]) + row["unlisted"] > max_patients),
+            ("many_patients", patients > max_patients),
             ("denied", row["denied"] > 0),
             ("off_hours", row["off_hours"] > 0)) if hit]
         result.append({"via": via, "actor": actor, "records": row["records"],
-                       "patients": len(row["patients"]) + row["unlisted"], "denied": row["denied"],
-                       "off_hours": row["off_hours"], "flags": flags})
+                       "patients": patients, "patients_at_least": row["partial"],
+                       "denied": row["denied"], "off_hours": row["off_hours"], "flags": flags})
     return result
 
 

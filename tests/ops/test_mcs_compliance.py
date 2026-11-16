@@ -31,7 +31,18 @@ def test_review_counts_patients_a_list_view_returned():
     entries = [{"via": "slack", "actor": "c", "ts": day, "outcome": "ok", "project_id": None,
                 "patients": [1, 2], "patients_more": 1}]
     row, = mcs_compliance.review(entries, max_patients=2)
-    assert row["patients"] == 3 and row["flags"] == ["many_patients"]
+    assert row["patients"] == 3 and row["patients_at_least"] and row["flags"] == ["many_patients"]
+
+
+def test_review_never_sums_overflow_counts_of_repeated_reads():
+    day = 1_790_000_000 - 1_790_000_000 % 86400 + 3 * 3600
+    listed = list(range(200))
+    entries = [{"via": "slack", "actor": "d", "ts": day, "outcome": "ok", "project_id": None,
+                "patients": listed, "patients_more": 1} for _ in range(30)]
+    entries.append({"via": "slack", "actor": "d", "ts": day, "outcome": "ok", "project_id": 500})
+    row, = mcs_compliance.review(entries, max_patients=220)
+    # The unlisted patient may be patient 500, so 201 is the safe lower bound, not 231.
+    assert row["patients"] == 201 and row["patients_at_least"] and row["flags"] == []
 
 
 # --- receipted facility review (ops.external_transfer_acknowledge) -----------------------------
@@ -392,3 +403,4 @@ def test_chat_buttons_cannot_widen_external_ai_transmission():
     from adapters.common import human_commands
     assert external_transfer.CMD not in human_commands._PROJECTLESS_OPS
     assert external_transfer.CMD.removeprefix("ops.") not in human_commands.CONTROL_FIELDS
+
