@@ -254,6 +254,15 @@ def test_unreadable_rows_alone_are_a_warning(synthetic_database, monkeypatch):
     assert mcs_setup._doctor_context_refresh({}, probe=True)['status'] == 'warning'
 
 
+def test_unreadable_patient_count_alone_is_a_warning(synthetic_database, monkeypatch, healthy_states):
+    counts = {**dict.fromkeys(mcs_setup._CONTEXT_REFRESH_COUNTS, 0), 'invalid': 1}
+    monkeypatch.setitem(sys.modules, 'patient_context_refresh', _refresh(lambda *a: counts))
+    report = mcs_setup._doctor_context_refresh({}, probe=True)
+    assert report['counts'] == counts and report['status'] == 'warning'
+    base = {'status': 'warning', 'enabled': True, 'publication': True, 'lanes': None, 'states': None}
+    assert '読めない記録1件' in mcs_setup._context_refresh_lines({**base, 'counts': counts})[0]
+
+
 def test_malformed_states_are_unknown_not_zero(synthetic_database, monkeypatch):
     states = _healthy_states()
     states['scan_failed']['codes']['synthetic-private-name'] = 1

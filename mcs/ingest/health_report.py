@@ -865,7 +865,7 @@ def pending_health(db, now, seconds=None):
 
 PATIENT_CONTEXT_S = 2.0     # one bounded count per COVERAGE_COUNT_S, like coverage
 _PATIENT_CONTEXT_COUNTS = ("published", "active_patients", "extraction_complete",
-                           "focus_eligible", "focus_targets")
+                           "focus_eligible", "focus_targets", "invalid_rows")
 
 
 def _observation_failure(exc) -> str:

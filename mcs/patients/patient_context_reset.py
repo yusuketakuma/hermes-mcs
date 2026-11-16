@@ -229,12 +229,7 @@ def _plan(db, cfg, now, stop):
     kinds = {kind: db.execute("SELECT COUNT(*) FROM artifacts WHERE kind=?", (kind,)).fetchone()[0]
              for kind in ERASED_KINDS}
     from patient_context_refresh_readiness import lane_metrics
-    try:
-        outcomes = lane_metrics(db)
-    except stop:
-        raise
-    except ValueError:
-        outcomes = None
+    outcomes = lane_metrics(db)
     body = {"refusal": refusal, "kinds": kinds, "quality_claims": db.execute(
                 "SELECT COUNT(*) FROM fetch_jobs WHERE kind=?", (state.QUALITY_CLAIM,)).fetchone()[0],
             "accounting_rows": len(accounting.ids) if accounting else 0,
