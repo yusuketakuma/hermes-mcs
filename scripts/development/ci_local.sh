@@ -190,6 +190,9 @@ job_publication_request() {
 job_lint_test() {
     make lint
     python3 scripts/development/check_drug_master_bundle.py
+    # This may run on the Mac that also hosts the live services: keep the old
+    # two test processes unless the caller asks for more (CI sizes by CPU).
+    export MCS_TEST_SHARDS="${MCS_TEST_SHARDS:-2}"
     python3 ci/run_pytest_groups.py linux
     # PR-only step regenerates and diffs; --check proves the same without writing
     python3 scripts/development/update_readme.py --check
@@ -228,6 +231,7 @@ job_incident_gates() {
     python3 ci/mine_gates.py --check
 }
 job_macos() {
+    export MCS_TEST_SHARDS="${MCS_TEST_SHARDS:-2}"   # see job_lint_test
     python3 ci/run_pytest_groups.py macos
 }
 job_hermes_integration() {

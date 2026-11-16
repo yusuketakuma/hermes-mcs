@@ -1036,17 +1036,50 @@ setup/teardownの失敗時に領域が残る保証はなく、runner終了時に
 
 ### CIの並列実行と診断
 
-`lint-test`は`tests/meta`・`tests/ops`と、それ以外の`tests/`・`integration/`の2群を並列で実行します。
-`macos`は`tests/meta`と`tests/ops`の2群です。いずれも`ci/run_pytest_groups.py`から既存の
-`scripts/run_tests.sh`を起動し、群ごとに一時HOMEと認証情報の隔離を維持します。
-ディレクトリ単位の指定で既存の収集条件とファイル内の順序を保ち、片方が失敗しても全群の終了を待ちます。
-1群でも失敗すればジョブは失敗です。SDK統合と安全ゲートの専用ジョブも維持します。
+`lint-test`は`tests/`・`integration/`全体を、`macos`は`tests/meta`・`tests/ops`を、N個の shard に分けて並列で実行します。
+`ci/run_pytest_groups.py`が shard ごとに既存の`scripts/run_tests.sh`を起動し、一時HOMEと認証情報の隔離を shard ごとに維持します。
+各 shard はディレクトリ指定で同じ全体を収集し（root の`collect_ignore_glob`も有効）、ルート`conftest.py`の
+`--mcs-shard=I/N`が`ci/pytest_shards.py`の決定的な割り当てで自分の担当ファイル以外を deselect します。
+ファイル内の順序は保ちますが、ファイルの実行順と組合せは割り当てで変わり、同じディレクトリのファイルが別プロセスで同時に動きます。
+shard だけが失敗したときは、同じ lane の対象と`--mcs-shard=I/N --mcs-shard-durations=ci/pytest_durations.<lane>.json`で
+その shard を単独で再実行し、同時実行による失敗か回帰かを切り分けてください。
+Nは`--shards`、`MCS_TEST_SHARDS`、使えるCPU数（2〜8）の順に決まります。`ci_local.sh`は稼働中のMacでも動くため、
+指定がなければ従来と同じ2です。
+
+runner は全 shard の終了を待ち、1つでも失敗すればジョブを失敗にします。exit 0 でも、各 shard の報告
+（`shard-<i>.report.json`：収集総数・選択数・node id の digest）と JUnit を突き合わせ、全テストがちょうど1回選ばれて
+実行されたことを確認できなければ失敗にします。ハングガードで止まった shard は報告が完了しないため失敗になり、
+最後の出力行を表示します。ファイル数より shard が多いときだけ、空の shard の exit 5 を成功として扱います。
+全選択テストの実行を報告が示している shard では、JUnit の testcase 数の不一致は警告だけにします（数え方は pytest の
+JUnit 出力に依存するため）。固定版 pytest を更新した最初の CI では、この警告が出ていないことを確認してください。
+
+割り当ては`ci/pytest_durations.<lane>.json`の実測秒（ファイル単位）を重い順に空いている shard へ配ります。
+表にないファイルは表の中央値、表が空なら各ファイルのテスト数で重み付けします（runner が
+「durations: none usable …」と1行表示します）。0.0秒と記録されたファイルも最小0.05秒として扱い、ファイルがある限り空の
+shard を作りません。有限でない値・負の値・巨大な整数は表から除きます。テスト数による配分は実行時間の近似として粗く、
+特に`tests/meta`（install.sh を起動する）では偏るため、表を CI の実測で埋めるまでは高速化を見込まないでください。1ファイルが1 shard 分を超えると
+runner が警告するので、そのファイルを`split`に加えると node id 単位の連続した塊に分けます。表は同じ lane の
+CIの「pytest diagnostics」artifact から更新します（失敗を含む実行は拒否されます。root 実行や別OSの計測は使わないこと）。
+
+```bash
+python3 ci/update_pytest_durations.py --output ci/pytest_durations.linux.json shard-*.xml
+```
+
+`scripts/run_tests.sh`は一時HOMEの親を、`MCS_TEST_TMPDIR`（指定時。書込み・実行できない場合は exit 2）、
+`TMPDIR`未指定で空きが6 GiB以上かつ書込み・実行・symlink を確認できた`/dev/shm`、`${TMPDIR:-/tmp}`の順に選び、
+選んだ場所を標準エラーに1行表示します。製品の空き容量ガード（添付は約2.5 GiB、健康診断の警告は約4.5 GiB）が
+実際の空きを読むため、小さい tmpfs は使いません。shard は同時に起動して同じ空きを見るので、runner が渡す
+`MCS_TEST_PARALLEL`（shard 数）に応じて、2本目以降の1本ごとに必要な空きを256 MiB増やします（8 shard で8 GiB）。
+成功したテストの一時ディレクトリは削除されますが（`tmp_path_retention_policy = "failed"`）、失敗したテストの分は実行が
+終わるまで残り、`/dev/shm`では RAM を使い続けます。失敗が多い実行や RAM の少ない環境では
+`MCS_TEST_TMPDIR=<ディスク上のディレクトリ>`で一時HOMEをディスクへ移してください。macOS には`/dev/shm`がないので従来どおりです。
+TERM・INT・HUP で止められても一時HOMEを削除します。
 
 Python環境は毎回作成し、uvの依存取得キャッシュを使います。提供元設定やテスト結果、仮想環境自体は
 キャッシュしません。`enable-cache: auto`により、タグのpushなどではキャッシュ復元を避けます。
 詳細は[setup-uvの公式キャッシュ手順](https://github.com/astral-sh/setup-uv/blob/main/docs/caching.md)を参照してください。
 
-各群のログ・JUnitと、遅い30件の実行時間を一時HOMEの外へ保存します。GitHub Actionsでは失敗時も診断ファイルを
+各 shard のログ（`shard-<i>.log`）・JUnit（`shard-<i>.xml`）・報告と、遅い30件の実行時間を一時HOMEの外の同じ`mcs-pytest-*`ディレクトリへ保存します。GitHub Actionsでは失敗時も診断ファイルを
 7日間保持します。全体を再実行する前に、失敗項目と[pytestの実行時間表示](https://docs.pytest.org/en/stable/how-to/usage.html#profiling-test-execution-duration)で原因を確認してください。
 
 ### hosted CI を開始できない場合のローカル同等チェック
@@ -1054,7 +1087,7 @@ Python環境は毎回作成し、uvの依存取得キャッシュを使います
 課金・利用上限・runner 障害で最終 SHA の CI job が開始できない場合だけ、
 `scripts/development/ci_local.sh` で `ci.yml` の6 job（lint-test・hygiene・standalone-sdk・
 incident-gates・macos・hermes-integration）を、その SHA の clean な clone で直列に実行します。
-`lint-test`と`macos`の内部では、CIと同じ2群の並列実行を使います。
+`lint-test`と`macos`の内部では、CIと同じ shard 実行を既定2並列（`MCS_TEST_SHARDS`で変更）で使います。
 未commit・untracked の変更がある checkout では実行を拒否し、job・run 行・固定版はすべて clone 側のランナーと `ci.yml` から読みます。
 CI が実行されて失敗した場合の代わりにはなりません。重いテストを含むため共有 slot を取ってから実行します。
 

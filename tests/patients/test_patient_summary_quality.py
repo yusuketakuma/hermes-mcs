@@ -783,6 +783,7 @@ def test_unknown_after_send_spends_repair_and_does_not_retry(repair):
 def test_summary_repair_reservation_refusal_keeps_both_allowances_unspent(repair, monkeypatch, refusal):
     from contextlib import nullcontext
     led, run, _, _, sent, _, _ = repair
+    sleeps = []
     with monkeypatch.context() as limited:
         if refusal == 'capacity':
             limited.setattr(worker.cloud_backlog, 'request_slot', lambda *_: nullcontext(False))
@@ -791,12 +792,16 @@ def test_summary_repair_reservation_refusal_keeps_both_allowances_unspent(repair
                             lambda owner, *_args, **_kwargs: 'daily_cap' if owner.db.in_transaction else None)
         elif refusal == 'run_lock':
             limited.setattr(patient_context_refresh_state, 'acquire_run_lock', lambda: None)
+            # The production wait sleeps one second per retry; count the retries instead.
+            limited.setattr(patient_context_refresh_state.time, 'sleep', lambda s: sleeps.append(s), raising=False)
         else:
             led.db.execute("CREATE TRIGGER synthetic_repair_failure AFTER INSERT ON artifacts "
                            "WHEN NEW.kind='patient_context_summary_quality_repair_v1' "
                            "BEGIN SELECT RAISE(ABORT,'synthetic reservation abort'); END")
             led.db.commit()
         assert run() == ('deferred', None) and not sent
+        # run_lock defers only after the whole retry loop, not through the deadline return.
+        assert len(sleeps) == (patient_context_quality_receipts._QUALITY_LOCK_WAIT_S if refusal == 'run_lock' else 0)
         assert not led.db.in_transaction
         assert not led.artifacts(patient_context_refresh_state.QUALITY_REPAIR, project_id=1)
         assert not led.artifacts('cloud_usage_reserve', project_id=1)

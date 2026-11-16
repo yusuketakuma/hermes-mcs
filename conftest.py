@@ -63,8 +63,101 @@ def _test_timeout():
         return 300.0
 
 
+# CI sharding (ci/run_pytest_groups.py): --mcs-shard=I/N keeps the I-th of N
+# deterministic parts of the collected tests and deselects the rest, so N
+# processes together run every test exactly once. Without the option nothing
+# changes. ci/pytest_shards.py is loaded by path only when the option is used,
+# because nested runs copy this file alone into a temporary directory.
+_shard = None
+
+
+def pytest_addoption(parser):
+    group = parser.getgroup("mcs-shard", "CI shards (ci/run_pytest_groups.py)")
+    group.addoption("--mcs-shard", default=None, metavar="I/N",
+                    help="run only the I-th of N deterministic test-file shards")
+    group.addoption("--mcs-shard-durations", default=None, metavar="PATH",
+                    help="per-file seconds used to balance --mcs-shard")
+    group.addoption("--mcs-shard-report", default=None, metavar="PATH",
+                    help="write the shard's selection and completion report here")
+
+
+def _shards():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ci", "pytest_shards.py")
+    spec = importlib.util.spec_from_file_location("_mcs_pytest_shards", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _write_shard_report(state):
+    path = state["path"]
+    if path:
+        temporary = path + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(state["report"], handle, sort_keys=True)
+        os.replace(temporary, path)
+
+
+def _configure_shard(config):
+    global _shard
+    spec = config.getoption("--mcs-shard")
+    if spec is None:
+        if config.getoption("--mcs-shard-durations") or config.getoption("--mcs-shard-report"):
+            raise pytest.UsageError("--mcs-shard-durations/--mcs-shard-report need --mcs-shard")
+        return
+    shards = _shards()
+    try:
+        index, count = shards.parse_spec(spec)
+    except ValueError as error:
+        raise pytest.UsageError(str(error)) from None
+    _shard = {"module": shards, "index": index, "count": count,
+              "durations": config.getoption("--mcs-shard-durations"),
+              "path": config.getoption("--mcs-shard-report"),
+              "collect_not_passed": 0, "ran": set(), "report": None}
+
+
+def pytest_collectreport(report):
+    if _shard is not None and not report.passed:
+        _shard["collect_not_passed"] += 1
+
+
+# trylast: -k/-m/--deselect run first, so the shards split what would run.
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(config, items):
+    if _shard is None:
+        return
+    shards = _shard["module"]
+    durations, split = shards.load_durations(_shard["durations"]) if _shard["durations"] else ({}, set())
+    nodeids = [item.nodeid for item in items]
+    assignment, info = shards.plan(nodeids, _shard["count"], durations, split)
+    mine = _shard["index"] - 1
+    keep = [item for item in items if assignment[item.nodeid] == mine]
+    drop = [item for item in items if assignment[item.nodeid] != mine]
+    if drop:
+        config.hook.pytest_deselected(items=drop)
+    items[:] = keep
+    _shard["selected"] = {item.nodeid for item in keep}
+    _shard["report"] = shards.report(nodeids, _shard["index"], _shard["count"], assignment, info,
+                                     _shard["collect_not_passed"])
+    _write_shard_report(_shard)
+
+
+def pytest_runtest_logfinish(nodeid, location):
+    if _shard is not None:
+        _shard["ran"].add(nodeid)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    if _shard is not None and _shard["report"] is not None:
+        _shard["report"].update(finished=True, exitstatus=int(exitstatus),
+                                ran=len(_shard["ran"] & _shard["selected"]),
+                                collect_not_passed=_shard["collect_not_passed"])
+        _write_shard_report(_shard)
+
+
 def pytest_configure(config):
     global _hang_stderr
+    _configure_shard(config)
     if _hang_stderr is None and _test_timeout():
         duplicate = os.dup(2)
         try:
@@ -79,7 +172,8 @@ def pytest_configure(config):
 
 
 def pytest_unconfigure(config):
-    global _hang_stderr
+    global _hang_stderr, _shard
+    _shard = None
     _cancel_dump()
     if _hang_stderr is not None:
         _hang_stderr.close()
