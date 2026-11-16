@@ -218,6 +218,7 @@ def test_labels_and_workflows_agree_with_the_module():
     assert "workflow_dispatch" in repair and "issue_comment" not in repair and "pull_request" not in repair.split("jobs:")[0]
     assert repair.index("agent_control.py repair") < repair.index("ref: ${{ steps.pr.outputs.branch }}")
     assert "actions: read" in repair.split("additional_permissions")[1]
+    assert "group: agent-claude-writer" in repair and "group: agent-claude-writer" in claude
     assert "--match-head-commit" in control
     assert "agent_control.py assigned" in claude
     consult = (ROOT / ".github/workflows/agent-consult.yml").read_text()
