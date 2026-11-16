@@ -272,6 +272,9 @@ def test_unsafe_folder_never_blocks_the_watchdog(tmp_path, monkeypatch):
     armed = []
     monkeypatch.setattr(faulthandler, "dump_traceback_later",
                         lambda delay, **kwargs: armed.append(kwargs))
+    # _arm_watchdog records its exit time process-wide; restore it afterwards so
+    # later ticks in this pytest process do not obey this test's hard deadline.
+    monkeypatch.setattr(run_check, "_WATCHDOG_EXIT_AT", None)
     run_check._arm_watchdog(time.monotonic() + 60, 1, None)
     assert armed == [{"exit": True}]
     assert list((tmp_path / "elsewhere").iterdir()) == []
