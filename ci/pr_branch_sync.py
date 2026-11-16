@@ -33,8 +33,10 @@ import time
 from agent_control import same_repository  # ci/ is this script's import root
 
 MARKER = "<!-- main-sync:update-branch -->"
-CI_WORKFLOW = "ci.yml"
-NOTES_WORKFLOW = "release-notes.yml"
+# Workflows started on the merged head, with their inputs. release-notes.yml
+# checks change records on pull_request only; its pr_check runs that check
+# (and nothing that writes) on the branch.
+DISPATCHES = {"ci.yml": (), "release-notes.yml": ("-f", "inputs[action]=pr_check")}
 SYNC_AUTHOR = "github-actions[bot]"  # author of an update-branch merge made with GITHUB_TOKEN
 HEAD_WAIT_SECONDS = 60
 HEAD_POLL_SECONDS = 3
@@ -105,21 +107,19 @@ class Sync:
                 return pr
         return None
 
-    def dispatch_ci(self, ref: str) -> None:
-        self.api("-X", "POST", f"repos/{self.repo}/actions/workflows/{CI_WORKFLOW}/dispatches",
-                 "-f", f"ref={ref}")
-        # the change-record check runs on pull_request only; pr_check runs it
-        # (and nothing that writes) on the branch
-        self.api("-X", "POST", f"repos/{self.repo}/actions/workflows/{NOTES_WORKFLOW}/dispatches",
-                 "-f", f"ref={ref}", "-f", "inputs[action]=pr_check")
+    def dispatch_ci(self, ref: str, workflows=None) -> None:
+        for workflow in workflows or DISPATCHES:
+            self.api("-X", "POST", f"repos/{self.repo}/actions/workflows/{workflow}/dispatches",
+                     "-f", f"ref={ref}", *DISPATCHES[workflow])
 
-    def missing_sync_ci(self, sha: str) -> bool:
-        """True when `sha` is this job's merge commit and CI never ran on it."""
+    def missing_sync_ci(self, sha: str) -> list[str]:
+        """Workflows that never ran on `sha`, when `sha` is this job's merge commit."""
         author = (self.api(f"repos/{self.repo}/commits/{sha}").get("author") or {}).get("login")
         if author != SYNC_AUTHOR:
-            return False  # a person's push starts CI by itself
-        runs = self.api(f"repos/{self.repo}/actions/workflows/{CI_WORKFLOW}/runs?head_sha={sha}&per_page=1")
-        return not runs.get("total_count")
+            return []  # a person's push starts CI by itself
+        return [workflow for workflow in DISPATCHES
+                if not self.api(f"repos/{self.repo}/actions/workflows/{workflow}/runs"
+                                f"?head_sha={sha}&per_page=1").get("total_count")]
 
     def sync_one(self, pr: dict, base_sha: str) -> str:
         number, head = pr["number"], pr["head"]
@@ -127,10 +127,11 @@ class Sync:
             return "skip: fork"
         behind = self.api(f"repos/{self.repo}/compare/{base_sha}...{head['sha']}")["behind_by"]
         if not behind:
-            if self.missing_sync_ci(head["sha"]):
-                # an earlier run merged but its dispatch failed or timed out
-                self.dispatch_ci(head["ref"])
-                return "up to date; CI re-dispatched for an unchecked sync merge"
+            missing = self.missing_sync_ci(head["sha"])
+            if missing:
+                # an earlier run merged but a dispatch failed or timed out
+                self.dispatch_ci(head["ref"], missing)
+                return f"up to date; re-dispatched {', '.join(missing)} for an unchecked sync merge"
             return "skip: up to date"
         if pr.get("auto_merge"):
             self.api("graphql", "-f",

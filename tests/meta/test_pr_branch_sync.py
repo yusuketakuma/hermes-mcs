@@ -57,7 +57,9 @@ class FakeGitHub:
         if path.startswith(f"repos/{REPO}/commits/"):
             return {"author": {"login": self.head_author}}
         if "/runs?head_sha=" in path:
-            return {"total_count": self.ci_runs}
+            runs = self.ci_runs if isinstance(self.ci_runs, dict) else {}
+            name = path.split("/workflows/", 1)[1].split("/", 1)[0]
+            return {"total_count": runs.get(name, self.ci_runs if not runs else 0)}
         if "/comments?" in path:
             return [self.comments]
         return {}
@@ -149,3 +151,11 @@ def test_up_to_date_sync_merge_without_ci_is_dispatched_again(author, runs, disp
     assert [p for _, p, _ in fake.writes] == ([
         f"repos/{REPO}/actions/workflows/ci.yml/dispatches",
         f"repos/{REPO}/actions/workflows/release-notes.yml/dispatches"] if dispatched else [])
+
+
+def test_only_the_workflow_whose_dispatch_was_lost_is_started_again():
+    fake = FakeGitHub([_pr()], behind=0, head_author="github-actions[bot]",
+                      ci_runs={"ci.yml": 1, "release-notes.yml": 0})
+    assert _run(fake) == 0
+    assert fake.writes == [("POST", f"repos/{REPO}/actions/workflows/release-notes.yml/dispatches",
+                            ("-f", "ref=feature-7", "-f", "inputs[action]=pr_check"))]
