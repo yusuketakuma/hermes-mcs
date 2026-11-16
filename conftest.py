@@ -155,9 +155,13 @@ def pytest_sessionfinish(session, exitstatus):
         _write_shard_report(_shard)
 
 
+def pytest_sessionstart(session):
+    # Kept out of pytest_configure: that hook is the hang guard's and is tested in isolation.
+    _configure_shard(session.config)
+
+
 def pytest_configure(config):
     global _hang_stderr
-    _configure_shard(config)
     if _hang_stderr is None and _test_timeout():
         duplicate = os.dup(2)
         try:
