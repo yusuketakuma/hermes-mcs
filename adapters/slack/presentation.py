@@ -70,12 +70,12 @@ def _provider_context(states, prefix=None, visible=None, sequence=None, *, compa
     return {"type": "context", "elements": elements}
 
 
-def _compact_header_context(header):
+def _compact_header_context(header, quiet=False):
     """The sealed compact header as context blocks: the Jev logo image
     plus the local 💻 mark. The frozen 👤 context stays inside the text
     prefix, split into plain context blocks when it overflows."""
     from processing_route import compact_header_parts
-    prefix, ordered = compact_header_parts(header)
+    prefix, ordered = compact_header_parts(header, quiet)
     blocks = []
     if len(prefix) > CONTEXT_MAX:
         blocks.extend(contexts(prefix[:-CONTEXT_MAX]))
@@ -259,7 +259,8 @@ def render_parts(parts, names=None, silent=False, card_kind=None, stamp_control=
             display = parts.get('processing_display_version')
             if display == 3 or (version == 4 and display in (1, 2)):
                 # One compact path for every transport (processing_route).
-                blocks.extend(_compact_header_context(item))
+                from processing_route import quiet_header
+                blocks.extend(_compact_header_context(item, quiet_header(parts)))
                 continue
             states = item["provider_states"]
             text = item["text"]

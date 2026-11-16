@@ -517,6 +517,7 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset(), *,
     set_provider_version(spec["parts"])
     if spec["parts"].get("provider_states_version") == 4:
         spec["parts"]["processing_display_version"] = (3 if any('context_progress' in c for c in containers) else 2)
+        spec["parts"]["processing_header_quiet"] = 1   # owner decision 2026-11-16
     if card["layout"] >= 3 and op != "revoke":
         spec["parts"]["section_divider_version"] = 1
     post_source_id = own_post(card)
@@ -561,6 +562,7 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset(), *,
     set_provider_version(spec["parts"])
     if spec["parts"].get("provider_states_version") != 4:
         spec["parts"].pop("processing_display_version", None)
+        spec["parts"].pop("processing_header_quiet", None)
     if any(b["id"] == "meds" for row in spec["parts"]["action_rows"] for b in row):
         spec["parts"]["drug_view_navigation"] = True
     if present.THREAD_DRUG_ACTIONS and spec["parts"].get("thread_body_parts"):

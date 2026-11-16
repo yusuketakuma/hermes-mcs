@@ -337,7 +337,7 @@ def test_lineworks_stamp_change_revises_only_changed_post(led, monkeypatch, off_
         assert ("合成更新名" if changed_field == "actor" else "再取得失敗") in revised_text
 
 
-@pytest.mark.parametrize("changed_field", ["actor", "failed", "reply"])
+@pytest.mark.parametrize("changed_field", ["actor", "failed", "actors_failed", "reply"])
 def test_layout7_lineworks_stamp_only_change_waits_for_the_next_repost(led, changed_field):
     """Owner decision 2026-11-16: a stamp alone never reposts a LINE WORKS
     card; a failed stamp read or another change still does, and the
@@ -361,10 +361,22 @@ def test_layout7_lineworks_stamp_only_change_waits_for_the_next_repost(led, chan
         return
     if changed_field == "reply":
         _extract(led, 101, {"summary": "合成返信の新しい要約"}, kind="extract_llm")
+    elif changed_field == "actors_failed":
+        # who-pressed fails alone while the counts read fine
+        with led.db:
+            led.db.execute("UPDATE message_reaction_actor_fetch SET last_error='network_error' "
+                           "WHERE message_id=100")
     else:
         with led.db:
             led.db.execute("UPDATE message_metadata SET last_error='network_error' WHERE message_id=100")
     assert notify_cards.sweep(led, LINEWORKS, now=NOW + 3)["updated"] == 1
+    if changed_field == "actors_failed":
+        failed = notify_render.card_content(led.db, _card(led), cfg=LINEWORKS)["actor_fp"]
+        with led.db:
+            led.db.execute("UPDATE message_reaction_actor_fetch SET last_error=NULL WHERE message_id=100")
+        # recovering is a change too, so the failure row does not linger
+        assert notify_render.card_content(led.db, _card(led), cfg=LINEWORKS)["actor_fp"] != failed
+        return
     spec = json.loads(_latest_render(led)["spec_json"])
     assert "スタンプ" not in json.dumps(spec["parts"]["footer"], ensure_ascii=False)
     root = next(p for p in spec["parts"]["manifest"] if p.get("name") == "m:100:header#1")

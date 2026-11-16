@@ -1159,6 +1159,7 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                     and scope_matches(previous["delivery"], stored_scope(card))
                     and previous["parts"].get("provider_states_version") == parts.get("provider_states_version")
                     and previous["parts"].get("processing_display_version") == parts.get("processing_display_version")
+                    and previous["parts"].get("processing_header_quiet") == parts.get("processing_header_quiet")
                     and same_chat_face
                     and same_v4_header
                     and prior_visible == visible_providers
@@ -1173,6 +1174,8 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
         visible["preview_text"] = parts["preview_text"]
     if "processing_display_version" in parts:
         visible["processing_display_version"] = parts["processing_display_version"]
+    if "processing_header_quiet" in parts:
+        visible["processing_header_quiet"] = parts["processing_header_quiet"]
     if "section_divider_version" in parts:
         visible["section_divider_version"] = parts["section_divider_version"]
     if "slack_thread_policy" in parts:

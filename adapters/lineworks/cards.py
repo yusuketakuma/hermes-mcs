@@ -180,11 +180,11 @@ def _text_node(value, style=None):
     return {"type": "text", "text": value or "MCS", "wrap": True, **(style or {})}
 
 
-def _provider_box(item):
+def _provider_box(item, quiet=False):
     """Known public logo icons and shared state marks; no clinical inference."""
     import processing_route
     states = item["provider_states"]
-    ordered = processing_route.compact_header_parts(item)[1]
+    ordered = processing_route.compact_header_parts(item, quiet)[1]
     assets = {key: url for key, _name, url in PROVIDER_ASSETS}
     children = []
     for key in ordered:
@@ -204,12 +204,13 @@ def _face_nodes(parts, posts):
     import notify_render
     import processing_route
     text = card_split(display_text(parts))[0]
+    quiet = processing_route.quiet_header(parts)
     # Splitting the exact sealed prefix keeps the overflow boundary unchanged.
     # Header logos replace only the provider-name suffix; the status stays text.
     headers = {line: item for item in parts["containers"]
                if item.get("provider_scope") == "header"
                and parts.get("processing_display_version") in (1, 2, 3)
-               for line in [processing_route.compact_header(item)] if line}
+               for line in [processing_route.compact_header(item, quiet)] if line}
     if not posts:
         out, plain = [], []
         def flush():
@@ -233,8 +234,8 @@ def _face_nodes(parts, posts):
                 plain.append(line)
                 continue
             flush()
-            fallback = processing_route.compact_header(item)
-            box = _provider_box(item)
+            fallback = processing_route.compact_header(item, quiet)
+            box = _provider_box(item, quiet)
             prefix = fallback.rsplit(" · ", 1)[0] if box and " · " in fallback else fallback
             if prefix:
                 out.append(_text_node(prefix))
@@ -255,7 +256,7 @@ def _face_nodes(parts, posts):
         if item.get("rule") and out:
             out.append(SEPARATOR)
         if item.get("provider_scope") == "header" and parts.get("processing_display_version") in (1, 2, 3):
-            box = _provider_box(item)
+            box = _provider_box(item, quiet)
             prefix = value.rsplit(" · ", 1)[0] if box and " · " in value else value
             if prefix:
                 out.append(_text_node(prefix))

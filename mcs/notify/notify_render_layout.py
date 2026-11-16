@@ -83,7 +83,7 @@ def render_text(parts: dict, head: str = "【{}】", lit=str,
             continue
         if parts.get("processing_display_version") in (1, 2, 3) and item.get("provider_scope") == "header":
             import processing_route
-            item = {**item, "text": processing_route.compact_header(item)}
+            item = {**item, "text": processing_route.compact_header(item, processing_route.quiet_header(parts))}
             if not item["text"]:
                 continue                 # a quiet header without its own prefix
         if item.get("rule") and lines:

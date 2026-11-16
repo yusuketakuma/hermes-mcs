@@ -1199,9 +1199,12 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
             # Retain the deployed fingerprint: upgrading alone must not resend.
             reactions.append((mid, actor_line(actors)))
         elif quiet_stamps:
-            # only a failed stamp read still owes the room a new post
-            if meta["last_error"]:
-                reactions.append((mid, "stamp_error"))
+            # only a failed stamp read (counts or who pressed) still owes
+            # the room a new post; recovering from it does too
+            failed = [name for name, bad in (("counts", meta["last_error"]),
+                                             ("actors", actors["state"] == "failed")) if bad]
+            if failed:
+                reactions.append((mid, "stamp_error", *failed))
         else:
             stamp = (thread_stamp_line(meta, actors, observed_time=stamp_time)
                      if stamp_counts(meta) != {} or meta["last_error"] else "")

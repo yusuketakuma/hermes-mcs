@@ -50,19 +50,27 @@ def _progress(percent=73, stage="sources", held=False):
      "09-24〜 · 2投稿 · ✓ 完了 · 👤 — · Jev ✓  💻 ✓"),
 ])
 def test_header_shows_processing_only_when_something_needs_attention(header, expected):
-    assert processing_route.compact_header(header) == expected
+    assert processing_route.compact_header(header, quiet=True) == expected
+    # a spec sealed before the decision keeps its whole compact header, so a
+    # stored LINE WORKS overflow split still validates after the update
+    assert processing_route.compact_header(header).startswith(
+        "09-24〜 · 2投稿 · " + ("◐" if header["processing_status"] in ("processing", "preparing")
+                              else processing_route.COMPACT_STATUS_LABELS[
+                                  notify_render.PROCESSING_STATUS_LABELS[header["processing_status"]]][0]))
 
 
 def test_a_quiet_header_without_prefix_leaves_no_empty_line_on_any_transport():
     header = _header("complete", prefix="")
-    assert processing_route.compact_header(header) == ""
-    parts = {"provider_states_version": 4, "processing_display_version": 2,
+    assert processing_route.compact_header(header, quiet=True) == ""
+    parts = {"provider_states_version": 4, "processing_display_version": 2, "processing_header_quiet": 1,
              "containers": [{"type": "heading", "text": "💬 合成 花子"}, header],
              "footer": [], "action_rows": []}
     assert notify_render.display_text(parts) == "💬 合成 花子"
     blocks = render_parts(parts, card_kind="thread")
     assert not any(block["type"] == "context" for block in blocks)
-    assert lineworks_cards._provider_box(header) is None
+    assert lineworks_cards._provider_box(header, quiet=True) is None
+    sealed = {k: v for k, v in parts.items() if k != "processing_header_quiet"}
+    assert "完了" in notify_render.display_text(sealed)
 
 
 def test_preview_privacy_masks_names_and_validates_the_setting():

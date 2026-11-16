@@ -325,6 +325,11 @@ def _route(row, meta, content):
 PROBLEM_STATES = frozenset({"attention", "unverified", "failed"})
 
 
+def quiet_header(parts) -> bool:
+    """Whether a spec opted into the problem-only header (processing_header_quiet)."""
+    return parts.get("processing_header_quiet") == 1
+
+
 def header_problem(header):
     """True when a sealed v4 header reports something the reader must see:
     an attention, unknown or missing status, a failed or unconfirmed
@@ -335,12 +340,13 @@ def header_problem(header):
             or (progress is not None and (progress["held"] or progress["stage"] == "unknown")))
 
 
-def compact_header_parts(header):
+def compact_header_parts(header, quiet=False):
     """Sealed compact header -> (display prefix, ordered provider keys).
 
-    Owner decision 2026-11-16: without a problem the header keeps only its
-    own prefix (time and count), plus ◐ while posts are still processed;
-    the status, 👤 progress and provider marks stay in 本文表示."""
+    Owner decision 2026-11-16 (``quiet``, a spec's processing_header_quiet):
+    without a problem the header keeps only its own prefix (time and count),
+    plus ◐ while posts are still processed. A spec sealed before that keeps
+    its full compact header, so its stored LINE WORKS overflow split holds."""
     states = header["provider_states"]
     visible = header["visible_providers"]
     sequence = header.get("provider_sequence")
@@ -358,16 +364,16 @@ def compact_header_parts(header):
             break
     else:
         return text, ordered
-    if header_problem(header):
+    if not quiet or header_problem(header):
         return base + short + rest, ordered
     quiet = short if short.startswith("◐") else ""
     return " · ".join(part for part in (base.removesuffix(" · "), quiet) if part), []
 
 
-def compact_header(header):
+def compact_header(header, quiet=False):
     """Render a validated processing header without claiming live execution."""
     states = header["provider_states"]
-    prefix, ordered = compact_header_parts(header)
+    prefix, ordered = compact_header_parts(header, quiet)
     providers = "  ".join(f"{PROVIDER_NAMES[key]} {COMPACT_MARKS[states[key]]}"
                           for key in ordered if states[key] in COMPACT_MARKS)
     return prefix + (" · " + providers if providers else "")
