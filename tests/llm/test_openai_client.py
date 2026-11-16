@@ -629,7 +629,8 @@ def test_transport_pins_endpoint_and_bearer_auth(monkeypatch):
     args, kwargs = seen[0]
     assert args == ("https://api.openai.com/v1/responses", "POST", {}, 1)
     assert kwargs == {"api_key": "synthetic-private", "deadline": 123,
-                      "allowed_endpoints": (client.ENDPOINT,), "auth": "bearer"}
+                      "allowed_endpoints": (client.ENDPOINT,), "auth": "bearer",
+                      "max_bytes": client.bounded_http.MAX_RESPONSE_BYTES}
 
 
 @pytest.mark.parametrize("n", [100, 272000, 272001, policy.INPUT_RESERVATION_BOUND])

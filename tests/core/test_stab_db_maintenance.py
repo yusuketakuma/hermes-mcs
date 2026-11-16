@@ -18,6 +18,7 @@ import pytest
 import worker_process
 import ledger
 import snapshots
+import local_backup
 import maintenance
 from extract_testkit import _ledger, _message
 
@@ -404,17 +405,17 @@ def test_backup_copy_stops_at_the_deadline(tmp_path, monkeypatch):
     db.save_messages([_message(i, body="x" * 2000) for i in range(1, 200)])
     db.close()
     backups = tmp_path / "backups"
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
-    monkeypatch.setattr(maintenance, "BACKUP_STEP_PAGES", 1)
-    monkeypatch.setattr(maintenance, "backup_time_needed_s", lambda _p: 0)
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(local_backup, "BACKUP_STEP_PAGES", 1)
+    monkeypatch.setattr(local_backup, "backup_time_needed_s", lambda _p: 0)
     clock = iter([0.0])   # the pre-copy budget check sees time left
-    monkeypatch.setattr(maintenance, "monotonic", lambda: next(clock, 100.0))
-    verified, valid = [], maintenance._valid
-    monkeypatch.setattr(maintenance, "_valid",
+    monkeypatch.setattr(local_backup, "monotonic", lambda: next(clock, 100.0))
+    verified, valid = [], local_backup._valid
+    monkeypatch.setattr(local_backup, "_valid",
                         lambda p, d: verified.append(p) or valid(p, None))
     with pytest.raises(maintenance.MaintenanceError,
                        match="backup_deadline_exceeded"):
-        maintenance.daily_backup(str(tmp_path / "ledger.db"), deadline=50.0)
+        local_backup.daily_backup(str(tmp_path / "ledger.db"), deadline=50.0)
     assert not any(p.endswith(".db.tmp") for p in verified)
     assert not list(backups.glob("ledger-*"))
 
@@ -425,22 +426,22 @@ def test_broken_backup_check_leaves_time_to_replace_it(tmp_path, monkeypatch):
     _ledger(tmp_path).close()
     backups = tmp_path / "backups"
     backups.mkdir()
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
-    monkeypatch.setattr(maintenance, "backup_time_needed_s", lambda _p: 10.0)
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(local_backup, "backup_time_needed_s", lambda _p: 10.0)
     dest = backups / f"ledger-{time.strftime('%Y%m%d')}.db"
     dest.write_bytes(b"not a database")
-    checked, valid = {}, maintenance._valid
+    checked, valid = {}, local_backup._valid
 
     def record(path, deadline):
         checked.setdefault(path, deadline)
         return valid(path, deadline)
-    monkeypatch.setattr(maintenance, "_valid", record)
+    monkeypatch.setattr(local_backup, "_valid", record)
     deadline = time.monotonic() + 600
-    assert maintenance.daily_backup(str(tmp_path / "ledger.db"),
+    assert local_backup.daily_backup(str(tmp_path / "ledger.db"),
                                     deadline=deadline) is None
     assert checked[str(dest)] == pytest.approx(
-        deadline - 10.0 - maintenance.BACKUP_CHECK_SLACK_S)
-    assert maintenance.valid_mcs_db(str(dest))
+        deadline - 10.0 - local_backup.BACKUP_CHECK_SLACK_S)
+    assert local_backup.valid_mcs_db(str(dest))
 
 
 def test_overrunning_check_still_leaves_time_to_replace(tmp_path, monkeypatch):
@@ -449,54 +450,54 @@ def test_overrunning_check_still_leaves_time_to_replace(tmp_path, monkeypatch):
     _ledger(tmp_path).close()
     backups = tmp_path / "backups"
     backups.mkdir()
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
-    monkeypatch.setattr(maintenance, "backup_time_needed_s", lambda _p: 10.0)
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(local_backup, "backup_time_needed_s", lambda _p: 10.0)
     dest = backups / f"ledger-{time.strftime('%Y%m%d')}.db"
     dest.write_bytes(b"not a database")
     clock = [0.0]
-    monkeypatch.setattr(maintenance, "monotonic", lambda: clock[0])
-    valid = maintenance._valid
+    monkeypatch.setattr(local_backup, "monotonic", lambda: clock[0])
+    valid = local_backup._valid
 
     def check(path, deadline):
         if path == str(dest):
             clock[0] = deadline + 1.0     # overran its cut-off by 1s
             return False
         return valid(path, None)
-    monkeypatch.setattr(maintenance, "_valid", check)
-    assert maintenance.daily_backup(str(tmp_path / "ledger.db"),
+    monkeypatch.setattr(local_backup, "_valid", check)
+    assert local_backup.daily_backup(str(tmp_path / "ledger.db"),
                                     deadline=100.0) is None
-    assert maintenance.valid_mcs_db(str(dest))
+    assert local_backup.valid_mcs_db(str(dest))
 
 
 def test_backup_skips_when_time_left_cannot_cover_the_ledger(tmp_path, monkeypatch):
     _ledger(tmp_path).close()
     backups = tmp_path / "backups"
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backups))
     path = str(tmp_path / "ledger.db")
-    assert maintenance.daily_backup(path, deadline=time.monotonic() + 1) \
+    assert local_backup.daily_backup(path, deadline=time.monotonic() + 1) \
         == "skipped_deadline"
     assert not list(backups.glob("ledger-*.db"))
-    assert maintenance.daily_backup(path, deadline=time.monotonic() + 600) is None
+    assert local_backup.daily_backup(path, deadline=time.monotonic() + 600) is None
     assert len(list(backups.glob("ledger-*.db"))) == 1
 
 
 
 def test_validated_backup_without_marker_rearms_the_fast_path(tmp_path, monkeypatch):
     backups = tmp_path / "backups"
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backups))
     path = str(tmp_path / "ledger.db")
     _ledger(tmp_path).close()
-    assert maintenance.daily_backup(path) is None
+    assert local_backup.daily_backup(path) is None
     (made,) = backups.glob("ledger-*.db")
     marker = made.with_name(made.name + ".ok")
     marker.unlink()                 # a same-day backup from before the marker
     checks = []
-    real = maintenance.valid_mcs_db
-    monkeypatch.setattr(maintenance, "valid_mcs_db",
+    real = local_backup.valid_mcs_db
+    monkeypatch.setattr(local_backup, "valid_mcs_db",
                         lambda *a, **k: checks.append(1) or real(*a, **k))
-    assert maintenance.daily_backup(path) is None
+    assert local_backup.daily_backup(path) is None
     assert marker.exists() and len(checks) == 1
-    assert maintenance.daily_backup(path) is None
+    assert local_backup.daily_backup(path) is None
     assert len(checks) == 1         # the next tick skips the full check
 
 # ---------- M1: child and LINE WORKS logs rotate ----------

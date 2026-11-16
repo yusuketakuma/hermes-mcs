@@ -12,7 +12,7 @@ import notify_scope
 import operational_status
 import run_check
 from ingest_testkit import _ledger
-from maintenance import local_backup_status
+from local_backup import local_backup_status
 
 NOW = 200_000.0
 
@@ -25,7 +25,7 @@ def stored(tmp_path, monkeypatch):
     monkeypatch.setattr(health_report, 'HEALTH_FILE', str(health))
     monkeypatch.setattr(run_check.time, "time", lambda: NOW)
     monkeypatch.setattr(health_report, 'attachment_free_mb', lambda path=None: 10_000)
-    monkeypatch.setattr(run_check.maintenance, "local_backup_status",
+    monkeypatch.setattr(run_check.local_backup, "local_backup_status",
                         lambda **_: {"state": "verified", "newest_age_s": 50,
                                      "observed_at": NOW})
     yield db, health
@@ -158,7 +158,7 @@ def test_local_observation_failure_does_not_relabel_collection(stored, monkeypat
     db, _ = stored
     def fail(**_):
         raise OSError("synthetic-private-path")
-    monkeypatch.setattr(run_check.maintenance, "local_backup_status", fail)
+    monkeypatch.setattr(run_check.local_backup, "local_backup_status", fail)
     result = health_report.build_health(db.db, {"errors": [], "notify": {}}, "failed", cfg={})
     assert result["backup"]["local"]["state"] == "unknown"
     assert result["overall"] == "failed"
@@ -174,11 +174,11 @@ def test_real_local_backup_observation_reaches_monitor_and_doctor(stored, monkey
     backup.write_bytes(b"synthetic backup bytes")
     os.utime(backup, (NOW - 60, NOW - 60))
     if marker_kind == "regular":
-        run_check.maintenance._write_ok_marker(str(backup))
+        run_check.local_backup._write_ok_marker(str(backup))
     else:
         os.mkfifo(str(backup) + ".ok")
-    monkeypatch.setattr(run_check.maintenance, "BACKUP_DIR", str(backups))
-    monkeypatch.setattr(run_check.maintenance, "local_backup_status", local_backup_status)
+    monkeypatch.setattr(run_check.local_backup, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(run_check.local_backup, "local_backup_status", local_backup_status)
     run_check._write_health(db, {"errors": [], "notify": {}}, "ok", cfg={})
     record = json.loads(path.read_text())
     assert record["overall"] == "ok"

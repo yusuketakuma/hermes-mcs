@@ -98,8 +98,8 @@ def test_nonempty_source_with_no_facts_still_runs_source_and_summary_quality(run
     seed(led, body='合成の事務連絡です。')
     wire = anthropic_client.AnthropicClient.request
 
-    def empty_answer(client, method, body, timeout, *, deadline):
-        status, headers, raw = wire(client, method, body, timeout, deadline=deadline)
+    def empty_answer(client, method, body, timeout, *, deadline, max_bytes):
+        status, headers, raw = wire(client, method, body, timeout, deadline=deadline, max_bytes=max_bytes)
         payload = json.loads(body['messages'][0]['content'])
         assert 'source' in payload
         response = json.loads(raw)

@@ -7,7 +7,7 @@ import subprocess
 import time
 import pytest
 import ledger
-import maintenance
+import local_backup
 import release_apply_owner
 from release_apply_owner_testkit import current_release as current_release, installed_current as installed_current, native_product as native_product, native_signing_keys as native_signing_keys, registered_effect as registered_effect
 from test_release_dependency_lock import product as product, runtime as runtime
@@ -203,12 +203,12 @@ def test_existing_backup_observation_only_reads_a_verified_unchanged_static_file
     elif failure == 'sidecar':
         Path(str(backup) + '-wal').write_bytes(b'synthetic WAL')
     elif failure == 'changed':
-        valid = maintenance._valid
+        valid = local_backup._valid
         def change_after_validation(path, deadline):
             result = valid(path, deadline)
             backup.write_bytes(backup.read_bytes() + b'synthetic changed bytes')
             return result
-        monkeypatch.setattr(maintenance, '_valid', change_after_validation)
+        monkeypatch.setattr(local_backup, '_valid', change_after_validation)
     deadline = time.monotonic() + (-1 if failure == 'expired' else 10)
     if failure is None:
         before = backup.stat()

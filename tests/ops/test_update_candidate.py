@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-import maintenance
+import local_backup
 import mcs_update
 import mcs_util
 import service_management
@@ -166,7 +166,7 @@ def test_candidate_plan_keeps_recovery_guidance_without_parsing_sha_as_a_version
                                       "protected_path: data/secret", "new_config: invalid"])
 def test_candidate_uses_all_normal_content_gates(updater, monkeypatch, problem):
     repo, base, target = _candidate_env(updater, monkeypatch, errors=[problem])
-    monkeypatch.setattr(maintenance, "preupdate_backup",
+    monkeypatch.setattr(local_backup, "preupdate_backup",
                         lambda *a: pytest.fail("rejected content must not reach backup"))
     assert _apply(updater, target, base) == 1
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == base
@@ -204,7 +204,7 @@ def test_candidate_applies_under_locks_and_records_human_reason_without_fetch(
     monkeypatch.setattr(update_repository, '_git', updater._git)
     monkeypatch.setattr(update_restore, '_git', updater._git)
     monkeypatch.setattr(update_runtime_migration, '_git', updater._git)
-    monkeypatch.setattr(maintenance, "preupdate_backup",
+    monkeypatch.setattr(local_backup, "preupdate_backup",
                         lambda *a: trace.append("backup") or "synthetic-backup")
     monkeypatch.setattr(updater, "quiesce", lambda: trace.append("quiesce"))
     monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
@@ -263,7 +263,7 @@ def test_candidate_rejects_non_fast_forward_before_backup(updater, monkeypatch):
     monkeypatch.setattr(updater, "precheck_tag", _REAL_PRECHECK_TAG)
     monkeypatch.setattr(update_execution, 'precheck_tag', updater.precheck_tag)
     monkeypatch.setattr(update_planning, 'precheck_tag', updater.precheck_tag)
-    monkeypatch.setattr(maintenance, "preupdate_backup",
+    monkeypatch.setattr(local_backup, "preupdate_backup",
                         lambda *a: pytest.fail("non-ff target must not reach backup"))
     assert _apply(updater, target, diverged) == 1
     state = updater.journal_store.load_state(updater.STATE_PATH)

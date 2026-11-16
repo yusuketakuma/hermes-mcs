@@ -34,6 +34,7 @@ from typing import TypedDict
 import pytest
 
 import ledger
+import local_backup
 import maintenance
 import restore_evidence
 import os
@@ -194,12 +195,12 @@ def test_released_backup_snapshot_and_restore_are_nonmutating(tmp_path, monkeypa
     source = _historical(tmp_path / "source", origin)
     expected, original_hash = _records(source), _sha(source)
     backups = tmp_path / "backups"
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backups))
     monkeypatch.setattr(maintenance.time, "strftime", lambda fmt: "synthetic-stamp")
     # Both interfaces must handle the genuine old static schema, not a
     # latest-schema database with only its user_version changed.
-    backup = Path(maintenance.preupdate_backup(str(source)))
-    maintenance.daily_backup(str(source))
+    backup = Path(local_backup.preupdate_backup(str(source)))
+    local_backup.daily_backup(str(source))
     daily = backups / "ledger-synthetic-stamp.db"
     snapshot = Path(ledger.publish_snapshot(str(source), str(tmp_path / "snapshots")))
     for copy in (backup, daily, snapshot):
@@ -294,8 +295,8 @@ def test_released_schema_update_rollback_requires_bound_consent(
     live = Path(updater.LEDGER)
     shutil.copy2(source, live)
     shutil.copytree(source.parent / "attachments", live.parent / "attachments")
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", updater.BACKUP_DIR)
-    backup = Path(maintenance.preupdate_backup(str(live)))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", updater.BACKUP_DIR)
+    backup = Path(local_backup.preupdate_backup(str(live)))
     backup_hash = _sha(backup)
     db = ledger.Ledger(str(live))
     with db.db:
@@ -469,8 +470,8 @@ def test_same_schema_restored_witness_reconciles_then_resumes(
     live = Path(updater.LEDGER)
     shutil.copy2(source, live)
     shutil.copytree(source.parent / "attachments", live.parent / "attachments")
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", updater.BACKUP_DIR)
-    backup = Path(maintenance.preupdate_backup(str(live)))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", updater.BACKUP_DIR)
+    backup = Path(local_backup.preupdate_backup(str(live)))
     backup_hash = _sha(backup)
     db = ledger.Ledger(str(live))
     try:
