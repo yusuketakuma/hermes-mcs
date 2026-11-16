@@ -13,21 +13,20 @@ from typing import BinaryIO
 
 from adapters.common.spec import MAX_BUTTONS, MAX_COMPONENTS, MAX_TEXT, MAX_TOTAL_TEXT
 from adapters.common.spec import discord_file_name
-from adapters.common.card_controls import (MENU_LABEL, STAMP_PICKER_LABEL,
+from adapters.common.card_controls import (MENU_LABEL, QUICK_ACTIONS, STAMP_PICKER_LABEL,
                                            plan_controls, stamp_label)
 from adapters.common.text import escape_md, notification_preview
 
 # accent bar colour per card kind — the visible card edge; a missing
 # kind (notice op) leaves the container unaccented
 _ACCENTS = {"thread": 0x5865F2, "signal": 0xF0A233, "digest": 0xF0A233}
-_URGENT_ACCENT = 0xED4245         # parts["discord"]["accent"] == "urgent"
+# parts["discord"]["accent"]: 🚨 red, else the layout-6 card state
+_STATE_ACCENTS = {"urgent": 0xED4245, "assigned": 0xFEE75C, "acked": 0x80848E}
 
 
 def _accent(spec):
     own = spec["parts"].get("discord") or {}
-    if own.get("accent") == "urgent":
-        return _URGENT_ACCENT
-    return _ACCENTS.get(spec.get("kind"))
+    return _STATE_ACCENTS.get(own.get("accent")) or _ACCENTS.get(spec.get("kind"))
 
 ACTION_PREFIX = "mcs:a:"          # card button custom_id = prefix + token
 MENU_ID = "mcs:menu"              # the 操作 select — value = token
@@ -151,13 +150,15 @@ def _zone_text(zone) -> list:
 def _button_items(spec, primary_actions=()):
     """Buttons for ``primary_actions`` and links, every other operation in the menu.
 
-    Cards pass none, so 確認・担当・タスク作成 sit in the menu as on Slack;
-    the companion-thread drug view passes its own button set."""
+    Cards pass QUICK_ACTIONS, so 確認する・担当する are buttons as on Slack and
+    the rest sit in the menu; the companion-thread drug view passes its own
+    button set."""
     import discord
     controls = plan_controls(spec["parts"])
     primary, links, menu = [], [], []
     # A full link row leaves the stamp form reachable in the menu.
-    operations = controls.menu if len(controls.links) < MAX_BUTTONS else controls.operations
+    operations = ((*controls.quick, *controls.menu) if len(controls.links) < MAX_BUTTONS
+                  else controls.operations)
     for button in (*operations, *controls.links):
         if spec["parts"].get("thread_drug_actions") is True \
                 and button.get("id") in {"meds", "drugsearch"}:
@@ -172,6 +173,19 @@ def _button_items(spec, primary_actions=()):
         else:
             menu.append(discord.SelectOption(label=button["label"], value=button["token"]))
     return primary + links, menu
+
+
+def _card_buttons(spec):
+    """(one row: 確認する・担当する, 別の投稿, links; menu options). The quick
+    buttons return to the menu when the row would exceed its five buttons."""
+    _, other = _stamp_rows(spec)
+    other = [other] if other else []
+    buttons, menu = _button_items(spec, QUICK_ACTIONS)   # quick buttons lead
+    quick = len(plan_controls(spec["parts"]).quick)
+    if len(buttons) + len(other) > MAX_BUTTONS:
+        buttons, menu = _button_items(spec)
+        quick = 0
+    return buttons[:quick] + other + buttons[quick:], menu
 
 
 def _stamp_rows(spec):
@@ -240,16 +254,16 @@ def message_payload(spec, *, components_v2=False):
         raise ValueError("discord_embed_budget")
     view = discord.ui.View(timeout=None)
     # the Slack order: 操作を選ぶ…, the stamp row, 別の投稿 + MCSで開く, then per-post 💊
-    links, menu = _button_items(spec)
+    links, menu = _card_buttons(spec)
     if menu:
         view.add_item(discord.ui.Select(
             custom_id=MENU_ID, placeholder=MENU_LABEL,
             min_values=1, max_values=1, options=menu[:_MENU_MAX], row=0))
-    stamps, other = _stamp_rows(spec)
+    stamps, _ = _stamp_rows(spec)
     for button in stamps:
         button.row = 1
         view.add_item(button)
-    for button in ([other] if other else []) + links:
+    for button in links:
         button.row = 2
         view.add_item(button)
     for line, button in posts[:_POST_BUTTONS_MAX]:
@@ -280,17 +294,18 @@ def build_view(spec: dict):
         return discord.ui.Separator(
             visible=True, spacing=discord.SeparatorSpacing.small)
 
-    links, menu = _button_items(spec)
-    stamps, other = _stamp_rows(spec)
+    links, menu = _card_buttons(spec)
+    stamps, _ = _stamp_rows(spec)
     rows = []
-    # the Slack order: 操作を選ぶ…, the stamp row, then 別の投稿 + MCSで開く
+    # the Slack order: 操作を選ぶ…, the stamp row, then 確認する・担当する,
+    # 別の投稿 + MCSで開く
     if menu:
         select_row = discord.ui.ActionRow()
         select_row.add_item(discord.ui.Select(
             custom_id=MENU_ID, placeholder=MENU_LABEL,
             min_values=1, max_values=1, options=menu[:_MENU_MAX]))
         rows.append(select_row)
-    for group in (stamps, ([other] if other else []) + links):
+    for group in (stamps, links):
         row = discord.ui.ActionRow()
         for button in group:
             row.add_item(button)

@@ -89,6 +89,18 @@ def _plan(capsys, tmp_path, *extra):
     return rc, report, (json.loads(out.read_text()) if out.exists() else None)
 
 
+def _approve(ledger, plan):
+    """Apply the approval with a 60-second limit for this call only: the 2-second limit
+    is a performance observation, not this file's contract (Astra c2b-M1-design r5/r7), and the
+    limit itself is tested with APPROVE_SECONDS=0 in test_cloud_local_rebuild."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(local_rebuild, 'APPROVE_SECONDS', 60.0)
+        return mcs_requests.apply_command(ledger, {
+            'version': 1, 'cmd': local_rebuild.COMMAND, 'command_id': str(uuid.uuid4()),
+            'actor': 'synthetic-human', 'human_confirmed': True, 'project_id': None,
+            'reason': '完全合成の確認', 'plan': plan})
+
+
 def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(scaled, tmp_path, capsys):
     rc, report, plan = _plan(capsys, tmp_path)
     assert report['state'] == 'bundle_full' and report['stop_reason'] is None and rc == 0
@@ -101,10 +113,7 @@ def test_production_scale_builds_a_full_bundle_and_the_approval_re_proves_it(sca
     from ledger import Ledger
     from contextlib import closing
     with closing(Ledger(str(scaled))) as ledger:
-        receipt = mcs_requests.apply_command(ledger, {
-            'version': 1, 'cmd': local_rebuild.COMMAND, 'command_id': str(uuid.uuid4()),
-            'actor': 'synthetic-human', 'human_confirmed': True, 'project_id': None,
-            'reason': '完全合成の確認', 'plan': plan})
+        receipt = _approve(ledger, plan)
     assert receipt['outcome'] == 'applied' and receipt['approved'] == 20
 
 
@@ -130,11 +139,9 @@ def test_a_history_changed_between_plan_and_approval_rejects_the_whole_bundle(sc
         with ledger.db:
             ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.synthetic_note','x') WHERE "
                               "kind='cloud_usage_result' AND message_id=?", (plan['units'][-1]['message_id'],))
-        receipt = mcs_requests.apply_command(ledger, {
-            'version': 1, 'cmd': local_rebuild.COMMAND, 'command_id': str(uuid.uuid4()),
-            'actor': 'synthetic-human', 'human_confirmed': True, 'project_id': None,
-            'reason': '完全合成の確認', 'plan': plan})
-        assert receipt['outcome'] == 'rejected' and local_rebuild.approved_units(ledger.db) == {}
+        receipt = _approve(ledger, plan)
+        assert receipt['outcome'] == 'rejected' and receipt['error'] == 'local_rebuild_bundle_changed'
+        assert local_rebuild.approved_units(ledger.db) == {}
 
 
 def test_the_tally_phase_over_its_own_budget_stops_at_tally_and_leaves_everything_unverified(

@@ -119,7 +119,7 @@ def test_slack_groups_stamp_choices_with_a_distinct_post_picker(led, monkeypatch
     spec = _rendered_spec(led, monkeypatch, "slack")
     blocks = slack_cards.render(spec)[1]
     (menu,) = [b for b in blocks if b.get("type") == "actions"
-               and b["elements"][0]["action_id"] == slack_cards.MENU_ACTION]
+               and b["elements"][-1]["action_id"] == slack_cards.MENU_ACTION]
     (stamp_control,) = [e for b in blocks if b.get("type") == "actions"
                         for e in b["elements"] if e.get("action_id") == slack_cards.STAMP_MENU_ACTION]
     assert stamp_control["type"] == "static_select"
@@ -132,23 +132,24 @@ def test_slack_groups_stamp_choices_with_a_distinct_post_picker(led, monkeypatch
     expected = [b["token"] for b in planned if b["id"] == "stamp_press"]
     expected += [b["token"] for b in planned if b["id"] == "stamp"]
     assert [e["value"] for e in stamp_row] == expected
-    assert [e["type"] for e in menu["elements"]] == ["static_select"]
+    assert [e["type"] for e in menu["elements"]] == ["button", "button", "static_select"]
 
 
 def test_lineworks_matches_slack_menu_stamp_row_other_post_and_link(led, monkeypatch):
     from adapters.lineworks import cards as lineworks_cards
     spec = _rendered_spec(led, monkeypatch, "lineworks")
     footer = lineworks_cards.render(spec)["contents"]["footer"]["contents"]
-    menu, row, other, link = footer
-    assert menu["action"]["label"] == "操作を選ぶ…"
+    ack, assign, menu, row, other, link = footer
+    assert [ack["action"]["label"], assign["action"]["label"], menu["action"]["label"]] == [
+        "確認する", "担当する", "操作を選ぶ…"]
     assert row["type"] == "box" and row["layout"] == "horizontal"
     assert [b["action"]["label"] for b in row["contents"]] == ["👀", "🙆", "🙏", "👍", "✅"]
     assert other["action"]["label"] == "別の投稿" and other["action"]["postback"].startswith("mcs:a:")
     assert link["action"]["type"] == "uri"
     assert all("_stamp" not in b["action"] for b in footer if b.get("type") == "button")
-    # the stamp form left the 1:1 menu; 確認・担当・タスク作成 joined it
+    # the stamp form left the 1:1 menu; 確認・担当 are card buttons, タスク作成 joined it
     ids = [b["id"] for b in lineworks_cards.secondary(spec)]
-    assert "stamp" not in ids and {"ack", "assign"} <= set(ids)
+    assert "stamp" not in ids and "request" in ids and not {"ack", "assign"} & set(ids)
 
 
 def test_discord_matches_slack_menu_stamp_row_then_other_post_and_link(led, monkeypatch):
@@ -163,9 +164,10 @@ def test_discord_matches_slack_menu_stamp_row_then_other_post_and_link(led, monk
     (menu,) = rows[0]
     assert menu.placeholder == "操作を選ぶ…"
     assert [b.label for b in rows[1]] == ["👀", "🙆", "🙏", "👍", "✅"]
-    assert [b.label for b in rows[2]] == ["別の投稿", "MCSで開く"]
+    assert [b.label for b in rows[2]] == ["確認する", "担当する", "別の投稿", "MCSで開く"]
     tokens = {o.value for o in menu.options}
-    assert rows[2][0].custom_id.removeprefix("mcs:a:") not in tokens   # the form is not in the menu
+    # neither the form nor the quick buttons are in the menu
+    assert not {b.custom_id.removeprefix("mcs:a:") for b in rows[2][:3]} & tokens
 
 
 def test_lineworks_stamp_row_passes_the_real_client_validation(led, monkeypatch):

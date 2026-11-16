@@ -175,8 +175,11 @@ def test_secondary_action_sets_reach_all_three_transport_menus(monkeypatch, kind
     _, blocks = slack_cards.render(slack_spec)
     menu = next(element for block in blocks if block["type"] == "actions"
                 for element in block["elements"] if element["type"] == "static_select")
-    # every transport: 確認・担当・タスク作成 lead the one 操作 menu, as on Slack
-    assert [tokens[option["value"]] for option in menu["options"]] == primary + secondary
+    quick = [tokens[element["value"]] for block in blocks if block["type"] == "actions"
+             for element in block["elements"] if element["type"] == "button"]
+    # every transport: 確認する・担当する are buttons, タスク作成 leads the one 操作 menu
+    assert quick == ["ack", "assign"]
+    assert [tokens[option["value"]] for option in menu["options"]] == primary[2:] + secondary
     assert any(block["type"] == "context" and block["elements"][0]["type"] == "mrkdwn"
                for block in blocks) == (kind != "digest")
 
@@ -194,9 +197,9 @@ def test_secondary_action_sets_reach_all_three_transport_menus(monkeypatch, kind
     spec["parts"]["action_rows"].append([
         {"id": "more", "ui": "button", "label": "その他の操作", "token": "f" * 32}])
     menu = lineworks_cards.secondary(spec)
-    assert [button["id"] for button in menu] == primary + secondary
+    assert [button["id"] for button in menu] == primary[2:] + secondary
     assert [button["label"] for button in lineworks_cards.action_buttons(spec)] == (
-        ["操作を選ぶ…"] + ([] if kind == "digest" else [LINK["label"]]))
+        ["ack", "assign", "操作を選ぶ…"] + ([] if kind == "digest" else [LINK["label"]]))
 
 
 def test_dismiss_preview_names_the_code():
@@ -271,14 +274,16 @@ def test_discord_view_zones_separators_and_menu(monkeypatch):
     assert all(c.visible and c.spacing == 1 for c in inner
                if type(c).__name__ == "Separator")
     assert inner[6].content.startswith("-# ")
-    # the Slack order: the 操作を選ぶ… select first, then the MCSで開く link
+    # the Slack order: the 操作を選ぶ… select first, then 確認する・担当する
+    # beside the MCSで開く link
     menu_row, link_row = inner[-2].children, inner[-1].children
     (menu,) = menu_row
     assert menu.custom_id == "mcs:menu" and menu.placeholder == "操作を選ぶ…"
     assert [(o.label, o.value) for o in menu.options] == [
-        ("Lack", f"{0:032x}"), ("Lassign", f"{1:032x}"), ("Lrequest", f"{2:032x}"),
-        ("Lbody", f"{3:032x}"), ("Lsummary", "f" * 32)]
-    (link,) = link_row
+        ("Lrequest", f"{2:032x}"), ("Lbody", f"{3:032x}"), ("Lsummary", "f" * 32)]
+    ack, assign, link = link_row
+    assert [(b.label, b.custom_id) for b in (ack, assign)] == [
+        ("Lack", "mcs:a:" + f"{0:032x}"), ("Lassign", "mcs:a:" + f"{1:032x}")]
     assert link.url == LINK["url"]
 
 

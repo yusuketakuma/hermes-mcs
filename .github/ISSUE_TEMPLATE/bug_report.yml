@@ -1,0 +1,63 @@
+name: 不具合の報告
+description: 動かない・おかしい表示・止まった処理を報告する
+title: "[不具合]: "
+labels:
+  - bug
+  - 要トリアージ
+body:
+  - type: markdown
+    attributes:
+      value: |
+        患者名・投稿本文・秘密値・実データのログは書かないでください（`SECURITY.md`）。
+        実投稿を匿名化した例や画面・添付も載せず、再現例は完全合成にしてください。
+        観測したことだけを書き、推測は「推測」と分けてください。
+  - type: textarea
+    id: summary
+    attributes:
+      label: 何が起きたか
+      description: 1〜2文で。
+      placeholder: 朝の収集のあと、Slack に新着カードが届かない。
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 種類
+      options:
+        - 以前は動いていた（退行）
+        - 処理が止まる・落ちる
+        - 結果や表示が違う
+        - 分からない
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 使っている版
+      description: "`mcs_setup.py check` に出る版。分からなければ空欄"
+      placeholder: v1.1.2
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: 実行形態
+      options:
+        - Hermes plugin
+        - standalone
+        - 分からない
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現の手順・きっかけ
+      placeholder: |
+        1. 08:10 の定期収集
+        2. 新着が3件あるのに通知が出ない
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待した動き
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 確認したこと
+      description: "固定エラーコード・時刻（タイムゾーン付き）・件数・技術状態のみ。コマンド出力や実データのログの貼り付けは禁止"
+      render: text

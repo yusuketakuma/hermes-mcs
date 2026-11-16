@@ -667,8 +667,18 @@ def test_updater_retains_valid_explicit_deployed_selection(updater, monkeypatch,
 @pytest.mark.parametrize("bad", [{"backup": {"enabled": True}}, {"watchdog_grace_s": "60"}])
 def test_invalid_render_config_is_reported_not_raised(updater, monkeypatch, tmp_path, capsys, bad):
     cfg = {"mcs_login_id": "synthetic", "notify_target": "local", **bad}
-    monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg)
     monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: cfg)
+    config_path = Path(mcs_setup.HOME) / 'config.json'
+    config_path.write_text(json.dumps(cfg))
+    config_path.chmod(0o600)
+    checked_load = mcs_util.load_config_checked
+    monkeypatch.setattr(mcs_util, 'load_config_checked',
+                        lambda path=None, *, missing_ok=False: checked_load(
+                            str(config_path) if path is None else path, missing_ok=missing_ok))
+    assert mcs_util.load_config_checked(missing_ok=True) == cfg
+    monkeypatch.setattr(mcs_setup, 'RECOVERY_DIR', str((tmp_path / 'log-helper-recovery').resolve()))
+    (Path(mcs_setup.HOME) / 'data').mkdir(mode=0o700, exist_ok=True)
+    assert Path(_prepare_recovery_helper()).is_file()
     monkeypatch.setattr(updater, "_tree_clean", lambda: True)
     monkeypatch.setattr(update_apply, '_tree_clean', updater._tree_clean)
     monkeypatch.setattr(update_execution, '_tree_clean', updater._tree_clean)
@@ -676,10 +686,11 @@ def test_invalid_render_config_is_reported_not_raised(updater, monkeypatch, tmp_
     monkeypatch.setattr(update_recovery, '_tree_clean', updater._tree_clean)
     monkeypatch.setattr(update_restore, '_tree_clean', updater._tree_clean)
     monkeypatch.setattr(update_runtime_migration, '_tree_clean', updater._tree_clean)
+    reason = 'backup_config_invalid' if 'backup' in bad else 'watchdog_grace_config_invalid'
     errors = updater.precheck_local(cfg)
-    assert any(e.startswith("config: ") and e.endswith("_config_invalid") for e in errors)
+    assert f'config: {reason}' in errors
     errors, _ = service_management.script_drift(paths=mcs_setup._service_paths())
-    assert errors and errors[0].startswith("設定に問題があります: ")
+    assert errors and errors[0].startswith("設定に問題があります: ") and reason in errors[0]
     monkeypatch.setattr(updater.journal_store, "save_state",
                         lambda *a, **k: pytest.fail("runtime gate allowed journal write"))
     before = _tree(tmp_path)
@@ -687,8 +698,11 @@ def test_invalid_render_config_is_reported_not_raised(updater, monkeypatch, tmp_
     assert "変更はありません" in capsys.readouterr().out
     assert _tree(tmp_path) == before
     monkeypatch.setattr(mcs_setup.mcs_runtime, "mode", lambda c: "hermes")
+    monkeypatch.setattr(service_management, 'load_manifest',
+                        lambda **_kw: pytest.fail('invalid config passed render validation'))
     assert mcs_setup.cmd_services(SimpleNamespace(dry_run=False)) == 1
-    assert "常駐設定: 設定に問題があります" in capsys.readouterr().out
+    message = capsys.readouterr().out
+    assert "常駐設定: 設定に問題があります" in message and reason in message
     assert _tree(tmp_path) == before
 
 

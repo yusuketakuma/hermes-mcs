@@ -35,8 +35,13 @@ def projection(monkeypatch):
     db.close()
 
 
+def record_meta():
+    # an analysed, extraction-eligible post, as read_model._message_records builds it
+    return {"extraction_eligible": True, "state": "current"}
+
+
 def record(value):
-    return {"patient_context": [{"category":value['category'],"text":value['text'],
+    return {**record_meta(), "patient_context": [{"category":value['category'],"text":value['text'],
         "evidence":value['quote'],"subject":value['subject'],"details":value['details'],
         "source":{key:value[key] for key in ('message_id','content_hash','posted_at_ts')}}]}
 
@@ -100,7 +105,11 @@ def test_empty_display_distinguishes_unanalysed_sources_from_observed_no_match(m
     monkeypatch.setattr(notify_views, '_coverage_line', lambda *a: '合成の取得範囲')
     monkeypatch.setattr(notify_views, 'patient_label', lambda *a: '合成患者')
     monkeypatch.setattr(notify_views, 'project_url', lambda *a: 'https://invalid.test/synthetic')
-    result = notify_views.patient_context_list(None, 1, 'timeline', cfg={}, since=None, now=T0)
+    db = sqlite3.connect(':memory:')  # the view opens a SAVEPOINT; every reader is stubbed or sees no schema
+    try:
+        result = notify_views.patient_context_list(db, 1, 'timeline', cfg={}, since=None, now=T0)
+    finally:
+        db.close()
     assert result['items'] == []
     if complete:
         assert result['empty'] == 'この範囲で該当する記録は見つかりません'
@@ -135,7 +144,7 @@ def test_only_contiguous_source_verified_owner_headings_bind_split_attributes(pr
         parsed = extract_context(body)
         for value in parsed:
             value['source'] = {'message_id':mid,'content_hash':f'{mid:064x}','posted_at_ts':T0+mid}
-        state['records'].append({'patient_context':parsed})
+        state['records'].append({**record_meta(), 'patient_context':parsed})
     db.commit()
     before = db.total_changes
     evidence = views.evidence(db,1)

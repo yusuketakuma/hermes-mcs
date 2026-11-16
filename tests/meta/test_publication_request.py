@@ -51,3 +51,41 @@ def test_missing_required_env_fails(tmp_path):
     result, out = _run(tmp_path, {'REPOSITORY_ID': ''})
     assert result.returncode != 0
     assert not out.exists()
+
+
+def test_publication_job_checks_out_exact_event_source_without_credentials():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    job = workflow.split("  publication-request:\n", 1)[1].split("\n  lint-test:", 1)[0]
+    assert "if: github.event_name == 'push'" in job
+    assert "runs-on: ubuntu-latest" in job
+    checkout, execute = job.split("      - name: write publication request hint", 1)
+    assert "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in checkout
+    assert "ref: ${{ github.sha }}" in checkout
+    assert "persist-credentials: false" in checkout
+    assert "run: python3 scripts/development/publication_request.py" in execute
+    assert "permissions:" not in job  # inherits contents:read, never write
+    assert "contents: read" in workflow.split("jobs:", 1)[0]
+    assert "secrets." not in job
+    assert "if-no-files-found: error" in job
+
+
+def test_hint_needs_checkout_and_succeeds_from_synthetic_workspace(tmp_path):
+    # No remote request, tag creation or artifact upload. The same relative
+    # command fails before checkout and runs once its tracked source exists.
+    import shutil
+
+    env = dict(os.environ, **ENV)
+    command = [sys.executable, "scripts/development/publication_request.py"]
+    before = subprocess.run(command, cwd=tmp_path, env=env,
+                            capture_output=True, text=True, timeout=15)
+    assert before.returncode == 2
+    assert not (tmp_path / "publication-request.json").exists()
+    target = tmp_path / "scripts/development/publication_request.py"
+    target.parent.mkdir(parents=True)
+    shutil.copyfile(SCRIPT, target)
+    after = subprocess.run(command, cwd=tmp_path, env=env,
+                           capture_output=True, text=True, timeout=15)
+    assert after.returncode == 0, after.stderr
+    hint = json.loads((tmp_path / "publication-request.json").read_text())
+    assert hint["tag_oid"] == ENV["SHA"]
+    assert hint["repository_id"] == int(ENV["REPOSITORY_ID"])
