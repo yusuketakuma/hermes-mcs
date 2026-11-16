@@ -50,13 +50,13 @@ def test_ci_has_a_macos_lane_with_the_pinned_actions():
 def test_parallel_test_lanes_keep_diagnostics_and_pinned_dependency_caches():
     jobs = _jobs((ROOT / ".github/workflows/ci.yml").read_text())
     setup_uv = "astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2"
-    for name in ("lint-test", "macos", "standalone-sdk", "hermes-integration"):
+    for name in ("lint-test", "linux-tests", "macos", "standalone-sdk", "hermes-integration"):
         assert setup_uv in jobs[name]
         assert 'version: "0.13.6"' in jobs[name]
         # Keep setup-uv's event-aware cache policy; never cache venvs or results.
         assert "enable-cache: true" not in jobs[name]
     assert setup_uv not in jobs["hygiene"] and setup_uv not in jobs["incident-gates"]
-    for name, lane in (("lint-test", "linux"), ("macos", "macos")):
+    for name, lane in (("linux-tests", "linux"), ("macos", "macos")):
         block = jobs[name]
         assert f"python3 ci/run_pytest_groups.py {lane}" in block
         assert "uv venv --python 3.14 --managed-python .venv" in block
@@ -92,3 +92,19 @@ def test_ci_secret_scan_exempts_only_exact_public_vector_bytes(tmp_path, changed
     assert result.returncode == expected, result.stdout + result.stderr
     if expected:
         assert 'possible secret committed' in result.stdout
+
+
+def test_linux_shards_keep_the_required_check_fail_closed():
+    jobs = _jobs((ROOT / ".github/workflows/ci.yml").read_text())
+    shards = jobs["linux-tests"]
+    assert "group: [lifecycle, patients, rest]" in shards
+    assert "fail-fast: false" in shards
+    assert '--group "${{ matrix.group }}"' in shards
+    assert 'name: pytest-linux-${{ matrix.group }}-${{ github.run_attempt }}' in shards
+    gate = jobs["lint-test"]
+    assert "needs: linux-tests" in gate and "if: always()" in gate
+    assert 'SHARDS_RESULT: ${{ needs.linux-tests.result }}' in gate
+    assert 'run: test "$SHARDS_RESULT" = success' in gate
+    for status in ("success", "failure", "cancelled", "skipped", ""):
+        result = subprocess.run(["sh", "-c", 'test "$1" = success', "gate", status])
+        assert (result.returncode == 0) == (status == "success")

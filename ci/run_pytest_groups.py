@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the CI lane's two complete test groups with isolated test runners."""
+"""Run the CI lane's complete test groups with isolated test runners."""
 import argparse
 import os
 from pathlib import Path
@@ -14,7 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 GROUPS = {
     "linux": {
         "lifecycle": ("tests/meta", "tests/ops"),
-        "rest": ("tests", "integration", "--ignore=tests/meta", "--ignore=tests/ops"),
+        "patients": ("tests/patients",),
+        "rest": ("tests", "integration", "--ignore=tests/meta", "--ignore=tests/ops",
+                 "--ignore=tests/patients"),
     },
     "macos": {"meta": ("tests/meta",), "ops": ("tests/ops",)},
 }
@@ -55,7 +57,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("lane", choices=GROUPS)
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--group", help="run one group on an isolated CI runner")
     args = parser.parse_args(argv)
+    selected = GROUPS[args.lane]
+    if args.group is not None:
+        if args.group not in selected:
+            parser.error("unknown group for lane")
+        selected = {args.group: selected[args.group]}
     if args.output_dir is None:
         parent = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())).resolve()
         if parent == ROOT or ROOT in parent.parents:
@@ -73,7 +81,7 @@ def main(argv=None):
     processes, threads, results = {}, [], {}
     previous_term = signal.signal(signal.SIGTERM, _terminate)
     try:
-        for name, targets in GROUPS[args.lane].items():
+        for name, targets in selected.items():
             command = ["sh", str(ROOT / "scripts/run_tests.sh"), *targets,
                        "-r", "fEs", "--durations=30", f"--junitxml={output / (name + '.xml')}"]
             log = (output / f"{name}.log").open("w")
@@ -106,7 +114,7 @@ def main(argv=None):
             print("a worker output stream did not close", file=sys.stderr, flush=True)
             results["output"] = 1
         signal.signal(signal.SIGTERM, previous_term)
-    for name in GROUPS[args.lane]:
+    for name in selected:
         code = results[name]
         print(f"{name}: exit={code}; junit={output / (name + '.xml')}", flush=True)
     return int(any(code != 0 for code in results.values()))
