@@ -9,6 +9,7 @@
     {"name": "要オーナー対応", "color": "e99695", "description": "対応: Yusukeさんの判断・承認・外部とのやり取りが必要"},
     {"name": "要実機作業", "color": "fbca04", "description": "対応: Macへの配備・実データの操作が必要（明示承認の範囲だけ）"},
     {"name": "要再起動", "color": "fef2c0", "description": "対応: 反映に Hermes gateway か LINE WORKS アダプターの再起動が要る"},
+    {"name": "マージ前確認済み", "color": "0e8a16", "description": "判定: 現head/baseのCI・差分・レビュー・依存を確認済み。更新時に解除。マージ・配備の許可ではない"},
     {"name": "要トリアージ", "color": "ededed", "description": "対応: 版・領域をまだ決めていない新しい issue"},
     {"name": "安全ゲート", "color": "b60205", "description": "注意: 既読化・通信制限・人承認・依存の許可リストに触れる。慎重にレビューする"},
 
