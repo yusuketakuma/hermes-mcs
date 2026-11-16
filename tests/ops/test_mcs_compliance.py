@@ -367,6 +367,191 @@ def test_replay_of_an_older_unpublished_receipt_never_undoes_a_later_review(inst
     assert external_transfer.status(root)["acknowledged"]["services"] == ["jev"]
 
 
+def test_replay_follows_commit_order_when_the_clock_moved_backward(install, monkeypatch):
+    root, path = install
+    clock = iter((2000000000.0, 1999999999.0))
+    monkeypatch.setattr(mcs_requests, "time", SimpleNamespace(time=lambda: next(clock)))
+    wider = _req(services=["anthropic", "jev"])
+    assert _apply(path, wider)["outcome"] == "applied"
+    narrower = _req(services=["jev"])  # recorded later, with an earlier wall-clock time
+    assert _apply(path, narrower)["outcome"] == "applied"
+    published = _file(root)
+    assert _apply(path, dict(wider))["acknowledged_at"] > _receipts(path)[narrower["command_id"]]["acknowledged_at"]
+    assert _file(root) == published
+    assert external_transfer.status(root)["acknowledged"]["services"] == ["jev"]
+    assert not external_transfer.auto_enable_allowed("anthropic", root)
+    # the stored times stay as recorded; the history keeps publication order, not time order
+    record = json.loads(published[0])
+    assert [old["command_id"] for old in record["history"]] == [wider["command_id"]]
+    assert record["acknowledged"]["at"] < record["history"][-1]["at"]
+
+
+def _copy_ledger(source, target):
+    """Copy a temporary ledger with the SQLite backup API, as a backup and a restore do."""
+    with closing(sqlite3.connect(source)) as src, closing(sqlite3.connect(target)) as dst:
+        src.backup(dst)
+
+
+def test_replay_after_a_ledger_restore_never_overwrites_a_review_it_does_not_know(install, capsys, tmp_path):
+    root, path = install
+    base = ["acknowledge", "--by", "合成", "--reason", "合成", "--confirm-human"]
+    wider = str(uuid.uuid4())
+    assert _cli(capsys, *base, "--services", "anthropic,jev", "--command-id", wider)[0] == 0
+    saved = tmp_path / "ledger-backup.db"
+    _copy_ledger(path, saved)
+    assert _cli(capsys, *base, "--services", "jev")[0] == 0
+    _copy_ledger(saved, path)  # the restored ledger is older than the record file
+    published = _file(root)
+    assert mcs_compliance.transfer_status()["receipt"] == "receipt_file_mismatch"
+    code, line = _cli(capsys, *base, "--services", "anthropic,jev", "--command-id", wider)
+    assert code == 1 and json.loads(line)["file_check"] == "external_transfer_superseded"
+    assert _file(root) == published
+    assert external_transfer.status(root)["acknowledged"]["services"] == ["jev"]
+    assert not external_transfer.auto_enable_allowed("anthropic", root)
+
+
+def test_replay_never_republishes_a_review_the_record_lists_as_replaced(install, tmp_path):
+    root, path = install
+    older = _req(services=["anthropic", "jev"])
+    assert _apply(path, older)["outcome"] == "applied"
+    saved = tmp_path / "ledger-backup.db"
+    _copy_ledger(path, saved)
+    assert _apply(path, _req(services=["jev"]))["outcome"] == "applied"
+    # a record without a command id (an earlier CLI) now follows both reviews
+    external_transfer.acknowledge(by="合成", reason="合成", services=["jev"], confirm_human=True, root=root)
+    _copy_ledger(saved, path)
+    published = _file(root)
+    _apply(path, dict(older))
+    assert _file(root) == published
+    assert not external_transfer.auto_enable_allowed("anthropic", root)
+
+
+def test_a_narrowing_review_stopped_after_commit_is_not_reported_as_matched(install, capsys, monkeypatch):
+    root, path = install
+    base = ["acknowledge", "--by", "合成", "--reason", "合成", "--confirm-human"]
+    wider = str(uuid.uuid4())
+    assert _cli(capsys, *base, "--services", "anthropic,jev", "--command-id", wider)[0] == 0
+    _seen, original = _stop_after_commit(monkeypatch, root)
+    code, line = _cli(capsys, *base, "--services", "jev")
+    narrower = json.loads(line)["command_id"]
+    assert code == 1 and json.loads(line)["outcome"] == "unknown"
+    monkeypatch.setattr(external_transfer, "_write", original)
+    # the earlier review is still in effect, and status says which command id finishes the later one
+    assert external_transfer.auto_enable_allowed("anthropic", root)
+    status = mcs_compliance.transfer_status()
+    assert (status["receipt"], status["replay_command_id"]) == ("external_transfer_newer_unpublished", narrower)
+    code, line = _cli(capsys, *base, "--services", "anthropic,jev", "--command-id", wider)
+    printed = json.loads(line)
+    assert code == 1 and printed["file_check"] == "external_transfer_newer_unpublished"
+    assert printed["replay_command_id"] == narrower
+    code, line = _cli(capsys, *base, "--services", "jev", "--command-id", narrower)
+    assert code == 0 and json.loads(line)["file_check"] == "matched"
+    assert not external_transfer.auto_enable_allowed("anthropic", root)
+    assert mcs_compliance.transfer_status()["receipt"] == "matched"
+
+
+_BASE = ["acknowledge", "--by", "合成", "--reason", "合成", "--confirm-human"]
+
+
+def _waiting(status, command_id, services):
+    """The status names the waiting review and everything its replay has to repeat."""
+    return ((status["receipt"], status["replay_command_id"], status["replay_by"], status["replay_reason"],
+             status["replay_services"])
+            == ("external_transfer_newer_unpublished", command_id, "合成", "合成", services))
+
+
+def _stopped(capsys, monkeypatch, root, services):
+    """Run the CLI with a stop after COMMIT and return the command id it committed."""
+    _seen, original = _stop_after_commit(monkeypatch, root)
+    code, line = _cli(capsys, *_BASE, "--services", services)
+    assert code == 1 and json.loads(line)["outcome"] == "unknown"
+    monkeypatch.setattr(external_transfer, "_write", original)
+    return json.loads(line)["command_id"]
+
+
+def test_status_names_a_first_approval_stopped_after_commit(install, capsys, monkeypatch):
+    root, path = install
+    first = _stopped(capsys, monkeypatch, root, "jev")
+    status = mcs_compliance.transfer_status()
+    assert status["state"] == "pending" and _waiting(status, first, ["jev"])
+    assert not external_transfer.auto_enable_allowed("jev", root)
+    code, line = _cli(capsys, *_BASE, "--services", "jev", "--command-id", first)
+    assert code == 0 and json.loads(line)["file_check"] == "matched"
+    assert mcs_compliance.transfer_status()["receipt"] == "matched"
+
+
+def test_status_names_a_review_stopped_after_commit_over_an_earlier_cli_record(install, capsys, monkeypatch):
+    root, path = install
+    # recorded by an earlier CLI, without a command id or a receipt
+    external_transfer.acknowledge(by="合成", reason="合成", services=["anthropic", "jev"], confirm_human=True,
+                                  root=root)
+    assert mcs_compliance.transfer_status()["receipt"] == "unreceipted"
+    narrower = _stopped(capsys, monkeypatch, root, "jev")
+    assert external_transfer.auto_enable_allowed("anthropic", root)
+    assert _waiting(mcs_compliance.transfer_status(), narrower, ["jev"])
+    code, line = _cli(capsys, *_BASE, "--services", "jev", "--command-id", narrower)
+    assert code == 0 and json.loads(line)["file_check"] == "matched"
+    assert not external_transfer.auto_enable_allowed("anthropic", root)
+
+
+def test_stopped_review_after_the_clock_moved_backward_is_still_the_one_to_replay(install, capsys, monkeypatch):
+    root, path = install
+    clock = iter((2000000000.0, 1999999999.0))
+    monkeypatch.setattr(mcs_requests, "time", SimpleNamespace(time=lambda: next(clock)))
+    wider = str(uuid.uuid4())
+    assert _cli(capsys, *_BASE, "--services", "anthropic,jev", "--command-id", wider)[0] == 0
+    narrower = _stopped(capsys, monkeypatch, root, "jev")  # committed later, stamped earlier
+    assert _waiting(mcs_compliance.transfer_status(), narrower, ["jev"])
+    code, line = _cli(capsys, *_BASE, "--services", "jev", "--command-id", narrower)
+    assert code == 0 and json.loads(line)["file_check"] == "matched"
+    assert not external_transfer.auto_enable_allowed("anthropic", root)
+
+
+def test_replay_never_overwrites_a_record_whose_command_the_ledger_never_saw(install, capsys):
+    root, path = install
+    known = str(uuid.uuid4())
+    assert _cli(capsys, *_BASE, "--services", "anthropic,jev", "--command-id", known)[0] == 0
+    # a record this ledger has no receipt for, with no history naming the known review
+    record = json.loads(open(external_transfer.path(root), "rb").read())
+    record["acknowledged"] = {**record["acknowledged"], "services": ["jev"], "command_id": str(uuid.uuid4())}
+    record["history"] = []
+    with open(external_transfer.path(root), "w") as stream:
+        json.dump(record, stream)
+    published = _file(root)
+    assert mcs_compliance.transfer_status()["receipt"] == "receipt_file_mismatch"
+    code, line = _cli(capsys, *_BASE, "--services", "anthropic,jev", "--command-id", known)
+    assert code == 1 and json.loads(line)["file_check"] == "receipt_file_mismatch"
+    assert _file(root) == published
+    assert not external_transfer.auto_enable_allowed("anthropic", root)
+
+
+def test_review_recorded_after_a_ledger_restore_finishes_on_replay(install, capsys, monkeypatch, tmp_path):
+    root, path = install
+    assert _cli(capsys, *_BASE, "--services", "jev")[0] == 0
+    saved = tmp_path / "ledger-backup.db"
+    _copy_ledger(path, saved)
+    assert _cli(capsys, *_BASE, "--services", "anthropic,jev")[0] == 0
+    _copy_ledger(saved, path)  # the restored ledger has no receipt for the published review
+    latest = _stopped(capsys, monkeypatch, root, "openai")
+    # the file still holds exactly the record the latest review replaced, so its replay finishes it
+    assert _waiting(mcs_compliance.transfer_status(), latest, ["openai"])
+    code, line = _cli(capsys, *_BASE, "--services", "openai", "--command-id", latest)
+    assert code == 0 and json.loads(line)["file_check"] == "matched"
+    assert external_transfer.status(root)["acknowledged"]["services"] == ["openai"]
+    assert not external_transfer.auto_enable_allowed("anthropic", root)
+
+
+def test_cli_does_not_report_success_when_the_ledger_cannot_be_reread(install, capsys, monkeypatch):
+    root, path = install
+
+    def unreadable(_command_id):
+        raise sqlite3.OperationalError("synthetic unreadable ledger")
+
+    monkeypatch.setattr(mcs_compliance, "_ledger_view", unreadable)
+    code, line = _cli(capsys, *_BASE, "--services", "jev")
+    assert code == 1 and json.loads(line)["file_check"] == "unverified"
+
+
 def test_cli_finishes_a_record_stopped_after_commit(install, capsys, monkeypatch):
     root, path = install
     _seen, original = _stop_after_commit(monkeypatch, root)

@@ -34,27 +34,45 @@ def _patients_of(entry) -> set:
     return ids
 
 
-def _stored_receipt(command_id):
+_NEWER = "external_transfer_newer_unpublished"
+
+
+def _ledger_view(command_id):
+    """(the applied receipt of ``command_id`` or None, the newest applied acknowledgement still waiting for the record)."""
     import cloud_cli
     with cloud_cli._reader() as (db, _deadline):
-        row = db.execute("SELECT outcome,receipt_json FROM command_receipts WHERE command_id=?",
-                         (command_id,)).fetchone()
-    return json.loads(row["receipt_json"]) if row is not None and row["outcome"] == "applied" else None
+        row = None if command_id is None else db.execute(
+            "SELECT outcome,receipt_json FROM command_receipts WHERE command_id=?", (command_id,)).fetchone()
+        waiting = external_transfer.unpublished(db)
+    return (json.loads(row["receipt_json"]) if row is not None and row["outcome"] == "applied" else None,
+            waiting)
+
+
+def _replay_hint(waiting: dict) -> dict:
+    """What the operator repeats with --command-id to finish the waiting review."""
+    return {"replay_command_id": waiting["command_id"], "replay_by": waiting["actor"],
+            "replay_reason": waiting["reason"], "replay_services": waiting["services"]}
 
 
 def transfer_status() -> dict:
-    """The review state plus whether its record is backed by an applied command receipt."""
+    """The review state plus whether its record is backed by the newest applied command receipt."""
     state = external_transfer.status()
-    if state["state"] != "acknowledged":
+    if state["state"] not in ("pending", "acknowledged"):
         return state
-    command_id = state["acknowledged"].get("command_id")
-    if not isinstance(command_id, str):
+    command_id = (state.get("acknowledged") or {}).get("command_id")
+    receipted = isinstance(command_id, str)
+    try:
+        stored, waiting = _ledger_view(command_id if receipted else None)
+    except (OSError, ValueError, sqlite3.Error):
+        # nothing is sent while pending, and a fresh install has no ledger yet
+        return state if state["state"] == "pending" else {**state, "receipt": "unverified"}
+    if waiting is not None:
+        return {**state, "receipt": _NEWER, **_replay_hint(waiting)}
+    if state["state"] == "pending":
+        return state
+    if not receipted:
         # recorded by an earlier version that wrote the file without a receipt
         return {**state, "receipt": "unreceipted"}
-    try:
-        stored = _stored_receipt(command_id)
-    except (OSError, ValueError, sqlite3.Error):
-        return {**state, "receipt": "unverified"}
     return {**state, "receipt": "receipt_file_mismatch" if stored is None
             else external_transfer.receipt_state(stored)}
 
@@ -92,8 +110,17 @@ def acknowledge(args) -> int:
     if receipt.get("outcome") != "applied":
         _print(result)
         return 1
-    # A stored receipt is success only while the published record is the one it approved.
-    result["file_check"] = external_transfer.receipt_state(receipt)
+    # A stored receipt is success only while the published record is the one it approved
+    # and no later committed review is still waiting to reach the file.
+    try:
+        waiting = _ledger_view(None)[1]
+    except (OSError, ValueError, sqlite3.Error):
+        result["file_check"] = "unverified"
+    else:
+        if waiting is not None and waiting["command_id"] != receipt["command_id"]:
+            result.update(file_check=_NEWER, **_replay_hint(waiting))
+        else:
+            result["file_check"] = external_transfer.receipt_state(receipt)
     _print(result)
     return 0 if result["file_check"] == "matched" else 1
 

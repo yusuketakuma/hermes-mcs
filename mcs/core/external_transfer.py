@@ -12,6 +12,7 @@ names the same command id as the published record.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -198,8 +199,10 @@ def _published_after_commit(root, acknowledged, expected_raw):
     """Publish only once the receipt transaction has committed.
 
     ``apply_command`` leaves SQLite before this stack, so a failed transaction or
-    COMMIT never reaches the write, and a process that dies after COMMIT leaves the
-    narrower record in place (fail-safe) for a replay of the same command id to finish.
+    COMMIT never reaches the write. A process that dies after COMMIT leaves the
+    previous record in effect until a replay of the same command id finishes it:
+    pending stays pending (fail-safe), but a review that narrows an earlier one is
+    not in effect yet, which :func:`unpublished` reports.
     """
     yield
     _write(root, acknowledged, expected_raw)
@@ -258,33 +261,90 @@ def apply_tx(db, req, filesystem_changes, now) -> tuple[str | None, dict]:
         code = str(refusal)
         return (code if code in _WRITER_CODES else "external_transfer_record_invalid"), {}
     filesystem_changes.enter_context(_published_after_commit(root, acknowledged, raw))
-    return None, {"cmd": CMD, "reason": reason, "services": chosen, "acknowledged_at": acknowledged["at"]}
+    # The receipt names the exact record it replaces, so a replay can still finish
+    # it over that record when this ledger knows nothing else about it (restore).
+    return None, {"cmd": CMD, "reason": reason, "services": chosen, "acknowledged_at": acknowledged["at"],
+                  "replaces": _digest(raw)}
+
+
+def _digest(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _newest(db) -> dict | None:
+    """The newest applied acknowledgement receipt, in commit order (never the wall clock).
+
+    command_receipts is an implicit-rowid table that the code only appends to (no
+    DELETE, REPLACE or pruning; UPDATE keeps the rowid) and its writers are
+    serialized by BEGIN IMMEDIATE, so a later commit always has the larger rowid,
+    even after the clock moved backward.
+    """
+    row = db.execute("SELECT receipt_json FROM command_receipts WHERE outcome='applied' "
+                     "AND json_extract(receipt_json,'$.cmd')=? ORDER BY rowid DESC LIMIT 1",
+                     (CMD,)).fetchone()
+    return json.loads(row[0]) if row is not None else None
+
+
+def _known_older(db, current, command_id) -> bool:
+    """Whether ``current`` is a record this ledger knows was published before ``command_id``.
+
+    Commit order proves "later" only while the ledger and the record file belong to
+    the same lineage. A restored ledger can be older than the file: then the file
+    names a review this ledger never saw, or already lists ``command_id`` as replaced.
+    """
+    if any(old.get("command_id") == command_id for old in current.get("history", [])):
+        return False
+    published = (current.get("acknowledged") or {}).get("command_id")
+    if published is None:  # pending, or recorded before receipts existed
+        return True
+    return db.execute("SELECT 1 FROM command_receipts WHERE command_id=? AND outcome='applied' "
+                      "AND json_extract(receipt_json,'$.cmd')=?", (published, CMD)).fetchone() is not None
+
+
+def _waiting(db, root) -> tuple[dict, bytes] | None:
+    """The newest applied acknowledgement and the record bytes when a replay of it would publish.
+
+    It publishes only over a record this ledger knows is older (_known_older) or
+    over exactly the record its own apply replaced (``replaces``): a record the
+    ledger does not know, as after a ledger restore, is never overwritten, so a
+    replay never undoes a later review.
+    """
+    receipt = _newest(db)
+    if receipt is None:
+        return None
+    try:
+        raw, current = _current(root)
+    except (OSError, ValueError):
+        return None  # status and the CLI's file_check report an unreadable record
+    ack = current.get("acknowledged") if current else None
+    if current is None or (isinstance(ack, dict) and ack.get("command_id") == receipt["command_id"]):
+        return None
+    if receipt.get("replaces") != _digest(raw) and not _known_older(db, current, receipt["command_id"]):
+        return None
+    return receipt, raw
+
+
+def unpublished(db, root=None) -> dict | None:
+    """The newest applied acknowledgement receipt that has not reached the record and a replay would publish."""
+    waiting = _waiting(db, root)
+    return waiting[0] if waiting else None
 
 
 def replay_tx(db, receipt, filesystem_changes) -> None:
     """Finish the record of a committed acknowledgement that never reached the file.
 
-    Runs inside the replay's BEGIN IMMEDIATE. Only the newest applied
-    acknowledgement is re-published, so a replay never undoes a later review.
+    Runs inside the replay's BEGIN IMMEDIATE and re-publishes only the receipt
+    :func:`_waiting` names, so a replay never undoes a later review.
     """
     if receipt.get("outcome") != "applied" or receipt.get("cmd") != CMD:
         return
-    newest = db.execute("SELECT command_id FROM command_receipts WHERE outcome='applied' "
-                        "AND json_extract(receipt_json,'$.cmd')=? ORDER BY processed_at DESC, rowid DESC "
-                        "LIMIT 1", (CMD,)).fetchone()
     root = _install_root(db)
-    if newest is None or newest[0] != receipt.get("command_id") or root is None:
-        return
-    try:
-        raw, current = _current(root)
-    except (OSError, ValueError):
-        return  # status and the CLI's file_check report an unreadable record
-    ack = current.get("acknowledged") if current else None
-    if current is None or (isinstance(ack, dict) and ack.get("command_id") == receipt["command_id"]):
+    waiting = _waiting(db, root) if root is not None else None
+    if waiting is None or waiting[0]["command_id"] != receipt.get("command_id"):
         return
     acknowledged = {"by": receipt["actor"], "reason": receipt["reason"], "services": receipt["services"],
                     "at": receipt["acknowledged_at"], "command_id": receipt["command_id"]}
-    filesystem_changes.enter_context(_published_after_commit(root, acknowledged, raw))
+    filesystem_changes.enter_context(_published_after_commit(root, acknowledged, waiting[1]))
 
 
 def receipt_state(receipt, root=None) -> str:
