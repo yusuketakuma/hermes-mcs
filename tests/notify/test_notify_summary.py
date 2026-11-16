@@ -222,3 +222,48 @@ def test_cli_prints_without_names_unless_asked(led, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert out.startswith("【📊 MCS サマリー") and "患者A" not in out
     assert notify_digest.main(["--print", "days:99"]) == 2
+
+
+def test_access_ids_are_only_the_patients_the_summary_still_shows(led):
+    for pid in range(1, 13):
+        _room(led, pid, f"患者{pid:02d}", "みどり訪問看護")
+        _add_request(led, "期限切れ", "山田", "2000-01-01", pid=pid)
+    got = notify_digest.view(led.db, {}, "all days:3", now=NOW, names=False)
+    out = notify_render.parts_text(got["parts"])
+    assert "project 10 他2件" in out and "project 11" not in out
+    assert got["project_ids"] == list(range(1, 11))  # the two cut by the list limit are not recorded
+
+
+@pytest.mark.parametrize("shared_name", [False, True])
+def test_access_ids_follow_actual_folded_rows_not_name_matches(led, monkeypatch, shared_name):
+    for pid in range(1, 13):
+        name = "山田太郎" if shared_name or pid != 12 else "太郎"
+        _room(led, pid, name, "みどり訪問看護")
+        led.db.execute(
+            "INSERT INTO messages(message_id,project_id,profession,first_seen,body_state) "
+            "VALUES(?,?,?,?,?)", (pid, pid, "合成職種", NOW - 1, "full"))
+    led.db.commit()
+    original = notify_digest.fit_parts
+
+    def smaller_budget(parts, **kwargs):
+        return original(parts, len(notify_render.display_text(parts)) - 1, **kwargs)
+
+    monkeypatch.setattr(notify_digest, "fit_parts", smaller_budget)
+    got = notify_digest.view(led.db, {}, "all days:3", now=NOW, names=True)
+    out = notify_render.display_text(got["parts"])
+    count = sum(line.startswith("・山田太郎 ") for line in out.splitlines())
+    assert 0 < count < 12
+    assert got["project_ids"] == list(range(1, count + 1))
+    assert "retained_lines" not in json.dumps(got["parts"])
+
+
+def test_fit_parts_returns_original_line_indices_without_changing_model():
+    parts = _long_parts(50)
+    refs = {999: [1]}
+    fitted = notify_render.fit_parts(parts, 600, retained_lines=refs)
+    assert fitted == notify_render.fit_parts(parts, 600)
+    assert 999 not in refs
+    kept = notify_render.display_text(fitted).count("・患者")
+    assert refs[1] == list(range(kept + 1))
+    assert refs[2] == [0, 1]
+    assert len(parts["containers"][1]["text"].splitlines()) == 51
