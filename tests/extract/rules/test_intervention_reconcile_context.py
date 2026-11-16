@@ -1,4 +1,4 @@
-"""An intervention-only repair must invalidate source-bound context scans."""
+"""An intervention-only repair leaves the context scan input, and so its scans, unchanged."""
 import extract_llm_runner
 import extract_llm_source_contract
 import json
@@ -13,7 +13,7 @@ from test_patient_context_refresh import CFG, finish, runtime, seed
 __all__ = ["runtime"]
 
 
-def test_intervention_repair_keeps_receipts_but_requires_a_new_context_scan(runtime, monkeypatch, tmp_path):
+def test_intervention_repair_keeps_receipts_and_reuses_the_context_scan(runtime, monkeypatch, tmp_path):
     led, clock, calls = runtime
     monkeypatch.setattr(extract.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(extract, "_WRITER_STATE", (False, 1))
@@ -71,10 +71,13 @@ def test_intervention_repair_keeps_receipts_but_requires_a_new_context_scan(runt
     assert len(calls) == calls_before  # Reconciliation itself makes no LLM call.
     after, _, pending = refresh._pending(led.db, 1, CFG, now=clock.wall)
     assert after["sources"][0]["content_hash"] == before["sources"][0]["content_hash"]
-    assert after["sources"][0]["extraction_sig"] != before["sources"][0]["extraction_sig"]
-    assert refresh._current_scans(led.db, 1, after["sources"], after["route"]) == {}
-    assert pending["B"] is True
-    assert refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    # The schedule is not a scan input: the patient-context items and the
+    # summaries are the same, so the source signature and the scan stay.
+    assert after["sources"][0]["extraction_sig"] == before["sources"][0]["extraction_sig"]
+    assert refresh._current_scans(led.db, 1, after["sources"], after["route"])[1] == old_scan
+    assert not pending["B"]
+    assert refresh.context_view_input(led.db, 1, cfg=CFG) is not None
+    assert len(calls) == calls_before
     assert [tuple(row) for row in led.db.execute(
         "SELECT * FROM artifacts WHERE kind IN (?,?,?,?) ORDER BY artifact_id", protected_kinds)] == protected
     assert led.db.execute(hold_query).fetchone()[0] == 1

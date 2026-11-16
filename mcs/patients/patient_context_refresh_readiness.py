@@ -497,7 +497,7 @@ def _pending(db, pid, cfg, *, now=None, route=None, estimate=False, proof_for=No
     if quality_required and meta.get("quality_audit_key"):
         # Planning may conservatively recheck an unchanged PASS after config edits;
         # execution still validates policy and reuses receipts before any request.
-        quality_changed = meta.get("quality_schedule_key") != patient_context_refresh_state._digest([cfg, patient_context_refresh_state._quality_code()])
+        quality_changed = meta.get("quality_schedule_key") != patient_context_refresh_state._digest([cfg, patient_context_refresh_state._quality_assessment_code()])
     summary_needed = (not old or not _bound_signature_matches(db, pid, cfg, meta, snapshot, snapshots)
                     or meta.get("publication_requested", meta.get("published")) != patient_context_refresh_state.options(cfg)["publication"]
                     or meta.get("summary_checked") is not True

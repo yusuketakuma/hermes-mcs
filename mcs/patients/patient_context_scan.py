@@ -49,8 +49,9 @@ def scan_source(source, saved, workday_id, *, answer_for, clock, metrics=None, s
                     for summary in summaries:
                         start = 0
                         for text in context_plan.plan_chunks(summary["text"], width):
-                            pages.append({"kind": summary["kind"], "artifact_id": summary["artifact_id"],
-                                "text": text, "span": [start, start + len(text)], "length": len(summary["text"])})
+                            # Pages carry what the source signature binds, not the artifact id.
+                            pages.append({"kind": summary["kind"], "text": text,
+                                          "span": [start, start + len(text)], "length": len(summary["text"])})
                             start += len(text)
                 groups, group = [], []
                 for page in pages:

@@ -1,0 +1,23 @@
+{
+  "category": "changed",
+  "title": "患者コンテキストの品質確認を、品質確認のコードが変わったときだけやり直す",
+  "summary": "この版を入れると、全患者の資料と概況の品質確認が一度だけ無効になり、Jev の再確認が終わるまで公開版は表示されません。以後は品質確認の質問と判定のコードが変わらない限り、関係のないリリースでは確認済みの公開版を表示し続け、Jev の再確認もしません。",
+  "upgrade": "P0-2a・P0-2b と同じく単独で配備せず、P0 の各版とまとめて配備した後の1回の消去と作り直しで回収します。配備から作り直しまでは extract.patient_context.enabled=false と、人の確認つきの cloud-llm stop（--confirm-human・--reason）を保ってください。gateway の再起動が必要です。semantic_candidate.py・semantic_usage_receipts.py・抽出の読込み元一覧の変更で、添付の抽出の契約が1回変わり、同じ配備で添付の抽出が通常の処理で再実行されます。候補指紋（candidate_fingerprint）も変わるため、それに結び付いた昇格の評価記録は使えなくなります。",
+  "details": [
+    "品質確認の識別値（assessment.code）を、読み込んだほぼ全コードの hash から、QA_VERSION と品質確認の質問・判定のコードと定数だけの hash へ意図して狭める（patient_context_quality_identity.py）。走査契約と要約契約は従来どおり識別値の入力に含まれる。",
+    "hash は関数の bytecode からファイル名と行番号を除いて作るため、関数の位置が動くだけでは変わらない。対象関数の docstring の変更、Python のマイナー版の更新、-O の段階の違いでは変わり、品質確認が1回無効になる。",
+    "品質確認の制御・記録と PASS 判定の受入れ規則を変えるときは QA_VERSION を手で上げる。上げると公開版は「再確認待ち」として表示を止め、以前の判定記録は残す。",
+    "QA_VERSION を持つモジュールは患者コンテキスト専用で、上げても添付の抽出はやり直さない。",
+    "状態側と PASS の記録の照合が同じ関数で識別値を作るようにし、二つの計算の食い違いを無くす。",
+    "semantic.fact_source が legacy 以外の設定では、方針の識別値が全コードを含む候補指紋を持つため、従来どおり関係のないコード変更でも品質確認が無効になる（所有者の決定待ち。既定は legacy）。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_quality_identity.py",
+    "mcs/patients/patient_context_refresh_state.py",
+    "mcs/patients/patient_context_refresh_sources.py",
+    "mcs/patients/patient_context_refresh_readiness.py",
+    "mcs/semantic/semantic_candidate.py",
+    "mcs/semantic/semantic_usage_receipts.py",
+    "docs/specs/patient-context.md"
+  ]
+}

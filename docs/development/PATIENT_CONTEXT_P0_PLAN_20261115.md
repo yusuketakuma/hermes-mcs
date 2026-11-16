@@ -41,7 +41,7 @@ P0 は、1回だけ行う消去と作り直しの前に必ず入れる変更で�
 ### 削除するキー
 
 `context_checks`・`state_code`・`dependency_code`・`rule`・`llm` を削除します。
-`rule` と `llm` は、資料ごとの `extraction_sig` で置き換えます。
+`rule` と `llm` は、資料ごとの `extraction_sig` で置き換えます（P0-2a では残し、P0-2b で削除しました）。
 
 ### 移動する処理
 
@@ -111,13 +111,14 @@ result だけが残ると `cloud_unit_unresolved` で送信が止まるため、
 ## 所有者の決定（未決）
 
 - **D1: 資料ごとの束縛を内容基準にするか**
-  - 現状: `extraction_sig` と `derived_summary_sig` は、抽出・意味解析の artifact の id と版に結び付いています。そのため、抽出や意味解析の世代を上げるたびに全資料の scan が順に失効し、クラウドの費用は作り直しと同じくらいかかります。
+  - 現状: `extraction_sig` は、チャット投稿では抽出結果の内容・モデル・meta の hash、添付では解析結果の id と hash に結び付いています。`derived_summary_sig` は補助要約の artifact の id と版に結び付いています。そのため、抽出や意味解析の世代を上げるたびに全資料の scan が順に失効し、クラウドの費用は作り直しと同じくらいかかります。
   - 推奨: 実際に渡した入力の内容（抽出の `patient_context` 配列と補助要約の本文）の hash に結び付けます。
 - **D2: 品質確認の識別値の範囲**
   - 現状: `_quality_code()` はほぼ全コードを含みます。そのため、リリースのたびに全資料の品質確認が失効し、Jev の再確認が終わるまでクラウドの公開版が非表示になります。
   - 推奨: 識別値を次の形にし、品質確認の意味が変わるときだけ手動の版定数 `QA_VERSION` を上げます。
     - source-QA: `digest([scan 契約, QA_VERSION])`
     - 要約QA: `digest([scan 契約, 要約契約, QA_VERSION])`
+  - 実装（P0-2c）: 走査契約と要約契約は既に識別値の入力（`source_input_key`・`input_key`）にあるため、`assessment.code` は `[QA_VERSION, 品質確認のコードだけのhash]` にしました（`patient_context_quality_identity.py`）。hash の範囲と手動で上げる条件は `docs/specs/patient-context.md`「品質確認の識別値（P0-2c）」にあります。
 
 ## コミットの順序
 
@@ -135,7 +136,7 @@ result だけが残ると `cloud_unit_unresolved` で送信が止まるため、
 
 ## 文書とコードの食い違い
 
-- 設計書は、契約に入るのを plan・projection・dependency_loss のhashだけとしています。しかし実際には、`patient_context_scan.py` は契約に入っておらず、品質確認は `_quality_code` を通じてほぼ全コードに結び付いています。
+- 設計書は、契約に入るのを plan・projection・dependency_loss のhashだけとしています。しかし実際には、`patient_context_scan.py` は契約に入っておらず、品質確認は `_quality_code` を通じてほぼ全コードに結び付いていました（P0-2c で品質確認のコードだけに狭めました）。
 - 設計書は projection を要約側として扱っていますが、scan 側の `annotate` を含んでいます。
 - `PATIENT_CONTEXT_VERSION` は `extract_llm_source_contract.py:40` で定義され、`extract_llm.PATIENT_CONTEXT_VERSION` として参照されています。
 - `CLOUD_SEND_FOUNDATION_DESIGN_20261115.md` §6 の maintenance の行番号がずれています（修復の pin は `_source_repair_cloud_pins`、添付OCRの pin は `_attachment_cloud_pins`、患者コンテキストの pin は `_context_scan_cloud_pins`。行番号は変わるので関数名で参照する）。

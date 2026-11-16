@@ -56,6 +56,7 @@ _MODULES += (
     'patient_context_refresh_sources',
     'patient_context_refresh_readiness',
     'patient_context_quality_controller',
+    'patient_context_quality_identity',
     'rollup_builder',
 )
 
@@ -87,6 +88,7 @@ _RUNTIME_STATE.update({
     'extract_llm_source_contract': frozenset({'DB', 'HOME', '_DEFERRED', '_INFERENCE_SOURCE_STAT', '_LOADED_SOURCE_DIGESTS', '_LOADED_SOURCE_PATHS', '_WRITER_STATE'}),
     'extract_llm_store': frozenset({'HOME'}),
     'semantic_due_selection': frozenset({'_BACKLOG_TURN'}),
+    'patient_context_quality_identity': frozenset({'_CODE_CACHE'}),
 })
 
 
@@ -143,6 +145,28 @@ def _code_bytes(code):
     # Format 2 ignores runtime reference counts; tag slices without executing this copy.
     constants = tuple(_code_constant(value) for value in code.co_consts)
     return marshal.dumps(code.replace(co_consts=constants), 2)
+
+
+def _position_free(code):
+    # Strip nested code first: _code_bytes recurses into its own unstripped copy.
+    constants = tuple(_position_free(value) if isinstance(value, types.CodeType) else value
+                      for value in code.co_consts)
+    return code.replace(co_filename='', co_firstlineno=0, co_linetable=b'', co_consts=constants)
+
+
+def code_identity(function):
+    """Hash a closure-free function's behaviour independently of its file and line position."""
+    if (type(function) is not types.FunctionType or function.__closure__ is not None
+            or hasattr(function, '__wrapped__')):
+        raise TypeError('unsupported_code_identity')
+    return payload_hash(['code-identity/1', function.__qualname__,
+                         hashlib.sha256(_code_bytes(_position_free(function.__code__))).hexdigest(),
+                         _constant(function.__defaults__), _constant(function.__kwdefaults__)])
+
+
+def constant_identity(value):
+    """Normalize a supported constant exactly as the loaded source witness does."""
+    return _constant(value)
 
 
 def _sources():

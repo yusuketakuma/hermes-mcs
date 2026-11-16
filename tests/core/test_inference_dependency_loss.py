@@ -1081,10 +1081,9 @@ def test_current_raw_binding_supports_adopted_context_but_stale_binding_is_a_gap
 
 
 def test_source_quality_proof_binds_actual_questions_and_receipts(store):
-    import extract_llm
     import patient_context_plan as plan
+    import patient_context_quality_identity
     import semantic_audit
-    import semantic_candidate
     import semantic_jev
     import semantic_policy
     import semantic_runtime
@@ -1100,7 +1099,7 @@ def test_source_quality_proof_binds_actual_questions_and_receipts(store):
     assert len(facts) == 1 and plan.validated_source_facts(source, facts) == facts
     policy, errors = semantic_policy.semantic_config({'semantic': {'mode':'assist', 'project_ids':[1]}}, key_present=True)
     assert not errors
-    assessment = {'code': payload_hash([extract_llm._LOADED_SOURCE_DIGESTS, semantic_candidate.loaded_source_contract()]),
+    assessment = {'code': patient_context_quality_identity.patient_quality_assessment_code(),
                   'policy': semantic_policy.policy_fingerprint(policy)}
     descriptor = {'v':1, 'assessment':assessment, 'policy': {key: policy.get(key) for key in
         ('model','match_threshold','nomatch_threshold','calibration_version','fact_source','candidate_fingerprint')}}
@@ -1148,10 +1147,9 @@ def test_source_quality_proof_binds_actual_questions_and_receipts(store):
 @pytest.mark.parametrize("kind", ["chat", "karte"])
 @pytest.mark.parametrize("with_fact", [False, True])
 def test_cloud_candidate_capture_requires_genuine_source_qa_evidence(store, kind, with_fact):
-    import extract_llm
     import patient_context_plan as plan
+    import patient_context_quality_identity
     import semantic_audit
-    import semantic_candidate
     import semantic_jev
     import semantic_policy
     import semantic_runtime
@@ -1180,7 +1178,7 @@ def test_cloud_candidate_capture_requires_genuine_source_qa_evidence(store, kind
     occurrence = loss._context_occurrence(store.db, 1, source, binding)
     policy, errors = semantic_policy.semantic_config({'semantic': {'mode':'assist', 'project_ids':[1]}}, key_present=True)
     assert not errors
-    assessment = {'code':payload_hash([extract_llm._LOADED_SOURCE_DIGESTS, semantic_candidate.loaded_source_contract()]),
+    assessment = {'code': patient_context_quality_identity.patient_quality_assessment_code(),
                   'policy':semantic_policy.policy_fingerprint(policy)}
     descriptor = {'v':1, 'assessment':assessment, 'policy': {key:policy.get(key) for key in
         ('model','match_threshold','nomatch_threshold','calibration_version','fact_source','candidate_fingerprint')}}
