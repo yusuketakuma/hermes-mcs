@@ -96,6 +96,20 @@ def test_card_resolve_releases_an_attempt_less_horizon_hold(world, result, extra
         assert world.render()["state"] == "queued"
 
 
+def test_horizon_hold_rejects_a_journal_only_absence_proof(world):
+    world.seed()
+    world.dispatch()
+    render = world.render()
+    _restore_from(world, backup_names.JOURNAL_HORIZON_MAX_S + 86400)
+    notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW)
+    # the journal rows that could witness the send may be compacted away
+    receipt = _resolve(world, render["delivery_id"], "mark_not_sent",
+                       evidence={"method": "synthetic", "ref": "journal",
+                                 "proof": "no_journal_started", "worker_stopped": True})
+    assert (receipt["outcome"], receipt["error"]) == ("rejected", "journal_cannot_vouch")
+    assert world.render()["state"] == "held"
+
+
 def test_renders_after_the_restore_are_not_held_on_rerun(world):
     world.seed()
     _restore_from(world, backup_names.JOURNAL_HORIZON_MAX_S + 86400,

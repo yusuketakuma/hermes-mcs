@@ -700,31 +700,32 @@ def _cloud_selection_page(db, kinds, max_jobs, settings, semantic_scope, exclude
     if upper > progress['upper']:
         progress['upper'] = upper
         progress['collecting'] = True
-    # PK range scan: the correlated MAX uses idx_messages_project_time and is
-    # evaluated only for pending rows of the requested kinds.
+    # Each page is a PK range of at most _CLOUD_SELECTION_PAGE job ids, so a
+    # long run of settled jobs never makes one statement scan it whole (an
+    # interrupted statement would leave the cursor in place and repeat the
+    # same scan every tick). The correlated MAX uses idx_messages_project_time
+    # and is evaluated only for pending rows of the requested kinds.
     # A page is adopted only after its statement has fully completed.
     marks = ','.join('?' for _ in kinds)
     while progress['collecting']:
         check_deadline()
+        bound = min(progress['cursor'] + _CLOUD_SELECTION_PAGE, progress['upper'])
         rows = db.execute(
-            'SELECT j.job_id,j.kind,j.project_id,COALESCE(p.is_archived,0), '
+            'SELECT j.job_id,j.project_id,COALESCE(p.is_archived,0), '
             + patient_priority.latest_activity_sql('j.project_id') + ' '
             'FROM fetch_jobs j NOT INDEXED LEFT JOIN patients p ON p.project_id=j.project_id '
-            f"WHERE j.job_id>? AND j.job_id<=? AND j.state='pending' AND j.kind IN ({marks}) "
-            'ORDER BY j.job_id LIMIT ?',
-            (progress['cursor'], progress['upper'], *kinds, _CLOUD_SELECTION_PAGE)).fetchall()
-        for job_id, _kind, project_id, archived, latest in rows:
+            f"WHERE j.job_id>? AND j.job_id<=? AND j.state='pending' AND j.kind IN ({marks})",
+            (progress['cursor'], bound, *kinds)).fetchall()
+        for job_id, project_id, archived, latest in rows:
             # SQLite orders NULL timestamps last for DESC and NULL
             # project IDs first for ASC.
             heapq.heappush(progress['rows'], (
                 *patient_priority.priority_key(project_id, latest, archived=bool(archived)), job_id))
-        if len(rows) < _CLOUD_SELECTION_PAGE:
-            progress['cursor'] = progress['upper']
+        progress['cursor'] = bound
+        if bound >= progress['upper']:
             progress['collecting'] = False
             if progress['scanned'] is None:
                 progress['scanned'] = time.monotonic()
-        else:
-            progress['cursor'] = rows[-1][0]
     check_deadline()
     selected, snapshots = [], {}
     pending = progress['pending']

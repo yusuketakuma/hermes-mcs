@@ -30,6 +30,9 @@ def _clock(monkeypatch):
     return clock
 
 
+_PAGE_SQL = 'SELECT j.job_id,j.project_id,COALESCE'
+
+
 def _select(led, deadline, max_jobs=1):
     with legacy_cloud_routes():
         return semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, max_jobs,
@@ -45,13 +48,23 @@ def test_cloud_selection_scan_skips_finished_and_other_kind_rows(cloud, monkeypa
     monkeypatch.setattr(semantic_due_selection, '_CLOUD_SELECTION_PAGE', 1)
     clock = _clock(monkeypatch)
     led.db.set_trace_callback(lambda sql: clock.__setitem__(0, 1.0)
-        if sql.startswith('SELECT j.job_id,j.kind') else None)
+        if sql.startswith(_PAGE_SQL) else None)
     try:
         with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
             _select(led, 1.0)
     finally:
         led.db.set_trace_callback(None)
-    # The single adopted page holds the first pending semantic job, never the done one.
+    # The adopted page is the settled job's id range alone: the cursor moves
+    # past it, so the next tick never rescans it, and no done job is ranked.
+    progress = semantic_due_selection._cloud_selection_progress
+    assert progress['cursor'] == job['job_id'] and progress['rows'] == []
+    led.db.set_trace_callback(lambda sql: clock.__setitem__(0, clock[0] + 1.0)
+        if sql.startswith(_PAGE_SQL) else None)
+    try:
+        with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
+            _select(led, clock[0] + 1.0)
+    finally:
+        led.db.set_trace_callback(None)
     ranked = [rank[-1] for rank in semantic_due_selection._cloud_selection_progress['rows']]
     assert ranked == [_job_id(led, 2)]
     assert not calls
@@ -105,7 +118,7 @@ def test_cloud_selection_long_full_scan_does_not_expire(cloud, monkeypatch):
     clock = _clock(monkeypatch)
     # Every page takes a whole TTL and each tick's deadline stops after one page.
     led.db.set_trace_callback(lambda sql: clock.__setitem__(0, clock[0] + semantic_due_selection._CLOUD_SELECTION_TTL_S)
-        if sql.startswith('SELECT j.job_id,j.kind') else None)
+        if sql.startswith(_PAGE_SQL) else None)
     try:
         progress, ticks = None, 0
         while True:

@@ -5,13 +5,13 @@
   "upgrade": "追加操作は不要です。配送記録の上限は Hermes gateway の再起動後、LINE WORKS の一時ファイル削除は LINE WORKS アダプターの再起動後に有効になります。上限の90日を超えた決済済みの記録は、再起動後の最初の記録の切替え・圧縮で削除されます。DB 復元時の全件保留は、復元に使ったバックアップ（mcs_update の復元のようにパスが記録されるもの）の日付が復元時刻より90日以上前の場合だけ適用されます。パスが記録されない復元（mcs_backup の復元・手動の mark_restored）は対象外で従来どおりの照合になり、90日を超えた journal の根拠は残りません。",
   "details": [
     "スキーマ更新前の複製や手作業の複製が1つあるだけで記録が増え続ける状態がなくなります。",
-    "送信記録の無い保留は attempt_id に delivery_id を指定して解除します。未送信と確認した場合はカードを送り直します。",
+    "送信記録の無い保留は attempt_id に delivery_id を指定して解除します。未送信の確認には送信先に投稿が無いこと（remote_absent）か送信拒否（api_rejected）が必要で、配送記録だけの証明（no_journal_started）は受け付けません。未送信と確認した場合はカードを送り直します。",
     "添付が確定できずに止まったファイルのまとまりは、その状態を完了として記録し、2秒ごとの再確認をやめます（未確認の送信は今までどおり再送しません）。",
     "mcs_setup.py check は、途中で切れた行や読めない行を含む配送記録のファイル名を注意として表示します（読取りのみ）。",
     "LINE WORKS の受信待ちは、強制停止で残った書きかけの一時ファイル（.atomic-*.tmp）を、20分を過ぎた時点で中身を読まずに削除します。",
     "data/backups の名前の分類を mcs/core/backup_names.py にまとめ、日次バックアップの管理（local_backup）と配送 worker の journal 圧縮が同じ分類を使う。復元に使える .db（日次・更新前・手作業）の最古 mtime を基準とし、90日前より古くはしない。",
     "復元の照合（notify_reconcile）は、復元マーカーの backup_path の mtime が restored_at の90日より前なら、restored_at までに作られた未確定（delivered・not_sent・cancelled・held 以外）の render を restore_beyond_journal_horizon として hold し、復元時点までに作られた保留中の操作カード通知を restore_hold として止める。backup_path が無い、または読めない場合は従来どおりの照合を行う。この attempt の無い hold は ops.card_resolve が attempt_id=delivery_id で受け付け、既存の rebind 経路で決済・解除し、render が残っていればカードの次の render を発行する。",
-    "ops.card_resolve の _rebind_check は、attempt_id が NULL の hold を delivery_id で照合する。",
+    "ops.card_resolve の _rebind_check は、attempt_id が NULL の hold を delivery_id で照合し、mark_not_sent の proof=no_journal_started を journal_cannot_vouch で拒否する（送信を示す journal 行が圧縮で消えている可能性があるため）。",
     "file_group の不足している添付がすべて started・result・receipt・denied のいずれかを journal に持つとき、または thread_id が無く manifest の thread part がそれらの phase を持つ（thread 待ちの添付が送られることがない）ときは、その delivery を parts_done として記録する。未着手の添付が送られうる場合は従来どおり次の周回で確認する。",
     "mcs_setup.py check は notify_journal.tainted_journal_files で discord_state・slack_state・lineworks_state の journal を読み、切れた行のあるファイルを注意に出す。fail-closed（該当送信の保留）は変えない。人承認での隔離は既存の承認・受領記録の経路に合うものがないため入れず、hermes_plugin/README.md の手作業の復旧手順に LINE WORKS の state の場所と check の表示を加えた。",
     "LINE WORKS の CallbackInbox.expire は、同じロック区間で mtime が1200秒を超えた .atomic-*.tmp を開かずに unlink する。"
