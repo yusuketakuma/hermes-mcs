@@ -55,7 +55,7 @@ def test_missing_required_env_fails(tmp_path):
 
 def test_publication_job_checks_out_exact_event_source_without_credentials():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-    job = workflow.split("  publication-request:\n", 1)[1].split("\n  lint-test:", 1)[0]
+    job = workflow.split("  publication-request:\n", 1)[1].split("\n  linux-tests:", 1)[0]
     assert "if: github.event_name == 'push'" in job
     assert "runs-on: ubuntu-latest" in job
     checkout, execute = job.split("      - name: write publication request hint", 1)
