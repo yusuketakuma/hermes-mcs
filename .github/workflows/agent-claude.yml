@@ -3,7 +3,7 @@ name: Agent Claude
 # Claude Code GitHub Action を、所有者が 担当:claude を付けた Issue と、
 # 所有者が担当中の Issue・PR に書いた @claude にだけ反応させる。
 # 停止スイッチ vars.AUTOMATION_ENABLED が true でなければ起動しない（既定は停止）。
-# 書くのは agent/claude- ブランチと下書きPRだけ。マージ・タグ・配備はしない。
+# 書くのは agent/claude- ブランチとPRだけ（下書きPRは使わない）。マージ・タグ・配備はしない。
 # CI 失敗の修正は agent-claude-repair.yml（workflow_dispatch だけで起動）。
 # 運用と停止手順: docs/development/AUTOMATION.md
 on:
@@ -94,5 +94,5 @@ jobs:
           branch_prefix: agent/claude-
           claude_args: >-
             --max-turns 40
-            --allowedTools "Bash(gh pr create --draft:*),Bash(git:*),Bash(ruff:*),Bash(python3:*),Bash(scripts/run_tests.sh:*)"
-            --append-system-prompt "このリポジトリの AGENTS.md と docs/development/AUTOMATION.md に従う。作業は対象 Issue の範囲だけ。終わったら本文に Fixes #番号 を書いて gh pr create --draft で下書きPRを作る。テストの削除・skip・閾値の緩和で成功を作らない。患者データ・実ログ・秘密値を書かない。マージ・タグ・リリースはしない。"
+            --allowedTools "Bash(gh pr create:*),Bash(git:*),Bash(ruff:*),Bash(python3:*),Bash(scripts/run_tests.sh:*)"
+            --append-system-prompt "このリポジトリの AGENTS.md と docs/development/AUTOMATION.md に従う。作業は対象 Issue の範囲だけ。終わったら本文に Fixes #番号 を書いて gh pr create でPRを作る（下書きにしない）。テストの削除・skip・閾値の緩和で成功を作らない。患者データ・実ログ・秘密値を書かない。マージ・タグ・リリースはしない。"
