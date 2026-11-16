@@ -7,6 +7,7 @@ import math
 import re
 import time
 from mcs_requests import positive
+from notify_card_state import PARTS_IN_FLIGHT_SQL
 from mcs_util import loads_dict, payload_hash, strict_json, text_sha256, valid_hash, valid_text
 
 TRANSPORT_VERSIONS = {"discord": 1, "slack": 2, "lineworks": 3}
@@ -276,9 +277,7 @@ def pending_breakdown(db, now: float, *, checkpoint=lambda: None) -> dict:
         "  WHERE ic.event_id=o.event_id AND ic.state='pending' "
         "    AND r.state='delivered' AND r.render_rev=(SELECT MAX(render_rev) "
         "      FROM notification_renders WHERE card_id=ic.card_id) "
-        "    AND ((p.kind IN ('body_part','attachment_part','file_group') "
-        "          AND p.state IN ('pending','unknown')) "
-        "      OR (p.kind='thread' AND p.state='unknown'))), "
+        "    AND " + PARTS_IN_FLIGHT_SQL + "), "
         " (SELECT json_extract(c.ui_state,'$.history_latest.phase') FROM notification_intent_cards i "
         "  JOIN notification_cards c ON c.card_id=i.card_id WHERE i.event_id=o.event_id "
         "  AND i.state='pending' AND c.kind='patient_history' AND c.delivery_state='delivered' "

@@ -5,6 +5,7 @@ import patient_context_refresh_sources
 import patient_context_refresh_state
 import patient_context_plan as context_plan
 import patient_context_selection
+import extract
 import mcs_queries
 import copy
 from contextlib import closing
@@ -524,7 +525,7 @@ def _clinical_source(led, mid, body, day, *, pid=1, dose=None):
     item = assertion(body, details=details)
     row = led.db.execute('SELECT content_hash FROM messages WHERE message_id=?', (mid,)).fetchone()
     led.artifact_add('extract_v1', json.dumps({'patient_context':[item]}), project_id=pid, message_id=mid,
-        meta={VERSION_KEY:patient_context_refresh_state.CURRENT_VERSION, 'hash':row[0], 'rule_version':patient_context_refresh_state._contract()['rule']})
+        meta={VERSION_KEY:patient_context_refresh_state.CURRENT_VERSION, 'hash':row[0], 'rule_version':extract.RULE_VERSION})
     _raw_proof(led, pid, mid)
     _semantic_proof(led, pid, mid)
     return next(mcs_queries.patient_context_sources(led.db,pid,mid=mid)), item

@@ -246,11 +246,18 @@ def test_summary_negative_does_not_invalidate_source_skip(runtime, cloud, monkey
     assert scans[1]['_audit_skipped'] is False
 
 
+def _budget_exhausted_audit(client, *args, **kwargs):
+    # Closure-free on purpose: the quality identity hashes the audit functions
+    # and refuses closures, so a stub must be hashable like the real one.
+    import semantic_jev
+    client.last_error = semantic_jev.JevError('budget_exceeded', 'daily_cap')
+    return {'evaluated': False}
+
+
 @pytest.mark.parametrize('mode', ['on', 'off'])
 @pytest.mark.parametrize('purpose', ['source', 'summary'])
 def test_mid_audit_budget_skip_cannot_override_prior_negative(runtime, cloud, monkeypatch, mode, purpose):
     import semantic_audit
-    import semantic_jev
     from inference_version import CURRENT_VERSION, VERSION_KEY
 
     led, clock, _ = runtime
@@ -262,10 +269,7 @@ def test_mid_audit_budget_skip_cannot_override_prior_negative(runtime, cloud, mo
     cloud[1][0] = mode
     name = 'audit_patient_quality_page' if purpose == 'source' else 'audit_patient_summary_chunk'
     real = getattr(semantic_audit, name)
-    def exhausted(client, *args, **kwargs):
-        client.last_error = semantic_jev.JevError('budget_exceeded', 'daily_cap')
-        return {'evaluated': False}
-    monkeypatch.setattr(semantic_audit, name, exhausted)
+    monkeypatch.setattr(semantic_audit, name, _budget_exhausted_audit)
     reason = purpose + '_quality_deferred'
     for _ in range(25):
         result = step(runtime)

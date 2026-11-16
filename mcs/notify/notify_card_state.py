@@ -88,21 +88,33 @@ def unsettled_attempt(db, card_id: int):
            ORDER BY a.created_at DESC LIMIT 1""", (card_id,)).fetchone()
 
 
+# Unsettled parts of one delivered render, as a predicate on alias ``p``.
+# A delivered attachment's upload identity is reusable only under the
+# render's delivered thread receipt (notify_parts._same_thread_delivered_parts),
+# so a pending thread beside a delivered attachment is in flight too: an
+# update planned before it lands would hold the file as unverified for good.
+PARTS_IN_FLIGHT_SQL = (
+    "((p.kind IN ('body_part','attachment_part','file_group') "
+    "AND p.state IN ('pending','unknown')) OR (p.kind='thread' AND (p.state='unknown' "
+    "OR p.state='pending' AND EXISTS(SELECT 1 FROM notification_render_parts d "
+    "WHERE d.delivery_id=p.delivery_id AND d.kind='attachment_part' "
+    "AND d.state='delivered'))))")
+
+
 def _parts_in_flight(db, latest) -> bool:
-    """The card is delivered but its thread identity is unknown, or body
+    """The card is delivered but its thread identity is unknown, its thread
+    receipt is still pending beside a delivered attachment, or body
     chunks/attachments are pending or unknown. An update names the posts that
     already carry each part (``prior_remote_id``) — issued before those
     receipts land it would know none and post every chunk and file a
-    second time — so it waits for the parts to settle and a later sweep
-    issues it. A render that never reached the wire (queued) is not
-    waited on, and neither are create/revoke renders."""
+    second time, or hold its files as unverified — so it waits for the parts
+    to settle and a later sweep issues it. A render that never reached the
+    wire (queued) is not waited on, and neither are create/revoke renders."""
     if latest is None or latest["state"] != "delivered":
         return False
     return db.execute(
-        "SELECT 1 FROM notification_render_parts WHERE delivery_id=? "
-        "AND ((kind IN ('body_part','attachment_part','file_group') "
-        "AND state IN ('pending','unknown')) OR (kind='thread' AND state='unknown')) "
-        "LIMIT 1", (latest["delivery_id"],)).fetchone() is not None
+        "SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=? AND "
+        + PARTS_IN_FLIGHT_SQL + " LIMIT 1", (latest["delivery_id"],)).fetchone() is not None
 
 
 def _cancel_render(db, delivery_id, now):
