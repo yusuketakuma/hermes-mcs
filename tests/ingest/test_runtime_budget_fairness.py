@@ -94,7 +94,7 @@ def test_notification_observations_precede_slow_global_health_reads(tmp_path, mo
     monkeypatch.setattr(health_report.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(health_report, "HEALTH_FILE", str(tmp_path / "missing.json"))
 
-    def parts(db, now, cfg):
+    def parts(db, now, cfg, **_kwargs):
         seen.append("parts")
         return {"total": 0, "cards": 0, "by_state": {}, "by_plan": {},
                 "oldest_age_s": None, "observed_at": now}

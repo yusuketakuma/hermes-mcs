@@ -747,25 +747,43 @@ def unresolved_length_deliveries(db, delivery_ids, *, proof_state=None) -> set:
             and row['state'] == 'not_sent' and row['error_code'] in _LENGTH_ERRORS}
 
 
-def incomplete_parts_health(db, now: float, cfg=None) -> dict:
-    """Read unfinished parts, excluding only matching later delivery evidence."""
+def _tracked_incomplete_part_rows(db, cfg=None):
+    """Yield (row, acknowledged) for unfinished parts; acknowledged rows are closed tracking."""
     import notify_tracking_ack
     index = notify_tracking_ack.receipt_targets(db)
+    for row in _incomplete_part_rows(db, cfg):
+        yield row, notify_tracking_ack.acknowledged(db, row, index, cfg=cfg)
+
+
+def active_incomplete_part_rows(db, cfg=None):
+    """Yield the unfinished parts the health alert counts as active, read-only."""
+    for row, acknowledged in _tracked_incomplete_part_rows(db, cfg):
+        if not acknowledged:
+            yield row
+
+
+def incomplete_parts_health(db, now: float, cfg=None, *, active_rows=None) -> dict:
+    """Read unfinished parts, excluding only matching later delivery evidence.
+
+    ``active_rows``, when a list, receives each active row this same pass
+    counted, so a follow-up diagnostic needs no second tracking-ack proof."""
     states = dict.fromkeys(('pending', 'unknown', 'not_sent', 'held'), 0)
     by_plan = {"current": 0, "superseded": 0}
     active_states = dict(states)
     active_plans = dict(by_plan)
     cards, oldest, active_cards, active_oldest, closed = set(), None, set(), None, 0
-    for row in _incomplete_part_rows(db, cfg):
+    for row, acknowledged in _tracked_incomplete_part_rows(db, cfg):
         states[row['state']] += 1
         by_plan["superseded" if row['superseded'] else "current"] += 1
         cards.add(row['card_id'])
         at = _finite(row['oldest'])
         if at is not None:
             oldest = min(oldest, at) if oldest is not None else at
-        if notify_tracking_ack.acknowledged(db, row, index, cfg=cfg):
+        if acknowledged:
             closed += 1
             continue
+        if active_rows is not None:
+            active_rows.append(row)
         active_states[row['state']] += 1
         active_plans["superseded" if row['superseded'] else "current"] += 1
         active_cards.add(row['card_id'])
