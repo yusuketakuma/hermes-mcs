@@ -127,6 +127,10 @@ class CallbackInbox:
                         path.unlink()
                 elif path.suffix == ".json":
                     self.finish(path, "unknown")
+                elif path.suffix == ".tmp" and path.name.startswith(".atomic-"):
+                    # A write a hard stop interrupted may hold a plaintext
+                    # body: remove it unread, like the inputs above.
+                    path.unlink()
 
 
 def callback_server(inbox, *, host="127.0.0.1", port=8788):

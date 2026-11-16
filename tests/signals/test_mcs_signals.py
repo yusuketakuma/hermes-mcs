@@ -911,6 +911,31 @@ def test_symptom_after_med_change_same_post(led):
 
 
 
+def test_symptom_after_med_change_keeps_only_coupled_rows(led, monkeypatch):
+    """Peak memory: the content/body rows are streamed, and only coupled
+    findings (not every fact row in the window) reach the engagement batch."""
+    _msg(led.db, 1, ts=NOW - 1 * DAY)
+    _extract_doc(led.db, 1, "h1",
+                 meds=[{"name": "薬A", "action": "start"}],
+                 symptoms=[{"text": "浮腫", "status": "new", "negated": False}])
+    for mid in range(2, 6):
+        _msg(led.db, mid, pid=mid, ts=NOW - 1 * DAY, chash=f"h{mid}")
+        _extract_doc(led.db, mid, f"h{mid}", meds=[{"name": "薬B", "action": "stop"}])
+    seen = []
+    real = mcs_signals._engagement_checker
+
+    def checker(db, candidates, profs, orgs):
+        candidates = list(candidates)
+        seen.extend(candidates)
+        return real(db, iter(candidates), profs, orgs)
+
+    monkeypatch.setattr(mcs_signals, "_engagement_checker", checker)
+    found = list(mcs_signals._symptom_after_med(
+        led.db, NOW, signal_policy.resolved_thresholds(led.db), {}))
+    assert [sig["project_id"] for _, sig in found] == [1]
+    assert [tuple(c)[:2] for c in seen] == [(1, 1)]
+
+
 def test_symptom_after_med_change_ignores_unverified_symptoms(led):
     """An unverified symptom is not evidence of a patient symptom: it
     alone never couples, and it is left out beside a verified one."""

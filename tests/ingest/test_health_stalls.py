@@ -330,7 +330,7 @@ def test_failed_alert_enqueue_is_visible():
                 fetchone=lambda: {"t": None})))
     result = {"errors": []}
     run_check._fail_run(ledger, SimpleNamespace(no_notify=True), result, 1,
-                        "failed", "crash:X", time.monotonic() + 10, "run")
+                        "failed", RuntimeError(), "crash:X", time.monotonic() + 10, "run")
     assert result["errors"] == ["crash:X", "alert_enqueue_failed: OSError"]
 
 

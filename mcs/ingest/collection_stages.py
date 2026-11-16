@@ -12,6 +12,7 @@ import re
 import time
 from types import SimpleNamespace
 
+import collection_diagnostics
 from mcs_contract import MCSError, SessionExpired, describe_error
 from message_observations import METADATA_SHADOW_BACKOFF_S
 from health_policy import COVERAGE_STALL_S
@@ -44,7 +45,7 @@ WALK_TICK_CAP = 40            # patients self_probe/backfill visit per tick (MCS
 REACTION_ACTORS_TICK_CAP = 4
 
 
-def queue_run_alert(ledger, kind: str, run_id: int, detail: str) -> bool:
+def queue_run_alert(ledger, kind: str, run_id: int, detail: str, *, stop=None) -> bool:
     """Enqueue a system alert — throttled so a persistent condition does
     not re-alert on every tick: one per kind per ALERT_MIN_INTERVAL_S
     keeps it visible without flooding the channel. The run row and
@@ -60,14 +61,16 @@ def queue_run_alert(ledger, kind: str, run_id: int, detail: str) -> bool:
             and time.time() - float(last) < ALERT_MIN_INTERVAL_S:
         return False
     import alert_recovery
-    ledger.outbox_add(kind, None, {"run_id": run_id, "detail": detail},
-                      next_try=alert_recovery.next_try_for(kind))
+    payload = {"run_id": run_id, "detail": detail}
+    if stop is not None:
+        payload["stop"] = stop
+    ledger.outbox_add(kind, None, payload, next_try=alert_recovery.next_try_for(kind))
     return True
 
 
-def queue_session_expired(ledger, run_id: int, detail: str) -> bool:
+def queue_session_expired(ledger, run_id: int, detail: str, *, stop=None) -> bool:
     """Enqueue the session_expired alert (throttled per kind)."""
-    return queue_run_alert(ledger, "session_expired", run_id, detail)
+    return queue_run_alert(ledger, "session_expired", run_id, detail, stop=stop)
 
 
 def _alert_session_recovered(ledger, run_id: int, detail: str) -> None:
@@ -208,6 +211,16 @@ def _restore_unobserved(where: str, result, aborted: dict, counted: dict,
 
 
 def with_relogin(adapter, ledger, result, where: str, fn, *args,
+                  **kwargs):
+    """Run one adapter-bound stage with session recovery; a failure keeps ``where`` as its stop point."""
+    try:
+        return _with_relogin(adapter, ledger, result, where, fn, *args, **kwargs)
+    except BaseException as e:
+        collection_diagnostics.mark_stage(e, where)
+        raise
+
+
+def _with_relogin(adapter, ledger, result, where: str, fn, *args,
                   **kwargs):
     """Run one adapter-bound stage with a single in-run session
     recovery. A mid-stage SessionExpired no longer abandons the whole

@@ -7,6 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import sqlite3
 import stat
 import subprocess
@@ -180,29 +181,41 @@ def request_slot(root, capacity):
             os.close(slot)
 
 
-def memory_workers(limit):
-    """Bound the pool by free memory after a ten-percent reserve and 256 MiB per worker."""
-    if sys.platform != "darwin":
-        try:
-            values = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines())
-            total = int(values["MemTotal"].split()[0]) * 1024
-            available = int(values["MemAvailable"].split()[0]) * 1024
-        except (OSError, ValueError, KeyError):
-            return 0
-    else:
-        import re
-        try:
-            total = int(subprocess.run(["/usr/sbin/sysctl", "-n", "hw.memsize"],
-                capture_output=True, text=True, timeout=2, check=True).stdout.strip())
-            output = subprocess.run(["/usr/bin/memory_pressure", "-Q"],
-                capture_output=True, text=True, timeout=2, check=True).stdout
+_WORKER_BYTES = 256 * 1024 * 1024
+_QUICK_EXIT_S = 60
+_RESTART_BACKOFF_MAX_S = 600
+
+
+def memory_headroom():
+    """Return free bytes above the foreground reserve, or None while memory is unobservable."""
+    try:
+        if sys.platform == "darwin":
+            env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C"}
+            total = int(subprocess.run(["/usr/sbin/sysctl", "-n", "hw.memsize"], capture_output=True,
+                                       text=True, timeout=2, check=True, env=env).stdout.strip())
+            output = subprocess.run(["/usr/bin/memory_pressure", "-Q"], capture_output=True,
+                                    text=True, timeout=2, check=True, env=env).stdout
             match = re.search(r"System-wide memory free percentage:\s*(\d+)%", output)
-            if match is None:
-                return 0
-            available = total * int(match[1]) // 100
-        except (OSError, ValueError, subprocess.SubprocessError):
-            return 0
-    return max(0, min(limit, int((available - total / 10) // (256 * 1024 * 1024))))
+            if match is None or not 0 <= int(match[1]) <= 100:
+                return None
+            available, reserve = total * int(match[1]) // 100, total // 10
+        else:
+            values = dict(re.findall(r"^(MemAvailable|MemTotal):\s*(\d+) kB$",
+                                     Path("/proc/meminfo").read_text(), re.M))
+            total, available = int(values["MemTotal"]) * 1024, int(values["MemAvailable"]) * 1024
+            # Small Linux standalone hosts keep at least 1 GiB for foreground work.
+            reserve = max(1 << 30, total // 10)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        return None
+    if total <= 0 or not 0 <= available <= total:
+        return None
+    return available - reserve
+
+
+def memory_workers(limit):
+    """Bound the pool by the shared memory headroom at 256 MiB per worker."""
+    headroom = memory_headroom()
+    return 0 if headroom is None else max(0, min(limit, headroom // _WORKER_BYTES))
 
 
 class CloudBacklogPool:
@@ -212,6 +225,9 @@ class CloudBacklogPool:
         self.context_only = context_only
         self.children = []
         self.indices = {}
+        self.started = {}
+        self.quick_exits = 0
+        self.retry_at = 0.0
         self.lock = None
         self.last_sync = 0.0
         # The context pool's owner also keeps the stored-message workers of a
@@ -221,7 +237,6 @@ class CloudBacklogPool:
     def sync(self, cfg, *, ledger=None):
         import cloud_inference
         import cloud_policy
-        import extract_llm
         if self.backlog is not None:
             self.backlog.sync(cfg, ledger=ledger)
         now = time.monotonic()
@@ -229,45 +244,24 @@ class CloudBacklogPool:
             return
         self.last_sync = now
         settings = cloud_inference.resolve_cloud_settings(cfg)
-        self.children = [p for p in self.children if p.poll() is None]
-        self.indices = {p: index for p, index in self.indices.items() if p in self.children}
-        if settings["mode"] != "on":
-            # Workers retire at the idle boundary after paid carry is settled.
+        self._reap(now)
+        if not self._admits(cfg, settings, ledger):
+            # Children retire by policy while the gate is closed: those exits
+            # are not crashes and never delay a restart once it reopens.
+            self.quick_exits, self.retry_at = 0, 0.0
             return
-        if self.context_only:
-            import patient_context_refresh
-            if not patient_context_refresh.options(cfg)["enabled"]:
-                return
-            # Cloud availability is decided inside run_due. A missing key or
-            # a spend hold must not hide its existing local fallback/recovery.
-        else:
-            extract_open = cloud_policy.reextract_planned(settings)
-            semantic_open = ("semantic_backlog" in settings["routes"]
-                             and cloud_policy.semantic_backlog_window(settings))
-            if not (extract_open or semantic_open):
-                # Existing workers settle paid carry before retiring.
-                return
-            if not cloud_policy.selected_key(self.root):
-                return
-            selection, errors = cloud_policy.resolve_profile(
-                cfg, route="reextract" if extract_open else "semantic_backlog", purpose="backlog", root=self.root)
-            if errors or selection is None:
-                return
-            limit = selection["max_tokens"] if selection["max_tokens"] is not None else extract_llm.MAX_TOKENS
-            if ledger is not None and (cloud_policy.global_block_reason(ledger, model=selection["model"])
-                    or cloud_policy.budget_block_reason(ledger, settings, max_tokens=limit, selection=selection)):
-                return
         directory = self.root / "data"
         if self.lock is None:
             self.lock = _lock(directory / ("context_pool.lock" if self.context_only else "cloud_pool.lock"))
             if self.lock is None:
                 return
-        self.children = [p for p in self.children if p.poll() is None]
+        self._reap(now)
         target = memory_workers(settings["max_concurrency"])
-        self.indices = {p: index for p, index in self.indices.items() if p in self.children}
         # Keep one worker of hysteresis: its resident memory changes the sample.
         if self.children and target > 0 and abs(target - len(self.children)) <= 1:
             target = min(settings["max_concurrency"], len(self.children))
+        if target <= len(self.children) or now < self.retry_at:
+            return
         inherited = os.environ.get("MCS_RUN_LOG_HELPER")
         recovery = str(Path(inherited).parent) if inherited and os.path.isabs(inherited) else None
         helper = helper_path(self.root, recovery, require_installed=True)
@@ -283,6 +277,52 @@ class CloudBacklogPool:
                 close_fds=True, env={**os.environ, cloud_policy.BACKLOG_WORKER_ENV: "0" if self.context_only else "1"})
             self.children.append(child)
             self.indices[child] = index
+            self.started[child] = now
+
+    def _admits(self, cfg, settings, ledger):
+        """Return whether mode, routes, key, profile and budget let this pool start children."""
+        import cloud_policy
+        import extract_llm
+        if settings["mode"] != "on":
+            # Workers retire at the idle boundary after paid carry is settled.
+            return False
+        if self.context_only:
+            import patient_context_refresh
+            if not patient_context_refresh.options(cfg)["enabled"]:
+                return False
+            # Cloud availability is decided inside run_due. A missing key or
+            # a spend hold must not hide its existing local fallback/recovery.
+        else:
+            extract_open = cloud_policy.reextract_planned(settings)
+            semantic_open = ("semantic_backlog" in settings["routes"]
+                             and cloud_policy.semantic_backlog_window(settings))
+            if not (extract_open or semantic_open):
+                # Existing workers settle paid carry before retiring.
+                return False
+            if not cloud_policy.selected_key(self.root):
+                return False
+            selection, errors = cloud_policy.resolve_profile(
+                cfg, route="reextract" if extract_open else "semantic_backlog", purpose="backlog", root=self.root)
+            if errors or selection is None:
+                return False
+            limit = selection["max_tokens"] if selection["max_tokens"] is not None else extract_llm.MAX_TOKENS
+            if ledger is not None and (cloud_policy.global_block_reason(ledger, model=selection["model"])
+                    or cloud_policy.budget_block_reason(ledger, settings, max_tokens=limit, selection=selection)):
+                return False
+        return True
+
+    def _reap(self, now):
+        """Forget exited children; a child that exits right after starting backs off its restart."""
+        alive = [p for p in self.children if p.poll() is None]
+        lifetimes = [now - self.started.pop(child, float("-inf")) for child in self.children if child not in alive]
+        if any(lifetime >= _QUICK_EXIT_S for lifetime in lifetimes):
+            self.quick_exits, self.retry_at = 0, 0.0
+        elif lifetimes:
+            # Children that exit together are one failure, not one per child.
+            self.quick_exits += 1
+            self.retry_at = now + min(_RESTART_BACKOFF_MAX_S, 10 * 2 ** min(self.quick_exits, 6))
+        self.children = alive
+        self.indices = {p: index for p, index in self.indices.items() if p in alive}
 
     def close(self):
         if self.backlog is not None:
@@ -299,6 +339,7 @@ class CloudBacklogPool:
                 child.wait(timeout=1)
         self.children = []
         self.indices = {}
+        self.started = {}
         if self.lock is not None:
             os.close(self.lock)
             self.lock = None
@@ -382,6 +423,14 @@ _HOLD_DEFER_REASONS = frozenset(
      "prepare_profile_unavailable", "local_rebuild_proof_changed", "local_rebuild_unverified"})
 
 
+def _defer(waiting, code):
+    """Wait one fixed interval; a persistent hold emits a heartbeat, not one event per retry."""
+    if code != waiting["code"] or time.monotonic() - waiting["at"] >= 60:
+        waiting.update(code=code, at=time.monotonic())
+        _event("cloud_backlog_deferred", reason=code)
+    time.sleep(10)
+
+
 def worker(parent, *, index=None, context_only=False):
     """Alternate guarded cloud extraction and semantic jobs with an independent ledger."""
     global _parent
@@ -426,11 +475,7 @@ def worker(parent, *, index=None, context_only=False):
         capacity_checked = float("-inf")
 
         def wait(code):
-            # A persistent hold emits a heartbeat, not one event per retry.
-            if code != waiting["code"] or time.monotonic() - waiting["at"] >= 60:
-                waiting.update(code=code, at=time.monotonic())
-                _event("cloud_backlog_deferred", reason=code)
-            time.sleep(10)
+            _defer(waiting, code)
 
         def settle_carry():
             deadline = time.monotonic() + 3.0
@@ -757,11 +802,19 @@ def _context_worker(ledger, initial, index):
     import extract_llm_resident
     import local_llm
     import writer_lock
-    from mcs_util import HOME, load_config
+    from mcs_util import HOME, ProviderSettingsUnreadable, load_config
 
+    waiting = {"code": None, "at": 0.0}
     with local_llm.scheduling_scope(os.path.join(HOME, "data")):
         while owner_alive() and writer_lock.updater_state() == initial and not initial[0]:
-            settings = cloud_inference.resolve_cloud_settings(load_config())
+            try:
+                cfg = load_config()
+            except ProviderSettingsUnreadable:
+                # A settings commit in progress: wait here instead of exiting the child.
+                _defer(waiting, "provider_settings_unreadable")
+                continue
+            waiting["code"] = None
+            settings = cloud_inference.resolve_cloud_settings(cfg)
             if (settings["mode"] != "on" or index is not None and index >= settings["max_concurrency"]
                     or not extract_llm_resident._context_memory_available()):
                 return
