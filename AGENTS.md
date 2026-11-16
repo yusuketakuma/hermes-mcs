@@ -1,31 +1,11 @@
 # AGENTS.md — hermes-mcs
 
-## コード品質と構造設計
-
-- 常にコードをクリーンに保ち、適切にモジュール化し、アーキテクチャと関心の分離を守る。
-- 依頼されたことだけを理由に機能や例外を継ぎ足さず、既存の責務・共通経路へ自然に組み込む。
-- 自然で簡潔な実装が見つからず、全体をクリーンにするためのリファクタリングが必要と判断した場合は、継ぎ足す前の早い段階で該当する実装を止め、問題・推奨する整理・影響範囲を伝える。
-- 最小変更は、構造の健全性と検証・互換性を満たす範囲で選ぶ。この方針は、無関係な全面改修や安全ゲートの変更、外部操作の権限を追加しない。
-
-## Model contract — GPT-6 Astra
-
-この節は GPT-6 Astra 向けの最適化。他のモデル・エージェント（Devin・Gemini・Claude系・GPT-6.1系など）で読む場合は、本文の規約を正本として適用し、この節は参考として扱う。対の `CLAUDE.md` は Fable 5.2 向け。
-
-- ユーザーの明示指示はこのファイル・skill・pluginの一般的推奨より優先する。skillの手順が立ち止まり・確認・脱線を要求するときは、該当ファイルと文言を指摘して要件と解釈を切り分ける。
-- 実行依頼はタスク全体の承認として扱い、成果と必須検証が揃うまで完遂する。読取・可逆的なローカル作業・競合解消・検証に追加承認は要らない。能力確認や計画提示だけで止まらない。
-- 承認が必要なのは破壊的・不可逆・外部公開・個別ゲートのある操作だけ。その承認も、レビュー可能な具体的結果を先に用意してから求める。仮想的リスクへの警告・免責・承認確認を増やさない。
-- 要点を最初に述べ、平易で直接的な文体で書く。並列・連続した項目だけをリスト化し、入れ子リスト・造語ラベル・定型句・対比構文は避ける。
-- 委譲は独立して並列化できる十分に大きな作業だけ。小さい作業や逐次作業は自分でやる。
-- 変更に必要な範囲の検証をする。小さな変更に全リポジトリsuiteを課さず、要求された対象のチェックは外さない。retryで通ったものはFLAKYとして報告する。
-
-<!-- Codex は ~/.codex/AGENTS.md と合わせて project_doc_max_bytes（既定32KiB）までしか読まない。追記は短くし、詳細は docs/ に置く。 -->
-
 MCS の医療・介護チャットを収集・解析するローカルシステム。詳細は `README.md`・`SECURITY.md`・
 `docs/development/REPOSITORY_STRUCTURE.md`。このMacへの導入・更新・復旧の依頼は開発作業ではない。
 `README.md` 冒頭「AIエージェントへ」から `docs/guides/SETUP_AGENT.md`（新規）か
 `docs/guides/UPGRADE_AGENT.md`（導入済み・復旧）を選んで従う。
 
-## 絶対ルール
+## 安全・設計上の制約
 
 - push・PR・merge・tag・Release 公開・配備・常駐サービスの再起動・本番DBや実データの変更は、ユーザーが明示した範囲だけ行う。
   この文書はそれらの承認にならない。worktree の作成、読取り、ローカルの検証は確認なしで進めてよい。
@@ -46,18 +26,19 @@ MCS の医療・介護チャットを収集・解析するローカルシステ�
 ## コマンド
 
 ```bash
-scripts/run_tests.sh                     # tests/・integration/ 一式（一時HOME・認証環境の隔離）。絞るときも scripts/run_tests.sh tests/<領域>/
+scripts/run_tests.sh tests/notify/       # 対象を絞って実行（一時HOME・認証環境の隔離）
 ruff check mcs/ tests/ hermes_plugin/ adapters/ lineworks_adapter/ mcs_standalone/ integration/ ci/ scripts/ deployment/ conftest.py  # CIと同じ範囲
-python3 scripts/development/update_readme.py [--check]   # 生成ブロックの再生成 / drift 検査
+python3 scripts/development/update_readme.py --check     # 生成ブロックの drift 検査（再生成は --check なし）
 python3 ci/gates.py
 python3 ci/mine_gates.py --check
 ```
 
-- `make test|lint|readme|check` も使える（uv があれば ephemeral 実行）。`integration/` も同じ runner に対象を指定する。
+- `make lint`・`make readme`・`make check` も使える（uv があれば ephemeral 実行）。`integration/` も同じ runner に対象を指定する。
 - `run_tests.sh` は `MCS_TEST_PYTHON`→`$VIRTUAL_ENV`→repo 直下の `.venv` の順に Python を選ぶ。worktree には `.venv` が無いので、pytest の入った Python を `MCS_TEST_PYTHON` に指定する。
 - ユーザー指示（2026-10-31）により、失敗項目を修正して再検証が通れば、既存結果と合わせて全体を合格扱いとし、全体 suite・同一SHAの全6ジョブの再実行は必須にしない。実行済み・失敗後に再検証済み・未実行を区別し、実行していないCIを実測成功と記録しない。記録方法は `docs/development/RELEASE_NOTES.md` に従う。
 - 導入先 `~/.mcs`（`MCS_ROOT`）は稼働中の checkout で、原本DB・設定を持つ。開発・検証は git worktree で行い、そこの未commit変更を巻き込まない。
-  全体 suite は同じ Mac の稼働処理と I/O を取り合うので、同時に複数走らせない。
+- 全体 suite はこの Mac では走らせない（所有者 2026-11-15）。稼働中の収集とディスク・メモリを取り合い、収集が止まるため。既存の承認範囲で統合用のブランチ（main 以外）を push し、既存の `ci.yml` を `gh workflow run ci.yml --ref <branch>` で実行する。Linux・macOS の検証用の job が走る。Actions の利用条件と課金はリポジトリやランナーの設定に従う。公開用の `publication-request` と、pull request だけで動く生成物の検査は走らないので、公開へは進まず、生成物の検査は上の `update_readme.py --check` をローカルで実行する。main の push・merge・tag・本番適用は別の承認が要る。
+- この Mac で対象を絞った pytest を走らせる前に、収集（`run_check.py --json --download-files`）か別の pytest が動いていないかを確かめる。動いていれば上限を決めて待ち、空かなければ始めない。検出を表示するだけで続行しない。
 - macOS の BSD `sed` は `\b` を扱わない。単語境界の置換は `perl -pi` を使う。改名後の呼出元確認は `git grep` の結果を切り詰めずに全件見る。
 - Hermes 実SDKとの統合は CI の pinned Hermes 環境で別に検証される。ローカル pytest の成功と区別する。
 - `python3 mcs/ops/mcs_setup.py check` / `make setup-check` は実機診断。合成 fixture のテストの代わりに実行しない。
@@ -82,6 +63,12 @@ python3 ci/mine_gates.py --check
 - `resources/drug-master/`: 公式公開 master の原本と出典・版・hash の manifest（実患者データでも fixture でもない）。リリース時の更新確認・同梱検証と、私有辞書への変換・承認・有効化を分ける。
 - 文書: 利用は `docs/guides/`、開発は `docs/development/`、契約は `docs/specs/`。第一層ディレクトリを足したら（ブートストラップは自動対応）この節と `deployment/` のパス表記も更新する。
 
+## 開発レビュー
+
+- ユーザー指示（2026-10-21）により、hermes-mcs の開発に必要な 既に利用を承認したレビューサービスへのコード・テスト・文書・関連する Git 差分とコンテキストの外部送信は承認済み。 利用を終了したサービスへの許可は引き継がない。同じ送信許可を聞き直さず、過去の未承認による保留は解除する。
+- 送信内容に認証情報・PHI/PII・実投稿・本番データ・私有ログを含めない。必要なら対象 SHA を維持した独立 clone を使い、実データと不要な過去履歴を分離する。送信される全バイトを事前に確定できないことだけを、確認済みの開発資料のレビューを止める理由にしない。
+- 既に完了した承認・検証や、今回に適用されない過去の停止条件を追加の必須工程にしない。skill の一般的な承認待ちよりこの明示許可を優先する。実際の課金・サービス障害・不足環境・実機未確認は事実として報告し、未実施を成功扱いしない。追加課金、公開・配備、本番変更の範囲は別の明示指示に従う。
+
 ## 生成物・変更記録・リリース
 
 - `mcs/**/*.py` の追加、docstring の変更、検知器・統計・サブコマンドの追加では `update_readme.py` を実行する。生成表は `docs/development/DEVELOPMENT.md`、
@@ -96,22 +83,10 @@ python3 ci/mine_gates.py --check
   本番辞書を自動で承認・有効化しない。CHANGELOG・GitHub Release の書式と生成は `docs/development/RELEASE_NOTES.md`、
   README の見直し記録は `docs/development/README_MAINTENANCE.md` に従う。
 
-## 処理経路の整理
-
-- 機能追加・修正のたびに関連する複雑な処理経路と重複分岐を見直し、既存の共通経路へ段階的に集約し続ける。
-  呼出元と互換性を確認し、認証・予算・人承認・データ保護の条件を維持する。経路ごとの例外や代替処理を追加する前に、共通処理で解決できるかを検討する。
-
 ## 並列開発
 
-- 独立した実装は並列で進める。ファイル所有範囲・依存・受入条件を分け、共有ファイルを同時に編集しない。
-- 親は未完タスクを保持し、完了通知ごとに結果と差分を確認して空いた担当へ次の独立タスクを渡す（全員の終了を待つ一括バリアは置かない）。
-  成功済みの確認を無変更で繰り返さない。統合結果や失敗で前提が変わったら、その箇所を再計画して実装を続ける。根拠のない範囲縮小や必須ゲートの省略はしない。
-- 並列化を、安全ゲート・人承認・実データ非使用・必須検証を省く理由にしない。依存待ち・承認待ちは明示し、ほかの着手可能なタスクを進める。
+- 完了通知ごとに結果と差分を確認し、空いた担当へ次の独立タスクを渡す。全員の終了を待つ一括バリアは置かない。
 
 ## 連携
 
-agmsg team `devflow-mcs` と devflow の運用は廃止済み（2026-10-02）。その座席・受信コマンド・フックを使わず、中央設定を推測で再作成しない。
-同じ Herdr タブの Codex・Claude 連携はユーザー全体設定の規約に従う。レビューの受入は技術的な受入で、merge・配備の許可ではない。
 GitHub 上の AI 実装（Claude Code Action・Copilot・Dots/Codex）は `docs/development/AUTOMATION.md` に従う。所有者が Issue に付けた `担当:*` ラベルは、その Issue の範囲で `agent/`・`copilot/`・`codex/` ブランチへ push しPRを作る明示指示とみなす。PRは下書きにしない（所有者 2026-11-17）。merge・tag・Release・配備の許可は含まない。
-
-ドキュメントと既存のコードが食い違うときはコードの書き方に従い、見つけた食い違いを最後の返答ですべて挙げること
