@@ -403,7 +403,7 @@ def warm_tally(ledger):
 def approve_tx(owner, req, now):
     """Inside apply_command's BEGIN IMMEDIATE: re-verify every unit; any change rejects the bundle.
 
-    ``owner`` is the Ledger (its tally warmed by warm_tally) or a bare connection."""
+    ``owner`` is the ledger object whose tally warm_tally built, or a bare connection."""
     plan = req['plan']
     db = getattr(owner, 'db', owner)
     ledger = owner if owner is not db else SimpleNamespace(db=db)
