@@ -84,7 +84,7 @@ def _completed(runtime, cloud, monkeypatch, lane):
     posts, answers = [], []
     blocked = [False]
 
-    def request(_client, method, body, timeout, *, deadline):
+    def request(_client, method, body, timeout, *, deadline, max_bytes):
         assert method == "POST" and timeout > 0 and deadline > clock.mono
         assert not led.db.in_transaction
         assert len(led.artifacts("cloud_usage_reserve", project_id=1)) == len(posts) + 1

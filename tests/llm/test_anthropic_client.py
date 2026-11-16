@@ -344,7 +344,7 @@ def test_the_real_request_path_never_resends_a_transport_failure(monkeypatch, er
     monkeypatch.setattr(a.time, "sleep", lambda delay: None)
     calls = []
 
-    def request(self, method, body, timeout, *, deadline):
+    def request(self, method, body, timeout, *, deadline, max_bytes):
         calls.append(method)
         raise error
 
