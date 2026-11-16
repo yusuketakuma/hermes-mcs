@@ -1,0 +1,53 @@
+name: Sync labels and milestones
+
+# .github/labels.json を GitHub のラベル・マイルストーンへ反映する。
+# 色と説明は上書きし、定義に無い既存ラベルとマイルストーンは消さない。
+on:
+  push:
+    branches: [main]
+    paths: [.github/labels.json]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: labels-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Sync labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          jq -c '.labels[]' .github/labels.json | while IFS= read -r label; do
+            gh label create "$(jq -r .name <<< "$label")" \
+              --color "$(jq -r .color <<< "$label")" \
+              --description "$(jq -r .description <<< "$label")" \
+              --force
+          done
+      - name: Create missing milestones
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          existing=$(gh api "repos/$GH_REPO/milestones?state=all&per_page=100" --paginate --jq '.[].title')
+          jq -c '.milestones[]' .github/labels.json | while IFS= read -r ms; do
+            title=$(jq -r .title <<< "$ms")
+            if ! grep -qxF "$title" <<< "$existing"; then
+              gh api "repos/$GH_REPO/milestones" -f title="$title" -f description="$(jq -r .description <<< "$ms")" > /dev/null
+              echo "created milestone: $title"
+            fi
+          done

@@ -1,0 +1,41 @@
+{
+  "_comment": "ラベルとマイルストーンの正本。main に入ると .github/workflows/labels-sync.yml が GitHub へ反映する。ここに無いラベルは消さない。使い方は docs/development/GITHUB_WORKFLOW.md。",
+  "labels": [
+    {"name": "即時適用", "color": "d73a4a", "description": "版: 次の緊急版で出す。期限切れ・停止の回避など待てない変更"},
+    {"name": "v1.1.3", "color": "1d76db", "description": "版: v1.1.3 に入れる"},
+    {"name": "v1.1.4", "color": "5319e7", "description": "版: v1.1.4 に入れる"},
+    {"name": "版未定", "color": "c5def5", "description": "版: 入れる版をまだ決めていない（計画済み）"},
+
+    {"name": "要オーナー対応", "color": "e99695", "description": "対応: Yusukeさんの判断・承認・外部とのやり取りが必要"},
+    {"name": "要実機作業", "color": "fbca04", "description": "対応: Macへの配備・実データの操作が必要（明示承認の範囲だけ）"},
+    {"name": "要再起動", "color": "fef2c0", "description": "対応: 反映に Hermes gateway か LINE WORKS アダプターの再起動が要る"},
+    {"name": "マージ前確認済み", "color": "0e8a16", "description": "判定: 現head/baseのCI・差分・レビュー・依存を確認済み。更新時に解除。マージ・配備の許可ではない"},
+    {"name": "要トリアージ", "color": "ededed", "description": "対応: 版・領域をまだ決めていない新しい issue"},
+    {"name": "安全ゲート", "color": "b60205", "description": "注意: 既読化・通信制限・人承認・依存の許可リストに触れる。慎重にレビューする"},
+
+    {"name": "roadmap", "color": "0052cc", "description": "種別: 複数の issue をまとめる計画"},
+    {"name": "refactor", "color": "d4c5f9", "description": "種別: 挙動を変えない整理"},
+
+    {"name": "領域: 収集", "color": "bfd4f2", "description": "mcs/ingest（MCSからの取得・既読化・履歴）"},
+    {"name": "領域: 抽出", "color": "bfd4f2", "description": "mcs/extract・mcs/medications（ルール・LLM抽出・薬剤）"},
+    {"name": "領域: 患者コンテキスト", "color": "bfd4f2", "description": "mcs/patients（患者コンテキスト・集約）"},
+    {"name": "領域: 意味解析", "color": "bfd4f2", "description": "mcs/semantic・mcs/signals"},
+    {"name": "領域: LLM", "color": "bfd4f2", "description": "mcs/llm（ローカル・クラウド推論、枠、料金表）"},
+    {"name": "領域: 通知", "color": "bfd4f2", "description": "mcs/notify・mcs/views・adapters・hermes_plugin・lineworks_adapter"},
+    {"name": "領域: スタンプ", "color": "bfd4f2", "description": "mcs/stamps（スタンプの読取り・人承認の送信）"},
+    {"name": "領域: 保存基盤", "color": "bfd4f2", "description": "mcs/core・mcs/export（台帳・バックアップ・保守）"},
+    {"name": "領域: 運用・導入", "color": "bfd4f2", "description": "mcs/ops・mcs_standalone・deployment・install.sh"},
+    {"name": "領域: 文書", "color": "bfd4f2", "description": "docs・README・SECURITY など"},
+    {"name": "領域: CI・開発", "color": "bfd4f2", "description": "ci・.github・scripts"},
+
+    {"name": "size: XS", "color": "b76e79", "description": "変更行数 50 未満"},
+    {"name": "size: S", "color": "b76e79", "description": "変更行数 50〜199"},
+    {"name": "size: M", "color": "b76e79", "description": "変更行数 200〜499"},
+    {"name": "size: L", "color": "b76e79", "description": "変更行数 500〜999"},
+    {"name": "size: XL", "color": "b76e79", "description": "変更行数 1000 以上"}
+  ],
+  "milestones": [
+    {"title": "v1.1.3", "description": "ラベル v1.1.3 と同じ範囲"},
+    {"title": "v1.1.4", "description": "ラベル v1.1.4 と同じ範囲"}
+  ]
+}

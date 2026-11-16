@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: GitHub の使い方（ラベル・版・進め方）
+    url: https://github.com/yusuketakuma/hermes-mcs/blob/main/docs/development/GITHUB_WORKFLOW.md
+    about: どのラベルを付けるか、何から見ればよいか。
