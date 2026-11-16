@@ -153,8 +153,11 @@ def config_generation(cfg: dict) -> str:
     return payload_hash(cfg)
 
 
-def execution_generation(scfg: dict) -> str:
-    """Interpretation identity, independent of runtime budgets, scope and mode."""
+def execution_generation(scfg: dict, *, local_model: str | None = None) -> str:
+    """Interpretation identity, independent of runtime budgets, scope and mode.
+
+    It names the configured local model, so a model change re-queues every
+    job and the local results it decides are redone (re-queue identity)."""
     from inference_version import CURRENT_VERSION, VERSION_KEY
     from semantic_policy import policy_fingerprint, SCHEMA_VERSION
     from semantic_extraction import v2_generation
@@ -162,7 +165,16 @@ def execution_generation(scfg: dict) -> str:
     # approval or operational cap change is not a fresh retry budget.
     policy = {**scfg, 'candidate_fingerprint': None}
     return payload_hash({VERSION_KEY: CURRENT_VERSION, 'schema': SCHEMA_VERSION,
-                         'policy': policy_fingerprint(policy), 'extraction': v2_generation()})
+                         'policy': policy_fingerprint(policy), 'extraction': v2_generation(local_model)})
+
+
+def interpretation_generation(scfg: dict) -> str:
+    """execution_generation without the local model, for receipts no local model produced.
+
+    A loop-completion receipt is Jev-backed; it keeps the value stamped under
+    the shipped default model so existing receipts stay current."""
+    from semantic_store import _LEGACY_FINGERPRINT_LOCAL_MODEL
+    return execution_generation(scfg, local_model=_LEGACY_FINGERPRINT_LOCAL_MODEL)
 
 
 @dataclass(frozen=True)
@@ -916,6 +928,7 @@ __all__ = [
     "RuntimeGuardError",
     "RuntimeOff",
     "RuntimeStale", "JevEvaluation", "bind_jev", "config_generation", "execution_generation",
+    "interpretation_generation",
     "circuit_open", "record_circuit_result",
     "guard", "guarded_llm", "job_deadline", "job_matches", "llm_call",
     "parse_payload", "attempt_limit", "payload_generation", "transition",

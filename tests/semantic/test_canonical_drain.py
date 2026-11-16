@@ -8,6 +8,7 @@ resume, and evaluated-only audit reuse.
 import semantic_drain
 import semantic_policy
 import semantic_store
+import semantic_transport
 import json
 import time
 
@@ -72,7 +73,7 @@ def _seed_incomplete_v2(db, mid, fp, doc, *, retried=False):
         meta["needs_review"] = True
     db.artifact_add(KIND_FACTS_V2,
                     json.dumps(doc, ensure_ascii=False),
-                    project_id=1, message_id=mid, model="test",
+                    project_id=1, message_id=mid, model=semantic_transport.llm_model(),
                     meta=meta)
 
 

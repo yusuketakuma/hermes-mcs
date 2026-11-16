@@ -55,6 +55,10 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
     # facts: reuse a stored set for this fingerprint, else extract.
     fact_source = scfg.get("fact_source", "legacy")
     v2_doc = None
+    # Facts written in this run say nothing for a summary built on earlier
+    # ones (a local model change redoes local facts at the same fingerprint).
+    fresh = current_artifact(ledger.db, KIND_FACTS_V2 if fact_source == "canonical" else KIND_FACTS,
+                             mid, fp) is None
     if fact_source != "legacy":
         early, v2_doc, doc_build = _fact_v2_document(
             ledger, member, pid, mid, fp, policy, fact_source,
@@ -78,7 +82,7 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
                                     llm_fn, deadline)
         if early is not None:
             return early
-    return {"outcome": None, "facts": facts, "v2_doc": v2_doc}
+    return {"outcome": None, "facts": facts, "v2_doc": v2_doc, "fresh_facts": fresh}
 
 
 def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
@@ -538,9 +542,10 @@ def _fact_legacy(ledger, member, pid, mid, fp, policy, llm_fn, deadline):
         if time.monotonic() > deadline - 5:
             return {"outcome": "incomplete", "v2_doc": None,
                     "diagnostic_reason": "fact_extract_deadline"}, None
+        producer = {}
         facts, f_complete, f_dropped, f_reason = semantic_extraction.extract_facts(
             llm_fn, member, deadline - 5, return_reason=True,
-            ledger=ledger, source_fingerprint=fp, project_id=pid)
+            ledger=ledger, source_fingerprint=fp, project_id=pid, producer_out=producer)
         if not f_complete:
             return {"outcome": "retryable" if f_reason == "model"
                     else "incomplete", "v2_doc": None,
@@ -556,7 +561,11 @@ def _fact_legacy(ledger, member, pid, mid, fp, policy, llm_fn, deadline):
             meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
                   "chunks_total": len(mcs_util.text_chunks(
                       member["body_original"])),
-                  "dropped_by_cap": f_dropped})
+                  "dropped_by_cap": f_dropped,
+                  # the producers decide whether a local model change redoes these facts
+                  "provider_provenance": {"version": 1, "stage": "facts_v1",
+                                          "providers": producer.get("providers", []),
+                                          "complete": producer.get("complete") is True}})
     return None, facts
 
 

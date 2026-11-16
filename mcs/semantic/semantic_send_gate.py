@@ -45,7 +45,7 @@ def intake_root_held(db, project_id, root):
 
 def _latest_receipt(db, kind, project_id, message_id):
     try:
-        row = db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? "
+        row = db.execute("SELECT * FROM artifacts WHERE kind=? AND project_id=? "
                          "AND message_id=? ORDER BY artifact_id DESC LIMIT 1",
                          (kind, project_id, message_id)).fetchone()
     except sqlite3.Error:
@@ -58,7 +58,9 @@ def _latest_receipt(db, kind, project_id, message_id):
         return None
     if not isinstance(content, dict) or not isinstance(meta, dict):
         return None
-    return {"artifact_id": row["artifact_id"], "content": content, "meta": meta}
+    # A store without the model column (an imported snapshot) recorded no producer model.
+    model = row["model"] if "model" in row.keys() else None
+    return {"artifact_id": row["artifact_id"], "content": content, "meta": meta, "model": model}
 
 
 def _receipt_not_invalidated(meta):
@@ -154,6 +156,10 @@ def _paired_summary(db, project_id, message_id, fingerprint, policy, revision, m
                 or meta.get("target_revision") != revision or meta.get("publication_mode") != mode
                 or meta.get("audit_status") != status):
             return None
+    # The audit is Jev's; the summary is current only while its producer is
+    # accepted (a locally produced summary is pinned to its local model).
+    if not semantic_store.producer_current(semantic_policy.KIND_SUMMARY, summary["model"], summary["meta"]):
+        return None
     content, verdict, meta = summary["content"], audit["content"], audit["meta"]
     findings = verdict.get("findings")
     if (content.get("audit_status") != status or verdict.get("status") != status
@@ -696,6 +702,11 @@ def semantic_gate(db, ev, payload: dict, cfg: dict,
 
 def semantic_render_state(db, ev, cfg: dict) -> tuple:
     """Current identities of audited summaries attached to a raw notice."""
+    with semantic_transport.config_model_scope(cfg):
+        return _render_state(db, ev, cfg)
+
+
+def _render_state(db, ev, cfg: dict) -> tuple:
     scfg, _ = semantic_policy.runtime_config(cfg)
     project_id = ev["project_id"]
     if enforce_block_reason(db, scfg, project_id) is not None:
@@ -706,7 +717,6 @@ def semantic_render_state(db, ev, cfg: dict) -> tuple:
     except Exception:
         return ()
     state = []
-    local_model = semantic_transport.llm_model() if isinstance(ids, list) and ids else None
     for mid in ids if isinstance(ids, list) else []:
         if type(mid) is not int:
             continue
@@ -722,7 +732,7 @@ def semantic_render_state(db, ev, cfg: dict) -> tuple:
         cur = current_summary(
             db, project_id, mid,
             lambda r=root, m=mid: semantic_store.thread_bundle(
-                db, project_id, r, [m], local_model=local_model),
+                db, project_id, r, [m]),
             semantic_policy.policy_fingerprint(scfg))
         if cur is None:
             continue

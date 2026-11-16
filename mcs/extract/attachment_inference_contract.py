@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 import re
 
-import local_llm
 from mcs_util import payload_hash, strict_json
 from safe_io import read_regular_nofollow
 
@@ -15,6 +14,11 @@ WITNESS_SCHEMA = 'attachment-refactor-witness/v1'
 BASELINE = '132d87d2994e8d6b5c4d6fce6f1790ced77ef9db'
 BASELINE_CODE = '45a81b77ca67c360ac90ccca5e6667434396ce8afb61e4374e3e821be19739b0'
 WITNESS_KEY = 'attachment_refactor_witness'
+# Hash-compatibility constant of the token recipe, not a local default: the
+# token once named the configured local endpoint and model, and every stored
+# result was keyed by the shipped pair. A local result is now pinned to its
+# own row model (attachment_extraction.stored), so the token names no backend.
+_LEGACY_LOCAL_IDENTITY = ('http://127.0.0.1:8080/v1/chat/completions', 'Qwen3.5-9B')
 _PATH = str(Path(__file__).resolve().parents[2] / 'resources' / 'inference-contracts' / 'attachment-refactor-20261105.json')
 try:
     _RAW = read_regular_nofollow(_PATH, 65536, ValueError)
@@ -54,10 +58,12 @@ def _compatible(code_digest, sources, versions):
     return witness['baseline_code_digest'], normalized
 
 
-def contract(cfg, *, code_digest, source_digests, inference_version, extract_version, context_version):
-    """Return the legacy artifact token only when every reviewed component matches exactly."""
+def contract(*, code_digest, source_digests, inference_version, extract_version, context_version):
+    """Return the legacy artifact token only when every reviewed component matches exactly.
+
+    The token is the extraction input identity; it never names the local backend."""
     versions = [inference_version, extract_version, context_version]
     compatible = _compatible(code_digest, source_digests, versions)
     code, sources = compatible if compatible is not None else (code_digest, source_digests)
     upgrade = hashlib.sha256(json.dumps([*versions, sources], sort_keys=True).encode()).hexdigest()
-    return payload_hash([SCHEMA, code, upgrade, local_llm.resolve(cfg)])
+    return payload_hash([SCHEMA, code, upgrade, _LEGACY_LOCAL_IDENTITY])

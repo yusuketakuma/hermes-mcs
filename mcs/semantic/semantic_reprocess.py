@@ -10,6 +10,7 @@ from inference_version import (CURRENT_VERSION, VERSION_KEY, is_current)
 import semantic_runtime as runtime
 from semantic_policy import (JOB_KIND, runtime_config)
 import semantic_notice
+import semantic_transport
 
 from semantic_scheduler_state import (
     _reservation_sched,
@@ -195,6 +196,7 @@ def _reprocess_bookmark_sealed(ledger, old_progress, epochs, version, changes, c
                 and _reprocess_proof_time_valid(old_progress, time.time()))
 
 
+@semantic_transport.with_local_model_scope
 def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
     """Advance a finite keyset pass; input races never erase its accepted cursor."""
     if type(limit) is not int or not 1 <= limit <= 128:
@@ -505,6 +507,7 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
     return {'status': progress['phase'], 'processed': len(planned), **progress}
 
 
+@semantic_transport.with_local_model_scope
 def reprocess_job(ledger, cfg, job, *, deadline=None, cfg_path=None):
     """Repair one stale-execution job through the shared reprocess contract.
 

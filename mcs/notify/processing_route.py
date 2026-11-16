@@ -213,18 +213,16 @@ def provider_states(db, project_id, message_id, cfg=None, *, bundle_cache=None, 
                 return result()
             import semantic_policy
             import semantic_store
-            import semantic_transport
             target = db.execute("SELECT COALESCE(parent_id,message_id) FROM messages "
                                 "WHERE project_id=? AND message_id=?", (project_id, message_id)).fetchone()
             scfg, errors = semantic_policy.semantic_config(cfg)
             if target is None or errors:
                 return result()
-            model = semantic_transport.llm_model(cfg)
-            cache_key = (project_id, target[0], model)
+            cache_key = (project_id, target[0])
             if bundle_cache is not None and cache_key in bundle_cache:
                 bundle = bundle_cache[cache_key]
             else:
-                bundle = semantic_store.thread_bundle(db, project_id, target[0], local_model=model)
+                bundle = semantic_store.thread_bundle(db, project_id, target[0])
                 if bundle_cache is not None:
                     bundle_cache[cache_key] = bundle
             if bundle is None:

@@ -184,7 +184,7 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
 
 
 def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
-                    facts, verdicts, existing, deadline, *, diagnostics: dict):
+                    facts, verdicts, existing, deadline, *, diagnostics: dict, reuse_candidate=True):
     """Stored, candidate, or freshly generated summary for one target, with
     the one reserved format repair.
 
@@ -202,7 +202,7 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
         if existing["meta"].get("input_oversize"):
             summary["_input_oversize"] = True
     else:
-        candidate = current_artifact(ledger.db, KIND_CANDIDATE, mid, fp, policy)
+        candidate = current_artifact(ledger.db, KIND_CANDIDATE, mid, fp, policy) if reuse_candidate else None
         if candidate and candidate["meta"].get("publication_mode") == scfg["summary_mode"]:
             summary = candidate["content"]
             producer = _summary_producer(candidate, fp, policy, revision, db=ledger.db, bundle=bundle)
@@ -420,6 +420,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     members = {m["message_id"]: m for m in bundle["members"]}
     fact_source = scfg.get("fact_source", "legacy")
     facts_by_target: dict[int, list] = {}
+    fresh_facts: set[int] = set()
     v2_docs_by_target: dict[int, dict] = {}
     coverage_by_target: dict[int, list] = {}
     detail_findings: dict[int, list] = {}
@@ -544,6 +545,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         if stage["v2_doc"] is not None:
             v2_docs_by_target[mid] = stage["v2_doc"]
         facts_by_target[mid] = facts
+        if stage.get("fresh_facts"):
+            fresh_facts.add(mid)
         from semantic_assessment import evaluate_medication_events
         event_details = evaluate_medication_events(
             ledger, bundle, mid, facts, jev_client, scfg, deadline - 5,
@@ -643,6 +646,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         if existing and existing["meta"].get("publication_mode") != scfg["summary_mode"]:
             existing = None
             prev_audit = None
+        if mid in fresh_facts:
+            # A summary of earlier facts (a cloud one over redone local facts)
+            # is not reused; its spent repair stays recorded on prev_audit.
+            existing = None
         prev_status = (prev_audit["meta"].get("audit_status")
                        if prev_audit else None)
         if existing is not None and prev_status == "PASS":
@@ -681,7 +688,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         else:
             summary, summary_reason, summary_error, sent_error, producer = _obtain_summary(
                 ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
-                facts, verdicts, existing, deadline, diagnostics=diagnostics)
+                facts, verdicts, existing, deadline, diagnostics=diagnostics,
+                reuse_candidate=mid not in fresh_facts)
         if sent_error is not None:
             if getattr(sent_error, "stage", None) in semantic_transport.MEMBER_HOLD_STAGES:
                 # member-bound hold (own paid unit/provenance): this target
@@ -1201,7 +1209,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                             meta={VERSION_KEY: CURRENT_VERSION, 'fingerprint': fp,
                                   'policy_fingerprint': policy, 'schema': SCHEMA_VERSION,
                                   'target_revision': members[mid]['revision'],
-                                  'execution_generation': runtime.execution_generation(scfg),
+                                  # Jev-backed receipt: a local model change keeps it current
+                                  'execution_generation': runtime.interpretation_generation(scfg),
                                   'loop_status': status, 'skip_reason': content['skip_reason'],
                                   'content_hash': mcs_util.payload_hash(content)})
             if not runtime.transition_tx(ledger, token, "done"):
@@ -1235,6 +1244,27 @@ NOT_SENT_BACKOFF_S = 3600
 
 
 _LLM_DOWN_REASONS = frozenset({"llm_unreachable", "llm_unavailable"})
+
+
+def local_fallback_allowed(db, project_id, message_id, fingerprint) -> bool:
+    """Whether a member may fall back to the local model after a cloud refusal.
+
+    Never join a member's local result to a previously persisted cloud
+    prefix, or to a chunk whose producer cannot be proven — decided per
+    actual target, so one member's cloud chunks never forbid another's
+    local. A readable row of another local model is reused by neither
+    side, so only a proven cloud row or an unproven row of the configured
+    local model (or an unreadable one) forbids the fallback."""
+    import semantic_extraction
+    rows = db.execute("SELECT * FROM artifacts WHERE project_id=? AND kind IN (?,?) "
+        "AND message_id IS ? AND (NOT json_valid(meta) OR json_extract(meta,'$.source_fingerprint')=?)",
+        (project_id, semantic_extraction.KIND_CHUNK,
+         semantic_extraction.KIND_CHUNK_V2, message_id, fingerprint)).fetchall()
+    model = semantic_transport.scoped_local_model()
+    return all(provider == 'local' or provider is None and row['model'] != model
+               and loads_dict(row['meta']) is not None
+               for row, provider in ((row, semantic_extraction._cached_provider(db, row))
+                                     for row in rows))
 
 
 def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
@@ -1274,18 +1304,9 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                     return bundle["source_fingerprint"] if bundle else None
 
                 fingerprint = source()
+
                 def fallback_current(mid):
-                    # Never join a member's local result to a previously
-                    # persisted cloud prefix, or to a chunk whose producer
-                    # cannot be proven — decided per actual target, so one
-                    # member's cloud chunks never forbid another's local.
-                    import semantic_extraction
-                    rows = ledger.db.execute("SELECT * FROM artifacts WHERE project_id=? AND kind IN (?,?) "
-                        "AND message_id IS ? AND (NOT json_valid(meta) OR json_extract(meta,'$.source_fingerprint')=?)",
-                        (job['project_id'], semantic_extraction.KIND_CHUNK,
-                         semantic_extraction.KIND_CHUNK_V2, mid, fingerprint)).fetchall()
-                    return all(semantic_extraction._cached_provider(
-                        ledger.db, row, semantic_transport.llm_model()) == 'local' for row in rows)
+                    return local_fallback_allowed(ledger.db, job['project_id'], mid, fingerprint)
 
                 def current():
                     try:

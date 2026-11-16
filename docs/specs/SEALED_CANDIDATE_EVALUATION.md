@@ -149,7 +149,7 @@ configにはmetrics-onlyの `semantic.fact_source_evidence`、完全長token `fa
 各recordの任意の `sealed_observations` に次を含める。外部DBへの接続や後付けmetricsの入力ではなく、許可されたsnapshotの実artifact/outbox行を、固定schemaのインメモリSQLiteへ読み込む。
 
 - `schema_version:1`、入力bundleの `bundle_sha256`、現在の `candidate_fingerprint` と `policy_fingerprint`。
-- `bundle`: runtimeの `thread_bundle` 形。全memberのproject/message/body/revision/posted_atを入力と照合し、`bundle_fingerprint(..., local_model=現在model)` を再計算する。
+- `bundle`: runtimeの `thread_bundle` 形。全memberのproject/message/body/revision/posted_atを入力と照合し、`bundle_fingerprint(members)` を再計算する（入力の識別値はローカルのモデルを含まない。`docs/specs/semantic-facts-v2-rollout.md`「Local model change」）。
 - `generation_sha256`: 評価対象として生成されたdocumentのdoc配列hash（元bundleのmember順）。保存済みsemantic_facts_v2も、同じ生成docの `_doc_hash` と完全一致する必要がある。
 - `artifacts`: artifact_id/project_id/message_id/kind/content/meta/created_at。許可kindはfacts-v2、fact-audit、summary、summary-audit、loop-candidate/event/rejected、request-loop-linkのみ。content/metaはJSON objectで、全行のsource/policy/project/messageを照合する。request-loop-linkは既存保存形式に従いcontent内のsource_fingerprint/policy_fingerprintを使う。
 - `notify_outbox`: event_id/project_id/kind/state/payload/progress。semantic_noticeのみ。実際のchunk receiptを既存 `fact_lifecycle` で検査する。`requests`: project_id/request_id/status/revision/title。

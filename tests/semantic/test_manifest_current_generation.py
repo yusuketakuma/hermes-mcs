@@ -39,7 +39,7 @@ def _persist(ledger, fp="synthetic-fp", model="model-a", *, project_id=1, messag
     extraction._persist_manifest(ledger, project_id, message_id, model, fp, manifest, len(body))
 
 
-def test_real_resume_model_aba_reselects_latest_manifest_and_preserves_prefix(ledger, monkeypatch):
+def test_real_resume_model_aba_keeps_each_models_prefix_apart(ledger, monkeypatch):
     body = "宇宙の架空説明。" * 400
     ledger.save_messages([_message(1, body=body)], project_id=1)
     model = ["model-a"]
@@ -49,7 +49,7 @@ def test_real_resume_model_aba_reselects_latest_manifest_and_preserves_prefix(le
     calls = []
     for index, value in enumerate(("model-a", "model-b", "model-a")):
         model[0] = value
-        bundle = semantic_store.thread_bundle(ledger.db, 1, 1, local_model=value)
+        bundle = semantic_store.thread_bundle(ledger.db, 1, 1)
         fingerprints.append(bundle["source_fingerprint"])
         current_calls = []
         calls.append(current_calls)
@@ -64,8 +64,10 @@ def test_real_resume_model_aba_reselects_latest_manifest_and_preserves_prefix(le
         results.append(extraction.extract_facts_v2(
             interrupted, bundle["members"][0], ledger=ledger,
             source_fingerprint=bundle["source_fingerprint"]))
-    assert fingerprints[0] != fingerprints[1] and fingerprints[0] == fingerprints[2]
+    # The local model is not input identity; its own chunks are never mixed into another model's run.
+    assert fingerprints[0] == fingerprints[1] == fingerprints[2]
     assert all(not result["extraction_complete"] for result in results)
+    assert results[1]["reused_chunks"] == [] and len(calls[1]) == 2
     assert results[2]["reused_chunks"] == [0] and len(calls[2]) == 1
     rows = _rows(ledger)
     assert len(rows) == 3 and [r["model"] for r in rows] == ["model-a", "model-b", "model-a"]
@@ -124,7 +126,7 @@ def test_source_revision_aba_creates_distinct_bound_manifests(ledger, monkeypatc
     fingerprints = []
     for body in ("完全合成の元の連絡。", "完全合成の訂正後の連絡。", "完全合成の元の連絡。"):
         ledger.save_messages([_message(1, body=body)], project_id=1)
-        bundle = semantic_store.thread_bundle(ledger.db, 1, 1, local_model="model-a")
+        bundle = semantic_store.thread_bundle(ledger.db, 1, 1)
         fp = bundle["source_fingerprint"]
         fingerprints.append(fp)
         text = bundle["members"][0]["body_original"]

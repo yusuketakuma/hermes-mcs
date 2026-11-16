@@ -99,8 +99,8 @@ def _read(data, **changes):
 def _singles(data, monkeypatch, **changes):
     single = extraction._cached_provider
     with monkeypatch.context() as old_path:
-        old_path.setattr(extraction, "_cached_providers", lambda db, rows, model: [
-            single(db, row, model) for row in rows])
+        old_path.setattr(extraction, "_cached_providers", lambda db, rows: [
+            single(db, row) for row in rows])
         return _read(data, **changes)
 
 
@@ -176,9 +176,9 @@ def test_mixed_bad_receipts_preserve_the_single_candidate_decisions(dataset, mon
     single = extraction._cached_provider
     replayed = []
 
-    def replay(db, row, model):
+    def replay(db, row):
         replayed.append(row["artifact_id"])
-        return single(db, row, model)
+        return single(db, row)
 
     monkeypatch.setattr(extraction, "_cached_provider", replay)
     assert _read(data) == expected
@@ -323,7 +323,7 @@ def test_single_provider_oracle_also_propagates_resource_failures(dataset, monke
 
     monkeypatch.setattr(policy, "reservation_evidence", failed)
     with pytest.raises(type(error)) as caught:
-        extraction._cached_provider(data.ledger.db, data.chunks[0], data.model)
+        extraction._cached_provider(data.ledger.db, data.chunks[0])
     assert caught.value is error
 
 
@@ -334,4 +334,4 @@ def test_single_provider_keeps_its_classified_legacy_sql_error_miss(dataset, mon
         raise _failure("generic")
 
     monkeypatch.setattr(policy, "reservation_evidence", failed)
-    assert extraction._cached_provider(data.ledger.db, data.chunks[0], data.model) is None
+    assert extraction._cached_provider(data.ledger.db, data.chunks[0]) is None

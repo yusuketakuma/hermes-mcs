@@ -290,11 +290,12 @@ def test_reply_matching_uses_explicit_configuration_instead_of_host_settings(mon
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: pytest.fail('unexpected host settings read'))
     monkeypatch.setattr(request_loops, 'latest_policy', lambda _: 'synthetic-policy')
     monkeypatch.setattr(request_loops, 'effective_loop_states',
-                        lambda *_args, **kwargs: selected.append(kwargs['local_model']) or [])
+                        lambda *_args, **kwargs: selected.append(kwargs) or [])
     row = {'mid': 1, 'ctx': '完全合成の依頼'}
     rollup._match_request_replies(DB(), 1, [(row, 1, 1, 1)], [row], [], 10,
                                   cfg={'local_llm': {'model': 'synthetic-pinned-model'}})
-    assert selected == ['synthetic-pinned-model']
+    # Loop states are Jev-backed: no local model is passed or read.
+    assert len(selected) == 1 and 'local_model' not in selected[0]
 
 
 @pytest.mark.parametrize('factory', [str, bytes])

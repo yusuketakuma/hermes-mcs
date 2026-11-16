@@ -48,18 +48,18 @@ def test_cloud_chunk_contract_matches_its_settled_model_and_effort(tmp_path, mon
                                        'binding_hash': mcs_util.payload_hash(binding)}
         row = {'meta': json.dumps(meta), 'content': json.dumps(content),
                'project_id': 1, 'message_id': 1, 'model': 'local-model'}
-        assert semantic_extraction._cached_provider(ledger.db, row, 'local-model') == 'openai'
+        assert semantic_extraction._cached_provider(ledger.db, row) == 'openai'
         for field, bad in [('effort', 'medium'), ('profile', 'sol-medium'),
                            ('price_version', 'unknown'), ('model', openai_client.MODEL)]:
             old = reservation[field]
             reservation[field] = bad
-            assert semantic_extraction._cached_provider(ledger.db, row, 'local-model') is None
+            assert semantic_extraction._cached_provider(ledger.db, row) is None
             reservation[field] = old
         meta['actual_contract'] = {**contract, 'prompt': 'different'}
         binding = semantic_extraction._chunk_provider_binding(meta, 1, 1, 'local-model', 'openai', result_hash, rid)
         meta['provider_provenance']['binding_hash'] = mcs_util.payload_hash(binding)
         row['meta'] = json.dumps(meta)
-        assert semantic_extraction._cached_provider(ledger.db, row, 'local-model') is None
+        assert semantic_extraction._cached_provider(ledger.db, row) is None
     finally:
         ledger.close()
 
@@ -81,7 +81,7 @@ def test_execution_contract_filters_old_chunks_without_hiding_historical_project
             'chunk_index': 0, 'chunk_hash': spec['hash'], 'start_codepoint': 0,
             'end_codepoint': 1, 'actual_model': openai_client.MODEL, 'actual_contract': old,
             'provider_provenance': {'reservation_id': 'synthetic'}}
-    row = {'meta': json.dumps(meta), 'content': json.dumps({
+    row = {'meta': json.dumps(meta), 'model': 'local', 'content': json.dumps({
         'chunk_index': 0, 'start_codepoint': 0, 'end_codepoint': 1, 'facts': []})}
     monkeypatch.setattr(extraction, 'iter_artifacts', lambda *_a, **_kw: [row])
     monkeypatch.setattr(extraction, '_cached_providers', lambda _db, rows, *_: ['openai'] * len(rows))
@@ -510,7 +510,7 @@ def test_settled_cloud_prefix_survives_a_send_cutoff_and_is_reused(tmp_path, mon
             assert len(dispositions) == 1
             with pytest.raises(ValueError):
                 cloud_policy.reservation_evidence(ledger.db, reserves[0][0])
-            assert semantic_extraction._cached_provider(ledger.db, chunk, chunk["model"]) is None
+            assert semantic_extraction._cached_provider(ledger.db, chunk) is None
             return
         assert not dispositions
         assert cloud_policy.reservation_evidence(ledger.db, reserves[0][0])["result"]["http_class"] == "http_200"

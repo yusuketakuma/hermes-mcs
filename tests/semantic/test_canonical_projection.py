@@ -856,7 +856,7 @@ def test_run_due_switch_hides_then_revives_only_current_projections(
 
 @pytest.mark.parametrize("mode", ["off", "enforce"])
 @pytest.mark.parametrize("fact_source", ["canonical", "legacy", "shadow"])
-def test_invalidation_reads_model_config_once_per_active_scan(
+def test_invalidation_never_reads_the_local_model(
         tmp_path, monkeypatch, mode, fact_source):
     from semantic_publication import invalidate_projections
     from semantic_testkit import _canonical_cfg
@@ -869,8 +869,7 @@ def test_invalidation_reads_model_config_once_per_active_scan(
         db.db.execute("UPDATE messages SET parent_id=NULL")
         db.db.commit()
         for mid in (1, 2):
-            bundle = semantic_store.thread_bundle(
-                db.db, 1, mid, local_model="synthetic-model")
+            bundle = semantic_store.thread_bundle(db.db, 1, mid)
             source_hash = db.db.execute(
                 "SELECT content_hash FROM messages WHERE message_id=?",
                 (mid,)).fetchone()[0]
@@ -889,7 +888,8 @@ def test_invalidation_reads_model_config_once_per_active_scan(
         monkeypatch.setattr(semantic_transport, 'llm_model', model)
         enabled = mode != "off" and fact_source == "canonical"
         assert invalidate_projections(db.db, scfg) == (0 if enabled else 4)
-        assert len(reads) == (1 if enabled else 0)
+        # the source fingerprint names no local model, so the scan never reads one
+        assert reads == []
     finally:
         db.close()
 

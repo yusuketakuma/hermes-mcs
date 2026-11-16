@@ -91,6 +91,7 @@ def origin_event_id(db, project_id: int,
     return None
 
 
+@semantic_transport.with_local_model_scope
 def emit_degraded(ledger, scfg: dict) -> int:
     """Enforce-only fallback: a new-messages intent whose thread still
     lacks a verified PASS or SKIPPED summary past delayed_notice_seconds gets ONE
@@ -108,7 +109,6 @@ def emit_degraded(ledger, scfg: dict) -> int:
         "SELECT event_id,project_id,payload,progress FROM notify_outbox "
         "WHERE kind='new_messages' AND state IN ('pending','failed') "
         "AND created_at<?", (cutoff,))
-    local_model = None      # resolved once per scan, on the first bundle
     for ev in events:
         progress = loads_dict(ev["progress"] or "{}")
         if not isinstance(progress, dict) or progress.get("sent"):
@@ -133,9 +133,7 @@ def emit_degraded(ledger, scfg: dict) -> int:
             semantic_intake_hold.validate_indexes(ledger.db)
             if semantic_intake_hold.has_held_root(ledger.db, pid, root):
                 continue
-            if local_model is None:
-                local_model = semantic_transport.llm_model()
-            bundle = semantic_store.thread_bundle(ledger.db, pid, root, local_model=local_model)
+            bundle = semantic_store.thread_bundle(ledger.db, pid, root)
             if bundle is None:
                 continue
             fp = bundle["source_fingerprint"]
@@ -173,7 +171,7 @@ def emit_degraded(ledger, scfg: dict) -> int:
                     _degraded_source_gate(source_row, False)
                 except (_SourceUnverified, DeferredSend, FreezeSend, StaleSend):
                     continue
-                current_bundle = semantic_store.thread_bundle(ledger.db, pid, root, local_model=local_model)
+                current_bundle = semantic_store.thread_bundle(ledger.db, pid, root)
                 if current_bundle is None or current_bundle["source_fingerprint"] != fp:
                     continue
                 current_ids = source_ids[:500]

@@ -68,9 +68,14 @@ def current_quality(ledger, cfg: dict | None, *, checkpoint=lambda: None) -> dic
         # Disabled coverage is not a processing backlog.
         out.update(complete=None, incomplete=None)
         return out
-    # the fingerprint binds the local model; resolve it from the
-    # supplied config, never from the host's config file
-    local_model = semantic_transport.llm_model(cfg)
+    # locally produced summaries are judged by the supplied config's local
+    # model, never the host's config file
+    with semantic_transport.config_model_scope(cfg):
+        return _count_current_pairs(ledger, scfg, out, project_ids, checkpoint)
+
+
+def _count_current_pairs(ledger, scfg, out, project_ids, checkpoint):
+    """Count the current summary/audit pairs of every scoped message into ``out``."""
     last_key, bundle, members = None, None, {}
     rows = ledger.db.execute(
         "SELECT project_id,message_id,COALESCE(parent_id,message_id) root_id "
@@ -87,7 +92,7 @@ def current_quality(ledger, cfg: dict | None, *, checkpoint=lambda: None) -> dic
         out["denominator"] += 1
         key = row["project_id"], row["root_id"]
         if key != last_key:
-            bundle = thread_bundle(ledger.db, *key, local_model=local_model)
+            bundle = thread_bundle(ledger.db, *key)
             checkpoint()
             members = ({m["message_id"]: m for m in bundle["members"]}
                        if bundle else {})
