@@ -81,7 +81,7 @@ def fixture(tmp_path, *, kind="body", project_ids=frozenset({123})):
             "synthetic-key": {"artifact_id": 17, "project_id": 123}}}}})
     app = App()
     settings = {**SCOPE, "allowed_user_ids": {"U_OPERATOR"},
-                "project_ids": project_ids}
+                "project_ids": project_ids, "data_root": str(tmp_path)}
     sender = SlackCardAdapter(
         app, team_id=SCOPE["team_id"], application_id=SCOPE["application_id"],
         channel_id=SCOPE["channel_id"], profile=SCOPE["profile"])
