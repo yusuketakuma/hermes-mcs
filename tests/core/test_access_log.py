@@ -117,3 +117,16 @@ def test_an_interrupted_append_is_dropped_before_the_next_record(tmp_path, monke
         _entry(tmp_path, now=1_790_000_120)
     monkeypatch.setattr(access_log.os, "write", real_write)
     assert access_log.verify(tmp_path) == {**access_log.verify(tmp_path), "ok": True, "records": 2}
+
+
+def test_an_interrupted_append_at_month_end_is_dropped_before_the_next_month(tmp_path):
+    november, december = 1_796_083_200 - 3600, 1_796_083_200  # 2026-11-30 / 12-01 UTC
+    _entry(tmp_path, now=november)
+    path, = (tmp_path / access_log.DIR_NAME).glob("access-*.jsonl")
+    complete = path.read_bytes()
+    with open(path, "ab") as stream:
+        stream.write(b'{"v":1,"at":"half')  # the crash came before the month changed
+    _entry(tmp_path, now=december)
+    assert path.read_bytes() == complete
+    assert access_log.verify(tmp_path)["ok"] is True
+    assert len(list(access_log.read(tmp_path))) == 2

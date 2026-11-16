@@ -130,6 +130,16 @@ def _drop_partial_tail(fd) -> int:
     return keep
 
 
+def _repair_tail(dir_fd, name) -> None:
+    """Cut an unacknowledged fragment from an earlier file before it heads the chain."""
+    fd = os.open(name, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dir_fd)
+    try:
+        _check_private(fd, is_dir=False)
+        _drop_partial_tail(fd)
+    finally:
+        os.close(fd)
+
+
 @contextmanager
 def _locked(dir_fd):
     fd = open_lock_file(LOCK_NAME, dir_fd=dir_fd)
@@ -175,6 +185,9 @@ def record(data_dir, *, via, actor, op, channel=None, kind=None, project_id=None
                 size = _drop_partial_tail(fd)
                 previous = None
                 for candidate in reversed([n for n in names + [name] if n <= name]):
+                    if candidate != name:
+                        # the previous month may end in an interrupted append too
+                        _repair_tail(dir_fd, candidate)
                     previous = _last_line(dir_fd, candidate)
                     if previous is not None:
                         break
