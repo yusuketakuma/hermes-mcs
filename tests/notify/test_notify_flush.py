@@ -294,7 +294,7 @@ def test_session_recovered_renders_as_resolved_notice(tmp_path):
                            (eid,)).fetchone()
         text, files = notify_flush._format_event(db, ev)
         assert "自動再ログインで復旧" in text
-        assert "run 5" in text and "history_jobs" in text
+        assert "run 5" in text and "処理: 履歴の取得" in text
         assert "手動再ログインが必要" not in text
         assert files == []
         cfg = {"notify_target": "discord:1",

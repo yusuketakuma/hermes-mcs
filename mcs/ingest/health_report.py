@@ -1247,6 +1247,10 @@ def build_health(db, result: dict, status: str,
                                  "reason": "observation_unavailable"}
     if result.get("deferred_stages"):
         run["deferred_stages"] = list(result["deferred_stages"])
+    from collection_diagnostics import valid_stop
+    stop = valid_stop(result.get("stop")) if status in ("failed", "session_expired") else None
+    if stop is not None:
+        run["stop"] = stop
     run_overdue = run.get("overshoot_s", 0) > 0
     from ledger_audit import guard_status
     try:
