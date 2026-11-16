@@ -973,7 +973,7 @@ def _doctor_context_refresh(cfg: dict, *, probe: bool) -> dict:
 
 def _doctor_collection(cfg: dict, *, probe: bool) -> dict:
     """Read the latest bounded collection observation only when explicitly requested."""
-    result = {"status": "not_checked", "counts": None}
+    result = {"status": "not_checked", "counts": None, "stop": None}
     if not probe:
         return result
     from health_policy import HEALTH_REL, freshness_deadline
@@ -982,6 +982,7 @@ def _doctor_collection(cfg: dict, *, probe: bool) -> dict:
     result["status"] = "stale" if observed["status"] == "stale" else "unknown"
     if observed["status"] not in ("ok", "degraded", "failed"):
         return result
+    result["stop"] = observed.get("run_stop")
     counts = observed.get("collection_diagnostics")
     if counts is None:
         return result
@@ -1096,7 +1097,7 @@ def cmd_doctor(args) -> int:
                                 "credentials", "data", "card_worker", "restore_delivery")}
         checks["configuration"] = {"status": "blocked", "errors": 1, "warnings": 0}
         report = {"mode": "invalid", "python": sys.version.split()[0], "sqlite": sqlite3.sqlite_version,
-                  "checks": checks, "collection": {"status": "not_checked", "counts": None},
+                  "checks": checks, "collection": {"status": "not_checked", "counts": None, "stop": None},
                   "runtimes": {"selected": None, "recovery": None, "desired_recovery": None},
                   "patient_context": {"status": "not_checked", "enabled": None, "counts": None},
                   "optional_features": None, "operations": None, "card_worker": None,
@@ -1277,8 +1278,13 @@ def cmd_doctor(args) -> int:
                   f"{'表示' if feature['guidance_shown'] else '省略'}"
                   "（登録・同意・稼働の状態はこの項目では判断しません）")
         print(f"  収集の内訳: {labels.get(collection['status'], '未確認')}")
+        from collection_diagnostics import detail_lines, guidance, stop_explanation
+        stop = stop_explanation(collection["stop"])
+        if stop is not None:
+            stage, label, what, todo = stop
+            print(f"    前回の収集は「{stage}」で止まりました（{label}）: {what}")
+            print(f"      → {todo}")
         if collection["counts"] is not None:
-            from collection_diagnostics import detail_lines, guidance
             for section in ("errors", "incomplete"):
                 for line in detail_lines(collection["counts"], section):
                     print("    " + line)
