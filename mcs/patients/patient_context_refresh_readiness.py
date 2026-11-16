@@ -581,26 +581,26 @@ def lane_metrics(db) -> dict:
     Counts are the current saved state of active patients (a later success
     clears a failure): A = summary progress, B = unfinished history scans,
     C = finished scans awaiting audit; split/repair count history scans that
-    took the finer plan or passed the one bounded repair. The caller bounds time."""
+    took the finer plan or passed the one bounded repair. A latest row whose
+    content is not a JSON object is counted in ``invalid_rows`` only, never
+    raised and never in a lane or quality count. The caller bounds time."""
+    from patient_context_status import _object, latest_current_pred
     lanes = {lane: dict.fromkeys(("length_stop", "unsupported", "other_failure", "split", "repair"), 0)
              for lane in "ABC"}
+    invalid_rows = 0
+    valid = _object("a.content")
     for row in db.execute(
-            "SELECT CASE WHEN a.kind=? THEN 'A' WHEN json_extract(CASE WHEN json_valid(a.content) THEN a.content END,'$.complete') THEN 'C' "
-            "ELSE 'B' END AS lane, json_extract(CASE WHEN json_valid(a.content) THEN a.content END,'$.failure') AS failure, "
-            "SUM(COALESCE(json_extract(CASE WHEN json_valid(a.content) THEN a.content END,'$.split'),0)>0) AS split, "
-            "SUM(COALESCE(json_extract(CASE WHEN json_valid(a.content) THEN a.content END,'$.repairs'),0)>0) AS repair, "
-            "COUNT(*) AS n, SUM(NOT json_valid(a.content)) AS invalid "
+            "SELECT CASE WHEN a.kind=? THEN 'A' WHEN json_extract(CASE WHEN " + valid + " THEN a.content END,'$.complete') THEN 'C' "
+            "ELSE 'B' END AS lane, json_extract(CASE WHEN " + valid + " THEN a.content END,'$.failure') AS failure, "
+            "SUM(COALESCE(json_extract(CASE WHEN " + valid + " THEN a.content END,'$.split'),0)>0) AS split, "
+            "SUM(COALESCE(json_extract(CASE WHEN " + valid + " THEN a.content END,'$.repairs'),0)>0) AS repair, "
+            "COUNT(*) AS n, SUM(NOT (" + valid + ")) AS invalid "
             "FROM artifacts a JOIN patients p ON p.project_id=a.project_id "
             "WHERE a.kind IN (?,?) AND COALESCE(p.is_archived,0)=0 AND "
             + current_meta_pred("a.meta", target=patient_context_refresh_state.CURRENT_VERSION)
-            + " AND (a.kind!=? OR NOT EXISTS (SELECT 1 FROM artifacts b WHERE b.kind=a.kind "
-            "AND b.project_id=a.project_id AND b.artifact_id>a.artifact_id AND "
-            + current_meta_pred("b.meta", target=patient_context_refresh_state.CURRENT_VERSION)
-            + " AND CASE WHEN json_valid(b.meta) THEN json_extract(b.meta,'$.source_key') END "
-            "IS CASE WHEN json_valid(a.meta) THEN json_extract(a.meta,'$.source_key') END)) "
+            + " AND (a.kind!=? OR " + latest_current_pred() + ") "
             "GROUP BY 1,2", (patient_context_refresh_state.PROGRESS, patient_context_refresh_state.PROGRESS, patient_context_refresh_state.SCAN, patient_context_refresh_state.SCAN)):
-        if row[5]:
-            raise ValueError("invalid patient context observation")
+        invalid_rows += row[5]
         lane, failure = row[0], row[1]
         if failure:
             lanes[lane][_LANE_CODES.get(failure, "other_failure")] += row[4]
@@ -616,44 +616,57 @@ def lane_metrics(db) -> dict:
     quality = dict.fromkeys(("none", "pending", "deferred", "held", "failed",
                              "unavailable", "unknown", "budget", "disabled", "other"), 0)
     for row in db.execute(
-            "SELECT json_extract(CASE WHEN json_valid(a.content) THEN a.content END,'$.quality_state') AS qs, COUNT(*) "
+            "SELECT json_extract(CASE WHEN " + valid + " THEN a.content END,'$.quality_state') AS qs, COUNT(*) "
             "FROM artifacts a JOIN patients p ON p.project_id=a.project_id "
-            "WHERE a.kind=? AND COALESCE(p.is_archived,0)=0 AND "
-            + current_meta_pred("a.meta", target=patient_context_refresh_state.CURRENT_VERSION)
-            + " AND NOT EXISTS (SELECT 1 FROM artifacts b WHERE b.kind=a.kind "
-            "AND b.project_id=a.project_id AND b.artifact_id>a.artifact_id AND "
-            + current_meta_pred("b.meta", target=patient_context_refresh_state.CURRENT_VERSION)
-            + " AND CASE WHEN json_valid(b.meta) THEN json_extract(b.meta,'$.source_key') END "
-            "IS CASE WHEN json_valid(a.meta) THEN json_extract(a.meta,'$.source_key') END) "
-            "GROUP BY 1", (patient_context_refresh_state.SCAN,)):
+            "WHERE a.kind=? AND COALESCE(p.is_archived,0)=0 AND " + latest_current_pred()
+            + " AND " + valid + " GROUP BY 1", (patient_context_refresh_state.SCAN,)):
         raw = row[0]
         state = raw.partition(":")[0] if type(raw) is str and raw else "none"
         quality[state if state in quality else "other"] += row[1]
-    return {"lanes": lanes, "quality": quality, "published": published}
+    return {"lanes": lanes, "quality": quality, "published": published, "invalid_rows": invalid_rows}
+
+
+def _unreadable_in_scope(db, pid, cfg, whole=None) -> bool:
+    """Whether a patient whose stored state could not be read is still worker work.
+
+    ``whole`` is the patient's unscoped snapshot when the caller already has it;
+    a patient whose snapshot itself cannot be read stays counted, never dropped."""
+    if whole is None:
+        try:
+            whole = patient_context_refresh_sources._snapshot(db, pid, cfg, hydrate=False)
+        except (ValueError, TypeError, KeyError):
+            return True
+    return not patient_context_refresh_state._out_of_scope(whole)
 
 
 def status(db, cfg):
     """Count work states without returning patients, source values or summaries.
-    Patients run_due never works on are left out, so the counts match the worker."""
+    Patients run_due never works on are left out, so the counts match the worker;
+    a patient whose stored state cannot be read is counted in ``invalid`` only."""
     counts = dict.fromkeys(("initial_pending", "delta_pending", "history_pending",
-                           "audit_pending", "failed", "complete"), 0)
+                           "audit_pending", "failed", "complete", "invalid"), 0)
     from types import SimpleNamespace
     cloud_scan = _cloud_scan_for(SimpleNamespace(db=db), cfg)
     for row in db.execute("SELECT project_id FROM patients ORDER BY is_archived,project_id"):
         pid = row[0]
-        with patient_context_refresh_sources._scan_read_owner(db, pid) as proof_for:
-            snapshot, progress, pending = _pending(db, pid, cfg, proof_for=proof_for,
-                                                  cloud_scan=cloud_scan(pid))
-            if patient_context_refresh_state._out_of_scope(snapshot):
-                continue
-            old, _ = patient_context_refresh_state._latest(db, patient_context_refresh_state.KIND, pid)
-            counts["initial_pending"] += int(not old)
-            counts["delta_pending"] += int(bool(old) and pending["A"])
-            counts["history_pending"] += int(pending["B"])
-            counts["audit_pending"] += int(pending["C"])
-            counts["failed"] += int(bool(progress.get("failure") or snapshot["source_failures"]))
-            counts["complete"] += int(_inference_coverage(db, pid, cfg, snapshot,
-                read_proof=proof_for(snapshot, cfg), proof_for=proof_for)["complete"])
+        try:
+            with patient_context_refresh_sources._scan_read_owner(db, pid) as proof_for:
+                snapshot, progress, pending = _pending(db, pid, cfg, proof_for=proof_for,
+                                                      cloud_scan=cloud_scan(pid))
+                if patient_context_refresh_state._out_of_scope(snapshot):
+                    continue
+                old, _ = patient_context_refresh_state._latest(db, patient_context_refresh_state.KIND, pid)
+                done = _inference_coverage(db, pid, cfg, snapshot,
+                    read_proof=proof_for(snapshot, cfg), proof_for=proof_for)["complete"]
+        except (ValueError, TypeError, KeyError):
+            counts["invalid"] += int(_unreadable_in_scope(db, pid, cfg))
+            continue
+        counts["initial_pending"] += int(not old)
+        counts["delta_pending"] += int(bool(old) and pending["A"])
+        counts["history_pending"] += int(pending["B"])
+        counts["audit_pending"] += int(pending["C"])
+        counts["failed"] += int(bool(progress.get("failure") or snapshot["source_failures"]))
+        counts["complete"] += int(done)
     counts["lanes"] = lane_metrics(db)["lanes"]
     return counts
 

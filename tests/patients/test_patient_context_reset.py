@@ -83,6 +83,22 @@ def test_reset_refuses_until_generation_is_disabled_and_cloud_is_paused(built, t
     assert readiness.context_view_input(ledger.db, 1, cfg=cfg) is not None, "a refused reset changes nothing"
 
 
+def test_a_preview_taken_before_invalid_rows_existed_is_refused_cleanly(built, tmp_path):
+    """An old-format preview (outcomes without invalid_rows) never matches and erases nothing."""
+    from mcs_util import payload_hash
+    ledger, clock, cfg, _ = built
+    off = _disabled(cfg)
+    cloud_policy.stop(ledger)
+    found = reset.preview(ledger.db, cfg=off, now=clock.wall)
+    assert found["refusal"] is None and found["outcomes"]["invalid_rows"] == 0
+    body = {key: found[key] for key in found if key not in ("refusal", "preview_hash")}
+    body["outcomes"] = {key: value for key, value in body["outcomes"].items() if key != "invalid_rows"}
+    kinds = {kind: len(ledger.artifacts(kind)) for kind in reset.ERASED_KINDS}
+    assert _apply(ledger, off, _request(payload_hash(body)), clock.wall, tmp_path)[0] == "preview_changed"
+    assert {kind: len(ledger.artifacts(kind)) for kind in reset.ERASED_KINDS} == kinds
+    assert readiness.context_view_input(ledger.db, 1, cfg=cfg) is not None, "a refused reset changes nothing"
+
+
 def test_reset_erases_results_and_accounting_but_keeps_spending(built, tmp_path):
     ledger, clock, cfg, _ = built
     off = _disabled(cfg)

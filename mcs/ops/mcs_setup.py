@@ -932,7 +932,7 @@ def _doctor_v3_status(cfg: dict):
 
 
 _CONTEXT_REFRESH_COUNTS = ("initial_pending", "delta_pending", "history_pending",
-                   "audit_pending", "failed", "complete")
+                   "audit_pending", "failed", "complete", "invalid")
 _CONTEXT_REFRESH_LANE_CODES = ("length_stop", "unsupported", "other_failure", "split", "repair")
 
 
@@ -982,7 +982,7 @@ def _doctor_context_refresh(cfg: dict, *, probe: bool) -> dict:
         isinstance(lanes.get(lane), dict) and all(
             type(lanes[lane].get(code)) is int and lanes[lane][code] >= 0
             for code in _CONTEXT_REFRESH_LANE_CODES) for lane in "ABC") else None
-    problem = bool(result["counts"] and result["counts"]["failed"]) or bool(
+    problem = bool(result["counts"] and (result["counts"]["failed"] or result["counts"]["invalid"])) or bool(
         result["states"] and patient_context_status.has_problem(result["states"]))
     # healthy needs both readings: a missing work-queue scan is unknown, never fine
     result["status"] = ("warning" if problem else "unknown" if None in (result["states"], result["counts"])
@@ -997,7 +997,7 @@ def _context_refresh_lines(result: dict) -> list[str]:
     lines = []
     counts, states = result["counts"], result["states"]
     if counts is not None:
-        names = ("初回未生成", "差分待ち", "過去走査待ち", "根拠点検待ち", "失敗", "完了")
+        names = ("初回未生成", "差分待ち", "過去走査待ち", "根拠点検待ち", "失敗", "完了", "読めない記録")
         lines.append("、".join(f"{name}{counts[key]}件" for key, name in zip(_CONTEXT_REFRESH_COUNTS, names)))
     else:
         lines.append("作業待ちの件数: 時間内に確認できませんでした（0件とは扱いません）")
