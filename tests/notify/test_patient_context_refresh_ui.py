@@ -5,6 +5,7 @@ import pytest
 
 import notify_actions
 import notify_views
+import patient_context_status
 from notify_testkit import CFG, NOW, ORIGIN, _delivered_card, _token_for, led, pinned_clock
 from semantic_testkit import _message
 
@@ -86,6 +87,52 @@ def test_context_waiting_reason_survives_each_transport_without_pending_messages
     assert expected in json.dumps(context_list_blocks(view, allowed), ensure_ascii=False)
     assert expected in "\n".join(context_texts(result, allowed))
     assert expected in "\n".join(list_messages(result, allowed, plain=True))
+
+
+def _inference_notes(led, monkeypatch, inference):
+    import patient_context_view
+    monkeypatch.setattr(patient_context_view, "evidence", lambda *a, **k: {
+        "project_id": 1, "items": [], "summary": [], "context_facts": [], "as_of": None,
+        "coverage": {"context": None, "inference": {"complete": False, "sources": {}, **inference}}})
+    return notify_views.patient_context_list(led.db, 1, "background", cfg=ENABLED, since=0, now=NOW)["notes"]
+
+
+@pytest.mark.parametrize("state", patient_context_status.COVERAGE_STATES)
+def test_every_coverage_state_is_worded_in_the_status_line(led, monkeypatch, state):
+    _delivered_card(led)
+    notes = _inference_notes(led, monkeypatch, {"status": state})
+    assert patient_context_status.STATUS_JA[state] in notes
+    assert patient_context_status.UNKNOWN_STATUS_JA not in notes
+
+
+@pytest.mark.parametrize("state", ["synthetic_future_state", None, 7])
+def test_unrecognised_coverage_state_is_shown_not_dropped(led, monkeypatch, state):
+    _delivered_card(led)
+    notes = _inference_notes(led, monkeypatch, {"status": state})
+    assert patient_context_status.UNKNOWN_STATUS_JA in notes
+
+
+@pytest.mark.parametrize("state", ["held", "failed"])
+def test_held_and_failed_wording_makes_no_retry_promise(state):
+    text = patient_context_status.STATUS_JA[state]
+    assert "自動" not in text and "再試行" not in text and "再開" not in text
+
+
+def test_dependency_gap_breakdown_only_with_integer_coverage(led, monkeypatch):
+    _delivered_card(led)
+    notes = _inference_notes(led, monkeypatch, {"status": "dependency_gap", "dependencies": {
+        "complete": False, "gaps": 3, "coverage": {"terminal": 1, "repairable": 2, "reasons": {}}}})
+    line = next(note for note in notes if note.startswith("根拠不足の内訳"))
+    assert "復元できない記録 1件" in line and "原本の再点検待ち 2件" in line
+    assert "再点検だけでは解消しません" in line
+    repairable_only = _inference_notes(led, monkeypatch, {"status": "dependency_gap", "dependencies": {
+        "complete": False, "coverage": {"terminal": 0, "repairable": 2, "reasons": {}}}})
+    assert not any("解消しません" in note for note in repairable_only)
+    for dependencies in ({"complete": False}, {"complete": False, "coverage": {"terminal": "1", "repairable": 0}},
+                         {"complete": False, "coverage": {"terminal": True, "repairable": 0}}):
+        notes = _inference_notes(led, monkeypatch, {"status": "dependency_gap", "dependencies": dependencies})
+        assert "変更前の根拠が不足しています" in notes
+        assert not any(note.startswith("根拠不足の内訳") for note in notes)     # absent is omitted, not 0
 
 
 def test_previous_time_preserved_in_navigation_and_per_actor(led):

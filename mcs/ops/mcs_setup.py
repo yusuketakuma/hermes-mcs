@@ -936,10 +936,25 @@ _CONTEXT_REFRESH_COUNTS = ("initial_pending", "delta_pending", "history_pending"
 _CONTEXT_REFRESH_LANE_CODES = ("length_stop", "unsupported", "other_failure", "split", "repair")
 
 
+def _bounded_read(db, read):
+    """Run one read-only diagnostic step under its own 1-second SQL budget; failure is None, never zero."""
+    deadline = time.monotonic() + 1
+    db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+    try:
+        return read()
+    except (OSError, ValueError, TypeError, sqlite3.Error):
+        return None
+    finally:
+        db.set_progress_handler(None, 0)
+
+
 def _doctor_context_refresh(cfg: dict, *, probe: bool) -> dict:
-    """患者コンテキスト作成を、明示診断時だけ読取り専用で件数確認する。"""
+    """患者コンテキスト作成を、明示診断時だけ読取り専用で件数確認する。
+
+    `states` is the cheap per-state count of last stored outcomes; `counts` is the
+    optional per-patient work scan and stays None when it does not finish in time."""
     from patient_context_refresh import options
-    result = {"status": "not_checked", **options(cfg), "counts": None}
+    result = {"status": "not_checked", **options(cfg), "counts": None, "lanes": None, "states": None}
     if not probe:
         return result
     result["status"] = "unknown"
@@ -949,26 +964,70 @@ def _doctor_context_refresh(cfg: dict, *, probe: bool) -> dict:
             return result
         with closing(sqlite3.connect(ledger.resolve().as_uri() + "?mode=ro", uri=True,
                                      timeout=1)) as db:
-            from patient_context_refresh import status
+            from patient_context_refresh import lane_metrics, status
+            import patient_context_status
             db.row_factory = sqlite3.Row
-            deadline = time.monotonic() + 1
-            db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
-            raw = status(db, cfg)
-        if not isinstance(raw, dict) or any(
-                type(raw.get(key)) is not int or raw[key] < 0 for key in _CONTEXT_REFRESH_COUNTS):
-            return result
-        result["counts"] = {key: raw[key] for key in _CONTEXT_REFRESH_COUNTS}
-        lanes = raw.get("lanes")
-        # fixed lane codes and counts only; a malformed block stays unknown, not zero
-        result["lanes"] = {lane: {code: lanes[lane][code] for code in _CONTEXT_REFRESH_LANE_CODES}
-                           for lane in "ABC"} if isinstance(lanes, dict) and all(
-            isinstance(lanes.get(lane), dict) and all(
-                type(lanes[lane].get(code)) is int and lanes[lane][code] >= 0
-                for code in _CONTEXT_REFRESH_LANE_CODES) for lane in "ABC") else None
-        result["status"] = "warning" if raw["failed"] else "healthy"
+            states = _bounded_read(db, lambda: patient_context_status.state_counts(db))
+            lanes = _bounded_read(db, lambda: lane_metrics(db)["lanes"])
+            raw = _bounded_read(db, lambda: status(db, cfg))
     except (OSError, ValueError, TypeError, sqlite3.Error):
-        pass
+        return result
+    result["states"] = patient_context_status.sanitize(states)
+    if isinstance(raw, dict) and all(
+            type(raw.get(key)) is int and raw[key] >= 0 for key in _CONTEXT_REFRESH_COUNTS):
+        result["counts"] = {key: raw[key] for key in _CONTEXT_REFRESH_COUNTS}
+    # fixed lane codes and counts only; a malformed block stays unknown, not zero
+    result["lanes"] = {lane: {code: lanes[lane][code] for code in _CONTEXT_REFRESH_LANE_CODES}
+                       for lane in "ABC"} if isinstance(lanes, dict) and all(
+        isinstance(lanes.get(lane), dict) and all(
+            type(lanes[lane].get(code)) is int and lanes[lane][code] >= 0
+            for code in _CONTEXT_REFRESH_LANE_CODES) for lane in "ABC") else None
+    problem = bool(result["counts"] and result["counts"]["failed"]) or bool(
+        result["states"] and patient_context_status.has_problem(result["states"]))
+    # healthy needs both readings: a missing work-queue scan is unknown, never fine
+    result["status"] = ("warning" if problem else "unknown" if None in (result["states"], result["counts"])
+                        else "healthy")
     return result
+
+
+def _context_refresh_lines(result: dict) -> list[str]:
+    """Doctor display of patient context counts; an unobtained count is said so, never shown as 0."""
+    if result["status"] == "not_checked":
+        return []
+    lines = []
+    counts, states = result["counts"], result["states"]
+    if counts is not None:
+        names = ("初回未生成", "差分待ち", "過去走査待ち", "根拠点検待ち", "失敗", "完了")
+        lines.append("、".join(f"{name}{counts[key]}件" for key, name in zip(_CONTEXT_REFRESH_COUNTS, names)))
+    else:
+        lines.append("作業待ちの件数: 時間内に確認できませんでした（0件とは扱いません）")
+    if states is None:
+        lines.append("記録上の状態: 確認できませんでした（0件とは扱いません）")
+        return lines
+    part = states["partition"]
+    lines.append(f"記録上の状態（最後に保存された結果、対象{states['patients_total']}人）: "
+                 f"公開済み{part['published']}人、作成途中{part['in_progress']}人、保留{part['held']}人、"
+                 f"解析失敗{part['failed']}人、依存の不足が未解消{part['dependency_gap']}人、"
+                 f"読めない記録あり{part['invalid']}人、未着手{part['no_record']}人")
+    if states["dependency_loss"]["patients"]:
+        lines.append(f"依存喪失の記録を保持している患者 {states['dependency_loss']['patients']}人"
+                     "（解除可否は未分類、注意には数えません）")
+
+    def reasons(*blocks):
+        merged = {}
+        for block in blocks:
+            for code, n in block["codes"].items():
+                merged[code] = merged.get(code, 0) + n
+        return "、".join(f"{code} {n}件" for code, n in sorted(merged.items()))
+    held = (states["summary_held"], states["scan_held"])
+    if any(block["codes"] for block in held):
+        lines.append(f"保留の理由別（要約は患者、資料は投稿の件数）: {reasons(*held)}")
+    failed = (states["summary_failed"], states["scan_failed"])
+    if any(block["codes"] for block in failed):
+        lines.append(f"解析失敗の理由別（要約は患者、資料は投稿の件数）: {reasons(*failed)}")
+    if states["invalid_rows"]:
+        lines.append(f"読めない行 {states['invalid_rows']}件（完了には数えません）")
+    return lines
 
 
 def _doctor_collection(cfg: dict, *, probe: bool) -> dict:
@@ -1099,7 +1158,8 @@ def cmd_doctor(args) -> int:
         report = {"mode": "invalid", "python": sys.version.split()[0], "sqlite": sqlite3.sqlite_version,
                   "checks": checks, "collection": {"status": "not_checked", "counts": None, "stop": None},
                   "runtimes": {"selected": None, "recovery": None, "desired_recovery": None},
-                  "patient_context": {"status": "not_checked", "enabled": None, "counts": None},
+                  "patient_context": {"status": "not_checked", "enabled": None, "publication": None,
+                                      "counts": None, "lanes": None, "states": None},
                   "optional_features": None, "operations": None, "card_worker": None,
                   "providers": None, "source": None,
                   "recovery_selection": {"explicit": None, "matches_deployed": None},
@@ -1268,10 +1328,8 @@ def cmd_doctor(args) -> int:
         print(f"  患者コンテキスト作成: {labels.get(context_refresh_result['status'], '未確認')}、"
               f"生成={'有効' if context_refresh_result['enabled'] else '無効'}、"
               f"限定閲覧={'有効' if context_refresh_result['publication'] else '無効'}")
-        if context_refresh_result["counts"] is not None:
-            names = ("初回未生成", "差分待ち", "過去走査待ち", "根拠点検待ち", "失敗", "完了")
-            print("    " + "、".join(f"{name}{context_refresh_result['counts'][key]}件"
-                                    for key, name in zip(_CONTEXT_REFRESH_COUNTS, names)))
+        for line in _context_refresh_lines(context_refresh_result):
+            print("    " + line)
         for name, feature in report["optional_features"].items():
             choice = ("既定に従う" if feature["choice"] == "default" else "明示の選択")
             print(f"  任意機能の案内（{name}）: {choice}、現在は案内を"
