@@ -57,7 +57,7 @@ def test_rule_cli_releases_owned_connection_and_lock_on_failure(
             ledger.db.set_authorizer(lambda action, *args: sqlite3.SQLITE_DENY
                                      if action == sqlite3.SQLITE_SELECT else sqlite3.SQLITE_OK)
         elif failure == "extract":
-            monkeypatch.setattr(extract, "_extract_rows", fail)
+            monkeypatch.setattr(extract, "_extract_ids", fail)
         elif failure == "json":
             monkeypatch.setattr(extract.json, "dumps", fail)
         elif failure == "stats":

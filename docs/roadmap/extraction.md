@@ -181,7 +181,7 @@ F-1の未確認検査値の表示分離は現行`structured_view._lab_lines`に�
 - 抽出側: 添付は未解析（`SECURITY.md:54`、`SECURITY.md:44`、O03）。v1 は本文の「写真|画像|添付」で `media_ref` を立てるだけ（`extract.py:171-172`）。semantic は添付メタを bundle に載せ（`semantic_store.py:86-101`）、「添付内容は解析していません」と限定する（`semantic_llm.py:287-289`）。`attachments_complete` は設定元がなく常に True（`semantic_extraction.py:1122-1123`）。
 - 既存の外部露出: 通知設定時は添付の実体が Discord 等へ転送される（`SECURITY.md:26`、`notify_flush.py:583-611`）。Jev（外部）は semantic / QC 有効時に本文を送る（`SECURITY.md:79-86`）。OCR テキストをそこへ流さないこと。
 - ローカル LLM は text 専用: `local_llm.chat` は `messages[].content` が str（`local_llm.py:373-379`）、`_validate_chat_args` は prompt を str に限定（:339-343）。実機の`/props`に対する確認履歴はあるが、端末固有のモデル・slot/context値は除去した。plist に `--mmproj` はない（`deployment/launchagents/ai.mcs.llamaserver.plist:6-20`）。端末固有のモデル配置・読込み状態は公開記録から除去した。mmproj の入手可否とメモリ余裕は【未検証】。VLM の長い出力は 1 枚数分になり、2 slot の抽出 drainer を塞ぐ。
-- 受付境界: `DEFAULT_ROUTES`（`llm_admission.py:60-75`）は mcs.extract / semantic / qc / bench=BACKLOG。`MCS_LLM_ADMISSION` 有効時は未登録ルートが恒久拒否され、`mcs_setup check` が検査する（`mcs_setup.py:534-556`）。既定 OFF（`local_llm.py:114-120`）。
+- 受付境界: `DEFAULT_ROUTES`（`llm_admission.py:60-75`）は mcs.extract / semantic / qc / bench=BACKLOG。`MCS_LLM_ADMISSION` 有効時は未登録ルートが恒久拒否される。受付を開ける `open_epoch` の呼出元がないため、`mcs_setup check` は有効化そのものをエラーにする（`environment_diagnostics.check_environment`）。既定 OFF（`local_llm.py:114-120`）。
 - OCR / vision の実装はリポジトリに存在しない。
 - 【実行確認】（合成画像・PDF だけ。macOS 26.5 / arm64、Swift 6.3.3 CLT）:
   - `osascript -l JavaScript` から Vision `VNRecognizeTextRequest`（accurate、ja-JP + en-US）が、新規 Python 依存なしで動作する。日本語行を正しく認識した。初回 8.7 秒（OS 側モデル初期化と推定）、以降 0.2 秒。

@@ -318,28 +318,19 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
                             d + "/" for d in LINEWORKS_SOURCE_DIRS)
                         + "）が稼働中のアダプターより新しくなっています。"
                         f"`launchctl kickstart -k gui/{paths.uid}/{lw}`で再起動してください")
-    # T20: with the admission boundary enabled, every MCS LLM route
-    # must be registered — a missing route fails closed FOREVER, so a
-    # misconfigured broker is a blocked-startup error, not a stall.
+    # T20 / O6: no production caller opens the admission epoch yet
+    # (llm_admission.Broker.open_epoch), so an enabled boundary holds every
+    # inference in epoch_closed forever. Until an owner of that reopen step
+    # exists, the opt-in is a setup error rather than a silent stall. Unlike the
+    # LINE WORKS warning above, this deliberately surfaces as a new error to an
+    # updater baseline from older code (owner decision O6): such an update fails
+    # its postcheck, so the change record tells the owner to turn it off first.
     import local_llm
     if local_llm.admission_enabled():   # config local_llm.admission first, then the env
-        try:
-            broker = local_llm._broker()
-            missing = [r for r in ("mcs.semantic", "mcs.extract")
-                       if broker.routes.get(r) != "BACKLOG"]
-            if missing:
-                errors.append(
-                    "AIの実行枠の登録に不足があります: "
-                    + ", ".join(missing)
-                    + " — 受付制御（local_llm.admission または MCS_LLM_ADMISSION）が有効な間、"
-                      "これらの処理は受け付けられません。実行枠の登録を確認してください")
-            elif not broker.is_open():
-                warnings.append(
-                    "AIの実行受付を一時停止しています。実行中の処理がないことを"
-                    "確認して受付を再開するまで、"
-                    "AI処理は待機します")
-        except Exception as e:
-            errors.append(f"AIの実行枠を管理できません。設定と稼働状態を確認してください（詳細: {e}）")
+        errors.append(
+            "AIの受付制御（local_llm.admission または MCS_LLM_ADMISSION）が有効です。"
+            "この版には受付を再開する処理がないため、有効な間はAI処理がすべて待機したままになります。"
+            "config.jsonのlocal_llm.admissionをfalseにし、環境変数MCS_LLM_ADMISSIONを外してください")
     return errors, warnings
 
 

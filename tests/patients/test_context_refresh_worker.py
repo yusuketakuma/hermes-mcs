@@ -229,8 +229,10 @@ def test_failure_isolated_and_no_sensitive_error(capacity, monkeypatch):
 def test_macos_memory(monkeypatch, percent, expected):
     monkeypatch.setattr(worker.sys, "platform", "darwin")
     def probe(argv, **kwargs):
-        assert argv == ["/usr/bin/memory_pressure", "-Q"]
         assert kwargs["timeout"] == 2
+        if argv == ["/usr/sbin/sysctl", "-n", "hw.memsize"]:
+            return SimpleNamespace(stdout="17179869184\n")
+        assert argv == ["/usr/bin/memory_pressure", "-Q"]
         return SimpleNamespace(stdout=f"System-wide memory free percentage: {percent}%")
     monkeypatch.setattr(worker.subprocess, "run", probe)
     assert worker._context_memory_available() is expected
