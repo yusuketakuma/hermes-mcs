@@ -355,9 +355,15 @@ def _v_drug_alias(req, base):
     return validate_operation(req, base)
 
 
+def _v_external_transfer(req, base):
+    from external_transfer import validate_operation
+    return validate_operation(req, base)
+
+
 _OPS_VALIDATORS = {
     "ops.drug_alias_apply": _v_drug_alias,
     "ops.drug_alias_rollback": _v_drug_alias,
+    "ops.external_transfer_acknowledge": _v_external_transfer,
     "ops.cloud_stop": _v_cloud_control,
     "ops.cloud_resume": _v_cloud_control,
     "ops.cloud_local_rebuild_approve": _v_local_rebuild,

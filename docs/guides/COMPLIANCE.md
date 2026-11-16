@@ -68,13 +68,35 @@ Anthropic・OpenAI・Jev へ自動では送りません。次を確認したう�
 2. 外国にある第三者への提供の根拠（同意、または契約による体制整備）。
 3. 患者・利用者への周知（[掲示文例](compliance/PATIENT_NOTICE_TEMPLATE.md)）。
 
+記録はセットアップと初回収集（`run_check`）の後に行います。保存記録 `data/ledger.db` がまだ無いときは
+記録せず、その旨を表示します（確認待ちの間は外部AIへ自動送信しないので、初回収集を先に済ませても送信は始まりません）。
+
 ```bash
 python3 mcs/ops/mcs_compliance.py acknowledge --by "管理薬剤師 氏名" \
   --reason "2026-11-20 契約・同意書式・運用管理規程v1を確認" --services anthropic,jev --confirm-human
 python3 mcs/ops/mcs_compliance.py status
 ```
 
-記録は確認者・根拠・対象サービス・日時を残し、再確認したときは前回の記録を履歴に移します。
+確認は人承認操作 `ops.external_transfer_acknowledge` として、ほかの承認操作と同じ受付記録（`command_receipts`）を
+残します。受付記録には `command_id`・確認者（`--by`、120文字まで）・根拠（`--reason`、500文字まで）・
+対象サービス・日時が入り、`external_transfer.json` の確認記録にも同じ `command_id` が入ります。
+結果は `command_id`・`outcome` を含む1行の JSON で、終了コードは 0（記録した）、1（受け付けなかった・
+記録と受付が一致しない・結果が分からない `outcome: unknown`）、3（ほかの保存処理が続いている `outcome: busy`）です。
+`busy`・`unknown` や途中で止まったときは、表示された `command_id` を `--command-id` に指定して同じ内容で再実行すると、
+記録を重ねずに前回の結果を返します（受付が残っていなければ、その時点で記録します）。
+`external_transfer.json` は受付記録の保存（COMMIT）が終わってから書きます。その間に処理が止まった
+（強制終了・停電など）場合は受付だけが残り、確認記録は確認待ちのままなので外部AIへの自動送信は始まりません。
+同じ `command_id` で再実行すると、それが最新の確認であれば確認記録を書き終えます（後に別の確認があれば書き換えません）。
+同じ `command_id` で内容（確認者・根拠・サービス）を変えると `command_id_conflict` で受け付けません。
+サービスの順番と重複は区別しません。
+
+`status` の `receipt` は、いまの確認記録が受付記録と一致するかを示します。`matched` は一致、
+`receipt_file_mismatch` は一致しない（受付の無い記録、または受付後に記録が戻った）、`unreceipted` は
+受付記録を残す前の版で記録したもの、`unverified` は保存記録を読めなかったことを表します。
+`matched` 以外のときは、内容を確認し直して新しい `command_id` で記録し直してください。
+再実行で `external_transfer_superseded` が出たときは、その確認より後に別の確認が記録されています。
+
+確認記録は確認者・根拠・対象サービス・日時を残し、再確認したときは前回の記録を履歴（直近5回）に移します。
 `config.json` で `mode` を明示した設定は、施設の判断として確認記録に関係なく従います。
 既存の環境（このファイルが無い環境）はこれまでどおりキーで自動有効化するので、
 同じ確認を済ませていない場合は `mode=off` を明示してください。

@@ -74,8 +74,9 @@
   ハッシュ連鎖の閲覧記録 `data/access_log/` へ追記する。検索語・本文・患者名は記録しない。
   記録できない閲覧は回答しない
 - 人承認操作（依頼登録・更新、シグナル却下、閾値変更、更新適用・ロールバック・
-  DB 復元同意）は `--confirm-human` + receipt 記録が必須で、依頼・却下・閾値変更は
-  `reason` も必須（core の validator が強制）
+  DB 復元同意、外部AI送信の施設確認）は `--confirm-human` + receipt 記録が必須で、依頼・却下・閾値変更・
+  外部AI送信の施設確認は `reason` も必須（core の validator が強制）。外部AI送信の施設確認
+  （`ops.external_transfer_acknowledge`）はチャットのボタンに出さず、端末の `mcs_compliance.py acknowledge` から実行する
 - 自己更新の信頼境界は GitHub/TLS と approval receipt。タグ署名は
   検証しないため `update.mode=auto` は「GitHub リポジトリへの
   push 権限 = このマシンでのコード実行」を意味する — auto は
