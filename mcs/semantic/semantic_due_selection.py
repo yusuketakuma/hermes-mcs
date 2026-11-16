@@ -670,6 +670,9 @@ _cloud_selection_progress = None
 _CLOUD_SELECTION_PAGE = 128
 
 
+_CLOUD_SELECTION_TTL_S = 900.0
+
+
 def _cloud_selection_page(db, kinds, max_jobs, settings, semantic_scope, excluded, deadline, binding):
     import cloud_policy
     global _cloud_selection_progress
@@ -680,34 +683,53 @@ def _cloud_selection_page(db, kinds, max_jobs, settings, semantic_scope, exclude
 
     check_deadline()
     progress = _cloud_selection_progress if binding is not None else None
-    if progress is None or progress['binding'] != binding:
-        upper = db.execute('SELECT COALESCE(MAX(job_id), 0) FROM fetch_jobs').fetchone()[0]
-        progress = {'binding': binding, 'upper': upper, 'cursor': 0,
+    # Rows below the cursor that return to pending (ON CONFLICT re-queue or
+    # automatic retry of a failed job) are only seen by a rebuild, so a
+    # retained progress expires a TTL after its full scan and eligibility
+    # traversal finished; an unfinished one (including a scan of new
+    # arrivals) never expires, so it always reaches selection.
+    if (progress is None or progress['binding'] != binding
+            or (progress['scanned'] is not None and not progress['collecting']
+                and time.monotonic() - progress['scanned'] >= _CLOUD_SELECTION_TTL_S)):
+        progress = {'binding': binding, 'upper': 0, 'cursor': 0,
                     'rows': [], 'pending': [], 'collecting': True,
-                    'yield_early': False}
+                    'yield_early': False, 'scanned': None}
         if binding is not None:
             _cloud_selection_progress = progress
-    # PK range scan: the correlated MAX uses idx_messages_project_time.
+    # Each pass also scans jobs added since the previous upper bound.
+    upper = db.execute('SELECT COALESCE(MAX(job_id), 0) FROM fetch_jobs').fetchone()[0]
+    if upper > progress['upper']:
+        progress['upper'] = upper
+        progress['collecting'] = True
+    # Each page is the PK range of the next _CLOUD_SELECTION_PAGE existing
+    # jobs, so a long run of settled jobs never makes one statement scan it
+    # whole (an interrupted statement would leave the cursor in place and
+    # repeat the same scan every tick), and gaps in job_id cost nothing. The
+    # correlated MAX uses idx_messages_project_time and is evaluated only
+    # for pending rows of the requested kinds.
     # A page is adopted only after its statement has fully completed.
     marks = ','.join('?' for _ in kinds)
     while progress['collecting']:
         check_deadline()
+        bound = db.execute(
+            'SELECT MAX(job_id) FROM (SELECT job_id FROM fetch_jobs '
+            'WHERE job_id>? AND job_id<=? ORDER BY job_id LIMIT ?)',
+            (progress['cursor'], progress['upper'], _CLOUD_SELECTION_PAGE)).fetchone()[0]
+        if bound is None or bound >= progress['upper']:
+            bound = progress['upper']
         rows = db.execute(
-            'SELECT j.job_id,j.kind,j.project_id,COALESCE(p.is_archived,0), '
+            'SELECT j.job_id,j.project_id,COALESCE(p.is_archived,0), '
             + patient_priority.latest_activity_sql('j.project_id') + ' '
             'FROM fetch_jobs j NOT INDEXED LEFT JOIN patients p ON p.project_id=j.project_id '
-            'WHERE j.job_id>? AND j.job_id<=? '
-            'ORDER BY j.job_id LIMIT ?',
-            (progress['cursor'], progress['upper'], _CLOUD_SELECTION_PAGE)).fetchall()
-        if rows:
-            for job_id, kind, project_id, archived, latest in rows:
-                if kind in kinds:
-                    # SQLite orders NULL timestamps last for DESC and NULL
-                    # project IDs first for ASC.
-                    heapq.heappush(progress['rows'], (
-                        *patient_priority.priority_key(project_id, latest, archived=bool(archived)), job_id))
-            progress['cursor'] = rows[-1][0]
-        if len(rows) < _CLOUD_SELECTION_PAGE:
+            f"WHERE j.job_id>? AND j.job_id<=? AND j.state='pending' AND j.kind IN ({marks})",
+            (progress['cursor'], bound, *kinds)).fetchall()
+        for job_id, project_id, archived, latest in rows:
+            # SQLite orders NULL timestamps last for DESC and NULL
+            # project IDs first for ASC.
+            heapq.heappush(progress['rows'], (
+                *patient_priority.priority_key(project_id, latest, archived=bool(archived)), job_id))
+        progress['cursor'] = bound
+        if bound >= progress['upper']:
             progress['collecting'] = False
     check_deadline()
     selected, snapshots = [], {}
@@ -771,6 +793,10 @@ def _cloud_selection_page(db, kinds, max_jobs, settings, semantic_scope, exclude
             progress['yield_early'] = True
         raise
     progress['yield_early'] = False
+    if not progress['rows'] and progress['scanned'] is None:
+        # the TTL starts once every collected row has been ranked for
+        # eligibility, so a long traversal is never discarded half-way
+        progress['scanned'] = time.monotonic()
     if not progress['rows'] and not pending and binding is not None:
         _cloud_selection_progress = None
     semantic = [r for r in selected if r['kind'] == JOB_KIND]

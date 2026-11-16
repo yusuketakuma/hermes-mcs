@@ -42,7 +42,7 @@ def test_unreadable_summary_config_preserves_private_scope_and_defaults(tmp_path
 
     monkeypatch.setattr(summary, "_modules", lambda: (View, Render))
     assert summary.answer(snapshot, "all", allowed=[1], now=snapshot.stat().st_mtime) == {
-        "text": "合成サマリー", "parts": {"footer": []}}
+        "text": "合成サマリー", "parts": {"footer": []}, "project_ids": []}
     assert seen == [({}, "all", [1])]
 
 

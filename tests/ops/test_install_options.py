@@ -356,6 +356,8 @@ def test_fresh_bootstrap_publishes_checked_split_before_services(tmp_path, monke
         assert state['mode'] == 'split' and state['common'] == {'runtime_mode': 'standalone'}
         assert state['providers'] == {name: {} for name in provider_settings.PROVIDERS}
         assert not (data / '.provider-settings-pending.json').exists()
+        import external_transfer
+        assert external_transfer.status(root)['state'] == 'pending'
     finally:
         os.close(fd)
 

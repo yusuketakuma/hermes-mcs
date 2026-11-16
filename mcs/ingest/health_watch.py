@@ -132,8 +132,10 @@ def _optional_blocks(h: dict) -> dict:
     if (isinstance(last, dict) and _is_code(last.get("reason"))
             and finite_number(last.get("detected_at"))):
         interrupt = {"reason": last["reason"], "detected_at": last["detected_at"]}
+    from collection_diagnostics import valid_stop
+    stop = valid_stop(run.get("stop")) if h.get("run_status") in ("failed", "session_expired") else None
     return {"notify_wait": wait, "backup_local": backup_local,
-            "last_interrupt": interrupt}
+            "last_interrupt": interrupt, "run_stop": stop}
 
 
 
@@ -1104,6 +1106,7 @@ _CLOUD_REASON_JA = {
 
 
 def _reason_rows(report: dict, reasons) -> list[str]:
+    from collection_diagnostics import stop_explanation
     if reasons is None:
         return ["・理由を特定できません（状態の記録に理由がありません）",
                 f"　→ {_CHECK} で確認"]
@@ -1203,6 +1206,15 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                         action += "。"
                     action += note
         guide = None
+        stop = (stop_explanation(report.get("run_stop"))
+                if base in ("run_failed", "session_expired") and not report.get("observations_recorded")
+                else None)
+        if stop is not None:
+            stage, label, what, todo = stop
+            extra += f"（止まった処理: {stage}）"
+            if base == "run_failed":
+                # the stop's own category beats the generic "read the log" step
+                guide = [(label, None, what, todo)]
         if base in ("stage_errors", "collection_incomplete") and not report.get("observations_recorded") \
                 and not (base == 'collection_incomplete' and report.get('semantic_intake_unstored')
                          in ('present', 'unverified')) \
@@ -1224,7 +1236,8 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             # one fixed cause and next step per observed category, most frequent first
             rows.append(f"・{meaning}{extra}")
             for label, n, what, todo in guide:
-                rows += [f"　・{label}（{n}件）: {what}", f"　　→ {todo}"]
+                rows += [f"　・{label}" + (f"（{n}件）" if n is not None else "") + f": {what}",
+                         f"　　→ {todo}"]
             continue
         rows += [f"・{meaning}{extra}", f"　→ {action}"]
     return rows

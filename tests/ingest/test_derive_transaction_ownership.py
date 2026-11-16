@@ -299,7 +299,7 @@ def test_failed_run_does_not_enqueue_or_send_after_recording_leaves_transaction(
         monkeypatch.setattr(notify_flush, "flush", lambda *a, **k: calls.append("send"))
         result = {"errors": []}
         run_check._fail_run(store, SimpleNamespace(no_notify=False), result, 1, "failed",
-                            "synthetic", time.monotonic() + 600, alert="run_failed")
+                            RuntimeError(), "synthetic", time.monotonic() + 600, alert="run_failed")
         assert calls == [] and store.db.in_transaction
         assert result["errors"] == ["synthetic", "run_record_failed: RuntimeError"]
         store.db.rollback()

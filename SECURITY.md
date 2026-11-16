@@ -59,7 +59,8 @@
   対話カードを有効にすると、タスクの期限リマインドも `notify_target` へ
   患者名・タスク内容・担当者名を含むテキストで送る。
   閲覧用 snapshot と `mcs_view` 出力にも PHI が含まれ得るため、閲覧権限と転送先を管理する
-- MCSの私有 `.env` にキーがありmode未指定なら、Jevはassist、選択したAnthropicまたはOpenAIはonで自動使用する。既定の優先順はAnthropic、OpenAIとする。
+- MCSの私有 `.env` にキーがありmode未指定なら、Jevはassist、選択したAnthropicまたはOpenAIはonで自動使用する。
+  ただし新規導入の環境は `external_transfer.json` に施設の確認を記録するまで自動使用しない（[法令・ガイドライン対応](docs/guides/COMPLIANCE.md)）。既定の優先順はAnthropic、OpenAIとする。
   本文・患者文脈には患者名等が含まれ得る。匿名化はしない。明示OFF・対象・低い予算は維持する。
   キーの登録前に送信先・対象と契約を確認する（[設定と保持条件](docs/guides/ANTHROPIC.md)）
 - 公開医薬品情報の照会はローカルTinyFishゲートウェイを使い、そのトークンファイルがない場合だけ
@@ -70,6 +71,9 @@
 - `brain_export.py` は患者名・病名・要約・薬剤等の PHI を含む Markdown を
   ローカル出力する。出力後の知識ストア同期・LLM 利用は別のデータ経路であり、
   エクスポート実行だけではそれらの外部送信を許可したことにならない
+- Slack・Discord・LINE WORKS の `/mcs` 操作は、回答前に操作者・操作・患者ID・結果を
+  ハッシュ連鎖の閲覧記録 `data/access_log/` へ追記する。検索語・本文・患者名は記録しない。
+  記録できない閲覧は回答しない
 - 人承認操作（依頼登録・更新、シグナル却下、閾値変更、更新適用・ロールバック・
   DB 復元同意）は `--confirm-human` + receipt 記録が必須で、依頼・却下・閾値変更は
   `reason` も必須（core の validator が強制）

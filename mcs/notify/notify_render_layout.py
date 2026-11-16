@@ -30,15 +30,20 @@ def _text_cost(parts: dict) -> int:
                len(display_text(parts)))
 
 
-def fit_parts(parts: dict, limit: int = PARTS_TEXT_BUDGET) -> dict:
+def fit_parts(parts: dict, limit: int = PARTS_TEXT_BUDGET, *,
+              retained_lines: dict | None = None) -> dict:
     """Fold list lines (``・`` bullets) of text containers marked
     ``"fold": True`` (one item per line) until the visible text fits
     ``limit``: the longest such list loses its last rows first and ends
     with ``・…他N件``. Unmarked containers — disclosures such as fetch
     gaps, aggregate lines — and the footer are never folded, so a
-    content builder never sizes for a transport."""
+    content builder never sizes for a transport. ``retained_lines`` receives
+    original line indices surviving in each container (generated fold markers
+    have no source line); caller-owned provenance never enters the model."""
     containers = [dict(c) for c in parts["containers"]]
     out = {**parts, "containers": containers}
+    origins = {id(c): list(range(len(c.get("text", "").split("\n"))))
+               for c in containers} if retained_lines is not None else None
 
     def bullets(c):
         return [i for i, ln in enumerate(c["text"].split("\n"))
@@ -56,9 +61,17 @@ def fit_parts(parts: dict, limit: int = PARTS_TEXT_BUDGET) -> dict:
         if marks:  # may sit before a trailing note line
             folded = int(_FOLD_RE.match(lines[marks[-1]]).group(1))
             del lines[marks[-1]]
+            if origins is not None:
+                del origins[id(c)][marks[-1]]
         last = bullets({"text": "\n".join(lines)})[-1]
         lines[last] = f"・…他{folded + 1}件"
+        if origins is not None:
+            origins[id(c)][last] = None
         c["text"] = "\n".join(lines)
+    if retained_lines is not None:
+        retained_lines.clear()
+        retained_lines.update({i: [n for n in origins[id(c)] if n is not None]
+                               for i, c in enumerate(containers)})
     return out
 
 
@@ -83,7 +96,9 @@ def render_text(parts: dict, head: str = "【{}】", lit=str,
             continue
         if parts.get("processing_display_version") in (1, 2, 3) and item.get("provider_scope") == "header":
             import processing_route
-            item = {**item, "text": processing_route.compact_header(item)}
+            item = {**item, "text": processing_route.compact_header(item, processing_route.quiet_header(parts))}
+            if not item["text"]:
+                continue                 # a quiet header without its own prefix
         if item.get("rule") and lines:
             lines.append(SECTION_RULE)
         if kind == "heading":

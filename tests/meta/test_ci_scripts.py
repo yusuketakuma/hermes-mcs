@@ -80,33 +80,93 @@ def test_update_readme_write_fails_without_partial_write(
 
 # ---------- generated blocks moved out of README into docs/ ----------
 
-def test_update_readme_check_flags_stale_dev_doc(monkeypatch, tmp_path):
-    ur = _load("update_readme_dev_check", "scripts/development/update_readme.py")
+def _dev_doc_only(ur, monkeypatch, tmp_path, body="STALE"):
     readme = tmp_path / "README.md"
     readme.write_text("no markers — user doc only\n")
     dev = tmp_path / "DEVELOPMENT.md"
     dev.write_text(
-        "<!-- BEGIN GENERATED:signals -->\nSTALE\n"
+        f"manual\n<!-- BEGIN GENERATED:signals -->\n{body}\n"
         "<!-- END GENERATED:signals -->\n")
     monkeypatch.setattr(ur, "README", readme)
     monkeypatch.setattr(ur, "DEV_DOC", dev)
     monkeypatch.setitem(ur.GENERATORS, "signals", lambda: "FRESH")
+    return dev
+
+
+def test_update_readme_check_leaves_dev_doc_freshness_to_main_sync(monkeypatch, tmp_path):
+    # PRs do not commit DEVELOPMENT.md's tables; main-sync regenerates them on main.
+    ur = _load("update_readme_dev_check", "scripts/development/update_readme.py")
+    _dev_doc_only(ur, monkeypatch, tmp_path)
+    monkeypatch.setattr(sys, "argv", ["update_readme.py", "--check"])
+    assert ur.main() == 0
+    monkeypatch.setattr(sys, "argv", ["update_readme.py", "--check", "--dev-doc"])
+    assert ur.main() == 1
+
+
+def test_update_readme_write_touches_dev_doc_only_with_dev_doc(monkeypatch, tmp_path):
+    ur = _load("update_readme_dev_write", "scripts/development/update_readme.py")
+    dev = _dev_doc_only(ur, monkeypatch, tmp_path)
+    monkeypatch.setattr(sys, "argv", ["update_readme.py"])
+    assert ur.main() == 0
+    assert "STALE" in dev.read_text()
+    monkeypatch.setattr(sys, "argv", ["update_readme.py", "--dev-doc"])
+    assert ur.main() == 0
+    assert "FRESH" in dev.read_text() and dev.read_text().startswith("manual\n")
+
+
+def test_update_readme_check_still_runs_dev_doc_generators(monkeypatch, tmp_path):
+    ur = _load("update_readme_dev_gen", "scripts/development/update_readme.py")
+    _dev_doc_only(ur, monkeypatch, tmp_path)
+    monkeypatch.setitem(ur.GENERATORS, "signals", _boom)
     monkeypatch.setattr(sys, "argv", ["update_readme.py", "--check"])
     assert ur.main() == 1
 
 
-def test_update_readme_write_regenerates_dev_doc(monkeypatch, tmp_path):
-    ur = _load("update_readme_dev_write", "scripts/development/update_readme.py")
-    monkeypatch.setattr(ur, "README", tmp_path / "absent.md")  # skipped
-    dev = tmp_path / "DEVELOPMENT.md"
-    dev.write_text(
-        "<!-- BEGIN GENERATED:signals -->\nSTALE\n"
-        "<!-- END GENERATED:signals -->\n")
-    monkeypatch.setattr(ur, "DEV_DOC", dev)
-    monkeypatch.setitem(ur.GENERATORS, "signals", lambda: "FRESH")
-    monkeypatch.setattr(sys, "argv", ["update_readme.py"])
-    assert ur.main() == 0
-    assert "FRESH" in dev.read_text()
+def _git(repo, *args):
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t",
+                    "-c", "user.email=t@example.invalid", *args],
+                   check=True, capture_output=True, timeout=30)
+
+
+@pytest.mark.parametrize("edit, expected", [
+    ("manual line changed", 0),       # hand-written text stays reviewable in PRs
+    ("generated block changed", 1),   # the conflict source: left to main-sync
+])
+def test_update_readme_base_rejects_pr_edits_to_dev_doc_tables(
+        monkeypatch, tmp_path, capsys, edit, expected):
+    ur = _load("update_readme_base", "scripts/development/update_readme.py")
+    dev = _dev_doc_only(ur, monkeypatch, tmp_path, body="FROM MAIN")
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    monkeypatch.setattr(ur, "ROOT", tmp_path)
+    text = dev.read_text()
+    dev.write_text(text.replace("manual", "edited") if edit.startswith("manual")
+                   else text.replace("FROM MAIN", "FROM PR"))
+    monkeypatch.setattr(sys, "argv", ["update_readme.py", "--check", "--base", "HEAD"])
+    assert ur.main() == expected
+    if expected:
+        err = capsys.readouterr().err
+        assert "signals" in err and "git checkout HEAD -- docs/development/DEVELOPMENT.md" in err
+
+
+def test_update_readme_unknown_base_fails_closed(monkeypatch, tmp_path, capsys):
+    ur = _load("update_readme_base_bad", "scripts/development/update_readme.py")
+    _dev_doc_only(ur, monkeypatch, tmp_path)
+    _git(tmp_path, "init", "-q")
+    monkeypatch.setattr(ur, "ROOT", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["update_readme.py", "--check", "--base", "nosuch"])
+    assert ur.main() == 1
+    assert "base revision not found" in capsys.readouterr().err
+
+
+def test_update_readme_base_allows_a_new_block():
+    ur = _load("update_readme_new_block", "scripts/development/update_readme.py")
+    base = "<!-- BEGIN GENERATED:signals -->\nold rows\n<!-- END GENERATED:signals -->\n"
+    pr = base + "<!-- BEGIN GENERATED:stats -->\nnew rows\n<!-- END GENERATED:stats -->\n"
+    assert ur.touched_dev_blocks(pr, base) == []
+    assert ur.touched_dev_blocks(pr, None) == []
+    assert ur.touched_dev_blocks(pr.replace("old rows", "pr rows"), base) == ["signals"]
 
 
 # ---------- FIX-G1: sqlite connect must carry mode=ro on ITS line ------

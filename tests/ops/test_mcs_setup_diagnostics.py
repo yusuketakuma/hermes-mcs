@@ -31,9 +31,9 @@ def test_check_admission_probe_follows_config_then_env(monkeypatch, configured, 
         monkeypatch.delenv("MCS_LLM_ADMISSION", raising=False)
     else:
         monkeypatch.setenv("MCS_LLM_ADMISSION", env)
-    monkeypatch.setattr(local_llm, "_broker", lambda: SimpleNamespace(routes={}, is_open=lambda: True))
     errors, _ = mcs_setup.check_environment(cfg)
-    assert any("mcs.semantic, mcs.extract" in e and "local_llm.admission" in e for e in errors) is probed
+    # O6: no production caller reopens the admission epoch, so an enabled boundary is a setup error.
+    assert any("受付制御" in e and "local_llm.admission" in e for e in errors) is probed
 
 
 def test_check_explicit_jev_mode_without_private_key_is_a_warning(monkeypatch):
