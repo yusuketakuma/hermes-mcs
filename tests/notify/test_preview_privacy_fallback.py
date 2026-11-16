@@ -87,3 +87,8 @@ def test_attachment_caption_follows_preview_privacy(led, privacy):
     assert '合成 花子' not in captions[7] and '合成職員' not in captions[7]
     if privacy == 'minimal':
         assert captions[7] == '📎 MCS: 添付ファイル'
+    failed = notify_parts._attachment_captions(
+        led.db, {'transport': 'lineworks', 'project_id': 1},
+        [{'attachment_id': 7, 'name': '合成.pdf', 'unavailable': True}],
+        {'notify': {'preview_privacy': privacy}})
+    assert '取得失敗' in failed[7]

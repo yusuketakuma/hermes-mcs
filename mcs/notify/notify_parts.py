@@ -451,8 +451,9 @@ def _attachment_captions(db, card, attachments, cfg=None) -> dict:
         r = where.get(a["attachment_id"])
         if privacy == "minimal":
             # the caption rides the push preview; minimal names neither the
-            # patient, the sender nor the file
-            out[a["attachment_id"]] = "📎 MCS: 添付ファイル"
+            # patient, the sender nor the file, but still says a fetch failed
+            out[a["attachment_id"]] = "📎 MCS: 添付ファイル" + (
+                " — 取得失敗" if a.get("unavailable") else "")
             continue
         if a.get("unavailable"):
             tail = "取得失敗"
