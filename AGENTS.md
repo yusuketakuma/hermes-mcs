@@ -48,7 +48,7 @@ MCS の医療・介護チャットを収集・解析するローカルシステ�
 ```bash
 scripts/run_tests.sh                     # tests/・integration/ 一式（一時HOME・認証環境の隔離）。絞るときも scripts/run_tests.sh tests/<領域>/
 ruff check mcs/ tests/ hermes_plugin/ adapters/ lineworks_adapter/ mcs_standalone/ integration/ ci/ scripts/ deployment/ conftest.py  # CIと同じ範囲
-python3 scripts/development/update_readme.py [--check]   # 生成ブロックの再生成 / drift 検査
+python3 scripts/development/update_readme.py [--check]   # README 生成ブロックの再生成 / drift 検査（DEVELOPMENT.md は main-sync）
 python3 ci/gates.py
 python3 ci/mine_gates.py --check
 ```
@@ -84,8 +84,9 @@ python3 ci/mine_gates.py --check
 
 ## 生成物・変更記録・リリース
 
-- `mcs/**/*.py` の追加、docstring の変更、検知器・統計・サブコマンドの追加では `update_readme.py` を実行する。生成表は `docs/development/DEVELOPMENT.md`、
-  `README.md` は `GENERATED:release` だけ。生成部分は手編集しない。docstring 先頭文は公開されるので1文要約にする。
+- `README.md` の `GENERATED:release` は `update_readme.py` で作り直して PR に含める。`docs/development/DEVELOPMENT.md` の生成表は PR に含めず
+  （他の PR がすべて衝突するため）、main への合流後に `main-sync.yml` が作り直す。PR の CI は生成表を merge base のまま残しているかを検査する。
+  生成部分は手編集しない。`mcs/**/*.py` の docstring 先頭文は公開されるので1文要約にする。
 - Slack 画面例は完全合成の説明図。`docs/screenshots/slack-gallery/README.md` のソース対応を確認し、画面変更時は SVG・PNG を一緒に再生成して
   `python3 scripts/development/generate_slack_gallery.py --check` で検証する。
 - 実行時の挙動を追加・変更・修正・削除したら、同じ作業内で `changes/<識別子>.json` を日本語で作る（形式 `changes/README.md`）。

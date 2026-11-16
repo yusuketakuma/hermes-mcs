@@ -50,4 +50,4 @@
 
 `development/` は現行の開発手順、`releases/v版番号/` はその版の記録を置く場所です。旧 `development/acceptance/` と `development/plans/` の文書は、ファイル名を保って版別のフォルダへ移しました。旧URLは当時のタグで参照でき、移動先は[リリース記録の索引](releases/README.md)から探せます。
 
-開発リファレンスの生成表は `scripts/development/update_readme.py`、現行READMEの見直し記録は `development/readme-review.json` で管理します。生成表は手で編集しません。
+開発リファレンスの生成表は `scripts/development/update_readme.py` が作り、main への合流後に `main-sync` ワークフローが更新します（PR には含めません）。現行READMEの見直し記録は `development/readme-review.json` で管理します。生成表は手で編集しません。

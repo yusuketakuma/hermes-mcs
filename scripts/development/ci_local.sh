@@ -199,7 +199,7 @@ job_linux_tests() {
 job_lint_test() {
     make lint
     python3 scripts/development/check_drug_master_bundle.py
-    # PR-only step regenerates and diffs; --check proves the same without writing
+    # the PR-only step also compares DEVELOPMENT.md's tables with the merge base
     python3 scripts/development/update_readme.py --check
     # Only evidence from this invocation's preceding Linux job counts.
     SHARDS_RESULT=$(awk -F '\t' '$1 == "linux-tests" && $2 == "pass" {print "success"}' "$summary")

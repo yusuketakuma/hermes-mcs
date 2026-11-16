@@ -76,7 +76,7 @@ def test_single_enabled_doc_and_absent_sections_remain_supported(monkeypatch, tm
     monkeypatch.setattr(module, "README", tmp_path / "absent.md")
     monkeypatch.setattr(module, "DEV_DOC", dev)
     monkeypatch.setitem(module.GENERATORS, "signals", lambda: "fresh")
-    monkeypatch.setattr(sys, "argv", ["update_readme.py"])
+    monkeypatch.setattr(sys, "argv", ["update_readme.py", "--dev-doc"])
     assert module.main() == 0
     assert "fresh" in dev.read_text() and dev.read_text().startswith("manual\n")
 
