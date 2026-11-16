@@ -1,6 +1,7 @@
 """Same-save invalidation batches preserve real projection state and atomic intake."""
 from dataclasses import replace
 import json
+import sqlite3
 
 import pytest
 
@@ -10,6 +11,50 @@ from test_semantic_ingest_revisions import _message, _patient
 
 KINDS = ("canonical_projection", "semantic_facts_v4")
 ROOTS = (1, 11)
+_INVALIDATION_SQL_PREFIX = "UPDATE ARTIFACTS SET META=JSON_SET(META,'$.INVALIDATED'"
+
+
+# Trace callbacks can repeat the same statement for each triggered row.
+class _CountingCursor(sqlite3.Cursor):
+    def execute(self, sql, parameters=()):
+        self.connection.record_invalidation(sql)
+        return super().execute(sql, parameters)
+
+    def executemany(self, sql, parameters):
+        def counted():
+            for item in parameters:
+                self.connection.record_invalidation(sql)
+                yield item
+
+        return super().executemany(sql, counted())
+
+    def executescript(self, sql_script):
+        if self.connection.invalidation_count is not None:
+            raise AssertionError("cannot count invalidations in executescript")
+        return super().executescript(sql_script)
+
+
+class _CountingConnection(sqlite3.Connection):
+    invalidation_count = None
+
+    def record_invalidation(self, sql):
+        if (self.invalidation_count is not None
+                and " ".join(sql.upper().split()).startswith(_INVALIDATION_SQL_PREFIX)):
+            self.invalidation_count += 1
+
+    def cursor(self, factory=_CountingCursor):
+        if factory is not _CountingCursor:
+            raise AssertionError("cannot count invalidations in an untracked cursor")
+        return super().cursor(factory)
+
+    def execute(self, sql, parameters=()):
+        return self.cursor().execute(sql, parameters)
+
+    def executemany(self, sql, parameters):
+        return self.cursor().executemany(sql, parameters)
+
+    def executescript(self, sql_script):
+        return self.cursor().executescript(sql_script)
 
 
 def _projections(store, messages):
@@ -24,8 +69,12 @@ def _projections(store, messages):
 
 
 @pytest.fixture
-def world(tmp_path):
-    store = make_ledger(tmp_path)
+def world(tmp_path, monkeypatch):
+    connect = sqlite3.connect
+    with monkeypatch.context() as patch:
+        patch.setattr(sqlite3, "connect",
+                      lambda *a, **kw: connect(*a, factory=_CountingConnection, **kw))
+        store = make_ledger(tmp_path)
     try:
         store.ensure_patient(1)
         store.ensure_patient(2)
@@ -68,41 +117,50 @@ def _invalidated(store, ids):
             for aid in ids]
 
 
-class _InvalidationCountingDB:
-    """Count executed invalidation UPDATEs per call, not per trace report.
-
-    sqlite3's trace callback re-reports the outer statement every time a row
-    trigger on ``artifacts`` runs, so it cannot count statement executions.
-    """
-    PREFIX = "UPDATE ARTIFACTS SET META=JSON_SET(META,'$.INVALIDATED'"
-
-    def __init__(self, db):
-        self._db = db
-        self.count = 0
-
-    def execute(self, sql, *args, **kwargs):
-        self.count += " ".join(sql.upper().split()).startswith(self.PREFIX)
-        return self._db.execute(sql, *args, **kwargs)
-
-    def __enter__(self):
-        return self._db.__enter__()
-
-    def __exit__(self, *exc):
-        return self._db.__exit__(*exc)
-
-    def __getattr__(self, name):
-        return getattr(self._db, name)
-
-
 def _save_invalidation_count(store, path, messages, semantic):
-    db = store.db
-    counter = store.db = _InvalidationCountingDB(db)
+    assert store.db.invalidation_count is None
+    store.db.invalidation_count = 0
     try:
         assert _save(store, path, messages, semantic) == []
+        # Count the complete save, including semantic seeding after changed IDs.
+        return store.db.invalidation_count
     finally:
-        store.db = db
-    # Count the complete save, including semantic seeding after changed IDs.
-    return counter.count
+        store.db.invalidation_count = None
+
+
+@pytest.mark.parametrize("has_trigger", [False, True])
+@pytest.mark.parametrize("method", ["connection", "cursor", "connection_many", "cursor_many"])
+def test_invalidation_counter_counts_repeated_executions(has_trigger, method):
+    db = sqlite3.connect(":memory:", factory=_CountingConnection)
+    try:
+        db.execute("CREATE TABLE artifacts(meta TEXT)")
+        db.executemany("INSERT INTO artifacts(meta) VALUES (?)", [("{}",)] * 3)
+        if has_trigger:
+            db.execute("CREATE TRIGGER update_watch AFTER UPDATE ON artifacts BEGIN SELECT 1; END")
+        sql = "UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true'))"
+        executor = db.cursor() if method.startswith("cursor") else db
+        db.invalidation_count = 0
+        for total, count in ((2, 2), (3, 1)):
+            if method.endswith("many"):
+                executor.executemany(sql, [()] * count)
+            else:
+                for _ in range(count):
+                    executor.execute(sql)
+            assert db.invalidation_count == total
+    finally:
+        db.close()
+
+
+def test_invalidation_counter_rejects_untracked_execution():
+    db = sqlite3.connect(":memory:", factory=_CountingConnection)
+    try:
+        db.invalidation_count = 0
+        with pytest.raises(AssertionError, match="executescript"):
+            db.executescript("SELECT 1;")
+        with pytest.raises(AssertionError, match="untracked cursor"):
+            db.cursor(factory=sqlite3.Cursor)
+    finally:
+        db.close()
 
 
 def _saved_state(store):

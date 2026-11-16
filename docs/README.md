@@ -32,6 +32,7 @@
 | 推論版と全件再処理の条件を確認する | [推論エンジンv1.0のルールと再処理契約](specs/inference-engine-v1.md)（開発中・受入前） |
 | 推論の呼出し・保存・資源所有を調べる | [推論経路と処理結果の所有者](development/LLM_RUNTIME.md) · [レーンと起動構成](../deployment/launchagents/README.md#3レーン構成) |
 | 抽出・意味解析を評価する | [意味解析の評価](specs/semantic-evaluation.md) · [封印候補の評価と昇格](specs/SEALED_CANDIDATE_EVALUATION.md) · [段階導入の記録](specs/semantic-facts-v2-rollout.md) · [評価基準と資産](../evaluation/README.md) |
+| GitHub で計画・ラベル・PR を管理する | [GitHub の使い方](development/GITHUB_WORKFLOW.md) |
 | リリースやREADMEを更新する | [変更記録の書き方](../changes/README.md) · [リリースノート規則](development/RELEASE_NOTES.md) · [README運用](development/README_MAINTENANCE.md) |
 | 実機へ配置する資産を調べる | [配備資産](../deployment/README.md) · [接続アダプター](../adapters/README.md) |
 | 今後の計画を確認する | [1.1.0の実装計画](roadmap/v1.1.0-public-launch-plan.md) · [ロードマップ](ROADMAP.md) · [分野ごとの詳細計画](roadmap/) |

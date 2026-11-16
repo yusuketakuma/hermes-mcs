@@ -68,7 +68,7 @@ def real_cloud(runtime, cloud, monkeypatch):
         monkeypatch.setattr(module, 'time', fake_time)
     posts = []
 
-    def request(_client, method, body, timeout, *, deadline):
+    def request(_client, method, body, timeout, *, deadline, max_bytes):
         assert method == 'POST' and timeout > 0 and deadline > clock.mono
         assert not ledger.db.in_transaction
         assert len(ledger.artifacts('cloud_usage_reserve')) == len(posts) + 1

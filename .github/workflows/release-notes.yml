@@ -27,7 +27,8 @@ permissions:
 concurrency:
   # PR checks have separate queues; release writes remain serialized.
   group: japanese-release-notes-${{ github.event_name == 'pull_request' && github.ref || 'publish' }}
-  cancel-in-progress: false
+  # Superseded PR checks are disposable; never interrupt release writes.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:

@@ -176,7 +176,6 @@ class OpenAIClient(CloudClient):
     MODEL = MODEL
     # Class defaults keep the original contract for subclasses that replace __init__.
     model = MODEL
-    OUTPUT_LIMIT_FIELD = "max_output_tokens"
     effort = "low"
 
     def __init__(self, api_key, *, model=MODEL, effort="low", **kwargs):
@@ -187,10 +186,12 @@ class OpenAIClient(CloudClient):
         self.model = model
         self.effort = effort
 
-    def request(self, method, body, timeout, *, deadline=None):
+    def request(self, method, body, timeout, *, deadline=None,
+                max_bytes=bounded_http.MAX_RESPONSE_BYTES):
         return bounded_http.bounded_http_request(
             ENDPOINT, method, body, timeout, api_key=self.api_key,
-            deadline=deadline, allowed_endpoints=(ENDPOINT,), **self.response_limit_args(body), auth="bearer")
+            deadline=deadline, allowed_endpoints=(ENDPOINT,), auth="bearer",
+            max_bytes=max_bytes)
 
     def response_error(self, status, raw):
         if status != 429:

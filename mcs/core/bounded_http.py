@@ -7,9 +7,8 @@ loopback llama.cpp server (local_llm), the public drug-information
 lookups (drug_info) and the paid Anthropic and OpenAI routes
 (anthropic_client, openai_client). Each request runs in a fresh
 interpreter: the JSON body and credential travel over stdin (never
-argv), the worker follows no proxy and no redirect, reads at most one
-byte past the response limit (``MAX_RESPONSE_BYTES`` unless the caller
-raises it with ``max_response_bytes``), and the parent enforces an absolute
+argv), the worker follows no proxy and no redirect, reads at most
+``MAX_RESPONSE_BYTES + 1`` bytes (unless the caller raises the bound), and the parent enforces an absolute
 deadline with kill/reap so a wedged socket can never outlive the
 caller's budget.
 
@@ -44,8 +43,9 @@ from mcs_util import NoRedirect, no_proxy_opener
 import worker_process
 
 MAX_RESPONSE_BYTES = 262144
-# Hard bound on a caller-raised limit; the default stays MAX_RESPONSE_BYTES.
-MAX_RESPONSE_BYTES_CEILING = 4 * 1024 * 1024
+# A caller may raise its own read bound up to this ceiling (cloud answers size
+# theirs from the request's output limit); every other caller keeps the default.
+MAX_RESPONSE_BYTES_CEILING = 8 * 1024 * 1024
 
 ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages"
 _HTTP_WORKER_ARG = "--http-worker"
@@ -92,19 +92,6 @@ def _worker_endpoint_allowed(endpoint: str, allowed) -> bool:
     return endpoint in allowed or loopback_endpoint_allowed(endpoint)
 
 
-def _response_limit(value) -> int:
-    """The response byte limit of one request: the default, or a caller's bounded raise.
-
-    Parent and worker share this check, so a limit can never be lowered below the
-    default or raised past ``MAX_RESPONSE_BYTES_CEILING``.
-    """
-    if value is None:
-        return MAX_RESPONSE_BYTES
-    if type(value) is not int or not MAX_RESPONSE_BYTES <= value <= MAX_RESPONSE_BYTES_CEILING:
-        raise ValueError("response_limit_invalid")
-    return value
-
-
 def _worker_headers(headers) -> dict:
     return {str(key): str(value) for key, value in headers.items()
             if str(key).lower() in _WORKER_HEADER_NAMES}
@@ -131,8 +118,9 @@ def _http_worker_main() -> int:
         public_mcp = envelope.get("public_mcp", False)
         auth = envelope.get("auth", "bearer")
         reservation_day = envelope.get("reservation_day")
-        response_limit = _response_limit(envelope.get("max_response_bytes"))
+        max_bytes = envelope.get("max_bytes", MAX_RESPONSE_BYTES)
         if (not isinstance(endpoint, str)
+                or not _valid_max_bytes(max_bytes)
                 or not isinstance(allowed, list)
                 or not all(isinstance(e, str) for e in allowed)
                 or not _worker_endpoint_allowed(endpoint, allowed)
@@ -177,7 +165,7 @@ def _http_worker_main() -> int:
         except urllib.error.HTTPError as error:
             response = error
         try:
-            payload = response.read(response_limit + 1)
+            payload = response.read(max_bytes + 1)
             result = {
                 "ok": True,
                 "status": int(getattr(response, "status",
@@ -221,6 +209,10 @@ def _jst_day(timestamp):
     return math.floor((timestamp + 9 * 3600) / 86400) * 86400 - 9 * 3600
 
 
+def _valid_max_bytes(value):
+    return type(value) is int and MAX_RESPONSE_BYTES <= value <= MAX_RESPONSE_BYTES_CEILING
+
+
 def _valid_reservation_day(day):
     return type(day) is int and abs(day) <= 2**53 and (day + 9 * 3600) % 86400 == 0
 
@@ -229,7 +221,7 @@ def bounded_http_request(endpoint: str, method: str, body,
                          timeout: float, api_key: str | None = None,
                          deadline: float | None = None,
                          allowed_endpoints=(), _public_mcp=False, auth="bearer",
-                         reservation_day=None, max_response_bytes=None):
+                         reservation_day=None, max_bytes=MAX_RESPONSE_BYTES):
     """Make one bounded request through a short-lived, reaped worker.
 
     An ``api_key`` request must target ``allowed_endpoints`` — the
@@ -237,16 +229,16 @@ def bounded_http_request(endpoint: str, method: str, body,
     ``api_key=None`` request is restricted to an unauthenticated
     loopback URL unless explicit public-MCP mode is selected. Request bodies
     and credentials are sent through stdin only; the worker follows neither proxies nor redirects and returns
-    at most one byte past the response limit so callers can reject an
-    oversized response without retaining an unbounded body. The limit is
-    ``MAX_RESPONSE_BYTES`` unless ``max_response_bytes`` raises it (never
-    lowers it) up to ``MAX_RESPONSE_BYTES_CEILING``.
+    at most ``max_bytes + 1`` bytes (``MAX_RESPONSE_BYTES`` unless the caller
+    raises it, up to ``MAX_RESPONSE_BYTES_CEILING``) so callers can reject an
+    oversized response without retaining an unbounded body.
     """
     if not isinstance(endpoint, str) or method not in ("GET", "POST"):
         raise ValueError("request_invalid")
     if reservation_day is not None and not _valid_reservation_day(reservation_day):
         raise ValueError("reservation_day_invalid")
-    response_limit = _response_limit(max_response_bytes)
+    if not _valid_max_bytes(max_bytes):
+        raise ValueError("max_bytes_invalid")
     allowed = {e for e in allowed_endpoints if isinstance(e, str)}
     if (auth not in ("bearer", "anthropic")
             or (auth == "anthropic" and (endpoint != ANTHROPIC_ENDPOINT
@@ -287,9 +279,8 @@ def bounded_http_request(endpoint: str, method: str, body,
         "public_mcp": _public_mcp,
         "auth": auth,
         "reservation_day": reservation_day,
+        "max_bytes": max_bytes,
     }
-    if max_response_bytes is not None:   # the default request keeps its unchanged envelope
-        envelope["max_response_bytes"] = response_limit
     payload = json.dumps(envelope, ensure_ascii=False,
                          allow_nan=False).encode("utf-8")
     command = [sys.executable, os.path.abspath(__file__), _HTTP_WORKER_ARG]
@@ -337,7 +328,7 @@ def bounded_http_request(endpoint: str, method: str, body,
     except (KeyError, TypeError, ValueError) as error:
         raise OSError("http worker response invalid") from error
     if (status < 100 or status > 599 or not isinstance(headers, dict)
-            or len(raw) > response_limit + 1):
+            or len(raw) > max_bytes + 1):
         raise OSError("http worker response invalid")
     return status, headers, raw
 

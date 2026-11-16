@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "クラウド課金の監視を入れたあとも、保留した意味解析を解除できるようにする",
+  "summary": "クラウド課金の記録を見張る仕組み（cloud_usage_guard）を入れた台帳では、保留中の意味解析の解除（semantic release）が毎回「書込みトリガーを確認できない」として止まっていました。見張り用のトリガーと表が決められた形のままであることを確かめたうえで、解除を進めます。形が違う・余分な索引がある・見張りの状態を読めないときは、これまでどおり解除しません。",
+  "upgrade": "追加操作は不要です。更新後、止まっていた保留の解除は次の実行から進みます。",
+  "details": [
+    "解除前の台帳検査で、cloud_usage_guard の4つのトリガーと表の定義を、作成時と同じ定義と完全一致で照合する。",
+    "通知文の組み立てを台帳なしで呼んだ場合（下見）は、復旧済みかを確かめられないため、運用通知を抑止せずに文面だけを作る。実際の送信経路は従来どおり台帳で復旧を確かめる。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_intake_hold.py",
+    "mcs/core/ledger_schema.py",
+    "mcs/notify/notify_flush.py",
+    "tests/semantic/test_semantic_intake_release.py"
+  ]
+}

@@ -29,20 +29,15 @@ def _spec(part, *, update=False):
             "parts": {"post_source_id": 202, "manifest": [part]}}
 
 
-NEAR_BUDGET_WIRE = delivery.BODY_WIRE_MAX - 2
-
-
-def _near_budget_text(unit):
-    """Return text whose escaped UTF-8 wire size is exactly NEAR_BUDGET_WIRE."""
-    width = len(escape(unit, quote=False).encode("utf-8"))
-    count = NEAR_BUDGET_WIRE // width - 1
-    return unit * count + "a" * (NEAR_BUDGET_WIRE - count * width)
-
-
 @pytest.mark.parametrize("mode", ["create", "edit", "legacy"])
-@pytest.mark.parametrize("unit", ["あ", "&", "😀"])
-def test_near_budget_body_preserves_wire_text_for_post_and_updates(world, mode, unit):
-    text = _near_budget_text(unit)
+@pytest.mark.parametrize(("text", "wire_bytes"), [
+    ("あ" * 1166 + "a", 3499), ("あ" * 1166 + "ab", 3500), ("あ" * 1166 + "abc", 3501),
+    ("&" * 699 + "aaaa", 3499), ("&" * 700, 3500), ("&" * 700 + "a", 3501),
+    ("😀" * 874 + "abc", 3499), ("😀" * 875, 3500), ("😀" * 875 + "a", 3501),
+])
+def test_body_wire_limit_for_post_and_updates(world, mode, text, wire_bytes):
+    assert delivery.BODY_WIRE_MAX == 3500
+    assert len(escape(text, quote=False).encode("utf-8")) == wire_bytes
     prior = "1790000000.000020"
     part = {"kind": "body_part", "name": "m:202#1"}
     spec = _spec(part, update=mode != "create")
@@ -56,13 +51,18 @@ def test_near_budget_body_preserves_wire_text_for_post_and_updates(world, mode, 
     context = {"thread_id": ROOT_TS, "consumed": set(), "history": [
         {"ts": prior, "thread_ts": ROOT_TS, "bot_id": world.client.bot_id, "text": "old"}]}
     out = asyncio.run(world.worker._body_part(spec, text, context, part))
-    assert out["result"] == "delivered"
     writes = [(op, kw) for op, kw in world.client.calls if op in ("create", "update")]
+    if wire_bytes > delivery.BODY_WIRE_MAX:
+        assert out == {"result": "not_sent", "error_code": "body_part_wire_too_long"}
+        assert writes == [] and context["consumed"] == set()
+        return
+    assert out["result"] == "delivered"
+    assert len(writes) == 1
     op, payload = writes[0]
-    assert len(writes) == 1 and op == ("create" if mode == "create" else "update")
+    assert op == ("create" if mode == "create" else "update")
     assert "blocks" not in payload
     assert payload["text"] == escape(text, quote=False)
-    assert len(payload["text"].encode("utf-8")) == NEAR_BUDGET_WIRE
+    assert len(payload["text"].encode("utf-8")) == wire_bytes
     assert json.loads(json.dumps(payload))["text"] == payload["text"]
 
 
@@ -80,12 +80,15 @@ def test_under_budget_failure_is_never_split_or_resent(world, failure):
 
     world.client.chat_postMessage = rejected
     part = {"kind": "body_part", "name": "m:202#1"}
-    out = asyncio.run(world.worker._body_part(_spec(part), _near_budget_text("あ"),
+    text = "あ" * 1165 + "abc"
+    out = asyncio.run(world.worker._body_part(_spec(part), text,
         {"thread_id": ROOT_TS, "history": None, "consumed": set()}, part))
     assert out == {"result": "not_sent" if failure == "msg_too_long" else "unknown",
                    "error_code": "msg_too_long" if failure == "msg_too_long" else "timeouterror"}
     assert len(attempts) == 1
-    assert len(attempts[0]["text"].encode("utf-8")) == NEAR_BUDGET_WIRE
+    assert attempts[0]["text"] == escape(text, quote=False)
+    assert len(attempts[0]["text"].encode("utf-8")) == delivery.BODY_WIRE_MAX - 2 == 3498
+    assert not [op for op, _ in world.client.calls if op in ("create", "update")]
 
 
 def _file_part(size=10):

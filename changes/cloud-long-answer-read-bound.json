@@ -1,0 +1,23 @@
+{
+  "category": "fixed",
+  "title": "長いクラウド回答でクラウド送信が全体に止まる問題を修正",
+  "summary": "外部AIの回答が256KiBを超えても、その送信の出力上限から決めた大きさまで読み切り、実際の使用量で精算します。上限を超える回答はその単位だけを予約額のまま保留し、ほかの送信は止めません。これまでは使用量が読めず料金未確認として扱われ、人が再開するまで全てのクラウド送信が止まっていました。",
+  "upgrade": "更新するだけで有効になり、追加操作は不要です。Hermes経由の導入ではgatewayの再起動後に反映されます。設定項目と既定値は変わりません。対象はAnthropicとOpenAIへの送信だけで、ローカルLLM・Jev・薬剤情報の取得は従来の256KiBのままです。",
+  "details": [
+    "bounded_http_request に読取り上限 max_bytes を追加しました。既定は従来の256KiBで、呼出し元が8MiBまで引き上げられます。",
+    "CloudClient は送信ごとに 256KiB + 出力上限×32バイト（8MiBで頭打ち）を読取り上限にします。この換算は仮定で、提供元の実測値ではありません。",
+    "上限を超えた200応答は利用量を読めないため、種別 response_too_large として予約した最大額で計上し、未確定のまま保持します。同じ要求の再送とローカルでの代替はしません。全体の停止は起こしません。",
+    "応答は読めたが回答本文だけが256KiBを超えた場合は、検証できた実際の利用量で計上し、回答は保存しません。この場合も、入力が変わるまで同じ要求は再送もローカルでの代替もしません（未確定としては保持しません）。保存する回答本文の上限は変えていません。",
+    "利用量を確認できないそれ以外の200応答（JSONでない、形式が違うなど）は、従来どおり料金未確認として全クラウド送信を止めます。",
+    "cloud-llm log に種別 response_too_large が出るようになります。"
+  ],
+  "refs": [
+    "mcs/core/bounded_http.py",
+    "mcs/llm/transport/cloud_client.py",
+    "mcs/llm/providers/anthropic_client.py",
+    "mcs/llm/providers/openai_client.py",
+    "mcs/llm/cloud_policy.py",
+    "mcs/llm/cloud_inference.py",
+    "mcs/ops/cloud_cli.py"
+  ]
+}

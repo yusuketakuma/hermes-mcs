@@ -32,11 +32,11 @@ def test_unknown_outcome_is_never_sent_again(runtime, real_cloud, monkeypatch): 
     answered = anthropic_client.AnthropicClient.request
     bodies = []
 
-    def request(client, method, body, timeout, *, deadline):
+    def request(client, method, body, timeout, **kwargs):
         bodies.append(json.dumps(body["messages"], sort_keys=True, ensure_ascii=False))
         if len(bodies) == 1:
             raise OSError("synthetic connection reset after the request may have left")
-        return answered(client, method, body, timeout, deadline=deadline)
+        return answered(client, method, body, timeout, **kwargs)
 
     monkeypatch.setattr(anthropic_client.AnthropicClient, "request", request)
     _passes(runtime, cfg, 10)

@@ -1,4 +1,4 @@
-"""Synthetic per-profile attempt caps and the cloud path's own response-size limit."""
+"""Synthetic per-profile attempt caps and the cloud path's own response-size limit (read whole up to its output bound)."""
 from contextlib import closing
 from decimal import Decimal
 import json
@@ -90,28 +90,53 @@ def test_a_timeout_after_sending_is_recorded_once_and_never_sent_again(provider)
     assert results[0]["usage"] is None
 
 
-def test_the_response_limit_follows_the_output_bound_and_never_drops_below_the_default():
-    default = bounded_http.MAX_RESPONSE_BYTES
-    assert cloud_client.response_limit(1) == cloud_client.response_limit(8192) == default
-    assert cloud_client.response_limit(16384) == 65536 + 16384 * 16 > default
-    assert cloud_client.response_limit(LARGE_TOKENS) == 65536 + LARGE_TOKENS * 16
+def _long_reply(size):
+    # A long signed thinking block pushes the body past the default 256 KiB read bound.
+    return json.dumps({"model": anthropic_client.MODEL, "stop_reason": "end_turn",
+                       "content": [{"type": "thinking", "thinking": "合" * size},
+                                   {"type": "text", "text": '{"synthetic":true}'}],
+                       "usage": {"input_tokens": 10, "output_tokens": 9000}},
+                      ensure_ascii=False).encode()
+
+
+def test_answer_over_the_default_bound_settles_from_its_usage():
+    raw = _long_reply(120_000)
+    assert bounded_http.MAX_RESPONSE_BYTES < len(raw) <= cloud_client.response_limit(16384)
+    results = []
+    client = anthropic_client.AnthropicClient("synthetic", post_fn=lambda *args: (200, {}, raw))
+    answer = _complete(client, results, max_tokens=16384)
+    assert answer["text"] == '{"synthetic":true}'
+    assert results[0]["error_kind"] is None and results[0]["usage"]["output_tokens"] == 9000
+
+
+def test_limit_grows_with_output_and_stops_at_the_ceiling():
+    assert cloud_client.response_limit(1) > bounded_http.MAX_RESPONSE_BYTES
+    assert cloud_client.response_limit(32768) > cloud_client.response_limit(16384)
     assert cloud_client.response_limit(cloud_client.MAX_TOKENS) <= bounded_http.MAX_RESPONSE_BYTES_CEILING
 
 
 @pytest.mark.parametrize("provider", sorted(PROVIDERS))
-def test_request_raises_the_worker_limit_only_for_a_body_with_a_large_output_bound(provider, monkeypatch):
+def test_provider_requests_pass_the_bound_to_the_transport(monkeypatch, provider):
     seen = []
     monkeypatch.setattr(bounded_http, "bounded_http_request",
-                        lambda *a, **kw: seen.append(kw) or (200, {}, b"{}"))
-    client = CLIENTS[provider]("synthetic-private")
-    field = client.OUTPUT_LIMIT_FIELD
-    assert field in client.body("synthetic", 100, None)
-    for body in ({}, {field: 8192}, {field: "32768"}, {field: True}, {field: 0},
-                 {field: cloud_client.MAX_TOKENS + 1}, client.body("synthetic", 8192, None)):
-        client.request("POST", body, 1, deadline=123)
-        assert "max_response_bytes" not in seen.pop()
-    client.request("POST", client.body("synthetic", LARGE_TOKENS, None), 1, deadline=123)
-    assert seen.pop()["max_response_bytes"] == cloud_client.response_limit(LARGE_TOKENS)
+                        lambda *args, **kwargs: seen.append(kwargs["max_bytes"]) or (200, {}, b"{}"))
+    client = CLIENTS[provider]("synthetic")
+    client.request("POST", {}, 1, max_bytes=bounded_http.MAX_RESPONSE_BYTES + 1)
+    client.request("POST", {}, 1)
+    assert seen == [bounded_http.MAX_RESPONSE_BYTES + 1, bounded_http.MAX_RESPONSE_BYTES]
+
+
+@pytest.mark.parametrize("provider", sorted(PROVIDERS))
+def test_complete_reads_up_to_the_bound_of_its_own_output_limit(monkeypatch, provider):
+    seen = []
+
+    def request(self, method, body, timeout, *, deadline, max_bytes):
+        seen.append(max_bytes)
+        return 200, {}, json.dumps(_reply(provider)).encode()
+
+    monkeypatch.setattr(CLIENTS[provider], "request", request)
+    _complete(CLIENTS[provider]("synthetic"), [], max_tokens=LARGE_TOKENS)
+    assert seen == [cloud_client.response_limit(LARGE_TOKENS)]
 
 
 @pytest.mark.parametrize("provider", sorted(PROVIDERS))

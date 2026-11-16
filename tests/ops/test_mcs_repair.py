@@ -45,6 +45,7 @@ def world(tmp_path):
         db.executescript(SCHEMA)
         db.executescript(ARTIFACTS_LOOKUP_INDEX_SQL)
         db.executescript("""
+          CREATE INDEX idx_artifacts_lookup ON artifacts(kind,project_id,message_id);
           ALTER TABLE patients ADD COLUMN history_floor INTEGER;
           ALTER TABLE patients ADD COLUMN coverage_ts INTEGER;
           ALTER TABLE patients ADD COLUMN karte_id INTEGER;
@@ -169,6 +170,13 @@ def test_rollup_count_marks_missing_or_expired_clock_boundary_dirty(world, metad
 def test_rollup_count_is_unknown_when_snapshot_lacks_input_columns(world):
     _change(world['snapshot'], 'ALTER TABLE messages RENAME COLUMN body_text TO legacy_body_text')
     assert repair.plan(world['snapshot'], nonce=NONCE)['counts']['dirty_rollups'] is None
+
+
+def test_rollup_count_is_unknown_when_snapshot_lacks_lookup_index(world):
+    _change(world['snapshot'], 'DROP INDEX idx_artifacts_lookup')
+    before = _hash(world['snapshot'])
+    assert repair.plan(world['snapshot'], nonce=NONCE)['counts']['dirty_rollups'] is None
+    assert _hash(world['snapshot']) == before
 
 
 def test_rollup_count_is_unknown_when_scan_cannot_establish_all_candidates(world, monkeypatch):

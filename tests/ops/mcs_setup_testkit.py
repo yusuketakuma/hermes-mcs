@@ -124,7 +124,10 @@ def _services_env(monkeypatch, tmp_path, cron_names=frozenset(),
     _previous_service_load_config_1007 = mcs_util.load_config
     monkeypatch.setattr(mcs_util, 'load_config',
                         lambda path=None: _previous_service_load_config_1007(path) if path else {})
-    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda **kw: {})
+    # cmd_services reads the checked loader; follow a test's later
+    # load_config patch so one override drives both readers
+    monkeypatch.setattr(mcs_util, 'load_config_checked',
+                        lambda path=None, **kw: mcs_util.load_config(path))
     monkeypatch.setattr(service_management, 'inspect_cron', lambda h: entries)
     monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
     monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)

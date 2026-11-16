@@ -96,13 +96,13 @@ def _reading_opener(observed, payload=b"{}"):
 @pytest.mark.parametrize("limit", [b.MAX_RESPONSE_BYTES, b.MAX_RESPONSE_BYTES + 1, b.MAX_RESPONSE_BYTES_CEILING])
 def test_worker_reads_one_byte_past_a_raised_response_limit(monkeypatch, limit):
     observed = []
-    result = _worker(monkeypatch, _envelope(max_response_bytes=limit), _reading_opener(observed))
+    result = _worker(monkeypatch, _envelope(max_bytes=limit), _reading_opener(observed))
     assert result["ok"] is True and observed == [limit + 1]
 
 
 def test_worker_without_a_declared_limit_keeps_the_default(monkeypatch):
     observed = []
-    assert "max_response_bytes" not in _envelope()
+    assert "max_bytes" not in _envelope()
     assert _worker(monkeypatch, _envelope(), _reading_opener(observed))["ok"] is True
     assert observed == [b.MAX_RESPONSE_BYTES + 1]
 
@@ -113,16 +113,16 @@ _INVALID_LIMITS = [0, -1, b.MAX_RESPONSE_BYTES - 1, b.MAX_RESPONSE_BYTES_CEILING
 
 @pytest.mark.parametrize("limit", _INVALID_LIMITS)
 def test_worker_refuses_a_response_limit_outside_the_bounds(monkeypatch, limit):
-    result = _worker(monkeypatch, _envelope(max_response_bytes=limit), lambda *a: pytest.fail("must not open"))
+    result = _worker(monkeypatch, _envelope(max_bytes=limit), lambda *a: pytest.fail("must not open"))
     assert result == {"ok": False, "error": "transport"}
 
 
 @pytest.mark.parametrize("limit", _INVALID_LIMITS)
 def test_parent_refuses_a_response_limit_outside_the_bounds_before_spawn(monkeypatch, limit):
     monkeypatch.setattr(b.subprocess, "Popen", lambda *a, **k: pytest.fail("must not spawn"))
-    with pytest.raises(ValueError, match="response_limit_invalid"):
+    with pytest.raises(ValueError, match="max_bytes_invalid"):
         b.bounded_http_request(b.ANTHROPIC_ENDPOINT, "POST", {}, 1, api_key="synthetic", auth="anthropic",
-                               allowed_endpoints=(b.ANTHROPIC_ENDPOINT,), max_response_bytes=limit)
+                               allowed_endpoints=(b.ANTHROPIC_ENDPOINT,), max_bytes=limit)
 
 
 class _Worker:
@@ -151,14 +151,14 @@ def _parent(monkeypatch, body, **kw):
 
 def test_parent_declares_a_raised_limit_to_the_worker_and_accepts_up_to_one_byte_past_it(monkeypatch):
     limit = b.MAX_RESPONSE_BYTES + 4096
-    envelope, (status, _headers, raw) = _parent(monkeypatch, b"x" * (limit + 1), max_response_bytes=limit)
-    assert envelope["max_response_bytes"] == limit and status == 200 and len(raw) == limit + 1
+    envelope, (status, _headers, raw) = _parent(monkeypatch, b"x" * (limit + 1), max_bytes=limit)
+    assert envelope["max_bytes"] == limit and status == 200 and len(raw) == limit + 1
     with pytest.raises(OSError, match="http worker response invalid"):
-        _parent(monkeypatch, b"x" * (limit + 2), max_response_bytes=limit)
+        _parent(monkeypatch, b"x" * (limit + 2), max_bytes=limit)
 
 
-def test_parent_default_request_keeps_its_envelope_and_the_default_limit(monkeypatch):
+def test_parent_default_request_declares_and_keeps_the_default_limit(monkeypatch):
     envelope, (_status, _headers, raw) = _parent(monkeypatch, b"x" * (b.MAX_RESPONSE_BYTES + 1))
-    assert "max_response_bytes" not in envelope and len(raw) == b.MAX_RESPONSE_BYTES + 1
+    assert envelope["max_bytes"] == b.MAX_RESPONSE_BYTES and len(raw) == b.MAX_RESPONSE_BYTES + 1
     with pytest.raises(OSError, match="http worker response invalid"):
         _parent(monkeypatch, b"x" * (b.MAX_RESPONSE_BYTES + 2))

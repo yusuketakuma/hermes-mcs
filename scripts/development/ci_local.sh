@@ -232,6 +232,7 @@ job_lint_test() {
     python3 ci/run_pytest_groups.py linux --verify-reports "$MCS_CI_REPORTS" --slices "$MCS_CI_SLICES" --per-slice "$MCS_CI_PER_SLICE"
 }
 job_hygiene() {
+    python3 scripts/development/check_labels_sync.py
     bad=$(git ls-files | grep -E '(^|/)(data/|chrome-profile/|\.env$|\.env\.[^/]*$|config\.json$|config\.json\.[^/]*$|token_cache\.json$)' || true)
     if [ -n "$bad" ]; then
       echo "::error::forbidden files tracked:"; echo "$bad"; exit 1
