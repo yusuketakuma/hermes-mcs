@@ -11,6 +11,7 @@ import extract_llm
 import job_ops
 import ledger
 import mcs_adapter
+import local_backup
 import maintenance
 import notify_flush
 import run_check
@@ -79,8 +80,9 @@ def test_real_tick_keeps_extraction_and_semantic_pending_on_budget_wait(
         monkeypatch.setattr(
             collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (run_check),
             name, str(value))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(data / "backups"))
     for name, value in {
-        "BACKUP_DIR": data / "backups", "SNAPSHOT_DIR": data / "snapshots",
+        "SNAPSHOT_DIR": data / "snapshots",
         "LOGFILE": data / "run.log",
     }.items():
         monkeypatch.setattr(maintenance, name, str(value))

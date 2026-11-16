@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import local_backup
 import maintenance
 
 
@@ -12,10 +13,10 @@ def test_backup_failure_always_closes_source(tmp_path, monkeypatch, operation, f
     source = tmp_path / 'synthetic.db'
     source.write_bytes(b'synthetic')
     backup_dir = tmp_path / 'backups'
-    monkeypatch.setattr(maintenance, 'BACKUP_DIR', str(backup_dir))
-    monkeypatch.setattr(maintenance, 'valid_mcs_db', lambda path: False)
-    monkeypatch.setattr(maintenance, '_verified_unchanged', lambda path: False)
-    monkeypatch.setattr(maintenance, 'disk_floor_mb', lambda: 0)
+    monkeypatch.setattr(local_backup, 'BACKUP_DIR', str(backup_dir))
+    monkeypatch.setattr(local_backup, 'valid_mcs_db', lambda path: False)
+    monkeypatch.setattr(local_backup, '_verified_unchanged', lambda path: False)
+    monkeypatch.setattr(local_backup, 'disk_floor_mb', lambda: 0)
     closed, copied = [], []
 
     class Source:
@@ -48,7 +49,7 @@ def test_backup_failure_always_closes_source(tmp_path, monkeypatch, operation, f
 
     monkeypatch.setattr(maintenance.sqlite3, 'connect', connect)
     with pytest.raises(OSError):
-        getattr(maintenance, operation)(str(source))
+        getattr(local_backup, operation)(str(source))
     assert closed == ['source']
     # the close failure must come after a copy, not mask an earlier error
     assert copied == ([True] if failure == 'destination_close' else [])
@@ -57,14 +58,14 @@ def test_backup_failure_always_closes_source(tmp_path, monkeypatch, operation, f
 
 def test_preupdate_source_open_failure_removes_its_new_temp_file(tmp_path, monkeypatch):
     backup_dir = tmp_path / 'backups'
-    monkeypatch.setattr(maintenance, 'BACKUP_DIR', str(backup_dir))
+    monkeypatch.setattr(local_backup, 'BACKUP_DIR', str(backup_dir))
 
     def unavailable(*args, **kwargs):
         raise OSError('synthetic_source_failure')
 
     monkeypatch.setattr(maintenance.sqlite3, 'connect', unavailable)
     with pytest.raises(OSError):
-        maintenance.preupdate_backup(str(tmp_path / 'synthetic.db'))
+        local_backup.preupdate_backup(str(tmp_path / 'synthetic.db'))
     assert list(backup_dir.glob('*.tmp')) == []
 
 
@@ -81,8 +82,8 @@ def test_backup_publication_failure_cleans_only_staging(tmp_path, monkeypatch, o
     backup_dir.mkdir()
     existing = backup_dir / 'ledger-prior.db'
     existing.write_bytes(b'synthetic-prior')
-    monkeypatch.setattr(maintenance, 'BACKUP_DIR', str(backup_dir))
-    real_publish = maintenance.publish_tmp
+    monkeypatch.setattr(local_backup, 'BACKUP_DIR', str(backup_dir))
+    real_publish = local_backup.publish_tmp
     targets = []
 
     def fail_publication(tmp, dest, mode=None):
@@ -91,9 +92,9 @@ def test_backup_publication_failure_cleans_only_staging(tmp_path, monkeypatch, o
             real_publish(tmp, dest, mode=mode)
         raise error('synthetic publication failure')
 
-    monkeypatch.setattr(maintenance, 'publish_tmp', fail_publication)
+    monkeypatch.setattr(local_backup, 'publish_tmp', fail_publication)
     with pytest.raises(error):
-        getattr(maintenance, operation)(str(source))
+        getattr(local_backup, operation)(str(source))
     assert list(backup_dir.glob('*.tmp')) == []
     assert existing.read_bytes() == b'synthetic-prior'
     assert targets and (targets[0].is_file() is published)

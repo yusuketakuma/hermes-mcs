@@ -1,0 +1,89 @@
+name: Agent Claude repair
+
+# agent-control.yml が、試行上限前の CI 失敗で起動する（workflow_dispatch だけ。コメントやPRでは起動しない）。
+# 対象はこのリポジトリの開いた agent/claude- ブランチだけ。失敗ログを読み、同じブランチに修正を push する。
+# 試行回数は agent-control が通算する。停止スイッチ vars.AUTOMATION_ENABLED が true でなければ起動しない。
+# 運用: docs/development/AUTOMATION.md
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "CI が失敗した agent/claude- ブランチの PR 番号"
+        required: true
+        type: number
+
+permissions: {}
+
+jobs:
+  repair:
+    if: vars.AUTOMATION_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      # One writer for every Claude entry point (Issue, PR comment, repair): an Issue and its PR have
+      # different numbers, so a per-number group would let two runs write the same branch.
+      group: agent-claude-writer
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      # The check runs from the default branch's ci/agent_control.py, before any PR code is checked out.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          path: control
+          sparse-checkout: ci
+          persist-credentials: false
+      - name: Check the PR and its linked issues now
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+          AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          gh api "repos/$GH_REPO/pulls/$PR" > "$work/pr.json"
+          echo '{}' > "$work/labels.json"
+          for issue in $(python3 control/ci/agent_control.py linked --pr "$work/pr.json" | jq -r '.issues[]'); do
+            labels=$(gh api "repos/$GH_REPO/issues/$issue" --jq '[.labels[].name]')
+            jq --arg n "$issue" --argjson l "$labels" '.[$n] = $l' "$work/labels.json" > "$work/next.json"
+            mv "$work/next.json" "$work/labels.json"
+          done
+          verdict=$(python3 control/ci/agent_control.py repair --pr "$work/pr.json" \
+            --issue-labels "$work/labels.json" --automation "${AUTOMATION:-}")
+          echo "$verdict"
+          if [[ "$(jq -r .allowed <<< "$verdict")" != "true" ]]; then
+            echo "::notice::repair refused: $(jq -r .reason <<< "$verdict")"
+            echo "allowed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "allowed=true" >> "$GITHUB_OUTPUT"
+          echo "branch=$(jq -r .head.ref "$work/pr.json")" >> "$GITHUB_OUTPUT"
+      - if: steps.pr.outputs.allowed == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ steps.pr.outputs.branch }}
+          fetch-depth: 1
+          persist-credentials: false
+      - if: steps.pr.outputs.allowed == 'true'
+        uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: "github-actions[bot]"
+          # The Claude App token needs this too, to read the failed CI logs.
+          additional_permissions: |
+            actions: read
+          prompt: >-
+            PR #${{ inputs.pr }}（ブランチ ${{ steps.pr.outputs.branch }}）の CI が失敗した。
+            gh run list と gh run view --log-failed で失敗したジョブのログを読み、原因を特定して直し、
+            同じブランチにコミットして push する。失敗が CI 基盤の障害・利用枠不足・原因不明なら、コードを変えずに
+            PR にその旨を1回コメントして終える。
+          claude_args: >-
+            --max-turns 40
+            --allowedTools "Bash(gh run list:*),Bash(gh run view:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(git:*),Bash(ruff:*),Bash(python3:*),Bash(scripts/run_tests.sh:*),Edit,Write,Read,Glob,Grep"
+            --append-system-prompt "このリポジトリの AGENTS.md と docs/development/AUTOMATION.md に従う。直すのは CI の失敗の原因だけ。テストの削除・skip・閾値の緩和・CI 設定の変更で成功を作らない。患者データ・実ログ・秘密値を書かない。マージ・タグ・リリースはしない。"

@@ -583,7 +583,7 @@ def test_apply_bail_consent_hold_keeps_writers_stopped(updater, tmp_path,
     restore-consent hold keeps the same invariant as rollback(): the
     drainers the NEW-code child restarted are quiesced again and the
     update marker stays up until consent."""
-    import maintenance
+    import local_backup
     monkeypatch.setattr(updater, "_provider_migration_needed", lambda: False)
     monkeypatch.setattr(update_apply, '_provider_migration_needed', updater._provider_migration_needed)
     monkeypatch.setattr(update_recovery, '_provider_migration_needed', updater._provider_migration_needed)
@@ -622,7 +622,7 @@ def test_apply_bail_consent_hold_keeps_writers_stopped(updater, tmp_path,
                         lambda t: ["schema_bump:7->8"])
     monkeypatch.setattr(update_execution, 'precheck_tag', mcs_update.precheck_tag)
     monkeypatch.setattr(update_planning, 'precheck_tag', mcs_update.precheck_tag)
-    monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: str(back))
+    monkeypatch.setattr(local_backup, "preupdate_backup", lambda p: str(back))
     monkeypatch.setattr(mcs_update, "_baseline_check", lambda c: [])
     monkeypatch.setattr(update_apply, '_baseline_check', mcs_update._baseline_check)
     events = []
@@ -700,7 +700,7 @@ def test_apply_consent_hold_survives_a_failing_quiesce(updater, tmp_path,
                                                        monkeypatch):
     """Recording the hold comes first: a quiesce failure after it must
     not lose restore_consent or drop the update marker."""
-    import maintenance
+    import local_backup
     monkeypatch.setattr(updater, "_provider_migration_needed", lambda: False)
     monkeypatch.setattr(update_apply, '_provider_migration_needed', updater._provider_migration_needed)
     monkeypatch.setattr(update_recovery, '_provider_migration_needed', updater._provider_migration_needed)
@@ -739,7 +739,7 @@ def test_apply_consent_hold_survives_a_failing_quiesce(updater, tmp_path,
                         lambda t: ["schema_bump:7->8"])
     monkeypatch.setattr(update_execution, 'precheck_tag', mcs_update.precheck_tag)
     monkeypatch.setattr(update_planning, 'precheck_tag', mcs_update.precheck_tag)
-    monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: str(back))
+    monkeypatch.setattr(local_backup, "preupdate_backup", lambda p: str(back))
     monkeypatch.setattr(mcs_update, "_baseline_check", lambda c: [])
     monkeypatch.setattr(update_apply, '_baseline_check', mcs_update._baseline_check)
     def quiesce():

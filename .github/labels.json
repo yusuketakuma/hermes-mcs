@@ -41,7 +41,24 @@
     {"name": "size: XL", "color": "586069", "description": "変更行数 1000 以上"},
     {"name": "CI待ち", "color": "fbca04", "description": "状態: 現headの必要なCIが未完了。成功・マージ許可を意味しない"},
     {"name": "修正待ち", "color": "fbca04", "description": "状態: 失敗またはレビュー指摘への修正が必要"},
-    {"name": "依存PR待ち", "color": "fbca04", "description": "状態: 先に取り込むPRがあり、単独のマージ判断を保留"}
+    {"name": "依存PR待ち", "color": "fbca04", "description": "状態: 先に取り込むPRがあり、単独のマージ判断を保留"},
+    {"name": "要再現確認", "color": "fbca04", "description": "状態: 不具合の再現条件・期待値・実際の結果が未確認。完全合成の例で確認する"},
+    {"name": "情報待ち", "color": "fbca04", "description": "状態: 報告者などから追加情報を待つ。必要な情報と回答者を本文に記載"},
+    {"name": "保留", "color": "fbca04", "description": "状態: 進行を意図的に保留。理由と再開条件を本文に記載。自動停止機能ではない"},
+    {"name": "影響:自動化", "color": "d93f0b", "description": "影響: 定期実行・CI・自動処理の挙動が変わる。発火条件・再実行・重複を確認"},
+    {"name": "影響:互換性", "color": "d93f0b", "description": "影響: 保存形式・API・設定・旧版との互換性を確認。破壊的変更はbreaking changeも併用"},
+    {"name": "影響:通知配送", "color": "d93f0b", "description": "影響: 通知の配送・重複防止・再送・配信記録を確認。通知の見た目だけなら不要"},
+    {"name": "影響:状態管理", "color": "d93f0b", "description": "影響: 永続状態・復旧・セッションの整合性を確認。保存形式の変更は互換性も確認"},
+    {"name": "担当:claude", "color": "5319e7", "description": "自動化: このIssueの書込み担当はClaude Code。担当ラベルは1件だけ。付けるのは所有者"},
+    {"name": "担当:copilot", "color": "1f6feb", "description": "自動化: このIssueの書込み担当はCopilot。担当ラベルは1件だけ。付けるのは所有者"},
+    {"name": "担当:dots", "color": "0e8a16", "description": "自動化: このIssueの書込み担当はDots/Codex。担当ラベルは1件だけ。付けるのは所有者"},
+    {"name": "試行:1", "color": "fef2c0", "description": "自動化: 担当をまたいだ通算の失敗回数。CI失敗で自動加算"},
+    {"name": "試行:2", "color": "fbca04", "description": "自動化: 担当をまたいだ通算の失敗回数。CI失敗で自動加算"},
+    {"name": "試行:3", "color": "e99695", "description": "自動化: 上限到達。担当を外し要オーナー対応へ移した"},
+    {"name": "失敗:コード", "color": "d93f0b", "description": "自動化: 製品コードの不具合で失敗。再試行してよい唯一の分類"},
+    {"name": "失敗:CI基盤", "color": "c5def5", "description": "自動化: CI基盤の障害で失敗。コードを変えず保留"},
+    {"name": "失敗:利用枠", "color": "c5def5", "description": "自動化: AIの利用枠・予算の不足で失敗。有料経路へ切り替えず保留"},
+    {"name": "失敗:不明", "color": "c5def5", "description": "自動化: 結果不明。同じ作業を再発注せず人が確認"}
   ],
   "milestones": [{"title": "v1.1.3", "description": "ラベル v1.1.3 と同じ範囲"}, {"title": "v1.1.4", "description": "ラベル v1.1.4 と同じ範囲"}]
 }

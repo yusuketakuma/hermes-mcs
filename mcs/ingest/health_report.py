@@ -17,6 +17,7 @@ import safe_io
 from mcs_queries import ELIGIBLE_MESSAGE
 from mcs_util import HOME, ATTACH_DIR, strict_json, valid_hash
 from llm_availability import disk_floor_mb
+import local_backup
 import maintenance
 
 HEALTH_FILE = os.path.join(HOME, HEALTH_REL)
@@ -320,7 +321,7 @@ def early_warnings(db, result: dict, free_mb: float | None) -> dict:
             and free_mb < floor + DISK_WARN_MARGIN_MB:
         out["warnings"].append("disk_space_low_soon")
     try:
-        backups = maintenance.backup_bytes_by_class()
+        backups = local_backup.backup_bytes_by_class()
     except Exception:
         backups = None
     out["manual_backup_bytes"] = None if backups is None else backups["manual"]
@@ -1265,7 +1266,7 @@ def build_health(db, result: dict, status: str,
     backup = (backup_health(cfg or {}, now) if cfg is not CONFIG_NOT_LOADED
               else {"state": "unknown", "reasons": ["config_not_loaded"]})
     try:
-        backup["local"] = maintenance.local_backup_status(now=now)
+        backup["local"] = local_backup.local_backup_status(now=now)
     except Exception:
         backup["local"] = {"state": "unknown", "newest_age_s": None,
                            "observed_at": now}
@@ -1279,10 +1280,15 @@ def build_health(db, result: dict, status: str,
     disk_low = attachment_disk_low(free_mb) or skipped == "disk_low"
     # M7: a backup skipped for lack of time is news only once the newest
     # daily copy is older than a day — one late tick is not an incident
-    age = maintenance.newest_backup_age_s() if skipped == "deadline" else 0
+    age = local_backup.newest_backup_age_s() if skipped == "deadline" else 0
     backup_deferred = skipped == "deadline" and (age is None or age > 86400)
+    # whatever the cause (repeated failures, ticks never reaching housekeeping),
+    # a newest daily copy past the overdue age is news; no copy yet is not
+    local_age = backup["local"].get("newest_age_s")
+    backup_local_overdue = (not backup_deferred and finite_number(local_age)
+                            and local_age > local_backup.BACKUP_OVERDUE_S)
     if (run_overdue or guard_violations or backup_bad or ocr_bad
-            or backup_deferred) and overall == "ok":
+            or backup_deferred or backup_local_overdue) and overall == "ok":
         overall = "degraded"
     previous = prev_health()
     last_ok_at = (now if overall == "ok" else previous.get(
@@ -1312,6 +1318,7 @@ def build_health(db, result: dict, status: str,
             ("notification_cards_unavailable", cards_unknown),
             ("disk_low", disk_low),
             ("backup_deferred_deadline", backup_deferred),
+            ("backup_local_overdue", backup_local_overdue),
         ) if present] + stalls
     return {
         "overall": overall, "run_status": status,

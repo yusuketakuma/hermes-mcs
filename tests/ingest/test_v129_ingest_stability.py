@@ -11,6 +11,7 @@ import pytest
 
 import health_report
 import job_ops
+import local_backup
 import maintenance
 import run_check
 from common_testkit import ledger_fixture
@@ -77,7 +78,7 @@ def test_crash_site_is_type_and_innermost_basename_line():
 def test_rotation_runs_even_when_housekeeping_is_not_due(monkeypatch):
     rotated = []
     monkeypatch.setattr(maintenance, "rotate_log", lambda: rotated.append(1))
-    monkeypatch.setattr(maintenance, "backup_overdue", lambda: False)
+    monkeypatch.setattr(local_backup, "backup_overdue", lambda: False)
     monkeypatch.setattr(run_check, "_housekeeping", lambda r: pytest.fail("not due"))
     result = {"errors": []}
     run_check._overdue_housekeeping(result)
@@ -93,7 +94,7 @@ def test_early_warnings_are_codes_and_numbers_only(db, tmp_path, monkeypatch):
     backups.mkdir()
     (backups / "ledger-20260101.db").write_bytes(b"x" * 10)
     (backups / "hand-copy.db").write_bytes(b"y" * 7)
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(backups))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backups))
     monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(tmp_path / "snapshots"))
     monkeypatch.setattr(health_report, "WAL_WARN_BYTES", -1)
     monkeypatch.setattr(health_report, "disk_floor_mb", lambda: 512)

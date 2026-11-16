@@ -62,7 +62,7 @@ with open(sys.argv[1], 'a') as lock:
     request = anthropic_client.AnthropicClient.request
     waiting_calls = []
 
-    def waiting_request(client, method, body, timeout, *, deadline):
+    def waiting_request(client, method, body, timeout, *, deadline, max_bytes):
         payload = json.loads(body['messages'][0]['content'])
         actual_phase = 'summary' if 'reports' in payload else 'source_scan'
         if actual_phase == phase:
@@ -72,7 +72,7 @@ with open(sys.argv[1], 'a') as lock:
             assert progress.returncode == 0, progress.stderr
             assert progress.stdout.strip() == 'local-progress'
             waiting_calls.append(actual_phase)
-        return request(client, method, body, timeout, deadline=deadline)
+        return request(client, method, body, timeout, deadline=deadline, max_bytes=max_bytes)
 
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', waiting_request)
     finish(runtime, cfg)
