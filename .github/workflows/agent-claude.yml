@@ -42,9 +42,12 @@ jobs:
       id-token: write
       actions: read
     steps:
+      # The check uses the default branch's ci/agent_control.py, never code from a PR.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          fetch-depth: 1
+          ref: ${{ github.event.repository.default_branch }}
+          path: control
+          sparse-checkout: ci
           persist-credentials: false
       - name: Check the assignment
         id: auth
@@ -53,21 +56,36 @@ jobs:
           GH_REPO: ${{ github.repository }}
           NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
           ON_PR: ${{ github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request != null }}
+          AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
         run: |
           set -euo pipefail
-          ok=false
+          control=control/ci/agent_control.py
+          # Read the labels now, not from the event: the lock job may have just removed a second 担当:*,
+          # and a run that waited in the queue must not act on an assignment withdrawn meanwhile.
           if [[ "$ON_PR" == "true" ]]; then
-            # On a PR, only an open agent/claude- branch of this repository is Claude's to work on.
-            info=$(gh api "repos/$GH_REPO/pulls/$NUMBER")
-            if [[ "$(jq -r .state <<< "$info")" == "open" && "$(jq -r .head.ref <<< "$info")" == agent/claude-* &&
-                  "$(jq -r .head.repo.full_name <<< "$info")" == "$GH_REPO" ]]; then ok=true; fi
+            work=$(mktemp -d)
+            gh api "repos/$GH_REPO/pulls/$NUMBER" > "$work/pr.json"
+            echo '{}' > "$work/labels.json"
+            for issue in $(python3 "$control" linked --pr "$work/pr.json" | jq -r '.issues[]'); do
+              labels=$(gh api "repos/$GH_REPO/issues/$issue" --jq '[.labels[].name]')
+              jq --arg n "$issue" --argjson l "$labels" '.[$n] = $l' "$work/labels.json" > "$work/next.json"
+              mv "$work/next.json" "$work/labels.json"
+            done
+            verdict=$(python3 "$control" repair --pr "$work/pr.json" --issue-labels "$work/labels.json" \
+              --automation "${AUTOMATION:-}" --owner-request)
+            ok=$(jq -r .allowed <<< "$verdict"); reason=$(jq -r .reason <<< "$verdict")
           else
-            # Read the labels now, not from the event: the lock job may have just removed a second 担当:*.
             labels=$(gh api "repos/$GH_REPO/issues/$NUMBER" --jq '[.labels[].name]')
-            ok=$(python3 ci/agent_control.py assigned --labels "$labels" --agent 担当:claude | jq -r .assigned)
+            ok=$(python3 "$control" assigned --labels "$labels" --agent 担当:claude | jq -r .assigned)
+            reason="#$NUMBER の担当が Claude だけではない"
           fi
           echo "ok=$ok" >> "$GITHUB_OUTPUT"
-          if [[ "$ok" != "true" ]]; then echo "::notice::not started: #$NUMBER is not assigned to Claude alone"; fi
+          if [[ "$ok" != "true" ]]; then echo "::notice::not started: $reason"; fi
+      - if: steps.auth.outputs.ok == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
       - if: steps.auth.outputs.ok == 'true'
         uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
         with:
