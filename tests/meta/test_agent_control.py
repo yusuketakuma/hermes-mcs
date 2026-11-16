@@ -221,6 +221,9 @@ def test_acceptance_criteria_reads_markdown_structure():
     assert ac.acceptance_criteria(quoted) == ""
     assert ac.assignment_refusal(_issue(quoted), "owner", "owner")
     assert ac.acceptance_criteria(quoted + "## 受入条件\n- 本物\n~~~\n# コード\n~~~\n") == "- 本物"
+    nested = "## 受入条件\n### 正常系\n- [ ] 通る\n### 異常系\n- [ ] 止まる\n## 注意\nx"
+    assert ac.acceptance_criteria(nested) == "- [ ] 通る\n- [ ] 止まる"
+    assert ac.acceptance_criteria("## 受入条件\n### 正常系\n## 注意\nx") == ""
 
 
 def test_cli_lock_and_assigned_read_the_issue(tmp_path, capsys):

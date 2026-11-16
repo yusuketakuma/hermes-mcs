@@ -67,7 +67,7 @@ _USES_LINE = re.compile(r"^[+-]\s*(-\s+)?uses:\s+[\w.-]+/[\w./-]+@[0-9a-f]{40}(\
 _TEST_SKIP = re.compile(r"pytest\.mark\.(skip|skipif|xfail)|pytest\.(skip|xfail)\(|unittest\.skip|@skip\b")
 _TEST_DEF = re.compile(r"^\s*(async\s+)?def\s+test_")
 # "#123" is an issue reference; a heading needs the space after its marks.
-_HEADING = re.compile(r"^ {0,3}#{1,6}(\s|$)")
+_HEADING = re.compile(r"^ {0,3}(#{1,6})(\s|$)")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _LINKED_ISSUE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)", re.I)
 
@@ -283,16 +283,24 @@ def acceptance_criteria(body):
     """The text under the issue's first filled-in acceptance heading, or "" when it has none yet."""
     lines = _outside_fences((body or "").splitlines())
     for index, line in enumerate(lines):
-        if _HEADING.match(line) and any(title in line for title in ACCEPTANCE_HEADINGS):
+        level = _heading_level(line)
+        if level and any(title in line for title in ACCEPTANCE_HEADINGS):
             section = []
             for following in lines[index + 1:]:
-                if _HEADING.match(following):
+                if 0 < _heading_level(following) <= level:
                     break
                 section.append(following)
-            text = "\n".join(section).strip()
+            # A subsection title alone is not a criterion.
+            text = "\n".join(part for part in section if not _heading_level(part)).strip()
             if text and text != "_No response_":
                 return text
     return ""
+
+
+def _heading_level(line):
+    """1-6 for an ATX heading line, 0 for anything else."""
+    match = _HEADING.match(line)
+    return len(match.group(1)) if match else 0
 
 
 def _outside_fences(lines):
