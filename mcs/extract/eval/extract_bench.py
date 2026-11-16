@@ -10,6 +10,9 @@ without touching the ledger.
       --out bench_v2.json
   extract_bench.py report bench_v1.json bench_v2.json
   extract_bench.py run --mock-ok   # offline sanity: validation only
+  extract_bench.py score --cases evaluation/extract_cases_safety_history.json \
+      --outputs evaluation/extract_baseline_gen11_safety_history.json \
+      --tag gen11-rule --out baseline.json   # offline: stored outputs only
 
 Case file format (all bodies MUST be synthetic — never real messages):
 
@@ -27,7 +30,11 @@ items matching nothing count as FP.
 Explicit medication, symptom and lab attributes must match; a null label
 pins absence rather than a wildcard. Unverified medication/symptom output
 cannot satisfy an expected confirmed fact. Optional event_records labels
-also score the event's subject, polarity, time and source span.
+also score the event's subject, polarity, time and source span. An
+event_records label may carry "care_detail" (event_type, workflow_status):
+the output record's verified care_detail must then agree, the label's
+kind becomes optional (an ACP discussion may ride care, eol or other), and
+the counts are also reported as event_records.<event_type>.
 
 Requests key on action containment; any other key a label carries
 (to/from/kind/condition/due/due_text/evidence) must match exactly, and
@@ -59,7 +66,25 @@ are two facts, a category label and a detail label may both hit the
 same item, and one unit never satisfies two labels. Like events,
 unlisted extras are not FP — the model legitimately records more context
 than a case labels — but a forbid match is. Per-category counts are
-reported as patient_context.<category>.
+reported as patient_context.<category>. A label subject may be
+"unspecified": downstream reads an unspecified item as the patient's own,
+so a family member's allergy filed there is a wrong assertion a forbid
+label must be able to name.
+
+Allergy and adverse-reaction assertions (scored only when a case labels
+`allergies`) carry subject / status / negated / certainty axes; the label
+and provisional output shapes live in extract_bench_assertions.
+
+`score` runs no model and opens no connection. It scores outputs that
+were ALREADY validated by the generation that produced them and never
+re-validates them, so a newer validator cannot erase an older engine's
+mistakes. Its input is either a `run` report (cases[].validated_output;
+it must name its generations, and a row with neither an error nor an
+output is refused as unmeasured) or {"validated": true, "generations": {...}, "corpus_sha256": "...",
+"outputs": {"<case id>": <output or null>}}; an optional "scored_fields"
+list limits the report to fields whose output shape that producer shares
+with the oracle. Every report carries false_assertion: the number of
+violated forbid labels, total and by field.
 """
 from __future__ import annotations
 
@@ -79,6 +104,8 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
+import extract_bench_assertions as assertions
+import extract_bench_stored as stored_outputs
 import extract_validation
 
 DEFAULT_CASES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -118,11 +145,34 @@ def _match_symptom(expected: dict, got: list) -> bool:
 
 
 def _match_event(expected: dict, got: list) -> bool:
+    detail = expected.get("care_detail")
     return any(isinstance(item, dict) and not item.get("unverified")
-               and item.get("kind") == expected.get("kind")
+               # a care_detail label names the event by its type; the legacy
+               # kind it rides on is then pinned only when the label gives one
+               and (item.get("kind") == expected.get("kind")
+                    or (detail is not None and "kind" not in expected))
                and all(key not in expected or expected[key] == item.get(key)
                        for key in ("subject", "status", "negated", "evidence", "span"))
+               and (detail is None or (isinstance(item.get("care_detail"), dict) and all(
+                   item["care_detail"].get(key) == value for key, value in detail.items())))
                for item in got)
+
+
+def _event_type(label: dict) -> str | None:
+    detail = label.get("care_detail")
+    return detail.get("event_type") if isinstance(detail, dict) else None
+
+
+def _event_fields(labels: list, records) -> dict:
+    """event_records counts, plus one event_records.<event_type> row per labelled care type."""
+    fields = {"event_records": (_field_pr(labels, records, _match_event) if records is not None
+                                else {"tp": 0, "fp": 0, "fn": len(labels)})}
+    for event_type in sorted({_event_type(label) for label in labels} - {None}):
+        typed = [label for label in labels if _event_type(label) == event_type]
+        fields[f"event_records.{event_type}"] = (
+            _field_pr(typed, records, _match_event, strict_fp=False) if records is not None
+            else {"tp": 0, "fp": 0, "fn": len(typed)})
+    return fields
 
 
 _REQ_KEYS = ("to", "from", "kind", "condition", "due", "due_text",
@@ -175,6 +225,9 @@ def _match_lab(expected: dict, got: list) -> bool:
 
 
 _CONTEXT_KEYS = frozenset({"category", "detail_key", "value_contains", "subject", "refers_to"})
+# "unspecified" is what the heading rules emit and what downstream reads as
+# the patient's own item, so a label must be able to name it.
+_CONTEXT_SUBJECTS = ("patient", "family", "other", "unspecified")
 
 
 def _context_units(body: str, got: list, references=None) -> list[dict]:
@@ -272,7 +325,9 @@ def _score_case(case: dict, out: dict | None) -> dict:
         if "labs" in exp:
             fields["labs"] = {"tp": 0, "fp": 0, "fn": len(exp["labs"])}
         if "event_records" in exp:
-            fields["event_records"] = {"tp": 0, "fp": 0, "fn": len(exp["event_records"])}
+            fields.update(_event_fields(exp["event_records"], None))
+        if assertions.FIELD in exp:
+            fields[assertions.FIELD] = {"tp": 0, "fp": 0, "fn": len(exp[assertions.FIELD])}
         if "patient_context" in exp:
             fields["patient_context"] = {"tp": 0, "fp": 0, "fn": len(exp["patient_context"])}
             for label in exp["patient_context"]:
@@ -289,7 +344,7 @@ def _score_case(case: dict, out: dict | None) -> dict:
             if expected:
                 fields[f"med_{key}"] = {"tp": 0, "fp": 0, "fn": expected}
         return {"id": case["id"], "error": "extract_failed",
-                "fields": fields, "forbid_violations": []}
+                "fields": fields, "forbid_violations": [], "forbid_counts": {}}
     got_meds = out.get("meds") or []
     got_syms = out.get("symptoms") or []
     got_events = out.get("events") or []
@@ -348,43 +403,63 @@ def _score_case(case: dict, out: dict | None) -> dict:
         fn = len(expected) - tp
         if tp + fn:
             fields[f"med_{k}"] = {"tp": tp, "fp": 0, "fn": fn}
-    violations = []
-    violations.extend(f"meds:{fm.get('name')}" for fm in
-                      forbid.get("meds", []) if _match_med(fm, got_meds))
-    violations.extend(f"symptoms:{fs.get('text')}" for fs in
-                      forbid.get("symptoms", [])
-                      if _match_symptom(fs, got_syms))
-    matched_events = [fe for fe in forbid.get("events", [])
-                      if fe in got_events]
-    violations.extend(f"events:{fe}" for fe in matched_events)
-    fields["events"]["fp"] += len(matched_events)
+    violations, forbid_counts = [], {}
+
+    def violate(field, name, detail=None):
+        # counted where the label is known: the display string is not parsed
+        violations.append(f"{field}:{name}")
+        for key in filter(None, (field, detail)):
+            forbid_counts[key] = forbid_counts.get(key, 0) + 1
+
+    for fm in forbid.get("meds", []):
+        if _match_med(fm, got_meds):
+            violate("meds", fm.get("name"))
+    for fs in forbid.get("symptoms", []):
+        if _match_symptom(fs, got_syms):
+            violate("symptoms", fs.get("text"))
+    for fe in forbid.get("events", []):
+        if fe in got_events:
+            violate("events", fe)
+            fields["events"]["fp"] += 1
     if "event_records" in exp or "event_records" in forbid:
         records = out.get("event_records") or []
-        fields["event_records"] = _field_pr(exp.get("event_records", []), records, _match_event)
-        violations.extend(f"event_records:{event.get('kind')}" for event in
-                          forbid.get("event_records", []) if _match_event(event, records))
-    violations.extend(f"requests:{request.get('action')}"
-                      for request in forbid.get("requests", [])
-                      if _match_request(request, got_requests))
-    violations.extend(f"labs:{fl.get('name')}" for fl in
-                      forbid.get("labs", []) if _match_lab(fl, got_labs))
+        fields.update(_event_fields(exp.get("event_records", []), records))
+        for event in forbid.get("event_records", []):
+            if _match_event(event, records):
+                event_type = _event_type(event)
+                violate("event_records", event.get("kind") or event_type,
+                        event_type and f"event_records.{event_type}")
+    for request in forbid.get("requests", []):
+        if _match_request(request, got_requests):
+            violate("requests", request.get("action"))
+    for fl in forbid.get("labs", []):
+        if _match_lab(fl, got_labs):
+            violate("labs", fl.get("name"))
     for label in forbid.get("patient_context", []):
         if _match_context(label, context_units):
             path = ".".join(filter(None, (label["category"], label.get("detail_key"))))
-            violations.append(f"patient_context:{path}")
+            violate("patient_context", path, f"patient_context.{label['category']}")
             for field in ("patient_context", f"patient_context.{label['category']}"):
                 if field in fields:
                     fields[field]["fp"] += 1
+    if assertions.FIELD in exp or assertions.FIELD in forbid:
+        claims = assertions.units(out, case.get("body", ""))
+        fields[assertions.FIELD] = _field_pr(
+            exp.get(assertions.FIELD, []), claims, assertions.match_expected)
+        for label in forbid.get(assertions.FIELD, []):
+            if assertions.match_forbidden(label, claims):
+                violate(assertions.FIELD, assertions.label_name(label))
     if "urgency" in forbid and out.get("urgency") == forbid["urgency"]:
-        violations.append(f"urgency:{forbid['urgency']}")
+        violate("urgency", forbid["urgency"])
     forbid_reply = forbid.get("reply")
     for fr in (forbid_reply if isinstance(forbid_reply, list)
                else [forbid_reply]):
         if got_reply is not None and _reply_kind(fr) == got_reply:
-            violations.append(f"reply:{got_reply}")
+            violate("reply", got_reply)
     score = {"id": case["id"], "fields": fields,
              "validated_output": out,
              "forbid_violations": violations,
+             "forbid_counts": forbid_counts,
              "items_dropped": out.get("_items_dropped", 0),
              "evidence_dropped": out.get("_evidence_dropped", 0),
              "raw": {k: out.get(k) for k in
@@ -397,6 +472,8 @@ def _score_case(case: dict, out: dict | None) -> dict:
         score["raw"]["event_records"] = out.get("event_records") or []
     if "patient_context" in exp or "patient_context" in forbid:
         score["raw"]["patient_context"] = got_context
+    if assertions.FIELD in exp or assertions.FIELD in forbid:
+        score["raw"][assertions.FIELD] = out.get(assertions.FIELD)
     if "reply" in exp:
         score["reply_expected"] = _reply_kind(exp["reply"])
     return score
@@ -431,6 +508,18 @@ def _aggregate(scores: list[dict]) -> dict:
     return agg
 
 
+def _false_assertions(scores: list[dict]) -> dict:
+    """Violated forbid labels: total, by field, and by category / care type."""
+    by_field, by_detail = {}, {}
+    for score in scores:
+        for key, count in score.get("forbid_counts", {}).items():
+            target = by_detail if "." in key else by_field
+            target[key] = target.get(key, 0) + count
+    return {"total": sum(by_field.values()),
+            "by_field": dict(sorted(by_field.items())),
+            "by_detail": dict(sorted(by_detail.items()))}
+
+
 def _load_corpus(path: str) -> tuple[list, str]:
     """Validate cases and fingerprint the exact same file snapshot."""
     raw = Path(path).read_bytes()
@@ -456,7 +545,7 @@ def _load_cases(path: str) -> list:
 def _synthetic_cases() -> list:
     """Read the checked-in, wholly fictional benchmark cases."""
     return [case for name in ("extract_cases.json", "extract_cases_labs.json", "extract_cases_patient_state.json",
-                             "extract_cases_injection.json")
+                             "extract_cases_injection.json", "extract_cases_safety_history.json")
             for case in _load_cases(str(Path(DEFAULT_CASES).with_name(name)))]
 
 
@@ -500,13 +589,15 @@ def _duration_percentiles(durations: list[float]) -> dict:
         for percentile in (50, 95)}
 
 
-def _section_valid(section) -> bool:
+def _section_valid(section, *, forbid: bool = False) -> bool:
     """An expect/forbid block survives _validate WHOLE — a dropped item
     (typo'd enum, missing name) would otherwise turn silently into
     "expect nothing" and the case would pass vacuously. Request kind
     and reply kind are checked here explicitly: _validate only omits a
     bad kind KEY, and the bench's reply shapes (null / list) are not
-    extractor output."""
+    extractor output. `forbid` admits the labels only a forbid block may
+    carry (an allergy assertion that abstains on subject or time)."""
+    import clinical_events
     import patient_context
     if not isinstance(section, dict):
         return False
@@ -519,11 +610,30 @@ def _section_valid(section) -> bool:
             or ("detail_key" in label and label["detail_key"] not in patient_context.DETAIL_KEYS)
             or ("value_contains" in label and not (
                 isinstance(label["value_contains"], str) and label["value_contains"].strip()))
-            or ("subject" in label and label["subject"] not in ("patient", "family", "other"))
+            or ("subject" in label and label["subject"] not in _CONTEXT_SUBJECTS)
             or ("refers_to" in label and ("detail_key" not in label or not isinstance(label["refers_to"], str)
                                          or not re.fullmatch(r"S[1-9][0-9]*", label["refers_to"])))
             for label in contexts):
         return False
+    if not assertions.labels_valid(section.pop(assertions.FIELD, []), forbid=forbid):
+        return False
+    if isinstance(section.get("event_records"), list):
+        # _validate cannot check a care_detail label without a source quote and
+        # requires a kind; check the vocabulary here and lend the neutral kind.
+        from semantic_facts import WORKFLOW_STATUSES
+        records = []
+        for record in section["event_records"]:
+            if isinstance(record, dict) and "care_detail" in record:
+                detail = record["care_detail"]
+                if (not isinstance(detail, dict) or set(detail) - {"event_type", "workflow_status"}
+                        or detail.get("event_type") not in clinical_events.CARE_DETAIL_TYPES
+                        or ("workflow_status" in detail
+                            and detail["workflow_status"] not in WORKFLOW_STATUSES)):
+                    return False
+                record = {"kind": "other"} | {key: value for key, value in record.items()
+                                             if key != "care_detail"}
+            records.append(record)
+        section["event_records"] = records
     replies = section.pop("reply", None)
     for r in (replies if isinstance(replies, list) else [replies]):
         if r is not None and _reply_kind(r) not in extract_validation._REPLY_KINDS:
@@ -570,7 +680,7 @@ def cmd_run(args) -> int:
     if args.mock_ok:
         results = [{"id": c["id"],
                     "validate_ok": _section_valid(c.get("expect", {}))
-                    and _section_valid(c.get("forbid", {}))}
+                    and _section_valid(c.get("forbid", {}), forbid=True)}
                    for c in cases]
         for case, result in zip(cases, results):
             try:
@@ -640,14 +750,15 @@ def cmd_run(args) -> int:
 
         print(f"  {c['id']}: "
               + ("FAIL" if scores[-1].get("error") else "ok"))
-    agg = _aggregate(scores)
-    n_err = sum(1 for s in scores if s.get("error"))
     report = {"tag": args.tag, "created_at": int(time.time()),
               "elapsed_s": round(time.time() - t0, 1),
               "corpus_sha256": corpus_sha256,
               "model": extract_llm.MODEL,
               "actual_model": target[1],
               "patient_state_mode": mode,
+              # what `score` needs to name the generation of a stored report
+              "generations": {"llm_extract": extract_llm.EXTRACT_VERSION,
+                              "patient_context": extract_llm.PATIENT_CONTEXT_VERSION},
               "chunk_plan_version": clinical_chunking.PLAN_VERSION,
               "requested_chunk_size": extract_llm._CHUNK_SIZE if chunk_size is None else chunk_size,
               "call_stats": _llm_call_stats(metas),
@@ -657,32 +768,87 @@ def cmd_run(args) -> int:
                   (extract_llm._PROMPT_HEAD + extract_llm._CTX_HEAD)
                   .encode("utf-8")).hexdigest(),
               "performance": _duration_percentiles(durations),
-              "n_cases": len(cases),
-              # end-to-end success: extraction completed at all, over
-              # the WHOLE corpus — success-case F1 alone hides total
-              # pipeline failure (F23)
-              "e2e_success_rate": (round((len(cases) - n_err)
-                                         / len(cases), 3)
-                                   if cases else None),
-              "errors": [s["id"] for s in scores if s.get("error")],
-              "fields": agg, "reply_confusion": _reply_confusion(scores),
-              "cases": scores}
-    with open(args.out, "w") as f:
+              **_summary(scores)}
+    _write_report(report, args.out)
+    return 0
+
+
+def _summary(scores: list[dict]) -> dict:
+    """The scored part of a report, shared by `run` and `score`."""
+    n_err = sum(1 for s in scores if s.get("error"))
+    return {"n_cases": len(scores),
+            # end-to-end success: extraction completed at all, over
+            # the WHOLE corpus — success-case F1 alone hides total
+            # pipeline failure (F23)
+            "e2e_success_rate": (round((len(scores) - n_err) / len(scores), 3)
+                                 if scores else None),
+            "errors": [s["id"] for s in scores if s.get("error")],
+            "fields": _aggregate(scores),
+            "false_assertion": _false_assertions(scores),
+            "reply_confusion": _reply_confusion(scores),
+            "cases": scores}
+
+
+def _write_report(report: dict, path: str) -> None:
+    with open(path, "w") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
-    print(f"\n{args.tag}: {len(cases)} cases, "
+    print(f"\n{report['tag']}: {report['n_cases']} cases, "
           f"{len(report['errors'])} extraction errors "
-          f"(e2e {report['e2e_success_rate']}) -> {args.out}")
-    for field, a in agg.items():
+          f"(e2e {report['e2e_success_rate']}) -> {path}")
+    for field, a in report["fields"].items():
         print(f"  {field:9s} P={a['precision']:.3f} "
               f"R={a['recall']:.3f} F1={a['f1']:.3f}")
+    false = report["false_assertion"]
+    print(f"  false_assertion total={false['total']} {false['by_field']}")
     if report["reply_confusion"]:
         print(f"  reply_confusion {report['reply_confusion']}")
     vio = [(s["id"], s["forbid_violations"])
-           for s in scores if s.get("forbid_violations")]
+           for s in report["cases"] if s.get("forbid_violations")]
     if vio:
         print("  forbid violations:")
         for cid, v in vio:
             print(f"    {cid}: {v}")
+
+
+def cmd_score(args) -> int:
+    """Score stored, already-validated outputs: no model, no network, no re-validation."""
+    try:
+        cases, corpus_sha256 = _load_corpus(args.cases)
+        if len({case["id"] for case in cases}) != len(cases):
+            raise ValueError("duplicate_case_id")
+        raw = Path(args.outputs).read_bytes()
+        stored = json.loads(raw)
+        outputs, origin = stored_outputs.read(stored, [case["id"] for case in cases])
+        if stored.get("corpus_sha256") != corpus_sha256:
+            raise ValueError("outputs_corpus_mismatch")
+    except (OSError, ValueError) as error:
+        # the bench's own reasons are identifiers; a parser message may quote the file
+        print(str(error) if str(error).isidentifier() else "score_input_invalid", file=sys.stderr)
+        return 2
+    scores = [_score_case(case, outputs[case["id"]]) for case in cases]
+    scored, out_of_scope = origin.pop("scored_fields"), set()
+    if scored is not None:
+        for score in scores:
+            out_of_scope.update(stored_outputs.limit_fields(score, scored))
+    present = [out for out in outputs.values() if out is not None]
+    report = {"tag": args.tag, "created_at": int(time.time()),
+              "source": "stored_outputs",
+              "corpus_sha256": corpus_sha256,
+              "outputs_sha256": hashlib.sha256(raw).hexdigest(),
+              # null = not measured here; never read it as zero
+              **origin,
+              "scored_fields": scored,
+              "out_of_scope_fields": sorted(out_of_scope),
+              # a generation without the field recalls nothing by construction:
+              # that is "not collected", not "no wrong assertion"
+              "fields_without_output": [assertions.FIELD] if present and not any(
+                  assertions.has_field(out) for out in present) else [],
+              **_summary(scores)}
+    _write_report(report, args.out)
+    for name, text in (("out_of_scope_fields", "対象外（出力の形が違う）"),
+                       ("fields_without_output", "欄なし（未取得）")):
+        if report[name]:
+            print(f"  {text}: {', '.join(report[name])}")
     return 0
 
 
@@ -701,7 +867,19 @@ def cmd_report(args) -> int:
             row += (f"  P{a['precision']:.2f} R{a['recall']:.2f}"
                     f" F1{a['f1']:.2f}" if a else " " * 24)
         print(row)
+    row = f"{'false_assertion':10s}"
     for r in reps:
+        # an older report did not count them: "not counted" is not zero
+        false = r.get("false_assertion")
+        row += f"{'total ' + str(false['total']) if false else '未集計':>24s}"
+    print(row)
+    for r in reps:
+        if r.get("false_assertion", {}).get("by_field"):
+            print(f"{r['tag']} false_assertion: {r['false_assertion']['by_field']}"
+                  f" {r['false_assertion']['by_detail']}")
+        for name in ("out_of_scope_fields", "fields_without_output"):
+            if r.get(name):
+                print(f"{r['tag']} {name}: {r[name]}")
         if r["errors"]:
             print(f"{r['tag']} extraction errors: {r['errors']}")
         if r.get("reply_confusion"):
@@ -723,6 +901,13 @@ def main() -> int:
     r.add_argument("--patient-state", choices=("off", "on"), default="off",
                    help="apply the bounded pharmacy-reference formatter to synthetic history")
     r.set_defaults(fn=cmd_run)
+    sc = sub.add_parser("score", help="offline: score stored validated outputs")
+    sc.add_argument("--cases", required=True)
+    sc.add_argument("--outputs", required=True,
+                    help="a run report, or {validated, generations, corpus_sha256, outputs}")
+    sc.add_argument("--tag", default="score")
+    sc.add_argument("--out", required=True)
+    sc.set_defaults(fn=cmd_score)
     p = sub.add_parser("report")
     p.add_argument("files", nargs="+")
     p.set_defaults(fn=cmd_report)
