@@ -41,6 +41,137 @@ from writer_lock import (RUN_LOCK, UPDATE_MARKER_NAME, acquire_run_lock,
 LOCKFILE = RUN_LOCK
 
 
+def _walk_patient_history(adapter, ledger, p, since, args, deadline, stats, result) -> tuple:
+    """One patient's incremental timeline walk: fetch→replies→save→cursor
+    advances per chunk, so a deadline or crash resumes from the last stored
+    page. Returns (total_new, cursor) for the caller's progress print."""
+    # Resume the stored cursor for the same or a shallower cutoff:
+    # pages are newest-first so a shallower one reaches its cutoff on
+    # the next fetched page. Restarting at page 1 on that drift made
+    # `--days` re-runs (whose `since` moves later every invocation)
+    # re-walk already-saved pages forever (P-3). A DEEPER cutoff must
+    # restart: fetch_history drops messages older than the old target
+    # and the cursor may sit past them (even at the timeline end), so
+    # resuming would skip [since, target) and still set the floor.
+    # save_messages dedups the re-fetched pages.
+    cursor = ledger.history_cursor(p.project_id)
+    target = ledger.history_target(p.project_id)
+    if not cursor or (target and since < target):
+        ledger.reset_history_cursor(p.project_id, since)
+        cursor = 1
+    elif target != since:
+        ledger.set_history_target(p.project_id, since)
+    pages_left = args.pages
+    total_new = 0
+    reached = False
+    reauthed = False  # one re-login attempt per patient (FIX-ID1)
+    # incremental walk: each chunk is fetched->replies->saved->cursor
+    # advances, so deadline/crash resumes from the last stored page
+    while pages_left > 0 and not reached:
+        if time.monotonic() > deadline:
+            stats["deadline"] = True
+            break
+        n_pages = min(args.chunk, pages_left)
+        sp = cursor if n_pages <= 1 else max(1, cursor - 1)
+        try:
+            batch = adapter.fetch_history(
+                p.project_id, since, max_pages=n_pages, start_page=sp)
+        except Exception as e:
+            # fetch_history embeds every MCSError in batch.error — a
+            # bare raise would be an adapter bug; keep the JSON
+            # contract instead of a traceback (FIX-ID1)
+            stats["errors"].append(
+                f"history {p.project_id}: {type(e).__name__}")
+            break
+        hist = batch.messages
+        merged = merge_full_replies(
+            adapter, hist, args.delay, deadline, stats, ledger=ledger)
+        try:
+            ledger.upsert_patient_info(p)
+            new_ids = ledger.save_messages(hist)
+        except Exception as exc:
+            import semantic_intake_hold
+            recorded = semantic_intake_hold.report_write_failure(
+                ledger, result, p.project_id, exc, messages=hist)
+            stats["errors"].append(f"db {p.project_id}: write_failed")
+            expired = (isinstance(batch.error, SessionExpired)
+                       or isinstance(merged.error, SessionExpired))
+            if recorded and expired:
+                if not reauthed:
+                    reauthed = True
+                    state = adapter.auto_login(profile_dir=CHROME_PROFILE,
+                                               chrome_bin=CHROME_BIN)
+                    if state == 'ok':
+                        # No page was committed; retry the same cursor.
+                        continue
+                    stats['errors'].append(f'history {p.project_id}: auto_login={state}')
+                else:
+                    stats['errors'].append('session_expired')
+                stats['deadline'] = True
+            break
+        total_new += len(new_ids)
+        pages_used = batch.pages
+        if merged.checkpoint_safe:
+            cursor = sp + pages_used
+        pages_left -= pages_used
+        ledger.set_history_cursor(p.project_id, cursor)
+        # floor requires: full walk to cutoff AND no failed/missing
+        # replies AND no mid-merge deadline hit (Oracle B08);
+        # 'snippet' parent bodies already forced
+        # checkpoint_safe=False inside merge (Oracle R3/F9) —
+        # 'unknown' parents are body-less post types the API never
+        # resolves, so they do not block
+        replies_pending = ledger.pending_reply_jobs(p.project_id) > 0
+        if batch.reached and not batch.error and merged.checkpoint_safe \
+                and not replies_pending and not merged.deadline:
+            # contiguous-with-coverage walks extend the verified
+            # upper boundary — later head syncs anchor there
+            if since <= ledger.coverage_ts(p.project_id):
+                ledger.set_coverage(p.project_id,
+                                    ledger.high_watermark(
+                                        p.project_id))
+            ledger.set_history_floor(p.project_id, since)
+            reached = True
+        elif batch.reached:
+            reached = True  # walk done but floor withheld — replies pending
+        # auth failure arrives embedded — fetch_history puts it in
+        # batch.error, the reply merge in merged.error. Attempt ONE
+        # re-login per patient, then resume the chunk from the
+        # persisted cursor (partial pages are already saved above).
+        # The old `except SessionExpired` around fetch_history could
+        # never fire, so this path was previously unreachable (FIX-ID1)
+        if (isinstance(batch.error, SessionExpired)
+                or isinstance(merged.error, SessionExpired)) \
+                and not reauthed:
+            reauthed = True
+            state = adapter.auto_login(profile_dir=CHROME_PROFILE,
+                                       chrome_bin=CHROME_BIN)
+            if state == "ok":
+                # the expired chunk is re-fetched: un-mark the walk
+                # as done and refund its pages when the cursor did
+                # not advance, or the loop exits with replies unfetched
+                reached = False
+                if not merged.checkpoint_safe:
+                    pages_left += pages_used
+                continue
+            stats["errors"].append(
+                f"history {p.project_id}: auto_login={state}")
+        if batch.error:
+            stats["errors"].append(
+                f"history {p.project_id}: {batch.error.kind}")
+            if isinstance(batch.error, SessionExpired):
+                stats["deadline"] = True
+            break
+        if merged.error:
+            stats["errors"].append("session_expired")
+            stats["deadline"] = True
+            break
+        if pages_used < n_pages:
+            break  # short page = end of timeline
+        time.sleep(args.delay)
+    return total_new, cursor
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=14)
@@ -128,131 +259,8 @@ def main() -> int:
             if floor and floor <= since:
                 result["skipped_floored"] += 1
                 continue
-            # Resume the stored cursor for the same or a shallower cutoff:
-            # pages are newest-first so a shallower one reaches its cutoff on
-            # the next fetched page. Restarting at page 1 on that drift made
-            # `--days` re-runs (whose `since` moves later every invocation)
-            # re-walk already-saved pages forever (P-3). A DEEPER cutoff must
-            # restart: fetch_history drops messages older than the old target
-            # and the cursor may sit past them (even at the timeline end), so
-            # resuming would skip [since, target) and still set the floor.
-            # save_messages dedups the re-fetched pages.
-            cursor = ledger.history_cursor(p.project_id)
-            target = ledger.history_target(p.project_id)
-            if not cursor or (target and since < target):
-                ledger.reset_history_cursor(p.project_id, since)
-                cursor = 1
-            elif target != since:
-                ledger.set_history_target(p.project_id, since)
-            pages_left = args.pages
-            total_new = 0
-            reached = False
-            replies_pending = False
-            reauthed = False  # one re-login attempt per patient (FIX-ID1)
-            # incremental walk: each chunk is fetched->replies->saved->cursor
-            # advances, so deadline/crash resumes from the last stored page
-            while pages_left > 0 and not reached:
-                if time.monotonic() > deadline:
-                    stats["deadline"] = True
-                    break
-                n_pages = min(args.chunk, pages_left)
-                sp = cursor if n_pages <= 1 else max(1, cursor - 1)
-                try:
-                    batch = adapter.fetch_history(
-                        p.project_id, since, max_pages=n_pages, start_page=sp)
-                except Exception as e:
-                    # fetch_history embeds every MCSError in batch.error — a
-                    # bare raise would be an adapter bug; keep the JSON
-                    # contract instead of a traceback (FIX-ID1)
-                    stats["errors"].append(
-                        f"history {p.project_id}: {type(e).__name__}")
-                    break
-                hist = batch.messages
-                merged = merge_full_replies(
-                    adapter, hist, args.delay, deadline, stats, ledger=ledger)
-                try:
-                    ledger.upsert_patient_info(p)
-                    new_ids = ledger.save_messages(hist)
-                except Exception as exc:
-                    import semantic_intake_hold
-                    recorded = semantic_intake_hold.report_write_failure(
-                        ledger, result, p.project_id, exc, messages=hist)
-                    stats["errors"].append(f"db {p.project_id}: write_failed")
-                    expired = (isinstance(batch.error, SessionExpired)
-                               or isinstance(merged.error, SessionExpired))
-                    if recorded and expired:
-                        if not reauthed:
-                            reauthed = True
-                            state = adapter.auto_login(profile_dir=CHROME_PROFILE,
-                                                       chrome_bin=CHROME_BIN)
-                            if state == 'ok':
-                                # No page was committed; retry the same cursor.
-                                continue
-                            stats['errors'].append(f'history {p.project_id}: auto_login={state}')
-                        else:
-                            stats['errors'].append('session_expired')
-                        stats['deadline'] = True
-                    break
-                total_new += len(new_ids)
-                pages_used = batch.pages
-                if merged.checkpoint_safe:
-                    cursor = sp + pages_used
-                pages_left -= pages_used
-                ledger.set_history_cursor(p.project_id, cursor)
-                # floor requires: full walk to cutoff AND no failed/missing
-                # replies AND no mid-merge deadline hit (Oracle B08);
-                # 'snippet' parent bodies already forced
-                # checkpoint_safe=False inside merge (Oracle R3/F9) —
-                # 'unknown' parents are body-less post types the API never
-                # resolves, so they do not block
-                replies_pending = ledger.pending_reply_jobs(p.project_id) > 0
-                if batch.reached and not batch.error and merged.checkpoint_safe \
-                        and not replies_pending and not merged.deadline:
-                    # contiguous-with-coverage walks extend the verified
-                    # upper boundary — later head syncs anchor there
-                    if since <= ledger.coverage_ts(p.project_id):
-                        ledger.set_coverage(p.project_id,
-                                            ledger.high_watermark(
-                                                p.project_id))
-                    ledger.set_history_floor(p.project_id, since)
-                    reached = True
-                elif batch.reached:
-                    reached = True  # walk done but floor withheld — replies pending
-                # auth failure arrives embedded — fetch_history puts it in
-                # batch.error, the reply merge in merged.error. Attempt ONE
-                # re-login per patient, then resume the chunk from the
-                # persisted cursor (partial pages are already saved above).
-                # The old `except SessionExpired` around fetch_history could
-                # never fire, so this path was previously unreachable (FIX-ID1)
-                if (isinstance(batch.error, SessionExpired)
-                        or isinstance(merged.error, SessionExpired)) \
-                        and not reauthed:
-                    reauthed = True
-                    state = adapter.auto_login(profile_dir=CHROME_PROFILE,
-                                               chrome_bin=CHROME_BIN)
-                    if state == "ok":
-                        # the expired chunk is re-fetched: un-mark the walk
-                        # as done and refund its pages when the cursor did
-                        # not advance, or the loop exits with replies unfetched
-                        reached = False
-                        if not merged.checkpoint_safe:
-                            pages_left += pages_used
-                        continue
-                    stats["errors"].append(
-                        f"history {p.project_id}: auto_login={state}")
-                if batch.error:
-                    stats["errors"].append(
-                        f"history {p.project_id}: {batch.error.kind}")
-                    if isinstance(batch.error, SessionExpired):
-                        stats["deadline"] = True
-                    break
-                if merged.error:
-                    stats["errors"].append("session_expired")
-                    stats["deadline"] = True
-                    break
-                if pages_used < n_pages:
-                    break  # short page = end of timeline
-                time.sleep(args.delay)
+            total_new, cursor = _walk_patient_history(
+                adapter, ledger, p, since, args, deadline, stats, result)
             result["messages_new"] += total_new
             result["threads_fetched"] = stats["threads"]
             result["done"] += 1

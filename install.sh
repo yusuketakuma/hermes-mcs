@@ -138,7 +138,7 @@ link_target() {
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 # Read-only bootstrap modes do not require checkout companions.
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
-INSTALL_RUNTIME_SHA256="a29d95875a414cc361f34a615efb8593552cbf46d3a150adf946f92695605833"
+INSTALL_RUNTIME_SHA256="1fc64244ff8845f5d5abd445023c5ec5abd9bf854848aad2a56e466e63db5913"
 _install_stage_private_dir=""
 # shellcheck disable=SC2317,SC2329  # Invoked by EXIT after the sourced stage exits.
 _install_stage_cleanup() {

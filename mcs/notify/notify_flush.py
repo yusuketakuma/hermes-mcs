@@ -266,7 +266,7 @@ def _followup_files(ledger, payload: dict, project_id):
 
 _SYSTEM_TEXT = {
     'session_expired': ('🔴 認証切れ', '新しい患者情報を取得できません。',
-                        'MCSへ手動で再ログインしてください。'),
+                        'Macの端末で ~/.local/bin/mcs setup browser を実行し、MCSへログインし直してください。'),
     'session_recovered': ('🟢 自動再ログインで復旧', '認証を復旧しました。収集の完了とは別です。',
                           '次回の収集状況を確認してください。'),
     'run_failed': ('🔴 収集処理の失敗', '新しい患者情報の更新が遅れる可能性があります。',
