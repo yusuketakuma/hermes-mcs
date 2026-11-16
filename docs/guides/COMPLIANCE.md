@@ -114,6 +114,7 @@ Jev が確認に含まれない場合は、明示した `semantic.mode` をそ�
 への要求の前に止まります。手動の合成データ検証（`semantic_jev.py` の配線確認・`mcs_setup.py jev-value`・`semantic_bench`・
 `semantic_shadow_e2e`）は配布されている完全合成のデータだけを送り患者情報を送らないため、この確認の対象外です
 （Jevの日次上限・`semantic.until` には従います）。
+通知では「要約：生成済み」・見出し「要約」・「抽出済み事実」と表示し、「自動検査完了」「自動検査済」「監査済み」は付きません。要約を出さない運用にする場合は `semantic.summary_mode` を `enforce` 以外にします。
 止めている間は `mcs_setup.py check` の注意・`mcs_setup.py doctor` の `providers` の `block_reason`・`mcs setup` の保存前の確認が、
 エラーコード `external_transfer_review_required` で理由を示します（`doctor --probe` で停止・予算の理由も見つかったときは、
 それを `also_block_reason` に並べます）。続ける場合は `--services` にそのサービスを含めて
@@ -139,11 +140,11 @@ MCSを動かすユーザーが所有する権限0600の通常ファイルに戻�
 その改ざん防止・定期確認を求めています。医療・介護関係事業者ガイダンスも「アクセス記録の保存」と
 「不正が疑われる異常な記録の定期的な確認」を挙げています。
 
-- Slack・Discord・LINE WORKS の `/mcs` 操作は、回答の前に `~/.mcs/data/access_log/access-YYYY-MM.jsonl` へ
+- Slack・Discord・LINE WORKS の `/mcs` 操作は、閲覧の回答では回答の前に、確定操作では依頼を受け付けた後に、`~/.mcs/data/access_log/access-YYYY-MM.jsonl` へ
   利用者・チャンネル・操作・患者ID・結果を1行で残します。一覧の回答は、表示した患者のIDも残します
   （1行200人まで、超えた分は人数だけ）。`/mcs-summary`・LINE WORKS の「サマリー」も同じく記録し、記録できないときは表示しません。
   検索語・本文・患者名は残さず、操作・種類が定義済みの名前でない拒否された要求は `invalid` として残します。
-- 記録できないときは閲覧の回答を返しません。確定済みの依頼・操作は別の受付記録があるため回答を返します。
+- 記録できないときは閲覧の回答を返しません。確定済みの依頼・操作の応答は受付番号（`command_id`）・ハッシュ・受付状態だけで患者情報を含まず、操作者・患者・変更内容は受付記録（`command_receipts`）に残るため返します。適用結果の照会は閲覧なので、記録できない間は返しません。
 - 各行は直前の行の SHA-256 を持ち、途中の行の削除・改変・月ファイルの欠落を検出できます。
   末尾の行の削除・改変は連鎖だけでは分からないため、`verify` が出す `records` と `head` を
   点検記録（端末の外）に書き、次回 `--checkpoint 件数:head` で照合します。
@@ -158,6 +159,7 @@ python3 mcs/ops/mcs_compliance.py access-log show --project 123
 人数しか残らず行をまたいで重複を除けないため、`patients_at_least: true` のときは「少なくともこの人数」と読みます。
 
 月1回の確認と記録の保存期間は、運用管理規程で決めてください（自動削除はしません）。
+アクセスログを書けなかった期間の確定操作は、受付記録（`command_receipts`）でしか追えません。定期確認では、その期間の受付記録も突き合わせてください。
 次は記録の対象外です。運用管理規程の業務日誌で補ってください。
 
 - Mac 上で `sqlite3` や `mcs_view.py` を直接使う操作（OS のアカウント管理と画面ロックで制御します）

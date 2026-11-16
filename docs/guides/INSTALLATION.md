@@ -336,7 +336,7 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 - `init` は通知プラグイン設定の後、対話通知を使うときは gateway を同期し、
   `check` を自動実行する。設定書込み・同期・チェックの失敗は成功扱いにしない
 
-設定キー全一覧は §4 を参照。個別キーは `--set KEY=JSON`（例: `--set self_posts=true`）、Jev 連携は `--semantic-mode`（`off`/`shadow`/`enforce`）で指定できる。
+設定キー全一覧は §4 を参照。個別キーは `--set KEY=JSON`（例: `--set self_posts=true`）、Jev 連携は `--semantic-mode`（`auto`/`off`/`shadow`/`assist`/`enforce`）で指定できる。
 
 ### A-4. サービスの再同期と再検証（更新・復旧時）
 
