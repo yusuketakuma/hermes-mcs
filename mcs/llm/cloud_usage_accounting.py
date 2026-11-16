@@ -1,7 +1,7 @@
 """Validate cloud prices, accounting rows and bound reservation evidence."""
 from __future__ import annotations
 from contextlib import closing, contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import json
 import math
@@ -79,19 +79,34 @@ PRICE_DEFINITIONS = MappingProxyType({**anthropic_client.PRICE_SNAPSHOTS,
 _CURRENT_PRICE = object()
 
 
-def _price_definition(model, price_version=_CURRENT_PRICE):
+def _configured_price_version(model):
+    if model == PROVIDERS["anthropic"]:
+        # Read at call time: a price rotation replaces the current Haiku version.
+        return anthropic_client.PRICE_VERSION
+    for module in (anthropic_client, openai_client):
+        if model in module.CURRENT_PRICE_VERSIONS:
+            return module.CURRENT_PRICE_VERSIONS[model]
+    raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
+
+
+def current_price_version(model, now=None):
+    """The price table in force for a new send on the JST day of ``now``: the
+    configured table from its recheck day, before that the newest table already
+    rechecked, so a rotation never prices an earlier day with an unconfirmed table."""
+    configured = _configured_price_version(model)
+    day = datetime.fromtimestamp(time.time() if now is None else now, JST).date().isoformat()
+    checked = [d for (m, _v), d in PRICE_DEFINITIONS.items() if m == model and d["price_checked_on"] <= day]
+    chosen = PRICE_DEFINITIONS.get((model, configured))
+    if not checked or chosen is not None and chosen["price_checked_on"] <= day:
+        return configured
+    return max(checked, key=lambda d: (d["price_checked_on"], d["price_valid_until"]))["price_version"]
+
+
+def _price_definition(model, price_version=_CURRENT_PRICE, *, now=None):
     if not isinstance(model, str):
         raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
     if price_version is _CURRENT_PRICE:
-        if model == PROVIDERS["anthropic"]:
-            # Read at call time: a price rotation replaces the current Haiku version.
-            price_version = anthropic_client.PRICE_VERSION
-        elif model in anthropic_client.CURRENT_PRICE_VERSIONS:
-            price_version = anthropic_client.CURRENT_PRICE_VERSIONS[model]
-        elif model in openai_client.CURRENT_PRICE_VERSIONS:
-            price_version = openai_client.CURRENT_PRICE_VERSIONS[model]
-        else:
-            raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
+        price_version = current_price_version(model, now)
     if not isinstance(price_version, str):
         raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
     definition = PRICE_DEFINITIONS.get((model, price_version))
@@ -143,20 +158,30 @@ def _decimal(value):
 
 
 def pricing_valid(now=None, *, model=MODEL):
+    now = time.time() if now is None else now
     try:
-        definition = _price_definition(model)
+        definition = _price_definition(model, now=now)
     except AnthropicError:
         return False
-    day = datetime.fromtimestamp(time.time() if now is None else now, JST).date().isoformat()
+    day = datetime.fromtimestamp(now, JST).date().isoformat()
     return definition["price_checked_on"] <= day <= definition["price_valid_until"]
 
 
-def price_info(model):
-    definition = _price_definition(model)
+# Days before a price table's recheck date from which diagnostics announce it.
+PRICE_RECHECK_NOTICE_DAYS = 7
+
+
+def price_info(model, now=None):
+    now = time.time() if now is None else now
+    definition = _price_definition(model, now=now)
+    valid = pricing_valid(now, model=model)
+    remaining = (date.fromisoformat(definition["price_valid_until"]) - datetime.fromtimestamp(now, JST).date()).days
     return {"price_version": definition["price_version"],
             "price_checked_on": definition["price_checked_on"],
             "price_valid_until": definition["price_valid_until"],
-            "price_valid": pricing_valid(model=model)}
+            "price_valid": valid,
+            "price_days_remaining": remaining,
+            "price_recheck_due": not valid or remaining <= PRICE_RECHECK_NOTICE_DAYS}
 
 
 def _texts(body):
@@ -188,11 +213,11 @@ def _reservation_cost(input_bound, max_tokens, *, legacy=False, model=MODEL, pri
 
 
 def max_cost(max_tokens, *, input_bound=INPUT_RESERVATION_BOUND, now=None, model=MODEL):
-    definition = _price_definition(model)
+    definition = _price_definition(model, now=now)
     if (not pricing_valid(now, model=model) or type(max_tokens) is not int or not 1 <= max_tokens <= definition["max_tokens"]
             or type(input_bound) is not int or not 1 <= input_bound <= INPUT_RESERVATION_BOUND):
         raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
-    return _reservation_cost(input_bound, max_tokens, model=model)
+    return _reservation_cost(input_bound, max_tokens, model=model, price_version=definition["price_version"])
 
 
 def usage_cost(usage, *, model=MODEL, price_version=_CURRENT_PRICE):
