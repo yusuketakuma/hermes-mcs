@@ -324,6 +324,22 @@ def _private_health_file():
     shutil.rmtree(directory, ignore_errors=True)
 
 
+@pytest.fixture(autouse=True)
+def _no_leftover_watchdog_deadline():
+    """run_check._WATCHDOG_EXIT_AT is process-wide: the real tick arms it once
+    and exits, but a test that arms it and returns leaves a hard deadline that
+    later ticks in the same pytest process obey (their snapshot publish and
+    backup stop once it has passed), so the damage shows up in an unrelated
+    test, only for some orderings. Fail the test that left it armed and clear
+    it for the ones that follow."""
+    yield
+    run_check = sys.modules.get("run_check")
+    if run_check is not None and run_check._WATCHDOG_EXIT_AT is not None:
+        run_check._WATCHDOG_EXIT_AT = None
+        pytest.fail("this test left run_check's watchdog deadline armed; "
+                    "disarm it or set _WATCHDOG_EXIT_AT through monkeypatch")
+
+
 @pytest.fixture
 def legacy_chat_format():
     """Suites written before chat_format_version keep the legacy Discord/

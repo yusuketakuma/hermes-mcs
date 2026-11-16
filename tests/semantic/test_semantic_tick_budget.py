@@ -128,6 +128,10 @@ def test_real_tick_keeps_extraction_and_semantic_pending_on_budget_wait(
     assert _BudgetJev.instances[0].requests_made == 0
     assert _BudgetJev.events.index("notify") < _BudgetJev.events.index("semantic")
 
+    # A failed publish keeps ok=True and only marks the run partial, so name
+    # the publisher's own reason instead of a bare missing file.
+    assert result["snapshot_state"] == "published", (
+        result.get("snapshot_failure"), result["errors"])
     snapshot = data / "snapshots" / "ledger-snapshot.db"
     assert snapshot.exists()
     view = ledger.LedgerReader(str(snapshot))
