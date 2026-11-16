@@ -807,9 +807,8 @@ def test_new_occurrence_marker_never_uses_duplicate_metadata_as_legacy(runtime, 
     assert not patient_context_refresh_readiness.inference_coverage(led.db, 1, CFG)['complete']
 
 
-@pytest.mark.parametrize('save_interrupted', [False, True])
-def test_openai_summary_high_repair_is_audited_published_and_rechecked(runtime, cloud, monkeypatch, tmp_path, save_interrupted):
-    """A paid repair remains bound to its response through publication and later reads."""
+def publish_summary_repair(runtime, monkeypatch, tmp_path, *, save_interrupted=False):
+    """Drive one synthetic paid summary repair to publication; needs the ``cloud`` fixture."""
     from contextlib import nullcontext
 
     led, _, _ = runtime
@@ -913,6 +912,14 @@ def test_openai_summary_high_repair_is_audited_published_and_rechecked(runtime, 
         runtime[1].wall += 3600
     drain(runtime)
     assert len(sends) == 1
+    return sends
+
+
+@pytest.mark.parametrize('save_interrupted', [False, True])
+def test_openai_summary_high_repair_is_audited_published_and_rechecked(runtime, cloud, monkeypatch, tmp_path, save_interrupted):
+    """A paid repair remains bound to its response through publication and later reads."""
+    led, _, _ = runtime
+    sends = publish_summary_repair(runtime, monkeypatch, tmp_path, save_interrupted=save_interrupted)
     assert sends[0]['model'] == 'gpt-6.1-sol' and sends[0]['reasoning'] == {'effort': 'high'}
     assert sends[0]['max_output_tokens'] == 32768
     assert led.artifacts(patient_context_refresh_state.QUALITY_FAIL, project_id=1)
