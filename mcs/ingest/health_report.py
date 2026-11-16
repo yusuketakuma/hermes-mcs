@@ -76,6 +76,7 @@ def _diagnostic_block(value) -> bool:
 
 def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     """Read bounded private OCR evidence without exposing source IDs, paths or text."""
+    import attachment_inference_deferral
     import attachment_ocr
     import writer_lock
     if not isinstance(cfg, dict):
@@ -94,11 +95,13 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     policy_fields = ('policy_binding', 'policy_rejected_failed',
                      'policy_rejected_exhausted', 'policy_rejected_unacknowledged')
     snapshot_fields = ("snapshot_failure", "snapshot_timing")
+    defer_field = "local_deferred_reasons"
     try:
         value = strict_json(safe_io.read_private_bytes(path, limit=4096))
         if (not isinstance(value, dict) or set(value) - {
                 "at", "reason", "queue_status", "paid_recovery_pending", *counts, *writer_fields,
-                *failure_fields, *ack_fields, *policy_fields, 'failure_cohort', *snapshot_fields}
+                *failure_fields, *ack_fields, *policy_fields, 'failure_cohort', *snapshot_fields,
+                defer_field}
                 or not finite_number(value.get("at")) or not 0 <= value["at"] <= now):
             raise ValueError("ocr_status_invalid")
         # mcs_ocr records why its publish after new pages was deferred; the
@@ -168,9 +171,15 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
         return {"state": "unknown", "reason": "attachment_ocr_status_missing"}
     except (OSError, ValueError, TypeError, RecursionError):
         return {"state": "unknown", "reason": "attachment_ocr_status_corrupt"}
+    # The deferral breakdown only explains local_deferred: an invalid one is
+    # dropped (the guidance falls back to the generic text), never 'corrupt'.
+    defer_reasons = value.get(defer_field)
+    defer_detail = ({defer_field: defer_reasons,
+                     "local_deferred_primary": attachment_inference_deferral.primary(defer_reasons)}
+                    if attachment_inference_deferral.valid(defer_reasons, value.get("local_deferred")) else {})
     detail = {"at": value["at"], "age_s": round(now - value["at"], 1),
               **{key: value[key] for key in (*counts, "paid_recovery_pending", "queue_status", 'failure_cohort') if key in value},
-              **writer_detail, **failure_detail, **ack_detail, **policy_detail}
+              **writer_detail, **failure_detail, **ack_detail, **policy_detail, **defer_detail}
     if now - value["at"] > freshness_deadline(cfg):
         return {**detail, "state": "unknown", "reason": "attachment_ocr_status_stale"}
     waiting_reasons = (None, "busy", "writer_busy", "snapshot_deferred", "memory_deferred")

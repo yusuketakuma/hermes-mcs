@@ -463,6 +463,7 @@ def test_ack_stops_old_unsent_alert_and_preserves_unknown_delivery(case, outcome
 
 @pytest.mark.parametrize("waiting,expected", [
     ({"local_deferred": 1}, "attachment_ocr_local_inference_deferred"),
+    ({"local_deferred": 1, "local_deferred_reasons": {"disk_low": 1}}, "attachment_ocr_local_inference_deferred"),
     ({"deferred": 1}, "attachment_ocr_processing_deferred"),
     ({"reason": "busy"}, "attachment_ocr_processing_deferred"),
     ({"reason": "memory_deferred"}, "attachment_ocr_memory_deferred"),
