@@ -211,7 +211,9 @@ def test_answer_survives_snapshot_removal_after_read(led, tmp_path, monkeypatch)
 def test_discord_mcs_summary_op(led, tmp_path, monkeypatch):
     from adapters.common.dispatch import dispatch
     path = _snapshot(led, tmp_path)
-    settings = {"snapshot": str(path), "allowed_user_ids": {"1001"},
+    (tmp_path / "cmd").mkdir()
+    settings = {"snapshot": str(path), "inbox": str(tmp_path / "cmd"),
+                "allowed_user_ids": {"1001"},
                 "allowed_chat_ids": {"42"}, "project_ids": frozenset({1})}
     ident = {"user_id": "1001", "chat_id": "42", "scope_id": None,
              "profile": None, "message_id": None}
@@ -256,9 +258,10 @@ def test_hermes_summary_keeps_names_out(led, tmp_path):
     led.db.execute("UPDATE patients SET station_name='みどり'")
     _add_request(led, "残薬", "山田", "2000-01-01")     # listed by room
     path = _snapshot(led, tmp_path)
+    (tmp_path / "cmd").mkdir()
     out = dispatch(
         {"op": "summary", "scope": "station:みどり"},
-        {"snapshot": str(path), "allowed_user_ids": {"1001"},
+        {"snapshot": str(path), "inbox": str(tmp_path / "cmd"), "allowed_user_ids": {"1001"},
          "allowed_chat_ids": {"42"}, "project_ids": frozenset({1})},
         {"user_id": "1001", "chat_id": "42", "scope_id": None,
          "profile": None, "message_id": None})

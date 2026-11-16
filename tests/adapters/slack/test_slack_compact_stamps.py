@@ -46,8 +46,18 @@ def test_stamp_controls_expand_one_menu_with_six_distinct_names():
     assert menu["initial_option"] == menu["options"][0]
     assert menu["initial_option"]["value"] == cards.OWN_STAMP_VALUE
     assert not any(b["type"] == "context_actions" for b in blocks)
-    assert not any(e["type"] == "button" for b in blocks if b["type"] == "actions"
-                   for e in b["elements"])
+    # the only buttons are the quick 確認する beside the ordinary menu
+    assert [e["action_id"] for b in blocks if b["type"] == "actions"
+            for e in b["elements"] if e["type"] == "button"] == ["mcs:a:" + "c" * 32]
+
+
+def _ordinary(blocks):
+    """(quick buttons, the 操作 select) of the one ordinary actions block."""
+    block, = [b for b in blocks if b["type"] == "actions"
+              and any(e["action_id"] == cards.MENU_ACTION for e in b["elements"])]
+    *buttons, select = block["elements"]
+    assert select["action_id"] == cards.MENU_ACTION
+    return buttons, select
 
 
 def test_stamp_menu_without_an_own_stamp_has_no_selection():
@@ -79,10 +89,9 @@ def _origin(body, action):
 def test_compact_controls_preserve_all_tokens_and_observed_own_state():
     spec = _stamps_spec()
     _, blocks = render(spec)
-    ordinary, = [b for b in blocks if b["type"] == "actions"
-                  and b["elements"][0]["action_id"] == cards.MENU_ACTION]
-    select, = ordinary["elements"]
-    assert [o["value"] for o in select["options"]] == ["b" * 32, "c" * 32]
+    buttons, select = _ordinary(blocks)
+    assert [b["value"] for b in buttons] == ["c" * 32]
+    assert [o["value"] for o in select["options"]] == ["b" * 32]
     control = _stamp_control(blocks)
     menu = control["elements"][0]
     assert [o["value"] for o in menu["options"]] == [
@@ -91,7 +100,8 @@ def test_compact_controls_preserve_all_tokens_and_observed_own_state():
     for option in menu["options"][1:]:
         origin = _origin(body, {**menu, "selected_option": option})
         assert origin and origin["token"] == option["value"]
-    assert blocks.index(control) < blocks.index(ordinary)
+    assert blocks.index(control) < next(i for i, b in enumerate(blocks)
+                                        if select in b.get("elements", ()))
     spec["render_rev"] += 1
     assert control["block_id"] != _stamp_control(render(spec)[1])["block_id"]
 
@@ -245,10 +255,9 @@ def test_visible_controls_keep_the_target_and_never_fallback(op, thread, rejecte
     assert len(calls) == 1 and calls[0][0] == op
     payload = calls[0][1]
     assert not any(b["type"] == "context_actions" for b in payload["blocks"])
-    ordinary, = [b for b in payload["blocks"] if b["type"] == "actions"
-                  and b["elements"][0]["action_id"] == cards.MENU_ACTION]
-    menu, = ordinary["elements"]
-    assert [o["value"] for o in menu["options"]] == ["b" * 32, "c" * 32]
+    buttons, menu = _ordinary(payload["blocks"])
+    assert [b["value"] for b in buttons] == ["c" * 32]
+    assert [o["value"] for o in menu["options"]] == ["b" * 32]
     stamps = _stamp_control(payload["blocks"])["elements"][0]["options"]
     assert [o["value"] for o in stamps] == [
         cards.OWN_STAMP_VALUE, *(f"{i:032x}" for i in range(1, 6)), "d" * 32]

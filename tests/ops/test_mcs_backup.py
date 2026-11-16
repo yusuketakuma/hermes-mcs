@@ -14,9 +14,11 @@ import sys
 import pytest
 
 import ledger
+import local_backup
 import maintenance
 import mcs_backup as backup
 import backup_evidence
+import held_restore
 import mcs_view
 import notify_spool
 import notify_transport
@@ -46,13 +48,13 @@ def world(tmp_path, monkeypatch):
             "receipt_json,processed_at) VALUES('synthetic','synthetic','applied','{}',?)",
             (NOW,))
     db.close()
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(source_dir / "backups"))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(source_dir / "backups"))
     monkeypatch.setattr(maintenance.time, "strftime", lambda _: "20261003")
     # This fixture exercises backup contracts, not ambient disk capacity.
     usage = maintenance.shutil.disk_usage(source_dir)
     monkeypatch.setattr(maintenance.shutil, "disk_usage",
                         lambda _: type(usage)(usage.total, usage.used, 16 * 1024**3))
-    assert maintenance.daily_backup(str(source)) is None
+    assert local_backup.daily_backup(str(source)) is None
     snapshot = source_dir / "backups" / "ledger-20261003.db"
     destination, scratch = tmp_path / "medium", tmp_path / "local"
     destination.mkdir(mode=0o700)
@@ -387,7 +389,7 @@ def test_snapshot_and_copy_limits_leave_no_published_output(world, tmp_path):
     with pytest.raises(backup_evidence.BackupError):
         backup.offsite(str(snapshot), replace(policy, max_snapshot_bytes=1), lambda: KEY)
     with pytest.raises(backup_evidence.BackupError, match="copy_size"):
-        backup._copy_private(snapshot, tmp_path / "copy", 1)
+        held_restore.copy_private(snapshot, tmp_path / "copy", 1)
     assert list(Path(policy.destination).iterdir()) == []
     assert not (tmp_path / "copy").exists()
 
@@ -717,7 +719,7 @@ def test_restore_racing_ledger_is_not_overwritten_or_deleted(world, tmp_path, mo
 def test_restore_copy_failure_cleans_only_its_new_destination(world, tmp_path, monkeypatch):
     receipt = _create(world)
     target = tmp_path / "fresh-data"
-    copy = backup._copy_private
+    copy = held_restore.copy_private
 
     def fail(source, destination, limit):
         if destination.parent == target:
@@ -725,7 +727,7 @@ def test_restore_copy_failure_cleans_only_its_new_destination(world, tmp_path, m
             raise OSError("synthetic copy failure")
         return copy(source, destination, limit)
 
-    monkeypatch.setattr(backup, "_copy_private", fail)
+    monkeypatch.setattr(held_restore, "copy_private", fail)
     with pytest.raises(OSError):
         backup.restore(receipt["bundle"], receipt["sha256"], world[3],
                        lambda: KEY, destination=str(target))

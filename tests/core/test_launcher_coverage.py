@@ -23,7 +23,7 @@ def _main_files():
     found = set()
     for path in ROOT.rglob('__main__.py'):
         rel = path.relative_to(ROOT).as_posix()
-        if '.git' in rel.split('/') or '__pycache__' in rel.split('/'):
+        if rel.startswith('.venv/') or '.git' in rel.split('/') or '__pycache__' in rel.split('/'):
             continue
         found.add(rel)
     return found
@@ -33,6 +33,15 @@ def test_every_main_module_is_classified():
     """新しい __main__.py は managed か非業務のどちらかに明示分類される。"""
     unclassified = _main_files() - set(_MANAGED) - set(_NON_BUSINESS_MAIN)
     assert not unclassified, f'unclassified __main__.py: {sorted(unclassified)}'
+
+
+def test_main_scan_excludes_only_root_virtualenv(tmp_path, monkeypatch):
+    monkeypatch.setitem(globals(), 'ROOT', tmp_path)
+    for rel in ('.venv/lib/pkg/__main__.py', 'new_package/__main__.py', 'new_package/.venv/__main__.py'):
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True)
+        path.touch()
+    assert _main_files() == {'new_package/__main__.py', 'new_package/.venv/__main__.py'}
 
 
 def test_managed_entries_present():

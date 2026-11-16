@@ -70,7 +70,10 @@ def render(spec, names=None):
     blocks = render_parts(spec["parts"], names,
                           spec["parts"].get("mentions") == "silent",
                           card_kind=spec.get("kind"), stamp_control=stamp_control)
-    elements = []
+    # 確認する・担当する as buttons first: one tap, and they wrap on a phone
+    elements = [{"type": "button", "text": {"type": "plain_text", "text": b["label"]},
+                 "action_id": "mcs:a:" + b["token"], "value": b["token"]}
+                for b in controls.quick]
     if menu:
         elements.append({
             "type": "static_select", "action_id": MENU_ACTION,

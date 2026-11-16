@@ -27,6 +27,7 @@ import sqlite3
 import time
 from contextvars import ContextVar
 
+import collection_diagnostics
 import mcs_util
 import notify_sender
 import mcs_signals
@@ -360,14 +361,22 @@ def _system_event_text(kind, payload):
     """Render operational notices from fixed vocabulary without raw payload text."""
     code, tag = _update_event(payload) if kind == 'update_notice' else (None, None)
     title, impact, action = _UPDATE_TEXT[code] if code else _SYSTEM_TEXT[kind]
-    lines = [f'[MCSLOG] {title}', '影響: ' + impact, '次の操作: ' + action]
+    stop = (collection_diagnostics.stop_explanation(payload.get('stop'))
+            if kind in ('run_failed', 'session_expired') else None)
+    lines = [f'[MCSLOG] {title}', '影響: ' + impact]
+    if stop is not None:
+        stage, _label, what, todo = stop
+        lines += ['止まった処理: ' + stage, '原因: ' + what]
+        if kind == 'run_failed':
+            action = todo
+    lines.append('次の操作: ' + action)
     run_id = payload.get('run_id')
     if type(run_id) is int and 0 < run_id < 2**63:
         lines.append(f'実行: run {run_id}')
     detail = payload.get('detail')
-    stage = detail.partition(':')[0] if isinstance(detail, str) else None
-    if stage in ('history_jobs', 'collection', 'bootstrap', 'unreads', 'self_probe'):
-        lines.append('処理: ' + stage)
+    step = detail.partition(':')[0] if isinstance(detail, str) else None
+    if stop is None and step in collection_diagnostics.STAGES and step != 'unknown':
+        lines.append('処理: ' + collection_diagnostics.STAGES[step])
     if tag:
         lines.append(('候補版: ' if code == 'available' else '対象版: ') + tag)
     if code == 'available':
@@ -388,7 +397,9 @@ def _format_event(ledger, ev) -> tuple[str, list[tuple[str, str]]]:
         raise ValueError("payload_invalid")
     if ev["kind"] in notify_sender.SYSTEM_ALERT_KINDS:
         import alert_recovery
-        reason = alert_recovery.suppression_reason(ledger.db, ev)
+        # without a ledger (a preview) recovery cannot be proven: the alert is not suppressed
+        reason = (alert_recovery.suppression_reason(ledger.db, ev)
+                  if ledger is not None else None)
         if reason is not None:
             raise semantic_send_gate.StaleSend(reason)
         return _system_event_text(ev["kind"], payload), []

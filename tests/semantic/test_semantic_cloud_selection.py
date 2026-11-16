@@ -280,7 +280,7 @@ def test_cloud_selection_resumes_pages_and_preserves_sql_order(cloud, monkeypatc
     for _ in range(3):
         clock[0] = 0.0
         led.db.set_trace_callback(lambda sql: clock.__setitem__(0, 1.0)
-            if sql.startswith('SELECT j.job_id,j.kind') else None)
+            if sql.startswith('SELECT j.job_id,j.project_id,COALESCE') else None)
         try:
             with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
                 with legacy_cloud_routes():
@@ -312,7 +312,7 @@ def test_cloud_selection_rechecks_scope_and_deleted_job_after_incomplete(cloud, 
     monkeypatch.setattr(semantic_due_selection, 'time', semantic_drain.time)
     monkeypatch.setattr(cloud_inference, 'time', semantic_drain.time)
     led.db.set_trace_callback(lambda sql: clock.__setitem__(0, 1.0)
-        if sql.startswith('SELECT j.job_id,j.kind') else None)
+        if sql.startswith('SELECT j.job_id,j.project_id,COALESCE') else None)
     try:
         with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
             with legacy_cloud_routes():
@@ -398,7 +398,7 @@ def test_cloud_selection_invalidates_progress_when_config_changes(cloud, monkeyp
     monkeypatch.setattr(semantic_due_selection, 'time', semantic_drain.time)
     monkeypatch.setattr(cloud_inference, 'time', semantic_drain.time)
     led.db.set_trace_callback(lambda sql: clock.__setitem__(0, 1.0)
-        if sql.startswith('SELECT j.job_id,j.kind') else None)
+        if sql.startswith('SELECT j.job_id,j.project_id,COALESCE') else None)
     try:
         with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
             with legacy_cloud_routes():
@@ -473,7 +473,7 @@ def test_cloud_selection_incomplete_invalid_suffix_advances(cloud, monkeypatch):
     assert not calls and not led.db.in_transaction
 
 
-def test_cloud_selection_highwater_defers_new_job_to_next_cycle(cloud, monkeypatch):
+def test_cloud_selection_resume_adds_jobs_above_highwater(cloud, monkeypatch):
     from types import SimpleNamespace
     led, _, _, calls = cloud
     led.save_messages([_message(2)])
@@ -489,7 +489,7 @@ def test_cloud_selection_highwater_defers_new_job_to_next_cycle(cloud, monkeypat
     monkeypatch.setattr(semantic_due_selection, 'time', semantic_drain.time)
     monkeypatch.setattr(cloud_inference, 'time', semantic_drain.time)
     led.db.set_trace_callback(lambda sql: clock.__setitem__(0, 1.0)
-        if sql.startswith('SELECT j.job_id,j.kind') else None)
+        if sql.startswith('SELECT j.job_id,j.project_id,COALESCE') else None)
     try:
         with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
             with legacy_cloud_routes():
@@ -504,11 +504,10 @@ def test_cloud_selection_highwater_defers_new_job_to_next_cycle(cloud, monkeypat
     clock[0] = 0.0
     with legacy_cloud_routes():
         first = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=10.0)[0]
-    assert [r['message_id'] for r in first] == [1, 2]
+    # The resumed cycle also scans jobs above its previous high-water mark.
+    assert [r['message_id'] for r in first] == [1, 2, 3]
     with led.db:
         led.db.execute("UPDATE fetch_jobs SET state='done' WHERE message_id IN (1,2)")
-    with legacy_cloud_routes():
-        assert not semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=10.0)[0]
     with legacy_cloud_routes():
         later = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=10.0)[0]
     assert [r['message_id'] for r in later] == [3]
@@ -531,7 +530,7 @@ def test_cloud_selection_invalidates_replaced_database_inode(cloud, tmp_path, mo
     def interrupt_after_page():
         clock[0] = 0.0
         led.db.set_trace_callback(lambda sql: clock.__setitem__(0, 1.0)
-            if sql.startswith('SELECT j.job_id,j.kind') else None)
+            if sql.startswith('SELECT j.job_id,j.project_id,COALESCE') else None)
         try:
             with pytest.raises(semantic_drain._CloudSelectionIncomplete, match='deadline'):
                 with legacy_cloud_routes():

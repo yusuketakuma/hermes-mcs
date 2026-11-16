@@ -333,3 +333,20 @@ def test_lineworks_stamp_change_revises_only_changed_post(led, off_page, changed
         assert reply["prior_remote_id"]
         revised_text = revised["parts"]["thread_body_parts"][int(root["part_id"].split(":")[1]) - 1]
         assert ("合成更新名" if changed_field == "actor" else "再取得失敗") in revised_text
+
+
+@pytest.mark.parametrize("layout,state,head", [
+    (5, "acked", "💬 患者A"),                 # an existing card keeps its face
+    (6, None, "💬 患者A"), (6, "assigned", "👤 患者A"), (6, "acked", "✅ 患者A")])
+def test_layout6_heading_icon_follows_the_card_state(led, monkeypatch, layout, state, head):
+    _seed_thread(led)
+    _dispatch(led, _intent(led))
+    led.db.execute("UPDATE notification_cards SET layout=? WHERE card_id=1", (layout,))
+    if state == "assigned":
+        led.db.execute("INSERT INTO notification_triage(card_id,owner,state,revision,updated_at)"
+                       " VALUES(1,'合成 担当','assigned',1,?)", (NOW,))
+    if state == "acked":
+        monkeypatch.setattr(notify_render, "current_ackers", lambda *a: ["合成 確認"])
+    content = notify_render.card_content(led.db, _card(led), cfg=CFG)
+    assert content["containers"][0]["text"] == head
+    assert content["card_state"] == state

@@ -139,9 +139,11 @@ DISPATCH_GROUP_LIMIT = 10  # the ordinary flush window, without a new configurat
 # Layout 4 introduced reply cards (notify.reply_cards): the root card shows
 # the root post only and each later reply gets its own card in the root's
 # thread. Layout 5 retains that format and adds initial-history summaries.
+# Layout 6 (notify_render.ACTION_FIRST_LAYOUT) retains that format, leads
+# each post summary with 📌 依頼 and shows the card state as the heading icon.
 # CARD_LAYOUT is the newest layout this code can write; rollback checks the
 # stored layout on the DB selected by the updater's schema/backup contract.
-CARD_LAYOUT = 5
+CARD_LAYOUT = 6
 FACE_LAYOUT = 3               # every card that is not a reply-card thread
 
 

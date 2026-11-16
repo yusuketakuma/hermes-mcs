@@ -66,7 +66,7 @@ def test_history_has_one_card_part_only_and_link_without_source_actions(led, mon
     assert [[b["id"] for b in row] for row in rendered["parts"]["action_rows"]] == [["link"]]
     assert all(k not in rendered["parts"] for k in ("thread_body_parts", "thread_name", "post_source_id", "source_thread"))
     assert "完全合成の履歴" not in json.dumps(rendered, ensure_ascii=False)
-    assert _card(led)["layout"] == 5
+    assert _card(led)["layout"] == notify_cards.CARD_LAYOUT
     assert not led.db.execute("SELECT 1 FROM notification_action_tokens").fetchone()
 
 

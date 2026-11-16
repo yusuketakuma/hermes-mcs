@@ -1,0 +1,98 @@
+name: Agent Claude
+
+# Claude Code GitHub Action を、所有者が 担当:claude を付けた Issue と、
+# 所有者が担当中の Issue・PR に書いた @claude にだけ反応させる。
+# 停止スイッチ vars.AUTOMATION_ENABLED が true でなければ起動しない（既定は停止）。
+# 書くのは agent/claude- ブランチとPRだけ（下書きPRは使わない）。マージ・タグ・配備はしない。
+# CI 失敗の修正は agent-claude-repair.yml（workflow_dispatch だけで起動）。
+# 運用と停止手順: docs/development/AUTOMATION.md
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  claude:
+    # The event decides only whether to look; the "Check the assignment" step decides whether to run.
+    if: >-
+      vars.AUTOMATION_ENABLED == 'true' &&
+      github.event.sender.login == github.repository_owner &&
+      (
+        (github.event_name == 'issues' && github.event.label.name == '担当:claude') ||
+        (github.event_name != 'issues' && contains(github.event.comment.body, '@claude') &&
+          (github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request ||
+           contains(github.event.issue.labels.*.name, '担当:claude')))
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      # One writer for every Claude entry point (Issue, PR comment, repair): an Issue and its PR have
+      # different numbers, so a per-number group would let two runs write the same branch.
+      group: agent-claude-writer
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      # The check uses the default branch's ci/agent_control.py, never code from a PR.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: control
+          sparse-checkout: ci
+          persist-credentials: false
+      - name: Check the assignment
+        id: auth
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+          ON_PR: ${{ github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request != null }}
+          AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
+        run: |
+          set -euo pipefail
+          control=control/ci/agent_control.py
+          # Read the labels now, not from the event: the lock job may have just removed a second 担当:*,
+          # and a run that waited in the queue must not act on an assignment withdrawn meanwhile.
+          if [[ "$ON_PR" == "true" ]]; then
+            work=$(mktemp -d)
+            gh api "repos/$GH_REPO/pulls/$NUMBER" > "$work/pr.json"
+            echo '{}' > "$work/labels.json"
+            for issue in $(python3 "$control" linked --pr "$work/pr.json" | jq -r '.issues[]'); do
+              labels=$(gh api "repos/$GH_REPO/issues/$issue" --jq '[.labels[].name]')
+              jq --arg n "$issue" --argjson l "$labels" '.[$n] = $l' "$work/labels.json" > "$work/next.json"
+              mv "$work/next.json" "$work/labels.json"
+            done
+            verdict=$(python3 "$control" repair --pr "$work/pr.json" --issue-labels "$work/labels.json" \
+              --automation "${AUTOMATION:-}" --owner-request)
+            ok=$(jq -r .allowed <<< "$verdict"); reason=$(jq -r .reason <<< "$verdict")
+          else
+            labels=$(gh api "repos/$GH_REPO/issues/$NUMBER" --jq '[.labels[].name]')
+            ok=$(python3 "$control" assigned --labels "$labels" --agent 担当:claude | jq -r .assigned)
+            reason="#$NUMBER の担当が Claude だけではない"
+          fi
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+          if [[ "$ok" != "true" ]]; then echo "::notice::not started: $reason"; fi
+      - if: steps.auth.outputs.ok == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - if: steps.auth.outputs.ok == 'true'
+        uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          label_trigger: "担当:claude"
+          branch_prefix: agent/claude-
+          claude_args: >-
+            --max-turns 40
+            --allowedTools "Bash(gh pr create:*),Bash(git:*),Bash(ruff:*),Bash(python3:*),Bash(scripts/run_tests.sh:*)"
+            --append-system-prompt "このリポジトリの AGENTS.md と docs/development/AUTOMATION.md に従う。作業は対象 Issue の範囲だけ。終わったら本文に Fixes #番号 を書いて gh pr create でPRを作る（下書きにしない）。テストの削除・skip・閾値の緩和で成功を作らない。患者データ・実ログ・秘密値を書かない。マージ・タグ・リリースはしない。"

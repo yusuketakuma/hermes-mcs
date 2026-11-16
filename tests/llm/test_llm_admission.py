@@ -742,24 +742,19 @@ def test_waiting_rt_promotion_respects_slot_limit(tmp_path):
         b.close()
 
 
-def test_setup_gate_blocks_broker_missing_mcs_routes(
-        tmp_path, monkeypatch):
-    """Blocked startup: with admission on and a route table lacking an
-    MCS caller, check_environment reports an ERROR — the calls would
-    otherwise fail closed forever with no surface."""
+@pytest.mark.parametrize("opened", [False, True])
+def test_setup_gate_rejects_enabled_admission(tmp_path, monkeypatch, opened):
+    """O6: no production caller reopens the epoch (open_epoch), so an
+    enabled boundary would hold every inference forever. check_environment
+    reports it as an ERROR whatever the broker state, not a warning."""
     import local_llm
     import mcs_setup
     import environment_diagnostics
     path = str(tmp_path / "adm.db")
     b = adm.Broker(path)
-    b.open_epoch(lambda: True)
+    if opened:
+        b.open_epoch(lambda: True)
     b.close()
-    # the route registry is code-level — simulate a broker whose table
-    # lost an MCS route (edited registry, wrong override)
-    monkeypatch.setattr(
-        adm, "DEFAULT_ROUTES",
-        {k: v for k, v in adm.DEFAULT_ROUTES.items()
-         if k != "mcs.extract"})
     monkeypatch.setenv("MCS_LLM_ADMISSION", path)
     local_llm._BROKERS.clear()
 
@@ -770,13 +765,15 @@ def test_setup_gate_blocks_broker_missing_mcs_routes(
     # only the admission audit is under test
     monkeypatch.setattr(environment_diagnostics.lifecycle_io, "run_bounded",
                         lambda *a, **k: _Done())
-    try:
-        errors, _warnings = mcs_setup.check_environment({})
-    finally:
-        live = local_llm._BROKERS.pop(path, None)
-        if live is not None:
-            live.close()
-    assert any("mcs.extract" in e for e in errors)
+    errors, warnings = mcs_setup.check_environment({})
+    assert local_llm._BROKERS.pop(path, None) is None
+    hits = [e for e in errors if "local_llm.admission" in e]
+    assert len(hits) == 1 and "MCS_LLM_ADMISSION" in hits[0]
+    assert not any("local_llm.admission" in w for w in warnings)
+
+    monkeypatch.setenv("MCS_LLM_ADMISSION", "0")
+    errors, _warnings = mcs_setup.check_environment({})
+    assert not any("local_llm.admission" in e for e in errors)
 
 
 def test_interrupted_rt_wait_is_not_masked_by_a_failing_cancel(

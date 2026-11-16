@@ -34,7 +34,7 @@ MCS の医療・介護チャットを収集・解析するローカルシステ�
 
 ## 絶対ルール
 
-- push・PR（下書きを含む）・merge・tag・Release 公開・配備・常駐サービスの再起動・本番DBや実データの変更は、ユーザーが明示した範囲だけ行う。
+- push・PR・merge・tag・Release 公開・配備・常駐サービスの再起動・本番DBや実データの変更は、ユーザーが明示した範囲だけ行う。
   この文書はそれらの承認にならない。worktree の作成、読取り、ローカルの検証は確認なしで進めてよい。
 - 収集・解析コアは標準ライブラリのみ。新しい外部依存を足さない。例外（Hermes 同梱 `discord.py` の関数内遅延 import、
   `runtime_mode=standalone` の `adapters/{slack,discord}/standalone.py` が使う `deployment/requirements-standalone.txt` の固定版 SDK、
@@ -119,5 +119,6 @@ python3 ci/mine_gates.py --check
 
 agmsg team `devflow-mcs` と devflow の運用は廃止済み（2026-10-02）。その座席・受信コマンド・フックを使わず、中央設定を推測で再作成しない。
 同じ Herdr タブの Codex・Claude 連携はユーザー全体設定の規約に従う。レビューの受入は技術的な受入で、merge・配備の許可ではない。
+GitHub 上の AI 実装（Claude Code Action・Copilot・Dots/Codex）は `docs/development/AUTOMATION.md` に従う。所有者が Issue に付けた `担当:*` ラベルは、その Issue の範囲で `agent/`・`copilot/`・`codex/` ブランチへ push しPRを作る明示指示とみなす。PRは下書きにしない（所有者 2026-11-17）。merge・tag・Release・配備の許可は含まない。
 
 ドキュメントと既存のコードが食い違うときはコードの書き方に従い、見つけた食い違いを最後の返答ですべて挙げること

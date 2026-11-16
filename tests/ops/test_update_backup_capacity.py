@@ -11,6 +11,7 @@ import update_runtime_migration
 import os
 from types import SimpleNamespace
 
+import local_backup
 import maintenance
 import pytest
 
@@ -27,19 +28,19 @@ def capacity(updater, tmp_path, monkeypatch):
     source.write_bytes(b"synthetic" * 137)
     cfg = {"runtime_mode": "hermes"}
     state = SimpleNamespace(floor=512, free=0, published=[], need_calls=[])
-    monkeypatch.setattr(maintenance, "BACKUP_DIR", updater.BACKUP_DIR)
-    monkeypatch.setattr(maintenance, "disk_floor_mb", lambda: state.floor)
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", updater.BACKUP_DIR)
+    monkeypatch.setattr(local_backup, "disk_floor_mb", lambda: state.floor)
     monkeypatch.setattr(maintenance.shutil, "disk_usage", lambda path: SimpleNamespace(free=state.free))
-    real_need = maintenance._backup_need_mb
+    real_need = local_backup.backup_need_mb
 
     def observed_need(path):
         state.need_calls.append(path)
         return real_need(path)
 
-    monkeypatch.setattr(maintenance, "_backup_need_mb", observed_need)
-    monkeypatch.setattr(maintenance.tempfile, "mkstemp", lambda **kwargs: (
+    monkeypatch.setattr(local_backup, "backup_need_mb", observed_need)
+    monkeypatch.setattr(local_backup.tempfile, "mkstemp", lambda **kwargs: (
         os.open(os.devnull, os.O_RDONLY), str(tmp_path / "synthetic-preupdate.db.tmp")))
-    monkeypatch.setattr(maintenance, "_publish_backup", lambda *args, **kwargs: state.published.append(args))
+    monkeypatch.setattr(local_backup, "publish_backup", lambda *args, **kwargs: state.published.append(args))
 
     # Exercise the public plan and its real precheck, while preventing every
     # unrelated config, git, service, and installed-database lookup.
@@ -118,7 +119,7 @@ def test_plan_uses_backup_capacity_and_preserves_old_margin(capacity, floor, fre
     capacity.floor = floor
     capacity.free = 2 * capacity.size + free_margin
     expected_backup_bytes = 2 * capacity.size + floor * MIB
-    assert maintenance._backup_need_mb(capacity.updater.LEDGER) * MIB == expected_backup_bytes
+    assert local_backup.backup_need_mb(capacity.updater.LEDGER) * MIB == expected_backup_bytes
     capacity.need_calls.clear()
 
     result = capacity.updater.plan("v1.0.1")
@@ -138,14 +139,14 @@ def test_plan_and_actual_backup_capacity_gate_are_consistent(capacity, floor, fr
     capacity.free = 2 * capacity.size + free_margin
     result = capacity.updater.plan("v1.0.1")
     blocked = "insufficient_disk" in result["blockers"]
-    backup_rejected = capacity.free < maintenance._backup_need_mb(capacity.updater.LEDGER) * MIB
+    backup_rejected = capacity.free < local_backup.backup_need_mb(capacity.updater.LEDGER) * MIB
 
     if backup_rejected:
         with pytest.raises(maintenance.MaintenanceError, match="backup_disk_low"):
-            maintenance.preupdate_backup(capacity.updater.LEDGER)
+            local_backup.preupdate_backup(capacity.updater.LEDGER)
         assert blocked and not capacity.published
     else:
-        result_path = maintenance.preupdate_backup(capacity.updater.LEDGER)
+        result_path = local_backup.preupdate_backup(capacity.updater.LEDGER)
         assert result_path.endswith("synthetic-preupdate.db")
         assert len(capacity.published) == 1
         # An additional precheck rejection is correct when the old 64 MiB

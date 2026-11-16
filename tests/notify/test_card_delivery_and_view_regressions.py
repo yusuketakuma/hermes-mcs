@@ -133,7 +133,7 @@ def test_layout_one_card_keeps_legacy_face_and_new_cards_use_layout_two(led):
     card = _card(led)
     # Post-scoped reply cards use the newest layout; ordinary faces retain layout three.
     assert card["layout"] == notify_cards.FACE_LAYOUT == 3
-    assert notify_cards.CARD_LAYOUT == 5
+    assert notify_cards.CARD_LAYOUT == 6
     new = notify_cards.card_content(led.db, card)
     legacy = notify_cards.card_content(led.db, {**card, "layout": 1})
     assert " · 起点 " in legacy["containers"][0]["text"]
@@ -265,7 +265,12 @@ def test_long_attachment_name_keeps_its_extension(led, tmp_path):
 
 # 8 ---------------------------------------------------------------------
 
-def test_health_write_failed_alert_is_sent(led, monkeypatch):
+def test_health_write_failed_alert_is_sent(led, monkeypatch, tmp_path):
+    import health_report
+
+    health = tmp_path / "health.json"
+    health.write_text(json.dumps({"at": NOW - 1}))
+    monkeypatch.setattr(health_report, "HEALTH_FILE", str(health))
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: sys.executable)
     monkeypatch.setattr(notify_sender, 'target', lambda *a: "synthetic")
     monkeypatch.setattr(notify_sender, 'send_argv', lambda *a, kind=None: ["hermes"])

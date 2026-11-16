@@ -1,0 +1,94 @@
+name: Sync labels and milestones
+
+# .github/labels.json を GitHub のラベル・マイルストーンへ反映する。
+# 名前・色・説明の変更分だけ反映し、定義外の既存ラベルは保持する。
+on:
+  push:
+    branches: [main]
+    paths: [.github/labels.json, .github/workflows/labels-sync.yml]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: labels-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Sync labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Rename objects, never delete/recreate: existing Issue/PR associations survive.
+          existing=$(gh api "repos/$GH_REPO/labels?per_page=100" --paginate --jq '.[].name')
+          # Check all collisions before the first write. A later race still fails safely.
+          jq -c '.labels[] | select(.rename_from != null)' .github/labels.json | while IFS= read -r label; do
+            old=$(jq -r .rename_from <<< "$label")
+            new=$(jq -r .name <<< "$label")
+            if grep -qxF "$old" <<< "$existing" && grep -qxF "$new" <<< "$existing"; then
+              echo "Label rename collision: $old -> $new. No labels have been changed." >&2
+              exit 1
+            fi
+          done
+          jq -c '.labels[] | select(.rename_from != null)' .github/labels.json | while IFS= read -r label; do
+            old=$(jq -r .rename_from <<< "$label")
+            new=$(jq -r .name <<< "$label")
+            if grep -qxF "$old" <<< "$existing"; then
+              gh label edit "$old" --name "$new"
+            fi
+          done
+          # Refresh after renames; finish all pages before any definition writes.
+          # A failed/incomplete read is never interpreted as an empty label set.
+          inventory=$(gh api "repos/$GH_REPO/labels?per_page=100" --paginate --slurp)
+          inventory=$(jq -ce 'if type == "array" and all(.[]; type == "array") then add // [] else error("invalid label pages") end | if all(.[]; (.name | type == "string") and (.color | type == "string") and (.description == null or (.description | type == "string"))) then . else error("invalid label inventory") end' <<< "$inventory")
+          jq -c '.labels[]' .github/labels.json | while IFS= read -r label; do
+            name=$(jq -r .name <<< "$label")
+            color=$(jq -r '.color | ascii_downcase' <<< "$label")
+            description=$(jq -r '.description // ""' <<< "$label")
+            found=$(jq -c --arg name "$name" '[.[] | select(.name == $name)]' <<< "$inventory")
+            count=$(jq length <<< "$found")
+            if (( count == 0 )); then
+              # No --force: a concurrently-created label must not be overwritten.
+              gh label create "$name" --color "$color" --description "$description"
+            elif (( count == 1 )); then
+              args=()
+              if [[ "$(jq -r '.[0].color | ascii_downcase' <<< "$found")" != "$color" ]]; then
+                args+=(--color "$color")
+              fi
+              if [[ "$(jq -r '.[0].description // ""' <<< "$found")" != "$description" ]]; then
+                args+=(--description "$description")
+              fi
+              if (( ${#args[@]} )); then
+                gh label edit "$name" "${args[@]}"
+              fi
+            else
+              echo "Duplicate label inventory: $name" >&2
+              exit 1
+            fi
+          done
+      - name: Create missing milestones
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          existing=$(gh api "repos/$GH_REPO/milestones?state=all&per_page=100" --paginate --jq '.[].title')
+          jq -c '.milestones[]' .github/labels.json | while IFS= read -r ms; do
+            title=$(jq -r .title <<< "$ms")
+            if ! grep -qxF "$title" <<< "$existing"; then
+              gh api "repos/$GH_REPO/milestones" -f title="$title" -f description="$(jq -r .description <<< "$ms")" > /dev/null
+              echo "created milestone: $title"
+            fi
+          done

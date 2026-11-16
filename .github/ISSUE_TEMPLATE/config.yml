@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 脆弱性・秘密情報・データ取扱いの問題（非公開で報告）
+    url: https://github.com/yusuketakuma/hermes-mcs/security/advisories/new
+    about: 公開の Issue にせず、非公開の脆弱性報告で管理者へ直接伝える（SECURITY.md「報告」）。
+  - name: GitHub の使い方（ラベル・版・進め方）
+    url: https://github.com/yusuketakuma/hermes-mcs/blob/main/docs/development/GITHUB_WORKFLOW.md
+    about: どのラベルを付けるか、何から見ればよいか。

@@ -173,7 +173,7 @@ def test_derive_reports_source_changed_without_disclosing_patient_id(tmp_path, m
         monkeypatch.setattr(rollup, 'scan_dirty_projects', lambda ledger, **kw: rollup.RollupScan((17, 18, 19), (), False))
 
         def rebuild(_ledger, pids, *, deadline, source_changed, source_unknown,
-                    source_unknown_reasons, cfg):
+                    source_unknown_reasons, cfg, timings):
             assert set(pids) == {17, 18, 19}
             source_changed.append(17)
             source_unknown.append(18)
@@ -299,7 +299,7 @@ def test_failed_run_does_not_enqueue_or_send_after_recording_leaves_transaction(
         monkeypatch.setattr(notify_flush, "flush", lambda *a, **k: calls.append("send"))
         result = {"errors": []}
         run_check._fail_run(store, SimpleNamespace(no_notify=False), result, 1, "failed",
-                            "synthetic", time.monotonic() + 600, alert="run_failed")
+                            RuntimeError(), "synthetic", time.monotonic() + 600, alert="run_failed")
         assert calls == [] and store.db.in_transaction
         assert result["errors"] == ["synthetic", "run_record_failed: RuntimeError"]
         store.db.rollback()

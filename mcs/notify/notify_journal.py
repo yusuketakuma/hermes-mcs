@@ -40,10 +40,41 @@ def scan_journals(dirs: dict, *, deadline=None, max_bytes=None, max_rows=None) -
 
     out: dict[str, dict] = {}
     incomplete = False
+    for _path, file_rows, tainted in _journal_files(
+            dirs, check_deadline, max_bytes, max_rows):
+        incomplete = incomplete or tainted
+        for aid, rows in file_rows.items():
+            rec = out.setdefault(aid, {"rows": [], "tainted": False})
+            rec["rows"].extend(rows)
+            if tainted:
+                rec["tainted"] = True
+    check_deadline()
+    return out, incomplete
+
+
+def tainted_journal_files(dirs: dict, *, deadline=None) -> list[str]:
+    """Paths of journal files with a torn or unparsable line, for the
+    operator check. Absent transport state dirs are skipped; an unreadable
+    one propagates, like the restore scan."""
+    def check_deadline():
+        if deadline is not None and time.monotonic() >= deadline:
+            raise JournalReadLimit("journal_read_limit")
+    return [path for path, _rows, tainted in _journal_files(
+        dirs, check_deadline, None, None, missing_ok=True) if tainted]
+
+
+def _journal_files(dirs, check_deadline, max_bytes, max_rows, *, missing_ok=False):
+    """Yield (path, attempt_id -> rows, tainted) per journal file."""
     bytes_read = rows_read = 0
     for state_dir in _journal_dirs(dirs):
         check_deadline()
-        names = sorted(n for n in os.listdir(state_dir)
+        try:
+            listed = os.listdir(state_dir)
+        except FileNotFoundError:
+            if not missing_ok:
+                raise
+            continue
+        names = sorted(n for n in listed
                        if n.startswith("journal-") and n.endswith(".jsonl"))
         for name in names:
             check_deadline()
@@ -83,11 +114,4 @@ def scan_journals(dirs: dict, *, deadline=None, max_bytes=None, max_rows=None) -
                         file_rows.setdefault(aid, []).append(row)
                     else:
                         tainted = True
-            incomplete = incomplete or tainted
-            for aid, rows in file_rows.items():
-                rec = out.setdefault(aid, {"rows": [], "tainted": False})
-                rec["rows"].extend(rows)
-                if tainted:
-                    rec["tainted"] = True
-    check_deadline()
-    return out, incomplete
+            yield os.path.join(state_dir, name), file_rows, tainted

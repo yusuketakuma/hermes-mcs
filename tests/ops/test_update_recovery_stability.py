@@ -318,7 +318,7 @@ def test_manual_schema_rollback_persists_hold_before_tree_change(
 
 def test_apply_bail_persists_schema_hold_before_tree_change(
         updater, tmp_path, monkeypatch):
-    import maintenance
+    import local_backup
     from ops_testkit import _git
 
     repo, live, back, before, after, restarts = _schema_bump_world(
@@ -335,7 +335,7 @@ def test_apply_bail_persists_schema_hold_before_tree_change(
     monkeypatch.setattr(updater, "precheck_tag", lambda t: ["schema_bump:7->8"])
     monkeypatch.setattr(update_execution, 'precheck_tag', updater.precheck_tag)
     monkeypatch.setattr(update_planning, 'precheck_tag', updater.precheck_tag)
-    monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: back)
+    monkeypatch.setattr(local_backup, "preupdate_backup", lambda p: back)
     monkeypatch.setattr(updater, "_baseline_check", lambda c: [])
     monkeypatch.setattr(update_apply, '_baseline_check', updater._baseline_check)
     monkeypatch.setattr(updater, "_needs_migration", lambda v: False)
@@ -389,7 +389,7 @@ def test_apply_bail_persists_schema_hold_before_tree_change(
 def test_failed_schema_rollback_stays_frozen_until_restored(
         updater, tmp_path, monkeypatch, runtime_mode):
     import ledger
-    import maintenance
+    import local_backup
     from ops_testkit import _git
     repo, live, back, before, after, restarts = _schema_bump_world(
         updater, tmp_path, monkeypatch)
@@ -405,7 +405,7 @@ def test_failed_schema_rollback_stays_frozen_until_restored(
     monkeypatch.setattr(updater, "precheck_tag", lambda t: ["schema_bump:7->8"])
     monkeypatch.setattr(update_execution, 'precheck_tag', updater.precheck_tag)
     monkeypatch.setattr(update_planning, 'precheck_tag', updater.precheck_tag)
-    monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: back)
+    monkeypatch.setattr(local_backup, "preupdate_backup", lambda p: back)
     monkeypatch.setattr(updater, "_baseline_check", lambda c: [])
     monkeypatch.setattr(update_apply, '_baseline_check', updater._baseline_check)
     monkeypatch.setattr(updater, "_needs_migration", lambda v: False)
@@ -517,7 +517,7 @@ def test_incomplete_restore_never_finishes_without_restoring_target(
 @pytest.mark.parametrize("failure_stage", ["layout_floor", "standalone_target", "runtime"])
 def test_apply_pre_reset_rollback_failure_survives_recovery(
         updater, tmp_path, monkeypatch, failure_stage):
-    import maintenance
+    import local_backup
     from ops_testkit import _git
 
     repo, live, back, _before, after, restarts = _schema_bump_world(
@@ -534,7 +534,7 @@ def test_apply_pre_reset_rollback_failure_survives_recovery(
     monkeypatch.setattr(updater, "precheck_tag", lambda t: ["schema_bump:7->8"])
     monkeypatch.setattr(update_execution, 'precheck_tag', updater.precheck_tag)
     monkeypatch.setattr(update_planning, 'precheck_tag', updater.precheck_tag)
-    monkeypatch.setattr(maintenance, "preupdate_backup", lambda p: back)
+    monkeypatch.setattr(local_backup, "preupdate_backup", lambda p: back)
     monkeypatch.setattr(updater, "_baseline_check", lambda c: [])
     monkeypatch.setattr(update_apply, '_baseline_check', updater._baseline_check)
     monkeypatch.setattr(updater, "_needs_migration", lambda v: False)

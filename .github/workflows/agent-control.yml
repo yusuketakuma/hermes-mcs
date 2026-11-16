@@ -1,0 +1,184 @@
+name: Agent control
+
+# merge-gate: 必須ジョブが現在の head で実際に実行・成功したかを commit status に出す。
+# 担当ロック: 1 Issue に 担当:* は1件だけ。試行回数: AIブランチの CI 失敗をIssueへ通算する。
+# 自動修正: 上限前の失敗で、担当が Claude なら agent-claude-repair.yml を起動する。
+# 自動マージ: vars.AUTO_MERGE_ENABLED が true のときだけ、対象の変更に予約する。
+# どのジョブも main 側の定義と ci/agent_control.py だけを使い、PR のコードは checkout も実行もしない。
+# 運用と停止手順: docs/development/AUTOMATION.md
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  issues:
+    types: [labeled]
+
+permissions: {}
+
+jobs:
+  gate:
+    if: github.event_name != 'issues'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: merge-gate-${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      checks: read
+      statuses: write
+      pull-requests: read
+      issues: write
+      actions: write   # workflow_dispatch of agent-claude-repair.yml
+    outputs:
+      pr: ${{ steps.plan.outputs.pr }}
+      eligible: ${{ steps.plan.outputs.eligible }}
+      sha: ${{ steps.plan.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Decide and publish merge-gate
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          CONTROL_ATTEMPT: ${{ github.run_attempt }}
+          PR_FROM_EVENT: ${{ github.event.pull_request.number }}
+          AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          if [[ "$EVENT" == "workflow_run" ]]; then
+            prs=$(gh api "repos/$GH_REPO/commits/$RUN_SHA/pulls" --jq '[.[] | select(.state == "open") | .number] | join(" ")')
+            ci_conclusion="$RUN_CONCLUSION"
+            # Re-running this workflow must not count the same CI failure again; a re-run of ci itself does.
+            if [[ "$CONTROL_ATTEMPT" != "1" ]]; then ci_conclusion=""; fi
+          else
+            prs="$PR_FROM_EVENT"
+            ci_conclusion=""
+          fi
+          last_pr=""; eligible=false; last_sha=""
+          for pr in $prs; do
+            gh api "repos/$GH_REPO/pulls/$pr" > "$work/pr.json"
+            sha=$(jq -r .head.sha "$work/pr.json")
+            # A workflow_run for an older head says nothing about the current one.
+            if [[ "$EVENT" == "workflow_run" && "$sha" != "$RUN_SHA" ]]; then continue; fi
+            base=$(jq -r .base.ref "$work/pr.json")
+            gh api "repos/$GH_REPO/commits/$sha/check-runs?per_page=100" --paginate --slurp > "$work/checks.json"
+            gh api "repos/$GH_REPO/pulls/$pr/files?per_page=100" --paginate --slurp > "$work/files.json"
+            behind=$(gh api "repos/$GH_REPO/compare/$base...$sha" --jq .behind_by)
+            python3 ci/agent_control.py gate --pr "$work/pr.json" --checks "$work/checks.json" \
+              --files "$work/files.json" --behind-by "$behind" --automation "${AUTOMATION:-}" \
+              --ci-conclusion "$ci_conclusion" > "$work/plan.json"
+            cat "$work/plan.json"
+            state=$(jq -r .state "$work/plan.json")
+            gh api -X POST "repos/$GH_REPO/statuses/$sha" -f context=merge-gate -f state="$state" \
+              -f description="$(jq -r .description "$work/plan.json")" > /dev/null
+            branch=$(jq -r .head.ref "$work/pr.json")
+            for issue in $(jq -r '.attempts[].issue' "$work/plan.json"); do
+              labels=$(gh api "repos/$GH_REPO/issues/$issue" --jq '[.labels[].name]')
+              step=$(python3 ci/agent_control.py attempt --labels "$labels")
+              for name in $(jq -r '.remove[]' <<< "$step"); do
+                gh api -X DELETE "repos/$GH_REPO/issues/$issue/labels/$(jq -rn --arg n "$name" '$n|@uri')" > /dev/null || true
+              done
+              gh api -X POST "repos/$GH_REPO/issues/$issue/labels" --input <(jq '{labels: .add}' <<< "$step") > /dev/null
+              if [[ "$(jq -r .exhausted <<< "$step")" == "true" ]]; then
+                gh issue comment "$issue" --body "AIによる試行が上限に達したため、担当を外して要オーナー対応にしました（PR #$pr の CI 失敗）。"
+              fi
+            done
+            # GITHUB_TOKEN may start workflow_dispatch; the repair run pushes as the Claude App, so CI runs again.
+            # The repair workflow re-reads every linked issue and refuses if any is exhausted, reassigned or held.
+            if [[ "$(jq '.attempts | length' "$work/plan.json")" != "0" && "$branch" == agent/claude-* &&
+                  "${AUTOMATION:-}" == "true" ]]; then
+              gh workflow run agent-claude-repair.yml --ref "$DEFAULT_BRANCH" -f pr="$pr"
+            fi
+            last_pr="$pr"; last_sha="$sha"
+            eligible=$(jq -r .auto_merge_eligible "$work/plan.json")
+          done
+          echo "pr=$last_pr" >> "$GITHUB_OUTPUT"
+          echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
+          echo "sha=$last_sha" >> "$GITHUB_OUTPUT"
+
+  auto-merge:
+    needs: gate
+    # 既定では動かない。段階5の試験に合格してから vars.AUTO_MERGE_ENABLED を true にする。
+    if: needs.gate.outputs.pr != '' && vars.AUTO_MERGE_ENABLED == 'true' && vars.AUTOMATION_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Reserve or withdraw auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ needs.gate.outputs.pr }}
+          ELIGIBLE: ${{ needs.gate.outputs.eligible }}
+          SHA: ${{ needs.gate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$ELIGIBLE" == "true" ]]; then
+            # Bound to the evaluated head: a push after the decision cannot inherit this reservation.
+            gh pr merge "$PR" --auto --squash --match-head-commit "$SHA"
+          else
+            gh pr merge "$PR" --disable-auto 2>/dev/null || true
+          fi
+
+  withdraw-on-push:
+    # 新しい push のたびに自動マージの予約を外す。次の判定で対象なら付け直す。
+    if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize' && vars.AUTO_MERGE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Withdraw auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr merge "$PR" --disable-auto 2>/dev/null || true
+
+  lock:
+    if: github.event_name == 'issues' && startsWith(github.event.label.name, '担当:')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: agent-lock-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Keep one agent label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          ADDED: ${{ github.event.label.name }}
+          SENDER: ${{ github.event.sender.login }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          labels=$(gh api "repos/$GH_REPO/issues/$ISSUE" --jq '[.labels[].name]')
+          conflict=$(python3 ci/agent_control.py lock --labels "$labels" --added "$ADDED" | jq -r .conflict)
+          if [[ "$conflict" == "true" || "$SENDER" != "$OWNER" ]]; then
+            gh api -X DELETE "repos/$GH_REPO/issues/$ISSUE/labels/$(jq -rn --arg n "$ADDED" '$n|@uri')" > /dev/null
+            if [[ "$conflict" == "true" ]]; then
+              gh issue comment "$ISSUE" --body "担当ラベルは1件だけです。$ADDED を外しました。交代するときは、旧担当の実行が終わったことを確かめてから旧ラベルを外し、新しいラベルを付けてください。"
+            else
+              gh issue comment "$ISSUE" --body "担当ラベルは所有者だけが付けられます。$ADDED を外しました。"
+            fi
+          fi

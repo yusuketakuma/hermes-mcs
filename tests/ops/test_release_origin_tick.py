@@ -10,6 +10,7 @@ import pytest
 import extract_llm
 import job_ops
 import ledger
+import local_backup
 import maintenance
 import mcs_adapter
 import mcs_view
@@ -95,9 +96,11 @@ def test_origin_migration_tick_extract_snapshot_view(tmp_path, monkeypatch, caps
             collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (run_check),
             name, str(value))
     monkeypatch.setattr(health_report, "HEALTH_FILE", str(root / health_report.HEALTH_REL))
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(data / "backups"))
+    monkeypatch.setattr(local_backup, "HOME", str(root))
     for name, value in {
         "HOME": root, "DB_MAINT_STATE": data / "db_maintenance.json",
-        "BACKUP_DIR": data / "backups", "SNAPSHOT_DIR": data / "snapshots",
+        "SNAPSHOT_DIR": data / "snapshots",
         "LOGFILE": data / "run.log",
     }.items():
         monkeypatch.setattr(maintenance, name, str(value))

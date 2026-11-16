@@ -1,0 +1,38 @@
+# 変更したファイルから「領域」「安全ゲート」ラベルを付ける（actions/labeler）。
+# ラベルの定義は .github/labels.json。版・対応のラベルは人が付ける。
+"収集":
+  - changed-files:
+      - any-glob-to-any-file: ["mcs/ingest/**"]
+"抽出":
+  - changed-files:
+      - any-glob-to-any-file: ["mcs/extract/**", "mcs/medications/**", "resources/drug-master/**"]
+"患者コンテキスト":
+  - changed-files:
+      - any-glob-to-any-file: ["mcs/patients/**"]
+"意味解析":
+  - changed-files:
+      - any-glob-to-any-file: ["mcs/semantic/**", "mcs/signals/**"]
+"LLM":
+  - changed-files:
+      - any-glob-to-any-file: ["mcs/llm/**"]
+"通知":
+  - changed-files:
+      - any-glob-to-any-file: ["mcs/notify/**", "mcs/views/**", "adapters/**", "hermes_plugin/**", "lineworks_adapter/**"]
+"スタンプ":
+  - changed-files:
+      - any-glob-to-any-file: ["mcs/stamps/**"]
+"保存基盤":
+  - changed-files:
+      - any-glob-to-any-file: ["mcs/core/**", "mcs/export/**"]
+"運用・導入":
+  - changed-files:
+      - any-glob-to-any-file: ["mcs/ops/**", "mcs_standalone/**", "deployment/**", "install.sh"]
+"文書":
+  - changed-files:
+      - any-glob-to-any-file: ["docs/**", "README.md", "SECURITY.md", "CHANGELOG.md"]
+"CI・開発":
+  - changed-files:
+      - any-glob-to-any-file: ["ci/**", ".github/**", "scripts/**", "Makefile", "pyproject.toml"]
+"安全ゲート":
+  - changed-files:
+      - any-glob-to-any-file: ["ci/gates.py", "ci/mine_gates.py", "SECURITY.md", "deployment/requirements-standalone.txt"]

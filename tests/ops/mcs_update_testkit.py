@@ -233,8 +233,8 @@ def _apply_env(updater, monkeypatch, *, precheck_errors=(),
     monkeypatch.setattr(update_services, '_enqueue_notice', mcs_update._enqueue_notice)
     monkeypatch.setattr(mcs_update, "restart_gateway", lambda c: None)
     monkeypatch.setattr(update_services, 'restart_gateway', mcs_update.restart_gateway)
-    import maintenance
-    monkeypatch.setattr(maintenance, "preupdate_backup",
+    import local_backup
+    monkeypatch.setattr(local_backup, "preupdate_backup",
                         lambda db: str(db) + ".bak")
     return repo
 

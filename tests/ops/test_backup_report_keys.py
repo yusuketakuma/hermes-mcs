@@ -1,12 +1,11 @@
 """The backup verification report keeps the exact key set restore fences on."""
-import mcs_backup
 import backup_evidence
+import held_restore
 
 
 def test_report_matches_the_verification_contract():
-    report = mcs_backup._report("0" * 64, {"plain_sha256": "1" * 64,
-                                          "inventory": {}}, restore_pending=True)
-    assert set(report) == set(mcs_backup.Verification.__annotations__) == {
+    report = held_restore.report("0" * 64, "1" * 64, {}, restore_pending=True)
+    assert set(report) == set(held_restore.Verification.__annotations__) == {
         "v", "sha256", "plain_sha256", "verified_at", "inventory",
         "restore_pending", "attachment_payloads_included"}
     assert report["restore_pending"] is True

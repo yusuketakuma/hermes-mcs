@@ -29,6 +29,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # Hosted jobs have independent empty workspaces. Read only the triggering
+      # tag's source; this untrusted hint never grants publication authority.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - name: write publication request hint
         env:
           REPOSITORY_ID: ${{ github.repository_id }}
@@ -45,11 +51,47 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  lint-test:
+  linux-tests:
     runs-on: ubuntu-latest
-    # The 2026-11-01 suite was still progressing at 93% after 45 min.
-    # Keep the per-test MCS_TEST_TIMEOUT guard and bound the whole job.
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [lifecycle, patients, rest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.6"
+          cache-python: true
+          cache-dependency-glob: |
+            Makefile
+            .github/workflows/ci.yml
+            deployment/requirements-standalone.txt
+      # no -x: every failure of the run is reported, not only the first
+      - name: pytest
+        run: |
+          uv venv --python 3.14 --managed-python .venv
+          uv pip install --python .venv/bin/python "pytest==9.2.0"
+          python3 ci/run_pytest_groups.py linux --group "${{ matrix.group }}"
+      - name: pytest diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: pytest-linux-${{ matrix.group }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mcs-pytest-*/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  lint-test:
+    # Preserve the required check name. Missing, cancelled or failed shards fail closed.
+    needs: linux-tests
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
@@ -68,26 +110,18 @@ jobs:
         run: make lint
       - name: Check bundled public medicine master
         run: python3 scripts/development/check_drug_master_bundle.py
-      # no -x: every failure of the run is reported, not only the first
-      - name: pytest
-        run: |
-          uv venv --python 3.14 --managed-python .venv
-          uv pip install --python .venv/bin/python "pytest==9.2.0"
-          python3 ci/run_pytest_groups.py linux
-      - name: pytest diagnostics
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
-        with:
-          name: pytest-linux-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/mcs-pytest-*/
-          retention-days: 7
-          if-no-files-found: ignore
+      - name: require every Linux shard
+        env:
+          SHARDS_RESULT: ${{ needs.linux-tests.result }}
+        run: test "$SHARDS_RESULT" = success
 
   hygiene:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: offline label migration regression
+        run: python3 scripts/development/check_labels_sync.py
       - name: no secrets or data dirs tracked
         run: |
           bad=$(git ls-files | grep -E '(^|/)(data/|chrome-profile/|\.env$|\.env\.[^/]*$|config\.json$|config\.json\.[^/]*$|token_cache\.json$)' || true)

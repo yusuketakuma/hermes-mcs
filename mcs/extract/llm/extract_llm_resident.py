@@ -6,8 +6,6 @@ import json
 import math
 import os
 from pathlib import Path
-import re
-import subprocess
 import sys
 import functools
 import time
@@ -99,24 +97,9 @@ def _background_semantic(ledger, stop=None):
 
 
 def _context_memory_available() -> bool:
-    """Reserve ten percent memory for foreground work; unknown pressure defers."""
-    try:
-        if sys.platform == "darwin":
-            result = subprocess.run(
-                ["/usr/bin/memory_pressure", "-Q"], capture_output=True,
-                text=True, timeout=2, check=True,
-                env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
-            match = re.search(r"System-wide memory free percentage:\s*(\d+)%",
-                              result.stdout)
-            return bool(match and 10 <= int(match[1]) <= 100)
-        if sys.platform.startswith("linux"):
-            values = dict(re.findall(r"^(MemAvailable|MemTotal):\s*(\d+) kB$",
-                                     Path("/proc/meminfo").read_text(), re.M))
-            available, total = int(values["MemAvailable"]), int(values["MemTotal"])
-            return total > 0 and total >= available >= max(1048576, total * 0.1)
-    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
-        pass
-    return False
+    """Admit one more worker under the pool's shared memory reserve; unknown pressure defers."""
+    headroom = cloud_backlog.memory_headroom()
+    return headroom is not None and headroom >= 0
 
 
 _CLOUD_OPERATING_LIMITS = semantic_runtime.CLOUD_OPERATING_LIMITS
@@ -451,6 +434,7 @@ def _main() -> int:
             context_state = writer_lock.updater_state()
             carry: list = []   # finished results waiting for the run lock
             idle_delay = _IDLE_FLOOR_S
+            pool_error = None   # one record per failure streak of the cloud pool sync
 
             def retire():
                 try:
@@ -468,13 +452,14 @@ def _main() -> int:
                 if stop is not None and time.monotonic() >= stop:
                     total["stopped"] = "stop_after"
                     break
-                if args.lane == 1:
-                    import llm_slot_schedule
-                    if not llm_slot_schedule.night():
-                        _settle_carry(led, carry, final=False, fence=context_state)
-                        pause(_IDLE_FLOOR_S)
-                        continue
                 try:
+                    if args.lane == 1:
+                        import llm_slot_schedule
+                        if not llm_slot_schedule.night():
+                            # A busy database here is the loop's transient error, not an exit.
+                            _settle_carry(led, carry, final=False, fence=context_state)
+                            pause(_IDLE_FLOOR_S)
+                            continue
                     if carry and not context_lane:
                         resume_budget = _RESIDENT_WRITE_WAIT_S + 1
                         if stop is not None:
@@ -495,7 +480,20 @@ def _main() -> int:
                             pause(2)
                             continue
                     if cloud_pool is not None:
-                        cloud_pool.sync(load_config(), ledger=led)
+                        try:
+                            synced = cloud_pool.last_sync
+                            cloud_pool.sync(load_config(), ledger=led)
+                            if cloud_pool.last_sync != synced:
+                                pool_error = None   # a throttled return decided nothing
+                        except Exception as error:
+                            # The pool is extra capacity: its failure must not
+                            # skip this lane's own extraction and semantic work.
+                            if pool_error != type(error).__name__:
+                                pool_error = type(error).__name__
+                                print(json.dumps({"event": "cloud_pool_sync_error",
+                                                  **cloud_backlog._exception_observation(error),
+                                                  "pid": os.getpid(), "ts": time.time()}),
+                                      file=sys.stderr, flush=True)
                     if context_lane:
                         # lane 3 serves patient context first; it yields to
                         # semantic/extraction only when nothing is due. A

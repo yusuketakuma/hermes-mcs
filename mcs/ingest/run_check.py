@@ -9,7 +9,8 @@ Responsibility split:
 - ledger.py      : schema, migrations, writes, outbox, jobs table
 - job_ops.py     : cmd ingest, fetch_jobs drains, discovery, trickle
                    deep-import seeding, thread merge
-- maintenance.py : daily verified backup, log rotation, snapshot publish
+- local_backup.py: daily verified backup
+- maintenance.py : log rotation, pruning, snapshot publish, DB upkeep
 - extract*/rollup/notify_flush : derived-data + delivery stages
 
 Exit codes:
@@ -58,8 +59,10 @@ from mcs_util import CACHE, CONF_PATH, DB, HOME, load_config
 import writer_lock
 from writer_lock import RUN_LOCK, UPDATE_MARKER_NAME, RunLockLost, acquire_run_lock
 import job_ops
+import collection_diagnostics
 import collection_stages
 import health_report
+import local_backup
 import maintenance
 import notify_flush
 
@@ -893,8 +896,8 @@ def _housekeeping(result):
     (M7); a skipped backup is recorded, not silently dropped."""
     hard = _hard_deadline()
     try:
-        skipped = (maintenance.daily_backup(DB) if hard is None
-                   else maintenance.daily_backup(DB, deadline=hard))
+        skipped = (local_backup.daily_backup(DB) if hard is None
+                   else local_backup.daily_backup(DB, deadline=hard))
         if skipped == "skipped_disk_low":
             result["backup_skipped"] = "disk_low"
         elif skipped == "skipped_deadline":
@@ -941,7 +944,7 @@ def _overdue_housekeeping(result) -> None:
     housekeeping — no MCS request, no send — and keep its errors."""
     _rotate_logs(result)
     try:
-        if maintenance.backup_overdue():
+        if local_backup.backup_overdue():
             _housekeeping(result)
     except Exception as e:
         result["errors"].append(f"housekeeping: {type(e).__name__}")
@@ -1209,13 +1212,14 @@ def _finish_run(ledger, cfg, result, run_id, deadline, *, run_lock_fd=None,
     return status
 
 
-def _fail_run(ledger, args, result, run_id, status, detail,
+def _fail_run(ledger, args, result, run_id, status, error, detail,
               deadline, alert):
-    """Shared failed-run epilogue — record the run, append the detail
-    to errors, then best-effort alert + pending flush. A failed alert
+    """Shared failed-run epilogue — record the run, its stop point and
+    the detail, then best-effort alert + pending flush. A failed alert
     must never mask the original failure; the caller still writes
     health and prints the result."""
     result["errors"].append(detail)
+    result["stop"] = collection_diagnostics.stop_point(error, detail)
     try:
         ledger.finish_run(run_id, status, detail)
     except Exception as e:  # health + exit code must still report the failure
@@ -1226,10 +1230,11 @@ def _fail_run(ledger, args, result, run_id, status, detail,
         return
     try:  # operational alert — silent death is worse than noise
         if alert == "session":
-            collection_stages.queue_session_expired(ledger, run_id, detail)
+            collection_stages.queue_session_expired(ledger, run_id, detail, stop=result["stop"])
         elif alert:
             # an unthrottled run_failed could alert every 10-minute tick
-            collection_stages.queue_run_alert(ledger, "run_failed", run_id, detail)
+            collection_stages.queue_run_alert(ledger, "run_failed", run_id, detail,
+                                              stop=result["stop"])
         if ledger.db.in_transaction:
             return
         # alert=None: the session_recovered notice was already queued by
@@ -1278,6 +1283,9 @@ def _run_stage(result, name, deadline, function, *args, required=False, **kwargs
         return None
     try:
         return function(*args, **kwargs)
+    except BaseException as e:
+        collection_diagnostics.mark_stage(e, name)
+        raise
     finally:
         finished = time.monotonic()
         durations = result.setdefault("stage_elapsed_s", {})
@@ -1477,7 +1485,7 @@ def _main() -> int:
         # — once the daily backup is overdue it runs past the deadline
         _rotate_logs(result)
         _run_stage(result, "housekeeping", deadline, _housekeeping, result,
-                   required=maintenance.backup_overdue())
+                   required=local_backup.backup_overdue())
         status = _run_stage(result, "finish", deadline, _finish_run,
                             ledger, cfg, result, run_id, deadline,
                             run_lock_fd=lock_fd, db_baseline=db_baseline,
@@ -1540,7 +1548,7 @@ def _main() -> int:
             detail = f"{detail} auto_login={state}"
             recovered = state == "ok"
         _fail_run(ledger, args, result, run_id, "session_expired",
-                  detail, deadline,
+                  e, detail, deadline,
                   alert=None if recovered else "session")
         if _report_open_transaction(ledger, result):
             return 1
@@ -1553,7 +1561,7 @@ def _main() -> int:
     except MCSError as e:
         if _report_open_transaction(ledger, result):
             return 1
-        _fail_run(ledger, args, result, run_id, "failed", describe_error(e),
+        _fail_run(ledger, args, result, run_id, "failed", e, describe_error(e),
                   deadline, alert="run_failed")
         if _report_open_transaction(ledger, result):
             return 1
@@ -1575,7 +1583,7 @@ def _main() -> int:
                     getattr(e, "_mcs_message_write_failure", None))
         with suppress(Exception):
             _fail_run(ledger, args, result, run_id, "failed",
-                      f"crash: {type(e).__name__}", deadline,
+                      e, f"crash: {type(e).__name__}", deadline,
                       alert="run_failed")
         if _report_open_transaction(ledger, result):
             return 1

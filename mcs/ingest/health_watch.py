@@ -132,8 +132,10 @@ def _optional_blocks(h: dict) -> dict:
     if (isinstance(last, dict) and _is_code(last.get("reason"))
             and finite_number(last.get("detected_at"))):
         interrupt = {"reason": last["reason"], "detected_at": last["detected_at"]}
+    from collection_diagnostics import valid_stop
+    stop = valid_stop(run.get("stop")) if h.get("run_status") in ("failed", "session_expired") else None
     return {"notify_wait": wait, "backup_local": backup_local,
-            "last_interrupt": interrupt}
+            "last_interrupt": interrupt, "run_stop": stop}
 
 
 
@@ -861,6 +863,9 @@ _REASON_JA = {
                           f"llama-server の稼働と {_COLLECTION_LOG} を確認"),
     "backup_deferred_deadline": ("収集の制限時間内に日次バックアップを取れず、1日以上更新されていません",
                                  f"DBの大きさと収集の所要時間を確認。続く場合は {_CHECK}"),
+    "backup_local_overdue": ("日次ローカルバックアップが2日以上更新されていません",
+                             f"{_COLLECTION_LOG} の backup のエラーと空き容量を確認。"
+                             "手元の世代は mcs/ops/mcs_local_backup.py list --verify で確認"),
     "stall_check_failed": ("停滞の有無を今回の監視で確認できませんでした",
                            "次回の収集で再判定します。続く場合は data/health.json の stall_check を確認"),
     "semantic_jev_payment_required": ("TypeSafe Jev が支払い未了（HTTP 402）を返しています",
@@ -1101,6 +1106,7 @@ _CLOUD_REASON_JA = {
 
 
 def _reason_rows(report: dict, reasons) -> list[str]:
+    from collection_diagnostics import stop_explanation
     if reasons is None:
         return ["・理由を特定できません（状態の記録に理由がありません）",
                 f"　→ {_CHECK} で確認"]
@@ -1171,7 +1177,7 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             closed = report.get('notify_tracking_closed_parts')
             if _count(closed) and closed:
                 extra += f"／別に運用終了・未回収 {closed}件"
-        elif base in ("backup_not_verified", "backup_deferred_deadline"):
+        elif base in ("backup_not_verified", "backup_deferred_deadline", "backup_local_overdue"):
             extra = ("" if report.get("observations_recorded")
                      else _backup_local_text(report.get("backup_local")))
         elif base == "semantic_backlog_stalled" and _hours(oldest.get("semantic_jobs")):
@@ -1200,6 +1206,15 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                         action += "。"
                     action += note
         guide = None
+        stop = (stop_explanation(report.get("run_stop"))
+                if base in ("run_failed", "session_expired") and not report.get("observations_recorded")
+                else None)
+        if stop is not None:
+            stage, label, what, todo = stop
+            extra += f"（止まった処理: {stage}）"
+            if base == "run_failed":
+                # the stop's own category beats the generic "read the log" step
+                guide = [(label, None, what, todo)]
         if base in ("stage_errors", "collection_incomplete") and not report.get("observations_recorded") \
                 and not (base == 'collection_incomplete' and report.get('semantic_intake_unstored')
                          in ('present', 'unverified')) \
@@ -1221,7 +1236,8 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             # one fixed cause and next step per observed category, most frequent first
             rows.append(f"・{meaning}{extra}")
             for label, n, what, todo in guide:
-                rows += [f"　・{label}（{n}件）: {what}", f"　　→ {todo}"]
+                rows += [f"　・{label}" + (f"（{n}件）" if n is not None else "") + f": {what}",
+                         f"　　→ {todo}"]
             continue
         rows += [f"・{meaning}{extra}", f"　→ {action}"]
     return rows
