@@ -40,6 +40,7 @@ import os
 import time
 import uuid
 
+import backup_names
 import notify_cards as cards
 import notify_scope
 import notify_spool
@@ -396,6 +397,12 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
         return {"v": 1, "at": now, "skipped": "awaiting_consent",
                 "counts": {}, "verdicts": [], "held": [],
                 "events_held": 0}
+    # O5: the journal keeps settled evidence only back to its capped horizon.
+    # A backup older than that cannot be reconciled from it — hold it all.
+    beyond_horizon = ("restored_at" in marker
+                      and marker.get("by") != "reconcile_incomplete"
+                      and backup_names.predates_journal_horizon(
+                          marker.get("backup_path"), marker.get("restored_at")))
     attempts, journal_incomplete = notify_journal.scan_journals(dirs)
     holds_before = _hold_rows(db)
     verdicts, held = [], []
@@ -423,25 +430,40 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
                         "unknown_attempt", dirs, now)
         verdicts.append(v)
         held.append(v)
+    # Only intents that existed at the restore point are unverifiable. Later
+    # events just wait in flush's restore gate and resume when it clears.
+    restored_at = (marker or {}).get("restored_at")
+    if type(restored_at) not in (int, float):
+        restored_at = None     # unknown restore point: hold every intent
+    if beyond_horizon:
+        # renders created after the restore are not from the old backup
+        disputed = {h["delivery_id"] for h in held}
+        for row in db.execute(
+                "SELECT delivery_id FROM notification_renders WHERE state NOT IN "
+                "('delivered','not_sent','cancelled','held') "
+                "AND (? IS NULL OR created_at <= ?)",
+                (restored_at, restored_at)).fetchall():
+            if row["delivery_id"] in disputed:
+                continue
+            v = _apply_hold(db, None, row["delivery_id"],
+                            "restore_beyond_journal_horizon", dirs, now)
+            verdicts.append(v)
+            held.append(v)
     # an unlinked delivered/unknown effect means the spec file that
     # would map delivery->intent is gone — hold every pending
     # interactive event rather than guess which would duplicate
     unlinked = sum(
         1 for h in held if h["detail"].startswith(("attempt_lost",))
         and not h.get("spec_linked"))
-    # Only intents that existed at the restore point are unverifiable. Later
-    # events just wait in flush's restore gate and resume when it clears.
-    restored_at = (marker or {}).get("restored_at")
-    if type(restored_at) not in (int, float):
-        restored_at = None     # unknown restore point: hold every intent
     mass_held = 0
-    if unlinked:
+    if unlinked or beyond_horizon:
         mass_held = db.execute(
             "UPDATE notify_outbox SET state='failed',next_try=NULL,"
             f"{HOLD_PROGRESS_SET},updated_at=? "
             "WHERE state='pending' AND route='interactive' "
             "AND (? IS NULL OR created_at IS NULL OR created_at <= ?)",
-            ("restore_unlinked", now, restored_at, restored_at)).rowcount
+            ("restore_unlinked" if unlinked else "restore_hold",
+             now, restored_at, restored_at)).rowcount
         db.commit()
     # Text sends have no independent transport journal. A restored pending
     # receipt cannot prove that its content was never posted. Keep these

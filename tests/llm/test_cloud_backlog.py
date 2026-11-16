@@ -1386,3 +1386,122 @@ def test_the_backlog_workers_spawn_only_while_the_stored_message_backlog_is_reop
     finally:
         owner.close()
     assert all(child.stopped for child in spawned)
+
+
+def test_pool_resolves_the_log_helper_only_when_it_starts_children(tmp_path, monkeypatch):
+    (tmp_path / "data").mkdir()
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 1}}
+    monkeypatch.setattr(backlog, "memory_workers", lambda _: 0)
+
+    def unavailable(*args, **kwargs):
+        raise run_log_install.LogInstallError("run_log_helper_missing")
+    monkeypatch.setattr(backlog, "helper_path", unavailable)
+    monkeypatch.setattr(backlog.subprocess, "Popen", lambda *a, **kw: pytest.fail("child started"))
+    pool = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        pool.sync(cfg)   # nothing to start: an unusable helper is not consulted
+        assert not pool.children
+    finally:
+        pool.close()
+
+
+def test_pool_backs_off_restarting_a_child_that_exits_at_once(tmp_path, monkeypatch):
+    (tmp_path / "data").mkdir()
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 1}}
+    now = [1000.0]
+    monkeypatch.setattr(backlog, "time", SimpleNamespace(monotonic=lambda: now[0], sleep=lambda _: None))
+    monkeypatch.setattr(backlog, "memory_workers", lambda _: 1)
+    started = []
+
+    class Child:
+        def __init__(self, command, **kwargs):
+            started.append(now[0])
+
+        def poll(self):
+            return 0   # exits right after starting (e.g. its own memory check)
+
+        def terminate(self):
+            pass
+
+        def wait(self, **kwargs):
+            return 0
+    monkeypatch.setattr(backlog.subprocess, "Popen", Child)
+    pool = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        pool.sync(cfg)
+        for _ in range(3):
+            now[0] += 11
+            pool.sync(cfg)
+        assert started == [1000.0, 1033.0]   # the first quick exit waits 20 s
+        for _ in range(4):
+            now[0] += 11
+            pool.sync(cfg)
+        assert started == [1000.0, 1033.0]   # the second waits 40 s
+        now[0] += 11
+        pool.sync(cfg)
+        assert started == [1000.0, 1033.0, 1088.0]
+    finally:
+        pool.close()
+
+
+def test_pool_does_not_back_off_after_children_retire_by_policy(tmp_path, monkeypatch):
+    (tmp_path / "data").mkdir()
+    on = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 2}}
+    off = {"cloud_llm": {**on["cloud_llm"], "mode": "off"}}
+    now = [1000.0]
+    monkeypatch.setattr(backlog, "time", SimpleNamespace(monotonic=lambda: now[0], sleep=lambda _: None))
+    monkeypatch.setattr(backlog, "memory_workers", lambda _: 2)
+    monkeypatch.setattr(backlog, "helper_path", lambda *a, **kw: "/synthetic/helper")
+    started, alive = [], []
+
+    class Child:
+        def __init__(self, command, **kwargs):
+            started.append(now[0])
+            alive.append(self)
+
+        def poll(self):
+            return None if self in alive else 0
+
+        def terminate(self):
+            pass
+
+        def wait(self, **kwargs):
+            return 0
+    monkeypatch.setattr(backlog.subprocess, "Popen", Child)
+    pool = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        pool.sync(on)
+        assert len(started) == 2
+        alive.clear()   # both retire at once when the mode is turned off
+        now[0] += 11
+        pool.sync(off)
+        now[0] += 11
+        pool.sync(on)   # reopened: no restart delay for a policy retirement
+        assert started[2:] == [now[0], now[0]]
+        alive.clear()   # both exit together at once: one failure, not two
+        now[0] += 11
+        pool.sync(on)
+        assert pool.quick_exits == 1 and pool.retry_at == now[0] + 20
+    finally:
+        pool.close()
+
+
+@pytest.mark.parametrize("platform,total_kb,available_kb", [
+    ("linux", 4194304, 838861), ("linux", 4194304, 1310720), ("linux", 6291456, 1153434),
+    ("linux", 16777216, 2097152), ("linux", 4194304, 1048576), ("darwin", 4194304, 838861),
+    ("darwin", 16777216, 2097152), ("darwin", 16777216, 1677722),
+])
+def test_parent_never_starts_a_child_its_own_memory_check_refuses(monkeypatch, platform, total_kb, available_kb):
+    monkeypatch.setattr(backlog.sys, "platform", platform)
+    monkeypatch.setattr(Path, "read_text", lambda self: f"MemTotal: {total_kb} kB\nMemAvailable: {available_kb} kB\n")
+
+    def probe(argv, **kwargs):
+        if argv[0] == "/usr/sbin/sysctl":
+            return SimpleNamespace(stdout=str(total_kb * 1024))
+        return SimpleNamespace(stdout=f"System-wide memory free percentage: {available_kb * 100 // total_kb}%")
+    monkeypatch.setattr(backlog.subprocess, "run", probe)
+    if backlog.memory_workers(1):
+        assert extract_llm_resident._context_memory_available()
+    # Small Linux hosts keep at least 1 GiB for foreground work in both checks.
+    if platform == "linux" and available_kb * 1024 < (1 << 30) + backlog._WORKER_BYTES:
+        assert backlog.memory_workers(4) == 0

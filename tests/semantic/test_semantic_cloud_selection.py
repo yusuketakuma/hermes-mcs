@@ -473,7 +473,7 @@ def test_cloud_selection_incomplete_invalid_suffix_advances(cloud, monkeypatch):
     assert not calls and not led.db.in_transaction
 
 
-def test_cloud_selection_highwater_defers_new_job_to_next_cycle(cloud, monkeypatch):
+def test_cloud_selection_resume_adds_jobs_above_highwater(cloud, monkeypatch):
     from types import SimpleNamespace
     led, _, _, calls = cloud
     led.save_messages([_message(2)])
@@ -504,11 +504,10 @@ def test_cloud_selection_highwater_defers_new_job_to_next_cycle(cloud, monkeypat
     clock[0] = 0.0
     with legacy_cloud_routes():
         first = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=10.0)[0]
-    assert [r['message_id'] for r in first] == [1, 2]
+    # The resumed cycle also scans jobs above its previous high-water mark.
+    assert [r['message_id'] for r in first] == [1, 2, 3]
     with led.db:
         led.db.execute("UPDATE fetch_jobs SET state='done' WHERE message_id IN (1,2)")
-    with legacy_cloud_routes():
-        assert not semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=10.0)[0]
     with legacy_cloud_routes():
         later = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 10, deadline=10.0)[0]
     assert [r['message_id'] for r in later] == [3]

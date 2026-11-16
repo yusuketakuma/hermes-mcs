@@ -21,6 +21,7 @@ from pathlib import Path
 from contextlib import closing, suppress
 from time import monotonic
 
+from backup_names import BACKUP_CLASSES, backup_class
 import snapshots
 from snapshots import publish_snapshot as _publish_snapshot
 from ledger import valid_mcs_db
@@ -302,27 +303,6 @@ def local_backup_status(*, now: float) -> dict:
     return out("verified" if verified else "unverified", age)
 
 
-_ROTATED_BACKUP = re.compile(
-    r"(ledger-\d{8}\.db(\.ok)?|preupdate-.*\.db|.*\.tmp(-journal|-wal|-shm)?)")
-
-
-BACKUP_CLASSES = ("daily", "daily_ok", "preupdate", "staging", "manual")
-
-
-_BACKUP_CLASS_PATTERNS = (("daily", re.compile(r"ledger-\d{8}\.db")),
-                          ("daily_ok", re.compile(r"ledger-\d{8}\.db\.ok")),
-                          ("preupdate", re.compile(r"preupdate-.*\.db")),
-                          ("staging", re.compile(r".*\.tmp(-journal|-wal|-shm)?")))
-
-
-def _backup_class(name: str) -> str:
-    # Same names as _ROTATED_BACKUP; anything else is a hand-made copy.
-    for owner, pattern in _BACKUP_CLASS_PATTERNS:
-        if pattern.fullmatch(name):
-            return owner
-    return "manual"
-
-
 def backup_bytes_by_class() -> dict | None:
     """Bytes of regular files in data/backups by the owner that keeps them
     (daily rotation, its .ok markers, pre-update copies, in-flight staging,
@@ -339,7 +319,7 @@ def backup_bytes_by_class() -> dict | None:
                 with suppress(FileNotFoundError):
                     st = entry.stat(follow_symlinks=False)
                     if stat.S_ISREG(st.st_mode):
-                        totals[_backup_class(entry.name)] += st.st_size
+                        totals[backup_class(entry.name)] += st.st_size
     except FileNotFoundError:
         return totals
     except OSError:

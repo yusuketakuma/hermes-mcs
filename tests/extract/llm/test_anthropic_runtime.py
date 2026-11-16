@@ -484,8 +484,10 @@ def test_resident_checks_source_before_config_and_stop(tmp_path, monkeypatch, mo
         def __init__(self, root, *, context_only):
             assert root == str(tmp_path)
             assert context_only is True
+            self.last_sync = 0.0   # the real CloudBacklogPool exposes its last sync time
         def sync(self, cfg, *, ledger):
             events.append("pool_sync")
+            self.last_sync = clock[0]
         def close(self):
             events.append("pool_closed")
 
