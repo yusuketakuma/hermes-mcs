@@ -53,6 +53,7 @@ def test_run_stage_and_relogin_step_tag_the_escaping_error():
 @pytest.mark.parametrize("value", [
     None, "deliver", {"stage": "deliver"}, {"stage": PRIVATE, "category": "network"},
     {"stage": "deliver", "category": PRIVATE}, {"stage": "deliver", "category": "network", "x": 1},
+    {"stage": ["deliver"], "category": "network"}, {"stage": "deliver", "category": {"x": 1}},
 ])
 def test_malformed_stop_points_are_never_explained(value):
     assert diagnostics.valid_stop(value) is None
@@ -99,6 +100,12 @@ def test_alert_names_the_stopped_stage_and_the_cause_specific_step(tmp_path):
     assert "　・通信: MCSとの通信に失敗しました" in text
     assert "　　→ 次回の収集で再試行されます。続く場合はネットワーク接続を確認" in text
     assert "data/mcs.log の末尾を確認" not in text
+
+
+def test_unhashable_stop_in_a_failed_record_does_not_break_monitoring(tmp_path):
+    report = health_watch.classify_health(
+        _health(tmp_path, "failed", {"stage": ["unread"], "category": {}}), 1000, 600)
+    assert report["run_stop"] is None
 
 
 def test_stop_from_a_successful_record_is_ignored(tmp_path):

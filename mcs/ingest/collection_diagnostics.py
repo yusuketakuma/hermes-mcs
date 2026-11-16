@@ -180,6 +180,7 @@ def stop_point(error: BaseException, detail) -> dict:
 def valid_stop(value) -> dict | None:
     """Whitelist a persisted stop point before an alert or doctor displays it."""
     if (isinstance(value, dict) and set(value) == {"stage", "category"}
+            and isinstance(value["stage"], str) and isinstance(value["category"], str)
             and value["stage"] in STAGES and value["category"] in CATEGORIES):
         return dict(value)
     return None
