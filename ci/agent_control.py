@@ -12,10 +12,8 @@ imports nothing from the application. Standard library only.
   linked   the issues a PR closes (Fixes #N and the like)
   repair   whether Claude may repair a failed PR now, from the PR and the
            current labels of its linked issues
-  lock     whether a newly added 担当:* label conflicts with another one,
-           and why its sender may not assign this issue (if so)
-  assigned whether an agent label is the issue's only assignment,
-           and why its sender may not assign this issue (if so)
+  lock     whether a newly added 担当:* label conflicts with another one
+  assigned whether an agent label is the issue's only assignment
 
 The verdict is evidence, not trust in "CI is green": every required job must
 have run on the current head and succeeded (GitHub counts skipped and neutral
@@ -60,15 +58,10 @@ REPAIR_PREFIX = "agent/claude-"
 REPAIR_AGENT_LABEL = "担当:claude"
 # A failure classified as one of these is held for a person, never retried.
 HOLD_LABELS = ("失敗:CI基盤", "失敗:利用枠", "失敗:不明")
-# Issue headings that state how to tell the work is done. The last two are the issue templates' wording.
-ACCEPTANCE_HEADINGS = ("受入条件", "完了と判断する条件", "期待した動き")
 # A dependabot Actions bump rewrites only pinned `uses:` lines.
 _USES_LINE = re.compile(r"^[+-]\s*(-\s+)?uses:\s+[\w.-]+/[\w./-]+@[0-9a-f]{40}(\s+#.*)?$")
 _TEST_SKIP = re.compile(r"pytest\.mark\.(skip|skipif|xfail)|pytest\.(skip|xfail)\(|unittest\.skip|@skip\b")
 _TEST_DEF = re.compile(r"^\s*(async\s+)?def\s+test_")
-# "#123" is an issue reference; a heading needs the space after its marks.
-_HEADING = re.compile(r"^ {0,3}(#{1,6})(\s|$)")
-_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _LINKED_ISSUE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)", re.I)
 
 
@@ -279,62 +272,6 @@ def lock_conflict(labels, added):
     return any(name.startswith(AGENT_LABEL_PREFIX) and name != added for name in labels)
 
 
-def acceptance_criteria(body):
-    """The text under the issue's first filled-in acceptance heading, or "" when it has none yet."""
-    lines = _markdown_lines(body or "")
-    for index, (line, level) in enumerate(lines):
-        if level and any(title in line for title in ACCEPTANCE_HEADINGS):
-            section = []
-            for following, following_level in lines[index + 1:]:
-                if 0 < following_level <= level:
-                    break
-                # A subsection title alone is not a criterion.
-                if not following_level:
-                    section.append(following)
-            text = "\n".join(section).strip()
-            if text and text != "_No response_":
-                return text
-    return ""
-
-
-def _markdown_lines(text):
-    """(line, heading level) pairs: 1-6 for an ATX heading, 0 for body text.
-
-    A fenced block is body text whatever it holds (a quoted "## 受入条件" is an example, not a
-    section), and the fence marks themselves are dropped.
-    """
-    pairs, fence = [], None
-    for line in text.splitlines():
-        marker = _FENCE.match(line)
-        if fence is None and marker:
-            fence = marker.group(1)
-        elif fence is None:
-            heading = _HEADING.match(line)
-            pairs.append((line, len(heading.group(1)) if heading else 0))
-        elif marker and marker.group(1)[0] == fence[0] and len(marker.group(1)) >= len(fence) and not line[marker.end():].strip():
-            fence = None
-        else:
-            pairs.append((line, 0))
-    return pairs
-
-
-def assignment_refusal(issue, sender, owner):
-    """Why a 担当:* label on `issue` must come off, or None when the assignment stands.
-
-    Only the owner's account assigns (Dots works through it), and only an issue that already states
-    how to tell it is done: an agent never starts from an instruction nobody wrote down.
-    """
-    if not sender or sender.lower() != owner.lower():
-        return "担当ラベルは所有者だけが付けられます"
-    if not acceptance_criteria(issue.get("body")):
-        return "担当を決める前に、Issue 本文へ「受入条件」の見出しと中身を書いてください（詳細化してから付け直します）"
-    return None
-
-
-def _labels(issue):
-    return [label["name"] for label in issue.get("labels", [])]
-
-
 def _load(path):
     with open(path, encoding="utf-8") as handle:
         return json.load(handle)
@@ -354,11 +291,6 @@ def _flatten(data):
     if data and isinstance(data[0], list):
         return [item for page in data for item in page]
     return data
-
-
-def _add_sender_arguments(command):
-    command.add_argument("--sender", required=True, help="login that added the label")
-    command.add_argument("--owner", required=True, help="repository owner login")
 
 
 def main(argv=None):
@@ -381,13 +313,11 @@ def main(argv=None):
     repair.add_argument("--automation", default="")
     repair.add_argument("--owner-request", action="store_true", help="the owner asked with @claude on the PR")
     lock = sub.add_parser("lock")
-    lock.add_argument("--issue", required=True, help="the issue as the REST API returns it")
+    lock.add_argument("--labels", required=True, help="JSON list of label names")
     lock.add_argument("--added", required=True)
-    _add_sender_arguments(lock)
     assigned = sub.add_parser("assigned")
-    assigned.add_argument("--issue", required=True, help="the issue as the REST API returns it")
+    assigned.add_argument("--labels", required=True, help="JSON list of label names")
     assigned.add_argument("--agent", required=True)
-    _add_sender_arguments(assigned)
     args = parser.parse_args(argv)
     if args.command == "gate":
         plan = decide_gate(_load(args.pr), _flatten_checks(_load(args.checks)), _flatten(_load(args.files)),
@@ -402,13 +332,9 @@ def main(argv=None):
                                  args.owner_request)
         plan = {"allowed": refusal is None, "reason": refusal or ""}
     elif args.command == "assigned":
-        issue = _load(args.issue)
-        plan = {"assigned": assigned_to(_labels(issue), args.agent),
-                "refusal": assignment_refusal(issue, args.sender, args.owner) or ""}
+        plan = {"assigned": assigned_to(json.loads(args.labels), args.agent)}
     else:
-        issue = _load(args.issue)
-        plan = {"conflict": lock_conflict(_labels(issue), args.added),
-                "refusal": assignment_refusal(issue, args.sender, args.owner) or ""}
+        plan = {"conflict": lock_conflict(json.loads(args.labels), args.added)}
     json.dump(plan, sys.stdout, ensure_ascii=False)
     sys.stdout.write("\n")
     return 0

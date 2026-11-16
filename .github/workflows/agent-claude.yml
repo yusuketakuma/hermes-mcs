@@ -57,8 +57,6 @@ jobs:
           NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
           ON_PR: ${{ github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request != null }}
           AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
-          SENDER: ${{ github.event.sender.login }}
-          OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
           control=control/ci/agent_control.py
@@ -77,12 +75,9 @@ jobs:
               --automation "${AUTOMATION:-}" --owner-request)
             ok=$(jq -r .allowed <<< "$verdict"); reason=$(jq -r .reason <<< "$verdict")
           else
-            # Same rule as the lock job: the issue must state its acceptance criteria before an agent starts.
-            gh api "repos/$GH_REPO/issues/$NUMBER" > "$RUNNER_TEMP/issue.json"
-            verdict=$(python3 "$control" assigned --issue "$RUNNER_TEMP/issue.json" --agent 担当:claude \
-              --sender "$SENDER" --owner "$OWNER")
-            ok=$(jq -r '.assigned and .refusal == ""' <<< "$verdict")
-            reason="#$NUMBER の担当が Claude だけではない。$(jq -r .refusal <<< "$verdict")"
+            labels=$(gh api "repos/$GH_REPO/issues/$NUMBER" --jq '[.labels[].name]')
+            ok=$(python3 "$control" assigned --labels "$labels" --agent 担当:claude | jq -r .assigned)
+            reason="#$NUMBER の担当が Claude だけではない"
           fi
           echo "ok=$ok" >> "$GITHUB_OUTPUT"
           if [[ "$ok" != "true" ]]; then echo "::notice::not started: $reason"; fi

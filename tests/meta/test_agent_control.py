@@ -195,50 +195,6 @@ def test_only_one_agent_label_per_issue():
     assert not ac.lock_conflict(["担当:claude"], "bug")
 
 
-def _issue(body, *labels):
-    return {"body": body, "labels": [{"name": name} for name in labels]}
-
-
-def test_assignment_needs_the_owner_and_written_acceptance_criteria():
-    ready = _issue("## やること\n直す\n\n## 受入条件\n- テストが通る\n\n## 注意\nなし")
-    assert ac.acceptance_criteria(ready["body"]) == "- テストが通る"
-    assert ac.assignment_refusal(ready, "Owner", "owner") is None
-    assert "所有者だけ" in ac.assignment_refusal(ready, "stranger", "owner")
-    assert "所有者だけ" in ac.assignment_refusal(ready, "", "owner")
-    for body in (None, "直して", "## 受入条件\n\n## 注意\nなし", "### 完了と判断する条件\n\n_No response_"):
-        assert "受入条件" in ac.assignment_refusal(_issue(body), "owner", "owner")
-    # An empty template field does not hide criteria written further down.
-    later = _issue("### 期待した動き\n\n_No response_\n\n## 受入条件\n- 一覧に出る")
-    assert ac.acceptance_criteria(later["body"]) == "- 一覧に出る"
-    # The issue templates' own headings count.
-    for heading in ("### 完了と判断する条件", "### 期待した動き"):
-        assert ac.assignment_refusal(_issue(f"{heading}\n\n一覧に出る"), "owner", "owner") is None
-
-
-def test_acceptance_criteria_reads_markdown_structure():
-    assert ac.acceptance_criteria("## 受入条件\n#123 の再現手順でエラーが出ない\n## 注意\nx") == "#123 の再現手順でエラーが出ない"
-    quoted = "書き方の例:\n```markdown\n## 受入条件\n- 例\n```\n"
-    assert ac.acceptance_criteria(quoted) == ""
-    assert ac.assignment_refusal(_issue(quoted), "owner", "owner")
-    assert ac.acceptance_criteria(quoted + "## 受入条件\n- 本物\n~~~\n# コード\n~~~\n## 注意\n") == "- 本物\n# コード"
-    nested = "## 受入条件\n### 正常系\n- [ ] 通る\n### 異常系\n- [ ] 止まる\n## 注意\nx"
-    assert ac.acceptance_criteria(nested) == "- [ ] 通る\n- [ ] 止まる"
-    assert ac.acceptance_criteria("## 受入条件\n### 正常系\n## 注意\nx") == ""
-    assert ac.acceptance_criteria('### 期待した動き\n```json\n{"status": "ok"}\n```\n') == '{"status": "ok"}'
-    assert ac.acceptance_criteria("## 再現手順\n```sh\npython3 example.py\n```\t\n\n## 受入条件\n- 終了する\n") == "- 終了する"
-
-
-def test_cli_lock_and_assigned_read_the_issue(tmp_path, capsys):
-    path = tmp_path / "issue.json"
-    path.write_text(json.dumps(_issue("直して", "担当:claude")))
-    ac.main(["lock", "--issue", str(path), "--added", "担当:claude", "--sender", "owner", "--owner", "owner"])
-    plan = json.loads(capsys.readouterr().out)
-    assert plan["conflict"] is False and "受入条件" in plan["refusal"]
-    path.write_text(json.dumps(_issue("## 受入条件\n通る", "担当:claude")))
-    ac.main(["assigned", "--issue", str(path), "--agent", "担当:claude", "--sender", "owner", "--owner", "owner"])
-    assert json.loads(capsys.readouterr().out) == {"assigned": True, "refusal": ""}
-
-
 def test_cli_reads_paginated_gh_output(tmp_path, capsys):
     (tmp_path / "pr.json").write_text(json.dumps(_pr()))
     (tmp_path / "checks.json").write_text(json.dumps([{"total_count": 6, "check_runs": _green()}]))
@@ -260,10 +216,7 @@ def test_labels_and_workflows_agree_with_the_module():
     assert "branch_prefix: agent/" in claude
     assert "vars.AUTOMATION_ENABLED == 'true'" in claude
     assert "github.repository_owner" in claude
-    # Both places ask the module, with the issue as it is now, whether the assignment stands.
-    for workflow, command in ((control, "lock"), (claude, "assigned")):
-        assert f'{command} --issue "$RUNNER_TEMP/issue.json"' in workflow
-        assert '--sender "$SENDER" --owner "$OWNER")' in workflow
+    assert "--draft" not in claude, "PRs are opened ready for review, never as drafts"
     repair = (ROOT / ".github/workflows/agent-claude-repair.yml").read_text()
     assert "agent-claude-repair.yml" in control
     assert "workflow_dispatch" in repair and "issue_comment" not in repair and "pull_request" not in repair.split("jobs:")[0]
