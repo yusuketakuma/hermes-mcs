@@ -70,3 +70,55 @@ def test_history_stays_within_the_readable_size(tmp_path):
     state = external_transfer.status(tmp_path)
     assert state["state"] == "acknowledged"
     assert len(external_transfer._read(tmp_path)["history"]) == external_transfer.HISTORY_LIMIT
+
+
+_COMMON = {"version", "cmd", "command_id", "actor", "human_confirmed", "project_id"}
+
+
+def _op(**changes):
+    req = {"version": 1, "cmd": external_transfer.CMD, "command_id": "00000000-0000-4000-8000-000000000001",
+           "actor": "管理者", "human_confirmed": True, "project_id": None, "reason": "契約確認",
+           "services": ["anthropic", "jev"]}
+    return {**req, **changes}
+
+
+@pytest.mark.parametrize("changes, error", [
+    ({}, None),
+    ({"services": ["jev", "anthropic"]}, "bad_services"),     # one spelling per approval
+    ({"services": ["jev", "jev"]}, "bad_services"),
+    ({"services": []}, "bad_services"),
+    ({"services": ["other"]}, "bad_services"),
+    ({"services": "anthropic"}, "bad_services"),
+    ({"reason": "確" * 501}, "bad_reason"),
+    ({"reason": " 契約確認"}, "bad_reason"),                    # receipt and record keep the same text
+    ({"actor": "管理者 "}, "bad_actor"),
+    ({"project_id": 1}, "bad_project_id"),
+    ({"by": "管理者"}, "unknown_field"),
+])
+def test_operation_payload_is_canonical_before_anything_is_written(changes, error):
+    assert external_transfer.validate_operation(_op(**changes), _COMMON) == error
+
+
+def test_rerun_of_an_uncommitted_command_replaces_its_own_record(tmp_path):
+    external_transfer.require(tmp_path)
+    first = external_transfer.acknowledge(by="管理者", reason="契約確認", services=["anthropic"],
+                                          confirm_human=True, root=tmp_path, command_id="a")
+    again = external_transfer.acknowledge(by="管理者", reason="契約確認", services=["anthropic"],
+                                          confirm_human=True, root=tmp_path, command_id="a")
+    assert again["history"] == [] and again["acknowledged"]["command_id"] == "a"
+    later = external_transfer.acknowledge(by="管理者", reason="Jev確認", services=["jev"],
+                                          confirm_human=True, root=tmp_path, command_id="b")
+    assert later["history"] == [again["acknowledged"]] and first["acknowledged"]["command_id"] == "a"
+
+
+def test_receipt_state_names_the_published_record(tmp_path):
+    external_transfer.require(tmp_path)
+    receipt = {"command_id": "a", "actor": "管理者", "reason": "契約確認", "services": ["anthropic"]}
+    assert external_transfer.receipt_state(receipt, tmp_path) == "receipt_file_mismatch"
+    external_transfer.acknowledge(by="管理者", reason="契約確認", services=["anthropic"],
+                                  confirm_human=True, root=tmp_path, command_id="a")
+    assert external_transfer.receipt_state(receipt, tmp_path) == "matched"
+    assert external_transfer.receipt_state({**receipt, "services": ["jev"]}, tmp_path) == "receipt_file_mismatch"
+    external_transfer.acknowledge(by="管理者", reason="再確認", services=["anthropic"],
+                                  confirm_human=True, root=tmp_path, command_id="b")
+    assert external_transfer.receipt_state(receipt, tmp_path) == "external_transfer_superseded"

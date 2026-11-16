@@ -698,6 +698,13 @@ def _apply_restore_op_tx(db, req, current) -> tuple[str | None, dict]:
     return None, extra
 
 
+def replay_tx(db, req: dict, receipt: dict, filesystem_changes) -> None:
+    """Finish file effects an applied receipt promised but a stopped process never published."""
+    if req.get("cmd") == "ops.external_transfer_acknowledge":
+        from external_transfer import replay_tx as acknowledge_replay_tx
+        acknowledge_replay_tx(getattr(db, "db", db), receipt, filesystem_changes)
+
+
 def apply_tx(db, req: dict, now: float | None = None, *,
              filesystem_changes=None, cfg=None, data_dir=None) -> tuple[str | None, dict]:
     """Apply one validated operation without committing its transaction."""
@@ -709,6 +716,9 @@ def apply_tx(db, req: dict, now: float | None = None, *,
     if req["cmd"] in ("ops.drug_alias_apply", "ops.drug_alias_rollback"):
         from drug_alias import apply_tx as apply_alias_tx
         return apply_alias_tx(db, req, filesystem_changes)
+    if req["cmd"] == "ops.external_transfer_acknowledge":
+        from external_transfer import apply_tx as acknowledge_tx
+        return acknowledge_tx(db, req, filesystem_changes, current)
     if req["cmd"] in ("ops.cloud_stop", "ops.cloud_resume"):
         from cloud_cli import apply_control_tx
         return apply_control_tx(db, req, current)
