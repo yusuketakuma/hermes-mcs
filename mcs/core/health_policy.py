@@ -16,6 +16,9 @@ COVERAGE_STALL_S = 24 * 3600
 # notification measurement older than this cannot vouch for renders queued
 # since, so a carried measurement expires at the same age.
 CARD_STALL_S = 1800
+# Why an unfinished run stopped, as runs.error of a 'crashed' row. Only a
+# reason its evidence proves is written; anything else reads as 'unknown'.
+INTERRUPT_REASONS = ("watchdog_exit", "update_preempted", "host_restart", "unknown")
 
 
 def _tick_settings(cfg: dict) -> tuple[float, float]:
