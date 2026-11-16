@@ -169,9 +169,12 @@ def notification_preview(db, card, content, *, limit=600, _urgencies=None, cfg=N
                              if row["body_state"] != "deleted"
                              and urgency_of(m) == "llm"),
                             rows[0])
-        header = preview_header(db, card["project_id"], message, privacy)
-        if privacy == "minimal" and message["body_state"] != "full":
+        # Unavailable/unverified content must not fall back to an identifying
+        # header when the owner selected a minimal preview.
+        if privacy == "minimal" and (message["body_state"] != "full"
+                                     or not valid_hash(message["content_hash"])):
             return "MCS: 新しい投稿"
+        header = preview_header(db, card["project_id"], message, privacy)
         if message["body_state"] == "deleted":
             return preview_line(header, "表示対象の投稿は削除済みです。", limit)
         if message["body_state"] != "full" or not valid_hash(message["content_hash"]):
