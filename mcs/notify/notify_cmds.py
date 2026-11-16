@@ -643,11 +643,9 @@ def drain_int_commands(ledger, result, cfg, root, deadline=None,
                 f"cmd_int_cursor_publish_failed:{type(e).__name__}")
     begins = [p for p in pending
               if p[1].get("op") == "transport_begin"]
-    # Part receipts settle before the card's own receipt: a settled card
-    # issues its next render at once, and that render must see the parts
-    # already delivered whatever order the receipt filenames sort in.
-    receipts = sorted((p for p in pending if p[1].get("op") in _RECEIPT_OPS),
-                      key=lambda p: p[1]["op"] == "transport_receipt")
+    # Receipts apply in filename order; a render planned before its parts'
+    # receipts land waits on notify_card_state.PARTS_IN_FLIGHT_SQL instead.
+    receipts = [p for p in pending if p[1].get("op") in _RECEIPT_OPS]
     others = [p for p in pending if p[1].get("op") not in TRANSPORT_OPS]
     done = 0
     card_actions = False
