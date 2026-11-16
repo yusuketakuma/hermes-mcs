@@ -68,7 +68,12 @@ def _test_timeout():
 # processes together run every test exactly once. Without the option nothing
 # changes. ci/pytest_shards.py is loaded by path only when the option is used,
 # because nested runs copy this file alone into a temporary directory.
+# --mcs-only-files=PATH first deselects every test outside the listed files
+# (docs-only pull requests, ci/ci_scope.py). The lane is still collected by
+# directory, so collect_ignore_glob stays active, and the shards then split
+# the remaining tests with the same completeness report.
 _shard = None
+_only_files = None
 
 
 def pytest_addoption(parser):
@@ -79,6 +84,8 @@ def pytest_addoption(parser):
                     help="per-file seconds used to balance --mcs-shard")
     group.addoption("--mcs-shard-report", default=None, metavar="PATH",
                     help="write the shard's selection and completion report here")
+    group.addoption("--mcs-only-files", default=None, metavar="PATH",
+                    help="keep only tests in the files listed in PATH (one rootdir-relative path per line)")
 
 
 def _shards():
@@ -96,6 +103,18 @@ def _write_shard_report(state):
         with open(temporary, "w", encoding="utf-8") as handle:
             json.dump(state["report"], handle, sort_keys=True)
         os.replace(temporary, path)
+
+
+def _configure_only_files(config):
+    global _only_files
+    path = config.getoption("--mcs-only-files")
+    if path is None:
+        return
+    try:
+        with open(path, encoding="utf-8") as handle:
+            _only_files = {line.strip() for line in handle if line.strip()}
+    except OSError as error:
+        raise pytest.UsageError(f"--mcs-only-files: {error}") from None
 
 
 def _configure_shard(config):
@@ -124,6 +143,11 @@ def pytest_collectreport(report):
 # trylast: -k/-m/--deselect run first, so the shards split what would run.
 @pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config, items):
+    if _only_files is not None:
+        outside = [item for item in items if item.nodeid.split("::", 1)[0] not in _only_files]
+        if outside:
+            config.hook.pytest_deselected(items=outside)
+            items[:] = [item for item in items if item.nodeid.split("::", 1)[0] in _only_files]
     if _shard is None:
         return
     shards = _shard["module"]
@@ -157,6 +181,7 @@ def pytest_sessionfinish(session, exitstatus):
 
 def pytest_configure(config):
     global _hang_stderr
+    _configure_only_files(config)
     _configure_shard(config)
     if _hang_stderr is None and _test_timeout():
         duplicate = os.dup(2)
@@ -172,8 +197,9 @@ def pytest_configure(config):
 
 
 def pytest_unconfigure(config):
-    global _hang_stderr, _shard
+    global _hang_stderr, _shard, _only_files
     _shard = None
+    _only_files = None
     _cancel_dump()
     if _hang_stderr is not None:
         _hang_stderr.close()

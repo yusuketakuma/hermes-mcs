@@ -131,6 +131,13 @@ python3 scripts/development/release_notes.py export --version X.Y.Z \
 
 ユーザー指示（2026-10-31）により、テストで失敗した項目は原因を修正し、その項目を再実行します。再検証がすべて通れば、既存結果と合わせて全体を合格扱いとし、全体suiteや同一SHAでの全6ジョブの再実行は必須にしません。変更の影響がある関連項目は確認します。
 
+「全6ジョブ」は必須チェックとリリース受入の6 lane（`lint-test`・`hygiene`・`standalone-sdk`・`incident-gates`・`macos`・`hermes-integration`）を指します。
+`ci.yml`の job はテストの matrix と判定用 gate を含めて11個に増えましたが、6 lane の名前は変わりません。`lint-test`と`macos`は
+`pytest-linux`・`pytest-macos`の全 slice と shard 報告の照合を判定する gate で、受入ではその gate job と`ci-gate-<lane>` artifact を証拠にできます。
+リリースのタグ run は常に full mode（`perf`テストを含む全テスト）です。draft・docs mode の pull request run の成功はテストを実行していない成功で、
+受入の実測には使いません（[CIの構成と実行範囲](DEVELOPMENT.md#ciの構成と実行範囲)）。
+slice の shard 報告 artifact の保存・取得に失敗して gate が止まった場合は、インフラ要因の失敗として下記の代替確認の対象です。
+
 受入票には、対象SHA、元の実行範囲と成功・失敗・中断、失敗項目の再実行結果、再利用した結果、未実行の項目を記録します。合格扱いはユーザーが承認した受入判断として記載し、未実行を実測成功にしたり、ローカル検証をGitHub CIの成功と記載したりしません。CIが開始できない場合、またはartifact保存などインフラ要因のみが失敗理由の場合は、理由と同等のローカル確認（`scripts/development/ci_local.sh` 等の既存経路）の結果を記録し、製品・test失敗を未修正のまま免除しません。認証、予算、人承認、独立レビュー、実機受入の条件は維持します。
 
 ## GitHubとの自動同期

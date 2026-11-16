@@ -17,6 +17,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "ci/run_pytest_groups.py"
+# A pytest-linux CI job sets these for the suite itself; the nested runners
+# below must start from the local defaults.
+ENV = {key: value for key, value in os.environ.items()
+       if key not in ("MCS_CI_SKIP_PERF", "MCS_CI_TEST_SCOPE", "MCS_TEST_SHARDS")}
 
 
 def _load(name, path):
@@ -231,7 +235,8 @@ root = xml.parent
 (root / (name + ".started")).write_text(json.dumps({"pid": os.getpid(), "pgid": os.getpgrp(),
                                                     "parallel": os.environ.get("MCS_TEST_PARALLEL")}))
 deadline = time.monotonic() + 10
-while len(list(root.glob("*.started"))) < count:
+# every shard this runner starts together (a slice runs only its own shards)
+while len(list(root.glob("*.started"))) < int(os.environ.get("MCS_TEST_PARALLEL") or count):
     if time.monotonic() > deadline:
         raise SystemExit("the other shards never started")
     time.sleep(0.01)
@@ -294,7 +299,7 @@ def _runner(script, output, *args, timeout=30, **env):
     command = [sys.executable, str(script), "linux", *args]
     if output is not None:
         command += ["--output-dir", str(output)]
-    return subprocess.run(command, env={**os.environ, "MCS_TEST_SHARDS": "", **env},
+    return subprocess.run(command, env={**ENV, **env},
                           text=True, capture_output=True, timeout=timeout)
 
 
@@ -388,7 +393,7 @@ def test_junit_count_mismatch_is_a_warning_when_every_selected_test_ran(tmp_path
 def test_default_reports_use_runner_temp_outside_the_checkout(tmp_path):
     script, _ = _synthetic_repo(tmp_path)
     result = subprocess.run([sys.executable, str(script), "macos", "--shards", "2"],
-                            env=dict(os.environ, RUNNER_TEMP=str(tmp_path)),
+                            env=dict(ENV, RUNNER_TEMP=str(tmp_path)),
                             text=True, capture_output=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     output, = tmp_path.glob("mcs-pytest-macos-*")
@@ -403,11 +408,11 @@ def test_existing_reports_and_checkout_paths_are_never_overwritten(tmp_path):
     marker.write_text("keep")
     for target in (output, script.parent / "reports"):
         result = subprocess.run([sys.executable, str(script), "linux", "--output-dir", str(target)],
-                                text=True, capture_output=True, timeout=10)
+                                env=ENV, text=True, capture_output=True, timeout=10)
         assert result.returncode == 2
     assert marker.read_text() == "keep"
     result = subprocess.run([sys.executable, str(script), "linux"],
-                            env=dict(os.environ, RUNNER_TEMP=str(script.parent)),
+                            env=dict(ENV, RUNNER_TEMP=str(script.parent)),
                             text=True, capture_output=True, timeout=10)
     assert result.returncode == 2
     assert not list(script.parent.glob("mcs-pytest-*"))
@@ -437,7 +442,7 @@ def test_interruption_reaps_every_process_group_and_their_children(tmp_path, sig
     script, output = _synthetic_repo(tmp_path)
     process = subprocess.Popen([sys.executable, str(script), "linux", "--shards", "2",
                                 "--output-dir", str(output)],
-                               env=dict(os.environ, SYNTHETIC_GROUP_CANCEL="1"),
+                               env=dict(ENV, SYNTHETIC_GROUP_CANCEL="1"),
                                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:
         deadline = time.monotonic() + 15
@@ -462,6 +467,180 @@ def test_interruption_reaps_every_process_group_and_their_children(tmp_path, sig
                 os.killpg(json.loads(marker.read_text())["pgid"], signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+# ---------- matrix slices ----------
+
+def test_slice_runs_only_its_shards_of_the_fixed_total(tmp_path):
+    script, output = _synthetic_repo(tmp_path)
+    result = _runner(script, output, "--slice", "2/3", "--per-slice", "2", MCS_TEST_SHARDS="5")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "pytest shards: 3-4 of 6 (slice 2/3; usable CPUs: " in result.stdout
+    assert "MCS_TEST_SHARDS is ignored" in result.stdout
+    assert {path.name for path in output.glob("*.xml")} == {"shard-3.xml", "shard-4.xml"}
+    for index in (3, 4):
+        args = json.loads((output / f"shard-{index}.args.json").read_text())
+        assert f"--mcs-shard={index}/6" in args and "-m" not in args
+        # only this slice's processes share the host's /dev/shm
+        assert json.loads((output / f"shard-{index}.started").read_text())["parallel"] == "2"
+    assert "incomplete run" not in result.stderr
+
+
+def test_every_slice_together_is_verified_as_one_exact_run(tmp_path):
+    script, _ = _synthetic_repo(tmp_path)
+    reports = tmp_path / "downloaded"
+    for number in (1, 2, 3):
+        output = tmp_path / f"slice-{number}"
+        assert _runner(script, output, "--slice", f"{number}/3", "--per-slice", "2").returncode == 0
+        # the gate downloads every slice's shard reports into one directory tree
+        (reports / f"mcs-pytest-linux-{number}").mkdir(parents=True)
+        for path in output.glob("shard-*.report.json"):
+            shutil.copy(path, reports / f"mcs-pytest-linux-{number}" / path.name)
+    verify = [sys.executable, str(script), "linux", "--verify-reports", str(reports)]
+    result = subprocess.run([*verify, "--slices", "3", "--per-slice", "2"], env=ENV,
+                            text=True, capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "3 slices x 2 shards = 6 shard reports; 6 collected tests" in result.stdout
+    # reports planned for another total, or a missing slice, are not this run
+    # (the plan depends only on the total, so 2 x 3 would describe the same run)
+    for slices, per_slice in (("2", "2"), ("4", "2")):
+        result = subprocess.run([*verify, "--slices", slices, "--per-slice", per_slice], env=ENV,
+                                text=True, capture_output=True, timeout=30)
+        assert result.returncode == 1 and "incomplete run" in result.stderr
+    shutil.rmtree(reports / "mcs-pytest-linux-3")
+    result = subprocess.run([*verify, "--slices", "3", "--per-slice", "2"], env=ENV,
+                            text=True, capture_output=True, timeout=30)
+    assert result.returncode == 1
+    assert "shard-5: 0 reports (slice 3 must upload exactly one)" in result.stderr
+
+
+def _reports(nodeids, total, assignment=None, info=None, **fields):
+    if assignment is None:
+        assignment, info = shards.plan(nodeids, total)
+    out = {}
+    for index in range(1, total + 1):
+        report = shards.report(nodeids, index, total, assignment, info, 0)
+        report.update(finished=True, ran=report["selected"], exitstatus=0 if report["selected"] else 5)
+        out[index] = report
+    for index, change in fields.items():
+        out[int(index[1:])].update(change)
+    return out
+
+
+def _write(directory, reports, per_slice):
+    for index, report in reports.items():
+        folder = directory / f"slice-{(index - 1) // per_slice + 1}"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"shard-{index}.report.json").write_text(json.dumps(report))
+
+
+@pytest.mark.parametrize("slices,per_slice", [(4, 2), (2, 3), (1, 2)])
+def test_slices_partition_the_shards_and_their_reports_prove_the_union(tmp_path, slices, per_slice):
+    total = slices * per_slice
+    indexes = [i for number in range(1, slices + 1) for i in groups.slice_indexes(number, per_slice)]
+    assert indexes == list(range(1, total + 1))   # disjoint and exact
+    nodeids = [f"tests/f{i % 11}.py::t{i}" for i in range(60)]
+    _write(tmp_path / "ok", _reports(nodeids, total), per_slice)
+    problems, loaded = groups.verify_reports(tmp_path / "ok", slices, per_slice)
+    assert problems == [] and sorted(loaded) == indexes
+
+
+@pytest.mark.parametrize("fault,message", [
+    ("missing", "shard-2: 0 reports"),
+    ("duplicate", "shard-1: 2 reports"),
+    ("unfinished", "shard-2: the shard report was never completed"),
+    ("short", "shard-2: ran 0 of"),
+    ("failed", "shard-2: pytest exit status 1"),
+    ("other plan", "shards collected different test sets"),
+    ("double selection", "did not select every collected test exactly once"),
+    ("stray", "shard-9: a report for a shard outside 1..4"),
+])
+def test_verify_reports_fails_closed(tmp_path, fault, message):
+    nodeids = [f"tests/f{i % 5}.py::t{i}" for i in range(40)]
+    reports = _reports(nodeids, 4)
+    if fault == "unfinished":
+        reports[2]["finished"] = False
+    elif fault == "short":
+        reports[2]["ran"] = 0
+    elif fault == "failed":
+        reports[2]["exitstatus"] = 1
+    elif fault == "other plan":
+        reports[3] = _reports(nodeids[:-1], 4)[3]
+    elif fault == "double selection":
+        reports[2]["selected_sum"] = reports[1]["selected_sum"]   # counts add up, the ids do not
+    _write(tmp_path, reports, 2)
+    if fault == "missing":
+        (tmp_path / "slice-1/shard-2.report.json").unlink()
+    elif fault == "duplicate":
+        shutil.copy(tmp_path / "slice-1/shard-1.report.json", tmp_path / "slice-2/shard-1.report.json")
+    elif fault == "stray":
+        (tmp_path / "slice-2/shard-9.report.json").write_text(json.dumps(reports[1]))
+    problems, _ = groups.verify_reports(tmp_path, 2, 2)
+    assert any(message in problem for problem in problems), problems
+
+
+@pytest.mark.parametrize("args", [
+    ["--slice", "1/2", "--per-slice", "2", "--shards", "4"],
+    ["--slice", "3/2", "--per-slice", "2"],
+    ["--slice", "0/2", "--per-slice", "2"],
+    ["--slice", "1/2"],
+    ["--slice", "x", "--per-slice", "2"],
+    ["--per-slice", "2"],
+    ["--slice", "1/8", "--per-slice", "9"],
+    ["--slices", "2", "--per-slice", "2"],
+    ["--verify-reports", "reports", "--slices", "2"],
+    ["--verify-reports", "reports", "--slices", "2", "--per-slice", "2", "--slice", "1/2"],
+])
+def test_invalid_slices_are_usage_errors(tmp_path, args):
+    script, output = _synthetic_repo(tmp_path)
+    assert _runner(script, output, *args).returncode == 2
+    assert not output.exists()
+
+
+def test_perf_tests_are_deselected_only_when_ci_asks(tmp_path):
+    script, output = _synthetic_repo(tmp_path)
+    assert _runner(script, output, "--shards", "2", MCS_CI_SKIP_PERF="1").returncode == 0
+    args = json.loads((output / "shard-1.args.json").read_text())
+    assert args[args.index("-m") + 1] == "not perf"
+    assert _runner(script, tmp_path / "bad", MCS_CI_SKIP_PERF="yes").returncode == 2
+
+
+def test_docs_scope_passes_the_document_test_list_to_every_shard(tmp_path):
+    script, output = _synthetic_repo(tmp_path)
+    repo = script.parents[1]
+    shutil.copy(ROOT / "ci/ci_scope.py", repo / "ci/ci_scope.py")
+    for name, text in (("tests/meta/test_runner.py", ""), ("tests/core/test_readme.py", "README.md"),
+                       ("tests/core/test_db.py", "x = 1\n")):
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_text(text)
+    (repo / "integration").mkdir()
+    result = _runner(script, output, "--shards", "2", MCS_CI_TEST_SCOPE="docs")
+    assert result.returncode == 0, result.stdout + result.stderr
+    only = output / "only-files.txt"
+    assert only.read_text() == "tests/core/test_readme.py\ntests/meta/test_runner.py\n"
+    assert "test scope: docs, 2 test files" in result.stdout
+    for index in (1, 2):
+        assert f"--mcs-only-files={only.resolve()}" in json.loads((output / f"shard-{index}.args.json").read_text())
+
+
+@pytest.mark.parametrize("count", [1, 2])
+def test_conftest_only_files_deselects_before_sharding(tmp_path, count):
+    _synthetic_tests(tmp_path, 4)
+    listed = tmp_path / "only.txt"
+    listed.write_text("tests/test_f1.py\ntests/test_f3.py\n")
+    reports = []
+    for index in range(1, count + 1):
+        report = tmp_path / f"r{index}.json"
+        result = _nested(tmp_path, "tests", f"--mcs-only-files={listed}", f"--mcs-shard={index}/{count}",
+                         f"--mcs-shard-report={report}")
+        assert result.returncode in (0, 5), result.stdout + result.stderr
+        reports.append(json.loads(report.read_text()))
+    assert {r["total"] for r in reports} == {6} and sum(r["selected"] for r in reports) == 6
+    assert {r["files_total"] for r in reports} == {2}
+    result = _nested(tmp_path, "tests", f"--mcs-only-files={listed}")
+    assert "6 passed, 1 skipped, 6 deselected" in result.stdout
+    result = _nested(tmp_path, "tests", f"--mcs-only-files={tmp_path / 'absent.txt'}")
+    assert result.returncode == 4 and "--mcs-only-files" in result.stderr
 
 
 # ---------- the durations table ----------

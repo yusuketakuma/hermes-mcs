@@ -32,7 +32,8 @@ fi
 # the real free space of this volume (attachments need 2.5 GiB, the health
 # report warns under 4.5 GiB), so /dev/shm is used only with 6 GiB free plus
 # 256 MiB for each further runner that starts beside this one at the same
-# moment (ci/run_pytest_groups.py sets MCS_TEST_PARALLEL to its shard count).
+# moment (ci/run_pytest_groups.py sets MCS_TEST_PARALLEL to the number of
+# shard processes it starts on this host: a CI slice's, not the lane total).
 shm_dir=${MCS_TEST_SHM_DIR:-/dev/shm}
 case ${MCS_TEST_PARALLEL:-} in
     [1-9] | [1-5][0-9] | 6[0-4]) test_parallel=$MCS_TEST_PARALLEL ;;

@@ -41,7 +41,10 @@ def guard_world():
         fake = SimpleNamespace(dup=duplicate, fdopen=stream, close=close)
         globals_ = {"os": fake, "errno": errno, "_hang_stderr": None,
                     "_test_timeout": lambda: 1,
-                    "_cancel_dump": lambda: calls["cancel"].append(True)}
+                    "_cancel_dump": lambda: calls["cancel"].append(True),
+                    # the CI shard and file-list options are configured by their own helpers
+                    "_configure_only_files": lambda config: None,
+                    "_configure_shard": lambda config: None}
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), "exec"), globals_)
         yield SimpleNamespace(namespace=globals_, fake=fake, calls=calls,
                               read_fd=read_fd, write_fd=write_fd, owned=owned)
