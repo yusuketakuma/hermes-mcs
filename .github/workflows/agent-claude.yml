@@ -31,7 +31,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
-      group: agent-claude-${{ github.event.issue.number || github.event.pull_request.number }}
+      # One writer for every Claude entry point (Issue, PR comment, repair): an Issue and its PR have
+      # different numbers, so a per-number group would let two runs write the same branch.
+      group: agent-claude-writer
       cancel-in-progress: false
     permissions:
       contents: write
