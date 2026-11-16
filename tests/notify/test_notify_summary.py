@@ -222,3 +222,19 @@ def test_cli_prints_without_names_unless_asked(led, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert out.startswith("【📊 MCS サマリー") and "患者A" not in out
     assert notify_digest.main(["--print", "days:99"]) == 2
+
+
+def test_access_ids_are_only_the_patients_the_summary_still_shows(led):
+    for pid in range(1, 13):
+        _room(led, pid, f"患者{pid:02d}", "みどり訪問看護")
+        _add_request(led, "期限切れ", "山田", "2000-01-01", pid=pid)
+    got = notify_digest.view(led.db, {}, "all days:3", now=NOW, names=False)
+    out = notify_render.parts_text(got["parts"])
+    assert "project 10 他2件" in out and "project 11" not in out
+    assert got["project_ids"] == list(range(1, 11))  # the two cut by the list limit are not recorded
+
+
+def test_labelled_counts_every_patient_sharing_a_visible_name():
+    model = {"containers": [{"type": "text", "text": "・同名 期限切れ / project 12"}]}
+    labels = {"同名": {1, 2}, "project 1": {7}, "project 12": {12}, "隠れ": {3}}
+    assert notify_digest._labelled(model, labels) == {1, 2, 12}

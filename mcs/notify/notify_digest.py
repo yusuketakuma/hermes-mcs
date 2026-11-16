@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 import unicodedata
@@ -357,7 +358,8 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     """The summary display model for [since, until). ``flt`` is a
     parse_scope dict (None = all); ``names`` shows patient names next to
     project ids; ``allowed`` is the caller's project scope; ``shown``
-    collects every project the model labels, for the access record."""
+    collects the projects whose label survives into the final model, for
+    the access record (rows cut by the list or size limits are not shown)."""
     import notify_views
     flt = flt or parse_scope("")
     keep = scope_projects(db, flt, name, allowed)
@@ -371,14 +373,17 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     def ok(pid) -> bool:
         return keep is None or pid in keep
 
+    labels: dict[str, set] = {}
+
     def room(pid) -> str:
-        if shown is not None and type(pid) is int:
-            shown.add(pid)
         name_ = _plain(project_display_name(db, pid)) if names else ""
         # staff read names; the internal id only identifies a room when
         # names are off or missing
-        return (name_ or f"project {pid}") \
+        label = (name_ or f"project {pid}") \
             + (notify_views.ARCHIVED_MARK if pid in archived else "")
+        if type(pid) is int:
+            labels.setdefault(label, set()).add(pid)
+        return label
 
     start = datetime.fromtimestamp(since, JST)
     end = datetime.fromtimestamp(until, JST)
@@ -556,8 +561,30 @@ def build(db, cfg, since: float, until: float, flt=None, *,
     footer = []
     if flt["mine"]:
         footer.append("※ 担当: 担当者欄が表示名と一致する未完了タスク")
-    return fit_parts({"containers": containers,
-                      "footer": [{"type": "text", "text": t} for t in footer]})
+    model = fit_parts({"containers": containers,
+                       "footer": [{"type": "text", "text": t} for t in footer]})
+    if shown is not None:
+        shown.update(_labelled(model, labels))
+    return model
+
+
+def _labelled(model, labels) -> set:
+    """Projects whose label appears in the final text; a shared name counts each."""
+    texts, stack = [], [model]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, str):
+            texts.append(node)
+        elif isinstance(node, dict):
+            stack.extend(node.values())
+        elif isinstance(node, (list, tuple)):
+            stack.extend(node)
+    body = "\n".join(texts)
+    found = set()
+    for label, pids in labels.items():
+        if re.search(re.escape(label) + r"(?![0-9])", body):
+            found |= pids
+    return found
 
 
 def _nonzero(parts) -> str:
