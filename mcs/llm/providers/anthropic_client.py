@@ -99,6 +99,10 @@ DEFAULT_PROFILES = MappingProxyType({"backlog": "haiku-medium", "patient_context
                                      "quality_repair": "sonnet-high"})
 ORIGINAL_CONTRACT = (MODEL, None)
 VALID_MODEL_EFFORTS = frozenset({ORIGINAL_CONTRACT, *PROFILE_DEFINITIONS.values()})
+# Per-attempt wait of each request shape (non-streaming). The named profiles' values are
+# initial settings without measurements, and the unit deadline still caps every attempt.
+ATTEMPT_TIMEOUTS = MappingProxyType({
+    ORIGINAL_CONTRACT: 120.0, (MODEL, "medium"): 300.0, (SONNET_MODEL, "high"): 600.0})
 
 
 def _haiku_snapshot(price_version, checked_on, valid_until):
@@ -167,12 +171,14 @@ class AnthropicClient(CloudClient):
     MODEL = MODEL
     # Class defaults keep the original contract for subclasses that replace __init__.
     model = MODEL
+    OUTPUT_LIMIT_FIELD = "max_tokens"
     effort = None
 
     def __init__(self, api_key, *, model=MODEL, effort=None, **kwargs):
         if not isinstance(model, str) or effort is not None and not isinstance(effort, str) \
                 or (model, effort) not in VALID_MODEL_EFFORTS:
             raise ValueError("anthropic_profile_invalid")
+        kwargs.setdefault("attempt_timeout", ATTEMPT_TIMEOUTS[(model, effort)])
         super().__init__(api_key, **kwargs)
         self.model = model
         self.effort = effort
@@ -180,7 +186,7 @@ class AnthropicClient(CloudClient):
     def request(self, method, body, timeout, *, deadline=None):
         return bounded_http.bounded_http_request(
             ENDPOINT, method, body, timeout, api_key=self.api_key,
-            deadline=deadline, allowed_endpoints=(ENDPOINT,), auth="anthropic")
+            deadline=deadline, allowed_endpoints=(ENDPOINT,), **self.response_limit_args(body), auth="anthropic")
 
     def body(self, prompt, max_tokens, cache_prefix):
         content = prompt

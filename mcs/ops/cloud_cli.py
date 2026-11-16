@@ -439,7 +439,8 @@ def _safe_log(row, meta):
         if meta.get(key) in allowed:
             result[key] = meta[key]
     kinds = {"auth_error", "payment_required", "pricing_unverified", "budget_exceeded", "no_api_key",
-             "rate_limited", "transport", "timeout", "contract_error", "protocol_error", "model_mismatch"}
+             "rate_limited", "transport", "timeout", "contract_error", "protocol_error", "model_mismatch",
+             "response_too_large"}
     if isinstance(meta.get("error_kind"), str) and meta["error_kind"] in kinds:
         result["error_kind"] = meta["error_kind"]
     if (row["kind"] == "cloud_usage_result"
