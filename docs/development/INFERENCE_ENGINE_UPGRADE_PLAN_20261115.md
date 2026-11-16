@@ -213,7 +213,7 @@
      - 自動では削除しない `patient-context-reset-*.db`（`local_backup.py:346-357`）、schema_bump の preupdate、manual のコピーが1つでもあると、圧縮（`:300-311`）が二度と成立しません。
      - ScanCache（`journal.py:320-380`）と `_spent_deliveries`（`worker.py:1260-1266`）も、それに比例して増えます。
    - 修正:
-     - 基準を `local_backup._backup_class`/`generations()` と共通の判定にし、上限（O5）を設けます。
+     - 基準を `backup_names.backup_class`/`generations()` と共通の判定にし、上限（O5）を設けます。
      - reset のコピーは復元に使えるので（`docs/guides/ANTHROPIC.md:279`）、単純には除外しません。
      - 上限より古いバックアップから restore するときは、配信状態を照合不能として扱い、全件 hold して人が照合します。
 3. **`extract_llm_resident.py:471-476`（lane 1 の昼間分岐）**

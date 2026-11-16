@@ -136,7 +136,7 @@ snapshotは保存時点の情報です。現行状態と異なれば適用時に
 | `remote_id` | `mark_delivered`の場合、照合済みの配送先投稿ID |
 | `evidence.method` / `evidence.ref` | 確認方法と、非機密の証拠参照 |
 | `evidence.worker_stopped` | 停止を確認した場合に限り`true` |
-| `evidence.proof` | `mark_not_sent`の場合、`no_journal_started`・`api_rejected`・`remote_absent`のいずれか。Slack添付説明の更新前拒否には下記の`local_preflight_rejected`、準備不足で実行しなかったグループ共有には`dependency_rejected`を使用 |
+| `evidence.proof` | `mark_not_sent`の場合、`no_journal_started`・`api_rejected`・`remote_absent`のいずれか。保持期間（90日）を超えた復元で保留・結果不明になったカードと部品では、`no_journal_started`は`journal_cannot_vouch`で拒否され、使えるのは`api_rejected`・`remote_absent`だけです。Slack添付説明の更新前拒否には下記の`local_preflight_rejected`、準備不足で実行しなかったグループ共有には`dependency_rejected`を使用 |
 | `evidence.duplicate_risk_accepted` | LINE WORKSで`remote_absent`を根拠にする場合、重複リスクを人が受け入れた時だけ`true` |
 
 送信結果が不明というだけで`mark_not_sent`を選ばないでください。既存journalの配送成功記録と矛盾する証拠、読めないjournal、古い計画は既存validatorと適用処理が拒否します。
