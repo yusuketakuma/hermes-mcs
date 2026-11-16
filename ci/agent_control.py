@@ -277,7 +277,7 @@ def lock_conflict(labels, added):
 
 
 def acceptance_criteria(body):
-    """The text under the issue's acceptance heading, or "" when the issue has none yet."""
+    """The text under the issue's first filled-in acceptance heading, or "" when it has none yet."""
     lines = (body or "").splitlines()
     for index, line in enumerate(lines):
         if line.startswith("#") and any(title in line for title in ACCEPTANCE_HEADINGS):
@@ -287,7 +287,8 @@ def acceptance_criteria(body):
                     break
                 section.append(following)
             text = "\n".join(section).strip()
-            return "" if text == "_No response_" else text
+            if text and text != "_No response_":
+                return text
     return ""
 
 

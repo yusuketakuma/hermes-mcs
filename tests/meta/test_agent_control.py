@@ -207,6 +207,9 @@ def test_assignment_needs_the_owner_and_written_acceptance_criteria():
     assert "所有者だけ" in ac.assignment_refusal(ready, "", "owner")
     for body in (None, "直して", "## 受入条件\n\n## 注意\nなし", "### 完了と判断する条件\n\n_No response_"):
         assert "受入条件" in ac.assignment_refusal(_issue(body), "owner", "owner")
+    # An empty template field does not hide criteria written further down.
+    later = _issue("### 期待した動き\n\n_No response_\n\n## 受入条件\n- 一覧に出る")
+    assert ac.acceptance_criteria(later["body"]) == "- 一覧に出る"
     # The issue templates' own headings count.
     for heading in ("### 完了と判断する条件", "### 期待した動き"):
         assert ac.assignment_refusal(_issue(f"{heading}\n\n一覧に出る"), "owner", "owner") is None
