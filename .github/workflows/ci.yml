@@ -18,6 +18,7 @@ on:
           - refactor
           - late
           - late_remaining
+          - late_main
 
 permissions:
   contents: read
@@ -121,16 +122,17 @@ jobs:
             tests/adapters/lineworks/test_lineworks_chat_format.py \
             -r fEs --durations=10
       - name: Lint late history modules
-        if: inputs.mode == 'late' && matrix.os == 'ubuntu-latest'
+        if: (inputs.mode == 'late' || inputs.mode == 'late_main') && matrix.os == 'ubuntu-latest'
         run: >-
           uv run --no-project --with "ruff==0.17.3" ruff check
           mcs/core/ledger_capture.py mcs/ingest/job_ops.py mcs/ingest/run_check.py
       - name: Validate late history paths
-        if: inputs.mode == 'late'
+        if: inputs.mode == 'late' || inputs.mode == 'late_main'
         env:
           MCS_TEST_PYTHON: ${{ github.workspace }}/.venv/bin/python
+          DIAGNOSTIC_MODE: ${{ inputs.mode }}
         run: |
-          sh scripts/run_tests.sh \
+          set -- \
             tests/ingest/test_late_arrival_notify.py \
             tests/ingest/test_unread_notify_paths.py \
             tests/ingest/test_run_check_sources.py \
@@ -142,8 +144,14 @@ jobs:
             tests/ingest/test_semantic_ingest_revisions.py \
             tests/core/test_initial_import_state.py \
             tests/core/test_ledger_reply_recovery.py \
-            tests/core/test_message_revisions.py \
-            -r fEs --durations=10
+            tests/core/test_message_revisions.py
+          if [ "$DIAGNOSTIC_MODE" = late_main ]; then
+            set -- "$@" \
+              tests/ingest/test_history_walk.py \
+              tests/ingest/test_history_undated_reply.py \
+              tests/core/test_thread_projection_invalidation_batch.py
+          fi
+          sh scripts/run_tests.sh "$@" -r fEs --durations=10
       - name: Validate remaining history paths
         if: inputs.mode == 'late_remaining'
         env:
