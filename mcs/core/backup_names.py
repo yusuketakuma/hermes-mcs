@@ -1,7 +1,7 @@
 """Owner classes of data/backups file names and the delivery-journal restore horizon they bound.
 
 Names and stat only — nothing here opens a database or deletes a file.
-The local backup rotation (``maintenance``) and the delivery workers'
+The local backup rotation (``local_backup``) and the delivery workers'
 journal compaction (``adapters/common/worker.py``) share this one reading,
 and post-restore reconcile uses the same cap to decide when a restored
 backup is older than the journal evidence kept for it.

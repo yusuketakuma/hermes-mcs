@@ -20,7 +20,6 @@ from pathlib import Path
 from contextlib import closing, suppress
 from time import monotonic
 
-from backup_names import BACKUP_CLASSES, backup_class
 import snapshots
 from snapshots import publish_snapshot as _publish_snapshot
 from mcs_util import HOME
