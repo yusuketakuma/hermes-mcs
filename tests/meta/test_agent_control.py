@@ -215,6 +215,14 @@ def test_assignment_needs_the_owner_and_written_acceptance_criteria():
         assert ac.assignment_refusal(_issue(f"{heading}\n\n一覧に出る"), "owner", "owner") is None
 
 
+def test_acceptance_criteria_reads_markdown_structure():
+    assert ac.acceptance_criteria("## 受入条件\n#123 の再現手順でエラーが出ない\n## 注意\nx") == "#123 の再現手順でエラーが出ない"
+    quoted = "書き方の例:\n```markdown\n## 受入条件\n- 例\n```\n"
+    assert ac.acceptance_criteria(quoted) == ""
+    assert ac.assignment_refusal(_issue(quoted), "owner", "owner")
+    assert ac.acceptance_criteria(quoted + "## 受入条件\n- 本物\n~~~\n# コード\n~~~\n") == "- 本物"
+
+
 def test_cli_lock_and_assigned_read_the_issue(tmp_path, capsys):
     path = tmp_path / "issue.json"
     path.write_text(json.dumps(_issue("直して", "担当:claude")))

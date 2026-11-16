@@ -66,6 +66,9 @@ ACCEPTANCE_HEADINGS = ("受入条件", "完了と判断する条件", "期待し
 _USES_LINE = re.compile(r"^[+-]\s*(-\s+)?uses:\s+[\w.-]+/[\w./-]+@[0-9a-f]{40}(\s+#.*)?$")
 _TEST_SKIP = re.compile(r"pytest\.mark\.(skip|skipif|xfail)|pytest\.(skip|xfail)\(|unittest\.skip|@skip\b")
 _TEST_DEF = re.compile(r"^\s*(async\s+)?def\s+test_")
+# "#123" is an issue reference; a heading needs the space after its marks.
+_HEADING = re.compile(r"^ {0,3}#{1,6}(\s|$)")
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _LINKED_ISSUE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)", re.I)
 
 
@@ -278,18 +281,32 @@ def lock_conflict(labels, added):
 
 def acceptance_criteria(body):
     """The text under the issue's first filled-in acceptance heading, or "" when it has none yet."""
-    lines = (body or "").splitlines()
+    lines = _outside_fences((body or "").splitlines())
     for index, line in enumerate(lines):
-        if line.startswith("#") and any(title in line for title in ACCEPTANCE_HEADINGS):
+        if _HEADING.match(line) and any(title in line for title in ACCEPTANCE_HEADINGS):
             section = []
             for following in lines[index + 1:]:
-                if following.startswith("#"):
+                if _HEADING.match(following):
                     break
                 section.append(following)
             text = "\n".join(section).strip()
             if text and text != "_No response_":
                 return text
     return ""
+
+
+def _outside_fences(lines):
+    """Drop fenced code blocks: a heading quoted as an example is not the issue's own section."""
+    kept, fence = [], None
+    for line in lines:
+        marker = _FENCE.match(line)
+        if fence is None and marker:
+            fence = marker.group(1)
+        elif fence is None:
+            kept.append(line)
+        elif marker and marker.group(1)[0] == fence[0] and len(marker.group(1)) >= len(fence) and not line.strip(" `~"):
+            fence = None
+    return kept
 
 
 def assignment_refusal(issue, sender, owner):
