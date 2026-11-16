@@ -58,8 +58,21 @@ def _valid_action(action):
     return False
 
 
+# the emphasis adapters/lineworks/cards.py draws (heading, sender line, band)
+_TEXT_STYLES = {"weight": {"bold"}, "size": {"xs", "lg"}, "color": {"#888888", "#FFFFFF"}}
+_HEADER_BANDS = {"#ED4245"}
+
+
+def _valid_text_node(child):
+    styles = set(child) - {"type", "text", "wrap"}
+    return (child.get("type") == "text" and {"type", "text", "wrap"} <= set(child)
+            and all(key in _TEXT_STYLES and child[key] in _TEXT_STYLES[key] for key in styles)
+            and isinstance(child.get("text"), str)
+            and 0 < len(child["text"]) <= 1000 and child.get("wrap") is True)
+
+
 def _valid_face_body(nodes):
-    """Accept only MCS text and catalog-icon baseline rows, never arbitrary Flex."""
+    """Accept only MCS text, separators and catalog-icon baseline rows, never arbitrary Flex."""
     from adapters.common.provider_assets import PROVIDER_ASSETS
     urls = {url for _key, _name, url in PROVIDER_ASSETS}
     if not isinstance(nodes, list) or not 1 <= len(nodes) <= 1000:
@@ -68,6 +81,8 @@ def _valid_face_body(nodes):
     for node in nodes:
         if not isinstance(node, dict):
             return False
+        if node == {"type": "separator"}:
+            continue
         if node.get("type") == "text":
             children = [node]
         elif (set(node) == {"type", "layout", "spacing", "contents"}
@@ -85,9 +100,7 @@ def _valid_face_body(nodes):
                     and isinstance(child.get("url"), str) and child["url"] in urls
                     and child.get("size") == "sm"):
                 continue
-            if (set(child) != {"type", "text", "wrap"} or child.get("type") != "text"
-                    or not isinstance(child.get("text"), str)
-                    or not 0 < len(child["text"]) <= 1000 or child.get("wrap") is not True):
+            if not _valid_text_node(child):
                 return False
             cost += len(child["text"])
             if cost > 1000:
@@ -116,8 +129,16 @@ def _validate_content(content):
         footer = bubble.get("footer") if isinstance(bubble, dict) else None
         texts = body.get("contents") if isinstance(body, dict) else None
         actions = footer.get("contents") if isinstance(footer, dict) else None
+        header = bubble.get("header") if isinstance(bubble, dict) else None
         valid = (valid_protocol_text(content.get("altText"), 400)
-                 and isinstance(bubble, dict) and set(bubble) <= {"type", "body", "footer"}
+                 and isinstance(bubble, dict) and set(bubble) <= {"type", "header", "body", "footer"}
+                 and ("header" not in bubble or (
+                     isinstance(header, dict)
+                     and set(header) == {"type", "layout", "backgroundColor", "contents"}
+                     and header.get("type") == "box" and header.get("layout") == "vertical"
+                     and header.get("backgroundColor") in _HEADER_BANDS
+                     and isinstance(header.get("contents"), list) and len(header["contents"]) == 1
+                     and _valid_text_node(header["contents"][0])))
                  and bubble.get("type") == "bubble"
                  and isinstance(body, dict) and set(body) == {"type", "layout", "contents"}
                  and body.get("type") == "box" and body.get("layout") == "vertical"
@@ -161,7 +182,7 @@ def _silent_content(content):
     elif isinstance(out.get("contents"), list):
         out["contents"] = [_silent_content(row) if isinstance(row, dict) else row
                            for row in out["contents"]]
-    for key in ("body", "footer", "action"):
+    for key in ("header", "body", "footer", "action"):
         if isinstance(out.get(key), dict):
             out[key] = _silent_content(out[key])
     for key in ("text", "contentText", "altText"):

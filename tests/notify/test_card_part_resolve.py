@@ -248,7 +248,7 @@ def preflight_recovery(led, monkeypatch, *, error="edit_target_unverified", miss
             led.db.execute("UPDATE attachments SET message_id=100 WHERE attachment_id=?", (sibling_id,))
     caption = {"text": "synthetic original description"}
     monkeypatch.setattr(notify_parts, "_attachment_captions",
-                        lambda db, card, attachments: {a["attachment_id"]: caption["text"] for a in attachments})
+                        lambda db, card, attachments, cfg=None: {a["attachment_id"]: caption["text"] for a in attachments})
     if legacy_original:
         build = notify_parts.build_manifest
         def legacy_manifest(*args, **kwargs):

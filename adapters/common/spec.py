@@ -84,6 +84,9 @@ PARTS_KEYS = frozenset({
     # them with allowed_mentions=none; Slack replaces them with names
     "mentions", "preview_text", "thread_drug_actions", "drug_view_navigation", "thread_notice", "source_thread", "post_source_id",
     "provider_states_version", "processing_display_version", "slack_thread_policy", "section_divider_version",
+    # processing_header_quiet=1: the compact processing header only shows a
+    # problem (2026-11-16); absent keeps a sealed spec's header and split
+    "processing_header_quiet",
     # chat_format_version=1 opts a Discord/LINE WORKS thread create/update
     # into the shared chat face (originals on the card); absent keeps the
     # legacy per-transport behaviour and old workers reject the key
@@ -94,7 +97,7 @@ PARTS_KEYS = frozenset({
 # what each transport namespace may hold
 TRANSPORT_PART_KEYS = {"slack": frozenset({"post_actions", "face_posts", "file_group"}),
                        "discord": frozenset({"post_actions", "accent", "face_posts"}),
-                       "lineworks": frozenset({"face_posts"})}
+                       "lineworks": frozenset({"accent", "face_posts"})}
 # discord card edge: 🚨 urgent, else the layout-6 card state (ack / assign)
 ACCENTS = frozenset({"urgent", "acked", "assigned"})
 POST_ACTION_IDS = frozenset({"meds"})   # read-only, clicker-scoped views
@@ -409,6 +412,10 @@ def validate(spec) -> dict:
             or parts["processing_display_version"] not in (1, 2, 3)
             or parts.get("provider_states_version") != 4):
         _err("bad_processing_display")
+    if "processing_header_quiet" in parts and (
+            type(parts["processing_header_quiet"]) is not int or parts["processing_header_quiet"] != 1
+            or "processing_display_version" not in parts):
+        _err("bad_processing_header_quiet")
     if "section_divider_version" in parts and (
             type(parts["section_divider_version"]) is not int or parts["section_divider_version"] != 1):
         _err("bad_section_divider_version")
@@ -908,6 +915,19 @@ def _validate_discord_file_groups(spec, manifest) -> None:
             _err("bad_discord_file_group")
 
 
+# Optional card-part keys hashed with the card body (same set notify_parts seals).
+CARD_PAYLOAD_OPTIONAL = ("preview_text", "processing_display_version", "processing_header_quiet",
+                         "section_divider_version", "slack_thread_policy")
+
+
+def card_part_payload(parts: dict) -> dict:
+    """Return the card-part payload whose sha256 the manifest's first part carries."""
+    payload = {"containers": parts["containers"], "footer": parts["footer"],
+               "action_rows": parts["action_rows"]}
+    payload.update((k, parts[k]) for k in CARD_PAYLOAD_OPTIONAL if k in parts)
+    return payload
+
+
 def _check_part_payloads(parts: dict, manifest: list, chunks) -> None:
     """Recompute the locally verifiable payloads — a dropped or rehashed
     part can never ride the manifest."""
@@ -916,16 +936,7 @@ def _check_part_payloads(parts: dict, manifest: list, chunks) -> None:
         _err("bad_card_part")
     if "footer" not in parts or "action_rows" not in parts:
         _err("bad_card_payload")
-    card_payload = {"containers": parts["containers"], "footer": parts["footer"],
-                    "action_rows": parts["action_rows"]}
-    if "preview_text" in parts:
-        card_payload["preview_text"] = parts["preview_text"]
-    if "processing_display_version" in parts:
-        card_payload["processing_display_version"] = parts["processing_display_version"]
-    if "section_divider_version" in parts:
-        card_payload["section_divider_version"] = parts["section_divider_version"]
-    if "slack_thread_policy" in parts:
-        card_payload["slack_thread_policy"] = parts["slack_thread_policy"]
+    card_payload = card_part_payload(parts)
     card_sha = hashlib.sha256(canonical(card_payload)).hexdigest()
     if card.get("sha256") != card_sha:
         _err("card_part_sha256")

@@ -153,23 +153,38 @@ def render(spec):
                 "type": "bubble", "body": {"type": "box", "layout": "vertical", "contents": nodes}}}
         else:
             result["contents"]["body"]["contents"] = nodes
+        if (parts.get("lineworks") or {}).get("accent") == "urgent" and nodes[0].get("size") == "lg":
+            # 🚨 urgent: the heading moves onto a red header band
+            band = {**nodes[0], **BAND_STYLE}
+            result["contents"] = {"type": "bubble", "header": {
+                "type": "box", "layout": "vertical", "backgroundColor": URGENT_BAND, "contents": [band]},
+                **{k: v for k, v in result["contents"].items() if k != "type"}}
+            result["contents"]["body"]["contents"] = nodes[1:] or [_text_node("MCS")]
         import json
         if len(json.dumps(result["contents"], ensure_ascii=False).encode("utf-8")) > 15000:
             raise ValueError("lineworks_flex_budget")
     return result
 
 
-def _text_node(value):
-    return {"type": "text", "text": value or "MCS", "wrap": True}
+# Flex emphasis: the patient heading bold and large, a post's time/sender
+# line small and grey, section rules as separators, and an urgent card's
+# heading on a red band. client._valid_face_body allows exactly these.
+HEADING_STYLE = {"weight": "bold", "size": "lg"}
+META_STYLE = {"size": "xs", "color": "#888888"}
+BAND_STYLE = {"weight": "bold", "size": "lg", "color": "#FFFFFF"}
+URGENT_BAND = "#ED4245"
+SEPARATOR = {"type": "separator"}
 
 
-def _provider_box(item):
+def _text_node(value, style=None):
+    return {"type": "text", "text": value or "MCS", "wrap": True, **(style or {})}
+
+
+def _provider_box(item, quiet=False):
     """Known public logo icons and shared state marks; no clinical inference."""
     import processing_route
     states = item["provider_states"]
-    visible = item.get("visible_providers") or list(processing_route.PROVIDERS)
-    sequence = item.get("provider_sequence") or []
-    ordered = sequence + [key for key in visible if key not in sequence]
+    ordered = processing_route.compact_header_parts(item, quiet)[1]
     assets = {key: url for key, _name, url in PROVIDER_ASSETS}
     children = []
     for key in ordered:
@@ -189,12 +204,13 @@ def _face_nodes(parts, posts):
     import notify_render
     import processing_route
     text = card_split(display_text(parts))[0]
+    quiet = processing_route.quiet_header(parts)
     # Splitting the exact sealed prefix keeps the overflow boundary unchanged.
     # Header logos replace only the provider-name suffix; the status stays text.
-    headers = {processing_route.compact_header(item): item
-               for item in parts["containers"]
+    headers = {line: item for item in parts["containers"]
                if item.get("provider_scope") == "header"
-               and parts.get("processing_display_version") in (1, 2, 3)}
+               and parts.get("processing_display_version") in (1, 2, 3)
+               for line in [processing_route.compact_header(item, quiet)] if line}
     if not posts:
         out, plain = [], []
         def flush():
@@ -203,14 +219,23 @@ def _face_nodes(parts, posts):
                 if value:
                     out.append(_text_node(value))
                 plain.clear()
+        heading_text = next((item["text"] for item in parts["containers"][:1]
+                             if item["type"] == "heading"), None)
         for line in text.split("\n"):
+            if line == notify_render.SECTION_RULE:
+                flush()
+                out.append(SEPARATOR)
+                continue
+            if not out and not plain and line == heading_text:
+                out.append(_text_node(line, HEADING_STYLE))
+                continue
             item = headers.get(line)
             if item is None:
                 plain.append(line)
                 continue
             flush()
-            fallback = processing_route.compact_header(item)
-            box = _provider_box(item)
+            fallback = processing_route.compact_header(item, quiet)
+            box = _provider_box(item, quiet)
             prefix = fallback.rsplit(" · ", 1)[0] if box and " · " in fallback else fallback
             if prefix:
                 out.append(_text_node(prefix))
@@ -229,16 +254,18 @@ def _face_nodes(parts, posts):
             continue
         value = notify_render.render_text({**parts, "containers": [item], "footer": []}, head="{}")
         if item.get("rule") and out:
-            out.append(_text_node(notify_render.SECTION_RULE))
+            out.append(SEPARATOR)
         if item.get("provider_scope") == "header" and parts.get("processing_display_version") in (1, 2, 3):
-            box = _provider_box(item)
+            box = _provider_box(item, quiet)
             prefix = value.rsplit(" · ", 1)[0] if box and " · " in value else value
             if prefix:
                 out.append(_text_node(prefix))
             if box:
                 out.append(box)
         elif value:
-            out.append(_text_node(value))
+            style = (HEADING_STYLE if item["type"] == "heading"
+                     else META_STYLE if item.get("rule") else None)
+            out.append(_text_node(value, style))
         if at in by_at:
             pending = by_at[at]
     if pending is not None:

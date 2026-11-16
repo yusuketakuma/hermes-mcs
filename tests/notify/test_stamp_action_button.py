@@ -207,10 +207,8 @@ def test_partial_and_complete_stamp_rows_keep_each_operation_reachable_once(
             spec["parts"]["action_rows"][i] = row[:stamp_count]
     spec["parts"]["action_rows"] = [r for r in spec["parts"]["action_rows"] if r]
     from adapters.common.envelopes import canonical
-    card_payload = {k: spec["parts"][k] for k in ("containers", "footer", "action_rows", "preview_text",
-                                                "processing_display_version", "section_divider_version",
-                                                "slack_thread_policy")
-                    if k in spec["parts"]}
+    from adapters.common.spec import card_part_payload
+    card_payload = card_part_payload(spec["parts"])
     spec["parts"]["manifest"][0]["sha256"] = hashlib.sha256(canonical(card_payload)).hexdigest()
     expected = [b["token"] for row in spec["parts"]["action_rows"] for b in row if "token" in b]
     form_token, = [b["token"] for row in spec["parts"]["action_rows"] for b in row if b["id"] == "stamp"]

@@ -40,7 +40,7 @@ def test_late_reply_gets_its_own_card_in_the_root_thread(led, monkeypatch):
     world = _mkworld(led)
     _deliver(world, led)
     (root,) = _cards(led)
-    assert root["layout"] == notify_cards.CARD_LAYOUT and root["delivery_state"] == "delivered"
+    assert root["layout"] == notify_cards.REPLY_LAYOUT and root["delivery_state"] == "delivered"
     assert root["thread_id"] == root["message_id"]
     before = len(world.client.thread_posts)
 
@@ -54,7 +54,7 @@ def test_late_reply_gets_its_own_card_in_the_root_thread(led, monkeypatch):
     root, reply = _cards(led)
     assert reply["card_key"].endswith("|reply:202")
     assert json.loads(reply["anchor_key"]) == {"root": 100, "source": 202}
-    assert reply["layout"] == notify_cards.CARD_LAYOUT and reply["delivery_state"] == "delivered"
+    assert reply["layout"] == notify_cards.REPLY_LAYOUT and reply["delivery_state"] == "delivered"
     # Reply cards remain inside the verified root thread.
     assert reply["thread_id"] == root["message_id"] != reply["message_id"]
     posts = world.client.thread_posts[before:]
@@ -134,7 +134,7 @@ def test_a_layout_four_root_keeps_reply_cards_after_the_switch_is_off(led, monke
     _dispatch(led, _intent(led, payload={"message_ids": [202]}), SLACK, now=clock[0])
     root, reply = _cards(led)
     assert root["layout"] == 4 and reply["card_key"].endswith("|reply:202")
-    assert reply["layout"] == notify_cards.CARD_LAYOUT
+    assert reply["layout"] == notify_cards.REPLY_LAYOUT
 
 
 def test_slack_reply_cards_stay_enabled_with_threads_disabled():
