@@ -45,7 +45,6 @@ def world(tmp_path):
         db.executescript(SCHEMA)
         db.executescript(ARTIFACTS_LOOKUP_INDEX_SQL)
         db.executescript("""
-          CREATE INDEX idx_artifacts_lookup ON artifacts(kind,project_id,message_id);
           ALTER TABLE patients ADD COLUMN history_floor INTEGER;
           ALTER TABLE patients ADD COLUMN coverage_ts INTEGER;
           ALTER TABLE patients ADD COLUMN karte_id INTEGER;
