@@ -13,9 +13,9 @@ imports nothing from the application. Standard library only.
   repair   whether Claude may repair a failed PR now, from the PR and the
            current labels of its linked issues
   lock     whether a newly added 担当:* label conflicts with another one,
-           and whether its sender may assign agents
+           and why its sender may not assign this issue (if so)
   assigned whether an agent label is the issue's only assignment,
-           and whether its sender may assign agents
+           and why its sender may not assign this issue (if so)
 
 The verdict is evidence, not trust in "CI is green": every required job must
 have run on the current head and succeeded (GitHub counts skipped and neutral
@@ -60,6 +60,8 @@ REPAIR_PREFIX = "agent/claude-"
 REPAIR_AGENT_LABEL = "担当:claude"
 # A failure classified as one of these is held for a person, never retried.
 HOLD_LABELS = ("失敗:CI基盤", "失敗:利用枠", "失敗:不明")
+# Issue headings that state how to tell the work is done. The last two are the issue templates' wording.
+ACCEPTANCE_HEADINGS = ("受入条件", "完了と判断する条件", "期待した動き")
 # A dependabot Actions bump rewrites only pinned `uses:` lines.
 _USES_LINE = re.compile(r"^[+-]\s*(-\s+)?uses:\s+[\w.-]+/[\w./-]+@[0-9a-f]{40}(\s+#.*)?$")
 _TEST_SKIP = re.compile(r"pytest\.mark\.(skip|skipif|xfail)|pytest\.(skip|xfail)\(|unittest\.skip|@skip\b")
@@ -274,14 +276,36 @@ def lock_conflict(labels, added):
     return any(name.startswith(AGENT_LABEL_PREFIX) and name != added for name in labels)
 
 
-def may_assign(sender, owner, dispatchers=""):
-    """True when `sender` may put a 担当:* label on an issue: the owner, or a login the owner listed.
+def acceptance_criteria(body):
+    """The text under the issue's acceptance heading, or "" when the issue has none yet."""
+    lines = (body or "").splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith("#") and any(title in line for title in ACCEPTANCE_HEADINGS):
+            section = []
+            for following in lines[index + 1:]:
+                if following.startswith("#"):
+                    break
+                section.append(following)
+            text = "\n".join(section).strip()
+            return "" if text == "_No response_" else text
+    return ""
 
-    `dispatchers` is the repository variable AGENT_DISPATCHERS (logins separated by commas or spaces).
-    Only an administrator can change a repository variable, so the list is the owner's own delegation.
+
+def assignment_refusal(issue, sender, owner):
+    """Why a 担当:* label on `issue` must come off, or None when the assignment stands.
+
+    Only the owner's account assigns (Dots works through it), and only an issue that already states
+    how to tell it is done: an agent never starts from an instruction nobody wrote down.
     """
-    allowed = {owner.lower()} | {name.lower() for name in re.split(r"[\s,]+", dispatchers or "") if name}
-    return bool(sender) and sender.lower() in allowed
+    if not sender or sender.lower() != owner.lower():
+        return "担当ラベルは所有者だけが付けられます"
+    if not acceptance_criteria(issue.get("body")):
+        return "担当を決める前に、Issue 本文へ「受入条件」の見出しと中身を書いてください（詳細化してから付け直します）"
+    return None
+
+
+def _labels(issue):
+    return [label["name"] for label in issue.get("labels", [])]
 
 
 def _load(path):
@@ -308,7 +332,6 @@ def _flatten(data):
 def _add_sender_arguments(command):
     command.add_argument("--sender", required=True, help="login that added the label")
     command.add_argument("--owner", required=True, help="repository owner login")
-    command.add_argument("--dispatchers", default="", help="vars.AGENT_DISPATCHERS")
 
 
 def main(argv=None):
@@ -331,11 +354,11 @@ def main(argv=None):
     repair.add_argument("--automation", default="")
     repair.add_argument("--owner-request", action="store_true", help="the owner asked with @claude on the PR")
     lock = sub.add_parser("lock")
-    lock.add_argument("--labels", required=True, help="JSON list of label names")
+    lock.add_argument("--issue", required=True, help="the issue as the REST API returns it")
     lock.add_argument("--added", required=True)
     _add_sender_arguments(lock)
     assigned = sub.add_parser("assigned")
-    assigned.add_argument("--labels", required=True, help="JSON list of label names")
+    assigned.add_argument("--issue", required=True, help="the issue as the REST API returns it")
     assigned.add_argument("--agent", required=True)
     _add_sender_arguments(assigned)
     args = parser.parse_args(argv)
@@ -352,11 +375,13 @@ def main(argv=None):
                                  args.owner_request)
         plan = {"allowed": refusal is None, "reason": refusal or ""}
     elif args.command == "assigned":
-        plan = {"assigned": assigned_to(json.loads(args.labels), args.agent),
-                "authorized": may_assign(args.sender, args.owner, args.dispatchers)}
+        issue = _load(args.issue)
+        plan = {"assigned": assigned_to(_labels(issue), args.agent),
+                "refusal": assignment_refusal(issue, args.sender, args.owner) or ""}
     else:
-        plan = {"conflict": lock_conflict(json.loads(args.labels), args.added),
-                "authorized": may_assign(args.sender, args.owner, args.dispatchers)}
+        issue = _load(args.issue)
+        plan = {"conflict": lock_conflict(_labels(issue), args.added),
+                "refusal": assignment_refusal(issue, args.sender, args.owner) or ""}
     json.dump(plan, sys.stdout, ensure_ascii=False)
     sys.stdout.write("\n")
     return 0

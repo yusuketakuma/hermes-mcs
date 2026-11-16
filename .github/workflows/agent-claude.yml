@@ -21,10 +21,10 @@ jobs:
     # The event decides only whether to look; the "Check the assignment" step decides whether to run.
     if: >-
       vars.AUTOMATION_ENABLED == 'true' &&
+      github.event.sender.login == github.repository_owner &&
       (
         (github.event_name == 'issues' && github.event.label.name == '担当:claude') ||
-        (github.event_name != 'issues' && github.event.sender.login == github.repository_owner &&
-          contains(github.event.comment.body, '@claude') &&
+        (github.event_name != 'issues' && contains(github.event.comment.body, '@claude') &&
           (github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request ||
            contains(github.event.issue.labels.*.name, '担当:claude')))
       )
@@ -59,7 +59,6 @@ jobs:
           AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
           SENDER: ${{ github.event.sender.login }}
           OWNER: ${{ github.repository_owner }}
-          DISPATCHERS: ${{ vars.AGENT_DISPATCHERS }}
         run: |
           set -euo pipefail
           control=control/ci/agent_control.py
@@ -78,12 +77,12 @@ jobs:
               --automation "${AUTOMATION:-}" --owner-request)
             ok=$(jq -r .allowed <<< "$verdict"); reason=$(jq -r .reason <<< "$verdict")
           else
-            labels=$(gh api "repos/$GH_REPO/issues/$NUMBER" --jq '[.labels[].name]')
-            # The label's sender is checked here, not in the job's `if`: besides the owner, a login listed in
-            # vars.AGENT_DISPATCHERS (Dots) may assign. An @claude comment stays the owner's alone.
-            ok=$(python3 "$control" assigned --labels "$labels" --agent 担当:claude \
-              --sender "$SENDER" --owner "$OWNER" --dispatchers "${DISPATCHERS:-}" | jq -r '.assigned and .authorized')
-            reason="#$NUMBER の担当が Claude だけではないか、ラベルを付けた $SENDER に担当を決める許可がない"
+            # Same rule as the lock job: the issue must state its acceptance criteria before an agent starts.
+            gh api "repos/$GH_REPO/issues/$NUMBER" > "$RUNNER_TEMP/issue.json"
+            verdict=$(python3 "$control" assigned --issue "$RUNNER_TEMP/issue.json" --agent 担当:claude \
+              --sender "$SENDER" --owner "$OWNER")
+            ok=$(jq -r '.assigned and .refusal == ""' <<< "$verdict")
+            reason="#$NUMBER の担当が Claude だけではない。$(jq -r .refusal <<< "$verdict")"
           fi
           echo "ok=$ok" >> "$GITHUB_OUTPUT"
           if [[ "$ok" != "true" ]]; then echo "::notice::not started: $reason"; fi
@@ -97,8 +96,6 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           label_trigger: "担当:claude"
-          # A delegated assigner may be a bot account; the step above has already checked who it is.
-          allowed_bots: ${{ vars.AGENT_DISPATCHERS }}
           branch_prefix: agent/claude-
           claude_args: >-
             --max-turns 40

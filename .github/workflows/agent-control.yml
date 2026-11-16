@@ -170,18 +170,17 @@ jobs:
           ADDED: ${{ github.event.label.name }}
           SENDER: ${{ github.event.sender.login }}
           OWNER: ${{ github.repository_owner }}
-          DISPATCHERS: ${{ vars.AGENT_DISPATCHERS }}
         run: |
           set -euo pipefail
-          labels=$(gh api "repos/$GH_REPO/issues/$ISSUE" --jq '[.labels[].name]')
-          verdict=$(python3 ci/agent_control.py lock --labels "$labels" --added "$ADDED" \
-            --sender "$SENDER" --owner "$OWNER" --dispatchers "${DISPATCHERS:-}")
-          conflict=$(jq -r .conflict <<< "$verdict"); authorized=$(jq -r .authorized <<< "$verdict")
-          if [[ "$conflict" == "true" || "$authorized" != "true" ]]; then
+          gh api "repos/$GH_REPO/issues/$ISSUE" > "$RUNNER_TEMP/issue.json"
+          verdict=$(python3 ci/agent_control.py lock --issue "$RUNNER_TEMP/issue.json" --added "$ADDED" \
+            --sender "$SENDER" --owner "$OWNER")
+          conflict=$(jq -r .conflict <<< "$verdict"); refusal=$(jq -r .refusal <<< "$verdict")
+          if [[ "$conflict" == "true" || -n "$refusal" ]]; then
             gh api -X DELETE "repos/$GH_REPO/issues/$ISSUE/labels/$(jq -rn --arg n "$ADDED" '$n|@uri')" > /dev/null
             if [[ "$conflict" == "true" ]]; then
               gh issue comment "$ISSUE" --body "担当ラベルは1件だけです。$ADDED を外しました。交代するときは、旧担当の実行が終わったことを確かめてから旧ラベルを外し、新しいラベルを付けてください。"
             else
-              gh issue comment "$ISSUE" --body "担当ラベルを付けられるのは、所有者と、所有者が AGENT_DISPATCHERS で許可した名義だけです。$ADDED を外しました。"
+              gh issue comment "$ISSUE" --body "$refusal。$ADDED を外しました。"
             fi
           fi

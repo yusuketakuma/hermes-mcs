@@ -195,17 +195,32 @@ def test_only_one_agent_label_per_issue():
     assert not ac.lock_conflict(["担当:claude"], "bug")
 
 
-def test_only_the_owner_and_listed_dispatchers_may_assign(capsys):
-    assert ac.may_assign("Owner", "owner")
-    assert not ac.may_assign("stranger", "owner")
-    assert not ac.may_assign("", "owner", "dots")
-    assert ac.may_assign("Dots[bot]", "owner", "someone, dots[bot]")
-    assert not ac.may_assign("dots", "owner", "dots[bot]")
-    ac.main(["lock", "--labels", '["担当:claude"]', "--added", "担当:claude", "--sender", "dots", "--owner", "owner"])
-    assert json.loads(capsys.readouterr().out) == {"conflict": False, "authorized": False}
-    ac.main(["assigned", "--labels", '["担当:claude"]', "--agent", "担当:claude",
-             "--sender", "dots", "--owner", "owner", "--dispatchers", "dots"])
-    assert json.loads(capsys.readouterr().out) == {"assigned": True, "authorized": True}
+def _issue(body, *labels):
+    return {"body": body, "labels": [{"name": name} for name in labels]}
+
+
+def test_assignment_needs_the_owner_and_written_acceptance_criteria():
+    ready = _issue("## やること\n直す\n\n## 受入条件\n- テストが通る\n\n## 注意\nなし")
+    assert ac.acceptance_criteria(ready["body"]) == "- テストが通る"
+    assert ac.assignment_refusal(ready, "Owner", "owner") is None
+    assert "所有者だけ" in ac.assignment_refusal(ready, "stranger", "owner")
+    assert "所有者だけ" in ac.assignment_refusal(ready, "", "owner")
+    for body in (None, "直して", "## 受入条件\n\n## 注意\nなし", "### 完了と判断する条件\n\n_No response_"):
+        assert "受入条件" in ac.assignment_refusal(_issue(body), "owner", "owner")
+    # The issue templates' own headings count.
+    for heading in ("### 完了と判断する条件", "### 期待した動き"):
+        assert ac.assignment_refusal(_issue(f"{heading}\n\n一覧に出る"), "owner", "owner") is None
+
+
+def test_cli_lock_and_assigned_read_the_issue(tmp_path, capsys):
+    path = tmp_path / "issue.json"
+    path.write_text(json.dumps(_issue("直して", "担当:claude")))
+    ac.main(["lock", "--issue", str(path), "--added", "担当:claude", "--sender", "owner", "--owner", "owner"])
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["conflict"] is False and "受入条件" in plan["refusal"]
+    path.write_text(json.dumps(_issue("## 受入条件\n通る", "担当:claude")))
+    ac.main(["assigned", "--issue", str(path), "--agent", "担当:claude", "--sender", "owner", "--owner", "owner"])
+    assert json.loads(capsys.readouterr().out) == {"assigned": True, "refusal": ""}
 
 
 def test_cli_reads_paginated_gh_output(tmp_path, capsys):
@@ -229,12 +244,10 @@ def test_labels_and_workflows_agree_with_the_module():
     assert "branch_prefix: agent/" in claude
     assert "vars.AUTOMATION_ENABLED == 'true'" in claude
     assert "github.repository_owner" in claude
-    # Who may assign is decided by the module in both places, from the same repository variable.
-    for workflow in (control, claude):
-        assert '--sender "$SENDER" --owner "$OWNER" --dispatchers "${DISPATCHERS:-}"' in workflow
-        assert "DISPATCHERS: ${{ vars.AGENT_DISPATCHERS }}" in workflow
-    assert "github.event.sender.login == github.repository_owner &&\n          contains(github.event.comment.body" in claude
-    assert "--draft" not in claude, "PRs are opened ready for review, never as drafts"
+    # Both places ask the module, with the issue as it is now, whether the assignment stands.
+    for workflow, command in ((control, "lock"), (claude, "assigned")):
+        assert f'{command} --issue "$RUNNER_TEMP/issue.json"' in workflow
+        assert '--sender "$SENDER" --owner "$OWNER")' in workflow
     repair = (ROOT / ".github/workflows/agent-claude-repair.yml").read_text()
     assert "agent-claude-repair.yml" in control
     assert "workflow_dispatch" in repair and "issue_comment" not in repair and "pull_request" not in repair.split("jobs:")[0]
