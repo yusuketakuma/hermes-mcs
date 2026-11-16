@@ -17,16 +17,17 @@ def test_services_renders_bootstraps_and_registers(monkeypatch, tmp_path):
     # ("MCS job drain" vs canonical "MCS durable drain")
     calls, args = _services_env(
         monkeypatch, tmp_path, cron_names={"mcs_check.sh"})
+    desired = service_contract.desired_agent_labels(mcs_util.load_config())
     assert mcs_setup.cmd_services(args) == 0
     # wrapper scripts rendered with placeholders substituted
     s = (tmp_path / "scripts" / "mcs_check.sh").read_text()
     assert "__PYTHON__" not in s and "/h/venv/bin/python" in s
     # every launchd plist rendered and bootstrapped
-    for label in service_contract.AGENT_LABELS:
+    for label in desired:
         body = (tmp_path / "agents" / f"{label}.plist").read_text()
         assert "__REPO__" not in body
     boots = [a for a in calls if a[:2] == ["launchctl", "bootstrap"]]
-    assert len(boots) == len(service_contract.AGENT_LABELS) == 6
+    assert len(boots) == len(desired) == 7
     # cron: the job whose script is already registered is skipped;
     # the other 6 (incl. OCR and the update check) are created
     creates = [" ".join(a) for a in calls
@@ -44,13 +45,13 @@ def test_services_renders_bootstraps_and_registers(monkeypatch, tmp_path):
     offsite = tmp_path / "scripts" / "mcs_offsite.sh"
     assert offsite.is_file() and "ENABLED=0" in offsite.read_text()
     assert not any("mcs_offsite.sh" in command for command in creates)
-    assert len(manifest["agents"]) == len(service_contract.AGENT_LABELS)
+    assert len(manifest["agents"]) == len(desired)
     assert len(manifest["cron"]) == 7
 
 
 def test_services_skips_loaded_agents_and_existing_cron(
         monkeypatch, tmp_path):
-    loaded = set(service_contract.AGENT_LABELS)
+    loaded = set(service_contract.desired_agent_labels({}))
     calls, args = _services_env(
         monkeypatch, tmp_path, loaded=loaded,
         cron_entries=[{"id": f"{i:06d}", "name": n, "schedule": s,
@@ -60,7 +61,7 @@ def test_services_skips_loaded_agents_and_existing_cron(
     subs = service_management.service_substitutions(
         mcs_util.load_config(), paths=mcs_setup._service_paths())
     (tmp_path / "agents").mkdir(parents=True)
-    for label in service_contract.AGENT_LABELS:
+    for label in loaded:
         body = scheduled_jobs.render_template(
             (Path(mcs_setup.REPO_ROOT) / "deployment/launchagents"
              / f"{label}.plist").read_text(), subs)

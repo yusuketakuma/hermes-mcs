@@ -127,6 +127,63 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
                         candidate_sha=candidate_sha, confirm_human=confirm_human, reason=reason)
 
 
+def _apply_pre_lock_checks(tag, sha, command_id, base_sha, reinstall,
+                           install_args, *, candidate_sha, confirm_human,
+                           reason):
+    """Non-borrowed entry's pre-lock validation: argument re-check, candidate
+    resolution, runtime/config gates, journal health, install-options pin.
+    Returns the resolved context dict, or an int return code to stop the apply."""
+    rc = _apply_validate_args(tag, sha, command_id, reinstall, install_args,
+                              candidate_sha=candidate_sha, base_sha=base_sha,
+                              confirm_human=confirm_human, reason=reason)
+    if rc is not None:
+        return rc
+    candidate = candidate_sha is not None
+    target_ref = candidate_sha if candidate else f"refs/tags/{tag}"
+    if candidate:
+        try:
+            _candidate_commit(candidate_sha)
+        except UpdateError:
+            print("未公開候補はローカルに存在するコミットだけを指定してください（変更はありません）")
+            return 2
+        tag = "candidate:" + candidate_sha
+        sha = candidate_sha
+    cfg = mcs_util.load_config()
+    expected_runtime = os.environ.get('MCS_UPDATE_RUNTIME_EXPECTED')
+    if expected_runtime is not None and (
+            expected_runtime != 'standalone' or cfg.get('runtime_mode') != expected_runtime):
+        print('確認後に実行モードが変わったか確認できないため、更新を開始しません。mcs update で確認し直してください。')
+        return 2
+    runtime_errors = _apply_runtime_gate_errors(cfg, reinstall, install_args)
+    if runtime_errors:
+        # Even acquiring update.lock or writing local_checks is a mutation.
+        # Keep an existing interrupted journal untouched for safe recovery.
+        print("更新を開始できません。実行環境の問題を解消してください（変更はありません）: " + "; ".join(runtime_errors))
+        return 1
+    state = journal_store.load_state(STATE_PATH)
+    if state.get("_corrupt"):
+        print("更新履歴を読み取れないため停止しました。update_state.jsonを削除せず、管理者に確認してください")
+        return 2
+    if state.get("applying") or state.get("stages"):
+        return recover_interrupted()
+    options_base = None
+    try:
+        options_base, current_options = _install_options_snapshot()
+        encoded_expected = os.environ.get("MCS_UPDATE_OPTIONS_EXPECTED")
+        if encoded_expected is not None:
+            expected_options = json.loads(encoded_expected)
+            if (expected_options is not None and not install_options_contract.valid(expected_options)) \
+                    or current_options != (sorted(set(expected_options)) if expected_options is not None else None):
+                raise ValueError("install_options_changed")
+    except (OSError, ValueError, TypeError, RecursionError):
+        if reinstall or os.environ.get("MCS_UPDATE_OPTIONS_EXPECTED") is not None:
+            print("導入設定が変更されたか確認できないため更新を開始しません。設定を確認してください。")
+            return 1
+    return {"candidate": candidate, "target_ref": target_ref, "tag": tag,
+            "sha": sha, "cfg": cfg, "expected_runtime": expected_runtime,
+            "options_base": options_base, "state": state}
+
+
 def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
           base_sha: str | None = None, reinstall: bool = False,
           install_args: tuple = (), *, candidate_sha: str | None = None,
@@ -156,51 +213,20 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             lifetime.enter_context(_release_git_scope())
             lifetime.enter_context(owned_process.lifetime_fds(borrowed.locks))
         if borrowed is None:
-            rc = _apply_validate_args(tag, sha, command_id, reinstall, install_args,
-                                      candidate_sha=candidate_sha, base_sha=base_sha,
-                                      confirm_human=confirm_human, reason=reason)
-            if rc is not None:
-                return rc
-            candidate = candidate_sha is not None
-            target_ref = candidate_sha if candidate else f"refs/tags/{tag}"
-            if candidate:
-                try:
-                    _candidate_commit(candidate_sha)
-                except UpdateError:
-                    print("未公開候補はローカルに存在するコミットだけを指定してください（変更はありません）")
-                    return 2
-                tag = "candidate:" + candidate_sha
-                sha = candidate_sha
-            cfg = mcs_util.load_config()
-            expected_runtime = os.environ.get('MCS_UPDATE_RUNTIME_EXPECTED')
-            if expected_runtime is not None and (
-                    expected_runtime != 'standalone' or cfg.get('runtime_mode') != expected_runtime):
-                print('確認後に実行モードが変わったか確認できないため、更新を開始しません。mcs update で確認し直してください。')
-                return 2
-            runtime_errors = _apply_runtime_gate_errors(cfg, reinstall, install_args)
-            if runtime_errors:
-                # Even acquiring update.lock or writing local_checks is a mutation.
-                # Keep an existing interrupted journal untouched for safe recovery.
-                print("更新を開始できません。実行環境の問題を解消してください（変更はありません）: " + "; ".join(runtime_errors))
-                return 1
-            state = journal_store.load_state(STATE_PATH)
-            if state.get("_corrupt"):
-                print("更新履歴を読み取れないため停止しました。update_state.jsonを削除せず、管理者に確認してください")
-                return 2
-            if state.get("applying") or state.get("stages"):
-                return recover_interrupted()
-            try:
-                options_base, current_options = _install_options_snapshot()
-                encoded_expected = os.environ.get("MCS_UPDATE_OPTIONS_EXPECTED")
-                if encoded_expected is not None:
-                    expected_options = json.loads(encoded_expected)
-                    if (expected_options is not None and not install_options_contract.valid(expected_options)) \
-                            or current_options != (sorted(set(expected_options)) if expected_options is not None else None):
-                        raise ValueError("install_options_changed")
-            except (OSError, ValueError, TypeError, RecursionError):
-                if reinstall or os.environ.get("MCS_UPDATE_OPTIONS_EXPECTED") is not None:
-                    print("導入設定が変更されたか確認できないため更新を開始しません。設定を確認してください。")
-                    return 1
+            prepared = _apply_pre_lock_checks(
+                tag, sha, command_id, base_sha, reinstall, install_args,
+                candidate_sha=candidate_sha, confirm_human=confirm_human,
+                reason=reason)
+            if isinstance(prepared, int):
+                return prepared
+            candidate = prepared["candidate"]
+            target_ref = prepared["target_ref"]
+            tag = prepared["tag"]
+            sha = prepared["sha"]
+            cfg = prepared["cfg"]
+            expected_runtime = prepared["expected_runtime"]
+            options_base = prepared["options_base"]
+            state = prepared["state"]
 
         else:
             deadline = borrowed.prequiesce_deadline

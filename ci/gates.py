@@ -256,6 +256,7 @@ _LINEWORKS_IMPORTS = {
     "sdc/transport.py": {"urllib"},  # Fixed-origin SDC transport only.
     "sdc/release_auto_transport.py": {"urllib"},  # Fixed-origin v3 device transport only.
     "sdc/keychain_owner.py": {"subprocess"},  # Fixed local native Keychain owner child only.
+    "sdc/telemetry.py": {"subprocess"},  # Fixed /usr/sbin/sysctl probes only.
     "lineworks/client.py": {"subprocess", "urllib"},
     "lineworks/server.py": {"http"},
     "lineworks/__main__.py": {"asyncio"},

@@ -95,9 +95,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_TAG: ${{ github.event.release.tag_name }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           TAG_ARG=""
-          if [ "${{ github.event_name }}" = "release" ] && [ -n "$EVENT_TAG" ]; then
+          if [ "$EVENT_NAME" = "release" ] && [ -n "$EVENT_TAG" ]; then
             TAG_ARG="--tag $EVENT_TAG"
           fi
           # shellcheck disable=SC2086

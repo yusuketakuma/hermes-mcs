@@ -1,7 +1,7 @@
 {
   "category": "fixed",
   "title": "患者コンテキスト走査の失敗理由が型名だけに潰れて実コードを失う問題を修正",
-  "summary": "患者コンテキストの処理パスで例外が起きた際、失敗理由の記録は nightly_/patient_context_ 接頭辞の正規表現だけをコードとして認め、それ以外の ValueError はすべて型名「ValueError」に潰していました。そのため cloud_result_discarded など登録済みの実コードや patient_source_*・patient_summary_*・context_progress_* 系のコードが artifact 上で判別不能になり、再試行の妥当性や障害の切り分けができませんでした。mcs_util.safe_error_code（KNOWN_ERROR_CODES 登録済みリテラルのみエコーし、それ以外は型名へ畳む既存の安全契約）へ置き換え、登録済みコードは接頭辞を問わずそのまま記録するようにしました。",
+  "summary": "患者コンテキストの処理パスで例外が起きた際、失敗理由の記録は nightly_/patient_context_ 接頭辞の正規表現だけをコードとして認め、cloud_result_discarded など登録済みコードが型名に潰れ、障害の切り分けができませんでした。mcs_util.safe_error_code（登録済みリテラルのみエコーする既存の安全契約）へ置き換え、登録済みコードは接頭辞を問わずそのまま記録するようにしました。",
   "upgrade": "追加操作は不要です。適用後、パス失敗の failure 欄には登録済みの実コード（例: cloud_result_discarded、patient_source_quality_incomplete、context_progress_limit）が記録され、未登録・自由文は従来どおり型名に畳まれます。既存 artifact の failure 値の解釈は変わりません。",
   "details": [
     "patient_context_refresh.py のパス失敗記録を _FAILURE_CODE 正規表現から safe_error_code(exc) へ変更しました。safe_error_code は KNOWN_ERROR_CODES に登録されたコードのみをエコーするため、ユーザー由来テキストやパス・SQL がログへ混入する契約は維持されます。",
@@ -9,5 +9,10 @@
     "未使用となった _FAILURE_CODE 定数と re インポートを patient_context_refresh_state.py から削除しました。",
     "held 判定・再試行バックオフ・fail-closed の公開条件は failure 値を参照しないか完全一致のため、記録内容の改善のみで動作は変わりません。"
   ],
-  "refs": ["mcs/patients/patient_context_refresh.py", "mcs/patients/patient_context_refresh_state.py", "mcs/core/error_codes.py", "tests/patients/test_patient_context_refresh.py"]
+  "refs": [
+    "mcs/patients/patient_context_refresh.py",
+    "mcs/patients/patient_context_refresh_state.py",
+    "mcs/core/error_codes.py",
+    "tests/patients/test_patient_context_refresh.py"
+  ]
 }
