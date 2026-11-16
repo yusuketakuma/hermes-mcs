@@ -207,6 +207,7 @@ jobs:
           if-no-files-found: ignore
 
   hermes-integration:
+    if: false  # 合成試験: 必須ジョブを飛ばしても merge-gate が不合格になることを確かめる（マージしない）
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
