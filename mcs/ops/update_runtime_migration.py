@@ -404,6 +404,9 @@ def _post_merge(state: dict, *, native_provider_migration: bool = False,
                     _verify_install_options_base(applying)
                 _plan_runtime_migration(state)
             if applying.get("reinstall") and not applying.get("reinstall_done"):
+                # durable before install.sh may change the venv: an abort reads it
+                applying["reinstall_started"] = True
+                journal_store.save_state(STATE_PATH, state)
                 _reinstall(applying)
                 journal(state, "reinstall")      # persists reinstall_done
             if applying.get("runtime_migration"):

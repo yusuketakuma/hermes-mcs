@@ -296,7 +296,10 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 try:
                     _provider_rollback_preflight(entry.get("prev_sha"))
                     _check_runtime_restore(entry)
-                    sdk_error = _standalone_sdk_rollback_error(entry, cfg)
+                    # only install.sh changes the venv's SDK pins
+                    ran = failed_state.get("applying") or {}
+                    sdk_error = (_standalone_sdk_rollback_error(entry, cfg)
+                                 if ran.get("reinstall_started") or ran.get("reinstall_done") else None)
                     if sdk_error:
                         raise UpdateError(sdk_error)
                 except UpdateError as e:

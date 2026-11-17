@@ -621,3 +621,36 @@ def test_failed_restart_after_abort_leaves_the_journal_for_recovery(updater, mon
     assert state["applying"] is None and state["stages"]
     assert "done" not in [row.get("stage") for row in state["stages"]]
     assert "restart:drainer_stop_failed" in state["executed"]["cid-restart"]["detail"]
+
+
+@pytest.mark.parametrize("installed", [False, True])
+def test_post_merge_bail_refuses_sdk_rollback_only_after_install_started(updater, monkeypatch, installed):
+    """Regression: the SDK-pin refusal also blocked rollbacks of failures before
+    install.sh, whose venv still had the old pins."""
+    repo = _apply_env(updater, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    previous = updater._head_sha()
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+    monkeypatch.setattr(update_apply, "_plan_runtime_migration", lambda *_args: None)
+    checked, reports = [], []
+
+    def child_failed(_sha, *, run_lock_fd):
+        if installed:
+            state = updater.journal_store.load_state(updater.STATE_PATH)
+            state["applying"]["reinstall_started"] = True
+            updater.journal_store.save_state(updater.STATE_PATH, state)
+        raise updater.UpdateError("post_merge_failed: synthetic")
+
+    monkeypatch.setattr(update_apply, "_run_post_merge", child_failed)
+    monkeypatch.setattr(update_apply, "_standalone_sdk_rollback_error",
+                        lambda entry, cfg: checked.append(True) or "standalone_sdk_rollback_unsupported")
+    monkeypatch.setattr(update_apply, "_report", lambda *a, **k: reports.append(a))
+    assert updater.apply("v1.1.0", target, "cid-sdk") == 1
+    assert bool(checked) is installed
+    if installed:
+        assert updater._head_sha() == target
+        assert reports[-1][0] == "runtime_restore_blocked"
+        assert "standalone_sdk_rollback_unsupported" in reports[-1][1]
+    else:
+        assert updater._head_sha() == previous
