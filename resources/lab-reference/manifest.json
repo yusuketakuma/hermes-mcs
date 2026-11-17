@@ -1,0 +1,59 @@
+{
+  "schema": "mcs-lab-reference/1",
+  "retrieved_on": "2026-11-17",
+  "unit_less_bands": {
+    "basis": "jslm-panic-values-2024",
+    "inclusive": true,
+    "note": "単位の書かれていない電解質の数値を検査値と読む範囲。範囲外や帯のない項目は未確認候補として値を残す。原本に単位があれば適用しない。",
+    "items": {
+      "sodium": {"low": "115", "high": "165", "unit": "mmol/L"},
+      "potassium": {"low": "1.5", "high": "7.0", "unit": "mmol/L"},
+      "calcium": {"low": "6.0", "high": "12.0", "unit": "mg/dL"},
+      "magnesium": null
+    },
+    "magnesium_note": "JCCLS共用基準範囲の40項目にも、確認したJSLMパニック値の表にも含まれないため帯を置かない。単位なしのマグネシウムは常に未確認候補。"
+  },
+  "sources": [
+    {
+      "id": "jccls-common-reference-intervals-2022",
+      "publisher": "日本臨床検査標準協議会（JCCLS）基準範囲共用化委員会",
+      "title": "日本における主要な臨床検査項目の共用基準範囲 ―解説と利用の手引き―",
+      "edition": "2022/10/01 版",
+      "url": "https://www.jccls.org/wp-content/uploads/2022/10/kijyunhani20221031.pdf",
+      "sha256": "d3a6174c30641c81918c14255b0a91593845dbe53f5f593b487e1857163dc1d6",
+      "bytes": 5721693,
+      "retrieved_on": "2026-11-17",
+      "verified_from_primary": true,
+      "used_by_code": false,
+      "kind": "reference_interval",
+      "values": {
+        "sodium": {"low": "138", "high": "145", "unit": "mmol/L"},
+        "potassium": {"low": "3.6", "high": "4.8", "unit": "mmol/L"},
+        "chloride": {"low": "101", "high": "108", "unit": "mmol/L"},
+        "calcium": {"low": "8.8", "high": "10.1", "unit": "mg/dL"},
+        "inorganic_phosphate": {"low": "2.7", "high": "4.6", "unit": "mg/dL"}
+      },
+      "note": "共用基準範囲（健常者の分布）。マグネシウムは40項目に含まれない。"
+    },
+    {
+      "id": "jslm-panic-values-2024",
+      "publisher": "日本臨床検査医学会（JSLM）",
+      "title": "臨床検査「パニック値」運用に関する提言書",
+      "edition": "2021年版（2024年改訂、同じ表）",
+      "url": "https://www.jslm.org/committees/team_med/20240610-2.pdf",
+      "sha256": null,
+      "bytes": null,
+      "retrieved_on": "2026-11-17",
+      "verified_from_primary": false,
+      "verification_note": "配布元が取得を拒否(403)。所有者による原本確認待ち",
+      "used_by_code": true,
+      "kind": "panic_value_example",
+      "values": {
+        "sodium": {"low": "115", "high": "165", "unit": "mmol/L"},
+        "potassium": {"low": "1.5", "high": "7.0", "unit": "mmol/L"},
+        "calcium": {"low": "6.0", "high": "12.0", "unit": "mg/dL"}
+      },
+      "note": "提言書の例示値（以下・以上）。各施設が自施設の値を定めるとしている。マグネシウムは見つからなかった。"
+    }
+  ]
+}
