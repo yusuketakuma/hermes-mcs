@@ -166,6 +166,12 @@ def _classify_pair(left: dict, right: dict, token_cache=None) -> dict | None:
                 and left.get("kind") != "other_observation":
             lw = left.get("workflow_status")
             rw = right.get("workflow_status")
+            # Normalize workflow direction only after action/polarity priority.
+            # Keep the existing time guard: an older completion cannot complete
+            # a later plan, even when the facts arrived in reverse order.
+            if lw in WORKFLOW_ORDER and rw in WORKFLOW_ORDER \
+                    and WORKFLOW_ORDER.index(lw) > WORKFLOW_ORDER.index(rw):
+                return _classify_pair(right, left, token_cache)
             if lw in WORKFLOW_ORDER and rw in WORKFLOW_ORDER \
                     and WORKFLOW_ORDER.index(lw) < WORKFLOW_ORDER.index(rw) \
                     and not _ordered_before(right, left):
