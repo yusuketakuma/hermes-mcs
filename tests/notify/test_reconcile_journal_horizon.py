@@ -623,21 +623,31 @@ def test_reconcile_rerun_promotes_a_group_whose_surface_became_usable(led):
     assert led.db.execute("SELECT COUNT(*) FROM notify_outbox WHERE kind='update_notice'").fetchone()[0] == 1
 
 
-def test_slack_unstarted_file_group_beyond_horizon_refuses_a_journal_only_proof(led, tmp_path, monkeypatch):
-    """#136: a pending Slack file_group of a pre-restore render must not be
-    resolved as unsent from journal rows that may be compacted away."""
+def _compacted_pending_group(led, tmp_path, monkeypatch):
+    """A pre-restore Slack render whose file_group never started: the stage upload
+    is human-confirmed delivered, and the journal rows of the stage and the group
+    are gone, as a restore past the journal horizon leaves them. Rows that
+    survived would make reconcile settle the group from the journal (not_sent) or
+    hold the card over the stage's recorded failure, so neither would stay pending."""
     from test_file_group_dependency_refusal import _confirm_stage, _refused
     from adapters.common import journal
     slack, render, _spec, stage, group = _refused(led, tmp_path, monkeypatch)
-    # a group is only resolvable once its stage upload is human-confirmed delivered
     _confirm_stage(led, render, stage)
-    aid = envelopes.part_attempt_id(render["delivery_id"], group["part_id"])
+    parts = {stage["part_id"], group["part_id"]}
     journal.compact(slack.dirs["state"], active="", file_ok=lambda rows: True,
-                    prunable=lambda candidate, rows: candidate == aid)
+                    prunable=lambda candidate, rows: any(r.get("part_id") in parts for r in rows))
+    slack.worker._jview.invalidate()
     with led.db:
         led.db.execute("UPDATE notification_render_parts SET state='pending',error_code=NULL,"
                        "attempt_id=NULL WHERE delivery_id=? AND part_id=?",
                        (render["delivery_id"], group["part_id"]))
+    return slack, render, group
+
+
+def test_slack_unstarted_file_group_beyond_horizon_refuses_a_journal_only_proof(led, tmp_path, monkeypatch):
+    """#136: a pending Slack file_group of a pre-restore render must not be
+    resolved as unsent from journal rows that may be compacted away."""
+    slack, render, group = _compacted_pending_group(led, tmp_path, monkeypatch)
     _restore_from(None, backup_names.JOURNAL_HORIZON_MAX_S + 86400,
                   data=Path(notify_spool.data_root(led)))
     notify_reconcile.reconcile_after_restore(led, SLACK, now=NOW)
@@ -663,13 +673,7 @@ def test_slack_unstarted_file_group_beyond_horizon_refuses_a_journal_only_proof(
 def test_slack_unstarted_file_group_beyond_horizon_resolves_as_delivered_when_observed(led, tmp_path, monkeypatch):
     """#136: a posted file set the operator observed still settles a flagged
     pending group (exact card id and file set re-checked, human approval kept)."""
-    from test_file_group_dependency_refusal import _confirm_stage, _refused
-    slack, render, _spec, stage, group = _refused(led, tmp_path, monkeypatch)
-    _confirm_stage(led, render, stage)
-    with led.db:
-        led.db.execute("UPDATE notification_render_parts SET state='pending',error_code=NULL,"
-                       "attempt_id=NULL WHERE delivery_id=? AND part_id=?",
-                       (render["delivery_id"], group["part_id"]))
+    slack, render, group = _compacted_pending_group(led, tmp_path, monkeypatch)
     _restore_from(None, backup_names.JOURNAL_HORIZON_MAX_S + 86400,
                   data=Path(notify_spool.data_root(led)))
     notify_reconcile.reconcile_after_restore(led, SLACK, now=NOW)
