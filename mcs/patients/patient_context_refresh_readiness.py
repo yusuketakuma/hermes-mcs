@@ -542,15 +542,24 @@ def _pending(db, pid, cfg, *, now=None, route=None, estimate=False, proof_for=No
 
 
 def pending_estimate(db, pid, cfg, *, now=None, route=None):
-    """Estimate pending work on a borrowed connection without reserving external requests."""
-    empty = dict.fromkeys(("targets", "summary_units", "scan_sources", "scan_chunks_estimate", "input_chars"), 0)
+    """Estimate pending work on a borrowed connection without reserving external requests.
+
+    A patient whose stored source scope cannot be read is neither done work nor a reason to stop
+    the caller's whole plan: it is reported as ``invalid`` (as ``status`` does) with no work."""
+    empty = dict.fromkeys(("targets", "summary_units", "scan_sources", "scan_chunks_estimate", "input_chars",
+                           "invalid"), 0)
     if not patient_context_refresh_state.options(cfg)["enabled"]:
         return empty
     from types import SimpleNamespace
     cloud_scan = (bool(route["provider"]) if route is not None else
                   _cloud_scan_for(SimpleNamespace(db=db), cfg)(pid))
-    snapshot, _, pending = _pending(db, pid, cfg, now=now, route=route, estimate=True,
-                                    cloud_scan=cloud_scan)
+    try:
+        snapshot, _, pending = _pending(db, pid, cfg, now=now, route=route, estimate=True,
+                                        cloud_scan=cloud_scan)
+    except ValueError as error:
+        if error.args != ("patient_context_source_scope_invalid",):
+            raise
+        return {**empty, "invalid": 1}
     if patient_context_refresh_state._out_of_scope(snapshot):
         return empty
     block = cfg.get("semantic", {}) if isinstance(cfg, dict) else {}

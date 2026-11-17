@@ -188,7 +188,8 @@ def _state_counts(db):
         + _field("a.content", "held", "json_type") + ", "
         + _field("a.content", "quality_state") + ", " + _field("a.content", "quality_state", "json_type") + ", "
         + _field("a.content", "complete", "json_type") + ", " + _field("a.content", "audited", "json_type") + ", "
-        + _field("a.meta", "source_scope", "json_type") + ", " + _field("a.meta", "source_scope")
+        + _field("a.meta", "source_scope", "json_type") + ", " + _field("a.meta", "source_scope") + ", "
+        + _field("a.content", "source_scope", "json_type") + ", " + _field("a.content", "source_scope")
         + " FROM artifacts a JOIN patients p ON p.project_id=a.project_id "
         "WHERE a.kind IN (?,?,?,?) AND COALESCE(p.is_archived,0)=0 "
         "AND (a.kind=? OR a.message_id IS NULL) "
@@ -196,7 +197,8 @@ def _state_counts(db):
         + latest_current_pred(), (state.PROGRESS, state.SCAN, state.KIND, state.LEGACY_KIND,
                                   state.SCAN, state.SCAN))
     for (pid, kind, mid, artifact_id, ok, key, key_type, binding, is_published, failure, failure_type,
-         held_type, quality, quality_type, complete_type, audited_type, scope_type, scope) in rows:
+         held_type, quality, quality_type, complete_type, audited_type, scope_type, scope,
+         progress_scope_type, progress_scope) in rows:
         recorded.add(pid)
         if (not ok or failure_type not in (None, "null", "text") or quality_type not in (None, "null", "text")
                 or any(value not in (None, "null", "true", "false")
@@ -213,6 +215,12 @@ def _state_counts(db):
                 continue
             if artifact_id > published.get(pid, (-1, False))[0]:
                 published[pid] = (artifact_id, is_published == 1)
+            continue
+        if kind == state.PROGRESS and progress_scope_type not in (None, "null") and not (
+                progress_scope_type == "array" and _scope_valid(progress_scope)):
+            # The progress reader rejects this scope for the patient, so the row is never in-progress work.
+            result["invalid_rows"] += 1
+            invalid.add(pid)
             continue
         held = held_type == "true"
         quality = _quality(quality)
