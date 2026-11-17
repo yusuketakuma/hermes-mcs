@@ -165,9 +165,9 @@ def _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread, requ
         row = {"kind": rq.get("kind"), "ctx": rq.get("ctx"),
                "at": m["posted_at"], "mid": m["message_id"]}
         requests.append(row)
-        # Full patient views also check replies to rule-only requests;
-        # the ordinary saved rollup retains its historical LLM-only scan.
-        if request_limit is None:
+        # Rule-only requests share the LLM rows' reply scan and cap, so an
+        # unevaluated thread reply is never shown as 記録なし.
+        if request_limit is None or len(requests) <= request_limit:
             req_thread.append((row, root, ts, sender_id))
     # negated/speculative/ungrounded requests stay flagged for the
     # readers; any flag other than a literal False fails closed
