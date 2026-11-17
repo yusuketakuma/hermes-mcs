@@ -892,11 +892,20 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
                 error_out["status"] = 503  # evidence beside kind, never a rewrite
                 return None  # server not ready (model loading): no verdict
             if response["status"] != 200:
+                # format selection stays separate from endpoint health:
+                # keep the distinct non-200 statuses so the observer can
+                # tell a format-rejection streak from server errors
+                sts = error_out.setdefault("statuses", [])
+                if response["status"] not in sts and len(sts) < 8:
+                    sts.append(response["status"])
                 continue
-            # only a real 200 answer is endpoint-health evidence — an
-            # HTTP500 streak or unusable 200 reaching "plain" is not
-            error_out["answered"] = True
-            if acceptance_error(response) is not None:
+            # endpoint health evidence is a completed answer, not any 200:
+            # empty/length-truncated bodies stay unproven, while a valid
+            # completion that merely fails the format verify still proves
+            # the endpoint alive (the verify outcome picks the mode)
+            if acceptance_error(response) is None:
+                error_out["answered"] = True
+            else:
                 continue
             content = response["text"]
             if (isinstance(content, str) and verify(content)

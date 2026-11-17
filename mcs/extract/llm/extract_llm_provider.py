@@ -494,6 +494,19 @@ def _llm_call(prompt: str, deadline: float | None = None,
                      else time.monotonic() + TIMEOUT)
     endpoint, model = _resolved_llm()
     downgrades = 0
+    probe_err: dict = {}
+    # a probe that reached the wire is accounted exactly once: either it
+    # rides on the first body call's note, or a probe_only note on the
+    # defer path that never let a body leave
+    probe_unaccounted = 0
+
+    def _note_probe_only():
+        nonlocal probe_unaccounted
+        if probe_unaccounted:
+            _integrity_note(None, kind, probe_unaccounted, downgrades,
+                            probe_err, probe_only=True)
+            probe_unaccounted = 0
+
     first = True
     while True:
         with (local_llm.call_turn(turn_deadline, floor + margin,
@@ -511,7 +524,6 @@ def _llm_call(prompt: str, deadline: float | None = None,
                         # re-acquire behind the caller's back
                         _CALL_NOTES.defer_reason = "busy"
                         return _DEFERRED
-                    probe_err: dict = {}
                     fmt = _probe_format(
                         deadline=(deadline - floor) if deadline is not None
                         else None, error_out=probe_err)
@@ -521,6 +533,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
                     # caching a verdict — a sibling worker moving the
                     # shared timestamp can neither fake nor double it
                     probe = int(bool(probe_err.get("sent")))
+                    probe_unaccounted = probe
                 else:
                     fmt, probe, probe_err = cached, 0, {}
                 first = False
@@ -536,8 +549,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
                         _CALL_NOTES.transport = ("expired" if expired
                                                  else "transport")
                         _CALL_NOTES.transport_at = time.monotonic()
-                        _integrity_note(None, kind, probe, downgrades,
-                                        probe_err, probe_only=True)
+                        _note_probe_only()
                         return None
                     if pkind == "unreachable" or pstatus == 503:
                         _CALL_NOTES.transport = ("unreachable"
@@ -545,9 +557,11 @@ def _llm_call(prompt: str, deadline: float | None = None,
                                                  else "unavailable")
                         _CALL_NOTES.transport_at = time.monotonic()
                         _CALL_NOTES.defer_reason = "endpoint_down"
+                        _note_probe_only()
                         return _DEFERRED
                     _CALL_NOTES.defer_reason = ("currentness_unverified" if getattr(
                         _CALL_NOTES, "medication_source_changed", False) else "probe_unobserved")
+                    _note_probe_only()
                     return _DEFERRED   # no idle slot to probe on — nothing sent
             # the same floor gates retries: a format degrade (4xx) loops
             # back here and would otherwise re-fire a full call that can
@@ -555,6 +569,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
             if deadline is not None \
                     and deadline - time.monotonic() < (need_s or 0):
                 _CALL_NOTES.defer_reason = "deadline"
+                _note_probe_only()
                 return _DEFERRED
             rf = None
             if fmt == "schema":
@@ -587,6 +602,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
             if getattr(_CALL_NOTES, "medication_source_changed", False):
                 _CALL_NOTES.transport = None
                 _CALL_NOTES.defer_reason = "currentness_unverified"
+                _note_probe_only()
                 return _DEFERRED
             # Endpoint health of this call for run_pending's breaker: refused /
             # not sent and 503 are outages, a pre-deadline transport failure
@@ -610,6 +626,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
             _CALL_NOTES.transport_at = time.monotonic()
             if _CALL_NOTES.transport == "expired":
                 _integrity_note(response, kind, probe, downgrades, err_out)
+                probe_unaccounted = 0
                 return None  # a sent timeout consumes an attempt, not endpoint health
             if response is None and (err_out.get("kind") in ("unreachable", "busy", "not_sent")
                                      or expired) \
@@ -623,6 +640,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
                     "not_sent" if err_out.get("kind") == "not_sent" else
                     "endpoint_down" if err_out.get("kind") == "unreachable" or status == 503 else
                     "deadline")
+                _note_probe_only()
                 return _DEFERRED
             # 4xx rejects THE REQUEST — walk down one rung and retry; the
             # ladder ends at "plain" (no format to blame), and a plain-mode
@@ -632,6 +650,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
                 downgrades += 1
                 continue
             _integrity_note(response, kind, probe, downgrades, err_out)
+            probe_unaccounted = 0
             # a length stop is truncated JSON: json_object would salvage an
             # inner complete object (one med dict) that validates to {} and
             # gets saved as the message's extraction — reject it as failed
