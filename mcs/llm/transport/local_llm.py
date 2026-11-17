@@ -893,13 +893,21 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
             if response is None:
                 if error_out.get("kind") in ("busy", "not_sent", "unreachable"):
                     return None  # nothing sent: probe again next call
+                # transport/protocol death: the wire was reached or the
+                # outcome is uncertain — per-call send evidence, never a
+                # global timestamp another worker could have moved
+                error_out["sent"] = True
                 error_out.setdefault("kind", "transport")
                 break
+            error_out["sent"] = True
             if response["status"] == 503:
                 error_out["status"] = 503  # evidence beside kind, never a rewrite
                 return None  # server not ready (model loading): no verdict
             if response["status"] != 200:
                 continue
+            # only a real 200 answer is endpoint-health evidence — an
+            # HTTP500 streak or unusable 200 reaching "plain" is not
+            error_out["answered"] = True
             if acceptance_error(response) is not None:
                 continue
             content = response["text"]
@@ -908,6 +916,7 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
                          or _json_obj(content) == {"probe": "schema"})):
                 return mode
         except (OSError, ValueError):
+            error_out["sent"] = True
             error_out.setdefault("kind", "transport")
             break                   # transport dead — stop probing
     # a deadline spent before the first send is an unobserved probe —

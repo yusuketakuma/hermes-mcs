@@ -17,6 +17,7 @@ import extract_schema
 import extract_validation
 import extract_quality
 import extract_llm_local_rebuild as local_rebuild
+import local_llm
 from extraction_provenance import (
     provider_evidence as _provider_evidence,
     EvidenceLeaf as _EvidenceLeaf,
@@ -70,7 +71,6 @@ from extract_llm_prompts import (
 from extract_llm_proofs import (
     _capture_checkpoint_state,
 )
-import extract_llm_provider
 from extract_llm_provider import (
     _actual_model,
     _cloud_compare,
@@ -1261,23 +1261,33 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             # workers would otherwise race to mutate the global mode.
             # Below the smallest floor every unit defers anyway, so the
             # probe would be a call nobody uses.
-            if any(r.get("_cloud_mode") != "on" for _, r, *_ in claimed) and deadline - time.monotonic() >= _MIN_CALL_S:
-                probed_at = extract_llm_provider._FMT_TS
+            # the warm probe obeys the same floor+probe-minimum contract
+            # as a body call: below it no probe POST may leave at all
+            if any(r.get("_cloud_mode") != "on" for _, r, *_ in claimed) \
+                    and deadline - time.monotonic() >= _MIN_CALL_S + local_llm.PROBE_TURN_MIN_S:
                 probe_err: dict = {}
                 _probe_format(deadline=deadline - _MIN_CALL_S,
                               error_out=probe_err)
-                pre_probes = int(extract_llm_provider._FMT_TS != probed_at)
+                # per-call wire evidence, not the shared timestamp: a
+                # probe that reached the wire counts even when it died
+                # before caching, and a cache hit or refused send does not
+                pre_probes = int(bool(probe_err.get("sent")))
                 # the warm probe is a real inference run on this thread —
-                # feed its endpoint observation like a body call; a cached
-                # verdict or a probe that never reached the wire stays silent
-                if pre_probes:
-                    _observe("answered", time.monotonic())
-                elif probe_err.get("kind") == "unreachable":
+                # feed its endpoint observation like a body call. Only a
+                # real 200 answer restores the circuit: an HTTP500 streak
+                # or unusable 200 reaching "plain" is endpoint trouble,
+                # and a cached verdict or unsent probe stays silent
+                kind = probe_err.get("kind")
+                if kind == "unreachable":
                     _observe("unreachable", time.monotonic())
                 elif probe_err.get("status") == 503:
                     _observe("unavailable", time.monotonic())
-                elif probe_err.get("kind") == "transport":
+                elif kind in ("transport", "protocol") or (
+                        probe_err.get("sent")
+                        and not probe_err.get("answered")):
                     _observe("transport", time.monotonic())
+                elif probe_err.get("answered"):
+                    _observe("answered", time.monotonic())
             from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
             with ThreadPoolExecutor(
                     max_workers=min(pool_workers, len(units))) as pool, contextlib.ExitStack() as cleanup:
