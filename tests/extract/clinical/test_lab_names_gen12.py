@@ -288,6 +288,24 @@ def test_another_specimen_or_a_qualitative_result_stays_a_candidate(name, value,
     assert lab["normalized"]["confirmation"] == "unverified"
 
 
+# A heading names the specimen as well as a prefix does: a colon, a bracket, a
+# space, 結果 or a line break between the specimen word and the item hides nothing.
+_SPECIMEN_HEADINGS = ("{s}検査：", "{s}検査:", "{s}検査 ", "{s}検査結果：", "{s}：", "({s})", "（{s}）",
+                      "【{s}】", "[{s}]", "{s}検査\n", "{s}\n", "・{s}検査・", "{s}検査にて", "{s}検査データ：")
+
+
+@pytest.mark.parametrize("specimen", ["尿", "尿中", "尿沈渣", "髄液", "胸水", "腹水"])
+@pytest.mark.parametrize("heading", _SPECIMEN_HEADINGS)
+@pytest.mark.parametrize("name,value,unit", [
+    ("WBC", "300", "/μL"), ("白血球", "300", "/μL"), ("TP", "6.5", "g/dL"), ("総蛋白", "6.5", "g/dL"),
+    ("Ca", "9.0", "mg/dL"), ("Mg", "2.0", "mg/dL"), ("T-Bil", "0.8", "mg/dL"),
+])
+def test_a_specimen_heading_keeps_the_item_a_candidate(specimen, heading, name, value, unit):
+    body = heading.format(s=specimen) + f"{name} {value}{unit}"
+    lab = _validated(name, value, unit, body)
+    assert lab["unverified"] is True and lab["normalized"]["confirmation"] == "unverified", body
+
+
 def test_a_specimen_word_in_an_earlier_clause_does_not_hide_the_blood_item():
     lab = _validated("WBC", "5600", "/μL", "尿検査は異常なし。採血 WBC 5600/μL")
     assert lab["normalized"]["confirmation"] == "quote_supported"

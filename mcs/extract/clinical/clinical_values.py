@@ -374,7 +374,11 @@ _SALT_STEM = re.compile(r"(?:酸|水素|ヨウ素|塩化|酸化|ヨウ化|沃化
 # those specimens and qualitative or ranged results (1+, 10-19) are not the blood item.
 # The previous items (尿Cr) keep their earlier reading.
 _SPECIMEN_SHARED_ITEMS = frozenset({"wbc", "total_protein", "total_bilirubin", "calcium", "magnesium"})
-_OTHER_SPECIMEN = re.compile(r"(?:尿|尿中|沈渣|髄液|胸水|腹水)(?:検査)?(?:デ|ノ|ハ)?$")
+# The specimen may also head the item: 尿検査：, 尿検査結果：, (尿), 【髄液】, 尿検査\n (folding
+# drops spaces and line breaks), so heading words, brackets and delimiters may follow it.
+_OTHER_SPECIMEN = re.compile(fold_surface(
+    r"(?:尿|尿中|沈渣|髄液|胸水|腹水)(?:検査)?(?:結果|所見|データ)?[)\]】>]?(?:にて|で|の|は)?[:・|=]*$"))
+_SPECIMEN_REACH = 16   # characters read before an item for its specimen heading
 _QUALITATIVE_RESULT = re.compile(r"\+")
 # A number followed by a range mark and a digit is one end of a range (2〜4, 4.5から5.0),
 # not a single result of any item. The marks are folded forms: ～ and － fold to ~ and -.
@@ -483,7 +487,7 @@ def _other_reading(analyte: str | None, quote: str, match: re.Match,
     # Bounded windows: a salt stem or a specimen word is a few characters long.
     if at < len(starts) and _part_of_drug_name(name, evidence[max(0, starts[at] - 16):starts[at]]):
         return True
-    if analyte in _SPECIMEN_SHARED_ITEMS and _OTHER_SPECIMEN.search(quote[max(0, at - 8):at]):
+    if analyte in _SPECIMEN_SHARED_ITEMS and _OTHER_SPECIMEN.search(quote, max(0, at - _SPECIMEN_REACH), at):
         return True
     other_sense = _OTHER_SENSE_CLAUSE.get(analyte)
     return bool(other_sense and other_sense.search(_clause_at(quote, at, lines)))
