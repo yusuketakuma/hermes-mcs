@@ -677,6 +677,10 @@ def test_merge_ready_runs_only_on_default_branch_events_and_dots_may_assign():
     ready = _jobs(control)["ready"]
     assert "schedule:" in control.split("jobs:")[0] and "pull_request_target" not in ready
     assert "github.event_name == 'schedule' || github.event_name == 'workflow_run'" in ready
+    # after gate (its merge-gate is what the precheck reads), and still when gate is skipped on a schedule
+    assert "\n    needs: gate\n" in ready and "${{ !cancelled() && (" in ready
+    # one group per head for a ci run or dispatch; the schedule's sweeps share one
+    assert "group: merge-ready-${{ github.event.workflow_run.head_sha || inputs.sha || 'sweep' }}" in ready
     assert "github.event_name != 'schedule'" in _jobs(control)["gate"]
     assert sorted(re.findall(r"^      ([a-z-]+): (read|write)", ready, re.M)) == [
         ("checks", "read"), ("contents", "read"), ("issues", "read"), ("pull-requests", "read"), ("statuses", "write")]

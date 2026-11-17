@@ -213,14 +213,17 @@ jobs:
           fi
 
   ready:
+    # After gate, whose merge-gate status the precheck reads; still runs when gate is skipped (schedule).
+    needs: gate
     # Only events that run the default branch's definition of this file, never a PR event.
     if: >-
-      github.event_name == 'schedule' || github.event_name == 'workflow_run' ||
-      (github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+      ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_run' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
-      group: merge-ready
+      # Per head, so a newer head's run never cancels this one's wait; the scheduled sweeps share one group.
+      group: merge-ready-${{ github.event.workflow_run.head_sha || inputs.sha || 'sweep' }}
       cancel-in-progress: false
     permissions:
       contents: read
