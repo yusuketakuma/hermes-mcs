@@ -519,6 +519,14 @@ def _defer(waiting, code):
     time.sleep(10)
 
 
+def _note_provider(seen, settings):
+    """One fixed event when the selected provider changes between this worker's reads."""
+    provider = settings.get("provider")
+    if seen["provider"] is not None and provider != seen["provider"]:
+        _event("cloud_provider_changed", previous=seen["provider"], provider=provider)
+    seen["provider"] = provider
+
+
 def worker(parent, *, index=None, context_only=False):
     """Alternate guarded cloud extraction and semantic jobs with an independent ledger."""
     global _parent
@@ -558,6 +566,7 @@ def worker(parent, *, index=None, context_only=False):
         carry = []
         allow_exit_settle = True
         waiting = {"code": None, "at": 0.0}
+        provider_seen = {"provider": None}
         carry_failures = 0
         semantic_lock_failures = 0
         capacity_checked = float("-inf")
@@ -611,6 +620,7 @@ def worker(parent, *, index=None, context_only=False):
                     wait("provider_settings_unreadable")
                     continue
                 settings = cloud_inference.resolve_cloud_settings(cfg)
+                _note_provider(provider_seen, settings)
                 extract_open = cloud_policy.reextract_planned(settings)
                 semantic_open = ("semantic_backlog" in settings["routes"]
                                  and cloud_policy.route_open("semantic_backlog", settings))
@@ -935,6 +945,7 @@ def _context_worker(ledger, initial, index):
     from mcs_util import HOME, ProviderSettingsUnreadable, load_config
 
     waiting = {"code": None, "at": 0.0}
+    provider_seen = {"provider": None}
     role = None   # this child's ROLE_CLOUD hold; local lanes see the cloud lane served through it
     try:
         with local_llm.scheduling_scope(os.path.join(HOME, "data")):
@@ -947,6 +958,7 @@ def _context_worker(ledger, initial, index):
                     continue
                 waiting["code"] = None
                 settings = cloud_inference.resolve_cloud_settings(cfg)
+                _note_provider(provider_seen, settings)
                 if (settings["mode"] != "on" or index is not None and index >= settings["max_concurrency"]
                         or not extract_llm_resident._context_memory_available()):
                     return

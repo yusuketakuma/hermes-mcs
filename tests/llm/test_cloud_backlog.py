@@ -1586,3 +1586,13 @@ def test_parent_never_starts_a_child_its_own_memory_check_refuses(monkeypatch, p
     # Small Linux hosts keep at least 1 GiB for foreground work in both checks.
     if platform == "linux" and available_kb * 1024 < (1 << 30) + backlog._WORKER_BYTES:
         assert backlog.memory_workers(4) == 0
+
+
+def test_note_provider_reports_only_a_change(capsys):
+    seen = {'provider': None}
+    for name in ('anthropic', 'anthropic', 'openai', 'openai'):
+        backlog._note_provider(seen, {'provider': name, 'private': 'synthetic-private-detail'})
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [(r['event'], r['previous'], r['provider']) for r in records] == [
+        ('cloud_provider_changed', 'anthropic', 'openai')]
+    assert 'synthetic-private-detail' not in json.dumps(records)
