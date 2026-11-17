@@ -128,8 +128,8 @@ def _turn(deadline: float | None, min_s: float = 0.0):
                 break
             except BlockingIOError:
                 if deadline is not None \
-                        and time.monotonic() + TURN_LOCK_POLL_S >= deadline:
-                    yield False
+                        and time.monotonic() + min_s + TURN_LOCK_POLL_S >= deadline:
+                    yield False  # even a won turn could not fit min_s now
                     return
                 time.sleep(TURN_LOCK_POLL_S)
         if deadline is not None and time.monotonic() + min_s > deadline:
@@ -896,6 +896,7 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
                 error_out.setdefault("kind", "transport")
                 break
             if response["status"] == 503:
+                error_out["status"] = 503  # evidence beside kind, never a rewrite
                 return None  # server not ready (model loading): no verdict
             if response["status"] != 200:
                 continue

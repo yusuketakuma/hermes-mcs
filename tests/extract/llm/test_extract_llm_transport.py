@@ -547,9 +547,11 @@ def test_llm_call_defers_before_probe_when_floor_unmet(monkeypatch):
     assert op.calls == []
 
 
-def test_unconfirmed_probe_defers_with_zero_body_sends(monkeypatch):
-    """A probe send that died in transport has unconfirmed completion —
-    the call defers with zero body sends and caches no plain verdict."""
+def test_unconfirmed_probe_fails_with_transport_evidence(monkeypatch):
+    """A probe send that died in transport consumed real work — the call
+    fails like a sent body timeout (never a not-sent defer), records the
+    endpoint evidence for the runner breaker, sends zero body requests
+    and caches no plain verdict."""
     monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
     monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
 
@@ -565,11 +567,14 @@ def test_unconfirmed_probe_defers_with_zero_body_sends(monkeypatch):
     monkeypatch.setattr(extract_llm, "_opener_request", _request_from_opener(down))
     monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
     monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
+    extract_llm._CALL_NOTES.transport = None
+    extract_llm._CALL_NOTES.transport_at = None
     assert extract_llm._llm_call(
-        "prompt", deadline=time.monotonic() + 200, need_s=75) \
-        is extract_llm._DEFERRED
+        "prompt", deadline=time.monotonic() + 200, need_s=75) is None
     assert down.calls == 1          # one probe send, zero body sends
     assert extract_llm_provider._FMT_MODE is None
+    assert extract_llm._CALL_NOTES.transport == "transport"
+    assert isinstance(extract_llm._CALL_NOTES.transport_at, float)
 
 
 def test_probe_and_body_share_one_turn_slot(tmp_path, monkeypatch):
@@ -611,3 +616,89 @@ def test_parallel_warmup_probe_reserves_body_floor(tmp_path, monkeypatch):
     assert time.monotonic() < deadlines[0] \
         <= time.monotonic() + 120 - floor + 1
     db.close()
+
+
+def test_stale_cached_format_still_defers_on_unconfirmed_probe(monkeypatch):
+    """A stale "object" cache must not wave the body through when the
+    re-probe dies in transport: the unconfirmed run is no verdict, the
+    body never sends and the stale entry is left for the next probe."""
+    monkeypatch.setattr(extract_llm, "_FMT_MODE", "object")
+    monkeypatch.setattr(extract_llm, "_FMT_TS", 0.0)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', "object")
+    monkeypatch.setattr(extract_llm_provider, '_FMT_TS', 0.0)
+
+    class Down:
+        def __init__(self):
+            self.calls = 0
+
+        def open(self, req, timeout=None):
+            self.calls += 1
+            raise OSError("reset by peer")
+
+    down = Down()
+    monkeypatch.setattr(extract_llm, "_opener_request", _request_from_opener(down))
+    monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
+    monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
+    extract_llm._CALL_NOTES.transport = None
+    extract_llm._CALL_NOTES.transport_at = None
+    assert extract_llm._llm_call(
+        "prompt", deadline=time.monotonic() + 200, need_s=75) is None
+    assert down.calls == 1          # probe send only — zero body sends
+    assert extract_llm_provider._FMT_MODE == "object"   # stale, unconfirmed
+    assert extract_llm._CALL_NOTES.transport == "transport"
+
+
+def test_probe_503_defers_as_endpoint_down(monkeypatch):
+    """A probe answered 503 (server still loading) is an endpoint outage,
+    not a format verdict: the call defers with endpoint evidence and the
+    body never sends."""
+    monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
+    op = _Opener({"schema": 503})
+    monkeypatch.setattr(extract_llm, "_opener_request", _request_from_opener(op))
+    monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
+    monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
+    extract_llm._CALL_NOTES.transport = None
+    extract_llm._CALL_NOTES.transport_at = None
+    extract_llm._CALL_NOTES.defer_reason = None
+    assert extract_llm._llm_call(
+        "prompt", deadline=time.monotonic() + 200, need_s=75) \
+        is extract_llm._DEFERRED
+    assert op.calls and all(
+        c.get("max_tokens") == 20 for c in op.calls)   # probe sends only
+    assert extract_llm._CALL_NOTES.transport == "unavailable"
+    assert extract_llm._CALL_NOTES.defer_reason == "endpoint_down"
+
+
+def test_format_downgrade_retry_releases_held_turn(monkeypatch):
+    """The held turn covers probe+first body only: a 4xx format downgrade
+    loops back through the ordinary per-send path, so the retry send runs
+    with no enclosing _OWNED_TURN instead of reusing the stale slot."""
+    import local_llm
+    monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', None)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_TS', 0.0)
+
+    def probe(deadline=None, error_out=None):
+        extract_llm_provider._FMT_MODE = "object"
+        extract_llm_provider._FMT_TS = time.monotonic()
+        return "object"
+
+    monkeypatch.setattr(extract_llm_provider, "_probe_format", probe)
+    owned, formats = [], []
+
+    def fake_chat(prompt, **kw):
+        owned.append(local_llm._OWNED_TURN.get())
+        formats.append(kw.get("response_format"))
+        if len(formats) == 1:
+            return {"status": 400, "text": "", "finish_reason": None}
+        return {"status": 200, "text": '{"ok": true}',
+                "finish_reason": "stop"}
+
+    monkeypatch.setattr(local_llm, "chat", fake_chat)
+    answer = extract_llm._llm_call(
+        "prompt", deadline=time.monotonic() + 200, need_s=75)
+    assert answer == {"ok": True}
+    assert formats == [{"type": "json_object"}, None]  # object -> plain
+    assert owned[0] is not None      # first body inside the held turn
+    assert owned[1] is None          # downgrade retry acquired its own
