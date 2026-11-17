@@ -50,9 +50,17 @@ def _current(ledger, mid: int, content_hash: str) -> bool:
         (KIND, mid, content_hash, EXTRACT_VERSION)).fetchone() is not None
 
 
-def _upgrade_contract() -> str:
+def _generation(version):
+    """The extraction generation a predicate reads as current (default: the running one)."""
+    version = EXTRACT_VERSION if version is None else version
+    if type(version) is not int or version < 0:
+        raise ValueError("extract_version_invalid")
+    return version
+
+
+def _upgrade_contract(*, version: int | None = None) -> str:
     """Identity an automatic hold stays valid under (see _HOLD_SOURCES)."""
-    return hashlib.sha256(json.dumps([_INFERENCE_VERSION, EXTRACT_VERSION, PATIENT_CONTEXT_VERSION, HOLD_EPOCH,
+    return hashlib.sha256(json.dumps([_INFERENCE_VERSION, _generation(version), PATIENT_CONTEXT_VERSION, HOLD_EPOCH,
         {name: _LOADED_SOURCE_DIGESTS[name] for name in sorted(_HOLD_SOURCES)}],
         sort_keys=True).encode()).hexdigest()
 
@@ -129,9 +137,10 @@ def _protected_prior_current(db, r):
     return ref is None or _resolve_protected_prior_reference(db, r, ref) is not None
 
 
-def _hold_sql(*, human=False, released=False):
+def _hold_sql(*, human=False, released=False, version=None):
     """Source-bound private receipts; a fresh human report bypasses automatic holds.
     ``released`` matches the same receipt minted under an older code contract."""
+    version = _generation(version)
     prior = ("c.artifact_id" if human else "(SELECT p.artifact_id FROM artifacts p "
         "JOIN messages pm ON pm.message_id=p.message_id "
         f"WHERE p.kind='{KIND}' AND pm.message_id=m.message_id "
@@ -149,8 +158,8 @@ def _hold_sql(*, human=False, released=False):
             AND json_extract(u.content,'$.hash')=m.content_hash
             AND json_type(u.content,'$.prior_artifact_id')='integer'
             AND json_extract(u.content,'$.prior_artifact_id')={prior}
-            AND json_extract(u.content,'$.target_version')={EXTRACT_VERSION}
-            AND json_extract(u.content,'$.contract'){'<>' if released else '='}'{_upgrade_contract()}'
+            AND json_extract(u.content,'$.target_version')={version}
+            AND json_extract(u.content,'$.contract'){'<>' if released else '='}'{_upgrade_contract(version=version)}'
             AND {inference.current_meta_pred('u.meta', target=_INFERENCE_VERSION)}
             AND COALESCE(json_extract(u.meta,'$.invalidated'),0)=0
             AND {reason} ELSE 0 END"""
@@ -214,7 +223,7 @@ def _register_thin_fact_count(db):
         db.create_function("mcs_thin_fact_count", 1, _thin_fact_count, deterministic=True)
 
 
-def _thin_pending_sql(db) -> str:
+def _thin_pending_sql(db, *, version: int | None = None) -> str:
     """A current, valid, same-version artifact that is under-extracted
     (<2 clinical assertions on a >=300-char body) and not retried
     yet — re-pends for ONE quality re-extract. Thinness is recomputed
@@ -222,12 +231,13 @@ def _thin_pending_sql(db) -> str:
     qualify without a backfill. Prefilter markers are excluded: a
     no-signal row is honest, not thin. The new row carries
     meta.thin_retried so a still-thin retry settles permanently."""
+    version = _generation(version)
     _register_thin_fact_count(db)
     meta = json_or_null("t.meta")
     return f"""SELECT t.artifact_id FROM artifacts t
         WHERE t.kind='{KIND}' AND t.message_id=m.message_id
           {current_extract_pred('t')}
-          AND json_extract({meta},'$.extract_version')={EXTRACT_VERSION}
+          AND json_extract({meta},'$.extract_version')={version}
           AND json_extract({meta},'$.prefilter') IS NULL
           AND json_extract({meta},'$.thin_retried') IS NULL
           AND json_extract({meta},'$.human_fix') IS NULL
@@ -249,7 +259,7 @@ def _thin_retry_content(ledger, row) -> str | None:
     return source["content"] if source is not None else None
 
 
-def _human_flagged_sql(val: str = "h.artifact_id") -> str:
+def _human_flagged_sql(val: str = "h.artifact_id", *, version: int | None = None) -> str:
     """A human ⚠ report (extract_feedback_v1, card button) pinned to the
     message's CURRENT extract artifact re-pends it for exactly one
     re-extract, bypassing the no-signal prefilter. Success or failure
@@ -264,7 +274,7 @@ def _human_flagged_sql(val: str = "h.artifact_id") -> str:
           AND h.message_id=m.message_id
           AND c.kind='{KIND}' AND c.message_id=m.message_id
           {current_extract_pred('c')}
-          AND NOT EXISTS ({_hold_sql(human=True)})
+          AND NOT EXISTS ({_hold_sql(human=True, version=version)})
         ORDER BY h.artifact_id DESC LIMIT 1"""
 
 
@@ -275,7 +285,7 @@ def _has_kind(kind: str, alias: str, project: bool = False) -> str:
             f" AND {alias}.message_id=m.message_id{scope})")
 
 
-def pending_pred(db, *, include_thin: bool = True) -> str:
+def pending_pred(db, *, include_thin: bool = True, version: int | None = None) -> str:
     """Shared body-current extraction and quality-retry eligibility.
 
     Evaluated per stored message, so the JSON-heavy subqueries sit behind
@@ -290,27 +300,31 @@ def pending_pred(db, *, include_thin: bool = True) -> str:
     scheduled thin-quality retry does not invalidate the current
     artifact, so it must not read as pending material. Every other
     clause — missing current extraction, actionable QC flag, human
-    report, held upgrade — is unchanged."""
+    report, held upgrade — is unchanged.
+
+    ``version`` reads another extraction generation as the current one
+    (default: the running ``EXTRACT_VERSION``, with an identical string)."""
+    version = _generation(version)
     thin = (f"(length(m.body_text) >= {extract_quality._THIN_BODY_MIN}\n"
-            f"                 AND EXISTS ({_thin_pending_sql(db)}))") if include_thin else "0"
+            f"                 AND EXISTS ({_thin_pending_sql(db, version=version)}))") if include_thin else "0"
     return f"""{ELIGIBLE_MESSAGE}
         AND (NOT {_has_kind(V4_PROJECTION_KIND, 'v0', project=True)}
              OR {current_v4_id()} IS NULL)
         AND (((NOT EXISTS (SELECT 1 FROM artifacts a
                         WHERE a.kind='{KIND}' AND a.message_id=m.message_id
                           {current_extract_pred()}
-                          AND json_extract({json_or_null('a.meta')},'$.extract_version')={EXTRACT_VERSION})
+                          AND json_extract({json_or_null('a.meta')},'$.extract_version')={version})
              OR ({_has_kind('extract_qc', 'q0')}
-                 AND EXISTS ({_qc_flagged_sql(val="1")}))
+                 AND EXISTS ({_qc_flagged_sql(val="1", version=version)}))
              OR {thin})
         AND NOT EXISTS (SELECT 1 FROM artifacts f
                         WHERE f.kind='{KIND}' AND f.message_id=m.message_id
                           {current_extract_pred('f')}
-                          AND json_extract({json_or_null('f.meta')},'$.extract_version')={EXTRACT_VERSION}
+                          AND json_extract({json_or_null('f.meta')},'$.extract_version')={version}
                           AND json_extract({json_or_null('f.meta')},'$.qc_fix') IS NOT NULL)
-        AND (NOT {_has_kind(UPGRADE_KIND, 'u0', project=True)} OR NOT EXISTS ({_hold_sql()})))
+        AND (NOT {_has_kind(UPGRADE_KIND, 'u0', project=True)} OR NOT EXISTS ({_hold_sql(version=version)})))
              OR ({_has_kind(EXTRACT_FEEDBACK_KIND, 'h0')}
-                 AND EXISTS ({_human_flagged_sql(val="1")})))"""
+                 AND EXISTS ({_human_flagged_sql(val="1", version=version)})))"""
 
 
 _QC_ACTIONABLE_SQL = """CASE WHEN json_valid(q.content) THEN
@@ -326,20 +340,21 @@ _QC_ACTIONABLE_SQL = """CASE WHEN json_valid(q.content) THEN
            ELSE 0 END"""
 
 
-def _qc_flagged_sql(msg: str = "m", val: str = "a.artifact_id") -> str:
+def _qc_flagged_sql(msg: str = "m", val: str = "a.artifact_id", *, version: int | None = None) -> str:
     """Scalar subquery: the extract artifact whose current Jev QC audit
     flagged unsupported items (NO_MATCH verdicts) or an urgency
     mismatch. The source pin lands on the NEWEST current extraction —
     a verdict on a superseded artifact never flags."""
-    src = qc_source_id(msg, version=EXTRACT_VERSION)
+    version = _generation(version)
+    src = qc_source_id(msg, version=version)
     return f"""SELECT {val} FROM artifacts a
         JOIN artifacts q ON q.message_id=a.message_id
          AND q.kind='extract_qc'
-         {current_qc_pred('q', msg, version=EXTRACT_VERSION)}
+         {current_qc_pred('q', msg, version=version)}
          AND q.artifact_id=(SELECT MAX(q2.artifact_id) FROM artifacts q2
              WHERE q2.kind='extract_qc'
                AND q2.message_id={msg}.message_id
-               {current_qc_pred('q2', msg, version=EXTRACT_VERSION)})
+               {current_qc_pred('q2', msg, version=version)})
          AND json_extract({json_or_null('q.meta')},'$.source_artifact_id')
              =a.artifact_id
          AND json_extract({json_or_null('q.content')},'$.qc')='done'

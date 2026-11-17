@@ -771,6 +771,8 @@ def _queue_warnings(cfg: dict | None = None) -> list[str]:
             out.extend(_semantic_queue_warnings(db, sem, now))
             out.extend(_extract_queue_warnings(db))
             out.extend(_fact_pipeline_warnings(db, sem))
+            from upgrade_scope import doctor_warnings
+            out.extend(doctor_warnings(db, cfg))
     except Exception as e:
         out.append(f"待機処理の状態を読み取れません（{type(e).__name__}）")
     return out
