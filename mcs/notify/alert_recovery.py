@@ -65,7 +65,7 @@ def _health_watch_recovered(db, created_at):
 
 
 def _run_failed_recovered(db, ev):
-    """Only a complete run of the failed run's kind proves recovery.
+    """Only the latest completed run of the failed run's kind proves recovery.
 
     Partial runs do not persist stage-level success evidence. Neither a
     different kind nor a timestamp alone proves that the failed work ran.
@@ -84,6 +84,7 @@ def _run_failed_recovered(db, ev):
         return False
     latest = db.execute(
         "SELECT status,finished_at FROM runs WHERE run_id>? AND kind=? "
+        "AND finished_at IS NOT NULL AND status != 'running' "
         "ORDER BY run_id DESC LIMIT 1", (run_id, failed["kind"])).fetchone()
     return latest is not None and latest["status"] == "ok" and latest["finished_at"] is not None
 

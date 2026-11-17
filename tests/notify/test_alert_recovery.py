@@ -172,7 +172,7 @@ def test_old_success_before_failed_run_cannot_recover_even_with_newer_timestamp(
     assert alert_recovery.suppression_reason(led.db, _ev(led, event_id)) is None
 
 
-@pytest.mark.parametrize("last_status", ["failed", "partial", "running"])
+@pytest.mark.parametrize("last_status", ["failed", "partial"])
 def test_later_incomplete_run_invalidates_intermediate_recovery(led, last_status):
     _run(led, "failed", ago=100)
     event_id = _outbox(led, "run_failed", {"run_id": 1}, created_ago=60)
@@ -193,4 +193,17 @@ def test_unfinished_ok_row_cannot_prove_recovery(led):
     event_id = _outbox(led, "run_failed", {"run_id": 1}, created_ago=60)
     _run(led, "ok")
     led.db.execute("UPDATE runs SET finished_at=NULL WHERE run_id=2")
+    assert alert_recovery.suppression_reason(led.db, _ev(led, event_id)) is None
+
+
+def test_flushing_run_does_not_hide_a_completed_recovery(led):
+    failed_id = led.begin_run(None, kind="tick")
+    led.finish_run(failed_id, "failed", "synthetic")
+    event_id = _outbox(led, "run_failed", {"run_id": failed_id})
+    recovered_id = led.begin_run(None, kind="tick")
+    led.finish_run(recovered_id, "ok")
+    flushing_id = led.begin_run(None, kind="tick")
+    assert led.db.execute("SELECT finished_at FROM runs WHERE run_id=?", (flushing_id,)).fetchone()[0] is None
+    assert alert_recovery.suppression_reason(led.db, _ev(led, event_id)) == "recovered_before_send"
+    led.finish_run(flushing_id, "failed", "synthetic")
     assert alert_recovery.suppression_reason(led.db, _ev(led, event_id)) is None
