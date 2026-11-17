@@ -366,10 +366,10 @@ _PATIENT_REF = (r"本人|ほんにん|当人|当事者|患者|利用者|入居�
 _ALL_BUT_PATIENT = r"本人以外|他者|他人|第三者"
 # The head: a person word, then は. も says the patient shares the fact (妻も卵アレルギー),
 # が marks an actor or a reporter and の may be a drug the patient took (奥様の薬), so
-# none names a holder.
+# none names a holder. Spacing and a bullet may come first.
+_LEAD = r"[ \t　]*(?:[■●◆#・＊*]+[ \t　]*)?"
 _VALUE_HOLDER = re.compile(
-    r"[ \t　]*(?:[■●◆#・＊*]+[ \t　]*)?"
-    rf"(?:(?P<family>{clinical_scope.FAMILY_PERSON})|(?!{_ALL_BUT_PATIENT})(?P<other>{clinical_scope.OTHER_PERSON}))"
+    rf"{_LEAD}(?:(?P<family>{clinical_scope.FAMILY_PERSON})|(?!{_ALL_BUT_PATIENT})(?P<other>{clinical_scope.OTHER_PERSON}))"
     r"(?:ご本人|本人)?(?:自身)?は")
 # In a note to the family these kin words can be the patient (ご主人・お母様), so they hold nothing.
 _PATIENT_ALIAS_KIN = re.compile(r"ご?主人|旦那(?:さん|様)?|奥(?:さん|様)|お(?:母|父|兄|姉)(?:さん|様)?")
@@ -377,17 +377,15 @@ _PATIENT_ALIAS_KIN = re.compile(r"ご?主人|旦那(?:さん|様)?|奥(?:さん|
 _PATIENT_WORD = re.compile(_PATIENT_REF)
 # Under 家族の意向／家族の希望 a named holder is the family only when it is a kin word that
 # cannot be the patient: of the kin list, not an alias of the patient (ご主人・お母様) and not
-# an ascending kin or a housemate relative to the writer (母・祖父・義母・同居者; every
-# ascending kin word of the list holds 母 or 父), who may be
-# the patient. Any other subject (山田さんは・入所者は・あの人は・おばあちゃんは) is unspecified.
+# an ascending kin or a housemate relative to the writer, who may be the patient (母・祖父・
+# 義母・同居者; every ascending kin word of the list holds 母 or 父). Any other subject
+# (山田さんは・入所者は・あの人は・おばあちゃんは) is unspecified.
 _WRITER_RELATIVE_KIN = re.compile(r"母|父|同居")
-_FAMILY_HEADING_HOLDER = re.compile(
-    rf"[ \t　]*(?:[■●◆#・＊*]+[ \t　]*)?(?P<kin>{clinical_scope.FAMILY_PERSON})は")
+_FAMILY_HEADING_HOLDER = re.compile(rf"{_LEAD}(?P<kin>{clinical_scope.FAMILY_PERSON})は")
 # The only topics a family value may mark with は besides its holder: the matters a family
 # wish is about, never a person (最期は自宅で・延命は望まない). Any other は or が may mark a
 # subject, so it leaves the value unspecified.
-_FAMILY_WISH_TOPIC = re.compile(
-    r"(?:最期|最後|今後|延命|治療|入院|退院|面会)は")
+_FAMILY_WISH_TOPIC = re.compile(r"(?:最期|最後|今後|延命|治療|入院|退院|面会)は")
 # Whose wish the value defers to (母の意向を尊重・入所者の希望に沿う): a possessor of one.
 _WISH_POSSESSOR = re.compile(r"の(?:意向|希望|意思|意志|意見|気持ち|思い|考え|願い|望み|判断)")
 _NAME_CHAR = r"[一-鿿ぁ-ゖァ-ヴーA-Za-z0-9Ａ-Ｚａ-ｚ０-９々]"
