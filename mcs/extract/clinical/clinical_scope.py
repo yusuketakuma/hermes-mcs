@@ -268,18 +268,22 @@ def patient_source_scope(body, start, end, *, patient_name=None, default="patien
     return subject if subject != "patient" or period == "current" else period
 
 
-def source_axes(body, start, end, *, default="patient"):
-    """Return independent reported person and period axes for a grounded assertion."""
-    subject, period = _source_scope_axes(body, start, end, default=default)
-    if period in ("conditional", "unknown"):
-        return subject, period
+def assertion_start(body, start):
+    """Start of the target's own assertion: its sentence part, from the nearest explicit owner."""
     left = max(body.rfind(mark, 0, start) for mark in "。！？!?;；\n") + 1
     left = max((m.end() for m in _SCOPE_BREAK.finditer(body, left, start)
                 if m.group() not in "、,"), default=left)
     # A later explicit owner begins a new assertion, not the earlier person's time.
     owners = list(_PERSON.finditer(body, left, start))
-    if owners:
-        left = owners[-1].start()
+    return owners[-1].start() if owners else left
+
+
+def source_axes(body, start, end, *, default="patient"):
+    """Return independent reported person and period axes for a grounded assertion."""
+    subject, period = _source_scope_axes(body, start, end, default=default)
+    if period in ("conditional", "unknown"):
+        return subject, period
+    left = assertion_start(body, start)
     before = body[left:start]
     if _has_condition(body, left, start):
         return subject, "conditional"
