@@ -388,3 +388,185 @@ def test_disabled_schedule_keeps_legacy_turn_and_route_behavior(tmp_path, monkey
         assert local_llm.chat("synthetic", deadline=time.monotonic() + .01,
                               error_out=errors, request_fn=lambda *a: pytest.fail("legacy lock bypassed")) is None
         assert errors == {"kind": "busy"}
+
+def _slot_json(processing):
+    return json.dumps([{"id": 0, "is_processing": True},
+                       {"id": 1, "is_processing": processing}]).encode()
+
+
+def _health_streak(root, slot):
+    try:
+        return json.loads(schedule._health_path(root, slot).read_text())["streak"]
+    except (OSError, ValueError, KeyError):
+        return 0
+
+
+def test_slot_that_never_returns_is_skipped_until_answered(tmp_path, monkeypatch):
+    monkeypatch.setattr(schedule, "night", lambda: False)
+    schedule.mark_stuck(tmp_path, 1)
+    with turn(tmp_path, preferred=1) as chosen:      # one miss: still used
+        assert chosen == 1
+    schedule.mark_stuck(tmp_path, 1)
+    with turn(tmp_path, preferred=1) as chosen:      # tripped: the other slot
+        assert chosen == 2
+    with turn(tmp_path, preferred=1) as first, turn(tmp_path, seconds=0.02) as second:
+        assert (first, second) == (2, None)          # no wait on the skipped slot
+    schedule.clear_stuck(tmp_path, 1)
+    with turn(tmp_path, preferred=1) as chosen:
+        assert chosen == 1
+
+
+def test_skipped_slot_is_tried_again_after_the_cooldown(tmp_path, monkeypatch):
+    monkeypatch.setattr(schedule, "night", lambda: False)
+    monkeypatch.setattr(schedule, "COOL_S", -1.0)
+    schedule.mark_stuck(tmp_path, 1)
+    schedule.mark_stuck(tmp_path, 1)
+    with turn(tmp_path, preferred=1) as chosen:
+        assert chosen == 1
+
+
+def _chat_send(queues, state):
+    """POST pops the next sample queue and raises a transport timeout;
+    GET serves that call's samples for pinned slot 1."""
+    def send(endpoint, method, body, timeout, deadline):
+        if method == "POST":
+            state["call"] += 1
+            state["gets"] = 0
+            raise TimeoutError("http worker timeout")
+        state["gets"] += 1
+        samples = queues[state["call"]]
+        sample = samples[min(state["gets"] - 1, len(samples) - 1)]
+        return 200, {}, _slot_json(sample)
+    return send
+
+
+def _scheduling(tmp_path, monkeypatch):
+    monkeypatch.setenv(local_llm.SCHEDULE_ENV, str(tmp_path))
+    monkeypatch.setattr(schedule, "night", lambda: False)
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_MAX_S", 0.05)
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_POLL_S", 0.01)
+
+
+def test_confirmed_idle_breaks_the_failure_streak(tmp_path, monkeypatch):
+    # unconfirmed -> confirmed -> unconfirmed is not consecutive failures:
+    # the confirmed idle resets the count, so two fresh misses are needed
+    _scheduling(tmp_path, monkeypatch)
+    state = {"call": -1, "gets": 0}
+    send = _chat_send([[True], [False, False], [True], [True]], state)
+
+    def call():
+        return local_llm.chat("p", request_fn=send,
+                              extra_payload={"id_slot": 1})
+
+    assert call() is None and _health_streak(tmp_path, 1) == 1
+    assert call() is None and _health_streak(tmp_path, 1) == 0   # cleared
+    assert call() is None and _health_streak(tmp_path, 1) == 1
+    assert 1 not in schedule._cooling(tmp_path)
+    assert call() is None and _health_streak(tmp_path, 1) == 2
+    assert 1 in schedule._cooling(tmp_path)
+
+
+def test_cooling_rejects_out_of_range_health_state(tmp_path, monkeypatch):
+    # a valid record excludes the slot only until now+COOL_S; corrupt or
+    # out-of-range values must leave the slot selectable
+    monkeypatch.setattr(schedule, "night", lambda: False)
+    schedule.mark_stuck(tmp_path, 1)
+    schedule.mark_stuck(tmp_path, 1)
+    assert 1 in schedule._cooling(tmp_path)
+    with turn(tmp_path, preferred=1) as chosen:
+        assert chosen == 2
+    path = schedule._health_path(tmp_path, 1)
+    now = time.time()
+    for bad in (
+            {"streak": 2, "until": 1e309},                    # infinity
+            {"streak": 2, "until": now + schedule.COOL_S + 60},  # far future
+            {"streak": 2, "until": now - 1},                  # already past
+            {"streak": 2.0, "until": now + 60},               # non-int streak
+            {"streak": True, "until": now + 60},
+            {"streak": -3, "until": now + 60},
+            {"streak": 2, "until": "soon"},
+            {"streak": 2, "until": None},
+            {"streak": 2, "until": float("nan")},
+            {"until": now + 60},                             # missing streak
+            {"streak": 2},                                   # missing until
+            ["not", "a", "dict"],
+    ):
+        path.write_text(json.dumps(bad))
+        assert 1 not in schedule._cooling(tmp_path), bad
+        with turn(tmp_path, preferred=1) as chosen:
+            assert chosen == 1, bad
+    # boundary: pin the wall clock _cooling reads so exactly 0 s left,
+    # COOL_S left and COOL_S+eps left are checked directly
+    fixed = time.time()
+    monkeypatch.setattr(time, "time", lambda: fixed)
+    path.write_text(json.dumps({"streak": 2, "until": fixed}))
+    assert 1 not in schedule._cooling(tmp_path)
+    with turn(tmp_path, preferred=1) as chosen:
+        assert chosen == 1
+    path.write_text(json.dumps({"streak": 2, "until": fixed + schedule.COOL_S}))
+    assert 1 in schedule._cooling(tmp_path)
+    with turn(tmp_path, preferred=1) as chosen:
+        assert chosen == 2
+    path.write_text(json.dumps({"streak": 2, "until": fixed + schedule.COOL_S + 0.001}))
+    assert 1 not in schedule._cooling(tmp_path)
+    with turn(tmp_path, preferred=1) as chosen:
+        assert chosen == 1
+
+
+def test_slot_health_updates_hold_the_slot_lock(tmp_path, monkeypatch):
+    # mark/clear must run while the turn still holds llm_slot_<n>.lock, so
+    # a success release cannot reach forward and erase a later call's mark
+    _scheduling(tmp_path, monkeypatch)
+    ok = json.dumps({"choices": [{"message": {"content": "{}"},
+                                  "finish_reason": "stop"}]}).encode()
+    # per call: (post result, GET samples for pinned slot 1)
+    plan = [("ok", None), ("timeout", [True]),
+            ("timeout", [False, False]), ("timeout", [True])]
+    state = {"call": -1, "gets": 0}
+    seen = []
+    real_mark, real_clear = schedule.mark_stuck, schedule.clear_stuck
+
+    def lock_held(directory, slot):
+        fd = os.open(tmp_path / f"llm_slot_{slot}.lock", os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return False
+        except BlockingIOError:
+            return True
+        finally:
+            os.close(fd)
+
+    def mark(directory, slot):
+        seen.append(("mark", slot, lock_held(directory, slot)))
+        return real_mark(directory, slot)
+
+    def clear(directory, slot):
+        seen.append(("clear", slot, lock_held(directory, slot)))
+        return real_clear(directory, slot)
+
+    monkeypatch.setattr(schedule, "mark_stuck", mark)
+    monkeypatch.setattr(schedule, "clear_stuck", clear)
+
+    def send(endpoint, method, body, timeout, deadline):
+        if method == "POST":
+            state["call"] += 1
+            state["gets"] = 0
+            action, _samples = plan[state["call"]]
+            if action == "ok":
+                return 200, {}, ok
+            raise TimeoutError("http worker timeout")
+        state["gets"] += 1
+        samples = plan[state["call"]][1]
+        sample = samples[min(state["gets"] - 1, len(samples) - 1)]
+        return 200, {}, _slot_json(sample)
+
+    def call():
+        return local_llm.chat("p", request_fn=send,
+                              extra_payload={"id_slot": 1})
+
+    assert call() is not None                     # 200: clear under the lock
+    assert call() is None and _health_streak(tmp_path, 1) == 1
+    assert call() is None and _health_streak(tmp_path, 1) == 0
+    assert call() is None and _health_streak(tmp_path, 1) == 1
+    assert seen == [("clear", 1, True), ("mark", 1, True),
+                    ("clear", 1, True), ("mark", 1, True)]
