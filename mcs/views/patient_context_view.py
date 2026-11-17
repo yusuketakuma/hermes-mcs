@@ -565,9 +565,13 @@ def changes(db, ev, since_ts) -> dict:
     prior = _reset_prior(db, ev["project_id"]) if reset_at is not None else None
 
     def found_again(item, first):
-        # found in a record seen before the reset and already in the context it erased
-        return (reset_at is not None and isinstance(first, (int, float)) and first < reset_at
-                and (prior is None or reset_fact_key(item) in prior))
+        # a recorded patient: the erased context already held this fact (karte and OCR facts have no
+        # messages row, so the record's first_seen cannot decide); unrecorded: a record seen before
+        if reset_at is None:
+            return False
+        if prior is not None:
+            return reset_fact_key(item) in prior
+        return isinstance(first, (int, float)) and first < reset_at
 
     def kind(item):
         # the reader's own observation decides first: a post first seen since is new (or
