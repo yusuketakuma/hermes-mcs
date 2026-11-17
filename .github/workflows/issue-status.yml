@@ -81,8 +81,8 @@ jobs:
               gh api -X GET "repos/$GH_REPO/actions/workflows/$wf/runs" -f status="$status" -f per_page=30 --jq .workflow_runs
             done | jq -s add
           }
-          wf=agent-claude.yml runs queued waiting in_progress success failure cancelled timed_out > "$work/claude_runs.json"
-          wf=agent-claude-repair.yml runs queued waiting in_progress > "$work/repair_runs.json"
+          wf=agent-claude.yml runs requested queued pending waiting in_progress success failure cancelled timed_out > "$work/claude_runs.json"
+          wf=agent-claude-repair.yml runs requested queued pending waiting in_progress > "$work/repair_runs.json"
           jq -r '.[] | "\(.issue) \(.pr // "")"' "$work/targets.json" | while read -r issue pr; do
             d="$work/$issue"; mkdir -p "$d"
             gh api --paginate --slurp "repos/$GH_REPO/issues/$issue/events?per_page=100" > "$d/events.json"

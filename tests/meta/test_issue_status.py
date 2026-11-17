@@ -100,6 +100,17 @@ def test_running_run_is_found_among_many_skipped_ones():
     assert row[1] == "実装中" and "run 99" in row[3]
 
 
+def test_pending_runs_in_the_writer_queue_count_as_running():
+    pending = _run("Agent Claude #5 x", status="pending")
+    assert _current(_bundle(claude_runs=[pending]))[0][1] == "実装中"
+    on_pr = _run("Agent Claude #9 PR", status="pending")
+    reviews = [_review("CHANGES_REQUESTED", commit=OLD)]
+    assert _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=reviews, claude_runs=[on_pr]))[0][1] == "修正中"
+    repair = [_run("Agent Claude repair #9", status="requested")]
+    _, rows, _ = _current(_bundle(pr=_pr(), ci_runs=[_ci("failure")], repair_runs=repair))
+    assert rows[_names(rows).index("自動修正中")][0] == "active"
+
+
 def test_a_run_that_ended_without_a_pr_shows_a_stopped_stage():
     for conclusion, name in (("failure", "実装停止（失敗）"), ("cancelled", "実装停止（取消）"),
                              ("timed_out", "実装停止（時間切れ）"), ("success", "実装停止（PR なしで終了）")):
@@ -277,8 +288,8 @@ def test_workflow_is_read_only_except_issue_comments():
         " || github.ref }}"]
     assert "github.event.workflow_run.conclusion != 'skipped'" in text
     # Running Claude runs are fetched by status, so skipped runs cannot crowd them off the page.
-    assert "runs queued waiting in_progress success failure cancelled timed_out" in text
-    assert "wf=agent-claude-repair.yml runs queued waiting in_progress" in text
+    assert "runs requested queued pending waiting in_progress success failure cancelled timed_out" in text
+    assert "wf=agent-claude-repair.yml runs requested queued pending waiting in_progress" in text
     assert "sparse-checkout: ci" in text and "persist-credentials: false" in text
     assert "group: issue-status" in text
     assert "/labels" not in text and "gh issue close" not in text and "state=closed" not in text.split("gh api -X PATCH")[1]
