@@ -117,6 +117,15 @@ def test_anthropic_defaults_follow_the_owner_layout_with_or_without_profiles(rou
     assert contract != cloud_inference._CLOUD_CONTRACT and cloud_inference.is_supported_cloud_contract(contract)
 
 
+def test_default_limit_changes_the_request_fingerprint_of_the_old_1600_reservation():
+    selection, _ = c.resolve_profile(_cfg(), route="reextract", purpose="backlog")
+    client = a.AnthropicClient("synthetic-key")
+    old = client.body("synthetic prompt", 1600, None)
+    assert client.body("synthetic prompt", selection["max_tokens"], None) != old
+    assert cloud_inference.mcs_util.payload_hash(old) != cloud_inference.mcs_util.payload_hash(
+        client.body("synthetic prompt", selection["max_tokens"], None))
+
+
 def test_invalid_or_conflicting_profiles_fail_closed():
     bad = _cfg(provider_profiles={"anthropic": {"backlog": "sonnet-unknown"}})
     assert c.resolve_profile(bad, route="reextract", purpose="backlog")[0] is None
