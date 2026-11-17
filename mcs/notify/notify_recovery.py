@@ -563,8 +563,9 @@ def _worklist_where(cfg):
     where = ("p.kind!='card' AND r.state!='cancelled'" + live +
              " AND (p.state='unknown' "
              "OR (p.state='held' AND p.error_code='attachment_upload_identity_unverified') "
-             "OR (p.state='not_sent' AND p.kind='file_group' AND p.error_code=?))")
-    return where, (*retired, _DEPENDENCY_ERROR)
+             "OR (p.state='not_sent' AND p.kind='file_group' AND p.error_code=?) "
+             "OR (p.state='pending' AND p.kind='file_group' AND p.error_code=?))")
+    return where, (*retired, _DEPENDENCY_ERROR, BEYOND_HORIZON)
 
 
 def recovery_worklist_keys(db, cfg=None, *, checkpoint=lambda: None) -> list:
@@ -583,7 +584,8 @@ def recovery_worklist(db, cfg=None, *, limit=20, offset=0) -> dict:
 
     Read-only on the caller's connection. Candidates are non-card parts
     that are ``unknown``, held awaiting attachment-identity confirmation,
-    or dependency-rejected ``file_groups``; each is then verified through
+    dependency-rejected ``file_groups``, or pending Slack ``file_groups``
+    flagged by a restore beyond the journal horizon; each is then verified through
     the same plan the approval command uses, so ``status``/``blocker``
     report real plan eligibility rather than a guess. Cancelled renders
     and retired transports are excluded. ``total`` counts every candidate
@@ -808,7 +810,8 @@ def validate_card_part_resolve(req) -> str | None:
         return None
     if req["expected_state"] == "pending":
         if (transport != "slack" or req["part_id"] != "file_group" or req["result"] != "mark_not_sent"
-                or evidence.get("proof") != "no_journal_started" or "remote_id" in req or "related_plans" in req):
+                or evidence.get("proof") not in ("no_journal_started", "remote_absent")
+                or "remote_id" in req or "related_plans" in req):
             return "bad_pending_resolution"
         return None
     if "related_plans" in req:
