@@ -18,7 +18,8 @@ import semantic_runtime as runtime
 import semantic_send_gate
 import semantic_store
 import semantic_transport
-from semantic_testkit import NO_FACTS, _PassJev, _canonical_cfg, _kind_rows, _llm_v2, _seeded_two
+from semantic_testkit import (NO_FACTS, _FakeJev, _PassJev, _canonical_cfg, _cfg, _kind_rows, _llm, _llm_v2,
+                              _seeded, _seeded_two)
 
 _B_STATEMENT = "アムロジピン5mgの継続が記載されている"
 
@@ -641,5 +642,111 @@ def test_needs_review_summary_over_another_document_is_regenerated(tmp_path, mon
         # regenerated over the current document; the spent repair is not repeated
         assert after != before and status == "NEEDS_REVIEW" and model.summaries() == 1
         assert len(_kind_rows(db, semantic_policy.KIND_REPAIR, 1)) == repairs
+    finally:
+        db.close()
+
+
+def _run_legacy(db, llm, jev):
+    db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+    db.db.commit()
+    semantic_drain.run_due(db, _cfg("enforce", budget=100, loop_mode="off"), {"errors": []},
+                           time.monotonic() + 300, jev_client=jev, llm_fn=llm)
+
+
+def _legacy_passed(db, mid):
+    scfg = semantic_policy.runtime_config(_cfg("enforce", budget=100, loop_mode="off"))[0]
+    policy = semantic_policy.policy_fingerprint(scfg)
+    bundle = semantic_store.thread_bundle(db.db, 1, 1, [mid])
+    member = next(m for m in bundle["members"] if m["message_id"] == mid)
+    return semantic_send_gate.passed_summary_current(
+        db.db, 1, mid, bundle["source_fingerprint"], policy, member["revision"], "enforce", bundle=bundle)
+
+
+def test_unbound_prior_pass_is_reaudited_after_reseed(tmp_path, monkeypatch):
+    """An audit stored without its summary id or claim binding cannot prove which
+    summary and facts it covered: the stored summary is audited again over the
+    current facts and published only from that new, bound pair."""
+    import semantic_job_processor
+
+    db = _seeded(tmp_path)
+    prompts = []
+
+    def llm(prompt):
+        prompts.append(prompt)
+        return _llm(prompt)
+
+    try:
+        _run_legacy(db, llm, _FakeJev())
+        assert db.job_state("semantic", 1, 1) == "done" and _legacy_passed(db, 1)
+        before = db.artifacts("semantic_audit", message_id=1)[-1]
+        db.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.summary_artifact_id',"
+                      "'$.claim_input_binding') WHERE artifact_id=?", (before["artifact_id"],))
+        db.db.commit()
+        assert not _legacy_passed(db, 1)
+        db.semantic_seed(1, [1, 2], {"source": "history_import"})
+        assert db.job_state("semantic", 1, 1) == "pending"
+
+        reasons = []
+        real_why = semantic_job_processor._why
+        monkeypatch.setattr(semantic_job_processor, "_why",
+                            lambda diagnostics, reason: reasons.append(reason) or real_why(diagnostics, reason))
+        summaries = sum("要約器" in prompt for prompt in prompts)
+        jev = _FakeJev()
+        for _ in range(3):
+            _run_legacy(db, llm, jev)
+            if db.job_state("semantic", 1, 1) != "pending":
+                break
+        assert "prior_pass_unverified" not in reasons
+        assert db.job_state("semantic", 1, 1) == "done"
+        assert sum("要約器" in prompt for prompt in prompts) == summaries   # the stored summary is reused
+        assert jev.requests_made >= 1                                     # ... and audited again
+        assert _legacy_passed(db, 1)
+        audit = db.artifacts("semantic_audit", message_id=1)[-1]
+        summary = db.artifacts("semantic_summary", message_id=1)[-1]
+        assert audit["artifact_id"] > before["artifact_id"]
+        assert json.loads(audit["meta"])["summary_artifact_id"] == summary["artifact_id"]
+    finally:
+        db.close()
+
+
+def _legacy_skipped(db, mid):
+    scfg = semantic_policy.runtime_config(_cfg("enforce", budget=100, loop_mode="off"))[0]
+    policy = semantic_policy.policy_fingerprint(scfg)
+    bundle = semantic_store.thread_bundle(db.db, 1, 1, [mid])
+    member = next(m for m in bundle["members"] if m["message_id"] == mid)
+    return semantic_send_gate.verified_skipped_summary_current(
+        db.db, 1, mid, bundle["source_fingerprint"], policy, member["revision"], "enforce", bundle=bundle)
+
+
+@pytest.mark.parametrize("tamper", ["binding", "summary_text"])
+def test_unverifiable_prior_pass_is_not_cleared_by_skipped_reaudit(tmp_path, tamper):
+    """With Jev skipped, an unverifiable PASS is not audited at all: like an
+    unbound PENDING prior, the skipped re-audit cannot clear it, so the target
+    stays pending (``prior_audit_unverified``) and nothing becomes publishable
+    until a real audit runs."""
+    db = _seeded(tmp_path)
+    try:
+        _run_legacy(db, _llm, _FakeJev())
+        assert db.job_state("semantic", 1, 1) == "done" and _legacy_passed(db, 1)
+        before = db.artifacts("semantic_audit", message_id=1)[-1]
+        if tamper == "binding":
+            db.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.summary_artifact_id',"
+                          "'$.claim_input_binding') WHERE artifact_id=?", (before["artifact_id"],))
+        else:
+            summary = db.artifacts("semantic_summary", message_id=1)[-1]
+            content = json.loads(summary["content"])
+            content["limitations"] = [*content.get("limitations", []), "synthetic-tamper"]
+            db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                          (json.dumps(content, ensure_ascii=False), summary["artifact_id"]))
+        db.db.commit()
+        assert not _legacy_passed(db, 1)
+        db.semantic_seed(1, [1, 2], {"source": "history_import"})
+        for _ in range(2):
+            _run_legacy(db, _llm, None)
+            assert db.job_state("semantic", 1, 1) == "pending"
+            assert not _legacy_passed(db, 1) and not _legacy_skipped(db, 1)
+        audit = db.artifacts("semantic_audit", message_id=1)[-1]
+        assert json.loads(audit["content"])["status"] == "PENDING"
+        assert "prior_audit_unverified" in audit["content"]
     finally:
         db.close()

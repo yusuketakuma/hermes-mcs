@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from contextlib import suppress
+from copy import deepcopy
 
 import semantic_jev as jev
 from semantic_quantities import claim_quantity_findings, extract_quantities
@@ -114,6 +115,35 @@ _FACT_QUESTION = (
     "support the fact.")
 
 
+def _claim_answer_findings(claim_id, ans: dict, match_threshold: float) -> list:
+    """Findings of one validated claim answer; only a confident ``supports`` has none."""
+    findings = []
+    if ans["confidence"] < match_threshold:
+        findings.append({"code": "claim_low_confidence", "claim": claim_id,
+                         "confidence": ans["confidence"]})
+    if ans["choice"] in ("contradicts", "not_supported", "ambiguous"):
+        findings.append({"code": "claim_" + ans["choice"], "claim": claim_id,
+                         "confidence": ans["confidence"]})
+    return findings
+
+
+def claim_answers_findings(answers, match_threshold: float) -> list:
+    """Findings that recorded claim answers (``summary['_claim_audit']``) carry.
+
+    The same rule as ``audit_claims`` applies; an answer that is not a valid
+    choice with a probability is itself a finding (fail closed)."""
+    if not isinstance(answers, dict):
+        return [{"code": "claim_answer_invalid"}]
+    findings = []
+    for claim_id, ans in answers.items():
+        if (not isinstance(ans, dict) or ans.get("choice") not in jev.CLAIM_SUPPORT_OPTIONS
+                or not _probability(ans.get("confidence"))):
+            findings.append({"code": "claim_answer_invalid", "claim": claim_id})
+            continue
+        findings.extend(_claim_answer_findings(claim_id, ans, match_threshold))
+    return findings
+
+
 def audit_claims(jev_client, bundle: dict, summary: dict,
                  deadline: float, match_threshold: float = jev.MATCH_THRESHOLD,
                  per_request: int = 12) -> tuple[list, bool]:
@@ -213,22 +243,39 @@ def audit_claims(jev_client, bundle: dict, summary: dict,
             raw = summary.setdefault("_claim_audit", {})
             raw[c["claim_id"]] = {"choice": ans["choice"],
                                   "confidence": ans["confidence"]}
-            if ans["confidence"] < match_threshold:
-                findings.append({"code": "claim_low_confidence",
-                                 "claim": c["claim_id"],
-                                 "confidence": ans["confidence"]})
-            if ans["choice"] in ("contradicts", "not_supported"):
-                findings.append({"code": "claim_" + ans["choice"],
-                                 "claim": c["claim_id"],
-                                 "confidence": ans["confidence"]})
-            elif ans["choice"] == "ambiguous":
-                findings.append({"code": "claim_ambiguous",
-                                 "claim": c["claim_id"],
-                                 "confidence": ans["confidence"]})
+            findings.extend(_claim_answer_findings(c["claim_id"], ans, match_threshold))
         if partial:
             return findings + [{"code": "support_unevaluated",
                                 "claim": chunk[0]["claim_id"]}], False
     return findings, True
+
+
+def resume_claim_audit(jev_client, bundle: dict, summary: dict, recorded: dict,
+                       deadline: float, match_threshold: float = jev.MATCH_THRESHOLD,
+                       per_request: int = 12) -> tuple[list, bool]:
+    """Finish a claim audit stopped after some answers were recorded, asking only the rest.
+
+    ``recorded`` holds the answers and findings observed before the stop.
+    They are kept as observed and never asked again, so a recorded negative
+    cannot be upgraded; ``audit_claims`` asks the claims without an answer.
+    The merged answers ride on ``summary['_claim_audit']`` even when that
+    call raises, so the caller can record them before the stop goes on."""
+    answered = deepcopy(recorded["answers"])
+    findings = deepcopy(recorded["findings"])
+    findings.extend(f for f in claim_answers_findings(answered, match_threshold) if f not in findings)
+    summary.pop("_claim_audit_reason", None)
+    summary["_claim_audit"] = deepcopy(answered)
+    rest = {key: value for key, value in summary.items() if key != "_claim_audit"}
+    rest["claims"] = [c for c in summary["claims"] if c["claim_id"] not in answered]
+    if not rest["claims"]:
+        return findings, True
+    try:
+        more, evaluated = audit_claims(jev_client, bundle, rest, deadline, match_threshold, per_request)
+    finally:
+        summary["_claim_audit"] = {**(rest.get("_claim_audit") or {}), **answered}
+        if "_claim_audit_reason" in rest:
+            summary["_claim_audit_reason"] = rest["_claim_audit_reason"]
+    return findings + [f for f in more if f not in findings], evaluated
 
 
 COVERAGE_OPTIONS = {
