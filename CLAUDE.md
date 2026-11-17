@@ -64,14 +64,18 @@ python3 ci/mine_gates.py --check
 - `run_tests.sh` は `MCS_TEST_PYTHON`→`$VIRTUAL_ENV`→repo 直下の `.venv` の順に Python を選ぶ。worktree には `.venv` が無いので、pytest の入った Python を `MCS_TEST_PYTHON` に指定する。
 - ユーザー指示（2026-10-31）により、失敗項目を修正して再検証が通れば、既存結果と合わせて全体を合格扱いとし、全体 suite・同一SHAの全6ジョブの再実行は必須にしない。実行済み・失敗後に再検証済み・未実行を区別し、実行していないCIを実測成功と記録しない。記録方法は `docs/development/RELEASE_NOTES.md` に従う。
 - 作業は原則 git worktree で行う（所有者 2026-11-17）。作業（ブランチ）ごとに1つ作り、既存の checkout でブランチを切り替えない。終わったら片付ける。
-  置き場所は `~/.mcs-wt/<名前>`。Codex・Herdr などが自動で作る worktree はその既定の場所でよいが、稼働 checkout `~/.mcs` の配下には作らない。
-  `main` は worktree に取り出さず `origin/main` から新しいブランチを作る。見るだけ・検証だけなら `--detach`。1作業1回の clone で動く GitHub Actions・クラウド環境は対象外。
+  まとまった作業は実装グループ（`group/<名前>` ブランチとその worktree、main 向けの PR 1本）にまとめ、main へのマージ回数を減らす。
+  決め方・積み方・期間と規模の上限は `docs/development/GITHUB_WORKFLOW.md`「実装グループ」に従う。
+  置き場所は Mac では `~/.mcs-wt/<名前>`。Codex・Herdr などが自動で作る worktree はその既定の場所でよいが、稼働 checkout `~/.mcs` の配下には作らない。
+  クラウドのセッション（Claude Code on the web など）も同じで、最初の clone は割り当てられたブランチのまま使い、別のブランチ・PR・比較用の版は clone の外 `../hermes-mcs-wt/<名前>` に worktree を足して扱う。
+  `main` は worktree に取り出さず、`origin/main`（別ブランチ向けの補助PRはその base のブランチ）から新しいブランチを作る。見るだけ・検証だけなら `--detach`。GitHub Actions のジョブは1ジョブ1ブランチで終了時に環境ごと消えるので、worktree は作らない。
 
   ```bash
   git fetch origin
   git worktree add -b <branch> ~/.mcs-wt/<名前> origin/main   # 既存ブランチは: git worktree add ~/.mcs-wt/<名前> <branch>
   git worktree remove ~/.mcs-wt/<名前>                          # merge 後。未commit変更があれば止まるので確かめてから
   git worktree prune                                             # 手で消したフォルダの登録を掃除
+  # クラウドでは ~/.mcs-wt を ../hermes-mcs-wt に読み替える
   ```
 
 - 導入先 `~/.mcs`（`MCS_ROOT`）は稼働中の checkout で、原本DB・設定を持つ。開発・検証は上記の worktree で行い、そこの未commit変更を巻き込まない。
