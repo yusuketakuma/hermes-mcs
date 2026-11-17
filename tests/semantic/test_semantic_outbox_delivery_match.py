@@ -40,10 +40,12 @@ def test_every_counted_state_matches(ledger, state):
     assert not semantic_notice.outbox_has_delivery(ledger.db, "SYNTH-other")
 
 
-def test_suppressed_notice_of_another_summary_does_not_hide_the_rebuilt_one(ledger):
+def test_suppressed_notice_blocks_a_rebuilt_summary_but_not_the_revived_one(ledger):
     _raw(ledger, '{"delivery_key": "SYNTH-k", "summary_artifact_id": 7}', "suppressed")
     assert semantic_notice.outbox_has_delivery(ledger.db, "SYNTH-k")
-    assert semantic_notice.outbox_has_delivery(ledger.db, "SYNTH-k", 7)
-    assert not semantic_notice.outbox_has_delivery(ledger.db, "SYNTH-k", 8)
-    _raw(ledger, '{"delivery_key": "SYNTH-k", "summary_artifact_id": 7}', "pending")
+    # a rebuilt summary (another id) gets no new notice
     assert semantic_notice.outbox_has_delivery(ledger.db, "SYNTH-k", 8)
+    # the same summary current again (old local model restored) is not blocked
+    assert not semantic_notice.outbox_has_delivery(ledger.db, "SYNTH-k", 7)
+    _raw(ledger, '{"delivery_key": "SYNTH-k", "summary_artifact_id": 7}', "pending")
+    assert semantic_notice.outbox_has_delivery(ledger.db, "SYNTH-k", 7)

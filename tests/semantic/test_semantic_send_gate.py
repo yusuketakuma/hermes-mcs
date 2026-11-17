@@ -429,6 +429,26 @@ def test_notice_on_summary_of_replaced_local_model_is_terminal(tmp_path, monkeyp
     _summary(db, model="synthetic-local-b")
     with pytest.raises(semantic_send_gate.StaleSend, match="stale_generation"):
         semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
+
+    # returning to the original model makes the original summary current again
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "Qwen3.5-9B")
+    semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
+    db.close()
+
+
+def test_gate_reads_the_local_model_once_per_check(tmp_path, monkeypatch):
+    import semantic_transport
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "Qwen3.5-9B")
+    db = _delivery_db(tmp_path, [_message()])
+    cfg = _cfg("enforce")
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
+    event = _semantic_event(db)
+    payload = json.loads(event["payload"])
+    reads = []
+    real = semantic_transport.llm_model
+    monkeypatch.setattr(semantic_transport, "llm_model", lambda c=None: reads.append(1) or real(c))
+    semantic_send_gate.semantic_gate(db.db, event, payload, cfg)
+    assert len(reads) == 1
     db.close()
 
 
