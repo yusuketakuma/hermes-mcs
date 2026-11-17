@@ -76,7 +76,6 @@ def _canonical_events(db, message, projection_row, cfg):
     import semantic_projection
     import semantic_publication
     import semantic_store
-    import semantic_transport
 
     if not isinstance(cfg, dict) or not isinstance(cfg.get("semantic"), dict) \
             or "mode" not in cfg["semantic"]:
@@ -89,8 +88,7 @@ def _canonical_events(db, message, projection_row, cfg):
     binding = inference_dependency_loss.source_binding(db, pid, mid)
     if not binding or meta.get("source_binding") != binding:
         return None
-    bundle = semantic_store.thread_bundle(db, pid, message.get("parent_id") or mid,
-                                          local_model=semantic_transport.llm_model(cfg))
+    bundle = semantic_store.thread_bundle(db, pid, message.get("parent_id") or mid)
     if (bundle is None or bundle.get("source_fingerprint") != meta.get("fingerprint")
             or semantic_policy.policy_fingerprint(policy) != meta.get("policy_fingerprint")):
         return None

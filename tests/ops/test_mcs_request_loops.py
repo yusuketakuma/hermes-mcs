@@ -17,12 +17,12 @@ import semantic_loops
 from semantic_testkit import _cfg, _message, _pending_fact, _seeded
 
 
-def _candidate_setup(tmp_path, *, local_model=None):
+def _candidate_setup(tmp_path):
     db = _seeded(tmp_path)
     cfg, _ = semantic_policy.semantic_config(_cfg())
     policy = semantic_policy.policy_fingerprint(cfg)
     db.artifact_add("semantic_policy", policy)
-    bundle = semantic_store.thread_bundle(db.db, 1, 1, [1], local_model=local_model)
+    bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
     semantic_loops.update_loops(
         db, 1, bundle, {1: _pending_fact(bundle["members"][0])},
         None, cfg, time.monotonic() + 30)
@@ -163,23 +163,21 @@ def test_loop_adoption_requires_exact_original_quote(tmp_path):
 
 
 @pytest.mark.parametrize('batch', [False, True])
-def test_loop_state_uses_explicit_model_without_host_config(tmp_path, monkeypatch, batch):
-    model = 'synthetic-snapshot-model'
-    db, row, _, policy, _ = _candidate_setup(tmp_path, local_model=model)
+def test_loop_state_never_reads_host_config_or_a_local_model(tmp_path, monkeypatch, batch):
+    db, row, _, policy, _ = _candidate_setup(tmp_path)
     try:
         monkeypatch.setattr(semantic_store.semantic_transport, 'load_config',
-                            lambda: pytest.fail('explicit model read host config'))
+                            lambda: pytest.fail('a loop state read host config'))
 
-        def state(local_model):
+        def state():
             if batch:
-                return request_loops.effective_loop_states(
-                    db.db, [row], policy=policy, local_model=local_model)[0]
-            return request_loops.effective_loop_state(
-                db.db, row, policy=policy, local_model=local_model)
+                return request_loops.effective_loop_states(db.db, [row], policy=policy)[0]
+            return request_loops.effective_loop_state(db.db, row, policy=policy)
 
-        current = state(model)
+        current = state()
         assert current['current'] and current['adoption_eligible']
-        stale = state('synthetic-other-model')
-        assert not stale['current'] and not stale['adoption_eligible']
+        # Jev-backed loop candidates do not depend on the configured local model.
+        monkeypatch.setattr(semantic_store.semantic_transport, 'LLM_MODEL', 'synthetic-other-model')
+        assert state() == current
     finally:
         db.close()

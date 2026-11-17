@@ -14,11 +14,13 @@ import local_llm as local_llm
 import initial_import_state as initial_import_state
 import cloud_inference as cloud_inference
 import inference_dependency_loss as dependency_loss
+import patient_context_artifacts as context_artifacts
 from clinical_chunking import PLAN_VERSION as PLAN_VERSION
 from mcs_queries import JST as JST
 from mcs_util import html_to_text as html_to_text, loads_dict as loads_dict, safe_error_code as safe_error_code, strict_json as strict_json, valid_hash as valid_hash
 from inference_version import VERSION_KEY as VERSION_KEY, current_meta_pred as current_meta_pred, read_version as read_version
 import patient_context_plan as context_plan
+import patient_context_selection as context_selection
 import patient_context_schedule as context_schedule
 import patient_context_quota as context_quota
 import mcs_queries as context_queries
@@ -47,33 +49,35 @@ from patient_context_refresh_state import (
     SCAN as SCAN,
     SOURCE_REPAIR as SOURCE_REPAIR,
     SOURCE_REPAIR_CANDIDATE as SOURCE_REPAIR_CANDIDATE,
-    _CHECKS as _CHECKS,
-    _DEPENDENCY_CODE as _DEPENDENCY_CODE,
     _INTERNAL_PROOF as _INTERNAL_PROOF,
-    _STATE_CODE as _STATE_CODE,
+    _SCAN_CODE as _SCAN_CODE,
+    _SUMMARY_CODE as _SUMMARY_CODE,
     _adoption_artifact_matches as _adoption_artifact_matches,
     _adoption_epoch_expected as _adoption_epoch_expected,
     _artifact_meta as _artifact_meta,
+    _checks as _checks,
     _cloud_input_binding as _cloud_input_binding,
     _comparison_context as _comparison_context,
     _contract as _contract,
     _digest as _digest,
     _facts_sig as _facts_sig,
     _latest as _latest,
+    _local_provenance as _local_provenance,
     _out_of_scope as _out_of_scope,
     _published_version as _published_version,
     _quality_assessment as _quality_assessment,
-    _quality_code as _quality_code,
     _quality_expected as _quality_expected,
     _quality_kind as _quality_kind,
     _replace as _replace,
-    _route_contract as _route_contract,
+    _route as _route,
     _save_source_chunk_tx as _save_source_chunk_tx,
     _scan_sig as _scan_sig,
     _source_quality_hold_key as _source_quality_hold_key,
     _sources_intact as _sources_intact,
+    _summary_contract as _summary_contract,
     acquire_run_lock as acquire_run_lock,
     options as options,
+    route_accepts as route_accepts,
     time as time,
     workday_window as workday_window
 )
@@ -153,7 +157,7 @@ from patient_context_refresh_readiness import (
     _inference_ready as _inference_ready,
     _observe_readiness as _observe_readiness,
     _pending as _pending,
-    _publication_contract as _publication_contract,
+    _publication_route as _publication_route,
     _quality_publication_allowed as _quality_publication_allowed,
     _raw_extraction_current as _raw_extraction_current,
     _readiness_environment as _readiness_environment,
@@ -282,15 +286,19 @@ def _scan_covered(db, seen):
 
 
 def _generation_input(snapshot, facts):
+    # A cloud route generates without the local model; a local one counts a
+    # model change as a new generation against the quota.
+    route = snapshot['route']
+    producer = route['provider'] if route['provider'] else {'local_model': route['local_model']}
     return patient_context_refresh_state._digest([
         "patient_context_generation_v1", snapshot['source_sig'],
-        patient_context_refresh_state._facts_sig(facts), snapshot['contract']])
+        patient_context_refresh_state._facts_sig(facts), snapshot['contract'], producer])
 
 
 def _generation_plan(db, pid, cfg, snapshot, now):
     """Observe quota for the same hydrated input used by the overview caller."""
     hydrated = patient_context_refresh_sources._snapshot(
-        db, pid, cfg, contract=snapshot['contract'], source_keys=snapshot.get('source_scope'))
+        db, pid, cfg, route=snapshot['route'], source_keys=snapshot.get('source_scope'))
     if hydrated['source_sig'] != snapshot['source_sig']:
         raise ValueError('patient_context_source_changed')
     workday_id, _ = patient_context_refresh_state.workday_window(now)
@@ -298,7 +306,7 @@ def _generation_plan(db, pid, cfg, snapshot, now):
     old, meta = patient_context_refresh_state._latest(db, patient_context_refresh_state.KIND, pid)
     same = (bool(old) and old.get('facts_sig') == patient_context_refresh_state._facts_sig(facts)
         and meta.get('source_sig') == snapshot['source_sig']
-        and patient_context_refresh_state._route_contract(meta) == snapshot['contract'])
+        and patient_context_refresh_state.route_accepts(snapshot['route'], meta))
     quality = patient_context_quality_receipts._summary_quality_required(db, pid, snapshot)
     key = _generation_input(snapshot, facts)
     prior_coverage = meta.get('source_coverage')
@@ -313,7 +321,7 @@ def _generation_plan(db, pid, cfg, snapshot, now):
     catchup = False
     if partial and full:
         scans = patient_context_refresh_sources._current_scans(
-            db, pid, snapshot['sources'], snapshot['contract'], cfg=cfg)
+            db, pid, snapshot['sources'], snapshot['route'], cfg=cfg)
         full = all(patient_context_refresh_sources._scan_ready(scans.get(context_plan.source_key(source), {}))
                    for source in snapshot['sources'] if context_plan.source_usable(source))
         taken = db.execute("SELECT json_extract(content,'$.catchup_generation') FROM artifacts WHERE kind=? "
@@ -329,15 +337,27 @@ _WAIT_COUNTER_KEYS = (
     'wait_no_eligible_sources', 'wait_no_due_lane', 'wait_generation_quota',
     'wait_readiness_unverified', 'wait_dependency_incomplete',
 )
+_SCAN_COUNTER_KEYS = _WAIT_COUNTER_KEYS + ('skip_patient_invalid',)
+
+
+def _raise_if_systemic(unreadable, scanned):
+    """Re-raise when no scanned patient was readable and two or more failed alike.
+
+    The same code from every patient points at configuration or code, not at
+    one patient's stored rows, so the pass reports an error instead of skips."""
+    if (len(unreadable) >= 2 and len(unreadable) == scanned
+            and len({(type(exc), safe_error_code(exc)) for exc in unreadable}) == 1):
+        raise unreadable[0]
 
 
 def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out=None):
     """Advance a bounded scan before evaluating each patient's current evidence."""
     if observed_out is not None:
-        observed_out.update(dict.fromkeys(_WAIT_COUNTER_KEYS, 0))
+        observed_out.update(dict.fromkeys(_SCAN_COUNTER_KEYS, 0))
     cloud_scan = patient_context_refresh_readiness._cloud_scan_for(ledger, cfg)
     scanned, waiting, seen = 0, 0, set()
     scan_reads, scan_interrupts = 0, 0
+    unreadable = []
     best, selected = {}, None
     rotation = patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.PROGRESS, 0)
     covered = False
@@ -369,90 +389,109 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                     continue
                 seen.add(pid)
                 scanned += 1
-                published = patient_context_refresh_state._published_version(reader.db, pid)
-                whole = patient_context_refresh_sources._snapshot(reader.db, pid, cfg, hydrate=False)
-                keys = patient_context_refresh_readiness._eligible_source_keys(reader, pid, cfg, whole, deadline=deadline)
-                if not keys and whole['sources']:
-                    if observed_out is not None:
-                        observed_out['wait_no_eligible_sources'] += 1
-                    waiting += 1
-                    continue
-                source_keys = list(keys) if keys else None
-                observed = {}
-                scan_reads += 1
-                snapshot, progress, pending = patient_context_refresh_readiness._pending(
-                    reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid),
-                    source_keys=source_keys, observed_out=observed)
-                if patient_context_refresh_state._out_of_scope(snapshot):
-                    continue
-                scopes = [(snapshot, progress, pending, source_keys, ('B', 'C'))]
-                # Same candidate, connection, read transaction, scope,
-                # contract, cfg and estimate: reuse the stored read
-                # _pending just made instead of reading it again.
-                scans = observed["scans"]
-                summary_keys = [context_plan.source_key(source) for source in snapshot['sources']
-                    if not context_plan.source_usable(source)
-                    or patient_context_refresh_sources._scan_ready(scans.get(context_plan.source_key(source), {}))]
-                if summary_keys or not snapshot['sources']:
-                    summary_keys = summary_keys or None
-                    if summary_keys == source_keys:
-                        scopes[0] = (snapshot, progress, pending, source_keys, ('A', 'B', 'C'))
-                    else:
-                        scan_reads += 1
-                        summary_snapshot, summary_progress, summary_pending = patient_context_refresh_readiness._pending(
-                            reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid), source_keys=summary_keys)
-                        scopes.append((summary_snapshot, summary_progress, summary_pending, summary_keys, ('A',)))
-                for candidate, state, due, scope_keys, lanes in scopes:
-                    if ('A' in lanes and due['A']
-                            and (candidate.get('source_coverage', {}).get('unreflected')
-                                 or not candidate['acquisition']['complete'])
-                            and not any(context_plan.source_usable(source) for source in candidate['sources'])):
-                        due['A'] = False
-                    if not any(due[lane] for lane in lanes):
+                waiting_before = waiting
+                counters_before = ({key: observed_out[key] for key in _WAIT_COUNTER_KEYS}
+                                   if observed_out is not None else None)
+                whole = None
+                try:
+                    published = patient_context_refresh_state._published_version(reader.db, pid)
+                    whole = patient_context_refresh_sources._snapshot(reader.db, pid, cfg, hydrate=False)
+                    keys = patient_context_refresh_readiness._eligible_source_keys(reader, pid, cfg, whole, deadline=deadline)
+                    if not keys and whole['sources']:
                         if observed_out is not None:
-                            observed_out['wait_no_due_lane'] += 1
-                        waiting += int(candidate['unfinished'])
+                            observed_out['wait_no_eligible_sources'] += 1
+                        waiting += 1
                         continue
-                    if 'A' in lanes and due['A']:
-                        try:
-                            generation = _generation_plan(reader.db, pid, cfg, candidate, now)
-                            quota = (context_quota.inspect(reader.db, pid, generation['input_key'],
-                                now=now, catchup=generation['catchup']) if generation['needed'] else {'allowed': True})
-                        except ValueError:
-                            generation, quota = None, {'allowed': False}
-                        candidate['_generation_plan'] = generation
-                        if not quota['allowed']:
-                            if observed_out is not None:
-                                observed_out['wait_generation_quota'] += 1
+                    source_keys = list(keys) if keys else None
+                    observed = {}
+                    scan_reads += 1
+                    snapshot, progress, pending = patient_context_refresh_readiness._pending(
+                        reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid),
+                        source_keys=source_keys, observed_out=observed)
+                    if patient_context_refresh_state._out_of_scope(snapshot):
+                        continue
+                    scopes = [(snapshot, progress, pending, source_keys, ('B', 'C'))]
+                    # Same candidate, connection, read transaction, scope,
+                    # contract, cfg and estimate: reuse the stored read
+                    # _pending just made instead of reading it again.
+                    scans = observed["scans"]
+                    summary_keys = [context_plan.source_key(source) for source in snapshot['sources']
+                        if not context_plan.source_usable(source)
+                        or patient_context_refresh_sources._scan_ready(scans.get(context_plan.source_key(source), {}))]
+                    if summary_keys or not snapshot['sources']:
+                        summary_keys = summary_keys or None
+                        if summary_keys == source_keys:
+                            scopes[0] = (snapshot, progress, pending, source_keys, ('A', 'B', 'C'))
+                        else:
+                            scan_reads += 1
+                            summary_snapshot, summary_progress, summary_pending = patient_context_refresh_readiness._pending(
+                                reader.db, pid, cfg, now=now, cloud_scan=cloud_scan(pid), source_keys=summary_keys)
+                            scopes.append((summary_snapshot, summary_progress, summary_pending, summary_keys, ('A',)))
+                    for candidate, state, due, scope_keys, lanes in scopes:
+                        if ('A' in lanes and due['A']
+                                and (candidate.get('source_coverage', {}).get('unreflected')
+                                     or not candidate['acquisition']['complete'])
+                                and not any(context_plan.source_usable(source) for source in candidate['sources'])):
                             due['A'] = False
-                            waiting += 1
-                            if not any(due[lane] for lane in lanes):
-                                continue
-                    changes = ledger.db.total_changes
-                    ready, proof, _ = patient_context_refresh_readiness._observe_readiness(reader, pid, cfg,
-                        deadline=deadline, complete=complete, allow_dependency_repair=lanes != ('A',), source_keys=scope_keys)
-                    if ledger.db.total_changes != changes:
-                        proof = None
-                    if proof is not None:
-                        proof['writer'] = ledger.db
-                        proof['writer_changes'] = ledger.db.total_changes
-                    candidate['_readiness_proof'] = proof
-                    patient_context_refresh_sources._scan_check(reader.db)
-                    if not candidate['dependencies']['complete']:
+                        if not any(due[lane] for lane in lanes):
+                            if observed_out is not None:
+                                observed_out['wait_no_due_lane'] += 1
+                            waiting += int(candidate['unfinished'])
+                            continue
+                        if 'A' in lanes and due['A']:
+                            try:
+                                generation = _generation_plan(reader.db, pid, cfg, candidate, now)
+                                quota = (context_quota.inspect(reader.db, pid, generation['input_key'],
+                                    now=now, catchup=generation['catchup']) if generation['needed'] else {'allowed': True})
+                            except ValueError:
+                                generation, quota = None, {'allowed': False}
+                            candidate['_generation_plan'] = generation
+                            if not quota['allowed']:
+                                if observed_out is not None:
+                                    observed_out['wait_generation_quota'] += 1
+                                due['A'] = False
+                                waiting += 1
+                                if not any(due[lane] for lane in lanes):
+                                    continue
+                        changes = ledger.db.total_changes
+                        ready, proof, _ = patient_context_refresh_readiness._observe_readiness(reader, pid, cfg,
+                            deadline=deadline, complete=complete, allow_dependency_repair=lanes != ('A',), source_keys=scope_keys)
+                        if ledger.db.total_changes != changes:
+                            proof = None
+                        if proof is not None:
+                            proof['writer'] = ledger.db
+                            proof['writer_changes'] = ledger.db.total_changes
+                        candidate['_readiness_proof'] = proof
+                        patient_context_refresh_sources._scan_check(reader.db)
+                        if not candidate['dependencies']['complete']:
+                            if observed_out is not None:
+                                observed_out['wait_dependency_incomplete'] += 1
+                            due['A'] = False
+                        if not ready and observed_out is not None:
+                            observed_out['wait_readiness_unverified'] += 1
+                        waiting += int(candidate['unfinished'] or not ready)
+                        if ready:
+                            best.update({lane: (candidate, state, published) for lane in lanes if due[lane]})
+                except (ValueError, TypeError, KeyError) as exc:
+                    # One patient's unreadable stored state skips only that patient;
+                    # SQLite, I/O and scan interruptions still abort the whole pass.
+                    unreadable.append(exc)
+                    best.clear()
+                    waiting = waiting_before
+                    if observed_out is not None:
+                        observed_out.update(counters_before)
+                    if patient_context_refresh_readiness._unreadable_in_scope(reader.db, pid, cfg, whole):
+                        waiting += 1
                         if observed_out is not None:
-                            observed_out['wait_dependency_incomplete'] += 1
-                        due['A'] = False
-                    if not ready and observed_out is not None:
-                        observed_out['wait_readiness_unverified'] += 1
-                    waiting += int(candidate['unfinished'] or not ready)
-                    if ready:
-                        best.update({lane: (candidate, state, published) for lane in lanes if due[lane]})
+                            observed_out['skip_patient_invalid'] += 1
+                            observed_out.setdefault('skip_patient_code', safe_error_code(exc))
                 if best:
                     selected = pid
                     break
                 if _scan_covered(reader.db, seen):
                     covered = True
                     break
+            _raise_if_systemic(unreadable, scanned)
     # scan_interrupts counts every early abort (contention, deadline or
     # read failure) — finite-slice completion keeps it at 0.
     except patient_context_refresh_sources._ScanInterrupted:
@@ -560,17 +599,23 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         stats = {"scanned": scanned, "waiting": waiting, "covered": covered,
                  "scan_reads": scan_reads, "scan_interrupts": scan_interrupts,
                  "scan_ms": int((patient_context_refresh_state.time.monotonic() - started) * 1000)}
-        stats.update({key: scan_observed[key] for key in _WAIT_COUNTER_KEYS if key in scan_observed})
-        if scan_observed.get('scan_refusal') is not None:
-            stats['scan_refusal'] = scan_observed['scan_refusal']
+        stats.update({key: scan_observed[key] for key in _SCAN_COUNTER_KEYS if key in scan_observed})
+        for key in ('scan_refusal', 'skip_patient_code'):
+            if scan_observed.get(key) is not None:
+                stats[key] = scan_observed[key]
         if scan_rotation is None:
             return {"status": "deferred", "done": 0, "reason": "patient_context_scan_incomplete", **stats}
         rotation = scan_rotation[0]
-        lane, index, next_cursor = context_plan.lane_rotation(best, rotation)
+        lane, index, next_cursor = context_schedule.lane_rotation(best, rotation)
         if lane is None:
+            # A skipped patient keeps waiting >= 1, so a pass that skipped is never
+            # complete; an interrupted pass reports the interruption, not the skip.
+            skipped = scan_observed.get('skip_patient_invalid')
+            reason = ("patient_context_scan_incomplete" if skipped and scan_interrupts
+                      else "patient_context_patient_invalid" if skipped
+                      else "patient_context_waiting" if waiting else "patient_context_scan_incomplete")
             return {"status": "deferred" if waiting or not covered else "complete", "done": 0,
-                    **({"reason": "patient_context_waiting" if waiting else "patient_context_scan_incomplete"}
-                       if waiting or not covered else {}), **stats}
+                    **({"reason": reason} if waiting or not covered else {}), **stats}
         snapshot, progress, frozen_ver = best[lane]
         source_keys = snapshot.get('source_scope')
         generation_plan = snapshot.pop('_generation_plan', None) if lane == 'A' else None
@@ -635,8 +680,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             return {"status": "source_changed", "done": 0, **stats}
         snapshot = hydrated
     frozen_scan_sig = patient_context_refresh_state._scan_sig(ledger.db, pid, source_keys=source_keys)
-    meta = {"source_sig": snapshot["source_sig"], "contract": snapshot["contract"],
-            "model": snapshot["contract"]["model"], "workday_id": workday_id}
+    meta = {"source_sig": snapshot["source_sig"], "workday_id": workday_id}
+    patient_context_refresh_state._record_backend(meta, patient_context_refresh_state._local_provenance(cfg))
+    meta["contract"] = snapshot["contract"]
     if lane == 'A' and source_keys is not None:
         meta.update(source_scope=source_keys, source_coverage=snapshot['source_coverage'])
     result = None
@@ -650,7 +696,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     generation_contacted = False
     generation_quality = False
     mode = extract_llm._cloud_mode(ledger, cfg, "patient_context", pid)
-    cloud_requested = bool(snapshot["contract"].get("provider"))
+    cloud_requested = bool(snapshot["route"]["provider"])
     quality_required = patient_context_quality_receipts._summary_quality_required(ledger.db, pid, snapshot)
     cloud_settings = cloud_inference.resolve_cloud_settings(cfg) if mode in ("on", "shadow", "dry_run") else None
     cloud_selection = None
@@ -837,21 +883,29 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
 
     def local_route():
         # the unit's record is written under the local backend; a cloud route
-        # contract is kept beside it so the selection still recognises the row
-        meta.pop("provider", None)
+        # provider is kept beside it so the selection still recognises the row
         meta.pop("cloud_receipts", None)
-        if "provider" in snapshot["contract"]:
-            meta["route_contract"] = snapshot["contract"]
-            meta["local_fallback"] = True
-            meta["contract"] = {key: value for key, value in snapshot["contract"].items() if key != "provider"}
-        meta["model"] = local_llm.resolve(cfg)[1]
+        patient_context_refresh_state._record_backend(meta, patient_context_refresh_state._local_provenance(cfg),
+                                                      route_provider=snapshot["route"]["provider"])
+
+    def cloud_route(unit):
+        patient_context_refresh_state._record_backend(meta, patient_context_refresh_state._cloud_provenance(
+            unit.contract, unit.model, cloud_selection), provider=unit.contract)
+
+    def saved_route(saved_meta):
+        # A reused row keeps the exact backend identity that produced it.
+        for key in patient_context_refresh_state._BACKEND_KEYS:
+            if key in saved_meta:
+                meta[key] = saved_meta[key]
+            else:
+                meta.pop(key, None)
 
     def guard_summary_sources():
         nonlocal generation_uncertain
         try:
             with cloud_policy._accounting_snapshot(ledger.db):
                 patient_context_refresh_sources.guard_cloud_sources(ledger, pid, snapshot['sources'],
-                    snapshot['contract'], cfg=cfg, deadline=deadline)
+                    snapshot['route'], cfg=cfg, deadline=deadline)
         except (cloud_client.CloudError, ValueError, TypeError, KeyError, sqlite3.Error,
                 OSError, RecursionError, OverflowError) as error:
             generation_uncertain = True
@@ -887,8 +941,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     saved.clear()
                 value = fn(provider, reset)
                 guard_provider(provider)
-                meta["provider"] = provider.contract
-                meta["model"] = provider.model
+                cloud_route(provider)
                 if getattr(provider, 'answered_reservations', None):
                     evidence = _completed_cloud_receipts(ledger, provider, answered_only=True)
                     meta['cloud_receipts'] = [{'artifact_id': aid, 'witness': proof['witness']}
@@ -910,8 +963,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 if changed:
                     provider.discard()
                     if paid:
-                        meta['provider'] = provider.contract
-                        meta['model'] = provider.model
+                        cloud_route(provider)
                     provider = None
                     if paid:
                         raise ValueError('patient_context_cloud_failed') from error
@@ -920,8 +972,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     # A fresh unsent remainder does not release a persisted cloud cursor.
                     raise patient_context_refresh_state.Deferred("patient_context_cloud_budget") from error
                 if paid:
-                    meta["provider"] = provider.contract
-                    meta["model"] = provider.model
+                    cloud_route(provider)
                 provider = None
                 if paid and (unresolved or not local_admit()):
                     # a paid attempt failed and local cannot take over now: record
@@ -930,8 +981,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     # would resume the cloud cursor locally); a fresh unit is
                     # recorded under the local route, where selection finds it.
                     if saved and saved.get("_provider_contract"):
-                        meta["provider"] = saved["_provider_contract"]
-                        meta["model"] = saved["_provider_contract"]["model"]
+                        saved_route(saved["_source_meta"])
                     elif not cloud_requested:
                         local_route()
                     if isinstance(error, ValueError):
@@ -953,6 +1003,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         if mode == "shadow":
             shadow_call = (fn, unit_key, mid, value, set())
         return value
+    # Lanes B/C bind both together only once a source is chosen; a failure
+    # before that writes no source record (and never another source's).
+    saved = source = None
     try:
         if lane == "A":
             guard_summary_sources()
@@ -962,25 +1015,25 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             if generation_plan is None or generation_plan['input_key'] != _generation_input(snapshot, facts):
                 raise patient_context_refresh_state.Deferred('patient_context_source_changed')
             summary_scans = patient_context_refresh_sources._current_scans(
-                ledger.db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
+                ledger.db, pid, snapshot["sources"], snapshot["route"], cfg=cfg)
             cloud_sources_ready = all(scan.get("_provider_contract") for scan in summary_scans.values())
             same_backend = (not facts or mode != "on" or old_meta.get("local_fallback") is True
-                            or old_meta.get("provider") == snapshot["contract"].get("provider")
+                            or old_meta.get("provider") == snapshot["route"]["provider"]
                             or not cloud_sources_ready and not old_meta.get("provider"))
             same = (old.get("facts_sig") == changed and old_meta.get("source_sig") == snapshot["source_sig"]
-                    and patient_context_refresh_state._route_contract(old_meta) == snapshot["contract"]
+                    and patient_context_refresh_state.route_accepts(snapshot["route"], old_meta)
                     and same_backend)
             if (same_backend and old_meta.get("quality_audit_key") and old_meta.get("source_sig") == snapshot["source_sig"]
-                    and old_meta.get("scan_sig") == frozen_scan_sig and patient_context_refresh_state._route_contract(old_meta) == snapshot["contract"]
+                    and old_meta.get("scan_sig") == frozen_scan_sig and patient_context_refresh_state.route_accepts(snapshot["route"], old_meta)
                     and patient_context_refresh_sources._summary_valid(ledger.db, pid, old, {context_plan.source_key(s): s for s in snapshot["sources"]},
                                        allow_historical=True)):
                 same = True
             if same:
                 if old_meta.get('local_fallback') is True:
-                    payload, _, _, _ = patient_context_quality_controller._summary_input(facts, snapshot['source_sig'])
+                    payload, _, _, _ = context_selection.summary_input(facts, snapshot['source_sig'])
                     guard_local_input('summary', None, json.dumps(payload, ensure_ascii=False))
-                meta["contract"] = old_meta["contract"]
-                for key in ("route_contract", "quality_repair_ref", "local_fallback", "cloud_receipts"):
+                saved_route(old_meta)
+                for key in ("quality_repair_ref", "cloud_receipts"):
                     if key in old_meta:
                         meta[key] = old_meta[key]
             if facts and not same or quality_required:
@@ -988,11 +1041,6 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 begin_generation()
             if same and quality_required:
                 generation_quality = True
-                if old_meta.get("provider"):
-                    meta["provider"] = old_meta["provider"]
-                    meta["model"] = old_meta["provider"]["model"]
-                else:
-                    meta['model'] = old_meta['model']
                 try:
                     quality_status, quality_result = patient_context_quality_controller._quality_step(
                         ledger, pid, cfg, workday_id, old, deadline, generation_admit, base_meta=old_meta)
@@ -1003,9 +1051,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                         by_id = {fact["id"]: fact for fact in quality_result["facts"]}
                         chosen = [by_id[fid] for fid in quality_result["fact_ids"]]
                         chosen_ids = {fact["id"] for fact in chosen}
-                        selected_facts = (chosen + [fact for fact in facts if fact["id"] not in chosen_ids])[:context_plan.MAX_FACTS]
+                        selected_facts = (chosen + [fact for fact in facts if fact["id"] not in chosen_ids])[:context_selection.MAX_FACTS]
                         repaired = {**old, "facts": selected_facts, "facts_sig": patient_context_refresh_state._facts_sig(selected_facts),
-                            "summary": [{"text": context_plan.summary_text(fact), "fact_ids": [fact["id"]]}
+                            "summary": [{"text": context_selection.summary_text(fact), "fact_ids": [fact["id"]]}
                                         for fact in chosen],
                             "temporal_view": {key: quality_result["state"][key] for key in ("groups", "relations")},
                             "facts_total": len(quality_result["facts"]),
@@ -1052,31 +1100,32 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                       "facts_total": total, "truncated": total > len(facts),
                       "as_of": now, "generated_at": old.get("generated_at", now) if same else now,
                       "source_sig": snapshot["source_sig"],
-                      "coverage": patient_context_refresh_sources._coverage(ledger.db, pid, snapshot["sources"], snapshot["contract"], facts, cfg=cfg)}
+                      "coverage": patient_context_refresh_sources._coverage(ledger.db, pid, snapshot["sources"], snapshot["route"], facts, cfg=cfg)}
         else:
-            scans = patient_context_refresh_sources._current_scans(ledger.db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
-            for source in snapshot["sources"]:
-                if not context_plan.source_usable(source):
+            scans = patient_context_refresh_sources._current_scans(ledger.db, pid, snapshot["sources"], snapshot["route"], cfg=cfg)
+            for candidate in snapshot["sources"]:
+                if not context_plan.source_usable(candidate):
                     continue
-                saved = scans.get(context_plan.source_key(source), {})
+                stored = scans.get(context_plan.source_key(candidate), {})
                 cloud_pending = (lane == "B" and patient_context_refresh_readiness._needs_cloud_scan(
-                    saved, mode == "on"))
-                if not patient_context_refresh_readiness._ready({} if cloud_pending else saved, now):
+                    stored, mode == "on"))
+                if not patient_context_refresh_readiness._ready({} if cloud_pending else stored, now):
                     continue
-                if (lane == "B" and (not saved.get("complete") or cloud_pending)) or (
-                        lane == "C" and saved.get("complete") and not saved.get("audited")):
-                    meta["source_sig"] = context_plan.source_signature(source)
-                    meta["original_source_sig"] = context_plan.original_source_signature(source)
-                    meta["source_key"] = context_plan.source_key(source)
-                    source = next(context_queries.patient_context_sources(ledger.db, pid, mid=context_plan.source_key(source), cfg=cfg), None)
+                if (lane == "B" and (not stored.get("complete") or cloud_pending)) or (
+                        lane == "C" and stored.get("complete") and not stored.get("audited")):
+                    meta["source_sig"] = context_plan.source_signature(candidate)
+                    meta["original_source_sig"] = context_plan.original_source_signature(candidate)
+                    meta["source_key"] = context_plan.source_key(candidate)
+                    saved, source = stored, candidate
+                    source = next(context_queries.patient_context_sources(ledger.db, pid, mid=context_plan.source_key(candidate), cfg=cfg), None)
                     if source is None:
                         return {"status": "source_changed", "done": 0}
                     selected_source[0] = source
                     selected_occurrence[0] = patient_context_refresh_sources._source_occurrence(ledger.db, pid, source)
                     if lane == 'C' and isinstance(saved.get('_source_meta'), dict):
                         prior_meta = saved['_source_meta']
-                        for key in ('contract', 'route_contract', 'provider', 'model', 'source_binding',
-                                    'source_occurrence', 'source_occurrence_version', 'local_fallback', 'cloud_receipts'):
+                        saved_route(prior_meta)
+                        for key in ('source_binding', 'source_occurrence', 'source_occurrence_version', 'cloud_receipts'):
                             if key in prior_meta:
                                 meta[key] = prior_meta[key]
                             else:
@@ -1091,8 +1140,11 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                                     source_binding=selected_occurrence[0]["source_binding"])
                         planned, planned_cursor, _, _, _ = context_plan.scan_plan(source, saved)
                         planned_span = [sum(map(len, planned[:planned_cursor])), sum(map(len, planned[:planned_cursor + 1]))]
-                        prior_unit = patient_context_refresh_state._digest([meta["source_sig"], planned_span, meta["contract"],
-                                              snapshot["contract"].get("provider"), selected_occurrence[0]])
+                        route = snapshot["route"]
+                        # The fresh unit this route would write; a local fallback
+                        # unit keeps its cloud provider and is never this one.
+                        prior_unit = patient_context_refresh_state._unit_key(meta["source_sig"], planned_span, meta["contract"],
+                            route["provider"], None if route["provider"] else route["local_model"], selected_occurrence[0])
                         del planned
                         if ledger.db.execute("SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND "
                                 + current_meta_pred("meta", target=patient_context_refresh_state.CURRENT_VERSION)
@@ -1109,17 +1161,12 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                             unit_key="scan:" + str(context_plan.source_key(source)), mid=source["message_id"] or None, saved=saved)
                         result.update(source_occurrence_version=1, source_occurrence=selected_occurrence[0])
                     else:
+                        # The audit keeps the scan's own backend identity (copied above).
                         result = {**saved, "audited": True, "audited_chunks_sig": saved["_chunks_sig"]}
-                        if not saved.get("_provider_contract") and "provider" in snapshot["contract"]:
-                            meta["route_contract"] = snapshot["contract"]
-                            meta["contract"] = {key: value for key, value in snapshot["contract"].items() if key != "provider"}
-                        if saved.get("_provider_contract"):
-                            meta["provider"] = saved["_provider_contract"]
-                            meta["model"] = saved["_provider_contract"]["model"]
                         # Reconstruct all quotations, refusing stored polarity or
                         # subject rewrites; confidence scores are not evidence.
                         audited_ids = []
-                        for part in patient_context_refresh_sources._source_chunks(ledger.db, pid, source, snapshot["contract"], saved):
+                        for part in patient_context_refresh_sources._source_chunks(ledger.db, pid, source, snapshot["route"], saved):
                             if len(context_plan.validated_source_facts(source, part.get("facts"))) != len(part.get("facts", [])):
                                 raise ValueError("patient_context_audit_mismatch")
                             audited_ids.append(part["_artifact_id"])
@@ -1148,7 +1195,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                                 result["accepted_candidate_ref"] = accepted
                                 result["source_occurrence_version"] = 1
                                 result["source_occurrence"] = patient_context_refresh_sources._source_occurrence(ledger.db, pid, source)
-                                staged = patient_context_refresh_sources._source_repair_chunks(ledger.db, pid, source, snapshot["contract"], accepted)
+                                staged = patient_context_refresh_sources._source_repair_chunks(
+                                    ledger.db, pid, source, context_artifacts.quality_binding(snapshot["route"]), accepted)
                                 result["_audited_chunk_ids"] = [part["_artifact_id"] for part in staged]
                                 result["facts"] = [fact for part in staged for fact in part["facts"]][:context_plan.MAX_SOURCE_FACTS]
                                 result["_chunks_sig"] = accepted["chunks_sig"]
@@ -1185,7 +1233,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         before = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
         ledger.db.execute("BEGIN")
         try:
-            if not patient_context_refresh_sources._source_quality_verified(ledger.db, pid, source, snapshot["contract"], cfg, result):
+            if not patient_context_refresh_sources._source_quality_verified(ledger.db, pid, source, snapshot["route"], cfg, result):
                 return {"status": "source_changed", "done": 0}
             source_pass_content = (patient_context_quality_receipts._quality_pass_content(ledger.db, pid, source_quality_identity)
                                    if not source_quality_skipped else None)
@@ -1310,7 +1358,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 try:
                     repair_verified = patient_context_refresh_readiness._summary_repair_publication(
                         ledger.db, pid, cfg, result, meta, refreshed_quality,
-                        quality_identity['assessment'], snapshot['contract'])
+                        quality_identity['assessment'], snapshot['route'])
                 except (ValueError, TypeError, KeyError, UnicodeError, RecursionError, RuntimeError):
                     repair_verified = False
                 if (problems or not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, live_policy, fresh["sources"])
@@ -1404,10 +1452,11 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     ledger.db.rollback()
                     return {"status": "source_changed", "done": 0}
                 adoption_cfg = patient_context_refresh_state._digest(live_cfg)
-            prior = progress if lane == "A" else saved
+            chosen = lane != "A" and source is not None
+            prior = progress if lane == "A" else (saved or {})
             attempts = prior.get("attempts", 0) + 1 if failure else 0
             retry = {"failure": failure, "held": failure in ("patient_context_unsplittable_assertion", "patient_context_original_unit_unverified"),
-                     "attempts": attempts, "checks": patient_context_refresh_state._CHECKS,
+                     "attempts": attempts, "checks": patient_context_refresh_state._checks(),
                      "failure_at": now if failure else None,
                      "next_try": (now + (86400 if attempts >= 5 else 300 * 2 ** attempts)) if failure else 0}
             progress = {**progress, "last_attempt": now, "last_attempt_unit": rotation.get("units", 0) + 1,
@@ -1421,9 +1470,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     if deferred_reason.startswith("summary_quality_") else None)
             elif lane == "A":
                 progress.pop("quality_state", None)
-            if failure and lane != "A":
+            if failure and chosen:
                 patient_context_refresh_state._replace(ledger, patient_context_refresh_state.SCAN, pid, {**{k: v for k, v in saved.items() if not k.startswith("_")}, **retry}, meta, source["message_id"])
-            if lane == "C" and deferred_reason and deferred_reason.startswith("source_quality_"):
+            if lane == "C" and chosen and deferred_reason and deferred_reason.startswith("source_quality_"):
                 patient_context_refresh_state._replace(ledger, patient_context_refresh_state.SCAN, pid, {**{k: v for k, v in saved.items() if not k.startswith("_")},
                     "audited": False, "quality_state": deferred_reason[len("source_quality_"):],
                     "quality_hold_key": patient_context_refresh_state._source_quality_hold_key(ledger.db, pid, cfg, source, saved["_chunks_sig"]),
@@ -1435,10 +1484,10 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     proof_changed = (prior_meta.get("summary_checked") is not True
                         or prior_meta.get("source_sig") != snapshot["source_sig"]
                         or prior_meta.get("scan_sig") != frozen_scan_sig
-                        or patient_context_refresh_state._route_contract(prior_meta) != snapshot["contract"]
+                        or not patient_context_refresh_state.route_accepts(snapshot["route"], prior_meta)
                         or prior_doc.get("facts_sig") != result.get("facts_sig")
                         or prior_doc.get("summary") != result.get("summary"))
-                    saved_scans = patient_context_refresh_sources._current_scans(ledger.db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
+                    saved_scans = patient_context_refresh_sources._current_scans(ledger.db, pid, snapshot["sources"], snapshot["route"], cfg=cfg)
                     audited = all(patient_context_refresh_sources._scan_ready(saved_scans.get(context_plan.source_key(s), {}))
                                   for s in snapshot["sources"] if context_plan.source_usable(s))
                     intact = patient_context_refresh_state._sources_intact(snapshot["sources"]) and snapshot["attachment_coverage"]["complete"]

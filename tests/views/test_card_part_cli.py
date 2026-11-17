@@ -239,3 +239,58 @@ def test_lineworks_absence_keeps_duplicate_risk_gate(led, tmp_path, monkeypatch,
                           'card_part_resolve', '--confirm-human']) == 1
     assert json.loads(capsys.readouterr().out)['error'] == 'duplicate_risk_acknowledgement_required'
     assert not list(inbox.iterdir())
+
+
+def _control_actions():
+    parser = mcs_view._parser()
+    kinds = next(a for a in parser._actions if a.dest == 'kind').choices
+    return set(next(a for a in kinds['control']._actions if a.dest == 'action').choices)
+
+
+def test_recovery_parts_summary_is_read_only_and_page_independent(led, tmp_path, monkeypatch, capsys):
+    import hashlib
+    import mcs_util
+    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda: CFG)
+    req = prepare(led)
+    snap = snapshot(led, tmp_path)
+    inbox = tmp_path / 'cmd'
+    inbox.mkdir()
+    common = ['--snapshot', snap, '--cmd-dir', str(inbox)]
+    digest = hashlib.sha256(open(snap, 'rb').read()).hexdigest()
+    actions = _control_actions()
+    assert mcs_view.main(common + ['recovery_parts']) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert mcs_view.main(common + ['recovery_parts', '--offset', '5']) == 0
+    second = json.loads(capsys.readouterr().out)
+    assert {'total', 'offset', 'limit', 'truncated', 'items', 'summary'} == set(first)
+    for key in ('status', 'active', 'population', 'note'):
+        assert key in first['summary']
+    assert first['summary']['active']['by_state']['unknown'] >= 1
+    assert first['summary']['population']['status'] == 'recorded'
+    assert any(item['delivery_id'] == req['delivery_id'] for item in first['items'])
+    assert first['summary'] == second['summary']
+    assert hashlib.sha256(open(snap, 'rb').read()).hexdigest() == digest
+    assert not list(inbox.iterdir())
+    # the breakdown adds no write action: approval stays one human-confirmed command
+    assert actions == _control_actions() == {
+        'scan', 'retry', 'pause', 'resume', 'adopt_summary', 'signal_dismiss', 'signal_policy',
+        'refstat_approve', 'card_resolve', 'card_part_resolve', 'card_part_tracking_ack',
+        'attachment_identity_confirm'}
+
+
+def test_recovery_parts_summary_is_unknown_when_tracking_receipts_overflow(led, tmp_path, monkeypatch, capsys):
+    import mcs_util
+    import notify_tracking_ack
+    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda: CFG)
+    prepare(led)
+    snap = snapshot(led, tmp_path)
+
+    def overflow(db):
+        raise ValueError('tracking_ack_observation_incomplete')
+
+    monkeypatch.setattr(notify_tracking_ack, 'receipt_targets', overflow)
+    assert mcs_view.main(['--snapshot', snap, 'recovery_parts']) == 0
+    page = json.loads(capsys.readouterr().out)
+    assert page['summary'] == {'status': 'unknown', 'reason': 'tracking_ack_observation_incomplete',
+                               'note': 'plan_eligibility_only_not_delivery_proof'}
+    assert isinstance(page['items'], list) and page['total'] >= 1

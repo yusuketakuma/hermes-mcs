@@ -1,0 +1,26 @@
+{
+  "category": "changed",
+  "title": "患者コンテキストの契約を走査と概況に分け、ローカルのモデル名で成果物が失効しないようにする",
+  "summary": "この版を入れると、既存の患者コンテキストの調査結果と概況は契約の変更で一度無効になり、作り直しが終わるまで患者の概況は表示されません。予定している1回の消去と作り直しで回収します。以後はローカルのモデルを変えてもクラウドで作った結果は失効せず、概況の選択や依存喪失だけの変更では資料の走査をやり直しません（時点解釈の変更は、添付の走査入力を内容で束縛する次の段階まで走査もやり直します）。",
+  "upgrade": "この版は単独で配備せず、P0 の各版と v2 をまとめて配備した後の1回の消去と作り直しで回収します。配備から作り直しまでは extract.patient_context.enabled=false と、人の確認つきの cloud-llm stop（--confirm-human・--reason）を保ってください。gateway の再起動が必要です。添付の抽出は、P0 の各版をまとめて配備した場合に1回だけ通常の処理で再実行されます。クラウドの再抽出も行う場合は、作り直しの前に cloud-llm resume で添付の抽出が落ち着くまで待ち、その後 cloud-llm stop・context-reset・設定の有効化・cloud-llm resume の順に進めます。意味解析の再処理の完了確認も1回やり直されます。",
+  "details": [
+    "走査契約は分割・引用検証と走査の処理のhashと各版だけを持ち、ローカルのモデル名と処理先を含めない。",
+    "要約契約 patient-context-summary/1 を新設し、入力署名に含める。レーン巡回と予定組みは被覆から外す。",
+    "走査の事実に temporal を保存せず、読むときに要約側で付ける。",
+    "成果物ごとに provenance {backend, model, profile} を保存し、受け入れる出所と照合する。ローカル代替の資料はローカルのモデルを変えると作り直す。ローカル代替の単位はクラウドの処理先を識別に含め、ローカル経路へ戻ったときの再走査を再送扱いで止めない。",
+    "添付抽出の契約から患者コンテキスト専用のモジュールを外す。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_refresh_state.py",
+    "mcs/patients/patient_context_refresh_sources.py",
+    "mcs/patients/patient_context_refresh_readiness.py",
+    "mcs/patients/patient_context_refresh.py",
+    "mcs/patients/patient_context_plan.py",
+    "mcs/patients/patient_context_projection.py",
+    "mcs/core/patient_context_artifacts.py",
+    "mcs/core/inference_dependency_loss.py",
+    "mcs/extract/attachment_extraction.py",
+    "mcs/semantic/semantic_reprocess.py",
+    "docs/specs/patient-context.md"
+  ]
+}

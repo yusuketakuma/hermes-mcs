@@ -44,6 +44,7 @@ from cloud_usage_accounting import (
     _BINDING_KEYS as _BINDING_KEYS,
     _decimal as _decimal,
     pricing_valid as pricing_valid,
+    current_price_version as current_price_version,
     price_info as price_info,
     _texts as _texts,
     input_bound as input_bound,
@@ -52,6 +53,9 @@ from cloud_usage_accounting import (
     usage_cost as usage_cost,
     _unbilled as _unbilled,
     _periods as _periods,
+    CARRYOVER_KIND as CARRYOVER_KIND,
+    carryover_entries as carryover_entries,
+    carryover_marker as carryover_marker,
     _loads as _loads,
     _accounting_meta as _accounting_meta,
     _accounting_snapshot as _accounting_snapshot,
@@ -88,7 +92,8 @@ from cloud_history_scope import (
     history_selection_check as history_selection_check,
 )
 from llm_retry import http_error
-from mcs_util import canonical, private_env_value, payload_hash, strict_json, until_epoch, valid_hash
+from mcs_util import (canonical, private_env_problem, private_env_value, payload_hash, strict_json,
+                      until_epoch, valid_hash)
 
 # Compatibility aliases: immutable versioned definitions live with providers.
 # Conservative bound covering decimal/binary interpretations of the public 1M label.
@@ -322,7 +327,12 @@ def provider_key(provider, root=None):
 
 
 def resolve_settings(cfg, root=None, *, available_providers=None):
-    """Choose a configured provider by key availability; never retry a paid unit elsewhere."""
+    """Choose a configured provider by key availability and facility approval; never retry a paid unit elsewhere."""
+    return resolve_selection(cfg, root, available_providers=available_providers)[:2]
+
+
+def resolve_selection(cfg, root=None, *, available_providers=None):
+    """:func:`select_settings` on this installation's keys and review record."""
     if available_providers is not None and (
             type(available_providers) is not tuple
             or any(type(name) is not str or name not in PROVIDERS for name in available_providers)
@@ -331,15 +341,56 @@ def resolve_settings(cfg, root=None, *, available_providers=None):
     def key_present(name):
         return (bool(provider_key(name, root)) if available_providers is None
                 else name in available_providers)
+    import external_transfer
+    return select_settings(cfg, key_present, lambda: external_transfer.status(root))
+
+
+def select_settings(cfg, key_present, transfer_status):
+    """Pick the provider and mode from a key-presence check and the facility review.
+
+    Returns ``(settings, errors, held)``. ``key_present(name)`` may read a key
+    file; it is asked at most once per provider. ``transfer_status()`` returns
+    :func:`external_transfer.status` and is read only when the cloud could be
+    on. While a review record exists, a provider the facility has not
+    approved never sends, whether the mode is omitted or explicit: its mode
+    resolves to ``off`` and ``held`` names it. ``auto`` prefers the first
+    provider in ``provider_order`` with both a key and approval and otherwise
+    keeps the key-only pick. Without a record (installations from before the
+    review) the review allows every provider, so nothing changes there; an
+    explicit ``off`` always stays off. A changed review can therefore change
+    the auto provider and the scope generation."""
+    import external_transfer
     c, errors = cloud_config(cfg)
+    block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
+    explicit = isinstance(block, dict) and "mode" in block
+    seen, review = {}, []
+
+    def keyed(name):
+        if name not in seen:
+            seen[name] = bool(key_present(name))
+        return seen[name]
+
+    def allowed(name):
+        if not review:
+            review.append(transfer_status())
+        return external_transfer.service_allowed(review[0], name)
+    automatic = not explicit and not errors
+    wanted = automatic or explicit and c["mode"] != "off"
     provider = c["provider"]
     if provider == "auto":
-        provider = next((name for name in c["provider_order"] if key_present(name)), c["provider_order"][0])
-    block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
-    if (block is None or isinstance(block, dict) and "mode" not in block) and not errors:
-        import external_transfer
-        c, errors = cloud_config(cfg, key_present=key_present(provider)
-                                 and external_transfer.auto_enable_allowed(provider, root))
+        order = c["provider_order"]
+        provider = None
+        if wanted:
+            provider = next((name for name in order if keyed(name) and allowed(name)), None)
+        if provider is None:
+            provider = next((name for name in order if keyed(name)), order[0])
+    held = None
+    if automatic:
+        on = keyed(provider) and allowed(provider)
+        c, errors = cloud_config(cfg, key_present=on)
+        held = provider if keyed(provider) and not on else None
+    elif wanted and not allowed(provider):
+        c["mode"], held = "off", provider
     c["provider"] = provider
     if isinstance(block, dict) and "model" in block:
         try:
@@ -349,7 +400,7 @@ def resolve_settings(cfg, root=None, *, available_providers=None):
             errors.append("config: cloud_llm_model_invalid")
     else:
         c["model"] = PROVIDERS[provider]
-    return c, errors
+    return c, errors, held
 
 
 def resolve_profile(cfg, *, route, purpose, root=None):
@@ -413,12 +464,77 @@ def profile_for_settings(cfg, settings, *, route, purpose):
         "profile": profile}), []
 
 
+_ROUTE_PURPOSES = (("reextract", ("backlog", "quality_repair")),
+                   ("semantic_backlog", ("backlog", "quality_repair")),
+                   ("patient_context", ("patient_context", "quality_repair")))
+
+
+def configured_models(cfg, settings):
+    """Every model this configuration can send to: the default and each route purpose's profile."""
+    models = {settings["model"]}
+    for route, purposes in _ROUTE_PURPOSES:
+        for purpose in purposes:
+            selection, errors = profile_for_settings(cfg, settings, route=route, purpose=purpose)
+            if selection is not None and not errors:
+                models.add(selection["model"])
+    return sorted(models)
+
+
+def earliest_price_info(cfg, settings, now=None):
+    """price_info of the configured model whose table runs out first (an expired one first)."""
+    infos = [{**price_info(model, now), "price_model": model} for model in configured_models(cfg, settings)]
+    return min(infos, key=lambda info: (info["price_valid"], info["price_valid_until"], info["price_model"]))
+
+
 def selected_key(root=None, cfg=None):
     if cfg is None:
         from mcs_util import load_config
         cfg = load_config()
     settings, _ = resolve_settings(cfg, root)
     return provider_key(settings["provider"], root)
+
+
+def selected_key_problem(root, cfg):
+    """None when the selected provider's key is usable, else the fixed reason it is not."""
+    settings, _ = resolve_settings(cfg, root)
+    env = anthropic_client.KEY_ENV if settings["provider"] == "anthropic" else openai_client.KEY_ENV
+    return private_env_problem(env, root)
+
+
+# The send-block codes refusal_code names more precisely; every other code is already final.
+REFINED_CODES = frozenset({"pricing_unverified", "window_history_unverified", "scope"})
+
+
+def refusal_code(cfg, code, *, model, root=None, settings=None):
+    """Name a send-block code the way the stop-reason classifier tells definitive from transient.
+
+    ``cfg`` is the raw configuration (an explicit ``mode`` and the facility review are read
+    from it); ``settings``, when given, are the resolved settings the code was judged under.
+    An expired price table, an aged period, an explicit mode off and a provider the facility
+    review has not approved are definitive. An unverifiable price or period history, a
+    computed off (the key problem, else ``unknown``) and an unreadable review record are not.
+    Every other code is returned as it is."""
+    try:
+        if code == "pricing_unverified":
+            return "price_expired" if not pricing_valid(model=model) else code
+        if code == "window_history_unverified":
+            aged = setting_block_reason(_cfg(cfg) if settings is None else settings) == code
+            return "window_history_aged" if aged else "window_history_pruned"
+        if code == "scope":
+            resolved, _, held = resolve_selection(cfg, root)
+            if held is not None:
+                import external_transfer
+                unreadable = external_transfer.status(root).get("state") == "unreadable"
+                return "transfer_review_unreadable" if unreadable else "provider_not_approved"
+            block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
+            if isinstance(block, dict) and block.get("mode") == "off":
+                return "mode_off"
+            if resolved["mode"] == "off":
+                # computed off: a mode left out with no usable key, or a configuration error
+                return selected_key_problem(root, cfg) or "unknown"
+    except Exception:
+        return {"window_history_unverified": "window_history_pruned", "scope": "unknown"}.get(code, code)
+    return code
 
 
 def send_route(route):
@@ -845,8 +961,46 @@ def _observe_recovery(observation, path):
         pass
 
 
-def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallback=False):
-    """Keep an unresolved or already answered logical request from being sent again."""
+# A request without its result is replaced by local work only after the longest live send and
+# adoption could still land it: the attempt's own wait plus the 900 s unit deadline and the
+# commit margin. The adoption fence (_published_version) covers a suspended clock.
+RESULT_STALE_MARGIN_S = 905
+# Dispositions that end a reservation without an adopted answer; none of them permits a resend.
+SUPERSEDED_LOCAL = "superseded_local"
+_INLINE_DISPOSITIONS = frozenset({"discarded_scope", "discarded_workday"})
+_ENDED_DISPOSITIONS = _INLINE_DISPOSITIONS | {SUPERSEDED_LOCAL}
+
+
+def _result_stale(row, previous, now):
+    """True once a reservation without its result is past the replacement threshold; never raises."""
+    try:
+        timeout = previous.get('timeout_seconds')
+        if type(timeout) not in (int, float) or not math.isfinite(timeout) \
+                or not 0 < timeout <= cloud_client.ATTEMPT_TIMEOUT_CEILING:
+            timeout = cloud_client.ATTEMPT_TIMEOUT_CEILING
+        created = row['created_at']
+        current = time.time() if now is None else now
+        if (type(created) not in (int, float) or not math.isfinite(created)
+                or type(current) not in (int, float) or not math.isfinite(current)):
+            return False
+        return created + timeout + RESULT_STALE_MARGIN_S <= current
+    except Exception:
+        return False
+
+
+def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallback=False,
+                            supersede=None, now=None):
+    """Keep an unresolved or already answered logical request from being sent again.
+
+    With ``supersede`` (a list; patient-context local fallback only) the guard also judges
+    which paid requests local work may replace. A reservation already ended by a disposition,
+    or whose result carries a discarded one, passes without a new row. A verified same request
+    of this unit key (a settled repeat, or a result still missing past
+    :data:`RESULT_STALE_MARGIN_S`) is appended to the list instead of refusing. Everything else
+    refuses exactly as without it. Without ``local_fallback`` the clock is never read."""
+    if supersede is not None and (type(supersede) is not list or not local_fallback
+                                  or candidate.get('route') != 'patient_context'):
+        raise ValueError('cloud_supersede_scope_invalid')
     rows = _verified_request_history(ledger, route=candidate['route'],
         project_id=candidate['project_id'], message_id=candidate['message_id'],
         unit_key=candidate['unit_key'])
@@ -856,6 +1010,7 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
     for row in rows:
         refusal = None
         guard_match = None
+        superseded = stale = None
         try:
             previous = _receipt_meta(row['meta'])
             maximum = _reserve_valid(previous, row)
@@ -873,6 +1028,9 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                     and candidate['unit_key'] == 'summary' and old_fp != new_fp):
                 new_fp = _context_summary_fallback_fp(current_body, previous)
             prompt_verified = False
+            # Only this unit key's own requests are replaced: another unit (another source,
+            # contract or provider) holding the same prompt keeps its refusal.
+            own_unit = previous.get('unit_key') == candidate['unit_key']
             if old_fp is not None and new_fp is not None:
                 if old_fp != new_fp:
                     continue
@@ -898,7 +1056,7 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
             # token-limit change cannot prove that their prompt is different.
             if result_map is None:
                 result_map = {}
-                disposition_ids = set()
+                disposition_ids = {}
                 results = ledger.db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
                     "FROM artifacts WHERE kind IN (?,?) AND project_id=? AND (message_id IS ? OR ?='semantic_backlog') "
                     "ORDER BY artifact_id",
@@ -910,18 +1068,38 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                     if result_row['kind'] == 'cloud_usage_disposition':
                         if not isinstance(reservation_id, str) or re.fullmatch(r'[0-9a-f]{32}', reservation_id) is None:
                             raise ValueError('invalid_disposition')
-                        disposition_ids.add(reservation_id)
+                        value = result_meta.get('disposition')
+                        # an unreadable value is kept as None: it blocks and never raises here
+                        disposition_ids.setdefault(reservation_id, set()).add(
+                            value if type(value) is str else None)
                     else:
                         result_map.setdefault(reservation_id, []).append((result_meta, result_row))
             if previous['reservation_id'] in disposition_ids:
+                ended = disposition_ids[previous['reservation_id']]
+                if local_fallback and candidate['route'] == 'patient_context':
+                    # Local work already replaced this request; it is never sent again.
+                    if ended == {SUPERSEDED_LOCAL}:
+                        continue
+                    # First disposition wins: an ended request needs no new row.
+                    if supersede is not None and ended <= _ENDED_DISPOSITIONS:
+                        continue
+                superseded = SUPERSEDED_LOCAL in ended
                 refusal = 'disposition'
                 raise ValueError('discarded')
             matches = result_map.get(previous['reservation_id'], [])
             if not matches:
                 refusal = 'result_missing'   # no result yet: the send's outcome is unknown, not a broken receipt
+                if local_fallback:
+                    stale = _result_stale(row, previous, now)
+                    if supersede is not None and prompt_verified and own_unit and stale:
+                        supersede.append(_accounting_meta(row['meta']))
+                        continue
             _, settled = _settled(previous, maximum, matches)
             result = matches[0][0]
             if result.get('disposition'):
+                # record_result writes only a discarded value inline; anything else blocks
+                if supersede is not None and result['disposition'] in _INLINE_DISPOSITIONS:
+                    continue
                 refusal = 'disposition'
                 raise ValueError('discarded')
             http_class = result.get('http_class')
@@ -942,10 +1120,17 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
             refusal = ('repeat_unsettled' if not settled else
                        'repeat_success' if (result.get('usage') is not None and result.get('http_class') == 'http_200'
                                             and result.get('error_kind') is None) else 'repeat_failed')
+            if supersede is not None and prompt_verified and own_unit:
+                supersede.append(_accounting_meta(row['meta']))
+                continue
             raise ValueError('already_sent_or_unknown')
         except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
             error = _classified(AnthropicError('budget_exceeded', 'cloud_unit_unresolved'),
                                 refusal or 'receipt_inconsistent')
+            if refusal == 'disposition':
+                error.history_superseded = superseded is True
+            elif refusal == 'result_missing' and local_fallback:
+                error.history_stale = stale is True
             if candidate['route'] == 'reextract' and candidate.get('message_id') is not None and guard_match:
                 try:
                     error.history_observation = _repeat_observation(previous, candidate, guard_match)
@@ -1023,8 +1208,14 @@ def guard_context_origins(ledger, project_id, origins):
                     or reservation['model'] != model or witness is not None and proof['witness'] != witness):
                 raise ValueError('patient_context_cloud_source_unverified')
 
-def guard_local_fallback(ledger, *, route, project_id, message_id, unit_key, request_factory):
-    """Prove local substitution safe without sending, reserving, or changing accounting."""
+def guard_local_fallback(ledger, *, route, project_id, message_id, unit_key, request_factory,
+                         allow_supersede=False):
+    """Prove local substitution safe without sending, reserving, or changing accounting.
+
+    ``allow_supersede`` (patient context only) also passes the paid requests that
+    :func:`supersede_local_tx` would record as replaced; it still writes nothing."""
+    if allow_supersede and route != 'patient_context':
+        raise ValueError('cloud_supersede_scope_invalid')
     with _accounting_snapshot(ledger.db):
         rows = _verified_request_history(ledger, route=route, project_id=project_id,
                                         message_id=message_id, unit_key=unit_key)
@@ -1032,7 +1223,57 @@ def guard_local_fallback(ledger, *, route, project_id, message_id, unit_key, req
             raise AnthropicError('budget_exceeded', 'cloud_unit_unresolved')
         if rows:
             candidate, body = request_factory()
-            _guard_repeated_request(ledger, candidate, current_body=body, local_fallback=True)
+            _guard_repeated_request(ledger, candidate, current_body=body, local_fallback=True,
+                                    **({'supersede': []} if allow_supersede else {}))
+
+
+def supersede_local_tx(ledger, *, route, project_id, message_id, unit_key, request_factory, now=None):
+    """Record this unit key's verified paid requests as replaced by local work, in the caller's transaction.
+
+    Appends one ``superseded_local`` disposition per replaced reservation and returns their
+    artifact ids, each a newly written row; reservation and result rows, and so every total,
+    stay as they are. The targets are what ``guard_local_fallback(allow_supersede=True)``
+    passes with a replacement: same-prompt requests whose stored ``unit_key`` is this one, at
+    any age. Any refusal, by the guard or by a write, raises with none of this call's rows
+    left in the transaction. The caller commits them together with the local result."""
+    if not ledger.db.in_transaction:
+        raise RuntimeError('cloud_disposition_transaction_required')
+    if route != 'patient_context':
+        raise ValueError('cloud_supersede_route_invalid')
+    with _accounting_snapshot(ledger.db):
+        rows = _verified_request_history(ledger, route=route, project_id=project_id,
+                                        message_id=message_id, unit_key=unit_key)
+        if _tally(ledger).invalid:
+            raise AnthropicError('budget_exceeded', 'cloud_unit_unresolved')
+        if not rows:
+            return []
+        candidate, body = request_factory()
+        targets = []
+        _guard_repeated_request(ledger, candidate, current_body=body, local_fallback=True,
+                                supersede=targets, now=now)
+        written, seen = [], set()
+        ledger.db.execute('SAVEPOINT cloud_supersede_local')
+        try:
+            for reservation in targets:
+                if reservation['reservation_id'] not in seen:
+                    seen.add(reservation['reservation_id'])
+                    written.append(record_disposition_tx(ledger, reservation, SUPERSEDED_LOCAL))
+        except BaseException:
+            ledger.db.execute('ROLLBACK TO cloud_supersede_local')
+            ledger.db.execute('RELEASE cloud_supersede_local')
+            raise
+        ledger.db.execute('RELEASE cloud_supersede_local')
+        return written
+
+
+def unit_reserved(db, *, route, project_id, message_id, unit_key):
+    """True when this unit key has any reservation for the message; an unreadable one counts."""
+    return db.execute(
+        "SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND message_id IS ? AND "
+        "CASE WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
+        "WHEN json_type(meta)!='object' THEN 1 "
+        "ELSE json_extract(meta,'$.route') IS ? AND json_extract(meta,'$.unit_key') IS ? END LIMIT 1",
+        (KINDS[0], project_id, message_id, route, unit_key)).fetchone() is not None
 
 def usage_report(ledger, *, now=None, period="month"):
     """Aggregate JST attempts; ambiguous results retain the full reserved amount.
@@ -1105,6 +1346,16 @@ def _usage_report_snapshot(ledger, *, now=None, period="month"):
                 _settled(prior[0][0], _reserve_valid(*prior[0]), results[rid])
             except (AnthropicError, ValueError, InvalidOperation, TypeError):
                 invalid = True
+        for at, provider, requests, cost, done in carryover_entries(ledger.db, day if period == "day" else month):
+            daily += requests * int(at >= day)
+            total += cost
+            providers.setdefault(provider, {"cost_usd": Decimal(0), "unresolved_requests": 0})
+            providers[provider]["cost_usd"] += cost
+            if done:
+                settled += cost
+            else:
+                unknown += requests
+                providers[provider]["unresolved_requests"] += requests
         return {"daily_requests": daily, "monthly_cost_usd": str(total),
                 "settled_cost_usd": str(settled), "max_reserved_cost_usd": str(total - settled),
                 "unresolved_requests": unknown, "pricing_unverified": invalid,
@@ -1174,6 +1425,7 @@ class _Tally:
         self.provider_totals = {}
         self.total = Decimal(0)
         self.invalid = False
+        self.carried = None   # carry-over marker the totals include; None until first read
 
     def _add(self, day, cost, provider):
         self.days.setdefault(day, [0, Decimal(0)])[1] += cost
@@ -1204,6 +1456,14 @@ class _Tally:
         return digest.digest()
 
     def update(self, ledger, now):
+        if self.carried is None:
+            # Rows a reset deleted after this tally's last_id leave no fingerprint
+            # change; _current_tally rebuilds on a changed carry-over marker instead.
+            self.carried = carryover_marker(ledger.db)
+            for at, provider, requests, cost, _settled_group in carryover_entries(ledger.db, self.month):
+                day = _periods(at)[0]
+                self.days.setdefault(day, [0, Decimal(0)])[0] += requests
+                self._add(day, cost, provider)
         last_id = self.last_id
         new_orphans = {}
         changed_orphans = set()
@@ -1294,6 +1554,7 @@ def _current_tally(ledger, start, attribute, now):
         with _accounting_snapshot(ledger.db):
             _validate_accounting_timestamps(ledger.db)
             if (tally is None or tally.connection is not ledger.db or tally.month != start or tally.invalid
+                    or tally.carried != carryover_marker(ledger.db)
                     or (tally.prefix is not None and tally.prefix != tally.fingerprint(ledger, now))):
                 tally = _Tally(start, ledger.db)
                 setattr(ledger, attribute, tally)
@@ -1560,13 +1821,15 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
         if ledger.db.in_transaction:
             raise AnthropicError("budget_exceeded", "owner_transaction_active")
         bound, tokens, model = input_bound(body), meta['max_tokens'], meta['model']
+        # one clock read: the maximum and the recorded table must come from the same JST day
+        now = time.time()
         try:
-            maximum = max_cost(tokens, input_bound=bound, model=model)
+            maximum = max_cost(tokens, input_bound=bound, model=model, now=now)
         except AnthropicError as error:
             _circuit_result(ledger, error)
             raise
         meta.update(reservation_id=uuid.uuid4().hex,
-                    price_version=_price_definition(model)["price_version"],
+                    price_version=_price_definition(model, now=now)["price_version"],
                     max_cost_usd=str(maximum), input_bound=bound,
                     input_chars=sum(len(text) for text in _texts(body)), timeout_seconds=float(timeout))
 
@@ -1651,9 +1914,11 @@ def recover_response(ledger, *, route, project_id, message_id, unit_key, input_b
             # Reasons surfaced below are proven by checks recover_response
             # already performs; a bare ValueError from the shared settlement
             # proof stays an ambiguous receipt, never permission to resend.
+            ended = ('cloud_result_superseded' if dispositions and all(
+                         _accounting_meta(item['meta']).get('disposition') == SUPERSEDED_LOCAL
+                         for item in dispositions) else 'cloud_result_discarded')
             if not results:
-                raise ValueError('cloud_result_discarded' if dispositions
-                                 else 'cloud_result_missing')
+                raise ValueError(ended if dispositions else 'cloud_result_missing')
             matches = [(_receipt_meta(r['meta']), r) for r in results]
             try:
                 _, settled = _settled(reservation, maximum, matches)
@@ -1664,7 +1929,7 @@ def recover_response(ledger, *, route, project_id, message_id, unit_key, input_b
                     and not dispositions):
                 continue
             if dispositions:
-                raise ValueError('cloud_result_discarded')
+                raise ValueError(ended)
             result_meta = matches[0][0]
             if (not settled or result_meta.get('http_class') != 'http_200'
                     or result_meta.get('error_kind') or result_meta.get('disposition')):
@@ -1693,7 +1958,10 @@ def record_result(ledger, reservation, metadata, *, answer=None):
     from semantic_runtime import reserve_artifact, _record_cloud_circuit_result_tx
     error_kind = metadata.get("error_kind")
     http_class = metadata.get("http_class")
-    if http_class == "http_200" and metadata.get("usage") is None:
+    if (http_class == "http_200" and metadata.get("usage") is None
+            and error_kind != cloud_client.RESPONSE_TOO_LARGE):
+        # An oversized response is the reader's own bound, not a failed price check: it is
+        # charged at the reserved maximum and stays unsettled without stopping other sends.
         error_kind = "pricing_unverified"
     error = None
     if error_kind:
@@ -1802,17 +2070,38 @@ def record_result(ledger, reservation, metadata, *, answer=None):
         raise AnthropicError("pricing_unverified", "usage_unknown")
 
 
+def _superseded_disposition(ledger, reservation):
+    """True when the reservation's one disposition row is a local replacement; never raises."""
+    try:
+        rows = _matching_bound_rows(ledger, "cloud_usage_disposition", reservation["reservation_id"])
+        return len(rows) == 1 and _loads(rows[0]["meta"]).get("disposition") == SUPERSEDED_LOCAL
+    except Exception:
+        return False
+
+
 def record_disposition_tx(ledger, reservation, disposition):
-    """Record a discarded unit in its owner's transaction without changing billing."""
+    """Record a discarded or locally replaced unit in its owner's transaction without changing billing.
+
+    The first disposition wins: discarding a reservation already replaced by local work
+    writes nothing and returns the existing row. A replacement by local work finds its
+    reservation at any age, as the guard that chose it does (maintenance keeps receipts a
+    current patient context cites past the usage window); a discard needs a retained one."""
     if not ledger.db.in_transaction:
         raise RuntimeError("cloud_disposition_transaction_required")
-    if disposition not in ("discarded_scope", "discarded_workday"):
+    if disposition not in _ENDED_DISPOSITIONS:
         raise ValueError("cloud_disposition_invalid")
-    _stored_reservation(ledger, reservation)
+    if disposition == SUPERSEDED_LOCAL or _superseded_disposition(ledger, reservation):
+        _stored_reservation(ledger, reservation, bound_only=True, retained=False)
+        existing = _matching_bound_rows(ledger, "cloud_usage_disposition", reservation["reservation_id"])
+    else:
+        _stored_reservation(ledger, reservation)
+        existing = _matching_rows(ledger, "cloud_usage_disposition", reservation["reservation_id"])
     meta = _receipt_binding(reservation)
     meta["disposition"] = disposition
-    existing = _matching_rows(ledger, "cloud_usage_disposition", reservation["reservation_id"])
     if existing:
+        if (len(existing) == 1 and disposition != SUPERSEDED_LOCAL
+                and _loads(existing[0]["meta"]) == {**meta, "disposition": SUPERSEDED_LOCAL}):
+            meta["disposition"] = SUPERSEDED_LOCAL
         if (len(existing) != 1 or _loads(existing[0]["meta"]) != meta
                 or existing[0]["project_id"] != reservation["project_id"]
                 or existing[0]["message_id"] != reservation.get("message_id")

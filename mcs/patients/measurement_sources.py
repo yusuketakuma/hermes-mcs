@@ -345,7 +345,6 @@ def _canonical_measurements(db, message, projection_row, cfg, patient_name):
     import semantic_policy
     import semantic_projection
     import semantic_store
-    import semantic_transport
     import semantic_publication
 
     # Explicit mode prevents the omitted-mode API-key probe. Canonical promotion
@@ -360,8 +359,7 @@ def _canonical_measurements(db, message, projection_row, cfg, patient_name):
     binding = inference_dependency_loss.source_binding(db, pid, mid)
     if not binding or meta.get("source_binding") != binding:
         return None, 0
-    bundle = semantic_store.thread_bundle(db, pid, message.get("parent_id") or mid,
-                                          local_model=semantic_transport.llm_model(cfg))
+    bundle = semantic_store.thread_bundle(db, pid, message.get("parent_id") or mid)
     if (bundle is None or bundle.get("source_fingerprint") != meta.get("fingerprint")
             or semantic_policy.policy_fingerprint(policy) != meta.get("policy_fingerprint")):
         return None, 0

@@ -65,6 +65,7 @@ import health_report
 import local_backup
 import maintenance
 import notify_flush
+import run_interrupt
 
 # canonical run-lock path lives in writer_lock; the local alias keeps the
 # module attribute names (monkeypatch surface for tests) unchanged
@@ -878,7 +879,7 @@ def _run_semantic(ledger, args, cfg, result, deadline, sem_on,
     lost = result["semantic"].get("run_lock_lost")
     if lost:
         # the drain stopped without touching its job; end the tick
-        raise RunLockLost(held=lost == "held")
+        raise RunLockLost(held=lost == "held", updated=lost == "updated")
 
 
 def _hard_deadline() -> float | None:
@@ -1245,13 +1246,41 @@ def _fail_run(ledger, args, result, run_id, status, error, detail,
         result["errors"].append(f"alert_enqueue_failed: {type(e).__name__}")
 
 
-def _arm_watchdog(deadline: float, grace_s: int) -> None:
-    """Exit a wedged tick after its deadline and explicit operator grace."""
+def _arm_watchdog(deadline: float, grace_s: int, evidence=None) -> None:
+    """Exit a wedged tick after its deadline and explicit operator grace.
+
+    With ``evidence`` the traceback goes to its private dump file (the next
+    run proves the watchdog exit from it and copies it to the log) and the
+    exit time is recorded; otherwise to stderr as before."""
     import faulthandler
     global _WATCHDOG_EXIT_AT
     delay = max(0.001, deadline - time.monotonic() + grace_s)
     _WATCHDOG_EXIT_AT = time.monotonic() + delay
-    faulthandler.dump_traceback_later(delay, exit=True)
+    dump = getattr(evidence, "dump", None)
+    if dump is None:
+        faulthandler.dump_traceback_later(delay, exit=True)
+        return
+    faulthandler.dump_traceback_later(delay, exit=True, file=dump)
+    evidence.armed(time.time() + delay)
+
+
+def _bind_evidence(ledger, evidence, run_id, interrupt) -> None:
+    """Tie this run's evidence to its row and keep the evidence folder bounded.
+
+    Runs right after begin_run, under the run lock: every finished watchdog
+    traceback of earlier runs goes to stderr (the run log) before pruning,
+    labelled with its run when proven for a row and as unmatched otherwise."""
+    run_interrupt.transcribe(interrupt, sys.stderr)
+    if evidence is None:
+        return
+    try:
+        row = ledger.db.execute(
+            "SELECT started_at FROM runs WHERE run_id=?", (run_id,)).fetchone()
+    except sqlite3.Error:
+        row = None
+    if row is not None:
+        evidence.bind(run_id, row[0])
+    run_interrupt.prune(os.path.join(HOME, "data"), own=evidence.stem, stream=sys.stderr)
 
 
 def _disarm_watchdog() -> None:
@@ -1408,9 +1437,11 @@ def _main() -> int:
         return _consent_only(lock_fd)
     adapter = MCSAdapter(token_cache=CACHE)
     adapter.set_deadline(deadline)
+    # this process's own interruption evidence; None never blocks the run
+    evidence = run_interrupt.open_evidence(os.path.join(HOME, "data"))
     watchdog_armed = args.watchdog_grace is not None
     if args.watchdog_grace is not None:
-        _arm_watchdog(deadline, args.watchdog_grace)
+        _arm_watchdog(deadline, args.watchdog_grace, evidence)
     try:
         ledger = Ledger(
             DB, notify_all_replies=(not args.jobs_only
@@ -1421,6 +1452,8 @@ def _main() -> int:
     except Exception:
         if watchdog_armed:
             _disarm_watchdog()
+        if evidence is not None:
+            evidence.close()
         os.close(lock_fd)
         print(json.dumps({"ok": False, "error": "ledger_init_failed"}))
         return 1
@@ -1431,9 +1464,14 @@ def _main() -> int:
               "marked_read": [], "notify": {}, "errors": []}
     cfg = health_report.CONFIG_NOT_LOADED
     try:
+        interrupt = run_interrupt.Classifier(
+            os.path.join(HOME, "data"),
+            own=evidence.stem if evidence is not None else None)
         run_id = ledger.begin_run(
-            None, kind="deep" if args.jobs_only else "tick")
+            None, kind="deep" if args.jobs_only else "tick",
+            interrupt_reason=interrupt)
         result["run_id"] = run_id
+        _bind_evidence(ledger, evidence, run_id, interrupt)
         cfg = _config()
         sem_on = _semantic_enabled(ledger, cfg, result)
         notify_max_age_s = _notify_max_age_s(cfg, result)
@@ -1495,12 +1533,17 @@ def _main() -> int:
         _write_health(ledger, result, status, run_id=run_id, cfg=cfg)
         _require_closed_transaction(ledger, result)
     except RunLockLost as e:
+        if not e.held and e.updated and evidence is not None:
+            # only this process's private evidence file, never the DB
+            evidence.mark_update_preempted()
         if _report_open_transaction(ledger, result):
             return 1
-        # An updater won the lock during LLM transport. Held: record
-        # the run as partial and stop — no further stage runs old code.
-        # Not held: no DB write at all; the 'running' row is closed as
-        # 'crashed' by the next begin_run (the crashed-run path).
+        # The lock could not be safely retaken after LLM transport. Held:
+        # an updater ran in the window — record the run as partial and
+        # stop, no further stage runs old code. Not held: the bounded wait
+        # expired (with ``updated`` when the update state changed in it);
+        # no DB write at all — the 'running' row is closed as 'crashed'
+        # by the next begin_run, which reads the evidence noted above.
         result["errors"].append("run_lock_lost")
         if e.held:
             try:
@@ -1597,6 +1640,8 @@ def _main() -> int:
     finally:
         if watchdog_armed:
             _disarm_watchdog()
+        if evidence is not None:
+            evidence.close()
         try:
             ledger.close()
         finally:

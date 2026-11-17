@@ -30,9 +30,7 @@ def _frames(count, payload):
             yield len(payload), payload
 
 
-@pytest.mark.parametrize("payload", [b"", b"x"], ids=["empty", "one_byte"])
-def test_many_small_fragments_do_not_retain_per_frame_objects(payload):
-    count = 100_000
+def _peak_while_receiving(count, payload):
     conn = _conn(_frames(count, payload))
     tracemalloc.start()
     try:
@@ -41,9 +39,20 @@ def test_many_small_fragments_do_not_retain_per_frame_objects(payload):
     finally:
         tracemalloc.stop()
     assert result == payload * count
-    print(f"synthetic_fragment_payload_bytes={len(result)} peak_traced_bytes={peak}")
+    return peak
+
+
+@pytest.mark.parametrize("payload", [b"", b"x"], ids=["empty", "one_byte"])
+def test_many_small_fragments_do_not_retain_per_frame_objects(payload):
+    count = 100_000
+    # tracemalloc counts every thread of the process, so a thread left by an
+    # earlier test can only add to a reading: the smallest of a few readings
+    # is the closest bound on what the assembly itself allocates.
+    peak = min(_peak_while_receiving(count, payload) for _ in range(3))
+    size = len(payload) * count
+    print(f"synthetic_fragment_payload_bytes={size} peak_traced_bytes={peak}")
     # Allow assembly over-allocation + final bytes; no list/join buffers per frame.
-    assert peak < len(result) * 4 + 128_000
+    assert peak < size * 4 + 128_000
 
 
 def test_empty_start_with_control_frames_accepts_continuations():

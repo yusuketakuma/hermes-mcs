@@ -311,22 +311,6 @@ def record_stage(ledger, pid: int, mid: int, fp: str, policy: str,
               "stage": stage, "engine_version": ENGINE_VERSION})
 
 
-def stage_ledger(ledger, mid: int, fp: str) -> list:
-    """Ordered S0–S8 receipts for one generation — the replayable
-    evidence that repair was reserved before dispatch, audits were
-    evaluated, and publication only followed an all-PASS chain."""
-    out = []
-    for r in ledger.db.execute(
-            "SELECT content,meta FROM artifacts WHERE kind=? "
-            "AND message_id=? ORDER BY artifact_id",
-            (KIND_V4_STAGE, mid)):
-        meta, content = loads_dict(r["meta"]), loads_dict(r["content"])
-        if isinstance(meta, dict) and is_current(meta) and isinstance(content, dict) \
-                and meta.get("fingerprint") == fp:
-            out.append({"stage": meta.get("stage"), **content})
-    return out
-
-
 def current_v4(ledger, mid: int, content_hash: str):
     """Newest valid published v4 row bound to the CURRENT source hash
     — mirrors ``current_projection_pred`` (error-free, hash-current,
@@ -585,9 +569,8 @@ def reproject_stale(ledger, scfg: dict,
         if doc is not None:
             reinterpreted.setdefault(
                 (row["project_id"], row["message_id"]), (doc, meta))
-    local_model = semantic_transport.llm_model() if reinterpreted else None
     for (pid, mid), (doc, meta) in reinterpreted.items():
-        _reinterpret_loops(ledger, scfg, pid, mid, doc, meta, out, local_model)
+        _reinterpret_loops(ledger, scfg, pid, mid, doc, meta, out)
     used = _rebuild_hint_docs(ledger, scfg, limit - len(rows), out)
     _hold_upgraded_repairs(ledger, scfg, limit - len(rows) - used, out)
     return out
@@ -607,28 +590,28 @@ def _count(out: dict, key: str) -> None:
     out["skip_reasons"][key] = out["skip_reasons"].get(key, 0) + 1
 
 
-def _member_bundle(ledger, pid: int, mid: int, fp, local_model=None):
+def _member_bundle(ledger, pid: int, mid: int, fp):
     """(bundle, member) of the message's live thread, or (None, None)
     when the stored generation ``fp`` is no longer the live one."""
     from semantic_store import thread_bundle
     row = ledger.db.execute(
         "SELECT COALESCE(parent_id,message_id) r FROM messages "
         "WHERE project_id=? AND message_id=?", (pid, mid)).fetchone()
-    bundle = thread_bundle(ledger.db, pid, row["r"], local_model=local_model) if row else None
+    bundle = thread_bundle(ledger.db, pid, row["r"]) if row else None
     if bundle is None or bundle["source_fingerprint"] != fp:
         return None, None
     member = next((m for m in bundle["members"] if m["message_id"] == mid), None)
     return (bundle, member) if member is not None else (None, None)
 
 
-def _reinterpret_loops(ledger, scfg, pid, mid, doc, meta, out, local_model=None) -> None:
+def _reinterpret_loops(ledger, scfg, pid, mid, doc, meta, out) -> None:
     """Loop candidates follow the current projection of the same audited
     document: items it no longer yields stop being current (no model)."""
     from semantic_projection import project_v2_facts
     if scfg.get("loop_mode", "off") == "off" \
             or meta.get("policy_fingerprint") != policy_fingerprint(scfg):
         return
-    bundle, _ = _member_bundle(ledger, pid, mid, meta.get("fingerprint"), local_model)
+    bundle, _ = _member_bundle(ledger, pid, mid, meta.get("fingerprint"))
     if bundle is None:
         return
     from semantic_loops import update_loops
@@ -753,14 +736,13 @@ def _rebuild_hint_docs(ledger, scfg: dict, limit: int, out: dict) -> int:
             "UPDATE artifacts SET meta=json_set(meta,'$.hint_rebuild',?) "
             "WHERE artifact_id=?", (value, row["artifact_id"]))
 
-    local_model = semantic_transport.llm_model() if rows else None
     for row in rows:
         pid, mid = row["project_id"], row["message_id"]
         meta, doc = loads_dict(row["meta"]) or {}, loads_dict(row["content"])
         fp = meta.get("fingerprint")
         new, reason = None, None
         try:
-            _, member = _member_bundle(ledger, pid, mid, fp, local_model)
+            _, member = _member_bundle(ledger, pid, mid, fp)
             if member is None:
                 reason = "history"   # not the live generation: never reused
             elif meta.get("repaired"):
@@ -954,10 +936,6 @@ def _hold_upgraded_repairs(ledger, scfg: dict, limit: int, out: dict) -> None:
         _count(out, f"repair_absence:{verdict}")
 
 
-
-
-
-
 def diagnostic(ledger, pid: int, mid: int, fp: str, policy: str,
                status: str, findings: list, doc_hash=None,
                tx: bool = False) -> None:
@@ -989,6 +967,7 @@ def diagnostic(ledger, pid: int, mid: int, fp: str, policy: str,
 _INVALIDATE_PAGE = 500   # artifacts (with meta) read per page; decisions commit once
 
 
+@semantic_transport.with_local_model_scope
 def invalidate_projections(db, scfg: dict) -> int:
     """Persist source/policy expiry for readers of the published snapshot."""
     from semantic_projection import projection_transition
@@ -1035,7 +1014,6 @@ def invalidate_projections(db, scfg: dict) -> int:
     # re-evaluate the JSON predicate for every remaining row on each page.
     upper = db.execute("SELECT MAX(artifact_id) FROM artifacts").fetchone()[0] or 0
     bundles = {}
-    local_model = None
     expired, revived, expiring_rows, adopted_projects = [], [], [], set()
     cursor = 0
     while True:
@@ -1055,10 +1033,7 @@ def invalidate_projections(db, scfg: dict) -> int:
             # contract below owns the actual keep/expire/revive decision.
             if enabled and meta is not None and meta.get("policy_fingerprint") == policy:
                 if key not in bundles:
-                    if local_model is None:
-                        # one config read per scan, not one per thread
-                        local_model = semantic_transport.llm_model()
-                    bundle = semantic_store.thread_bundle(db, *key, local_model=local_model)
+                    bundle = semantic_store.thread_bundle(db, *key)
                     bundles[key] = bundle["source_fingerprint"] if bundle else None
                 source_fingerprint = bundles[key]
                 if (source_fingerprint is not None
@@ -1158,7 +1133,6 @@ def publish_fact_projection(ledger, member, pid, mid, fp, policy,
         record_stage(ledger, pid, mid, fp, policy,
                         "s5_projection", "reused",
                         doc_hash=doc_hash)
-
 
 
 def _publish_skipped(ledger, pid, mid, fp, policy, member, doc):
@@ -1286,6 +1260,33 @@ def current_skipped(db, pid, mid, fp, policy, member):
         return None
 
 
+def target_doc(db, mid: int, fp: str, v2_docs_by_target: dict):
+    """The canonical fact document a target's outcome is published with."""
+    from semantic_store import current_artifact
+    doc = v2_docs_by_target.get(mid)
+    if doc is None:
+        prev_v2 = current_artifact(db, KIND_FACTS_V2, mid, fp)
+        # never publish from a document the hint rebuild could not re-derive
+        doc = prev_v2["content"] if prev_v2 and prev_v2["meta"].get(
+            "hint_rebuild") in (None, "same") else None
+    return doc
+
+
+def published_doc_hash(db, mid: int, fp: str, policy: str):
+    """``(found, doc_hash)`` of the latest S8 receipt: the fact document the
+    target's latest outcome was published (and its summary rendered) with."""
+    meta_doc = json_object_or_null("meta")
+    row = db.execute(
+        "SELECT content FROM artifacts WHERE kind=? AND message_id=? "
+        f"AND {current_meta_pred('meta')} "
+        f"AND json_extract({meta_doc},'$.stage')='s8_publish' "
+        f"AND json_extract({meta_doc},'$.fingerprint')=? "
+        f"AND json_extract({meta_doc},'$.policy_fingerprint')=? "
+        "ORDER BY artifact_id DESC LIMIT 1", (KIND_V4_STAGE, mid, fp, policy)).fetchone()
+    content = loads_dict(row["content"]) if row is not None else None
+    return (False, None) if content is None else (True, content.get("doc_hash"))
+
+
 def publish_target_tx(ledger, pid: int, mid: int, fp: str, policy: str,
                 members: dict, v2_docs_by_target: dict,
                 final_status: str, findings: list,
@@ -1296,15 +1297,9 @@ def publish_target_tx(ledger, pid: int, mid: int, fp: str, policy: str,
     ``semantic_facts_v4`` read model. Eligible fully-bound SKIPPED results
     mint ``semantic_facts_v4_skipped``; other outcomes leave a
     ``v4_diagnostic`` receipt that no extraction reader can select."""
-    from semantic_store import current_artifact
     if fact_source != "canonical":
         return
-    doc = v2_docs_by_target.get(mid)
-    if doc is None:
-        prev_v2 = current_artifact(ledger.db, KIND_FACTS_V2, mid, fp)
-        # never publish from a document the hint rebuild could not re-derive
-        doc = prev_v2["content"] if prev_v2 and prev_v2["meta"].get(
-            "hint_rebuild") in (None, "same") else None
+    doc = target_doc(ledger.db, mid, fp, v2_docs_by_target)
     doc_hash = semantic_facts.doc_hash(doc) if doc else None
     if final_status == "SKIPPED" and doc is not None:
         vid = _publish_skipped(ledger, pid, mid, fp, policy, members[mid], doc)

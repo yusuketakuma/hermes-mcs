@@ -697,6 +697,7 @@ def worker(parent, *, index=None, context_only=False):
 
 _CONTEXT_PASS_REASONS = frozenset({
     "transaction_active", "patient_context_waiting", "patient_context_scan_incomplete",
+    "patient_context_patient_invalid",
     "patient_context_readiness_unverified", "patient_context_generation_changed", "run_lock",
     "patient_context_selection_busy", "patient_context_selection_unavailable",
     "patient_context_completed_expired", "patient_context_capacity_or_deadline", "patient_context_admission_deferred",
@@ -770,13 +771,18 @@ def _context_pass_observation(result):
     refusal = result.get("scan_refusal")
     if refusal is not None:
         record["scan_refusal"] = refusal if type(refusal) is str and refusal in _SCAN_REFUSALS else "unclassified"
+    # The first skipped patient's registered code or exception type name only.
+    skipped = result.get("skip_patient_code")
+    if skipped is not None:
+        record["skip_patient_code"] = skipped if _bounded_pass_code(skipped) else "unclassified"
     covered = result.get("covered")
     if type(covered) is bool:
         record["covered"] = covered
     # Real per-pass bounds: one try-wide interrupt, 8 candidates x at most 2
     # waiting additions (quota-fail double count or two single-count scopes),
-    # and at most 2 pending reads per candidate.
+    # and at most 2 pending reads per candidate; at most one skip per candidate.
     for key, limit in (("waiting", 16), ("scan_reads", 16), ("scan_interrupts", 1),
+                       ("skip_patient_invalid", 8),
                        ("wait_no_eligible_sources", 8), ("wait_no_due_lane", 16),
                        ("wait_generation_quota", 8), ("wait_readiness_unverified", 16),
                        ("wait_dependency_incomplete", 16)):

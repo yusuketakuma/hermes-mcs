@@ -11,6 +11,7 @@ import patient_context_quota as quota
 import patient_context_refresh as refresh
 import patient_context_refresh_sources as sources
 import patient_context_refresh_state as state
+import patient_context_schedule as schedule
 from test_patient_context_refresh import CFG, document, runtime as runtime, seed, stamp, step
 from anthropic_context_testkit import CFG as CLOUD_CFG, cloud as cloud, drain as drain_cloud, step as step_cloud
 
@@ -22,23 +23,23 @@ def _records(led, pid=1):
 
 
 def _only_a(monkeypatch):
-    original = plan.lane_rotation
+    original = schedule.lane_rotation
     def only_a(best, rotation):
         return original({'A': best['A']} if 'A' in best else {}, rotation)
     only_a._source_rotation = original
-    monkeypatch.setattr(plan, 'lane_rotation', only_a)
+    monkeypatch.setattr(schedule, 'lane_rotation', only_a)
 
 
 
 def _ready_sources(runtime, *, cfg=CFG, pid=1, keys=None):
     """Reach overview eligibility through the real source and audit lanes."""
     led, _, _ = runtime
-    rotation = getattr(plan.lane_rotation, '_source_rotation', plan.lane_rotation)
-    with patch.object(plan, 'lane_rotation',
+    rotation = getattr(schedule.lane_rotation, '_source_rotation', schedule.lane_rotation)
+    with patch.object(schedule, 'lane_rotation',
             lambda best, state: rotation({key: value for key, value in best.items() if key != 'A'}, state)):
         for _ in range(20):
             snapshot = sources._snapshot(led.db, pid, cfg, hydrate=False, source_keys=keys)
-            scans = sources._current_scans(led.db, pid, snapshot['sources'], snapshot['contract'], cfg=cfg)
+            scans = sources._current_scans(led.db, pid, snapshot['sources'], snapshot['route'], cfg=cfg)
             if all(sources._scan_ready(scans.get(plan.source_key(source), {}))
                    for source in snapshot['sources'] if plan.source_usable(source)):
                 return
@@ -188,7 +189,7 @@ def test_first_full_catchup_is_identified_once_for_the_patient(runtime):
     assert step(runtime)['lane'] == 'A'
     for _ in range(8):
         snapshot = sources._snapshot(led.db, 1, CFG, hydrate=False, source_keys=[1])
-        scans = sources._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+        scans = sources._current_scans(led.db, 1, snapshot['sources'], snapshot['route'], cfg=CFG)
         if sources._scan_ready(scans.get(1, {})):
             break
         assert step(runtime)['status'] == 'progressed'

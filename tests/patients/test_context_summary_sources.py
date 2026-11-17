@@ -135,7 +135,8 @@ def _ocr_local(led, key, cfg, text):
         "provider_evidence": {"complete": True, "providers": ["local"]},
         "provider_contract": None, "local_artifact_id": None, "reservation_artifact_ids": []}
     return led.artifact_add(attachment_extraction.KIND, json.dumps(value), project_id=1,
-        message_id=source["parent_message_id"], meta={"source_key": key, "stage": "local"})
+        message_id=source["parent_message_id"], model=attachment_extraction.local_model(cfg),
+        meta={"source_key": key, "stage": "local"})
 
 
 def test_attachment_summary_uses_real_current_validator_and_stable_source_binding(tmp_path):

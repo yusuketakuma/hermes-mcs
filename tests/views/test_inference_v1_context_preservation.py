@@ -94,8 +94,10 @@ def test_atomic_span_and_temporal_relation_are_preserved_without_absorbing_a_rep
 
 
 @pytest.mark.parametrize('complete', [False, True])
-def test_empty_display_distinguishes_unanalysed_sources_from_observed_no_match(monkeypatch, complete):
+def test_empty_display_distinguishes_unanalysed_sources_from_observed_no_match(monkeypatch, tmp_path, complete):
     import notify_views
+    from ledger import Ledger
+    db = Ledger(str(tmp_path / 'synthetic.db')).db  # empty synthetic ledger for the view SAVEPOINT
     ev = {'project_id':1, 'items':[], 'summary':[], 'as_of':None,
           'coverage':{'inference':{'complete':complete, 'status':'empty' if complete else 'held',
                                   'sources':{'pending':1, 'held':1, 'failed':0, 'incomplete':0}}}}
@@ -105,11 +107,7 @@ def test_empty_display_distinguishes_unanalysed_sources_from_observed_no_match(m
     monkeypatch.setattr(notify_views, '_coverage_line', lambda *a: '合成の取得範囲')
     monkeypatch.setattr(notify_views, 'patient_label', lambda *a: '合成患者')
     monkeypatch.setattr(notify_views, 'project_url', lambda *a: 'https://invalid.test/synthetic')
-    db = sqlite3.connect(':memory:')  # the view opens a SAVEPOINT; every reader is stubbed or sees no schema
-    try:
-        result = notify_views.patient_context_list(db, 1, 'timeline', cfg={}, since=None, now=T0)
-    finally:
-        db.close()
+    result = notify_views.patient_context_list(db, 1, 'timeline', cfg={}, since=None, now=T0)
     assert result['items'] == []
     if complete:
         assert result['empty'] == 'この範囲で該当する記録は見つかりません'

@@ -149,6 +149,8 @@ def test_a_removed_row_is_not_a_background_append(env):
     baseline = db.db.execute("SELECT MAX(rowid) FROM command_receipts").fetchone()[0]
 
     def removed(db):
+        # a row older than both the publish and the failure goes away: a background
+        # table's MAX(rowid) falls while the failed urgent change (c1) is still there
         with db.db:
             db.db.execute("DELETE FROM command_receipts")   # MAX(rowid) falls
     before = _fail_then(env, now, change=removed)

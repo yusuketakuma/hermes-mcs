@@ -125,15 +125,15 @@ def test_source_validation_still_rejects_before_body_hash(db, monkeypatch, inval
 
 
 def test_empty_summary_has_a_bound_input_while_nonempty_capacity_still_refuses(monkeypatch):
-    import patient_context_quality_controller as controller
+    import patient_context_selection as selection
     signature = 'a' * 64
-    payload, reports, aliases, offered = controller._summary_input([], signature)
+    payload, reports, aliases, offered = selection.summary_input([], signature)
     assert payload['reports'] == reports == offered == [] and aliases == {}
     assert payload['source_identity'] == {'signature': signature}
-    other = controller._summary_input([], 'b' * 64)[0]
+    other = selection.summary_input([], 'b' * 64)[0]
     assert other != payload
     monkeypatch.setattr(context_plan, 'MAX_PROMPT_CHARS', 2000)
     fact = {'id': 'synthetic', 'project_id': 1, 'category': 'living', 'posted_at': None,
             'subject': 'unspecified', 'text': '完全合成の居住記録。'}
     with pytest.raises(ValueError, match='^patient_context_summary_capacity$'):
-        controller._summary_input([fact], signature)
+        selection.summary_input([fact], signature)

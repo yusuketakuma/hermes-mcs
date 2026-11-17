@@ -66,6 +66,18 @@ def _init_env(monkeypatch, tmp_path, cfg):
     monkeypatch.setattr(mcs_drug, "BUNDLE", tmp_path / "no-bundle")
 
 
+def _serve_config(monkeypatch, cfg):
+    """Serve `cfg` from both config readers; explicit-path reads stay empty.
+
+    cmd_services reads through load_config_checked while other setup paths
+    still use load_config, so a test patching only one silently runs on the
+    temp HOME's empty (Hermes-default) settings."""
+    monkeypatch.setattr(mcs_util, 'load_config',
+                        lambda path=None: cfg if path is None else {})
+    monkeypatch.setattr(mcs_util, 'load_config_checked',
+                        lambda path=None, **kw: cfg if path is None else {})
+
+
 # ---- services (launchd + hermes cron automation) --------------------
 
 def _services_env(monkeypatch, tmp_path, cron_names=frozenset(),

@@ -13,6 +13,7 @@ import patient_context_quality_receipts
 import patient_context_refresh_readiness
 import patient_context_refresh_sources
 import patient_context_refresh_state
+import patient_context_artifacts as context_artifacts
 import patient_context_plan as context_plan
 import mcs_queries
 import json
@@ -165,9 +166,9 @@ def test_source_quality_capture_keeps_every_fact_and_coverage_question(runtime, 
               "subject": "unspecified", "details": []} for text in statements]
     facts = context_plan.source_facts(source, items, workday_id="synthetic", discovery="new_report", found_at=patient_context_refresh_state.time.time())
     assert len(facts) == count
-    contract = patient_context_refresh_state._contract(CFG, 1)
+    route = patient_context_refresh_state._route(CFG, 1)
     meta = {"source_sig": context_plan.source_signature(source), "source_key": 1,
-            "contract": contract, "provider": contract["provider"], "model": "synthetic"}
+            "contract": route["contract"], "provider": route["provider"], "model": "synthetic", "provenance": {"backend": route["provider"]["backend"], "model": "synthetic", "profile": None}}
     cap = context_refresh.context_plan.MAX_SOURCE_FACTS
     parts = max(1, (len(facts) + cap - 1) // cap)
     with led.db:
@@ -215,9 +216,9 @@ def test_source_quality_overlapping_chunks_deduplicate_only_identical_occurrence
     fact = facts[0]
     start, end = fact['evidence_span']
     assert 0 < start < end < len(body)
-    contract = patient_context_refresh_state._contract(CFG, 1)
+    route = patient_context_refresh_state._route(CFG, 1)
     meta = {'source_sig': context_plan.source_signature(source), 'source_key': 1,
-            'contract': contract, 'provider': contract['provider'], 'model': 'synthetic'}
+            'contract': route['contract'], 'provider': route['provider'], 'model': 'synthetic', 'provenance': {'backend': route['provider']['backend'], 'model': 'synthetic', 'profile': None}}
     repeated = {**fact, 'found_at': fact['found_at'] + 1, 'discovery': 'backfill_found',
                 'found_workday_id': 'later-synthetic'}
     with led.db:
@@ -256,7 +257,7 @@ def test_source_quality_identical_text_in_distinct_posts_retains_distinct_facts(
     seed(led, mid=1, body=text)
     seed(led, mid=2, body=text)
     sources = patient_context_refresh_sources._snapshot(led.db, 1, CFG)['sources']
-    contract = patient_context_refresh_state._contract(CFG, 1)
+    route = patient_context_refresh_state._route(CFG, 1)
     expected_ids = []
     with led.db:
         for source in sources:
@@ -267,7 +268,7 @@ def test_source_quality_identical_text_in_distinct_posts_retains_distinct_facts(
             assert len(facts) == 1
             expected_ids.append(facts[0]['id'])
             meta = {'source_sig': context_plan.source_signature(source), 'source_key': mid,
-                    'contract': contract, 'provider': contract['provider'], 'model': 'synthetic'}
+                    'contract': route['contract'], 'provider': route['provider'], 'model': 'synthetic', 'provenance': {'backend': route['provider']['backend'], 'model': 'synthetic', 'profile': None}}
             patient_context_refresh_state._replace(led, patient_context_refresh_state.SCAN, 1,
                 {'cursor': 1, 'chunks': 1, 'complete': True, 'audited': False, 'facts': []}, meta, mid)
             patient_context_refresh_state._replace(led, patient_context_refresh_state.CHUNK, 1,
@@ -296,7 +297,7 @@ def test_scan_quality_proof_reuses_one_snapshot_enumeration(runtime, cloud):
         led.db.set_trace_callback(statements.append)
         try:
             actual = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'],
-                                                     snapshot['contract'], cfg=CFG)
+                                                     snapshot['route'], cfg=CFG)
         finally:
             led.db.set_trace_callback(None)
         assert led.db.in_transaction and all(actual[mid]['audited'] for mid in (1, 2, 3))
@@ -305,11 +306,11 @@ def test_scan_quality_proof_reuses_one_snapshot_enumeration(runtime, cloud):
         assert sum(sql.startswith('SELECT meta, CASE WHEN json_valid(content)') for sql in statements) == 1
         assert sum(sql.startswith('SELECT artifact_id,meta,CASE WHEN json_valid(meta)') for sql in statements) == 1
         expected = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'],
-                                                   snapshot['contract'], check_quality=False)
+                                                   snapshot['route'], check_quality=False)
         for source in snapshot['sources']:
             key = context_plan.source_key(source)
             if expected[key].get('audited') and not patient_context_refresh_sources._source_quality_verified(
-                    led.db, 1, source, snapshot['contract'], CFG, expected[key]):
+                    led.db, 1, source, snapshot['route'], CFG, expected[key]):
                 expected[key]['audited'] = False
         assert actual == expected
     finally:
@@ -324,17 +325,17 @@ def test_scan_quality_proof_never_leaves_a_borrowed_snapshot(runtime, cloud):
     led.db.execute('BEGIN')
     try:
         snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG, hydrate=False)
-        before = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+        before = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['route'], cfg=CFG)
         assert before[1]['audited'] and led.db.in_transaction
         with closing(sqlite3.connect(path)) as writer:
             writer.execute("UPDATE messages SET body_text=body_text || '変更' WHERE message_id=1")
             writer.commit()
-        same_snapshot = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+        same_snapshot = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['route'], cfg=CFG)
         assert same_snapshot == before and led.db.in_transaction
     finally:
         led.db.rollback()
     fresh = patient_context_refresh_sources._snapshot(led.db, 1, CFG, hydrate=False)
-    after = patient_context_refresh_sources._current_scans(led.db, 1, fresh['sources'], fresh['contract'], cfg=CFG)
+    after = patient_context_refresh_sources._current_scans(led.db, 1, fresh['sources'], fresh['route'], cfg=CFG)
     assert not after.get(1, {}).get('audited')
     assert not led.db.in_transaction
 
@@ -368,7 +369,7 @@ def test_scan_proof_keeps_hydration_rows_with_conflicting_invalidation_keys(runt
         return actual
     monkeypatch.setattr(patient_context_refresh_sources, '_source_quality_verified', compare)
     snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG, hydrate=False)
-    out = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+    out = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['route'], cfg=CFG)
     assert seen == [1, 2] and all(out[mid]['audited'] for mid in (1, 2))
 
 
@@ -389,7 +390,7 @@ def test_scan_proof_keeps_sql_and_python_source_key_membership_distinct(runtime,
                                "VALUES(?,?,?,?,?,?,?)", (patient_context_refresh_state.CHUNK, 1, 2, original['content'],
                                                           original['model'], meta, original['created_at'])).lastrowid
     snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG, hydrate=False)
-    proof = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], check_quality=False)[1]
+    proof = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['route'], check_quality=False)[1]
     assert proof['complete'] and not proof['audited']
     scan = led.db.execute("SELECT artifact_id,content FROM artifacts WHERE kind=? AND message_id=1", (patient_context_refresh_state.SCAN,)).fetchone()
     scan_doc = json.loads(scan['content'])
@@ -408,7 +409,7 @@ def test_scan_proof_keeps_sql_and_python_source_key_membership_distinct(runtime,
         seen.append(context_plan.source_key(source))
         return actual
     monkeypatch.setattr(patient_context_refresh_sources, '_source_quality_verified', compare)
-    out = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+    out = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['route'], cfg=CFG)
     assert seen == [1, 2] and not out[1]['audited'] and out[2]['audited']
 
 
@@ -576,7 +577,7 @@ def test_paired_read_retains_distinct_pinned_and_current_contracts(runtime, clou
     assert patient_context_refresh_readiness.context_view_read(led.db, 1, cfg=CFG) == expected
     assert len(contracts) == (1 if route == 'on' else 2)
     if route != 'on':
-        assert contracts[0].get('provider') and not contracts[1].get('provider')
+        assert contracts[0]['provider'] and not contracts[1]['provider']
 
 
 @pytest.mark.parametrize('early', ['missing', 'cfg_none', 'unpublished', 'disabled', 'publication_off'])
@@ -649,7 +650,7 @@ def test_read_owner_rolls_back_only_its_own_unexpected_write(runtime, cloud, loo
             proof = proof_for(snapshot, CFG)
             led.db.execute("INSERT INTO context_read_sentinel VALUES ('inside')")
             if lookup_after_write:
-                patient_context_refresh_sources._scans_from_read(led.db, 1, snapshot['sources'], snapshot['contract'], CFG, proof)
+                patient_context_refresh_sources._scans_from_read(led.db, 1, snapshot['sources'], snapshot['route'], CFG, proof)
     assert [row[0] for row in led.db.execute('SELECT value FROM context_read_sentinel')] == (['prior'] if borrowed else [])
     assert led.db.in_transaction is borrowed
     if borrowed:
@@ -747,7 +748,7 @@ def test_unresolved_source_repair_evidence_holds_the_lane_instead_of_deferring_f
         clock.wall += 61
         snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG, hydrate=False)
         scans = patient_context_refresh_sources._current_scans(
-            led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+            led.db, 1, snapshot['sources'], snapshot['route'], cfg=CFG)
         for scan in scans.values():
             if scan.get('quality_state') == 'held':
                 held = scan
@@ -763,7 +764,7 @@ def test_unresolved_source_repair_evidence_holds_the_lane_instead_of_deferring_f
         clock.wall += 61
     snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG, hydrate=False)
     scans = patient_context_refresh_sources._current_scans(
-        led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+        led.db, 1, snapshot['sources'], snapshot['route'], cfg=CFG)
     assert all(scan.get('quality_state') == 'held' or not scan.get('complete') for scan in scans.values())
     assert len(led.artifacts('patient_context_source_quality_v1', project_id=1)) == len(receipts)
     assert not source_repair['sent']
@@ -776,7 +777,7 @@ def test_source_verified_reads_each_receipt_page_once_and_refuses_missing_eviden
     drain(runtime)
     snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG, hydrate=False)
     source = snapshot['sources'][0]
-    scan = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], check_quality=False)[1]
+    scan = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['route'], check_quality=False)[1]
     assert scan['audited']
     calls = []
     original = semantic_runtime.patient_source_question_evidence
@@ -786,14 +787,14 @@ def test_source_verified_reads_each_receipt_page_once_and_refuses_missing_eviden
     monkeypatch.setattr(semantic_usage_receipts, 'patient_source_question_evidence', count)
     led.db.execute('BEGIN')
     try:
-        assert patient_context_refresh_sources._source_quality_verified(led.db, 1, source, snapshot['contract'], CFG, scan)
+        assert patient_context_refresh_sources._source_quality_verified(led.db, 1, source, snapshot['route'], CFG, scan)
         assert len(calls) == 1 and 1 <= len(calls[0]) <= 12
         answer = led.db.execute("SELECT artifact_id FROM artifacts WHERE kind='patient_context_source_quality_v1' "
                                 "AND project_id=1 ORDER BY artifact_id LIMIT 1").fetchone()
         assert answer
         led.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (answer[0],))
         calls.clear()
-        assert not patient_context_refresh_sources._source_quality_verified(led.db, 1, source, snapshot['contract'], CFG, scan)
+        assert not patient_context_refresh_sources._source_quality_verified(led.db, 1, source, snapshot['route'], CFG, scan)
         assert len(calls) == 1
     finally:
         led.db.rollback()
@@ -819,7 +820,7 @@ def test_source_pass_content_checks_each_logical_page_once(runtime, cloud, monke
     assessment = patient_context_refresh_state._quality_assessment(scfg)
     occurrence = patient_context_refresh_sources._source_occurrence(led.db, 1, source)
     identity, _ = semantic_audit.patient_source_quality_identity(
-        source, facts, occurrence, patient_context_refresh_state._contract(CFG, 1), 'a' * 64, assessment)
+        source, facts, occurrence, context_artifacts.quality_binding(patient_context_refresh_state._route(CFG, 1)), 'a' * 64, assessment)
     ids = identity['fact_ids']
     assert len(ids) == 25
     descriptor = semantic_runtime.patient_source_assessment_descriptor(assessment, scfg)

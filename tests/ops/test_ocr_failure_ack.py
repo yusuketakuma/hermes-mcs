@@ -325,7 +325,7 @@ def test_real_database_replace_invalidates_old_plan_and_allows_new_proof(case):
     with sqlite3.connect(case.data / 'ledger.db') as db:
         db.row_factory = sqlite3.Row
         db.execute('BEGIN')
-        assert not ack.current_acknowledged(db, case.artifact)
+        assert not _current_acknowledged(db, case.artifact)
         new_plan = ack.build_plan(db, [case.artifact])
         db.rollback()
         with pytest.raises(ValueError, match='stale_plan'):
@@ -333,7 +333,7 @@ def test_real_database_replace_invalidates_old_plan_and_allows_new_proof(case):
         fresh = {**req, 'command_id': str(uuid.uuid4()), 'plan': new_plan}
         operator.apply(case.root, fresh)
         db.execute('BEGIN')
-        assert ack.current_acknowledged(db, case.artifact)
+        assert _current_acknowledged(db, case.artifact)
         db.rollback()
 
 
@@ -463,6 +463,7 @@ def test_ack_stops_old_unsent_alert_and_preserves_unknown_delivery(case, outcome
 
 @pytest.mark.parametrize("waiting,expected", [
     ({"local_deferred": 1}, "attachment_ocr_local_inference_deferred"),
+    ({"local_deferred": 1, "local_deferred_reasons": {"disk_low": 1}}, "attachment_ocr_local_inference_deferred"),
     ({"deferred": 1}, "attachment_ocr_processing_deferred"),
     ({"reason": "busy"}, "attachment_ocr_processing_deferred"),
     ({"reason": "memory_deferred"}, "attachment_ocr_memory_deferred"),
@@ -514,3 +515,12 @@ def test_active_failure_is_not_hidden_by_current_ack_proof(case, active):
     assert report["state"] == "failed"
     assert report["reason"] == "attachment_ocr_processing_failed"
     assert report.get("alert_required") is not False
+
+
+def _current_acknowledged(db, artifact_id):
+    """The acknowledgement of the current OCR failure; damaged evidence reads as not acknowledged."""
+    import sqlite3
+    try:
+        return ack.acknowledged(db, ack.target(db, artifact_id))
+    except (ValueError, TypeError, KeyError, OSError, sqlite3.Error, RecursionError):
+        return False

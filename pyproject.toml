@@ -20,3 +20,8 @@ select = ["E4", "E7", "E9", "F"]
 testpaths = ["tests", "integration"]
 addopts = "-q"
 tmp_path_retention_policy = "failed"
+# Markers used across directories; a marker owned by one directory is
+# registered by that directory's conftest.py (tests/meta/test_ci_scope_gates.py).
+markers = [
+    "perf: wall-clock or p95 budget on synthetic scale; pull-request CI deselects it (MCS_CI_SKIP_PERF=1)",
+]

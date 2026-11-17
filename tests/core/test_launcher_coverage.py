@@ -23,7 +23,10 @@ def _main_files():
     found = set()
     for path in ROOT.rglob('__main__.py'):
         rel = path.relative_to(ROOT).as_posix()
-        if rel.startswith('.venv/') or '.git' in rel.split('/') or '__pycache__' in rel.split('/'):
+        parts = rel.split('/')
+        # root hidden directories (.git, a checkout-local .venv) and caches hold no repository
+        # entry point; a hidden directory inside the tree is still scanned
+        if (len(parts) > 1 and parts[0].startswith('.')) or '__pycache__' in parts:
             continue
         found.add(rel)
     return found
@@ -35,9 +38,10 @@ def test_every_main_module_is_classified():
     assert not unclassified, f'unclassified __main__.py: {sorted(unclassified)}'
 
 
-def test_main_scan_excludes_only_root_virtualenv(tmp_path, monkeypatch):
+def test_main_scan_excludes_only_root_hidden_directories(tmp_path, monkeypatch):
     monkeypatch.setitem(globals(), 'ROOT', tmp_path)
-    for rel in ('.venv/lib/pkg/__main__.py', 'new_package/__main__.py', 'new_package/.venv/__main__.py'):
+    for rel in ('.venv/lib/pkg/__main__.py', '.git/hooks/__main__.py', 'new_package/__main__.py',
+                'new_package/.venv/__main__.py', 'new_package/__pycache__/__main__.py'):
         path = tmp_path / rel
         path.parent.mkdir(parents=True)
         path.touch()

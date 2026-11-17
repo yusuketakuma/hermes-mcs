@@ -606,8 +606,7 @@ def patient_source_assessment_descriptor(assessment, policy):
 def patient_source_pass_content(db, pid, identity, descriptor):
     """Rebuild a source PASS from its bounded policy and original Jev receipts."""
     import hashlib
-    import extract_llm
-    import semantic_candidate
+    import patient_context_quality_identity
     import semantic_policy
     from semantic_jev import JEV_MODEL
 
@@ -631,7 +630,7 @@ def patient_source_pass_content(db, pid, identity, descriptor):
             or policy['fact_source'] != 'legacy' and not valid_hash(policy['candidate_fingerprint'])):
         raise ValueError('patient_source_descriptor_invalid')
     assessment = descriptor['assessment']
-    code = payload_hash([extract_llm._LOADED_SOURCE_DIGESTS, semantic_candidate.loaded_source_contract()])
+    code = patient_context_quality_identity.patient_quality_assessment_code()
     if (assessment != keys['assessment'] or not isinstance(assessment, dict)
             or set(assessment) != {'code', 'policy'} or assessment['code'] != code
             or assessment['policy'] != semantic_policy.policy_fingerprint(policy)):

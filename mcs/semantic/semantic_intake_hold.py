@@ -24,7 +24,6 @@ _MAX_FAILURE_MESSAGES = 512
 _MAX_FAILURE_ROOTS = 128
 
 
-
 def _unstored_unique_index(db):
     for index in db.execute('PRAGMA main.index_list(fetch_jobs)'):
         if not index[2] or index[4]:
@@ -67,11 +66,6 @@ def _failure_scope(messages, project_id):
     except (AttributeError, TypeError):
         return None
     return (sorted(roots), sorted(message_ids)) if roots else None
-
-
-def failure_roots(messages, project_id):
-    scope = _failure_scope(messages, project_id)
-    return scope[0] if scope else None
 
 
 def record_unstored(ledger, project_id, *, roots=None, observed_ids=None):

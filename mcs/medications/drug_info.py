@@ -14,7 +14,6 @@ The updater imports this module lazily; keep Python 3.10 grammar.
 import fcntl
 import hashlib
 import json
-import math
 import os
 import re
 import sys
@@ -24,16 +23,14 @@ import uuid
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
-from urllib.parse import urlsplit
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import _mcs_path  # noqa: E402,F401
-from mcs_util import HOME, strict_json  # noqa: E402
+from mcs_util import HOME  # noqa: E402
 from safe_io import atomic_write, read_private_bytes  # noqa: E402
 from stats_math import finite_number  # noqa: E402
 
 GATEWAY_URL = "http://127.0.0.1:3149/call"
-EXA_URL = "https://mcp.exa.ai/mcp"
 TOKEN_PATH = Path.home() / ".local/state/tinyfish-free/local-token"
 STATE_DIR = Path(HOME) / "data" / "drug-info"
 MENU = "https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/"
@@ -123,130 +120,6 @@ def _request(bounded_http, name, arguments, timeout, token, deadline=None):
     return bounded_http.bounded_http_request(
         GATEWAY_URL, "POST", {"name": name, "arguments": arguments}, timeout,
         api_key=token, deadline=deadline, allowed_endpoints=(GATEWAY_URL,))
-
-
-def _exa_text(tool, arguments, deadline=None, timeout=30.0):
-    import bounded_http
-    payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-               "params": {"name": tool, "arguments": arguments}}
-    try:
-        status, _headers, raw = bounded_http.public_mcp_request(
-            EXA_URL, payload, min(timeout, 30.0), deadline=deadline, allowed_endpoints=(EXA_URL,))
-    except (OSError, TimeoutError, ValueError):
-        raise DrugInfoError("web_provider_unavailable") from None
-    if len(raw) > bounded_http.MAX_RESPONSE_BYTES:
-        raise DrugInfoError("web_response_too_large")
-    if status != 200:
-        raise DrugInfoError("web_provider_refused")
-    try:
-        body = raw.decode("utf-8")
-        if body.lstrip().startswith("{"):
-            candidates = [body.strip()]
-        else:
-            # SSE joins data lines within each event; only CR/LF delimit frames, never CJK separators.
-            frames = body.replace("\r\n", "\n").replace("\r", "\n").split("\n\n")
-            candidates = []
-            for frame in frames:
-                lines = [line[5:].removeprefix(" ") for line in re.split(r"\r\n|\r|\n", frame)
-                         if line.startswith("data:")]
-                if lines:
-                    candidates.append("\n".join(lines))
-        for candidate in candidates:
-            data = strict_json(candidate)
-            if not isinstance(data, dict) or data.get("jsonrpc") != "2.0":
-                raise ValueError
-            if data.get("error"):
-                raise DrugInfoError("web_provider_refused")
-            if "result" not in data:  # SSE progress notifications are not results.
-                if "id" in data or not isinstance(data.get("method"), str):
-                    raise ValueError
-                continue
-            if type(data.get("id")) is not int or data["id"] != 1 or not isinstance(data["result"], dict):
-                raise ValueError
-            result = data["result"]
-            if result.get("isError"):
-                raise DrugInfoError("web_provider_refused")
-            content = result.get("content")
-            if not isinstance(content, list):
-                raise ValueError
-            texts = [item["text"] for item in content if isinstance(item, dict)
-                     and item.get("type") == "text" and isinstance(item.get("text"), str)]
-            if not texts or not any(text.strip() for text in texts):
-                raise ValueError  # No verified structuredContent schema: never infer document text from it.
-            return "\n".join(texts)
-    except DrugInfoError:
-        raise
-    except (UnicodeError, ValueError, TypeError, KeyError, RecursionError):
-        raise DrugInfoError("web_response_invalid") from None
-    raise DrugInfoError("web_response_invalid")
-
-
-def _official_url(url, domain):
-    try:
-        parts = urlsplit(url)
-        return (parts.scheme == "https" and parts.hostname in (domain, "www." + domain)
-                and parts.username is None and parts.password is None and parts.port in (None, 443)
-                and not parts.fragment)
-    except (ValueError, TypeError):
-        return False
-
-
-def _exa_search(query, domain, deadline=None, timeout=30.0):
-    if domain not in (PMDA, MINDS):
-        raise DrugInfoError("public_input_required")
-    text = _exa_text("web_search_exa", {"query": "site:" + domain + " " + query, "numResults": 5},
-                     deadline, timeout)
-    if text.strip().lower().rstrip(".") in ("no results found", "no search results found"):
-        return []
-    results, title, url = [], None, None
-    for line in text.splitlines() + ["Title:"]:
-        line = line.strip()
-        if line.startswith("Title:"):
-            if title is not None:
-                if not title or not url:
-                    raise DrugInfoError("search_response_invalid")
-                try:
-                    parts = urlsplit(url)
-                    valid = (parts.scheme == "https" and bool(parts.hostname)
-                             and parts.username is None and parts.password is None
-                             and parts.port in (None, 443) and not parts.fragment
-                             and not any(char.isspace() for char in url))
-                except ValueError:
-                    valid = False
-                if not valid:
-                    raise DrugInfoError("search_response_invalid")
-                if _official_url(url, domain):
-                    results.append({"url": url, "title": title[:200]})
-            title, url = line[6:].strip(), None
-        elif line.startswith("URL:"):
-            if title is None or url is not None:
-                raise DrugInfoError("search_response_invalid")
-            url = line[4:].strip()
-    if title is None or not re.search(r"(?m)^\s*Title:", text):
-        raise DrugInfoError("search_response_invalid")
-    if not results:
-        raise DrugInfoError("search_official_results_missing")
-    return results[:5]
-
-
-def _exa_call(name, arguments, deadline=None, timeout=75.0):
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
-        raise DrugInfoError("web_provider_unavailable")
-    deadline = min(deadline, time.monotonic() + timeout) if deadline is not None else time.monotonic() + timeout
-    if name == "search":
-        domains = arguments.get("include_domains")
-        if not isinstance(domains, list) or len(domains) != 1:
-            raise DrugInfoError("public_input_required")
-        return {"data": {"results": _exa_search(arguments["query"], domains[0], deadline, timeout)}}
-    if arguments.get("force_fresh"):
-        raise DrugInfoError("web_freshness_unavailable")
-    urls = arguments.get("urls")
-    if (name != "fetch_content" or not isinstance(urls, list) or len(urls) != 1
-            or not any(_official_url(urls[0], domain) for domain in (PMDA, MINDS, MENU_DOMAIN))):
-        raise DrugInfoError("host_refused")
-    text = _exa_text("web_fetch_exa", {"urls": urls}, deadline, timeout)
-    return {"results": [{"result": {"retrieved_at": None, "cache_hit": None,
-                                    "data": {"results": [{"text": text}]}}}]}
 
 
 def fetch_page(url, *, fresh=False, validators=None, deadline=None):

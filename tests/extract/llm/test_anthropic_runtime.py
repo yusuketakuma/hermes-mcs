@@ -26,7 +26,7 @@ import cloud_inference
 import inference_version as inference
 import mcs_util
 from extract_testkit import _ledger, _message
-from anthropic_runtime_testkit import _assert_legacy_retained as _assert_legacy_retained, _bound_source as _bound_source, _current_artifacts as _current_artifacts, _use_real_cloud_accounting as _use_real_cloud_accounting, old as old, routed as routed
+from anthropic_runtime_testkit import SETTLED_200 as SETTLED_200, _assert_legacy_retained as _assert_legacy_retained, _bound_source as _bound_source, _current_artifacts as _current_artifacts, _use_real_cloud_accounting as _use_real_cloud_accounting, old as old, routed as routed
 from test_cloud_response_recovery import legacy_cloud_routes
 
 
@@ -432,7 +432,7 @@ def test_first_scope_rejection_after_http_audits_once_and_keeps_local_fallback(r
         report = worker.run_pending(led, budget_s=180)
     assert report["done"] == 1 and len(local) == 1
     assert len(calls) == len(reserved) == len(results) == 1
-    assert outcomes == [{"http_class": "http_200"}]
+    assert outcomes == [SETTLED_200]
     annotations = led.artifacts("cloud_usage_disposition")
     assert len(annotations) == 1
     assert json.loads(annotations[0]["meta"])["disposition"] == "discarded_scope"

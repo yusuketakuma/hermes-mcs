@@ -164,8 +164,10 @@ def validate(req):
     if not valid_text(req.get("actor"), 120):
         return "bad_actor"
     if req.get("cmd") in ("ops.cloud_stop", "ops.cloud_resume", "ops.cloud_local_rebuild_approve",
+                          "ops.patient_context_reset",
                           "ops.update_apply", "ops.update_rollback",
-                          "ops.restore_approve", "ops.drug_alias_apply", "ops.drug_alias_rollback"):
+                          "ops.restore_approve", "ops.drug_alias_apply", "ops.drug_alias_rollback",
+                          "ops.external_transfer_acknowledge"):
         # System-wide lifecycle ops are projectless — they govern the
         # whole install, not one patient. The shared identity fields
         # (human_confirmed/actor/command_id) were already checked above;
@@ -244,11 +246,19 @@ def apply_command(ledger, req, *, cfg=None, data_dir=None):
         # replays its original receipt even if the tag re-pointed.
         from mcs_operations import prepare_update_pins
         req = prepare_update_pins(req)
+    if req.get("cmd") == "ops.cloud_local_rebuild_approve" and validate(req) is None:
+        # The month tally is counted outside the writer lock; the approval re-checks it there.
+        from extract_llm_local_rebuild import warm_tally
+        warm_tally(ledger)
     # SQLite exits first, so a failed COMMIT still unwinds file promotions.
     with ExitStack() as filesystem_changes, _receipt_transaction(db) as commit_sensitive:
         db.execute("BEGIN IMMEDIATE")
         found, old = replay_receipt(db, req["command_id"], digest)
         if found:
+            if old.get("outcome") == "applied" and isinstance(req.get("cmd"), str) \
+                    and req["cmd"].startswith("ops."):
+                from mcs_operations import replay_tx
+                replay_tx(ledger, req, old, filesystem_changes)
             return old
         if req.get('cmd') == 'ops.drug_alias_apply':
             try:
@@ -273,7 +283,7 @@ def apply_command(ledger, req, *, cfg=None, data_dir=None):
         if not error and isinstance(req.get("cmd"), str) \
                 and req["cmd"].startswith("ops."):
             from mcs_operations import apply_tx
-            error, extra = apply_tx(db, req, now=now,
+            error, extra = apply_tx(ledger, req, now=now,
                                    filesystem_changes=filesystem_changes,
                                    **({"cfg": cfg, "data_dir": data_dir}
                                       if req["cmd"] in ("ops.mcs_reaction", "ops.retry", "ops.extract_feedback") else {}))

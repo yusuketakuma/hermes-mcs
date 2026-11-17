@@ -23,7 +23,9 @@ def source(mid, body, *, day=1, content_hash=None):
 
 
 def facts_for(row):
-    return context_plan.source_facts(row, extract_context(row["body_text"]), workday_id=1, discovery="new_report", found_at=refresh.time.time())
+    # Stored scan facts carry no interpretation; the projection reads it at read time.
+    return [state.with_temporal(fact, row["body_text"]) for fact in context_plan.source_facts(
+        row, extract_context(row["body_text"]), workday_id=1, discovery="new_report", found_at=refresh.time.time())]
 
 
 def category_fact(row, category):

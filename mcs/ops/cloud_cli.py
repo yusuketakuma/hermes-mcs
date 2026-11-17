@@ -29,6 +29,12 @@ READ_BYTES = 16 * 1024 * 1024
 # never borrowed from another phase.
 TALLY_READ_ROWS = 200000
 TALLY_READ_BYTES = 640 * 1024 * 1024
+# The patient-context reset preview reads this route's retained accounting once and the month's
+# accounting of every route once (the usage report), so twice the tally phase. Same kind of
+# operating capacity; its values may also exceed the observation reader's 2 MiB length cap.
+RESET_READ_ROWS = 2 * TALLY_READ_ROWS
+RESET_READ_BYTES = 2 * TALLY_READ_BYTES
+RESET_VALUE_BYTES = 64 * 1024 * 1024
 
 
 class _ReaderLimit(ValueError):
@@ -43,10 +49,14 @@ def pending_key_presence(root=None):
 
 
 def _settings(cfg, root=None):
+    return _selection(cfg, root)[:3]
+
+
+def _selection(cfg, root=None):
     # an unreadable config arrives as {}: fail closed like the runtime, never auto-enable
-    settings, errors = policy.resolve_settings(cfg if cfg else {"cloud_llm": {"mode": "off"}}, root)
+    settings, errors, held = policy.resolve_selection(cfg if cfg else {"cloud_llm": {"mode": "off"}}, root)
     key = bool(policy.provider_key(settings["provider"], root))
-    return settings, errors, key
+    return settings, errors, key, held
 
 
 @contextmanager
@@ -104,6 +114,23 @@ def _reader_phase(db, *, rows, size, reason):
         factory.budget = outer
 
 
+def _context_reset_preview(cfg):
+    """The patient-context reset preview under its own read budget; a reader limit is reported, never a refusal."""
+    import patient_context_reset
+    with _reader(seconds=FULL_READ_SECONDS) as (db, _deadline):
+        db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, RESET_VALUE_BYTES)
+        try:
+            with _reader_phase(db, rows=RESET_READ_ROWS, size=RESET_READ_BYTES, reason="reset_budget_exceeded"):
+                found = patient_context_reset.preview(db, cfg=cfg, now=time.time(), stop=(_ReaderLimit,))
+        except (_ReaderLimit, sqlite3.Error) as error:
+            found = {"stop_reason": _reader_failure_reason(error)}
+        # a limit some reader inside the preview absorbed still leaves its mark here
+        reason = getattr(db.row_factory, "stop_reason", None) or found.get("stop_reason")
+    if reason is not None:
+        return {"refusal": "read_incomplete", "stop_reason": reason, "preview_hash": None}
+    return found
+
+
 def _check_reader(db, deadline):
     reason = getattr(db.row_factory, 'stop_reason', None)
     if reason or time.monotonic() >= deadline:
@@ -156,13 +183,14 @@ def _dryrun_report(db, deadline, now, provider="anthropic"):
 
 def diagnostics(cfg, *, root=None, probe=False):
     """Return only effective modes, key presence, budgets and optional safe accounting."""
-    cloud, errors, key = _settings(cfg, root)
+    cloud, errors, key, held = _selection(cfg, root)
     from semantic_policy import BACKLOG_BUDGET_RESERVE, runtime_config
     semantic, sem_errors = runtime_config(cfg, root=root)
     jev_key = bool(jev.api_key(root))
     out = {
         "jev": {"mode": semantic["mode"], "key_present": jev_key,
-                "status": "invalid" if sem_errors else "local" if not jev_key or semantic["mode"] == "off" else "configured",
+                "status": "invalid" if sem_errors else "local" if (
+                    not jev_key or semantic["mode"] == "off" or semantic["jev_held"]) else "configured",
                 "daily_request_budget": semantic["daily_request_budget"],
                 "scope": "all" if semantic["project_ids"] is None else "none" if not semantic["project_ids"] else "selected",
                 "backlog_budget": None},
@@ -172,10 +200,16 @@ def diagnostics(cfg, *, root=None, probe=False):
                 "daily_cost_limit_usd": cloud["daily_cost_limit_usd"],
                 "monthly_cost_limit_usd": cloud["monthly_cost_limit_usd"],
                 "scope": "all" if cloud["project_ids"] is None else "none" if not cloud["project_ids"] else "selected",
-                **policy.price_info(cloud["model"]), "model": cloud["model"],
+                **policy.earliest_price_info(cfg, cloud), "model": cloud["model"],
                 "provider_budgets": cloud["provider_budgets"],
                 "accounting": None, "dry_run": None,
                 "block_reason": "cost_limit_required" if errors and not policy.blocking_errors(errors) else None}}
+    import external_transfer
+    from semantic_policy import runtime_review_held
+    if held:
+        out["anthropic"]["block_reason"] = external_transfer.HOLD_CODE
+    if cfg and runtime_review_held(cfg, root=root):
+        out["jev"]["block_reason"] = external_transfer.HOLD_CODE
     eligible_scope = cloud["project_ids"] is None or bool(set(cloud["project_ids"]) - set(cloud["exclude_project_ids"]))
     window_reason = policy.setting_block_reason(cloud) if not errors else None
     if key and cloud["mode"] in ("on", "shadow") and window_reason:
@@ -214,7 +248,10 @@ def diagnostics(cfg, *, root=None, probe=False):
                 out["anthropic"]["accounting"] = policy.usage_report(borrowed)
                 out["anthropic"]["dry_run"] = _dryrun_report(db, deadline, time.time(), cloud["provider"])
                 reason = policy.global_block_reason(borrowed, model=cloud["model"]) or policy.budget_block_reason(borrowed, cloud)
-                if reason == "paused":
+                if reason and held:
+                    # the review hold stays the reason shown; the probe's own reason is kept beside it
+                    out["anthropic"]["also_block_reason"] = reason
+                elif reason == "paused":
                     out["anthropic"].update(status="local", block_reason=reason)
                 elif reason:
                     out["anthropic"].update(status="blocked", block_reason=reason)
@@ -257,22 +294,29 @@ def _backlog_setting_blockers(settings, route):
 
 def _route_counts(db, cfg, settings, deadline):
     out = {route: {"targets": 0, "requests_estimate": 0, "input_chars": 0,
-                   "basic_requests_estimate": 0, "chunk_extra_requests_estimate": 0}
+                   "basic_requests_estimate": 0, "chunk_extra_requests_estimate": 0, "invalid_rows": 0}
            for route in policy.ROUTES}
     if "patient_context" in settings["routes"]:
         import patient_context_refresh as context
         import cloud_inference
-        # Resolve the semantic contract without consulting installation credentials.
-        contract = context._contract({**cfg, "cloud_llm": {"mode": "off"}})
+        # Resolve the accepted route without consulting installation credentials.
+        context_route = context._route({**cfg, "cloud_llm": {"mode": "off"}})
         if settings["mode"] == "on":
-            contract["provider"] = cloud_inference.cloud_provider_contract({"cloud_llm": settings})
+            context_route["provider"] = cloud_inference.cloud_provider_contract({"cloud_llm": settings})
         scope, params = _source_scope(settings, "p")
         rows = db.execute("SELECT p.project_id FROM patients p WHERE COALESCE(p.is_archived,0)=0"
                           + scope + " ORDER BY p.project_id", params)
         for count, row in enumerate(rows, 1):
             _checkpoint(deadline, count)
-            pending = context.pending_estimate(db, row["project_id"], cfg, now=time.time(), contract=contract)
             item = out["patient_context"]
+            try:
+                pending = context.pending_estimate(db, row["project_id"], cfg, now=time.time(), route=context_route)
+            except ValueError as error:
+                if error.args != ("patient_context_source_scope_invalid",):
+                    raise
+                # One unreadable stored scope is neither done work nor a reason to stop the whole plan.
+                item["invalid_rows"] += 1
+                continue
             item["targets"] += pending["targets"]
             item["input_chars"] += pending["input_chars"]
             basic = pending["summary_units"] + pending["scan_sources"]
@@ -405,18 +449,22 @@ def _costs(item, ratio, fx=None, *, output_limit=1600, output_per_request=None, 
     return item
 
 
+_DISPOSITIONS = ("discarded_scope", "discarded_workday", policy.SUPERSEDED_LOCAL)
+
+
 def _safe_log(row, meta):
     result = {"kind": row["kind"], "at": row["created_at"]}
     if row["kind"] == "cloud_usage_disposition":
-        if meta.get("disposition") in ("discarded_scope", "discarded_workday"):
+        if meta.get("disposition") in _DISPOSITIONS:
             result["disposition"] = meta["disposition"]
         return result
     for key, allowed in (("route", policy.ROUTES), ("model", tuple({model for model, _ in policy.PRICE_DEFINITIONS})),
-                         ("disposition", ("discarded_scope", "discarded_workday"))):
+                         ("disposition", _DISPOSITIONS)):
         if meta.get(key) in allowed:
             result[key] = meta[key]
     kinds = {"auth_error", "payment_required", "pricing_unverified", "budget_exceeded", "no_api_key",
-             "rate_limited", "transport", "timeout", "contract_error", "protocol_error", "model_mismatch"}
+             "rate_limited", "transport", "timeout", "contract_error", "protocol_error", "model_mismatch",
+             "response_too_large"}
     if isinstance(meta.get("error_kind"), str) and meta["error_kind"] in kinds:
         result["error_kind"] = meta["error_kind"]
     if (row["kind"] == "cloud_usage_result"
@@ -739,7 +787,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
         "estimate_excludes": ["unmeasured_repair_retry", "prompt_overhead_and_added_context"],
         "cost_basis": "reference_range_not_budget_reservation_or_invoice",
         "reservation_input_upper_bound_tokens": policy.INPUT_RESERVATION_BOUND,
-        **policy.price_info(settings["model"]),
+        **policy.earliest_price_info(cfg, settings),
         "provider": settings["provider"], "model": settings["model"],
         "provider_budgets": settings["provider_budgets"],
         "usd_jpy": settings["usd_jpy"], "log": log}
@@ -818,7 +866,8 @@ def apply_control_tx(db, req, now):
             return "cloud_config_invalid", {}
         if not key:
             return "no_api_key", {}
-        if not policy.pricing_valid(model=settings["model"]) or policy.usage_report(SimpleNamespace(db=db))["pricing_unverified"]:
+        if (not all(policy.pricing_valid(model=model) for model in policy.configured_models(cfg, settings))
+                or policy.usage_report(SimpleNamespace(db=db))["pricing_unverified"]):
             return "pricing_unverified", {}
         policy.capture_history_tx(db, req["command_id"], now, continuous=True)
         state = {"consecutive_failures": 0, "open_until": 0.0,
@@ -871,7 +920,11 @@ def command(args):
                              | {"planned": len(result["plan"]["units"]) if result["plan"] else 0},
                              ensure_ascii=False, indent=2))
             return 0 if result["state"] in ("complete", "bundle_full") else 1
-        if action in ("stop", "resume", "local-rebuild-approve"):
+        if action == "context-reset-plan":
+            result = _context_reset_preview(cfg)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result["refusal"] is None else 1
+        if action in ("stop", "resume", "local-rebuild-approve", "context-reset"):
             from writer_lock import acquire_run_lock, wait_run_lock, code_stamp
             expected_code = code_stamp()
             if not args.confirm_human or not mcs_util.valid_text(args.reason, 2000):
@@ -883,6 +936,34 @@ def command(args):
             req = {"version": 1, "cmd": "ops.cloud_" + action,
                 "command_id": args.command_id or str(uuid.uuid4()), "actor": args.actor,
                 "human_confirmed": True, "project_id": None, "reason": args.reason}
+            if action == "context-reset":
+                import patient_context_reset
+                req["cmd"] = "ops.patient_context_reset"
+                req["preview_hash"] = args.preview_hash
+                # replaced by the real copy under the run lock; the envelope is validated before that
+                req["backup"] = {"name": patient_context_reset.BACKUP_PREFIX + "pending.db", "bytes": 1,
+                                 "sha256": "0" * 64}
+                # Refuse before copying the database: a refused or replayed reset leaves no backup behind.
+                if args.command_id:
+                    with _reader() as (db, _deadline):
+                        old = db.execute("SELECT receipt_json FROM command_receipts WHERE command_id=?",
+                                         (args.command_id,)).fetchone()
+                    if old is not None:
+                        receipt = json.loads(old["receipt_json"])
+                        if receipt.get("outcome") == "applied" and "erased" not in receipt:
+                            # another operation's id: the shared receipt contract calls this a conflict
+                            receipt = {"command_id": args.command_id, "outcome": "rejected",
+                                       "error": "command_id_conflict"}
+                        print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "backup",
+                                                                      "erased", "carryover") if k in receipt},
+                                         ensure_ascii=False))
+                        return 0 if receipt.get("outcome") == "applied" else 1
+                found = _context_reset_preview(cfg)
+                if found["refusal"] is not None or found["preview_hash"] != args.preview_hash:
+                    print(json.dumps({"outcome": "rejected", "error": found["refusal"] or "preview_changed"}
+                                     | ({"stop_reason": found["stop_reason"]} if "stop_reason" in found else {}),
+                                     ensure_ascii=False))
+                    return 1
             if action == "local-rebuild-approve":
                 # One bundle per human confirmation; the plan file comes from local-rebuild-plan.
                 from safe_io import read_regular_nofollow
@@ -904,16 +985,40 @@ def command(args):
             if lock_fd is None:
                 print("クラウド操作: ほかの保存処理が終わってから再試行してください")
                 return 3
+            copy = None
             try:
                 if (path.parent / "update_in_progress.marker").exists() or code_stamp() != expected_code:
                     raise ValueError("update_in_progress")
                 if notify_spool.restore_writer_hold(str(path.parent)) is not None:
                     raise ValueError("restore_in_progress")
+                if action == "context-reset":
+                    # The owner's order: back up under the run lock, before the erasing transaction.
+                    import hashlib
+                    import local_backup
+                    try:
+                        copy = local_backup.reset_backup(str(path))
+                    except local_backup.MaintenanceError as error:
+                        print(json.dumps({"outcome": "rejected", "error": str(error)}, ensure_ascii=False))
+                        return 1
+                    digest = hashlib.sha256()
+                    with open(copy, "rb") as stream:
+                        for block in iter(lambda: stream.read(1 << 20), b""):
+                            digest.update(block)
+                    req["backup"] = {"name": os.path.basename(copy), "bytes": os.path.getsize(copy),
+                                     "sha256": digest.hexdigest()}
                 with closing(Ledger(str(path))) as ledger:
                     receipt = mcs_requests.apply_command(ledger, req)
+                if action == "context-reset" and receipt.get("outcome") != "applied":
+                    # Nothing was erased, so the copy restores nothing; an exception keeps it (below).
+                    os.unlink(copy)
+            except BaseException:
+                if copy is not None:
+                    print(json.dumps({"backup_kept": os.path.basename(copy)}, ensure_ascii=False))
+                raise
             finally:
                 os.close(lock_fd)
-            print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "control", "approved")},
+            print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "control", "approved",
+                                                          "backup", "erased", "carryover") if k in receipt},
                              ensure_ascii=False))
             return 0 if receipt["outcome"] == "applied" else 1
         if action == "outstanding":
@@ -1252,6 +1357,15 @@ def add_parsers(sub):
     q.add_argument("--after", type=int, help="前回の出力の next_after。この message_id より古い候補から確かめる")
     q.add_argument("--out", type=Path, help="承認に使う束の計画を書き出すファイル")
     q.set_defaults(fn=command, cloud_action="local-rebuild-plan")
+    q = actions.add_parser("context-reset-plan", help="患者コンテキストの消去で消える件数・引き継ぐ使用額・実行できない理由を確認（変更しない）")
+    q.set_defaults(fn=command, cloud_action="context-reset-plan")
+    q = actions.add_parser("context-reset", help="人の確認と記録を伴い、バックアップを取ってから患者コンテキストの結果とその外部AI記録を消去")
+    q.add_argument("--preview-hash", required=True, help="context-reset-plan が表示した preview_hash")
+    q.add_argument("--confirm-human", action="store_true")
+    q.add_argument("--reason", required=True)
+    q.add_argument("--actor", default="local-human")
+    q.add_argument("--command-id", help="結果が不明だった同じ消去を確かめる場合の承認記録UUID")
+    q.set_defaults(fn=command, cloud_action="context-reset")
     q = actions.add_parser("local-rebuild-approve", help="人の確認と記録を伴い、確認した1束のローカルでの作り直しを承認")
     q.add_argument("--plan", type=Path, required=True)
     q.add_argument("--confirm-human", action="store_true")

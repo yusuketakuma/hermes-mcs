@@ -1,0 +1,14 @@
+{
+  "category": "changed",
+  "title": "シグナル検出の残りの全件読み込みを逐次読みに変更",
+  "summary": "処方期間・依頼登録のシグナル検出は履歴を1行ずつ、退院通知は一定数ずつ読み、全件を一度にメモリへ載せません。検出結果と順序は変わりません。",
+  "upgrade": "追加操作は不要です。常駐処理の再起動後に反映されます。",
+  "details": [
+    "med_period_artifacts・request_overdue・request_aging・discharge_noticeがカーソル経由の逐次読みになった。",
+    "latest_signal_statesは生の文書と解析後の文書を同時に保持しなくなった。"
+  ],
+  "refs": [
+    "mcs/signals/mcs_signals.py",
+    "mcs/core/mcs_queries.py"
+  ]
+}

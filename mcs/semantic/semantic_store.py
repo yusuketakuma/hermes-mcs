@@ -20,7 +20,7 @@ from inference_version import CURRENT_VERSION, LEGACY_VERSION, VERSION_KEY, is_c
 import semantic_jev as jev
 from semantic_policy import (JOB_KIND, KIND_ASSESS, KIND_AUDIT, KIND_FACT_AUDIT, KIND_FACTS,
                              KIND_FACTS_V2, KIND_LOOP, KIND_LOOP_EVENT, KIND_SUMMARY, KIND_USAGE,
-                             POLICY_VERSION, SCHEMA_VERSION, policy_fingerprint)
+                             LOCAL_MODEL_GATED_KINDS, POLICY_VERSION, SCHEMA_VERSION, policy_fingerprint)
 
 
 def _member(row) -> dict:
@@ -42,17 +42,19 @@ def _member(row) -> dict:
     }
 
 
-def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL,
-                       local_model: str | None = None) -> str:
+# Hash-compatibility constant of the fingerprint recipe, not a model default:
+# the fingerprint once named the configured local model, and every stored
+# artifact was keyed by this shipped value. The producing model is now judged
+# per artifact (producer_current), so a local model change keeps cloud results.
+_LEGACY_FINGERPRINT_LOCAL_MODEL = "Qwen3.5-9B"
+
+
+def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL) -> str:
     """Content+context revision fingerprint: any body edit, context
-    change, model/registry/schema bump invalidates prior results
-    (INV-15). Canonical JSON — never a lossy string concat.
-    ``local_model`` defaults to the host-configured local model; a
-    snapshot reader passes the one resolved from its supplied config
-    so it never opens host configuration implicitly."""
+    change, Jev model/registry/schema bump invalidates prior results
+    (INV-15). Canonical JSON — never a lossy string concat. The local
+    model is not part of the input identity."""
     from clinical_chunking import PLAN_VERSION
-    if local_model is None:
-        local_model = semantic_transport.llm_model()
     return payload_hash({
         VERSION_KEY: CURRENT_VERSION,
         # Target roles are selection metadata; artifacts are selected per
@@ -60,7 +62,7 @@ def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL,
         "members": sorted(({k: v for k, v in m.items() if k != "role"}
                            for m in members), key=lambda x: x["message_id"]),
         "model": model,
-        "local_model": local_model,
+        "local_model": _LEGACY_FINGERPRINT_LOCAL_MODEL,
         "prompts": [semantic_llm._FACT_PROMPT, semantic_llm._SUMMARY_PROMPT,
                     semantic_llm._REPAIR_SUFFIX, semantic_llm._FACT_V2_PROMPT,
                     semantic_llm._FACT_V2_REPAIR_SUFFIX],
@@ -72,8 +74,7 @@ def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL,
 
 
 def thread_bundle(db, project_id: int, root_id: int,
-                  target_ids: list | None = None,
-                  local_model: str | None = None) -> dict | None:
+                  target_ids: list | None = None) -> dict | None:
     """One post + its same-thread stored replies — the atomic analysis
     unit (§12.3). A message whose row vanished makes the bundle
     unbuildable (None), never silently re-scoped (AT-019)."""
@@ -122,7 +123,7 @@ def thread_bundle(db, project_id: int, root_id: int,
     quality = "full" if not missing_replies and all(
         m["body_state"] in ("full", "deleted") for m in members) \
         else "partial"
-    fp = bundle_fingerprint(members, local_model=local_model)
+    fp = bundle_fingerprint(members)
     return {"bundle_id": f"bundle_{project_id}_{root_id}_{fp[:12]}",
             "account_scope": "mcs",
             "project_id": project_id, "root_id": root_id,
@@ -156,12 +157,23 @@ def jev_state(bundle: dict, target_id: int) -> dict | None:
             "context": ctx}
 
 
-def current_artifact(db, kind: str, message_id: int, fp: str, policy=None):
-    """Latest artifact of `kind` for `message_id` whose meta fingerprint
-    still matches the live input — older generations stay recorded as
-    history but are never 'current' (AT-035/056)."""
+def producer_current(kind: str, row_model, meta: dict) -> bool:
+    """Whether the local model still accepts this row's producer (cloud rows always do)."""
+    if kind not in LOCAL_MODEL_GATED_KINDS:
+        return True
+    import extraction_provenance
+    proof = meta.get("provider_provenance")
+    # Only a row the local model decides reads the model (once per scope).
+    if extraction_provenance.local_producer_current(proof, row_model, None):
+        return True
+    return extraction_provenance.local_producer_current(
+        proof, row_model, semantic_transport.scoped_local_model())
+
+
+def _latest_matching(db, kind: str, message_id: int, fp: str, policy=None):
+    """The latest readable, non-invalidated row of ``kind`` bound to ``fp``/``policy``, or None."""
     for r in db.execute(
-            "SELECT content,meta FROM artifacts WHERE kind=? "
+            "SELECT * FROM artifacts WHERE kind=? "
             "AND message_id=? ORDER BY artifact_id DESC",
             (kind, message_id)):
         meta = loads_dict(r["meta"])
@@ -175,11 +187,99 @@ def current_artifact(db, kind: str, message_id: int, fp: str, policy=None):
             continue
         if meta.get("fingerprint") == fp and (
                 policy is None or meta.get("policy_fingerprint") == policy):
-            content = loads_dict(r["content"])
-            if content is None:
-                return None
-            return {"content": content, "meta": meta}
+            return r, meta
     return None
+
+
+def current_artifact(db, kind: str, message_id: int, fp: str, policy=None):
+    """Latest artifact of `kind` for `message_id` whose meta fingerprint
+    still matches the live input — older generations stay recorded as
+    history but are never 'current' (AT-035/056). An interpretation result
+    is current only while its producer is accepted (producer_current); the
+    latest matching row decides, never an older one behind it."""
+    found = _latest_matching(db, kind, message_id, fp, policy)
+    if found is None:
+        return None
+    r, meta = found
+    if not producer_current(kind, r["model"] if "model" in r.keys() else None, meta):
+        return None
+    content = loads_dict(r["content"])
+    if content is None:
+        return None
+    return {"content": content, "meta": meta}
+
+
+def local_redo_pending(db, message_id: int, fp: str, policy) -> bool:
+    """The latest summary of this input awaits a redo for the configured local model.
+
+    Its evaluation then restarts like a new generation: older receipts of
+    the same input (its audit) are not evidence of the new one."""
+    found = _latest_matching(db, KIND_SUMMARY, message_id, fp, policy)
+    return found is not None and not producer_current(
+        KIND_SUMMARY, found[0]["model"] if "model" in found[0].keys() else None, found[1])
+
+
+def claim_input_binding(project_id, message_id, fp, policy, revision, summary, facts) -> str:
+    """Bind a summary's exact claims to the facts it was written from or audited against."""
+    return payload_hash({"project_id": project_id, "message_id": message_id, "fingerprint": fp,
+                         "policy": policy, "revision": revision,
+                         "claims": summary.get("claims"), "facts": facts})
+
+
+def fact_input_binding(project_id, message_id, fp, policy, revision, facts) -> str:
+    """Bind a fact-level evaluation (source coverage) to the facts it evaluated."""
+    return payload_hash({"project_id": project_id, "message_id": message_id, "fingerprint": fp,
+                         "policy": policy, "revision": revision, "facts": facts})
+
+
+def current_row_id(db, kind: str, message_id: int, fp: str, policy=None):
+    """Id of the row ``current_artifact`` returns (the latest matching one), or None."""
+    found = _latest_matching(db, kind, message_id, fp, policy)
+    return found[0]["artifact_id"] if found is not None else None
+
+
+def facts_rewritten_after(db, fact_kind: str, message_id: int, fp: str, artifact_id) -> bool:
+    """Whether the current fact row of this input was written after row ``artifact_id``.
+
+    With no fact row there is no rewrite; a row id that cannot be read
+    (``None``) counts as rewritten once a fact row exists."""
+    facts = current_row_id(db, fact_kind, message_id, fp)
+    return facts is not None and (artifact_id is None or facts > artifact_id)
+
+
+def paired_audit(db, message_id: int, fp: str, policy):
+    """The audit written with the current summary of this input, or None.
+
+    It records which facts the summary was audited over; a later audit of
+    another summary or a PENDING stub without a summary does not replace it."""
+    summary_id = current_row_id(db, KIND_SUMMARY, message_id, fp, policy)
+    if summary_id is None:
+        return None
+    for r in db.execute(
+            "SELECT * FROM artifacts WHERE kind=? AND message_id=? AND artifact_id>? "
+            "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.summary_artifact_id')=? ELSE 0 END "
+            "ORDER BY artifact_id DESC", (KIND_AUDIT, message_id, summary_id, summary_id)):
+        meta = loads_dict(r["meta"])
+        if (meta is not None and is_current(meta) and not meta.get("invalidated")
+                and meta.get("fingerprint") == fp and meta.get("policy_fingerprint") == policy):
+            content = loads_dict(r["content"])
+            return None if content is None else {"content": content, "meta": meta}
+    return None
+
+
+def built_over_current_facts(db, kind: str, message_id: int, fp: str, policy, recorded,
+                             binding: str, fact_kind: str) -> bool:
+    """Whether the current ``kind`` row was derived from the facts that are current now.
+
+    A local model change can rewrite the facts of an unchanged input, so a
+    row derived from them is judged on every attempt from durable state:
+    the binding ``recorded`` for it decides. A row without one (written
+    before bindings were recorded, or an unaudited oversize stub) counts
+    only while no current fact row was written after it."""
+    if recorded is not None:
+        return recorded == binding
+    return not facts_rewritten_after(db, fact_kind, message_id, fp,
+                                     current_row_id(db, kind, message_id, fp, policy))
 
 
 def refresh_cards_allowed(db, project_id, message_id):
@@ -654,8 +754,7 @@ def _classification_only_state(ledger, row, scfg, cfg, bundle, fp, policy):
                             or semantic_audit.audit_status_for(findings, findings, True, True) != 'PASS'):
                         return 'held'
                 elif kind == KIND_AUDIT and (meta.get('jev_evaluated') is not False or meta.get('code_checks') != 'passed'
-                      or meta.get('jev_skip_reason') not in ('not_configured', 'disabled', 'daily_budget',
-                          'backlog_reserved', 'service_unavailable', 'circuit_open')
+                      or meta.get('jev_skip_reason') not in jev.SKIP_REASONS
                       or any(item['code'] != 'support_unevaluated' for item in findings)):
                     return 'held'
         assessment, previous = _primary_assessment_history(db, pid, mid, fp, policy)
@@ -670,8 +769,7 @@ def _classification_only_state(ledger, row, scfg, cfg, bundle, fp, policy):
             if meta.get('registry') != jev.REGISTRY_VERSION or meta.get('model') != jev.JEV_MODEL:
                 return 'held'
             return 'current'
-        if (meta.get('technical_status') != 'skipped' or meta.get('jev_skip_reason') not in
-                ('not_configured', 'disabled', 'daily_budget', 'backlog_reserved', 'service_unavailable', 'circuit_open')):
+        if meta.get('technical_status') != 'skipped' or meta.get('jev_skip_reason') not in jev.SKIP_REASONS:
             return 'held'
         return 'current_skipped'
     except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
@@ -705,14 +803,13 @@ def _loop_only_state(ledger, row, scfg, cfg, bundle, fp, policy, deadline=None):
                 or not is_current(meta) or meta.get('invalidated') or meta.get('stale')
                 or meta.get('schema') != SCHEMA_VERSION or meta.get('fingerprint') != fp
                 or meta.get('policy_fingerprint') != policy or meta.get('target_revision') != member['revision']
-                or meta.get('execution_generation') != runtime.execution_generation(scfg)
+                or meta.get('execution_generation') != runtime.interpretation_generation(scfg)
                 or meta.get('loop_status') != status or meta.get('skip_reason') != content.get('skip_reason')
                 or meta.get('content_hash') != mcs_util.payload_hash(content) or receipt['model'] != jev.JEV_MODEL):
             return 'held'
         if status == 'SKIPPED':
             reason = content.get('skip_reason')
-            if (reason not in ('not_configured', 'disabled', 'daily_budget', 'backlog_reserved',
-                               'service_unavailable', 'circuit_open')
+            if (reason not in jev.SKIP_REASONS
                     or content.get('skip_ref') is None
                     or content['skip_ref'] != _loop_skip_ref(db, pid, bundle['root_id'], fp, policy, reason)):
                 return 'held'
@@ -747,7 +844,11 @@ def _loop_only_state(ledger, row, scfg, cfg, bundle, fp, policy, deadline=None):
 
 
 def reprocess_target_state(ledger, row, scfg, *, cfg=None, deadline=None, observe_paused=False):
-    """Observe one stored source without mistaking job completion for coverage."""
+    """Observe one stored source without mistaking job completion for coverage.
+
+    Locally produced results are judged by the enclosing local model scope:
+    the semantic reprocess loop uses the host configuration (as its writers
+    and job generations do), a patient-context reader the config it holds."""
     from mcs_queries import current_v4_id, paused
     import semantic_publication as v4
     pid, mid = row['project_id'], row['message_id']

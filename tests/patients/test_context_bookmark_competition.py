@@ -4,7 +4,6 @@ from contextlib import closing
 import pytest
 
 from ledger import Ledger
-import patient_context_plan as plan
 import patient_context_refresh as refresh
 import patient_context_refresh_readiness as readiness
 import patient_context_refresh_state as state
@@ -39,7 +38,7 @@ def test_other_patient_bookmark_does_not_reject_selected_source(runtime, monkeyp
         def select_then_other_bookmark(*args, **kwargs):
             selected = select(*args, **kwargs)
             best, pid, rotation, *_ = selected
-            assert pid == 1 and plan.lane_rotation(best, rotation[0])[0] == lane
+            assert pid == 1 and schedule.lane_rotation(best, rotation[0])[0] == lane
             snapshot, _, published = best[lane]
             assert snapshot['_readiness_proof'] is not None
             observed['source_sig'] = snapshot['source_sig']

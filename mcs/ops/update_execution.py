@@ -64,8 +64,13 @@ from update_services import (
     _standalone_drainer_problems,
 )
 
+def _commit_order(op: dict) -> tuple:
+    """Receipt commit order (rowid); a row without processed_at, which the schema forbids, stays the oldest as before."""
+    return op["at"] is not None, op["rowid"]
+
+
 def _scan_receipt(executed, applies, rollbacks, consumed, cid, rj, at, rowid) -> None:
-    """One receipt row of scan_pending_approvals, in processed_at order."""
+    """One receipt row of scan_pending_approvals, in _commit_order."""
     if cid in executed:
         return
     if at is not None and (type(at) not in (int, float) or not 0 <= at < 1e12):
@@ -99,10 +104,15 @@ def scan_pending_approvals(state: dict
     """Read command_receipts read-only (no Ledger init — R16).
 
     Returns (candidates, consumed):
-      candidates — unexecuted ops in processed_at order: among pending
+      candidates — unexecuted ops in receipt commit order: among pending
         applies only the newest tag is eligible (older ones are
         superseded); each ops.update_rollback is its own op AND vetoes
         every apply receipt that arrived before it.
+      "Before" and "newest" are _commit_order, the rowid of
+      command_receipts (the code only appends to it, never deletes or
+      replaces a row, and writers are serialized), not processed_at: a
+      clock that moved backward must not let an earlier apply escape a
+      later rollback's veto.
       consumed — (command_id, result) pairs to record as executed
         without running (superseded / vetoed applies)."""
     try:
@@ -120,7 +130,7 @@ def scan_pending_approvals(state: dict
         rows = con.execute(
             "SELECT command_id, receipt_json, processed_at, rowid"
             " FROM command_receipts WHERE outcome='applied'"
-            " ORDER BY processed_at, rowid")
+            " ORDER BY processed_at IS NOT NULL, rowid")
         for cid, rj, at, rowid in rows:
             _scan_receipt(executed, applies, rollbacks, consumed,
                           cid, rj, at, rowid)
@@ -133,8 +143,7 @@ def scan_pending_approvals(state: dict
     by_tag: dict[str, dict] = {}
     for p in applies:
         cur = by_tag.get(p["tag"])
-        if cur is None or (p["at"] or 0, p["rowid"]) \
-                > (cur["at"] or 0, cur["rowid"]):
+        if cur is None or _commit_order(p) > _commit_order(cur):
             by_tag[p["tag"]] = p
     keep = {id(p) for p in by_tag.values()}
     consumed.extend((p["command_id"], "superseded")
@@ -148,7 +157,7 @@ def scan_pending_approvals(state: dict
     consumed.extend((p["command_id"], "superseded")
                     for p in ordered[1:])
     candidates = ordered[:1] + rollbacks
-    candidates.sort(key=lambda p: (p.get("at") or 0, p.get("rowid") or 0))
+    candidates.sort(key=_commit_order)
     return candidates, consumed
 
 

@@ -1,7 +1,7 @@
 """Validate cloud prices, accounting rows and bound reservation evidence."""
 from __future__ import annotations
 from contextlib import closing, contextmanager
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import json
 import math
@@ -83,23 +83,32 @@ def _configured_price_version(model):
     if model == PROVIDERS["anthropic"]:
         # Read at call time: a price rotation replaces the current Haiku version.
         return anthropic_client.PRICE_VERSION
-    for module in (anthropic_client, openai_client):
-        if model in module.CURRENT_PRICE_VERSIONS:
-            return module.CURRENT_PRICE_VERSIONS[model]
+    if model in anthropic_client.CURRENT_PRICE_VERSIONS:
+        return anthropic_client.CURRENT_PRICE_VERSIONS[model]
+    if model in openai_client.CURRENT_PRICE_VERSIONS:
+        return openai_client.CURRENT_PRICE_VERSIONS[model]
     raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
 
 
 def current_price_version(model, now=None):
-    """The price table in force for a new send on the JST day of ``now``: the
-    configured table from its recheck day, before that the newest table already
-    rechecked, so a rotation never prices an earlier day with an unconfirmed table."""
+    """The price table in force for a new send on the JST day of ``now``.
+
+    The newest configured table applies from its recheck day; before that day the
+    newest table already rechecked applies, so a rotation never reprices an
+    earlier day with a table that was not yet confirmed.
+    """
     configured = _configured_price_version(model)
     day = datetime.fromtimestamp(time.time() if now is None else now, JST).date().isoformat()
-    checked = [d for (m, _v), d in PRICE_DEFINITIONS.items() if m == model and d["price_checked_on"] <= day]
     chosen = PRICE_DEFINITIONS.get((model, configured))
-    if not checked or chosen is not None and chosen["price_checked_on"] <= day:
+    if chosen is None:
+        return configured   # an undefined table stops sending (_price_definition), never a silent fallback
+    if chosen.get("price_checked_on", "") <= day:
         return configured
-    return max(checked, key=lambda d: (d["price_checked_on"], d["price_valid_until"]))["price_version"]
+    earlier = [d for (m, _v), d in PRICE_DEFINITIONS.items()
+               if m == model and isinstance(d.get("price_checked_on"), str) and d["price_checked_on"] <= day]
+    if not earlier:
+        return configured
+    return max(earlier, key=lambda d: (d["price_checked_on"], d["price_valid_until"]))["price_version"]
 
 
 def _price_definition(model, price_version=_CURRENT_PRICE, *, now=None):
@@ -174,8 +183,9 @@ PRICE_RECHECK_NOTICE_DAYS = 7
 def price_info(model, now=None):
     now = time.time() if now is None else now
     definition = _price_definition(model, now=now)
+    today = datetime.fromtimestamp(now, JST).date()
+    remaining = (datetime.strptime(definition["price_valid_until"], "%Y-%m-%d").date() - today).days
     valid = pricing_valid(now, model=model)
-    remaining = (date.fromisoformat(definition["price_valid_until"]) - datetime.fromtimestamp(now, JST).date()).days
     return {"price_version": definition["price_version"],
             "price_checked_on": definition["price_checked_on"],
             "price_valid_until": definition["price_valid_until"],
@@ -242,6 +252,63 @@ def _periods(now):
         return day.timestamp(), day.replace(day=1).timestamp()
     except (TypeError, ValueError, OverflowError, OSError):
         raise AnthropicError("pricing_unverified", "usage_timestamp_invalid") from None
+
+
+# Spending of accounting rows removed by a receipted patient-context reset. One
+# artifact per reset holds per-day totals by provider and settlement: when (the
+# day's last reservation), which provider, how many requests, how much, and
+# whether every request of the group settled. Unsettled spending stays at its
+# reserved maximum and keeps counting as unresolved.
+CARRYOVER_KIND = "cloud_usage_carryover_v1"
+_CARRYOVER_FIELDS = frozenset({"at", "provider", "requests", "cost_usd", "settled"})
+
+
+def carryover_providers():
+    return frozenset(definition["provider"] for definition in PRICE_DEFINITIONS.values())
+
+
+def carryover_entries(db, since):
+    """Carried totals at or after ``since`` as (at, provider, requests, cost, settled); malformed rows fail closed."""
+    providers = carryover_providers()
+    entries = []
+    for (content,) in db.execute("SELECT content FROM artifacts WHERE kind=? ORDER BY artifact_id", (CARRYOVER_KIND,)):
+        document = strict_json(content) if isinstance(content, str) else None
+        if not isinstance(document, dict) or document.get("schema") != CARRYOVER_KIND \
+                or not isinstance(document.get("entries"), list):
+            raise AnthropicError("pricing_unverified", "carryover_invalid")
+        for entry in document["entries"]:
+            if (not isinstance(entry, dict) or set(entry) != _CARRYOVER_FIELDS
+                    or type(entry["at"]) not in (int, float) or not math.isfinite(entry["at"])
+                    or entry["provider"] not in providers or type(entry["settled"]) is not bool
+                    or type(entry["requests"]) is not int or entry["requests"] < 0):
+                raise AnthropicError("pricing_unverified", "carryover_invalid")
+            try:
+                cost = _decimal(entry["cost_usd"])
+            except ValueError:
+                raise AnthropicError("pricing_unverified", "carryover_invalid") from None
+            if entry["at"] >= since:
+                entries.append((entry["at"], entry["provider"], entry["requests"], cost, entry["settled"]))
+    return entries
+
+
+def expired_carryover_ids(db, cutoff):
+    """Carry-over artifacts whose every entry predates ``cutoff``; unreadable ones stay (they fail closed)."""
+    expired = []
+    for artifact_id, content in db.execute("SELECT artifact_id,content FROM artifacts WHERE kind=?",
+                                           (CARRYOVER_KIND,)):
+        try:
+            entries = strict_json(content)["entries"]
+            if all(type(entry["at"]) in (int, float) and entry["at"] < cutoff for entry in entries):
+                expired.append(artifact_id)
+        except (TypeError, ValueError, KeyError, RecursionError):
+            continue
+    return expired
+
+
+def carryover_marker(db):
+    """Changes whenever a carry-over artifact is added or removed; tallies rebuild on change."""
+    return tuple(db.execute("SELECT COUNT(*), COALESCE(MAX(artifact_id),0) FROM artifacts WHERE kind=?",
+                            (CARRYOVER_KIND,)).fetchone())
 
 
 def _loads(value):
@@ -361,14 +428,16 @@ def _reserve_valid(meta, row):
     return maximum
 
 
-def _stored_reservation(ledger, reservation, *, bound_only=False):
-    """The one retained reservation row matching ``reservation``, validated."""
+def _stored_reservation(ledger, reservation, *, bound_only=False, retained=True):
+    """The one retained reservation row matching ``reservation``, validated.
+
+    ``retained=False`` (with ``bound_only``) also accepts a row older than the usage window."""
     rid = reservation.get("reservation_id")
     rows = (_matching_bound_rows(ledger, KINDS[0], rid) if bound_only
             else _matching_rows(ledger, KINDS[0], rid))
     if len(rows) != 1:
         raise AnthropicError("pricing_unverified", "reservation_missing")
-    if bound_only and rows[0]["created_at"] < time.time() - 62 * 86400:
+    if bound_only and retained and rows[0]["created_at"] < time.time() - 62 * 86400:
         raise AnthropicError("pricing_unverified", "reservation_missing")
     stored = _accounting_meta(rows[0]["meta"])
     _reserve_valid(stored, rows[0])

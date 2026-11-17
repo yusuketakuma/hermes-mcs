@@ -116,7 +116,7 @@ def test_build_health_bounds_part_read_and_keeps_observed_zero_healthy(stored, m
     original_limit = stored.getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
     original_wait = stored.execute("PRAGMA busy_timeout").fetchone()[0]
 
-    def read(db, now, cfg=None):
+    def read(db, now, cfg=None, **_kwargs):
         assert db.getlimit(sqlite3.SQLITE_LIMIT_LENGTH) == min(
             original_limit, health_report.HEALTH_OBSERVATION_ROW_BYTES)
         assert db.execute("PRAGMA busy_timeout").fetchone()[0] == min(

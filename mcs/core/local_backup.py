@@ -258,8 +258,8 @@ def local_backup_status(*, now: float) -> dict:
 
 def backup_bytes_by_class() -> dict | None:
     """Bytes of regular files in data/backups by the owner that keeps them
-    (daily rotation, its .ok markers, pre-update copies, in-flight staging,
-    hand-made copies). Names and stat only — no DB open. A number for
+    (daily rotation, its .ok markers, pre-update copies, patient-context
+    reset copies, in-flight staging, hand-made copies). Names and stat only — no DB open. A number for
     health only: nothing here deletes. None when the scan is unbounded or
     unreadable; all zero when the directory is missing."""
     totals = dict.fromkeys(BACKUP_CLASSES, 0)
@@ -324,6 +324,20 @@ def preupdate_backup(db_path: str, *, deadline: float | None = None) -> str:
     return dest
 
 
+def reset_backup(db_path: str) -> str:
+    """Verified copy before a patient-context reset; its prefix keeps it out of every automatic rotation."""
+    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
+    os.chmod(BACKUP_DIR, 0o700)
+    if shutil.disk_usage(BACKUP_DIR).free / (1024 * 1024) < backup_need_mb(db_path):
+        raise MaintenanceError("backup_disk_low")
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    fd, tmp = tempfile.mkstemp(prefix=f"patient-context-reset-{stamp}-", suffix=".db.tmp", dir=BACKUP_DIR)
+    os.close(fd)
+    dest = tmp[:-4]
+    publish_backup(db_path, tmp, dest)
+    return dest
+
+
 def prune_preupdate_backups(state_path: str | None = None) -> int:
     """Delete only preupdate-* backups NOT referenced by an actionable
     record — reference-based retention (B3): a flapping fetch loop can
@@ -378,15 +392,18 @@ def staging_patterns() -> list[str]:
             for suffix in ("", "-journal", "-wal", "-shm")]
 
 
+_GENERATION_ORDER = ("daily", "preupdate", "patient_context_reset")
+
+
 def generations() -> list[tuple[str, str, os.stat_result]]:
-    """(name, kind, lstat) of the regular daily then pre-update backups,
-    newest name first within each kind. Names and stat only — no DB open."""
+    """(name, kind, lstat) of the daily, pre-update and pre-reset backups,
+    in that kind order and newest name first within each. Names and stat only — no DB open."""
     found = []
     try:
         with os.scandir(BACKUP_DIR) as entries:
             for entry in entries:
                 kind = backup_class(entry.name)
-                if kind not in ("daily", "preupdate"):
+                if kind not in _GENERATION_ORDER:
                     continue
                 with suppress(FileNotFoundError):   # rotated away mid-scan
                     st = entry.stat(follow_symlinks=False)
@@ -395,4 +412,4 @@ def generations() -> list[tuple[str, str, os.stat_result]]:
     except FileNotFoundError:
         return []
     found.sort(key=lambda item: item[0], reverse=True)
-    return sorted(found, key=lambda item: item[1] != "daily")
+    return sorted(found, key=lambda item: _GENERATION_ORDER.index(item[1]))

@@ -16,7 +16,7 @@ SAFE_CFG = {**CFG, 'cloud_llm': {'mode': 'off', 'provider': 'anthropic'}}
 def observed(monkeypatch):
     db = SimpleNamespace(scan_until=progress.state.time.monotonic() + 60)
     source = {'message_id': 1, 'source_key': 1, 'body_length': 100, 'derived_summary_chars': 0}
-    snapshot = {'source_sig': '1' * 64, 'sources': [source], 'contract': {},
+    snapshot = {'source_sig': '1' * 64, 'sources': [source], 'contract': {}, 'route': {'contract': {}, 'provider': None},
                 'acquisition': {'complete': True}, 'attachment_coverage': {'complete': True},
                 'dependencies': {'complete': True}}
     scans = {1: {'complete': False, 'audited': False, 'cursor': 100}}
@@ -221,3 +221,23 @@ def test_real_progress_reader_accepts_publicly_resolved_implicit_mode(runtime, m
     assert result["percent"] == 10
     assert result["stage"] == "sources"
     assert led.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("block", [None, {"mode": "off"}])
+def test_real_progress_reader_works_for_local_only_resolved_settings(runtime, monkeypatch, block):
+    """Local-only settings (no keys) still show numeric progress once resolved without reading keys."""
+    import cloud_policy
+    led, _, _ = runtime
+    seed(led)
+    cfg = dict(CFG)
+    cfg.pop("cloud_llm", None)
+    if block is not None:
+        cfg["cloud_llm"] = block
+    def forbidden(*args, **kwargs):
+        pytest.fail("display must not inspect credentials")
+    monkeypatch.setattr(cloud_policy, "provider_key", forbidden)
+    settings, errors = cloud_policy.resolve_settings(cfg, available_providers=())
+    assert not errors and settings["mode"] in ("off", "on")
+    effective = {**cfg, "cloud_llm": {**(cfg.get("cloud_llm") or {}), **settings}}
+    result = progress.read(led.db, 1, effective)
+    assert result["percent"] == 10 and result["stage"] == "sources"

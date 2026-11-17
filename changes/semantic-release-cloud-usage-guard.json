@@ -10,6 +10,7 @@
   "refs": [
     "mcs/semantic/semantic_intake_hold.py",
     "mcs/core/ledger_schema.py",
-    "mcs/notify/notify_flush.py"
+    "mcs/notify/notify_flush.py",
+    "tests/semantic/test_semantic_intake_release.py"
   ]
 }

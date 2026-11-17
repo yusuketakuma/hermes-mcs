@@ -1,13 +1,21 @@
 {
   "category": "added",
   "title": "患者情報の閲覧・操作記録と、新規導入時の外部AI送信の施設確認を追加",
-  "summary": "Slack・Discord・LINE WORKSの /mcs 操作とサマリー（/mcs-summary・LINE WORKSのDM）は、操作者・操作・患者ID・結果を、改ざんを検知できる記録として data/access_log/ に残してから回答します。記録できない場合、閲覧の回答は返しません。検索語・本文・患者名は記録しません。新しく導入する環境では、APIキーを登録しただけではAnthropic・OpenAI・Jevへの送信が自動で始まらず、施設の責任者が確認を記録した後に始まります。既存の環境の動作は変わりません。",
-  "upgrade": "既存環境は追加操作不要です（external_transfer.json が無いため従来どおりキーで自動有効化します）。Hermesモードは gateway の再起動、LINE WORKS は独立アダプターの再起動で閲覧記録が有効になります。新規導入で外部AIを使う場合は、送信先との契約・患者への周知を確認してから python3 mcs/ops/mcs_compliance.py acknowledge --by 氏名 --reason 根拠 --services anthropic,jev --confirm-human を実行します。config.json で mode を明示した設定は確認記録に関係なく従来どおりです。",
+  "summary": "Slack・Discord・LINE WORKSの /mcs 操作とサマリーは、操作者・操作・患者ID・結果を改ざんを検知できる記録として data/access_log/ に残してから回答します。記録できない場合は、閲覧の回答も患者情報を含む失敗の応答も返しません。新しく導入する環境では、Anthropic・OpenAI・Jevへの送信は、施設の責任者が確認を記録し、その確認に含めたサービスにだけ始まります（mode を明示した設定も同じです）。確認記録の無い既存の環境の動作は変わりません。",
+  "upgrade": "確認記録（external_transfer.json）の無い既存環境は追加操作不要です。Hermesモードは gateway の再起動、LINE WORKS は独立アダプターの再起動で閲覧記録が有効になります。新規導入で外部AIを使う場合は、契約と患者への周知を確認してから python3 mcs/ops/mcs_compliance.py acknowledge --by 氏名 --reason 根拠 --services anthropic,jev --confirm-human を実行します。確認記録がある環境で、確認に含まれないサービスを mode の明示で使っていた場合は、更新後その送信が止まります。続けるには --services にそのサービスを含めて確認を記録し直します。",
   "details": [
-    "記録は月ごとの access-YYYY-MM.jsonl（0600、ディレクトリ0700）に1行ずつ追記し、各行が直前の行のSHA-256を持ちます。途中の行の削除・改変・月ファイルの欠落は mcs_compliance.py access-log verify で検出し、末尾の削除・改変は前回の件数とheadを --checkpoint に渡して検出します。",
-    "記録できない場合も、確定済みの依頼・操作は別の受付記録があるため従来どおり返します。一覧の回答（患者を指定しない閲覧）は、回答に含まれた患者IDも記録します（1行200人まで、超えた分は人数）。サマリーは表示した患者IDと、表示できなかったこと（summary_unavailable）を記録します。操作・種類は dispatch が定義する名前だけを残し、それ以外は invalid として残すので、拒否された要求の本文や名前を記録に残しません。時計が戻っても最新の月ファイルへ追記し、連鎖を保ちます。書きかけで止まった行は次の記録の前に取り除き、書込みに失敗した行は残しません。",
-    "mcs_compliance.py access-log review は利用者ごとの件数・閲覧患者数・拒否・夜間（JST 20〜7時）の件数を出し、定期確認の対象に印を付けます。保存期間の自動削除はしません。",
-    "外部AIの確認記録は MCS_ROOT 直下の external_transfer.json（0600）に、確認者・根拠・対象サービス・日時と直近5回の確認履歴を保存します。install.sh の初回導入と、config.json が無い状態からの mcs setup init で、設定を書く前に確認待ちを作ります（途中で止まっても確認待ちが残ります）。記録が読めない場合は自動有効化しません。患者文脈の品質監査を含め、Jevの自動有効化はすべて同じ確認を通ります。このファイルは .gitignore の対象です。"
+    "記録は月ごとの access-YYYY-MM.jsonl（0600、ディレクトリ0700）に1行ずつ追記し、記録ディレクトリの作成と各追記をディレクトリの fsync まで確定してから回答します。各行が直前の行のSHA-256を持ちます。途中の行の削除・改変・月ファイルの欠落は mcs_compliance.py access-log verify で検出し、末尾の削除・改変は前回の件数とheadを --checkpoint に渡して検出します。",
+    "記録できない場合も、確定済みの依頼・操作の応答は従来どおり返します。応答は受付番号・ハッシュ・受付状態だけで患者情報を含まず、操作者・患者・変更内容は受付記録（command_receipts）に残ります。適用結果の照会は閲覧なので返しません（確定操作の記録には、検証済みの依頼内容の患者と操作名を残します）。患者情報を含まない拒否（エラーコードだけの応答）はそのまま返します。一覧の回答（患者を指定しない閲覧）は、回答に含まれた患者IDも記録します（1行200人まで、超えた分は人数）。サマリーは件数・文字数の制限で省略された行を除き、表示に残った行の患者IDだけ（文字列から患者を逆引きせず、表示行の由来を保持して判定し、その対応情報は公開カードに含めません）と、表示できなかったこと（summary_unavailable）を記録します。操作・種類は dispatch が定義する名前だけを残し、それ以外は invalid として残すので、拒否された要求の本文や名前を記録に残しません。時計が戻っても最新の月ファイルへ追記し、連鎖を保ちます。書きかけで止まった行は、次の記録が翌月になっても前月の末尾から取り除き、書込みに失敗した行は残しません。",
+    "mcs_compliance.py access-log review は利用者ごとの件数・閲覧患者数（1行に載らず人数だけ残った分は記録をまたいで足し合わせず、patients_at_least で下限と示します）・拒否・夜間（JST 20〜7時）の件数を出し、定期確認の対象に印を付けます。保存期間の自動削除はしません。",
+    "外部AIの確認記録は MCS_ROOT 直下の external_transfer.json（0600）に、確認者・根拠・対象サービス・日時と直近5回の確認履歴を保存します。install.sh の初回導入と、config.json が無い状態、または読めない config.json を退避して新しく作る mcs setup init --yes で、設定を書く前に確認待ちを作ります（途中で止まっても確認待ちが残ります）。記録が読めない場合（JSONでない、0600でない、リンク・ディレクトリ、想定外の項目・型、services が文字列のリストでない）はすべての外部AIへの送信を止め、例外で止まりません。未知のサービス名は無視します。止めている理由の表示は確認待ち・サービス未確認・記録の破損を区別し、破損時は修復の手順を示します。このファイルは .gitignore の対象です。",
+    "確認記録がある環境では、mode を省略しても明示しても、確認に含まれない提供元・Jevへは送りません。Anthropic・OpenAI は cloud_llm.mode を off として扱います（明示の off は常に off です）。cloud_llm.provider が auto の場合は、キーがあり確認記録で許可された提供元を provider_order の順に選びます（例: 両方のキーがありOpenAIだけを許可した場合は、mode を明示していてもOpenAIを使います）。許可された提供元が無い場合は送信せず、表示する提供元は従来どおりキーのある最初のものです。provider を明示した設定は、許可された別の提供元へ切り替えず送信を止めます。確認記録の無い既存環境の選択は変わりません。選択は cloud_policy.select_settings、Jev は semantic_policy.semantic_config の1か所で行い、患者情報を送る経路（resolve_settings 経由の cloud_inference・cloud_backlog・抽出・添付OCR、semantic_config・runtime_config 経由の Jev の意味解析・抽出QC・患者文脈の品質監査）は同じ判定を使います。例外は、配布済みの完全合成データだけを送る手動の Jev 検証（semantic_jev の配線確認・mcs_setup.py jev-value・semantic_bench・semantic_shadow_e2e）で、確認の対象外です（日次上限と semantic.until には従います）。確認記録を変えると auto の提供元が変わることがあり、その場合は提供元の変更と同じく患者コンテキストの契約が変わります。mcs setup の保存前の確認も同じ選択で利用先を表示し、config.json が無い状態からの初回保存では、その保存で作られる確認待ちを前提に表示します。止めている場合は mcs_setup.py check の注意、mcs_setup.py doctor の providers の block_reason、保存前の確認に external_transfer_review_required と理由を表示します。",
+    "Jev が確認に含まれない場合（明示の semantic.mode）は、mode を保ったまま解決結果の jev_held で Jev だけを止めます。semantic_drain は Jev クライアントを作らず、各ジョブを skip reason review_held（semantic_jev.SKIP_REASONS に登録。各受付・検証で not_configured と区別）でこのMacだけで処理し、抽出QC・患者文脈の品質監査も同じ理由で省略を記録します。semantic_backlog の外部AI経路は Anthropic・OpenAI の確認だけに従います。enforce の公開は Jev を使えない他の場合と同じく、PASS ではなくコード確認を通った SKIPPED として扱います。cfg_path のある drain はジョブごとに設定を読み直し、確認が Jev を外すと次のジョブから review_held になり、実行中のジョブも次の Jev 要求の前（semantic_runtime.guard の jev_attempt など）で止まります。患者文脈の品質監査も、Jev に送る実行は再確認で semantic.mode=off・jev_held を検出した時点で止まります。mode を省略した設定は従来どおり off のままです。",
+    "確認を狭めたとき、送信予約を持つ Anthropic・OpenAI の処理単位は保留のまま送信せず、確認を記録し直すか cloud_llm.mode=off を明示するまで解けません（docs/guides/COMPLIANCE.md）。mcs_setup.py doctor --probe で予算・停止の理由があっても block_reason は確認待ちを示し、その理由は also_block_reason に並べて出します。",
+    "検索語・本文・患者名は閲覧記録に残しません。",
+    "Jevだけが確認に含まれない場合は、semantic.mode を保ったままこのMacでの意味解析を続け、Jevへの送信だけを止めます。結果は SKIPPED・理由 review_held として記録し、自動検査完了とは表示しません。",
+    "確認記録が読めない場合はすべての外部AIへの送信を止め、確認の記録も受け付けません。ファイルを削除せず、内容と権限を直してから記録し直してください（docs/guides/COMPLIANCE.md）。",
+    "送信を止めている間は、mcs_setup.py check・mcs_setup.py doctor・mcs setup の保存前の確認が、エラーコード external_transfer_review_required で理由を表示します。",
+    "config.json が読めない状態から mcs setup init --yes で作り直した場合も、初回導入と同じく確認待ちになります。"
   ],
   "refs": [
     "mcs/core/access_log.py",
@@ -16,6 +24,19 @@
     "adapters/common/dispatch.py",
     "mcs/llm/cloud_policy.py",
     "mcs/semantic/semantic_policy.py",
-    "mcs/ops/setup/setup_config_snapshot.py"
+    "mcs/ops/setup/setup_config_snapshot.py",
+    "mcs/notify/notify_digest.py",
+    "mcs/notify/notify_render_layout.py",
+    "mcs/ops/setup/setup_wizard.py",
+    "docs/guides/ANTHROPIC.md",
+    "docs/guides/COMPLIANCE.md",
+    "mcs/ops/cloud_cli.py",
+    "mcs/ops/diagnostics/environment_diagnostics.py",
+    "mcs/ops/mcs_setup.py",
+    "SECURITY.md",
+    "mcs/patients/patient_context_quality_controller.py",
+    "mcs/semantic/semantic_drain.py",
+    "mcs/semantic/semantic_jev.py",
+    "mcs/semantic/semantic_runtime.py"
   ]
 }

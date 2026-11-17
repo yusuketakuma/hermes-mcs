@@ -38,6 +38,8 @@ from adapters.discord import delivery
 from notify_testkit import NOW, SETTINGS
 
 pytestmark = pytest.mark.usefixtures("legacy_chat_format")
+# The budget tests carry the perf marker (pull-request CI skips them); the
+# mocked-clock correctness test below runs everywhere.
 
 CFG = {"notify": {"interactive": "discord", "route_epoch": 1,
                   "operator": "op-user",
@@ -271,6 +273,7 @@ def _measure_pipeline(world, n, monkeypatch):
             "e2e_cpu": [cpu] * len(starts)}
 
 
+@pytest.mark.perf
 @pytest.mark.parametrize("n", [100, 1000])
 def test_perf_delivery_pipeline(tmp_path, monkeypatch, n):
     monkeypatch.setitem(sys.modules, "discord", _fake_discord())
@@ -362,6 +365,7 @@ def test_pipeline_clock_includes_dispatch_wait_and_first_publication(tmp_path, m
         led.close()
 
 
+@pytest.mark.perf
 def test_perf_operation_apply(tmp_path, monkeypatch):
     """RC26 — click command file -> applied receipt commit, p95<=6s."""
     monkeypatch.setitem(sys.modules, "discord", _fake_discord())
@@ -439,6 +443,7 @@ def test_perf_operation_apply(tmp_path, monkeypatch):
     assert r["p95"] <= 6.0
 
 
+@pytest.mark.perf
 def test_perf_scale_stages(tmp_path, monkeypatch):
     """RC20 — queue/lock/sweep/gc/snapshot breakdown at 10,000 cards.
     Full-delivery is measured at 100/1,000 above; here the per-stage

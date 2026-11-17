@@ -16,12 +16,14 @@ import patient_context_plan as context_plan
 import mcs_queries
 import json
 import time
+from datetime import date, datetime
 import pytest
+import cloud_usage_accounting
 import extract_llm as worker
 import cloud_inference
 import patient_context_refresh as context_refresh
 import patient_context_refresh_sources as context_sources
-from test_patient_context_refresh import CFG as BASE_CFG, runtime, seed, step as base_step
+from test_patient_context_refresh import CFG as BASE_CFG, JST, runtime, seed, step as base_step
 import semantic_jev as _source_repair_jev
 
 __all__ = ["runtime"]
@@ -47,6 +49,27 @@ _REPAIR_HOME = '本人は自宅で生活しています。'
 
 
 _REPAIR_BED = '本人は介護ベッドを使用しています。'
+
+
+def price_window():
+    """JST days on which every model's configured price table is in force.
+
+    Paid fixtures fake ``time`` for the whole send path, so their clock must sit
+    inside the tables the code itself defines rather than on a fixed date that a
+    price rotation leaves behind.
+    """
+    tables = [definition for (model, version), definition in cloud_usage_accounting.PRICE_DEFINITIONS.items()
+              if cloud_usage_accounting._configured_price_version(model) == version]
+    start = max(definition["price_checked_on"] for definition in tables)
+    end = min(definition["price_valid_until"] for definition in tables)
+    assert start < end, (start, end)
+    return start, end
+
+
+def priced_wall(wall):
+    """``wall`` moved by whole days onto the first priced day, keeping its JST time of day."""
+    days = (date.fromisoformat(price_window()[0]) - datetime.fromtimestamp(wall, JST).date()).days
+    return wall + days * 86400
 
 
 def step(runtime, **kwargs):

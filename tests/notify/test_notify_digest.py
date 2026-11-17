@@ -108,8 +108,7 @@ def test_daily_explicit_days_controls_content_and_recorded_window(led, scope, da
 
 
 @pytest.mark.parametrize("days", ["days:3", "日数：３", "ｄａｙｓ:３", "ＤＡＹＳ：3"])
-@pytest.mark.parametrize("renderer", ["daily_parts", "build_text"])
-def test_daily_fullwidth_days_selects_window_without_normalizing_station(led, days, renderer):
+def test_daily_fullwidth_days_selects_window_without_normalizing_station(led, days):
     for pid, station in ((1, "Ａ棟：東"), (2, "A棟:東")):
         _patient(led, pid)
         led.db.execute("UPDATE patients SET station_name=? WHERE project_id=?", (station, pid))
@@ -117,8 +116,7 @@ def test_daily_fullwidth_days_selects_window_without_normalizing_station(led, da
     _seen(led, 101, T - 4 * 86400)  # outside the requested three days
     _seen(led, 102, T - 2 * 86400, pid=2)  # a different, ASCII-named station
     cfg = {**ON, "daily_digest": {**ON["daily_digest"], "scope": f"施設：Ａ棟：東 {days}"}}
-    result = getattr(notify_digest, renderer)(led.db, cfg, T - 86400, T)
-    text = notify_digest.parts_text(result, "plain") if isinstance(result, dict) else result
+    text = notify_digest.parts_text(notify_digest.daily_parts(led.db, cfg, T - 86400, T), "plain")
     assert "対象: 施設 Ａ棟：東 1人・直近3日" in text
     assert "新着 1件" in text
     assert "・project 1 1件" in text

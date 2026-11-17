@@ -134,7 +134,8 @@ def test_local_inference_runs_before_ocr_without_ingestion_lock(tmp_path, monkey
         return {"done": 0, "deferred": 1}
 
     monkeypatch.setattr(attachment_inference, "run_pending", local)
-    assert mcs_ocr.run(cfg) == {"complete": 0, "local_done": 0, "local_deferred": 1}
+    assert mcs_ocr.run(cfg) == {"complete": 0, "local_done": 0, "local_deferred": 1,
+                                "local_deferred_reasons": {"unclassified": 1}}
 
 
 @pytest.mark.parametrize('phase', ['local', 'ocr', 'both'])
@@ -165,6 +166,7 @@ def test_drain_reports_captured_writer_phase_without_changing_counts(tmp_path, m
     monkeypatch.setattr(mcs_ocr.attachment_ocr, 'run_pending', ocr)
     assert mcs_ocr.run(cfg) == {'complete': 0, 'local_done': 0,
         'local_deferred': int(phase in ('local', 'both')), 'deferred': int(phase in ('ocr', 'both')),
+        **({'local_deferred_reasons': {'writer_refused': 1}} if phase != 'ocr' else {}),
         'writer_reason': 'run_lock_not_acquired', 'writer_stage': 'write_lock',
         'writer_job_stage': 'local' if phase == 'local' else 'ocr'}
 
@@ -212,6 +214,7 @@ def test_local_inference_deadline_never_exceeds_the_remaining_job_budget(monkeyp
                             live_config=False)
     assert received == [115]
     assert result["local_deferred"] == 1
+    assert result["local_deferred_reasons"] == {"unclassified": 1}
 
 
 def test_large_raw_timeout_runs_original_ocr_before_local_inference(tmp_path, monkeypatch):
@@ -337,3 +340,169 @@ def test_cli_explicit_retry_errors_reaches_only_the_bounded_job(tmp_path, monkey
     monkeypatch.setattr(mcs_ocr.sys, 'argv', ['mcs_ocr', '--run', '--retry-errors'])
     assert mcs_ocr.main() == 0 and calls == [(None, True)]
     assert 'disabled' in capsys.readouterr().out
+
+
+def _probe_ledger(tmp_path):
+    import sqlite3
+    return SimpleNamespace(db=sqlite3.connect(str(tmp_path / "synthetic.db")), close=lambda: None)
+
+
+@pytest.fixture
+def probe(tmp_path, monkeypatch):
+    import cloud_backlog
+    import extract_llm
+    state = {"free": 10_000.0, "floor": 100.0, "headroom": 1 << 30}
+    monkeypatch.setattr(extract_llm, "disk_free_mb", lambda db: state["free"])
+    monkeypatch.setattr(extract_llm, "disk_floor_mb", lambda: state["floor"])
+    monkeypatch.setattr(cloud_backlog, "memory_headroom", lambda: state["headroom"])
+    return state
+
+
+@pytest.mark.parametrize("change,code", [
+    ({}, "unclassified"),
+    ({"free": None}, "disk_unknown"),
+    ({"free": 99.0}, "disk_low"),
+    ({"headroom": None}, "memory_unknown"),
+    ({"headroom": -1}, "memory_low"),
+    ({"free": 99.0, "headroom": None}, "disk_low"),
+])
+def test_local_deferral_reason_reobserves_admission_conditions(tmp_path, probe, change, code):
+    probe.update(change)
+    ledger = _probe_ledger(tmp_path)
+    assert mcs_ocr._local_defer_reason(ledger, None, 0.1) == code
+    assert mcs_ocr._local_defer_reason(
+        ledger, {"writer_reason": "writer_refusal_unclassified", "writer_stage": "writer_guard"}, 0.1) == code
+
+
+def test_local_deferral_reason_names_a_held_inference_lock_and_releases_its_probe(tmp_path, probe):
+    ledger = _probe_ledger(tmp_path)
+    path = str(tmp_path / "attachment_inference_local.lock")
+    held = mcs_ocr.writer_lock.acquire_run_lock(path)
+    try:
+        assert mcs_ocr._local_defer_reason(ledger, None, 0.1) == "inference_lock_busy"
+    finally:
+        mcs_ocr.os.close(held)
+    assert mcs_ocr._local_defer_reason(ledger, None, 0.1) == "unclassified"
+    again = mcs_ocr.writer_lock.acquire_run_lock(path)
+    assert again is not None
+    mcs_ocr.os.close(again)
+
+
+def test_local_deferral_reason_prefers_the_recorded_writer_refusal(tmp_path, probe):
+    probe.update(free=None)
+    diagnostic = {"writer_reason": "run_lock_not_acquired", "writer_stage": "write_lock"}
+    assert mcs_ocr._local_defer_reason(_probe_ledger(tmp_path), diagnostic, 299.0) == "writer_refused"
+
+
+@pytest.mark.parametrize("elapsed_s", [mcs_ocr.ADMISSION_WINDOW_S + 0.1, 299.0, -1.0, None])
+def test_local_deferral_after_a_long_page_run_is_not_attributed_to_a_later_recheck(tmp_path, probe, elapsed_s):
+    # A deferral after the LLM call (quality hold, no result, save race) must
+    # not be named after whatever the re-check happens to see afterwards.
+    probe.update(headroom=-1)
+    assert mcs_ocr._local_defer_reason(_probe_ledger(tmp_path), None, elapsed_s) == "unclassified"
+    assert mcs_ocr._local_defer_reason(_probe_ledger(tmp_path), None, mcs_ocr.ADMISSION_WINDOW_S) == "memory_low"
+
+
+def test_drain_passes_the_page_run_duration_to_the_classifier(monkeypatch):
+    now = [1000.0]
+    seen = []
+    monkeypatch.setattr(mcs_ocr.time, "monotonic", lambda: now[0])
+
+    def local(*args, **kwargs):
+        now[0] += 120.0
+        return {"done": 0, "deferred": 1}
+
+    def classify(ledger, diagnostic, elapsed_s):
+        seen.append(elapsed_s)
+        return "unclassified"
+
+    monkeypatch.setattr(mcs_ocr, "_local_defer_reason", classify)
+    _drain_with(monkeypatch, local)
+    assert seen == [120.0]
+
+
+def test_local_deferral_observation_failure_is_unclassified_and_keeps_the_outcome(tmp_path, monkeypatch):
+    import extract_llm
+
+    def broken(db):
+        raise RuntimeError("synthetic secret-like detail sk-SYNTHETIC")
+
+    monkeypatch.setattr(extract_llm, "disk_free_mb", broken)
+    assert mcs_ocr._local_defer_reason(_probe_ledger(tmp_path), None, 0.1) == "unclassified"
+
+
+def _drain_with(monkeypatch, local):
+    monkeypatch.setattr(mcs_ocr.writer_lock, "updater_state", lambda: (False, 1))
+    monkeypatch.setattr(attachment_inference, "run_pending", local)
+    monkeypatch.setattr(mcs_ocr.attachment_ocr, "run_pending", lambda *args, **kwargs: {"complete": 0})
+    cfg = {"attachment_ocr": {"enabled": True, "timeout_seconds": 120}}
+    return mcs_ocr._drain(SimpleNamespace(), cfg, (False, 1), mcs_ocr.time.monotonic() + 600,
+                          live_config=False)
+
+
+def test_drain_records_only_fixed_reason_counts_for_local_deferrals(monkeypatch):
+    monkeypatch.setattr(mcs_ocr, "_local_defer_reason", lambda ledger, diagnostic, elapsed_s: "disk_low")
+    result = _drain_with(monkeypatch, lambda *args, **kwargs: {"done": 0, "deferred": 1})
+    assert result["local_deferred"] == 1
+    assert result["local_deferred_reasons"] == {"disk_low": 1}
+
+
+def test_drain_unknown_reason_code_becomes_unclassified(monkeypatch):
+    monkeypatch.setattr(mcs_ocr, "_local_defer_reason", lambda ledger, diagnostic, elapsed_s: "synthetic_free_text")
+    result = _drain_with(monkeypatch, lambda *args, **kwargs: {"done": 0, "deferred": 1})
+    assert result["local_deferred_reasons"] == {"unclassified": 1}
+
+
+def test_drain_local_stage_exception_is_counted_without_its_text(monkeypatch):
+    def local(*args, **kwargs):
+        raise ValueError("synthetic secret-like detail /private/path sk-SYNTHETIC")
+
+    result = _drain_with(monkeypatch, local)
+    assert result["reason"] == "local_processing_failed" and result["local_deferred"] == 1
+    assert result["local_deferred_reasons"] == {"local_stage_error": 1}
+    assert "SYNTHETIC" not in mcs_ocr.json.dumps(result) and "private" not in mcs_ocr.json.dumps(result)
+
+
+def test_drain_without_local_deferral_has_no_breakdown(monkeypatch):
+    result = _drain_with(monkeypatch, lambda *args, **kwargs: {"done": 0, "deferred": 0})
+    assert result["local_deferred"] == 0 and "local_deferred_reasons" not in result
+
+
+def test_drain_early_return_still_normalizes_the_breakdown(monkeypatch):
+    states = iter([(False, 1)] + [(True, 2)] * 10)
+    monkeypatch.setattr(mcs_ocr, "_local_defer_reason", lambda ledger, diagnostic, elapsed_s: "memory_low")
+    monkeypatch.setattr(attachment_inference, "run_pending", lambda *args, **kwargs: {"done": 0, "deferred": 1})
+    monkeypatch.setattr(mcs_ocr.writer_lock, "updater_state", lambda: next(states))
+    cfg = {"attachment_ocr": {"enabled": True, "timeout_seconds": 120}}
+    result = mcs_ocr._drain(SimpleNamespace(), cfg, (False, 1), mcs_ocr.time.monotonic() + 600,
+                            live_config=False)
+    assert result["reason"] == "writer_blocked"
+    assert result["local_deferred_reasons"] == {"memory_low": 1}
+
+
+def test_status_breakdown_yields_to_the_reader_size_limit():
+    small = {"local_deferred": 1, "local_deferred_reasons": {"disk_low": 1}}
+    assert mcs_ocr.json.loads(mcs_ocr._status_text(small, 1000.0))["local_deferred_reasons"] == {"disk_low": 1}
+    block = {f"synthetic_key_{index:02d}": f"synthetic_value_{index:02d}" * 4 for index in range(16)}
+    large = {**small, "snapshot_failure": block, "snapshot_timing": block,
+             "failure_reason_counts": {f"synthetic_reason_{index:03d}": 1 for index in range(60)}}
+    text = mcs_ocr._status_text(large, 1000.0)
+    assert "local_deferred_reasons" not in mcs_ocr.json.loads(text)
+    assert mcs_ocr.json.loads(text)["snapshot_failure"] == block
+
+
+def test_cli_status_file_carries_a_breakdown_the_health_reader_accepts(tmp_path, monkeypatch):
+    import health_report
+    monkeypatch.setattr(mcs_ocr, "DATA", str(tmp_path))
+    monkeypatch.setattr(mcs_ocr.sys, "argv", ["mcs_ocr", "--run"])
+    monkeypatch.setattr(mcs_ocr, "run", lambda cfg: {
+        "complete": 0, "empty": 0, "failed": 0, "unsupported": 0, "deferred": 0, "pending_failed": 0,
+        "queue_status": "known", "local_done": 0, "local_deferred": 2,
+        "local_deferred_reasons": {"memory_unknown": 2}})
+    assert mcs_ocr.main() == 1
+    cfg = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/yomitoku"}}
+    at = mcs_ocr.json.loads((tmp_path / "attachment_ocr_status.json").read_text())["at"]
+    report = health_report.attachment_ocr_health(str(tmp_path), cfg, at + 1)
+    assert report["reason"] == "attachment_ocr_local_inference_deferred"
+    assert report["local_deferred_reasons"] == {"memory_unknown": 2}
+    assert report["local_deferred_primary"] == "memory_unknown"

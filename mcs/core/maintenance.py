@@ -887,6 +887,99 @@ def _attachment_cloud_pins(con, rows):
     return held, pinned
 
 
+def _context_scan_cloud_pins(con, rows):
+    """Keep receipts that current patient-context scans, summaries and summary repairs still cite."""
+    from inference_version import is_current, read_version
+    from mcs_util import strict_json
+
+    def parsed(raw):
+        try:
+            value = strict_json(raw)
+        except (TypeError, ValueError, RecursionError, OverflowError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    def scope(value):
+        return type(value) is int and value > 0
+
+    def row_id(value):
+        return type(value) is int and 0 < value < 2**63
+
+    receipt_kinds = ('cloud_usage_reserve', 'cloud_usage_result', 'cloud_usage_disposition')
+    summary_kind = 'patient_context_v1'
+    repair_kind = 'patient_context_summary_quality_repair_v1'
+    candidate_kind = 'patient_context_summary_quality_repair_candidate_v1'
+    citing_kinds = ('patient_context_scan_chunk_v1', 'patient_context_scan_v1', summary_kind, repair_kind, candidate_kind)
+    batch = [(row, parsed(row[3])) for row in rows if row[1] in receipt_kinds]
+    if not batch:
+        return set(), set()
+    uuids = {meta['reservation_id'] for _, meta in batch if meta is not None
+             and isinstance(meta.get('reservation_id'), str)}
+    projects = {pid for row, meta in batch for pid in (row[2], meta.get('project_id') if meta else None) if scope(pid)}
+    # A reservation UUID is global evidence: its owning patient's citations decide
+    # every row carrying it, so a conflicting scope is not deleted back into a PASS.
+    reserves = {}
+    if uuids:
+        for artifact_id, pid, reservation_id in con.execute(
+                "SELECT artifact_id,project_id,json_extract(meta,'$.reservation_id') FROM artifacts "
+                "WHERE kind='cloud_usage_reserve' AND CASE WHEN json_valid(meta) THEN "
+                "json_extract(meta,'$.reservation_id') IN (SELECT value FROM json_each(?)) END",
+                (json.dumps(sorted(uuids)),)):
+            reserves[artifact_id] = reservation_id
+            if scope(pid):
+                projects.add(pid)
+    held, citing, references, protected = set(), set(), set(), set()
+    candidates, repaired, repair_refs = {}, set(), []
+    # The currentness test runs here, not in SQL: current_meta_pred() silently
+    # drops an unreadable row, which must hold its patient instead.
+    query = ("SELECT a.artifact_id,a.kind,a.project_id,CASE WHEN typeof(a.meta)='text' AND length(a.meta)<=4194304 "
+             'THEN a.meta END FROM json_each(?) p CROSS JOIN artifacts a WHERE a.project_id=p.value AND a.kind IN ('
+             + ','.join('?' for _ in citing_kinds) + ')')
+    for artifact_id, kind, pid, raw in con.execute(query, (json.dumps(sorted(projects)), *citing_kinds)):
+        meta = parsed(raw)
+        if meta is None or read_version(meta) is None:
+            held.add(pid)
+            continue
+        if kind == candidate_kind:
+            candidates[artifact_id] = (pid, meta.get('input_key'))
+            continue
+        if not is_current(meta):
+            continue
+        if kind == repair_kind:
+            # The spent repair names its reservation directly; candidate content is never read here.
+            if not row_id(meta.get('reservation_artifact_id')) or not isinstance(meta.get('reservation_id'), str):
+                held.add(pid)
+                continue
+            references.add(meta['reservation_artifact_id'])
+            protected.add(meta['reservation_id'])
+            repaired.add((pid, meta.get('input_key')))
+            citing.add(pid)
+            continue
+        if 'cloud_receipts' in meta:
+            receipts = meta['cloud_receipts']
+            if (type(receipts) is not list or not 1 <= len(receipts) <= 128
+                    or any(type(ref) is not dict or not row_id(ref.get('artifact_id')) for ref in receipts)):
+                held.add(pid)
+                continue
+            references.update(ref['artifact_id'] for ref in receipts)
+            citing.add(pid)
+        if kind == summary_kind and meta.get('quality_repair_ref') is not None:
+            ref = meta['quality_repair_ref']
+            if type(ref) is not dict or not row_id(ref.get('artifact_id')):
+                held.add(pid)
+            else:
+                repair_refs.append((pid, ref['artifact_id']))
+    for pid, artifact_id in repair_refs:
+        owner, input_key = candidates.get(artifact_id, (None, None))
+        if owner != pid or (pid, input_key) not in repaired:
+            held.add(pid)   # a published repair whose reservation cannot be traced
+    protected.update(reservation_id for artifact_id, reservation_id in reserves.items() if artifact_id in references)
+    pinned = {row[0] for row, meta in batch
+              if row[0] in references or meta is None and row[2] in citing
+              or meta is not None and isinstance(meta.get('reservation_id'), str) and meta['reservation_id'] in protected}
+    return held, pinned
+
+
 def _mark_cloud_usage_pruned(con, cutoff):
     """Durably record how far usage was pruned, in the deleting transaction: a period
     budget starting before it cannot be counted even if the clock later moves back."""
@@ -907,9 +1000,19 @@ def _mark_cloud_usage_pruned(con, cutoff):
 
 
 def _prune_cloud_usage(con, cutoff):
-    """Keep exact source-repair reservation/result/disposition evidence beyond ordinary accounting retention."""
+    """Delete expired cloud accounting, keeping evidence that repairs, attachment OCR and patient context still cite."""
     total, last_id = 0, 0
     kinds = ('cloud_usage_reserve', 'cloud_usage_result', 'cloud_usage_dryrun', 'cloud_compare_v1', 'cloud_usage_disposition')
+    # Spending a patient-context reset carried over ages out with the rows it replaced.
+    from cloud_usage_accounting import expired_carryover_ids
+    with con:
+        if not con.in_transaction:
+            con.execute('BEGIN IMMEDIATE')
+        expired = expired_carryover_ids(con, cutoff)
+        if expired:
+            _mark_cloud_usage_pruned(con, cutoff)
+        for artifact_id in expired:
+            total += con.execute('DELETE FROM artifacts WHERE artifact_id=?', (artifact_id,)).rowcount
     while True:
         with con:
             if not con.in_transaction:
@@ -922,8 +1025,9 @@ def _prune_cloud_usage(con, cutoff):
                 return total
             held, pinned_ids = _source_repair_cloud_pins(con, rows)
             attachment_held, attachment_ids = _attachment_cloud_pins(con, rows)
-            held.update(attachment_held)
-            pinned_ids.update(attachment_ids)
+            context_held, context_ids = _context_scan_cloud_pins(con, rows)
+            held.update(attachment_held, context_held)
+            pinned_ids.update(attachment_ids, context_ids)
             _mark_cloud_usage_pruned(con, cutoff)
             for artifact_id, kind, pid, raw in rows:
                 if kind in ('cloud_usage_reserve', 'cloud_usage_result', 'cloud_usage_disposition') and (pid in held or artifact_id in pinned_ids):

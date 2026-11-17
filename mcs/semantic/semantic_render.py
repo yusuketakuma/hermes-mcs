@@ -13,6 +13,7 @@ import re
 from mcs_queries import JST
 import semantic_facts as sf
 import semantic_send_gate
+import semantic_transport
 from semantic_send_gate import enforce_block_reason
 from semantic_llm import OVERSIZE_LIMITATION
 
@@ -422,11 +423,12 @@ def semantic_summary_block(db, r, cfg: dict) -> str:
             return ""
         # The audited summary must describe the current whole-thread
         # generation, not only the target's body revision (INV-15).
-        cur = semantic_send_gate.current_summary(
-            db, r["project_id"], r["message_id"],
-            lambda: semantic_store.thread_bundle(db, r["project_id"], root,
-                                       [r["message_id"]]),
-            semantic_policy.policy_fingerprint(scfg))
+        with semantic_transport.config_model_scope(cfg):
+            cur = semantic_send_gate.current_summary(
+                db, r["project_id"], r["message_id"],
+                lambda: semantic_store.thread_bundle(db, r["project_id"], root,
+                                           [r["message_id"]]),
+                semantic_policy.policy_fingerprint(scfg))
         if cur is None:
             return ""
         summ = cur["content"]

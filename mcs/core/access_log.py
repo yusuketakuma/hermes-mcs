@@ -16,15 +16,18 @@ from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import stat
 import time
 
-from safe_io import fsync_dir, open_lock_file
+from safe_io import atomic_write, fsync_dir, open_lock_file, read_private_bytes
 
 DIR_NAME = "access_log"
 LOCK_NAME = ".lock"
+FAILURE_NAME = "access_log_failure.json"   # beside the log directory, never inside it
+_FAILURE_MAX = 1024
 GENESIS = "0" * 64
 MAX_LINE = 4096
 _FILE_RE = re.compile(r"access-(\d{4})-(\d{2})\.jsonl")
@@ -134,6 +137,16 @@ def _drop_partial_tail(fd) -> int:
     return keep
 
 
+def _repair_tail(dir_fd, name) -> None:
+    """Cut an unacknowledged fragment from an earlier file before it heads the chain."""
+    fd = os.open(name, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dir_fd)
+    try:
+        _check_private(fd, is_dir=False)
+        _drop_partial_tail(fd)
+    finally:
+        os.close(fd)
+
+
 @contextmanager
 def _locked(dir_fd):
     fd = open_lock_file(LOCK_NAME, dir_fd=dir_fd)
@@ -154,6 +167,8 @@ def record(data_dir, *, via, actor, op, channel=None, kind=None, project_id=None
 
     ``patients`` are the ids an answer actually contained, so a list view
     is attributed to every patient it showed, not only to the request.
+    A failure leaves a content-free note (:func:`failure`) for the health
+    report until a later record succeeds.
     """
     now = time.time() if now is None else now
     listed, more = _patients(patients)
@@ -164,7 +179,17 @@ def record(data_dir, *, via, actor, op, channel=None, kind=None, project_id=None
              "project_id": project_id if type(project_id) is int else None,
              "patients": listed, "patients_more": more,
              "outcome": _code(outcome) or "unknown", "query": bool(query)}
-    name = stamp.strftime("access-%Y-%m.jsonl")
+    try:
+        _append(data_dir, entry, stamp.strftime("access-%Y-%m.jsonl"))
+    except AccessLogError as error:
+        _note_failure(data_dir, str(error), entry["ts"])
+        raise
+    _clear_failure(data_dir)
+    return entry
+
+
+def _append(data_dir, entry, name) -> None:
+    """Chain ``entry`` to the newest complete line and make it durable, or raise AccessLogError."""
     dir_fd = _open_dir(data_dir, create=True)
     try:
         with _locked(dir_fd):
@@ -179,6 +204,9 @@ def record(data_dir, *, via, actor, op, channel=None, kind=None, project_id=None
                 size = _drop_partial_tail(fd)
                 previous = None
                 for candidate in reversed([n for n in names + [name] if n <= name]):
+                    if candidate != name:
+                        # the previous month may end in an interrupted append too
+                        _repair_tail(dir_fd, candidate)
                     previous = _last_line(dir_fd, candidate)
                     if previous is not None:
                         break
@@ -203,7 +231,64 @@ def record(data_dir, *, via, actor, op, channel=None, kind=None, project_id=None
         raise AccessLogError("access_log_unavailable") from error
     finally:
         os.close(dir_fd)
-    return entry
+
+
+def _failure_path(data_dir) -> str:
+    return os.path.join(os.fspath(data_dir), FAILURE_NAME)
+
+
+def _stamp(value):
+    return value if type(value) in (int, float) and math.isfinite(value) and value >= 0 else None
+
+
+def failure(data_dir) -> dict | None:
+    """The append failure no later record has cleared: fixed code and first/last epoch seconds.
+
+    None means the newest attempt succeeded, or none failed. A note that
+    cannot be read still means an attempt failed, so it is reported as
+    ``unknown`` rather than as a working log.
+    """
+    try:
+        raw = read_private_bytes(_failure_path(data_dir), _FAILURE_MAX)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):   # a link, a shared mode, another owner, oversized
+        raw = b""
+    try:
+        note = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError):
+        note = None
+    if not isinstance(note, dict):
+        return {"code": "unknown", "since": None, "last": None}
+    code = note.get("code")
+    return {"code": code if isinstance(code, str) and _CODE_RE.fullmatch(code) else "unknown",
+            "since": _stamp(note.get("since")), "last": _stamp(note.get("last"))}
+
+
+def _note_failure(data_dir, code, now) -> None:
+    """Best effort: tell the health report that answers are being withheld.
+
+    The note holds only the fixed code and times, never who asked or about
+    whom; a note that cannot be written leaves the caller's error as it is.
+    """
+    previous = failure(data_dir)
+    since = previous["since"] if previous and previous["since"] is not None else now
+    body = json.dumps({"v": 1, "code": code, "since": since, "last": now},
+                      sort_keys=True).encode("utf-8") + b"\n"
+    try:
+        atomic_write(_failure_path(data_dir), lambda stream: stream.write(body), 0o600,
+                     binary=True, makedirs=False)
+    except OSError:
+        pass
+
+
+def _clear_failure(data_dir) -> None:
+    # Unlocked like the note itself: a concurrent failure may outlive this
+    # removal, and the next record settles it either way.
+    try:
+        os.unlink(_failure_path(data_dir))
+    except OSError:
+        pass   # absent (the usual case) or not removable; health keeps reporting it
 
 
 def _lines(dir_fd, name):

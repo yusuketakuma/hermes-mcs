@@ -7,7 +7,6 @@ import pytest
 import extract_llm
 from inference_dependency_loss import source_binding
 from inference_version import CURRENT_VERSION, VERSION_KEY
-import semantic_assessment as assessment
 import semantic_extraction as extraction
 
 
@@ -32,21 +31,6 @@ def ledger():
 def add(ledger, kind, content, meta):
     ledger.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
                       "VALUES(?,1,1,?,?)", (kind, json.dumps(content), json.dumps(meta)))
-
-
-@pytest.mark.parametrize("project_id", [1, None])
-def test_detail_uses_newest_valid_matching_generation(ledger, project_id):
-    meta = {"schema": assessment.ASSESSMENT_SCHEMA_VERSION, "source_fingerprint": "fp",
-            "policy_fingerprint": "policy", "fact_id": "fact1", "dimension": "dim",
-            "technical_status": "complete"}
-    for confidence in (0.5, 0.9, "invalid"):
-        add(ledger, assessment.KIND_ASSESS, {"choice": "yes", "confidence": confidence}, meta)
-    add(ledger, assessment.KIND_ASSESS, {"choice": "yes", "confidence": 0.7},
-        {**meta, "source_fingerprint": "old"})
-    before = ledger.total_changes
-    assert assessment._cached_detail(ledger, project_id, 1, "fp", "policy", "fact1", "dim",
-                                      {"yes": "SYNTH"}) == {"choice": "yes", "confidence": 0.9}
-    assert ledger.total_changes == before
 
 
 @pytest.mark.parametrize("project_id", [1, None])
@@ -80,28 +64,3 @@ def test_legacy_chunk_malformed_latest_owner_still_invalidates_old_checkpoint(le
     assert extract_llm._saved_chunk_state(ledger, row)[1] == {}
 
 
-def test_legacy_detail_protocol_and_borrowed_chunk_reads_preserve_selection(ledger):
-    legacy = ledger
-    assert not hasattr(legacy, "db") and not hasattr(legacy, "iter_artifacts")
-    detail_meta = {"schema": assessment.ASSESSMENT_SCHEMA_VERSION, "source_fingerprint": "fp",
-                   "policy_fingerprint": "policy", "fact_id": "fact1", "dimension": "dim",
-                   "technical_status": "complete"}
-    for confidence in (0.5, 0.9):
-        add(ledger, assessment.KIND_ASSESS, {"choice": "yes", "confidence": confidence}, detail_meta)
-    assert assessment._cached_detail(legacy, 1, 1, "fp", "policy", "fact1", "dim",
-                                      {"yes": "SYNTH"}) == {"choice": "yes", "confidence": 0.9}
-    assert extraction._cached_chunks(ledger, 1, 1, "fp", "hash", "r", [], "") == {}
-    row = {"message_id": 1, "project_id": 1, "body_text": "SYNTH", "content_hash": "hash",
-           "posted_at": "2026-01-01T00:00:00+09:00"}
-    row["_source_binding"] = source_binding(ledger, 1, 1)
-    assert isinstance(row["_source_binding"], str)
-    meta = {VERSION_KEY: CURRENT_VERSION, "hash": "hash", "ver": extract_llm.EXTRACT_VERSION,
-            "chunk_size": extract_llm._CHUNK_SIZE, "context": extract_llm._chunk_context(row, None, checkpoint=True),
-            "chunk": 0}
-    add(ledger, "extract_llm_chunk", {"summary": "SYNTH"}, meta)
-    assert extract_llm._saved_chunk_state(ledger, row)[1] == {0: {"summary": "SYNTH"}}
-
-
-def test_no_ledger_detail_assessment_keeps_no_cache_mode():
-    assert assessment._cached_detail(None, 1, 1, "fp", "policy", "fact1", "dim",
-                                     {"yes": "SYNTH"}) is None

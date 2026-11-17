@@ -495,7 +495,6 @@ def _noncurrent_vital_reference(body, values):
 def _match_request_replies(db, project_id, req_thread, requests, messages, now, *, cfg=None):
     """Annotate only uniquely matched requests with current Loop relation evidence."""
     from request_loops import effective_loop_states, latest_policy
-    from semantic_transport import llm_model
     import semantic_jev as jev
 
     kinds = {"acknowledges": "ack", "progress_report": "progress",
@@ -523,8 +522,7 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now, 
         "json_extract(requested.value,'$[1]'))", (project_id, json.dumps(sorted(wanted)))).fetchall()
     source_mids = {source["artifact_id"]: source["message_id"] for source in sources}
     for loop in effective_loop_states(db, sources, policy=policy,
-                                     relation_limit=None, eligible_only=True,
-                                     local_model=llm_model(cfg)):
+                                     relation_limit=None, eligible_only=True):
         key = (source_mids[loop["artifact_id"]], loop["description"])
         candidates.setdefault(key, []).append(loop)
     by_id = {m["message_id"]: m for m in messages}

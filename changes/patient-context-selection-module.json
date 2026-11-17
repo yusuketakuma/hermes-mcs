@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "患者コンテキストの要約側の選択処理を独立したモジュールへ移す",
+  "summary": "更新後は、患者コンテキストの公開済みの版が、資料ごとの調査（scan）と品質確認をやり直すまで非表示になります（処理契約の識別値 context_checks が変わり、保存済みの契約と一致しなくなるため）。添付の抽出の識別値も変わるため、添付の抽出もやり直しになります。要約に使う根拠の選択・要約への入力・要約の検証を patient_context_selection へ、レーンの巡回を patient_context_schedule へ移しました（契約の分割の準備）。",
+  "upgrade": "単独では配備せず、作り直し（消去）の計画どおり P0 の一連の変更と合わせて配備してください。追加の操作は不要ですが、配備後は添付の抽出と、患者コンテキストの調査・品質確認が作り直されるまで、患者コンテキストは表示されません。",
+  "details": [
+    "患者コンテキストの表示ロジックと根拠の選び方そのものは変わりません（コードの移動のみ）。",
+    "context_checks は patient_context_plan・patient_context_selection・patient_context_schedule の3ファイルを合わせて hash します（契約のキー名と文書の形は変えません）。schedule はファイル全体を含むため、bookmark の予定組み plan() も一時的に被覆に入ります。P0-2a の契約の分割で外します。",
+    "抽出の読込み元一覧と意味解析の候補指紋に patient_context_selection を加えます。読込み元一覧の digest を含む添付抽出の契約（attachment_extraction.contract）も変わります。患者コンテキストの品質確認の識別値は、同じ版の patient-context-quality-identity により選択の処理を含まなくなりました。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_selection.py",
+    "mcs/patients/patient_context_plan.py",
+    "mcs/patients/patient_context_schedule.py",
+    "mcs/patients/patient_context_refresh_state.py",
+    "docs/development/PATIENT_CONTEXT_P0_PLAN_20261115.md"
+  ]
+}

@@ -52,7 +52,7 @@
 | LINE WORKS | 本文・要約・患者名 | 日本の事業者（契約で確認） | 設定した場合 | 独立アダプターを停止 |
 | Anthropic / OpenAI | 本文・患者文脈（患者名を含み得る。匿名化しない） | 米国の事業者 | 既存環境はキーで自動。新規導入は確認記録の後 | `cloud_llm.mode=off` |
 | TypeSafe Jev | 確認用の設問と本文 | 契約で確認 | 既存環境はキーで自動。新規導入は確認記録の後 | `semantic.mode=off` |
-| Exa / TinyFish（医薬品情報） | 公開マスターと一致した薬品名・一般的な疾患語のみ | 米国ほか | 有効 | 患者情報は送りません |
+| TinyFish（ローカルゲートウェイ経由・医薬品情報） | 公開マスターと一致した薬品名・一般的な疾患語のみ | 米国ほか | 有効 | 患者情報は送りません |
 
 Slack・Discord・米国の AI 事業者は「外国にある第三者」に当たり得ます。米国は個人情報保護委員会規則で
 定める同等水準の国ではないため、本人の同意か、契約等による基準適合体制（規則第16条）の整備が必要です。
@@ -60,13 +60,19 @@ Slack・Discord・米国の AI 事業者は「外国にある第三者」に当�
 
 ## 4. 外部AI送信の施設確認（新規導入）
 
-新しく導入した環境は `~/.mcs/external_transfer.json` に「確認待ち」を記録し、APIキーを登録しても
-Anthropic・OpenAI・Jev へ自動では送りません。次を確認したうえで、責任者が記録します。
+新しく導入した環境（`config.json` が無い状態、または読めない `config.json` を退避して新しく作る
+`mcs setup init`、および `install.sh` の初回導入）は `~/.mcs/external_transfer.json` に「確認待ち」を記録し、APIキーを登録しても、
+`mode` を明示しても、Anthropic・OpenAI・Jev へは送りません。次を確認したうえで、責任者が記録します。
+`cloud_llm.provider` が `auto`（既定）なら、`mode` の明示の有無にかかわらず、キーがあり確認で許可されたサービスを
+`provider_order` の順に選ぶため、OpenAI だけを許可した場合は Anthropic のキーが残っていても OpenAI が使われます。
 
 1. 送信先との契約で、入力が学習に使われず、保存期間と削除が定められていること
    （Anthropic の Zero Data Retention や OpenAI の保持条件は、組織ごとの契約が必要です。[ANTHROPIC.md](ANTHROPIC.md)）。
 2. 外国にある第三者への提供の根拠（同意、または契約による体制整備）。
 3. 患者・利用者への周知（[掲示文例](compliance/PATIENT_NOTICE_TEMPLATE.md)）。
+
+記録はセットアップと初回収集（`run_check`）の後に行います。保存記録 `data/ledger.db` がまだ無いときは
+記録せず、その旨を表示します（確認待ちの間は外部AIへ自動送信しないので、初回収集を先に済ませても送信は始まりません）。
 
 ```bash
 python3 mcs/ops/mcs_compliance.py acknowledge --by "管理薬剤師 氏名" \
@@ -74,9 +80,74 @@ python3 mcs/ops/mcs_compliance.py acknowledge --by "管理薬剤師 氏名" \
 python3 mcs/ops/mcs_compliance.py status
 ```
 
-記録は確認者・根拠・対象サービス・日時を残し、再確認したときは前回の記録を履歴に移します。
-`config.json` で `mode` を明示した設定は、施設の判断として確認記録に関係なく従います。
-既存の環境（このファイルが無い環境）はこれまでどおりキーで自動有効化するので、
+確認は人承認操作 `ops.external_transfer_acknowledge` として、ほかの承認操作と同じ受付記録（`command_receipts`）を
+残します。受付記録には `command_id`・確認者（`--by`、120文字まで）・根拠（`--reason`、500文字まで）・
+対象サービス・日時が入り、`external_transfer.json` の確認記録にも同じ `command_id` が入ります。
+結果は `command_id`・`outcome` を含む1行の JSON で、終了コードは 0（記録した）、1（受け付けなかった・
+記録と受付が一致しない・結果が分からない `outcome: unknown`）、3（ほかの保存処理が続いている `outcome: busy`）です。
+`busy`・`unknown` や途中で止まったときは、表示された `command_id` を `--command-id` に指定して同じ内容で再実行すると、
+記録を重ねずに前回の結果を返します（受付が残っていなければ、その時点で記録します）。
+`external_transfer.json` は受付記録の保存（COMMIT）が終わってから書きます。その間に処理が止まった
+（強制終了・停電など）場合は受付だけが残り、確認記録は前の状態のままです。初回の確認なら確認待ちのままなので
+外部AIへの自動送信は始まりませんが、前の確認を置き換える確認（対象サービスを減らす確認を含む）なら、
+同じ `command_id` で再実行するまで前の確認が有効です。
+同じ `command_id` で再実行すると、それが最新の確認であれば確認記録を書き終えます（後に別の確認があれば書き換えません）。
+最新かどうかは受付記録を保存した順で決め、Mac の時計が戻って後の確認の日時が前の確認より早く記録されても変わりません。
+記録された日時は書き換えず、`history` は確認記録に書いた順に並びます。
+受付には、その確認が置き換えた確認記録の SHA-256 も残します。保存記録（`data/ledger.db`）だけを復元した後でも、
+確認記録がその確認の置き換えた記録のままなら、同じ `command_id` の再実行で書き終えます。それ以外で、
+いまの確認記録がこの保存記録に受付の無い確認を指している場合や、再実行した確認が履歴に移っている場合は、
+再実行しても確認記録を書き換えません。
+同じ `command_id` で内容（確認者・根拠・サービス）を変えると `command_id_conflict` で受け付けません。
+サービスの順番と重複は区別しません。
+
+`status` の `receipt` は、いまの確認記録が受付記録と一致するかを示します。`matched` は一致、
+`receipt_file_mismatch` は一致しない（受付の無い記録、または受付後に記録が戻った）、`unreceipted` は
+受付記録を残す前の版で記録したもの、`unverified` は保存記録を読めなかったことを表します。
+`external_transfer_newer_unpublished` は、いまの確認記録より後に保存した確認の受付が確認記録に反映されておらず、
+再実行で書き終えられることを表します。確認待ち（`state` が `pending`）や受付記録を残す前の版の記録でも出ます。
+`replay_command_id`・`replay_by`・`replay_reason`・`replay_services` に、その確認の `command_id`・確認者・根拠・サービスを
+示すので、内容を確かめ、`--command-id` と `--by`・`--reason`・`--services` にその値を指定して再実行してください。
+`acknowledge` の `file_check` も、後の確認が反映待ちなら同じ値と項目を出します。
+それ以外で `matched` でないときは、内容を確認し直して新しい `command_id` で記録し直してください。
+再実行で `external_transfer_superseded` が出たときは、その確認より後に別の確認が記録されています。
+
+確認記録は確認者・根拠・対象サービス・日時を残し、再確認したときは前回の記録を履歴（直近5回）に移します。
+このファイルがある環境では、`config.json` で `mode` を明示した場合も、確認に含まれないサービスへは送りません。
+Anthropic・OpenAI は `cloud_llm.mode` を off として扱います（明示した `off` は常に off です）。`provider` を `auto` に
+していれば、キーがあり確認に含まれる提供元を `provider_order` の順に選び、`provider` を明示していれば、そのサービスが
+確認に含まれるまで送りません。
+
+Jev が確認に含まれない場合は、明示した `semantic.mode` をそのまま保ち、Jev への送信だけを止めます。このMacでの
+意味解析・`semantic_backlog` の外部AI経路（Anthropic・OpenAI の確認に従います）・公開条件の確認は続き、Jev を使えない
+ほかの場合（キー未登録・予算0など）と同じく、Jev の確認結果は `SKIPPED`、理由 `review_held` として記録します
+（`not_configured` とは区別します）。`enforce` の公開も同じで、Jev の確認を通ったもの（`PASS`）としては扱わず、
+コードによる確認を通った `SKIPPED` として扱います。`mode` を省略した環境の意味解析は Jev のキーで有効になる設定なので、
+確認に Jev が含まれるまで off のままです。患者文脈の品質監査を含む実行中の処理は、確認から Jev が外れると次の Jev
+への要求の前に止まります。手動の合成データ検証（`semantic_jev.py` の配線確認・`mcs_setup.py jev-value`・`semantic_bench`・
+`semantic_shadow_e2e`）は配布されている完全合成のデータだけを送り患者情報を送らないため、この確認の対象外です
+（Jevの日次上限・`semantic.until` には従います）。ファイル内の `source` などの自己申告では判断せず、`evaluation/` に
+同梱されたケースと完全に一致しない入力は Jev へ送らずに止めます。
+通知では「要約：生成済み」・見出し「要約」・「抽出済み事実」と表示し、「自動検査完了」「自動検査済」「監査済み」は付きません。要約を出さない運用にする場合は `semantic.summary_mode` を `enforce` 以外にします。
+止めている間は `mcs_setup.py check` の注意・`mcs_setup.py doctor` の `providers` の `block_reason`（画面表示では止めている理由と
+対処の文）・`mcs setup` の保存前の確認が、エラーコード `external_transfer_review_required` で理由を示します（`doctor --probe` で
+停止・予算の理由も見つかったときは、それを `also_block_reason` に並べます）。監視の警報も、送信する設定の外部AIを止めている間は
+`cloud_llm_provider_not_approved`、Jev を止めている間は `semantic_jev_provider_not_approved` としてシステム通知先へ知らせます。続ける場合は `--services` にそのサービスを含めて
+確認を記録し直してください。確認待ち・記録を読めない状態も同じく送信しません。
+
+確認を狭めたとき、すでに送信の予約（利用記録）を持っている Anthropic・OpenAI の処理単位は、そのまま保留されます。
+保留の間は新しい送信をしませんが、予約は残り、このMacでの処理へも切り替えません（送信済みかもしれない要求を
+二重に扱わないためです）。保留が解けるのは、`--services` にそのサービスを含めて確認を記録し直したとき（その処理単位が
+外部AIで続きます）か、`config.json` で `cloud_llm.mode` を `off` と明示したとき（その処理単位は外部AIの対象から外れ、
+このMacでの処理に戻ります）のどちらかです。`mode` を省略しただけでは保留は解けません。
+
+`external_transfer.json` を読めない（形式が違う・権限が0600でない・リンクやディレクトリになっている）間は、
+すべての外部AIへの送信を止め、`acknowledge` も `external_transfer_record_invalid`（リンクでは `external_transfer_io_error`）
+で受け付けません。このファイルは削除しないでください（削除すると確認記録の無い既存環境と同じ扱いに戻ります）。
+MCSを動かすユーザーが所有する権限0600の通常ファイルに戻し、内容を `{"v": 1, "required": true, "acknowledged": null}`
+（確認待ち）にしてから、確認を記録し直してください。読めない間は、外部AIを使う設定かどうかにかかわらず、監視が
+`external_transfer_unreadable` の警報を出します。
+既存の環境（このファイルが無い環境）はこれまでどおり、`mode` を省略すればキーで自動有効化し、明示すればその設定に従うので、
 同じ確認を済ませていない場合は `mode=off` を明示してください。
 
 ## 5. 閲覧・操作の記録（アクセスログ）
@@ -85,11 +156,11 @@ python3 mcs/ops/mcs_compliance.py status
 その改ざん防止・定期確認を求めています。医療・介護関係事業者ガイダンスも「アクセス記録の保存」と
 「不正が疑われる異常な記録の定期的な確認」を挙げています。
 
-- Slack・Discord・LINE WORKS の `/mcs` 操作は、回答の前に `~/.mcs/data/access_log/access-YYYY-MM.jsonl` へ
+- Slack・Discord・LINE WORKS の `/mcs` 操作は、閲覧の回答では回答の前に、確定操作では依頼を受け付けた後に、`~/.mcs/data/access_log/access-YYYY-MM.jsonl` へ
   利用者・チャンネル・操作・患者ID・結果を1行で残します。一覧の回答は、表示した患者のIDも残します
   （1行200人まで、超えた分は人数だけ）。`/mcs-summary`・LINE WORKS の「サマリー」も同じく記録し、記録できないときは表示しません。
   検索語・本文・患者名は残さず、操作・種類が定義済みの名前でない拒否された要求は `invalid` として残します。
-- 記録できないときは閲覧の回答を返しません。確定済みの依頼・操作は別の受付記録があるため回答を返します。
+- 記録できないときは閲覧の回答を返しません。確定済みの依頼・操作の応答は受付番号（`command_id`）・ハッシュ・受付状態だけで患者情報を含まず、操作者・患者・変更内容は受付記録（`command_receipts`）に残るため返します。適用結果の照会は閲覧なので、記録できない間は返しません。
 - 各行は直前の行の SHA-256 を持ち、途中の行の削除・改変・月ファイルの欠落を検出できます。
   末尾の行の削除・改変は連鎖だけでは分からないため、`verify` が出す `records` と `head` を
   点検記録（端末の外）に書き、次回 `--checkpoint 件数:head` で照合します。
@@ -104,6 +175,10 @@ python3 mcs/ops/mcs_compliance.py access-log show --project 123
 人数しか残らず行をまたいで重複を除けないため、`patients_at_least: true` のときは「少なくともこの人数」と読みます。
 
 月1回の確認と記録の保存期間は、運用管理規程で決めてください（自動削除はしません）。
+アクセスログを書けない間は、監視が `access_log_unwritable` の警報で最初に書けなかった時刻とともに知らせます（時刻と固定の理由コードだけを
+`~/.mcs/data/access_log_failure.json` に残し、次に書けた時点で消します）。権限や空き容量を直しただけでは警報は消えず、
+直したあとの最初の閲覧の記録が書けた時点で消えます。
+アクセスログを書けなかった期間の確定操作は、受付記録（`command_receipts`）でしか追えません。定期確認では、その期間の受付記録も突き合わせてください。
 次は記録の対象外です。運用管理規程の業務日誌で補ってください。
 
 - Mac 上で `sqlite3` や `mcs_view.py` を直接使う操作（OS のアカウント管理と画面ロックで制御します）

@@ -30,7 +30,7 @@ def _has_prior_quality_failure(db, pid, *, purpose=None):
 
 def _summary_quality_required(db, pid, snapshot):
     """Keep substantive zero-fact sources and prior failures subject to summary quality checks."""
-    return bool(snapshot['contract'].get('provider')
+    return bool(snapshot['route']['provider']
         and any(context_plan.source_usable(source) for source in snapshot['sources'])
         or _has_prior_quality_failure(db, pid))
 
@@ -237,7 +237,7 @@ def _quality_skip_receipt(db, pid, identity, selected, threshold):
         content, meta = strict_json(rows[0][0]), strict_json(rows[0][1])
     except (ValueError, TypeError, UnicodeError, RecursionError):
         return None
-    reasons = {"not_configured", "disabled", "daily_budget", "backlog_reserved", "service_unavailable", "circuit_open"}
+    from semantic_jev import SKIP_REASONS as reasons
     if (not isinstance(content, dict) or set(content) != {"status", "reason", "fact_count", "purpose"}
             or content.get("status") != "SKIPPED" or content.get("reason") not in reasons
             or type(content.get("fact_count")) is not int or content["fact_count"] != len(identity["fact_ids"])

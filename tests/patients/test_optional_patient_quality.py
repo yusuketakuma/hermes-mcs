@@ -198,7 +198,7 @@ def test_keyless_cloud_keeps_route_identity_and_finishes_same_pipeline(runtime, 
         monkeypatch.setattr(semantic_jev, 'JevClient',
                             lambda **kwargs: pytest.fail('keyless Jev must never be constructed'))
     assert extract_llm._cloud_mode(ledger, CFG, 'patient_context', 1) == 'off'
-    assert 'provider' in state._contract(CFG, 1)  # Credential removal is not a new clinical input.
+    assert state._route(CFG, 1)['provider']  # Credential removal is not a new clinical input.
     seed(ledger, body='本人は合成の自宅で生活しています。')
     for _ in range(40):
         result = step(runtime, cfg=CFG)

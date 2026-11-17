@@ -232,6 +232,8 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
                 source = original_source_keys.source(ledger.db, row['project_id'], key)
                 if source is None or _stored(ledger.db, row['project_id'], key, stage, cfg) is not None:
                     continue
+                if stage == 'local' and _stored(ledger.db, row['project_id'], key, 'cloud', cfg) is not None:
+                    continue  # a current cloud result does not depend on the local model
                 source['_feedback_revision'] = attachment_feedback.revision(
                     ledger.db, row['project_id'], key, source['_source_binding'])
                 if used >= limit or time.monotonic() >= deadline:

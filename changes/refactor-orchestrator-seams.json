@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "内部コード整理(実行時の挙動は変更なし)",
+  "summary": "収集・通知・意味処理の大きなオーケストレーター関数を名前付きの継ぎ目に分割する内部整理です。処理順・戻り値・例外経路・保存内容は変更していません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "semantic_loops.update_loops を候補行取得(_candidate_rows)・現世代候補の更新(_refresh_candidates)・前世代候補の昇格(_promote_prior_candidates)・Jev関係ペア評価(_evaluate_relation_pairs)に分割。",
+    "notify_parts.build_manifest の LINE WORKS カード再利用判定を _reusable_lineworks_card へ抽出。",
+    "job_ops.run_history_jobs の walk前進とジョブ処遇決定を _settle_history_job へ抽出。"
+  ],
+  "refs": ["mcs/semantic/semantic_loops.py", "mcs/notify/notify_parts.py", "mcs/ingest/job_ops.py"]
+}

@@ -456,3 +456,72 @@ def test_malformed_snapshot_diagnostics_stay_corrupt(tmp_path, extra):
     _status(tmp_path, reason="snapshot_deferred", complete=1, **extra)
     assert health_report.attachment_ocr_health(str(tmp_path), CFG, 1000) == {
         "state": "unknown", "reason": "attachment_ocr_status_corrupt"}
+
+
+_GENERIC_LOCAL_DEFER = ["・添付の文字起こし後のローカル解析が保留されています",
+                        "　→ ローカルLLMの稼働状態と処理枠を確認してください。文字起こしの失敗を示すものではありません"]
+
+
+def _local_deferred(tmp_path, **extra):
+    _status(tmp_path, local_done=0, **{"local_deferred": 1, **extra})
+    return health_report.attachment_ocr_health(str(tmp_path), CFG, 1000)
+
+
+def test_status_without_breakdown_keeps_the_current_guidance(tmp_path):
+    report = _local_deferred(tmp_path)
+    assert report["state"] == "deferred" and report["reason"] == "attachment_ocr_local_inference_deferred"
+    assert "local_deferred_reasons" not in report and "local_deferred_primary" not in report
+    assert health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]]) == _GENERIC_LOCAL_DEFER
+
+
+def test_valid_breakdown_is_exposed_with_its_primary_reason(tmp_path):
+    report = _local_deferred(tmp_path, local_deferred=3,
+                             local_deferred_reasons={"disk_low": 2, "unclassified": 1})
+    assert report["state"] == "deferred" and report["reason"] == "attachment_ocr_local_inference_deferred"
+    assert report["local_deferred_reasons"] == {"disk_low": 2, "unclassified": 1}
+    assert report["local_deferred_primary"] == "disk_low"
+
+
+@pytest.mark.parametrize("reasons,total", [
+    ({"synthetic_free_text": 1}, 1), ({"disk_low": True}, 1), ({"disk_low": 0}, 1),
+    ({"disk_low": -1}, 1), ({"disk_low": "1"}, 1), ({"disk_low": 1}, 2), ({"disk_low": 1}, 0),
+    ({f"synthetic_{index:02d}": 1 for index in range(9)}, 9), ("disk_low", 1), ([], 1),
+])
+def test_invalid_breakdown_is_ignored_without_marking_the_status_corrupt(tmp_path, reasons, total):
+    report = _local_deferred(tmp_path, local_deferred=total, local_deferred_reasons=reasons)
+    # With nothing deferred the status is plain 'ok' (no reason key at all).
+    assert report.get("reason") != "attachment_ocr_status_corrupt"
+    assert report["state"] == ("deferred" if total else "ok")
+    assert "local_deferred_reasons" not in report and "local_deferred_primary" not in report
+    if total:
+        assert health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]]) == _GENERIC_LOCAL_DEFER
+
+
+def test_every_known_reason_has_matching_guidance():
+    import attachment_inference_deferral as deferral
+    assert set(health_watch._OCR_LOCAL_DEFER_JA) == set(deferral.LOCAL_DEFER_REASONS)
+    assert deferral.UNCLASSIFIED not in health_watch._OCR_LOCAL_DEFER_JA
+
+
+@pytest.mark.parametrize("code", sorted(health_watch._OCR_LOCAL_DEFER_JA))
+def test_primary_reason_selects_its_guidance(tmp_path, code):
+    report = _local_deferred(tmp_path, local_deferred_reasons={code: 1})
+    observed, todo = health_watch._OCR_LOCAL_DEFER_JA[code]
+    rows = health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]])
+    assert rows == [f"・添付の文字起こし後のローカル解析が保留されています（直近の実行の再確認: {observed}）",
+                    f"　→ {todo}。文字起こしの失敗を示すものではありません"]
+    assert "AI判定" not in "\n".join(rows)
+
+
+@pytest.mark.parametrize("reasons", [{"unclassified": 1}, {"disk_low": 1, "unclassified": 1}])
+def test_unconfirmed_reason_falls_back_to_the_current_guidance(tmp_path, reasons):
+    report = _local_deferred(tmp_path, local_deferred=sum(reasons.values()), local_deferred_reasons=reasons)
+    assert report["local_deferred_primary"] == "unclassified"
+    assert health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]]) == _GENERIC_LOCAL_DEFER
+
+
+@pytest.mark.parametrize("mode", [{"runtime_mode": "standalone"}, {"notify_transport": "lineworks"}])
+def test_reason_guidance_survives_runtime_specific_action_overrides(tmp_path, mode):
+    report = _local_deferred(tmp_path, local_deferred_reasons={"memory_low": 1})
+    rows = health_watch._reason_rows({**report, "attachment_ocr": report, **mode}, [report["reason"]])
+    assert rows[1] == "　→ " + health_watch._OCR_LOCAL_DEFER_JA["memory_low"][1] + "。文字起こしの失敗を示すものではありません"

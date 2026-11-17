@@ -100,7 +100,9 @@ def test_transition_windows_name_their_anchor_date(ctx):
     day = datetime.fromtimestamp(anchor_at, JST).strftime("%m/%d")
     assert f"{day}の前後14日の記録" in groups, groups
     assert "本人の移行実施の記録" in groups
-    assert any(h.startswith(f"{day}の前後14日で記載なし: ") for h in view["head"])
+    assert not any("記載なし" in h for h in view["head"]), "a missing record is never stated as absence"
+    assert any(h.startswith((f"{day}の前後14日で記載が見つかりません: ",
+                             f"{day}の前後14日で記載の有無は未確認（解析・取得が未完了）: ")) for h in view["head"])
     assert not any(h.startswith("この範囲で記載なし") for h in view["head"])
 
 

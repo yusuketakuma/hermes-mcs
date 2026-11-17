@@ -716,6 +716,21 @@ def test_completion_contract_tracks_profiles_but_not_operating_budgets(store, mo
             drain._reprocess_proof_generation(store, changed, scfg)
 
 
+def test_completion_contract_keeps_patient_context_dependency_coverage(store, monkeypatch):
+    import patient_context_refresh_state as context_state
+
+    cfg = _cfg(loop_mode='off')
+    scfg = semantic_policy.runtime_config(cfg)[0]
+    base = drain._reprocess_proof_generation(store, cfg, scfg)
+    for name in ('_SCAN_CODE', '_SUMMARY_CODE'):
+        with monkeypatch.context() as patch:
+            patch.setattr(context_state, name, 'f' * 64)
+            assert drain._reprocess_proof_generation(store, cfg, scfg) != base
+    # The local model only rechecks completion; it is named explicitly.
+    changed = {**cfg, 'local_llm': {'model': 'synthetic-other-local'}}
+    assert drain._reprocess_proof_generation(store, changed, scfg) != base
+
+
 @pytest.mark.parametrize('direction', ['expired', 'backward'])
 def test_clock_change_invalidates_a_completed_bookmark(store, monkeypatch, direction):
     now = [time.time()]

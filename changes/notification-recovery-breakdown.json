@@ -1,0 +1,19 @@
+{
+  "category": "added",
+  "title": "未完了partの内訳で復旧作業の順序を決められるように",
+  "summary": "health.jsonのnotify.incomplete_parts.recovery_breakdownとmcs_view recovery_partsのsummaryで、監視対象の未完了partを固定エラー・送信先・種別・使える復旧計画・まとめて承認できる件数で確認できます。送信・確定・承認・警報の判定は変わりません。",
+  "upgrade": "追加操作は不要です。healthへの反映は次回のhealth生成から、viewは新しいsnapshotから有効です。内訳は読み取り専用で、承認は従来どおり1件ずつの人承認コマンドです。",
+  "details": [
+    "内訳はhealthでは件数のみで、本体が数えた行を再読せず1秒以内の別枠で他の観測の後に計算し、上限超過や集団の不一致ではstatus=unknownとして件数を出さない。",
+    "related_plansでまとめられるSlack添付説明は、適用時と同じ配送先照合が通った束と候補だけの束を分けて数える。",
+    "viewのsummary.populationは、unknown部品の全件を監視対象・一覧のみ・一覧外に分けて示す。"
+  ],
+  "refs": [
+    "mcs/notify/notify_recovery_breakdown.py",
+    "mcs/notify/notify_recovery.py",
+    "mcs/notify/notify_scope.py",
+    "mcs/ingest/health_report.py",
+    "mcs/views/mcs_view.py",
+    "docs/guides/NOTIFICATION_RECOVERY.md"
+  ]
+}

@@ -153,8 +153,11 @@ def config_generation(cfg: dict) -> str:
     return payload_hash(cfg)
 
 
-def execution_generation(scfg: dict) -> str:
-    """Interpretation identity, independent of runtime budgets, scope and mode."""
+def execution_generation(scfg: dict, *, local_model: str | None = None) -> str:
+    """Interpretation identity, independent of runtime budgets, scope and mode.
+
+    It names the configured local model, so a model change re-queues every
+    job and the local results it decides are redone (re-queue identity)."""
     from inference_version import CURRENT_VERSION, VERSION_KEY
     from semantic_policy import policy_fingerprint, SCHEMA_VERSION
     from semantic_extraction import v2_generation
@@ -162,7 +165,16 @@ def execution_generation(scfg: dict) -> str:
     # approval or operational cap change is not a fresh retry budget.
     policy = {**scfg, 'candidate_fingerprint': None}
     return payload_hash({VERSION_KEY: CURRENT_VERSION, 'schema': SCHEMA_VERSION,
-                         'policy': policy_fingerprint(policy), 'extraction': v2_generation()})
+                         'policy': policy_fingerprint(policy), 'extraction': v2_generation(local_model)})
+
+
+def interpretation_generation(scfg: dict) -> str:
+    """execution_generation without the local model, for receipts no local model produced.
+
+    A loop-completion receipt is Jev-backed; it keeps the value stamped under
+    the shipped default model so existing receipts stay current."""
+    from semantic_store import _LEGACY_FINGERPRINT_LOCAL_MODEL
+    return execution_generation(scfg, local_model=_LEGACY_FINGERPRINT_LOCAL_MODEL)
 
 
 @dataclass(frozen=True)
@@ -339,6 +351,8 @@ _CIRCUIT_RETRYABLE_KINDS = frozenset({"rate_limited", "transport", "timeout"})
 _CIRCUIT_FAILURE_CLASSES = _CIRCUIT_RETRYABLE_KINDS | {
     "http_402", "http_429", "http_529", "http_5xx"
 }
+# Classes only the cloud circuit records: contract errors count; the other three latch.
+_CLOUD_CIRCUIT_CLASSES = frozenset({"auth_error", "payment_required", "pricing_unverified", "contract_error"})
 
 
 def _circuit_now(now) -> float:
@@ -412,8 +426,7 @@ def _circuit_state(ledger, now=None, *, kind=_CIRCUIT_ARTIFACT_KIND) -> dict:
                 or not math.isfinite(float(open_until))
                 or (failure_class is not None
                     and failure_class not in (_CIRCUIT_FAILURE_CLASSES |
-                        ({"auth_error", "payment_required", "pricing_unverified", "contract_error"}
-                         if kind == "cloud_circuit" else set())))
+                        (_CLOUD_CIRCUIT_CLASSES if kind == "cloud_circuit" else set())))
                 or (kind == "cloud_circuit"
                     and failure_class in {"auth_error", "payment_required", "pricing_unverified"}
                     and open_until <= _circuit_now(now))):
@@ -693,6 +706,43 @@ def _jev_window_check(retryable: bool = False, *, config_path=None):
         raise JevError("budget_exceeded", "semantic_until_expired", retryable=retryable)
 
 
+def verify_jev_skip(ledger, skip_reason, scfg, *, lane=None, cfg_path=None) -> None:
+    """Confirm a job's recorded Jev skip still holds before it is written.
+
+    Raises ValueError("semantic_skip_reason_stale") when the reason no longer
+    holds (Jev became available), and JevError, ValueError or sqlite3.Error
+    when it cannot be verified; callers treat both as "do not write"."""
+    from semantic_jev import REVIEW_HELD, api_key
+    from semantic_policy import BACKLOG_BUDGET_RESERVE
+    from semantic_store import jev_usage_today
+    _jev_window_check(config_path=cfg_path)
+    used = jev_usage_today(ledger)
+    cap = scfg["daily_request_budget"]
+    if lane == "backlog":
+        cap -= math.ceil(cap * BACKLOG_BUDGET_RESERVE)
+    if ((skip_reason in ("daily_budget", "backlog_reserved") and used < cap)
+            or (skip_reason == "disabled" and scfg["daily_request_budget"] > 0)
+            or (skip_reason == "not_configured" and api_key())
+            or (skip_reason == REVIEW_HELD and not _live_jev_held(scfg, cfg_path))
+            or (skip_reason == "circuit_open" and (not circuit_open(ledger)
+                or _circuit_state(ledger)["failure_class"] not in _CIRCUIT_FAILURE_CLASSES))):
+        raise ValueError("semantic_skip_reason_stale")
+
+
+def _live_jev_held(scfg, cfg_path) -> bool:
+    """The facility review hold on Jev as the live config resolves it now."""
+    if cfg_path is None:
+        return scfg.get("jev_held") is True
+    from mcs_util import load_config
+    from semantic_policy import runtime_config
+    return runtime_config(load_config(cfg_path))[0].get("jev_held") is True
+
+
+# Guard stages right before a Jev request is reserved or sent ("jev_result",
+# after a response arrived, is not one: an answer already paid for is kept).
+JEV_SEND_STAGES = ("jev_attempt", "jev_reserve", "jev_reserved")
+
+
 def _check_reservation_day(ledger, artifact_id, day):
     """Reject a reservation whose check and durable timestamp span JST days."""
     from semantic_jev import JevError
@@ -890,6 +940,9 @@ def guard(ledger, token: JobToken, *, deadline: float,
         current_scfg, _ = parse_cfg(current_cfg)
         if current_scfg.get("mode") == "off":
             raise RuntimeOff(stage)
+        if stage in JEV_SEND_STAGES and current_scfg.get("jev_held") is True:
+            # a review withdrawn mid-job stops the next Jev request, not local work
+            raise RuntimeOff(stage + ":jev_review")
         projects = current_scfg.get('project_ids')
         if projects is not None and token.project_id not in projects:
             raise RuntimeOff(stage + ':scope')
@@ -916,6 +969,7 @@ __all__ = [
     "RuntimeGuardError",
     "RuntimeOff",
     "RuntimeStale", "JevEvaluation", "bind_jev", "config_generation", "execution_generation",
+    "interpretation_generation",
     "circuit_open", "record_circuit_result",
     "guard", "guarded_llm", "job_deadline", "job_matches", "llm_call",
     "parse_payload", "attempt_limit", "payload_generation", "transition",

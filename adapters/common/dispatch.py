@@ -194,8 +194,11 @@ def _audited(reply: str, data: dict, settings: dict[str, Any],
 
     An answer whose record cannot be written is withheld (fail closed),
     including a failure that still carries patient content. Bare denials
-    carry no patient data, and a confirmed write already has its own
-    receipt, so those answers are returned unchanged.
+    carry no patient data. A confirmed write is queued before its record is
+    attempted and answers only with its receipt (command_id, hash, outcome),
+    never patient information; who, which patient and what changed stay in
+    command_receipts, so that answer is returned unchanged. Reading the
+    applied result later is a view and stays withheld.
     """
     parsed = None if isinstance(reply, _Shown) else _parsed(reply)
     outcome = reply.outcome if isinstance(reply, _Shown) else _outcome(reply, parsed)

@@ -107,7 +107,10 @@ def test_send_cap_does_not_reset_a_persisted_cloud_cursor(runtime, partial_cloud
     seed(ledger, body='見出しのない完全合成の居住記録。')
     snapshot = patient_context_refresh_sources._snapshot(ledger.db, 1, CLOUD_CFG)
     meta = {'source_sig': plan.source_signature(snapshot['sources'][0]),
-            'contract': snapshot['contract'], 'provider': snapshot['contract']['provider']}
+            'contract': snapshot['contract'], 'provider': snapshot['route']['provider'],
+            'model': snapshot['route']['provider']['model'], 'provenance': {
+                'backend': snapshot['route']['provider']['backend'],
+                'model': snapshot['route']['provider']['model'], 'profile': None}}
     with ledger.db:
         patient_context_refresh_state._replace(ledger, patient_context_refresh_state.SCAN, 1,
             {'cursor': 1, 'chunks': 2, 'complete': False, 'facts': []}, meta, 1)
@@ -122,5 +125,5 @@ def test_send_cap_does_not_reset_a_persisted_cloud_cursor(runtime, partial_cloud
     result = cloud_step(runtime)
     assert result['status'] == 'deferred' and result['reason'] == 'patient_context_cloud_budget'
     assert not local and len(seen) == 1
-    saved = patient_context_refresh_sources._current_scans(ledger.db, 1, snapshot['sources'], snapshot['contract'])[1]
-    assert saved['_provider_contract'] == snapshot['contract']['provider'] and saved['cursor'] == 1
+    saved = patient_context_refresh_sources._current_scans(ledger.db, 1, snapshot['sources'], snapshot['route'])[1]
+    assert saved['_provider_contract'] == snapshot['route']['provider'] and saved['cursor'] == 1

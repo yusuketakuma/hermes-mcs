@@ -8,7 +8,11 @@
 # release. A local pass is recorded as local evidence, not as hosted CI
 # success.
 # The run lines below are copied verbatim from ci.yml and
-# tests/meta/test_ci_local_runner.py fails when the two drift.
+# tests/meta/test_ci_local_runner.py fails when the two drift. A local run is
+# always ci.yml's full mode (perf tests included); the pytest matrix slices
+# run one after another with the same partition, and the gate jobs verify
+# the slices' shard reports while this runner's own per-job result stands in
+# for the needs results that ci/ci_gate.py judges in CI.
 #
 # Usage: scripts/development/ci_local.sh [--out DIR] [--fetch] [JOB ...]
 #   --out DIR   evidence directory outside the repository
@@ -19,10 +23,12 @@
 #   MCS_CI_PYTHON             Python of ci.yml python-version with the ci.yml pytest
 #   MCS_CI_STANDALONE_PYTHON  same, plus deployment/requirements-standalone.txt
 #   MCS_CI_HERMES_AGENT       hermes-agent checkout at the ci.yml ref, with .venv
-# Exit: 0 only when all eight jobs pass on a clean clone; 1 otherwise; 2 usage.
+# Exit: 0 only when every ci.yml job passes on a clean clone; 1 otherwise; 2 usage.
 set -u
 
-JOBS="publication-request linux-tests lint-test hygiene standalone-sdk incident-gates macos hermes-integration"
+JOBS="publication-request scope lint pytest-linux lint-test hygiene standalone-sdk incident-gates pytest-macos macos hermes-integration"
+# jobs that only decide or judge in CI; locally they run no tests of their own
+JUDGES="scope lint-test macos"
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)
 out=""
@@ -33,7 +39,7 @@ while [ "$#" -gt 0 ]; do
         --out) out=${2:?--out needs a directory}; shift 2 ;;
         --fetch) fetch=1; shift ;;
         --list-jobs) for j in $JOBS; do echo "$j"; done; exit 0 ;;
-        -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
         -*) echo "unknown option: $1" >&2; exit 2 ;;
         *)
             case " $JOBS " in *" $1 "*) ;; *) echo "unknown job: $1" >&2; exit 2 ;; esac
@@ -95,6 +101,8 @@ if [ "$fetch" = 0 ]; then
     # no network unless asked: pip and uv resolve only from local caches
     export PIP_NO_INDEX=1 UV_OFFLINE=1
 fi
+# ci.yml sets these only for pull requests; the local run is the full run
+unset MCS_CI_SKIP_PERF MCS_CI_TEST_SCOPE
 
 # wrapper (not symlink) so a venv interpreter keeps its pyvenv.cfg
 shim() {
@@ -126,8 +134,8 @@ python_ready() {
 }
 
 # --- prerequisites: a missing one makes the job 実行不能, never pass ---
-prereq_linux_tests() { python_ready; }
-prereq_lint_test() {
+prereq_scope() { :; }
+prereq_lint() {
     python_ready || return 1
     if command -v uv >/dev/null 2>&1; then
         uv run --no-project --with "ruff==$ruff_pin" ruff --version >/dev/null 2>&1 ||
@@ -139,10 +147,18 @@ prereq_lint_test() {
 }
 prereq_hygiene() { command -v shellcheck >/dev/null 2>&1 || { reason="shellcheck が未導入"; return 1; }; }
 prereq_incident_gates() { py_ok "$base_python" || { reason="Python $py_pin が見つからない（MCS_CI_PYTHON）"; return 1; }; }
-prereq_macos() {
+prereq_pytest_linux() { python_ready; }
+prereq_pytest_macos() {
     [ "$(uname -s)" = Darwin ] || { reason="macOS 以外のホスト"; return 1; }
     python_ready
 }
+# a gate verifies the shard reports that its pytest job left in $out/<job>
+gate_ready() {
+    [ -d "$out/$1" ] || { reason="$1 が実行されていない（照合する shard 報告がない）"; return 1; }
+    command -v python3 >/dev/null 2>&1 || { reason="python3 が未導入"; return 1; }
+}
+prereq_lint_test() { gate_ready pytest-linux; }
+prereq_macos() { gate_ready pytest-macos; }
 prereq_standalone_sdk() {
     standalone_python=${MCS_CI_STANDALONE_PYTHON:-}
     if [ -z "$standalone_python" ] && [ "$fetch" = 1 ] && py_ok "$base_python"; then
@@ -188,22 +204,32 @@ job_publication_request() {
     HEAD_COMMIT_ID='' RUN_ID=1 RUN_ATTEMPT=1 \
         python3 scripts/development/publication_request.py
 }
-job_linux_tests() {
-    # Local evidence is serial, not a hosted-runner speed measurement.
-    rc=0
-    for group in lifecycle patients rest; do
-        python3 ci/run_pytest_groups.py linux --group "$group" || rc=1
-    done
-    return "$rc"
+job_scope() {
+    # ci.yml classifies pull requests with ci/ci_scope.py; a local run is full
+    echo "mode=full"
 }
-job_lint_test() {
+job_lint() {
     make lint
     python3 scripts/development/check_drug_master_bundle.py
     # the PR-only step also compares DEVELOPMENT.md's tables with the merge base
     python3 scripts/development/update_readme.py --check
-    # Only evidence from this invocation's preceding Linux job counts.
-    SHARDS_RESULT=$(awk -F '\t' '$1 == "linux-tests" && $2 == "pass" {print "success"}' "$summary")
-    test "$SHARDS_RESULT" = success
+}
+job_pytest_linux() {
+    # ci.yml runs each slice as its own matrix job; here they run one after
+    # another (2 shard processes at a time) and keep their reports for lint-test
+    export RUNNER_TEMP="$out/pytest-linux"
+    mkdir -p "$RUNNER_TEMP"
+    MCS_CI_SLICES=4 MCS_CI_PER_SLICE=2 failed=0
+    for MCS_CI_SLICE in 1 2 3 4; do
+        python3 ci/run_pytest_groups.py linux --slice "$MCS_CI_SLICE/$MCS_CI_SLICES" --per-slice "$MCS_CI_PER_SLICE" || failed=1
+    done
+    return "$failed"
+}
+job_lint_test() {
+    # gate: ci/ci_gate.py judges the needed jobs in CI (this runner's job rows do
+    # here); the slices' shard reports must cover the collection exactly once
+    MCS_CI_REPORTS="$out/pytest-linux" MCS_CI_SLICES=4 MCS_CI_PER_SLICE=2
+    python3 ci/run_pytest_groups.py linux --verify-reports "$MCS_CI_REPORTS" --slices "$MCS_CI_SLICES" --per-slice "$MCS_CI_PER_SLICE"
 }
 job_hygiene() {
     python3 scripts/development/check_labels_sync.py
@@ -239,8 +265,19 @@ job_incident_gates() {
     python3 ci/gates.py
     python3 ci/mine_gates.py --check
 }
+job_pytest_macos() {
+    export RUNNER_TEMP="$out/pytest-macos"   # see job_pytest_linux
+    mkdir -p "$RUNNER_TEMP"
+    MCS_CI_SLICES=2 MCS_CI_PER_SLICE=3 failed=0
+    for MCS_CI_SLICE in 1 2; do
+        python3 ci/run_pytest_groups.py macos --slice "$MCS_CI_SLICE/$MCS_CI_SLICES" --per-slice "$MCS_CI_PER_SLICE" || failed=1
+    done
+    return "$failed"
+}
 job_macos() {
-    python3 ci/run_pytest_groups.py macos
+    # gate: see job_lint_test
+    MCS_CI_REPORTS="$out/pytest-macos" MCS_CI_SLICES=2 MCS_CI_PER_SLICE=3
+    python3 ci/run_pytest_groups.py macos --verify-reports "$MCS_CI_REPORTS" --slices "$MCS_CI_SLICES" --per-slice "$MCS_CI_PER_SLICE"
 }
 job_hermes_integration() {
     MCS_TEST_PYTHON=$hermes/.venv/bin/python MCS_HERMES_SOURCE=$hermes MCS_HERMES_REFERENCE=$hermes \
@@ -284,7 +321,10 @@ for job in $JOBS; do
     ) >"$log" 2>&1
     rc=$?
     status=pass; [ "$rc" = 0 ] || { status=fail; all_pass=0; }
-    note=""; [ "$runs_on" = macos-latest ] || note="ubuntu runner 固有の差は未検証"
+    case " $JUDGES " in
+        *" $job "*) note="判定のみ（CI の needs 結果の代わりにこの runner の job 結果を使う）" ;;
+        *) note=""; [ "$runs_on" = macos-latest ] || note="ubuntu runner 固有の差は未検証" ;;
+    esac
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$job" "$status" "$rc" "$started" "$(now)" "$runs_on" "$(uname -s)" "$note" >>"$summary"
 done
 

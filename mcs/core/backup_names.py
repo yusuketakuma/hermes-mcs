@@ -11,15 +11,17 @@ from __future__ import annotations
 import os
 import re
 
-BACKUP_CLASSES = ("daily", "daily_ok", "preupdate", "staging", "manual")
+BACKUP_CLASSES = ("daily", "daily_ok", "preupdate", "patient_context_reset", "staging", "manual")
 
 _BACKUP_CLASS_PATTERNS = (("daily", re.compile(r"ledger-\d{8}\.db")),
                           ("daily_ok", re.compile(r"ledger-\d{8}\.db\.ok")),
                           ("preupdate", re.compile(r"preupdate-.*\.db")),
+                          # reset_backup's copies: kept by the owner, never rotated
+                          ("patient_context_reset", re.compile(r"patient-context-reset-.*\.db")),
                           ("staging", re.compile(r".*\.tmp(-journal|-wal|-shm)?")))
 
 # Settled journal rows are kept back to the oldest restorable backup, but
-# never longer than this: an owner-kept copy (schema-bump preupdate,
+# never longer than this: an owner-kept copy (reset, schema-bump preupdate,
 # hand-made) must not stop compaction for good. A restore from a backup
 # older than the cap cannot be reconciled from the journal and holds all.
 JOURNAL_HORIZON_MAX_S = 90 * 86400.0

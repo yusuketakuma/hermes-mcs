@@ -127,7 +127,7 @@ def selected_scan(db, pid, source_key):
 
 
 def candidate_rows(db, pid, source_key, candidate_ref, *, source_sig=None, source_binding=None,
-                   source_occurrence=None, contract=None, body_size=None):
+                   source_occurrence=None, binding=None, body_size=None):
     """Return exact sealed stage rows, including empty split slots, after complete storage-membership checks."""
     source_key = _key(pid, source_key)
     if (not isinstance(candidate_ref, dict) or set(candidate_ref) != {
@@ -136,7 +136,7 @@ def candidate_rows(db, pid, source_key, candidate_ref, *, source_sig=None, sourc
             or any(not valid_hash(candidate_ref[key]) for key in ('repair_input_key', 'candidate_key', 'chunks_sig'))
             or source_sig is not None and not valid_hash(source_sig)
             or source_binding is not None and not valid_hash(source_binding)
-            or contract is not None and not isinstance(contract, dict)):
+            or binding is not None and not isinstance(binding, dict)):
         raise _invalid()
     before = _fence(db)
     if body_size is None and type(source_key) is int:
@@ -159,7 +159,7 @@ def candidate_rows(db, pid, source_key, candidate_ref, *, source_sig=None, sourc
             or not isinstance(origin.get('contract'), dict)
             or source_sig is not None and origin['source_sig'] != source_sig
             or source_binding is not None and origin['source_binding'] != source_binding
-            or contract is not None and origin['contract'] != contract
+            or binding is not None and quality_binding(origin) != binding
             or seal.get('phase') != 'ready' or any(seal.get(key) != candidate_ref[key] for key in ('candidate_key', 'chunks_sig'))):
         raise _invalid()
     saved_occurrence = _occurrence(pid, origin.get('source_occurrence'), origin['source_binding'])
@@ -169,30 +169,28 @@ def candidate_rows(db, pid, source_key, candidate_ref, *, source_sig=None, sourc
             or source_occurrence is not None and payload_hash(saved_occurrence) != payload_hash(source_occurrence)):
         raise _invalid()
     rows = staged_rows(db, pid, source_key, candidate_ref['repair_input_key'],
-        source_sig=origin['source_sig'], contract=origin['contract'], source_binding=origin['source_binding'],
+        source_sig=origin['source_sig'], binding=quality_binding(origin), source_binding=origin['source_binding'],
         source_occurrence=saved_occurrence, body_size=body_size, repair_provider=origin.get('repair_provider'))
-    if (origin.get('provider') != origin['contract'].get('provider')
-            or origin.get('model') != ((origin.get('provider') or {}).get('model')
-                                      if origin.get('provider') is not None else origin['contract'].get('model'))
+    if (origin.get('model') != (origin.get('provider') or {}).get('model')
             or payload_hash([[row['artifact_id'], row['content'], row['meta']] for row in rows]) != candidate_ref['chunks_sig']):
         raise _invalid()
     _unchanged(db, before)
     return rows
 
 
-def staged_rows(db, pid, source_key, repair_input_key, *, source_sig, contract, source_binding,
+def staged_rows(db, pid, source_key, repair_input_key, *, source_sig, binding, source_binding,
                 source_occurrence=None, body_size, require_complete=True, repair_provider=None):
     """Validate stored unit parts and origin; incomplete ranges are allowed only for explicit staging reads."""
     source_key = _key(pid, source_key)
     if (not valid_hash(repair_input_key) or not valid_hash(source_sig) or not valid_hash(source_binding)
-            or not isinstance(contract, dict) or type(body_size) is not int or body_size <= 0
-            or type(require_complete) is not bool):
+            or not isinstance(binding, dict) or not isinstance(binding.get('contract'), dict)
+            or type(body_size) is not int or body_size <= 0 or type(require_complete) is not bool):
         raise _invalid()
     before = _fence(db)
-    provider = contract.get('provider')
+    contract, provider = binding['contract'], binding.get('provider')
     if provider is not None and not isinstance(provider, dict):
         raise _invalid()
-    model = provider.get('model') if provider is not None else contract.get('model')
+    model = provider.get('model') if provider is not None else None
     if repair_provider is not None:
         import cloud_inference
         if not cloud_inference.is_supported_cloud_contract(repair_provider):
@@ -390,8 +388,7 @@ def original_rows(db, pid, source_key, scan_meta, scan_content, *, artifact_ids=
                     continue
                 if (payload_hash(member_occurrence) != payload_hash(occurrence)
                         or meta.get('source_sig') != scan_meta['source_sig']
-                        or payload_hash(meta.get('contract')) != payload_hash(scan_meta['contract'])
-                        or payload_hash(meta.get('provider')) != payload_hash(scan_meta.get('provider'))):
+                        or any(payload_hash(meta.get(key)) != payload_hash(scan_meta.get(key)) for key in BINDING_KEYS)):
                     continue
                 if (project_id != pid or message_id != (source_key if type(source_key) is int else 0)
                         and not (type(source_key) is str and message_id is None)
@@ -470,7 +467,7 @@ def selected_rows(db, pid, source_key, *, artifact_ids=None, source_binding=None
         _occurrence(pid, occurrence, occurrence.get('source_binding'))
         rows = candidate_rows(db, pid, source_key, doc['accepted_candidate_ref'], source_sig=meta.get('source_sig'),
                               source_binding=occurrence['source_binding'], source_occurrence=occurrence,
-                              contract=meta.get('contract'), body_size=body_size)
+                              binding=quality_binding(meta), body_size=body_size)
         if (source_binding is not None and occurrence['source_binding'] != source_binding
                 or source_occurrence is not None and payload_hash(occurrence) != payload_hash(source_occurrence)):
             raise _invalid()
@@ -486,32 +483,25 @@ def selected_rows(db, pid, source_key, *, artifact_ids=None, source_binding=None
     return rows
 
 
-def original_quality_rows(db, pid, source_key, scan, source_sig, contract, occurrence, body_size):
+def original_quality_rows(db, pid, source_key, scan, source_sig, binding, occurrence, body_size):
     """Select a complete original scan proof; malformed membership is never silently accepted."""
     from patient_context_plan import MAX_SOURCE_FACTS, ranges_complete, source_digest
     if (not db.in_transaction or not isinstance(scan, dict) or not valid_hash(source_sig)
-            or not isinstance(contract, dict) or type(body_size) is not int or body_size <= 0):
+            or not isinstance(binding, dict) or not isinstance(binding.get('contract'), dict)
+            or type(body_size) is not int or body_size <= 0):
         raise _invalid()
     meta = decode_document(scan['meta'], metadata=True)
     content = decode_document(scan['content'])
     rows = original_rows(db, pid, source_key, meta, content, body_size=body_size,
                          source_occurrence=occurrence, current_only=True)
     proofs, units, selected = [], {}, []
+    header = {key: meta.get(key) for key in BINDING_KEYS}
     for row in rows:
         origin, doc = decode_document(row['meta'], metadata=True), decode_document(row['content'])
-        actual = origin.get('contract')
-        route = origin.get('route_contract')
-        if route is not None:
-            if (not isinstance(route, dict) or not isinstance(actual, dict) or 'provider' not in route
-                    or actual != {k:v for k,v in route.items() if k != 'provider'}
-                    or origin.get('provider') or origin.get('model') != actual.get('model')):
-                continue
-            actual = route
-        elif not isinstance(actual, dict) or origin.get('provider') != actual.get('provider'):
-            continue
-        if (origin.get('invalidated') not in (None,False,0) or origin.get('source_key') != source_key
-                or origin.get('source_sig') != source_sig or actual != contract
-                or {k:origin.get(k) for k in ('contract','provider')} != {k:meta.get(k) for k in ('contract','provider')}):
+        if (provenance(origin) is None or quality_binding(origin) != binding
+                or origin.get('invalidated') not in (None,False,0) or origin.get('source_key') != source_key
+                or origin.get('source_sig') != source_sig
+                or {key: origin.get(key) for key in BINDING_KEYS} != header):
             continue
         marked = 'source_occurrence_version' in content or 'source_occurrence' in content
         candidate = 'source_occurrence_version' in origin or 'source_occurrence' in origin
@@ -550,21 +540,54 @@ def facts_signature(facts):
     return context_scan.facts_signature(facts)
 
 
-def route_contract(meta):
-    """Validate the actual backend and return its pinned selection contract."""
-    actual = meta.get("contract")
-    if not isinstance(actual, dict):
+# Backend identity shared by a scan header and every one of its chunks.
+BINDING_KEYS = ('contract', 'provider', 'route_provider', 'provenance')
+
+
+def provenance(meta):
+    """Validate and return the stored {backend, model, profile} of the producing backend."""
+    value = meta.get('provenance') if isinstance(meta, dict) else None
+    if (not isinstance(value, dict) or set(value) != {'backend', 'model', 'profile'}
+            or not isinstance(meta.get('contract'), dict)
+            or not isinstance(value['model'], str) or not value['model'] or meta.get('model') != value['model']):
         return None
-    if "route_contract" in meta:
-        route = meta["route_contract"]
-        if (not isinstance(route, dict) or "provider" not in route
-                or actual != {key: value for key, value in route.items() if key != "provider"}
-                or meta.get("provider") or meta.get("model") != actual.get("model")):
+    provider, route_provider = meta.get('provider'), meta.get('route_provider')
+    if provider is not None:
+        if (not isinstance(provider, dict) or 'route_provider' in meta or meta.get('local_fallback') is True
+                or value['backend'] != provider.get('backend') or value['backend'] == 'local'
+                or value['profile'] is not None and not isinstance(value['profile'], str)):
             return None
-        return route
-    if meta.get("provider") != actual.get("provider"):
+    elif (value['backend'] != 'local' or value['profile'] is not None
+            or 'route_provider' in meta and not isinstance(route_provider, dict)
+            or (meta.get('local_fallback') is True) != isinstance(route_provider, dict)):
         return None
-    return actual
+    return value
+
+
+def route_accepts(route, meta):
+    """Accept an artifact produced for this scan contract by an accepted backend.
+
+    A cloud artifact is matched by its provider contract alone; the local model
+    only decides locally produced rows. A snapshot reader without settings
+    passes ``local_model_pinned=False`` instead of a resolved model value."""
+    value = provenance(meta)
+    if value is None or not isinstance(route, dict) or meta['contract'] != route.get('contract'):
+        return False
+    if meta.get('provider') is not None:
+        return route.get('provider') is not None and meta['provider'] == route['provider']
+    if meta.get('route_provider') != route.get('provider'):
+        return False
+    return route.get('local_model_pinned') is False or value['model'] == route.get('local_model')
+
+
+def cloud_requested(meta):
+    """A row produced, or kept as a local fallback, under a cloud route."""
+    return bool(meta.get('provider') or meta.get('route_provider'))
+
+
+def quality_binding(value):
+    """Source-QA and repair identity of a route, scan row or repair origin; never a local model."""
+    return {'contract': value.get('contract'), 'provider': value.get('provider') or value.get('route_provider')}
 
 
 def quality_failed(db, pid, identity):
@@ -660,9 +683,9 @@ def verify_source_repair_rows(db, pid, source_key, origin, rows):
             meta = loads_dict(raw)
             if (not isinstance(meta, dict) or meta.get('source_sig') != origin['source_sig']
                     or _digest(meta.get('source_occurrence')) != _digest(occurrence)
-                    or route_contract(meta) != origin['contract']):
+                    or provenance(meta) is None or quality_binding(meta) != quality_binding(origin)):
                 continue
-            binding = {key: meta.get(key) for key in ('contract', 'provider')}
+            binding = {key: meta.get(key) for key in BINDING_KEYS}
             bindings[_digest(binding)] = binding
         if len(bindings) != 1:
             raise ValueError('patient_context_source_repair_invalid')
@@ -671,7 +694,7 @@ def verify_source_repair_rows(db, pid, source_key, origin, rows):
                         'audited_chunks_sig':origin['original_chunks_sig']}
         original_rows = original_quality_rows(db, pid, source_key,
             {'meta':json.dumps(scan_meta), 'content':json.dumps(scan_content)}, origin['source_sig'],
-            origin['contract'], occurrence, origin['body_length'])
+            quality_binding(origin), occurrence, origin['body_length'])
         facts = {}
         for row in original_rows:
             document = loads_dict(row['content'])
@@ -683,7 +706,7 @@ def verify_source_repair_rows(db, pid, source_key, origin, rows):
                     raise ValueError('patient_context_source_repair_invalid')
                 facts[fact['id']] = fact
         identity, _ = semantic_audit.patient_source_quality_identity(source, list(facts.values()), occurrence,
-            origin['contract'], origin['original_chunks_sig'], assessment)
+            quality_binding(origin), origin['original_chunks_sig'], assessment)
         if (identity['source_input_key'] != origin['repair_input_key']
                 or identity['audit_key'] != origin['original_audit_key']
                 or identity['failure_key'] != origin['original_failure_key']):

@@ -626,13 +626,6 @@ def daily_parts(db, cfg, since: float, until: float) -> dict:
                  names=s.get("include_names") is True)
 
 
-def build_text(db, cfg, since: float, until: float) -> str:
-    """The daily text notice — the summary in the plain dialect, folded
-    to one relayed chat message (text route and card kill switch)."""
-    return parts_text(fit_parts(daily_parts(db, cfg, since, until),
-                                NOTICE_BUDGET), "plain")
-
-
 def view(db, cfg, scope_text, *, name=None, allowed=None, now=None,
          names: bool = True) -> dict:
     """The clicker-only 📊 view: the scope's window ending now, patient

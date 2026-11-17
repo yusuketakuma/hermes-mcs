@@ -1,0 +1,21 @@
+{
+  "category": "changed",
+  "title": "添付のローカル解析保留の警報に、再確認で分かった理由と対処を表示",
+  "summary": "添付の文字起こし後のローカル解析が保留されたとき、監視の案内に、書込み拒否の記録か入場判定直後の再確認で分かった理由（空き容量・メモリー・別のページ解析の実行中など）と対処を示します。理由を確かめられない保留は従来の案内のままです。患者情報・パス・エラー本文は記録しません。",
+  "upgrade": "追加操作は不要です。OCRは毎分のcron（mcs_ocr.sh）で別プロセスとして動くため、gatewayの再起動は要りません。ページ解析の契約（attachment_inference.py）は変更していないので、保存済みページの再解析は起きません。旧版へ戻した直後は、旧版のOCRが状態ファイルを書き直すまで（最大1分程度）attachment_ocr_status_corrupt が一時的に出ることがあります。",
+  "details": [
+    "mcs/ops/mcs_ocr.py: ローカル段が保留を返したとき、その回に記録された書込み拒否（writer_reason。更新中・実行ロックの競合・入力世代の変更などをまとめて writer_refused）を優先して数えます。それ以外は、ページ処理が5秒以内に返った保留（入場判定での保留）に限り、直後に空き容量・メモリーの余裕・attachment_inference_local.lock を再確認し、確認できた理由を固定コードで状態ファイルの local_deferred_reasons に記録します。local_deferred が0のときは記録しません。ローカル段の例外は local_stage_error として数えます。",
+    "ページ処理が5秒を超えた保留（ローカルLLMの応答なし・品質保留・保存競合などページ処理中の保留を含む）は、直後の状態と実際の原因が一致しない場合があるため再確認せず unclassified とします。再確認で理由を確かめられない保留も unclassified とし、原因を推測しません。",
+    "状態ファイルが読取り上限（4096 byte）を超える場合は、内訳だけを省いて書き出します。",
+    "mcs/ingest/health_report.py: 内訳が正しい形式のときだけ local_deferred_reasons と主な理由 local_deferred_primary を出します。内訳の無い旧ファイルや不正な内訳は従来どおり読み、corrupt にはしません。",
+    "mcs/ingest/health_watch.py: 警報コード attachment_ocr_local_inference_deferred は変えず、主な理由が分かるときだけ案内文をその理由と対処に差し替えます。再警報・重複抑止の判定は変わりません。",
+    "語彙は mcs/extract/attachment_inference_deferral.py にまとめ、推論の契約には含めていません。"
+  ],
+  "refs": [
+    "mcs/extract/attachment_inference_deferral.py",
+    "mcs/ops/mcs_ocr.py",
+    "mcs/ingest/health_report.py",
+    "mcs/ingest/health_watch.py",
+    "docs/specs/ocr-processing.md"
+  ]
+}

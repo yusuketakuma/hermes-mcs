@@ -41,6 +41,31 @@ class EvaluationError(ValueError):
     """Input or acceptance criteria are not safe to evaluate."""
 
 
+# The repository's fully synthetic case assets an explicit tool may send to Jev.
+BUNDLED_CASE_ASSETS = ("extract_cases.json", "extract_cases_labs.json",
+                       "semantic_completeness_cases.json")
+
+
+def bundled_synthetic_cases(cases) -> bool:
+    """True when every case is, exactly and once, a case of the checked-in synthetic assets.
+
+    A provenance label inside an input file is only a declaration; a tool
+    that sends cases outside this Mac compares them with the assets instead.
+    An asset that cannot be read refuses every input."""
+    try:
+        allowed = {}
+        folder = Path(__file__).resolve().parents[3] / "evaluation"
+        for name in BUNDLED_CASE_ASSETS:
+            allowed.update((case["id"], case) for case in
+                           json.loads((folder / name).read_text(encoding="utf-8"))["cases"])
+        return (isinstance(cases, list) and bool(cases)
+                and all(isinstance(case, dict) and isinstance(case.get("id"), str)
+                        and case == allowed.get(case["id"]) for case in cases)
+                and len({case["id"] for case in cases}) == len(cases))
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        return False
+
+
 def evaluation_id(value, field: str) -> str:
     if value is None:
         raise EvaluationError(f"{field}_missing")

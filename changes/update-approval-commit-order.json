@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "更新の承認とロールバックを、時計が戻っても受付の保存順で扱う",
+  "summary": "自動更新の承認（ops.update_apply）とロールバック（ops.update_rollback、前の版へ戻す操作）の前後は、受付記録の日時ではなく保存した順で決めます。Mac の時計が戻っても、後に記録したロールバックはそれより前に記録したまだ実行していない更新の承認を必ず無効にし、同じ版の承認が重なったときは後に保存した承認を使います。",
+  "upgrade": "追加操作は不要です。既存の受付記録はそのまま読み、日時は書き換えません。時計が正しく進んでいた環境では、採用する承認と取消しの結果は変わりません。",
+  "details": [
+    "scan_pending_approvals は command_receipts を rowid 順に読み、ロールバックで無効にする承認・同じ版での採用・実行順をすべて rowid で決める。コードは command_receipts に追記するだけで行を削除・置換せず、書込みは直列化されるため、rowid は保存順に増える。"
+  ],
+  "refs": [
+    "mcs/ops/update_execution.py",
+    "tests/ops/test_mcs_update.py"
+  ]
+}

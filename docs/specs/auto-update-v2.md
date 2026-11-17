@@ -403,7 +403,7 @@ END-GITHUB-PUBLICATION-V2.0
 # 02 — 端末プロトコル・一回性・停止・移行
 
 本章は顧客用v2の新設契約。現行v1のself/TTY/unknown経路は維持する。
-現行の`_run_native_release`、borrowed effect、source/successor検証を出発点とし、同じownerの内部で拡張する [SRC02–08]。
+現行の`_run_native_release`、borrowed effect、source/successor検証を出発点とし、同じownerの内部で拡張する [SRC02–08]。（2026-11-15: 起動されていなかった v1 native release 一式 `_run_native_release`・`_tty_confirmation`・`_queue_native_unknown` は未使用として削除した。出発点は git 履歴の該当版を参照する）
 
 ## 1. 端末の適格性とbootstrap
 
@@ -934,7 +934,7 @@ END-CONTRACTS-V2.0
 
 ### P0-a 更新経路
 
-`apply`, `_apply_pipeline`, `cmd_check`, `--post-merge`, `rollback`, `recover`, `_run_native_release`, `install.sh`, `mcs_upgrade`, `reinstall_done`, `settings_migration_receipt`の**全caller**をgrepする。結果は切り詰めず保存。
+`apply`, `_apply_pipeline`, `cmd_check`, `--post-merge`, `rollback`, `recover`, `_run_native_release`, `install.sh`, `mcs_upgrade`, `reinstall_done`, `settings_migration_receipt`の**全caller**をgrepする（`_run_native_release` は 2026-11-15 に削除済み）。結果は切り詰めず保存。
 callerごとにsource file/function、起動profile、親process、既存G/U/R/A/M/O/C、実dataの変更、外部送信、自己再起動、借用FDを記録する。
 facade `mcs_update.py`への追記だけで修正を終わらせない。直接importするcallerとfacade経由が同じ実装へ到達することを試験する。
 

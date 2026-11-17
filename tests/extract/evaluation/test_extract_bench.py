@@ -319,6 +319,10 @@ def test_benchmark_records_cost_and_paired_corpus(tmp_path, monkeypatch):
     assert report['prompt_sha256'] == hashlib.sha256(
         (extract_llm._PROMPT_HEAD + extract_llm._CTX_HEAD).encode('utf-8')).hexdigest()
     assert report['reply_confusion'] == {}
+    # violated forbid labels are counted in every report; `score` reads the generations
+    assert report['false_assertion'] == {'total': 0, 'by_field': {}, 'by_detail': {}}
+    assert report['generations'] == {'llm_extract': extract_llm.EXTRACT_VERSION,
+                                     'patient_context': extract_llm.PATIENT_CONTEXT_VERSION}
     assert report['cases'][0]['performance']['calls'] == 2
     assert report['cases'][0]['performance']['usage']['total_tokens'] == 12
     assert report['performance']['p95_s'] is not None

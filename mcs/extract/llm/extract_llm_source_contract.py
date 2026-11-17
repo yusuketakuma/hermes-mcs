@@ -36,6 +36,7 @@ import cloud_usage_accounting
 import cloud_history_scope
 import cloud_backlog
 import cloud_inference
+import cloud_send_admission
 import llm_retry
 import mcs_config
 import clinical_values
@@ -63,6 +64,7 @@ import semantic_facts
 import extraction_context
 import patient_priority
 import patient_context_scan
+import patient_context_selection
 import patient_context_schedule
 import patient_readiness_witness
 import extraction_medications
@@ -108,6 +110,7 @@ _LOADED_SOURCE_PATHS = dict((("extract_llm", str(Path(__file__).with_name("extra
                        ("cloud_history_scope", cloud_history_scope.__file__),
                        ("cloud_backlog", cloud_backlog.__file__),
                        ("cloud_inference", cloud_inference.__file__),
+                       ("cloud_send_admission", cloud_send_admission.__file__),
                        ("llm_retry", llm_retry.__file__),
                        ("mcs_config", mcs_config.__file__),
                        ("mcs_queries", mcs_queries.__file__),
@@ -163,6 +166,7 @@ _LOADED_SOURCE_PATHS.update({"extraction_medications": extraction_medications.__
                              "drug_mentions": drug_mentions.__file__, "drug_map": drug_map.__file__,
                              "patient_priority": patient_priority.__file__,
                              "patient_context_scan": patient_context_scan.__file__,
+                             "patient_context_selection": patient_context_selection.__file__,
                              "patient_context_schedule": patient_context_schedule.__file__,
                              "patient_readiness_witness": patient_readiness_witness.__file__})
 
@@ -220,6 +224,7 @@ _LOADED_SOURCE_PATHS.update({
     'patient_context_refresh_sources': str(Path(__file__).resolve().parents[2] / 'patients' / 'patient_context_refresh_sources.py'),
     'patient_context_refresh_readiness': str(Path(__file__).resolve().parents[2] / 'patients' / 'patient_context_refresh_readiness.py'),
     'patient_context_quality_controller': str(Path(__file__).resolve().parents[2] / 'patients' / 'patient_context_quality_controller.py'),
+    'patient_context_quality_identity': str(Path(__file__).resolve().parents[2] / 'patients' / 'patient_context_quality_identity.py'),
     'rollup_builder': str(Path(__file__).resolve().parents[2] / 'patients' / 'rollup_builder.py'),
 })
 

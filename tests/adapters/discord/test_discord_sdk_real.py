@@ -80,6 +80,17 @@ def _spec():
     }
 
 
+def _menus(rows):
+    """Select menus inside action rows (type 1), in order."""
+    return [item for row in rows if row["type"] == 1 for item in row["components"] if item["type"] == 3]
+
+
+def _quick_buttons(rows):
+    """(label, custom_id) of the action buttons (type 2, not links) inside action rows."""
+    return [(item["label"], item["custom_id"]) for row in rows if row["type"] == 1
+            for item in row["components"] if item["type"] == 2 and "custom_id" in item]
+
+
 def test_layout_view_serializes_components_v2():
     spec = _spec()
     spec_mod.validate(spec)
@@ -90,16 +101,16 @@ def test_layout_view_serializes_components_v2():
     assert [c["type"] for c in comps] == [17]
     assert comps[0]["accent_color"] == cards._ACCENTS["signal"]
     inner = comps[0]["components"]
-    # 確認 is a button; the other operations share one select; meta remains hidden.
+    # 確認する・担当する are buttons (one row); every other operation stays in one select;
+    # meta remains hidden.
     assert [c["type"] for c in inner] == [10, 14, 10, 14, 1, 1]
     assert all(c["divider"] and c["spacing"] == 1
                for c in inner if c["type"] == 14)
     assert inner[2]["content"] == "-# mcs notify"
-    (menu,) = inner[-2]["components"]
+    assert _quick_buttons(inner) == [("確認", cards.ACTION_PREFIX + "ab" * 16)]
+    (menu,) = _menus(inner)
     assert (menu["type"], menu["custom_id"]) == (3, "mcs:menu")
     assert [(o["label"], o["value"]) for o in menu["options"]] == [("棄却", "ef" * 16)]
-    assert [(b["type"], b["label"], b["custom_id"]) for b in inner[-1]["components"]] == [
-        (2, "確認", "mcs:a:" + "ab" * 16)]
     # multi-byte labels/contents survive the wire unchanged
     assert "患者A" in inner[0]["content"]
     # '>>>' would swallow the rest of the merged display — the quote
@@ -314,11 +325,10 @@ def test_mobile_classic_serialization_has_content_full_embed_and_same_tokens():
         assert not payload.get("flags", 0) & (32768 | 4096)
         assert "患者A" in payload["embeds"][0]["description"]
         assert "mcs notify" in payload["embeds"][0]["description"]
-        menu_row, button_row = payload["components"]
-        menu, = menu_row["components"]
+        (menu,) = _menus(payload["components"])
         assert menu["custom_id"] == "mcs:menu"
         assert [option["value"] for option in menu["options"]] == ["ef" * 16]
-        assert [b["custom_id"] for b in button_row["components"]] == ["mcs:a:" + "ab" * 16]
+        assert [cid for _label, cid in _quick_buttons(payload["components"])] == [cards.ACTION_PREFIX + "ab" * 16]
         assert payload["allowed_mentions"]["parse"] == []
         v2 = handle_message_parameters(**cards.message_payload(spec, components_v2=True))
         assert v2.payload["flags"] & 32768
@@ -344,10 +354,10 @@ def test_render_only_card_views_do_not_accumulate_in_native_store():
                     store.add_view(view, mid)
                 components = view.to_components()
                 rows = components[0]["components"] if legacy else components
-                menu, = [item for row in rows if row["type"] == 1
-                         for item in row["components"] if item["type"] == 3]
+                menu, = _menus(rows)
                 assert menu["custom_id"] == "mcs:menu"
                 assert [option["value"] for option in menu["options"]] == ["ef" * 16]
+                assert [cid for _label, cid in _quick_buttons(rows)] == [cards.ACTION_PREFIX + "ab" * 16]
             assert not store._views and not store._synced_message_views
     asyncio.run(scenario())
 

@@ -413,14 +413,16 @@ def current_fact_pred(art: str = "a", msg: str = "m", *,
 
 def med_period_artifacts(db):
     """Current extract_v1 artifacts carrying med_periods — the only
-    source of period expressions today."""
+    source of period expressions today. Returned as the open cursor: one
+    statement, consumed row by row (same snapshot and order as fetchall,
+    without holding every document); callers must not write meanwhile."""
     return db.execute(
         "SELECT m.project_id, m.message_id, a.content "
         "FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
         "WHERE a.kind='extract_v1'"
         f"{current_extract_pred(error_check=False)} "
         f"AND json_array_length({json_or_null('a.content')},"
-        "'$.med_periods')>0").fetchall()
+        "'$.med_periods')>0")
 
 
 def med_is_patient_current(med) -> bool:
@@ -919,9 +921,23 @@ def _kind_state(rows, content_hash: str, *, engine_version=None,
 
 
 
+def _artifact_proof(db, artifact_id, *, material, inference_target=CURRENT_VERSION,
+                    proof_cache=None):
+    """Run one exact proof, shared by the reads of the same message when a cache is given."""
+    if proof_cache is None:
+        return selected_artifact_proof_valid(db, artifact_id, inference_target=inference_target,
+                                             material=material)
+    key = (artifact_id, inference_target, material)
+    if key not in proof_cache:
+        # An interrupted proof raises before the store and is never memoized.
+        proof_cache[key] = selected_artifact_proof_valid(
+            db, artifact_id, inference_target=inference_target, material=material)
+    return proof_cache[key]
+
+
 def extraction_kind_map(art_rows, content_hash, *,
                         inference_target: str = CURRENT_VERSION, db=None,
-                        material: bool = False) -> dict:
+                        material: bool = False, proof_cache=None) -> dict:
     by_kind: dict = {}
     for kind in EXTRACTION_KINDS:
         kind_rows = [r for r in art_rows if r["kind"] == kind]
@@ -932,9 +948,9 @@ def extraction_kind_map(art_rows, content_hash, *,
         entry = {"state": st["state"],
                  "artifact_id": st["artifact_id"]}
         if (db is not None and kind == 'extract_llm' and entry['state'] == 'current'
-                and not selected_artifact_proof_valid(db, entry['artifact_id'],
-                                                      inference_target=inference_target,
-                                                      material=material)):
+                and not _artifact_proof(db, entry['artifact_id'],
+                                        inference_target=inference_target,
+                                        material=material, proof_cache=proof_cache)):
             entry.update(state='unknown', artifact_id=None, _proof_unverified=True)
         if st["last_error"]:
             entry["last_error"] = True
@@ -973,6 +989,24 @@ def _context_inputs(db, message, *, by_kind=None, art_rows=None, material=False)
     return art_rows, by_kind, body
 
 
+def _selected_context_documents(art_rows, by_kind):
+    """The stored context documents a source reads: extract_v1, extract_llm and one audited addition."""
+    def document(artifact_id):
+        row = next((r for r in art_rows if r["artifact_id"] == artifact_id), None)
+        return json.loads(row["content"]) if row is not None else None
+
+    documents = [document(by_kind[kind]["artifact_id"]) for kind in ("extract_v1", "extract_llm")]
+    # A v4 worker fences legacy LLM writes; read its audited additive context.
+    for kind in ("semantic_facts_v4", "canonical_projection"):
+        entry = by_kind.get(kind, {})
+        if entry.get("state") == "current":
+            documents.append(document(entry["artifact_id"]))
+            break
+    else:
+        documents.append(None)
+    return documents
+
+
 def source_patient_context(db, message, *, by_kind=None, art_rows=None,
                            material=False):
     """Read source-bound context independently of canonical extraction precedence."""
@@ -981,21 +1015,44 @@ def source_patient_context(db, message, *, by_kind=None, art_rows=None,
     if inputs is None:
         return []
     art_rows, by_kind, body = inputs
-    documents = []
-    for kind in ("extract_v1", "extract_llm"):
-        artifact_id = by_kind[kind]["artifact_id"]
-        row = next((r for r in art_rows if r["artifact_id"] == artifact_id), None)
-        documents.append(json.loads(row["content"]) if row is not None else None)
-    items = merged_context(*documents, body)
-    # A v4 worker fences legacy LLM writes; read its audited additive context.
-    for kind in ("semantic_facts_v4", "canonical_projection"):
-        entry = by_kind.get(kind, {})
-        if entry.get("state") == "current":
-            row = next((r for r in art_rows if r["artifact_id"] == entry["artifact_id"]), None)
-            if row is not None:
-                items = merged_context({"patient_context": items}, json.loads(row["content"]), body)
-            break
+    v1, llm, addition = _selected_context_documents(art_rows, by_kind)
+    items = merged_context(v1, llm, body)
+    if addition is not None:
+        items = merged_context({"patient_context": items}, addition, body)
     return items
+
+
+def _scan_item(item):
+    detail_keys = ("key", "value", "evidence", "refers_to")
+    value = {key: item.get(key) for key in ("category", "text", "evidence", "subject")}
+    if item.get("origin") == "explicit_heading":
+        value["origin"] = "explicit_heading"
+    details = item.get("details")
+    if details:
+        # Detail order reaches the scan's fact assertions, so it is kept.
+        value["details"] = ([{key: d.get(key) for key in detail_keys if key in d}
+                             if isinstance(d, dict) else d for d in details]
+                            if isinstance(details, list) else details)
+    return value
+
+
+def context_items_signature(groups):
+    """Bind the context items a scan reads, never the artifact, model or version that stored them.
+
+    ``groups`` lists item lists in reading order (a missing document is
+    ``None``). Each item is reduced to the fields the scan and its fact
+    projection read, so retry bookkeeping or extra model fields never move it."""
+    from patient_context_plan import source_digest
+    return source_digest(["patient-context-scan-items/1", [
+        [_scan_item(item) for item in (group if isinstance(group, list) else []) if isinstance(item, dict)]
+        for group in groups]])
+
+
+def derived_summaries_signature(summaries):
+    """Bind the supplemental summaries by the kind and text the scan sends, not by artifact."""
+    from patient_context_plan import source_digest
+    return source_digest(["patient-context-scan-summaries/1",
+                          [[summary["kind"], summary["text"]] for summary in summaries]])
 
 
 def extraction_input_signature(content, meta, model="") -> str:
@@ -1323,23 +1380,23 @@ def attachment_ocr_sources(db, pid, *, mid=None, hydrate=True, cfg=None):
             continue
         analysis = (None if record["empty"] else
                     attachment_extraction.current(db, pid, key, **({"cfg": cfg} if cfg is not None else {})))
-        record["extraction_ready"] = record["empty"] or bool(analysis and analysis.get("ready") is True)
-        record["extraction_sig"] = payload_hash([analysis.get("artifact_id"), analysis.get("result_hash"),
-            record["extraction_ready"]]) if analysis else payload_hash(["attachment-inference-pending"])
-        summaries, summary_identity = [], None
-        if analysis and analysis.get("ready") is True:
+        ready = bool(analysis and analysis.get("ready") is True)
+        # Readiness is signed on its own: ready with no items differs from pending.
+        record["extraction_ready"] = record["empty"] or ready
+        summaries, items = [], []
+        if ready:
             text = analysis["document"].get("summary")
             if isinstance(text, str) and text.strip():
                 summaries.append({"kind": "attachment_extract_" + analysis["stage"],
                                   "artifact_id": analysis["artifact_id"], "text": text})
-                summary_identity = [analysis["artifact_id"], analysis["stage"],
-                                    analysis["contract"], analysis["result_hash"]]
+            items = attachment_context_items(analysis["document"], record)
+        # The scan reads these items and summaries; a re-inference that
+        # reproduces them keeps the source signature.
+        record["extraction_sig"] = context_items_signature([items])
         record["derived_summaries"] = summaries if hydrate else []
         record["derived_summary_chars"] = sum(len(summary["text"]) for summary in summaries)
-        record["derived_summary_sig"] = payload_hash([pid, key, record["content_hash"],
-                                                      record["_source_binding"], summary_identity])
-        record["items"] = (attachment_context_items(analysis["document"], record)
-                           if analysis and record["extraction_ready"] and hydrate else [])
+        record["derived_summary_sig"] = derived_summaries_signature(summaries)
+        record["items"] = items if hydrate else []
         if not hydrate:
             record.pop("body_text")
         yield record
@@ -1407,7 +1464,7 @@ def attachment_ocr_coverage(db, pid, cfg, *, mid=None, message_ids=None):
     return result
 
 
-def _derived_summary_proof_valid(db, row, fresh, *, material=False):
+def _derived_summary_proof_valid(db, row, fresh, *, material=False, proof_cache=None):
     content, meta = (loads_dict(row[3]), loads_dict(row[5])) if fresh else (None, None)
     if (not material and isinstance(content, dict) and isinstance(meta, dict)
             and _INTERNAL_PROOF not in content
@@ -1415,12 +1472,12 @@ def _derived_summary_proof_valid(db, row, fresh, *, material=False):
             and "internal_proof_hash" not in meta):
         # The aggregate's newer-marked exclusion already proved this unmarked row.
         return True
-    return selected_artifact_proof_valid(db, row[1], material=material)
+    return _artifact_proof(db, row[1], material=material, proof_cache=proof_cache)
 
 
 def _context_derived_summaries(db, message, rows, cfg, *, proof_state=None,
-                               material=False):
-    summaries, identities = [], []
+                               material=False, proof_cache=None):
+    summaries = []
     fresh = False
     if proof_state is not None and proof_state[0] is not None:
         try:
@@ -1434,18 +1491,18 @@ def _context_derived_summaries(db, message, rows, cfg, *, proof_state=None,
     for row in sorted(rows, key=lambda row: (row[2], row[1])):
         if row[2] not in ("extract_v1", "extract_llm"):
             continue
-        if row[2] == "extract_llm" and not _derived_summary_proof_valid(db, row, fresh,
-                                                                       material=material):
+        if row[2] == "extract_llm" and not _derived_summary_proof_valid(
+                db, row, fresh, material=material, proof_cache=proof_cache):
             continue
         text = (loads_dict(row[3]) or {}).get("summary")
         if not isinstance(text, str) or not text.strip():
             continue
         summaries.append({"kind": row[2], "artifact_id": row[1], "text": text})
-        identities.append([row[2], row[1], extraction_input_signature(row[3], row[5], row[4])])
     if cfg is not None:
         import semantic_policy
         import semantic_send_gate
         import semantic_store
+        import semantic_transport
 
         # An omitted mode must not resolve credentials during this borrowed read.
         scfg, errors = semantic_policy.semantic_config(cfg)
@@ -1453,16 +1510,14 @@ def _context_derived_summaries(db, message, rows, cfg, *, proof_state=None,
         root = message["parent_id"] or mid
         if (not errors and semantic_send_gate.enforce_block_reason(db, scfg, pid) is None
                 and not semantic_send_gate.intake_root_held(db, pid, root)):
-            summary = semantic_send_gate.current_summary(db, pid, mid,
-                lambda: semantic_store.thread_bundle(db, pid, root, [mid]),
-                semantic_policy.policy_fingerprint(scfg))
+            with semantic_transport.config_model_scope(cfg):
+                summary = semantic_send_gate.current_summary(db, pid, mid,
+                    lambda: semantic_store.thread_bundle(db, pid, root, [mid]),
+                    semantic_policy.policy_fingerprint(scfg))
             if summary is not None:
                 text = json.dumps(summary["content"], ensure_ascii=False, sort_keys=True)
                 summaries.append({"kind": "semantic_summary", "artifact_id": summary["artifact_id"], "text": text})
-                identities.append(["semantic_summary", summary["artifact_id"],
-                    extraction_input_signature(summary["content"], summary["meta"])])
-    return summaries, payload_hash([message["project_id"], message["message_id"],
-                                    message["content_hash"], identities])
+    return summaries, derived_summaries_signature(summaries)
 
 
 def patient_context_sources(db, pid, *, hydrate=True, mid=None, cfg=None,
@@ -1474,7 +1529,6 @@ def patient_context_sources(db, pid, *, hydrate=True, mid=None, cfg=None,
     ``material=False`` checks marked rows against the progress-complete
     witness and accepts unmarked rows without a proof."""
     from patient_context import context_items, extract_context, project_context_items
-    from patient_context_plan import source_digest
     extractions = {}
     seen = set()
     try:
@@ -1513,15 +1567,28 @@ def patient_context_sources(db, pid, *, hydrate=True, mid=None, cfg=None,
                           + "ORDER BY message_id", (pid, mid) if mid is not None else (pid,)):
         message = dict(row)
         rows = extractions.get(message["message_id"], [])
-        message["extraction_sig"] = source_digest(sorted((r[2], extraction_input_signature(r[3], r[5], r[4])) for r in rows))
+        # One exact proof per artifact serves both the summary and the item read.
+        proof_cache = {}
         derived, derived_sig = _context_derived_summaries(db, message, rows, cfg,
                                                           proof_state=proof_state,
-                                                          material=material)
+                                                          material=material,
+                                                          proof_cache=proof_cache)
         message["derived_summaries"] = derived if hydrate else []
         message["derived_summary_sig"] = derived_sig
         message["derived_summary_chars"] = sum(len(summary["text"]) for summary in derived)
-        items = source_patient_context(db, message, art_rows=list(reversed(rows)),
-                                       material=material) if hydrate else []
+        art_rows = list(reversed(rows))
+        by_kind, documents = None, [None, None, None]
+        if message.get("body_state") in (None, "full") and (message.get("body_length") or 0) > 0:
+            by_kind = extraction_kind_map(art_rows, message["content_hash"], db=db,
+                                          material=material, proof_cache=proof_cache)
+            documents = _selected_context_documents(art_rows, by_kind)
+        # The stored items the scan input is derived from; the body is bound by
+        # content_hash and the derivation code by the contract's context version,
+        # so the shallow read signs them without re-deriving the items.
+        message["extraction_sig"] = context_items_signature(
+            [(document or {}).get("patient_context") for document in documents])
+        items = source_patient_context(db, message, by_kind=by_kind, art_rows=art_rows,
+                                       material=material) if hydrate and by_kind is not None else []
         source = {key: message.get(key) for key in
                   ("project_id", "message_id", "content_hash", "posted_at_ts")}
         items = project_context_items(items, "detail", source)

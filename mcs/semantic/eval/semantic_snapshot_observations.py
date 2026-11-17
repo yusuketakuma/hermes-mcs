@@ -22,7 +22,6 @@ def policy_identity(cfg):
 
 def source_bundle(record, cfg):
     """Validate the exported runtime bundle against every input message."""
-    from local_llm import resolve
     from semantic_store import bundle_fingerprint
     obs = record.get('sealed_observations')
     if obs is None:
@@ -63,7 +62,7 @@ def source_bundle(record, cfg):
             or any(m.get('parent_id') not in (None, root) for m in members)):
         raise EvaluationError('observation_root_invalid')
     target_members(record, bundle)
-    if bundle.get('source_fingerprint') != bundle_fingerprint(members, local_model=resolve(cfg)[1]):
+    if bundle.get('source_fingerprint') != bundle_fingerprint(members):
         raise EvaluationError('observation_source_fingerprint_mismatch')
     return bundle
 
