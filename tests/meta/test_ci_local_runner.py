@@ -59,8 +59,11 @@ def test_runner_lists_ci_jobs_in_order():
     assert '全${job_count} job pass' in runner
     count_line = next(line.strip() for line in runner.splitlines() if line.strip().startswith("job_count="))
     result = subprocess.run(["bash", "-c", count_line + '; printf "%s" "$job_count"'],
-                            env={"JOBS": " ".join(listed)}, text=True, capture_output=True, check=True)
-    assert int(result.stdout) == len(listed)
+                            env={"JOBS": " ".join(listed), "GITHUB_ONLY": "merge-gate-request"},
+                            text=True, capture_output=True, check=True)
+    # a GitHub-only job is reported as not run locally, never counted as passed
+    assert int(result.stdout) == len(listed) - 1
+    assert 'GITHUB_ONLY="merge-gate-request"' in runner and "GitHub専用" in runner
 
 
 def test_runner_contains_every_ci_run_line():
@@ -284,12 +287,13 @@ def test_final_report_preserves_success_exit_and_exact_sha(tmp_path, all_pass):
     result = subprocess.run(
         ["bash", "-u", "-c", 'if [ "$all_pass" = 1 ]; then' + reporting],
         env={"PATH": "/usr/bin:/bin", "LC_ALL": "en_US.UTF-8", "all_pass": all_pass, "sha": sha,
-             "out": str(tmp_path), "JOBS": " ".join(jobs)},
+             "out": str(tmp_path), "JOBS": " ".join(jobs), "GITHUB_ONLY": "merge-gate-request"},
         capture_output=True, text=True, errors="replace", timeout=10)
     assert result.returncode == (0 if all_pass == "1" else 1), result.stderr
     assert "CI の実行成功ではない" in result.stdout
     if all_pass == "1":
-        assert f"全{len(jobs)} job pass（{sha}）" in result.stdout
+        # the GitHub-only job is named as not run, never counted as passed
+        assert f"全{len(jobs) - 1} job pass、GitHub 専用の merge-gate-request は未実行（{sha}）" in result.stdout
     else:
         assert "未成立" in result.stdout
     assert (tmp_path / "meta.txt").read_text() == result.stdout

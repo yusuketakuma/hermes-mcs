@@ -28,7 +28,9 @@ set -u
 
 JOBS="publication-request scope lint pytest-linux lint-test hygiene standalone-sdk incident-gates pytest-macos macos hermes-integration merge-gate-request"
 # jobs that only decide or judge in CI; locally they run no tests of their own
-JUDGES="scope lint-test macos merge-gate-request"
+JUDGES="scope lint-test macos"
+# jobs that act only on GitHub; locally they are listed as not run, never as passed
+GITHUB_ONLY="merge-gate-request"
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)
 out=""
@@ -196,7 +198,6 @@ prereq_hermes_integration() {
 }
 
 # --- job bodies: ci.yml run lines, verbatim except where noted ---
-prereq_merge_gate_request() { :; }
 prereq_publication_request() { command -v python3 >/dev/null 2>&1 || { reason="python3 が未導入"; return 1; }; }
 job_publication_request() {
     # ci.ymlではtag push時のみ動くhint生成。localでは合成envで同じscriptを実行する。
@@ -285,8 +286,8 @@ job_hermes_integration() {
         sh scripts/development/check_pinned_sdks.sh hermes
 }
 job_merge_gate_request() {
-    # ci.yml asks agent-control.yml for the merge-gate of a head main-sync started; a local run has no PR to judge
-    echo "merge-gate request is GitHub-only"
+    # never called (GITHUB_ONLY): ci.yml asks agent-control.yml for the merge-gate of a head main-sync started
+    :
 }
 
 summary=$out/summary.tsv
@@ -309,6 +310,9 @@ for job in $JOBS; do
     runs_on=$(job_block "$job" | sed -nE 's/^ *runs-on: *//p' | head -n 1)
     case "$selected " in *" $job "*) ;; *)
         printf '%s\t未実行\t-\t-\t-\t%s\t-\t対象外に指定\n' "$job" "$runs_on" >>"$summary"; all_pass=0; continue ;;
+    esac
+    case " $GITHUB_ONLY " in *" $job "*)
+        printf '%s\tGitHub専用\t-\t-\t-\t%s\t-\tローカルでは実行しない（CI だけで動く）\n' "$job" "$runs_on" >>"$summary"; continue ;;
     esac
     started=$(now); reason=""; log=$out/$job.log
     if ! "prereq_$fn"; then
@@ -343,8 +347,8 @@ clean_after=$(git -C "$src" status --porcelain --untracked-files=all)
 column -t -s "$(printf '\t')" "$summary" 2>/dev/null || cat "$summary"
 echo "evidence: $out"
 if [ "$all_pass" = 1 ]; then
-    job_count=$(printf '%s\n' "$JOBS" | awk '{print NF}')
-    result="ローカル同等チェック: 全${job_count} job pass（${sha}）"
+    job_count=$(printf '%s\n' "$JOBS" | awk -v skip=" $GITHUB_ONLY " '{n = 0; for (i = 1; i <= NF; i++) if (!index(skip, " " $i " ")) n++; print n}')
+    result="ローカル同等チェック: 全${job_count} job pass、GitHub 専用の ${GITHUB_ONLY} は未実行（${sha}）"
 else
     result="ローカル同等チェック: 未成立（fail・実行不能・未実行・dirty のいずれかあり）"
 fi

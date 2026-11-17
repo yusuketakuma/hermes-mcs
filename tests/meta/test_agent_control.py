@@ -242,7 +242,14 @@ def test_labels_and_workflows_agree_with_the_module():
     assert "github.event.pull_request.head.sha || inputs.sha }}" in control
     request = (ROOT / ".github/workflows/ci.yml").read_text().split("\n  merge-gate-request:\n")[1]
     assert "github.triggering_actor == 'github-actions[bot]'" in request and "actions: write" in request
-    assert 'agent-control.yml --ref "$DEFAULT_BRANCH"' in request
+    assert 'agent-control.yml --ref "$DEFAULT_BRANCH"' in request and '-f run_id="$RUN_ID"' in request
+    # a dispatch runs the gate only from the default branch: another ref's script must not get the write token
+    assert "github.event_name != 'workflow_dispatch' || github.ref_name == github.event.repository.default_branch" in control
+    # the request is bound to a real ci run on that head, and one ci run attempt counts once
+    assert '.path == ".github/workflows/ci.yml" and .head_sha == $sha' in control
+    assert 'RUN_ATTEMPT=$(jq -r .run_attempt "$work/run.json")' in control
+    assert 'select(.context == "merge-gate" and .target_url == $u)' in control
+    assert '${source:+-f target_url="$source"}' in control
     claude = (ROOT / ".github/workflows/agent-claude.yml").read_text()
     assert "branch_prefix: agent/" in claude
     assert "vars.AUTOMATION_ENABLED == 'true'" in claude

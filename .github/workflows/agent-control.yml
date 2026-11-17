@@ -18,6 +18,10 @@ on:
         description: "判定する PR head の commit（40桁）"
         required: true
         type: string
+      run_id:
+        description: "その head で完了を待った ci の実行 ID"
+        required: true
+        type: string
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   issues:
@@ -27,7 +31,10 @@ permissions: {}
 
 jobs:
   gate:
-    if: github.event_name != 'issues'
+    # A dispatch on another ref would run that ref's ci/agent_control.py with this job's write token.
+    if: >-
+      github.event_name != 'issues' &&
+      (github.event_name != 'workflow_dispatch' || github.ref_name == github.event.repository.default_branch)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
@@ -56,6 +63,8 @@ jobs:
           EVENT: ${{ github.event_name }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
           RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           CONTROL_ATTEMPT: ${{ github.run_attempt }}
           PR_FROM_EVENT: ${{ github.event.pull_request.number }}
           AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
@@ -66,12 +75,23 @@ jobs:
           if [[ "$EVENT" != "pull_request_target" ]]; then
             # A dispatched sha is typed by a caller: accept a full commit id only. The PR head is compared below.
             [[ "$RUN_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a 40-digit commit id"; exit 1; }
+            if [[ "$EVENT" == "workflow_dispatch" ]]; then
+              # Bind the request to a real ci run on that head; its attempt is read from GitHub, not from the caller.
+              [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "::error::run_id must be a number"; exit 1; }
+              gh api "repos/$GH_REPO/actions/runs/$RUN_ID" > "$work/run.json"
+              jq -e --arg sha "$RUN_SHA" '.path == ".github/workflows/ci.yml" and .head_sha == $sha' "$work/run.json" > /dev/null ||
+                { echo "::error::run $RUN_ID is not a ci run on $RUN_SHA"; exit 1; }
+              RUN_ATTEMPT=$(jq -r .run_attempt "$work/run.json")
+            fi
             prs=$(gh api "repos/$GH_REPO/commits/$RUN_SHA/pulls" --jq '[.[] | select(.state == "open") | .number] | join(" ")')
-            # A dispatch has no run to read: the script takes the conclusion from the jobs on the head.
+            # A dispatch has no run conclusion yet: the script takes it from the jobs on the head.
             ci_conclusion="${RUN_CONCLUSION:-checks}"
             # Re-running this workflow must not count the same CI failure again; a re-run of ci itself does.
             if [[ "$CONTROL_ATTEMPT" != "1" ]]; then ci_conclusion=""; fi
+            # The merge-gate status names the ci run attempt it judged, so the same attempt is never counted twice.
+            source="https://github.com/$GH_REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT"
           else
+            source=""
             prs="$PR_FROM_EVENT"
             ci_conclusion=""
           fi
@@ -85,13 +105,17 @@ jobs:
             gh api "repos/$GH_REPO/commits/$sha/check-runs?per_page=100" --paginate --slurp > "$work/checks.json"
             gh api "repos/$GH_REPO/pulls/$pr/files?per_page=100" --paginate --slurp > "$work/files.json"
             behind=$(gh api "repos/$GH_REPO/compare/$base...$sha" --jq .behind_by)
+            if [[ -n "$source" ]] && gh api "repos/$GH_REPO/commits/$sha/statuses?per_page=100" --paginate --slurp |
+                jq -e --arg u "$source" '[.[][] | select(.context == "merge-gate" and .target_url == $u)] | length > 0' > /dev/null; then
+              ci_conclusion=""
+            fi
             python3 ci/agent_control.py gate --pr "$work/pr.json" --checks "$work/checks.json" \
               --files "$work/files.json" --behind-by "$behind" --automation "${AUTOMATION:-}" \
               --ci-conclusion "$ci_conclusion" > "$work/plan.json"
             cat "$work/plan.json"
             state=$(jq -r .state "$work/plan.json")
             gh api -X POST "repos/$GH_REPO/statuses/$sha" -f context=merge-gate -f state="$state" \
-              -f description="$(jq -r .description "$work/plan.json")" > /dev/null
+              -f description="$(jq -r .description "$work/plan.json")" ${source:+-f target_url="$source"} > /dev/null
             branch=$(jq -r .head.ref "$work/pr.json")
             for issue in $(jq -r '.attempts[].issue' "$work/plan.json"); do
               labels=$(gh api "repos/$GH_REPO/issues/$issue" --jq '[.labels[].name]')
