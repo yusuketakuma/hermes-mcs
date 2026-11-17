@@ -449,6 +449,11 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                             if not quota['allowed']:
                                 if observed_out is not None:
                                     observed_out['wait_generation_quota'] += 1
+                                    if quota.get('reason') is not None:
+                                        observed_out.setdefault('generation_reason', quota['reason'])
+                                        observed_out['unverified_records'] = max(
+                                            observed_out.get('unverified_records', 0),
+                                            quota.get('unverified_records', 0))
                                 due['A'] = False
                                 waiting += 1
                                 if not any(due[lane] for lane in lanes):
@@ -600,7 +605,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                  "scan_reads": scan_reads, "scan_interrupts": scan_interrupts,
                  "scan_ms": int((patient_context_refresh_state.time.monotonic() - started) * 1000)}
         stats.update({key: scan_observed[key] for key in _SCAN_COUNTER_KEYS if key in scan_observed})
-        for key in ('scan_refusal', 'skip_patient_code'):
+        for key in ('scan_refusal', 'skip_patient_code', 'generation_reason', 'unverified_records'):
             if scan_observed.get(key) is not None:
                 stats[key] = scan_observed[key]
         if scan_rotation is None:
