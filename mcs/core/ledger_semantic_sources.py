@@ -341,10 +341,19 @@ class LedgerSemanticSourcesMixin:
                     pl["notification_free"] = True
                 source_changed = (old_targets != set(pl['targets'])
                                   or pl.get('source_generation') != source_generation)
+                # A done job without an execution marker (arrival and history
+                # seeds write none) was never bound to a generation. The
+                # reprocess pass replays one only when its assessment predates
+                # the registry (or its source changed); it binds it once, as a
+                # new budget.
+                unbound_done = (existing['state'] == 'done'
+                                and 'execution_contract' not in old_pl
+                                and 'execution_generation' not in old_pl)
                 input_changed = (not is_current(old_pl)
                                  or (execution is not None
-                                     and old_pl.get('execution_contract') == 1
-                                     and old_pl.get('execution_generation') != execution)
+                                     and (unbound_done
+                                          or (old_pl.get('execution_contract') == 1
+                                              and old_pl.get('execution_generation') != execution)))
                                  or source_changed)
                 if execution is not None and existing['state'] == 'done' and not input_changed:
                     # Enumeration is not a request to obtain a different
