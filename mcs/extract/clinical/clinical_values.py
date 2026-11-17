@@ -443,8 +443,10 @@ def _in_a_lab_layout(quote: str, at: int, value_end: int, lines: list[int]) -> b
         return False
     # A sentence end (。 ;) starts a new statement; a comma or space does not (塩化、カリウム 4).
     start = max(first, quote.rfind("。", first, at) + 1, quote.rfind(";", first, at) + 1)
-    # A salt stem ending the line above still names the item (塩化\nカリウム 4).
-    if start == first and first and _SALT_STEM.search(quote, _line_span(quote, first - 1, lines)[0], first):
+    # A salt stem ending the sentence or the line just before still names the item
+    # (塩化。カリウム 4, 塩化\nカリウム 4).
+    end_before = start - 1 if start > first else first
+    if end_before and _SALT_STEM.search(quote, _line_span(quote, end_before - 1, lines)[0], end_before):
         return False
     stop = _LAB_TAIL_END.search(quote, value_end, last)
     return bool(_LAB_PREFIX.fullmatch(quote, start, at)
@@ -506,10 +508,10 @@ _LAB_PREFIX = re.compile(fold_surface(
     rf"(?:[【\[(<]?(?:{_LAB_HEADER})[】\])>]?(?:にて|で|の|は)?|{_DATE.pattern}|{_MONTH_DAY.pattern}"
     rf"|{_READING}|補正|血清|[、,/:|・\-~=])*"))
 _LAB_TAIL = re.compile(fold_surface(
-    rf"(?:[/:|・\-~=]|\((?![0-9])[^()]*\)|前回(?:は|:)?[0-9]+(?:\.[0-9]+)?(?:{_READING_UNIT})?|{_READING}"
+    rf"(?:[/:|・\-~=]|\((?![0-9.]+\))[^()]*\)|前回(?:は|:)?[0-9]+(?:\.[0-9]+)?(?:{_READING_UNIT})?|{_READING}"
     r"|[でとにがはも]?(?:高値|低値|高め|低め|高|低|↑+|↓+|high|low|上昇|低下|改善|悪化|横ばい|不変"
     r"|著変なし|変化なし|安定|再検査?|要?経過観察|推移|正常(?:範囲|値)?内?|異常なし|基準(?:値|範囲)?内"
-    r"|報告(?:します|しました|あり)?)"
+    r"|報告(?:します|しました|あり)?|採血|検査|測定)"
     r"|でした|です|だった|である)*"))
 _LAB_TAIL_END = re.compile(fold_surface(r"[、。,;]|の?ため|により"))
 _BP_DATE_LABEL = re.compile(r"(?:BP|血圧)", re.I)
@@ -647,7 +649,8 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
             continue
         # Positions, not slices: each match costs only its own surroundings.
         if number is not None:
-            result = _QUOTED_RESULT.match(quote, match.end())
+            # The number and its unit end with their source line (カリウム 4.0\nCr 0.9).
+            result = _QUOTED_RESULT.match(quote, match.end(), _line_span(quote, match.start(), lines)[1])
             if result and normalized_quantity_number(result[1]) == number:
                 if (_RANGE_FOLLOWS.match(quote, result.end()) or (
                         analyte in _SPECIMEN_SHARED_ITEMS and _QUALITATIVE_RESULT.match(quote, result.end()))):
