@@ -149,7 +149,6 @@ def test_gate1_no_combination_of_claimed_axes_asserts_anything_forbidden(gate1):
     assert misses == len(keys)
 
 
-@pytest.mark.perf
 def test_gate1_runs_within_thirty_seconds(gate1):
     assert gate1[3] <= 30.0
 
