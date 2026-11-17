@@ -259,6 +259,9 @@ def candidate_fingerprint(cfg: dict) -> str:
                   'mode', 'summary_mode', 'loop_mode', 'project_ids'):
         defaults.pop(field, None)
     extraction = {'patient_state_context': False, **(cfg.get('extract') or {})}
+    # Selection-only switches decide which work runs, never how a fact is read.
+    for field in ('upgrade_scope', 'patient_context', 'patient_context_nightly'):
+        extraction.pop(field, None)
     return payload_hash({
         'extract_version': extract_llm.EXTRACT_VERSION,
         'plan_version': extract_llm.PLAN_VERSION,
