@@ -319,7 +319,7 @@ def test_cli_commands_use_nested_parser_and_never_touch_network(world, capsys):
     assert '"outcome": "applied"' in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("action", ["plan", "outstanding", "stop", "resume"])
+@pytest.mark.parametrize("action", ["plan", "outstanding", "resume"])
 def test_corrupt_provider_settings_never_open_control_or_report(world, monkeypatch, capsys, action):
     import ledger
     root, _, _ = world
@@ -338,7 +338,7 @@ def test_corrupt_provider_settings_never_open_control_or_report(world, monkeypat
     assert marker.exists()
 
 
-@pytest.mark.parametrize("action", ["stop", "resume"])
+@pytest.mark.parametrize("action", ["resume"])
 def test_control_rechecks_provider_settings_inside_transaction(world, monkeypatch, action):
     root, path, _ = world
     original = mcs_util._load_config
@@ -357,6 +357,17 @@ def test_control_rechecks_provider_settings_inside_transaction(world, monkeypatc
         assert receipt["outcome"] == "rejected"
         assert json.loads(receipt["receipt_json"])["error"] == "cloud_config_invalid"
     assert calls[0] >= 2 and root.exists()
+
+
+def test_stop_is_recorded_even_when_provider_settings_are_unreadable(world, monkeypatch, capsys):
+    root, path, _ = world
+    def unreadable(config_path):
+        raise mcs_util.ProviderSettingsUnreadable("synthetic-private-canary")
+    monkeypatch.setattr(mcs_util, "_load_config", unreadable)
+    assert mcs_setup.main(["cloud-llm", "stop", "--confirm-human", "--reason", "synthetic"]) == 0
+    assert "synthetic-private-canary" not in capsys.readouterr().out
+    with closing(Ledger(str(path))) as db:
+        assert [row["content"] for row in db.artifacts("cloud_control")] == ["paused"]
 
 
 @pytest.mark.parametrize("obstacle", ["busy", "updating", "code_changed"])
