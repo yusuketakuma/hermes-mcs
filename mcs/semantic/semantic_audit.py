@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from contextlib import suppress
+from copy import deepcopy
 
 import semantic_jev as jev
 from semantic_quantities import claim_quantity_findings, extract_quantities
@@ -114,6 +115,40 @@ _FACT_QUESTION = (
     "support the fact.")
 
 
+def _claim_answer_valid(ans) -> bool:
+    """Whether a claim answer is a supported choice with a probability."""
+    return (isinstance(ans, dict) and isinstance(ans.get("choice"), str)
+            and ans["choice"] in jev.CLAIM_SUPPORT_OPTIONS and _probability(ans.get("confidence")))
+
+
+def _claim_answer_findings(claim_id, ans: dict, match_threshold: float) -> list:
+    """Findings of one validated claim answer; only a confident ``supports`` has none."""
+    findings = []
+    if ans["confidence"] < match_threshold:
+        findings.append({"code": "claim_low_confidence", "claim": claim_id,
+                         "confidence": ans["confidence"]})
+    if ans["choice"] in ("contradicts", "not_supported", "ambiguous"):
+        findings.append({"code": "claim_" + ans["choice"], "claim": claim_id,
+                         "confidence": ans["confidence"]})
+    return findings
+
+
+def claim_answers_findings(answers, match_threshold: float) -> list:
+    """Findings that recorded claim answers (``summary['_claim_audit']``) carry.
+
+    The same rule as ``audit_claims`` applies; an answer that is not a valid
+    choice with a probability is itself a finding (fail closed)."""
+    if not isinstance(answers, dict):
+        return [{"code": "claim_answer_invalid"}]
+    findings = []
+    for claim_id, ans in answers.items():
+        if not _claim_answer_valid(ans):
+            findings.append({"code": "claim_answer_invalid", "claim": claim_id})
+            continue
+        findings.extend(_claim_answer_findings(claim_id, ans, match_threshold))
+    return findings
+
+
 def audit_claims(jev_client, bundle: dict, summary: dict,
                  deadline: float, match_threshold: float = jev.MATCH_THRESHOLD,
                  per_request: int = 12) -> tuple[list, bool]:
@@ -186,49 +221,79 @@ def audit_claims(jev_client, bundle: dict, summary: dict,
                             "claims": [{"id": c["claim_id"], "text": c["text"]}
                                        for c in chunk]},
                  "context": list(ctx.values())}
+        # raw answers ride on the summary's private channel so the drain can
+        # persist them into the audit artifact's meta (accumulated
+        # confidences feed threshold calibration, §22). A validated answer
+        # is put there before its malformed siblings are asked again, so a
+        # stop during that re-ask cannot drop it (the caller records it).
+        checkpoint = {}
+
+        def record(valid, chunk_ids=frozenset(questions)):
+            for claim_id, ans in valid.items():
+                if claim_id in chunk_ids and _claim_answer_valid(ans):
+                    checkpoint[claim_id] = ans
+                    summary.setdefault("_claim_audit", {})[claim_id] = {
+                        "choice": ans["choice"], "confidence": ans["confidence"]}
+
         partial = False
         try:
-            out = jev.evaluate_once_more(jev_client, state, questions, deadline)
+            out = jev.evaluate_once_more(jev_client, state, questions, deadline,
+                                         on_valid_answers=record)
         except jev.JevError as error:
             summary["_claim_audit_reason"] = "service_error"
             with suppress(Exception):
                 jev_client.last_error = error
-            out = {"answers": getattr(error, "partial_answers", {})}
+            received = getattr(error, "partial_answers", None)
+            out = {"answers": {**(received if isinstance(received, dict) else {}), **checkpoint}}
             partial = True
         answers = out.get("answers") if isinstance(out, dict) else None
+        invalid = None
         for c in chunk:
             ans = answers.get(c["claim_id"]) if isinstance(answers, dict) else None
-            if partial and ans is None:
+            if partial and not _claim_answer_valid(ans):
+                continue    # not received: asked again
+            if not _claim_answer_valid(ans):
+                # Not a judgement of the claim: it is asked again. The
+                # chunk's valid answers are still kept as observed.
+                invalid = invalid or c["claim_id"]
                 continue
-            if (not isinstance(ans, dict)
-                    or not isinstance(ans.get("choice"), str)
-                    or ans["choice"] not in jev.CLAIM_SUPPORT_OPTIONS
-                    or not _probability(ans.get("confidence"))):
-                summary["_claim_audit_reason"] = "response_invalid"
-                return findings + [{"code": "support_unevaluated",
-                                    "claim": c["claim_id"]}], False
-            # raw answers ride on the summary's private channel so the
-            # drain can persist them into the audit artifact's meta —
-            # accumulated confidences feed threshold calibration (§22).
-            raw = summary.setdefault("_claim_audit", {})
-            raw[c["claim_id"]] = {"choice": ans["choice"],
-                                  "confidence": ans["confidence"]}
-            if ans["confidence"] < match_threshold:
-                findings.append({"code": "claim_low_confidence",
-                                 "claim": c["claim_id"],
-                                 "confidence": ans["confidence"]})
-            if ans["choice"] in ("contradicts", "not_supported"):
-                findings.append({"code": "claim_" + ans["choice"],
-                                 "claim": c["claim_id"],
-                                 "confidence": ans["confidence"]})
-            elif ans["choice"] == "ambiguous":
-                findings.append({"code": "claim_ambiguous",
-                                 "claim": c["claim_id"],
-                                 "confidence": ans["confidence"]})
+            record({c["claim_id"]: ans})
+            findings.extend(_claim_answer_findings(c["claim_id"], ans, match_threshold))
+        if invalid is not None:
+            summary["_claim_audit_reason"] = "response_invalid"
+            return findings + [{"code": "support_unevaluated", "claim": invalid}], False
         if partial:
             return findings + [{"code": "support_unevaluated",
                                 "claim": chunk[0]["claim_id"]}], False
     return findings, True
+
+
+def resume_claim_audit(jev_client, bundle: dict, summary: dict, recorded: dict,
+                       deadline: float, match_threshold: float = jev.MATCH_THRESHOLD,
+                       per_request: int = 12) -> tuple[list, bool]:
+    """Finish a claim audit stopped after some answers were recorded, asking only the rest.
+
+    ``recorded`` holds the answers and findings observed before the stop.
+    They are kept as observed and never asked again, so a recorded negative
+    cannot be upgraded; ``audit_claims`` asks the claims without an answer.
+    The merged answers ride on ``summary['_claim_audit']`` even when that
+    call raises, so the caller can record them before the stop goes on."""
+    answered = deepcopy(recorded["answers"])
+    findings = deepcopy(recorded["findings"])
+    findings.extend(f for f in claim_answers_findings(answered, match_threshold) if f not in findings)
+    summary.pop("_claim_audit_reason", None)
+    summary["_claim_audit"] = deepcopy(answered)
+    rest = {key: value for key, value in summary.items() if key != "_claim_audit"}
+    rest["claims"] = [c for c in summary["claims"] if c["claim_id"] not in answered]
+    if not rest["claims"]:
+        return findings, True
+    try:
+        more, evaluated = audit_claims(jev_client, bundle, rest, deadline, match_threshold, per_request)
+    finally:
+        summary["_claim_audit"] = {**(rest.get("_claim_audit") or {}), **answered}
+        if "_claim_audit_reason" in rest:
+            summary["_claim_audit_reason"] = rest["_claim_audit_reason"]
+    return findings + [f for f in more if f not in findings], evaluated
 
 
 COVERAGE_OPTIONS = {
