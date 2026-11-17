@@ -86,7 +86,9 @@ _LEADING_CURRENT = re.compile(rf"(?:{CURRENT_MARK.pattern})(?:は|も|に|の)?[
 _TARGET_PREDICATE = re.compile(
     rf"(?:は|が|も)?[\s　]*(?:(?:し|した|して)(?:が|けど|けれど(?:も)?)?[、,\s　]*)?"
     rf"(?P<now>{CURRENT_MARK.pattern})?(?:は|も)?[\s　]*"
-    rf"(?:(?P<cont>{_CONTINUING.pattern})|あり|ある|あります|みられ|見られ)")
+    # A negated continuation (続いていません/持続せず) is not one.
+    rf"(?:(?P<cont>(?:{_CONTINUING.pattern})(?!(?:して|し|せ)?[いお]?(?:ない|ません|なく|なかった|ず|らず)))"
+    rf"|あり|ある|あります|みられ|見られ)")
 
 _NONCURRENT_MARK = re.compile(r"過去|既往|以前(?!から|より)|先月(?!から|より)|先週(?!から|より)|昨年|一昨年")
 
