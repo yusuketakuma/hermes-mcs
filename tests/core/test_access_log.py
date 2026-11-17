@@ -81,6 +81,52 @@ def test_checkpoint_detects_a_dropped_or_edited_newest_record(tmp_path):
     assert access_log.verify(tmp_path, checkpoint=checkpoint)["checkpoint"] == "records_missing"
 
 
+@pytest.mark.parametrize("checkpoint", [(-1, access_log.GENESIS), (True, access_log.GENESIS),
+                                        (0, "z" * 64), (0,), "invalid"])
+def test_invalid_checkpoint_is_rejected(tmp_path, checkpoint):
+    with pytest.raises(ValueError, match="checkpoint_invalid"):
+        access_log.verify(tmp_path, checkpoint=checkpoint)
+
+
+def test_zero_record_checkpoint_requires_genesis(tmp_path):
+    assert access_log.verify(tmp_path, checkpoint=(0, access_log.GENESIS))["ok"] is True
+    assert access_log.verify(tmp_path, checkpoint=(0, "f" * 64))["checkpoint"] == "changed"
+
+
+def test_short_tail_reads_are_completed_before_hashing(tmp_path, monkeypatch):
+    _entry(tmp_path, now=1_790_000_000)
+    before = access_log.verify(tmp_path)
+    real_pread = os.pread
+    monkeypatch.setattr(access_log.os, "pread",
+                        lambda fd, size, offset: real_pread(fd, min(size, 8), offset))
+    entry = _entry(tmp_path, now=1_790_000_060)
+    assert entry["prev"] == before["head"]
+    assert access_log.verify(tmp_path)["records"] == 2
+
+
+def test_early_eof_in_tail_read_keeps_log_unchanged(tmp_path, monkeypatch):
+    _entry(tmp_path, now=1_790_000_000)
+    path, = (tmp_path / access_log.DIR_NAME).glob("access-*.jsonl")
+    before = path.read_bytes()
+    monkeypatch.setattr(access_log.os, "pread", lambda fd, size, offset: b"")
+    with pytest.raises(access_log.AccessLogError, match="access_log_corrupt"):
+        _entry(tmp_path, now=1_790_000_060)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("next_time", [1_790_000_060, 1_792_700_000])
+@pytest.mark.parametrize("tail", [b"\n", b'{"broken":true}\n', b"not json\n", b"x" * 9000 + b"\n"])
+def test_invalid_completed_tail_is_not_appended(tmp_path, tail, next_time):
+    _entry(tmp_path, now=1_790_000_000)
+    path, = (tmp_path / access_log.DIR_NAME).glob("access-*.jsonl")
+    with open(path, "ab") as stream:
+        stream.write(tail)
+    damaged = path.read_bytes()
+    with pytest.raises(access_log.AccessLogError, match="access_log_corrupt"):
+        _entry(tmp_path, now=next_time)
+    assert path.read_bytes() == damaged
+
+
 def test_free_text_codes_become_invalid_and_patient_lists_are_bounded(tmp_path):
     entry = _entry(tmp_path, op="read", kind="合成 患者 本文", outcome="bad read",
                    patients=[*range(access_log.PATIENT_LIMIT + 5), "9", True])

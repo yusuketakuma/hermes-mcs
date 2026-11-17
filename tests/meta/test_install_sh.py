@@ -452,7 +452,7 @@ def test_standalone_installer_has_no_hermes_checkout_or_commands(tmp_path):
     assert first.returncode == 0, first.stdout + first.stderr
     assert json.loads((home / ".mcs/config.json").read_text())["runtime_mode"] == "standalone"
     assert f"cd '{ROOT}' && " in first.stdout.split("-m mcs_standalone status")[0].splitlines()[-1]
-    # LINE WORKS steps appear only when LINE WORKS is the chosen target
+    # The default target does not show LINE WORKS steps.
     assert "lineworks_adapter" not in first.stdout
     calls = _calls(stub)
     text = "\n".join(calls)

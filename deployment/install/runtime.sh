@@ -809,7 +809,7 @@ if [ "$SETUP_STATUS" -eq 0 ]; then
         "$MCS_PY" "$SETUP" slack-channels || SETUP_STATUS=$?
     fi
 fi
-# Show only the follow-up steps that apply to this install.
+# Show follow-up steps for this install.
 printf '\n次にすること（上から順に）:\n'
 printf '    1. 専用ChromeでMCSへログイン（初期設定の最後に済ませた場合は不要）: %s setup browser\n' "$(shell_quote "$MCS_SHIM")"
 printf '    2. 10分ほど待って状態を確認: %s doctor\n' "$(shell_quote "$MCS_SHIM")"
@@ -822,7 +822,7 @@ if [ "$RUNTIME_MODE" = standalone ]; then
     printf '\n動作状況の確認: %s %s -m mcs_standalone status\n' "$INREPO" "$PYQ"
     printf '詳しい説明: docs/guides/STANDALONE.md\n'
 fi
-# LINE WORKS needs its own connection steps; other targets never see them.
+# LINE WORKS needs its own connection steps.
 # Display-only hint: a plain text match keeps this read free of interpreter runs.
 if grep -Eqs '"interactive"[[:space:]]*:[[:space:]]*"lineworks"|"notify_target"[[:space:]]*:[[:space:]]*"lineworks:' "$MCS_ROOT/config.json"; then
     printf '\nLINE WORKS の接続設定も必要です（詳しい説明: docs/guides/LINEWORKS.md）\n'

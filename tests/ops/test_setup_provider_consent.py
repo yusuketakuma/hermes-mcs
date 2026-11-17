@@ -76,8 +76,8 @@ def test_existing_key_preview_reads_only_presence_problem_codes(monkeypatch, cap
     monkeypatch.setattr(mcs_util, 'private_env_problem', problem)
     monkeypatch.setattr(cloud_policy, 'selected_key', lambda *a, **k: pytest.fail('credential read'))
     monkeypatch.setattr(cloud_policy, 'provider_key', lambda *a, **k: pytest.fail('credential read'))
-    monkeypatch.setattr(semantic_policy, 'runtime_config',
-                        lambda cfg: semantic_policy.semantic_config(cfg, key_present=False))
+    # confirm_save asks runtime_key_present, which reads the Jev key through semantic_jev.
+    monkeypatch.setattr(semantic_policy.jev, 'api_key', lambda root: None)
     monkeypatch.setattr(setup_wizard, 'ask', lambda *args, **kwargs: False)
     setup_wizard.confirm_save({'notify_target': 'slack:synthetic'}, plugin_profile=None)
     assert seen == ['MCS_ANTHROPIC_API_KEY', 'MCS_OPENAI_API_KEY']
