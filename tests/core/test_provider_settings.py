@@ -1463,3 +1463,12 @@ def test_provider_unavailable_view_is_marked_so_it_is_held_not_revoked():
     assert cloud_policy.scope_revoked(view, 'reextract', 1) is False
     explicit = {'cloud_llm': {'mode': 'off'}}
     assert cloud_policy.scope_revoked(explicit, 'reextract', 1) is True
+
+
+def test_provider_unavailable_off_is_not_classified_as_the_owners_mode_off(monkeypatch):
+    view = mcs_util._paid_routes_closed({'cloud_llm': {'mode': 'on', 'project_ids': [1]}})
+    monkeypatch.setattr(cloud_policy, 'resolve_selection', lambda cfg, root=None: ({'mode': 'off'}, [], None))
+    monkeypatch.setattr(cloud_policy, 'selected_key_problem', lambda root, cfg: None)
+    assert cloud_policy.refusal_code(view, 'scope', model='m') == 'unknown'
+    explicit = {'cloud_llm': {'mode': 'off'}}
+    assert cloud_policy.refusal_code(explicit, 'scope', model='m') == 'mode_off'

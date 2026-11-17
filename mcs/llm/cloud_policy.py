@@ -529,7 +529,7 @@ def refusal_code(cfg, code, *, model, root=None, settings=None, route=None, proj
                 unreadable = external_transfer.status(root).get("state") == "unreadable"
                 return "transfer_review_unreadable" if unreadable else "provider_not_approved"
             block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
-            if isinstance(block, dict) and block.get("mode") == "off":
+            if isinstance(block, dict) and block.get("mode") == "off" and not cfg.get("provider_unavailable"):
                 return "mode_off"
             if resolved["mode"] == "off":
                 # computed off: a mode left out with no usable key, or a configuration error
