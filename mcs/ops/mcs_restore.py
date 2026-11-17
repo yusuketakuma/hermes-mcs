@@ -171,7 +171,7 @@ def _binding(path, fd, source_sha256, *, static=True) -> Binding:
         _, digest, db_identity = _read(fd, "ledger.db", database=True)
         if digest != report["plain_sha256"]:
             raise RestoreConsentError("restore_database_hash_mismatch")
-        if backup_evidence.inventory_snapshot(path / "ledger.db") != report["inventory"]:
+        if not backup_evidence.inventory_matches(path / "ledger.db", report["inventory"]):
             raise RestoreConsentError("restore_inventory_mismatch")
     else:
         st = os.stat("ledger.db", dir_fd=fd, follow_symlinks=False)
