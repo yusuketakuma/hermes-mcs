@@ -467,7 +467,10 @@ def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
     manual investigation until promote_group_parts finds their surface usable. Older superseded renders never block an update and
     are left alone; a Slack file_group that never started keeps its own
     ``no_journal_started`` path. A missing record is not proof of
-    non-delivery, so nothing becomes not_sent. Returns the parts this run
+    non-delivery, so nothing becomes not_sent. That group stays ``pending`` but
+    takes the BEYOND_HORIZON error code, so ``no_journal_started`` is refused
+    for it (``journal_cannot_vouch``): the rows that would witness its send may
+    be compacted away, and only a journal-independent proof can resolve it. Returns the parts this run
     changed; re-runs find no pending parts left and change nothing."""
     from adapters.common import envelopes
     rows = db.execute(
@@ -482,7 +485,6 @@ def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
         "AND p.kind='file_group' AND p.attempt_id IS NULL) "
         "ORDER BY p.delivery_id,p.idx", (restored_at, restored_at)).fetchall()
     marked = []
-
     def mark(row, aid, reason=BEYOND_HORIZON):
         changed = db.execute(
             "UPDATE notification_render_parts SET state='unknown',"
@@ -494,6 +496,14 @@ def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
 
     with db:
         db.execute("BEGIN IMMEDIATE")
+        db.execute(
+            "UPDATE notification_render_parts SET error_code=?,updated_at=? "
+            "WHERE state='pending' AND attempt_id IS NULL AND kind='file_group' "
+            "AND error_code IS NULL AND delivery_id IN (SELECT r.delivery_id "
+            "FROM notification_renders r WHERE r.state='delivered' AND r.card_id IS NOT NULL "
+            "AND r.transport='slack' AND (? IS NULL OR r.created_at <= ?) "
+            "AND r.render_rev=(SELECT MAX(x.render_rev) FROM notification_renders x "
+            "WHERE x.card_id=r.card_id))", (BEYOND_HORIZON, now, restored_at, restored_at))
         grouped, unresolvable, surfaces = [], [], {}
         for row in rows:
             if row["transport"] == "discord" and row["kind"] in ("attachment_part", "file_group"):
