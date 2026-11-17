@@ -311,7 +311,7 @@ def _slots_idle(endpoint: str, deadline: float | None, request=None,
 
 
 def _wait_slot_idle(request, endpoint: str, slot: int,
-                    deadline: float | None, error_out: dict | None) -> None:
+                    deadline: float | None, error_out: dict | None) -> bool:
     """Hold the turn until the pinned slot reports idle in
     SLOT_WAIT_IDLE_SAMPLES consecutive samples, or SLOT_WAIT_MAX_S / the
     caller's deadline passes. A single idle sample, a missing slot, bad
@@ -336,6 +336,7 @@ def _wait_slot_idle(request, endpoint: str, slot: int,
     if error_out is not None:
         error_out["slot_wait_ms"] = int((time.monotonic() - start) * 1000)
         error_out["slot_wait_confirmed"] = int(idle >= SLOT_WAIT_IDLE_SAMPLES)
+    return idle >= SLOT_WAIT_IDLE_SAMPLES
 
 
 def admitted_chat(client_route: str, prompt: str, *,
@@ -726,9 +727,16 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
             if kind == "transport" and isinstance(error, OSError) \
                     and (_turn_path() or scheduling_enabled()) \
                     and wait_for_idle:
-                _wait_slot_idle(send, endpoint, body["id_slot"], deadline,
-                                error_out)
+                confirmed = _wait_slot_idle(send, endpoint, body["id_slot"],
+                                            deadline, error_out)
+                if scheduling_enabled() and not confirmed:
+                    import llm_slot_schedule
+                    llm_slot_schedule.mark_stuck(
+                        os.environ[SCHEDULE_ENV], body["id_slot"])
             return None
+    if status == 200 and scheduling_enabled():
+        import llm_slot_schedule
+        llm_slot_schedule.clear_stuck(os.environ[SCHEDULE_ENV], body["id_slot"])
     if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
         return {"text": None, "finish_reason": None, "usage": None,
                 "status": status}

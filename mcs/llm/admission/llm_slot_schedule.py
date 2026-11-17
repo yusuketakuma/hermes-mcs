@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import fcntl
+import json
 import os
 from pathlib import Path
 import time
@@ -12,6 +13,12 @@ import safe_io
 
 SLOTS = (0, 1, 2)
 POLL_S = 0.05
+# A slot that stays busy after its request died (never confirmed idle)
+# is skipped for COOL_S once it has done so STUCK_TRIP times running; an
+# answered request clears it. One slot's failure must not cost every
+# call that lands on it a full timeout and an attempt.
+STUCK_TRIP = 2
+COOL_S = 120.0
 JST = timezone(timedelta(hours=9))
 
 
@@ -53,6 +60,48 @@ def _available(directory):
         raise
 
 
+def _health_path(directory, slot):
+    return Path(directory) / f"llm_slot_{slot}.health"
+
+
+def mark_stuck(directory, slot) -> None:
+    """Count one request that died on *slot* without the slot coming idle."""
+    path = _health_path(directory, slot)
+    try:
+        streak = json.loads(path.read_text()).get("streak", 0)
+        streak = streak if type(streak) is int and streak >= 0 else 0
+    except (OSError, ValueError, AttributeError):
+        streak = 0
+    streak += 1
+    payload = json.dumps({"streak": streak, "until": time.time() + COOL_S})
+    # shortcut: a lost concurrent update only delays the skip by one failure
+    try:
+        safe_io.atomic_write(str(path), lambda f: f.write(payload))
+    except OSError:
+        pass
+
+
+def clear_stuck(directory, slot) -> None:
+    """An answered request proves *slot* usable again."""
+    try:
+        _health_path(directory, slot).unlink()
+    except OSError:
+        pass
+
+
+def _cooling(directory) -> set:
+    """Slots currently skipped; unreadable state skips nothing."""
+    out = set()
+    for slot in SLOTS:
+        try:
+            state = json.loads(_health_path(directory, slot).read_text())
+            if state["streak"] >= STUCK_TRIP and time.time() < state["until"]:
+                out.add(slot)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return out
+
+
 @contextmanager
 def turn(directory, *, realtime, preferred, deadline=None, min_s=0.0, held_slots=None,
          legacy_path=None):
@@ -84,7 +133,8 @@ def turn(directory, *, realtime, preferred, deadline=None, min_s=0.0, held_slots
                 free = {}
                 try:
                     free = _available(directory)
-                    unavailable = held_slots() if held_slots is not None else ()
+                    unavailable = {*(held_slots() if held_slots is not None else ()),
+                                   *_cooling(directory)}
                     rt_active = not _try(active)
                     rt_waiting = False
                     if not realtime:
