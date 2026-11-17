@@ -1,5 +1,6 @@
 """A stopped cloud unit waits for a transient reason and finishes locally after a definitive one."""
 from contextlib import nullcontext
+import hashlib
 import inspect
 import json
 
@@ -1495,6 +1496,57 @@ def test_answer_reserved_under_an_earlier_binding_is_replaced_once_and_never_res
     _drain(runtime, cfg)
     assert sent.count(sent[0]) == 1 and _reservations(ledger, 'scan:1') == [answered]
     assert _dispositions(ledger) == [(answered, 'superseded_local')] and _usage(ledger)[:len(paid)] == paid
+
+
+def test_request_without_a_result_under_an_earlier_binding_waits_then_is_replaced_once(runtime, real_cloud, monkeypatch):
+    """A request sent by a version that bound a scan to the whole patient, whose result never
+    arrived: it waits for that result until the stale threshold, then local work replaces it
+    once, nothing is sent again, and an answer arriving after all is accounted, never adopted."""
+    ledger, clock, local_calls = runtime
+    cfg, _ = real_cloud
+    seed(ledger, body=BODY)
+    sent = _wire(monkeypatch, lambda index, payload, limit: _Interrupted() if index == 0 else None)
+    with monkeypatch.context() as patch:
+        patch.setattr(state, '_cloud_scan_binding', lambda *args: 'e' * 64)
+        with pytest.raises(_Interrupted):
+            step(runtime, cfg=cfg)
+    row, = ledger.artifacts('cloud_usage_reserve')
+    reservation = json.loads(row['meta'])
+    assert not ledger.artifacts('cloud_usage_result')
+    assert reservation['owner']['source_sig'] == 'e' * 64   # the earlier, patient-wide binding
+    stale = row['created_at'] + reservation['timeout_seconds'] + cloud_policy.RESULT_STALE_MARGIN_S
+    for wall in (clock.wall, stale - 1):
+        clock.wall = wall
+        outcome = step(runtime, cfg=cfg)
+        assert (outcome['status'], outcome['reason']) == (
+            'deferred', 'patient_context_cloud_deferred:result_pending'), outcome
+        assert len(sent) == 1 and len(ledger.artifacts('cloud_usage_reserve')) == 1
+        assert not local_calls and not _dispositions(ledger) and not _scan_rows(ledger)
+    clock.wall = stale
+    outcome = step(runtime, cfg=cfg)
+    assert outcome['status'] == 'progressed', outcome
+    assert _local_sources(local_calls) == [sent[0]] and _local_fallback_scans(ledger)
+    assert _dispositions(ledger) == [(reservation['reservation_id'], 'superseded_local')]
+    _drain(runtime, cfg)
+    # The source's request is never asked again (the overview, another unit, is asked once).
+    assert len([payload for payload in sent if 'source' in payload]) == 1
+    assert _reservations(ledger, 'scan:1') == [reservation['reservation_id']]
+    assert _dispositions(ledger) == [(reservation['reservation_id'], 'superseded_local')]
+    # The answer arrives after all: it settles the reservation and is never taken up.
+    _, _, raw = _answer(sent[0])
+    text = json.loads(raw)['content'][0]['text']
+    cloud_policy.record_result(ledger, reservation, {
+        'model': reservation['model'], 'request_fp': reservation['request_fp'],
+        'usage': {'input_tokens': 10, 'output_tokens': 2}, 'http_class': 'http_200', 'request_id': None,
+        'error_kind': None, 'answer_text_sha256_v1': hashlib.sha256(text.encode()).hexdigest(),
+        'answer_finish_reason_v1': 'stop'}, answer={'text': text, 'finish_reason': 'stop'})
+    assert [json.loads(result['meta'])['reservation_id'] for result in ledger.artifacts('cloud_usage_result')
+            ].count(reservation['reservation_id']) == 1
+    _drain(runtime, cfg)
+    assert len([payload for payload in sent if 'source' in payload]) == 1
+    assert all(meta.get('local_fallback') is True and not meta.get('cloud_receipts') for _, meta in _scan_rows(ledger))
+    assert _dispositions(ledger) == [(reservation['reservation_id'], 'superseded_local')]
+    assert readiness.context_view_input(ledger.db, 1, cfg=cfg)
 
 
 def test_unsaved_answer_is_never_taken_up_for_another_occurrence_of_the_same_body(runtime, real_cloud, monkeypatch):
