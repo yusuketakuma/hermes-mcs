@@ -433,6 +433,16 @@ def test_the_bridge_marker_s_newest_verdict_decides_and_ends_with_dots_actor():
     assert not _decide(comments=[_marker()], actors=[], dots_actor="")["passed"], "no actors: nothing counts"
 
 
+def test_sources_are_named_by_login_not_position():
+    # the bridge: REVIEW_ACTORS="claude[bot]", DOTS_ACTOR unset
+    claude = _decide([_verdict("claude[bot]")], actors=["claude[bot]"], dots_actor="")
+    assert claude["source"] == "claude" and claude["passed"]
+    bridge = _decide([_verdict("claude[bot]")], [_marker("changes_requested")], actors=["claude[bot]"], dots_actor="")
+    assert bridge["source"] == "dots・つなぎ" and bridge["state"] == "CHANGES_REQUESTED"
+    # a first actor that is not DOTS_ACTOR is named by its login
+    assert _decide([_verdict("other")], actors=["other"], dots_actor=DOTS)["source"] == "other"
+
+
 def _gate(state="success", reasons=(), description="必須ジョブ実行済み・成功"):
     return {"state": state, "human_reasons": list(reasons), "description": description}
 

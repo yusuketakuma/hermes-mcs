@@ -76,7 +76,7 @@ PR に足されたワークフローは、GitHub Actions 名義で `merge-gate` 
 レビュー合格かどうかは、`ci/agent_control.py` の `review_verdict` だけが決めます。`merge-ready` と Issue の進み具合は同じ判定を使います。
 
 - 数えるのは、リポジトリ変数 `REVIEW_ACTORS`（カンマ区切りのログイン。大文字と小文字も区別し、App は `名前[bot]`）に載ったアカウントの正式レビュー（Approve・Request changes）だけです。
-  1番目が Dots の専用ログイン、2番目が `claude[bot]` です。コメントだけのレビューと、現在の head 以外のコミットへのレビューは数えません。
+  一覧の先にあるほど優先します。表示の名前は順番ではなくログインで決め、`DOTS_ACTOR` のログインを dots、`claude[bot]` を claude と出します。コメントだけのレビューと、現在の head 以外のコミットへのレビューは数えません。
 - 現在の head に判定のあるアカウントのうち、一覧で先のアカウントの最新の判定で決まります。Dots の修正依頼は Claude の承認より優先します。
   PR の作者と所有者のアカウントは数えません。席（codex1・codex2・claude1・claude2）のレビューは所有者のアカウントで書かれるので数えず、進み具合の「注意」に参考として出すだけです。
 - `REVIEW_ACTORS` が未設定か空のとき、または現在の head に判定がないときは不合格です。
@@ -119,6 +119,7 @@ PR 側のイベント（`pull_request`・`pull_request_review`・`pull_request_t
 - 結果は日本語で「確認したこと」「確認できなかったこと」「指摘」を書き、読んだ head の `commit_id` を指定した正式レビューを1件だけ付けます。
 - 承認はしません。claude-code-action の公式文書が「Claude cannot approve pull requests」としているためで、結果は COMMENT か REQUEST_CHANGES だけです。
   そのため Claude のレビューだけでは `merge-ready` は `success` になりません。合格には Dots の承認（つなぎの間はマーカー）が要ります。
+- レビューのジョブの `id-token: write` は、Claude App のトークンを得るためだけに使います。
 - 書き手の待ち行列（`agent-claude-writer`）とは別の、PR ごとの待ち行列で動きます。書き手の待ちを押し出さないためです。
 
 ### Dots の定期作業（15分おき）
@@ -290,10 +291,17 @@ gh secret set OPENAI_API_KEY --repo $R
 - 自動マージを使うときは、Settings → General の Allow auto-merge をオンにします。
 - Actions event policy（14520）で起動イベントを絞っている場合は、`schedule`（`agent-review-fix.yml` と `agent-control.yml` の `merge-ready`）と
   `issue_comment`（`agent-review.yml` の `/claude-review`）を許可します（`workflow_dispatch` は許可済み）。許可が無いと、これらは起動しません。
-- Dots の専用ログインを作り、このリポジトリへの write 権限だけを付けます。admin にはしません（迂回できないようにするため）。そのあと判定の変数を設定します。
-  設定するまでは `REVIEW_ACTORS` に `claude[bot]` だけを入れ、Dots はつなぎのマーカーを使います。
+- 判定の変数は次の2段階で設定します。`REVIEW_ACTORS` が空なら何も数えず、すべての PR が不合格です。
+  - つなぎの間: `REVIEW_ACTORS` を `claude[bot]` にし、`DOTS_ACTOR` は設定しません。マーカーを数えます。
+    Claude は COMMENT か REQUEST_CHANGES しか付けられないので、合格には Dots のマーカーが要ります。
+  - Dots の専用ログインを作ったあと: ログインには write 権限だけを付け、admin にはしません（迂回できないようにするため）。
+    `REVIEW_ACTORS` を `<Dotsのログイン>,claude[bot]`、`DOTS_ACTOR` を `<Dotsのログイン>` にします。マーカーは数えなくなります。
 
 ```bash
+# つなぎの間
+gh variable set REVIEW_ACTORS --body "claude[bot]" --repo $R
+gh variable delete DOTS_ACTOR --repo $R 2>/dev/null || true
+# Dots の専用ログインを作ったあと
 gh variable set REVIEW_ACTORS --body "<Dotsのログイン>,claude[bot]" --repo $R
 gh variable set DOTS_ACTOR --body "<Dotsのログイン>" --repo $R
 ```

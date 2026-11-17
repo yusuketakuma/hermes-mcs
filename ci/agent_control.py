@@ -323,7 +323,7 @@ def verdict_candidates(pr, reviews, comments, actors, dots_actor, owner):
     for rank, actor in enumerate(actors):
         if actor in (author, owner):
             continue
-        source = "dots" if rank == 0 else "claude" if actor == REVIEWER_LOGIN else actor
+        source = "dots" if dots_actor and actor == dots_actor else "claude" if actor == REVIEWER_LOGIN else actor
         found += [{"rank": rank, "source": source, "state": r["state"], "commit": r.get("commit_id"),
                    "at": r.get("submitted_at") or "", "url": r.get("html_url")}
                   for r in reviews if r.get("state") in VERDICTS and _login(r) == actor]
