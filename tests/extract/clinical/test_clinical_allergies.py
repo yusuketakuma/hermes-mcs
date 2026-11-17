@@ -52,13 +52,18 @@ def test_r10_one_assertion_repeated_by_overlapping_chunks_is_stored_once():
     assert not ca.same_assertion(_claim(), _claim(status="past"))
 
 
-def test_r10_keeps_the_confirmed_copy_of_one_assertion():
-    body = "ご本人は合成薬Gで眠気が出ます。"
-    claim = {"allergen": "合成薬G", "kind": "adverse_reaction", "subject": "patient", "status": "current",
-             "negated": False, "certainty": "confirmed", "evidence": body}
-    # Without a reaction there is no relation, so that copy is dropped; with it the copy is kept.
-    kept, dropped = ca.validate_items([{**claim, "reaction": None}, {**claim, "reaction": "眠気"}], body)
-    assert (kept, dropped) == ([{**claim, "reaction": "眠気"}], 1)
+def test_r10_keeps_the_copy_naming_a_reaction_in_either_order():
+    body = "ご本人は合成薬Gにアレルギーがあり、眠気が出ます。"
+    claim = _claim(allergen="合成薬G", evidence=body)
+    for order in ([claim, {**claim, "reaction": "眠気"}], [{**claim, "reaction": "眠気"}, claim]):
+        assert ca.validate_items(order, body) == ([{**claim, "reaction": "眠気"}], 0)
+
+
+def test_r10_two_quotes_of_one_allergen_are_two_assertions():
+    body = "ご本人は合成薬Eにアレルギーがあります。合成薬Eにアレルギーがあると薬局にも伝えました。"
+    first, second = _claim(evidence="ご本人は合成薬Eにアレルギーがあります。"), _claim(evidence="合成薬Eにアレルギーがある")
+    kept, _ = ca.validate_items([first, second], body)
+    assert [item["evidence"] for item in kept] == ["ご本人は合成薬Eにアレルギーがあります。", "合成薬Eにアレルギーがある"]
 
 
 def test_bad_shapes_are_dropped_and_counted_with_bounded_repair_detail():
@@ -163,6 +168,9 @@ def test_allergen_candidates_for_the_gate():
     found = ca.allergen_candidates(body, [{"allergen": "卵"}, {}], [{"name": "合成薬Z"}, {"dose": "1錠"}])
     assert found[:2] == [None, "卵"] and found[-1] == "合成薬Z"
     assert {"ご本人", "薬", "食べ物", "アレルギー"} <= set(found)
+    # A label allergen is also tried with the text around it (the scorer matches by containment).
+    padded = ca.allergen_candidates("ご本人は卵アレルギーです。", [{"allergen": "卵"}])
+    assert {"は卵", "ご本人は卵", "卵ア", "卵アレルギ"} <= set(padded)
     long_body = "、".join(f"合成薬{chr(0x41 + i)}{'あ' * i}" for i in range(26))
     assert len(ca.allergen_candidates(long_body)) == 21
 

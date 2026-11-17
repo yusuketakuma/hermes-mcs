@@ -12,18 +12,23 @@ Verification has two stages. `resolve` reads the axes from the body alone
 resolution happens outside it, so many claims over one quote cost one parse.
 
 - A claim whose quote is not uniquely in the body, whose allergen or
-  reaction is not inside the quote, or whose sentence has no cue for its
-  kind is dropped (not stored).
-- A claim whose axes disagree with the body, or whose subject or time the
-  body does not settle, is kept as a candidate (`unverified: true`).
+  reaction is not inside the quote, whose allergen carries punctuation, or
+  whose sentence has no cue for its kind is dropped (not stored).
+- A claim whose axes disagree with the body, or whose subject, time or
+  polarity the body does not settle, is kept as a candidate (`unverified: true`).
+  Polarity needs evidence both ways: an affirmation is a predicate bound to a
+  cue or a reaction word (or a heading value naming the allergen), a negation
+  is a negation bound the same way; neither, both, open wording or a negative
+  form nothing binds leave it open.
 - Nothing is ever corrected towards the patient, towards confirmed or
   towards current: a model `suspected` stays `suspected` even when the body
   reads as certain.
 
-The rule constants below (R1-R11 of the extraction generation-12 plan) only
-weaken: a rule that misfires turns a claim into a candidate or drops it,
-never into a wrong confirmed assertion. `clinical_scope` is reused as is;
-its person/period parse is the common subject/time reader (R3a, R4).
+The rule constants below (R1-R11 of the extraction generation-12 plan, and the
+review additions named with them) only weaken: a rule that misfires turns a
+claim into a candidate or drops it, never into a wrong confirmed assertion.
+`clinical_scope` is reused as is; its person/period parse is the common
+subject/time reader (R3a), corrected here only towards unknown.
 """
 from __future__ import annotations
 
@@ -41,30 +46,50 @@ CERTAINTIES = ("confirmed", "suspected")
 
 # One assertion unit: a sentence; a heading line is its label plus the value on the same line.
 _UNIT_BREAK = re.compile(r"[。！？!?\n]")
+# A clause inside a unit: a cue binds the allergen of its own clause (R2).
+_CLAUSE_BREAK = re.compile(r"[、,，]")
+# What may stand before a free cue in its clause: particles, connectives and spaces.
+_ATTACHED = re.compile(r"[ \t　はがもをにのでと]|また|特に|なお|現在|今のところ|これまで")
+# An allergen string that carries sentence or clause punctuation or brackets names no single allergen.
+_PUNCTUATED = re.compile(r"[。、，,！？!?「」『』\n]")
+_PHRASE_BREAK = re.compile(r"[、。，,．！？!?\n「」（）()：:・｜|\s]+|から|より|まで|[はがをにでのともへや]")
 
 # R2: the cue for each kind. 抗アレルギー薬, アレルギー検査/外来/科 and アレルギー性鼻炎 name no allergy.
 ALLERGY_CUE = re.compile(r"(?<!抗)(?:アレルギー|過敏症|不耐症?)(?!検査|テスト|薬|外来|科|性)")
 ADVERSE_CUE = re.compile(r"副作用|副反応|有害事象|薬疹")
-# R2: 「副作用が心配」「副作用の説明」 talk about a possibility, not a reaction.
-CONCERN_AFTER = re.compile(r"(?:が|は|の)?(?:心配|不安|懸念|気にな|注意|説明|予防|対策)")
+# R2: a cue whose clause goes on to a concern (「副作用が心配」「副作用歴を確認」「副作用について説明」)
+# talks about a possibility, not a reaction. The clause ends at 、 or a reason/contrast conjunction.
+CONCERN = re.compile(r"心配|不安|懸念|気にな|注意|説明|予防|対策|怖|こわ|確認|チェック|モニタ|観察")
+_CONCERN_CLAUSE_END = re.compile(r"[、,，。！？!?\n]|ので|ため|から|けれど|けど|が、")
 # R2: a relation alone (no cue word) needs a reaction from this vocabulary.
 REACTION_WORDS = tuple(dict.fromkeys(clinical_scope.SYMPTOMS + (
     "じんましん", "蕁麻疹", "かゆ", "痒", "皮疹", "湿疹", "眠気", "肝機能", "腎機能", "腫れ",
     "アナフィラキシー", "ショック", "食欲")))
 _TAKE = r"(?:飲|服用|内服|使用|使|貼|塗)"
 _EMERGE = r"(?:出|出現|起こ|生じ|みられ|見られ)"
+# R2: talk about a reaction that may come (「出ないか」「出ることがある」) asserts none.
+OPEN_WORDING = re.compile(r"(?<!た)(?:こと|場合)が(?:ある|あり)|(?:恐れ|おそれ)(?:が|も)?(?:ある|あり)")
 
 # R3b: another person named by a pointing word inside the sentence, before the allergen.
 OTHER_REFERENT = re.compile(
     r"隣(?:室|の部屋|のベッド)の(?:方|人)|同室の(?:方|人)|"
     r"(?:その|あの|別の|他の|ほかの)(?:方|かた|人)(?!が(?:よい|良い|いい|安全|楽|早))|"
     r"同じ(?:苗字|名字|姓)の|同姓の")
+# R3: a self word, and the other persons a sentence can name after it before the allergen.
+SELF_WORD = re.compile(r"(?:ご本人|患者本人|本人|患者(?:さん|様)?|利用者(?:さん|様)?)(?:自身)?")
+OTHER_PEOPLE = re.compile(
+    rf"{clinical_scope.FAMILY_PERSON}|{clinical_scope.OTHER_PERSON}|{clinical_scope.NAMED_PERSON}|"
+    r"同室者|ルームメイト|[一-龥ァ-ヶ]{1,8}氏(?!名)|(?:一人|1人|ひとり)の(?:方|かた)")
+# R3: a sentence with no self word that opens on its own topic is not the patient named earlier.
+OWN_TOPIC = re.compile(r"[^\s、。！？!?\n]+?(?:は|が|には)")
 # R3c: a post that says it is not this patient's record settles no assertion as the patient's.
 NOT_THIS_PATIENT = re.compile(
     r"(?:こちらの|この|当該)?(?:ご本人|本人|利用者(?:さん|様)?|患者(?:さん|様)?)の(?:記録|件|こと|話|情報)では(?:ありません|ない)|"
     r"別の(?:利用者|患者)(?:さん|様)?の(?:件|記録|話|情報)")
-# R3c: a document page headed with a person's name field names someone this text cannot match to the patient.
-NAME_FIELD = re.compile(r"(?m)^[ \t　]*(?:患者|利用者|対象者)?(?:氏名|お名前|名前)[ \t　]*[:：][ \t　]*\S")
+# R3c: a document page with a person's name field or name line names someone this text cannot match to the patient.
+NAME_FIELD = re.compile(
+    r"(?m)^[ \t　]*(?:(?:患者|利用者|対象者)?(?:氏名|お名前|名前)(?:[ \t　]*[:：]|[ \t　]+)|(?:患者|利用者|対象者)[ \t　]*[:：])"
+    r"[ \t　]*\S|^[ \t　]*[^\s:：、。]{1,10}(?:[ \t　]+[^\s:：、。]{1,10})?[ \t　]*様[ \t　]*$")
 # R3d: an allergy / adverse-reaction history heading owns its value as the patient's.
 HISTORY_HEADING = re.compile(
     r"^[ \t　]*[■◆◇●○・※＊*\-－]?[ \t　]*[【［\[]?[ \t　]*"
@@ -78,7 +103,10 @@ RECORD_BEFORE = re.compile(
 RECORD_AFTER = re.compile(r"[ \t　]*(?:と|との)(?:記載|記録|あり|ある|書かれ)")
 QUOTE_DENIAL = re.compile(
     r"覚え(?:が|は)(?:ない|ありません)|記憶(?:が|は)(?:ない|ありません)|(?:飲|使)んだこと(?:が|は)(?:ない|ありません)|"
-    r"(?:事実|本当)では(?:ない|ありません)|否定(?:して|され)|誤り|間違い")
+    r"(?:事実|本当)では(?:ない|ありません)|否定(?:して|され|的|(?=[。！？!?\n]|$))|誤り|間違い|誤記|別人|"
+    r"事実(?:は|が)?(?:ない|なく|ありません)|心当たり")
+# R3e: the denial is read in the quote's own sentence and in this many sentences in all.
+DENIAL_SENTENCES = 2
 # R4: time words. 「飲んだときに」 after a past word and the もし of かもしれ are not conditions;
 # they are masked (same length) before the shared period parse reads the body.
 _PAST_WORD = (r"以前|過去|昔|かつて|前に|昨年|"
@@ -86,9 +114,14 @@ _PAST_WORD = (r"以前|過去|昔|かつて|前に|昨年|"
 WHEN_AFTER_PAST = re.compile(rf"(?:{_PAST_WORD})[^。！？!?\n]*?(?P<when>(?:んだ|った|いた|した|きた|えた|出た)(?:とき|時)(?:に|は)?)")
 MAYBE = re.compile(r"(?<=か)もし(?=れ)")
 NUMBERED_AGO = re.compile(r"[0-9０-９一二三四五六七八九十数]+(?:年|か月|ヶ月|カ月|週間|日)前(?!から|より)")
+# R4: childhood (not 「子供の頃から」) with a past predicate is past; without one the time is open.
+CHILDHOOD = re.compile(r"(?:子供|子ども|こども|幼少|幼児|小児|学生|若い|小さい)(?:の)?(?:頃|ころ|時代|時|とき|期)(?!から|より)")
+PAST_PREDICATE = re.compile(r"ました|でした|った|かった|ていた")
+# R4: a later clause about now (「…ありましたが、今は食べられます」) leaves the time open.
+LATER_NOW = re.compile(r"(?:今|現在|最近)(?:は|では)")
 _MASK = "〓"
 # R5: negation bound to a cue (heading values included), to a reaction word, or a tolerance after the allergen.
-_NOT_AFTER = r"(?!か|よう|ため)"
+_NOT_AFTER = r"(?!か)"
 CUE_NEGATION = re.compile(
     r"(?:歴)?[ \t　]*[:：]?[ \t　]*(?:は|が|も|について(?:は)?)?[ \t　]*"
     r"(?:特に|全く|一切|今のところ|現在|今は|これまで)?[ \t　]*"
@@ -98,12 +131,33 @@ CUE_NEGATION = re.compile(
 REACTION_NEGATION = re.compile(
     r"(?:は|が|も)?(?:特に|全く)?(?:出て(?:いない|いません|おらず)|出なかった|みられ(?:ない|ません)|"
     r"見られ(?:ない|ません)|ない|なし|ありません)" + _NOT_AFTER)
+# R5: a lack of these is the symptom itself (「食欲がない」), not a negated reaction.
+LACK_IS_SYMPTOM = ("食欲",)
 TOLERATED = re.compile(r"問題(?:なし|無し|なく|ない|ありません|ございません)|大丈夫")
-# R5: 「…との記録はない」 is a missing record, neither a negation nor an affirmation.
-REPORTED_ABSENCE = re.compile(clinical_scope.REPORTED_ABSENCE)
+# R5: affirmation needs a predicate bound to a cue or a reaction word, or a heading value naming the allergen.
+_EXIST = (r"(?:あり|ある|あっ|有り|有(?![無効])|持ち|を?起こ|を?生じ|を?発症|を?認め|が?出(?:た|て|ま)|"
+          r"出現(?:し|あり|有))")
+CUE_AFFIRM = re.compile(
+    r"(?:歴)?[ \t　]*(?:"
+    rf"(?:[:：][ \t　]*|(?:が|は|も)[ \t　]*)?{_EXIST}"
+    rf"|の?(?:疑い|既往)(?:が|も|は)?[ \t　]*(?:{_EXIST}|です|(?=$|[。、，,]))"
+    r"|です|でした|だった|かもしれ|と(?:診断|言われ|指摘)"
+    r"|(?=(?:[（(][^）)\n]*[）)])?[ \t　]*(?:$|[。、，,」』\n])))")
+REACTION_AFFIRM = re.compile(
+    r"(?:さ|み|感)?(?:の[一-龥]{1,3})?[ \t　]*(?:"
+    r"(?:が|も|は)?[ \t　]*(?:出(?!な)|出現|起こ|生じ|みられ|見られ|認め|あり|ある|あっ|落ち(?!着)|続|悪化|上昇|ひど|強く)"
+    r"|く(?:な|て)"
+    r"|(?=(?:[（(][^）)\n]*[）)])?[ \t　]*(?:$|[。、，,」』）)\n])))")
+# R5: negative forms; one that no negation above binds leaves the sentence open (「ではありません」
+# 「症状なし」「…とは言い切れません」「陰性」), unless it belongs to a hedge or to a reaction word.
+NEGATIVE_FORM = re.compile(r"ない|なし|無し|なく|無(?![料理事効])|ません|せず|ず(?=[、。，,に]|$)|"
+                           r"[(（][ \t　]*[-－−ー][ \t　]*[)）]|否定|陰性")
+NOT_A_NEGATION = re.compile(r"かもしれ(?:ない|ません)|(?:分か|わか)って(?:いない|いません)|はっきりし(?:ない|ません)")
+# R5: 「合成薬E以外にアレルギーはありません」 says the allergy is to E; the polarity is open.
+EXCEPT_AFTER = re.compile(r"以外|の(?:ほか|他)(?:に|は|の|で)|を除")
 # R6: hedged wording in the sentence makes the assertion suspected.
 UNCERTAIN = re.compile(
-    r"疑い|かもしれ|可能性|おそらく|恐らく|ようだ|ようです|みたい|と思われ|と考えられ|未確定|不明|未確認|"
+    r"疑い|疑っ|かもしれ|可能性|おそらく|恐らく|ようだ|ようです|みたい|と思われ|と考えられ|未確定|不明|未確認|"
     r"はっきりしない|分かって(?:いない|いません)|わかって(?:いない|いません)|確認中|相談中|検査中")
 # R7: a follow-up still to be done leaves a current assertion open.
 FOLLOW_UP = re.compile(r"確認します|確認する予定|聞いてみます|伺います|検査(?:を)?(?:受け|予定)")
@@ -111,8 +165,9 @@ FOLLOW_UP = re.compile(r"確認します|確認する予定|聞いてみます|�
 FORM_FIELD = re.compile(r"有[ \t　]*[・/／][ \t　]*無|あり[ \t　]*[・/／][ \t　]*なし|[□☐]|"
                         r"■[ \t　]*(?:有|無|あり|なし)|(?:有|無|あり|なし)[ \t　]*■|[|｜][^\n]*[|｜]")
 EMPTY_VALUE = re.compile(r"[:：][ \t　]*$")
-# An allergen that is only a heading value or a form mark names nothing.
-_VALUE_WORD = re.compile(r"[ \t　]*(?:なし|無し|特になし|ない|ありません|有|無|あり|不明|[・/／□☐■])+[ \t　]*")
+# An allergen that is only a heading value, a form mark or a not-yet-asked note names nothing.
+_VALUE_WORD = re.compile(r"[ \t　]*(?:なし|無し|特になし|ない|ありません|有|無|あり|不明|未聴取|聴取中|未確認|確認中|不詳|"
+                         r"[・/／□☐■])+[ \t　]*")
 
 
 class Resolution(NamedTuple):
@@ -134,6 +189,14 @@ def _unit(body, position):
     return left, stop.start() if stop else len(body)
 
 
+def _clause(body, start, end):
+    """The clause (inside its unit) that holds body[start:end]."""
+    left, right = _unit(body, start)
+    marks = [m.end() for m in _CLAUSE_BREAK.finditer(body, left, start)]
+    stop = _CLAUSE_BREAK.search(body, end, right)
+    return (marks[-1] if marks else left), (stop.start() if stop else right)
+
+
 def _line(body, position):
     left = body.rfind("\n", 0, position) + 1
     right = body.find("\n", position)
@@ -152,13 +215,18 @@ def _masked(body):
     return "".join(chars)
 
 
+def _concern(text, cue_end, end):
+    """R2: the cue's clause goes on to a concern word."""
+    stop = _CONCERN_CLAUSE_END.search(text, cue_end, end)
+    return bool(CONCERN.search(text, cue_end, stop.start() if stop else end))
+
+
 def _cues(text, start=0, end=None):
-    """(start, end, kind) of every allergy cue and every adverse cue that is not a concern."""
+    """(start, end, kind) of every cue word whose clause does not go on to a concern."""
     end = len(text) if end is None else end
     found = [(m.start(), m.end(), "allergy") for m in ALLERGY_CUE.finditer(text, start, end)]
-    found += [(m.start(), m.end(), "adverse_reaction") for m in ADVERSE_CUE.finditer(text, start, end)
-              if not CONCERN_AFTER.match(text, m.end())]
-    return sorted(found)
+    found += [(m.start(), m.end(), "adverse_reaction") for m in ADVERSE_CUE.finditer(text, start, end)]
+    return sorted(cue for cue in found if not _concern(text, cue[1], end))
 
 
 def cue_spans(body) -> list[tuple[int, int, str]]:
@@ -184,36 +252,64 @@ def _supported_kinds(body, left, right, allergen, reaction):
     return frozenset(kinds)
 
 
-def _subject(body, masked, start, end, *, cue_anchor=False):
+def _heading_value(body, start):
+    """R3d/R5: the history heading whose value (up to the next label on the line) holds body[start]."""
+    line_left, line_right = _line(body, start)
+    heading = HISTORY_HEADING.match(body, line_left, line_right)
+    if heading is None or start < heading.end() or re.search(r"[:：]", body[heading.end():start]):
+        return None
+    return heading
+
+
+def _free_cue(body, cue_start):
+    """R2: a cue with no word of its own before it in its clause (「…が、副作用は出ていません」) speaks of the whole sentence."""
+    left, _ = _clause(body, cue_start, cue_start)
+    return not _ATTACHED.sub("", SELF_WORD.sub("", body[left:cue_start]))
+
+
+def _bound(body, start, end):
+    """R2: the allergen's clause holds a cue, a reaction word or the relation, it is a heading value, or a cue is free."""
+    left, right = _clause(body, start, end)
+    unit_left, unit_right = _unit(body, start)
+    return bool(_cues(body, left, right) or any(word in body[left:right] for word in REACTION_WORDS)
+                or _heading_value(body, start) is not None
+                or any(_free_cue(body, cue_start) for cue_start, _, _ in _cues(body, unit_left, unit_right)))
+
+
+def _subject(body, masked, start, end):
     """R3a-R3e: whose assertion the allergen (or, without one, the cue) at body[start:end] is.
 
     Returns (subject, history heading, quoted from a record, denied).
     """
     subject, _ = clinical_scope.source_axes(masked, start, end, default="unknown")
     left, right = _unit(body, start)
-    if OTHER_REFERENT.search(body, left, start):
+    if OTHER_REFERENT.search(body, left, end):
         subject = "other"
     not_patient = bool(NOT_THIS_PATIENT.search(body) or NAME_FIELD.search(body))
-    history = False
+    history = settled = False
     line_left, line_right = _line(body, start)
     heading = HISTORY_HEADING.match(body, line_left, line_right)
     if heading is not None:
         history = "歴" in heading["label"]
-        if (subject == "unknown" and not not_patient
-                and (start >= heading.end() or cue_anchor and heading.start("label") <= start < heading.end("label"))
-                and not _LINE_PERSON.search(body, line_left, line_right)):
-            subject = "patient"
+        if subject == "unknown" and not _LINE_PERSON.search(body, line_left, line_right):
+            subject, settled = "patient", True
     quoted = denied = False
     opening = body.rfind("「", left, start)
     closing = body.find("」", end, right)
     if opening >= 0 and closing >= 0 and "」" not in body[opening:start] and \
             RECORD_BEFORE.search(body, left, opening) and RECORD_AFTER.match(body, closing + 1):
         quoted = True
-        if subject in ("unknown", "patient") and not not_patient and \
-                not _LINE_PERSON.search(body, opening, closing):
-            subject = "patient"
-        _, after = _unit(body, right + 1) if right < len(body) else (right, right)
+        if subject in ("unknown", "patient") and not _LINE_PERSON.search(body, opening, closing):
+            subject, settled = "patient", True
+        after = right
+        for _ in range(DENIAL_SENTENCES - 1):
+            after = _unit(body, after + 1)[1] if after < len(body) else after
         denied = bool(QUOTE_DENIAL.search(body, closing, after))
+    if subject == "patient":
+        selves = list(SELF_WORD.finditer(body, left, end))
+        if OTHER_PEOPLE.search(body, selves[-1].end() if selves else left, end) or (
+                not selves and not settled and OWN_TOPIC.search(body, left, end)):
+            subject = "unknown"
     if not_patient and subject == "patient":
         subject = "unknown"
     return subject, history, quoted, denied
@@ -221,43 +317,93 @@ def _subject(body, masked, start, end, *, cue_anchor=False):
 
 def _status(body, masked, start, end, *, quoted):
     """R4: the time of the allergen at body[start:end]."""
+    left, right = _unit(body, start)
+    if LATER_NOW.search(body, end, right):
+        return "unknown"
     if quoted:
         return "past"
     _, period = clinical_scope.source_axes(masked, start, end, default="unknown")
-    left, _ = _unit(body, start)
-    if period == "current" and NUMBERED_AGO.search(body, left, start):
+    if period == "current" and NUMBERED_AGO.search(body, left, end):
         return "past"
+    if period == "current" and CHILDHOOD.search(body, left, end):
+        return "past" if PAST_PREDICATE.search(body, end, right) else "unknown"
     return period
 
 
-def _polarity(body, left, right, start=None):
-    """R5: True (negated), False (affirmed) or None (mixed, or a missing record) for one sentence."""
-    if REPORTED_ABSENCE.search(body, left, right):
-        return None
-    signals = [bool(CUE_NEGATION.match(body, cue_end, right)) for _, cue_end, _ in _cues(body, left, right)]
+def _overlaps(span, spans):
+    return any(span[0] < other[1] and other[0] < span[1] for other in spans)
+
+
+def _verdict(negated, affirmed):
+    """R5: a bound negation alone is a negation, a bound affirmation alone an affirmation; both or neither stay open."""
+    if negated and not affirmed:
+        return True
+    if affirmed and not negated:
+        return False
+    return None
+
+
+def _signals(body, left, right, start=None, end=None):
+    """R5: (open, negated, affirmed) evidence of one sentence, read at an allergen when given.
+
+    Open is open wording, an exception after the allergen, or a negative form that
+    no negation binds; negated and affirmed are bound negations and affirmations.
+    """
+    if OPEN_WORDING.search(body, left, right) or start is not None and EXCEPT_AFTER.search(body, start, right):
+        return True, False, False
+    negations, affirmations, words = [], [], []
+    for cue_start, cue_end, _ in _cues(body, left, right):
+        if match := CUE_NEGATION.match(body, cue_end, right):
+            negations.append((cue_start, match.end()))
+        if match := CUE_AFFIRM.match(body, cue_end, right):
+            affirmations.append((cue_start, max(match.end(), cue_end + 1)))
     for word in REACTION_WORDS:
         for match in re.finditer(re.escape(word), body[left:right]):
-            signals.append(bool(REACTION_NEGATION.match(body, left + match.end(), right)))
-    if start is not None and TOLERATED.search(body, start, right):
-        signals.append(True)
-    if not any(signals):
-        return False
-    return True if all(signals) else None
+            word_start, word_end = left + match.start(), left + match.end()
+            words.append((word_start, word_end))
+            if word not in LACK_IS_SYMPTOM and (negation := REACTION_NEGATION.match(body, word_end, right)):
+                negations.append((word_start, negation.end()))
+            if affirmation := REACTION_AFFIRM.match(body, word_end, right):
+                affirmations.append((word_start, max(affirmation.end(), word_end + 1)))
+    if start is not None:
+        negations += [m.span() for m in TOLERATED.finditer(body, start, right)]
+        if _heading_value(body, start) is not None:
+            affirmations.append((start, end))
+    held = negations + words + [m.span() for m in NOT_A_NEGATION.finditer(body, left, right)]
+    unbound = any(not _overlaps(m.span(), held) for m in NEGATIVE_FORM.finditer(body, left, right))
+    return unbound, bool(negations), any(not _overlaps(span, negations) for span in affirmations)
+
+
+def _polarity(body, left, right, start=None, end=None):
+    """R5: True (negated), False (affirmed) or None (open) for one sentence."""
+    open_, negated, affirmed = _signals(body, left, right, start, end)
+    return None if open_ else _verdict(negated, affirmed)
 
 
 _OCCURRENCE_LIMIT = 64
 
 
+def _reading(body, masked, start, end):
+    """R8: the (subject, polarity) one occurrence of an allergen reads as; None for a sentence silent about it."""
+    left, right = _unit(body, start)
+    open_, negated, affirmed = _signals(body, left, right, start, end)
+    if not (open_ or negated or affirmed):
+        return None
+    return _subject(body, masked, start, end)[0], None if open_ else _verdict(negated, affirmed)
+
+
 def _occurrences_conflict(body, masked, allergen):
-    """R8: an allergen written more than once must read the same (subject, polarity) at every place."""
-    seen = set()
-    for index, match in enumerate(re.finditer(re.escape(allergen), body)):
-        if index >= _OCCURRENCE_LIMIT:
-            return True  # Too many places to read: leave the assertion open.
-        subject = _subject(body, masked, match.start(), match.end())[0]
-        left, right = _unit(body, match.start())
-        seen.add((subject, _polarity(body, left, right, match.start())))
-    return len(seen) > 1
+    """R8: an allergen (and each phrase of it) written more than once must read the same wherever a sentence speaks of it."""
+    parts = {allergen} | {part for part in _PHRASE_BREAK.split(allergen) if len(part) >= 2}
+    for part in parts:
+        seen = set()
+        for index, match in enumerate(re.finditer(re.escape(part), body)):
+            if index >= _OCCURRENCE_LIMIT:
+                return True  # Too many places to read: leave the assertion open.
+            seen.add(_reading(body, masked, match.start(), match.end()))
+        if len(seen - {None}) > 1:
+            return True
+    return False
 
 
 def _status_agrees(model, computed, history):
@@ -278,7 +424,8 @@ def resolve(body, evidence, allergen, reaction) -> Resolution:
     if span is None:  # R1/R9: the reference context is never searched.
         return Resolution(drop="引用が対象の本文に一意に見つかりません")
     quote = body[span[0]:span[1]]
-    if allergen is not None and (allergen not in quote or _VALUE_WORD.fullmatch(allergen)):
+    if allergen is not None and (allergen not in quote or _VALUE_WORD.fullmatch(allergen)
+                                 or _PUNCTUATED.search(allergen)):
         return Resolution(drop="アレルゲンが引用の中にありません")
     if allergen is not None:
         start = span[0] + quote.index(allergen)
@@ -299,14 +446,14 @@ def resolve(body, evidence, allergen, reaction) -> Resolution:
     if not kinds:
         return Resolution(drop="アレルギー・副作用の手がかり語がありません")
     masked = _masked(body)
-    subject, history, quoted, denied = _subject(body, masked, start, end, cue_anchor=allergen is None)
+    subject, history, quoted, denied = _subject(body, masked, start, end)
     status = _status(body, masked, start, end, quoted=quoted)
     conflict = denied or bool(FOLLOW_UP.search(body, left, right) and status == "current")
     if allergen is not None and not conflict:
-        conflict = _occurrences_conflict(body, masked, allergen)
+        conflict = not _bound(body, start, end) or _occurrences_conflict(body, masked, allergen)
     return Resolution(
         evidence=quote, kinds=kinds, subject=subject, status=status, history=history,
-        negated=_polarity(body, left, right, start if allergen is not None else None),
+        negated=_polarity(body, left, right, *((start, end) if allergen is not None else ())),
         certainty="suspected" if UNCERTAIN.search(body, left, right) else "confirmed",
         conflict=conflict)
 
@@ -349,9 +496,8 @@ def same_assertion(a, b) -> bool:
 
 
 def _better(new, old):
-    """Of two copies of one assertion keep the confirmed one, then the one naming a reaction."""
-    return ((not new.get("unverified"), new.get("reaction") is not None)
-            > (not old.get("unverified"), old.get("reaction") is not None))
+    """Of two copies of one assertion keep the one naming a reaction (copies of one key share one resolution)."""
+    return new.get("reaction") is not None and old.get("reaction") is None
 
 
 def validate_items(items, body, drops=None, *, ctx=False) -> tuple[list, int]:
@@ -406,18 +552,21 @@ def stored_assertions(meta, content, *, first_generation):
     return [dict(item) for item in items if isinstance(item, dict) and item.get("unverified") is not True]
 
 
-_PHRASE_BREAK = re.compile(r"[、。，,．！？!?\n「」（）()：:・｜|\s]+|から|より|まで|[はがをにでのともへや]")
-
-
 def allergen_candidates(body, labels=(), meds=()) -> list:
-    """Allergen strings for exhaustive claim gates: label allergens, null, body phrases (20 longest) and med names.
+    """Allergen strings for exhaustive claim gates: label allergens and their padded copies, null, body phrases and med names.
 
-    A test aid for the validator gate; runtime code never calls it.
+    A padded copy is a label allergen as written in the body with 1-8 characters
+    before it or 1-4 after it (the scorer matches allergens by containment). Body
+    phrases are the 20 longest. A test aid for the validator gate; runtime code never calls it.
     """
     found = [None]
     for label in labels:
         if isinstance(label, dict) and isinstance(label.get("allergen"), str):
-            found.append(label["allergen"])
+            allergen = label["allergen"]
+            found.append(allergen)
+            for match in re.finditer(re.escape(allergen), body):
+                found += [body[max(match.start() - k, 0):match.end()] for k in range(1, 9)]
+                found += [body[match.start():match.end() + k] for k in range(1, 5)]
     phrases = sorted({part for part in _PHRASE_BREAK.split(body) if part.strip()},
                      key=lambda part: (-len(part), part))
     found += phrases[:20]
