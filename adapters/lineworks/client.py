@@ -284,7 +284,7 @@ def _http_worker():
         timeout = data["timeout"]
         if (not _allowed_url(url) or data["method"] != "POST"
                 or isinstance(timeout, bool) or not isinstance(timeout, int | float)
-                or not math.isfinite(timeout) or not 0 < timeout <= 120):
+                or not math.isfinite(timeout) or not 0 < timeout <= REQUEST_TIMEOUT_MAX):
             raise ValueError
         body = base64.b64decode(data["body"], validate=True)
         if len(body) > MAX_REQUEST_BYTES:

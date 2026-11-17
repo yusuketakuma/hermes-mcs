@@ -1,11 +1,13 @@
 """Synthetic regressions: LINE WORKS parts that provably never reached the room
 settle not_sent (or are delivered), never stranded as unknown."""
 import asyncio
+import io
 import json
 import os
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from adapters.common import envelopes
@@ -63,6 +65,43 @@ def test_attachment_upload_failure_before_the_file_post_is_not_sent(tmp_path, mo
     if fail_at == "storage":
         # The storage upload gets time for its size, not the fixed 20 s base.
         assert dict(wire.calls)[STORAGE] >= 22
+
+
+def test_large_upload_timeout_passes_the_real_http_worker(monkeypatch):
+    """A 13 MiB body gets a sized timeout above 120 s; the worker must accept it."""
+    seen = []
+
+    class Response:
+        code = 200
+        headers = {}
+
+        def read(self, limit):
+            return b"{}"
+
+        def close(self):
+            pass
+
+    class Opener:
+        def open(self, request, timeout):
+            seen.append((request.full_url, len(request.data), timeout))
+            return Response()
+
+    def run(argv, *, input, timeout, **kwargs):
+        # In-process stand-in for the child: a real one would bypass the stubs.
+        assert argv[-1] == "--http-worker"
+        output = io.StringIO()
+        monkeypatch.setattr(module.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(input)))
+        monkeypatch.setattr(module.sys, "stdout", output)
+        module._http_worker()
+        return SimpleNamespace(returncode=0, stdout=output.getvalue().encode())
+
+    monkeypatch.setattr(module.urllib.request, "build_opener", lambda *handlers: Opener())
+    monkeypatch.setattr(module.subprocess, "run", run)
+    body = b"s" * (13 * 1024 * 1024)
+    status, raw = client(module._http_request)._request(STORAGE, body, "application/octet-stream")
+    assert (status, raw) == (200, b"{}")
+    assert seen == [(STORAGE, len(body), 20 + len(body) // module.UPLOAD_MIN_BYTES_PER_S)]
+    assert seen[0][2] > 120
 
 
 def test_upload_5xx_keeps_its_own_code(tmp_path):
