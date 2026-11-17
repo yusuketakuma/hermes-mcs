@@ -480,6 +480,15 @@ def test_generation_reason_is_rolled_back_with_the_skipped_patient(runtime, monk
     def broken(*args, **kwargs):
         raise ValueError('patient_context_synthetic_unreadable')
 
+    original = patient_context_refresh_readiness._pending
+
+    def pending(*args, **kwargs):
+        snapshot, progress, due = original(*args, **kwargs)
+        snapshot['unfinished'] = True
+        # A stays due so the quota denies it; B stays due so the pass goes on to readiness.
+        return snapshot, progress, {'A': True, 'B': True, 'C': False}
+
+    monkeypatch.setattr(patient_context_refresh_readiness, '_pending', pending)
     monkeypatch.setattr(patient_context_refresh_readiness, '_observe_readiness', broken)
     result = step(runtime)
     assert result['wait_generation_quota'] == 0 and not calls
