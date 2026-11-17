@@ -420,11 +420,13 @@ def current_summary(db, project_id: int, message_id: int,
 
 
 def _summary_superseded(db, project_id, message_id, summary_id, current) -> bool:
-    """Whether the summary a notice was built on can never be current again.
+    """Whether the summary a notice was built on has been replaced.
 
     True when another summary is current now, or when the notice's own summary
     exists for this message but its producer is no longer accepted (a local
-    model change). Anything else stays unverified and is retried."""
+    model change). Anything else stays unverified and is retried. A later
+    return to the old model does not revive the notice; the summary's own
+    notice is built again from the summary."""
     if type(summary_id) is not int or summary_id <= 0:
         return False
     if current is not None and summary_id == current["artifact_id"]:

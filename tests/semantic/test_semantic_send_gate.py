@@ -425,8 +425,8 @@ def test_notice_on_summary_of_replaced_local_model_is_terminal(tmp_path, monkeyp
         with pytest.raises(error, match="stale_generation"):
             semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config(), in_progress)
 
-    # a rebuilt summary does not revive the old notice either
-    _summary(db)
+    # a summary rebuilt by the new model does not revive the old notice either
+    _summary(db, model="synthetic-local-b")
     with pytest.raises(semantic_send_gate.StaleSend, match="stale_generation"):
         semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
     db.close()
