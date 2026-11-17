@@ -95,11 +95,21 @@ def test_source_normal_fail_repairs_all_units_preserving_original_chunks_and_sup
     assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
 
 
-@pytest.mark.parametrize('role', ['local_takeover', 'local'])
-def test_a_local_lane_never_sends_a_source_quality_repair(runtime, source_repair, monkeypatch, role):
+@pytest.mark.parametrize('case,role,reason', [
+    ('takeover', 'local_takeover', context_refresh.CHILD_WAIT_REASON),
+    # The patient left the cloud scope: a local lane serves it and no child would repair it.
+    ('left_scope', 'local', 'source_quality_deferred'),
+    ('left_scope', 'local_takeover', 'source_quality_deferred'),
+    # The lane serves the patient outside the cloud scope, and the patient joins it while the
+    # unit runs: only a read inside the repair would see the cloud on.
+    ('joins_scope', 'local', 'source_quality_deferred'),
+])
+def test_a_local_lane_never_sends_a_source_quality_repair(runtime, source_repair, monkeypatch, case, role, reason):
     """Reproduction: a takeover lane audited the child's cloud scan, the audit failed and the
-    repair went to the cloud from the lane. A local lane neither sends nor reserves a repair;
-    under the takeover the repair waits for a child (the patient is passed over meanwhile)."""
+    repair went to the cloud from the lane. A local lane neither sends nor reserves a repair and
+    keeps the source's quality state as with the cloud off; only where the takeover turned the
+    cloud off does the pass report a wait for a child."""
+    import sys
     led, clock, _ = runtime
     for _ in range(20):
         result = step(runtime)
@@ -109,27 +119,38 @@ def test_a_local_lane_never_sends_a_source_quality_repair(runtime, source_repair
     else:
         pytest.fail('independent source coverage oracle did not find the omitted bed')
     sent, reserved = len(source_repair['sent']), len(led.artifacts('cloud_usage_reserve'))
-    if role == 'local':
-        # The lane serves the patient outside the cloud scope, and the patient joins the cloud
-        # scope while its unit runs: only a later read (the repair's own, before) sees it on.
-        import sys
-        real = worker._cloud_mode
+    real = worker._cloud_mode
+    if case == 'left_scope':
+        monkeypatch.setattr(worker, '_cloud_mode', lambda *args: 'off')
+    elif case == 'joins_scope':
         monkeypatch.setattr(worker, '_cloud_mode', lambda *args: real(*args) if sys._getframe(1).f_globals[
             '__name__'] == 'patient_context_quality_controller' else 'off')
     outcomes = []
     for _ in range(4):
         clock.mono += context_refresh.CHILD_WAIT_S
+        clock.wall += 61   # past the deferred source's retry
         outcomes.append(step(runtime, role=role))
     assert len(source_repair['sent']) == sent and len(led.artifacts('cloud_usage_reserve')) == reserved, outcomes
-    if role == 'local_takeover':
-        assert outcomes[0]['reason'] == context_refresh.CHILD_WAIT_REASON, outcomes
-    else:
-        monkeypatch.setattr(worker, '_cloud_mode', real)
+    assert outcomes[0]['reason'] == reason, outcomes
+    # The deferral is recorded on the source like a plain local deferral, so a restarted lane
+    # or the other lane does not take it up again at once.
+    scan = json.loads(led.artifacts(patient_context_refresh_state.SCAN, project_id=1)[-1]['content'])
+    assert scan['quality_state'] == 'deferred' and scan['next_try'] > clock.wall - 61 and not scan['audited'], scan
+    monkeypatch.setattr(worker, '_cloud_mode', real)
     # A child pass, once the deferred unit's retry is due, repairs the source in the cloud.
     clock.wall += 3600
     drain(runtime)
     assert len(source_repair['sent']) == sent + 2
     assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
+
+
+def test_quality_steps_require_the_units_cloud_mode():
+    """No caller can leave out the unit's cloud mode, which decides whether a repair is sent."""
+    for call in (lambda: patient_context_quality_controller._quality_step(*[None] * 7),
+                 lambda: patient_context_quality_controller._quality_repair_candidate(*[None] * 14),
+                 lambda: patient_context_quality_controller._source_quality_repair_step(*[None] * 10)):
+        with pytest.raises(TypeError, match='cloud_mode'):
+            call()
 
 
 @pytest.mark.parametrize('code', ['patient_context_prompt_capacity', 'nightly_prompt_capacity',
@@ -975,19 +996,32 @@ def publish_summary_repair(runtime, monkeypatch, tmp_path, *, save_interrupted=F
     return sends
 
 
-def test_a_takeover_lane_never_sends_a_summary_quality_repair(runtime, cloud, monkeypatch, tmp_path):
+@pytest.mark.parametrize('role,left_scope,reason', [
+    ('local_takeover', False, context_refresh.CHILD_WAIT_REASON),
+    ('local_takeover', True, 'summary_quality_deferred'),
+    ('local', True, 'summary_quality_deferred'),
+])
+def test_a_local_lane_never_sends_a_summary_quality_repair(runtime, cloud, monkeypatch, tmp_path, role, left_scope, reason):
     """Reproduction: the overview's audit failed and a takeover lane sent its repair to the
-    cloud. The repair waits for a child instead, and a child pass then makes it once."""
+    cloud. A local lane defers it as with the cloud off; a child pass then makes it once."""
     led, clock, _ = runtime
 
     def takeover(sends):
         reserved = len(led.artifacts('cloud_usage_reserve'))
+        real = worker._cloud_mode
+        if left_scope:
+            monkeypatch.setattr(worker, '_cloud_mode', lambda *args: 'off')
         outcomes = []
         for _ in range(4):
             clock.mono += context_refresh.CHILD_WAIT_S
-            outcomes.append(step(runtime, role='local_takeover'))
+            clock.wall += 61
+            outcomes.append(step(runtime, role=role))
         assert not sends and len(led.artifacts('cloud_usage_reserve')) == reserved, outcomes
-        assert context_refresh.CHILD_WAIT_REASON in [outcome.get('reason') for outcome in outcomes], outcomes
+        waited = [outcome for outcome in outcomes if outcome.get('lane') == 'A' and outcome['status'] == 'deferred']
+        assert waited and {outcome['reason'] for outcome in waited} == {reason}, outcomes
+        progress = patient_context_refresh_state._latest(led.db, patient_context_refresh_state.PROGRESS, 1)[0]
+        assert progress['quality_state'] == 'deferred', progress
+        monkeypatch.setattr(worker, '_cloud_mode', real)
         clock.wall += 3600   # the deferred unit's retry is due for the child
 
     publish_summary_repair(runtime, monkeypatch, tmp_path, before_repair=takeover)

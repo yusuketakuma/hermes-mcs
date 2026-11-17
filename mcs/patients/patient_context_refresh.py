@@ -1012,7 +1012,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
 
     def quality_step(*args, **kwargs):
         """Audit under this unit's cloud mode: a local lane, the takeover included, never sends a
-        repair. The takeover's repair waits for a child, like the unit's other cloud work."""
+        repair, which is deferred as with the cloud off. Only where the takeover turned the cloud
+        off (a child would make the repair) does the pass report a wait for a child."""
         status, value = patient_context_quality_controller._quality_step(*args, cloud_mode=mode, **kwargs)
         if status == "cloud_off":
             repair_waits[0] = takeover
@@ -1688,7 +1689,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                             result.pop("quality_hold_key", None)
                     break
     except patient_context_refresh_state.Deferred as exc:
-        deferred_reason = CHILD_WAIT_REASON if repair_waits[0] else str(exc) or "patient_context_waiting"
+        deferred_reason = str(exc) or "patient_context_waiting"
         if (generation_claim is not None and not generation_decision['resume'] and not generation_quality
                 and not generation_uncertain and not generation_contacted and (deferred_reason in (
                     'patient_context_capacity_or_deadline', 'patient_context_admission_deferred', 'patient_context_turn_busy', 'patient_context_local_capacity')
@@ -2132,7 +2133,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             return_generation('complete' if cloud_value is not None else 'unknown')
     return {"status": "failed" if failure else "deferred" if deferred_reason else "progressed",
             "done": int(not failure and deferred_reason is None), "lane": lane,
-            **({"reason": failure or deferred_reason} if failure or deferred_reason else {}),
+            # A repair waiting for a child keeps its quality state above; the pass reports the wait.
+            **({"reason": failure or (CHILD_WAIT_REASON if repair_waits[0] else deferred_reason)}
+               if failure or deferred_reason else {}),
             **({"guard_error": guard_error[0]} if guard_error[0] is not None else {}),
             **({"cloud_refusal": cloud_refusal[0]} if cloud_refusal[0] is not None else {}),
             "lock_wait_s": waited, **stats}
