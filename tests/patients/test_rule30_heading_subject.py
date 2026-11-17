@@ -6,18 +6,21 @@ family or other label hides the patient's own allergy, adverse reaction or wish:
 家族の意向／家族の希望 is the family's, and a value of an allergy, adverse-event or
 preference heading is a family member's or another patient's only when the whole
 value is exactly a plain kin word or another patient, は (never も, which says the
-patient shares the fact, and never が, which marks an actor or a reporter; 本人以外
-holds nothing, since it implies the patient has something), and one fact of a closed shape for the heading: an
+patient shares the fact, and never が, which marks an actor or a reporter; everyone but
+the patient (本人以外・他者・他人・第三者) holds nothing, since it implies the patient has
+something), and one fact of a closed shape for the heading: an
 allergy (卵アレルギー・合成薬Aで発疹・花粉症・なし), an adverse reaction (合成薬Bで眠気・
 なし) or a stance on one thing (施設入所を希望・延命を望まない・反対). No space, symbol,
 bracket, second item, clause, request (〜してほしい) or permission (同席可) may
 follow, the fact names no person, group or pointer back to the patient's record
-(皆・全員・本人・入居者・対象・同じ・当該・前述), and an
+(皆・全員・本人・入居者・対象・同じ・同薬; nor opens with a determiner that refers back:
+当該・前述・左記・本件・当薬・以上), and an
 honorific kin word that can be the patient in a note to the family (ご主人・お母様)
 holds nothing. A staff member holds only a proposal under a policy (方針) heading.
 本人の意向／本人の希望 is the patient's and is never relabelled; a person heading its
 value only withdraws the assertion. 家族の意向／家族の希望 is the family's only when its
-value names no patient word (本人・患者・利用者・私). Everything else stays ``unspecified``, the
+value names no patient word (本人・患者・利用者・対象者・Pt・自身・私・彼), even after a
+holder (母本人は). Everything else stays ``unspecified``, the
 former behaviour and the safe direction. Fully synthetic text only.
 """
 import copy
@@ -243,7 +246,7 @@ def test_a_person_who_observes_reports_or_acts_never_relabels_the_patients_fact(
     ("方針：家族は在宅継続を希望", "family"),
     ("意向：別の利用者は個室を希望", "other"),
     ("アレルギー：他の利用者は卵アレルギー", "other"),
-    ("副作用：他者は合成薬Bで眠気", "other"),
+    ("副作用：他の利用者は合成薬Bで眠気", "other"),
     ("方針：看護師は週3回訪問を提案", "other"),
     ("療養方針：ケアマネは通所の継続を推奨", "other"),
     ("本人の意向：自宅で最期を迎えたい", "patient"),
@@ -333,14 +336,40 @@ SHARED_OR_POINTED_FACTS = [
     "副作用：娘は先述薬で眠気", "アレルギー：妻は前出アレルギー", "副作用：妻は前記薬で眠気",
     "アレルギー：妻は右記アレルギー", "アレルギー：妻は下記アレルギー", "アレルギー：妻は以上アレルギー",
     "希望：妻は同じ施設を希望", "方針：医師は同じ内容を提案", "副作用：妻はこれで眠気", "副作用：妻はあれで眠気",
-    # 本人以外 implies the patient has something.
+    # A determiner that refers back opens the fact, one per determiner and per head.
+    "副作用：妻は当薬で眠気", "アレルギー：妻は当アレルギー", "副作用：妻は本剤で眠気", "希望：妻は本件を希望",
+    "アレルギー：妻は本品アレルギー", "副作用：妻は該薬で眠気", "アレルギー：妻は前項アレルギー",
+    "アレルギー：妻は前回アレルギー", "アレルギー：妻は前掲アレルギー", "アレルギー：妻は前例アレルギー",
+    "副作用：妻は上薬で眠気", "アレルギー：妻は上欄アレルギー", "アレルギー：妻は左記アレルギー",
+    "希望：妻は左記を希望", "アレルギー：妻は既知アレルギー", "アレルギー：妻は既往アレルギー",
+    "副作用：妻は先薬で眠気", "アレルギー：妻は件アレルギー", "アレルギー：妻は例アレルギー",
+    "希望：妻は以下を希望", "副作用：妻は左記薬で眠気", "希望：長男は在宅での前述内容を希望",
+    # A together-word of 同 that names the item itself is the patient's item.
+    "副作用：妻は同時薬で眠気", "副作用：妻は同日剤で眠気",
+    # Everyone but the patient implies the patient has something.
     "アレルギー：本人以外は特になし", "アレルギー：本人以外はなし", "副作用：本人以外はなし",
+    "アレルギー：他者は特になし", "アレルギー：他人は特になし", "アレルギー：第三者は特になし",
+    "副作用：他者は合成薬Bで眠気", "希望：他人は拒否", "希望：第三者は希望なし",
+    # A stance as the object of a proposal is someone's wish, not a thing.
+    "方針：医師は意向を提案",
     # 家族の意向 whose value names the patient, on any line.
     "家族の意向：本人は自宅を希望", "家族の希望：患者は延命を拒否", "家族の意向：在宅を希望（本人の意向）",
     "家族の意向：在宅を希望\n本人は施設を希望", "家族の意向：自宅で看取りたい\n本人もそれを望んでいる",
     "家族の意向：ご本人様は自宅を希望", "家族の希望：御本人の希望通りに", "家族の意向：入居者様は施設継続を希望",
     "家族の希望：利用者さんは自宅を希望", "家族の意向：当人は在宅を希望", "家族の意向：私は在宅を希望",
     "家族の意向：自分は在宅を希望",
+    # One per patient word of the shared list, and after a holder (母本人は).
+    "家族の意向：ほんにんは在宅を希望", "家族の意向：当事者は在宅を希望", "家族の意向：対象者は在宅を希望",
+    "家族の希望：対象者の希望通り", "家族の意向：被保険者は在宅を希望", "家族の意向：要介護者は在宅を希望",
+    "家族の意向：被介護者は在宅を希望", "家族の希望：クライアントは在宅を希望", "家族の希望：お客様は在宅を希望",
+    "家族の意向：自身は在宅を希望", "家族の希望：ご自身の意思を尊重", "家族の意向：じぶんは在宅を希望",
+    "家族の希望：わたしは在宅を希望", "家族の希望：わたくしは在宅を希望", "家族の意向：当方は在宅を希望",
+    "家族の希望：僕は在宅を希望", "家族の希望：俺は在宅を希望", "家族の意向：彼は在宅を希望",
+    "家族の意向：彼女は在宅を希望", "家族の意向：あの方は在宅を希望", "家族の意向：この方は在宅を希望",
+    "家族の意向：その方は在宅を希望", "家族の意向：Ptは在宅を希望", "家族の意向：ptは在宅を希望",
+    "家族の意向：PTは在宅を希望", "家族の希望：Ptの意向を尊重",
+    "家族の意向：母本人は在宅を希望", "家族の意向：父自身は在宅を希望", "家族の希望：お母さん自身は在宅を希望",
+    "家族の意向：長男本人は在宅を希望", "家族の意向：長男は本人と在宅を希望",
     # Cheap patient-denoting tokens.
     "アレルギー：夫は対象アレルギー", "副作用：夫は対象で眠気", "アレルギー：夫はptアレルギー",
     "アレルギー：夫はPtアレルギー", "アレルギー：夫はPT卵アレルギー", "副作用：夫はA氏で眠気",
@@ -380,7 +409,19 @@ def test_a_shared_or_pointed_fact_never_becomes_a_family_or_other_fact(line):
     ("希望：娘は同居を希望しています", "family"), ("希望：夫は受診への同行を希望", "family"),
     ("方針：医師は在宅を提案", "other"), ("家族の希望：ご主人は在宅を希望", "family"),
     ("家族の意向：在宅を希望", "family"), ("家族の意向：長男は在宅を希望", "family"),
-    ("アレルギー：夫はOPTアレルギー", "family"),
+    ("アレルギー：夫はOPTアレルギー", "family"), ("アレルギー：夫はPTFEアレルギー", "family"),
+    # A holder with 本人 or 自身 under a heading that is not 家族の意向.
+    ("アレルギー：母本人は卵アレルギー", "family"),
+    # Not everyone but the patient: one other patient keeps the holder.
+    ("副作用：他の利用者は合成薬Bで眠気", "other"),
+    # A determiner kanji that names a thing, not a reference back.
+    ("希望：妻は当院への入院を希望", "family"), ("希望：長男は本日の面会を希望", "family"),
+    ("希望：長男は前日の面会を希望", "family"), ("希望：妻は上肢リハビリを希望", "family"),
+    ("副作用：妻は眠前薬で眠気", "family"), ("副作用：妻は先発品で眠気", "family"),
+    ("希望：妻は左膝の手術を希望", "family"), ("アレルギー：妻は既製品アレルギー", "family"),
+    # 同 that means together points at nothing.
+    ("希望：長男は同室を希望", "family"), ("希望：長男は同日退院を希望", "family"),
+    ("希望：妻は同時面会を希望", "family"), ("副作用：妻は同時服用で眠気", "family"),
 ])
 def test_the_same_shape_without_the_excluded_word_keeps_its_holder(line, subject):
     assert _line_subjects(line) == [subject]
@@ -394,6 +435,11 @@ def test_the_same_shape_without_the_excluded_word_keeps_its_holder(line, subject
     "アレルギー：お孫さんは卵アレルギー",
     # も: the patient may share it; formerly family / other.
     "アレルギー歴：妻も卵アレルギーあり", "副作用歴：別の利用者も合成薬Fで発疹",
+    # A group, patient or pointer word, or a referring determiner, that is a thing here.
+    "希望：長女は全額負担を希望", "希望：妻は全面介助を希望", "アレルギー：妻は全身麻酔で発疹",
+    "希望：長男は対象施設を希望", "希望：長女は以上を希望", "希望：長男は氏名公表を拒否",
+    "副作用：妻は同系統薬で眠気", "アレルギー：妻は同種果実アレルギー", "副作用：妻は下剤で下痢",
+    "アレルギー：他人は卵アレルギー", "意向：妻は意向を了承",
 ])
 def test_a_family_fact_outside_the_allowed_shapes_stays_unspecified(line):
     assert _line_subjects(line) == ["unspecified"]
