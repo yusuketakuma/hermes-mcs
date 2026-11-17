@@ -255,3 +255,102 @@ def test_labels_and_workflows_agree_with_the_module():
     consult = (ROOT / ".github/workflows/agent-consult.yml").read_text()
     assert "contents: write" not in consult and "pull-requests:" not in consult
     assert "sandbox: read-only" in consult and "github_token: ${{ github.token }}" in consult
+
+
+OWNER = "yusuketakuma"
+
+
+def _review(rid, login="coderabbitai[bot]", body="**Actionable comments posted: 2**", state="COMMENTED", sha=HEAD):
+    return {"id": rid, "user": {"login": login}, "body": body, "state": state, "commit_id": sha}
+
+
+def _mark(kind, ids, login="github-actions[bot]"):
+    return {"user": {"login": login}, "body": f"text\n<!-- agent-review:{kind} {ids} -->"}
+
+
+@pytest.mark.parametrize("review, actionable", [
+    (_review(1, OWNER, "", "CHANGES_REQUESTED"), True),
+    (_review(1, OWNER, "looks fine", "COMMENTED"), False),
+    (_review(1, OWNER, "", "APPROVED"), False),
+    (_review(1), True),
+    (_review(1, body="**Actionable comments posted: 0**\n\nNitpick comments (3)"), False),
+    (_review(1, body=""), False),  # a reply in a thread
+    (_review(1, "devin-ai-integration[bot]", "**Devin Review** found 3 potential issues."), True),
+    (_review(1, "devin-ai-integration[bot]", "**Devin Review** found 1 new potential issue."), True),
+    (_review(1, "devin-ai-integration[bot]", "## ✅ Devin Review: No Issues Found"), False),
+    (_review(1, "devin-ai-integration[bot]", "## 🔍 Devin Review: 1 flag\n\nNot posted on this PR"), False),
+    (_review(1, "chatgpt-codex-connector[bot]", "**Actionable comments posted: 2**", "CHANGES_REQUESTED"), False),
+    (_review(1, "someone", "**Actionable comments posted: 2**", "CHANGES_REQUESTED"), False),
+])
+def test_only_the_owner_and_reporting_review_bots_start_a_repair(review, actionable):
+    assert ac.actionable_review(review, OWNER) is actionable
+
+
+def _plan(reviews, comments=(), labels=None, busy=False, automation=True, pr=None):
+    pr = pr or {**_pr(), "state": "open"}
+    return ac.review_plan(pr, labels or {"5": ["担当:claude"]}, list(reviews), list(comments), automation, OWNER, busy)
+
+
+def test_new_findings_cost_one_attempt_together_and_are_never_counted_twice():
+    plan = _plan([_review(11), _review(12, "devin-ai-integration[bot]", "**Devin Review** found 1 potential issue.")])
+    assert plan == {"reviews": [11, 12], "count": True, "reason": ""}
+    # once queued and taken, the same reviews start nothing
+    done = [_mark("queued", "11,12"), _mark("handled", "11,12")]
+    assert _plan([_review(11), _review(12)], done)["reviews"] == []
+    # a marker written by anyone but the workflows is ignored
+    forged = [_mark("queued", "11", "someone"), _mark("handled", "11", "someone")]
+    assert _plan([_review(11)], forged)["count"] is True
+
+
+def test_a_review_of_an_older_head_or_without_findings_starts_nothing():
+    assert _plan([_review(11, sha=OLD)])["reviews"] == []
+    assert _plan([_review(11, body="**Actionable comments posted: 0**")])["reviews"] == []
+
+
+def test_a_queued_review_no_run_took_is_sent_again_without_a_new_attempt():
+    queued = [_mark("queued", "11")]
+    assert _plan([_review(11)], queued) == {"reviews": [11], "count": False, "reason": ""}
+    # while a Claude writer run waits, re-sending would cancel it
+    assert _plan([_review(11)], queued, busy=True)["reviews"] == []
+    # a new finding still counts, and carries the waiting one along
+    assert _plan([_review(11), _review(13)], queued, busy=True) == {"reviews": [11, 13], "count": True, "reason": ""}
+
+
+def test_review_findings_reuse_the_repair_eligibility_and_attempt_limit():
+    assert _plan([_review(11)], automation=False)["reviews"] == []
+    assert "#5" in _plan([_review(11)], labels={"5": ["担当:dots"]})["reason"]
+    assert "#5" in _plan([_review(11)], labels={"5": ["担当:claude", "失敗:不明"]})["reason"]
+    assert _plan([_review(11)], pr={**_pr(branch="codex/x"), "state": "open"})["reviews"] == []
+    # the review's attempt is the same 試行:N as a CI failure: the third one hands the issue to the owner
+    remove, add, exhausted = ac.next_attempt(["担当:claude", "試行:2"])
+    assert exhausted and ac.OWNER_LABEL in add and "担当:claude" in remove
+    assert _plan([_review(11)], labels={"5": ["試行:3", ac.OWNER_LABEL]})["reviews"] == []
+
+
+def test_cli_plans_review_findings(tmp_path, capsys):
+    (tmp_path / "pr.json").write_text(json.dumps({**_pr(), "state": "open"}))
+    (tmp_path / "labels.json").write_text(json.dumps({"5": ["担当:claude"]}))
+    (tmp_path / "reviews.json").write_text(json.dumps([[_review(11)]]))
+    (tmp_path / "comments.json").write_text(json.dumps([[]]))
+    ac.main(["review", "--pr", str(tmp_path / "pr.json"), "--issue-labels", str(tmp_path / "labels.json"),
+             "--reviews", str(tmp_path / "reviews.json"), "--comments", str(tmp_path / "comments.json"),
+             "--owner", OWNER, "--automation", "true"])
+    assert json.loads(capsys.readouterr().out) == {"reviews": [11], "count": True, "reason": ""}
+
+
+def test_review_workflow_never_runs_pr_code_and_hands_findings_as_data():
+    review = (ROOT / ".github/workflows/agent-review.yml").read_text()
+    head = review.split("jobs:")[0]
+    assert "pull_request_target" not in review and "pull_request_review:" in head
+    # the review event runs this file from the PR merge ref: the one checkout names main and only ci/
+    assert review.count("ref:") == 1 and "ref: refs/heads/main" in review and "sparse-checkout: ci" in review
+    assert "permissions: {}" in head and "contents: write" not in review and "pull-requests: read" in review
+    assert "vars.AUTOMATION_ENABLED == 'true'" in review and "cancel-in-progress: false" in review
+    # review text is fetched by the repair run into a file, never interpolated into a script or prompt
+    assert "github.event.review.body" not in review and "github.event.comment" not in review
+    assert review.index("agent-review:queued") < review.index("agent_control.py attempt") < review.index(
+        "gh workflow run agent-claude-repair.yml")
+    repair = (ROOT / ".github/workflows/agent-claude-repair.yml").read_text()
+    assert "^[0-9]+(,[0-9]+)*$" in repair and "agent-review:handled" in repair
+    assert repair.index("agent-review:handled") < repair.index("ref: ${{ steps.pr.outputs.branch }}")
+    assert "> .git/agent-review.md" in repair and "inputs.reviews }}" not in repair.split("prompt:")[1]
