@@ -26,7 +26,8 @@ def test_derive_reserves_verification_and_existing_tail_for_every_stage(tmp_path
             return 154
         monkeypatch.setattr(snapshots, "snapshot_verify_timeout_s", verification_budget)
         monkeypatch.setattr(run_check.time, "monotonic", lambda: 0)
-        def rules(*args, deadline):
+        def rules(*args, deadline, scope_sql):
+            assert scope_sql == ""  # no host extract.upgrade_scope: the rule query is unrestricted
             seen["rules"] = deadline
             return {"done": 0, "pids": []}
         def drugs(*args, deadline):

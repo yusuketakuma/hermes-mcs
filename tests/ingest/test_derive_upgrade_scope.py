@@ -82,3 +82,26 @@ def test_stage_derive_rule_pass_follows_the_scope(tmp_path, monkeypatch, cfg, ex
         again = {"errors": []}
         run_check.stage_derive(db, again, time.monotonic() + 600, loaded, llm_budget_cap=0)
         assert again["extracted"] == 0
+
+
+@pytest.mark.parametrize("cfg", [_UNSET, {}, {"extract": {}}, {"extract": {"patient_state_context": True}}],
+                         ids=lambda value: "unset" if value is _UNSET else repr(value))
+def test_an_empty_or_unset_scope_runs_rules_and_llm_exactly_as_before(tmp_path, monkeypatch, cfg):
+    """Unset = "all" = the behaviour before the setting: both passes run, neither query changes."""
+    import extract_llm
+    import upgrade_scope
+    loaded = _host_config(tmp_path, monkeypatch, cfg)
+    seen = []
+    monkeypatch.setattr(extract, "run_pending", lambda ledger, **kw: (seen.append(("rules", kw["scope_sql"])),
+                                                                      {"done": 0, "pids": []})[1])
+    monkeypatch.setattr(extract_llm, "pinned_slot_busy", lambda _: False)
+    monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: None)
+    monkeypatch.setattr(extract_llm, "run_pending", lambda ledger, **kw: (seen.append(("llm", None)),
+                                                                          {"done": 0, "pids": []})[1])
+    assert upgrade_scope.selection_sql(upgrade_scope.live(), "llm") == ""
+    assert upgrade_scope.selection_sql(upgrade_scope.live(), "rule") == ""
+    with closing(_ledger(tmp_path)) as db:
+        result = {"errors": [], "realtime_ids": [1]}
+        run_check.stage_derive(db, result, time.monotonic() + 600, loaded)
+        assert seen[:2] == [("rules", ""), ("llm", None)]
+        assert not any(e.startswith(("extract:", "extract_llm:")) for e in result["errors"])
