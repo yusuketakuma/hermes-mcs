@@ -419,7 +419,7 @@ def test_a_lab_unit_in_the_source_keeps_the_reading_next_to_dosing_words(name, v
     ("食後血糖", "180", "食後血糖 180"),
     ("リチウム濃度", "0.8", "リチウム濃度 0.8 朝夕内服中"),
 ])
-def test_a_unit_less_lab_without_a_dosing_cue_in_its_clause_keeps_the_reading(name, value, body):
+def test_a_unit_less_lab_in_a_lab_layout_keeps_the_reading(name, value, body):
     assert clinical_values.lab_candidate(name, value, None, body)["confirmation"] == "quote_supported"
 
 
@@ -449,26 +449,6 @@ _DOSES_WITHOUT_A_CUE_WORD = [
 def test_a_unit_less_amount_outside_the_band_stays_a_candidate(name, value, body):
     lab = _validated(name, value, None, body)
     assert lab["normalized"]["confirmation"] == "unverified"
-
-
-# Timing and route words also say when blood was drawn; an in-band unit-less value
-# next to them is the reading. So is an amount whose dosing words sit in another clause.
-_ELECTROLYTES = (("ナトリウム", "128"), ("カリウム", "5.8"), ("カルシウム", "9.1"))
-_SAMPLING_CONTEXTS = (
-    "食後 {}", "食前採血 {}", "朝食前 {}", "起床時 {}", "処方前 {}", "採血 {} 投与前",
-    "{} 食後2時間", "{} のため点滴", "{}\n点滴開始", "点滴後 {}", "{} 内服前の採血",
-    "{} 経口摂取不良", "{} 週1回測定", "{} 月1回採血", "朝夕 {}", "{} 就寝前に採血",
-)
-
-
-@pytest.mark.parametrize("name,value,body", [
-    (name, value, context.format(f"{name} {value}"))
-    for name, value in _ELECTROLYTES for context in _SAMPLING_CONTEXTS
-])
-def test_timing_and_route_words_do_not_hide_an_in_band_reading(name, value, body):
-    lab = _validated(name, value, None, body)
-    assert lab["normalized"]["confirmation"] == "quote_supported"
-    assert not lab.get("unverified", False)
 
 
 @pytest.mark.parametrize("name,value,unit,body", [
@@ -527,10 +507,13 @@ def test_the_bands_match_their_recorded_provenance():
     assert basis["used_by_code"] is True
     assert {item: band for item, band in recorded.items() if band} == basis["values"]
     assert all(isinstance(source["verified_from_primary"], bool) for source in sources.values())
-    assert all(source["sha256"] and source["bytes"] for source in sources.values()
-               if source["verified_from_primary"])
-    assert all(source["verification_note"] for source in sources.values()
-               if not source["verified_from_primary"])
+    for source in sources.values():
+        # Only a fetched original has a hash, a size, a retrieval date and a verified edition.
+        verified = source["verified_from_primary"]
+        assert bool(source["sha256"] and source["bytes"] and source["retrieved_on"]) is verified
+        assert source["edition_verified"] is verified
+        if not verified:
+            assert source["verification_note"] and source["retrieval_attempted_on"]
     assert all(Decimal(band["low"]) < Decimal(band["high"]) for band in recorded.values() if band)
 
 
@@ -566,10 +549,115 @@ def _confirmation(name, value, body):
     return _validated(name, value, None, body)["normalized"]["confirmation"]
 
 
-def test_the_dosing_cue_is_written_in_the_folded_form_it_is_searched_on():
-    # Hiragana or spaces in the cue would never match the folded quote.
-    pattern = clinical_values._DOSING_CUE.pattern
-    assert clinical_values.fold_surface(pattern) == pattern
+
+
+_ELECTROLYTES = (("ナトリウム", "128"), ("カリウム", "5.8"), ("カルシウム", "9.1"))
+
+
+def test_the_lab_layout_is_written_in_the_folded_form_it_is_matched_on():
+    # Hiragana or spaces in a pattern would never match the folded quote.
+    for pattern in (clinical_values._LAB_PREFIX, clinical_values._LAB_TAIL, clinical_values._LAB_TAIL_END):
+        assert clinical_values.fold_surface(pattern.pattern) == pattern.pattern
+
+
+# A unit-less reading is confirmed only in a lab layout on its own line: before the
+# item a bullet, a lab header, a date or other readings; after the number units,
+# flags, a note, a previous value, other readings or words about the value.
+_LAB_LAYOUTS = (
+    "{}", "・{}", "- {}", "1. {}", "採血 {}", "採血で{}", "本日採血 {}", "本日の{}", "血液検査 {}",
+    "検査結果：{}", "【検査】{}", "電解質：{}", "緊急値：{}", "2026/11/16 {}", "11/16 {}", "11月16日 {}",
+    "{} 低値", "{}と低値", "{} ↓", "{} で推移", "{} 上昇", "{}で正常範囲", "{} 要経過観察",
+    "{}（前回 130）", "{} 前回 130", "{}でした", "{}と報告します", "{} - 安定",
+    "{}、合成薬B 1錠追加", "{} のため点滴", "{}。内服は分3で継続", "{}；合成薬A 分2継続",
+    "合成薬A 1錠。{}", "合成薬A 1錠；{}",
+)
+
+
+@pytest.mark.parametrize("name,value,body", [
+    (name, value, layout.format(f"{name} {value}")) for name, value in _ELECTROLYTES for layout in _LAB_LAYOUTS
+])
+def test_a_unit_less_reading_in_a_lab_layout_is_confirmed(name, value, body):
+    assert _confirmation(name, value, body) == "quote_supported"
+
+
+# Anything else before the item or after the number keeps it a candidate with its
+# value: salt and solution words (also set apart by a space, a comma or a line
+# break), katakana drug names, timing, PRN, dose and form words, ranges and trends.
+_OTHER_LAYOUTS = (
+    "塩化 {}", "塩化、{}", "塩化\n{}", "乳酸 {}", "炭酸水素 {}", "維持液 {}", "スローケー {}",
+    "ロスバスタチン {}", "アトルバスタチン {}", "ロサルタン {}", "フェニトイン {}", "合成薬A 1錠、{}",
+    "食後 {}", "朝食前 {}", "朝夕 {}", "点滴後 {}", "1T {}", "包 {}",
+    "{} 食後2時間", "{} 内服前の採血", "{} 経口摂取不良", "{} 週1回測定", "{} を処方", "{} に増量",
+    "{} 朝夕", "{} 適宜", "{} 疼痛時", "{} 不眠時", "{} とんぷく", "{} 倍散", "{} 半錠", "{} 朝1",
+    "{} 分2", "{} 1日2回", "{} 散在", "{} 包括", "{}→2", "{}⇒2", "{}±1", "{}前後", "{}台", "{}(2)",
+)
+
+
+@pytest.mark.parametrize("name,value,body", [
+    (name, value, layout.format(f"{name} {value}")) for name, value in _ELECTROLYTES for layout in _OTHER_LAYOUTS
+])
+def test_a_unit_less_reading_outside_a_lab_layout_stays_a_candidate(name, value, body):
+    lab = _validated(name, value, None, body)
+    assert lab["normalized"]["confirmation"] == "unverified"
+    assert lab["unverified"] is True and lab["value"] == value
+
+
+@pytest.mark.parametrize("name,value,body", [
+    ("カリウム", "4", "塩化 カリウム\n4 分2"),
+    ("カリウム", "4.2", "カリウム\n4.2"),
+])
+def test_a_label_and_a_number_on_different_lines_stay_a_candidate(name, value, body):
+    assert _confirmation(name, value, body) == "unverified"
+
+
+# Panels: readings after another reading, a number, a Latin label or a line break.
+_PANELS = [
+    ("ナトリウム 138 カリウム 4.0 カルシウム 9.0", ("ナトリウム", "138"), ("カリウム", "4.0"), ("カルシウム", "9.0")),
+    ("電解質：ナトリウム 140、カリウム 4.2、カルシウム 9.1", ("ナトリウム", "140"), ("カリウム", "4.2"),
+     ("カルシウム", "9.1")),
+    ("血液検査 ナトリウム 141 / カリウム 4.4 / カルシウム 9.5", ("ナトリウム", "141"), ("カリウム", "4.4"),
+     ("カルシウム", "9.5")),
+    ("ナトリウム：137　カリウム：4.3", ("ナトリウム", "137"), ("カリウム", "4.3")),
+    ("ナトリウム 140 カリウム 4.2 クロール 104", ("ナトリウム", "140"), ("カリウム", "4.2")),
+    ("Na 140 カリウム 4.2", ("カリウム", "4.2")),
+    ("BUN 20 カリウム 4.2", ("カリウム", "4.2")),
+    ("Alb 3.0 補正カルシウム 9.0", ("カルシウム", "9.0")),
+    ("血液検査\nナトリウム 138\nカリウム 4.2\nカルシウム 9.1", ("ナトリウム", "138"), ("カリウム", "4.2"),
+     ("カルシウム", "9.1")),
+    ("Cr 0.9\nカリウム 4.0", ("カリウム", "4.0")),
+    ("eGFR 60\nカリウム 4.0", ("カリウム", "4.0")),
+    ("ナトリウム 138 \nカリウム 4.0", ("カリウム", "4.0")),
+    ("ナトリウム 138 mEq/L\nカリウム 4.0", ("カリウム", "4.0")),
+    ("2026/11/16\nカリウム 4.0", ("カリウム", "4.0")),
+]
+
+
+@pytest.mark.parametrize("body,name,value", [
+    (body, name, value) for body, *readings in _PANELS for name, value in readings
+])
+def test_every_reading_of_a_panel_is_read(body, name, value):
+    assert _confirmation(name, value, body) == "quote_supported"
+
+
+# A reading with its own unit is never made a candidate by its neighbours.
+@pytest.mark.parametrize("body,name,value", [
+    ("ナトリウム 138 mEq/L\nカリウム 4.0 mEq/L", "カリウム", "4.0"),
+    ("ナトリウム 138mEq/L カリウム 4.0mEq/L", "カリウム", "4.0"),
+    ("塩化 カリウム 4 分2\nカリウム 4.0mEq/L", "カリウム", "4.0"),
+    ("維持液 カリウム 4.0mEq/L", "カリウム", "4.0"),
+])
+def test_a_reading_with_its_own_unit_keeps_it_whatever_its_neighbours(body, name, value):
+    assert _confirmation(name, value, body) == "quote_supported"
+
+
+# The item still must not continue a Latin word or a number written right before it.
+@pytest.mark.parametrize("name,value,unit,body", [
+    ("K", "4.0", "mEq/L", "CK 4.0mEq/L"),
+    ("Mg", "2.0", "mg/dL", "330Mg 2.0mg/dL"),
+    ("カリウム", "4.0", "mEq/L", "合成薬1カリウム 4.0mEq/L"),
+])
+def test_an_item_glued_to_a_latin_word_or_a_number_is_not_read(name, value, unit, body):
+    assert _validated(name, value, unit, body)["normalized"]["confirmation"] == "unverified"
 
 
 # Every cue shape, glued after the amount by a particle or written before the item.
@@ -592,63 +680,24 @@ def test_each_dosing_cue_keeps_an_in_band_amount_a_candidate(body):
     assert _confirmation("カリウム", "4", body) == "unverified"
 
 
-# Outside the closed shapes the same words are no cue (で keeps the digits apart
-# once folding drops the spaces).
-@pytest.mark.parametrize("cue", ["日7回", "7回/日", "分7", "分10", "日2回測定", "1日2回の測定", "毎日2回採血",
-                                 "日1回検査", "塩分1日6g", "錠剤変更後", "包括", "包帯交換", "散歩後", "散在", "顆粒球",
-                                 "テープ固定", "軟膏塗布", "カプセル内視鏡後"])
-def test_words_outside_the_cue_shapes_do_not_hide_a_reading(cue):
-    for body in (f"カリウム 4.5 で{cue}", f"{cue}で カリウム 4.5"):
-        assert _confirmation("カリウム", "4.5", body) == "quote_supported", body
-
-
-@pytest.mark.parametrize("body", [
-    "カリウム 3.2 低め 1日2回測定", "カリウム 3.2 低め 毎日2回採血", "カリウム 4.1 食後 日1回採血",
-    "カリウム 4.1（日2回測定中）", "カリウム 3.2 低め 包括", "包括評価で カリウム 4.5",
-    "散歩後 カリウム 4.5", "錠剤変更後 カリウム 4.5",
-])
-def test_cue_words_in_another_sense_keep_the_reading(body):
-    value = body.split("カリウム ")[1].split(" ")[0].split("（")[0]
-    assert _confirmation("カリウム", value, body) == "quote_supported"
-
-
-# A clause made only of dosing cues continues the amount next to it, across 、。;；.
+# A clause or a line made only of dosing words names no lab layout either.
 @pytest.mark.parametrize("name,value,body", [
     ("カリウム", "4", "塩化 カリウム 4、分2"),
-    ("カリウム", "4", "塩化 カリウム 4、1日2回"),
-    ("カリウム", "4", "塩化 カリウム 4、毎日2回"),
-    ("カリウム", "4", "塩化 カリウム 4、2回/日"),
     ("カリウム", "4", "塩化 カリウム 4。分2"),
-    ("カリウム", "2", "塩化 カリウム 2、頓用"),
-    ("カリウム", "2", "塩化 カリウム 2、1錠"),
     ("カルシウム", "9", "乳酸 カルシウム 9 ; 分3"),
-    ("カルシウム", "9", "乳酸 カルシウム 9；1包1日3回"),
     ("カリウム", "4", "分2、塩化 カリウム 4"),
-    ("カリウム", "4", "1日3回。塩化 カリウム 4"),
-    ("カリウム", "4", "頓用、塩化 カリウム 4"),
     ("カリウム", "4", "1錠、塩化 カリウム 4"),
     ("ナトリウム", "140", "2包；炭酸水素 ナトリウム 140"),
+    ("カリウム", "4", "塩化 カリウム 4\n分2"),
+    ("カリウム", "4", "分2\n塩化 カリウム 4"),
+    ("カリウム", "4", "塩化 カリウム 4\n・分2"),
+    ("カリウム", "4", "塩化 カリウム 4\n分2 継続"),
 ])
-def test_a_cue_only_clause_next_to_the_amount_keeps_it_a_candidate(name, value, body):
+def test_a_dosing_clause_or_line_next_to_a_salt_amount_keeps_it_a_candidate(name, value, body):
     assert _confirmation(name, value, body) == "unverified"
 
 
-# A neighbouring clause that names more than cues (another drug, a measurement) is
-# its own statement, and each of 、。;； ends the clause of the reading.
-@pytest.mark.parametrize("name,value,body", [
-    ("カリウム", "4.5", "合成薬A 1錠、カリウム 4.5"),
-    ("カリウム", "4.5", "カリウム 4.5、1日2回測定"),
-    ("カリウム", "4.5", "カリウム 4.5、分2で合成薬A"),
-    *((name, value, f"{name} {value}{mark}合成薬A 分2継続")
-      for name, value in _ELECTROLYTES for mark in ("、", "。", "; ", "；")),
-    *((name, value, f"合成薬A 1錠{mark}{name} {value}")
-      for name, value in _ELECTROLYTES for mark in ("、", "。", "; ", "；")),
-])
-def test_a_neighbouring_clause_with_more_than_cues_does_not_hide_the_reading(name, value, body):
-    assert _confirmation(name, value, body) == "quote_supported"
-
-
-# A line break is a hard clause bound: a line naming a drug with its dose is another statement.
+# A line break bounds the layout: a line naming a drug with its dose is another statement.
 @pytest.mark.parametrize("name,value,body", [
     ("ナトリウム", "128", "ナトリウム 128\n合成薬B 分2 継続"),
     ("ナトリウム", "128", "ナトリウム 128\r\n合成薬B 分2 継続"),
@@ -656,19 +705,11 @@ def test_a_neighbouring_clause_with_more_than_cues_does_not_hide_the_reading(nam
     ("カリウム", "5.8", "合成薬A 1錠中止\nカリウム 5.8"),
     ("ナトリウム", "128", "合成薬B 分2 継続\nナトリウム 128"),
     ("ナトリウム", "138", "ナトリウム 138\nカリウム 4.2\n合成薬 1日2回"),
-    ("カルシウム", "9.1", "カルシウム 9.1\n合成薬C 1錠"),
     ("カルシウム", "9.1", "【検査】\nカルシウム 9.1\nマグネシウム 2.0\n【処方】\n合成薬C 1錠 分1"),
-    ("カリウム", "4.2", "合成薬A 頓用、\nカリウム 4.2"),
-    ("カリウム", "4.2", "合成薬A 1錠 分2 継続\nカリウム 4.2"),
-    ("カリウム", "4.2", "カリウム 4.2\n合成薬A 分2"),
-    ("カリウム", "4.2", "分2で合成薬A 継続\nカリウム 4.2"),
-    # A cue-only line touches only the clause at its edge, and a cue-only clause on
-    # another line reaches the reading only through that whole line.
-    ("カリウム", "4.2", "分2\nナトリウム 138、カリウム 4.2"),
-    ("ナトリウム", "138", "ナトリウム 138、カリウム 4.2\n分2"),
-    ("カリウム", "4.2", "合成薬A 継続、頓用。\nカリウム 4.2"),
+    ("カリウム", "4.2", "合成薬A 1錠 分2\nカリウム 4.2"),
+    ("カリウム", "4.2", "分2\nカリウム 4.2"),
 ])
-def test_a_line_break_bounds_the_clause_of_a_reading(name, value, body):
+def test_a_line_break_bounds_the_layout_of_a_reading(name, value, body):
     assert _confirmation(name, value, body) == "quote_supported"
 
 
@@ -687,33 +728,30 @@ def test_one_end_of_a_range_stays_a_candidate(name, value, body):
     assert lab["value"] == value
 
 
-@pytest.mark.parametrize("body", ["ナトリウム 138 から上昇", "ナトリウム 138 ー 前回並み", "ナトリウム 138 - 安定"])
-def test_a_range_mark_without_a_second_number_keeps_the_reading(body):
-    assert _confirmation("ナトリウム", "138", body) == "quote_supported"
+def test_a_range_mark_without_a_second_number_and_a_later_range_keep_the_reading():
+    assert _confirmation("ナトリウム", "138", "ナトリウム 138 - 安定") == "quote_supported"
+    assert _validated("カリウム", "4.5", "mEq/L", "カリウム 4.5mEq/L（前回 3.9〜4.2）")[
+        "normalized"]["confirmation"] == "quote_supported"
 
 
-# Each salt stem glued to the item names a drug even for an in-band amount without a cue.
+# Each salt stem glued to the item names a drug, even with a lab unit written.
 @pytest.mark.parametrize("stem", ["酸", "水素", "ヨウ素", "塩化", "酸化", "ヨウ化", "沃化", "フッ化", "臭化",
                                   "ブロム化", "硫化", "シアン化"])
 def test_each_salt_stem_glued_to_the_item_is_a_drug_name(stem):
-    assert _confirmation("カリウム", "4.0", f"{stem}カリウム 4.0") == "unverified"
+    assert _validated("カリウム", "4.0", "mEq/L", f"{stem}カリウム 4.0mEq/L")["normalized"][
+        "confirmation"] == "unverified"
 
 
-# A form word right after the amount itself is a counted form (塩化 カリウム 4 散).
-@pytest.mark.parametrize("form", ["顆粒", "散", "シロップ", "テープ", "軟膏", "坐剤"])
-def test_a_form_word_right_after_the_amount_keeps_it_a_candidate(form):
-    assert _confirmation("カリウム", "4", f"塩化 カリウム 4 {form}") == "unverified"
+@pytest.mark.parametrize("gap", [" ", "\t", "　", "\n"])
+def test_any_space_between_a_word_and_the_item_sets_them_apart(gap):
+    lab = _validated("カリウム", "4.1", "mEq/L", f"尿酸{gap}カリウム 4.1mEq/L")
+    assert lab["normalized"]["confirmation"] == "quote_supported"
 
 
-# Across a line break only a line of nothing but dosing cues continues the amount.
-@pytest.mark.parametrize("name,value,body", [
-    ("カリウム", "4", "塩化 カリウム 4\n分2"),
-    ("カリウム", "4", "分2\n塩化 カリウム 4"),
-    ("カリウム", "4", "塩化 カリウム 4\n1日3回"),
-    ("カリウム", "4", "頓用、\n塩化 カリウム 4"),
-    ("カリウム", "4", "塩化 カリウム 4\r\n1錠 分2"),
-    ("カリウム", "4", "合成薬A 1錠\n分2；\n塩化 カリウム 4"),
-    ("ナトリウム", "140", "炭酸水素 ナトリウム 140\n分3\n合成薬B 1錠"),
-])
-def test_an_adjacent_line_of_only_dosing_cues_keeps_the_amount_a_candidate(name, value, body):
-    assert _confirmation(name, value, body) == "unverified"
+def test_a_long_evidence_is_read_in_linear_time():
+    import time
+    body = "\n".join(["塩化 カリウム 4 分2", "ナトリウム 138 カリウム 4.0"] * 10000)
+    began = time.perf_counter()
+    lab = clinical_values.lab_candidate("カリウム", "4.0", None, body)
+    assert time.perf_counter() - began < 10
+    assert lab["confirmation"] == "unverified"   # 10000 readings are not one reading
