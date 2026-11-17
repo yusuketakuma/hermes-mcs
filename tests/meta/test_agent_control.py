@@ -152,6 +152,17 @@ def test_failed_ci_on_an_agent_branch_counts_against_the_linked_issue():
     assert ac.decide_gate(human, _green(), CODE, 0, True, "failure")["attempts"] == []
 
 
+def test_a_dispatched_request_reads_the_ci_conclusion_from_the_jobs_on_the_head():
+    # main-sync's CI run raises no workflow_run, so its gate request has no run conclusion to pass
+    failed = _green()[:-1] + [_run(ac.REQUIRED_JOBS[-1], "failure")]
+    assert ac.decide_gate(_pr(), failed, CODE, 0, True, ac.CHECKS_CONCLUSION)["attempts"] == [{"issue": 5}]
+    assert ac.decide_gate(_pr(), _green(), CODE, 0, True, ac.CHECKS_CONCLUSION)["attempts"] == []
+    # the kill switch fails the gate without a failed job: that is not a CI failure
+    assert ac.decide_gate(_pr(), _green(), CODE, 0, False, ac.CHECKS_CONCLUSION)["attempts"] == []
+    waiting = _green()[:-1]
+    assert ac.decide_gate(_pr(), waiting, CODE, 0, True, ac.CHECKS_CONCLUSION)["attempts"] == []
+
+
 def test_attempts_are_counted_across_agents_and_stop_at_the_limit():
     assert ac.next_attempt(["bug"]) == ([], ["試行:1"], False)
     assert ac.next_attempt(["試行:1", "担当:claude"]) == (["試行:1"], ["試行:2"], False)
@@ -227,6 +238,11 @@ def test_labels_and_workflows_agree_with_the_module():
     control = (ROOT / ".github/workflows/agent-control.yml").read_text()
     assert "ref:" not in control, "never check out PR code in a privileged workflow"
     assert "workflow_run" in control and "pull_request_target" in control
+    # a dispatched gate must not share one concurrency group across heads, and only ci.yml's bot-started run asks
+    assert "github.event.pull_request.head.sha || inputs.sha }}" in control
+    request = (ROOT / ".github/workflows/ci.yml").read_text().split("\n  merge-gate-request:\n")[1]
+    assert "github.triggering_actor == 'github-actions[bot]'" in request and "actions: write" in request
+    assert 'agent-control.yml --ref "$DEFAULT_BRANCH"' in request
     claude = (ROOT / ".github/workflows/agent-claude.yml").read_text()
     assert "branch_prefix: agent/" in claude
     assert "vars.AUTOMATION_ENABLED == 'true'" in claude

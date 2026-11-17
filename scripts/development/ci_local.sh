@@ -26,9 +26,9 @@
 # Exit: 0 only when every ci.yml job passes on a clean clone; 1 otherwise; 2 usage.
 set -u
 
-JOBS="publication-request scope lint pytest-linux lint-test hygiene standalone-sdk incident-gates pytest-macos macos hermes-integration"
+JOBS="publication-request scope lint pytest-linux lint-test hygiene standalone-sdk incident-gates pytest-macos macos hermes-integration merge-gate-request"
 # jobs that only decide or judge in CI; locally they run no tests of their own
-JUDGES="scope lint-test macos"
+JUDGES="scope lint-test macos merge-gate-request"
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)
 out=""
@@ -196,6 +196,7 @@ prereq_hermes_integration() {
 }
 
 # --- job bodies: ci.yml run lines, verbatim except where noted ---
+prereq_merge_gate_request() { :; }
 prereq_publication_request() { command -v python3 >/dev/null 2>&1 || { reason="python3 が未導入"; return 1; }; }
 job_publication_request() {
     # ci.ymlではtag push時のみ動くhint生成。localでは合成envで同じscriptを実行する。
@@ -282,6 +283,10 @@ job_macos() {
 job_hermes_integration() {
     MCS_TEST_PYTHON=$hermes/.venv/bin/python MCS_HERMES_SOURCE=$hermes MCS_HERMES_REFERENCE=$hermes \
         sh scripts/development/check_pinned_sdks.sh hermes
+}
+job_merge_gate_request() {
+    # ci.yml asks agent-control.yml for the merge-gate of a head main-sync started; a local run has no PR to judge
+    echo "merge-gate request is GitHub-only"
 }
 
 summary=$out/summary.tsv

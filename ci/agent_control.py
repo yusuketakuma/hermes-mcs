@@ -37,6 +37,8 @@ REQUIRED_JOBS = ("lint-test", "hygiene", "standalone-sdk", "incident-gates",
 # pytest-macos may be skipped only for a docs-only change (see docs_only()).
 EVIDENCE_JOBS = ("pytest-linux", "pytest-macos")
 ACTIONS_APP = "github-actions"
+# --ci-conclusion value of a gate request that has no workflow_run to read the conclusion from.
+CHECKS_CONCLUSION = "checks"
 # Branches written by an AI agent. claude/ is left out: project threads use it
 # for work the owner asked for. Claude Code Action is configured to agent/.
 AGENT_PREFIXES = ("agent/", "copilot/", "codex/")
@@ -240,6 +242,9 @@ def decide_gate(pr, check_runs, files, behind_by, automation_enabled, ci_conclus
     # Only branches pushed to this repository count as agent work; outsiders cannot push here.
     agent = is_agent_branch(branch) and same_repository(pr)
     state, notes = evidence(check_runs, head, files)
+    # A dispatched request carries no run conclusion: the jobs on the head say whether CI failed.
+    if ci_conclusion == CHECKS_CONCLUSION:
+        ci_conclusion = state
     if agent and not automation_enabled:
         state, notes = "failure", ["自動化の停止中（AUTOMATION_ENABLED が true ではない）"]
     if pr.get("draft") and state == "success":
