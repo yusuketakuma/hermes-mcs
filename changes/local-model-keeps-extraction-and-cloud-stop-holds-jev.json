@@ -11,6 +11,7 @@
     "mcs/extract/llm/extract_llm_progress.py",
     "mcs/patients/care_event_sources.py",
     "mcs/patients/rollup_builder.py",
+    "mcs/patients/measurement_sources.py",
     "mcs/patients/patient_context_refresh_readiness.py",
     "mcs/patients/patient_context_quality_controller.py",
     "mcs/llm/cloud_policy.py"

@@ -382,14 +382,17 @@ def _measurement_source_page(db, page, kinds, refs, expected_model):
         if (not isinstance(meta, dict) or not isinstance(meta.get('source_binding'), str)
                 or not isinstance(meta.get('actual_model'), str) or not meta['actual_model']):
             continue
-        candidates.append((i, row, meta['source_binding']))
+        candidates.append((i, row, meta['source_binding'], meta['actual_model']))
     bindings = dependency_loss.source_bindings(
-        db, [(row['project_id'], row['message_id']) for _, row, _ in candidates])
-    ready = [(i, row) for (i, row, expected), actual in zip(candidates, bindings)
-             if expected == actual]
-    if ready:
-        progress = extract_llm.progress_for_messages(db, [row for _, row in ready], model=expected_model)
-        for (i, _), state in zip(ready, progress):
+        db, [(row['project_id'], row['message_id']) for _, row, _, _ in candidates])
+    # A stored extraction keeps the model it was made with (same as the single-row path).
+    ready = {}
+    for (i, row, expected, model), actual in zip(candidates, bindings):
+        if expected == actual:
+            ready.setdefault(model, []).append((i, row))
+    for model, items in ready.items():
+        progress = extract_llm.progress_for_messages(db, [row for _, row in items], model=model)
+        for (i, _), state in zip(items, progress):
             result[i] = state.get('state') == 'complete'
     return result
 
