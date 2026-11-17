@@ -20,6 +20,7 @@ import patient_context_refresh_state as state
 from test_context_cloud_update_identity import cloud, real_cloud, runtime
 from test_patient_context_refresh import CFG, document, seed, step
 from test_patient_context_cloud_stop_paths import LONG, _local_sources, _partial_cloud_scan, _wire
+from common_testkit import follow_cloud_mode
 
 __all__ = ['cloud', 'real_cloud', 'runtime']
 
@@ -190,6 +191,7 @@ def test_local_role_never_sends_when_cloud_turns_on_mid_pass(runtime, real_cloud
     seed(ledger, mid=1, pid=1, body=IN_SCOPE)
     modes = iter(['off'])
     monkeypatch.setattr(extract_llm, '_cloud_mode', lambda *args: next(modes, 'on'))
+    follow_cloud_mode(monkeypatch, extract_llm)
     result = refresh.run_due(ledger, cfg, deadline=clock.mono + 600, admit=lambda: True, role='local')
     assert result == {**result, 'status': 'deferred', 'done': 0, 'reason': 'patient_context_role_changed'}
     assert not posts and not calls and not ledger.artifacts('cloud_usage_reserve')

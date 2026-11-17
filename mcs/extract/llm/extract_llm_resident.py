@@ -196,10 +196,13 @@ def _background_context_refresh(ledger, initial_state, stop=None, *, cloud_worke
     if not cloud_worker and slot != local_llm.LANES[3]:
         # Lane 1 serves context only until 08:00; a call that cannot finish by then starts nothing.
         import patient_context_refresh_state as context_state
+        # The monotonic reference is read before the wall clock, so a delay between the two
+        # reads can only bring the deadline earlier than 08:00, never later.
+        started = time.monotonic()
         remaining = llm_slot_schedule.seconds_until_day()
         if remaining < context_state.CALL_SECONDS + context_state.COMMIT_MARGIN + 5:
             return {"status": "deferred", "done": 0}
-        deadline = min(deadline, time.monotonic() + remaining)
+        deadline = min(deadline, started + remaining)
     if not cloud_worker:
         until, reason = ledger.__dict__.get(_CONTEXT_PAUSE, (0.0, None))
         if time.monotonic() < until:

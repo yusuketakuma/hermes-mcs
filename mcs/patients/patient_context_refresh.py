@@ -960,12 +960,12 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     generation_uncertain = False
     generation_contacted = False
     generation_quality = False
-    mode = extract_llm._cloud_mode(ledger, cfg, "patient_context", pid)
+    # One reading gives the mode and, when it is off, why: the unit's decisions and its quality
+    # step all use this reading.
+    mode, off_reason = extract_llm.cloud_route_mode(ledger, cfg, "patient_context", pid)
     if role == "local" and mode == "on":
         # The cloud took this patient between its selection and now: a local lane never sends.
         return {"status": "deferred", "done": 0, "reason": "patient_context_role_changed", **stats}
-    # Why the cloud is off for this unit, named once for every decision below.
-    off_reason = extract_llm.cloud_off_reason(ledger, cfg, "patient_context", pid) if mode == "off" else None
     takeover = role == "local_takeover" and mode == "on"
     if takeover:
         # No context child has served the cloud lane for the grace period. The unit runs with the

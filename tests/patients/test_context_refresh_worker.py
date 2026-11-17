@@ -16,6 +16,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+import time
 
 import extract_llm as worker
 import cloud_backlog
@@ -148,6 +149,28 @@ def test_lane1_runs_context_first_only_at_night_on_its_own_slot(capacity, monkey
     left[0] = 0.0   # day
     assert lane(capacity) == {"status": "off", "done": 0}
     assert len(capacity[2]) == 1
+
+
+def test_lane1_night_deadline_never_passes_08_00_after_a_slow_clock_read(capacity, monkeypatch):
+    """The monotonic reference precedes the wall-clock read: 30 s lost between them shortens
+    the deadline instead of moving it past 08:00."""
+    import llm_slot_schedule
+    from types import SimpleNamespace
+    monkeypatch.setattr(worker, "_SLOT_OVERRIDE", LANES[1])
+    monkeypatch.setattr(extract_llm_call_context, '_SLOT_OVERRIDE', worker._SLOT_OVERRIDE)
+    clock = [time.monotonic()]
+    started = clock[0]
+
+    def seconds_until_day():
+        clock[0] += 30   # the read is slow
+        return 400.0
+
+    monkeypatch.setattr(extract_llm_resident, "time", SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
+    monkeypatch.setattr(llm_slot_schedule, "night", lambda: True)
+    monkeypatch.setattr(llm_slot_schedule, "seconds_until_day", seconds_until_day)
+    result = lane(capacity)
+    assert result["done"] == 1, result
+    assert capacity[2][-1][3] <= started + 400.0
 
 
 def test_disabled_has_no_probes(capacity, monkeypatch):

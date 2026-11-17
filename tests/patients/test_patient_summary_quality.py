@@ -31,6 +31,7 @@ import semantic_runtime as semantic_runtime
 from test_patient_context_refresh import runtime as runtime, seed, finish, step, document, CFG
 from semantic_jev import JevError
 from extract_testkit import _ledger, _message
+from common_testkit import follow_cloud_mode
 
 _REAL_CLOUD_PROVIDER = cloud_inference.CloudInferenceUnit
 
@@ -535,6 +536,7 @@ def repair(tmp_path, monkeypatch):
     responses, sent, enabled, current = [facts[1]['id']], [], [True], [True]
     repair_cfg = {'cloud_llm': {'mode': 'on', 'provider': 'anthropic', 'project_ids': [1]}}
     monkeypatch.setattr(worker, '_cloud_mode', lambda *_: 'on' if enabled[0] else 'off')
+    follow_cloud_mode(monkeypatch, worker)
     monkeypatch.setattr(extract_llm_prepare, '_cloud_mode', worker._cloud_mode)
     monkeypatch.setattr(worker.cloud_policy, 'budget_block_reason', lambda *args, **kwargs: None)
     monkeypatch.setattr(worker.cloud_policy, 'provider_key', lambda *_args: 'synthetic-key')
