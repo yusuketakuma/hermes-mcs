@@ -364,6 +364,11 @@ _LEAD = r"[ \t　]*(?:[■●◆#・＊*]+[ \t　]*)?"
 _VALUE_HOLDER = re.compile(
     rf"{_LEAD}(?:(?:本人|患者|利用者)(?:さん|様)?の(?P<family>{clinical_scope.FAMILY_PERSON})"
     rf"(?:ご本人|本人)?(?:自身)?|(?P<other>(?:他の|別の)(?:患者|利用者)|他患者|別患者|{clinical_scope.STAFF_PERSON}))は")
+# A conflicting holder under an explicitly patient-owned heading withdraws
+# only that heading's patient assertion. A bare kin may do so without being
+# affirmative evidence for a family holder. が and も are not this holder form.
+_PATIENT_HEADING_CONFLICT = re.compile(
+    rf"{_LEAD}(?:{clinical_scope.FAMILY_PERSON})(?:ご本人|本人)?(?:自身)?は")
 # A fact names one thing, never a person, a group that may include the patient or a
 # pointer back to the patient's record (皆・全員・入居者・本人同様・同じ・それ); the
 # closed shapes below guarantee everything else. A family or other word already covers
@@ -431,17 +436,10 @@ _FACT = {
     "preferences": re.compile(rf"{_OBJECT}を?(?:{_WISH})"),
 }
 _PROPOSAL = re.compile(rf"{_OBJECT}を?(?:提案|推奨|指示|予定){_DOING}")
-# Under an explicit patient heading, another person's role may be the object
-# (家族の負担・医師の往診), not a new holder. Compound conditional clauses stay
-# outside these closed wishes; no author identity or referent is guessed.
-_PATIENT_OBJECT = rf"(?:(?:{clinical_scope.FAMILY_PERSON}|{clinical_scope.OTHER_PERSON})の)?{_OBJECT}"
-_PATIENT_WISH = re.compile(
-    rf"{_LEAD}(?:{_PATIENT_OBJECT}(?:を|は)?(?:{_WISH})"
-    rf"|{_PATIENT_OBJECT}(?:で(?:最期|最後)を迎えたい|になりたくない|を続けてほしい))")
 
 
 def heading_subject(label, value) -> str:
-    """Name only a source-bound holder and a self-contained fact, otherwise leave it unspecified."""
+    """Name a written heading or closed holder subject, leaving unresolved relative holders unspecified."""
     if not isinstance(label, str) or not isinstance(value, str):
         return "unspecified"
     category = _CATEGORY_FOLD.get(label.casefold())
@@ -449,7 +447,8 @@ def heading_subject(label, value) -> str:
         return "unspecified"
     heading = _SUBJECT_HEADINGS.get(label)
     if heading == "patient":
-        return "patient" if _PATIENT_WISH.fullmatch(value.rstrip()) else "unspecified"
+        conflict = _VALUE_HOLDER.match(value) or _PATIENT_HEADING_CONFLICT.match(value)
+        return "unspecified" if conflict else "patient"
     person = _VALUE_HOLDER.match(value)
     if person is None:
         return "unspecified"

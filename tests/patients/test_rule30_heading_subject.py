@@ -2,8 +2,10 @@
 
 Owner-approved requirement change: kin terms relative to an unknown writer are
 unspecified, including mother, wife and daughter. A family holder needs a written
-relationship to the patient. Objectless stances and unresolved references stay
-unspecified. Raw evidence/details and independently named items are preserved.
+relationship to the patient. Objectless stances and unresolved references cannot
+establish a family/other holder. An explicitly patient-owned heading retains its
+subject unless a conflicting holder heads the value; its text is not reclassified
+by the fact shape. Raw evidence/details and independently named items are preserved.
 
 Existing adversarial inputs remain. Positive counterparts name the patient-bound
 relationship explicitly. Corpus numeric acceptance remains unchanged for X9 to
@@ -793,13 +795,13 @@ def test_an_explicit_patient_relationship_keeps_its_closed_fact(label, value):
     ('希望', '妻は希望している', 'unspecified'),
     ('家族の希望', '妻は反対', 'unspecified'),
     ('希望', '別の利用者は同意している', 'unspecified'),
-    ('本人の希望', '希望している', 'unspecified'),
+    ('本人の希望', '希望している', 'patient'),
     ('家族の希望', '希望している', 'unspecified'),
-    ('本人の意向', '望んでいます', 'unspecified'),
-    ('本人の希望', 'この施設を希望', 'unspecified'),
-    ('本人の希望', 'その施設を希望', 'unspecified'),
+    ('本人の意向', '望んでいます', 'patient'),
+    ('本人の希望', 'この施設を希望', 'patient'),
+    ('本人の希望', 'その施設を希望', 'patient'),
     ('希望', '別の利用者はこの施設を希望', 'unspecified'),
-    ('本人の希望', 'このアレルギーには対応してほしい', 'unspecified'),
+    ('本人の希望', 'このアレルギーには対応してほしい', 'patient'),
     ('アレルギー', '妻はこのアレルギーあり', 'unspecified'),
     ('方針', '医師はその施設を提案', 'unspecified'),
     ('本人の希望', '在宅を希望', 'patient'),
@@ -842,3 +844,25 @@ def test_writer_relative_objectless_and_demonstrative_policy(label, value, subje
 ])
 def test_a_bound_relationship_still_requires_one_closed_fact(label, value):
     assert heading_subject(label, value) == "unspecified"
+
+
+@pytest.mark.parametrize(("label", "value"), [
+    ("本人の希望", "自宅で過ごしたい"),
+    ("本人の意向", "点滴はしたくない"),
+    ("本人の希望", "家族が望むなら入院してもよい"),
+    ("本人の意向", "夫が元気なうちは在宅を続けたい"),
+    ("本人の希望", "妻が同席してほしい"),
+    ("本人の希望", "家族も同席してほしい"),
+])
+def test_a_patient_heading_keeps_its_subject_without_a_conflicting_holder(label, value):
+    assert heading_subject(label, value) == "patient"
+
+
+@pytest.mark.parametrize("value", [
+    "妻は在宅を希望", "母は在宅を希望", "長女は在宅を希望",
+    "患者の妻は在宅を希望", "本人の家族は在宅を希望",
+    "別の利用者は個室を希望", "医師は在宅移行を提案",
+])
+def test_a_conflicting_holder_only_withdraws_the_patient_heading(value):
+    assert heading_subject("本人の希望", value) == "unspecified"
+    assert heading_subject("本人の意向", value) == "unspecified"
