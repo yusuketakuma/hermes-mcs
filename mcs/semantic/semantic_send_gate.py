@@ -424,9 +424,9 @@ def _summary_superseded(db, project_id, message_id, summary_id, current) -> bool
 
     True when another summary is current now, or when the notice's own summary
     exists for this message but its producer is no longer accepted (a local
-    model change). Anything else stays unverified and is retried. A later
-    return to the old model does not revive the notice; the summary's own
-    notice is built again from the summary."""
+    model change). Anything else stays unverified and is retried. A notice
+    ended this way is not rebuilt for the replacing summary; if the old model
+    returns and the summary is current again, the gate accepts it again."""
     if type(summary_id) is not int or summary_id <= 0:
         return False
     if current is not None and summary_id == current["artifact_id"]:
@@ -620,6 +620,11 @@ def _has_initial_history(db, project_id, ids):
 def semantic_gate(db, ev, payload: dict, cfg: dict,
                   in_progress: bool = False):
     """Recheck a semantic intent immediately before every external post."""
+    with semantic_transport.config_model_scope(cfg):
+        return _semantic_gate(db, ev, payload, cfg, in_progress)
+
+
+def _semantic_gate(db, ev, payload: dict, cfg: dict, in_progress: bool = False):
     if not isinstance(payload, dict):
         raise ValueError("payload_invalid")
     scfg, _ = semantic_policy.runtime_config(cfg)

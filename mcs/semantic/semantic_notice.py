@@ -21,17 +21,18 @@ from semantic_send_gate import enforce_block_reason, initial_history_ids
 def outbox_has_delivery(db, delivery_key: str, summary_artifact_id: int | None = None) -> bool:
     """Whether a live or finished semantic_notice already carries this key.
 
-    A suppressed notice built on a different summary does not count when the
-    caller names the summary it is about to publish: that notice ended as a
-    stale generation (a replaced summary or local model) and the rebuilt
-    summary needs its own notice. The json_valid guard keeps an unreadable
-    payload from hiding a valid key further on; the match runs in SQL."""
+    A suppressed notice for the very summary named by the caller does not
+    count: it ended as a stale generation (a local model change) and that
+    summary is current again. A suppressed notice for another summary still
+    counts, so a rebuilt summary does not send a new notice. The json_valid
+    guard keeps an unreadable payload from hiding a valid key further on;
+    the match runs in SQL, not per-row in Python."""
     return db.execute(
         "SELECT 1 FROM notify_outbox WHERE kind='semantic_notice' AND state IN "
         "('pending','failed','accepted','suppressed') AND CASE WHEN "
         "json_valid(payload) THEN json_extract(payload,'$.delivery_key')=? "
         "AND (state<>'suppressed' OR ? IS NULL "
-        "OR json_extract(payload,'$.summary_artifact_id') IS ?) "
+        "OR json_extract(payload,'$.summary_artifact_id') IS NOT ?) "
         "ELSE 0 END LIMIT 1", (delivery_key, summary_artifact_id, summary_artifact_id)).fetchone() is not None
 
 
