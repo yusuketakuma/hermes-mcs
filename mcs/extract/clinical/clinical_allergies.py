@@ -240,15 +240,20 @@ def _polarity(body, left, right, start=None):
             signals.append(bool(REACTION_NEGATION.match(body, left + match.end(), right)))
     if start is not None and TOLERATED.search(body, start, right):
         signals.append(True)
-    if all(signals):
-        return bool(signals)
-    return False if not any(signals) else None
+    if not any(signals):
+        return False
+    return True if all(signals) else None
+
+
+_OCCURRENCE_LIMIT = 64
 
 
 def _occurrences_conflict(body, masked, allergen):
     """R8: an allergen written more than once must read the same (subject, polarity) at every place."""
     seen = set()
-    for match in re.finditer(re.escape(allergen), body):
+    for index, match in enumerate(re.finditer(re.escape(allergen), body)):
+        if index >= _OCCURRENCE_LIMIT:
+            return True  # Too many places to read: leave the assertion open.
         subject = _subject(body, masked, match.start(), match.end())[0]
         left, right = _unit(body, match.start())
         seen.add((subject, _polarity(body, left, right, match.start())))
@@ -309,7 +314,8 @@ def resolve(body, evidence, allergen, reaction) -> Resolution:
 def _shape(item):
     return (isinstance(item, dict) and item.get("kind") in KINDS and item.get("subject") in SUBJECTS
             and item.get("status") in STATUSES and type(item.get("negated")) is bool
-            and item.get("certainty") in CERTAINTIES)
+            and item.get("certainty") in CERTAINTIES and isinstance(item.get("evidence"), str)
+            and all(item.get(key) is None or isinstance(item[key], str) for key in ("allergen", "reaction")))
 
 
 def _judge(item, res):

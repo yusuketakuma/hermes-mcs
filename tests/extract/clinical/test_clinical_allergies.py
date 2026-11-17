@@ -63,7 +63,8 @@ def test_r10_keeps_the_confirmed_copy_of_one_assertion():
 
 def test_bad_shapes_are_dropped_and_counted_with_bounded_repair_detail():
     bad = [_claim(kind="allergies"), _claim(subject="self"), _claim(negated="false"), _claim(certainty="sure"),
-           _claim(evidence=""), _claim(allergen=""), "合成薬E", _claim(evidence="参考の文の合成薬E")]
+           _claim(evidence=""), _claim(allergen=""), _claim(allergen=["合成薬E"]), _claim(reaction={"x": 1}),
+           _claim(evidence=None), "合成薬E", _claim(evidence="参考の文の合成薬E")]
     drops = {}
     kept, dropped = ca.validate_items(bad, BODY, drops)
     assert (kept, dropped) == ([], len(bad))
@@ -164,3 +165,12 @@ def test_allergen_candidates_for_the_gate():
     assert {"ご本人", "薬", "食べ物", "アレルギー"} <= set(found)
     long_body = "、".join(f"合成薬{chr(0x41 + i)}{'あ' * i}" for i in range(26))
     assert len(ca.allergen_candidates(long_body)) == 21
+
+
+def test_r8_an_allergen_written_too_often_to_read_stays_open():
+    body = "ご本人は合成薬Eにアレルギーがあります。" + "合成薬Eの在庫を確認しました。" * 70
+    kept, _ = ca.validate_items([_claim(evidence="ご本人は合成薬Eにアレルギーがあります。")], body)
+    assert kept[0]["unverified"] is True
+    short = "ご本人は合成薬Eにアレルギーがあります。" + "合成薬Eの在庫を確認しました。" * 3
+    kept, _ = ca.validate_items([_claim(evidence="ご本人は合成薬Eにアレルギーがあります。")], short)
+    assert "unverified" not in kept[0]

@@ -15,6 +15,7 @@ import itertools
 import json
 import re
 import time
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -122,12 +123,20 @@ def gate1():
     return found, keys, misses, elapsed
 
 
+def _folded(text):
+    return re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", text))
+
+
 def test_corpus_is_synthetic_valid_and_disjoint_from_blk_eval():
     ids = [case["id"] for case in X2]
     assert len(ids) == len(set(ids)) and all(case_id.startswith("g12-") for case_id in ids)
     assert not set(ids) & {case["id"] for case in BLK_EVAL}
     assert not {case["body"] for case in X2} & {case["body"] for case in BLK_EVAL}
+    import extract_llm
+    examples = _folded(extract_llm._PROMPT_EXAMPLES)
     for case in X2:
+        text = _folded(case["body"])
+        assert not {text[i:i + 12] for i in range(max(len(text) - 11, 1)) if text[i:i + 12] in examples}, case["id"]
         assert case["posted_at"].endswith("+09:00"), case["id"]
         for key in ("expect", "forbid"):
             assert extract_bench._section_valid(case.get(key, {}), forbid=key == "forbid"), (case["id"], key)
