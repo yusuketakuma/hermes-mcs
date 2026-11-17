@@ -422,7 +422,7 @@ def _thing(excluded):
     # A drug, prescription or product names one only with a name part (合成薬A・ペニシリン系
     # 薬); written in kanji alone it is a regimen or a class that may be the patient's
     # (処方薬・持参薬・本処方・当内服薬・同時薬・睡眠薬・下剤), never a thing.
-    nameless_drug = (rf"(?:(?:{word})*(?:[薬剤品]|処方)|(?:{word})*?(?:処方|内服|服用)(?:{word})*)"
+    nameless_drug = (rf"(?:(?:{word})*[薬剤品]|(?:{word})*?(?:処方|内服|服用)(?:{word})*)"
                      rf"(?!(?!アレルギー)(?:{char}))")
     return rf"(?:(?!{_POINTER}|{nameless_drug})(?:(?!{excluded})(?:{char})){{1,20}}|(?:(?!{excluded})[ぁ-ゖ](?<![はがもとをの])){{1,20}})"
 
@@ -453,9 +453,8 @@ _PROPOSAL = re.compile(rf"{_OBJECT}を?(?:提案|推奨|指示|予定){_DOING}")
 
 
 def _family_side_kin(word) -> bool:
-    """Tell whether a kin word names a family member who cannot be the patient."""
-    return (bool(re.fullmatch(clinical_scope.FAMILY_PERSON, word)) and not _PATIENT_ALIAS_KIN.fullmatch(word)
-            and not _WRITER_RELATIVE_KIN.search(word))
+    """Tell whether a word of the kin list names a family member who cannot be the patient."""
+    return not _PATIENT_ALIAS_KIN.fullmatch(word) and not _WRITER_RELATIVE_KIN.search(word)
 
 
 def _family_heading_value(value) -> bool:
