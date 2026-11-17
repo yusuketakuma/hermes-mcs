@@ -289,8 +289,10 @@ def _summary_repair_evidence(db, bundle, summary, evidence, fp, policy, revision
             return False
         feedback = [f.get('code', '') + ' ' + f.get('statement', f.get('claim', '')) for f in findings]
         answer = evidence['answer']
+        # The absolute read ceiling here; verify_cloud_repair_evidence in
+        # reply() checks the exact bound of the answer's own reservation.
         if (not isinstance(answer, dict) or set(answer) != {'text', 'prompt_sha256', 'reservation_id', 'contract', 'unit_key', 'owner'}
-                or not isinstance(answer['text'], str) or len(answer['text'].encode('utf-8')) > bounded_http.MAX_RESPONSE_BYTES
+                or not isinstance(answer['text'], str) or len(answer['text'].encode('utf-8')) > bounded_http.MAX_RESPONSE_BYTES_CEILING
                 or not isinstance(answer['reservation_id'], str) or not isinstance(answer['owner'], dict)):
             return False
         reservations = db.execute("SELECT artifact_id FROM artifacts WHERE kind='cloud_usage_reserve' "
@@ -371,6 +373,33 @@ def _empty_repair_prior(db, pid, mid):
     return refs
 
 
+def _empty_repair_prior_superseded(db, recorded, current) -> bool:
+    """Whether the pair a repair was reserved over stopped being current, not changed in place.
+
+    A newer summary or audit row, or a recorded row now marked invalidated or
+    stale, supersedes it. A recorded row that is gone, older, or otherwise
+    altered is not proof of anything and keeps the reservation held."""
+    if not isinstance(recorded, list) or len(recorded) != 2:
+        return False
+    superseded = False
+    for kind, old, new in zip((KIND_SUMMARY, KIND_AUDIT), recorded, current):
+        if old == new:
+            continue
+        if new is None or old is not None and (not isinstance(old, dict) or type(old.get('id')) is not int):
+            return False
+        if old is None or new['id'] > old['id']:
+            superseded = True
+            continue
+        if new['id'] != old['id']:
+            return False
+        row = db.execute('SELECT meta FROM artifacts WHERE artifact_id=? AND kind=?', (new['id'], kind)).fetchone()
+        meta = strict_json(row['meta']) if row is not None else None
+        if not isinstance(meta, dict) or not (meta.get('invalidated') is True or meta.get('stale') is True):
+            return False
+        superseded = True
+    return superseded
+
+
 def _empty_repair_consumed(db, pid, mid, fp, policy, candidate_id, content) -> bool:
     """Whether a final result of this empty-repair candidate was committed after it.
 
@@ -396,6 +425,38 @@ def _empty_repair_consumed(db, pid, mid, fp, policy, candidate_id, content) -> b
     return False
 
 
+_NEGATIVE_CLAIM_FINDINGS = ('claim_contradicts', 'claim_not_supported', 'claim_ambiguous',
+                            'claim_low_confidence')
+
+
+def _recorded_claim_audit(meta, content):
+    """The claim answers and negative findings recorded on a held candidate, or None.
+
+    The answers are valid and cover some of the candidate's claims (all of
+    them when the record is an evaluated verdict), and at least one negative
+    claim finding names an answered claim; anything else (unknown codes,
+    another shape) is None and keeps the candidate held."""
+    record = meta.get('partial_answers')
+    if (meta.get('audit_state') != 'held' or not isinstance(record, dict)
+            or set(record) - {'evaluated'} != {'answers', 'findings'}
+            or record.get('evaluated', True) is not True):
+        return None
+    answers, findings = record['answers'], record['findings']
+    claim_ids = [claim.get('claim_id') if isinstance(claim, dict) else None
+                 for claim in content.get('claims') or []]
+    if (not isinstance(answers, dict) or not answers or not claim_ids or None in claim_ids
+            or not set(answers) <= set(claim_ids) or len(claim_ids) != len(set(claim_ids))
+            or 'evaluated' in record and set(answers) != set(claim_ids)
+            or any(not isinstance(ans, dict) or set(ans) != {'choice', 'confidence'} for ans in answers.values())
+            or any(f.get('code') == 'claim_answer_invalid'
+                   for f in semantic_audit.claim_answers_findings(answers, jev.MATCH_THRESHOLD))
+            or not isinstance(findings, list) or not findings
+            or any(not isinstance(item, dict) or item.get('code') not in _NEGATIVE_CLAIM_FINDINGS
+                   or item.get('claim') not in answers for item in findings)):
+        return None
+    return {'answers': answers, 'findings': findings}
+
+
 def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, reason_out=None,
                             fact_kind=None):
     """Recover only the latest source-bound, reserved empty repair candidate.
@@ -404,8 +465,9 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
     summary is later dropped, e.g. over another fact document or a redone
     local model) and, with ``fact_kind``, when it was made before the
     current facts were written (a local model change redid them) and its
-    candidate is not bound to them. The target then takes the ordinary
-    path; the spent repair stays recorded on its marker, so it is neither
+    candidate is not bound to them, or when the summary/audit pair it was
+    reserved over was superseded without its result. The target then takes
+    the ordinary path; the spent repair stays recorded on its marker, so it is neither
     refunded nor repeated and nothing is published without a new audit."""
     def held(reason, reserved=True):
         if reason_out is not None:
@@ -467,13 +529,31 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
             return held('empty_repair_claims_invalid')
         if meta.get('claim_input_binding') != _claim_input_binding(pid, mid, fp, policy, revision, content, facts):
             return held('empty_repair_claim_binding')
-        if meta.get('prior') != _empty_repair_prior(db, pid, mid):
+        prior = _empty_repair_prior(db, pid, mid)
+        superseded = meta.get('prior') != prior
+        if superseded and not _empty_repair_prior_superseded(db, meta.get('prior'), prior):
             return held('empty_repair_prior_unverified')
         if proof != _summary_provenance(producer, fp, policy, revision, content):
             return held('empty_repair_provenance_unverified')
-        if meta.get('audit_state') != 'ready' or meta.get('partial_answers') != {}:
+        # 'inflight' with no recorded answer: the pass stopped (a crash or
+        # any other stop before the answers were recorded) while the
+        # repaired text was audited. Like a stored PENDING summary (AT-058)
+        # it is audited again; only a recorded negative answer or finding
+        # holds it. Recorded negative answers are recovered with the
+        # candidate, only to finish that audit over the claims not yet
+        # answered and commit it (NEEDS_REVIEW, never a PASS).
+        recorded = _recorded_claim_audit(meta, content)
+        if recorded is None and (meta.get('audit_state') not in ('ready', 'inflight')
+                                or meta.get('partial_answers') != {}):
             return held('empty_repair_audit_not_ready')
-        return {'content': content, 'meta': meta, 'producer': producer}, True
+        # A superseded prior pair frees only a candidate the gates above
+        # would recover with nothing recorded: it reserves nothing, and the
+        # ordinary path audits it.
+        if superseded:
+            if recorded is not None:
+                return held('empty_repair_audit_not_ready')
+            return held('empty_repair_prior_superseded', False)
+        return {'content': content, 'meta': meta, 'producer': producer, 'recorded_audit': recorded}, True
     except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
         return held('empty_repair_validation_unavailable')
 
@@ -595,6 +675,15 @@ def _prior_pending_findings(db, pid, mid, fp, policy, revision, mode, repaired, 
     return (known, False) if bound else ([], True)
 
 
+def _current_pair_newest(db, pid, mid, fp, policy, audit) -> bool:
+    """Whether the current summary and its audit are the newest rows of their kinds, paired."""
+    newest = [db.execute('SELECT MAX(artifact_id) FROM artifacts WHERE kind=? AND project_id=? AND message_id=?',
+                         (kind, pid, mid)).fetchone()[0] for kind in (KIND_SUMMARY, KIND_AUDIT)]
+    return (newest == [semantic_store.current_row_id(db, KIND_SUMMARY, mid, fp, policy),
+                       semantic_store.current_row_id(db, KIND_AUDIT, mid, fp, policy)]
+            and audit['meta'].get('summary_artifact_id') == newest[0])
+
+
 def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
                   members: dict, final_status: str, policy: str, publication_mode: str) -> None:
     """Summary + audit artifact pair for one evaluated target — the
@@ -613,55 +702,63 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
             raise ValueError("semantic_skip_reason_invalid")
         skip_meta = {"jev_skip_reason": reason, "jev_evaluated": False,
                      "code_checks": "passed", "summary_hash": mcs_util.payload_hash(summary)}
+    summary_meta = {VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
+                    "audit_status": final_status, "publication_mode": publication_mode,
+                    "stale": final_status == "STALE",
+                    "target_revision": members[mid]["revision"],
+                    "provider_provenance": provenance,
+                    # the stored content drops _-keys — the oversize marker
+                    # must survive storage so a later re-audit of the stub
+                    # keeps its blocking finding
+                    "input_oversize": bool(r["summary"].get("_input_oversize")), **skip_meta}
+    audit_content = {"status": final_status, "findings": r["findings"], "target_message_id": mid}
+    audit_meta = {VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
+                  "audit_status": final_status, "publication_mode": publication_mode,
+                  "repair_count": 1 if r["repaired"] else 0,
+                  "summary_hash": mcs_util.payload_hash(summary),
+                  "audit_content_hash": mcs_util.payload_hash(audit_content),
+                  "claim_input_binding": r.get("claim_input_binding"),
+                  "target_revision": members[mid]["revision"],
+                  "jev_requests": r.get("jev_requests", 0),
+                  # raw Jev claim verdicts — the calibration corpus for
+                  # match_threshold tuning (summary content strips _-keys,
+                  # so this private channel is the only place they persist)
+                  "claim_audit": r["summary"].get("_claim_audit") or {}, **skip_meta}
     # A deferred/pending job re-derives the same outcome on every pass.
     # Without this guard, unreachable Jev can produce byte-identical
     # summary+audit pairs repeatedly. The durable store records an outcome
-    # once, not once per attempt (FIX-SD1).
+    # once, not once per attempt (FIX-SD1) — only while the stored pair is
+    # the one readers see and holds every receipt field this write would
+    # (hashes, binding, revision, mode, schema; the summary id is checked
+    # above), so a pair the send gate
+    # cannot verify is written again, never kept as a duplicate.
     prev_sum = current_artifact(ledger.db, KIND_SUMMARY, mid, fp, policy)
     prev_aud = current_artifact(ledger.db, KIND_AUDIT, mid, fp, policy)
     if (prev_sum is not None and prev_aud is not None
-            and prev_sum["content"] == summary
-            and prev_sum["meta"].get("audit_status") == final_status
-            and prev_sum["meta"].get("provider_provenance") == provenance
-            and all(prev_sum["meta"].get(key) == value for key, value in skip_meta.items())
-            and prev_sum["meta"].get("publication_mode")
-            == publication_mode
-            and prev_aud["content"].get("status") == final_status
-            and prev_aud["meta"].get("repair_count") == (1 if r["repaired"] else 0)
-            and prev_aud["meta"].get("claim_input_binding") == r.get("claim_input_binding")
-            and all(prev_aud["meta"].get(key) == value for key, value in skip_meta.items())
-            and prev_aud["content"].get("findings") == r["findings"]):
+            and _current_pair_newest(ledger.db, pid, mid, fp, policy, prev_aud)
+            and prev_sum["content"] == summary and prev_aud["content"] == audit_content
+            and _receipt_matches(prev_sum["meta"], summary_meta)
+            and _receipt_matches(prev_aud["meta"], audit_meta)):
         return
     summary_id = ledger.artifact_add_tx(
         KIND_SUMMARY,
         json.dumps(summary, ensure_ascii=False),
         project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
-        meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
-              "audit_status": final_status, "publication_mode": publication_mode,
-              "stale": final_status == "STALE",
-              "target_revision": members[mid]["revision"],
-              "provider_provenance": provenance,
-              # the stored content drops _-keys — the oversize marker
-              # must survive storage so a later re-audit of the stub
-              # keeps its blocking finding
-              "input_oversize": bool(r["summary"].get("_input_oversize")), **skip_meta})
-    audit_content = {"status": final_status, "findings": r["findings"], "target_message_id": mid}
+        meta=summary_meta)
     ledger.artifact_add_tx(
         KIND_AUDIT,
         json.dumps(audit_content, ensure_ascii=False),
         project_id=pid, message_id=mid, model=jev.JEV_MODEL,
-        meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
-              "audit_status": final_status, "publication_mode": publication_mode,
-              "repair_count": 1 if r["repaired"] else 0,
-              "summary_artifact_id": summary_id, "summary_hash": mcs_util.payload_hash(summary),
-              "audit_content_hash": mcs_util.payload_hash(audit_content),
-              "claim_input_binding": r.get("claim_input_binding"),
-              "target_revision": members[mid]["revision"],
-              "jev_requests": r.get("jev_requests", 0),
-              # raw Jev claim verdicts — the calibration corpus for
-              # match_threshold tuning (summary content strips _-keys,
-              # so this private channel is the only place they persist)
-              "claim_audit": r["summary"].get("_claim_audit") or {}, **skip_meta})
+        meta={**audit_meta, "summary_artifact_id": summary_id})
+
+
+# Receipt fields that vary per attempt without changing the recorded outcome.
+_ATTEMPT_FIELDS = (VERSION_KEY, "inference_requests", "jev_requests", "claim_audit")
+
+
+def _receipt_matches(stored: dict, written: dict) -> bool:
+    """Whether a stored receipt's meta already holds every outcome field of this write."""
+    return all(stored.get(key) == value for key, value in written.items() if key not in _ATTEMPT_FIELDS)
 
 
 def _park_needs_review(ledger, pid, mid, fp, policy, v2_doc,
