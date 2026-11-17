@@ -1,6 +1,6 @@
 name: Agent Claude repair
 
-# agent-control.yml が試行上限前の CI 失敗で、agent-review.yml がレビューの指摘で起動する
+# agent-control.yml が試行上限前の CI 失敗で、agent-review-fix.yml がレビューの指摘で起動する
 # （workflow_dispatch だけ。コメントやPRでは起動しない）。
 # 対象はこのリポジトリの開いた agent/claude- ブランチだけ。失敗ログか指摘を読み、同じブランチに修正を push する。
 # 試行回数は agent-control が通算する。停止スイッチ vars.AUTOMATION_ENABLED が true でなければ起動しない。
@@ -68,7 +68,7 @@ jobs:
             --issue-labels "$work/labels.json" --automation "${AUTOMATION:-}")
           echo "$verdict"
           if [[ -n "$REVIEWS" ]]; then
-            # Taken or refused, these reviews are done: agent-review.yml re-sends only a queued one no run took.
+            # Taken or refused, these reviews are done: agent-review-fix.yml re-sends only a queued one no run took.
             gh pr comment "$PR" --body "レビューの指摘（レビュー $REVIEWS）: $(jq -r 'if .allowed then "Claude が修正を始めました" else "修正しません（" + .reason + "）" end' <<< "$verdict")。
           <!-- agent-review:handled $REVIEWS -->"
           fi

@@ -339,9 +339,11 @@ def test_cli_plans_review_findings(tmp_path, capsys):
 
 
 def test_review_workflow_never_runs_pr_code_and_hands_findings_as_data():
-    review = (ROOT / ".github/workflows/agent-review.yml").read_text()
+    review = (ROOT / ".github/workflows/agent-review-fix.yml").read_text()
     head = review.split("jobs:")[0]
-    assert "pull_request_target" not in review and "pull_request_review:" in head
+    # only events that run the default branch's definition of this privileged workflow
+    assert "pull_request" not in head and "schedule:" in head and "workflow_dispatch:" in head
+    assert "github.ref == 'refs/heads/main'" in review
     # the review event runs this file from the PR merge ref: the one checkout names main and only ci/
     assert review.count("ref:") == 1 and "ref: refs/heads/main" in review and "sparse-checkout: ci" in review
     assert "permissions: {}" in head and "contents: write" not in review and "pull-requests: write" in review

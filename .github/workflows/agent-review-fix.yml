@@ -3,26 +3,21 @@ name: Agent review findings
 # agent/claude- の PR に付いたレビューの指摘を、agent-claude-repair.yml（Claude）の修正に回す。
 # 対象は所有者の Request changes と、指摘を報告した CodeRabbit・Devin のレビューだけ。レビューツールの Autofix は使わない。
 # 試行は CI 失敗と同じ 試行:N で数える（1回の判定で新しい指摘をまとめて1回）。同じレビューは2回数えない。
-# 修正の待ちが取り消されたレビューは、定期実行が数え直さずに起動し直す。
+# レビューは API で読む（起動はすべて既定ブランチの定義で動くイベントだけ。PR 側の定義では動かない）。
+# 修正の待ちが取り消されたレビューは、次の判定が数え直さずに起動し直す。
 # PR のコードは checkout も実行もしない（main の ci/ だけ）。運用: docs/development/AUTOMATION.md
 on:
-  pull_request_review:
-    types: [submitted]
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
 
 permissions: {}
 
 jobs:
   dispatch:
-    # The review event is only a nudge: every run reads all open agent/claude- PRs from the API.
-    if: >-
-      vars.AUTOMATION_ENABLED == 'true' &&
-      (github.event_name == 'schedule' ||
-        (startsWith(github.event.pull_request.head.ref, 'agent/claude-') &&
-         github.event.pull_request.head.repo.full_name == github.repository &&
-         (github.event.review.user.login == github.repository_owner ||
-          contains(fromJSON('["coderabbitai[bot]", "devin-ai-integration[bot]"]'), github.event.review.user.login))))
+    # Every run reads all open agent/claude- PRs and their reviews from the API.
+    # A dispatch on another ref would run that ref's definition of this file.
+    if: vars.AUTOMATION_ENABLED == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -35,7 +30,7 @@ jobs:
       issues: write    # attempt labels
       actions: write   # workflow_dispatch of agent-claude-repair.yml
     steps:
-      # A review event runs this file from the PR merge ref, so check out main by name, never the PR code.
+      # main by name: never the PR code.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: refs/heads/main
