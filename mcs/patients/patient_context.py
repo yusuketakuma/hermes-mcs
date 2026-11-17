@@ -347,38 +347,67 @@ def extract_context(body: str) -> list[dict]:
     return result
 
 
-# Rule 30: a heading names another subject only on one unambiguous form, because a
-# wrong family or other label hides the patient's own allergy or wish (unspecified,
-# the former behaviour, is the safe default). 本人の意向／本人の希望 is never relabelled.
+# Rule 30: a heading names another subject only on an allow-list, because a wrong
+# family or other label hides the patient's own allergy or wish (unspecified, the
+# former behaviour, is the safe default). 本人の意向／本人の希望 is never relabelled.
 _SUBJECT_HEADINGS = {"家族の意向": "family", "家族の希望": "family",
                      "本人の意向": "patient", "本人の希望": "patient"}
 _SUBJECT_CATEGORIES = frozenset({"preferences", "allergies", "adverse_events"})
 # A staff member holds only a policy; for a clinical fact or a wish they are a reporter.
 _STAFF_HELD_HEADINGS = frozenset({"方針", "療養方針", "治療方針"})
-# The holder form: a person word, then は or も. が marks an actor or a reporter and
-# の may be a drug the patient took (奥様の薬), so neither names a holder.
+# The head: a person word, then は or も. が marks an actor or a reporter and の may
+# be a drug the patient took (奥様の薬), so neither names a holder.
 _VALUE_HOLDER = re.compile(
     r"[ \t　]*(?:[■●◆#・＊*]+[ \t　]*)?"
     rf"(?:(?P<family>{clinical_scope.FAMILY_PERSON})|(?P<other>{clinical_scope.OTHER_PERSON}))"
-    r"(?:ご本人|本人)?(?:自身)?[はも][ \t　、,，]*")
-# What leaves the rest more than a plain fact about that person: a self word or a
-# second person; a report, observation, perception, concern or act on a drug (気づいた・
-# 記載・確認・様子・気にしている・飲ませた・中止); a quotation (と); an event or time clause
-# (訪問時に・ところ); a condition, reason or joined clause (望むなら・元気なうちは・ため・
-# …が); a second line or sentence. It errs to unspecified, the safe direction.
-_VALUE_NOT_PLAIN = re.compile(
-    rf"ご本人|本人|患者|利用者|私|自分|{clinical_scope.FAMILY_PERSON}|{clinical_scope.OTHER_PERSON}"
-    r"|気づ|気付|確認|聴取|指摘|記載|記録|報告|連絡|相談|説明|伝え|話|言|いう|聞|訴え|心配|問い?合"
-    r"|判断|診断|評価|発見|見|目に|目撃|感じ|知|わか|分か|把握|管理|介助|付き?添|渡|来[てたるら院]|持参"
-    r"|注意|気に|不安|懸念|申し送|させ|飲ませ|処方|投与|服用|内服|使用|開始|中止|中断|休薬|再開|減量|増量|変更"
-    r"|様子|そう|らしい|よう|みたい|模様|同様|同じく|と|時|際|ところ|たび|後"
-    r"|なら|たら|れば|ても|でも|うちは|限り|ので|ため|のに|けど|けれど|ものの|一方|しかし|ただし"
-    r"|(?:[るたすいくてだ]|ない|ます|です)が(?=.*\S)"
-    r"|[\n、,，;；（(]|[。．！？!?](?=.*\S)", re.S)
-# An object marks an act on something: in a clinical fact always (薬を管理・発疹を目にした),
-# in a preference unless it is what the person wishes or proposes (胃ろうを望む).
-_VALUE_ACT = {"preferences": re.compile(r"を(?!希望|望|提案|勧|拒否|選択)"),
-              "allergies": re.compile("を"), "adverse_events": re.compile("を")}
+    r"(?:ご本人|本人)?(?:自身)?[はも]")
+# In a note to the family these kin words can be the patient (ご主人・お母様), so they hold nothing.
+_PATIENT_ALIAS_KIN = re.compile(r"ご?主人|旦那(?:さん|様)?|奥(?:さん|様)|お(?:母|父|兄|姉)(?:さん|様)?")
+# A fact names one thing, never a person, a group that may include the patient or a
+# pointer back to the patient's record (皆・全員・入居者・本人同様・同上); the closed
+# shapes below guarantee everything else.
+_NOT_A_THING = (rf"{clinical_scope.FAMILY_PERSON}|{clinical_scope.OTHER_PERSON}"
+                r"|者|本人|当人|他人|主人|自身|自分|私|わたし|当方|僕|俺|さん|様|ちゃん|君"
+                r"|皆|みな|みんな|全|両|双方|一同|共|一緒|揃|そろ|二人|ふたり|夫婦|親子"
+                r"|同上|上記|前記|それ|これ|あれ")
+_STANCE = r"希望|望|拒否|反対|賛成|了承|同意|提案|推奨|指示|予定"
+
+
+def _thing(excluded):
+    """Return the pattern of one short noun that contains none of the excluded words."""
+    # At most 20 characters: kanji with at most two noun-forming kana each (看取り・
+    # 話し合い・胃ろう), katakana, alphanumerics, or hiragana alone without は・が・も・と・
+    # を・の. No space or symbol fits, so neither a verb, a clause nor a second item
+    # does (知らなかった・元気なら・卵 蕎麦).
+    kana = "[々りいしみきけえちびれじろう]"
+    char = (rf"[一-鿿]|(?<=[一-鿿]){kana}|(?<=[一-鿿]{kana}){kana}|[ァ-ヴ]|(?<=[ァ-ヴー])ー"
+            r"|[A-Za-z0-9Ａ-Ｚａ-ｚ０-９]")
+    return rf"(?:(?:(?!{excluded})(?:{char})){{1,20}}|(?:(?!{excluded})[ぁ-ゖ](?<![はがもとをの])){{1,20}})"
+
+
+_THING = _thing(_NOT_A_THING)
+# What a stance or a proposal is about may join nouns with の・で・に・へ (自宅での看取り),
+# but holds no second stance (了承在宅を希望).
+_OBJECT = _thing(f"{_NOT_A_THING}|{_STANCE}")
+_OBJECT = rf"{_OBJECT}(?:(?:での|への|の|で|に|へ){_OBJECT}){{0,2}}"
+_ALLERGY_SYMPTOM = (r"発疹|皮疹|薬疹|蕁麻疹|じんましん|湿疹|かぶれ|発赤|かゆみ|痒み|口がかゆくなる|かゆくなる"
+                    r"|腫れ|むくみ|喘息|呼吸困難|アナフィラキシー|嘔吐|下痢")
+_ADVERSE_SYMPTOM = (r"眠気|ふらつき|めまい|発疹|薬疹|蕁麻疹|湿疹|かゆみ|嘔気|吐き気|嘔吐|下痢|便秘|頭痛|胃痛"
+                    r"|腹痛|口渇|倦怠感|だるさ|むくみ|浮腫|動悸|低血圧|低血糖|食欲低下|食欲不振|肝障害|腎障害"
+                    r"|せん妄|不眠|振戦|発熱")
+_DOING = r"(?:する|しない|している|していない|しています|されている|されています|です)?"
+# The whole value after the holder, per heading category; anything else is unspecified.
+_FACT = {
+    "allergies": re.compile(
+        rf"{_THING}アレルギー(?:あり|有り|がある|です)?|{_THING}で(?:{_ALLERGY_SYMPTOM})(?:あり|有り|が出た)?"
+        r"|花粉症|(?:アレルギー)?(?:なし|無し|特になし)"),
+    "adverse_events": re.compile(
+        rf"{_THING}で(?:{_ADVERSE_SYMPTOM})(?:あり|有り|が出た)?|(?:副作用)?(?:なし|無し|特になし)"),
+    "preferences": re.compile(
+        rf"(?:{_OBJECT}を?)?(?:(?:希望|拒否|反対|賛成|了承|同意){_DOING}"
+        r"|望む|望まない|望んでいる|望んでいない|望んでいます|望みます)|(?:希望|特に)?なし"),
+}
+_PROPOSAL = re.compile(rf"{_OBJECT}を?(?:提案|推奨|指示|予定){_DOING}")
 
 
 def heading_subject(label, value) -> str:
@@ -390,13 +419,12 @@ def heading_subject(label, value) -> str:
         return "unspecified"
     holder = None
     person = _VALUE_HOLDER.match(value)
-    rest = value[person.end():].rstrip() if person else ""
-    if rest and not _VALUE_NOT_PLAIN.search(rest) and not _VALUE_ACT[category].search(rest):
-        if person["family"]:
-            holder = "family"
-        elif (not re.fullmatch(clinical_scope.STAFF_PERSON, person["other"])
-              or label in _STAFF_HELD_HEADINGS):
-            holder = "other"
+    if person and not _PATIENT_ALIAS_KIN.fullmatch(person["family"] or ""):
+        shape = _FACT[category]
+        if person["other"] and re.fullmatch(clinical_scope.STAFF_PERSON, person["other"]):
+            shape = _PROPOSAL if label in _STAFF_HELD_HEADINGS else None
+        if shape and shape.fullmatch(value[person.end():].rstrip()):
+            holder = "family" if person["family"] else "other"
     heading = _SUBJECT_HEADINGS.get(label, "unspecified")
     if heading == "patient":
         # A person heading the patient's own heading withdraws the assertion, never relabels it.
