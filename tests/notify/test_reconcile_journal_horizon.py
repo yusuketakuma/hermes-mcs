@@ -448,10 +448,13 @@ def test_slack_unstarted_file_group_stays_pending_but_is_reported_beyond_horizon
     plan = notify_recovery.card_part_resolve_plan(led, render["delivery_id"], group["part_id"])
     assert plan["expected_state"] == "pending"
     worklist = notify_recovery.recovery_worklist(led.db)
+    # the refused stage (attach:0001) stays unknown and listed in its own right
     assert [(i["part_id"], i["state"], i["status"]) for i in worklist["items"]
-            if i["delivery_id"] == render["delivery_id"]] == [(group["part_id"], "pending", "plannable")]
-    notices = lambda: led.db.execute(
-        "SELECT payload FROM notify_outbox WHERE kind='update_notice'").fetchall()
+            if i["delivery_id"] == render["delivery_id"] and i["part_id"] == group["part_id"]
+            ] == [(group["part_id"], "pending", "plannable")]
+
+    def notices():
+        return led.db.execute("SELECT payload FROM notify_outbox WHERE kind='update_notice'").fetchall()
     assert len(notices()) == 1 and "part unknown=1件" in notices()[0]["payload"]
     # a re-run (the marker stays while the journal is incomplete) reports the part
     # again through parts_held but flags nothing new, so no second notice follows
@@ -619,9 +622,11 @@ def test_reconcile_rerun_promotes_a_group_whose_surface_became_usable(led):
 def test_slack_unstarted_file_group_beyond_horizon_refuses_a_journal_only_proof(led, tmp_path, monkeypatch):
     """#136: a pending Slack file_group of a pre-restore render must not be
     resolved as unsent from journal rows that may be compacted away."""
-    from test_file_group_dependency_refusal import _refused
+    from test_file_group_dependency_refusal import _confirm_stage, _refused
     from adapters.common import journal
-    slack, render, _spec, _stage, group = _refused(led, tmp_path, monkeypatch)
+    slack, render, _spec, stage, group = _refused(led, tmp_path, monkeypatch)
+    # a group is only resolvable once its stage upload is human-confirmed delivered
+    _confirm_stage(led, render, stage)
     aid = envelopes.part_attempt_id(render["delivery_id"], group["part_id"])
     journal.compact(slack.dirs["state"], active="", file_ok=lambda rows: True,
                     prunable=lambda candidate, rows: candidate == aid)
