@@ -121,6 +121,14 @@ _FIELDS = {"reactions": (valid_stored_reactions, "reactions_status"),
 _FIELD_ONLY_ERRORS = {k + "_invalid" for k in _FIELDS if k != "reactions"}
 
 
+def only_field_errors(errors) -> bool:
+    """True when every error is one field's invalid value, not a failed refetch.
+
+    The fields are observed independently (decode_metadata marks the bad one
+    invalid), so such a refresh may still be published to capture."""
+    return all(e in _FIELD_ONLY_ERRORS for e in errors)
+
+
 ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 

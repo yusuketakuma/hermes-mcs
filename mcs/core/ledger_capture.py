@@ -10,6 +10,7 @@ from contextlib import suppress
 from time import monotonic
 
 import initial_import_state
+from message_observations import only_field_errors
 from mcs_util import RETRY_LATER_4XX, html_to_text, loads_dict, valid_hash
 from mcs_queries import posted_epoch
 
@@ -759,7 +760,9 @@ class LedgerCaptureMixin:
         """Save refresh observations without changing chat, coverage or delivery.
 
         publish=True also writes a successful refresh to capture in the
-        same transaction; a failure never touches capture."""
+        same transaction, including fields that validated while another
+        field was invalid (the bad one is recorded as invalid); a failed
+        fetch or an invalid reactions field never touches capture."""
         row = self.db.execute(
             "SELECT project_id FROM messages WHERE message_id=?", (m.message_id,)).fetchone()
         if row is None or row["project_id"] != m.project_id:
@@ -770,7 +773,7 @@ class LedgerCaptureMixin:
         now = time.time()
         with self.db:
             self._save_message_metadata(m, source="shadow", now=now)
-            if publish is True and error is None and not getattr(m, "metadata_errors", []):
+            if publish is True and error is None and only_field_errors(getattr(m, "metadata_errors", [])):
                 self._save_message_metadata(m, source="capture", now=now)
 
     def save_reaction_actors(self, message_id, rows, complete, *, error=None, now=None):

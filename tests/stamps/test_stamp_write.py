@@ -14,6 +14,7 @@ from notify_testkit import (
     CFG, CLICKER, NOW, _attach, _card, _dispatch, _intent, _seed_thread, _spec,
     _token_for, _uuid, led, pinned_clock,
 )
+import message_observations
 import stamp_write
 
 __all__ = ["led", "pinned_clock"]
@@ -272,6 +273,23 @@ def test_non_reaction_metadata_error_does_not_invalidate_fresh_stamp_observation
     assert _drain(scene)["confirmed"] == 1
     assert api.posts == [(100, "viewed", False)]
     assert _receipt(scene, request)["stamp_state"] == "confirmed"
+    # the independently valid reactions reach the capture that cards read
+    captured = message_observations.get_message_metadata(scene[0].db, 100)
+    assert captured["reactions_status"] == "observed" and captured["last_error"] is None
+    assert captured["reactions"][0]["type"] == "viewed"
+    assert captured[error.removesuffix("_invalid")] is None
+
+
+def test_invalid_reactions_field_never_reaches_capture(scene):
+    ledger, api = scene[0], scene[3]
+    api.own = "viewed"
+    sql = "SELECT content,checked_at FROM message_metadata WHERE message_id=100 AND source='capture'"
+    before = ledger.db.execute(sql).fetchone()
+    post = api.message(100)
+    post.metadata_errors = ["reactions_invalid"]
+    ledger.save_metadata_shadow(post, publish=True)
+    after = ledger.db.execute(sql).fetchone()
+    assert (after and tuple(after)) == (before and tuple(before))
 
 
 @pytest.mark.parametrize("change", ["archived", "actor", "account"])
