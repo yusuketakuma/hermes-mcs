@@ -164,3 +164,20 @@ def test_decimal_values_from_different_readings_are_not_paired(body, values):
 def test_decimal_reading_or_side_present_verbatim_is_kept(values):
     for layer in _layers(DECIMAL, values):
         assert {k: layer[k] for k in values} == values
+
+
+@pytest.mark.parametrize("sep", ["/", " / ", "　／　"])
+def test_blank_around_slash_keeps_side_matching(sep):
+    body = f"本人の血圧120{sep}80。"
+    assert clinical_values.grounded_vitals(body, {"sbp": 120, "dbp": 80}) == {"sbp": 120, "dbp": 80}
+    # a reversed answer is rejected with or without blanks
+    reversed_ = clinical_values.grounded_vitals(body, {"sbp": 80, "dbp": 120})
+    assert not ({"sbp", "dbp"} & reversed_.keys()), reversed_
+
+
+@pytest.mark.parametrize("sep", ["/", " / "])
+def test_blank_around_slash_keeps_threshold_flag(sep):
+    flags = clinical_values.vital_threshold_flags(
+        {"sbp": 80, "dbp": 60}, f"本人の血圧80{sep}60。", {"sbp_lte": 90})
+    assert flags == clinical_values.vital_threshold_flags(
+        {"sbp": 80, "dbp": 60}, "本人の血圧80/60。", {"sbp_lte": 90}) != []

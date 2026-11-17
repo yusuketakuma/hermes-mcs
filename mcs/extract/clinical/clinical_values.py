@@ -565,11 +565,16 @@ def _nearest_vital_label(body: str, s: int, e: int):
     return best[1] if best else None
 
 
+_BP_SLASH_AFTER = re.compile(r"\s*[/／]")
+_BP_SLASH_BEFORE = re.compile(r"[/／]\s*$")
+
+
 def _bp_side(body: str, s: int, e: int):
     """120/80: before the slash is systolic, after is diastolic."""
-    if body[e:e + 1] in ("/", "／"):
+    # the same slash grammar as _BP_PAIR: blanks around the slash are allowed
+    if _BP_SLASH_AFTER.match(body, e):
         return "sbp"
-    if body[s - 1:s] in ("/", "／"):
+    if _BP_SLASH_BEFORE.search(body, max(0, s - _VITAL_WIN_BACK), s):
         return "dbp"
     return None
 
