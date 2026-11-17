@@ -297,8 +297,9 @@ The Jev incremental-value experiment is a separate synthetic comparison; its rep
     call; a summary whose producer is not current (a local or unproven
     repaired summary after a local model change) is redone even then.
     The send gate (`_claim_binding_current`, `_canonical_chain_current`)
-    stays the publication check, so a reused PASS no longer meets
-    `prior_pass_unverified` for a fact change.
+    stays the publication check; the former stop reason
+    `prior_pass_unverified` was removed, and a PASS it cannot verify is
+    audited again (see Reused PASS below).
   - Cost when only the S8 check drops a summary (its facts' projection
     unchanged, e.g. an S8 receipt without `doc_hash`), per target, at its
     next same-fingerprint run (reprocess, pending resume or hint rebuild;
@@ -323,16 +324,94 @@ The Jev incremental-value experiment is a separate synthetic comparison; its rep
     repair, paired by id and hash with a summary carrying the candidate's
     claims), or when it was made before the current fact row and its
     candidate is not bound to the current facts
-    (`empty_repair_over_earlier_facts`). The target then takes the
+    (`empty_repair_over_earlier_facts`), or when the summary/audit pair it
+    was reserved over was superseded without its result (a newer row, or
+    a recorded row now invalidated or stale) and its candidate would
+    otherwise be recovered (provenance proven, no recorded answer or
+    finding). The target then takes the
     ordinary path: a bound candidate is audited again, otherwise it is
     summarized again; the spent repair stays recorded on its marker (no
     refund, no second repair; an empty result again is the usual
-    permanent hold). Remaining holds: an interrupted empty repair whose
-    recorded prior summary/audit pair no longer matches without a
-    committed result (`empty_repair_prior_unverified`), and a crash
-    between the candidate's `inflight` and `ready` writes
-    (`empty_repair_audit_not_ready`, a Jev audit may have been
-    dispatched); neither recovers automatically.
+    permanent hold). What the audit of the repaired text observed is
+    recorded before the pass can stop, and only a negative observation
+    holds: an answer `contradicts`, `not_supported` or `ambiguous`, one
+    below the match threshold, or another Jev audit finding
+    (`support_unevaluated` alone is not one). An answer that is not a
+    valid choice is not a judgement of its claim and is never recorded:
+    that claim is asked again (once in the same call, then on the job's
+    retry). The valid answers of the same response are recorded before
+    that re-ask (`audit_claims` checkpoints them through
+    `evaluate_once_more`'s answer callback), so a stop during it keeps a
+    negative one. On a
+    guard stop inside the audit (`LLMNotSent`, `RuntimeBudget`,
+    `RuntimeOff` such as a pause, off, scope or review hold, or a
+    `RuntimeStale` config change) the answers already received are
+    judged by the same rule as the audit (`claim_answers_findings`):
+    with a negative one they are written `held` with their findings;
+    with only confident `supports` answers nothing negative is kept and
+    the candidate is written `ready`, so the next pass runs a new,
+    complete audit (those answers are asked again; a PASS comes only from
+    that audit). When the audit returns, a verdict with findings is
+    written `held` before the result commit, until that result is
+    committed (`empty_repair_consumed`); an evaluated one also carries
+    `evaluated: true`, a clean one writes `ready`. This record only
+    holds or re-audits, so it is checked only for job ownership and an
+    unchanged source (`owner_guard`). Only a crash, a stop after which
+    the job is no longer this worker's (re-queued or taken over), or a
+    changed source leaves `inflight` with no answer: the repaired text is
+    then audited again, like a stored PENDING summary, and an answer
+    observed before that stop is asked again. A Jev result refused by its
+    result guard is not read, so it is not observed.
+    Recorded negative answers: a stop after a negative answer, with or
+    without an evaluated verdict, does not hold for good. When the `held`
+    record has valid answers on some of the candidate's claims (all of
+    them when it is `evaluated: true`) and at least one finding, all of
+    them claim findings (`claim_contradicts`, `claim_not_supported`,
+    `claim_ambiguous`, `claim_low_confidence`) on answered claims, the next
+    pass recovers the candidate with that record and finishes its audit
+    (`resume_claim_audit`): only the claims without a recorded answer are
+    asked; the recorded answers and findings are kept as observed, never
+    asked again or upgraded. When every claim is answered nothing is asked
+    (also while Jev is skipped), and the result is committed without a new
+    local-model call: NEEDS_REVIEW (never PASS; any other status is written
+    PENDING), paired with a summary of the candidate's claims and counting
+    the one repair, which consumes the reservation. While claims remain
+    unanswered and Jev is skipped or unavailable, the target stays pending
+    with the record unchanged and is retried later; a resumed audit that
+    stops again writes the grown record (`held`, the earlier answers and
+    findings kept), never `inflight` while a record exists, so a crash
+    during or after the resumed audit never loses the recorded negative.
+    The candidate is bound to the current facts by the usual recovery
+    gates, so the combined audit covers them. A superseded prior pair does
+    not release such a candidate; it stays held (deferred, no attempt
+    spent) while it is bound to the current facts. A fact row written
+    after the reservation that the candidate is not bound to releases it
+    (`empty_repair_over_earlier_facts`), and a changed source fingerprint
+    leaves it behind: the ordinary path then summarizes the current facts
+    again and audits that summary (no second repair).
+    Remaining holds: a recorded
+    prior pair changed in place, gone, or newer than the current row
+    (`empty_repair_prior_unverified`), and a candidate with a recorded
+    finding or answer that cannot be verified as above (no answer, a
+    finding on an unanswered claim or with another code, an invalid
+    answer, an answer for another claim, `evaluated` not true or not
+    covering every claim, another shape) (`empty_repair_audit_not_ready`),
+    also when its prior pair was superseded; neither recovers
+    automatically over the same facts, and a recorded negative is never
+    released or outvoted by a later audit of the same claims and facts.
+  - Reused PASS: a PASS whose pair the send gate cannot verify (e.g. an
+    audit without `summary_artifact_id`/`claim_input_binding`) is not
+    reused or deferred; the stored summary is audited again over the
+    current facts and only that new pair can publish it. With the Jev
+    audit skipped (disabled, budget, review hold) it is not cleared: the
+    target stays PENDING with `prior_audit_unverified`, as for an unbound
+    PENDING prior, until a real audit runs. An identical
+    result is not recorded again only while the current summary and its
+    audit are the newest, paired rows of their kinds and already hold
+    every receipt field the new write would (summary and audit hashes,
+    claim binding, target revision, publication mode, schema, status):
+    a re-audited PASS over a pair the send gate refuses for any of these
+    is written as a new pair, so it can publish.
   - Stage boundaries: facts → fact audit/projection (bound to the
     document hash) → medication details (fact id and options) →
     coverage (binding) → candidate (binding) → audit → repair

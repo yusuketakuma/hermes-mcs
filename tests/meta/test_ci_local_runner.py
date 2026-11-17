@@ -14,11 +14,13 @@ WORKFLOW = ROOT / ".github/workflows/ci.yml"
 # (it needs the PR's merge base) replaced by update_readme.py --check, and the
 # CI-only decisions: ci_scope.py classifies pull requests (a local run is always
 # full) and ci_gate.py judges the needed jobs' results, for which the local
-# runner's own pass/fail per job is the verdict
+# runner's own pass/fail per job is the verdict, and the merge-gate request
+# (GitHub-only: it dispatches agent-control.yml for the head under test)
 SETUP = re.compile(
     r"^(pip install|python3? -m pip install|python -m pip install|uv |cd hermes-agent$|#"
     r"|base=\$\(git merge-base |python3 scripts/development/update_readme\.py --check --base "
-    r"|python3 ci/ci_scope\.py$|python3 ci/ci_gate\.py (lint-test|macos)$)")
+    r"|python3 ci/ci_scope\.py$|python3 ci/ci_gate\.py (lint-test|macos)$"
+    r"|gh workflow run agent-control\.yml )")
 
 
 def _ci_jobs():
@@ -52,13 +54,16 @@ def test_runner_lists_ci_jobs_in_order():
     listed = subprocess.run([str(RUNNER), "--list-jobs"], capture_output=True,
                             text=True, timeout=10, check=True).stdout.split()
     assert listed == list(_ci_jobs())
-    assert len(listed) == 11
+    assert len(listed) == 12
     runner = RUNNER.read_text()
     assert '全${job_count} job pass' in runner
     count_line = next(line.strip() for line in runner.splitlines() if line.strip().startswith("job_count="))
     result = subprocess.run(["bash", "-c", count_line + '; printf "%s" "$job_count"'],
-                            env={"JOBS": " ".join(listed)}, text=True, capture_output=True, check=True)
-    assert int(result.stdout) == len(listed)
+                            env={"JOBS": " ".join(listed), "GITHUB_ONLY": "merge-gate-request"},
+                            text=True, capture_output=True, check=True)
+    # a GitHub-only job is reported as not run locally, never counted as passed
+    assert int(result.stdout) == len(listed) - 1
+    assert 'GITHUB_ONLY="merge-gate-request"' in runner and "GitHub専用" in runner
 
 
 def test_runner_contains_every_ci_run_line():
@@ -282,12 +287,13 @@ def test_final_report_preserves_success_exit_and_exact_sha(tmp_path, all_pass):
     result = subprocess.run(
         ["bash", "-u", "-c", 'if [ "$all_pass" = 1 ]; then' + reporting],
         env={"PATH": "/usr/bin:/bin", "LC_ALL": "en_US.UTF-8", "all_pass": all_pass, "sha": sha,
-             "out": str(tmp_path), "JOBS": " ".join(jobs)},
+             "out": str(tmp_path), "JOBS": " ".join(jobs), "GITHUB_ONLY": "merge-gate-request"},
         capture_output=True, text=True, errors="replace", timeout=10)
     assert result.returncode == (0 if all_pass == "1" else 1), result.stderr
     assert "CI の実行成功ではない" in result.stdout
     if all_pass == "1":
-        assert f"全{len(jobs)} job pass（{sha}）" in result.stdout
+        # the GitHub-only job is named as not run, never counted as passed
+        assert f"全{len(jobs) - 1} job pass、GitHub 専用の merge-gate-request は未実行（{sha}）" in result.stdout
     else:
         assert "未成立" in result.stdout
     assert (tmp_path / "meta.txt").read_text() == result.stdout

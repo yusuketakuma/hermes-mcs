@@ -8,7 +8,6 @@ import semantic_store
 import semantic_transport
 from functools import wraps
 import json
-import hashlib
 from contextlib import ExitStack, nullcontext
 import sqlite3
 import time
@@ -414,6 +413,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                           "technical_status": "stale"})
             raise
 
+    def owner_guard(stage):
+        runtime.owner_guard(ledger, token, source_fingerprint=fp,
+                            current_source=current_source_fp, stage=stage)
+
     guard("admission")
     if cohort.hold_unbounded_job(ledger, job):
         return "failed"
@@ -695,14 +698,19 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             existing = None
         prev_status = (prev_audit["meta"].get("audit_status")
                        if prev_audit else None)
+        pass_unverified = False
         if existing is not None and prev_status == "PASS":
             import semantic_send_gate
             if not semantic_send_gate.passed_summary_current(
                     ledger.db, pid, mid, fp, policy, members[mid]["revision"],
                     scfg["summary_mode"], bundle=bundle, fact_source=fact_source):
-                _why(diagnostics, "prior_pass_unverified")
-                incomplete = resource_wait = True
-                continue
+                # A PASS whose pair cannot be verified (e.g. an audit stored
+                # without its summary id or claim binding) is not reused: like
+                # a PENDING one, the stored summary is audited again over the
+                # facts current now, and only that new pair can publish it; a
+                # skipped re-audit cannot clear it (as for an unbound PENDING).
+                prev_status = None
+                pass_unverified = True
         if existing is not None and prev_status in ("PASS",
                                                     "NEEDS_REVIEW"):
             results[mid] = {"summary": existing["content"],
@@ -850,26 +858,57 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                           + detail_findings.get(mid, []))
                 claim_input_binding = _claim_input_binding(pid, mid, fp, policy, members[mid]["revision"], summary, facts)
                 before_audit = getattr(jev_client, "requests_made", None)
-                if empty_repair and jev_client is not None:
+                # A recovered candidate with negative answers recorded before
+                # a stop resumes that audit: only the claims not yet answered
+                # are asked, the recorded answers stay as observed, and the
+                # result is committed (NEEDS_REVIEW) instead of a new audit
+                # outvoting them. The record is not rewritten until it grows.
+                recorded = (recovered.get('recorded_audit') if recovered is not None and _attempt == 0
+                            else None)
+                if empty_repair and jev_client is not None and recorded is None:
                     _store_empty_repair(ledger, pid, mid, fp, policy, members[mid]['revision'],
                         scfg['summary_mode'], facts, summary, producer, empty_repair_id, empty_prior,
                         guard, audit_state='inflight')
+                def record_empty_repair_audit(findings, verdict=False):
+                    # What the audit observed is recorded before anything can
+                    # stop the pass, and survives any stop while this worker
+                    # owns the job and the source is unchanged: a negative
+                    # answer or finding holds the candidate, so a later audit
+                    # cannot outvote it. Answers with no finding hold
+                    # nothing ('ready': the next pass audits afresh).
+                    adverse = [item for item in findings if not isinstance(item, dict)
+                               or item.get('code') != 'support_unevaluated']
+                    if recorded is not None:
+                        if summary.get('_claim_audit') == recorded['answers']:
+                            return      # nothing new: the record stands as it is
+                        adverse.extend(item for item in recorded['findings'] if item not in adverse)
+                    partial = ({'answers': summary.get('_claim_audit') or {}, 'findings': adverse,
+                                **({'evaluated': True} if verdict else {})} if adverse else {})
+                    _store_empty_repair(ledger, pid, mid, fp, policy, members[mid]['revision'],
+                        scfg['summary_mode'], facts, summary, producer, empty_repair_id, empty_prior,
+                        owner_guard, partial_answers=partial, audit_state='held' if partial else 'ready')
+
                 try:
-                    jev_f, evaluated = semantic_audit.audit_claims(
-                        jev_client, bundle, summary, deadline,
-                        scfg["match_threshold"], scfg["max_questions_per_request"])
-                except (runtime.LLMNotSent, runtime.RuntimeBudget) as error:
+                    if recorded is not None:
+                        jev_f, evaluated = semantic_audit.resume_claim_audit(
+                            jev_client, bundle, summary, recorded, deadline,
+                            scfg["match_threshold"], scfg["max_questions_per_request"])
+                    else:
+                        jev_f, evaluated = semantic_audit.audit_claims(
+                            jev_client, bundle, summary, deadline,
+                            scfg["match_threshold"], scfg["max_questions_per_request"])
+                except runtime.RuntimeGuardError as error:
+                    if empty_repair and jev_client is not None:
+                        record_empty_repair_audit(semantic_audit.claim_answers_findings(
+                            summary.get('_claim_audit') or {}, scfg["match_threshold"]))
+                    if not isinstance(error, (runtime.LLMNotSent, runtime.RuntimeBudget)):
+                        raise
                     # Jev cutoff/budget: earlier targets commit below. A repair
                     # already applied this pass is kept as a PENDING result, so
                     # the next pass re-audits the repaired text (INV-10: the
                     # one repair is spent, never refunded).
                     not_sent = error
                     incomplete = True
-                    if empty_repair and jev_client is not None:
-                        partial = summary.get('_claim_audit') or {}
-                        _store_empty_repair(ledger, pid, mid, fp, policy, members[mid]['revision'],
-                            scfg['summary_mode'], facts, summary, producer, empty_repair_id, empty_prior,
-                            guard, partial_answers=partial, audit_state='held' if partial else 'ready')
                     if _attempt and not empty_repair:
                         summary["audit_status"] = "PENDING"
                         if fact_source == 'canonical' and producer.get('repair_evidence'):
@@ -884,15 +923,11 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                             if jev_client else 0}
                     break
                 if empty_repair and jev_client is not None:
-                    partial = summary.get('_claim_audit') or {} if not evaluated else {}
-                    if not evaluated:
-                        adverse = [item for item in jev_f if not isinstance(item, dict)
-                                   or item.get('code') != 'support_unevaluated']
-                        if adverse:
-                            partial = {'answers': partial, 'findings': adverse}
-                    _store_empty_repair(ledger, pid, mid, fp, policy, members[mid]['revision'],
-                        scfg['summary_mode'], facts, summary, producer, empty_repair_id, empty_prior,
-                        guard, partial_answers=partial, audit_state='held' if partial else 'ready')
+                    # An evaluated verdict with findings is recorded too, until
+                    # its result is committed (empty_repair_consumed): a stop
+                    # before the commit replays it next pass. A clean one
+                    # records nothing to hold.
+                    record_empty_repair_audit(jev_f, verdict=evaluated)
                 if not evaluated and jev_skip is None:
                     skip = semantic_audit.jev_skip_reason(getattr(jev_client, "last_error", None))
                     if skip is not None:
@@ -907,7 +942,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 claim_ids = [claim.get("claim_id") for claim in summary["claims"] if isinstance(claim, dict)]
                 valid_ids = (len(claim_ids) == len(summary["claims"])
                              and all(isinstance(claim_id, str) for claim_id in claim_ids))
-                if (sent and evaluated and valid_ids and claim_ids and isinstance(observed, dict)
+                if ((sent or recorded is not None) and evaluated and valid_ids and claim_ids
+                        and isinstance(observed, dict)
                         and set(observed) == set(claim_ids)):
                     jev_outcome = "done"
                 elif sent and isinstance(observed, dict) and observed:
@@ -935,6 +971,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     known, unbound = _prior_pending_findings(ledger.db, pid, mid, fp, policy,
                                                              members[mid]["revision"], scfg["summary_mode"], repaired, prev_audit,
                                                              summary, claim_input_binding)
+                    unbound = unbound or pass_unverified
                     prior_blocked = bool(known) or unbound or _attempt > 0
                     if known:
                         jev_f.extend(f for f in known if f not in jev_f)
@@ -946,6 +983,9 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 status = (semantic_audit.optional_audit_status(code_f, jev_f, jev_skip, repaired)
                           if not evaluated and jev_skip is not None
                           else audit_status_for(code_f, jev_f, evaluated, repaired))
+                if recorded is not None and status not in ("NEEDS_REVIEW", "PENDING"):
+                    # A resumed audit with a recorded negative is never released (fail closed).
+                    status = "PENDING"
                 if prior_blocked:
                     # A skipped re-audit cannot clear an earlier negative result
                     # or certify a repair that has not itself been re-evaluated.
@@ -980,19 +1020,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 def summary_repair_llm(prompt):
                     previous_requests = set(semantic_transport.inference_requests())
                     value = llm_fn(prompt)
-                    receipt = semantic_transport.inference_receipt()
-                    contract = semantic_transport.inference_contract()
-                    if (not empty_repair and isinstance(value, str) and receipt is not None and contract is not None
-                            and receipt.get('reservation_id') not in previous_requests):
-                        import bounded_http
-                        try:
-                            if len(value.encode('utf-8')) <= bounded_http.MAX_RESPONSE_BYTES:
-                                repair_answers.append({'text': value,
-                                    'prompt_sha256': hashlib.sha256(prompt.encode('utf-8')).hexdigest(),
-                                    'reservation_id': receipt.get('reservation_id'), 'contract': contract,
-                                    'unit_key': receipt.get('unit_key'), 'owner': receipt.get('owner')})
-                        except UnicodeError:
-                            pass
+                    record = (None if empty_repair else
+                              semantic_transport.repair_answer_record(prompt, value, previous_requests))
+                    if record is not None:
+                        repair_answers.append(record)
                     return value
 
                 try:

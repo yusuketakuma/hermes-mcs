@@ -913,6 +913,7 @@ def test_digest_modal_submits_scope_and_answers_with_a_card(tmp_path):
 
 
 def test_summary_slash_command_answers_ephemerally(tmp_path, monkeypatch):
+    import access_log
     from adapters.common import summary
     calls = []
     monkeypatch.setattr(summary, "answer", lambda *a, **kw: (calls.append(
@@ -943,6 +944,9 @@ def test_summary_slash_command_answers_ephemerally(tmp_path, monkeypatch):
                                      if k != "channel_id"})
         assert len(app.client.messages) == 1 and len(calls) == 1
     asyncio.run(scenario())
+    entry, = access_log.read(tmp_path)
+    assert (entry["actor"], entry["channel"], entry["op"]) == (
+        f"slack:{SCOPE['team_id']}:U_OPERATOR", "C_SYNTHETIC", "summary")
 
 
 def test_dismiss_modal_sends_reason_code(tmp_path):

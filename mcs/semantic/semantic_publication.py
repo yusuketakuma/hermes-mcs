@@ -124,9 +124,11 @@ def _repaired_projection_producer(db, pid, mid, fp, policy, member, doc, meta):
                 raise semantic_runtime.RuntimeStale('repair_evidence_missing')
             answer = answers[index]
             index += 1
+            # The absolute read ceiling here; verify_cloud_repair_evidence below
+            # checks the exact bound of the answer's own reservation.
             if (not isinstance(answer, dict) or set(answer) != {'text', 'prompt_sha256', 'reservation_id', 'contract', 'unit_key', 'owner'}
                     or not isinstance(answer['text'], str)
-                    or len(answer['text'].encode('utf-8')) > bounded_http.MAX_RESPONSE_BYTES
+                    or len(answer['text'].encode('utf-8')) > bounded_http.MAX_RESPONSE_BYTES_CEILING
                     or answer['prompt_sha256'] != hashlib.sha256(prompt.encode('utf-8')).hexdigest()
                     or not isinstance(answer['reservation_id'], str) or not isinstance(answer['unit_key'], str)
                     or not isinstance(answer['owner'], dict)):
@@ -974,17 +976,22 @@ def invalidate_projections(db, scfg: dict) -> int:
     policy = policy_fingerprint(scfg)
     off = scfg.get("mode") == "off"
     enabled = not off and scfg.get("fact_source") == "canonical"
-    candidate = """
+    def candidate_from(kind_column):
+        return f"""
       FROM artifacts a LEFT JOIN messages m ON m.message_id=a.message_id
-      WHERE +a.kind IN ('canonical_projection','semantic_facts_v4')
+      WHERE {kind_column} IN ('canonical_projection','semantic_facts_v4')
         AND CASE WHEN json_valid(a.meta) AND json_type(a.meta)='object' THEN
              COALESCE(json_extract(a.meta,'$.invalidated'),0)=0
              OR (? AND json_extract(a.meta,'$.invalidated')=1
                  AND json_extract(a.meta,'$.invalidated_reason')='fact_source')
              END"""
+    # Paging pins the rowid range with a unary ``+`` (see below); the one-row
+    # pre-check has no such range, so it keeps the plain kind for the kind index.
+    candidate = candidate_from("+a.kind")
     current_ids = set()
     if enabled and db.execute(
-            "SELECT 1" + candidate + " AND json_extract(a.meta,'$.invalidated')=1 LIMIT 1",
+            "SELECT 1" + candidate_from("a.kind")
+            + " AND json_extract(a.meta,'$.invalidated')=1 LIMIT 1",
             (True,)).fetchone():
         from mcs_queries import current_projection_id, current_v4_id
         # Evaluate the normal reader predicates against a prospective snapshot,

@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "256KiBを超える修正回答で意味解析の事実・要約が止まる問題を修正",
+  "summary": "外部AIの修正回答が256KiBを超えても、その送信の読取り上限までは事実・要約の修正の証拠として保存・照合し、処理を続けます。これまでは証拠が残らず、事実の作成元を確認できないとして同じ投稿の処理が止まったままでした。",
+  "upgrade": "追加操作は不要です。Hermes経由の導入ではgatewayの再起動後に反映されます。上限は送信の出力上限から決める読取り上限（長いクラウド回答の読取りの変更記録と同じ）で、それを超える回答は従来どおりその送信単位だけ保留されます。この更新の前に証拠なしで保存された修正は自動では作り直さず、止まったままです。",
+  "details": [
+    "修正回答の記録は semantic_transport.repair_answer_record に共通化し、事実と要約の修正で同じ上限を使います。",
+    "再生時の照合は固定の256KiBではなく読取りの絶対上限（8MiB）で形を確かめ、正確な上限は verify_cloud_repair_evidence が予約の出力上限から確かめます。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_transport.py",
+    "mcs/semantic/semantic_fact_stages.py",
+    "mcs/semantic/semantic_job_processor.py",
+    "mcs/semantic/semantic_publication.py",
+    "mcs/semantic/semantic_summary_stages.py"
+  ]
+}
