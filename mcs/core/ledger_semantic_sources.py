@@ -318,6 +318,19 @@ class LedgerSemanticSourcesMixin:
                                      "SELECT 1 FROM notify_outbox WHERE event_id=? AND project_id=? "
                                      "AND kind='new_messages' AND state!='suppressed'",
                                      (arrival, project_id)).fetchone() is not None)
+                # An initial-history edit only adds its own target to a job that
+                # already carries a live arrival; per-target notice eligibility
+                # (origin_event_id) keeps the history target silent, so the job
+                # itself must not be quieted for the live sibling.
+                old_event = old_origin.get("event_id") if isinstance(old_origin, dict) else None
+                if (execution is None and isinstance(origin, dict)
+                        and origin.get("source") == "initial_history"
+                        and old_eligible and not old_notification_free
+                        and type(old_event) is int and self.db.execute(
+                            "SELECT 1 FROM notify_outbox WHERE event_id=? AND project_id=? "
+                            "AND kind='new_messages' AND state!='suppressed'",
+                            (old_event, project_id)).fetchone() is not None):
+                    preserve_live = True
                 if isinstance(old_pl.get('intake_notification_targets'), dict) and not old_notification_free:
                     preserve_live |= any(semantic_intake_hold.notification_allowed(self, old_pl, project_id, mid)
                                          for mid in old_targets)
