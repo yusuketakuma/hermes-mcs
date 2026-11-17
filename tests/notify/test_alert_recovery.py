@@ -73,22 +73,22 @@ def test_health_write_failed_missing_health_file_is_not_recovered(led, tmp_path,
     assert alert_recovery.suppression_reason(led.db, _ev(led, rid)) is None
 
 
-def _run(led, status, ago=0.0):
+def _run(led, status, ago=0.0, kind="tick"):
     now = time.time()
     led.db.execute(
         "INSERT INTO runs(run_id,started_at,finished_at,status,kind) "
         "VALUES(?,?,?,?,?)",
         (led.db.execute("SELECT COALESCE(MAX(run_id),0)+1 FROM runs").fetchone()[0],
-         now - ago, now - ago, status, "tick"))
+         now - ago, now - ago, status, kind))
     led.db.commit()
 
 
-def test_run_failed_recovers_on_later_ok_or_partial_run(led):
+def test_run_failed_recovers_on_later_complete_run(led):
     rid = _outbox(led, "run_failed", {"run_id": 1, "detail": "crash: X"})
     led.db.execute("INSERT INTO runs(run_id,started_at,finished_at,status,kind) "
                    "VALUES(1,?,?,?,?)", (time.time() - 100, time.time() - 100, "failed", "tick"))
     led.db.commit()
-    _run(led, "partial")
+    _run(led, "ok")
     assert alert_recovery.suppression_reason(led.db, _ev(led, rid)) == "recovered_before_send"
 
 
@@ -142,3 +142,55 @@ def test_health_watch_stalled_stays_due_without_a_readable_newer_observation(led
         (tmp_path / "health_watch_status.json").write_text(content)
     rid = _outbox(led, "health_watch_stalled", created_ago=60.0)
     assert alert_recovery.suppression_reason(led.db, _ev(led, rid)) is None
+
+
+@pytest.mark.parametrize("failed_kind", ["tick", "deep"])
+@pytest.mark.parametrize("later_kind", ["tick", "deep"])
+@pytest.mark.parametrize("status", ["ok", "partial", "failed", "running"])
+def test_run_recovery_requires_complete_success_of_same_kind(led, failed_kind, later_kind, status):
+    _run(led, "failed", ago=100, kind=failed_kind)
+    event_id = _outbox(led, "run_failed", {"run_id": 1}, created_ago=60)
+    _run(led, status, kind=later_kind)
+    expected = "recovered_before_send" if status == "ok" and failed_kind == later_kind else None
+    assert alert_recovery.suppression_reason(led.db, _ev(led, event_id)) == expected
+
+
+@pytest.mark.parametrize("payload", [{"detail": "legacy"}, {"run_id": 99}, {"run_id": True},
+                                     {"run_id": "1"}, []])
+def test_time_fallback_does_not_guess_missing_failure_kind(led, payload):
+    event_id = _outbox(led, "run_failed", {"detail": "legacy"}, created_ago=60)
+    led.db.execute("UPDATE notify_outbox SET payload=? WHERE event_id=?", (json.dumps(payload), event_id))
+    _run(led, "ok")
+    _run(led, "ok", kind="deep")
+    assert alert_recovery.suppression_reason(led.db, _ev(led, event_id)) is None
+
+
+def test_old_success_before_failed_run_cannot_recover_even_with_newer_timestamp(led):
+    _run(led, "ok", ago=-100)
+    _run(led, "failed")
+    event_id = _outbox(led, "run_failed", {"run_id": 2}, created_ago=60)
+    assert alert_recovery.suppression_reason(led.db, _ev(led, event_id)) is None
+
+
+@pytest.mark.parametrize("last_status", ["failed", "partial", "running"])
+def test_later_incomplete_run_invalidates_intermediate_recovery(led, last_status):
+    _run(led, "failed", ago=100)
+    event_id = _outbox(led, "run_failed", {"run_id": 1}, created_ago=60)
+    _run(led, "ok", ago=40)
+    _run(led, last_status)
+    assert alert_recovery.suppression_reason(led.db, _ev(led, event_id)) is None
+
+
+def test_unknown_original_kind_cannot_be_recovered(led):
+    _run(led, "failed", ago=100, kind="unknown")
+    event_id = _outbox(led, "run_failed", {"run_id": 1}, created_ago=60)
+    _run(led, "ok", kind="unknown")
+    assert alert_recovery.suppression_reason(led.db, _ev(led, event_id)) is None
+
+
+def test_unfinished_ok_row_cannot_prove_recovery(led):
+    _run(led, "failed", ago=100)
+    event_id = _outbox(led, "run_failed", {"run_id": 1}, created_ago=60)
+    _run(led, "ok")
+    led.db.execute("UPDATE runs SET finished_at=NULL WHERE run_id=2")
+    assert alert_recovery.suppression_reason(led.db, _ev(led, event_id)) is None
