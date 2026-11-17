@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "ローカルのモデルを変えたあと、古い要約を現役として表示・採用しないよう修正",
+  "summary": "ローカルのモデル（local_llm.model）を変えると、ローカルで作った補助要約は作り直し対象になりますが、要約の採用画面（比較・ops.adopt_summary）と mcs_view の意味解析表示は、その古い要約を現役として扱っていました。採用の可否と表示が、パイプラインと同じ「作り手が現役か」の判定に揃います。モデル変更後のローカル産の要約は採用できず（reasons に candidate_producer_stale）、mcs_view では PASS でなく STALE と表示されます。クラウドで作った要約はモデルを変えても現役のままです。外部送信・課金には関わりません。",
+  "upgrade": "操作は不要です。次の更新から適用されます。",
+  "details": [
+    "判定は既存の semantic_store.producer_current を使います。新しい判定の仕組みは足していません。",
+    "出所の記録がなくモデルも記録していない古い行は、従来どおり識別値だけで判定します。"
+  ],
+  "refs": [
+    "mcs/views/summary_review.py",
+    "mcs/views/mcs_view.py"
+  ]
+}
