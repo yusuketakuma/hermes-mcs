@@ -14,6 +14,8 @@ imports nothing from the application. Standard library only.
            current labels of its linked issues
   lock     whether a newly added 担当:* label conflicts with another one
   assigned whether an agent label is the issue's only assignment
+  review   which review findings on a Claude PR to send to the repair run,
+           and whether they cost a new attempt
 
 The verdict is evidence, not trust in "CI is green": every required job must
 have run on the current head and succeeded (GitHub counts skipped and neutral
@@ -62,6 +64,16 @@ HOLD_LABELS = ("失敗:CI基盤", "失敗:利用枠", "失敗:不明")
 _USES_LINE = re.compile(r"^[+-]\s*(-\s+)?uses:\s+[\w.-]+/[\w./-]+@[0-9a-f]{40}(\s+#.*)?$")
 _TEST_SKIP = re.compile(r"pytest\.mark\.(skip|skipif|xfail)|pytest\.(skip|xfail)\(|unittest\.skip|@skip\b")
 _TEST_DEF = re.compile(r"^\s*(async\s+)?def\s+test_")
+# Reviews that may start a repair: the owner's request for changes, and these
+# bots' reviews when they report findings on the PR (an unknown format never counts).
+REVIEW_FINDINGS = {
+    "coderabbitai[bot]": re.compile(r"Actionable comments posted:\s*(\d+)"),
+    "devin-ai-integration[bot]": re.compile(r"\*\*Devin Review\*\* found (\d+) (?:new )?potential issue"),
+}
+# Progress of a review on its PR, written only by the workflows (GITHUB_TOKEN):
+# queued = counted and dispatched, handled = a repair run took it (or refused it).
+REVIEW_MARK_AUTHOR = "github-actions[bot]"
+_REVIEW_MARK = re.compile(r"<!-- agent-review:(queued|handled) ([\d,]+) -->")
 _LINKED_ISSUE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)", re.I)
 
 
@@ -232,6 +244,49 @@ def repair_refusal(pr, issue_labels, automation_enabled, owner_request=False):
     return None
 
 
+def actionable_review(review, owner):
+    """True for the owner's request for changes, or a listed bot's review that reports findings."""
+    login = (review.get("user") or {}).get("login", "")
+    if login == owner:
+        return review.get("state") == "CHANGES_REQUESTED"
+    pattern = REVIEW_FINDINGS.get(login)
+    found = pattern.search(review.get("body") or "") if pattern else None
+    return bool(found) and int(found.group(1)) > 0
+
+
+def review_marks(comments):
+    """(queued, handled) review ids from the workflows' markers; anyone else's text is ignored."""
+    marks = {"queued": set(), "handled": set()}
+    for comment in comments:
+        if (comment.get("user") or {}).get("login") != REVIEW_MARK_AUTHOR:
+            continue
+        for kind, ids in _REVIEW_MARK.findall(comment.get("body") or ""):
+            marks[kind].update(int(n) for n in ids.split(","))
+    return marks["queued"], marks["handled"]
+
+
+def review_plan(pr, issue_labels, reviews, comments, automation_enabled, owner, repair_busy):
+    """The review findings to send to the repair run now, and whether they cost an attempt.
+
+    New actionable reviews of the current head cost one attempt for all of them
+    together; a review already counted is never counted again. A counted review no
+    repair run took (its queued run was cancelled) is sent again, without a new
+    attempt, once no Claude writer run is waiting.
+    """
+    refusal = repair_refusal(pr, issue_labels, automation_enabled)
+    if refusal:
+        return {"reviews": [], "count": False, "reason": refusal}
+    queued, handled = review_marks(comments)
+    new = {r["id"] for r in reviews if r["id"] not in queued and r.get("commit_id") == pr["head"]["sha"]
+           and actionable_review(r, owner)}
+    waiting = queued - handled
+    if new:
+        return {"reviews": sorted(new | waiting), "count": True, "reason": ""}
+    if waiting and not repair_busy:
+        return {"reviews": sorted(waiting), "count": False, "reason": ""}
+    return {"reviews": [], "count": False, "reason": "新しい指摘なし" if not waiting else "修正の実行待ち"}
+
+
 def decide_gate(pr, check_runs, files, behind_by, automation_enabled, ci_conclusion=None):
     """The plan for one PR head: commit status, auto-merge eligibility and attempt bookkeeping."""
     head = pr["head"]["sha"]
@@ -320,6 +375,14 @@ def main(argv=None):
     assigned = sub.add_parser("assigned")
     assigned.add_argument("--labels", required=True, help="JSON list of label names")
     assigned.add_argument("--agent", required=True)
+    review = sub.add_parser("review")
+    review.add_argument("--pr", required=True)
+    review.add_argument("--issue-labels", required=True, help="JSON object: issue number -> label names")
+    review.add_argument("--reviews", required=True, help="the PR's reviews (gh --paginate --slurp)")
+    review.add_argument("--comments", required=True, help="the PR's issue comments (gh --paginate --slurp)")
+    review.add_argument("--owner", required=True)
+    review.add_argument("--automation", default="")
+    review.add_argument("--busy", action="store_true", help="a Claude writer run is queued or running")
     args = parser.parse_args(argv)
     if args.command == "gate":
         plan = decide_gate(_load(args.pr), _flatten_checks(_load(args.checks)), _flatten(_load(args.files)),
@@ -333,6 +396,9 @@ def main(argv=None):
         refusal = repair_refusal(_load(args.pr), _load(args.issue_labels), args.automation == "true",
                                  args.owner_request)
         plan = {"allowed": refusal is None, "reason": refusal or ""}
+    elif args.command == "review":
+        plan = review_plan(_load(args.pr), _load(args.issue_labels), _flatten(_load(args.reviews)),
+                           _flatten(_load(args.comments)), args.automation == "true", args.owner, args.busy)
     elif args.command == "assigned":
         plan = {"assigned": assigned_to(json.loads(args.labels), args.agent)}
     else:

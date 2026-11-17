@@ -1,0 +1,94 @@
+name: Agent review findings
+
+# agent/claude- の PR に付いたレビューの指摘を、agent-claude-repair.yml（Claude）の修正に回す。
+# 対象は所有者の Request changes と、指摘を報告した CodeRabbit・Devin のレビューだけ。レビューツールの Autofix は使わない。
+# 試行は CI 失敗と同じ 試行:N で数える（1回の判定で新しい指摘をまとめて1回）。同じレビューは2回数えない。
+# 修正の待ちが取り消されたレビューは、定期実行が数え直さずに起動し直す。
+# PR のコードは checkout も実行もしない（main の ci/ だけ）。運用: docs/development/AUTOMATION.md
+on:
+  pull_request_review:
+    types: [submitted]
+  schedule:
+    - cron: "*/30 * * * *"
+
+permissions: {}
+
+jobs:
+  dispatch:
+    # The review event is only a nudge: every run reads all open agent/claude- PRs from the API.
+    if: >-
+      vars.AUTOMATION_ENABLED == 'true' &&
+      (github.event_name == 'schedule' ||
+        (startsWith(github.event.pull_request.head.ref, 'agent/claude-') &&
+         github.event.pull_request.head.repo.full_name == github.repository &&
+         (github.event.review.user.login == github.repository_owner ||
+          contains(fromJSON('["coderabbitai[bot]", "devin-ai-integration[bot]"]'), github.event.review.user.login))))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      # One pass at a time, so a review is never counted twice; a cancelled waiting pass is caught by the next one.
+      group: agent-review-dispatch
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write    # attempt labels, and the progress markers on the PR
+      actions: write   # workflow_dispatch of agent-claude-repair.yml
+    steps:
+      # A review event runs this file from the PR's merge ref, so name main's ref: never the PR's code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: refs/heads/main
+          sparse-checkout: ci
+          persist-credentials: false
+      - name: Send new review findings to the repair run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          # A Claude writer run waiting or running: re-sending a cancelled review now would cancel it in turn.
+          busy=$(for wf in agent-claude.yml agent-claude-repair.yml; do
+            gh run list --workflow "$wf" --limit 20 --json status --jq '.[].status'; done | grep -cvx completed || true)
+          prs=$(gh api "repos/$GH_REPO/pulls?state=open&per_page=100" --paginate \
+            --jq '.[] | select(.head.ref | startswith("agent/claude-")) | .number')
+          for pr in $prs; do
+            gh api "repos/$GH_REPO/pulls/$pr" > "$work/pr.json"
+            echo '{}' > "$work/labels.json"
+            for issue in $(python3 ci/agent_control.py linked --pr "$work/pr.json" | jq -r '.issues[]'); do
+              labels=$(gh api "repos/$GH_REPO/issues/$issue" --jq '[.labels[].name]')
+              jq --arg n "$issue" --argjson l "$labels" '.[$n] = $l' "$work/labels.json" > "$work/next.json"
+              mv "$work/next.json" "$work/labels.json"
+            done
+            gh api "repos/$GH_REPO/pulls/$pr/reviews?per_page=100" --paginate --slurp > "$work/reviews.json"
+            gh api "repos/$GH_REPO/issues/$pr/comments?per_page=100" --paginate --slurp > "$work/comments.json"
+            busy_flag=(); if [[ "$busy" != "0" ]]; then busy_flag=(--busy); fi
+            plan=$(python3 ci/agent_control.py review --pr "$work/pr.json" --issue-labels "$work/labels.json" \
+              --reviews "$work/reviews.json" --comments "$work/comments.json" --owner "$OWNER" \
+              --automation "${AUTOMATION:-}" "${busy_flag[@]}")
+            echo "PR #$pr: $plan"
+            ids=$(jq -r '.reviews | map(tostring) | join(",")' <<< "$plan")
+            if [[ -z "$ids" ]]; then continue; fi
+            if [[ "$(jq -r .count <<< "$plan")" == "true" ]]; then
+              # Marker first: a pass that dies after it never counts the same review again.
+              gh pr comment "$pr" --body "レビューの指摘（レビュー $ids）を Claude の修正に回します。範囲外の提案は修正せず、この PR に挙げます。
+          <!-- agent-review:queued $ids -->"
+              for issue in $(jq -r 'keys[]' "$work/labels.json"); do
+                labels=$(gh api "repos/$GH_REPO/issues/$issue" --jq '[.labels[].name]')
+                step=$(python3 ci/agent_control.py attempt --labels "$labels")
+                for name in $(jq -r '.remove[]' <<< "$step"); do
+                  gh api -X DELETE "repos/$GH_REPO/issues/$issue/labels/$(jq -rn --arg n "$name" '$n|@uri')" > /dev/null || true
+                done
+                gh api -X POST "repos/$GH_REPO/issues/$issue/labels" --input <(jq '{labels: .add}' <<< "$step") > /dev/null
+                if [[ "$(jq -r .exhausted <<< "$step")" == "true" ]]; then
+                  gh issue comment "$issue" --body "AIによる試行が上限に達したため、担当を外して要オーナー対応にしました（PR #$pr のレビュー指摘）。"
+                fi
+              done
+            fi
+            # The repair run re-reads the labels and refuses an exhausted, reassigned or held issue.
+            gh workflow run agent-claude-repair.yml --ref main -f pr="$pr" -f reviews="$ids"
+            busy=1
+          done
