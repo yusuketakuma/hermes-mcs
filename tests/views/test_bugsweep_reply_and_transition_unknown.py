@@ -1,8 +1,12 @@
 """An unevaluated reply or an unanalysed post is unknown, never a missing reply or record (synthetic only)."""
+import sys
+from datetime import datetime
+
 import mcs_contract
 
 import notify_views
 import patient_context_view as pcv
+from mcs_queries import JST
 from patient_context import extract_context
 from semantic_testkit import _message
 from test_patient_context_v3_views import DAY, T0, _requests, ctx  # noqa: F401 - shared synthetic fixture
@@ -70,12 +74,37 @@ def test_pending_post_outside_window_keeps_the_observed_absence():
     assert group["no_record_unverified"] is False
 
 
-def test_pending_extraction_reaches_the_rendered_heading(ctx):
-    ctx.db.db.execute("DELETE FROM artifacts WHERE message_id=5")   # message 5 is now unanalysed
+def _transition_heads(ctx, *, unanalysed):
+    if unanalysed:
+        ctx.db.db.execute("DELETE FROM artifacts WHERE message_id=5")   # message 5 is now unanalysed
     body = "経過: 本人は本日退院しました。"
     ctx.db.save_messages([_message(7, body=body)], project_id=1)
     ctx.db.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=7", (T0 + 6 * DAY,))
     _artifact(ctx.db, "extract_v1", 7, {"patient_context": extract_context(body)}, {"hash": _hash_of(ctx.db, 7)})
     view = notify_views.patient_context_list(ctx.db.db, 1, "transition_course", cfg={}, since=T0, now=T0 + 30 * DAY)
-    assert not any("記載なし" in h for h in view["head"])
-    assert any("記載の有無は未確認" in h for h in view["head"])
+    return datetime.fromtimestamp(T0 + 6 * DAY, JST).strftime("%m/%d"), view["head"]
+
+
+def _inference_complete(monkeypatch):
+    monkeypatch.setattr(sys.modules["patient_context_refresh"], "context_view_read",
+                        lambda conn, pid, cfg=None: (None, {"complete": True}))
+
+
+def test_pending_extraction_reaches_the_rendered_heading(ctx):
+    day, heads = _transition_heads(ctx, unanalysed=True)
+    assert f"{day}の前後14日で記載の有無は未確認（未解析の投稿あり）" in heads
+    assert not any("記載が見つかりません" in h for h in heads)
+
+
+def test_unanalysed_post_keeps_absence_unconfirmed_after_a_complete_analysis(ctx, monkeypatch):
+    _inference_complete(monkeypatch)
+    day, heads = _transition_heads(ctx, unanalysed=True)
+    assert f"{day}の前後14日で記載の有無は未確認（未解析の投稿あり）" in heads
+    assert not any("記載が見つかりません" in h for h in heads)
+
+
+def test_complete_analysis_without_unanalysed_posts_states_the_absence(ctx, monkeypatch):
+    _inference_complete(monkeypatch)
+    day, heads = _transition_heads(ctx, unanalysed=False)
+    assert any(h.startswith(f"{day}の前後14日で記載が見つかりません: ") for h in heads), heads
+    assert not any("記載の有無は未確認" in h for h in heads)
