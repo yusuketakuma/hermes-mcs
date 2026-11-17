@@ -654,6 +654,32 @@ def test_other_role_patients_do_not_use_the_candidate_budget(runtime, real_cloud
     assert outcomes[-1]['status'] == 'progressed', outcomes
 
 
+def test_skipped_patients_write_no_bookmark_and_admission_runs_outside_the_write_lock(
+        runtime, real_cloud, monkeypatch):
+    """Reproduction: every other-role patient wrote the bookmark twice, and each write ran the
+    admission check (which may start external commands) under BEGIN IMMEDIATE."""
+    ledger, clock, _ = runtime
+    cfg, _ = real_cloud
+    _many_other_role(runtime, cfg, monkeypatch, 70)
+    real, writes, admitted = refresh._advance_patient_scan, [], []
+
+    def counted(*args, **kwargs):
+        writes.append(1)
+        return real(*args, **kwargs)
+
+    def admit():
+        admitted.append(ledger.db.in_transaction)
+        return True
+
+    monkeypatch.setattr(refresh, '_advance_patient_scan', counted)
+    first = refresh.run_due(ledger, cfg, deadline=clock.mono + 600, admit=admit, role='cloud')
+    assert 8 < first['wait_other_role'] <= refresh._ROLE_SKIP_LIMIT, first
+    # At most one write per candidate, one for the skips at the end and one for a cancelled
+    # query, never one per skipped patient.
+    assert len(writes) <= 10 and len(writes) < first['wait_other_role'], (len(writes), first)
+    assert admitted and not any(admitted), admitted
+
+
 def test_no_preference_while_the_rebuilding_patients_context_is_visible(runtime, monkeypatch):
     ledger, _, _ = runtime
     assert refresh.PREFER_LIMIT == 32
