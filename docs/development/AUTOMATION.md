@@ -97,6 +97,24 @@ AI ブランチ（`agent/`・`copilot/`・`codex/`）の CI が失敗すると�
 Copilot と Dots の PR は自動では再起動しません（Copilot は所有者が PR で `@copilot` と書きます）。
 同じブランチの書き手を1つに保つため、CodeRabbit などレビューツールの自動修正（Autofix）は使いません。
 
+### レビュー指摘の自動修正（Claude 担当だけ）
+
+レビューの指摘も、Autofix ではなく同じ `agent-claude-repair.yml` の Claude が直します。
+`.github/workflows/agent-review.yml` が、レビューの投稿（`pull_request_review`）と30分おきの定期実行で、開いている `agent/claude-…` の PR をすべて調べます。
+
+- 数える指摘は、所有者の Request changes のレビューと、CodeRabbit（`Actionable comments posted: N` が1以上）・Devin（`Devin Review found N potential issue` が1以上）のレビューだけです。
+  指摘0件・nitpick だけ・「No Issues Found」・PR に載らない flag・スレッドへの返信・Codex など他のレビューは数えません。現在の head より古いコミットへのレビューも数えません。
+  所有者の指摘を PR のコメントで書いたときは対象外なので、これまでどおり `@claude` と書きます。両方を使うと Claude が2回動きます。
+- 対象の PR と Issue の条件は CI 失敗の自動修正と同じです（`担当:claude` だけ。`担当:dots` は別の書き手なので対象外）。
+- 1回の判定で見つかった新しい指摘はまとめて1回と数え、CI 失敗と同じ `試行:N` を進めます。3回目で `要オーナー対応` にして止まります。
+  同じレビューは2回数えません。判定は PR に `<!-- agent-review:queued … -->` を、修正の実行は `<!-- agent-review:handled … -->` を書き、`github-actions[bot]` が書いたものだけを読みます。
+- Claude の書き込みの待ちが取り消されて handled が付かなかったレビューは、Claude の実行が何も待っていないときに、次の判定が数え直さずに起動し直します。
+- 修正モードの Claude は、指摘を `.git/agent-review.md`（commit されない）からデータとして読み、結ばれた Issue の受入条件の範囲だけを直します。
+  範囲外の提案と誤りと判断した指摘は直さず、PR に1回のコメントで挙げます。テストの削除・skip・閾値の緩和はしません。
+- レビュー投稿で起動した実行は、PR の merge ref にある `agent-review.yml` で動きます（`ci.yml` と同じ）。そのため checkout は main の `ci/` だけに固定し、`.github/` を変える PR は人がマージします。
+- CodeRabbit は bot が作った PR を自動ではレビューしません（「Bot user detected」）。`github-actions[bot]` の `@coderabbitai review` が受け付けられるかは確かめていないので、自動では書きません。
+  CodeRabbit の指摘を回すときは、所有者が PR に `@coderabbitai review` と書きます。Devin は所有者の設定で bot の PR もレビューします。
+
 ## main の取り込みと生成表（`main-sync`）
 
 PR どうしの衝突を減らすため、`.github/workflows/main-sync.yml` が main への push のたびに2つの処理をします。
@@ -186,6 +204,8 @@ gh secret set OPENAI_API_KEY --repo $R
 - Claude GitHub App をこのリポジトリにインストールします（https://github.com/apps/claude）。
 - `merge-gate` を main-protect の必須チェックに足すのは、合成の試験 PR でゲートの不合格を確かめてからにします。
 - 自動マージを使うときは、Settings → General の Allow auto-merge をオンにします。
+- Actions event policy で起動イベントを絞っている場合は、`agent-review.yml` 用に `pull_request_review` と `schedule` を許可します。
+  許可が無いとレビュー指摘の自動修正は起動しません。
 
 `main-sync` の生成表 commit に使う deploy key は次の手順で設定します（鍵は手元で作り、秘密鍵は secret に入れたあと消します）。
 
