@@ -1414,6 +1414,12 @@ def _circuit_result(ledger, error, *, reset=False):
     return record_circuit_result(ledger, error, kind="cloud_circuit", reset=reset)
 
 
+def _circuit_on_pricing_error(ledger, error, model):
+    """Hold the circuit for an unverifiable price or accounting; an expired price table only refuses."""
+    if error.kind == "pricing_unverified" and pricing_valid(model=model):
+        _circuit_result(ledger, error)
+
+
 def block_reason(ledger, cfg, route, project_id, *, model=None):
     if not eligible(cfg, route, project_id):
         return "scope"
@@ -1838,7 +1844,7 @@ def request_send_block_reason(ledger, cfg, body, *, route, project_id, unit_key,
     except AnthropicError as error:
         if error.kind == 'pricing_unverified' and not ledger.db.in_transaction:
             try:
-                _circuit_result(ledger, error)
+                _circuit_on_pricing_error(ledger, error, candidate['model'])
             except Exception:
                 # Failure to record the circuit must never turn an accounting
                 # refusal into a fresh/local input or replace its fixed category.
@@ -1869,7 +1875,7 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
         try:
             maximum = max_cost(tokens, input_bound=bound, model=model, now=now)
         except AnthropicError as error:
-            _circuit_result(ledger, error)
+            _circuit_on_pricing_error(ledger, error, model)
             raise
         meta.update(reservation_id=uuid.uuid4().hex,
                     price_version=_price_definition(model, now=now)["price_version"],
@@ -1906,8 +1912,7 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
         try:
             return reserve_artifact(ledger, check, write)
         except AnthropicError as error:
-            if error.kind == "pricing_unverified":
-                _circuit_result(ledger, error)
+            _circuit_on_pricing_error(ledger, error, model)
             raise
     return reserve
 

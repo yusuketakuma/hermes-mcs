@@ -445,6 +445,16 @@ def test_a_result_after_the_price_table_expires_is_settled_at_its_reservation_pr
             c.record_result(ledger, {**reservation, "price_version": "older-table"}, result)
 
 
+def test_an_expired_price_table_refuses_a_reservation_without_opening_the_circuit(tmp_path, now, monkeypatch):
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        reserve = c.usage_reserver(ledger, _period(), route="patient_context", project_id=1, unit_key="u1")
+        monkeypatch.setattr(c, "pricing_valid", lambda now=None, *, model=None: False)
+        with pytest.raises(c.AnthropicError) as raised:
+            reserve({"model": c.MODEL, "max_tokens": 100}, 2)
+        assert raised.value.kind == "pricing_unverified"
+        assert not ledger.artifacts("cloud_circuit")
+
+
 def test_provider_cap_reduction_preserves_paid_result_but_blocks_new_reservation(tmp_path, now):
     high = {"cloud_llm": {"mode": "on", "provider": "anthropic", "project_ids": [1], "daily_cost_limit_usd": 80,
                           "monthly_cost_limit_usd": 80, "provider_budgets": {"anthropic": {
