@@ -1263,7 +1263,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             # probe would be a call nobody uses.
             if any(r.get("_cloud_mode") != "on" for _, r, *_ in claimed) and deadline - time.monotonic() >= _MIN_CALL_S:
                 probed_at = extract_llm_provider._FMT_TS
-                _probe_format(deadline=deadline)
+                _probe_format(deadline=deadline - _MIN_CALL_S)
                 pre_probes = int(extract_llm_provider._FMT_TS != probed_at)
             from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
             with ThreadPoolExecutor(

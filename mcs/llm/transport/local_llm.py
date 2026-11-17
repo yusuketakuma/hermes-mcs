@@ -234,6 +234,34 @@ def pinned_slot(slot):
             os.environ["MCS_LLM_SLOT"] = previous
 
 
+@contextmanager
+def call_turn(deadline: float | None, min_s: float,
+               slot: int | None = None, *, held_slots=None):
+    """Hold one physical turn across a caller's probe+body send sequence.
+
+    Sends inside the block reuse the held slot through ``_OWNED_TURN``
+    instead of re-queueing for it; each send still takes its own permit
+    and honours its own deadline. ``held_slots=None`` resolves the
+    admission broker's held slots when the shared boundary is enabled,
+    matching ``admitted_chat``'s avoidance. Yields the held slot, or
+    ``None`` when no slot fit before ``deadline`` — the block then runs
+    with each send acquiring its own turn exactly as before."""
+    if held_slots is None and scheduling_enabled() and admission_enabled():
+        broker = _broker()
+        held_slots = broker.held_slots if broker.is_open() else None
+    with _request_turn(deadline, min_s,
+                       slot if slot is not None else request_slot(),
+                       held_slots=held_slots) as selected:
+        if selected is None:
+            yield None
+            return
+        token = _OWNED_TURN.set(selected)
+        try:
+            yield selected
+        finally:
+            _OWNED_TURN.reset(token)
+
+
 # ---------- cross-client admission boundary (T20, default off) ----------
 
 def admission_enabled() -> bool:
