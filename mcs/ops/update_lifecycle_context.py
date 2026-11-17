@@ -483,7 +483,7 @@ def _remove_marker() -> None:
 # A notice_id names one notification intent: a replay after an unacknowledged
 # (possibly committed) enqueue reuses the event instead of adding another.
 _NOTICE_SEEN_SQL = ("SELECT 1 FROM notify_outbox WHERE kind='update_notice' "
-                    "AND json_extract(payload,'$.notice_id')=? LIMIT 1")
+                    "AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.notice_id')=? END LIMIT 1")
 _NOTICE_CHILD = (
     "import sys, json; sys.path.insert(0, sys.argv[1]); import _mcs_path, ledger\n"
     "db = ledger.Ledger(sys.argv[2])\n"
