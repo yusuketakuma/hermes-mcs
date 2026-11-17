@@ -342,8 +342,10 @@ class LedgerSemanticSourcesMixin:
                 source_changed = (old_targets != set(pl['targets'])
                                   or pl.get('source_generation') != source_generation)
                 # A done job without an execution marker (arrival and history
-                # seeds write none) was never bound to a generation: a
-                # reprocess adoption binds it once, as a new budget.
+                # seeds write none) was never bound to a generation. The
+                # reprocess pass replays one only when its assessment predates
+                # the registry (or its source changed); it binds it once, as a
+                # new budget.
                 unbound_done = (existing['state'] == 'done'
                                 and 'execution_contract' not in old_pl
                                 and 'execution_generation' not in old_pl)

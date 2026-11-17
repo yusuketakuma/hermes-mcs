@@ -126,14 +126,31 @@ def _reprocess_execution_unverifiable(pl):
     return runtime.execution_marker_state(pl, None) == 'unverifiable'
 
 
-def _reprocess_unbound_done(state, pl):
-    """Completed job whose outdated results were never bound to a generation.
+def _reprocess_unbound_done(ledger, row, state, pl):
+    """Completed marker-less job whose per-post assessment predates the registry.
 
     Arrival and history seeds write no execution marker, so a done job of
-    theirs cannot show which interpretation it was evaluated under. The
-    pass adopts it once under the current generation; after that it carries
-    the marker and, like every marked job, reopens only for a new one."""
-    return state == 'repair_required' and runtime.execution_marker_state(pl, None) == 'legacy'
+    theirs cannot show which interpretation it was evaluated under. Only a
+    registry bump is read from its results: the newest per-post assessment
+    (the one without a fact_id) names an older registry. Any other outdated
+    result keeps the existing repair_required contract. The pass adopts the
+    job once under the current generation; the rebuilt assessment names the
+    current registry, so it is not adopted again."""
+    if state != 'repair_required' or runtime.execution_marker_state(pl, None) != 'legacy':
+        return False
+    import semantic_jev
+    from semantic_policy import KIND_ASSESS
+    for stored in ledger.db.execute('SELECT meta FROM artifacts WHERE kind=? AND project_id=? '
+                                    'AND message_id=? ORDER BY artifact_id DESC',
+                                    (KIND_ASSESS, row['project_id'], row['message_id'])):
+        meta = mcs_util.loads_dict(stored['meta'])
+        if meta is None:
+            return False
+        if meta.get('fact_id') is not None:
+            continue
+        registry = meta.get('registry')
+        return type(registry) is str and registry != semantic_jev.REGISTRY_VERSION
+    return False
 
 
 def _job_identity_same(token, current):
@@ -479,7 +496,7 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
                 sources[key] = ledger._semantic_source_generation(*key)
             if (not is_current(pl)
                     or _reprocess_execution_stale(pl, generation)
-                    or _reprocess_unbound_done(state, pl)
+                    or _reprocess_unbound_done(ledger, row, state, pl)
                     or pl.get('source_generation') != sources[key]
                     or not isinstance(pl.get('targets'), list) or row['message_id'] not in pl['targets']):
                 arrival = _reprocess_arrival_event(

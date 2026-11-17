@@ -190,3 +190,108 @@ def test_execution_generation_names_the_registry_but_not_local_labels(monkeypatc
     monkeypatch.setattr(jev, "REGISTRY_VERSION", BUMPED)
     assert runtime.execution_generation(base) != before["base"]
     assert runtime.interpretation_generation(base) != loop
+
+
+def _observable(store):
+    """Job rows and the reprocess bookmark's identity (not its observation clocks)."""
+    from semantic_scheduler_state import _sched_state
+    rows = store.db.execute("SELECT * FROM fetch_jobs WHERE kind='semantic' ORDER BY job_id").fetchall()
+    bookmark = _sched_state(store).get("inference_reprocess", {})
+    return [dict(row) for row in rows], {key: bookmark.get(key) for key in (
+        "phase", "complete", "proof_generation", "seed_cursor", "proof_status", "waiting_reasons")}
+
+
+def _counted_drain(store, cfg, rounds=3):
+    """Drain with stubs that count every local LLM prompt and Jev request."""
+    calls = {"llm": 0}
+    client = _FakeJev()
+
+    def llm(prompt):
+        calls["llm"] += 1
+        return _llm(prompt)
+    for _ in range(rounds):
+        drain.run_due(store, cfg, {"errors": []}, time.monotonic() + 300, jev_client=client, llm_fn=llm)
+    return calls["llm"], client.requests_made
+
+
+def test_the_registry_key_is_absent_while_the_registry_is_the_marked_one():
+    """Deploying the re-queue code alone must keep every stored execution marker valid."""
+    from mcs_util import payload_hash
+    from semantic_extraction import v2_generation
+    for scfg in (semantic_policy.runtime_config(_cfg("assist"))[0],
+                 semantic_policy.runtime_config(_cfg("assist", extra_propositions=["E01"]))[0]):
+        policy = {**scfg, "candidate_fingerprint": None}
+        before_registry_key = payload_hash({VERSION_KEY: CURRENT_VERSION, "schema": semantic_policy.SCHEMA_VERSION,
+                                            "policy": semantic_policy.policy_fingerprint(policy),
+                                            "extraction": v2_generation(None)})
+        assert jev.REGISTRY_VERSION == runtime._MARKED_REGISTRY_VERSION
+        assert runtime.execution_generation(scfg) == before_registry_key
+
+
+@pytest.mark.parametrize("origin", ORIGINS)
+def test_a_deploy_without_a_bump_changes_nothing_observable(store, origin):
+    """Same job rows (state, attempts, payload), same bookmark, zero LLM and Jev calls."""
+    cfg = _cfg(loop_mode="off")
+    _evaluated(store, cfg, origin)
+    _settle(store, cfg)
+    if origin == "reprocess_seed":
+        # an exhausted marked job keeps its spent budget
+        with store.db:
+            store.db.execute("UPDATE fetch_jobs SET state='failed',attempts=6 WHERE kind='semantic'")
+    before = _observable(store)
+    for _ in range(6):
+        drain.reprocess_step(store, cfg)
+    assert _counted_drain(store, cfg) == (0, 0)
+    assert _observable(store) == before
+
+
+def _outdate_for_another_reason(cfg, reason):
+    cfg = json.loads(json.dumps(cfg))
+    if reason == "calibration":
+        cfg["semantic"]["calibration_version"] = "synthetic-test-v2"
+    else:
+        cfg["semantic"]["match_threshold"] = 0.71
+    return cfg
+
+
+@pytest.mark.parametrize("reason", ["calibration", "match_threshold"])
+def test_a_job_outdated_for_another_reason_is_not_adopted_without_a_bump(store, monkeypatch, reason):
+    """Marker-less done jobs non-current for a non-registry reason keep the origin/main contract."""
+    cfg = _cfg(loop_mode="off")
+    _evaluated(store, cfg, "live_arrival")
+    changed = _outdate_for_another_reason(cfg, reason)
+    assert not semantic_policy.runtime_config(changed)[1]
+    assert _state(store, changed) == "repair_required"
+    before = dict(_job(store))
+    for _ in range(12):
+        drain.reprocess_step(store, changed)
+    assert dict(_job(store)) == before
+    # the bump then rebuilds it exactly once
+    monkeypatch.setattr(jev, "REGISTRY_VERSION", BUMPED)
+    _settle(store, changed)
+    assert _job(store)["state"] == "pending" and _job(store)["attempts"] == 0
+    llm_calls, jev_calls = _counted_drain(store, changed)
+    assert llm_calls and jev_calls
+    assert _job(store)["state"] == "done" and _state(store, changed) == "current"
+    after = dict(_job(store))
+    for _ in range(12):
+        drain.reprocess_step(store, changed)
+    assert _counted_drain(store, changed) == (0, 0)
+    assert dict(_job(store)) == after
+
+
+@pytest.mark.parametrize("origin", ORIGINS)
+def test_a_bump_rebuilds_each_origin_exactly_once(store, monkeypatch, origin):
+    cfg = _cfg(loop_mode="off")
+    _evaluated(store, cfg, origin)
+    monkeypatch.setattr(jev, "REGISTRY_VERSION", BUMPED)
+    _settle(store, cfg)
+    assert _job(store)["state"] == "pending"
+    llm_calls, jev_calls = _counted_drain(store, cfg)
+    assert llm_calls and jev_calls
+    assert _job(store)["state"] == "done" and _state(store, cfg) == "current"
+    after = dict(_job(store))
+    for _ in range(12):
+        drain.reprocess_step(store, cfg)
+    assert _counted_drain(store, cfg) == (0, 0)
+    assert dict(_job(store)) == after
