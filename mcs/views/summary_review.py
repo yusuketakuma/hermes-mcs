@@ -145,7 +145,8 @@ def _current_candidate(db, project_id: int, message_id: int,
 def _adoption_rows(db, project_id: int, message_id: int,
                    comparison_hash: str | None, source_fingerprint: str | None,
                    policy_fingerprint: str | None,
-                   summary_artifact_id: int) -> list[dict]:
+                   summary_artifact_id: int,
+                   candidate_current: bool) -> list[dict]:
     rows = db.execute(
         "SELECT artifact_id,content,meta FROM artifacts "
         "WHERE kind=? AND project_id=? AND message_id=? "
@@ -201,7 +202,7 @@ def _adoption_rows(db, project_id: int, message_id: int,
             except (sqlite3.Error, ValueError, TypeError):
                 pass
         current = bool(
-            receipt_verified and comparison_hash
+            candidate_current and receipt_verified and comparison_hash
             and content.get("comparison_hash") == comparison_hash
             and content.get("summary_artifact_id") == summary_artifact_id
             and meta.get("source_fingerprint") == source_fingerprint
@@ -362,7 +363,8 @@ def comparison(db, project_id: int, message_id: int,
     adoptions = _adoption_rows(
         db, project_id, message_id, comparison_hash,
         bundle["source_fingerprint"] if bundle else None,
-        policy, candidate["artifact_id"] if candidate else -1)
+        policy, candidate["artifact_id"] if candidate else -1,
+        bool(candidate and candidate["current"]))
     adopted = any(adoption["current"] for adoption in adoptions)
     if candidate is not None:
         candidate["adopted"] = adopted
