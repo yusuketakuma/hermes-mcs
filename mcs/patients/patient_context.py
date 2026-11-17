@@ -379,14 +379,14 @@ _PATIENT_WORD = re.compile(_PATIENT_REF)
 # pointer back to the patient's record (皆・全員・入居者・本人同様・同じ・それ); the
 # closed shapes below guarantee everything else. A family or other word already covers
 # 他人・主人・夫婦. 同 before a noun is "the same as the patient's" (同薬・同施設・同内容)
-# except where it means "together" (同居・同意・同席・同行・同伴・同室・同時・同日), which
-# points at nothing unless it names the item itself (同時薬).
+# except where it means "together" (同居・同席・同行・同伴・同室・同時・同日), which
+# points at nothing unless it names the item itself (同時薬); 同意 is a stance, not a thing.
 # The item an allergy or adverse-event fact is about; after a determiner it is "this one".
 _ITEM = "薬剤品"
 _NOT_A_THING = (rf"{clinical_scope.FAMILY_PERSON}|{clinical_scope.OTHER_PERSON}|{_PATIENT_REF}"
                 r"|者|さん|様|ちゃん|君|氏"
                 r"|皆|みな|みんな|全|両|双方|共|一緒|揃|そろ|二人|ふたり|親子"
-                rf"|同(?![居意席行伴室時日](?![{_ITEM}]))|おなじ|それ|これ|あれ")
+                rf"|同(?![居席行伴室時日](?![{_ITEM}]))|おなじ|それ|これ|あれ")
 # A thing is self-contained unless it opens with a determiner kanji (当・本・該・前・上・
 # 下・左・右・既・先・件・例・以) that refers back: one standing alone (当アレルギー・同じ)
 # or one before a head that completes a reference — a place in the record (左記・前述・
