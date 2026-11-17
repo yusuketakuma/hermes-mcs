@@ -858,6 +858,37 @@ def test_worker_does_not_settle_old_carry_after_update_fence(
     assert 'synthetic-private-detail' not in json.dumps(records)
 
 
+def test_worker_reports_carry_settlement_with_fixed_reasons(carry_worker, monkeypatch, capsys):
+    import extract_llm
+    state, _ = carry_worker
+    item = object()
+
+    def extract(ledger, **kw):
+        state.memory = False
+        state.carry = [item]
+        return {"done": 1, "carry": state.carry}
+
+    def settle(ledger, carry, **kw):
+        assert kw["report"] is False
+        carry.clear()
+        return {"done": 2, "held_prior": 1, "deferred": 3,
+                "defer_reasons": {"update_fence": 2, "synthetic-private-detail": 1}}, 3, set()
+
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+    monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
+    with legacy_cloud_routes():
+        backlog.worker(991)
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    settled = [r for r in records if r['event'] == 'cloud_carry_settled']
+    assert len(settled) == 1
+    assert {k: settled[0][k] for k in ('carried', 'kept', 'done', 'held_prior', 'deferred', 'defer_reasons')} == {
+        'carried': 1, 'kept': 0, 'done': 2, 'held_prior': 1, 'deferred': 3, 'defer_reasons': {'update_fence': 2}}
+    assert 'synthetic-private-detail' not in json.dumps(records)
+
+
 def test_worker_attempts_paid_carry_before_low_memory_exit(carry_worker, monkeypatch):
     import extract_llm
     state, fake_ledger = carry_worker

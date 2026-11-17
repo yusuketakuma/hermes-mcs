@@ -567,10 +567,19 @@ def worker(parent, *, index=None, context_only=False):
 
         def settle_carry():
             deadline = time.monotonic() + 3.0
-            extract_llm._settle_carry(
+            held = len(carry)
+            settled = extract_llm._settle_carry(
                 ledger, carry, final=False, fence=initial,
                 lock_context=extract_llm._write_lock(True, wait_s=1, deadline=deadline),
-                preserve_on_fence_loss=True, deadline=deadline)
+                preserve_on_fence_loss=True, deadline=deadline, report=False)[0]
+            if any(type(settled.get(key)) is int and settled[key] > 0 for key in ("done", "held_prior", "deferred")):
+                # A pass's `done` counts only what that run_pending call saved; work carried
+                # out of it is saved (done) or released (deferred) here, so it is reported here.
+                reasons = {key: count for key, count in (settled.get("defer_reasons") or {}).items()
+                           if key in _DEFER_REASONS and type(count) is int and count > 0}
+                _event("cloud_carry_settled", carried=held, kept=len(carry), done=settled["done"],
+                       done_unit="messages", held_prior=settled["held_prior"],
+                       deferred=settled["deferred"], defer_reasons=reasons)
 
         try:
             while os.getppid() == parent and writer_lock.updater_state() == initial and not initial[0]:
