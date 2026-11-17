@@ -1195,3 +1195,28 @@ def test_precheck_tag_rejects_nonregular_runtime_asset(monkeypatch, mode, kind):
     monkeypatch.setattr(update_preflight, '_run_with_lifetime', no_blob_or_probe)
     errors = update_preflight.precheck_tag('v1.2.0')
     assert errors == [f'preflight_failed: bad_entry_type: {mode} {asset}']
+
+
+def test_abort_notice_dropped_by_a_busy_tick_is_sent_by_the_next_check(updater, monkeypatch):
+    """Regression: a pre-lock abort consumed the receipt, then lost its only
+    notice because a collection tick held run.lock at that moment."""
+    _apply_env(updater, monkeypatch)
+    monkeypatch.setattr(update_apply, 'precheck_local', lambda cfg: ["synthetic"])
+    monkeypatch.setattr(update_apply, '_enqueue_notice', lambda *a, **k: False)
+    assert updater.apply("v1.1.0", "a" * 40, "cid-busy") == 1
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["executed"]["cid-busy"]["result"] == "failed"
+    [pending] = state["pending_notices"]
+    assert pending["notice_code"] == "aborted" and "synthetic" in pending["text"]
+
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {"update": {"mode": "notify"}})
+    monkeypatch.setattr(update_discovery, 'detect_latest', lambda pre, **_paths: (None, None))
+    monkeypatch.setattr(update_discovery, 'current_version', lambda **_paths: ("v1.0.0", "b" * 40))
+    monkeypatch.setattr(update_cli, 'scan_pending_approvals', lambda state: ([], []))
+    monkeypatch.setattr(update_cli, '_drug_info_notices', lambda cfg: None)
+    sent = []
+    monkeypatch.setattr(update_cli, '_enqueue_notice', lambda text, **k: sent.append((text, k)) or True)
+    assert updater.cmd_check() == 0
+    assert sent == [(pending["text"], {"use_run_lock": True, "notice_code": "aborted",
+                                       "tag": "v1.1.0"})]
+    assert "pending_notices" not in updater.journal_store.load_state(updater.STATE_PATH)
