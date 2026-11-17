@@ -398,7 +398,7 @@ def test_degraded_producer_keeps_live_reply_from_mixed_history_origin(tmp_path, 
                       "ON CONFLICT(message_id,source) DO UPDATE SET content=excluded.content",
                       (json.dumps({"_initial_import": {"role":"history", "cohort_id":"a"*32}}),))
         db.db.commit()
-        monkeypatch.setattr(semantic_notice.semantic_transport, "llm_model", lambda: None)
+        monkeypatch.setattr(semantic_notice.semantic_transport, "llm_model", lambda cfg=None: None)
         assert semantic_notice.emit_degraded(db, scfg) == 1
         event = db.db.execute("SELECT * FROM notify_outbox WHERE kind='semantic_notice'").fetchone()
         payload = json.loads(event["payload"])
@@ -438,7 +438,7 @@ def test_notice_defers_until_the_summary_is_replaced_then_is_terminal(tmp_path, 
     db.close()
 
 
-def test_gate_reads_the_local_model_once_per_check(tmp_path, monkeypatch):
+def test_gate_never_reads_host_config_for_the_local_model(tmp_path, monkeypatch):
     import semantic_transport
     monkeypatch.setattr(semantic_transport, "LLM_MODEL", "Qwen3.5-9B")
     db = _delivery_db(tmp_path, [_message()])
@@ -446,11 +446,12 @@ def test_gate_reads_the_local_model_once_per_check(tmp_path, monkeypatch):
     monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
     event = _semantic_event(db)
     payload = json.loads(event["payload"])
-    reads = []
-    real = semantic_transport.llm_model
-    monkeypatch.setattr(semantic_transport, "llm_model", lambda c=None: reads.append(1) or real(c))
+    host_reads = []
+    real = semantic_transport.llm_conf
+    monkeypatch.setattr(semantic_transport, "llm_conf",
+                        lambda c=None: host_reads.append(1) or real(c) if c is None else real(c))
     semantic_send_gate.semantic_gate(db.db, event, payload, cfg)
-    assert len(reads) == 1
+    assert host_reads == []
     db.close()
 
 
