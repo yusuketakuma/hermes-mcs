@@ -322,9 +322,13 @@ The Jev incremental-value experiment is a separate synthetic comparison; its rep
     (PASS/NEEDS_REVIEW) result of its candidate was committed
     (`empty_repair_consumed`: an audit after the candidate counting the
     repair, paired by id and hash with a summary carrying the candidate's
-    claims), or when it was made before the current fact row and its
-    candidate is not bound to the current facts
-    (`empty_repair_over_earlier_facts`), or when the summary/audit pair it
+    claims; judged on the latest `empty_repair` candidate of the same
+    fingerprint linked to the marker, so a later redone pre-audit
+    candidate does not hide it), when it was made before the current fact
+    row and its candidate is not bound to the current facts
+    (`empty_repair_over_earlier_facts`), when its candidate was written
+    by a local model that is no longer current
+    (`empty_repair_candidate_producer`), or when the summary/audit pair it
     was reserved over was superseded without its result (a newer row, or
     a recorded row now invalidated or stale) and its candidate would
     otherwise be recovered (provenance proven, no recorded answer or

@@ -148,6 +148,41 @@ def test_committed_empty_repair_result_reserves_nothing(empty_candidate, tamper)
         assert result == (None, True) and diag == {'code': 'empty_repair_prior_unverified'}
 
 
+def test_consumed_empty_repair_is_judged_on_its_own_candidate(empty_candidate):
+    """A redone pre-audit candidate written after the committed result does not hide it."""
+    db, content, meta, _, calls, seed = empty_candidate
+    seed(content, meta)
+    audit = {'status': 'PASS', 'findings': [], 'target_message_id': 1}
+    audit_meta = {VERSION_KEY: CURRENT_VERSION, 'fingerprint': 'fp', 'policy_fingerprint': 'policy',
+                  'audit_status': 'PASS', 'repair_count': 1, 'summary_artifact_id': 3,
+                  'summary_hash': summary.mcs_util.payload_hash(content)}
+    redone = dict(meta, stage='pre_audit')
+    redone.pop('repair_artifact_id')
+    for artifact_id, kind, body, body_meta in (
+            (3, summary.KIND_SUMMARY, content, {}), (4, summary.KIND_AUDIT, audit, audit_meta),
+            (5, summary.KIND_CANDIDATE, content, redone)):
+        db.execute('INSERT INTO artifacts VALUES (?,?,1,1,?,?)',
+                   (artifact_id, kind, json.dumps(body), json.dumps(body_meta)))
+    db.commit()
+    diag = {}
+    assert summary._empty_repair_candidate(db, 1, 1, 'fp', 'policy', 'revision', 'assist', [],
+                                         reason_out=diag) == (None, False)
+    assert diag == {'code': 'empty_repair_consumed'}
+
+
+def test_empty_repair_candidate_of_an_earlier_local_model_is_not_recovered(empty_candidate, monkeypatch):
+    db, content, meta, _, calls, seed = empty_candidate
+    seed(content, meta)
+    seen = []
+    monkeypatch.setattr(summary.semantic_store, 'producer_current',
+                        lambda kind, model, row_meta: seen.append((kind, row_meta)) or False)
+    diag = {}
+    assert summary._empty_repair_candidate(db, 1, 1, 'fp', 'policy', 'revision', 'assist', [],
+                                         reason_out=diag) == (None, False)
+    assert diag == {'code': 'empty_repair_candidate_producer'}
+    assert seen == [(summary.KIND_CANDIDATE, meta)] and calls == []
+
+
 def test_empty_validation_exception_hides_error_text():
     class Unavailable:
         def execute(self, *_):
