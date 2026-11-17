@@ -347,6 +347,45 @@ def extract_context(body: str) -> list[dict]:
     return result
 
 
+# Rule 30: a heading names its subject only where the heading or the head of its value
+# names the person; a person heading the value can only weaken a patient heading.
+_SUBJECT_HEADINGS = {"家族の意向": "family", "家族の希望": "family",
+                     "本人の意向": "patient", "本人の希望": "patient"}
+_SUBJECT_CATEGORIES = frozenset({"preferences", "allergies", "adverse_events"})
+_VALUE_PERSON = re.compile(
+    r"[ \t　]*(?:[■●◆#・＊*]+[ \t　]*)?"
+    rf"(?:(?P<family>{clinical_scope.FAMILY_PERSON})|(?P<other>{clinical_scope.OTHER_PERSON}))"
+    r"(?:ご本人|本人)?(?:自身)?(?:は|が|の|も)")
+
+
+def heading_subject(label, value) -> str:
+    """Name the subject a preference, allergy or adverse-event heading states, else leave it unspecified."""
+    if not isinstance(label, str) or not isinstance(value, str):
+        return "unspecified"
+    if _CATEGORY_FOLD.get(label.casefold()) not in _SUBJECT_CATEGORIES:
+        return "unspecified"
+    person = _VALUE_PERSON.match(value)
+    if person:
+        return "family" if person["family"] else "other"
+    return _SUBJECT_HEADINGS.get(label, "unspecified")
+
+
+def annotate_heading_subjects(items) -> list:
+    """Return the items with each unspecified heading item's subject named by rule 30, inputs untouched."""
+    if not isinstance(items, list):
+        return []
+    result = []
+    for item in items:
+        if (isinstance(item, dict) and item.get("origin") == "explicit_heading"
+                and item.get("subject") == "unspecified"
+                and isinstance(item.get("evidence"), str) and isinstance(item.get("text"), str)):
+            lines = item["evidence"].splitlines()
+            header = _HEADING.match(lines[0]) if lines else None
+            item = {**item, "subject": heading_subject(header["label"], item["text"]) if header else "unspecified"}
+        result.append(item)
+    return result
+
+
 def context_items(doc, body: str) -> list[dict]:
     """Read only well-shaped context with a unique verbatim source and contained value."""
     if not isinstance(body, str):
