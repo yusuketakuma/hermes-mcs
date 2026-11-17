@@ -321,6 +321,18 @@ def _precheck_target_tree(tag: str, standalone: bool, *, deadline=None, installe
     return errors, entries
 
 
+def _standalone_sdk_rollback_error(entry: dict, cfg: dict) -> str | None:
+    """A rollback keeps ~/.mcs/venv's SDKs; the older host refuses any other pins."""
+    try:
+        hermes = mcs_runtime.mode(cfg) == "hermes"
+    except (ValueError, TypeError, AttributeError):
+        hermes = False                  # unknown mode: keep the stricter standalone rule
+    if hermes or _git(["diff", "--quiet", str(entry.get("prev_sha")), "HEAD", "--",
+                       "deployment/requirements-standalone.txt"]).returncode == 0:
+        return None
+    return "standalone_sdk_rollback_unsupported"
+
+
 def _precheck_target_runtime_files(tag: str, standalone: bool, *, deadline=None) -> list[str]:
     """Retain the existing installer, lock and SDK change refusals."""
     errors = []
