@@ -781,7 +781,7 @@ def worker(parent, *, index=None, context_only=False):
 
 
 _CONTEXT_PASS_REASONS = frozenset({
-    "transaction_active", "patient_context_waiting", "patient_context_scan_incomplete",
+    "transaction_active", "patient_context_waiting", "patient_context_scan_incomplete", "patient_context_nothing_due",
     "patient_context_patient_invalid",
     "patient_context_readiness_unverified", "patient_context_generation_changed", "run_lock",
     "patient_context_selection_busy", "patient_context_selection_unavailable",
@@ -909,8 +909,9 @@ def _context_retry_delay(result):
     base, _, code = reason.partition(":") if type(reason) is str else ("", "", "")
     if base == "patient_context_cloud_deferred":
         return 5 if code == "cloud_capacity" else 60
-    if reason in ("patient_context_cloud_budget", "patient_context_other_role"):
-        # Every patient the pass reached is served by the other worker role.
+    if reason in ("patient_context_cloud_budget", "patient_context_other_role",
+                  "patient_context_nothing_due"):
+        # Every patient the pass reached is served by the other worker role, or none was due.
         return 60
     return 5
 

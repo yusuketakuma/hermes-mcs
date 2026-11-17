@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "患者が9人以上で何も処理する対象がないとき、患者コンテキストの走査を空回りさせない",
+  "summary": "患者が9人以上いて、確認した患者に処理待ちも待機もない周回は、専用の理由 patient_context_nothing_due で返し、次の周回まで60秒待ちます。これまでは5秒ごとに走査位置を最大8回書き込み続けていました。処理待ちがある周回の間隔は変わりません。",
+  "upgrade": "追加操作は不要です。Hermes plugin ではなく常駐 worker とレーンの変更のため、反映には常駐処理の再起動が必要です。患者コンテキストの処理内容・順序・公開条件は変更していません。",
+  "details": [
+    "patient_context_refresh._run_due_unit は、走査が候補の上限（8人）で終わり、選択・待機・中断・読み飛ばしのいずれもなかった周回を patient_context_scan_incomplete ではなく patient_context_nothing_due で返します。",
+    "cloud_backlog._context_retry_delay は、この理由でクラウド worker とローカルのレーンの双方を60秒待たせます（共通の経路）。周回の記録では既知の理由として数えます。",
+    "走査位置は候補の確認より前に書く既存の公平性の仕様（高コストな確認が中断しても順番が進む）を維持しています。書込みの回数は、周回の間隔が延びた分だけ減ります。"
+  ],
+  "refs": ["mcs/patients/patient_context_refresh.py", "mcs/llm/cloud_backlog.py", "tests/patients/test_context_scan_integration.py"]
+}

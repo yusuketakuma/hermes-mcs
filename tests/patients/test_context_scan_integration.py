@@ -493,3 +493,26 @@ def test_generation_reason_is_rolled_back_with_the_skipped_patient(runtime, monk
     result = step(runtime)
     assert result['wait_generation_quota'] == 0 and not calls
     assert 'generation_reason' not in result and 'unverified_records' not in result
+
+
+def test_more_patients_than_the_budget_with_nothing_due_back_off(runtime, monkeypatch):
+    """Nine patients, none due: the pass says so with its own reason and the pacing waits a minute."""
+    import cloud_backlog
+    led, _, _ = runtime
+    for pid in range(1, 10):
+        seed(led, mid=pid, pid=pid)
+    original = patient_context_refresh_readiness._pending
+
+    def pending(*args, **kwargs):
+        snapshot, progress, due = original(*args, **kwargs)
+        snapshot['unfinished'] = False
+        return snapshot, progress, dict.fromkeys(due, False)
+
+    monkeypatch.setattr(patient_context_refresh_readiness, '_pending', pending)
+    monkeypatch.setattr(patient_context_refresh_readiness, '_observe_readiness',
+                        lambda *a, **k: (True, None, None))
+    result = step(runtime)
+    assert (result['status'], result['reason']) == ('deferred', refresh.NOTHING_DUE_REASON), result
+    assert result['scanned'] == 8 and not result['covered'] and not result['waiting']
+    assert cloud_backlog._context_retry_delay(result) == 60
+    assert cloud_backlog._context_pass_observation(result)['reason'] == refresh.NOTHING_DUE_REASON

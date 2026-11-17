@@ -234,6 +234,9 @@ CHILD_WAIT_REASON = "patient_context_cloud_deferred:cloud_worker_unavailable"
 CHILD_WAIT_S = 60
 CHILD_WAIT_UNITS = 8
 _CHILD_WAIT = "_patient_context_child_wait"
+# A pass over more patients than its candidate budget that found nothing due, waiting or
+# interrupted. ``cloud_backlog._context_retry_delay`` paces it like other idle waits.
+NOTHING_DUE_REASON = "patient_context_nothing_due"
 
 
 def _scan_key(role):
@@ -932,9 +935,13 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 # Every patient belongs to the other worker role. A pass that ended on its
                 # budget first reports an incomplete scan, which keeps the caller's pacing.
                 return {"status": "deferred", "done": 0, "reason": "patient_context_other_role", **stats}
+            # A pass that checked patients, with nothing due or waiting and no interruption, ended
+            # on its candidate budget: nothing to do, not an unfinished scan, so callers back off.
+            idle = scanned and not scan_interrupts and not waiting and not covered
             reason = ("patient_context_scan_incomplete" if skipped and scan_interrupts
                       else "patient_context_patient_invalid" if skipped
-                      else "patient_context_waiting" if waiting else "patient_context_scan_incomplete")
+                      else "patient_context_waiting" if waiting
+                      else NOTHING_DUE_REASON if idle else "patient_context_scan_incomplete")
             return {"status": "deferred" if waiting or not covered else "complete", "done": 0,
                     **({"reason": reason} if waiting or not covered else {}), **stats}
         snapshot, progress, frozen_ver = best[lane]
