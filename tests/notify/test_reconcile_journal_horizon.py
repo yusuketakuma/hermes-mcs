@@ -648,3 +648,30 @@ def test_rerun_receipt_still_lists_the_open_holds(world):
     again = notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW)
     assert again["held"] == first["held"]
     assert again["events_held"] == first["events_held"]
+
+
+def test_beyond_horizon_part_keeps_recover_from_reissuing_the_whole_spec(world):
+    world.seed()
+    world.dispatch()
+    render = _deliver_card_only(world)
+    _restore_from(world, backup_names.JOURNAL_HORIZON_MAX_S + 86400)
+    notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW)
+    parts = _parts(world, render["delivery_id"])
+    assert parts["body:0001"]["error_code"] == notify_reconcile.BEYOND_HORIZON
+    other = next(pid for pid, row in parts.items() if pid not in ("body:0001", "card"))
+    with world.led.db:     # another part of the same render is still pending
+        world.led.db.execute("UPDATE notification_render_parts SET state='pending',error_code=NULL "
+                             "WHERE delivery_id=? AND part_id=?", (render["delivery_id"], other))
+    root = notify_spool.data_root(world.led)
+    spec = Path(notify_spool.notify_dirs(root)["discord_render"]) / (render["delivery_id"] + ".json")
+    spec.unlink(missing_ok=True)
+    # the compacted journal cannot show the marked part never ran: a replay would resend it
+    assert notify_spool.recover(world.led, CFG, {})["republished"] == 0
+    assert not spec.exists()
+    with world.led.db:
+        # every beyond-horizon mark on the delivery is settled before the
+        # spec may be replayed — clearing only one part still blocks it
+        world.led.db.execute("UPDATE notification_render_parts SET error_code='synthetic' "
+                             "WHERE delivery_id=? AND error_code=?",
+                             (render["delivery_id"], notify_reconcile.BEYOND_HORIZON))
+    assert notify_spool.recover(world.led, CFG, {})["republished"] == 1

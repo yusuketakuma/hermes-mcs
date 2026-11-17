@@ -178,10 +178,16 @@ def publish_flags(cfg: dict, root: str) -> bool:
 
 
 def _cleanup_budget_held(db, delivery_id):
-    return db.execute("SELECT 1 FROM notification_render_parts WHERE delivery_id=? AND state='held' "
-                      "AND error_code IN ('thread_cleanup_budget_exceeded','part_budget_exceeded',"
-                      "'blank_part_unrepresentable','attachment_upload_identity_unverified') "
-                      "LIMIT 1", (delivery_id,)).fetchone() is not None
+    """A held resource part, or a part a restore beyond the journal horizon
+    made unknown, keeps its delivery off the spool: the worker replays a
+    spec from the journal alone, and the compacted journal cannot show that
+    such a part (e.g. a Slack group's chat.update) never ran."""
+    from notify_recovery import BEYOND_HORIZON
+    return db.execute("SELECT 1 FROM notification_render_parts WHERE delivery_id=? AND "
+                      "((state='held' AND error_code IN ('thread_cleanup_budget_exceeded','part_budget_exceeded',"
+                      "'blank_part_unrepresentable','attachment_upload_identity_unverified')) "
+                      "OR (state='unknown' AND error_code=?)) LIMIT 1",
+                      (delivery_id, BEYOND_HORIZON)).fetchone() is not None
 
 
 def _mark_published(db, marks):
