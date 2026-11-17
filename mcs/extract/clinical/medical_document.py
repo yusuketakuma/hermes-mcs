@@ -34,8 +34,6 @@ _HEADINGS = {
     "other": ("備考",),
 }
 _CATEGORY = {label: category for category, labels in _HEADINGS.items() for label in labels}
-# Headings of a lab section; the lab validator reads them as a lab context too.
-LAB_HEADINGS = _HEADINGS["labs_vitals"] + _HEADINGS["course_and_labs"]
 _COMPACT_HEADINGS = {re.sub(r"\s+", "", label): label for label in _CATEGORY}
 _HEADING_LABELS = "|".join(map(re.escape, sorted(_CATEGORY, key=len, reverse=True)))
 _HEADING = re.compile(

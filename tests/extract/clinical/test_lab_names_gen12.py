@@ -559,6 +559,12 @@ def _confirmation(name, value, body):
 _ELECTROLYTES = (("ナトリウム", "128"), ("カリウム", "5.8"), ("カルシウム", "9.1"))
 
 
+def test_the_lab_headers_are_the_lab_sections_of_medical_documents():
+    import medical_document
+    assert set(clinical_values.LAB_SECTION_HEADINGS) == {
+        *medical_document._HEADINGS["labs_vitals"], *medical_document._HEADINGS["course_and_labs"]}
+
+
 def test_the_lab_layout_is_written_in_the_folded_form_it_is_matched_on():
     # Hiragana or spaces in a pattern would never match the folded quote.
     for pattern in (clinical_values._LAB_PREFIX, clinical_values._LAB_TAIL, clinical_values._LAB_TAIL_END):
@@ -763,10 +769,22 @@ def test_any_space_between_a_word_and_the_item_sets_them_apart(gap):
     assert lab["normalized"]["confirmation"] == "quote_supported"
 
 
-def test_a_long_evidence_is_read_in_linear_time():
+@pytest.mark.parametrize("body", [
+    "\n".join(["塩化 カリウム 4 分2", "ナトリウム 138 カリウム 4.0"] * 10000),
+    "カリウム 4.0 " * 20000,
+    "カリウム 4.0 " * 20000 + "分2",
+    "塩化 カリウム 分2 " * 20000 + "カリウム 4.0",
+])
+def test_a_long_evidence_is_read_in_linear_time(body):
     import time
-    body = "\n".join(["塩化 カリウム 4 分2", "ナトリウム 138 カリウム 4.0"] * 10000)
     began = time.perf_counter()
     lab = clinical_values.lab_candidate("カリウム", "4.0", None, body)
     assert time.perf_counter() - began < 10
-    assert lab["confirmation"] == "unverified"   # 10000 readings are not one reading
+    assert lab["confirmation"] == "unverified"   # many readings, or a line too long for a layout
+
+
+def test_a_panel_line_is_read_up_to_the_layout_reach():
+    panel = "、".join(["ナトリウム 140", "カリウム 4.0"] + ["Cr 0.9"] * 10)
+    assert _confirmation("カリウム", "4.0", panel) == "quote_supported"
+    assert _confirmation("カリウム", "4.0", "Cr 0.9 " * 60 + "カリウム 4.0") == "unverified"
+    assert _confirmation("カリウム", "4.0", "カリウム 4.0 " + "Cr 0.9 " * 60) == "unverified"

@@ -6,7 +6,6 @@ import re
 import unicodedata
 from decimal import Decimal
 import clinical_scope
-import medical_document
 from typing import Literal, TypedDict
 
 from semantic_quantities import normalized_quantity_number
@@ -438,18 +437,23 @@ def _unit_less_reading(analyte: str | None, number: str, quote: str, match: re.M
 
 def _in_a_lab_layout(quote: str, at: int, value_end: int, lines: list[int]) -> bool:
     """Whether the item at ``at`` and its number ending at ``value_end`` sit in a lab layout."""
-    # The number was matched within the item's line, so both are on one line.
+    # The number was matched within the item's line, so both are on one line. Each side
+    # is read within _LAYOUT_REACH characters, so every match costs a bounded amount.
     first, last = _line_span(quote, at, lines)
+    reach = max(first, at - _LAYOUT_REACH)
     # A sentence end (。 ;) starts a new statement; a comma or space does not (塩化、カリウム 4).
-    start = max(first, quote.rfind("。", first, at) + 1, quote.rfind(";", first, at) + 1)
+    start = max(reach, quote.rfind("。", reach, at) + 1, quote.rfind(";", reach, at) + 1)
+    if start == reach > first:   # a longer prefix is no lab layout
+        return False
     # A salt stem ending the sentence or the line just before still names the item
     # (塩化。カリウム 4, 塩化\nカリウム 4).
     end_before = start - 1 if start > first else first
-    if end_before and _SALT_STEM.search(quote, _line_span(quote, end_before - 1, lines)[0], end_before):
+    if end_before and _SALT_STEM.search(quote, max(0, end_before - _LAYOUT_REACH), end_before):
         return False
-    stop = _LAB_TAIL_END.search(quote, value_end, last)
-    return bool(_LAB_PREFIX.fullmatch(quote, start, at)
-                and _LAB_TAIL.fullmatch(quote, value_end, stop.start() if stop else last))
+    stop = _LAB_TAIL_END.search(quote, value_end, min(last, value_end + _LAYOUT_REACH))
+    stop = stop.start() if stop else last
+    return (stop - value_end <= _LAYOUT_REACH and bool(_LAB_PREFIX.fullmatch(quote, start, at))
+            and bool(_LAB_TAIL.fullmatch(quote, value_end, stop)))
 
 
 def _glued_to_a_word(quote: str, at: int, evidence, starts: list, ends: list) -> bool:
@@ -498,8 +502,12 @@ _READING_UNIT = "|".join(re.escape(u) for u in sorted(_LAB_UNITS, key=len, rever
 _READING = (r"(?:" + _lab_name_pattern({n for spellings in _LAB_NAMES.values() for n in spellings})
             + r"|[ァ-ヺー]++|[a-z][a-z0-9]*)(?:値|は|:|=)*[0-9]+(?:\.[0-9]+)?"
             + rf"(?:{_READING_UNIT})?")
+# The lab section headings of medical_document._HEADINGS (labs_vitals, course_and_labs),
+# repeated here so the validator's decisions do not import the OCR module; a test keeps
+# them equal.
+LAB_SECTION_HEADINGS = ("検査結果", "検査所見", "検査データ", "バイタルサイン", "身体所見", "症状経過及び検査結果")
 _LAB_HEADER = "|".join((
-    *map(re.escape, sorted(medical_document.LAB_HEADINGS, key=len, reverse=True)),
+    *map(re.escape, sorted(LAB_SECTION_HEADINGS, key=len, reverse=True)),
     r"(?:血液|生化学?|電解質|定期|本日|今日|今回)?(?:採血|検査|測定)(?:結果|値|データ|所見)?",
     r"電解質|生化学?|緊急値|本日|今日|今回",
 ))
@@ -514,6 +522,7 @@ _LAB_TAIL = re.compile(fold_surface(
     r"|報告(?:します|しました|あり)?|採血|検査|測定)"
     r"|でした|です|だった|である)*"))
 _LAB_TAIL_END = re.compile(fold_surface(r"[、。;]|,(?![0-9])|の?ため|により"))
+_LAYOUT_REACH = 256   # characters read on each side of a reading; longer lines are no layout
 _BP_DATE_LABEL = re.compile(r"(?:BP|血圧)", re.I)
 _BP_DATE_LETTER = re.compile(r"[A-Za-z]", re.I)
 
