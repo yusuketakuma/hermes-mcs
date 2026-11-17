@@ -2,6 +2,7 @@
 protected changes for a person, and bounds automated attempts."""
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -226,7 +227,10 @@ def test_labels_and_workflows_agree_with_the_module():
     assert {f"{ac.ATTEMPT_PREFIX}{n}" for n in range(1, ac.ATTEMPT_LIMIT + 1)} <= names
     control = (ROOT / ".github/workflows/agent-control.yml").read_text()
     # never check out PR code in a privileged workflow: the one checkout ref is the default branch's full ref
-    assert control.count("ref:") == 1 and "ref: refs/heads/${{ github.event.repository.default_branch }}" in control
+    assert re.findall(r"^\s+ref: (.*)$", control, re.M) == [
+        "refs/heads/${{ github.event.repository.default_branch }}",
+        "${{ github.event.repository.default_branch && format('refs/heads/{0}', github.event.repository.default_branch)"
+        " || github.ref }}"]
     assert "workflow_run" in control and "pull_request_target" in control
     # main-sync's ci run raises no workflow_run: ci.yml asks for the verdict, only for a run the bot started,
     # and the gate runs such a request only from the default branch (full ref: a tag named like it fails)
@@ -356,3 +360,217 @@ def test_review_workflow_never_runs_pr_code_and_hands_findings_as_data():
     assert "^[0-9]+(,[0-9]+)*$" in repair and "agent-review:handled" in repair
     assert repair.index("agent-review:handled") < repair.index("ref: ${{ steps.pr.outputs.branch }}")
     assert "> agent-review.md" in repair and ".git/info/exclude" in repair and "inputs.reviews }}" not in repair.split("prompt:")[1]
+
+
+# The review verdict ("レビュー合格"), merge-ready, the 担当 labeler and the cloud reviewer's trigger.
+DOTS = "dots-example"
+ACTORS = [DOTS, "claude[bot]"]
+
+
+def _verdict(login, state="APPROVED", sha=HEAD, at="2026-11-17T02:00:00Z"):
+    return {"user": {"login": login}, "state": state, "commit_id": sha, "submitted_at": at, "html_url": "u"}
+
+
+def _marker(verdict="approved", head=HEAD, login=OWNER, at="2026-11-17T02:30:00Z", prefix=""):
+    return {"user": {"login": login}, "created_at": at, "html_url": "c",
+            "body": f"{prefix}<!-- dots-review verdict={verdict} head={head} -->\r\n本文"}
+
+
+def _decide(reviews=(), comments=(), actors=ACTORS, dots_actor=DOTS, author="someone"):
+    return ac.review_verdict(_pr(author=author), list(reviews), list(comments), actors, dots_actor, OWNER)
+
+
+def test_the_highest_priority_actor_s_verdict_on_the_current_head_decides():
+    both = _decide([_verdict(DOTS), _verdict("claude[bot]", "CHANGES_REQUESTED", at="2026-11-17T03:00:00Z")])
+    assert both["passed"] and both["source"] == "dots"
+    assert not _decide([_verdict(DOTS, "CHANGES_REQUESTED"), _verdict("claude[bot]")])["passed"]
+    assert _decide([_verdict(DOTS)])["passed"]
+    claude = _decide([_verdict("claude[bot]")])
+    assert claude["passed"] and claude["source"] == "claude"
+    # Dots on an older head says nothing about this one: Claude's verdict on the current head decides
+    mixed = _decide([_verdict(DOTS, sha=OLD), _verdict("claude[bot]", "CHANGES_REQUESTED")])
+    assert mixed["state"] == "CHANGES_REQUESTED" and mixed["source"] == "claude"
+    # the actor's latest verdict on the head wins
+    later = [_verdict(DOTS), _verdict(DOTS, "CHANGES_REQUESTED", at="2026-11-17T04:00:00Z")]
+    assert _decide(later)["state"] == "CHANGES_REQUESTED"
+
+
+def test_the_verdict_fails_closed():
+    assert _decide()["passed"] is False and _decide()["state"] is None
+    assert not _decide([_verdict(DOTS)], actors=[])["passed"], "unset REVIEW_ACTORS"
+    assert ac.review_actors(" dots-example, claude[bot] ,") == ACTORS and ac.review_actors(None) == []
+    # the author never reviews their own PR; logins match exactly
+    assert not _decide([_verdict("claude[bot]")], author="claude[bot]")["passed"]
+    assert not _decide([_verdict("Dots-Example")])["passed"]
+    # the owner, and so every seat, never counts, even when listed; COMMENTED never decides
+    assert not _decide([_verdict(OWNER)], actors=[OWNER, "claude[bot]"])["passed"]
+    assert not _decide([_verdict(DOTS, "COMMENTED")])["passed"]
+
+
+@pytest.mark.parametrize("comment, passed", [
+    (_marker(), True),
+    (_marker(head="c" * 39), False),                 # broken head
+    (_marker(verdict="APPROVED"), False),             # exact spelling only
+    (_marker(prefix="レビュー\n"), False),             # not the first line
+    (_marker(prefix=" "), False),
+    (_marker(login="someone"), False),                # another author
+    (_marker(login="github-actions[bot]"), False),
+    (_marker(head=OLD), False),                       # an older head
+])
+def test_the_bridge_marker_counts_only_exactly_from_the_owner_on_the_current_head(comment, passed):
+    assert _decide(comments=[comment], dots_actor="")["passed"] is passed
+
+
+def test_the_bridge_marker_s_newest_verdict_decides_and_ends_with_dots_actor():
+    flipped = [_marker(), _marker("changes_requested", at="2026-11-17T05:00:00Z")]
+    assert _decide(comments=flipped, dots_actor="")["state"] == "CHANGES_REQUESTED"
+    # the marker is Dots: it beats Claude's approval
+    bridge = _decide([_verdict("claude[bot]")], [_marker("changes_requested")], dots_actor="")
+    assert bridge["source"] == "dots・つなぎ" and not bridge["passed"]
+    # once DOTS_ACTOR is set, markers are ignored entirely
+    assert not _decide(comments=[_marker()])["passed"]
+    assert _decide([_verdict("claude[bot]")], [_marker("changes_requested")])["passed"]
+    assert not _decide(comments=[_marker()], actors=[], dots_actor="")["passed"], "no actors: nothing counts"
+
+
+def _gate(state="success", reasons=(), description="必須ジョブ実行済み・成功"):
+    return {"state": state, "human_reasons": list(reasons), "description": description}
+
+
+APPROVED = {"passed": True, "state": "APPROVED", "source": "dots"}
+NO_VERDICT = {"passed": False, "state": None, "source": ""}
+
+
+@pytest.mark.parametrize("pr, gate, behind, verdict, state", [
+    (_pr(), _gate(), 0, APPROVED, "success"),
+    (_pr(), _gate("pending"), 0, APPROVED, "pending"),
+    (_pr(), _gate("failure"), 0, APPROVED, "failure"),
+    (_pr(), _gate(), 2, APPROVED, "pending"),
+    (_pr(draft=True), _gate(), 0, APPROVED, "pending"),
+    (_pr(), _gate(reasons=["保護対象の変更: ci/gates.py"]), 0, APPROVED, "failure"),
+    (_pr(head_repo="someone/fork"), _gate(), 0, APPROVED, "failure"),
+    (_pr(), _gate(), 0, NO_VERDICT, "pending"),
+    (_pr(), _gate(), 0, {"passed": False, "state": "CHANGES_REQUESTED", "source": "claude"}, "failure"),
+])
+def test_merge_ready_needs_every_condition(pr, gate, behind, verdict, state):
+    assert ac.merge_ready(pr, gate, behind, verdict)[0] == state
+
+
+def test_cli_publishes_merge_ready_only_when_it_changes(tmp_path, capsys):
+    (tmp_path / "pr.json").write_text(json.dumps(_pr(author="someone")))
+    (tmp_path / "checks.json").write_text(json.dumps([{"check_runs": _green()}]))
+    (tmp_path / "comments.json").write_text(json.dumps([[]]))
+    args = ["ready", "--pr", str(tmp_path / "pr.json"), "--checks", str(tmp_path / "checks.json"),
+            "--files", str(tmp_path / "files.json"), "--behind-by", "0", "--automation", "true",
+            "--reviews", str(tmp_path / "reviews.json"), "--comments", str(tmp_path / "comments.json"),
+            "--actors", ",".join(ACTORS), "--dots-actor", DOTS, "--owner", OWNER]
+    (tmp_path / "files.json").write_text(json.dumps([CODE]))
+    (tmp_path / "reviews.json").write_text(json.dumps([[_verdict(DOTS)]]))
+    ac.main(args)
+    plan = json.loads(capsys.readouterr().out)
+    assert plan == {"sha": HEAD, "state": "success", "description": "承認（dots）", "write": True}
+    ac.main(args + ["--current", json.dumps({"state": "success", "description": "承認（dots）"})])
+    assert json.loads(capsys.readouterr().out)["write"] is False
+    # a protected path stays the owner's merge; a review of an older head is stale
+    (tmp_path / "files.json").write_text(json.dumps([[_file("ci/gates.py")]]))
+    ac.main(args)
+    assert json.loads(capsys.readouterr().out)["state"] == "failure"
+    (tmp_path / "files.json").write_text(json.dumps([CODE]))
+    (tmp_path / "reviews.json").write_text(json.dumps([[_verdict(DOTS, sha=OLD)]]))
+    ac.main(args)
+    assert json.loads(capsys.readouterr().out)["state"] == "pending"
+
+
+@pytest.mark.parametrize("sender, dots_actor, allowed", [
+    (OWNER, "", True), (OWNER, DOTS, True), (DOTS, DOTS, True),
+    (DOTS, "", False), ("Dots-Example", DOTS, False), ("someone", DOTS, False), ("", "", False),
+])
+def test_only_the_owner_or_dots_actor_may_assign(sender, dots_actor, allowed):
+    assert ac.labeler_allowed(sender, OWNER, dots_actor) is allowed
+
+
+GATE_OK = {"statuses": [{"context": "merge-gate", "state": "success", "creator": {"login": "github-actions[bot]"}}]}
+
+
+def _request(pr=None, reviews=(), status=GATE_OK, automation=True, owner_request=False, comments=()):
+    pr = pr or {**_pr(author="someone"), "state": "open"}
+    return ac.review_request_refusal(pr, list(reviews), list(comments), ac.gate_state(status), ACTORS, DOTS,
+                                     OWNER, automation, owner_request)
+
+
+def test_the_cloud_reviewer_reviews_each_green_head_once():
+    assert _request() is None
+    assert "停止" in _request(automation=False)
+    assert "Claude が作った" in _request({**_pr(author="claude[bot]"), "state": "open"})
+    assert "開いた PR" in _request({**_pr(author="x", head_repo="someone/fork"), "state": "open"})
+    assert "merge-gate" in _request(status={"statuses": [{**GATE_OK["statuses"][0], "state": "pending"}]})
+    # a merge-gate posted by anyone but the workflows is no gate
+    forged = {"statuses": [{**GATE_OK["statuses"][0], "creator": {"login": "someone"}}]}
+    assert "merge-gate" in _request(status=forged)
+    assert "判定あり" in _request([_verdict(DOTS)])
+    # Claude's own COMMENT on this head ends the automatic review of it, not of the next head
+    assert "レビュー済み" in _request([_verdict("claude[bot]", "COMMENTED")])
+    assert _request([_verdict("claude[bot]", "COMMENTED", sha=OLD)]) is None
+    # the owner may ask again, but never past the kill switch, a fork or a red gate
+    assert _request([_verdict("claude[bot]", "COMMENTED")], owner_request=True) is None
+    assert _request(automation=False, owner_request=True) is not None
+    assert _request(status={"statuses": []}, owner_request=True) is not None
+
+
+def _jobs(text):
+    jobs = text.split("\njobs:\n", 1)[1]
+    return {m.group(1): m.group(2) for m in re.finditer(r"^  ([a-z-]+):\n((?:    .*\n|\n)*)", jobs, re.M)}
+
+
+def test_review_workflow_is_read_only_and_never_runs_pr_code():
+    text = (ROOT / ".github/workflows/agent-review.yml").read_text()
+    head = text.split("jobs:")[0]
+    # only events that run the default branch's definition
+    assert re.findall(r"^  ([a-z_]+):$", head, re.M) == ["workflow_run", "issue_comment"]
+    assert "workflows: [Agent control]" in head and "pull_request" not in head and "permissions: {}" in head
+    jobs = _jobs(text)
+    granted = {name: sorted(re.findall(r"^      ([a-z-]+): (read|write)", body, re.M)) for name, body in jobs.items()}
+    assert granted == {"plan": [("contents", "read"), ("issues", "read"), ("pull-requests", "read"), ("statuses", "read")],
+                       "review": [("contents", "read"), ("id-token", "write"), ("pull-requests", "write")]}
+    # every checkout is the default branch by full ref, without credentials
+    assert re.findall(r"^\s+ref: (.*)$", text, re.M) == ["refs/heads/${{ github.event.repository.default_branch }}"] * 2
+    assert text.count("persist-credentials: false") == 2
+    assert "vars.AUTOMATION_ENABLED == 'true'" in jobs["plan"] and "github.repository_owner" in jobs["plan"]
+    # its own trigger phrase, never one agent-claude.yml's @claude would also take
+    assert "startsWith(github.event.comment.body, '/claude-review') && !contains(github.event.comment.body, '@claude')" in text
+    assert "/claude-review" not in (ROOT / ".github/workflows/agent-claude.yml").read_text()
+    # its own concurrency group per PR, outside the writer queue
+    assert "group: agent-review-${{ matrix.pr }}" in text and "group: agent-claude-writer" not in text
+    tools = re.search(r'--allowedTools "([^"]+)"', text).group(1).split(",")
+    post = "Bash(gh api -X POST repos/${{ github.repository }}/pulls/${{ matrix.pr }}/reviews -f commit_id=${{ matrix.sha }}"
+    assert tools == ["Read", "Glob", "Grep", "Edit(//tmp/pr-review/**)", "Bash(gh pr view ${{ matrix.pr }}:*)",
+                     "Bash(gh issue view:*)", post + " -f event=COMMENT -F body=@/tmp/pr-review/review.md)",
+                     post + " -f event=REQUEST_CHANGES -F body=@/tmp/pr-review/review.md)"]
+    assert "APPROVE)" not in text and "event=APPROVE" not in text
+    assert "--max-turns" in text and "additional_permissions: |\n            contents: read\n            issues: read" in text
+    # the target is validated before it reaches the prompt, and the review is re-checked after the queue
+    check = jobs["review"].split("name: Check again", 1)[1]
+    assert '"$SHA" =~ ^[0-9a-f]{40}$' in check and "review-request" in check
+    assert "github.event.comment.body" not in jobs["review"]
+
+
+def test_merge_ready_runs_only_on_default_branch_events_and_dots_may_assign():
+    control = (ROOT / ".github/workflows/agent-control.yml").read_text()
+    ready = _jobs(control)["ready"]
+    assert "schedule:" in control.split("jobs:")[0] and "pull_request_target" not in ready
+    assert "github.event_name == 'schedule' || github.event_name == 'workflow_run'" in ready
+    assert "github.event_name != 'schedule'" in _jobs(control)["gate"]
+    assert sorted(re.findall(r"^      ([a-z-]+): (read|write)", ready, re.M)) == [
+        ("checks", "read"), ("contents", "read"), ("issues", "read"), ("pull-requests", "read"), ("statuses", "write")]
+    assert "sparse-checkout: ci" in ready and "context=merge-ready" in ready and '.write "$work/ready.json")" != "true"' in ready
+    # merge-ready never merges, counts an attempt or starts a repair
+    for word in ("gh pr merge", "agent_control.py attempt", "gh workflow run", "/labels"):
+        assert word not in ready
+    lock = _jobs(control)["lock"]
+    assert 'agent_control.py labeler --sender "$SENDER" --owner "$OWNER" --dots-actor "${DOTS:-}"' in lock
+    claude = (ROOT / ".github/workflows/agent-claude.yml").read_text()
+    condition = claude.split("if: >-", 1)[1].split("runs-on:", 1)[0]
+    issues_branch, comment_branch = condition.split("(github.event_name != 'issues'", 1)
+    assert "vars.DOTS_ACTOR != '' && github.event.sender.login == vars.DOTS_ACTOR" in issues_branch
+    assert "DOTS_ACTOR" not in comment_branch and "github.event.sender.login == github.repository_owner" in comment_branch
+    assert '"$control" labeler --sender "$SENDER" --owner "$OWNER" --dots-actor "${DOTS:-}"' in claude

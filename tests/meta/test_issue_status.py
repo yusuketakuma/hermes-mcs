@@ -1,5 +1,5 @@
 """ci/issue_status.py: one status comment per issue, recomputed from synthetic
-GitHub data; reviews decide only from the owner's verdict on the current head."""
+GitHub data; reviews decide from the shared review verdict of the current head."""
 import importlib.util
 import json
 import re
@@ -17,6 +17,8 @@ OWNER = "owner-example"
 HEAD = "a" * 40
 OLD = "b" * 40
 NOW = datetime(2026, 11, 17, 3, 0, tzinfo=timezone.utc)
+DOTS = "dots-example"
+ACTORS = (DOTS, "claude[bot]")
 
 
 def _issue(number=5, labels=("担当:claude",), state="open", closed_at=None, reason=None):
@@ -56,8 +58,8 @@ def _bundle(issue=None, pr=None, **kw):
     return bundle
 
 
-def _current(bundle):
-    rows, notes = st.decide(bundle, OWNER)
+def _current(bundle, actors=ACTORS, dots_actor=DOTS):
+    rows, notes = st.decide(bundle, OWNER, "main", list(actors), dots_actor)
     return rows[st.current_index(rows)], rows, notes
 
 
@@ -156,36 +158,65 @@ def test_merge_gate_then_review_wait_after_green_ci():
     assert _current(_bundle(pr=_pr(), ci_runs=[_ci()], status=pending))[0][1] == "マージ判定"
 
 
-def test_owner_verdict_on_the_current_head_decides_with_seat():
+def _mark(verdict, head=HEAD, user=OWNER, at="2026-11-17T02:30:00Z"):
+    return {"user": {"login": user}, "created_at": at, "html_url": "https://example.test/c",
+            "body": f"<!-- dots-review verdict={verdict} head={head} -->\n本文"}
+
+
+def test_the_shared_verdict_names_its_source():
+    green = {"pr": _pr(), "ci_runs": [_ci()]}
+    row, _, _ = _current(_bundle(**green, reviews=[_review("APPROVED", user=DOTS)]))
+    assert row[1] == "承認（dots）" and "commit aaaaaaa" in row[3]
+    row, _, _ = _current(_bundle(**green, reviews=[_review("CHANGES_REQUESTED", user="claude[bot]")]))
+    assert row[1] == "修正依頼（claude）"
+    row, _, _ = _current(_bundle(**green, pr_comments=[_mark("approved")]), dots_actor="")
+    assert row[1] == "承認（dots・つなぎ）"
+    # Dots beats Claude on the same head
+    both = [_review("APPROVED", user="claude[bot]", at="2026-11-17T03:00:00Z"), _review("CHANGES_REQUESTED", user=DOTS)]
+    assert _current(_bundle(**green, reviews=both))[0][1] == "修正依頼（dots）"
+
+
+def test_owner_and_seat_reviews_are_a_reference_only():
     body = "独立レビュー（codex2、作者でない席）: pass。対象 head " + OLD
-    row, _, _ = _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=[_review("APPROVED", body=body)]))
-    assert row[1] == "承認（codex2）"
-    row, _, _ = _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=[_review("CHANGES_REQUESTED")]))
-    assert row[1] == "修正依頼" and "commit aaaaaaa" in row[3], "no seat in the body: no seat in the stage"
+    row, _, notes = _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=[_review("APPROVED", body=body)]))
+    assert row[1] == "レビュー待ち"
+    assert notes == ["参考（判定に数えない）: 所有者の承認（codex2） commit aaaaaaa"]
+    reviews = [_review("APPROVED", user="someone-else"), _review("COMMENTED", user=DOTS)]
+    assert _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=reviews))[0][1] == "レビュー待ち"
+    # no REVIEW_ACTORS: nothing decides
+    approved = [_review("APPROVED", user=DOTS)]
+    assert _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=approved), actors=())[0][1] == "レビュー待ち"
 
 
 def test_body_sha_never_overrides_commit_id():
     body = "独立レビュー（claude2、作者でない席）: pass。対象 head " + HEAD
-    row, _, _ = _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=[_review("APPROVED", commit=OLD, body=body)]))
-    assert row[1] == "再レビュー待ち" and "bbbbbbb" in row[3]
+    row, _, _ = _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=[_review("APPROVED", user=DOTS, commit=OLD,
+                                                                              body=body)]))
+    assert row[1] == "再レビュー待ち" and "bbbbbbb" in row[3] and "（dots）" in row[3]
 
 
 def test_stale_changes_request_waits_for_rereview_and_a_running_fix_is_current():
-    reviews = [_review("CHANGES_REQUESTED", commit=OLD)]
+    reviews = [_review("CHANGES_REQUESTED", user=DOTS, commit=OLD)]
     row, rows, _ = _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=reviews))
     assert row[1] == "再レビュー待ち"
-    assert [r[0] for r in rows if r[1] in ("修正依頼", "修正中")] == ["done", "done"]
+    assert [r[0] for r in rows if r[1] in ("修正依頼（dots）", "修正中")] == ["done", "done"]
     running = [_run("Agent Claude #9 PR")]
     row, _, _ = _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=reviews, claude_runs=running))
     assert row[1] == "修正中"
 
 
-def test_only_owner_verdicts_count_and_comments_never_decide():
-    reviews = [_review("APPROVED", user="someone-else"), _review("CHANGES_REQUESTED", user="bot[bot]"),
-               _review("COMMENTED", at="2026-11-17T09:00:00Z")]
-    assert _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=reviews))[0][1] == "レビュー待ち"
-    reviews.append(_review("CHANGES_REQUESTED", at="2026-11-17T01:00:00Z"))
-    assert _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=reviews))[0][1] == "修正依頼"
+def test_merge_ready_is_its_own_stage():
+    def status(state):
+        return {"statuses": [{"context": "merge-gate", "state": "success", "description": "ok"},
+                             {"context": "merge-ready", "state": state, "description": f"{state} reason",
+                              "updated_at": "2026-11-17T02:40:00Z"}]}
+    approved = [_review("APPROVED", user=DOTS)]
+    row, _, _ = _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=approved, status=status("success")))
+    assert row[1] == "マージ可（merge-ready）" and row[0] == "done"
+    row, _, _ = _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=approved, status=status("pending")))
+    assert row[1] == "マージ可（merge-ready）" and row[0] == "active" and "pending reason" in row[3]
+    # a waiting review stays current ahead of merge-ready
+    assert _current(_bundle(pr=_pr(), ci_runs=[_ci()], status=status("pending")))[0][1] == "レビュー待ち"
 
 
 def test_main_merge_and_closing_complete_the_issue():
@@ -264,6 +295,11 @@ def test_cli_renders_from_a_work_directory(tmp_path, capsys):
     assert st.main(["render", "--work", str(tmp_path), "--issue", "5", "--owner", OWNER]) == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan["write"] is True and plan["comment_id"] is None and "CI 失敗" in plan["body"]
+    (d / "ci_runs.json").write_text(json.dumps([_ci()]))
+    (d / "pr_comments.json").write_text(json.dumps([[_mark("approved")]]))
+    assert st.main(["render", "--work", str(tmp_path), "--issue", "5", "--owner", OWNER,
+                    "--actors", f"{DOTS}, claude[bot]"]) == 0
+    assert "承認（dots・つなぎ）" in json.loads(capsys.readouterr().out)["body"]
 
 
 def _top_level(text, key):
@@ -296,6 +332,7 @@ def test_workflow_is_read_only_except_issue_comments():
     # Event text reaches the script only through env, never interpolated into the shell.
     run = text.split("run: |", 1)[1]
     assert "${{" not in run
+    assert '--actors "${ACTORS:-}" --dots-actor "${DOTS:-}"' in run and "/comments?per_page=100\" > \"$d/pr_comments.json\"" in run
     for workflow in ("agent-claude.yml", "agent-claude-repair.yml", "agent-control.yml"):
         assert "\nrun-name: " in (ROOT / ".github/workflows" / workflow).read_text()
     control = (ROOT / ".github/workflows/agent-control.yml").read_text()
