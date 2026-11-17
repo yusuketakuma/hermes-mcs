@@ -1454,3 +1454,12 @@ def test_legacy_config_preserves_directory_identity_between_retry_attempts(tmp_p
         mcs_util.load_config(str(tmp_path / 'config.json'))
     assert str(error.value.__cause__) == 'provider_settings_changed'
     assert changed and len(scans) == 1
+
+
+def test_provider_unavailable_view_is_marked_so_it_is_held_not_revoked():
+    view = mcs_util._paid_routes_closed({'cloud_llm': {'mode': 'on', 'project_ids': [1]}})
+    assert view['cloud_llm']['mode'] == 'off' and view['provider_unavailable'] is True
+    # a synthesized off proves nothing about an existing unit's scope
+    assert cloud_policy.scope_revoked(view, 'reextract', 1) is False
+    explicit = {'cloud_llm': {'mode': 'off'}}
+    assert cloud_policy.scope_revoked(explicit, 'reextract', 1) is True

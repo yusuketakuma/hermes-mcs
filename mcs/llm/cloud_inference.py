@@ -212,6 +212,9 @@ class CloudInferenceUnit:
                 live = load_config()
                 if not isinstance(live, dict) or not live:
                     raise CloudObservationIncomplete('cloud_config_unverified')
+                if live.get('provider_unavailable'):
+                    # A provider-file mismatch is not the owner's stop: hold, keep any response.
+                    raise CloudObservationIncomplete('cloud_provider_unverified')
                 if isinstance(live.get('cloud_llm'), dict) and live['cloud_llm'].get('mode') == 'off':
                     refuse('pre_send', 'mode_off')
                     raise CloudFallback('cloud_unit_changed')

@@ -522,7 +522,9 @@ def _record_circuit_result(ledger, error, now=None, *, kind=_CIRCUIT_ARTIFACT_KI
         _write_circuit_state(ledger, updated, current, kind=kind)
         return True
     failure_class = _circuit_failure_class(error)
-    if kind == "cloud_circuit" and getattr(error, "kind", "") == "contract_error":
+    if (kind == "cloud_circuit" and getattr(error, "kind", "") == "contract_error"
+            # A refusal belongs to its unit's input, not to the provider's health.
+            and getattr(error, "detail", "") != "refusal"):
         failure_class = "contract_error"
     if error is None:
         if kind == "cloud_circuit" and not reset and _circuit_is_open(state, current):
@@ -536,8 +538,6 @@ def _record_circuit_result(ledger, error, now=None, *, kind=_CIRCUIT_ARTIFACT_KI
     if failure_class is None or _circuit_is_open(state, current):
         return _circuit_is_open(state, current)
     failures = state["consecutive_failures"]
-    if kind == "cloud_circuit" and state["failure_class"] != failure_class:
-        failures = 0
     if state["open_until"] > 0 and current >= state["open_until"]:
         failures = 0
     failures = min(_CIRCUIT_FAILURE_LIMIT, failures + 1)

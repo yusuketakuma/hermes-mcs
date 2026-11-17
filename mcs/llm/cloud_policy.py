@@ -620,7 +620,7 @@ def scope_revoked(cfg, route, project_id):
     computed 'off' — mode omitted, key unreadable — proves nothing about
     an existing reservation, so unverifiable config never revokes."""
     block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
-    if not isinstance(block, dict):
+    if not isinstance(block, dict) or cfg.get("provider_unavailable"):
         return False
     c, errors = cloud_config(cfg)
     if errors:
