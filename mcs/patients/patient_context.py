@@ -377,16 +377,17 @@ _PATIENT_ALIAS_KIN = re.compile(r"ご?主人|旦那(?:さん|様)?|奥(?:さん|
 _PATIENT_WORD = re.compile(_PATIENT_REF)
 # Under 家族の意向／家族の希望 a named holder is the family only when it is a kin word that
 # cannot be the patient: of the kin list, not an alias of the patient (ご主人・お母様) and not
-# an ascending kin or a housemate relative to the writer (母・祖父・義母・同居者), who may be
+# an ascending kin or a housemate relative to the writer (母・祖父・義母・同居者; every
+# ascending kin word of the list holds 母 or 父), who may be
 # the patient. Any other subject (山田さんは・入所者は・あの人は・おばあちゃんは) is unspecified.
-_WRITER_RELATIVE_KIN = re.compile(r"母|父|祖|義|同居")
+_WRITER_RELATIVE_KIN = re.compile(r"母|父|同居")
 _FAMILY_HEADING_HOLDER = re.compile(
     rf"[ \t　]*(?:[■●◆#・＊*]+[ \t　]*)?(?P<kin>{clinical_scope.FAMILY_PERSON})は")
 # The only topics a family value may mark with は besides its holder: the matters a family
 # wish is about, never a person (最期は自宅で・延命は望まない). Any other は or が may mark a
 # subject, so it leaves the value unspecified.
 _FAMILY_WISH_TOPIC = re.compile(
-    r"(?:最期|最後|今後|将来|延命治療|延命|治療|入院|退院|看取り|胃ろう|点滴|手術|面会|施設入所|在宅|自宅)は")
+    r"(?:最期|最後|今後|延命|治療|入院|退院|面会)は")
 # Whose wish the value defers to (母の意向を尊重・入所者の希望に沿う): a possessor of one.
 _WISH_POSSESSOR = re.compile(r"の(?:意向|希望|意思|意志|意見|気持ち|思い|考え|願い|望み|判断)")
 _NAME_CHAR = r"[一-鿿ぁ-ゖァ-ヴーA-Za-z0-9Ａ-Ｚａ-ｚ０-９々]"

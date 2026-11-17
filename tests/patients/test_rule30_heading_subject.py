@@ -19,8 +19,12 @@ honorific kin word that can be the patient in a note to the family (ご主人・
 holds nothing. A staff member holds only a proposal under a policy (方針) heading.
 本人の意向／本人の希望 is the patient's and is never relabelled; a person heading its
 value only withdraws the assertion. 家族の意向／家族の希望 is the family's only when its
-value names no patient word (本人・患者・利用者・対象者・Pt・自身・私・彼), even after a
-holder (母本人は). Everything else stays ``unspecified``, the
+value names nobody else: no patient word (本人・対象者・Pt・自身・私・彼), no bracket, no
+subject marked with は or が but a family-side kin word at its head (長男は・妻は; never an
+alias of the patient, 母・父 or 同居者) or a topic a wish is about (最期は・延命は), and no
+possessor of a wish but such a kin word (長男の意向). A drug, prescription or product is a
+thing only with a name part (合成薬A); in kanji alone (処方薬・睡眠薬・下剤) it may be the
+patient's regimen. Everything else stays ``unspecified``, the
 former behaviour and the safe direction. Fully synthetic text only.
 """
 import copy
@@ -229,7 +233,7 @@ def test_a_person_who_observes_reports_or_acts_never_relabels_the_patients_fact(
     ("副作用：妻は合成薬Cで発疹", "family"),
     ("副作用：長男は合成薬Aで頭痛", "family"),
     ("副作用歴：次男は合成薬Eでふらつき", "family"),
-    ("副作用：父は睡眠薬で眠気あり", "family"),
+    ("副作用：父は合成薬Dで眠気あり", "family"),
     ("副作用：娘は副作用なし", "family"),
     ("被疑薬：孫は合成薬Fで嘔気", "family"),
     ("希望：妻は施設入所を希望", "family"),
@@ -404,10 +408,10 @@ def test_a_shared_or_pointed_fact_never_becomes_a_family_or_other_fact(line):
     ("アレルギー：家族はなし", "family"), ("アレルギー：家族は特になし", "family"),
     ("副作用：妻はなし", "family"), ("アレルギー：他の利用者はなし", "other"),
     ("副作用：妻は合成薬A1234567890123456で眠気", "family"),
-    ("アレルギー：妻はたまごアレルギー", "family"), ("副作用：妻は架空処方薬で眠気", "family"),
+    ("アレルギー：妻はたまごアレルギー", "family"), ("副作用：妻は架空処方薬Xで眠気", "family"),
     ("アレルギー：妻は卵アレルギー", "family"), ("希望：妻は施設入所を希望", "family"),
     ("希望：娘は同居を希望しています", "family"), ("希望：夫は受診への同行を希望", "family"),
-    ("方針：医師は在宅を提案", "other"), ("家族の希望：ご主人は在宅を希望", "family"),
+    ("方針：医師は在宅を提案", "other"), ("家族の希望：長男さんは在宅を希望", "family"),
     ("家族の意向：在宅を希望", "family"), ("家族の意向：長男は在宅を希望", "family"),
     ("アレルギー：夫はOPTアレルギー", "family"), ("アレルギー：夫はPTFEアレルギー", "family"),
     # A holder with 本人 or 自身 under a heading that is not 家族の意向.
@@ -417,11 +421,10 @@ def test_a_shared_or_pointed_fact_never_becomes_a_family_or_other_fact(line):
     # A determiner kanji that names a thing, not a reference back.
     ("希望：妻は当院への入院を希望", "family"), ("希望：長男は本日の面会を希望", "family"),
     ("希望：長男は前日の面会を希望", "family"), ("希望：妻は上肢リハビリを希望", "family"),
-    ("副作用：妻は眠前薬で眠気", "family"), ("副作用：妻は先発品で眠気", "family"),
-    ("希望：妻は左膝の手術を希望", "family"), ("アレルギー：妻は既製品アレルギー", "family"),
+    ("希望：妻は左膝の手術を希望", "family"), ("アレルギー：妻は既製服アレルギー", "family"),
     # 同 that means together points at nothing.
     ("希望：長男は同室を希望", "family"), ("希望：長男は同日退院を希望", "family"),
-    ("希望：妻は同時面会を希望", "family"), ("副作用：妻は同時服用で眠気", "family"),
+    ("希望：妻は同時面会を希望", "family"),
     ("希望：妻は同席を希望", "family"), ("希望：娘は同伴を希望", "family"),
 ])
 def test_the_same_shape_without_the_excluded_word_keeps_its_holder(line, subject):
@@ -441,6 +444,10 @@ def test_the_same_shape_without_the_excluded_word_keeps_its_holder(line, subject
     "希望：長男は対象施設を希望", "希望：長女は以上を希望", "希望：長男は氏名公表を拒否",
     "副作用：妻は同系統薬で眠気", "アレルギー：妻は同種果実アレルギー", "副作用：妻は下剤で下痢",
     "アレルギー：他人は卵アレルギー", "意向：妻は意向を了承",
+    # A drug, prescription or product written in kanji alone.
+    "副作用：父は睡眠薬で眠気あり", "副作用：妻は架空処方薬で眠気", "副作用：妻は眠前薬で眠気",
+    "副作用：妻は先発品で眠気", "アレルギー：妻は既製品アレルギー", "副作用：妻は同時服用で眠気",
+    "副作用：妻は抗生剤で下痢", "方針：医師は処方変更を提案",
 ])
 def test_a_family_fact_outside_the_allowed_shapes_stays_unspecified(line):
     assert _line_subjects(line) == ["unspecified"]
@@ -454,10 +461,105 @@ def test_a_family_fact_outside_the_allowed_shapes_stays_unspecified(line):
     ("本人の意向：家族は皆在宅を希望", "unspecified"),
     # 家族の意向 is the family's unless its value names the patient (was family).
     ("家族の意向：本人は同席してほしい", "unspecified"),
-    ("家族の希望：ご主人は在宅を希望", "family"),
+    ("家族の希望：ご主人は在宅を希望", "unspecified"),
+    ("家族の希望：長男さんは在宅を希望", "family"),
 ])
 def test_a_subject_heading_decides_when_the_value_does_not(line, subject):
     assert _line_subjects(line) == [subject]
+
+
+# 家族の意向／家族の希望: any way of naming someone but a family-side kin word leaves the
+# heading undecided, one per form (a subject, a possessor of a wish, a bracket, an alias or
+# ascending kin, each wish topic, each possessed noun, each bracket).
+FAMILY_HEADING_NAMES_SOMEONE_ELSE = [
+    "家族の意向：山田さんは在宅を希望", "家族の意向：山田は在宅を希望", "家族の希望：Aさんは在宅を希望",
+    "家族の意向：入所者は在宅を希望", "家族の意向：高齢者は在宅を希望", "家族の意向：お年寄りは在宅を希望",
+    "家族の意向：あの人は在宅を希望", "家族の意向：同氏は在宅を希望", "家族の希望：おばあちゃんは在宅を希望",
+    "家族の意向：あたしは在宅を希望", "家族の意向：ぼくは在宅を希望", "家族の意向：Ｐｔは在宅を希望",
+    "家族の意向：ﾎﾝﾆﾝは在宅を希望", "家族の意向：本 人は在宅を希望", "家族の意向：療養者は在宅を希望",
+    "家族の意向：在宅療養者が在宅を希望", "家族の希望：じいちゃんは家に帰りたい",
+    # Kin that can be the patient relative to the writer.
+    "家族の意向：母は在宅を希望", "家族の意向：父は在宅を希望", "家族の意向：祖母は在宅を希望",
+    "家族の意向：義父は在宅を希望", "家族の意向：お母様は在宅を希望", "家族の意向：同居者は在宅を希望",
+    "家族の意向：旦那さんは在宅を希望", "家族の意向：奥様は在宅を希望", "家族の意向：お兄さんは在宅を希望",
+    # A possessor of a wish, one per possessed noun.
+    "家族の意向：母の意向を尊重", "家族の希望：入所者の希望に沿う", "家族の希望：あの人の希望に沿う",
+    "家族の意向：かれの意思次第", "家族の意向：母の意志を尊重", "家族の意向：母の意見に従う",
+    "家族の意向：母の気持ちを尊重", "家族の意向：母の思いを尊重", "家族の意向：母の考えに従う",
+    "家族の意向：母の願いを叶えたい", "家族の意向：母の望みを叶えたい", "家族の意向：母の判断に任せる",
+    "家族の意向：長男は母の意向を尊重", "家族の意向：うちの長男の希望を尊重",
+    # A bracket may name the person.
+    "家族の希望：在宅を希望（入所者）", "家族の意向：在宅を希望(Ｐｔ)", "家族の意向：在宅を希望［入所者］",
+    "家族の意向：在宅を希望[入所者]", "家族の意向：在宅を希望【入所者】", "家族の意向：在宅を希望〔入所者〕",
+    # Another は or が may mark a subject.
+    "家族の意向：自宅では看られない", "家族の意向：在宅が難しい",
+    # The patient named in another position.
+    "家族の意向：本人次第", "家族の意向：在宅を希望、本人も同意",
+]
+
+
+@pytest.mark.parametrize("line", FAMILY_HEADING_NAMES_SOMEONE_ELSE)
+def test_a_family_heading_that_names_someone_else_is_unspecified(line):
+    assert _line_subjects(line) == ["unspecified"]
+
+
+@pytest.mark.parametrize("line", [
+    "家族の意向：長男は在宅を希望", "家族の意向：長女さんは在宅を希望", "家族の意向：■長女は在宅を希望",
+    "家族の希望：家族は同意", "家族の意向：妻は反対", "家族の意向：孫は面会を希望",
+    "家族の意向：長男の意向を尊重", "家族の希望：妻の気持ちを大切にしたい",
+    # A topic a wish is about, one per topic.
+    "家族の意向：最期は自宅で", "家族の意向：最後は家で", "家族の意向：今後は施設で", "家族の希望：延命は望まない",
+    "家族の意向：治療は続けたい", "家族の意向：入院はしたくない", "家族の意向：退院は来月で",
+    "家族の希望：面会は週1回", "家族の意向：長男は延命は望まない",
+    # No holder at all; a person as the object of the family's own wish.
+    "家族の意向：家に帰りたい", "家族の希望：施設入所も考えたい", "家族の意向：おばあちゃんを在宅で看たい",
+])
+def test_a_family_heading_naming_only_family_side_kin_or_nobody_is_family(line):
+    assert _line_subjects(line) == ["family"]
+
+
+# A drug, prescription or product in kanji alone refers to a regimen or a class, which may
+# be the patient's; one with a name part is a thing.
+@pytest.mark.parametrize("line", [
+    "副作用：妻は本処方で眠気", "副作用：妻は当内服薬で眠気", "副作用：妻は現行薬で眠気", "副作用：妻は継続薬で眠気",
+    "副作用：妻は持参薬で眠気", "副作用：妻は定期薬で眠気", "副作用：妻は頓服薬で眠気", "副作用：妻は常用薬で眠気",
+    "副作用：妻は処方薬で眠気", "副作用：妻は内服薬で眠気", "副作用：妻は服用薬で眠気", "副作用：妻は今回薬で眠気",
+    "副作用：妻は新しい薬で眠気", "副作用：妻は旧薬で眠気", "副作用：妻は従来薬で眠気", "副作用：妻は当院処方薬で眠気",
+    "副作用：妻は他院処方薬で眠気", "副作用：妻は既存薬で眠気", "副作用：妻は下剤で下痢", "副作用：妻は現行薬剤で眠気",
+    "アレルギー：夫は処方薬アレルギー", "アレルギー：夫は薬剤アレルギー", "アレルギー：夫は持参薬で発疹",
+    "アレルギー：夫は本品アレルギー", "副作用：妻は内服で眠気", "副作用：妻は服用中で眠気",
+    "希望：妻は本剤を希望", "希望：妻は処方薬の変更を希望",
+])
+def test_a_nameless_drug_is_no_family_fact(line):
+    assert _relabelled(line) == []
+
+
+@pytest.mark.parametrize("line", [
+    "副作用：妻は合成薬Aで眠気", "副作用：妻は薬Aで眠気", "副作用：妻はペニシリン系薬で眠気",
+    "副作用：妻は合成薬Ａで眠気", "副作用：妻は処方薬Xで眠気", "副作用：妻は内服薬B2で眠気",
+    "アレルギー：夫はセフェム系抗菌薬アレルギー", "アレルギー：夫はペニシリンアレルギー",
+    "希望：妻は合成薬Cの継続を希望",
+])
+def test_a_named_drug_is_a_family_fact(line):
+    assert _line_subjects(line) == ["family"]
+
+
+# Closed-shape edges, each pinned in the safe direction.
+@pytest.mark.parametrize("line", [
+    "アレルギー：妻はたまごとそばアレルギー", "アレルギー：妻はたまごをたべてアレルギー",
+    "アレルギー：妻はうちのねこアレルギー", "アレルギー：妻は猫の毛アレルギー",
+    "希望：妻は在宅と施設を希望", "アレルギー：妻は卵アレルギーも", "アレルギー：妻は不明", "副作用：妻は不明",
+])
+def test_a_shape_edge_stays_unspecified(line):
+    assert _relabelled(line) == []
+
+
+def test_annotate_reads_the_heading_from_the_first_evidence_line_only():
+    item = {"category": "allergies", "text": "長女は架空果実Nアレルギー", "subject": "unspecified",
+            "origin": "explicit_heading", "evidence": "アレルギー：長女は架空果実Nアレルギー\n既往歴：なし"}
+    assert annotate_heading_subjects([item])[0]["subject"] == "family"
+    flipped = {**item, "evidence": "既往歴：なし\nアレルギー：長女は架空果実Nアレルギー"}
+    assert annotate_heading_subjects([flipped])[0]["subject"] == "unspecified"
 
 
 @pytest.mark.parametrize(("label", "value"), [(None, "長女は卵"), ("アレルギー", None), (3, 4), ("", "")])
