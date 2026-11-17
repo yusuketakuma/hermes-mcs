@@ -1263,8 +1263,21 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             # probe would be a call nobody uses.
             if any(r.get("_cloud_mode") != "on" for _, r, *_ in claimed) and deadline - time.monotonic() >= _MIN_CALL_S:
                 probed_at = extract_llm_provider._FMT_TS
-                _probe_format(deadline=deadline - _MIN_CALL_S)
+                probe_err: dict = {}
+                _probe_format(deadline=deadline - _MIN_CALL_S,
+                              error_out=probe_err)
                 pre_probes = int(extract_llm_provider._FMT_TS != probed_at)
+                # the warm probe is a real inference run on this thread —
+                # feed its endpoint observation like a body call; a cached
+                # verdict or a probe that never reached the wire stays silent
+                if pre_probes:
+                    _observe("answered", time.monotonic())
+                elif probe_err.get("kind") == "unreachable":
+                    _observe("unreachable", time.monotonic())
+                elif probe_err.get("status") == 503:
+                    _observe("unavailable", time.monotonic())
+                elif probe_err.get("kind") == "transport":
+                    _observe("transport", time.monotonic())
             from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
             with ThreadPoolExecutor(
                     max_workers=min(pool_workers, len(units))) as pool, contextlib.ExitStack() as cleanup:

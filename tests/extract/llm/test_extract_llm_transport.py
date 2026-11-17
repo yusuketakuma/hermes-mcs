@@ -702,3 +702,164 @@ def test_format_downgrade_retry_releases_held_turn(monkeypatch):
     assert formats == [{"type": "json_object"}, None]  # object -> plain
     assert owned[0] is not None      # first body inside the held turn
     assert owned[1] is None          # downgrade retry acquired its own
+
+
+@pytest.mark.parametrize("kind,status", [
+    ("unreachable", None), (None, 503), ("transport", None),
+])
+def test_warm_probe_outage_feeds_breaker_once(tmp_path, monkeypatch,
+                                              kind, status, capsys):
+    """The pre-fan-out warm probe is a real inference run on the owner
+    thread: its unreachable/503/transport outcome reaches the breaker
+    once, and queued rows dedup onto the same outage instead of charging
+    each call."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message(mid=i, body=f"本文{i}") for i in range(1, 4)])
+    failures, successes = [], []
+
+    def warm(deadline=None, error_out=None):
+        if error_out is not None:
+            if kind:
+                error_out["kind"] = kind
+            if status:
+                error_out["status"] = status
+        return None
+
+    monkeypatch.setattr(extract_llm_runner, "_probe_format", warm)
+    monkeypatch.setattr(extract_llm_provider, "_probe_format",
+                        lambda **kw: "plain")
+    monkeypatch.setattr(extract_llm, "_probe_format",
+                        extract_llm_provider._probe_format)
+    monkeypatch.setattr(extract_llm_runner, "circuit_failure",
+                        lambda _db: failures.append(1))
+    monkeypatch.setattr(extract_llm_runner, "circuit_success",
+                        lambda _db: successes.append(1))
+
+    def down(prompt, **kw):
+        kw["error_out"]["kind"] = "unreachable"
+
+    monkeypatch.setattr(extract_llm.local_llm, "chat", down)
+    res = extract_llm.run_pending(db, limit=10, budget_s=200, workers=2)
+    assert failures == [1]         # warm + worker outages dedup to one
+    assert successes == []
+    assert res["failed"] == 0
+    db.close()
+
+
+def test_warm_probe_answered_resets_breaker(tmp_path, monkeypatch):
+    """A warm probe that returns a verdict proves the endpoint alive —
+    the observation resets the streak like any answered call."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message(mid=i, body=f"本文{i}") for i in range(1, 3)])
+    failures, successes = [], []
+
+    def warm(deadline=None, error_out=None):
+        extract_llm_provider._FMT_MODE = "plain"
+        extract_llm_provider._FMT_TS = time.monotonic()
+        return "plain"
+
+    monkeypatch.setattr(extract_llm_runner, "_probe_format", warm)
+    monkeypatch.setattr(extract_llm_provider, "_FMT_MODE", None)
+    monkeypatch.setattr(extract_llm, "_probe_format", warm)
+    monkeypatch.setattr(extract_llm_runner, "circuit_failure",
+                        lambda _db: failures.append(1))
+    monkeypatch.setattr(extract_llm_runner, "circuit_success",
+                        lambda _db: successes.append(1))
+    monkeypatch.setattr(extract_llm, "llm_extract",
+                        lambda body, **_: {"summary": "ok"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract',
+                        extract_llm.llm_extract)
+    res = extract_llm.run_pending(db, limit=10, budget_s=200, workers=2)
+    assert successes == [1]
+    assert failures == []
+    assert res["done"] == 2
+    db.close()
+
+
+def test_warm_probe_busy_never_reaches_wire_observation(tmp_path, monkeypatch):
+    """A busy/unsent warm probe consumed no endpoint work — the breaker
+    hears nothing and the workers still run their own calls."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message(mid=i, body=f"本文{i}") for i in range(1, 3)])
+    failures = []
+
+    def warm(deadline=None, error_out=None):
+        if error_out is not None:
+            error_out["kind"] = "busy"
+        return None
+
+    monkeypatch.setattr(extract_llm_runner, "_probe_format", warm)
+    monkeypatch.setattr(extract_llm_provider, "_probe_format",
+                        lambda **kw: "plain")
+    monkeypatch.setattr(extract_llm, "_probe_format",
+                        extract_llm_provider._probe_format)
+    monkeypatch.setattr(extract_llm_runner, "circuit_failure",
+                        lambda _db: failures.append(1))
+    monkeypatch.setattr(extract_llm, "llm_extract",
+                        lambda body, **_: {"summary": "ok"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract',
+                        extract_llm.llm_extract)
+    res = extract_llm.run_pending(db, limit=10, budget_s=200, workers=2)
+    assert failures == []
+    assert res["done"] == 2
+    db.close()
+
+
+def test_serial_run_skips_warm_probe(tmp_path, monkeypatch):
+    """workers=1 never fans out, so the warm probe does not run at all —
+    no extra inference call and no breaker observation from it."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message(mid=1, body="本文1")])
+    warm_calls = []
+
+    def warm(deadline=None, error_out=None):
+        warm_calls.append(1)
+        return "plain"
+
+    monkeypatch.setattr(extract_llm_runner, "_probe_format", warm)
+    monkeypatch.setattr(extract_llm_provider, "_probe_format",
+                        lambda **kw: "plain")
+    monkeypatch.setattr(extract_llm, "_probe_format",
+                        extract_llm_provider._probe_format)
+    monkeypatch.setattr(extract_llm, "llm_extract",
+                        lambda body, **_: {"summary": "ok"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract',
+                        extract_llm.llm_extract)
+    res = extract_llm.run_pending(db, limit=10, budget_s=200, workers=1)
+    assert warm_calls == []
+    assert res["done"] == 1
+    db.close()
+
+
+@pytest.mark.parametrize("admission", [False, True])
+@pytest.mark.parametrize("kind,status", [("unreachable", None), (None, 503)])
+def test_probe_wrapper_classification_keeps_evidence(monkeypatch,
+                                                      admission, kind, status):
+    """Regardless of the admission gate, an unobserved probe returns
+    None with its transport evidence intact — 503 stays a status, never
+    a rewritten kind — and caches no verdict."""
+    import local_llm
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: admission)
+    monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
+    monkeypatch.setattr(extract_llm, "_FMT_TS", 0.0)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', None)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_TS', 0.0)
+
+    def fake_probe(*a, **kw):
+        err = kw.get("error_out")
+        if err is not None:
+            if kind:
+                err["kind"] = kind
+            if status:
+                err["status"] = status
+        return None
+
+    monkeypatch.setattr(local_llm, "probe_format", fake_probe)
+    monkeypatch.setattr(local_llm, "admitted_probe_format", fake_probe)
+    err = {}
+    assert extract_llm_provider._probe_format(error_out=err) is None
+    if kind:
+        assert err.get("kind") == kind
+    if status:
+        assert err.get("status") == status and "kind" not in err
+    assert extract_llm_provider._FMT_MODE is None
