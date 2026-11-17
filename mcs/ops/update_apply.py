@@ -270,6 +270,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
         def _bail(reason: str) -> int:
             nonlocal rollback_failed, consent_hold, state, terminal
             transient = reason.split(":")[0] in _TRANSIENT_BAIL
+            stopped = False                # set only once a rollback quiesce returned
             stages = [s.get("stage") for s in state.get("stages", [])]
             merged = "merge" in stages or "post_merge" in stages
             if merged and state.get("applying"):
@@ -315,19 +316,22 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     _report("runtime_restore_blocked", str(e), writers_stopped=True,
                             apply_failure=reason)
                     return 1               # retain the original journal and marker
-                if entry.get("schema_bump") and entry.get("backup_path"):
-                    # journal rollback-shaped BEFORE the reset, like
-                    # rollback(): a failed/interrupted DB restore must
-                    # classify as head == target on the next recover pass
-                    # and retry _restore_db — an apply-shaped record would
-                    # read head == prev and 'finish' on the newer schema
-                    state["applying"] = _rollback_applying(
-                        entry, entry.get("sha"),
-                        command_id or entry.get("command_id"))
-                    journal(state, "rollback")
                 try:
                     # The post-merge child may have restarted writers before failing.
                     quiesce()
+                    stopped = True
+                    if entry.get("schema_bump") and entry.get("backup_path"):
+                        # journal rollback-shaped BEFORE the reset, like
+                        # rollback(): a failed/interrupted DB restore must
+                        # classify as head == target on the next recover pass
+                        # and retry _restore_db — an apply-shaped record would
+                        # read head == prev and 'finish' on the newer schema.
+                        # A failed quiesce changed nothing, so it keeps the
+                        # apply-shaped record (forward recovery, no freeze).
+                        state["applying"] = _rollback_applying(
+                            entry, entry.get("sha"),
+                            command_id or entry.get("command_id"))
+                        journal(state, "rollback")
                     schema_hold = bool(entry.get("schema_bump") and entry.get("backup_path"))
                     if schema_hold:
                         consent_hold = True
@@ -409,7 +413,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 # same report-only freeze as recover_interrupted's escalate: an
                 # outbox notice would write the newer-schema DB under the old
                 # code and join the later restore's loss report
-                _report("escalate", reason, writers_stopped=True)
+                _report("escalate", reason, writers_stopped=stopped)
                 return 1
             if quiesced and not rollback_failed:
                 problems = restart_agents()
