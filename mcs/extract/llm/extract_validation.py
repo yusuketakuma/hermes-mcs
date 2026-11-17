@@ -591,8 +591,12 @@ class Validator:
             self.uncertain(item, "negated")
         if symptom:
             resolved = clinical_scope.source_resolution(self.body, start, assertion_end, target_end=end)
-            continuing = re.search(r"持続|続いて|残って", tail)
+            continuing = clinical_scope.target_continuing(self.body, end, assertion_end)
             if status in ("new", "ongoing") and resolved is True:
+                self.uncertain(item, "status")
+            elif (status == "past" and period == "current" and polarity is False and resolved is None
+                  and clinical_scope.source_current(self.body, start, end, assertion_end)):
+                # An explicitly current, present, unresolved assertion of the same owner contradicts "past".
                 self.uncertain(item, "status")
             elif status == "resolved" and (continuing or resolved is not True):
                 self.uncertain(item, "status")
