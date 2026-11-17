@@ -167,7 +167,35 @@ def test_repair_receipt_reserved_before_dispatch(tmp_path):
         db.close()
 
 
-def test_repaired_projection_replays_bound_answers_and_rejects_tampering(tmp_path, monkeypatch):
+def test_repair_answer_record_keeps_answers_up_to_their_reservation_bound(monkeypatch):
+    """A repair answer is kept as evidence up to its own reservation's read bound, never past it."""
+    import cloud_client
+    import hashlib
+    import semantic_transport
+
+    owner = {'semantic_target_id': 1}
+    receipt = {'reservation_id': 'r' * 32, 'unit_key': 'semantic:synthetic', 'owner': owner, 'max_tokens': 1}
+    monkeypatch.setattr(semantic_transport, 'inference_contract', lambda: {'synthetic': True})
+    monkeypatch.setattr(semantic_transport, 'inference_receipt', lambda: dict(receipt))
+    bound = cloud_client.response_limit(1)
+    at_bound = 'a' * bound
+    assert semantic_transport.repair_answer_record('prompt', at_bound, set()) == {
+        'text': at_bound, 'prompt_sha256': hashlib.sha256(b'prompt').hexdigest(),
+        'reservation_id': 'r' * 32, 'contract': {'synthetic': True},
+        'unit_key': 'semantic:synthetic', 'owner': owner}
+    assert semantic_transport.repair_answer_record('prompt', at_bound + 'a', set()) is None
+    assert semantic_transport.repair_answer_record('prompt', at_bound, {'r' * 32}) is None
+    for max_tokens in (None, True, 0, '1'):
+        receipt['max_tokens'] = max_tokens
+        assert semantic_transport.repair_answer_record('prompt', 'a', set()) is None
+    receipt.pop('max_tokens')
+    assert semantic_transport.repair_answer_record('prompt', 'a', set()) is None
+
+
+@pytest.mark.parametrize('long_answer', [False, True])
+def test_repaired_projection_replays_bound_answers_and_rejects_tampering(tmp_path, monkeypatch, long_answer):
+    """A cloud answer over 256KiB (read whole by the transport) replays like any other."""
+    import bounded_http
     import copy
     import hashlib
     import mcs_util
@@ -206,6 +234,8 @@ def test_repaired_projection_replays_bound_answers_and_rejects_tampering(tmp_pat
         started = db.artifact_add(KIND_FACT_REPAIR, json.dumps({'status': 'started', 'rejected': {}}),
                                   project_id=1, message_id=1, meta={**common, 'doc_hash': original_hash})
         text = facts_llm([])('synthetic')
+        if long_answer:
+            text += ' ' * bounded_http.MAX_RESPONSE_BYTES
         prompts = []
 
         def answer(prompt):
@@ -260,6 +290,113 @@ def test_repaired_projection_replays_bound_answers_and_rejects_tampering(tmp_pat
         completed['__mcs_internal_proof_v1']['answers'][0]['text'] += 'changed'
         db.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(completed), completed_id))
         assert v4._repaired_projection_producer(db.db, 1, 1, fp, policy, member, repaired['doc'], result_meta) is None
+    finally:
+        db.close()
+
+
+def test_fact_repair_long_answer_is_recorded_by_the_fact_stage(tmp_path, monkeypatch):
+    """A fact-repair cloud answer over 256KiB is kept as evidence by the stage itself.
+
+    The fact audit finds a missing source fact and the stage dispatches its
+    one coverage repair; the answer, longer than the default read bound but
+    within its reservation's, is recorded on the completed repair, so the
+    repaired document's producer replays and a later pass does not stop on
+    ``fact_repaired_producer_unverified``."""
+    import bounded_http
+    import mcs_util
+    import semantic_facts
+    import semantic_policy
+    import semantic_transport
+    from inference_dependency_loss import source_binding
+    from semantic_testkit import _canonical_cfg, _FakeJev
+
+    first, second = "本人は朝の架空資料を希望します。", "本人は夕方の架空資料も希望します。"
+
+    def preference(quote):
+        return {"kind": "preference", "statement": quote, "subject_role": "patient",
+                "polarity": "affirmed", "epistemic": "reported", "workflow_status": "reported",
+                "evidence_quote": quote}
+
+    class CoverageJev(_FakeJev):
+        def __init__(self):
+            super().__init__(choice_map={"has_" + category: "present" if category == "preference"
+                                         else "absent" for category in semantic_facts.MANDATORY_CATEGORIES})
+
+        def evaluate(self, state, questions, deadline):
+            if "source_fact_coverage" in questions:
+                statements = [row["text"] for row in state["context"]]
+                self.choice_map["source_fact_coverage"] = "complete" if second in statements else "missing"
+            return super().evaluate(state, questions, deadline)
+
+    db = _ledger(tmp_path)
+    _patient(db)
+    db.save_messages([_message(1, body=first + second)])
+    bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
+    member = bundle["members"][0]
+    fp = bundle["source_fingerprint"]
+    scfg, errors = semantic_policy.semantic_config(_canonical_cfg())
+    assert not errors
+    policy = semantic_policy.policy_fingerprint(scfg)
+    contract = {"backend": "openai", "model": "synthetic-sol", "prompt": "synthetic-contract"}
+    state = {"requests": [], "receipt": None, "repairs": 0}
+
+    def model(prompt):
+        presence = dict.fromkeys(semantic_facts.MANDATORY_CATEGORIES, "none")
+        presence["preference"] = "one"
+        repair = semantic_transport._inference_purpose.get() == "quality_repair"
+        value = json.dumps({"facts": [preference(first)] + ([preference(second)] if repair else []),
+                            "category_presence": presence}, ensure_ascii=False)
+        if not repair:
+            semantic_transport._record_inference("local")
+            return value
+        state["repairs"] += 1
+        value += " " * bounded_http.MAX_RESPONSE_BYTES
+        rid = "b" * 32
+        reserve_id = db.artifact_add("cloud_usage_reserve", "{}", project_id=1, message_id=1,
+                                     meta={"reservation_id": rid})
+        owner = {"semantic_target_id": 1, "semantic_thread_root": 1, "semantic_phase": "facts",
+                 "semantic_generation": "synthetic",
+                 "semantic_source": mcs_util.payload_hash([(1, source_binding(db.db, 1, 1))])}
+        state.update(reserve_id=reserve_id, prompt=prompt, answer=value, owner=owner,
+                     receipt={"reservation_id": rid, "unit_key": "semantic:synthetic", "owner": owner,
+                              "max_tokens": 32768})
+        state["requests"].append(rid)
+        semantic_transport._record_inference("openai")
+        return value
+
+    def verify(_db, **kwargs):
+        if (kwargs["reservation_artifact_id"] != state.get("reserve_id")
+                or kwargs["prompt"] != state.get("prompt") or kwargs["answer_text"] != state.get("answer")
+                or kwargs["owner"] != state.get("owner") or kwargs["contract"] != contract):
+            raise ValueError("synthetic-receipt-invalid")
+        return {}
+
+    monkeypatch.setattr(cloud_inference, "verify_cloud_repair_evidence", verify)
+    monkeypatch.setattr(semantic_transport, "inference_requests", lambda: list(state["requests"]))
+    monkeypatch.setattr(semantic_transport, "inference_receipt", lambda: state["receipt"])
+    monkeypatch.setattr(semantic_transport, "inference_contract", lambda: (
+        contract if semantic_transport._inference_purpose.get() == "quality_repair" else None))
+    try:
+        stage = semantic_drain._fact_stage(db, scfg, member, 1, 1, fp, policy, CoverageJev(), model,
+                                           time.monotonic() + 600)
+        assert stage["outcome"] is None and state["repairs"] == 1
+        assert stage["v2_doc"]["coverage"]["status"] == "complete"
+        assert len(state["answer"].encode("utf-8")) > bounded_http.MAX_RESPONSE_BYTES
+        completed = _rows(db, KIND_FACT_REPAIR, 1)[-1]
+        evidence = json.loads(completed["content"])["__mcs_internal_proof_v1"]
+        assert [answer["text"] for answer in evidence["answers"]] == [state["answer"]]
+        repaired = semantic_store.current_artifact(db.db, "semantic_facts_v2", 1, fp)
+        assert repaired["content"] == stage["v2_doc"] and repaired["meta"]["repaired"] is True
+        assert repaired["meta"]["repair_artifact_id"] == completed["artifact_id"]
+        proof = v4._repaired_projection_producer(db.db, 1, 1, fp, policy, member,
+                                                 repaired["content"], repaired["meta"])
+        assert proof is not None and proof["providers"] == ["local", "openai"]
+        assert [item["reservation_id"] for item in proof["repair"]] == ["b" * 32]
+        # A later pass under a cloud contract reads the repaired document back.
+        monkeypatch.setattr(semantic_transport, "inference_contract", lambda: contract)
+        early, _, _ = semantic_fact_stages._fact_v2_document(
+            db, member, 1, 1, fp, policy, "canonical", None, None, time.monotonic() + 60)
+        assert (early or {}).get("diagnostic_reason") != "fact_repaired_producer_unverified"
     finally:
         db.close()
 
