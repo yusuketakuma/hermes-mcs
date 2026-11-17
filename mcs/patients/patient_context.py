@@ -349,27 +349,35 @@ def extract_context(body: str) -> list[dict]:
 
 # Rule 30: a heading names another subject only on an allow-list, because a wrong
 # family or other label hides the patient's own allergy or wish (unspecified, the
-# former behaviour, is the safe default). 本人の意向／本人の希望 is never relabelled.
+# former behaviour, is the safe default). 本人の意向／本人の希望 is never relabelled, and
+# 家族の意向／家族の希望 is the family's only while its value names no patient word.
 _SUBJECT_HEADINGS = {"家族の意向": "family", "家族の希望": "family",
                      "本人の意向": "patient", "本人の希望": "patient"}
 _SUBJECT_CATEGORIES = frozenset({"preferences", "allergies", "adverse_events"})
 # A staff member holds only a policy; for a clinical fact or a wish they are a reporter.
 _STAFF_HELD_HEADINGS = frozenset({"方針", "療養方針", "治療方針"})
-# The head: a person word, then は or も. が marks an actor or a reporter and の may
-# be a drug the patient took (奥様の薬), so neither names a holder.
+# The head: a person word, then は. も says the patient shares the fact (妻も卵アレルギー),
+# が marks an actor or a reporter and の may be a drug the patient took (奥様の薬), so
+# none names a holder; nor does 本人以外, which implies the patient has something.
 _VALUE_HOLDER = re.compile(
     r"[ \t　]*(?:[■●◆#・＊*]+[ \t　]*)?"
-    rf"(?:(?P<family>{clinical_scope.FAMILY_PERSON})|(?P<other>{clinical_scope.OTHER_PERSON}))"
-    r"(?:ご本人|本人)?(?:自身)?[はも]")
+    rf"(?:(?P<family>{clinical_scope.FAMILY_PERSON})|(?!本人以外)(?P<other>{clinical_scope.OTHER_PERSON}))"
+    r"(?:ご本人|本人)?(?:自身)?は")
 # In a note to the family these kin words can be the patient (ご主人・お母様), so they hold nothing.
 _PATIENT_ALIAS_KIN = re.compile(r"ご?主人|旦那(?:さん|様)?|奥(?:さん|様)|お(?:母|父|兄|姉)(?:さん|様)?")
+# A value of 家族の意向／家族の希望 that names the patient is not the family's alone.
+_PATIENT_WORD = re.compile(r"本人|患者|利用者|入居者|当人|私|自分")
 # A fact names one thing, never a person, a group that may include the patient or a
-# pointer back to the patient's record (皆・全員・入居者・本人同様・同上); the closed
-# shapes below guarantee everything else.
+# pointer back to the patient's record (皆・全員・入居者・本人同様・同じ・当該・前述); the
+# closed shapes below guarantee everything else. A family or other word already covers
+# 他人・主人・夫婦 and 同 covers 一同・同上; 同 leaves 同居・同意・同席・同行・同伴,
+# which point at nothing.
 _NOT_A_THING = (rf"{clinical_scope.FAMILY_PERSON}|{clinical_scope.OTHER_PERSON}"
-                r"|者|本人|当人|他人|主人|自身|自分|私|わたし|当方|僕|俺|さん|様|ちゃん|君"
-                r"|皆|みな|みんな|全|両|双方|一同|共|一緒|揃|そろ|二人|ふたり|夫婦|親子"
-                r"|同上|上記|前記|それ|これ|あれ")
+                r"|者|本人|ほんにん|当人|自身|自分|じぶん|私|わたし|当方|僕|俺|対象"
+                r"|(?<![A-Za-z])(?:pt|Pt|PT)(?![A-Za-z])|さん|様|ちゃん|君|氏"
+                r"|皆|みな|みんな|全|両|双方|共|一緒|揃|そろ|二人|ふたり|親子"
+                r"|同(?![居意席行伴])|おなじ|当該|該当|前述|上述|先述|前出|前記|右記|下記|以上|上記"
+                r"|それ|これ|あれ")
 _STANCE = r"希望|望|拒否|反対|賛成|了承|同意|提案|推奨|指示|予定"
 
 
@@ -426,6 +434,8 @@ def heading_subject(label, value) -> str:
         if shape and shape.fullmatch(value[person.end():].rstrip()):
             holder = "family" if person["family"] else "other"
     heading = _SUBJECT_HEADINGS.get(label, "unspecified")
+    if heading == "family" and _PATIENT_WORD.search(value):
+        heading = "unspecified"
     if heading == "patient":
         # A person heading the patient's own heading withdraws the assertion, never relabels it.
         return "unspecified" if person else heading
