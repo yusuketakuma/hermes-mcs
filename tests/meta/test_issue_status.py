@@ -76,6 +76,18 @@ def test_issue_without_pr_walks_from_filing_to_implementation():
     assert row[1] == "実装中" and "run 7" in row[3]
 
 
+def test_removed_assignment_refreshes_only_an_existing_comment():
+    labeled = [{"event": "labeled", "label": {"name": "担当:claude"}, "created_at": "2026-11-17T00:10:00Z"}]
+    row, rows, _ = _current(_bundle(_issue(labels=()), events=labeled))
+    assert row[1] == "起票" and rows[1][0] == "todo" and rows[2][0] == "todo"
+    assert st.plan_targets([_issue(labels=())], [], now=NOW) == []
+    assert st.plan_targets([_issue(labels=())], [], "#5", now=NOW) == [{"issue": 5, "pr": None}]
+    body = st.render_body(*st.decide(_bundle(_issue(labels=())), OWNER))
+    assert st.comment_plan(body, [], tracked=False)["write"] is False
+    ours = {"id": 3, "user": {"login": st.BOT}, "body": st.MARKER + " old"}
+    assert st.comment_plan(body, [ours], tracked=False)["write"] is True
+
+
 def test_skipped_and_unrelated_agent_runs_are_not_this_issue():
     runs = [_run("Agent Claude #5 x", status="completed", conclusion="skipped"), _run("Agent Claude #51 y", run_id=8)]
     row, _, _ = _current(_bundle(claude_runs=runs))
@@ -199,6 +211,8 @@ def test_rendered_cells_never_mention_or_break_the_table():
     status = {"statuses": [{"context": "merge-gate", "state": "failure", "description": "@claude a|b\nc"}]}
     body = st.render_body(*st.decide(_bundle(pr=_pr(), ci_runs=[_ci()], status=status), OWNER))
     assert "@claude" not in body and "a\\|b c" in body
+    merged = _pr(state="closed", base="group/a|b", merged_at="2026-11-17T02:30:00Z")
+    assert "**現在: グループへ統合済み（group/a\\|b）**" in st.render_body(*st.decide(_bundle(pr=merged), OWNER))
 
 
 def test_cli_renders_from_a_work_directory(tmp_path, capsys):

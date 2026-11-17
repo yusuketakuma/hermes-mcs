@@ -66,7 +66,7 @@ jobs:
           default=${DEFAULT_BRANCH:-$(gh api "repos/$GH_REPO" --jq .default_branch)}
           since=$(date -u -d '2 days ago' +%Y-%m-%dT%H:%M:%SZ)
           gh api --paginate --slurp -X GET "repos/$GH_REPO/issues" -f state=open -f per_page=100 > "$work/open.json"
-          gh api --slurp -X GET "repos/$GH_REPO/issues" -f state=closed -f since="$since" -f per_page=100 > "$work/closed.json"
+          gh api --paginate --slurp -X GET "repos/$GH_REPO/issues" -f state=closed -f since="$since" -f per_page=100 > "$work/closed.json"
           # shortcut: only the 100 most recently updated PRs are linked; page further if older PRs go unseen.
           gh api -X GET "repos/$GH_REPO/pulls" -f state=all -f sort=updated -f direction=desc -f per_page=100 > "$work/pulls.json"
           python3 ci/issue_status.py plan --work "$work" --hints "$hints" > "$work/targets.json"

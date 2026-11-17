@@ -96,7 +96,8 @@ def plan_targets(issues, pulls, hints="", now=None):
     for issue in sorted({i["number"]: i for i in issues if "pull_request" not in i}.values(),
                         key=lambda i: i["number"]):
         prs = links.get(issue["number"], [])
-        if not (agent_label(issue) or prs):
+        # A direct "#N" also refreshes an issue that just lost its 担当:* label; render writes only over an old comment.
+        if not (agent_label(issue) or prs or issue["number"] in numbers):
             continue
         if issue.get("state") != "open" and now - _time(issue.get("closed_at") or issue["updated_at"]) > CLOSED_WINDOW:
             continue
@@ -152,21 +153,19 @@ def decide(bundle, owner, default_branch="main"):
     claude_run = _agent_run(bundle.get("claude_runs", []), numbers)
     rows = [("done", "起票", issue.get("created_at"), _link(f"#{issue['number']}", issue.get("html_url")))]
 
-    assigned = [e for e in bundle.get("events", [])
-                if e.get("event") == "labeled" and (e.get("label") or {}).get("name", "").startswith(AGENT_LABEL_PREFIX)]
+    # The current label decides; events only date it (a removed label is no assignment).
     agent = agent_label(issue)
-    if assigned:
-        last = max(assigned, key=lambda e: e.get("created_at") or "")
-        rows.append(("done", "担当決定", last.get("created_at"), last["label"]["name"]))
-    elif agent:
-        rows.append(("done", "担当決定", None, agent))
+    dates = [e.get("created_at") or "" for e in bundle.get("events", [])
+             if e.get("event") == "labeled" and (e.get("label") or {}).get("name") == agent]
+    if agent:
+        rows.append(("done", "担当決定", max(dates, default=None), agent))
     else:
         rows.append(("todo", "担当決定", None, ""))
 
     run_link = _link(f"run {claude_run['id']}", claude_run.get("html_url")) if claude_run else ""
     if pr:
         rows.append(("done", "実装中", claude_run.get("created_at") if claude_run else None, run_link))
-    elif agent or assigned:
+    elif agent:
         rows.append(("active", "実装中", claude_run.get("created_at") if claude_run else None,
                      run_link or "実行状況はこの担当から取得しない"))
     else:
@@ -274,7 +273,7 @@ def current_index(rows):
 
 def render_body(rows, notes):
     now = current_index(rows)
-    lines = [MARKER, "### AI 実装の進み具合", "", f"**現在: {rows[now][1]}**", ""]
+    lines = [MARKER, "### AI 実装の進み具合", "", f"**現在: {_cell(rows[now][1])}**", ""]
     if notes:
         lines += ["注意: " + _cell("・".join(notes)), ""]
     lines += ["| | 段階 | 時刻（JST） | 根拠 |", "| --- | --- | --- | --- |"]
@@ -293,10 +292,12 @@ def own_comment(comments):
                  and (c.get("body") or "").startswith(MARKER)), None)
 
 
-def comment_plan(body, comments):
+def comment_plan(body, comments, tracked=True):
+    """Edit our comment when the body changed; start one only for an issue with an assignee or a PR."""
     existing = own_comment(comments)
     old = (existing or {}).get("body", "").replace("\r\n", "\n").strip()
-    return {"comment_id": existing["id"] if existing else None, "write": old != body.strip(), "body": body}
+    write = old != body.strip() and (tracked or existing is not None)
+    return {"comment_id": existing["id"] if existing else None, "write": write, "body": body}
 
 
 def _flatten(data):
@@ -358,7 +359,8 @@ def main(argv=None):
         return 0
     else:
         bundle = load_bundle(args.work, args.issue)
-        out = comment_plan(render_body(*decide(bundle, args.owner, args.default_branch)), bundle["comments"])
+        out = comment_plan(render_body(*decide(bundle, args.owner, args.default_branch)), bundle["comments"],
+                           bool(agent_label(bundle["issue"]) or bundle["pr"]))
     json.dump(out, sys.stdout, ensure_ascii=False)
     sys.stdout.write("\n")
     return 0
