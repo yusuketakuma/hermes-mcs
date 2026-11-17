@@ -25,7 +25,7 @@ def test_unevaluated_reasons_are_private_and_never_pass(summary, client, size, r
 
 
 def test_invalid_response_is_not_a_service_outage(monkeypatch):
-    monkeypatch.setattr(audit.jev, 'evaluate_once_more', lambda *args: {'answers': {}})
+    monkeypatch.setattr(audit.jev, 'evaluate_once_more', lambda *args, **kwargs: {'answers': {}})
     summary = {'claims': [{'claim_id': 'c', 'text': 'synthetic', 'evidence_refs': []}]}
     findings, evaluated = audit.audit_claims(object(), {'members': []}, summary, 0)
     assert not evaluated and findings[0]['code'] == 'support_unevaluated'
@@ -66,3 +66,16 @@ def test_invalid_saved_claims_fail_once_without_fabricating_pass(tmp_path, monke
         assert all('_claim_audit_reason' not in row['content'] for row in audits)
     finally:
         db.close()
+
+
+def test_invalid_answer_keeps_the_valid_negative_beside_it(monkeypatch):
+    """An invalid answer is asked again; a valid negative in the same response is kept as observed."""
+    answers = {'a': {'choice': 'invalid-choice', 'confidence': 0.9},
+               'b': {'choice': 'contradicts', 'confidence': 0.9}}
+    monkeypatch.setattr(audit.jev, 'evaluate_once_more', lambda *args, **kwargs: {'answers': answers})
+    summary = {'claims': [{'claim_id': claim, 'text': 'synthetic', 'evidence_refs': []} for claim in answers]}
+    findings, evaluated = audit.audit_claims(object(), {'members': []}, summary, 0)
+    assert not evaluated and summary['_claim_audit_reason'] == 'response_invalid'
+    assert summary['_claim_audit'] == {'b': {'choice': 'contradicts', 'confidence': 0.9}}
+    assert {'code': 'claim_contradicts', 'claim': 'b', 'confidence': 0.9} in findings
+    assert {'code': 'support_unevaluated', 'claim': 'a'} in findings

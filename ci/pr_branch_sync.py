@@ -14,8 +14,10 @@ imports nothing from the application. Standard library only.
 - A commit made with GITHUB_TOKEN starts no pull_request workflow, so the
   required checks would never report on the new head. CI is started with
   workflow_dispatch on the head branch instead (GITHUB_TOKEN may do that),
-  with release-notes.yml's read-only pr_check for the change-record check;
-  agent-control.yml then publishes merge-gate for that head as usual.
+  with release-notes.yml's read-only pr_check for the change-record check.
+  A run started that way raises no workflow_run either, so ci.yml's last job
+  (merge-gate-request) dispatches agent-control.yml, which publishes
+  merge-gate for that head.
   If that dispatch failed or the new head appeared too late, the next run
   finds this job's merge commit without any CI run and dispatches again.
 - An auto-merge reservation is withdrawn first: it was decided for the old
