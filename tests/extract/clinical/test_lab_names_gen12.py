@@ -98,6 +98,8 @@ def test_a_unit_that_does_not_fit_the_new_item_stays_a_candidate(name, value, un
     ("TP", "6.5", None, "TP 6.5"),
     # PT the coagulation test vs PT the physical therapist.
     ("PT", "2", None, "訪問リハのPT 2回/週 継続"),
+    ("PT", "2", None, "PT（理学療法士）より 週2回訪問"),
+    ("PT", "2", "回", "PT（理学療法士）2回/週"),
     ("PT", "40", None, "PTさん 40分 訓練"),
     ("PT", "40", "分", "PTさん 40分 訓練"),
     ("PT", "98", "%", "PT 98%"),
