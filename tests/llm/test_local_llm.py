@@ -325,17 +325,18 @@ def test_probe_that_reached_no_model_fixes_no_format(fail):
 @pytest.mark.parametrize(("status", "text", "finish", "mode",
                           "answered", "statuses"), [
     # a completed 200 proves the endpoint alive and picks the mode
-    (200, '{"ok":true}', "stop", "object", True, []),
+    (200, '{"ok":true}', "stop", "object", True, [200]),
     # server errors are endpoint trouble, never a health signal
     (500, "", "stop", "plain", False, [500]),
     # a pure format-rejection streak stays distinct from 5xx
     (400, "", "stop", "plain", False, [400]),
-    # a 200 whose body cannot complete is not health evidence
-    (200, "", "stop", "plain", False, []),
-    (200, '{"a":1', "length", "plain", False, []),
+    # a 200 whose body cannot complete is not health evidence — and the
+    # 200 stays in statuses so it cannot pass as a pure rejection streak
+    (200, "", "stop", "plain", False, [200]),
+    (200, '{"a":1', "length", "plain", False, [200]),
     # a completed answer that fails the format verify still proves the
     # endpoint alive — format selection and health stay separate
-    (200, "not json at all", "stop", "plain", True, []),
+    (200, "not json at all", "stop", "plain", True, [200]),
 ])
 def test_probe_error_out_separates_format_from_endpoint_health(
         status, text, finish, mode, answered, statuses):
@@ -353,6 +354,24 @@ def test_probe_error_out_separates_format_from_endpoint_health(
     assert err.get("sent") is True
     assert bool(err.get("answered")) is answered
     assert err.get("statuses", []) == statuses
+
+
+def test_probe_statuses_keep_mixed_rejection_and_unusable_200():
+    """A 400 beside an unusable 200 is not a pure format-rejection
+    streak: every response status stays in the evidence, in order."""
+    def send(endpoint, method, body, timeout, deadline=None):
+        rf = (body.get("response_format") or {}).get("type") \
+            if isinstance(body, dict) else None
+        if rf == "json_schema":
+            return 400, {}, b""
+        return 200, {}, json.dumps(_response("", finish="stop")).encode()
+
+    err = {}
+    assert local_llm.probe_format(
+        local_llm.ENDPOINT, "synthetic", {"name": "synthetic"},
+        request_fn=send, error_out=err) == "plain"
+    assert err["statuses"] == [400, 200]
+    assert "answered" not in err
 
 
 def test_extract_llm_call_pins_background_slot(monkeypatch):

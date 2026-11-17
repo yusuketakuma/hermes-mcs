@@ -881,6 +881,9 @@ class _ProbeOpener:
     # server errors and unusable 200s are endpoint trouble
     ({"schema": (500, ""), "object": (500, "")}, [1], []),
     ({"schema": (200, ""), "object": (200, "")}, [1], []),
+    # a rejection beside an unusable 200 is not a pure rejection streak
+    ({"schema": (400, ""), "object": (200, "")}, [1], []),
+    ({"schema": (200, ""), "object": (400, "")}, [1], []),
 ])
 def test_warm_probe_real_format_run_observes_endpoint_health(
         tmp_path, monkeypatch, by_mode, failures, successes):
@@ -960,6 +963,35 @@ def test_sent_probe_counts_once_when_floor_closes_after_probe(monkeypatch):
     # 79s left, 75s floor: the probe's 5s leaves 74s — floor closed
     assert extract_llm._llm_call(
         "prompt", deadline=clock[0] + 79, need_s=75) is extract_llm._DEFERRED
+    summary = extract_llm_provider._integrity_summary(
+        extract_llm_provider._note_list())
+    assert summary["probe_runs"] == 1
+    assert summary["calls"] == 0
+
+
+def test_sent_probe_counts_once_when_admission_refuses_body(monkeypatch):
+    """With admission on, an admitted_chat slot refusal returns before
+    any body send: the already-sent probe still counts exactly once."""
+    import local_llm
+    monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', None)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_TS', 0.0)
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: True)
+
+    def probe(deadline=None, error_out=None):
+        if error_out is not None:
+            error_out["sent"] = True
+            error_out["answered"] = True
+        return "plain"
+
+    monkeypatch.setattr(extract_llm_provider, "_probe_format", probe)
+    monkeypatch.setattr(local_llm, "admitted_chat",
+                        lambda *a, **k: {"admission": "slot_busy"})
+    extract_llm._CALL_NOTES.defer_reason = None
+    extract_llm_provider._note_list().clear()
+    assert extract_llm._llm_call(
+        "prompt", deadline=time.monotonic() + 200, need_s=75) \
+        is extract_llm._DEFERRED
     summary = extract_llm_provider._integrity_summary(
         extract_llm_provider._note_list())
     assert summary["probe_runs"] == 1

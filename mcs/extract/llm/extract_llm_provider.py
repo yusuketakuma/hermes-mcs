@@ -590,6 +590,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
                     turn_min_s=need_s or 0)
                 if response is not None and response.get("admission"):
                     _CALL_NOTES.defer_reason = "admission"
+                    _note_probe_only()   # the body slot was refused pre-send
                     return _DEFERRED
             else:
                 response = local_llm.chat(
