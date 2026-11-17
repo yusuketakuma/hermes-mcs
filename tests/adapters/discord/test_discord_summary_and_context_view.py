@@ -2,6 +2,8 @@
 import asyncio
 from types import SimpleNamespace
 
+import access_log
+
 from adapters.discord import actions as actions_mod, standalone as runtime
 from mcs_standalone.config import connector_settings
 from mcs_standalone.host import Host
@@ -138,6 +140,8 @@ def test_summary_command_answers_privately_with_names_and_scope(tmp_path, monkey
         assert kwargs["name"] == "架空 薬剤師" and kwargs["allowed"] == [1]
         assert kwargs.get("names", True) is True and kwargs["dialect"] == "discord"
     asyncio.run(exercise())
+    entry, = access_log.read(tmp_path / "data")
+    assert (entry["actor"], entry["channel"], entry["op"]) == ("discord:1001", "42", "summary")
 
 
 def test_summary_command_rejects_a_user_outside_scope(tmp_path, monkeypatch):
