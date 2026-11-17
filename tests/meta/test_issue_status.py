@@ -162,7 +162,7 @@ def test_merge_gate_then_review_wait_after_green_ci():
 
 
 def _mark(verdict, head=HEAD, user=OWNER, at="2026-11-17T02:30:00Z"):
-    return {"user": {"login": user}, "created_at": at, "html_url": "https://example.test/c",
+    return {"user": {"login": user}, "created_at": at, "updated_at": at, "html_url": "https://example.test/c",
             "body": f"<!-- dots-review verdict={verdict} head={head} -->\n本文"}
 
 
@@ -172,6 +172,8 @@ def test_the_shared_verdict_names_its_source():
     assert row[1] == "承認（dots）" and "commit aaaaaaa" in row[3]
     row, _, _ = _current(_bundle(**green, reviews=[_review("CHANGES_REQUESTED", user="claude[bot]")]))
     assert row[1] == "修正依頼（claude）"
+    # Claude's approval is no verdict
+    assert _current(_bundle(**green, reviews=[_review("APPROVED", user="claude[bot]")]))[0][1] == "レビュー待ち"
     row, _, _ = _current(_bundle(**green, pr_comments=[_mark("approved")]), dots_actor="")
     assert row[1] == "承認（dots・つなぎ）"
     # Dots beats Claude on the same head
@@ -212,12 +214,18 @@ def test_merge_ready_is_its_own_stage():
     def status(state):
         return {"statuses": [{"context": "merge-gate", "state": "success", "description": "ok"},
                              {"context": "merge-ready", "state": state, "description": f"{state} reason",
+                              "creator": {"login": "github-actions[bot]"},
                               "updated_at": "2026-11-17T02:40:00Z"}]}
     approved = [_review("APPROVED", user=DOTS)]
     row, _, _ = _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=approved, status=status("success")))
     assert row[1] == "マージ可（merge-ready）" and row[0] == "done"
     row, _, _ = _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=approved, status=status("pending")))
     assert row[1] == "マージ可（merge-ready）" and row[0] == "active" and "pending reason" in row[3]
+    # a merge-ready posted by anyone else is not shown
+    forged = status("success")
+    forged["statuses"][1]["creator"] = {"login": "someone"}
+    row, _, _ = _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=approved, status=forged))
+    assert row[1] == "承認（dots）"
     # a waiting review stays current ahead of merge-ready
     assert _current(_bundle(pr=_pr(), ci_runs=[_ci()], status=status("pending")))[0][1] == "レビュー待ち"
 

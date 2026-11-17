@@ -423,8 +423,8 @@ def _verdict(login, state="APPROVED", sha=HEAD, at="2026-11-17T02:00:00Z"):
     return {"user": {"login": login}, "state": state, "commit_id": sha, "submitted_at": at, "html_url": "u"}
 
 
-def _marker(verdict="approved", head=HEAD, login=OWNER, at="2026-11-17T02:30:00Z", prefix=""):
-    return {"user": {"login": login}, "created_at": at, "html_url": "c",
+def _marker(verdict="approved", head=HEAD, login=OWNER, at="2026-11-17T02:30:00Z", prefix="", edited=None):
+    return {"user": {"login": login}, "created_at": at, "updated_at": edited or at, "html_url": "c",
             "body": f"{prefix}<!-- dots-review verdict={verdict} head={head} -->\r\n本文"}
 
 
@@ -437,14 +437,19 @@ def test_the_highest_priority_actor_s_verdict_on_the_current_head_decides():
     assert both["passed"] and both["source"] == "dots"
     assert not _decide([_verdict(DOTS, "CHANGES_REQUESTED"), _verdict("claude[bot]")])["passed"]
     assert _decide([_verdict(DOTS)])["passed"]
-    claude = _decide([_verdict("claude[bot]")])
-    assert claude["passed"] and claude["source"] == "claude"
+    # claude[bot] can only reject: its approval never passes, its request for changes counts
+    assert _decide([_verdict("claude[bot]")]) == _decide()
+    claude = _decide([_verdict("claude[bot]", "CHANGES_REQUESTED")])
+    assert claude["state"] == "CHANGES_REQUESTED" and claude["source"] == "claude"
     # Dots on an older head says nothing about this one: Claude's verdict on the current head decides
     mixed = _decide([_verdict(DOTS, sha=OLD), _verdict("claude[bot]", "CHANGES_REQUESTED")])
     assert mixed["state"] == "CHANGES_REQUESTED" and mixed["source"] == "claude"
     # the actor's latest verdict on the head wins
     later = [_verdict(DOTS), _verdict(DOTS, "CHANGES_REQUESTED", at="2026-11-17T04:00:00Z")]
     assert _decide(later)["state"] == "CHANGES_REQUESTED"
+    # a dismissed request for changes no longer decides: the earlier approval does again (GitHub's own rule)
+    dismissed = [_verdict(DOTS), _verdict(DOTS, "DISMISSED", at="2026-11-17T04:00:00Z")]
+    assert _decide(dismissed)["passed"]
 
 
 def test_the_verdict_fails_closed():
@@ -452,7 +457,7 @@ def test_the_verdict_fails_closed():
     assert not _decide([_verdict(DOTS)], actors=[])["passed"], "unset REVIEW_ACTORS"
     assert ac.review_actors(" dots-example, claude[bot] ,") == ACTORS and ac.review_actors(None) == []
     # the author never reviews their own PR; logins match exactly
-    assert not _decide([_verdict("claude[bot]")], author="claude[bot]")["passed"]
+    assert not _decide([_verdict("claude[bot]", "CHANGES_REQUESTED")], author="claude[bot]")["state"]
     assert not _decide([_verdict("Dots-Example")])["passed"]
     # the owner, and so every seat, never counts, even when listed; COMMENTED never decides
     assert not _decide([_verdict(OWNER)], actors=[OWNER, "claude[bot]"])["passed"]
@@ -468,6 +473,7 @@ def test_the_verdict_fails_closed():
     (_marker(login="someone"), False),                # another author
     (_marker(login="github-actions[bot]"), False),
     (_marker(head=OLD), False),                       # an older head
+    (_marker(edited="2026-11-17T09:00:00Z"), False),  # edited after posting
 ])
 def test_the_bridge_marker_counts_only_exactly_from_the_owner_on_the_current_head(comment, passed):
     assert _decide(comments=[comment], dots_actor="")["passed"] is passed
@@ -476,21 +482,26 @@ def test_the_bridge_marker_counts_only_exactly_from_the_owner_on_the_current_hea
 def test_the_bridge_marker_s_newest_verdict_decides_and_ends_with_dots_actor():
     flipped = [_marker(), _marker("changes_requested", at="2026-11-17T05:00:00Z")]
     assert _decide(comments=flipped, dots_actor="")["state"] == "CHANGES_REQUESTED"
-    # the marker is Dots: it beats Claude's approval
-    bridge = _decide([_verdict("claude[bot]")], [_marker("changes_requested")], dots_actor="")
-    assert bridge["source"] == "dots・つなぎ" and not bridge["passed"]
+    # the marker is Dots: it beats Claude's request for changes
+    bridge = _decide([_verdict("claude[bot]", "CHANGES_REQUESTED")], [_marker()], dots_actor="")
+    assert bridge["source"] == "dots・つなぎ" and bridge["passed"]
+    # the single newest marker is chosen first: one for an older head hides an earlier one for this head
+    newer_old = [_marker(), _marker(head=OLD, at="2026-11-17T05:00:00Z")]
+    assert not _decide(comments=newer_old, dots_actor="")["passed"]
+    # it counts on a PR the owner's account authored too (the bridge's known limit)
+    assert _decide(comments=[_marker()], dots_actor="", author=OWNER)["passed"]
     # once DOTS_ACTOR is set, markers are ignored entirely
     assert not _decide(comments=[_marker()])["passed"]
-    assert _decide([_verdict("claude[bot]")], [_marker("changes_requested")])["passed"]
+    assert _decide([_verdict("claude[bot]", "CHANGES_REQUESTED")], [_marker()])["state"] == "CHANGES_REQUESTED"
     assert not _decide(comments=[_marker()], actors=[], dots_actor="")["passed"], "no actors: nothing counts"
 
 
 def test_sources_are_named_by_login_not_position():
     # the bridge: REVIEW_ACTORS="claude[bot]", DOTS_ACTOR unset
-    claude = _decide([_verdict("claude[bot]")], actors=["claude[bot]"], dots_actor="")
-    assert claude["source"] == "claude" and claude["passed"]
-    bridge = _decide([_verdict("claude[bot]")], [_marker("changes_requested")], actors=["claude[bot]"], dots_actor="")
-    assert bridge["source"] == "dots・つなぎ" and bridge["state"] == "CHANGES_REQUESTED"
+    claude = _decide([_verdict("claude[bot]", "CHANGES_REQUESTED")], actors=["claude[bot]"], dots_actor="")
+    assert claude["source"] == "claude" and claude["state"] == "CHANGES_REQUESTED"
+    bridge = _decide([_verdict("claude[bot]", "CHANGES_REQUESTED")], [_marker()], actors=["claude[bot]"], dots_actor="")
+    assert bridge["source"] == "dots・つなぎ" and bridge["passed"]
     # a first actor that is not DOTS_ACTOR is named by its login
     assert _decide([_verdict("other")], actors=["other"], dots_actor=DOTS)["source"] == "other"
 
@@ -525,14 +536,21 @@ def test_cli_publishes_merge_ready_only_when_it_changes(tmp_path, capsys):
     args = ["ready", "--pr", str(tmp_path / "pr.json"), "--checks", str(tmp_path / "checks.json"),
             "--files", str(tmp_path / "files.json"), "--behind-by", "0", "--automation", "true",
             "--reviews", str(tmp_path / "reviews.json"), "--comments", str(tmp_path / "comments.json"),
-            "--actors", ",".join(ACTORS), "--dots-actor", DOTS, "--owner", OWNER]
+            "--actors", ",".join(ACTORS), "--dots-actor", DOTS, "--owner", OWNER, "--status", str(tmp_path / "st.json")]
+    (tmp_path / "st.json").write_text(json.dumps({"statuses": []}))
     (tmp_path / "files.json").write_text(json.dumps([CODE]))
     (tmp_path / "reviews.json").write_text(json.dumps([[_verdict(DOTS)]]))
     ac.main(args)
     plan = json.loads(capsys.readouterr().out)
     assert plan == {"sha": HEAD, "state": "success", "description": "承認（dots）", "write": True}
-    ac.main(args + ["--current", json.dumps({"state": "success", "description": "承認（dots）"})])
+    posted = {"context": "merge-ready", "state": "success", "description": "承認（dots）"}
+    (tmp_path / "st.json").write_text(json.dumps({"statuses": [{**posted, "creator": {"login": "github-actions[bot]"}}]}))
+    ac.main(args)
     assert json.loads(capsys.readouterr().out)["write"] is False
+    # someone else's status of the same name is not ours: write again
+    (tmp_path / "st.json").write_text(json.dumps({"statuses": [{**posted, "creator": {"login": "someone"}}]}))
+    ac.main(args)
+    assert json.loads(capsys.readouterr().out)["write"] is True
     # a protected path stays the owner's merge; a review of an older head is stale
     (tmp_path / "files.json").write_text(json.dumps([[_file("ci/gates.py")]]))
     ac.main(args)
@@ -541,6 +559,29 @@ def test_cli_publishes_merge_ready_only_when_it_changes(tmp_path, capsys):
     (tmp_path / "reviews.json").write_text(json.dumps([[_verdict(DOTS, sha=OLD)]]))
     ac.main(args)
     assert json.loads(capsys.readouterr().out)["state"] == "pending"
+
+
+def _st(*items):
+    return {"statuses": [{"context": c, "state": st, "creator": {"login": who}} for c, st, who in items]}
+
+
+BOT = "github-actions[bot]"
+
+
+@pytest.mark.parametrize("status, action", [
+    (_st(("merge-gate", "success", BOT)), "evaluate"),
+    (_st(("merge-gate", "pending", BOT), ("merge-ready", "success", BOT)), "withdraw"),
+    (_st(("merge-ready", "success", BOT)), "withdraw"),              # no gate: an old success is withdrawn
+    (_st(("merge-gate", "failure", BOT), ("merge-ready", "pending", BOT)), "skip"),
+    (_st(("merge-gate", "success", "someone")), "skip"),             # a forged gate fetches nothing
+    (_st(("merge-gate", "pending", BOT), ("merge-ready", "success", "someone")), "skip"),
+    ({"statuses": []}, "skip"),
+])
+def test_the_sweep_fetches_more_only_for_a_green_gate_and_withdraws_an_old_success(status, action):
+    plan = ac.ready_precheck(status)
+    assert plan["action"] == action
+    if action == "withdraw":
+        assert plan["state"] == "pending"
 
 
 @pytest.mark.parametrize("sender, dots_actor, allowed", [
@@ -605,6 +646,13 @@ def test_review_workflow_is_read_only_and_never_runs_pr_code():
     assert re.findall(r"^\s+ref: (.*)$", text, re.M) == ["refs/heads/${{ github.event.repository.default_branch }}"] * 2
     assert text.count("persist-credentials: false") == 2
     assert "vars.AUTOMATION_ENABLED == 'true'" in jobs["plan"] and "github.repository_owner" in jobs["plan"]
+    # only an upstream actor the action accepts, so the started marker never spends a head on a refused run
+    allowed = "\"github-actions[bot]\",\"dependabot[bot]\",\"claude[bot]\"]'"
+    assert jobs["plan"].count(allowed) == 2 and "github.event.workflow_run.actor.login" in jobs["plan"]
+    assert 'allowed_bots: "github-actions[bot],dependabot[bot],claude[bot]"' in text
+    # the head named by the Agent control run, or every PR after its schedule run; the gate is read first
+    assert '"$UPSTREAM" == "schedule"' in jobs["plan"] and '"$TITLE" =~ ([0-9a-f]{40})' in jobs["plan"]
+    assert jobs["plan"].index("ready-precheck") < jobs["plan"].index("/reviews?per_page=100")
     # its own trigger phrase, never one agent-claude.yml's @claude would also take
     assert "startsWith(github.event.comment.body, '/claude-review') && !contains(github.event.comment.body, '@claude')" in text
     assert "/claude-review" not in (ROOT / ".github/workflows/agent-claude.yml").read_text()
@@ -632,7 +680,13 @@ def test_merge_ready_runs_only_on_default_branch_events_and_dots_may_assign():
     assert "github.event_name != 'schedule'" in _jobs(control)["gate"]
     assert sorted(re.findall(r"^      ([a-z-]+): (read|write)", ready, re.M)) == [
         ("checks", "read"), ("contents", "read"), ("issues", "read"), ("pull-requests", "read"), ("statuses", "write")]
-    assert "sparse-checkout: ci" in ready and "context=merge-ready" in ready and '.write "$work/ready.json")" != "true"' in ready
+    assert "sparse-checkout: ci" in ready and "context=merge-ready" in ready and "'.write // false' \"$d/ready.json\")\" != \"true\"" in ready
+    # a ci run or dispatch judges only its head; the schedule sweeps, and the gate is read before anything else
+    assert 'gh api "repos/$GH_REPO/commits/$RUN_SHA/pulls"' in ready and '"$EVENT" == "schedule"' in ready
+    assert ready.index("ready-precheck") < ready.index("check-runs") < ready.index("agent_control.py ready --pr")
+    # one PR's error is isolated and leaves pending, never an older success; listing errors are not caught
+    assert "bash -euo pipefail -c 'ready_pr" in ready and 'state=pending' in ready.split("not judged after an error")[1]
+    assert '--paginate --slurp | jq' in ready and "pulls?state=open&per_page=100\" --paginate --slurp ||" not in ready
     # merge-ready never merges, counts an attempt or starts a repair
     for word in ("gh pr merge", "agent_control.py attempt", "gh workflow run", "/labels"):
         assert word not in ready
