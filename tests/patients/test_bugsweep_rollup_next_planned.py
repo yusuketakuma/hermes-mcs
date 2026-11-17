@@ -53,3 +53,21 @@ def test_postponement_without_an_extracted_new_date_hides_the_old_plan(store):
     _post(store, 1, "2099-09-01", "次回訪問は9/15です", "2099-09-15")
     _post(store, 2, "2099-09-14", "2099－09－15の訪問は2099－09－22へ延期")
     assert "next_planned" not in rollup.build_rollup(store.db, 1)
+
+
+def test_patients_own_affirmative_cancellation_hides_the_plan(store):
+    _post(store, 1, "2099-09-01", "次回訪問は9/15です", "2099-09-15")
+    _post(store, 2, "2099-09-14", "患者さんの9/15の訪問は中止です")
+    assert "next_planned" not in rollup.build_rollup(store.db, 1)
+
+
+@pytest.mark.parametrize("body", [
+    "母の9/15の訪問は中止です",
+    "9/15の訪問は中止ではありません",
+    "9/15の訪問が中止の場合は連絡します",
+    "雨なら9/15の訪問は中止です",
+])
+def test_family_negated_or_conditional_cancellation_keeps_the_plan(store, body):
+    _post(store, 1, "2099-09-01", "次回訪問は9/15です", "2099-09-15")
+    _post(store, 2, "2099-09-14", body)
+    assert rollup.build_rollup(store.db, 1)["next_planned"] == "2099-09-15"

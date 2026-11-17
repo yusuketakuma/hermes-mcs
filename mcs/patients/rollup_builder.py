@@ -597,7 +597,10 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now, 
             row["reply_evaluation_unavailable"] = len(later - evaluated)
 
 
-def _cancelled_visit_dates(body):
+_NEGATED_CANCEL = re.compile(r"(?:で|に|と)?(?:は|も)?(?:なら|あり|し|なり|され)?(?:ない|なく|ません|ず)|(?:では|じゃ)")
+
+
+def _cancelled_visit_dates(body, patient_name=None):
     """Visit dates this post marks cancelled, postponed or undecided: (month, day) or ISO when a year is written."""
     from extract import _NEXT_CANCELLED  # shortcut: reuses the rule extractor's cancel cue without a RULE_VERSION bump
     out, previous = set(), None
@@ -612,8 +615,13 @@ def _cancelled_visit_dates(body):
             # 「AはBに延期」: B is the new date; A, earlier in the same sentence, is the cancelled one
             if previous is not None and not re.search(r"[。！？!?\n]", body[previous[1]:match.start()]):
                 out.add(previous[0])
-        elif key is not None and _NEXT_CANCELLED.match(after):
-            out.add(key)
+        elif key is not None and (cue := _NEXT_CANCELLED.match(after)):
+            tail = after[cue.end():]
+            scope = clinical_scope.patient_source_scope(body, match.start(), match.end() + cue.end(),
+                                                        patient_name=patient_name, provider_fields=True)
+            # the patient's own, affirmative, unconditional cancellation only (same scope gate as the extractor)
+            if scope not in ("family", "other", "unknown", "conditional") and not _NEGATED_CANCEL.match(tail):
+                out.add(key)
         previous = (key, match.end()) if key is not None else None
     return out
 
@@ -926,7 +934,7 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
             if next_planned is None and not next_planned_closed:
                 # Newest-first: a later cancellation of a date hides that older plan.
                 if m["body_state"] in (None, "full") and isinstance(m["body_text"], str):
-                    cancelled |= _cancelled_visit_dates(m["body_text"])
+                    cancelled |= _cancelled_visit_dates(m["body_text"], patient_name)
                 planned = v1.get("next_planned")
                 if isinstance(planned, str) and planned:
                     try:
