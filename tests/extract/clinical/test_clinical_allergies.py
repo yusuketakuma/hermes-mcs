@@ -72,6 +72,49 @@ def test_one_folding_of_the_body_serves_every_claim_of_a_call():
     assert time.perf_counter() - started < 15.0
 
 
+def test_invisible_format_characters_are_ignored_in_both_directions():
+    for mark in ("\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad"):
+        body = f"ご本人はペニ{mark}シリンアレルギーです。"
+        kept, dropped = ca.validate_items([_claim(allergen="ペニシリン", evidence=None)], body)
+        assert dropped == 0 and kept[0]["evidence"] == body, repr(mark)
+        kept, dropped = ca.validate_items([_claim(allergen=f"ペニ{mark}シリン", evidence=None)], "ペニシリンアレルギー。")
+        assert dropped == 0 and kept[0]["evidence"] == "ペニシリンアレルギー。", repr(mark)
+    assert ca.validate_items([_claim(allergen="\u200b", evidence=None)], BODY)[1] == 1
+
+
+def test_the_stored_evidence_is_a_bounded_window_around_the_allergen():
+    window = ca.EVIDENCE_WINDOW
+    body = "あ" * 150000 + "合成薬E" + "い" * 150000
+    started = time.perf_counter()
+    claims = [_claim(evidence=None, status=status, certainty=certainty, negated=negated)
+              for status in clinical_events.STATUSES for certainty in ca.CERTAINTIES for negated in (False, True)]
+    kept, dropped = ca.validate_items(claims * (500 // len(claims) + 1), body)
+    assert dropped == 0 and len(kept) == len(claims)
+    assert time.perf_counter() - started < 15.0
+    for evidence in (None, body):
+        kept, _ = ca.validate_items([_claim(evidence=evidence)], body)
+        assert kept[0]["evidence"] == "あ" * window + "合成薬E" + "い" * window, evidence is None
+    kept, _ = ca.validate_items([_claim(evidence=body[:150100])], body)  # A quote also bounds the window.
+    assert kept[0]["evidence"] == "あ" * window + "合成薬E" + "い" * 96
+    # A none claim keeps the window after its quote's start or its cue.
+    none = _claim(allergen=None, negated=True, evidence=None)
+    kept, _ = ca.validate_items([none], "アレルギーはありません" + "。" * 0 + "う" * 5000)
+    assert kept[0]["evidence"] == ("アレルギーはありません" + "う" * 5000)[:window + len("アレルギー")]
+    # A cut never separates a base character from its combining mark.
+    body = "か\u3099" * 400 + "x合成薬E"  # The window's edge falls on a combining mark and moves to its base.
+    kept, _ = ca.validate_items([_claim(evidence=None)], body)
+    edge = body.index("合成薬E") - window
+    assert body[edge] == "\u3099" and kept[0]["evidence"] == body[edge - 1:]
+
+
+def test_a_quote_verbatim_once_is_used_even_when_a_folded_copy_occurs_elsewhere():
+    body = "合成薬Ｅで発疹。合成薬Eで発疹。"
+    assert ca.validate_items([_claim(evidence="合成薬Eで発疹")], body)[0][0]["evidence"] == "合成薬Eで発疹"
+    assert body.index("合成薬Eで発疹") == 8
+    # Without a quote, the first occurrence under the folding gives the sentence.
+    assert ca.validate_items([_claim(evidence=None)], body)[0][0]["evidence"] == "合成薬Ｅで発疹。"
+
+
 def test_a_quote_written_twice_in_the_body_is_not_used():
     body = "合成薬Eで発疹。合成薬Eで発疹。"
     kept, _ = ca.validate_items([_claim(evidence="合成薬Eで発疹")], body)
@@ -104,6 +147,11 @@ def test_bad_shapes_are_dropped_and_counted_with_bounded_repair_detail():
     drops = {}
     ca.validate_items([_claim(allergen=None, negated=True, evidence="参考の文")], "本日訪問しました。", drops, ctx=True)
     assert "参考コンテキスト" in drops["reasons"][0] and drops["ev"] == ["参考の文"]
+    # Only an unlocated quote is blamed on the context; other drops keep their own reason and no quote.
+    drops = {}
+    ca.validate_items([_claim(allergen="合成薬Z"), _claim(kind="x")], BODY, drops, ctx=True)
+    assert drops["reasons"] == [f"allergies: {ca.REASONS['absent']}", f"allergies: {ca.REASONS['shape']}"]
+    assert "ev" not in drops
     assert ca.validate_items("not a list", BODY) == ([], 0)
     for body in (None, "", "  ", ["合成薬E"]):
         assert ca.validate_items([_claim()], body)[1] == 1
@@ -150,6 +198,10 @@ def test_r10_one_assertion_repeated_by_overlapping_chunks_is_stored_once():
                                  _claim(evidence=body), _claim(evidence=body, reaction="発疹")], body)
     assert [item["reaction"] for item in kept] == ["発疹", "肝障害"]
     assert not ca.same_assertion(_claim(reaction="発疹"), _claim(reaction="肝障害"))
+    # An empty reaction names none.
+    assert [item["reaction"] for item in ca.validate_items([_claim(evidence=body, reaction=""),
+                                                            _claim(evidence=body, reaction="発疹")], body)[0]] == ["発疹"]
+    assert len(ca.validate_items([_claim(reaction=""), _claim()], BODY)[0]) == 1
     assert ca.same_assertion(_claim(), _claim(reaction="発疹"))
     assert not ca.same_assertion(_claim(), _claim(status="past"))
     # Of two copies the one naming a reaction is kept, in either order.
@@ -165,6 +217,7 @@ def test_cue_spans_skip_words_that_name_no_allergy():
         ("副作用", "adverse_reaction"), ("アレルギー", "allergy"), ("薬疹", "adverse_reaction")]
     assert ca.cue_spans(None) == []
     assert ca.cue_spans("抗アレルギーの作用です。") == []
+    assert ca.cue_spans("アレルギー性鼻炎があります。") == []
 
 
 def test_every_line_break_and_space_is_handled_and_long_runs_stay_linear():

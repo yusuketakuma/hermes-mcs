@@ -15,7 +15,6 @@ from pathlib import Path
 import clinical_allergies as ca
 import extract_bench
 import extract_bench_assertions as scorer
-from mcs_util import fold_map
 
 ROOT = Path(__file__).resolve().parents[3]
 BLK_EVAL = json.loads((ROOT / "evaluation" / "extract_cases_safety_history.json").read_bytes())["cases"]
@@ -77,14 +76,14 @@ def _bodies():
 
 
 def _folded_in(term, text):
-    return fold_map(term, casefold=True)[0] in fold_map(text, casefold=True)[0]
+    return ca._fold(term)[0] in ca._fold(text)[0]
 
 
 def _fuzz(count):
     """Random bodies of corpus fragments, whitespace and line breaks of every kind."""
     rng = random.Random(20261117)
     pieces = [piece for body, _ in _bodies() for piece in _sentences(body)]
-    glue = ["合成", "薬", "ＡＢ", "ab", "\r\n合成", "", "\n", "\r\n", "\r", "\u2028", "\n\n", " ", "　", "\u00a0", "※", "（", "）", "「", "」", "：", "、"]
+    glue = ["\u200b", "\u00ad", "合成", "薬", "ＡＢ", "ab", "\r\n合成", "", "\n", "\r\n", "\r", "\u2028", "\n\n", " ", "　", "\u00a0", "※", "（", "）", "「", "」", "：", "、"]
     return ["".join(rng.choice(pieces) + rng.choice(glue) for _ in range(rng.randint(1, 6))) for _ in range(count)]
 
 

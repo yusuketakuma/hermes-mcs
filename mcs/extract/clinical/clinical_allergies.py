@@ -12,22 +12,28 @@ nothing: every kept claim carries `unverified: true`, and the model's axes
 are stored as written (never corrected). What it still decides:
 
 - Locate the claim in the target body (never the reference context). The
-  body is folded once per call (NFKC, casefold, whitespace removed); the same
-  folding decides whether the allergen occurs and where. The evidence is the
-  model's quote when it is uniquely in the body and holds the allergen,
-  otherwise the sentence or line around the allergen's first occurrence,
-  widened over a line break inside the allergen. A claim with no allergen
-  ("none") keeps its located quote, or else the sentence of the first cue word.
+  body is folded once per call (NFKC, casefold, whitespace and invisible
+  format characters removed); the same folding decides whether the allergen
+  occurs and where, and its first occurrence is the first under that folding.
+  The evidence is the model's quote when it occurs once in the body (verbatim
+  first, else once under the folding) and holds the allergen, otherwise the
+  sentence or line around the allergen's first occurrence, widened over a
+  line break inside the allergen. A claim with no allergen ("none") keeps its
+  located quote, or else the sentence of the first cue word. Either way the
+  stored evidence keeps at most `EVIDENCE_WINDOW` characters on each side of
+  the allergen (of the quote's start or the cue for a "none").
 - Drop only a malformed item, a claim whose allergen does not occur in the
   body at all, and a claim with no allergen that has neither a located quote
   nor a cue word. A claimed reaction is kept as written.
 - Store one assertion once (R10): copies with the same allergen, kind, quote
-  and axes merge when their reactions are equal or one names none; distinct
-  reactions stay separate candidates.
+  and axes merge when their reactions are equal or one names none (null or
+  ""); distinct reactions stay separate candidates.
 """
 from __future__ import annotations
 
+import bisect
 import re
+import unicodedata
 from typing import NamedTuple
 
 from clinical_events import STATUSES, SUBJECTS
@@ -59,45 +65,74 @@ class Resolution(NamedTuple):
     evidence: str = ""
 
 
+# Format characters a reader does not see (zero-width space / joiners, word joiner, BOM, soft hyphen): the folding
+# skips them here, not in the shared `fold_map`, whose other callers keep them.
+_IGNORABLE = frozenset("\u200b\u200c\u200d\u2060\ufeff\u00ad")
+# The stored evidence keeps at most this many characters on each side of the allergen (or of a none claim's anchor).
+EVIDENCE_WINDOW = 300
+
+
+def _fold(text):
+    """`fold_map(text, casefold=True)` without the ignorable characters."""
+    flat, starts, ends = fold_map(text, casefold=True)
+    keep = [index for index, char in enumerate(flat) if char not in _IGNORABLE]
+    if len(keep) == len(flat):
+        return flat, starts, ends
+    return "".join(flat[i] for i in keep), [starts[i] for i in keep], [ends[i] for i in keep]
+
+
 class _Body:
     """One body and its folding, computed once and shared by every claim of a call."""
 
     def __init__(self, text):
         self.text = text
-        self.flat, self.starts, self.ends = fold_map(text, casefold=True)
+        self.flat, self.starts, self.ends = _fold(text)
 
-    def first(self, term):
-        """(start, end) in the body of the first folded occurrence of `term`, or None."""
-        exact = self.text.find(term)
-        if exact >= 0:
-            return exact, exact + len(term)
-        needle = fold_map(term, casefold=True)[0]
-        at = self.flat.find(needle) if needle else -1
-        return (self.starts[at], self.ends[at + len(needle) - 1]) if at >= 0 else None
+    def _span(self, at, needle):
+        return self.starts[at], self.ends[at + len(needle) - 1]
+
+    def first(self, term, start=0, end=None):
+        """(start, end) of the first occurrence of `term` under the folding inside body[start:end], or None."""
+        needle = _fold(term)[0]
+        if not needle:
+            return None
+        at = self.flat.find(needle, bisect.bisect_left(self.starts, start))
+        if at < 0:
+            return None
+        span = self._span(at, needle)
+        return span if end is None or span[1] <= end else None
 
     def unique(self, term):
-        """(start, end) of the only occurrence of `term` (exact, else folded), widened to whole characters, or None."""
+        """(start, end) of `term` when it occurs exactly once verbatim, else once under the folding; otherwise None.
+
+        A verbatim unique quote is used even when a folded copy of it also occurs elsewhere: the model copied that one.
+        """
         exact = self.text.find(term)
         if exact >= 0:
             return (exact, exact + len(term)) if self.text.find(term, exact + 1) < 0 else None
-        needle = fold_map(term, casefold=True)[0]
+        needle = _fold(term)[0]
         at = self.flat.find(needle) if needle else -1
         if at < 0 or self.flat.find(needle, at + 1) >= 0:
             return None
-        return self.starts[at], self.ends[at + len(needle) - 1]  # Whole source characters around the match.
+        return self._span(at, needle)
 
     def unit(self, start, end):
-        """The sentences or lines covering body[start:end], with the run of end marks after them."""
+        """(left, right) of the sentences or lines covering body[start:end], with the run of end marks after them."""
         text = self.text
         left = max(text.rfind(mark, 0, start) for mark in _BREAKS) + 1
         stop = _UNIT_END.search(text, end)
         right = stop.start() if stop else len(text)
-        right += len(_END_MARKS.match(text, right)[0])
+        return left, right + len(_END_MARKS.match(text, right)[0])
+
+    def evidence(self, span, anchor):
+        """body[span] cut to the window around `anchor` (which it holds), never inside a base + combining mark."""
+        text = self.text
+        left, right = max(span[0], anchor[0] - EVIDENCE_WINDOW), min(span[1], anchor[1] + EVIDENCE_WINDOW)
+        while left > span[0] and unicodedata.combining(text[left]):
+            left -= 1
+        while right < span[1] and unicodedata.combining(text[right]):
+            right += 1
         return text[left:right]
-
-
-def _contains(text, term):
-    return term in text or fold_map(term, casefold=True)[0] in fold_map(text, casefold=True)[0]
 
 
 def _cues(text):
@@ -115,19 +150,22 @@ def cue_spans(body) -> list[tuple[int, int, str]]:
 def _locate(view, evidence, allergen):
     if allergen is not None and not (isinstance(allergen, str) and allergen.strip()):
         return Resolution(drop="shape")
-    span = view.unique(evidence) if isinstance(evidence, str) and evidence.strip() else None
-    quote = view.text[span[0]:span[1]] if span else None
+    quote = view.unique(evidence) if isinstance(evidence, str) and evidence.strip() else None
     if allergen is not None:
         found = view.first(allergen)
         if found is None:
             return Resolution(drop="absent")
-        if quote is not None and _contains(quote, allergen):
-            return Resolution(evidence=quote)
-        return Resolution(evidence=view.unit(*found))
+        inside = view.first(allergen, *quote) if quote else None
+        if inside is not None:
+            return Resolution(evidence=view.evidence(quote, inside))
+        return Resolution(evidence=view.evidence(view.unit(*found), found))
     if quote is not None:
-        return Resolution(evidence=quote)
+        return Resolution(evidence=view.evidence(quote, (quote[0], quote[0])))
     cues = _cues(view.text)
-    return Resolution(evidence=view.unit(cues[0][0], cues[0][1])) if cues else Resolution(drop="unlocated")
+    if not cues:
+        return Resolution(drop="unlocated")
+    anchor = cues[0][:2]
+    return Resolution(evidence=view.evidence(view.unit(*anchor), anchor))
 
 
 def resolve(body, evidence, allergen) -> Resolution:
@@ -151,15 +189,17 @@ def _key(item):
 
 def same_assertion(a, b) -> bool:
     """R10: one allergen, kind, quote and axis set whose reactions are equal or one names none is one assertion."""
-    return (isinstance(a, dict) and isinstance(b, dict) and _key(a) == _key(b)
-            and (a.get("reaction") == b.get("reaction") or a.get("reaction") is None or b.get("reaction") is None))
+    if not (isinstance(a, dict) and isinstance(b, dict) and _key(a) == _key(b)):
+        return False
+    first, second = a.get("reaction") or None, b.get("reaction") or None  # An empty reaction names none.
+    return first == second or first is None or second is None
 
 
 def _merge(copies, result):
     """Add one candidate to the copies of its key: a reaction fills an empty copy; a distinct reaction stays apart."""
     for index, copy in enumerate(copies):
         if same_assertion(copy, result):
-            if copy["reaction"] is None and result["reaction"] is not None:
+            if not copy["reaction"] and result["reaction"]:
                 copies[index] = result
             return
     copies.append(result)
