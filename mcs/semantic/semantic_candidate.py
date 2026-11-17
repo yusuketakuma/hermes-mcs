@@ -238,8 +238,24 @@ def _cloud_contract(cfg):
     return contract
 
 
+# Extract settings that only select which work runs, never how a fact is read.
+# Leaving them out of the fingerprint narrows when an owner-approved promotion
+# stays valid (owner question O-11), so it is NOT active: on approval, the
+# switch is ``candidate_fingerprint`` passing this tuple to ``_fingerprint``.
+SELECTION_ONLY_EXTRACT = ('upgrade_scope', 'patient_context', 'patient_context_nightly')
+
+
 def candidate_fingerprint(cfg: dict) -> str:
     """Hash versions, prompts, schemas, models and all interpretation settings."""
+    return _fingerprint(cfg, ())
+
+
+def narrowed_candidate_fingerprint(cfg: dict) -> str:
+    """The fingerprint without ``SELECTION_ONLY_EXTRACT``; unwired until O-11 is approved."""
+    return _fingerprint(cfg, SELECTION_ONLY_EXTRACT)
+
+
+def _fingerprint(cfg: dict, omitted_extract: tuple) -> str:
     import extract_llm
     import extract_schema
     import extract_validation
@@ -259,8 +275,7 @@ def candidate_fingerprint(cfg: dict) -> str:
                   'mode', 'summary_mode', 'loop_mode', 'project_ids'):
         defaults.pop(field, None)
     extraction = {'patient_state_context': False, **(cfg.get('extract') or {})}
-    # Selection-only switches decide which work runs, never how a fact is read.
-    for field in ('upgrade_scope', 'patient_context', 'patient_context_nightly'):
+    for field in omitted_extract:
         extraction.pop(field, None)
     return payload_hash({
         'extract_version': extract_llm.EXTRACT_VERSION,
