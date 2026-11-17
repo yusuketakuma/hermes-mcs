@@ -345,11 +345,12 @@ _LAB_ITEM_UNITS = {
 }
 # Capture explicit dose/count symbols too; an omitted output unit cannot hide them.
 _LAB_QUOTED_UNIT = r"(?:[a-zμ%/0-9.^²‰‱°×万秒錠包袋滴枚本個回単位]|カプセル)*"
-# A katakana item glued to a salt stem (塩化カリウム, 酸化マグネシウム, 炭酸水素ナトリウム)
+# A katakana item glued to a salt stem (塩化カリウム, バルプロ酸ナトリウム, 炭酸水素ナトリウム)
 # or to another katakana word (ワルファリンカリウム, アトルバスタチンカルシウム) is part
-# of a drug name. Words that merely end in 化/酸/素 (悪化, 尿酸, 尿素窒素) are no stems.
-_SALT_STEM = re.compile(r"(?:塩化|酸化|ヨウ化|臭化|炭酸|硫酸|乳酸|酢酸|硝酸|リン酸|クエン酸"
-                        r"|グルコン酸|アスパラギン酸|酸水素)$")
+# of a drug name. Any acid glued to the item names its salt; a lab word ending in 酸
+# (尿酸, 乳酸) is set apart by a space or a line break. 化 and 素 stay listed stems,
+# so words that merely end in them (悪化, 尿素窒素) are no stems.
+_SALT_STEM = re.compile(r"(?:酸|水素|塩化|酸化|ヨウ化|フッ化|臭化)$")
 # Items also reported for urine, CSF or effusions (尿中Ca, 尿TP, 尿沈渣WBC 10-19/HPF):
 # those specimens and qualitative or ranged results (1+, 10-19) are not the blood item.
 # The previous items (尿Cr) keep their earlier reading.

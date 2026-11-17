@@ -181,6 +181,11 @@ def test_absolute_date_is_unchanged(text, expected):
     ("カルシウム", "9.0", "mg/dL", "尿素窒素 カルシウム 9.0mg/dL"),
     ("リチウム濃度", "0.6", "mEq/L", "炭酸リチウム濃度 0.6mEq/L"),
     ("リチウム濃度", "0.6", "mEq/L", "炭酸リチウム血中濃度 0.6mEq/L"),
+    ("カルシウム", "9.0", "mg/dL", "尿酸 カルシウム 9.0mg/dL"),
+    ("カリウム", "4.1", "mEq/L", "尿酸\nカリウム 4.1mEq/L"),
+    ("カリウム", "4.1", "mEq/L", "乳酸 カリウム 4.1mEq/L"),
+    ("カリウム", "4.1", "mEq/L", "胃酸、カリウム 4.1mEq/L"),
+    ("カリウム", "5.8", "mEq/L", "腎機能悪化カリウム 5.8mEq/L"),
 ])
 def test_a_word_ending_in_a_salt_character_does_not_hide_the_lab(name, value, unit, body):
     lab = _validated(name, value, unit, body)
@@ -205,6 +210,28 @@ def test_a_word_ending_in_a_salt_character_does_not_hide_the_lab(name, value, un
     ("ナトリウム", "60", None, "ﾛｷｿﾌﾟﾛﾌｪﾝﾅﾄﾘｳﾑ 60 頓用"),
 ])
 def test_salts_and_katakana_drug_names_stay_candidates(name, value, unit, body):
+    lab = _validated(name, value, unit, body)
+    assert lab["unverified"] is True
+    assert lab["normalized"]["confirmation"] == "unverified"
+
+
+# Any acid written right before the item names its salt (バルプロ酸ナトリウム), not only
+# the listed stems; reading the dose as a blood value is the dangerous direction.
+@pytest.mark.parametrize("name,value,unit,body", [
+    ("ナトリウム", "400", None, "バルプロ酸ナトリウム 400 分2"),
+    ("ナトリウム", "0.3", None, "ヒアルロン酸ナトリウム 0.3 点眼"),
+    ("カルシウム", "1", None, "ケイ酸カルシウム 1"),
+    ("ナトリウム", "3", None, "塩酸ナトリウム 3"),
+    ("カリウム", "1", None, "ヨード酸カリウム 1"),
+    ("ナトリウム", "35", None, "アレンドロン酸ナトリウム 35 週1回"),
+    ("ナトリウム", "17.5", None, "リセドロン酸ナトリウム 17.5 週1回"),
+    ("カルシウム", "5", None, "ポリスチレンスルホン酸カルシウム 5 分2"),
+    ("ナトリウム", "100", None, "ｱｽｺﾙﾋﾞﾝ酸ﾅﾄﾘｳﾑ 100"),
+    ("カリウム", "1", None, "リン酸二水素カリウム 1"),
+    ("ナトリウム", "1", None, "フッ化ナトリウム 1"),
+    ("カルシウム", "9.0", "mg/dL", "尿酸カルシウム 9.0mg/dL"),
+])
+def test_any_acid_glued_before_the_item_is_a_salt_name(name, value, unit, body):
     lab = _validated(name, value, unit, body)
     assert lab["unverified"] is True
     assert lab["normalized"]["confirmation"] == "unverified"
