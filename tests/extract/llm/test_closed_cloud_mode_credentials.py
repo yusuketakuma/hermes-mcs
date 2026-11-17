@@ -134,3 +134,15 @@ def test_a_declared_exclusion_stays_a_scope_stop_after_a_flaky_key_read(monkeypa
     assert provider.cloud_route_mode(None, cfg, 'patient_context', 1) == ('off', 'scope')
     assert cloud_policy.refusal_code(cfg, 'scope', model=None, route='patient_context',
                                      project_id=1) == 'scope'
+
+
+def test_a_closed_backlog_window_stays_a_scope_stop(monkeypatch):
+    import external_transfer
+    monkeypatch.setattr(external_transfer, 'status', lambda root=None: dict(_REVIEW_OPEN))
+    monkeypatch.setattr(cloud_policy, 'provider_key', lambda backend, root=None: 'synthetic-key')
+    monkeypatch.delenv(cloud_policy.BACKLOG_WORKER_ENV, raising=False)
+    cfg = {'cloud_llm': {**_ON, 'routes': ['reextract', 'patient_context']}}
+    # The route is closed outside the backlog worker: a second reading cannot reopen it.
+    assert cloud_policy.refusal_code(cfg, 'scope', model=None, route='reextract', project_id=1) == 'scope'
+    assert cloud_policy.refusal_code(cfg, 'scope', model=None, route='patient_context',
+                                     project_id=1) == 'env_file_unreadable'
