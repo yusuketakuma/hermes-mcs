@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "ローカル推論の要求に取得済みslotを必ず反映する",
+  "summary": "ローカル推論の共通chatで、スケジューラー未使用時も実際に取得したslotを要求に反映します。slot省略・不正値が未固定のまま送られたり、既に所有するturnと異なるslotを要求したりする問題を修正します。",
+  "upgrade": "更新後の要求から適用。常駐する収集・解析プロセスは所有者の手順で更新・再起動してください。新しい設定や外部送信先・課金は追加しません。",
+  "details": [
+    "既存のslot正規化、process override、lock・admission・締切・busy deferを維持する。",
+    "実GPUや実モデルでの効果は未検証。完全合成のrequest stubで要求bodyと取得slotの一致を検証。"
+  ],
+  "refs": [
+    "mcs/llm/transport/local_llm.py"
+  ]
+}
