@@ -1,5 +1,6 @@
 """Synthetic contracts for assist-summary comparison and adoption."""
 import semantic_store
+import semantic_transport
 
 import json
 import uuid
@@ -24,7 +25,12 @@ def _command(cmd, project_id=1, **fields):
     }
 
 
-def _setup(tmp_path, *, publication_mode="assist", audit_status="PASS"):
+@pytest.fixture(autouse=True)
+def _local_model(monkeypatch):
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "local")
+
+
+def _setup(tmp_path, *, publication_mode="assist", audit_status="PASS", provenance=None):
     db = Ledger(str(tmp_path / "ledger.db"))
     db.save_patient(
         type("Patient", (), {
@@ -58,9 +64,57 @@ def _setup(tmp_path, *, publication_mode="assist", audit_status="PASS"):
               "policy_fingerprint": policy,
               "target_revision": bundle["members"][0]["revision"],
               "audit_status": audit_status,
-              "publication_mode": publication_mode},
+              "publication_mode": publication_mode,
+              **({"provider_provenance": provenance} if provenance else {})},
     )
     return db, candidate_id
+
+
+def test_local_model_change_makes_local_summary_not_adoptable(tmp_path, monkeypatch):
+    db, candidate_id = _setup(tmp_path)
+    assert summary_review.comparison(db.db, 1, 1, candidate_id)["adoptable"] is True
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
+    reviewed = summary_review.comparison(db.db, 1, 1, candidate_id)
+    assert reviewed["candidate"]["current"] is False
+    assert reviewed["adoptable"] is False
+    assert "candidate_producer_stale" in reviewed["reasons"]
+    rejected = mcs_requests.apply_command(db, _command(
+        "ops.adopt_summary", message_id=1, summary_artifact_id=candidate_id,
+        comparison_hash=reviewed["comparison_hash"], reason="古い要約は採用しない"))
+    assert rejected["outcome"] == "rejected"
+    db.close()
+
+
+def test_local_model_change_keeps_cloud_summary_adoptable(tmp_path, monkeypatch):
+    db, candidate_id = _setup(
+        tmp_path, provenance={"providers": ["anthropic"], "complete": True})
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
+    reviewed = summary_review.comparison(db.db, 1, 1, candidate_id)
+    assert reviewed["candidate"]["current"] is True
+    assert reviewed["adoptable"] is True
+    assert "candidate_producer_stale" not in reviewed["reasons"]
+    db.close()
+
+
+@pytest.mark.parametrize("cloud,model,expected", [
+    (False, "local", "PASS"), (False, "synthetic-local-b", "STALE"),
+    (True, "synthetic-local-b", "PASS")])
+def test_view_shows_summary_stale_after_local_model_change(
+        tmp_path, monkeypatch, cloud, model, expected):
+    import ledger
+    import mcs_view
+    db, _ = _setup(tmp_path, provenance=(
+        {"providers": ["anthropic"], "complete": True} if cloud else None))
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", model)
+    snapshot = ledger.publish_snapshot(
+        str(tmp_path / "ledger.db"), str(tmp_path / "snapshots"))
+    db.close()
+    view = mcs_view.View(snapshot)
+    try:
+        row = view.read("semantic", project=1, message_id=1)["semantic"]["semantic_summary"][0]
+        assert row["effective_status"] == expected
+    finally:
+        view.close()
 
 
 def test_comparison_adoption_is_replayed_without_outbox_mutation(tmp_path):

@@ -133,6 +133,9 @@ def _current_candidate(db, project_id: int, message_id: int,
     if not policy or meta.get("policy_fingerprint") != policy:
         reasons.append("candidate_policy_stale")
         fresh = False
+    if not semantic_store.producer_current("semantic_summary", candidate.get("model"), meta):
+        reasons.append("candidate_producer_stale")
+        fresh = False
     if meta.get("stale"):
         reasons.append("candidate_stale")
         fresh = False
@@ -244,14 +247,14 @@ def _load_candidate(db, project_id: int, message_id: int,
     """The audited assist summary — latest, or the pinned artifact_id."""
     if summary_artifact_id is None:
         row = db.execute(
-            "SELECT artifact_id,content,meta FROM artifacts "
+            "SELECT artifact_id,content,meta,model FROM artifacts "
             "WHERE kind=? AND project_id=? AND message_id=? "
             "ORDER BY artifact_id DESC LIMIT 1",
             ("semantic_summary", project_id, message_id),
         ).fetchone()
     else:
         row = db.execute(
-            "SELECT artifact_id,content,meta FROM artifacts "
+            "SELECT artifact_id,content,meta,model FROM artifacts "
             "WHERE artifact_id=? AND kind=? AND project_id=? AND message_id=?",
             (summary_artifact_id, "semantic_summary", project_id,
              message_id),
@@ -266,6 +269,7 @@ def _load_candidate(db, project_id: int, message_id: int,
         reasons.append("candidate_missing")
         return None
     candidate = _artifact(row, "candidate")
+    candidate["model"] = row["model"]
     candidate_has_text = validate_comparison_candidate(candidate["content"])
     if not candidate_has_text:
         reasons.append("candidate_empty")

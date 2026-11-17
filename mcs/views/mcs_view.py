@@ -588,6 +588,8 @@ class View:
                     current = current and bool(
                         policy
                         and meta.get("policy_fingerprint") == policy)
+                current = current and semantic_store.producer_current(
+                    kind, r["model"], meta)
                 effective = (meta.get("audit_status") or meta.get("technical_status")) \
                     if current else "STALE"
                 items.append({"artifact_id": r["artifact_id"],
