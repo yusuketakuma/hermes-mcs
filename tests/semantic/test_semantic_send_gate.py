@@ -410,7 +410,7 @@ def test_degraded_producer_keeps_live_reply_from_mixed_history_origin(tmp_path, 
         db.close()
 
 
-def test_notice_on_summary_of_replaced_local_model_is_terminal(tmp_path, monkeypatch):
+def test_notice_defers_until_the_summary_is_replaced_then_is_terminal(tmp_path, monkeypatch):
     import semantic_transport
     from semantic_testkit import _summary
     monkeypatch.setattr(semantic_transport, "LLM_MODEL", "Qwen3.5-9B")
@@ -420,19 +420,21 @@ def test_notice_on_summary_of_replaced_local_model_is_terminal(tmp_path, monkeyp
     payload = json.loads(event["payload"])
     semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
 
+    # model changed, nothing rebuilt yet: retried, not ended
     monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
+    with pytest.raises(semantic_send_gate.DeferredSend, match="summary_unverified"):
+        semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
+
+    # back to the original model before any rebuild: the notice still sends
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "Qwen3.5-9B")
+    semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
+
+    # a summary rebuilt by the new model replaces it: the old notice ends
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
+    _summary(db, model="synthetic-local-b")
     for in_progress, error in ((False, semantic_send_gate.StaleSend), (True, semantic_send_gate.FreezeSend)):
         with pytest.raises(error, match="stale_generation"):
             semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config(), in_progress)
-
-    # a summary rebuilt by the new model does not revive the old notice either
-    _summary(db, model="synthetic-local-b")
-    with pytest.raises(semantic_send_gate.StaleSend, match="stale_generation"):
-        semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
-
-    # returning to the original model makes the original summary current again
-    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "Qwen3.5-9B")
-    semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
     db.close()
 
 
