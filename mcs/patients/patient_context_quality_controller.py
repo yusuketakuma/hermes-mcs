@@ -581,6 +581,8 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, base_do
 
     if ledger.db.in_transaction:
         raise RuntimeError("patient_summary_transaction_active")
+    if cloud_policy.stopped(ledger):
+        return "held", None   # `cloud-llm stop` also stops sends to Jev
     key = semantic_jev.api_key()
     cloud_key = cloud_policy.selected_key(extract_llm.HOME, cfg)
     scfg, errors = semantic_policy.semantic_config(cfg, key_present=bool(key))

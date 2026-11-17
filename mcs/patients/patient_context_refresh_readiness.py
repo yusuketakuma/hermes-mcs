@@ -499,6 +499,8 @@ def _pending(db, pid, cfg, *, now=None, route=None, estimate=False, proof_for=No
         # execution still validates policy and reuses receipts before any request.
         quality_changed = meta.get("quality_schedule_key") != patient_context_refresh_state._digest([cfg, patient_context_refresh_state._quality_assessment_code()])
     summary_needed = (not old or not _bound_signature_matches(db, pid, cfg, meta, snapshot, snapshots)
+                    # Same route test as the display (`current` above): A->B->A must rebuild, not stay hidden.
+                    or not patient_context_refresh_state.route_accepts(snapshot["route"], meta)
                     or meta.get("publication_requested", meta.get("published")) != patient_context_refresh_state.options(cfg)["publication"]
                     or meta.get("summary_checked") is not True
                     or bool(quality_required and not meta.get("quality_audit_key"))
