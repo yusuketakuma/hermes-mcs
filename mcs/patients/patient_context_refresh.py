@@ -278,13 +278,15 @@ def _advance_patient_scan(ledger, expected, bookmark, deadline, admit, *, observ
         if observed_out is not None:
             observed_out['scan_refusal'] = reason
 
+    # Admission may start external commands (the memory check): never under the write lock.
+    if not admit():
+        _mark('admission')
+        return None
     with patient_context_refresh_sources._scan_writer_wait(ledger.db, deadline):
         try:
             ledger.db.execute('BEGIN IMMEDIATE')
             if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline:
                 refusal = 'deadline'
-            elif not admit():
-                refusal = 'admission'
             elif not extract_llm._writer_current(full=True):
                 refusal = 'writer_generation'
             elif patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.PROGRESS, 0) != expected:
@@ -439,16 +441,23 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
         if observed_out is not None:
             observed_out[key] += 1
 
+    def passed(pid):
+        """Count a patient another role serves, or whose unit waits for a context child."""
+        nonlocal waiting
+        if role in ("local", "cloud") and cloud_scan(pid) != (role == "cloud"):
+            count('wait_other_role')
+            return True
+        if pid in passed_over:
+            count('wait_cloud_worker')
+            waiting += 1
+            return True
+        return False
+
     def consider(reader, pid):
         """Evaluate one patient: ``selected``, ``checked`` (then test coverage) or ``skipped``."""
         nonlocal scanned, waiting, scan_reads
         seen.add(pid)
-        if role in ("local", "cloud") and cloud_scan(pid) != (role == "cloud"):
-            count('wait_other_role')
-            return 'other_role'
-        if pid in passed_over:
-            count('wait_cloud_worker')
-            waiting += 1
+        if passed(pid):
             return 'other_role'
         scanned += 1
         lock = _patient_lock(reader.db, pid)
@@ -583,25 +592,40 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                 candidates += 1
                 if consider(reader, prefer) == 'selected':
                     selected = prefer
-            while selected is None and candidates < 8:
-                patient_context_refresh_sources._scan_check(reader.db)
-                original = rotation[0].get(scan_key)
-                reserved = context_schedule.advance_turn(original)
-                rotation = _advance_patient_scan(ledger, rotation, reserved, deadline, admit,
+            # A patient skipped for its role moves only this in-memory bookmark; the next write
+            # (the next candidate's, or the one at the end of the pass) carries it.
+            bookmark = rotation[0].get(scan_key)
+
+            def persist(value):
+                nonlocal rotation
+                rotation = _advance_patient_scan(ledger, rotation, value, deadline, admit,
                                                  observed_out=observed_out, key=scan_key)
                 if rotation is None:
                     raise patient_context_refresh_sources._ScanInterrupted('patient_context_scan_changed')
+
+            while selected is None and candidates < 8:
+                patient_context_refresh_sources._scan_check(reader.db)
+                original = bookmark
                 # Expensive activity ordering must not consume the fair turn's chance.
                 reader.db.scan_until = min(deadline - patient_context_refresh_state.COMMIT_MARGIN, patient_context_refresh_state.time.monotonic() + 1.0)
                 try:
                     plan = context_schedule.plan(reader.db, original)
+                except BaseException:
+                    # A cancelled candidate query still uses up its turn.
+                    persist(context_schedule.advance_turn(original))
+                    raise
                 finally:
                     reader.db.scan_until = deadline - patient_context_refresh_state.COMMIT_MARGIN
-                rotation = _advance_patient_scan(ledger, rotation, plan['next'], deadline, admit,
-                                                 observed_out=observed_out, key=scan_key)
-                if rotation is None:
-                    raise patient_context_refresh_sources._ScanInterrupted('patient_context_scan_changed')
+                bookmark = plan['next']
                 pid = plan['project_id']
+                if pid is not None and pid not in seen and passed(pid):
+                    seen.add(pid)
+                    role_skips += 1
+                    if role_skips >= _ROLE_SKIP_LIMIT or _scan_covered(reader.db, seen):
+                        covered = role_skips < _ROLE_SKIP_LIMIT
+                        break
+                    continue
+                persist(bookmark)
                 if pid is None or pid in seen:
                     candidates += 1
                     if _scan_covered(reader.db, seen):
@@ -609,12 +633,7 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                         break
                     continue
                 outcome = consider(reader, pid)
-                if outcome == 'other_role':
-                    role_skips += 1
-                    if role_skips >= _ROLE_SKIP_LIMIT:
-                        break
-                else:
-                    candidates += 1
+                candidates += 1
                 if outcome == 'skipped':
                     continue
                 if outcome == 'selected':
@@ -623,6 +642,8 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                 if _scan_covered(reader.db, seen):
                     covered = True
                     break
+            if bookmark != rotation[0].get(scan_key):
+                persist(bookmark)   # the skips after the last write: once per pass
             _raise_if_systemic(unreadable, scanned)
     # scan_interrupts counts every early abort (contention, deadline or
     # read failure) — finite-slice completion keeps it at 0.
