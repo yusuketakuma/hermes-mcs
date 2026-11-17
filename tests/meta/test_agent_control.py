@@ -511,6 +511,12 @@ def test_the_cloud_reviewer_reviews_each_green_head_once():
     # Claude's own COMMENT on this head ends the automatic review of it, not of the next head
     assert "レビュー済み" in _request([_verdict("claude[bot]", "COMMENTED")])
     assert _request([_verdict("claude[bot]", "COMMENTED", sha=OLD)]) is None
+    # a started review (the workflows' marker) is not started again for that head; anyone else's text is ignored
+    started = {"user": {"login": "github-actions[bot]"}, "body": f"x\n<!-- claude-review:started {HEAD} -->"}
+    assert "開始済み" in _request(comments=[started])
+    assert _request(comments=[{**started, "user": {"login": "someone"}}]) is None
+    assert _request(comments=[{**started, "body": f"<!-- claude-review:started {OLD} -->"}]) is None
+    assert _request(comments=[started], owner_request=True) is None
     # the owner may ask again, but never past the kill switch, a fork or a red gate
     assert _request([_verdict("claude[bot]", "COMMENTED")], owner_request=True) is None
     assert _request(automation=False, owner_request=True) is not None
@@ -531,7 +537,8 @@ def test_review_workflow_is_read_only_and_never_runs_pr_code():
     jobs = _jobs(text)
     granted = {name: sorted(re.findall(r"^      ([a-z-]+): (read|write)", body, re.M)) for name, body in jobs.items()}
     assert granted == {"plan": [("contents", "read"), ("issues", "read"), ("pull-requests", "read"), ("statuses", "read")],
-                       "review": [("contents", "read"), ("id-token", "write"), ("pull-requests", "write")]}
+                       "review": [("contents", "read"), ("id-token", "write"), ("issues", "read"), ("pull-requests", "write"),
+                                  ("statuses", "read")]}
     # every checkout is the default branch by full ref, without credentials
     assert re.findall(r"^\s+ref: (.*)$", text, re.M) == ["refs/heads/${{ github.event.repository.default_branch }}"] * 2
     assert text.count("persist-credentials: false") == 2
@@ -551,6 +558,7 @@ def test_review_workflow_is_read_only_and_never_runs_pr_code():
     # the target is validated before it reaches the prompt, and the review is re-checked after the queue
     check = jobs["review"].split("name: Check again", 1)[1]
     assert '"$SHA" =~ ^[0-9a-f]{40}$' in check and "review-request" in check
+    assert check.index("review-request") < check.index("claude-review:started $SHA") < check.index("diff.patch")
     assert "github.event.comment.body" not in jobs["review"]
 
 
