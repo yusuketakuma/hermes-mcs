@@ -322,6 +322,39 @@ def test_probe_that_reached_no_model_fixes_no_format(fail):
         local_llm.ENDPOINT, "synthetic", None, request_fn=send) is None
 
 
+@pytest.mark.parametrize(("status", "text", "finish", "mode",
+                          "answered", "statuses"), [
+    # a completed 200 proves the endpoint alive and picks the mode
+    (200, '{"ok":true}', "stop", "object", True, []),
+    # server errors are endpoint trouble, never a health signal
+    (500, "", "stop", "plain", False, [500]),
+    # a pure format-rejection streak stays distinct from 5xx
+    (400, "", "stop", "plain", False, [400]),
+    # a 200 whose body cannot complete is not health evidence
+    (200, "", "stop", "plain", False, []),
+    (200, '{"a":1', "length", "plain", False, []),
+    # a completed answer that fails the format verify still proves the
+    # endpoint alive — format selection and health stay separate
+    (200, "not json at all", "stop", "plain", True, []),
+])
+def test_probe_error_out_separates_format_from_endpoint_health(
+        status, text, finish, mode, answered, statuses):
+    """Real probe_format + synthetic request_fn: the wire evidence
+    distinguishes usable answers, unusable 200s, 5xx streaks and pure
+    format rejections instead of collapsing them into one flag."""
+    def send(endpoint, method, body, timeout, deadline=None):
+        return status, {}, json.dumps(
+            _response(text, finish=finish)).encode()
+
+    err = {}
+    assert local_llm.probe_format(
+        local_llm.ENDPOINT, "synthetic", None,
+        request_fn=send, error_out=err) == mode
+    assert err.get("sent") is True
+    assert bool(err.get("answered")) is answered
+    assert err.get("statuses", []) == statuses
+
+
 def test_extract_llm_call_pins_background_slot(monkeypatch):
     """The legacy extract path pins the same background slot."""
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)

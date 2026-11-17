@@ -1273,21 +1273,27 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 # before caching, and a cache hit or refused send does not
                 pre_probes = int(bool(probe_err.get("sent")))
                 # the warm probe is a real inference run on this thread —
-                # feed its endpoint observation like a body call. Only a
-                # real 200 answer restores the circuit: an HTTP500 streak
-                # or unusable 200 reaching "plain" is endpoint trouble,
-                # and a cached verdict or unsent probe stays silent
+                # feed its endpoint observation like a body call. Format
+                # selection stays separate from endpoint health: only a
+                # completed answer or a pure format-rejection streak
+                # proves the endpoint alive, while 5xx, unusable 200s and
+                # transport/protocol deaths are endpoint trouble; a cached
+                # verdict or unsent probe stays silent
                 kind = probe_err.get("kind")
                 if kind == "unreachable":
                     _observe("unreachable", time.monotonic())
                 elif probe_err.get("status") == 503:
                     _observe("unavailable", time.monotonic())
-                elif kind in ("transport", "protocol") or (
-                        probe_err.get("sent")
-                        and not probe_err.get("answered")):
+                elif kind in ("transport", "protocol"):
                     _observe("transport", time.monotonic())
                 elif probe_err.get("answered"):
                     _observe("answered", time.monotonic())
+                elif probe_err.get("sent"):
+                    sts = probe_err.get("statuses") or []
+                    if sts and all(s in (400, 404, 422) for s in sts):
+                        _observe("answered", time.monotonic())
+                    else:
+                        _observe("transport", time.monotonic())
             from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
             with ThreadPoolExecutor(
                     max_workers=min(pool_workers, len(units))) as pool, contextlib.ExitStack() as cleanup:
