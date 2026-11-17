@@ -726,12 +726,17 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
             return False
         # extract_llm's own pending predicate, minus exhausted rows
         import extract_llm
+        import upgrade_scope
         _phase("llm_due_extract")
+        scope = upgrade_scope.resolve(cfg)
+        if scope.error:
+            raise ValueError("extract_upgrade_scope_unverified")
+        scope_sql = upgrade_scope.selection_sql(scope, "llm")
         return db.execute(
             f"SELECT 1 FROM messages m WHERE {extract_llm.pending_pred(db)} "
             "AND COALESCE((SELECT MAX(COALESCE(json_extract(e.meta,"
             f"'$.attempts'),0)) {extract_llm._ERROR_ROWS_SQL}), 0) < 5 "
-            "LIMIT 1", (extract_llm.KIND, extract_llm.EXTRACT_VERSION)
+            + scope_sql + " LIMIT 1", (extract_llm.KIND, extract_llm.EXTRACT_VERSION)
         ).fetchone() is not None
 
     # the LLM lane's own health record (llm_health.json): None means
