@@ -461,6 +461,8 @@ def test_slack_unstarted_file_group_stays_pending_but_is_reported_beyond_horizon
     assert notify_reconcile._unknown_beyond_horizon_parts(led.db, NOW, NOW + 1) == []
     assert [p["part_id"] for p in notify_reconcile._beyond_horizon_parts(led.db)[0]] == [group["part_id"]]
     assert len(notices()) == 1
+    # the health-read hold report counts it by cause (state stays pending)
+    assert notify_recovery.part_hold_report(led)["parts"]["pending"][_HOLD] == 1
 
 
 # ---------- Discord group parts that cannot share a verified surface attempt ----------
@@ -483,6 +485,8 @@ def _assert_reported(led, receipt, render, part_ids, reason):
         assert "error" in notify_recovery.card_part_resolve_plan(led, render["delivery_id"], pid)
     listed = {p["part_id"]: p["reason"] for p in receipt["parts_unresolvable"]}
     assert all(listed[pid] == reason for pid in part_ids)
+    # no attempt id is invented for a part the receipt never recorded one for
+    assert all(p["attempt_id"] is None for p in receipt["parts_unresolvable"])
     assert not set(part_ids) & {p["part_id"] for p in receipt["parts_held"]}
     assert reason in notify_recovery.PART_HOLD_REASONS
     report = notify_recovery.part_hold_report(led)
@@ -654,3 +658,27 @@ def test_slack_unstarted_file_group_beyond_horizon_refuses_a_journal_only_proof(
     receipt = resolve("remote_absent", 2)
     assert receipt["outcome"] == "applied", receipt
     assert _rows(led, render["delivery_id"])[group["part_id"]]["state"] == "not_sent"
+
+
+def test_slack_unstarted_file_group_beyond_horizon_resolves_as_delivered_when_observed(led, tmp_path, monkeypatch):
+    """#136: a posted file set the operator observed still settles a flagged
+    pending group (exact card id and file set re-checked, human approval kept)."""
+    from test_file_group_dependency_refusal import _confirm_stage, _refused
+    slack, render, _spec, stage, group = _refused(led, tmp_path, monkeypatch)
+    _confirm_stage(led, render, stage)
+    with led.db:
+        led.db.execute("UPDATE notification_render_parts SET state='pending',error_code=NULL,"
+                       "attempt_id=NULL WHERE delivery_id=? AND part_id=?",
+                       (render["delivery_id"], group["part_id"]))
+    _restore_from(None, backup_names.JOURNAL_HORIZON_MAX_S + 86400,
+                  data=Path(notify_spool.data_root(led)))
+    notify_reconcile.reconcile_after_restore(led, SLACK, now=NOW)
+    plan = notify_recovery.card_part_resolve_plan(led, render["delivery_id"], group["part_id"])
+    card = led.db.execute("SELECT message_id FROM notification_cards WHERE card_id=?",
+                          (render["card_id"],)).fetchone()
+    req = dict(plan, command_id=str(uuid.UUID(int=7100)), actor="op-user", human_confirmed=True,
+               reason="合成の復元後確認", result="mark_delivered", remote_id=card["message_id"],
+               evidence=dict(method="synthetic", ref="thread-check", worker_stopped=True))
+    receipt = notify_recovery.apply_card_part_resolve(led, req, SLACK, now=NOW + 1)
+    assert receipt["outcome"] == "applied", receipt
+    assert _rows(led, render["delivery_id"])[group["part_id"]]["state"] == "delivered"

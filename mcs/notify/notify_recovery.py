@@ -534,7 +534,7 @@ def part_hold_report(ledger) -> dict:
     db = cards.connection(ledger)
     marks = ",".join("?" * len(PART_HOLD_REASONS))
     by_state = {state: dict.fromkeys((*PART_HOLD_REASONS, "not_recorded", "unknown"), 0)
-                for state in ("held", "unknown")}
+                for state in ("held", "unknown", "pending")}
     resolvable = 0
     for row in db.execute(
             f"SELECT state, CASE WHEN error_code IN ({marks}) THEN error_code "
@@ -544,6 +544,10 @@ def part_hold_report(ledger) -> dict:
             "GROUP BY 1,2", PART_HOLD_REASONS):
         by_state[row[0]][row[1]] += row[2]
         resolvable += row[3]
+    # a pending Slack file_group a restore beyond the journal horizon flagged
+    by_state["pending"][BEYOND_HORIZON] = db.execute(
+        "SELECT COUNT(*) FROM notification_render_parts WHERE kind='file_group' "
+        "AND state='pending' AND attempt_id IS NULL AND error_code=?", (BEYOND_HORIZON,)).fetchone()[0]
     spec = db.execute(
         "SELECT COALESCE(SUM(spec_json IS NOT NULL),0), COALESCE(SUM(spec_published=1),0), "
         "COALESCE(SUM(EXISTS(SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=r.delivery_id "
@@ -809,9 +813,12 @@ def validate_card_part_resolve(req) -> str | None:
             return "bad_dependency_resolution"
         return None
     if req["expected_state"] == "pending":
-        if (transport != "slack" or req["part_id"] != "file_group" or req["result"] != "mark_not_sent"
-                or evidence.get("proof") not in ("no_journal_started", "remote_absent")
-                or "remote_id" in req or "related_plans" in req):
+        if transport != "slack" or req["part_id"] != "file_group" or "related_plans" in req:
+            return "bad_pending_resolution"
+        if req["result"] == "mark_delivered":
+            # observed posted: the exact card id and file set are re-checked at apply
+            return None if valid_text(req.get("remote_id"), 64) else "remote_id_required"
+        if evidence.get("proof") not in ("no_journal_started", "remote_absent") or "remote_id" in req:
             return "bad_pending_resolution"
         return None
     if "related_plans" in req:
