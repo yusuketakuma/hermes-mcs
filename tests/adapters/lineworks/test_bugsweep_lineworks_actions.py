@@ -11,7 +11,7 @@ import pytest
 
 from adapters.common import envelopes, paths
 from adapters.lineworks import __main__ as cli
-from adapters.lineworks import delivery, server
+from adapters.lineworks import actions, delivery, server
 from adapters.lineworks.client import ClientError, _validate_content
 from lineworks_testkit import (CONFIG, SCOPE, SECRET, TOKEN, command_files, event, raw,
                                signature, world)
@@ -172,6 +172,23 @@ def test_callback_dm_outwaits_an_api_lock_held_past_the_followup_budget(tmp_path
         holder.join(5)
     assert [content["text"] for _, content, _ in w.client.calls] == [
         "この操作は無効です。最新のカードでやり直してください。"]
+
+
+def test_stop_ends_a_callback_dm_cooldown_wait_promptly(tmp_path):
+    w = world(tmp_path)
+    Path(w.dirs["state"], "rate-limit.json").write_text(json.dumps({"until": time.time() + 59}))
+    stop = threading.Event()
+    handler = actions.Actions(w.settings, w.dirs, w.reg, w.sender, lambda *a, **kw: None, stop.is_set)
+
+    async def run():
+        task = asyncio.create_task(handler.handle(event(postback="mcs:a:" + "f" * 32, channel=None)))
+        await asyncio.sleep(0.2)
+        stop.set()  # SIGTERM: launchd's stop grace is far shorter than the 59 s cooldown
+        with pytest.raises(ClientError, match="rate_limited"):
+            await asyncio.wait_for(task, 5)
+
+    asyncio.run(run())
+    assert w.client.calls == []
 
 
 def _status(tmp_path, capsys):

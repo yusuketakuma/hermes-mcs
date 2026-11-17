@@ -15,8 +15,9 @@ from .delivery import SCOPE_KEYS, failure, locked
 
 ACTION = re.compile(r"mcs:a:([0-9a-f]{32})\Z")
 CONFIRM = re.compile(r"mcs:c:([0-9a-f]{16})(:cancel)?\Z")
-# A callback is never re-delivered, so its DMs outwait a card/attachment api.lock
-# hold (signing, token, upload and post at 20 s each) and one shared 429 cooldown.
+# A callback is never re-delivered, so its DMs wait up to ~60 s for a card/text
+# api.lock hold and one shared 429 cooldown. A sized attachment upload can hold
+# the lock longer (up to REQUEST_TIMEOUT_MAX); the DM then fails as sender_busy.
 CALLBACK_BUSY_TRIES, CALLBACK_COOLDOWN_TRIES = 120, 2
 
 
@@ -24,9 +25,10 @@ SUMMARY_WORD = "サマリー"
 
 
 class Actions:
-    def __init__(self, settings, dirs, reg, sender, log):
+    def __init__(self, settings, dirs, reg, sender, log, stopping=lambda: False):
         self.settings, self.dirs, self.reg = settings, dirs, reg
         self.sender, self.log = sender, log
+        self._stopping = stopping  # a stop ends a callback DM's wait within ~1 s
         self._followup_cursor = 0
         self._sent = self._attempts = 0
         self._callback = False
@@ -69,10 +71,14 @@ class Actions:
         # stays at most once. Only callback DMs wait: a followup is restored instead.
         self._attempts += 1
         wait = ({"wait_cooldown": True, "busy_tries": CALLBACK_BUSY_TRIES,
-                 "cooldown_tries": CALLBACK_COOLDOWN_TRIES} if self._callback else {})
+                 "cooldown_tries": CALLBACK_COOLDOWN_TRIES,
+                 "retry_allowed": self._running} if self._callback else {})
         sent = await locked(functools.partial(self.sender.send, content, user_id=user), **wait)
         self._sent += 1
         return sent
+
+    async def _running(self):
+        return not self._stopping()
 
     def _unsent(self, exc, sent, attempts):
         """True when no DM of the step went out: a local write failed before any was

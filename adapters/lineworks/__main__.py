@@ -185,13 +185,14 @@ async def serve(root, port):
     registered_signals = []
     try:
         for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, stopping.set)
+            # The worker's retry gate must see a stop even while a callback DM waits.
+            loop.add_signal_handler(sig, lambda: (stopping.set(), worker.stop()))
             registered_signals.append(sig)
         reg.reload()
         with reg.batch():
             await worker.reconcile()
         inbox = CallbackInbox(Path(dirs["state"]) / "callbacks", scope, bot_secret)
-        actions = Actions(scope, dirs, reg, sender, _log)
+        actions = Actions(scope, dirs, reg, sender, _log, stopping.is_set)
         server = callback_server(inbox, port=port)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -213,6 +214,8 @@ async def serve(root, port):
                 try:
                     inbox.expire()
                     for pending in inbox.pending():
+                        if stopping.is_set():
+                            break  # untaken callbacks stay queued for the next start
                         working, event = inbox.take(pending)
                         try:
                             await actions.handle(event)

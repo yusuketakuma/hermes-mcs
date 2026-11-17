@@ -105,8 +105,9 @@ async def locked(fn, *args, wait_cooldown=False, retry_allowed=None,
     sender_busy is a local preflight (nothing sent), so retrying cannot duplicate;
     a journaled part result is terminal, so failing at once would drop the part.
     With wait_cooldown (parts), a 429 — the shared cooldown preflight or a wire
-    rejection, both proving nothing committed — is waited out and retried too,
-    and sender_busy is waited out up to PART_BUSY_LIMIT instead of a few tries.
+    rejection, both proving nothing committed — is waited out and retried too.
+    busy_tries=None (parts) waits sender_busy out up to PART_BUSY_LIMIT seconds
+    instead of a number of tries.
     A worker borrows its current authority for each retry; losing it (stop,
     route, withdrawn spec) preserves the original rejection, never turns a
     known not_sent into unknown."""
@@ -125,7 +126,7 @@ async def locked(fn, *args, wait_cooldown=False, retry_allowed=None,
             busy += 1
             if exc.error_code != "sender_busy":
                 raise
-            if wait_cooldown and retry_allowed is not None:
+            if busy_tries is None:
                 busy_since = time.monotonic() if busy_since is None else busy_since
                 if time.monotonic() - busy_since >= PART_BUSY_LIMIT:
                     raise
@@ -299,7 +300,8 @@ class DeliveryWorker(BaseWorker):
                     return {"result": "not_sent", "error_code": "body_part_missing"}
                 text = chunk_text(spec, part.get("name") or "", chunks[index])
                 await locked(self._sender.send, {"type": "text", "text": text},
-                             wait_cooldown=True, retry_allowed=self._retry_gate(spec))
+                             wait_cooldown=True, busy_tries=None,
+                             retry_allowed=self._retry_gate(spec))
                 rid = _part_remote_id(spec, part)
             elif part["kind"] == "attachment_part":
                 if part.get("unavailable"):
@@ -309,7 +311,8 @@ class DeliveryWorker(BaseWorker):
                         # Its 取得失敗 line is already in the room — never repeat it.
                         return {"result": "delivered", "remote_id": part["prior_remote_id"]}
                     await locked(self._sender.send, {"type": "text", "text": part["caption"]},
-                                 wait_cooldown=True, retry_allowed=self._retry_gate(spec))
+                                 wait_cooldown=True, busy_tries=None,
+                                 retry_allowed=self._retry_gate(spec))
                     return {"result": "delivered", "remote_id": _part_remote_id(spec, part)}
                 if part.get("prior_remote_id"):
                     return {"result": "delivered", "remote_id": part["prior_remote_id"]}
@@ -318,7 +321,8 @@ class DeliveryWorker(BaseWorker):
                 if blob is None:
                     return {"result": "not_sent", "error_code": "attachment_mismatch"}
                 rid = await locked(self._sender.attachment, blob, part.get("name") or "file",
-                                   wait_cooldown=True, retry_allowed=self._retry_gate(spec))
+                                   wait_cooldown=True, busy_tries=None,
+                                   retry_allowed=self._retry_gate(spec))
             else:
                 return {"result": "not_sent", "error_code": "unsupported_part"}
         except Exception as exc:
