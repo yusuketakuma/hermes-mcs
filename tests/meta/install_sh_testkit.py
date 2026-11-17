@@ -220,6 +220,8 @@ case "$*" in
     touch "$STUB_STATE/sdk-ready"
     printf '%s' "${STUB_SDK_POST_FAULT:-}" > "$STUB_STATE/sdk-fault"
     exit 0 ;;
+  # the real OCR setup caches its models under data/huggingface
+  *scripts/setup_yomitoku.py*) mkdir -p "$HOME/.mcs/data/huggingface"; exit 0 ;;
   *prepare_recovery.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
   *install_options.py*) exec "$STUB_PARSE_PYTHON" -B "$STUB_ROOT/install-options-runner.py" "$@" ;;
   *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*mcs-installer-inherited-lock*|*mcs-installer-flock-fallback*|*requires_python_admits.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;

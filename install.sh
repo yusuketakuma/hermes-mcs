@@ -85,6 +85,7 @@ RECOVERY_PYTHON=""
 SKIP_BREW=0; SKIP_LLM=0; SKIP_PLUGIN=0; SKIP_SERVICES=0; SKIP_RECOVERY=0
 WITH_YOMITOKU=0
 FORCE_REPO=0
+_fresh_resume=0
 ARG_HOME=""
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -146,7 +147,7 @@ link_target() {
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 # Read-only bootstrap modes do not require checkout companions.
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
-INSTALL_RUNTIME_SHA256="1d81ab2fe3ae3a13a4f02f1c6b731a2813fcdc2ca8928fb8a6f188de5d6cf409"
+INSTALL_RUNTIME_SHA256="9286030abbd318accd7729156c8f7b478753349bfe1d36ca23afa38b2dd3253f"
 _install_stage_private_dir=""
 # shellcheck disable=SC2317,SC2329  # Invoked by EXIT after the sourced stage exits.
 _install_stage_cleanup() {
@@ -252,6 +253,33 @@ EOF
         if [ -e "$_lock_data" ] || [ -L "$_lock_data" ]; then
             _safe_dir "$_lock_data" || _unsafe_dir "データフォルダー"
         fi
+    }
+    # <root stat> <data stat>: the exact fresh-install hold this root would own.
+    _fresh_marker_body() {
+        IFS=' ' read -r _fr_dev _fr_ino _fr_uid _fr_mode _fr_links <<EOF
+$1
+EOF
+        IFS=' ' read -r _fd_dev _fd_ino _fd_uid _fd_mode _fd_links <<EOF
+$2
+EOF
+        for _number in "$_fr_dev" "$_fr_ino" "$_fr_uid" "$_fr_mode" "$_fr_links" "$_fd_dev" "$_fd_ino" "$_fd_uid" "$_fd_mode" "$_fd_links"; do
+            case "$_number" in ''|*[!0-9]*) return 1 ;; esac
+        done
+        [ "$_fr_uid" = "$_lock_uid" ] && [ "$_fd_uid" = "$_lock_uid" ] && [ "$_fd_mode" = 700 ] || return 1
+        printf '{"version":1,"root":[%s,%s,%s,%s],"data":[%s,%s,%s,%s],"config":null}\n' \
+            "$_fr_dev" "$_fr_ino" "$_fr_uid" "$((0$_fr_mode))" \
+            "$_fd_dev" "$_fd_ino" "$_fd_uid" "$((0$_fd_mode))"
+    }
+    # The hold's exact bytes, bounded; a resumed install never rewrites them.
+    _fresh_marker_matches() {  # <expected body>
+        [ -f "$_lock_data/.provider-bootstrap-fresh.json" ] && [ ! -L "$_lock_data/.provider-bootstrap-fresh.json" ] || return 1
+        _fm_info="$(_lock_info "$_lock_data/.provider-bootstrap-fresh.json")" || return 1
+        IFS=' ' read -r _fm_dev _fm_ino _fm_owner _fm_mode _fm_links <<EOF
+$_fm_info
+EOF
+        [ "$_fm_owner" = "$_lock_uid" ] && [ "$_fm_mode" = 600 ] && [ "$_fm_links" = 1 ] || return 1
+        [ "$(wc -c < "$_lock_data/.provider-bootstrap-fresh.json" | tr -d ' ')" = "$((${#1} + 1))" ] || return 1
+        [ "$(dd if="$_lock_data/.provider-bootstrap-fresh.json" bs=4096 count=1 2>/dev/null)" = "$1" ]
     }
     # Pin a private root symlink before any fresh data or lock is created.
     # Physical cwd prevents a later replacement of the alias from redirecting
@@ -401,6 +429,20 @@ except (OSError, ValueError, OverflowError): raise SystemExit(1) from None
     if [ -e "$_lock_file" ] || [ -L "$_lock_file" ] || [ -n "${MCS_UPDATE_REINSTALL:-}" ]; then
         acquire_install_lock
     fi
+    # A fresh install stopped before its config existed resumes only while
+    # data/ still holds exactly the lock and the hold this root and data
+    # directory would get now; fresh-sync and bootstrap-fresh re-prove it.
+    if [ -z "${MCS_UPDATE_REINSTALL:-}" ] && [ "$_install_lock_held" -eq 1 ] \
+            && [ ! -e "$MCS_ROOT/config.json" ] && [ ! -L "$MCS_ROOT/config.json" ] \
+            && [ "$(LC_ALL=C ls -A "$_lock_data")" = ".provider-bootstrap-fresh.json
+update.lock" ] \
+            && _resume_data="$(_lock_info "$_lock_data")" \
+            && _resume_body="$(_fresh_marker_body "$(_lock_info "$MCS_ROOT")" "$_resume_data")" \
+            && _fresh_marker_matches "$_resume_body"; then
+        _fresh_resume=1
+        _fresh_data_info="$_resume_data"
+        printf '%s\n' "前回中断した初回導入の記録を確認しました。初回導入を再開します。"
+    fi
 fi
 if [ "$RUNTIME_EXPLICIT" -eq 0 ] && [ -n "$ARG_HOME" ]; then RUNTIME_MODE=hermes; fi
 CONFIG_ABSENT=0
@@ -479,7 +521,8 @@ PYMODE
     case "$RUNTIME_MODE" in hermes|standalone) ;; *) die "接続方法を読み取れません。--mode hermes または --mode standalone を指定してください" ;; esac
 else
     CONFIG_ABSENT=1
-    if [ "$RUNTIME_EXPLICIT" -eq 0 ] && { [ -e "$MCS_ROOT/data" ] || [ -L "$MCS_ROOT/data" ]; }; then
+    if [ "$RUNTIME_EXPLICIT" -eq 0 ] && [ "$_fresh_resume" -eq 0 ] \
+            && { [ -e "$MCS_ROOT/data" ] || [ -L "$MCS_ROOT/data" ]; }; then
         RUNTIME_MODE=hermes
     fi
 fi
@@ -497,8 +540,8 @@ if [ "$MODE" = install ] && [ "$CONFIG_ABSENT" -eq 0 ] \
     esac
 fi
 # Only a fresh install without saved authority may acquire a new default.
-if [ "$RUNTIME_EXPLICIT" -eq 0 ] && { { [ "$CONFIG_ABSENT" -eq 1 ] \
-        && [ ! -e "$MCS_ROOT/data" ] && [ ! -L "$MCS_ROOT/data" ]; } || { [ "$CONFIG_EMPTY" -eq 1 ] \
+if [ "$RUNTIME_EXPLICIT" -eq 0 ] && { { [ "$CONFIG_ABSENT" -eq 1 ] && { [ "$_fresh_resume" -eq 1 ] \
+        || { [ ! -e "$MCS_ROOT/data" ] && [ ! -L "$MCS_ROOT/data" ]; }; }; } || { [ "$CONFIG_EMPTY" -eq 1 ] \
         && [ ! -e "$MCS_ROOT/data/.provider-settings-authority.json" ] \
         && [ ! -L "$MCS_ROOT/data/.provider-settings-authority.json" ] \
         && [ ! -e "$MCS_ROOT/data/install_options.json" ] \
@@ -683,6 +726,12 @@ hermes_admits_314() {
     "$_ha_py" -I "$REPO/mcs/ops/requires_python_admits.py" "$HERMES_DIR/pyproject.toml"
 }
 
+# Established installs never rebuild a runtime here; a runtime that cannot
+# start at all is moved aside by the operator once its services are stopped.
+venv_unusable_hint() {
+    printf '%s' "実行環境の Python が起動しない場合は、常駐サービスが止まっていることを確認し、mv $(shell_quote "$VENV") $(shell_quote "$VENV.broken") で退避してから install.sh を再実行してください（退避した環境は削除しません）"
+}
+
 preserve_old_venv() {
     if [ ! -e "$VENV" ] && [ ! -L "$VENV" ]; then return; fi
     if [ -n "${MCS_UPDATE_RUN_LOCK_FD:-}" ] || [ -n "${MCS_UPDATE_RUNTIME_BACKUP:-}" ]; then
@@ -692,12 +741,14 @@ preserve_old_venv() {
         # A scheduled tick can start after a process check; established installs
         # require the updater's inherited run.lock for runtime migration.
         if [ -e "$MCS_DATA/ledger.db" ] || [ -e "$MCS_DATA/service_manifest.json" ]; then
-            die "導入済み MCS の Python 移行には更新ツールが必要です。既存環境は保持しました。リリースの更新手順に従ってください"
+            die "導入済み MCS の Python 移行には更新ツールが必要です。既存環境は保持しました。動作する旧版の Python からの移行はリリースの更新手順に従ってください。$(venv_unusable_hint)"
         fi
         _runtime_processes="$(ps -axo command=)" \
             || die "実行環境の停止を確認できません。既存の Python 環境は保持しました"
+        # Homebrew's framework Python re-execs Python.app, so a venv script
+        # shows up as an argument rather than argv[0]; match the whole line.
         if printf '%s\n' "$_runtime_processes" | MCS_VENV_PREFIX="$VENV/" awk '
-            index($0, ENVIRON["MCS_VENV_PREFIX"]) == 1 { busy=1 }
+            index($0, ENVIRON["MCS_VENV_PREFIX"]) > 0 { busy=1 }
             END { exit !busy }'; then
             die "既存環境は稼働中です。Gateway または独立接続サービスを通常の停止手順で止めてから再実行してください。既存環境は保持しました"
         fi
@@ -924,8 +975,14 @@ preflight() {
     if [ "$SKIP_LLM" -eq 0 ] && [ "$OS" = Darwin ] && [ ! -f "$MODEL_FILE" ]; then _need_hf=1; fi
     pf_net huggingface.co "$MODEL_URL" "$_need_hf"
 
+    _venv_established=0
+    if [ -e "$MCS_DATA/ledger.db" ] || [ -e "$MCS_DATA/service_manifest.json" ]; then _venv_established=1; fi
     if [ "$RUNTIME_MODE" = standalone ]; then
         pf_info "MCS 単独接続の実行環境: ${VENV}（Hermes は不要です）"
+        if { [ -e "$VENV" ] || [ -L "$VENV" ]; } && ! py_ok "$VENV_PY" 14 15 && [ "$_venv_established" -eq 1 ]; then
+            pf_ng "導入済みの実行環境で Python 3.14 を使用できません（段階2では作り直しません）" \
+                "動作する旧版の Python はリリースの更新手順で移行してください。$(venv_unusable_hint)"
+        fi
         pf_net pypi.org https://pypi.org 1
     else
     if command -v hermes >/dev/null 2>&1; then pf_info "Hermes コマンド: $(command -v hermes)"
@@ -936,11 +993,14 @@ preflight() {
         if ! _h="$(git -C "$HERMES_DIR" rev-parse HEAD 2>/dev/null)"; then
             pf_ng "$HERMES_DIR の現在の版（HEAD）を読み取れません" "mv $(shell_quote "$HERMES_DIR") $(shell_quote "$HERMES_DIR.bak")   # 段階2で再取得します"
         elif [ "$_h" = "$HERMES_PIN" ]; then pf_ok "Hermes は検証済みの固定版です"
-        else pf_warn "Hermes は $_h です。検証済み固定版 $HERMES_PIN と異なります（現状を保持します）" "git -C $(shell_quote "$HERMES_DIR") checkout --detach $HERMES_PIN"; fi
+        else pf_warn "Hermes は $_h です。検証済み固定版 $HERMES_PIN と異なります（現状を保持します）" "版の変更はリリースの更新手順（更新ツール）で行ってください。手作業で checkout すると依存関係が更新されません"; fi
     elif [ -e "$HERMES_DIR" ]; then
         pf_ng "$HERMES_DIR は存在しますが Git で取得したフォルダではありません" "mv $(shell_quote "$HERMES_DIR") $(shell_quote "$HERMES_DIR.bak")"
     else pf_info "Hermes は未取得です。段階2で $HERMES_PIN を取得します"; fi
     if py_ok "$VENV_PY" 14 15; then pf_ok "Hermes 用 Python: $VENV_PY"
+    elif { [ -e "$VENV" ] || [ -L "$VENV" ]; } && [ "$_venv_established" -eq 1 ]; then
+        pf_ng "導入済みの Hermes 用 Python 3.14 を使用できません（段階2では作り直しません）" \
+            "動作する旧版の Python はリリースの更新手順で移行してください。$(venv_unusable_hint)"
     elif [ -e "$VENV" ]; then pf_info "Hermes 用 Python 3.14 が使用できません。段階2で環境を再作成します"
     else pf_info "Hermes 用 Python 環境は未作成です。段階2で作成します"; fi
     fi
@@ -965,6 +1025,13 @@ preflight() {
     fi
     if [ -e "$MCS_ROOT/.install-options-migration.pending" ] || [ -L "$MCS_ROOT/.install-options-migration.pending" ]; then
         pf_ng "導入設定の移行結果を確認できません" "保留記録と設定を保持し、担当者に確認してください"
+    fi
+    if [ -e "$MCS_DATA/.provider-bootstrap-fresh.json" ] || [ -L "$MCS_DATA/.provider-bootstrap-fresh.json" ]; then
+        if [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ]; then
+            pf_ng "初回導入が中断された記録があります" "設定と記録を保持し、担当者に確認してください"
+        else
+            pf_info "初回導入が設定の作成前に止まっています。記録を確認できれば導入時に再開します"
+        fi
     fi
 
     if [ "$OS" = Darwin ]; then
@@ -1121,7 +1188,7 @@ fi
 _fresh_marker="$MCS_DATA/.provider-bootstrap-fresh.json"
 _fresh_authorized=0
 _legacy_uninitialized=0
-if [ -e "$_fresh_marker" ] || [ -L "$_fresh_marker" ]; then
+if { [ -e "$_fresh_marker" ] || [ -L "$_fresh_marker" ]; } && [ "$_fresh_resume" -ne 1 ]; then
     die "初回導入が中断された記録があります。設定と記録を保持し、担当者に確認してください"
 fi
 _fresh_complete="$MCS_DATA/.provider-bootstrap-complete.json"
@@ -1179,22 +1246,15 @@ if [ -n "$_fresh_data_info" ] && [ "$CONFIG_ABSENT" -eq 1 ]; then
         fi
     done
     _fresh_root_info="$(_lock_info "$MCS_ROOT")" || die "初回導入の保存先を確認できません"
-    IFS=' ' read -r _fr_dev _fr_ino _fr_uid _fr_mode _fr_links <<EOF
-$_fresh_root_info
-EOF
-    IFS=' ' read -r _fd_dev _fd_ino _fd_uid _fd_mode _fd_links <<EOF
-$_fresh_data_info
-EOF
-    for _number in "$_fr_dev" "$_fr_ino" "$_fr_uid" "$_fr_mode" "$_fr_links" "$_fd_dev" "$_fd_ino" "$_fd_uid" "$_fd_mode" "$_fd_links"; do
-        case "$_number" in ''|*[!0-9]*) die "初回導入の保存先を確認できません" ;; esac
-    done
-    if ! { [ "$_fr_uid" = "$_lock_uid" ] && [ "$_fd_uid" = "$_lock_uid" ] && [ "$_fd_mode" = 700 ]; }; then
-        die "初回導入の保存先を確認できません"
+    _fresh_body="$(_fresh_marker_body "$_fresh_root_info" "$_fresh_data_info")" \
+        || die "初回導入の保存先を確認できません"
+    if [ "$_fresh_resume" -eq 1 ]; then
+        _fresh_marker_matches "$_fresh_body" \
+            || die "初回導入が中断された記録が変更されました。設定と記録を保持し、担当者に確認してください"
+    else
+        (set -C; printf '%s\n' "$_fresh_body" > "$_fresh_marker") \
+            || die "初回導入の記録を保存できません。データを保持してください"
     fi
-    (set -C; printf '{"version":1,"root":[%s,%s,%s,%s],"data":[%s,%s,%s,%s],"config":null}\n' \
-        "$_fr_dev" "$_fr_ino" "$_fr_uid" "$((0$_fr_mode))" \
-        "$_fd_dev" "$_fd_ino" "$_fd_uid" "$((0$_fd_mode))" > "$_fresh_marker") \
-        || die "初回導入の記録を保存できません。データを保持してください"
     _fresh_authorized=1
 elif [ "$CONFIG_ABSENT" -eq 1 ]; then
     _legacy_py="${MODE_PY:-}"
@@ -1306,7 +1366,11 @@ fi
 # every non-zero exit from here on is a stopped install, not a usage error
 # _ip_cur_* is this run's last stage marker (runtime.sh), journal-independent.
 trap 'if [ "$?" -ne 0 ]; then
-    if [ -e "$MCS_DATA/.provider-bootstrap-fresh.json" ] || [ -L "$MCS_DATA/.provider-bootstrap-fresh.json" ] \
+    if [ -f "$MCS_DATA/.provider-bootstrap-fresh.json" ] && [ ! -L "$MCS_DATA/.provider-bootstrap-fresh.json" ] \
+            && [ ! -e "$MCS_ROOT/config.json" ] && [ ! -L "$MCS_ROOT/config.json" ] \
+            && [ ! -e "$MCS_DATA/.provider-settings-pending.json" ] && [ ! -L "$MCS_DATA/.provider-settings-pending.json" ]; then
+        printf "%s\n" "エラー: 導入を中断しました。失敗した段階の原因を確認してください。設定はまだ作成していないため、原因を直して最初と同じ指定（--mode など）で再実行すると初回導入を再開します。" >&2
+    elif [ -e "$MCS_DATA/.provider-bootstrap-fresh.json" ] || [ -L "$MCS_DATA/.provider-bootstrap-fresh.json" ] \
             || [ -e "$MCS_DATA/.provider-settings-pending.json" ] || [ -L "$MCS_DATA/.provider-settings-pending.json" ]; then
         printf "%s\n" "エラー: 導入は保留中です。設定と記録を保持し、担当者に確認してください。" >&2
     elif [ "${_ip_cur_status:-}" = running ]; then

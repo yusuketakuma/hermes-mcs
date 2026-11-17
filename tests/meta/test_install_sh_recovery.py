@@ -355,12 +355,14 @@ def test_prior_run_journal_compact_record_shows_stage_notice(tmp_path):
 
 
 def test_fresh_install_stop_keeps_hold_guidance_not_stage_claim(tmp_path):
-    """A fresh install stopped at brew keeps the approval hold message."""
+    """A fresh install stopped at brew before its config says a rerun resumes it."""
     home, hermes_home, _stub, env = _world(tmp_path, brew=False)
     r = _run(env, hermes_home)
     assert r.returncode != 0
-    assert "導入は保留中です" in r.stderr
-    assert "担当者に確認してください" in r.stderr
+    assert "初回導入を再開します" in r.stderr
+    assert "導入は保留中です" not in r.stderr
+    assert "段階で止まっていました" not in r.stderr
+    assert (home / ".mcs/data/.provider-bootstrap-fresh.json").is_file()
 
 
 def test_unchanged_world_readable_repo_pointer_is_made_private(tmp_path):

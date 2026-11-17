@@ -308,12 +308,6 @@ esac
 sum "2/6 Hermes:   $_ck; $_venv; $_shimsum"
 fi
 
-if [ "$WITH_YOMITOKU" -eq 1 ]; then
-    "$MCS_PY" "$REPO/scripts/setup_yomitoku.py" --root "$MCS_ROOT" \
-        || die "OCR専用環境の導入に失敗しました。既存モデルは保持しています"
-    sum "追加OCR: $MCS_ROOT/ocr-venv/bin/yomitoku（利用開始は別途設定）"
-fi
-
 # Publish a pinned lifecycle entrypoint for both runtimes. A foreign command
 # is never overwritten; an MCS shim from another checkout needs --force-repo.
 MCS_BODY="$(printf '#!/bin/sh\n# MCS lifecycle launcher\nunset PYTHONPATH PYTHONHOME\nexport MCS_LIFECYCLE_PINNED=1\nexec %s %s "$@"' \
@@ -339,7 +333,8 @@ if recovery_wanted; then
 fi
 # Make the private hold durable before an initial config can be published.
 if [ "$_fresh_authorized" -eq 1 ]; then
-    "$MCS_PY" -B "$REPO/mcs/ops/install_options.py" fresh-sync "$MCS_ROOT/config.json" \
+    MCS_FRESH_RUNTIME_MODE="$RUNTIME_MODE" MCS_FRESH_HERMES_HOME="$HERMES_HOME" MCS_FRESH_HERMES_EXE="$VENV_HERMES" \
+        "$MCS_PY" -B "$REPO/mcs/ops/install_options.py" fresh-sync "$MCS_ROOT/config.json" \
         "$MCS_DATA/install_options.json" - "$MCS_INSTALL_UPDATE_LOCK_FD" \
         || die "初回導入の記録を確認できません。設定と記録を保持してください"
 fi
@@ -532,6 +527,13 @@ if [ "$_fresh_authorized" -eq 1 ]; then
         || die "初回導入の安全性を確認できません。設定と保留記録を保持し、担当者に確認してください"
 fi
 _install_progress_hold=""
+# The OCR model cache lives in data/; a fresh install fetches it only after
+# bootstrap-fresh has verified the exact initial data inventory.
+if [ "$WITH_YOMITOKU" -eq 1 ]; then
+    "$MCS_PY" "$REPO/scripts/setup_yomitoku.py" --root "$MCS_ROOT" \
+        || die "OCR専用環境の導入に失敗しました。既存モデルは保持しています"
+    sum "追加OCR: $MCS_ROOT/ocr-venv/bin/yomitoku（利用開始は別途設定）"
+fi
 # -------------------------------------------------------- 3. plugin
 say "【3/6】Slack／Discord の操作カード用プラグイン"
 _install_progress plugin running
@@ -811,10 +813,25 @@ PYQ="$(shell_quote "$MCS_PY")"
 SETUPQ="$(shell_quote "$SETUP")"
 # `-m` resolves only from the checkout: install.sh may run from elsewhere.
 INREPO="cd $(shell_quote "$REPO") &&"
+# Display-only hint: a plain text match on the required keys keeps this
+# read free of interpreter runs; `mcs_setup.py check` does the real validation.
+_configured=0
+if grep -Eqs '"mcs_login_id"[[:space:]]*:[[:space:]]*"[^"]' "$MCS_ROOT/config.json" \
+        && grep -Eqs '"notify_target"[[:space:]]*:[[:space:]]*"[^"]' "$MCS_ROOT/config.json"; then
+    _configured=1
+fi
 printf '\n============================================================\n'
-printf 'ソフトの準備が完了しました。まだ利用開始前の初期設定が必要です。\n'
+if [ "$_configured" -eq 1 ]; then
+    printf 'ソフトの準備が完了しました。必須の設定項目がそろっているため、初期設定の開始は不要です。\n'
+else
+    printf 'ソフトの準備が完了しました。まだ利用開始前の初期設定が必要です。\n'
+fi
 printf '%s' "$SUMMARY"
 printf '============================================================\n'
+if [ "$_configured" -eq 1 ]; then
+    printf '\n設定と接続の状態は次のコマンドで確認できます:\n    %s %s check\n' "$PYQ" "$SETUPQ"
+    printf '設定を見直す場合:\n    %s setup\n' "$(shell_quote "$MCS_SHIM")"
+else
 printf '\n次は MCS のログイン情報と通知先を設定します。\n'
 printf 'アカウント情報は、ご自身の端末で入力してください。\n'
 printf '準備ができていない項目は初期設定の案内に従って後で設定できます。\n'
@@ -839,6 +856,7 @@ elif [ -t 0 ] && [ -t 1 ]; then
             printf '入力内容や表示された問題を確認し、次のコマンドで再開してください:\n    %s setup\n' "$(shell_quote "$MCS_SHIM")"
         fi
     fi
+fi
 fi
 # Explicit installer lifecycle only; ordinary runtime startup never creates an intent.
 if [ "$SETUP_STATUS" -eq 0 ]; then
