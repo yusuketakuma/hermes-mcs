@@ -608,7 +608,7 @@ def _cancelled_visit_dates(body):
         except ValueError:
             key = None
         after = body[match.end():]
-        if re.match(r"[ \t　]*[にへ][ \t　]*(?:延期|変更)", after):
+        if re.match(r"[ \t　]*[にへ][ \t　]*延期", after):
             # 「AはBに延期」: B is the new date; A, earlier in the same sentence, is the cancelled one
             if previous is not None and not re.search(r"[。！？!?\n]", body[previous[1]:match.start()]):
                 out.add(previous[0])
