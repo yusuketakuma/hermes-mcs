@@ -923,10 +923,16 @@ def _ask(cfg, payload, deadline, admit, *, provider=None, evidence_out=None, loc
                                          error_out=err, turn_min_s=patient_context_refresh_state.CALL_SECONDS + patient_context_refresh_state.COMMIT_MARGIN)
     if response and response.get("admission"):
         raise patient_context_refresh_state.Deferred("patient_context_admission_deferred")
-    if provider is None and response is None and err.get("kind") == "busy":
-        # lane 2 held the GPU turn for the whole call window: nothing
-        # was sent, so the patient is not charged a failure
-        raise patient_context_refresh_state.Deferred("patient_context_turn_busy")
+    if provider is None and response is None and err.get("kind") in ("busy", "unreachable", "not_sent"):
+        # nothing reached the model (lane 2 held the GPU turn, connection
+        # refused, request never sent): like extraction/semantic, a hold
+        # without charging the patient an attempt
+        raise patient_context_refresh_state.Deferred(
+            "patient_context_turn_busy" if err.get("kind") == "busy" else "patient_context_endpoint_unsent")
+    if response and response.get("status") == 503:
+        # still loading the model: the call did no work, same no-charge hold
+        # (sent, so not in the proven-unsent generation return)
+        raise patient_context_refresh_state.Deferred("patient_context_endpoint_unavailable")
     if (evidence_out is not None and isinstance(response, dict) and response.get("status") == 200
             and isinstance(response.get("text"), str)):
         evidence_out.append((prompt, response["text"]))
