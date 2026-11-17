@@ -455,6 +455,19 @@ def test_an_expired_price_table_refuses_a_reservation_without_opening_the_circui
         assert not ledger.artifacts("cloud_circuit")
 
 
+def test_a_price_table_valid_only_after_midnight_refuses_a_reservation_without_opening_the_circuit(tmp_path, now, monkeypatch):
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        reserve = c.usage_reserver(ledger, _period(), route="patient_context", project_id=1, unit_key="u1")
+        # the table is not yet valid at the attempt's instant but is when the failure is classified
+        monkeypatch.setattr(c, "pricing_valid", lambda at=None, *, model=None: at is None)
+        monkeypatch.setattr(c, "max_cost", lambda *a, **k: (_ for _ in ()).throw(
+            c.AnthropicError("pricing_unverified", "price_or_limit_invalid")))
+        with pytest.raises(c.AnthropicError) as raised:
+            reserve({"model": c.MODEL, "max_tokens": 100}, 2)
+        assert raised.value.kind == "pricing_unverified"
+        assert not ledger.artifacts("cloud_circuit")
+
+
 def test_provider_cap_reduction_preserves_paid_result_but_blocks_new_reservation(tmp_path, now):
     high = {"cloud_llm": {"mode": "on", "provider": "anthropic", "project_ids": [1], "daily_cost_limit_usd": 80,
                           "monthly_cost_limit_usd": 80, "provider_budgets": {"anthropic": {

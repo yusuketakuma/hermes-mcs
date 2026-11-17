@@ -1414,9 +1414,12 @@ def _circuit_result(ledger, error, *, reset=False):
     return record_circuit_result(ledger, error, kind="cloud_circuit", reset=reset)
 
 
-def _circuit_on_pricing_error(ledger, error, model):
-    """Hold the circuit for an unverifiable price or accounting; an expired price table only refuses."""
-    if error.kind == "pricing_unverified" and pricing_valid(model=model):
+def _circuit_on_pricing_error(ledger, error, model, since):
+    """Hold the circuit for an unverifiable price or accounting; an expired price table only refuses.
+
+    ``since`` is the instant the attempt began: a price table that was not valid then (a day
+    change between the pre-check and the reservation) is a refusal, not an accounting fault."""
+    if error.kind == "pricing_unverified" and pricing_valid(since, model=model) and pricing_valid(model=model):
         _circuit_result(ledger, error)
 
 
@@ -1826,6 +1829,7 @@ def _request_identity(c, body, *, route, project_id, unit_key, message_id, owner
 def request_send_block_reason(ledger, cfg, body, *, route, project_id, unit_key,
                               message_id=None, owner=None, selection=None, input_binding=None):
     """Check the same input's prior sends before deciding a fresh send is blocked."""
+    started = time.time()
     c = _cfg(cfg)
     candidate = _request_identity(c, body, route=route, project_id=project_id, unit_key=unit_key,
         message_id=message_id, owner=owner, selection=selection, input_binding=input_binding)
@@ -1844,7 +1848,7 @@ def request_send_block_reason(ledger, cfg, body, *, route, project_id, unit_key,
     except AnthropicError as error:
         if error.kind == 'pricing_unverified' and not ledger.db.in_transaction:
             try:
-                _circuit_on_pricing_error(ledger, error, candidate['model'])
+                _circuit_on_pricing_error(ledger, error, candidate['model'], started)
             except Exception:
                 # Failure to record the circuit must never turn an accounting
                 # refusal into a fresh/local input or replace its fixed category.
@@ -1875,7 +1879,7 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
         try:
             maximum = max_cost(tokens, input_bound=bound, model=model, now=now)
         except AnthropicError as error:
-            _circuit_on_pricing_error(ledger, error, model)
+            _circuit_on_pricing_error(ledger, error, model, now)
             raise
         meta.update(reservation_id=uuid.uuid4().hex,
                     price_version=_price_definition(model, now=now)["price_version"],
@@ -1912,7 +1916,7 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
         try:
             return reserve_artifact(ledger, check, write)
         except AnthropicError as error:
-            _circuit_on_pricing_error(ledger, error, model)
+            _circuit_on_pricing_error(ledger, error, model, now)
             raise
     return reserve
 
