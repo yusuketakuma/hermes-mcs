@@ -506,11 +506,15 @@ ADHERENCE_TERMINAL = ("管理は出来ない", "管理はできない",
 # てい/してい covers 「飲み忘れていない」「飲み忘れはしていない」;
 # ません covers 「残薬ありません」 (the pattern consumes the あり);
 # an adverb may sit before the negation: 「飲み忘れは特にない」「残薬が全くない」;
-# く covers the adjective stem 「服薬管理が難し」+「くない/くありません」
+# く covers the adjective stem 「服薬管理が難し」+「くない/くありません」;
+# the lookahead keeps double negations and worry (「ないわけじゃない」「なくはない」
+# 「ないとは言えない」「ないはずがない」「ないか心配」) as concerns
 _NEGATE_RE = re.compile(
     r"[はがも、。\s]*(?:(?:特に|全く|ほとんど|あまり|今のところ)[は、\s]*)?"
     r"(?:く|してい|てい|て)?(ない|なし|ありません|なく|ません)"
-    r"(?!\s*(?:わけ|訳|こと|事)(?:では|でも|は|が)?(?:ない|ありません|なく))")
+    r"(?!\s*(?:(?:わけ|訳|こと|事)(?:では|でも|じゃ|は|が|も)?(?:ない|ありません|なく)"
+    r"|は(?:ない|ありません)|とは(?:言え|いえ|限ら|思え)"
+    r"|はず(?:が|は)?(?:ない|ありません)|か心配))")
 
 
 def _adherence_phrases(text, *, patient_name=None):
