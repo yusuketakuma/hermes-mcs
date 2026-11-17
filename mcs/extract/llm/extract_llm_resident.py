@@ -129,6 +129,8 @@ def _same_but_operating_limits(current, cfg):
 CHILD_ABSENT_GRACE_S = 900
 # The lane's ledger keeps (first, last) monotonic times of the probes that saw no child.
 _CHILD_ABSENT = "_context_child_absent"
+# The lane's ledger marks a takeover that has been recorded, so it is recorded once.
+_TAKEOVER = "_context_takeover"
 # The lane's ledger keeps (until, reason) of the pause after a context pass that waits.
 _CONTEXT_PAUSE = "_context_pause"
 # The pause after a takeover pass whose patients all wait for a context child: the wait of a
@@ -154,6 +156,7 @@ def _context_role(ledger, *, cloud_worker, cloud_on):
         return "cloud" if cloud_backlog.role_alive(HOME, cloud_backlog.ROLE_LOCAL) is True else "any"
     if not cloud_on:
         ledger.__dict__.pop(_CHILD_ABSENT, None)
+        ledger.__dict__.pop(_TAKEOVER, None)
         return "any"
     alive = cloud_backlog.role_alive(HOME, cloud_backlog.ROLE_CLOUD)
     if (alive is None) != ledger.__dict__.get("_context_role_probe_unavailable", False):
@@ -164,6 +167,7 @@ def _context_role(ledger, *, cloud_worker, cloud_on):
                   file=sys.stderr, flush=True)
     if alive is not False:
         ledger.__dict__.pop(_CHILD_ABSENT, None)
+        ledger.__dict__.pop(_TAKEOVER, None)
         return "local"
     now = time.monotonic()
     since, last = ledger.__dict__.get(_CHILD_ABSENT, (now, now))
@@ -172,7 +176,15 @@ def _context_role(ledger, *, cloud_worker, cloud_on):
         # between (the lane was off, not admitted or extracting). The grace starts again.
         since = now
     ledger.__dict__[_CHILD_ABSENT] = (since, now)
-    return "local_takeover" if now - since >= CHILD_ABSENT_GRACE_S else "local"
+    if now - since < CHILD_ABSENT_GRACE_S:
+        ledger.__dict__.pop(_TAKEOVER, None)
+        return "local"
+    if not ledger.__dict__.get(_TAKEOVER):
+        # One record when the lane starts pinning cloud patients' sources locally, not one per pass.
+        ledger.__dict__[_TAKEOVER] = True
+        print(json.dumps({"event": "context_local_takeover", "pid": os.getpid(), "ts": time.time(),
+                          "absent_s": int(now - since)}), file=sys.stderr, flush=True)
+    return "local_takeover"
 
 
 def _background_context_refresh(ledger, initial_state, stop=None, *, cloud_worker=False):
