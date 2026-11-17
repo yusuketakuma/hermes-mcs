@@ -723,7 +723,7 @@ def test_new_unit_deadline_preserves_paid_response_without_local_fallback(routed
 
 def _provider_unavailable_load(cfg, unavailable):
     def load():
-        return {**cfg, "provider_unavailable": True} if unavailable[0] else cfg
+        return mcs_util._paid_routes_closed(cfg) if unavailable[0] else cfg
     return load
 
 
@@ -741,8 +741,9 @@ def _patch_load_config(monkeypatch, load):
 
 
 def test_provider_unavailable_before_send_holds_with_zero_accounting(routed, monkeypatch):
-    """The provider_unavailable flag is a hold, not a stop: the unit is refused
-    before any reservation and no accounting row is written."""
+    """The synthesized provider-unavailable view is a hold, not the owner's
+    stop: the unit is refused before any reservation and no accounting row is
+    written — unlike an explicit mode=off, which falls back instead."""
     led, cfg, _, _, _ = routed
     _use_real_cloud_accounting(monkeypatch)
     unavailable = [True]
@@ -750,12 +751,25 @@ def test_provider_unavailable_before_send_holds_with_zero_accounting(routed, mon
     monkeypatch.setattr(AnthropicClient, "request",
                         lambda *args, **kwargs: pytest.fail("unexpected post"))
     deadline = time.monotonic() + 180
-    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
-        unit_key="synthetic", deadline=deadline, current=lambda: True,
-        dispatch=lambda fn, **kwargs: fn())
+
+    def unit():
+        return cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
+            unit_key="synthetic", deadline=deadline, current=lambda: True,
+            dispatch=lambda fn, **kwargs: fn())
+
     with legacy_cloud_routes(), pytest.raises(cloud_inference.CloudObservationIncomplete,
                                                match="cloud_provider_unverified"):
-        provider("synthetic", deadline=deadline, max_tokens=100)
+        unit()("synthetic", deadline=deadline, max_tokens=100)
+    assert not led.artifacts("cloud_usage_reserve")
+    assert not led.artifacts("cloud_usage_result")
+    assert not led.artifacts("cloud_usage_disposition")
+    assert not led.db.in_transaction
+    # The synthesized view also carries mode=off; an explicit owner stop without
+    # the unavailable flag is a different outcome (fallback, not a hold).
+    off = {**cfg, "cloud_llm": {**cfg["cloud_llm"], "mode": "off"}}
+    _patch_load_config(monkeypatch, lambda: off)
+    with legacy_cloud_routes(), pytest.raises(cloud_inference.CloudFallback):
+        unit()("synthetic", deadline=deadline, max_tokens=100)
     assert not led.artifacts("cloud_usage_reserve")
     assert not led.artifacts("cloud_usage_result")
     assert not led.artifacts("cloud_usage_disposition")
