@@ -3,7 +3,7 @@
 The heading rules emit ``unspecified``, which downstream reads as the patient's
 own item. Rule 30 names another subject only on an allow-list, because a wrong
 family or other label hides the patient's own allergy, adverse reaction or wish:
-家族の意向／家族の希望 is the family's, and a value of an allergy, adverse-event or
+家族の意向／家族の希望 is the family's when a family-side kin word holds it, and a value of an allergy, adverse-event or
 preference heading is a family member's or another patient's only when the whole
 value is exactly a plain kin word or another patient, は (never も, which says the
 patient shares the fact, and never が, which marks an actor or a reporter; everyone but
@@ -19,16 +19,16 @@ honorific kin word that can be the patient in a note to the family (ご主人・
 holds nothing. A staff member holds only a proposal under a policy (方針) heading.
 本人の意向／本人の希望 is the patient's and is never relabelled; a person heading its
 value only withdraws the assertion. 家族の意向／家族の希望 is the family's only when its
-value names nobody else: no patient word (本人・対象者・Pt・自身・私・彼), no bracket, no
-subject marked with は or が but a family-side kin word at its head (長男は・妻は; never an
-alias of the patient, 母・父 or 同居者) or a topic a wish is about (最期は・延命は), and no
-possessor of a wish but such a kin word (長男の意向). A drug, prescription or product is a
+value is held by a family-side kin word alone at its head, then は (長男は・妻は; never an
+alias of the patient, 母・父 or 同居者), and the rest is a wish of the closed shape; with no
+holder (家に帰りたい) it may be the patient's own voice. A drug, prescription or product is a
 thing only with a name part (合成薬A); in kanji alone (処方薬・睡眠薬・下剤) it may be the
 patient's regimen. Everything else stays ``unspecified``, the
 former behaviour and the safe direction. Fully synthetic text only.
 """
 import copy
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -41,9 +41,9 @@ CASES = json.loads((ROOT / "evaluation" / "extract_cases_safety_history.json").r
 
 
 @pytest.mark.parametrize(("label", "value", "subject"), [
-    # The heading itself names the person.
-    ("家族の意向", "自宅での看取りを希望されています", "family"),
-    ("家族の希望", "週2回の訪問を続けたい", "family"),
+    # The heading itself names the person; 家族の意向 needs its holder named too.
+    ("家族の意向", "長女は自宅での看取りを希望されています", "family"),
+    ("家族の希望", "週2回の訪問を続けたい", "unspecified"),
     ("本人の意向", "自宅で最期を迎えたい", "patient"),
     ("本人の希望", "延命治療は望まない", "patient"),
     # The head of the value names a family member or another person.
@@ -210,7 +210,7 @@ def test_a_person_who_observes_reports_or_acts_never_relabels_the_patients_fact(
     ("薬剤アレルギー：次女さんは合成薬Dで蕁麻疹", "family"),
     ("希望：長女は施設入所を希望している", "family"),
     ("延命：ご家族は延命治療を望まない", "family"),
-    ("家族の意向：自宅で看取りたい", "family"),
+    ("家族の意向：長男は自宅での看取りを希望", "family"),
     ("副作用：孫さんは合成薬Eでかゆみ", "family"),
     ("アレルギー：父自身は甲殻類で蕁麻疹", "family"),
     ("希望：他の利用者は個室を希望", "other"),
@@ -413,7 +413,7 @@ def test_a_shared_or_pointed_fact_never_becomes_a_family_or_other_fact(line):
     ("アレルギー：妻は卵アレルギー", "family"), ("希望：妻は施設入所を希望", "family"),
     ("希望：娘は同居を希望しています", "family"), ("希望：夫は受診への同行を希望", "family"),
     ("方針：医師は在宅を提案", "other"), ("家族の希望：長男さんは在宅を希望", "family"),
-    ("家族の意向：在宅を希望", "family"), ("家族の意向：長男は在宅を希望", "family"),
+    ("家族の意向：長男は在宅を希望", "family"),
     ("アレルギー：夫はOPTアレルギー", "family"), ("アレルギー：夫はPTFEアレルギー", "family"),
     # A holder with 本人 or 自身 under a heading that is not 家族の意向.
     ("アレルギー：母本人は卵アレルギー", "family"),
@@ -460,7 +460,7 @@ def test_a_family_fact_outside_the_allowed_shapes_stays_unspecified(line):
     ("本人の意向：ご主人は反対", "unspecified"),
     ("本人の希望：家族は同席してほしい", "unspecified"),
     ("本人の意向：家族は皆在宅を希望", "unspecified"),
-    # 家族の意向 is the family's unless its value names the patient (was family).
+    # 家族の意向 is the family's only with a family-side kin holder (ご主人 may be the patient).
     ("家族の意向：本人は同席してほしい", "unspecified"),
     ("家族の希望：ご主人は在宅を希望", "unspecified"),
     ("家族の希望：長男さんは在宅を希望", "family"),
@@ -469,9 +469,9 @@ def test_a_subject_heading_decides_when_the_value_does_not(line, subject):
     assert _line_subjects(line) == [subject]
 
 
-# 家族の意向／家族の希望: any way of naming someone but a family-side kin word leaves the
-# heading undecided, one per form (a subject, a possessor of a wish, a bracket, an alias or
-# ascending kin, each wish topic, each possessed noun, each bracket).
+# 家族の意向／家族の希望 without a family-side kin holder at the head is undecided, however
+# the rest names someone or nobody (a subject, a possessor, a bracket, another particle, an
+# alias or ascending kin, the patient's own voice, no holder at all).
 FAMILY_HEADING_NAMES_SOMEONE_ELSE = [
     "家族の意向：山田さんは在宅を希望", "家族の意向：山田は在宅を希望", "家族の希望：Aさんは在宅を希望",
     "家族の意向：入所者は在宅を希望", "家族の意向：高齢者は在宅を希望", "家族の意向：お年寄りは在宅を希望",
@@ -496,6 +496,26 @@ FAMILY_HEADING_NAMES_SOMEONE_ELSE = [
     "家族の意向：自宅では看られない", "家族の意向：在宅が難しい",
     # The patient named in another position.
     "家族の意向：本人次第", "家族の意向：在宅を希望、本人も同意",
+    "家族の希望：山田さんのご意向を尊重", "家族の希望：入所者様のご希望", "家族の希望：山田さんの在宅希望",
+    "家族の希望：おばあちゃんの帰りたい気持ち", "家族の希望：Aさんの要望", "家族の希望：山田さん次第",
+    "家族の意向：母のご意向", "家族の意向：山田さんも在宅を希望", "家族の意向：山田さん、在宅を希望",
+    "家族の意向：山田さん 在宅希望", "家族の意向：山田さん：在宅希望", "家族の意向：入所者より在宅希望",
+    "家族の意向：母も在宅を希望", "家族の意向：母、在宅を希望",
+    # The patient's own voice, with no holder.
+    "家族の意向：家に帰りたいと言っている", "家族の意向：「家で死にたい」と話している",
+    "家族の意向：帰りたいとおっしゃっている", "家族の意向：帰宅願望あり", "家族の意向：入院は嫌だと話している",
+    # No holder at all, formerly family: nobody being named cannot be read from the text.
+    "家族の意向：在宅を希望", "家族の意向：自宅で看取りたい", "家族の意向：最期は自宅で", "家族の意向：最後は家で",
+    "家族の希望：延命は望まない", "家族の意向：入院はしたくない", "家族の意向：家に帰りたい",
+    "家族の希望：施設入所も考えたい", "家族の意向：おばあちゃんを在宅で看たい", "家族の希望：面会を増やしたい",
+    # A possessor alone, even family-side kin, is no holder.
+    "家族の意向：長男の意向を尊重", "家族の希望：妻の気持ちを大切にしたい",
+    # A holder that is not a family-side kin word alone.
+    "家族の意向：長男自身は在宅を希望", "家族の意向：他の利用者は個室を希望", "家族の意向：医師は在宅を提案",
+    # A family-side holder whose rest is outside the closed shape (尊重 is no closed stance,
+    # 延命は adds a topic); 長男は山田さんのご意向を尊重 is the son's stance, but the patient's
+    # wish it names would read as the family's, so unspecified is right.
+    "家族の希望：長男は山田さんのご意向を尊重", "家族の意向：長男は延命は望まない",
 ]
 
 
@@ -507,15 +527,9 @@ def test_a_family_heading_that_names_someone_else_is_unspecified(line):
 @pytest.mark.parametrize("line", [
     "家族の意向：長男は在宅を希望", "家族の意向：長女さんは在宅を希望", "家族の意向：■長女は在宅を希望",
     "家族の希望：家族は同意", "家族の意向：妻は反対", "家族の意向：孫は面会を希望",
-    "家族の意向：長男の意向を尊重", "家族の希望：妻の気持ちを大切にしたい",
-    # A topic a wish is about, one per topic.
-    "家族の意向：最期は自宅で", "家族の意向：最後は家で", "家族の意向：今後は施設で", "家族の希望：延命は望まない",
-    "家族の意向：治療は続けたい", "家族の意向：入院はしたくない", "家族の意向：退院は来月で",
-    "家族の希望：面会は週1回", "家族の意向：長男は延命は望まない",
-    # No holder at all; a person as the object of the family's own wish.
-    "家族の意向：家に帰りたい", "家族の希望：施設入所も考えたい", "家族の意向：おばあちゃんを在宅で看たい",
+    "家族の意向：夫は延命を望まない", "家族の希望：ご家族は施設入所を希望",
 ])
-def test_a_family_heading_naming_only_family_side_kin_or_nobody_is_family(line):
+def test_a_family_heading_held_by_family_side_kin_is_family(line):
     assert _line_subjects(line) == ["family"]
 
 
@@ -555,6 +569,18 @@ def test_a_shape_edge_stays_unspecified(line):
     assert _relabelled(line) == []
 
 
+@pytest.mark.parametrize(("label", "value"), [
+    ("アレルギー", "妻は" + "処方" * 25000 + "Aアレルギー"), ("アレルギー", "妻は" + "内服" * 25000 + "A"),
+    ("副作用", "妻は" + "薬" * 50000 + "Aで眠気"), ("希望", "妻は" + "処方" * 25000 + "Aを希望"),
+    ("家族の意向", "妻は" + "服用" * 25000 + "Aを希望"),
+])
+def test_a_long_value_is_judged_in_linear_time(label, value):
+    # A nested lazy run used to take seconds at 8k characters and grows quadratically.
+    started = time.perf_counter()
+    assert heading_subject(label, value) == "unspecified"
+    assert time.perf_counter() - started < 2.0
+
+
 def test_annotate_reads_the_heading_from_the_first_evidence_line_only():
     item = {"category": "allergies", "text": "長女は架空果実Nアレルギー", "subject": "unspecified",
             "origin": "explicit_heading", "evidence": "アレルギー：長女は架空果実Nアレルギー\n既往歴：なし"}
@@ -579,7 +605,7 @@ def test_annotate_changes_only_the_subject_of_heading_items_and_does_not_mutate(
     assert items == before
     assert out[-2:] == [llm, "not an item"]
     assert [item["subject"] for item in out[:-2]] == [
-        "patient", "family", "family", "unspecified", "unspecified"]
+        "patient", "unspecified", "family", "unspecified", "unspecified"]
     assert [{key: value for key, value in item.items() if key != "subject"} for item in out[:-2]] == [
         {key: value for key, value in item.items() if key != "subject"} for item in before]
     assert out[0] is not items[0]

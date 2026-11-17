@@ -350,14 +350,14 @@ def extract_context(body: str) -> list[dict]:
 # Rule 30: a heading names another subject only on an allow-list, because a wrong
 # family or other label hides the patient's own allergy or wish (unspecified, the
 # former behaviour, is the safe default). 本人の意向／本人の希望 is never relabelled, and
-# 家族の意向／家族の希望 is the family's only while its value names nobody but the family.
+# 家族の意向／家族の希望 is the family's only when a family-side kin word holds the value.
 _SUBJECT_HEADINGS = {"家族の意向": "family", "家族の希望": "family",
                      "本人の意向": "patient", "本人の希望": "patient"}
 _SUBJECT_CATEGORIES = frozenset({"preferences", "allergies", "adverse_events"})
 # A staff member holds only a policy; for a clinical fact or a wish they are a reporter.
 _STAFF_HELD_HEADINGS = frozenset({"方針", "療養方針", "治療方針"})
-# Words that can name the patient (本人・対象者・Pt・自身・私・彼・あの方); one list, so the
-# patient-word check of 家族の意向 and the things a fact may not name cannot drift apart.
+# Words that can name the patient (本人・対象者・Pt・自身・私・彼・あの方), which a fact
+# never names.
 _PATIENT_REF = (r"本人|ほんにん|当人|当事者|患者|利用者|入居者|対象|被保険者|要介護者|被介護者"
                 r"|クライアント|お客様|自身|自分|じぶん|私|わたし|わたくし|当方|僕|俺|彼"
                 r"|(?:あの|この|その)方|(?<![A-Za-z])(?:pt|Pt|PT)(?![A-Za-z])")
@@ -373,22 +373,12 @@ _VALUE_HOLDER = re.compile(
     r"(?:ご本人|本人)?(?:自身)?は")
 # In a note to the family these kin words can be the patient (ご主人・お母様), so they hold nothing.
 _PATIENT_ALIAS_KIN = re.compile(r"ご?主人|旦那(?:さん|様)?|奥(?:さん|様)|お(?:母|父|兄|姉)(?:さん|様)?")
-# A value of 家族の意向／家族の希望 that names the patient is not the family's alone.
-_PATIENT_WORD = re.compile(_PATIENT_REF)
-# Under 家族の意向／家族の希望 a named holder is the family only when it is a kin word that
-# cannot be the patient: of the kin list, not an alias of the patient (ご主人・お母様) and not
-# an ascending kin or a housemate relative to the writer, who may be the patient (母・祖父・
-# 義母・同居者; every ascending kin word of the list holds 母 or 父). Any other subject
-# (山田さんは・入所者は・あの人は・おばあちゃんは) is unspecified.
+# Under 家族の意向／家族の希望 nobody being named cannot be read from the text (家に帰りたいと
+# 話している is the patient's own voice), so only an explicit holder decides, and only a kin
+# word that cannot be the patient: not an alias (ご主人・お母様) and not an ascending kin or a
+# housemate relative to the writer, who may be the patient (母・祖父・義母・同居者; every
+# ascending kin word of the list holds 母 or 父).
 _WRITER_RELATIVE_KIN = re.compile(r"母|父|同居")
-_FAMILY_HEADING_HOLDER = re.compile(rf"{_LEAD}(?P<kin>{clinical_scope.FAMILY_PERSON})は")
-# The only topics a family value may mark with は besides its holder: the matters a family
-# wish is about, never a person (最期は自宅で・延命は望まない). Any other は or が may mark a
-# subject, so it leaves the value unspecified.
-_FAMILY_WISH_TOPIC = re.compile(r"(?:最期|最後|今後|延命|治療|入院|退院|面会)は")
-# Whose wish the value defers to (母の意向を尊重・入所者の希望に沿う): a possessor of one.
-_WISH_POSSESSOR = re.compile(r"の(?:意向|希望|意思|意志|意見|気持ち|思い|考え|願い|望み|判断)")
-_NAME_CHAR = r"[一-鿿ぁ-ゖァ-ヴーA-Za-z0-9Ａ-Ｚａ-ｚ０-９々]"
 # A fact names one thing, never a person, a group that may include the patient or a
 # pointer back to the patient's record (皆・全員・入居者・本人同様・同じ・それ); the
 # closed shapes below guarantee everything else. A family or other word already covers
@@ -422,8 +412,10 @@ def _thing(excluded):
     # A drug, prescription or product names one only with a name part (合成薬A・ペニシリン系
     # 薬); written in kanji alone it is a regimen or a class that may be the patient's
     # (処方薬・持参薬・本処方・当内服薬・同時薬・睡眠薬・下剤), never a thing.
-    nameless_drug = (rf"(?:(?:{word})*[薬剤品]|(?:{word})*?(?:処方|内服|服用)(?:{word})*)"
-                     rf"(?!(?!アレルギー)(?:{char}))")
+    # Possessive runs keep the check linear in the length of the value.
+    whole = rf"(?!(?!アレルギー)(?:{char}))"
+    nameless_drug = (rf"(?:{word})++(?<=[薬剤品]){whole}"
+                     rf"|(?=(?:(?!処方|内服|服用)(?:{word}))*+(?:処方|内服|服用))(?:{word})++{whole}")
     return rf"(?:(?!{_POINTER}|{nameless_drug})(?:(?!{excluded})(?:{char})){{1,20}}|(?:(?!{excluded})[ぁ-ゖ](?<![はがもとをの])){{1,20}})"
 
 
@@ -452,30 +444,6 @@ _FACT = {
 _PROPOSAL = re.compile(rf"{_OBJECT}を?(?:提案|推奨|指示|予定){_DOING}")
 
 
-def _family_side_kin(word) -> bool:
-    """Tell whether a word of the kin list names a family member who cannot be the patient."""
-    return not _PATIENT_ALIAS_KIN.fullmatch(word) and not _WRITER_RELATIVE_KIN.search(word)
-
-
-def _family_heading_value(value) -> bool:
-    """Tell whether a 家族の意向／家族の希望 value names nobody but family-side kin as its holder."""
-    if _PATIENT_WORD.search(value) or re.search(r"[（(［\[【〔]", value):
-        return False
-    head = _FAMILY_HEADING_HOLDER.match(value)
-    if head:
-        if not _family_side_kin(head["kin"]):
-            return False
-        value = value[head.end():]
-    if re.search("[はが]", _FAMILY_WISH_TOPIC.sub("", value)):
-        return False
-    for possessor in _WISH_POSSESSOR.finditer(value):
-        before = value[:possessor.start()]
-        kin = re.search(rf"(?<!{_NAME_CHAR})(?:{clinical_scope.FAMILY_PERSON})$", before)
-        if not kin or not _family_side_kin(kin[0]):
-            return False
-    return True
-
-
 def heading_subject(label, value) -> str:
     """Name the subject a preference, allergy or adverse-event heading states, else leave it unspecified."""
     if not isinstance(label, str) or not isinstance(value, str):
@@ -493,8 +461,10 @@ def heading_subject(label, value) -> str:
             holder = "family" if person["family"] else "other"
     heading = _SUBJECT_HEADINGS.get(label, "unspecified")
     if heading == "family":
-        # The heading decides alone, and only while nobody else is named (母本人は在宅を希望).
-        return heading if _family_heading_value(value) else "unspecified"
+        # Only a family-side kin word alone at the head, holding a wish of the closed shape.
+        alone = person and person.end() == person.end("family") + 1
+        return "family" if holder == "family" and alone and not _WRITER_RELATIVE_KIN.search(
+            person["family"]) else "unspecified"
     if heading == "patient":
         # A person heading the patient's own heading withdraws the assertion, never relabels it.
         return "unspecified" if person else heading
