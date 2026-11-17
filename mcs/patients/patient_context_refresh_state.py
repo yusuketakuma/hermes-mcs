@@ -412,17 +412,21 @@ def _comparison_context(value, sources, *, facts=None, prefix_ids=()):
 
 def _scan_sig(db, pid, *, source_keys=None) -> str:
     """Digest of the patient's per-source scan rows, read at the caller's observation point."""
-    rows = [tuple(r) for r in db.execute(
-        "SELECT message_id,content,meta FROM artifacts WHERE kind IN (?,?) AND project_id=? AND "
-        + current_meta_pred("meta", target=CURRENT_VERSION) + " ORDER BY artifact_id",
-        (SCAN, CHUNK, pid))]
-    if source_keys is not None:
-        selected = set(source_keys)
-        rows = [row for row in rows if loads_dict(row[2]) is None
-                or (loads_dict(row[2]) or {}).get('source_key', row[0]) in selected]
-    keys = {(loads_dict(content) or {}).get("accepted_candidate_ref", {}).get("repair_input_key")
-            for mid, content, meta in rows if isinstance((loads_dict(content) or {}).get("accepted_candidate_ref"), dict)
-            and valid_hash((loads_dict(content) or {})["accepted_candidate_ref"].get("repair_input_key"))}
+    selected = None if source_keys is None else set(source_keys)
+    rows, keys = [], set()
+    # One decode per row, and rows outside source_keys are dropped as they stream (digest input is unchanged).
+    for row in db.execute(
+            "SELECT message_id,content,meta FROM artifacts WHERE kind IN (?,?) AND project_id=? AND "
+            + current_meta_pred("meta", target=CURRENT_VERSION) + " ORDER BY artifact_id", (SCAN, CHUNK, pid)):
+        row = tuple(row)
+        if selected is not None:
+            meta = loads_dict(row[2])
+            if meta is not None and meta.get('source_key', row[0]) not in selected:
+                continue
+        rows.append(row)
+        ref = (loads_dict(row[1]) or {}).get("accepted_candidate_ref")
+        if isinstance(ref, dict) and valid_hash(ref.get("repair_input_key")):
+            keys.add(ref["repair_input_key"])
     for key in sorted(keys):
         rows.extend(tuple(row) for row in db.execute("SELECT message_id,content,meta FROM artifacts WHERE kind=? "
             "AND project_id=? AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.repair_input_key') END=? "
