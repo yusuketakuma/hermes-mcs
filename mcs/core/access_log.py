@@ -37,10 +37,12 @@ _HASH_RE = re.compile(r"[0-9a-f]{64}")
 PATIENT_LIMIT = 200  # ids an answer returned; more are counted, not listed
 FIELDS = ("v", "at", "ts", "via", "actor", "channel", "op", "kind",
           "project_id", "patients", "patients_more", "outcome", "query", "prev")
+# records written before the patient lists were added stay valid in the chain
+_FIELD_SETS = (frozenset(FIELDS), frozenset(FIELDS) - {"patients", "patients_more"})
 
 
 class AccessLogError(RuntimeError):
-    """A fixed failure code; the record was not durably appended."""
+    """A fixed failure code; a durable append could not be confirmed."""
 
 
 def directory(data_dir) -> str:
@@ -106,7 +108,7 @@ def _files(dir_fd):
 
 
 def _read_at(fd, size, offset) -> bytes:
-    """Read exactly ``size`` bytes; a short read must not hash or cut a partial line."""
+    """Read exactly ``size`` bytes; a short read must not hash a partial line."""
     data = b""
     while len(data) < size:
         chunk = os.pread(fd, size - len(data), offset + len(data))
@@ -117,7 +119,11 @@ def _read_at(fd, size, offset) -> bytes:
 
 
 def _last_line(dir_fd, name):
-    """The newest line of a newline-terminated file, checked to be a whole record."""
+    """Return the newest line, whether it lacks its newline, and whether it was read whole.
+
+    A line longer than the window read here (an older format allowed one) is
+    reported as not whole so the caller checks it against the full chain.
+    """
     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dir_fd)
     try:
         _check_private(fd, is_dir=False)
@@ -127,48 +133,14 @@ def _last_line(dir_fd, name):
     finally:
         os.close(fd)
     if not tail:
-        return None
-    body = tail[:-1]
+        return None, False, True
+    unterminated = not tail.endswith(b"\n")
+    body = tail if unterminated else tail[:-1]
     boundary = body.rfind(b"\n")
     line = body[boundary + 1:]
-    if boundary < 0 and start:
-        raise AccessLogError("access_log_corrupt")  # longer than any record we write
-    try:
-        entry = json.loads(line)
-    except ValueError:
-        entry = None
-    if not isinstance(entry, dict) or set(entry) != set(FIELDS):
+    if not line:
         raise AccessLogError("access_log_corrupt")
-    return line
-
-
-def _drop_partial_tail(fd) -> int:
-    """Cut a record an interrupted append left without its newline; return the size.
-
-    Such a fragment was never acknowledged, so its answer was withheld; the
-    next record must chain to the last complete line, not to the fragment.
-    """
-    size = os.fstat(fd).st_size
-    if not size or _read_at(fd, 1, size - 1) == b"\n":
-        return size
-    start = max(0, size - 2 * MAX_LINE)
-    end = _read_at(fd, size - start, start).rfind(b"\n")
-    if end < 0 and start:
-        raise AccessLogError("access_log_corrupt")
-    keep = start + end + 1 if end >= 0 else 0
-    os.ftruncate(fd, keep)
-    os.fsync(fd)
-    return keep
-
-
-def _repair_tail(dir_fd, name) -> None:
-    """Cut an unacknowledged fragment from an earlier file before it heads the chain."""
-    fd = os.open(name, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dir_fd)
-    try:
-        _check_private(fd, is_dir=False)
-        _drop_partial_tail(fd)
-    finally:
-        os.close(fd)
+    return line, unterminated, start == 0 or boundary >= 0
 
 
 @contextmanager
@@ -213,7 +185,12 @@ def record(data_dir, *, via, actor, op, channel=None, kind=None, project_id=None
 
 
 def _append(data_dir, entry, name) -> None:
-    """Chain ``entry`` to the newest complete line and make it durable, or raise AccessLogError."""
+    """Chain ``entry`` to the newest line and make it durable, or raise AccessLogError.
+
+    Bytes already in the log are never cut: a fragment an interrupted append or
+    later damage left stops every new record until an administrator recovers it,
+    because removing it could drop a record whose access was already answered.
+    """
     dir_fd = _open_dir(data_dir, create=True)
     try:
         with _locked(dir_fd):
@@ -225,29 +202,43 @@ def _append(data_dir, entry, name) -> None:
                          | os.O_CLOEXEC, 0o600, dir_fd=dir_fd)
             try:
                 _check_private(fd, is_dir=False)
-                size = _drop_partial_tail(fd)
-                previous = None
-                for candidate in reversed([n for n in names + [name] if n <= name]):
-                    if candidate != name:
-                        # the previous month may end in an interrupted append too
-                        _repair_tail(dir_fd, candidate)
-                    previous = _last_line(dir_fd, candidate)
-                    if previous is not None:
-                        break
-                entry["prev"] = GENESIS if previous is None else _digest(previous)
+                prev, separator = GENESIS, b""
+                for candidate in reversed(sorted({*names, name})):
+                    previous, unterminated, whole = _last_line(dir_fd, candidate)
+                    if previous is None:
+                        continue
+                    if unterminated or not whole:
+                        verification = verify(data_dir)
+                        if not verification["ok"]:
+                            raise AccessLogError("access_log_corrupt")
+                        prev = verification["head"]
+                    else:
+                        try:
+                            last_entry = json.loads(previous)
+                        except ValueError:
+                            raise AccessLogError("access_log_corrupt") from None
+                        if not isinstance(last_entry, dict) or set(last_entry) not in _FIELD_SETS:
+                            raise AccessLogError("access_log_corrupt")
+                        prev = _digest(previous)
+                    if unterminated and candidate == name:
+                        separator = b"\n"  # a whole record an older writer left without its newline
+                    break
+                entry["prev"] = prev
                 line = json.dumps(entry, ensure_ascii=False, sort_keys=True,
                                   separators=(",", ":")).encode("utf-8")
                 if len(line) >= MAX_LINE:
                     raise AccessLogError("access_log_record_too_large")
-                try:
-                    if os.write(fd, line + b"\n") != len(line) + 1:
-                        raise AccessLogError("access_log_write_incomplete")
-                    os.fsync(fd)
-                except BaseException:
-                    os.ftruncate(fd, size)  # never leave half a record for the next one
-                    raise
+                data = separator + line + b"\n"
+                if os.write(fd, data) != len(data):
+                    raise AccessLogError("access_log_write_incomplete")
+                os.fsync(fd)
             finally:
                 os.close(fd)
+            # An earlier month may hold a line whose fsync failed before the month
+            # changed; nothing records which were synced, so every earlier file is.
+            for earlier in names:
+                if earlier < name:
+                    _sync_file(dir_fd, earlier)
             # Every time: a monthly file left by an earlier failed directory sync
             # would otherwise be acknowledged without a durable directory entry.
             os.fsync(dir_fd)
@@ -255,6 +246,15 @@ def _append(data_dir, entry, name) -> None:
         raise AccessLogError("access_log_unavailable") from error
     finally:
         os.close(dir_fd)
+
+
+def _sync_file(dir_fd, name) -> None:
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dir_fd)
+    try:
+        _check_private(fd, is_dir=False)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def _failure_path(data_dir) -> str:
@@ -374,7 +374,7 @@ def verify(data_dir, *, checkpoint=None) -> dict:
                     entry = json.loads(line)
                 except ValueError:
                     entry = None
-                if (not isinstance(entry, dict) or set(entry) != set(FIELDS)
+                if (not isinstance(entry, dict) or set(entry) not in _FIELD_SETS
                         or entry["prev"] != expected):
                     return {"ok": False, "files": files, "records": count,
                             "broken_at": {"file": name, "line": number}}
