@@ -10,6 +10,7 @@ import time
 from types import MappingProxyType
 
 import anthropic_client
+import cloud_client
 import openai_client
 import provider_registry
 from anthropic_client import AnthropicError, MODEL
@@ -674,6 +675,33 @@ def _confirmed_anthropic_payment(result, model):
             or _confirmed_anthropic_usage_limit(result, model))
 
 
+def result_evidence_error(meta):
+    """The first conditional-evidence rule record_result enforces, or None.
+
+    A stored row is read through the same determination the write applied, so
+    evidence that mixes a provider payment marker with 200-only fields cannot
+    pass as a confirmed rejection."""
+    http_class = meta.get("http_class")
+    error_kind = meta.get("error_kind")
+    usage = meta.get("usage")
+    if "contract_error_detail" in meta:
+        detail = meta["contract_error_detail"]
+        if (http_class != "http_200" or error_kind != "contract_error" or usage is None
+                or not isinstance(detail, str) or detail not in cloud_client.CONTRACT_ERROR_DETAILS):
+            return "result_mismatch"
+    if "answer_text_sha256_v1" in meta:
+        answer_hash = meta["answer_text_sha256_v1"]
+        if (not isinstance(answer_hash, str) or re.fullmatch(r"[0-9a-f]{64}", answer_hash) is None
+                or http_class != "http_200" or usage is None or error_kind is not None):
+            return "answer_hash_invalid"
+    if "answer_finish_reason_v1" in meta:
+        finish_reason = meta["answer_finish_reason_v1"]
+        if (finish_reason not in ("stop", "length") or http_class != "http_200"
+                or usage is None or error_kind is not None):
+            return "finish_reason_invalid"
+    return None
+
+
 def _settled(m, maximum, matching):
     """(cost, settled?) of one reservation's single bound result; raises when
     the result is duplicated, unbound or its usage/cost disagrees."""
@@ -690,6 +718,8 @@ def _settled(m, maximum, matching):
     if "anthropic_error_code" in r and not _confirmed_anthropic_spend_limit(r, m["model"]):
         raise ValueError
     if "anthropic_400_diagnostic" in r and not _confirmed_anthropic_usage_limit(r, m["model"]):
+        raise ValueError
+    if result_evidence_error(r) is not None:
         raise ValueError
     reported = _decimal(r.get("cost_usd"))
     if r.get("usage") is None:

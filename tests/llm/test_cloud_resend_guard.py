@@ -840,3 +840,49 @@ def test_corrupt_anthropic_payment_marker_cannot_prove_retry(tmp_path, monkeypat
         assert cloud_policy.usage_report(ledger)['pricing_unverified'] is True
         with pytest.raises(anthropic_client.AnthropicError):
             _reserve(ledger, 'synthetic prompt')
+
+
+@pytest.mark.parametrize('evidence', [
+    {'answer_text_sha256_v1': 'a' * 64},
+    {'answer_finish_reason_v1': 'stop'},
+    {'contract_error_detail': 'refusal'}])
+def test_stored_payment_marker_mixed_with_200_evidence_stays_held(tmp_path, monkeypatch, evidence):
+    """record_result can never write a payment marker beside 200-only evidence;
+    a stored row that mixes them is corrupt, so it must hold as unresolved —
+    never prove a resendable rejection, even after a receipted resume."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt')
+        cloud_policy.record_result(ledger, reservation, {
+            **_result(reservation, 'http_429', 'payment_required'),
+            'anthropic_error_code': 'enforced_spend_limit_reached'})
+        field, value = next(iter(evidence.items()))
+        with ledger.db:
+            ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,?,?) "
+                              "WHERE kind='cloud_usage_result'", ('$.' + field, value))
+        stored = ledger.db.execute("SELECT meta FROM artifacts WHERE kind='cloud_usage_result'").fetchone()[0]
+        assert cloud_policy.usage_report(ledger)['pricing_unverified'] is True
+        with pytest.raises(anthropic_client.AnthropicError):
+            _reserve(ledger, 'synthetic prompt')
+        cloud_policy.resume(ledger)
+        with pytest.raises(anthropic_client.AnthropicError):
+            _reserve(ledger, 'synthetic prompt')
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+        assert ledger.db.execute("SELECT meta FROM artifacts WHERE kind='cloud_usage_result'").fetchone()[0] == stored
+
+
+def test_stored_rate_limited_mixed_with_200_evidence_stays_held(tmp_path, monkeypatch):
+    """The generic http_429 rate_limited rejection carries no provider marker;
+    a stored row mixing it with 200-only evidence is just as impossible and
+    must hold instead of authorizing another attempt."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt')
+        cloud_policy.record_result(ledger, reservation, _result(reservation, 'http_429', 'rate_limited'))
+        with ledger.db:
+            ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.answer_text_sha256_v1',?) "
+                              "WHERE kind='cloud_usage_result'", ('a' * 64,))
+        assert cloud_policy.usage_report(ledger)['pricing_unverified'] is True
+        with pytest.raises(anthropic_client.AnthropicError):
+            _reserve(ledger, 'synthetic prompt')
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1

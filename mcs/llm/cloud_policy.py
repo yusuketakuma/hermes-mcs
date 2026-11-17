@@ -81,6 +81,7 @@ from cloud_usage_accounting import (
     _confirmed_anthropic_spend_limit as _confirmed_anthropic_spend_limit,
     _confirmed_anthropic_usage_limit as _confirmed_anthropic_usage_limit,
     _confirmed_anthropic_payment as _confirmed_anthropic_payment,
+    result_evidence_error as result_evidence_error,
     _settled as _settled,
 )
 from cloud_history_scope import (
@@ -2051,12 +2052,11 @@ def record_result(ledger, reservation, metadata, *, answer=None):
         if "anthropic_400_diagnostic" in metadata and not _confirmed_anthropic_usage_limit(metadata, model):
             raise AnthropicError("pricing_unverified", "result_mismatch")
         usage = definition["validate_usage"](metadata["usage"]) if metadata.get("usage") is not None else None
+        evidence_error = result_evidence_error(metadata)
+        if evidence_error is not None:
+            raise AnthropicError("pricing_unverified", evidence_error)
         if "contract_error_detail" in metadata:
-            detail = metadata["contract_error_detail"]
-            if (http_class != "http_200" or error_kind != "contract_error" or usage is None
-                    or not isinstance(detail, str) or detail not in cloud_client.CONTRACT_ERROR_DETAILS):
-                raise AnthropicError("pricing_unverified", "result_mismatch")
-            error.detail = detail
+            error.detail = metadata["contract_error_detail"]
         maximum = _decimal(reservation["max_cost_usd"])
         cost = (usage_cost(usage, model=model, price_version=reservation["price_version"]) if usage is not None
                 else Decimal(0) if _unbilled(metadata.get("http_class")) else maximum)
@@ -2077,17 +2077,9 @@ def record_result(ledger, reservation, metadata, *, answer=None):
         if "anthropic_400_diagnostic" in metadata:
             result["anthropic_400_diagnostic"] = metadata["anthropic_400_diagnostic"]
         if "answer_text_sha256_v1" in metadata:
-            answer_hash = metadata["answer_text_sha256_v1"]
-            if (not isinstance(answer_hash, str) or re.fullmatch(r"[0-9a-f]{64}", answer_hash) is None
-                    or http_class != "http_200" or usage is None or error_kind is not None):
-                raise AnthropicError("pricing_unverified", "answer_hash_invalid")
-            result["answer_text_sha256_v1"] = answer_hash
+            result["answer_text_sha256_v1"] = metadata["answer_text_sha256_v1"]
         if "answer_finish_reason_v1" in metadata:
-            finish_reason = metadata["answer_finish_reason_v1"]
-            if (finish_reason not in ("stop", "length") or http_class != "http_200"
-                    or usage is None or error_kind is not None):
-                raise AnthropicError("pricing_unverified", "finish_reason_invalid")
-            result["answer_finish_reason_v1"] = finish_reason
+            result["answer_finish_reason_v1"] = metadata["answer_finish_reason_v1"]
         if "disposition" in metadata:
             if metadata["disposition"] not in ("discarded_scope", "discarded_workday"):
                 raise AnthropicError("pricing_unverified", "disposition_invalid")
