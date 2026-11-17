@@ -70,7 +70,8 @@ def _resolved_llm() -> tuple[str, str]:
             resolved_model(cfg))
 
 
-def _probe_format(deadline: float | None = None) -> str | None:
+def _probe_format(deadline: float | None = None,
+                  error_out: dict | None = None) -> str | None:
     """Detect the best response_format the server accepts, via the
     shared loopback adapter.  Fallback order: json_schema -> json_object
     -> plain; acceptance requires a parseable JSON object reply — a 200
@@ -84,7 +85,7 @@ def _probe_format(deadline: float | None = None) -> str | None:
             and time.monotonic() - _FMT_TS < _PROBE_RETRY_S:
         return _FMT_MODE
     endpoint, model = _resolved_llm()
-    err_out: dict = {}
+    err_out: dict = error_out if error_out is not None else {}
     if local_llm.admission_enabled():
         # T20: the probe sends real inference POSTs — it passes the
         # same admission gate and consumes its class budget
@@ -100,7 +101,9 @@ def _probe_format(deadline: float | None = None) -> str | None:
             slot=_choose_slot(), error_out=err_out,
             verify=lambda text: json_object(text) is not None)
     if mode is None or (mode == "plain" and err_out.get("kind") == "transport"):
-        return _FMT_MODE  # unobserved or unconfirmed: nothing cached
+        # a probe run that ended unobserved/unconfirmed is not a verdict —
+        # defer the body even when a stale mode is still cached
+        return None
     _FMT_MODE = mode
     _FMT_TS = time.monotonic()
     return _FMT_MODE
@@ -463,25 +466,66 @@ def _llm_call(prompt: str, deadline: float | None = None,
         _CALL_NOTES.defer_reason = "deadline"
         return _DEFERRED
     probed_at = _FMT_TS
-    # the probe spends the caller's budget, never adds to it: reserve
-    # the body floor so the format check cannot eat the time the real
-    # call needs, and hold one physical turn across probe+body so the
-    # body reuses the probed slot instead of re-queueing for it
-    probe_deadline = (deadline - (need_s or 0)
-                      if deadline is not None else None)
+    floor = need_s or 0
+    # the probe spends the caller's budget, never adds to it: the body
+    # floor is reserved for the real call, and PROBE_TURN_MIN_S of probe
+    # margin joins the turn minimum only while a format check may still
+    # hit the wire. The held turn covers probe+first body only — every
+    # resend re-acquires through the existing per-send path.
+    probe_due = (_FMT_MODE is None
+                 or (_FMT_MODE != "schema"
+                     and time.monotonic() - _FMT_TS >= _PROBE_RETRY_S))
+    margin = local_llm.PROBE_TURN_MIN_S if probe_due else 0.0
     turn_deadline = (deadline if deadline is not None
                      else time.monotonic() + TIMEOUT)
-    with local_llm.call_turn(turn_deadline, need_s or 0,
-                             slot=_choose_slot()):
-        fmt = _probe_format(deadline=probe_deadline)
-        probe = int(_FMT_TS != probed_at)   # one format-check run may send multiple requests
-        if fmt is None:
-            _CALL_NOTES.defer_reason = ("currentness_unverified" if getattr(
-                _CALL_NOTES, "medication_source_changed", False) else "probe_unobserved")
-            return _DEFERRED   # no idle slot to probe on — nothing sent
-        endpoint, model = _resolved_llm()
-        downgrades = 0
-        while True:
+    endpoint, model = _resolved_llm()
+    downgrades = 0
+    first = True
+    while True:
+        with (local_llm.call_turn(turn_deadline, floor + margin,
+                                  slot=_choose_slot())
+              if first and probe_due else contextlib.nullcontext()
+              ) as held:
+            if first:
+                if probe_due and (held is None or (
+                        deadline is not None
+                        and deadline - time.monotonic() < margin)):
+                    # the turn never fit the probe+body minimum, or the
+                    # probe margin is already gone: a finite busy refusal —
+                    # inner sends never re-acquire behind the caller's back
+                    _CALL_NOTES.defer_reason = "busy"
+                    return _DEFERRED
+                probe_err: dict = {}
+                fmt = _probe_format(
+                    deadline=(deadline - floor) if deadline is not None
+                    else None, error_out=probe_err)
+                probe = int(_FMT_TS != probed_at)   # one format-check run may send multiple requests
+                first = False
+                if fmt is None:
+                    pkind = probe_err.get("kind")
+                    pstatus = probe_err.get("status")
+                    expired = (deadline is not None
+                               and time.monotonic() >= deadline)
+                    if pkind == "transport":
+                        # the probe left and died in transport — work was
+                        # consumed; record endpoint evidence and fail like
+                        # a sent body timeout, never a not-sent defer
+                        _CALL_NOTES.transport = ("expired" if expired
+                                                 else "transport")
+                        _CALL_NOTES.transport_at = time.monotonic()
+                        _integrity_note(None, kind, probe, downgrades,
+                                        probe_err)
+                        return None
+                    if pkind == "unreachable" or pstatus == 503:
+                        _CALL_NOTES.transport = ("unreachable"
+                                                 if pkind == "unreachable"
+                                                 else "unavailable")
+                        _CALL_NOTES.transport_at = time.monotonic()
+                        _CALL_NOTES.defer_reason = "endpoint_down"
+                        return _DEFERRED
+                    _CALL_NOTES.defer_reason = ("currentness_unverified" if getattr(
+                        _CALL_NOTES, "medication_source_changed", False) else "probe_unobserved")
+                    return _DEFERRED   # no idle slot to probe on — nothing sent
             # the same floor gates retries: a format degrade (4xx) loops
             # back here and would otherwise re-fire a full call that can
             # no longer finish before the deadline
