@@ -595,7 +595,7 @@ def test_each_dosing_cue_keeps_an_in_band_amount_a_candidate(body):
 # Outside the closed shapes the same words are no cue (で keeps the digits apart
 # once folding drops the spaces).
 @pytest.mark.parametrize("cue", ["日7回", "7回/日", "分7", "分10", "日2回測定", "1日2回の測定", "毎日2回採血",
-                                 "日1回検査", "錠剤変更後", "包括", "包帯交換", "散歩後", "散在", "顆粒球",
+                                 "日1回検査", "塩分1日6g", "錠剤変更後", "包括", "包帯交換", "散歩後", "散在", "顆粒球",
                                  "テープ固定", "軟膏塗布", "カプセル内視鏡後"])
 def test_words_outside_the_cue_shapes_do_not_hide_a_reading(cue):
     for body in (f"カリウム 4.5 で{cue}", f"{cue}で カリウム 4.5"):
@@ -659,6 +659,8 @@ def test_a_neighbouring_clause_with_more_than_cues_does_not_hide_the_reading(nam
     ("カルシウム", "9.1", "カルシウム 9.1\n合成薬C 1錠"),
     ("カルシウム", "9.1", "【検査】\nカルシウム 9.1\nマグネシウム 2.0\n【処方】\n合成薬C 1錠 分1"),
     ("カリウム", "4.2", "合成薬A 頓用、\nカリウム 4.2"),
+    ("カリウム", "4.2", "分2、\nカリウム 4.2"),
+    ("カリウム", "4.2", "頓用；\nカリウム 4.2"),
 ])
 def test_a_line_break_bounds_the_clause_of_a_reading(name, value, body):
     assert _confirmation(name, value, body) == "quote_supported"
@@ -679,8 +681,19 @@ def test_one_end_of_a_range_stays_a_candidate(name, value, body):
     assert lab["value"] == value
 
 
+@pytest.mark.parametrize("body", ["ナトリウム 138 から上昇", "ナトリウム 138 ー 前回並み", "ナトリウム 138 - 安定"])
+def test_a_range_mark_without_a_second_number_keeps_the_reading(body):
+    assert _confirmation("ナトリウム", "138", body) == "quote_supported"
+
+
 # Each salt stem glued to the item names a drug even for an in-band amount without a cue.
 @pytest.mark.parametrize("stem", ["酸", "水素", "ヨウ素", "塩化", "酸化", "ヨウ化", "沃化", "フッ化", "臭化",
                                   "ブロム化", "硫化", "シアン化"])
 def test_each_salt_stem_glued_to_the_item_is_a_drug_name(stem):
     assert _confirmation("カリウム", "4.0", f"{stem}カリウム 4.0") == "unverified"
+
+
+# A form word right after the amount itself is a counted form (塩化 カリウム 4 散).
+@pytest.mark.parametrize("form", ["顆粒", "散", "シロップ", "テープ", "軟膏", "坐剤"])
+def test_a_form_word_right_after_the_amount_keeps_it_a_candidate(form):
+    assert _confirmation("カリウム", "4", f"塩化 カリウム 4 {form}") == "unverified"

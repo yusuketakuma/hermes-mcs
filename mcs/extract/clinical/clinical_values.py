@@ -375,7 +375,7 @@ _SALT_STEM = re.compile(r"(?:酸|水素|ヨウ素|塩化|酸化|ヨウ化|沃化
 # cue. A lab unit written in the source keeps the reading. The cue is searched on
 # folded text (hiragana as katakana, no spaces), so it is written through the same fold.
 _DOSING_CUE = re.compile(fold_surface("|".join((
-    r"(?:(?:1日|毎日|日)[1-6]回|[1-6]回/日|分[1-6](?![0-9]))(?!の?(?:測定|採血|検査))",
+    r"(?:(?:1日|毎日|日)[1-6]回|[1-6]回/日|分[1-6](?![0-9日]))(?!の?(?:測定|採血|検査))",
     _PRN_WORDS,
     rf"[0-9](?:{_MED_FORMS}|包)",
 ))))
@@ -388,17 +388,18 @@ _SPECIMEN_SHARED_ITEMS = frozenset({"wbc", "total_protein", "total_bilirubin", "
 _OTHER_SPECIMEN = re.compile(r"(?:尿|尿中|沈渣|髄液|胸水|腹水)(?:検査)?(?:デ|ノ|ハ)?$")
 _QUALITATIVE_RESULT = re.compile(r"\+")
 # A number followed by a range mark and a digit is one end of a range (2〜4, 4.5から5.0),
-# not a single result of any item.
+# not a single result of any item. The marks are folded forms: ～ and － fold to ~ and -.
 _RANGE_FOLLOWS = re.compile(
-    "(?:" + "|".join(re.escape(fold_surface(m)) for m in ("〜", "～", "~", "ー", "–", "—", "－", "-", "から"))
+    "(?:" + "|".join(re.escape(fold_surface(m)) for m in ("〜", "~", "ー", "–", "—", "-", "から"))
     + ")(?=[0-9])")
 # A clause naming another reading of the same spelling (PT the physical therapist).
 _OTHER_SENSE_CLAUSE = {
     "prothrombin_time": re.compile(r"リハ|理学療法|訓練|歩行|立位|座位|起立|移乗|筋力|tug"),
 }
-# Clause punctuation in folded text; folding drops line breaks, so they are passed
-# separately as hard bounds (folded positions where a source line starts).
-_CLAUSE_END = re.compile(r"[。、;；]")
+# Clause punctuation in folded text (； and ｡ fold to ; and 。); folding drops line
+# breaks, so they are passed separately as hard bounds (folded positions where a
+# source line starts).
+_CLAUSE_END = re.compile(r"[。、;]")
 _DATE = re.compile(r"(?<!\d)(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?(?!\d)")
 
 
@@ -433,7 +434,7 @@ def _clause_at(quote: str, at: int, lines: list[int]) -> str:
 
 
 def _unit_less_reading(analyte: str | None, number: str, quote: str, match: re.Match,
-                       value_end: int, lines: list[int]) -> bool:
+                       lines: list[int]) -> bool:
     """Whether a number quoted without a unit after an item name can be its reading."""
     if analyte in _UNIT_LESS_BANDS:
         band = _UNIT_LESS_BANDS[analyte]
@@ -441,14 +442,15 @@ def _unit_less_reading(analyte: str | None, number: str, quote: str, match: re.M
             return False
     elif analyte is not None:
         return True
-    return not _in_a_dosing_clause(quote, match, value_end, lines)
+    return not _in_a_dosing_clause(quote, match, lines)
 
 
-def _in_a_dosing_clause(quote: str, match: re.Match, value_end: int, lines: list[int]) -> bool:
+def _in_a_dosing_clause(quote: str, match: re.Match, lines: list[int]) -> bool:
     """Whether the clause of an item name, or a cue-only clause next to it, carries a dosing cue."""
     at = match.start("name")
     start, stop = _clause_bounds(quote, at, lines)
-    if _DOSING_CUE.search(quote, start, at) or _DOSING_CUE.search(quote, value_end, stop):
+    # The amount itself is the number a form follows (塩化 カリウム 4 散).
+    if _DOSING_CUE.search(quote, start, at) or _DOSING_CUE.search(quote, match.end("name"), stop):
         return True
     # The clause just before the previous break or just after the next one (same line).
     line = bisect.bisect_right(lines, at)
@@ -621,8 +623,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                 if (_RANGE_FOLLOWS.match(tail, result.end()) or (
                         analyte in _SPECIMEN_SHARED_ITEMS and _QUALITATIVE_RESULT.match(tail, result.end()))):
                     continue
-                if not result[2] and not _unit_less_reading(
-                        analyte, number, quote, match, match.end() + result.end(1), lines):
+                if not result[2] and not _unit_less_reading(analyte, number, quote, match, lines):
                     continue
                 # an omitted unit must not bypass the item's units: the quoted one is checked too;
                 # spellings of one unit (×10^3, ×10³, x10^3) compare by their display form
