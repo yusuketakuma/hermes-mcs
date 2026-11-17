@@ -682,7 +682,7 @@ def _journal_fresh(state):
         return False
     last = max([s.get("at", 0) for s in state.get("stages", [])]
                + [(applying or {}).get("at", 0)])
-    return bool(last) and 0 <= time.time() - last < mcs_recovery_core.STALE_S  # future: clock moved back
+    return bool(last) and abs(time.time() - last) < mcs_recovery_core.STALE_S  # far future: clock moved back
 
 
 def _restore_entered(state):
@@ -800,7 +800,7 @@ def _recover_legacy(if_stale=False):
         except (OSError, ValueError):
             return _hold("provider_editor_lock_invalid", 2)
         if editor_fd is None:
-            return 0                        # an editor is publishing — retry
+            return 2                        # an editor is publishing — retry
         mcs_recovery_core._check_recovery_root()
         state = mcs_recovery_core._load_state()               # fresh view under the locks
         record = not (if_stale and _journal_fresh(state))

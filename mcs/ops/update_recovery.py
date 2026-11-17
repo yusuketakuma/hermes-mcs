@@ -128,7 +128,7 @@ def _journal_is_fresh(state: dict, applying: dict | None) -> bool:
     last = max(
         [s.get("at", 0) for s in state.get("stages", [])]
         + [(applying or {}).get("at", 0)])
-    return bool(last and 0 <= time.time() - last < STALE_S)   # future = clock moved back
+    return bool(last and abs(time.time() - last) < STALE_S)   # far future = clock moved back
 
 
 def _rollback_not_started(state: dict, applying: dict) -> bool:
