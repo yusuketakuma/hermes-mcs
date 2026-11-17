@@ -29,6 +29,7 @@ import pytest
 import mcs_setup
 from test_mcs_update import updater as updater
 from ops_testkit import git_reads_or
+from mcs_setup_testkit import _serve_config
 
 
 def _prepare_recovery_helper():
@@ -243,7 +244,7 @@ def test_services_runtime_gate_precedes_all_mutation(
     monkeypatch.setattr(os, "getuid", lambda: real_uid)
     args.dry_run = dry
     cfg = {"runtime_mode": mode}
-    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: cfg if path is None else {})
+    _serve_config(monkeypatch, cfg)
     monkeypatch.setattr(service_management, 'standalone_py_problem', lambda cfg, **_service_kwargs: None)
     recovery = _deployed_recovery(monkeypatch, tmp_path)
     selected = service_management.selected_python(cfg, paths=mcs_setup._service_paths())
@@ -456,7 +457,7 @@ def test_services_repairs_owned_unsafe_selection_without_autoenabling(
             "ProgramArguments": _recovery_args(old, helper)}))
     desired = str(tmp_path / "independent-python")
     cfg = {"recovery_python": desired}
-    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: cfg if path is None else {})
+    _serve_config(monkeypatch, cfg)
     monkeypatch.setattr(runtime_inspection, "probe_python",
                         lambda exe: _facts(sqlite="3.51.0") if exe == old else _facts())
     state = {"loaded": loaded}
@@ -523,7 +524,7 @@ def test_services_missing_log_helper_keeps_existing_services_before_mutation(
     args.dry_run = dry
     monkeypatch.setattr(mcs_setup, "RECOVERY_DIR", str(tmp_path.resolve() / "missing-recovery"))
     cfg = {"runtime_mode": mode}
-    monkeypatch.setattr(mcs_util, "load_config", lambda path=None: cfg if path is None else {})
+    _serve_config(monkeypatch, cfg)
     monkeypatch.setattr(service_management, "standalone_py_problem", lambda *a, **k: None)
     monkeypatch.setattr(service_management, "runtime_gate_errors", lambda *a, **k: [])
     # Planning can calculate the immutable destination without creating it.
@@ -635,7 +636,7 @@ def test_bad_desired_service_selection_blocks_before_any_write(monkeypatch, tmp_
     monkeypatch.setattr(os, "getuid", lambda: real_uid)
     desired = str(tmp_path / "independent-python")
     cfg = {"recovery_python": desired}
-    monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: cfg if path is None else {})
+    _serve_config(monkeypatch, cfg)
     monkeypatch.setattr(runtime_inspection, "probe_python",
                         lambda exe: facts if exe == desired else _facts())
     before = _tree(tmp_path)
@@ -734,8 +735,7 @@ def test_services_rejects_nonobject_recovery_plist_without_mutation(
                             promote=True)
     path.write_bytes(plistlib.dumps(plist))
     cfg = {"recovery_python": str(tmp_path / "independent-python")}
-    monkeypatch.setattr(mcs_util, 'load_config',
-                        lambda path=None: cfg if path is None else {})
+    _serve_config(monkeypatch, cfg)
     before = _tree(tmp_path)
     assert mcs_setup.cmd_services(args) == 1
     assert not service_management.recovery_owned(paths=mcs_setup._service_paths())

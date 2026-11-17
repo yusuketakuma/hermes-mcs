@@ -68,6 +68,8 @@ def test_supplemental_summary_is_fully_chunked_and_separate_from_original(runtim
     assert len(calls) > 1
     pages = [page for call in calls for page in call["derived_summaries"]]
     assert "".join(page["text"] for page in pages) == text
+    # Pages carry the kind and text the source signature binds, never the artifact.
+    assert all(set(page) == {"kind", "text", "span", "length"} for page in pages)
     assert [page["span"][0] for page in pages] == [
         sum(len(prior["text"]) for prior in pages[:index]) for index in range(len(pages))]
 

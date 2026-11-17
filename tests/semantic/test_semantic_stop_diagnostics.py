@@ -80,7 +80,10 @@ def test_empty_repair_first_failed_gate_is_read_only(empty_candidate, where, key
     assert diag['code'] in cloud_backlog._SEMANTIC_STOP_REASONS
     assert observed == calls
     assert db.total_changes == before
-    assert len(statements) == 2 and all(s.startswith('SELECT ') for s in statements)
+    # past the marker gates, a candidate linked to the marker gets one more
+    # read: a committed result of it
+    expected = 2 if (where == 'marker' and key != 'repair_count') or key == 'repair_artifact_id' else 3
+    assert len(statements) == expected and all(s.startswith('SELECT ') for s in statements)
     assert 'synthetic-private-detail' not in json.dumps(diag)
 
 
@@ -113,6 +116,36 @@ def test_empty_recovery_preserves_legacy_tuple_and_does_not_report_failure(empty
     assert diag == {} and db.total_changes == before
     assert calls == ['producer', 'binding', 'prior', 'proof']
     assert summary._empty_repair_candidate(db, 1, 1, 'fp', 'policy', 'revision', 'assist', []) == (recovered, True)
+
+
+@pytest.mark.parametrize('tamper', [None, 'claims', 'before_candidate', 'pending', 'no_repair',
+                                    'summary_hash', 'policy'])
+def test_committed_empty_repair_result_reserves_nothing(empty_candidate, tamper):
+    """A final result committed from the candidate releases it; anything less keeps it held."""
+    db, content, meta, _, calls, seed = empty_candidate
+    stale = copy.deepcopy(meta)
+    stale['prior'] = ['earlier-result']          # the committed result changed the prior pair
+    seed(content, stale)
+    stored = dict(content, claims=[{'synthetic': 'other'}]) if tamper == 'claims' else content
+    status = 'PENDING' if tamper == 'pending' else 'PASS'
+    audit = {'status': status, 'findings': [], 'target_message_id': 1}
+    audit_meta = {VERSION_KEY: CURRENT_VERSION, 'fingerprint': 'fp',
+                  'policy_fingerprint': 'other' if tamper == 'policy' else 'policy',
+                  'audit_status': status, 'repair_count': 0 if tamper == 'no_repair' else 1,
+                  'summary_artifact_id': 0 if tamper == 'before_candidate' else 3,
+                  'summary_hash': 'invalid' if tamper == 'summary_hash' else summary.mcs_util.payload_hash(stored)}
+    db.execute('INSERT INTO artifacts VALUES (0,?,1,1,?,?)', (summary.KIND_SUMMARY, json.dumps(stored), '{}'))
+    db.execute('INSERT INTO artifacts VALUES (3,?,1,1,?,?)', (summary.KIND_SUMMARY, json.dumps(stored), '{}'))
+    db.execute('INSERT INTO artifacts VALUES (4,?,1,1,?,?)',
+               (summary.KIND_AUDIT, json.dumps(audit), json.dumps(audit_meta)))
+    db.commit()
+    diag = {}
+    result = summary._empty_repair_candidate(db, 1, 1, 'fp', 'policy', 'revision', 'assist', [],
+                                             reason_out=diag)
+    if tamper is None:
+        assert result == (None, False) and diag == {'code': 'empty_repair_consumed'}
+    else:
+        assert result == (None, True) and diag == {'code': 'empty_repair_prior_unverified'}
 
 
 def test_empty_validation_exception_hides_error_text():

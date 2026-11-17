@@ -109,3 +109,24 @@ def leaf_evidence(value):
             or len(set(names)) != len(names) or (complete and not names)):
         return None
     return provider_evidence(names, complete)
+
+
+def cloud_produced(proof):
+    """A complete producer proof naming only cloud providers; it is bound by its own contract."""
+    import cloud_policy
+    names = proof.get("providers") if isinstance(proof, dict) else None
+    return (isinstance(names, list) and bool(names) and proof.get("complete") is True
+            and all(isinstance(name, str) and name in cloud_policy.PROVIDERS for name in names))
+
+
+def local_producer_current(proof, row_model, local_model):
+    """Apply the route_accepts rule to a stored producer proof.
+
+    A cloud-produced result keeps its identity when only the local model
+    changes; anything else (local, mixed, incomplete or unproven) stays
+    current only for the local model that wrote its row. A row that never
+    recorded a model keeps its earlier, fingerprint-only identity, so this
+    rule alone invalidates nothing that was current before it."""
+    if cloud_produced(proof) or row_model is None or row_model == "":
+        return True
+    return isinstance(row_model, str) and row_model == local_model

@@ -1,0 +1,29 @@
+{
+  "category": "added",
+  "title": "患者コンテキストを消去して作り直す人承認コマンドを追加",
+  "summary": "患者コンテキストの公開版・調査結果・品質判定・生成枠と、その外部AIの会計記録を、人の確認と記録を伴って消去できるようにしました（cloud-llm context-reset-plan・context-reset）。消去の前にバックアップを取ります。使った額は引き継ぎ、上限判定と使用額の表示は消去の前と同じ額を数え続けます。",
+  "upgrade": "追加操作は不要です。実行する場合は、設定で extract.patient_context.enabled を false にし、cloud-llm stop で送信を止め、cloud-llm estimate で作り直しの見積りを取ってから context-reset-plan を実行し、表示された preview_hash を context-reset に渡してください。終わったら enabled を戻し、cloud-llm resume で再開します。消去後は、結果が分からないまま残っていた患者コンテキストの送信と同じ内容を、作り直しで改めて送ることがあります（context-reset-plan の unsettled_reservations が件数です）。",
+  "details": [
+    "公開中の患者コンテキストはすぐ表示されなくなり、送信を再開すると通常の処理で作り直します。",
+    "再抽出・意味解析・添付OCRの会計記録と、通知カードの表示記録は消しません。",
+    "新モジュール mcs/patients/patient_context_reset.py が、前提条件・消去・使用額の引き継ぎ・Jev 使用記録の整理を受け持ちます。人承認の操作 ops.patient_context_reset として登録しました。",
+    "引き継ぎ記録 cloud_usage_carryover_v1 を集計に加えました。日・期間予算の開始時刻の前後・提供元・精算の別に合計するので、1日の途中から始まる期間予算も消去の前と同じ額を数えます。記録が増減すると集計を作り直し、壊れていれば送信を止めます。",
+    "消去は1つのセーブポイントの中で行い、前後で使用額の報告が一致しなければ取り消します。",
+    "local_backup.reset_backup が patient-context-reset-*.db を作ります。自動のバックアップ整理では削除しません。mcs_local_backup.py の list・list --verify・restore で、日次・更新前のバックアップと同じように確認・復元できます。",
+    "context-reset はバックアップの前に前提と同じ command-id の記録を確認し、拒否された消去のバックアップは削除します。確認の読取りが上限に達したときは read_incomplete と表示します。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_reset.py",
+    "mcs/llm/cloud_policy.py",
+    "mcs/llm/cloud_usage_accounting.py",
+    "mcs/core/maintenance.py",
+    "mcs/ops/cloud_cli.py",
+    "mcs/ops/commands/operation_contract.py",
+    "mcs/ops/commands/mcs_requests.py",
+    "mcs/ops/commands/mcs_operations.py",
+    "tests/patients/test_patient_context_reset.py",
+    "tests/llm/test_cloud_usage_carryover.py",
+    "mcs/core/local_backup.py",
+    "mcs/ops/mcs_local_backup.py"
+  ]
+}

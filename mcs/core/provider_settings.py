@@ -326,16 +326,6 @@ def _must_be_absent(parent, name):
     raise ValueError("provider_settings_changed")
 
 
-def is_canonical_config(path, root):
-    """Match only the fixed absolute config path; actual reads still verify links."""
-    try:
-        path, root = os.fspath(path), os.fspath(root)
-        return (isinstance(path, str) and isinstance(root, str) and os.path.isabs(path)
-                and os.path.isabs(root) and os.path.normpath(path) == os.path.join(os.path.normpath(root), "config.json"))
-    except TypeError:
-        return False
-
-
 def _config_presence(root_fd):
     try:
         info = os.stat("config.json", dir_fd=root_fd, follow_symlinks=False)

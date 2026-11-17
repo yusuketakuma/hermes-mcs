@@ -5,10 +5,10 @@ import copy
 import json
 
 import attachment_ocr
+import attachment_extraction
 import attachment_feedback
 import extract_llm
 import extract_validation
-import local_llm
 from mcs_util import payload_hash
 
 KIND = 'attachment_inference_checkpoint_v1'
@@ -47,12 +47,18 @@ def validated_leaf(value, source, piece):
     return leaf
 
 
+def _identity(source, cfg, *, contract):
+    """One OCR occurrence, extraction token and local model: leaves never cross models."""
+    return {'schema': SCHEMA, 'source_key': source['source_key'],
+        'source_binding': source['_source_binding'], 'contract': contract(cfg),
+        'plan': extract_llm.PLAN_VERSION, 'chunk_size': extract_llm._CHUNK_SIZE,
+        'model': attachment_extraction.local_model(cfg)}
+
+
 def local_checkpoints(ledger, source, cfg, *, contract, write):
     """Bind resumable local leaves and split paths to one exact OCR occurrence."""
     size = extract_llm._CHUNK_SIZE
-    identity = {'schema': SCHEMA, 'source_key': source['source_key'],
-        'source_binding': source['_source_binding'], 'contract': contract(cfg),
-        'plan': extract_llm.PLAN_VERSION, 'chunk_size': size}
+    identity = _identity(source, cfg, contract=contract)
     records = {}
     for row in ledger.db.execute("SELECT CASE WHEN typeof(content)='text' AND length(content)<=4194304 "
             "THEN content END FROM artifacts WHERE kind=? AND project_id=? AND artifact_id>? "
@@ -110,7 +116,7 @@ def local_checkpoints(ledger, source, cfg, *, contract, write):
             with ledger.db:
                 ledger.artifact_add_tx(KIND, json.dumps(raw, ensure_ascii=False),
                     project_id=source['project_id'], message_id=source['parent_message_id'],
-                    model=local_llm.resolve(cfg)[1],
+                    model=identity['model'],
                     meta={'source_key': source['source_key'], 'binding': payload_hash(identity)})
             return True
         if not write(save):

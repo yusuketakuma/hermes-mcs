@@ -137,7 +137,7 @@ def test_quality_identity_binds_actual_body_and_revision_not_just_stored_hash(tm
         selected, _, state, facts, quality_state = patient_context_refresh_sources._all_facts(
             led.db, 1, snapshot, '2026-10-27', include_all=True)
         assert facts
-        summary = [{'text': refresh.context_plan.summary_text(selected[0]), 'fact_ids': [selected[0]['id']]}]
+        summary = [{'text': refresh.context_selection.summary_text(selected[0]), 'fact_ids': [selected[0]['id']]}]
         original = patient_context_refresh_sources._quality_input(led.db, 1, snapshot, facts, quality_state, summary, {'model': 'synthetic'}, state)
         changed = {**source, 'body_text': source['body_text'] + '\n\n別の合成追記。'}
         changed_snapshot = {**snapshot, 'sources': [changed]}
@@ -175,7 +175,7 @@ def test_quality_identity_includes_fact_outside_selection_cap(tmp_path):
         selected, total, state, all_facts, quality_state = patient_context_refresh_sources._all_facts(
             led.db, 1, snapshot, '2026-10-27', include_all=True)
         assert total == len(all_facts) == 257 and len(selected) == 256
-        summary = [{'text': refresh.context_plan.summary_text(selected[0]), 'fact_ids': [selected[0]['id']]}]
+        summary = [{'text': refresh.context_selection.summary_text(selected[0]), 'fact_ids': [selected[0]['id']]}]
         queries = []
         led.db.set_trace_callback(queries.append)
         try:
@@ -201,7 +201,7 @@ def test_quality_audit_binds_display_order_but_failure_identity_does_not(tmp_pat
         selected, _, state, all_facts, quality_state = patient_context_refresh_sources._all_facts(
             led.db, 1, snapshot, '2026-10-27', include_all=True)
         assert len(selected) == len(all_facts) == 2
-        summary = [{'text': refresh.context_plan.summary_text(fact), 'fact_ids': [fact['id']]}
+        summary = [{'text': refresh.context_selection.summary_text(fact), 'fact_ids': [fact['id']]}
                    for fact in selected]
         first = patient_context_refresh_sources._quality_input(led.db, 1, snapshot, all_facts, quality_state, summary,
                                        {'model': 'synthetic'}, state)
@@ -231,7 +231,7 @@ def test_quality_denominator_keeps_historical_karte(tmp_path):
             led.db, 1, snapshot, '2026-10-27', include_all=True)
         assert total == len(selected) == 1 and len(all_facts) == 2
         assert sum(bool(fact.get('historical')) for fact in all_facts) == 1
-        summary = [{'text': refresh.context_plan.summary_text(selected[0]), 'fact_ids': [selected[0]['id']]}]
+        summary = [{'text': refresh.context_selection.summary_text(selected[0]), 'fact_ids': [selected[0]['id']]}]
         identity = patient_context_refresh_sources._quality_input(led.db, 1, snapshot, all_facts, quality_state, summary,
                                           {'model': 'synthetic'}, state)
         assert len(identity['fact_ids']) == 2
@@ -498,7 +498,7 @@ def test_requested_cloud_with_missing_key_falls_back_to_local(runtime, monkeypat
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: None)
     result = refresh.run_due(led, cfg, deadline=runtime[1].mono + 600, admit=lambda: True)
     assert result['status'] == 'progressed' and local_calls
-    assert patient_context_refresh_state._contract(cfg, 1).get('provider') == cloud_inference.cloud_provider_contract()
+    assert patient_context_refresh_state._route(cfg, 1)['provider'] == cloud_inference.cloud_provider_contract()
     for _ in range(60):
         result = step(runtime, cfg=cfg)
         if result['status'] == 'complete':
@@ -783,6 +783,7 @@ def test_unknown_after_send_spends_repair_and_does_not_retry(repair):
 def test_summary_repair_reservation_refusal_keeps_both_allowances_unspent(repair, monkeypatch, refusal):
     from contextlib import nullcontext
     led, run, _, _, sent, _, _ = repair
+    sleeps = []
     with monkeypatch.context() as limited:
         if refusal == 'capacity':
             limited.setattr(worker.cloud_backlog, 'request_slot', lambda *_: nullcontext(False))
@@ -791,12 +792,16 @@ def test_summary_repair_reservation_refusal_keeps_both_allowances_unspent(repair
                             lambda owner, *_args, **_kwargs: 'daily_cap' if owner.db.in_transaction else None)
         elif refusal == 'run_lock':
             limited.setattr(patient_context_refresh_state, 'acquire_run_lock', lambda: None)
+            # The production wait sleeps one second per retry; count the retries instead.
+            limited.setattr(patient_context_refresh_state.time, 'sleep', lambda s: sleeps.append(s), raising=False)
         else:
             led.db.execute("CREATE TRIGGER synthetic_repair_failure AFTER INSERT ON artifacts "
                            "WHEN NEW.kind='patient_context_summary_quality_repair_v1' "
                            "BEGIN SELECT RAISE(ABORT,'synthetic reservation abort'); END")
             led.db.commit()
         assert run() == ('deferred', None) and not sent
+        # run_lock defers only after the whole retry loop, not through the deadline return.
+        assert len(sleeps) == (patient_context_quality_receipts._QUALITY_LOCK_WAIT_S if refusal == 'run_lock' else 0)
         assert not led.db.in_transaction
         assert not led.artifacts(patient_context_refresh_state.QUALITY_REPAIR, project_id=1)
         assert not led.artifacts('cloud_usage_reserve', project_id=1)

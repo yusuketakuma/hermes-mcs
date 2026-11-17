@@ -3,6 +3,7 @@ from __future__ import annotations
 import mcs_util
 import semantic_audit
 import semantic_render
+import semantic_store
 import semantic_transport
 import json
 import hashlib
@@ -142,9 +143,7 @@ def _summarize_observed(*args, **kwargs):
 
 def _claim_input_binding(pid, mid, fp, policy, revision, summary, facts):
     """Bind the exact claims and evidence supplied to the claim audit."""
-    return mcs_util.payload_hash({"project_id": pid, "message_id": mid, "fingerprint": fp,
-                                  "policy": policy, "revision": revision,
-                                  "claims": summary.get("claims"), "facts": facts})
+    return semantic_store.claim_input_binding(pid, mid, fp, policy, revision, summary, facts)
 
 
 def _summary_repair_pending(db, bundle, summary, evidence, fp, policy, revision, *, completed_id):
@@ -372,15 +371,49 @@ def _empty_repair_prior(db, pid, mid):
     return refs
 
 
-def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, reason_out=None):
-    """Recover only the latest source-bound, reserved empty repair candidate."""
+def _empty_repair_consumed(db, pid, mid, fp, policy, candidate_id, content) -> bool:
+    """Whether a final result of this empty-repair candidate was committed after it.
+
+    Proof is a PASS/NEEDS_REVIEW audit written after the candidate, counting
+    the one repair, for this input and policy, paired (by id and hash) with a
+    summary written after the candidate that has the candidate's claims."""
+    for audit in db.execute('SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? '
+                            'AND message_id=? AND artifact_id>? ORDER BY artifact_id DESC',
+                            (KIND_AUDIT, pid, mid, candidate_id)):
+        audit_content, meta = strict_json(audit['content']), strict_json(audit['meta'])
+        if (not isinstance(audit_content, dict) or not isinstance(meta, dict) or not is_current(meta)
+                or meta.get('fingerprint') != fp or meta.get('policy_fingerprint') != policy
+                or meta.get('repair_count') != 1 or audit_content.get('status') not in ('PASS', 'NEEDS_REVIEW')
+                or meta.get('audit_status') != audit_content['status']
+                or type(meta.get('summary_artifact_id')) is not int or meta['summary_artifact_id'] <= candidate_id):
+            continue
+        summary = db.execute('SELECT content FROM artifacts WHERE artifact_id=? AND kind=? AND project_id=? '
+                             'AND message_id=?', (meta['summary_artifact_id'], KIND_SUMMARY, pid, mid)).fetchone()
+        summary = strict_json(summary['content']) if summary is not None else None
+        if (isinstance(summary, dict) and meta.get('summary_hash') == mcs_util.payload_hash(summary)
+                and summary.get('claims') == content.get('claims')):
+            return True
+    return False
+
+
+def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, reason_out=None,
+                            fact_kind=None):
+    """Recover only the latest source-bound, reserved empty repair candidate.
+
+    A reservation reserves nothing once its result was committed (the
+    summary is later dropped, e.g. over another fact document or a redone
+    local model) and, with ``fact_kind``, when it was made before the
+    current facts were written (a local model change redid them) and its
+    candidate is not bound to them. The target then takes the ordinary
+    path; the spent repair stays recorded on its marker, so it is neither
+    refunded nor repeated and nothing is published without a new audit."""
     def held(reason, reserved=True):
         if reason_out is not None:
             reason_out['code'] = reason
         return None, reserved
 
     try:
-        row = db.execute('SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? '
+        row = db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? '
                          'AND message_id=? ORDER BY artifact_id DESC LIMIT 1',
                          (KIND_CANDIDATE, pid, mid)).fetchone()
         content, meta = (strict_json(row['content']), strict_json(row['meta'])) if row else (None, None)
@@ -400,6 +433,16 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
             return held('empty_repair_marker_binding', candidate_bound)
         if not is_current(marker_meta) or marker_meta.get('invalidated') or marker_meta.get('stale'):
             return held('empty_repair_marker_currentness')
+        if (candidate_bound and isinstance(content, dict) and type(meta.get('repair_artifact_id')) is int
+                and meta['repair_artifact_id'] == marker['artifact_id']
+                and _empty_repair_consumed(db, pid, mid, fp, policy, row['artifact_id'], content)):
+            return held('empty_repair_consumed', False)
+        if (fact_kind is not None
+                and semantic_store.facts_rewritten_after(db, fact_kind, mid, fp, marker['artifact_id'])
+                and not (candidate_bound and isinstance(content, dict)
+                         and meta.get('claim_input_binding') == _claim_input_binding(
+                    pid, mid, fp, policy, revision, content, facts))):
+            return held('empty_repair_over_earlier_facts', False)
         if row is None:
             return held('empty_repair_candidate_missing')
         if not isinstance(content, dict) or not isinstance(meta, dict):
@@ -566,8 +609,7 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
     skip_meta = {}
     if final_status == "SKIPPED":
         reason = r.get("jev_skip_reason")
-        if reason not in {"not_configured", "daily_budget", "backlog_reserved", "disabled",
-                          "service_unavailable", "circuit_open"}:
+        if reason not in jev.SKIP_REASONS:
             raise ValueError("semantic_skip_reason_invalid")
         skip_meta = {"jev_skip_reason": reason, "jev_evaluated": False,
                      "code_checks": "passed", "summary_hash": mcs_util.payload_hash(summary)}

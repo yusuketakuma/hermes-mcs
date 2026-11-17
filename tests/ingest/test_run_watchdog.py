@@ -8,6 +8,7 @@ import sys
 
 import pytest
 import run_check
+import run_interrupt
 from ledger import Ledger
 
 
@@ -16,20 +17,26 @@ def test_watchdog_exits_wedged_child_with_a_bounded_parent_timeout(tmp_path):
     assert isinstance(module_file, str)
     source = str(Path(module_file).resolve().parent)
     database = tmp_path / "synthetic.db"
+    data = tmp_path / "data"
+    data.mkdir()
+    # the same order as run_check.main: evidence, watchdog, begin_run, bind
     script = (
         "import sys,time,threading\n"
         f"sys.path.insert(0,{source!r})\n"
-        "import run_check\n"
+        "import run_check,run_interrupt\n"
         "from ledger import Ledger\n"
+        "ev=run_interrupt.open_evidence(sys.argv[2],boot_time=lambda:None)\n"
+        "assert ev is not None\n"
+        "run_check._arm_watchdog(time.monotonic(),1,ev)\n"
         "db=Ledger(sys.argv[1])\n"
-        "db.begin_run(None)\n"
-        "run_check._arm_watchdog(time.monotonic(),1)\n"
+        "rid=db.begin_run(None)\n"
+        "ev.bind(rid,db.db.execute('SELECT started_at FROM runs WHERE run_id=?',(rid,)).fetchone()[0])\n"
         "print('ARMED',flush=True)\n"
         "threading.Event().wait()\n")
     # Interpreter start and Ledger setup are not under test and slow down under
     # suite load; the parent bound starts once the child reports it is armed.
     with subprocess.Popen(
-            [sys.executable, "-c", script, str(database)],
+            [sys.executable, "-c", script, str(database), str(data)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             env={**os.environ, "HOME": str(tmp_path), "MCS_ROOT": str(tmp_path)}) as child:
         try:
@@ -46,11 +53,16 @@ def test_watchdog_exits_wedged_child_with_a_bounded_parent_timeout(tmp_path):
                 child.kill()
     assert stdout.strip() == ""
     assert child.returncode != 0
-    assert stderr
+    dumps = list((data / run_interrupt.DIR_NAME).glob("*.dump"))
+    assert len(dumps) == 1 and dumps[0].read_bytes().startswith(run_interrupt.DUMP_PREFIX)
     db = Ledger(str(database))
     try:
-        db.begin_run(None)
-        assert db.db.execute("SELECT status FROM runs ORDER BY run_id").fetchall()[0][0] == "crashed"
+        interrupt = run_interrupt.Classifier(str(data), boot_time=lambda: None)
+        db.begin_run(None, interrupt_reason=interrupt)
+        assert tuple(db.db.execute(
+            "SELECT status,error FROM runs ORDER BY run_id").fetchall()[0]) == (
+            "crashed", "watchdog_exit")
+        assert interrupt.transcripts and interrupt.transcripts[0][1].startswith(b"Timeout (")
     finally:
         db.close()
 
@@ -77,7 +89,7 @@ def test_watchdog_covers_ledger_initialization_and_cleans_up_on_failure(
     monkeypatch.setattr(run_check, "MCSAdapter",
                         lambda **kwargs: SimpleNamespace(set_deadline=lambda _: None))
     monkeypatch.setattr(run_check, "_arm_watchdog",
-                        lambda deadline, grace: events.append(("armed", grace)))
+                        lambda deadline, grace, evidence=None: events.append(("armed", grace)))
     monkeypatch.setattr(faulthandler, "cancel_dump_traceback_later",
                         lambda: events.append(("cancelled", None)))
     def fail(*args, **kwargs):

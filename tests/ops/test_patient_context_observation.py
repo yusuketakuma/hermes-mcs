@@ -2,8 +2,6 @@
 import json
 import time
 
-import pytest
-
 import extract_llm
 import patient_context_refresh as context
 from extract_testkit import _hash, _ledger, _message
@@ -71,25 +69,38 @@ def test_large_pending_corpus_uses_fewer_sql_steps(tmp_path):
     ledger.close()
 
 
-def test_lane_counts_exclude_archived_and_reject_invalid_current_json(tmp_path):
+def test_lane_counts_exclude_archived_and_count_invalid_current_json(tmp_path):
     ledger = _ledger(tmp_path)
     db = ledger.db
     db.executemany("INSERT INTO patients(project_id,patient_name,is_archived) VALUES (?,'synthetic',?)", [(1, 0), (2, 1)])
     meta = {VERSION_KEY: CURRENT_VERSION, 'published': True}
     for pid in (1, 2):
         ledger.artifact_add(context.PROGRESS, json.dumps({'failure': 'patient_context_length_stop'}), project_id=pid, meta=meta)
-        ledger.artifact_add(context.SCAN, json.dumps({'complete': True, 'split': 1, 'repairs': 1}), project_id=pid, meta=meta)
+        ledger.artifact_add(context.SCAN, json.dumps({'complete': True, 'split': 1, 'repairs': 1}), project_id=pid,
+                            meta={**meta, 'source_key': 1})
         ledger.artifact_add(context.KIND, '{}', project_id=pid, meta=meta)
+    expected = context.lane_metrics(db)
+    assert expected['published'] == 1 and expected['invalid_rows'] == 0
+    assert expected['lanes']['A']['length_stop'] == 1
+    assert expected['lanes']['B']['split'] == expected['lanes']['B']['repair'] == 1
+    assert expected['quality'] == {'none': 1, 'pending': 0, 'deferred': 0, 'held': 0,
+                                   'failed': 0, 'unavailable': 0, 'unknown': 0,
+                                   'budget': 0, 'disabled': 0, 'other': 0}
+    # Malformed latest rows of other sources (and an archived patient's) are counted, never raised.
+    for key, content in ((2, '{'), (3, '[1]'), (4, '"synthetic"')):
+        ledger.artifact_add(context.SCAN, content, project_id=1, meta={**meta, 'source_key': key})
+    ledger.artifact_add(context.SCAN, '{', project_id=2, meta={**meta, 'source_key': 2})
     result = context.lane_metrics(db)
-    assert result['published'] == 1
-    assert result['lanes']['A']['length_stop'] == 1
-    assert result['lanes']['B']['split'] == result['lanes']['B']['repair'] == 1
-    assert result['quality'] == {'none': 1, 'pending': 0, 'deferred': 0, 'held': 0,
-                               'failed': 0, 'unavailable': 0, 'unknown': 0,
-                               'budget': 0, 'disabled': 0, 'other': 0}
-    ledger.artifact_add(context.SCAN, '{', project_id=1, meta=meta)
-    with pytest.raises(ValueError, match='invalid patient context observation'):
-        context.lane_metrics(db)
+    assert result['invalid_rows'] == 3
+    assert {k: result[k] for k in ('lanes', 'published', 'quality')} == {
+        k: expected[k] for k in ('lanes', 'published', 'quality')}
+    # A malformed newer row of the same source supersedes the valid one: invalid, not quality none.
+    ledger.artifact_add(context.SCAN, '[]', project_id=1, meta={**meta, 'source_key': 1})
+    result = context.lane_metrics(db)
+    assert result['invalid_rows'] == 4
+    assert result['lanes']['B']['split'] == result['lanes']['B']['repair'] == 0
+    assert sum(result['quality'].values()) == 0
+    assert result['lanes']['A'] == expected['lanes']['A']
     ledger.close()
 
 
@@ -118,4 +129,38 @@ def test_lane_quality_counts_group_scan_states_and_supersede(tmp_path):
     assert result['quality']['none'] == 1
     assert result['quality']['held'] == result['quality']['failed'] == 0
     assert sum(v for k, v in result['quality'].items() if k != 'other') == 3
+    ledger.close()
+
+
+def test_health_patient_context_records_invalid_rows_and_recomputes_old_cache(tmp_path, monkeypatch):
+    import health_report
+    ledger = _ledger(tmp_path)
+    db = ledger.db
+    db.execute("INSERT INTO patients(project_id,patient_name) VALUES (1,'synthetic')")
+    meta = {VERSION_KEY: CURRENT_VERSION}
+    ledger.artifact_add(context.SCAN, '{', project_id=1, meta={**meta, 'source_key': 1})
+    now = time.time()
+    # A cached reading from before invalid_rows existed is recomputed, not reused.
+    old = {'status': 'recorded', 'observed_at': now, 'source': 'synthetic',
+           'extract_version': extract_llm.EXTRACT_VERSION, 'published': 0, 'active_patients': 1,
+           'extraction_complete': 0, 'focus_eligible': 0, 'focus_targets': 0}
+    monkeypatch.setattr(health_report, 'prev_health', lambda: {'patient_context': old})
+    result = health_report.patient_context_health(db, None, now, 'synthetic')
+    assert result['status'] == 'recorded' and result['invalid_rows'] == 1
+    ledger.close()
+
+
+def test_doctor_states_warn_on_the_rows_lane_metrics_counts_invalid(tmp_path):
+    """health.json's invalid_rows and doctor's states.invalid_rows see the same latest rows."""
+    import patient_context_status
+    ledger = _ledger(tmp_path)
+    db = ledger.db
+    db.execute("INSERT INTO patients(project_id,patient_name) VALUES (1,'synthetic')")
+    meta = {VERSION_KEY: CURRENT_VERSION}
+    ledger.artifact_add(context.PROGRESS, '[1]', project_id=1, meta=meta)
+    for key, content in ((1, '{'), (2, '"synthetic"')):
+        ledger.artifact_add(context.SCAN, content, project_id=1, meta={**meta, 'source_key': key})
+    assert context.lane_metrics(db)['invalid_rows'] == 3
+    states = patient_context_status.sanitize(patient_context_status.state_counts(db))
+    assert states['invalid_rows'] == 3 and patient_context_status.has_problem(states)
     ledger.close()

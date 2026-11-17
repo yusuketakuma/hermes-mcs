@@ -85,6 +85,21 @@ def test_skipped_test_evidence_fails_unless_macos_on_a_docs_only_change():
     assert ac.decide_gate(_pr(), skipped_mac, CODE, 0, True)["state"] == "failure"
 
 
+def test_matrix_legs_of_the_test_jobs_count_as_evidence():
+    legs = _green() + [_run("pytest-linux (1)"), _run("pytest-linux (2)"), _run("pytest-macos (1)")]
+    assert ac.decide_gate(_pr(), legs, CODE, 0, True)["state"] == "success"
+    one_failed = legs + [_run("pytest-linux (3)", "failure")]
+    assert ac.decide_gate(_pr(), one_failed, CODE, 0, True)["state"] == "failure"
+    running = _green() + [_run("pytest-linux (1)", None, status="in_progress")]
+    assert ac.decide_gate(_pr(), running, CODE, 0, True)["state"] == "pending"
+    skipped_mac = _green() + [_run("pytest-linux (1)"), _run("pytest-macos (1)", "skipped")]
+    assert ac.decide_gate(_pr(), skipped_mac, DOC, 0, True)["state"] == "success"
+    assert ac.decide_gate(_pr(), skipped_mac, CODE, 0, True)["state"] == "failure"
+    # a job whose name merely starts with the same letters is not a leg
+    other = _green() + [_run("pytest-linux-extra", "failure")]
+    assert ac.decide_gate(_pr(), other, CODE, 0, True)["state"] == "success"
+
+
 def test_kill_switch_refuses_agent_branches_only():
     assert ac.decide_gate(_pr(), _green(), CODE, 0, False)["state"] == "failure"
     human = _pr(branch="claude/project-thread-abc")

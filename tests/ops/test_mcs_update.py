@@ -509,6 +509,53 @@ def test_scan_pending_newest_tag_and_veto(updater, tmp_path):
     assert set(dict(consumed).values()) == {"vetoed"}
 
 
+def test_scan_veto_follows_commit_order_when_the_clock_moved_backward(updater, tmp_path):
+    """A rollback committed after an apply vetoes it even with an earlier processed_at."""
+    db = tmp_path / "ledger.db"
+    con = _receipts_db(db)
+    sha = "a" * 40
+    rows = [
+        ("cid-apply", _rec("cid-apply", "ops.update_apply", 200,
+                           tag="v1.2.0", target_sha=sha, base_sha=sha), 200),
+        ("cid-rb", _rec("cid-rb", "ops.update_rollback", 100), 100),
+    ]
+    con.executemany(
+        "INSERT INTO command_receipts VALUES(?,?,NULL,NULL,'applied',?,?)",
+        [(c, "h" * 64, j, t) for c, j, t in rows])
+    con.commit()
+    con.close()
+    updater.LEDGER = str(db)
+    cand, consumed = updater.scan_pending_approvals(
+        updater.journal_store.default_state())
+    assert [c["command_id"] for c in cand] == ["cid-rb"]
+    assert dict(consumed) == {"cid-apply": "vetoed"}
+
+
+def test_scan_newest_same_tag_and_order_follow_commit_order(updater, tmp_path):
+    """Same-tag choice and execution order use the insert order, not processed_at."""
+    db = tmp_path / "ledger.db"
+    con = _receipts_db(db)
+    sha = "a" * 40
+    rows = [
+        ("cid-rb", _rec("cid-rb", "ops.update_rollback", 300), 300),
+        ("cid-first", _rec("cid-first", "ops.update_apply", 200,
+                           tag="v1.2.0", target_sha=sha, base_sha=sha), 200),
+        ("cid-later", _rec("cid-later", "ops.update_apply", 100,
+                           tag="v1.2.0", target_sha=sha, base_sha=sha), 100),
+    ]
+    con.executemany(
+        "INSERT INTO command_receipts VALUES(?,?,NULL,NULL,'applied',?,?)",
+        [(c, "h" * 64, j, t) for c, j, t in rows])
+    con.commit()
+    con.close()
+    updater.LEDGER = str(db)
+    cand, consumed = updater.scan_pending_approvals(
+        updater.journal_store.default_state())
+    # both applies were recorded after the rollback, so it vetoes neither
+    assert [c["command_id"] for c in cand] == ["cid-rb", "cid-later"]
+    assert dict(consumed) == {"cid-first": "superseded"}
+
+
 def test_scan_pending_supersede(updater, tmp_path):
     db = tmp_path / "ledger.db"
     con = _receipts_db(db)

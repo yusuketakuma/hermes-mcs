@@ -23,7 +23,7 @@ import extract_llm as worker
 import cloud_inference
 import patient_context_refresh as context_refresh
 from extract_testkit import _message
-from test_patient_context_refresh import _prepare_summary, _semantic_proof, document, seed, stamp
+from test_patient_context_refresh import _prepare_summary, _raw_proof, _semantic_proof, document, seed, stamp
 from anthropic_context_testkit import (
     _SOURCE_REPAIR_PROVIDER as _SOURCE_REPAIR_PROVIDER,
     _SOURCE_REPAIR_JEV as _SOURCE_REPAIR_JEV,
@@ -87,7 +87,9 @@ def test_daytime_cloud_needs_no_local_gpu_capacity(runtime, cloud):
     meta = json.loads(scan[0])
     assert meta["provider"] == cloud_inference.cloud_provider_contract()
     assert meta["model"] == "claude-haiku-5-5"
-    assert meta["contract"] == patient_context_refresh_state._contract(CFG, 1)
+    assert meta["contract"] == patient_context_refresh_state._contract()
+    assert meta["provenance"] == {"backend": meta["provider"]["backend"], "model": meta["model"],
+                                  "profile": meta["provenance"]["profile"]}
 
 
 def test_archived_cloud_source_is_audited_but_never_published(runtime, cloud):
@@ -104,7 +106,7 @@ def test_archived_cloud_source_is_audited_but_never_published(runtime, cloud):
     assert led.artifacts("patient_context_source_quality_v1", project_id=1)
     assert led.artifacts("patient_context_source_quality_pass_v1", project_id=1)
     snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG, hydrate=False)
-    scan = patient_context_refresh_sources._current_scans(led.db, 1, snapshot["sources"], snapshot["contract"], cfg=CFG)[1]
+    scan = patient_context_refresh_sources._current_scans(led.db, 1, snapshot["sources"], snapshot["route"], cfg=CFG)[1]
     assert scan["complete"] and scan["audited"]
     assert not patient_context_refresh_readiness._inference_coverage(led.db, 1, CFG, snapshot)["publication_eligible"]
     assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
@@ -119,7 +121,7 @@ def test_archived_cloud_source_is_audited_but_never_published(runtime, cloud):
     with led.db:
         led.db.execute("UPDATE patients SET is_archived=0 WHERE project_id=1")
     active = patient_context_refresh_sources._snapshot(led.db, 1, CFG, hydrate=False)
-    changed = patient_context_refresh_sources._current_scans(led.db, 1, active["sources"], active["contract"], cfg=CFG)[1]
+    changed = patient_context_refresh_sources._current_scans(led.db, 1, active["sources"], active["route"], cfg=CFG)[1]
     assert not changed.get("audited")
     assert len(led.synthetic_jev_requests) == before
 
@@ -236,19 +238,26 @@ def test_summary_negative_does_not_invalidate_source_skip(runtime, cloud, monkey
             'failure_key': '3' * 64, 'audit_key': '4' * 64}
     led.artifact_add(patient_context_refresh_state.QUALITY_FAIL, '{}', project_id=1, meta=meta)
     snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG)
-    scans = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+    scans = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['route'], cfg=CFG)
     assert scans[1]['_audit_skipped'] is True
     source_failure = patient_context_refresh_state._quality_kind(patient_context_refresh_state.QUALITY_FAIL, {'purpose': 'source'})
     led.artifact_add(source_failure, '{}', project_id=1, meta=meta)
-    scans = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+    scans = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['route'], cfg=CFG)
     assert scans[1]['_audit_skipped'] is False
+
+
+def _budget_exhausted_audit(client, *args, **kwargs):
+    # Closure-free on purpose: the quality identity hashes the audit functions
+    # and refuses closures, so a stub must be hashable like the real one.
+    import semantic_jev
+    client.last_error = semantic_jev.JevError('budget_exceeded', 'daily_cap')
+    return {'evaluated': False}
 
 
 @pytest.mark.parametrize('mode', ['on', 'off'])
 @pytest.mark.parametrize('purpose', ['source', 'summary'])
 def test_mid_audit_budget_skip_cannot_override_prior_negative(runtime, cloud, monkeypatch, mode, purpose):
     import semantic_audit
-    import semantic_jev
     from inference_version import CURRENT_VERSION, VERSION_KEY
 
     led, clock, _ = runtime
@@ -260,10 +269,7 @@ def test_mid_audit_budget_skip_cannot_override_prior_negative(runtime, cloud, mo
     cloud[1][0] = mode
     name = 'audit_patient_quality_page' if purpose == 'source' else 'audit_patient_summary_chunk'
     real = getattr(semantic_audit, name)
-    def exhausted(client, *args, **kwargs):
-        client.last_error = semantic_jev.JevError('budget_exceeded', 'daily_cap')
-        return {'evaluated': False}
-    monkeypatch.setattr(semantic_audit, name, exhausted)
+    monkeypatch.setattr(semantic_audit, name, _budget_exhausted_audit)
     reason = purpose + '_quality_deferred'
     for _ in range(25):
         result = step(runtime)
@@ -337,13 +343,13 @@ def test_cloud_completed_data_is_not_reused_after_route_change(runtime, cloud, m
     assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
     snapshot, _, pending = patient_context_refresh_readiness._pending(led.db, 1, CFG)
     assert pending["A"] and pending["B"]
-    assert not patient_context_refresh_sources._current_scans(led.db, 1, snapshot["sources"], snapshot["contract"])
+    assert not patient_context_refresh_sources._current_scans(led.db, 1, snapshot["sources"], snapshot["route"])
     clock.wall += 3 * 60 * 60
     clock.mono += 3 * 60 * 60
     drain(runtime)
     assert local_calls and patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
     current = patient_context_refresh_sources._snapshot(led.db, 1, CFG, hydrate=False)
-    scans = patient_context_refresh_sources._current_scans(led.db, 1, current['sources'], current['contract'])
+    scans = patient_context_refresh_sources._current_scans(led.db, 1, current['sources'], current['route'])
     assert scans and all(not scan.get('_provider_contract') for scan in scans.values())
     assert not patient_context_refresh_state._latest(led.db, patient_context_refresh_state.KIND, 1)[1].get('provider')
     assert any(json.loads(row[0]).get('provider') for row in led.db.execute(
@@ -355,21 +361,24 @@ def test_partial_cloud_scan_requires_same_rules_and_provider_contract(runtime, c
     seed(led)
     snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG)
     source = snapshot["sources"][0]
+    provider = snapshot["route"]["provider"]
     meta = {"source_sig": context_plan.source_signature(source), "contract": snapshot["contract"],
-            "provider": {**snapshot["contract"]["provider"], "prompt": "0" * 16}}
+            "provider": {**provider, "prompt": "0" * 16}, "model": provider["model"],
+            "provenance": {"backend": provider["backend"], "model": provider["model"], "profile": None}}
     with led.db:
         patient_context_refresh_state._replace(led, patient_context_refresh_state.SCAN, 1, {"cursor": 1, "complete": False, "facts": []}, meta, 1)
-    assert not patient_context_refresh_sources._current_scans(led.db, 1, snapshot["sources"], snapshot["contract"])
-    meta["provider"] = snapshot["contract"]["provider"]
+    assert not patient_context_refresh_sources._current_scans(led.db, 1, snapshot["sources"], snapshot["route"])
+    meta["provider"] = provider
     with led.db:
         patient_context_refresh_state._replace(led, patient_context_refresh_state.SCAN, 1, {"cursor": 1, "complete": False, "facts": []}, meta, 1)
-    assert patient_context_refresh_sources._current_scans(led.db, 1, snapshot["sources"], snapshot["contract"])[1]["cursor"] == 1
+    assert patient_context_refresh_sources._current_scans(led.db, 1, snapshot["sources"], snapshot["route"])[1]["cursor"] == 1
     # a code release that leaves the inference rules alone keeps the scan
     monkeypatch.setattr(worker, "_upgrade_contract", lambda: "f" * 64)
     monkeypatch.setattr(extract_llm_qc, '_upgrade_contract', worker._upgrade_contract)
     monkeypatch.setattr(extract_llm_store, '_upgrade_contract', worker._upgrade_contract)
     assert patient_context_refresh_sources._snapshot(led.db, 1, CFG)["contract"] == snapshot["contract"]
-    # an inference rule version change rebuilds it
+    # an extraction generation change is not part of the scan contract; the
+    # source signature alone decides (test_context_refresh_generation_reuse)
     monkeypatch.setattr(worker, "EXTRACT_VERSION", worker.EXTRACT_VERSION + 1)
     monkeypatch.setattr(extract_llm_context, 'EXTRACT_VERSION', worker.EXTRACT_VERSION)
     monkeypatch.setattr(extract_llm_errors, 'EXTRACT_VERSION', worker.EXTRACT_VERSION)
@@ -381,9 +390,15 @@ def test_partial_cloud_scan_requires_same_rules_and_provider_contract(runtime, c
     monkeypatch.setattr(extract_llm_resident, 'EXTRACT_VERSION', worker.EXTRACT_VERSION)
     monkeypatch.setattr(extract_llm_selection, 'EXTRACT_VERSION', worker.EXTRACT_VERSION)
     monkeypatch.setattr(extract_llm_store, 'EXTRACT_VERSION', worker.EXTRACT_VERSION)
-    changed, _, pending = patient_context_refresh_readiness._pending(led.db, 1, CFG)
-    assert pending["B"] and changed["contract"] != snapshot["contract"]
-    assert not patient_context_refresh_sources._current_scans(led.db, 1, changed["sources"], changed["contract"])
+    assert patient_context_refresh_sources._snapshot(led.db, 1, CFG)["contract"] == snapshot["contract"]
+    # Re-extraction under the new generation reproduces the same scan input,
+    # so the partial scan with the same provider contract is current again.
+    _raw_proof(led, 1, 1)
+    changed = patient_context_refresh_sources._snapshot(led.db, 1, CFG)
+    assert changed["contract"] == snapshot["contract"]
+    assert context_plan.source_signature(changed["sources"][0]) == meta["source_sig"]
+    assert patient_context_refresh_sources._current_scans(
+        led.db, 1, changed["sources"], changed["route"])[1]["cursor"] == 1
 
 
 def test_scope_is_rechecked_after_writer_acquisition(runtime, cloud, monkeypatch):
@@ -407,34 +422,39 @@ def test_scope_is_rechecked_after_writer_acquisition(runtime, cloud, monkeypatch
     assert led.synthetic_cloud_dispositions == ["discarded_scope"]
 
 
-@pytest.mark.parametrize("mutation", ["actual_cloud_without_provider", "local_model", "route_model", "actual_model"])
+@pytest.mark.parametrize("mutation", ["actual_cloud_without_provider", "local_model", "route_model", "actual_model",
+                                      "fallback_mark", "provenance_backend"])
 def test_fallback_reuse_requires_exact_local_and_route_contract(runtime, cloud, mutation):
     led, _, _ = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
     snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG)
-    contract = snapshot['contract']
+    route = snapshot['route']
     # A previously saved local fallback is read-only compatibility evidence;
     # current explicit cloud work no longer creates one on provider failure.
-    meta = {'source_sig': context_plan.source_signature(snapshot['sources'][0]),
-            'contract': {key: value for key, value in contract.items() if key != 'provider'},
-            'route_contract': contract, 'model': 'synthetic'}
+    local = patient_context_refresh_state._local_provenance(CFG)
+    meta = {'source_sig': context_plan.source_signature(snapshot['sources'][0]), 'contract': snapshot['contract'],
+            'route_provider': route['provider'], 'local_fallback': True, 'model': local['model'], 'provenance': local}
     with led.db:
         patient_context_refresh_state._replace(led, patient_context_refresh_state.SCAN, 1,
                                  {'cursor': 1, 'complete': False, 'facts': []}, meta, 1)
-    assert 1 in patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], contract)
+    assert 1 in patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], route)
     row = led.db.execute("SELECT artifact_id,meta FROM artifacts WHERE kind=?", (patient_context_refresh_state.SCAN,)).fetchone()
     meta = json.loads(row['meta'])
     if mutation == 'actual_cloud_without_provider':
-        meta['contract'] = meta.pop('route_contract')
+        del meta['route_provider'], meta['local_fallback']
     elif mutation == 'local_model':
-        meta['contract']['model'] = 'unapproved-local-model'
+        meta['model'] = meta['provenance']['model'] = 'unapproved-local-model'
     elif mutation == 'route_model':
-        meta['route_contract']['provider']['model'] = 'unapproved-cloud-model'
+        meta['route_provider']['model'] = 'unapproved-cloud-model'
+    elif mutation == 'fallback_mark':
+        del meta['local_fallback']
+    elif mutation == 'provenance_backend':
+        meta['provenance']['backend'] = route['provider']['backend']
     else:
         meta['model'] = 'unapproved-actual-model'
     led.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(meta), row['artifact_id']))
     led.db.commit()
-    assert not patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], contract)
+    assert not patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], route)
 
 
 def test_dryrun_does_not_count_deferred_or_audit_and_stops_after_completion(runtime, cloud):
@@ -526,6 +546,10 @@ def test_saved_cloud_context_survives_budget_changes_but_not_code_change(runtime
     monkeypatch.setattr(extract_llm_resident, 'EXTRACT_VERSION', worker.EXTRACT_VERSION)
     monkeypatch.setattr(extract_llm_selection, 'EXTRACT_VERSION', worker.EXTRACT_VERSION)
     monkeypatch.setattr(extract_llm_store, 'EXTRACT_VERSION', worker.EXTRACT_VERSION)
+    # The scan contract stays; the old extraction's material proof no longer
+    # holds, so its summary is not read and the view waits for re-extraction.
+    assert patient_context_refresh_sources._snapshot(led.db, 1, CFG)["contract"] == \
+        patient_context_refresh_state._contract()
     assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG) is None
 
 
@@ -602,6 +626,7 @@ def test_shadow_scan_does_not_count_local_prefix_as_cloud_work(runtime, cloud, m
              "source_occurrence_version": 1, "source_occurrence": occurrence}
     binding = {"source_sig": context_plan.source_signature(source), "source_key": 1,
                "contract": snapshot["contract"], "model": "synthetic",
+               "provenance": {"backend": "local", "model": "synthetic", "profile": None},
                "source_occurrence_version": 1, "source_occurrence": occurrence,
                "source_binding": occurrence["source_binding"]}
     with led.db:
@@ -633,23 +658,23 @@ def test_shadow_scan_does_not_count_local_prefix_as_cloud_work(runtime, cloud, m
 def test_pending_estimate_uses_exact_current_contract_without_credentials(runtime, cloud, monkeypatch):
     led, _, _ = runtime
     seed(led)
-    contract = patient_context_refresh_state._contract(CFG, 1)
+    route = patient_context_refresh_state._route(CFG, 1)
     monkeypatch.setattr(worker.cloud_policy, "api_key", lambda *args: pytest.fail("estimate read a credential"))
-    estimate = patient_context_refresh_readiness.pending_estimate(led.db, 1, CFG, contract=contract)
+    estimate = patient_context_refresh_readiness.pending_estimate(led.db, 1, CFG, route=route)
     assert estimate["targets"] == estimate["scan_sources"] == 1
     assert estimate["summary_units"] == 0  # Cloud summary waits for source scans and audits.
     assert estimate["scan_chunks_estimate"] >= 1 and estimate["input_chars"] > 0
     cfg = {**CFG, "extract": {"patient_context": {"enabled": False}}}
-    assert not any(patient_context_refresh_readiness.pending_estimate(led.db, 1, cfg, contract=contract).values())
+    assert not any(patient_context_refresh_readiness.pending_estimate(led.db, 1, cfg, route=route).values())
 
 
 def test_pending_estimate_completed_current_context_has_no_due_work(runtime, cloud, monkeypatch):
     led, _, _ = runtime
     seed(led)
     drain(runtime)
-    contract = patient_context_refresh_state._contract(CFG, 1)
+    route = patient_context_refresh_state._route(CFG, 1)
     monkeypatch.setattr(worker.cloud_policy, "api_key", lambda *args: pytest.fail("estimate read a credential"))
-    assert not any(patient_context_refresh_readiness.pending_estimate(led.db, 1, CFG, contract=contract).values())
+    assert not any(patient_context_refresh_readiness.pending_estimate(led.db, 1, CFG, route=route).values())
 
 
 @pytest.mark.parametrize('fact_source', ['shadow', 'canonical'])
@@ -663,7 +688,7 @@ def test_pending_estimate_nonlegacy_does_not_read_provider_key(runtime, cloud, m
     led, _, _ = runtime
     seed(led)
     drain(runtime)
-    contract = patient_context_refresh_state._contract(CFG, 1)
+    route = patient_context_refresh_state._route(CFG, 1)
     cfg = copy.deepcopy(CFG)
     cfg['semantic']['fact_source'] = fact_source
     monkeypatch.setattr(mcs_util, 'HOME', str(tmp_path))
@@ -673,7 +698,7 @@ def test_pending_estimate_nonlegacy_does_not_read_provider_key(runtime, cloud, m
         assert not semantic_policy.semantic_config(cfg, key_present=True)[1]
     with monkeypatch.context() as patch:
         patch.setattr(worker.cloud_policy, 'api_key', lambda *_: pytest.fail('estimate read a credential'))
-        estimate = patient_context_refresh_readiness.pending_estimate(led.db, 1, cfg, contract=contract)
+        estimate = patient_context_refresh_readiness.pending_estimate(led.db, 1, cfg, route=route)
     assert estimate['targets'] == 1 and estimate['summary_units'] == 0
     if fact_source == 'canonical':
         cfg['semantic']['match_threshold'] = 0.99
@@ -858,10 +883,10 @@ def test_paid_cloud_failure_without_local_capacity_records_the_retry(runtime, cl
     assert stored["failure"] == "patient_context_cloud_failed" and stored["attempts"] == 1 and stored["next_try"] > 0
     # The failed attempt remains bound to the requested cloud route and source.
     meta = json.loads(led.db.execute("SELECT meta FROM artifacts WHERE kind=?", (patient_context_refresh_state.SCAN,)).fetchone()[0])
-    contract = patient_context_refresh_state._contract(CFG, 1)
-    assert meta["provider"] == contract["provider"] and meta["model"] == contract["provider"]["model"]
+    route = patient_context_refresh_state._route(CFG, 1)
+    assert meta["provider"] == route["provider"] and meta["model"] == route["provider"]["model"]
     snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG)
-    saved = patient_context_refresh_sources._current_scans(led.db, 1, snapshot["sources"], contract)[1]
+    saved = patient_context_refresh_sources._current_scans(led.db, 1, snapshot["sources"], route)[1]
     assert saved["failure"] == "patient_context_cloud_failed" and saved["attempts"] == 1 and saved["next_try"] > 0
     # the backoff keeps the next tick from re-sending the same unit
     assert step(runtime, local_admit=lambda: False)["status"] != "failed" and len(sent) == 1
@@ -923,7 +948,10 @@ def test_paid_failure_of_a_partial_cloud_scan_keeps_its_cloud_pin(runtime, cloud
     seed(led, body="見出しのない完全合成の居住記録。")
     snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG)
     meta = {"source_sig": context_plan.source_signature(snapshot["sources"][0]),
-            "contract": snapshot["contract"], "provider": snapshot["contract"]["provider"]}
+            "contract": snapshot["contract"], "provider": snapshot["route"]["provider"],
+            "model": snapshot["route"]["provider"]["model"], "provenance": {
+                "backend": snapshot["route"]["provider"]["backend"],
+                "model": snapshot["route"]["provider"]["model"], "profile": None}}
     with led.db:
         patient_context_refresh_state._replace(led, patient_context_refresh_state.SCAN, 1,
                                  {"cursor": 1, "chunks": 2, "complete": False, "facts": []}, meta, 1)
@@ -942,8 +970,8 @@ def test_paid_failure_of_a_partial_cloud_scan_keeps_its_cloud_pin(runtime, cloud
     assert result["status"] == "failed" and result["reason"] == "patient_context_cloud_failed"
     assert not local_calls and len(sent) == 1
     # the retry stays on the cloud backend: no local record of a cloud cursor
-    scan = patient_context_refresh_sources._current_scans(led.db, 1, snapshot["sources"], snapshot["contract"])[1]
-    assert scan["_provider_contract"] == snapshot["contract"]["provider"]
+    scan = patient_context_refresh_sources._current_scans(led.db, 1, snapshot["sources"], snapshot["route"])[1]
+    assert scan["_provider_contract"] == snapshot["route"]["provider"]
     assert scan["failure"] == "patient_context_cloud_failed" and scan["next_try"] > 0
 
 
@@ -1034,9 +1062,9 @@ def test_read_proof_cannot_outlive_its_owner_even_with_a_borrowed_transaction(ru
         with patient_context_refresh_sources._scan_read_owner(led.db, 1) as proof_for:
             snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG, hydrate=False)
             proof = proof_for(snapshot, CFG)
-            assert patient_context_refresh_sources._scans_from_read(led.db, 1, snapshot['sources'], snapshot['contract'], CFG, proof)[1]['audited']
+            assert patient_context_refresh_sources._scans_from_read(led.db, 1, snapshot['sources'], snapshot['route'], CFG, proof)[1]['audited']
         assert led.db.in_transaction
         with pytest.raises(RuntimeError, match='patient_context_read_changed'):
-            patient_context_refresh_sources._scans_from_read(led.db, 1, snapshot['sources'], snapshot['contract'], CFG, proof)
+            patient_context_refresh_sources._scans_from_read(led.db, 1, snapshot['sources'], snapshot['route'], CFG, proof)
     finally:
         led.db.rollback()

@@ -32,15 +32,15 @@ def test_private_basis_diagnostic(runtime, real_cloud, monkeypatch):
         db = ledger.db
         doc, meta = state._latest(db, state.KIND, 1)
         with sources._scan_read_owner(db, 1) as proof_for:
-            contract = readiness._publication_contract(cfg, meta) or state._contract(cfg)
-            snap = sources._snapshot(db, 1, cfg, hydrate=True, contract=contract)
+            route = readiness._publication_route(cfg, meta) or state._route(cfg)
+            snap = sources._snapshot(db, 1, cfg, hydrate=True, route=route)
             proof = proof_for(snap, cfg)
-            scans = sources._scans_from_read(db, 1, snap['sources'], contract, cfg, proof)
+            scans = sources._scans_from_read(db, 1, snap['sources'], route, cfg, proof)
             coverage = readiness._inference_coverage(db, 1, cfg, snap, read_proof=proof)
             view = readiness.context_view_input(db, 1, cfg=cfg)
             qa = {}
             scope_keys = meta.get('source_scope')
-            scoped_snap = sources._snapshot(db, 1, cfg, hydrate=True, contract=contract,
+            scoped_snap = sources._snapshot(db, 1, cfg, hydrate=True, route=route,
                                             source_keys=scope_keys)
             scoped_proof = proof_for(scoped_snap, cfg)
             _, _, _, scoped_facts, scoped_state = sources._all_facts(
@@ -52,7 +52,7 @@ def test_private_basis_diagnostic(runtime, real_cloud, monkeypatch):
                 try:
                     captured = sources._quality_capture(db, 1, cfg, meta.get('workday_id'),
                         doc.get('summary'), state._quality_assessment(policy),
-                        doc.get('temporal_view'), contract=contract, read_proof=scoped_proof,
+                        doc.get('temporal_view'), route=route, read_proof=scoped_proof,
                         source_keys=scope_keys)
                     qa['identity'] = captured['identity']
                     qa['facts_hash'] = digest(captured['facts'])
@@ -78,7 +78,7 @@ def test_private_basis_diagnostic(runtime, real_cloud, monkeypatch):
                 'SELECT artifact_id,kind,content,meta FROM artifacts WHERE project_id=1 ORDER BY artifact_id')]
             observed = {
                 'step': len(observations), 'outcome': outcome, 'posts': len(posts),
-                'visible': bool(view), 'source_sig': snap['source_sig'], 'contract': contract,
+                'visible': bool(view), 'source_sig': snap['source_sig'], 'contract': route,
                 'raw': [{'key': plan.source_key(s), 'signature': plan.source_signature(s),
                          'body_hash': digest(s.get('body_text')),
                          'derived_hash': digest(s.get('derived_summaries'))} for s in snap['sources']],

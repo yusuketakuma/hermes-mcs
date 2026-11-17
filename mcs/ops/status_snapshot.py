@@ -16,6 +16,7 @@ from urllib.parse import urljoin
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
+import host_clock
 import mcs_util
 import local_llm
 from bounded_http import loopback_endpoint_allowed
@@ -91,16 +92,11 @@ JOB_PREFIXES = ("ai.mcs.", "local.mcs", "org.mcs.", "ai.hermes.")
 
 def _run(argv):
     """A short read-only OS query; None on any failure or timeout."""
-    try:
-        out = subprocess.run(argv, capture_output=True, text=True, timeout=3,
-                             env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"})
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return out.stdout if out.returncode == 0 else None
+    return host_clock.read_only_query(argv, timeout=3)
 
 
 def _sysctl(name):
-    out = _run(["/usr/sbin/sysctl", "-n", name])
+    out = _run([host_clock.SYSCTL, "-n", name])
     return out.strip() if out else None
 
 
@@ -176,7 +172,7 @@ def _jobs():
 def host_status(root) -> dict:
     """This Mac's resources: numbers and machine codes only (no host name or address)."""
     load = os.getloadavg()
-    boot = re.search(r"sec = (\d+)", _sysctl("kern.boottime") or "")
+    boot = host_clock.parse_boot_time(_sysctl("kern.boottime"))
     swap = re.findall(r"(total|used) = ([0-9.]+)M", _sysctl("vm.swapusage") or "")
     usage = shutil.disk_usage(root) if os.path.isdir(root) else None
     endpoint, _model = local_llm.resolve(mcs_util.load_config())
@@ -191,7 +187,7 @@ def host_status(root) -> dict:
                    **{f"swap_{k}_mb": float(v) for k, v in swap}},
         "disk": {"free_mb": usage.free // 2**20 if usage else None,
                  "total_mb": usage.total // 2**20 if usage else None},
-        "uptime_s": int(time.time()) - int(boot[1]) if boot else None,
+        "uptime_s": int(time.time()) - int(boot) if boot is not None else None,
         "llm": {"health": health.get("status") if isinstance(health, dict) else None,
                 "slots_total": len(slots) if valid_slots else None,
                 "slots_busy": sum(1 for s in slots if s["is_processing"]) if valid_busy else None},

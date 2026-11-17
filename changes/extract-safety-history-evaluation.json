@@ -1,0 +1,22 @@
+{
+  "category": "changed",
+  "title": "アレルギー・副作用歴とACPの誤断定を合成資料で評価",
+  "summary": "通常処理・設定・通知・既読化に変更はありません。抽出の評価資料に、アレルギー・副作用歴とACPの39例（否定、家族、別患者、予定・仮定、引用された過去記録、疑い）を追加します。保存済みの出力をモデルも通信も使わずに採点でき、誤断定の件数をフィールド別に確認できます。",
+  "upgrade": "追加操作は不要です。評価資料と採点の追加であり、実モデルの品質を証明するものではありません。LLM抽出の世代11は未測定で、基準値はルール抽出の患者コンテキストだけです。",
+  "details": [
+    "全例は新規に作成した架空の文章です。実投稿も、実投稿を匿名化した例も使っていません。",
+    "extract_bench.py に score サブコマンドを追加しました。入力は run の報告か、検証済みと世代を明記した出力の一覧です。再検証はせず、ケースIDの過不足、資料の不一致、世代の記載なし、エラーも出力も無い行（未測定）は終了コード2で拒否します。",
+    "アレルギー欄の禁止ラベルでは主体・時制の unknown を指定できます。家族・別患者・予定・仮定の例で、主体や時制を付けない断定を誤断定として数えるためです。別患者のACPを主体不明のまま実施済みとした出力も同じく数えます。",
+    "報告に false_assertion（禁止ラベルに当たった件数の合計と内訳）を追加しました。report は、この欄が無い古い報告を「未集計」と表示します。",
+    "ACPは既存の event_records の care_detail で採点します。アレルギーは主体・時制・否定・確からしさの軸を持つ仮の欄で採点し、世代11にこの欄が無いことは「欄なし（未取得）」として誤断定0件と区別します。",
+    "患者コンテキストの期待値で主体 unspecified を指定できるようにしました。家族のアレルギーを主体なしで本人側に載せた出力を誤断定として数えるためです。"
+  ],
+  "refs": [
+    "evaluation/extract_cases_safety_history.json",
+    "evaluation/extract_baseline_gen11_safety_history.json",
+    "mcs/extract/eval/extract_bench.py",
+    "mcs/extract/eval/extract_bench_assertions.py",
+    "mcs/extract/eval/extract_bench_stored.py",
+    "tests/extract/evaluation/test_safety_history_evaluation.py"
+  ]
+}

@@ -13,6 +13,7 @@ import sqlite3
 
 import pytest
 
+import anthropic_client
 import cloud_policy
 import cloud_inference
 import cloud_client
@@ -676,12 +677,14 @@ def _sealed_context(store, source, facts, *, original_facts=(), repair_input_key
     source_key = source.get('source_key', mid)
     binding = loss.source_binding(store.db, pid, mid,
         **({'source_key': source_key} if type(source_key) is str else {}))
+    model, effort = anthropic_client.ORIGINAL_CONTRACT
     provider = cloud_inference.cloud_provider_contract(selection={
-        'provider': 'anthropic', 'model': cloud_policy.MODEL, 'effort': None})
-    contract = {'model': 'synthetic-local', 'provider': provider}
+        'provider': 'anthropic', 'model': model, 'effort': effort})
+    contract = {'synthetic': 'scan-contract'}
     origin = {VERSION_KEY: CURRENT_VERSION, 'repair_input_key': repair_input_key or 'd' * 64, 'source_key': source_key,
         'source_sig': source_sig or 'a' * 64, 'source_binding': binding, 'contract': contract,
-        'provider': provider, 'model': provider['model']}
+        'provider': provider, 'model': provider['model'],
+        'provenance': {'backend': provider['backend'], 'model': provider['model'], 'profile': None}}
     scope = dict(store.db.execute('SELECT project_id,project_type,karte_id,is_archived FROM patients WHERE project_id=?', (pid,)).fetchone())
     origin.update(source_occurrence={'source_binding': binding, 'first_seen': source.get('first_seen'), 'scope': scope},
                   source_occurrence_version=1, body_length=len(source['body_text']))
@@ -885,7 +888,7 @@ def test_staging_range_mode_is_explicit_and_split_slots_do_not_supply_facts(stor
         doc['phase'] = 'split'
         store.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(doc), fixture['candidate']))
     args = {'source_sig': origin['source_sig'], 'source_binding': origin['source_binding'],
-            'contract': origin['contract'], 'body_size': len(source['body_text'])}
+            'binding': context_artifacts.quality_binding(origin), 'body_size': len(source['body_text'])}
     assert len(context_artifacts.staged_rows(store.db, 1, 1, fixture['ref']['repair_input_key'], require_complete=False, **args)) == 1
     with pytest.raises(ValueError):
         context_artifacts.staged_rows(store.db, 1, 1, fixture['ref']['repair_input_key'], **args)
@@ -1078,10 +1081,9 @@ def test_current_raw_binding_supports_adopted_context_but_stale_binding_is_a_gap
 
 
 def test_source_quality_proof_binds_actual_questions_and_receipts(store):
-    import extract_llm
     import patient_context_plan as plan
+    import patient_context_quality_identity
     import semantic_audit
-    import semantic_candidate
     import semantic_jev
     import semantic_policy
     import semantic_runtime
@@ -1097,7 +1099,7 @@ def test_source_quality_proof_binds_actual_questions_and_receipts(store):
     assert len(facts) == 1 and plan.validated_source_facts(source, facts) == facts
     policy, errors = semantic_policy.semantic_config({'semantic': {'mode':'assist', 'project_ids':[1]}}, key_present=True)
     assert not errors
-    assessment = {'code': payload_hash([extract_llm._LOADED_SOURCE_DIGESTS, semantic_candidate.loaded_source_contract()]),
+    assessment = {'code': patient_context_quality_identity.patient_quality_assessment_code(),
                   'policy': semantic_policy.policy_fingerprint(policy)}
     descriptor = {'v':1, 'assessment':assessment, 'policy': {key: policy.get(key) for key in
         ('model','match_threshold','nomatch_threshold','calibration_version','fact_source','candidate_fingerprint')}}
@@ -1145,10 +1147,9 @@ def test_source_quality_proof_binds_actual_questions_and_receipts(store):
 @pytest.mark.parametrize("kind", ["chat", "karte"])
 @pytest.mark.parametrize("with_fact", [False, True])
 def test_cloud_candidate_capture_requires_genuine_source_qa_evidence(store, kind, with_fact):
-    import extract_llm
     import patient_context_plan as plan
+    import patient_context_quality_identity
     import semantic_audit
-    import semantic_candidate
     import semantic_jev
     import semantic_policy
     import semantic_runtime
@@ -1177,12 +1178,14 @@ def test_cloud_candidate_capture_requires_genuine_source_qa_evidence(store, kind
     occurrence = loss._context_occurrence(store.db, 1, source, binding)
     policy, errors = semantic_policy.semantic_config({'semantic': {'mode':'assist', 'project_ids':[1]}}, key_present=True)
     assert not errors
-    assessment = {'code':payload_hash([extract_llm._LOADED_SOURCE_DIGESTS, semantic_candidate.loaded_source_contract()]),
+    assessment = {'code': patient_context_quality_identity.patient_quality_assessment_code(),
                   'policy':semantic_policy.policy_fingerprint(policy)}
     descriptor = {'v':1, 'assessment':assessment, 'policy': {key:policy.get(key) for key in
         ('model','match_threshold','nomatch_threshold','calibration_version','fact_source','candidate_fingerprint')}}
-    contract = {'model':'synthetic-local', 'provider':cloud_inference.cloud_provider_contract(selection={
-        'provider':'anthropic', 'model':cloud_policy.MODEL, 'effort':None})}
+    model, effort = anthropic_client.ORIGINAL_CONTRACT
+    # The source-QA identity binds the scan contract and the provider, never a local model.
+    contract = {'contract': {'synthetic': 'scan-contract'}, 'provider':cloud_inference.cloud_provider_contract(selection={
+        'provider':'anthropic', 'model':model, 'effort':effort})}
     initial, _ = semantic_audit.patient_source_quality_identity(source, facts, occurrence, contract, '0' * 64, assessment)
     fixture = _sealed_context(store, source, facts, repair_input_key=initial['source_input_key'],
                               source_sig=plan.source_signature(source, legacy=True))
@@ -1226,7 +1229,8 @@ def test_cloud_candidate_capture_requires_genuine_source_qa_evidence(store, kind
             'text':correction_text, 'evidence':correction_text, 'subject':'patient',
             'details':[{'key':'drug_name','value':'合成薬A','evidence':correction_text}]}],
             workday_id='synthetic', discovery='new_report', found_at=1790000000.0)
-        assert len(correction_facts) == 1 and correction_facts[0]['temporal']['corrections']
+        assert len(correction_facts) == 1 and 'temporal' not in correction_facts[0]
+        assert state.with_temporal(correction_facts[0], correction_text)['temporal']['corrections']
         correction_id = store.artifact_add(context_artifacts.ORIGINAL_KIND, json.dumps({'facts':correction_facts}),
             project_id=1, message_id=2, meta={VERSION_KEY:CURRENT_VERSION,
                 'source_binding':loss.source_binding(store.db, 1, 2)})

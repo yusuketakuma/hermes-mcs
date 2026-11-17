@@ -99,6 +99,8 @@ PRのCIは実行コードの変更・削除に変更記録を要求する。
 
 本リポジトリでは `release-mcs`（リリースMCS）skillを使用する。医薬品マスターは毎回、[公式download menu](https://shinryohoshu.mhlw.go.jp/shinryohoshu/downloadMenu/)と同梱版を比較する。更新があれば原本・出典/版/hash/利用条件のmanifestを同じリリース候補へ組み込み、同梱検証とoffline変換検証を行う。新版のlayout・変更区分・日付条件は正式仕様と照合し、未対応版を既存版として処理しない。確認不能は更新なしとせず阻害事項として記録する。同梱と本番辞書の有効化・人手承認を区別する。
 
+患者コンテキストの品質確認の受入れ規則（`patient_context_quality_controller.py`・`patient_context_quality_receipts.py`・`semantic_usage_receipts.py` の PASS 判定、答えの解釈、Jev の振る舞い）を変えた候補では、`patient_context_quality_identity.QA_VERSION` を上げたかを確認する。hash される範囲は `docs/specs/patient-context.md`「品質確認の識別値（P0-2c）」を参照する。
+
 リリースを依頼されたエージェントは、未リリースの記録を確認して見出しと要約を作る。
 version・日本時間の日付は明示的に指定する。暗黙にversionを上げない。
 
@@ -129,6 +131,13 @@ python3 scripts/development/release_notes.py export --version X.Y.Z \
 ### 失敗項目の再検証と受入
 
 ユーザー指示（2026-10-31）により、テストで失敗した項目は原因を修正し、その項目を再実行します。再検証がすべて通れば、既存結果と合わせて全体を合格扱いとし、全体suiteや同一SHAでの全6ジョブの再実行は必須にしません。変更の影響がある関連項目は確認します。
+
+「全6ジョブ」は必須チェックとリリース受入の6 lane（`lint-test`・`hygiene`・`standalone-sdk`・`incident-gates`・`macos`・`hermes-integration`）を指します。
+`ci.yml`の job はテストの matrix と判定用 gate を含めて11個に増えましたが、6 lane の名前は変わりません。`lint-test`と`macos`は
+`pytest-linux`・`pytest-macos`の全 slice と shard 報告の照合を判定する gate で、受入ではその gate job と`ci-gate-<lane>` artifact を証拠にできます。
+リリースのタグ run は常に full mode（`perf`テストを含む全テスト）です。draft・docs mode の pull request run の成功はテストを実行していない成功で、
+受入の実測には使いません（[CIの構成と実行範囲](DEVELOPMENT.md#ciの構成と実行範囲)）。
+slice の shard 報告 artifact の保存・取得に失敗して gate が止まった場合は、インフラ要因の失敗として下記の代替確認の対象です。
 
 受入票には、対象SHA、元の実行範囲と成功・失敗・中断、失敗項目の再実行結果、再利用した結果、未実行の項目を記録します。合格扱いはユーザーが承認した受入判断として記載し、未実行を実測成功にしたり、ローカル検証をGitHub CIの成功と記載したりしません。CIが開始できない場合、またはartifact保存などインフラ要因のみが失敗理由の場合は、理由と同等のローカル確認（`scripts/development/ci_local.sh` 等の既存経路）の結果を記録し、製品・test失敗を未修正のまま免除しません。認証、予算、人承認、独立レビュー、実機受入の条件は維持します。
 

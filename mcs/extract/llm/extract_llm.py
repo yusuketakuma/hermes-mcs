@@ -119,6 +119,7 @@ import semantic_facts as semantic_facts
 import extraction_context as extraction_context
 import patient_priority as patient_priority
 import patient_context_scan as patient_context_scan
+import patient_context_selection as patient_context_selection
 import patient_context_schedule as patient_context_schedule
 import patient_readiness_witness as patient_readiness_witness
 import extraction_medications as extraction_medications

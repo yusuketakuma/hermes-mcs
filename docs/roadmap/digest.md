@@ -29,7 +29,7 @@
 
 | 項目 | 現状 | 根拠 |
 |---|---|---|
-| 日次ダイジェスト | 平文1通。新着（職種別）・緊急度高・取得状況・連携サマリー更新・アラート・滞留・タスク件数 | `notify_digest.build_text` |
+| 日次ダイジェスト | 平文1通。新着（職種別）・緊急度高・取得状況・連携サマリー更新・アラート・滞留・タスク件数 | `notify_digest.build_text`（2026-11-15 に削除済み） |
 | 配信 | outbox `daily_digest` → `notify_flush`がテキストのまま中継。カード経路は`new_messages`/`signal`のみ | `notify_flush.py:330`、`notify_cards.INTERACTIVE_KINDS` |
 | 表示モデル | `mcs-card-render/v1`の`parts`（`containers`: heading/text/field/quote/meta、`footer`、`action_rows`）と予算検査 | `adapters/common/spec.py` |
 | 各チャット描画 | Slack Block Kit（`slack/cards.render`）、Discord Components V2（`discord/cards.build_view`）、LINE WORKS（`lineworks/cards.render`＋超過分の分割送信）、テキスト（`notify_render.display_text`） | 各`cards.py` |

@@ -1,4 +1,5 @@
 """Fictional callback, real validation/cache/staging; no model or API acceptance."""
+from semantic_testkit import stage_ledger
 import semantic_store
 import semantic_transport
 import json
@@ -218,7 +219,7 @@ def test_actual_candidate_wrapper_cache_and_pending_staging_have_no_public_side_
     assert first["candidate"]["promotion_ready"] is False
     assert {"human_200_g6", "calibration"} <= set(first["candidate"]["required_promotion_gates"])
     assert before == {table: [tuple(r) for r in db.db.execute(f'SELECT * FROM "{table}"')] for table in tables}
-    stages = v4.stage_ledger(db, 1, bundle["source_fingerprint"])
+    stages = stage_ledger(db, 1, bundle["source_fingerprint"])
     assert len(stages) == 2 and {stage["status"] for stage in stages} == {"PENDING"}
     receipt = next(r for r in stages if r["stage"] == "request_following_extraction")
     assert receipt["generation"] == first["extraction"]["generation"]
@@ -239,7 +240,7 @@ def test_wrapper_failed_extraction_is_pending_without_candidate_then_resumes(sou
     assert incomplete["candidate"] is None and not incomplete["extraction"]["extraction_complete"]
     assert completed["candidate"]["promotion_ready"] is False
     assert incomplete["extraction"]["generation"] == completed["extraction"]["generation"]
-    receipts = v4.stage_ledger(db, 1, bundle["source_fingerprint"])
+    receipts = stage_ledger(db, 1, bundle["source_fingerprint"])
     assert {r["status"] for r in receipts} == {"PENDING"}
     attempts = [r for r in receipts if r["stage"] == "request_following_extraction"]
     assert [r["extraction_complete"] for r in attempts] == [False, True]

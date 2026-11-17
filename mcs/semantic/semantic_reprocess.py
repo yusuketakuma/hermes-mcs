@@ -10,6 +10,7 @@ from inference_version import (CURRENT_VERSION, VERSION_KEY, is_current)
 import semantic_runtime as runtime
 from semantic_policy import (JOB_KIND, runtime_config)
 import semantic_notice
+import semantic_transport
 
 from semantic_scheduler_state import (
     _reservation_sched,
@@ -65,6 +66,7 @@ def _reprocess_proof_generation(ledger, cfg, scfg):
     import patient_context_refresh
     import rollup
     import cloud_inference
+    import local_llm
     cloud = cfg.get('cloud_llm', {})
     cloud = cloud if isinstance(cloud, dict) else {'mode': 'invalid'}
     contract_cfg = dict(cfg)
@@ -79,7 +81,11 @@ def _reprocess_proof_generation(ledger, cfg, scfg):
         'execution': runtime.execution_generation(scfg),
         'semantic': {key: scfg.get(key) for key in ('mode', 'summary_mode', 'loop_mode',
                      'extract_qc', 'project_ids', 'candidate_fingerprint')},
-        'context': patient_context_refresh._contract(cfg),
+        # Scan and summary contracts keep dependency coverage; the local model
+        # only rechecks completion, it never invalidates an artifact.
+        'context': {'scan': patient_context_refresh._contract(),
+                    'summary': patient_context_refresh._summary_contract(),
+                    'local_model': local_llm.resolve(cfg)[1]},
         'context_options': patient_context_refresh.options(cfg),
         'cloud': {key: cloud.get(key) for key in ('mode', 'routes', 'project_ids', 'exclude_project_ids', 'model')},
         'cloud_contract': cloud_inference.cloud_provider_contract(contract_cfg),
@@ -190,6 +196,7 @@ def _reprocess_bookmark_sealed(ledger, old_progress, epochs, version, changes, c
                 and _reprocess_proof_time_valid(old_progress, time.time()))
 
 
+@semantic_transport.with_local_model_scope
 def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
     """Advance a finite keyset pass; input races never erase its accepted cursor."""
     if type(limit) is not int or not 1 <= limit <= 128:
@@ -500,6 +507,7 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
     return {'status': progress['phase'], 'processed': len(planned), **progress}
 
 
+@semantic_transport.with_local_model_scope
 def reprocess_job(ledger, cfg, job, *, deadline=None, cfg_path=None):
     """Repair one stale-execution job through the shared reprocess contract.
 

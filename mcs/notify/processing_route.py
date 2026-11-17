@@ -100,8 +100,8 @@ def _extract_jev_state(db, project_id, message_id, source_id, source_hash, versi
                         or type(score) not in (int, float) or not math.isfinite(score) or not 0 <= score <= 1):
                     return "unknown"
             return "done"
-        if (data.get("status") != "SKIPPED" or data.get("reason") not in {
-                "not_configured", "disabled", "daily_budget", "backlog_reserved", "circuit_open", "service_unavailable"}):
+        from semantic_jev import SKIP_REASONS
+        if data.get("status") != "SKIPPED" or data.get("reason") not in SKIP_REASONS:
             return "unknown"
         partial = data.get("partial_answers", {})
         if not isinstance(partial, dict) or set(partial) - set(questions):
@@ -213,18 +213,16 @@ def provider_states(db, project_id, message_id, cfg=None, *, bundle_cache=None, 
                 return result()
             import semantic_policy
             import semantic_store
-            import semantic_transport
             target = db.execute("SELECT COALESCE(parent_id,message_id) FROM messages "
                                 "WHERE project_id=? AND message_id=?", (project_id, message_id)).fetchone()
             scfg, errors = semantic_policy.semantic_config(cfg)
             if target is None or errors:
                 return result()
-            model = semantic_transport.llm_model(cfg)
-            cache_key = (project_id, target[0], model)
+            cache_key = (project_id, target[0])
             if bundle_cache is not None and cache_key in bundle_cache:
                 bundle = bundle_cache[cache_key]
             else:
-                bundle = semantic_store.thread_bundle(db, project_id, target[0], local_model=model)
+                bundle = semantic_store.thread_bundle(db, project_id, target[0])
                 if bundle_cache is not None:
                     bundle_cache[cache_key] = bundle
             if bundle is None:

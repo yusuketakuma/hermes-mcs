@@ -8,7 +8,6 @@ import pytest
 import attachment_inference_contract as contract
 import attachment_inference
 import extract_llm
-import local_llm
 from mcs_util import payload_hash
 
 VERSIONS = ['1.0', 11, 4]
@@ -17,13 +16,15 @@ BASELINE_ORACLE = '95e17bf2639d32b159f79309e32cefa1d88448a7424e76407baf74e80da8e
 BASELINE_OCR = 'a390d9f87ec89317b0045e5e8a12b092752b0ab305c65227cc17cf98a38cad88'
 
 
-def _legacy(code, sources, versions=VERSIONS, cfg=CFG):
+def _legacy(code, sources, versions=VERSIONS):
+    # The token keeps the shipped default local pair as a fixed hash-compatibility value.
     upgrade = hashlib.sha256(json.dumps([*versions, sources], sort_keys=True).encode()).hexdigest()
-    return payload_hash(['attachment-inference/v1', code, upgrade, local_llm.resolve(cfg)])
+    return payload_hash(['attachment-inference/v1', code, upgrade,
+                         ('http://127.0.0.1:8080/v1/chat/completions', 'Qwen3.5-9B')])
 
 
-def _calculate(sources, *, code='a' * 64, versions=VERSIONS, cfg=CFG):
-    return contract.contract(cfg, code_digest=code, source_digests=sources,
+def _calculate(sources, *, code='a' * 64, versions=VERSIONS):
+    return contract.contract(code_digest=code, source_digests=sources,
                              inference_version=versions[0], extract_version=versions[1], context_version=versions[2])
 
 
@@ -129,4 +130,6 @@ def test_new_unreviewed_source_and_version_or_model_changes_do_not_preserve_old_
     after['unreviewed_source'] = 'f' * 64
     assert _calculate(after) != old
     assert _calculate(after, versions=['2.0', 11, 4]) == _legacy('a' * 64, after, ['2.0', 11, 4])
-    assert _calculate(after, cfg={'local_llm': {'model': 'different-synthetic-model'}}) != old
+    # The local backend is no longer token input: a local model change keeps cloud results.
+    assert attachment_inference._contract({'local_llm': {'model': 'different-synthetic-model'}}) \
+        == attachment_inference._contract(CFG)

@@ -76,8 +76,6 @@ def _norm(text) -> str:
     return sf.normalize_name(text or "")
 
 
-
-
 def _entity_overlap(left: dict, right: dict, token_cache=None) -> set:
     def tokens(fact):
         statement = fact.get("statement")
@@ -115,13 +113,6 @@ def _ordered_before(left: dict, right: dict) -> bool:
                 continue
             return lt < rt
     return False
-
-
-def classify_pair(left: dict, right: dict) -> dict | None:
-    """Classify the relation between two facts, or ``None`` when they
-    are unrelated.  ``left`` is the earlier/active fact, ``right`` the
-    newer one for directed types."""
-    return _classify_pair(left, right)
 
 
 def _classify_pair(left: dict, right: dict, token_cache=None) -> dict | None:

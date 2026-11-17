@@ -124,7 +124,7 @@ def test_a_new_v2_extraction_generation_runs_the_comparison_again(tmp_path, monk
     db = _seeded(tmp_path)
     try:
         first = _passes(db, _incomplete_v2, configs=({},))[0]
-        monkeypatch.setattr(semantic_extraction, "v2_generation", lambda: "next")
+        monkeypatch.setattr(semantic_extraction, "v2_generation", lambda model=None: "next")
         assert _passes(db, _incomplete_v2, configs=({},)) == [first]
     finally:
         db.close()

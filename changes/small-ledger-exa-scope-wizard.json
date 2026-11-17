@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "公開薬情報の送り先表示と、壊れた対象範囲の扱いを修正",
+  "summary": "公開薬情報はTinyFishだけに送る実装に合わせ、未到達のExa経路を削除し保存前確認の文も直しました。対象範囲が壊れた公開済み文脈は無効行として示し、費用見積りは壊れた進行記録1件で止まらず無効件数に数えます。",
+  "upgrade": "追加操作は不要です。Exaへの送信は元から行われていません。次の状態集計から、対象範囲が壊れた公開済み文脈が無効行になります。保存前確認は再抽出・意味解析の送信期間が開いていれば、その期限を表示します。",
+  "details": [
+    "bounded_httpの匿名public-MCP方式とExa用の薬情報コードを削除した。到達する呼出元はなかった。",
+    "patient_context_status.state_countsが公開済み行のsource_scopeを共通の検証で確かめ、不正なら無効行にする。対象範囲なし・nullは患者全体として従来どおり公開済み。公開前の行は従来どおり。",
+    "cloud_cli plan の費用見積りは、進行記録の対象範囲が読めない患者1人で止まらず、その患者を invalid_rows に数えて見積りから外す（完了扱いにはしない）。",
+    "保存前確認は、再抽出・意味解析の送信期間が開いている間、個別投稿を送らないとは表示せず期限を示す。",
+    "cloud_send_admission.tightenedの説明を、未送信として0円で精算する実際の挙動に合わせた。"
+  ],
+  "refs": ["mcs/medications/drug_info.py", "mcs/core/bounded_http.py", "mcs/patients/patient_context_status.py", "mcs/ops/setup/setup_wizard.py", "mcs/ops/cloud_cli.py"]
+}

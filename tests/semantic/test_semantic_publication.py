@@ -5,6 +5,7 @@ stage receipts S1–S8, the PASS-only read model boundary, generation
 fencing, diagnostic (non-PASS) separation, pre-reserved repair, and
 the finite retirement manifest.
 """
+from semantic_testkit import stage_ledger
 import extract_llm_engine
 import extract_llm_runner
 import semantic_fact_stages
@@ -65,7 +66,7 @@ def test_v4_pass_publishes_read_model_and_stage_ledger(tmp_path):
             assert [f["fact_id"] for f in v4doc["canonical_facts"]] \
                 == [f["fact_id"] for f in proj["canonical_facts"]]
             stages = {s["stage"]: s["status"] for s in
-                      v4.stage_ledger(db, mid, fp)}
+                      stage_ledger(db, mid, fp)}
             for s in ("s0_prep", "s1_extract", "s2_fact_audit",
                       "s5_projection", "s6_summary", "s7_summary_audit",
                       "s8_publish"):
@@ -143,7 +144,7 @@ def test_repair_receipt_reserved_before_dispatch(tmp_path):
                     for r in repairs]
         assert statuses[0] == "started"       # reservation precedes
         stage_seq = [s["stage"] + ":" + s["status"]
-                     for s in v4.stage_ledger(db, 1, fp)]
+                     for s in stage_ledger(db, 1, fp)]
         assert "s3_repair:reserved" in stage_seq
         assert stage_seq.index("s3_repair:reserved") < \
             stage_seq.index("s3_repair:completed")
@@ -529,7 +530,7 @@ def test_v4_readers_skip_invalid_shapes_and_use_shared_generation_rule(tmp_path)
                               ("{}", []), ("null", None)):
             db.artifact_add(v4.KIND_V4_STAGE, content, message_id=1,
                             meta=meta)
-        assert v4.stage_ledger(db, 1, "fp") == []
+        assert stage_ledger(db, 1, "fp") == []
     finally:
         db.close()
 

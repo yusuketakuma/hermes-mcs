@@ -267,7 +267,7 @@ def test_context_child_exits_before_engine_when_import_fence_is_stale(runtime, r
 @pytest.mark.parametrize('key,limit', [
     ('wait_no_eligible_sources', 8), ('wait_no_due_lane', 16),
     ('wait_generation_quota', 8), ('wait_readiness_unverified', 16),
-    ('wait_dependency_incomplete', 16),
+    ('wait_dependency_incomplete', 16), ('skip_patient_invalid', 8),
 ])
 def test_context_pass_wait_branch_counters_are_strict_and_bounded(key, limit):
     for valid in (0, limit):
@@ -333,3 +333,15 @@ def test_context_child_waits_through_unreadable_provider_settings(monkeypatch, t
     assert [e for e, _ in events] == ["cloud_backlog_deferred", "patient_context_pass"]
     assert events[0][1] == {"reason": "provider_settings_unreadable"}
     assert "synthetic-private" not in json.dumps(events)
+
+
+def test_context_pass_patient_invalid_reason_and_skip_code_are_bounded():
+    record = cloud_backlog._context_pass_observation({
+        'status': 'deferred', 'reason': 'patient_context_patient_invalid',
+        'skip_patient_invalid': 1, 'skip_patient_code': 'patient_context_source_scope_invalid'})
+    assert record['reason'] == 'patient_context_patient_invalid'
+    assert record['skip_patient_invalid'] == 1
+    assert record['skip_patient_code'] == 'patient_context_source_scope_invalid'
+    for bad in ('合成の非公開値', 'synthetic private text', 7, 'x' * 81):
+        assert cloud_backlog._context_pass_observation({
+            'status': 'deferred', 'skip_patient_code': bad})['skip_patient_code'] == 'unclassified'

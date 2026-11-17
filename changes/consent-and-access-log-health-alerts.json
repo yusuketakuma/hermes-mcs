@@ -1,0 +1,19 @@
+{
+  "category": "fixed",
+  "title": "外部AIの施設確認で送信を止めている間とアクセスログを書けない間を警報で知らせる",
+  "summary": "施設の確認に含まれない外部AI・Jevへの送信を止めている間、確認記録（external_transfer.json）を読めない間、閲覧・操作記録（アクセスログ）を書けず閲覧の回答を返していない間に、監視がシステム通知先へ警報を出します。これまでは送信や回答が止まっていても警報が出ませんでした。",
+  "upgrade": "追加設定は不要です。警報は収集処理が書く監視記録（data/health.json）と監視処理（local.mcs-health / mcs-health.timer）から出るため、両方が新しいコードで動いてから有効になります。アクセスログの失敗の記録は閲覧の回答を作る処理が書くため、Hermesモードは gateway の再起動、LINE WORKS は独立アダプターの再起動、独立動作は host の再起動のあとに有効になります。外部AIを使わない設定（cloud_llm.mode・semantic.mode が off）では、確認待ちでも警報は出ません。ただし確認記録を読めない場合は設定にかかわらず警報が出ます。",
+  "details": [
+    "送信する設定（mode が on・shadow、送信経路と対象患者がある）の Anthropic・OpenAI を確認が止めている間は cloud_llm_provider_not_approved、Jev を止めている間は semantic_jev_provider_not_approved を出します。判定は送信の可否と同じ cloud_policy.resolve_selection と semantic_policy.runtime_review_held を使い、設定の誤りや対象患者が無いなど承認しても送らない設定では出しません。mode を明示した設定は、APIキーが無くても確認待ちを先に知らせます（キーの不足は確認の記録後に別の警報で示します）。",
+    "確認記録を読めない間は、外部AIの設定にかかわらず external_transfer_unreadable を1件だけ出し、記録を削除せず権限と内容を直してから確認を記録し直す手順を示します。",
+    "アクセスログへの追記に失敗すると、理由コードと最初・最後の失敗時刻だけを data/access_log_failure.json（0600）に残し、次の追記が成功した時点で消します。利用者・チャンネル・患者は残しません。監視はこの記録があれば access_log_unwritable を最初に失敗した時刻とともに出します。権限などを直しただけでは消えず、次の閲覧の記録が書けた時点で消えます。記録自体を書けない場合（データフォルダが無いなど）は元のエラーのまま回答を止めます。",
+    "mcs_setup.py doctor の画面表示も、確認が止めている提供元に、止めている理由と確認の記録方法を表示します。"
+  ],
+  "refs": [
+    "mcs/ingest/health_report.py",
+    "mcs/ingest/health_watch.py",
+    "mcs/core/access_log.py",
+    "mcs/ops/mcs_setup.py",
+    "docs/guides/COMPLIANCE.md"
+  ]
+}

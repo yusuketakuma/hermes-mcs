@@ -471,16 +471,17 @@ def _complete_context(db, config):
     with db.db:
         db.db.execute("UPDATE patients SET fetch_state='complete',fetch_reason=NULL,history_floor=-1 "
                       "WHERE project_id=1")
-    contract = context._contract({**config, "cloud_llm": {"mode": "off"}})
-    contract["provider"] = cloud_inference.cloud_provider_contract()
+    route = context._route({**config, "cloud_llm": {"mode": "off"}})
+    route["provider"] = cloud_inference.cloud_provider_contract()
     policy, errors = semantic_policy.semantic_config(config, key_present=True)
     assert not errors
     assessment = context._quality_assessment(policy)
-    snapshot = context._snapshot(db.db, 1, config, hydrate=False, contract=contract)
+    snapshot = context._snapshot(db.db, 1, config, hydrate=False, route=route)
     assert len(snapshot["sources"]) == 1
     source = snapshot["sources"][0]
-    meta = {"source_sig": context_plan.source_signature(source), "contract": contract,
-            "provider": contract["provider"], "model": cloud_policy.MODEL}
+    provenance = {"backend": route["provider"]["backend"], "model": cloud_policy.MODEL, "profile": None}
+    meta = {"source_sig": context_plan.source_signature(source), "contract": route["contract"],
+            "provider": route["provider"], "model": cloud_policy.MODEL, "provenance": provenance}
     span = [0, source["body_length"]]
     unit = context._digest([context_plan.source_key(source), meta["source_sig"], span])
     chunk = {"chunk_span": span, "part": 0, "parts": 1, "facts": []}
@@ -494,7 +495,7 @@ def _complete_context(db, config):
     db.db.execute("BEGIN")
     try:
         captured = context._source_quality_capture(db.db, 1, config, context_plan.source_key(source),
-                                                    assessment, contract=contract)
+                                                    assessment, route=route)
     finally:
         db.db.rollback()
     identity = captured["identity"]
@@ -529,7 +530,7 @@ def _complete_context(db, config):
     db.db.execute("BEGIN")
     try:
         summary = context._quality_capture(db.db, 1, config, "synthetic", [], assessment, projection,
-                                           contract=contract)
+                                           route=route)
     finally:
         db.db.rollback()
     summary_identity = summary["identity"]
@@ -542,52 +543,57 @@ def _complete_context(db, config):
             meta={inference.VERSION_KEY: inference.CURRENT_VERSION, **{key: summary_identity[key] for key in
                 ("input_key", "candidate_key", "audit_key")}})
         context._replace(db, context.KIND, 1, {"facts": [], "summary": [], "temporal_view": projection},
-            {"source_sig": snapshot["source_sig"], "contract": contract,
-             "provider": contract["provider"], "model": cloud_policy.MODEL,
+            {"source_sig": snapshot["source_sig"], "contract": route["contract"],
+             "provider": route["provider"], "model": cloud_policy.MODEL, "provenance": provenance,
              "published": context.options(config)["publication"], "summary_checked": True,
              "quality_audit_key": summary_identity["audit_key"],
              "quality_schedule_key": context._digest([config, assessment["code"]]),
              "scan_sig": context._scan_sig(db.db, 1)})
-    assert not any(context._pending(db.db, 1, config, contract=contract)[2].values())
+    assert not any(context._pending(db.db, 1, config, route=route)[2].values())
 
 
 
-@pytest.mark.parametrize("change", ["rule_version", "extraction", "karte"])
+def test_extraction_generation_alone_keeps_cloud_context_targets_at_zero(world, monkeypatch):
+    root, path, config = world
+    with closing(Ledger(str(path))) as db:
+        _complete_context(db, config)
+    assert cli.observe(config, root=str(root))["routes"]["patient_context"]["targets"] == 0
+    # Neither a code release nor an extraction generation is a scan input;
+    # only a changed item or summary of a source makes it a target.
+    monkeypatch.setattr(extract_llm, "_upgrade_contract", lambda: "f" * 64)
+    monkeypatch.setattr(extract_llm_qc, '_upgrade_contract', extract_llm._upgrade_contract)
+    monkeypatch.setattr(extract_llm_store, '_upgrade_contract', extract_llm._upgrade_contract)
+    assert cli.observe(config, root=str(root))["routes"]["patient_context"]["targets"] == 0
+    for module in (extract_llm, extract_llm_context, extract_llm_errors, extract_llm_prepare,
+                   extract_llm_progress, extract_llm_proofs, extract_llm_provider, extract_llm_qc,
+                   extract_llm_resident, extract_llm_selection, extract_llm_store):
+        monkeypatch.setattr(module, "EXTRACT_VERSION", module.EXTRACT_VERSION + 1)
+    monkeypatch.setattr(extract_llm.extract, "RULE_VERSION", extract_llm.extract.RULE_VERSION + 1)
+    assert cli.observe(config, root=str(root))["routes"]["patient_context"]["targets"] == 0
+
+
+@pytest.mark.parametrize("change", ["extraction", "karte"])
 def test_current_context_targets_follow_runtime_signatures_without_message_timestamp_change(world, monkeypatch, change):
     root, path, config = world
     with closing(Ledger(str(path))) as db:
         _complete_context(db, config)
         timestamps = tuple(db.db.execute("SELECT first_seen,updated_seen,posted_at_ts FROM messages WHERE message_id=1").fetchone())
     assert cli.observe(config, root=str(root))["routes"]["patient_context"]["targets"] == 0
-    if change == "rule_version":
-        # a code release alone keeps cloud contexts current; a rule version rebuilds them
-        monkeypatch.setattr(extract_llm, "_upgrade_contract", lambda: "f" * 64)
-        monkeypatch.setattr(extract_llm_qc, '_upgrade_contract', extract_llm._upgrade_contract)
-        monkeypatch.setattr(extract_llm_store, '_upgrade_contract', extract_llm._upgrade_contract)
-        assert cli.observe(config, root=str(root))["routes"]["patient_context"]["targets"] == 0
-        monkeypatch.setattr(extract_llm, "EXTRACT_VERSION", extract_llm.EXTRACT_VERSION + 1)
-        monkeypatch.setattr(extract_llm_context, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
-        monkeypatch.setattr(extract_llm_errors, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
-        monkeypatch.setattr(extract_llm_prepare, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
-        monkeypatch.setattr(extract_llm_progress, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
-        monkeypatch.setattr(extract_llm_proofs, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
-        monkeypatch.setattr(extract_llm_provider, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
-        monkeypatch.setattr(extract_llm_qc, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
-        monkeypatch.setattr(extract_llm_resident, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
-        monkeypatch.setattr(extract_llm_selection, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
-        monkeypatch.setattr(extract_llm_store, 'EXTRACT_VERSION', extract_llm.EXTRACT_VERSION)
-    else:
-        with closing(Ledger(str(path))) as db:
-            if change == "extraction":
-                db.artifact_add("extract_v1", "{}", project_id=1, message_id=1,
-                    meta={inference.VERSION_KEY: inference.CURRENT_VERSION, "hash": _hash(db, 1),
-                          "rule_version": extract_llm.extract.RULE_VERSION})
-            else:
-                db.db.execute("UPDATE patients SET karte_id=10 WHERE project_id=1")
-                db.db.commit()
-                db.artifact_add("karte_summary", '{"comment":"完全合成の追加背景。"}',
-                                project_id=1, meta={"karte_id": 10})
-            assert tuple(db.db.execute("SELECT first_seen,updated_seen,posted_at_ts FROM messages WHERE message_id=1").fetchone()) == timestamps
+    with closing(Ledger(str(path))) as db:
+        if change == "extraction":
+            # A new rule row adds a patient-context item the scan reads.
+            db.artifact_add("extract_v1", json.dumps({"patient_context": [
+                {"category": "living", "text": "synthetic private body",
+                 "evidence": "synthetic private body", "subject": "patient"}]}),
+                project_id=1, message_id=1,
+                meta={inference.VERSION_KEY: inference.CURRENT_VERSION, "hash": _hash(db, 1),
+                      "rule_version": extract_llm.extract.RULE_VERSION})
+        else:
+            db.db.execute("UPDATE patients SET karte_id=10 WHERE project_id=1")
+            db.db.commit()
+            db.artifact_add("karte_summary", '{"comment":"完全合成の追加背景。"}',
+                            project_id=1, meta={"karte_id": 10})
+        assert tuple(db.db.execute("SELECT first_seen,updated_seen,posted_at_ts FROM messages WHERE message_id=1").fetchone()) == timestamps
     report = cli.observe(config, root=str(root))
     assert report["routes"]["patient_context"]["targets"] == 1
     assert report["patient_context_basis"] == "runtime_pending_source_contract"
@@ -1113,3 +1119,13 @@ def test_cloud_budget_until_does_not_change_jev_deadline(monkeypatch):
     assert cli.budget_command(SimpleNamespace(until="2026-11-05")) == 0
     assert saved == [{"cloud_llm.until": "2026-11-05T23:59:59+09:00"}]
     assert cfg["semantic"]["until"] == "2026-11-30T23:59:59+09:00"
+
+
+@pytest.mark.parametrize("kind", ["cloud_usage_disposition", "cloud_usage_result"])
+def test_safe_log_reports_a_superseded_local_disposition(kind):
+    meta = {"disposition": "superseded_local", "reservation_id": "synthetic-private", "route": "patient_context"}
+    safe = cli._safe_log({"kind": kind, "created_at": 1, "model": None}, meta)
+    assert safe["disposition"] == "superseded_local"
+    assert "synthetic-private" not in json.dumps(safe)
+    unknown = cli._safe_log({"kind": kind, "created_at": 1, "model": None}, {**meta, "disposition": "synthetic"})
+    assert "disposition" not in unknown

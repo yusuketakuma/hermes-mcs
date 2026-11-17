@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""List, fully verify and held-restore the local daily and pre-update ledger backups.
+"""List, fully verify and held-restore the local daily, pre-update and pre-reset ledger backups.
 
 ``list`` reads names, stat and the verification marker only; ``--verify``
 adds a readonly integrity_check, foreign_key_check, schema contract and
@@ -29,7 +29,7 @@ from llm_availability import disk_floor_mb  # noqa: E402
 import local_backup  # noqa: E402
 from mcs_util import file_sha256, has_sqlite_sidecars  # noqa: E402
 
-_NAME = re.compile(r"ledger-\d{8}\.db|preupdate-[0-9A-Za-z_-]+\.db")
+_NAME = re.compile(r"ledger-\d{8}\.db|(?:preupdate|patient-context-reset)-[0-9A-Za-z_-]+\.db")
 
 
 def list_backups(*, verify: bool = False) -> list[dict]:

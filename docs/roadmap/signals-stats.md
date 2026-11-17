@@ -19,7 +19,7 @@
 
 2026-10-03照合: 以下の「現状」・行番号・実測・節番号は2026-09-29の調査記録。
 現在の版割当・公開条件は[ROADMAP](../ROADMAP.md)を正とし、末尾の全体着手順は上書きしない。
-#13の基本日次digestは`notify_digest.build_text/maybe_enqueue`と`run_check._deliver`に実装済み。
+#13の基本日次digestは`notify_digest.build_text/maybe_enqueue`（`build_text` は 2026-11-15 に削除済み）と`run_check._deliver`に実装済み。
 1.0.11は本人反応件数、1.0.12は#25の一覧を既存digestへ追加する。下記の新規digest・cron提案を重複実装しない。
 F-2のルール緊急度問題は1.0.13で是正予定。#17と#19（残件、冒頭の追記参照）は1.0.13、
 #14/#18は未割当で未決判断を今回実装しない。
@@ -93,7 +93,7 @@ F-2のルール緊急度問題は1.0.13で是正予定。#17と#19（残件、�
 **設計方針**
 - **12a（表示。plugin 不要）**
   - `structured_view.message_urgency(db, mid)` を新設し、`notify_flush._urgency` と `mcs_signals._urgency_high` の重複を置換する。level と source（llm / rule）を返す。
-  - `_head_lines` に 1 行足す: 「🚨 緊急度高」（LLM 判定）/「🚨」（機械照合。1.0.17 で全レイアウトの表記を統一）。`structured_lines` は text / card 共有（:325）なので同時に反映される。
+  - `_head_lines`（2026-11-15 に削除済み）に 1 行足す: 「🚨 緊急度高」（LLM 判定）/「🚨」（機械照合。1.0.17 で全レイアウトの表記を統一）。`structured_lines` は text / card 共有（:325）なので同時に反映される。
   - LLM 由来は `latest_artifact(db,'extract_llm',mid)` で読む。canonical_projection が shadow するため、`latest_fact_artifact` では拾えない。
   - 既存カードは sweep が source_fp（`fact_generations`）差分で update render する（`notify_render.py:165-211`、`notify_cards.py:1847-1911`）。編集は通知を鳴らさない。
 - **12b（再通知。通知層の機能で、signal 型は増やさない）**: 新モジュール `mcs/notify/notify_urgent.py`（`ledger` 引数だけ）を `run_check._deliver` の flush 直前に呼ぶ。

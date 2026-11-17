@@ -1,0 +1,1021 @@
+{
+ "published": {
+  "as_of": "<volatile>",
+  "coverage": {
+   "acquisition": {
+    "coverage_ts": null,
+    "fetch_reason": null,
+    "fetch_state": "complete",
+    "history_floor": -1
+   },
+   "analyzed": 3,
+   "attachments": {
+    "analysis": "not_assessed",
+    "analyzed": 0,
+    "count": 0,
+    "extraction_pending": 0,
+    "pages": 0,
+    "processing": {
+     "clinical_pending": 0,
+     "complete": true,
+     "eligible": 0,
+     "excluded": 0,
+     "mode": "off",
+     "ocr_complete": 0,
+     "pending": 0,
+     "signature": "<volatile>",
+     "total": 0
+    },
+    "unscanned": 0
+   },
+   "evidence_supported": 6,
+   "evidence_total": 6,
+   "fetched": 3,
+   "human_accuracy": null,
+   "incomplete": 0,
+   "karte_records": {
+    "analyzed": 0,
+    "historical": 0,
+    "observed_empty": 0,
+    "stored": 0,
+    "unscanned": 0
+   },
+   "observed_empty": 0,
+   "partial": false,
+   "source_coverage": {
+    "acquisition_complete": true,
+    "included": 3,
+    "observed": 3,
+    "unreflected": 0
+   },
+   "unreflected": 0,
+   "unreflected_since": 1792245607.0,
+   "unscanned": 0
+  },
+  "facts": [
+   {
+    "assertion": {
+     "category": "living",
+     "details": [],
+     "evidence": "生活環境: 合成の居住記録。本人は自宅で生活しています。",
+     "evidence_span": [
+      0,
+      28
+     ],
+     "reported_subject": "unspecified",
+     "text": "生活環境: 合成の居住記録。本人は自宅で生活しています。"
+    },
+    "category": "living",
+    "content_hash": "0be5e68de5d269bbe2822ad9f8a9de8a1d061132531b1795fe3b03184f98b28f",
+    "details": [],
+    "discovery": "backfill_found",
+    "evidence": "生活環境: 合成の居住記録。本人は自宅で生活しています。",
+    "evidence_span": [
+     0,
+     28
+    ],
+    "found_at": 1792245600.0,
+    "found_workday_id": "2026-10-17",
+    "historical": false,
+    "id": "<volatile>",
+    "message_id": 1,
+    "posted_at": "2026-09-19T00:00:00+09:00",
+    "posted_at_ts": 1789743600,
+    "project_id": 1,
+    "quote": "生活環境: 合成の居住記録。本人は自宅で生活しています。",
+    "quote_span": [
+     0,
+     28
+    ],
+    "reference_context": {
+     "after": "",
+     "after_span": [
+      28,
+      28
+     ],
+     "before": "",
+     "before_span": [
+      0,
+      0
+     ],
+     "leading": "",
+     "leading_span": [
+      0,
+      0
+     ],
+     "span": [
+      0,
+      28
+     ]
+    },
+    "relations": [],
+    "reported_subject": "unspecified",
+    "sender": "sender",
+    "source": "chat",
+    "source_key": 1,
+    "subject": "unspecified",
+    "temporal": {
+     "action": null,
+     "as_of_day": null,
+     "corrections": [],
+     "current_cue": false,
+     "event_day": null,
+     "negated": null,
+     "ongoing": false,
+     "period": "current",
+     "posted_at_ts": 1789743600,
+     "posted_day": "2026-09-19",
+     "resolution": null,
+     "state_day": null,
+     "subject": "patient",
+     "symptom_state": null,
+     "unknown": false,
+     "use_state": null
+    },
+    "temporality": "reported",
+    "text": "生活環境: 合成の居住記録。本人は自宅で生活しています。",
+    "view_bucket": "unknown"
+   },
+   {
+    "assertion": {
+     "category": "medication_management",
+     "details": [],
+     "evidence": "服薬: 合成の降圧薬を朝1回服用と記載されています。",
+     "evidence_span": [
+      0,
+      26
+     ],
+     "reported_subject": "unspecified",
+     "text": "合成の降圧薬を朝1回服用と記載されています。"
+    },
+    "category": "medication_management",
+    "content_hash": "98781bf8a85cb9674898629baf53041f8f611720e71f474f5249791b46ee8e8b",
+    "details": [],
+    "discovery": "new_report",
+    "evidence": "服薬: 合成の降圧薬を朝1回服用と記載されています。",
+    "evidence_span": [
+     0,
+     26
+    ],
+    "found_at": 1792245602.0,
+    "found_workday_id": "2026-10-17",
+    "historical": false,
+    "id": "<volatile>",
+    "message_id": 3,
+    "posted_at": "2026-09-19T00:00:00+09:00",
+    "posted_at_ts": 1789743600,
+    "project_id": 1,
+    "quote": "服薬: 合成の降圧薬を朝1回服用と記載されています。",
+    "quote_span": [
+     0,
+     26
+    ],
+    "reference_context": {
+     "after": "",
+     "after_span": [
+      26,
+      26
+     ],
+     "before": "",
+     "before_span": [
+      0,
+      0
+     ],
+     "leading": "",
+     "leading_span": [
+      0,
+      0
+     ],
+     "span": [
+      0,
+      26
+     ]
+    },
+    "relations": [],
+    "reported_subject": "unspecified",
+    "sender": "sender",
+    "source": "chat",
+    "source_key": 3,
+    "subject": "unspecified",
+    "temporal": {
+     "action": null,
+     "as_of_day": null,
+     "corrections": [],
+     "current_cue": false,
+     "event_day": null,
+     "negated": null,
+     "ongoing": false,
+     "period": "current",
+     "posted_at_ts": 1789743600,
+     "posted_day": "2026-09-19",
+     "resolution": null,
+     "state_day": null,
+     "subject": "patient",
+     "symptom_state": null,
+     "unknown": false,
+     "use_state": null
+    },
+    "temporality": "reported",
+    "text": "合成の降圧薬を朝1回服用と記載されています。",
+    "view_bucket": "unknown"
+   },
+   {
+    "assertion": {
+     "category": "living",
+     "details": [],
+     "evidence": "服薬: 合成の降圧薬を朝1回服用と記載されています。",
+     "evidence_span": [
+      0,
+      26
+     ],
+     "reported_subject": "unspecified",
+     "text": "服薬: 合成の降圧薬を朝1回服用と記載されています。"
+    },
+    "category": "living",
+    "content_hash": "98781bf8a85cb9674898629baf53041f8f611720e71f474f5249791b46ee8e8b",
+    "details": [],
+    "discovery": "backfill_found",
+    "evidence": "服薬: 合成の降圧薬を朝1回服用と記載されています。",
+    "evidence_span": [
+     0,
+     26
+    ],
+    "found_at": 1792245602.0,
+    "found_workday_id": "2026-10-17",
+    "historical": false,
+    "id": "<volatile>",
+    "message_id": 3,
+    "posted_at": "2026-09-19T00:00:00+09:00",
+    "posted_at_ts": 1789743600,
+    "project_id": 1,
+    "quote": "服薬: 合成の降圧薬を朝1回服用と記載されています。",
+    "quote_span": [
+     0,
+     26
+    ],
+    "reference_context": {
+     "after": "",
+     "after_span": [
+      26,
+      26
+     ],
+     "before": "",
+     "before_span": [
+      0,
+      0
+     ],
+     "leading": "",
+     "leading_span": [
+      0,
+      0
+     ],
+     "span": [
+      0,
+      26
+     ]
+    },
+    "relations": [],
+    "reported_subject": "unspecified",
+    "sender": "sender",
+    "source": "chat",
+    "source_key": 3,
+    "subject": "unspecified",
+    "temporal": {
+     "action": null,
+     "as_of_day": null,
+     "corrections": [],
+     "current_cue": false,
+     "event_day": null,
+     "negated": null,
+     "ongoing": false,
+     "period": "current",
+     "posted_at_ts": 1789743600,
+     "posted_day": "2026-09-19",
+     "resolution": null,
+     "state_day": null,
+     "subject": "patient",
+     "symptom_state": null,
+     "unknown": false,
+     "use_state": null
+    },
+    "temporality": "reported",
+    "text": "服薬: 合成の降圧薬を朝1回服用と記載されています。",
+    "view_bucket": "unknown"
+   },
+   {
+    "assertion": {
+     "category": "living",
+     "details": [],
+     "evidence": "生活環境: 合成の居住記録。本人は自宅で生活しています。",
+     "evidence_span": [
+      0,
+      28
+     ],
+     "reported_subject": "unspecified",
+     "text": "合成の居住記録。本人は自宅で生活しています。"
+    },
+    "category": "living",
+    "content_hash": "0be5e68de5d269bbe2822ad9f8a9de8a1d061132531b1795fe3b03184f98b28f",
+    "details": [],
+    "discovery": "new_report",
+    "evidence": "生活環境: 合成の居住記録。本人は自宅で生活しています。",
+    "evidence_span": [
+     0,
+     28
+    ],
+    "found_at": 1792245600.0,
+    "found_workday_id": "2026-10-17",
+    "historical": false,
+    "id": "<volatile>",
+    "message_id": 1,
+    "posted_at": "2026-09-19T00:00:00+09:00",
+    "posted_at_ts": 1789743600,
+    "project_id": 1,
+    "quote": "生活環境: 合成の居住記録。本人は自宅で生活しています。",
+    "quote_span": [
+     0,
+     28
+    ],
+    "reference_context": {
+     "after": "",
+     "after_span": [
+      28,
+      28
+     ],
+     "before": "",
+     "before_span": [
+      0,
+      0
+     ],
+     "leading": "",
+     "leading_span": [
+      0,
+      0
+     ],
+     "span": [
+      0,
+      28
+     ]
+    },
+    "relations": [],
+    "reported_subject": "unspecified",
+    "sender": "sender",
+    "source": "chat",
+    "source_key": 1,
+    "subject": "unspecified",
+    "temporal": {
+     "action": null,
+     "as_of_day": null,
+     "corrections": [],
+     "current_cue": false,
+     "event_day": null,
+     "negated": null,
+     "ongoing": false,
+     "period": "current",
+     "posted_at_ts": 1789743600,
+     "posted_day": "2026-09-19",
+     "resolution": null,
+     "state_day": null,
+     "subject": "patient",
+     "symptom_state": null,
+     "unknown": false,
+     "use_state": null
+    },
+    "temporality": "reported",
+    "text": "合成の居住記録。本人は自宅で生活しています。",
+    "view_bucket": "unknown"
+   },
+   {
+    "assertion": {
+     "category": "history",
+     "details": [],
+     "evidence": "既往歴: 合成の既往として高血圧の記載があります。",
+     "evidence_span": [
+      0,
+      25
+     ],
+     "reported_subject": "unspecified",
+     "text": "合成の既往として高血圧の記載があります。"
+    },
+    "category": "history",
+    "content_hash": "db13dc55f20f95c19cc1a7a7530e5cb735dcb03487a82f726166ade88a186db2",
+    "details": [],
+    "discovery": "new_report",
+    "evidence": "既往歴: 合成の既往として高血圧の記載があります。",
+    "evidence_span": [
+     0,
+     25
+    ],
+    "found_at": 1792245601.0,
+    "found_workday_id": "2026-10-17",
+    "historical": false,
+    "id": "<volatile>",
+    "message_id": 2,
+    "posted_at": "2026-09-19T00:00:00+09:00",
+    "posted_at_ts": 1789743600,
+    "project_id": 1,
+    "quote": "既往歴: 合成の既往として高血圧の記載があります。",
+    "quote_span": [
+     0,
+     25
+    ],
+    "reference_context": {
+     "after": "",
+     "after_span": [
+      25,
+      25
+     ],
+     "before": "",
+     "before_span": [
+      0,
+      0
+     ],
+     "leading": "",
+     "leading_span": [
+      0,
+      0
+     ],
+     "span": [
+      0,
+      25
+     ]
+    },
+    "relations": [],
+    "reported_subject": "unspecified",
+    "sender": "sender",
+    "source": "chat",
+    "source_key": 2,
+    "subject": "unspecified",
+    "temporal": {
+     "action": null,
+     "as_of_day": null,
+     "corrections": [],
+     "current_cue": false,
+     "event_day": null,
+     "negated": null,
+     "ongoing": false,
+     "period": "past",
+     "posted_at_ts": 1789743600,
+     "posted_day": "2026-09-19",
+     "resolution": null,
+     "state_day": null,
+     "subject": "patient",
+     "symptom_state": null,
+     "unknown": false,
+     "use_state": null
+    },
+    "temporality": "reported",
+    "text": "合成の既往として高血圧の記載があります。",
+    "view_bucket": "history"
+   },
+   {
+    "assertion": {
+     "category": "living",
+     "details": [],
+     "evidence": "既往歴: 合成の既往として高血圧の記載があります。",
+     "evidence_span": [
+      0,
+      25
+     ],
+     "reported_subject": "unspecified",
+     "text": "既往歴: 合成の既往として高血圧の記載があります。"
+    },
+    "category": "living",
+    "content_hash": "db13dc55f20f95c19cc1a7a7530e5cb735dcb03487a82f726166ade88a186db2",
+    "details": [],
+    "discovery": "backfill_found",
+    "evidence": "既往歴: 合成の既往として高血圧の記載があります。",
+    "evidence_span": [
+     0,
+     25
+    ],
+    "found_at": 1792245601.0,
+    "found_workday_id": "2026-10-17",
+    "historical": false,
+    "id": "<volatile>",
+    "message_id": 2,
+    "posted_at": "2026-09-19T00:00:00+09:00",
+    "posted_at_ts": 1789743600,
+    "project_id": 1,
+    "quote": "既往歴: 合成の既往として高血圧の記載があります。",
+    "quote_span": [
+     0,
+     25
+    ],
+    "reference_context": {
+     "after": "",
+     "after_span": [
+      25,
+      25
+     ],
+     "before": "",
+     "before_span": [
+      0,
+      0
+     ],
+     "leading": "",
+     "leading_span": [
+      0,
+      0
+     ],
+     "span": [
+      0,
+      25
+     ]
+    },
+    "relations": [],
+    "reported_subject": "unspecified",
+    "sender": "sender",
+    "source": "chat",
+    "source_key": 2,
+    "subject": "unspecified",
+    "temporal": {
+     "action": null,
+     "as_of_day": null,
+     "corrections": [],
+     "current_cue": false,
+     "event_day": null,
+     "negated": null,
+     "ongoing": false,
+     "period": "past",
+     "posted_at_ts": 1789743600,
+     "posted_day": "2026-09-19",
+     "resolution": null,
+     "state_day": null,
+     "subject": "patient",
+     "symptom_state": null,
+     "unknown": false,
+     "use_state": null
+    },
+    "temporality": "reported",
+    "text": "既往歴: 合成の既往として高血圧の記載があります。",
+    "view_bucket": "history"
+   }
+  ],
+  "facts_sig": "8d288cba97dccc1e32ea05a3ca0864fa426a9542b3f5d09b9a350d4a911353e2",
+  "facts_total": 6,
+  "generated_at": "<volatile>",
+  "historical_facts": [],
+  "source_sig": "<volatile>",
+  "summary": [
+   {
+    "fact_ids": [
+     "70aa3c3f7cfce4925c05b38bd2532bc16f04ea359c49881dc47f2bda1348ce55"
+    ],
+    "text": "生活環境: 合成の居住記録。本人は自宅で生活しています。"
+   },
+   {
+    "fact_ids": [
+     "7613aacf99201b3a6354796c9835889536297554406e137594edd17597c2fa27"
+    ],
+    "text": "服薬: 合成の降圧薬を朝1回服用と記載されています。"
+   },
+   {
+    "fact_ids": [
+     "15372cdc29e115df87e2f1520003dd7d0da1cbd16f5132ca873f6a517368cc33"
+    ],
+    "text": "服薬: 合成の降圧薬を朝1回服用と記載されています。"
+   },
+   {
+    "fact_ids": [
+     "0bc6030f17eeb215e681b459b7cf435aed6f8f94c7b8e612e12ee4c8e6694f5c"
+    ],
+    "text": "生活環境: 合成の居住記録。本人は自宅で生活しています。"
+   },
+   {
+    "fact_ids": [
+     "bb3bddb497d9f9a0ccd381b52ebaeb5535996028185983727c207ba952b39361"
+    ],
+    "text": "既往歴: 合成の既往として高血圧の記載があります。"
+   },
+   {
+    "fact_ids": [
+     "240591e59df8d704d9eafad1be5b1c7ac20b84d82530226b5c3705a0470b6b24"
+    ],
+    "text": "既往歴: 合成の既往として高血圧の記載があります。"
+   }
+  ],
+  "temporal_view": {
+   "groups": {
+    "conflict": [],
+    "current": [],
+    "history": [
+     "bb3bddb497d9f9a0ccd381b52ebaeb5535996028185983727c207ba952b39361",
+     "240591e59df8d704d9eafad1be5b1c7ac20b84d82530226b5c3705a0470b6b24"
+    ],
+    "plan": [],
+    "unknown": [
+     "70aa3c3f7cfce4925c05b38bd2532bc16f04ea359c49881dc47f2bda1348ce55",
+     "7613aacf99201b3a6354796c9835889536297554406e137594edd17597c2fa27",
+     "15372cdc29e115df87e2f1520003dd7d0da1cbd16f5132ca873f6a517368cc33",
+     "0bc6030f17eeb215e681b459b7cf435aed6f8f94c7b8e612e12ee4c8e6694f5c"
+    ]
+   },
+   "relations": []
+  },
+  "truncated": false,
+  "version": 1
+ },
+ "views": {
+  "background": {
+   "empty": "この範囲で該当する記録は見つかりません",
+   "head": [
+    "関係者: sender",
+    "表示順: 標準",
+    "介入・経過：未取得・未解析などにより、確認できた範囲を表示",
+    "全10件中 1〜8件目"
+   ],
+   "items": [
+    {
+     "date": "09/19",
+     "group": "患者コンテキスト · 時点・関係未確認",
+     "project_id": 1,
+     "quotes": [
+      "生活環境: 合成の居住記録。本人は自宅で生活しています。"
+     ],
+     "source": "09/19 sender #1",
+     "source_key": 1,
+     "source_rest": "sender #1",
+     "text": "生活環境: 合成の居住記録。本人は自宅で生活しています。　（09/19 sender #1）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    },
+    {
+     "date": "09/19",
+     "group": "患者コンテキスト · 時点・関係未確認",
+     "project_id": 1,
+     "quotes": [
+      "服薬: 合成の降圧薬を朝1回服用と記載されています。"
+     ],
+     "source": "09/19 sender #3",
+     "source_key": 3,
+     "source_rest": "sender #3",
+     "text": "服薬: 合成の降圧薬を朝1回服用と記載されています。　（09/19 sender #3）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    },
+    {
+     "date": "09/19",
+     "group": "患者コンテキスト · 時点・関係未確認",
+     "project_id": 1,
+     "quotes": [
+      "生活環境: 合成の居住記録。本人は自宅で生活しています。"
+     ],
+     "source": "09/19 sender #1",
+     "source_key": 1,
+     "source_rest": "sender #1",
+     "text": "生活環境: 合成の居住記録。本人は自宅で生活しています。　（09/19 sender #1）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    },
+    {
+     "date": "09/19",
+     "group": "患者コンテキスト · 履歴",
+     "project_id": 1,
+     "quotes": [
+      "既往歴: 合成の既往として高血圧の記載があります。"
+     ],
+     "source": "09/19 sender #2",
+     "source_key": 2,
+     "source_rest": "sender #2",
+     "text": "既往歴: 合成の既往として高血圧の記載があります。　（09/19 sender #2）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    },
+    {
+     "date": "09/19",
+     "group": "既往歴 · 履歴",
+     "project_id": 1,
+     "quotes": [
+      "合成の既往として高血圧の記載があります。"
+     ],
+     "source": "09/19 sender #2",
+     "source_key": 2,
+     "source_rest": "sender #2",
+     "text": "合成の既往として高血圧の記載があります。　（09/19 sender #2）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    },
+    {
+     "date": "09/19",
+     "group": "生活環境 · 時点・関係未確認",
+     "project_id": 1,
+     "quotes": [
+      "服薬: 合成の降圧薬を朝1回服用と記載されています。"
+     ],
+     "source": "09/19 sender #3",
+     "source_key": 3,
+     "source_rest": "sender #3",
+     "text": "服薬: 合成の降圧薬を朝1回服用と記載されています。　（09/19 sender #3）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    },
+    {
+     "date": "09/19",
+     "group": "生活環境 · 履歴",
+     "project_id": 1,
+     "quotes": [
+      "既往歴: 合成の既往として高血圧の記載があります。"
+     ],
+     "source": "09/19 sender #2",
+     "source_key": 2,
+     "source_rest": "sender #2",
+     "text": "既往歴: 合成の既往として高血圧の記載があります。　（09/19 sender #2）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    },
+    {
+     "date": "09/19",
+     "group": "生活環境 · 時点・関係未確認",
+     "project_id": 1,
+     "quotes": [
+      "合成の居住記録。本人は自宅で生活しています。"
+     ],
+     "source": "09/19 sender #1",
+     "source_key": 1,
+     "source_rest": "sender #1",
+     "text": "合成の居住記録。本人は自宅で生活しています。　（09/19 sender #1）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    }
+   ],
+   "layout": "patient_context",
+   "notes": [
+    "患者コンテキストの反映時点: 10/17 23:00",
+    "履歴取得: 完了記録あり",
+    "取込済み 3件 / 点検済み 3件 / 未点検 0件 / 本文未取得・不完全 0件",
+    "原文に対応する引用 6 / 6件",
+    "まとめ未反映 0件"
+   ],
+   "page": 0,
+   "pages": 2,
+   "title": "synthetic-1 — 患者さんの全体像（1/2ページ）"
+  },
+  "care_events": {
+   "empty": "出来事の記載の有無は確認できません",
+   "head": [
+    "出来事の日付順（日付未確認は後に表示）。投稿間の関係は未照合",
+    "投稿番号の降順で3件を確認（1回最大200件）",
+    "未取得・未解析・添付・対象上限などのため、全履歴の確認は未完了"
+   ],
+   "items": [],
+   "layout": "patient_context",
+   "notes": [],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 出来事の記録"
+  },
+  "changes": {
+   "empty": "この範囲で該当する記録は見つかりません",
+   "head": [
+    "前回の表示依頼: 初回"
+   ],
+   "items": [
+    {
+     "date": "09/19",
+     "group": "新しい報告 · 時点・関係未確認",
+     "project_id": 1,
+     "quotes": [
+      "服薬: 合成の降圧薬を朝1回服用と記載されています。"
+     ],
+     "source": "09/19 sender #3",
+     "source_key": 3,
+     "source_rest": "sender #3",
+     "text": "服薬: 合成の降圧薬を朝1回服用と記載されています。　（09/19 sender #3）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    },
+    {
+     "date": "09/19",
+     "group": "新しい報告 · 履歴",
+     "project_id": 1,
+     "quotes": [
+      "既往歴: 合成の既往として高血圧の記載があります。"
+     ],
+     "source": "09/19 sender #2",
+     "source_key": 2,
+     "source_rest": "sender #2",
+     "text": "既往歴: 合成の既往として高血圧の記載があります。　（09/19 sender #2）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    },
+    {
+     "date": "09/19",
+     "group": "新しい報告 · 時点・関係未確認",
+     "project_id": 1,
+     "quotes": [
+      "生活環境: 合成の居住記録。本人は自宅で生活しています。"
+     ],
+     "source": "09/19 sender #1",
+     "source_key": 1,
+     "source_rest": "sender #1",
+     "text": "生活環境: 合成の居住記録。本人は自宅で生活しています。　（09/19 sender #1）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    }
+   ],
+   "layout": "patient_context",
+   "notes": [
+    "患者コンテキストの反映時点: 10/17 23:00",
+    "履歴取得: 完了記録あり",
+    "取込済み 3件 / 点検済み 3件 / 未点検 0件 / 本文未取得・不完全 0件",
+    "原文に対応する引用 6 / 6件",
+    "まとめ未反映 0件"
+   ],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 前回から変わったこと"
+  },
+  "discrepancies": {
+   "empty": "この範囲で該当する記録は見つかりません",
+   "head": [],
+   "items": [],
+   "layout": "patient_context",
+   "notes": [
+    "患者コンテキストの反映時点: 10/17 23:00",
+    "履歴取得: 完了記録あり",
+    "取込済み 3件 / 点検済み 3件 / 未点検 0件 / 本文未取得・不完全 0件",
+    "原文に対応する引用 6 / 6件",
+    "まとめ未反映 0件"
+   ],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 記録の食い違い"
+  },
+  "handoff": {
+   "empty": "この範囲で該当する記録は見つかりません",
+   "head": [],
+   "items": [],
+   "layout": "patient_context",
+   "notes": [
+    "患者コンテキストの反映時点: 10/17 23:00",
+    "履歴取得: 完了記録あり",
+    "取込済み 3件 / 点検済み 3件 / 未点検 0件 / 本文未取得・不完全 0件",
+    "原文に対応する引用 6 / 6件",
+    "まとめ未反映 0件"
+   ],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 引継ぎ用の記録"
+  },
+  "observations": {
+   "empty": "この範囲で該当する記録は見つかりません",
+   "head": [
+    "原文に記載された検査・観測値を項目ごとに投稿順で表示",
+    "原文照合: 0 / 0投稿（1回最大50投稿）"
+   ],
+   "items": [],
+   "layout": "patient_context",
+   "notes": [
+    "患者コンテキストの反映時点: 10/17 23:00",
+    "履歴取得: 完了記録あり",
+    "取込済み 3件 / 点検済み 3件 / 未点検 0件 / 本文未取得・不完全 0件",
+    "原文に対応する引用 6 / 6件",
+    "まとめ未反映 0件"
+   ],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 検査・観測の記録"
+  },
+  "previsit": {
+   "empty": "この範囲で該当する記録は見つかりません",
+   "head": [
+    "介入の記載: 投稿番号の降順で3件を対象に走査。定型の記載のみ対象、別投稿による変更は未照合",
+    "介入の記載: 履歴の取得完了は未確認",
+    "介入・経過：未取得・未解析などにより、確認できた範囲を表示"
+   ],
+   "items": [
+    {
+     "date": "09/19",
+     "group": "後から取得した記録 · 時点・関係未確認",
+     "project_id": 1,
+     "quotes": [
+      "服薬: 合成の降圧薬を朝1回服用と記載されています。"
+     ],
+     "source": "09/19 sender #3",
+     "source_key": 3,
+     "source_rest": "sender #3",
+     "text": "服薬: 合成の降圧薬を朝1回服用と記載されています。　（09/19 sender #3）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    },
+    {
+     "date": "09/19",
+     "group": "後から取得した記録 · 履歴",
+     "project_id": 1,
+     "quotes": [
+      "既往歴: 合成の既往として高血圧の記載があります。"
+     ],
+     "source": "09/19 sender #2",
+     "source_key": 2,
+     "source_rest": "sender #2",
+     "text": "既往歴: 合成の既往として高血圧の記載があります。　（09/19 sender #2）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    },
+    {
+     "date": "09/19",
+     "group": "後から取得した記録 · 時点・関係未確認",
+     "project_id": 1,
+     "quotes": [
+      "生活環境: 合成の居住記録。本人は自宅で生活しています。"
+     ],
+     "source": "09/19 sender #1",
+     "source_key": 1,
+     "source_rest": "sender #1",
+     "text": "生活環境: 合成の居住記録。本人は自宅で生活しています。　（09/19 sender #1）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    }
+   ],
+   "layout": "patient_context",
+   "notes": [
+    "患者コンテキストの反映時点: 10/17 23:00",
+    "履歴取得: 完了記録あり",
+    "取込済み 3件 / 点検済み 3件 / 未点検 0件 / 本文未取得・不完全 0件",
+    "原文に対応する引用 6 / 6件",
+    "まとめ未反映 0件"
+   ],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 訪問前の確認ノート"
+  },
+  "replies": {
+   "empty": "この範囲で該当する記録は見つかりません",
+   "head": [],
+   "items": [],
+   "layout": "patient_context",
+   "notes": [
+    "患者コンテキストの反映時点: 10/17 23:00",
+    "履歴取得: 完了記録あり",
+    "取込済み 3件 / 点検済み 3件 / 未点検 0件 / 本文未取得・不完全 0件",
+    "原文に対応する引用 6 / 6件",
+    "まとめ未反映 0件"
+   ],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 連絡・返答の確認"
+  },
+  "timeline": {
+   "empty": "この範囲で該当する記録は見つかりません",
+   "head": [
+    "介入・経過：未取得・未解析などにより、確認できた範囲を表示"
+   ],
+   "items": [
+    {
+     "date": "09/19",
+     "group": "時点・関係未確認",
+     "project_id": 1,
+     "quotes": [
+      "生活環境: 合成の居住記録。本人は自宅で生活しています。"
+     ],
+     "source": "09/19 sender #1",
+     "source_key": 1,
+     "source_rest": "sender #1",
+     "text": "生活環境: 合成の居住記録。本人は自宅で生活しています。　（09/19 sender #1）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    },
+    {
+     "date": "09/19",
+     "group": "履歴",
+     "project_id": 1,
+     "quotes": [
+      "既往歴: 合成の既往として高血圧の記載があります。"
+     ],
+     "source": "09/19 sender #2",
+     "source_key": 2,
+     "source_rest": "sender #2",
+     "text": "既往歴: 合成の既往として高血圧の記載があります。　（09/19 sender #2）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    },
+    {
+     "date": "09/19",
+     "group": "時点・関係未確認",
+     "project_id": 1,
+     "quotes": [
+      "服薬: 合成の降圧薬を朝1回服用と記載されています。"
+     ],
+     "source": "09/19 sender #3",
+     "source_key": 3,
+     "source_rest": "sender #3",
+     "text": "服薬: 合成の降圧薬を朝1回服用と記載されています。　（09/19 sender #3）",
+     "url": "https://www.medical-care.net/projects/medical/1"
+    }
+   ],
+   "layout": "patient_context",
+   "notes": [
+    "紹介状: OCR無効・内容未点検",
+    "患者コンテキストの反映時点: 10/17 23:00",
+    "履歴取得: 完了記録あり",
+    "取込済み 3件 / 点検済み 3件 / 未点検 0件 / 本文未取得・不完全 0件",
+    "原文に対応する引用 6 / 6件",
+    "まとめ未反映 0件"
+   ],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 経過タイムライン"
+  },
+  "transition_course": {
+   "empty": "この範囲で該当する記録は見つかりません",
+   "head": [],
+   "items": [],
+   "layout": "patient_context",
+   "notes": [
+    "患者コンテキストの反映時点: 10/17 23:00",
+    "履歴取得: 完了記録あり",
+    "取込済み 3件 / 点検済み 3件 / 未点検 0件 / 本文未取得・不完全 0件",
+    "原文に対応する引用 6 / 6件",
+    "まとめ未反映 0件"
+   ],
+   "page": 0,
+   "pages": 1,
+   "title": "synthetic-1 — 退院・移行時の経過"
+  }
+ }
+}

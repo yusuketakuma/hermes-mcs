@@ -144,11 +144,30 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
 
     # ---------- runs ----------
 
-    def begin_run(self, snapshot_ts: int | None, kind: str = "tick") -> int:
+    def begin_run(self, snapshot_ts: int | None, kind: str = "tick", *,
+                  interrupt_reason=None) -> int:
+        """Close any unfinished run as crashed, then open a new running row.
+
+        ``interrupt_reason(run_id, started_at)`` may name what stopped an
+        unfinished row; it is called before any write, so no write lock is
+        held while it reads its evidence. A failure or a non-code answer
+        leaves the row's error untouched (read as cause unknown)."""
         # caller holds the process lock — any 'running' row is a crashed run
-        self.db.execute(
-            "UPDATE runs SET status='crashed',finished_at=? "
-            "WHERE status='running'", (time.time(),))
+        detected = time.time()
+        unfinished = self.db.execute(
+            "SELECT run_id,started_at FROM runs WHERE status='running'").fetchall()
+        for row in unfinished:
+            reason = None
+            if interrupt_reason is not None:
+                try:
+                    reason = interrupt_reason(row[0], row[1])
+                except Exception:
+                    reason = None
+            if not (isinstance(reason, str) and 0 < len(reason) <= 32):
+                reason = None
+            self.db.execute(
+                "UPDATE runs SET status='crashed',finished_at=?,error=COALESCE(?,error) "
+                "WHERE run_id=? AND status='running'", (detected, reason, row[0]))
         cur = self.db.execute(
             "INSERT INTO runs(started_at,snapshot_ts,status,kind) "
             "VALUES(?,?,?,?)",

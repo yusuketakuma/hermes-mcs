@@ -56,7 +56,7 @@ PY
 | rollup | `patient_rollup` に `karte_summary`（comment、updated_at、updater の職種、empty）を追加。`PERIOD_CHECK_VERSION` 据え置き | S |
 | 表示 | `notify_views.patient_summary_text` に 1 行: 登録あり →「連携サマリー（MCS・更新 MM/DD・職種）: 先頭 80 字」、**空 →「連携サマリー（MCS）: 空」**、未取得 →「連携サマリー（MCS）: 未取得」。`mcs_view status` の project 行に `karte_summary_at`・`karte_summary_empty` | S |
 | 抽出文脈 | `extract_llm._thread_context` と同じ参照専用ブロックとして「患者連携サマリー（参照専用・evidence 引用禁止）」を対象本文の前に注入（≤ 150 字）。既存の文脈上限（`_CTX_TOTAL_MAX`）に含める。chunk checkpoint は文脈 hash が変わるため新着からのみ影響。`EXTRACT_VERSION` 据え置き | S |
-| digest | `notify_digest.build_text` に「連携サマリー更新: n 件（project ID 一覧）」。本文は載せない。`daily_digest.include_names` の規則に従う | S |
+| digest | `notify_digest.build_text`（2026-11-15 に削除済み）に「連携サマリー更新: n 件（project ID 一覧）」。本文は載せない。`daily_digest.include_names` の規則に従う | S |
 
 `ponytail:` 取得の対象選択は「新規チャットがあった project は都度」＋「未取得 project の初回埋め 10 件/deep run」の 2 規則だけにする。全 project の毎 tick 取得（102 GET/tick）はしない。新着の無い患者のサマリー変更は次の新着まで反映されない（一覧 API に更新日時が無いため。差分検知が取れると分かれば規則を差し替える）。
 

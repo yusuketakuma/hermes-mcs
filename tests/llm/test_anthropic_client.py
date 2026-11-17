@@ -302,7 +302,7 @@ def test_each_retry_reserves_and_accounts_http_failures(monkeypatch):
     def post(*args):
         calls.append(1)
         if len(calls) == 1:
-            return 529, {}, b"private response must not appear"   # an HTTP status is a definite outcome
+            return 429, {}, b"private response must not appear"   # an HTTP status is a definite outcome
         return 200, {}, json.dumps(_reply()).encode()
 
     def reserve(*args):
@@ -313,10 +313,21 @@ def test_each_retry_reserves_and_accounts_http_failures(monkeypatch):
     client.complete("synthetic", deadline=time.monotonic() + 10, reserve_fn=reserve,
                     after_result=lambda r, meta, **_answer: results.append((r, meta)))
     assert reservations == [0, 1]
-    assert results[0][1]["usage"] is None and results[0][1]["error_kind"] == "transport"
-    assert results[0][1]["http_class"] == "http_529"
+    assert results[0][1]["usage"] is None and results[0][1]["error_kind"] == "rate_limited"
+    assert results[0][1]["http_class"] == "http_429"
     assert results[1][1]["usage"]["output_tokens"] == 5
     assert "private response" not in json.dumps(results)
+
+
+def test_a_provider_5xx_is_accounted_once_and_handed_to_local(monkeypatch):
+    monkeypatch.setattr(a.time, "sleep", lambda delay: pytest.fail("a 5xx is not waited on"))
+    reservations, results = [], []
+    client = a.AnthropicClient("synthetic", post_fn=lambda *args: (529, {"Retry-After": "30"}, b"busy"))
+    with pytest.raises(a.AnthropicError, match="transport"):
+        client.complete("synthetic", deadline=time.monotonic() + 60,
+                        reserve_fn=lambda *args: reservations.append(1) or len(reservations),
+                        after_result=lambda r, meta, **_answer: results.append(meta))
+    assert reservations == [1] and [meta["http_class"] for meta in results] == ["http_529"]
 
 
 @pytest.mark.parametrize("error", [TimeoutError("synthetic"), ConnectionResetError("synthetic"),
@@ -356,11 +367,13 @@ def test_the_real_request_path_never_resends_a_transport_failure(monkeypatch, er
     assert calls == ["POST"]
 
 
+# A cloud 5xx/529 is not retried: the shared reservation guard refuses a second send of the same
+# request anyway, so waiting only held the slot (owner decision 2026-11-15: hand it to local now).
 @pytest.mark.parametrize("status,kind,retries", [(401,"auth_error",1), (403,"auth_error",1),
                                                 (402,"payment_required",1), (400,"contract_error",1),
-                                                (429,"rate_limited",3), (529,"transport",3),
-                                                (503,"transport",3)])
-def test_shared_jev_retry_classes(monkeypatch, status, kind, retries):
+                                                (429,"rate_limited",3), (529,"transport",1),
+                                                (503,"transport",1)])
+def test_cloud_retry_classes(monkeypatch, status, kind, retries):
     monkeypatch.setattr(a.time, "sleep", lambda delay: None)
     calls = []
     client = a.AnthropicClient("synthetic", post_fn=lambda *args: (

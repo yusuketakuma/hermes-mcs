@@ -11,8 +11,33 @@ from test_install_sh import _world, _run, _calls, SAVED_FLAGS
 FLAGS = ('--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
 
 
+def _pairwise_skip_cases():
+    """Every value pair of every two flags, plus all flags on and all off.
+
+    Rows are the 8-run orthogonal array over base bits a, b, c with columns
+    a, b, c, a^b, a^c: any two of these columns are independent over GF(2),
+    so each of the four value pairs of any two flags appears in two rows.
+    Both runtimes run every row, so each runtime meets every flag pair. The
+    flag interactions in install.sh read at most two flags with the runtime
+    (--no-brew with hermes, --no-brew with the recovery check, --no-llm in
+    the disk check, flags forwarded to the next step); the full 2^5 product
+    ran install.sh 64 times for them."""
+    rows = [(a, b, c, a ^ b, a ^ c) for a, b, c in itertools.product((0, 1), repeat=3)]
+    rows.append((1,) * len(FLAGS))
+    return [tuple(bool(bit) for bit in row) for row in rows]
+
+
+SKIP_CASES = _pairwise_skip_cases()
+
+
+def test_skip_flag_cases_cover_every_pair_and_both_extremes():
+    assert (False,) * len(FLAGS) in SKIP_CASES and (True,) * len(FLAGS) in SKIP_CASES
+    for left, right in itertools.combinations(range(len(FLAGS)), 2):
+        assert {(row[left], row[right]) for row in SKIP_CASES} == set(itertools.product((False, True), repeat=2))
+
+
 @pytest.mark.parametrize('runtime', ['hermes', 'standalone'])
-@pytest.mark.parametrize('bits', list(itertools.product([False, True], repeat=len(FLAGS))))
+@pytest.mark.parametrize('bits', SKIP_CASES)
 def test_every_skip_flag_combination_converges(tmp_path, runtime, bits):
     home, _, stub, env = _world(tmp_path)
     flags = [flag for flag, skip in zip(FLAGS, bits) if skip]

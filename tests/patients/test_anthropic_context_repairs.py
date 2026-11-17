@@ -80,13 +80,15 @@ def test_source_normal_fail_repairs_all_units_preserving_original_chunks_and_sup
                                                 (patient_context_refresh_state.CHUNK,))] == originals
     assert len(led.artifacts(patient_context_refresh_state.SOURCE_REPAIR, project_id=1)) == 1
     snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG)
-    scan = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)[1]
+    scan = patient_context_refresh_sources._current_scans(led.db, 1, snapshot['sources'], snapshot['route'], cfg=CFG)[1]
     assert scan['accepted_candidate_ref'] and scan['audited']
-    facts = list(patient_context_refresh_sources._scan_facts(led.db, 1, snapshot['sources'][0], snapshot['contract'], scan))
+    facts = list(patient_context_refresh_sources._scan_facts(led.db, 1, snapshot['sources'][0], snapshot['route'], scan))
     assert {fact['text'] for fact in facts} == {_REPAIR_HOME, _REPAIR_BED}
     for fid, fact in supported.items():
         actual = next(value for value in facts if value['id'] == fid)
-        assert patient_context_refresh_state._facts_sig([actual]) == patient_context_refresh_state._facts_sig([fact])
+        # The read adds its temporal interpretation; the stored fact itself is unchanged.
+        stored = {key: value for key, value in actual.items() if key != 'temporal'}
+        assert patient_context_refresh_state._facts_sig([stored]) == patient_context_refresh_state._facts_sig([fact])
     reserves = led.artifacts('cloud_usage_reserve', project_id=1)
     assert len(reserves) == 2
     assert len({json.loads(row['meta'])['unit_key'] for row in reserves}) == 2
@@ -111,7 +113,7 @@ def test_deterministic_source_repair_scan_refusal_holds_instead_of_paid_retries(
         clock.wall += 61
         snapshot = patient_context_refresh_sources._snapshot(led.db, 1, CFG, hydrate=False)
         scans = patient_context_refresh_sources._current_scans(
-            led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+            led.db, 1, snapshot['sources'], snapshot['route'], cfg=CFG)
         for scan in scans.values():
             if scan.get('quality_state') == 'held':
                 held = scan
@@ -125,8 +127,18 @@ def test_deterministic_source_repair_scan_refusal_holds_instead_of_paid_retries(
     assert not source_repair['sent']
 
 
-@pytest.mark.parametrize('stop', ['none', 'length', 'capacity'])
-@pytest.mark.parametrize('tamper', ['answer', 'missing_proof', 'duplicate_proof', 'strip_provider'])
+# Not the full 3 x 4 product: the stop only changes the first send during the
+# drain (the run then sends and stores more parts, asserted below), while every
+# tamper rewrites the stored proof after the drain and is checked before any
+# phase-specific replay. Every tamper runs on the plain answer; each cut answer
+# keeps two tampers. This is a reduced sample of the product, not equivalent
+# coverage: the plain-answer cases are the strong tamper checks. Each case
+# takes about 10-13 s, so the four dropped pairs would add roughly 45 s.
+@pytest.mark.parametrize('stop,tamper', [
+    ('none', 'answer'), ('none', 'missing_proof'), ('none', 'duplicate_proof'), ('none', 'strip_provider'),
+    ('length', 'answer'), ('length', 'strip_provider'),
+    ('capacity', 'answer'), ('capacity', 'duplicate_proof'),
+])
 def test_openai_source_repair_replays_high_response_before_publication(runtime, source_repair, monkeypatch, stop, tamper):
     from contextlib import nullcontext
 
@@ -188,6 +200,8 @@ def test_openai_source_repair_replays_high_response_before_publication(runtime, 
                          and body['max_output_tokens'] == 32768 for body in sends)
     slots = led.artifacts(patient_context_refresh_state.SOURCE_REPAIR_CANDIDATE, project_id=1)
     assert slots and all(json.loads(row['meta'])['repair_provider']['model'] == 'gpt-6.1-sol' for row in slots)
+    # The stop path was taken: a cut first answer leads to more sends and stored parts.
+    assert len(sends) == len(slots) == (2 if stop == 'none' else 4)
     import mcs_view
     for row in slots:
         stored = json.loads(row['content'])
@@ -385,10 +399,10 @@ def test_historical_karte_repair_retains_original_question_and_answer(runtime, c
     record = {'category': 'living', 'subject': 'patient', 'text': _REPAIR_HOME, 'evidence': _REPAIR_HOME, 'details': []}
     facts = context_plan.source_facts(source, [record], workday_id='synthetic', discovery='new_report', found_at=patient_context_refresh_state.time.time())
     assert len(facts) == 1 and facts[0]['historical'] is False
-    contract = patient_context_refresh_state._contract(CFG, 1)
+    route = patient_context_refresh_state._route(CFG, 1)
     occurrence = patient_context_refresh_sources._source_occurrence(led.db, 1, source)
     meta = {'source_key': context_plan.source_key(source), 'source_sig': context_plan.source_signature(source),
-            'contract': contract, 'provider': contract['provider'], 'model': contract['provider']['model'],
+            'contract': route['contract'], 'provider': route['provider'], 'model': route['provider']['model'], 'provenance': {'backend': route['provider']['backend'], 'model': route['provider']['model'], 'profile': None},
             'source_occurrence_version': 1, 'source_occurrence': occurrence,
             'source_binding': occurrence['source_binding'], 'unit_key': '1' * 64, 'chunk_key': '2' * 64}
     checkpoint = {'complete': True, 'audited': False, 'cursor': 1, 'chunks': 1,
@@ -805,9 +819,8 @@ def test_new_occurrence_marker_never_uses_duplicate_metadata_as_legacy(runtime, 
     assert not patient_context_refresh_readiness.inference_coverage(led.db, 1, CFG)['complete']
 
 
-@pytest.mark.parametrize('save_interrupted', [False, True])
-def test_openai_summary_high_repair_is_audited_published_and_rechecked(runtime, cloud, monkeypatch, tmp_path, save_interrupted):
-    """A paid repair remains bound to its response through publication and later reads."""
+def publish_summary_repair(runtime, monkeypatch, tmp_path, *, save_interrupted=False):
+    """Drive one synthetic paid summary repair to publication; needs the ``cloud`` fixture."""
     from contextlib import nullcontext
 
     led, _, _ = runtime
@@ -911,6 +924,14 @@ def test_openai_summary_high_repair_is_audited_published_and_rechecked(runtime, 
         runtime[1].wall += 3600
     drain(runtime)
     assert len(sends) == 1
+    return sends
+
+
+@pytest.mark.parametrize('save_interrupted', [False, True])
+def test_openai_summary_high_repair_is_audited_published_and_rechecked(runtime, cloud, monkeypatch, tmp_path, save_interrupted):
+    """A paid repair remains bound to its response through publication and later reads."""
+    led, _, _ = runtime
+    sends = publish_summary_repair(runtime, monkeypatch, tmp_path, save_interrupted=save_interrupted)
     assert sends[0]['model'] == 'gpt-6.1-sol' and sends[0]['reasoning'] == {'effort': 'high'}
     assert sends[0]['max_output_tokens'] == 32768
     assert led.artifacts(patient_context_refresh_state.QUALITY_FAIL, project_id=1)

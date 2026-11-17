@@ -99,23 +99,31 @@ DEFAULT_PROFILES = MappingProxyType({"backlog": "haiku-medium", "patient_context
                                      "quality_repair": "sonnet-high"})
 ORIGINAL_CONTRACT = (MODEL, None)
 VALID_MODEL_EFFORTS = frozenset({ORIGINAL_CONTRACT, *PROFILE_DEFINITIONS.values()})
+# Per-attempt wait of each request shape (non-streaming). The named profiles' values are
+# initial settings without measurements, and the unit deadline still caps every attempt.
+ATTEMPT_TIMEOUTS = MappingProxyType({
+    ORIGINAL_CONTRACT: 120.0, (MODEL, "medium"): 300.0, (SONNET_MODEL, "high"): 600.0})
 
 
 def _haiku_snapshot(price_version, checked_on, valid_until):
     return MappingProxyType({
-        "provider": "anthropic", "model": MODEL, "price_version": price_version,
-        "price_checked_on": checked_on, "price_valid_until": valid_until, "price_sources": PRICE_SOURCES,
-        "prices": PRICES_20261026, "long_input_threshold": LONG_INPUT_THRESHOLD,
+        "provider": "anthropic", "model": "claude-haiku-5-5",
+        "price_version": price_version,
+        "price_checked_on": checked_on, "price_valid_until": valid_until,
+        "price_sources": ("https://platform.claude.com/docs/en/models/haiku-5-5/overview",
+                          "https://platform.claude.com/docs/en/models/overview",
+                          "https://platform.claude.com/docs/en/about-claude/pricing"),
+        "prices": PRICES_20261026, "long_input_threshold": 100000,
         "validate_usage": _validate_usage_20261026, "max_tokens": 128000, "legacy_reservation": True,
     })
 
 
-# A recheck with unchanged prices adds a version; older versions stay so stored
-# reservations keep resolving to the definition they were priced with.
+# The 2026-11-15 recheck found the 2026-10-26 Haiku table unchanged; the older
+# version stays so receipts reserved under it keep their original definition.
 PRICE_SNAPSHOTS = MappingProxyType({
-    (MODEL, "anthropic-haiku-5-5-2026-10-26"): _haiku_snapshot(
+    ("claude-haiku-5-5", "anthropic-haiku-5-5-2026-10-26"): _haiku_snapshot(
         "anthropic-haiku-5-5-2026-10-26", "2026-10-26", "2026-11-25"),
-    (MODEL, PRICE_VERSION): _haiku_snapshot(PRICE_VERSION, PRICE_CHECKED_ON, PRICE_VALID_UNTIL),
+    ("claude-haiku-5-5", PRICE_VERSION): _haiku_snapshot(PRICE_VERSION, PRICE_CHECKED_ON, PRICE_VALID_UNTIL),
     (SONNET_MODEL, SONNET_PRICE_VERSION): MappingProxyType({
         "provider": "anthropic", "model": SONNET_MODEL, "price_version": SONNET_PRICE_VERSION,
         "price_checked_on": "2026-11-15", "price_valid_until": "2026-12-15",
@@ -169,6 +177,7 @@ class AnthropicClient(CloudClient):
         if not isinstance(model, str) or effort is not None and not isinstance(effort, str) \
                 or (model, effort) not in VALID_MODEL_EFFORTS:
             raise ValueError("anthropic_profile_invalid")
+        kwargs.setdefault("attempt_timeout", ATTEMPT_TIMEOUTS[(model, effort)])
         super().__init__(api_key, **kwargs)
         self.model = model
         self.effort = effort

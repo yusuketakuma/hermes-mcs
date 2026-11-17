@@ -254,6 +254,42 @@ def test_shadow_cli_malformed_cases_stop_before_model(monkeypatch, tmp_path, cap
     assert "Traceback" not in capsys.readouterr().err
 
 
+def _bundled_case():
+    asset = json.loads((ROOT / "evaluation/semantic_completeness_cases.json").read_text(encoding="utf-8"))
+    return asset["cases"][0]
+
+
+@pytest.mark.parametrize("kind", ["self_declared", "edited_bundled", "duplicated_bundled"])
+def test_shadow_cli_jev_sends_only_the_bundled_synthetic_cases(monkeypatch, tmp_path, capsys, kind):
+    import semantic_evaluation
+    module = _load("semantic_shadow_e2e")
+    cases, output = tmp_path / "cases.json", tmp_path / "report.json"
+    bundled = _bundled_case()
+    payload = {"self_declared": [{"id": "synthetic-operator", "body": "合成の投稿"}],
+               "edited_bundled": [{**bundled, "expect": []}],
+               "duplicated_bundled": [bundled, bundled]}[kind]
+    cases.write_text(json.dumps({"source": "synthetic", "cases": payload}, ensure_ascii=False))
+    calls = []
+    monkeypatch.setitem(sys.modules, "semantic_transport", SimpleNamespace(llm_chat=None))
+    monkeypatch.setitem(sys.modules, "semantic_jev", SimpleNamespace(
+        api_key=lambda: "synthetic", live_client=lambda *a, **kw: calls.append("live")))
+    monkeypatch.setitem(sys.modules, "semantic_evaluation", SimpleNamespace(
+        bundled_synthetic_cases=semantic_evaluation.bundled_synthetic_cases,
+        run_shadow_e2e=lambda *a, **kw: calls.append("run") or {"cases": 1, "complete": 0}))
+    monkeypatch.setattr(sys, "argv", ["shadow", "--cases", str(cases), "--out", str(output), "--jev"])
+    assert module.main() == 1
+    assert calls == [] and not output.exists()
+    assert "bundled" in capsys.readouterr().err
+
+
+def test_bundled_synthetic_cases_accept_only_checked_in_cases():
+    import semantic_evaluation
+    bundled = _bundled_case()
+    assert semantic_evaluation.bundled_synthetic_cases([bundled]) is True
+    for cases in ([], None, [bundled, bundled], [{**bundled, "messages": []}], [{"id": bundled["id"]}], ["x"]):
+        assert semantic_evaluation.bundled_synthetic_cases(cases) is False
+
+
 def test_initial_history_gallery_uses_current_identity_schema():
     module = _load("generate_slack_gallery")
     svg = module.initial_history()

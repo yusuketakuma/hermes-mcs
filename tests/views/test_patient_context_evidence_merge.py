@@ -1,5 +1,6 @@
 """Synthetic source identity boundaries for raw and published context."""
 import patient_context_plan as context_plan
+import patient_context_projection as context_projection
 from contextlib import closing
 from copy import deepcopy
 
@@ -25,7 +26,9 @@ def _seed(db, body, subject=None):
             item["subject"] = subject
     _artifact(db, "extract_v1", 1, {"patient_context": items}, {"hash": _hash_of(db, 1)})
     source = _source(db, 1)
-    facts = context_plan.source_facts(source, items, workday_id="2026-10-01", discovery="new_report", found_at=refresh.time.time())
+    # A published overview carries the read-time interpretation of its facts.
+    facts = [context_projection.with_temporal(fact, source["body_text"]) for fact in context_plan.source_facts(
+        source, items, workday_id="2026-10-01", discovery="new_report", found_at=refresh.time.time())]
     assert facts and context_plan.validated_source_facts(source, facts) == facts
     return source, facts
 

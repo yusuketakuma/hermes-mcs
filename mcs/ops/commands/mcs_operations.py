@@ -698,10 +698,17 @@ def _apply_restore_op_tx(db, req, current) -> tuple[str | None, dict]:
     return None, extra
 
 
+def replay_tx(db, req: dict, receipt: dict, filesystem_changes) -> None:
+    """Finish file effects an applied receipt promised but a stopped process never published."""
+    if req.get("cmd") == "ops.external_transfer_acknowledge":
+        from external_transfer import replay_tx as acknowledge_replay_tx
+        acknowledge_replay_tx(getattr(db, "db", db), receipt, filesystem_changes)
+
+
 def apply_tx(db, req: dict, now: float | None = None, *,
              filesystem_changes=None, cfg=None, data_dir=None) -> tuple[str | None, dict]:
     """Apply one validated operation without committing its transaction."""
-    db = getattr(db, "db", db)
+    owner, db = db, getattr(db, "db", db)
     current = time.time() if now is None else float(now)
     if req["cmd"] == "ops.mcs_reaction":
         from stamp_write import enqueue_tx
@@ -709,12 +716,18 @@ def apply_tx(db, req: dict, now: float | None = None, *,
     if req["cmd"] in ("ops.drug_alias_apply", "ops.drug_alias_rollback"):
         from drug_alias import apply_tx as apply_alias_tx
         return apply_alias_tx(db, req, filesystem_changes)
+    if req["cmd"] == "ops.external_transfer_acknowledge":
+        from external_transfer import apply_tx as acknowledge_tx
+        return acknowledge_tx(db, req, filesystem_changes, current)
     if req["cmd"] in ("ops.cloud_stop", "ops.cloud_resume"):
         from cloud_cli import apply_control_tx
         return apply_control_tx(db, req, current)
     if req["cmd"] == "ops.cloud_local_rebuild_approve":
         from extract_llm_local_rebuild import approve_tx
-        return approve_tx(db, req, current)
+        return approve_tx(owner, req, current)
+    if req["cmd"] == "ops.patient_context_reset":
+        from patient_context_reset import apply_tx as reset_tx
+        return reset_tx(db, req, current)
     if req["cmd"] == "ops.scan":
         return _apply_scan_tx(db, req, current)
     if req["cmd"] == "ops.retry":

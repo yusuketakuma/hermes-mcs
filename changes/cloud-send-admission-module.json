@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "クラウド送信の拒否の種類と上限比較を共通モジュールへ移動",
+  "summary": "クラウド送信を止める理由の種類（CloudFallback・CloudBusy・CloudObservationIncomplete）と、予約後に上限が下がったかを比べる処理を、新しい共通モジュール mcs/llm/admission/cloud_send_admission.py へ移しました。送信・予約・精算・ローカル代替の挙動は変わりません。患者コンテキストを新しい送信の仕組みへ段階的に移すための最初の一歩です。",
+  "upgrade": "追加操作は不要です。ただし抽出・意味解析の候補指紋（candidate_fingerprint）の対象にこのモジュールを加えたため、指紋が変わります。semantic.fact_source を canonical にして承認済みの評価証拠を使っている環境では、更新後に証拠が一致しなくなり、意味解析は legacy・off に戻ります。その場合は現行の評価手順で再評価し、改めて承認してください。",
+  "details": [
+    "cloud_inference は移した例外を同じオブジェクトとして再公開するので、既存の except 節はそのまま動きます。",
+    "extract_llm_source_contract._LOADED_SOURCE_PATHS と semantic_candidate._MODULES に cloud_send_admission を加えました。"
+  ],
+  "refs": ["mcs/llm/admission/cloud_send_admission.py", "mcs/llm/cloud_inference.py", "mcs/extract/llm/extract_llm_source_contract.py", "mcs/semantic/semantic_candidate.py", "tests/llm/test_cloud_send_admission.py"]
+}

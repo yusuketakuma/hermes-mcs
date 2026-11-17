@@ -119,6 +119,19 @@ def test_an_interrupted_append_is_dropped_before_the_next_record(tmp_path, monke
     assert access_log.verify(tmp_path) == {**access_log.verify(tmp_path), "ok": True, "records": 2}
 
 
+def test_an_interrupted_append_at_month_end_is_dropped_before_the_next_month(tmp_path):
+    november, december = 1_796_083_200 - 3600, 1_796_083_200  # 2026-11-30 / 12-01 UTC
+    _entry(tmp_path, now=november)
+    path, = (tmp_path / access_log.DIR_NAME).glob("access-*.jsonl")
+    complete = path.read_bytes()
+    with open(path, "ab") as stream:
+        stream.write(b'{"v":1,"at":"half')  # the crash came before the month changed
+    _entry(tmp_path, now=december)
+    assert path.read_bytes() == complete
+    assert access_log.verify(tmp_path)["ok"] is True
+    assert len(list(access_log.read(tmp_path))) == 2
+
+
 def test_new_log_directory_is_made_durable_before_the_first_record(tmp_path, monkeypatch):
     synced = []
     monkeypatch.setattr(access_log, "fsync_dir", lambda path, **_k: synced.append(os.fspath(path)))
@@ -148,3 +161,39 @@ def test_log_directory_is_synced_again_after_a_failed_publication(tmp_path, monk
         access_log.record(tmp_path, via="slack", actor="a", op="read")
     access_log.record(tmp_path, via="slack", actor="a", op="read")
     assert len(synced) == 2  # the retry synced the log directory again
+
+
+def test_a_failed_append_leaves_a_content_free_note_until_a_record_succeeds(tmp_path):
+    folder = tmp_path / access_log.DIR_NAME
+    folder.mkdir(mode=0o755)
+    os.chmod(folder, 0o755)
+    for at in (1_790_000_000, 1_790_000_600):
+        with pytest.raises(access_log.AccessLogError, match="access_log_untrusted"):
+            _entry(tmp_path, now=at)
+    assert access_log.failure(tmp_path) == {"code": "access_log_untrusted",
+                                            "since": 1_790_000_000, "last": 1_790_000_600}
+    note = tmp_path / access_log.FAILURE_NAME
+    assert stat.S_IMODE(note.stat().st_mode) == 0o600
+    assert not {"slack", "U1", "C1", "7"} & set(json.loads(note.read_text()).values())
+    os.chmod(folder, 0o700)
+    _entry(tmp_path)
+    assert access_log.failure(tmp_path) is None and not note.exists()
+
+
+@pytest.mark.parametrize("kind", ["not_json", "shared_mode", "link"])
+def test_an_unreadable_note_still_reports_a_failure(tmp_path, kind):
+    assert access_log.failure(tmp_path) is None
+    note = tmp_path / access_log.FAILURE_NAME
+    if kind == "link":
+        (tmp_path / "elsewhere.json").write_text('{"code": "access_log_unavailable"}')
+        note.symlink_to(tmp_path / "elsewhere.json")
+    else:
+        note.write_text("not json" if kind == "not_json" else '{"code": "access_log_unavailable"}')
+        note.chmod(0o600 if kind == "not_json" else 0o644)
+    assert access_log.failure(tmp_path) == {"code": "unknown", "since": None, "last": None}
+
+
+def test_a_failure_note_that_cannot_be_written_keeps_the_original_error(tmp_path):
+    with pytest.raises(access_log.AccessLogError, match="access_log_unavailable"):
+        _entry(tmp_path / "absent")
+    assert not (tmp_path / "absent").exists()

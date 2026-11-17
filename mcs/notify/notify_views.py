@@ -21,6 +21,7 @@ from drug_map import candidate_note
 from rollup import current_cached_refs
 from mcs_queries import karte_summary_block
 from patient_context import DETAIL_LABELS, LABELS, context_items, extract_context, pharmacy_state_items
+import patient_context_status
 from mcs_contract import project_url
 from mcs_queries import JST, incomplete_reply_roots
 from mcs_util import fold_map, search_fold
@@ -1011,19 +1012,19 @@ def _bare_quote(text: str, category) -> str:
     return text
 
 
-def patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0,
+def patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0, first_view=False,
                          intervention_history=False, intervention_cursor=None, measurement=None):
     if section == "measurements":
         return _measurement_list(db, project_id, measurement)
     if section not in ("care_events", "background", "timeline", "previsit"):
         return _patient_context_list(db, project_id, section, cfg=cfg, since=since, now=now,
-                                     role=role, page=page, intervention_history=intervention_history,
+                                     role=role, page=page, first_view=first_view, intervention_history=intervention_history,
                                      intervention_cursor=intervention_cursor)
     # Coverage, source references and the final rendered labels share the same snapshot.
     db.execute("SAVEPOINT care_event_notification")
     try:
         result = _patient_context_list(db, project_id, section, cfg=cfg, since=since, now=now,
-                                       role=role, page=page, intervention_history=intervention_history,
+                                       role=role, page=page, first_view=first_view, intervention_history=intervention_history,
                                        intervention_cursor=intervention_cursor)
     except BaseException:
         try:
@@ -1073,7 +1074,7 @@ def _measurement_list(db, project_id, measurement):
             "items": rows, "notes": [], "empty": note, "page": 0, "pages": 1}
 
 
-def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0,
+def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0, first_view=False,
                           intervention_history=False, intervention_cursor=None):
     """Private patient-context views as source-bound rows: each row keeps the original
     quotes and one compact source line (when · who · which post); consecutive items of
@@ -1216,7 +1217,9 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         head.append(order)
     elif section == "changes":
         view = views.changes(db, ev, since)
-        head.append("前回の表示依頼: " + (stamp_time(datetime.fromtimestamp(since, JST)) if since else "初回"))
+        stamped = stamp_time(datetime.fromtimestamp(since, JST)) if since else None
+        head.append("初回（直近7日）: " + stamped + "から" if first_view and stamped
+                    else "前回の表示依頼: " + (stamped or "初回"))
         for key, label in DISCOVERY_LABELS:
             add(view["by_discovery"].get(key, []), label)
         # a deleted post shows only when its deletion was observed, never its old text
@@ -1357,7 +1360,12 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
             add(group.get("anchors") or [group["anchor"]], label)
             add(group["nearby"], f"{day}の前後14日の記録")
             if group["no_record"]:
-                head.append(f"{day}の前後14日で記載なし: "
+                # a missing record is not an absent action: only a completed analysis (the same
+                # condition as the empty-view note below) may say nothing was found
+                found_all = (ev["coverage"].get("inference") or {}).get("complete") is True
+                head.append(f"{day}の前後14日で"
+                            + ("記載が見つかりません: " if found_all
+                               else "記載の有無は未確認（解析・取得が未完了）: ")
                             + "・".join(views.SECTION_LABELS.get(k, (k,))[0] for k in group["no_record"]))
     elif section == "timeline":
         from referral_document import HEADER_FIELDS
@@ -1436,16 +1444,14 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         sources = inference.get("sources") or {}
         status.append(f"解析未完了: 未解析 {sources.get('pending', 0)}件 / 保留 {sources.get('held', 0)}件 / "
                       f"解析失敗 {sources.get('failed', 0)}件 / 本文不完全 {sources.get('incomplete', 0)}件")
-        reason = {"unacquired": "原文の取得完了を未確認",
-                  "acquisition_incomplete": "履歴の取得は未完了",
-                  "dependency_gap": "変更前の根拠が不足しています",
-                  "summary_pending": "患者コンテキストの更新待ち",
-                  "quality_unknown": "要約の照合結果を確認できません",
-                  "quality_held": "要約の照合を保留しています",
-                  "cloud_extraction_pending": "クラウド解析が未完了",
-                  "audit_pending": "原文の根拠照合待ち"}.get(inference.get("status"))
-        if reason:
-            status.append(reason)
+        # every coverage state has wording; an unrecognised one is shown as unknown, never dropped
+        status.append(patient_context_status.status_text(inference.get("status")))
+        gap = (inference.get("dependencies") or {}).get("coverage")
+        if inference.get("status") == "dependency_gap" and isinstance(gap, dict) and all(
+                type(gap.get(key)) is int and gap[key] >= 0 for key in ("terminal", "repairable")):
+            status.append(f"根拠不足の内訳: 復元できない記録 {gap['terminal']}件 / 原本の再点検待ち {gap['repairable']}件"
+                          + ("（復元できない記録があるため、再点検だけでは解消しません）"
+                             if gap["terminal"] and gap["repairable"] else ""))
     if context_coverage:
         status.append(f"取込済み {context_coverage.get('fetched', 0)}件 / 点検済み {context_coverage.get('analyzed', 0)}件 / 未点検 {context_coverage.get('unscanned', 0)}件 / 本文未取得・不完全 {context_coverage.get('incomplete', 0)}件")
         status.append(f"原文に対応する引用 {context_coverage.get('evidence_supported', 0)} / {context_coverage.get('evidence_total', 0)}件")

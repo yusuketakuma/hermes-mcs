@@ -113,7 +113,7 @@ def test_partial_cloud_draft_uses_only_audited_sources_then_expands(cloud_schedu
             return original_quality(_ledger, pid, _cfg, workday_id, doc, deadline, admit, **kwargs)
         scope = kwargs['base_meta']['source_scope']
         snapshot = patient_context_refresh_sources._snapshot(led.db, pid, cfg, source_keys=scope)
-        scans = patient_context_refresh_sources._current_scans(led.db, pid, snapshot['sources'], snapshot['contract'], cfg=cfg)
+        scans = patient_context_refresh_sources._current_scans(led.db, pid, snapshot['sources'], snapshot['route'], cfg=cfg)
         quality_inputs.append((scope, {mid: (scans.get(mid, {}).get('complete'), scans.get(mid, {}).get('audited'))
                                       for mid in scope}, snapshot['source_coverage']))
         return 'pending', None

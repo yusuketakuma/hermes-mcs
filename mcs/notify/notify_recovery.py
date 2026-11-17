@@ -448,6 +448,8 @@ def card_part_resolve_plan(ledger, delivery_id, part_id, *, include_related=Fals
 
 
 # every fixed reason a producer stores on a held or unknown part; others count as 'unknown'
+# a part made unknown by a restore beyond the journal horizon (notify_reconcile)
+BEYOND_HORIZON = "restore_beyond_journal_horizon"
 PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
                      "blank_part_unrepresentable", "attachment_upload_identity_unverified", "card_revoked",
                      *_PREFLIGHT_ERRORS, _DEPENDENCY_ERROR,
@@ -463,15 +465,32 @@ PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
                      "workspace_unverified", "sdk_capability_missing", "retry_policy_unknown",
                      "prefetch_failed", "unsupported_part", "slack_attachment_incomplete",
                      "scope_mismatch", "no_target", "bad_render", "bad_slack_response",
-                     "operator_part_resolve")
+                     "operator_part_resolve", BEYOND_HORIZON,
+                     "restore_group_spec_unverified", "restore_group_surface_missing",
+                     "restore_group_surface_unresolvable")
+
+
+# non-card part kinds an operator recovery command can name
+RECOVERY_PART_KINDS = ("thread", "body_part", "attachment_part", "file_group")
+
+
+def fixed_error_code(error_code) -> str:
+    """Map a stored part error code onto the fixed reporting vocabulary."""
+    if error_code is None:
+        return "not_recorded"
+    return error_code if error_code in PART_HOLD_REASONS else "unknown"
+
+
+def preflight_proof_applies(transport, kind, error_code) -> bool:
+    """True when a Slack attachment edit pre-check refusal may name local_preflight_rejected."""
+    return transport == "slack" and kind == "attachment_part" and error_code in _PREFLIGHT_ERRORS
 
 
 def recovery_guidance(kind, transport, error_code, attempt_id) -> dict:
     """Describe existing recovery requirements without creating an approval payload."""
-    known = PART_HOLD_REASONS
-    code = error_code if error_code in known else "not_recorded" if error_code is None else "unknown"
+    code = fixed_error_code(error_code)
     card = kind == "card"
-    available = (transport in SUPPORTED_TRANSPORTS and kind in ("card", "thread", "body_part", "attachment_part", "file_group")
+    available = (transport in SUPPORTED_TRANSPORTS and kind in ("card", *RECOVERY_PART_KINDS)
                  and (kind != "file_group" or transport in ("slack", "discord"))
                  and isinstance(attempt_id, str) and bool(attempt_id.strip()))
     not_sent = {"worker_stopped": True,
@@ -485,6 +504,8 @@ def recovery_guidance(kind, transport, error_code, attempt_id) -> dict:
         not_sent["conditional_proof_requires_current_sealed_preflight"] = True
     if kind == "file_group" and transport == "slack" and code == _DEPENDENCY_ERROR:
         not_sent["proof_any_of"] = [_DEPENDENCY_PROOF]
+    if not card and code == BEYOND_HORIZON:
+        not_sent["proof_any_of"] = ["api_rejected", "remote_absent"]
     return {"error_code": code, "available": available,
             "reason": None if available else "attempt_or_transport_unverified",
             "command": "ops.card_resolve" if card else "ops.card_part_resolve",
@@ -534,6 +555,29 @@ def part_hold_report(ledger) -> dict:
                       "kept_for_edit_check": spec[2]}}
 
 
+def _worklist_where(cfg):
+    # One candidate predicate for the worklist page and its population counts.
+    retired = retired_transports(cfg)
+    marks = ",".join("?" * len(retired))
+    live = f" AND r.transport NOT IN ({marks})" if retired else ""
+    where = ("p.kind!='card' AND r.state!='cancelled'" + live +
+             " AND (p.state='unknown' "
+             "OR (p.state='held' AND p.error_code='attachment_upload_identity_unverified') "
+             "OR (p.state='not_sent' AND p.kind='file_group' AND p.error_code=?))")
+    return where, (*retired, _DEPENDENCY_ERROR)
+
+
+def recovery_worklist_keys(db, cfg=None, *, checkpoint=lambda: None) -> list:
+    """Read (delivery_id, part_id, state) of every worklist candidate without planning or writing."""
+    where, params = _worklist_where(cfg)
+    keys = []
+    for row in db.execute("SELECT p.delivery_id,p.part_id,p.state FROM notification_render_parts p "
+                          "JOIN notification_renders r USING(delivery_id) WHERE " + where, params):
+        checkpoint()
+        keys.append((row["delivery_id"], row["part_id"], row["state"]))
+    return keys
+
+
 def recovery_worklist(db, cfg=None, *, limit=20, offset=0) -> dict:
     """Bounded operator worklist of parts awaiting human-reviewed recovery.
 
@@ -553,14 +597,7 @@ def recovery_worklist(db, cfg=None, *, limit=20, offset=0) -> dict:
             or type(offset) is not int or offset < 0:
         raise ValueError("bad_page")
     now = time.time()
-    retired = retired_transports(cfg)
-    marks = ",".join("?" * len(retired))
-    live = f" AND r.transport NOT IN ({marks})" if retired else ""
-    where = ("p.kind!='card' AND r.state!='cancelled'" + live +
-             " AND (p.state='unknown' "
-             "OR (p.state='held' AND p.error_code='attachment_upload_identity_unverified') "
-             "OR (p.state='not_sent' AND p.kind='file_group' AND p.error_code=?))")
-    params = (*retired, _DEPENDENCY_ERROR)
+    where, params = _worklist_where(cfg)
     total = db.execute(
         "SELECT COUNT(*) FROM notification_render_parts p "
         "JOIN notification_renders r USING(delivery_id) WHERE " + where,
@@ -657,9 +694,7 @@ def card_part_check(ledger, data_dir, delivery_id, part_id) -> dict:
         proofs = [_DEPENDENCY_PROOF]
     else:
         proofs = list(_CARD_PART_CHECK_PROOFS)
-        if (plan["transport"] == "slack" and part is not None
-                and part["kind"] == "attachment_part"
-                and part["error_code"] in _PREFLIGHT_ERRORS):
+        if part is not None and preflight_proof_applies(plan["transport"], part["kind"], part["error_code"]):
             proofs.append(_PREFLIGHT_PROOF)
     try:
         attempts, incomplete = notify_journal.scan_journals(
@@ -868,6 +903,26 @@ def _preflight_journal_error(attempts, incomplete, req, render, part, *, result=
     return None
 
 
+def discord_bound_spec(db, render, card=None):
+    """The validated wire spec of a Discord card render, bound to its card,
+    scope and sealed payload hash; ValueError (or a lookup error) otherwise.
+    Group recovery and restore reconcile trust a file_group manifest only
+    through this check."""
+    from adapters.common import spec as wire_spec
+    from mcs_util import strict_json
+    spec = wire_spec.validate(strict_json(render["spec_json"]))
+    card = card_row(db, render["card_id"]) if card is None else card
+    if (card is None or render["card_id"] != card["card_id"]
+            or not scope_matches(render, stored_scope(card))
+            or spec["card_key"] != card["card_key"] or spec["logical_intent_id"] != card["card_key"]
+            or payload_hash(spec) != render["payload_hash"]
+            or any(spec.get(key) != render[key] for key in ("delivery_id", "render_rev", "op"))
+            or not scope_matches(render, spec["delivery"])
+            or any(spec["delivery"].get(key) != render[key] for key in ("route_epoch", "correlation"))):
+        raise ValueError("unbound spec")
+    return spec
+
+
 def _discord_recovery_group(db, req):
     # Logical group parts share their surface's wire attempt, not a journal of their own.
     render = render_row(db, req["delivery_id"])
@@ -882,17 +937,7 @@ def _discord_recovery_group(db, req):
     if not db.execute("SELECT 1 FROM notification_render_parts WHERE delivery_id=? "
                       "AND kind='file_group' LIMIT 1", (req["delivery_id"],)).fetchone():
         return None
-    from adapters.common import spec as wire_spec
-    from mcs_util import strict_json
-    spec = wire_spec.validate(strict_json(render["spec_json"]))
-    card = card_row(db, render["card_id"])
-    if (card is None or not scope_matches(render, stored_scope(card))
-            or spec["card_key"] != card["card_key"] or spec["logical_intent_id"] != card["card_key"]
-            or payload_hash(spec) != render["payload_hash"]
-            or any(spec.get(key) != render[key] for key in ("delivery_id", "render_rev", "op"))
-            or not scope_matches(render, spec["delivery"])
-            or any(spec["delivery"].get(key) != render[key] for key in ("route_epoch", "correlation"))):
-        raise ValueError("unbound spec")
+    spec = discord_bound_spec(db, render)
     groups = [item for item in spec["parts"]["manifest"]
               if item["kind"] == "file_group" and
               (item["part_id"] == req["part_id"] or req["part_id"] in item["members"])]
@@ -964,6 +1009,12 @@ def _part_resolution_journal_error(ledger, req, *, journal_evidence=None):
     proof = req["evidence"]["proof"]
     if proof == "no_journal_started" and any(row.get("phase") == "started" for row in rows):
         return "journal_contradicts_proof"
+    if proof == "no_journal_started" and cards.connection(ledger).execute(
+            "SELECT 1 FROM notification_render_parts WHERE delivery_id=? AND part_id=? "
+            "AND error_code=?", (req["delivery_id"], req["part_id"], BEYOND_HORIZON)).fetchone():
+        # as for an attempt-less render hold (_rebind_check): the rows that
+        # could witness this part's send may be the ones compacted away
+        return "journal_cannot_vouch"
     if proof == "api_rejected" and not any(row.get("phase") == "result" and row.get("result") == "not_sent" for row in rows):
         return "api_rejection_unproven"
     return None
@@ -1236,19 +1287,10 @@ def _discord_file_group_resolution_error(db, render, card, group_row, req):
     (card or one body_part), not a slack-style thread file set — re-check
     the render↔spec↔card identity, then delegate surface/member binding
     to the transport's shared validator."""
-    from adapters.common import spec as _spec
-    from mcs_util import strict_json
     try:
-        spec = _spec.validate(strict_json(render["spec_json"]))
-        if (card is None or render["card_id"] != card["card_id"]
-                or not scope_matches(render, stored_scope(card))
-                or payload_hash(spec) != render["payload_hash"]
-                or any(spec.get(key) != render[key] for key in ("delivery_id", "render_rev", "op"))
-                or not scope_matches(render, spec["delivery"])
-                or any(spec["delivery"].get(key) != render[key] for key in ("route_epoch", "correlation"))
-                or spec["card_key"] != card["card_key"] or spec["logical_intent_id"] != card["card_key"]
-                or card["delivery_state"] != "delivered"):
+        if card is None or card["delivery_state"] != "delivered":
             return "file_group_identity_unverified"
+        discord_bound_spec(db, render, card)
     except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
         return "file_group_identity_unverified"
     return notify_transport._discord_group_part_error(db, render, group_row, req)

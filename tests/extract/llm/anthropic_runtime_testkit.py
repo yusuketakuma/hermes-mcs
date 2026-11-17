@@ -26,6 +26,10 @@ import mcs_queries
 from extract_testkit import _hash, _ledger, _message
 
 
+# Outcome metadata of a completed, priced 200 as the real transport reports it.
+SETTLED_200 = {"http_class": "http_200", "usage": {"input_tokens": 10, "output_tokens": 5}}
+
+
 @pytest.fixture
 def routed(tmp_path, monkeypatch):
     led = _ledger(tmp_path)
@@ -89,7 +93,8 @@ def routed(tmp_path, monkeypatch):
             reservation = reserve_fn({"prompt": prompt, "max_tokens": max_tokens}, 1)
             before_attempt()
             calls.append(prompt)
-            after_result(reservation, {"http_class": "http_200"})
+            # A validated 200 carries its usage; one without usage stays unresolved.
+            after_result(reservation, dict(SETTLED_200))
             return {"status": 200, "finish_reason": "stop", "text": '{"symptoms":[]}'}
     monkeypatch.setattr(worker.anthropic_client, "AnthropicClient", Client)
     yield led, cfg, calls, reserved, results

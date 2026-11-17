@@ -1,4 +1,5 @@
 """Recheck semantic send eligibility and current audited summaries at each delivery boundary."""
+import semantic_jev
 import semantic_policy
 import semantic_store
 import semantic_transport
@@ -45,7 +46,7 @@ def intake_root_held(db, project_id, root):
 
 def _latest_receipt(db, kind, project_id, message_id):
     try:
-        row = db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? "
+        row = db.execute("SELECT * FROM artifacts WHERE kind=? AND project_id=? "
                          "AND message_id=? ORDER BY artifact_id DESC LIMIT 1",
                          (kind, project_id, message_id)).fetchone()
     except sqlite3.Error:
@@ -58,7 +59,9 @@ def _latest_receipt(db, kind, project_id, message_id):
         return None
     if not isinstance(content, dict) or not isinstance(meta, dict):
         return None
-    return {"artifact_id": row["artifact_id"], "content": content, "meta": meta}
+    # A store without the model column (an imported snapshot) recorded no producer model.
+    model = row["model"] if "model" in row.keys() else None
+    return {"artifact_id": row["artifact_id"], "content": content, "meta": meta, "model": model}
 
 
 def _receipt_not_invalidated(meta):
@@ -154,6 +157,10 @@ def _paired_summary(db, project_id, message_id, fingerprint, policy, revision, m
                 or meta.get("target_revision") != revision or meta.get("publication_mode") != mode
                 or meta.get("audit_status") != status):
             return None
+    # The audit is Jev's; the summary is current only while its producer is
+    # accepted (a locally produced summary is pinned to its local model).
+    if not semantic_store.producer_current(semantic_policy.KIND_SUMMARY, summary["model"], summary["meta"]):
+        return None
     content, verdict, meta = summary["content"], audit["content"], audit["meta"]
     findings = verdict.get("findings")
     if (content.get("audit_status") != status or verdict.get("status") != status
@@ -280,10 +287,8 @@ def _claim_binding_current(db, project_id, message_id, fingerprint, policy, revi
         facts = _binding_facts(db, project_id, message_id, fingerprint, policy, member, fact_source)
         if facts is None:
             return False
-        binding = payload_hash({"project_id": project_id, "message_id": message_id,
-                                "fingerprint": fingerprint, "policy": policy, "revision": revision,
-                                "claims": summary["content"].get("claims"), "facts": facts})
-        return binding == audit["meta"].get("claim_input_binding")
+        return audit["meta"].get("claim_input_binding") == semantic_store.claim_input_binding(
+            project_id, message_id, fingerprint, policy, revision, summary["content"], facts)
     except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
         return False
 
@@ -299,7 +304,7 @@ def skipped_summary_current(db, project_id, message_id, fingerprint, policy, rev
     summary_receipt, audit_receipt = pair
     summary, smeta = summary_receipt["content"], summary_receipt["meta"]
     audit, ameta = audit_receipt["content"], audit_receipt["meta"]
-    reasons = {"not_configured", "disabled", "daily_budget", "backlog_reserved", "service_unavailable", "circuit_open"}
+    reasons = semantic_jev.SKIP_REASONS
     findings = audit.get("findings")
     return (all(meta.get("jev_evaluated") is False and meta.get("code_checks") == "passed"
                 for meta in (smeta, ameta))
@@ -376,8 +381,8 @@ def verified_skipped_summary_current(db, project_id, message_id, fingerprint, po
 def current_summary(db, project_id: int, message_id: int,
                      bundle, policy: str, *, fact_source=None):
     """The newest semantic_summary for this message when it is publishable
-    on the CURRENT generation (PASS, not stale, enforce, same policy,
-    whole-thread fingerprint and target revision), else None. The single
+    on the CURRENT generation (PASS or SKIPPED, not stale, enforce, same
+    policy, whole-thread fingerprint and target revision), else None. The single
     predicate shared by the send gate, render state and summary block.
     Returns ``{artifact_id, content, meta}``. ``bundle`` may be a dict or
     a zero-arg callable resolved only after the cheap row/meta checks pass
@@ -695,7 +700,12 @@ def semantic_gate(db, ev, payload: dict, cfg: dict,
 
 
 def semantic_render_state(db, ev, cfg: dict) -> tuple:
-    """Current identities of audited summaries attached to a raw notice."""
+    """Current identities of publishable summaries attached to a raw notice."""
+    with semantic_transport.config_model_scope(cfg):
+        return _render_state(db, ev, cfg)
+
+
+def _render_state(db, ev, cfg: dict) -> tuple:
     scfg, _ = semantic_policy.runtime_config(cfg)
     project_id = ev["project_id"]
     if enforce_block_reason(db, scfg, project_id) is not None:
@@ -706,7 +716,6 @@ def semantic_render_state(db, ev, cfg: dict) -> tuple:
     except Exception:
         return ()
     state = []
-    local_model = semantic_transport.llm_model() if isinstance(ids, list) and ids else None
     for mid in ids if isinstance(ids, list) else []:
         if type(mid) is not int:
             continue
@@ -722,7 +731,7 @@ def semantic_render_state(db, ev, cfg: dict) -> tuple:
         cur = current_summary(
             db, project_id, mid,
             lambda r=root, m=mid: semantic_store.thread_bundle(
-                db, project_id, r, [m], local_model=local_model),
+                db, project_id, r, [m]),
             semantic_policy.policy_fingerprint(scfg))
         if cur is None:
             continue

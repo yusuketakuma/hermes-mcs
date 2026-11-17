@@ -671,3 +671,14 @@ def test_unreadable_reply_sources_are_an_error_not_zero_requests(ctx, monkeypatc
     monkeypatch.setattr(rollup, "build_rollup", unreadable)
     with pytest.raises(sqlite3.OperationalError):
         pcv.replies(ctx.db.db, 1)
+
+
+def test_first_view_baseline_is_the_last_seven_days(ctx):
+    now = T0 + 20 * DAY
+    assert pcv.first_changes_baseline(now) == now - 7 * DAY
+    _observe(ctx.db, 5, now - 3 * DAY)    # seen within 7 days: shown on a first view
+    _observe(ctx.db, 4, now - 10 * DAY)   # seen earlier: not a change
+    ctx.db.db.commit()
+    got = pcv.changes(ctx.db.db, pcv.evidence(ctx.db.db, 1), pcv.first_changes_baseline(now))["by_discovery"]
+    shown = {i["message_id"] for g in ("new_report", "retrospective") for i in got[g]}
+    assert 5 in shown and 4 not in shown

@@ -2,7 +2,6 @@ import clinical_display
 import extract_validation
 import pytest
 import extract
-import structured_view
 
 
 @pytest.mark.parametrize(('body', 'event'), [
@@ -35,16 +34,6 @@ def test_explicit_patient_event_is_current_only_without_family_negation_or_corre
     assert record['kind'] == 'eol' and record['subject'] == subject
     assert bool(record.get('unverified')) is unverified
     assert body[record['span']['start']:record['span']['end']] == record['evidence']
-
-
-@pytest.mark.parametrize(('body', 'event', 'forbidden'), [
-    ('本日訪問しました。入院は不要です。', 'visit', '入院'),
-    ('本日退院して自宅に戻りました。', 'discharge', '入院'),
-])
-def test_rules_cannot_restore_excluded_event(body, event, forbidden):
-    llm = extract_validation.validate({'events': [event]}, body)
-    rules = extract.extract_message(body, '2026-09-28')
-    assert forbidden not in '\n'.join(structured_view._head_lines(llm, rules))
 
 
 @pytest.mark.parametrize(('body', 'vitals', 'forbidden'), [

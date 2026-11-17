@@ -59,6 +59,55 @@ python3 mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db \
 
 配送結果が`unknown`の部品がある計画は、通知サービス・部品種別・エラー理由にかかわらず、保守処理で封印済みの本文・添付計画を削除しません。結果を確定すると通常の保守対象に戻ります。既に削除された計画の復元や、結果不明の部品の再送・成功扱いは行いません。未確定の間は、調査用の計画が私有データ領域に残ります。
 
+監視が使う件数は`active_*`の項目です。`active_total`・`active_by_state`・`active_by_plan`・`active_cards`は、運用追跡を終了した部品（`acknowledged_unresolved_total`）を除いた件数です。
+`total`・`by_state`・`by_plan`は終了分を含む未完了の総数です。`unknown_parts_total`はカード本体以外の`unknown`部品の全件で、
+取消済みのカードや未配送・取消済みの計画、切替前の通知サービスの部品も含みます。`active_total`が0でも`unknown_parts_total`が1件以上なら同じ警報が出ます。
+添付の配送先identity確認待ちで計画全体が保留（renderが`held`）の部品は、この件数には含まれず、`cards.recovery_parts`にだけ現れます。
+
+### 未完了partの内訳から作業順を決める
+
+部品が数十件ある場合は、まず内訳で同じ手順にまとまる部品を確認します。内訳は次の2か所で読めます。どちらも読み取り専用で、送信・確定・承認・enqueueは行いません。
+
+- `data/health.json`の`notify.incomplete_parts.recovery_breakdown`：件数だけを示します。配送IDやpart IDは含みません。
+- `mcs_view recovery_parts`の`summary`：同じ内訳に加え、まとめて承認できる配送IDの一覧（`summary.active.batches`、最大20件）と集団の内訳（`summary.population`）を示します。`--offset`を変えても`summary`は同じです。
+
+```sh
+python3 mcs/views/mcs_view.py --snapshot /absolute/path/ledger-snapshot.db recovery_parts
+```
+
+集計対象は、監視が数える`active_by_state`の`unknown`・`not_sent`・`held`です。`total`はその合計と一致し、送信中の可能性がある`pending`は分類せず`pending_not_classified`に件数だけを示します。
+healthでは、本体の観測が`recorded`で対象が1件以上のときだけ内訳を付けます。本体の読取りが数えた監視対象の行をそのまま受け取り、追跡終了の再確認はせずに、ほかの観測の後の1秒以内の別枠で計画の適用可否だけを読みます。上限を超えた場合や、本体と異なる集団を読んだ場合（`reason=population_mismatch`）は`status=unknown`で件数を出しません。
+本体が前回値の引継ぎ（`stale_measurement`）のときは、内訳も`status=stale_measurement`と`age_s`を付けて残します。1回に分類する部品は200件（viewでは1000件）までで、超えた分は`unclassified`に数え、`status=partial`になります。未分類を`none`や0件とは扱いません。
+
+| 項目 | 内容 |
+|---|---|
+| `by_state`・`by_error_code`・`by_transport`・`by_kind` | 状態・固定エラーコード・通知サービス・部品種別ごとの件数。未登録のコードは`unknown`、未記録は`not_recorded`、未知のサービス・種別は`other` |
+| `by_flow` | 実際に作れる計画の系統。`card_part_plan`・`attachment_identity_plan`・`card_part_tracking_plan`・`none`・`unclassified` |
+| `by_flow_error_code` | 系統ごとの固定エラーコード別件数 |
+| `card_part_plan.proof_candidates` | 部品を区別できる証明候補だけの件数。`local_preflight_rejected`（Slack添付で`error_code`が`edit_target_unverified`・`edit_history_unverified`）と`dependency_rejected`（依存拒否の`file_group`）。どの`unknown`にも当てはまる`no_journal_started`・`api_rejected`・`remote_absent`は数えません |
+| `card_part_plan.distinct_plans`・`group_approval_members`・`group_anchors` | 必要な個別計画の数。Discordのグループ構成員は共有アンカーの1計画にまとまります |
+| `card_part_plan.related_plans` | 同じSlack更新の添付説明を`related_plans`でまとめられる候補。`preflight_target_verified_*`は適用時と同じ配送先の照合（最新の更新・カードとスレッドの配送・元の配送先・保存spec）が通った束です。`unbatchable_parts`は同じカードに別の未確定部品があるなどでまとめられない部品です |
+| `card_part_tracking_plan.targets` | 運用追跡を終了できる`not_sent`部品。1回の承認は最大20対象 |
+| `none_by_blocker` | どの計画も作れない部品の固定理由別件数 |
+| `sharing` | 同じカード・同じ配送計画に複数の部品があるカード数・配送数と、その部品数 |
+
+`summary.population`は`unknown`部品の全件（`unknown_parts_total`）を、監視対象（`active_unknown`）、一覧には載るが監視対象外（`worklist_outside_active`。未配送・取消済みカード・後続の証拠で覆われた計画など）、一覧にも載らない（`unknown_outside_worklist`。取消済みの計画と切替前の通知サービス）に分けます。
+`worklist_outside_active.held`は計画全体が保留された添付で、`attachment_identity_plan`で確認します。監視対象の`held`部品は計画が配送済みのため、identity確認の対象にはなりません（`none_by_blocker.part_not_confirmable`）。
+監視対象が一覧に含まれないなど、集団の関係が崩れた場合は`status=unknown`・`reason=population_mismatch`を返します。追跡終了の記録を読めない場合も`summary`は`status=unknown`になり、一覧の`items`はそのまま返ります。
+
+おすすめの作業順は次のとおりです。
+
+1. `related_plans.preflight_target_verified_batches`：`summary.active.batches`の`batch=related_plans`の項目を、`card_part_plan --include-related`で読み、1回の承認で複数の添付説明を扱います（「同じカードで複数の添付説明が保留された場合」）。照合が通っていない候補は、先に`card_part_check`と配送先を確認します。
+2. `group_anchors`：`batch=group_approval`の項目を、アンカーのpart IDで1回ずつ承認します。
+3. `card_part_tracking_plan.targets`：「過去の未配送部品の運用追跡を終了する」の手順で、最大20対象を1回で承認します。追跡の終了だけで、配送の回収ではありません。
+4. 残りの`card_part_plan`：`by_flow_error_code.card_part_plan`の多い固定コードから、`card_part_check`でjournalを確認し、配送先の証拠と照合して個別に承認します。LINE WORKSで`remote_absent`を使う場合は、重複送信のリスクの承認が別に必要です。
+5. `none_by_blocker`：`part_not_resolvable`は試行記録がないためworker journalを調査します。`tracking_ack_successor_unverified`は後続カードの配送を待ちます。`part_not_confirmable`は計画が配送済みの`held`部品で、既存の承認計画では扱えないため、worker journalと配送先を調査します。
+6. `unclassified`：上限を超えた分です。公開snapshotの`recovery_parts`で読み直します。
+
+内訳への掲載は証明でも承認でもありません（`note=plan_eligibility_only_not_delivery_proof`）。証明候補は候補であり、journal・worker停止・復元保留・再送上限・人の承認は適用時に改めて照合されます。
+計画が作れる部品も、承認のreceiptが適用されるまで`unknown`・`not_sent`のまま数えます。内訳から複数の部品を一括で書き込む経路、自動再送、自動の確定はありません。
+
+
 ## 1. 保存された計画を読む
 
 公開snapshotを指定し、対象の配送IDとpart IDを照合します。
@@ -87,7 +136,7 @@ snapshotは保存時点の情報です。現行状態と異なれば適用時に
 | `remote_id` | `mark_delivered`の場合、照合済みの配送先投稿ID |
 | `evidence.method` / `evidence.ref` | 確認方法と、非機密の証拠参照 |
 | `evidence.worker_stopped` | 停止を確認した場合に限り`true` |
-| `evidence.proof` | `mark_not_sent`の場合、`no_journal_started`・`api_rejected`・`remote_absent`のいずれか。Slack添付説明の更新前拒否には下記の`local_preflight_rejected`、準備不足で実行しなかったグループ共有には`dependency_rejected`を使用 |
+| `evidence.proof` | `mark_not_sent`の場合、`no_journal_started`・`api_rejected`・`remote_absent`のいずれか。保持期間（90日）を超えた復元で保留・結果不明になったカードと部品では、`no_journal_started`は`journal_cannot_vouch`で拒否され、使えるのは`api_rejected`・`remote_absent`だけです。Slack添付説明の更新前拒否には下記の`local_preflight_rejected`、準備不足で実行しなかったグループ共有には`dependency_rejected`を使用 |
 | `evidence.duplicate_risk_accepted` | LINE WORKSで`remote_absent`を根拠にする場合、重複リスクを人が受け入れた時だけ`true` |
 
 送信結果が不明というだけで`mark_not_sent`を選ばないでください。既存journalの配送成功記録と矛盾する証拠、読めないjournal、古い計画は既存validatorと適用処理が拒否します。
@@ -114,6 +163,7 @@ snapshotは保存時点の情報です。現行状態と異なれば適用時に
 | `edit_target_ambiguous` | 同じファイルを持つ更新先が複数ないか |
 | `edit_native_client_unverified` / `edit_timestamp_unverified` | 送信クライアント・対象時刻IDを検証できたか |
 
+表の`reason`はworkerログの理由です。`local_preflight_rejected`を使えるかどうかは、partに保存された`error_code`で決まります。
 このログ単独では配送記録を書き換えません。`edit_target_unverified`または
 `edit_history_unverified`で保留されたSlackの添付説明には、
 `result=mark_not_sent`と`evidence.proof=local_preflight_rejected`を指定できます。
@@ -214,6 +264,11 @@ CLIが既存契約に従ってDiscord=1・Slack=2・LINE WORKS=3の版を付け�
 `card_resolve`の受付時にはsnapshot上のrenderの存在を追加条件にしません。
 復元でrenderやattemptが失われた場合も、適用時に既存の復元保留・保存scope・journalを照合します。
 90日より古いバックアップからの復元で、送信記録（attempt）の無いまま保留されたrenderは、`attempt_id`に`delivery_id`と同じ値を指定します。配送記録が消えている可能性があるため、`mark_not_sent`の`proof`は`remote_absent`か`api_rejected`に限られ、`no_journal_started`は拒否されます。`mark_not_sent`で解除すると、そのカードの次のrenderを発行します。
+同じ復元で、カード本体は届いたもののスレッド・本文・添付の結果が記録されていない部品は、`restore_beyond_journal_horizon`の`unknown`になります（各カードの最新renderだけが対象です。以前のrenderは次の更新を止めないため変更しません）。`card_part_plan`で計画を出し、`card_part_resolve`で確認・解除すると、カードの次の更新を発行できます。記録が無いことは未送信の証拠ではないため、`not_sent`にはしません。同じ理由で、これらの部品を`mark_not_sent`で解除するときの`proof`は`remote_absent`か`api_rejected`に限られ、配送記録だけの`no_journal_started`は拒否されます。送信待ちのスレッドは作成済みの可能性があり、次の更新で2つ目のスレッドを作り得るため、従来は更新を止めなかった場合も`unknown`にして、確認まで次の更新を止めます。Discordの添付のまとまり（file_group）は、載せる面（カードか本文）と同じattemptで照合するため、まとまり全体を1つの計画で解除します。本文の面も結果不明なら、面を先に解除します。Slackの未着手のfile_groupは従来どおり`no_journal_started`で解除します。
+Discordのまとまりで、保存済みの計画がrender・カード・payload hashと一致しない、面の部品が無い、面が配送済みでも結果不明でもないか送信記録が無い場合は、面のattemptで照合できないため`card_part_plan`の計画は作れません。これらはattemptを持たない`unknown`になり、`error_code`がそれぞれ`restore_group_spec_unverified`・`restore_group_surface_missing`・`restore_group_surface_unresolvable`になります。`restore_reconcile.json`では`parts_held`と別の`parts_unresolvable`に理由とともに載り、`delivery_reconcile_held`の通知に要調査の件数、部品の保留件数（`by_error_code`・`part_hold_report`）にも理由別に出ます。送信先とワーカーの記録を個別に調べて対応してください。
+後から面の部品に送信記録がそろうと（面の結果が遅れて届いた、または面を`card_part_resolve`で解除した）、その時点で、また復元の照合が再実行されるたびに（送信記録が不完全で照合の印が残っている間）、まとまりの部品は面のattemptを受け取って`restore_beyond_journal_horizon`の`unknown`に移り、面の結果でそのまま決まるか、`card_part_plan`・`card_part_resolve`で解除できるようになります。
+計画を作れないまま残った部品は、そのカードの次の更新を止め続けます。これを解除するコマンドはありません。送信先にファイルが届いているかと通知ワーカーの記録を確認してください。面の部品の結果が後から記録されれば、上のとおり解除できる状態に移ります。保存済みの計画がrender・カードと一致しない（`restore_group_spec_unverified`）場合や、面の部品が無い（`restore_group_surface_missing`）場合は、MCSの操作では解除できず、そのカードの更新は止まったままになります。
+部品の固定エラーコードには、これらと`restore_beyond_journal_horizon`が含まれます。
 受付できたことは、保留の解除や証拠の成立を意味しません。
 
 ## 4. 未発行の通知を送らず取り消す（Slack・Discord・LINE WORKS）

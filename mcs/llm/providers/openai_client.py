@@ -39,6 +39,11 @@ DEFAULT_PROFILES = MappingProxyType({"backlog": "luna-medium", "patient_context"
                                      "quality_repair": "sol-high"})
 ORIGINAL_CONTRACT = (MODEL, "low")
 VALID_MODEL_EFFORTS = frozenset({ORIGINAL_CONTRACT, *PROFILE_DEFINITIONS.values()})
+# Per-attempt wait of each request shape (non-streaming). The named profiles' values are
+# initial settings without measurements, and the unit deadline still caps every attempt.
+ATTEMPT_TIMEOUTS = MappingProxyType({
+    ORIGINAL_CONTRACT: 120.0, (MODEL, "medium"): 300.0, (SOL_MODEL, "medium"): 300.0,
+    (SOL_MODEL, "high"): 600.0})
 QUOTA_ERROR_CODES = frozenset({"insufficient_quota", "credit_balance_exhausted",
                                "organization_spend_limit_exceeded", "project_spend_limit_exceeded",
                                "organization_usage_limit_exceeded"})
@@ -176,6 +181,7 @@ class OpenAIClient(CloudClient):
     def __init__(self, api_key, *, model=MODEL, effort="low", **kwargs):
         if not isinstance(model, str) or not isinstance(effort, str) or (model, effort) not in VALID_MODEL_EFFORTS:
             raise ValueError("openai_profile_invalid")
+        kwargs.setdefault("attempt_timeout", ATTEMPT_TIMEOUTS[(model, effort)])
         super().__init__(api_key, **kwargs)
         self.model = model
         self.effort = effort

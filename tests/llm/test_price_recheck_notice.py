@@ -1,30 +1,25 @@
-"""Synthetic checks for the 2026-11-15 price recheck and the recheck notice."""
+"""Synthetic checks for the price-table recheck notice and the 2026-11-15 rotation."""
 from datetime import datetime
 from decimal import Decimal
 
 import anthropic_client
 import cloud_usage_accounting as accounting
-import openai_client
 
 
 def _at(year, month, day):
     return datetime(year, month, day, 12, tzinfo=accounting.JST).timestamp()
 
 
-def test_recheck_adds_versions_with_identical_prices():
-    pairs = [(anthropic_client.MODEL, "anthropic-haiku-5-5-2026-10-26", anthropic_client.PRICE_VERSION),
-             (openai_client.MODEL, "openai-gpt-6-luna-2026-10-29", openai_client.PRICE_VERSION),
-             (openai_client.SOL_MODEL, "openai-gpt-6.1-sol-2026-10-31", openai_client.SOL_PRICE_VERSION)]
-    for model, older, current in pairs:
-        old_def = accounting.PRICE_DEFINITIONS[(model, older)]
-        new_def = accounting.PRICE_DEFINITIONS[(model, current)]
-        assert dict(old_def["prices"]) == dict(new_def["prices"])
-        assert (new_def["price_checked_on"], new_def["price_valid_until"]) == ("2026-11-15", "2026-12-15")
-        assert accounting._price_definition(model)["price_version"] == current
+def test_rotation_keeps_the_older_definition_with_identical_prices():
+    older = accounting.PRICE_DEFINITIONS[(anthropic_client.MODEL, "anthropic-haiku-5-5-2026-10-26")]
+    current = accounting.PRICE_DEFINITIONS[(anthropic_client.MODEL, anthropic_client.PRICE_VERSION)]
+    assert anthropic_client.PRICE_VERSION == "anthropic-haiku-5-5-2026-11-15"
+    assert dict(older["prices"]) == dict(current["prices"])
+    assert (current["price_checked_on"], current["price_valid_until"]) == ("2026-11-15", "2026-12-15")
     usage = {"input_tokens": 1000, "output_tokens": 100}
-    model = anthropic_client.MODEL
-    assert (accounting.usage_cost(usage, model=model, price_version="anthropic-haiku-5-5-2026-10-26")
-            == accounting.usage_cost(usage, model=model) == Decimal("0.00015"))
+    assert (accounting.usage_cost(usage, model=anthropic_client.MODEL,
+                                  price_version="anthropic-haiku-5-5-2026-10-26")
+            == accounting.usage_cost(usage, model=anthropic_client.MODEL) == Decimal("0.00015"))
 
 
 def test_notice_starts_seven_days_before_the_recheck_date():
@@ -44,6 +39,43 @@ def test_new_sends_use_the_table_already_rechecked_on_that_day():
     assert accounting.current_price_version(model, _at(2026, 11, 1)) == "anthropic-haiku-5-5-2026-10-26"
     assert accounting.pricing_valid(_at(2026, 11, 1), model=model)
     assert accounting.current_price_version(model, _at(2026, 11, 15)) == anthropic_client.PRICE_VERSION
+    assert accounting.current_price_version(model, _at(2026, 11, 26)) == anthropic_client.PRICE_VERSION
     assert accounting.pricing_valid(_at(2026, 11, 26), model=model)
     # Before any table was rechecked nothing is in force.
     assert not accounting.pricing_valid(_at(2026, 10, 1), model=model)
+
+
+def test_an_undefined_configured_table_stops_instead_of_falling_back(monkeypatch):
+    import pytest
+    monkeypatch.setattr(anthropic_client, "PRICE_VERSION", "anthropic-haiku-5-5-undefined")
+    model = anthropic_client.MODEL
+    assert accounting.current_price_version(model, _at(2026, 11, 20)) == "anthropic-haiku-5-5-undefined"
+    with pytest.raises(anthropic_client.AnthropicError):
+        accounting.max_cost(100, input_bound=100, model=model, now=_at(2026, 11, 20))
+
+
+def test_notice_follows_the_configured_model_whose_table_runs_out_first():
+    import cloud_policy
+    import openai_client
+    cfg = {"cloud_llm": {"mode": "on", "provider": "openai", "model": openai_client.SOL_MODEL,
+                         "profiles": {"backlog": "luna-medium"},
+                         "project_ids": [1], "daily_cost_limit_usd": 1, "monthly_cost_limit_usd": 10}}
+    settings, errors = cloud_policy.resolve_settings(cfg)
+    assert not cloud_policy.blocking_errors(errors)
+    models = cloud_policy.configured_models(cfg, settings)
+    assert models == sorted({openai_client.SOL_MODEL, openai_client.MODEL}), "the backlog profile uses Luna"
+    info = cloud_policy.earliest_price_info(cfg, settings, now=_at(2026, 11, 20))
+    assert (info["price_model"], info["price_valid_until"]) == (openai_client.MODEL, openai_client.PRICE_VALID_UNTIL)
+
+
+def test_openai_recheck_adds_versions_with_identical_prices():
+    import openai_client
+    for model, older, current in ((openai_client.MODEL, "openai-gpt-6-luna-2026-10-29", openai_client.PRICE_VERSION),
+                                  (openai_client.SOL_MODEL, "openai-gpt-6.1-sol-2026-10-31",
+                                   openai_client.SOL_PRICE_VERSION)):
+        before = accounting.PRICE_DEFINITIONS[(model, older)]
+        after = accounting.PRICE_DEFINITIONS[(model, current)]
+        assert dict(before["prices"]) == dict(after["prices"])
+        assert (after["price_checked_on"], after["price_valid_until"]) == ("2026-11-15", "2026-12-15")
+        assert accounting.current_price_version(model, _at(2026, 11, 14)) == older
+        assert accounting.current_price_version(model, _at(2026, 11, 20)) == current

@@ -140,3 +140,23 @@ def test_two_plans_require_cas_before_advancing(db):
     next_value = json.dumps(first['next'], sort_keys=True)
     assert db.execute('UPDATE bookmark SET value=? WHERE value=?', (next_value, original)).rowcount == 1
     assert db.execute('UPDATE bookmark SET value=? WHERE value=?', (next_value, original)).rowcount == 0
+
+
+def test_lane_rotation_keeps_six_three_one_schedule():
+    lanes = [schedule.lane_rotation({"A": 1, "B": 1, "C": 1}, {"cursor": i})[0] for i in range(10)]
+    assert lanes == list("AAAAAABBBC")
+    assert schedule.lane_rotation({"C": 1}, {"cursor": 0}) == ("C", 9, 0)
+    assert schedule.lane_rotation({}, {"cursor": 9}) == (None, 9, 0)
+
+
+def test_rotation_advances_after_selected_slot_and_keeps_backlog_share():
+    # Start with A unavailable: selection jumps over A and must advance from B,
+    # rather than restarting the search from the original slot on each tick.
+    cursor = 0
+    observed = []
+    for _ in range(8):
+        lane, selected, cursor = schedule.lane_rotation({'B': 1, 'C': 1}, {'cursor': cursor})
+        observed.append((lane, selected))
+    assert observed == [('B', 6), ('B', 7), ('B', 8), ('C', 9)] * 2
+    assert cursor == 0
+    assert schedule.lane_rotation({'C': 1}, {'cursor': 7}) == ('C', 9, 0)

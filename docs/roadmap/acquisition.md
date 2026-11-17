@@ -274,7 +274,7 @@
 | `bounded_call` の kill 後の回収 | `worker_process.reap_worker`: `communicate(timeout=REAP_TIMEOUT_S=5 秒)`、超えたら pipe を同期で閉じて `wait(timeout=0.1)` | おおむね約 5.1 秒＋pipe close までに収まるが、合計時間を厳密に保証するものではない | `mcs/core/worker_process.py:5-22`、`mcs_worker.py:74,79` |
 | プロセス全体 | 外側は hermes cron の script timeout 3600 秒（テスト定数） | 固着するとロックを最大 3600 秒保持 | `tests/meta/test_deployment_scripts.py:12-14` |
 
-- 実 tick の所要時間の分布は未確認。`runs` 表に `started_at` / `finished_at` が残るので、コードなしで測れる（下記）。途中で kill された run は次の `begin_run` が `crashed` に更新する（`ledger.py:498-501`）。`health_watch` の猶予は 480 秒固定（`mcs/ingest/health_watch.py:41`）。
+- 実 tick の所要時間の分布は未確認。`runs` 表に `started_at` / `finished_at` が残るので、コードなしで測れる（下記）。途中で kill された run は次の `begin_run` が `crashed` に更新する（`ledger.py` の `begin_run`。理由は `mcs/ingest/run_interrupt.py` が証明できた場合だけ `runs.error` に残る）。`health_watch` の猶予は `health_policy.RUN_GRACE_S`（480 秒）。
 - 旧 ROADMAP の評価: 「収集 tick の耐久性」という枠は妥当だが、通信経路は既に完了している。残りは `hermes send` の下限、非通信ステージ、プロセス全体の上限。
 
 **設計方針**
@@ -282,7 +282,7 @@
 2. **`hermes send` の最小予算**: `_send` と `_send_text` のループで、残りが `SEND_MIN_BUDGET_S`（例 30 秒）未満なら送信を始めない（`_SendFailed` で proven-not-begun。マーカーも戻る）。既存の LLM の `need_s` 前例（`extract_llm.py:1017-1023`）に倣う。#6 と共通の修正。
 3. `extract.run_pending` と `rollup.rebuild_many` に `deadline` を渡す。1 tick の処理量の上限と、まとめ commit（`artifact_add_tx`: `ledger.py:1801-1812` が既にある）で fsync を減らす。
 4. housekeeping: 計測で問題が出た場合のみ、`daily_backup` の毎 tick 再検証を「mtime・サイズ不変なら省略」に、`publish_snapshot` の頻度を見直す（CCO が新しい snapshot を待つ前提の確認が要る）。
-5. **プロセス全体の上限**: `faulthandler.dump_traceback_later(RUN_DEADLINE_S+猶予, exit=True)`（stdlib）。固着位置のトレースが `run.log` に残り、次 tick が `crashed` にする。トレースは関数名・行だけで PHI を含まない。順序上、手順 2 を先に入れる（上限で kill されうる箇所を非通信ステージに限り、送信途中の kill による held の増加を避ける）。
+5. **プロセス全体の上限**: `faulthandler.dump_traceback_later(RUN_DEADLINE_S+猶予, exit=True)`（stdlib）。固着位置のトレースは `data/run_interrupt/` に残り、次 tick が `crashed`（理由 `watchdog_exit`）にしてトレースを `mcs.log` へ転記する。トレースは関数名・行だけで PHI を含まない。順序上、手順 2 を先に入れる（上限で kill されうる箇所を非通信ステージに限り、送信途中の kill による held の増加を避ける）。
 6. health に `run.elapsed_s`・`overshoot_s`・`slowest_stage` を足し、閾値超過で `degraded` にする。
 
 **成果物**

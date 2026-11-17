@@ -306,7 +306,7 @@ def test_patient_input_recovery_binding_detects_aba_even_when_original_text_retu
     with closing(Ledger(path)) as ledger:
         def binding():
             return patient_context_refresh._cloud_input_binding(ledger.db, 1,
-                {'source_sig': 'same-input', 'contract': {'version': 'synthetic'},
+                {'scan_source_sig': 'same-input', 'contract': {'version': 'synthetic'}, 'route': {'provider': None},
                  'sources': list(mcs_queries.patient_context_sources(ledger.db, 1, hydrate=False))})
         original = binding()
         ledger.save_messages([_message(body='合成の変更後本文。')])

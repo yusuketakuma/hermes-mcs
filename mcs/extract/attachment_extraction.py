@@ -27,11 +27,32 @@ SCHEMA = 'attachment-inference/v1'
 _FACADE_CODE = hashlib.sha256(Path(__file__).with_name('attachment_inference.py').read_bytes()).hexdigest()
 
 
+# Patient-context-only modules: attachment extraction never runs them, so their
+# scan and summary contract changes must not re-extract every attachment page.
+# The extraction inputs ``patient_context`` and ``patient_state_context`` stay.
+_CONTEXT_ONLY_SOURCES = frozenset({
+    "patient_context_artifacts", "patient_context_plan", "patient_context_state", "patient_context_refresh",
+    "patient_context_scan", "patient_context_selection", "patient_context_schedule",
+    "patient_context_refresh_state", "patient_context_quality_receipts", "patient_context_refresh_sources",
+    "patient_context_refresh_readiness", "patient_context_quality_controller",
+    "patient_context_quality_identity"})
+
+
 def contract(cfg, *, code_digest=None):
-    return attachment_inference_contract.contract(cfg, code_digest=code_digest or _FACADE_CODE,
-        source_digests=extract_llm._LOADED_SOURCE_DIGESTS,
+    """Extraction input token. ``cfg`` stays for the contract_for seam; no backend is named."""
+    sources = {name: digest for name, digest in extract_llm._LOADED_SOURCE_DIGESTS.items()
+               if name not in _CONTEXT_ONLY_SOURCES}
+    return attachment_inference_contract.contract(code_digest=code_digest or _FACADE_CODE,
+        source_digests=sources,
         inference_version=inference_version.CURRENT_VERSION, extract_version=extract_llm.EXTRACT_VERSION,
         context_version=extract_llm.PATIENT_CONTEXT_VERSION)
+
+
+def local_model(cfg):
+    """The local model a locally produced page result and its checkpoints are pinned to.
+
+    A reader without settings passes ``cfg=None`` and uses host configuration."""
+    return local_llm.resolve(load_config() if cfg is None else cfg)[1]
 
 
 def requirement(cfg, pid):
@@ -92,7 +113,7 @@ def stored(db, pid, key, stage, cfg, *, contract_for=None):
     source = original_source_keys.source(db, pid, key)
     if source is None:
         return None
-    row = db.execute("SELECT artifact_id,CASE WHEN length(content)<=4194304 THEN content END AS content "
+    row = db.execute("SELECT artifact_id,model,CASE WHEN length(content)<=4194304 THEN content END AS content "
         "FROM artifacts WHERE kind=? AND project_id=? "
         "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.source_key') END=? "
         "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.stage') END=? "
@@ -110,15 +131,15 @@ def stored(db, pid, key, stage, cfg, *, contract_for=None):
             or not isinstance(proof, dict) or proof.get('complete') is not True):
         return None
     if stage == 'local':
-        if proof.get('providers') != ['local']:
+        # A local result is redone when the local model changes.
+        if proof.get('providers') != ['local'] or row['model'] != local_model(cfg):
             return None
     else:
         needed, provider_contract = _cloud_requirement(db, cfg, pid, key)
-        local = stored(db, pid, key, 'local', cfg, contract_for=contract_for)
-        if (needed is not True or local is None or provider_contract is None
+        if (needed is not True or provider_contract is None
                 or value.get('provider_contract') != provider_contract
                 or proof.get('providers') != [provider_contract['backend']]
-                or value.get('local_artifact_id') != local['artifact_id']):
+                or not _cloud_local_basis(db, pid, key, value, source)):
             return None
         ids = value.get('reservation_artifact_ids')
         if (not isinstance(ids, list) or not 0 < len(ids) <= 512
@@ -142,6 +163,20 @@ def stored(db, pid, key, stage, cfg, *, contract_for=None):
     return {**value, 'artifact_id': row['artifact_id']}
 
 
+def _cloud_local_basis(db, pid, key, value, source):
+    """The local admission row a cloud result names: same occurrence and token, after feedback.
+
+    Its local model is not checked, so a local model change keeps the cloud result."""
+    local_id = value.get('local_artifact_id')
+    if type(local_id) is not int or local_id <= attachment_feedback.revision(db, pid, key, source['_source_binding']):
+        return False
+    bound = attachment_cloud_identity.occurrence(db, {
+        'route': 'reextract', 'project_id': pid, 'message_id': None, 'unit_key': key + ':cloud',
+        'owner': {'source_type': 'attachment_ocr', 'source_key': key, 'local_artifact_id': local_id}})
+    return (bound is not None and bound[0]['_source_binding'] == source['_source_binding']
+            and bound[1]['contract'] == value['contract'])
+
+
 def current(db, pid, source_key, *, cfg=None):
     """Return a source-bound result, keeping mandatory cloud follow-up visibly pending."""
     cfg = load_config() if cfg is None else cfg
@@ -150,12 +185,12 @@ def current(db, pid, source_key, *, cfg=None):
                                 'UNION ALL SELECT NULL UNION ALL SELECT NULL')) as anchor:
             anchor.fetchone()
             original_source_keys.parse(source_key)
-            local = stored(db, pid, source_key, 'local', cfg)
-            if local is None:
-                return None
             needed, _ = _cloud_requirement(db, cfg, pid, source_key)
             cloud = stored(db, pid, source_key, 'cloud', cfg) if needed is True else None
-            return {**(cloud or local), 'require_cloud': needed,
+            result = cloud or stored(db, pid, source_key, 'local', cfg)
+            if result is None:
+                return None
+            return {**result, 'require_cloud': needed,
                     'ready': needed is False or cloud is not None}
     except (ValueError, TypeError, KeyError, sqlite3.Error):
         return None
@@ -263,7 +298,7 @@ def save(ledger, source, cfg, stage, document, meta, unit=None, local=None, *, c
             if stored(ledger.db, source['project_id'], source['source_key'], stage, cfg, contract_for=contract_for) is not None:
                 return False
             ledger.artifact_add_tx(KIND, json.dumps(value, ensure_ascii=False), project_id=source['project_id'],
-                message_id=source['parent_message_id'], model=unit.model if unit else local_llm.resolve(cfg)[1],
+                message_id=source['parent_message_id'], model=unit.model if unit else local_model(cfg),
                 meta={'source_key': source['source_key'], 'stage': stage})
             import notify_cards
             notify_cards.mark_snapshot_dirty(ledger.db)

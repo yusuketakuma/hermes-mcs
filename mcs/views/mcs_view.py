@@ -653,7 +653,7 @@ class View:
         return {
             "background": lambda: pcv.role_order(pcv.background(ev, care=care), role),
             "participants": lambda: pcv.participants(self.db, pid),
-            "changes": lambda: pcv.changes(self.db, ev, since if since is not None else now - 7 * 86400),
+            "changes": lambda: pcv.changes(self.db, ev, since if since is not None else pcv.first_changes_baseline(now)),
             "previsit": lambda: pcv.previsit(self.db, ev, now, care=care),
             "observations": lambda: pcv.observations(self.db, ev, cfg=cfg),
             "discrepancies": lambda: pcv.discrepancies(ev, posters=pcv.participants(self.db, pid)["items"]),
@@ -1057,8 +1057,10 @@ def main(argv=None):
         elif args["kind"] == "recovery_parts":
             from mcs_util import load_config_checked
             from notify_recovery import recovery_worklist
-            result = recovery_worklist(view.db, load_config_checked(),
-                                       limit=args["limit"], offset=args["offset"])
+            from notify_recovery_breakdown import recovery_summary
+            cfg = load_config_checked()
+            result = recovery_worklist(view.db, cfg, limit=args["limit"], offset=args["offset"])
+            result["summary"] = recovery_summary(view.db, cfg)
         elif args["kind"] == "card_part_check":
             if (not requests.valid_uuid(args["delivery_id"])
                     or not valid_text(args["part_id"], 64)):

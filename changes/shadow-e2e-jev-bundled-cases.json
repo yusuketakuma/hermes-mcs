@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "評価用の semantic_shadow_e2e --jev は同梱の完全合成ケースだけを送る",
+  "summary": "開発用の評価コマンド semantic_shadow_e2e に --jev を付けると、ケースファイルが evaluation/ に同梱された完全合成ケースと完全に一致する場合だけ Jev へ送ります。これまではファイル内の source: synthetic という自己申告だけで送っていました。",
+  "upgrade": "通常の運用への影響はありません。独自に作ったケースで評価する場合は --jev を付けずにこのMacのモデルだけで実行します（従来どおり実行できます）。--jev は同梱のケース（例: evaluation/semantic_completeness_cases.json）をそのまま使ってください。",
+  "details": [
+    "同梱ケースとの照合は mcs_setup.py jev-value と同じ semantic_evaluation.bundled_synthetic_cases に集約し、jev-value の判定と表示は変わりません。一致しない入力は Jev のクライアントを作る前に終了コード1で止めます。"
+  ],
+  "refs": [
+    "scripts/evaluation/semantic_shadow_e2e.py",
+    "mcs/semantic/eval/semantic_evaluation.py",
+    "mcs/ops/mcs_setup.py"
+  ]
+}

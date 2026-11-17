@@ -274,7 +274,11 @@ def test_init_parent_swap_never_writes_new_parent(tmp_path, monkeypatch, capsys)
 
 @pytest.mark.parametrize('phase', ['backup', 'replace_before', 'replace_after', 'backup_fsync', 'replace_fsync', 'parent_close', 'replace_eio_before', 'replace_eio_after'])
 def test_init_reports_uncertain_backup_for_interrupted_phase(tmp_path, monkeypatch, capsys, phase):
+    import external_transfer
     setup, path = _init_world(monkeypatch, tmp_path)
+    # The pending facility review precedes the backup with its own directory sync;
+    # writing it first keeps the injected faults on the backup's own syncs.
+    assert external_transfer.require(tmp_path)
     publish, replace, fsync, close = config_backup._publish_backup, os.replace, os.fsync, os.close
     published, directories = [], []
     def publish_fault(fd, name, raw, symlink):

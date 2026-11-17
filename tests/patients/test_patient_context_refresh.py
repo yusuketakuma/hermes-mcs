@@ -208,7 +208,7 @@ def _prepare_summary(runtime, *, cfg=CFG):
         sources = [source for source in snapshot['sources'] if context_plan.source_usable(source)]
         assert sources, 'summary preparation requires a nonempty source fixture'
         scans = patient_context_refresh_sources._current_scans(
-            led.db, 1, snapshot['sources'], snapshot['contract'], cfg=cfg)
+            led.db, 1, snapshot['sources'], snapshot['route'], cfg=cfg)
         if all(patient_context_refresh_sources._scan_ready(scans.get(context_plan.source_key(source), {}))
                for source in sources):
             return
@@ -717,7 +717,7 @@ def test_changed_source_resets_exhausted_retries(runtime, monkeypatch):
     assert after['failure_at'] == after['last_attempt'] == retry_at
     assert step(runtime)['status'] == 'deferred'
     # New semantic checks still start a fresh retry generation; the same input gets daily retries.
-    monkeypatch.setattr(patient_context_refresh_state, '_CHECKS', 'synthetic-changed-checks')
+    monkeypatch.setattr(patient_context_refresh_state, '_SCAN_CODE', 'synthetic-changed-checks')
     clock.wall += 86400
     # Stored scans reopen before lane A gets its first attempt under the new checks.
     results = [step(runtime) for _ in range(3)]
@@ -1093,7 +1093,7 @@ def test_new_backfill_evidence_rearms_exhausted_summary(runtime, monkeypatch):
 
 def test_summary_budget_preserves_complete_source_reports_in_detail(runtime, monkeypatch):
     led, _, _ = runtime
-    monkeypatch.setattr(context_refresh.context_plan, 'MAX_FACTS', 2)
+    monkeypatch.setattr(context_refresh.context_selection, 'MAX_FACTS', 2)
     for mid in range(1, 5):
         seed(led, mid=mid, body=f'生活環境: 合成の独立した過去報告その{mid}。')
     finish(runtime)
@@ -1206,7 +1206,7 @@ def test_source_checkpoint_reads_are_batched(runtime):
     led.db.set_trace_callback(statements.append)
     try:
         facts, total = patient_context_refresh_sources._all_facts(led.db, 1, snapshot, "2026-10-17")
-        coverage = patient_context_refresh_sources._coverage(led.db, 1, snapshot["sources"], snapshot["contract"], facts)
+        coverage = patient_context_refresh_sources._coverage(led.db, 1, snapshot["sources"], snapshot["route"], facts)
     finally:
         led.db.set_trace_callback(None)
     assert total == 24 and coverage["fetched"] == 24
@@ -1553,14 +1553,14 @@ def test_initial_context_unit_can_start_at_any_hour(runtime, at):
 
 @pytest.mark.parametrize('field', ['held', '_quality_held'])
 def test_daily_retry_never_releases_protected_holds(field):
-    progress = {'attempts': 5, 'checks': patient_context_refresh_state._CHECKS,
+    progress = {'attempts': 5, 'checks': patient_context_refresh_state._checks(),
                 'failure': 'context_timeout', 'next_try': 1000, 'failure_at': 1000, field: True}
     assert not patient_context_refresh_readiness._ready(progress, 1000 + 10 * 86400)
 
 
 @pytest.mark.parametrize('attempts', [5, 6, 100])
 def test_daily_retry_legacy_schedule_and_new_attempt_boundary(attempts):
-    progress = {'attempts': attempts, 'checks': patient_context_refresh_state._CHECKS,
+    progress = {'attempts': attempts, 'checks': patient_context_refresh_state._checks(),
                 'failure': 'context_timeout', 'next_try': 1000}
     assert not patient_context_refresh_readiness._ready(progress, 1000 + 86400 - 1)
     assert patient_context_refresh_readiness._ready(progress, 1000 + 86400)
@@ -1573,13 +1573,13 @@ def test_daily_retry_legacy_schedule_and_new_attempt_boundary(attempts):
     ('next_try', float('inf')), ('next_try', True), ('failure_at', float('inf')),
     ('failure_at', True), ('failure_at', '1000'), ('failure_at', 10**1000)])
 def test_daily_retry_keeps_unverified_dates_and_counters_waiting(field, value):
-    progress = {'attempts': 5, 'checks': patient_context_refresh_state._CHECKS,
+    progress = {'attempts': 5, 'checks': patient_context_refresh_state._checks(),
                 'failure': 'context_timeout', 'next_try': 1000, 'failure_at': 1000, field: value}
     assert not patient_context_refresh_readiness._ready(progress, 1e9)
 
 
 def test_other_lanes_cannot_postpone_an_exhausted_summary_daily_retry():
-    progress = {'attempts': 5, 'checks': patient_context_refresh_state._CHECKS,
+    progress = {'attempts': 5, 'checks': patient_context_refresh_state._checks(),
                 'failure': 'context_timeout', 'failure_at': 1000,
                 'next_try': 1000 + 86400, 'last_attempt': 1000 + 86399}
     assert patient_context_refresh_readiness._ready(progress, 1000 + 86400)

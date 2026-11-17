@@ -1,38 +1,7 @@
-"""Synthetic independent invariants for context selection and source validation."""
+"""Synthetic independent invariants for context scan planning and source validation."""
 import copy
 import pytest
 import patient_context_plan as plan
-
-
-def fact(identity, category, text, stamp):
-    return {"id": identity, "category": category, "text": text,
-            "source": "chat", "project_id": 1, "message_id": 1,
-            "posted_at": None, "posted_at_ts": stamp, "subject": "unspecified"}
-
-
-def test_category_fairness_and_summary_source_identity(monkeypatch):
-    values = [fact("a", "living", "家族は過去の居住を希望していません。", 3),
-              fact("b", "living", "本人の転居予定は未確認。", 2),
-              fact("c", "allergies", "アレルギーは未確認。", 1)]
-    original = copy.deepcopy(values)
-    monkeypatch.setattr(plan, "MAX_FACTS", 2)
-    selected, total = plan.select_facts({f["id"]: f for f in values})
-    assert [f["id"] for f in selected] == ["c", "a"]
-    assert total == 3
-    reports = plan.summary_reports(values + [values[0]])
-    assert [r["id"] for r in reports] == ["a", "b", "c"]
-    assert plan.summary_selection({"fact_ids": ["b", "a"]}, reports) == [
-        {"text": "本人の転居予定は未確認。", "fact_ids": ["b"]},
-        {"text": "家族は過去の居住を希望していません。", "fact_ids": ["a"]}]
-    assert values == original
-
-
-@pytest.mark.parametrize("answer", [{"fact_ids": []}, {"fact_ids": ["a", "a"]},
-    {"fact_ids": ["unknown"]}, {"fact_ids": [1]}, {"fact_ids": ["a"], "text": "推論"}])
-def test_summary_rejects_unbound_or_generated_content(answer):
-    reports = plan.summary_reports([fact("a", "living", "原文は未確認。", 0)])
-    with pytest.raises(ValueError, match="patient_context_unsupported_summary"):
-        plan.summary_selection(answer, reports)
 
 
 def test_scan_cursor_and_complete_quoted_unit_do_not_mutate_inputs():
@@ -50,13 +19,6 @@ def test_scan_cursor_and_complete_quoted_unit_do_not_mutate_inputs():
     with pytest.raises(ValueError, match="patient_context_invalid_items"):
         plan.scan_items({"patient_context": [{**item, "status": "current"}]}, chunks[0])
     assert (source, saved) == original
-
-
-def test_lane_rotation_keeps_six_three_one_schedule():
-    lanes = [plan.lane_rotation({"A": 1, "B": 1, "C": 1}, {"cursor": i})[0] for i in range(10)]
-    assert lanes == list("AAAAAABBBC")
-    assert plan.lane_rotation({"C": 1}, {"cursor": 0}) == ("C", 9, 0)
-    assert plan.lane_rotation({}, {"cursor": 9}) == (None, 9, 0)
 
 
 def test_split_scan_resumes_where_the_stopped_chunk_began_and_is_bounded():
@@ -103,16 +65,3 @@ def test_grounded_items_keep_only_what_passes_on_its_own():
     answer = {"patient_context": [good, {"category": "living", "text": "合成の別文",
                                          "evidence": "合成の別文", "subject": "unspecified"}]}
     assert plan.grounded_items(answer, chunk) == plan.context_items({"patient_context": [good]}, chunk)
-
-
-def test_rotation_advances_after_selected_slot_and_keeps_backlog_share():
-    # Start with A unavailable: selection jumps over A and must advance from B,
-    # rather than restarting the search from the original slot on each tick.
-    cursor = 0
-    observed = []
-    for _ in range(8):
-        lane, selected, cursor = plan.lane_rotation({'B': 1, 'C': 1}, {'cursor': cursor})
-        observed.append((lane, selected))
-    assert observed == [('B', 6), ('B', 7), ('B', 8), ('C', 9)] * 2
-    assert cursor == 0
-    assert plan.lane_rotation({'C': 1}, {'cursor': 7}) == ('C', 9, 0)

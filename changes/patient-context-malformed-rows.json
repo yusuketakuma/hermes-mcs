@@ -1,0 +1,21 @@
+{
+  "category": "fixed",
+  "title": "読めない記録が1件あっても患者コンテキストの作成と診断を止めない",
+  "summary": "ある患者の保存記録が値・型の誤りで読めない場合、患者コンテキストの作成はその患者だけを飛ばしてほかの患者を続けます。飛ばした周回は完了と報告せず、doctor と health.json に件数を出します。履歴調査の失敗は選んだ投稿の記録だけに書き、別の投稿の内容を書き込みません。",
+  "upgrade": "追加操作は不要です。常駐の抽出 worker とクラウド backlog の子プロセスが再起動した後に反映されます。doctor の patient_context.counts に invalid（読めない記録の患者数、1以上で注意）、health.json の patient_context に invalid_rows（読めない最新行の数）が加わります。更新前に取った患者コンテキストのリセット preview は内容が変わるため、更新後に preview を取り直してください。",
+  "details": [
+    "作成対象を選ぶ周回で、1人の進捗や調査記録の読取りが ValueError・TypeError・KeyError になった場合、その患者だけを飛ばして skip_patient_invalid に数え、最初の理由コード（登録済みコードか例外の型名）を skip_patient_code に記録します。作成対象外（読取り範囲なし・MCSが拒否）の患者は数えません。",
+    "飛ばした患者がいる周回は待機扱いとし、ほかに作業がなければ patient_context_patient_invalid の理由で先送りにします（同じ周回が走査中断で終わった場合は patient_context_scan_incomplete）。complete は返しません。SQLite・I/O の失敗と走査の中断は、従来どおり周回全体を打ち切ります。確認した2人以上の患者が全員、同じ型・同じ理由コードで読めない場合は、設定やコードの不具合として飛ばさずにエラーにします。",
+    "履歴の調査（B）と根拠照合（C）で、対象の投稿を選ぶ前に失敗した場合は調査記録を書かず、進捗の試行記録だけを更新します。この失敗は待機時間・失敗回数・doctor の失敗件数には入らず、その周回の結果（failed と理由コード）にだけ残ります。誤りが続く場合は次の周回の候補確認でその患者を飛ばす（skip_patient_invalid）ため、同じ処理を選び直し続けることはありません。以前は処理が例外で止まるか、前に見た投稿の内容を別の投稿の記録として書くことがありました。投稿を選んだ後の失敗は、従来どおりその投稿の記録に待機時間を書きます。",
+    "レーン別件数（lane_metrics）は、JSON オブジェクトでない最新行を例外にせず invalid_rows に数え、レーン別・照合状態の件数（none を含む）には入れません。以前は1行で doctor の lanes が null、health.json の patient_context が unknown になりました。invalid_rows は health.json にだけ出ます。doctor は同じ行を従来どおり記録上の状態の「読めない行」として表示し、注意にします。",
+    "doctor の作業待ち件数（counts）は、記録を読めない患者を invalid に数えてほかの患者を数え続けます。以前は1人分の誤りで counts 全体が未確認になりました。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_refresh.py",
+    "mcs/patients/patient_context_refresh_readiness.py",
+    "mcs/patients/patient_context_reset.py",
+    "mcs/llm/cloud_backlog.py",
+    "mcs/ingest/health_report.py",
+    "mcs/ops/mcs_setup.py"
+  ]
+}

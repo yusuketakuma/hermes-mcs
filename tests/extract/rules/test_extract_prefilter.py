@@ -217,7 +217,7 @@ def test_prefilter_still_settles_when_circuit_open(tmp_path, monkeypatch):
                       _message(mid=2, body="体温38度です")])
     # a real cooldown never exceeds _CIRCUIT_MAX_S; a longer stamp reads as damaged (closed)
     llm_availability.circuit_state_path(db.db).write_text(
-        json.dumps({"open_until": time.time() + 600}))
+        json.dumps({"open_until": time.time() + llm_availability._CIRCUIT_MAX_S / 2}))
     calls = []
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda body, **_: calls.append(body))

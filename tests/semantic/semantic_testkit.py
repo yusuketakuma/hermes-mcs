@@ -595,3 +595,17 @@ def local_http(monkeypatch):
         server.shutdown()
         server.server_close()
         thread.join(timeout=1.0)
+
+
+def stage_ledger(ledger, mid: int, fp: str) -> list:
+    """Ordered current S0-S8 receipts of one generation, read for assertions."""
+    from inference_version import is_current
+    from mcs_util import loads_dict
+    from semantic_publication import KIND_V4_STAGE
+    out = []
+    for r in ledger.db.execute("SELECT content,meta FROM artifacts WHERE kind=? AND message_id=? ORDER BY artifact_id",
+                               (KIND_V4_STAGE, mid)):
+        meta, content = loads_dict(r["meta"]), loads_dict(r["content"])
+        if isinstance(meta, dict) and is_current(meta) and isinstance(content, dict) and meta.get("fingerprint") == fp:
+            out.append({"stage": meta.get("stage"), **content})
+    return out

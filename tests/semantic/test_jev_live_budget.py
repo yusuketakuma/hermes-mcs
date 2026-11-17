@@ -171,8 +171,11 @@ def test_shadow_cli_live_entry_uses_shared_budget_context(tmp_path, monkeypatch)
     spec = importlib.util.spec_from_file_location("synthetic_shadow_driver", script)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    import semantic_evaluation
     cases, output = tmp_path / "cases.json", tmp_path / "out.json"
-    cases.write_text(json.dumps({"source": "synthetic", "cases": [{"id": "synthetic", "body": "synthetic"}]}))
+    asset = script.parents[2] / "evaluation/semantic_completeness_cases.json"
+    bundled = json.loads(asset.read_text(encoding="utf-8"))["cases"][:1]
+    cases.write_text(json.dumps({"source": "synthetic", "cases": bundled}, ensure_ascii=False))
     calls = []
 
     @contextmanager
@@ -186,7 +189,8 @@ def test_shadow_cli_live_entry_uses_shared_budget_context(tmp_path, monkeypatch)
 
     monkeypatch.setattr(jev, "api_key", lambda: "synthetic")
     monkeypatch.setattr(jev, "live_client", live)
-    monkeypatch.setitem(sys.modules, "semantic_evaluation", SimpleNamespace(run_shadow_e2e=run))
+    monkeypatch.setitem(sys.modules, "semantic_evaluation", SimpleNamespace(
+        run_shadow_e2e=run, bundled_synthetic_cases=semantic_evaluation.bundled_synthetic_cases))
     monkeypatch.setattr(sys, "argv", ["shadow", "--cases", str(cases), "--out", str(output), "--jev"])
     assert module.main() == 0
     assert calls == ["semantic_shadow_e2e"]

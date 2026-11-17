@@ -14,9 +14,9 @@ def test_chunk_plan_change_invalidates_completed_bundle(tmp_path, monkeypatch):
     import clinical_chunking
     db = _seeded(tmp_path)
     try:
-        first = semantic_store.thread_bundle(db.db, 1, 1, local_model="synthetic-model")
+        first = semantic_store.thread_bundle(db.db, 1, 1)
         monkeypatch.setattr(clinical_chunking, "PLAN_VERSION", "synthetic-next-plan")
-        changed = semantic_store.thread_bundle(db.db, 1, 1, local_model="synthetic-model")
+        changed = semantic_store.thread_bundle(db.db, 1, 1)
         assert changed["source_fingerprint"] != first["source_fingerprint"]
     finally:
         db.close()

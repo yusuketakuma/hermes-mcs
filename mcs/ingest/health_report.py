@@ -76,6 +76,7 @@ def _diagnostic_block(value) -> bool:
 
 def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     """Read bounded private OCR evidence without exposing source IDs, paths or text."""
+    import attachment_inference_deferral
     import attachment_ocr
     import writer_lock
     if not isinstance(cfg, dict):
@@ -94,11 +95,13 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     policy_fields = ('policy_binding', 'policy_rejected_failed',
                      'policy_rejected_exhausted', 'policy_rejected_unacknowledged')
     snapshot_fields = ("snapshot_failure", "snapshot_timing")
+    defer_field = "local_deferred_reasons"
     try:
         value = strict_json(safe_io.read_private_bytes(path, limit=4096))
         if (not isinstance(value, dict) or set(value) - {
                 "at", "reason", "queue_status", "paid_recovery_pending", *counts, *writer_fields,
-                *failure_fields, *ack_fields, *policy_fields, 'failure_cohort', *snapshot_fields}
+                *failure_fields, *ack_fields, *policy_fields, 'failure_cohort', *snapshot_fields,
+                defer_field}
                 or not finite_number(value.get("at")) or not 0 <= value["at"] <= now):
             raise ValueError("ocr_status_invalid")
         # mcs_ocr records why its publish after new pages was deferred; the
@@ -168,9 +171,15 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
         return {"state": "unknown", "reason": "attachment_ocr_status_missing"}
     except (OSError, ValueError, TypeError, RecursionError):
         return {"state": "unknown", "reason": "attachment_ocr_status_corrupt"}
+    # The deferral breakdown only explains local_deferred: an invalid one is
+    # dropped (the guidance falls back to the generic text), never 'corrupt'.
+    defer_reasons = value.get(defer_field)
+    defer_detail = ({defer_field: defer_reasons,
+                     "local_deferred_primary": attachment_inference_deferral.primary(defer_reasons)}
+                    if attachment_inference_deferral.valid(defer_reasons, value.get("local_deferred")) else {})
     detail = {"at": value["at"], "age_s": round(now - value["at"], 1),
               **{key: value[key] for key in (*counts, "paid_recovery_pending", "queue_status", 'failure_cohort') if key in value},
-              **writer_detail, **failure_detail, **ack_detail, **policy_detail}
+              **writer_detail, **failure_detail, **ack_detail, **policy_detail, **defer_detail}
     if now - value["at"] > freshness_deadline(cfg):
         return {**detail, "state": "unknown", "reason": "attachment_ocr_status_stale"}
     waiting_reasons = (None, "busy", "writer_busy", "snapshot_deferred", "memory_deferred")
@@ -490,15 +499,63 @@ def jev_block_reason(db) -> str | None:
     return kind if kind in _JEV_BLOCK_KINDS else None
 
 
+def _cloud_would_send(settings) -> bool:
+    """A sending mode with at least one route and one patient in scope."""
+    return (settings["mode"] in ("on", "shadow") and bool(settings["routes"])
+            and (settings["project_ids"] is None
+                 or bool(set(settings["project_ids"]) - set(settings["exclude_project_ids"]))))
+
+
+# external_transfer.status() without a record: the review allows every service
+_REVIEW_ALLOWS_ALL = {"state": "not_required", "auto_enable": True}
+
+
+def _jev_would_run(cfg) -> bool:
+    """Jev's settings as approval would apply them: a valid mode other than off with a patient in scope.
+
+    Only called while the review holds Jev, and a hold of an omitted mode
+    implies a present key, so the key counts as present."""
+    import semantic_policy
+    settings, errors = semantic_policy.semantic_config(
+        cfg, key_present=True, transfer_status=lambda: _REVIEW_ALLOWS_ALL)
+    return not errors and settings["mode"] != "off" and settings["project_ids"] != []
+
+
+def transfer_review_holds(cfg) -> list:
+    """Fixed reasons for external sends the facility review record withholds (external_transfer).
+
+    An unreadable record withholds every service, so it is one reason whatever
+    is configured. Otherwise a cloud provider or Jev that the recorded review
+    does not name is reported when its valid configuration would send with a
+    patient in scope once approved; without a record nothing is withheld. An
+    explicit mode is reported whether or not its key is present: the missing
+    key is named (cloud_llm_no_api_key, semantic_jev_no_api_key) once the
+    review allows the send, while an omitted mode is held only with a key."""
+    import cloud_policy
+    import external_transfer
+    import semantic_policy
+    if external_transfer.status()["state"] == "unreadable":
+        return ["external_transfer_unreadable"]
+    if not cfg:
+        return []   # an unreadable config keeps every external route off
+    reasons = []
+    _, errors, held = cloud_policy.resolve_selection(cfg)
+    # an omitted mode is held only with a key, and an explicit mode ignores
+    # key_present, so this is the configuration as approval would apply it
+    if held and not errors and _cloud_would_send(cloud_policy.cloud_config(cfg, key_present=True)[0]):
+        reasons.append("cloud_llm_provider_not_approved")
+    if semantic_policy.runtime_review_held(cfg) and _jev_would_run(cfg):
+        reasons.append("semantic_jev_provider_not_approved")
+    return reasons
+
+
 def cloud_stop_reason(db, cfg) -> str | None:
     """Observe a configured provider's durable stop without probing it or reading source bodies."""
     from types import SimpleNamespace
     import cloud_policy
     # an unreadable config ({}) keeps the route off (cloud_inference.resolve_cloud_settings)
     settings, errors = cloud_policy.resolve_settings(cfg) if cfg else cloud_policy.cloud_config({})
-    if (errors or settings["mode"] not in ("on", "shadow")
-            or not settings["routes"] or settings["project_ids"] is not None
-            and not set(settings["project_ids"]) - set(settings["exclude_project_ids"])):
+    if errors or not _cloud_would_send(settings):
         return None
     key_present = bool(cloud_policy.provider_key(settings["provider"]))
     reason = cloud_policy.global_block_reason(SimpleNamespace(db=db), model=settings["model"])
@@ -521,6 +578,18 @@ def carried_since(key: str, active: bool, now: float) -> float | None:
     marks = prev_health().get("stall_marks")
     at = marks.get(key) if isinstance(marks, dict) else None
     return at if finite_number(at) and 0 <= at <= now else now
+
+
+def access_log_health(data_dir: str) -> dict:
+    """Whether the newest access-log append failed (access_log.failure), without reading the log.
+
+    The adapters withhold patient answers they cannot record; only this
+    note, written by the failed append, tells the operator so."""
+    import access_log
+    note = access_log.failure(data_dir)
+    if note is None:
+        return {"state": "ok", "code": None, "since": None}
+    return {"state": "failing", "code": note["code"], "since": note["since"]}
 
 
 def watcher_health(data_dir: str, cfg, now: float) -> dict:
@@ -557,6 +626,9 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
     check is gated on its feature being enabled and needs BOTH old
     waiting work and no completion inside the window, so a large but
     draining backlog (or an idle system) never trips it.
+    - external sends the facility review withholds, and an unreadable
+      review record (transfer_review_holds): nothing else would say that
+      a configured provider or Jev is not being used.
     - card_delivery_stalled: a queued render on the active interactive
       transport not picked up for CARD_STALL_S (worker down/denied).
     - local_llm_down: local-model work (semantic jobs or pending legacy
@@ -589,6 +661,8 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
     cloud_reason = cloud_stop_reason(db, cfg)
     if cloud_reason:
         reasons.append(f"cloud_llm_{cloud_reason}")
+    _phase("transfer_review")
+    reasons.extend(transfer_review_holds(cfg))
     if notify_scope.interactive_enabled(cfg):
         import card_worker_status
         transport = notify_scope.active_transport(cfg)
@@ -856,7 +930,7 @@ def pending_health(db, now, seconds=None):
 
 PATIENT_CONTEXT_S = 2.0     # one bounded count per COVERAGE_COUNT_S, like coverage
 _PATIENT_CONTEXT_COUNTS = ("published", "active_patients", "extraction_complete",
-                           "focus_eligible", "focus_targets")
+                           "focus_eligible", "focus_targets", "invalid_rows")
 
 
 def _observation_failure(exc) -> str:
@@ -905,14 +979,21 @@ def part_holds_health(db, now, seconds=None) -> dict:
     return {**report, "status": "recorded", "observed_at": now}
 
 
-def incomplete_parts_health(db, now, cfg=None, seconds=None) -> dict:
-    """Observe unfinished notification counts within the existing reader budget."""
+def incomplete_parts_health(db, now, cfg=None, seconds=None, active_rows=None) -> dict:
+    """Observe unfinished notification counts within the existing reader budget.
+
+    ``active_rows``, when a list, is extended only after a complete read with
+    the active rows that read counted; a stopped read leaves it untouched."""
     import notify_scope
+    collected = []
+    sink = {} if active_rows is None else {"active_rows": collected}
     try:
         report = bounded_health_read(
-            db, lambda _check: notify_scope.incomplete_parts_health(db, now, cfg),
+            db, lambda _check: notify_scope.incomplete_parts_health(db, now, cfg, **sink),
             seconds=NOTIFICATION_OBSERVATION_S if seconds is None
             else min(seconds, NOTIFICATION_OBSERVATION_S))
+        if active_rows is not None:
+            active_rows.extend(collected)
     except Exception as exc:
         return {"total": None, "cards": None,
                 "by_state": dict.fromkeys(("pending", "unknown", "not_sent", "held")),
@@ -920,6 +1001,38 @@ def incomplete_parts_health(db, now, cfg=None, seconds=None) -> dict:
                 "oldest_age_s": None, "observed_at": now,
                 "status": "unknown", "reason": _observation_failure(exc)}
     return {**report, "status": "recorded"}
+
+
+RECOVERY_BREAKDOWN_S = 1.0
+
+
+def incomplete_parts_breakdown_health(db, parts, active_rows, cfg, now, seconds=None):
+    """Counts only: active unfinished parts by fixed code and applicable recovery plan.
+
+    Classifies ``active_rows``, the rows the verdict's own read counted, so the
+    unfinished-part scan and tracking-ack reproof are not repeated here. Runs
+    in its own bounded window after every other observation and never changes
+    the incomplete-part verdict. Omitted when the measured report is not
+    current or has no active unknown/not_sent/held part; a stopped read is
+    'unknown' with no counts, never zero."""
+    import notify_recovery_breakdown
+    active = parts.get("active_by_state") if parts.get("status") == "recorded" else None
+    if not isinstance(active, dict) or not any(active.get(state) for state in
+                                               notify_recovery_breakdown.CLASSIFIED_STATES):
+        return None
+    try:
+        report = bounded_health_read(
+            db, lambda check: notify_recovery_breakdown.recovery_breakdown(
+                db, cfg, active_rows, checkpoint=check),
+            seconds=RECOVERY_BREAKDOWN_S if seconds is None else min(seconds, RECOVERY_BREAKDOWN_S))
+    except Exception as exc:
+        return {"status": "unknown", "reason": _observation_failure(exc), "observed_at": now}
+    # Never publish counts for a population other than the one the verdict
+    # measured (e.g. rows that were not handed over with the report).
+    if (report["total"] != sum(active.get(state) or 0 for state in notify_recovery_breakdown.CLASSIFIED_STATES)
+            or report["pending_not_classified"] != (active.get("pending") or 0)):
+        return {"status": "unknown", "reason": "population_mismatch", "observed_at": now}
+    return {**report, "observed_at": now}
 
 
 def delivery_latency_health(db, cfg, now, seconds) -> dict:
@@ -1013,8 +1126,10 @@ def build_health(db, result: dict, status: str,
     cards_health = carried_measurement(cards_health, prev_health().get("cards"), now)
     cards_unknown = cards_health.get("status") == "unknown"
     previous_notify = prev_health().get("notify")
+    active_part_rows = []
     incomplete_parts = carried_measurement(
-        incomplete_parts_health(db, now, cfg, seconds=min(NOTIFICATION_OBSERVATION_S, remaining())),
+        incomplete_parts_health(db, now, cfg, seconds=min(NOTIFICATION_OBSERVATION_S, remaining()),
+                                active_rows=active_part_rows),
         previous_notify.get("incomplete_parts") if isinstance(previous_notify, dict) else None, now)
     parts_incomplete = incomplete_parts['status'] == 'unknown' or bool(
         incomplete_parts.get('active_total', incomplete_parts['total'])) or bool(
@@ -1274,6 +1389,8 @@ def build_health(db, result: dict, status: str,
     import notify_spool
     ocr = attachment_ocr_health(notify_spool.data_root(db), cfg if checked else None, now)
     watch = watcher_health(notify_spool.data_root(db), cfg if checked else None, now)
+    access = access_log_health(notify_spool.data_root(db))
+    access_bad = access["state"] != "ok"
     stall_marks["health_watch_bad_since"] = watch["bad_since"]
     ocr_bad = ocr["state"] not in ("ok", "disabled")
     skipped = result.get("backup_skipped")
@@ -1288,7 +1405,7 @@ def build_health(db, result: dict, status: str,
     backup_local_overdue = (not backup_deferred and finite_number(local_age)
                             and local_age > local_backup.BACKUP_OVERDUE_S)
     if (run_overdue or guard_violations or backup_bad or ocr_bad
-            or backup_deferred or backup_local_overdue) and overall == "ok":
+            or backup_deferred or backup_local_overdue or access_bad) and overall == "ok":
         overall = "degraded"
     previous = prev_health()
     last_ok_at = (now if overall == "ok" else previous.get(
@@ -1319,8 +1436,9 @@ def build_health(db, result: dict, status: str,
             ("disk_low", disk_low),
             ("backup_deferred_deadline", backup_deferred),
             ("backup_local_overdue", backup_local_overdue),
+            ("access_log_unwritable", access_bad),
         ) if present] + stalls
-    return {
+    report = {
         "overall": overall, "run_status": status,
         "last_ok_at": last_ok_at,
         "state_reasons": state_reasons,
@@ -1329,6 +1447,7 @@ def build_health(db, result: dict, status: str,
         "ledger_guards": guards,
         "backup": backup,
         "attachment_ocr": ocr,
+        "access_log": access,
         "at": now,
         "unread_at": unread_at(result, status, now),
         **coll,
@@ -1374,6 +1493,20 @@ def build_health(db, result: dict, status: str,
         **early_warnings(db, result, free_mb),
         "errors": list(result.get("errors") or []),
     }
+    # Diagnostic only and last: it never takes time from the sections above.
+    if incomplete_parts.get("status") == "stale_measurement":
+        carried = incomplete_parts.pop("recovery_breakdown", None)
+        if isinstance(carried, dict) and carried.get("status") in ("recorded", "partial", "stale_measurement"):
+            incomplete_parts["recovery_breakdown"] = {
+                **carried, "status": "stale_measurement",
+                "age_s": incomplete_parts.get("age_s")}
+    else:
+        incomplete_parts.pop("recovery_breakdown", None)
+        breakdown = incomplete_parts_breakdown_health(
+            db, incomplete_parts, active_part_rows, cfg, now, seconds=remaining())
+        if breakdown is not None:
+            incomplete_parts["recovery_breakdown"] = breakdown
+    return report
 
 
 def ledger_key(db) -> str:

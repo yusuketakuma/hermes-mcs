@@ -53,6 +53,12 @@ _GUARD_TRIGGERS = frozenset(
     + [f"relation_audit_messages_{suffix}" for suffix in ("del", "upd", "replace")])
 
 
+# rollup._dirty_project_snapshot names this index with INDEXED BY.
+# Keep the line break: sqlite_master stores this text and schema shapes compare it.
+ARTIFACTS_LOOKUP_INDEX_SQL = ("CREATE INDEX IF NOT EXISTS idx_artifacts_lookup\n"
+                              "            ON artifacts(kind, project_id, message_id);")
+
+
 REQUEST_SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests(
   request_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -362,7 +368,7 @@ def _initialize(db, *, schema_version: int) -> bool:
         fts = False
     # adds v3 columns first — indexes/triggers depend on them
     _migrate(db, schema_version=schema_version, fts=fts, fts_created=fts and not had_fts)
-    db.executescript("""
+    db.executescript(f"""
           CREATE INDEX IF NOT EXISTS idx_patients_name ON patients(patient_name) WHERE patient_name IS NOT NULL;
           CREATE INDEX IF NOT EXISTS idx_messages_project_time
             ON messages(project_id, posted_at_ts);
@@ -374,8 +380,7 @@ def _initialize(db, *, schema_version: int) -> bool:
             ON messages(parent_id);
           CREATE INDEX IF NOT EXISTS idx_messages_thread_time
             ON messages(project_id, COALESCE(parent_id,message_id), posted_at_ts);
-          CREATE INDEX IF NOT EXISTS idx_artifacts_lookup
-            ON artifacts(kind, project_id, message_id);
+          {ARTIFACTS_LOOKUP_INDEX_SQL}
           CREATE INDEX IF NOT EXISTS idx_requests_source_msg
             ON requests(source_message_id);
           CREATE INDEX IF NOT EXISTS idx_artifacts_kind_msg

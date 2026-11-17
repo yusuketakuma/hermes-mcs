@@ -1002,16 +1002,19 @@ def test_unread_route_5xx_keeps_http_error_without_fallback(tmp_path):
     db.close()
 
 
-def test_semantic_run_lock_lost_is_raised_to_end_the_tick(tmp_path, monkeypatch):
+@pytest.mark.parametrize("lost, held, updated", [
+    ("timeout", False, False), ("updated", False, True), ("held", True, False)])
+def test_semantic_run_lock_lost_is_raised_to_end_the_tick(tmp_path, monkeypatch,
+                                                          lost, held, updated):
     from writer_lock import RunLockLost
     _sem_setup(monkeypatch, tmp_path)
     monkeypatch.setattr(semantic_drain, 'run_due', lambda *a, **k: {
-        "done": 0, "deferred": 0, "failed": 0, "run_lock_lost": "timeout"})
+        "done": 0, "deferred": 0, "failed": 0, "run_lock_lost": lost})
     db = _ledger(tmp_path)
     with pytest.raises(RunLockLost) as e:
         run_check._run_semantic(db, _sem_args(), {}, {"errors": []},
                                 time.monotonic() + 400, True)
-    assert e.value.held is False
+    assert (e.value.held, e.value.updated) == (held, updated)
     db.close()
 
 

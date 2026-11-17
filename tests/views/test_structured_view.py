@@ -621,12 +621,6 @@ def test_malformed_vital_flag_key_keeps_valid_summary(db, key):
     assert joined == "合成要約"
 
 
-def test_all_layouts_use_the_same_urgency_label():
-    # one label map serves every layout; there is no per-layout switch left
-    assert structured_view._head_lines({}, {}, "llm") == ["🚨 緊急度高"]
-    assert structured_view._head_lines({}, {}, "rule") == ["🚨"]
-
-
 def test_legacy_held_urgency_keeps_the_reason_without_model_source_label(db):
     with db.db:
         db.db.execute("UPDATE messages SET body_text='本人は落ち着いています。' WHERE message_id=1")

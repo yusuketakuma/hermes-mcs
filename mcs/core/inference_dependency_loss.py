@@ -212,9 +212,8 @@ def _facts(source, artifact):
             if any(not isinstance(detail, dict) or not isinstance(detail.get('value'), str)
                     or detail['value'] not in fact['evidence'] for detail in fact.get('details', [])):
                 continue
-            candidate = {**fact, 'temporal': state.annotate(fact, source['body_text'])}
-            if candidate['temporal'] == fact.get('temporal'):
-                candidates.append(candidate)
+            # Scan facts store no interpretation; temporal is computed on reading.
+            candidates.append(state.with_temporal(fact, source['body_text']))
         return candidates
     candidates = []
     for category, key in (('medications', 'medications' if artifact['kind'] == 'extract_v1' else 'meds'),
@@ -265,18 +264,18 @@ def _verified_cloud_context(db, pid, key, scan):
             return False
         binding = source_binding(db, pid, source['message_id'], **({'source_key':key} if isinstance(key,str) else {}))
         occurrence = _context_occurrence(db, pid, source, binding)
-        contract = meta.get('route_contract', meta.get('contract'))
+        qa_binding = context_artifacts.quality_binding(meta)
         # Retained original proof must not depend on today's derived-input config.
         expected = (plan.original_source_signature(source) if 'original_source_sig' in meta
                     else plan.source_signature(source, legacy=True))
-        if (not isinstance(contract, dict) or not contract.get('provider')
+        if (not isinstance(qa_binding['contract'], dict) or not qa_binding['provider']
                 or meta.get('original_source_sig', meta.get('source_sig')) != expected):
             return False
         selected = context_artifacts.selected_rows(db, pid, key, source_binding=binding,
             source_occurrence=occurrence, body_size=len(source['body_text']))
         if doc.get('accepted_candidate_ref') is None:
             selected = context_artifacts.original_quality_rows(db, pid, key, scan, meta['source_sig'],
-                contract, occurrence, len(source['body_text']))
+                qa_binding, occurrence, len(source['body_text']))
         elif doc['accepted_candidate_ref'].get('chunks_sig') != chunks_sig:
             return False
         facts_by_id = {}
@@ -296,7 +295,7 @@ def _verified_cloud_context(db, pid, key, scan):
                     return False
                 facts_by_id.setdefault(fact['id'], fact)
         identity, _ = semantic_audit.patient_source_quality_identity(source, list(facts_by_id.values()),
-            occurrence, contract, chunks_sig, descriptor.get('assessment'))
+            occurrence, qa_binding, chunks_sig, descriptor.get('assessment'))
         return identity['audit_key'] == audit_key and semantic_runtime.patient_source_pass_verified(db, pid, identity, descriptor)
     except (ValueError, TypeError, KeyError, UnicodeError, OSError, RuntimeError, OverflowError):
         return False
@@ -408,17 +407,13 @@ def capture_tx(db, pid, mid, *, artifact_ids=None, source_key=None):
     quality_required = False
     for item in rows:
         if item['kind'] in _CONTEXT_KINDS:
-            entry = loads_dict(item['meta']) or {}
-            route = entry.get('route_contract')
-            quality_required |= bool(entry.get('provider') or isinstance(route, dict) and route.get('provider'))
+            quality_required |= context_artifacts.cloud_requested(loads_dict(item['meta']) or {})
     scan = (context_artifacts.selected_scan(db, pid, source_key if source_key is not None else mid)
             if valid_chunk_sigs or quality_required else None)
     if scan is not None:
         scan_doc, scan_meta = loads_dict(scan['content']) or {}, loads_dict(scan['meta']) or {}
         ref = scan_doc.get('accepted_candidate_ref')
-        route = scan_meta.get('route_contract', scan_meta.get('contract'))
-        quality_required = bool(quality_required or ref is not None or scan_meta.get('provider')
-                                or isinstance(route, dict) and route.get('provider'))
+        quality_required = bool(quality_required or ref is not None or context_artifacts.cloud_requested(scan_meta))
         verified = (scan_doc.get('complete') is True and scan_doc.get('audited') is True
                     and isinstance(scan_doc.get('audited_chunks_sig'), str)
                     and re.fullmatch('[0-9a-f]{64}', scan_doc['audited_chunks_sig'])
@@ -473,14 +468,10 @@ def capture_tx(db, pid, mid, *, artifact_ids=None, source_key=None):
                 target_scan = context_artifacts.selected_scan(db, pid, target_mid) if selected_target else None
                 target_meta = loads_dict(target_scan['meta']) or {} if target_scan else {}
                 target_doc = loads_dict(target_scan['content']) or {} if target_scan else {}
-                target_route = target_meta.get('route_contract', target_meta.get('contract'))
                 target_requires_qa = bool(target_doc.get('accepted_candidate_ref') is not None
-                    or target_meta.get('provider') or isinstance(target_route, dict) and target_route.get('provider'))
+                    or context_artifacts.cloud_requested(target_meta))
                 for target_item in selected_target:
-                    target_origin = loads_dict(target_item['meta']) or {}
-                    target_route = target_origin.get('route_contract')
-                    target_requires_qa |= bool(target_origin.get('provider')
-                        or isinstance(target_route, dict) and target_route.get('provider'))
+                    target_requires_qa |= context_artifacts.cloud_requested(loads_dict(target_item['meta']) or {})
                 if target_requires_qa and (target_scan is None or not _verified_cloud_context(db, pid, target_mid, target_scan)):
                     gaps.append({**origin, 'kind': 'patient_context_audit_unverified'})
                 else:

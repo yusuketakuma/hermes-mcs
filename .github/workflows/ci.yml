@@ -5,7 +5,10 @@ on:
   # the weekly schedule or a manual dispatch — never for a plain push to main
   push:
     tags: ['v*']
+  # ready_for_review and the full-ci label start the full run of a draft;
+  # the scope job decides what each pull request run needs (ci/ci_scope.py)
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   # weekly run on main: a runner image, Python patch or SQLite update that
   # breaks the suite surfaces without waiting for the next release
   schedule:
@@ -17,7 +20,11 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A label other than full-ci does not change what a run tests, so its run
+  # waits for the running one instead of cancelling it. It is not cut short
+  # either: a run that skipped everything would report green gates for the
+  # same head SHA and could replace a real result in the required checks.
+  cancel-in-progress: ${{ !(contains(fromJSON('["labeled", "unlabeled"]'), github.event.action) && github.event.label.name != 'full-ci') }}
 
 jobs:
   publication-request:
@@ -51,13 +58,78 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  linux-tests:
+  scope:
+    # full | docs | draft, read by the job conditions and the gates.
+    # Only a pull request is classified (ci/ci_scope.py); a vX.Y.Z tag, the
+    # schedule and a manual run are always full by this expression, so the
+    # release gate never depends on a script.
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ github.event_name == 'pull_request' && steps.pr.outputs.mode || 'full' }}
+    steps:
+      - if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # the pull_request merge commit and its first parent (the base)
+          fetch-depth: 2
+          persist-credentials: false
+      - name: classify pull request
+        id: pr
+        if: github.event_name == 'pull_request'
+        env:
+          MCS_CI_DRAFT: ${{ github.event.pull_request.draft }}
+          MCS_CI_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          # HEAD^2 of the merge commit must be this, or the run is full
+          MCS_CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 ci/ci_scope.py
+
+  lint:
+    # ruff, the medicine-master bundle and the generated docs in every mode,
+    # beside the tests so a lint failure reports within minutes
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.6"
+          cache-dependency-glob: |
+            Makefile
+            .github/workflows/ci.yml
+            deployment/requirements-standalone.txt
+      - name: ruff
+        # Lint scope and the ruff pin live in the Makefile.
+        run: make lint
+      - name: Check bundled public medicine master
+        run: python3 scripts/development/check_drug_master_bundle.py
+
+  pytest-linux:
+    # tests/ and integration/ as slices x shards. The partition is fixed here
+    # (never sized by a runner's CPUs) so every slice computes the same plan:
+    # full runs 4 slices x 2 shards = 8 shards (2 vCPU private runners), docs
+    # mode 1 slice x 2 shards over the document-related tests only. The
+    # lint-test gate checks the union of the slices' shard reports.
+    needs: scope
+    if: needs.scope.outputs.mode == 'full' || needs.scope.outputs.mode == 'docs'
+    runs-on: ubuntu-latest
+    # The 2026-11-01 suite was still progressing at 93% after 45 min.
+    # Keep the per-test MCS_TEST_TIMEOUT guard and bound each slice.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        group: [lifecycle, patients, rest]
+        slice: ${{ fromJSON(needs.scope.outputs.mode == 'full' && '[1, 2, 3, 4]' || '[1]') }}
+    env:
+      MCS_CI_SLICE: ${{ matrix.slice }}
+      MCS_CI_SLICES: ${{ needs.scope.outputs.mode == 'full' && '4' || '1' }}
+      MCS_CI_PER_SLICE: "2"
+      MCS_CI_TEST_SCOPE: ${{ needs.scope.outputs.mode }}
+      # perf-marked budget tests run on tags, the schedule and manual runs only
+      MCS_CI_SKIP_PERF: ${{ github.event_name == 'pull_request' && '1' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
@@ -76,44 +148,71 @@ jobs:
         run: |
           uv venv --python 3.14 --managed-python .venv
           uv pip install --python .venv/bin/python "pytest==9.2.0"
-          python3 ci/run_pytest_groups.py linux --group "${{ matrix.group }}"
+          python3 ci/run_pytest_groups.py linux --slice "$MCS_CI_SLICE/$MCS_CI_SLICES" --per-slice "$MCS_CI_PER_SLICE"
+      # small fixed-name artifact for the gate; a re-run of this slice replaces it
+      - name: shard reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: pytest-report-linux-${{ matrix.slice }}
+          path: ${{ runner.temp }}/mcs-pytest-*/shard-*.report.json
+          retention-days: 7
+          if-no-files-found: ignore
+          overwrite: true
       - name: pytest diagnostics
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
-          name: pytest-linux-${{ matrix.group }}-${{ github.run_attempt }}
+          name: pytest-linux-${{ matrix.slice }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/mcs-pytest-*/
           retention-days: 7
           if-no-files-found: ignore
 
   lint-test:
-    # Preserve the required check name. Missing, cancelled or failed shards fail closed.
-    needs: linux-tests
-    if: always()
+    # Required check and release lane: judges lint and every pytest-linux
+    # slice (ci/ci_gate.py lists the skips each mode allows), then proves the
+    # slices' shard reports cover the collected tests exactly once. A missing
+    # report fails closed; an artifact-storage failure is an infrastructure
+    # failure (docs/development/RELEASE_NOTES.md: ci_local.sh fallback).
+    needs: [scope, lint, pytest-linux]
+    # judge after a failure too, but not a run cancelled by a newer push
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
-          python-version: "3.14"
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
-        with:
-          version: "0.13.6"
-          cache-python: true
-          cache-dependency-glob: |
-            Makefile
-            .github/workflows/ci.yml
-            deployment/requirements-standalone.txt
-      - name: ruff
-        # Lint scope and the ruff pin live in the Makefile.
-        run: make lint
-      - name: Check bundled public medicine master
-        run: python3 scripts/development/check_drug_master_bundle.py
-      - name: require every Linux shard
+          persist-credentials: false
+      - name: gate
+        id: gate
         env:
-          SHARDS_RESULT: ${{ needs.linux-tests.result }}
-        run: test "$SHARDS_RESULT" = success
+          MCS_CI_NEEDS: ${{ toJSON(needs) }}
+          MCS_CI_GATE_DIR: ${{ runner.temp }}/ci-gate
+        run: python3 ci/ci_gate.py lint-test
+      - name: download shard reports
+        if: steps.gate.outputs.tests == 'ran'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          pattern: pytest-report-linux-*
+          path: ${{ runner.temp }}/ci-gate/reports
+          merge-multiple: true
+      - name: verify shard reports
+        if: steps.gate.outputs.tests == 'ran'
+        env:
+          MCS_CI_REPORTS: ${{ runner.temp }}/ci-gate/reports
+          MCS_CI_SLICES: ${{ needs.scope.outputs.mode == 'full' && '4' || '1' }}
+          MCS_CI_PER_SLICE: "2"
+        run: python3 ci/run_pytest_groups.py linux --verify-reports "$MCS_CI_REPORTS" --slices "$MCS_CI_SLICES" --per-slice "$MCS_CI_PER_SLICE"
+      # one artifact per lane for the release acceptance: verdict + verified reports
+      - name: gate evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: ci-gate-lint-test
+          path: ${{ runner.temp }}/ci-gate/
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: true
 
   hygiene:
     runs-on: ubuntu-latest
@@ -176,6 +275,8 @@ jobs:
   standalone-sdk:
     # runtime_mode=standalone against the exact SDK pins install.sh puts in
     # ~/.mcs/venv — offline: only each SDK's HTTP session is faked
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -209,14 +310,26 @@ jobs:
       - name: incident coverage from dev-records
         run: python3 ci/mine_gates.py --check
 
-  macos:
+  pytest-macos:
     # production runs on macOS: launchd/LaunchAgent plists, plutil, BSD
     # script(1) and /usr/bin/perl timeouts are only exercised here (their
     # tests skip on Linux). meta/ and ops/ hold the installer, updater,
     # setup and service tests; -r fEs lists every skip so a macOS-only test
-    # that silently skipped is visible in the log.
+    # that silently skipped is visible in the log. 2 slices x 3 shards = 6
+    # (hosted macOS runners have 3 vCPU), full mode only.
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        slice: [1, 2]
+    env:
+      MCS_CI_SLICE: ${{ matrix.slice }}
+      MCS_CI_SLICES: "2"
+      MCS_CI_PER_SLICE: "3"
+      MCS_CI_SKIP_PERF: ${{ github.event_name == 'pull_request' && '1' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
@@ -235,17 +348,70 @@ jobs:
           # python.org's macOS build can link an unpatched SQLite release.
           uv venv --python 3.14 --managed-python .venv
           uv pip install --python .venv/bin/python "pytest==9.2.0"
-          python3 ci/run_pytest_groups.py macos
+          python3 ci/run_pytest_groups.py macos --slice "$MCS_CI_SLICE/$MCS_CI_SLICES" --per-slice "$MCS_CI_PER_SLICE"
+      - name: shard reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: pytest-report-macos-${{ matrix.slice }}
+          path: ${{ runner.temp }}/mcs-pytest-*/shard-*.report.json
+          retention-days: 7
+          if-no-files-found: ignore
+          overwrite: true
       - name: pytest diagnostics
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
-          name: pytest-macos-${{ github.run_attempt }}
+          name: pytest-macos-${{ matrix.slice }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/mcs-pytest-*/
           retention-days: 7
           if-no-files-found: ignore
 
+  macos:
+    # Required check and release lane for pytest-macos, same rule as
+    # lint-test. It runs on ubuntu because it only judges and verifies
+    # reports: macOS runner minutes are billed at ten times the rate.
+    needs: [scope, pytest-macos]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: gate
+        id: gate
+        env:
+          MCS_CI_NEEDS: ${{ toJSON(needs) }}
+          MCS_CI_GATE_DIR: ${{ runner.temp }}/ci-gate
+        run: python3 ci/ci_gate.py macos
+      - name: download shard reports
+        if: steps.gate.outputs.tests == 'ran'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          pattern: pytest-report-macos-*
+          path: ${{ runner.temp }}/ci-gate/reports
+          merge-multiple: true
+      - name: verify shard reports
+        if: steps.gate.outputs.tests == 'ran'
+        env:
+          MCS_CI_REPORTS: ${{ runner.temp }}/ci-gate/reports
+          MCS_CI_SLICES: "2"
+          MCS_CI_PER_SLICE: "3"
+        run: python3 ci/run_pytest_groups.py macos --verify-reports "$MCS_CI_REPORTS" --slices "$MCS_CI_SLICES" --per-slice "$MCS_CI_PER_SLICE"
+      - name: gate evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: ci-gate-macos
+          path: ${{ runner.temp }}/ci-gate/
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: true
+
   hermes-integration:
+    needs: scope
+    if: needs.scope.outputs.mode == 'full'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
