@@ -206,7 +206,52 @@ def test_reset_keeps_the_facts_of_an_unpublished_context(built, tmp_path):
             meta = {**json.loads(row["meta"]), "published": False}
             ledger.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
                               (json.dumps(meta), row["artifact_id"]))
+        # without scans only the unpublished context itself can supply the keys
+        ledger.db.execute("DELETE FROM artifacts WHERE kind IN (?,?)", (state.SCAN, state.CHUNK))
     assert expected <= _reset_now(ledger, clock, cfg, tmp_path)[1]
+
+
+def test_reset_keeps_scan_facts_after_the_cloud_setting_changed(built, tmp_path):
+    """The scans were made on the published route: switching cloud off before the reset must not hide them."""
+    ledger, clock, cfg, _ = built
+    expected = _published_keys(ledger)
+    with ledger.db:
+        for row in ledger.artifacts(state.KIND):
+            doc = json.loads(row["content"])
+            doc["facts"], doc["summary"] = [], []
+            ledger.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                              (json.dumps(doc), row["artifact_id"]))
+    off = _disabled(cfg)
+    off["cloud_llm"] = {**off["cloud_llm"], "mode": "off"}
+    cloud_policy.stop(ledger)
+    found = reset.preview(ledger.db, cfg=off, now=clock.wall)
+    assert _apply(ledger, off, _request(found["preview_hash"]), clock.wall, tmp_path)[0] is None
+    kept = {row["project_id"]: set(json.loads(row["content"])) for row in ledger.artifacts(view_prior_kind())}
+    assert expected <= kept[1]
+
+
+def view_prior_kind():
+    import patient_context_view as view
+    return view.RESET_PRIOR_KIND
+
+
+def test_reset_counts_the_patients_whose_scan_facts_could_not_be_read(built, tmp_path, monkeypatch):
+    import cloud_inference
+    import patient_context_refresh_sources as sources
+    ledger, clock, cfg, _ = built
+    expected = _published_keys(ledger)
+
+    def failing(*args, **kwargs):
+        raise cloud_inference.CloudFallback("synthetic")
+
+    monkeypatch.setattr(sources, "_snapshot", failing)
+    off = _disabled(cfg)
+    cloud_policy.stop(ledger)
+    found = reset.preview(ledger.db, cfg=off, now=clock.wall)
+    error, extra = _apply(ledger, off, _request(found["preview_hash"]), clock.wall, tmp_path)
+    assert error is None and extra["erased"]["prior_facts_unreadable"] >= 1
+    kept = {row["project_id"]: set(json.loads(row["content"])) for row in ledger.artifacts(view_prior_kind())}
+    assert expected <= kept[1], "the published facts are still recorded"
 
 
 def test_a_second_reset_before_the_rebuild_keeps_the_first_records(built, tmp_path):
