@@ -300,3 +300,122 @@ def test_unit_spellings_of_the_same_unit_confirm_each_other(name, value, unit, b
 def test_a_different_power_of_ten_still_does_not_confirm():
     lab = _validated("WBC", "5.6", "×10^3/μL", "WBC 5.6×10^2/μL")
     assert lab["normalized"]["confirmation"] == "unverified"
+
+
+# A unit-less amount of a salt item (or of an unnamed item) in a clause that also
+# carries a dosing cue (分2, 毎食後, 点滴, 週1回 ...) is a dose; a space, a line break
+# or punctuation between the acid and the item does not make it a blood value.
+_LATIN = {"ナトリウム": "Na", "カリウム": "K", "カルシウム": "Ca", "マグネシウム": "Mg"}
+_DOSED_SALTS = [
+    ("ナトリウム", "200", "バルプロ酸 ナトリウム 200 分2"),
+    ("ナトリウム", "200", "バルプロ酸　ナトリウム 200 分2"),
+    ("ナトリウム", "200", "バルプロ酸  ナトリウム 200 分2"),
+    ("ナトリウム", "200", "バルプロ酸・ナトリウム 200 分2"),
+    ("ナトリウム", "200", "バルプロ酸･ナトリウム 200 分2"),
+    ("ナトリウム", "200", "バルプロ酸-ナトリウム 200 分2"),
+    ("ナトリウム", "200", "(バルプロ酸)ナトリウム 200 分2"),
+    ("ナトリウム", "200", "バルプロ酸\nナトリウム 200 分2"),
+    ("ナトリウム", "200", "・バルプロ酸\n・ナトリウム 200 分2"),
+    ("カリウム", "300", "アスパラギン酸\nカリウム 300 分3"),
+    ("マグネシウム", "330", "酸化\nマグネシウム 330 分3"),
+    ("マグネシウム", "330", "酸化　マグネシウム 330 分3"),
+    ("カルシウム", "500", "炭酸 カルシウム 500 分3"),
+    ("リチウム", "200", "炭酸 リチウム 200 分2"),
+    ("カリウム", "8", "ブドウ糖カリウム 8 点滴"),
+    ("ナトリウム", "3", "重曹 ナトリウム 3 分3"),
+    # Own synthetic lines.
+    ("カリウム", "600", "塩化 カリウム 600 1日3回"),
+    ("ナトリウム", "500", "炭酸水素 ナトリウム 500 毎食後"),
+    ("カルシウム", "1", "乳酸 カルシウム 1 朝夕"),
+    ("マグネシウム", "500", "酸化 マグネシウム 500 就寝前"),
+    ("マグネシウム", "250", "酸化 マグネシウム 250 眠前"),
+    ("ナトリウム", "60", "ロキソプロフェン ナトリウム 60 頓服"),
+    ("ナトリウム", "0.1", "ヒアルロン酸 ナトリウム 0.1 点眼"),
+    ("ナトリウム", "35", "アレンドロン酸 ナトリウム 35 週1回"),
+    ("カリウム", "10", "グルコン酸 カリウム 10 日2回"),
+    ("カリウム", "20", "塩化 カリウム 20 点滴"),
+    ("カルシウム", "500", "沈降炭酸 カルシウム 500 食後"),
+    ("カリウム", "1.5", "ワルファリン カリウム 1.5 内服中"),
+    ("ナトリウム", "500", "チオ硫酸 ナトリウム 500 静注"),
+    ("カルシウム", "1", "グルコン酸 カルシウム 1 食前"),
+    ("アムロジピン", "5", "アムロジピン 5 分1"),
+    ("リチウム", "400", "リチウム 400 1日2回"),
+    ("ナトリウム", "75", "リセドロン酸 ナトリウム 75 月1回"),
+    ("カルシウム", "500", "炭酸 カルシウム 500 隔日"),
+    ("ナトリウム", "35", "アレンドロン酸 ナトリウム 35 起床時"),
+    ("ナトリウム", "200", "バルプロ酸 ナトリウム 200 処方"),
+    ("カリウム", "600", "塩化 カリウム 600 投与"),
+]
+
+
+@pytest.mark.parametrize("name,value,body", [
+    *_DOSED_SALTS,
+    *((_LATIN[name], value, body) for name, value, body in _DOSED_SALTS if name in _LATIN),
+])
+def test_a_unit_less_amount_in_a_dosing_clause_stays_a_candidate(name, value, body):
+    lab = _validated(name, value, None, body)
+    assert lab["unverified"] is True
+    assert lab["normalized"]["confirmation"] == "unverified"
+
+
+# Inorganic salt stems glued to the item, like 塩化 and 酸化 (no dosing cue needed).
+@pytest.mark.parametrize("name,value,body", [
+    ("ナトリウム", "1", "シアン化ナトリウム 1"),
+    ("カリウム", "1", "シアン化カリウム 1"),
+    ("ナトリウム", "1", "硫化ナトリウム 1"),
+    ("Na", "1", "硫化ナトリウム 1"),
+    ("K", "1", "シアン化カリウム 1"),
+])
+def test_cyanide_and_sulfide_stems_are_salt_names(name, value, body):
+    lab = _validated(name, value, None, body)
+    assert lab["normalized"]["confirmation"] == "unverified"
+
+
+# A lab unit written in the source keeps the reading, even next to a dosing cue,
+# and a cue in another clause or inside the label itself does not hide a lab.
+_UNIT_LABS = [
+    ("カリウム", "4.1", "mEq/L", "尿酸 カリウム 4.1mEq/L"),
+    ("カリウム", "4.1", "mEq/L", "尿酸　カリウム 4.1mEq/L"),
+    ("カリウム", "4.1", "mEq/L", "尿酸\nカリウム 4.1mEq/L"),
+    ("ナトリウム", "139", "mEq/L", "乳酸\nナトリウム 139mEq/L"),
+    ("カリウム", "4.0", "mEq/L", "・尿酸\n・乳酸\n・カリウム 4.0mEq/L"),
+    ("ナトリウム", "128", "mEq/L", "悪化ナトリウム 128mEq/L"),
+    ("カリウム", "5.8", "mEq/L", "腎機能悪化カリウム 5.8mEq/L"),
+    ("カリウム", "4.2", "mEq/L", "酸素カリウム 4.2mEq/L"),
+    ("マグネシウム", "1.8", "mg/dL", "褥瘡悪化マグネシウム 1.8mg/dL"),
+    ("ナトリウム", "140", "mEq/L", "アミノ酸 ナトリウム 140mEq/L"),
+    ("ナトリウム", "138", "mEq/L", "ﾅﾄﾘｳﾑ 138mEq/L"),
+    # Own synthetic lines.
+    ("カリウム", "5.1", "mEq/L", "カリウム 5.1mEq/L 分2の塩化カリウム中止"),
+    ("ナトリウム", "132", "mEq/L", "点滴後 ナトリウム 132mEq/L"),
+    ("カルシウム", "8.6", "mg/dL", "カルシウム 8.6mg/dL 食後採血"),
+    ("マグネシウム", "2.1", "mg/dL", "マグネシウム 2.1mg/dL 毎食後の酸化マグネシウム継続"),
+    ("ナトリウム", "136", "mEq/L", "ナトリウム 136mEq/L 点滴継続"),
+    ("カリウム", "4.0", "mEq/L", "Na 140mEq/L、カリウム 4.0mEq/L 頓服使用なし"),
+    ("ナトリウム", "135", "mmol/L", "ナトリウム 135mmol/L 週1回採血"),
+    ("カルシウム", "9.4", "mg/dL", "炭酸 カルシウム服用中 カルシウム 9.4mg/dL"),
+    ("カリウム", "3.6", "mEq/L", "朝夕 カリウム 3.6mEq/L"),
+    ("マグネシウム", "2.4", "mg/dL", "酸化マグネシウム 330 分3、マグネシウム 2.4mg/dL"),
+]
+
+
+@pytest.mark.parametrize("name,value,unit,body", [
+    *_UNIT_LABS,
+    *((name, value, None, body) for name, value, _, body in _UNIT_LABS),
+    *((_LATIN[name], value, unit, body) for name, value, unit, body in _UNIT_LABS if name in _LATIN),
+])
+def test_a_lab_unit_in_the_source_keeps_the_reading_next_to_dosing_words(name, value, unit, body):
+    lab = _validated(name, value, unit, body)
+    assert lab["normalized"]["confirmation"] == "quote_supported"
+    assert not lab.get("unverified", False)
+
+
+@pytest.mark.parametrize("name,value,body", [
+    ("ナトリウム", "138", "ナトリウム 138"),
+    ("カリウム", "4.2", "カリウム 4.2、アスパラK 分3継続"),
+    ("カリウム", "3.9", "採血でカリウム 3.9。内服は分3で継続"),
+    ("食後血糖", "180", "食後血糖 180"),
+    ("リチウム濃度", "0.8", "リチウム濃度 0.8 朝夕内服中"),
+])
+def test_a_unit_less_lab_without_a_dosing_cue_in_its_clause_keeps_the_reading(name, value, body):
+    assert clinical_values.lab_candidate(name, value, None, body)["confirmation"] == "quote_supported"
