@@ -1,16 +1,15 @@
 """Advance fair patient context work while preserving inference and publication evidence."""
 from contextlib import closing as closing, contextmanager as contextmanager
-from datetime import datetime as datetime, timedelta as timedelta
+from datetime import datetime as datetime
 import copy as copy
 import hashlib as hashlib
 import json as json
-import math as math
 import os as os
 from pathlib import Path as Path
 import re as re
 import sqlite3 as sqlite3
-from types import SimpleNamespace as SimpleNamespace
 import local_llm as local_llm
+import semantic_policy
 import initial_import_state as initial_import_state
 import cloud_inference as cloud_inference
 import cloud_backlog as cloud_backlog
@@ -34,7 +33,6 @@ from patient_context_refresh_state import (
     CALL_SECONDS as CALL_SECONDS,
     CHUNK as CHUNK,
     COMMIT_MARGIN as COMMIT_MARGIN,
-    CONTRACT as CONTRACT,
     CURRENT_VERSION as CURRENT_VERSION,
     Deferred as Deferred,
     KIND as KIND,
@@ -53,9 +51,6 @@ from patient_context_refresh_state import (
     _INTERNAL_PROOF as _INTERNAL_PROOF,
     _SCAN_CODE as _SCAN_CODE,
     _SUMMARY_CODE as _SUMMARY_CODE,
-    _adoption_artifact_matches as _adoption_artifact_matches,
-    _adoption_epoch_expected as _adoption_epoch_expected,
-    _artifact_meta as _artifact_meta,
     _checks as _checks,
     _cloud_input_binding as _cloud_input_binding,
     _comparison_context as _comparison_context,
@@ -83,37 +78,17 @@ from patient_context_refresh_state import (
     workday_window as workday_window
 )
 from patient_context_quality_receipts import (
-    _has_prior_quality_failure as _has_prior_quality_failure,
     _new_summary_repair_response as _new_summary_repair_response,
-    _other_summary_repair_spent as _other_summary_repair_spent,
-    _profiled_summary_repair_exists as _profiled_summary_repair_exists,
     _quality_answers as _quality_answers,
     _quality_claim as _quality_claim,
     _quality_failed as _quality_failed,
-    _quality_failure_allows_remainder as _quality_failure_allows_remainder,
-    _quality_integrity as _quality_integrity,
-    _quality_mark_pass as _quality_mark_pass,
-    _quality_mark_skipped as _quality_mark_skipped,
     _quality_owns as _quality_owns,
     _quality_pass_content as _quality_pass_content,
-    _quality_pass_present as _quality_pass_present,
     _quality_passed as _quality_passed,
-    _quality_record_failure as _quality_record_failure,
-    _quality_release as _quality_release,
-    _quality_repair_spent as _quality_repair_spent,
-    _quality_reserve_repair_tx as _quality_reserve_repair_tx,
-    _quality_retry as _quality_retry,
-    _quality_scope_allowed as _quality_scope_allowed,
-    _quality_skip_evidence as _quality_skip_evidence,
     _quality_skip_receipt as _quality_skip_receipt,
-    _quality_store_answers as _quality_store_answers,
-    _repair_response as _repair_response,
-    _stored_quality_answers as _stored_quality_answers,
-    _summary_repair_response as _summary_repair_response
+    _quality_store_answers as _quality_store_answers
 )
 from patient_context_refresh_sources import (
-    _ScanConnection as _ScanConnection,
-    _ScanCursor as _ScanCursor,
     _ScanInterrupted as _ScanInterrupted,
     _all_facts as _all_facts,
     _candidate_reader as _candidate_reader,
@@ -125,17 +100,12 @@ from patient_context_refresh_sources import (
     _quality_input as _quality_input,
     _scan_check as _scan_check,
     _scan_facts as _scan_facts,
-    _scan_read_binding as _scan_read_binding,
     _scan_read_owner as _scan_read_owner,
     _scan_ready as _scan_ready,
-    _scan_writer_wait as _scan_writer_wait,
     _scans_from_read as _scans_from_read,
     _snapshot as _snapshot,
-    _source_chunk_marker_matches as _source_chunk_marker_matches,
-    _source_chunk_rows as _source_chunk_rows,
     _source_chunks as _source_chunks,
     _source_occurrence as _source_occurrence,
-    _source_occurrence_disposition as _source_occurrence_disposition,
     _source_quality_capture as _source_quality_capture,
     _source_quality_verified as _source_quality_verified,
     _source_repair_chunks as _source_repair_chunks,
@@ -148,7 +118,6 @@ from patient_context_refresh_sources import (
     _verify_source_repair_rows as _verify_source_repair_rows
 )
 from patient_context_refresh_readiness import (
-    _LANE_CODES as _LANE_CODES,
     _capture_readiness as _capture_readiness,
     _cloud_extraction_ready as _cloud_extraction_ready,
     _context_view_input as _context_view_input,
@@ -158,10 +127,8 @@ from patient_context_refresh_readiness import (
     _inference_ready as _inference_ready,
     _observe_readiness as _observe_readiness,
     _pending as _pending,
-    _publication_route as _publication_route,
     _quality_publication_allowed as _quality_publication_allowed,
     _raw_extraction_current as _raw_extraction_current,
-    _readiness_environment as _readiness_environment,
     _readiness_for_write as _readiness_for_write,
     _ready as _ready,
     _required_cloud_extraction_contract as _required_cloud_extraction_contract,
@@ -176,10 +143,8 @@ from patient_context_refresh_readiness import (
 )
 from patient_context_quality_controller import (
     _ask as _ask,
-    _quality_repair_candidate as _quality_repair_candidate,
     _quality_step as _quality_step,
     _scan as _scan,
-    _source_quality_repair_step as _source_quality_repair_step,
     _source_repair_seal as _source_repair_seal,
     _summary as _summary
 )
@@ -898,10 +863,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         return {"status": "deferred", "done": 0, "reason": "transaction_active"}
     local_admit = local_admit or admit
     now = patient_context_refresh_state.time.time()
-    window = patient_context_refresh_state.workday_window(now)
-    if not patient_context_refresh_state.options(cfg)["enabled"] or not window:
+    if not patient_context_refresh_state.options(cfg)["enabled"]:
         return {"status": "off", "done": 0}
-    workday_id, _ = window
+    workday_id = patient_context_refresh_state.workday_window(now)[0]
     if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline or not admit():
         return {"status": "deferred", "done": 0}
     if role == "local" and patient_context_refresh_readiness._cloud_serves_every_patient(ledger, cfg):
@@ -1611,7 +1575,6 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     facts, total = repaired["facts"], repaired["facts_total"]
                     changed = repaired["facts_sig"]
                     projected = repaired["temporal_view"]
-                import semantic_policy
                 quality_policy, problems = semantic_policy.runtime_config(cfg)
                 if problems or not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, quality_policy, snapshot["sources"]):
                     raise patient_context_refresh_state.Deferred("summary_quality_promotion")
@@ -1678,7 +1641,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                                     source_binding=selected_occurrence[0]["source_binding"])
                         scan_input[0] = patient_context_refresh_state._cloud_scan_binding(
                             meta["source_sig"], meta["contract"], snapshot["route"]["provider"], selected_occurrence[0])
-                        planned, planned_cursor, _, _, _ = context_plan.scan_plan(source, saved)
+                        planned, planned_cursor, _, _ = context_plan.scan_plan(source, saved)
                         planned_span = [sum(map(len, planned[:planned_cursor])), sum(map(len, planned[:planned_cursor + 1]))]
                         route = snapshot["route"]
                         # The unit this pass would write: the route's fresh unit, or the local
@@ -1916,7 +1879,6 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     ledger.db.rollback()
                     return {"status": "source_changed", "done": 0}
             if source_quality_identity is not None:
-                import semantic_policy
                 live_cfg = extract_llm.load_config()
                 live_policy, problems = semantic_policy.runtime_config(live_cfg)
                 import semantic_jev

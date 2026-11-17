@@ -352,7 +352,7 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
     if header and header['phase'] == 'sealing':
         return _source_repair_seal(ledger, pid, source, binding, protected, header, identity, claim, current, deadline)
     saved = {key:header[key] for key in ('cursor','split') if header and key in header}
-    chunks, cursor, saved, _, _ = context_plan.scan_plan(source, saved)
+    chunks, cursor, saved, _ = context_plan.scan_plan(source, saved)
     span = [sum(map(len, chunks[:cursor])), sum(map(len, chunks[:cursor + 1]))]
     unit_key = patient_context_refresh_state._digest(['source-repair-unit/1', repair_key, span, saved.get('split', 0), PLAN_VERSION])
     if reserved_units and (not header or reserved_units[0]['meta']['unit_key'] != unit_key
