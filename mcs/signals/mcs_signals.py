@@ -505,10 +505,11 @@ ADHERENCE_TERMINAL = ("管理は出来ない", "管理はできない",
                       "服薬管理出来ません", "服薬管理できません")
 # てい/してい covers 「飲み忘れていない」「飲み忘れはしていない」;
 # ません covers 「残薬ありません」 (the pattern consumes the あり);
-# an adverb may sit before the negation: 「飲み忘れは特にない」「残薬が全くない」
+# an adverb may sit before the negation: 「飲み忘れは特にない」「残薬が全くない」;
+# く covers the adjective stem 「服薬管理が難し」+「くない/くありません」
 _NEGATE_RE = re.compile(
     r"[はがも、。\s]*(?:(?:特に|全く|ほとんど|あまり|今のところ)[は、\s]*)?"
-    r"(?:してい|てい|て)?(ない|なし|ありません|なく|ません)"
+    r"(?:く|してい|てい|て)?(ない|なし|ありません|なく|ません)"
     r"(?!\s*(?:わけ|訳|こと|事)(?:では|でも|は|が)?(?:ない|ありません|なく))")
 
 
