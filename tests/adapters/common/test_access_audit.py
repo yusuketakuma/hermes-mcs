@@ -2,6 +2,7 @@
 import json
 
 import access_log
+import pytest
 from adapters.common import dispatch as command_dispatch
 from adapters.common.mcs_api import deny, ok
 
@@ -96,15 +97,21 @@ def test_summary_text_records_shown_patients_and_its_failures(tmp_path, monkeypa
     assert (failed["outcome"], failed["patients"]) == ("summary_unavailable", [])
 
 
-def test_native_summary_entries_share_the_recorded_answer(tmp_path, monkeypatch):
+@pytest.mark.parametrize(("transport", "scope_id", "expected_actor"), [
+    ("slack", "T1", "slack:T1:U9"),
+    ("discord", "G1", "discord:U9"),
+    ("lineworks", "D1", "lineworks:D1:U9"),
+])
+def test_native_summary_entries_share_the_recorded_answer(
+        tmp_path, monkeypatch, transport, scope_id, expected_actor):
     from adapters.common import summary
     monkeypatch.setattr(summary, "answer", lambda *a, **k: {"text": "合成", "parts": {},
                                                            "project_ids": [3]})
     settings = {**_settings(tmp_path), "snapshot": str(tmp_path / "s.db"), "project_ids": frozenset({3})}
-    who = {"transport": "lineworks", "user": "U9", "scope_id": "D1"}
+    who = {"transport": transport, "user": "U9", "scope_id": scope_id}
     assert summary.answer_recorded(settings, "all", **who)["text"] == "合成"
     entry, = access_log.read(tmp_path)
-    assert (entry["actor"], entry["op"], entry["patients"]) == ("lineworks:D1:U9", "summary", [3])
+    assert (entry["actor"], entry["op"], entry["patients"]) == (expected_actor, "summary", [3])
     missing = {**settings, "inbox": str(tmp_path / "gone" / "cmd")}
     assert summary.answer_recorded(missing, "all", **who) == {
         "error": summary.ACCESS_LOG_UNAVAILABLE}
