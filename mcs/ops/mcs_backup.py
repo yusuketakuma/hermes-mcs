@@ -644,8 +644,15 @@ def main(argv: list[str] | None = None, *,
                 backup_evidence.record_failure(records, state, args.action, exc)
                 raise
             if args.scheduled and policy.periodic_drill is not None:
-                result = {**result, "periodic_drill": _periodic_drill(
-                    records, policy, key, key_source="keychain" if args.keychain else "key_fd")}
+                try:
+                    drill = _periodic_drill(
+                        records, policy, key, key_source="keychain" if args.keychain else "key_fd")
+                except (backup_evidence.BackupError, OSError, ValueError, TypeError,
+                        sqlite3.Error, RecursionError) as exc:
+                    # The completed action's receipt is still printed; the drill alone failed.
+                    drill = {"status": "failed", "due": True,
+                             "error": backup_evidence.failure_code(exc)}
+                result = {**result, "periodic_drill": drill}
         print(json.dumps(result, sort_keys=True))
         if result.get("periodic_drill", {}).get("status") in ("failed", "unverified"):
             return 1
