@@ -452,12 +452,18 @@ def _in_a_dosing_clause(quote: str, match: re.Match, lines: list[int]) -> bool:
     # The amount itself is the number a form follows (塩化 カリウム 4 散).
     if _DOSING_CUE.search(quote, start, at) or _DOSING_CUE.search(quote, match.end("name"), stop):
         return True
-    # The clause just before the previous break or just after the next one (same line).
+    # The clause just before the previous break or just after the next one (same line),
+    # or, at a line's edge, the adjacent line when it holds nothing but dosing cues.
     line = bisect.bisect_right(lines, at)
-    return any(0 <= mark < len(quote) and _CLAUSE_END.match(quote, mark)
-               and bisect.bisect_right(lines, inside) == line
-               and _DOSING_ONLY_CLAUSE.fullmatch(_clause_at(quote, inside, lines))
-               for mark, inside in ((start - 1, start - 1), (stop, stop + 1)))
+    bounds = [0, *lines, len(quote)]   # line n spans bounds[n]..bounds[n + 1]
+    neighbours = [_clause_at(quote, inside, lines) for mark, inside in ((start - 1, start - 1), (stop, stop + 1))
+                  if 0 <= mark < len(quote) and _CLAUSE_END.match(quote, mark)
+                  and bisect.bisect_right(lines, inside) == line]
+    if line and start == bounds[line]:
+        neighbours.append(_CLAUSE_END.sub("", quote[bounds[line - 1]:bounds[line]]))
+    if line < len(lines) and stop == bounds[line + 1]:
+        neighbours.append(_CLAUSE_END.sub("", quote[bounds[line + 1]:bounds[line + 2]]))
+    return any(_DOSING_ONLY_CLAUSE.fullmatch(clause) for clause in neighbours)
 
 
 def _part_of_drug_name(name: str, before: str) -> bool:

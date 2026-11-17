@@ -648,7 +648,7 @@ def test_a_neighbouring_clause_with_more_than_cues_does_not_hide_the_reading(nam
     assert _confirmation(name, value, body) == "quote_supported"
 
 
-# A line break is a hard clause bound: a dosing word on the next line is another statement.
+# A line break is a hard clause bound: a line naming a drug with its dose is another statement.
 @pytest.mark.parametrize("name,value,body", [
     ("ナトリウム", "128", "ナトリウム 128\n合成薬B 分2 継続"),
     ("ナトリウム", "128", "ナトリウム 128\r\n合成薬B 分2 継続"),
@@ -659,8 +659,14 @@ def test_a_neighbouring_clause_with_more_than_cues_does_not_hide_the_reading(nam
     ("カルシウム", "9.1", "カルシウム 9.1\n合成薬C 1錠"),
     ("カルシウム", "9.1", "【検査】\nカルシウム 9.1\nマグネシウム 2.0\n【処方】\n合成薬C 1錠 分1"),
     ("カリウム", "4.2", "合成薬A 頓用、\nカリウム 4.2"),
-    ("カリウム", "4.2", "分2、\nカリウム 4.2"),
-    ("カリウム", "4.2", "頓用；\nカリウム 4.2"),
+    ("カリウム", "4.2", "合成薬A 1錠 分2 継続\nカリウム 4.2"),
+    ("カリウム", "4.2", "カリウム 4.2\n合成薬A 分2"),
+    ("カリウム", "4.2", "分2で合成薬A 継続\nカリウム 4.2"),
+    # A cue-only line touches only the clause at its edge, and a cue-only clause on
+    # another line reaches the reading only through that whole line.
+    ("カリウム", "4.2", "分2\nナトリウム 138、カリウム 4.2"),
+    ("ナトリウム", "138", "ナトリウム 138、カリウム 4.2\n分2"),
+    ("カリウム", "4.2", "合成薬A 継続、頓用。\nカリウム 4.2"),
 ])
 def test_a_line_break_bounds_the_clause_of_a_reading(name, value, body):
     assert _confirmation(name, value, body) == "quote_supported"
@@ -697,3 +703,17 @@ def test_each_salt_stem_glued_to_the_item_is_a_drug_name(stem):
 @pytest.mark.parametrize("form", ["顆粒", "散", "シロップ", "テープ", "軟膏", "坐剤"])
 def test_a_form_word_right_after_the_amount_keeps_it_a_candidate(form):
     assert _confirmation("カリウム", "4", f"塩化 カリウム 4 {form}") == "unverified"
+
+
+# Across a line break only a line of nothing but dosing cues continues the amount.
+@pytest.mark.parametrize("name,value,body", [
+    ("カリウム", "4", "塩化 カリウム 4\n分2"),
+    ("カリウム", "4", "分2\n塩化 カリウム 4"),
+    ("カリウム", "4", "塩化 カリウム 4\n1日3回"),
+    ("カリウム", "4", "頓用、\n塩化 カリウム 4"),
+    ("カリウム", "4", "塩化 カリウム 4\r\n1錠 分2"),
+    ("カリウム", "4", "合成薬A 1錠\n分2；\n塩化 カリウム 4"),
+    ("ナトリウム", "140", "炭酸水素 ナトリウム 140\n分3\n合成薬B 1錠"),
+])
+def test_an_adjacent_line_of_only_dosing_cues_keeps_the_amount_a_candidate(name, value, body):
+    assert _confirmation(name, value, body) == "unverified"
