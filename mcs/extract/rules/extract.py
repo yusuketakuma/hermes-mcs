@@ -74,7 +74,9 @@ _SYMPTOM_CONTINGENCY = re.compile(r"\s*(?:の)?(?:時(?!間|刻|期|点|々)|と
 _SYMPTOM_PRN_MED = re.compile(r"薬|処方|内服|服用|服薬|使用|頓用|頓服|投与|mg|錠|包|坐薬|座薬|外用|貼付|飲(?:む|ん|み)")
 # a use that already happened, or an injury at the event (転倒時に打撲), reports the symptom
 _SYMPTOM_REPORTED = re.compile(
-    r"(?:使用|服用|内服|頓服|投与|貼付|塗布|挿入|吸入)(?:した|しました|済|して(?:い|お)|中)"
+    r"(?:使用|服用|内服|頓服|投与|貼付|塗布|挿入|吸入)"
+    r"(?:した|しました|済|して(?:い|お)|中|あり|し(?=[、,。]|解熱|効果|軽快|改善|$))"
+    r"|効果(?:あり|あっ|なし|乏し)|奏効|解熱(?!剤|薬)|(?:軽快|改善)(?:し|あり)"
     r"|飲んだ|飲みました|飲んで(?:い|お)|現在|持続|続いて|悪化|強い"
     r"|打撲|受傷|骨折|出血|負傷|外傷|怪我|けが|ケガ")
 
@@ -140,7 +142,10 @@ _PLAN_DATE = re.compile(
     r"(?<!\d)(?:(?P<year>\d{4})[-－/／年])?(?P<month>\d{1,2})[-－/／月](?P<day>\d{1,2})(?!\d)日?"
     r"(?:[ \t　]*[（(][月火水木金土日](?:曜(?:日)?)?[）)])?")
 _PLAN_MOVED = re.compile(r"[ \t　]*(?P<word>→|⇒|->|から)[ \t　]*(?=(?:\d{4}[-－/／年])?\d{1,2}[-－/／月]\d)")
-_PLAN_DONE = re.compile(r"済|実施|しました|した(?![いらく])|でした|行いました|伺いました")
+# 決まりました/なりました/決定しました announce a plan; 実施します/実施予定 are not done either.
+_PLAN_DONE = re.compile(
+    r"済|実施(?!しま|いたしま|致しま|予定)|(?<!決まりま)(?<!なりま)(?<!決めま)(?<!決定しま)した(?![いらく])"
+    r"|でした|行いました|伺いました")
 _PLANNED_BEFORE = re.compile(r"次回|予定(?!通り|どおり)|明日|明後日|今度|来週")
 # 予定通りなら (conditional) right before the date, beyond the 6-char window
 _PLANNED_IF = re.compile(r"予定(?:通り|どおり)なら[　\s、,，]*$")
@@ -174,7 +179,7 @@ def _next_planned_matches(body):
                 continue
             yield new
             continue
-        if re.match(r"[ \t　]*(?:に|へ|を|が)?[ \t　]*変更", sentence):
+        if re.match(r"[ \t　]*(?:を|が)?[ \t　]*変更", sentence):
             continue  # 次回訪問11/20変更: changed without a new date
         yield match
 

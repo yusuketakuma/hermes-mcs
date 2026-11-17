@@ -110,3 +110,40 @@ def test_a_year_crossing_date_resolves_but_a_recent_wrong_side_date_does_not(pos
     from datetime import datetime
     when = datetime.fromisoformat(posted)
     assert extract._ymd(month, day, when.year, when, mode) == expected
+
+
+@pytest.mark.parametrize("body, expected", [
+    ("次回訪問は11/27に変更になりました", "2026-11-27"),
+    ("次回訪問日を11/27に変更します", "2026-11-27"),
+    ("次回は11/27に決まりました", "2026-11-27"),
+    ("次回は11/27となりました", "2026-11-27"),
+    ("次回は11/27に採血を実施します", "2026-11-27"),
+])
+def test_an_announced_or_changed_to_date_stays_the_next_plan(body, expected):
+    assert _rule(body)["next_planned"] == expected
+
+
+@pytest.mark.parametrize("body", ["次回訪問11/20変更", "次回訪問は11/20を変更します", "次回は11/10に採血を実施しました"])
+def test_a_changed_without_new_date_or_done_date_is_still_dropped(body):
+    assert "next_planned" not in _rule(body)
+
+
+@pytest.mark.parametrize("body", [
+    "疼痛時オキノーム使用あり",
+    "発熱時カロナール内服し解熱",
+    "呼吸困難時にモルヒネ使用、効果あり",
+])
+def test_a_reported_prn_use_keeps_the_symptom_that_occurred(body):
+    assert _rule(body)["symptoms"]
+
+
+@pytest.mark.parametrize("body", ["疼痛時にオキノームを使用してください", "疼痛時はオキノーム5mg頓用"])
+def test_a_prn_instruction_is_still_not_a_symptom(body):
+    assert "symptoms" not in _rule(body)
+
+
+@pytest.mark.parametrize("day, expected", [(19, None), (18, "2027-09-18")])
+def test_the_62_and_63_day_boundary_of_a_passed_plan_date(day, expected):
+    from datetime import datetime
+    when = datetime.fromisoformat("2026-11-20T10:00:00+09:00")
+    assert extract._ymd(9, day, 2026, when, "future") == expected
