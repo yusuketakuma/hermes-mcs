@@ -696,3 +696,19 @@ def test_wedged_lock_holder_fails_closed_after_the_bound(data, monkeypatch):
         os.close(holder)
     run_log.append(str(data), b"synthetic second\n")
     assert (data / run_log.LOG).read_bytes() == b"synthetic first\nsynthetic second\n"
+
+
+def test_consume_fd_reports_lock_timeout_and_drains_remaining_output(data, monkeypatch):
+    @contextmanager
+    def locked(_data):
+        raise run_log.RunLogError('run_log_lock_timeout')
+        yield
+
+    monkeypatch.setattr(run_log, '_locked', locked)
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b'first\nsecond\n')
+    os.close(write_fd)
+    with pytest.raises(run_log.RunLogError, match='run_log_capture_failed'):
+        run_log._consume_fd(data, read_fd)
+    with pytest.raises(OSError):
+        os.fstat(read_fd)
