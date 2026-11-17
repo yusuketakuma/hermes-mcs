@@ -271,12 +271,32 @@ def _cloud_route_state(cfg, route, project_id):
     # Quota/circuit denial is decided after recovering/checking this input's
     # prior attempt. Turning the route off here could send an unknown unit locally.
     if mode in ("on", "shadow") and not cloud_policy.selected_key(HOME, cfg):
-        return "off", "key"
+        # The key's problem is named now, with the mode: a key that the next read finds usable
+        # was a temporary read failure, which waits, never an unknown stop.
+        return "off", "key:" + (cloud_policy.selected_key_problem(HOME, cfg) or "env_file_unreadable")
     return mode, None
 
 
 def _cloud_mode(ledger, cfg, route, project_id):
     return _cloud_route_state(cfg, route, project_id)[0]
+
+
+def _off_code(cfg, stop):
+    """The ``cloud_send_admission.classify_refusal`` code of one :func:`_cloud_route_state` stop."""
+    if stop == "scope":
+        return cloud_policy.refusal_code(cfg if isinstance(cfg, dict) else {}, "scope", model=None, root=HOME)
+    if type(stop) is str and stop.startswith("key:"):
+        return stop[len("key:"):]
+    return stop
+
+
+def cloud_route_mode(ledger, cfg, route, project_id):
+    """``(mode, off_reason)`` from one reading of the route, the scope and the key.
+
+    ``off_reason`` is :func:`cloud_off_reason` of that same reading, so a key read that fails
+    and then succeeds cannot pair an off mode with no reason. None unless the mode is off."""
+    mode, stop = _cloud_route_state(cfg, route, project_id)
+    return mode, (_off_code(cfg, stop) if mode == "off" else None)
 
 
 def cloud_off_reason(ledger, cfg, route, project_id):
@@ -285,12 +305,7 @@ def cloud_off_reason(ledger, cfg, route, project_id):
     An explicit off, the patient's scope, a provider the facility review has not approved and a
     closed route are named as such; a key that cannot be used is named by its own problem. None
     while this configuration leaves the cloud available, which a caller reads as unknown."""
-    stop = _cloud_route_state(cfg, route, project_id)[1]
-    if stop == "scope":
-        return cloud_policy.refusal_code(cfg if isinstance(cfg, dict) else {}, "scope", model=None, root=HOME)
-    if stop == "key":
-        return cloud_policy.selected_key_problem(HOME, cfg) or "key_missing"
-    return stop
+    return _off_code(cfg, _cloud_route_state(cfg, route, project_id)[1])
 
 
 def _comparison_fact(source, kind, assertion, evidence=None, *, evidence_span=None):

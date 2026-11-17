@@ -74,8 +74,9 @@ def test_off_reason_of_an_unresolvable_profile_and_an_unnamed_key_problem(monkey
     monkeypatch.setattr(cloud_policy, 'resolve_profile', lambda *args, **kwargs: (None, ['config: synthetic']))
     assert provider.cloud_off_reason(None, cfg, 'patient_context', 1) == 'profile_invalid'
     monkeypatch.undo()
-    # The key is gone although its file reads cleanly: still named, never left as available.
+    # The key read failed although the next read of its file finds no problem: a temporary read
+    # failure, still named and never left as available.
     monkeypatch.setattr(cloud_policy, 'provider_key', lambda backend, root=None: None)
     monkeypatch.setattr(cloud_policy, 'private_env_problem', lambda *args: None)
     assert provider._cloud_mode(None, cfg, 'patient_context', 1) == 'off'
-    assert provider.cloud_off_reason(None, cfg, 'patient_context', 1) == 'key_missing'
+    assert provider.cloud_off_reason(None, cfg, 'patient_context', 1) == 'env_file_unreadable'

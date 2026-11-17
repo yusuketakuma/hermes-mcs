@@ -254,6 +254,7 @@ from extract_llm_provider import (
     _cloud_origin_for_checkpoint as _cloud_origin_for_checkpoint,
     _cloud_mode as _cloud_mode,
     cloud_off_reason as cloud_off_reason,
+    cloud_route_mode as cloud_route_mode,
     _comparison_fact as _comparison_fact,
     _comparison_extract as _comparison_extract,
     _cloud_compare as _cloud_compare,
