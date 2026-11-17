@@ -7,7 +7,6 @@ import semantic_extraction
 import semantic_store
 import semantic_transport
 import json
-import hashlib
 import math
 import sqlite3
 import time
@@ -412,18 +411,9 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                     sent.append(True)
                     raise
                 sent.append(True)
-                receipt = semantic_transport.inference_receipt()
-                contract = semantic_transport.inference_contract()
-                if (isinstance(value, str) and receipt is not None and contract is not None
-                        and receipt.get('reservation_id') not in previous_requests):
-                    import bounded_http
-                    try:
-                        if len(value.encode('utf-8')) <= bounded_http.MAX_RESPONSE_BYTES:
-                            answers.append({'text': value, 'prompt_sha256': hashlib.sha256(prompt.encode('utf-8')).hexdigest(),
-                                            'reservation_id': receipt.get('reservation_id'), 'contract': contract,
-                                            'unit_key': receipt.get('unit_key'), 'owner': receipt.get('owner')})
-                    except UnicodeError:
-                        pass
+                record = semantic_transport.repair_answer_record(prompt, value, previous_requests)
+                if record is not None:
+                    answers.append(record)
                 return value
             try:
                 with semantic_transport.quality_repair():

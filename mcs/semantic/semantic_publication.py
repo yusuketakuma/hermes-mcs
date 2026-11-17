@@ -124,9 +124,11 @@ def _repaired_projection_producer(db, pid, mid, fp, policy, member, doc, meta):
                 raise semantic_runtime.RuntimeStale('repair_evidence_missing')
             answer = answers[index]
             index += 1
+            # The absolute read ceiling here; verify_cloud_repair_evidence below
+            # checks the exact bound of the answer's own reservation.
             if (not isinstance(answer, dict) or set(answer) != {'text', 'prompt_sha256', 'reservation_id', 'contract', 'unit_key', 'owner'}
                     or not isinstance(answer['text'], str)
-                    or len(answer['text'].encode('utf-8')) > bounded_http.MAX_RESPONSE_BYTES
+                    or len(answer['text'].encode('utf-8')) > bounded_http.MAX_RESPONSE_BYTES_CEILING
                     or answer['prompt_sha256'] != hashlib.sha256(prompt.encode('utf-8')).hexdigest()
                     or not isinstance(answer['reservation_id'], str) or not isinstance(answer['unit_key'], str)
                     or not isinstance(answer['owner'], dict)):

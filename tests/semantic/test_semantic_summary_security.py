@@ -24,7 +24,7 @@ def test_every_factual_claim_kind_requires_evidence_and_support(monkeypatch, kin
     bundle = {"content_quality": "full", "members": []}
     seen = []
 
-    def evaluate(_client, state, questions, _deadline):
+    def evaluate(_client, state, questions, _deadline, **_kwargs):
         seen.append((state, questions))
         return {"answers": {"claim_1_0": {"choice": "not_supported", "confidence": 0.9}}}
 
