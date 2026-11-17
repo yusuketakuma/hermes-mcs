@@ -428,3 +428,14 @@ def test_context_child_holds_the_cloud_role_and_retries_a_failed_hold(monkeypatc
     # The failed hold is retried on the next pass, and only until it is held.
     assert seen == [False, True, True] and len(holds) == 2
     assert cloud_backlog.role_alive(tmp_path, cloud_backlog.ROLE_CLOUD) is False   # released on exit
+
+
+def test_deferral_delay_is_shared_by_the_child_pause_and_the_lane_a_retry_time():
+    # Lane A writes next_try with this one function: a full send slot is retried in 5 s,
+    # every other deferral (cap, circuit, pending result, waiting child) in 60 s.
+    assert cloud_backlog.deferral_delay("patient_context_cloud_deferred:cloud_capacity") == 5
+    for reason in ("patient_context_cloud_deferred:daily_cap", "patient_context_cloud_deferred:result_pending",
+                   "patient_context_waiting", "summary_quality_deferred", None):
+        assert cloud_backlog.deferral_delay(reason) == 60
+        if reason and reason.startswith("patient_context_cloud_deferred:"):
+            assert cloud_backlog._context_retry_delay({"done": 0, "reason": reason}) == 60

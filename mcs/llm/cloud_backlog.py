@@ -895,6 +895,12 @@ def _context_pass_observation(result):
     return record
 
 
+def deferral_delay(reason):
+    """Seconds before a unit the cloud deferred is tried again: a full send slot clears within
+    seconds, every other deferral (cap, circuit, pending result, waiting child) does not."""
+    return 5 if reason == "patient_context_cloud_deferred:cloud_capacity" else 60
+
+
 def _context_retry_delay(result):
     """Backoff for one context pass. selection_busy means another worker
     holds the selection lock and is doing real work — retrying in seconds
@@ -908,7 +914,7 @@ def _context_retry_delay(result):
         return 20
     base, _, code = reason.partition(":") if type(reason) is str else ("", "", "")
     if base == "patient_context_cloud_deferred":
-        return 5 if code == "cloud_capacity" else 60
+        return deferral_delay(reason)
     if reason in ("patient_context_cloud_budget", "patient_context_other_role",
                   "patient_context_nothing_due"):
         # Every patient the pass reached is served by the other worker role, or none was due.

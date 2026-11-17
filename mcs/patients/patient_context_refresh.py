@@ -13,6 +13,7 @@ from types import SimpleNamespace as SimpleNamespace
 import local_llm as local_llm
 import initial_import_state as initial_import_state
 import cloud_inference as cloud_inference
+import cloud_backlog as cloud_backlog
 import inference_dependency_loss as dependency_loss
 import patient_context_artifacts as context_artifacts
 from clinical_chunking import PLAN_VERSION as PLAN_VERSION
@@ -2028,8 +2029,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                         **({"source_sig": snapshot["source_sig"], "source_scope": source_keys} if lane == "A" else {}),
                         **(retry if lane == "A" and deferred_reason is None else {})}
             if lane == "A" and deferred_reason is not None:
-                progress["next_try"] = ((generation_wait.get('next_at') or now + 60) if generation_wait is not None
-                    else now if deferred_reason == "summary_quality_pending" else now + 60)
+                wait = cloud_backlog.deferral_delay(deferred_reason)
+                progress["next_try"] = ((generation_wait.get('next_at') or now + wait) if generation_wait is not None
+                    else now if deferred_reason == "summary_quality_pending" else now + wait)
                 progress["quality_state"] = (deferred_reason[len("summary_quality_"):]
                     if deferred_reason.startswith("summary_quality_") else None)
             elif lane == "A":
