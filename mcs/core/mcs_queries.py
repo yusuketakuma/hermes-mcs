@@ -413,14 +413,16 @@ def current_fact_pred(art: str = "a", msg: str = "m", *,
 
 def med_period_artifacts(db):
     """Current extract_v1 artifacts carrying med_periods — the only
-    source of period expressions today."""
+    source of period expressions today. Returned as the open cursor: one
+    statement, consumed row by row (same snapshot and order as fetchall,
+    without holding every document); callers must not write meanwhile."""
     return db.execute(
         "SELECT m.project_id, m.message_id, a.content "
         "FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
         "WHERE a.kind='extract_v1'"
         f"{current_extract_pred(error_check=False)} "
         f"AND json_array_length({json_or_null('a.content')},"
-        "'$.med_periods')>0").fetchall()
+        "'$.med_periods')>0")
 
 
 def med_is_patient_current(med) -> bool:

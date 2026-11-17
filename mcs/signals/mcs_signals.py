@@ -23,6 +23,7 @@ from __future__ import annotations
 import clinical_scope
 
 import hashlib
+import itertools
 import json
 import re
 import sqlite3
@@ -231,11 +232,10 @@ def _comm_concentration(db, now, th, sig_cfg):
 
 def _request_overdue(db, now, th, sig_cfg):
     """Formal register fact: open/in_progress requests past due_date."""
-    # fetchall kept: each row yields at most one signal, so streaming saves nothing
+    # streamed: no other read happens while the rows are consumed
     rows = db.execute(
         "SELECT request_id, project_id, due_date FROM requests "
-        "WHERE status IN ('open','in_progress') AND due_date IS NOT NULL"
-    ).fetchall()
+        "WHERE status IN ('open','in_progress') AND due_date IS NOT NULL")
     today = datetime.fromtimestamp(now, JST).date()
     for rid, pid, due in rows:
         try:
@@ -257,11 +257,11 @@ def _request_overdue(db, now, th, sig_cfg):
 def _request_aging(db, now, th, sig_cfg):
     """Open register items whose created_at is older than the aging
     threshold — regardless of due_date (register fact only)."""
-    # fetchall kept: each row yields at most one signal, so streaming saves nothing
+    # streamed: no other read happens while the rows are consumed
     rows = db.execute(
         "SELECT request_id, project_id, created_at FROM requests "
         "WHERE status IN ('open','in_progress') AND created_at <= ?",
-        (now - th["req_age_days"] * DAY_S,)).fetchall()
+        (now - th["req_age_days"] * DAY_S,))
     for rid, pid, created in rows:
         days = int((now - created) / DAY_S)
         yield _key("request_aging", pid, rid), {
@@ -634,8 +634,6 @@ def _discharge_notice(db, now, th, sig_cfg):
     covered = {mid for mid, (pid, mids) in grouped.items()
                if _patient_transition(db, pid, mid)
                and any(_patient_change_message(db, pid, item) for item in mids)}
-    # fetchall kept: the rows are iterated twice (engagement checker, then the
-    # loop) and the loop reads the database per row
     rows = db.execute(
         f"""SELECT DISTINCT d.project_id, d.message_id, d.posted_at_ts
             FROM messages d
@@ -649,9 +647,14 @@ def _discharge_notice(db, now, th, sig_cfg):
               AND COALESCE(p.is_archived,0)=0
               {self_pred}
             ORDER BY d.project_id, d.message_id""",
-        (lookback, *self_params)).fetchall()
-    engaged = _engagement_checker(db, rows, profs, orgs)
-    for pid, mid, ts in rows:
+        (lookback, *self_params))
+
+    # the checker reads ahead in bounded batches over the same cursor, so
+    # tee holds only that lag; the source-scope filters stay in the loop so
+    # a later row's error still surfaces after the earlier rows' signals
+    for_checker, for_loop = itertools.tee(rows)
+    engaged = _engagement_checker(db, for_checker, profs, orgs)
+    for pid, mid, ts in for_loop:
         if mid in covered:
             continue                    # transition_reconciliation owns it
         if not _patient_transition(db, pid, mid):
@@ -790,7 +793,11 @@ def latest_signal_states(db):
         key = meta.get("key") if isinstance(meta, dict) else None
         if isinstance(key, str) and key:
             latest[key] = (content_s, pid)
-    return {key: signal_content(*row) for key, row in latest.items()}
+    # parse in place so each raw document is freed as its parsed form
+    # replaces it, instead of holding both copies of every signal
+    for key in latest:
+        latest[key] = signal_content(*latest[key])
+    return latest
 
 
 def signal_message_ids(sig):
