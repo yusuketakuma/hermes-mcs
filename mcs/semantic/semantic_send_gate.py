@@ -427,8 +427,8 @@ def _summary_superseded(db, project_id, message_id, summary_id, current) -> bool
     model change). Anything else stays unverified and is retried."""
     if type(summary_id) is not int or summary_id <= 0:
         return False
-    if current is not None:
-        return summary_id != current["artifact_id"]
+    if current is not None and summary_id == current["artifact_id"]:
+        return False
     try:
         row = db.execute("SELECT kind,project_id,message_id,model,meta FROM artifacts WHERE artifact_id=?",
                          (summary_id,)).fetchone()
@@ -441,6 +441,8 @@ def _summary_superseded(db, project_id, message_id, summary_id, current) -> bool
         model = row["model"] if "model" in row.keys() else None
     except (sqlite3.Error, ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
         return False
+    if current is not None:
+        return True
     return not semantic_store.producer_current(semantic_policy.KIND_SUMMARY, model, meta)
 
 
