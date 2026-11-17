@@ -105,6 +105,16 @@ def _receipts(led):
     return led.artifacts(drain.KIND_LOOP_COMPLETION, project_id=1)
 
 
+def test_local_model_change_keeps_the_raw_extraction_current(runtime):
+    led = _seed(runtime)
+    cfg = _config()
+    assert _run(led, cfg, client=_FakeJev())["done"] == 1
+    row = led.db.execute("SELECT * FROM messages WHERE project_id=1 AND message_id=1").fetchone()
+    assert patient_context_refresh._raw_extraction_current(led.db, row, cfg)[0]
+    other = {**cfg, "local_llm": {**(cfg.get("local_llm") or {}), "model": "synthetic-other-model"}}
+    assert patient_context_refresh._raw_extraction_current(led.db, row, other)[0]
+
+
 @pytest.mark.parametrize("field", ["meds", "requests"])
 def test_resolved_metadata_cannot_hide_missing_raw_source_hints(runtime, field):
     led = _seed(runtime)

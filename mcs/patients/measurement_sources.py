@@ -667,7 +667,7 @@ def _collect_measurements(db, project_id, msgs, arts, refs, *, cfg=None, truncat
         model = meta.get("actual_model")
         progress = extract_llm.progress_for_message(db, message, model=model)
         current_binding = inference_dependency_loss.source_binding(db, project_id, mid)
-        verified = (isinstance(cfg, dict) and model == extract_llm.resolved_model(cfg)
+        verified = (isinstance(cfg, dict) and isinstance(model, str) and bool(model)
                     and isinstance(current_binding, str) and meta.get("source_binding") == current_binding
                     and progress.get("state") == "complete" and row["model"] == model)
         if not verified:

@@ -719,6 +719,9 @@ def _raw_extraction_current(db, row, cfg):
     required = _required_cloud_extraction_contract(cfg, pid)
     if required is not None:
         return extract_llm.cloud_completion(db, row, required) == "complete", meta
+    # A local final keeps the model it was made with; a later model change does not stale it.
+    if isinstance(meta, dict) and isinstance(meta.get("actual_model"), str) and meta["actual_model"]:
+        model = meta["actual_model"]
     cloud = _saved_cloud_contract(meta)
     if cloud is not None:
         candidate["_provider_contract"] = cloud
