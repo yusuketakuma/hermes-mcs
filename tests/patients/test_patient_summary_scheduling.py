@@ -174,7 +174,7 @@ def test_unapproved_canonical_quality_never_spends_or_falls_back(runtime, monkey
     monkeypatch.setattr(worker.cloud_policy, 'api_key', lambda *_: 'synthetic-anthropic-key')
     monkeypatch.setattr(semantic_jev, 'JevClient', lambda **_: pytest.fail('unapproved source made a request'))
     assert patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', {}, clock.mono + 600,
-                                 lambda: True) == ('deferred', None)
+                                 lambda: True, cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1)) == ('deferred', None)
     assert not led.artifacts('semantic_usage')
 
 
