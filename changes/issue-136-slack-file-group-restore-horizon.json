@@ -5,7 +5,8 @@
   "upgrade": "追加操作は不要です。保持期間外の復元で保留になっているSlackのファイルまとめは、Slack側の実在確認（remote_absent など）で解消してください。",
   "details": [
     "保持期間外の復元で、復元点以前に作られた最新描画のpendingなSlack file_groupに restore_beyond_journal_horizon を記録し、no_journal_started を journal_cannot_vouch で拒否する。",
-    "状態はpendingのまま変えず、未送信とは断定しない。"
+    "状態はpendingのまま変えず、未送信とは断定しない。復元の receipt（parts_held）・通知・復旧作業一覧には対象として出し、再実行で重複して通知しない。",
+    "このpendingのgroupは remote_absent でも解消できる（no_journal_started だけを拒否する）。"
   ],
-  "refs": ["mcs/notify/notify_reconcile.py", "tests/notify/test_reconcile_journal_horizon.py"]
+  "refs": ["mcs/notify/notify_reconcile.py", "mcs/notify/notify_recovery.py", "tests/notify/test_reconcile_journal_horizon.py"]
 }

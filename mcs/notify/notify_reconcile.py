@@ -468,10 +468,10 @@ def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
     are left alone; a Slack file_group that never started keeps its own
     ``no_journal_started`` path. A missing record is not proof of
     non-delivery, so nothing becomes not_sent. That group stays ``pending`` but
-    takes the BEYOND_HORIZON error code, so ``no_journal_started`` is refused
-    for it (``journal_cannot_vouch``): the rows that would witness its send may
-    be compacted away, and only a journal-independent proof can resolve it. Returns the parts this run
-    changed; re-runs find no pending parts left and change nothing."""
+    takes the BEYOND_HORIZON error code (_flag_unstarted_slack_groups), so
+    ``no_journal_started`` is refused for it: the rows that would witness its
+    send may be compacted away. Returns the parts this run changed or
+    flagged; re-runs find nothing new."""
     from adapters.common import envelopes
     rows = db.execute(
         "SELECT p.delivery_id,p.part_id,p.kind,p.attempt_id,r.card_id,r.transport "
@@ -485,6 +485,7 @@ def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
         "AND p.kind='file_group' AND p.attempt_id IS NULL) "
         "ORDER BY p.delivery_id,p.idx", (restored_at, restored_at)).fetchall()
     marked = []
+
     def mark(row, aid, reason=BEYOND_HORIZON):
         changed = db.execute(
             "UPDATE notification_render_parts SET state='unknown',"
@@ -496,14 +497,7 @@ def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
 
     with db:
         db.execute("BEGIN IMMEDIATE")
-        db.execute(
-            "UPDATE notification_render_parts SET error_code=?,updated_at=? "
-            "WHERE state='pending' AND attempt_id IS NULL AND kind='file_group' "
-            "AND error_code IS NULL AND delivery_id IN (SELECT r.delivery_id "
-            "FROM notification_renders r WHERE r.state='delivered' AND r.card_id IS NOT NULL "
-            "AND r.transport='slack' AND (? IS NULL OR r.created_at <= ?) "
-            "AND r.render_rev=(SELECT MAX(x.render_rev) FROM notification_renders x "
-            "WHERE x.card_id=r.card_id))", (BEYOND_HORIZON, now, restored_at, restored_at))
+        flagged = _flag_unstarted_slack_groups(db, restored_at, now)
         grouped, unresolvable, surfaces = [], [], {}
         for row in rows:
             if row["transport"] == "discord" and row["kind"] in ("attachment_part", "file_group"):
@@ -533,7 +527,36 @@ def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
         promoted = promote_group_parts(db, now)
         for delivery_id in sorted({h["delivery_id"] for h in (*marked, *promoted)}):
             notify_parts.update_state(db, delivery_id, now)
-    return marked
+    return [*marked, *flagged]
+
+
+def _flag_unstarted_slack_groups(db, restored_at, now) -> list:
+    """Record BEYOND_HORIZON on each pending, never-started Slack file_group of
+    a card's latest pre-restore render, leaving its state ``pending``.
+
+    The code makes ``no_journal_started`` refuse it (``journal_cannot_vouch``)
+    while a journal-independent proof such as ``remote_absent`` still resolves
+    it. Only groups without an error code are touched, so a re-run flags none."""
+    from adapters.common import envelopes
+    rows = db.execute(
+        "SELECT p.delivery_id,p.part_id,p.kind,r.card_id FROM notification_render_parts p "
+        "JOIN notification_renders r ON r.delivery_id=p.delivery_id "
+        "WHERE p.state='pending' AND p.attempt_id IS NULL AND p.kind='file_group' "
+        "AND p.error_code IS NULL AND r.state='delivered' AND r.card_id IS NOT NULL "
+        "AND r.transport='slack' AND (? IS NULL OR r.created_at <= ?) "
+        "AND r.render_rev=(SELECT MAX(x.render_rev) FROM notification_renders x "
+        "WHERE x.card_id=r.card_id) ORDER BY p.delivery_id,p.idx",
+        (restored_at, restored_at)).fetchall()
+    flagged = []
+    for row in rows:
+        if db.execute(
+                "UPDATE notification_render_parts SET error_code=?,updated_at=? "
+                "WHERE delivery_id=? AND part_id=? AND state='pending' "
+                "AND attempt_id IS NULL AND error_code IS NULL",
+                (BEYOND_HORIZON, now, row["delivery_id"], row["part_id"])).rowcount:
+            flagged.append(_part_entry(row, envelopes.part_attempt_id(
+                row["delivery_id"], row["part_id"]), BEYOND_HORIZON))
+    return flagged
 
 
 def _part_entry(row, aid, reason):
@@ -543,16 +566,20 @@ def _part_entry(row, aid, reason):
 
 
 def _beyond_horizon_parts(db) -> tuple[list, list]:
-    """Every part still ``unknown`` from a restore beyond the journal horizon,
-    so a re-run's receipt still lists what awaits ``ops.card_part_resolve``
-    (first) and what it cannot plan and needs manual investigation (second)."""
+    """Every part still ``unknown`` from a restore beyond the journal horizon
+    (and each pending Slack file_group flagged with it), so a re-run's receipt
+    still lists what awaits ``ops.card_part_resolve`` (first) and what it
+    cannot plan and needs manual investigation (second)."""
+    from adapters.common import envelopes
     codes = (BEYOND_HORIZON, *UNRESOLVABLE)
-    parts = [_part_entry(r, r["attempt_id"], r["error_code"]) for r in db.execute(
+    parts = [_part_entry(r, r["attempt_id"] or envelopes.part_attempt_id(r["delivery_id"], r["part_id"]),
+                         r["error_code"]) for r in db.execute(
         "SELECT p.delivery_id,p.part_id,p.kind,p.attempt_id,p.error_code,r.card_id "
         "FROM notification_render_parts p JOIN notification_renders r "
-        "ON r.delivery_id=p.delivery_id WHERE p.state='unknown' "
-        f"AND p.error_code IN ({','.join('?' * len(codes))}) "
-        "ORDER BY p.delivery_id,p.idx", codes).fetchall()]
+        "ON r.delivery_id=p.delivery_id WHERE (p.state='unknown' "
+        f"AND p.error_code IN ({','.join('?' * len(codes))})) "
+        "OR (p.state='pending' AND p.kind='file_group' AND p.attempt_id IS NULL AND p.error_code=?) "
+        "ORDER BY p.delivery_id,p.idx", (*codes, BEYOND_HORIZON)).fetchall()]
     return ([p for p in parts if p["reason"] == BEYOND_HORIZON],
             [p for p in parts if p["reason"] != BEYOND_HORIZON])
 
