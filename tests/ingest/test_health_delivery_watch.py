@@ -180,6 +180,45 @@ def test_sending_or_unknown_outcome_is_reported_as_unconfirmed(tmp_path, monkeyp
     assert "自動で再送しません" in text
 
 
+@pytest.mark.parametrize("stale", [False, True])
+def test_new_stalled_queue_alerts_once_while_outcome_remains_unconfirmed(tmp_path, monkeypatch, stale):
+    _health(tmp_path, at=1000 if stale else 4000, unread=1 if stale else 4000,
+            reasons=[], overall="ok")
+    stalled = [False]
+    def observe(home, cfg, now):
+        state = "waiting_without_progress" if stalled[0] else "outcome_unconfirmed"
+        value = _snapshot(now, delivery=state)
+        value["delivery"].update(
+            queued=1, sending=0, unknown=1,
+            oldest_created_at=120 if stalled[0] else now - 1,
+            issues=(["waiting_without_progress", "outcome_unconfirmed"] if stalled[0]
+                    else ["outcome_unconfirmed"]))
+        return value
+    monkeypatch.setattr(health_watch, "_observe_delivery", observe)
+    first = health_watch.evaluate(str(tmp_path), 4000, cfg=CFG)
+    assert first["alert"] and first["state_reasons"] == ["notification_delivery_outcome_unconfirmed"]
+    stalled[0] = True
+    second = health_watch.evaluate(str(tmp_path), 4001, cfg=CFG)
+    assert second["alert"] and second["state_reasons"] == [
+        "notification_delivery_waiting", "notification_delivery_outcome_unconfirmed"]
+    assert second["delivery_observation"]["delivery"]["issues"] == [
+        "waiting_without_progress", "outcome_unconfirmed"]
+    text = "\n".join(health_watch._alert_lines(second))
+    assert "古い通知が待機" in text and "送信結果を確認できません" in text
+    assert not health_watch.evaluate(str(tmp_path), 4002, cfg=CFG)["alert"]
+
+
+@pytest.mark.parametrize("issues", [
+    ["waiting_without_progress", "waiting_without_progress"],
+    ["outcome_unconfirmed", "waiting_without_progress"],
+    ["arbitrary-code"], [None], "waiting_without_progress",
+])
+def test_delivery_snapshot_rejects_invalid_issues(issues):
+    value = _snapshot(4000)
+    value["delivery"]["issues"] = issues
+    assert health_watch._delivery_snapshot(value, 4000) is None
+
+
 def test_unknown_current_observation_does_not_remove_fresh_recorded_reason(tmp_path, monkeypatch):
     _health(tmp_path, at=4000, unread=4000, reasons=["worker_restart_required"])
     monkeypatch.setattr(health_watch, "_observe_delivery",
@@ -196,7 +235,7 @@ def test_unknown_count_is_not_a_healthy_delivery_and_needs_proven_recovery(tmp_p
     value["delivery"]["unknown"] = unknown
     monkeypatch.setattr(health_watch, "_observe_delivery", lambda *args: value)
     first = health_watch.evaluate(str(tmp_path), 4000, cfg=CFG)
-    assert first["status"] == "degraded" and first["alert"]
+    assert first["status"] == "degraded" and not first["alert"] and first["alert_held"]
     assert first["state_reasons"] == ["notification_delivery_unverified"]
     value.update(_snapshot(4001, delivery="pending"))
     second = health_watch.evaluate(str(tmp_path), 4001, cfg=CFG)
@@ -205,6 +244,29 @@ def test_unknown_count_is_not_a_healthy_delivery_and_needs_proven_recovery(tmp_p
     value.update(_snapshot(4002, delivery="progressing"))
     recovered = health_watch.evaluate(str(tmp_path), 4002, cfg=CFG)
     assert recovered["status"] == "ok" and recovered["recovered_from"] == "degraded"
+
+
+def test_probe_failure_alone_alerts_only_after_three_fresh_observations(tmp_path, monkeypatch):
+    monkeypatch.setattr(health_watch, "_observe_delivery",
+                        lambda *args: (_ for _ in ()).throw(ValueError("synthetic-private-error")))
+    for now in (4000, 4001, 4002):
+        _health(tmp_path, at=now, unread=now, reasons=[], overall="ok")
+        report = health_watch.evaluate(str(tmp_path), now, cfg=CFG)
+        assert report["alert"] is (now == 4002)
+    text = "\n".join(health_watch._alert_lines(report))
+    assert "通知の状態を確認できません" in text
+    assert "通知に遅れや不具合" not in text
+    assert "synthetic-private-error" not in text
+
+
+def test_new_unverified_probe_alone_does_not_realert_an_existing_stale_episode(tmp_path, monkeypatch):
+    _health(tmp_path, at=1000, reasons=[])
+    monkeypatch.setattr(health_watch, "_observe_delivery",
+                        lambda home, cfg, now: _snapshot(now, delivery="progressing"))
+    assert health_watch.evaluate(str(tmp_path), 4000, cfg=CFG)["alert"]
+    monkeypatch.setattr(health_watch, "_observe_delivery", lambda *args: None)
+    report = health_watch.evaluate(str(tmp_path), 4001, cfg=CFG)
+    assert report["state_reasons"] == ["notification_delivery_unverified"] and not report["alert"]
 
 
 def test_recent_normal_wait_is_not_alerted_without_a_previous_fault(tmp_path, monkeypatch):
@@ -226,6 +288,47 @@ def test_unverified_or_non_gateway_config_is_not_observed(monkeypatch, cfg, bloc
     obs, state = {"status": "stale", "state_reasons": None}, {}
     health_watch._apply_delivery_observation(obs, state, "/synthetic", 1000, cfg, config_blocked=blocked)
     assert obs == {"status": "stale", "state_reasons": None}
+
+
+@pytest.mark.parametrize("cfg", [
+    {"notify": {"interactive": "off"}},
+    {"notify": {}},
+    {"notify": {"interactive": "lineworks", "lineworks": {
+        "profile": "synthetic", "application_id": "1", "team_id": "2", "channel_id": "room",
+        "allowed_user_ids": ["user"], "project_ids": [1]}}},
+    {"runtime_mode": "standalone", "notify": {"interactive": "off"}},
+])
+def test_valid_non_gateway_switch_discards_the_current_scope_without_claiming_recovery(tmp_path, monkeypatch, cfg):
+    _health(tmp_path, at=4000, unread=4000, reasons=[], overall="ok")
+    monkeypatch.setattr(health_watch, "_observe_delivery", lambda home, cfg, now: _snapshot(now))
+    assert health_watch.evaluate(str(tmp_path), 4000, cfg=CFG)["alert"]
+    monkeypatch.setattr(health_watch, "_observe_delivery", lambda *args: pytest.fail("unexpected probe"))
+    if cfg.get("runtime_mode") == "standalone":
+        monkeypatch.setattr(health_watch, "_apply_standalone", lambda *args: None)
+    report = health_watch.evaluate(str(tmp_path), 4001, cfg=cfg)
+    state = json.loads((tmp_path / health_watch.STATE_REL).read_text())
+    assert report["status"] == "ok" and "recovered_from" not in report
+    assert "delivery_current_reason" not in state and "delivery_current_scope" not in state
+
+
+@pytest.mark.parametrize("cfg,blocked", [
+    ({"notify": {"interactive": "off", "card_thread": "invalid"}}, False),
+    ({"runtime_mode": "standalone"}, False),
+    ({"runtime_mode": "standalone", "notify": None}, False),
+    ({"runtime_mode": "standalone", "notify": {}, "notify_target": 42}, False),
+    ({"runtime_mode": "standalone", "notify": {"interactive": "slack", "slack": {}}}, False),
+    ({"runtime_mode": "invalid", "notify": {"interactive": "off"}}, False),
+    ({"notify": {"interactive": "off"}}, True),
+])
+def test_invalid_or_blocked_switch_keeps_previous_delivery_scope(monkeypatch, cfg, blocked):
+    monkeypatch.setattr(health_watch, "_observe_delivery", lambda *args: pytest.fail("unexpected probe"))
+    obs = {"status": "ok", "state_reasons": []}
+    state = {"delivery_current_reason": "notification_delivery_waiting", "delivery_current_scope": "a" * 64}
+    assert not health_watch._apply_delivery_observation(obs, state, "/synthetic", 1000, cfg,
+                                                       config_blocked=blocked)
+    assert state == {"delivery_current_reason": "notification_delivery_waiting", "delivery_current_scope": "a" * 64}
+    if not blocked:
+        assert obs["state_reasons"] == ["notification_delivery_unverified"]
 
 
 def test_unknown_send_witness_is_retained_when_a_new_recorded_reason_alerts(tmp_path, monkeypatch):

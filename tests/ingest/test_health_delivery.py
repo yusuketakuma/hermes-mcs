@@ -12,6 +12,7 @@ import card_worker_status
 import environment_diagnostics
 import health_delivery as delivery
 import health_recovery
+import health_watch
 
 
 NOW = 1_800_000_000.0
@@ -71,7 +72,8 @@ def test_other_scope_progress_never_hides_own_queued_render(world, change):
     _render(world.db, "queued")
     _render(world.db, "other", state="delivered", updated=NOW - 10, **change)
     result = _observe(world)["delivery"]
-    assert result == {"state": "waiting_without_progress", "queued": 1, "sending": 0,
+    assert result == {"state": "waiting_without_progress", "issues": ["waiting_without_progress"],
+                      "queued": 1, "sending": 0,
                       "unknown": 0, "oldest_created_at": NOW - 3600, "last_progress_at": None}
     with sqlite3.connect(world.db) as db:
         db.execute("INSERT INTO notification_render_parts VALUES('queued','delivered',?)", (NOW - 5,))
@@ -113,6 +115,27 @@ def test_unsettled_attempt_uses_its_start_and_never_changes_the_database(world, 
         assert db.execute("SELECT state FROM notification_delivery_attempts").fetchone()[0] == "granted"
 
 
+@pytest.mark.parametrize("state", ["sending", "unknown"])
+def test_old_queue_and_unsettled_attempt_are_independent_issues(world, state):
+    _render(world.db, "queued")
+    _render(world.db, "attempt", state=state)
+    _attempt(world.db, "attempt")
+    result = _observe(world)["delivery"]
+    assert result["state"] == "waiting_without_progress"
+    assert result["issues"] == ["waiting_without_progress", "outcome_unconfirmed"]
+    with sqlite3.connect(world.db) as db:
+        db.execute("INSERT INTO notification_render_parts VALUES('queued','delivered',?)", (NOW - 1,))
+    result = _observe(world)["delivery"]
+    assert result["state"] == "outcome_unconfirmed"
+    assert result["issues"] == ["outcome_unconfirmed"]
+    with sqlite3.connect(world.db) as db:
+        db.execute("DELETE FROM notification_render_parts")
+        db.execute("UPDATE notification_delivery_attempts SET created_at=?", (NOW + 1,))
+    result = _observe(world)["delivery"]
+    assert result["state"] == "waiting_without_progress"
+    assert result["issues"] == ["waiting_without_progress"]
+
+
 def test_fresh_queued_and_invalid_time_do_not_claim_progress_or_stall(world):
     _render(world.db, "queued", created=NOW - 2)
     assert _observe(world)["delivery"]["state"] == "pending"
@@ -142,6 +165,29 @@ def test_future_progress_does_not_override_real_recent_progress(world):
     assert result["state"] == "progressing" and result["last_progress_at"] == NOW - 5
 
 
+@pytest.mark.parametrize("kind", ["empty", "fresh", "sending", "old"])
+def test_progress_queries_only_for_old_queued(world, monkeypatch, kind):
+    if kind == "fresh":
+        _render(world.db, "queued", created=NOW - 1)
+    elif kind == "sending":
+        _render(world.db, "sending", state="sending")
+        _attempt(world.db, "sending")
+    elif kind == "old":
+        _render(world.db, "queued")
+    calls = []
+    progress = delivery._progress
+
+    def track(db, source, where, params, now):
+        calls.append(source)
+        return progress(db, source, where, params, now)
+
+    monkeypatch.setattr(delivery, "_progress", track)
+    result = _observe(world)["delivery"]
+    assert calls == (["renders", "parts"] if kind == "old" else [])
+    if kind != "old":
+        assert result["last_progress_at"] is None
+
+
 def test_requeued_render_keeps_creation_time_without_claiming_wait_start(world):
     _render(world.db, "requeued", state="delivered", created=NOW - 7200, updated=NOW - 7200)
     with sqlite3.connect(world.db) as db:
@@ -162,9 +208,9 @@ def test_database_read_is_mode_ro_and_sees_committed_wal(world, monkeypatch):
     connect = delivery.sqlite3.connect
     opened = []
 
-    def observe_connect(uri, **kwargs):
-        opened.append((uri, kwargs))
-        return connect(uri, **kwargs)
+    def observe_connect(database, **kwargs):
+        opened.append((database, kwargs))
+        return connect(database, **kwargs)
 
     monkeypatch.setattr(delivery.sqlite3, "connect", observe_connect)
     try:
@@ -211,7 +257,7 @@ def test_unverified_database_is_unknown(world, damage):
         (world.data / ("update_in_progress.marker" if damage == "update" else "restore_pending.json")).touch()
     else:
         with sqlite3.connect(world.db) as db:
-            db.execute("DROP TABLE notification_render_parts")
+            db.execute("DROP TABLE notification_delivery_attempts")
     result = _observe(world)
     assert result["delivery"]["state"] == "unknown"
     assert result["delivery"]["queued"] is None
@@ -310,6 +356,52 @@ def test_observe_sends_only_minimal_settings_to_bounded_child(world, monkeypatch
     monkeypatch.setattr(delivery.subprocess, "run", run)
     cfg = {**CFG, "private": "private-canary"}
     assert delivery.observe(world.home, cfg, NOW) == result and len(seen) == 1
+
+
+def test_real_child_observes_synthetic_queue_and_private_receipt(world, monkeypatch):
+    _render(world.db, "queued")
+    _render(world.db, "sending", state="sending")
+    _attempt(world.db, "sending")
+    receipt = world.data / "gateway_restart.json"
+    receipt.write_text(json.dumps({"status": "requested", "at": NOW - 1}))
+    receipt.chmod(0o600)
+    empty_bin = world.home / "bin"
+    empty_bin.mkdir()
+    monkeypatch.setenv("PATH", str(empty_bin))
+    for key in ("HOME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME"):
+        monkeypatch.setenv(key, str(world.home))
+
+    result = delivery.observe(world.home, CFG, NOW)
+    assert result["worker"]["state"] == "unknown"
+    assert result["restart_request"] == {"state": "requested", "at": NOW - 1}
+    assert result["delivery"] == {"state": "waiting_without_progress",
+                                  "issues": ["waiting_without_progress", "outcome_unconfirmed"],
+                                  "queued": 1, "sending": 1, "unknown": 0,
+                                  "oldest_created_at": NOW - 3600, "last_progress_at": None}
+    assert delivery._valid_result(result, NOW)
+    assert health_watch._delivery_snapshot(result, NOW) == result
+    assert SCOPE["profile"] not in json.dumps(result)
+    assert json.loads(receipt.read_text()) == {"status": "requested", "at": NOW - 1}
+
+
+@pytest.mark.parametrize("issues", [None, ["outcome_unconfirmed", "waiting_without_progress"],
+                                    ["waiting_without_progress", "waiting_without_progress"],
+                                    ["unexpected"]])
+def test_child_result_rejects_invalid_issue_lists(issues):
+    result = delivery._empty(NOW)
+    result["delivery"].update(state="waiting_without_progress", issues=issues, queued=1,
+                              sending=1, unknown=0, oldest_created_at=NOW - 3600)
+    assert not delivery._valid_result(result, NOW)
+
+
+def test_child_result_requires_issue_and_primary_state_to_agree():
+    result = delivery._empty(NOW)
+    result["delivery"].update(state="waiting_without_progress",
+                              issues=["waiting_without_progress", "outcome_unconfirmed"],
+                              queued=1, sending=1, unknown=0, oldest_created_at=NOW - 3600)
+    assert delivery._valid_result(result, NOW)
+    result["delivery"]["state"] = "outcome_unconfirmed"
+    assert not delivery._valid_result(result, NOW)
 
 
 def test_worker_reserves_status_time_and_forwards_witness_deadline(tmp_path, monkeypatch):

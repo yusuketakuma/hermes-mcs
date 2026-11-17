@@ -29,6 +29,7 @@ _STATUS_S = 1.0
 MAX_INPUT_BYTES = 16384
 MAX_OUTPUT_BYTES = 8192
 _RESTART_STATES = frozenset({"requested", "unknown", "failed", "supervisor_restart_verified"})
+_DELIVERY_ISSUES = ("waiting_without_progress", "outcome_unconfirmed")
 _DELIVERY_STATES = frozenset({"waiting_without_progress", "progressing", "pending",
                               "outcome_unconfirmed", "idle", "unknown"})
 _WORKER_REASONS = frozenset({"worker_started", "worker_start_failed", "worker_start_unverified"})
@@ -41,7 +42,7 @@ def _stamp(value, now):
 def _empty(now):
     return {"observed_at": now,
             "worker": {"state": "unknown", "reason": "worker_start_unverified", "started_at": None},
-            "delivery": {"state": "unknown", "queued": None, "sending": None, "unknown": None,
+            "delivery": {"state": "unknown", "issues": [], "queued": None, "sending": None, "unknown": None,
                          "oldest_created_at": None, "last_progress_at": None},
             "restart_request": {"state": "unverified", "at": None}}
 
@@ -176,7 +177,9 @@ def _delivery(data, cfg, now, deadline):
         if invalid_queued:
             raise ValueError("queue_unverified")
         queued = count - sending - unknown
-        recent = [_progress(db, source, where, params, now) for source in ("renders", "parts")]
+        old_queued = bool(queued and oldest is not None and now - oldest > CARD_STALL_S)
+        recent = ([_progress(db, source, where, params, now) for source in ("renders", "parts")]
+                  if old_queued else [])
         valid_progress = [value for value, _ in recent if value is not None]
         last = max(valid_progress, default=None)
         stale_attempts, invalid_attempts = db.execute(
@@ -196,21 +199,24 @@ def _delivery(data, cfg, now, deadline):
                 or any(os.path.lexists(marker) for marker in markers)):
             raise ValueError("database_unverified")
         recent_progress = last is not None and now - last <= CARD_STALL_S
+        issues = []
+        if old_queued and not recent_progress and not any(x[1] for x in recent):
+            issues.append("waiting_without_progress")
         if stale_attempts:
-            state = "outcome_unconfirmed"
+            issues.append("outcome_unconfirmed")
+        if issues:
+            state = issues[0]
         elif invalid_attempts or missing_attempts or unknown:
             state = "unknown"
         elif not queued and not sending:
             state = "idle"
         elif recent_progress:
             state = "progressing"
-        elif queued and oldest is not None and now - oldest > CARD_STALL_S and not any(x[1] for x in recent):
-            state = "waiting_without_progress"
-        elif queued and oldest is not None and now - oldest > CARD_STALL_S:
+        elif old_queued:
             state = "unknown"
         else:
             state = "pending"
-        return {"state": state, "queued": queued, "sending": sending, "unknown": unknown,
+        return {"state": state, "issues": issues, "queued": queued, "sending": sending, "unknown": unknown,
                 "oldest_created_at": oldest, "last_progress_at": last}
     finally:
         db.close()
@@ -243,7 +249,7 @@ def _valid_result(value, now):
             or worker["started_at"] is not None and not (0 < worker["started_at"] and
                                                            _stamp(worker["started_at"], now))):
         return False
-    if (type(delivery) is not dict or set(delivery) != {"state", "queued", "sending", "unknown",
+    if (type(delivery) is not dict or set(delivery) != {"state", "issues", "queued", "sending", "unknown",
             "oldest_created_at", "last_progress_at"} or delivery["state"] not in _DELIVERY_STATES
             or any(delivery[key] is not None and (type(delivery[key]) is not int or delivery[key] < 0)
                    for key in ("queued", "sending", "unknown"))
@@ -251,13 +257,21 @@ def _valid_result(value, now):
                    for key in ("oldest_created_at", "last_progress_at"))):
         return False
     state, queued, sending, unknown = (delivery[key] for key in ("state", "queued", "sending", "unknown"))
+    issues = delivery["issues"]
+    if (type(issues) is not list or issues not in ([], [_DELIVERY_ISSUES[0]], [_DELIVERY_ISSUES[1]],
+                                                   list(_DELIVERY_ISSUES))
+            or bool(issues) != (state in _DELIVERY_ISSUES) or issues and state != issues[0]):
+        return False
     if state != "unknown" and any(value is None for value in (queued, sending, unknown)):
         return False
     if state == "idle" and (queued or sending or unknown):
         return False
-    if state == "waiting_without_progress" and (not queued or delivery["oldest_created_at"] is None):
+    if "waiting_without_progress" in issues and (not queued or delivery["oldest_created_at"] is None
+            or now - delivery["oldest_created_at"] <= CARD_STALL_S
+            or delivery["last_progress_at"] is not None
+            and now - delivery["last_progress_at"] <= CARD_STALL_S):
         return False
-    if state == "outcome_unconfirmed" and not (sending or unknown):
+    if "outcome_unconfirmed" in issues and not (sending or unknown):
         return False
     if state == "progressing" and delivery["last_progress_at"] is None:
         return False
