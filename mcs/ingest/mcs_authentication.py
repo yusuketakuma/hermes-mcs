@@ -541,6 +541,9 @@ class MCSAuthenticationMixin:
                 try:
                     ok = self.check_session()
                 except MCSError:
+                    # submitted but unverified (not proven rejected): the
+                    # same credential still waits out the backoff
+                    self._login_rejected(login)
                     return "failed"
                 if ok:
                     self._write_cache(tok)
