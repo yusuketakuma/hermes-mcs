@@ -1,6 +1,7 @@
 """Validate source-grounded extraction fields and merge document chunks without I/O."""
 import clinical_scope
 import clinical_events
+import clinical_allergies
 import json
 import math
 import re
@@ -290,6 +291,7 @@ def validate(d: dict, body: str | None = None,
         v.meds(d, out)
         v.symptoms(d, out)
         v.labs(d, out)
+        v.allergies(d, out)
         v.events(d, out)
         v.requests(d, out)
         v.patient_context(d, out)
@@ -642,6 +644,17 @@ class Validator:
             return None
         v = str(v).strip().lower()
         return v if v in allowed else False
+
+    def allergies(self, d: dict, out: dict):
+        if "allergies" not in d:
+            return
+        if not isinstance(d["allergies"], list):
+            self.drop_item("allergies")
+            return
+        items, dropped = clinical_allergies.validate_items(
+            d["allergies"], self.body, self.drops, ctx=self.ctx)
+        out["allergies"] = items
+        self.items_dropped += dropped
 
     def patient_context(self, d: dict, out: dict):
         if "patient_context" not in d:
@@ -1206,6 +1219,16 @@ def merge(outs: list[dict]) -> dict:
             if key not in seen_labs:
                 seen_labs.add(key)
                 out.setdefault("labs", []).append(lab)
+        if isinstance(d.get("allergies"), list):
+            allergies = out.setdefault("allergies", [])
+            for item in d["allergies"]:
+                for index, prior in enumerate(allergies):
+                    if clinical_allergies.same_assertion(prior, item):
+                        if not prior.get("reaction") and item.get("reaction"):
+                            allergies[index] = item
+                        break
+                else:
+                    allergies.append(item)
         for rq in d.get("requests") or []:
             # condition/due_text change what is asked: two chunks'
             # requests differing only there are distinct, never merged
