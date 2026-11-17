@@ -77,6 +77,10 @@ from cloud_usage_accounting import (
     _is_openai_model as _is_openai_model,
     _confirmed_openai_quota as _confirmed_openai_quota,
     _confirmed_openai_rate_diagnostic as _confirmed_openai_rate_diagnostic,
+    _is_anthropic_model as _is_anthropic_model,
+    _confirmed_anthropic_spend_limit as _confirmed_anthropic_spend_limit,
+    _confirmed_anthropic_usage_limit as _confirmed_anthropic_usage_limit,
+    _confirmed_anthropic_payment as _confirmed_anthropic_payment,
     _settled as _settled,
 )
 from cloud_history_scope import (
@@ -1929,7 +1933,8 @@ def _confirmed_rejection(result, settled, model):
     # A known rejection permits another attempt while retaining its reserved cost.
     return (_never_sent(result, settled)
             or result.get('http_class') == 'http_429' and result.get('error_kind') == 'rate_limited'
-            and result.get('usage') is None or _confirmed_openai_quota(result, model))
+            and result.get('usage') is None or _confirmed_openai_quota(result, model)
+            or _confirmed_anthropic_payment(result, model))
 
 
 def _saved_answer(answer, metadata, reservation):
@@ -2041,7 +2046,17 @@ def record_result(ledger, reservation, metadata, *, answer=None):
             raise AnthropicError("pricing_unverified", "result_mismatch")
         if "openai_429_diagnostic" in metadata and not _confirmed_openai_rate_diagnostic(metadata, model):
             raise AnthropicError("pricing_unverified", "result_mismatch")
+        if "anthropic_error_code" in metadata and not _confirmed_anthropic_spend_limit(metadata, model):
+            raise AnthropicError("pricing_unverified", "result_mismatch")
+        if "anthropic_400_diagnostic" in metadata and not _confirmed_anthropic_usage_limit(metadata, model):
+            raise AnthropicError("pricing_unverified", "result_mismatch")
         usage = definition["validate_usage"](metadata["usage"]) if metadata.get("usage") is not None else None
+        if "contract_error_detail" in metadata:
+            detail = metadata["contract_error_detail"]
+            if (http_class != "http_200" or error_kind != "contract_error" or usage is None
+                    or not isinstance(detail, str) or detail not in cloud_client.CONTRACT_ERROR_DETAILS):
+                raise AnthropicError("pricing_unverified", "result_mismatch")
+            error.detail = detail
         maximum = _decimal(reservation["max_cost_usd"])
         cost = (usage_cost(usage, model=model, price_version=reservation["price_version"]) if usage is not None
                 else Decimal(0) if _unbilled(metadata.get("http_class")) else maximum)
@@ -2057,6 +2072,10 @@ def record_result(ledger, reservation, metadata, *, answer=None):
             result["openai_error_code"] = metadata["openai_error_code"]
         if "openai_429_diagnostic" in metadata:
             result["openai_429_diagnostic"] = metadata["openai_429_diagnostic"]
+        if "anthropic_error_code" in metadata:
+            result["anthropic_error_code"] = metadata["anthropic_error_code"]
+        if "anthropic_400_diagnostic" in metadata:
+            result["anthropic_400_diagnostic"] = metadata["anthropic_400_diagnostic"]
         if "answer_text_sha256_v1" in metadata:
             answer_hash = metadata["answer_text_sha256_v1"]
             if (not isinstance(answer_hash, str) or re.fullmatch(r"[0-9a-f]{64}", answer_hash) is None

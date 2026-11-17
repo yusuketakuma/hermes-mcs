@@ -524,7 +524,10 @@ def _record_circuit_result(ledger, error, now=None, *, kind=_CIRCUIT_ARTIFACT_KI
     failure_class = _circuit_failure_class(error)
     if (kind == "cloud_circuit" and getattr(error, "kind", "") == "contract_error"
             # A refusal belongs to its unit's input, not to the provider's health.
-            and getattr(error, "detail", "") != "refusal"):
+            and getattr(error, "detail", "") != "refusal"
+            # Only a 200 contract violation is provider-health evidence; a
+            # non-retryable 4xx (e.g. input too large) is the unit's own request.
+            and _circuit_status(error) == 200):
         failure_class = "contract_error"
     if error is None:
         if kind == "cloud_circuit" and not reset and _circuit_is_open(state, current):
