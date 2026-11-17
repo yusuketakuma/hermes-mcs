@@ -908,3 +908,38 @@ def test_interrupted_migration_undo_refuses_sdk_pin_rollback_before_changes(
     assert result == 1 and escalated == ["standalone_sdk_rollback_unsupported"]
     assert _head(repo) == after
     assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] == applying
+
+
+def test_interrupted_migration_undo_restores_old_venv_across_sdk_pins(
+        updater, tmp_path, monkeypatch):  # noqa: F811
+    """Regression: the SDK-pin refusal also blocked undoing a migration whose
+    pre-update venv backup (old pins) is still there to restore."""
+    repo, _ = _make_repo(tmp_path)
+    for module in (updater, update_apply, update_cli, update_execution, update_lifecycle_context,
+                   update_preflight, update_recovery, update_repository, update_runtime_migration,
+                   update_services):
+        monkeypatch.setattr(module, "REPO", str(repo))
+    before = _head(repo)
+    (repo / "deployment").mkdir()
+    (repo / "deployment" / "requirements-standalone.txt").write_text("synthetic-sdk==2\n")
+    _git(repo, "add", "deployment/requirements-standalone.txt")
+    _git(repo, "commit", "-qm", "synthetic sdk pin")
+    backup = tmp_path / "venv.pre-python314"
+    backup.mkdir()
+    applying = {"tag": "synthetic", "sha": _head(repo), "prev_sha": before, "schema_bump": False,
+                "runtime_migration": {"venv": str(tmp_path / "venv"), "backup_path": str(backup)}}
+    state = updater.journal_store.default_state()
+    state["applying"] = applying
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {"runtime_mode": "standalone"})
+
+    class Reached(Exception):
+        pass
+
+    def quiesce():
+        raise Reached
+    monkeypatch.setattr(update_recovery, "quiesce", quiesce)
+    with pytest.raises(Reached):
+        updater._undo_interrupted_migration(
+            state, applying, lambda *a: pytest.fail("no drainers"),
+            lambda detail: pytest.fail(f"unexpected escalation: {detail}"))

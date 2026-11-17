@@ -327,6 +327,10 @@ def _standalone_sdk_rollback_error(entry: dict, cfg: dict) -> str | None:
         hermes = mcs_runtime.mode(cfg) == "hermes"
     except (ValueError, TypeError, AttributeError):
         hermes = False                  # unknown mode: keep the stricter standalone rule
+    migration = entry.get("runtime_migration")
+    if isinstance(migration, dict) and isinstance(migration.get("backup_path"), str) \
+            and os.path.lexists(migration["backup_path"]):
+        return None                     # _restore_runtime renames the pre-update venv (old pins) back
     if hermes or _git(["diff", "--quiet", str(entry.get("prev_sha")), "HEAD", "--",
                        "deployment/requirements-standalone.txt"]).returncode == 0:
         return None
