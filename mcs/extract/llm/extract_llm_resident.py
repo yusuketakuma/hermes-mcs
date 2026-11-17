@@ -238,9 +238,10 @@ def _background_context_refresh(ledger, initial_state, stop=None, *, cloud_worke
             if not cloud_worker:
                 # A lane paces its context passes like the children (a cloud wait or a pass
                 # that found only other-role patients waits a minute); shorter waits keep the
-                # lane loop's own idle floor.
+                # lane loop's own idle floor. A unit waiting for a child holds back only its
+                # patient, which the next passes skip: the lane goes on with the others.
                 delay = cloud_backlog._context_retry_delay(result)
-                if delay > _IDLE_FLOOR_S:
+                if delay > _IDLE_FLOOR_S and result.get("reason") != patient_context_refresh.CHILD_WAIT_REASON:
                     ledger.__dict__[_CONTEXT_PAUSE] = (time.monotonic() + delay, result.get("reason"))
     except Exception as exc:
         # Context refresh failures must not interrupt collection or normal extraction.

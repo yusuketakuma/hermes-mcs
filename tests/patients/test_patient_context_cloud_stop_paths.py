@@ -677,6 +677,32 @@ def test_young_missing_result_defers_and_stale_goes_local_without_adopting_a_lat
     assert _dispositions(ledger) == [(reservation['reservation_id'], 'superseded_local')]
 
 
+def test_takeover_keeps_waiting_for_a_missing_result_even_once_stale(runtime, real_cloud, monkeypatch):
+    """Known limitation (spec, change note): with no context child, a unit whose request lost
+    its result waits under the takeover whether the result is young or provably stale. Only a
+    child pass replaces it, once and without a resend; the owner's other remedy is mode off."""
+    ledger, clock, local_calls = runtime
+    cfg, _ = real_cloud
+    seed(ledger, body=BODY)
+    sent = _wire(monkeypatch, lambda index, payload, limit: _Interrupted() if index == 0 else None)
+    with pytest.raises(_Interrupted):
+        step(runtime, cfg=cfg)   # the child stops after its reservation and send
+    row, = ledger.artifacts('cloud_usage_reserve')
+    reservation = json.loads(row['meta'])
+    stale = row['created_at'] + reservation['timeout_seconds'] + cloud_policy.RESULT_STALE_MARGIN_S
+    for wall in (clock.wall, stale + 1, stale + 86400):
+        clock.wall = wall
+        clock.mono += refresh.CHILD_WAIT_S   # past the takeover's wait for this patient
+        outcome = step(runtime, cfg=cfg, role='local_takeover')
+        assert (outcome['status'], outcome['reason'], outcome['cloud_refusal']) == (
+            'deferred', 'patient_context_cloud_deferred:cloud_worker_unavailable', 'cloud_worker_unavailable'), outcome
+    assert not local_calls and len(sent) == 1 and not _dispositions(ledger) and not _scan_rows(ledger)
+    # A child pass after the stale threshold replaces the request once, without sending it again.
+    assert step(runtime, cfg=cfg)['status'] == 'progressed'
+    assert _local_sources(local_calls) == [sent[0]] and len(sent) == 1
+    assert _dispositions(ledger) == [(reservation['reservation_id'], 'superseded_local')]
+
+
 def test_repeated_cloud_defers_do_not_consume_generation_quota(runtime, real_cloud, monkeypatch):
     ledger, clock, local_calls = runtime
     cfg, posts = real_cloud
