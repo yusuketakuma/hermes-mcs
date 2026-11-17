@@ -79,6 +79,8 @@ _SCOPE_HEADING = re.compile(
 _REPORTING = re.compile(r"(?:より|から|が(?:報告|連絡|説明|相談|話)|は(?:報告|連絡|説明|相談|話))")
 
 CURRENT_MARK = re.compile(r"現在|今も|今は|本日|今日|続いて|持続|(?:昨日|先週|先月)から|(?:昨日|先週|先月)より")
+CONTINUING = re.compile(r"持続|続いて|残って")
+_ATTACHED_CURRENT = re.compile(rf"(?:は|が|も|を)?\s*(?:{CURRENT_MARK.pattern})")
 
 _NONCURRENT_MARK = re.compile(r"過去|既往|以前(?!から|より)|先月(?!から|より)|先週(?!から|より)|昨年|一昨年")
 
@@ -282,6 +284,15 @@ def assertion_stop(body, end, limit):
     """End of the target's own assertion before ``limit``: a later explicit owner starts another one."""
     owner = _PERSON.search(body, end, limit)
     return owner.start() if owner else limit
+
+
+def source_current(body, start, end, limit):
+    """Whether the target's own assertion states it as current, not another predicate in that sentence."""
+    if CURRENT_MARK.search(body, assertion_start(body, start), start):
+        return True
+    # After the target only a time word attached to it or a continuation of it counts.
+    tail = body[end:assertion_stop(body, end, limit)]
+    return bool(_ATTACHED_CURRENT.match(tail) or CONTINUING.search(tail))
 
 
 def source_axes(body, start, end, *, default="patient"):

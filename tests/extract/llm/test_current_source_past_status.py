@@ -77,3 +77,14 @@ def test_later_owner_current_mark_does_not_flag_patient_past():
     body = "本人は3日前に発熱したが家族は現在食欲あり。"
     item = _symptom(body, "past")["symptoms"][0]
     assert item["status"] == "past" and "unverified" not in item
+
+
+def test_same_owner_other_predicate_current_does_not_flag_past():
+    item = _symptom("本人は3日前に発熱したが現在は食欲あり。", "past")["symptoms"][0]
+    assert item["status"] == "past" and "unverified" not in item
+
+
+@pytest.mark.parametrize("body", ["本人は発熱が現在あります。", "本人は3日前に発熱したが現在も続いている。"])
+def test_current_attached_to_symptom_still_flagged(body):
+    item = _symptom(body, "past")["symptoms"][0]
+    assert "status" not in item and item["unverified"] is True
