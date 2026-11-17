@@ -23,6 +23,17 @@ import semantic_facts as sf
 from mcs_util import payload_hash
 
 
+# Rule generation of the candidate classification. 2 normalizes the workflow
+# direction (#158). Stored documents carry it in meta["relation_rule"]; a
+# document without it was made under rule 1 and must be re-derived with rule 1.
+RELATION_RULE = 2
+
+
+def meta_relation_rule(meta) -> int:
+    value = meta.get("relation_rule") if isinstance(meta, dict) else None
+    return RELATION_RULE if value == RELATION_RULE and type(value) is int else 1
+
+
 WORKFLOW_ORDER = (
     "reported", "considering", "planned", "ordered", "in_progress",
     "performed", "done",
@@ -115,7 +126,8 @@ def _ordered_before(left: dict, right: dict) -> bool:
     return False
 
 
-def _classify_pair(left: dict, right: dict, token_cache=None) -> dict | None:
+def _classify_pair(left: dict, right: dict, token_cache=None,
+                   rule: int = RELATION_RULE) -> dict | None:
     if not isinstance(left, dict) or not isinstance(right, dict):
         return None
     lf_id, rf_id = left.get("fact_id"), right.get("fact_id")
@@ -169,9 +181,9 @@ def _classify_pair(left: dict, right: dict, token_cache=None) -> dict | None:
             # Normalize workflow direction only after action/polarity priority.
             # Keep the existing time guard: an older completion cannot complete
             # a later plan, even when the facts arrived in reverse order.
-            if lw in WORKFLOW_ORDER and rw in WORKFLOW_ORDER \
+            if rule >= 2 and lw in WORKFLOW_ORDER and rw in WORKFLOW_ORDER \
                     and WORKFLOW_ORDER.index(lw) > WORKFLOW_ORDER.index(rw):
-                return _classify_pair(right, left, token_cache)
+                return _classify_pair(right, left, token_cache, rule)
             if lw in WORKFLOW_ORDER and rw in WORKFLOW_ORDER \
                     and WORKFLOW_ORDER.index(lw) < WORKFLOW_ORDER.index(rw) \
                     and not _ordered_before(right, left):
@@ -203,7 +215,8 @@ def _relation(left: dict, right: dict, rel_type: str, reason: str) -> dict:
 
 
 def reconcile_facts(active_facts: list, new_facts: list,
-                    *, deadline: float | None = None) -> dict:
+                    *, deadline: float | None = None,
+                    rule: int = RELATION_RULE) -> dict:
     """Compare new facts against the active set and return candidate
     relations plus the relation-set fingerprint.
 
@@ -213,6 +226,8 @@ def reconcile_facts(active_facts: list, new_facts: list,
     overwrite.  The pair scan is quadratic, so past ``deadline``
     (``time.monotonic()``) it stops and reports ``pairs_skipped``; a
     caller must treat a non-zero count as an incomplete relation set.
+    ``rule`` selects the classification generation a stored document was
+    made under (see ``meta_relation_rule``); new evaluation uses the default.
     """
     active = [f for f in (active_facts or []) if isinstance(f, dict)]
     new = [f for f in (new_facts or []) if isinstance(f, dict)]
@@ -229,7 +244,7 @@ def reconcile_facts(active_facts: list, new_facts: list,
                 and time.monotonic() > deadline:
             break
         compared += 1
-        rel = _classify_pair(left, right, token_cache)
+        rel = _classify_pair(left, right, token_cache, rule)
         if rel is not None:
             relations[rel["relation_id"]] = rel
     out = sorted(relations.values(), key=lambda r: r["relation_id"])

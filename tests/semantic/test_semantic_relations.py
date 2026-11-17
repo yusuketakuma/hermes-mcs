@@ -381,3 +381,24 @@ def test_same_statement_later_plan_is_unresolved_in_both_orders():
     forward = sr._classify_pair(planned, done)
     assert forward["type"] == "UNRESOLVED"
     assert sr._classify_pair(done, planned) == forward
+
+
+def test_stored_document_rule_keeps_pre_normalization_relations():
+    planned = _fact("fact_plan", "合成薬剤A開始", workflow="planned",
+                    event_time="2026-11-01", action="start")
+    done = _fact("fact_done", "合成薬剤A開始", workflow="done",
+                 event_time="2026-11-03", action="start")
+    # new evaluation: order of the batch does not matter
+    assert sr.reconcile_facts([], [done, planned]) == sr.reconcile_facts([], [planned, done])
+    # a document made before the rule (no marker) is re-derived with rule 1
+    legacy = sr.meta_relation_rule({})
+    assert legacy == 1
+    assert sr.reconcile_facts([], [done, planned], rule=legacy) == \
+        sr.reconcile_facts([], [done, planned], rule=1)
+    assert sr._classify_pair(done, planned, None, 1) != sr._classify_pair(done, planned)
+
+
+def test_meta_relation_rule_accepts_only_the_current_marker():
+    assert sr.meta_relation_rule({"relation_rule": sr.RELATION_RULE}) == sr.RELATION_RULE
+    for meta in (None, {}, {"relation_rule": True}, {"relation_rule": "2"}, {"relation_rule": 99}):
+        assert sr.meta_relation_rule(meta) == 1

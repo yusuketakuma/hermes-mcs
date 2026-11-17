@@ -1180,8 +1180,9 @@ def rebuild_facts_v2_cached(member: dict, db, source_fingerprint: str,
     assembled = assembly.assemble_facts(member, source, manifest, facts, obligations,
                                         presence, preflight, status, hints, signals,
                                         use_jev_preflight=jev_used)
-    from semantic_relations import reconcile_facts
-    reconciled = reconcile_facts([], assembled["facts"])
+    from semantic_relations import meta_relation_rule, reconcile_facts
+    # a stored document is re-derived under the rule it was made under (#158)
+    reconciled = reconcile_facts([], assembled["facts"], rule=meta_relation_rule(stored_meta))
     progress = assembly.chunk_progress(specs, completed, list(completed), [], None, 0, source_fp)
     result = assembly.assemble_document(assembly.source_binding(member, source_fp), manifest,
                                         assembled, reconciled, progress)

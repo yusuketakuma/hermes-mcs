@@ -195,6 +195,7 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
         else:
             v2_doc = v2_result["doc"]
             from semantic_extraction import FACTS_V2_BUILD
+            from semantic_relations import RELATION_RULE
             doc_build = FACTS_V2_BUILD
             meta = {VERSION_KEY: CURRENT_VERSION, "fingerprint": fp,
                     "policy_fingerprint": policy,
@@ -207,6 +208,7 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
                         v2_doc["coverage"]
                         ["open_obligation_ids"]),
                     "build": FACTS_V2_BUILD,
+                    "relation_rule": RELATION_RULE,
                     # newly normalised this run (reused chunks excluded)
                     "null_contexts_omitted":
                         v2_result.get("null_contexts_omitted", 0)}
