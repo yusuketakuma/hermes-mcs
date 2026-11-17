@@ -58,9 +58,9 @@ def _generation(version):
     return version
 
 
-def _upgrade_contract(*, version: int | None = None) -> str:
+def _upgrade_contract() -> str:
     """Identity an automatic hold stays valid under (see _HOLD_SOURCES)."""
-    return hashlib.sha256(json.dumps([_INFERENCE_VERSION, _generation(version), PATIENT_CONTEXT_VERSION, HOLD_EPOCH,
+    return hashlib.sha256(json.dumps([_INFERENCE_VERSION, EXTRACT_VERSION, PATIENT_CONTEXT_VERSION, HOLD_EPOCH,
         {name: _LOADED_SOURCE_DIGESTS[name] for name in sorted(_HOLD_SOURCES)}],
         sort_keys=True).encode()).hexdigest()
 
@@ -139,7 +139,8 @@ def _protected_prior_current(db, r):
 
 def _hold_sql(*, human=False, released=False, version=None):
     """Source-bound private receipts; a fresh human report bypasses automatic holds.
-    ``released`` matches the same receipt minted under an older code contract."""
+    ``released`` matches the same receipt minted under an older code contract;
+    ``version`` changes only the target generation, not the running code's contract."""
     version = _generation(version)
     prior = ("c.artifact_id" if human else "(SELECT p.artifact_id FROM artifacts p "
         "JOIN messages pm ON pm.message_id=p.message_id "
@@ -159,7 +160,7 @@ def _hold_sql(*, human=False, released=False, version=None):
             AND json_type(u.content,'$.prior_artifact_id')='integer'
             AND json_extract(u.content,'$.prior_artifact_id')={prior}
             AND json_extract(u.content,'$.target_version')={version}
-            AND json_extract(u.content,'$.contract'){'<>' if released else '='}'{_upgrade_contract(version=version)}'
+            AND json_extract(u.content,'$.contract'){'<>' if released else '='}'{_upgrade_contract()}'
             AND {inference.current_meta_pred('u.meta', target=_INFERENCE_VERSION)}
             AND COALESCE(json_extract(u.meta,'$.invalidated'),0)=0
             AND {reason} ELSE 0 END"""
