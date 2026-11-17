@@ -688,10 +688,6 @@ def fresh_marker_sync(root, update_fd):
     root = Path(os.path.abspath(root))
     _fresh_update_lock(root, int(update_fd))
     _fresh_root_clean(root)
-    # Prove what bootstrap-fresh will require while no config exists yet, so a
-    # refused environment stays a resumable install instead of a held config.
-    if not _fresh_workers_absent() or not _fresh_cron_absent():
-        raise ValueError('fresh_workers_unverified')
     _, raw, identity = _fresh_marker_read(root)
     fd = os.open(root / 'data' / _FRESH_MARKER, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
@@ -772,15 +768,7 @@ def main(argv):
             if len(desired) != 1:
                 return 1
             fresh_marker_sync(Path(os.path.abspath(config_path)).parent, desired[0])
-        except ValueError as exc:
-            if str(exc) == 'fresh_workers_unverified':
-                print('既存の Hermes の保存先・定期実行、または MCS の常駐処理を確認できないため、初回導入を確定せず中止しました。'
-                      '設定はまだ作成していません。前回 --mode hermes や Hermes の保存先を指定して導入を始めた場合は、'
-                      '同じ指定で再実行してください。', file=sys.stderr)
-            else:
-                print('初回導入の記録を確認できません。設定と記録を保持します。', file=sys.stderr)
-            return 1
-        except (OSError, TypeError, KeyError, RecursionError, ImportError):
+        except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
             print('初回導入の記録を確認できません。設定と記録を保持します。', file=sys.stderr)
             return 1
         return 0

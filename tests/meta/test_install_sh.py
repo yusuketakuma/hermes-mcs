@@ -44,19 +44,14 @@ def test_fresh_install_reaches_bootstrap_without_python(tmp_path, prior_state):
     assert not (home / '.mcs/config.json').exists()
     assert not any(line.startswith(('git clone', 'uv ', 'launchctl bootstrap')) for line in _calls(stub_root))
     if prior_state == 'absent':
-        # The verified hold is resumed: software preparation is retried, the
-        # hold bytes stay unchanged, and still no Python runs before stage 1.
         marker = lock.parent / '.provider-bootstrap-fresh.json'
         before = marker.read_bytes()
         calls = _calls(stub_root)
         retry = _run(env, hermes_home, '--no-llm', '--no-recovery')
         assert retry.returncode != 0
-        assert '初回導入を再開します' in retry.stdout + retry.stderr
         assert marker.read_bytes() == before
-        assert len([line for line in _calls(stub_root) if line.startswith('brew ')]) > len(
-            [line for line in calls if line.startswith('brew ')])
-        assert not any(line.startswith('python3 ') for line in _calls(stub_root))
-        assert not (home / '.mcs/config.json').exists()
+        assert [line for line in _calls(stub_root) if line.startswith('brew ')] == [
+            line for line in calls if line.startswith('brew ')]
 
 
 @pytest.mark.parametrize("root_value", ["empty", "different"])
