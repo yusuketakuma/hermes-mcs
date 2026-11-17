@@ -55,18 +55,25 @@ def capacity(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm_resident, '_context_memory_available', worker._context_memory_available)
     calls = []
 
-    def run_due(led, config, *, deadline, admit, complete, local_admit=None):
+    def run_due(led, config, *, deadline, admit, complete, local_admit=None, role=None):
         assert led is ledger and config == cfg
         assert deadline > worker.time.monotonic()
-        assert worker.local_llm.request_slot() == LANES[3]
+        # Children and lane 3 run on slot 2; lane 1 at night keeps its own slot 0.
+        assert worker.local_llm.request_slot() == extract_llm_call_context._SLOT_OVERRIDE
         assert admit()
-        calls.append((admit, complete))
+        calls.append((admit, complete, role, deadline, local_admit))
         return {"status": "done", "done": 1}
 
-    monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(run_due=run_due, options=patient_context_refresh.options))
+    monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(run_due=run_due, options=patient_context_refresh.options,
+                        CHILD_WAIT_REASON=patient_context_refresh.CHILD_WAIT_REASON))
     monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: True)
     yield ledger, cfg, calls
     ledger.close()
+
+
+def lane(capacity):
+    """The resident lane's own call, whatever the cloud mode."""
+    return worker._background_context_refresh(capacity[0], (False, 123))
 
 
 def run(capacity, stop=None, state=(False, 123)):
@@ -74,11 +81,24 @@ def run(capacity, stop=None, state=(False, 123)):
     return worker._background_context_refresh(capacity[0], state, stop, cloud_worker=cloud_worker)
 
 
-def test_cloud_context_leaves_local_resident_free(capacity):
+def test_cloud_mode_lane3_runs_the_local_role(capacity, tmp_path, monkeypatch):
     capacity[1]["cloud_llm"] = {"mode": "on", "project_ids": [1]}
-    assert worker._background_context_refresh(capacity[0], (False, 123)) == {"status": "off", "done": 0}
-    assert not capacity[2]
+    monkeypatch.setattr(extract_llm_resident, "HOME", str(tmp_path))
+    child = cloud_backlog.hold_role(tmp_path, cloud_backlog.ROLE_CLOUD)
+    try:
+        assert worker._background_context_refresh(capacity[0], (False, 123))["done"] == 1
+        admit, _, role, _, local_admit = capacity[2][-1]
+        assert role == "local" and local_admit is None
+        # The lane sends nothing: it passes the local admission, which includes the memory
+        # reserve, and no separate cloud one.
+        monkeypatch.setattr(extract_llm_resident, "_context_memory_available", lambda: False)
+        assert admit() is False
+        monkeypatch.setattr(extract_llm_resident, "_context_memory_available", lambda: True)
+    finally:
+        os.close(child)
+    # The child path is unchanged: it passes no role while no local lane holds its own.
     assert run(capacity)["done"] == 1
+    assert capacity[2][-1][2] is None
 
 
 def test_context_dry_run_keeps_existing_local_lane(capacity):
@@ -96,10 +116,38 @@ def test_context_child_stops_admitting_when_owner_disappears(capacity, monkeypat
 
 @pytest.mark.parametrize("slot", [LANES[1], LANES[2], None])
 def test_other_lanes_never_enter_engine(capacity, monkeypatch, slot):
+    import llm_slot_schedule
+    monkeypatch.setattr(llm_slot_schedule, "night", lambda: False)
     monkeypatch.setattr(worker, "_SLOT_OVERRIDE", slot)
     monkeypatch.setattr(extract_llm_call_context, '_SLOT_OVERRIDE', worker._SLOT_OVERRIDE)
     assert run(capacity)["status"] == "off"
     assert not capacity[2]
+
+
+@pytest.mark.parametrize("cloud", ["off", "on"])
+def test_lane1_runs_context_first_only_at_night_on_its_own_slot(capacity, monkeypatch, tmp_path, cloud):
+    import llm_slot_schedule
+    if cloud == "on":
+        capacity[1]["cloud_llm"] = {"mode": "on", "project_ids": [1]}
+        monkeypatch.setattr(extract_llm_resident, "HOME", str(tmp_path))
+    monkeypatch.setattr(worker, "_SLOT_OVERRIDE", LANES[1])
+    monkeypatch.setattr(extract_llm_call_context, '_SLOT_OVERRIDE', worker._SLOT_OVERRIDE)
+    # 400 s before 08:00: inside the lane's 900 s call deadline, above the 310 s floor.
+    left = [400.0]
+    monkeypatch.setattr(llm_slot_schedule, "night", lambda: left[0] > 0)
+    monkeypatch.setattr(llm_slot_schedule, "seconds_until_day", lambda: left[0])
+    started = worker.time.monotonic()
+    first = lane(capacity)
+    assert first["done"] == 1, first
+    _, _, role, deadline, _ = capacity[2][-1]
+    assert role == ("local" if cloud == "on" else None)
+    assert deadline <= started + 400 + 1   # clipped to 08:00
+    # A call that cannot finish before 08:00 starts nothing.
+    left[0] = patient_context_refresh.CALL_SECONDS + patient_context_refresh.COMMIT_MARGIN + 4
+    assert lane(capacity) == {"status": "deferred", "done": 0}
+    left[0] = 0.0   # day
+    assert lane(capacity) == {"status": "off", "done": 0}
+    assert len(capacity[2]) == 1
 
 
 def test_disabled_has_no_probes(capacity, monkeypatch):
@@ -144,7 +192,7 @@ def test_engine_gets_extraction_complete_rule(capacity):
     ledger.save_messages([_message(mid=1, project_id=1), _message(mid=2, project_id=2)])
     _v2_artifact(ledger, 1, _hash(ledger, 1), project_id=1)
     assert run(capacity)["done"] == 1
-    admit, complete = calls[0]
+    admit, complete = calls[0][:2]
     assert admit() and callable(complete)
     assert complete(1) is True    # every post extracted under EXTRACT_VERSION
     assert complete(2) is False   # one eligible post still pending
@@ -181,7 +229,8 @@ def test_context_result_survives_budget_window_edit_only(
         return {"status": "done" if admit() else "source_changed", "done": int(admit())}
 
     monkeypatch.setitem(sys.modules, "patient_context_refresh",
-        SimpleNamespace(run_due=run_due, options=patient_context_refresh.options))
+        SimpleNamespace(run_due=run_due, options=patient_context_refresh.options,
+                        CHILD_WAIT_REASON=patient_context_refresh.CHILD_WAIT_REASON))
     assert run(capacity)["done"] == int(not scope_changed)
 
 
@@ -221,7 +270,8 @@ def test_canonical_pass_completes_patient_without_legacy_admission(
 def test_failure_isolated_and_no_sensitive_error(capacity, monkeypatch):
     def fail(*args, **kwargs):
         raise RuntimeError("private text")
-    monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(run_due=fail, options=patient_context_refresh.options))
+    monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(run_due=fail, options=patient_context_refresh.options,
+                        CHILD_WAIT_REASON=patient_context_refresh.CHILD_WAIT_REASON))
     assert run(capacity) == {"status": "error", "done": 0, "error": "RuntimeError"}
 
 
@@ -286,8 +336,11 @@ def resident_generation(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("idle", [True, False])
-@pytest.mark.parametrize("lane,context_refresh_first", [("3", True), ("2", False)])
+@pytest.mark.parametrize("lane,context_refresh_first", [("3", True), ("2", False), ("1", True)])
 def test_resident_integration(monkeypatch, resident_generation, idle, lane, context_refresh_first):
+    import llm_slot_schedule
+    # Lane 1 serves patient context at night only; the daytime lane 1 is unchanged.
+    monkeypatch.setattr(llm_slot_schedule, "night", lambda: True)
     now, events = [0.0], []
     monkeypatch.setenv("MCS_LLM_SLOT", "1")
     monkeypatch.setenv(worker.local_llm.TURN_LOCK_ENV, "/synthetic/turn.lock")
@@ -317,6 +370,8 @@ def test_resident_integration(monkeypatch, resident_generation, idle, lane, cont
     def context_refresh(led, state, stop):
         events.append("context_refresh")
         assert state == (False, 123) and stop is not None
+        # The lane announces its local role while it serves patient context.
+        assert cloud_backlog.role_alive(worker.HOME, cloud_backlog.ROLE_LOCAL) is True
         assert os.environ["MCS_LLM_SLOT"] == str(worker.local_llm.lane_slot(int(lane)))
         assert os.environ[worker.local_llm.TURN_LOCK_ENV].endswith("data/llm_turn.lock")
         return {"status": "deferred", "done": 0}
@@ -329,6 +384,31 @@ def test_resident_integration(monkeypatch, resident_generation, idle, lane, cont
     assert os.environ["MCS_LLM_SLOT"] == "1"
     assert os.environ[worker.local_llm.TURN_LOCK_ENV] == "/synthetic/turn.lock"
     assert worker._SLOT_OVERRIDE == previous_slot
+    assert cloud_backlog.role_alive(worker.HOME, cloud_backlog.ROLE_LOCAL) is False   # released on exit
+
+
+def test_daytime_lane1_releases_its_local_role_before_it_idles(monkeypatch, resident_generation):
+    import llm_slot_schedule
+    nights = iter([True, True])
+    monkeypatch.setattr(llm_slot_schedule, "night", lambda: next(nights, False))
+    now, held = [0.0], []
+    monkeypatch.setattr(worker.time, "monotonic", lambda: now[0])
+
+    def sleep(seconds):
+        held.append(cloud_backlog.role_alive(worker.HOME, cloud_backlog.ROLE_LOCAL))
+        now[0] += seconds
+    monkeypatch.setattr(worker.time, "sleep", sleep)
+    monkeypatch.setattr(worker, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
+    monkeypatch.setattr(worker.sys, "argv", ["extract_llm", "--all", "--lane", "1", "--stop-after", "20"])
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', lambda *a, **k: {
+        "done": 1, "failed": 0, "left": 1, "selected": 1, "carried": 0, "carry": []})
+    monkeypatch.setattr(extract_llm_resident, '_background_context_refresh',
+                        lambda *a: {"status": "deferred", "done": 0})
+    assert worker.main() == 0
+    # The night pass held the role; once day came, the lane idles without it.
+    assert held[0] is True and held[-1] is False
 
 
 def test_resident_exits_when_context_refresh_sees_update(monkeypatch, resident_generation):
@@ -383,7 +463,8 @@ def test_update_during_engine_signals_resident_exit(capacity, monkeypatch):
         monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 124))
         assert not admit()
         return {"status": "deferred", "done": 0}
-    monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(run_due=engine, options=patient_context_refresh.options))
+    monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(run_due=engine, options=patient_context_refresh.options,
+                        CHILD_WAIT_REASON=patient_context_refresh.CHILD_WAIT_REASON))
     assert run(capacity)["run_lock_lost"] == "updated"
 
 

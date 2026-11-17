@@ -123,10 +123,63 @@ def _same_but_operating_limits(current, cfg):
     return strip(current) == strip(cfg)
 
 
-def _background_context_refresh(ledger, initial_state, stop=None, *, cloud_worker=False):
-    """Refresh one patient context in its cloud child or the local lane, with shared guards."""
+# A local lane takes over the cloud patients once its probes have seen no context child for
+# this long. It exceeds the pool's longest child restart backoff (600 s), so a pool restarting
+# its children is not taken over; a drainer the standalone host restarts may wait longer.
+CHILD_ABSENT_GRACE_S = 900
+# The lane's ledger keeps (first, last) monotonic times of the probes that saw no child.
+_CHILD_ABSENT = "_context_child_absent"
+# The lane's ledger keeps (until, reason) of the pause after a context pass that waits.
+_CONTEXT_PAUSE = "_context_pause"
+# The pause after a takeover pass whose patients all wait for a context child: the wait of a
+# pass that found another worker in the selection (``patient_context_selection_busy``).
+_CHILD_WAIT_PAUSE_S = 20
 
-    if not cloud_worker and extract_llm_call_context._SLOT_OVERRIDE != local_llm.LANES[3]:
+
+def context_lane_active(slot=None):
+    """Whether this resident lane serves patient context now: lane 3 always, lane 1 at night."""
+    import llm_slot_schedule
+    slot = extract_llm_call_context._SLOT_OVERRIDE if slot is None else slot
+    return slot == local_llm.LANES[3] or slot == local_llm.LANES[1] and llm_slot_schedule.night()
+
+
+def _context_role(ledger, *, cloud_worker, cloud_on):
+    """The patients this worker serves (``patient_context_refresh.ROLES``).
+
+    A child serves only the cloud's patients while a local lane is alive, and every patient
+    otherwise. With the cloud on, a local lane serves the other patients while a child is alive
+    or cannot be observed, and every patient once no child has served for the grace period."""
+    import cloud_backlog
+    if cloud_worker:
+        return "cloud" if cloud_backlog.role_alive(HOME, cloud_backlog.ROLE_LOCAL) is True else "any"
+    if not cloud_on:
+        ledger.__dict__.pop(_CHILD_ABSENT, None)
+        return "any"
+    alive = cloud_backlog.role_alive(HOME, cloud_backlog.ROLE_CLOUD)
+    if (alive is None) != ledger.__dict__.get("_context_role_probe_unavailable", False):
+        # One record when the probe becomes unavailable, not one per pass.
+        ledger.__dict__["_context_role_probe_unavailable"] = alive is None
+        if alive is None:
+            print(json.dumps({"event": "context_role_probe_unavailable", "pid": os.getpid(), "ts": time.time()}),
+                  file=sys.stderr, flush=True)
+    if alive is not False:
+        ledger.__dict__.pop(_CHILD_ABSENT, None)
+        return "local"
+    now = time.monotonic()
+    since, last = ledger.__dict__.get(_CHILD_ABSENT, (now, now))
+    if now - last > CHILD_ABSENT_GRACE_S:
+        # Probes this far apart do not show a continuous absence: a child may have served in
+        # between (the lane was off, not admitted or extracting). The grace starts again.
+        since = now
+    ledger.__dict__[_CHILD_ABSENT] = (since, now)
+    return "local_takeover" if now - since >= CHILD_ABSENT_GRACE_S else "local"
+
+
+def _background_context_refresh(ledger, initial_state, stop=None, *, cloud_worker=False):
+    """Refresh one patient context in its cloud child or a local lane, with shared guards."""
+    import llm_slot_schedule
+    slot = extract_llm_call_context._SLOT_OVERRIDE
+    if not cloud_worker and not context_lane_active(slot):
         return {"status": "off", "done": 0}
     try:
         cfg = load_config()
@@ -140,6 +193,18 @@ def _background_context_refresh(ledger, initial_state, stop=None, *, cloud_worke
     deadline = time.monotonic() + 900
     if stop is not None:
         deadline = min(deadline, stop)
+    if not cloud_worker and slot != local_llm.LANES[3]:
+        # Lane 1 serves context only until 08:00; a call that cannot finish by then starts nothing.
+        import patient_context_refresh_state as context_state
+        remaining = llm_slot_schedule.seconds_until_day()
+        if remaining < context_state.CALL_SECONDS + context_state.COMMIT_MARGIN + 5:
+            return {"status": "deferred", "done": 0}
+        deadline = min(deadline, time.monotonic() + remaining)
+    if not cloud_worker:
+        until, reason = ledger.__dict__.get(_CONTEXT_PAUSE, (0.0, None))
+        if time.monotonic() < until:
+            # The pause after a waiting pass: no scan and no selection lock until it ends.
+            return {"status": "deferred", "done": 0, "reason": reason}
 
     def admit():
         # Unknown capacity is not idle: memory, disk, breaker, updater
@@ -158,17 +223,32 @@ def _background_context_refresh(ledger, initial_state, stop=None, *, cloud_worke
 
     try:
         cloud_cfg = cloud_inference.resolve_cloud_settings(cfg)
-        cloud_enabled = cloud_cfg["mode"] != "off"
-        if (cloud_cfg["mode"] == "on") != cloud_worker:
+        cloud_on = cloud_cfg["mode"] == "on"
+        if cloud_worker and not cloud_on:
             return {"status": "off", "done": 0}
+        # A local lane sends nothing: with the cloud on it admits like any local work.
+        cloud_enabled = cloud_cfg["mode"] != "off" and not (cloud_on and not cloud_worker)
         if time.monotonic() >= deadline or not (admit() if cloud_enabled else local_admit()):
             result = {"status": "deferred", "done": 0}
         else:
-            with local_llm.pinned_slot(local_llm.LANES[3]):
+            role = _context_role(ledger, cloud_worker=cloud_worker, cloud_on=cloud_on)
+            with local_llm.pinned_slot(local_llm.LANES[3] if cloud_worker else slot):
                 result = patient_context_refresh.run_due(
                     ledger, cfg, deadline=deadline, admit=admit if cloud_enabled else local_admit,
                     **({"local_admit": local_admit} if cloud_enabled else {}),
+                    **({"role": role} if role != "any" else {}),
                     complete=functools.partial(patient_extraction_complete, ledger))
+            if not cloud_worker:
+                # A lane paces its context passes like the children (a cloud wait or a pass
+                # that found only other-role patients waits a minute); shorter waits keep the
+                # lane loop's own idle floor. A unit waiting for a child holds back only its
+                # patient, which the next passes skip: the lane goes on with the others, and
+                # only a pass that found nothing but such patients waits, as briefly as a pass
+                # that found the selection busy.
+                delay = (_CHILD_WAIT_PAUSE_S if result.get("reason") == patient_context_refresh.CHILD_WAIT_REASON
+                         else cloud_backlog._context_retry_delay(result))
+                if delay > _IDLE_FLOOR_S:
+                    ledger.__dict__[_CONTEXT_PAUSE] = (time.monotonic() + delay, result.get("reason"))
     except Exception as exc:
         # Context refresh failures must not interrupt collection or normal extraction.
         result = {"status": "error", "done": 0, "error": type(exc).__name__}
@@ -402,6 +482,8 @@ def _main() -> int:
         except Exception:
             return set(), None
     cloud_pool = cloud_backlog.CloudBacklogPool(HOME, context_only=True) if args.all and args.lane == 2 else None
+    # This lane's ROLE_LOCAL hold while it serves patient context; context children read it.
+    local_role = [None]
     try:
         if args.all:
             # Backlog drainer: per-write locking only — holding the run
@@ -424,7 +506,7 @@ def _main() -> int:
                 pause(seconds)
 
             total = {"done": 0, "failed": 0, "left": 0}
-            context_lane = extract_llm_call_context._SLOT_OVERRIDE == local_llm.LANES[3]
+            context_lane = context_lane_active()
             semantic_first_until = 0.0
             # Start fairness only after a semantic pass has actually worked.
             # Waiting or an expired priority window must not reset it.
@@ -453,6 +535,15 @@ def _main() -> int:
                     total["stopped"] = "stop_after"
                     break
                 try:
+                    # Lane 3 serves patient context always, lane 1 only at night (context first,
+                    # extraction when no context is due). The role hold follows it, so that a
+                    # daytime lane 1 never hides local patients from the context children.
+                    context_lane = context_lane_active()
+                    if context_lane and local_role[0] is None:
+                        local_role[0] = cloud_backlog.hold_role(HOME, cloud_backlog.ROLE_LOCAL)
+                    elif not context_lane and local_role[0] is not None:
+                        os.close(local_role[0])
+                        local_role[0] = None
                     if args.lane == 1:
                         import llm_slot_schedule
                         if not llm_slot_schedule.night():
@@ -673,6 +764,8 @@ def _main() -> int:
             finally:
                 os.close(lock_fd)
     finally:
+        if local_role[0] is not None:
+            os.close(local_role[0])
         if cloud_pool is not None:
             cloud_pool.close()
         led.close()
