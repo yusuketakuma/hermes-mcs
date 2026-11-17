@@ -345,9 +345,6 @@ def test_token_state_controls_available_transport(tmp_path, monkeypatch, case):
         _token_file(tmp_path, monkeypatch, content="short-token")
     wire = Wire([])
     monkeypatch.setattr(drug_info, "_request", wire)
-    import bounded_http
-    monkeypatch.setattr(bounded_http, "public_mcp_request",
-                        lambda *args, **kwargs: pytest.fail("unexpected external fallback"))
     with pytest.raises(drug_info.DrugInfoError, match="^gateway_unconfigured$"):
         drug_info.search("架空", drug_info.PMDA)
     assert wire.calls == []

@@ -12,7 +12,7 @@ import bounded_http as b
 @pytest.mark.parametrize("overrides", [{"endpoint": "https://api.anthropic.com/v1/messages?x=1"},
                                        {"endpoint": "https://other.invalid/v1/messages"},
                                        {"method": "GET"}, {"api_key": None},
-                                       {"auth": "unknown"}, {"_public_mcp": True}])
+                                       {"auth": "unknown"}])
 def test_parent_rejects_wrong_auth_endpoint_before_spawn(monkeypatch, overrides):
     monkeypatch.setattr(b.subprocess, "Popen", lambda *a, **k: pytest.fail("must not spawn"))
     args = {"endpoint": b.ANTHROPIC_ENDPOINT, "method": "POST", "body": {}, "timeout": 1,

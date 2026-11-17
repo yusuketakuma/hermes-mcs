@@ -294,7 +294,7 @@ def _backlog_setting_blockers(settings, route):
 
 def _route_counts(db, cfg, settings, deadline):
     out = {route: {"targets": 0, "requests_estimate": 0, "input_chars": 0,
-                   "basic_requests_estimate": 0, "chunk_extra_requests_estimate": 0}
+                   "basic_requests_estimate": 0, "chunk_extra_requests_estimate": 0, "invalid_rows": 0}
            for route in policy.ROUTES}
     if "patient_context" in settings["routes"]:
         import patient_context_refresh as context
@@ -308,8 +308,15 @@ def _route_counts(db, cfg, settings, deadline):
                           + scope + " ORDER BY p.project_id", params)
         for count, row in enumerate(rows, 1):
             _checkpoint(deadline, count)
-            pending = context.pending_estimate(db, row["project_id"], cfg, now=time.time(), route=context_route)
             item = out["patient_context"]
+            try:
+                pending = context.pending_estimate(db, row["project_id"], cfg, now=time.time(), route=context_route)
+            except ValueError as error:
+                if error.args != ("patient_context_source_scope_invalid",):
+                    raise
+                # One unreadable stored scope is neither done work nor a reason to stop the whole plan.
+                item["invalid_rows"] += 1
+                continue
             item["targets"] += pending["targets"]
             item["input_chars"] += pending["input_chars"]
             basic = pending["summary_units"] + pending["scan_sources"]

@@ -348,3 +348,31 @@ def test_display_constants_import_without_the_refresh_engine():
             "print(sorted(heavy))")
     out = subprocess.run([sys.executable, "-I", "-c", code], cwd=root, capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "[]"
+
+
+@pytest.mark.parametrize("scope", [[], "7", [0], [True], [7, 7], [1.5], {"a": 1}, ["bad key"], "[7, 8]", 7, False])
+def test_a_published_row_with_a_malformed_source_scope_is_invalid_not_published(ledger, scope):
+    _patients(ledger, 1, 2)
+    ledger.artifact_add(context.KIND, "{}", project_id=1, meta={**META, "published": True, "source_scope": scope})
+    ledger.artifact_add(context.KIND, "{}", project_id=2, meta={**META, "published": True, "source_scope": [7, 8]})
+    result = status.state_counts(ledger.db)
+    assert result["invalid_rows"] == 1
+    assert result["partition"]["invalid"] == 1 and result["partition"]["published"] == 1
+    _assert_partition(result)
+
+
+@pytest.mark.parametrize("scope", [None, [7, 8]])
+def test_a_published_row_with_no_or_a_valid_source_scope_is_still_published(ledger, scope):
+    _patients(ledger, 1)
+    ledger.artifact_add(context.KIND, "{}", project_id=1, meta={**META, "published": True, "source_scope": scope})
+    result = status.state_counts(ledger.db)
+    assert result["invalid_rows"] == 0 and result["partition"]["published"] == 1
+    _assert_partition(result)
+
+
+def test_an_unpublished_row_with_a_malformed_source_scope_keeps_its_in_progress_state(ledger):
+    _patients(ledger, 1)
+    ledger.artifact_add(context.KIND, "{}", project_id=1, meta={**META, "published": False, "source_scope": "7"})
+    result = status.state_counts(ledger.db)
+    assert result["invalid_rows"] == 0 and result["partition"]["invalid"] == 0
+    _assert_partition(result)

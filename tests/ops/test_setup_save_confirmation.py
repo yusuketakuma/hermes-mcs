@@ -260,3 +260,31 @@ def test_preview_reports_an_explicit_mode_the_review_holds(monkeypatch, capsys, 
     output = capsys.readouterr().out
     assert "外部AI追加処理: off" in output
     assert external_transfer.hold_message("Anthropic", external_transfer.status(tmp_path)) in output
+
+
+def test_public_drug_lookup_names_only_the_gateway_that_exists(monkeypatch, capsys):
+    cfg = {"notify_target": "slack:C123", "notify": {"interactive": "slack"}}
+    monkeypatch.setattr("builtins.input", lambda prompt: "2")
+    setup_wizard.confirm_save(cfg, plugin_profile="named")
+    output = capsys.readouterr().out
+    assert "TinyFish" in output and "Exa" not in output
+
+
+def test_open_backlog_window_is_named_instead_of_saying_no_post_is_sent(monkeypatch, capsys):
+    block = {"mode": "on", "project_ids": [1], "provider": "anthropic",
+             "reextract_backlog_until": "2999-01-01T00:00:00+09:00",
+             "daily_cost_limit_usd": 30, "monthly_cost_limit_usd": 300,
+             "provider_budgets": {"anthropic": {"daily_cost_limit_usd": 15, "monthly_cost_limit_usd": 150}}}
+    cfg = {"notify_target": "slack:C123", "notify": {"interactive": "slack"}, "cloud_llm": block}
+    monkeypatch.setattr("builtins.input", lambda prompt: "2")
+    setup_wizard.confirm_save(cfg, plugin_profile="named", key_presence={"anthropic": True})
+    output = capsys.readouterr().out
+    assert "保存済み投稿の再抽出 2999-01-01T00:00:00+09:00 まで" in output
+    assert "意味解析の滞留分" not in output and "個別の投稿・添付OCR・意味解析の新規送信は行いません" not in output
+
+
+def test_closed_backlog_window_keeps_the_no_new_post_sends_statement(monkeypatch, capsys):
+    cfg = {"notify_target": "slack:C123", "notify": {"interactive": "slack"}}
+    monkeypatch.setattr("builtins.input", lambda prompt: "2")
+    setup_wizard.confirm_save(cfg, plugin_profile="named")
+    assert "個別の投稿・添付OCR・意味解析の新規送信は行いません" in capsys.readouterr().out

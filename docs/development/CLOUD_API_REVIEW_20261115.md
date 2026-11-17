@@ -11,7 +11,7 @@ Anthropic の公式資料（料金・effort・thinking・errors・versioning）�
 - 「文書とコードの食い違い」1（5xx の再試行）: 5xx・529 は再送しない仕様に決まり（所有者の決定 2026-11-15、`cloud_client.response_error`）、429 だけが再試行されます。`docs/guides/ANTHROPIC.md` はこの内容に直りました。
 - 同 2（上限の引き下げ）: ANTHROPIC.md を、未送信として0円で精算する記述へ直しました。コード側の `cloud_send_admission.tightened` の docstring（「予約は最大額のまま計上」）は実装と合わず、未修正です。この経路を確かめる回帰テストもありません。
 - 同 3（README の再抽出の説明）: README・SECURITY・USER_GUIDE・ANTHROPIC を、期限付きの再開期間中だけクラウドへ送る内容に直しました。
-- 同 8（医薬品情報の経路）: SECURITY の記述（TinyFish だけ）が正しく、`mcs/medications/drug_info.py` に到達できない Exa 経路が残っています（コード側の課題）。
+- 同 8（医薬品情報の経路）: SECURITY の記述（TinyFish だけ）が正しく、`mcs/medications/drug_info.py` に到達できない Exa 経路が残っています（コード側の課題）。後続の変更で、この Exa 経路と `bounded_http` の公開MCP例外は削除済みです。
 - 同 9（SECURITY の秘密値一覧）: `MCS_ANTHROPIC_API_KEY`・`MCS_OPENAI_API_KEY` を SECURITY.md に追記して解消しました。
 - 同 10（CLOUD_SEND の設計メモ）: `CLOUD_SEND_FOUNDATION_DESIGN_20261115.md` に注記しました。
 - 同 5（料金期限の通知）: `cloud_cli` が `policy.earliest_price_info` を設定済みモデルに対して使うため解消済みと見られます（コミット未特定・未検証）。
@@ -97,7 +97,7 @@ Anthropic の公式資料（料金・effort・thinking・errors・versioning）�
 5. **料金期限の予告**: 実装は既定モデルの料金表だけを見ている。
 6. **`provider_registry` の docstring**: 「名前で分岐しない」としているが、実装と食い違う。
 7. **`bounded_http` の docstring**: 主な有料経路（Anthropic/OpenAI）を利用者として書いていない。
-8. **医薬品情報の照会**: SECURITY.md は「TinyFish だけ」としているが、`drug_info.py` に呼出元のない Exa の経路が残っている。
+8. **医薬品情報の照会**: SECURITY.md は「TinyFish だけ」としているが、`drug_info.py` に呼出元のない Exa の経路が残っていた（後続の変更で、経路と `bounded_http` の公開MCP例外を削除済み）。
 9. **秘密値の一覧**: SECURITY.md の秘密値一覧に `MCS_ANTHROPIC_API_KEY`/`MCS_OPENAI_API_KEY` がない。
 10. **設計書の行番号**: `CLOUD_SEND_FOUNDATION_DESIGN_20261115.md` の行番号がずれている。
 11. **添付OCR**: 設計書は「添付OCRのため CloudInferenceUnit を残す」としているが、新規送信は到達せず、必要なのは回復の経路だけ。

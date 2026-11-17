@@ -1,6 +1,9 @@
 """Synthetic checks for the shared cloud-send refusal types, stop-reason classifier and cap comparison."""
 import ast
+from contextlib import closing
 import inspect
+import json
+import time
 
 import pytest
 
@@ -9,6 +12,8 @@ import cloud_policy
 import cloud_send_admission as admission
 import mcs_util
 import semantic_runtime
+from ledger import Ledger
+from test_cloud_response_recovery import legacy_cloud_routes, paid as paid  # noqa: F401
 
 SETTINGS = {"daily_request_budget": 10, "daily_cost_limit_usd": 5.0, "monthly_cost_limit_usd": 50.0,
             "window_budget_usd": None, "window_start": None, "provider": "anthropic",
@@ -172,3 +177,33 @@ def test_unknown_code_is_hold(stage, code):
 def test_invalid_stage_or_progress_is_refused(stage, progress):
     with pytest.raises(ValueError, match="^cloud_refusal_stage_invalid$"):
         admission.classify_refusal(stage, "daily_cap", progress=progress)
+
+
+def test_a_cap_lowered_after_reservation_settles_the_unsent_attempt_at_zero(paid, monkeypatch):
+    """tightened() stops the send; the reservation is settled as not_sent with no spend, not kept at its maximum."""
+    path, cfg, calls, _locks, _state, unit, _restart = paid
+    cfg['cloud_llm']['daily_cost_limit_usd'] = 10
+    reserver = cloud_policy.usage_reserver
+    lowered = []
+
+    def reserve_then_lower(*args, **kwargs):
+        reserve = reserver(*args, **kwargs)
+
+        def reserve_and_lower(body, timeout):
+            reservation = reserve(body, timeout)
+            cfg['cloud_llm']['daily_cost_limit_usd'] = 1   # set between the reservation and the send
+            lowered.append(True)
+            return reservation
+        return reserve_and_lower
+
+    monkeypatch.setattr(cloud_policy, 'usage_reserver', reserve_then_lower)
+    with closing(Ledger(path)) as ledger:
+        provider = unit(ledger)
+        with legacy_cloud_routes(), pytest.raises(cloud_inference.CloudObservationIncomplete):
+            provider('synthetic prompt', deadline=time.monotonic() + 60, max_tokens=100)
+        assert lowered and calls == []   # nothing was sent
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+        result = ledger.artifacts('cloud_usage_result')[0]
+        assert json.loads(result['meta'])['http_class'] == 'not_sent'
+        report = cloud_policy.usage_report(ledger)
+        assert float(report['settled_cost_usd']) == 0 and report['unresolved_requests'] == 0

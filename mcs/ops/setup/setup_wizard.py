@@ -642,13 +642,21 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None, new_installati
                                                transfer_status()))
     else:
         print(f"  外部AI追加処理: {cloud['mode']} / キー未登録・off・dry_runの場合は外部送信しません。")
-    print("  OpenAI・Anthropicへの個別の投稿・添付OCR・意味解析の新規送信は行いません。"
-          "過去の課金済み回答や送信結果不明の回復・保留は維持します。")
+    open_windows = [f"{label} {cloud[key]} まで" for label, key, window in (
+        ("保存済み投稿の再抽出", "reextract_backlog_until", cloud_policy.reextract_backlog_window),
+        ("意味解析の滞留分", "semantic_backlog_until", cloud_policy.semantic_backlog_window)) if window(cfg)]
+    if open_windows:
+        print("  OpenAI・Anthropicへの個別の投稿・意味解析の送信: " + "、".join(open_windows)
+              + "、上記の費用上限の範囲で行います。添付OCRの新規送信は行いません。"
+              "過去の課金済み回答や送信結果不明の回復・保留は維持します。")
+    else:
+        print("  OpenAI・Anthropicへの個別の投稿・添付OCR・意味解析の新規送信は行いません。"
+              "過去の課金済み回答や送信結果不明の回復・保留は維持します。")
     daily_cap, monthly_cap = ("上限なし" if cloud[key] is None else f"{cloud[key]:g} USD"
                               for key in ("daily_cost_limit_usd", "monthly_cost_limit_usd"))
     print(f"  外部AI合計費用上限: 1日 {daily_cap} / 1か月 {monthly_cap}（両方の上限を適用）")
     print("  公開薬情報の照会: 同梱公開マスターで照合した薬品名・一般疾患名・公式URLを"
-          "TinyFishへ送り、トークンファイルがない場合だけ固定の無料Exaへ送ります。患者本文は送りません。"
+          "このMacのTinyFishゲートウェイへ送ります。トークンがない場合は照会を止め、ほかへは送りません。患者本文は送りません。"
           "\n  定期的な薬情報更新確認: "
           + ("無効" if cfg.get("drug_info_watch") is False else "有効（強制再取得できるTinyFish経路のみ）"))
     print("  MCSの既読: 定期収集には、取得完了と取得時刻を確認した対象を既読にする経路があります。"

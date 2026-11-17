@@ -34,7 +34,8 @@ def caps(settings):
 def tightened(reserved, now):
     """True when a cap was set or lowered after the reservation: its unsent request must stop.
 
-    The reservation itself stays counted at its maximum; only the send it has not made yet stops.
+    Nothing was sent, so the caller settles the reservation as not sent: it is released at 0 spend
+    rather than kept at its maximum (``docs/guides/ANTHROPIC.md``).
     """
     return any(reserved.get(key, now[key]) is None and now[key] is not None
                or None not in (reserved.get(key), now[key]) and now[key] < reserved[key]
