@@ -171,6 +171,19 @@ def test_pending_appearing_after_initial_check_keeps_marker_and_journal(watchdog
     assert not Path(watchdog.STATE_PATH).exists()
 
 
+def test_busy_provider_editor_is_a_retry_not_a_failure(watchdog, monkeypatch):
+    data = Path(watchdog.DATA)
+    marker = data / "update_in_progress.marker"
+    marker.write_text("synthetic marker")
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_lock_provider_editor", lambda: None)
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_git", lambda *_a, **_k: pytest.fail("busy editor ran git"))
+    patch_lifecycle_lookup(monkeypatch, watchdog, "_restart_drainers", lambda **_k: pytest.fail("busy editor restarted"))
+    # Same as a busy update or run lock: the interactive caller then asks to wait and retry.
+    assert watchdog._recover_legacy() == 0
+    assert marker.read_text() == "synthetic marker"
+    assert not (data / "recovery_report.json").exists()
+
+
 def test_unreadable_provider_marker_state_is_not_legacy(watchdog, monkeypatch):
     marker = Path(watchdog.MARKER_PATH)
     marker.write_text("synthetic marker")

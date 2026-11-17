@@ -48,7 +48,7 @@ import types
 import linecache
 
 # The entrypoint and each retained .prev select only their own complete generation.
-SUPPORT_FILES = {'mcs_recovery_gateway.py': 'fd7b5fd00c33e0925847f9b48f56131c2ed8b3f8641e46d4f6f854b6b69a68d0', 'mcs_recovery_core.py': 'ae51f18b713895c6a65c9925847c9865dad27b477bb5d0b4e7cbc2f3a973e288', 'mcs_recovery_services.py': '0b05f8b8147d6d23876d27d7e7d6b6d9ca182009b959d1e0cf66d03e9cc379c8', 'mcs_recovery_database.py': '10db4c452233806944496a527c66b92c7fcec61390c3979d4f18255a11b04a0b'}
+SUPPORT_FILES = {'mcs_recovery_gateway.py': 'fd7b5fd00c33e0925847f9b48f56131c2ed8b3f8641e46d4f6f854b6b69a68d0', 'mcs_recovery_core.py': 'ae51f18b713895c6a65c9925847c9865dad27b477bb5d0b4e7cbc2f3a973e288', 'mcs_recovery_services.py': 'fc2744167bb3fb2cda588df2151cf74fa08b10878909d1c1f3413fc8e2873b75', 'mcs_recovery_database.py': '10db4c452233806944496a527c66b92c7fcec61390c3979d4f18255a11b04a0b'}
 
 
 class _PinnedSourceLoader(importlib.abc.SourceLoader):
@@ -292,6 +292,7 @@ def _recovery_explanation(detail):
         "restore_failed:": "データベースを復元できません。保留を維持して復旧結果の記録を確認してください。",
         "restore_verify_failed": "復元後のデータベースを確認できません。復旧結果の記録を確認してください。",
         "restore_marker_adopted": "バックアップを採用した導入先では、更新の巻戻しでデータベースを戻しません。保留を維持し、戻すかどうかを担当者が判断してください。",
+        "apply failed after merge": "更新の適用に失敗し、更新前の版への巻戻しも完了していません。適用済みとは扱わず、mcs_update.py recover で状態を確認してください。",
     }
     if detail.startswith("rollback db restore: "):
         detail = detail[len("rollback db restore: "):]
@@ -681,7 +682,7 @@ def _journal_fresh(state):
         return False
     last = max([s.get("at", 0) for s in state.get("stages", [])]
                + [(applying or {}).get("at", 0)])
-    return bool(last) and time.time() - last < mcs_recovery_core.STALE_S
+    return bool(last) and 0 <= time.time() - last < mcs_recovery_core.STALE_S  # future: clock moved back
 
 
 def _restore_entered(state):
@@ -799,7 +800,7 @@ def _recover_legacy(if_stale=False):
         except (OSError, ValueError):
             return _hold("provider_editor_lock_invalid", 2)
         if editor_fd is None:
-            return 2                        # an editor is publishing — retry
+            return 0                        # an editor is publishing — retry
         mcs_recovery_core._check_recovery_root()
         state = mcs_recovery_core._load_state()               # fresh view under the locks
         record = not (if_stale and _journal_fresh(state))
@@ -944,11 +945,13 @@ def _recover_legacy(if_stale=False):
                     "at": time.time()}
                 mcs_recovery_core._save_state(state)
             dkey = mcs_recovery_core._drainers_key(state, head)
+            # = mcs_update: the alert carries any worker that failed to restart
+            problems = drainers(dkey)
             _report_alert("escalate", state, detail,
                           "[MCS] 更新の中断復旧ができません"
-                          f"（要手動対応）: {_recovery_explanation(detail)}",
-                          drainers_key=dkey)
-            drainers(dkey)
+                          f"（要手動対応）: {_recovery_explanation(detail)}"
+                          + (" restart:" + ",".join(problems) if problems else ""),
+                          drainers_key=dkey, **({"restart": problems} if problems else {}))
             mcs_recovery_core._remove_marker()
             return 1
 
@@ -1127,6 +1130,15 @@ def _recover_legacy(if_stale=False):
                 held_before = state.pop("restore_consent", None) is not None
                 if applying.pop("restore_incomplete", None) or held_before:
                     mcs_recovery_core._save_state(state)
+            attempt = (state.get("attempts") or {}).get(applying.get("tag"))
+            if (not applying.get("rollback") and isinstance(attempt, dict)
+                    and attempt.get("result") == "failed"
+                    and type(attempt.get("at")) in (int, float)
+                    and attempt["at"] >= (applying.get("at") or 0)):
+                # This apply already failed (its own postcheck included) and its
+                # rollback did not finish; this helper has no postcheck to
+                # promote it with, so it never records it applied.
+                return escalate("apply failed after merge — rollback incomplete")
             if not applying.get("rollback") and applying.get("reinstall") \
                     and not applying.get("reinstall_done"):
                 # install.sh is never re-run unattended; the operator
@@ -1184,8 +1196,18 @@ def _recover_legacy(if_stale=False):
                 mcs_recovery_core._git_out(["reset", "--hard", prev])
                 if mcs_recovery_core._head() != prev or mcs_recovery_core._clean() is not True:
                     return escalate("prev tree could not be cleaned")
-                return _finish(state, "mixed_tree_reset", removed)
-            return _finish(state, "interrupted_pre_merge", removed)
+                result = "mixed_tree_reset"
+            else:
+                result = "interrupted_pre_merge"
+            if not applying.get("rollback") and "post_merge" in stages:
+                # = mcs_update: the new code ran and its failed rollback may have
+                # reset the tree without re-rendering services; redo them here.
+                problems = mcs_recovery_services._reconcile_membership(
+                    applying.get("manifest_snapshot") or state.get("manifest_snapshot"))
+                if problems:
+                    return escalate("resume incomplete: " + ",".join(problems))
+                result = "post_merge_reverted"
+            return _finish(state, result, removed)
         return escalate("unclassifiable repo state — no destructive "
                         f"action taken (HEAD={head[:12]})")
     finally:
@@ -1227,6 +1249,7 @@ def _finish(state, result, removed):
         "merge_aborted": "中断されたプログラムの統合を取り消し、更新前の状態に戻しました。",
         "mixed_tree_reset": "更新前後のファイルが混在していたため、更新前の状態に戻しました。",
         "interrupted_pre_merge": "プログラムの切り替え前に中断した更新を終了しました。",
+        "post_merge_reverted": "更新前の版への巻戻しが途中で止まっていたため、更新前の版で常駐処理の設定を整え直しました。",
     }.get(result, "中断された更新の復旧を完了しました。")
     mcs_recovery_services._notify("[MCS] " + explanation)
     # = mcs_update._finish_recovery: the tree is back on prev, so the
