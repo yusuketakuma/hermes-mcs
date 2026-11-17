@@ -15,6 +15,7 @@ from pathlib import Path
 import clinical_allergies as ca
 import extract_bench
 import extract_bench_assertions as scorer
+from mcs_util import fold_map
 
 ROOT = Path(__file__).resolve().parents[3]
 BLK_EVAL = json.loads((ROOT / "evaluation" / "extract_cases_safety_history.json").read_bytes())["cases"]
@@ -75,17 +76,20 @@ def _bodies():
         yield post["body"], [claim["allergen"] for claim in post["claims"]]
 
 
+def _folded_in(term, text):
+    return fold_map(term, casefold=True)[0] in fold_map(text, casefold=True)[0]
+
+
 def _fuzz(count):
     """Random bodies of corpus fragments, whitespace and line breaks of every kind."""
     rng = random.Random(20261117)
     pieces = [piece for body, _ in _bodies() for piece in _sentences(body)]
-    glue = ["", "\n", "\r\n", "\r", " ", "\n\n", " ", "　", " ", "※", "（", "）", "「", "」", "：", "、"]
+    glue = ["合成", "薬", "ＡＢ", "ab", "\r\n合成", "", "\n", "\r\n", "\r", "\u2028", "\n\n", " ", "　", "\u00a0", "※", "（", "）", "「", "」", "：", "、"]
     return ["".join(rng.choice(pieces) + rng.choice(glue) for _ in range(rng.randint(1, 6))) for _ in range(count)]
 
 
 def test_no_input_ever_yields_a_confirmed_claim():
     """Property: whatever the body, quote, allergen, reaction and axes, every kept claim is unverified."""
-    ca.resolve.cache_clear()
     bodies = [(body, names) for body, names in _bodies()] + [(body, []) for body in _fuzz(400)]
     rng = random.Random(7)
     checked = 0
@@ -99,11 +103,13 @@ def test_no_input_ever_yields_a_confirmed_claim():
                  for kind, subject, status, negated, certainty in rng.sample(AXES, 4)]
         kept, _ = ca.validate_items(items, body)
         assert all(item["unverified"] is True for item in kept), body
+        for item in kept:  # The stored evidence is the body's own text and holds the allergen as it was found.
+            assert item["evidence"] in body, (body, item)
+            assert item["allergen"] is None or _folded_in(item["allergen"], item["evidence"]), (body, item)
         units = scorer.units({"allergies": kept}, body)
         assert not any(scorer.match_expected({}, [unit]) for unit in units)
         checked += len(items)
     assert checked > 100_000
-    ca.resolve.cache_clear()
 
 
 def _verdict(claim, body, evidence):

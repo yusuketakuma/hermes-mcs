@@ -48,6 +48,37 @@ def test_only_a_claim_whose_allergen_is_not_in_the_body_is_dropped():
         assert ca.validate_items([_claim(allergen=allergen, evidence=None)], body)[1] == 0, body
 
 
+def test_the_evidence_covers_an_allergen_split_by_a_line_break_or_written_in_another_case():
+    for body, evidence in (("合成\n薬Eにアレルギー", "合成\n薬Eにアレルギー"), ("ご本人は合成\r\n薬E。で発疹。", "ご本人は合成\r\n薬E。"),
+                           ("元気です。合成\u2028薬Eで発疹。以上", "合成\u2028薬Eで発疹。")):
+        kept, _ = ca.validate_items([_claim(evidence=None)], body)
+        assert kept[0]["evidence"] == evidence, repr(body)
+    # One folding (with case) finds the allergen and its place; a long body is never stored whole.
+    body = "本日訪問しました。" * 20000 + "ご本人はabc薬にアレルギーがあります。"
+    kept, _ = ca.validate_items([_claim(allergen="ABC薬", evidence=None)], body)
+    assert kept[0]["evidence"] == "ご本人はabc薬にアレルギーがあります。"
+    kept, _ = ca.validate_items([_claim(allergen="ｱｽﾋﾟﾘﾝ", evidence=None)], "アスピリン。" * 3)
+    assert kept[0]["evidence"] == "アスピリン。"
+
+
+def test_one_folding_of_the_body_serves_every_claim_of_a_call():
+    body = "お疲れ様です。" * 60000 + BODY
+    started = time.perf_counter()
+    kept, dropped = ca.validate_items([_claim(allergen=f"合成薬Z{index}") for index in range(1000)], body)
+    kept, _ = ca.validate_items([_claim(evidence="ご本人は 合成薬E に アレルギー", subject=subject)
+                                 for subject in clinical_events.SUBJECTS] * 12, body)
+    assert dropped == 1000 and len(kept) == len(clinical_events.SUBJECTS)
+    assert kept[0]["evidence"] == "ご本人は合成薬Eにアレルギー"
+    assert time.perf_counter() - started < 15.0
+
+
+def test_a_quote_written_twice_in_the_body_is_not_used():
+    body = "合成薬Eで発疹。合成薬Eで発疹。"
+    kept, _ = ca.validate_items([_claim(evidence="合成薬Eで発疹")], body)
+    assert kept[0]["evidence"] == "合成薬Eで発疹。"
+    assert ca.validate_items([_claim(evidence="で発疹")], "ご本人は合成薬Eで発疹")[0][0]["evidence"] == "ご本人は合成薬Eで発疹"
+
+
 def test_a_reaction_the_body_does_not_hold_is_kept_as_written():
     kept, dropped = ca.validate_items([_claim(reaction="めまい")], BODY)
     assert (kept, dropped) == ([_kept(reaction="めまい")], 0)
@@ -74,7 +105,13 @@ def test_bad_shapes_are_dropped_and_counted_with_bounded_repair_detail():
     ca.validate_items([_claim(allergen=None, negated=True, evidence="参考の文")], "本日訪問しました。", drops, ctx=True)
     assert "参考コンテキスト" in drops["reasons"][0] and drops["ev"] == ["参考の文"]
     assert ca.validate_items("not a list", BODY) == ([], 0)
-    assert ca.validate_items([_claim()], None)[1] == 1
+    for body in (None, "", "  ", ["合成薬E"]):
+        assert ca.validate_items([_claim()], body)[1] == 1
+        assert ca.resolve(body, BODY, "合成薬E").drop == "shape"
+    assert ca.validate_items([_claim(negated=1)], BODY)[1] == 1
+    drops = {}
+    ca.validate_items([_claim(allergen=None, evidence=f"参考{index}") for index in range(7)], "本日訪問しました。", drops)
+    assert len(drops["ev"]) == 5 and len(drops["reasons"]) == 5
 
 
 def test_stored_assertions_tell_not_acquired_from_none_found():
@@ -91,6 +128,12 @@ def test_stored_assertions_tell_not_acquired_from_none_found():
         assert ca.stored_assertions(meta, content, first_generation=12) is None
     assert ca.stored_assertions({"extract_version": 12}, {"allergies": "合成薬E"}, first_generation=12) is None
     assert ca.stored_assertions({"extract_version": 12}, None, first_generation=12) is None
+    # Only the documented shape counts, and the caller gets copies.
+    odd = {"allergies": [{}, {**_claim(), "unverified": 1}, {**_claim(), "unverified": False}, {**_claim(), "kind": "x"}]}
+    assert ca.stored_assertions({"extract_version": 12}, odd, first_generation=12) == [{**_claim(), "unverified": False}]
+    found = ca.stored_assertions({"extract_version": 12}, content, first_generation=12)
+    found[0]["allergen"] = "卵"
+    assert content["allergies"][0]["allergen"] == "合成薬E"
 
 
 def test_r10_one_assertion_repeated_by_overlapping_chunks_is_stored_once():
@@ -98,7 +141,15 @@ def test_r10_one_assertion_repeated_by_overlapping_chunks_is_stored_once():
     body = "訪問しました。ご本人は合成薬Eにアレルギーがあります。本日は落ち着いています。"
     chunks = [_claim(evidence="ご本人は合成薬Eにアレルギーがあります。"), _claim(evidence=None)]
     assert len(ca.validate_items(chunks, body)[0]) == 1
-    assert len(ca.validate_items([_claim(), _claim(certainty="suspected")], BODY)[0]) == 2
+    for changes in ({"certainty": "suspected"}, {"subject": "family"}, {"negated": True}, {"kind": "adverse_reaction"},
+                    {"status": "past"}, {"allergen": "合成薬"}):
+        assert len(ca.validate_items([_claim(), _claim(**changes)], BODY)[0]) == 2, changes
+    # Distinct reactions of one sentence stay separate candidates.
+    body = "合成薬Eで発疹と肝障害が出ました。"
+    kept, _ = ca.validate_items([_claim(evidence=body, reaction="発疹"), _claim(evidence=body, reaction="肝障害"),
+                                 _claim(evidence=body), _claim(evidence=body, reaction="発疹")], body)
+    assert [item["reaction"] for item in kept] == ["発疹", "肝障害"]
+    assert not ca.same_assertion(_claim(reaction="発疹"), _claim(reaction="肝障害"))
     assert ca.same_assertion(_claim(), _claim(reaction="発疹"))
     assert not ca.same_assertion(_claim(), _claim(status="past"))
     # Of two copies the one naming a reaction is kept, in either order.
@@ -113,17 +164,18 @@ def test_cue_spans_skip_words_that_name_no_allergy():
     assert [(body[start:end], kind) for start, end, kind in ca.cue_spans(body)] == [
         ("副作用", "adverse_reaction"), ("アレルギー", "allergy"), ("薬疹", "adverse_reaction")]
     assert ca.cue_spans(None) == []
+    assert ca.cue_spans("抗アレルギーの作用です。") == []
 
 
 def test_every_line_break_and_space_is_handled_and_long_runs_stay_linear():
-    for brk in ("\n", "\r\n", "\r", " ", " ", "\x85"):
+    for brk in ("\n", "\r\n", "\r", "\u2028", "\u2029", "\x85"):
         body = f"ご本人は元気です{brk}合成薬Eで発疹{brk}以上"
         kept, _ = ca.validate_items([_claim(evidence=None, kind="adverse_reaction")], body)
         assert kept[0]["evidence"] == "合成薬Eで発疹", repr(brk)
-    nbsp = "ご本人は合成薬E にアレルギーがあります。"
+    nbsp = "ご本人は合成薬E\u00a0にアレルギーがあります。"
     assert ca.validate_items([_claim(evidence=BODY)], nbsp)[0][0]["evidence"] == nbsp
     started = time.perf_counter()
-    for space in (" ", "　", " ", "\t"):
+    for space in (" ", "　", "\u00a0", "\t"):
         run = space * 5000
         for body in (run + BODY, BODY + run, "ご本人は合成薬E" + run + "にアレルギーがあります。", run):
             for evidence in (BODY, body, "合成薬E に アレルギー", None):
