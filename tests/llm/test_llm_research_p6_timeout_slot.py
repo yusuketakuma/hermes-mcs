@@ -97,6 +97,7 @@ def test_never_idle_within_bound_releases_unconfirmed(turn, monkeypatch):
 
 def test_caller_deadline_ends_the_poll(turn, monkeypatch):
     monkeypatch.setattr(local_llm, "SLOT_WAIT_MAX_S", 5.0)
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_GRACE_S", 0.0)
     send, _state = _fake(turn, [True])
     err = {}
     started = time.monotonic()
@@ -105,6 +106,16 @@ def test_caller_deadline_ends_the_poll(turn, monkeypatch):
     assert _chat(send, err, deadline=time.monotonic() + 0.3) is None
     assert time.monotonic() - started < 1
     assert err["slot_wait_confirmed"] == 0 and err["slot_wait_ms"] < 5000
+
+
+def test_spent_deadline_still_gets_the_grace_budget(turn, monkeypatch):
+    # a timeout means the caller's deadline is already spent; the idle
+    # check must still run for the short grace, not end after one miss
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_GRACE_S", 1.0)
+    send, state = _fake(turn, [True, True, False, False])
+    err = {}
+    assert _chat(send, err, deadline=time.monotonic() + 0.3) is None
+    assert state["gets"] == 4 and err["slot_wait_confirmed"] == 1
 
 
 def test_outcomes_are_reported_separately(turn, monkeypatch):

@@ -104,6 +104,9 @@ PROBE_TURN_MIN_S = 2.0
 # turn is held while /slots is polled so the other lane does not start
 # into a still-busy GPU.
 SLOT_WAIT_MAX_S = 10.0
+# A timeout spends the caller's whole deadline, so the idle check keeps
+# this short budget of its own when the deadline leaves less than it.
+SLOT_WAIT_GRACE_S = 2.0
 SLOT_WAIT_POLL_S = 0.5
 SLOT_WAIT_IDLE_SAMPLES = 2
 
@@ -312,7 +315,8 @@ def _wait_slot_idle(request, endpoint: str, slot: int,
     """Hold the turn until the pinned slot reports idle in
     SLOT_WAIT_IDLE_SAMPLES consecutive samples, or SLOT_WAIT_MAX_S / the
     caller's deadline passes. A single idle sample, a missing slot, bad
-    JSON or a failed GET resets the run. Expiry is UNCONFIRMED but still
+    JSON or a failed GET resets the run. The caller's deadline caps the
+    wait, but never below SLOT_WAIT_GRACE_S. Expiry is UNCONFIRMED but still
     releases the turn — it is never held forever. Idle is a stop
     observation, not a cancel receipt: a slot-pinned request the server
     still queues may decode after the next send (that sender's own
@@ -320,7 +324,7 @@ def _wait_slot_idle(request, endpoint: str, slot: int,
     start = time.monotonic()
     until = start + SLOT_WAIT_MAX_S
     if deadline is not None:
-        until = min(until, deadline)
+        until = min(until, max(deadline, start + SLOT_WAIT_GRACE_S))
     idle = 0
     while idle < SLOT_WAIT_IDLE_SAMPLES and time.monotonic() < until:
         idle = idle + 1 if _slots_idle(endpoint, until, request=request,
