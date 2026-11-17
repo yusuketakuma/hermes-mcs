@@ -1012,19 +1012,19 @@ def _bare_quote(text: str, category) -> str:
     return text
 
 
-def patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0,
+def patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0, first_view=False,
                          intervention_history=False, intervention_cursor=None, measurement=None):
     if section == "measurements":
         return _measurement_list(db, project_id, measurement)
     if section not in ("care_events", "background", "timeline", "previsit"):
         return _patient_context_list(db, project_id, section, cfg=cfg, since=since, now=now,
-                                     role=role, page=page, intervention_history=intervention_history,
+                                     role=role, page=page, first_view=first_view, intervention_history=intervention_history,
                                      intervention_cursor=intervention_cursor)
     # Coverage, source references and the final rendered labels share the same snapshot.
     db.execute("SAVEPOINT care_event_notification")
     try:
         result = _patient_context_list(db, project_id, section, cfg=cfg, since=since, now=now,
-                                       role=role, page=page, intervention_history=intervention_history,
+                                       role=role, page=page, first_view=first_view, intervention_history=intervention_history,
                                        intervention_cursor=intervention_cursor)
     except BaseException:
         try:
@@ -1074,7 +1074,7 @@ def _measurement_list(db, project_id, measurement):
             "items": rows, "notes": [], "empty": note, "page": 0, "pages": 1}
 
 
-def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0,
+def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0, first_view=False,
                           intervention_history=False, intervention_cursor=None):
     """Private patient-context views as source-bound rows: each row keeps the original
     quotes and one compact source line (when · who · which post); consecutive items of
@@ -1217,7 +1217,9 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         head.append(order)
     elif section == "changes":
         view = views.changes(db, ev, since)
-        head.append("前回の表示依頼: " + (stamp_time(datetime.fromtimestamp(since, JST)) if since else "初回"))
+        stamped = stamp_time(datetime.fromtimestamp(since, JST)) if since else None
+        head.append("初回（直近7日）: " + stamped + "から" if first_view and stamped
+                    else "前回の表示依頼: " + (stamped or "初回"))
         for key, label in DISCOVERY_LABELS:
             add(view["by_discovery"].get(key, []), label)
         # a deleted post shows only when its deletion was observed, never its old text

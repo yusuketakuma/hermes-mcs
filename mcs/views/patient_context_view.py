@@ -531,6 +531,14 @@ def _reset_prior(db, project_id):
     return set(keys) if isinstance(keys, list) and all(isinstance(k, str) for k in keys) else None
 
 
+FIRST_CHANGES_BASELINE_S = 7 * 86400
+
+
+def first_changes_baseline(now) -> float:
+    """The 前回から変わったこと start for a reader with no earlier view: the last 7 days."""
+    return now - FIRST_CHANGES_BASELINE_S
+
+
 def changes(db, ev, since_ts) -> dict:
     """前回から変わったこと, from the ledger's own observation record (messages.first_seen,
     message_revisions) so edits and deletions not yet reflected at night still show:

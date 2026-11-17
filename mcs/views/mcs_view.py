@@ -653,7 +653,7 @@ class View:
         return {
             "background": lambda: pcv.role_order(pcv.background(ev, care=care), role),
             "participants": lambda: pcv.participants(self.db, pid),
-            "changes": lambda: pcv.changes(self.db, ev, since if since is not None else now - 7 * 86400),
+            "changes": lambda: pcv.changes(self.db, ev, since if since is not None else pcv.first_changes_baseline(now)),
             "previsit": lambda: pcv.previsit(self.db, ev, now, care=care),
             "observations": lambda: pcv.observations(self.db, ev, cfg=cfg),
             "discrepancies": lambda: pcv.discrepancies(ev, posters=pcv.participants(self.db, pid)["items"]),

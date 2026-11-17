@@ -227,7 +227,8 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None, measurement=No
         # card reuse its command_id: only a prompt resend is a replay.
         if (action == "summary" and replay is not None and "context_since" in replay
                 and now - (replay.get("processed_at") or 0) <= LIVE_RESULT_S):
-            tok_params = {**tok_params, "since": replay["context_since"], "_replay": True}
+            tok_params = {**tok_params, "since": replay["context_since"],
+                          "first_view": replay.get("context_first_view") is True, "_replay": True}
         return _act_view(db, base, card, action, req.get("input") or {}, now,
                          cfg, tok_params, measurement=measurement)
     if action == "tasks":
@@ -575,7 +576,7 @@ def _context_navigation(db, base, card, params, cfg, now, legacy, *, measurement
     history = params.get("intervention_history", False)
     cursor = params.get("intervention_cursor")
     measurement_cursor = params.get("measurement_cursor")
-    if (not isinstance(section, str) or section not in CONTEXT_SECTIONS
+    if (type(params.get("first_view", False)) is not bool or not isinstance(section, str) or section not in CONTEXT_SECTIONS
             or section == "measurements" and card["transport"] != "slack"
             or not isinstance(role, str) or role not in CONTEXT_ROLES
             or type(page) is not int or not 0 <= page <= 100000
@@ -596,22 +597,34 @@ def _context_navigation(db, base, card, params, cfg, now, legacy, *, measurement
     if ("since" not in params and saved.get("command_id") == base.get("command_id")
             and type(saved.get("at")) in (int, float) and 0 <= now - saved["at"] <= LIVE_RESULT_S
             and type(saved.get("since")) in (int, float)):
-        params = {**params, "since": saved["since"], "_replay": True}
-    since = params.get("since", saved.get("at", 0))
+        params = {**params, "since": saved["since"], "first_view": saved.get("first_view") is True,
+                  "_replay": True}
+    if "since" in params:
+        since, first_view = params["since"], params.get("first_view", False)
+    elif "at" in saved:
+        since, first_view = saved["at"], False
+    else:
+        # no earlier opening by this viewer: compare against the last 7 days, not nothing
+        import patient_context_view
+        since, first_view = patient_context_view.first_changes_baseline(now), True
     if type(since) not in (int, float) or not math.isfinite(since) or since < 0:
         return {**base, "outcome": "rejected", "error": "action_not_applicable"}
+    if since == 0 and not first_view:
+        # tokens and receipts from before the 7-day baseline carry since=0: read them as a first opening
+        import patient_context_view
+        since, first_view = patient_context_view.first_changes_baseline(now), True
     navigation, token_ctx = [], {}
     if "section" not in params:
         # The card's 🧾 keeps showing the existing summary; the context refresh views open from it.
         result = legacy()
         for target in ("background", "changes", "previsit", "replies", "discrepancies"):
             _private_button(db, base, card, now, navigation, token_ctx, "summary",
-                            CONTEXT_SECTIONS[target], {"section": target, "page": 0, "role": "", "since": since})
-        _context_checkpoint(db, card, identity, row, params, now, since, base.get("command_id"))
-        return {**result, "context_since": since, "navigation": navigation, "token_ctx": token_ctx}
+                            CONTEXT_SECTIONS[target], {"section": target, "page": 0, "role": "", "since": since, "first_view": first_view})
+        _context_checkpoint(db, card, identity, row, params, now, since, base.get("command_id"), first_view)
+        return {**result, "context_since": since, "context_first_view": first_view, "navigation": navigation, "token_ctx": token_ctx}
     try:
         view = patient_context_list(db, card["project_id"], section, cfg=cfg,
-                                   since=since, now=now, role=role, page=page,
+                                   since=since, now=now, role=role, page=page, first_view=first_view,
                                    **({"measurement": measurement} if section == "measurements" else {}),
                                    **({"intervention_history": True, "intervention_cursor": cursor}
                                       if history else {}))
@@ -628,6 +641,7 @@ def _context_navigation(db, base, card, params, cfg, now, legacy, *, measurement
             return
         _private_button(db, base, card, now, navigation, token_ctx, action, label,
                         {"section": target, "page": target_page, "role": target_role, "since": since,
+                         "first_view": first_view,
                          **({"intervention_history": True, "intervention_cursor": target_cursor}
                             if target_history else {}),
                          **({"measurement_cursor": target_measurement_cursor}
@@ -661,17 +675,19 @@ def _context_navigation(db, base, card, params, cfg, now, legacy, *, measurement
         navigate("次の記載を確認", target_measurement_cursor=measurement["next_cursor"])
     _context_checkpoint(db, card, identity, row, params, now)
     return {**base, "outcome": "applied", "action": "list", "list": view,
-            "context_since": since, "navigation": navigation, "token_ctx": token_ctx,
+            "context_since": since, "context_first_view": first_view,
+            "navigation": navigation, "token_ctx": token_ctx,
             **({"measurement_view": True} if section == "measurements" else {})}
 
 
-def _context_checkpoint(db, card, identity, row, params, now, since=None, command_id=None):
+def _context_checkpoint(db, card, identity, row, params, now, since=None, command_id=None, first_view=False):
     # Record viewing time only, never clinical acknowledgement. Tokens retain
     # the prior checkpoint throughout this private navigation session; the
     # opening's own baseline and command let a prompt resend reuse it.
     if params.get("ephemeral") or params.get("_replay"):
         return
-    content = json.dumps({"at": now, **({"since": since, "command_id": command_id}
+    content = json.dumps({"at": now, **({"since": since, "command_id": command_id,
+                                                    **({"first_view": True} if first_view else {})}
                                         if command_id and since is not None else {})})
     if row:
         db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (content, row["artifact_id"]))

@@ -51,7 +51,7 @@ def test_all_sections_reachable_and_actor_bound(led):
     assert notify_views.CONTEXT_SECTIONS[sections[0]] in click(
         led, token, now=NOW + len(sections))["list"]["title"]
     row = led.db.execute("SELECT content,meta FROM artifacts WHERE kind='patient_context_view_checkpoint_v1'").fetchone()
-    assert json.loads(row["content"])["at"] == NOW and set(json.loads(row["content"])) <= {"at", "since", "command_id"}
+    assert json.loads(row["content"])["at"] == NOW and set(json.loads(row["content"])) <= {"at", "since", "command_id", "first_view"}
     assert "discord:1001" not in row["meta"]
     receipts = led.db.execute("SELECT receipt_json FROM command_receipts").fetchall()
     assert receipts and all("navigation" not in json.loads(row[0]) and "list" not in json.loads(row[0])
@@ -143,11 +143,13 @@ def test_previous_time_preserved_in_navigation_and_per_actor(led):
     changes_token = second["navigation"][1]["token"]
     params = json.loads(led.db.execute("SELECT params FROM notification_action_tokens WHERE token=?", (changes_token,)).fetchone()[0])
     assert params["since"] == NOW
+    assert params["first_view"] is False
     changes = click(led, changes_token, now=NOW + 20)
     assert "初回" not in str(changes["list"]["head"])
     other = click(led, token, actor="discord:2002", now=NOW + 30)
     params = json.loads(led.db.execute("SELECT params FROM notification_action_tokens WHERE token=?", (other["navigation"][1]["token"],)).fetchone()[0])
-    assert params["since"] == 0
+    assert params["since"] == NOW + 30 - FIRST
+    assert params["first_view"] is True
 
 
 def test_role_cycle_and_search_reuse_existing_modal(led):
@@ -266,7 +268,7 @@ def test_replayed_summary_does_not_advance_checkpoint(led):
            "origin": dict(ORIGIN, message_id="m-9")}
     first = notify_actions.apply_notification(led, req, ENABLED, now=NOW)
     second = notify_actions.apply_notification(led, req, ENABLED, now=NOW + 30)
-    assert first["context_since"] == second["context_since"] == 0
+    assert first["context_since"] == second["context_since"] == NOW - FIRST
     row = led.db.execute("SELECT content FROM artifacts WHERE kind='patient_context_view_checkpoint_v1'").fetchone()
     assert json.loads(row[0])["at"] == NOW
 
@@ -281,7 +283,7 @@ def test_resend_of_a_later_reopening_keeps_that_openings_baseline(led, later):
     first = notify_actions.apply_notification(led, req, ENABLED, now=NOW)
     reopened = notify_actions.apply_notification(led, req, ENABLED, now=NOW + later)
     resent = notify_actions.apply_notification(led, req, ENABLED, now=NOW + later + 30)
-    assert first["context_since"] == 0 and reopened["context_since"] == NOW
+    assert first["context_since"] == NOW - FIRST and reopened["context_since"] == NOW
     assert resent["context_since"] == reopened["context_since"]
     row = led.db.execute("SELECT content FROM artifacts WHERE kind='patient_context_view_checkpoint_v1'").fetchone()
     assert json.loads(row[0])["at"] == NOW + later
@@ -414,6 +416,72 @@ def test_later_click_by_same_user_on_same_card_advances_checkpoint(led):
            "origin": dict(ORIGIN, message_id="m-9")}
     first = notify_actions.apply_notification(led, req, ENABLED, now=NOW)
     later = notify_actions.apply_notification(led, req, ENABLED, now=NOW + 2 * 86400)
-    assert first["context_since"] == 0 and later["context_since"] == NOW
+    assert first["context_since"] == NOW - FIRST and later["context_since"] == NOW
     row = led.db.execute("SELECT content FROM artifacts WHERE kind='patient_context_view_checkpoint_v1'").fetchone()
     assert json.loads(row[0])["at"] == NOW + 2 * 86400
+
+
+FIRST = 7 * 86400
+
+
+def test_first_view_compares_against_seven_days_and_says_so(led):
+    spec = _delivered_card(led)
+    first = click(led, _token_for(spec, "summary"), now=NOW)
+    assert first["context_since"] == NOW - FIRST and first["context_first_view"] is True
+    changes_token = first["navigation"][1]["token"]
+    changes = click(led, changes_token, now=NOW + 5)
+    head = str(changes["list"]["head"])
+    assert "初回（直近7日）" in head and "前回の表示依頼" not in head
+    assert changes["context_since"] == NOW - FIRST and changes["context_first_view"] is True
+
+
+def _token_params(led, token):
+    return json.loads(led.db.execute("SELECT params FROM notification_action_tokens WHERE token=?", (token,)).fetchone()[0])
+
+
+def test_first_view_survives_in_section_arrows(led):
+    spec = _delivered_card(led)
+    page = click(led, _token_for(spec, "summary"), now=NOW)["navigation"][0]  # background
+    result = click(led, page["token"], now=NOW + 1)
+    for step in range(12):
+        assert result["context_first_view"] is True and result["context_since"] == NOW - FIRST
+        assert all(_token_params(led, b["token"]).get("first_view") is True
+                   for b in result["navigation"] if "section" in _token_params(led, b["token"]))
+        if notify_views.CONTEXT_SECTIONS["changes"] in result["list"]["title"]:
+            break
+        arrow = next(b for b in result["navigation"] if b["label"].startswith("→ "))
+        result = click(led, arrow["token"], now=NOW + 2 + step)
+    assert "初回（直近7日）" in str(result["list"]["head"])
+
+
+def test_first_view_survives_receipt_replay_and_saved_checkpoint_replay(led):
+    spec = _delivered_card(led)
+    req = {"command_id": "same-view", "actor": "discord:1001", "token": _token_for(spec, "summary"),
+           "origin": dict(ORIGIN, message_id="m-9")}
+    first = notify_actions.apply_notification(led, req, ENABLED, now=NOW)
+    replayed = notify_actions.apply_notification(led, req, ENABLED, now=NOW + 30)
+    assert replayed["context_first_view"] is True and replayed["context_since"] == first["context_since"]
+    assert _token_params(led, replayed["navigation"][1]["token"])["first_view"] is True
+    # without the receipt, the saved checkpoint of the same opening answers the resend
+    led.db.execute("DELETE FROM command_receipts WHERE command_id='same-view'")
+    led.db.commit()
+    resent = notify_actions.apply_notification(led, req, ENABLED, now=NOW + 60)
+    assert resent["context_first_view"] is True and resent["context_since"] == first["context_since"]
+    saved = json.loads(led.db.execute("SELECT content FROM artifacts WHERE kind='patient_context_view_checkpoint_v1'").fetchone()[0])
+    assert saved["at"] == NOW and saved["first_view"] is True
+
+
+def test_token_issued_before_the_baseline_change_reads_as_first_view(led):
+    # since=0 and no first_view flag: a token minted by the earlier release
+    spec = _delivered_card(led)
+    token = click(led, _token_for(spec, "summary"), now=NOW)["navigation"][1]["token"]
+    params = _token_params(led, token)
+    params.pop("first_view")
+    params["since"] = 0
+    led.db.execute("UPDATE notification_action_tokens SET params=? WHERE token=?", (json.dumps(params), token))
+    led.db.commit()
+    result = click(led, token, now=NOW + 5)
+    assert result["context_first_view"] is True and result["context_since"] == NOW + 5 - FIRST
+    head = str(result["list"]["head"])
+    assert "初回（直近7日）" in head and "1970" not in head
+
