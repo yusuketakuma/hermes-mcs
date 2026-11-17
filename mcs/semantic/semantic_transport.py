@@ -793,6 +793,12 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
                         return _failed("transport")
                     _failed("probe_unsent")
                     raise runtime.LLMNotSent("probe_unsent")
+                if not level and call_deadline - time.monotonic() < floor:
+                    # the probe's own elapsed time can spend the floor the
+                    # turn was acquired for — the first body never leaves
+                    # below it (equality still sends); long levels keep
+                    # their own 620s not-sent gate below
+                    return _failed("deadline")
                 rf = {"type": "json_object"} if fmt == "object" else None
                 timeout = call_deadline - time.monotonic()
                 if timeout <= 0:

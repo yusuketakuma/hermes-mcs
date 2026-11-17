@@ -704,15 +704,19 @@ def test_format_downgrade_retry_releases_held_turn(monkeypatch):
     assert owned[1] is None          # downgrade retry acquired its own
 
 
-@pytest.mark.parametrize("kind,status", [
-    ("unreachable", None), (None, 503), ("transport", None),
+@pytest.mark.parametrize("kind,status,sent,probe_runs", [
+    # unreachable dies before the wire: breaker hears it, probe_runs not
+    ("unreachable", None, False, 0),
+    (None, 503, True, 1),
+    ("transport", None, True, 1),
 ])
 def test_warm_probe_outage_feeds_breaker_once(tmp_path, monkeypatch,
-                                              kind, status, capsys):
+                                              kind, status, sent,
+                                              probe_runs, capsys):
     """The pre-fan-out warm probe is a real inference run on the owner
     thread: its unreachable/503/transport outcome reaches the breaker
-    once, and queued rows dedup onto the same outage instead of charging
-    each call."""
+    exactly once. Workers defer before any call so every observation
+    counted here is the warm probe's own."""
     db = _ledger(tmp_path)
     db.save_messages([_message(mid=i, body=f"本文{i}") for i in range(1, 4)])
     failures, successes = [], []
@@ -723,6 +727,8 @@ def test_warm_probe_outage_feeds_breaker_once(tmp_path, monkeypatch,
                 error_out["kind"] = kind
             if status:
                 error_out["status"] = status
+            if sent:
+                error_out["sent"] = True
         return None
 
     monkeypatch.setattr(extract_llm_runner, "_probe_format", warm)
@@ -734,21 +740,23 @@ def test_warm_probe_outage_feeds_breaker_once(tmp_path, monkeypatch,
                         lambda _db: failures.append(1))
     monkeypatch.setattr(extract_llm_runner, "circuit_success",
                         lambda _db: successes.append(1))
-
-    def down(prompt, **kw):
-        kw["error_out"]["kind"] = "unreachable"
-
-    monkeypatch.setattr(extract_llm.local_llm, "chat", down)
+    # silent workers: a deferred row carries no transport note, so the
+    # breaker can only have heard the warm probe
+    monkeypatch.setattr(extract_llm_runner, "llm_extract",
+                        lambda *a, **k: extract_llm._DEFERRED)
     res = extract_llm.run_pending(db, limit=10, budget_s=200, workers=2)
-    assert failures == [1]         # warm + worker outages dedup to one
+    assert failures == [1]
     assert successes == []
     assert res["failed"] == 0
+    assert res["llm_calls"]["probe_runs"] == probe_runs
     db.close()
 
 
 def test_warm_probe_answered_resets_breaker(tmp_path, monkeypatch):
     """A warm probe that returns a verdict proves the endpoint alive —
-    the observation resets the streak like any answered call."""
+    the observation resets the streak like any answered call. Only a
+    real 200 answer carries the answered flag; workers defer silently
+    so the single success is the warm probe's own."""
     db = _ledger(tmp_path)
     db.save_messages([_message(mid=i, body=f"本文{i}") for i in range(1, 3)])
     failures, successes = [], []
@@ -756,6 +764,9 @@ def test_warm_probe_answered_resets_breaker(tmp_path, monkeypatch):
     def warm(deadline=None, error_out=None):
         extract_llm_provider._FMT_MODE = "plain"
         extract_llm_provider._FMT_TS = time.monotonic()
+        if error_out is not None:
+            error_out["sent"] = True
+            error_out["answered"] = True
         return "plain"
 
     monkeypatch.setattr(extract_llm_runner, "_probe_format", warm)
@@ -765,14 +776,13 @@ def test_warm_probe_answered_resets_breaker(tmp_path, monkeypatch):
                         lambda _db: failures.append(1))
     monkeypatch.setattr(extract_llm_runner, "circuit_success",
                         lambda _db: successes.append(1))
-    monkeypatch.setattr(extract_llm, "llm_extract",
-                        lambda body, **_: {"summary": "ok"})
-    monkeypatch.setattr(extract_llm_runner, 'llm_extract',
-                        extract_llm.llm_extract)
+    monkeypatch.setattr(extract_llm_runner, "llm_extract",
+                        lambda *a, **k: extract_llm._DEFERRED)
     res = extract_llm.run_pending(db, limit=10, budget_s=200, workers=2)
     assert successes == [1]
     assert failures == []
-    assert res["done"] == 2
+    assert res["failed"] == 0
+    assert res["llm_calls"]["probe_runs"] == 1
     db.close()
 
 
@@ -801,6 +811,43 @@ def test_warm_probe_busy_never_reaches_wire_observation(tmp_path, monkeypatch):
                         extract_llm.llm_extract)
     res = extract_llm.run_pending(db, limit=10, budget_s=200, workers=2)
     assert failures == []
+    assert res["done"] == 2
+    assert res["llm_calls"]["probe_runs"] == 0   # busy never hit the wire
+    db.close()
+
+
+@pytest.mark.parametrize("budget_s,warm_calls", [(76, 0), (80, 1)])
+def test_warm_probe_needs_body_floor_plus_probe_margin(
+        tmp_path, monkeypatch, budget_s, warm_calls):
+    """Below _MIN_CALL_S + PROBE_TURN_MIN_S the warm probe may not POST
+    at all — the same floor+margin contract a body call's probe obeys.
+    At the gate it runs once before fan-out."""
+    import local_llm
+    db = _ledger(tmp_path)
+    db.save_messages([_message(mid=i, body=f"本文{i}") for i in range(1, 3)])
+    probes = []
+
+    def warm(deadline=None, error_out=None):
+        probes.append(1)
+        if error_out is not None:
+            error_out["sent"] = True
+            error_out["answered"] = True
+        return "plain"
+
+    gate = extract_llm_runner._MIN_CALL_S + local_llm.PROBE_TURN_MIN_S
+    assert budget_s in (gate - 1, gate + 3)
+    monkeypatch.setattr(extract_llm_runner, "_probe_format", warm)
+    monkeypatch.setattr(extract_llm_provider, "_probe_format",
+                        lambda **kw: "plain")
+    monkeypatch.setattr(extract_llm, "_probe_format",
+                        extract_llm_provider._probe_format)
+    monkeypatch.setattr(extract_llm, "llm_extract",
+                        lambda body, **_: {"summary": "ok"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract',
+                        extract_llm.llm_extract)
+    res = extract_llm.run_pending(db, limit=10, budget_s=budget_s,
+                                  workers=2)
+    assert len(probes) == warm_calls
     assert res["done"] == 2
     db.close()
 
