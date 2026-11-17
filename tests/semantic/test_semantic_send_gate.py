@@ -408,3 +408,40 @@ def test_degraded_producer_keeps_live_reply_from_mixed_history_origin(tmp_path, 
         assert json.loads(db.db.execute("SELECT payload FROM notify_outbox WHERE event_id=?", (source,)).fetchone()[0])["message_ids"] == [1,2]
     finally:
         db.close()
+
+
+def test_notice_on_summary_of_replaced_local_model_is_terminal(tmp_path, monkeypatch):
+    import semantic_transport
+    from semantic_testkit import _summary
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "Qwen3.5-9B")
+    db = _delivery_db(tmp_path, [_message()])
+    monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))
+    event = _semantic_event(db)
+    payload = json.loads(event["payload"])
+    semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
+
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
+    for in_progress, error in ((False, semantic_send_gate.StaleSend), (True, semantic_send_gate.FreezeSend)):
+        with pytest.raises(error, match="stale_generation"):
+            semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config(), in_progress)
+
+    # a rebuilt summary does not revive the old notice either
+    _summary(db)
+    with pytest.raises(semantic_send_gate.StaleSend, match="stale_generation"):
+        semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
+    db.close()
+
+
+def test_notice_on_superseded_summary_is_terminal_and_unknown_summary_stays_unverified(tmp_path, monkeypatch):
+    from semantic_testkit import _summary
+    db = _delivery_db(tmp_path, [_message()])
+    monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))
+    event = _semantic_event(db)
+    payload = json.loads(event["payload"])
+    unknown = dict(payload, summary_artifact_id=10 ** 6)
+    with pytest.raises(semantic_send_gate.DeferredSend, match="summary_unverified"):
+        semantic_send_gate.semantic_gate(db.db, event, unknown, notify_flush._config())
+    _summary(db)
+    with pytest.raises(semantic_send_gate.StaleSend, match="stale_generation"):
+        semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
+    db.close()

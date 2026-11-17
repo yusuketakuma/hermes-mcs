@@ -419,6 +419,31 @@ def current_summary(db, project_id: int, message_id: int,
     return row
 
 
+def _summary_superseded(db, project_id, message_id, summary_id, current) -> bool:
+    """Whether the summary a notice was built on can never be current again.
+
+    True when another summary is current now, or when the notice's own summary
+    exists for this message but its producer is no longer accepted (a local
+    model change). Anything else stays unverified and is retried."""
+    if type(summary_id) is not int or summary_id <= 0:
+        return False
+    if current is not None:
+        return summary_id != current["artifact_id"]
+    try:
+        row = db.execute("SELECT kind,project_id,message_id,model,meta FROM artifacts WHERE artifact_id=?",
+                         (summary_id,)).fetchone()
+        if (row is None or row["kind"] != semantic_policy.KIND_SUMMARY
+                or row["project_id"] != project_id or row["message_id"] != message_id):
+            return False
+        meta = strict_json(row["meta"])
+        if not isinstance(meta, dict):
+            return False
+        model = row["model"] if "model" in row.keys() else None
+    except (sqlite3.Error, ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
+        return False
+    return not semantic_store.producer_current(semantic_policy.KIND_SUMMARY, model, meta)
+
+
 def enforce_block_reason(db, scfg: dict, project_id) -> str | None:
     """The reason semantic content must not ride this send, or None.
 
@@ -685,6 +710,8 @@ def semantic_gate(db, ev, payload: dict, cfg: dict,
         current = current_summary(db, project_id, target, bundle, policy,
                                   fact_source=scfg.get("fact_source"))
         summary_id, summary_hash = payload.get("summary_artifact_id"), payload.get("summary_hash")
+        if _summary_superseded(db, project_id, target, summary_id, current):
+            _stale("stale_generation", in_progress)
         notice_text, notice_hash = payload.get("text"), payload.get("notice_text_hash")
         try:
             bound = (current is not None and type(summary_id) is int and summary_id > 0
