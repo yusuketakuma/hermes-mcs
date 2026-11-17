@@ -1,4 +1,4 @@
-"""Unit contract of the generation-12 allergy validator: vocabulary, stored reading, dedupe, template licensing and weakening only."""
+"""Unit contract of the generation-12 allergy validator: vocabulary, stored reading, dedupe, template licensing, the whole-body rule and weakening only."""
 import clinical_allergies as ca
 import clinical_events
 import extract_bench_assertions as scorer
@@ -81,10 +81,12 @@ def test_bad_shapes_are_dropped_and_counted_with_bounded_repair_detail():
     assert ca.validate_items("not a list", BODY) == ([], 0)
 
 
-def test_r1_allergen_and_reaction_must_be_inside_the_quote_and_the_sentence():
+def test_r1_allergen_must_be_in_the_quote_and_a_reaction_outside_its_sentence_is_only_a_candidate():
     body = "ご本人は合成薬Eにアレルギーがあります。発疹は出ていません。"
     assert ca.validate_items([_claim(evidence="アレルギーがあります")], body)[1] == 1
-    assert ca.validate_items([_claim(evidence=body, reaction="発疹")], body)[1] == 1
+    assert ca.validate_items([_claim(evidence=body, reaction="めまい")], body)[1] == 1
+    kept, dropped = ca.validate_items([_claim(evidence=body, reaction="発疹")], body)
+    assert dropped == 0 and kept[0]["unverified"] is True
     # A heading value is not an allergen.
     assert ca.validate_items([_claim(evidence="アレルギー：なし", allergen="なし", negated=True)], "アレルギー：なし")[1] == 1
 
@@ -95,11 +97,12 @@ def test_r2_a_relation_alone_needs_a_reaction_from_the_vocabulary():
              "negated": False, "certainty": "confirmed", "evidence": body}
     assert ca.validate_items([{**claim, "reaction": "落ち着"}], body)[1] == 1
     assert ca.validate_items([{**claim, "reaction": None}], body)[1] == 1
-    # The allergy kind always needs its own cue word.
+    # The allergy kind needs its own cue word to be confirmed; with a reaction in the sentence it stays a candidate.
     rash = "ご本人は合成薬AWで発疹が出ました。"
     kept, dropped = ca.validate_items([{**claim, "evidence": rash, "reaction": "発疹"},
                                        {**claim, "evidence": rash, "reaction": "発疹", "kind": "allergy"}], rash)
-    assert (len(kept), dropped) == (1, 1) and kept[0]["kind"] == "adverse_reaction"
+    assert dropped == 0 and [(item["kind"], item.get("unverified")) for item in kept] == [
+        ("adverse_reaction", None), ("allergy", True)]
 
 
 def test_cue_spans_skip_words_that_name_no_allergy():
@@ -138,13 +141,14 @@ def test_the_allergen_must_fill_the_slot_as_one_word():
         assert kept[0]["unverified"] is True, allergen
 
 
-def test_a_null_allergen_needs_an_exact_none_form_with_nothing_limiting_it():
+def test_a_null_allergen_needs_an_exact_unscoped_none_form_with_nothing_else_in_the_body():
     def null(body):
         claim = _claim(allergen=None, negated=True, evidence=body.split("。")[0])
         kept, dropped = ca.validate_items([claim], body)
         return "dropped" if dropped else ("unverified" if kept[0].get("unverified") else "confirmed")
-    assert null("ご本人の食物アレルギーはなしです。") == "confirmed"
-    assert null("ご本人の食物アレルギーはなし。ただし卵は未確認です。") == "unverified"
+    assert null("ご本人のアレルギーはなしです。") == "confirmed"
+    assert null("ご本人の食物アレルギーはなしです。") == "unverified"
+    assert null("ご本人のアレルギーはなし。ただし卵は未確認です。") == "unverified"
     assert null("ご本人は卵以外のアレルギーはありません。") == "dropped"
 
 
@@ -214,10 +218,16 @@ def test_allergen_candidates_for_the_gate():
     assert len(ca.allergen_candidates(long_body)) == 21
 
 
-def test_r8_an_allergen_written_too_often_to_read_stays_open():
-    body = "ご本人は合成薬Eにアレルギーがあります。" + "合成薬Eの在庫を確認しました。" * 70
-    kept, _ = ca.validate_items([_claim(evidence="ご本人は合成薬Eにアレルギーがあります。")], body)
+def test_every_other_unit_of_the_body_must_be_recognised():
+    own = "ご本人は合成薬Eにアレルギーがあります。"
+    for rest, confirmed in (("", True), ("よろしくお願いします。", True), ("ご本人は卵アレルギーです。", True),
+                            ("\n副作用歴：合成薬Fで眠気", True), ("\n【アレルギー】", True),
+                            ("合成薬Eの在庫を確認しました。", False), ("ご本人は元気です。", False),
+                            ("ご本人は合成薬Eにアレルギーはありません。", False), ("ご本人はアレルギーはありません。", False),
+                            ("\n\n誤解でした。", False), ("\n※長女のことです", False)):
+        kept, _ = ca.validate_items([_claim(evidence=own)], own + rest)
+        assert (kept[0].get("unverified") is not True) is confirmed, rest
+    # A recognised unit about another allergen does not open a claim, but any affirmative unit opens a negation.
+    negated = "ご本人は合成薬Eにアレルギーはありません。"
+    kept, _ = ca.validate_items([_claim(evidence=negated, negated=True)], negated + "ご本人は卵アレルギーです。")
     assert kept[0]["unverified"] is True
-    short = "ご本人は合成薬Eにアレルギーがあります。" + "合成薬Eの在庫を確認しました。" * 3
-    kept, _ = ca.validate_items([_claim(evidence="ご本人は合成薬Eにアレルギーがあります。")], short)
-    assert "unverified" not in kept[0]
