@@ -318,7 +318,13 @@ gh secret set OPENAI_API_KEY --repo $R
 - Actions event policy（14520）で起動イベントを絞っている場合は、`schedule`（`agent-review-fix.yml` と `agent-control.yml` の `merge-ready`）と
   `issue_comment`（`agent-review.yml` の `/claude-review`）を許可します（`workflow_dispatch` は許可済み）。許可が無いと、これらは起動しません。
   `agent-review.yml` の自動の起動には `workflow_run` も要ります（`agent-control.yml` がすでに使っています）。
-- 判定の変数は次の2段階で設定します。`REVIEW_ACTORS` が空なら何も数えず、すべての PR が不合格です。
+- GitHub は 2026-12-02 から、公開リポジトリの `pull_request_target` で起動するワークフローを既定で止めます。
+  このため Settings → Actions → Policies に、Actions event policy（`allow-pull-request-target-for-control-workflows`）を1つ作成済みです。
+  対象は `agent-control.yml` と `labeler.yml` の2本、許可イベントは `pull_request_target`・`workflow_run`・`issues` です。
+- この policy が無いと、2本が起動時に失敗（startup failure）します。push 直後の `merge-gate` の「実行待ち」表示、担当ラベルの整理、
+  PR ラベルの自動付与が止まります。CI 完了後の `merge-gate` の判定は止まりません。
+- `pull_request_target` を使うワークフローを増やすとき、または `agent-control.yml` の起動イベントを増やすときは、この policy も合わせて更新します。
+- 判定の変数は次の2段階で設定します。`REVIEW_ACTORS` が空なら何も数えず、すべての PR が不合格です。<|end_message|><|message_model|>exec<|content_invoke_tool_json|>{
   - つなぎの間: `REVIEW_ACTORS` を `claude[bot]` にし、`DOTS_ACTOR` は設定しません。マーカーを数えます。
     Claude は COMMENT か REQUEST_CHANGES しか付けられないので、合格には Dots のマーカーが要ります。
   - Dots の専用ログインを作ったあと: ログインには write 権限だけを付け、admin にはしません（迂回できないようにするため）。
