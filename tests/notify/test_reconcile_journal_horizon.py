@@ -599,3 +599,27 @@ def test_reconcile_rerun_promotes_a_group_whose_surface_became_usable(led):
     assert third["parts_held"] == again["parts_held"]
     assert third["parts_unresolvable"] == again["parts_unresolvable"]
     assert led.db.execute("SELECT COUNT(*) FROM notify_outbox WHERE kind='update_notice'").fetchone()[0] == 1
+
+
+def test_beyond_horizon_part_keeps_recover_from_reissuing_the_whole_spec(world):
+    world.seed()
+    world.dispatch()
+    render = _deliver_card_only(world)
+    _restore_from(world, backup_names.JOURNAL_HORIZON_MAX_S + 86400)
+    notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW)
+    parts = _parts(world, render["delivery_id"])
+    assert parts["body:0001"]["error_code"] == notify_reconcile.BEYOND_HORIZON
+    other = next(pid for pid, row in parts.items() if pid not in ("body:0001", "card"))
+    with world.led.db:     # another part of the same render is still pending
+        world.led.db.execute("UPDATE notification_render_parts SET state='pending',error_code=NULL "
+                             "WHERE delivery_id=? AND part_id=?", (render["delivery_id"], other))
+    root = notify_spool.data_root(world.led)
+    spec = Path(notify_spool.notify_dirs(root)["discord_render"]) / (render["delivery_id"] + ".json")
+    spec.unlink(missing_ok=True)
+    # the compacted journal cannot show the marked part never ran: a replay would resend it
+    assert notify_spool.recover(world.led, CFG, {})["republished"] == 0
+    assert not spec.exists()
+    with world.led.db:
+        world.led.db.execute("UPDATE notification_render_parts SET error_code='synthetic' "
+                             "WHERE delivery_id=? AND part_id='body:0001'", (render["delivery_id"],))
+    assert notify_spool.recover(world.led, CFG, {})["republished"] == 1

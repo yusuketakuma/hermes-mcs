@@ -623,16 +623,11 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
     history drains, trickle seeding, reconcile and self profile."""
     # cmd ingest first so requests are due THIS run; discovery and
     # trickle seeding only enqueue — the drains below execute them.
-    job_ops.drain_commands(ledger, result)
-    _require_closed_transaction(ledger, result)
     try:
-        # interactive-notification command channel: plugin receipts
-        # and card actions apply mid-tick, not just via the watcher
         import notify_spool
-        import notify_cmds
         notify_spool.ensure_dirs(os.path.join(HOME, "data"))
-        # a DB restore holds send grants until the journal-vs-DB
-        # reconcile lands — run it before draining cmd_int traffic
+        # a DB restore holds send grants until the journal-vs-DB reconcile
+        # lands — run it before any command (a never-started approval) applies
         if notify_spool.restore_pending(
                 os.path.join(HOME, "data")) is not None:
             import notify_reconcile
@@ -640,6 +635,17 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
                 ledger, cfg)
             result["restore_reconcile"] = rep["counts"]
             _require_closed_transaction(ledger, result)
+    except TickTransactionOpen:
+        raise
+    except Exception as e:
+        result["errors"].append(f"restore_reconcile:{type(e).__name__}")
+    _require_closed_transaction(ledger, result)
+    job_ops.drain_commands(ledger, result)
+    _require_closed_transaction(ledger, result)
+    try:
+        # interactive-notification command channel: plugin receipts
+        # and card actions apply mid-tick, not just via the watcher
+        import notify_cmds
         notify_cmds.drain_int_commands(
             ledger, result, cfg, os.path.join(HOME, "data"),
             deadline=deadline)

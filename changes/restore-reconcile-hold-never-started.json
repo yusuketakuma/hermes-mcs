@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "復元の照合が終わるまで、未送信を確定する承認を適用しない",
+  "summary": "DB復元の印が残っている間は、「送信を始めた記録がない」を根拠に未送信と確定する承認を保留し、復元の照合後に処理します。復元前の古い journal が欠けた部品を、再送で二重に投稿し得る経路も塞ぎます。",
+  "upgrade": "追加操作は不要です。復元後は照合が終わるまで該当の承認が待機し、印が消えると次の周期で適用されます。Hermes plugin と通知 worker の更新は gateway の再起動後に反映されます。",
+  "details": [
+    "通常の周期で、コマンド処理より先に復元の照合を行う。照合が失敗しても、該当の承認は印が残る限り待機する。",
+    "復元が保持期間外だった部品は、spool の再出力（recover・公開）の対象から外す。他の証拠の承認（api_rejected・remote_absent）は保留しない。"
+  ],
+  "refs": [
+    "mcs/ingest/job_ops.py",
+    "mcs/ingest/run_check.py",
+    "mcs/notify/notify_spool.py"
+  ]
+}
