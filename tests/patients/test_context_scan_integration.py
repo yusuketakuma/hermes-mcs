@@ -495,8 +495,31 @@ def test_generation_reason_is_rolled_back_with_the_skipped_patient(runtime, monk
     assert 'generation_reason' not in result and 'unverified_records' not in result
 
 
-def test_more_patients_than_the_budget_with_nothing_due_back_off(runtime, monkeypatch):
-    """Nine patients, none due: the pass says so with its own reason and the pacing waits a minute."""
+def test_a_full_rotation_with_nothing_due_backs_off(runtime, monkeypatch):
+    """Every patient checked, none due: the pass says so with its own reason and the pacing waits a minute."""
+    import cloud_backlog
+    led, _, _ = runtime
+    for pid in range(1, 4):
+        seed(led, mid=pid, pid=pid)
+    original = patient_context_refresh_readiness._pending
+
+    def pending(*args, **kwargs):
+        snapshot, progress, due = original(*args, **kwargs)
+        snapshot['unfinished'] = False
+        return snapshot, progress, dict.fromkeys(due, False)
+
+    monkeypatch.setattr(patient_context_refresh_readiness, '_pending', pending)
+    monkeypatch.setattr(patient_context_refresh_readiness, '_observe_readiness',
+                        lambda *a, **k: (True, None, None))
+    result = step(runtime)
+    assert (result['status'], result['reason']) == ('complete', refresh.NOTHING_DUE_REASON), result
+    assert result['scanned'] == 3 and result['covered'] and not result['waiting']
+    assert cloud_backlog._context_retry_delay(result) == 60
+    assert cloud_backlog._context_pass_observation(result)['reason'] == refresh.NOTHING_DUE_REASON
+
+
+def test_a_partial_slice_with_nothing_due_does_not_back_off(runtime, monkeypatch):
+    """Nine patients, 8 checked, none due: unvisited patients may be due, so the next slice is not delayed."""
     import cloud_backlog
     led, _, _ = runtime
     for pid in range(1, 10):
@@ -512,7 +535,7 @@ def test_more_patients_than_the_budget_with_nothing_due_back_off(runtime, monkey
     monkeypatch.setattr(patient_context_refresh_readiness, '_observe_readiness',
                         lambda *a, **k: (True, None, None))
     result = step(runtime)
-    assert (result['status'], result['reason']) == ('deferred', refresh.NOTHING_DUE_REASON), result
+    assert (result['status'], result['reason']) == ('deferred', 'patient_context_scan_incomplete'), result
     assert result['scanned'] == 8 and not result['covered'] and not result['waiting']
-    assert cloud_backlog._context_retry_delay(result) == 60
-    assert cloud_backlog._context_pass_observation(result)['reason'] == refresh.NOTHING_DUE_REASON
+    assert cloud_backlog._context_retry_delay(result) == 5
+

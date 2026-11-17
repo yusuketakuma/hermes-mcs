@@ -900,15 +900,16 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 # Every patient belongs to the other worker role. A pass that ended on its
                 # budget first reports an incomplete scan, which keeps the caller's pacing.
                 return {"status": "deferred", "done": 0, "reason": "patient_context_other_role", **stats}
-            # A pass that checked patients, with nothing due or waiting and no interruption, ended
-            # on its candidate budget: nothing to do, not an unfinished scan, so callers back off.
-            idle = scanned and not scan_interrupts and not waiting and not covered
+            # A pass that covered every patient with nothing due or waiting and no interruption is a
+            # full rotation with nothing to do, so callers back off. A partial slice never does: the
+            # patients it did not reach may be due.
+            idle = scanned and covered and not scan_interrupts and not waiting
             reason = ("patient_context_scan_incomplete" if skipped and scan_interrupts
                       else "patient_context_patient_invalid" if skipped
                       else "patient_context_waiting" if waiting
                       else NOTHING_DUE_REASON if idle else "patient_context_scan_incomplete")
             return {"status": "deferred" if waiting or not covered else "complete", "done": 0,
-                    **({"reason": reason} if waiting or not covered else {}), **stats}
+                    **({"reason": reason} if waiting or not covered or idle else {}), **stats}
         snapshot, progress, frozen_ver = best[lane]
         source_keys = snapshot.get('source_scope')
         generation_plan = snapshot.pop('_generation_plan', None) if lane == 'A' else None
