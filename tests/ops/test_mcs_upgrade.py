@@ -1615,3 +1615,20 @@ def test_plan_exposes_reinstall_recovery_repair(updater, monkeypatch, tmp_path, 
     report = updater.plan("v1.2.0")
     assert report["route"] == "reinstall"
     assert report["reinstall_requires_recovery_repair"] is repair
+
+
+@pytest.mark.parametrize('report, code', [
+    ({'route': 'apply', 'blockers': []}, 0),
+    ({'route': 'noop', 'blockers': ['synthetic_interrupted']}, 1),
+    ({'route': 'blocked', 'blockers': []}, 1),
+])
+def test_installed_plan_exit_code_reports_blockers(tmp_path, monkeypatch, capfd, report, code):
+    """IA-126: plan through the installed updater exits 1 when it would not proceed."""
+    launcher = _launcher()
+    updater = tmp_path / 'mcs' / 'ops' / 'mcs_update.py'
+    updater.parent.mkdir(parents=True)
+    updater.write_text('# synthetic\n')
+    monkeypatch.setattr(launcher, '_update_plan', lambda *a, **k: report)
+    args = type('Args', (), {'cmd': 'plan'})()
+    assert launcher._installed_update(args, str(tmp_path.resolve()), 'v1.2.0') == code
+    assert json.loads(capfd.readouterr().out) == report
