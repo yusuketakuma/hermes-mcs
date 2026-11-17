@@ -111,9 +111,11 @@ def extract(pages):
                 if ambiguous_columns:
                     category, section_status = "other", "needs_review"
             labels = list(_PUMP_LABEL.finditer(line))
-            for label in labels:
+            for position, label in enumerate(labels):
                 field = _PUMP_FIELD[label[0]]
-                raw = line[label.end():].strip().lstrip("：:").strip()
+                # Stop at the next label so a repeated-label line stays linear, not quadratic, in copied text.
+                stop = labels[position + 1].start() if position + 1 < len(labels) else len(line)
+                raw = line[label.end():stop].strip().lstrip("：:").strip()
                 quantity = _QUANTITIES[field].fullmatch(raw) if len(labels) == 1 else None
                 # A page-level pump heading permits labels on following lines; it never supplies their values.
                 literal = quantity is not None and pump_context
