@@ -7,7 +7,8 @@ from types import MappingProxyType
 
 import bounded_http
 from cloud_client import CloudClient, CloudError, MAX_TOKENS, SYSTEM  # noqa: F401
-from mcs_util import payload_hash
+from llm_retry import retry_after
+from mcs_util import payload_hash, strict_json
 
 AnthropicError = CloudError
 MODEL = "claude-haiku-5-5"
@@ -26,6 +27,17 @@ PRICES_20261026 = MappingProxyType({"input": "0.1", "output": "0.5", "long_input
     "long_output": "2.5", "cache_write_5m_multiplier": "1.25",
     "cache_write_1h_multiplier": "2", "cache_read_multiplier": "0.1"})
 PRICES = PRICES_20261026
+# 429 body error.details.error_code values that mean a spend limit, not a pause.
+SPEND_LIMIT_ERROR_CODES = frozenset({"enforced_spend_limit_reached"})
+
+
+def _spend_limit_429(raw):
+    """True only for a bounded, well-formed 429 body naming a spend-limit code."""
+    try:
+        details = strict_json(raw.decode("utf-8"))["error"]["details"]
+        return details["error_code"] in SPEND_LIMIT_ERROR_CODES
+    except (AttributeError, KeyError, TypeError, ValueError, RecursionError, OverflowError):
+        return False
 
 
 # Usage metadata known not to change the price at its listed values; any other
@@ -188,6 +200,15 @@ class AnthropicClient(CloudClient):
             ENDPOINT, method, body, timeout, api_key=self.api_key,
             deadline=deadline, allowed_endpoints=(ENDPOINT,), auth="anthropic",
             max_bytes=max_bytes)
+
+    def response_error(self, status, raw, headers=None):
+        kind, retryable, meta = super().response_error(status, raw, headers)
+        if status != 429:
+            return kind, retryable, meta
+        if isinstance(raw, bytes) and len(raw) <= bounded_http.MAX_RESPONSE_BYTES and _spend_limit_429(raw):
+            return "payment_required", False, meta
+        # A 429 without Retry-After is not a short pause: a retry only burns reserved budget.
+        return kind, retryable and retry_after(headers or {}) is not None, meta
 
     def body(self, prompt, max_tokens, cache_prefix):
         content = prompt

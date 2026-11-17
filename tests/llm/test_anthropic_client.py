@@ -33,7 +33,7 @@ def test_success_hash_covers_returned_text_not_raw_response():
     recorded = []
     provider = a.AnthropicClient('synthetic', post_fn=lambda *args: (200, {}, raw))
     result = provider.complete('synthetic', deadline=time.monotonic() + 10,
-                               after_result=lambda _reservation, meta, **_answer: recorded.append(meta))
+                               after_result=lambda _reservation, meta, **_answer: recorded.append(meta), reserve_fn=lambda *args: None)
     assert result['text'] == answer
     assert recorded[0]['answer_text_sha256_v1'] == hashlib.sha256(answer.encode('utf-8')).hexdigest()
     assert recorded[0]['answer_finish_reason_v1'] == 'stop'
@@ -57,7 +57,7 @@ def test_success_with_non_strict_json_is_never_accepted(kind):
     provider = a.AnthropicClient("synthetic", post_fn=lambda *args: (calls.append(True) or 200, {}, raw))
     with pytest.raises(a.AnthropicError, match="protocol_error"):
         provider.complete("synthetic", deadline=time.monotonic() + 10,
-                          after_result=lambda _reservation, meta, **_answer: recorded.append(meta))
+                          after_result=lambda _reservation, meta, **_answer: recorded.append(meta), reserve_fn=lambda *args: None)
     assert len(calls) == len(recorded) == 1
     assert recorded[0]["http_class"] == "http_200" and recorded[0]["usage"] is None
 
@@ -70,7 +70,7 @@ def test_proven_unsent_timeout_is_recorded_once_as_not_sent():
     provider = a.AnthropicClient("synthetic", post_fn=post)
     with pytest.raises(a.AnthropicError, match="budget_exceeded"):
         provider.complete("synthetic", deadline=time.monotonic() + 10,
-                          after_result=lambda _reservation, meta, **_answer: recorded.append(meta))
+                          after_result=lambda _reservation, meta, **_answer: recorded.append(meta), reserve_fn=lambda *args: None)
     assert len(calls) == len(recorded) == 1
     assert recorded[0]["http_class"] == "not_sent" and recorded[0]["usage"] is None
 
@@ -106,7 +106,7 @@ def test_only_end_turn_is_accepted_but_usage_is_reported(stop):
         200, {}, json.dumps(_reply(stop_reason=stop)).encode()))
     with pytest.raises(a.AnthropicError, match="contract_error"):
         client.complete("synthetic", deadline=time.monotonic() + 10,
-                        after_result=lambda r, meta, **_answer: results.append(meta))
+                        after_result=lambda r, meta, **_answer: results.append(meta), reserve_fn=lambda *args: None)
     assert len(results) == 1 and results[0]["usage"]["input_tokens"] == 10
 
 
@@ -115,13 +115,13 @@ def test_a_max_tokens_stop_is_a_paid_length_answer_not_a_failure():
     client = a.AnthropicClient("synthetic", post_fn=lambda *args: (
         200, {}, json.dumps(_reply(stop_reason="max_tokens")).encode()))
     result = client.complete("synthetic", deadline=time.monotonic() + 10,
-                             after_result=lambda r, meta, **_answer: results.append(meta))
+                             after_result=lambda r, meta, **_answer: results.append(meta), reserve_fn=lambda *args: None)
     assert result["finish_reason"] == "length" and result["status"] == 200
     assert results[0]["error_kind"] is None and results[0]["usage"]["output_tokens"] == 5
     client = a.AnthropicClient("synthetic", post_fn=lambda *args: (
         200, {}, json.dumps(_reply(stop_reason="max_tokens", content=[])).encode()))
     with pytest.raises(a.AnthropicError, match="contract_error"):
-        client.complete("synthetic", deadline=time.monotonic() + 10)
+        client.complete("synthetic", deadline=time.monotonic() + 10, reserve_fn=lambda *args: None)
 
 
 @pytest.mark.parametrize("types", [("thinking",), ("redacted_thinking",),
@@ -225,7 +225,7 @@ def test_empty_or_unverified_responses_do_not_gain_the_paid_length_contract(stop
     client = a.AnthropicClient("synthetic", post_fn=lambda *args: (200, {}, json.dumps(reply).encode()))
     with pytest.raises(a.AnthropicError, match=kind):
         client.complete("synthetic", deadline=time.monotonic() + 10,
-                        after_result=lambda reservation, meta, **_answer: results.append(meta))
+                        after_result=lambda reservation, meta, **_answer: results.append(meta), reserve_fn=lambda *args: None)
     assert len(results) == 1 and results[0]["error_kind"] == kind
 
 
@@ -249,7 +249,7 @@ def test_malformed_thinking_cannot_become_a_length_replan(block):
     client = a.AnthropicClient("synthetic", post_fn=post)
     with pytest.raises(a.AnthropicError, match="protocol_error"):
         client.complete("synthetic", deadline=time.monotonic() + 10,
-                        after_result=lambda reservation, meta, **_answer: results.append(meta))
+                        after_result=lambda reservation, meta, **_answer: results.append(meta), reserve_fn=lambda *args: None)
     assert len(calls) == len(results) == 1 and results[0]["error_kind"] == "protocol_error"
 
 
@@ -257,14 +257,14 @@ def test_a_cache_prefix_becomes_the_first_cached_text_block():
     seen = []
     client = a.AnthropicClient("synthetic", post_fn=lambda body, timeout: (
         seen.append(body) or 200, {}, json.dumps(_reply()).encode()))
-    client.complete("HEAD\n\nbody", deadline=time.monotonic() + 10, cache_prefix="HEAD\n\n")
+    client.complete("HEAD\n\nbody", deadline=time.monotonic() + 10, cache_prefix="HEAD\n\n", reserve_fn=lambda *args: None)
     assert seen[0]["messages"] == [{"role": "user", "content": [
         {"type": "text", "text": "HEAD\n\n", "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": "body"}]}]
-    client.complete("HEAD", deadline=time.monotonic() + 10, cache_prefix="HEAD")
+    client.complete("HEAD", deadline=time.monotonic() + 10, cache_prefix="HEAD", reserve_fn=lambda *args: None)
     assert len(seen[1]["messages"][0]["content"]) == 1   # never an empty text block
     with pytest.raises(ValueError, match="cache_prefix_invalid"):
-        client.complete("body", deadline=time.monotonic() + 10, cache_prefix="HEAD")
+        client.complete("body", deadline=time.monotonic() + 10, cache_prefix="HEAD", reserve_fn=lambda *args: None)
 
 
 @pytest.mark.parametrize("usage", [None, {}, {"input_tokens": True, "output_tokens": 1},
@@ -274,7 +274,7 @@ def test_unknown_usage_is_never_a_zero_cost_success(usage):
     client = a.AnthropicClient("synthetic", post_fn=lambda *args: (
         200, {}, json.dumps(_reply(usage=usage)).encode()))
     with pytest.raises(a.AnthropicError, match="pricing_unverified"):
-        client.complete("synthetic", deadline=time.monotonic() + 10)
+        client.complete("synthetic", deadline=time.monotonic() + 10, reserve_fn=lambda *args: None)
 
 
 def test_second_guard_rejection_never_dispatches_and_settles_the_reservation_as_unsent():
@@ -302,7 +302,7 @@ def test_each_retry_reserves_and_accounts_http_failures(monkeypatch):
     def post(*args):
         calls.append(1)
         if len(calls) == 1:
-            return 429, {}, b"private response must not appear"   # an HTTP status is a definite outcome
+            return 429, {"Retry-After": "0"}, b"private response must not appear"   # an HTTP status is a definite outcome
         return 200, {}, json.dumps(_reply()).encode()
 
     def reserve(*args):
@@ -379,7 +379,7 @@ def test_cloud_retry_classes(monkeypatch, status, kind, retries):
     client = a.AnthropicClient("synthetic", post_fn=lambda *args: (
         calls.append(1) or status, {"Retry-After": "0"}, b"private error body"))
     with pytest.raises(a.AnthropicError, match=kind):
-        client.complete("synthetic", deadline=time.monotonic() + 10)
+        client.complete("synthetic", deadline=time.monotonic() + 10, reserve_fn=lambda *args: None)
     assert len(calls) == retries
 
 
@@ -390,7 +390,7 @@ def test_anthropic_quota_shaped_429_keeps_existing_rate_limit_behavior(monkeypat
     provider = a.AnthropicClient("synthetic", post_fn=lambda *args: (
         calls.append(True) or 429, {"Retry-After": "0"}, body))
     with pytest.raises(a.AnthropicError, match="rate_limited"):
-        provider.complete("synthetic", deadline=time.monotonic() + 10)
+        provider.complete("synthetic", deadline=time.monotonic() + 10, reserve_fn=lambda *args: None)
     assert len(calls) == 3
 
 
@@ -402,7 +402,7 @@ def test_request_id_has_only_the_bounded_provider_contract(request_id, expected)
     client = a.AnthropicClient("synthetic", post_fn=lambda *args: (
         200, {"request-id": request_id}, json.dumps(_reply()).encode()))
     client.complete("synthetic", deadline=time.monotonic() + 10,
-                    after_result=lambda reservation, metadata, **_answer: observed.append(metadata))
+                    after_result=lambda reservation, metadata, **_answer: observed.append(metadata), reserve_fn=lambda *args: None)
     assert observed[0]["request_id"] == expected
 
 
@@ -412,7 +412,7 @@ def test_only_known_unpriced_usage_metadata_is_accepted():
              "output_tokens_details": {"thinking_tokens": 2}, "speed": "standard"}
     client = a.AnthropicClient("synthetic", post_fn=lambda *args: (
         200, {}, json.dumps(_reply(usage=usage)).encode()))
-    assert client.complete("synthetic", deadline=time.monotonic() + 10)["usage"]["input_tokens"] == 10
+    assert client.complete("synthetic", deadline=time.monotonic() + 10, reserve_fn=lambda *args: None)["usage"]["input_tokens"] == 10
     for extra in ({"speed": "fast"}, {"speed": None}, {"speed": True}, {"speed": "future"},
                   {"service_tier": "priority"}, {"inference_geo": "us"}, {"new_charge_usd": "10"},
                   {"service_tier": {"tier": "standard"}}, {"inference_geo": ["global"]}, {"service_tier": True},
@@ -421,7 +421,7 @@ def test_only_known_unpriced_usage_metadata_is_accepted():
         client = a.AnthropicClient("synthetic", post_fn=lambda *args, e=extra: (
             200, {}, json.dumps(_reply(usage={"input_tokens": 1, "output_tokens": 1, **e})).encode()))
         with pytest.raises(a.AnthropicError, match="pricing_unverified"):
-            client.complete("synthetic", deadline=time.monotonic() + 10)
+            client.complete("synthetic", deadline=time.monotonic() + 10, reserve_fn=lambda *args: None)
 
 
 @pytest.mark.parametrize("speed,accepted", [("standard", True), ("fast", False), (None, False)])
@@ -452,7 +452,7 @@ def test_a_dated_model_id_is_not_assumed_to_share_the_price():
     client = a.AnthropicClient("synthetic", post_fn=lambda *args: (
         200, {}, json.dumps(_reply(model=a.MODEL + "-20261001")).encode()))
     with pytest.raises(a.AnthropicError, match="model_mismatch"):
-        client.complete("synthetic", deadline=time.monotonic() + 10)
+        client.complete("synthetic", deadline=time.monotonic() + 10, reserve_fn=lambda *args: None)
 
 
 def test_retry_after_alone_paces_retries(monkeypatch):
@@ -460,7 +460,7 @@ def test_retry_after_alone_paces_retries(monkeypatch):
     monkeypatch.setattr(a.time, "sleep", slept.append)
     client = a.AnthropicClient("synthetic", post_fn=lambda *args: (429, {"Retry-After": "2"}, b""))
     with pytest.raises(a.AnthropicError, match="rate_limited"):
-        client.complete("synthetic", deadline=time.monotonic() + 60)
+        client.complete("synthetic", deadline=time.monotonic() + 60, reserve_fn=lambda *args: None)
     assert slept == [2, 2]
 
 
@@ -504,7 +504,7 @@ def test_retry_wait_follows_settlement_and_preserves_send_guards(monkeypatch, ou
         assert len(reservations) == len(calls) == len(results) == 1
         assert results[0][1]["http_class"] == "http_429"
         events.append("wait")
-        assert delay == (10 if outcome == "deadline" else 2)
+        assert outcome != "deadline" and delay == 2   # a wait past the deadline fails without sleeping
         if outcome == "wait_failed":
             raise RuntimeError("synthetic_wait_failed")
         now[0] += delay
@@ -640,7 +640,7 @@ def test_a_validated_answer_arriving_at_the_deadline_is_kept(monkeypatch):
     def post(*args):
         now[0] = 11.0          # paid and validated just past the HTTP deadline
         return 200, {}, json.dumps(_reply()).encode()
-    result = a.AnthropicClient("synthetic", post_fn=post).complete("synthetic", deadline=10.0)
+    result = a.AnthropicClient("synthetic", post_fn=post).complete("synthetic", deadline=10.0, reserve_fn=lambda *args: None)
     assert result["status"] == 200
 
 
@@ -704,3 +704,48 @@ def test_presend_expiry_after_sent_retry_is_not_free_defer(monkeypatch, phase):
                           after_result=lambda r, meta, **_answer: results.append((r, meta)))
     assert not isinstance(caught.value, cloud_client.CloudNotSent)
     assert [meta["http_class"] for _, meta in results] == ["http_429", "not_sent"]
+
+
+def _client_429(headers, body=b"{}"):
+    calls = []
+    client = a.AnthropicClient("synthetic", post_fn=lambda *args: calls.append(1) or (429, headers, body))
+    return client, calls
+
+
+def test_a_429_without_retry_after_is_not_retried(monkeypatch):
+    monkeypatch.setattr(a.time, "sleep", lambda delay: pytest.fail("no wait without Retry-After"))
+    client, calls = _client_429({})
+    with pytest.raises(a.AnthropicError, match="rate_limited"):
+        client.complete("synthetic", deadline=time.monotonic() + 60, reserve_fn=lambda *args: None)
+    assert len(calls) == 1
+
+
+def test_a_spend_limit_429_is_a_terminal_payment_stop(monkeypatch):
+    monkeypatch.setattr(a.time, "sleep", lambda delay: pytest.fail("a spend limit is not waited on"))
+    body = json.dumps({"type": "error", "error": {"type": "rate_limit_error",
+                       "details": {"error_code": "enforced_spend_limit_reached"}}}).encode()
+    client, calls = _client_429({"Retry-After": "5"}, body)
+    with pytest.raises(a.AnthropicError, match="payment_required") as caught:
+        client.complete("synthetic", deadline=time.monotonic() + 60, reserve_fn=lambda *args: None)
+    assert len(calls) == 1 and caught.value.retryable is False
+
+
+@pytest.mark.parametrize("raw", [b"", b"not json", b"[]", b'{"error": []}', b'{"error": {"details": 1}}',
+                                 b'{"error": {"details": {"error_code": ["x"]}}}'])
+def test_a_malformed_429_body_never_claims_a_spend_limit(raw):
+    assert a.AnthropicClient("synthetic").response_error(429, raw, {"Retry-After": "1"}) == (
+        "rate_limited", True, {})
+
+
+def test_a_retry_after_past_the_remaining_time_fails_without_holding_the_slot(monkeypatch):
+    monkeypatch.setattr(a.time, "sleep", lambda delay: pytest.fail("must not sleep past the unit"))
+    client, calls = _client_429({"Retry-After": "600"})
+    with pytest.raises(a.AnthropicError, match="rate_limited"):
+        client.complete("synthetic", deadline=time.monotonic() + 30, reserve_fn=lambda *args: None)
+    assert len(calls) == 1
+
+
+def test_complete_requires_a_reserve_function():
+    with pytest.raises(TypeError):
+        a.AnthropicClient("synthetic", post_fn=lambda *args: (200, {}, b"{}")).complete(
+            "synthetic", deadline=time.monotonic() + 10)
