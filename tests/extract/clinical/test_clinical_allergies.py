@@ -235,3 +235,34 @@ def test_every_line_break_and_space_is_handled_and_long_runs_stay_linear():
                 kept, dropped = ca.validate_items([_claim(evidence=evidence)], body)
                 assert all(item["unverified"] for item in kept)
     assert time.perf_counter() - started < 10.0
+
+
+def _without(key, **changes):
+    claim = _claim(**changes)
+    del claim[key]
+    return claim
+
+
+def test_a_missing_optional_key_reads_as_none_and_keeps_the_claim():
+    # reaction and evidence are optional: missing is the same as None, never an exception.
+    assert ca.validate_items([_without("reaction")], BODY) == ca.validate_items([_claim(reaction=None)], BODY)
+    assert ca.validate_items([_without("evidence")], BODY) == ca.validate_items([_claim(evidence=None)], BODY)
+    assert ca.validate_items([_without("reaction")], BODY)[0] == [_kept(evidence="ご本人は合成薬Eにアレルギーがあります。")]
+
+
+def test_a_missing_allergen_is_a_none_claim_like_a_null_allergen():
+    for evidence in (BODY, None, "どこにもない引用"):
+        assert (ca.validate_items([_without("allergen", evidence=evidence)], BODY)
+                == ca.validate_items([_claim(allergen=None, evidence=evidence)], BODY)), evidence
+    kept, dropped = ca.validate_items([_without("allergen")], BODY)
+    assert dropped == 0 and kept[0]["allergen"] is None
+
+
+def test_one_malformed_item_never_stops_the_rest_of_the_post():
+    drops = {}
+    items = [None, "合成薬E", 1, [], _without("allergen"), _without("reaction"), _without("evidence"),
+             _without("kind"), _claim(allergen="合成薬E", reaction="発疹")]
+    kept, dropped = ca.validate_items(items, BODY, drops)
+    assert dropped == 5 and drops["reasons"]
+    # R10: the copies without a reaction merge into the one that names 発疹.
+    assert sorted((k["allergen"] or "", k["reaction"] or "") for k in kept) == [("", ""), ("合成薬E", "発疹")]

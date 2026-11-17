@@ -175,11 +175,14 @@ def resolve(body, evidence, allergen) -> Resolution:
     return _locate(_Body(body), evidence, allergen)
 
 
+_OPTIONAL_KEYS = ("allergen", "reaction", "evidence")
+
+
 def _shape(item):
     return (isinstance(item, dict) and item.get("kind") in KINDS and item.get("subject") in SUBJECTS
             and item.get("status") in STATUSES and type(item.get("negated")) is bool
             and item.get("certainty") in CERTAINTIES
-            and all(item.get(key) is None or isinstance(item[key], str) for key in ("allergen", "reaction", "evidence")))
+            and all(item.get(key) is None or isinstance(item[key], str) for key in _OPTIONAL_KEYS))
 
 
 def _key(item):
@@ -218,6 +221,8 @@ def validate_items(items, body, drops=None, *, ctx=False) -> tuple[list, int]:
         if view is None or not _shape(item):
             res = Resolution(drop="shape")
         else:
+            # A missing allergen, reaction or evidence reads as None (allergen None is a "none" claim).
+            item = {**item, **{key: item.get(key) for key in _OPTIONAL_KEYS}}
             where = (item["evidence"], item["allergen"])
             res = located[where] = located[where] if where in located else _locate(view, *where)
         if res.drop is not None:
