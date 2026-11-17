@@ -516,6 +516,10 @@ FAMILY_HEADING_NAMES_SOMEONE_ELSE = [
     # 延命は adds a topic); 長男は山田さんのご意向を尊重 is the son's stance, but the patient's
     # wish it names would read as the family's, so unspecified is right.
     "家族の希望：長男は山田さんのご意向を尊重", "家族の意向：長男は延命は望まない",
+    # A proxy marker: the son voices someone else's stance, one per marker.
+    "家族の意向：長男は代理で在宅を希望", "家族の意向：長男は代弁で在宅を希望", "家族の意向：長男は代わりに在宅を希望",
+    "家族の意向：長男は代りに在宅を希望",
+    "家族の意向：長男は代筆で在宅を希望", "家族の意向：長男は代行で施設入所を了承", "希望：長男は代理で在宅を希望",
 ]
 
 
@@ -528,6 +532,12 @@ def test_a_family_heading_that_names_someone_else_is_unspecified(line):
     "家族の意向：長男は在宅を希望", "家族の意向：長女さんは在宅を希望", "家族の意向：■長女は在宅を希望",
     "家族の希望：家族は同意", "家族の意向：妻は反対", "家族の意向：孫は面会を希望",
     "家族の意向：夫は延命を望まない", "家族の希望：ご家族は施設入所を希望",
+    # The stance is the son's own when no proxy marker names someone else's.
+    "家族の意向：長男は代替施設を希望",
+    # A sibling without the honorific お and a spouse or daughter-in-law are family-side kin,
+    # not an alias of the patient (お兄さん is one, so it stays unspecified).
+    "家族の意向：兄さんは在宅を希望", "家族の意向：姉さんは在宅を希望",
+    "家族の意向：配偶者は在宅を希望", "家族の希望：お嫁さんは在宅を希望",
 ])
 def test_a_family_heading_held_by_family_side_kin_is_family(line):
     assert _line_subjects(line) == ["family"]
@@ -579,6 +589,17 @@ def test_a_long_value_is_judged_in_linear_time(label, value):
     started = time.perf_counter()
     assert heading_subject(label, value) == "unspecified"
     assert time.perf_counter() - started < 2.0
+
+
+@pytest.mark.parametrize(("label", "value", "subject"), [
+    # Trailing spacing is not part of the fact.
+    ("アレルギー", "妻は卵アレルギー 　", "family"),
+    # The closed preference shapes, one each.
+    ("希望", "妻は特になし", "family"), ("希望", "妻は自宅へ退院を希望", "family"),
+    ("方針", "医師は在宅移行を予定", "other"),
+])
+def test_a_closed_shape_detail_keeps_its_holder(label, value, subject):
+    assert heading_subject(label, value) == subject
 
 
 def test_annotate_reads_the_heading_from_the_first_evidence_line_only():

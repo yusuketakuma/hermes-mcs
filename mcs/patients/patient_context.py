@@ -396,7 +396,10 @@ _NOT_A_THING = (rf"{clinical_scope.FAMILY_PERSON}|{clinical_scope.OTHER_PERSON}|
 # known history (既知・既往), or another determiner (当該・該当). 当院・本日・前日・上肢
 # name a thing and stay.
 _POINTER = r"[当本該前上下左右既先件例以](?:[記述項出掲欄回件例上下知往該当]|(?![一-鿿]))"
-_STANCE = r"希望|望|意向|拒否|反対|賛成|了承|同意|提案|推奨|指示|予定"
+# A stance word, or a proxy marker that makes the stance someone else's (代理・代弁・代り・
+# 代筆・代行: the son voices the patient's wish); the object of a stance holds neither.
+# 代わり never fits the object (わ ends it).
+_STANCE = r"希望|望|意向|拒否|反対|賛成|了承|同意|提案|推奨|指示|予定|代理|代弁|代り|代筆|代行"
 
 
 def _thing(excluded):
@@ -421,7 +424,7 @@ def _thing(excluded):
 
 _THING = _thing(_NOT_A_THING)
 # What a stance or a proposal is about may join nouns with の・で・に・へ (自宅での看取り),
-# but holds no second stance (了承在宅を希望).
+# but holds no second stance (了承在宅を希望) and no proxy (代理で在宅を希望).
 _OBJECT = _thing(f"{_NOT_A_THING}|{_STANCE}")
 _OBJECT = rf"{_OBJECT}(?:(?:での|への|の|で|に|へ){_OBJECT}){{0,2}}"
 _ALLERGY_SYMPTOM = (r"発疹|皮疹|薬疹|蕁麻疹|じんましん|湿疹|かぶれ|発赤|かゆみ|痒み|口がかゆくなる|かゆくなる"
@@ -462,9 +465,9 @@ def heading_subject(label, value) -> str:
     heading = _SUBJECT_HEADINGS.get(label, "unspecified")
     if heading == "family":
         # Only a family-side kin word alone at the head, holding a wish of the closed shape.
-        alone = person and person.end() == person.end("family") + 1
-        return "family" if holder == "family" and alone and not _WRITER_RELATIVE_KIN.search(
-            person["family"]) else "unspecified"
+        kin = person["family"] if holder == "family" else None
+        alone = kin is not None and value[person.end("family"):person.end()] == "は"
+        return "family" if alone and not _WRITER_RELATIVE_KIN.search(kin) else "unspecified"
     if heading == "patient":
         # A person heading the patient's own heading withdraws the assertion, never relabels it.
         return "unspecified" if person else heading
