@@ -84,6 +84,8 @@ VERDICTS = ("APPROVED", "CHANGES_REQUESTED")
 REVIEWER_LOGIN = "claude[bot]"
 GATE_AUTHOR = "github-actions[bot]"
 # Until Dots has its own login it reviews from the owner's account and writes this as a comment's first line.
+# Written by agent-review.yml (GITHUB_TOKEN) before Claude starts, so a run that posts nothing is not retried.
+_REVIEW_STARTED = re.compile(r"<!-- claude-review:started ([0-9a-f]{40}) -->")
 _DOTS_MARK = re.compile(r"<!-- dots-review verdict=(approved|changes_requested) head=([0-9a-f]{40}) -->")
 _LINKED_ISSUE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)", re.I)
 
@@ -379,8 +381,8 @@ def review_request_refusal(pr, reviews, comments, gate, actors, dots_actor, owne
                            owner_request=False):
     """Why the cloud Claude reviewer may not review the current head now, or None.
 
-    Automatically once per head: never after a verdict on it or Claude's own review of it.
-    The owner's explicit request may review a head again.
+    Automatically once per head: never after a verdict on it, Claude's own review of it, or a
+    started review of it (the workflows' marker). The owner's explicit request may review a head again.
     """
     if not automation_enabled:
         return "自動化の停止中"
@@ -394,8 +396,11 @@ def review_request_refusal(pr, reviews, comments, gate, actors, dots_actor, owne
         return None
     if review_verdict(pr, reviews, comments, actors, dots_actor, owner)["state"]:
         return "現在の head にレビューの判定あり"
-    if any(_login(r) == REVIEWER_LOGIN and r.get("commit_id") == pr["head"]["sha"] for r in reviews):
+    head = pr["head"]["sha"]
+    if any(_login(r) == REVIEWER_LOGIN and r.get("commit_id") == head for r in reviews):
         return "Claude がこの head をレビュー済み"
+    if any(head in _REVIEW_STARTED.findall(c.get("body") or "") for c in comments if _login(c) == GATE_AUTHOR):
+        return "この head のレビューは開始済み"
     return None
 
 

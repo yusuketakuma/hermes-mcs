@@ -93,7 +93,9 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: write  # the review (Claude App token) and the started marker (GITHUB_TOKEN)
+      issues: read
+      statuses: read
       id-token: write  # the OIDC exchange for the Claude App token, so the review is claude[bot]'s
     steps:
       # The default branch only: a PR's CLAUDE.md or .claude/ settings must never reach this run.
@@ -132,6 +134,9 @@ jobs:
             echo "::notice::not reviewed: $(jq -r '.reason' <<< "$plan") (head $(jq -r .sha <<< "$plan"))"
             echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
+          # Marker first: a run that ends without a review (turns, refusal) is not started again for this head.
+          gh pr comment "$PR" --body "Claude が head ${SHA:0:7} のレビューを始めました。
+          <!-- claude-review:started $SHA -->"
           # The diff of exactly this head (merge base to SHA), so the review's commit_id is the head it read.
           mkdir -p /tmp/pr-review
           gh api -H "Accept: application/vnd.github.diff" \
@@ -141,8 +146,8 @@ jobs:
         uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # The workflow_run actor may be the bot that started the upstream run (main-sync, dependabot).
-          allowed_bots: "github-actions[bot],dependabot[bot]"
+          # The workflow_run actor may be the bot that started the upstream run (main-sync, dependabot, an agent's push).
+          allowed_bots: "github-actions[bot],dependabot[bot],claude[bot],copilot"
           # Narrow the Claude App token: reviews only (the action's default also grants contents and issues write).
           additional_permissions: |
             contents: read
