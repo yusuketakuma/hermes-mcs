@@ -189,7 +189,11 @@ def _integrity_summary(notes: list) -> dict:
             slot_wait_ms += note["slot_wait_ms"]
             slot_wait_unconfirmed += int(note.get("slot_wait_confirmed") == 0)
         for key, value in (note.get("usage") or {}).items():
-            if key in ("prompt_tokens", "completion_tokens", "total_tokens") \
+            # known top-level counters of each wire format (one cloud unit binds one
+            # provider); nested details stay out and a missing total is never synthesized
+            if key in ("prompt_tokens", "completion_tokens", "total_tokens",
+                       "input_tokens", "output_tokens",
+                       "cache_creation_input_tokens", "cache_read_input_tokens") \
                     and type(value) is int and value >= 0:
                 usage[key] = usage.get(key, 0) + value
         measured = note.get("timings") or {}
