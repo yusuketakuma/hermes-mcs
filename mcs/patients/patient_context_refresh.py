@@ -1214,7 +1214,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         deferred_reason = str(exc) or "patient_context_waiting"
         if (generation_claim is not None and not generation_decision['resume'] and not generation_quality
                 and not generation_uncertain and not generation_contacted and deferred_reason in (
-                    'patient_context_capacity_or_deadline', 'patient_context_admission_deferred', 'patient_context_turn_busy', 'patient_context_local_capacity')
+                    'patient_context_capacity_or_deadline', 'patient_context_admission_deferred', 'patient_context_turn_busy', 'patient_context_endpoint_unsent', 'patient_context_local_capacity')
                 and (provider is None or not provider.possibly_sent)):
             return_generation('unsent', proven_unsent=True)
         discard_if_changed()
