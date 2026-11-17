@@ -33,6 +33,7 @@ MAX_LINE = 4096
 _FILE_RE = re.compile(r"access-(\d{4})-(\d{2})\.jsonl")
 _TEXT_LIMIT = 200
 _CODE_RE = re.compile(r"[a-z][a-z0-9_.]{0,63}")
+_HASH_RE = re.compile(r"[0-9a-f]{64}")
 PATIENT_LIMIT = 200  # ids an answer returned; more are counted, not listed
 FIELDS = ("v", "at", "ts", "via", "actor", "channel", "op", "kind",
           "project_id", "patients", "patients_more", "outcome", "query", "prev")
@@ -104,18 +105,41 @@ def _files(dir_fd):
     return sorted(name for name in os.listdir(dir_fd) if _FILE_RE.fullmatch(name))
 
 
+def _read_at(fd, size, offset) -> bytes:
+    """Read exactly ``size`` bytes; a short read must not hash or cut a partial line."""
+    data = b""
+    while len(data) < size:
+        chunk = os.pread(fd, size - len(data), offset + len(data))
+        if not chunk:
+            raise AccessLogError("access_log_corrupt")
+        data += chunk
+    return data
+
+
 def _last_line(dir_fd, name):
+    """The newest line of a newline-terminated file, checked to be a whole record."""
     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dir_fd)
     try:
         _check_private(fd, is_dir=False)
         size = os.fstat(fd).st_size
         start = max(0, size - 2 * MAX_LINE)
-        os.lseek(fd, start, os.SEEK_SET)
-        tail = os.read(fd, size - start)
+        tail = _read_at(fd, size - start, start)
     finally:
         os.close(fd)
-    lines = [line for line in tail.split(b"\n") if line]
-    return lines[-1] if lines else None
+    if not tail:
+        return None
+    body = tail[:-1]
+    boundary = body.rfind(b"\n")
+    line = body[boundary + 1:]
+    if boundary < 0 and start:
+        raise AccessLogError("access_log_corrupt")  # longer than any record we write
+    try:
+        entry = json.loads(line)
+    except ValueError:
+        entry = None
+    if not isinstance(entry, dict) or set(entry) != set(FIELDS):
+        raise AccessLogError("access_log_corrupt")
+    return line
 
 
 def _drop_partial_tail(fd) -> int:
@@ -125,10 +149,10 @@ def _drop_partial_tail(fd) -> int:
     next record must chain to the last complete line, not to the fragment.
     """
     size = os.fstat(fd).st_size
-    if not size or os.pread(fd, 1, size - 1) == b"\n":
+    if not size or _read_at(fd, 1, size - 1) == b"\n":
         return size
     start = max(0, size - 2 * MAX_LINE)
-    end = os.pread(fd, size - start, start).rfind(b"\n")
+    end = _read_at(fd, size - start, start).rfind(b"\n")
     if end < 0 and start:
         raise AccessLogError("access_log_corrupt")
     keep = start + end + 1 if end >= 0 else 0
@@ -333,6 +357,13 @@ def verify(data_dir, *, checkpoint=None) -> dict:
     kept elsewhere, so the result returns both for the reviewer to record;
     ``checkpoint=(records, head)`` from an earlier run must still be in the chain.
     """
+    if checkpoint is not None:
+        if (not isinstance(checkpoint, (tuple, list)) or len(checkpoint) != 2
+                or type(checkpoint[0]) is not int or checkpoint[0] < 0
+                or not isinstance(checkpoint[1], str) or not _HASH_RE.fullmatch(checkpoint[1])):
+            raise ValueError("checkpoint_invalid")
+        if checkpoint[0] == 0 and checkpoint[1] != GENESIS:
+            return {"ok": False, "files": 0, "records": 0, "checkpoint": "changed"}
     dir_fd = _open_dir(data_dir, create=False)
     count, files, expected = 0, 0, GENESIS
     try:

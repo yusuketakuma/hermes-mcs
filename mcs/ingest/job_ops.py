@@ -812,7 +812,9 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
                     notify_max_age_s=max_age_s, notify_all_new=True)
             else:
                 new_ids = ledger.save_messages(hist, project_id=pid,
-                                               semantic=semantic)
+                                               semantic=semantic,
+                                               notify_max_age_s=notify_max_age_s,
+                                               notify_late=True)
         except Exception as exc:
             import semantic_intake_hold
             if not semantic_intake_hold.report_write_failure(
@@ -868,7 +870,8 @@ def seed_reconcile(ledger):
 
 
 def run_reconcile_jobs(adapter, ledger, result, deadline,
-                       semantic: bool = False, ack_exclusions=None):
+                       semantic: bool = False, ack_exclusions=None,
+                       notify_max_age_s: float | None = None):
     """Re-walk floored patients' history in small page windows, with NO
     since cutoff — the only path where an edit/deletion/tombstone on an
     old post is observed (F04). Re-saving lets the upsert detect the
@@ -920,7 +923,9 @@ def run_reconcile_jobs(adapter, ledger, result, deadline,
                                     result, ledger=ledger)
         try:
             new_ids = ledger.save_messages(batch.messages, project_id=pid,
-                                           semantic=semantic)
+                                           semantic=semantic,
+                                           notify_max_age_s=notify_max_age_s,
+                                           notify_late=True)
         except Exception as exc:
             import semantic_intake_hold
             if not semantic_intake_hold.report_write_failure(
