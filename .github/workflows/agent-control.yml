@@ -1,4 +1,6 @@
 name: Agent control
+# The head SHA in the run name lets issue-status.yml refresh only the issues of that PR.
+run-name: "Agent control ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || format('#{0}', github.event.issue.number) }}"
 
 # merge-gate: 必須ジョブが現在の head で実際に実行・成功したかを commit status に出す。
 # 担当ロック: 1 Issue に 担当:* は1件だけ。試行回数: AIブランチの CI 失敗をIssueへ通算する。
