@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "古いバックアップへの復元後、Slackのファイルまとめが二重に投稿され得る問題を修正",
+  "summary": "journalの保持期間より古いバックアップへ復元したあと、未反映のまま残ったSlackのファイルまとめを「未送信（no_journal_started）」として解消できなくなりました。journalの記録が圧縮で失われている場合があり、そのまま再発行するとファイルまとめが同じスレッドに二重に投稿され得たためです。journalに頼らない確認（remote_absent など）での解消は従来どおり使えます。upgradeに必要な操作はありません。復元の照合（reconcile）が走るときに適用されます。",
+  "upgrade": "追加操作は不要です。保持期間外の復元で保留になっているSlackのファイルまとめは、Slack側の実在確認（remote_absent など）で解消してください。",
+  "details": [
+    "保持期間外の復元で、復元点以前に作られた最新描画のpendingなSlack file_groupに restore_beyond_journal_horizon を記録し、no_journal_started を journal_cannot_vouch で拒否する。",
+    "状態はpendingのまま変えず、未送信とは断定しない。"
+  ],
+  "refs": ["mcs/notify/notify_reconcile.py", "tests/notify/test_reconcile_journal_horizon.py"]
+}

@@ -599,3 +599,34 @@ def test_reconcile_rerun_promotes_a_group_whose_surface_became_usable(led):
     assert third["parts_held"] == again["parts_held"]
     assert third["parts_unresolvable"] == again["parts_unresolvable"]
     assert led.db.execute("SELECT COUNT(*) FROM notify_outbox WHERE kind='update_notice'").fetchone()[0] == 1
+
+
+def test_slack_unstarted_file_group_beyond_horizon_refuses_a_journal_only_proof(led, tmp_path, monkeypatch):
+    """#136: a pending Slack file_group of a pre-restore render must not be
+    resolved as unsent from journal rows that may be compacted away."""
+    from test_file_group_dependency_refusal import _refused
+    from adapters.common import journal
+    slack, render, _spec, _stage, group = _refused(led, tmp_path, monkeypatch)
+    aid = envelopes.part_attempt_id(render["delivery_id"], group["part_id"])
+    journal.compact(slack.dirs["state"], active="", file_ok=lambda rows: True,
+                    prunable=lambda candidate, rows: candidate == aid)
+    with led.db:
+        led.db.execute("UPDATE notification_render_parts SET state='pending',error_code=NULL,"
+                       "attempt_id=NULL WHERE delivery_id=? AND part_id=?",
+                       (render["delivery_id"], group["part_id"]))
+    _restore_from(None, backup_names.JOURNAL_HORIZON_MAX_S + 86400,
+                  data=Path(notify_spool.data_root(led)))
+    notify_reconcile.reconcile_after_restore(led, SLACK, now=NOW)
+    row = _rows(led, render["delivery_id"])[group["part_id"]]
+    assert (row["state"], row["attempt_id"], row["error_code"]) == ("pending", None, _HOLD)
+    plan = notify_recovery.card_part_resolve_plan(led, render["delivery_id"], group["part_id"])
+
+    def resolve(proof, n):
+        req = dict(plan, command_id=str(uuid.UUID(int=7000 + n)), actor="op-user",
+                   human_confirmed=True, reason="合成の復元後確認", result="mark_not_sent",
+                   evidence=dict(method="synthetic", ref="thread-check", proof=proof,
+                                 worker_stopped=True))
+        return notify_recovery.apply_card_part_resolve(led, req, SLACK, now=NOW + n)
+    receipt = resolve("no_journal_started", 1)
+    assert (receipt["outcome"], receipt["error"]) == ("rejected", "journal_cannot_vouch")
+    assert _rows(led, render["delivery_id"])[group["part_id"]]["state"] == "pending"
