@@ -467,7 +467,7 @@ def _write_circuit_state(ledger, state: dict, now: float, *, kind=_CIRCUIT_ARTIF
         kind,
         json.dumps(payload, ensure_ascii=False, separators=(",", ":"),
                    allow_nan=False),
-        model="jev" if kind == _CIRCUIT_ARTIFACT_KIND else "claude-haiku-5-5",
+        model="jev" if kind == _CIRCUIT_ARTIFACT_KIND else "",  # circuit row is provider-neutral
         meta={"state": "open" if payload["open_until"] > now else "closed"},
     )
 
@@ -522,7 +522,12 @@ def _record_circuit_result(ledger, error, now=None, *, kind=_CIRCUIT_ARTIFACT_KI
         _write_circuit_state(ledger, updated, current, kind=kind)
         return True
     failure_class = _circuit_failure_class(error)
-    if kind == "cloud_circuit" and getattr(error, "kind", "") == "contract_error":
+    if (kind == "cloud_circuit" and getattr(error, "kind", "") == "contract_error"
+            # A refusal belongs to its unit's input, not to the provider's health.
+            and getattr(error, "detail", "") != "refusal"
+            # Only a 200 contract violation is provider-health evidence; a
+            # non-retryable 4xx (e.g. input too large) is the unit's own request.
+            and _circuit_status(error) == 200):
         failure_class = "contract_error"
     if error is None:
         if kind == "cloud_circuit" and not reset and _circuit_is_open(state, current):
@@ -536,8 +541,6 @@ def _record_circuit_result(ledger, error, now=None, *, kind=_CIRCUIT_ARTIFACT_KI
     if failure_class is None or _circuit_is_open(state, current):
         return _circuit_is_open(state, current)
     failures = state["consecutive_failures"]
-    if kind == "cloud_circuit" and state["failure_class"] != failure_class:
-        failures = 0
     if state["open_until"] > 0 and current >= state["open_until"]:
         failures = 0
     failures = min(_CIRCUIT_FAILURE_LIMIT, failures + 1)

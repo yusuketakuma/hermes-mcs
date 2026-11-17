@@ -1,0 +1,19 @@
+{
+  "category": "fixed",
+  "title": "クラウドAIの拒否応答と利用上限の課金記録・再送判定を修正",
+  "summary": "Anthropicのクラウド送信で、HTTP 200の拒否応答が検証済みの使用量とともに結果行へ保存されるようになり、単位固有の失敗がクラウド全体の一時停止（回路）を開かなくなりました。Anthropicの利用上限（HTTP 400/429）は確認済みの支払い停止として記録され、同じ要求の再送は人の承認がある場合だけに限定されます。",
+  "upgrade": "追加操作は不要です。利用上限で止まったクラウド送信を再開する場合は、従来どおり人の承認による resume 操作が必要です。",
+  "details": [
+    "HTTP 200で返る拒否（refusal）は課金対象の使用量を保持したまま contract_error として記録し、プロバイダ障害ではなくその要求固有の失敗として扱います。回路を開く根拠にはしません。",
+    "入力過大など再試行できない4xxの contract_error も要求固有の失敗であり、200の契約違反だけが回路の障害証拠になります。",
+    "Anthropicの支出上限（429の enforced_spend_limit_reached）とAPI利用上限（400の規定メッセージ）は、形式を厳密に確認できた場合だけ payment_required として記録し、予約の最大費用を保持します。形の合わない応答は保留（hold）とし、行を書き換えません。",
+    "確認済みの拒否・利用上限は再送ガードとローカル代替ガードで「確定した拒否」として認識し、曖昧な送信は引き続きブロックします。"
+  ],
+  "refs": [
+    "mcs/llm/providers/anthropic_client.py",
+    "mcs/llm/transport/cloud_client.py",
+    "mcs/llm/cloud_usage_accounting.py",
+    "mcs/llm/cloud_policy.py",
+    "mcs/semantic/semantic_runtime.py"
+  ]
+}

@@ -51,10 +51,15 @@ def test_context_child_finishes_real_guarded_pipeline(runtime, real_cloud, monke
     monkeypatch.setattr(resident, "time", fake_time)
     monkeypatch.setattr(cloud_backlog, "time", fake_time)
     initial = writer_lock.updater_state()
-    # Normal lane 3 does not call the cloud engine or wait for its requests.
+    # Lane 3 serves only the patients the cloud does not: it never sends. With a usable key the
+    # patient is the cloud's, and the lane skips it; without one, the lane does its local work.
     monkeypatch.setattr(resident.extract_llm_call_context, "_SLOT_OVERRIDE", local_llm.LANES[3])
-    assert resident._background_context_refresh(ledger, initial) == {"status": "off", "done": 0}
-    assert not posts
+    monkeypatch.setattr(resident, "HOME", str(tmp_path))
+    lane = resident._background_context_refresh(ledger, initial)
+    assert lane["status"] != "off" and not posts
+    if cloud_ready:
+        assert lane["reason"] == "patient_context_other_role" and lane["wait_other_role"] == 1
+        assert not local_calls
     cloud_backlog._context_worker(ledger, initial, 0)
     assert document(ledger) is not None
     assert bool(posts) is cloud_ready and bool(local_calls) is not cloud_ready
@@ -72,13 +77,42 @@ def test_context_child_does_not_enter_after_source_generation_changes(runtime, r
     assert not posts and not document(ledger)
 
 
-def test_context_retry_delay_backs_off_only_for_selection_busy():
+def test_context_retry_delay_backs_off_for_selection_busy_and_cloud_defers():
     assert cloud_backlog._context_retry_delay({"done": 1}) == 1
     assert cloud_backlog._context_retry_delay(
         {"done": 0, "reason": "patient_context_selection_busy"}) == 20
     assert cloud_backlog._context_retry_delay(
         {"done": 0, "reason": "patient_context_waiting"}) == 5
     assert cloud_backlog._context_retry_delay({"done": 0}) == 5
+    # A full send slot frees within seconds; a cap, a circuit or a pending result does not.
+    assert cloud_backlog._context_retry_delay(
+        {"done": 0, "reason": "patient_context_cloud_deferred:cloud_capacity"}) == 5
+    for code in ("daily_cap", "circuit_open", "env_file_unreadable", "result_pending", ""):
+        assert cloud_backlog._context_retry_delay(
+            {"done": 0, "reason": "patient_context_cloud_deferred:" + code}) == 60
+    assert cloud_backlog._context_retry_delay({"done": 0, "reason": "patient_context_cloud_deferred"}) == 60
+    assert cloud_backlog._context_retry_delay({"done": 0, "reason": "patient_context_cloud_budget"}) == 60
+    # Every patient the pass reached is served by the other worker role.
+    assert cloud_backlog._context_retry_delay({"done": 0, "reason": "patient_context_other_role"}) == 60
+    assert cloud_backlog._context_retry_delay({"done": 0, "reason": "patient_context_role_changed"}) == 5
+    assert cloud_backlog._context_retry_delay({"done": 0, "reason": "patient_context_cloud_not_sent"}) == 5
+    assert cloud_backlog._context_retry_delay({"done": 0, "reason": 7}) == 5
+    assert cloud_backlog._context_retry_delay({"done": 1, "reason": "patient_context_cloud_deferred:daily_cap"}) == 1
+
+
+@pytest.mark.parametrize("stop,expected", [
+    ("cloud_capacity", "cloud_capacity"), ("daily_cap", "daily_cap"), ("mode_off", "mode_off"),
+    ("http_5xx", "http_5xx"), ("result_missing", "result_missing"), ("local_pinned", "local_pinned"),
+    ("unknown", "unknown"), ("synthetic private text", "unclassified"), ("result_pending", "unclassified"),
+    ("a" * 81, "unclassified"), (7, "unclassified"), (["daily_cap"], "unclassified"),
+])
+def test_context_pass_reports_only_a_declared_cloud_refusal_code(stop, expected):
+    record = cloud_backlog._context_pass_observation({
+        "status": "deferred", "reason": "patient_context_cloud_deferred:" + str(stop), "cloud_refusal": stop})
+    # The reason keeps its fixed base; the stop code passes only when the classifier declares it.
+    assert record["reason"] == "patient_context_cloud_deferred" and record["cloud_refusal"] == expected
+    assert "cloud_refusal" not in cloud_backlog._context_pass_observation(
+        {"status": "deferred", "reason": "patient_context_waiting"})
 
 
 def test_context_pass_reports_only_fixed_bounded_diagnostics():
@@ -141,6 +175,7 @@ def test_context_pass_keeps_deferred_reasons_strictly_whitelisted():
 @pytest.mark.parametrize("reason", [
     "patient_context_generation_active",
     "patient_context_generation_clock_changed",
+    "patient_context_generation_unverified",
     "patient_context_generation_daily_limit",
     "patient_context_generation_interval",
     "patient_summary_quality_lock",
@@ -148,6 +183,8 @@ def test_context_pass_keeps_deferred_reasons_strictly_whitelisted():
     "patient_summary_quality_source_changed",
     "summary_quality_unknown",
     "source_quality_unknown",
+    "patient_context_role_changed",
+    "patient_context_other_role",
 ])
 def test_context_pass_reports_known_deferral_reasons(reason):
     record = cloud_backlog._context_pass_observation({"status": "deferred", "reason": reason})
@@ -181,6 +218,16 @@ def test_context_pass_reports_scan_refusal_and_bounded_scan_stats():
 def test_context_pass_rejects_arbitrary_scan_refusals(value):
     record = cloud_backlog._context_pass_observation({"status": "deferred", "scan_refusal": value})
     assert record["scan_refusal"] == "unclassified"
+
+
+def test_context_pass_reports_generation_quota_reason_and_unverified_records():
+    result = {"status": "deferred", "reason": "patient_context_waiting",
+              "generation_reason": "patient_context_generation_unverified", "unverified_records": 2}
+    record = cloud_backlog._context_pass_observation(result)
+    assert record["generation_reason"] == "patient_context_generation_unverified"
+    assert record["unverified_records"] == 2
+    unknown = cloud_backlog._context_pass_observation({"status": "deferred", "generation_reason": "synthetic-private"})
+    assert unknown["generation_reason"] == "unclassified"
 
 
 def test_context_pass_omits_absent_scan_refusal():
@@ -268,6 +315,7 @@ def test_context_child_exits_before_engine_when_import_fence_is_stale(runtime, r
     ('wait_no_eligible_sources', 8), ('wait_no_due_lane', 16),
     ('wait_generation_quota', 8), ('wait_readiness_unverified', 16),
     ('wait_dependency_incomplete', 16), ('skip_patient_invalid', 8),
+    ('wait_patient_busy', 8), ('wait_other_role', 64),
 ])
 def test_context_pass_wait_branch_counters_are_strict_and_bounded(key, limit):
     for valid in (0, limit):
@@ -345,3 +393,38 @@ def test_context_pass_patient_invalid_reason_and_skip_code_are_bounded():
     for bad in ('合成の非公開値', 'synthetic private text', 7, 'x' * 81):
         assert cloud_backlog._context_pass_observation({
             'status': 'deferred', 'skip_patient_code': bad})['skip_patient_code'] == 'unclassified'
+
+
+def test_context_child_holds_the_cloud_role_and_retries_a_failed_hold(monkeypatch, tmp_path):
+    """Local lanes see the cloud lane served only through the child's ROLE_CLOUD hold."""
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, "resolve_cloud_settings",
+                        lambda cfg: {"mode": "on", "max_concurrency": 1})
+    monkeypatch.setattr(resident, "_context_memory_available", lambda: True)
+    initial = (False, 1)
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: initial)
+    monkeypatch.setattr(cloud_backlog, "_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cloud_backlog, "time", SimpleNamespace(monotonic=lambda: 0.0, sleep=lambda seconds: None))
+    holds = []
+    real_hold = cloud_backlog.hold_role
+
+    def hold(root, name):
+        assert name == cloud_backlog.ROLE_CLOUD
+        holds.append(name)
+        return None if len(holds) == 1 else real_hold(root, name)   # the first hold fails
+
+    monkeypatch.setattr(cloud_backlog, "hold_role", hold)
+    seen = []
+
+    def context_pass(ledger, state, *, cloud_worker):
+        assert cloud_worker and state == initial
+        seen.append(cloud_backlog.role_alive(tmp_path, cloud_backlog.ROLE_CLOUD))
+        return {"status": "deferred", "done": 0}
+
+    monkeypatch.setattr(resident, "_background_context_refresh", context_pass)
+    monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: len(seen) < 3)
+    cloud_backlog._context_worker(object(), initial, 0)
+    # The failed hold is retried on the next pass, and only until it is held.
+    assert seen == [False, True, True] and len(holds) == 2
+    assert cloud_backlog.role_alive(tmp_path, cloud_backlog.ROLE_CLOUD) is False   # released on exit

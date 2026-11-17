@@ -426,3 +426,70 @@ def test_wait_counter_records_generation_quota_without_inference(runtime, monkey
     result = step(runtime)
     assert result['status'] == 'deferred' and result['wait_generation_quota'] == 1
     assert result['wait_readiness_unverified'] == 0 and not calls
+
+
+def _plan_stub(monkeypatch):
+    monkeypatch.setattr(refresh, '_generation_plan', lambda *a, **k: {
+        'needed': True, 'input_key': 'a' * 64, 'catchup': False})
+
+
+def test_generation_quota_reason_and_records_reach_the_pass_result(runtime, monkeypatch):
+    led, _, calls = runtime
+    seed(led, body='', proof=False)
+    _plan_stub(monkeypatch)
+    monkeypatch.setattr(refresh.context_quota, 'inspect', lambda *a, **k: {
+        'allowed': False, 'reason': 'patient_context_generation_unverified', 'unverified_records': 3})
+    result = step(runtime)
+    assert result['wait_generation_quota'] == 1 and not calls
+    assert result['generation_reason'] == 'patient_context_generation_unverified'
+    assert result['unverified_records'] == 3
+
+
+def test_unreadable_generation_record_error_is_reported_with_its_reason(runtime, monkeypatch):
+    led, _, calls = runtime
+    seed(led, body='', proof=False)
+
+    def unreadable(*args, **kwargs):
+        raise ValueError('patient_context_generation_unverified')
+
+    monkeypatch.setattr(refresh, '_generation_plan', unreadable)
+    result = step(runtime)
+    assert result['wait_generation_quota'] == 1 and not calls
+    assert result['generation_reason'] == 'patient_context_generation_unverified'
+
+
+def test_unverified_reason_outranks_another_patients_quota_reason():
+    out = {}
+    refresh._note_generation_denial(out, {'reason': 'patient_context_generation_interval', 'unverified_records': 0})
+    refresh._note_generation_denial(out, {'reason': 'patient_context_generation_unverified', 'unverified_records': 3})
+    refresh._note_generation_denial(out, {'reason': 'patient_context_generation_interval', 'unverified_records': 9})
+    assert out == {'generation_reason': 'patient_context_generation_unverified', 'unverified_records': 3}
+    refresh._note_generation_denial(out, {'reason': 'patient_context_generation_unverified', 'unverified_records': 5})
+    assert out['unverified_records'] == 5
+    refresh._note_generation_denial(out, {'allowed': False})
+    assert out['generation_reason'] == 'patient_context_generation_unverified'
+
+
+def test_generation_reason_is_rolled_back_with_the_skipped_patient(runtime, monkeypatch):
+    led, _, calls = runtime
+    seed(led, body='', proof=False)
+    _plan_stub(monkeypatch)
+    monkeypatch.setattr(refresh.context_quota, 'inspect', lambda *a, **k: {
+        'allowed': False, 'reason': 'patient_context_generation_unverified', 'unverified_records': 3})
+
+    def broken(*args, **kwargs):
+        raise ValueError('patient_context_synthetic_unreadable')
+
+    original = patient_context_refresh_readiness._pending
+
+    def pending(*args, **kwargs):
+        snapshot, progress, due = original(*args, **kwargs)
+        snapshot['unfinished'] = True
+        # A stays due so the quota denies it; B stays due so the pass goes on to readiness.
+        return snapshot, progress, {'A': True, 'B': True, 'C': False}
+
+    monkeypatch.setattr(patient_context_refresh_readiness, '_pending', pending)
+    monkeypatch.setattr(patient_context_refresh_readiness, '_observe_readiness', broken)
+    result = step(runtime)
+    assert result['wait_generation_quota'] == 0 and not calls
+    assert 'generation_reason' not in result and 'unverified_records' not in result

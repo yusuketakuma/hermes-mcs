@@ -846,9 +846,8 @@ def apply_control_tx(db, req, now):
     """Write global control/circuit and its receipt in the caller's existing transaction."""
     try:
         cfg = mcs_util._load_config(str(Path(mcs_util.HOME) / "config.json"))
-    except mcs_util.ProviderSettingsUnreadable:
-        return "cloud_config_invalid", {}
-    except (OSError, ValueError, UnicodeError, RecursionError):
+    except (OSError, ValueError, UnicodeError, RecursionError, mcs_util.ProviderSettingsUnreadable):
+        # stop must stay recordable when settings cannot be read; resume needs a valid config
         if req["cmd"] == "ops.cloud_resume":
             return "cloud_config_invalid", {}
         cfg = None
@@ -873,11 +872,11 @@ def apply_control_tx(db, req, now):
         state = {"consecutive_failures": 0, "open_until": 0.0,
                  "failure_class": None, "updated_at": now}
         db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
-            ("cloud_circuit", json.dumps(state), policy.MODEL, '{"state":"closed"}', now))
+            ("cloud_circuit", json.dumps(state), "", '{"state":"closed"}', now))
     content = "paused" if req["cmd"] == "ops.cloud_stop" else "running"
     meta = {"command_id": req["command_id"], "actor": req["actor"], "reason": req["reason"]}
     db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
-        ("cloud_control", content, policy.MODEL, json.dumps(meta, ensure_ascii=False), now))
+        ("cloud_control", content, "", json.dumps(meta, ensure_ascii=False), now))
     return None, {"reason": req["reason"], "control": content}
 
 
@@ -887,7 +886,9 @@ def command(args):
         try:
             cfg = mcs_util._load_config(str(Path(mcs_util.HOME) / "config.json")) or {}
         except mcs_util.ProviderSettingsUnreadable:
-            raise
+            if action != "stop":  # stop stays recordable without readable settings
+                raise
+            cfg = {}
         except (OSError, ValueError, TypeError, RecursionError):
             cfg = {}
         if action == "local-rebuild-plan":

@@ -77,6 +77,10 @@ from cloud_usage_accounting import (
     _is_openai_model as _is_openai_model,
     _confirmed_openai_quota as _confirmed_openai_quota,
     _confirmed_openai_rate_diagnostic as _confirmed_openai_rate_diagnostic,
+    _is_anthropic_model as _is_anthropic_model,
+    _confirmed_anthropic_spend_limit as _confirmed_anthropic_spend_limit,
+    _confirmed_anthropic_usage_limit as _confirmed_anthropic_usage_limit,
+    _confirmed_anthropic_payment as _confirmed_anthropic_payment,
     _settled as _settled,
 )
 from cloud_history_scope import (
@@ -432,9 +436,9 @@ def profile_for_settings(cfg, settings, *, route, purpose):
     if not isinstance(by_provider, dict):
         return None, ["config: cloud_llm_profiles_invalid"]
     limit = {"backlog": 8192, "patient_context": 16384, "quality_repair": 32768}[purpose]
-    if provider == "anthropic" and "anthropic" in by_provider:
-        # Opt-in purpose profiles; an unnamed purpose takes the owner's default.
-        chosen = by_provider["anthropic"]
+    if provider == "anthropic":
+        # Purpose profiles; an unset provider or purpose takes the owner's default (same layout as OpenAI).
+        chosen = by_provider.get("anthropic", {})
         if not _profile_map_valid(anthropic_client, chosen):
             return None, ["config: cloud_llm_profiles_invalid"]
         profile = chosen.get(purpose, anthropic_client.DEFAULT_PROFILES[purpose])
@@ -505,7 +509,7 @@ def selected_key_problem(root, cfg):
 REFINED_CODES = frozenset({"pricing_unverified", "window_history_unverified", "scope"})
 
 
-def refusal_code(cfg, code, *, model, root=None, settings=None):
+def refusal_code(cfg, code, *, model, root=None, settings=None, route=None, project_id=None):
     """Name a send-block code the way the stop-reason classifier tells definitive from transient.
 
     ``cfg`` is the raw configuration (an explicit ``mode`` and the facility review are read
@@ -513,6 +517,8 @@ def refusal_code(cfg, code, *, model, root=None, settings=None):
     An expired price table, an aged period, an explicit mode off and a provider the facility
     review has not approved are definitive. An unverifiable price or period history, a
     computed off (the key problem, else ``unknown``) and an unreadable review record are not.
+    With ``route`` and ``project_id``, a scope stop that a second reading finds open and in
+    scope was a key or review read that has since recovered: ``env_file_unreadable``.
     Every other code is returned as it is."""
     try:
         if code == "pricing_unverified":
@@ -527,11 +533,13 @@ def refusal_code(cfg, code, *, model, root=None, settings=None):
                 unreadable = external_transfer.status(root).get("state") == "unreadable"
                 return "transfer_review_unreadable" if unreadable else "provider_not_approved"
             block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
-            if isinstance(block, dict) and block.get("mode") == "off":
+            if isinstance(block, dict) and block.get("mode") == "off" and not cfg.get("provider_unavailable"):
                 return "mode_off"
             if resolved["mode"] == "off":
                 # computed off: a mode left out with no usable key, or a configuration error
                 return selected_key_problem(root, cfg) or "unknown"
+            if route is not None and eligible(resolved, route, project_id):
+                return "env_file_unreadable"
     except Exception:
         return {"window_history_unverified": "window_history_pruned", "scope": "unknown"}.get(code, code)
     return code
@@ -616,7 +624,7 @@ def scope_revoked(cfg, route, project_id):
     computed 'off' — mode omitted, key unreadable — proves nothing about
     an existing reservation, so unverifiable config never revokes."""
     block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
-    if not isinstance(block, dict):
+    if not isinstance(block, dict) or cfg.get("provider_unavailable"):
         return False
     c, errors = cloud_config(cfg)
     if errors:
@@ -1213,9 +1221,12 @@ def guard_local_fallback(ledger, *, route, project_id, message_id, unit_key, req
     """Prove local substitution safe without sending, reserving, or changing accounting.
 
     ``allow_supersede`` (patient context only) also passes the paid requests that
-    :func:`supersede_local_tx` would record as replaced; it still writes nothing."""
+    :func:`supersede_local_tx` would record as replaced; it still writes nothing. Returns the
+    reservation ids of those requests: empty when there is nothing left to record, as after
+    that function ran, and always empty without ``allow_supersede``."""
     if allow_supersede and route != 'patient_context':
         raise ValueError('cloud_supersede_scope_invalid')
+    targets = []
     with _accounting_snapshot(ledger.db):
         rows = _verified_request_history(ledger, route=route, project_id=project_id,
                                         message_id=message_id, unit_key=unit_key)
@@ -1224,7 +1235,8 @@ def guard_local_fallback(ledger, *, route, project_id, message_id, unit_key, req
         if rows:
             candidate, body = request_factory()
             _guard_repeated_request(ledger, candidate, current_body=body, local_fallback=True,
-                                    **({'supersede': []} if allow_supersede else {}))
+                                    **({'supersede': targets} if allow_supersede else {}))
+    return [reservation['reservation_id'] for reservation in targets]
 
 
 def supersede_local_tx(ledger, *, route, project_id, message_id, unit_key, request_factory, now=None):
@@ -1266,14 +1278,49 @@ def supersede_local_tx(ledger, *, route, project_id, message_id, unit_key, reque
         return written
 
 
-def unit_reserved(db, *, route, project_id, message_id, unit_key):
-    """True when this unit key has any reservation for the message; an unreadable one counts."""
-    return db.execute(
-        "SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND message_id IS ? AND "
-        "CASE WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
-        "WHEN json_type(meta)!='object' THEN 1 "
-        "ELSE json_extract(meta,'$.route') IS ? AND json_extract(meta,'$.unit_key') IS ? END LIMIT 1",
-        (KINDS[0], project_id, message_id, route, unit_key)).fetchone() is not None
+def _proven_unsent(ledger, row):
+    """True when a reservation row is proven to have left nothing with the provider: its one
+    result settles it as never sent and no disposition names it. Anything missing, repeated
+    or unreadable is not proof."""
+    try:
+        reservation = _receipt_meta(row['meta'])
+        maximum = _reserve_valid(reservation, row)
+        rid = reservation['reservation_id']
+        results = _matching_bound_rows(ledger, KINDS[1], rid)
+        if (len(results) != 1 or len(_matching_bound_rows(ledger, KINDS[0], rid)) != 1
+                or _matching_bound_rows(ledger, 'cloud_usage_disposition', rid)):
+            return False
+        result = _receipt_meta(results[0]['meta'])
+        _, settled = _settled(reservation, maximum, [(result, results[0])])
+        return bool(_never_sent(result, settled) and result.get('usage') is None
+                    and not result.get('disposition'))
+    except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
+        return False
+
+
+def unit_reserved(ledger, *, route, project_id, message_id, unit_key, source_sig=None, sent_only=False):
+    """True when this unit key has any reservation for the message; an unreadable one counts.
+
+    With ``source_sig`` only a reservation made for that input (its owner's source signature)
+    counts: one unit key serves every later input of the same message or patient, and a request
+    made for an earlier input can never be taken up by the current one.
+
+    With ``sent_only`` a reservation proven never sent does not count. A request is reserved
+    before the last checks ahead of its send; one they refuse is settled as ``not_sent``, costs
+    nothing and holds no answer, now or later. Every other reservation holds or may hold paid
+    work and still counts, as does one whose rows cannot prove it."""
+    with _accounting_snapshot(ledger.db):
+        rows = ledger.db.execute(
+            "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
+            "WHERE kind=? AND project_id=? AND message_id IS ? AND "
+            "CASE WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
+            "WHEN json_type(meta)!='object' THEN 1 "
+            "ELSE json_extract(meta,'$.route') IS ? AND json_extract(meta,'$.unit_key') IS ? "
+            "AND (? IS NULL OR json_extract(meta,'$.owner.source_sig') IS ?) END ORDER BY artifact_id"
+            + ("" if sent_only else " LIMIT 1"),
+            (KINDS[0], project_id, message_id, route, unit_key, source_sig, source_sig)).fetchall()
+        return any(not sent_only or not _proven_unsent(ledger, row) for row in rows)
+
 
 def usage_report(ledger, *, now=None, period="month"):
     """Aggregate JST attempts; ambiguous results retain the full reserved amount.
@@ -1369,6 +1416,15 @@ def _usage_report_snapshot(ledger, *, now=None, period="month"):
 def _circuit_result(ledger, error, *, reset=False):
     from semantic_runtime import record_circuit_result
     return record_circuit_result(ledger, error, kind="cloud_circuit", reset=reset)
+
+
+def _circuit_on_pricing_error(ledger, error, model, since):
+    """Hold the circuit for an unverifiable price or accounting; an expired price table only refuses.
+
+    ``since`` is the instant the attempt began: a price table that was not valid then (a day
+    change between the pre-check and the reservation) is a refusal, not an accounting fault."""
+    if error.kind == "pricing_unverified" and pricing_valid(since, model=model) and pricing_valid(model=model):
+        _circuit_result(ledger, error)
 
 
 def block_reason(ledger, cfg, route, project_id, *, model=None):
@@ -1709,7 +1765,7 @@ def pause_for_restore(db, restored_at, cfg, now=None) -> bool:
             and not db.execute("SELECT 1 FROM artifacts WHERE kind=? LIMIT 1", (KINDS[0],)).fetchone()):
         return False
     db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
-               ("cloud_control", "paused", MODEL,
+               ("cloud_control", "paused", "",
                 json.dumps({"reason": RESTORE_PAUSE, "restore": restore}),
                 time.time() if now is None else now))
     return True
@@ -1777,6 +1833,7 @@ def _request_identity(c, body, *, route, project_id, unit_key, message_id, owner
 def request_send_block_reason(ledger, cfg, body, *, route, project_id, unit_key,
                               message_id=None, owner=None, selection=None, input_binding=None):
     """Check the same input's prior sends before deciding a fresh send is blocked."""
+    started = time.time()
     c = _cfg(cfg)
     candidate = _request_identity(c, body, route=route, project_id=project_id, unit_key=unit_key,
         message_id=message_id, owner=owner, selection=selection, input_binding=input_binding)
@@ -1795,7 +1852,7 @@ def request_send_block_reason(ledger, cfg, body, *, route, project_id, unit_key,
     except AnthropicError as error:
         if error.kind == 'pricing_unverified' and not ledger.db.in_transaction:
             try:
-                _circuit_result(ledger, error)
+                _circuit_on_pricing_error(ledger, error, candidate['model'], started)
             except Exception:
                 # Failure to record the circuit must never turn an accounting
                 # refusal into a fresh/local input or replace its fixed category.
@@ -1826,7 +1883,7 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
         try:
             maximum = max_cost(tokens, input_bound=bound, model=model, now=now)
         except AnthropicError as error:
-            _circuit_result(ledger, error)
+            _circuit_on_pricing_error(ledger, error, model, now)
             raise
         meta.update(reservation_id=uuid.uuid4().hex,
                     price_version=_price_definition(model, now=now)["price_version"],
@@ -1863,17 +1920,21 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
         try:
             return reserve_artifact(ledger, check, write)
         except AnthropicError as error:
-            if error.kind == "pricing_unverified":
-                _circuit_result(ledger, error)
+            _circuit_on_pricing_error(ledger, error, model, now)
             raise
     return reserve
 
 
+def _never_sent(result, settled):
+    return settled and result.get('http_class') == 'not_sent'
+
+
 def _confirmed_rejection(result, settled, model):
     # A known rejection permits another attempt while retaining its reserved cost.
-    return (settled and result.get('http_class') == 'not_sent'
+    return (_never_sent(result, settled)
             or result.get('http_class') == 'http_429' and result.get('error_kind') == 'rate_limited'
-            and result.get('usage') is None or _confirmed_openai_quota(result, model))
+            and result.get('usage') is None or _confirmed_openai_quota(result, model)
+            or _confirmed_anthropic_payment(result, model))
 
 
 def _saved_answer(answer, metadata, reservation):
@@ -1985,7 +2046,17 @@ def record_result(ledger, reservation, metadata, *, answer=None):
             raise AnthropicError("pricing_unverified", "result_mismatch")
         if "openai_429_diagnostic" in metadata and not _confirmed_openai_rate_diagnostic(metadata, model):
             raise AnthropicError("pricing_unverified", "result_mismatch")
+        if "anthropic_error_code" in metadata and not _confirmed_anthropic_spend_limit(metadata, model):
+            raise AnthropicError("pricing_unverified", "result_mismatch")
+        if "anthropic_400_diagnostic" in metadata and not _confirmed_anthropic_usage_limit(metadata, model):
+            raise AnthropicError("pricing_unverified", "result_mismatch")
         usage = definition["validate_usage"](metadata["usage"]) if metadata.get("usage") is not None else None
+        if "contract_error_detail" in metadata:
+            detail = metadata["contract_error_detail"]
+            if (http_class != "http_200" or error_kind != "contract_error" or usage is None
+                    or not isinstance(detail, str) or detail not in cloud_client.CONTRACT_ERROR_DETAILS):
+                raise AnthropicError("pricing_unverified", "result_mismatch")
+            error.detail = detail
         maximum = _decimal(reservation["max_cost_usd"])
         cost = (usage_cost(usage, model=model, price_version=reservation["price_version"]) if usage is not None
                 else Decimal(0) if _unbilled(metadata.get("http_class")) else maximum)
@@ -2001,6 +2072,10 @@ def record_result(ledger, reservation, metadata, *, answer=None):
             result["openai_error_code"] = metadata["openai_error_code"]
         if "openai_429_diagnostic" in metadata:
             result["openai_429_diagnostic"] = metadata["openai_429_diagnostic"]
+        if "anthropic_error_code" in metadata:
+            result["anthropic_error_code"] = metadata["anthropic_error_code"]
+        if "anthropic_400_diagnostic" in metadata:
+            result["anthropic_400_diagnostic"] = metadata["anthropic_400_diagnostic"]
         if "answer_text_sha256_v1" in metadata:
             answer_hash = metadata["answer_text_sha256_v1"]
             if (not isinstance(answer_hash, str) or re.fullmatch(r"[0-9a-f]{64}", answer_hash) is None

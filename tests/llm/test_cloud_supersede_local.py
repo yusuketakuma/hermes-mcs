@@ -66,7 +66,7 @@ def _supersede(ledger, *, now=None, **kwargs):
 
 def _guard(ledger, *, allow=False, **kwargs):
     unit = kwargs.pop("unit", "synthetic-unit")
-    policy.guard_local_fallback(ledger, route="patient_context", project_id=1, message_id=1,
+    return policy.guard_local_fallback(ledger, route="patient_context", project_id=1, message_id=1,
         unit_key=unit, request_factory=_factory(unit=unit, **kwargs), allow_supersede=allow)
 
 
@@ -331,9 +331,24 @@ def test_default_guard_path_is_unchanged(ledger, status, error, usage, expected)
     assert [tuple(row) for row in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == before
 
 
+def test_allow_guard_names_what_is_left_to_record_until_the_supersede_ran(ledger):
+    assert _guard(ledger) == [] and _guard(ledger, allow=True) == []   # no history
+    first = _reserve(ledger)
+    _settle(ledger, first, "http_200", None, USAGE)
+    rejected = _reserve(ledger, "another synthetic prompt")
+    _settle(ledger, rejected, "http_404", "contract_error")
+    before = [tuple(row) for row in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+    # The check writes nothing and names the request a supersede would still record.
+    assert _guard(ledger, allow=True) == [first["reservation_id"]]
+    assert _guard(ledger, prompt="another synthetic prompt", allow=True) == []
+    assert [tuple(row) for row in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == before
+    assert len(_supersede(ledger)) == 1
+    assert _guard(ledger, allow=True) == [] and _guard(ledger) == []
+
+
 def test_unit_reserved_is_conservative_on_unreadable_meta(ledger):
     def reserved(unit="synthetic-unit", message_id=1, route="patient_context"):
-        return policy.unit_reserved(ledger.db, route=route, project_id=1, message_id=message_id, unit_key=unit)
+        return policy.unit_reserved(ledger, route=route, project_id=1, message_id=message_id, unit_key=unit)
     assert reserved() is False
     _reserve(ledger)
     assert reserved() is True
@@ -346,6 +361,90 @@ def test_unit_reserved_is_conservative_on_unreadable_meta(ledger):
                           "AND message_id IS NULL")
     assert reserved(message_id=None) is True and reserved(unit="synthetic-other", message_id=None) is True
     assert reserved(unit="synthetic-other") is False
+
+
+def test_unit_reserved_can_be_bound_to_the_input_the_reservation_was_made_for(ledger):
+    def reserved(signature, message_id=1):
+        return policy.unit_reserved(ledger, route="patient_context", project_id=1, message_id=message_id,
+                                    unit_key="synthetic-unit", source_sig=signature)
+    _reserve(ledger)
+    # The unit key outlives its input: only the reservation's own input counts.
+    assert reserved(OWNER["source_sig"]) is True and reserved("b" * 64) is False
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.owner') WHERE kind='cloud_usage_reserve'")
+    assert reserved(OWNER["source_sig"]) is False
+    ledger.artifact_add("cloud_usage_reserve", "{}", project_id=1, message_id=None, model="synthetic", meta={})
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET meta='{not json' WHERE kind='cloud_usage_reserve' "
+                          "AND message_id IS NULL")
+    assert reserved("b" * 64, message_id=None) is True   # an unreadable row still counts
+
+
+def _sent(ledger, unit="synthetic-unit"):
+    return policy.unit_reserved(ledger, route="patient_context", project_id=1, message_id=1,
+                                unit_key=unit, source_sig=OWNER["source_sig"], sent_only=True)
+
+
+def _any(ledger, unit="synthetic-unit"):
+    return policy.unit_reserved(ledger, route="patient_context", project_id=1, message_id=1,
+                                unit_key=unit, source_sig=OWNER["source_sig"])
+
+
+def test_request_proven_never_sent_is_left_out_only_when_asked(ledger):
+    assert _sent(ledger) is False
+    unsent = _reserve(ledger)
+    # Until its result is stored, the request may have been sent.
+    assert _sent(ledger) is True
+    _settle(ledger, unsent, "not_sent", "transport")
+    before = _financial(ledger)
+    assert _sent(ledger) is False and _any(ledger) is True
+    assert _financial(ledger) == before and _dispositions(ledger) == []
+    # One request that left is enough, whatever the rows around it say.
+    _settle(ledger, _reserve(ledger, "another synthetic prompt"), "not_sent", "transport")
+    assert _sent(ledger) is False
+    _reserve(ledger, "a third synthetic prompt")
+    assert _sent(ledger) is True
+
+
+@pytest.mark.parametrize("status,error,usage", [
+    ("http_200", None, USAGE), ("http_429", "rate_limited", None), ("http_503", "overloaded_error", None),
+    ("timeout", "timeout", None)])
+def test_request_that_reached_the_provider_or_may_have_still_counts(ledger, status, error, usage):
+    _settle(ledger, _reserve(ledger), status, error, usage)
+    assert _sent(ledger) is True
+
+
+@pytest.mark.parametrize("fault", ["disposition", "second_result", "result_unreadable", "result_unbound",
+                                   "reservation_repeated", "reservation_invalid"])
+def test_never_sent_request_counts_unless_its_rows_prove_it(ledger, fault):
+    reservation = _reserve(ledger)
+    _settle(ledger, reservation, "not_sent", "transport")
+    assert _sent(ledger) is False
+    result = "kind='cloud_usage_result'"
+    if fault == "disposition":
+        ledger.db.execute("BEGIN IMMEDIATE")
+        policy.record_disposition_tx(ledger, reservation, "discarded_workday")
+        ledger.db.commit()
+    elif fault == "second_result":
+        with ledger.db:
+            ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,model,content,meta,created_at) "
+                              f"SELECT kind,project_id,message_id,model,content,meta,created_at FROM artifacts WHERE {result}")
+    elif fault == "result_unreadable":
+        with ledger.db:
+            ledger.db.execute(f"UPDATE artifacts SET meta=meta||'x' WHERE {result}")
+    elif fault == "result_unbound":
+        with ledger.db:
+            ledger.db.execute(f"UPDATE artifacts SET meta=json_set(meta,'$.request_fp',?) WHERE {result}", ("0" * 64,))
+    elif fault == "reservation_repeated":
+        with ledger.db:
+            ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,model,content,meta,created_at) "
+                              "SELECT kind,project_id,message_id,model,content,json_set(meta,'$.unit_key','synthetic-other'),"
+                              "created_at FROM artifacts WHERE kind='cloud_usage_reserve'")
+    else:
+        with ledger.db:
+            ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.max_cost_usd','0') "
+                              "WHERE kind='cloud_usage_reserve'")
+    assert _sent(ledger) is True and _any(ledger) is True
 
 
 def test_selected_key_problem_names_the_fixed_code(tmp_path):
@@ -484,3 +583,22 @@ def test_a_write_failure_after_an_earlier_target_leaves_no_row(ledger):
     assert caught.value.detail == "disposition_conflict"
     ledger.db.commit()          # even a caller that commits anyway keeps no partial replacement
     assert [tuple(row) for row in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == before
+
+
+@pytest.mark.parametrize('status,extra', [
+    ('http_400', {'anthropic_400_diagnostic': 'usage_limit'}),
+    ('http_429', {'anthropic_error_code': 'enforced_spend_limit_reached'})])
+def test_a_verified_anthropic_payment_limit_lets_the_unit_go_local(ledger, status, extra):
+    """A strictly verified account limit is a confirmed rejection: the local
+    fallback guard passes it through the real request factory and writes nothing."""
+    reservation = _reserve(ledger)
+    _settle(ledger, reservation, status, 'payment_required', **extra)
+    assert _guard(ledger) == []
+    assert len(_financial(ledger)) == 2 and not _dispositions(ledger)
+
+
+def test_an_unmarked_anthropic_payment_receipt_still_blocks_local_fallback(ledger):
+    reservation = _reserve(ledger)
+    _settle(ledger, reservation, 'http_429', 'payment_required')
+    _refusal(lambda: _guard(ledger))
+    assert len(_financial(ledger)) == 2 and not _dispositions(ledger)
