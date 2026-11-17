@@ -29,6 +29,7 @@ MCS の医療・介護チャットを収集・解析するローカルシステ�
 
 - push・PR・merge・tag・Release 公開・配備・常駐サービスの再起動・本番DBや実データの変更は、ユーザーが明示した範囲だけ行う。
   この文書はそれらの承認にならない。worktree の作成、読取り、ローカルの検証は確認なしで進めてよい。
+  例外は1つだけ: 実装グループの作業PRは、CI が通れば担当エージェントが `group/<名前>` へマージしてよい（所有者 2026-11-17。main・release・その他のブランチへの merge は含まない。`docs/development/GITHUB_WORKFLOW.md`「実装グループ」）。
 - 収集・解析コアは標準ライブラリのみ。新しい外部依存を足さない。例外（Hermes 同梱 `discord.py` の関数内遅延 import、
   `runtime_mode=standalone` の `adapters/{slack,discord}/standalone.py` が使う `deployment/requirements-standalone.txt` の固定版 SDK、
   `adapters/lineworks/` の独自認証・Bot REST・署名Callback、adapter ごとの `asyncio` 許可範囲）の正確な許可リストは
@@ -56,7 +57,22 @@ python3 ci/mine_gates.py --check
 - `make test|lint|readme|check` も使える（uv があれば ephemeral 実行）。`integration/` も同じ runner に対象を指定する。
 - `run_tests.sh` は `MCS_TEST_PYTHON`→`$VIRTUAL_ENV`→repo 直下の `.venv` の順に Python を選ぶ。worktree には `.venv` が無いので、pytest の入った Python を `MCS_TEST_PYTHON` に指定する。
 - ユーザー指示（2026-10-31）により、失敗項目を修正して再検証が通れば、既存結果と合わせて全体を合格扱いとし、全体 suite・同一SHAの全6ジョブの再実行は必須にしない。実行済み・失敗後に再検証済み・未実行を区別し、実行していないCIを実測成功と記録しない。記録方法は `docs/development/RELEASE_NOTES.md` に従う。
-- 導入先 `~/.mcs`（`MCS_ROOT`）は稼働中の checkout で、原本DB・設定を持つ。開発・検証は git worktree で行い、そこの未commit変更を巻き込まない。
+- 作業は原則 git worktree で行う（所有者 2026-11-17）。作業（ブランチ）ごとに1つ作り、既存の checkout でブランチを切り替えない。終わったら片付ける。
+  まとまった作業は実装グループ（`group/<名前>` ブランチとその worktree、main 向けの PR 1本）にまとめ、main へのマージ回数を減らす。
+  決め方・積み方・期間と規模の上限は `docs/development/GITHUB_WORKFLOW.md`「実装グループ」に従う。
+  置き場所は Mac では `~/.mcs-wt/<名前>`。Codex・Herdr などが自動で作る worktree はその既定の場所でよいが、稼働 checkout `~/.mcs` の配下には作らない。
+  クラウドのセッション（Claude Code on the web など）も同じで、最初の clone は割り当てられたブランチのまま使い、別のブランチ・PR・比較用の版は clone の外 `../hermes-mcs-wt/<名前>` に worktree を足して扱う。
+  `main` は worktree に取り出さず、`origin/main`（別ブランチ向けの補助PRはその base のブランチ）から新しいブランチを作る。見るだけ・検証だけなら `--detach`。GitHub Actions のジョブは1ジョブ1ブランチで終了時に環境ごと消えるので、worktree は作らない。
+
+  ```bash
+  git fetch origin
+  git worktree add -b <branch> ~/.mcs-wt/<名前> origin/main   # 既存ブランチは: git worktree add ~/.mcs-wt/<名前> <branch>
+  git worktree remove ~/.mcs-wt/<名前>                          # merge 後。未commit変更があれば止まるので確かめてから
+  git worktree prune                                             # 手で消したフォルダの登録を掃除
+  # クラウドでは ~/.mcs-wt を ../hermes-mcs-wt に読み替える
+  ```
+
+- 導入先 `~/.mcs`（`MCS_ROOT`）は稼働中の checkout で、原本DB・設定を持つ。開発・検証は上記の worktree で行い、そこの未commit変更を巻き込まない。
   全体 suite は同じ Mac の稼働処理と I/O を取り合うので、同時に複数走らせない。
 - macOS の BSD `sed` は `\b` を扱わない。単語境界の置換は `perl -pi` を使う。改名後の呼出元確認は `git grep` の結果を切り詰めずに全件見る。
 - Hermes 実SDKとの統合は CI の pinned Hermes 環境で別に検証される。ローカル pytest の成功と区別する。
