@@ -52,6 +52,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           OWNER: ${{ github.repository_owner }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          ACTORS: ${{ vars.REVIEW_ACTORS }}
+          DOTS: ${{ vars.DOTS_ACTOR }}
           # Hints narrow an event run to the issues it concerns; schedule and dispatch refresh every target.
           ISSUE: ${{ github.event.issue.number }}
           REVIEW_PR: ${{ github.event.pull_request.number }}
@@ -93,13 +95,14 @@ jobs:
               gh api -X GET "repos/$GH_REPO/actions/runs" -f head_sha="$sha" -f per_page=100 --jq .workflow_runs > "$d/ci_runs.json"
               gh api "repos/$GH_REPO/commits/$sha/status" > "$d/status.json"
               gh api --paginate --slurp "repos/$GH_REPO/pulls/$pr/reviews?per_page=100" > "$d/reviews.json"
+              gh api --paginate --slurp "repos/$GH_REPO/issues/$pr/comments?per_page=100" > "$d/pr_comments.json"
               run=$(python3 ci/issue_status.py failed-ci-run --work "$work" --issue "$issue")
               if [[ -n "$run" ]]; then
                 gh api -X GET "repos/$GH_REPO/actions/runs/$run/jobs" -f per_page=100 --jq .jobs > "$d/ci_jobs.json"
               fi
             fi
             python3 ci/issue_status.py render --work "$work" --issue "$issue" --owner "$OWNER" \
-              --default-branch "$default" > "$d/plan.json"
+              --default-branch "$default" --actors "${ACTORS:-}" --dots-actor "${DOTS:-}" > "$d/plan.json"
             if [[ "$(jq -r .write "$d/plan.json")" != "true" ]]; then continue; fi
             id=$(jq -r '.comment_id // empty' "$d/plan.json")
             if [[ -n "$id" ]]; then

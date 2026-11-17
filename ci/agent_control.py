@@ -16,6 +16,10 @@ imports nothing from the application. Standard library only.
   assigned whether an agent label is the issue's only assignment
   review   which review findings on a Claude PR to send to the repair run,
            and whether they cost a new attempt
+  ready    the `merge-ready` commit status: the gate, the base and the review
+           verdict of the current head together
+  review-request  whether the cloud Claude reviewer may review a PR head now
+  labeler  whether the sender may add a 担当:* label
 
 The verdict is evidence, not trust in "CI is green": every required job must
 have run on the current head and succeeded (GitHub counts skipped and neutral
@@ -74,6 +78,13 @@ REVIEW_FINDINGS = {
 # queued = counted and dispatched, handled = a repair run took it (or refused it).
 REVIEW_MARK_AUTHOR = "github-actions[bot]"
 _REVIEW_MARK = re.compile(r"<!-- agent-review:(queued|handled) ([\d,]+) -->")
+# The review verdict ("レビュー合格"). REVIEW_ACTORS lists the logins whose formal review
+# decides, highest priority first (Dots, then claude[bot]); see review_verdict().
+VERDICTS = ("APPROVED", "CHANGES_REQUESTED")
+REVIEWER_LOGIN = "claude[bot]"
+GATE_AUTHOR = "github-actions[bot]"
+# Until Dots has its own login it reviews from the owner's account and writes this as a comment's first line.
+_DOTS_MARK = re.compile(r"<!-- dots-review verdict=(approved|changes_requested) head=([0-9a-f]{40}) -->")
 _LINKED_ISSUE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)", re.I)
 
 
@@ -287,6 +298,112 @@ def review_plan(pr, issue_labels, reviews, comments, automation_enabled, owner, 
     return {"reviews": [], "count": False, "reason": "新しい指摘なし" if not waiting else "修正の実行待ち"}
 
 
+def _login(item):
+    return (item.get("user") or {}).get("login", "")
+
+
+def review_actors(value):
+    """The REVIEW_ACTORS variable as an ordered list of exact logins."""
+    return [name.strip() for name in (value or "").split(",") if name.strip()]
+
+
+def verdict_candidates(pr, reviews, comments, actors, dots_actor, owner):
+    """Every verdict that may decide the PR, on any head: [{rank, source, state, commit, at, url}].
+
+    rank orders the sources (lower decides): the bridge marker, then REVIEW_ACTORS
+    in order. The owner (and so every seat, which reviews from the owner's account)
+    and the PR's author never count. An empty actor list counts nothing.
+    """
+    if not actors:
+        return []
+    author = _login(pr)
+    found = []
+    for rank, actor in enumerate(actors):
+        if actor in (author, owner):
+            continue
+        source = "dots" if rank == 0 else "claude" if actor == REVIEWER_LOGIN else actor
+        found += [{"rank": rank, "source": source, "state": r["state"], "commit": r.get("commit_id"),
+                   "at": r.get("submitted_at") or "", "url": r.get("html_url")}
+                  for r in reviews if r.get("state") in VERDICTS and _login(r) == actor]
+    if not dots_actor:
+        for comment in comments:
+            lines = (comment.get("body") or "").splitlines()
+            mark = _DOTS_MARK.fullmatch(lines[0]) if lines and _login(comment) == owner else None
+            if mark:
+                found.append({"rank": -1, "source": "dots・つなぎ", "state": mark.group(1).upper(),
+                              "commit": mark.group(2), "at": comment.get("created_at") or "",
+                              "url": comment.get("html_url")})
+    return found
+
+
+def review_verdict(pr, reviews, comments, actors, dots_actor, owner):
+    """The review verdict of the current head: the highest-priority source's latest verdict on it.
+
+    passed only for an approval; no verdict on the head (or no actors) fails closed.
+    """
+    head = pr["head"]["sha"]
+    on_head = [c for c in verdict_candidates(pr, reviews, comments, actors, dots_actor, owner) if c["commit"] == head]
+    if not on_head:
+        return {"passed": False, "state": None, "source": "", "commit": None, "at": "", "url": None}
+    rank = min(c["rank"] for c in on_head)
+    pick = max((c for c in on_head if c["rank"] == rank), key=lambda c: c["at"])
+    return {**pick, "passed": pick["state"] == "APPROVED"}
+
+
+def merge_ready(pr, gate, behind_by, verdict):
+    """(state, description) of `merge-ready` for the gate plan of the current head."""
+    if not same_repository(pr):
+        return "failure", "fork の PR は対象外"
+    if gate["human_reasons"]:
+        return "failure", "所有者がマージ: " + gate["human_reasons"][0]
+    if gate["state"] != "success":
+        return ("failure" if gate["state"] == "failure" else "pending"), "merge-gate: " + gate["description"]
+    if pr.get("draft"):
+        return "pending", "下書き"
+    if behind_by:
+        return "pending", f"base より {behind_by} コミット遅れ"
+    if verdict["state"] == "CHANGES_REQUESTED":
+        return "failure", f"修正依頼（{verdict['source']}）"
+    if not verdict["passed"]:
+        return "pending", "現在の head のレビュー合格待ち"
+    return "success", f"承認（{verdict['source']}）"
+
+
+def gate_state(status):
+    """The merge-gate state the workflows posted on a head (combined status API), or "" when none."""
+    return next((s.get("state", "") for s in (status or {}).get("statuses", [])
+                 if s.get("context") == "merge-gate" and (s.get("creator") or {}).get("login") == GATE_AUTHOR), "")
+
+
+def review_request_refusal(pr, reviews, comments, gate, actors, dots_actor, owner, automation_enabled,
+                           owner_request=False):
+    """Why the cloud Claude reviewer may not review the current head now, or None.
+
+    Automatically once per head: never after a verdict on it or Claude's own review of it.
+    The owner's explicit request may review a head again.
+    """
+    if not automation_enabled:
+        return "自動化の停止中"
+    if pr.get("state") != "open" or not same_repository(pr):
+        return "このリポジトリの開いた PR ではない"
+    if _login(pr) == REVIEWER_LOGIN:
+        return "Claude が作った PR"
+    if gate != "success":
+        return "merge-gate が success ではない"
+    if owner_request:
+        return None
+    if review_verdict(pr, reviews, comments, actors, dots_actor, owner)["state"]:
+        return "現在の head にレビューの判定あり"
+    if any(_login(r) == REVIEWER_LOGIN and r.get("commit_id") == pr["head"]["sha"] for r in reviews):
+        return "Claude がこの head をレビュー済み"
+    return None
+
+
+def labeler_allowed(sender, owner, dots_actor):
+    """True when `sender` may add a 担当:* label: the owner, or exactly the DOTS_ACTOR login when set."""
+    return sender == owner or (bool(dots_actor) and sender == dots_actor)
+
+
 def decide_gate(pr, check_runs, files, behind_by, automation_enabled, ci_conclusion=None):
     """The plan for one PR head: commit status, auto-merge eligibility and attempt bookkeeping."""
     head = pr["head"]["sha"]
@@ -383,6 +500,28 @@ def main(argv=None):
     review.add_argument("--owner", required=True)
     review.add_argument("--automation", default="")
     review.add_argument("--busy", action="store_true", help="a Claude writer run is queued or running")
+    ready = sub.add_parser("ready")
+    ready.add_argument("--pr", required=True)
+    ready.add_argument("--checks", required=True)
+    ready.add_argument("--files", required=True)
+    ready.add_argument("--behind-by", type=int, required=True)
+    ready.add_argument("--automation", default="")
+    request = sub.add_parser("review-request")
+    for p in (ready, request):
+        p.add_argument("--reviews", required=True, help="the PR's reviews (gh --paginate --slurp)")
+        p.add_argument("--comments", required=True, help="the PR's issue comments (gh --paginate --slurp)")
+        p.add_argument("--actors", default="", help="vars.REVIEW_ACTORS")
+        p.add_argument("--dots-actor", default="", help="vars.DOTS_ACTOR")
+        p.add_argument("--owner", required=True)
+    ready.add_argument("--current", default="{}", help="JSON {state, description} of the latest merge-ready")
+    request.add_argument("--pr", required=True)
+    request.add_argument("--status", required=True, help="the head's combined status")
+    request.add_argument("--automation", default="")
+    request.add_argument("--owner-request", action="store_true", help="the owner asked on the PR")
+    labeler = sub.add_parser("labeler")
+    labeler.add_argument("--sender", required=True)
+    labeler.add_argument("--owner", required=True)
+    labeler.add_argument("--dots-actor", default="")
     args = parser.parse_args(argv)
     if args.command == "gate":
         plan = decide_gate(_load(args.pr), _flatten_checks(_load(args.checks)), _flatten(_load(args.files)),
@@ -399,6 +538,24 @@ def main(argv=None):
     elif args.command == "review":
         plan = review_plan(_load(args.pr), _load(args.issue_labels), _flatten(_load(args.reviews)),
                            _flatten(_load(args.comments)), args.automation == "true", args.owner, args.busy)
+    elif args.command == "ready":
+        pr = _load(args.pr)
+        gate = decide_gate(pr, _flatten_checks(_load(args.checks)), _flatten(_load(args.files)), args.behind_by,
+                           args.automation == "true")
+        verdict = review_verdict(pr, _flatten(_load(args.reviews)), _flatten(_load(args.comments)),
+                                 review_actors(args.actors), args.dots_actor, args.owner)
+        state, description = merge_ready(pr, gate, args.behind_by, verdict)
+        current = json.loads(args.current) or {}
+        plan = {"sha": gate["sha"], "state": state, "description": description[:140],
+                "write": (current.get("state"), current.get("description")) != (state, description[:140])}
+    elif args.command == "review-request":
+        pr = _load(args.pr)
+        refusal = review_request_refusal(pr, _flatten(_load(args.reviews)), _flatten(_load(args.comments)),
+                                         gate_state(_load(args.status)), review_actors(args.actors),
+                                         args.dots_actor, args.owner, args.automation == "true", args.owner_request)
+        plan = {"run": refusal is None, "reason": refusal or "", "pr": pr.get("number"), "sha": pr["head"]["sha"]}
+    elif args.command == "labeler":
+        plan = {"allowed": labeler_allowed(args.sender, args.owner, args.dots_actor)}
     elif args.command == "assigned":
         plan = {"assigned": assigned_to(json.loads(args.labels), args.agent)}
     else:

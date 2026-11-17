@@ -13,7 +13,7 @@ comment from the current state, so a missed event is fixed by the next run.
 
 Work directory: open.json, closed.json, pulls.json, claude_runs.json and
 repair_runs.json for the repository; <issue>/events.json, comments.json,
-pr.json, ci_runs.json, ci_jobs.json, status.json and reviews.json per issue.
+pr.json, pr_comments.json, ci_runs.json, ci_jobs.json, status.json and reviews.json per issue.
 See docs/development/AUTOMATION.md.
 """
 from __future__ import annotations
@@ -26,7 +26,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # ci/ is this script's import root
-from agent_control import AGENT_LABEL_PREFIX, ATTEMPT_PREFIX, OWNER_LABEL, linked_issues
+from agent_control import (AGENT_LABEL_PREFIX, ATTEMPT_PREFIX, OWNER_LABEL, VERDICTS, linked_issues, review_actors,
+                           review_verdict, verdict_candidates)
 
 MARKER = "<!-- issue-status -->"
 BOT = "github-actions[bot]"  # author of comments written with GITHUB_TOKEN
@@ -34,7 +35,6 @@ CLOSED_WINDOW = timedelta(days=2)
 CI_PATH = ".github/workflows/ci.yml"
 HOLD_LABEL = "保留"
 FAILURE_PREFIX = "失敗:"
-VERDICTS = ("APPROVED", "CHANGES_REQUESTED")
 STOPPED = {"failure": "失敗", "cancelled": "取消", "timed_out": "時間切れ", "success": "PR なしで終了"}
 JST = timezone(timedelta(hours=9))
 _SEAT = re.compile(r"^\s*独立レビュー（([^、）\s]+)")
@@ -130,7 +130,7 @@ def _active(run):
 
 
 def owner_verdict(reviews, owner):
-    """The owner's latest APPROVED or CHANGES_REQUESTED review; COMMENTED and other authors never decide."""
+    """The owner's latest APPROVED or CHANGES_REQUESTED review: a reference only, never the verdict."""
     found = [r for r in reviews if r.get("state") in VERDICTS and (r.get("user") or {}).get("login") == owner]
     return max(found, key=lambda r: r.get("submitted_at") or "") if found else None
 
@@ -145,7 +145,7 @@ def _link(text, url):
     return f"[{text}]({url})" if url else text
 
 
-def decide(bundle, owner, default_branch="main"):
+def decide(bundle, owner, default_branch="main", actors=(), dots_actor=""):
     """(rows, notes) for one issue. A row is (state, name, time, evidence); state is done, active or todo."""
     issue = bundle["issue"]
     pr = bundle.get("pr")
@@ -180,6 +180,7 @@ def decide(bundle, owner, default_branch="main"):
         return _finish(rows, issue, labels, pr, bundle.get("others", []))
 
     head = pr["head"]["sha"]
+    reviews, pr_comments = bundle.get("reviews", []), bundle.get("pr_comments", [])
     rows.append(("done", "PR 作成", pr.get("created_at"),
                  _link(f"#{pr['number']}", pr.get("html_url")) + f" head {_short(head)}"))
 
@@ -209,29 +210,40 @@ def decide(bundle, owner, default_branch="main"):
         rows.append(("done" if gate.get("state") == "success" else "active", "マージ判定", gate.get("updated_at"),
                      f"{gate.get('state')}: {gate.get('description') or ''}"))
 
-    verdict = owner_verdict(bundle.get("reviews", []), owner)
+    # The same verdict as merge-ready (agent_control.review_verdict); an older head's one asks for a re-review.
+    verdict = review_verdict(pr, reviews, pr_comments, actors, dots_actor, owner)
+    if not verdict["state"]:
+        earlier = verdict_candidates(pr, reviews, pr_comments, actors, dots_actor, owner)
+        verdict = max(earlier, key=lambda c: c["at"]) if earlier else None
     ci_ok = bool(ci) and ci.get("conclusion") == "success"
     if verdict is None:
         rows.append(("active" if ci_ok else "todo", "レビュー待ち", None, ""))
     else:
-        seat = review_seat(verdict)
-        at = f"（{seat}）" if seat else ""
-        evidence = _link("review", verdict.get("html_url")) + f" commit {_short(verdict.get('commit_id'))}"
+        at = f"（{verdict['source']}）"
+        evidence = _link("review", verdict.get("url")) + f" commit {_short(verdict.get('commit'))}"
         changes = verdict["state"] == "CHANGES_REQUESTED"
-        stale = verdict.get("commit_id") != head
+        stale = verdict.get("commit") != head
         if changes:
             rows.append(("done" if stale or _active(claude_run) else "active", "修正依頼" + at,
-                         verdict.get("submitted_at"), evidence))
+                         verdict.get("at"), evidence))
         if changes and _active(claude_run):
             rows.append(("active", "修正中", claude_run.get("created_at"), run_link))
         elif stale:
             if changes:
                 rows.append(("done", "修正中", None, f"head {_short(head)}"))
             rows.append(("active" if ci_ok else "todo", "再レビュー待ち", None,
-                         f"前回{'の修正依頼' if changes else 'の承認'}{at}は {_short(verdict.get('commit_id'))}、"
+                         f"前回{'の修正依頼' if changes else 'の承認'}{at}は {_short(verdict.get('commit'))}、"
                          f"head は {_short(head)}"))
         elif not changes:
-            rows.append(("done", "承認" + at, verdict.get("submitted_at"), evidence))
+            rows.append(("done", "承認" + at, verdict.get("at"), evidence))
+
+    ready = next((s for s in (bundle.get("status") or {}).get("statuses", []) if s.get("context") == "merge-ready"),
+                 None)
+    if ready is None:
+        rows.append(("todo", "マージ可（merge-ready）", None, ""))
+    else:
+        rows.append(("done" if ready.get("state") == "success" else "active", "マージ可（merge-ready）",
+                     ready.get("updated_at"), f"{ready.get('state')}: {ready.get('description') or ''}"))
 
     if pr.get("merged_at"):
         base = pr["base"]["ref"]
@@ -246,10 +258,16 @@ def decide(bundle, owner, default_branch="main"):
         rows.append(("done", "PR 閉鎖（未マージ）", pr.get("closed_at"), _link(f"#{pr['number']}", pr.get("html_url"))))
     else:
         rows.append(("todo", "マージ", None, ""))
-    return _finish(rows, issue, labels, pr, bundle.get("others", []))
+    reference = owner_verdict(reviews, owner)
+    extra = []
+    if reference:
+        seat = review_seat(reference)
+        extra.append(f"参考（判定に数えない）: 所有者の{'承認' if reference['state'] == 'APPROVED' else '修正依頼'}"
+                     + (f"（{seat}）" if seat else "") + f" commit {_short(reference.get('commit_id'))}")
+    return _finish(rows, issue, labels, pr, bundle.get("others", []), extra)
 
 
-def _finish(rows, issue, labels, pr, others):
+def _finish(rows, issue, labels, pr, others, extra=()):
     if issue.get("state") == "closed":
         reason = "見送り" if issue.get("state_reason") == "not_planned" else ""
         rows.append(("done", "完了" + (f"（{reason}）" if reason else ""), issue.get("closed_at"), ""))
@@ -268,7 +286,7 @@ def _finish(rows, issue, labels, pr, others):
             notes.append("衝突あり")
     if others:
         notes.append("ほかの PR: " + ", ".join(f"#{n}" for n in others))
-    return rows, notes
+    return rows, notes + list(extra)
 
 
 def current_index(rows):
@@ -336,6 +354,7 @@ def load_bundle(work, number):
         "ci_jobs": _read(d / "ci_jobs.json", []),
         "status": _read(d / "status.json", None),
         "reviews": _read(d / "reviews.json", []),
+        "pr_comments": _read(d / "pr_comments.json", []),
         "claude_runs": _read(work / "claude_runs.json", []),
         "repair_runs": _read(work / "repair_runs.json", []),
     }
@@ -355,6 +374,8 @@ def main(argv=None):
     render.add_argument("--issue", type=int, required=True)
     render.add_argument("--owner", required=True)
     render.add_argument("--default-branch", default="main")
+    render.add_argument("--actors", default="", help="vars.REVIEW_ACTORS")
+    render.add_argument("--dots-actor", default="", help="vars.DOTS_ACTOR")
     args = parser.parse_args(argv)
     if args.command == "plan":
         out = plan_targets(_issues(args.work), _read(args.work / "pulls.json", []), args.hints)
@@ -366,7 +387,8 @@ def main(argv=None):
         return 0
     else:
         bundle = load_bundle(args.work, args.issue)
-        out = comment_plan(render_body(*decide(bundle, args.owner, args.default_branch)), bundle["comments"],
+        rows = decide(bundle, args.owner, args.default_branch, review_actors(args.actors), args.dots_actor)
+        out = comment_plan(render_body(*rows), bundle["comments"],
                            bool(agent_label(bundle["issue"]) or bundle["pr"]))
     json.dump(out, sys.stdout, ensure_ascii=False)
     sys.stdout.write("\n")
