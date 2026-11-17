@@ -104,6 +104,8 @@ def _change_local_model(db, monkeypatch):
 @pytest.fixture
 def cloud_over_local(tmp_path, monkeypatch):
     """Both members PASS with cloud summaries over facts of local model A."""
+    # the stub never calls llm_chat, which is what resets a failure left by an earlier test
+    monkeypatch.setattr(semantic_transport, "_LLM_FAILURE", None)
     monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-a")
     db = _seeded_two(tmp_path)
     _run(db, _Model(), rounds=2)
