@@ -16,18 +16,28 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA = 'inference-freeze/v1'
-CLASSES = {
-    'A': ('attachment pages', ['attachment_extract_v1', 'attachment_inference_checkpoint_v1'],
-          'local LLM or cloud inference for every attachment page'),
-    'B': ('held extractions', ['extract_upgrade_v1'], 'local LLM retry of every held post'),
-    'C': ('patient context scan', ['patient_context_v1'], 'cloud scan of every patient (once)'),
-    'D': ('patient context summary', ['patient_context_v1'], 'cloud summary of every patient'),
-    'E': ('promotion evidence', ['candidate_fingerprint'], 'canonical re-evaluation (Jev) and human re-approval'),
-    'F': ('semantic bundles', ['semantic bundle', 'jev verdict'], 'local LLM summaries and Jev verdicts for every bundle'),
-    'G': ('extraction chunks', ['extract_llm_chunk'], 'discarded and rebuilt on read'),
-    'H': ('projections', ['canonical_projection', 'semantic_facts_v4'], 'local CPU reprojection'),
-    'I': ('QC questions (reference)', ['extract_qc'], 'none: old QC stays current; frozen after the F gate'),
-}
+
+def _classes(m):
+    """Class labels, the artifact kinds each invalidates and the cost, from the running modules."""
+    state, policy = m['patient_context_refresh_state'], m['semantic_policy']
+    return {
+        'A': ('attachment pages', ['attachment_extract_v1', m['attachment_inference_checkpoints'].KIND],
+              'local LLM or cloud inference for every attachment page'),
+        'B': ('held extractions', [m['extract_llm_source_contract'].UPGRADE_KIND],
+              'local LLM retry of every held post'),
+        'C': ('patient context scan', [state.SCAN, state.CHUNK], 'cloud scan of every patient (once)'),
+        'D': ('patient context summary', [state.KIND], 'cloud summary of every patient'),
+        'E': ('promotion evidence', ['candidate_fingerprint'],
+              'canonical re-evaluation (Jev) and human re-approval'),
+        'F': ('semantic bundles', [policy.KIND_SUMMARY, policy.KIND_ASSESS, policy.KIND_FACTS,
+                                   policy.KIND_FACTS_V2, policy.KIND_FACT_AUDIT],
+              'local LLM summaries and Jev verdicts for every bundle'),
+        'G': ('extraction chunks', ['extract_llm_chunk'], 'discarded and rebuilt on read'),
+        'H': ('projections', [policy.KIND_FACT_PROJ, m['mcs_queries'].V4_PROJECTION_KIND],
+              'local CPU reprojection'),
+        'I': ('QC questions (reference)', ['extract_qc'],
+              'none: old QC stays current; frozen after the F gate'),
+    }
 
 
 def _sha(path):
@@ -38,14 +48,24 @@ def _text(value):
     return hashlib.sha256(str(value).encode('utf-8')).hexdigest()
 
 
+def _module_digest(name):
+    """Digest of the file a running module was loaded from."""
+    import importlib
+    return _sha(importlib.import_module(name).__file__)
+
+
 def _runtime():
     """The running modules, imported on demand (importing them is not free)."""
-    sys.path.insert(0, str(ROOT / 'mcs'))
     import importlib
+    root = str(ROOT / 'mcs')
+    if root not in sys.path:
+        sys.path.insert(0, root)
     importlib.import_module('_mcs_path')  # registers the flat import roots
     names = ('attachment_extraction', 'extract', 'extract_llm', 'extract_llm_source_contract',
              'inference_version', 'patient_context_refresh_state', 'semantic_jev', 'semantic_llm',
-             'semantic_projection', 'semantic_store', 'clinical_chunking')
+             'semantic_projection', 'semantic_store', 'clinical_chunking', 'semantic_candidate',
+             'semantic_policy', 'attachment_inference_checkpoints',
+             'mcs_queries')
     return {name: importlib.import_module(name) for name in names}
 
 
@@ -61,6 +81,7 @@ def snapshot():
     a = {name: digest for name, digest in loaded.items() if name not in context_only}
     a.update({f'version:{key}': _text(value) for key, value in versions.items()})
     b = {name: loaded[name] for name in sorted(m['extract_llm_source_contract']._HOLD_SOURCES)}
+    b.update({f'version:{key}': _text(value) for key, value in versions.items()})
     b['hold_epoch'] = _text(m['extract_llm_source_contract'].HOLD_EPOCH)
     c = {'scan_code': state._SCAN_CODE, 'mcs_queries': loaded['mcs_queries'],
          'contract': _text(json.dumps(state._contract(), sort_keys=True)),
@@ -70,9 +91,14 @@ def snapshot():
     e = dict(loaded)
     e.update({f'version:{key}': _text(value) for key, value in versions.items()})
     e['rule_version'] = _text(m['extract'].RULE_VERSION)
+    e['plan_version'] = _text(ext.PLAN_VERSION)
+    e['policy_version'] = _text(m['semantic_store'].POLICY_VERSION)
+    # candidate_fingerprint hashes the code of every semantic_candidate module, which `loaded` does not cover.
+    e.update({f'module:{name}': _module_digest(name) for name in m['semantic_candidate']._MODULES})
     llm = m['semantic_llm']
     f = {'prompts': _text(json.dumps([llm._FACT_PROMPT, llm._SUMMARY_PROMPT, llm._REPAIR_SUFFIX,
                                       llm._FACT_V2_PROMPT, llm._FACT_V2_REPAIR_SUFFIX])),
+         'inference_version': _text(m['inference_version'].CURRENT_VERSION),
          'registry_version': _text(jev.REGISTRY_VERSION), 'jev_model': _text(jev.JEV_MODEL),
          'schema_version': _text(m['semantic_store'].SCHEMA_VERSION),
          'policy_version': _text(m['semantic_store'].POLICY_VERSION),
@@ -95,8 +121,13 @@ def check(manifest):
             or not isinstance(manifest.get('classes'), dict):
         raise ValueError('freeze_manifest_unrecognized')
     now = snapshot()['classes']
+    classes = _classes(_runtime())
     report = []
-    for key, (label, kinds, cost) in CLASSES.items():
+    for key in sorted(manifest['classes'].keys() - classes.keys()):
+        old = manifest['classes'][key]
+        report.append({'class': key, 'label': 'unknown class', 'files': sorted(old) if isinstance(old, dict) and old else [key],
+                       'kinds': [], 'cost': 'unknown: the record names a class this tool does not know'})
+    for key, (label, kinds, cost) in classes.items():
         old = manifest['classes'].get(key)
         if not isinstance(old, dict):
             old = {}
