@@ -95,6 +95,7 @@ from update_repository import (
     _tree_clean,
 )
 from update_restore import (
+    _adopted_marker,
     _consent_hold,
     _hold_rollback_for_consent,
     _rollback_applying,
@@ -291,6 +292,9 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     rollback_failed = True
                     return _provider_migration_recovery_hold(expected_mode=hold_mode or "")
                 try:
+                    if entry.get("schema_bump") and _adopted_marker():
+                        # before any journal rewrite, like rollback()
+                        raise UpdateError("restore_marker_adopted")
                     _provider_rollback_preflight(entry.get("prev_sha"))
                     _check_runtime_restore(entry)
                 except UpdateError as e:

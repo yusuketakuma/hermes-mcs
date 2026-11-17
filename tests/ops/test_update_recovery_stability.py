@@ -1378,3 +1378,97 @@ def test_manual_rollback_checks_frozen_journal_before_reset(updater, tmp_path, m
     assert Path(updater.MARKER_PATH).exists() and restarts == []
     assert Path(live).read_bytes() == db_bytes
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == after
+
+
+def test_interrupted_migration_undo_keeps_adopted_backup_without_freezing(
+        updater, tmp_path, monkeypatch):
+    _repo, live, back, before, after, restarts = _schema_bump_world(updater, tmp_path, monkeypatch)
+    applying = {"tag": "v1.1.0", "sha": after, "prev_sha": before, "schema_bump": True,
+                "backup_path": back, "runtime_migration": {"synthetic": True}}
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    state["applying"] = applying
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    marker, raw, inode = _adopted_marker(updater.DATA)
+    db_bytes = Path(live).read_bytes()
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("no worker start or escalation")
+
+    assert updater._undo_interrupted_migration(state, applying, forbidden, forbidden) == 1
+    report = json.loads(Path(updater.REPORT_PATH).read_text())
+    assert (report["result"], report["detail"]) == ("runtime_restore_blocked", "restore_marker_adopted")
+    assert Path(updater.MARKER_PATH).exists()            # writers stay held
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] == applying
+    assert updater._head_sha() == after and restarts == []
+    assert marker.read_bytes() == raw and marker.stat().st_ino == inode
+    assert Path(live).read_bytes() == db_bytes
+
+
+def test_post_merge_bail_keeps_adopted_backup_without_freezing(updater, tmp_path, monkeypatch):
+    import local_backup
+    from ops_testkit import _git, _make_repo, _mk_schema
+    monkeypatch.setattr(updater, "_provider_migration_needed", lambda: False)
+    monkeypatch.setattr(update_apply, '_provider_migration_needed', updater._provider_migration_needed)
+    monkeypatch.setattr(update_recovery, '_provider_migration_needed', updater._provider_migration_needed)
+    repo, _ = _make_repo(tmp_path)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    for module in (updater, update_apply, update_cli, update_execution, update_lifecycle_context,
+                   update_preflight, update_recovery, update_repository, update_runtime_migration,
+                   update_services):
+        monkeypatch.setattr(module, "REPO", str(repo))
+    sha = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
+    live = str(tmp_path / "data" / "ledger.db")
+    for module in (updater, update_apply, update_execution, update_lifecycle_context,
+                   update_planning, update_preflight, update_restore):
+        monkeypatch.setattr(module, "LEDGER", live)
+    back = tmp_path / "data" / "backups" / "pre.db"
+    back.parent.mkdir(parents=True, exist_ok=True)
+    _mk_schema(back, 7, messages=2)
+    _mk_schema(live, 8, messages=5)
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {"update": {"mode": "notify"}})
+    monkeypatch.setattr(updater, "precheck_local", lambda c: [])
+    monkeypatch.setattr(update_apply, 'precheck_local', updater.precheck_local)
+    monkeypatch.setattr(update_planning, 'precheck_local', updater.precheck_local)
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_paths: sha)
+    monkeypatch.setattr(updater, "precheck_tag", lambda t: ["schema_bump:7->8"])
+    monkeypatch.setattr(update_execution, 'precheck_tag', updater.precheck_tag)
+    monkeypatch.setattr(update_planning, 'precheck_tag', updater.precheck_tag)
+    monkeypatch.setattr(local_backup, "preupdate_backup", lambda p: str(back))
+    monkeypatch.setattr(updater, "_baseline_check", lambda c: [])
+    monkeypatch.setattr(update_apply, '_baseline_check', updater._baseline_check)
+    monkeypatch.setattr(updater, "quiesce", lambda: (updater._write_marker(), [])[1])
+    monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_recovery, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_apply, "_quiesce_for_mode", lambda mode: [])
+    monkeypatch.setattr(updater, "restart_agents", lambda: pytest.fail("no worker start"))
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(updater, "_services_reconcile", lambda: None)
+    monkeypatch.setattr(update_recovery, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_restore, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_runtime_migration, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda m, **_kwargs: [])
+    for module in (updater, update_apply, update_cli, update_recovery, update_runtime_migration,
+                   update_services):
+        monkeypatch.setattr(module, "_enqueue_notice", lambda *a, **k: True)
+    monkeypatch.setattr(updater, "restart_gateway", lambda c: None)
+    monkeypatch.setattr(update_services, 'restart_gateway', updater.restart_gateway)
+    adopted = []
+
+    def post_merge(_s, *, run_lock_fd):
+        adopted.append(_adopted_marker(updater.DATA))
+        raise updater.UpdateError("post_merge_failed: synthetic")
+
+    monkeypatch.setattr(updater, "_run_post_merge", post_merge)
+    monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
+    assert updater.apply("v1.1.0", sha, "cid-apply") == 1
+    applying = updater.journal_store.load_state(updater.STATE_PATH)["applying"]
+    # Still apply-shaped: no rollback record, no restore_incomplete freeze.
+    assert not applying.get("rollback") and "restore_incomplete" not in applying
+    assert updater._head_sha() == sha
+    report = json.loads(Path(updater.REPORT_PATH).read_text())
+    assert report["result"] == "runtime_restore_blocked"
+    assert "restore_marker_adopted" in report["detail"]
+    marker, raw, inode = adopted[0]
+    assert marker.read_bytes() == raw and marker.stat().st_ino == inode
