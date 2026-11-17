@@ -517,10 +517,10 @@ def test_the_cloud_reviewer_reviews_each_green_head_once():
     # a merge-gate posted by anyone but the workflows is no gate
     forged = {"statuses": [{**GATE_OK["statuses"][0], "creator": {"login": "someone"}}]}
     assert "merge-gate" in _request(status=forged)
-    assert "判定あり" in _request([_verdict(DOTS)])
+    assert "判定あり" in _request(reviews=[_verdict(DOTS)])
     # Claude's own COMMENT on this head ends the automatic review of it, not of the next head
-    assert "レビュー済み" in _request([_verdict("claude[bot]", "COMMENTED")])
-    assert _request([_verdict("claude[bot]", "COMMENTED", sha=OLD)]) is None
+    assert "レビュー済み" in _request(reviews=[_verdict("claude[bot]", "COMMENTED")])
+    assert _request(reviews=[_verdict("claude[bot]", "COMMENTED", sha=OLD)]) is None
     # a started review (the workflows' marker) is not started again for that head; anyone else's text is ignored
     started = {"user": {"login": "github-actions[bot]"}, "body": f"x\n<!-- claude-review:started {HEAD} -->"}
     assert "開始済み" in _request(comments=[started])
@@ -528,7 +528,7 @@ def test_the_cloud_reviewer_reviews_each_green_head_once():
     assert _request(comments=[{**started, "body": f"<!-- claude-review:started {OLD} -->"}]) is None
     assert _request(comments=[started], owner_request=True) is None
     # the owner may ask again, but never past the kill switch, a fork or a red gate
-    assert _request([_verdict("claude[bot]", "COMMENTED")], owner_request=True) is None
+    assert _request(reviews=[_verdict("claude[bot]", "COMMENTED")], owner_request=True) is None
     assert _request(automation=False, owner_request=True) is not None
     assert _request(status={"statuses": []}, owner_request=True) is not None
 

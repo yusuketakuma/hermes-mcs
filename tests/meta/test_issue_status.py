@@ -106,8 +106,11 @@ def test_pending_runs_in_the_writer_queue_count_as_running():
     pending = _run("Agent Claude #5 x", status="pending")
     assert _current(_bundle(claude_runs=[pending]))[0][1] == "実装中"
     on_pr = _run("Agent Claude #9 PR", status="pending")
-    reviews = [_review("CHANGES_REQUESTED", commit=OLD)]
+    reviews = [_review("CHANGES_REQUESTED", commit=OLD, user=DOTS)]
     assert _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=reviews, claude_runs=[on_pr]))[0][1] == "修正中"
+    # a fix run on the PR shows 修正中 even when the request came from a review that does not count (the owner's)
+    owner_only = [_review("CHANGES_REQUESTED", commit=OLD)]
+    assert _current(_bundle(pr=_pr(), ci_runs=[_ci()], reviews=owner_only, claude_runs=[on_pr]))[0][1] == "修正中"
     repair = [_run("Agent Claude repair #9", status="requested")]
     _, rows, _ = _current(_bundle(pr=_pr(), ci_runs=[_ci("failure")], repair_runs=repair))
     assert rows[_names(rows).index("自動修正中")][0] == "active"

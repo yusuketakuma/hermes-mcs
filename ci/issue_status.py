@@ -217,7 +217,8 @@ def decide(bundle, owner, default_branch="main", actors=(), dots_actor=""):
         verdict = max(earlier, key=lambda c: c["at"]) if earlier else None
     ci_ok = bool(ci) and ci.get("conclusion") == "success"
     if verdict is None:
-        rows.append(("active" if ci_ok else "todo", "レビュー待ち", None, ""))
+        # while a fix run is on the PR, the review is not what the PR waits for
+        rows.append(("active" if ci_ok and not _active(claude_run) else "todo", "レビュー待ち", None, ""))
     else:
         at = f"（{verdict['source']}）"
         evidence = _link("review", verdict.get("url")) + f" commit {_short(verdict.get('commit'))}"
@@ -236,6 +237,10 @@ def decide(bundle, owner, default_branch="main", actors=(), dots_actor=""):
                          f"head は {_short(head)}"))
         elif not changes:
             rows.append(("done", "承認" + at, verdict.get("at"), evidence))
+
+    # A Claude run on the PR is a fix in progress whatever asked for it (an owner's request counts for #265, not here).
+    if _active(claude_run) and not any(r[1] == "修正中" for r in rows):
+        rows.append(("active", "修正中", claude_run.get("created_at"), run_link))
 
     ready = next((s for s in (bundle.get("status") or {}).get("statuses", []) if s.get("context") == "merge-ready"),
                  None)
