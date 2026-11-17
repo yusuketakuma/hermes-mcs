@@ -33,9 +33,9 @@ def _db(tmp_path):
 
 def _reserve(ledger, prompt, provider='anthropic', *, max_tokens=100, cache_prefix=None, unit='synthetic-unit', owner=None, message_id=1, route='semantic_backlog', selection=None):
     cfg = {'cloud_llm': {'mode': 'on', 'project_ids': [1], 'provider': provider}}
-    client = (anthropic_client.AnthropicClient('synthetic') if provider == 'anthropic'
-              else openai_client.OpenAIClient('synthetic', **({'model': selection['model'], 'effort': selection['effort']}
-                                                             if selection is not None else {})))
+    client_type = anthropic_client.AnthropicClient if provider == 'anthropic' else openai_client.OpenAIClient
+    client = client_type('synthetic', **({'model': selection['model'], 'effort': selection['effort']}
+                                         if selection is not None else {}))
     body = client.body(prompt, max_tokens, cache_prefix)
     return cloud_policy.usage_reserver(ledger, cfg, route=route, project_id=1,
                                       message_id=message_id, unit_key=unit, owner=owner, selection=selection)(body, 2)
@@ -886,3 +886,114 @@ def test_stored_rate_limited_mixed_with_200_evidence_stays_held(tmp_path, monkey
         with pytest.raises(anthropic_client.AnthropicError):
             _reserve(ledger, 'synthetic prompt')
         assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+def _anthropic_profile(route, purpose):
+    selected, errors = cloud_policy.resolve_profile(
+        {'cloud_llm': {'mode': 'on', 'project_ids': [1], 'provider': 'anthropic'}},
+        route=route, purpose=purpose)
+    assert not errors
+    return selected
+
+
+def test_c1_pending_unit_is_not_resent_under_the_new_profile(tmp_path, monkeypatch):
+    """A paid attempt without a result stays unresolved across the C1 profile change."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    selected = _anthropic_profile('patient_context', 'patient_context')
+    with closing(_db(tmp_path)) as ledger:
+        _reserve(ledger, 'synthetic prompt', 'anthropic', route='patient_context', unit='old',
+                 owner={'workday_id': 'old', 'source_sig': 'old'})
+        with pytest.raises(anthropic_client.AnthropicError) as caught:
+            _reserve(ledger, 'synthetic prompt', 'anthropic', route='patient_context', unit='new',
+                     owner={'workday_id': 'new', 'source_sig': 'new'},
+                     max_tokens=selected['max_tokens'], selection=selected)
+        assert caught.value.detail == 'cloud_unit_unresolved'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+def test_c1_failed_unit_is_not_resent_under_the_new_profile(tmp_path, monkeypatch):
+    """A settled paid failure stays failed; the new profile cannot resend it."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    selected = _anthropic_profile('patient_context', 'patient_context')
+    with closing(_db(tmp_path)) as ledger:
+        previous = _reserve(ledger, 'synthetic prompt', 'anthropic', route='patient_context', unit='old',
+                            owner={'workday_id': 'old', 'source_sig': 'old'})
+        cloud_policy.record_result(ledger, previous, {
+            **_result(previous, 'http_200', 'contract_error'),
+            'usage': {'input_tokens': 10, 'output_tokens': 2}})
+        with pytest.raises(anthropic_client.AnthropicError) as caught:
+            _reserve(ledger, 'synthetic prompt', 'anthropic', route='patient_context', unit='new',
+                     owner={'workday_id': 'new', 'source_sig': 'new'},
+                     max_tokens=selected['max_tokens'], selection=selected)
+        assert caught.value.detail == 'cloud_unit_unresolved'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+def test_c1_completed_backlog_is_not_rebuilt_under_haiku_medium(tmp_path, monkeypatch):
+    """Completed backlog work keeps its Haiku result: same model with effort
+    None to medium is not a proven selection change, so nothing is resent."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    selected = _anthropic_profile('semantic_backlog', 'backlog')
+    assert (selected['model'], selected['effort'], selected['profile']) == (
+        anthropic_client.MODEL, 'medium', 'haiku-medium')
+    with closing(_db(tmp_path)) as ledger:
+        previous = _reserve(ledger, 'synthetic prompt', 'anthropic', route='semantic_backlog',
+                            unit='old', owner=_owner())
+        cloud_policy.record_result(ledger, previous, {
+            **_result(previous, 'http_200', None),
+            'usage': {'input_tokens': 10, 'output_tokens': 2}})
+        with pytest.raises(anthropic_client.AnthropicError) as caught:
+            _reserve(ledger, 'synthetic prompt', 'anthropic', route='semantic_backlog',
+                     unit='new', owner=_owner(),
+                     max_tokens=selected['max_tokens'], selection=selected)
+        assert caught.value.detail == 'cloud_unit_unresolved'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+@pytest.mark.parametrize('purpose', ['patient_context', 'quality_repair'])
+def test_c1_completed_patient_work_is_rebuilt_once_under_sonnet(tmp_path, monkeypatch, purpose):
+    """Completed patient-context work may be rebuilt exactly once under Sonnet;
+    the rebuilt unit then blocks any further resend as a repeat success."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    selected = _anthropic_profile('patient_context', purpose)
+    assert (selected['model'], selected['effort'], selected['profile']) == (
+        anthropic_client.SONNET_MODEL, 'high', 'sonnet-high')
+    with closing(_db(tmp_path)) as ledger:
+        previous = _reserve(ledger, 'synthetic prompt', 'anthropic', route='patient_context',
+                            unit='old', owner={'workday_id': 'old', 'source_sig': 'old'})
+        cloud_policy.record_result(ledger, previous, {
+            **_result(previous, 'http_200', None),
+            'usage': {'input_tokens': 10, 'output_tokens': 2}})
+        rebuilt = _reserve(ledger, 'synthetic prompt', 'anthropic', route='patient_context',
+                           unit='new', owner={'workday_id': 'new', 'source_sig': 'new'},
+                           max_tokens=selected['max_tokens'], selection=selected)
+        assert rebuilt['model'] == anthropic_client.SONNET_MODEL
+        cloud_policy.record_result(ledger, rebuilt, {
+            **_result(rebuilt, 'http_200', None),
+            'usage': {'input_tokens': 10, 'output_tokens': 2}})
+        with pytest.raises(anthropic_client.AnthropicError) as caught:
+            _reserve(ledger, 'synthetic prompt', 'anthropic', route='patient_context',
+                     unit='third', owner={'workday_id': 'third', 'source_sig': 'third'},
+                     max_tokens=selected['max_tokens'], selection=selected)
+        assert caught.value.detail == 'cloud_unit_unresolved'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 2
+
+
+def test_c1_completed_semantic_quality_repair_is_rebuilt_once_under_sonnet(tmp_path, monkeypatch):
+    """The same one-time Sonnet rebuild applies to quality repair on the
+    semantic backlog route."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    selected = _anthropic_profile('semantic_backlog', 'quality_repair')
+    assert (selected['model'], selected['effort'], selected['profile']) == (
+        anthropic_client.SONNET_MODEL, 'high', 'sonnet-high')
+    with closing(_db(tmp_path)) as ledger:
+        previous = _reserve(ledger, 'synthetic prompt', 'anthropic', route='semantic_backlog',
+                            unit='old', owner=_owner())
+        cloud_policy.record_result(ledger, previous, {
+            **_result(previous, 'http_200', None),
+            'usage': {'input_tokens': 10, 'output_tokens': 2}})
+        rebuilt = _reserve(ledger, 'synthetic prompt', 'anthropic', route='semantic_backlog',
+                           unit='new', owner=_owner(),
+                           max_tokens=selected['max_tokens'], selection=selected)
+        assert rebuilt['model'] == anthropic_client.SONNET_MODEL
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 2
