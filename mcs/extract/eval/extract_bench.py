@@ -115,7 +115,12 @@ DEFAULT_CASES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 # safety-bearing med attributes — when a case SPECIFIES one it is part
 # of the match, not silently ignored (F23)
-_MED_ATTRS = ("dose", "status", "subject", "negated", "evidence", "route", "freq", "prn")
+_MED_ATTRS = ("dose", "status", "subject", "negated", "evidence", "route", "freq", "prn",
+              "form", "timing", "days", "period")
+# quote-bound free text a label may pin on a medication or an event record:
+# a string the source states, or null for "the source states none"
+_MED_TEXT_ATTRS = ("form", "timing", "days", "period")
+_EVENT_TEXT_ATTRS = ("date_text", "actor")
 
 
 def _med_name_hit(expected: dict, m) -> bool:
@@ -152,7 +157,8 @@ def _match_event(expected: dict, got: list) -> bool:
                and (item.get("kind") == expected.get("kind")
                     or (detail is not None and "kind" not in expected))
                and all(key not in expected or expected[key] == item.get(key)
-                       for key in ("subject", "status", "negated", "evidence", "span"))
+                       for key in ("subject", "status", "negated", "evidence", "span",
+                           *_EVENT_TEXT_ATTRS))
                and (detail is None or (isinstance(item.get("care_detail"), dict) and all(
                    item["care_detail"].get(key) == value for key, value in detail.items())))
                for item in got)
@@ -435,6 +441,11 @@ def _score_case(case: dict, out: dict | None) -> dict:
     for fl in forbid.get("labs", []):
         if _match_lab(fl, got_labs):
             violate("labs", fl.get("name"))
+    got_vitals = out.get("vitals") if isinstance(out.get("vitals"), dict) else {}
+    for key, value in (forbid.get("vitals") or {}).items():
+        # one violation per leaked reading: a pinned key counts when the output carries that value
+        if key in got_vitals and got_vitals[key] == value:
+            violate("vitals", key)
     for label in forbid.get("patient_context", []):
         if _match_context(label, context_units):
             path = ".".join(filter(None, (label["category"], label.get("detail_key"))))
@@ -468,6 +479,8 @@ def _score_case(case: dict, out: dict | None) -> dict:
     score["raw"]["reply"] = got_reply
     if "labs" in exp:
         score["raw"]["labs"] = got_labs
+    if "vitals" in forbid:
+        score["raw"]["vitals"] = got_vitals
     if "event_records" in exp or "event_records" in forbid:
         score["raw"]["event_records"] = out.get("event_records") or []
     if "patient_context" in exp or "patient_context" in forbid:
@@ -545,7 +558,8 @@ def _load_cases(path: str) -> list:
 def _synthetic_cases() -> list:
     """Read the checked-in, wholly fictional benchmark cases."""
     return [case for name in ("extract_cases.json", "extract_cases_labs.json", "extract_cases_patient_state.json",
-                             "extract_cases_injection.json", "extract_cases_safety_history.json")
+                             "extract_cases_injection.json", "extract_cases_safety_history.json",
+                             "extract_cases_gen12_fields.json")
             for case in _load_cases(str(Path(DEFAULT_CASES).with_name(name)))]
 
 
@@ -617,6 +631,8 @@ def _section_valid(section, *, forbid: bool = False) -> bool:
         return False
     if not assertions.labels_valid(section.pop(assertions.FIELD, []), forbid=forbid):
         return False
+    if not _text_labels_valid(section):
+        return False
     if isinstance(section.get("event_records"), list):
         # _validate cannot check a care_detail label without a source quote and
         # requires a kind; check the vocabulary here and lend the neutral kind.
@@ -659,6 +675,26 @@ def _section_valid(section, *, forbid: bool = False) -> bool:
                            if isinstance(lab, dict) else lab for lab in section["labs"]]
     v = extract_validation.validate(section)
     return isinstance(v, dict) and not v.get("_items_dropped")
+
+
+def _text_labels_valid(section: dict) -> bool:
+    """Bench-only label vocabulary _validate ignores: a typo'd key or an empty text would pin nothing.
+
+    A medication attribute and an event record's date_text / actor are a string
+    or an explicit null ("absent"); vitals are a non-empty {key: number} map."""
+    for key, attrs in (("meds", _MED_TEXT_ATTRS), ("event_records", _EVENT_TEXT_ATTRS)):
+        for item in section.get(key) or []:
+            if isinstance(item, dict) and any(
+                    name in item and item[name] is not None
+                    and not (isinstance(item[name], str) and item[name].strip()) for name in attrs):
+                return False
+    if "vitals" in section:
+        vitals = section["vitals"]
+        if (not isinstance(vitals, dict) or not vitals
+                or set(vitals) - extract_validation._VITAL_KEYS
+                or any(type(value) not in (int, float) for value in vitals.values())):
+            return False
+    return True
 
 
 def _iso_date(d) -> bool:
