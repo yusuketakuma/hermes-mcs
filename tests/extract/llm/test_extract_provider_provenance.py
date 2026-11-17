@@ -321,7 +321,20 @@ def test_prefilter_does_not_claim_a_provider(tmp_path, monkeypatch):
         monkeypatch.setattr(extract_llm_store, '_rerender_cards', worker._rerender_cards)
         row = dict(ledger.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
         row["_source_binding"] = inference_dependency_loss.source_binding(ledger.db, row["project_id"], 1)
-        assert worker._mark_prefiltered(ledger, row)
+        assert not worker._mark_prefiltered(ledger, row)
+        rows, _ = worker._select_pending(ledger, 1, None, None, False)
+        jobs, skipped, blocked = worker._prepare_jobs(ledger, rows, worker._resolved_llm(), True, allow_cloud=False)
+        assert len(jobs) == 1 and skipped == blocked == 0
+        row, context, _saved, _hints, _qc = jobs[0]
+        from extract_llm_errors import _claim, _release
+        from extract_llm_proofs import _capture_checkpoint_state
+        lease = _claim(ledger, row)
+        assert lease is not None
+        try:
+            _capture_checkpoint_state(ledger.db, row, context)
+            assert worker._mark_prefiltered(ledger, row)
+        finally:
+            _release(ledger, row, lease)
         meta = json.loads(ledger.artifacts(worker.KIND, message_id=1)[-1]["meta"])
         assert meta["prefilter"] == "no_signal"
         assert meta["provider_provenance"]["providers"] == []
