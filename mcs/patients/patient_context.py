@@ -356,29 +356,45 @@ _SUBJECT_HEADINGS = {"家族の意向": "family", "家族の希望": "family",
 _SUBJECT_CATEGORIES = frozenset({"preferences", "allergies", "adverse_events"})
 # A staff member holds only a policy; for a clinical fact or a wish they are a reporter.
 _STAFF_HELD_HEADINGS = frozenset({"方針", "療養方針", "治療方針"})
+# Words that can name the patient (本人・対象者・Pt・自身・私・彼・あの方); one list, so the
+# patient-word check of 家族の意向 and the things a fact may not name cannot drift apart.
+_PATIENT_REF = (r"本人|ほんにん|当人|当事者|患者|利用者|入居者|対象|被保険者|要介護者|被介護者"
+                r"|クライアント|お客様|自身|自分|じぶん|私|わたし|わたくし|当方|僕|俺|彼"
+                r"|(?:あの|この|その)方|(?<![A-Za-z])(?:pt|Pt|PT)(?![A-Za-z])")
+# Everyone but the patient (本人以外・他者・他人・第三者) contrasts with the patient, so a
+# fact of theirs implies one of the patient's: it holds nothing.
+_ALL_BUT_PATIENT = r"本人以外|他者|他人|第三者"
 # The head: a person word, then は. も says the patient shares the fact (妻も卵アレルギー),
 # が marks an actor or a reporter and の may be a drug the patient took (奥様の薬), so
-# none names a holder; nor does 本人以外, which implies the patient has something.
+# none names a holder.
 _VALUE_HOLDER = re.compile(
     r"[ \t　]*(?:[■●◆#・＊*]+[ \t　]*)?"
-    rf"(?:(?P<family>{clinical_scope.FAMILY_PERSON})|(?!本人以外)(?P<other>{clinical_scope.OTHER_PERSON}))"
+    rf"(?:(?P<family>{clinical_scope.FAMILY_PERSON})|(?!{_ALL_BUT_PATIENT})(?P<other>{clinical_scope.OTHER_PERSON}))"
     r"(?:ご本人|本人)?(?:自身)?は")
 # In a note to the family these kin words can be the patient (ご主人・お母様), so they hold nothing.
 _PATIENT_ALIAS_KIN = re.compile(r"ご?主人|旦那(?:さん|様)?|奥(?:さん|様)|お(?:母|父|兄|姉)(?:さん|様)?")
 # A value of 家族の意向／家族の希望 that names the patient is not the family's alone.
-_PATIENT_WORD = re.compile(r"本人|患者|利用者|入居者|当人|私|自分")
+_PATIENT_WORD = re.compile(_PATIENT_REF)
 # A fact names one thing, never a person, a group that may include the patient or a
-# pointer back to the patient's record (皆・全員・入居者・本人同様・同じ・当該・前述); the
+# pointer back to the patient's record (皆・全員・入居者・本人同様・同じ・それ); the
 # closed shapes below guarantee everything else. A family or other word already covers
-# 他人・主人・夫婦 and 同 covers 一同・同上; 同 leaves 同居・同意・同席・同行・同伴,
-# which point at nothing.
-_NOT_A_THING = (rf"{clinical_scope.FAMILY_PERSON}|{clinical_scope.OTHER_PERSON}"
-                r"|者|本人|ほんにん|当人|自身|自分|じぶん|私|わたし|当方|僕|俺|対象"
-                r"|(?<![A-Za-z])(?:pt|Pt|PT)(?![A-Za-z])|さん|様|ちゃん|君|氏"
+# 他人・主人・夫婦. 同 before a noun is "the same as the patient's" (同薬・同施設・同内容)
+# except where it means "together" (同居・同意・同席・同行・同伴・同室・同時・同日), which
+# points at nothing unless it names the item itself (同時薬).
+# The item an allergy or adverse-event fact is about; after a determiner it is "this one".
+_ITEM = "薬剤品"
+_NOT_A_THING = (rf"{clinical_scope.FAMILY_PERSON}|{clinical_scope.OTHER_PERSON}|{_PATIENT_REF}"
+                r"|者|さん|様|ちゃん|君|氏"
                 r"|皆|みな|みんな|全|両|双方|共|一緒|揃|そろ|二人|ふたり|親子"
-                r"|同(?![居意席行伴])|おなじ|当該|該当|前述|上述|先述|前出|前記|右記|下記|以上|上記"
-                r"|それ|これ|あれ")
-_STANCE = r"希望|望|拒否|反対|賛成|了承|同意|提案|推奨|指示|予定"
+                rf"|同(?![居意席行伴室時日](?![{_ITEM}]))|おなじ|それ|これ|あれ")
+# A thing is self-contained unless it opens with a determiner kanji (当・本・該・前・上・
+# 下・左・右・既・先・件・例・以) that refers back: one standing alone (当アレルギー・同じ)
+# or one before a head that completes a reference — a place in the record (左記・前述・
+# 前項・前出・前掲), an occurrence or case (前回・本件・前例), the item itself (当薬・本剤・
+# 本品), a position (以上・以下) or a known history (既知・既往), or another determiner
+# (当該・該当). 当院・本日・前日・上肢・眠前薬 name a thing and stay; 下剤 is lost, the safe way.
+_POINTER = rf"[当本該前上下左右既先件例以](?:[記述項出掲欄回件例{_ITEM}上下知往該当]|(?![一-鿿]))"
+_STANCE = r"希望|望|意向|拒否|反対|賛成|了承|同意|提案|推奨|指示|予定"
 
 
 def _thing(excluded):
@@ -390,7 +406,7 @@ def _thing(excluded):
     kana = "[々りいしみきけえちびれじろう]"
     char = (rf"[一-鿿]|(?<=[一-鿿]){kana}|(?<=[一-鿿]{kana}){kana}|[ァ-ヴ]|(?<=[ァ-ヴー])ー"
             r"|[A-Za-z0-9Ａ-Ｚａ-ｚ０-９]")
-    return rf"(?:(?:(?!{excluded})(?:{char})){{1,20}}|(?:(?!{excluded})[ぁ-ゖ](?<![はがもとをの])){{1,20}})"
+    return rf"(?:(?!{_POINTER})(?:(?!{excluded})(?:{char})){{1,20}}|(?:(?!{excluded})[ぁ-ゖ](?<![はがもとをの])){{1,20}})"
 
 
 _THING = _thing(_NOT_A_THING)
@@ -435,7 +451,8 @@ def heading_subject(label, value) -> str:
             holder = "family" if person["family"] else "other"
     heading = _SUBJECT_HEADINGS.get(label, "unspecified")
     if heading == "family" and _PATIENT_WORD.search(value):
-        heading = "unspecified"
+        # The patient named under 家族の意向 outweighs any holder (母本人は在宅を希望).
+        return "unspecified"
     if heading == "patient":
         # A person heading the patient's own heading withdraws the assertion, never relabels it.
         return "unspecified" if person else heading
