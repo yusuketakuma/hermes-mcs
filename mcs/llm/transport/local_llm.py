@@ -104,6 +104,9 @@ PROBE_TURN_MIN_S = 2.0
 # turn is held while /slots is polled so the other lane does not start
 # into a still-busy GPU.
 SLOT_WAIT_MAX_S = 10.0
+# A timeout spends the caller's whole deadline, so the idle check keeps
+# this short budget of its own when the deadline leaves less than it.
+SLOT_WAIT_GRACE_S = 2.0
 SLOT_WAIT_POLL_S = 0.5
 SLOT_WAIT_IDLE_SAMPLES = 2
 
@@ -336,10 +339,12 @@ def _slots_idle(endpoint: str, deadline: float | None, request=None,
 
 
 def _wait_slot_idle(request, endpoint: str, slot: int,
-                    deadline: float | None, error_out: dict | None) -> None:
+                    deadline: float | None, error_out: dict | None) -> bool:
     """Hold the turn until the pinned slot reports idle in
     SLOT_WAIT_IDLE_SAMPLES consecutive samples, or SLOT_WAIT_MAX_S / the
-    caller's deadline passes. A single idle sample, a missing slot, bad
+    caller's deadline passes — the deadline caps the wait but never below
+    SLOT_WAIT_GRACE_S, since a spent deadline is exactly the timeout case
+    this check exists for. A single idle sample, a missing slot, bad
     JSON or a failed GET resets the run. Expiry is UNCONFIRMED but still
     releases the turn — it is never held forever. Idle is a stop
     observation, not a cancel receipt: a slot-pinned request the server
@@ -348,7 +353,7 @@ def _wait_slot_idle(request, endpoint: str, slot: int,
     start = time.monotonic()
     until = start + SLOT_WAIT_MAX_S
     if deadline is not None:
-        until = min(until, deadline)
+        until = min(until, max(deadline, start + SLOT_WAIT_GRACE_S))
     idle = 0
     while idle < SLOT_WAIT_IDLE_SAMPLES and time.monotonic() < until:
         idle = idle + 1 if _slots_idle(endpoint, until, request=request,
@@ -360,6 +365,7 @@ def _wait_slot_idle(request, endpoint: str, slot: int,
     if error_out is not None:
         error_out["slot_wait_ms"] = int((time.monotonic() - start) * 1000)
         error_out["slot_wait_confirmed"] = int(idle >= SLOT_WAIT_IDLE_SAMPLES)
+    return idle >= SLOT_WAIT_IDLE_SAMPLES
 
 
 def admitted_chat(client_route: str, prompt: str, *,
@@ -750,9 +756,24 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
             if kind == "transport" and isinstance(error, OSError) \
                     and (_turn_path() or scheduling_enabled()) \
                     and wait_for_idle:
-                _wait_slot_idle(send, endpoint, body["id_slot"], deadline,
-                                error_out)
+                confirmed = _wait_slot_idle(send, endpoint, body["id_slot"],
+                                            deadline, error_out)
+                if scheduling_enabled():
+                    import llm_slot_schedule
+                    directory = os.environ[SCHEDULE_ENV]
+                    if confirmed:
+                        llm_slot_schedule.clear_stuck(directory,
+                                                      body["id_slot"])
+                    else:
+                        llm_slot_schedule.mark_stuck(directory,
+                                                     body["id_slot"])
             return None
+        if status == 200 and scheduling_enabled():
+            # proven usable while the turn still holds the slot lock, so a
+            # later call's failure record cannot be erased by this release
+            import llm_slot_schedule
+            llm_slot_schedule.clear_stuck(os.environ[SCHEDULE_ENV],
+                                          body["id_slot"])
     if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
         return {"text": None, "finish_reason": None, "usage": None,
                 "status": status}
