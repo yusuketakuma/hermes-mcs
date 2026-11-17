@@ -14,6 +14,7 @@ import upgrade_scope
 from test_anthropic_runtime import routed
 from test_attachment_inference import page_store
 from test_cloud_after_local import local_then_cloud
+from test_cloud_response_recovery import legacy_cloud_routes
 
 __all__ = ["routed", "local_then_cloud", "page_store"]
 
@@ -84,3 +85,40 @@ def test_disabled_ocr_reports_no_attachment_work(page_store):
     _earlier_contract(ledger, cfg, key)
     cfg["attachment_ocr"] = {"enabled": False}
     assert upgrade_scope.prior_generation_remaining(ledger.db, cfg)["attachment_pages"] == 0
+
+
+def _cloud(ledger, cfg):
+    (attachment_ocr._data_root(ledger) / "attachment_inference_cloud_cursor.json").unlink(missing_ok=True)
+    with legacy_cloud_routes():
+        return worker.run_pending(ledger, cfg, stage="cloud", deadline=time.monotonic() + 300)
+
+
+def _age_every_result(ledger):
+    with ledger.db:
+        for row in ledger.db.execute("SELECT artifact_id, content FROM artifacts WHERE kind=?",
+                                     (worker.KIND,)).fetchall():
+            value = json.loads(row["content"])
+            value["contract"] = "synthetic-earlier-contract"
+            ledger.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                              (json.dumps(value), row["artifact_id"]))
+
+
+@pytest.mark.parametrize("value,rebuilt", [
+    (None, True), ("all", True), ("none", False), ({"project_ids": [2]}, False), ("everything", False),
+], ids=repr)
+def test_cloud_stage_follows_the_same_scope(page_store, value, rebuilt):
+    ledger, cfg, key, local_calls, cloud_calls, _ = page_store
+    assert _run(ledger, cfg)["done"] == 1
+    cfg["cloud_llm"]["mode"] = "on"
+    assert _cloud(ledger, cfg)["done"] == 1 and len(cloud_calls) == 1
+    _age_every_result(ledger)  # both stages now carry an earlier extraction contract
+    if value is not None:
+        cfg["extract"] = {"upgrade_scope": value}
+    # The cloud stage runs first here, so only its own scope check (and its
+    # need for a current local result) decides; a closed scope sends nothing.
+    assert _cloud(ledger, cfg)["done"] == 0 and len(cloud_calls) == 1
+    assert _run(ledger, cfg)["done"] == (1 if rebuilt else 0)
+    assert _cloud(ledger, cfg)["done"] == (1 if rebuilt else 0)
+    # A closed scope never sends; an open rebuild may reuse the recorded paid response.
+    assert rebuilt or len(cloud_calls) == 1
+    assert (worker.current(ledger.db, 1, key, cfg=cfg) is not None) is rebuilt

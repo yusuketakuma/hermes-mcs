@@ -6,7 +6,8 @@ interpreted, so it is not a loaded source and no contract digest includes it.
 - unset or ``"all"``: no restriction (the behaviour before this setting existed).
 - ``"none"``: earlier-generation results are kept; nothing is rebuilt.
 - ``{"project_ids": [positive int, ...]}``: only those patients are rebuilt.
-- any other value, or an unreadable configuration: closed, like ``"none"``.
+- any other value, a non-object ``extract`` or an unreadable configuration:
+  closed, like ``"none"``.
 
 A closed scope never stops new arrivals, edited bodies, same-generation QC or
 thin retries, nor a human correction report: an earlier-generation result is
@@ -26,6 +27,7 @@ _UNSET = object()
 _INVALID = ('"all"・"none"・{"project_ids": [正の整数, …]}（重複なし・1件以上）の'
             'いずれかを指定してください。この値では過去世代を作り直しません')
 _UNREADABLE = "設定を読み取れないため、過去世代を作り直しません"
+_CONTAINER = "extract の設定がJSONオブジェクトではないため、過去世代を作り直しません"
 _KINDS = ("llm", "rule")
 
 
@@ -62,9 +64,11 @@ def resolve(cfg) -> Scope:
     """Scope of a loaded configuration; ``None`` (an unreadable one) is closed."""
     if not isinstance(cfg, dict):
         return Scope("none", error=_UNREADABLE)
-    ext = cfg.get("extract")
-    if not isinstance(ext, dict):
+    if "extract" not in cfg:
         return OPEN
+    ext = cfg["extract"]
+    if not isinstance(ext, dict):
+        return Scope("none", error=_CONTAINER)  # validate_config reports it as an error
     return parse(ext.get("upgrade_scope", _UNSET))
 
 

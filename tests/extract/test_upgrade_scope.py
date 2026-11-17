@@ -74,6 +74,20 @@ def test_an_unreadable_host_config_closes_the_scope(tmp_path, monkeypatch):
     assert not upgrade_scope.resolve(None).is_open
 
 
+@pytest.mark.parametrize("container", ["none", "all", None, [], 0, True], ids=repr)
+def test_a_non_object_extract_block_closes_like_its_config_error(tmp_path, monkeypatch, container):
+    cfg = {"extract": container}
+    scope = upgrade_scope.resolve(cfg)
+    assert not scope.is_open and scope.error and not upgrade_scope.allows(scope, 1)
+    assert upgrade_scope.selection_sql(scope, "rule") and upgrade_scope.selection_sql(scope, "llm")
+    errors, _ = mcs_setup.validate_config({**BASE, **cfg})
+    assert len(errors) == 1 and errors[0].startswith("extract: ")  # reported once, by the block check
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(cfg), encoding="utf-8")
+    monkeypatch.setattr(mcs_util, "CONF_PATH", str(path))
+    assert not upgrade_scope.live().is_open
+
+
 def _llm_row(db, mid, version, *, pid=1, chash=None, **meta):
     return db.artifact_add(llm.KIND, '{"summary":"合成の結果"}', project_id=pid, message_id=mid,
         model=llm.MODEL, meta={VERSION_KEY: CURRENT_VERSION, "hash": chash or _hash(db, mid),
