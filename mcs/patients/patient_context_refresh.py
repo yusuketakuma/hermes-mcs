@@ -226,6 +226,14 @@ _SCAN_KEYS = ("patient_scan", "patient_scan_local")
 # at most this many consecutive units.
 PREFER_LIMIT = 32
 _PREFER = "_patient_context_prefer"
+# Under ``local_takeover`` a unit that holds cloud work waits for a context child with this
+# reason. The wait belongs to that patient, not to the lane: the worker passes over the patient
+# for as long as a child waits after a cloud defer (``cloud_backlog._context_retry_delay``) and
+# moves on, in the same pass, to a patient it can serve, for at most this many units.
+CHILD_WAIT_REASON = "patient_context_cloud_deferred:cloud_worker_unavailable"
+CHILD_WAIT_S = 60
+CHILD_WAIT_UNITS = 8
+_CHILD_WAIT = "_patient_context_child_wait"
 
 
 def _scan_key(role):
@@ -372,9 +380,10 @@ def _generation_plan(db, pid, cfg, snapshot, now, *, cohort=False):
 _WAIT_COUNTER_KEYS = (
     'wait_no_eligible_sources', 'wait_no_due_lane', 'wait_generation_quota',
     'wait_readiness_unverified', 'wait_dependency_incomplete',
-    'wait_other_role', 'wait_patient_busy',
+    'wait_other_role', 'wait_patient_busy', 'wait_cloud_worker',
 )
-# Patients of the other worker role do not use the pass's candidate budget, up to this many.
+# Patients of the other worker role, and patients passed over while their unit waits for a
+# context child, do not use the pass's candidate budget, up to this many.
 _ROLE_SKIP_LIMIT = 64
 _SCAN_COUNTER_KEYS = _WAIT_COUNTER_KEYS + ('skip_patient_invalid',)
 
@@ -390,11 +399,12 @@ def _raise_if_systemic(unreadable, scanned):
 
 
 def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out=None, role="any",
-                    patient_lock_out=None, prefer=None):
+                    patient_lock_out=None, prefer=None, passed_over=()):
     """Advance a bounded scan before evaluating each patient's current evidence.
 
-    ``role`` skips the patients another worker role serves, and a patient another worker holds
-    is skipped as busy. The selected patient's lock is appended to ``patient_lock_out`` as
+    ``role`` skips the patients another worker role serves, a patient another worker holds
+    is skipped as busy, and a patient in ``passed_over`` (its unit waits for a context child)
+    is skipped as waiting. The selected patient's lock is appended to ``patient_lock_out`` as
     ``(pid, fd)``; without that list no lock outlives the selection. ``prefer`` is evaluated
     first, without moving the scan bookmark."""
     if observed_out is not None:
@@ -418,6 +428,10 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
         seen.add(pid)
         if role in ("local", "cloud") and cloud_scan(pid) != (role == "cloud"):
             count('wait_other_role')
+            return 'other_role'
+        if pid in passed_over:
+            count('wait_cloud_worker')
+            waiting += 1
             return 'other_role'
         scanned += 1
         lock = _patient_lock(reader.db, pid)
@@ -618,7 +632,22 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
 
 
 def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None, role="any"):
-    """Keep one completed unit's existing save path resumable within its deadline.
+    """Run one unit; after a unit that waits for a context child, select again past its patient.
+
+    A pass that selected no other patient reports that wait."""
+    waited = None
+    for _ in range(CHILD_WAIT_UNITS):
+        selected, result = yield from _run_one_unit(ledger, cfg, deadline=deadline, admit=admit,
+                                                    complete=complete, local_admit=local_admit, role=role)
+        if not isinstance(result, dict) or result.get("reason") != CHILD_WAIT_REASON:
+            return waited if waited is not None and selected is None else result
+        waited = result
+    return waited
+
+
+def _run_one_unit(ledger, cfg, *, deadline, admit, complete, local_admit, role):
+    """Keep one completed unit's existing save path resumable within its deadline; returns the
+    selected patient (None when no patient was selected) and the unit's result.
 
     The selected patient's lock is held while the unit runs, so that two workers never work on
     one patient. It is released while the completed unit waits suspended (the resident may
@@ -629,7 +658,8 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None, r
     prefer = _preferred_patient(ledger, cfg)
     unit = _run_due_unit(ledger, cfg, deadline=deadline, admit=admit, complete=complete,
                          local_admit=local_admit, returned=returned, role=role,
-                         patient_lock=patient_lock, prefer=prefer)
+                         patient_lock=patient_lock, prefer=prefer,
+                         passed_over=_child_waits(ledger, role))
     try:
         try:
             outcome = next(unit)
@@ -657,7 +687,7 @@ def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None, r
             # Unknown ownership remains reserved when its best-effort CAS
             # cannot be proved. Preserve the unit's existing return value.
             pass
-    return result
+    return selected, result
 
 
 def _preferred_patient(ledger, cfg):
@@ -684,14 +714,34 @@ def _preferred_patient(ledger, cfg):
     return pid
 
 
+def _child_waits(ledger, role):
+    """The patients this worker passes over while their unit waits for a context child.
+
+    Only a takeover waits for a child; any other role forgets the waits."""
+    waits = ledger.__dict__.get(_CHILD_WAIT)
+    if role != "local_takeover":
+        ledger.__dict__.pop(_CHILD_WAIT, None)
+        return frozenset()
+    if not waits:
+        return frozenset()
+    now = patient_context_refresh_state.time.monotonic()
+    for pid in [pid for pid, until in waits.items() if until <= now]:
+        del waits[pid]
+    return frozenset(waits)
+
+
 def _remember_patient(ledger, pid, result):
-    """Count consecutive source units of one patient selected by this worker.
+    """Count consecutive source units of one patient selected by this worker, and remember a
+    patient whose unit waits for a context child.
 
     Its overview, another patient's unit, or a selected unit of it that did not complete ends
     the count: such a wait (a cloud cap until the next day, an absent child) must not hold
     other patients' ready work."""
     if pid is None or not isinstance(result, dict):
         return
+    if result.get("reason") == CHILD_WAIT_REASON:
+        ledger.__dict__.setdefault(_CHILD_WAIT, {})[pid] = (
+            patient_context_refresh_state.time.monotonic() + CHILD_WAIT_S)
     previous = ledger.__dict__.get(_PREFER)
     if not result.get("done"):
         if previous is not None and previous[0] == pid:
@@ -763,7 +813,7 @@ def _selection_lock(db):
 
 
 def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, returned, role="any",
-                  patient_lock=None, prefer=None):
+                  patient_lock=None, prefer=None, passed_over=()):
     import extract_llm
     import cloud_inference
     import cloud_client
@@ -791,7 +841,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         scan_observed = {}
         best, pid, scan_rotation, scanned, waiting, covered, scan_reads, scan_interrupts = _select_patient(
             ledger, cfg, now, deadline, admit, complete, observed_out=scan_observed, role=role,
-            patient_lock_out=patient_lock, prefer=prefer)
+            patient_lock_out=patient_lock, prefer=prefer, passed_over=passed_over)
         stats = {"scanned": scanned, "waiting": waiting, "covered": covered,
                  "scan_reads": scan_reads, "scan_interrupts": scan_interrupts,
                  "scan_ms": int((patient_context_refresh_state.time.monotonic() - started) * 1000)}

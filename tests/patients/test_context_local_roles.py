@@ -13,12 +13,13 @@ import extract_llm_provider
 import extract_llm_resident as resident
 import ledger as ledger_module
 import local_llm
+import patient_context_plan as plan
 import patient_context_refresh as refresh
 import patient_context_refresh_readiness as readiness
 import patient_context_refresh_state as state
 from test_context_cloud_update_identity import cloud, real_cloud, runtime
 from test_patient_context_refresh import CFG, document, seed, step
-from test_patient_context_cloud_stop_paths import _local_sources, _partial_cloud_scan
+from test_patient_context_cloud_stop_paths import LONG, _local_sources, _partial_cloud_scan, _wire
 
 __all__ = ['cloud', 'real_cloud', 'runtime']
 
@@ -249,7 +250,7 @@ def lanes(request, runtime, real_cloud, tmp_path, monkeypatch):
             seed(ledger, mid=pid, pid=pid, body=IN_SCOPE)
         for index in range(3):
             seed(ledger, mid=1000 + index, pid=71, body=OUT_OF_SCOPE + f'記録{index}。')
-    else:
+    elif param == 'in_scope':
         seed(ledger, mid=1, pid=1, body=IN_SCOPE)
     monkeypatch.setattr(resident, 'HOME', str(tmp_path))
     monkeypatch.setattr(resident, 'disk_free_mb', lambda _: 100000)
@@ -371,6 +372,32 @@ def test_role_probe_failure_semantics(lanes, tmp_path, monkeypatch, capsys):
     assert OUT_OF_SCOPE in _bodies(lanes.calls)
 
 
+@pytest.mark.parametrize('lanes', ['in_scope'], indirect=True)
+def test_an_unobservable_child_never_starts_the_takeover_grace(lanes, monkeypatch):
+    """Probes that cannot observe the child, a little less than the grace apart and for longer
+    than the grace in all, never count as an absence."""
+    monkeypatch.setattr(cloud_backlog, 'role_alive', lambda root, name: None)
+    roles = []
+    real = resident._context_role
+    monkeypatch.setattr(resident, '_context_role', lambda *args, **kwargs: roles.append(real(*args, **kwargs)) or roles[-1])
+    started = lanes.clock.mono
+    while lanes.clock.mono - started <= resident.CHILD_ABSENT_GRACE_S + 100:
+        lanes.lane()
+        lanes.clock.mono += 99
+    assert len(roles) >= 10 and set(roles) == {'local'}, roles
+    assert resident._CHILD_ABSENT not in lanes.ledger.__dict__
+    assert IN_SCOPE not in _bodies(lanes.calls) and not lanes.posts
+
+
+@pytest.mark.parametrize('local', [None, False, True])
+def test_a_child_serves_only_cloud_patients_while_a_local_lane_is_proven_alive(lanes, monkeypatch, local):
+    """A child treats an unobservable local lane as absent and serves every patient."""
+    probed = []
+    monkeypatch.setattr(cloud_backlog, 'role_alive', lambda root, name: probed.append(name) or local)
+    role = resident._context_role(lanes.ledger, cloud_worker=True, cloud_on=True)
+    assert role == ('cloud' if local is True else 'any') and probed == [cloud_backlog.ROLE_LOCAL]
+
+
 def test_a_role_never_probes_itself(tmp_path):
     fd = cloud_backlog.hold_role(tmp_path, cloud_backlog.ROLE_LOCAL)
     try:
@@ -414,13 +441,16 @@ def test_lane_pauses_after_a_pass_that_found_only_other_role_patients(lanes, mon
     assert lanes.lane()['reason'] == 'patient_context_other_role' and entered == [1]
 
 
-@pytest.mark.parametrize('reason,pause', [
-    ('patient_context_cloud_deferred:cloud_worker_unavailable', 60), ('patient_context_cloud_budget', 60),
-    ('patient_context_cloud_deferred:cloud_capacity', 0), ('patient_context_waiting', 0)])
-def test_lane_paces_its_passes_like_the_children(lanes, monkeypatch, reason, pause):
-    """Owner Q12: a cloud wait (an absent child holds a unit with cloud progress) pauses the
-    lane's context passes for a minute; a full send slot or ordinary waiting does not."""
-    assert cloud_backlog._context_retry_delay({'reason': reason}) == (pause or 5)
+@pytest.mark.parametrize('reason,child,pause', [
+    ('patient_context_cloud_deferred:daily_cap', 60, 60), ('patient_context_cloud_budget', 60, 60),
+    ('patient_context_selection_busy', 20, 20), ('patient_context_other_role', 60, 60),
+    ('patient_context_cloud_deferred:cloud_worker_unavailable', 60, 0),
+    ('patient_context_cloud_deferred:cloud_capacity', 5, 0), ('patient_context_waiting', 5, 0)])
+def test_lane_paces_its_passes_like_the_children(lanes, monkeypatch, reason, child, pause):
+    """Owner Q12: a cloud wait pauses the lane's context passes for a minute like a child's, and
+    another worker in the selection for 20 s; a full send slot or ordinary waiting does not. A
+    unit waiting for a child holds back only its patient (the selection passes over it)."""
+    assert cloud_backlog._context_retry_delay({'reason': reason}) == child
     entered = []
 
     def run_due(*args, **kwargs):
@@ -431,7 +461,11 @@ def test_lane_paces_its_passes_like_the_children(lanes, monkeypatch, reason, pau
     lanes.lane()
     lanes.lane()
     assert len(entered) == (1 if pause else 2)
-    lanes.clock.mono += pause
+    if pause:
+        lanes.clock.mono += pause - 3   # each pass takes a second: just before the pause ends
+        lanes.lane()
+        assert len(entered) == 1
+        lanes.clock.mono += 1
     lanes.lane()
     assert len(entered) == (2 if pause else 3)
 
@@ -571,10 +605,12 @@ def test_a_waiting_preferred_patient_does_not_hold_the_takeover(runtime, real_cl
     cfg['semantic'] = {**cfg['semantic'], 'project_ids': None}
     seed(ledger, mid=2, pid=2, body=OUT_OF_SCOPE)
     _prefer(ledger, 1)
-    outcomes = _until(lambda: step(runtime, cfg=cfg, role='local_takeover'),
-                      lambda: OUT_OF_SCOPE in _bodies(local_calls), limit=6)
-    assert OUT_OF_SCOPE in _bodies(local_calls), outcomes
-    assert outcomes[0][1] == 'patient_context_cloud_deferred:cloud_worker_unavailable', outcomes
+    first = step(runtime, cfg=cfg, role='local_takeover')
+    # The same pass waits on the preferred patient and moves on to the fresh one.
+    assert (first['status'], first['done']) == ('progressed', 1), first
+    assert OUT_OF_SCOPE in _bodies(local_calls) and not [body for body in _bodies(local_calls) if body in LONG]
+    assert refresh._PREFER not in ledger.__dict__ or ledger.__dict__[refresh._PREFER][0] == 2
+    assert 1 in ledger.__dict__[refresh._CHILD_WAIT]
     assert 'patient_scan_local' in _rotation(ledger)
 
 
@@ -628,3 +664,87 @@ def test_no_preference_while_the_rebuilding_patients_context_is_visible(runtime,
     monkeypatch.setattr(readiness, 'context_view_input', lambda *args, **kwargs: {'facts': []})
     assert refresh._preferred_patient(ledger, CFG) is None
     assert refresh._PREFER not in ledger.__dict__
+
+
+def _stuck_patients(lanes, monkeypatch, stuck):
+    """``stuck`` cloud patients whose source the cloud answered in part (cloud progress), then a
+    fresh cloud patient with three sources; the cloud is never asked again afterwards."""
+    ledger, clock = lanes.ledger, lanes.clock
+    monkeypatch.setattr(plan, 'SCAN_CHUNK', 80)
+    sent = _wire(monkeypatch, lambda index, payload, limit: None)
+    fresh = stuck + 1
+    lanes.cfg['semantic'] = {**lanes.cfg['semantic'], 'project_ids': None}
+    for index in range(3):
+        seed(ledger, mid=1000 + index, pid=fresh, body=IN_SCOPE + f'記録{index}。')
+    for pid in range(1, fresh):
+        seed(ledger, mid=pid, pid=pid, body=LONG)
+        lanes.cfg['cloud_llm']['project_ids'] = [pid]   # this patient's first chunk only
+        for _ in range(8):
+            step((ledger, clock, lanes.calls), cfg=lanes.cfg, role='cloud')
+            if ledger.db.execute('SELECT 1 FROM artifacts WHERE kind=? AND project_id=?',
+                                 (state.SCAN, pid)).fetchone():
+                break
+    for pid in range(1, fresh):
+        rows = ledger.db.execute('SELECT content,meta FROM artifacts WHERE kind=? AND project_id=?',
+                                 (state.SCAN, pid)).fetchall()
+        assert rows and all(json.loads(meta).get('provider') and not json.loads(content)['complete']
+                            for content, meta in rows), [(json.loads(c), json.loads(m)) for c, m in rows]
+    lanes.cfg['cloud_llm']['project_ids'] = list(range(1, fresh + 1))
+    assert not lanes.calls and len(sent) >= stuck
+    return fresh, sent
+
+
+def _takeover_lane_seconds(lanes, done, limit=6000):
+    """Simulated lane seconds until ``done()``, the lane already past the child-absence grace; a
+    pass that did no work waits the lane loop's idle floor before the next."""
+    clock = lanes.clock
+    lanes.ledger.__dict__[resident._CHILD_ABSENT] = (clock.mono - resident.CHILD_ABSENT_GRACE_S - 1, clock.mono)
+    started = clock.mono
+    outcomes = []
+    while not done() and clock.mono - started < limit:
+        outcome = lanes.lane()
+        outcomes.append((outcome.get('status'), outcome.get('reason')))
+        if not outcome.get('done'):
+            clock.mono += 5
+            clock.wall += 5
+    return clock.mono - started, outcomes
+
+
+@pytest.mark.parametrize('lanes', ['none'], indirect=True)
+@pytest.mark.parametrize('stuck', [1, 4, 10])
+def test_takeover_serves_a_fresh_patient_behind_stuck_ones(lanes, monkeypatch, stuck):
+    """Reproduction: a unit waiting for a child paused the whole lane for a minute, so fresh
+    local work waited behind every stuck patient (1 stuck: 437 s, 4: 3223 s, 10: over 6000 s).
+    The wait now holds back only its patient; the stuck ones are never redone locally or sent."""
+    assert refresh.CHILD_WAIT_S == cloud_backlog._context_retry_delay({'reason': refresh.CHILD_WAIT_REASON})
+    fresh, sent = _stuck_patients(lanes, monkeypatch, stuck)
+    sent_before, reserved = len(sent), len(lanes.ledger.artifacts('cloud_usage_reserve'))
+    seconds, outcomes = _takeover_lane_seconds(lanes, lambda: document(lanes.ledger, pid=fresh))
+    assert document(lanes.ledger, pid=fresh) is not None, outcomes[-12:]
+    assert seconds < 120, (seconds, outcomes)
+    # The stuck patients keep waiting, checked again after each wait, and nothing else happens.
+    waits = {}
+    real = refresh._remember_patient
+
+    def remember(ledger, pid, result):
+        if result.get('reason') == refresh.CHILD_WAIT_REASON:
+            waits[pid] = waits.get(pid, 0) + 1
+        return real(ledger, pid, result)
+
+    monkeypatch.setattr(refresh, '_remember_patient', remember)
+    _takeover_lane_seconds(lanes, lambda: False, limit=300)
+    assert set(waits) == set(range(1, fresh)) and all(2 <= count <= 7 for count in waits.values()), waits
+    assert not [body for body in _bodies(lanes.calls) if body in LONG]
+    assert len(sent) == sent_before and len(lanes.ledger.artifacts('cloud_usage_reserve')) == reserved
+    assert not lanes.ledger.artifacts('cloud_usage_disposition')
+
+
+def test_child_waits_expire_and_end_with_the_takeover(runtime, real_cloud):
+    ledger, clock, _ = runtime
+    refresh._remember_patient(ledger, 3, {'status': 'deferred', 'done': 0, 'reason': refresh.CHILD_WAIT_REASON})
+    assert refresh._child_waits(ledger, 'local_takeover') == {3}
+    clock.mono += refresh.CHILD_WAIT_S
+    assert refresh._child_waits(ledger, 'local_takeover') == frozenset()
+    refresh._remember_patient(ledger, 3, {'status': 'deferred', 'done': 0, 'reason': refresh.CHILD_WAIT_REASON})
+    assert refresh._child_waits(ledger, 'local') == frozenset()   # a child is back
+    assert refresh._CHILD_WAIT not in ledger.__dict__
