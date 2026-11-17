@@ -285,10 +285,11 @@ def _cloud_mode(ledger, cfg, route, project_id):
     return _cloud_route_state(cfg, route, project_id)[0]
 
 
-def _off_code(cfg, stop):
+def _off_code(cfg, stop, route, project_id):
     """The ``cloud_send_admission.classify_refusal`` code of one :func:`_cloud_route_state` stop."""
     if stop == "scope":
-        return cloud_policy.refusal_code(cfg if isinstance(cfg, dict) else {}, "scope", model=None, root=HOME)
+        return cloud_policy.refusal_code(cfg if isinstance(cfg, dict) else {}, "scope", model=None, root=HOME,
+                                         route=route, project_id=project_id)
     if type(stop) is str and stop.startswith("key:"):
         return stop[len("key:"):]
     return stop
@@ -300,7 +301,7 @@ def cloud_route_mode(ledger, cfg, route, project_id):
     ``off_reason`` is :func:`cloud_off_reason` of that same reading, so a key read that fails
     and then succeeds cannot pair an off mode with no reason. None unless the mode is off."""
     mode, stop = _cloud_route_state(cfg, route, project_id)
-    return mode, (_off_code(cfg, stop) if mode == "off" else None)
+    return mode, (_off_code(cfg, stop, route, project_id) if mode == "off" else None)
 
 
 def cloud_off_reason(ledger, cfg, route, project_id):
@@ -309,7 +310,7 @@ def cloud_off_reason(ledger, cfg, route, project_id):
     An explicit off, the patient's scope, a provider the facility review has not approved and a
     closed route are named as such; a key that cannot be used is named by its own problem. None
     while this configuration leaves the cloud available, which a caller reads as unknown."""
-    return _off_code(cfg, _cloud_route_state(cfg, route, project_id)[1])
+    return _off_code(cfg, _cloud_route_state(cfg, route, project_id)[1], route, project_id)
 
 
 def _comparison_fact(source, kind, assertion, evidence=None, *, evidence_span=None):

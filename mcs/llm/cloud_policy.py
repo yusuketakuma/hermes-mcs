@@ -505,7 +505,7 @@ def selected_key_problem(root, cfg):
 REFINED_CODES = frozenset({"pricing_unverified", "window_history_unverified", "scope"})
 
 
-def refusal_code(cfg, code, *, model, root=None, settings=None):
+def refusal_code(cfg, code, *, model, root=None, settings=None, route=None, project_id=None):
     """Name a send-block code the way the stop-reason classifier tells definitive from transient.
 
     ``cfg`` is the raw configuration (an explicit ``mode`` and the facility review are read
@@ -513,6 +513,8 @@ def refusal_code(cfg, code, *, model, root=None, settings=None):
     An expired price table, an aged period, an explicit mode off and a provider the facility
     review has not approved are definitive. An unverifiable price or period history, a
     computed off (the key problem, else ``unknown``) and an unreadable review record are not.
+    With ``route`` and ``project_id``, a scope stop that the configuration does not declare
+    (:func:`scope_revoked`) was a read that has since recovered: ``env_file_unreadable``.
     Every other code is returned as it is."""
     try:
         if code == "pricing_unverified":
@@ -532,6 +534,8 @@ def refusal_code(cfg, code, *, model, root=None, settings=None):
             if resolved["mode"] == "off":
                 # computed off: a mode left out with no usable key, or a configuration error
                 return selected_key_problem(root, cfg) or "unknown"
+            if route is not None and not scope_revoked(cfg, route, project_id):
+                return "env_file_unreadable"
     except Exception:
         return {"window_history_unverified": "window_history_pruned", "scope": "unknown"}.get(code, code)
     return code

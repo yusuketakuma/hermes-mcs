@@ -1384,7 +1384,8 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                             max_tokens=cloud_selection["max_tokens"] or 1600, selection=cloud_selection))
                 if code in cloud_policy.REFINED_CODES:
                     code = cloud_policy.refusal_code(cfg, code, model=cloud_selection["model"],
-                                                     root=extract_llm.HOME, settings=cloud_settings)
+                                                     root=extract_llm.HOME, settings=cloud_settings,
+                                                     route="patient_context", project_id=pid)
                 verdict, code, _ = cloud_stop(("pre_send", code), False, False) if code else (None, None, False)
         except Exception:
             return   # the send path decides again, with the same table

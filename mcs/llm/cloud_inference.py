@@ -369,7 +369,8 @@ class CloudInferenceUnit:
             return reason
         try:
             return cloud_policy.refusal_code(load_config() if cfg is None else cfg, reason,
-                                             model=self.model, root=HOME, settings=settings)
+                                             model=self.model, root=HOME, settings=settings,
+                                             route=self.route, project_id=self.project_id)
         except Exception:
             return {"window_history_unverified": "window_history_pruned", "scope": "unknown"}.get(reason, reason)
 
