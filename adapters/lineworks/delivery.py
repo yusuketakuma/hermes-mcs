@@ -98,7 +98,8 @@ async def _wait(seconds, retry_allowed):
             return True
 
 
-async def locked(fn, *args, wait_cooldown=False, retry_allowed=None):
+async def locked(fn, *args, wait_cooldown=False, retry_allowed=None,
+                 busy_tries=SENDER_BUSY_TRIES, cooldown_tries=COOLDOWN_TRIES):
     """Run a lock-taking Sender call, waiting out an api.lock hold.
 
     sender_busy is a local preflight (nothing sent), so retrying cannot duplicate;
@@ -116,7 +117,7 @@ async def locked(fn, *args, wait_cooldown=False, retry_allowed=None):
             return await asyncio.to_thread(fn, *args)
         except ClientError as exc:
             until = getattr(exc, "until", None)
-            if wait_cooldown and until is not None and cooled < COOLDOWN_TRIES - 1:
+            if wait_cooldown and until is not None and cooled < cooldown_tries - 1:
                 cooled += 1
                 if not await _wait(min(max(until - time.time(), 0), 60) + 0.05, retry_allowed):
                     raise
@@ -128,7 +129,7 @@ async def locked(fn, *args, wait_cooldown=False, retry_allowed=None):
                 busy_since = time.monotonic() if busy_since is None else busy_since
                 if time.monotonic() - busy_since >= PART_BUSY_LIMIT:
                     raise
-            elif busy == SENDER_BUSY_TRIES:
+            elif busy == busy_tries:
                 raise
             if not await _wait(SENDER_BUSY_WAIT, retry_allowed):
                 raise

@@ -4,16 +4,20 @@ from __future__ import annotations
 import asyncio
 import functools
 import re
+import time
 
 from adapters.common import projects
 from adapters.common import confirm, envelopes, paths, forms, text
 
 from .cards import buttons
 from .client import ClientError
-from .delivery import SCOPE_KEYS, locked
+from .delivery import SCOPE_KEYS, failure, locked
 
 ACTION = re.compile(r"mcs:a:([0-9a-f]{32})\Z")
 CONFIRM = re.compile(r"mcs:c:([0-9a-f]{16})(:cancel)?\Z")
+# A callback is never re-delivered, so its DMs outwait a card/attachment api.lock
+# hold (signing, token, upload and post at 20 s each) and one shared 429 cooldown.
+CALLBACK_BUSY_TRIES, CALLBACK_COOLDOWN_TRIES = 120, 2
 
 
 SUMMARY_WORD = "サマリー"
@@ -24,7 +28,8 @@ class Actions:
         self.settings, self.dirs, self.reg = settings, dirs, reg
         self.sender, self.log = sender, log
         self._followup_cursor = 0
-        self._sent = 0
+        self._sent = self._attempts = 0
+        self._callback = False
 
     def _allowed(self):
         return self.sender.route_current({"delivery": {"route_epoch": self.settings["route_epoch"]}})
@@ -51,22 +56,42 @@ class Actions:
         if user not in self.settings["allowed_user_ids"] or not self._allowed():
             return
         # DMs, never a shared-room substitute for Slack ephemeral answers.
+        # LINE WORKS button labels are at most 20 characters; the postback is unchanged.
+        actions = [{**a, "label": a["label"][:20]} for a in actions or []]
         chunks = text.split_body(value, limit=1000 if actions else 1900, max_chunks=None)
         for i, chunk in enumerate(chunks):
             content = buttons(chunk, actions if i == len(chunks) - 1 else [])
             await self._send(content, user)
 
     async def _send(self, content, user):
-        # sender_busy is a local lock preflight (nothing sent), so delivery.locked's
-        # bounded retry cannot duplicate a DM; every other error stays at most once.
-        sent = await locked(functools.partial(self.sender.send, content, user_id=user))
+        # sender_busy and the 429 cooldown/rejection prove nothing was sent, so
+        # delivery.locked's bounded retry cannot duplicate a DM; every other error
+        # stays at most once. Only callback DMs wait: a followup is restored instead.
+        self._attempts += 1
+        wait = ({"wait_cooldown": True, "busy_tries": CALLBACK_BUSY_TRIES,
+                 "cooldown_tries": CALLBACK_COOLDOWN_TRIES} if self._callback else {})
+        sent = await locked(functools.partial(self.sender.send, content, user_id=user), **wait)
         self._sent += 1
         return sent
+
+    def _unsent(self, exc, sent, attempts):
+        """True when no DM of the step went out: a local write failed before any was
+        tried, or the one tried provably failed. A permanent local error (a malformed
+        result, a button budget) is not retried."""
+        return self._sent == sent and (self._attempts == attempts and isinstance(exc, OSError)
+                                       or failure(exc)["result"] == "not_sent")
 
     async def _publish(self, payload):
         await asyncio.to_thread(envelopes.publish_command, self.dirs["cmd_int"], payload)
 
     async def handle(self, event):
+        self._callback = True
+        try:
+            await self._handle(event)
+        finally:
+            self._callback = False
+
+    async def _handle(self, event):
         source = event["source"]
         user = source["userId"]
         if user not in self.settings["allowed_user_ids"] or not self._allowed():
@@ -110,8 +135,14 @@ class Actions:
                            "token": token, "origin": origin, "fields": {}, "index": 0,
                            "definitions": [{"id": "name", "label": "担当者名を入力してください。",
                                             "required": True, "max": 120, "default": ""}]}
-                self.reg.put_modal("lw-form-" + envelopes.actor_hash(actor), session)
-                await self._prompt(user, session)
+                self.reg.put_modal(form_id, session)
+                sent, attempts = self._sent, self._attempts
+                try:
+                    await self._prompt(user, session)
+                except Exception as exc:
+                    if self._unsent(exc, sent, attempts):
+                        self.reg.drop_modal(form_id)  # never answer a question the user was not shown
+                    raise
                 return
             env = envelopes.notification(token, actor, origin,
                                          projects.view_inputs(self.settings, kind, name))
@@ -241,6 +272,18 @@ class Actions:
         if field["id"] == "due_date" and value and not forms.valid_due(value):
             await self._prompt(user, session, "入力を確認できませんでした（YYYY-MM-DD 形式）。")
             return
+        previous = {**session, "fields": dict(session["fields"])}
+        sent, attempts = self._sent, self._attempts
+        try:
+            await self._advance(user, actor, mid, session, field, value)
+        except ClientError as exc:
+            # A next prompt or preview that provably never went out keeps the form
+            # where the user last saw it, so resending the answer continues it.
+            if self._unsent(exc, sent, attempts):
+                self.reg.put_modal(mid, previous)
+            raise
+
+    async def _advance(self, user, actor, mid, session, field, value):
         session["fields"][field["id"]] = value
         session["index"] += 1
         if session["index"] < len(session["definitions"]):
@@ -348,17 +391,18 @@ class Actions:
             # At most once: a DM with a lost response must never be automatically posted again.
             if not self.reg.drop_followup(cid):
                 continue
-            sent = self._sent
+            sent, attempts = self._sent, self._attempts
             try:
                 await self._deliver_followup(user, rec, result)
-            except ClientError as exc:
-                # sender_busy outlasting the retry budget and a 429 (api_lock stamps
-                # ``until`` on both the cooldown preflight and a wire rejection) are
-                # pre-commit refusals; when no chunk of this followup went out,
-                # restore it so the next sweep retries.
-                if (exc.error_code == "sender_busy" or getattr(exc, "until", None) is not None) \
-                        and self._sent == sent:
-                    self.reg.put_followup(cid, rec)
+            except Exception as exc:
+                # When no chunk of this followup went out and the failure proves the
+                # tried DM never did (sender_busy, 429, token request, local check,
+                # 4xx) or nothing was tried, restore it so the next sweep retries —
+                # but only within its original lifetime: a restore renews ``expires``.
+                retry_until = rec.get("retry_until", rec.get("expires"))
+                if self._unsent(exc, sent, attempts) and isinstance(retry_until, int | float) \
+                        and time.time() < retry_until:
+                    self.reg.put_followup(cid, {**rec, "retry_until": retry_until})
                 raise
 
     async def _deliver_followup(self, user, rec, result):
@@ -407,7 +451,7 @@ class Actions:
             else:
                 await self._say(user, message)
             if tasks:
-                actions = [{"type": "message", "label": f"{tr['label']} #{task['request_id']}"[:20],
+                actions = [{"type": "message", "label": f"{tr['label']} #{task['request_id']}",
                             "postback": "mcs:a:" + tr["token"]}
                            for task in tasks for tr in (task.get("transitions") or {}).values()]
                 for i in range(0, len(actions), 10):
