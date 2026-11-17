@@ -96,7 +96,7 @@ def test_new_inventory_counts_persisted_states_and_keeps_private_values_hidden(i
     assert backup_evidence.inventory_matches(source, _legacy_inventory(), max_steps=10_000_000)
 
 
-@pytest.mark.parametrize("version", [None, True, False, 0, 1, 3, "2", [], {}])
+@pytest.mark.parametrize("version", [None, True, False, 0, 1, 2.0, 3, "2", [], {}])
 def test_explicit_invalid_inventory_version_is_rejected_before_read(inventory_world, monkeypatch, version):
     source, _ = inventory_world
     expected = _legacy_inventory()
@@ -138,6 +138,24 @@ def test_inventory_comparison_never_ignores_non_state_fields(inventory_world):
     expected = deepcopy(_legacy_inventory())
     expected["counts"]["messages"] = 1
     assert not backup_evidence.inventory_matches(source, expected)
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_held_report_version_cannot_reinterpret_its_saved_counts(inventory_world, monkeypatch, legacy):
+    source, policy = inventory_world
+    receipt = _bundle(source, policy, monkeypatch, legacy)
+    target = Path(policy.scratch_dir) / "held"
+    backup.verify(receipt["bundle"], receipt["sha256"], policy, lambda: KEY,
+                  drill_destination=str(target))
+    path = target / "restore.json"
+    report = json.loads(path.read_text())
+    if legacy:
+        report["inventory"]["v"] = 2
+    else:
+        report["inventory"].pop("v")
+    path.write_text(json.dumps(report))
+    with pytest.raises(restore.RestoreConsentError, match="restore_inventory_mismatch"):
+        restore.plan(str(target), source_sha256=receipt["sha256"])
 
 
 def test_new_local_restore_report_uses_the_current_inventory(inventory_world, monkeypatch):
