@@ -8,7 +8,8 @@ import sqlite3
 
 import clinical_scope
 from clinical_values import patient_item_scope
-from mcs_queries import CHANGE_ACTIONS, FACT_KINDS_SQL, current_fact_pred, json_or_null, med_is_patient_current
+from mcs_queries import (CHANGE_ACTIONS, FACT_KINDS_SQL, current_fact_pred, json_or_null,
+                         med_capability_evidence, med_is_patient_current)
 
 def _member_sql(col):
     """instr() test for one ? value being an element of a ", "-joined
@@ -168,7 +169,9 @@ def _patient_change_message(db, pid, mid):
             f"WHERE a.kind IN ({FACT_KINDS_SQL}) {current_fact_pred()} "
             "AND m.project_id=? AND m.message_id=? AND je.type='object'", (pid, mid)):
         item = json.loads(raw)
+        # every condition on the SAME item, matching the SQL co-occurrence gate
         if (item.get("action") in CHANGE_ACTIONS and med_is_patient_current(item)
+                and not med_capability_evidence(item.get("evidence"))
                 and patient_item_scope(item, body, patient_name=name, surface=item.get("name")) == "patient"):
             return True
     return False

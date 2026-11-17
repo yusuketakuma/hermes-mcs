@@ -67,6 +67,7 @@ import clinical_urgency
 
 ARTIFACT_KIND = "signal_v1"
 FEEDBACK_KIND = "signal_feedback_v1"
+EVAL_KIND = "signal_eval_v1"
 FEEDBACK_OBSERVATION_LIMIT = 4096
 
 
@@ -159,47 +160,36 @@ def _med_followup(db, now, th, sig_cfg):
                   -- mention is not a change needing follow-up
                   AND {MED_PATIENT_CURRENT_SQL}
                   -- 「〜は出来ない」 capability spans are not changes
-                  AND {MED_NOT_CAPABILITY_SQL}),
-            latest AS (
-                SELECT pid, med, MAX(ts) AS lts FROM med_msgs
-                GROUP BY pid, med)
-            SELECT DISTINCT mm.pid, mm.med, mm.mid
-            FROM med_msgs mm
-            JOIN latest l ON l.pid=mm.pid AND l.med=mm.med
-            JOIN med_msgs lm ON lm.pid=l.pid AND lm.med=l.med
-                            AND lm.ts=l.lts
-            -- evidence rows: window elapsed, no visible follow-up
-            WHERE mm.ts <= ?
-              AND NOT EXISTS (SELECT 1 FROM requests r
-                              WHERE r.source_message_id=mm.mid)
-              AND NOT EXISTS (SELECT 1 FROM messages m2
-                              WHERE m2.project_id=mm.pid
-                                AND m2.posted_at_ts > mm.ts
-                                AND m2.posted_at_ts <= mm.ts + ?
-                                AND m2.body_state IS NOT 'deleted')
-              -- gate: the LATEST mention of this med must itself have
-              -- passed the window with no visible follow-up
-              AND lm.ts <= ?
-              AND NOT EXISTS (SELECT 1 FROM requests r2
-                              WHERE r2.source_message_id=lm.mid)
-              AND NOT EXISTS (SELECT 1 FROM messages m3
-                              WHERE m3.project_id=lm.pid
-                                AND m3.posted_at_ts > lm.ts
-                                AND m3.posted_at_ts <= lm.ts + ?
-                                AND m3.body_state IS NOT 'deleted')
-            ORDER BY mm.pid, mm.med, mm.mid""",
+                  AND {MED_NOT_CAPABILITY_SQL})
+            -- pending: window elapsed with no visible follow-up
+            SELECT DISTINCT mm.pid, mm.med, mm.mid, mm.ts,
+                   mm.ts <= ?
+                   AND NOT EXISTS (SELECT 1 FROM requests r
+                                   WHERE r.source_message_id=mm.mid)
+                   AND NOT EXISTS (SELECT 1 FROM messages m2
+                                   WHERE m2.project_id=mm.pid
+                                     AND m2.posted_at_ts > mm.ts
+                                     AND m2.posted_at_ts <= mm.ts + ?
+                                     AND m2.body_state IS NOT 'deleted')
+            FROM med_msgs mm""",
         (_patient_fact_keys(db, "meds", now - th["followup_max_age_d"] * DAY_S),
          now - th["followup_max_age_d"] * DAY_S, *self_params,
          now - th["followup_days"] * DAY_S,
-         th["followup_days"] * DAY_S,
-         now - th["followup_days"] * DAY_S,
          th["followup_days"] * DAY_S))
-    episodes = {}
-    for pid, med, mid in rows:
+    # Group in Python: SQL TRIM keeps inner/U+3000 whitespace, so spelling
+    # variants must share one key for the latest-mention gate as well.
+    mentions = {}
+    for pid, med, mid, ts, pending in rows:
         if re.sub(r"\s+", "", med) in excludes:
             continue                 # configured non-dispensed name
-        key = (pid, " ".join(med.split()))
-        episodes.setdefault(key, []).append(mid)
+        name = " ".join(med.split())
+        if name:
+            mentions.setdefault((pid, name), {})[(ts, mid)] = bool(pending)
+    episodes = {}
+    for key, found in mentions.items():
+        # gate: the LATEST mention must itself still be pending
+        if found[max(found)]:
+            episodes[key] = [mid for (_, mid), pending in sorted(found.items()) if pending]
     for (pid, med), mids in episodes.items():
         yield _key("med_change_no_followup", pid, med), {
             "type": "med_change_no_followup", "project_id": pid,
@@ -896,7 +886,8 @@ def _resolution(db, old, now, th, sig_cfg):
                 if all(m is not None and m["posted_at_ts"] is not None
                        and db.execute(
                            "SELECT 1 FROM messages WHERE project_id=? "
-                           "AND posted_at_ts>? AND posted_at_ts<=? LIMIT 1",
+                           "AND posted_at_ts>? AND posted_at_ts<=? "
+                           "AND body_state IS NOT 'deleted' LIMIT 1",
                            (pid, m["posted_at_ts"],
                             m["posted_at_ts"] + th["followup_days"] * DAY_S)).fetchone()
                        for m in messages):
@@ -923,6 +914,52 @@ def _resolution(db, old, now, th, sig_cfg):
             "basis": "stored_evidence_exclusion"}
 
 
+def _eval_state(db):
+    """(artifact_id, state) of the single in-place evaluation-progress row."""
+    row = db.execute("SELECT artifact_id, content FROM artifacts WHERE kind=? "
+                     "ORDER BY artifact_id DESC LIMIT 1", (EVAL_KIND,)).fetchone()
+    state = loads_dict(row[1]) if row else None
+    if state is None or not isinstance(state.get("ran_at"), dict):
+        state = {"ran_at": {}}
+    return (row[0] if row else None), state
+
+
+def _detector_order(next_start, sig_cfg):
+    """Immediate-tier detectors first, then the rest rotated to resume where
+    the previous deadline cut off — a fixed order would starve the tail."""
+    immediate = [d for d in DETECTORS if _signal_tier(sig_cfg, d[0]) == "immediate"]
+    rest = [d for d in DETECTORS if d not in immediate]
+    names = [name for name, _ in rest]
+    start = names.index(next_start) if next_start in names else 0
+    return immediate + rest[start:] + rest[:start]
+
+
+def _complete_eval_at(state):
+    """Oldest per-detector success time: every detector has been evaluated
+    at least once since then. None until all of them have."""
+    ran = state.get("ran_at") if isinstance(state, dict) else None
+    times = [ran.get(name) if isinstance(ran, dict) else None for name, _ in DETECTORS]
+    if all(type(t) in (int, float) and 0 <= t < 1e12 for t in times):
+        return min(times)
+    return None
+
+
+def _save_eval_state(db, eval_id, state, next_start, ran_types,
+                     deferred_types, errors, now):
+    names = {name for name, _ in DETECTORS}
+    ran_at = {name: t for name, t in state["ran_at"].items() if name in names}
+    ran_at.update((name, now) for name in ran_types)
+    content = json.dumps({"v": 1, "at": now, "ran_at": ran_at,
+                          "next_start": next_start,
+                          "deferred": deferred_types, "errors": errors})
+    if eval_id is None:
+        db.execute("INSERT INTO artifacts(kind,content,meta,created_at) "
+                   "VALUES(?,?,?,?)", (EVAL_KIND, content, "{}", now))
+    else:
+        db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                   (content, eval_id))
+
+
 def evaluate(ledger, cfg: dict, now: float | None = None,
              deadline: float | None = None) -> dict:
     """Recompute candidates; append lifecycle transitions; enqueue
@@ -933,13 +970,14 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
     sig_cfg = cfg.get("signals")
     notify = isinstance(sig_cfg, dict) and sig_cfg.get("notify") is True
 
-    current = {}
-    ran_types = set()
+    found_by = {}
     errors = []
-    deferred_types = []
-    for index, (stype, det) in enumerate(DETECTORS):
+    eval_id, eval_state = _eval_state(ledger.db)
+    order = _detector_order(eval_state.get("next_start"), sig_cfg)
+    remaining = set()
+    for index, (stype, det) in enumerate(order):
         if deadline is not None and time.monotonic() >= deadline:
-            deferred_types = [name for name, _ in DETECTORS[index:]]
+            remaining = {name for name, _ in order[index:]}
             break
         try:
             found = dict(det(ledger.db, now, th, sig_cfg))
@@ -948,8 +986,13 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
             continue
         # merge only on full success: a half-scanned type must neither
         # open partial candidates nor resolve its existing signals
-        current.update(found)
-        ran_types.add(stype)
+        found_by[stype] = found
+    # merged/reported in DETECTORS order; the run order is a scheduling detail
+    current = {}
+    for name, _ in DETECTORS:
+        current.update(found_by.get(name, {}))
+    ran_types = set(found_by)
+    deferred_types = [name for name, _ in DETECTORS if name in remaining]
 
     existing = latest_signal_states(ledger.db)
     if any(value is None for value in existing.values()):
@@ -1015,6 +1058,11 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
         if notify:
             enqueued, dig_merged = _notify_opened(
                 ledger, newly, now, th, sig_cfg)
+        # resume at the first cut-off non-immediate detector next time
+        next_start = next((name for name, _ in order if name in remaining
+                           and _signal_tier(sig_cfg, name) != "immediate"), None)
+        _save_eval_state(ledger.db, eval_id, eval_state, next_start,
+                         ran_types, deferred_types, errors, now)
         # Keep one daily row while retaining individual observation times for
         # exact sub-day/as-of reads up to a fixed cap. Overflow keeps totals
         # and its interval; crossing that interval remains explicitly partial.
@@ -1167,6 +1215,13 @@ SIGNAL_TIERS = {
     "rx_period_lapsed": "digest",
 }
 DIGEST_INTERVAL_H = 24
+
+
+def _signal_tier(sig_cfg, stype):
+    """Configured signals.tiers override, else SIGNAL_TIERS, else immediate."""
+    sc = sig_cfg if isinstance(sig_cfg, dict) else {}
+    overrides = sc.get("tiers") if isinstance(sc.get("tiers"), dict) else {}
+    return overrides.get(stype, SIGNAL_TIERS.get(stype, "immediate"))
 
 
 def med_group_key(sig):
@@ -1340,12 +1395,9 @@ def _notify_opened(ledger, items, now, th, sig_cfg):
     ih = sc.get("digest_interval_h")
     interval_h = (ih if type(ih) in (int, float) and 0 < ih <= 1e9
                   else DIGEST_INTERVAL_H)
-    overrides = sc.get("tiers") if isinstance(sc.get("tiers"), dict) else {}
     imm, dig = [], []
     for key, sig in items:
-        tier = overrides.get(sig.get("type"),
-                             SIGNAL_TIERS.get(sig.get("type"),
-                                              "immediate"))
+        tier = _signal_tier(sc, sig.get("type"))
         if digest_on and tier == "digest" \
                 and not _urgency_high(ledger.db, sig):
             dig.append((key, sig))
@@ -1487,9 +1539,8 @@ def current_open(db, project_id=None, limit=50):
              if c is not None and c["state"] == "open"
              and (project_id is None or c["project_id"] == project_id)]
     items.sort(key=lambda i: -(i["detected_at"] or 0))
-    last_run = db.execute(
-        "SELECT MAX(finished_at) FROM runs WHERE status != 'failed'"
-    ).fetchone()[0]
+    # every detector evaluated since then; any finished run would hide deferral
+    last_run = _complete_eval_at(_eval_state(db)[1])
     approved = approved_policy(db)          # one read for thresholds and provenance
     thresholds, policy_warnings = resolve_policy(approved)
     policy = None
