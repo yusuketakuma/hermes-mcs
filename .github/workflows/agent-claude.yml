@@ -1,4 +1,6 @@
 name: Agent Claude
+# The number leads the run name: issue-status.yml matches runs to issues by it.
+run-name: "Agent Claude #${{ github.event.issue.number || github.event.pull_request.number }} ${{ github.event.issue.title || github.event.pull_request.title }}"
 
 # Claude Code GitHub Action を、所有者が 担当:claude を付けた Issue と、
 # 所有者が担当中の Issue・PR に書いた @claude にだけ反応させる。

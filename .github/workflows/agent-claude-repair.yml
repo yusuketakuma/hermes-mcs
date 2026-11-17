@@ -1,4 +1,6 @@
 name: Agent Claude repair
+# The PR number in the run name lets issue-status.yml show the repair on the linked issues.
+run-name: "Agent Claude repair #${{ inputs.pr }}"
 
 # agent-control.yml が試行上限前の CI 失敗で、agent-review-fix.yml がレビューの指摘で起動する
 # （workflow_dispatch だけ。コメントやPRでは起動しない）。

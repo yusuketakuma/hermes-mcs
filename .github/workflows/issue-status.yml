@@ -1,0 +1,111 @@
+name: Issue status
+
+# 各 Issue に AI 実装の進み具合を1件のコメントで出し、状態が変わるたびに書き換える（変わらなければ書かない）。
+# 毎回いまの状態から作り直す。GITHUB_TOKEN が起こしたイベントでは起動しないので、取りこぼしは10分おきの定期実行が拾う。
+# 判定は main 側の ci/issue_status.py だけで行い、PR のコードは checkout も実行もしない。
+# ラベルは付けず、Issue も閉じない（main へのマージは Fixes #N で GitHub が閉じる）。
+# 運用: docs/development/AUTOMATION.md
+on:
+  issues:
+    types: [opened, labeled, unlabeled, closed, reopened]
+  workflow_run:
+    workflows: [ci, Agent Claude, Agent Claude repair, Agent control]
+    types: [requested, completed]
+  pull_request_review:
+    types: [submitted]
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: issue-status
+  cancel-in-progress: false
+
+jobs:
+  status:
+    # A fork's review gets a read-only token; the schedule picks it up. A skipped run changes no stage.
+    if: >-
+      (github.event_name != 'pull_request_review' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      github.event.workflow_run.conclusion != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      pull-requests: read
+      actions: read
+      checks: read
+      statuses: read
+      contents: read
+    steps:
+      # pull_request_review runs on the PR merge ref: take ci/ from the default branch, never from the PR.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # The full ref, so a tag named like the branch is never taken; a schedule run has no repository payload.
+          ref: ${{ github.event.repository.default_branch && format('refs/heads/{0}', github.event.repository.default_branch) || github.ref }}
+          sparse-checkout: ci
+          persist-credentials: false
+      - name: Update the status comments
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # Hints narrow an event run to the issues it concerns; schedule and dispatch refresh every target.
+          ISSUE: ${{ github.event.issue.number }}
+          REVIEW_PR: ${{ github.event.pull_request.number }}
+          RUN_TITLE: ${{ github.event.workflow_run.display_title }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_PRS: ${{ join(github.event.workflow_run.pull_requests.*.number, ' ') }}
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          hints=""
+          [[ -n "$ISSUE" ]] && hints="#$ISSUE"
+          [[ -n "$REVIEW_PR" ]] && hints="#$REVIEW_PR"
+          [[ -n "$RUN_SHA" ]] && hints="$RUN_TITLE $RUN_SHA"
+          for n in $RUN_PRS; do hints+=" #$n"; done
+          default=${DEFAULT_BRANCH:-$(gh api "repos/$GH_REPO" --jq .default_branch)}
+          since=$(date -u -d '2 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          gh api --paginate --slurp -X GET "repos/$GH_REPO/issues" -f state=open -f per_page=100 > "$work/open.json"
+          gh api --paginate --slurp -X GET "repos/$GH_REPO/issues" -f state=closed -f since="$since" -f per_page=100 > "$work/closed.json"
+          # shortcut: only the 100 most recently updated PRs are linked; page further if older PRs go unseen.
+          gh api -X GET "repos/$GH_REPO/pulls" -f state=all -f sort=updated -f direction=desc -f per_page=100 > "$work/pulls.json"
+          python3 ci/issue_status.py plan --work "$work" --hints "$hints" > "$work/targets.json"
+          cat "$work/targets.json"
+          if [[ "$(jq length "$work/targets.json")" == "0" ]]; then exit 0; fi
+          # By status: skipped runs (one per label or comment event) would push a running one off a plain recent page.
+          runs() {
+            for status in "$@"; do
+              gh api -X GET "repos/$GH_REPO/actions/workflows/$wf/runs" -f status="$status" -f per_page=30 --jq .workflow_runs
+            done | jq -s add
+          }
+          wf=agent-claude.yml runs requested queued pending waiting in_progress success failure cancelled timed_out > "$work/claude_runs.json"
+          wf=agent-claude-repair.yml runs requested queued pending waiting in_progress > "$work/repair_runs.json"
+          jq -r '.[] | "\(.issue) \(.pr // "")"' "$work/targets.json" | while read -r issue pr; do
+            d="$work/$issue"; mkdir -p "$d"
+            gh api --paginate --slurp "repos/$GH_REPO/issues/$issue/events?per_page=100" > "$d/events.json"
+            gh api --paginate --slurp "repos/$GH_REPO/issues/$issue/comments?per_page=100" > "$d/comments.json"
+            if [[ -n "$pr" ]]; then
+              gh api "repos/$GH_REPO/pulls/$pr" > "$d/pr.json"
+              sha=$(jq -r .head.sha "$d/pr.json")
+              gh api -X GET "repos/$GH_REPO/actions/runs" -f head_sha="$sha" -f per_page=100 --jq .workflow_runs > "$d/ci_runs.json"
+              gh api "repos/$GH_REPO/commits/$sha/status" > "$d/status.json"
+              gh api --paginate --slurp "repos/$GH_REPO/pulls/$pr/reviews?per_page=100" > "$d/reviews.json"
+              run=$(python3 ci/issue_status.py failed-ci-run --work "$work" --issue "$issue")
+              if [[ -n "$run" ]]; then
+                gh api -X GET "repos/$GH_REPO/actions/runs/$run/jobs" -f per_page=100 --jq .jobs > "$d/ci_jobs.json"
+              fi
+            fi
+            python3 ci/issue_status.py render --work "$work" --issue "$issue" --owner "$OWNER" \
+              --default-branch "$default" > "$d/plan.json"
+            if [[ "$(jq -r .write "$d/plan.json")" != "true" ]]; then continue; fi
+            id=$(jq -r '.comment_id // empty' "$d/plan.json")
+            if [[ -n "$id" ]]; then
+              jq '{body}' "$d/plan.json" | gh api -X PATCH "repos/$GH_REPO/issues/comments/$id" --input - > /dev/null
+            else
+              jq '{body}' "$d/plan.json" | gh api -X POST "repos/$GH_REPO/issues/$issue/comments" --input - > /dev/null
+            fi
+            echo "#$issue を更新"
+          done
