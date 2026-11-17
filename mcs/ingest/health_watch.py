@@ -64,6 +64,7 @@ OVERALL_STATUS = {"ok": "ok", "degraded": "degraded",
 # runtime_mode=standalone: the host's own status file (mcs_standalone)
 STANDALONE_STATUS_REL = os.path.join("data", "standalone-status.json")
 STANDALONE_HOST_STALE_S = 180      # heartbeat every 5 s; restart throttle 30 s
+STANDALONE_CLOCK_SKEW_S = 2        # same tolerance as mcs_standalone.service.read_status
 STANDALONE_CHILD_FAILURES = 3      # consecutive failed exits of one job
 STANDALONE_CONNECTOR_DOWN_S = 600
 STANDALONE_UPDATE_STUCK_S = 2 * 3600
@@ -354,10 +355,13 @@ def standalone_host_reasons(home: str, now: float, cfg: dict, *, status=None):
     status = _read_standalone_status(home) if status is None else status
     stamp = status.get("updated_at") if status else None
     if status is None or not finite_number(stamp) or not _pid_alive(status.get("pid")) \
-            or now - stamp > STANDALONE_HOST_STALE_S:
+            or not -STANDALONE_CLOCK_SKEW_S <= now - stamp <= STANDALONE_HOST_STALE_S:
         age = now - stamp if finite_number(stamp) else None
+        # a future stamp (clock rolled back) is not freshness evidence
         return "failed", ["standalone_host_down"], (
-            {"standalone_host_down": f"最終更新 {_hours(age)}前"} if age and age > 0 else {})
+            {"standalone_host_down": f"最終更新 {_hours(age)}前"} if age and age > 0 else
+            {"standalone_host_down": "最終更新が現在より未来"}
+            if age and age < -STANDALONE_CLOCK_SKEW_S else {})
     reasons, details = [], {}
     exits = status.get("exits") if isinstance(status.get("exits"), dict) else {}
     failing = []
@@ -388,10 +392,14 @@ def standalone_host_reasons(home: str, now: float, cfg: dict, *, status=None):
     check = exits.get("mcs_check") if isinstance(exits.get("mcs_check"), dict) else {}
     last_ok = check.get("last_ok_at")
     reference = last_ok if finite_number(last_ok) else status.get("started_at")
-    if finite_number(reference) and now - reference > freshness_deadline(cfg):
-        reasons.append("standalone_check_stalled")
-        details["standalone_check_stalled"] = (f"最終成功 {_hours(now - last_ok)}前"
-                                               if finite_number(last_ok) else "起動後の成功なし")
+    if finite_number(reference):
+        age = now - reference
+        future = age < -STANDALONE_CLOCK_SKEW_S
+        if future or age > freshness_deadline(cfg):
+            reasons.append("standalone_check_stalled")
+            details["standalone_check_stalled"] = (
+                "時刻が現在より未来" if future else
+                f"最終成功 {_hours(age)}前" if finite_number(last_ok) else "起動後の成功なし")
     return ("degraded" if reasons else "ok"), reasons, details
 
 
