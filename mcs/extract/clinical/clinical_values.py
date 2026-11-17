@@ -297,6 +297,10 @@ _LAB_ITEM_UNITS = {
 }
 # Capture explicit dose/count symbols too; an omitted output unit cannot hide them.
 _LAB_QUOTED_UNIT = r"(?:[a-zμ%/0-9.^²‰‱°錠包袋滴枚本個回単位]|カプセル)*"
+# A comparison, range, negation or doubt after the number means the quote does not state it as the measurement.
+_LAB_NUMBER_QUALIFIER = re.compile(
+    r"以上|以下|未満|超(?!音)|程度|前後|クライ|グライ|ホド|台|[~〜～]|デハナ|デハアリ|ジャナ|デナ|マセン|ナイ"
+    r"|疑|カモ|不明|[?？]|カ$")  # kana in katakana: fold_surface folds the quote that way
 _DATE = re.compile(r"(?<!\d)(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?(?!\d)")
 
 
@@ -434,7 +438,9 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                               f"({_LAB_QUOTED_UNIT})", tail)
             if result and normalized_quantity_number(result[1]) == number:
                 # an omitted unit must not bypass the item's units: the quoted one is checked too
-                if (result[2] == unit_key) if unit_key else (not result[2] or result[2] in allowed_units):
+                after = re.split(r"[。、,;；\n]", tail[result.end():], maxsplit=1)[0]
+                if ((result[2] == unit_key) if unit_key else (not result[2] or result[2] in allowed_units)) \
+                        and not _LAB_NUMBER_QUALIFIER.search(after):
                     readings.append(match)
         elif tail.startswith(fold_surface(raw_value)) and raw_value:
             remainder = tail[len(fold_surface(raw_value)):]
