@@ -36,6 +36,14 @@ the output record's verified care_detail must then agree, the label's
 kind becomes optional (an ACP discussion may ride care, eol or other), and
 the counts are also reported as event_records.<event_type>.
 
+Generation-12 fields (corpus evaluation/extract_cases_gen12_fields.json): a
+meds label may pin form / timing / days / period and an event_records label
+date_text / actor, each a string the source states or null ("states none");
+each pinned medication attribute is also reported as med_<attribute>. A
+label's date_text_iso=true names any ISO date in date_text (a guessed one).
+`forbid.vitals` is {key: value} and names a leaked reading. Label keys outside
+the vocabulary are rejected by _section_valid.
+
 Requests key on action containment; any other key a label carries
 (to/from/kind/condition/due/due_text/evidence) must match exactly, and
 an explicit null there means the output must NOT carry it. A request
@@ -121,6 +129,13 @@ _MED_ATTRS = ("dose", "status", "subject", "negated", "evidence", "route", "freq
 # a string the source states, or null for "the source states none"
 _MED_TEXT_ATTRS = ("form", "timing", "days", "period")
 _EVENT_TEXT_ATTRS = ("date_text", "actor")
+# the keys a meds / event_records label may carry; a typo'd key would pin nothing
+_MED_LABEL_KEYS = frozenset({"name", "action", *_MED_ATTRS})
+_EVENT_LABEL_KEYS = frozenset({"kind", "subject", "status", "negated", "evidence", "span",
+                               "care_detail", "date_text_iso", *_EVENT_TEXT_ATTRS})
+# date_text_iso=true names an ISO date in date_text: the source never states one,
+# so a guessed or calendar-converted date is caught whatever date it is
+_ISO_DATE_TEXT = re.compile(r"\d{4}-\d\d-\d\d")
 
 
 def _med_name_hit(expected: dict, m) -> bool:
@@ -159,6 +174,8 @@ def _match_event(expected: dict, got: list) -> bool:
                and all(key not in expected or expected[key] == item.get(key)
                        for key in ("subject", "status", "negated", "evidence", "span",
                            *_EVENT_TEXT_ATTRS))
+               and (not expected.get("date_text_iso") or (
+                   isinstance(item.get("date_text"), str) and _ISO_DATE_TEXT.fullmatch(item["date_text"])))
                and (detail is None or (isinstance(item.get("care_detail"), dict) and all(
                    item["care_detail"].get(key) == value for key, value in detail.items())))
                for item in got)
@@ -681,12 +698,20 @@ def _text_labels_valid(section: dict) -> bool:
     """Bench-only label vocabulary _validate ignores: a typo'd key or an empty text would pin nothing.
 
     A medication attribute and an event record's date_text / actor are a string
-    or an explicit null ("absent"); vitals are a non-empty {key: number} map."""
-    for key, attrs in (("meds", _MED_TEXT_ATTRS), ("event_records", _EVENT_TEXT_ATTRS)):
-        for item in section.get(key) or []:
-            if isinstance(item, dict) and any(
+    or an explicit null ("absent"); date_text_iso is true; vitals are a
+    non-empty {key: number} map. A non-list meds / event_records falls through
+    to _validate, which rejects it."""
+    for key, allowed, attrs in (("meds", _MED_LABEL_KEYS, _MED_TEXT_ATTRS),
+                                ("event_records", _EVENT_LABEL_KEYS, _EVENT_TEXT_ATTRS)):
+        items = section.get(key)
+        for item in items if isinstance(items, list) else ():
+            if not isinstance(item, dict):
+                continue
+            if set(item) - allowed or any(
                     name in item and item[name] is not None
                     and not (isinstance(item[name], str) and item[name].strip()) for name in attrs):
+                return False
+            if "date_text_iso" in item and item["date_text_iso"] is not True:
                 return False
     if "vitals" in section:
         vitals = section["vitals"]
