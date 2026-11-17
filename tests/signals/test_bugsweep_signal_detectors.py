@@ -110,3 +110,40 @@ def test_transition_needs_one_item_meeting_every_change_condition(led):
     types = [s["type"] for s in mcs_signals.current_open(led.db)["items"]]
     assert "transition_reconciliation" not in types
     assert types.count("discharge_notice") == 1
+
+
+def _dismissed_med_signal(led, message_ids):
+    """A pid-2 med candidate dismissed by a human with the given stored evidence ids."""
+    _msg(led.db, 6, pid=2, ts=NOW - 30 * DAY, chash="h6")
+    _extract_llm(led.db, 6, "h6", [{"name": "合成薬B", "action": "stop"}])
+    _msg(led.db, 5, pid=2, ts=NOW - 20 * DAY, chash="h5")
+    _extract_llm(led.db, 5, "h5", [{"name": "合成薬B", "action": "stop"}])
+    _ev(led)
+    key = "med_change_no_followup:2:合成薬B"
+    row = mcs_signals.latest_signal_states(led.db)[key]
+    assert row["evidence"]["message_ids"] == [6, 5]
+    mcs_signals._insert(led.db, key, {**row, "state": "dismissed",
+                                      "evidence": {**row["evidence"], "message_ids": message_ids}})
+    return key
+
+
+def test_reordered_evidence_ids_keep_a_dismissed_candidate_down(led):
+    # stored before the time-ordered evidence: same posts, id order
+    key = _dismissed_med_signal(led, [5, 6])
+    res = mcs_signals.evaluate(led, {"signals": {"notify": True}}, now=NOW)
+    assert res["opened"] == 0 and res["notify_enqueued"] == 0
+    assert _states(led.db)[key] == "dismissed"
+
+
+def test_a_different_evidence_set_still_reopens_a_dismissed_candidate(led):
+    key = _dismissed_med_signal(led, [6])
+    assert _ev(led)["opened"] == 1
+    assert _states(led.db)[key] == "open"
+
+
+def test_evidence_identity_ignores_id_order_and_repeats_only():
+    assert mcs_signals._same_evidence({"med": "合成薬B", "message_ids": [5, 6, 6]},
+                                      {"med": "合成薬B", "message_ids": [6, 5]})
+    assert mcs_signals._same_evidence({"med_change_message_ids": [2, 1]}, {"med_change_message_ids": [1, 2]})
+    assert not mcs_signals._same_evidence({"message_ids": [5, 6]}, {"message_ids": [5, 7]})
+    assert not mcs_signals._same_evidence({"meds": ["A", "B"]}, {"meds": ["B", "A"]})

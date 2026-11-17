@@ -914,6 +914,17 @@ def _resolution(db, old, now, th, sig_cfg):
             "basis": "stored_evidence_exclusion"}
 
 
+def _same_evidence(old, new):
+    """Evidence equality for reopen/supersede: message-id lists compare as
+    sets, so a reordered or repeated id is not a new situation."""
+    def identity(evidence):
+        if not isinstance(evidence, dict):
+            return evidence
+        return {k: sorted(set(v)) if k.endswith("message_ids") and isinstance(v, list)
+                and all(type(x) is int for x in v) else v for k, v in evidence.items()}
+    return identity(old) == identity(new)
+
+
 def _eval_state(db):
     """(artifact_id, state) of the single in-place evaluation-progress row."""
     row = db.execute("SELECT artifact_id, content FROM artifacts WHERE kind=? "
@@ -1009,10 +1020,10 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
             if old is not None and old["state"] == "dismissed":
                 counts = suppression.setdefault((sig["project_id"], sig["type"]), [0, 0])
                 counts[0] += 1
-                counts[1] += old.get("evidence") == sig["evidence"]
+                counts[1] += _same_evidence(old.get("evidence"), sig["evidence"])
             if old is None or old["state"] == "resolved" or (
                     old["state"] == "dismissed"
-                    and old.get("evidence") != sig["evidence"]):
+                    and not _same_evidence(old.get("evidence"), sig["evidence"])):
                 # new signal, condition returned after resolution, or a
                 # human dismissed an earlier evidence set that has since
                 # changed — a genuinely new situation, open again
@@ -1026,7 +1037,7 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
                 newly.append((key, sig))
             elif old["state"] == "dismissed":
                 pass   # human dismissed this exact evidence — stays down
-            elif old.get("evidence") != sig["evidence"]:
+            elif not _same_evidence(old.get("evidence"), sig["evidence"]):
                 # identity-level evidence moved on — supersede with a
                 # fresh open row preserving the original detection time
                 # (volatile context stays frozen at each detection)
