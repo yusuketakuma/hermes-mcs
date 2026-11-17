@@ -104,12 +104,18 @@ Copilot と Dots の PR は自動では再起動しません（Copilot は所有
 レビューの投稿をきっかけには起動しません。そのイベントは PR 側のワークフロー定義で動き、ブランチから書き換えられるためです。指摘が修正に回るまで最大15分ほどかかります。
 
 - 数える指摘は、所有者の Request changes のレビューと、CodeRabbit（`Actionable comments posted: N` が1以上）・Devin（`Devin Review found N potential issue` が1以上）のレビューだけです。
-  指摘0件・nitpick だけ・「No Issues Found」・PR に載らない flag・スレッドへの返信・Codex など他のレビューは数えません。現在の head より古いコミットへのレビューも数えません。
+  指摘0件・nitpick だけ・「No Issues Found」・PR に載らない flag・スレッドへの返信・Codex など他のレビューは数えません。取り下げ（dismiss）たレビューも数えません。
+  数えるのは現在の head へのレビューと、その後に main の取り込み（merge commit）だけが重なった head へのレビューです。
+  修正の push で head が替わった後のレビューは数えません。所有者の Request changes がこれに当たったときは、PR に1回だけ知らせます。
   所有者の指摘を PR のコメントで書いたときは対象外なので、これまでどおり `@claude` と書きます。両方を使うと Claude が2回動きます。
 - 対象の PR と Issue の条件は CI 失敗の自動修正と同じです（`担当:claude` だけ。`担当:dots` は別の書き手なので対象外）。
+  fork の PR は調べません。結ばれた Issue が5件を超える PR は対象外です。1本の PR で API が失敗しても、ほかの PR の判定は続けます。
 - 1回の判定で見つかった新しい指摘はまとめて1回と数え、CI 失敗と同じ `試行:N` を進めます。3回目で `要オーナー対応` にして止まります。
   同じレビューは2回数えません。判定は PR に `<!-- agent-review:queued … -->` を、修正の実行は `<!-- agent-review:handled … -->` を書き、`github-actions[bot]` が書いたものだけを読みます。
-- Claude の書き込みの待ちが取り消されて handled が付かなかったレビューは、Claude の実行が何も待っていないときに、次の判定が数え直さずに起動し直します。
+- Claude の書き込みの実行（`agent-claude.yml`・`agent-claude-repair.yml`）が待機中か実行中の間は、何も数えず、何も起動しません。
+  新しい待ちが古い待ちを取り消すためです。状態を確かめられないときも実行中とみなします。修正の起動は1回の判定で1本までです。
+- 待ちが取り消されて handled が付かなかったレビューは、次の判定が数え直さずに起動し直します。
+- 修正ジョブは、渡された id をすべて読み直し、指摘を報告したレビュー（所有者の Request changes、CodeRabbit・Devin の指摘）だけを Claude に渡します。
 - 修正モードの Claude は、指摘を `agent-review.md`（`.git/info/exclude` で commit されない）からデータとして読み、結ばれた Issue の受入条件の範囲だけを直します。
   範囲外の提案と誤りと判断した指摘は直さず、PR に1回のコメントで挙げます。テストの削除・skip・閾値の緩和はしません。
 - 判定は main の定義と main の `ci/` だけで動き、PR のコードは checkout も実行もしません。main 以外から手動実行しても動きません。
