@@ -1,4 +1,4 @@
-"""Unit contract of the generation-12 allergy validator: vocabulary, stored reading, dedupe and the weakening-only rules."""
+"""Unit contract of the generation-12 allergy validator: vocabulary, stored reading, dedupe, template licensing and weakening only."""
 import clinical_allergies as ca
 import clinical_events
 import extract_bench_assertions as scorer
@@ -104,9 +104,48 @@ def test_r2_a_relation_alone_needs_a_reaction_from_the_vocabulary():
 
 def test_cue_spans_skip_words_that_name_no_allergy():
     body = "抗アレルギー薬を飲んでいます。副作用が心配です。卵アレルギーがあり、薬疹の既往もあります。"
+    # A worry still carries the cue word; no template licenses it, so its claims stay candidates.
     assert [(body[start:end], kind) for start, end, kind in ca.cue_spans(body)] == [
-        ("アレルギー", "allergy"), ("薬疹", "adverse_reaction")]
+        ("副作用", "adverse_reaction"), ("アレルギー", "allergy"), ("薬疹", "adverse_reaction")]
     assert ca.cue_spans(None) == []
+    worry = "ご本人は合成薬Tの副作用が心配です。"
+    kept, _ = ca.validate_items([_claim(allergen="合成薬T", kind="adverse_reaction", evidence=worry)], worry)
+    assert kept[0]["unverified"] is True
+
+
+def test_only_a_template_licenses_a_claim_and_anything_else_stays_a_candidate():
+    for body in ("ご本人は合成薬Eにアレルギーがありますか。", "ご本人は合成薬Eにアレルギーがあります？",
+                 "ご本人は合成薬Eにアレルギーがあると思います。", "ご本人は合成薬Eにアレルギーがありそうです。",
+                 "ご本人は合成薬Eにアレルギーがあるのは娘さんです。", "ご本人は去年合成薬Eにアレルギーがありました。"):
+        kept, dropped = ca.validate_items([_claim(evidence=body), _claim(evidence=body, status="past")], body)
+        assert dropped == 0 and all(item["unverified"] is True for item in kept), body
+    # A hearsay or report ending after a plain form is a statement about the patient.
+    for body in ("ご本人は合成薬Eにアレルギーがあるそうです。", "ご本人は合成薬Eにアレルギーがあるとのことです。"):
+        assert "unverified" not in ca.validate_items([_claim(evidence=body)], body)[0][0], body
+    res = ca.resolve(BODY, BODY, "合成薬E", None)
+    assert [(lic.template, lic.subject, lic.negated) for lic in res.licences] == [("alg-exist", "patient", False)]
+
+
+def test_the_allergen_must_fill_the_slot_as_one_word():
+    body = "ご本人は合成薬ABCにアレルギーがあります。"
+    for allergen in ("合成薬AB", "薬ABC", "合成薬ABCに", "ご本人は合成薬ABC"):
+        kept, _ = ca.validate_items([_claim(allergen=allergen, evidence=body)], body)
+        assert kept[0]["unverified"] is True, allergen
+    assert "unverified" not in ca.validate_items([_claim(allergen="合成薬ABC", evidence=body)], body)[0][0]
+    field = "アレルギー：合成薬AFで発疹"
+    for allergen in ("合成薬AFで発疹", "発疹"):
+        kept, _ = ca.validate_items([_claim(allergen=allergen, evidence=field)], field)
+        assert kept[0]["unverified"] is True, allergen
+
+
+def test_a_null_allergen_needs_an_exact_none_form_with_nothing_limiting_it():
+    def null(body):
+        claim = _claim(allergen=None, negated=True, evidence=body.split("。")[0])
+        kept, dropped = ca.validate_items([claim], body)
+        return "dropped" if dropped else ("unverified" if kept[0].get("unverified") else "confirmed")
+    assert null("ご本人の食物アレルギーはなしです。") == "confirmed"
+    assert null("ご本人の食物アレルギーはなし。ただし卵は未確認です。") == "unverified"
+    assert null("ご本人は卵以外のアレルギーはありません。") == "dropped"
 
 
 def test_a_null_allergen_is_kept_only_for_a_negation():

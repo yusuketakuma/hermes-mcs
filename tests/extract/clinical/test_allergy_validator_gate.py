@@ -1,18 +1,17 @@
-"""Gate for the generation-12 allergy validator: no forbidden assertion survives, every expected one does, every rule is needed.
+"""Gate for the generation-12 allergy validator: nothing forbidden is confirmed, expected claims stay, every template and weakener is needed.
 
-Gate 1 sends every combination of allergen x reaction x quote x claimed axes,
-built from each case body, through `clinical_allergies.validate_items`, one
-claim at a time and per case in one batch, and requires that no forbid label
-of the Blk-EVAL corpus or of the X2 corpus is violated; allergen candidates
-include each label allergen padded with the text around it. Gate 2 requires
-that fixed gold claims for every expect label stay confirmed. Gate 3 disables
-one rule at a time so that it weakens nothing and requires a forbidden
-violation (or, for a rule that settles a subject, a time or a polarity, a lost
-expectation) on the example named for it; every named forbidden example first
-has to read as the patient's (from `clinical_scope`, or for `RAISED` from the
-heading or record quote), so the rule under test, not the unknown-subject rule,
-is what stops the claim. The drop rules whose claims the open polarity already
-keeps unconfirmed are shown to change a dropped claim into a stored candidate.
+The validator confirms a claim only where an explicit template licenses it
+(see `clinical_allergies`). Gate 1 sends every combination of allergen x
+reaction x quote x claimed axes, built from each case body, through
+`validate_items`, one claim at a time and per case in one batch, and requires
+that no forbid label of the Blk-EVAL corpus or of the X2 corpus is violated.
+Gate 2 requires that fixed gold claims for every expect label stay confirmed.
+Gate A replays the review's attack corpus claim by claim (no forbidden claim
+confirmed), gate B pins the recall on its correct claims, gate C appends or
+substitutes non-declarative endings, hedges, questions, other persons and
+time words on affirmative template sentences, and gate D (replacing the
+plan's rule-by-rule gate 3) removes one template, one subject position or
+one weakener entry at a time and requires a named case to fail.
 """
 import itertools
 import json
@@ -24,19 +23,21 @@ from pathlib import Path
 import pytest
 
 import clinical_allergies as ca
-import clinical_scope
 import extract_bench
 import extract_bench_assertions as scorer
 
 ROOT = Path(__file__).resolve().parents[3]
 BLK_EVAL = json.loads((ROOT / "evaluation" / "extract_cases_safety_history.json").read_bytes())["cases"]
-X2 = json.loads((ROOT / "evaluation" / "extract_cases_safety_history_gen12.json").read_bytes())["cases"]
+X2_CORPUS = json.loads((ROOT / "evaluation" / "extract_cases_safety_history_gen12.json").read_bytes())
+X2 = X2_CORPUS["cases"]
+CLAIMS = X2_CORPUS["claims"]
 CASES = [case for case in BLK_EVAL + X2
          if "allergies" in case.get("expect", {}) or "allergies" in case.get("forbid", {})]
 BY_ID = {case["id"]: case for case in BLK_EVAL + X2}
-NEVER = re.compile(r"(?!)")
+CLAIM_BY_ID = {claim["id"]: claim for claim in CLAIMS}
 NOT_IN_BODY = "本文に無い合成薬ZZで発疹が出ました。"
 AXES = list(itertools.product(ca.KINDS, scorer.SUBJECTS, scorer.STATUSES, (False, True), ca.CERTAINTIES))
+_AXIS_KEYS = ("allergen", "kind", "reaction", "subject", "status", "negated", "certainty")
 
 
 def _labels(case, key):
@@ -137,12 +138,19 @@ def test_corpus_is_synthetic_valid_and_disjoint_from_blk_eval():
     assert not {case["body"] for case in X2} & {case["body"] for case in BLK_EVAL}
     import extract_llm
     examples = _folded(extract_llm._PROMPT_EXAMPLES)
+    for record in X2 + CLAIMS:
+        text = _folded(record["body"])
+        assert not {text[i:i + 12] for i in range(max(len(text) - 11, 1)) if text[i:i + 12] in examples}, record["id"]
     for case in X2:
-        text = _folded(case["body"])
-        assert not {text[i:i + 12] for i in range(max(len(text) - 11, 1)) if text[i:i + 12] in examples}, case["id"]
         assert case["posted_at"].endswith("+09:00"), case["id"]
         for key in ("expect", "forbid"):
             assert extract_bench._section_valid(case.get(key, {}), forbid=key == "forbid"), (case["id"], key)
+    claim_ids = [claim["id"] for claim in CLAIMS]
+    assert len(claim_ids) == len(set(claim_ids)) and all(claim_id.startswith("rv-") for claim_id in claim_ids)
+    for claim in CLAIMS:
+        assert claim["want"] in ("forbid", "correct") and claim["kind"] in ca.KINDS, claim["id"]
+        assert claim["subject"] in scorer.SUBJECTS and claim["status"] in scorer.STATUSES, claim["id"]
+        assert claim["allergen"] is None or claim["allergen"] in claim["body"], claim["id"]
 
 
 def test_gate1_no_combination_of_claimed_axes_asserts_anything_forbidden(gate1):
@@ -206,6 +214,12 @@ GOLD = {
     "g12-adr-tolerated": [_gold("合成薬AU", "adverse_reaction", "合成薬AUの副作用について、問題ない", negated=True)],
     "g12-quote-plain": [_gold("卵", "allergy", "卵アレルギーあり", status="past")],
     "g12-alg-heading-value": [_gold("架空果実AZ", "allergy", "アレルギー：架空果実AZ")],
+    "g12-exp-sus-maybe-adr": [_gold("合成薬BA", "adverse_reaction", "合成薬BAの副作用かもしれません",
+                                    certainty="suspected")],
+    "g12-exp-null-adr": [_gold(None, "adverse_reaction", "副作用は特にありません", negated=True)],
+    "g12-exp-null-field-alg": [_gold(None, "allergy", "薬剤アレルギー：特になし", negated=True)],
+    "g12-exp-null-field-adr": [_gold(None, "adverse_reaction", "副作用歴：なし", negated=True)],
+    "g12-exp-family-subject": [_gold("合成薬BB", "allergy", "合成薬BBにアレルギーがあります", subject="family")],
 }
 
 
@@ -244,204 +258,293 @@ def test_gate2_every_x2_expectation_stays_confirmed():
             assert _expected_kept(case, _whole_body(GOLD[case["id"]], case["body"])) == want, case["id"]
 
 
-def _without(fragment):
-    def apply(monkeypatch):
-        pattern = ca.ALLERGY_CUE.pattern
-        assert fragment in pattern
-        monkeypatch.setattr(ca, "ALLERGY_CUE", re.compile(pattern.replace(fragment, "")))
-    return apply
+# --- Gate A / B: the review's attack corpus, one claim at a time ------------------------------------------------
+
+def _sentence_of(body, at):
+    left = max(body.rfind(mark, 0, at) for mark in "。！？!?\n") + 1
+    stop = re.compile(r"[。！？!?\n]").search(body, at)
+    return body[left:stop.end() if stop else len(body)].rstrip("\n")
 
 
-def _never(*names):
-    def apply(monkeypatch):
-        for name in names:
-            assert isinstance(getattr(ca, name), re.Pattern)
-            monkeypatch.setattr(ca, name, NEVER)
-    return apply
+def _claim_item(claim, *, whole=False):
+    body = claim["body"]
+    if claim["allergen"] is not None:
+        at = body.index(claim["allergen"])
+    else:
+        cues = ca.cue_spans(body)
+        at = cues[0][0] if cues else 0
+    item = {key: claim[key] for key in _AXIS_KEYS}
+    item["evidence"] = body if whole else _sentence_of(body, at)
+    return item
 
 
-def _replace(name, function):
-    def apply(monkeypatch):
-        assert callable(getattr(ca, name))
-        monkeypatch.setattr(ca, name, function)
-    return apply
+def _verdict(claim, *, whole=False):
+    kept, _ = ca.validate_items([_claim_item(claim, whole=whole)], claim["body"])
+    if not kept:
+        return "dropped"
+    return "unverified" if kept[0].get("unverified") else "confirmed"
 
 
-def _set(name, value):
-    def apply(monkeypatch):
-        assert type(getattr(ca, name)) is type(value)
-        monkeypatch.setattr(ca, name, value)
-    return apply
+def test_gate_a_no_claim_of_the_attack_corpus_marked_forbid_is_confirmed(fresh_memo):
+    forbidden = [claim for claim in CLAIMS if claim["want"] == "forbid"]
+    assert len(forbidden) >= 850
+    wrong = [(claim["id"], whole) for claim in forbidden for whole in (False, True)
+             if _verdict(claim, whole=whole) == "confirmed"]
+    assert wrong == []
+    # The same claims sent per body in one batch.
+    by_body = {}
+    for claim in forbidden:
+        by_body.setdefault(claim["body"], []).append(_claim_item(claim))
+    for body, items in by_body.items():
+        kept, _ = ca.validate_items(items, body)
+        assert [item for item in kept if not item.get("unverified")] == [], body
 
 
-def _wrap(name, make):
-    """Replace a function with a variant built from the original (the clause under test removed)."""
-    def apply(monkeypatch):
-        monkeypatch.setattr(ca, name, make(getattr(ca, name)))
-    return apply
+# Correct claims of the attack corpus that the templates do not license (precision first; each is kept as a
+# candidate or, with no cue in its sentence, dropped; never turned into "none"). A new template that licenses one
+# of them moves it out of this set.
+STILL_UNVERIFIED = {
+    "rv-corpus-a-011", "rv-corpus-a-020", "rv-corpus-a-035", "rv-corpus-b-026", "rv-corpus-c-010",
+    "rv-corpus-d-009", "rv-corpus-d-014", "rv-corpus-d-029", "rv-corpus-d-035", "rv-corpus-d-038",
+    "rv-corpus2-a2-011", "rv-corpus2-a2-034", "rv-corpus2-a2-035", "rv-corpus2-b2-034", "rv-corpus2-b2-036",
+    "rv-corpus2-b2-038", "rv-corpus2-b2-041", "rv-corpus2-c2-021", "rv-corpus2-c2-037", "rv-corpus2-d2-004",
+    "rv-corpus2-d2-024", "rv-corpus2-d2-031", "rv-corpus2-d2-032", "rv-corpus2-d2-036", "rv-corpus2-d2-038",
+    "rv-corpus2-d2-044", "rv-corpus2-d2-045",
+}
 
 
-_NOT_AFTER_ANTI = "(?<!抗)"
-_NOT_BEFORE = "(?!検査|テスト|薬|外来|科|性)"
+def test_gate_b_recall_on_the_correct_claims_of_the_attack_corpus(fresh_memo):
+    correct = [claim for claim in CLAIMS if claim["want"] == "correct"]
+    verdicts = {claim["id"]: _verdict(claim) for claim in correct}
+    assert {claim_id for claim_id, verdict in verdicts.items() if verdict != "confirmed"} == STILL_UNVERIFIED
+    plain = [claim["id"] for claim in correct if claim["id"].startswith("rv-corpus-pos-")]
+    assert (len(plain), sum(verdicts[claim_id] == "confirmed" for claim_id in plain)) == (42, 42)
+    assert (len(correct), sum(verdict == "confirmed" for verdict in verdicts.values())) == (102, 75)
 
 
-def _both_lookarounds(monkeypatch):
-    _without(_NOT_AFTER_ANTI)(monkeypatch)
-    _without(_NOT_BEFORE)(monkeypatch)
+# --- Gate C: non-declarative endings, hedges, questions, other persons and time words never confirm -------------
 
-
-def _negation_before_か(monkeypatch):
-    for name in ("CUE_NEGATION", "REACTION_NEGATION"):
-        pattern = getattr(ca, name).pattern
-        assert pattern.endswith("(?!か)")
-        monkeypatch.setattr(ca, name, re.compile(pattern[:-len("(?!か)")]))
-
-
-def _no_open_time(model, computed, history):
-    return model == computed or (history and {model, computed} <= {"current", "past"})
-
-
-def _polarity_only(reading):
-    return lambda *args: None if (value := reading(*args)) is None else value[1:]
-
-
-def _quote_not_past(status):
-    return lambda body, masked, start, end, *, quoted: status(body, masked, start, end, quoted=False)
-
-
-# (rule, disable so that the rule weakens nothing, named forbidden examples with the allergen the
-# subject is read at and, for a relation without a cue word, the reaction). Each example must
-# produce a forbidden violation once the rule is disabled.
-SUPPRESSING = [
-    ("R1 punctuated allergen", _never("_PUNCTUATED"), [("alg-confirmed-beside-tolerated", "。架空薬F")]),
-    ("R2 (?<!抗)", _without(_NOT_AFTER_ANTI), [("g12-alg-antiallergic-agent-itch", "合成薬AH")]),
-    ("R2 (?!検査|…|性)", _without(_NOT_BEFORE), [("g12-alg-rhinitis-itch", "合成薬AK"),
-                                                ("g12-alg-planned-test-itch", "来月"),
-                                                ("g12-alg-clinic-itch", "通院中")]),
-    ("R2 both lookarounds", _both_lookarounds, [("g12-alg-antiallergic-drug-itch", "合成薬AD")]),
-    ("R2 concern", _never("CONCERN"), [("g12-possible-09", "合成薬T")]),
-    ("R2 cue or relation", _replace("_supported_kinds", lambda *args: frozenset(ca.KINDS)),
-     [("g12-plain-medication-rash", "合成薬AV")]),
-    ("R2 open wording", _never("OPEN_WORDING"), [("g12-possible-08", "合成薬E", "発疹")]),
-    ("R2 binding", _replace("_bound", lambda *args: True), [("g12-alg-unbound-allergen", "合成薬T")]),
-    ("R3a other person", _never("OTHER_PEOPLE"), [("g12-person-05", "卵"), ("g12-person-06", "合成薬E", "発疹")]),
-    ("R3a own topic", _never("OWN_TOPIC"), [("g12-person-07", "合成薬E")]),
-    ("R3a other person or own topic", _never("OTHER_PEOPLE", "OWN_TOPIC"),
-     [("g12-person-01", "合成薬E"), ("g12-person-02", "合成薬E"), ("g12-person-03", "合成薬E"), ("g12-person-04", "合成薬E")]),
-    ("R3b", _never("OTHER_REFERENT"), [("g12-alg-other-referent", "合成薬Q", "発疹")]),
-    ("R3c disclaimer", _never("NOT_THIS_PATIENT"), [("g12-adr-not-this-patient", "合成薬AB", "発疹")]),
-    ("R3c name field", _never("NAME_FIELD"), [("g12-alg-name-field", "合成薬AJ"), ("g12-person-12", "卵"),
-                                              ("g12-person-13", "卵"), ("g12-person-14", "卵")]),
-    ("R3d/R3e person word", _never("_LINE_PERSON"), [("g12-person-10", "卵"), ("g12-person-11", "卵")]),
-    ("R3e denial", _never("QUOTE_DENIAL"), [("g12-quote-denied-01", "架空薬U"), ("g12-quote-denied-02", "架空薬U"),
-                                            ("g12-quote-denied-03", "架空薬U"), ("g12-quote-denied-04", "架空薬U"),
-                                            ("g12-quote-denied-05", "架空薬U")]),
-    ("R3e denial in the next sentence", _set("DENIAL_SENTENCES", 1), [("g12-quote-denied-01", "架空薬U")]),
-    ("R3e record wording after the quote", _set("RECORD_AFTER", re.compile("")), [("g12-quote-request", "卵")]),
-    ("R3e a quoted record is past", _wrap("_status", _quote_not_past), [("g12-quote-plain", "卵")]),
-    ("R4 time comparison", _replace("_status_agrees", lambda *args: True), [("g12-adr-conditional", "合成薬AR", "発疹")]),
-    ("R4 an open time", _replace("_status_agrees", _no_open_time), [("g12-time-question", "合成薬E")]),
-    ("R4 numbered ago, not from", _set("NUMBERED_AGO", re.compile(ca.NUMBERED_AGO.pattern.replace("(?!から|より)", ""))),
-     [("g12-time-since-days", "合成薬E", "発疹")]),
-    ("R4 childhood", _never("CHILDHOOD"), [("g12-time-childhood", "卵")]),
-    ("R4 a later clause about now", _never("LATER_NOW"), [("g12-time-now-eats", "卵")]),
-    ("R5 unbound negative form", _never("NEGATIVE_FORM"), [("g12-neg-unbound-08", "合成薬E", "発疹"),
-                                                          ("g12-neg-heading-mixed", "卵"),
-                                                          ("g12-neg-open-03", "合成薬E")]),
-    ("R5 (?!か)", _negation_before_か, [("g12-neg-question", "合成薬E")]),
-    ("R5 exception", _never("EXCEPT_AFTER"), [("g12-neg-open-01", "合成薬E"), ("g12-neg-open-02", "合成薬E")]),
-    ("R5 lack is the symptom", _set("LACK_IS_SYMPTOM", ()), [("g12-neg-open-06", "合成薬E", "食欲")]),
-    ("R5 mixed stays open", _replace("_verdict", lambda negated, affirmed: True if negated else affirmed and False or None),
-     [("g12-neg-open-07", "合成薬E")]),
-    ("R5 no evidence stays open", _replace("_verdict", lambda negated, affirmed: None if negated and affirmed else negated),
-     [("g12-possible-10", "合成薬E")]),
-    ("R6", _never("UNCERTAIN"), [("adr-suspected", "合成薬Y"), ("alg-suspected", "架空薬Z")]),
-    ("R7", _never("FOLLOW_UP"), [("g12-alg-follow-up-affirmed", "合成薬AC")]),
-    ("R8", _replace("_occurrences_conflict", lambda *args: False), [("g12-adr-two-readings", "合成薬AG", "発疹")]),
-    ("R8 subject", _wrap("_reading", _polarity_only), [("g12-adr-two-people", "合成薬AI", "発疹")]),
-    ("R11 form mark", _never("FORM_FIELD"), [("g12-form-unmarked-kind", "食物")]),
+AB = "合成薬AB"
+# (sentence head, plain predicate, the claim it licenses as written).
+BASES = [
+    (f"ご本人は{AB}にアレルギーが", "ある", ("allergy", False)),
+    (f"ご本人は{AB}アレルギー", "だ", ("allergy", False)),
+    (f"ご本人は{AB}で発疹が", "出た", ("adverse_reaction", False)),
+    (f"ご本人は{AB}の副作用で眠気が", "出る", ("adverse_reaction", False)),
+    (f"ご本人は{AB}にアレルギーは", "ない", ("allergy", True)),
+    (f"ご本人は{AB}の副作用は", "ない", ("adverse_reaction", True)),
 ]
-# Named examples whose patient subject comes from the history heading or the record quote (R3d/R3e),
-# not from clinical_scope: the shared reader leaves them open.
-RAISED = {"g12-neg-heading-mixed", "g12-person-10", "g12-person-11", "g12-person-13", "g12-person-14", "g12-quote-request", "g12-quote-plain"}
-
-# Rules that settle a subject, a time or a polarity: disabled, the gold claim of the named example is lost.
-SETTLING = [
-    ("R3d", _never("HISTORY_HEADING"), ["alg-confirmed-drug-heading", "adr-history-heading",
-                                        "g12-alg-history-heading"]),
-    ("R3e record quote", _never("RECORD_BEFORE"), ["adr-quoted-old-summary", "g12-quote-plain"]),
-    ("R4 mask after a past word", _never("WHEN_AFTER_PAST"), ["adr-history-prose"]),
-    ("R4 mask かもしれ", _never("MAYBE"), ["alg-suspected", "g12-adr-suspected-maybe"]),
-    ("R4 numbered ago", _never("NUMBERED_AGO"), ["g12-adr-numbered-ago"]),
-    ("R5 affirmation after a cue", _never("CUE_AFFIRM"), ["alg-confirmed-beside-tolerated", "g12-adr-suspected-maybe"]),
-    ("R5 affirmation after a reaction", _never("REACTION_AFFIRM"), ["adr-history-prose", "g12-adr-numbered-ago"]),
-    ("R5 heading value", _replace("_heading_value", lambda *args: None), ["g12-alg-heading-value"]),
-    ("R5 a hedge is no negation", _never("NOT_A_NEGATION"), ["alg-suspected"]),
-    ("R5 cue negation", _never("CUE_NEGATION"), ["g12-adr-negated-specific", "g12-alg-negated-by-test"]),
-    ("R5 reaction negation", _never("REACTION_NEGATION"), ["g12-adr-reaction-negated"]),
-    ("R5 tolerance", _never("TOLERATED"), ["g12-adr-tolerated"]),
+NON_DECLARATIVE = [
+    "か。", "？", "か？", "の？", "よね。", "よね？", "っけ。", "かな。", "のかな。", "の。", "のですか。", "んですか。",
+    "でしょうか。", "か否か。", "かどうか。", "か教えてください。", "かご存じですか。", "のでは。", "のではないか。",
+    "かもしれません。", "かも。", "と思います。", "と思う。", "でしょう。", "だろう。", "らしいです。", "みたいです。",
+    "ようです。", "はずです。", "っぽい。", "と推測します。", "と推察します。", "と仮定します。", "と想定します。",
+    "ものとして対応します。", "と記憶しています。", "と認識しています。", "と考えます。", "と思われます。",
+    "と困るので受診します。", "なら中止してください。", "と大変です。", "と心配されています。", "のではと心配されています。",
+    "かと不安です。", "かは不明です。", "かは確認中です。", "とは限りません。", "とは言い切れません。", "わけではありません。",
+    "と言われたらどうしよう。", "と聞いたことがあるが本当かわからない。", "ことにしています。", "つもりです。",
+    "予定です。", "とすれば。", "ようでしたら連絡ください。", "場合は連絡してください。", "と言われました。",
+    "との記録はありません。", "と書かれていますが未確認です。", "と話されていましたが、違うようです。",
+    "が、今は違います。", "と娘さんが話しています。", "のは娘さんです。", "（夫）。", "と夫が話していました。",
 ]
-
-# Drop rules whose claims the open polarity already keeps unconfirmed: disabled, the named claim is stored
-# as a candidate instead of dropped (and gate 1 still finds nothing forbidden).
-DROPPING = [
-    ("R11 form mark", _never("FORM_FIELD"), [("g12-form-checkbox", "アレルギー"), ("g12-form-table-header", "副作用")]),
-    ("R11 empty value", _never("EMPTY_VALUE"), [("g12-form-empty-value", "薬剤")]),
-]
+PERSONS = ["ご本人の娘さんは", "娘さんは", "田中さんは", "同室の方は", "利用者Bは", "ご本人とご主人は", "ご主人は",
+           "主治医は", "看護師は", "その方は", "患者Bさんは", "彼女は", "私は", "職員の方は"]
+TIMES = ["去年", "半年前に", "10年ほど前に", "令和3年に", "幼い頃に", "20代の頃に", "高校生のとき", "前の施設で",
+         "昨年の秋に", "一昨年", "先月", "入院中に", "子供の頃から"]
 
 
-@pytest.mark.parametrize(("rule", "disable", "examples"), SUPPRESSING, ids=[row[0] for row in SUPPRESSING])
-def test_precondition_every_named_forbidden_example_reads_as_the_patient(rule, disable, examples, monkeypatch,
-                                                                          fresh_memo):
-    for case_id, anchor, *_ in examples:
-        body = BY_ID[case_id]["body"]
-        start = body.index(anchor)
-        shared = clinical_scope.source_axes(body, start, start + len(anchor), default="unknown")[0]
-        assert (shared != "patient") is (case_id in RAISED), (rule, case_id, shared)
-    disable(monkeypatch)
+def _claim_c(body, kind, negated, *, status="current", subject="patient"):
+    return {"allergen": AB, "kind": kind, "reaction": None, "subject": subject, "status": status, "negated": negated,
+            "certainty": "confirmed", "evidence": body}
+
+
+def _confirmed(claim, body):
+    kept, _ = ca.validate_items([claim], body)
+    return any(not item.get("unverified") for item in kept)
+
+
+def test_gate_c_the_affirmative_bases_are_confirmed_as_written(fresh_memo):
+    for head, plain, (kind, negated) in BASES:
+        body = head + plain + "。"
+        assert _confirmed(_claim_c(body, kind, negated), body), body
+
+
+def test_gate_c_no_non_declarative_ending_is_confirmed(fresh_memo):
+    assert len(NON_DECLARATIVE) >= 40
+    wrong = []
+    for (head, plain, (kind, negated)), ending in itertools.product(BASES, NON_DECLARATIVE):
+        for body in (head + plain + ending, head + ending):
+            for status in ("current", "past"):
+                if _confirmed(_claim_c(body, kind, negated, status=status), body):
+                    wrong.append(body)
+    assert wrong == []
+
+
+def test_gate_c_no_other_person_or_time_word_is_confirmed_as_the_patient_s_current_claim(fresh_memo):
+    wrong = []
+    for head, plain, (kind, negated) in BASES:
+        rest = head[len("ご本人は"):] + plain + "。"
+        for person in PERSONS:
+            for body in (person + rest, "ご本人は元気です。" + person + rest):
+                if _confirmed(_claim_c(body, kind, negated), body):
+                    wrong.append(body)
+        for when in TIMES:
+            body = "ご本人は" + when + rest
+            if _confirmed(_claim_c(body, kind, negated), body):
+                wrong.append(body)
+    assert wrong == []
+
+
+# --- Gate D: each template, subject position and weakener entry is needed ---------------------------------------
+
+def _holds(ref):
+    """A named expected case: a gold case (all its labels kept) or a correct claim of the attack corpus confirmed."""
+    if ref in GOLD:
+        case = BY_ID[ref]
+        return _expected_kept(case, GOLD[ref]) == len(_labels(case, "expect"))
+    return _verdict(CLAIM_BY_ID[ref]) == "confirmed"
+
+
+# Template -> named expected cases; removing the template must lose at least one.
+TEMPLATE_CASES = {
+    "alg-exist": ["alg-confirmed-beside-tolerated", "rv-corpus-pos-001"],
+    "alg-copula": ["rv-corpus-pos-009", "rv-corpus-pos-012"],
+    "alg-raise": ["rv-corpus-pos-022", "rv-corpus-pos-030"],
+    "alg-emerge": ["rv-corpus-e-002", "rv-corpus-pos-006"],
+    "alg-food": ["alg-confirmed-food-prose"],
+    "alg-told": ["g12-alg-safe-wording"],
+    "alg-topic": ["rv-corpus-pos-021"],
+    "adr-relation": ["adr-history-prose", "g12-adr-numbered-ago"],
+    "adr-cue": ["rv-corpus-pos-025"],
+    "adr-history": ["rv-corpus-pos-029"],
+    "adr-drug-rash": ["rv-corpus-pos-033"],
+    "neg-alg": ["rv-corpus-pos-005", "rv-corpus-pos-040"],
+    "neg-alg-denied": ["g12-alg-negated-by-test"],
+    "neg-adr": ["g12-adr-reaction-negated"],
+    "neg-adr-never": ["rv-corpus2-a2-036"],
+    "neg-adr-taking": ["g12-adr-negated-specific"],
+    "neg-adr-tolerated": ["g12-adr-tolerated"],
+    "sus-maybe-alg": ["g12-adr-suspected-maybe", "alg-suspected"],
+    "sus-maybe-adr": ["g12-exp-sus-maybe-adr"],
+    "sus-doubt": ["adr-suspected"],
+    "field-alg": ["alg-confirmed-drug-heading", "alg-confirmed-two-drugs", "g12-alg-heading-value"],
+    "field-adr": ["adr-history-heading", "adr-history-current-heading"],
+    "field-neg-alg": ["rv-corpus-a-025"],
+    "field-family": ["alg-family-heading"],
+    "record-alg": ["g12-quote-plain"],
+    "record-adr": ["adr-quoted-old-summary"],
+    "null-alg": ["rv-corpus-pos-013", "rv-corpus-pos-039"],
+    "null-alg-label": ["rv-corpus2-a2-017", "rv-corpus2-a2-018"],
+    "null-adr": ["g12-exp-null-adr"],
+    "null-field-alg": ["g12-exp-null-field-alg"],
+    "null-field-adr": ["g12-exp-null-field-adr"],
+}
+SUBJECT_CASES = [("patient topic", 0, ["alg-confirmed-beside-tolerated"]),
+                 ("patient possessive", 1, ["g12-alg-negated-by-test"]),
+                 ("family", 2, ["g12-exp-family-subject"])]
+
+
+def test_gate_d_names_every_template_once():
+    assert list(TEMPLATE_CASES) == [template.name for template in ca.TEMPLATES]
+    assert [index for _, index, _ in SUBJECT_CASES] == list(range(len(ca.SUBJECTS_OF)))
+
+
+@pytest.mark.parametrize("name", list(TEMPLATE_CASES))
+def test_gate_d_each_template_is_needed(name, monkeypatch, fresh_memo):
+    refs = TEMPLATE_CASES[name]
+    assert all(_holds(ref) for ref in refs), name
+    monkeypatch.setattr(ca, "TEMPLATES", tuple(t for t in ca.TEMPLATES if t.name != name))
     ca.resolve.cache_clear()
-    for case_id, anchor, *reaction in examples:
-        body = BY_ID[case_id]["body"]
-        resolution = ca.resolve(body, body, anchor, *(reaction or [None]))
-        assert resolution.drop is None and resolution.subject == "patient", (rule, case_id, resolution)
+    assert not all(_holds(ref) for ref in refs), name
 
 
-@pytest.mark.parametrize(("rule", "disable", "examples"), SUPPRESSING, ids=[row[0] for row in SUPPRESSING])
-def test_gate3_each_suppressing_rule_is_needed(rule, disable, examples, monkeypatch, fresh_memo):
-    cases = [BY_ID[case_id] for case_id, *_ in examples]
+@pytest.mark.parametrize(("label", "index", "refs"), SUBJECT_CASES, ids=[row[0] for row in SUBJECT_CASES])
+def test_gate_d_each_subject_position_is_needed(label, index, refs, monkeypatch, fresh_memo):
+    assert all(_holds(ref) for ref in refs), label
+    monkeypatch.setattr(ca, "SUBJECTS_OF", ca.SUBJECTS_OF[:index] + ca.SUBJECTS_OF[index + 1:])
+    ca.resolve.cache_clear()
+    assert not any(_holds(ref) for ref in refs), label
+
+
+def test_gate_d_the_reaction_topic_of_a_suspected_claim_is_needed(monkeypatch, fresh_memo):
+    assert _holds("alg-suspected")
+    monkeypatch.setattr(ca, "SUSPECTED_SUBJECTS", ())
+    ca.resolve.cache_clear()
+    assert not _holds("alg-suspected")
+
+
+def _numbered(prefix, count):
+    return [f"{prefix}-{index:02d}" for index in range(1, count + 1)]
+
+
+# Weakener list -> one named forbid case per entry, in list order.
+WEAKENER_CASES = {
+    "NAME_LABELS": _numbered("g12-name", 9),
+    "NAME_HONORIFICS": ["g12-person-14", "g12-name-10", "g12-name-11"],
+    "DISCLAIMER_NOUNS": _numbered("g12-disclaimer", 6),
+    "DISCLAIMER_MARKS": ["g12-disclaimer-01", *_numbered("g12-disclaimer", 12)[6:]],
+    "DENIAL": _numbered("g12-denial", 13),
+    "EXCEPTION": _numbered("g12-null-limited", 6),
+    "TOLERATED": _numbered("g12-tolerated", 2),
+    "NOUN_EXCLUDE": ["g12-noun-exception"],
+}
+WEAKENER_ROWS = [(name, entry, case_id) for name, ids in WEAKENER_CASES.items()
+                 for entry, case_id in zip(getattr(ca, name), ids, strict=True)]
+
+
+def test_gate_d_names_every_weakener_entry_once():
+    assert all(len(getattr(ca, name)) == len(ids) for name, ids in WEAKENER_CASES.items())
+    lists = {name for name, value in vars(ca).items() if name.isupper() and isinstance(value, tuple)
+             and value and all(isinstance(entry, str) for entry in value)}
+    assert lists - set(WEAKENER_CASES) == {"KINDS", "CERTAINTIES", "SUBJECTS", "STATUSES", "REACTION_WORDS"}
+
+
+@pytest.mark.parametrize(("name", "entry", "case_id"), WEAKENER_ROWS,
+                         ids=[f"{name}:{entry}" for name, entry, _ in WEAKENER_ROWS])
+def test_gate_d_each_weakener_entry_is_needed(name, entry, case_id, monkeypatch, fresh_memo):
+    case = BY_ID[case_id]
+    assert _run([case], singly=False)[0] == []
+    monkeypatch.setattr(ca, name, tuple(item for item in getattr(ca, name) if item != entry))
+    ca.resolve.cache_clear()
+    assert _run([case], singly=False)[0] != [], (name, entry)
+
+
+# Structural weakeners (not word lists): disabled, a named forbid case is violated.
+STRUCTURAL = [
+    ("R8 another reading of the allergen", "_occurrences_conflict", lambda *args: False,
+     ["g12-adr-two-people", "g12-tolerated-01"]),
+    ("R5 another sentence names a cue or reaction", "_null_conflict", lambda *args: False,
+     ["g12-null-limited-07", "g12-null-limited-08"]),
+    ("allergen fills the slot as one word", "_token", lambda allergen: True,
+     ["g12-neg-heading-mixed", "g12-span-reaction"]),
+]
+
+
+@pytest.mark.parametrize(("rule", "name", "replacement", "case_ids"), STRUCTURAL, ids=[row[0] for row in STRUCTURAL])
+def test_gate_d_each_structural_weakener_is_needed(rule, name, replacement, case_ids, monkeypatch, fresh_memo):
+    cases = [BY_ID[case_id] for case_id in case_ids]
     assert _run(cases, singly=False)[0] == []
-    disable(monkeypatch)
+    monkeypatch.setattr(ca, name, replacement)
     ca.resolve.cache_clear()
-    violated = {case_id for case_id, *_ in _run(cases, singly=False)[0]}
-    assert violated == {case["id"] for case in cases}, rule
+    assert {case_id for case_id, *_ in _run(cases, singly=False)[0]} == set(case_ids), rule
 
 
-@pytest.mark.parametrize(("rule", "disable", "examples"), SETTLING, ids=[row[0] for row in SETTLING])
-def test_gate3_each_settling_rule_is_needed(rule, disable, examples, monkeypatch, fresh_memo):
-    cases = [BY_ID[case_id] for case_id in examples]
-    assert [_expected_kept(case, GOLD[case["id"]]) for case in cases] == [
-        len(_labels(case, "expect")) for case in cases]
-    disable(monkeypatch)
-    ca.resolve.cache_clear()
-    assert [_expected_kept(case, GOLD[case["id"]]) for case in cases] == [0] * len(cases), rule
+# Drop rules: disabled, the named claim is stored as a candidate instead of dropped (and stays unconfirmed).
+NEVER = re.compile(r"(?!)")
+DROPPING = [
+    ("R11 form mark", "FORM_FIELD", NEVER, [("g12-form-checkbox", "アレルギー"), ("g12-form-table-header", "副作用")]),
+    ("R11 empty value", "EMPTY_VALUE", NEVER, [("g12-form-empty-value", "薬剤")]),
+    ("R2 cue lookarounds", "ALLERGY_CUE", re.compile(r"アレルギー|過敏症|不耐症?"),
+     [("g12-alg-antiallergic-drug", "合成薬AD"), ("g12-alg-allergic-rhinitis", "合成薬AK")]),
+]
 
 
-@pytest.mark.parametrize(("rule", "disable", "examples"), DROPPING, ids=[row[0] for row in DROPPING])
-def test_gate3_each_dropping_rule_is_needed(rule, disable, examples, monkeypatch, fresh_memo):
+@pytest.mark.parametrize(("rule", "name", "replacement", "examples"), DROPPING, ids=[row[0] for row in DROPPING])
+def test_gate_d_each_dropping_rule_is_needed(rule, name, replacement, examples, monkeypatch, fresh_memo):
     def resolutions():
         ca.resolve.cache_clear()
         return [ca.resolve(BY_ID[case_id]["body"], BY_ID[case_id]["body"], anchor, None) for case_id, anchor in examples]
     assert all(res.drop is not None for res in resolutions())
-    disable(monkeypatch)
+    monkeypatch.setattr(ca, name, replacement)
     assert all(res.drop is None for res in resolutions()), rule
     assert _run([BY_ID[case_id] for case_id, _ in examples], singly=False)[0] == []
-
-
-def test_gate3_names_every_rule_of_the_plan_once():
-    named = {part for row in SUPPRESSING + SETTLING + DROPPING for part in row[0].split()[0].split("/")}
-    # R1 quotes and R9 are gate 1 (quotes outside the body, reference context); R3a is clinical_scope
-    # plus the person-after-the-patient words;
-    # R3f is gate 1 on the hearsay / named-person examples; R10 is a unit test.
-    assert named == {"R1", "R2", "R3a", "R3b", "R3c", "R3d", "R3e", "R4", "R5", "R6", "R7", "R8", "R11"}
-    assert {"g12-alg-hearsay-clinician", "g12-alg-named-person"} <= {case["id"] for case in CASES}
-    assert any("context" in case for case in CASES)
