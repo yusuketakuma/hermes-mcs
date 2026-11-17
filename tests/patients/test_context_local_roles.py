@@ -854,3 +854,26 @@ def test_passed_over_patients_do_not_use_the_candidate_budget(lanes, monkeypatch
                               admit=lambda: True, role='local_takeover')
     assert outcome['status'] == 'progressed' and outcome['wait_cloud_worker'] >= 9, outcome
     assert IN_SCOPE in ''.join(_bodies(lanes.calls))
+
+
+def test_the_takeover_start_is_recorded_once_per_absence(monkeypatch, capsys):
+    clock = [1000.0]
+    alive = [False]
+    monkeypatch.setattr(resident.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(cloud_backlog, 'role_alive', lambda root, name: alive[0])
+    lane = SimpleNamespace()
+
+    def probes(count):
+        roles = []
+        for _ in range(count):
+            roles.append(resident._context_role(lane, cloud_worker=False, cloud_on=True))
+            clock[0] += resident.CHILD_ABSENT_GRACE_S / 2 + 1
+        return roles
+
+    assert probes(5) == ['local', 'local', 'local_takeover', 'local_takeover', 'local_takeover']
+    assert capsys.readouterr().err.count('"context_local_takeover"') == 1   # once, not per pass
+    alive[0] = True
+    assert probes(1) == ['local']
+    alive[0] = False
+    assert probes(4)[-1] == 'local_takeover'
+    assert capsys.readouterr().err.count('"context_local_takeover"') == 1   # the next absence
