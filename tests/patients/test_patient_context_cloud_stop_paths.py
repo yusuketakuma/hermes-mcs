@@ -1,5 +1,6 @@
 """A stopped cloud unit waits for a transient reason and finishes locally after a definitive one."""
 from contextlib import nullcontext
+import inspect
 import json
 
 import pytest
@@ -9,7 +10,6 @@ import cloud_backlog
 import cloud_client
 import cloud_inference
 import cloud_policy
-import cloud_send_admission
 import extract_llm
 import extract_llm_provider
 import local_llm
@@ -24,6 +24,7 @@ from inference_version import CURRENT_VERSION, VERSION_KEY
 from test_cloud_entry_recovery import unrelated_reservation
 from test_context_cloud_update_identity import cloud, finish, real_cloud, runtime
 from test_patient_context_refresh import seed, step
+from common_testkit import follow_cloud_mode
 
 __all__ = ['cloud', 'real_cloud', 'runtime']
 
@@ -942,14 +943,20 @@ def test_rate_limit_waits_for_a_unit_whose_paid_answer_of_this_input_is_not_save
     assert _reservations(ledger, 'scan:1')[0] == answered and _scan_rows(ledger)[-1][1]['provider']
 
 
-# Rows of the decision table that no other test here drives through a refresh pass.
-_PRE_SEND_ROWS = ('not_started', 'deadline', 'owner_transaction_active', 'checkpoint_unverified',
-                  'pricing_unverified', 'provider_budget_missing', 'window_history_pruned',
-                  'price_expired', 'window_history_aged', 'provider_monthly_cap', 'provider_daily_cap')
+# Rows of the decision table that no other test here drives through a refresh pass, with the
+# owner's decision written out (with cloud progress, fresh), independent of the classifier.
+_PRE_SEND_ROWS = {
+    'not_started': ('defer', 'hold'), 'deadline': ('defer', 'hold'),
+    'owner_transaction_active': ('defer', 'hold'), 'checkpoint_unverified': ('defer', 'hold'),
+    'pricing_unverified': ('hold', 'hold'), 'provider_budget_missing': ('hold', 'hold'),
+    'window_history_pruned': ('hold', 'hold'),
+    'price_expired': ('local', 'local'), 'window_history_aged': ('local', 'local'),
+    'provider_monthly_cap': ('local', 'local'), 'provider_daily_cap': ('defer', 'defer'),
+}
 
 
 @pytest.mark.parametrize('held', [False, True])
-@pytest.mark.parametrize('code', _PRE_SEND_ROWS)
+@pytest.mark.parametrize('code', sorted(_PRE_SEND_ROWS))
 def test_stop_before_send_follows_the_decision_table(runtime, real_cloud, monkeypatch, code, held):
     ledger, _, local_calls = runtime
     cfg, _ = real_cloud
@@ -961,7 +968,7 @@ def test_stop_before_send_follows_the_decision_table(runtime, real_cloud, monkey
     answered, before, paid = _reservations(ledger, 'scan:1'), len(sent), _usage(ledger)
     monkeypatch.setattr(cloud_policy, 'block_reason', lambda *args, **kwargs: code)
     monkeypatch.setattr(cloud_policy, 'refusal_code', lambda cfg, named, **kwargs: named)
-    verdict = cloud_send_admission.classify_refusal('pre_send', code, progress=held)
+    verdict = _PRE_SEND_ROWS[code][0 if held else 1]
     outcome = step(runtime, cfg=cfg)
     assert len(sent) == before and _usage(ledger) == paid
     if verdict == 'defer':
@@ -981,23 +988,54 @@ def test_stop_before_send_follows_the_decision_table(runtime, real_cloud, monkey
         assert not local_calls and not _dispositions(ledger) and not _scan_rows(ledger)
 
 
-@pytest.mark.parametrize('code', ['scope', 'route_closed', 'profile_invalid'])
-def test_reason_the_cloud_is_off_follows_the_decision_table_for_a_unit_with_cloud_work(runtime, real_cloud, monkeypatch, code):
+@pytest.mark.parametrize('code,verdict', [('scope', 'local'), ('route_closed', 'local'), ('profile_invalid', 'hold')])
+def test_reason_the_cloud_is_off_follows_the_decision_table_for_a_unit_with_cloud_work(
+        runtime, real_cloud, monkeypatch, code, verdict):
     ledger, _, local_calls = runtime
     cfg, _ = real_cloud
     sent = _partial_cloud_scan(runtime, cfg, monkeypatch)
     adopted, = _reservations(ledger, 'scan:1')
     paid = _usage(ledger)
     monkeypatch.setattr(extract_llm, '_cloud_mode', lambda *args: 'off')
+    follow_cloud_mode(monkeypatch, extract_llm)
     monkeypatch.setattr(extract_llm, 'cloud_off_reason', lambda *args: code)
     outcome = step(runtime, cfg=cfg)
     assert len(sent) == 1 and _usage(ledger) == paid
-    if cloud_send_admission.classify_refusal('pre_send', code, progress=True) == 'local':
+    if verdict == 'local':
         assert outcome['status'] == 'progressed' and outcome['cloud_refusal'] == code, outcome
         assert _local_sources(local_calls) and _dispositions(ledger) == [(adopted, 'superseded_local')]
     else:
         assert (outcome['status'], outcome['reason']) == ('deferred', 'patient_context_cloud_not_sent'), outcome
         assert outcome['cloud_refusal'] == 'repeat_success' and not local_calls and not _dispositions(ledger)
+
+
+def test_a_key_read_that_fails_once_waits_instead_of_holding(runtime, real_cloud, monkeypatch):
+    """Reproduction: the mode and the reason the cloud is off were read separately. The first
+    key read failed and the second succeeded, so the unit held as an unknown stop. One reading
+    names the temporary read failure, and the unit waits for the cloud."""
+    ledger, _, local_calls = runtime
+    cfg, posts = real_cloud
+    monkeypatch.setattr(extract_llm, '_cloud_mode', extract_llm_provider._cloud_mode)
+    seed(ledger, body=BODY)
+    reads = []
+    real_key = cloud_policy.selected_key
+
+    def selected_key(root=None, cfg=None):
+        # The unit's first reading of its cloud mode fails to read the key; every other read
+        # (the selection's, the route's, later ones) succeeds.
+        stack = [frame.function for frame in inspect.stack()]
+        callers = [name for name in stack[stack.index('_cloud_route_state') + 1:]
+                   if name not in ('_cloud_mode', 'cloud_route_mode', 'cloud_off_reason', 'route_mode')]
+        unit = callers[:1] == ['_run_due_unit']
+        reads.append('unit' if unit else 'other')
+        return None if unit and reads.count('unit') == 1 else real_key(root, cfg)
+
+    monkeypatch.setattr(cloud_policy, 'selected_key', selected_key)
+    monkeypatch.setattr(cloud_policy, 'selected_key_problem', lambda root, cfg: reads.append('problem'))
+    outcome = step(runtime, cfg=cfg)
+    assert (outcome['status'], outcome.get('reason'), outcome.get('cloud_refusal')) == (
+        'deferred', 'patient_context_cloud_deferred:env_file_unreadable', 'env_file_unreadable'), (outcome, reads)
+    assert not local_calls and not posts and not _scan_rows(ledger)
 
 
 @pytest.mark.parametrize('role', ['any', 'local_takeover'])

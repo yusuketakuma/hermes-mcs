@@ -15,6 +15,7 @@ import patient_context_refresh_state as state
 import patient_context_refresh as refresh
 from test_context_cloud_update_identity import real_cloud, runtime, cloud, finish
 from test_patient_context_refresh import seed, step
+from common_testkit import follow_cloud_mode
 
 __all__ = ['real_cloud', 'runtime', 'cloud']
 
@@ -165,6 +166,7 @@ def test_paid_reservation_arriving_after_local_inference_blocks_adoption(runtime
     ledger, _, _ = runtime
     cfg, posts = real_cloud
     monkeypatch.setattr(extract_llm, '_cloud_mode', lambda *args: 'off')
+    follow_cloud_mode(monkeypatch, extract_llm)
     original = local_llm.admitted_chat
     reservations = []
     def race(owner, prompt, **kwargs):

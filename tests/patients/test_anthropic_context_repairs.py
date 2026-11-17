@@ -25,6 +25,7 @@ import cloud_inference
 import patient_context_refresh as context_refresh
 from test_patient_context_refresh import document, seed
 import semantic_jev as _source_repair_jev
+from common_testkit import follow_cloud_mode
 from anthropic_context_testkit import (
     CFG, _REPAIR_BED, _REPAIR_HOME, _SOURCE_REPAIR_CLIENT, _SOURCE_REPAIR_JEV, _SOURCE_REPAIR_PROVIDER, cloud, drain, runtime, source_repair, step
 )
@@ -122,9 +123,11 @@ def test_a_local_lane_never_sends_a_source_quality_repair(runtime, source_repair
     real = worker._cloud_mode
     if case == 'left_scope':
         monkeypatch.setattr(worker, '_cloud_mode', lambda *args: 'off')
+        follow_cloud_mode(monkeypatch, worker)
     elif case == 'joins_scope':
         monkeypatch.setattr(worker, '_cloud_mode', lambda *args: real(*args) if sys._getframe(1).f_globals[
             '__name__'] == 'patient_context_quality_controller' else 'off')
+        follow_cloud_mode(monkeypatch, worker)
     outcomes = []
     for _ in range(4):
         clock.mono += context_refresh.CHILD_WAIT_S
@@ -1011,6 +1014,7 @@ def test_a_local_lane_never_sends_a_summary_quality_repair(runtime, cloud, monke
         real = worker._cloud_mode
         if left_scope:
             monkeypatch.setattr(worker, '_cloud_mode', lambda *args: 'off')
+            follow_cloud_mode(monkeypatch, worker)
         outcomes = []
         for _ in range(4):
             clock.mono += context_refresh.CHILD_WAIT_S
