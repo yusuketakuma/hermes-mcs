@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "送信前に自分で止めたカードが結果不明のまま残る問題を修正",
+  "summary": "Slack・Discordのカードや本文・添付の送信で、送信直前に設定変更・停止・キルスイッチ・復元保留などを検知して通信前に止めた場合は「未送信」として記録します。これまでは「結果不明」と記録され、送っていないカードでも card_resolve による手動確認が必要でした。未送信になったカードは、ほかの未送信と同じく再送上限の範囲で次の配送に回ります。また Slack がカードを受け付けた後にボタン情報の保存だけが失敗しても、配送済みと実際の投稿IDを記録します。",
+  "upgrade": "追加操作は不要です。Hermes 経由の Slack は gateway の再起動後、standalone の Slack・Discord は standalone の再起動後に反映されます。すでに結果不明として残っているカードは自動では変わらないため、従来どおり card_resolve で確認してください。",
+  "details": [
+    "未送信と扱うのは、その要求が通信を始める前に拒否されたと証明できる場合だけです。Slack の添付アップロードは複数の要求からなるため、最初の要求の前に止めた場合だけ未送信にし、途中で止めた場合は従来どおり結果不明のまま再送しません。",
+    "Discord standalone では、SDK が同じ呼出しの中で再試行する2回目以降の要求で止めた場合は、前の要求が届いた可能性があるため結果不明のままです。",
+    "standalone Slack の文字通知（mcs-notify）が設定変更で止まったときのエラーコード slack_configuration_changed_restart_required と、接続の再接続判定は変わりません。",
+    "ボタン情報の保存に失敗したときは、配送結果とは別に token_pin_failed をログに残します。"
+  ],
+  "refs": ["adapters/slack/delivery.py", "adapters/slack/standalone.py", "adapters/discord/standalone.py", "adapters/common/worker.py", "tests/adapters/common/test_bugsweep_prewire_not_sent.py"]
+}

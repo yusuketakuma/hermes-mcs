@@ -103,8 +103,9 @@ async def await_settled(coroutine, *, on_cancel=None):
 class SendNotAdmitted(RuntimeError):
     """Current authority refused a write before it reached the transport."""
 
-    def __init__(self, last_status=None):
-        super().__init__("current send authority unavailable")
+    def __init__(self, last_status=None, code=None):
+        # ``code`` keeps a caller's fixed refusal code in str(exc) for logs.
+        super().__init__(code or "current send authority unavailable")
         # A preceding 429 is an observed refusal, never an ambiguous send.
         self.status = 429 if last_status == 429 else None
 
