@@ -25,11 +25,6 @@ def _command(cmd, project_id=1, **fields):
     }
 
 
-@pytest.fixture(autouse=True)
-def _local_model(monkeypatch):
-    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "local")
-
-
 def _setup(tmp_path, *, publication_mode="assist", audit_status="PASS", provenance=None):
     db = Ledger(str(tmp_path / "ledger.db"))
     db.save_patient(
@@ -59,7 +54,7 @@ def _setup(tmp_path, *, publication_mode="assist", audit_status="PASS", provenan
             "section": "status", "text": "新しい監査済み要約",
             "claim_kind": "reported_fact",
         }], "limitations": []}, ensure_ascii=False),
-        project_id=1, message_id=1, model="local",
+        project_id=1, message_id=1, model=semantic_transport.LLM_MODEL,
         meta={"fingerprint": bundle["source_fingerprint"],
               "policy_fingerprint": policy,
               "target_revision": bundle["members"][0]["revision"],
@@ -85,6 +80,23 @@ def test_local_model_change_makes_local_summary_not_adoptable(tmp_path, monkeypa
     db.close()
 
 
+def test_local_model_change_after_adoption_clears_current_adoption(tmp_path, monkeypatch):
+    db, candidate_id = _setup(tmp_path)
+    reviewed = summary_review.comparison(db.db, 1, 1, candidate_id)
+    applied = mcs_requests.apply_command(db, _command(
+        "ops.adopt_summary", message_id=1, summary_artifact_id=candidate_id,
+        comparison_hash=reviewed["comparison_hash"], reason="採用する"))
+    assert applied["outcome"] == "applied"
+    adopted = summary_review.comparison(db.db, 1, 1, candidate_id)
+    assert adopted["candidate"]["adopted"] is True
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
+    changed = summary_review.comparison(db.db, 1, 1, candidate_id)
+    assert changed["candidate"]["current"] is False
+    assert changed["candidate"]["adopted"] is False
+    assert changed["adoptions"] and not any(a["current"] for a in changed["adoptions"])
+    db.close()
+
+
 def test_local_model_change_keeps_cloud_summary_adoptable(tmp_path, monkeypatch):
     db, candidate_id = _setup(
         tmp_path, provenance={"providers": ["anthropic"], "complete": True})
@@ -96,16 +108,16 @@ def test_local_model_change_keeps_cloud_summary_adoptable(tmp_path, monkeypatch)
     db.close()
 
 
-@pytest.mark.parametrize("cloud,model,expected", [
-    (False, "local", "PASS"), (False, "synthetic-local-b", "STALE"),
-    (True, "synthetic-local-b", "PASS")])
+@pytest.mark.parametrize("cloud,changed,expected", [
+    (False, False, "PASS"), (False, True, "STALE"), (True, True, "PASS")])
 def test_view_shows_summary_stale_after_local_model_change(
-        tmp_path, monkeypatch, cloud, model, expected):
+        tmp_path, monkeypatch, cloud, changed, expected):
     import ledger
     import mcs_view
     db, _ = _setup(tmp_path, provenance=(
         {"providers": ["anthropic"], "complete": True} if cloud else None))
-    monkeypatch.setattr(semantic_transport, "LLM_MODEL", model)
+    if changed:
+        monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
     snapshot = ledger.publish_snapshot(
         str(tmp_path / "ledger.db"), str(tmp_path / "snapshots"))
     db.close()
