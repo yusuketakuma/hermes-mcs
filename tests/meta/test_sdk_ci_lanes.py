@@ -14,6 +14,8 @@ def test_hermes_ci_runs_the_guarded_sdk_lane():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     job = workflow.split("  hermes-integration:\n", 1)[1]
     step = job.split("      - name: discord and slack plugin integration\n", 1)[1]
+    # Stop at the next top-level job so later jobs cannot affect the match.
+    step = step.split("\n\n  ", 1)[0] + "\n"
     # The guard verifies distribution versions and source against the CI pin,
     # installs process isolation before collection, and rejects missing tests.
     assert "working-directory: hermes-mcs" in step
