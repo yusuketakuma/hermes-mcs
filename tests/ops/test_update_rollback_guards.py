@@ -943,3 +943,59 @@ def test_interrupted_migration_undo_restores_old_venv_across_sdk_pins(
         updater._undo_interrupted_migration(
             state, applying, lambda *a: pytest.fail("no drainers"),
             lambda detail: pytest.fail(f"unexpected escalation: {detail}"))
+
+
+class _GuardPassed(Exception):
+    pass
+
+
+@pytest.mark.parametrize("marker,backup,proceeds", [
+    ({"reinstall_started": False}, False, True),     # known not started
+    ({}, False, False),                              # legacy journal: unknown
+    ({"reinstall_started": True}, False, False),     # started, no backup
+    ({"reinstall_started": True}, True, True),       # started, backup verified
+    ({"reinstall_started": False, "reinstall_done": True}, False, False),
+])
+def test_interrupted_migration_undo_sdk_guard_by_install_marker(
+        updater, tmp_path, monkeypatch, marker, backup, proceeds):  # noqa: F811
+    """Crash before install.sh, then two recover passes: the undo is allowed only
+    when the old venv is proven unchanged (explicit not-started) or restorable."""
+    repo, _ = _make_repo(tmp_path)
+    for module in (updater, update_apply, update_cli, update_execution, update_lifecycle_context,
+                   update_preflight, update_recovery, update_repository, update_runtime_migration,
+                   update_services):
+        monkeypatch.setattr(module, "REPO", str(repo))
+    before = _head(repo)
+    (repo / "deployment").mkdir()
+    (repo / "deployment" / "requirements-standalone.txt").write_text("synthetic-sdk==2\n")
+    _git(repo, "add", "deployment/requirements-standalone.txt")
+    _git(repo, "commit", "-qm", "synthetic sdk pin")
+    after = _head(repo)
+    kept = tmp_path / "venv.pre-python314"
+    if backup:
+        kept.mkdir()
+    applying = {"tag": "synthetic", "sha": after, "prev_sha": before, "schema_bump": False,
+                "reinstall": True, **marker,
+                "runtime_migration": {"backup_path": str(kept)}}
+    state = updater.journal_store.default_state()
+    state["applying"] = applying
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {"runtime_mode": "standalone"})
+
+    def stop():
+        raise _GuardPassed
+
+    monkeypatch.setattr(update_recovery, "quiesce", stop)
+    monkeypatch.setattr(update_recovery, "journal", lambda *a, **k: None)
+    for _step in (1, 2):                      # pass 2 reads the rollback-shaped record
+        escalated = []
+        try:
+            result = updater._undo_interrupted_migration(
+                state, state["applying"], lambda *a: pytest.fail("no drainers"),
+                lambda detail: escalated.append(detail) or 1)
+        except _GuardPassed:
+            assert proceeds
+        else:
+            assert not proceeds and result == 1
+            assert escalated == ["standalone_sdk_rollback_unsupported"]
+        assert bool(state["applying"].get("rollback")) is proceeds

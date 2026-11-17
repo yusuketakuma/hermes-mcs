@@ -203,6 +203,7 @@ def _plan_runtime_migration(state: dict, held_fd: int | None = None) -> None:
     args = list(applying.get("install_args") or [])
     applying["install_args"] = args + [a for a in MIGRATION_INSTALL_ARGS if a not in args]
     applying["reinstall"] = True
+    applying["reinstall_started"] = False      # explicit: a missing key is a legacy journal (unknown)
     journal(state, "runtime_migration")
 
 
