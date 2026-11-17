@@ -444,12 +444,13 @@ def test_lane_pauses_after_a_pass_that_found_only_other_role_patients(lanes, mon
 @pytest.mark.parametrize('reason,child,pause', [
     ('patient_context_cloud_deferred:daily_cap', 60, 60), ('patient_context_cloud_budget', 60, 60),
     ('patient_context_selection_busy', 20, 20), ('patient_context_other_role', 60, 60),
-    ('patient_context_cloud_deferred:cloud_worker_unavailable', 60, 0),
+    ('patient_context_cloud_deferred:cloud_worker_unavailable', 60, 20),
     ('patient_context_cloud_deferred:cloud_capacity', 5, 0), ('patient_context_waiting', 5, 0)])
 def test_lane_paces_its_passes_like_the_children(lanes, monkeypatch, reason, child, pause):
     """Owner Q12: a cloud wait pauses the lane's context passes for a minute like a child's, and
     another worker in the selection for 20 s; a full send slot or ordinary waiting does not. A
-    unit waiting for a child holds back only its patient (the selection passes over it)."""
+    takeover pass that found only patients waiting for a child waits like a busy selection
+    (its unit holds back only its patient, which the selection passes over)."""
     assert cloud_backlog._context_retry_delay({'reason': reason}) == child
     entered = []
 
@@ -748,3 +749,80 @@ def test_child_waits_expire_and_end_with_the_takeover(runtime, real_cloud):
     refresh._remember_patient(ledger, 3, {'status': 'deferred', 'done': 0, 'reason': refresh.CHILD_WAIT_REASON})
     assert refresh._child_waits(ledger, 'local') == frozenset()   # a child is back
     assert refresh._CHILD_WAIT not in ledger.__dict__
+
+
+def _write_transactions_per_minute(lanes, seconds=600):
+    """BEGIN IMMEDIATE statements per simulated lane minute while the lane runs."""
+    statements = []
+    lanes.ledger.db.set_trace_callback(lambda sql: statements.append(sql) if sql.startswith('BEGIN IMMEDIATE') else None)
+    try:
+        elapsed, _ = _takeover_lane_seconds(lanes, lambda: False, limit=seconds)
+    finally:
+        lanes.ledger.db.set_trace_callback(None)
+    return len(statements) * 60 / elapsed
+
+
+@pytest.mark.parametrize('lanes', ['none'], indirect=True)
+def test_a_lane_whose_patients_all_wait_for_a_child_pauses_briefly(lanes, monkeypatch):
+    """Reproduction: with only stuck patients the lane walked every one of them each pass, two
+    bookmark writes each, at the idle floor: 339 write transactions a minute for 10, now about 95."""
+    assert resident._CHILD_WAIT_PAUSE_S == cloud_backlog._context_retry_delay(
+        {'reason': 'patient_context_selection_busy'})
+    fresh, _ = _stuck_patients(lanes, monkeypatch, 10)
+    _takeover_lane_seconds(lanes, lambda: document(lanes.ledger, pid=fresh))
+    _takeover_lane_seconds(lanes, lambda: False, limit=120)   # every stuck patient checked once
+    rate = _write_transactions_per_minute(lanes)
+    assert rate < 120, rate
+    assert lanes.ledger.__dict__[resident._CONTEXT_PAUSE][1] == refresh.CHILD_WAIT_REASON
+
+
+@pytest.mark.parametrize('lanes', ['none'], indirect=True)
+def test_a_busy_selection_after_a_child_wait_keeps_its_pause(lanes, monkeypatch):
+    """The pass reports what stopped its later unit: another worker in the selection keeps the
+    lane's 20 s pause, and the child wait before it is not reported instead."""
+    _stuck_patients(lanes, monkeypatch, 1)
+    lanes.ledger.__dict__[resident._CHILD_ABSENT] = (
+        lanes.clock.mono - resident.CHILD_ABSENT_GRACE_S - 1, lanes.clock.mono)
+    real, calls = refresh._selection_lock, []
+
+    def selection_lock(db):
+        calls.append(1)
+        return real(db) if len(calls) == 1 else (None, 'patient_context_selection_busy')
+
+    monkeypatch.setattr(refresh, '_selection_lock', selection_lock)
+    started = lanes.clock.mono
+    outcome = lanes.lane()
+    assert outcome['reason'] == 'patient_context_selection_busy' and len(calls) == 2, outcome
+    assert lanes.ledger.__dict__[resident._CONTEXT_PAUSE] == (started + 20, 'patient_context_selection_busy')
+    assert 1 in lanes.ledger.__dict__[refresh._CHILD_WAIT]
+
+
+@pytest.mark.parametrize('role', ['any', 'cloud', 'local'])
+def test_only_a_takeover_selects_again_after_a_child_wait(runtime, monkeypatch, role):
+    ledger, clock, _ = runtime
+    units = []
+
+    def one_unit(*args, **kwargs):
+        units.append(1)
+        return (1, {'status': 'deferred', 'done': 0, 'reason': refresh.CHILD_WAIT_REASON})
+        yield
+
+    monkeypatch.setattr(refresh, '_run_one_unit', one_unit)
+    refresh.run_due(ledger, CFG, deadline=clock.mono + 600, admit=lambda: True, role=role)
+    assert units == [1]
+    outcome = refresh.run_due(ledger, CFG, deadline=clock.mono + 600, admit=lambda: True, role='local_takeover')
+    assert len(units) == 1 + refresh.CHILD_WAIT_UNITS
+    # A pass that used up its units continues without the lane's pause.
+    assert outcome['reason'] == 'patient_context_scan_incomplete'
+
+
+@pytest.mark.parametrize('lanes', ['none'], indirect=True)
+def test_passed_over_patients_do_not_use_the_candidate_budget(lanes, monkeypatch):
+    """More waiting patients than the pass's 8 candidates: one pass still reaches the fresh one."""
+    fresh, _ = _stuck_patients(lanes, monkeypatch, 12)
+    waits = lanes.ledger.__dict__.setdefault(refresh._CHILD_WAIT, {})
+    waits.update({pid: lanes.clock.mono + 3600 for pid in range(1, fresh)})
+    outcome = refresh.run_due(lanes.ledger, lanes.cfg, deadline=lanes.clock.mono + 600,
+                              admit=lambda: True, role='local_takeover')
+    assert outcome['status'] == 'progressed' and outcome['wait_cloud_worker'] >= 9, outcome
+    assert IN_SCOPE in ''.join(_bodies(lanes.calls))

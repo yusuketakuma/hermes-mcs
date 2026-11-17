@@ -131,6 +131,9 @@ CHILD_ABSENT_GRACE_S = 900
 _CHILD_ABSENT = "_context_child_absent"
 # The lane's ledger keeps (until, reason) of the pause after a context pass that waits.
 _CONTEXT_PAUSE = "_context_pause"
+# The pause after a takeover pass whose patients all wait for a context child: the wait of a
+# pass that found another worker in the selection (``patient_context_selection_busy``).
+_CHILD_WAIT_PAUSE_S = 20
 
 
 def context_lane_active(slot=None):
@@ -239,9 +242,12 @@ def _background_context_refresh(ledger, initial_state, stop=None, *, cloud_worke
                 # A lane paces its context passes like the children (a cloud wait or a pass
                 # that found only other-role patients waits a minute); shorter waits keep the
                 # lane loop's own idle floor. A unit waiting for a child holds back only its
-                # patient, which the next passes skip: the lane goes on with the others.
-                delay = cloud_backlog._context_retry_delay(result)
-                if delay > _IDLE_FLOOR_S and result.get("reason") != patient_context_refresh.CHILD_WAIT_REASON:
+                # patient, which the next passes skip: the lane goes on with the others, and
+                # only a pass that found nothing but such patients waits, as briefly as a pass
+                # that found the selection busy.
+                delay = (_CHILD_WAIT_PAUSE_S if result.get("reason") == patient_context_refresh.CHILD_WAIT_REASON
+                         else cloud_backlog._context_retry_delay(result))
+                if delay > _IDLE_FLOOR_S:
                     ledger.__dict__[_CONTEXT_PAUSE] = (time.monotonic() + delay, result.get("reason"))
     except Exception as exc:
         # Context refresh failures must not interrupt collection or normal extraction.
