@@ -399,6 +399,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                             "s3_repair", "reserved",
                             doc_hash=doc_hash)
             from semantic_extraction import repair_facts_v2
+            from semantic_relations import RELATION_RULE
             sent, answers = [], []
 
             def repair_llm(prompt):
@@ -491,6 +492,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                           "schema": SCHEMA_VERSION,
                           "fact_source": fact_source,
                           "repaired": True,
+                          "relation_rule": RELATION_RULE,
                           **({'repair_artifact_id': completed_id} if evidence is not None else {}),
                           "coverage_status":
                               v2_doc["coverage"]["status"],
