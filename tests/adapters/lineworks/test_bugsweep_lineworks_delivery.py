@@ -159,6 +159,31 @@ def test_body_part_outwaits_a_ten_second_cli_lock_hold(tmp_path, monkeypatch):
     assert len(waited) > delivery.SENDER_BUSY_TRIES
 
 
+def test_part_busy_wait_ends_at_part_busy_limit(monkeypatch):
+    clock = [0.0]
+    tries = []
+
+    def busy():
+        tries.append(clock[0])
+        raise ClientError("sender_busy")
+
+    async def sleep(seconds):
+        clock[0] += seconds
+
+    async def allowed():
+        return True
+
+    monkeypatch.setattr(delivery, "time", SimpleNamespace(time=lambda: clock[0],
+                                                          monotonic=lambda: clock[0]))
+    monkeypatch.setattr(delivery.asyncio, "sleep", sleep)
+    with pytest.raises(ClientError, match="sender_busy"):
+        asyncio.run(delivery.locked(busy, wait_cooldown=True, busy_tries=None,
+                                    retry_allowed=allowed))
+    # A wedged lock holder ends the part's wait at the bound, not before and not never.
+    assert delivery.PART_BUSY_LIMIT == 1800
+    assert delivery.PART_BUSY_LIMIT <= tries[-1] < delivery.PART_BUSY_LIMIT + 1
+
+
 def test_stop_during_cooldown_journals_not_sent_promptly(tmp_path):
     w = world(tmp_path)
     spec = _published(w)
