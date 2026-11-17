@@ -23,12 +23,18 @@ reaction); comparing the model's axes with the licences happens outside it.
   of a longer name, a particle or a cue word in the allergen never matches;
   any other ending (question, hedge, conjecture, condition, request, worry,
   plan) or any word between the subject and the allergen is no match by
-  construction. A template fixes kind, polarity, certainty, subject and time.
+  construction. A template fixes kind, polarity, certainty, subject and time;
+  a time word outside its fixed slots, or a clause in front of the subject
+  with a past form, leaves the time open. A clause after the assertion may
+  only name one of `TAIL_ACTIONS` or a reaction.
 - A licence is weakened only by the small lists below, each for a case a
-  template would otherwise confirm: another post-level owner (`NAME_FIELD`,
-  `DISCLAIMER`), a later denial (`DENIAL`), exceptions to a "none" form
-  (`EXCEPTION`), names that end in an exception (`NOUN_EXCLUDE`) and a
-  different reading of the same allergen elsewhere (R8, `TOLERATED`).
+  template would otherwise confirm: another owner named by the post
+  (`NAME_LABELS` / `NAME_HONORIFICS`, `DISCLAIMER_NOUNS` with
+  `DISCLAIMER_MARKS` or a person), a later sentence that denies, doubts or
+  limits (`DENIAL`, `EXCEPTION`), exception and value words inside a list or
+  an allergen (`NOUN_EXCLUDE`) and a different reading of the same allergen
+  in another sentence (R8, `TOLERATED`). Each entry is needed by a named case
+  of the gate.
 - Nothing is ever corrected towards the patient, towards confirmed or
   towards current: a model `suspected` stays `suspected` even when the body
   licenses a certain assertion.
@@ -82,17 +88,19 @@ NAME_HONORIFICS = ("様", "さん", "氏")
 # other than the patient, disowns the post.
 DISCLAIMER_NOUNS = ("記録", "情報", "内容", "もの", "件", "話")
 DISCLAIMER_MARKS = ("別", "他", "違", "誤", "混", "ではな", "ではありません")
-# R3e/R7: a later sentence that denies, retracts or still doubts what came before.
-DENIAL = ("覚え", "記憶", "事実", "否定", "誤り", "間違", "誤記", "別人", "心当たり", "訂正", "取り消", "削除",
-          "飲んだこと", "本当", "未確認", "確認中")
+# R3e/R7: a later sentence that denies, retracts or still doubts what came before (「削除」 is held by 「除」 below).
+DENIAL = ("覚え", "記憶", "事実", "否定", "誤り", "間違", "誤記", "別人", "心当たり", "訂正", "取り消",
+          "飲んだこと", "本当", "未確認", "確認中", "確認でき", "不明")
 # What a clause after the assertion may do (「…のため、合成薬ACに変更しました」); anything else is no match.
 TAIL_ACTIONS = ("変更", "中止", "除去", "注意", "使用")
-# R5: a "none" form is exact only when no other sentence limits it or names a reaction or cue.
+# R5: a later sentence with these limits what came before; a "none" form is exact only when no other
+# sentence holds one of them or names a reaction or cue.
 EXCEPTION = ("ただし", "但し", "のみ", "だけ", "以外", "除")
 # R8: a sentence naming the allergen with these words speaks about it even without a cue.
 TOLERATED = ("問題", "大丈夫")
-# A word holding these is an exception (「卵以外」), neither an allergen nor another list member.
-NOUN_EXCLUDE = ("外",)
+# A word holding these is an exception (「卵以外」) or a value / doubt word (「卵、不明」), neither an allergen
+# nor another list member.
+NOUN_EXCLUDE = ("外", "不明", "未確認", "確認中", "要確認", "疑", "可能性", "なし", "無し", "未聴取", "不詳")
 
 _OCCURRENCE_LIMIT = 64
 _A = "\ue000"  # the claimed allergen's placeholder inside its unit
@@ -195,7 +203,7 @@ def _expand(text):
             return (r"(?:<<N>>(?:に|の)?(?:は|には)?(?:アレルギー|副作用)(?:は|が)?"
                     r"(?:なく|なし|あり|ありませんでしたが|ありませんが|ありますが)[、，])?")
         if name == "LEAD":
-            lead = r"[^、。\ue000]{1,20}(?:ので|ため)[、，]|[^、。\ue000はがをに]{1,12}(?:から|より)[、，]"
+            lead = r"[^、。\ue000]{1,20}ので[、，]|[^、。\ue000はがをに]{1,12}(?:から|より)[、，]"
             return f"{group('ld', lead)}?"
         raise KeyError(name)
 
@@ -363,8 +371,9 @@ def _unit(body, position):
 
 
 def _unit_text(body, left, right):
-    """The unit with its own end mark (a question mark stays, so no template ends on it)."""
-    return body[left:right + 1] if right < len(body) and body[right] != "\n" else body[left:right]
+    """The unit with its own run of end marks (a question mark stays, so no template ends on it)."""
+    marks = re.match(r"[。！？!?]*", body[right:])[0]
+    return body[left:right + len(marks)]
 
 
 def _cues(text, start=0, end=None):
@@ -479,8 +488,14 @@ def _disclaimer(body):
     return False
 
 
+def _later_words():
+    """R3e/R5: the words a later sentence denies, doubts or limits an assertion with."""
+    return DENIAL + EXCEPTION
+
+
 def _denied_after(body, right):
-    return bool(DENIAL) and re.search(_alt(DENIAL), body[right:]) is not None
+    words = _later_words()
+    return bool(words) and re.search(_alt(words), body[right:]) is not None
 
 
 def _speaks(body, left, right):

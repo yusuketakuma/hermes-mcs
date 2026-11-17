@@ -483,10 +483,10 @@ WEAKENER_CASES = {
     "NAME_HONORIFICS": ["g12-person-14", "g12-name-10", "g12-name-11"],
     "DISCLAIMER_NOUNS": _numbered("g12-disclaimer", 6),
     "DISCLAIMER_MARKS": ["g12-disclaimer-01", *_numbered("g12-disclaimer", 12)[6:]],
-    "DENIAL": _numbered("g12-denial", 16),
+    "DENIAL": [case_id for case_id in _numbered("g12-denial", 18) if case_id != "g12-denial-12"],  # 12: EXCEPTION 除
     "EXCEPTION": _numbered("g12-null-limited", 6),
     "TOLERATED": _numbered("g12-tolerated", 2),
-    "NOUN_EXCLUDE": ["g12-noun-exception"],
+    "NOUN_EXCLUDE": ["g12-noun-exception", *_numbered("g12-value-item", 10)],
 }
 WEAKENER_ROWS = [(name, entry, case_id) for name, ids in WEAKENER_CASES.items()
                  for entry, case_id in zip(getattr(ca, name), ids, strict=True)]
@@ -534,6 +534,12 @@ def test_gate_d_each_weakener_entry_is_needed(name, entry, case_id, monkeypatch,
 
 
 _GROUPS = ca._groups
+
+
+def _one_end_mark(body, left, right):
+    return body[left:right + 1] if right < len(body) and body[right] != "\n" else body[left:right]
+
+
 # Structural weakeners (not word lists): disabled, a named forbid case is violated.
 STRUCTURAL = [
     ("R8 another reading of the allergen", "_occurrences_conflict", lambda *args: False,
@@ -544,6 +550,9 @@ STRUCTURAL = [
      ["g12-neg-heading-mixed", "g12-span-reaction"]),
     ("a person is neither a list member nor a record owner", "_PERSON", r"(?!)",
      ["g12-person-list", "g12-disclaimer-person"]),
+    ("a later caveat limits any claim, not only a none form", "_later_words", lambda: ca.DENIAL,
+     ["g12-caveat-later"]),
+    ("the whole run of end marks stays with the unit", "_unit_text", _one_end_mark, ["g12-end-marks"]),
     ("a clause in front reads only a present form", "_groups",
      lambda match, prefix: [] if prefix == "ld" else _GROUPS(match, prefix), ["g12-lead-time"]),
 ]
