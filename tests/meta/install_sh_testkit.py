@@ -172,7 +172,7 @@ fi
 case "$*" in
   *prepare_recovery.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
   *install_options.py*) exec "$STUB_PARSE_PYTHON" -B "$STUB_ROOT/install-options-runner.py" "$@" ;;
-  *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*mcs-installer-inherited-lock*|*requires_python_admits.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
+  *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*mcs-installer-inherited-lock*|*mcs-installer-flock-fallback*|*requires_python_admits.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
 esac
 if [ "$1" = "-I" ] && [ "$2" = "-B" ] && [ "$3" = "-c" ]; then
     exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/runtime-check.py" "$@"
@@ -222,7 +222,7 @@ case "$*" in
     exit 0 ;;
   *prepare_recovery.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
   *install_options.py*) exec "$STUB_PARSE_PYTHON" -B "$STUB_ROOT/install-options-runner.py" "$@" ;;
-  *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*mcs-installer-inherited-lock*|*requires_python_admits.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
+  *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*mcs-installer-inherited-lock*|*mcs-installer-flock-fallback*|*requires_python_admits.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
 esac
 if [ "$1" = "-I" ] && [ "$2" = "-B" ] && [ "$3" = "-c" ]; then
     exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/runtime-check.py" "$@"

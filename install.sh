@@ -43,6 +43,14 @@
 set -eu
 # files this script creates are the owner's only; existing modes are kept
 umask 077
+runnable_py() {  # <preferred interpreter>; first of it and python3 that actually starts
+    for _rp in "$1" "$(command -v python3 || true)"; do
+        if [ -n "$_rp" ] && [ -x "$_rp" ] && "$_rp" -c '' >/dev/null 2>&1; then
+            printf '%s\n' "$_rp"; return 0
+        fi
+    done
+    return 1
+}
 
 usage() {
     # Keep the complete Japanese prerequisites and option explanations above.
@@ -292,9 +300,8 @@ EOF
     fi
     _safe_dir "$_lock_data" || _unsafe_dir "データフォルダー"
     if [ -n "${MCS_UPDATE_REINSTALL:-}" ]; then
-        _lock_py="$MCS_ROOT/venv/bin/python3"
-        [ -x "$_lock_py" ] || _lock_py="$(command -v python3 || true)"
-        [ -n "$_lock_py" ] || die "更新の排他制御を確認する Python が必要です"
+        _lock_py="$(runnable_py "$MCS_ROOT/venv/bin/python3")" \
+            || die "更新の排他制御を確認する Python を実行できません（venv の Python と python3 のどちらも起動しません）"
         "$_lock_py" -I -c '
 # mcs-installer-inherited-lock
 import fcntl, os, stat, sys
@@ -341,7 +348,31 @@ EOF
             die "排他制御ファイルの所有者または権限を確認できません"
         fi
         if command -v lockf >/dev/null 2>&1; then
-            lockf -s -t 0 "$_install_lock_fd" || die "別の導入または更新が進行中です。完了後に再実行してください"
+            # Only EX_TEMPFAIL means the lock is held. A lockf without descriptor
+            # support (macOS 13-14, EX_USAGE) falls back to the same flock the
+            # reinstall branch takes on the inherited descriptor.
+            _lock_status=0
+            lockf -s -t 0 "$_install_lock_fd" || _lock_status=$?
+            case "$_lock_status" in
+                0) ;;
+                75) die "別の導入または更新が進行中です。完了後に再実行してください" ;;
+                *)
+                    _flock_py="$(runnable_py "$MCS_ROOT/venv/bin/python3")" \
+                        || die "排他制御（lockf）を実行できず（終了コード ${_lock_status}）、代わりに使う Python も起動しません。変更は行っていません。担当者に確認してください"
+                    _lock_status=0
+                    "$_flock_py" -I -c '
+# mcs-installer-flock-fallback
+import fcntl, sys
+try: fcntl.flock(int(sys.argv[1]), fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError: raise SystemExit(75) from None
+except (OSError, ValueError, OverflowError): raise SystemExit(1) from None
+' "$_install_lock_fd" || _lock_status=$?
+                    case "$_lock_status" in
+                        0) ;;
+                        75) die "別の導入または更新が進行中です。完了後に再実行してください" ;;
+                        *) die "排他制御を実行できません（lockf と Python の flock のどちらも使えません）。変更は行っていません。担当者に確認してください" ;;
+                    esac ;;
+            esac
         elif command -v flock >/dev/null 2>&1; then
             flock -n "$_install_lock_fd" || die "別の導入または更新が進行中です。完了後に再実行してください"
         else
@@ -360,9 +391,8 @@ EOF
     if [ -e "$_lock_data/.provider-settings-pending.json" ] || [ -L "$_lock_data/.provider-settings-pending.json" ] \
         || [ -e "$_lock_data/.provider-settings-authority.json" ] || [ -L "$_lock_data/.provider-settings-authority.json" ] \
         || [ -e "$_lock_data/provider_settings" ] || [ -L "$_lock_data/provider_settings" ]; then
-        _provider_py="$MCS_ROOT/venv/bin/python3"
-        [ -x "$_provider_py" ] || _provider_py="$(command -v python3 || true)"
-        [ -n "$_provider_py" ] || die "提供元設定の確認には Python が必要です。変更は行っていません"
+        _provider_py="$(runnable_py "$MCS_ROOT/venv/bin/python3")" \
+            || die "提供元設定の確認に使う Python を実行できません（venv の Python と python3 のどちらも起動しません）。変更は行っていません"
         "$_provider_py" -B "$REPO/mcs/ops/install_options.py" provider-check "$MCS_ROOT/config.json" "$_lock_data/install_options.json" - \
             || die "提供元設定を確認できないため変更せず中止しました"
     fi
@@ -378,9 +408,8 @@ CONFIG_EMPTY=0
 RESUME_UNCONFIGURED=0
 CONFIG_BASE=""
 if [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ]; then
-    MODE_PY="$MCS_ROOT/venv/bin/python3"
-    if [ ! -x "$MODE_PY" ]; then MODE_PY="$(command -v python3 || true)"; fi
-    [ -n "$MODE_PY" ] || die "既存設定の接続方法を確認するには Python が必要です。Python を導入して再実行してください"
+    MODE_PY="$(runnable_py "$MCS_ROOT/venv/bin/python3")" \
+        || die "既存設定の接続方法を確認する Python を実行できません（venv の Python と python3 のどちらも起動しません）。Python を導入または修復して再実行してください"
     read_install_config() {
     "$MODE_PY" - "$MCS_ROOT/config.json" "$RUNTIME_EXPLICIT" "$RUNTIME_MODE" <<'PYMODE'
 import json
