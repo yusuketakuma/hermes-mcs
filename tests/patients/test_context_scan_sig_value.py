@@ -53,3 +53,20 @@ def test_scan_sig_value_is_unchanged_and_each_row_decodes_once(monkeypatch):
     monkeypatch.setattr(state, 'loads_dict', lambda v: calls.append(v) or real(v))
     state._scan_sig(db, 1, source_keys=[1])
     assert len(calls) <= 2 * 4  # 4 current rows x (meta + content), was up to 6 per row
+
+
+def test_scan_sig_does_not_hold_the_rows(monkeypatch):
+    import tracemalloc
+    db = build()
+    big = 'x' * 20000
+    for mid in range(100, 400):
+        db.execute('INSERT INTO artifacts(kind,project_id,message_id,content,meta) VALUES(?,?,?,?,?)',
+                   (state.CHUNK, 1, mid, json.dumps({'b': big}), json.dumps({VERSION_KEY: CURRENT_VERSION, 'source_key': 1})))
+    expected = reference(db, 1, [1])
+    tracemalloc.start()
+    try:
+        assert state._scan_sig(db, 1, source_keys=[1]) == expected
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 1_000_000  # 300 rows x 20 kB = 6 MB if they were all held
