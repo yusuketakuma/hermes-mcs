@@ -64,6 +64,15 @@ def _condition_binds_measurement(body, assertion, evidence, condition, anchor, k
                         re.IGNORECASE) is not None
 
 
+def _vital_surface(value, body, span):
+    """The original number token in the quote that equals a numeric vital, else str(value)."""
+    if type(value) in (int, float) and isinstance(body, str):
+        for match in _vital_numbers(body[span[0]:span[1]]):
+            if _bp_number(match[0]) == value:
+                return match[0]
+    return str(value)
+
+
 def _candidate(record):
     """Check source binding; clinical value and subject validation belongs to the caller."""
     span, body, evidence = record.get("evidence_span"), record.get("source_body"), record.get("evidence")
@@ -101,8 +110,10 @@ def _candidate(record):
     name, condition = record.get("name"), record.get("condition")
     if record.get("kind") == "lab" and (not isinstance(name, str) or not 0 < len(name.strip()) <= 40):
         verified_source = False
+    # Anchor on the written token (37 vs 37.0), not on Python's spelling of the number.
+    value_surface = _vital_surface(value, body, span) if valid_span else str(value)
     if verified_source:
-        surface = name if record.get("kind") == "lab" else str(value)
+        surface = name if record.get("kind") == "lab" else value_surface
         target = body.find(surface, span[0], span[1]) if isinstance(surface, str) else -1
         left = max((body.rfind(mark, 0, target) for mark in "。！？!?;；\n"), default=-1) + 1
         if (target < 0 or _OTHER_PERSON_CUE.search(body[left:target])
@@ -110,7 +121,7 @@ def _candidate(record):
             # An unrecognized owner or recipient must not default to the patient.
             verified_source = False
     if condition is not None:
-        anchor = name if record.get("kind") == "lab" else str(value)
+        anchor = name if record.get("kind") == "lab" else value_surface
         assertion = source_assertion_span(body, anchor) if valid_span and isinstance(anchor, str) else None
         if (not valid_span or not _condition_binds_measurement(
                 body, assertion, evidence, condition, anchor, record.get("kind"))):
@@ -155,8 +166,8 @@ def _candidate(record):
                         matching.append(clause)
             verified_source = (len(matching) == 1
                                and patient_item_scope(record, body, patient_name=record.get("patient_name"),
-                                                      surface=str(value)) in allowed_scope)
-            comparison = (str(value), unicodedata.normalize("NFKC", unit).casefold() if unit else None)
+                                                      surface=value_surface) in allowed_scope)
+            comparison = (float(value), unicodedata.normalize("NFKC", unit).casefold() if unit else None)
         else:
             verified_source = False
     verified = (verified_source and day is not None and day.isoformat() == measured and quote_day == ("ymd", day)

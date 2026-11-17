@@ -333,3 +333,19 @@ def test_future_or_missing_measurement_date_is_not_returned_as_a_measured_date()
     missing["measured_on"] = None
     item = measurement_timeline.project_measurements([missing], source_complete=True)["items"][0]
     assert item["state"] == "unknown" and item["measured_on"] is None
+
+
+def _vital(body, value):
+    a = _record(1, "2026-10-01", "2026-10-01T09:00:00+09:00", value)
+    a.update(kind="vital", key="bt", unit="℃", condition="安静時", source_body=body, evidence=body,
+             evidence_span=[0, len(body)], source_ref={"artifact_id": 1, "field": "vitals"})
+    return measurement_timeline.project_measurements([a], source_complete=False)["items"][0]
+
+
+def test_vital_anchor_follows_the_written_number_not_python_spelling():
+    integer = "本人は2026-10-01安静時測定の体温37℃。"
+    decimal = "本人は2026-10-01安静時測定の体温37.0℃。"
+    for body, value in ((integer, 37), (integer, 37.0), (decimal, 37.0), (decimal, 37)):
+        item = _vital(body, value)
+        assert (item["state"], item["verification"], item["measured_on"]) == ("observed", "quote_supported", "2026-10-01")
+    assert _vital(integer, 38.0)["state"] == "unknown"
