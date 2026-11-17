@@ -582,7 +582,7 @@ def _inventory_connection(path: Path, max_steps: int | None, deadline: float | N
 
 def inventory_snapshot(path: Path, *, version: int = 2, max_steps: int | None = None,
                deadline: float | None = None) -> Inventory:
-    """Validate static SQLite and report only allowlisted counts/timestamps."""
+    """Validate static SQLite and report allowlisted counts; default v2 sets saved format."""
     if type(version) is not int or version not in (1, 2):
         raise BackupError("backup_inventory_mismatch")
     if max_steps is None and not valid_mcs_db(str(path)):
