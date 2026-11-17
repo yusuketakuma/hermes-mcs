@@ -151,12 +151,13 @@ JSON:{"symptoms":[],"vitals":{"hr":71},"patient_context":[
 例3:
 対象本文:
 <<<
-本人の話では、模擬食品ルを食べた後の口のかゆみはアレルギーかもしれないとのこと。妹は模擬食品ニでアレルギーはないと話した。
+本人は先月、模擬食品ルを食べた後に口のかゆみがあり、アレルギーだったかもしれないと話した。妹は模擬食品ニでアレルギーはないと話した。
 >>>
-JSON:{"symptoms":[{"text":"口のかゆみ","subject":"patient","negated":false,
-  "evidence":"模擬食品ルを食べた後の口のかゆみはアレルギーかもしれない"}],"allergies":[
+JSON:{"symptoms":[{"text":"口のかゆみ","subject":"patient","status":"past","negated":false,
+  "evidence":"先月、模擬食品ルを食べた後に口のかゆみがあり"}],"allergies":[
   {"allergen":"模擬食品ル","kind":"allergy","reaction":"口のかゆみ","subject":"patient","status":"past",
-   "negated":false,"certainty":"suspected","evidence":"模擬食品ルを食べた後の口のかゆみはアレルギーかもしれない"},
+   "negated":false,"certainty":"suspected",
+   "evidence":"本人は先月、模擬食品ルを食べた後に口のかゆみがあり、アレルギーだったかもしれないと話した"},
   {"allergen":"模擬食品ニ","kind":"allergy","subject":"family","status":"current","negated":true,
    "certainty":"confirmed","evidence":"妹は模擬食品ニでアレルギーはないと話した"}
 ]}
@@ -213,7 +214,7 @@ JSON:{"symptoms":[{"text":"返答の減弱","subject":"patient","status":"new","
 >>>
 JSON:{"symptoms":[{"text":"息切れ","subject":"patient","negated":true,
   "evidence":"本人に息切れはありません"}],"requests":[
-  {"to":"看護師","from":null,"kind":"request","action":"看護師へ連絡","condition":"夕食のときに吐き気が出た場合に限り",
+  {"to":"介護士","from":null,"kind":"request","action":"看護師へ連絡","condition":"夕食のときに吐き気が出た場合に限り",
    "evidence":"夕食のときに吐き気が出た場合に限り、介護士は看護師へ知らせてください"}
 ],"urgency":"routine"}
 

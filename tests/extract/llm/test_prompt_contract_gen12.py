@@ -61,11 +61,23 @@ def test_next_prompt_examples_are_bounded_and_disjoint_from_evaluation():
     prefix, *blocks = re.split(r"(?m)^例[0-9]+:\n", examples)
     assert not prefix and blocks
     example_grams = set()
+    outputs = {}
     for block in blocks:
         body, separator, response = block.removeprefix("対象本文:\n<<<\n").partition("\n>>>\nJSON:")
         assert block.startswith("対象本文:\n<<<\n") and body and separator
-        assert isinstance(json.loads(response)["symptoms"], list)
+        outputs[body] = json.loads(response)
+        assert isinstance(outputs[body]["symptoms"], list)
         example_grams.update(_case_grams(body))
+
+    allergy_body, = (body for body in outputs if "模擬食品ル" in body)
+    allergy, = (item for item in outputs[allergy_body]["allergies"] if item["allergen"] == "模擬食品ル")
+    assert allergy["status"] == "past" and "先月" in allergy["evidence"]
+    assert allergy["evidence"] in allergy_body
+
+    request_body, = (body for body in outputs if "介護士は看護師へ" in body)
+    request, = outputs[request_body]["requests"]
+    assert (request["to"], request["action"], request["from"]) == ("介護士", "看護師へ連絡", None)
+    assert "介護士は看護師へ" in request["evidence"] and request["evidence"] in request_body
 
     evaluation = Path(__file__).resolve().parents[3] / "evaluation"
     corpora = {
