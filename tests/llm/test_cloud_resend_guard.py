@@ -908,6 +908,7 @@ def test_c1_pending_unit_is_not_resent_under_the_new_profile(tmp_path, monkeypat
                      owner={'workday_id': 'new', 'source_sig': 'new'},
                      max_tokens=selected['max_tokens'], selection=selected)
         assert caught.value.detail == 'cloud_unit_unresolved'
+        assert caught.value.history_refusal == 'result_missing'
         assert len(ledger.artifacts('cloud_usage_reserve')) == 1
 
 
@@ -926,6 +927,7 @@ def test_c1_failed_unit_is_not_resent_under_the_new_profile(tmp_path, monkeypatc
                      owner={'workday_id': 'new', 'source_sig': 'new'},
                      max_tokens=selected['max_tokens'], selection=selected)
         assert caught.value.detail == 'cloud_unit_unresolved'
+        assert caught.value.history_refusal == 'repeat_failed'
         assert len(ledger.artifacts('cloud_usage_reserve')) == 1
 
 
@@ -947,6 +949,7 @@ def test_c1_completed_backlog_is_not_rebuilt_under_haiku_medium(tmp_path, monkey
                      unit='new', owner=_owner(),
                      max_tokens=selected['max_tokens'], selection=selected)
         assert caught.value.detail == 'cloud_unit_unresolved'
+        assert caught.value.history_refusal == 'repeat_success'
         assert len(ledger.artifacts('cloud_usage_reserve')) == 1
 
 
@@ -976,6 +979,7 @@ def test_c1_completed_patient_work_is_rebuilt_once_under_sonnet(tmp_path, monkey
                      unit='third', owner={'workday_id': 'third', 'source_sig': 'third'},
                      max_tokens=selected['max_tokens'], selection=selected)
         assert caught.value.detail == 'cloud_unit_unresolved'
+        assert caught.value.history_refusal == 'repeat_success'
         assert len(ledger.artifacts('cloud_usage_reserve')) == 2
 
 
@@ -996,4 +1000,13 @@ def test_c1_completed_semantic_quality_repair_is_rebuilt_once_under_sonnet(tmp_p
                            unit='new', owner=_owner(),
                            max_tokens=selected['max_tokens'], selection=selected)
         assert rebuilt['model'] == anthropic_client.SONNET_MODEL
+        cloud_policy.record_result(ledger, rebuilt, {
+            **_result(rebuilt, 'http_200', None),
+            'usage': {'input_tokens': 10, 'output_tokens': 2}})
+        with pytest.raises(anthropic_client.AnthropicError) as caught:
+            _reserve(ledger, 'synthetic prompt', 'anthropic', route='semantic_backlog',
+                     unit='third', owner=_owner(),
+                     max_tokens=selected['max_tokens'], selection=selected)
+        assert caught.value.detail == 'cloud_unit_unresolved'
+        assert caught.value.history_refusal == 'repeat_success'
         assert len(ledger.artifacts('cloud_usage_reserve')) == 2

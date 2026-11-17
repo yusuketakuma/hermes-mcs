@@ -38,7 +38,7 @@ OpenAIの用途別モデル設定は背景抽出・意味解析に `gpt-6-luna`�
 OpenAIの用途別設定は提供元専用の私有設定に保持します。`mcs setup api-keys` の利用先設定画面で実効モデルを確認できます。 利用先と予算を保存した後、同じ画面でキーの設定を続けられます。別の操作で設定が変わった場合は、画面を開き直してください。
 
 用途別のprofileはCLIでも変更できます。たとえば `cloud-llm providers --patient-context-profile sol-high` はOpenAIの患者コンテキスト用profileを変更します。OpenAIには `--backlog-profile`・`--patient-context-profile`・`--quality-repair-profile` を使い、`--openai-` から始まる同名の引数も使えます。Anthropicには `--anthropic-backlog-profile`・`--anthropic-patient-context-profile`・`--anthropic-quality-repair-profile` を使います。値は各提供元で定義されたprofile名に限ります。
-指定しなかった用途・提供元・利用先の選択・予算・キーは保持します。分割形式の設定も既存の設定保存経路で更新するため、私有ファイルを直接編集する必要はありません。Anthropicの用途別profileは設定がなくても既定値で有効です。profileを設定した場合は指定した用途だけが置き換わり、未指定の用途は引き続き既定値を使います。
+指定しなかった用途・提供元・利用先の選択・予算・キーは保持します。分割形式の設定も既存の設定保存経路で更新するため、私有ファイルを直接編集する必要はありません。Anthropicの用途別profileは設定がなくても既定値で有効です。profileを設定した場合は指定した用途だけが置き換わり、省略した用途は既存の設定を保ち、設定がない用途だけ既定値を使います。
 患者コンテキストのprofileを変えると、以前クラウドで作成した患者scanは現在の契約と一致しなくなります。対象患者のscanを新しいprofileでやり直すため、その処理に費用がかかります。既存の記録は削除せず、新しい処理にも日額・月額などの費用上限を適用します。
 
 `cloud_llm.provider` は `anthropic`、`openai`、`auto` から選びます。省略時は `auto` です。
