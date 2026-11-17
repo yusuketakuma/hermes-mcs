@@ -78,12 +78,15 @@ _VALUE_WORD = re.compile(r"[ \t　]*(?:なし|無し|特になし|ない|あり�
 # R3c: a post with a name / ID field or a name line belongs to someone this text cannot match to the patient.
 NAME_LABELS = ("氏名", "名前", "患者", "利用者", "入居者", "対象者", "フリガナ", "ID", "被保険者")
 NAME_HONORIFICS = ("様", "さん", "氏")
-# R3c: a sentence that puts a record noun next to an otherness or negation marker disowns the post.
+# R3c: a sentence that puts a record noun next to an otherness or negation marker, or next to a person
+# other than the patient, disowns the post.
 DISCLAIMER_NOUNS = ("記録", "情報", "内容", "もの", "件", "話")
 DISCLAIMER_MARKS = ("別", "他", "違", "誤", "混", "ではな", "ではありません")
-# R3e: a later sentence that denies or retracts what came before.
+# R3e/R7: a later sentence that denies, retracts or still doubts what came before.
 DENIAL = ("覚え", "記憶", "事実", "否定", "誤り", "間違", "誤記", "別人", "心当たり", "訂正", "取り消", "削除",
-          "飲んだこと")
+          "飲んだこと", "本当", "未確認", "確認中")
+# What a clause after the assertion may do (「…のため、合成薬ACに変更しました」); anything else is no match.
+TAIL_ACTIONS = ("変更", "中止", "除去", "注意", "使用")
 # R5: a "none" form is exact only when no other sentence limits it or names a reaction or cue.
 EXCEPTION = ("ただし", "但し", "のみ", "だけ", "以外", "除")
 # R8: a sentence naming the allergen with these words speaks about it even without a cue.
@@ -103,6 +106,8 @@ def _alt(words):
 # Template grammar. `<<X>>` tokens expand in `_expand`; capturing tokens get unique group names.
 
 _SELF = r"(?:ご本人|本人|ご?利用者(?:さん|様)|患者(?:さん|様))"
+_PERSON = (rf"(?:{clinical_scope.FAMILY_PERSON}|{clinical_scope.OTHER_PERSON}|{clinical_scope.NAMED_PERSON}"
+           r"|(?:その|あの|別の|他の|ほかの|隣の|同室の)(?:方|かた|人))")
 _NUM = r"[0-9０-９一二三四五六七八九十数]+"
 _SPAN = r"(?:年|か月|ヶ月|カ月|週間|日)"
 _FIXED = {
@@ -118,10 +123,10 @@ _FIXED = {
 
 
 def _noun():
-    """Another list member: a run with no particle, punctuation, placeholder or exception word."""
-    run = r"[^\s\ue000、。，,．！？!?「」『』（）()：:・/／|｜はがをにでのともへやか]+"
-    exclude = _alt(NOUN_EXCLUDE)
-    return rf"(?:(?!{exclude}){run[:-1]})+" if NOUN_EXCLUDE else run
+    """Another list member: a run with no particle, punctuation, placeholder or exception word, not a person."""
+    char = r"[^\s\ue000、。，,．！？!?「」『』（）()：:・/／|｜はがをにでのともへやか]"
+    run = rf"(?:(?!{_alt(NOUN_EXCLUDE)}){char})+" if NOUN_EXCLUDE else f"{char}+"
+    return f"(?!{_PERSON}){run}"
 
 
 def _reaction():
@@ -182,7 +187,7 @@ def _expand(text):
             return r"<<N>>(?:に|の)?(?:は|には)?アレルギー(?:が|は)?(?:あります|ありです|あり)<<END>>"
         if name == "TAIL":
             obj = r"(?:<<N>>(?:を|に|へ|は|も|が|で|から)<<SP>>)*"
-            verb = (r"[一-龥ァ-ヶー]{2,}(?:し(?:ています|ております|ている)"
+            verb = (f"(?:{_alt(TAIL_ACTIONS)})(?:し(?:ています|ております|ている)"
                     f"|{group('tq', 'しました|していました|した|していた|にな(?:りました|った))')}")
             return (f"{obj}(?:{verb}|<<R>>(?:が|も)?(?:出(?:ます|ています|る)|続いています)|<<N>>を飲んで(?:います|いる))"
                     r"(?:そうです)?<<END>>")
@@ -190,7 +195,8 @@ def _expand(text):
             return (r"(?:<<N>>(?:に|の)?(?:は|には)?(?:アレルギー|副作用)(?:は|が)?"
                     r"(?:なく|なし|あり|ありませんでしたが|ありませんが|ありますが)[、，])?")
         if name == "LEAD":
-            return r"(?:[^、。\ue000]{1,20}(?:ので|ため)[、，]|[^、。\ue000はがをに]{1,12}(?:から|より)[、，])?"
+            lead = r"[^、。\ue000]{1,20}(?:ので|ため)[、，]|[^、。\ue000はがをに]{1,12}(?:から|より)[、，]"
+            return f"{group('ld', lead)}?"
         raise KeyError(name)
 
     previous = None
@@ -312,9 +318,9 @@ SUSPECTED_SUBJECTS = (("patient", r"<<SELF>>の<<RG>>は"),)
 
 
 @functools.lru_cache(maxsize=None)
-def _compiled(templates, subjects, suspected_subjects, noun_exclude, reaction_words):
+def _compiled(templates, subjects, suspected_subjects, noun_exclude, tail_actions, reaction_words):
     """(template, subject, regex) for every template and subject position (cached per vocabulary)."""
-    del noun_exclude, reaction_words  # cache keys: the expansion reads the module constants
+    del noun_exclude, tail_actions, reaction_words  # cache keys: the expansion reads the module constants
     out = []
     for template in templates:
         if template.scope == "sentence":
@@ -327,7 +333,7 @@ def _compiled(templates, subjects, suspected_subjects, noun_exclude, reaction_wo
 
 
 def _templates():
-    return _compiled(TEMPLATES, SUBJECTS_OF, SUSPECTED_SUBJECTS, NOUN_EXCLUDE, REACTION_WORDS)
+    return _compiled(TEMPLATES, SUBJECTS_OF, SUSPECTED_SUBJECTS, NOUN_EXCLUDE, TAIL_ACTIONS, REACTION_WORDS)
 
 
 class Licence(NamedTuple):
@@ -407,6 +413,9 @@ def _statuses(template, match):
     if template.negated:
         return frozenset({"current", "past"}) if _groups(match, "np") else frozenset({"current"})
     past_form = bool(_groups(match, "pp") or _groups(match, "pe"))
+    if _groups(match, "ld"):  # A clause in front may carry its own time: only a present form is read.
+        return frozenset() if past_form or any(_groups(match, tag) for tag in ("pv", "tq", "tp", "tn")) \
+            else frozenset({"current"})
     if _groups(match, "tp"):
         return frozenset({"past"}) if past_form or _groups(match, "pv") or _groups(match, "tq") else frozenset()
     if _groups(match, "tn"):
@@ -463,7 +472,11 @@ def _name_field(body):
 
 def _disclaimer(body):
     nouns, marks = _alt(DISCLAIMER_NOUNS), _alt(DISCLAIMER_MARKS)
-    return any(re.search(nouns, body[s:e]) and re.search(marks, body[s:e]) for s, e in _sentences(body))
+    for s, e in _sentences(body):
+        others = re.sub(_SELF, "", body[s:e])
+        if re.search(nouns, others) and (re.search(marks, others) or re.search(_PERSON, others)):
+            return True
+    return False
 
 
 def _denied_after(body, right):

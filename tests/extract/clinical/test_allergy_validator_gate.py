@@ -483,7 +483,7 @@ WEAKENER_CASES = {
     "NAME_HONORIFICS": ["g12-person-14", "g12-name-10", "g12-name-11"],
     "DISCLAIMER_NOUNS": _numbered("g12-disclaimer", 6),
     "DISCLAIMER_MARKS": ["g12-disclaimer-01", *_numbered("g12-disclaimer", 12)[6:]],
-    "DENIAL": _numbered("g12-denial", 13),
+    "DENIAL": _numbered("g12-denial", 16),
     "EXCEPTION": _numbered("g12-null-limited", 6),
     "TOLERATED": _numbered("g12-tolerated", 2),
     "NOUN_EXCLUDE": ["g12-noun-exception"],
@@ -496,7 +496,31 @@ def test_gate_d_names_every_weakener_entry_once():
     assert all(len(getattr(ca, name)) == len(ids) for name, ids in WEAKENER_CASES.items())
     lists = {name for name, value in vars(ca).items() if name.isupper() and isinstance(value, tuple)
              and value and all(isinstance(entry, str) for entry in value)}
-    assert lists - set(WEAKENER_CASES) == {"KINDS", "CERTAINTIES", "SUBJECTS", "STATUSES", "REACTION_WORDS"}
+    assert lists - set(WEAKENER_CASES) == {"KINDS", "CERTAINTIES", "SUBJECTS", "STATUSES", "REACTION_WORDS",
+                                           "TAIL_ACTIONS"}
+    assert list(ACTION_CASES) == list(ca.TAIL_ACTIONS)
+
+
+# The actions a clause after the assertion may name license, not weaken: each is needed by a named expected case,
+# and a verb outside the list (here one that resolves the allergy) is no match.
+ACTION_CASES = {"変更": "rv-corpus-pos-019", "中止": "adr-history-prose", "除去": "rv-corpus-pos-012",
+                "注意": "rv-corpus-pos-031", "使用": "rv-corpus-pos-021"}
+
+
+@pytest.mark.parametrize("action", list(ACTION_CASES))
+def test_gate_d_each_tail_action_is_needed(action, monkeypatch, fresh_memo):
+    assert _holds(ACTION_CASES[action])
+    monkeypatch.setattr(ca, "TAIL_ACTIONS", tuple(item for item in ca.TAIL_ACTIONS if item != action))
+    ca.resolve.cache_clear()
+    assert not _holds(ACTION_CASES[action]), action
+
+
+def test_gate_d_a_verb_outside_the_tail_actions_is_no_match(monkeypatch, fresh_memo):
+    case = BY_ID["g12-tail-resolved"]
+    assert _run([case], singly=False)[0] == []
+    monkeypatch.setattr(ca, "TAIL_ACTIONS", (*ca.TAIL_ACTIONS, "寛解"))
+    ca.resolve.cache_clear()
+    assert _run([case], singly=False)[0] != []
 
 
 @pytest.mark.parametrize(("name", "entry", "case_id"), WEAKENER_ROWS,
@@ -509,14 +533,19 @@ def test_gate_d_each_weakener_entry_is_needed(name, entry, case_id, monkeypatch,
     assert _run([case], singly=False)[0] != [], (name, entry)
 
 
+_GROUPS = ca._groups
 # Structural weakeners (not word lists): disabled, a named forbid case is violated.
 STRUCTURAL = [
     ("R8 another reading of the allergen", "_occurrences_conflict", lambda *args: False,
-     ["g12-adr-two-people", "g12-tolerated-01"]),
+     ["g12-adr-two-people-plain", "g12-tolerated-01"]),
     ("R5 another sentence names a cue or reaction", "_null_conflict", lambda *args: False,
      ["g12-null-limited-07", "g12-null-limited-08"]),
     ("allergen fills the slot as one word", "_token", lambda allergen: True,
      ["g12-neg-heading-mixed", "g12-span-reaction"]),
+    ("a person is neither a list member nor a record owner", "_PERSON", r"(?!)",
+     ["g12-person-list", "g12-disclaimer-person"]),
+    ("a clause in front reads only a present form", "_groups",
+     lambda match, prefix: [] if prefix == "ld" else _GROUPS(match, prefix), ["g12-lead-time"]),
 ]
 
 
@@ -526,7 +555,11 @@ def test_gate_d_each_structural_weakener_is_needed(rule, name, replacement, case
     assert _run(cases, singly=False)[0] == []
     monkeypatch.setattr(ca, name, replacement)
     ca.resolve.cache_clear()
-    assert {case_id for case_id, *_ in _run(cases, singly=False)[0]} == set(case_ids), rule
+    ca._compiled.cache_clear()
+    try:
+        assert {case_id for case_id, *_ in _run(cases, singly=False)[0]} == set(case_ids), rule
+    finally:
+        ca._compiled.cache_clear()
 
 
 # Drop rules: disabled, the named claim is stored as a candidate instead of dropped (and stays unconfirmed).
