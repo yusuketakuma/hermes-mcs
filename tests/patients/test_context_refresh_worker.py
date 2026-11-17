@@ -64,7 +64,8 @@ def capacity(tmp_path, monkeypatch):
         calls.append((admit, complete, role, deadline, local_admit))
         return {"status": "done", "done": 1}
 
-    monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(run_due=run_due, options=patient_context_refresh.options))
+    monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(run_due=run_due, options=patient_context_refresh.options,
+                        CHILD_WAIT_REASON=patient_context_refresh.CHILD_WAIT_REASON))
     monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: True)
     yield ledger, cfg, calls
     ledger.close()
@@ -228,7 +229,8 @@ def test_context_result_survives_budget_window_edit_only(
         return {"status": "done" if admit() else "source_changed", "done": int(admit())}
 
     monkeypatch.setitem(sys.modules, "patient_context_refresh",
-        SimpleNamespace(run_due=run_due, options=patient_context_refresh.options))
+        SimpleNamespace(run_due=run_due, options=patient_context_refresh.options,
+                        CHILD_WAIT_REASON=patient_context_refresh.CHILD_WAIT_REASON))
     assert run(capacity)["done"] == int(not scope_changed)
 
 
@@ -268,7 +270,8 @@ def test_canonical_pass_completes_patient_without_legacy_admission(
 def test_failure_isolated_and_no_sensitive_error(capacity, monkeypatch):
     def fail(*args, **kwargs):
         raise RuntimeError("private text")
-    monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(run_due=fail, options=patient_context_refresh.options))
+    monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(run_due=fail, options=patient_context_refresh.options,
+                        CHILD_WAIT_REASON=patient_context_refresh.CHILD_WAIT_REASON))
     assert run(capacity) == {"status": "error", "done": 0, "error": "RuntimeError"}
 
 
@@ -460,7 +463,8 @@ def test_update_during_engine_signals_resident_exit(capacity, monkeypatch):
         monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 124))
         assert not admit()
         return {"status": "deferred", "done": 0}
-    monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(run_due=engine, options=patient_context_refresh.options))
+    monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(run_due=engine, options=patient_context_refresh.options,
+                        CHILD_WAIT_REASON=patient_context_refresh.CHILD_WAIT_REASON))
     assert run(capacity)["run_lock_lost"] == "updated"
 
 
