@@ -703,6 +703,7 @@ _CONTEXT_PASS_REASONS = frozenset({
     "patient_context_completed_expired", "patient_context_capacity_or_deadline", "patient_context_admission_deferred",
     "patient_context_turn_busy", "patient_context_local_capacity", "patient_context_source_changed", "patient_context_cloud_budget",
     "patient_context_generation_active", "patient_context_generation_clock_changed",
+    "patient_context_generation_unverified",
     "patient_context_generation_daily_limit", "patient_context_generation_interval",
     "patient_context_cloud_not_sent", "patient_context_cloud_pending", "patient_context_cloud_source_changed",
     "patient_context_length_stop", "patient_context_unsupported_items", "patient_context_unsupported_summary",
@@ -775,6 +776,11 @@ def _context_pass_observation(result):
     skipped = result.get("skip_patient_code")
     if skipped is not None:
         record["skip_patient_code"] = skipped if _bounded_pass_code(skipped) else "unclassified"
+    # The generation quota's own denial reason (fixed identifiers only).
+    generation = result.get("generation_reason")
+    if generation is not None:
+        record["generation_reason"] = (generation if type(generation) is str
+                                       and generation in _CONTEXT_PASS_REASONS else "unclassified")
     covered = result.get("covered")
     if type(covered) is bool:
         record["covered"] = covered
@@ -782,7 +788,7 @@ def _context_pass_observation(result):
     # waiting additions (quota-fail double count or two single-count scopes),
     # and at most 2 pending reads per candidate; at most one skip per candidate.
     for key, limit in (("waiting", 16), ("scan_reads", 16), ("scan_interrupts", 1),
-                       ("skip_patient_invalid", 8),
+                       ("skip_patient_invalid", 8), ("unverified_records", 1 << 20),
                        ("wait_no_eligible_sources", 8), ("wait_no_due_lane", 16),
                        ("wait_generation_quota", 8), ("wait_readiness_unverified", 16),
                        ("wait_dependency_incomplete", 16)):

@@ -141,6 +141,7 @@ def test_context_pass_keeps_deferred_reasons_strictly_whitelisted():
 @pytest.mark.parametrize("reason", [
     "patient_context_generation_active",
     "patient_context_generation_clock_changed",
+    "patient_context_generation_unverified",
     "patient_context_generation_daily_limit",
     "patient_context_generation_interval",
     "patient_summary_quality_lock",
@@ -181,6 +182,16 @@ def test_context_pass_reports_scan_refusal_and_bounded_scan_stats():
 def test_context_pass_rejects_arbitrary_scan_refusals(value):
     record = cloud_backlog._context_pass_observation({"status": "deferred", "scan_refusal": value})
     assert record["scan_refusal"] == "unclassified"
+
+
+def test_context_pass_reports_generation_quota_reason_and_unverified_records():
+    result = {"status": "deferred", "reason": "patient_context_waiting",
+              "generation_reason": "patient_context_generation_unverified", "unverified_records": 2}
+    record = cloud_backlog._context_pass_observation(result)
+    assert record["generation_reason"] == "patient_context_generation_unverified"
+    assert record["unverified_records"] == 2
+    unknown = cloud_backlog._context_pass_observation({"status": "deferred", "generation_reason": "synthetic-private"})
+    assert unknown["generation_reason"] == "unclassified"
 
 
 def test_context_pass_omits_absent_scan_refusal():
