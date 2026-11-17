@@ -175,3 +175,24 @@ def test_selection_fragment_rejects_unknown_kinds_and_versions():
         upgrade_scope.selection_sql(upgrade_scope.parse("none"), "attachment")
     with pytest.raises(ValueError):
         upgrade_scope.prior_generation_sql("llm", version=-1)
+
+
+@pytest.mark.parametrize("value", [None, "all", "none", {"project_ids": [1]}, "ALL"], ids=repr)
+def test_a_post_without_a_patient_is_counted_as_it_is_selected(tmp_path, value):
+    """A NULL project id is never admitted by a project list: the count agrees with the selection."""
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(1, "完全合成の経過記録です。", project_id=None),
+                          _message(2, "完全合成の経過記録二です。", project_id=1)])
+        _rule_row(db, 1, extract.RULE_VERSION - 1, pid=None)
+        _rule_row(db, 2, extract.RULE_VERSION - 1)
+        cfg = {} if value is None else {"extract": {"upgrade_scope": value}}
+        scope = upgrade_scope.resolve(cfg)
+        counts = upgrade_scope.prior_generation_remaining(db.db, cfg)
+        selectable = {r[0] for r in db.db.execute(
+            "SELECT m.message_id FROM messages m WHERE 1"
+            + upgrade_scope.selection_sql(scope, "rule"))}
+        assert counts["rule"] == 2
+        assert counts["rule"] - counts["outside_scope"]["rule"] == len(selectable & {1, 2})
+    finally:
+        db.close()

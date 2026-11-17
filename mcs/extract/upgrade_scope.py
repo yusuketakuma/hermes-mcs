@@ -220,7 +220,8 @@ def _llm_counts(db, scope):
 def _rule_counts(db, scope):
     from mcs_queries import ELIGIBLE_MESSAGE
     total, outside = db.execute(
-        f"SELECT COUNT(*), COALESCE(SUM(NOT ({_admitted_sql(scope)})),0) FROM messages m "
+        # A NULL project id is never admitted (NULL IN (...) is NULL): count it outside, as selected.
+        f"SELECT COUNT(*), COALESCE(SUM(NOT COALESCE(({_admitted_sql(scope)}),0)),0) FROM messages m "
         f"WHERE {ELIGIBLE_MESSAGE} AND {prior_generation_sql('rule')}").fetchone()
     return total, 0 if scope.is_open else outside
 
