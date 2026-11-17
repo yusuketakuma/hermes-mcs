@@ -219,8 +219,14 @@ def test_a_record_whose_fsync_failed_is_kept_and_chained(tmp_path, monkeypatch):
     _entry(tmp_path, now=1_790_000_000)
     path, = (tmp_path / access_log.DIR_NAME).glob("access-*.jsonl")
     complete = path.read_bytes()
-    real_fsync = os.fsync
-    monkeypatch.setattr(access_log.os, "fsync", lambda fd: (_ for _ in ()).throw(OSError()))
+    real_fsync, target = os.fsync, (path.stat().st_dev, path.stat().st_ino)
+
+    def fsync(fd):   # only the log file: the directories and the failure note still sync
+        info = os.fstat(fd)
+        if (info.st_dev, info.st_ino) == target:
+            raise OSError("synthetic")
+        return real_fsync(fd)
+    monkeypatch.setattr(access_log.os, "fsync", fsync)
     with pytest.raises(access_log.AccessLogError, match="access_log_unavailable"):
         _entry(tmp_path, now=1_790_000_060)
     monkeypatch.setattr(access_log.os, "fsync", real_fsync)
