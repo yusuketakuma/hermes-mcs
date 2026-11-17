@@ -115,6 +115,12 @@ _FACT_QUESTION = (
     "support the fact.")
 
 
+def _claim_answer_valid(ans) -> bool:
+    """Whether a claim answer is a supported choice with a probability."""
+    return (isinstance(ans, dict) and isinstance(ans.get("choice"), str)
+            and ans["choice"] in jev.CLAIM_SUPPORT_OPTIONS and _probability(ans.get("confidence")))
+
+
 def _claim_answer_findings(claim_id, ans: dict, match_threshold: float) -> list:
     """Findings of one validated claim answer; only a confident ``supports`` has none."""
     findings = []
@@ -136,8 +142,7 @@ def claim_answers_findings(answers, match_threshold: float) -> list:
         return [{"code": "claim_answer_invalid"}]
     findings = []
     for claim_id, ans in answers.items():
-        if (not isinstance(ans, dict) or ans.get("choice") not in jev.CLAIM_SUPPORT_OPTIONS
-                or not _probability(ans.get("confidence"))):
+        if not _claim_answer_valid(ans):
             findings.append({"code": "claim_answer_invalid", "claim": claim_id})
             continue
         findings.extend(_claim_answer_findings(claim_id, ans, match_threshold))
@@ -216,34 +221,47 @@ def audit_claims(jev_client, bundle: dict, summary: dict,
                             "claims": [{"id": c["claim_id"], "text": c["text"]}
                                        for c in chunk]},
                  "context": list(ctx.values())}
+        # raw answers ride on the summary's private channel so the drain can
+        # persist them into the audit artifact's meta (accumulated
+        # confidences feed threshold calibration, §22). A validated answer
+        # is put there before its malformed siblings are asked again, so a
+        # stop during that re-ask cannot drop it (the caller records it).
+        checkpoint = {}
+
+        def record(valid, chunk_ids=frozenset(questions)):
+            for claim_id, ans in valid.items():
+                if claim_id in chunk_ids and _claim_answer_valid(ans):
+                    checkpoint[claim_id] = ans
+                    summary.setdefault("_claim_audit", {})[claim_id] = {
+                        "choice": ans["choice"], "confidence": ans["confidence"]}
+
         partial = False
         try:
-            out = jev.evaluate_once_more(jev_client, state, questions, deadline)
+            out = jev.evaluate_once_more(jev_client, state, questions, deadline,
+                                         on_valid_answers=record)
         except jev.JevError as error:
             summary["_claim_audit_reason"] = "service_error"
             with suppress(Exception):
                 jev_client.last_error = error
-            out = {"answers": getattr(error, "partial_answers", {})}
+            received = getattr(error, "partial_answers", None)
+            out = {"answers": {**(received if isinstance(received, dict) else {}), **checkpoint}}
             partial = True
         answers = out.get("answers") if isinstance(out, dict) else None
+        invalid = None
         for c in chunk:
             ans = answers.get(c["claim_id"]) if isinstance(answers, dict) else None
-            if partial and ans is None:
+            if partial and not _claim_answer_valid(ans):
+                continue    # not received: asked again
+            if not _claim_answer_valid(ans):
+                # Not a judgement of the claim: it is asked again. The
+                # chunk's valid answers are still kept as observed.
+                invalid = invalid or c["claim_id"]
                 continue
-            if (not isinstance(ans, dict)
-                    or not isinstance(ans.get("choice"), str)
-                    or ans["choice"] not in jev.CLAIM_SUPPORT_OPTIONS
-                    or not _probability(ans.get("confidence"))):
-                summary["_claim_audit_reason"] = "response_invalid"
-                return findings + [{"code": "support_unevaluated",
-                                    "claim": c["claim_id"]}], False
-            # raw answers ride on the summary's private channel so the
-            # drain can persist them into the audit artifact's meta —
-            # accumulated confidences feed threshold calibration (§22).
-            raw = summary.setdefault("_claim_audit", {})
-            raw[c["claim_id"]] = {"choice": ans["choice"],
-                                  "confidence": ans["confidence"]}
+            record({c["claim_id"]: ans})
             findings.extend(_claim_answer_findings(c["claim_id"], ans, match_threshold))
+        if invalid is not None:
+            summary["_claim_audit_reason"] = "response_invalid"
+            return findings + [{"code": "support_unevaluated", "claim": invalid}], False
         if partial:
             return findings + [{"code": "support_unevaluated",
                                 "claim": chunk[0]["claim_id"]}], False

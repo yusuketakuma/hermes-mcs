@@ -702,57 +702,63 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
             raise ValueError("semantic_skip_reason_invalid")
         skip_meta = {"jev_skip_reason": reason, "jev_evaluated": False,
                      "code_checks": "passed", "summary_hash": mcs_util.payload_hash(summary)}
+    summary_meta = {VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
+                    "audit_status": final_status, "publication_mode": publication_mode,
+                    "stale": final_status == "STALE",
+                    "target_revision": members[mid]["revision"],
+                    "provider_provenance": provenance,
+                    # the stored content drops _-keys — the oversize marker
+                    # must survive storage so a later re-audit of the stub
+                    # keeps its blocking finding
+                    "input_oversize": bool(r["summary"].get("_input_oversize")), **skip_meta}
+    audit_content = {"status": final_status, "findings": r["findings"], "target_message_id": mid}
+    audit_meta = {VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
+                  "audit_status": final_status, "publication_mode": publication_mode,
+                  "repair_count": 1 if r["repaired"] else 0,
+                  "summary_hash": mcs_util.payload_hash(summary),
+                  "audit_content_hash": mcs_util.payload_hash(audit_content),
+                  "claim_input_binding": r.get("claim_input_binding"),
+                  "target_revision": members[mid]["revision"],
+                  "jev_requests": r.get("jev_requests", 0),
+                  # raw Jev claim verdicts — the calibration corpus for
+                  # match_threshold tuning (summary content strips _-keys,
+                  # so this private channel is the only place they persist)
+                  "claim_audit": r["summary"].get("_claim_audit") or {}, **skip_meta}
     # A deferred/pending job re-derives the same outcome on every pass.
     # Without this guard, unreachable Jev can produce byte-identical
     # summary+audit pairs repeatedly. The durable store records an outcome
-    # once, not once per attempt (FIX-SD1) — while that record is the pair
-    # readers see, never under a newer unpaired or invalidated row.
+    # once, not once per attempt (FIX-SD1) — only while the stored pair is
+    # the one readers see and holds every receipt field this write would
+    # (hashes, binding, revision, mode, schema; the summary id is checked
+    # above), so a pair the send gate
+    # cannot verify is written again, never kept as a duplicate.
     prev_sum = current_artifact(ledger.db, KIND_SUMMARY, mid, fp, policy)
     prev_aud = current_artifact(ledger.db, KIND_AUDIT, mid, fp, policy)
     if (prev_sum is not None and prev_aud is not None
             and _current_pair_newest(ledger.db, pid, mid, fp, policy, prev_aud)
-            and prev_sum["content"] == summary
-            and prev_sum["meta"].get("audit_status") == final_status
-            and prev_sum["meta"].get("provider_provenance") == provenance
-            and all(prev_sum["meta"].get(key) == value for key, value in skip_meta.items())
-            and prev_sum["meta"].get("publication_mode")
-            == publication_mode
-            and prev_aud["content"].get("status") == final_status
-            and prev_aud["meta"].get("repair_count") == (1 if r["repaired"] else 0)
-            and prev_aud["meta"].get("claim_input_binding") == r.get("claim_input_binding")
-            and all(prev_aud["meta"].get(key) == value for key, value in skip_meta.items())
-            and prev_aud["content"].get("findings") == r["findings"]):
+            and prev_sum["content"] == summary and prev_aud["content"] == audit_content
+            and _receipt_matches(prev_sum["meta"], summary_meta)
+            and _receipt_matches(prev_aud["meta"], audit_meta)):
         return
     summary_id = ledger.artifact_add_tx(
         KIND_SUMMARY,
         json.dumps(summary, ensure_ascii=False),
         project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
-        meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
-              "audit_status": final_status, "publication_mode": publication_mode,
-              "stale": final_status == "STALE",
-              "target_revision": members[mid]["revision"],
-              "provider_provenance": provenance,
-              # the stored content drops _-keys — the oversize marker
-              # must survive storage so a later re-audit of the stub
-              # keeps its blocking finding
-              "input_oversize": bool(r["summary"].get("_input_oversize")), **skip_meta})
-    audit_content = {"status": final_status, "findings": r["findings"], "target_message_id": mid}
+        meta=summary_meta)
     ledger.artifact_add_tx(
         KIND_AUDIT,
         json.dumps(audit_content, ensure_ascii=False),
         project_id=pid, message_id=mid, model=jev.JEV_MODEL,
-        meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
-              "audit_status": final_status, "publication_mode": publication_mode,
-              "repair_count": 1 if r["repaired"] else 0,
-              "summary_artifact_id": summary_id, "summary_hash": mcs_util.payload_hash(summary),
-              "audit_content_hash": mcs_util.payload_hash(audit_content),
-              "claim_input_binding": r.get("claim_input_binding"),
-              "target_revision": members[mid]["revision"],
-              "jev_requests": r.get("jev_requests", 0),
-              # raw Jev claim verdicts — the calibration corpus for
-              # match_threshold tuning (summary content strips _-keys,
-              # so this private channel is the only place they persist)
-              "claim_audit": r["summary"].get("_claim_audit") or {}, **skip_meta})
+        meta={**audit_meta, "summary_artifact_id": summary_id})
+
+
+# Receipt fields that vary per attempt without changing the recorded outcome.
+_ATTEMPT_FIELDS = (VERSION_KEY, "inference_requests", "jev_requests", "claim_audit")
+
+
+def _receipt_matches(stored: dict, written: dict) -> bool:
+    """Whether a stored receipt's meta already holds every outcome field of this write."""
+    return all(stored.get(key) == value for key, value in written.items() if key not in _ATTEMPT_FIELDS)
 
 
 def _park_needs_review(ledger, pid, mid, fp, policy, v2_doc,

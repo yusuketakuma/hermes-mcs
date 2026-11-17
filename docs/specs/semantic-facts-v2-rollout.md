@@ -335,8 +335,14 @@ The Jev incremental-value experiment is a separate synthetic comparison; its rep
     permanent hold). What the audit of the repaired text observed is
     recorded before the pass can stop, and only a negative observation
     holds: an answer `contradicts`, `not_supported` or `ambiguous`, one
-    below the match threshold, an answer that is not a valid choice, or
-    another Jev audit finding (`support_unevaluated` alone is not one). On a
+    below the match threshold, or another Jev audit finding
+    (`support_unevaluated` alone is not one). An answer that is not a
+    valid choice is not a judgement of its claim and is never recorded:
+    that claim is asked again (once in the same call, then on the job's
+    retry). The valid answers of the same response are recorded before
+    that re-ask (`audit_claims` checkpoints them through
+    `evaluate_once_more`'s answer callback), so a stop during it keeps a
+    negative one. On a
     guard stop inside the audit (`LLMNotSent`, `RuntimeBudget`,
     `RuntimeOff` such as a pause, off, scope or review hold, or a
     `RuntimeStale` config change) the answers already received are
@@ -401,7 +407,11 @@ The Jev incremental-value experiment is a separate synthetic comparison; its rep
     target stays PENDING with `prior_audit_unverified`, as for an unbound
     PENDING prior, until a real audit runs. An identical
     result is not recorded again only while the current summary and its
-    audit are the newest, paired rows of their kinds.
+    audit are the newest, paired rows of their kinds and already hold
+    every receipt field the new write would (summary and audit hashes,
+    claim binding, target revision, publication mode, schema, status):
+    a re-audited PASS over a pair the send gate refuses for any of these
+    is written as a new pair, so it can publish.
   - Stage boundaries: facts → fact audit/projection (bound to the
     document hash) → medication details (fact id and options) →
     coverage (binding) → candidate (binding) → audit → repair

@@ -750,3 +750,62 @@ def test_unverifiable_prior_pass_is_not_cleared_by_skipped_reaudit(tmp_path, tam
         assert "prior_audit_unverified" in audit["content"]
     finally:
         db.close()
+
+
+_PASS_TAMPER = {
+    # One reason each for the send gate to refuse the stored PASS pair while
+    # its summary id and claim binding stay in place.
+    "summary_hash": ("semantic_audit", "json_remove(meta,'$.summary_hash')", None),
+    "audit_content_hash": ("semantic_audit", "json_remove(meta,'$.audit_content_hash')", None),
+    "audit_schema": ("semantic_audit", "json_remove(meta,'$.schema')", None),
+    "audit_revision": ("semantic_audit", "json_set(meta,'$.target_revision',-1)", None),
+    "audit_mode": ("semantic_audit", "json_set(meta,'$.publication_mode','assist')", None),
+    "summary_stale": ("semantic_summary", "json_set(meta,'$.stale',1)", None),
+    "summary_text": ("semantic_summary", None, "synthetic-tamper"),
+    "audit_target": ("semantic_audit", None, 2),
+}
+
+
+@pytest.mark.parametrize("tamper", sorted(_PASS_TAMPER))
+def test_reaudited_unverifiable_pass_writes_a_new_pair(tmp_path, tamper):
+    """A PASS pair the send gate refuses is audited again and that PASS is written as a new pair.
+
+    The pair keeps its summary id and claim binding but fails another check
+    of the send gate. The re-audit's PASS equals the stored outcome, yet it
+    is not dropped as a duplicate: one new, verifiable pair is written,
+    which publishes the summary, and a further pass writes nothing."""
+    db = _seeded(tmp_path)
+    try:
+        _run_legacy(db, _llm, _FakeJev())
+        assert db.job_state("semantic", 1, 1) == "done" and _legacy_passed(db, 1)
+        kind, meta_sql, content_change = _PASS_TAMPER[tamper]
+        row = db.artifacts(kind, message_id=1)[-1]
+        if meta_sql is not None:
+            db.db.execute(f"UPDATE artifacts SET meta={meta_sql} WHERE artifact_id=?", (row["artifact_id"],))
+        else:
+            content = json.loads(row["content"])
+            if kind == "semantic_summary":
+                content["limitations"] = [*content.get("limitations", []), content_change]
+            else:
+                content["target_message_id"] = content_change
+            db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                          (json.dumps(content, ensure_ascii=False), row["artifact_id"]))
+        db.db.commit()
+        assert not _legacy_passed(db, 1)
+        before = db.artifacts("semantic_audit", message_id=1)[-1]["artifact_id"]
+        db.semantic_seed(1, [1, 2], {"source": "history_import"})
+        jev = _FakeJev()
+        for _ in range(3):
+            _run_legacy(db, _llm, jev)
+            if db.job_state("semantic", 1, 1) != "pending":
+                break
+        assert jev.requests_made >= 1
+        audits = db.artifacts("semantic_audit", message_id=1)
+        assert audits[-1]["artifact_id"] > before
+        assert db.job_state("semantic", 1, 1) == "done" and _legacy_passed(db, 1)
+        summary = db.artifacts("semantic_summary", message_id=1)[-1]
+        assert json.loads(audits[-1]["meta"])["summary_artifact_id"] == summary["artifact_id"]
+        _run_legacy(db, _llm, jev)
+        assert len(db.artifacts("semantic_audit", message_id=1)) == len(audits)
+    finally:
+        db.close()

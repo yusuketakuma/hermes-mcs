@@ -1221,6 +1221,109 @@ def test_negative_answer_before_a_stop_resumes_audit_to_needs_review(interrupted
     assert resumed.claims == [[second]]
 
 
+def _defective_batch_jev(state, first=None, reask="stop"):
+    """Jev that answers a two-claim batch with ``first`` for the first claim and an invalid second answer.
+
+    ``first`` is a choice or ``"invalid"``; an invalid answer fails Jev
+    validation, so ``evaluate_once_more`` asks it again. That re-ask stops
+    (``reask="stop"``, a pause) or is invalid again (``"invalid"``).
+    Without ``first`` every claim is answered ``supports``. Claim batches
+    it received are kept in ``claims``."""
+    import semantic_runtime
+    from semantic_jev import JevError
+    from semantic_testkit import _FakeJev
+
+    class DefectiveJev(_FakeJev):
+        claims = []
+
+        def evaluate(self, target, questions, deadline):
+            if target.get("target", {}).get("id") != "claims":
+                return super().evaluate(target, questions, deadline)
+            self.claims.append(sorted(questions))
+            out = super().evaluate(target, questions, deadline)
+            if first is None:
+                return out
+            if len(self.claims) > 1 and reask == "stop":
+                state.db.artifact_add("semantic_control", "paused", project_id=1)
+                raise semantic_runtime.RuntimeOff("jev_attempt")
+            ids = sorted(questions)
+            choices = dict(zip(ids, [first, "invalid"])) if len(self.claims) == 1 else {}
+            valid, failed = {}, []
+            for qid in ids:
+                choice = choices.get(qid, "invalid")
+                if choice == "invalid":
+                    failed.append(qid)
+                else:
+                    valid[qid] = {"type": "choice", "choice": choice, "confidence": 0.9,
+                                  "distribution": out["answers"][qid]["probabilities"]}
+            error = JevError("protocol_error", f"{failed[0]}:synthetic_choice_invalid")
+            error.answers, error.failed = valid, failed
+            raise error
+
+    client = DefectiveJev()
+    client.claims = []
+    return client
+
+
+@pytest.mark.parametrize("first,reask,held", [
+    ("contradicts", "stop", True), ("contradicts", "invalid", True),
+    ("invalid", "stop", False), ("supports", "stop", False)])
+def test_valid_answers_beside_an_invalid_one_are_recorded_before_the_reask(
+        interrupted_empty_repair, monkeypatch, first, reask, held):
+    """Answers that passed validation are recorded before their invalid sibling is asked again.
+
+    One batch answers the first claim ``first`` and the second with an
+    invalid choice; the re-ask of the invalid claims stops (pause) or is
+    invalid again. A valid negative answer is recorded and holds the
+    candidate: the resumed audit asks only the other claim and commits
+    NEEDS_REVIEW, never a PASS from a later supporting answer. An invalid
+    answer is not a judgement of the claim, so with no negative answer the
+    candidate is ``ready`` and the next pass audits every claim again; a
+    PASS then comes only from that complete audit."""
+    state = interrupted_empty_repair
+    _two_claim_repair(monkeypatch)
+    state.phase = "two_claims"
+    stopping = _defective_batch_jev(state, first, reask)
+    state.retry()
+    state.run(client=stopping, max_questions_per_request=2)
+    assert state.summaries == [False, True] and len(stopping.claims) == 2
+    claim_a, claim_b = stopping.claims[0]
+    assert stopping.claims[1] == ([claim_b] if first != "invalid" else [claim_a, claim_b])
+    candidate = state.db.artifacts(semantic_drain.KIND_CANDIDATE, message_id=1)[-1]
+    meta = json.loads(candidate["meta"])
+    if held:
+        assert meta["audit_state"] == "held" and "evaluated" not in meta["partial_answers"]
+        assert meta["partial_answers"]["answers"] == {claim_a: {"choice": "contradicts", "confidence": 0.9}}
+        assert [f["code"] for f in meta["partial_answers"]["findings"]] == ["claim_contradicts"]
+    else:
+        assert meta["audit_state"] == "ready" and meta["partial_answers"] == {}
+    assert dict(state.db.artifacts("semantic_audit", message_id=1)[-1]) == state.old_audit
+    assert not _notice_for_target(state.db)
+
+    state.db.artifact_add("semantic_control", "running", project_id=1)
+    state.restart()
+    resumed = _defective_batch_jev(state)
+    for _ in range(3):
+        state.retry()
+        state.run(client=resumed, max_questions_per_request=2)
+        if state.db.job_state("semantic", 1, 1) != "pending":
+            break
+    assert resumed.claims == ([[claim_b]] if held else [[claim_a, claim_b]])
+    assert state.db.job_state("semantic", 1, 1) == "done"
+    assert state.summaries == [False, True]
+    assert len(state.db.artifacts("semantic_repair", message_id=1)) == 1
+    statuses = [json.loads(row["content"])["status"]
+                for row in state.db.artifacts("semantic_audit", message_id=1)]
+    audit_meta = json.loads(state.db.artifacts("semantic_audit", message_id=1)[-1]["meta"])
+    if held:
+        assert "PASS" not in statuses and statuses[-1] == "NEEDS_REVIEW"
+        assert audit_meta["claim_audit"][claim_a] == {"choice": "contradicts", "confidence": 0.9}
+    else:
+        assert statuses[-1] == "PASS"
+        assert audit_meta["claim_audit"] == {claim: {"choice": "supports", "confidence": 0.9}
+                                             for claim in (claim_a, claim_b)}
+
+
 @pytest.mark.parametrize("corruption", ["evaluated_false", "unknown_code", "no_findings",
                                         "missing_answer", "extra_key", "answer_invalid",
                                         "unknown_claim"])
