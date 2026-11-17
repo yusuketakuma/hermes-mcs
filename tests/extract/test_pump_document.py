@@ -53,3 +53,19 @@ def test_continuation_page_is_kept_as_unverified_without_borrowed_pump_context()
     assert result['events'][1]['page'] == 2
     assert result['events'][1]['candidate_status'] == 'needs_review'
     assert 'number' not in result['events'][1] and result['events'][1]['unverified']
+
+
+def test_candidate_build_stops_past_record_cap_and_projection_is_limited():
+    count = pump_document._MAX_RECORDS + 500
+    text = 'PCAポンプ\n' + '残量:\n' * count
+    calls = []
+    real = pump_document.medical_document.extract
+    pump_document.medical_document.extract = lambda pages, cap=None: calls.append(cap) or real(pages, cap)
+    try:
+        output = _project(text)
+    finally:
+        pump_document.medical_document.extract = real
+    assert calls == [pump_document._MAX_RECORDS + 1]
+    assert output['limited'] is True and len(output['events']) == pump_document._MAX_RECORDS
+    assert len(real([{'page': 1, 'text': text}], 3)['pump_candidates']) == 3
+    assert len(real([{'page': 1, 'text': text}])['pump_candidates']) == count
