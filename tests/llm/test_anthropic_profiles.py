@@ -101,22 +101,16 @@ def test_profile_contracts_are_finite_per_provider(provider, model, effort, prof
     assert accounting.profile_contract_valid(provider, model, effort, profile, tokens) is valid
 
 
-def test_anthropic_without_profiles_resolves_the_original_contract():
-    selection, errors = c.resolve_profile(_cfg(), route="reextract", purpose="backlog")
-    assert not errors
-    assert (selection["model"], selection["effort"], selection["profile"], selection["max_tokens"]) \
-        == (a.MODEL, None, None, None)
-    assert cloud_inference.cloud_provider_contract(selection=selection) == cloud_inference._CLOUD_CONTRACT
-
-
 @pytest.mark.parametrize("route,purpose,model,effort,limit", [
     ("reextract", "backlog", a.MODEL, "medium", 8192),
     ("semantic_backlog", "backlog", a.MODEL, "medium", 8192),
     ("patient_context", "patient_context", a.SONNET_MODEL, "high", 16384),
     ("semantic_backlog", "quality_repair", a.SONNET_MODEL, "high", 32768),
 ])
-def test_opted_in_anthropic_profiles_follow_the_owner_defaults(route, purpose, model, effort, limit):
-    selection, errors = c.resolve_profile(_cfg(provider_profiles={"anthropic": {}}), route=route, purpose=purpose)
+@pytest.mark.parametrize("profiles", [{}, {"provider_profiles": {"anthropic": {}}}])
+def test_anthropic_defaults_follow_the_owner_layout_with_or_without_profiles(route, purpose, model, effort, limit, profiles):
+    # An unset profile map must not fall back to the 1600-token original contract.
+    selection, errors = c.resolve_profile(_cfg(**profiles), route=route, purpose=purpose)
     assert not errors
     assert (selection["model"], selection["effort"], selection["max_tokens"]) == (model, effort, limit)
     contract = cloud_inference.cloud_provider_contract(selection=selection)

@@ -432,9 +432,9 @@ def profile_for_settings(cfg, settings, *, route, purpose):
     if not isinstance(by_provider, dict):
         return None, ["config: cloud_llm_profiles_invalid"]
     limit = {"backlog": 8192, "patient_context": 16384, "quality_repair": 32768}[purpose]
-    if provider == "anthropic" and "anthropic" in by_provider:
-        # Opt-in purpose profiles; an unnamed purpose takes the owner's default.
-        chosen = by_provider["anthropic"]
+    if provider == "anthropic":
+        # Purpose profiles; an unset provider or purpose takes the owner's default (same layout as OpenAI).
+        chosen = by_provider.get("anthropic", {})
         if not _profile_map_valid(anthropic_client, chosen):
             return None, ["config: cloud_llm_profiles_invalid"]
         profile = chosen.get(purpose, anthropic_client.DEFAULT_PROFILES[purpose])
