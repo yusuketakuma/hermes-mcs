@@ -24,6 +24,13 @@ def isolated_format_marks(monkeypatch, tmp_path):
     monkeypatch.setattr(semantic_transport, '_FMT_PATH', str(tmp_path / "format.json"))
 
 
+def _format_cached_plain(monkeypatch):
+    """Pin a fresh plain verdict so budget-tight calls skip the probe —
+    the body floor alone then decides the turn, as before probing."""
+    monkeypatch.setattr(semantic_transport, '_FMT_MODE', "plain")
+    monkeypatch.setattr(semantic_transport, '_FMT_TS', time.monotonic())
+
+
 def _run_with_missing_model(db):
     return semantic_drain.run_due(
         db, _cfg("shadow"), {"errors": []}, time.monotonic() + 300,
@@ -152,6 +159,7 @@ def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
         return process
 
     monkeypatch.setattr(bounded_http.subprocess, "Popen", popen_after_post)
+    _format_cached_plain(monkeypatch)
     # The byte-trickled response takes ~20 s; returning None far below that
     # after the POST landed proves the absolute deadline cut the in-flight
     # response instead of a per-read idle timeout.
@@ -421,11 +429,13 @@ def test_semantic_llm_chat_requests_json_object_after_probe(monkeypatch):
         return 200, {}, json.dumps(_response(text)).encode()
 
     monkeypatch.setattr(local_llm, "bounded_request", send)
-    assert semantic_transport.llm_chat("抽出 JSON:", timeout=4) == '{"facts": []}'
+    # timeout=5 leaves floor(2.5s)+probe margin(2s) inside the window —
+    # the probe still spends the caller's budget instead of adding to it
+    assert semantic_transport.llm_chat("抽出 JSON:", timeout=5) == '{"facts": []}'
     assert semantic_transport._FMT_MODE == "object"
     assert bodies[-1]["response_format"] == {"type": "json_object"}
     assert bodies[-1]["id_slot"] == local_llm.BACKGROUND_SLOT
-    assert len(timeouts) == 2 and all(t <= 4 for t in timeouts)
+    assert len(timeouts) == 2 and all(t <= 5 for t in timeouts)
     # cached: a second call does not re-probe
     semantic_transport.llm_chat("次 JSON:")
     assert sum("Reply with" in b["messages"][0]["content"] for b in bodies) == 1
@@ -1068,6 +1078,7 @@ def test_turn_won_with_scraps_of_window_is_busy(tmp_path, monkeypatch):
         return real_flock(fd, operation)
 
     monkeypatch.setattr(local_llm.fcntl, "flock", flock)
+    _format_cached_plain(monkeypatch)
     try:
         with pytest.raises(semantic_runtime.LLMNotSent) as info:
             semantic_transport.llm_chat("synthetic JSON:", timeout=2)

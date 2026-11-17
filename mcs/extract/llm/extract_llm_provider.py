@@ -472,9 +472,15 @@ def _llm_call(prompt: str, deadline: float | None = None,
     # margin joins the turn minimum only while a format check may still
     # hit the wire. The held turn covers probe+first body only — every
     # resend re-acquires through the existing per-send path.
-    probe_due = (_FMT_MODE is None
-                 or (_FMT_MODE != "schema"
-                     and time.monotonic() - _FMT_TS >= _PROBE_RETRY_S))
+    # resolve the format cache once: a hit is used to completion and
+    # only a miss pays the probe margin inside the shared turn — a TTL
+    # crossing between two reads must not split probe and body turns
+    cached = (_FMT_MODE
+              if _FMT_MODE == "schema"
+              or _FMT_MODE is not None
+              and time.monotonic() - _FMT_TS < _PROBE_RETRY_S
+              else None)
+    probe_due = cached is None
     margin = local_llm.PROBE_TURN_MIN_S if probe_due else 0.0
     turn_deadline = (deadline if deadline is not None
                      else time.monotonic() + TIMEOUT)
@@ -487,19 +493,26 @@ def _llm_call(prompt: str, deadline: float | None = None,
               if first and probe_due else contextlib.nullcontext()
               ) as held:
             if first:
-                if probe_due and (held is None or (
-                        deadline is not None
-                        and deadline - time.monotonic() < margin)):
-                    # the turn never fit the probe+body minimum, or the
-                    # probe margin is already gone: a finite busy refusal —
-                    # inner sends never re-acquire behind the caller's back
-                    _CALL_NOTES.defer_reason = "busy"
-                    return _DEFERRED
-                probe_err: dict = {}
-                fmt = _probe_format(
-                    deadline=(deadline - floor) if deadline is not None
-                    else None, error_out=probe_err)
-                probe = int(_FMT_TS != probed_at)   # one format-check run may send multiple requests
+                if probe_due:
+                    if held is None or (
+                            deadline is not None
+                            and deadline - time.monotonic() < floor + margin):
+                        # the turn never fit the probe+body minimum, or
+                        # the body floor + probe margin is already gone:
+                        # a finite busy refusal — inner sends never
+                        # re-acquire behind the caller's back
+                        _CALL_NOTES.defer_reason = "busy"
+                        return _DEFERRED
+                    probe_err: dict = {}
+                    fmt = _probe_format(
+                        deadline=(deadline - floor) if deadline is not None
+                        else None, error_out=probe_err)
+                    # one format-check run may send multiple requests;
+                    # err_out proves a run reached the wire even when it
+                    # died before caching a verdict
+                    probe = int(_FMT_TS != probed_at or bool(probe_err))
+                else:
+                    fmt, probe, probe_err = cached, 0, {}
                 first = False
                 if fmt is None:
                     pkind = probe_err.get("kind")

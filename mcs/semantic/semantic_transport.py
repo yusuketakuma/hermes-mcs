@@ -601,8 +601,9 @@ def _probe_format(endpoint: str, model: str, timeout: float = 10,
             return None
         _FMT_MODE = mode
     except Exception:
-        # an unobserved probe is not a plain verdict — stay unprobed
-        return _FMT_MODE
+        # an unobserved probe is not a plain verdict — a stale cached
+        # mode must not wave the body through either
+        return None
     _FMT_TS = time.monotonic()
     return _FMT_MODE
 
@@ -744,10 +745,17 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
     # the wire; remembered/plain-cached formats skip the probe margin and
     # every resend re-acquires through the existing per-send path
     fkey = _format_key(endpoint, model)
-    probe_due = (fkey not in _format_marks()
-                 and (_FMT_MODE is None
-                      or (_FMT_MODE != "object"
-                          and time.monotonic() - _FMT_TS >= _PROBE_RETRY_S)))
+    # resolve the format cache once, mirroring _probe_format's early
+    # returns: a hit is used to completion and only a miss pays the
+    # probe margin inside the shared turn — a TTL crossing between two
+    # reads must not split probe and body turns
+    cached = ("plain" if fkey in _format_marks()
+              else _FMT_MODE
+              if _FMT_MODE == "object"
+              or _FMT_MODE is not None
+              and time.monotonic() - _FMT_TS < _PROBE_RETRY_S
+              else None)
+    probe_due = cached is None
     margin = local_llm.PROBE_TURN_MIN_S if probe_due else 0.0
     turn_deadline = call_deadline
     first = True
@@ -756,16 +764,20 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
                                   slot=local_llm.request_slot())
               if first and probe_due else nullcontext()) as held:
             if first:
-                if probe_due and (held is None or (
-                        call_deadline - time.monotonic() < margin)):
-                    # the turn never fit probe+body, or the probe margin is
-                    # already gone: the probe never left — a not-sent defer,
-                    # never an inner re-acquire behind the caller's back
-                    _failed("probe_unsent")
-                    raise runtime.LLMNotSent("probe_unsent")
-                probe_err: dict = {}
-                fmt = _probe_format(endpoint, model, timeout,
-                                    call_deadline - floor, probe_err)
+                if probe_due:
+                    if held is None or (
+                            call_deadline - time.monotonic() < floor + margin):
+                        # the turn never fit probe+body, or the body floor
+                        # + probe margin is already gone: the probe never
+                        # left — a not-sent defer, never an inner
+                        # re-acquire behind the caller's back
+                        _failed("probe_unsent")
+                        raise runtime.LLMNotSent("probe_unsent")
+                    probe_err: dict = {}
+                    fmt = _probe_format(endpoint, model, timeout,
+                                        call_deadline - floor, probe_err)
+                else:
+                    fmt = cached
                 first = False
                 if fmt is None:
                     kind = probe_err.get("kind")
