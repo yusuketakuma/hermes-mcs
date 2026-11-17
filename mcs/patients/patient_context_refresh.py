@@ -338,6 +338,23 @@ _WAIT_COUNTER_KEYS = (
     'wait_readiness_unverified', 'wait_dependency_incomplete',
 )
 _SCAN_COUNTER_KEYS = _WAIT_COUNTER_KEYS + ('skip_patient_invalid',)
+_DENIAL_KEYS = ('generation_reason', 'unverified_records')
+_GENERATION_UNVERIFIED = 'patient_context_generation_unverified'
+
+
+def _note_generation_denial(observed_out, quota):
+    """Keep one generation-quota denial per pass; an unreadable record outranks other reasons.
+
+    The record count always belongs to the reason kept, never a mix of patients."""
+    reason = quota.get('reason')
+    if reason is None:
+        return
+    records = quota.get('unverified_records', 0)
+    held = observed_out.get('generation_reason')
+    if held is None or (reason == _GENERATION_UNVERIFIED and held != _GENERATION_UNVERIFIED):
+        observed_out['generation_reason'], observed_out['unverified_records'] = reason, records
+    elif held == reason:
+        observed_out['unverified_records'] = max(observed_out['unverified_records'], records)
 
 
 def _raise_if_systemic(unreadable, scanned):
@@ -392,6 +409,8 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                 waiting_before = waiting
                 counters_before = ({key: observed_out[key] for key in _WAIT_COUNTER_KEYS}
                                    if observed_out is not None else None)
+                denial_before = ({key: observed_out.get(key) for key in _DENIAL_KEYS}
+                                 if observed_out is not None else None)
                 whole = None
                 try:
                     published = patient_context_refresh_state._published_version(reader.db, pid)
@@ -443,17 +462,15 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                                 generation = _generation_plan(reader.db, pid, cfg, candidate, now)
                                 quota = (context_quota.inspect(reader.db, pid, generation['input_key'],
                                     now=now, catchup=generation['catchup']) if generation['needed'] else {'allowed': True})
-                            except ValueError:
+                            except ValueError as exc:
                                 generation, quota = None, {'allowed': False}
+                                if exc.args == (_GENERATION_UNVERIFIED,):
+                                    quota['reason'] = _GENERATION_UNVERIFIED
                             candidate['_generation_plan'] = generation
                             if not quota['allowed']:
                                 if observed_out is not None:
                                     observed_out['wait_generation_quota'] += 1
-                                    if quota.get('reason') is not None:
-                                        observed_out.setdefault('generation_reason', quota['reason'])
-                                        observed_out['unverified_records'] = max(
-                                            observed_out.get('unverified_records', 0),
-                                            quota.get('unverified_records', 0))
+                                    _note_generation_denial(observed_out, quota)
                                 due['A'] = False
                                 waiting += 1
                                 if not any(due[lane] for lane in lanes):
@@ -485,6 +502,11 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                     waiting = waiting_before
                     if observed_out is not None:
                         observed_out.update(counters_before)
+                        for key, value in denial_before.items():
+                            if value is None:
+                                observed_out.pop(key, None)
+                            else:
+                                observed_out[key] = value
                     if patient_context_refresh_readiness._unreadable_in_scope(reader.db, pid, cfg, whole):
                         waiting += 1
                         if observed_out is not None:
