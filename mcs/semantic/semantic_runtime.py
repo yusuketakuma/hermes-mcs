@@ -952,6 +952,18 @@ def guard(ledger, token: JobToken, *, deadline: float,
             raise RuntimeStale(stage)
     elif expected_mode == "off":
         raise RuntimeOff(stage)
+    owner_guard(ledger, token, source_fingerprint=source_fingerprint,
+                current_source=current_source, stage=stage)
+
+
+def owner_guard(ledger, token: JobToken, *, source_fingerprint: str | None = None,
+                current_source=None, stage: str = ""):
+    """Re-read only that this worker still owns the job and its source is unchanged.
+
+    ``guard`` ends with these checks. Alone they gate a fail-closed record of
+    what a stopped pass observed (it only holds, and carries its own
+    fingerprint and binding), so a budget, pause, off or config stop does not
+    lose it; another worker's job or a changed source raises RuntimeStale."""
     if not job_matches(ledger, token):
         raise RuntimeStale(stage)
     if current_source is not None:
@@ -971,7 +983,7 @@ __all__ = [
     "RuntimeStale", "JevEvaluation", "bind_jev", "config_generation", "execution_generation",
     "interpretation_generation",
     "circuit_open", "record_circuit_result",
-    "guard", "guarded_llm", "job_deadline", "job_matches", "llm_call",
+    "guard", "owner_guard", "guarded_llm", "job_deadline", "job_matches", "llm_call",
     "parse_payload", "attempt_limit", "payload_generation", "transition",
     "transition_tx",
     "usage_reserver", "llm_request_was_dispatched",
