@@ -1,0 +1,14 @@
+{
+  "category": "changed",
+  "title": "意味解析の失効確認が artifacts の種別索引を使うようになる",
+  "summary": "意味解析の公開物を失効させる処理の事前確認が、artifacts の kind 索引（idx_artifacts_kind_created）で対象を探すようになります。失効の対象と結果は変わりません。内部の検索計画だけの変更で、性能の数値は測っていません。",
+  "upgrade": "追加操作は不要です。設定・既定値・通知・既読化・承認条件は変わりません。",
+  "details": [
+    "invalidate_projections の事前確認だけ a.kind の条件から + を外し、ページ走査は +a.kind のまま維持する。",
+    "条件文は candidate_from(kind_column) に一本化した。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_publication.py",
+    "tests/semantic/test_semantic_drain_scan_bounds.py"
+  ]
+}

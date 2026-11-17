@@ -976,17 +976,22 @@ def invalidate_projections(db, scfg: dict) -> int:
     policy = policy_fingerprint(scfg)
     off = scfg.get("mode") == "off"
     enabled = not off and scfg.get("fact_source") == "canonical"
-    candidate = """
+    def candidate_from(kind_column):
+        return f"""
       FROM artifacts a LEFT JOIN messages m ON m.message_id=a.message_id
-      WHERE +a.kind IN ('canonical_projection','semantic_facts_v4')
+      WHERE {kind_column} IN ('canonical_projection','semantic_facts_v4')
         AND CASE WHEN json_valid(a.meta) AND json_type(a.meta)='object' THEN
              COALESCE(json_extract(a.meta,'$.invalidated'),0)=0
              OR (? AND json_extract(a.meta,'$.invalidated')=1
                  AND json_extract(a.meta,'$.invalidated_reason')='fact_source')
              END"""
+    # Paging pins the rowid range with a unary ``+`` (see below); the one-row
+    # pre-check has no such range, so it keeps the plain kind for the kind index.
+    candidate = candidate_from("+a.kind")
     current_ids = set()
     if enabled and db.execute(
-            "SELECT 1" + candidate + " AND json_extract(a.meta,'$.invalidated')=1 LIMIT 1",
+            "SELECT 1" + candidate_from("a.kind")
+            + " AND json_extract(a.meta,'$.invalidated')=1 LIMIT 1",
             (True,)).fetchone():
         from mcs_queries import current_projection_id, current_v4_id
         # Evaluate the normal reader predicates against a prospective snapshot,
