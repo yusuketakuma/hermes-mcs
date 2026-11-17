@@ -19,6 +19,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     import _mcs_path  # noqa: F401
 
+import cloud_send_admission
 from run_log_install import helper_path, LogInstallError
 
 _parent = None
@@ -130,13 +131,23 @@ def owner_alive():
     return _parent is None or os.getppid() == _parent
 
 
-def _lock(path):
+def _open_lock_file(path):
+    """Open one trusted lock leaf: a private regular file of this user, never a link."""
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, 0o600)
-    held = False
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o077:
             raise ValueError("cloud_lock_untrusted")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _lock(path):
+    fd = _open_lock_file(path)
+    held = False
+    try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -146,6 +157,80 @@ def _lock(path):
     finally:
         if not held:
             os.close(fd)
+
+
+# Patient-context worker roles. Every context child holds ROLE_CLOUD, and every local lane
+# serving patient context holds ROLE_LOCAL, as a shared lock for as long as it serves. A
+# worker of one role probes the other role only, never its own: flock would see itself.
+ROLE_CLOUD = "context_workers.lock"
+ROLE_LOCAL = "context_local_workers.lock"
+_ROLE_PROBE_TRIES = 100   # 5 ms apart: about half a second
+
+
+@contextmanager
+def _role_probe(directory, name):
+    """Serialise holders and probers of one role, so that two probers never see each other.
+
+    Each holds the mutex for microseconds; one that is not free within the tries is unavailable."""
+    fd = _open_lock_file(directory / (name + ".probe"))
+    try:
+        for attempt in range(_ROLE_PROBE_TRIES):
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if attempt == _ROLE_PROBE_TRIES - 1:
+                    raise
+                time.sleep(0.005)
+        yield
+    finally:
+        os.close(fd)
+
+
+def _role_directory(root):
+    directory = Path(root) / "data" / "cloud_locks"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return directory
+
+
+def hold_role(root, name):
+    """Announce this process in one role; the fd holds it until closed. None when not held now,
+    which the caller retries on its next pass."""
+    if name not in (ROLE_CLOUD, ROLE_LOCAL):
+        raise ValueError("context_role_invalid")
+    try:
+        directory = _role_directory(root)
+        with _role_probe(directory, name):
+            fd = _open_lock_file(directory / name)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BaseException:
+                os.close(fd)
+                raise
+            return fd
+    except (OSError, ValueError):
+        return None
+
+
+def role_alive(root, name):
+    """True while any process holds the role, False when none does, None when unobservable.
+
+    Never call it for a role this process holds itself."""
+    if name not in (ROLE_CLOUD, ROLE_LOCAL):
+        raise ValueError("context_role_invalid")
+    try:
+        directory = _role_directory(root)
+        with _role_probe(directory, name):
+            fd = _open_lock_file(directory / name)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            finally:
+                os.close(fd)   # closing also drops the probe's own exclusive lock
+            return False
+    except (OSError, ValueError):
+        return None
 
 
 @contextmanager
@@ -705,6 +790,7 @@ _CONTEXT_PASS_REASONS = frozenset({
     "patient_context_generation_active", "patient_context_generation_clock_changed",
     "patient_context_generation_daily_limit", "patient_context_generation_interval",
     "patient_context_cloud_not_sent", "patient_context_cloud_pending", "patient_context_cloud_source_changed",
+    "patient_context_cloud_deferred", "patient_context_role_changed", "patient_context_other_role",
     "patient_context_length_stop", "patient_context_unsupported_items", "patient_context_unsupported_summary",
     "summary_quality_promotion", "summary_quality_unavailable", "source_quality_unavailable",
     "patient_summary_quality_lock", "patient_summary_quality_budget_changed",
@@ -768,6 +854,11 @@ def _context_pass_observation(result):
     guard = result.get("guard_error")
     if guard is not None:
         record["guard_error"] = guard if _bounded_pass_code(guard) else "unclassified"
+    # The classified reason the cloud did not serve the unit; only declared codes pass.
+    stop = result.get("cloud_refusal")
+    if stop is not None:
+        record["cloud_refusal"] = (stop if type(stop) is str and stop in cloud_send_admission.REFUSAL_CODES
+                                   else "unclassified")
     refusal = result.get("scan_refusal")
     if refusal is not None:
         record["scan_refusal"] = refusal if type(refusal) is str and refusal in _SCAN_REFUSALS else "unclassified"
@@ -781,11 +872,14 @@ def _context_pass_observation(result):
     # Real per-pass bounds: one try-wide interrupt, 8 candidates x at most 2
     # waiting additions (quota-fail double count or two single-count scopes),
     # and at most 2 pending reads per candidate; at most one skip per candidate.
+    # A patient busy with another worker counts once per candidate; patients
+    # of the other worker role have their own budget of 64 per pass.
     for key, limit in (("waiting", 16), ("scan_reads", 16), ("scan_interrupts", 1),
                        ("skip_patient_invalid", 8),
                        ("wait_no_eligible_sources", 8), ("wait_no_due_lane", 16),
                        ("wait_generation_quota", 8), ("wait_readiness_unverified", 16),
-                       ("wait_dependency_incomplete", 16)):
+                       ("wait_dependency_incomplete", 16), ("wait_patient_busy", 8),
+                       ("wait_other_role", 64)):
         value = result.get(key)
         if type(value) is int and 0 <= value <= limit:
             record[key] = value
@@ -795,11 +889,20 @@ def _context_pass_observation(result):
 def _context_retry_delay(result):
     """Backoff for one context pass. selection_busy means another worker
     holds the selection lock and is doing real work — retrying in seconds
-    just adds convoy noise, so wait longer."""
+    just adds convoy noise, so wait longer. A unit waiting for the cloud
+    returns within seconds when the send slot was full; a cap, a circuit or
+    a pending result does not clear that fast."""
     if result.get("done"):
         return 1
-    if result.get("reason") == "patient_context_selection_busy":
+    reason = result.get("reason")
+    if reason == "patient_context_selection_busy":
         return 20
+    base, _, code = reason.partition(":") if type(reason) is str else ("", "", "")
+    if base == "patient_context_cloud_deferred":
+        return 5 if code == "cloud_capacity" else 60
+    if reason in ("patient_context_cloud_budget", "patient_context_other_role"):
+        # Every patient the pass reached is served by the other worker role.
+        return 60
     return 5
 
 
@@ -811,29 +914,37 @@ def _context_worker(ledger, initial, index):
     from mcs_util import HOME, ProviderSettingsUnreadable, load_config
 
     waiting = {"code": None, "at": 0.0}
-    with local_llm.scheduling_scope(os.path.join(HOME, "data")):
-        while owner_alive() and writer_lock.updater_state() == initial and not initial[0]:
-            try:
-                cfg = load_config()
-            except ProviderSettingsUnreadable:
-                # A settings commit in progress: wait here instead of exiting the child.
-                _defer(waiting, "provider_settings_unreadable")
-                continue
-            waiting["code"] = None
-            settings = cloud_inference.resolve_cloud_settings(cfg)
-            if (settings["mode"] != "on" or index is not None and index >= settings["max_concurrency"]
-                    or not extract_llm_resident._context_memory_available()):
-                return
-            with writer_lock.capture_writer_refusal() as diagnostic:
-                result = extract_llm_resident._background_context_refresh(
-                    ledger, initial, cloud_worker=True)
-            record = _context_pass_observation(result)
-            if diagnostic["writer_reason"] != "writer_refusal_unclassified":
-                record.update(writer_reason=diagnostic["writer_reason"], writer_stage=diagnostic["writer_stage"])
-            _event("patient_context_pass", **record)
-            if result.get("run_lock_lost") == "updated":
-                return
-            time.sleep(_context_retry_delay(result))
+    role = None   # this child's ROLE_CLOUD hold; local lanes see the cloud lane served through it
+    try:
+        with local_llm.scheduling_scope(os.path.join(HOME, "data")):
+            while owner_alive() and writer_lock.updater_state() == initial and not initial[0]:
+                try:
+                    cfg = load_config()
+                except ProviderSettingsUnreadable:
+                    # A settings commit in progress: wait here instead of exiting the child.
+                    _defer(waiting, "provider_settings_unreadable")
+                    continue
+                waiting["code"] = None
+                settings = cloud_inference.resolve_cloud_settings(cfg)
+                if (settings["mode"] != "on" or index is not None and index >= settings["max_concurrency"]
+                        or not extract_llm_resident._context_memory_available()):
+                    return
+                if role is None:
+                    # A hold that failed is retried on every pass, so a live child never stays hidden.
+                    role = hold_role(HOME, ROLE_CLOUD)
+                with writer_lock.capture_writer_refusal() as diagnostic:
+                    result = extract_llm_resident._background_context_refresh(
+                        ledger, initial, cloud_worker=True)
+                record = _context_pass_observation(result)
+                if diagnostic["writer_reason"] != "writer_refusal_unclassified":
+                    record.update(writer_reason=diagnostic["writer_reason"], writer_stage=diagnostic["writer_stage"])
+                _event("patient_context_pass", **record)
+                if result.get("run_lock_lost") == "updated":
+                    return
+                time.sleep(_context_retry_delay(result))
+    finally:
+        if role is not None:
+            os.close(role)
 
 
 def main():

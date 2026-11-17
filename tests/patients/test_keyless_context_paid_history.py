@@ -52,7 +52,7 @@ def test_missing_key_never_replaces_a_paid_context_with_missing_result(runtime, 
 
 @pytest.mark.parametrize('status', [401, 403, 402, 404, 429, 500, 503, 529])
 def test_definite_api_error_uses_local_without_erasing_reserved_cost(runtime, real_cloud, monkeypatch, status):
-    ledger, _, local_calls = runtime
+    ledger, clock, local_calls = runtime
     cfg, _ = real_cloud
     sent = []
     def rejected(_client, *args, **kwargs):
@@ -61,16 +61,24 @@ def test_definite_api_error_uses_local_without_erasing_reserved_cost(runtime, re
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', rejected)
     monkeypatch.setattr(cloud_client, 'time', cloud_policy.time)
     seed(ledger, body='本人は合成の自宅で生活しています。')
+    waited = []
     for _ in range(40):
         result = step(runtime, cfg=cfg)
         if result['status'] == 'complete':
             break
         assert result['status'] in ('progressed', 'deferred'), result
+        if result.get('reason', '').startswith('patient_context_cloud_deferred:'):
+            # Three rate limits open the circuit: the next unit waits for its cooldown
+            # instead of going local (owner decision 2026-11-16), then meets its own refusal.
+            waited.append(result['reason'])
+            clock.wall += 301
+            clock.mono += 301
     else:
         snapshot = refresh._snapshot(ledger.db, 1, cfg, hydrate=False)
         pytest.fail(f'API fallback did not publish: {result!r}; coverage='
                     f'{refresh._inference_coverage(ledger.db, 1, cfg, snapshot)!r}')
     assert sent and local_calls
+    assert bool(waited) == (status == 429), waited
     assert json.loads(ledger.artifacts(state.KIND)[-1]["meta"])["local_fallback"] is True
     results = ledger.artifacts('cloud_usage_result')
     assert results
@@ -115,21 +123,41 @@ def test_unverified_or_answered_request_cannot_be_substituted_locally(runtime, r
     assert [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
 
 
-def test_unknown_transport_never_starts_local_replacement(runtime, real_cloud, monkeypatch):
+def test_unknown_transport_hands_the_unit_to_local_once(runtime, real_cloud, monkeypatch):
     ledger, _, local_calls = runtime
     cfg, _ = real_cloud
     sent = []
-    def unknown(*args, **kwargs):
-        sent.append(True)
+    def unknown(_client, method, body, *args, **kwargs):
+        sent.append(json.loads(body['messages'][0]['content']))
         raise OSError('synthetic uncertain transport')
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', unknown)
+    monkeypatch.setattr(cloud_client, 'time', cloud_policy.time)
     seed(ledger, body='本人は合成の自宅で生活しています。')
-    for _ in range(4):
-        assert step(runtime, cfg=cfg)['status'] != 'complete'
-    assert sent and not local_calls
-    assert ledger.artifacts('cloud_usage_reserve')
-    assert ledger.artifacts('cloud_usage_result')
-    assert not ledger.artifacts(state.KIND)
+    # The result of a sent request is unknown: local work takes the unit at once (owner
+    # decision 2026-11-15) and the request is recorded as replaced, never sent again.
+    first = step(runtime, cfg=cfg)
+    assert first['status'] == 'progressed' and len(sent) == 1 and len(local_calls) == 1
+    paid = [tuple(row) for row in ledger.db.execute(
+        "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")]
+    assert len(paid) == 2
+    replaced = [json.loads(row['meta']) for row in ledger.artifacts('cloud_usage_disposition')]
+    assert [(row['reservation_id'], row['disposition']) for row in replaced] == [
+        (json.loads(paid[0][6])['reservation_id'], 'superseded_local')]
+    for _ in range(40):
+        result = step(runtime, cfg=cfg)
+        if result['status'] == 'complete':
+            break
+        assert result['status'] in ('progressed', 'deferred'), result
+    else:
+        pytest.fail(f'local replacement did not publish: {result!r}')
+    assert refresh.context_view_input(ledger.db, 1, cfg=cfg)
+    # Each unit (the source, then its overview) met the failure once; no body was sent twice.
+    bodies = [json.dumps(payload, sort_keys=True) for payload in sent]
+    assert len(bodies) == len(set(bodies)) == 2 and sum('source' in payload for payload in sent) == 1
+    dispositions = [json.loads(row['meta']) for row in ledger.artifacts('cloud_usage_disposition')]
+    assert len(dispositions) == 2 and {row['disposition'] for row in dispositions} == {'superseded_local'}
+    assert [tuple(row) for row in ledger.db.execute(
+        "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")][:2] == paid
 
 
 def test_paid_reservation_arriving_after_local_inference_blocks_adoption(runtime, real_cloud, monkeypatch):
