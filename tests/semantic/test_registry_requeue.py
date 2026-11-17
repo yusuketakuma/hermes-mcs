@@ -122,8 +122,7 @@ def test_a_resting_reprocess_bookmark_wakes_for_a_registry_bump(store, monkeypat
                             lambda *args: {VERSION_KEY: CURRENT_VERSION, "complete": True})
         rollup.rebuild(store, 1, cfg=cfg)
     assert _settle(store, cfg)["phase"] == bookmark
-    before = dict(_job(store))
-    assert dict(_job(store)) == before and before["state"] == "done"
+    assert _job(store)["state"] == "done"
     monkeypatch.setattr(jev, "REGISTRY_VERSION", BUMPED)
     _settle(store, cfg)
     job = _job(store)
