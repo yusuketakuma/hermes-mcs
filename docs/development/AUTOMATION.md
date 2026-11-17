@@ -130,6 +130,10 @@ Dots は15分おきに、次の3つを順に行います。
 2. マージ: `merge-ready` が `success` の PR だけを、`gh pr merge --match-head-commit <head>` でマージします。
 3. 担当付け: 担当ラベルは1件ずつ付けます。付けるのは、クラウドの Claude の実行が動いていないときと、待っていないときだけです。
 
+所有者（admin）のアカウントは main-protect を迂回できるので、`merge-gate` や `merge-ready` が `failure`・`pending` でも `gh pr merge` が通ります（2026-11-17 の PR #163）。
+そのため Dots と席は、マージの前に現在の head の `merge-ready`（まだ無い PR では `merge-gate`）が `success` であることを API で確かめ、head を固定して（`--match-head-commit`）マージします。
+`--admin` などの迂回は使いません。
+
 ## 試行回数
 
 AI ブランチ（`agent/`・`copilot/`・`codex/`）の CI が失敗すると、PR 本文の `Fixes #番号` などで結ばれた Issue の `試行:N` を1つ進めます。
@@ -286,7 +290,7 @@ gh secret set OPENAI_API_KEY --repo $R
 - 自動マージを使うときは、Settings → General の Allow auto-merge をオンにします。
 - Actions event policy（14520）で起動イベントを絞っている場合は、`schedule`（`agent-review-fix.yml` と `agent-control.yml` の `merge-ready`）と
   `issue_comment`（`agent-review.yml` の `/claude-review`）を許可します（`workflow_dispatch` は許可済み）。許可が無いと、これらは起動しません。
-- Dots の専用ログインを作り、このリポジトリへの write 権限を付けます。そのあと判定の変数を設定します。
+- Dots の専用ログインを作り、このリポジトリへの write 権限だけを付けます。admin にはしません（迂回できないようにするため）。そのあと判定の変数を設定します。
   設定するまでは `REVIEW_ACTORS` に `claude[bot]` だけを入れ、Dots はつなぎのマーカーを使います。
 
 ```bash
