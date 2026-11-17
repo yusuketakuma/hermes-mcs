@@ -196,3 +196,39 @@ def test_a_post_without_a_patient_is_counted_as_it_is_selected(tmp_path, value):
         assert counts["rule"] - counts["outside_scope"]["rule"] == len(selectable & {1, 2})
     finally:
         db.close()
+
+
+def _paren_depth(sql):
+    depth = deepest = 0
+    quote = None
+    for char in sql:
+        if quote:
+            quote = None if char == quote else quote
+        elif char in "'\"":
+            quote = char
+        elif char == "(":
+            depth += 1
+            deepest = max(deepest, depth)
+        elif char == ")":
+            depth -= 1
+    return deepest
+
+
+@pytest.mark.parametrize("value", [None, "none", {"project_ids": [1]}], ids=repr)
+def test_remaining_counts_nest_no_deeper_than_the_selection_predicate(tmp_path, value):
+    """The counts read the pending predicate in WHERE, as the selection does, never inside a
+    column: no statement nests deeper than that predicate (fixed parser stacks before SQLite 3.46)."""
+    import extract_llm_qc as qc
+    db = _ledger(tmp_path)
+    statements = []
+    try:
+        _seed_counts(db)
+        cfg = {} if value is None else {"extract": {"upgrade_scope": value}}
+        db.db.set_trace_callback(statements.append)
+        upgrade_scope.prior_generation_remaining(db.db, cfg)
+        db.db.set_trace_callback(None)
+        bound = _paren_depth(qc.pending_pred(db.db, include_thin=False))
+        reads = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]
+        assert reads and max(map(_paren_depth, reads)) <= bound
+    finally:
+        db.close()

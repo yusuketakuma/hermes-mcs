@@ -196,19 +196,25 @@ def _llm_counts(db, scope):
     import extract_llm_qc as qc
     from mcs_queries import ELIGIBLE_MESSAGE, V4_PROJECTION_KIND, current_v4_id
     counts = dict.fromkeys(("runnable", "sealed", "held", "failed", "outside"), 0)
-    rows = db.execute(f"""SELECT
+    earlier = f"FROM messages m WHERE {ELIGIBLE_MESSAGE} AND {prior_generation_sql('llm')}"
+    # The pending predicate is read in WHERE, as the selection reads it, never nested
+    # inside a column of another statement: that keeps each statement's expression
+    # depth to the selection's own (SQLite parsers before 3.46 have a fixed stack).
+    pending = {row[0] for row in db.execute(
+        f"SELECT m.message_id {earlier} AND {qc.pending_pred(db, include_thin=False)}")}
+    rows = db.execute(f"""SELECT m.message_id AS message_id,
         ({qc._has_kind(V4_PROJECTION_KIND, 'v0', project=True)} AND {current_v4_id()} IS NOT NULL) AS sealed,
-        ({qc.pending_pred(db, include_thin=False)}) AS pending,
         EXISTS ({qc._hold_sql()}) AS held,
         ({qc._retry_budget_sql()}) AS budget,
         ({_exempt_sql(scope, 'llm', None)}) AS exempt
-        FROM messages m WHERE {ELIGIBLE_MESSAGE} AND {prior_generation_sql('llm')}""")
+        {earlier}""")
     for row in rows:
+        is_pending = row["message_id"] in pending
         if row["sealed"]:
             counts["sealed"] += 1
-        elif not row["pending"] and row["held"]:
+        elif not is_pending and row["held"]:
             counts["held"] += 1
-        elif row["pending"] and not row["budget"]:
+        elif is_pending and not row["budget"]:
             counts["failed"] += 1
         else:
             # Anything not sealed, held or exhausted is still to be rebuilt.
