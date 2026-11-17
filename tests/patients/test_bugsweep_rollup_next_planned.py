@@ -41,3 +41,15 @@ def test_newer_plan_after_a_cancellation_is_kept(store):
     _post(store, 1, "2099-09-01", "次回訪問は9/15です", "2099-09-15")
     _post(store, 2, "2099-09-14", "9/15の訪問は中止です。次回は9/22です", "2099-09-22")
     assert rollup.build_rollup(store.db, 1)["next_planned"] == "2099-09-22"
+
+
+def test_postponement_cancels_the_old_date_not_the_new_one(store):
+    _post(store, 1, "2099-09-01", "次回訪問は9/15です", "2099-09-15")
+    _post(store, 2, "2099-09-14", "9/15の訪問は9/22に延期します", "2099-09-22")
+    assert rollup.build_rollup(store.db, 1)["next_planned"] == "2099-09-22"
+
+
+def test_postponement_without_an_extracted_new_date_hides_the_old_plan(store):
+    _post(store, 1, "2099-09-01", "次回訪問は9/15です", "2099-09-15")
+    _post(store, 2, "2099-09-14", "2099－09－15の訪問は2099－09－22へ延期")
+    assert "next_planned" not in rollup.build_rollup(store.db, 1)

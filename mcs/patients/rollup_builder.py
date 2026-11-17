@@ -600,14 +600,21 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now, 
 def _cancelled_visit_dates(body):
     """Visit dates this post marks cancelled, postponed or undecided: (month, day) or ISO when a year is written."""
     from extract import _NEXT_CANCELLED  # shortcut: reuses the rule extractor's cancel cue without a RULE_VERSION bump
-    out = set()
-    for match in re.finditer(r"(?<!\d)(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})(?!\d)日?", body):
-        if _NEXT_CANCELLED.match(body[match.end():]):
-            year, month, day = (int(v) if v else None for v in match.groups())
-            try:
-                out.add(date(year, month, day).isoformat() if year else (month, day))
-            except ValueError:
-                continue
+    out, previous = set(), None
+    for match in re.finditer(r"(?<!\d)(?:(\d{4})[-－/／年])?(\d{1,2})[-－/／月](\d{1,2})(?!\d)日?", body):
+        year, month, day = (int(v) if v else None for v in match.groups())
+        try:
+            key = date(year, month, day).isoformat() if year else (month, day)
+        except ValueError:
+            key = None
+        after = body[match.end():]
+        if re.match(r"[ \t　]*[にへ][ \t　]*(?:延期|変更)", after):
+            # 「AはBに延期」: B is the new date; A, earlier in the same sentence, is the cancelled one
+            if previous is not None and not re.search(r"[。！？!?\n]", body[previous[1]:match.start()]):
+                out.add(previous[0])
+        elif key is not None and _NEXT_CANCELLED.match(after):
+            out.add(key)
+        previous = (key, match.end()) if key is not None else None
     return out
 
 
