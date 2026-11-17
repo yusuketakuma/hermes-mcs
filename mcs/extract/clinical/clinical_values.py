@@ -345,16 +345,58 @@ _LAB_ITEM_UNITS = {
 }
 # Capture explicit dose/count symbols too; an omitted output unit cannot hide them.
 _LAB_QUOTED_UNIT = r"(?:[a-zμ%/0-9.^²‰‱°×万秒錠包袋滴枚本個回単位]|カプセル)*"
-# A katakana item preceded by 酸/化/素 is a salt (酸化マグネシウム, 塩化カリウム,
-# 炭酸水素ナトリウム), i.e. a drug name, not the analyte.
-_SALT_PREFIX = r"(?<![酸化素])"
+# A katakana item glued to a salt stem (塩化カリウム, 酸化マグネシウム, 炭酸水素ナトリウム)
+# or to another katakana word (ワルファリンカリウム, アトルバスタチンカルシウム) is part
+# of a drug name. Words that merely end in 化/酸/素 (悪化, 尿酸, 尿素窒素) are no stems.
+_SALT_STEM = re.compile(r"(?:塩化|酸化|ヨウ化|臭化|炭酸|硫酸|乳酸|酢酸|硝酸|リン酸|クエン酸"
+                        r"|グルコン酸|アスパラギン酸|酸水素)$")
+# Items also reported for urine, CSF or effusions (尿中Ca, 尿TP, 尿沈渣WBC 10-19/HPF):
+# those specimens and qualitative or ranged results (1+, 10-19) are not the blood item.
+# The previous items (尿Cr) keep their earlier reading.
+_SPECIMEN_SHARED_ITEMS = frozenset({"wbc", "total_protein", "total_bilirubin", "calcium", "magnesium"})
+_OTHER_SPECIMEN = re.compile(r"(?:尿|尿中|沈渣|髄液|胸水|腹水)(?:検査)?(?:デ|ノ|ハ)?$")
+_NOT_A_SINGLE_RESULT = re.compile(r"\+|-[0-9]")
+# A clause naming another reading of the same spelling (PT the physical therapist).
+_OTHER_SENSE_CLAUSE = {
+    "prothrombin_time": re.compile(r"リハ|理学療法|訓練|歩行|立位|座位|起立|移乗|筋力|tug"),
+}
+_CLAUSE_END = re.compile(r"[。、;；\n]")
 _DATE = re.compile(r"(?<!\d)(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?(?!\d)")
 
 
 def _lab_name_pattern(names) -> str:
     # Longest first, so 血小板数 is not read as 血小板 followed by 数.
-    return "|".join((_SALT_PREFIX if "ァ" <= n[0] <= "ヺ" else "") + re.escape(n)
-                    for n in sorted(names, key=len, reverse=True))
+    return "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True))
+
+
+def _clause_at(quote: str, at: int) -> str:
+    """The folded clause of ``quote`` that contains position ``at``."""
+    start = max((m.end() for m in _CLAUSE_END.finditer(quote[:at])), default=0)
+    stop = _CLAUSE_END.search(quote[at:])
+    return quote[start:at + stop.start() if stop else len(quote)]
+
+
+def _part_of_drug_name(name: str, before: str) -> bool:
+    """Whether a katakana item right after the original text ``before`` ends a drug name."""
+    # Adjacency is read in the original text: a space or line break separates words.
+    if not ("ァ" <= name[0] <= "ヺ") or name.endswith("濃度") or not before or before[-1].isspace():
+        return False
+    previous = unicodedata.normalize("NFKC", before[-2:])[-1:]   # ﾌﾟ folds to one character
+    return ("ァ" <= previous <= "ヺ" or previous == "ー"
+            or bool(_SALT_STEM.search(fold_surface(re.split(r"\s", before)[-1]))))
+
+
+def _other_reading(analyte: str | None, quote: str, match: re.Match,
+                   evidence: str, starts: list) -> bool:
+    """A name match that belongs to a drug, another specimen or another sense of the spelling."""
+    name = match.group("name")
+    at = match.start("name")
+    if at < len(starts) and _part_of_drug_name(name, evidence[:starts[at]]):
+        return True
+    if analyte in _SPECIMEN_SHARED_ITEMS and _OTHER_SPECIMEN.search(quote[:at]):
+        return True
+    other_sense = _OTHER_SENSE_CLAUSE.get(analyte)
+    return bool(other_sense and other_sense.search(_clause_at(quote, at)))
 
 
 _MONTH_DAY = re.compile(r"(?<![\d/年-])(\d{1,2})[/月](\d{1,2})日?(?![\d/])")
@@ -480,27 +522,35 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
     normalized_unit = _LAB_UNITS.get(unit_key, unit_key) if unit_key else None
     quote = fold_surface(evidence or "").replace("µ", "μ")
     names = _LAB_NAMES[analyte] if analyte else (label,)
-    pattern = (r"(?<![a-z0-9])(?:" + _lab_name_pattern(names)
+    pattern = (r"(?<![a-z0-9])(?P<name>" + _lab_name_pattern(names)
                + r")(?![a-z])(?:値|ハ|:|=)*")
     allowed_units = _LAB_ITEM_UNITS[analyte] if analyte else _GENERIC_LAB_UNITS
+    starts, ends = fold_map(evidence, casefold=True)[1:] if isinstance(evidence, str) else ([], [])
     readings = []
     for match in re.finditer(pattern, quote):
+        if _other_reading(analyte, quote, match, evidence, starts):
+            continue
         tail = quote[match.end():]
         if number is not None:
             result = re.match(r"([+-]?[0-9]+(?:\.[0-9]+)?)(?![0-9.])"
                               f"({_LAB_QUOTED_UNIT})", tail)
             if result and normalized_quantity_number(result[1]) == number:
-                # an omitted unit must not bypass the item's units: the quoted one is checked too
-                if (result[2] == unit_key) if unit_key else (not result[2] or result[2] in allowed_units):
+                if analyte in _SPECIMEN_SHARED_ITEMS and _NOT_A_SINGLE_RESULT.match(tail, result.end()):
+                    continue
+                # an omitted unit must not bypass the item's units: the quoted one is checked too;
+                # spellings of one unit (×10^3, ×10³, x10^3) compare by their display form
+                if ((_LAB_UNITS.get(result[2], result[2]) == normalized_unit) if unit_key
+                        else (not result[2] or result[2] in allowed_units)):
                     readings.append(match)
         elif tail.startswith(fold_surface(raw_value)) and raw_value:
             remainder = tail[len(fold_surface(raw_value)):]
             result_unit = re.match(_LAB_QUOTED_UNIT, remainder)
-            suffix = remainder[len(unit_key):] if unit_key else remainder
+            suffix = remainder[result_unit.end():] if unit_key else remainder
             # A prefix is not the complete result: 陰性ではありません,
             # 陰性疑い etc. must stay candidates, without guessing their value.
             complete = re.match(r"(?:デス|デシタ)?(?:[。、,;；]|$)", suffix)
-            if complete and (unit_key is None or (result_unit and result_unit[0] == unit_key)):
+            if complete and (unit_key is None
+                             or _LAB_UNITS.get(result_unit[0], result_unit[0]) == normalized_unit):
                 readings.append(match)
     supported = (len(readings) == 1 and not unverified
                  and (unit_key is None or unit_key in allowed_units)
@@ -514,7 +564,6 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
     if re.search(r"予定|検査依頼|目標|基準|参考", quote):
         supported = False
     if readings and isinstance(evidence, str):
-        _, starts, ends = fold_map(evidence, casefold=True)
         reading = readings[0]
         if clinical_scope.patient_source_scope(evidence, starts[reading.start()], ends[reading.end() - 1],
                                         patient_name=patient_name) \
@@ -532,10 +581,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
     # Do not mistake another sentence's date or a posting date for sampling.
     clause = ""
     if readings:   # the clause that contains the matched reading itself
-        at = readings[0].start()
-        start = max((m.end() for m in re.finditer(r"[。、;；\n]", quote[:at])), default=0)
-        stop = re.search(r"[。、;；\n]", quote[at:])
-        clause = quote[start:at + stop.start() if stop else len(quote)]
+        clause = _clause_at(quote, readings[0].start())
     sampling_day = measurement_day(clause)
     if (supported and sampling_day is not None and sampling_day[0] == "ymd"
             and measurement_day(quote) == sampling_day and re.search(r"採血|検査|測定", clause)):

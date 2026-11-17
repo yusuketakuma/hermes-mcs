@@ -165,3 +165,111 @@ def test_an_unnamed_item_keeps_the_previous_generic_units():
 ])
 def test_absolute_date_is_unchanged(text, expected):
     assert clinical_values.absolute_date(text) == expected
+
+
+# A salt is a stem written right before the item (塩化カリウム). A word that merely
+# ends in 化/酸/素 (悪化, 尿酸, 尿素窒素), or one set apart by a space or a line
+# break, does not make the next item a drug name.
+@pytest.mark.parametrize("name,value,unit,body", [
+    ("クレアチニン", "2.1", "mg/dL", "腎機能悪化 クレアチニン 2.1mg/dL"),
+    ("クレアチニン", "2.1", "mg/dL", "腎機能悪化\nクレアチニン 2.1mg/dL"),
+    ("カリウム", "5.8", "mEq/L", "腎機能悪化 カリウム 5.8mEq/L"),
+    ("ヘモグロビン", "7.2", "g/dL", "貧血悪化 ヘモグロビン 7.2g/dL"),
+    ("アルブミン", "2.8", "g/dL", "低栄養が悪化 アルブミン 2.8g/dL"),
+    ("カリウム", "4.1", "mEq/L", "尿酸 カリウム 4.1mEq/L"),
+    ("マグネシウム", "2.0", "mg/dL", "腎機能悪化 マグネシウム 2.0mg/dL"),
+    ("カルシウム", "9.0", "mg/dL", "尿素窒素 カルシウム 9.0mg/dL"),
+    ("リチウム濃度", "0.6", "mEq/L", "炭酸リチウム濃度 0.6mEq/L"),
+    ("リチウム濃度", "0.6", "mEq/L", "炭酸リチウム血中濃度 0.6mEq/L"),
+])
+def test_a_word_ending_in_a_salt_character_does_not_hide_the_lab(name, value, unit, body):
+    lab = _validated(name, value, unit, body)
+    assert lab["normalized"]["confirmation"] == "quote_supported"
+    assert not lab.get("unverified", False)
+
+
+# Salts and katakana drug names that end in an item spelling stay candidates.
+@pytest.mark.parametrize("name,value,unit,body", [
+    ("カリウム", "4.1", None, "塩化カリウム4.1"),
+    ("カリウム", "4.1", None, "塩化カリウム 4.1 分2"),
+    ("マグネシウム", "1.0", None, "水酸化マグネシウム 1.0 分2"),
+    ("カルシウム", "1.0", None, "乳酸カルシウム 1.0 分3"),
+    ("カルシウム", "1.0", None, "グルコン酸カルシウム 1.0 分3"),
+    ("カリウム", "1.8", None, "L-アスパラギン酸カリウム 1.8 分3"),
+    ("ナトリウム", "1.0", None, "炭酸水素ナトリウム1.0 分3"),
+    ("カルシウム", "10", None, "アトルバスタチンカルシウム 10 夕食後に継続"),
+    ("カルシウム", "2.5", None, "ロスバスタチンカルシウム 2.5 を継続"),
+    ("カルシウム", "1.5", None, "ポリカルボフィルカルシウム 1.5 分3"),
+    ("カリウム", "1.5", None, "ワルファリンカリウム 1.5 継続"),
+    ("ナトリウム", "60", None, "ロキソプロフェンナトリウム 60 頓用"),
+    ("ナトリウム", "60", None, "ﾛｷｿﾌﾟﾛﾌｪﾝﾅﾄﾘｳﾑ 60 頓用"),
+])
+def test_salts_and_katakana_drug_names_stay_candidates(name, value, unit, body):
+    lab = _validated(name, value, unit, body)
+    assert lab["unverified"] is True
+    assert lab["normalized"]["confirmation"] == "unverified"
+
+
+def test_a_hiragana_word_before_the_item_is_not_a_drug_name():
+    lab = _validated("カリウム", "4.1", "mEq/L", "今日はカリウム4.1mEq/L")
+    assert lab["normalized"]["confirmation"] == "quote_supported"
+
+
+# PT read in a rehabilitation clause is the physical therapist, even with 秒.
+@pytest.mark.parametrize("value,body", [
+    ("10", "訪問リハPT 10秒 立位保持できました。"),
+    ("30", "PT 30秒 片脚立位可能でした。"),
+    ("12", "リハビリ時、PT 12秒で10m歩行。"),
+])
+def test_pt_in_a_rehabilitation_clause_stays_a_candidate(value, body):
+    lab = _validated("PT", value, "秒", body)
+    assert lab["unverified"] is True
+    assert lab["normalized"]["confirmation"] == "unverified"
+
+
+def test_pt_in_another_clause_than_the_rehabilitation_words_is_the_coagulation_time():
+    lab = _validated("PT", "12.0", "秒", "訪問リハは週2回。採血 PT 12.0秒、PT-INR 1.1")
+    assert lab["normalized"]["analyte"] == "prothrombin_time"
+    assert lab["normalized"]["confirmation"] == "quote_supported"
+
+
+# Another specimen (urine, CSF, effusions) or a qualitative/ranged result is not
+# the blood item of the same name.
+@pytest.mark.parametrize("name,value,unit,body", [
+    ("白血球", "1", None, "尿白血球 1+"),
+    ("白血球", "3", None, "尿検査で白血球 3+ でした。"),
+    ("WBC", "10", None, "尿沈渣 WBC 10-19/HPF でした。"),
+    ("WBC", "10", None, "WBC 10-19 でした。"),
+    ("Ca", "30", "mg/dL", "尿中Ca 30mg/dL"),
+    ("TP", "6.5", "g/dL", "尿TP 6.5g/dL"),
+    ("TP", "120", "mg/dL", "髄液TP 120mg/dL"),
+    ("TP", "4.5", "g/dL", "胸水 TP 4.5g/dL"),
+    ("WBC", "300", "/μL", "腹水WBC 300/μL"),
+])
+def test_another_specimen_or_a_qualitative_result_stays_a_candidate(name, value, unit, body):
+    lab = _validated(name, value, unit, body)
+    assert lab["unverified"] is True
+    assert lab["normalized"]["confirmation"] == "unverified"
+
+
+def test_a_specimen_word_in_an_earlier_clause_does_not_hide_the_blood_item():
+    lab = _validated("WBC", "5600", "/μL", "尿検査は異常なし。採血 WBC 5600/μL")
+    assert lab["normalized"]["confirmation"] == "quote_supported"
+
+
+# The same unit spelled with ^, a superscript or x/× confirms the same reading.
+@pytest.mark.parametrize("name,value,unit,body,shown_unit", [
+    ("血小板", "15.2", "×10^4/μL", "血小板 15.2×10⁴/μL", "×10^4/μL"),
+    ("WBC", "5.6", "×10^3/μL", "WBC 5.6×10³/μL", "×10^3/μL"),
+    ("WBC", "5.6", "x10^3/μL", "WBC 5.6×10^3/μL", "×10^3/μL"),
+    ("WBC", "5.6", "×10³/μL", "WBC 5.6x10^3/μL", "×10^3/μL"),
+])
+def test_unit_spellings_of_the_same_unit_confirm_each_other(name, value, unit, body, shown_unit):
+    lab = _validated(name, value, unit, body)
+    assert lab["normalized"]["unit"] == shown_unit
+    assert lab["normalized"]["confirmation"] == "quote_supported"
+
+
+def test_a_different_power_of_ten_still_does_not_confirm():
+    lab = _validated("WBC", "5.6", "×10^3/μL", "WBC 5.6×10^2/μL")
+    assert lab["normalized"]["confirmation"] == "unverified"
