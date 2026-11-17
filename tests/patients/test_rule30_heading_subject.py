@@ -4,8 +4,11 @@ The heading rules emit ``unspecified``, which downstream reads as the patient's
 own item. Rule 30 names the subject only where the heading or the head of its
 value names the person: 家族の意向／家族の希望 is the family's, 本人の意向／本人の希望
 is the patient's, and a value of an allergy, adverse-event or preference heading
-that opens with a family or other person word and は／が／の／も is theirs.
-Everything else stays ``unspecified``. Fully synthetic text only.
+that opens with a family or other person word and は／が／も (の only before a
+clinical noun) is theirs, but only where the value is about that person alone:
+one line, one sentence, no comma-joined clause, no self word, and not a report
+or judgement by that person. Everything else stays ``unspecified``, which is the
+former behaviour. Fully synthetic text only.
 """
 import copy
 import json
@@ -30,17 +33,45 @@ CASES = json.loads((ROOT / "evaluation" / "extract_cases_safety_history.json").r
     ("アレルギー", "長女は架空果実Mで口がかゆくなる", "family"),
     ("アレルギー歴", "同居者も卵アレルギーがある", "family"),
     ("薬剤アレルギー", "娘さんが合成薬Aで発疹", "family"),
-    ("副作用歴", "奥様の合成薬Bでめまい", "family"),
-    ("副作用", "ご家族は合成薬Cで眠気が出たとのこと", "family"),
+    ("副作用歴", "奥様の薬でめまい", "family"),
+    ("副作用", "ご家族は合成薬Cで眠気が出た", "family"),
     ("被疑薬", "息子さん本人が飲んでいた合成薬D", "family"),
     ("意向", "長男さんは胃ろうを望んでいる", "family"),
     ("希望", "他の利用者が同じ部屋を希望", "other"),
-    ("副作用歴", "別の利用者の記録で合成薬E", "other"),
+    ("副作用歴", "別の利用者の発疹は合成薬Eによる", "other"),
     ("アレルギー", "ヘルパーさんは卵アレルギー", "other"),
     ("アレルギー", "・長女は架空果実N", "family"),
+    ("アレルギー", "長女自身は卵アレルギー", "family"),
+    ("アレルギー", "長女は、卵アレルギー", "family"),
+    ("アレルギー", "長女のアレルギーは卵", "family"),
     # A person in the value weakens even a patient heading, never the reverse.
     ("本人の意向", "長女は胃ろうを希望", "family"),
-    ("本人の希望", "他者の意見で施設入所を希望", "other"),
+    # The value is not about that person alone: unchanged, and the heading decides.
+    # A second-hand report or a clinician's judgement or action.
+    ("アレルギー", "家族の話では卵アレルギーあり", "unspecified"),
+    ("副作用歴", "医師は合成薬Aによる薬疹と判断", "unspecified"),
+    ("アレルギー", "薬剤師が確認、合成薬Aで発疹歴あり", "unspecified"),
+    ("副作用", "ご家族は合成薬Cで眠気が出たとのこと", "unspecified"),
+    ("副作用", "長女が報告、合成薬Hで発疹", "unspecified"),
+    ("副作用", "長女が報告した合成薬Hでの発疹", "unspecified"),
+    ("アレルギー", "看護師が確認した卵アレルギー", "unspecified"),
+    ("DNAR", "医師が説明し本人が同意", "unspecified"),
+    # The patient is named later in the same value.
+    ("アレルギー", "家族は特になし、本人は卵", "unspecified"),
+    ("アレルギー", "妻も本人も卵アレルギー", "unspecified"),
+    ("延命", "家族は希望するが本人は望まない", "unspecified"),
+    ("アレルギー", "長女は利用者と同じく卵", "unspecified"),
+    # More than one line, sentence or clause.
+    ("アレルギー", "・長女は花粉症\n・合成薬Aで発疹", "unspecified"),
+    ("アレルギー", "長女は花粉症。合成薬Aで発疹", "unspecified"),
+    ("アレルギー", "長女は花粉症、合成薬Aで発疹", "unspecified"),
+    # の that is not the person's clinical fact.
+    ("本人の意向", "家族の負担になりたくない", "patient"),
+    ("本人の希望", "医師の往診を続けてほしい", "patient"),
+    ("本人の希望", "他者の意見で施設入所を希望", "patient"),
+    ("アレルギー", "父の日に食べたエビで蕁麻疹", "unspecified"),
+    ("副作用歴", "奥様の合成薬Bでめまい", "unspecified"),
+    ("副作用歴", "別の利用者の記録で合成薬E", "unspecified"),
     ("家族の意向", "本人は自宅を望んでいると話す", "family"),
     # No person is named: unchanged.
     ("アレルギー", "合成薬Aで発疹", "unspecified"),
@@ -87,6 +118,23 @@ def test_annotate_changes_only_the_subject_of_heading_items_and_does_not_mutate(
     assert [{key: value for key, value in item.items() if key != "subject"} for item in out[:-2]] == [
         {key: value for key, value in item.items() if key != "subject"} for item in before]
     assert out[0] is not items[0]
+
+
+@pytest.mark.parametrize("item", [
+    # Not from the heading rules: an evidence that opens with a heading line is not enough.
+    {"category": "allergies", "text": "長女は架空果実M", "evidence": "アレルギー：長女は架空果実M",
+     "subject": "unspecified"},
+    # A malformed heading item.
+    {"category": "allergies", "text": "長女は架空果実M", "evidence": None, "subject": "unspecified",
+     "origin": "explicit_heading"},
+    {"category": "allergies", "text": None, "evidence": "アレルギー：長女は架空果実M", "subject": "unspecified",
+     "origin": "explicit_heading"},
+    # Only the first evidence line is the heading; a heading on a later line is not read.
+    {"category": "allergies", "text": "長女は架空果実M", "evidence": "申し送り\nアレルギー：長女は架空果実M",
+     "subject": "unspecified", "origin": "explicit_heading"},
+])
+def test_annotate_passes_other_items_through_unchanged(item):
+    assert annotate_heading_subjects([item]) == [item]
 
 
 def test_annotate_leaves_a_subject_already_named_and_is_idempotent():

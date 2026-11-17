@@ -348,14 +348,23 @@ def extract_context(body: str) -> list[dict]:
 
 
 # Rule 30: a heading names its subject only where the heading or the head of its value
-# names the person; a person heading the value can only weaken a patient heading.
+# names the person; a person heading the value can only weaken a patient heading, and
+# only where the value is about that person alone (else unspecified, as before).
 _SUBJECT_HEADINGS = {"家族の意向": "family", "家族の希望": "family",
                      "本人の意向": "patient", "本人の希望": "patient"}
 _SUBJECT_CATEGORIES = frozenset({"preferences", "allergies", "adverse_events"})
+_POSSESSED = "|".join(("アレルギー", "副作用", "薬疹", "既往", "病歴", "服薬", "薬", *map(re.escape, clinical_scope.SYMPTOMS)))
 _VALUE_PERSON = re.compile(
     r"[ \t　]*(?:[■●◆#・＊*]+[ \t　]*)?"
     rf"(?:(?P<family>{clinical_scope.FAMILY_PERSON})|(?P<other>{clinical_scope.OTHER_PERSON}))"
-    r"(?:ご本人|本人)?(?:自身)?(?:は|が|の|も)")
+    rf"(?:ご本人|本人)?(?:自身)?(?:は|が|も|の(?={_POSSESSED}))[ \t　、,，]*")
+# What leaves the value about more than that person: a self word, a reporter or judge
+# (「長女が報告」「医師は…と判断」「…とのこと」), or a second line, sentence or clause.
+_VALUE_NOT_ALONE = re.compile(
+    r"ご本人|本人|患者|利用者"
+    r"|^(?:確認|聴取|説明|報告|連絡|相談|話|判断|診断|評価|指摘)"
+    r"|と(?:のこと|の事|判断|診断|評価|説明|報告|連絡|話|言|聞|思)"
+    r"|[\n、,，;；]|[。．！？!?](?=.*\S)", re.S)
 
 
 def heading_subject(label, value) -> str:
@@ -365,7 +374,7 @@ def heading_subject(label, value) -> str:
     if _CATEGORY_FOLD.get(label.casefold()) not in _SUBJECT_CATEGORIES:
         return "unspecified"
     person = _VALUE_PERSON.match(value)
-    if person:
+    if person and not _VALUE_NOT_ALONE.search(value[person.end():].rstrip()):
         return "family" if person["family"] else "other"
     return _SUBJECT_HEADINGS.get(label, "unspecified")
 
