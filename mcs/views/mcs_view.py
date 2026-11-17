@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 import semantic_store
+import semantic_transport
 
 from ledger import LedgerReader
 from stamp_read import reaction_actor_summary
@@ -544,6 +545,7 @@ class View:
                                    include_text=True)
         return result
 
+    @semantic_transport.with_local_model_scope
     def _semantic(self, pid, mid):
         """Phase-J artifacts for one message: bundle, proposition
         verdicts, verified fact candidates, audited summary, notify
