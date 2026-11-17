@@ -347,6 +347,149 @@ def extract_context(body: str) -> list[dict]:
     return result
 
 
+# Rule 30: a heading names another subject only on an allow-list, because a wrong
+# family or other label hides the patient's own allergy or wish (unspecified, the
+# former behaviour, is the safe default). 本人の意向／本人の希望 is never relabelled, and
+# 家族の意向／家族の希望 is the family's only when a family-side kin word holds the value.
+_SUBJECT_HEADINGS = {"家族の意向": "family", "家族の希望": "family",
+                     "本人の意向": "patient", "本人の希望": "patient"}
+_SUBJECT_CATEGORIES = frozenset({"preferences", "allergies", "adverse_events"})
+# A staff member holds only a policy; for a clinical fact or a wish they are a reporter.
+_STAFF_HELD_HEADINGS = frozenset({"方針", "療養方針", "治療方針"})
+# Words that can name the patient (本人・対象者・Pt・自身・私・彼・あの方), which a fact
+# never names.
+_PATIENT_REF = (r"本人|ほんにん|当人|当事者|患者|利用者|入居者|対象|被保険者|要介護者|被介護者"
+                r"|クライアント|お客様|自身|自分|じぶん|私|わたし|わたくし|当方|僕|俺|彼"
+                r"|(?:あの|この|その)方|(?<![A-Za-z])(?:pt|Pt|PT)(?![A-Za-z])")
+# Everyone but the patient (本人以外・他者・他人・第三者) contrasts with the patient, so a
+# fact of theirs implies one of the patient's: it holds nothing.
+_ALL_BUT_PATIENT = r"本人以外|他者|他人|第三者"
+# The head: a person word, then は. も says the patient shares the fact (妻も卵アレルギー),
+# が marks an actor or a reporter and の may be a drug the patient took (奥様の薬), so
+# none names a holder. Spacing and a bullet may come first.
+_LEAD = r"[ \t　]*(?:[■●◆#・＊*]+[ \t　]*)?"
+_VALUE_HOLDER = re.compile(
+    rf"{_LEAD}(?:(?P<family>{clinical_scope.FAMILY_PERSON})|(?!{_ALL_BUT_PATIENT})(?P<other>{clinical_scope.OTHER_PERSON}))"
+    r"(?:ご本人|本人)?(?:自身)?は")
+# In a note to the family these kin words can be the patient (ご主人・お母様), so they hold nothing.
+_PATIENT_ALIAS_KIN = re.compile(r"ご?主人|旦那(?:さん|様)?|奥(?:さん|様)|お(?:母|父|兄|姉)(?:さん|様)?")
+# Under 家族の意向／家族の希望 nobody being named cannot be read from the text (家に帰りたいと
+# 話している is the patient's own voice), so only an explicit holder decides, and only a kin
+# word that cannot be the patient: not an alias (ご主人・お母様) and not an ascending kin or a
+# housemate relative to the writer, who may be the patient (母・祖父・義母・同居者; every
+# ascending kin word of the list holds 母 or 父).
+_WRITER_RELATIVE_KIN = re.compile(r"母|父|同居")
+# A fact names one thing, never a person, a group that may include the patient or a
+# pointer back to the patient's record (皆・全員・入居者・本人同様・同じ・それ); the
+# closed shapes below guarantee everything else. A family or other word already covers
+# 他人・主人・夫婦. 同 before a noun is "the same as the patient's" (同薬・同施設・同内容)
+# except where it means "together" (同居・同席・同行・同伴・同室・同時・同日), which
+# points at nothing; 同意 is a stance, not a thing.
+_NOT_A_THING = (rf"{clinical_scope.FAMILY_PERSON}|{clinical_scope.OTHER_PERSON}|{_PATIENT_REF}"
+                r"|者|さん|様|ちゃん|君|氏"
+                r"|皆|みな|みんな|全|両|双方|共|一緒|揃|そろ|二人|ふたり|親子"
+                r"|同(?![居席行伴室時日])|おなじ|それ|これ|あれ")
+# A thing is self-contained unless it opens with a determiner kanji (当・本・該・前・上・
+# 下・左・右・既・先・件・例・以) that refers back: one standing alone (当アレルギー・同じ)
+# or one before a head that completes a reference — a place in the record (左記・前述・
+# 前項・前出・前掲), an occurrence or case (前回・本件・前例), a position (以上・以下) or a
+# known history (既知・既往), or another determiner (当該・該当). 当院・本日・前日・上肢
+# name a thing and stay.
+_POINTER = r"[当本該前上下左右既先件例以](?:[記述項出掲欄回件例上下知往該当]|(?![一-鿿]))"
+# A stance word, or a proxy marker that makes the stance someone else's (代理・代弁・代り・
+# 代筆・代行: the son voices the patient's wish); the object of a stance holds neither.
+# 代わり never fits the object (わ ends it).
+_STANCE = r"希望|望|意向|拒否|反対|賛成|了承|同意|提案|推奨|指示|予定|代理|代弁|代り|代筆|代行"
+
+
+def _thing(excluded):
+    """Return the pattern of one short noun that contains none of the excluded words."""
+    # At most 20 characters: kanji with at most two noun-forming kana each (看取り・
+    # 話し合い・胃ろう), katakana, alphanumerics, or hiragana alone without は・が・も・と・
+    # を・の. No space or symbol fits, so neither a verb, a clause nor a second item
+    # does (知らなかった・元気なら・卵 蕎麦).
+    kana = "[々りいしみきけえちびれじろう]"
+    word = rf"[一-鿿]|(?<=[一-鿿]){kana}|(?<=[一-鿿]{kana}){kana}"
+    name = r"[ァ-ヴ]|(?<=[ァ-ヴー])ー|[A-Za-z0-9Ａ-Ｚａ-ｚ０-９]"
+    char = f"{word}|{name}"
+    # A drug, prescription or product names one only with a name part (合成薬A・ペニシリン系
+    # 薬); written in kanji alone it is a regimen or a class that may be the patient's
+    # (処方薬・持参薬・本処方・当内服薬・同時薬・睡眠薬・下剤), never a thing.
+    # Possessive runs keep the check linear in the length of the value.
+    whole = rf"(?!(?!アレルギー)(?:{char}))"
+    nameless_drug = (rf"(?:{word})++(?<=[薬剤品]){whole}"
+                     rf"|(?=(?:(?!処方|内服|服用)(?:{word}))*+(?:処方|内服|服用))(?:{word})++{whole}")
+    return rf"(?:(?!{_POINTER}|{nameless_drug})(?:(?!{excluded})(?:{char})){{1,20}}|(?:(?!{excluded})[ぁ-ゖ](?<![はがもとをの])){{1,20}})"
+
+
+_THING = _thing(_NOT_A_THING)
+# What a stance or a proposal is about may join nouns with の・で・に・へ (自宅での看取り),
+# but holds no second stance (了承在宅を希望) and no proxy (代理で在宅を希望).
+_OBJECT = _thing(f"{_NOT_A_THING}|{_STANCE}")
+_OBJECT = rf"{_OBJECT}(?:(?:での|への|の|で|に|へ){_OBJECT}){{0,2}}"
+_ALLERGY_SYMPTOM = (r"発疹|皮疹|薬疹|蕁麻疹|じんましん|湿疹|かぶれ|発赤|かゆみ|痒み|口がかゆくなる|かゆくなる"
+                    r"|腫れ|むくみ|喘息|呼吸困難|アナフィラキシー|嘔吐|下痢")
+_ADVERSE_SYMPTOM = (r"眠気|ふらつき|めまい|発疹|薬疹|蕁麻疹|湿疹|かゆみ|嘔気|吐き気|嘔吐|下痢|便秘|頭痛|胃痛"
+                    r"|腹痛|口渇|倦怠感|だるさ|むくみ|浮腫|動悸|低血圧|低血糖|食欲低下|食欲不振|肝障害|腎障害"
+                    r"|せん妄|不眠|振戦|発熱")
+_DOING = r"(?:する|しない|している|していない|しています|されている|されています|です)?"
+# The whole value after the holder, per heading category; anything else is unspecified.
+_FACT = {
+    "allergies": re.compile(
+        rf"{_THING}アレルギー(?:あり|有り|がある|です)?|{_THING}で(?:{_ALLERGY_SYMPTOM})(?:あり|有り|が出た)?"
+        r"|花粉症|(?:アレルギー)?(?:なし|無し|特になし)"),
+    "adverse_events": re.compile(
+        rf"{_THING}で(?:{_ADVERSE_SYMPTOM})(?:あり|有り|が出た)?|(?:副作用)?(?:なし|無し|特になし)"),
+    "preferences": re.compile(
+        rf"(?:{_OBJECT}を?)?(?:(?:希望|拒否|反対|賛成|了承|同意){_DOING}"
+        r"|望む|望まない|望んでいる|望んでいない|望んでいます|望みます)|(?:希望|特に)?なし"),
+}
+_PROPOSAL = re.compile(rf"{_OBJECT}を?(?:提案|推奨|指示|予定){_DOING}")
+
+
+def heading_subject(label, value) -> str:
+    """Name the subject a preference, allergy or adverse-event heading states, else leave it unspecified."""
+    if not isinstance(label, str) or not isinstance(value, str):
+        return "unspecified"
+    category = _CATEGORY_FOLD.get(label.casefold())
+    if category not in _SUBJECT_CATEGORIES:
+        return "unspecified"
+    holder = None
+    person = _VALUE_HOLDER.match(value)
+    if person and not _PATIENT_ALIAS_KIN.fullmatch(person["family"] or ""):
+        shape = _FACT[category]
+        if person["other"] and re.fullmatch(clinical_scope.STAFF_PERSON, person["other"]):
+            shape = _PROPOSAL if label in _STAFF_HELD_HEADINGS else None
+        if shape and shape.fullmatch(value[person.end():].rstrip()):
+            holder = "family" if person["family"] else "other"
+    heading = _SUBJECT_HEADINGS.get(label, "unspecified")
+    if heading == "family":
+        # Only a family-side kin word alone at the head, holding a wish of the closed shape.
+        kin = person["family"] if holder == "family" else None
+        alone = kin is not None and value[person.end("family"):person.end()] == "は"
+        return "family" if alone and not _WRITER_RELATIVE_KIN.search(kin) else "unspecified"
+    if heading == "patient":
+        # A person heading the patient's own heading withdraws the assertion, never relabels it.
+        return "unspecified" if person else heading
+    return holder or heading
+
+
+def annotate_heading_subjects(items) -> list:
+    """Return the items with each unspecified heading item's subject named by rule 30, inputs untouched."""
+    if not isinstance(items, list):
+        return []
+    result = []
+    for item in items:
+        if (isinstance(item, dict) and item.get("origin") == "explicit_heading"
+                and item.get("subject") == "unspecified"
+                and isinstance(item.get("evidence"), str) and isinstance(item.get("text"), str)):
+            lines = item["evidence"].splitlines()
+            header = _HEADING.match(lines[0]) if lines else None
+            item = {**item, "subject": heading_subject(header["label"], item["text"]) if header else "unspecified"}
+        result.append(item)
+    return result
+
+
 def context_items(doc, body: str) -> list[dict]:
     """Read only well-shaped context with a unique verbatim source and contained value."""
     if not isinstance(body, str):
