@@ -153,6 +153,28 @@ def inference_receipt():
     return dict(provider.completed_reservations[-1])
 
 
+def repair_answer_record(prompt, value, previous_requests):
+    """Return the replay record of one new cloud answer, or None.
+
+    The answer is kept up to the read bound of its own reservation, the bound
+    the transport read it with and ``verify_cloud_repair_evidence`` checks,
+    so a long answer the transport accepted stays provable."""
+    receipt, contract = inference_receipt(), inference_contract()
+    if (not isinstance(value, str) or receipt is None or contract is None
+            or receipt.get('reservation_id') in previous_requests):
+        return None
+    import cloud_client
+    import hashlib
+    try:
+        if len(value.encode('utf-8')) > cloud_client.response_limit(receipt.get('max_tokens')):
+            return None
+        prompt_sha256 = hashlib.sha256(prompt.encode('utf-8')).hexdigest()
+    except (UnicodeError, ValueError):
+        return None
+    return {'text': value, 'prompt_sha256': prompt_sha256, 'reservation_id': receipt.get('reservation_id'),
+            'contract': contract, 'unit_key': receipt.get('unit_key'), 'owner': receipt.get('owner')}
+
+
 def inference_provider() -> str:
     """Identify the current inference backend without inferring old provenance."""
     provider = _job_model.get()

@@ -225,8 +225,19 @@ def test_labels_and_workflows_agree_with_the_module():
     assert {"担当:claude", "担当:copilot", "担当:dots", ac.OWNER_LABEL} <= names
     assert {f"{ac.ATTEMPT_PREFIX}{n}" for n in range(1, ac.ATTEMPT_LIMIT + 1)} <= names
     control = (ROOT / ".github/workflows/agent-control.yml").read_text()
-    assert "ref:" not in control, "never check out PR code in a privileged workflow"
+    # never check out PR code in a privileged workflow: the one checkout ref is the default branch's full ref
+    assert control.count("ref:") == 1 and "ref: refs/heads/${{ github.event.repository.default_branch }}" in control
     assert "workflow_run" in control and "pull_request_target" in control
+    # main-sync's ci run raises no workflow_run: ci.yml asks for the verdict, only for a run the bot started,
+    # and the gate runs such a request only from the default branch (full ref: a tag named like it fails)
+    request = (ROOT / ".github/workflows/ci.yml").read_text().split("\n  merge-gate-request:\n")[1]
+    assert "github.triggering_actor == 'github-actions[bot]'" in request and "actions: write" in request
+    assert 'agent-control.yml --ref "$DEFAULT_BRANCH" -f sha="$SHA"' in request
+    assert "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)" in control
+    # one concurrency group per head, and a dispatched verdict never counts an attempt
+    assert "github.event.pull_request.head.sha || inputs.sha }}" in control
+    dispatched = control.split('elif [[ "$EVENT" == "workflow_dispatch" ]]; then', 1)[1].split("else", 1)[0]
+    assert 'ci_conclusion=""' in dispatched
     claude = (ROOT / ".github/workflows/agent-claude.yml").read_text()
     assert "branch_prefix: agent/" in claude
     assert "vars.AUTOMATION_ENABLED == 'true'" in claude
