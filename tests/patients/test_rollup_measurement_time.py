@@ -480,9 +480,9 @@ def test_source_batch_matches_single_for_scope_model_and_source_selection(store)
     assert rollup._measurement_sources_bound(store.db, rows, kinds, refs, {}) == expected
     assert rollup._measurement_sources_bound(store.db, [row], ['extract_llm'], refs, None) == [False]
     wrong_model = {'local_llm': {'model': 'a-different-model'}}
-    assert not rollup._measurement_source_bound(store.db, row, 'extract_llm', wrong_model)
-    assert rollup._measurement_sources_bound(store.db, [row], ['extract_llm'], refs, wrong_model) == [
-        rollup._measurement_source_bound(store.db, row, 'extract_llm', wrong_model)]
+    # Changing the local model keeps a stored extraction current (owner decision 2026-11-17).
+    assert rollup._measurement_source_bound(store.db, row, 'extract_llm', wrong_model)
+    assert rollup._measurement_sources_bound(store.db, [row], ['extract_llm'], refs, wrong_model) == [True]
 
 
 def test_source_batch_matches_single_after_source_aba_and_missing_artifact(store):
