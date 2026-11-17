@@ -183,6 +183,36 @@ def test_empty_repair_candidate_of_an_earlier_local_model_is_not_recovered(empty
     assert seen == [(summary.KIND_CANDIDATE, meta)] and calls == []
 
 
+def test_earlier_model_repair_is_released_under_a_redone_pre_audit_candidate(empty_candidate, monkeypatch):
+    """The producer is judged on the marker's own candidate, not on a later pre-audit one."""
+    db, content, meta, _, calls, seed = empty_candidate
+    seed(content, meta)
+    redone = dict(meta, stage='pre_audit')
+    redone.pop('repair_artifact_id')
+    db.execute('INSERT INTO artifacts VALUES (5,?,1,1,?,?)',
+               (summary.KIND_CANDIDATE, json.dumps(content), json.dumps(redone)))
+    db.commit()
+    monkeypatch.setattr(summary.semantic_store, 'producer_current',
+                        lambda kind, model, row_meta: row_meta.get('stage') != 'empty_repair')
+    diag = {}
+    assert summary._empty_repair_candidate(db, 1, 1, 'fp', 'policy', 'revision', 'assist', [],
+                                         reason_out=diag) == (None, False)
+    assert diag == {'code': 'empty_repair_candidate_producer'}
+
+
+@pytest.mark.parametrize('record', [
+    {'audit_state': 'held', 'partial_answers': {'answers': {}, 'findings': []}},
+    {'audit_state': 'inflight', 'partial_answers': {'answers': {}, 'findings': []}}])
+def test_recorded_negative_of_an_earlier_model_is_not_released(empty_candidate, monkeypatch, record):
+    db, content, meta, _, calls, seed = empty_candidate
+    seed(content, dict(meta, **record))
+    monkeypatch.setattr(summary.semantic_store, 'producer_current', lambda *_: False)
+    diag = {}
+    assert summary._empty_repair_candidate(db, 1, 1, 'fp', 'policy', 'revision', 'assist', [],
+                                         reason_out=diag) == (None, True)
+    assert diag == {'code': 'empty_repair_audit_not_ready'}
+
+
 def test_empty_validation_exception_hides_error_text():
     class Unavailable:
         def execute(self, *_):
