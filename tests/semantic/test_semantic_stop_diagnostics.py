@@ -183,6 +183,31 @@ def test_empty_repair_candidate_of_an_earlier_local_model_is_not_recovered(empty
     assert seen == [(summary.KIND_CANDIDATE, meta)] and calls == []
 
 
+def test_empty_repair_candidate_follows_the_local_model_actually_in_use(empty_candidate):
+    """Changing the scoped local model, not a stub, decides whether the candidate is recovered."""
+    from semantic_transport import local_model_scope
+    db, content, meta, _, calls, seed = empty_candidate
+    seed(content, meta)
+    db.execute('ALTER TABLE artifacts ADD COLUMN model')
+    db.execute("UPDATE artifacts SET model='synthetic-old-model' WHERE kind=?", (summary.KIND_CANDIDATE,))
+    db.commit()
+
+    def run():
+        diag = {}
+        result = summary._empty_repair_candidate(db, 1, 1, 'fp', 'policy', 'revision', 'assist', [],
+                                                 reason_out=diag)
+        return result, diag
+
+    with local_model_scope('synthetic-old-model'):
+        (recovered, reserved), diag = run()
+    assert reserved is True and recovered['content'] == content and diag == {}
+    calls.clear()
+    with local_model_scope('synthetic-new-model'):
+        result, diag = run()
+    assert result == (None, False) and diag == {'code': 'empty_repair_candidate_producer'}
+    assert calls == []
+
+
 def test_empty_validation_exception_hides_error_text():
     class Unavailable:
         def execute(self, *_):
