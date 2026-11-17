@@ -29,6 +29,7 @@ MCS の医療・介護チャットを収集・解析するローカルシステ�
 
 - push・PR・merge・tag・Release 公開・配備・常駐サービスの再起動・本番DBや実データの変更は、ユーザーが明示した範囲だけ行う。
   この文書はそれらの承認にならない。worktree の作成、読取り、ローカルの検証は確認なしで進めてよい。
+  例外は1つだけ: 実装グループの作業PRは、CI が通れば担当エージェントが `group/<名前>` へマージしてよい（所有者 2026-11-17。main・release・その他のブランチへの merge は含まない。`docs/development/GITHUB_WORKFLOW.md`「実装グループ」）。
 - 収集・解析コアは標準ライブラリのみ。新しい外部依存を足さない。例外（Hermes 同梱 `discord.py` の関数内遅延 import、
   `runtime_mode=standalone` の `adapters/{slack,discord}/standalone.py` が使う `deployment/requirements-standalone.txt` の固定版 SDK、
   `adapters/lineworks/` の独自認証・Bot REST・署名Callback、adapter ごとの `asyncio` 許可範囲）の正確な許可リストは
