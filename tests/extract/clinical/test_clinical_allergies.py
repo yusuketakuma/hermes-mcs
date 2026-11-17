@@ -231,3 +231,24 @@ def test_every_other_unit_of_the_body_must_be_recognised():
     negated = "ご本人は合成薬Eにアレルギーはありません。"
     kept, _ = ca.validate_items([_claim(evidence=negated, negated=True)], negated + "ご本人は卵アレルギーです。")
     assert kept[0]["unverified"] is True
+
+
+def test_whole_body_readings_compare_subject_polarity_and_time_and_read_only_one_word_slots():
+    own = "ご本人は合成薬Eにアレルギーがあります。"
+    for rest in ("ご本人の姉は合成薬Eにアレルギーがあります。", "ご本人は以前、合成薬Eでアレルギーを起こしたことがあります。",
+                 "娘さんは発疹アレルギーです。", "ご本人はご本人アレルギーです。"):
+        kept, _ = ca.validate_items([_claim(evidence=own)], own + rest)
+        assert kept[0]["unverified"] is True, rest
+    # Two "none" units read each other as recognised.
+    body = "アレルギー：なし\n副作用：なし"
+    none = _claim(allergen=None, negated=True, evidence="アレルギー：なし")
+    assert ca.validate_items([none], body) == ([none], 0)
+
+
+def test_an_onset_time_with_an_experience_form_leaves_the_time_open():
+    body = "ご本人は初めて合成薬Eでアレルギーが出たことがあります。"
+    for status in ("current", "past"):
+        kept, _ = ca.validate_items([_claim(evidence=body, status=status)], body)
+        assert kept[0]["unverified"] is True, status
+    body = "ご本人は初めて合成薬Eでアレルギーが出ました。"
+    assert "unverified" not in ca.validate_items([_claim(evidence=body)], body)[0][0]

@@ -493,10 +493,15 @@ def _licences_at(body, start, end):
 
 
 def _token(allergen):
-    """An allergen fills a slot only as one word: letters only, hiragana only when all of it, no cue, reaction or self word."""
-    letters = re.fullmatch(_ALLERGEN_SHAPE, allergen) is not None
-    return (letters and not _cues(allergen) and not (NOUN_EXCLUDE and re.search(_alt(NOUN_EXCLUDE), allergen))
-            and not any(word in allergen for word in REACTION_WORDS + ("薬疹",))
+    """An allergen fills a slot only as one word: letters only, hiragana only when all of it, no value, cue, reaction or self word."""
+    return _word(allergen, NOUN_EXCLUDE, REACTION_WORDS)
+
+
+@functools.lru_cache(maxsize=4096)
+def _word(allergen, noun_exclude, reaction_words):
+    letters = re.fullmatch(_ALLERGEN_SHAPE, allergen) is not None and not _VALUE_WORD.fullmatch(allergen)
+    return (letters and not _cues(allergen) and not (noun_exclude and re.search(_alt(noun_exclude), allergen))
+            and not any(word in allergen for word in reaction_words + ("薬疹",))
             and not re.search(_SELF, allergen))
 
 
@@ -605,10 +610,6 @@ def resolve(body, evidence, allergen, reaction) -> Resolution:
     reacting = any(word in text for text in (body[left:right], reaction or "") for word in REACTION_WORDS)
     if not kinds and not reacting:
         return Resolution(drop="アレルギー・副作用の手がかり語がありません")
-    # A claimed reaction outside the quote or the allergen's sentence is a candidate only.
-    if reaction is not None and not any(left <= span[0] + m.start() and span[0] + m.end() <= right
-                                        for m in re.finditer(re.escape(reaction), quote)):
-        licences = ()
     conflict = bool(licences) and _block_conflict(body, (left, right), allergen, licences)
     return Resolution(evidence=quote, kinds=kinds, licences=licences, conflict=conflict)
 
@@ -627,7 +628,7 @@ def _judge(item, res, body, claimed):
     kept = {"allergen": item["allergen"], "kind": item["kind"], "reaction": item["reaction"],
             "subject": item["subject"], "status": item["status"], "negated": item["negated"],
             "certainty": item["certainty"], "evidence": res.evidence}
-    if item["kind"] not in res.kinds or not _confirmed(item, res, body, claimed):
+    if not _confirmed(item, res, body, claimed):
         kept["unverified"] = True
     return kept, None
 
@@ -651,7 +652,7 @@ def _confirmed(item, res, body, claimed):
     """One licence carries every claimed axis (a suspected claim fits a certain licence) and none reads otherwise."""
     if res.conflict or not res.licences or len({(lic.subject, lic.negated) for lic in res.licences}) > 1:
         return False
-    return any(lic.kind == item["kind"] and lic.subject == item["subject"] and item["subject"] != "unknown"
+    return any(lic.kind == item["kind"] and lic.subject == item["subject"]
                and item["status"] in lic.statuses and lic.negated == item["negated"]
                and (item["certainty"] == "suspected" or lic.certainty == "confirmed")
                and (item["reaction"] is None or any(item["reaction"] in body[s:e] for s, e in lic.reactions))
