@@ -2,6 +2,7 @@
 from contextlib import closing
 from datetime import datetime, timezone
 import json
+import sqlite3
 import threading
 import time
 
@@ -18,6 +19,9 @@ import extract_llm_prepare as prepare
 import extract_llm_proofs as proofs
 import extract_llm_runner as runner
 import extract_llm_store as store
+import extract_quality
+import extract_validation
+import inference_dependency_loss
 import inference_version as inference
 import semantic_qc
 from extract_testkit import _ledger, _message, _qc_job, _v2_artifact
@@ -445,3 +449,156 @@ def test_stale_prepared_candidate_returns_current_without_repeating_auxiliary_wr
             assert before == [dict(item) for item in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
         finally:
             extract_llm_errors._release(ledger, stale, later)
+
+
+def _existing_nonprotected_candidate(ledger):
+    source = dict(ledger.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    content = {**json.loads(worker._PREFILTER_CONTENT), "summary": "合成の感謝の記録"}
+    validated = extract_validation.validate(content, source["body_text"])
+    assert validated is not None and validated.get("_items_dropped", 0) == validated.get("_evidence_dropped", 0) == 0
+    assert extract_quality.protected_assertions(content, source["body_text"]) == {}
+    aid = ledger.artifact_add(worker.KIND, json.dumps(content, ensure_ascii=False), project_id=1, message_id=1,
+        model=worker.MODEL, meta={inference.VERSION_KEY: inference.CURRENT_VERSION,
+            "hash": source["content_hash"], "extract_version": worker.EXTRACT_VERSION - 1,
+            "source_binding": inference_dependency_loss.source_binding(ledger.db, 1, 1)})
+    prior = dict(ledger.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (aid,)).fetchone())
+    row, context, _saved, hints, _qc = _prepare(ledger)
+    assert dict(prepare._prior_extract(ledger.db, row)) == prior
+    assert isinstance(row["_prefilter_prior"], tuple) and row["_prefilter_prior"] is not None
+    assert row["_prefilter_prior"] == prepare._prior_identity(prior)
+    assert row.get("_expected_prior") is None
+    assert "_protected_prior" not in row and "_protected_prior_ref" not in row
+    assert prepare._low_signal(row["body_text"], hints)
+    return prior, row, context, hints
+
+
+def test_existing_nonprotected_prior_is_normally_superseded_without_llm(tmp_path, monkeypatch):
+    _no_transport(monkeypatch)
+    with closing(_ledger(tmp_path)) as ledger:
+        _source(ledger)
+        prior, row, context, hints = _existing_nonprotected_candidate(ledger)
+        lease = extract_llm_errors._claim(ledger, row)
+        assert lease is not None
+        try:
+            proofs._capture_checkpoint_state(ledger.db, row, context)
+            assert row.get("_expected_prior") is None and "_protected_prior" not in row
+            assert prepare._settle_prefiltered(ledger, row, hints=hints) == "written"
+            current = _rows(ledger, worker.KIND)
+            assert len(current) == 1 and current[0]["artifact_id"] != prior["artifact_id"]
+            assert ledger.db.execute("SELECT 1 FROM artifacts WHERE artifact_id=?", (prior["artifact_id"],)).fetchone() is None
+            meta = json.loads(current[0]["meta"])
+            assert meta["prefilter"] == "no_signal" and meta["upgrade"]["prior_artifact_id"] == prior["artifact_id"]
+            assert len(_rows(ledger, "extract_v1")) == 1
+            assert not _rows(ledger, worker.UPGRADE_KIND)
+            assert not _rows(ledger, "cloud_usage_reserve") and not _rows(ledger, "cloud_usage_result")
+        finally:
+            extract_llm_errors._release(ledger, row, lease)
+
+
+@pytest.mark.parametrize("when", ["before_capture", "after_capture"])
+def test_existing_nonprotected_prior_change_refuses_before_any_new_write(tmp_path, monkeypatch, when):
+    _no_transport(monkeypatch)
+    with closing(_ledger(tmp_path)) as ledger:
+        _source(ledger)
+        prior, row, context, hints = _existing_nonprotected_candidate(ledger)
+        lease = extract_llm_errors._claim(ledger, row)
+        assert lease is not None
+        try:
+            if when == "after_capture":
+                proofs._capture_checkpoint_state(ledger.db, row, context)
+            with ledger.db:
+                ledger.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                    (json.dumps({**json.loads(prior["content"]), "summary": "合成の変更済み感謝の記録"}, ensure_ascii=False), prior["artifact_id"]))
+            if when == "before_capture":
+                proofs._capture_checkpoint_state(ledger.db, row, context)
+            changed = prepare._prior_extract(ledger.db, row)
+            assert row.get("_expected_prior") is None and "_protected_prior" not in row
+            assert changed["artifact_id"] == prior["artifact_id"]
+            assert prepare._prior_identity(changed) != row["_prefilter_prior"]
+            assert extract_quality.protected_assertions(json.loads(changed["content"]), row["body_text"]) == {}
+            before = [dict(item) for item in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+            writes = ledger.db.total_changes
+            assert prepare._settle_prefiltered(ledger, row, hints=hints) == "rejected"
+            assert row["_commit_reject_reason"] == "checkpoint"
+            assert ledger.db.total_changes == writes
+            assert before == [dict(item) for item in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+            assert not _rows(ledger, "extract_v1") and not _rows(ledger, worker.UPGRADE_KIND)
+        finally:
+            extract_llm_errors._release(ledger, row, lease)
+
+
+@pytest.mark.parametrize("when", ["before_v1", "after_v1"])
+def test_existing_nonprotected_prior_change_inside_auxiliary_write_rolls_back_all_artifacts(tmp_path, monkeypatch, when):
+    _no_transport(monkeypatch)
+    with closing(_ledger(tmp_path)) as ledger:
+        _source(ledger)
+        prior, row, context, hints = _existing_nonprotected_candidate(ledger)
+        lease = extract_llm_errors._claim(ledger, row)
+        assert lease is not None
+        proofs._capture_checkpoint_state(ledger.db, row, context)
+        before = [dict(item) for item in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+        writes = ledger.db.total_changes
+        assert row.get("_expected_prior") is None and "_protected_prior" not in row
+        ensure = prepare._ensure_v1
+        called = []
+
+        def changed_auxiliary(*args):
+            assert ledger.db.in_transaction
+            if when == "after_v1":
+                ensure(*args)
+            ledger.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                (json.dumps({**json.loads(prior["content"]), "summary": "合成のTX内変更済み感謝の記録"}, ensure_ascii=False), prior["artifact_id"]))
+            changed = prepare._prior_extract(ledger.db, row)
+            assert changed["artifact_id"] == prior["artifact_id"]
+            assert prepare._prior_identity(changed) != row["_prefilter_prior"]
+            assert extract_quality.protected_assertions(json.loads(changed["content"]), row["body_text"]) == {}
+            if when == "before_v1":
+                ensure(*args)
+            assert len(_rows(ledger, "extract_v1")) == 1
+            called.append(when)
+
+        monkeypatch.setattr(prepare, "_ensure_v1", changed_auxiliary)
+        try:
+            assert prepare._settle_prefiltered(ledger, row, hints=hints) == "rejected"
+            assert row["_commit_reject_reason"] == "checkpoint" and called == [when]
+            assert ledger.db.total_changes > writes  # rollback must undo actual SQL writes
+            assert before == [dict(item) for item in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+            assert not _rows(ledger, "extract_v1") and not _rows(ledger, worker.UPGRADE_KIND)
+        finally:
+            extract_llm_errors._release(ledger, row, lease)
+
+
+def test_sqlite_error_in_adoption_guard_refuses_without_auxiliary_write(tmp_path, monkeypatch):
+    _no_transport(monkeypatch)
+    with closing(_ledger(tmp_path)) as ledger:
+        _source(ledger)
+        _prior, row, context, hints = _existing_nonprotected_candidate(ledger)
+        lease = extract_llm_errors._claim(ledger, row)
+        assert lease is not None
+        proofs._capture_checkpoint_state(ledger.db, row, context)
+        before = [dict(item) for item in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+        writes = ledger.db.total_changes
+
+        def unavailable(*_args):
+            raise sqlite3.OperationalError("synthetic read unavailable")
+
+        monkeypatch.setattr(prepare, "_prefilter_evidence_absent", unavailable)
+        try:
+            assert prepare._settle_prefiltered(ledger, row, hints=hints) == "rejected"
+            assert row["_commit_reject_reason"] == "superseded_guard" and ledger.db.total_changes == writes
+            assert before == [dict(item) for item in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+        finally:
+            extract_llm_errors._release(ledger, row, lease)
+
+
+def test_disk_low_clean_marker_still_uses_no_provider(tmp_path, monkeypatch):
+    _no_transport(monkeypatch)
+    monkeypatch.setattr(runner, "disk_free_mb", lambda _db: 0)
+    monkeypatch.setattr(runner, "disk_floor_mb", lambda: 1)
+    with closing(_ledger(tmp_path)) as ledger:
+        _source(ledger)
+        result = worker.run_pending(ledger, limit=1, budget_s=30, allow_cloud=False)
+        assert result["disk_low"] is True and result["skipped"] == 1
+        assert result["done"] == result["held_prior"] == 0
+        assert len(_rows(ledger, "extract_v1")) == len(_rows(ledger, worker.KIND)) == 1
+        assert not ledger.db.execute("SELECT 1 FROM fetch_jobs WHERE kind='extract_claim'").fetchone()
