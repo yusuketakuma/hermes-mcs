@@ -129,6 +129,33 @@ def test_view_shows_summary_stale_after_local_model_change(
         view.close()
 
 
+def test_view_reads_local_model_once_so_one_screen_is_consistent(tmp_path, monkeypatch):
+    import ledger
+    import mcs_view
+    db, _ = _setup(tmp_path)
+    created_model = semantic_transport.LLM_MODEL
+    snapshot = ledger.publish_snapshot(
+        str(tmp_path / "ledger.db"), str(tmp_path / "snapshots"))
+    db.close()
+    models = iter(["synthetic-local-b", "synthetic-local-c", "synthetic-local-d"] * 50)
+    calls = []
+
+    def drifting_model(*_a, **_k):
+        calls.append(1)
+        return next(models)
+
+    monkeypatch.setattr(semantic_transport, "llm_model", drifting_model)
+    view = mcs_view.View(snapshot)
+    try:
+        out = view.read("semantic", project=1, message_id=1)["semantic"]
+        rows = [r for items in out.values() for r in items
+                if r["model"] == created_model]
+        assert rows and {r["effective_status"] for r in rows} == {"STALE"}
+        assert len(calls) == 1
+    finally:
+        view.close()
+
+
 def test_comparison_adoption_is_replayed_without_outbox_mutation(tmp_path):
     db, candidate_id = _setup(tmp_path)
     before_outbox = db.db.execute(
