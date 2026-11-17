@@ -1,4 +1,4 @@
-"""Confirm an allergy or adverse-reaction assertion only where every unit of the post body is recognised and an explicit template licenses it.
+"""Keep every model allergy or adverse-reaction claim whose allergen occurs in the post body, always as an unverified candidate.
 
 An assertion is one allergen with explicit axes:
 
@@ -6,658 +6,112 @@ An assertion is one allergen with explicit axes:
    "reaction": str | null, "subject": ..., "status": ..., "negated": bool,
    "certainty": "confirmed" | "suspected", "evidence": str}
 
-The default is inverted: a claim stays a candidate (`unverified: true`)
-unless the body positively licenses it. `resolve` reads the body alone (never
-the reference context) and is memoized on (body, evidence, allergen,
-reaction); comparing the model's axes with the licences, and the list members
-with the other claims of the same call, happens outside it.
+Four rounds of held-out attacks showed that sentence templates cannot make a
+"confirmed" assertion both safe and useful, so this validator confirms
+nothing: every kept claim carries `unverified: true`, and the model's axes
+are stored as written (never corrected). What it still decides:
 
-- A claim whose quote is not uniquely in the body, whose allergen or
-  reaction is not inside the quote, whose allergen is a value word or
-  carries punctuation, whose sentence is a form field, or whose sentence has
-  no cue, relation or reaction word at all is dropped (not stored). A claim
-  whose sentence holds a cue or a reaction word is never dropped for its kind
-  or its reaction's place: it stays a candidate.
-- The unit is the sentence (or the line) holding the allergen. The claimed
-  allergen is replaced there by a placeholder and the unit must fully match
-  one of `TEMPLATES`: each runs from the subject position (a self marker, a
-  family word, an allergy / adverse-reaction heading, or a quoted record),
-  optionally after one closed source lead (`SOURCES`), to a plain declarative
-  ending. A template fixes kind, polarity, certainty, subject and time.
-- Fail closed over the whole body (the block): every other unit must be
-  recognised, as a template match about any allergen, a bare allergy /
-  adverse-reaction heading line, or one of the exact `NEUTRAL` formulas.
-  Any other sentence, annotation, parenthesis, owner or section line leaves
-  every claim of the body a candidate. A recognised unit that names the
-  claimed allergen must read it the same way; a "none" reading anywhere
-  opens every affirmative claim, and any affirmative reading opens every
-  negated claim.
-- Slots are closed: other list members (prose lists and heading values) must
-  each be claimed in the same `validate_items` call with the same kind and
-  polarity; a tail clause names one of `TAIL_ACTIONS` with at most one
-  allergen-shaped object; a reaction may carry one of `BODY_PARTS`.
-- A null-allergen "none" is confirmed only on an unscoped form (a category
-  such as 薬 or 食物 leaves it open), and a negation naming a reaction confirms
-  only a claim naming that reaction.
-- Nothing is ever corrected towards the patient, towards confirmed or
-  towards current: a model `suspected` stays `suspected` even when the body
-  licenses a certain assertion.
+- Locate the claim in the target body (never the reference context): the
+  quote when it is uniquely in the body and holds the allergen, otherwise the
+  sentence or line where the allergen first occurs. A claim with no allergen
+  ("none") keeps its located quote, or else the sentence of the first cue word.
+- Drop only a malformed item, a claim whose allergen does not occur in the
+  body at all, and a claim with no allergen that has neither a located quote
+  nor a cue word. A claimed reaction that the body does not hold is kept as
+  written (the claim is a candidate either way).
+- Store one assertion once (R10).
 """
 from __future__ import annotations
 
 import functools
-import itertools
 import re
 from typing import NamedTuple
 
-import clinical_scope
 from clinical_events import STATUSES, SUBJECTS
-from mcs_util import locate_quote_span
+from mcs_util import fold_find, locate_quote_span, search_fold
 
 FIELD = "allergies"
 KINDS = ("allergy", "adverse_reaction")
 CERTAINTIES = ("confirmed", "suspected")
 
-# One assertion unit: a sentence; a heading line is its label plus the value on the same line.
-_UNIT_BREAK = re.compile(r"[。！？!?\n]")
-# An allergen string that carries sentence or clause punctuation or brackets names no single allergen.
-_PUNCTUATED = re.compile(r"[。、，,！？!?「」『』（）()\n]")
-_PHRASE_BREAK = re.compile(r"[、。，,．！？!?\n「」（）()：:・｜|\s]+|から|より|まで|[はがをにでのともへや]")
-
-# R2: the cue for each kind. 抗アレルギー薬, アレルギー検査/外来/科 and アレルギー性鼻炎 name no allergy.
+# The cue words of each kind. 抗アレルギー薬, アレルギー検査/外来/科 and アレルギー性鼻炎 name no allergy.
 ALLERGY_CUE = re.compile(r"(?<!抗)(?:アレルギー|過敏症|不耐症?)(?!検査|テスト|薬|外来|科|性)")
 ADVERSE_CUE = re.compile(r"副作用|副反応|有害事象|薬疹")
-# R2: a relation alone (no cue word) needs a reaction from this vocabulary; it is also the reaction slot.
-REACTION_WORDS = tuple(dict.fromkeys(clinical_scope.SYMPTOMS + (
-    "じんましん", "蕁麻疹", "かゆ", "痒", "皮疹", "湿疹", "眠気", "肝機能", "腎機能", "腫れ",
-    "アナフィラキシー", "ショック", "食欲")))
-_TAKE = r"(?:飲|服用|内服|使用|使|貼|塗)"
-_EMERGE = r"(?:出|出現|起こ|生じ|みられ|見られ)"
-
-# R11: form fields whose mark cannot be read from text, table rows, and empty heading values.
-FORM_FIELD = re.compile(r"有[ \t　]*[・/／][ \t　]*無|あり[ \t　]*[・/／][ \t　]*なし|[□☐]|"
-                        r"■[ \t　]*(?:有|無|あり|なし)|(?:有|無|あり|なし)[ \t　]*■|[|｜][^\n]*[|｜]")
-EMPTY_VALUE = re.compile(r"[:：][ \t　]*$")
-# An allergen that is only a heading value, a form mark or a not-yet-asked note names nothing.
-_VALUE_WORD = re.compile(r"[ \t　]*(?:なし|無し|特になし|ない|ありません|有|無|あり|不明|未聴取|聴取中|未確認|確認中|不詳|"
-                         r"[・/／□☐■])+[ \t　]*")
-
-# ---------------------------------------------------------------------------------------------
-# Closed vocabularies. Each entry is needed by a named test (tests remove one at a time).
-
-# Who conveyed the assertion, in a lead 「<source>より、」「<source>から、」; it changes neither subject nor polarity.
-SOURCES = ("主治医", "医師", "看護師", "薬剤師", "薬局", "ご家族")
-# The only body parts a reaction may name in front of it (「口の中がかゆくなる」); any other word (「孫が」) is no match.
-BODY_PARTS = ("口の中", "口", "唇", "皮膚", "全身", "顔", "喉")
-# What a clause after the assertion may do (「…のため、合成薬ACに変更しました」); anything else is no match.
-TAIL_ACTIONS = ("変更", "中止", "除去", "注意", "使用")
-# Whole sentences that say nothing about any person's allergy (exact, an end mark optional).
-NEUTRAL = ("お疲れ様です", "お疲れさまです", "よろしくお願いします", "よろしくお願いいたします", "以上です", "共有します",
-           "ご確認ください")
-# A word holding these is an exception (「卵以外」) or a value / doubt word (「卵、不明」), neither an allergen
-# nor another list member.
-# (Value words such as 不明 or なし are already no allergen: `_VALUE_WORD` drops them, so they are never claimed.)
-NOUN_EXCLUDE = ("外", "要確認", "可能性")
-
-_UNIT_LIMIT = 64  # A body with more units than this is not read: every claim stays open.
-_A = ""  # the claimed allergen's placeholder inside its unit
-_LETTERS = r"[一-龥々ァ-ヶーA-Za-z0-9Ａ-Ｚａ-ｚ０-９]"
-_ALLERGEN_SHAPE = rf"{_LETTERS}+|[ぁ-ゖー]+"
-
-
-def _alt(words):
-    return "|".join(map(re.escape, sorted(words, key=len, reverse=True))) or r"(?!)"
-
-
-# ---------------------------------------------------------------------------------------------
-# Template grammar. `<<X>>` tokens expand in `_expand`; capturing tokens get unique group names.
-
-_SELF = r"(?:ご本人様?|本人様?|ご?利用者(?:さん|様)|患者(?:さん|様))"
-_PERSON = (rf"(?:{clinical_scope.FAMILY_PERSON}|{clinical_scope.OTHER_PERSON}|{clinical_scope.NAMED_PERSON}"
-           r"|(?:その|あの|別の|他の|ほかの|隣の|同室の)(?:方|かた|人))")
-_NUM = r"[0-9０-９一二三四五六七八九十数]+"
-_SPAN = r"(?:年|か月|ヶ月|カ月|週間|日)"
-_FIXED = {
-    "SELF": _SELF,
-    "FAMILY": rf"(?:{clinical_scope.FAMILY_PERSON})",
-    "END": r"[ \t　]*[。．！!]?[ \t　]*$",
-    # Reported speech after a plain form; そうです only there (「ありそうです」 is a conjecture, not a report).
-    "REPORTTO": r"と(?:のことです|言っています|話されています|話しています|聞いています|聞きました|伺いました|伺っています)",
-    "REPORT": r"(?:<<REPORTTO>>|そうです)",
-    "SP": r"[ \t　]*",
-    "LSEP": r"(?:と|や|・)",
-    "ISEP": r"[、，,・/／]<<SP>>",
-}
-
-
-def _noun():
-    """Another list member: a run with no particle, punctuation, placeholder or exception word, not a person."""
-    char = r"[^\s、。，,．！？!?「」『』（）()：:・/／|｜はがをにでのともへやか]"
-    run = rf"(?:(?!{_alt(NOUN_EXCLUDE)}){char})+" if NOUN_EXCLUDE else f"{char}+"
-    return f"(?!{_PERSON}){run}"
-
-
-def _object():
-    """The one object a tail clause may name: an allergen-shaped word, not a person or an exception word."""
-    exclude = rf"(?!{_alt(NOUN_EXCLUDE)})" if NOUN_EXCLUDE else ""
-    return f"(?!{_PERSON})(?:{exclude}{_LETTERS})+"
-
-
-def _reaction():
-    words = _alt(REACTION_WORDS + ("薬疹",))
-    return rf"(?:(?:{_alt(BODY_PARTS)})が)?(?:{words})(?:さ|み|感|症状|症)?(?:の悪化)?"
-
-
-def _expand(text, slot):
-    """Compile a template text: expand `<<X>>` tokens until none is left, naming capture groups uniquely.
-
-    `slot` is what the allergen position holds: the placeholder for a claim, or any allergen-shaped word
-    when a unit is only recognised.
-    """
-    counter = itertools.count()
-
-    def group(name, body):
-        return f"(?P<{name}_{next(counter)}>{body})"
-
-    def token(match):
-        name = match[1]
-        if name in _FIXED:
-            return _FIXED[name]
-        if name == "N":
-            return _noun()
-        if name == "OBJ":
-            return _object()
-        if name == "A":
-            return slot
-        if name == "CAT":
-            return group("cat", "薬や食べ物|薬や食物|薬剤|食べ物|食物|食品|薬")
-        if name == "ALIST":
-            return (f"{group('li', '(?:<<N>><<LSEP>>){1,3}')}?<<A>>"
-                    f"{group('li', '(?:<<LSEP>><<N>>){1,3}')}?")
-        if name == "R":
-            return group("R", _reaction())
-        if name == "RG":
-            return f"(?:{_reaction()})"
-        if name == "LEAD":
-            return rf"(?:(?:{_alt(SOURCES)})(?:より|から)[、，])?"
-        if name == "TIME":
-            past = rf"以前|過去に|{_NUM}{_SPAN}前に|子供の頃に?"
-            since = rf"以前から|昨日から|{_NUM}{_SPAN}前から"
-            onset = r"今朝|初めて"
-            return f"(?:(?:{group('ts', since)}|{group('to', onset)}|{group('tp', past)})[、，]?)?"
-        if name == "EXISTF":
-            return f"(?:あります|あり(?:です)?|ある(?:<<REPORT>>)?|{group('pp', 'ありました|あった(?:<<REPORT>>)?')})<<END>>"
-        if name == "EXISTL":
-            return r"(?:あり|あるため|あるので)[、，]?<<TAIL>>"
-        if name == "COPF":
-            return f"(?:です|だ(?:<<REPORT>>)?|{group('pp', 'でした|だった(?:<<REPORT>>)?')})<<END>>"
-        if name == "COPL":
-            return r"(?:のため|で)[、，]?<<TAIL>>"
-        if name == "EMF":
-            return (f"(?:が|も)?(?:出(?:ます|る体質です|ています|る(?:<<REPORT>>)?)|出現しています|続いています|落ちています"
-                    f"|くなります|くなる(?:<<REPORT>>)?"
-                    f"|{group('pv', '出ました|出た(?:<<REPORT>>)?|出現しました|悪化しました|くなりました|出ていました')}"
-                    f"|{group('pe', '出たことがあります|出たことがある(?:<<REPORT>>)?')})<<END>>")
-        if name == "EML":
-            return r"(?:が|も)?(?:出て|出たため|出たので|出現したため)[、，]?<<TAIL>>"
-        if name == "RAISE":
-            return (f"を起こ(?:します|しています|{group('pv', 'しました')}"
-                    f"|{group('pe', 'したことがあります|したことがある(?:<<REPORT>>)?')})<<END>>")
-        if name == "NEGF":
-            return (f"(?:ありません|ございません|ない(?:<<REPORT>>)?|なし(?:です|<<REPORTTO>>)?"
-                    f"|{group('np', 'ありませんでした|なかったです|なかった(?:<<REPORT>>)?')})<<END>>")
-        if name == "NEGL":
-            return r"(?:なく|なし)[、，]<<TAIL>>"
-        if name == "TAIL":
-            verb = (f"(?:{_alt(TAIL_ACTIONS)})(?:し(?:ています|ております|ている)"
-                    f"|{group('tq', 'しました|していました|した|していた|にな(?:りました|った))')}")
-            return (f"(?:<<OBJ>>(?:を|に)<<SP>>)?(?:{verb}|<<R>>(?:が|も)?(?:出(?:ます|ています|る)|続いています)"
-                    r"|<<OBJ>>を飲んで(?:います|いる))(?:そうです)?<<END>>")
-        raise KeyError(name)
-
-    previous = None
-    while previous != text:
-        previous, text = text, re.sub(r"<<([A-Z]+)>>", token, text)
-    return re.compile(text)
-
-
-class Template(NamedTuple):
-    """One explicit assertion form: the regex over the unit and the axes it licenses."""
-    name: str
-    kind: str
-    negated: bool
-    subject: str  # "patient" or "family"; "subject" when the subject position in front of the core decides
-    certainty: str
-    pattern: str
-    scope: str  # "sentence" (after a subject position), "lead" (own subject), "line" (heading / record), "null"
-    record: bool = False
-
-
-_PAT = r"<<SELF>>(?:は|には|に|が|も)[、，]?"
-_POS = r"<<SELF>>の"
-_FAM = r"(?:<<SELF>>の)?(?:同居の)?<<FAMILY>>(?:は|には|に|が)[、，]?"
-_MARK = r"<<SP>>[■◆◇●○・※＊*\-－]?<<SP>>"
-_LABEL_A = (_MARK + r"(?:<<SELF>>の)?[【［\[]?(?P<cat_x>薬剤|食物|食品)?アレルギー"
-            r"(?P<hist_x>歴)?[】］\]]?<<SP>>[:：]<<SP>>")
-_LABEL_R = _MARK + r"(?:<<SELF>>の)?[【［\[]?副作用(?P<hist_x>歴)?[】］\]]?<<SP>>[:：]<<SP>>"
-_GITEM = r"<<N>>(?:(?:で|による)<<RG>>)?(?:[（(]<<RG>>[）)])?"
-_AITEM = r"<<A>>(?:(?:で|による)<<R>>)?(?:[（(](?:<<R>>|(?P<fp_x>昨年|昔))[）)])?"
-_VALUE = (rf"(?P<li_pre>(?:{_GITEM}<<ISEP>>){{1,3}})?{_AITEM}(?P<li_post>(?:<<ISEP>>{_GITEM}){{1,3}})?"
-          r"(?:[（(]いずれも<<R>>[）)])?<<END>>")
-_NEG_VALUE = (r"(?P<li_pre>(?:<<N>>(?:なし|無し)<<ISEP>>){1,3})?<<A>>(?:なし|無し)"
-              r"(?P<li_post>(?:<<ISEP>><<N>>(?:なし|無し)){1,3})?<<END>>")
-_RECORD = (r"(?:<<SP>>" + _NUM + _SPAN + r"前の)?(?:前医の)?(?:紹介状|診療情報提供書|情報提供書|退院時?サマリー|看護サマリー|サマリー|"
-           r"お薬手帳|カルテ)(?:に|には|では)「")
-_RECORD_END = r"」(?:と|との)(?:記載|記録)(?:が)?(?:あり(?:ます|ました)?|されています)<<END>>"
-_ADR_LINK = (r"(?:で|による|により|の副作用で|の副作用として|を飲んで|を服用して|を内服して|の(?:内服|服用|使用|投与)後に?"
-             r"|を飲んだ(?:とき|時|後)に?|を飲むと|を服用すると)")
-_ALG_TO = r"(?:に|へ|の|に対して|に対する|への)?"
-
-TEMPLATES = (
-    # Affirmative allergy, prose.
-    Template("alg-exist", "allergy", False, "subject", "confirmed",
-             rf"<<TIME>><<ALIST>>{_ALG_TO}(?:は|も)?(?:アレルギー|過敏症)(?:反応)?(?:が|も)?(?:<<EXISTF>>|<<EXISTL>>)", "sentence"),
-    Template("alg-copula", "allergy", False, "subject", "confirmed",
-             r"<<TIME>><<ALIST>>(?:の)?アレルギー(?:<<COPF>>|<<COPL>>|<<REPORTTO>><<END>>)", "sentence"),
-    Template("alg-raise", "allergy", False, "subject", "confirmed",
-             r"<<TIME>><<ALIST>>(?:に|で|に対して)アレルギー(?:反応|症状)?<<RAISE>>", "sentence"),
-    Template("alg-emerge", "allergy", False, "subject", "confirmed",
-             r"<<TIME>><<ALIST>>(?:で|に)アレルギー(?:反応|症状)?(?:<<EMF>>|<<EML>>)", "sentence"),
-    Template("alg-food", "allergy", False, "subject", "confirmed",
-             r"<<ALIST>>を(?:食べる|飲む|使う)と<<R>>(?:くなる|が出る)アレルギー(?:が|も)<<EXISTF>>", "sentence"),
-    Template("alg-told", "allergy", False, "subject", "confirmed",
-             r"<<ALIST>>(?:に|の)アレルギーがあることを(?:<<OBJ>>(?:に|へ))?(?:も)?伝えて(?:います|いました|おります)<<END>>",
-             "sentence"),
-    Template("alg-topic", "allergy", False, "patient", "confirmed",
-             r"<<ALIST>>アレルギーの<<SELF>>は[、，]?<<TAIL>>", "lead"),
-    # Affirmative adverse reaction, prose.
-    Template("adr-relation", "adverse_reaction", False, "subject", "confirmed",
-             rf"<<TIME>><<ALIST>>{_ADR_LINK}<<TIME>><<R>>(?:<<EMF>>|<<EML>>)", "sentence"),
-    Template("adr-cue", "adverse_reaction", False, "subject", "confirmed",
-             r"<<TIME>><<ALIST>>(?:で|の|による)<<TIME>>副作用(?:<<EMF>>|<<EML>>)", "sentence"),
-    Template("adr-history", "adverse_reaction", False, "subject", "confirmed",
-             r"<<ALIST>>の副作用(?P<hist_x>歴)?(?:が|も)<<EXISTF>>", "sentence"),
-    Template("adr-drug-rash", "adverse_reaction", False, "subject", "confirmed",
-             r"<<ALIST>>(?:による|で)(?P<R_x>薬疹)が<<EXISTF>>", "sentence"),
-    # Negation, prose.
-    Template("neg-alg", "allergy", True, "subject", "confirmed",
-             rf"<<ALIST>>{_ALG_TO}(?:は|には)?(?:特に)?(?:アレルギー|過敏症)(?:は|が|も)?(?:特に)?(?:<<NEGF>>|<<NEGL>>)",
-             "sentence"),
-    Template("neg-alg-denied", "allergy", True, "subject", "confirmed",
-             r"<<ALIST>>(?:への|に対する|の)アレルギーは否定され(?:ました|ています)<<END>>", "sentence"),
-    Template("neg-adr", "adverse_reaction", True, "subject", "confirmed",
-             r"<<ALIST>>(?:で|による|の)(?:副作用|<<R>>)(?:は|も)(?:特に)?"
-             r"(?:出ていません|ありません|みられません|見られません|ない|なし|(?P<np_x>ありませんでした|出ませんでした|出なかった))<<END>>",
-             "sentence"),
-    Template("neg-adr-never", "adverse_reaction", True, "subject", "confirmed",
-             r"<<ALIST>>で(?:副作用|<<R>>)が出たことは(?:一度も)?ありません<<END>>", "sentence"),
-    Template("neg-adr-taking", "adverse_reaction", True, "subject", "confirmed",
-             rf"<<ALIST>>を(?:{_NUM}{_SPAN})?(?:続けて|飲んで|服用して|内服して)いますが[、，](?:特に)?副作用は(?:特に)?"
-             r"(?:出ていません|ありません|みられません)<<END>>", "sentence"),
-    Template("neg-adr-tolerated", "adverse_reaction", True, "subject", "confirmed",
-             r"<<ALIST>>の副作用(?:について|は)[、，]?(?:特に)?問題(?:ない(?:<<REPORT>>)?|ありません|なし(?:<<REPORTTO>>)?)<<END>>", "sentence"),
-    # Suspected.
-    Template("sus-maybe-alg", "allergy", False, "subject", "suspected",
-             r"<<ALIST>>のアレルギーかもしれ(?:ません|ない)(?:が[、，](?:まだ)?(?:分かって|わかって)いません)?<<END>>", "sentence"),
-    Template("sus-maybe-adr", "adverse_reaction", False, "subject", "suspected",
-             r"<<ALIST>>の副作用かもしれ(?:ません|ない)(?:が[、，](?:まだ)?(?:分かって|わかって)いません)?<<END>>", "sentence"),
-    Template("sus-doubt", "adverse_reaction", False, "subject", "suspected",
-             r"<<ALIST>>を(?:始めて|飲み始めて|開始して)から<<R>>(?:が|も)?(?:落ちて|出て)おり[、，]副作用の疑いがあります<<END>>",
-             "sentence"),
-    # Heading fields (one line), owned by the patient.
-    Template("field-alg", "allergy", False, "patient", "confirmed", _LABEL_A + _VALUE, "line"),
-    Template("field-adr", "adverse_reaction", False, "patient", "confirmed", _LABEL_R + _VALUE, "line"),
-    Template("field-neg-alg", "allergy", True, "patient", "confirmed", _LABEL_A + _NEG_VALUE, "line"),
-    Template("field-family", "allergy", False, "family", "confirmed",
-             _LABEL_A + r"(?:同居の)?<<FAMILY>>は<<A>>で<<R>>(?:くなる|くなります|が出る|が出ます)<<END>>", "line"),
-    # A quoted earlier record: the patient's past assertion.
-    Template("record-alg", "allergy", False, "patient", "confirmed",
-             _RECORD + r"<<A>>(?:に|の|で)?アレルギー(?:あり)?" + _RECORD_END, "line", record=True),
-    Template("record-adr", "adverse_reaction", False, "patient", "confirmed",
-             _RECORD + r"<<A>>(?:で|による)<<R>>" + _RECORD_END, "line", record=True),
-    # "None" forms for a null allergen: exact, with no list and no exception; a category word scopes them.
-    Template("null-alg", "allergy", True, "patient", "confirmed",
-             r"<<LEAD>><<SELF>>(?:は|には|に|の)[、，]?(?:特に)?(?:<<CAT>>(?:の)?)?アレルギー(?:歴)?(?:は|が|も)?(?:特に)?<<NEGF>>",
-             "null"),
-    Template("null-alg-label", "allergy", True, "patient", "confirmed",
-             r"<<SP>><<SELF>>の(?:<<CAT>>)?アレルギー(?:[（(]なし[）)]|[ \t　]+なし)<<END>>", "null"),
-    Template("null-adr", "adverse_reaction", True, "patient", "confirmed",
-             r"<<LEAD>><<SELF>>(?:は|には|に|の)[、，]?(?:特に)?副作用(?:歴)?(?:は|が|も)?(?:特に)?<<NEGF>>", "null"),
-    Template("null-field-alg", "allergy", True, "patient", "confirmed",
-             _LABEL_A + r"(?:なし|無し|特になし|特記(?:事項)?なし|該当なし|ありません)<<END>>", "null"),
-    Template("null-field-adr", "adverse_reaction", True, "patient", "confirmed",
-             _LABEL_R + r"(?:なし|無し|特になし|特記(?:事項)?なし|該当なし|ありません)<<END>>", "null"),
-)
-
-# The subject positions of a "sentence" template, in front of its core.
-SUBJECTS_OF = (("patient", _PAT), ("patient", _POS), ("family", _FAM))
-# 「ご本人の発疹は…かもしれません」: the reaction as topic, for the suspected templates only.
-SUSPECTED_SUBJECTS = (("patient", r"<<SELF>>の<<RG>>は"),)
-# A unit that is only a heading of the allergy / adverse-reaction family, with nothing else on the line.
-BARE_HEADING = re.compile(r"[ \t　]*[■◆◇●○・※＊*\-－]?[ \t　]*[【［\[]?(?:薬剤|食物|食品)?(?:アレルギー|副作用)歴?"
-                          r"[】］\]]?[ \t　]*[:：]?[ \t　]*")
-
-
-def _vocabulary():
-    """Everything the compiled templates and the unit readings depend on (the cache key)."""
-    return (TEMPLATES, SUBJECTS_OF, SUSPECTED_SUBJECTS, NEUTRAL, BARE_HEADING, NOUN_EXCLUDE, TAIL_ACTIONS,
-            REACTION_WORDS, SOURCES, BODY_PARTS)
-
-
-@functools.lru_cache(maxsize=None)
-def _compiled(slot, vocabulary):
-    """(template, subject, regex) for every template and subject position (cached per slot and vocabulary)."""
-    templates, subjects, suspected_subjects = vocabulary[:3]
-    out = []
-    for template in templates:
-        if template.scope == "sentence":
-            heads = list(subjects) + (list(suspected_subjects) if template.certainty == "suspected" else [])
-            for subject, head in heads:
-                out.append((template, subject, _expand(rf"^<<SP>><<LEAD>>{head}{template.pattern}", slot)))
-        else:
-            out.append((template, template.subject, _expand(rf"^<<SP>>{template.pattern}", slot)))
-    return tuple(out)
-
-
-def _templates(slot=_A):
-    return _compiled(slot, _vocabulary())
-
-
-class Licence(NamedTuple):
-    """The axes one template match licenses for one allergen occurrence."""
-    template: str
-    kind: str
-    subject: str
-    statuses: frozenset
-    negated: bool
-    certainty: str
-    reactions: tuple  # (start, end) spans in the body that may hold the claimed reaction
-    items: tuple = ()  # the other list members, each to be claimed in the same call
-    scoped: bool = False  # a "none" limited to a category (薬, 食物, ...)
+# A unit ends at a sentence mark or at any line break (LF, CR, NEL, LINE / PARAGRAPH SEPARATOR).
+_BREAKS = "。！？!?\n\r\x85  "
+_UNIT_END = re.compile(f"[{_BREAKS}]")
+_END_MARKS = re.compile(r"[。！？!?]*")
 
 
 class Resolution(NamedTuple):
-    """What the body licenses for one (evidence, allergen, reaction), or why the claim is dropped."""
+    """Where one claim sits in the body, or why it is dropped."""
     drop: str | None = None
     evidence: str = ""
-    kinds: frozenset = frozenset()
-    licences: tuple = ()
-    conflict: bool = False
 
 
-def _unit(body, position):
-    left = max((body.rfind(mark, 0, position) for mark in "。！？!?\n"), default=-1) + 1
-    stop = _UNIT_BREAK.search(body, position)
-    return left, stop.start() if stop else len(body)
-
-
-def _unit_text(body, left, right):
-    """The unit with its own run of end marks (a question mark stays, so no template ends on it)."""
-    marks = re.match(r"[。！？!?]*", body[right:])[0]
-    return body[left:right + len(marks)]
-
-
-def _cues(text, start=0, end=None):
+def _cues(text):
     """(start, end, kind) of every cue word."""
-    end = len(text) if end is None else end
-    found = [(m.start(), m.end(), "allergy") for m in ALLERGY_CUE.finditer(text, start, end)]
-    found += [(m.start(), m.end(), "adverse_reaction") for m in ADVERSE_CUE.finditer(text, start, end)]
+    found = [(m.start(), m.end(), "allergy") for m in ALLERGY_CUE.finditer(text)]
+    found += [(m.start(), m.end(), "adverse_reaction") for m in ADVERSE_CUE.finditer(text)]
     return sorted(found)
 
 
 def cue_spans(body) -> list[tuple[int, int, str]]:
-    """Positions of the allergy / adverse-reaction cue words in a body (R2), for prefilters and context views."""
+    """Positions of the allergy / adverse-reaction cue words in a body, for prefilters and context views."""
     return _cues(body) if isinstance(body, str) else []
 
 
-def _related(unit, allergen, reaction):
-    """R2: an allergen-to-reaction relation in one sentence (only an adverse reaction)."""
-    if allergen is None or reaction is None or not any(word in reaction for word in REACTION_WORDS):
-        return False
-    a, r = re.escape(allergen), re.escape(reaction)
-    return bool(re.search(rf"{a}(?:で|による|により)[^。！？!?\n]*?{r}", unit)
-                or re.search(rf"{a}を{_TAKE}[^。！？!?\n]*?(?:とき|時|後|ところ|て)(?:に|から)?"
-                             rf"[^。！？!?\n]*?{r}が{_EMERGE}", unit))
+def _unit_at(body, position):
+    """The sentence or line holding body[position], with its own run of end marks (linear in the body)."""
+    left = max(body.rfind(mark, 0, position) for mark in _BREAKS) + 1
+    stop = _UNIT_END.search(body, position)
+    right = stop.start() if stop else len(body)
+    right += len(_END_MARKS.match(body, right)[0])
+    return body[left:right]
 
 
-def _supported_kinds(body, left, right, allergen, reaction):
-    """R2: the kinds a sentence has a cue (or, for an adverse reaction, a relation) for."""
-    kinds = {kind for _, _, kind in _cues(body, left, right)}
-    if _related(body[left:right], allergen, reaction):
-        kinds.add("adverse_reaction")
-    return frozenset(kinds)
+def _occurs(needle, text):
+    return needle in text or search_fold(needle) in search_fold(text)
 
 
-def _groups(match, prefix):
-    return [name for name, value in match.groupdict().items() if value is not None and name.startswith(prefix + "_")]
-
-
-def _statuses(template, match):
-    """R4: the time a template match licenses; an empty set leaves the time open."""
-    if template.record:
-        return frozenset({"past"})
-    if _groups(match, "fp"):
-        return frozenset({"past"})
-    if _groups(match, "hist"):
-        return frozenset({"current", "past"})
-    if template.negated:
-        return frozenset({"current", "past"}) if _groups(match, "np") else frozenset({"current"})
-    past_form = bool(_groups(match, "pp") or _groups(match, "pe"))
-    if _groups(match, "tp"):
-        return frozenset({"past"}) if past_form or _groups(match, "pv") or _groups(match, "tq") else frozenset()
-    if _groups(match, "ts"):  # 「3年前から…ありました」 may have ended since: only a present form is read.
-        return frozenset() if past_form or _groups(match, "pv") else frozenset({"current"})
-    if _groups(match, "to"):
-        return frozenset() if _groups(match, "pe") else frozenset({"current"})
-    return frozenset({"past"}) if past_form else frozenset({"current"})
-
-
-def _members(match):
-    """The other list members a match holds (prose list or heading value), each reduced to its noun."""
-    noun = re.compile(rf"[ \t　]*({_noun()}?)(?:なし|無し)?(?:(?:で|による)|[（(]|$)")
-    out = []
-    for name in _groups(match, "li"):
-        for piece in re.split(r"[、，,・/／と や]", match[name]):
-            head = noun.match(piece)
-            if head:
-                out.append(head[1])
-    return tuple(out)
-
-
-def _licences(text, offset, scope_null):
-    """Every licence the templates give a unit text (the allergen already replaced by the placeholder)."""
-    found = []
-    for template, subject, regex in _templates():
-        if (template.scope == "null") != scope_null:
-            continue
-        match = regex.match(text)
-        if match is None:
-            continue
-        reactions = tuple((offset + match.start(name), offset + match.end(name)) for name in _groups(match, "R"))
-        found.append(Licence(template.name, template.kind, subject, _statuses(template, match),
-                             template.negated, template.certainty, reactions, _members(match),
-                             bool(_groups(match, "cat"))))
-    return tuple(found)
-
-
-def _licences_at(body, start, end):
-    """Licences for the allergen written at body[start:end], read in its own unit."""
-    left, right = _unit(body, start)
-    text = _unit_text(body, left, right)
-    placed = text[:start - left] + _A + text[end - left:]
-    found = _licences(placed, left, scope_null=False)
-    # Spans after the placeholder are shifted by the allergen's length minus one.
-    shift = (end - start) - 1
-    return tuple(lic._replace(reactions=tuple((s + shift if s > start else s, e + shift if e > start else e)
-                                              for s, e in lic.reactions)) for lic in found)
-
-
-def _token(allergen):
-    """An allergen fills a slot only as one word: letters only, hiragana only when all of it, no value, cue, reaction or self word."""
-    return _word(allergen, NOUN_EXCLUDE, REACTION_WORDS)
-
-
-@functools.lru_cache(maxsize=4096)
-def _word(allergen, noun_exclude, reaction_words):
-    letters = re.fullmatch(_ALLERGEN_SHAPE, allergen) is not None and not _VALUE_WORD.fullmatch(allergen)
-    return (letters and not _cues(allergen) and not (noun_exclude and re.search(_alt(noun_exclude), allergen))
-            and not any(word in allergen for word in reaction_words + ("薬疹",))
-            and not re.search(_SELF, allergen))
-
-
-def _units(body):
-    """(left, right) of every non-blank unit of the body, in order."""
-    return [(m.start(), m.end()) for m in re.finditer(r"[^。！？!?\n]+", body) if m[0].strip(" \t　")]
-
-
-def _recognised(text):
-    """Readings of a unit that is not the claim's own, or None when the unit is not recognised.
-
-    A reading is (negated, null) of a template match about any allergen-shaped word; a bare heading or a
-    neutral formula is recognised with no reading.
-    """
-    return _recognise(text, _vocabulary())
-
-
-@functools.lru_cache(maxsize=4096)
-def _recognise(text, vocabulary):
-    neutral, bare_heading = vocabulary[3:5]
-    if bare_heading.fullmatch(text) or re.sub(r"[ \t　。．！!]+$", "", text.strip(" \t　")) in neutral:
-        return frozenset()
-    slot = f"(?P<slot>{_ALLERGEN_SHAPE})"
-    readings = set()
-    for template, _, regex in _templates(slot):
-        if template.scope == "null":
-            continue
-        match = regex.match(text)
-        if match is not None and _token(match["slot"]):
-            readings.add((template.negated, False))
-    for template, _, regex in _templates():
-        if template.scope == "null" and regex.match(text):
-            readings.add((True, True))
-    return frozenset(readings) or None
-
-
-def _reading_opens(found, negated):
-    """A negated claim is open beside any affirmative reading; an affirmative one beside any "none"."""
-    return any(not neg for neg, _ in found) if negated else any(null for _, null in found)
-
-
-def _reads_otherwise(body, left, right, allergen, readings):
-    """Another unit naming the allergen must license it with the same subject, polarity and time."""
-    for match in re.finditer(re.escape(allergen), body[left:right]):
-        other = _licences_at(body, left + match.start(), left + match.end())
-        if {(lic.subject, lic.negated, lic.statuses) for lic in other} != readings:
-            return True
-    return False
-
-
-def _block_conflict(body, own, allergen, licences):
-    """Fail closed over the body: every other unit is recognised and none reads the claim otherwise."""
-    units = _units(body)
-    if len(units) > _UNIT_LIMIT:
-        return True
-    readings = {(lic.subject, lic.negated, lic.statuses) for lic in licences}
-    negated = any(lic.negated for lic in licences)
-    for left, right in units:
-        if (left, right) == own:
-            continue
-        found = _recognised(_unit_text(body, left, right))
-        if found is None or _reading_opens(found, negated):
-            return True
-        if allergen is not None and _reads_otherwise(body, left, right, allergen, readings):
-            return True
-    return False
+def _allergen_unit(body, allergen):
+    """The unit of the allergen's first occurrence; the whole body when only a folded, ambiguous match exists."""
+    start = body.find(allergen)
+    if start < 0:
+        span = fold_find(body, allergen)
+        start = span[0] if span else -1
+    return _unit_at(body, start) if start >= 0 else body
 
 
 @functools.lru_cache(maxsize=4096)
 def resolve(body, evidence, allergen, reaction) -> Resolution:
-    """Read the licences the body gives one quoted claim (memoized; independent of the claimed axes)."""
-    if (not isinstance(body, str) or not isinstance(evidence, str) or not evidence.strip()
-            or any(value is not None and not (isinstance(value, str) and value.strip())
-                   for value in (allergen, reaction))):
+    """Locate one claim in the body (memoized); `reaction` never decides anything and is kept as written."""
+    del reaction
+    if not isinstance(body, str) or not body.strip() or allergen is not None and not (
+            isinstance(allergen, str) and allergen.strip()):
         return Resolution(drop="形式が不正です")
-    span = locate_quote_span(body, evidence)
-    if span is None:  # R1/R9: the reference context is never searched.
-        return Resolution(drop="引用が対象の本文に一意に見つかりません")
-    quote = body[span[0]:span[1]]
-    if allergen is not None and (allergen not in quote or _VALUE_WORD.fullmatch(allergen)
-                                 or _PUNCTUATED.search(allergen)):
-        return Resolution(drop="アレルゲンが引用の中にありません")
-    if reaction is not None and reaction not in body:
-        return Resolution(drop="反応が本文にありません")
+    if not (isinstance(evidence, str) and evidence.strip()):
+        evidence = None  # No usable quote: the claim is located by its allergen or cue.
+    if allergen is not None and not _occurs(allergen, body):
+        return Resolution(drop="アレルゲンが本文にありません")
+    span = locate_quote_span(body, evidence) if evidence is not None else None
+    quote = body[span[0]:span[1]] if span else None
     if allergen is not None:
-        start = span[0] + quote.index(allergen)
-        end = start + len(allergen)
-    else:
-        cues = _cues(quote)
-        if not cues:
-            return Resolution(drop="アレルギー・副作用の手がかり語がありません")
-        start, end = span[0] + cues[0][0], span[0] + cues[0][1]
-    left, right = _unit(body, start)
-    if FORM_FIELD.search(body, left, right) or EMPTY_VALUE.search(body[left:right]):
-        return Resolution(drop="様式の欄は印の位置や値が読めません")
-    kinds = _supported_kinds(body, left, right, allergen, reaction)
-    if allergen is None:
-        licences = _licences(_unit_text(body, left, right), left, scope_null=True)
-        if not licences:
-            return Resolution(drop="アレルゲンの無い主張は「なし」の形のときだけ残せます")
-    else:
-        licences = _licences_at(body, start, end) if _token(allergen) else ()
-    kinds |= {lic.kind for lic in licences}
-    # A cue, a relation, a template or a reaction word in the sentence, or a claimed reaction from the vocabulary
-    # elsewhere in the body, keeps the claim as a candidate.
-    reacting = any(word in text for text in (body[left:right], reaction or "") for word in REACTION_WORDS)
-    if not kinds and not reacting:
-        return Resolution(drop="アレルギー・副作用の手がかり語がありません")
-    conflict = bool(licences) and _block_conflict(body, (left, right), allergen, licences)
-    return Resolution(evidence=quote, kinds=kinds, licences=licences, conflict=conflict)
+        return Resolution(evidence=quote if quote is not None and _occurs(allergen, quote)
+                          else _allergen_unit(body, allergen))
+    if quote is not None:
+        return Resolution(evidence=quote)
+    cues = _cues(body)
+    if not cues:
+        return Resolution(drop="引用が対象の本文に一意に見つかりません")
+    return Resolution(evidence=_unit_at(body, cues[0][0]))
 
 
 def _shape(item):
     return (isinstance(item, dict) and item.get("kind") in KINDS and item.get("subject") in SUBJECTS
             and item.get("status") in STATUSES and type(item.get("negated")) is bool
-            and item.get("certainty") in CERTAINTIES and isinstance(item.get("evidence"), str)
-            and all(item.get(key) is None or isinstance(item[key], str) for key in ("allergen", "reaction")))
-
-
-def _judge(item, res, body, claimed):
-    """Compare the claimed axes with a resolution: (kept item or None, drop reason)."""
-    if res.drop is not None:
-        return None, res.drop
-    kept = {"allergen": item["allergen"], "kind": item["kind"], "reaction": item["reaction"],
-            "subject": item["subject"], "status": item["status"], "negated": item["negated"],
-            "certainty": item["certainty"], "evidence": res.evidence}
-    if not _confirmed(item, res, body, claimed):
-        kept["unverified"] = True
-    return kept, None
-
-
-def _none_scope_fits(item, lic):
-    """A null-allergen "none" is the global one only on an unscoped form."""
-    return not (item["allergen"] is None and lic.scoped)
-
-
-def _reaction_scope_fits(item, lic):
-    """A negation that names a reaction confirms only a claim naming that reaction."""
-    return not (lic.negated and lic.reactions and item["reaction"] is None)
-
-
-def _members_claimed(lic, claimed):
-    """Every other list member is claimed in the same call with the same kind and polarity."""
-    return all((member, lic.kind, lic.negated) in claimed for member in lic.items)
-
-
-def _confirmed(item, res, body, claimed):
-    """One licence carries every claimed axis (a suspected claim fits a certain licence) and none reads otherwise."""
-    if res.conflict or not res.licences or len({(lic.subject, lic.negated) for lic in res.licences}) > 1:
-        return False
-    return any(lic.kind == item["kind"] and lic.subject == item["subject"]
-               and item["status"] in lic.statuses and lic.negated == item["negated"]
-               and (item["certainty"] == "suspected" or lic.certainty == "confirmed")
-               and (item["reaction"] is None or any(item["reaction"] in body[s:e] for s, e in lic.reactions))
-               and _none_scope_fits(item, lic) and _reaction_scope_fits(item, lic) and _members_claimed(lic, claimed)
-               for lic in res.licences)
+            and item.get("certainty") in CERTAINTIES
+            and all(item.get(key) is None or isinstance(item[key], str) for key in ("allergen", "reaction", "evidence")))
 
 
 def _key(item):
@@ -670,61 +124,55 @@ def same_assertion(a, b) -> bool:
     return isinstance(a, dict) and isinstance(b, dict) and _key(a) == _key(b)
 
 
-def _better(new, old):
-    """Of two copies of one assertion keep a confirmed one, then the one naming a reaction."""
-    def rank(item):
-        return item.get("unverified") is not True, item.get("reaction") is not None
-    return rank(new) > rank(old)
-
-
 def validate_items(items, body, drops=None, *, ctx=False) -> tuple[list, int]:
-    """Verify model allergy claims against the target body; returns (kept items, dropped count).
+    """Keep the model allergy claims located in the target body as unverified candidates; returns (kept, dropped count).
 
     `drops`, when given, collects bounded repair detail in the extract_validation
     shape ({"ev": [...], "items": ["allergies"], "reasons": [...]}). `ctx` says the
-    prompt carried reference context, which is never a valid source (R9).
+    prompt carried reference context, which is never a valid source.
     """
-    rows = []
-    for item in items if isinstance(items, list) else []:
-        res = resolve(body, item.get("evidence"), item.get("allergen"), item.get("reaction")) if _shape(item) else None
-        rows.append((item, res))
-    # List members are confirmed only together: each must be claimed here with the same kind and polarity.
-    claimed = {(item["allergen"], item["kind"], item["negated"]) for item, res in rows
-               if res is not None and res.drop is None and item["allergen"] is not None and _token(item["allergen"])}
     kept, dropped = {}, 0
-    for item, res in rows:
-        result, reason = None, "形式が不正です"
-        if res is not None:
-            result, reason = _judge(item, res, body, claimed)
-            if result is None and res.drop.startswith("引用") and ctx:
-                reason = "参考コンテキストの文は引用にできません。対象の投稿の本文から引用してください"
-        if result is None:
+    for item in items if isinstance(items, list) else []:
+        res = (resolve(body, item.get("evidence"), item.get("allergen"), item.get("reaction")) if _shape(item)
+               else Resolution(drop="形式が不正です"))
+        if res.drop is not None:
             dropped += 1
             if drops is not None:
-                if reason.startswith(("引用", "参考")) and isinstance(item, dict):
-                    quotes = drops.setdefault("ev", [])
-                    if len(quotes) < 5:
-                        quotes.append(str(item.get("evidence"))[:60])
-                fields = drops.setdefault("items", [])
-                if FIELD not in fields and len(fields) < 5:
-                    fields.append(FIELD)
-                reasons = drops.setdefault("reasons", [])
-                if len(reasons) < 5:
-                    reasons.append(f"{FIELD}: {reason}")
+                _note_drop(drops, item, res.drop, ctx)
             continue
+        result = {"allergen": item["allergen"], "kind": item["kind"], "reaction": item["reaction"],
+                  "subject": item["subject"], "status": item["status"], "negated": item["negated"],
+                  "certainty": item["certainty"], "evidence": res.evidence, "unverified": True}
         key = _key(result)
-        if key not in kept or _better(result, kept[key]):
+        # Of two copies of one assertion keep the one naming a reaction.
+        if key not in kept or (result["reaction"] is not None and kept[key]["reaction"] is None):
             kept[key] = result
     return list(kept.values()), dropped
+
+
+def _note_drop(drops, item, reason, ctx):
+    if reason.startswith("引用") and ctx:
+        reason = "参考コンテキストの文は引用にできません。対象の投稿の本文から引用してください"
+    if reason.startswith(("引用", "参考")) and isinstance(item, dict):
+        quotes = drops.setdefault("ev", [])
+        if len(quotes) < 5:
+            quotes.append(str(item.get("evidence"))[:60])
+    fields = drops.setdefault("items", [])
+    if FIELD not in fields and len(fields) < 5:
+        fields.append(FIELD)
+    reasons = drops.setdefault("reasons", [])
+    if len(reasons) < 5:
+        reasons.append(f"{FIELD}: {reason}")
 
 
 def stored_assertions(meta, content, *, first_generation):
     """Confirmed assertions of one stored extraction, None when its generation never looked for them.
 
     None is "not acquired" (an older generation, an unreadable version or field);
-    [] is "looked and found none". Unverified candidates are never returned. The
-    caller checks that the row is a per-post extraction: other kinds (for example
-    semantic_facts_v4, whose meta says extract_version 4) read as not acquired.
+    [] is "looked and found none confirmed". Unverified candidates are never
+    returned, and this validator stores only candidates. The caller checks that
+    the row is a per-post extraction: other kinds (for example semantic_facts_v4,
+    whose meta says extract_version 4) read as not acquired.
     """
     version = meta.get("extract_version") if isinstance(meta, dict) else None
     if type(version) is not int or version < first_generation or not isinstance(content, dict):
@@ -733,25 +181,3 @@ def stored_assertions(meta, content, *, first_generation):
     if not isinstance(items, list):
         return None
     return [dict(item) for item in items if isinstance(item, dict) and item.get("unverified") is not True]
-
-
-def allergen_candidates(body, labels=(), meds=()) -> list:
-    """Allergen strings for exhaustive claim gates: label allergens and their padded copies, null, body phrases and med names.
-
-    A padded copy is a label allergen as written in the body with 1-8 characters
-    before it or 1-4 after it (the scorer matches allergens by containment). Body
-    phrases are the 20 longest. A test aid for the validator gate; runtime code never calls it.
-    """
-    found = [None]
-    for label in labels:
-        if isinstance(label, dict) and isinstance(label.get("allergen"), str):
-            allergen = label["allergen"]
-            found.append(allergen)
-            for match in re.finditer(re.escape(allergen), body):
-                found += [body[max(match.start() - k, 0):match.end()] for k in range(1, 9)]
-                found += [body[match.start():match.end() + k] for k in range(1, 5)]
-    phrases = sorted({part for part in _PHRASE_BREAK.split(body) if part.strip()},
-                     key=lambda part: (-len(part), part))
-    found += phrases[:20]
-    found += [med["name"] for med in meds if isinstance(med, dict) and isinstance(med.get("name"), str)]
-    return list(dict.fromkeys(found))
