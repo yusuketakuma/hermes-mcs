@@ -424,11 +424,11 @@ def _summary_superseded(db, project_id, message_id, summary_id, fingerprint, pol
 
     True once a terminal audit (PASS, SKIPPED or NEEDS_REVIEW) of this input
     records a summary newer than the notice's own, whether it became current or
-    not, or a NEEDS_REVIEW was parked without a summary. The
-    notice's own summary must exist for the same message. While the rebuild is
-    pending (no newer result, or only PENDING ones) the notice stays unverified
-    and is retried, so returning to the old model before it finishes still lets
-    it send. A notice ended this way is not rebuilt for the replacing summary."""
+    not, or a NEEDS_REVIEW was parked without a summary. The notice's own
+    summary must exist for the same message. While the rebuild is pending (no
+    newer result, or only PENDING ones) the notice stays unverified and is
+    retried; returning to the old model before the rebuild stores anything still
+    lets it send. A notice ended this way is not rebuilt for the replacing summary."""
     from inference_version import is_current
     if type(summary_id) is not int or summary_id <= 0:
         return False

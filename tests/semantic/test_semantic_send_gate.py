@@ -8,6 +8,7 @@ import json
 import pytest
 
 import notify_flush
+from inference_version import VERSION_KEY
 from semantic_testkit import (_cfg, _delivery_db, _delivery_patient, _message,
                               _semantic_event)
 
@@ -514,12 +515,15 @@ def test_flush_holds_the_notice_while_rebuilding_and_ends_it_once_rebuilt_even_i
 
 
 def test_rebuilt_summary_adds_no_semantic_notice(tmp_path, monkeypatch):
+    import mcs_util
     import notify_sender
     import semantic_notice
     import semantic_transport
     monkeypatch.setattr(semantic_transport, "LLM_MODEL", "Qwen3.5-9B")
     db = _delivery_db(tmp_path, [_message()])
     monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))
+    monkeypatch.setattr(mcs_util, "hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(notify_sender, "target", lambda *a: "channel")
     monkeypatch.setattr(notify_sender, "send", lambda *a, **kw: pytest.fail("stale notice was sent"))
     _semantic_event(db)
     monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
@@ -538,4 +542,23 @@ def test_rebuilt_summary_adds_no_semantic_notice(tmp_path, monkeypatch):
     assert rebuild("PASS") == ["pending"]
     assert _flush_notice(db) == "suppressed"
     assert rebuild("PASS") == ["suppressed"]
+    db.close()
+
+
+def test_rebuild_parked_without_a_summary_ends_the_notice(tmp_path, monkeypatch):
+    import semantic_transport
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "Qwen3.5-9B")
+    db = _delivery_db(tmp_path, [_message()])
+    event = _semantic_event(db)
+    payload = json.loads(event["payload"])
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
+    with pytest.raises(semantic_send_gate.DeferredSend, match="summary_unverified"):
+        semantic_send_gate.semantic_gate(db.db, event, payload, _cfg("enforce"))
+    meta = json.loads(db.artifacts("semantic_audit", message_id=1)[-1]["meta"])
+    db.artifact_add("semantic_audit", json.dumps({"status": "NEEDS_REVIEW", "findings": [], "target_message_id": 1}),
+                    project_id=1, message_id=1,
+                    meta={key: meta[key] for key in (VERSION_KEY, "fingerprint", "policy_fingerprint")}
+                    | {"audit_status": "NEEDS_REVIEW", "technical_status": "needs_review"})
+    with pytest.raises(semantic_send_gate.StaleSend, match="stale_generation"):
+        semantic_send_gate.semantic_gate(db.db, event, payload, _cfg("enforce"))
     db.close()
