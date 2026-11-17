@@ -39,9 +39,36 @@
 
 1. **issue を作る**: テンプレート（不具合・機能/改善）を選ぶと `要トリアージ` が付きます。患者名・投稿本文・秘密値は書きません。白紙の issue は作れません。脆弱性・秘密情報・データ取扱いの問題は issue にせず、非公開の脆弱性報告（`SECURITY.md`「報告」）を使います。
 2. **振り分ける**: 版・領域・対応のラベルを付け、`要トリアージ` を外します。大きな計画は `roadmap` の issue の子 issue（sub-issue）にします。
-3. **PR を出す**: テンプレートの「概要・関連・取り込み先・利用者への影響・更新時の操作・検証」を埋めます。default branch 向けで issue 全体を解決する場合だけ本文に `Closes #番号`、補助PR・一部対応は `Related: #番号` を書きます。版のラベルを1つ付けます。領域と size は自動で付きます。
+3. **PR を出す**: まとまった作業は下の「実装グループ」で進め、グループ用の worktree で書きます（worktree の手順は `AGENTS.md`「コマンド」）。テンプレートの「概要・関連・取り込み先・利用者への影響・更新時の操作・検証」を埋めます。default branch 向けで issue 全体を解決する場合だけ本文に `Closes #番号`、補助PR・一部対応は `Related: #番号` を書きます。版のラベルを1つ付けます。領域と size は自動で付きます。
 4. **merge・リリース**: default branch 向けの解決キーワード付きPRをそこへmergeすると、対応するissueが自動で閉じます。別branch向けの補助PRではキーワードが無視され、自動で閉じません。リリースは `release-mcs` skill と [RELEASE_NOTES.md](RELEASE_NOTES.md) の手順に従います。
 5. **配備**: `要実機作業`・`要再起動` の付いた変更は、配備のあとに gateway・LINE WORKS アダプターの再起動まで済んだか確認します。
+
+## 実装グループ（グループごとの worktree とブランチ）
+
+main へのマージ回数を減らすため、まとまった作業は「実装グループ」に分けて進めます。
+main に1本入るたびに、開いているすべての PR へ main が取り込まれて CI がやり直しになる（`AUTOMATION.md`「main-sync」）ので、
+細かい PR を毎回 main に入れるより、グループでまとめて入れるほうが待ち時間も CI も減ります。
+
+- **グループの単位**: 1つの目的で、ふつう1つの領域に収まる作業です。例: 通知UIの残り、患者コンテキストの再構成、自動化基盤。
+  版のラベル（`v1.1.3` など）に合わせて区切ると、リリース単位とも揃います。
+- **ブランチと worktree**: グループごとに `group/<名前>`（英小文字とハイフン。例: `group/notify-ui`）を `origin/main` から作り、
+  専用の worktree（Mac は `~/.mcs-wt/group-<名前>`）で作業します。開始と同時に、そのブランチから main への PR を1本開きます（下書きにしない）。
+  本文の先頭にグループの目的と、入れる作業のチェックリストを書きます。この PR があると、main の更新が `main-sync` で自動的に取り込まれ、CI も回ります。
+- **グループ内の積み方**: 1人（1エージェント）で順に進めるときは、グループの worktree に直接 commit して push します。
+  並行して進めるときは、作業ごとに `group/<名前>` から作業ブランチを切って別の worktree で書き、`group/<名前>` 向けの PR にします。
+  作業ブランチの PR は、CI が通れば、そのグループを担当するエージェントが `group/<名前>` へマージしてかまいません（所有者 2026-11-17 承認。main へのマージは含みません）。
+  同じファイルを同時に編集する作業は、同じグループの中でも並行させません。`changes/*.json` は作業ごとに作ります。
+- **main への取り込み**: グループの PR が CI を通り、チェックリストが終わったら Yusukeさんが main にマージします。
+  マージは merge commit で行い、グループ内の commit を残します。終わったらブランチと worktree を消します。
+- **大きくしすぎない歯止め**: グループの PR は、開いてから **1週間以内**か、変更が**おおむね2,000行・10作業**に達したところで、途中でも main に入れます。
+  未完成の機能は、設定の既定を無効にしておくなど、入れても挙動が変わらない形にします。同時に開くグループは**3本まで**にします。
+  main の取り込みが衝突したら、その日のうちに `git merge origin/main` で解消します（rebase や force-push はしません）。
+- **グループにしないもの**: `即時適用` の修正、1本で済む小さな修正、`担当:*` ラベルの Issue から AI が作る PR（`AUTOMATION.md`）は、これまでどおり main 向けの PR にします。
+
+根拠: [DORA: Trunk-based development](https://dora.dev/capabilities/trunk-based-development/)（作業ブランチは短く、同時に開くブランチは3本以下、少なくとも1日1回は統合）、
+[Martin Fowler: Patterns for Managing Source Code Branches](https://martinfowler.com/articles/branching-patterns.html)（統合の間隔が長いほど衝突の解消が重くなる）、
+[pydevtools: Parallel AI coding agents](https://pydevtools.com/handbook/how-to/how-to-run-parallel-ai-coding-agents-on-a-python-project/)（エージェントごとに worktree とブランチを分け、マージ後に片付ける）。2026-11-17確認。
+グループは統合を遅らせる仕組みなので、期間と規模の上限と、main の自動取り込みで衝突を早めに小さく見つけることを前提にしています。
 
 ## 補助PR・検証結果の管理
 
