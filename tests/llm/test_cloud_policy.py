@@ -408,6 +408,128 @@ def test_openai_quota_429_is_reconstructed_as_terminal(tmp_path, now, monkeypatc
         assert c.usage_report(ledger)["max_reserved_cost_usd"] == reservation["max_cost_usd"]
 
 
+@pytest.mark.parametrize('status,marker', [
+    ('http_400', {'anthropic_400_diagnostic': 'usage_limit'}),
+    ('http_429', {'anthropic_error_code': 'enforced_spend_limit_reached'}),
+])
+def test_anthropic_payment_limit_is_reconstructed_as_terminal(tmp_path, now, monkeypatch, status, marker):
+    import semantic_runtime
+
+    for module in (c, cloud_usage_accounting):
+        monkeypatch.setattr(module, "pricing_valid", lambda *args, **kwargs: True)
+    seen = []
+    original = semantic_runtime._record_cloud_circuit_result_tx
+    def observe(ledger, error, *args, **kwargs):
+        assert ledger.db.in_transaction
+        assert len(ledger.artifacts("cloud_usage_result")) == 1
+        seen.append(error)
+        return original(ledger, error, *args, **kwargs)
+    monkeypatch.setattr(semantic_runtime, "_record_cloud_circuit_result_tx", observe)
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        reservation = _reserve(ledger)
+        c.record_result(ledger, reservation, {
+            "model": MODEL, "request_fp": reservation["request_fp"],
+            "usage": None, "http_class": status, "error_kind": "payment_required", **marker})
+        assert len(seen) == 1 and seen[0].kind == "payment_required" and seen[0].retryable is False
+        assert seen[0].status == int(status[5:])
+        stored = json.loads(ledger.artifacts("cloud_usage_result")[0]["meta"])
+        assert stored["cost_usd"] == reservation["max_cost_usd"] or stored["cost_usd"] == str(reservation["max_cost_usd"])
+        assert stored["usage"] is None
+        assert not ledger.db.in_transaction and len(ledger.artifacts("cloud_circuit")) == 1
+        assert c.global_block_reason(ledger, model=MODEL) == "payment_required"
+        assert c.usage_report(ledger)["max_reserved_cost_usd"] == reservation["max_cost_usd"]
+
+
+@pytest.mark.parametrize('changes', [
+    {'http_class': 'http_500'}, {'error_kind': 'rate_limited'},
+    {'usage': {'input_tokens': 1, 'output_tokens': 1}}, {'model': 'gpt-6-luna'},
+    {'anthropic_error_code': 'enforced_spend_limit_reached',
+     'anthropic_400_diagnostic': 'usage_limit'},
+    {'anthropic_error_code': 'enforced_spend_limit_reached',
+     'openai_error_code': 'insufficient_quota'},
+])
+def test_invalid_anthropic_payment_marker_is_held_not_saved(tmp_path, now, monkeypatch, changes):
+    for module in (c, cloud_usage_accounting):
+        monkeypatch.setattr(module, "pricing_valid", lambda *args, **kwargs: True)
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        reservation = _reserve(ledger)
+        base = {"model": MODEL, "request_fp": reservation["request_fp"], "usage": None,
+                "http_class": "http_429", "error_kind": "payment_required",
+                "anthropic_error_code": "enforced_spend_limit_reached"}
+        base.update(changes)
+        with pytest.raises(AnthropicError, match="pricing_unverified"):
+            c.record_result(ledger, reservation, base)
+        # The hold writes no result row for this reservation.
+        assert not [row for row in ledger.artifacts("cloud_usage_result")
+                    if json.loads(row["meta"]).get("reservation_id") == reservation["reservation_id"]]
+
+
+def test_anthropic_payment_marker_survives_storage_and_validates_on_read(tmp_path, now, monkeypatch):
+    for module in (c, cloud_usage_accounting):
+        monkeypatch.setattr(module, "pricing_valid", lambda *args, **kwargs: True)
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        reservation = _reserve(ledger)
+        c.record_result(ledger, reservation, {
+            "model": MODEL, "request_fp": reservation["request_fp"], "usage": None,
+            "http_class": "http_400", "error_kind": "payment_required",
+            "anthropic_400_diagnostic": "usage_limit"})
+        stored = json.loads(ledger.artifacts("cloud_usage_result")[0]["meta"])
+        assert stored["anthropic_400_diagnostic"] == "usage_limit"
+        assert stored["cost_usd"] == str(reservation["max_cost_usd"]) or stored["cost_usd"] == reservation["max_cost_usd"]
+        report = c.usage_report(ledger)
+        assert report["unresolved_requests"] == 1 and not report["pricing_unverified"]
+
+
+def test_a_200_refusal_detail_reaches_the_circuit_without_opening_it(tmp_path, now, monkeypatch):
+    import semantic_runtime
+    for module in (c, cloud_usage_accounting):
+        monkeypatch.setattr(module, "pricing_valid", lambda *args, **kwargs: True)
+    seen = []
+    original = semantic_runtime._record_cloud_circuit_result_tx
+    def observe(ledger, error, *args, **kwargs):
+        seen.append(error)
+        return original(ledger, error, *args, **kwargs)
+    monkeypatch.setattr(semantic_runtime, "_record_cloud_circuit_result_tx", observe)
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        for index in range(5):
+            reservation = _reserve(ledger, unit=f"refusal-{index}")
+            usage = {"input_tokens": 10, "output_tokens": 2}
+            c.record_result(ledger, reservation, {
+                "model": MODEL, "request_fp": reservation["request_fp"], "usage": usage,
+                "http_class": "http_200", "error_kind": "contract_error",
+                "contract_error_detail": "refusal"})
+        assert len(seen) == 5
+        assert all(error.kind == "contract_error" and error.detail == "refusal" and error.status == 200
+                   for error in seen)
+        assert c.block_reason(ledger, _cfg(), "patient_context", 1) is None
+        stored = [json.loads(row["meta"]) for row in ledger.artifacts("cloud_usage_result")]
+        assert all("contract_error_detail" not in meta for meta in stored)
+        report = c.usage_report(ledger)
+        assert report["unresolved_requests"] == 0 and report["daily_requests"] == 5
+
+
+@pytest.mark.parametrize('changes', [
+    {'http_class': 'http_400'}, {'http_class': 'http_413'}, {'http_class': 'not_sent'},
+    {'error_kind': 'rate_limited'}, {'error_kind': 'protocol_error'},
+    {'usage': None}, {'contract_error_detail': 'incomplete_response'},
+    {'contract_error_detail': 'synthetic-canary'}, {'contract_error_detail': 1},
+])
+def test_invalid_contract_error_detail_is_held_not_saved(tmp_path, now, monkeypatch, changes):
+    for module in (c, cloud_usage_accounting):
+        monkeypatch.setattr(module, "pricing_valid", lambda *args, **kwargs: True)
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        reservation = _reserve(ledger)
+        base = {"model": MODEL, "request_fp": reservation["request_fp"],
+                "usage": {"input_tokens": 10, "output_tokens": 2},
+                "http_class": "http_200", "error_kind": "contract_error",
+                "contract_error_detail": "refusal"}
+        base.update(changes)
+        with pytest.raises(AnthropicError, match="pricing_unverified"):
+            c.record_result(ledger, reservation, base)
+        assert not [row for row in ledger.artifacts("cloud_usage_result")
+                    if json.loads(row["meta"]).get("reservation_id") == reservation["reservation_id"]]
+
+
 def test_borrowed_sqlite_connection_rejects_worker_thread_writes(tmp_path, now):
     with closing(Ledger(str(tmp_path / "l.db"))) as db:
         with ThreadPoolExecutor(max_workers=1) as pool:
@@ -415,13 +537,16 @@ def test_borrowed_sqlite_connection_rejects_worker_thread_writes(tmp_path, now):
                 pool.submit(_reserve, db).result()
 
 
-def test_repeated_contract_failures_open_but_mixed_classes_do_not(tmp_path, now):
+def test_only_200_contract_violations_count_toward_the_cloud_circuit(tmp_path, now):
     with closing(Ledger(str(tmp_path / "l.db"))) as db:
-        for kind in ("contract_error", "transport", "contract_error"):
-            c._circuit_result(db, AnthropicError(kind, retryable=kind == "transport"))
+        # A refusal, a non-retryable 4xx and a pre-send failure are the unit's own
+        # request, never provider health: none of them may open the circuit.
+        for detail, status in (("refusal", 200), ("incomplete_response", 400), ("", 413), ("", 0)):
+            c._circuit_result(db, AnthropicError("contract_error", detail, status=status))
+        c._circuit_result(db, AnthropicError("transport", retryable=True))
         assert c.block_reason(db, _cfg(), "patient_context", 1) is None
-        c._circuit_result(db, AnthropicError("contract_error"))
-        c._circuit_result(db, AnthropicError("contract_error"))
+        for _ in range(2):
+            c._circuit_result(db, AnthropicError("contract_error", "incomplete_response", status=200))
         assert c.block_reason(db, _cfg(), "patient_context", 1) == "contract_error"
 
 

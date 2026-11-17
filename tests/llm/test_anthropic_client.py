@@ -780,3 +780,53 @@ def test_complete_refuses_to_send_without_a_callable_reservation(reserve_fn):
     with pytest.raises(ValueError, match="reserve_fn_invalid"):
         client.complete("synthetic", deadline=time.monotonic() + 10, reserve_fn=reserve_fn)
     assert calls == []
+
+
+def test_a_spend_limit_429_stamps_its_finite_diagnostic():
+    body = json.dumps({"type": "error", "error": {"type": "rate_limit_error",
+                       "details": {"error_code": "enforced_spend_limit_reached"}}}).encode()
+    assert a.AnthropicClient("synthetic").response_error(429, body, {"Retry-After": "1"}) == (
+        "payment_required", False, {"anthropic_error_code": "enforced_spend_limit_reached"})
+
+
+def test_a_usage_limit_400_stamps_its_finite_diagnostic():
+    assert a.AnthropicClient("synthetic").response_error(400, _usage_limit_400_body(), {}) == (
+        "payment_required", False, {"anthropic_400_diagnostic": "usage_limit"})
+
+
+@pytest.mark.parametrize("raw", [
+    json.dumps({"type": "error", "error": {"type": "api_error",
+        "details": {"error_code": "enforced_spend_limit_reached"}}}).encode(),
+    json.dumps({"type": "error", "error": {"type": "rate_limit_error",
+        "details": {"error_code": "rate_limit_exceeded"}}}).encode(),
+    json.dumps({"type": "error", "error": {"type": "rate_limit_error"}}).encode(),
+    json.dumps({"type": "error", "error": {"details": {"error_code": "enforced_spend_limit_reached"}}}).encode(),
+])
+def test_only_a_verified_spend_limit_429_is_payment(raw):
+    assert a.AnthropicClient("synthetic").response_error(429, raw, {"Retry-After": "1"}) == (
+        "rate_limited", True, {})
+
+
+def test_a_200_refusal_carries_its_bounded_detail_to_the_result_metadata():
+    recorded = []
+    provider = a.AnthropicClient("synthetic", post_fn=lambda *args: (
+        200, {}, json.dumps(_reply(stop_reason="refusal", content=[])).encode()))
+    with pytest.raises(a.AnthropicError, match="contract_error"):
+        provider.complete("synthetic", deadline=time.monotonic() + 10,
+                          after_result=lambda _reservation, meta, **_answer: recorded.append(meta),
+                          reserve_fn=lambda *args: None)
+    assert recorded[0]["http_class"] == "http_200" and recorded[0]["error_kind"] == "contract_error"
+    assert recorded[0]["contract_error_detail"] == "refusal"
+    assert recorded[0]["usage"]["input_tokens"] == 10
+
+
+def test_a_200_contract_violation_without_a_known_detail_stays_unmarked():
+    recorded = []
+    provider = a.AnthropicClient("synthetic", post_fn=lambda *args: (
+        200, {}, json.dumps(_reply(stop_reason="incomplete")).encode()))
+    with pytest.raises(a.AnthropicError, match="contract_error"):
+        provider.complete("synthetic", deadline=time.monotonic() + 10,
+                          after_result=lambda _reservation, meta, **_answer: recorded.append(meta),
+                          reserve_fn=lambda *args: None)
+    assert recorded[0]["error_kind"] == "contract_error"
+    assert "contract_error_detail" not in recorded[0]

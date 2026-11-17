@@ -583,3 +583,22 @@ def test_a_write_failure_after_an_earlier_target_leaves_no_row(ledger):
     assert caught.value.detail == "disposition_conflict"
     ledger.db.commit()          # even a caller that commits anyway keeps no partial replacement
     assert [tuple(row) for row in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == before
+
+
+@pytest.mark.parametrize('status,extra', [
+    ('http_400', {'anthropic_400_diagnostic': 'usage_limit'}),
+    ('http_429', {'anthropic_error_code': 'enforced_spend_limit_reached'})])
+def test_a_verified_anthropic_payment_limit_lets_the_unit_go_local(ledger, status, extra):
+    """A strictly verified account limit is a confirmed rejection: the local
+    fallback guard passes it through the real request factory and writes nothing."""
+    reservation = _reserve(ledger)
+    _settle(ledger, reservation, status, 'payment_required', **extra)
+    assert _guard(ledger) == []
+    assert len(_financial(ledger)) == 2 and not _dispositions(ledger)
+
+
+def test_an_unmarked_anthropic_payment_receipt_still_blocks_local_fallback(ledger):
+    reservation = _reserve(ledger)
+    _settle(ledger, reservation, 'http_429', 'payment_required')
+    _refusal(lambda: _guard(ledger))
+    assert len(_financial(ledger)) == 2 and not _dispositions(ledger)

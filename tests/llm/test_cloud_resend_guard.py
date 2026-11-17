@@ -763,3 +763,80 @@ def test_inconsistent_receipt_is_classified_apart_from_a_repeat(tmp_path, monkey
             ledger.db.execute("UPDATE artifacts SET meta=? WHERE kind='cloud_usage_reserve'",
                               ('{"unit_key":"other","unit_key":"synthetic-unit"}',))
         assert _refusal_of(ledger, 'synthetic prompt') == 'receipt_inconsistent'
+
+
+@pytest.mark.parametrize('status,marker', [
+    ('http_400', {'anthropic_400_diagnostic': 'usage_limit'}),
+    ('http_429', {'anthropic_error_code': 'enforced_spend_limit_reached'})])
+def test_anthropic_verified_payment_retries_only_after_receipted_human_resume(tmp_path, monkeypatch, status, marker):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    monkeypatch.setattr(cloud_policy, 'selected_key', lambda *args, **kwargs: 'synthetic')
+    monkeypatch.setattr(mcs_util, 'HOME', str(tmp_path))
+    (tmp_path / 'config.json').write_text(json.dumps({
+        'mcs_login_id': 'synthetic', 'notify_target': 'synthetic',
+        'cloud_llm': {'mode': 'on', 'project_ids': [1], 'provider': 'anthropic'},
+    }))
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt')
+        cloud_policy.record_result(ledger, reservation, {
+            **_result(reservation, status, 'payment_required'), **marker})
+        usage = cloud_policy.usage_report(ledger)
+        assert usage['unresolved_requests'] == 1
+        assert usage['max_reserved_cost_usd'] == reservation['max_cost_usd']
+        with pytest.raises(anthropic_client.AnthropicError):
+            _reserve(ledger, 'synthetic prompt')
+        req = {'version': 1, 'cmd': 'ops.cloud_resume', 'command_id': str(uuid.uuid4()),
+               'actor': 'synthetic human', 'human_confirmed': False,
+               'project_id': None, 'reason': 'synthetic approval'}
+        denied = mcs_requests.apply_command(ledger, req)
+        assert denied['outcome'] == 'rejected' and denied['error'] == 'human_confirmation_required'
+        with pytest.raises(anthropic_client.AnthropicError):
+            _reserve(ledger, 'synthetic prompt')
+        req.update(command_id=str(uuid.uuid4()), human_confirmed=True)
+        receipt = mcs_requests.apply_command(ledger, req)
+        assert receipt['outcome'] == 'applied'
+        _reserve(ledger, 'synthetic prompt')
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 2
+        assert cloud_policy.usage_report(ledger)['unresolved_requests'] == 2
+
+
+@pytest.mark.parametrize('status,error', [('http_400', 'payment_required'),
+                                          ('http_429', 'payment_required')])
+def test_an_old_unmarked_anthropic_payment_receipt_still_blocks_after_resume(tmp_path, monkeypatch, status, error):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt')
+        cloud_policy.record_result(ledger, reservation, _result(reservation, status, error))
+        cloud_policy.resume(ledger)
+        with pytest.raises(anthropic_client.AnthropicError) as caught:
+            _reserve(ledger, 'synthetic prompt')
+        assert caught.value.detail == 'cloud_unit_unresolved'
+
+
+@pytest.mark.parametrize('change', ['marker_false', 'marker_integer', 'marker_string',
+                                    'wrong_status', 'wrong_kind', 'wrong_provider', 'usage_missing',
+                                    'openai_marker_mixed'])
+def test_corrupt_anthropic_payment_marker_cannot_prove_retry(tmp_path, monkeypatch, change):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt')
+        cloud_policy.record_result(ledger, reservation, {
+            **_result(reservation, 'http_429', 'payment_required'),
+            'anthropic_error_code': 'enforced_spend_limit_reached'})
+        expressions = {'marker_false': "'$.anthropic_error_code',json('false')",
+                       'marker_integer': "'$.anthropic_error_code',1",
+                       'marker_string': "'$.anthropic_error_code','synthetic_unknown'",
+                       'wrong_status': "'$.http_class','http_400'",
+                       'wrong_kind': "'$.error_kind','rate_limited'",
+                       'wrong_provider': "'$.model','gpt-6-luna'",
+                       'openai_marker_mixed': "'$.openai_error_code','insufficient_quota'"}
+        with ledger.db:
+            if change == 'usage_missing':
+                ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.usage') "
+                                  "WHERE kind='cloud_usage_result'")
+            else:
+                ledger.db.execute("UPDATE artifacts SET meta=json_set(meta," + expressions[change] + ") "
+                                  "WHERE kind='cloud_usage_result'")
+        assert cloud_policy.usage_report(ledger)['pricing_unverified'] is True
+        with pytest.raises(anthropic_client.AnthropicError):
+            _reserve(ledger, 'synthetic prompt')
