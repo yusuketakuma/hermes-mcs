@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import semantic_store
+import semantic_transport
 import pytest
 
 from hermes_plugin import card_workers
@@ -485,7 +486,7 @@ def test_summary_comparison_adoption_preview_confirm_and_stale_guard(tmp_path):
     }
     candidate_id = db.artifact_add(
         "semantic_summary", json.dumps(candidate, ensure_ascii=False),
-        project_id=1, message_id=1, model="local",
+        project_id=1, message_id=1, model=semantic_transport.LLM_MODEL,
         meta={"fingerprint": bundle["source_fingerprint"],
               "policy_fingerprint": policy,
               "target_revision": member["revision"],

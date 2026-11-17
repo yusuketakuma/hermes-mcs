@@ -129,15 +129,24 @@ def test_view_shows_summary_stale_after_local_model_change(
         view.close()
 
 
-def test_view_reads_local_model_once_so_one_screen_is_consistent(tmp_path, monkeypatch):
+def _drifting_screen(tmp_path, monkeypatch):
+    """One screen: 3 local rows made by model A + 1 cloud row; the configured model drifts A→B."""
     import ledger
     import mcs_view
     db, _ = _setup(tmp_path)
     created_model = semantic_transport.LLM_MODEL
+    fingerprint = semantic_store.thread_bundle(db.db, 1, 1)["source_fingerprint"]
+    for kind in ("semantic_facts", "semantic_facts_v4"):
+        db.artifact_add(kind, "{}", project_id=1, message_id=1, model=created_model,
+                        meta={"fingerprint": fingerprint, "policy_fingerprint": "a" * 64,
+                              "technical_status": "PASS"})
+    db.artifact_add("semantic_facts", "{}", project_id=1, message_id=1, model="cloud-synthetic",
+                    meta={"fingerprint": fingerprint, "technical_status": "PASS",
+                          "provider_provenance": {"providers": ["anthropic"], "complete": True}})
     snapshot = ledger.publish_snapshot(
         str(tmp_path / "ledger.db"), str(tmp_path / "snapshots"))
     db.close()
-    models = iter(["synthetic-local-b", "synthetic-local-c", "synthetic-local-d"] * 50)
+    models = iter([created_model] + ["synthetic-local-b"] * 200)
     calls = []
 
     def drifting_model(*_a, **_k):
@@ -145,13 +154,35 @@ def test_view_reads_local_model_once_so_one_screen_is_consistent(tmp_path, monke
         return next(models)
 
     monkeypatch.setattr(semantic_transport, "llm_model", drifting_model)
-    view = mcs_view.View(snapshot)
+    return mcs_view.View(snapshot), created_model, calls
+
+
+def _statuses(out, created_model):
+    rows = [r for items in out.values() for r in items]
+    local = [r["effective_status"] for r in rows if r["model"] == created_model]
+    cloud = [r["effective_status"] for r in rows if r["model"] == "cloud-synthetic"]
+    return local, cloud
+
+
+def test_view_reads_local_model_once_so_one_screen_is_consistent(tmp_path, monkeypatch):
+    view, created_model, calls = _drifting_screen(tmp_path, monkeypatch)
     try:
-        out = view.read("semantic", project=1, message_id=1)["semantic"]
-        rows = [r for items in out.values() for r in items
-                if r["model"] == created_model]
-        assert rows and {r["effective_status"] for r in rows} == {"STALE"}
+        local, cloud = _statuses(view.read("semantic", project=1, message_id=1)["semantic"],
+                                 created_model)
+        assert len(local) >= 3 and len(set(local)) == 1
+        assert cloud == ["PASS"]
         assert len(calls) == 1
+    finally:
+        view.close()
+
+
+def test_view_without_model_scope_would_split_one_screen(tmp_path, monkeypatch):
+    import mcs_view
+    view, created_model, calls = _drifting_screen(tmp_path, monkeypatch)
+    try:
+        out = mcs_view.View._semantic.__wrapped__(view, 1, 1)["semantic"]
+        local, _cloud = _statuses(out, created_model)
+        assert len(set(local)) > 1 and len(calls) > 1
     finally:
         view.close()
 
