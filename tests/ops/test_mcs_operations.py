@@ -286,6 +286,28 @@ def test_retry_preview_reads_bounded_payload_from_readonly_snapshot(tmp_path):
         db.close()
 
 
+@pytest.mark.parametrize("tail", ['"x": NaN', '"x": Infinity', '"x": "\\ud800"'])
+def test_retry_preview_rejects_stored_payload_the_writer_cannot_hash(tmp_path, tail):
+    from adapters.common.human_commands import _semantic_job
+
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        db.ensure_patient(1)
+        job_id = db.job_add("semantic", 1, 42, payload={VERSION_KEY: CURRENT_VERSION, "targets": [42]})
+        raw = '{"%s": %s, "targets": [42], %s}' % (VERSION_KEY, json.dumps(CURRENT_VERSION), tail)
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=2,payload=? WHERE job_id=?",
+                          (raw, job_id))
+        db.db.execute("BEGIN")
+        try:
+            assert _semantic_job(SimpleNamespace(db=db.db), mcs_requests, 1, job_id) == (
+                None, "invalid_payload", None)
+        finally:
+            db.db.rollback()
+    finally:
+        db.close()
+
+
 def test_retry_preview_accepts_stored_payload_above_command_limit(tmp_path):
     from adapters.common.human_commands import _semantic_job
 

@@ -238,7 +238,12 @@ def _semantic_job(view, requests, project_id: int, job_id: int, additional_attem
         return None, error, None
     from semantic_runtime import attempt_limit
     row = {**dict(row), "attempt_limit": attempt_limit(parsed)}
-    return row, None, requests.payload_hash(parsed)
+    try:
+        digest = requests.payload_hash(parsed)
+    except (TypeError, ValueError, RecursionError):
+        # Same rejection as the writer (mcs_operations): NaN, lone surrogates, deep nesting.
+        return None, "invalid_payload", None
+    return row, None, digest
 
 
 def _summary_comparison(view, project_id: int, message_id: int,
