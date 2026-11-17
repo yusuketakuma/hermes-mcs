@@ -19,10 +19,16 @@ permissions: {}
 
 jobs:
   plan:
+    # The action refuses an actor that is neither a person with write access nor in allowed_bots; such a run
+    # would still write the started marker below and spend the head's one automatic review, so it never starts.
     if: >-
       vars.AUTOMATION_ENABLED == 'true' &&
       (
-        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+          contains(fromJSON(format('["{0}","{1}","github-actions[bot]","dependabot[bot]","claude[bot]"]',
+            github.repository_owner, vars.DOTS_ACTOR)), github.event.workflow_run.actor.login) &&
+          contains(fromJSON(format('["{0}","{1}","github-actions[bot]","dependabot[bot]","claude[bot]"]',
+            github.repository_owner, vars.DOTS_ACTOR)), github.actor)) ||
         (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
           github.event.sender.login == github.repository_owner &&
           startsWith(github.event.comment.body, '/claude-review') && !contains(github.event.comment.body, '@claude'))
@@ -49,31 +55,54 @@ jobs:
           GH_REPO: ${{ github.repository }}
           OWNER: ${{ github.repository_owner }}
           NUMBER: ${{ github.event.issue.number }}
+          UPSTREAM: ${{ github.event.workflow_run.event }}
+          TITLE: ${{ github.event.workflow_run.display_title }}
           AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
           ACTORS: ${{ vars.REVIEW_ACTORS }}
           DOTS: ${{ vars.DOTS_ACTOR }}
         run: |
           set -euo pipefail
-          work=$(mktemp -d)
-          # An Agent control run's own head is the default branch's, not a PR's: look at every open PR.
-          if [[ -n "$NUMBER" ]]; then prs="$NUMBER"; request=(--owner-request)
-          else prs=$(gh api "repos/$GH_REPO/pulls?state=open&per_page=100" --paginate --jq '.[].number'); request=(); fi
-          echo '[]' > "$work/targets.json"
-          for pr in $prs; do
-            gh api "repos/$GH_REPO/pulls/$pr" > "$work/pr.json"
-            sha=$(jq -r .head.sha "$work/pr.json")
-            gh api "repos/$GH_REPO/pulls/$pr/reviews?per_page=100" --paginate --slurp > "$work/reviews.json"
-            gh api "repos/$GH_REPO/issues/$pr/comments?per_page=100" --paginate --slurp > "$work/comments.json"
-            gh api "repos/$GH_REPO/commits/$sha/status" > "$work/status.json"
-            plan=$(python3 ci/agent_control.py review-request --pr "$work/pr.json" --reviews "$work/reviews.json" \
-              --comments "$work/comments.json" --status "$work/status.json" --actors "${ACTORS:-}" \
-              --dots-actor "${DOTS:-}" --owner "$OWNER" --automation "${AUTOMATION:-}" "${request[@]}")
-            echo "PR #$pr: $plan"
-            if [[ "$(jq -r .run <<< "$plan")" == "true" ]]; then
-              jq --argjson p "$plan" '. + [{pr: $p.pr, sha: $p.sha}]' "$work/targets.json" > "$work/next.json"
-              mv "$work/next.json" "$work/targets.json"
+          export work; work=$(mktemp -d)
+          # The PR on the comment; the head named in an Agent control run's name ("Agent control <sha>");
+          # every open PR only after its schedule run. A failed list fails the job.
+          # Calls per run: the list (1 per 100 PRs, or 1), 1 status per PR, and 3 more only when merge-gate is success.
+          request=()
+          if [[ -n "$NUMBER" ]]; then
+            gh api "repos/$GH_REPO/pulls/$NUMBER" | jq -c . > "$work/prs.jsonl"; request=(--owner-request)
+          elif [[ "$UPSTREAM" == "schedule" ]]; then
+            gh api "repos/$GH_REPO/pulls?state=open&per_page=100" --paginate --slurp | jq -c '.[][]' > "$work/prs.jsonl"
+          elif [[ "$TITLE" =~ ([0-9a-f]{40}) ]]; then
+            sha=${BASH_REMATCH[1]}
+            gh api "repos/$GH_REPO/commits/$sha/pulls" |
+              jq -c --arg sha "$sha" '.[] | select(.state == "open" and .head.sha == $sha)' > "$work/prs.jsonl"
+          else
+            : > "$work/prs.jsonl"
+          fi
+          export REQUEST="${request[*]}"
+          plan_pr() {
+            local d="$work/$1"; mkdir -p "$d"
+            printf '%s' "$2" > "$d/pr.json"
+            gh api "repos/$GH_REPO/commits/$(jq -r .head.sha "$d/pr.json")/status" > "$d/status.json"
+            if [[ "$(python3 ci/agent_control.py ready-precheck --status "$d/status.json" | jq -r .gate)" != "success" ]]; then
+              echo "PR #$1: merge-gate が success ではない"; return 0
             fi
-          done
+            gh api "repos/$GH_REPO/pulls/$1/reviews?per_page=100" --paginate --slurp > "$d/reviews.json"
+            gh api "repos/$GH_REPO/issues/$1/comments?per_page=100" --paginate --slurp > "$d/comments.json"
+            # shellcheck disable=SC2086  # REQUEST is empty or one flag
+            plan=$(python3 ci/agent_control.py review-request --pr "$d/pr.json" --reviews "$d/reviews.json" \
+              --comments "$d/comments.json" --status "$d/status.json" --actors "${ACTORS:-}" \
+              --dots-actor "${DOTS:-}" --owner "$OWNER" --automation "${AUTOMATION:-}" $REQUEST)
+            echo "PR #$1: $plan"
+            if [[ "$(jq -r .run <<< "$plan")" == "true" ]]; then jq -c '{pr, sha}' <<< "$plan" >> "$work/targets.jsonl"; fi
+          }
+          export -f plan_pr
+          while read -r item; do
+            pr=$(jq -r .number <<< "$item")
+            # Its own bash: one PR's trouble skips that PR only.
+            bash -euo pipefail -c 'plan_pr "$@"' _ "$pr" "$item" || echo "::warning::PR #$pr: skipped after an error"
+          done < "$work/prs.jsonl"
+          touch "$work/targets.jsonl"
+          jq -s . "$work/targets.jsonl" > "$work/targets.json"
           echo "targets=$(jq -c . "$work/targets.json")" >> "$GITHUB_OUTPUT"
 
   review:
@@ -147,7 +176,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # The workflow_run actor may be the bot that started the upstream run (main-sync, dependabot, an agent's push).
-          allowed_bots: "github-actions[bot],dependabot[bot],claude[bot],copilot"
+          allowed_bots: "github-actions[bot],dependabot[bot],claude[bot]"
           # Narrow the Claude App token: reviews only (the action's default also grants contents and issues write).
           additional_permissions: |
             contents: read

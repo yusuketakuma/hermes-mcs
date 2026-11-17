@@ -235,35 +235,62 @@ jobs:
           ref: ${{ github.event.repository.default_branch && format('refs/heads/{0}', github.event.repository.default_branch) || github.ref }}
           sparse-checkout: ci
           persist-credentials: false
-      - name: Publish merge-ready on every open PR head
+      - name: Publish merge-ready on the PR heads
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           OWNER: ${{ github.repository_owner }}
+          EVENT: ${{ github.event_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
           AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
           ACTORS: ${{ vars.REVIEW_ACTORS }}
           DOTS: ${{ vars.DOTS_ACTOR }}
         run: |
           set -euo pipefail
-          work=$(mktemp -d)
-          # The gate is recomputed from the check runs, never read back; this job counts no attempt and starts no repair.
-          for pr in $(gh api "repos/$GH_REPO/pulls?state=open&per_page=100" --paginate --jq '.[].number'); do
-            gh api "repos/$GH_REPO/pulls/$pr" > "$work/pr.json"
-            sha=$(jq -r .head.sha "$work/pr.json"); base=$(jq -r .base.ref "$work/pr.json")
-            gh api "repos/$GH_REPO/commits/$sha/check-runs?per_page=100" --paginate --slurp > "$work/checks.json"
-            gh api "repos/$GH_REPO/pulls/$pr/files?per_page=100" --paginate --slurp > "$work/files.json"
-            gh api "repos/$GH_REPO/pulls/$pr/reviews?per_page=100" --paginate --slurp > "$work/reviews.json"
-            gh api "repos/$GH_REPO/issues/$pr/comments?per_page=100" --paginate --slurp > "$work/comments.json"
-            behind=$(gh api "repos/$GH_REPO/compare/$base...$sha" --jq .behind_by)
-            current=$(gh api "repos/$GH_REPO/commits/$sha/status" \
-              --jq '[.statuses[] | select(.context == "merge-ready")][0] // {} | {state, description}')
-            python3 ci/agent_control.py ready --pr "$work/pr.json" --checks "$work/checks.json" \
-              --files "$work/files.json" --behind-by "$behind" --automation "${AUTOMATION:-}" \
-              --reviews "$work/reviews.json" --comments "$work/comments.json" --actors "${ACTORS:-}" \
-              --dots-actor "${DOTS:-}" --owner "$OWNER" --current "$current" > "$work/ready.json"
-            echo "PR #$pr: $(cat "$work/ready.json")"
+          export work; work=$(mktemp -d)
+          # A ci run or a dispatch names one head: only its PRs. The schedule sweeps every open PR.
+          # Calls per run: the list (1 per 100 PRs, or 1 for a head), 1 status per PR, and 5 more (plus pages)
+          # only for a PR whose merge-gate is success. A failed list fails the job.
+          if [[ "$EVENT" == "schedule" ]]; then
+            gh api "repos/$GH_REPO/pulls?state=open&per_page=100" --paginate --slurp | jq -c '.[][]' > "$work/prs.jsonl"
+          else
+            [[ "$RUN_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a 40-digit commit id"; exit 1; }
+            gh api "repos/$GH_REPO/commits/$RUN_SHA/pulls" |
+              jq -c --arg sha "$RUN_SHA" '.[] | select(.state == "open" and .head.sha == $sha)' > "$work/prs.jsonl"
+          fi
+          ready_pr() {
+            local d="$work/$1"; mkdir -p "$d"
+            printf '%s' "$2" > "$d/pr.json"
+            local sha base; sha=$(jq -r .head.sha "$d/pr.json"); base=$(jq -r .base.ref "$d/pr.json")
+            gh api "repos/$GH_REPO/commits/$sha/status" > "$d/status.json"
+            python3 ci/agent_control.py ready-precheck --status "$d/status.json" > "$d/ready.json"
+            if [[ "$(jq -r .action "$d/ready.json")" == "evaluate" ]]; then
+              gh api "repos/$GH_REPO/commits/$sha/check-runs?per_page=100" --paginate --slurp > "$d/checks.json"
+              gh api "repos/$GH_REPO/pulls/$1/files?per_page=100" --paginate --slurp > "$d/files.json"
+              gh api "repos/$GH_REPO/pulls/$1/reviews?per_page=100" --paginate --slurp > "$d/reviews.json"
+              gh api "repos/$GH_REPO/issues/$1/comments?per_page=100" --paginate --slurp > "$d/comments.json"
+              behind=$(gh api "repos/$GH_REPO/compare/$base...$sha" --jq .behind_by)
+              python3 ci/agent_control.py ready --pr "$d/pr.json" --checks "$d/checks.json" \
+                --files "$d/files.json" --behind-by "$behind" --automation "${AUTOMATION:-}" \
+                --reviews "$d/reviews.json" --comments "$d/comments.json" --actors "${ACTORS:-}" \
+                --dots-actor "${DOTS:-}" --owner "$OWNER" --status "$d/status.json" > "$d/ready.json"
+            elif [[ "$(jq -r .action "$d/ready.json")" == "withdraw" ]]; then
+              jq '. + {write: true}' "$d/ready.json" > "$d/next.json"; mv "$d/next.json" "$d/ready.json"
+            fi
+            echo "PR #$1: $(cat "$d/ready.json")"
             # Unchanged: no new status (GitHub keeps at most 1000 per head and context).
-            if [[ "$(jq -r .write "$work/ready.json")" != "true" ]]; then continue; fi
-            gh api -X POST "repos/$GH_REPO/statuses/$sha" -f context=merge-ready -f state="$(jq -r .state "$work/ready.json")" \
-              -f description="$(jq -r .description "$work/ready.json")" > /dev/null
-          done
+            if [[ "$(jq -r '.write // false' "$d/ready.json")" != "true" ]]; then return 0; fi
+            gh api -X POST "repos/$GH_REPO/statuses/$sha" -f context=merge-ready -f state="$(jq -r .state "$d/ready.json")" \
+              -f description="$(jq -r .description "$d/ready.json")" > /dev/null
+          }
+          export -f ready_pr
+          while read -r item; do
+            pr=$(jq -r .number <<< "$item"); sha=$(jq -r .head.sha <<< "$item")
+            # Its own bash, so set -e still stops this PR's steps; one PR's trouble does not stop the others.
+            # A head that could not be judged never keeps an older success.
+            bash -euo pipefail -c 'ready_pr "$@"' _ "$pr" "$item" || {
+              echo "::warning::PR #$pr: not judged after an error"
+              gh api -X POST "repos/$GH_REPO/statuses/$sha" -f context=merge-ready -f state=pending \
+                -f description="判定できなかった（次の実行で判定し直す）" > /dev/null || true
+            }
+          done < "$work/prs.jsonl"

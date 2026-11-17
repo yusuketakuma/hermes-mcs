@@ -355,7 +355,9 @@ def verdict_candidates(pr, reviews, comments, actors, dots_actor, owner):
 
     rank orders the sources (lower decides): the bridge marker, then REVIEW_ACTORS
     in order. The owner (and so every seat, which reviews from the owner's account)
-    and the PR's author never count. An empty actor list counts nothing.
+    and the PR's author never count. claude[bot] can only reject: its approval never
+    counts. An empty actor list counts nothing. Of the bridge markers only the newest
+    unedited one counts, whatever head it names (an owner-authored PR included).
     """
     if not actors:
         return []
@@ -365,18 +367,20 @@ def verdict_candidates(pr, reviews, comments, actors, dots_actor, owner):
         if actor in (author, owner):
             continue
         source = "dots" if dots_actor and actor == dots_actor else "claude" if actor == REVIEWER_LOGIN else actor
+        states = ("CHANGES_REQUESTED",) if actor == REVIEWER_LOGIN else VERDICTS
         found += [{"rank": rank, "source": source, "state": r["state"], "commit": r.get("commit_id"),
                    "at": r.get("submitted_at") or "", "url": r.get("html_url")}
-                  for r in reviews if r.get("state") in VERDICTS and _login(r) == actor]
-    if not dots_actor:
-        for comment in comments:
-            lines = (comment.get("body") or "").splitlines()
-            mark = _DOTS_MARK.fullmatch(lines[0]) if lines and _login(comment) == owner else None
-            if mark:
-                found.append({"rank": -1, "source": "dots・つなぎ", "state": mark.group(1).upper(),
-                              "commit": mark.group(2), "at": comment.get("created_at") or "",
-                              "url": comment.get("html_url")})
-    return found
+                  for r in reviews if r.get("state") in states and _login(r) == actor]
+    marks = []
+    for comment in comments if not dots_actor else ():
+        lines = (comment.get("body") or "").splitlines()
+        # An edited comment no longer shows what was written when it was posted.
+        unedited = comment.get("created_at") and comment.get("updated_at") == comment.get("created_at")
+        mark = _DOTS_MARK.fullmatch(lines[0]) if lines and unedited and _login(comment) == owner else None
+        if mark:
+            marks.append({"rank": -1, "source": "dots・つなぎ", "state": mark.group(1).upper(),
+                          "commit": mark.group(2), "at": comment["created_at"], "url": comment.get("html_url")})
+    return found + ([max(marks, key=lambda m: m["at"])] if marks else [])
 
 
 def review_verdict(pr, reviews, comments, actors, dots_actor, owner):
@@ -412,10 +416,34 @@ def merge_ready(pr, gate, behind_by, verdict):
     return "success", f"承認（{verdict['source']}）"
 
 
+def posted_status(status, context):
+    """The latest status of `context` the workflows posted on a head (combined status API), or None.
+
+    Anyone with write access can post a status of any name: only github-actions[bot]'s counts.
+    """
+    return next((s for s in (status or {}).get("statuses", [])
+                 if s.get("context") == context and (s.get("creator") or {}).get("login") == GATE_AUTHOR), None)
+
+
 def gate_state(status):
-    """The merge-gate state the workflows posted on a head (combined status API), or "" when none."""
-    return next((s.get("state", "") for s in (status or {}).get("statuses", [])
-                 if s.get("context") == "merge-gate" and (s.get("creator") or {}).get("login") == GATE_AUTHOR), "")
+    """The merge-gate state the workflows posted on a head, or "" when none."""
+    return (posted_status(status, "merge-gate") or {}).get("state", "")
+
+
+def ready_precheck(status):
+    """What the merge-ready sweep does for a head from its status alone (one API call).
+
+    evaluate: merge-gate is success, so fetch the rest and judge. withdraw: merge-gate is
+    not success but an old merge-ready success stands, so write pending without fetching.
+    skip: nothing to change.
+    """
+    gate = gate_state(status)
+    if gate == "success":
+        return {"action": "evaluate", "gate": gate}
+    if (posted_status(status, "merge-ready") or {}).get("state") == "success":
+        return {"action": "withdraw", "gate": gate, "state": "pending",
+                "description": f"merge-gate: {gate or '未判定'}"}
+    return {"action": "skip", "gate": gate}
 
 
 def review_request_refusal(pr, reviews, comments, gate, actors, dots_actor, owner, automation_enabled,
@@ -563,7 +591,9 @@ def main(argv=None):
         p.add_argument("--actors", default="", help="vars.REVIEW_ACTORS")
         p.add_argument("--dots-actor", default="", help="vars.DOTS_ACTOR")
         p.add_argument("--owner", required=True)
-    ready.add_argument("--current", default="{}", help="JSON {state, description} of the latest merge-ready")
+    ready.add_argument("--status", required=True, help="the head's combined status")
+    precheck = sub.add_parser("ready-precheck")
+    precheck.add_argument("--status", required=True, help="the head's combined status")
     request.add_argument("--pr", required=True)
     request.add_argument("--status", required=True, help="the head's combined status")
     request.add_argument("--automation", default="")
@@ -598,7 +628,7 @@ def main(argv=None):
         verdict = review_verdict(pr, _flatten(_load(args.reviews)), _flatten(_load(args.comments)),
                                  review_actors(args.actors), args.dots_actor, args.owner)
         state, description = merge_ready(pr, gate, args.behind_by, verdict)
-        current = json.loads(args.current) or {}
+        current = posted_status(_load(args.status), "merge-ready") or {}
         plan = {"sha": gate["sha"], "state": state, "description": description[:140],
                 "write": (current.get("state"), current.get("description")) != (state, description[:140])}
     elif args.command == "review-request":
@@ -607,6 +637,8 @@ def main(argv=None):
                                          gate_state(_load(args.status)), review_actors(args.actors),
                                          args.dots_actor, args.owner, args.automation == "true", args.owner_request)
         plan = {"run": refusal is None, "reason": refusal or "", "pr": pr.get("number"), "sha": pr["head"]["sha"]}
+    elif args.command == "ready-precheck":
+        plan = ready_precheck(_load(args.status))
     elif args.command == "labeler":
         plan = {"allowed": labeler_allowed(args.sender, args.owner, args.dots_actor)}
     elif args.command == "assigned":

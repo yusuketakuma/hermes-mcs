@@ -26,8 +26,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # ci/ is this script's import root
-from agent_control import (AGENT_LABEL_PREFIX, ATTEMPT_PREFIX, OWNER_LABEL, VERDICTS, linked_issues, review_actors,
-                           review_verdict, verdict_candidates)
+from agent_control import (AGENT_LABEL_PREFIX, ATTEMPT_PREFIX, OWNER_LABEL, VERDICTS, linked_issues, posted_status,
+                           review_actors, review_verdict, verdict_candidates)
 
 MARKER = "<!-- issue-status -->"
 BOT = "github-actions[bot]"  # author of comments written with GITHUB_TOKEN
@@ -242,8 +242,7 @@ def decide(bundle, owner, default_branch="main", actors=(), dots_actor=""):
     if _active(claude_run) and not any(r[1] == "修正中" for r in rows):
         rows.append(("active", "修正中", claude_run.get("created_at"), run_link))
 
-    ready = next((s for s in (bundle.get("status") or {}).get("statuses", []) if s.get("context") == "merge-ready"),
-                 None)
+    ready = posted_status(bundle.get("status"), "merge-ready")
     if ready is None:
         rows.append(("todo", "マージ可（merge-ready）", None, ""))
     else:
