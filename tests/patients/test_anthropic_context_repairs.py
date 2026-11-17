@@ -95,6 +95,43 @@ def test_source_normal_fail_repairs_all_units_preserving_original_chunks_and_sup
     assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
 
 
+@pytest.mark.parametrize('role', ['local_takeover', 'local'])
+def test_a_local_lane_never_sends_a_source_quality_repair(runtime, source_repair, monkeypatch, role):
+    """Reproduction: a takeover lane audited the child's cloud scan, the audit failed and the
+    repair went to the cloud from the lane. A local lane neither sends nor reserves a repair;
+    under the takeover the repair waits for a child (the patient is passed over meanwhile)."""
+    led, clock, _ = runtime
+    for _ in range(20):
+        result = step(runtime)
+        if led.artifacts('patient_context_source_quality_fail_v1', project_id=1):
+            break
+        assert result['status'] in ('progressed', 'deferred')
+    else:
+        pytest.fail('independent source coverage oracle did not find the omitted bed')
+    sent, reserved = len(source_repair['sent']), len(led.artifacts('cloud_usage_reserve'))
+    if role == 'local':
+        # The lane serves the patient outside the cloud scope, and the patient joins the cloud
+        # scope while its unit runs: only a later read (the repair's own, before) sees it on.
+        import sys
+        real = worker._cloud_mode
+        monkeypatch.setattr(worker, '_cloud_mode', lambda *args: real(*args) if sys._getframe(1).f_globals[
+            '__name__'] == 'patient_context_quality_controller' else 'off')
+    outcomes = []
+    for _ in range(4):
+        clock.mono += context_refresh.CHILD_WAIT_S
+        outcomes.append(step(runtime, role=role))
+    assert len(source_repair['sent']) == sent and len(led.artifacts('cloud_usage_reserve')) == reserved, outcomes
+    if role == 'local_takeover':
+        assert outcomes[0]['reason'] == context_refresh.CHILD_WAIT_REASON, outcomes
+    else:
+        monkeypatch.setattr(worker, '_cloud_mode', real)
+    # A child pass, once the deferred unit's retry is due, repairs the source in the cloud.
+    clock.wall += 3600
+    drain(runtime)
+    assert len(source_repair['sent']) == sent + 2
+    assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
+
+
 @pytest.mark.parametrize('code', ['patient_context_prompt_capacity', 'nightly_prompt_capacity',
                                   'patient_context_unsplittable_assertion', 'nightly_unsplittable_assertion'])
 def test_deterministic_source_repair_scan_refusal_holds_instead_of_paid_retries(runtime, source_repair, monkeypatch, code):
@@ -425,7 +462,7 @@ def test_historical_karte_repair_retains_original_question_and_answer(runtime, c
     monkeypatch.setattr(_source_repair_jev, 'JevClient',
                         lambda **kwargs: _SOURCE_REPAIR_JEV(post_fn=judge, **kwargs))
     assert patient_context_quality_controller._quality_step(led, 1, CFG, 'synthetic', {}, clock.mono + 600,
-                                         lambda: True, source=source)[0] == 'pending'
+                                         lambda: True, source=source, cloud_mode='on')[0] == 'pending'
     assessment = patient_context_refresh_state._quality_assessment(semantic_policy.runtime_config(CFG)[0])
     led.db.execute('BEGIN')
     try:
@@ -727,10 +764,10 @@ def test_thinking_only_length_holds_summary_and_consumes_no_second_repair(runtim
         doc = {'summary':[{'text':facts[0]['text'],'fact_ids':['a']}]}
         args = (led, 1, CFG, 'synthetic-night', doc, identity, 'synthetic-claim',
                 lambda *args:True, deadline, lambda:True, facts, {}, .9, {'groups':[],'relations':[]})
-        assert patient_context_quality_controller._quality_repair_candidate(*args) == ('held', None)
+        assert patient_context_quality_controller._quality_repair_candidate(*args, cloud_mode='on') == ('held', None)
         assert len(led.artifacts(patient_context_refresh_state.QUALITY_REPAIR, project_id=1)) == 1
         results.extend(json.loads(row['meta']) for row in led.artifacts('cloud_usage_result', project_id=1))
-        assert patient_context_quality_controller._quality_repair_candidate(*args) == ('held', None)
+        assert patient_context_quality_controller._quality_repair_candidate(*args, cloud_mode='on') == ('held', None)
         assert not led.artifacts(patient_context_refresh_state.QUALITY_REPAIR_CANDIDATE, project_id=1)
     assert len(calls) == len(results) == 1 and results[0]['error_kind'] is None
     assert results[0]['usage']['output_tokens'] == 10 and 'synthetic-hidden' not in json.dumps(results)
@@ -819,8 +856,10 @@ def test_new_occurrence_marker_never_uses_duplicate_metadata_as_legacy(runtime, 
     assert not patient_context_refresh_readiness.inference_coverage(led.db, 1, CFG)['complete']
 
 
-def publish_summary_repair(runtime, monkeypatch, tmp_path, *, save_interrupted=False):
-    """Drive one synthetic paid summary repair to publication; needs the ``cloud`` fixture."""
+def publish_summary_repair(runtime, monkeypatch, tmp_path, *, save_interrupted=False, before_repair=None):
+    """Drive one synthetic paid summary repair to publication; needs the ``cloud`` fixture.
+
+    ``before_repair(sends)`` runs once the summary's audit failed, before the repair is asked."""
     from contextlib import nullcontext
 
     led, _, _ = runtime
@@ -922,9 +961,36 @@ def publish_summary_repair(runtime, monkeypatch, tmp_path, *, save_interrupted=F
         assert len(sends) == 1 and not led.artifacts(patient_context_refresh_state.QUALITY_REPAIR_CANDIDATE, project_id=1)
         monkeypatch.setattr(patient_context_quality_receipts, '_new_summary_repair_response', prove)
         runtime[1].wall += 3600
+    if before_repair is not None:
+        for _ in range(25):
+            if led.artifacts(patient_context_refresh_state.QUALITY_FAIL, project_id=1):
+                break
+            step(runtime)
+        else:
+            pytest.fail('the summary audit did not fail')
+        assert not sends
+        before_repair(sends)
     drain(runtime)
     assert len(sends) == 1
     return sends
+
+
+def test_a_takeover_lane_never_sends_a_summary_quality_repair(runtime, cloud, monkeypatch, tmp_path):
+    """Reproduction: the overview's audit failed and a takeover lane sent its repair to the
+    cloud. The repair waits for a child instead, and a child pass then makes it once."""
+    led, clock, _ = runtime
+
+    def takeover(sends):
+        reserved = len(led.artifacts('cloud_usage_reserve'))
+        outcomes = []
+        for _ in range(4):
+            clock.mono += context_refresh.CHILD_WAIT_S
+            outcomes.append(step(runtime, role='local_takeover'))
+        assert not sends and len(led.artifacts('cloud_usage_reserve')) == reserved, outcomes
+        assert context_refresh.CHILD_WAIT_REASON in [outcome.get('reason') for outcome in outcomes], outcomes
+        clock.wall += 3600   # the deferred unit's retry is due for the child
+
+    publish_summary_repair(runtime, monkeypatch, tmp_path, before_repair=takeover)
 
 
 @pytest.mark.parametrize('save_interrupted', [False, True])
