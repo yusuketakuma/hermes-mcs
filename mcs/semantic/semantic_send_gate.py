@@ -420,32 +420,23 @@ def current_summary(db, project_id: int, message_id: int,
 
 
 def _summary_superseded(db, project_id, message_id, summary_id, current) -> bool:
-    """Whether the summary a notice was built on has been replaced.
+    """Whether a different summary has replaced the one a notice was built on.
 
-    True when another summary is current now, or when the notice's own summary
-    exists for this message but its producer is no longer accepted (a local
-    model change). Anything else stays unverified and is retried. A notice
-    ended this way is not rebuilt for the replacing summary; if the old model
-    returns and the summary is current again, the gate accepts it again."""
-    if type(summary_id) is not int or summary_id <= 0:
-        return False
-    if current is not None and summary_id == current["artifact_id"]:
+    True only when another summary of this message is current and the notice's
+    own summary exists for the same message. While no summary is current (a
+    local model change, before the rebuild) the notice stays unverified and is
+    retried, so returning to the old model still lets it send. A notice ended
+    this way is not rebuilt for the replacing summary."""
+    if type(summary_id) is not int or summary_id <= 0 or current is None \
+            or summary_id == current["artifact_id"]:
         return False
     try:
-        row = db.execute("SELECT kind,project_id,message_id,model,meta FROM artifacts WHERE artifact_id=?",
+        row = db.execute("SELECT kind,project_id,message_id FROM artifacts WHERE artifact_id=?",
                          (summary_id,)).fetchone()
-        if (row is None or row["kind"] != semantic_policy.KIND_SUMMARY
-                or row["project_id"] != project_id or row["message_id"] != message_id):
-            return False
-        meta = strict_json(row["meta"])
-        if not isinstance(meta, dict):
-            return False
-        model = row["model"] if "model" in row.keys() else None
-    except (sqlite3.Error, ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
+    except sqlite3.Error:
         return False
-    if current is not None:
-        return True
-    return not semantic_store.producer_current(semantic_policy.KIND_SUMMARY, model, meta)
+    return (row is not None and row["kind"] == semantic_policy.KIND_SUMMARY
+            and row["project_id"] == project_id and row["message_id"] == message_id)
 
 
 def enforce_block_reason(db, scfg: dict, project_id) -> str | None:

@@ -18,22 +18,16 @@ from semantic_policy import KIND_PLAN, POLICY_VERSION
 from semantic_send_gate import enforce_block_reason, initial_history_ids
 
 
-def outbox_has_delivery(db, delivery_key: str, summary_artifact_id: int | None = None) -> bool:
+def outbox_has_delivery(db, delivery_key: str) -> bool:
     """Whether a live or finished semantic_notice already carries this key.
 
-    A suppressed notice for the very summary named by the caller does not
-    count: it ended as a stale generation (a local model change) and that
-    summary is current again. A suppressed notice for another summary still
-    counts, so a rebuilt summary does not send a new notice. The json_valid
-    guard keeps an unreadable payload from hiding a valid key further on;
-    the match runs in SQL, not per-row in Python."""
+    The json_valid guard keeps an unreadable payload from hiding a valid
+    key further on; the match runs in SQL, not per-row in Python."""
     return db.execute(
         "SELECT 1 FROM notify_outbox WHERE kind='semantic_notice' AND state IN "
         "('pending','failed','accepted','suppressed') AND CASE WHEN "
         "json_valid(payload) THEN json_extract(payload,'$.delivery_key')=? "
-        "AND (state<>'suppressed' OR ? IS NULL "
-        "OR json_extract(payload,'$.summary_artifact_id') IS NOT ?) "
-        "ELSE 0 END LIMIT 1", (delivery_key, summary_artifact_id, summary_artifact_id)).fetchone() is not None
+        "ELSE 0 END LIMIT 1", (delivery_key,)).fetchone() is not None
 
 
 def arrival_ids(raw) -> list[int]:
@@ -284,7 +278,7 @@ def record_notice_plan_tx(ledger, pid, root, mid, fp, policy,
         # (INV-20, AT-055)
         src_mid = origin_event_id(ledger.db, pid, [mid])
         if src_mid is not None \
-                and not outbox_has_delivery(ledger.db, dkey, summary_receipt["summary_artifact_id"]):
+                and not outbox_has_delivery(ledger.db, dkey):
             receipt = {"delivery_key": dkey, "root_id": root, "target_message_id": mid,
                        "src_event_id": src_mid, "fingerprint": fp, "policy_fingerprint": policy,
                        **summary_receipt, "notice_text_hash": payload_hash(text)}
