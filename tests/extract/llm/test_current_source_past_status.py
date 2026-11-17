@@ -71,3 +71,9 @@ def test_patient_owned_current_after_other_owner_still_flagged():
     body = "家族は昨日、食欲あり、本人は現在、発熱あり。"
     item = _symptom(body, "past")["symptoms"][0]
     assert "status" not in item and item["unverified"] is True
+
+
+def test_later_owner_current_mark_does_not_flag_patient_past():
+    body = "本人は3日前に発熱したが家族は現在食欲あり。"
+    item = _symptom(body, "past")["symptoms"][0]
+    assert item["status"] == "past" and "unverified" not in item

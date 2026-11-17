@@ -278,6 +278,12 @@ def assertion_start(body, start):
     return owners[-1].start() if owners else left
 
 
+def assertion_stop(body, end, limit):
+    """End of the target's own assertion before ``limit``: a later explicit owner starts another one."""
+    owner = _PERSON.search(body, end, limit)
+    return owner.start() if owner else limit
+
+
 def source_axes(body, start, end, *, default="patient"):
     """Return independent reported person and period axes for a grounded assertion."""
     subject, period = _source_scope_axes(body, start, end, default=default)

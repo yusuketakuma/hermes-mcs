@@ -596,7 +596,8 @@ class Validator:
                 self.uncertain(item, "status")
             elif (status == "past" and period == "current" and polarity is False and resolved is None
                   and clinical_scope.CURRENT_MARK.search(
-                      self.body, clinical_scope.assertion_start(self.body, start), assertion_end)):
+                      self.body, clinical_scope.assertion_start(self.body, start),
+                      clinical_scope.assertion_stop(self.body, end, assertion_end))):
                 # An explicitly current, present, unresolved assertion of the same owner contradicts "past".
                 self.uncertain(item, "status")
             elif status == "resolved" and (continuing or resolved is not True):
