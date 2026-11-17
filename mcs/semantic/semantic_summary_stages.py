@@ -496,8 +496,9 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
             return held('empty_repair_marker_binding', candidate_bound)
         if not is_current(marker_meta) or marker_meta.get('invalidated') or marker_meta.get('stale'):
             return held('empty_repair_marker_currentness')
-        # The consumed result belongs to this marker's own empty-repair
-        # candidate, which a later (redone) pre-audit candidate may follow.
+        # The consumed result and the producer belong to this marker's own
+        # empty-repair candidate, which a later (redone) pre-audit candidate
+        # may follow. An unreadable older row fails closed (validation_unavailable).
         for repair_row in itertools.chain([row] if row is not None else [], rows):
             repair_content, repair_meta = strict_json(repair_row['content']), strict_json(repair_row['meta'])
             if (isinstance(repair_meta, dict) and repair_meta.get('stage') == 'empty_repair'
@@ -508,12 +509,14 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
                         and _empty_repair_consumed(db, pid, mid, fp, policy, repair_row['artifact_id'],
                                                    repair_content)):
                     return held('empty_repair_consumed', False)
+                # A candidate written by an earlier local model is never
+                # recovered; one with a recorded negative is never released.
+                if (repair_meta.get('audit_state') != 'held' and not repair_meta.get('partial_answers')
+                        and not semantic_store.producer_current(
+                            KIND_CANDIDATE, repair_row['model'] if 'model' in repair_row.keys() else None,
+                            repair_meta)):
+                    return held('empty_repair_candidate_producer', False)
                 break
-        # A candidate written by an earlier local model is never recovered.
-        if (row is not None and isinstance(meta, dict)
-                and not semantic_store.producer_current(
-                    KIND_CANDIDATE, row['model'] if 'model' in row.keys() else None, meta)):
-            return held('empty_repair_candidate_producer', False)
         if (fact_kind is not None
                 and semantic_store.facts_rewritten_after(db, fact_kind, mid, fp, marker['artifact_id'])
                 and not (candidate_bound and isinstance(content, dict)
