@@ -79,8 +79,14 @@ _SCOPE_HEADING = re.compile(
 _REPORTING = re.compile(r"(?:より|から|が(?:報告|連絡|説明|相談|話)|は(?:報告|連絡|説明|相談|話))")
 
 CURRENT_MARK = re.compile(r"現在|今も|今は|本日|今日|続いて|持続|(?:昨日|先週|先月)から|(?:昨日|先週|先月)より")
-CONTINUING = re.compile(r"持続|続いて|残って")
-_ATTACHED_CURRENT = re.compile(rf"(?:は|が|も|を)?\s*(?:{CURRENT_MARK.pattern})")
+_CONTINUING = re.compile(r"持続|続いて|残って")
+# Closed forms of the target's own predicate: a time word right before it, or right after it a
+# time word and/or continuation. Another noun or predicate in between never lends its time.
+_LEADING_CURRENT = re.compile(rf"(?:{CURRENT_MARK.pattern})(?:は|も|に|の)?[、,\s　]*$")
+_TARGET_PREDICATE = re.compile(
+    rf"(?:は|が|も)?[\s　]*(?:(?:し|した|して)(?:が|けど|けれど(?:も)?)?[、,\s　]*)?"
+    rf"(?P<now>{CURRENT_MARK.pattern})?(?:は|も)?[\s　]*"
+    rf"(?:(?P<cont>{_CONTINUING.pattern})|あり|ある|あります|みられ|見られ)")
 
 _NONCURRENT_MARK = re.compile(r"過去|既往|以前(?!から|より)|先月(?!から|より)|先週(?!から|より)|昨年|一昨年")
 
@@ -286,13 +292,22 @@ def assertion_stop(body, end, limit):
     return owner.start() if owner else limit
 
 
+def _target_predicate(body, end, limit):
+    return _TARGET_PREDICATE.match(body, end, assertion_stop(body, end, limit))
+
+
+def target_continuing(body, end, limit):
+    """Whether the target's own predicate states that it continues."""
+    match = _target_predicate(body, end, limit)
+    return bool(match and match["cont"])
+
+
 def source_current(body, start, end, limit):
-    """Whether the target's own assertion states it as current, not another predicate in that sentence."""
-    if CURRENT_MARK.search(body, assertion_start(body, start), start):
+    """Whether the target's own predicate states it as current; an unknown form is not current."""
+    if _LEADING_CURRENT.search(body[assertion_start(body, start):start]):
         return True
-    # After the target only a time word attached to it or a continuation of it counts.
-    tail = body[end:assertion_stop(body, end, limit)]
-    return bool(_ATTACHED_CURRENT.match(tail) or CONTINUING.search(tail))
+    match = _target_predicate(body, end, limit)
+    return bool(match and (match["now"] or match["cont"]))
 
 
 def source_axes(body, start, end, *, default="patient"):

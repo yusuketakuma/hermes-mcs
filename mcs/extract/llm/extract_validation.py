@@ -591,7 +591,7 @@ class Validator:
             self.uncertain(item, "negated")
         if symptom:
             resolved = clinical_scope.source_resolution(self.body, start, assertion_end, target_end=end)
-            continuing = clinical_scope.CONTINUING.search(tail)
+            continuing = clinical_scope.target_continuing(self.body, end, assertion_end)
             if status in ("new", "ongoing") and resolved is True:
                 self.uncertain(item, "status")
             elif (status == "past" and period == "current" and polarity is False and resolved is None
