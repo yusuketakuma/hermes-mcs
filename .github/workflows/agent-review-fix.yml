@@ -44,29 +44,47 @@ jobs:
           AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
         run: |
           set -euo pipefail
-          work=$(mktemp -d)
-          # A Claude writer run waiting or running: re-sending a cancelled review now would cancel it in turn.
-          busy=$(for wf in agent-claude.yml agent-claude-repair.yml; do
-            gh run list --workflow "$wf" --limit 20 --json status --jq '.[].status'; done | grep -cvx completed || true)
-          prs=$(gh api "repos/$GH_REPO/pulls?state=open&per_page=100" --paginate \
-            --jq '.[] | select(.head.ref | startswith("agent/claude-")) | .number')
-          for pr in $prs; do
+          export work; work=$(mktemp -d)
+          # A Claude writer run waiting or running: a new waiting run would cancel an older one.
+          # Asked per status (skipped runs would crowd a plain list); a failed query counts as busy.
+          busy=0
+          for wf in agent-claude.yml agent-claude-repair.yml; do
+            for st in in_progress queued pending waiting requested; do
+              n=$(gh run list --workflow "$wf" --status "$st" --limit 1 --json databaseId --jq length) || n=1
+              if [[ "$n" != "0" ]]; then busy=1; fi
+            done
+          done
+          # Only this repository's branches: a fork's PR can carry any branch name and body.
+          prs=$(gh api "repos/$GH_REPO/pulls?state=open&per_page=100" --paginate | jq -r --arg repo "$GH_REPO" \
+            '.[] | select((.head.ref | startswith("agent/claude-")) and .head.repo.full_name == $repo) | .number')
+          sweep_pr() {
+            local pr=$1 busy=$2
             gh api "repos/$GH_REPO/pulls/$pr" > "$work/pr.json"
             echo '{}' > "$work/labels.json"
-            for issue in $(python3 ci/agent_control.py linked --pr "$work/pr.json" | jq -r '.issues[]'); do
-              labels=$(gh api "repos/$GH_REPO/issues/$issue" --jq '[.labels[].name]')
-              jq --arg n "$issue" --argjson l "$labels" '.[$n] = $l' "$work/labels.json" > "$work/next.json"
-              mv "$work/next.json" "$work/labels.json"
-            done
+            issues=$(python3 ci/agent_control.py linked --pr "$work/pr.json" | jq -r '.issues[]')
+            # Over the cap the plan refuses on the count alone: fetch nothing.
+            if (( $(wc -w <<< "$issues") <= 5 )); then
+              for issue in $issues; do
+                labels=$(gh api "repos/$GH_REPO/issues/$issue" --jq '[.labels[].name]')
+                jq --arg n "$issue" --argjson l "$labels" '.[$n] = $l' "$work/labels.json" > "$work/next.json"
+                mv "$work/next.json" "$work/labels.json"
+              done
+            fi
             gh api "repos/$GH_REPO/pulls/$pr/reviews?per_page=100" --paginate --slurp > "$work/reviews.json"
             gh api "repos/$GH_REPO/issues/$pr/comments?per_page=100" --paginate --slurp > "$work/comments.json"
+            gh api "repos/$GH_REPO/commits?sha=$(jq -r .head.sha "$work/pr.json")&per_page=100" > "$work/commits.json"
             busy_flag=(); if [[ "$busy" != "0" ]]; then busy_flag=(--busy); fi
             plan=$(python3 ci/agent_control.py review --pr "$work/pr.json" --issue-labels "$work/labels.json" \
-              --reviews "$work/reviews.json" --comments "$work/comments.json" --owner "$OWNER" \
-              --automation "${AUTOMATION:-}" "${busy_flag[@]}")
+              --reviews "$work/reviews.json" --comments "$work/comments.json" --commits "$work/commits.json" \
+              --owner "$OWNER" --automation "${AUTOMATION:-}" "${busy_flag[@]}")
             echo "PR #$pr: $plan"
+            dropped=$(jq -r '.dropped | map(tostring) | join(",")' <<< "$plan")
+            if [[ -n "$dropped" ]]; then
+              gh pr comment "$pr" --body "所有者のレビュー（$dropped）は、その後の修正の push で古い head へのレビューになったため、自動修正に回していません。まだ必要なら、もう一度 Request changes にするか @claude と書いてください。
+          <!-- agent-review:dropped $dropped -->"
+            fi
             ids=$(jq -r '.reviews | map(tostring) | join(",")' <<< "$plan")
-            if [[ -z "$ids" ]]; then continue; fi
+            if [[ -z "$ids" ]]; then return 0; fi
             if [[ "$(jq -r .count <<< "$plan")" == "true" ]]; then
               # Marker first: a pass that dies after it never counts the same review again.
               gh pr comment "$pr" --body "レビューの指摘（レビュー $ids）を Claude の修正に回します。範囲外の提案は修正せず、この PR に挙げます。
@@ -83,7 +101,14 @@ jobs:
                 fi
               done
             fi
-            # The repair run re-reads the labels and refuses an exhausted, reassigned or held issue.
+            # The repair run re-checks every id and re-reads the labels (exhausted, reassigned or held: refused).
             gh workflow run agent-claude-repair.yml --ref main -f pr="$pr" -f reviews="$ids"
-            busy=1
+            touch "$work/dispatched"
+          }
+          export -f sweep_pr
+          for pr in $prs; do
+            # Its own bash, so set -e still stops this PR's steps; one PR's trouble does not stop the others.
+            bash -euo pipefail -c 'sweep_pr "$@"' _ "$pr" "$busy" || echo "::warning::PR #$pr: skipped after an error"
+            # At most one dispatch per sweep: it is now the waiting writer run.
+            if [[ -e "$work/dispatched" ]]; then busy=1; fi
           done

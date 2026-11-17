@@ -16,6 +16,7 @@ imports nothing from the application. Standard library only.
   assigned whether an agent label is the issue's only assignment
   review   which review findings on a Claude PR to send to the repair run,
            and whether they cost a new attempt
+  findings which of the given reviews report findings (the repair run's re-check)
 
 The verdict is evidence, not trust in "CI is green": every required job must
 have run on the current head and succeeded (GitHub counts skipped and neutral
@@ -71,9 +72,12 @@ REVIEW_FINDINGS = {
     "devin-ai-integration[bot]": re.compile(r"\*\*Devin Review\*\* found (\d+) (?:new )?potential issue"),
 }
 # Progress of a review on its PR, written only by the workflows (GITHUB_TOKEN):
-# queued = counted and dispatched, handled = a repair run took it (or refused it).
+# queued = counted and dispatched, handled = a repair run took it (or refused it),
+# dropped = the owner was told the review is of an older head and was not sent.
 REVIEW_MARK_AUTHOR = "github-actions[bot]"
-_REVIEW_MARK = re.compile(r"<!-- agent-review:(queued|handled) ([\d,]+) -->")
+_REVIEW_MARK = re.compile(r"<!-- agent-review:(queued|handled|dropped) ([\d,]+) -->")
+# A PR body can name any number of issues; each costs an API call per sweep.
+MAX_LINKED_ISSUES = 5
 _LINKED_ISSUE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)", re.I)
 
 
@@ -232,6 +236,8 @@ def repair_refusal(pr, issue_labels, automation_enabled, owner_request=False):
     issues = linked_issues(pr.get("body"))
     if not issues:
         return "結ばれた Issue がない"
+    if len(issues) > MAX_LINKED_ISSUES:
+        return f"結ばれた Issue が {MAX_LINKED_ISSUES} 件を超える"
     for number in issues:
         labels = issue_labels.get(str(number), issue_labels.get(number))
         if labels is None:
@@ -247,6 +253,8 @@ def repair_refusal(pr, issue_labels, automation_enabled, owner_request=False):
 def actionable_review(review, owner):
     """True for the owner's request for changes, or a listed bot's review that reports findings."""
     login = (review.get("user") or {}).get("login", "")
+    if review.get("state") == "DISMISSED":
+        return False
     if login == owner:
         return review.get("state") == "CHANGES_REQUESTED"
     pattern = REVIEW_FINDINGS.get(login)
@@ -255,36 +263,69 @@ def actionable_review(review, owner):
 
 
 def review_marks(comments):
-    """(queued, handled) review ids from the workflows' markers; anyone else's text is ignored."""
-    marks = {"queued": set(), "handled": set()}
+    """{kind: review ids} from the workflows' markers; anyone else's text is ignored."""
+    marks = {"queued": set(), "handled": set(), "dropped": set()}
     for comment in comments:
         if (comment.get("user") or {}).get("login") != REVIEW_MARK_AUTHOR:
             continue
         for kind, ids in _REVIEW_MARK.findall(comment.get("body") or ""):
-            marks[kind].update(int(n) for n in ids.split(","))
-    return marks["queued"], marks["handled"]
+            marks[kind].update(int(n) for n in ids.split(",") if n)
+    return marks
 
 
-def review_plan(pr, issue_labels, reviews, comments, automation_enabled, owner, repair_busy):
+def only_merges_since(commits, since, head):
+    """True when `head` reaches `since` along first parents through merge commits only (main-sync's Update branch).
+
+    `commits` is the head's history with parents (GET commits?sha=head); a chain
+    that leaves it, or any ordinary commit on the way, is False.
+    """
+    parents = {c.get("sha"): [p.get("sha") for p in c.get("parents") or []] for c in commits}
+    sha = head
+    for _ in range(len(parents) + 1):
+        if sha == since:
+            return True
+        chain = parents.get(sha) or []
+        if len(chain) < 2:
+            return False
+        sha = chain[0]
+    return False
+
+
+def review_plan(pr, issue_labels, reviews, comments, automation_enabled, owner, repair_busy, commits=()):
     """The review findings to send to the repair run now, and whether they cost an attempt.
 
-    New actionable reviews of the current head cost one attempt for all of them
-    together; a review already counted is never counted again. A counted review no
-    repair run took (its queued run was cancelled) is sent again, without a new
-    attempt, once no Claude writer run is waiting.
+    A review counts when it is of the current head, or of an earlier head that
+    only main merges have moved since; a review of a head a fix replaced is
+    dropped, and the owner's request for changes is then reported once (`dropped`).
+    While a Claude writer run waits or runs nothing is sent: another waiting run
+    would cancel it. New reviews cost one attempt for all of them together and are
+    never counted again; a counted review no repair run took is sent again later
+    without a new attempt.
     """
     refusal = repair_refusal(pr, issue_labels, automation_enabled)
     if refusal:
-        return {"reviews": [], "count": False, "reason": refusal}
-    queued, handled = review_marks(comments)
-    new = {r["id"] for r in reviews if r["id"] not in queued and r.get("commit_id") == pr["head"]["sha"]
-           and actionable_review(r, owner)}
-    waiting = queued - handled
-    if new:
-        return {"reviews": sorted(new | waiting), "count": True, "reason": ""}
-    if waiting and not repair_busy:
-        return {"reviews": sorted(waiting), "count": False, "reason": ""}
-    return {"reviews": [], "count": False, "reason": "新しい指摘なし" if not waiting else "修正の実行待ち"}
+        return {"reviews": [], "count": False, "dropped": [], "reason": refusal}
+    marks = review_marks(comments)
+    head = pr["head"]["sha"]
+    fresh, dropped = set(), set()
+    for r in reviews:
+        if r["id"] in marks["queued"] or not actionable_review(r, owner):
+            continue
+        if r.get("commit_id") == head or only_merges_since(commits, r.get("commit_id"), head):
+            fresh.add(r["id"])
+        elif (r.get("user") or {}).get("login") == owner and r["id"] not in marks["dropped"]:
+            dropped.add(r["id"])
+    plan = {"reviews": [], "count": False, "dropped": sorted(dropped), "reason": ""}
+    waiting = marks["queued"] - marks["handled"]
+    if repair_busy and (fresh or waiting):
+        plan["reason"] = "Claude の実行中のため次の判定に回す"
+    elif fresh:
+        plan.update(reviews=sorted(fresh | waiting), count=True)
+    elif waiting:
+        plan["reviews"] = sorted(waiting)
+    else:
+        plan["reason"] = "新しい指摘なし"
+    return plan
 
 
 def decide_gate(pr, check_runs, files, behind_by, automation_enabled, ci_conclusion=None):
@@ -383,6 +424,10 @@ def main(argv=None):
     review.add_argument("--owner", required=True)
     review.add_argument("--automation", default="")
     review.add_argument("--busy", action="store_true", help="a Claude writer run is queued or running")
+    review.add_argument("--commits", help="the head's history with parents (gh api commits?sha=HEAD)")
+    findings = sub.add_parser("findings")
+    findings.add_argument("--reviews", required=True, help="JSON list of reviews")
+    findings.add_argument("--owner", required=True)
     args = parser.parse_args(argv)
     if args.command == "gate":
         plan = decide_gate(_load(args.pr), _flatten_checks(_load(args.checks)), _flatten(_load(args.files)),
@@ -398,7 +443,10 @@ def main(argv=None):
         plan = {"allowed": refusal is None, "reason": refusal or ""}
     elif args.command == "review":
         plan = review_plan(_load(args.pr), _load(args.issue_labels), _flatten(_load(args.reviews)),
-                           _flatten(_load(args.comments)), args.automation == "true", args.owner, args.busy)
+                           _flatten(_load(args.comments)), args.automation == "true", args.owner, args.busy,
+                           _flatten(_load(args.commits)) if args.commits else ())
+    elif args.command == "findings":
+        plan = {"reviews": [r["id"] for r in _load(args.reviews) if actionable_review(r, args.owner)]}
     elif args.command == "assigned":
         plan = {"assigned": assigned_to(json.loads(args.labels), args.agent)}
     else:

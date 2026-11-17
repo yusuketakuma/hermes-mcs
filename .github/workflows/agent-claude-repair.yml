@@ -3,13 +3,13 @@ name: Agent Claude repair
 # agent-control.yml が試行上限前の CI 失敗で、agent-review-fix.yml がレビューの指摘で起動する
 # （workflow_dispatch だけ。コメントやPRでは起動しない）。
 # 対象はこのリポジトリの開いた agent/claude- ブランチだけ。失敗ログか指摘を読み、同じブランチに修正を push する。
-# 試行回数は agent-control が通算する。停止スイッチ vars.AUTOMATION_ENABLED が true でなければ起動しない。
+# 試行回数は agent-control（CI 失敗）と agent-review-fix（レビュー）が通算する。停止スイッチ vars.AUTOMATION_ENABLED が true でなければ起動しない。
 # 運用: docs/development/AUTOMATION.md
 on:
   workflow_dispatch:
     inputs:
       pr:
-        description: "CI が失敗した agent/claude- ブランチの PR 番号"
+        description: "CI が失敗した、またはレビューの指摘が付いた agent/claude- ブランチの PR 番号"
         required: true
         type: number
       reviews:
@@ -50,13 +50,22 @@ jobs:
           GH_REPO: ${{ github.repository }}
           PR: ${{ inputs.pr }}
           REVIEWS: ${{ inputs.reviews }}
+          OWNER: ${{ github.repository_owner }}
           AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
         run: |
           set -euo pipefail
           work=$(mktemp -d)
-          # The ids are typed by a caller: digits only, and each must be a review of this PR.
+          # The ids are typed by a caller: digits only, each a review of this PR, and only the ones
+          # that report findings (the owner's request for changes, a listed bot's findings) go to Claude.
           [[ -z "$REVIEWS" || "$REVIEWS" =~ ^[0-9]+(,[0-9]+)*$ ]] || { echo "::error::reviews must be review ids"; exit 1; }
-          for id in ${REVIEWS//,/ }; do gh api "repos/$GH_REPO/pulls/$PR/reviews/$id" > /dev/null; done
+          echo '[]' > "$work/reviews.json"
+          for id in ${REVIEWS//,/ }; do
+            gh api "repos/$GH_REPO/pulls/$PR/reviews/$id" > "$work/one.json"
+            jq --slurpfile r "$work/one.json" '. + $r' "$work/reviews.json" > "$work/next.json"
+            mv "$work/next.json" "$work/reviews.json"
+          done
+          findings=$(python3 control/ci/agent_control.py findings --reviews "$work/reviews.json" --owner "$OWNER" |
+            jq -r '.reviews | map(tostring) | join(",")')
           gh api "repos/$GH_REPO/pulls/$PR" > "$work/pr.json"
           echo '{}' > "$work/labels.json"
           for issue in $(python3 control/ci/agent_control.py linked --pr "$work/pr.json" | jq -r '.issues[]'); do
@@ -66,6 +75,7 @@ jobs:
           done
           verdict=$(python3 control/ci/agent_control.py repair --pr "$work/pr.json" \
             --issue-labels "$work/labels.json" --automation "${AUTOMATION:-}")
+          if [[ -n "$REVIEWS" && -z "$findings" ]]; then verdict='{"allowed": false, "reason": "指摘を報告したレビューがない"}'; fi
           echo "$verdict"
           if [[ -n "$REVIEWS" ]]; then
             # Taken or refused, these reviews are done: agent-review-fix.yml re-sends only a queued one no run took.
@@ -78,6 +88,7 @@ jobs:
             exit 0
           fi
           echo "allowed=true" >> "$GITHUB_OUTPUT"
+          echo "findings=$findings" >> "$GITHUB_OUTPUT"
           branch=$(jq -r .head.ref "$work/pr.json")
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           {
@@ -101,10 +112,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR: ${{ inputs.pr }}
-          REVIEWS: ${{ inputs.reviews }}
+          REVIEWS: ${{ steps.pr.outputs.findings }}
         run: |
           set -euo pipefail
           # Untracked and excluded, so the findings can be read but are never committed.
+          if git ls-files --error-unmatch agent-review.md > /dev/null 2>&1; then
+            echo "::error::agent-review.md is tracked on this branch"; exit 1
+          fi
           for id in ${REVIEWS//,/ }; do
             gh api "repos/$GH_REPO/pulls/$PR/reviews/$id" \
               --jq '"## レビュー \(.id)（\(.user.login)、\(.state)、commit \(.commit_id)）\n\n\(.body)\n"'
