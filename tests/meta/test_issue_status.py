@@ -94,6 +94,30 @@ def test_skipped_and_unrelated_agent_runs_are_not_this_issue():
     assert "run" not in row[3]
 
 
+def test_running_run_is_found_among_many_skipped_ones():
+    skipped = [_run("Agent Claude #5 x", status="completed", conclusion="skipped", run_id=100 + n) for n in range(40)]
+    row, _, _ = _current(_bundle(claude_runs=skipped + [_run("Agent Claude #5 x", run_id=99)]))
+    assert row[1] == "実装中" and "run 99" in row[3]
+
+
+def test_a_run_that_ended_without_a_pr_shows_a_stopped_stage():
+    for conclusion, name in (("failure", "実装停止（失敗）"), ("cancelled", "実装停止（取消）"),
+                             ("timed_out", "実装停止（時間切れ）"), ("success", "実装停止（PR なしで終了）")):
+        ended = _run("Agent Claude #5 x", status="completed", conclusion=conclusion)
+        row, _, _ = _current(_bundle(claude_runs=[ended]))
+        assert row[1] == name and "run 7" in row[3]
+    newer = dict(_run("Agent Claude #5 x", status="queued", run_id=8), created_at="2026-11-17T00:40:00Z")
+    ended = _run("Agent Claude #5 x", status="completed", conclusion="failure")
+    assert _current(_bundle(claude_runs=[ended, newer]))[0][1] == "実装中", "a queued retry is implementation again"
+    assert _current(_bundle(pr=_pr(), claude_runs=[ended]))[0][1] == "CI 実行待ち", "with a PR the run is history"
+
+
+def test_closed_unmerged_pr_ends_the_stages_while_the_issue_stays_open():
+    closed = dict(_pr(state="closed"), closed_at="2026-11-17T02:40:00Z")
+    row, rows, _ = _current(_bundle(pr=closed, ci_runs=[_ci()]))
+    assert row[1] == "PR 閉鎖（未マージ）" and "active" not in [r[0] for r in rows]
+
+
 def test_ci_stages_follow_the_latest_run_on_the_current_head():
     pr = _pr()
     assert _current(_bundle(pr=pr))[0][1] == "CI 実行待ち"
@@ -248,7 +272,13 @@ def test_workflow_is_read_only_except_issue_comments():
                                       ("checks", "read"), ("statuses", "read"), ("contents", "read")])
     # The only checkout is the default branch's ci/; no PR ref, SHA or merge ref is ever checked out.
     assert text.count("actions/checkout@") == 1
-    assert re.findall(r"^\s+ref: (.*)$", text, re.M) == ["${{ github.event.repository.default_branch }}"]
+    assert re.findall(r"^\s+ref: (.*)$", text, re.M) == [
+        "${{ github.event.repository.default_branch && format('refs/heads/{0}', github.event.repository.default_branch)"
+        " || github.ref }}"]
+    assert "github.event.workflow_run.conclusion != 'skipped'" in text
+    # Running Claude runs are fetched by status, so skipped runs cannot crowd them off the page.
+    assert "runs queued waiting in_progress success failure cancelled timed_out" in text
+    assert "wf=agent-claude-repair.yml runs queued waiting in_progress" in text
     assert "sparse-checkout: ci" in text and "persist-credentials: false" in text
     assert "group: issue-status" in text
     assert "/labels" not in text and "gh issue close" not in text and "state=closed" not in text.split("gh api -X PATCH")[1]
@@ -257,3 +287,5 @@ def test_workflow_is_read_only_except_issue_comments():
     assert "${{" not in run
     for workflow in ("agent-claude.yml", "agent-claude-repair.yml", "agent-control.yml"):
         assert "\nrun-name: " in (ROOT / ".github/workflows" / workflow).read_text()
+    control = (ROOT / ".github/workflows/agent-control.yml").read_text()
+    assert "|| inputs.sha ||" in control.split("run-name: ", 1)[1].splitlines()[0], "main-sync dispatch carries the head"

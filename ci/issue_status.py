@@ -35,6 +35,7 @@ CI_PATH = ".github/workflows/ci.yml"
 HOLD_LABEL = "保留"
 FAILURE_PREFIX = "失敗:"
 VERDICTS = ("APPROVED", "CHANGES_REQUESTED")
+STOPPED = {"failure": "失敗", "cancelled": "取消", "timed_out": "時間切れ", "success": "PR なしで終了"}
 JST = timezone(timedelta(hours=9))
 _SEAT = re.compile(r"^\s*独立レビュー（([^、）\s]+)")
 _HINT_NUMBER = re.compile(r"#(\d+)")
@@ -165,6 +166,10 @@ def decide(bundle, owner, default_branch="main"):
     run_link = _link(f"run {claude_run['id']}", claude_run.get("html_url")) if claude_run else ""
     if pr:
         rows.append(("done", "実装中", claude_run.get("created_at") if claude_run else None, run_link))
+    elif agent and claude_run and not _active(claude_run):
+        # The run ended without a PR: nothing is implementing until someone starts it again.
+        ended = STOPPED.get(claude_run.get("conclusion"), claude_run.get("conclusion"))
+        rows.append(("active", f"実装停止（{ended}）", claude_run.get("updated_at"), run_link))
     elif agent:
         rows.append(("active", "実装中", claude_run.get("created_at") if claude_run else None,
                      run_link or "実行状況はこの担当から取得しない"))
@@ -237,6 +242,8 @@ def decide(bundle, owner, default_branch="main"):
         else:
             name = f"マージ済み（{base}）"
         rows.append(("done", name, pr.get("merged_at"), _link(f"#{pr['number']}", pr.get("html_url"))))
+    elif pr.get("state") == "closed":
+        rows.append(("done", "PR 閉鎖（未マージ）", pr.get("closed_at"), _link(f"#{pr['number']}", pr.get("html_url"))))
     else:
         rows.append(("todo", "マージ", None, ""))
     return _finish(rows, issue, labels, pr, bundle.get("others", []))
@@ -250,7 +257,7 @@ def _finish(rows, issue, labels, pr, others):
         rows.append(("todo", "完了", None, "グループが main へ入ったあと所有者が閉じる"))
     else:
         rows.append(("todo", "完了", None, ""))
-    if issue.get("state") == "closed" or (pr and pr.get("merged_at")):
+    if issue.get("state") == "closed" or (pr and pr.get("state") == "closed"):
         # Nothing still runs after a merge or close: unfinished stages are history, not the present.
         rows = [("skip" if state == "active" else state, *rest) for state, *rest in rows]
     notes = [name for name in labels if name in (OWNER_LABEL, HOLD_LABEL) or name.startswith(FAILURE_PREFIX)]
