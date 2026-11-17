@@ -594,6 +594,11 @@ class Validator:
             continuing = re.search(r"持続|続いて|残って", tail)
             if status in ("new", "ongoing") and resolved is True:
                 self.uncertain(item, "status")
+            elif (status == "past" and period == "current" and polarity is False and resolved is None
+                  and clinical_scope.CURRENT_MARK.search(
+                      self.body, max(self.body.rfind(c, 0, start) for c in "。！？!?;；\n") + 1, assertion_end)):
+                # An explicitly current, present, unresolved source sentence contradicts "past".
+                self.uncertain(item, "status")
             elif status == "resolved" and (continuing or resolved is not True):
                 self.uncertain(item, "status")
 
