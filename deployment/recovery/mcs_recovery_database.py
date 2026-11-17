@@ -553,6 +553,13 @@ def _restore_db(backup_path, on_hold=None):
                 current.get("phase") in ("restored", "awaiting_consent")
                 or ("phase" not in current and "restored_at" in current)):
             return "restore_marker_unreadable"
+    # = notify_spool.restore_pending's adoption files: writers_resumed binds the
+    # adoption marker's bytes and inode, so never rewrite it here.
+    if (isinstance(current, dict) and current.get("by") == "mcs_backup_restore") or any(
+            os.path.lexists(os.path.join(mcs_recovery_core.DATA, name)) for name in (
+                "restore.json", "backup_restore_approval.json",
+                "backup_restore_resume.json", "backup_restore_blocked.json")):
+        return "restore_marker_adopted"
     live = _db_version(mcs_recovery_core.LEDGER)
     back = _db_version(backup_path)
     # SQLite opens a zero-byte file as an empty schema-0 DB; reject it like ledger.valid_mcs_db

@@ -48,7 +48,7 @@ import types
 import linecache
 
 # The entrypoint and each retained .prev select only their own complete generation.
-SUPPORT_FILES = {'mcs_recovery_gateway.py': '4b896f55269b9197f6d91b0dbbffea36682ac56438483482fe624725a3263fc0', 'mcs_recovery_core.py': '3bc35ad1e7b051bbfaaef52c46814856105919a36570090347327bd636b3408e', 'mcs_recovery_services.py': '0b05f8b8147d6d23876d27d7e7d6b6d9ca182009b959d1e0cf66d03e9cc379c8', 'mcs_recovery_database.py': '728a8fef544b9dddbbb2a92bf54e4d67eeb8abf439d2a8d1e616e292c1ea5f4a'}
+SUPPORT_FILES = {'mcs_recovery_gateway.py': 'fd7b5fd00c33e0925847f9b48f56131c2ed8b3f8641e46d4f6f854b6b69a68d0', 'mcs_recovery_core.py': 'ae51f18b713895c6a65c9925847c9865dad27b477bb5d0b4e7cbc2f3a973e288', 'mcs_recovery_services.py': '0b05f8b8147d6d23876d27d7e7d6b6d9ca182009b959d1e0cf66d03e9cc379c8', 'mcs_recovery_database.py': '10db4c452233806944496a527c66b92c7fcec61390c3979d4f18255a11b04a0b'}
 
 
 class _PinnedSourceLoader(importlib.abc.SourceLoader):
@@ -291,6 +291,7 @@ def _recovery_explanation(detail):
         "restore_consent_pending:": "データベースの復元は人の承認待ちです。損失報告を確認してください。" + mcs_recovery_database.RESTORE_LOSS_NOTICE,
         "restore_failed:": "データベースを復元できません。保留を維持して復旧結果の記録を確認してください。",
         "restore_verify_failed": "復元後のデータベースを確認できません。復旧結果の記録を確認してください。",
+        "restore_marker_adopted": "バックアップを採用した導入先では、更新の巻戻しでデータベースを戻しません。保留を維持し、戻すかどうかを担当者が判断してください。",
     }
     if detail.startswith("rollback db restore: "):
         detail = detail[len("rollback db restore: "):]
@@ -683,6 +684,28 @@ def _journal_fresh(state):
     return bool(last) and time.time() - last < mcs_recovery_core.STALE_S
 
 
+def _restore_entered(state):
+    """= mcs_update._restore_entered: a consent record, or a restore marker
+    other than the backup-adoption one (unreadable counts, fail closed)."""
+    marker = mcs_recovery_core._awaiting_consent() or mcs_recovery_core._unreconciled_restore()
+    return bool(state.get("restore_consent")) or (
+        marker is not None and marker.get("by") != "mcs_backup_restore")
+
+
+def _rollback_not_started(state, applying):
+    """= mcs_update._rollback_not_started, stricter: any restore marker keeps
+    the freeze. The rollback of the last applied version stopped at or before
+    quiesce, so that version and its DB are unchanged."""
+    applied = state.get("applied") or []
+    if not (applying.get("hold_before_change") is True
+            and not applying.get("restore_incomplete") and not state.get("restore_consent")
+            and applied and applied[-1].get("sha") == applying.get("prev_sha")
+            and not os.path.lexists(os.path.join(mcs_recovery_core.DATA, "restore_pending.json"))
+            and not os.path.lexists(os.path.join(mcs_recovery_core.REPO, ".git", "MERGE_HEAD"))):
+        return False
+    return mcs_recovery_core._head() == applying.get("prev_sha") and mcs_recovery_core._clean() is True
+
+
 def _clear_hold():
     """Record once that an earlier hold no longer applies."""
     last = mcs_recovery_core._last_report()
@@ -839,7 +862,7 @@ def _recover_legacy(if_stale=False):
         schema_rollback = (isinstance(applying, dict) and applying.get("rollback")
                            and applying.get("schema_bump") is not False
                            and (applying.get("schema_bump") is not None or applying.get("backup_path")))
-        if schema_rollback:
+        if schema_rollback and not _rollback_not_started(state, applying):
             try:
                 # This marker prevents new launches; it is not stop evidence.
                 mcs_recovery_core._ensure_recovery_marker()
@@ -1014,7 +1037,17 @@ def _recover_legacy(if_stale=False):
                     return git_failed("status")
                 if not clean:
                     return escalate("target tree could not be cleaned")
-            if applying.get("rollback") and applying.get("backup_path"):
+            if rollback_shaped and not schema_rollback and not _restore_entered(state):
+                # = mcs_update: a rollback without a schema change never restores
+                # its (possibly pruned) backup; drop a hold set for that restore.
+                if applying.pop("restore_incomplete", None):
+                    try:
+                        mcs_recovery_core._save_state(state)
+                    except (OSError, ValueError, TypeError, RecursionError):
+                        mcs_recovery_core._report("restore_hold_unverified",
+                                "rollback hold could not be saved or verified")
+                        return 1
+            elif rollback_shaped:
                 # Older rollback journals did not record the restore hold.
                 # Seal it under both locks before touching the database so
                 # every failure and a process interruption remains held.

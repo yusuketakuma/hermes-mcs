@@ -71,6 +71,7 @@ from update_repository import (
 from update_restore import (
     _consent_hold,
     _restore_db,
+    _restore_entered,
     _rollback_applying,
     _rollback_tree,
 )
@@ -128,6 +129,23 @@ def _journal_is_fresh(state: dict, applying: dict | None) -> bool:
         [s.get("at", 0) for s in state.get("stages", [])]
         + [(applying or {}).get("at", 0)])
     return bool(last and time.time() - last < STALE_S)
+
+
+def _rollback_not_started(state: dict, applying: dict) -> bool:
+    """A rollback of the last applied version that stopped at or before
+    quiesce: its writer freezes before any change (hold_before_change), no
+    freeze or restore witness exists and the clean tree is still on that
+    version, so the version and its DB are unchanged and consistent."""
+    applied = state.get("applied") or []
+    try:
+        return bool(applying.get("hold_before_change") is True
+                    and not applying.get("restore_incomplete")
+                    and applied and applied[-1].get("sha") == applying.get("prev_sha")
+                    and _restore_writer_hold_marker() is None
+                    and not os.path.exists(os.path.join(REPO, ".git", "MERGE_HEAD"))
+                    and _head_sha() == applying.get("prev_sha") and _tree_clean())
+    except (UpdateError, OSError):
+        return False
 
 
 def _journal_consent_from_marker(state: dict, applying: dict) -> None:
@@ -302,7 +320,7 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                            and applying.get("schema_bump") is not False
                            and (applying.get("schema_bump") is not None
                                 or applying.get("backup_path")))
-        if schema_rollback:
+        if schema_rollback and not _rollback_not_started(state, applying):
             # Older journals can lack both the durable freeze and its launcher
             # marker. Neither is proof that already-running writers stopped.
             try:
@@ -496,7 +514,13 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                         pass
                 except (update_migrations.MigrationError, UpdateError):
                     return _provider_migration_recovery_hold()
-            if applying.get("rollback") and applying.get("backup_path"):
+            if rollback_shaped and not schema_rollback and not _restore_entered(state):
+                # Like _rollback_tree, a rollback without a schema change never
+                # restores its backup (maintenance may have pruned it). Drop a
+                # hold an earlier recovery set for that unneeded restore.
+                if applying.pop("restore_incomplete", None):
+                    journal_store.save_state(STATE_PATH, state)
+            elif rollback_shaped:
                 # Old rollback journals may predate the durable freeze.
                 # Persist it before entering any DB restore operation.
                 applying["restore_incomplete"] = True

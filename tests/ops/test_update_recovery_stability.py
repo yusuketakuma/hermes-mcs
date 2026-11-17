@@ -274,6 +274,55 @@ def test_manual_rollback_quiesce_failure_before_tree_change_does_not_freeze(
     assert not Path(updater.MARKER_PATH).exists()
     state = updater.journal_store.load_state(updater.STATE_PATH)
     assert not (state.get("applying") or {}).get("restore_incomplete")
+    # The next recovery must not freeze the unchanged applied version.
+    monkeypatch.setattr(updater, "_migrate_log_tail", lambda: None)
+    monkeypatch.setattr(update_execution, '_migrate_log_tail', updater._migrate_log_tail)
+    monkeypatch.setattr(update_recovery, '_migrate_log_tail', updater._migrate_log_tail)
+    assert updater.recover_interrupted() == 0
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"] is None and state["stages"] == []
+    assert state["applied"][-1]["sha"] == after
+    assert updater._head_sha() == after and Path(live).read_bytes() == live_bytes
+    assert restarts == [1, 1] and not Path(updater.MARKER_PATH).exists()
+
+
+@pytest.mark.parametrize("engine", ["updater", "watchdog"])
+@pytest.mark.parametrize("flagged", [True, False])
+def test_unstarted_rollback_of_applied_version_is_not_frozen(
+        updater, tmp_path, monkeypatch, engine, flagged):
+    from ops_testkit import _git
+
+    tool, recover, repo, live, _back, _before, restarts = _synthetic_flagless_rollback(
+        updater, tmp_path, monkeypatch, engine)
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    after = state["applying"]["prev_sha"]
+    assert state["applied"][-1]["sha"] == after
+    _git(repo, "reset", "-q", "--hard", after)      # died at quiesce: tree unchanged
+    if flagged:
+        state["applying"]["hold_before_change"] = True
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    db_bytes = Path(live).read_bytes()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("an unstarted rollback must not restore or reset")
+
+    patch_lifecycle_lookup(monkeypatch, tool, "_restore_db", forbidden)
+    if engine == "watchdog":
+        patch_lifecycle_lookup(monkeypatch, tool, "_runtime_mode", lambda: "hermes")
+        patch_lifecycle_lookup(monkeypatch, tool, "_restart_drainers", lambda bounce=True: restarts.append(1) or [])
+        patch_lifecycle_lookup(monkeypatch, tool, "_restart_services", lambda *a, **k: 0)
+    if flagged:
+        assert recover() == 0
+        state = updater.journal_store.load_state(updater.STATE_PATH)
+        assert state["applying"] is None and state["applied"][-1]["sha"] == after
+        assert restarts == [1] and not Path(updater.MARKER_PATH).exists()
+    else:
+        # A legacy record cannot prove that no change happened: keep the freeze.
+        assert recover() == 1
+        assert updater.journal_store.load_state(updater.STATE_PATH)["applying"]["restore_incomplete"] is True
+        assert restarts == [] and Path(updater.MARKER_PATH).exists()
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == after
+    assert Path(live).read_bytes() == db_bytes
 
 
 def test_manual_schema_rollback_persists_hold_before_tree_change(
@@ -936,6 +985,95 @@ def test_flagless_rollback_reaches_existing_restore_outcomes(
     else:
         assert state["applying"] is None and restarts == [1]
         assert not Path(updater.MARKER_PATH).exists()
+
+
+@pytest.mark.parametrize("engine", ["updater", "watchdog"])
+@pytest.mark.parametrize("earlier_hold", [False, True])
+def test_non_schema_rollback_resumes_without_pruned_backup(
+        updater, tmp_path, monkeypatch, engine, earlier_hold):
+    tool, recover, _repo, _live, back, _before, restarts = _synthetic_flagless_rollback(
+        updater, tmp_path, monkeypatch, engine)
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    # Maintenance pruned the preupdate backup of an update without a schema change.
+    Path(back).unlink()
+    state["applying"]["schema_bump"] = False
+    if earlier_hold:
+        state["applying"]["restore_incomplete"] = True   # set by an earlier recovery pass
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("a rollback without a schema change must not restore its backup")
+
+    patch_lifecycle_lookup(monkeypatch, tool, "_restore_db", forbidden)
+    if engine == "updater":
+        monkeypatch.setattr(updater, "_restore_runtime", lambda entry: None)
+        monkeypatch.setattr(update_recovery, '_restore_runtime', updater._restore_runtime)
+        monkeypatch.setattr(update_restore, '_restore_runtime', updater._restore_runtime)
+        monkeypatch.setattr(updater, "restart_services", lambda *a, **k: None)
+        monkeypatch.setattr(update_apply, 'restart_services', updater.restart_services)
+        monkeypatch.setattr(update_recovery, 'restart_services', updater.restart_services)
+        monkeypatch.setattr(update_services, 'restart_services', updater.restart_services)
+    else:
+        patch_lifecycle_lookup(monkeypatch, tool, "_runtime_mode", lambda: "hermes")
+        patch_lifecycle_lookup(monkeypatch, tool, "_reconcile_membership", lambda snapshot: [])
+        patch_lifecycle_lookup(monkeypatch, tool, "_restart_drainers", lambda bounce=True: restarts.append(1) or [])
+        patch_lifecycle_lookup(monkeypatch, tool, "_restart_services", lambda *a, **k: 0)
+    assert recover() == 0
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"] is None and restarts == [1]
+    assert not Path(updater.MARKER_PATH).exists()
+
+
+def _adopted_marker(data):
+    """A backup-adoption marker and its report, as mcs_backup restore leaves them."""
+    marker = Path(data, "restore_pending.json")
+    marker.write_text(json.dumps({"v": 1, "phase": "awaiting_consent", "backup_path": None,
+                                  "by": "mcs_backup_restore", "at": 1, "report_id": "a" * 64}))
+    marker.chmod(0o600)
+    Path(data, "restore.json").write_text("{}")
+    return marker, marker.read_bytes(), marker.stat().st_ino
+
+
+@pytest.mark.parametrize("live_version", [7, 8])
+def test_update_restore_never_rewrites_backup_adoption_marker(
+        updater, tmp_path, monkeypatch, live_version):
+    import sqlite3
+
+    _repo, live, back, _before, after, restarts = _schema_bump_world(updater, tmp_path, monkeypatch)
+    if live_version == 7:
+        con = sqlite3.connect(live)
+        con.execute("PRAGMA user_version=7")
+        con.commit()
+        con.close()
+    marker, raw, inode = _adopted_marker(updater.DATA)
+    db_bytes = Path(live).read_bytes()
+    with pytest.raises(updater.UpdateError, match="restore_marker_adopted"):
+        updater._restore_db(back)
+    # Manual rollback refuses before journaling or resetting.
+    assert updater.rollback("synthetic-adopted-rollback") != 0
+    assert updater._head_sha() == after and restarts == []
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] is None
+    assert marker.read_bytes() == raw and marker.stat().st_ino == inode
+    assert Path(live).read_bytes() == db_bytes
+
+
+@pytest.mark.parametrize("live_version", [7, 8])
+def test_watchdog_restore_never_rewrites_backup_adoption_marker(
+        updater, tmp_path, monkeypatch, live_version):
+    from ops_testkit import _load
+    from mcs_recover_testkit import _mk_db
+
+    recovery = _load()
+    data = tmp_path / "watchdog-data"
+    data.mkdir()
+    live, back = data / "ledger.db", data / "backup.db"
+    _mk_db(live, live_version)
+    _mk_db(back, 7)
+    patch_lifecycle_lookup(monkeypatch, recovery, "DATA", str(data))
+    patch_lifecycle_lookup(monkeypatch, recovery, "LEDGER", str(live))
+    marker, raw, inode = _adopted_marker(data)
+    assert recovery.mcs_recovery_database._restore_db(str(back)) == "restore_marker_adopted"
+    assert marker.read_bytes() == raw and marker.stat().st_ino == inode
 
 
 @pytest.mark.parametrize("engine", ["updater", "watchdog"])
