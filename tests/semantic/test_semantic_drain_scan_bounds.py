@@ -160,6 +160,27 @@ def test_reproject_failure_is_marked_not_blocking(tmp_path, monkeypatch):
         db.close()
 
 
+def test_invalidation_precheck_uses_the_kind_index(tmp_path):
+    """The one-row pre-check must search by kind, not scan every artifact."""
+    db = _seeded(tmp_path)
+    seen = []
+    try:
+        db.db.set_trace_callback(seen.append)
+        semantic_publication.invalidate_projections(db.db, _canonical_cfg())
+        db.db.set_trace_callback(None)
+        precheck = [s for s in seen if s.lstrip().startswith("SELECT 1")
+                    and "FROM artifacts a" in s]
+        assert len(precheck) == 1
+        # The trace callback expands bound parameters, so the statement
+        # can be planned exactly as executed.
+        plan = " ".join(str(r[3]) for r in db.db.execute(
+            "EXPLAIN QUERY PLAN " + precheck[0]))
+        assert "idx_artifacts_kind_created" in plan
+        assert "SCAN a" not in plan
+    finally:
+        db.close()
+
+
 def test_job_locks_are_bucketed(tmp_path):
     db = _seeded(tmp_path)
     try:
