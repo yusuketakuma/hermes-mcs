@@ -1761,7 +1761,7 @@ def pause_for_restore(db, restored_at, cfg, now=None) -> bool:
             and not db.execute("SELECT 1 FROM artifacts WHERE kind=? LIMIT 1", (KINDS[0],)).fetchone()):
         return False
     db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
-               ("cloud_control", "paused", MODEL,
+               ("cloud_control", "paused", "",
                 json.dumps({"reason": RESTORE_PAUSE, "restore": restore}),
                 time.time() if now is None else now))
     return True

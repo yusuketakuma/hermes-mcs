@@ -268,6 +268,9 @@ def test_stop_resume_and_idempotent_receipt_share_one_transaction(world):
                               "ORDER BY artifact_id DESC LIMIT 1").fetchone()
         assert json.loads(scope[0]) == {'version': 2, 'command_id': req['command_id']}
         assert cloud_policy.history_thread_allowed(db.db, 1, 1)
+        models = {m for (m,) in db.db.execute(
+            "SELECT model FROM artifacts WHERE kind IN ('cloud_control','cloud_circuit')")}
+        assert models == {""}      # provider-neutral: never a fixed Haiku label
         count = db.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0]
         env.unlink()
         assert mcs_requests.apply_command(db, req) == resume

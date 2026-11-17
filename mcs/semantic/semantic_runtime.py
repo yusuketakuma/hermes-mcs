@@ -467,7 +467,7 @@ def _write_circuit_state(ledger, state: dict, now: float, *, kind=_CIRCUIT_ARTIF
         kind,
         json.dumps(payload, ensure_ascii=False, separators=(",", ":"),
                    allow_nan=False),
-        model="jev" if kind == _CIRCUIT_ARTIFACT_KIND else "claude-haiku-5-5",
+        model="jev" if kind == _CIRCUIT_ARTIFACT_KIND else "",  # circuit row is provider-neutral
         meta={"state": "open" if payload["open_until"] > now else "closed"},
     )
 
