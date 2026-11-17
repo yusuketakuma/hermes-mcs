@@ -695,8 +695,8 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
             if error_out is not None:
                 error_out["kind"] = "busy"
             return None
-        if scheduling_enabled():
-            body["id_slot"] = turn
+        # The acquired turn owns the wire slot, including legacy and nested calls.
+        body["id_slot"] = turn
         try:
             status, _headers, raw = send(endpoint, "POST", body, timeout,
                                          deadline)
