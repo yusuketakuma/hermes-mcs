@@ -252,6 +252,9 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
                 and isinstance(backup_reasons, list) and "backup_failed" in backup_reasons
                 and reasons is not None and "backup_not_verified" in reasons):
             report["backup_failure_code"] = cause
+    access = h.get("access_log")
+    since = access.get("since") if isinstance(access, dict) else None
+    report["access_log_since"] = since if finite_number(since) and since >= 0 else None
     last_ok = h.get("last_ok_at")
     report["last_ok_at"] = (last_ok if finite_number(last_ok)
                             and last_ok >= 0 else None)
@@ -770,6 +773,8 @@ _CHECK = "python3 mcs/ops/mcs_setup.py check"
 _DOCTOR = "python3 mcs/ops/mcs_setup.py doctor"
 _CLOUD_RESUME = ("python3 mcs/ops/mcs_setup.py cloud-llm resume "
                  "--confirm-human --reason '確認理由'")
+_ACKNOWLEDGE = "python3 mcs/ops/mcs_compliance.py acknowledge --services"
+_COMPLIANCE_GUIDE = "docs/guides/COMPLIANCE.md"
 _COLLECTION_LOG = "data/mcs.log"  # MCS-owned producers share the run_log sink in both modes.
 _STANDALONE_STATUS = "python -m mcs_standalone status"
 _STANDALONE_RESTART = ("hostを再起動（macOS: launchctl kickstart -k gui/$(id -u)/ai.mcs.standalone、"
@@ -876,6 +881,18 @@ _REASON_JA = {
                                      "翌日に自動で再開します。上限は semantic.daily_request_budget"),
     "semantic_jev_auth_error": ("TypeSafe Jev の認証に失敗しました",
                                 "TYPESAFE_API_KEY の値と有効期限を確認"),
+    "semantic_jev_provider_not_approved": ("施設の確認記録にJevが含まれていないため、Jevへの送信を止めています",
+                                           f"施設で確認したうえで {_ACKNOWLEDGE} にjevを含めて記録。"
+                                           f"Jevを使わない場合は semantic.mode を off にする（{_COMPLIANCE_GUIDE}）"),
+    "access_log_unwritable": ("閲覧・操作記録（アクセスログ）を書き込めないため、患者情報を含む閲覧の回答（/mcs・サマリー）を返していません",
+                              "data/access_log の所有者と権限（MCSを動かすユーザーだけ、フォルダ700・ファイル600）と空き容量を確認。"
+                              "書き込めるようになると次の閲覧から自動で再開し、その閲覧の記録が書けた時点でこの警報も消えます"
+                              f"（直しただけでは消えません。{_COMPLIANCE_GUIDE}）"),
+    "external_transfer_unreadable": ("施設の外部AI確認記録（external_transfer.json）を読み取れないため、"
+                                     "外部AIとJevへの送信をすべて止めています",
+                                     "記録は削除しないでください（確認記録の無い環境と同じ扱いに戻ります）。"
+                                     "MCSを動かすユーザーが所有する権限0600の通常ファイルに戻し、確認待ちの内容にしてから"
+                                     f"{_ACKNOWLEDGE} で確認を記録し直す（{_COMPLIANCE_GUIDE}）"),
     CONFIG_BLOCKED: ("設定を確認できず、自動復旧を止めています",
                      f"{_CHECK} で設定の状態を確認。設定の変更が途中で止まっている場合は設定を保持したまま管理者へ連絡"),
     "unread_collection_unknown": ("未読収集の状況が記録されていません",
@@ -945,12 +962,12 @@ def _lineworks_actions() -> dict:
 
 
 _AREA_JA = (("semantic", "意味チェック（任意機能）"), ("extract_backlog", "要約の抽出"),
-            ("cloud_llm", "外部AI処理"),
+            ("cloud_llm", "外部AI処理"), ("external_transfer", "外部AI処理"),
             ("provider_settings", "外部AI処理"),
             ("local_llm", "要約の抽出"), ("llm_endpoint", "要約の抽出"),
             ("notification", "通知"), ("card_delivery", "通知"),
             ("collection_incomplete", "一部患者の記録取得"), ("disk_low", "保存"),
-            ("ledger", "保存データ"), ("backup", "バックアップ"))
+            ("ledger", "保存データ"), ("backup", "バックアップ"), ("access_log", "閲覧・操作記録"))
 
 
 def _jst(ts) -> str:
@@ -1119,6 +1136,9 @@ _CLOUD_REASON_JA = {
                                  f"{_CLOUD_RESUME} で再開"),
     "cloud_llm_circuit_open": ("外部AIへの要求が続けて失敗し、一時停止しています",
                                f"{_DOCTOR} で停止理由を確認し、待機期間後に再確認"),
+    "cloud_llm_provider_not_approved": ("施設の確認記録に利用先の外部AIが含まれていないため、外部AIへの新しい送信を止めています",
+                                        f"施設で確認したうえで {_ACKNOWLEDGE} に利用先を含めて記録。"
+                                        f"外部AIを使わない場合は cloud_llm.mode を off にする（{_COMPLIANCE_GUIDE}）"),
 }
 
 
@@ -1194,6 +1214,9 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             closed = report.get('notify_tracking_closed_parts')
             if _count(closed) and closed:
                 extra += f"／別に運用終了・未回収 {closed}件"
+        elif base == "access_log_unwritable":
+            since = report.get("access_log_since")
+            extra = f"（{_jst(since)} から）" if finite_number(since) else ""
         elif base in ("backup_not_verified", "backup_deferred_deadline", "backup_local_overdue"):
             extra = ("" if report.get("observations_recorded")
                      else _backup_local_text(report.get("backup_local")))

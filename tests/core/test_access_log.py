@@ -161,3 +161,39 @@ def test_log_directory_is_synced_again_after_a_failed_publication(tmp_path, monk
         access_log.record(tmp_path, via="slack", actor="a", op="read")
     access_log.record(tmp_path, via="slack", actor="a", op="read")
     assert len(synced) == 2  # the retry synced the log directory again
+
+
+def test_a_failed_append_leaves_a_content_free_note_until_a_record_succeeds(tmp_path):
+    folder = tmp_path / access_log.DIR_NAME
+    folder.mkdir(mode=0o755)
+    os.chmod(folder, 0o755)
+    for at in (1_790_000_000, 1_790_000_600):
+        with pytest.raises(access_log.AccessLogError, match="access_log_untrusted"):
+            _entry(tmp_path, now=at)
+    assert access_log.failure(tmp_path) == {"code": "access_log_untrusted",
+                                            "since": 1_790_000_000, "last": 1_790_000_600}
+    note = tmp_path / access_log.FAILURE_NAME
+    assert stat.S_IMODE(note.stat().st_mode) == 0o600
+    assert not {"slack", "U1", "C1", "7"} & set(json.loads(note.read_text()).values())
+    os.chmod(folder, 0o700)
+    _entry(tmp_path)
+    assert access_log.failure(tmp_path) is None and not note.exists()
+
+
+@pytest.mark.parametrize("kind", ["not_json", "shared_mode", "link"])
+def test_an_unreadable_note_still_reports_a_failure(tmp_path, kind):
+    assert access_log.failure(tmp_path) is None
+    note = tmp_path / access_log.FAILURE_NAME
+    if kind == "link":
+        (tmp_path / "elsewhere.json").write_text('{"code": "access_log_unavailable"}')
+        note.symlink_to(tmp_path / "elsewhere.json")
+    else:
+        note.write_text("not json" if kind == "not_json" else '{"code": "access_log_unavailable"}')
+        note.chmod(0o600 if kind == "not_json" else 0o644)
+    assert access_log.failure(tmp_path) == {"code": "unknown", "since": None, "last": None}
+
+
+def test_a_failure_note_that_cannot_be_written_keeps_the_original_error(tmp_path):
+    with pytest.raises(access_log.AccessLogError, match="access_log_unavailable"):
+        _entry(tmp_path / "absent")
+    assert not (tmp_path / "absent").exists()

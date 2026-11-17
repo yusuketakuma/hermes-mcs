@@ -126,11 +126,13 @@ Jev が確認に含まれない場合は、明示した `semantic.mode` をそ�
 確認に Jev が含まれるまで off のままです。患者文脈の品質監査を含む実行中の処理は、確認から Jev が外れると次の Jev
 への要求の前に止まります。手動の合成データ検証（`semantic_jev.py` の配線確認・`mcs_setup.py jev-value`・`semantic_bench`・
 `semantic_shadow_e2e`）は配布されている完全合成のデータだけを送り患者情報を送らないため、この確認の対象外です
-（Jevの日次上限・`semantic.until` には従います）。
+（Jevの日次上限・`semantic.until` には従います）。ファイル内の `source` などの自己申告では判断せず、`evaluation/` に
+同梱されたケースと完全に一致しない入力は Jev へ送らずに止めます。
 通知では「要約：生成済み」・見出し「要約」・「抽出済み事実」と表示し、「自動検査完了」「自動検査済」「監査済み」は付きません。要約を出さない運用にする場合は `semantic.summary_mode` を `enforce` 以外にします。
-止めている間は `mcs_setup.py check` の注意・`mcs_setup.py doctor` の `providers` の `block_reason`・`mcs setup` の保存前の確認が、
-エラーコード `external_transfer_review_required` で理由を示します（`doctor --probe` で停止・予算の理由も見つかったときは、
-それを `also_block_reason` に並べます）。続ける場合は `--services` にそのサービスを含めて
+止めている間は `mcs_setup.py check` の注意・`mcs_setup.py doctor` の `providers` の `block_reason`（画面表示では止めている理由と
+対処の文）・`mcs setup` の保存前の確認が、エラーコード `external_transfer_review_required` で理由を示します（`doctor --probe` で
+停止・予算の理由も見つかったときは、それを `also_block_reason` に並べます）。監視の警報も、送信する設定の外部AIを止めている間は
+`cloud_llm_provider_not_approved`、Jev を止めている間は `semantic_jev_provider_not_approved` としてシステム通知先へ知らせます。続ける場合は `--services` にそのサービスを含めて
 確認を記録し直してください。確認待ち・記録を読めない状態も同じく送信しません。
 
 確認を狭めたとき、すでに送信の予約（利用記録）を持っている Anthropic・OpenAI の処理単位は、そのまま保留されます。
@@ -143,7 +145,8 @@ Jev が確認に含まれない場合は、明示した `semantic.mode` をそ�
 すべての外部AIへの送信を止め、`acknowledge` も `external_transfer_record_invalid`（リンクでは `external_transfer_io_error`）
 で受け付けません。このファイルは削除しないでください（削除すると確認記録の無い既存環境と同じ扱いに戻ります）。
 MCSを動かすユーザーが所有する権限0600の通常ファイルに戻し、内容を `{"v": 1, "required": true, "acknowledged": null}`
-（確認待ち）にしてから、確認を記録し直してください。
+（確認待ち）にしてから、確認を記録し直してください。読めない間は、外部AIを使う設定かどうかにかかわらず、監視が
+`external_transfer_unreadable` の警報を出します。
 既存の環境（このファイルが無い環境）はこれまでどおり、`mode` を省略すればキーで自動有効化し、明示すればその設定に従うので、
 同じ確認を済ませていない場合は `mode=off` を明示してください。
 
@@ -172,6 +175,9 @@ python3 mcs/ops/mcs_compliance.py access-log show --project 123
 人数しか残らず行をまたいで重複を除けないため、`patients_at_least: true` のときは「少なくともこの人数」と読みます。
 
 月1回の確認と記録の保存期間は、運用管理規程で決めてください（自動削除はしません）。
+アクセスログを書けない間は、監視が `access_log_unwritable` の警報で最初に書けなかった時刻とともに知らせます（時刻と固定の理由コードだけを
+`~/.mcs/data/access_log_failure.json` に残し、次に書けた時点で消します）。権限や空き容量を直しただけでは警報は消えず、
+直したあとの最初の閲覧の記録が書けた時点で消えます。
 アクセスログを書けなかった期間の確定操作は、受付記録（`command_receipts`）でしか追えません。定期確認では、その期間の受付記録も突き合わせてください。
 次は記録の対象外です。運用管理規程の業務日誌で補ってください。
 

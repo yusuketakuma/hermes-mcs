@@ -15,7 +15,10 @@ Usage:
 Without --jev (or without the API key) the audit stages honestly
 report INCOMPLETE — the driver never fabricates a pass. The cases file
 must declare top-level "source": "synthetic"; that marks the corpus as
-fictional, not as human clinical labels.
+fictional, not as human clinical labels. That label is only declared, so
+--jev additionally requires every case to be one of the bundled fully
+synthetic evaluation cases (semantic_evaluation.bundled_synthetic_cases):
+nothing else is ever sent to Jev.
 """
 import argparse
 import json
@@ -58,6 +61,12 @@ def main() -> int:
     if payload.get("source") != "synthetic":
         # Unconfirmed provenance never reaches the model.
         print("cases file must declare source: synthetic", file=sys.stderr)
+        return 1
+
+    if args.jev and not semantic_evaluation.bundled_synthetic_cases(cases):
+        # Jev is outside the facility review only for the bundled synthetic assets.
+        print("--jev sends only the bundled fully synthetic evaluation cases "
+              "(evaluation/*.json); a self-declared source is not enough", file=sys.stderr)
         return 1
 
     from contextlib import nullcontext

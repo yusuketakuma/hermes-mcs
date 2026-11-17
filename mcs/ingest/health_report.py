@@ -499,15 +499,63 @@ def jev_block_reason(db) -> str | None:
     return kind if kind in _JEV_BLOCK_KINDS else None
 
 
+def _cloud_would_send(settings) -> bool:
+    """A sending mode with at least one route and one patient in scope."""
+    return (settings["mode"] in ("on", "shadow") and bool(settings["routes"])
+            and (settings["project_ids"] is None
+                 or bool(set(settings["project_ids"]) - set(settings["exclude_project_ids"]))))
+
+
+# external_transfer.status() without a record: the review allows every service
+_REVIEW_ALLOWS_ALL = {"state": "not_required", "auto_enable": True}
+
+
+def _jev_would_run(cfg) -> bool:
+    """Jev's settings as approval would apply them: a valid mode other than off with a patient in scope.
+
+    Only called while the review holds Jev, and a hold of an omitted mode
+    implies a present key, so the key counts as present."""
+    import semantic_policy
+    settings, errors = semantic_policy.semantic_config(
+        cfg, key_present=True, transfer_status=lambda: _REVIEW_ALLOWS_ALL)
+    return not errors and settings["mode"] != "off" and settings["project_ids"] != []
+
+
+def transfer_review_holds(cfg) -> list:
+    """Fixed reasons for external sends the facility review record withholds (external_transfer).
+
+    An unreadable record withholds every service, so it is one reason whatever
+    is configured. Otherwise a cloud provider or Jev that the recorded review
+    does not name is reported when its valid configuration would send with a
+    patient in scope once approved; without a record nothing is withheld. An
+    explicit mode is reported whether or not its key is present: the missing
+    key is named (cloud_llm_no_api_key, semantic_jev_no_api_key) once the
+    review allows the send, while an omitted mode is held only with a key."""
+    import cloud_policy
+    import external_transfer
+    import semantic_policy
+    if external_transfer.status()["state"] == "unreadable":
+        return ["external_transfer_unreadable"]
+    if not cfg:
+        return []   # an unreadable config keeps every external route off
+    reasons = []
+    _, errors, held = cloud_policy.resolve_selection(cfg)
+    # an omitted mode is held only with a key, and an explicit mode ignores
+    # key_present, so this is the configuration as approval would apply it
+    if held and not errors and _cloud_would_send(cloud_policy.cloud_config(cfg, key_present=True)[0]):
+        reasons.append("cloud_llm_provider_not_approved")
+    if semantic_policy.runtime_review_held(cfg) and _jev_would_run(cfg):
+        reasons.append("semantic_jev_provider_not_approved")
+    return reasons
+
+
 def cloud_stop_reason(db, cfg) -> str | None:
     """Observe a configured provider's durable stop without probing it or reading source bodies."""
     from types import SimpleNamespace
     import cloud_policy
     # an unreadable config ({}) keeps the route off (cloud_inference.resolve_cloud_settings)
     settings, errors = cloud_policy.resolve_settings(cfg) if cfg else cloud_policy.cloud_config({})
-    if (errors or settings["mode"] not in ("on", "shadow")
-            or not settings["routes"] or settings["project_ids"] is not None
-            and not set(settings["project_ids"]) - set(settings["exclude_project_ids"])):
+    if errors or not _cloud_would_send(settings):
         return None
     key_present = bool(cloud_policy.provider_key(settings["provider"]))
     reason = cloud_policy.global_block_reason(SimpleNamespace(db=db), model=settings["model"])
@@ -530,6 +578,18 @@ def carried_since(key: str, active: bool, now: float) -> float | None:
     marks = prev_health().get("stall_marks")
     at = marks.get(key) if isinstance(marks, dict) else None
     return at if finite_number(at) and 0 <= at <= now else now
+
+
+def access_log_health(data_dir: str) -> dict:
+    """Whether the newest access-log append failed (access_log.failure), without reading the log.
+
+    The adapters withhold patient answers they cannot record; only this
+    note, written by the failed append, tells the operator so."""
+    import access_log
+    note = access_log.failure(data_dir)
+    if note is None:
+        return {"state": "ok", "code": None, "since": None}
+    return {"state": "failing", "code": note["code"], "since": note["since"]}
 
 
 def watcher_health(data_dir: str, cfg, now: float) -> dict:
@@ -566,6 +626,9 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
     check is gated on its feature being enabled and needs BOTH old
     waiting work and no completion inside the window, so a large but
     draining backlog (or an idle system) never trips it.
+    - external sends the facility review withholds, and an unreadable
+      review record (transfer_review_holds): nothing else would say that
+      a configured provider or Jev is not being used.
     - card_delivery_stalled: a queued render on the active interactive
       transport not picked up for CARD_STALL_S (worker down/denied).
     - local_llm_down: local-model work (semantic jobs or pending legacy
@@ -598,6 +661,8 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
     cloud_reason = cloud_stop_reason(db, cfg)
     if cloud_reason:
         reasons.append(f"cloud_llm_{cloud_reason}")
+    _phase("transfer_review")
+    reasons.extend(transfer_review_holds(cfg))
     if notify_scope.interactive_enabled(cfg):
         import card_worker_status
         transport = notify_scope.active_transport(cfg)
@@ -1324,6 +1389,8 @@ def build_health(db, result: dict, status: str,
     import notify_spool
     ocr = attachment_ocr_health(notify_spool.data_root(db), cfg if checked else None, now)
     watch = watcher_health(notify_spool.data_root(db), cfg if checked else None, now)
+    access = access_log_health(notify_spool.data_root(db))
+    access_bad = access["state"] != "ok"
     stall_marks["health_watch_bad_since"] = watch["bad_since"]
     ocr_bad = ocr["state"] not in ("ok", "disabled")
     skipped = result.get("backup_skipped")
@@ -1338,7 +1405,7 @@ def build_health(db, result: dict, status: str,
     backup_local_overdue = (not backup_deferred and finite_number(local_age)
                             and local_age > local_backup.BACKUP_OVERDUE_S)
     if (run_overdue or guard_violations or backup_bad or ocr_bad
-            or backup_deferred or backup_local_overdue) and overall == "ok":
+            or backup_deferred or backup_local_overdue or access_bad) and overall == "ok":
         overall = "degraded"
     previous = prev_health()
     last_ok_at = (now if overall == "ok" else previous.get(
@@ -1369,6 +1436,7 @@ def build_health(db, result: dict, status: str,
             ("disk_low", disk_low),
             ("backup_deferred_deadline", backup_deferred),
             ("backup_local_overdue", backup_local_overdue),
+            ("access_log_unwritable", access_bad),
         ) if present] + stalls
     report = {
         "overall": overall, "run_status": status,
@@ -1379,6 +1447,7 @@ def build_health(db, result: dict, status: str,
         "ledger_guards": guards,
         "backup": backup,
         "attachment_ocr": ocr,
+        "access_log": access,
         "at": now,
         "unread_at": unread_at(result, status, now),
         **coll,

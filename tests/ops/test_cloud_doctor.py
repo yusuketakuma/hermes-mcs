@@ -173,3 +173,29 @@ def test_intentional_pause_is_not_replaced_by_a_missing_key_warning_when_probed(
     provider = cloud_cli.diagnostics({"cloud_llm": {"mode": "on", "project_ids": None}},
                                      root=str(root), probe=True)["anthropic"]
     assert provider["status"] == "local" and provider["block_reason"] == "paused"
+
+
+def test_doctor_text_explains_a_provider_the_facility_review_holds(local, monkeypatch, capsys):
+    import external_transfer
+    import mcs_setup
+    import runtime_inspection
+
+    root, _, _ = local
+    cfg = {"mcs_login_id": "synthetic", "notify_target": "local",
+           "cloud_llm": {"mode": "on", "project_ids": [1], "provider": "openai"},
+           "semantic": {"mode": "assist", "project_ids": None, "daily_request_budget": 10}}
+    monkeypatch.setattr(cloud_policy, "provider_key", lambda name, root=None: "synthetic-key")
+    monkeypatch.setattr(mcs_setup, "HOME", str(root))
+    monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(root / "LaunchAgents"))
+    monkeypatch.setattr(cloud_cli.mcs_util, "HOME", str(root))
+    monkeypatch.setattr(mcs_setup, "_diagnostic_config", lambda: cfg)
+    monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
+    monkeypatch.setattr(mcs_setup.sqlite3, "sqlite_version_info", (3, 51, 3))
+    monkeypatch.setattr(runtime_inspection, "probe_python", lambda _: {
+        "python": "3.14.8", "sqlite": "3.51.3", "packages": {}})
+    external_transfer.require(root)
+    mcs_setup.main(["doctor"])
+    text = capsys.readouterr().out
+    state = external_transfer.status(root)
+    assert external_transfer.hold_message("OpenAI", state) in text
+    assert external_transfer.hold_message("Jev", state) in text
