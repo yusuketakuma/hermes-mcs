@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
 
 
@@ -20,6 +21,7 @@ LOG = "mcs.log"
 STATE = ".mcs-log-state.json"
 LOCK = ".mcs-log.lock"
 BACKUPS = "mcs-log-backups"
+LOCK_WAIT_S = 120     # a wedged holder must not stall every service behind this helper
 BLOCK = 65536
 MAX_STATE = 262144
 LEGACY_NAMES = tuple(name + suffix for name in (
@@ -206,7 +208,15 @@ def _locked(data_dir):
     directory = _directory(data_dir)
     try:
         with _file(directory, LOCK, os.O_RDWR | os.O_CREAT) as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+            until = time.monotonic() + LOCK_WAIT_S
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= until:
+                        raise RunLogError("run_log_lock_timeout") from None
+                    time.sleep(0.2)
             _check(directory, directory=True)
             if _identity(os.fstat(lock)) != _identity(os.stat(LOCK, dir_fd=directory, follow_symlinks=False)):
                 raise RunLogError("run_log_lock_changed")
