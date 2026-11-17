@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import time
+import uuid
 from contextlib import suppress
 from cli_args import JapaneseArgumentParser as _JapaneseParser  # noqa: E402
 import mcs_util  # noqa: E402
@@ -166,11 +167,19 @@ def cmd_check() -> int:
         if not held:
             if state.get("pending_notices"):
                 # abort notices a busy tick made bail defer
-                kept = [notice for notice in state["pending_notices"]
-                        if isinstance(notice, dict) and isinstance(notice.get("text"), str)
-                        and not _enqueue_notice(notice["text"], use_run_lock=True,
-                                                notice_code=notice.get("notice_code"),
-                                                tag=notice.get("tag"))]
+                pending = [notice for notice in state["pending_notices"]
+                           if isinstance(notice, dict) and isinstance(notice.get("text"), str)]
+                unnamed = [notice for notice in pending if not isinstance(notice.get("notice_id"), str)]
+                if unnamed:
+                    # items saved before notice ids: fix the id durably before the first send
+                    for notice in unnamed:
+                        notice["notice_id"] = uuid.uuid4().hex
+                    state["pending_notices"] = pending
+                    journal_store.save_state(STATE_PATH, state)
+                kept = [notice for notice in pending
+                        if not _enqueue_notice(notice["text"], use_run_lock=True,
+                                               notice_code=notice.get("notice_code"),
+                                               tag=notice.get("tag"), notice_id=notice["notice_id"])]
                 if kept:
                     state["pending_notices"] = kept
                 else:
