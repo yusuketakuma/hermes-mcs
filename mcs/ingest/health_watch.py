@@ -508,6 +508,8 @@ def _delivery_snapshot(value, now: float):
 
 def _add_delivery_reason(obs: dict, reason: str) -> None:
     reasons = obs.get("state_reasons")
+    if reason == _DELIVERY_UNVERIFIED and not reasons and obs["status"] in ("degraded", "failed"):
+        return  # an unknown cause stays unknown: a transient probe note must not delay its alert
     obs["state_reasons"] = [reason] + [r for r in reasons or [] if r != reason]
     if obs["status"] == "ok":
         obs["status"] = "degraded"
@@ -522,6 +524,8 @@ def _apply_delivery_observation(obs: dict, state: dict, home: str, now: float,
     if not isinstance(previous, str) or previous not in _DELIVERY_UNRESOLVED:
         previous = None
     notify = cfg.get("notify") if isinstance(cfg, dict) else None
+    if isinstance(cfg, dict) and notify is None:
+        notify = {}  # the optional block is absent: notifications are off (notify_scope.notify_cfg)
     mode = cfg.get("runtime_mode", "hermes") if isinstance(cfg, dict) else None
     if mode not in ("hermes", "standalone") or not isinstance(notify, dict):
         if previous in _DELIVERY_UNRESOLVED:

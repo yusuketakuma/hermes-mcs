@@ -297,6 +297,8 @@ def test_unverified_or_non_gateway_config_is_not_observed(monkeypatch, cfg, bloc
         "profile": "synthetic", "application_id": "1", "team_id": "2", "channel_id": "room",
         "allowed_user_ids": ["user"], "project_ids": [1]}}},
     {"runtime_mode": "standalone", "notify": {"interactive": "off"}},
+    {},
+    {"notify": None},
 ])
 def test_valid_non_gateway_switch_discards_the_current_scope_without_claiming_recovery(tmp_path, monkeypatch, cfg):
     _health(tmp_path, at=4000, unread=4000, reasons=[], overall="ok")
@@ -313,8 +315,6 @@ def test_valid_non_gateway_switch_discards_the_current_scope_without_claiming_re
 
 @pytest.mark.parametrize("cfg,blocked", [
     ({"notify": {"interactive": "off", "card_thread": "invalid"}}, False),
-    ({"runtime_mode": "standalone"}, False),
-    ({"runtime_mode": "standalone", "notify": None}, False),
     ({"runtime_mode": "standalone", "notify": {}, "notify_target": 42}, False),
     ({"runtime_mode": "standalone", "notify": {"interactive": "slack", "slack": {}}}, False),
     ({"runtime_mode": "invalid", "notify": {"interactive": "off"}}, False),
@@ -329,6 +329,15 @@ def test_invalid_or_blocked_switch_keeps_previous_delivery_scope(monkeypatch, cf
     assert state == {"delivery_current_reason": "notification_delivery_waiting", "delivery_current_scope": "a" * 64}
     if not blocked:
         assert obs["state_reasons"] == ["notification_delivery_unverified"]
+
+
+def test_degraded_health_without_reasons_alerts_immediately_despite_failed_probe(tmp_path, monkeypatch):
+    monkeypatch.setattr(health_watch, "_observe_delivery",
+                        lambda *args: (_ for _ in ()).throw(ValueError("synthetic")))
+    _health(tmp_path, at=4000, unread=4000, reasons=[], overall="degraded")
+    report = health_watch.evaluate(str(tmp_path), 4000, cfg=CFG)
+    assert report["alert"] is True
+    assert "notification_delivery_unverified" not in (report["state_reasons"] or [])
 
 
 def test_unknown_send_witness_is_retained_when_a_new_recorded_reason_alerts(tmp_path, monkeypatch):
