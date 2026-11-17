@@ -126,6 +126,16 @@ def _reprocess_execution_unverifiable(pl):
     return runtime.execution_marker_state(pl, None) == 'unverifiable'
 
 
+def _reprocess_unbound_done(state, pl):
+    """Completed job whose outdated results were never bound to a generation.
+
+    Arrival and history seeds write no execution marker, so a done job of
+    theirs cannot show which interpretation it was evaluated under. The
+    pass adopts it once under the current generation; after that it carries
+    the marker and, like every marked job, reopens only for a new one."""
+    return state == 'repair_required' and runtime.execution_marker_state(pl, None) == 'legacy'
+
+
 def _job_identity_same(token, current):
     """Full fetch_jobs identity captured before adoption, mirroring
     runtime.job_matches field coverage plus the raw payload."""
@@ -469,6 +479,7 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
                 sources[key] = ledger._semantic_source_generation(*key)
             if (not is_current(pl)
                     or _reprocess_execution_stale(pl, generation)
+                    or _reprocess_unbound_done(state, pl)
                     or pl.get('source_generation') != sources[key]
                     or not isinstance(pl.get('targets'), list) or row['message_id'] not in pl['targets']):
                 arrival = _reprocess_arrival_event(
