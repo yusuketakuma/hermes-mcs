@@ -1596,3 +1596,26 @@ def test_note_provider_reports_only_a_change(capsys):
     assert [(r['event'], r['previous'], r['provider']) for r in records] == [
         ('cloud_provider_changed', 'anthropic', 'openai')]
     assert 'synthetic-private-detail' not in json.dumps(records)
+
+
+def test_pool_sync_reports_recovery_only_after_the_nested_pool_recovers(tmp_path, monkeypatch):
+    # a nested pool that raised is throttled on the next call: the outer
+    # pass alone must not read as recovery, or the owner logs the same
+    # failure again every other cycle
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    outcomes = iter([RuntimeError("synthetic"), None])
+
+    def decide(cfg, ledger, now):
+        item = next(outcomes)
+        if item:
+            raise item
+    monkeypatch.setattr(owner.backlog, "_decide", decide)
+    monkeypatch.setattr(owner, "_decide", lambda cfg, ledger, now: None)
+    with pytest.raises(RuntimeError):
+        owner.sync({})
+    owner.last_sync -= 11
+    assert owner.sync({}) is False          # nested throttled and still failed
+    owner.backlog.last_sync -= 11
+    owner.last_sync -= 11
+    assert owner.sync({}) is True
+    assert owner.sync({}) is False          # throttled: nothing decided

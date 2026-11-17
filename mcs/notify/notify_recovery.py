@@ -139,7 +139,8 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
                 # the operator's proof never outranks the worker's own
                 # witness — settling not_sent over a journaled send
                 # would reissue it (double post)
-                error = _journal_contradiction(ledger, req)
+                error = (_journal_contradiction(ledger, req)
+                         or _horizon_hold_cannot_vouch(db, req))
             if error == "unknown_attempt":
                 # the restore may have erased the attempt row — a
                 # recorded restore hold is the operator's handle for
@@ -340,6 +341,21 @@ def _resolve_check(attempt, render, card, req) -> str | None:
     return None
 
 
+def _horizon_hold_cannot_vouch(db, req) -> str | None:
+    """An attempt row held after a restore past the journal horizon needs
+    proof independent of the journal, like an attempt-less hold
+    (_rebind_check): the rows that could witness its send may be compacted."""
+    if req["result"] == "mark_not_sent" \
+            and req["evidence"].get("proof") == "no_journal_started" \
+            and db.execute(
+                "SELECT 1 FROM notification_restore_holds WHERE attempt_id=? "
+                "AND delivery_id=? AND reason=? AND released_at IS NULL",
+                (req["attempt_id"], req["delivery_id"],
+                 UNKNOWN_ATTEMPT_BEYOND_HORIZON)).fetchone():
+        return "journal_cannot_vouch"
+    return None
+
+
 def _journal_contradiction(ledger, req) -> str | None:
     """Check an attempt-row resolve against the delivery journal (the
     same scan post-restore reconcile trusts). A delivered ``result``
@@ -450,6 +466,9 @@ def card_part_resolve_plan(ledger, delivery_id, part_id, *, include_related=Fals
 # every fixed reason a producer stores on a held or unknown part; others count as 'unknown'
 # a part made unknown by a restore beyond the journal horizon (notify_reconcile)
 BEYOND_HORIZON = "restore_beyond_journal_horizon"
+# the hold reconcile gives a granted/unknown attempt row the journal never saw
+# in a restore past the journal horizon: its journal rows may be compacted away
+UNKNOWN_ATTEMPT_BEYOND_HORIZON = "unknown_attempt:beyond_horizon"
 PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
                      "blank_part_unrepresentable", "attachment_upload_identity_unverified", "card_revoked",
                      *_PREFLIGHT_ERRORS, _DEPENDENCY_ERROR,

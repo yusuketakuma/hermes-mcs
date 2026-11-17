@@ -315,19 +315,32 @@ class CloudBacklogPool:
         self.retry_at = 0.0
         self.lock = None
         self.last_sync = 0.0
+        self.failed = False
         # The context pool's owner also keeps the stored-message workers of a
         # bounded reopening: they spawn only while that window is open.
         self.backlog = CloudBacklogPool(root) if context_only else None
 
     def sync(self, cfg, *, ledger=None):
+        """Return True only when a pass finished and no pool in the chain is
+        in a failure streak; a throttled return decided nothing. The owner
+        reads this, not ``last_sync``: a nested pool that raised is throttled
+        on the next call, and the outer pass alone must not count as recovery."""
+        decided = self.backlog.sync(cfg, ledger=ledger) if self.backlog is not None else False
+        now = time.monotonic()
+        if now - self.last_sync >= 10:
+            self.last_sync = now
+            try:
+                self._decide(cfg, ledger, now)
+            except Exception:
+                self.failed = True
+                raise
+            self.failed = False
+            decided = True
+        return decided and not (self.failed or (self.backlog is not None and self.backlog.failed))
+
+    def _decide(self, cfg, ledger, now):
         import cloud_inference
         import cloud_policy
-        if self.backlog is not None:
-            self.backlog.sync(cfg, ledger=ledger)
-        now = time.monotonic()
-        if now - self.last_sync < 10:
-            return
-        self.last_sync = now
         settings = cloud_inference.resolve_cloud_settings(cfg)
         self._reap(now)
         if not self._admits(cfg, settings, ledger):
