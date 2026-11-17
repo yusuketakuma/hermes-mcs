@@ -540,3 +540,66 @@ def test_probe_uncontended_turn_is_sent(tmp_path, monkeypatch):
     assert local_llm.probe_format(
         "http://127.0.0.1:8080/v1/chat/completions", "m", None, timeout=10,
         request_fn=_fake_request(_response('{"ok": true}'))) == "object"
+
+
+def test_call_turn_holds_one_slot_across_inner_sends(tmp_path, monkeypatch):
+    """One call_turn keeps a single physical turn: inner sends reuse the
+    owned slot instead of re-taking the lock, and ownership is released
+    on exit."""
+    path = str(tmp_path / "turn.lock")
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, path)
+    slots = []
+
+    def send(endpoint, method, body, timeout, deadline=None):
+        slots.append(body.get("id_slot"))
+        return 200, {}, json.dumps(_response("{}")).encode()
+
+    with local_llm.call_turn(time.monotonic() + 30, 1.0) as held:
+        assert held == local_llm.request_slot()
+        assert local_llm._OWNED_TURN.get() == held
+        local_llm.chat("p", request_fn=send)
+        local_llm.chat("p", request_fn=send)
+    assert local_llm._OWNED_TURN.get() is None
+    assert slots == [held, held]
+    assert _lock_is_free(path)
+
+
+def test_call_turn_waits_out_held_lock_then_sends(tmp_path, monkeypatch):
+    """A call_turn that waits out a held GPU turn still gets one slot
+    for the whole probe+body sequence."""
+    path = str(tmp_path / "turn.lock")
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, path)
+    monkeypatch.setattr(local_llm, "TURN_LOCK_POLL_S", 0.01)
+    timer = _hold_turn_for(path, 0.3, monkeypatch)
+    slots = []
+    try:
+        def send(endpoint, method, body, timeout, deadline=None):
+            slots.append(body.get("id_slot"))
+            return 200, {}, json.dumps(_response("{}")).encode()
+
+        with local_llm.call_turn(time.monotonic() + 5, 1.0) as held:
+            assert held == local_llm.request_slot()
+            local_llm.chat("p", request_fn=send)
+            local_llm.chat("p", request_fn=send)
+        assert slots == [held, held]
+    finally:
+        if timer.is_alive():
+            timer.join()
+        else:
+            timer.cancel()
+    assert _lock_is_free(path)
+
+
+def test_call_turn_yields_none_when_floor_unmet(tmp_path, monkeypatch):
+    """When no turn fits the deadline the block still runs — sends then
+    acquire their own turn exactly as before (here: busy, nothing sent)."""
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, str(tmp_path / "turn.lock"))
+    err = {}
+    with local_llm.call_turn(time.monotonic() + 1.0, 5.0) as held:
+        assert held is None
+        assert local_llm._OWNED_TURN.get() is None
+        assert local_llm.chat(
+            "p", deadline=time.monotonic() + 1.0, turn_min_s=5.0,
+            request_fn=lambda *a, **k: pytest.fail("sent"),
+            error_out=err) is None
+    assert err == {"kind": "busy"}

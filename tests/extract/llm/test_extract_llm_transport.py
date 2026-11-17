@@ -44,18 +44,22 @@ def test_probe_all_rejected_means_plain(monkeypatch):
     assert extract_llm._probe_format() == "plain"
 
 
-def test_probe_endpoint_down_stays_plain_no_raise(monkeypatch):
+def test_probe_transport_death_stays_unprobed_no_raise(monkeypatch):
+    """A probe send that died in transport left its completion
+    unconfirmed — it is unobserved like a refused connection, never a
+    cached "plain" verdict."""
     monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
     monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
 
     class Down:
         def open(self, req, timeout=None):
-            raise OSError("conn refused")
+            raise OSError("conn reset")
 
     monkeypatch.setattr(extract_llm, "_opener_request", _request_from_opener(Down()))
     monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
     monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
-    assert extract_llm._probe_format() == "plain"
+    assert extract_llm._probe_format() is None
+    assert extract_llm_provider._FMT_MODE is None
 
 
 def test_extract_sends_response_format_when_supported(monkeypatch):
@@ -505,3 +509,105 @@ def test_degrade_retry_respects_need_floor(monkeypatch):
     # entry gate passes (95 >= 90) -> 400 -> degrade -> loop gate:
     # 95-10 = 85 < 90 -> deferred after ONE call, not a ladder burn
     assert d is extract_llm._DEFERRED and len(calls) == 1
+
+
+def test_probe_deadline_reserves_body_floor(monkeypatch):
+    """The format probe's deadline stops need_s short of the caller's
+    — the format check cannot spend the time the body call needs."""
+    monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
+    seen = {}
+
+    def probe(deadline=None, **kw):
+        seen["deadline"] = deadline
+        return "plain"
+
+    monkeypatch.setattr(extract_llm_provider, "_probe_format", probe)
+    op = _Opener({"plain": "ok"})
+    monkeypatch.setattr(extract_llm, "_opener_request", _request_from_opener(op))
+    monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
+    monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
+    deadline = time.monotonic() + 200
+    extract_llm._llm_call("prompt", deadline=deadline, need_s=75)
+    assert seen["deadline"] == pytest.approx(deadline - 75)
+
+
+def test_llm_call_defers_before_probe_when_floor_unmet(monkeypatch):
+    """Less than the body floor left defers before the probe fires —
+    zero probe sends, zero body sends."""
+    monkeypatch.setattr(extract_llm_provider, "_probe_format",
+                        lambda **kw: pytest.fail("probed without budget"))
+    op = _Opener({"plain": "ok"})
+    monkeypatch.setattr(extract_llm, "_opener_request", _request_from_opener(op))
+    monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
+    monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
+    assert extract_llm._llm_call(
+        "prompt", deadline=time.monotonic() + 50, need_s=75) \
+        is extract_llm._DEFERRED
+    assert op.calls == []
+
+
+def test_unconfirmed_probe_defers_with_zero_body_sends(monkeypatch):
+    """A probe send that died in transport has unconfirmed completion —
+    the call defers with zero body sends and caches no plain verdict."""
+    monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
+
+    class Down:
+        def __init__(self):
+            self.calls = 0
+
+        def open(self, req, timeout=None):
+            self.calls += 1
+            raise OSError("reset by peer")
+
+    down = Down()
+    monkeypatch.setattr(extract_llm, "_opener_request", _request_from_opener(down))
+    monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
+    monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
+    assert extract_llm._llm_call(
+        "prompt", deadline=time.monotonic() + 200, need_s=75) \
+        is extract_llm._DEFERRED
+    assert down.calls == 1          # one probe send, zero body sends
+    assert extract_llm_provider._FMT_MODE is None
+
+
+def test_probe_and_body_share_one_turn_slot(tmp_path, monkeypatch):
+    """Probe and body run under one held turn: both sends carry the same
+    physical id_slot instead of re-queueing for a fresh one."""
+    import local_llm
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, str(tmp_path / "turn.lock"))
+    monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
+    op = _Opener({"schema": "ok"})
+    monkeypatch.setattr(extract_llm, "_opener_request", _request_from_opener(op))
+    monkeypatch.setattr(extract_llm_errors, '_opener_request', extract_llm._opener_request)
+    monkeypatch.setattr(extract_llm_provider, '_opener_request', extract_llm._opener_request)
+    extract_llm._llm_call("prompt", deadline=time.monotonic() + 200, need_s=75)
+    assert len(op.calls) >= 2
+    assert op.calls[0]["id_slot"] == op.calls[-1]["id_slot"]
+
+
+def test_parallel_warmup_probe_reserves_body_floor(tmp_path, monkeypatch):
+    """The pre-fan-out format warm-up stops _MIN_CALL_S short of the run
+    deadline so the workers' body calls keep their floor."""
+    db = _ledger(tmp_path)
+    db.save_messages([_message(mid=i, body=f"本文{i}") for i in range(1, 4)])
+    deadlines = []
+
+    def probe(**kw):
+        deadlines.append(kw.get("deadline"))
+        return "plain"
+
+    monkeypatch.setattr(extract_llm, "_probe_format", probe)
+    monkeypatch.setattr(extract_llm_provider, '_probe_format', extract_llm._probe_format)
+    monkeypatch.setattr(extract_llm_runner, '_probe_format', probe)
+    monkeypatch.setattr(extract_llm, "llm_extract",
+                        lambda body, **_: {"summary": "ok"})
+    monkeypatch.setattr(extract_llm_runner, 'llm_extract', extract_llm.llm_extract)
+    extract_llm.run_pending(db, limit=10, budget_s=120, workers=2)
+    assert deadlines and deadlines[0] is not None
+    floor = extract_llm_runner._MIN_CALL_S
+    assert time.monotonic() < deadlines[0] \
+        <= time.monotonic() + 120 - floor + 1
+    db.close()

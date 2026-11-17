@@ -1074,3 +1074,53 @@ def test_turn_won_with_scraps_of_window_is_busy(tmp_path, monkeypatch):
             timer[0].join()
         else:
             os.close(holder)
+
+
+def test_llm_chat_probe_deadline_reserves_body_floor(monkeypatch):
+    """The probe's deadline stops the body floor short of the call
+    deadline — a 45 s call reserves min(60, 45/2) = 22.5 s for the body."""
+    import local_llm
+    clock = [1000.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    seen = {}
+
+    def probe(endpoint, model, timeout=10, deadline=None):
+        seen["deadline"] = deadline
+        return "plain"
+
+    monkeypatch.setattr(semantic_transport, "_probe_format", probe)
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(local_llm, "chat", lambda *a, **kw: {
+        "status": 200, "text": "{}", "finish_reason": "stop"})
+    assert semantic_transport.llm_chat("p JSON:", timeout=45) == "{}"
+    assert seen["deadline"] == pytest.approx(1000.0 + 45 - 22.5)
+
+
+def test_llm_chat_long_level_reserves_620_and_defers_short(monkeypatch):
+    """A prompt marked for the long ceiling reserves LONG_MIN_CALL_S for
+    the body; a budget below it defers before the probe fires."""
+    import local_llm
+    clock = [1000.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    model = semantic_transport.llm_conf()[1]
+    marks = {semantic_transport._long_key(model, "p JSON:"): 1}
+    monkeypatch.setattr(semantic_transport, "_long_marks", lambda: marks)
+    calls = []
+
+    def probe(endpoint, model_, timeout=10, deadline=None):
+        calls.append(deadline)
+        return "plain"
+
+    monkeypatch.setattr(semantic_transport, "_probe_format", probe)
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(local_llm, "chat", lambda *a, **kw: {
+        "status": 200, "text": "{}", "finish_reason": "stop"})
+    # 700 s leaves 80 s for the probe after the 620 s body floor
+    assert semantic_transport.llm_chat("p JSON:", timeout=700) == "{}"
+    assert calls == [pytest.approx(1000.0 + 700 - 620)]
+    # 600 s cannot fit the long floor — deferred before any probe send
+    calls.clear()
+    with pytest.raises(semantic_runtime.LLMNotSent) as info:
+        semantic_transport.llm_chat("p JSON:", timeout=600)
+    assert info.value.stage == "long_output_needs_budget"
+    assert calls == []
