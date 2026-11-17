@@ -79,3 +79,28 @@ def test_qc_result_compares_and_covers_allergies_for_the_processing_route(tmp_pa
             db.db, 1, 1, source, _hash(db), meta["extract_version"], content) == "done"
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("allergies, capped", [(6, False), (7, True)])
+def test_allergies_count_toward_the_capped_coverage(tmp_path, allergies, capped):
+    """10 medications plus 6 allergies fill the 16 slots exactly; one more allergy caps the round."""
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(posted_at=_recent())])
+        content = {"meds": [{"name": f"合成薬M{i}", "action": "start", "subject": "patient"} for i in range(10)],
+                   "allergies": [{"text": f"合成薬A{i}で発疹", "evidence": f"合成薬A{i}で発疹"}
+                                 for i in range(allergies)]}
+        source = _v2_artifact(db, 1, _hash(db), content=content)
+        out = semantic_drain.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 60,
+                                     jev_client=_FakeJev(noul=0.9))
+        assert out["done"] == 1
+        row = db.db.execute("SELECT content,meta FROM artifacts WHERE kind='extract_qc' AND message_id=1").fetchone()
+        coverage = json.loads(row["content"])["coverage"]
+        assert coverage["capped"] is capped
+        assert coverage["by_field"]["allergies"]["total"] == allergies
+        assert coverage["checked"] == semantic_qc.QC_MAX_ITEMS
+        assert coverage["unchecked"] == (1 if capped else 0)
+        assert processing_route._extract_jev_state(
+            db.db, 1, 1, source, _hash(db), json.loads(row["meta"])["extract_version"], content) == "done"
+    finally:
+        db.close()
