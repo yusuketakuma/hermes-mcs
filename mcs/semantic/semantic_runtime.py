@@ -156,16 +156,19 @@ def config_generation(cfg: dict) -> str:
 def execution_generation(scfg: dict, *, local_model: str | None = None) -> str:
     """Interpretation identity, independent of runtime budgets, scope and mode.
 
-    It names the configured local model, so a model change re-queues every
-    job and the local results it decides are redone (re-queue identity)."""
+    It names the configured local model and the proposition registry, so a
+    model change or a registry bump re-queues every completed job whose
+    results it outdates and those results are redone (re-queue identity)."""
     from inference_version import CURRENT_VERSION, VERSION_KEY
     from semantic_policy import policy_fingerprint, SCHEMA_VERSION
     from semantic_extraction import v2_generation
+    import semantic_jev
     # Candidate approval still fences execution/publication separately. A code
     # approval or operational cap change is not a fresh retry budget.
     policy = {**scfg, 'candidate_fingerprint': None}
     return payload_hash({VERSION_KEY: CURRENT_VERSION, 'schema': SCHEMA_VERSION,
-                         'policy': policy_fingerprint(policy), 'extraction': v2_generation(local_model)})
+                         'policy': policy_fingerprint(policy), 'extraction': v2_generation(local_model),
+                         'registry': semantic_jev.REGISTRY_VERSION})
 
 
 def interpretation_generation(scfg: dict) -> str:
