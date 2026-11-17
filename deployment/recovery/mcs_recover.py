@@ -945,13 +945,19 @@ def _recover_legacy(if_stale=False):
                     "at": time.time()}
                 mcs_recovery_core._save_state(state)
             dkey = mcs_recovery_core._drainers_key(state, head)
-            # = mcs_update: the alert carries any worker that failed to restart
+            # = mcs_update: report before the start (it may raise), then notify
+            key = mcs_recovery_core._alert_key(state, detail)
+            notify, notified_at = mcs_recovery_core._alert_due("escalate", key, time.time())
+            fields = {"alert_key": key, "notified_at": notified_at, "drainers_key": dkey}
+            mcs_recovery_core._report("escalate", detail, **fields)
             problems = drainers(dkey)
-            _report_alert("escalate", state, detail,
-                          "[MCS] 更新の中断復旧ができません"
-                          f"（要手動対応）: {_recovery_explanation(detail)}"
-                          + (" restart:" + ",".join(problems) if problems else ""),
-                          drainers_key=dkey, **({"restart": problems} if problems else {}))
+            if problems:
+                mcs_recovery_core._report("escalate", detail, restart=problems, **fields)
+            if notify:
+                mcs_recovery_services._notify(
+                    "[MCS] 更新の中断復旧ができません"
+                    f"（要手動対応）: {_recovery_explanation(detail)}"
+                    + (" restart:" + ",".join(problems) if problems else ""))
             mcs_recovery_core._remove_marker()
             return 1
 

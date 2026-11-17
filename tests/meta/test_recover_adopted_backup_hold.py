@@ -37,6 +37,20 @@ def test_resumed_check_fails_closed_without_an_adoption(tmp_path):
     assert json.loads(result.stdout) == {"ok": True, "writers_resumed": False}
 
 
+@pytest.mark.parametrize("output, code, resumed", [
+    ('{"ok": true, "writers_resumed": true}', 0, True),
+    ('{"ok": true, "writers_resumed": false}', 1, False),
+    ('{"ok": true, "writers_resumed": true}', 1, False),
+])
+def test_adoption_resumed_accepts_only_the_exact_checkout_proof(rec, tmp_path, output, code, resumed):  # noqa: F811
+    data = tmp_path / "root" / "data"
+    data.mkdir(parents=True)
+    script = tmp_path / "root" / "mcs" / "ops" / "mcs_restore.py"
+    script.parent.mkdir(parents=True)
+    script.write_text(f"import sys\nprint({output!r})\nsys.exit({code})\n")
+    assert rec.mcs_recovery_gateway._adoption_resumed(str(data)) is resumed
+
+
 def test_gateway_helper_proof_is_frozen_into_the_detached_program(rec):  # noqa: F811
     program = rec.mcs_recovery_gateway._GATEWAY_RESTART_PROGRAM
     assert "def _adoption_resumed(data):" in program and "_adoption_resumed(data)" in program

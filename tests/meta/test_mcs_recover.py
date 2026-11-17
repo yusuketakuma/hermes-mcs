@@ -835,6 +835,23 @@ def test_escalation_alert_names_workers_that_failed_to_restart(rec, tmp_path, mo
     assert len(notices) == 1 and notices[0].endswith(" restart:local.mcs-synthetic")
 
 
+def test_escalation_reports_before_a_failing_worker_start(rec, tmp_path, monkeypatch):
+    _make_repo(tmp_path)
+    state = _applying("0" * 40, sha="f" * 40, stage="merge")   # HEAD is neither: unclassifiable
+    Path(rec.mcs_recovery_core.STATE_PATH).write_text(json.dumps(state))
+    notices = []
+    monkeypatch.setattr(rec.mcs_recovery_services, "_notify", notices.append)
+
+    def start(**_kwargs):
+        raise OSError("synthetic start failure")
+
+    monkeypatch.setattr(rec.mcs_recovery_services, "_restart_drainers", start)
+    assert rec.recover() == 2
+    report = json.loads(Path(rec.mcs_recovery_core.REPORT_PATH).read_text())
+    assert report["result"] == "escalate" and "restart" not in report
+    assert notices == []
+
+
 def test_future_journal_timestamp_is_not_fresh(rec):
     import update_recovery
 
