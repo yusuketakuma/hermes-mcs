@@ -109,7 +109,7 @@ Copilot と Dots の PR は自動では再起動しません（Copilot は所有
 - 1回の判定で見つかった新しい指摘はまとめて1回と数え、CI 失敗と同じ `試行:N` を進めます。3回目で `要オーナー対応` にして止まります。
   同じレビューは2回数えません。判定は PR に `<!-- agent-review:queued … -->` を、修正の実行は `<!-- agent-review:handled … -->` を書き、`github-actions[bot]` が書いたものだけを読みます。
 - Claude の書き込みの待ちが取り消されて handled が付かなかったレビューは、Claude の実行が何も待っていないときに、次の判定が数え直さずに起動し直します。
-- 修正モードの Claude は、指摘を `.git/agent-review.md`（commit されない）からデータとして読み、結ばれた Issue の受入条件の範囲だけを直します。
+- 修正モードの Claude は、指摘を `agent-review.md`（`.git/info/exclude` で commit されない）からデータとして読み、結ばれた Issue の受入条件の範囲だけを直します。
   範囲外の提案と誤りと判断した指摘は直さず、PR に1回のコメントで挙げます。テストの削除・skip・閾値の緩和はしません。
 - レビュー投稿で起動した実行は、PR の merge ref にある `agent-review.yml` で動きます（`ci.yml` と同じ）。そのため checkout は main の `ci/` だけに固定し、`.github/` を変える PR は人がマージします。
 - CodeRabbit は bot が作った PR を自動ではレビューしません（「Bot user detected」）。`github-actions[bot]` の `@coderabbitai review` が受け付けられるかは確かめていないので、自動では書きません。

@@ -344,7 +344,7 @@ def test_review_workflow_never_runs_pr_code_and_hands_findings_as_data():
     assert "pull_request_target" not in review and "pull_request_review:" in head
     # the review event runs this file from the PR merge ref: the one checkout names main and only ci/
     assert review.count("ref:") == 1 and "ref: refs/heads/main" in review and "sparse-checkout: ci" in review
-    assert "permissions: {}" in head and "contents: write" not in review and "pull-requests: read" in review
+    assert "permissions: {}" in head and "contents: write" not in review and "pull-requests: write" in review
     assert "vars.AUTOMATION_ENABLED == 'true'" in review and "cancel-in-progress: false" in review
     # review text is fetched by the repair run into a file, never interpolated into a script or prompt
     assert "github.event.review.body" not in review and "github.event.comment" not in review
@@ -353,4 +353,4 @@ def test_review_workflow_never_runs_pr_code_and_hands_findings_as_data():
     repair = (ROOT / ".github/workflows/agent-claude-repair.yml").read_text()
     assert "^[0-9]+(,[0-9]+)*$" in repair and "agent-review:handled" in repair
     assert repair.index("agent-review:handled") < repair.index("ref: ${{ steps.pr.outputs.branch }}")
-    assert "> .git/agent-review.md" in repair and "inputs.reviews }}" not in repair.split("prompt:")[1]
+    assert "> agent-review.md" in repair and ".git/info/exclude" in repair and "inputs.reviews }}" not in repair.split("prompt:")[1]

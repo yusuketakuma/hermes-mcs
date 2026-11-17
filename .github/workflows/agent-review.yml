@@ -31,11 +31,11 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
-      pull-requests: read
-      issues: write    # attempt labels, and the progress markers on the PR
+      pull-requests: write  # the progress markers on the PR
+      issues: write    # attempt labels
       actions: write   # workflow_dispatch of agent-claude-repair.yml
     steps:
-      # A review event runs this file from the PR's merge ref, so name main's ref: never the PR's code.
+      # A review event runs this file from the PR merge ref, so check out main by name, never the PR code.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: refs/heads/main
