@@ -69,8 +69,8 @@ _QUANTITIES = {field: re.compile(r"(?P<number>[0-9]+(?:\.[0-9]+)?)\s*(?P<unit>" 
                for field, unit in _UNITS.items()}
 
 
-def extract(pages):
-    """Return source-bound sections and unverified same-line pump quantities without clinical inference."""
+def extract(pages, max_candidates=None):
+    """Return source-bound sections and unverified same-line pump quantities, stopping candidates at max_candidates."""
     sections, candidates = [], []
     for page in pages:
         text = page["text"]
@@ -110,8 +110,11 @@ def extract(pages):
                 section_status = "literal_candidate"
                 if ambiguous_columns:
                     category, section_status = "other", "needs_review"
-            labels = list(_PUMP_LABEL.finditer(line))
+            full = max_candidates is not None and len(candidates) >= max_candidates
+            labels = [] if full else list(_PUMP_LABEL.finditer(line))
             for position, label in enumerate(labels):
+                if max_candidates is not None and len(candidates) >= max_candidates:
+                    break
                 field = _PUMP_FIELD[label[0]]
                 # Stop at the next label so a repeated-label line stays linear, not quadratic, in copied text.
                 stop = labels[position + 1].start() if position + 1 < len(labels) else len(line)
