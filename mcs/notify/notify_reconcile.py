@@ -572,9 +572,12 @@ def _beyond_horizon_parts(db) -> tuple[list, list]:
     cannot plan and needs manual investigation (second)."""
     from adapters.common import envelopes
     codes = (BEYOND_HORIZON, *UNRESOLVABLE)
-    parts = [_part_entry(r, r["attempt_id"] or envelopes.part_attempt_id(r["delivery_id"], r["part_id"]),
+    # only a flagged pending group has no stored attempt id; its plan's value is
+    # derived, whereas an unknown part's (NULL for Discord) is reported as stored
+    parts = [_part_entry(r, r["attempt_id"] or (envelopes.part_attempt_id(r["delivery_id"], r["part_id"])
+                                                if r["state"] == "pending" else None),
                          r["error_code"]) for r in db.execute(
-        "SELECT p.delivery_id,p.part_id,p.kind,p.attempt_id,p.error_code,r.card_id "
+        "SELECT p.delivery_id,p.part_id,p.kind,p.state,p.attempt_id,p.error_code,r.card_id "
         "FROM notification_render_parts p JOIN notification_renders r "
         "ON r.delivery_id=p.delivery_id WHERE (p.state='unknown' "
         f"AND p.error_code IN ({','.join('?' * len(codes))})) "

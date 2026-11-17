@@ -1,12 +1,17 @@
 {
   "category": "fixed",
   "title": "古いバックアップへの復元後、Slackのファイルまとめが二重に投稿され得る問題を修正",
-  "summary": "journalの保持期間より古いバックアップへ復元したあと、未反映のまま残ったSlackのファイルまとめを「未送信（no_journal_started）」として解消できなくなりました。journalの記録が圧縮で失われている場合があり、そのまま再発行するとファイルまとめが同じスレッドに二重に投稿され得たためです。journalに頼らない確認（remote_absent など）での解消は従来どおり使えます。upgradeに必要な操作はありません。復元の照合（reconcile）が走るときに適用されます。",
-  "upgrade": "追加操作は不要です。保持期間外の復元で保留になっているSlackのファイルまとめは、Slack側の実在確認（remote_absent など）で解消してください。",
+  "summary": "journalの保持期間より古いバックアップへ復元したあと、未反映のまま残ったSlackのファイルまとめを「未送信（no_journal_started）」として解消できなくなりました。journalの記録が圧縮で失われている場合があり、そのまま再発行するとファイルまとめが同じスレッドに二重に投稿され得たためです。journalに頼らない確認（remote_absent での未送信解消、Slack上で投稿済みを確かめた場合の投稿済み解消）は使えます。upgradeに必要な操作はありません。復元の照合（reconcile）が走るときに適用されます。",
+  "upgrade": "追加操作は不要です。保持期間外の復元で保留になっているSlackのファイルまとめは、Slack側の確認（remote_absent、または投稿済みの確認）で解消してください。",
   "details": [
     "保持期間外の復元で、復元点以前に作られた最新描画のpendingなSlack file_groupに restore_beyond_journal_horizon を記録し、no_journal_started を journal_cannot_vouch で拒否する。",
     "状態はpendingのまま変えず、未送信とは断定しない。復元の receipt（parts_held）・通知・復旧作業一覧には対象として出し、再実行で重複して通知しない。",
-    "このpendingのgroupは remote_absent でも解消できる（no_journal_started だけを拒否する）。"
+    "このpendingのgroupは remote_absent（未送信）または mark_delivered（カードのメッセージIDとファイル構成を再検証）で解消できる。人の承認は従来どおり必要で、no_journal_started だけを拒否する。",
+    "part_hold_report に pending 区分を足し、印の付いた group を原因別に数える。Discord の未解決 part には attempt_id を補完しない。"
   ],
-  "refs": ["mcs/notify/notify_reconcile.py", "mcs/notify/notify_recovery.py", "tests/notify/test_reconcile_journal_horizon.py"]
+  "refs": [
+    "mcs/notify/notify_reconcile.py",
+    "mcs/notify/notify_recovery.py",
+    "tests/notify/test_reconcile_journal_horizon.py"
+  ]
 }
