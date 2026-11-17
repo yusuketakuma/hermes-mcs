@@ -571,7 +571,9 @@ def test_settle_stops_at_deadline_and_keeps_result_unsaved(setup, monkeypatch):
     start = clock[0]
     result = ocr.run_pending(ledger, cfg, deadline=start + 10)
     assert result["deferred"] == 1 and result["complete"] == 0 and len(calls) == 1
-    assert waits == [5, 4] and clock[0] <= start + 10
+    # the clock starts at the real monotonic value, so the last wait is the
+    # remaining budget only up to float rounding (e.g. 4.000000000000014)
+    assert waits == pytest.approx([5, 4]) and clock[0] <= start + 10 + 1e-9
     assert ledger.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 0
 
 
