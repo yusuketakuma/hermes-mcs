@@ -306,6 +306,22 @@ def test_probe_rejects_length_stops(schema, content, expected):
         request_fn=send) == expected
 
 
+@pytest.mark.parametrize("fail", [
+    ConnectionRefusedError("synthetic"),
+    503,
+])
+def test_probe_that_reached_no_model_fixes_no_format(fail):
+    """A refused connection or a 503 (server loading) is not a "plain"
+    verdict: the probe is unobserved and the caller probes again."""
+    def send(endpoint, method, body, timeout, deadline=None):
+        if isinstance(fail, Exception):
+            raise fail
+        return fail, {}, b""
+
+    assert local_llm.probe_format(
+        local_llm.ENDPOINT, "synthetic", None, request_fn=send) is None
+
+
 def test_extract_llm_call_pins_background_slot(monkeypatch):
     """The legacy extract path pins the same background slot."""
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)

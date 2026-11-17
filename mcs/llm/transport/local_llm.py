@@ -809,10 +809,11 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
     Returns the accepted mode, or ``"plain"`` when every constraint was
     rejected; transport failure after the request left aborts probing
     and also yields ``"plain"`` (callers cache the result for a bounded
-    cooldown), while a probe deferred by admission (``busy``) or whose
+    cooldown), while a probe deferred by admission (``busy``), whose
     deadline expired before the request was handed to the wire
-    (``not_sent``) returns ``None`` so callers can defer instead of
-    caching a blind verdict.
+    (``not_sent``), refused by the connection (``unreachable``) or
+    answered 503 (server not ready) returns ``None`` so callers can
+    defer instead of caching a blind verdict.
     *slot* pins the probe's wire ``id_slot``; ``None`` resolves it via
     :func:`request_slot`, so the per-process ``MCS_LLM_SLOT`` override —
     or the caller's own slot decision — governs probes exactly as it
@@ -862,10 +863,12 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
                 request_fn=request_fn, error_out=error_out,
                 turn_min_s=PROBE_TURN_MIN_S)
             if response is None:
-                if error_out.get("kind") in ("busy", "not_sent"):
+                if error_out.get("kind") in ("busy", "not_sent", "unreachable"):
                     return None  # nothing sent: probe again next call
                 error_out.setdefault("kind", "transport")
                 break
+            if response["status"] == 503:
+                return None  # server not ready (model loading): no verdict
             if response["status"] != 200:
                 continue
             if acceptance_error(response) is not None:
