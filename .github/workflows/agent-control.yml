@@ -22,6 +22,10 @@ on:
         description: "その head で完了を待った ci の実行 ID"
         required: true
         type: string
+      run_attempt:
+        description: "その実行の試行回"
+        required: true
+        type: string
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   issues:
@@ -34,7 +38,7 @@ jobs:
     # A dispatch on another ref would run that ref's ci/agent_control.py with this job's write token.
     if: >-
       github.event_name != 'issues' &&
-      (github.event_name != 'workflow_dispatch' || github.ref_name == github.event.repository.default_branch)
+      (github.event_name != 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
@@ -54,6 +58,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          # the default branch only: never the PR's code, never a tag or another branch named like it
+          ref: refs/heads/${{ github.event.repository.default_branch }}
           persist-credentials: false
       - name: Decide and publish merge-gate
         id: plan
@@ -64,7 +70,7 @@ jobs:
           RUN_SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
           RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
-          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt || inputs.run_attempt }}
           CONTROL_ATTEMPT: ${{ github.run_attempt }}
           PR_FROM_EVENT: ${{ github.event.pull_request.number }}
           AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
@@ -75,23 +81,17 @@ jobs:
           if [[ "$EVENT" != "pull_request_target" ]]; then
             # A dispatched sha is typed by a caller: accept a full commit id only. The PR head is compared below.
             [[ "$RUN_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a 40-digit commit id"; exit 1; }
-            if [[ "$EVENT" == "workflow_dispatch" ]]; then
-              # Bind the request to a real ci run on that head; its attempt is read from GitHub, not from the caller.
-              [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "::error::run_id must be a number"; exit 1; }
-              gh api "repos/$GH_REPO/actions/runs/$RUN_ID" > "$work/run.json"
-              jq -e --arg sha "$RUN_SHA" '.path == ".github/workflows/ci.yml" and .head_sha == $sha' "$work/run.json" > /dev/null ||
-                { echo "::error::run $RUN_ID is not a ci run on $RUN_SHA"; exit 1; }
-              RUN_ATTEMPT=$(jq -r .run_attempt "$work/run.json")
-            fi
+            [[ "$RUN_ID" =~ ^[0-9]+$ && "$RUN_ATTEMPT" =~ ^[0-9]+$ ]] ||
+              { echo "::error::run_id and run_attempt must be numbers"; exit 1; }
+            # Bind the request to that attempt of a ci.yml run on the head, as GitHub records it.
+            gh api "repos/$GH_REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT" > "$work/attempt.json"
+            gh api "repos/$GH_REPO/actions/runs/$RUN_ID" > "$work/latest.json"
             prs=$(gh api "repos/$GH_REPO/commits/$RUN_SHA/pulls" --jq '[.[] | select(.state == "open") | .number] | join(" ")')
             # A dispatch has no run conclusion yet: the script takes it from the jobs on the head.
             ci_conclusion="${RUN_CONCLUSION:-checks}"
             # Re-running this workflow must not count the same CI failure again; a re-run of ci itself does.
             if [[ "$CONTROL_ATTEMPT" != "1" ]]; then ci_conclusion=""; fi
-            # The merge-gate status names the ci run attempt it judged, so the same attempt is never counted twice.
-            source="https://github.com/$GH_REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT"
           else
-            source=""
             prs="$PR_FROM_EVENT"
             ci_conclusion=""
           fi
@@ -105,17 +105,23 @@ jobs:
             gh api "repos/$GH_REPO/commits/$sha/check-runs?per_page=100" --paginate --slurp > "$work/checks.json"
             gh api "repos/$GH_REPO/pulls/$pr/files?per_page=100" --paginate --slurp > "$work/files.json"
             behind=$(gh api "repos/$GH_REPO/compare/$base...$sha" --jq .behind_by)
-            if [[ -n "$source" ]] && gh api "repos/$GH_REPO/commits/$sha/statuses?per_page=100" --paginate --slurp |
-                jq -e --arg u "$source" '[.[][] | select(.context == "merge-gate" and .target_url == $u)] | length > 0' > /dev/null; then
-              ci_conclusion=""
+            source=""; count=false
+            if [[ "$EVENT" != "pull_request_target" ]]; then
+              # A failed read stops the job: only a successful read with no mark means the attempt is not counted yet.
+              gh api "repos/$GH_REPO/commits/$sha/statuses?per_page=100" --paginate --slurp > "$work/statuses.json"
+              python3 ci/agent_control.py source --attempt-run "$work/attempt.json" --latest-run "$work/latest.json" \
+                --statuses "$work/statuses.json" --sha "$sha" --attempt "$RUN_ATTEMPT" > "$work/source.json"
+              cat "$work/source.json"
+              source=$(jq -r .source "$work/source.json"); count=$(jq -r .count "$work/source.json")
             fi
+            [[ "$count" == "true" ]] || ci_conclusion=""
             python3 ci/agent_control.py gate --pr "$work/pr.json" --checks "$work/checks.json" \
               --files "$work/files.json" --behind-by "$behind" --automation "${AUTOMATION:-}" \
               --ci-conclusion "$ci_conclusion" > "$work/plan.json"
             cat "$work/plan.json"
             state=$(jq -r .state "$work/plan.json")
             gh api -X POST "repos/$GH_REPO/statuses/$sha" -f context=merge-gate -f state="$state" \
-              -f description="$(jq -r .description "$work/plan.json")" ${source:+-f target_url="$source"} > /dev/null
+              -f description="$(jq -r .description "$work/plan.json")" > /dev/null
             branch=$(jq -r .head.ref "$work/pr.json")
             for issue in $(jq -r '.attempts[].issue' "$work/plan.json"); do
               labels=$(gh api "repos/$GH_REPO/issues/$issue" --jq '[.labels[].name]')
@@ -133,6 +139,12 @@ jobs:
             if [[ "$(jq '.attempts | length' "$work/plan.json")" != "0" && "$branch" == agent/claude-* &&
                   "${AUTOMATION:-}" == "true" ]]; then
               gh workflow run agent-claude-repair.yml --ref "$DEFAULT_BRANCH" -f pr="$pr"
+            fi
+            # Written last: the mark means this attempt was counted and repaired. A gate that stopped earlier
+            # leaves none, and the attempt is recovered by hand (docs/development/AUTOMATION.md), never twice.
+            if [[ "$count" == "true" && "$state" != "pending" ]]; then
+              gh api -X POST "repos/$GH_REPO/statuses/$sha" -f context=merge-gate-counted -f state=success \
+                -f description="この CI 試行の試行回数を記録済み" -f target_url="$source" > /dev/null
             fi
             last_pr="$pr"; last_sha="$sha"
             eligible=$(jq -r .auto_merge_eligible "$work/plan.json")

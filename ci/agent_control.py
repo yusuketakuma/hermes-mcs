@@ -5,6 +5,8 @@
 the plan this script prints; the script itself makes no network call and
 imports nothing from the application. Standard library only.
 
+  source   whether a ci run attempt may count against the attempt budget:
+           bound to ci.yml on the head, the run's latest attempt, not counted yet
   gate     verdict for the `merge-gate` commit status of a PR head, whether
            the PR needs a person, auto-merge eligibility, and the attempt
            labels to set on the linked issue after a failed CI run
@@ -39,6 +41,9 @@ EVIDENCE_JOBS = ("pytest-linux", "pytest-macos")
 ACTIONS_APP = "github-actions"
 # --ci-conclusion value of a gate request that has no workflow_run to read the conclusion from.
 CHECKS_CONCLUSION = "checks"
+CI_WORKFLOW = ".github/workflows/ci.yml"
+# Commit status written after a ci run attempt was counted (and repaired); its target_url names the attempt.
+COUNTED_CONTEXT = "merge-gate-counted"
 # Branches written by an AI agent. claude/ is left out: project threads use it
 # for work the owner asked for. Claude Code Action is configured to agent/.
 AGENT_PREFIXES = ("agent/", "copilot/", "codex/")
@@ -272,6 +277,31 @@ def decide_gate(pr, check_runs, files, behind_by, automation_enabled, ci_conclus
     return plan
 
 
+def count_source(attempt_run, latest_run, statuses, sha, attempt):
+    """{"source", "count", "reason"} for one ci run attempt on `sha`; ValueError when it is not one.
+
+    The attempt is read from GitHub, never from the caller. Counting is at most once
+    per attempt: the COUNTED_CONTEXT status is written only after the count and the
+    repair request are done, so a gate that stopped half-way leaves no mark and the
+    attempt is recovered by hand (re-dispatch), never re-counted automatically.
+    """
+    if not isinstance(attempt_run, dict) or not isinstance(latest_run, dict) or not isinstance(statuses, list):
+        raise ValueError("run or statuses response has an unexpected shape")
+    run_id = attempt_run.get("id")
+    if (attempt_run.get("path") != CI_WORKFLOW or attempt_run.get("head_sha") != sha
+            or attempt_run.get("run_attempt") != attempt or latest_run.get("id") != run_id):
+        raise ValueError(f"run {run_id} attempt {attempt} is not a ci.yml run on {sha}")
+    source = f"{attempt_run.get('html_url')}/attempts/{attempt}"
+    if not isinstance(latest_run.get("run_attempt"), int) or latest_run["run_attempt"] > attempt:
+        return {"source": source, "count": False, "reason": "新しい試行がある"}
+    for status in statuses:
+        if not isinstance(status, dict) or "context" not in status:
+            raise ValueError("statuses response has an unexpected shape")
+        if status["context"] == COUNTED_CONTEXT and status.get("target_url") == source:
+            return {"source": source, "count": False, "reason": "この試行は数え済み"}
+    return {"source": source, "count": True, "reason": ""}
+
+
 def lock_conflict(labels, added):
     """True when `added` is a 担当:* label and the issue already has another one."""
     if not added.startswith(AGENT_LABEL_PREFIX):
@@ -310,6 +340,12 @@ def main(argv=None):
     gate.add_argument("--behind-by", type=int, required=True)
     gate.add_argument("--automation", default="")
     gate.add_argument("--ci-conclusion", default="")
+    source = sub.add_parser("source")
+    source.add_argument("--attempt-run", required=True, help="actions/runs/{id}/attempts/{n} response")
+    source.add_argument("--latest-run", required=True, help="actions/runs/{id} response")
+    source.add_argument("--statuses", required=True, help="commit statuses of the head (gh --paginate --slurp)")
+    source.add_argument("--sha", required=True)
+    source.add_argument("--attempt", type=int, required=True)
     attempt = sub.add_parser("attempt")
     attempt.add_argument("--labels", required=True, help="JSON list of label names")
     linked = sub.add_parser("linked")
@@ -329,6 +365,15 @@ def main(argv=None):
     if args.command == "gate":
         plan = decide_gate(_load(args.pr), _flatten_checks(_load(args.checks)), _flatten(_load(args.files)),
                            args.behind_by, args.automation == "true", args.ci_conclusion or None)
+    elif args.command == "source":
+        statuses = _load(args.statuses)
+        if not isinstance(statuses, list) or not all(isinstance(page, list) for page in statuses):
+            raise SystemExit("statuses response has an unexpected shape")
+        try:
+            plan = count_source(_load(args.attempt_run), _load(args.latest_run), _flatten(statuses),
+                                args.sha, args.attempt)
+        except ValueError as error:
+            raise SystemExit(str(error)) from None
     elif args.command == "attempt":
         remove, add, exhausted = next_attempt(json.loads(args.labels))
         plan = {"remove": remove, "add": add, "exhausted": exhausted}
