@@ -422,6 +422,8 @@ def test_a_shared_or_pointed_fact_never_becomes_a_family_or_other_fact(line):
     # 同 that means together points at nothing.
     ("希望：長男は同室を希望", "family"), ("希望：長男は同日退院を希望", "family"),
     ("希望：妻は同時面会を希望", "family"), ("副作用：妻は同時服用で眠気", "family"),
+    ("希望：妻は同席を希望", "family"), ("希望：娘は同伴を希望", "family"),
+    ("意向：長男は同意書への署名を了承", "family"),
 ])
 def test_the_same_shape_without_the_excluded_word_keeps_its_holder(line, subject):
     assert _line_subjects(line) == [subject]
