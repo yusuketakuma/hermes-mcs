@@ -144,7 +144,8 @@ def _note_list() -> list:
 
 
 def _integrity_note(response, kind: str = "first", probe: int = 0,
-                     downgrades: int = 0, err_out: dict | None = None) -> None:
+                     downgrades: int = 0, err_out: dict | None = None,
+                     *, probe_only: bool = False) -> None:
     """Bounded per-call integrity record for shared extraction paths: counts and
     token usage only — never payload text."""
     # Probe/downgrade counts ride on the answered call's note.
@@ -156,6 +157,10 @@ def _integrity_note(response, kind: str = "first", probe: int = 0,
         "timings": None if response is None else response.get("timings"),
         "kind": kind, "probe": probe, "downgrades": downgrades,
     }
+    if probe_only:
+        # the probe died before any body send: probe-run evidence only,
+        # never a first/repair call in the summary's call accounting
+        note["probe_only"] = True
     if type((err_out or {}).get("slot_wait_ms")) is int:
         note["slot_wait_ms"] = err_out["slot_wait_ms"]
         note["slot_wait_confirmed"] = err_out.get("slot_wait_confirmed")
@@ -175,6 +180,10 @@ def _integrity_summary(notes: list) -> dict:
     for note in notes:
         if note.get("reused_response") is True:
             reused += 1
+            continue
+        if note.get("probe_only") is True:
+            if type(note.get("probe")) is int:
+                probe_runs += note["probe"]
             continue
         calls += 1
         finish = note.get("finish_reason")
@@ -465,7 +474,6 @@ def _llm_call(prompt: str, deadline: float | None = None,
             and deadline - time.monotonic() < (need_s or 0):
         _CALL_NOTES.defer_reason = "deadline"
         return _DEFERRED
-    probed_at = _FMT_TS
     floor = need_s or 0
     # the probe spends the caller's budget, never adds to it: the body
     # floor is reserved for the real call, and PROBE_TURN_MIN_S of probe
@@ -508,9 +516,11 @@ def _llm_call(prompt: str, deadline: float | None = None,
                         deadline=(deadline - floor) if deadline is not None
                         else None, error_out=probe_err)
                     # one format-check run may send multiple requests;
-                    # err_out proves a run reached the wire even when it
-                    # died before caching a verdict
-                    probe = int(_FMT_TS != probed_at or bool(probe_err))
+                    # err_out's per-call send evidence proves this call's
+                    # probe reached the wire even when it died before
+                    # caching a verdict — a sibling worker moving the
+                    # shared timestamp can neither fake nor double it
+                    probe = int(bool(probe_err.get("sent")))
                 else:
                     fmt, probe, probe_err = cached, 0, {}
                 first = False
@@ -527,7 +537,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
                                                  else "transport")
                         _CALL_NOTES.transport_at = time.monotonic()
                         _integrity_note(None, kind, probe, downgrades,
-                                        probe_err)
+                                        probe_err, probe_only=True)
                         return None
                     if pkind == "unreachable" or pstatus == 503:
                         _CALL_NOTES.transport = ("unreachable"

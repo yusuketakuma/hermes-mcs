@@ -514,7 +514,8 @@ def test_remembered_long_output_format_retry_rechecks_remaining_budget(
     import local_llm
     _long_env(monkeypatch, tmp_path, [], True)
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
-    monkeypatch.setattr(semantic_transport, '_probe_format', lambda *a: "object")
+    # a cached "object" verdict, resolved once before any probe could run
+    monkeypatch.setattr(semantic_transport, '_FMT_MODE', "object")
     semantic_transport._long_mark(semantic_transport._long_key(semantic_transport.llm_conf()[1], "synthetic"), 1)
     clock = [0.0]
     monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
@@ -538,6 +539,38 @@ def test_remembered_long_output_format_retry_rechecks_remaining_budget(
         assert calls[1]["response_format"] is None
     assert semantic_transport._long_marks()[semantic_transport._long_key(
         semantic_transport.llm_conf()[1], "synthetic")] == 1
+
+
+@pytest.mark.parametrize("spent,expected_calls", [(51.0, 0), (50.0, 1)])
+def test_first_body_never_leaves_below_the_original_floor(
+        monkeypatch, tmp_path, spent, expected_calls):
+    """The probe's own elapsed time can spend the floor the shared turn
+    was acquired for: below it the first body POST count is zero, at
+    equality it still sends — pinned on a fixed clock."""
+    import local_llm
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(semantic_transport, '_FMT_MODE', None)
+    monkeypatch.setattr(semantic_transport, '_FMT_TS', 0.0)
+    monkeypatch.setattr(semantic_transport, '_long_marks', lambda: {})
+    clock = [0.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    calls = []
+
+    def probe(*args, **kwargs):
+        clock[0] += spent
+        return "object"
+
+    def chat(*args, **kwargs):
+        calls.append(kwargs)
+        return {"status": 200, "text": '{"facts": []}',
+                "finish_reason": "stop"}
+
+    monkeypatch.setattr(semantic_transport, '_probe_format', probe)
+    monkeypatch.setattr(local_llm, "chat", chat)
+    # timeout=100 -> ordinary floor min(60, 100/2) = 50
+    out = semantic_transport.llm_chat("synthetic", timeout=100)
+    assert len(calls) == expected_calls
+    assert out == ('{"facts": []}' if expected_calls else None)
 
 
 @pytest.mark.parametrize("long_ok", [True, False])
@@ -738,7 +771,7 @@ def test_constrained_long_rejection_is_a_retryable_summary_failure(monkeypatch, 
     import local_llm
     _long_env(monkeypatch, tmp_path, [], True)
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
-    monkeypatch.setattr(semantic_transport, '_probe_format', lambda *a: "object")
+    monkeypatch.setattr(semantic_transport, '_FMT_MODE', "object")
     # All generated synthetic summary prompts are remembered as long.
     monkeypatch.setattr(semantic_transport, '_long_marks', lambda: {"synthetic-key": 1})
     monkeypatch.setattr(semantic_transport, '_long_key', lambda *a: "synthetic-key")
@@ -770,7 +803,7 @@ def test_format_persistence_time_is_charged_to_retry_budget(monkeypatch, tmp_pat
     import local_llm
     _long_env(monkeypatch, tmp_path, [], True)
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
-    monkeypatch.setattr(semantic_transport, '_probe_format', lambda *a: "object")
+    monkeypatch.setattr(semantic_transport, '_FMT_MODE', "object")
     semantic_transport._long_mark(semantic_transport._long_key(semantic_transport.llm_conf()[1], "synthetic"), 1)
     clock = [0.0]
     monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
@@ -797,7 +830,7 @@ def test_format_persistence_io_failure_keeps_same_call_fallback(monkeypatch, tmp
     blocked.write_text("synthetic")
     monkeypatch.setattr(semantic_transport, '_FMT_PATH', str(blocked / "format.json"))
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
-    monkeypatch.setattr(semantic_transport, '_probe_format', lambda *a: "object")
+    monkeypatch.setattr(semantic_transport, '_FMT_MODE', "object")
     monkeypatch.setattr(semantic_transport, '_long_marks', lambda: {})
     calls = []
 
