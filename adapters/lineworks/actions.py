@@ -24,6 +24,18 @@ CALLBACK_BUSY_TRIES, CALLBACK_COOLDOWN_TRIES = 120, 2
 SUMMARY_WORD = "サマリー"
 
 
+def _transient(exc):
+    """sender_busy, a 429, a token request outage, or a local write error."""
+    if isinstance(exc, OSError):
+        return True
+    status = getattr(exc, "status", None)
+    return isinstance(exc, ClientError) and (
+        exc.error_code in ("sender_busy", "rate_limited")
+        or getattr(exc, "pre_send", False) is True
+        and not (isinstance(status, int) and 400 <= status < 500)
+        and exc.error_code != "response_invalid")
+
+
 class Actions:
     def __init__(self, settings, dirs, reg, sender, log, stopping=lambda: False):
         self.settings, self.dirs, self.reg = settings, dirs, reg
@@ -401,14 +413,13 @@ class Actions:
             try:
                 await self._deliver_followup(user, rec, result)
             except Exception as exc:
-                # When no chunk of this followup went out and the failure proves the
-                # tried DM never did (sender_busy, 429, token request, local check,
-                # 4xx) or nothing was tried, restore it so the next sweep retries —
-                # but only within its original lifetime: a restore renews ``expires``.
-                retry_until = rec.get("retry_until", rec.get("expires"))
-                if self._unsent(exc, sent, attempts) and isinstance(retry_until, int | float) \
-                        and time.time() < retry_until:
-                    self.reg.put_followup(cid, {**rec, "retry_until": retry_until})
+                # Restore for the next sweep only when no chunk went out and the failure
+                # is provably unsent and transient; a permanent rejection (4xx, local
+                # check) would otherwise repeat every sweep. The original expiry holds.
+                expires = rec.get("expires")
+                if self._unsent(exc, sent, attempts) and _transient(exc) \
+                        and isinstance(expires, int | float) and time.time() < expires:
+                    self.reg.put_followup(cid, rec, expires=expires)
                 raise
 
     async def _deliver_followup(self, user, rec, result):

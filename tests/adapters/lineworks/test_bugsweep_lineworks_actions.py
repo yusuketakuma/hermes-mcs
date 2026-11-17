@@ -94,15 +94,28 @@ def test_failure_before_any_dm_restores_the_followup(tmp_path, monkeypatch):
     assert w.reg.followup(env["command_id"]) is None and len(w.client.calls) == 1
 
 
-def test_expired_followup_is_not_restored_forever(tmp_path):
+@pytest.mark.parametrize("error", [ClientError("http_error", 400), ClientError("http_error", 403),
+                                   ClientError("http_error", 404), ClientError("validation_invalid")])
+def test_permanently_rejected_followup_is_not_resent_every_sweep(tmp_path, error):
     w = world(tmp_path, action="summary")
     env = _summary_followup(w)
-    rec = w.reg.followup(env["command_id"])
-    w.reg.put_followup(env["command_id"], {**rec, "retry_until": time.time() - 1})
-    w.client.error = ClientError("http_error", 403)
+    w.client.error = error
     with pytest.raises(ClientError):
         asyncio.run(w.actions.sweep_followups())
     assert w.reg.followup(env["command_id"]) is None
+    asyncio.run(w.actions.sweep_followups())
+    assert len(w.client.calls) == 1
+
+
+def test_restored_followup_keeps_its_original_expiry(tmp_path):
+    w = world(tmp_path, action="summary")
+    env = _summary_followup(w)
+    expires = w.reg.followup(env["command_id"])["expires"]
+    time.sleep(0.01)
+    w.client.error = ClientError("rate_limited", 429)
+    with pytest.raises(ClientError):
+        asyncio.run(w.actions.sweep_followups())
+    assert w.reg.followup(env["command_id"])["expires"] == expires
 
 
 VALUES = ("合成の内容", "合成担当", "2026-10-18", "合成の理由")
