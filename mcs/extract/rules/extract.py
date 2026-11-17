@@ -413,11 +413,15 @@ def _delete_stale(ledger) -> set:
     return {r['message_id'] for r in rows if r['ok']}
 
 
-def run_pending(ledger, *, deadline: float | None = None) -> dict:
+def run_pending(ledger, *, deadline: float | None = None, scope_sql: str = "") -> dict:
     """Extract messages lacking an extract_v1 artifact, and re-extract
     ones whose body changed on the server (content_hash drift — see
     _delete_stale). Returns {done, pids} so rollups can rebuild touched
-    patients."""
+    patients. ``scope_sql`` is the caller's AND-fragment over messages ``m``
+    (``upgrade_scope.selection_sql(scope, "rule")``) that keeps rows of an
+    earlier rule version out of a closed upgrade scope; empty selects all."""
+    if type(scope_sql) is not str:
+        raise ValueError("extract_scope_invalid")
     if deadline is not None and time.monotonic() >= deadline:
         return {"done": 0, "pids": []}
     if ledger.db.in_transaction:
@@ -432,7 +436,7 @@ def run_pending(ledger, *, deadline: float | None = None) -> dict:
         AND NOT EXISTS (SELECT 1 FROM artifacts a
           WHERE a.kind=? AND a.message_id=m.message_id
           {current_extract_pred(error_check=False)}
-          AND json_extract(a.meta,'$.rule_version')=?)
+          AND json_extract(a.meta,'$.rule_version')=?){scope_sql}
       ORDER BY EXISTS (SELECT 1 FROM patients p
                        WHERE p.project_id=m.project_id AND p.is_archived),
                m.posted_at_ts DESC
