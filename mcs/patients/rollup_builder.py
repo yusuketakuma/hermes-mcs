@@ -493,7 +493,7 @@ def _noncurrent_vital_reference(body, values):
 
 
 def _match_request_replies(db, project_id, req_thread, requests, messages, now, *, cfg=None):
-    """Annotate only uniquely matched requests with current Loop relation evidence."""
+    """Annotate uniquely matched requests with current Loop relation evidence, and mark unevaluable replies."""
     from request_loops import effective_loop_states, latest_policy
     import semantic_jev as jev
 
@@ -509,11 +509,9 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now, 
     wanted = {(row["mid"], row["ctx"]) for row, _root, _ts, sender in req_thread
               if isinstance(row.get("ctx"), str) and sender is not None
               and counts[(row["mid"], row["ctx"])] == 1}
-    if not wanted:
-        return
     candidates = {}
     policy = latest_policy(db)
-    sources = db.execute(
+    sources = [] if not wanted else db.execute(
         "SELECT artifact_id,project_id,message_id,content,meta FROM artifacts a "
         "WHERE kind='loop_candidate' AND project_id=? AND EXISTS ("
         "SELECT 1 FROM json_each(?) requested WHERE "
@@ -526,15 +524,35 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now, 
         key = (source_mids[loop["artifact_id"]], loop["description"])
         candidates.setdefault(key, []).append(loop)
     by_id = {m["message_id"]: m for m in messages}
+    threads = {}
+    for m in messages:
+        threads.setdefault(m["parent_id"] or m["message_id"], []).append(m)
     for row, root, ts, sender in req_thread:
         if not isinstance(row.get("ctx"), str):
             continue
         key = (row["mid"], row["ctx"])
         matched = candidates.get(key, [])
+        # Later posts by someone else in the thread: the replies a relation evaluation must cover.
+        later = {m["message_id"] for m in threads.get(root, ())
+                 if m["message_id"] != row["mid"] and m["body_state"] != "deleted"
+                 and m["posted_at_ts"] is not None and 0 < ts < m["posted_at_ts"] <= now
+                 and (sender is None or normalize_sender_id(m["sender_id"]) != sender)}
         if sender is None or counts[key] != 1 or len(matched) != 1:
+            if later:  # replies exist but none could be matched to this request
+                row["reply_evaluation"] = "unavailable"
+                row["reply_evaluation_unavailable"] = len(later)
             continue
         seen = []
         reply_events = []
+        # shortcut: `unrelated` evaluations are hidden by request_loops, so they count as
+        # evaluated whatever their staleness; expose evaluated pairs there to tighten this.
+        evaluated = {event.get("trigger_message_id") for event in matched[0]["relation_events"]
+                     if not event.get("stale")} | {r[0] for r in db.execute(
+                         "SELECT json_extract(content,'$.trigger_message_id') FROM artifacts "
+                         "WHERE kind='loop_event' AND project_id=? AND json_valid(content) "
+                         "AND json_extract(content,'$.loop_artifact_id')=? "
+                         "AND json_extract(content,'$.relation')='unrelated'",
+                         (project_id, matched[0]["artifact_id"]))}
         for event in matched[0]["relation_events"]:
             relation = event.get("relation")
             kind = kinds.get(relation) if isinstance(relation, str) else None
@@ -573,6 +591,24 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now, 
             row["reply_state"] = max((kind for _, kind in seen), key=_REPLY_STAGE.get)
             if {kind for _, kind in seen} >= {"done", "cancel"}:
                 row["reply_conflict"] = True
+        elif later - evaluated:
+            # not yet evaluated, rejected or stale: unknown, not "no reply"
+            row["reply_evaluation"] = "unavailable"
+            row["reply_evaluation_unavailable"] = len(later - evaluated)
+
+
+def _cancelled_visit_dates(body):
+    """Visit dates this post marks cancelled, postponed or undecided: (month, day) or ISO when a year is written."""
+    from extract import _NEXT_CANCELLED  # shortcut: reuses the rule extractor's cancel cue without a RULE_VERSION bump
+    out = set()
+    for match in re.finditer(r"(?<!\d)(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})(?!\d)日?", body):
+        if _NEXT_CANCELLED.match(body[match.end():]):
+            year, month, day = (int(v) if v else None for v in match.groups())
+            try:
+                out.add(date(year, month, day).isoformat() if year else (month, day))
+            except ValueError:
+                continue
+    return out
 
 
 def _close_rollup_cursor(cursor):
@@ -708,6 +744,8 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
     # Request rows retain source/thread identity for grounded Loop matching.
     req_thread = []
     next_planned = None
+    next_planned_closed = False
+    cancelled = set()
     senders = {}
     summary = None
     # Retain only fields needed later for reply matching and observation age;
@@ -878,9 +916,22 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
                         "importance": f.get("importance"),
                         "evidence": f.get("evidence_quote"),
                         "last": m["posted_at"], "mid": m["message_id"]}
-            if next_planned is None and isinstance(v1.get("next_planned"), str) \
-                    and v1["next_planned"]:
-                next_planned = v1["next_planned"]
+            if next_planned is None and not next_planned_closed:
+                # Newest-first: a later cancellation of a date hides that older plan.
+                if m["body_state"] in (None, "full") and isinstance(m["body_text"], str):
+                    cancelled |= _cancelled_visit_dates(m["body_text"])
+                planned = v1.get("next_planned")
+                if isinstance(planned, str) and planned:
+                    try:
+                        day = date.fromisoformat(planned[:10])
+                    except ValueError:
+                        day = None
+                    if day is None or (day >= as_of and (day.month, day.day) not in cancelled
+                                       and day.isoformat() not in cancelled):
+                        next_planned = planned
+                    else:
+                        # A past or cancelled newest plan supersedes every older one.
+                        next_planned_closed = True
 
     clinical_facts = dependency_loss.bind_facts(db, [*med_state.values(), *symptom_facts.values()])
     dependencies = dependency_loss.read(db, project_id)
