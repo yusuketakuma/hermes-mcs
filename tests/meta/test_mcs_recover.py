@@ -849,7 +849,14 @@ def test_escalation_reports_before_a_failing_worker_start(rec, tmp_path, monkeyp
     assert rec.recover() == 2
     report = json.loads(Path(rec.mcs_recovery_core.REPORT_PATH).read_text())
     assert report["result"] == "escalate" and "restart" not in report
+    assert "notified_at" not in report             # the notice is not yet earned
     assert notices == []
+    monkeypatch.setattr(rec.mcs_recovery_services, "_restart_drainers", lambda **kwargs: [])
+    Path(rec.mcs_recovery_core.STATE_PATH).write_text(json.dumps(state))   # marker/journal as left by the failed pass
+    assert rec.recover() == 1
+    assert len(notices) == 1                        # sent once, not suppressed
+    assert rec.recover() == 1
+    assert len(notices) == 1                        # and never resent
 
 
 def test_future_journal_timestamp_is_not_fresh(rec):

@@ -948,11 +948,15 @@ def _recover_legacy(if_stale=False):
             # = mcs_update: report before the start (it may raise), then notify
             key = mcs_recovery_core._alert_key(state, detail)
             notify, notified_at = mcs_recovery_core._alert_due("escalate", key, time.time())
-            fields = {"alert_key": key, "notified_at": notified_at, "drainers_key": dkey}
-            mcs_recovery_core._report("escalate", detail, **fields)
+            fields = {"alert_key": key, "drainers_key": dkey}
+            # a start failure must not leave a notified_at the notice never
+            # earned: stamp it only after the start, right before the send
+            mcs_recovery_core._report("escalate", detail, **fields,
+                                      **({} if notify else {"notified_at": notified_at}))
             problems = drainers(dkey)
-            if problems:
-                mcs_recovery_core._report("escalate", detail, restart=problems, **fields)
+            if notify or problems:
+                mcs_recovery_core._report("escalate", detail, notified_at=notified_at,
+                                          **({"restart": problems} if problems else {}), **fields)
             if notify:
                 mcs_recovery_services._notify(
                     "[MCS] 更新の中断復旧ができません"
