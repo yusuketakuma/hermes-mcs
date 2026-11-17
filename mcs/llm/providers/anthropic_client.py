@@ -29,6 +29,8 @@ PRICES_20261026 = MappingProxyType({"input": "0.1", "output": "0.5", "long_input
 PRICES = PRICES_20261026
 # 429 body error.details.error_code values that mean a spend limit, not a pause.
 SPEND_LIMIT_ERROR_CODES = frozenset({"enforced_spend_limit_reached"})
+# A 400 invalid_request_error whose message opens with this is the account's usage limit.
+USAGE_LIMIT_400_PREFIX = "You have reached your specified API usage limits"
 
 
 def _spend_limit_429(raw):
@@ -36,6 +38,16 @@ def _spend_limit_429(raw):
     try:
         details = strict_json(raw.decode("utf-8"))["error"]["details"]
         return details["error_code"] in SPEND_LIMIT_ERROR_CODES
+    except (AttributeError, KeyError, TypeError, ValueError, RecursionError, OverflowError):
+        return False
+
+
+def _usage_limit_400(raw):
+    """True only for a bounded, well-formed 400 body that names the account usage limit."""
+    try:
+        error = strict_json(raw.decode("utf-8"))["error"]
+        return (error["type"] == "invalid_request_error" and type(error["message"]) is str
+                and error["message"].startswith(USAGE_LIMIT_400_PREFIX))
     except (AttributeError, KeyError, TypeError, ValueError, RecursionError, OverflowError):
         return False
 
@@ -203,9 +215,12 @@ class AnthropicClient(CloudClient):
 
     def response_error(self, status, raw, headers=None):
         kind, retryable, meta = super().response_error(status, raw, headers)
+        bounded = isinstance(raw, bytes) and len(raw) <= bounded_http.MAX_RESPONSE_BYTES
+        if status == 400 and bounded and _usage_limit_400(raw):
+            return "payment_required", False, meta   # every later call fails until the limit lifts
         if status != 429:
             return kind, retryable, meta
-        if isinstance(raw, bytes) and len(raw) <= bounded_http.MAX_RESPONSE_BYTES and _spend_limit_429(raw):
+        if bounded and _spend_limit_429(raw):
             return "payment_required", False, meta
         # A 429 without Retry-After is not a short pause: a retry only burns reserved budget.
         return kind, retryable and retry_after(headers or {}) is not None, meta

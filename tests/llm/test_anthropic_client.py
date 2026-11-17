@@ -730,6 +730,28 @@ def test_a_spend_limit_429_is_a_terminal_payment_stop(monkeypatch):
     assert len(calls) == 1 and caught.value.retryable is False
 
 
+def _usage_limit_400_body(message="You have reached your specified API usage limits. You will regain access on 2027-01-01 at 00:00 UTC."):
+    return json.dumps({"type": "error", "error": {"type": "invalid_request_error", "message": message}}).encode()
+
+
+def test_a_usage_limit_400_is_a_terminal_payment_stop(monkeypatch):
+    monkeypatch.setattr(a.time, "sleep", lambda delay: pytest.fail("a usage limit is not waited on"))
+    calls = []
+    client = a.AnthropicClient("synthetic", post_fn=lambda *args: calls.append(1) or (400, {}, _usage_limit_400_body()))
+    with pytest.raises(a.AnthropicError, match="payment_required") as caught:
+        client.complete("synthetic", deadline=time.monotonic() + 60, reserve_fn=lambda *args: None)
+    assert len(calls) == 1 and caught.value.retryable is False
+
+
+@pytest.mark.parametrize("raw", [b"", b"not json", b"[]", b'{"error": []}', b'{"error": {"type": "invalid_request_error"}}',
+                                 _usage_limit_400_body("max_tokens is too large"),
+                                 json.dumps({"error": {"type": "other_error", "message": "You have reached your specified API usage limits"}}).encode(),
+                                 b'{"error": {"type": "invalid_request_error", "message": ["x"]}}',
+                                 b"x" * (a.bounded_http.MAX_RESPONSE_BYTES + 1)])
+def test_any_other_400_stays_a_contract_error(raw):
+    assert a.AnthropicClient("synthetic").response_error(400, raw, {}) == ("contract_error", False, {})
+
+
 @pytest.mark.parametrize("raw", [b"", b"not json", b"[]", b'{"error": []}', b'{"error": {"details": 1}}',
                                  b'{"error": {"details": {"error_code": ["x"]}}}'])
 def test_a_malformed_429_body_never_claims_a_spend_limit(raw):
