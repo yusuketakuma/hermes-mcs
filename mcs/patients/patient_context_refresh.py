@@ -279,6 +279,9 @@ def _advance_patient_scan(ledger, expected, bookmark, deadline, admit, *, observ
             observed_out['scan_refusal'] = reason
 
     # Admission may start external commands (the memory check): never under the write lock.
+    if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline:
+        _mark('deadline')
+        return None
     if not admit():
         _mark('admission')
         return None
@@ -610,9 +613,13 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                 reader.db.scan_until = min(deadline - patient_context_refresh_state.COMMIT_MARGIN, patient_context_refresh_state.time.monotonic() + 1.0)
                 try:
                     plan = context_schedule.plan(reader.db, original)
-                except BaseException:
-                    # A cancelled candidate query still uses up its turn.
-                    persist(context_schedule.advance_turn(original))
+                except Exception:
+                    # A cancelled candidate query still uses up its turn; the query's own error
+                    # is the one the pass reports.
+                    try:
+                        persist(context_schedule.advance_turn(original))
+                    except Exception:
+                        pass
                     raise
                 finally:
                     reader.db.scan_until = deadline - patient_context_refresh_state.COMMIT_MARGIN
