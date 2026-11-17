@@ -465,6 +465,67 @@ def test_scope_change_without_prior_delivery_fault_preserves_other_recovery(tmp_
     assert report["status"] == "ok" and report["recovered_from"] == "stale"
 
 
+@pytest.mark.parametrize("switch", ["channel", "off", "lineworks", "standalone"])
+def test_later_waiting_in_new_scope_is_not_the_old_scope_reflap(tmp_path, monkeypatch, switch):
+    _health(tmp_path, at=4000, unread=4000, reasons=[], overall="ok")
+    current = ["waiting_without_progress"]
+    def observe(home, cfg, now):
+        value = _snapshot(now, delivery=current[0])
+        if current[0] == "idle":
+            value["delivery"].update(queued=0, oldest_created_at=None)
+        return value
+    monkeypatch.setattr(health_watch, "_observe_delivery", observe)
+    assert health_watch.evaluate(str(tmp_path), 4000, cfg=CFG)["alert"]
+    changed = {"notify": {"interactive": "slack", "slack": {
+        **CFG["notify"]["slack"], "channel_id": "C_OTHER_SYNTHETIC"}}}
+    current[0] = "idle"
+    if switch != "channel":
+        if switch == "lineworks":
+            disabled = {"notify": {"interactive": "lineworks", "lineworks": {
+                "profile": "synthetic", "application_id": "1", "team_id": "2", "channel_id": "room",
+                "allowed_user_ids": ["user"], "project_ids": [1]}}}
+        elif switch == "standalone":
+            disabled = {"runtime_mode": "standalone", "notify": {"interactive": "off"}}
+            monkeypatch.setattr(health_watch, "_apply_standalone", lambda *args: None)
+        else:
+            disabled = {"notify": {"interactive": "off"}}
+        assert not health_watch.evaluate(str(tmp_path), 4001, cfg=disabled)["alert"]
+    assert health_watch.evaluate(str(tmp_path), 4002, cfg=changed)["status"] == "ok"
+    state = json.loads((tmp_path / health_watch.STATE_REL).read_text())
+    assert state["alerted_episode"]["reasons"] == []
+    _health(tmp_path, at=6002, unread=6002, reasons=[], overall="ok")
+    current[0] = "waiting_without_progress"
+    report = health_watch.evaluate(str(tmp_path), 6002, cfg=changed)
+    assert report["alert"] and report["state_reasons"] == ["notification_delivery_waiting"]
+    assert not health_watch.evaluate(str(tmp_path), 6003, cfg=changed)["alert"]
+
+
+def test_scope_change_ends_only_delivery_reflap_history(tmp_path, monkeypatch):
+    _health(tmp_path, at=4000, unread=4000, reasons=[], overall="ok")
+    monkeypatch.setattr(health_report, "attachment_ocr_health", lambda *args: {
+        "state": "deferred", "reason": "attachment_ocr_processing_deferred"})
+    current = ["waiting_without_progress"]
+    def observe(home, cfg, now):
+        value = _snapshot(now, delivery=current[0])
+        if current[0] == "idle":
+            value["delivery"].update(queued=0, oldest_created_at=None)
+        return value
+    monkeypatch.setattr(health_watch, "_observe_delivery", observe)
+    assert health_watch.evaluate(str(tmp_path), 4000, cfg=CFG)["alert"]
+    state_path = tmp_path / health_watch.STATE_REL
+    state = json.loads(state_path.read_text())
+    witness = {"outcome": "unknown", "synthetic": "retained"}
+    state["unknown_deliveries"] = [witness]
+    state_path.write_text(json.dumps(state))
+    changed = {"notify": {"interactive": "slack", "slack": {
+        **CFG["notify"]["slack"], "channel_id": "C_OTHER_SYNTHETIC"}}}
+    current[0] = "idle"
+    assert not health_watch.evaluate(str(tmp_path), 4001, cfg=changed)["alert"]
+    state = json.loads(state_path.read_text())
+    assert state["alerted_episode"]["reasons"] == ["attachment_ocr_processing_deferred"]
+    assert state["unknown_deliveries"] == [witness]
+
+
 def test_recorded_reason_filter_rejects_non_string_values():
     obs = {"status": "stale", "health_at": 10,
            "recorded_state_reasons": [{"synthetic": "secret"}, "worker_restart_required"]}

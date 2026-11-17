@@ -816,6 +816,10 @@ def evaluate(home: str = HOME, now: float | None = None,
     episode_reasons = episode.get("reasons")
     episode_reasons = (set(episode_reasons) if isinstance(episode_reasons, list)
                        and all(isinstance(r, str) for r in episode_reasons) else None)
+    if delivery_scope_changed and episode_reasons is not None:
+        # A later fault in the new scope must not inherit the old scope's reflap suppression.
+        episode_reasons.difference_update(_DELIVERY_UNRESOLVED)
+        state["alerted_episode"] = {**episode, "reasons": sorted(episode_reasons)}
     reflap = (transition and obs["status"] == "degraded"
               and episode.get("status") == "degraded" and not realert
               and not (delivery_scope_changed and set(reasons) & _DELIVERY_UNRESOLVED)
