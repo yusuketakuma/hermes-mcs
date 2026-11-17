@@ -152,63 +152,6 @@ def test_failed_ci_on_an_agent_branch_counts_against_the_linked_issue():
     assert ac.decide_gate(human, _green(), CODE, 0, True, "failure")["attempts"] == []
 
 
-def test_a_dispatched_request_reads_the_ci_conclusion_from_the_jobs_on_the_head():
-    # main-sync's CI run raises no workflow_run, so its gate request has no run conclusion to pass
-    failed = _green()[:-1] + [_run(ac.REQUIRED_JOBS[-1], "failure")]
-    assert ac.decide_gate(_pr(), failed, CODE, 0, True, ac.CHECKS_CONCLUSION)["attempts"] == [{"issue": 5}]
-    assert ac.decide_gate(_pr(), _green(), CODE, 0, True, ac.CHECKS_CONCLUSION)["attempts"] == []
-    # the kill switch fails the gate without a failed job: that is not a CI failure
-    assert ac.decide_gate(_pr(), _green(), CODE, 0, False, ac.CHECKS_CONCLUSION)["attempts"] == []
-    waiting = _green()[:-1]
-    assert ac.decide_gate(_pr(), waiting, CODE, 0, True, ac.CHECKS_CONCLUSION)["attempts"] == []
-
-
-def _ci_run(attempt=1, latest=1, sha=HEAD, path=".github/workflows/ci.yml"):
-    url = f"https://github.com/{REPO}/actions/runs/77"
-    return ({"id": 77, "path": path, "head_sha": sha, "run_attempt": attempt, "html_url": url},
-            {"id": 77, "path": path, "head_sha": sha, "run_attempt": latest, "html_url": url})
-
-
-def test_a_ci_attempt_counts_once_and_only_while_it_is_the_latest():
-    run, latest = _ci_run()
-    first = ac.count_source(run, latest, [], HEAD, 1)
-    assert first == {"source": f"https://github.com/{REPO}/actions/runs/77/attempts/1", "count": True, "reason": ""}
-    # a repeated request for the same attempt finds the mark written after the count and the repair
-    counted = [{"context": ac.COUNTED_CONTEXT, "target_url": first["source"]}]
-    assert ac.count_source(run, latest, counted, HEAD, 1)["count"] is False
-    # the merge-gate verdict (pending or not) is not the mark: it does not consume the attempt
-    verdict = [{"context": "merge-gate", "target_url": first["source"], "state": "pending"}]
-    assert ac.count_source(run, latest, verdict, HEAD, 1)["count"] is True
-    # a re-run of ci is a new attempt and counts; an older attempt does not once a newer one exists
-    run2, latest2 = _ci_run(attempt=2, latest=2)
-    assert ac.count_source(run2, latest2, counted, HEAD, 2)["count"] is True
-    stale, newer = _ci_run(attempt=1, latest=2)
-    assert ac.count_source(stale, newer, [], HEAD, 1)["count"] is False
-
-
-@pytest.mark.parametrize("change", ["path", "sha", "attempt", "statuses"])
-def test_a_request_that_is_not_a_ci_attempt_on_the_head_stops(change):
-    run, latest = _ci_run(path=".github/workflows/other.yml" if change == "path" else ".github/workflows/ci.yml",
-                          sha=OLD if change == "sha" else HEAD)
-    statuses = [{"state": "success"}] if change == "statuses" else []
-    with pytest.raises(ValueError):
-        ac.count_source(run, latest, statuses, HEAD, 2 if change == "attempt" else 1)
-
-
-def test_cli_source_refuses_an_unreadable_statuses_response(tmp_path):
-    run, latest = _ci_run()
-    (tmp_path / "attempt.json").write_text(json.dumps(run))
-    (tmp_path / "latest.json").write_text(json.dumps(latest))
-    args = ["source", "--attempt-run", str(tmp_path / "attempt.json"), "--latest-run", str(tmp_path / "latest.json"),
-            "--statuses", str(tmp_path / "statuses.json"), "--sha", HEAD, "--attempt", "1"]
-    (tmp_path / "statuses.json").write_text(json.dumps({"message": "Bad credentials"}))
-    with pytest.raises(SystemExit) as stopped:
-        ac.main(args)
-    assert stopped.value.code != 0
-    (tmp_path / "statuses.json").write_text(json.dumps([[]]))
-    assert ac.main(args) == 0
-
-
 def test_attempts_are_counted_across_agents_and_stop_at_the_limit():
     assert ac.next_attempt(["bug"]) == ([], ["試行:1"], False)
     assert ac.next_attempt(["試行:1", "担当:claude"]) == (["試行:1"], ["試行:2"], False)
@@ -285,17 +228,16 @@ def test_labels_and_workflows_agree_with_the_module():
     # never check out PR code in a privileged workflow: the one checkout ref is the default branch's full ref
     assert control.count("ref:") == 1 and "ref: refs/heads/${{ github.event.repository.default_branch }}" in control
     assert "workflow_run" in control and "pull_request_target" in control
-    # a dispatched gate must not share one concurrency group across heads, and only ci.yml's bot-started run asks
-    assert "github.event.pull_request.head.sha || inputs.sha }}" in control
+    # main-sync's ci run raises no workflow_run: ci.yml asks for the verdict, only for a run the bot started,
+    # and the gate runs such a request only from the default branch (full ref: a tag named like it fails)
     request = (ROOT / ".github/workflows/ci.yml").read_text().split("\n  merge-gate-request:\n")[1]
     assert "github.triggering_actor == 'github-actions[bot]'" in request and "actions: write" in request
-    assert 'agent-control.yml --ref "refs/heads/$DEFAULT_BRANCH"' in request
-    assert '-f run_id="$RUN_ID" -f run_attempt="$RUN_ATTEMPT"' in request
-    # a dispatch runs the gate only from the default branch (full ref: a tag named like it does not pass)
+    assert 'agent-control.yml --ref "$DEFAULT_BRANCH" -f sha="$SHA"' in request
     assert "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)" in control
-    # the attempt is bound and checked by the script; the counted mark is written after the count and repair
-    assert "agent_control.py source" in control and f"context={ac.COUNTED_CONTEXT}" in control
-    assert control.index("agent-claude-repair.yml --ref") < control.index(f"context={ac.COUNTED_CONTEXT}")
+    # one concurrency group per head, and a dispatched verdict never counts an attempt
+    assert "github.event.pull_request.head.sha || inputs.sha }}" in control
+    dispatched = control.split('elif [[ "$EVENT" == "workflow_dispatch" ]]; then', 1)[1].split("else", 1)[0]
+    assert 'ci_conclusion=""' in dispatched
     claude = (ROOT / ".github/workflows/agent-claude.yml").read_text()
     assert "branch_prefix: agent/" in claude
     assert "vars.AUTOMATION_ENABLED == 'true'" in claude

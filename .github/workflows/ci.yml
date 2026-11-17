@@ -459,10 +459,10 @@ jobs:
     # and GitHub raises no workflow_run for a run started that way: agent-control.yml
     # would never judge the new head. A dispatch is the one event GITHUB_TOKEN may
     # start, so this run asks for the judgement itself once the required jobs are done.
-    # A run a person started reaches agent-control.yml through workflow_run; asking
-    # here too would count one CI failure twice.
-    # The request only names the commit. agent-control.yml runs from the default
-    # branch and reads the check runs itself, so nothing this job says is trusted.
+    # A run a person started reaches agent-control.yml through workflow_run, which
+    # also counts a failure against the linked issue; this request only publishes the
+    # verdict. It names the commit and nothing else: agent-control.yml runs from the
+    # default branch and reads the check runs itself, so nothing this job says is trusted.
     needs: [lint-test, hygiene, standalone-sdk, incident-gates, macos, hermes-integration]
     if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.triggering_actor == 'github-actions[bot]' }}
     runs-on: ubuntu-latest
@@ -476,6 +476,4 @@ jobs:
           GH_REPO: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           SHA: ${{ github.sha }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: gh workflow run agent-control.yml --ref "refs/heads/$DEFAULT_BRANCH" -f sha="$SHA" -f run_id="$RUN_ID" -f run_attempt="$RUN_ATTEMPT"
+        run: gh workflow run agent-control.yml --ref "$DEFAULT_BRANCH" -f sha="$SHA"

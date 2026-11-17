@@ -110,9 +110,8 @@ PR どうしの衝突を減らすため、`.github/workflows/main-sync.yml` が 
   rebase や force-push はしません。GITHUB_TOKEN で作った commit では PR の CI が起動しないため、続けて CI と、`release-notes.yml` の読み取りだけの PR 検査（`action=pr_check`、変更記録の検査を含む）を `workflow_dispatch` で起動し、
   CI の最後のジョブ（`merge-gate-request`）が `agent-control.yml` を `workflow_dispatch` で起動して、`merge-gate` を出します。
   GITHUB_TOKEN で起動した実行は、完了しても `workflow_run` を起こさないためです。人が起動した CI は、これまでどおり `workflow_run` で判定します。
-  依頼は CI の実行 ID と試行回を渡し、判定側が GitHub に照合します。既定ブランチ（`refs/heads/<既定ブランチ>`）以外から起動された判定は動きません。
-  試行回数は CI の1試行につき1回だけ数えます。数え終え、自動修正を依頼したあとに `merge-gate-counted` の status（試行の URL つき）を書き、同じ試行の依頼が来ても数えません。
-  判定が途中で止まった試行には印が残らず、自動では数え直しません。Issue のラベルを確かめ、必要なら同じ試行の依頼を手で起動し直します。
+  この依頼は `merge-gate` を出すだけで、CI が失敗しても試行回数は数えず、自動修正も起動しません。判定は check runs を自分で読みますが、どの CI 試行の失敗かを1つに決められないためです。
+  既定ブランチ（`refs/heads/<既定ブランチ>`）以外から起動された判定は動きません。
   Actions event policy で `agent-control.yml` の起動イベントを絞っている場合は、`workflow_dispatch` も許可します。許可が無いと、この判定は起動時に失敗します。
   起動に失敗した head は、次の実行で（このジョブの merge commit に CI が無いことを確かめて）起動し直します。自動マージの予約は取り込みの前に外し、新しい head の判定で付け直します。
   衝突、または `.github/workflows/` の変更（GITHUB_TOKEN では書けません）で取り込めない PR には、手で取り込む手順を1件だけコメントし、以降はそのコメントを書き換えます。
