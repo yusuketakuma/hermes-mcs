@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "クラウド抽出の入力・出力トークン数が実行統計から抜ける問題を修正",
+  "summary": "Anthropic と OpenAI で抽出したときも、提供元が返した入力・出力トークン数を抽出の実行統計に残します。これまで Anthropic は最初の呼出しも修復もトークン数が空になり、OpenAI は総数だけが残っていました。Anthropic の総数は提供元が返さないため補作しません。財務receipt・予算・送信前の承認・結果不明の再送禁止は変わりません。",
+  "upgrade": "追加設定やDB移行は不要です。通常の更新後、処理側の新しいコードへの切替えが必要です。抽出の共通処理のソースが変わるため、意味チェックの指紋と添付抽出の入力識別子が変わり、既存の結果は通常の現在性・再評価条件に従います。保存済みの実行統計は書き換えません。",
+  "details": [
+    "共通集計が、ローカル形式の prompt_tokens・completion_tokens・total_tokens に加えて、input_tokens・output_tokens と Anthropic の cache_creation_input_tokens・cache_read_input_tokens をそれぞれの名前のまま合算する。",
+    "提供元ごとにキー名を分けたまま集計するため、キャッシュ計数の意味を混同しない。OpenAI の内訳（input_tokens_details など）は従来どおり集計に含めない。",
+    "再利用した回答の除外と、負の値・整数でない値を捨てる扱いは従来どおり。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_llm_provider.py",
+    "#155"
+  ]
+}
