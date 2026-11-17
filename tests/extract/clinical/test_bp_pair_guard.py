@@ -181,3 +181,16 @@ def test_blank_around_slash_keeps_threshold_flag(sep):
         {"sbp": 80, "dbp": 60}, f"本人の血圧80{sep}60。", {"sbp_lte": 90})
     assert flags == clinical_values.vital_threshold_flags(
         {"sbp": 80, "dbp": 60}, "本人の血圧80/60。", {"sbp_lte": 90}) != []
+
+
+@pytest.mark.parametrize("sep", ["/", " / "])
+@pytest.mark.parametrize("body,values,expected", [
+    # several readings: a pair is accepted only as one written reading
+    ("本人の血圧120{s}80、130{s}90。", {"sbp": 130, "dbp": 90}, {"sbp": 130, "dbp": 90}),
+    ("本人の血圧120{s}80、130{s}90。", {"sbp": 120, "dbp": 90}, {}),
+    # another person's and a past reading stay rejected with or without blanks
+    ("家族の血圧120{s}80。", {"sbp": 120, "dbp": 80}, {}),
+    ("以前は血圧120{s}80だった。", {"sbp": 120, "dbp": 80}, {}),
+])
+def test_blank_around_slash_keeps_reader_controls(sep, body, values, expected):
+    assert clinical_values.grounded_vitals(body.format(s=sep), values) == expected
