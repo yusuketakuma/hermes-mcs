@@ -17,3 +17,24 @@ def test_explicit_double_negation_retains_adherence_concern(text):
 @pytest.mark.parametrize("text", ["飲み忘れは全くない。", "残薬が全くない。"])
 def test_simple_negation_still_has_no_concern(text):
     assert not mcs_signals._adherence_phrases(text)
+
+
+@pytest.mark.parametrize("text", [
+    "本人は服薬管理が難しくありません。",
+    "本人は服薬管理が難しくない。",
+    "本人は服薬管理が難しくなく、自分で続けている。",
+])
+def test_adjective_negation_is_not_a_concern(text):
+    assert not mcs_signals._adherence_phrases(text, patient_name="架空患者")
+
+
+@pytest.mark.parametrize("text", [
+    "本人は服薬管理が難しい。",
+    "本人は服薬管理が難しいです。",
+    "本人は服薬管理が難しくなってきた。",
+    "本人は服薬管理が難しくないわけではない。",
+    "本人は服薬管理できない。",
+    "本人は飲み忘れがないわけではない。",
+])
+def test_adjective_concern_and_double_negation_are_kept(text):
+    assert mcs_signals._adherence_phrases(text, patient_name="架空患者")
