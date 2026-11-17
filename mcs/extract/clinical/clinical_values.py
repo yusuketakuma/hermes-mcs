@@ -3,6 +3,7 @@
 from datetime import date
 import re
 import unicodedata
+from decimal import Decimal
 import clinical_scope
 from typing import Literal, TypedDict
 
@@ -345,6 +346,16 @@ _LAB_ITEM_UNITS = {
     "phenytoin_level": ("μg/ml",),
     "lithium_level": ("meq/l", "mmol/l"),
 }
+# Salt items also name drug amounts (バルプロ酸 ナトリウム 200, 酸化 マグネシウム 330).
+# A number written without a unit is read in the item's conventional unit (Na/K in
+# mEq/L, Ca/Mg in mg/dL) and only inside a band wide enough for any charted value;
+# a unit in the source (ionised Ca 1.2mmol/L) is not bound by it. No conversions.
+_UNIT_LESS_BANDS = {
+    "sodium": ("100", "180"),
+    "potassium": ("1.5", "9.0"),
+    "calcium": ("4.0", "16.0"),
+    "magnesium": ("0.5", "6.0"),
+}
 # Capture explicit dose/count symbols too; an omitted output unit cannot hide them.
 _LAB_QUOTED_UNIT = r"(?:[a-zμ%/0-9.^²‰‱°×万秒錠包袋滴枚本個回単位]|カプセル)*"
 # A katakana item glued to a salt stem (塩化カリウム, バルプロ酸ナトリウム, 炭酸水素ナトリウム)
@@ -353,16 +364,12 @@ _LAB_QUOTED_UNIT = r"(?:[a-zμ%/0-9.^²‰‱°×万秒錠包袋滴枚本個回�
 # (尿酸, 乳酸) is set apart by a space or a line break. 化 and 素 stay listed stems,
 # so words that merely end in them (悪化, 尿素窒素) are no stems.
 _SALT_STEM = re.compile(r"(?:酸|水素|塩化|酸化|ヨウ化|フッ化|臭化|硫化|シアン化)$")
-# A salt item (or an unnamed item: 炭酸リチウム, アムロジピン) whose amount is written
-# without a unit in a clause that also carries a dosing cue (分2, 毎食後, 点滴, 週1回)
-# is a dose, however the salt stem is set apart (バルプロ酸 ナトリウム 200 分2).
-# A lab unit written in the source keeps the reading; the item label itself
-# (食後血糖) is no cue.
-_DOSE_SHARED_ITEMS = frozenset({"sodium", "potassium", "calcium", "magnesium", None})
-_DOSING_CUE = re.compile("|".join((
-    _FREQ_EXPLICIT, r"(?:日|週|月)[1-7]回|隔日", _PRN_WORDS, _MED_FORMS, r"包|点眼|処方|投与",
-    r"毎食|食前|食後|食間|朝夕|就寝前|眠前|起床時",
-    *(words for route, words in _ROUTE_WORDS.items() if route != "other"))))
+# An in-band unit-less amount of a salt item (or any unit-less amount of an unnamed
+# item: アムロジピン 5 分1) is still a dose when its clause names
+# a daily frequency, a PRN use or a dosage form or count (塩化 カリウム 5 分2). Timing,
+# route, weekly or monthly words (食後, 点滴, 投与前, 週1回) also say when blood was
+# drawn, so they are no cue. A lab unit written in the source keeps the reading.
+_DOSING_CUE = re.compile("|".join((_FREQ_EXPLICIT, r"日[1-7]回", _PRN_WORDS, _MED_FORMS, r"包")))
 # Items also reported for urine, CSF or effusions (尿中Ca, 尿TP, 尿沈渣WBC 10-19/HPF):
 # those specimens and qualitative or ranged results (1+, 10-19) are not the blood item.
 # The previous items (尿Cr) keep their earlier reading.
@@ -393,6 +400,15 @@ def _clause_at(quote: str, at: int) -> str:
     """The folded clause of ``quote`` that contains position ``at``."""
     start, stop = _clause_bounds(quote, at)
     return quote[start:stop]
+
+
+def _unit_less_reading(analyte: str | None, number: str, quote: str, match: re.Match) -> bool:
+    """Whether a number quoted without a unit after an item name can be its reading."""
+    if analyte is None:
+        return not _in_a_dosing_clause(quote, match)
+    band = _UNIT_LESS_BANDS.get(analyte)
+    return band is None or (Decimal(band[0]) <= Decimal(number) <= Decimal(band[1])
+                            and not _in_a_dosing_clause(quote, match))
 
 
 def _in_a_dosing_clause(quote: str, match: re.Match) -> bool:
@@ -563,7 +579,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
             if result and normalized_quantity_number(result[1]) == number:
                 if analyte in _SPECIMEN_SHARED_ITEMS and _NOT_A_SINGLE_RESULT.match(tail, result.end()):
                     continue
-                if not result[2] and analyte in _DOSE_SHARED_ITEMS and _in_a_dosing_clause(quote, match):
+                if not result[2] and not _unit_less_reading(analyte, number, quote, match):
                     continue
                 # an omitted unit must not bypass the item's units: the quoted one is checked too;
                 # spellings of one unit (×10^3, ×10³, x10^3) compare by their display form

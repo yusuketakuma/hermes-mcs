@@ -302,9 +302,9 @@ def test_a_different_power_of_ten_still_does_not_confirm():
     assert lab["normalized"]["confirmation"] == "unverified"
 
 
-# A unit-less amount of a salt item (or of an unnamed item) in a clause that also
-# carries a dosing cue (分2, 毎食後, 点滴, 週1回 ...) is a dose; a space, a line break
-# or punctuation between the acid and the item does not make it a blood value.
+# A unit-less amount of a salt item outside the item's plausible band is a dose
+# whatever follows it; a space, a line break or punctuation between the acid and
+# the item does not make it a blood value.
 _LATIN = {"ナトリウム": "Na", "カリウム": "K", "カルシウム": "Ca", "マグネシウム": "Mg"}
 _DOSED_SALTS = [
     ("ナトリウム", "200", "バルプロ酸 ナトリウム 200 分2"),
@@ -321,7 +321,6 @@ _DOSED_SALTS = [
     ("マグネシウム", "330", "酸化　マグネシウム 330 分3"),
     ("カルシウム", "500", "炭酸 カルシウム 500 分3"),
     ("リチウム", "200", "炭酸 リチウム 200 分2"),
-    ("カリウム", "8", "ブドウ糖カリウム 8 点滴"),
     ("ナトリウム", "3", "重曹 ナトリウム 3 分3"),
     # Own synthetic lines.
     ("カリウム", "600", "塩化 カリウム 600 1日3回"),
@@ -335,7 +334,6 @@ _DOSED_SALTS = [
     ("カリウム", "10", "グルコン酸 カリウム 10 日2回"),
     ("カリウム", "20", "塩化 カリウム 20 点滴"),
     ("カルシウム", "500", "沈降炭酸 カルシウム 500 食後"),
-    ("カリウム", "1.5", "ワルファリン カリウム 1.5 内服中"),
     ("ナトリウム", "500", "チオ硫酸 ナトリウム 500 静注"),
     ("カルシウム", "1", "グルコン酸 カルシウム 1 食前"),
     ("アムロジピン", "5", "アムロジピン 5 分1"),
@@ -419,3 +417,107 @@ def test_a_lab_unit_in_the_source_keeps_the_reading_next_to_dosing_words(name, v
 ])
 def test_a_unit_less_lab_without_a_dosing_cue_in_its_clause_keeps_the_reading(name, value, body):
     assert clinical_values.lab_candidate(name, value, None, body)["confirmation"] == "quote_supported"
+
+
+# Drug amounts written without a unit: outside the analyte's plausible band they
+# stay candidates with or without any dosing word.
+_DOSES_WITHOUT_A_CUE_WORD = [
+    *(("ナトリウム", "200", f"バルプロ酸 ナトリウム 200 {word}") for word in (
+        "毎朝", "夕のみ", "寝る前", "隔週", "月1", "継続", "増量", "減量", "再開", "中止",
+        "追加", "開始", "朝", "毎日", "朝1夕1", "持続")),
+    *(("カリウム", "600", f"塩化 カリウム 600 {word}") for word in ("毎朝", "夕のみ", "継続", "再開")),
+    *(("マグネシウム", "330", f"酸化 マグネシウム 330 {word}") for word in ("毎朝", "継続", "減量")),
+    ("カルシウム", "500", "乳酸 カルシウム 500 毎朝"),
+    ("ナトリウム", "200", "ナトリウム 200 毎朝"),
+    ("ナトリウム", "200", "バルプロ酸 ナトリウム 200"),
+    ("ナトリウム", "200", "バルプロ酸 ナトリウム 200 です"),
+    ("ナトリウム", "200", "バルプロ酸 ナトリウム 200、分2"),
+    ("ナトリウム", "200", "バルプロ酸 ナトリウム 200。毎食後"),
+    ("ナトリウム", "200", "・バルプロ酸 ナトリウム 200\n・塩化 カリウム 600"),
+    ("マグネシウム", "330", "①バルプロ酸 ナトリウム 200\n②塩化 カリウム 600\n③酸化 マグネシウム 330"),
+    ("ナトリウム", "35", "アレンドロン酸 ナトリウム 35"),
+    ("ナトリウム", "17.5", "リセドロン酸 ナトリウム 17.5"),
+    ("カルシウム", "1", "グルコン酸 カルシウム 1"),
+]
+
+
+@pytest.mark.parametrize("name,value,body", _DOSES_WITHOUT_A_CUE_WORD)
+def test_a_unit_less_amount_outside_the_band_stays_a_candidate(name, value, body):
+    lab = _validated(name, value, None, body)
+    assert lab["normalized"]["confirmation"] == "unverified"
+
+
+# Timing and route words also say when blood was drawn; an in-band unit-less value
+# next to them is the reading. So is an amount whose dosing words sit in another clause.
+_ELECTROLYTES = (("ナトリウム", "128"), ("カリウム", "5.8"), ("カルシウム", "9.1"), ("マグネシウム", "2.0"))
+_SAMPLING_CONTEXTS = (
+    "食後 {}", "食前採血 {}", "朝食前 {}", "起床時 {}", "処方前 {}", "採血 {} 投与前",
+    "{} 食後2時間", "{} のため点滴", "{}\n点滴開始", "点滴後 {}", "{} 内服前の採血",
+    "{} 経口摂取不良", "{} 週1回測定", "{} 月1回採血", "朝夕 {}", "{} 就寝前に採血",
+)
+
+
+@pytest.mark.parametrize("name,value,body", [
+    (name, value, context.format(f"{name} {value}"))
+    for name, value in _ELECTROLYTES for context in _SAMPLING_CONTEXTS
+])
+def test_timing_and_route_words_do_not_hide_an_in_band_reading(name, value, body):
+    lab = _validated(name, value, None, body)
+    assert lab["normalized"]["confirmation"] == "quote_supported"
+    assert not lab.get("unverified", False)
+
+
+@pytest.mark.parametrize("name,value,unit,body", [
+    ("カリウム", "5.8", None, "カリウム 5.8 のため合成薬A 中止"),
+    ("ナトリウム", "128", None, "ナトリウム 128、合成薬B 1錠追加"),
+    ("ナトリウム", "128", None, "ナトリウム 128 低値のため補充 開始"),
+    ("Ca", "9.1", "mg/dL", "Ca 9.1mg/dL 食後"),
+    ("ナトリウム", "138", None, "ナトリウム 138、カリウム 4.2"),
+    ("カリウム", "4.2", None, "ナトリウム 138、カリウム 4.2"),
+])
+def test_the_owner_examples_stay_confirmed(name, value, unit, body):
+    assert _validated(name, value, unit, body)["normalized"]["confirmation"] == "quote_supported"
+
+
+# Each band holds just inside and drops just outside, in the item's conventional unit.
+@pytest.mark.parametrize("name,inside,outside", [
+    ("ナトリウム", ("100", "180"), ("99.9", "180.1")),
+    ("カリウム", ("1.5", "9.0"), ("1.4", "9.1")),
+    ("カルシウム", ("4.0", "16.0"), ("3.9", "16.1")),
+    ("マグネシウム", ("0.5", "6.0"), ("0.4", "6.1")),
+])
+def test_a_unit_less_electrolyte_is_confirmed_only_inside_its_band(name, inside, outside):
+    for value in inside:
+        assert clinical_values.lab_candidate(name, value, None, f"{name} {value}")["confirmation"] \
+            == "quote_supported", value
+    for value in outside:
+        assert clinical_values.lab_candidate(name, value, None, f"{name} {value}")["confirmation"] \
+            == "unverified", value
+
+
+@pytest.mark.parametrize("name,value,unit,body", [
+    ("カルシウム", "1.2", "mmol/L", "イオン化 カルシウム 1.2mmol/L"),
+    ("カルシウム", "1.2", None, "イオン化 カルシウム 1.2mmol/L"),
+    ("マグネシウム", "0.8", "mmol/L", "マグネシウム 0.8mmol/L"),
+    ("ナトリウム", "98", "mEq/L", "ナトリウム 98mEq/L"),
+    ("Xyz", "7.1", "mg/dL", "Xyz 7.1mg/dL 毎朝"),
+])
+def test_a_lab_unit_in_the_source_is_not_bound_by_the_band(name, value, unit, body):
+    assert _validated(name, value, unit, body)["normalized"]["confirmation"] == "quote_supported"
+
+
+# In-band amounts are still doses when their clause names a dosing frequency, a
+# PRN use or a dosage form or count; the cue may follow or precede the item.
+@pytest.mark.parametrize("name,value,body", [
+    ("カリウム", "5", "塩化 カリウム 5 分2"),
+    ("カリウム", "5", "分2 塩化 カリウム 5"),
+    ("カリウム", "2", "塩化 カリウム 2 1日3回"),
+    ("カリウム", "2", "塩化 カリウム 2 日2回"),
+    ("カリウム", "2", "塩化 カリウム 2 頓服"),
+    ("カリウム", "2", "塩化 カリウム 2 錠"),
+    ("マグネシウム", "2", "酸化 マグネシウム 2 カプセル"),
+    ("ナトリウム", "150", "炭酸水素 ナトリウム 150 1包"),
+    ("カルシウム", "5", "ポリスチレンスルホン酸 カルシウム 5 包"),
+])
+def test_an_in_band_amount_with_a_dosing_cue_stays_a_candidate(name, value, body):
+    assert _validated(name, value, None, body)["normalized"]["confirmation"] == "unverified"
