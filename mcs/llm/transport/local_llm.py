@@ -869,6 +869,18 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
     or the caller's own slot decision — governs probes exactly as it
     does the calls they precede.
     """
+    if scheduling_enabled() and deadline is not None and _OWNED_TURN.get() is None:
+        _validate_chat_args('Reply with {"ok": true}', endpoint, timeout, 20, deadline)
+        preferred = slot if type(slot) is int and 0 <= slot < SLOT_COUNT else request_slot()
+        with _request_turn(deadline, PROBE_TURN_MIN_S, preferred) as selected:
+            if selected is None:
+                return None
+            token = _OWNED_TURN.set(selected)
+            try:
+                return probe_format(endpoint, model, schema, timeout, verify, deadline,
+                                    request_fn, selected, admission_token, error_out)
+            finally:
+                _OWNED_TURN.reset(token)
     verify = verify or (lambda text: isinstance(_json_obj(text), dict))
     if error_out is None:
         error_out = {}
