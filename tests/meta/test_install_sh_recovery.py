@@ -361,3 +361,116 @@ def test_fresh_install_stop_keeps_hold_guidance_not_stage_claim(tmp_path):
     assert r.returncode != 0
     assert "導入は保留中です" in r.stderr
     assert "担当者に確認してください" in r.stderr
+
+
+def test_unchanged_world_readable_repo_pointer_is_made_private(tmp_path):
+    """Installs from before umask 077 left repo_path 0644 with the same content;
+    services refuse the watchdog as unowned unless it is 0600, so the mode is
+    repaired before stage 5 (here stage 5 fails and stage 6 never runs)."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(mode=0o700, parents=True)
+    pointer = rec / "repo_path"
+    pointer.write_text(str(ROOT) + "\n")
+    pointer.chmod(0o644)
+    r = _run({**env, "STUB_FAIL_SERVICES": "1"}, hermes_home)
+    assert r.returncode != 0
+    assert "常駐サービスの登録に問題があります" in r.stderr
+    assert pointer.read_text() == str(ROOT) + "\n"
+    assert pointer.stat().st_mode & 0o777 == 0o600
+
+
+def test_unrepairable_repo_pointer_does_not_stop_install_without_watchdog(tmp_path):
+    """A repo_path whose mode cannot be changed (another owner, uchg) only
+    warns: services and recovery are skipped here, and stage 5's ownership
+    check refuses on its own when it is reached."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    (stub_root / "bin/chmod").write_text(
+        '#!/bin/sh\ncase "$2" in */repo_path) exit 1 ;; esac\nexec /bin/chmod "$@"\n')
+    (stub_root / "bin/chmod").chmod(0o700)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(mode=0o700, parents=True)
+    pointer = rec / "repo_path"
+    pointer.write_text(str(ROOT) + "\n")
+    pointer.chmod(0o644)
+    r = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin",
+             "--no-services", "--no-recovery")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "注意:" in r.stderr and "repo_path のアクセス権" in r.stderr
+    assert pointer.read_text() == str(ROOT) + "\n"
+    assert pointer.stat().st_mode & 0o777 == 0o644
+
+
+def test_unchanged_world_readable_watchdog_files_are_made_private(tmp_path):
+    """The pre-umask tool (0755) and plist (0644) also fail the ownership
+    check, and stage 5 runs before stage 6 could republish them; files others
+    can write are not laundered into private ones."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(mode=0o700, parents=True)
+    tool, pointer = rec / "mcs_recover.py", rec / "repo_path"
+    watch = home / "Library/LaunchAgents/org.mcs.recovery.plist"
+    watch.parent.mkdir(parents=True)
+    tool.write_bytes(b"# synthetic prior tool\n")
+    pointer.write_text(str(ROOT) + "\n")
+    watch.write_bytes(plistlib.dumps({"Label": "org.mcs.recovery", "ProgramArguments": [
+        "/usr/bin/python3", str(tool), "--if-stale"]}))
+    tool.chmod(0o755)
+    pointer.chmod(0o664)
+    watch.chmod(0o644)
+    before = {path: path.read_bytes() for path in (tool, pointer, watch)}
+    r = _run({**env, "STUB_FAIL_SERVICES": "1"}, hermes_home)
+    assert r.returncode != 0
+    assert "常駐サービスの登録に問題があります" in r.stderr
+    assert {path: path.read_bytes() for path in before} == before
+    assert tool.stat().st_mode & 0o777 == 0o700
+    assert watch.stat().st_mode & 0o777 == 0o600
+    assert pointer.stat().st_mode & 0o777 == 0o664
+    assert "repo_path のアクセス権を 600 に変更できませんでした" in r.stderr
+
+
+def _loose(directory):
+    import os
+    import re
+    import subprocess
+    function = re.search(r"^recovery_dir_loose\(\) \{.*?^\}\n", INSTALL.read_text(), re.M | re.S).group(0)
+    result = subprocess.run(["/bin/sh", "-c", function + 'recovery_dir_loose'],
+                            env={**os.environ, "RECOVERY_DIR": str(directory)}, timeout=10)
+    return result.returncode == 0
+
+
+@pytest.mark.parametrize("mode, loose", [(0o755, True), (0o700, False), (0o775, False), (0o757, False)])
+def test_only_an_own_recovery_directory_without_group_or_other_write_is_tightened(tmp_path, mode, loose):
+    directory = tmp_path / "recovery"
+    directory.mkdir()
+    directory.chmod(mode)
+    assert _loose(directory) is loose
+
+
+def test_linked_and_missing_recovery_directories_are_left_alone(tmp_path):
+    target = tmp_path / "real"
+    target.mkdir()
+    target.chmod(0o755)
+    link = tmp_path / "link"
+    link.symlink_to(target)
+    assert not _loose(link)
+    assert not _loose(tmp_path / "missing")
+
+
+def test_legacy_0755_recovery_directory_is_tightened_by_install(tmp_path):
+    """v1.0.3-v1.0.6 created ~/.mcs-recovery 0755; the log helper requires 0700."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(parents=True)
+    rec.chmod(0o755)
+    _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin", "--no-services")
+    assert rec.stat().st_mode & 0o777 == 0o700
+
+
+def test_dry_run_leaves_a_legacy_recovery_directory_unchanged(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(parents=True)
+    rec.chmod(0o755)
+    _run(env, hermes_home, "--dry-run")
+    assert rec.stat().st_mode & 0o777 == 0o755

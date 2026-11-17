@@ -687,6 +687,21 @@ _install_progress services running
 # the agents stage 5/6 load log to / watch these — they must exist first
 # (new ones are 0700 via umask; existing modes are kept)
 mkdir -p "$MCS_ROOT" "$MCS_DATA" "$MCS_DATA/cmd" "$MCS_DATA/cmd_int"
+# Installs before umask 077 left the watchdog's tool, repo_path and plist
+# readable by others, and services refuse the watchdog as unowned unless they
+# are private. Stage 5 runs before stage 6 republishes them, so tighten them
+# here. Links and files others can write are left alone (the tool's bytes are
+# not verified). A failed repair only warns: the ownership check refuses itself.
+_private_recovery_file() {  # <mode> <file>
+    if [ ! -f "$2" ] || [ -L "$2" ]; then return 0; fi
+    _w="$(find "$2" -prune \( -perm -020 -o -perm -002 \) -print)" || _w=unknown
+    if [ -n "$_w" ] || ! chmod "$1" "$2"; then
+        warn "$2 のアクセス権を $1 に変更できませんでした。所有者と、他のユーザーが書き込めないことを確認してください。変更できるまで、復旧監視の Python の切替えは止まります"
+    fi
+}
+_private_recovery_file 700 "$RECOVERY_DIR/mcs_recover.py"
+_private_recovery_file 600 "$RECOVERY_DIR/repo_path"
+_private_recovery_file 600 "$WATCH_PLIST"
 if [ "$SKIP_SERVICES" -eq 1 ]; then
     skip "--no-services のため省略します。後で次のコマンドで登録してください:"
     skip "  $(shell_quote "$MCS_PY") $(shell_quote "$SETUP") services"
