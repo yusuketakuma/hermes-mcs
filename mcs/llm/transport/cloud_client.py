@@ -100,6 +100,8 @@ class CloudClient:
             raise ValueError("max_tokens_invalid")
         if type(deadline) not in (int, float) or not math.isfinite(deadline):
             raise ValueError("deadline_invalid")
+        if not callable(reserve_fn):   # no reservation, no send
+            raise ValueError("reserve_fn_invalid")
         if not isinstance(self.api_key, str) or not self.api_key:
             raise CloudError("no_api_key")
         body = self.body(prompt, max_tokens, cache_prefix)

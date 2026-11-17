@@ -749,3 +749,12 @@ def test_complete_requires_a_reserve_function():
     with pytest.raises(TypeError):
         a.AnthropicClient("synthetic", post_fn=lambda *args: (200, {}, b"{}")).complete(
             "synthetic", deadline=time.monotonic() + 10)
+
+
+@pytest.mark.parametrize("reserve_fn", [None, "reserve", 0])
+def test_complete_refuses_to_send_without_a_callable_reservation(reserve_fn):
+    calls = []
+    client = a.AnthropicClient("synthetic", post_fn=lambda *args: calls.append(args) or (200, {}, b"{}"))
+    with pytest.raises(ValueError, match="reserve_fn_invalid"):
+        client.complete("synthetic", deadline=time.monotonic() + 10, reserve_fn=reserve_fn)
+    assert calls == []
