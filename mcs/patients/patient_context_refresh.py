@@ -632,17 +632,32 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
 
 
 def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None, role="any"):
-    """Run one unit; after a unit that waits for a context child, select again past its patient.
+    """Run one unit; under a takeover, after a unit that waits for a context child, select again
+    past its patient.
 
-    A pass that selected no other patient reports that wait."""
+    A takeover pass that found nothing else to serve (no patient selected, and only waiting or
+    nothing due) reports the child wait, so that the lane paces it; one that used up its units
+    reports an incomplete scan. Any other result, such as another worker in the selection or a
+    closed window, is reported as it is."""
     waited = None
-    for _ in range(CHILD_WAIT_UNITS):
+    for _ in range(CHILD_WAIT_UNITS if role == "local_takeover" else 1):
         selected, result = yield from _run_one_unit(ledger, cfg, deadline=deadline, admit=admit,
                                                     complete=complete, local_admit=local_admit, role=role)
-        if not isinstance(result, dict) or result.get("reason") != CHILD_WAIT_REASON:
-            return waited if waited is not None and selected is None else result
-        waited = result
-    return waited
+        if isinstance(result, dict) and result.get("reason") == CHILD_WAIT_REASON:
+            waited = result
+            continue
+        if (role == "local_takeover" and selected is None and isinstance(result, dict)
+                and result.get("status") in ("deferred", "complete")
+                and result.get("reason") in (None, "patient_context_waiting")):
+            if waited is not None:
+                return waited
+            if result.get("wait_cloud_worker"):
+                # Every patient it could serve waits for a child: the patients it passed over.
+                return {**result, "status": "deferred", "reason": CHILD_WAIT_REASON}
+        return result
+    # The pass ended on its unit budget, not on patients it could not serve: like a pass that
+    # ended on its candidate budget, it continues from its bookmark without waiting.
+    return {**waited, "reason": "patient_context_scan_incomplete"}
 
 
 def _run_one_unit(ledger, cfg, *, deadline, admit, complete, local_admit, role):

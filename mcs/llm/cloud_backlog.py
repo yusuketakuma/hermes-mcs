@@ -873,7 +873,10 @@ def _context_pass_observation(result):
     # waiting additions (quota-fail double count or two single-count scopes),
     # and at most 2 pending reads per candidate; at most one skip per candidate.
     # A patient busy with another worker counts once per candidate; patients
-    # of the other worker role have their own budget of 64 per pass.
+    # of the other worker role have their own budget of 64 per pass. These are
+    # a child's bounds: only a local lane's takeover passes over patients that
+    # wait for a child (up to 64 more ``waiting``), and its passes are not
+    # recorded here.
     for key, limit in (("waiting", 16), ("scan_reads", 16), ("scan_interrupts", 1),
                        ("skip_patient_invalid", 8),
                        ("wait_no_eligible_sources", 8), ("wait_no_due_lane", 16),
