@@ -65,7 +65,10 @@ def _legacy_inventory():
 def _bundle(source, policy, monkeypatch, legacy):
     with monkeypatch.context() as patch:
         if legacy:
-            patch.setattr(backup_evidence, "inventory_snapshot", lambda path: _legacy_inventory())
+            collector = backup_evidence.inventory_snapshot
+            def legacy_writer(path, **kwargs):
+                return collector(path, **kwargs) if kwargs else _legacy_inventory()
+            patch.setattr(backup_evidence, "inventory_snapshot", legacy_writer)
         return backup.offsite(str(source), policy, lambda: KEY)
 
 
@@ -111,8 +114,8 @@ def test_old_and_new_bundle_verify_and_held_consent_preserve_data(inventory_worl
     receipt = _bundle(source, policy, monkeypatch, legacy)
     before = backup.file_sha256(source)
     target = Path(policy.scratch_dir) / "held"
-    report = backup.verify(receipt["bundle"], receipt["sha256"], policy,
-                           lambda: KEY, drill_destination=str(target))
+    report = backup.restore(receipt["bundle"], receipt["sha256"], policy,
+                            lambda: KEY, destination=str(target))
     assert report["inventory"].get("v") == (None if legacy else 2)
     plan = restore.plan(str(target), source_sha256=receipt["sha256"])
     approval = restore.approve(
@@ -145,8 +148,8 @@ def test_held_report_version_cannot_reinterpret_its_saved_counts(inventory_world
     source, policy = inventory_world
     receipt = _bundle(source, policy, monkeypatch, legacy)
     target = Path(policy.scratch_dir) / "held"
-    backup.verify(receipt["bundle"], receipt["sha256"], policy, lambda: KEY,
-                  drill_destination=str(target))
+    backup.restore(receipt["bundle"], receipt["sha256"], policy, lambda: KEY,
+                   destination=str(target))
     path = target / "restore.json"
     report = json.loads(path.read_text())
     if legacy:
