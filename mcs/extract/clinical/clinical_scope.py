@@ -93,9 +93,12 @@ _CONDITIONAL_MARK = re.compile(
     r"た(?:い|が|こと|ため|為|ので|後|と(?:報告|連絡|記載)|(?=$|[。！？!?、,\s]))|"
     r"ない|なく(?!ても)|なかった|よう|ろ|もら(?:う|い|った)|らせ|らべ|っかり)|"
     r"万一|万が一|(?:場合|とき|(?<![0-9０-９一二三四五六七八九十])(?<!採血)(?<!測定)(?<!検査)(?<!服用)(?<!投与)(?<!訪問)(?<!往診)時)(?:は|には|に)|"
-    r"なら(?!ない|なく|なかった|れ|ず|ぬ)|たら(?!しい)|れば|"
-    # A standing order's comparator on a number (SpO2 90%以下で酸素開始) is a threshold, not a reading;
-    # 以下で推移/経過/安定 still reports the patient's own course.
+    r"なら(?!ない|なく|なかった|れ|ず|ぬ)|たら(?!しい)|れば")
+
+# A standing order's comparator on a number (SpO2 90%以下で酸素開始) is a threshold, not a reading;
+# 以下で推移/経過/安定 still reports the patient's own course. It conditions only its own clause
+# (no break between it and the span), never a later measured value or request after a 、.
+_THRESHOLD_MARK = re.compile(
     r"(?<=[0-9０-９%％℃度台LgＬ分回])[ \t　]*(?:(?:以上|以下|未満|超)"
     r"(?:で(?!推移|経過|安定|維持|続|変動|あ|し|す)|は|なら|の?(?:場合|時|とき))"
     r"|(?:を超え|を下回|を切)(?:る|た|った)?(?:と(?!の|こ)|なら|場合|時|とき))")
@@ -115,10 +118,16 @@ _ADDITIVE_MOSHI = re.compile(r"(?<=[一-龥々ァ-ヶーA-Za-z0-9])もし(?=[、
 _CONSEQUENT = re.compile(r"[^。！？!?\n]*?(?:れば|ければ|たら|なら|ても|場合|とき|際)")
 
 
-def _has_condition(body, start, end):
+def _has_condition(body, start, end, span=None):
     for match in _CONDITIONAL_MARK.finditer(body, start, end):
         if (not match.group().startswith("もし") or not _ADDITIVE_MOSHI.match(body, match.start())
                 or _CONSEQUENT.match(body, match.end())):
+            return True
+    for match in _THRESHOLD_MARK.finditer(body, start, end):
+        if span is None:
+            return True
+        gap = body[span:match.start()] if match.start() >= span else body[match.end():span]
+        if _SCOPE_BREAK.search(gap) is None:
             return True
     return False
 
@@ -238,7 +247,7 @@ def _source_scope_axes(body, start, end, *, patient_name=None, default="patient"
     sentence = max(body.rfind(c, 0, start) for c in "。！？!?;；\n") + 1
     condition_start = max((m.end() for m in _SCOPE_BREAK.finditer(body, sentence, start)
                            if m.group() not in "、,"), default=sentence)
-    if _has_condition(body, condition_start, right.start() if right else len(body)):
+    if _has_condition(body, condition_start, right.start() if right else len(body), start):
         return scope, "conditional"
     if (_QUESTION.search(clause) or right is not None and body[right.start()] in "？?"):
         return scope, "unknown"
@@ -287,7 +296,7 @@ def source_axes(body, start, end, *, default="patient"):
     if owners:
         left = owners[-1].start()
     before = body[left:start]
-    if _has_condition(body, left, start):
+    if _has_condition(body, left, start, start):
         return subject, "conditional"
     times = [(m.end(), "current") for m in CURRENT_MARK.finditer(before)]
     times += [(m.end(), "past") for rx in (_NONCURRENT_MARK, _MEASURED_PAST_MARK)

@@ -84,8 +84,8 @@ def clinical_urgency_quote(quote, *, symptom=None):
             continue
         if re.match(
                 prefix + r"(?:は|も|が|を)?(?:して|認めて|認め|はして)?(?:では|で|じゃ)?"
-                r"(?:いません|ありません|ません|ない|なかった|なし|なく|ず|られ(?:ず|ない|ません)"
-                r"|[見み]られ(?:ず|ない|ません|なかった)|せず)", tail):
+                r"(?:いません|ありません|ません|ない|なかった|なし|なく|られ(?:ず|ない|ません)"
+                r"|[見み]られ(?:ず|ない|ません|なかった)|せず|ず(?=$|[、,。\s　]|に|と))", tail):
             clause_start = max((quote.rfind(c, 0, match.start()) for c in _CLAUSE_BREAK_CHARS),
                                default=-1) + 1
             if (match[0] == "反応"

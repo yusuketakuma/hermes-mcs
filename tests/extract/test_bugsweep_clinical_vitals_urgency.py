@@ -172,3 +172,31 @@ def test_a_shock_blood_pressure_is_still_a_reading(body, vitals):
 @pytest.mark.parametrize("body", ["血圧 12/5", "血圧 11/30"])
 def test_a_month_day_pair_is_not_a_blood_pressure(body):
     assert "vitals" not in _rule(body)
+
+
+@pytest.mark.parametrize("quote", [
+    "出血がずっと止まらず、至急往診をお願いします",
+    "痛みがずっと続いており至急往診をお願いします",
+    "嘔吐がずきずきと続く",
+])
+def test_zutto_is_not_the_negative_ending_zu(quote):
+    assert clinical_urgency.clinical_urgency_quote(quote) is True
+
+
+@pytest.mark.parametrize("quote", ["出血は見られず", "呼吸困難を認めず、安定", "痛みはなく"])
+def test_a_real_negative_ending_still_denies_the_cue(quote):
+    assert clinical_urgency.clinical_urgency_quote(quote) is False
+
+
+def test_a_threshold_order_does_not_condition_a_later_reading_or_request():
+    assert _rule("SpO2 90%以下で酸素開始の指示あり、本日SpO2 88%")["vitals"] == {"spo2": 88}
+    assert _rule("嘔吐5回以上で水分がとれず、至急往診をお願いします")["urgency"] == "high"
+    assert _rule("SpO2 90%以下で呼吸苦が強く、救急搬送をお願いします")["urgency"] == "high"
+    assert "vitals" not in _rule("SpO2 90%以下で酸素2L開始してください")
+
+
+@pytest.mark.parametrize("body, vitals", [
+    ("血圧 29/20", None), ("血圧 30/20", {"sbp": 30, "dbp": 20}), ("血圧 80/80", None),
+])
+def test_blood_pressure_systolic_floor_and_equal_pair(body, vitals):
+    assert _rule(body).get("vitals") == vitals

@@ -541,7 +541,7 @@ def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(
     ("clinical_values", "prose_preserves_current_readings"),
     ("clinical_values", "grounded_vitals"),
     ("clinical_values", "VITAL_NUMBER_TOKEN"),
-    ("clinical_values", "_VITAL_CTX_EXCLUDE"),
+    ("clinical_values", "_VITAL_UNMEASURED"),
     ("patient_context", "pharmacy_state_items"),
     ("patient_context", "project_context_items"),
     ("patient_context", "PHARMACY_STATE_KEYS"),
@@ -591,7 +591,7 @@ def test_moved_definition_changes_new_candidate_identity(monkeypatch, module_nam
         monkeypatch.setattr(module, member, "synthetic-manifest-version")
     elif member == "SCHED_KIND":
         monkeypatch.setattr(module, member, "synthetic-semantic-sched")
-    elif member in ("_AMOUNT_RE", "_VITAL_CTX_EXCLUDE", "MEDICATION_TOKEN"):
+    elif member in ("_AMOUNT_RE", "_VITAL_UNMEASURED", "MEDICATION_TOKEN"):
         import re
         old = getattr(module, member)
         monkeypatch.setattr(module, member, re.compile(old.pattern + "(?:)", old.flags))
