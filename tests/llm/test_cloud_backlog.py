@@ -699,6 +699,13 @@ def test_worker_keeps_unreadable_config_closed_without_work(carry_worker, monkey
     ('global-unknown', 'cloud_blocked'),
     ('budget-daily_cap', 'daily_cap'),
     ('budget-unknown', 'cloud_blocked'),
+    ('global-http_429', 'http_429'),
+    ('global-auth_error', 'auth_error'),
+    ('global-payment_required', 'payment_required'),
+    ('global-contract_error', 'contract_error'),
+    ('global-transport', 'transport'),
+    ('budget-expired', 'expired'),
+    ('budget-not_started', 'not_started'),
 ])
 def test_worker_reports_each_wait_reason_once_per_change(carry_worker, monkeypatch, capsys, gate, code):
     import extract_llm
@@ -715,8 +722,10 @@ def test_worker_reports_each_wait_reason_once_per_change(carry_worker, monkeypat
     elif gate == 'global-unknown':
         monkeypatch.setattr(extract_llm.cloud_policy, 'global_block_reason',
                             lambda *a, **kw: 'synthetic-private-detail')
-    elif gate == 'budget-daily_cap':
-        monkeypatch.setattr(extract_llm.cloud_policy, 'budget_block_reason', lambda *a, **kw: 'daily_cap')
+    elif gate.startswith('global-'):
+        monkeypatch.setattr(extract_llm.cloud_policy, 'global_block_reason', lambda *a, **kw: code)
+    elif gate in ('budget-daily_cap', 'budget-expired', 'budget-not_started'):
+        monkeypatch.setattr(extract_llm.cloud_policy, 'budget_block_reason', lambda *a, **kw: code)
     else:
         monkeypatch.setattr(extract_llm.cloud_policy, 'budget_block_reason',
                             lambda *a, **kw: 'synthetic-private-detail')

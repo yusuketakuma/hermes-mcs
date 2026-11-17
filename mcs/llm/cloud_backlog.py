@@ -435,7 +435,10 @@ class CloudBacklogPool:
 _WAIT_CODES = {"paused", "circuit_open", "pricing_unverified", "profile_invalid",
                "daily_cap", "daily_cost_cap", "monthly_cap", "provider_budget_missing",
                "provider_daily_cap", "provider_monthly_cap", "window_history_unverified",
-               "window_cap"}
+               "window_cap", "expired", "not_started",
+               # fixed circuit failure classes (semantic_runtime): global_block_reason returns one while open
+               "auth_error", "payment_required", "pricing_unverified", "contract_error", "transport",
+               "timeout", "rate_limited", "http_402", "http_429", "http_529", "http_5xx"}
 
 # Fixed defer-reason vocabulary reported by extract_llm.run_pending — a raw
 # error class, config value or id is never a valid reason in the pass record.
