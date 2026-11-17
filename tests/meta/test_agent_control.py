@@ -286,14 +286,19 @@ def test_only_the_owner_and_reporting_review_bots_start_a_repair(review, actiona
     assert ac.actionable_review(review, OWNER) is actionable
 
 
-def _plan(reviews, comments=(), labels=None, busy=False, automation=True, pr=None):
+def _plan(reviews, comments=(), labels=None, busy=False, automation=True, pr=None, commits=()):
     pr = pr or {**_pr(), "state": "open"}
-    return ac.review_plan(pr, labels or {"5": ["担当:claude"]}, list(reviews), list(comments), automation, OWNER, busy)
+    return ac.review_plan(pr, labels or {"5": ["担当:claude"]}, list(reviews), list(comments), automation, OWNER, busy,
+                          list(commits))
+
+
+def _sent(reviews, count):
+    return {"reviews": reviews, "count": count, "dropped": [], "reason": ""}
 
 
 def test_new_findings_cost_one_attempt_together_and_are_never_counted_twice():
     plan = _plan([_review(11), _review(12, "devin-ai-integration[bot]", "**Devin Review** found 1 potential issue.")])
-    assert plan == {"reviews": [11, 12], "count": True, "reason": ""}
+    assert plan == _sent([11, 12], True)
     # once queued and taken, the same reviews start nothing
     done = [_mark("queued", "11,12"), _mark("handled", "11,12")]
     assert _plan([_review(11), _review(12)], done)["reviews"] == []
@@ -309,11 +314,48 @@ def test_a_review_of_an_older_head_or_without_findings_starts_nothing():
 
 def test_a_queued_review_no_run_took_is_sent_again_without_a_new_attempt():
     queued = [_mark("queued", "11")]
-    assert _plan([_review(11)], queued) == {"reviews": [11], "count": False, "reason": ""}
-    # while a Claude writer run waits, re-sending would cancel it
-    assert _plan([_review(11)], queued, busy=True)["reviews"] == []
-    # a new finding still counts, and carries the waiting one along
-    assert _plan([_review(11), _review(13)], queued, busy=True) == {"reviews": [11, 13], "count": True, "reason": ""}
+    assert _plan([_review(11)], queued) == _sent([11], False)
+    # a new finding counts once, and carries the waiting one along
+    assert _plan([_review(11), _review(13)], queued) == _sent([11, 13], True)
+
+
+def test_nothing_is_sent_or_counted_while_a_claude_writer_run_waits_or_runs():
+    # another waiting run would cancel the older one (a CI repair already counted)
+    for plan in (_plan([_review(11)], [_mark("queued", "11")], busy=True), _plan([_review(13)], busy=True)):
+        assert plan["reviews"] == [] and plan["count"] is False and plan["reason"]
+    # the next sweep still finds the new review: nothing marked it
+    assert _plan([_review(13)]) == _sent([13], True)
+
+
+def _commit(sha, *parents):
+    return {"sha": sha, "parents": [{"sha": p} for p in parents]}
+
+
+MAIN = "c" * 40
+MID = "d" * 40
+
+
+def test_a_review_survives_main_merges_but_not_a_fix_push():
+    merged = [_commit(HEAD, MID, MAIN), _commit(MID, OLD, MAIN)]
+    assert ac.only_merges_since(merged, OLD, HEAD)
+    owner = _review(11, OWNER, "", "CHANGES_REQUESTED", sha=OLD)
+    bot = _review(12, sha=OLD)
+    assert _plan([owner, bot], commits=merged) == _sent([11, 12], True)
+    fixed = [_commit(HEAD, OLD)]
+    assert not ac.only_merges_since(fixed, OLD, HEAD) and not ac.only_merges_since([], OLD, HEAD)
+    # a bot's review of a replaced head is dropped quietly; the owner's is reported once
+    plan = _plan([owner, bot], commits=fixed)
+    assert plan["reviews"] == [] and plan["dropped"] == [11]
+    assert _plan([owner, bot], [_mark("dropped", "11")], commits=fixed)["dropped"] == []
+
+
+def test_broken_or_dismissed_input_starts_nothing():
+    assert ac.review_marks([_mark("queued", ",,11,")])["queued"] == {11}
+    assert not ac.actionable_review(_review(1, OWNER, "", "DISMISSED"), OWNER)
+    assert not ac.actionable_review(_review(1, state="DISMISSED"), OWNER)
+    many = {**_pr(body=" ".join(f"Fixes #{n}" for n in range(1, ac.MAX_LINKED_ISSUES + 2))), "state": "open"}
+    labels = {str(n): ["担当:claude"] for n in range(1, ac.MAX_LINKED_ISSUES + 2)}
+    assert "超える" in _plan([_review(11)], labels=labels, pr=many)["reason"]
 
 
 def test_review_findings_reuse_the_repair_eligibility_and_attempt_limit():
@@ -335,7 +377,11 @@ def test_cli_plans_review_findings(tmp_path, capsys):
     ac.main(["review", "--pr", str(tmp_path / "pr.json"), "--issue-labels", str(tmp_path / "labels.json"),
              "--reviews", str(tmp_path / "reviews.json"), "--comments", str(tmp_path / "comments.json"),
              "--owner", OWNER, "--automation", "true"])
-    assert json.loads(capsys.readouterr().out) == {"reviews": [11], "count": True, "reason": ""}
+    assert json.loads(capsys.readouterr().out) == _sent([11], True)
+    # the repair run's re-check keeps only reviews that report findings
+    (tmp_path / "picked.json").write_text(json.dumps([_review(11), _review(12, "someone"), _review(13, OWNER)]))
+    ac.main(["findings", "--reviews", str(tmp_path / "picked.json"), "--owner", OWNER])
+    assert json.loads(capsys.readouterr().out) == {"reviews": [11]}
 
 
 def test_review_workflow_never_runs_pr_code_and_hands_findings_as_data():
@@ -355,4 +401,10 @@ def test_review_workflow_never_runs_pr_code_and_hands_findings_as_data():
     repair = (ROOT / ".github/workflows/agent-claude-repair.yml").read_text()
     assert "^[0-9]+(,[0-9]+)*$" in repair and "agent-review:handled" in repair
     assert repair.index("agent-review:handled") < repair.index("ref: ${{ steps.pr.outputs.branch }}")
-    assert "> agent-review.md" in repair and ".git/info/exclude" in repair and "inputs.reviews }}" not in repair.split("prompt:")[1]
+    assert "> agent-review.md" in repair and ".git/info/exclude" in repair and "ls-files --error-unmatch" in repair
+    # every caller-typed id is re-checked, and only the ones with findings reach Claude
+    assert repair.index("agent_control.py findings") < repair.index("ref: ${{ steps.pr.outputs.branch }}")
+    assert "REVIEWS: ${{ steps.pr.outputs.findings }}" in repair
+    # the sweep: this repository's PRs only, one PR's error does not stop it, busy fails closed
+    assert ".head.repo.full_name == $repo" in review and "|| echo \"::warning::PR #$pr" in review
+    assert "--status \"$st\"" in review and "|| n=1" in review and "--limit 20" not in review and "inputs.reviews }}" not in repair.split("prompt:")[1]
