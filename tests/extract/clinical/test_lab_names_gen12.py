@@ -258,8 +258,13 @@ def test_pt_in_a_rehabilitation_clause_stays_a_candidate(value, body):
     assert lab["normalized"]["confirmation"] == "unverified"
 
 
-def test_pt_in_another_clause_than_the_rehabilitation_words_is_the_coagulation_time():
-    lab = _validated("PT", "12.0", "秒", "訪問リハは週2回。採血 PT 12.0秒、PT-INR 1.1")
+@pytest.mark.parametrize("body", [
+    "訪問リハは週2回。採血 PT 12.0秒、PT-INR 1.1",
+    "訪問リハは週2回、採血 PT 12.0秒",
+    "訪問リハは週2回\n採血 PT 12.0秒",
+])
+def test_pt_in_another_clause_than_the_rehabilitation_words_is_the_coagulation_time(body):
+    lab = _validated("PT", "12.0", "秒", body)
     assert lab["normalized"]["analyte"] == "prothrombin_time"
     assert lab["normalized"]["confirmation"] == "quote_supported"
 
@@ -565,9 +570,9 @@ def test_the_lab_layout_is_written_in_the_folded_form_it_is_matched_on():
 # flags, a note, a previous value, other readings or words about the value.
 _LAB_LAYOUTS = (
     "{}", "・{}", "- {}", "1. {}", "採血 {}", "採血で{}", "本日採血 {}", "本日の{}", "血液検査 {}",
-    "検査結果：{}", "【検査】{}", "電解質：{}", "緊急値：{}", "2026/11/16 {}", "11/16 {}", "11月16日 {}",
+    "検査結果：{}", "採血結果 {}", "症状経過及び検査結果：{}", "【検査】{}", "電解質：{}", "緊急値：{}", "2026/11/16 {}", "11/16 {}", "11月16日 {}",
     "{} 低値", "{}と低値", "{} ↓", "{} で推移", "{} 上昇", "{}で正常範囲", "{} 要経過観察",
-    "{}（前回 130）", "{} 前回 130", "{} 採血", "{}（1日2回採血）", "{}でした", "{}と報告します", "{} - 安定",
+    "{}（前回 130）", "{} 前回 130", "{} 採血", "{}（1日2回採血）", "{}でした", "{}と報告します", "{} - 安定", "{}により補液開始",
     "{}、合成薬B 1錠追加", "{} のため点滴", "{}。内服は分3で継続", "{}；合成薬A 分2継続",
     "合成薬A 1錠。{}", "合成薬A 1錠；{}",
 )
@@ -585,11 +590,11 @@ def test_a_unit_less_reading_in_a_lab_layout_is_confirmed(name, value, body):
 # break), katakana drug names, timing, PRN, dose and form words, ranges and trends.
 _OTHER_LAYOUTS = (
     "塩化 {}", "塩化、{}", "塩化\n{}", "塩化。{}", "乳酸 {}", "炭酸水素 {}", "維持液 {}", "スローケー {}",
-    "ロスバスタチン {}", "アトルバスタチン {}", "ロサルタン {}", "フェニトイン {}", "合成薬A 1錠、{}",
+    "ロスバスタチン {}", "アトルバスタチン {}", "ロサルタン {}", "フェニトイン {}", "合成薬A 1錠、{}", "スローケー 1錠 {}",
     "食後 {}", "朝食前 {}", "朝夕 {}", "点滴後 {}", "1T {}", "包 {}",
     "{} 食後2時間", "{} 内服前の採血", "{} 経口摂取不良", "{} 週1回測定", "{} を処方", "{} に増量",
     "{} 朝夕", "{} 適宜", "{} 疼痛時", "{} 不眠時", "{} とんぷく", "{} 倍散", "{} 半錠", "{} 朝1",
-    "{} 分2", "{} 1日2回", "{} 散在", "{} 包括", "{}→2", "{}⇒2", "{}±1", "{}前後", "{}台", "{}(2)",
+    "{} 分2", "{} 1日2回", "{} 散在", "{} 包括", "{}→2", "{}⇒2", "{}±1", "{}前後", "{}台", "{}(2)", "{},2", "{}-", "{}~",
 )
 
 
@@ -620,6 +625,10 @@ _PANELS = [
     ("ナトリウム：137　カリウム：4.3", ("ナトリウム", "137"), ("カリウム", "4.3")),
     ("ナトリウム 140 カリウム 4.2 クロール 104", ("ナトリウム", "140"), ("カリウム", "4.2")),
     ("Na 140 カリウム 4.2", ("カリウム", "4.2")),
+    ("ナトリウム 142，カリウム 4.1，カルシウム 9.3", ("ナトリウム", "142"), ("カリウム", "4.1"), ("カルシウム", "9.3")),
+    ("ナトリウム 138 mEq/L カリウム 4.0", ("カリウム", "4.0")),
+    ("血糖 110 カリウム 4.0", ("カリウム", "4.0")),
+    ("SpO2 98% カリウム 4.0", ("カリウム", "4.0")),
     ("BUN 20 カリウム 4.2", ("カリウム", "4.2")),
     ("Alb 3.0 補正カルシウム 9.0", ("カルシウム", "9.0")),
     ("血液検査\nナトリウム 138\nカリウム 4.2\nカルシウム 9.1", ("ナトリウム", "138"), ("カリウム", "4.2"),
@@ -727,6 +736,11 @@ def test_one_end_of_a_range_stays_a_candidate(name, value, body):
     lab = _validated(name, value, None, body)
     assert lab["normalized"]["confirmation"] == "unverified"
     assert lab["value"] == value
+
+
+@pytest.mark.parametrize("mark", ["〜", "～", "~", "ー", "–", "—", "－", "-", "から"])
+def test_a_range_of_an_item_without_a_band_stays_a_candidate(mark):
+    assert _confirmation("クレアチニン", "1.2", f"クレアチニン 1.2{mark}1.5mg/dL") == "unverified"
 
 
 def test_a_range_mark_without_a_second_number_and_a_later_range_keep_the_reading():

@@ -438,9 +438,8 @@ def _unit_less_reading(analyte: str | None, number: str, quote: str, match: re.M
 
 def _in_a_lab_layout(quote: str, at: int, value_end: int, lines: list[int]) -> bool:
     """Whether the item at ``at`` and its number ending at ``value_end`` sit in a lab layout."""
+    # The number was matched within the item's line, so both are on one line.
     first, last = _line_span(quote, at, lines)
-    if value_end > last:   # the label and the number are on different lines
-        return False
     # A sentence end (。 ;) starts a new statement; a comma or space does not (塩化、カリウム 4).
     start = max(first, quote.rfind("。", first, at) + 1, quote.rfind(";", first, at) + 1)
     # A salt stem ending the sentence or the line just before still names the item
@@ -463,8 +462,9 @@ def _glued_to_a_word(quote: str, at: int, evidence, starts: list, ends: list) ->
 
 def _part_of_drug_name(name: str, before: str) -> bool:
     """Whether a katakana item right after the original text ``before`` ends a drug name."""
-    # Adjacency is read in the original text: a space or line break separates words.
-    if not ("ァ" <= name[0] <= "ヺ") or name.endswith("濃度") or not before or before[-1].isspace():
+    # Adjacency is read in the original text: a space or line break separates words
+    # (the character before is then a space, and the last word is empty).
+    if not ("ァ" <= name[0] <= "ヺ") or name.endswith("濃度") or not before:
         return False
     previous = unicodedata.normalize("NFKC", before[-2:])[-1:]   # ﾌﾟ folds to one character
     return ("ァ" <= previous <= "ヺ" or previous == "ー"
@@ -496,7 +496,7 @@ _MONTH_DAY = re.compile(r"(?<![\d/年-])(\d{1,2})[/月](\d{1,2})日?(?![\d/])")
 # The words are folded once, like the quote they are matched on.
 _READING_UNIT = "|".join(re.escape(u) for u in sorted(_LAB_UNITS, key=len, reverse=True))
 _READING = (r"(?:" + _lab_name_pattern({n for spellings in _LAB_NAMES.values() for n in spellings})
-            + r"|[ァ-ヺー]{2,}+|[a-z][a-z0-9]*)(?:値|は|:|=)*[0-9]+(?:\.[0-9]+)?"
+            + r"|[ァ-ヺー]++|[a-z][a-z0-9]*)(?:値|は|:|=)*[0-9]+(?:\.[0-9]+)?"
             + rf"(?:{_READING_UNIT})?")
 _LAB_HEADER = "|".join((
     *map(re.escape, sorted(medical_document.LAB_HEADINGS, key=len, reverse=True)),
@@ -508,12 +508,12 @@ _LAB_PREFIX = re.compile(fold_surface(
     rf"(?:[【\[(<]?(?:{_LAB_HEADER})[】\])>]?(?:にて|で|の|は)?|{_DATE.pattern}|{_MONTH_DAY.pattern}"
     rf"|{_READING}|補正|血清|[、,/:|・\-~=])*"))
 _LAB_TAIL = re.compile(fold_surface(
-    rf"(?:[/:|・\-~=]|\((?![0-9.]+\))[^()]*\)|前回(?:は|:)?[0-9]+(?:\.[0-9]+)?(?:{_READING_UNIT})?|{_READING}"
+    rf"(?:[/:|・=]|-(?!$)|\((?![0-9.]+\))[^()]*\)|前回(?:は|:)?[0-9]+(?:\.[0-9]+)?(?:{_READING_UNIT})?|{_READING}"
     r"|[でとにがはも]?(?:高値|低値|高め|低め|高|低|↑+|↓+|high|low|上昇|低下|改善|悪化|横ばい|不変"
     r"|著変なし|変化なし|安定|再検査?|要?経過観察|推移|正常(?:範囲|値)?内?|異常なし|基準(?:値|範囲)?内"
     r"|報告(?:します|しました|あり)?|採血|検査|測定)"
     r"|でした|です|だった|である)*"))
-_LAB_TAIL_END = re.compile(fold_surface(r"[、。,;]|の?ため|により"))
+_LAB_TAIL_END = re.compile(fold_surface(r"[、。;]|,(?![0-9])|の?ため|により"))
 _BP_DATE_LABEL = re.compile(r"(?:BP|血圧)", re.I)
 _BP_DATE_LETTER = re.compile(r"[A-Za-z]", re.I)
 
