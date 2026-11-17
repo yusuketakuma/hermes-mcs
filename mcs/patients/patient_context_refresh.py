@@ -1007,6 +1007,18 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                    if cloud_settings is not None and lane != "B" else None)
     scan_input = [None]
 
+    # Set when a quality repair, which only the cloud makes, waits for a context child.
+    repair_waits = [False]
+
+    def quality_step(*args, **kwargs):
+        """Audit under this unit's cloud mode: a local lane, the takeover included, never sends a
+        repair. The takeover's repair waits for a child, like the unit's other cloud work."""
+        status, value = patient_context_quality_controller._quality_step(*args, cloud_mode=mode, **kwargs)
+        if status == "cloud_off":
+            repair_waits[0] = takeover
+            status = "deferred"
+        return status, value
+
     def answer_stale(latest):
         """Whether a change of the patient's inputs reached the input this unit asked about.
 
@@ -1502,7 +1514,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             if same and quality_required:
                 generation_quality = True
                 try:
-                    quality_status, quality_result = patient_context_quality_controller._quality_step(
+                    quality_status, quality_result = quality_step(
                         ledger, pid, cfg, workday_id, old, deadline, generation_admit, base_meta=old_meta)
                     repaired = None
                     if quality_status == "candidate":
@@ -1518,7 +1530,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                             "temporal_view": {key: quality_result["state"][key] for key in ("groups", "relations")},
                             "facts_total": len(quality_result["facts"]),
                             "truncated": len(quality_result["facts"]) > len(selected_facts)}
-                        quality_status, quality_result = patient_context_quality_controller._quality_step(
+                        quality_status, quality_result = quality_step(
                             ledger, pid, cfg, workday_id, repaired, deadline, generation_admit, base_doc=old, base_meta=old_meta)
                 except (patient_context_refresh_state.Deferred, ValueError, RuntimeError) as exc:
                     raise patient_context_refresh_state.Deferred(
@@ -1638,14 +1650,14 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                         result["_audited_chunk_ids"] = audited_ids
                         if cloud_requested or patient_context_quality_receipts._has_prior_quality_failure(ledger.db, pid, purpose='source'):
                             try:
-                                quality_status, quality_result = patient_context_quality_controller._quality_step(
+                                quality_status, quality_result = quality_step(
                                     ledger, pid, cfg, workday_id, {}, deadline, admit, source=source)
                             except (patient_context_refresh_state.Deferred, ValueError, RuntimeError) as exc:
                                 result = None
                                 raise patient_context_refresh_state.Deferred(
                                     "source_quality_unavailable:" + (_quality_unavailable_detail(exc) or type(exc).__name__)) from None
                             if quality_status == "source_candidate":
-                                quality_status, quality_result = patient_context_quality_controller._quality_step(
+                                quality_status, quality_result = quality_step(
                                     ledger, pid, cfg, workday_id, {}, deadline, admit, source=source,
                                     source_candidate_ref=quality_result)
                             if quality_status not in ("passed", "skipped"):
@@ -1676,7 +1688,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                             result.pop("quality_hold_key", None)
                     break
     except patient_context_refresh_state.Deferred as exc:
-        deferred_reason = str(exc) or "patient_context_waiting"
+        deferred_reason = CHILD_WAIT_REASON if repair_waits[0] else str(exc) or "patient_context_waiting"
         if (generation_claim is not None and not generation_decision['resume'] and not generation_quality
                 and not generation_uncertain and not generation_contacted and (deferred_reason in (
                     'patient_context_capacity_or_deadline', 'patient_context_admission_deferred', 'patient_context_turn_busy', 'patient_context_local_capacity')
