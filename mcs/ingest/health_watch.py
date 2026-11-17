@@ -51,6 +51,7 @@ TRANSIENT_REASONS = frozenset({"stage_errors", "run_deadline_exceeded", "collect
                                "notification_pending", "notification_parts_incomplete",
                                "notification_cards_unavailable",
                                "notification_pending_unavailable",
+                               "notification_delivery_unverified",
                                "provider_settings_unreadable"})
 STREAK_ALERT = 3
 CONFIG_BLOCKED = "provider_settings_unreadable"
@@ -457,6 +458,14 @@ def _delivery_snapshot(value, now: float):
             or restart.get("state") not in ("requested", "unknown", "failed",
                                              "supervisor_restart_verified", "unverified")):
         return None
+    issues = delivery.get("issues") if "issues" in delivery else (
+        [delivery["state"]] if delivery["state"] in _DELIVERY_CURRENT else [])
+    if (not isinstance(issues, list)
+            or any(not isinstance(issue, str) or issue not in _DELIVERY_CURRENT for issue in issues)
+            or issues != [issue for issue in _DELIVERY_CURRENT if issue in issues]
+            or (bool(issues) != (delivery["state"] in _DELIVERY_CURRENT))
+            or issues and delivery["state"] != issues[0]):
+        return None
     queued, sending, unknown = (delivery.get(key) for key in ("queued", "sending", "unknown"))
     if any(count is not None and not _count(count) for count in (queued, sending, unknown)):
         return None
@@ -465,10 +474,11 @@ def _delivery_snapshot(value, now: float):
     if any(stamp is not None and (not finite_number(stamp) or not 0 <= stamp <= now)
            for stamp in stamps):
         return None
-    if (delivery["state"] == "waiting_without_progress" and (
-            not queued or unknown != 0 or stamps[1] is None or now - stamps[1] <= CARD_STALL_S
+    if (issues and None in (queued, sending, unknown)
+            or "waiting_without_progress" in issues and (
+            not queued or stamps[1] is None or now - stamps[1] <= CARD_STALL_S
             or stamps[2] is not None and now - stamps[2] <= CARD_STALL_S)
-            or delivery["state"] == "outcome_unconfirmed" and not (sending or unknown)
+            or "outcome_unconfirmed" in issues and not (sending or unknown)
             or delivery["state"] in ("idle", "progressing") and None in (queued, sending, unknown)
             or delivery["state"] == "progressing" and (
                 unknown != 0 or stamps[2] is None or now - stamps[2] > CARD_STALL_S)
@@ -481,8 +491,9 @@ def _delivery_snapshot(value, now: float):
     return {
         "observed_at": now,
         "worker": {key: worker.get(key) for key in ("state", "reason", "started_at")},
-        "delivery": {key: delivery.get(key) for key in (
+        "delivery": {**{key: delivery.get(key) for key in (
             "state", "queued", "sending", "unknown", "oldest_created_at", "last_progress_at")},
+            "issues": list(issues)},
         "restart_request": {key: restart.get(key) for key in ("state", "at")},
     }
 
@@ -502,13 +513,9 @@ def _apply_delivery_observation(obs: dict, state: dict, home: str, now: float,
     previous = state.get("delivery_current_reason")
     if not isinstance(previous, str) or previous not in _DELIVERY_UNRESOLVED:
         previous = None
-    if isinstance(cfg, dict) and cfg.get("runtime_mode") == "standalone":
-        if previous in _DELIVERY_UNRESOLVED:
-            _add_delivery_reason(obs, _DELIVERY_UNVERIFIED)
-        return False
     notify = cfg.get("notify") if isinstance(cfg, dict) else None
-    if (not isinstance(cfg, dict) or cfg.get("runtime_mode", "hermes") != "hermes"
-            or not isinstance(notify, dict)):
+    mode = cfg.get("runtime_mode", "hermes") if isinstance(cfg, dict) else None
+    if mode not in ("hermes", "standalone") or not isinstance(notify, dict):
         if previous in _DELIVERY_UNRESOLVED:
             _add_delivery_reason(obs, _DELIVERY_UNVERIFIED)
         return False
@@ -516,11 +523,19 @@ def _apply_delivery_observation(obs: dict, state: dict, home: str, now: float,
         import mcs_config
         import notify_scope
         from mcs_util import payload_hash, valid_hash
-        if mcs_config.validate_notify(notify):
+        if (mcs_config.validate_notify(notify) or mode == "standalone" and (
+                mcs_config.validate_standalone(cfg) or mcs_config.validate_standalone_scope(cfg)
+                or any(key in cfg and mcs_config.CONFIG_RULES[key][1](cfg[key])
+                       for key in ("notify_target", "notify_system_target")))):
             if previous in _DELIVERY_UNRESOLVED:
                 _add_delivery_reason(obs, _DELIVERY_UNVERIFIED)
             return False
-        if notify.get("interactive", "off") not in ("slack", "discord"):
+        if mode == "standalone" or notify.get("interactive", "off") in ("off", "lineworks"):
+            scope_changed = "delivery_current_scope" in state or "delivery_current_reason" in state
+            state.pop("delivery_current_reason", None)
+            state.pop("delivery_current_scope", None)
+            return scope_changed
+        if notify.get("interactive") not in ("slack", "discord"):
             if previous in _DELIVERY_UNRESOLVED:
                 _add_delivery_reason(obs, _DELIVERY_UNVERIFIED)
             return False
@@ -551,19 +566,16 @@ def _apply_delivery_observation(obs: dict, state: dict, home: str, now: float,
         obs["delivery_observation"] = snapshot
     current = snapshot["delivery"]["state"] if snapshot is not None else "unknown"
     if current in ("unknown", "pending"):
-        reason = (_DELIVERY_UNVERIFIED if current == "unknown" or previous in _DELIVERY_UNRESOLVED
-                  else None)
-        if reason is not None:
-            state["delivery_current_reason"] = reason
-            state["delivery_current_scope"] = scope_id
+        reasons = ([_DELIVERY_UNVERIFIED] if current == "unknown" or previous in _DELIVERY_UNRESOLVED
+                   else [])
     else:
-        reason = _DELIVERY_CURRENT.get(current)
-        if reason is None:
-            state.pop("delivery_current_reason", None)
-        else:
-            state["delivery_current_reason"] = reason
-            state["delivery_current_scope"] = scope_id
-    if reason is not None:
+        reasons = [_DELIVERY_CURRENT[issue] for issue in snapshot["delivery"]["issues"]]
+    if reasons:
+        state["delivery_current_reason"] = reasons[0]
+        state["delivery_current_scope"] = scope_id
+    else:
+        state.pop("delivery_current_reason", None)
+    for reason in reversed(reasons):
         _add_delivery_reason(obs, reason)
     return scope_changed
 
@@ -780,7 +792,7 @@ def evaluate(home: str = HOME, now: float | None = None,
                   and obs["status"] != "ok"
                   and (obs["status"] != "stale"
                        or any(r.startswith(("standalone_", "attachment_ocr_", CONFIG_BLOCKED))
-                              or r in (*_DELIVERY_CURRENT.values(), _DELIVERY_UNVERIFIED)
+                              or r in _DELIVERY_CURRENT.values()
                               for r in gained))) or recorded_new
     from mcs_util import valid_hash
     ocr_detail = obs.get('attachment_ocr') or {}
@@ -1251,6 +1263,8 @@ def _impact(report: dict, reasons) -> str:
         return "新しい連絡の収集と通知が止まっている可能性があります。"
     areas = []
     for r in reasons or []:
+        if r == _DELIVERY_UNVERIFIED:
+            continue
         for prefix, name in _AREA_JA:
             if r.startswith(prefix):
                 if prefix == "collection_incomplete" and _collection_known_empty(report):
@@ -1260,6 +1274,8 @@ def _impact(report: dict, reasons) -> str:
     parts = []
     if areas:
         parts.append("・".join(areas) + "に遅れや不具合があります。")
+    if _DELIVERY_UNVERIFIED in (reasons or []):
+        parts.append("通知の状態を確認できません。")
     if report.get("run_status") == "ok":
         parts.append("収集は動いています。")
     return "".join(parts) or "稼働状況の確認が必要です。"
