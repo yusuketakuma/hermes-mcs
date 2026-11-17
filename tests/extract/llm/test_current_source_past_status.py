@@ -85,7 +85,8 @@ def test_same_owner_other_predicate_current_does_not_flag_past():
     assert item["status"] == "past" and "unverified" not in item
 
 
-@pytest.mark.parametrize("body", ["本人は発熱が現在あります。", "本人は3日前に発熱したが現在も続いている。"])
+@pytest.mark.parametrize("body", ["本人は発熱が現在あります。", "本人は3日前に発熱したが現在も続いている。",
+                                  "本人は3日前に発熱しましたが現在も続いている。"])
 def test_current_attached_to_symptom_still_flagged(body):
     item = _symptom(body, "past")["symptoms"][0]
     assert "status" not in item and item["unverified"] is True
@@ -101,7 +102,8 @@ def test_continuing_symptom_still_flagged(body):
 @pytest.mark.parametrize("body", [
     "本人は3日前に発熱したが現在は咳が続いている。", "現在は咳が続き、発熱は3日前にあった。",
     "本人は3日前に発熱したが現在も続いていません。", "本人は現在、食欲あり、3日前に発熱した。",
-    "本人は現在咳が続いているが3日前に発熱した。"])
+    "本人は現在咳が続いているが3日前に発熱した。", "本人は3日前に発熱したが現在も続いてはいません。",
+    "本人は3日前に発熱したが現在も続いておりません。"])
 def test_other_symptom_time_or_continuation_not_borrowed(body):
     item = _symptom(body, "past")["symptoms"][0]
     assert item["status"] == "past" and "unverified" not in item
@@ -109,7 +111,9 @@ def test_other_symptom_time_or_continuation_not_borrowed(body):
 
 @pytest.mark.parametrize("body,expected", [
     ("発熱は解熱したが咳が続いている。", False), ("発熱が続いている。", True), ("発熱したが現在も続いている。", True),
-    ("発熱したが現在も続いていません。", False), ("発熱は持続せず。", False)])
+    ("発熱したが現在も続いていません。", False), ("発熱は持続せず。", False),
+    ("発熱しましたが現在も続いている。", True), ("発熱は持続しています。", True),
+    ("発熱したが現在も続いてはいません。", False), ("発熱したが現在も続いておりません。", False)])
 def test_target_continuing_reads_only_target_predicate(body, expected):
     end = body.index("発熱") + 2
     assert clinical_scope.target_continuing(body, end, len(body) - 1) is expected
