@@ -166,7 +166,8 @@ def test_invalidation_precheck_uses_the_kind_index(tmp_path):
     seen = []
     try:
         db.db.set_trace_callback(seen.append)
-        semantic_publication.invalidate_projections(db.db, _canonical_cfg())
+        semantic_publication.invalidate_projections(
+            db.db, semantic_config(_canonical_cfg())[0])
         db.db.set_trace_callback(None)
         precheck = [s for s in seen if s.lstrip().startswith("SELECT 1")
                     and "FROM artifacts a" in s]
