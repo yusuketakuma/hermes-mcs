@@ -566,13 +566,20 @@ def test_long_output_then_hold_at_real_partial_guard_keeps_reservation(tmp_path,
         monkeypatch.setattr(semantic_fact_stages, 'current_artifact', semantic_drain.current_artifact)
         monkeypatch.setattr(semantic_job_processor, 'current_artifact', semantic_drain.current_artifact)
         monkeypatch.setattr(semantic_summary_stages, 'current_artifact', semantic_drain.current_artifact)
+        original_obtain = semantic_job_processor._obtain_summary
         def reject_after_hold(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
                               facts, verdicts, existing, deadline, *, diagnostics):
-            assert mid == 2
+            if mid != 2:
+                # target 1's stored PASS is not bound to an audit pair, so it is
+                # audited again over its stored text (no summary call)
+                assert mid == 1 and existing is not None
+                return original_obtain(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
+                                       facts, verdicts, existing, deadline, diagnostics=diagnostics)
             with ledger.db:
                 hold.hold_tx(ledger, 1, 1, [2], {'source': 'history_import', 'notification_free': True},
                              source_generation=ledger._semantic_source_generation(1, 1))
-            return None, 'budget', {}, runtime.LLMNotSent('long_output_needs_budget')
+            return (None, 'not_sent', {}, runtime.LLMNotSent('long_output_needs_budget'),
+                    {'providers': [], 'complete': False})
         monkeypatch.setattr(semantic_drain, '_obtain_summary', reject_after_hold)
         monkeypatch.setattr(semantic_job_processor, '_obtain_summary', semantic_drain._obtain_summary)
         result = {'errors': []}

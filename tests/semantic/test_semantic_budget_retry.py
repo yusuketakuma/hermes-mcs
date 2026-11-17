@@ -449,8 +449,10 @@ def test_summary_repair_reservation_tracks_actual_dispatch(tmp_path, monkeypatch
         db.close()
 
 
-@pytest.mark.parametrize('interruption', ['budget', 'not_sent'])
-def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeypatch, interruption):
+@pytest.mark.parametrize('interruption,long_answer', [('budget', False), ('not_sent', False), ('budget', True)])
+def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeypatch, interruption, long_answer):
+    """The repair answer stays provable up to its reservation's read bound (over 256KiB too)."""
+    import bounded_http
     import inference_dependency_loss
     import mcs_util
     import semantic_policy
@@ -469,6 +471,8 @@ def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeyp
         value = _llm_v2(prompt)
         if semantic_transport._inference_purpose.get() == 'quality_repair':
             state['repairs'] += 1
+            if long_answer:
+                value += ' ' * bounded_http.MAX_RESPONSE_BYTES
             rid = 'a' * 32
             reserve_id = db.artifact_add('cloud_usage_reserve', '{}', project_id=1, message_id=1,
                                          meta={'reservation_id': rid})
@@ -478,7 +482,8 @@ def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeyp
             owner = {'semantic_target_id': 1, 'semantic_thread_root': 1, 'semantic_phase': 'summary',
                      'semantic_generation': 'synthetic', 'semantic_source': mcs_util.payload_hash(occurrences)}
             state.update(reserve_id=reserve_id, prompt=prompt, answer=value, owner=owner,
-                         receipt={'reservation_id': rid, 'unit_key': 'semantic:synthetic', 'owner': owner})
+                         receipt={'reservation_id': rid, 'unit_key': 'semantic:synthetic', 'owner': owner,
+                                  'max_tokens': 32768})
             state['requests'].append(rid)
             semantic_transport._record_inference('openai')
         else:
