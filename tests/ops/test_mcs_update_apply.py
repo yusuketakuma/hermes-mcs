@@ -601,3 +601,23 @@ def test_schema_rollback_stop_failure_does_not_freeze_or_claim_a_stop(updater, m
     assert not state["applying"].get("restore_incomplete")
     assert not any(k.get("writers_stopped") for _a, k in reports)
     assert Path(updater.MARKER_PATH).exists()
+
+
+def test_failed_restart_after_abort_leaves_the_journal_for_recovery(updater, monkeypatch):
+    """Regression: bail cleared the journal before restart_agents, which
+    returns without starting anything when a stop is unconfirmed."""
+    repo = _apply_env(updater, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+
+    def stop_failed():
+        raise updater.UpdateError("drainer_stop_failed: ai.mcs.synthetic")
+
+    monkeypatch.setattr(update_apply, "quiesce", stop_failed)
+    monkeypatch.setattr(update_apply, "restart_agents", lambda: ["drainer_stop_failed:ai.mcs.synthetic"])
+    assert updater.apply("v1.1.0", target, "cid-restart") == 1
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"] is None and state["stages"]
+    assert "done" not in [row.get("stage") for row in state["stages"]]
+    assert "restart:drainer_stop_failed" in state["executed"]["cid-restart"]["detail"]

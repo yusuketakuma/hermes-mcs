@@ -391,6 +391,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                         # newer schema: recovery keeps writers stopped until the
                         # restore completes (no consent report exists to hold on)
                         state["applying"]["restore_incomplete"] = True
+            stages_before_abort = list(state.get("stages") or [])
             if not rollback_failed:
                 # keep remnants when the rollback itself failed — recovery
                 # must still be able to see and escalate the wedged state
@@ -420,6 +421,13 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 _remove_marker()
                 if problems:
                     reason += " restart:" + ",".join(problems)
+                    # A failed restart leaves drainers down: keep the pre-merge stages (never 'done')
+                    # so recovery (finish_pre_merge) retries the restart instead of a finished journal.
+                    state["stages"] = [row for row in stages_before_abort if row.get("stage") != "done"]
+                    if command_id:
+                        _record_executed(state, command_id, "failed", reason)
+                    _record_attempt(state, tag, "failed", reason)
+                    journal_store.save_state(STATE_PATH, state)
             text = f"[MCS] 更新 {tag or ''} を中止しました: {reason}"
             if not _enqueue_notice(text, use_run_lock=run_fd is None,
                                    notice_code="aborted", tag=tag) and run_fd is None:
