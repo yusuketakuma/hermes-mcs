@@ -249,6 +249,7 @@ def request_action_key(value):
 
 # Item spellings from docs/roadmap/extraction.md; these are analyte labels,
 # not drug-equivalence assertions. No OCR corrections or unit conversions.
+# A drug's blood level is named only with 濃度: the bare drug name is a dose.
 _LAB_NAMES = {
     "creatinine": ("cr", "クレアチニン"),
     "egfr": ("egfr",),
@@ -266,12 +267,45 @@ _LAB_NAMES = {
     "weight": ("体重", "weight"),
     "height": ("身長", "height"),
     "blood_glucose": ("血糖", "血糖値", "bs", "glu", "glucose"),
+    "wbc": ("wbc", "白血球", "白血球数"),
+    "platelet": ("plt", "血小板", "血小板数"),
+    "total_protein": ("tp", "総蛋白", "総タンパク"),
+    "total_bilirubin": ("t-bil", "t.bil", "tbil", "総ビリルビン"),
+    "calcium": ("ca", "補正ca", "カルシウム"),
+    "magnesium": ("mg", "マグネシウム"),
+    "ammonia": ("nh3", "アンモニア"),
+    "prothrombin_time": ("pt", "プロトロンビン時間"),
+    "tsh": ("tsh",),
+    "digoxin_level": ("ジゴキシン濃度", "ジゴキシン血中濃度"),
+    "valproate_level": ("バルプロ酸濃度", "バルプロ酸血中濃度"),
+    "theophylline_level": ("テオフィリン濃度", "テオフィリン血中濃度"),
+    "carbamazepine_level": ("カルバマゼピン濃度", "カルバマゼピン血中濃度"),
+    "phenytoin_level": ("フェニトイン濃度", "フェニトイン血中濃度"),
+    "lithium_level": ("リチウム濃度", "リチウム血中濃度"),
 }
+# Units an unnamed item may be reported in; the named items' own units below
+# do not widen what an unknown label (TUG in 秒, フェリチン in ng/mL) can confirm.
+_GENERIC_LAB_UNITS = (
+    "mg/dl", "mmol/l", "μmol/l", "g/dl", "%", "u/l", "meq/l",
+    "kg", "g", "cm", "m", "pg/ml", "ml/min/1.73m2",
+)
+
+
+def _cell_units(*powers):
+    # NFKC folds a superscript exponent (10⁴) into plain digits (104).
+    return tuple(f"{times}10{sep}{power}/μl"
+                 for power in powers for times in ("×", "x") for sep in ("^", ""))
+
+
 _LAB_UNITS = {
     "mg/dl": "mg/dL", "mmol/l": "mmol/L", "μmol/l": "μmol/L",
     "g/dl": "g/dL", "%": "%", "u/l": "U/L", "meq/l": "mEq/L",
     "kg": "kg", "g": "g", "cm": "cm", "m": "m",
     "pg/ml": "pg/mL", "ml/min/1.73m2": "mL/min/1.73m2",
+    "/μl": "/μL", "万/μl": "万/μL", "万": "万",
+    **{unit: f"×10^{power}/μL" for power in (2, 3, 4) for unit in _cell_units(power)},
+    "μg/dl": "μg/dL", "μg/ml": "μg/mL", "ng/ml": "ng/mL",
+    "μiu/ml": "μIU/mL", "μu/ml": "μU/mL", "miu/l": "mIU/L", "秒": "秒",
 }
 # Units each named item is reported in (folded _LAB_UNITS keys); an item named in
 # _LAB_NAMES with any other unit (K in %, INR in kg) stays a candidate. No conversions.
@@ -292,10 +326,35 @@ _LAB_ITEM_UNITS = {
     "weight": ("kg", "g"),
     "height": ("cm", "m"),
     "blood_glucose": ("mg/dl", "mmol/l"),
+    "wbc": ("/μl", *_cell_units(2, 3)),
+    "platelet": ("/μl", "万/μl", "万", *_cell_units(3, 4)),
+    "total_protein": ("g/dl",),
+    "total_bilirubin": ("mg/dl", "μmol/l"),
+    "calcium": ("mg/dl", "meq/l", "mmol/l"),
+    "magnesium": ("mg/dl", "meq/l", "mmol/l"),
+    "ammonia": ("μg/dl", "μmol/l"),
+    # PT in % is an activity, not the time; it stays a candidate.
+    "prothrombin_time": ("秒",),
+    "tsh": ("μiu/ml", "μu/ml", "miu/l"),
+    "digoxin_level": ("ng/ml",),
+    "valproate_level": ("μg/ml",),
+    "theophylline_level": ("μg/ml",),
+    "carbamazepine_level": ("μg/ml",),
+    "phenytoin_level": ("μg/ml",),
+    "lithium_level": ("meq/l", "mmol/l"),
 }
 # Capture explicit dose/count symbols too; an omitted output unit cannot hide them.
-_LAB_QUOTED_UNIT = r"(?:[a-zμ%/0-9.^²‰‱°錠包袋滴枚本個回単位]|カプセル)*"
+_LAB_QUOTED_UNIT = r"(?:[a-zμ%/0-9.^²‰‱°×万秒錠包袋滴枚本個回単位]|カプセル)*"
+# A katakana item preceded by 酸/化/素 is a salt (酸化マグネシウム, 塩化カリウム,
+# 炭酸水素ナトリウム), i.e. a drug name, not the analyte.
+_SALT_PREFIX = r"(?<![酸化素])"
 _DATE = re.compile(r"(?<!\d)(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?(?!\d)")
+
+
+def _lab_name_pattern(names) -> str:
+    # Longest first, so 血小板数 is not read as 血小板 followed by 数.
+    return "|".join((_SALT_PREFIX if "ァ" <= n[0] <= "ヺ" else "") + re.escape(n)
+                    for n in sorted(names, key=len, reverse=True))
 
 
 _MONTH_DAY = re.compile(r"(?<![\d/年-])(\d{1,2})[/月](\d{1,2})日?(?![\d/])")
@@ -421,9 +480,9 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
     normalized_unit = _LAB_UNITS.get(unit_key, unit_key) if unit_key else None
     quote = fold_surface(evidence or "").replace("µ", "μ")
     names = _LAB_NAMES[analyte] if analyte else (label,)
-    pattern = (r"(?<![a-z0-9])(?:" + "|".join(re.escape(n) for n in names)
+    pattern = (r"(?<![a-z0-9])(?:" + _lab_name_pattern(names)
                + r")(?![a-z])(?:値|ハ|:|=)*")
-    allowed_units = _LAB_ITEM_UNITS.get(analyte, _LAB_UNITS)
+    allowed_units = _LAB_ITEM_UNITS[analyte] if analyte else _GENERIC_LAB_UNITS
     readings = []
     for match in re.finditer(pattern, quote):
         tail = quote[match.end():]
