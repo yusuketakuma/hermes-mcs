@@ -453,3 +453,27 @@ jobs:
           MCS_HERMES_SOURCE: ${{ github.workspace }}/hermes-agent
           MCS_HERMES_REFERENCE: ${{ github.workspace }}/hermes-agent
         run: sh scripts/development/check_pinned_sdks.sh hermes
+
+  merge-gate-request:
+    # main-sync starts this run with GITHUB_TOKEN after it merges main into a PR,
+    # and GitHub raises no workflow_run for a run started that way: agent-control.yml
+    # would never judge the new head. A dispatch is the one event GITHUB_TOKEN may
+    # start, so this run asks for the judgement itself once the required jobs are done.
+    # A run a person started reaches agent-control.yml through workflow_run, which
+    # also counts a failure against the linked issue; this request only publishes the
+    # verdict. It names the commit and nothing else: agent-control.yml runs from the
+    # default branch and reads the check runs itself, so nothing this job says is trusted.
+    needs: [lint-test, hygiene, standalone-sdk, incident-gates, macos, hermes-integration]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.triggering_actor == 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write   # workflow_dispatch of agent-control.yml, nothing else
+    steps:
+      - name: ask agent-control.yml for the merge-gate of this head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SHA: ${{ github.sha }}
+        run: gh workflow run agent-control.yml --ref "$DEFAULT_BRANCH" -f sha="$SHA"
