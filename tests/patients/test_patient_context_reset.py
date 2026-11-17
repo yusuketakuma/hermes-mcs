@@ -169,6 +169,53 @@ def clock_runtime(ledger, clock):
     return ledger, clock, []
 
 
+def _reset_now(ledger, clock, cfg, tmp_path):
+    import patient_context_view as view
+    off = _disabled(cfg)
+    cloud_policy.stop(ledger)
+    found = reset.preview(ledger.db, cfg=off, now=clock.wall)
+    assert _apply(ledger, off, _request(found["preview_hash"]), clock.wall, tmp_path)[0] is None
+    return {row["project_id"]: set(json.loads(row["content"])) for row in ledger.artifacts(view.RESET_PRIOR_KIND)}
+
+
+def _published_keys(ledger):
+    import patient_context_view as view
+    doc, _meta = state._latest(ledger.db, state.KIND, 1)
+    return {view.reset_fact_key(fact) for fact in doc["facts"]}
+
+
+def test_reset_keeps_scan_facts_the_selection_did_not_publish(built, tmp_path):
+    ledger, clock, cfg, _ = built
+    expected = _published_keys(ledger)
+    assert expected
+    with ledger.db:   # a selection that kept none of the scanned facts
+        for row in ledger.artifacts(state.KIND):
+            doc = json.loads(row["content"])
+            doc["facts"], doc["summary"] = [], []
+            ledger.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                              (json.dumps(doc), row["artifact_id"]))
+    assert expected <= _reset_now(ledger, clock, cfg, tmp_path)[1]
+
+
+def test_reset_keeps_the_facts_of_an_unpublished_context(built, tmp_path):
+    ledger, clock, cfg, _ = built
+    expected = _published_keys(ledger)
+    assert expected
+    with ledger.db:
+        for row in ledger.artifacts(state.KIND):
+            meta = {**json.loads(row["meta"]), "published": False}
+            ledger.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                              (json.dumps(meta), row["artifact_id"]))
+    assert expected <= _reset_now(ledger, clock, cfg, tmp_path)[1]
+
+
+def test_a_second_reset_before_the_rebuild_keeps_the_first_records(built, tmp_path):
+    ledger, clock, cfg, _ = built
+    first = _reset_now(ledger, clock, cfg, tmp_path)
+    assert first[1]
+    assert first[1] <= _reset_now(ledger, clock, cfg, tmp_path)[1]
+
+
 def _reserves(ledger):
     return [row["artifact_id"] for row in ledger.artifacts("cloud_usage_reserve")]
 
