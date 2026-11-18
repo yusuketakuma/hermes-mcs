@@ -501,8 +501,8 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                                 quota['reason'] = _GENERATION_UNVERIFIED
                         candidate['_generation_plan'] = generation
                         if not quota['allowed']:
-                            count('wait_generation_quota')
                             if observed_out is not None:
+                                observed_out['wait_generation_quota'] += 1
                                 _note_generation_denial(observed_out, quota)
                             due['A'] = False
                             waiting += 1
