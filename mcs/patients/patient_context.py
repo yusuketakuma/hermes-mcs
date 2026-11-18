@@ -378,7 +378,7 @@ _PATIENT_HEADING_CONFLICT = re.compile(
 _NOT_A_THING = (rf"{clinical_scope.FAMILY_PERSON}|{clinical_scope.OTHER_PERSON}|{_PATIENT_REF}"
                 r"|者|さん|様|ちゃん|君|氏"
                 r"|皆|みな|みんな|全|両|双方|共|一緒|揃|そろ|二人|ふたり|親子"
-                r"|同(?![居席行伴室時日])|おなじ|それ|これ|あれ")
+                r"|同(?![居席行伴室時日])|おなじ|それ|これ|あれ|その|この|あの")
 # A thing is self-contained unless it opens with a determiner kanji (当・本・該・前・上・
 # 下・左・右・既・先・件・例・以) that refers back: one standing alone (当アレルギー・同じ)
 # or one before a head that completes a reference — a place in the record (左記・前述・
