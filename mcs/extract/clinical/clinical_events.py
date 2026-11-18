@@ -679,7 +679,8 @@ _ACTOR_AGENT = re.compile(r"(?:による|が|は)")
 # (「ご本人が…しました」) still binds.
 _SELF_ACTOR_VALUE = re.compile(
     r"(?:ご本人|患者本人|本人|患者(?:さん|様)?|利用者(?:さん|様)?)(?:自身)?")
-_PATIENT_RECEIVE = re.compile(r"を受け|受診(?:し|する|した|して|ます)")
+_PATIENT_RECEIVE = re.compile(
+    r"を受け|受診(?:し|する|した|して|ます|され|なさ|いた|頂)")
 
 
 def _actor_is_recipient(quote, left, right, value):
