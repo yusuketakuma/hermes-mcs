@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "未使用のDiscordファイル名補助処理を削除",
+  "summary": "利用者向けの実行時動作に変更はありません。Discord配送コードの未使用処理を削除しました。",
+  "upgrade": "追加操作は不要です。",
+  "details": ["未使用のDeliveryWorker._wire_namesだけを削除し、既存のインライン正規化は保持しました。"],
+  "refs": ["adapters/discord/delivery.py"]
+}
