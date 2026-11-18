@@ -24,6 +24,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
+import cloud_inference
 import cloud_policy
 from anthropic_client import AnthropicError
 import patient_context_quota
@@ -157,24 +158,58 @@ def _spend(db, cfg):
     return _amounts(out)
 
 
-def _record_prior_facts(db, now):
-    """Keep, per patient, the keys of the facts its newest published context held (no text)."""
-    from patient_context_view import RESET_PRIOR_KIND, reset_fact_key
-    db.execute("DELETE FROM artifacts WHERE kind=?", (RESET_PRIOR_KIND,))
+def _scan_fact_keys(db, pid, cfg, reset_fact_key, meta):
+    """Keys of the facts in this patient's completed current scans (the selection keeps only some).
+
+    Read with the route the display reads with: a published context is pinned to its own provenance,
+    so a cloud or model setting changed after publication does not hide its scans. None when the
+    scans cannot be read now: the keys decide a display, so this never stops the reset."""
+    import patient_context_refresh_readiness as readiness
+    import patient_context_refresh_sources as sources
+    try:
+        route = readiness._publication_route(cfg, meta) if meta.get("published") is True else None
+        current = sources._snapshot(db, pid, cfg, hydrate=False, route=route)
+        scans = sources._scans_from_read(db, pid, current["sources"], current["route"], cfg, None)
+        keys = set()
+        for source in current["sources"]:
+            if not scans.get(sources.context_plan.source_key(source), {}).get("complete"):
+                continue
+            source["body_text"] = sources._hydrate_source_body(db, pid, source)
+            keys.update(reset_fact_key(fact) for fact in
+                        sources._scan_facts(db, pid, source, current["route"],
+                                            scans[sources.context_plan.source_key(source)]))
+        return keys
+    except (ValueError, TypeError, KeyError, OSError, AttributeError, cloud_inference.CloudFallback):
+        return None
+
+
+def _record_prior_facts(db, now, cfg):
+    """Keep, per patient, the keys of the facts its context and current scans held (no text).
+
+    Newest context row (published or not), completed scan facts and the keys of an earlier reset
+    whose rebuild has not finished are all kept; a patient with none of them gets an empty record.
+    Returns how many patients' scan facts could not be read (their other keys are still kept)."""
+    from patient_context_view import RESET_PRIOR_KIND, _reset_prior, reset_fact_key
     # every patient with records gets a row: an empty one says its context held nothing, so a
     # fact the rebuild finds in its older records is new, not something the reset erased
     pids = sorted({row[0] for row in db.execute(
         "SELECT DISTINCT project_id FROM messages WHERE project_id IS NOT NULL")}
         | {row[0] for row in db.execute(
-            "SELECT DISTINCT project_id FROM artifacts WHERE kind IN (?,?) AND project_id IS NOT NULL",
-            (state.KIND, state.LEGACY_KIND))})
+            "SELECT DISTINCT project_id FROM artifacts WHERE kind IN (?,?,?) AND project_id IS NOT NULL",
+            (state.KIND, state.LEGACY_KIND, RESET_PRIOR_KIND))})
+    rows, unreadable = [], 0
     for pid in pids:
         doc, meta = state._latest(db, state.KIND, pid)
-        facts = doc.get("facts") if meta.get("published") is True else None
-        keys = sorted({reset_fact_key(fact) for fact in facts if isinstance(fact, dict)}) \
-            if isinstance(facts, list) else []
-        db.execute("INSERT INTO artifacts(kind,project_id,content,model,meta,created_at) VALUES(?,?,?,?,?,?)",
-                   (RESET_PRIOR_KIND, pid, json.dumps(keys), "", "{}", now))
+        facts = doc.get("facts")
+        keys = _reset_prior(db, pid) or set()
+        keys |= {reset_fact_key(fact) for fact in facts if isinstance(fact, dict)} if isinstance(facts, list) else set()
+        scanned = _scan_fact_keys(db, pid, cfg, reset_fact_key, meta)
+        unreadable += scanned is None
+        keys |= scanned or set()
+        rows.append((RESET_PRIOR_KIND, pid, json.dumps(sorted(keys)), "", "{}", now))
+    db.execute("DELETE FROM artifacts WHERE kind=?", (RESET_PRIOR_KIND,))
+    db.executemany("INSERT INTO artifacts(kind,project_id,content,model,meta,created_at) VALUES(?,?,?,?,?,?)", rows)
+    return unreadable
 
 
 def _quality_usage(db):
@@ -293,6 +328,8 @@ def apply_tx(db, req, now, *, cfg=None, backup_dir=None):
     db.execute("SAVEPOINT patient_context_reset")
     try:
         before = _spend(db, cfg)
+        # before the reservations go: a scan whose repair is adopted needs them to read as complete
+        unreadable_prior = _record_prior_facts(db, now, cfg)
         for start in range(0, len(accounting.ids), 500):
             page = accounting.ids[start:start + 500]
             db.execute(f"DELETE FROM artifacts WHERE artifact_id IN ({_placeholders(page)})", page)
@@ -307,7 +344,6 @@ def apply_tx(db, req, now, *, cfg=None, backup_dir=None):
                 db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(carried), artifact_id))
             else:
                 db.execute("DELETE FROM artifacts WHERE artifact_id=?", (artifact_id,))
-        _record_prior_facts(db, now)
         db.execute(f"DELETE FROM artifacts WHERE kind IN ({_placeholders(ERASED_KINDS)})", ERASED_KINDS)
         db.execute("DELETE FROM fetch_jobs WHERE kind=?", (state.QUALITY_CLAIM,))
         from patient_context_view import RESET_MARK_KIND
@@ -325,5 +361,6 @@ def apply_tx(db, req, now, *, cfg=None, backup_dir=None):
                   "erased": {"kinds": found["kinds"], "quality_claims": found["quality_claims"],
                              "accounting_rows": found["accounting_rows"],
                              "quality_usage_rows": found["quality_usage_rows"],
-                             "generation_records": found["generation_records"]},
+                             "generation_records": found["generation_records"],
+                             "prior_facts_unreadable": unreadable_prior},
                   "carryover": found["carryover"], "outcomes": found["outcomes"]}
