@@ -519,6 +519,47 @@ def test_depleted_entry_budget_starts_no_read(db):
     assert observation["stop"] == "budget_exhausted"
 
 
+def test_report_observation_marks_a_depleted_entry_budget(db, monkeypatch):
+    """A shared-window remainder of zero stops before the aggregation: the
+    report's own observation keeps phase=connection_setup and
+    stop=budget_exhausted, distinguishable from a mid-read overrun."""
+    calls = []
+
+    def read(*_args, **_kwargs):
+        calls.append(1)
+        return {}
+
+    monkeypatch.setattr(notify_scope, "incomplete_parts_health", read)
+    report = health_report.incomplete_parts_health(db, NOW, SLACK, seconds=0.0)
+    assert report["status"] == "unknown" and report["reason"] == "observation_limit"
+    assert report["total"] is None and report["cards"] is None
+    assert report["observation"]["phase"] == "connection_setup"
+    assert report["observation"]["stop"] == "budget_exhausted"
+    assert calls == []
+
+
+def test_report_observation_marks_the_aggregation_phase_on_overrun(db, monkeypatch):
+    """An overrun inside the part aggregation names the phase that was
+    running, so entry-budget shortage and aggregation cost stay distinct."""
+    _plain_incomplete(db, _PART_COUNT)
+    db.commit()
+    clock = _FakeClock()
+    monkeypatch.setattr(health_report, "time", clock)
+    original = notify_tracking_ack.receipt_targets
+
+    def slow_receipt_targets(*args, **kwargs):
+        clock.advance(10.0)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(notify_tracking_ack, "receipt_targets", slow_receipt_targets)
+    report = health_report.incomplete_parts_health(db, NOW, SLACK, seconds=0.05)
+    assert report["status"] == "unknown" and report["reason"] == "observation_limit"
+    assert report["total"] is None
+    assert report["observation"]["stop"] == "time_limit"
+    assert report["observation"]["phase"] in ("receipt_targets", "part_rows",
+                                              "acknowledged")
+
+
 def test_production_wrapper_reports_honest_unknown_on_overrun(tmp_path, monkeypatch):
     """health_report.incomplete_parts_health keeps total=None and an honest
     observation_limit reason when the bounded read stops — never zeroed.

@@ -37,10 +37,12 @@ def _empty(now=NOW):
 
 
 def _assert_unknown(parts, reason):
-    assert parts == {"total": None, "cards": None, "by_state": dict.fromkeys(STATES),
-                     "by_plan": dict.fromkeys(("current", "superseded")),
-                     "oldest_age_s": None, "observed_at": NOW,
-                     "status": "unknown", "reason": reason}
+    # observation carries the bounded read's own stop diagnostics, not counts.
+    assert {k: v for k, v in parts.items() if k != "observation"} == {
+        "total": None, "cards": None, "by_state": dict.fromkeys(STATES),
+        "by_plan": dict.fromkeys(("current", "superseded")),
+        "oldest_age_s": None, "observed_at": NOW,
+        "status": "unknown", "reason": reason}
 
 
 @pytest.mark.parametrize("reader", ["cards", "parts", "holds"])
@@ -139,7 +141,7 @@ def test_failed_part_observation_is_unknown_without_losing_outer_transaction(sto
     original_limit = stored.getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
     stored.execute("INSERT INTO runs(started_at,status,error) VALUES(?,'ok','')", (NOW,))
     before = stored.total_changes
-    def read(db, now, cfg=None):
+    def read(db, now, cfg=None, **_kwargs):
         if failure == "unavailable":
             raise ValueError("SYNTHETIC_PRIVATE_ERROR")
         db.execute("SELECT zeroblob(?)", (health_report.HEALTH_OBSERVATION_ROW_BYTES + 1,)).fetchone()
@@ -165,7 +167,7 @@ def test_sql_deadline_clears_handler_and_preserves_connection(stored, monkeypatc
     clock = [100.0]
     monkeypatch.setattr(health_report.time, "monotonic", lambda: clock[0])
 
-    def read(db, now, cfg=None):
+    def read(db, now, cfg=None, **_kwargs):
         clock[0] += health_report.NOTIFICATION_OBSERVATION_S + 0.1
         # Exercise the real SQLite progress handler, not a raised stub timeout.
         db.execute("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 "
