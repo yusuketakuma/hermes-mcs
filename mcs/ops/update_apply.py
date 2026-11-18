@@ -4,6 +4,7 @@ import copy
 import json
 import os
 import time
+import uuid
 from contextlib import ExitStack
 import mcs_runtime  # noqa: E402
 import mcs_util  # noqa: E402
@@ -80,6 +81,7 @@ from update_preflight import (
     _precheck_target_tree,
     _provider_migration_needed,
     _provider_rollback_preflight,
+    _standalone_sdk_rollback_error,
     precheck_local,
 )
 from update_recovery import (
@@ -269,6 +271,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
         def _bail(reason: str) -> int:
             nonlocal rollback_failed, consent_hold, state, terminal
             transient = reason.split(":")[0] in _TRANSIENT_BAIL
+            stopped = False                # set only once a rollback quiesce returned
             stages = [s.get("stage") for s in state.get("stages", [])]
             merged = "merge" in stages or "post_merge" in stages
             if merged and state.get("applying"):
@@ -293,6 +296,12 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 try:
                     _provider_rollback_preflight(entry.get("prev_sha"))
                     _check_runtime_restore(entry)
+                    # only install.sh changes the venv's SDK pins
+                    ran = failed_state.get("applying") or {}
+                    sdk_error = (_standalone_sdk_rollback_error(entry, cfg)
+                                 if ran.get("reinstall_started") or ran.get("reinstall_done") else None)
+                    if sdk_error:
+                        raise UpdateError(sdk_error)
                 except UpdateError as e:
                     rollback_failed = True
                     try:
@@ -311,19 +320,22 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     _report("runtime_restore_blocked", str(e), writers_stopped=True,
                             apply_failure=reason)
                     return 1               # retain the original journal and marker
-                if entry.get("schema_bump") and entry.get("backup_path"):
-                    # journal rollback-shaped BEFORE the reset, like
-                    # rollback(): a failed/interrupted DB restore must
-                    # classify as head == target on the next recover pass
-                    # and retry _restore_db — an apply-shaped record would
-                    # read head == prev and 'finish' on the newer schema
-                    state["applying"] = _rollback_applying(
-                        entry, entry.get("sha"),
-                        command_id or entry.get("command_id"))
-                    journal(state, "rollback")
                 try:
                     # The post-merge child may have restarted writers before failing.
                     quiesce()
+                    stopped = True
+                    if entry.get("schema_bump") and entry.get("backup_path"):
+                        # journal rollback-shaped BEFORE the reset, like
+                        # rollback(): a failed/interrupted DB restore must
+                        # classify as head == target on the next recover pass
+                        # and retry _restore_db — an apply-shaped record would
+                        # read head == prev and 'finish' on the newer schema.
+                        # A failed quiesce changed nothing, so it keeps the
+                        # apply-shaped record (forward recovery, no freeze).
+                        state["applying"] = _rollback_applying(
+                            entry, entry.get("sha"),
+                            command_id or entry.get("command_id"))
+                        journal(state, "rollback")
                     schema_hold = bool(entry.get("schema_bump") and entry.get("backup_path"))
                     if schema_hold:
                         consent_hold = True
@@ -383,6 +395,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                         # newer schema: recovery keeps writers stopped until the
                         # restore completes (no consent report exists to hold on)
                         state["applying"]["restore_incomplete"] = True
+            stages_before_abort = list(state.get("stages") or [])
             if not rollback_failed:
                 # keep remnants when the rollback itself failed — recovery
                 # must still be able to see and escalate the wedged state
@@ -405,15 +418,30 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 # same report-only freeze as recover_interrupted's escalate: an
                 # outbox notice would write the newer-schema DB under the old
                 # code and join the later restore's loss report
-                _report("escalate", reason, writers_stopped=True)
+                _report("escalate", reason, writers_stopped=stopped)
                 return 1
             if quiesced and not rollback_failed:
                 problems = restart_agents()
                 _remove_marker()
                 if problems:
                     reason += " restart:" + ",".join(problems)
-            _enqueue_notice(f"[MCS] 更新 {tag or ''} を中止しました: {reason}",
-                            use_run_lock=run_fd is None, notice_code="aborted", tag=tag)
+                    # A failed restart leaves drainers down: keep the pre-merge stages (never 'done')
+                    # so recovery (finish_pre_merge) retries the restart instead of a finished journal.
+                    state["stages"] = [row for row in stages_before_abort if row.get("stage") != "done"]
+                    if command_id:
+                        _record_executed(state, command_id, "failed", reason)
+                    _record_attempt(state, tag, "failed", reason)
+                    journal_store.save_state(STATE_PATH, state)
+            text = f"[MCS] 更新 {tag or ''} を中止しました: {reason}"
+            notice_id = uuid.uuid4().hex
+            if not _enqueue_notice(text, use_run_lock=run_fd is None,
+                                   notice_code="aborted", tag=tag, notice_id=notice_id) and run_fd is None:
+                # A tick held run.lock and the receipt is already consumed:
+                # keep the notice for the next daily check to send.
+                state["pending_notices"] = [*(state.get("pending_notices") or []),
+                                            {"text": text, "notice_code": "aborted", "tag": tag,
+                                             "notice_id": notice_id}][-10:]
+                journal_store.save_state(STATE_PATH, state)
             return 1
 
         try:
@@ -713,7 +741,8 @@ def rollback(command_id: str | None = None) -> int:
                 raise UpdateError("tree_dirty_before_rollback")
             _provider_rollback_preflight(prev)
             # an unusable backup aborts before the journal: nothing runs
-            err = _rollback_backup_error(entry) or _rollback_layout_error(entry)
+            err = (_rollback_backup_error(entry) or _rollback_layout_error(entry)
+                   or _standalone_sdk_rollback_error(entry, mcs_util.load_config()))
             if err:
                 raise UpdateError(err)
             try:

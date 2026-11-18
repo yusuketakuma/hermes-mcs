@@ -59,6 +59,7 @@ from update_preflight import (
     _fresh_rollback_state,
     _provider_migration_needed,
     _provider_rollback_preflight,
+    _standalone_sdk_rollback_error,
 )
 from update_repository import (
     _git,
@@ -640,6 +641,12 @@ def _undo_interrupted_migration(state, applying, drainers, escalate) -> int:
     Same order as rollback(): journal a rollback-shaped record, quiesce,
     then restore tree, venv and Hermes checkout; a pending restore consent
     holds with drainers stopped."""
+    # Like rollback(): the venv keeps the new SDK pins, so refuse before any change.
+    sdk_error = _standalone_sdk_rollback_error(
+        {**applying, "prev_sha": applying["sha"]} if applying.get("rollback") else applying,
+        mcs_util.load_config())
+    if sdk_error:
+        return escalate(sdk_error)
     if applying.get("rollback"):
         record, entry = applying, {**applying, "sha": applying["prev_sha"],
                                    "prev_sha": applying["sha"]}

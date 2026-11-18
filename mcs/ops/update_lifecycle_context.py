@@ -480,20 +480,29 @@ def _remove_marker() -> None:
         os.unlink(MARKER_PATH)
 
 
+# A notice_id names one notification intent: a replay after an unacknowledged
+# (possibly committed) enqueue reuses the event instead of adding another.
+_NOTICE_SEEN_SQL = ("SELECT 1 FROM notify_outbox WHERE kind='update_notice' "
+                    "AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.notice_id')=? END LIMIT 1")
 _NOTICE_CHILD = (
     "import sys, json; sys.path.insert(0, sys.argv[1]); import _mcs_path, ledger\n"
     "db = ledger.Ledger(sys.argv[2])\n"
+    "payload = json.loads(sys.argv[3])\n"
     "try:\n"
-    "    db.outbox_add('update_notice', None, json.loads(sys.argv[3]))\n"
+    "    if payload.get('notice_id') is None or db.db.execute(sys.argv[4], (payload['notice_id'],)).fetchone() is None:\n"
+    "        db.outbox_add('update_notice', None, payload)\n"
     "finally:\n"
     "    db.db.close()\n")
 
 
-def _enqueue_notice(text: str, use_run_lock: bool = False, *, notice_code=None, tag=None) -> bool:
+def _enqueue_notice(text: str, use_run_lock: bool = False, *, notice_code=None, tag=None,
+                    notice_id=None) -> bool:
     """Freeze sanitized text into an update_notice outbox event.
     use_run_lock=True for the daily check (NB acquire — a busy tick
     defers the notify to the next check); the apply child skips it
-    because its parent already holds the lock."""
+    because its parent already holds the lock. With notice_id the
+    enqueue is idempotent; False then means "maybe enqueued", so retry
+    with the same id."""
     fd = None
     if use_run_lock:
         fd = acquire_run_lock(RUN_LOCK)
@@ -505,6 +514,8 @@ def _enqueue_notice(text: str, use_run_lock: bool = False, *, notice_code=None, 
             payload["notice_code"] = notice_code
         if tag is not None:
             payload["tag"] = tag
+        if notice_id is not None:
+            payload["notice_id"] = notice_id
         live = os.path.join(REPO, "mcs")
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         if os.path.realpath(here) != os.path.realpath(live):
@@ -512,12 +523,14 @@ def _enqueue_notice(text: str, use_run_lock: bool = False, *, notice_code=None, 
             # would migrate the live DB past what the live tree runs, so
             # only the live tree's own Ledger may open it
             r = _run_with_lifetime(
-                [sys.executable, "-c", _NOTICE_CHILD, live, LEDGER, json.dumps(payload)],
+                [sys.executable, "-c", _NOTICE_CHILD, live, LEDGER, json.dumps(payload),
+                 _NOTICE_SEEN_SQL],
                 stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
             return r.returncode == 0
         db = ledger.Ledger(LEDGER)
         try:
-            db.outbox_add("update_notice", None, payload)
+            if notice_id is None or db.db.execute(_NOTICE_SEEN_SQL, (notice_id,)).fetchone() is None:
+                db.outbox_add("update_notice", None, payload)
         finally:
             db.db.close()
         return True

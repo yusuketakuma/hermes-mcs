@@ -1195,3 +1195,145 @@ def test_precheck_tag_rejects_nonregular_runtime_asset(monkeypatch, mode, kind):
     monkeypatch.setattr(update_preflight, '_run_with_lifetime', no_blob_or_probe)
     errors = update_preflight.precheck_tag('v1.2.0')
     assert errors == [f'preflight_failed: bad_entry_type: {mode} {asset}']
+
+
+def test_abort_notice_dropped_by_a_busy_tick_is_sent_by_the_next_check(updater, monkeypatch):
+    """Regression: a pre-lock abort consumed the receipt, then lost its only
+    notice because a collection tick held run.lock at that moment."""
+    _apply_env(updater, monkeypatch)
+    monkeypatch.setattr(update_apply, 'precheck_local', lambda cfg: ["synthetic"])
+    monkeypatch.setattr(update_apply, '_enqueue_notice', lambda *a, **k: False)
+    assert updater.apply("v1.1.0", "a" * 40, "cid-busy") == 1
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["executed"]["cid-busy"]["result"] == "failed"
+    [pending] = state["pending_notices"]
+    assert pending["notice_code"] == "aborted" and "synthetic" in pending["text"]
+
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {"update": {"mode": "notify"}})
+    monkeypatch.setattr(update_discovery, 'detect_latest', lambda pre, **_paths: (None, None))
+    monkeypatch.setattr(update_discovery, 'current_version', lambda **_paths: ("v1.0.0", "b" * 40))
+    monkeypatch.setattr(update_cli, 'scan_pending_approvals', lambda state: ([], []))
+    monkeypatch.setattr(update_cli, '_drug_info_notices', lambda cfg: None)
+    sent = []
+    monkeypatch.setattr(update_cli, '_enqueue_notice', lambda text, **k: sent.append((text, k)) or True)
+    assert updater.cmd_check() == 0
+    assert sent == [(pending["text"], {"use_run_lock": True, "notice_code": "aborted",
+                                       "tag": "v1.1.0", "notice_id": pending["notice_id"]})]
+    assert "pending_notices" not in updater.journal_store.load_state(updater.STATE_PATH)
+
+
+# ------------------------------------------- idempotent pending abort notices
+
+_WORKTREE = str(Path(update_lifecycle_context.__file__).resolve().parents[2])
+
+
+def _pending_notice_check_env(updater, tmp_path, monkeypatch, pending, *, child=False):
+    """Daily check over a seeded pending_notices list, with the real Ledger enqueue
+    (in-process, or the launcher's live-tree child process when child=True)."""
+    monkeypatch.setattr(update_lifecycle_context, 'REPO', _WORKTREE)
+    monkeypatch.setattr(update_lifecycle_context, 'LEDGER', str(tmp_path / 'notice-ledger.db'))
+    if child:
+        monkeypatch.setattr(update_lifecycle_context, '__file__',
+                            str(tmp_path / 'launcher' / 'mcs' / 'ops' / 'update_lifecycle_context.py'))
+    os.makedirs(updater.DATA, exist_ok=True)
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {"update": {"mode": "notify"}})
+    monkeypatch.setattr(update_discovery, 'detect_latest', lambda pre, **_paths: (None, None))
+    monkeypatch.setattr(update_discovery, 'current_version', lambda **_paths: ("v1.0.0", "b" * 40))
+    monkeypatch.setattr(update_cli, 'scan_pending_approvals', lambda state: ([], []))
+    monkeypatch.setattr(update_cli, '_drug_info_notices', lambda cfg: None)
+    state = updater.journal_store.default_state()
+    state["pending_notices"] = pending
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+
+
+def _notice_events(tmp_path):
+    import sqlite3
+    con = sqlite3.connect(tmp_path / 'notice-ledger.db')
+    try:
+        return [json.loads(p) for (p,) in con.execute(
+            "SELECT payload FROM notify_outbox WHERE kind='update_notice' ORDER BY event_id")]
+    finally:
+        con.close()
+
+
+def _fail_save_after(updater, monkeypatch, ok_saves):
+    """Let ok_saves journal saves through, then fail every later save once."""
+    real, calls = updater.journal_store.save_state, []
+
+    def save(path, state):
+        calls.append(path)
+        if len(calls) > ok_saves:
+            monkeypatch.setattr(updater.journal_store, 'save_state', real)
+            raise OSError('synthetic journal save failure')
+        return real(path, state)
+    monkeypatch.setattr(updater.journal_store, 'save_state', save)
+
+
+def _abort(text="[MCS] 更新 v1.1.0 を中止しました: synthetic", notice_id="nid-1"):
+    notice = {"text": text, "notice_code": "aborted", "tag": "v1.1.0"}
+    return {**notice, "notice_id": notice_id} if notice_id else notice
+
+
+@pytest.mark.parametrize('child', [False, True])
+def test_pending_abort_replayed_after_a_failed_journal_save_keeps_one_event(
+        updater, tmp_path, monkeypatch, child):
+    """Regression: the outbox commit landed but the journal still listed the
+    notice, so the next check inserted a second event for the same abort."""
+    _pending_notice_check_env(updater, tmp_path, monkeypatch, [_abort()], child=child)
+    _fail_save_after(updater, monkeypatch, 0)
+    with pytest.raises(OSError, match='synthetic journal save failure'):
+        updater.cmd_check()
+    assert [e["notice_id"] for e in _notice_events(tmp_path)] == ["nid-1"]
+    assert updater.journal_store.load_state(updater.STATE_PATH)["pending_notices"]
+
+    assert updater.cmd_check() == 0
+    assert [e["notice_id"] for e in _notice_events(tmp_path)] == ["nid-1"]
+    assert "pending_notices" not in updater.journal_store.load_state(updater.STATE_PATH)
+
+
+def test_pending_abort_enqueue_false_after_commit_is_not_duplicated(updater, tmp_path, monkeypatch):
+    """False from the wrapper may follow a commit: keep the notice, and the retry reuses the event."""
+    _pending_notice_check_env(updater, tmp_path, monkeypatch, [_abort()])
+    real = update_lifecycle_context._enqueue_notice
+    monkeypatch.setattr(update_cli, '_enqueue_notice', lambda *a, **k: real(*a, **k) and False)
+    assert updater.cmd_check() == 0
+    assert len(updater.journal_store.load_state(updater.STATE_PATH)["pending_notices"]) == 1
+    monkeypatch.setattr(update_cli, '_enqueue_notice', real)
+    assert updater.cmd_check() == 0
+    assert [e["notice_id"] for e in _notice_events(tmp_path)] == ["nid-1"]
+    assert "pending_notices" not in updater.journal_store.load_state(updater.STATE_PATH)
+
+
+def test_two_pending_aborts_with_distinct_ids_each_get_one_event(updater, tmp_path, monkeypatch):
+    same_text = _abort()["text"]
+    _pending_notice_check_env(updater, tmp_path, monkeypatch,
+                              [_abort(same_text, "nid-1"), _abort(same_text, "nid-2")])
+    _fail_save_after(updater, monkeypatch, 0)
+    with pytest.raises(OSError):
+        updater.cmd_check()
+    assert updater.cmd_check() == 0
+    assert [e["notice_id"] for e in _notice_events(tmp_path)] == ["nid-1", "nid-2"]
+
+
+def test_pending_abort_saved_without_an_id_still_gets_exactly_one_event(updater, tmp_path, monkeypatch):
+    """Items written before notice ids get one fixed durably before their first send."""
+    _pending_notice_check_env(updater, tmp_path, monkeypatch, [_abort(notice_id=None)])
+    _fail_save_after(updater, monkeypatch, 1)  # the id assignment saves; the removal fails
+    with pytest.raises(OSError):
+        updater.cmd_check()
+    [pending] = updater.journal_store.load_state(updater.STATE_PATH)["pending_notices"]
+    assert isinstance(pending["notice_id"], str)
+    assert updater.cmd_check() == 0
+    assert [e["notice_id"] for e in _notice_events(tmp_path)] == [pending["notice_id"]]
+    assert "pending_notices" not in updater.journal_store.load_state(updater.STATE_PATH)
+
+
+def test_abort_pending_notice_carries_the_id_of_its_first_enqueue(updater, monkeypatch):
+    """The id is fixed before the first (possibly committed) enqueue and kept with the pending item."""
+    _apply_env(updater, monkeypatch)
+    monkeypatch.setattr(update_apply, 'precheck_local', lambda cfg: ["synthetic"])
+    ids = []
+    monkeypatch.setattr(update_apply, '_enqueue_notice', lambda *a, **k: ids.append(k["notice_id"]) and False)
+    assert updater.apply("v1.1.0", "a" * 40, "cid-id") == 1
+    [pending] = updater.journal_store.load_state(updater.STATE_PATH)["pending_notices"]
+    assert ids == [pending["notice_id"]]

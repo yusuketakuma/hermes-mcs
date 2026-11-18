@@ -103,6 +103,8 @@ def _rollback_applying(entry, prev_sha, command_id) -> dict:
         "manifest_snapshot": entry.get("manifest_snapshot"),
         **({"runtime_migration": entry["runtime_migration"]}
            if entry.get("runtime_migration") else {}),
+        **({"reinstall_started": False}
+           if entry.get("reinstall_started") is False and not entry.get("reinstall_done") else {}),
         **({"target_kind": "release"} if entry.get('target_kind') == 'release' else {}),
         **({"release_ref": entry["release_ref"]} if "release_ref" in entry else {}),
         "command_id": command_id,
