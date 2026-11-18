@@ -397,3 +397,20 @@ def test_lab_flag_is_bound_to_its_own_reading(flag, cue):
 def test_repeated_lab_reading_in_separate_columns_is_unverified(tail):
     quote = f"Cr 1.2mg/dL {tail}"
     assert clinical_values.lab_candidate("Cr", 1.2, "mg/dL", quote)["confirmation"] == "unverified"
+
+
+@pytest.mark.parametrize("name, value, unit, quote", [
+    ("HbA1c", 7.2, "%", "HbA1c 7.2% HbA1c 7.2%"),
+    ("Cr", 1.2, "mg/dL", "Cr 1.2mg/dL HbA1c 7.2% クレアチニン 1.2mg/dL"),
+])
+def test_a_second_column_cannot_revive_an_ambiguous_lab_reading(name, value, unit, quote):
+    assert clinical_values.lab_candidate(name, value, unit, quote)["confirmation"] == "unverified"
+    result = extract_validation.validate({"labs": [{
+        "name": name, "value": value, "unit": unit, "evidence": quote,
+    }]}, quote)
+    assert result["labs"][0]["unverified"] is True
+
+
+def test_a_distinct_lab_column_after_percent_is_supported():
+    quote = "HbA1c 7.2% K 4.0mEq/L"
+    assert clinical_values.lab_candidate("HbA1c", 7.2, "%", quote)["confirmation"] == "quote_supported"
