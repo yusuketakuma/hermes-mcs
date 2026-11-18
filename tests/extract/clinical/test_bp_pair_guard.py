@@ -177,10 +177,16 @@ def test_blank_around_slash_keeps_side_matching(sep):
 
 @pytest.mark.parametrize("sep", ["/", " / "])
 def test_blank_around_slash_keeps_threshold_flag(sep):
+    body = f"本人の血圧80{sep}60。"
     flags = clinical_values.vital_threshold_flags(
-        {"sbp": 80, "dbp": 60}, f"本人の血圧80{sep}60。", {"sbp_lte": 90})
-    assert flags == clinical_values.vital_threshold_flags(
-        {"sbp": 80, "dbp": 60}, "本人の血圧80/60。", {"sbp_lte": 90}) != []
+        {"sbp": 80, "dbp": 60}, body, {"sbp_lte": 90})
+    plain = clinical_values.vital_threshold_flags(
+        {"sbp": 80, "dbp": 60}, "本人の血圧80/60。", {"sbp_lte": 90})
+    assert flags and plain
+    assert [{k: f[k] for k in ("key", "value", "rule")} for f in flags] == \
+        [{k: f[k] for k in ("key", "value", "rule")} for f in plain]
+    assert all(f["evidence"] == body for f in flags)
+    assert all(f["evidence"] == "本人の血圧80/60。" for f in plain)
 
 
 @pytest.mark.parametrize("sep", ["/", " / "])

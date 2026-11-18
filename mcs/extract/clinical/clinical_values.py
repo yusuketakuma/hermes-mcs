@@ -439,8 +439,15 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                               f"({_LAB_QUOTED_UNIT})", tail)
             if result and normalized_quantity_number(result[1]) == number:
                 # an omitted unit must not bypass the item's units: the quoted one is checked too
-                after = re.split(r"[。、,;；\n]", tail[result.end():], maxsplit=1)[0]
-                if ((result[2] == unit_key) if unit_key else (not result[2] or result[2] in allowed_units)) \
+                quoted_unit, unit_end = result[2], result.end()
+                if (unit_key and quoted_unit != unit_key and quoted_unit.startswith(unit_key)
+                        and re.match(r"[a-z]+[0-9]", quoted_unit[len(unit_key):])):
+                    # Folding drops the space before a following item ("mg/dl k 4.0"): keep the
+                    # item's own unit and let the digit-bearing tail prove the next reading.
+                    unit_end = result.start(2) + len(unit_key)
+                    quoted_unit = unit_key
+                after = re.split(r"[。、,;；\n]", tail[unit_end:], maxsplit=1)[0]
+                if ((quoted_unit == unit_key) if unit_key else (not quoted_unit or quoted_unit in allowed_units)) \
                         and _LAB_NUMBER_CLOSED_TAIL.match(after):
                     readings.append(match)
         elif tail.startswith(fold_surface(raw_value)) and raw_value:

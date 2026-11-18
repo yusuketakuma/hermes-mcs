@@ -135,7 +135,9 @@ def _candidate(record):
         else:
             anchor = span[0] + evidence.index(name)
             subject, period = source_axes(body, anchor, anchor + len(name))
-            marker = re.search(r"予定|計画|検討中|見込み|なら|場合|たら|とき|れば", evidence[evidence.index(name):])
+            marker = re.search(r"(?:の)?(?:検査|採血|測定|血液検査|生化学検査|尿検査)?"
+                               r"(?:予定|計画|検討中|見込み|なら|場合|たら|とき|れば)",
+                               evidence[evidence.index(name):])
             verified_source = subject == "patient" and period == record["status"] and marker is not None
             if marker is not None:
                 # This is a contiguous original prefix, used only to prove the label/value relation.
