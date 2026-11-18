@@ -313,10 +313,8 @@ def until_epoch(value) -> float:
     from datetime import datetime
     if not isinstance(value, str) or len(value) > 64:
         raise ValueError("until_invalid")
-    # Installer helpers may run on Python 3.9/3.10, whose fromisoformat rejects
-    # the 'Z' that 3.11+ accepts. shortcut: other 3.11-only ISO forms (+0900,
-    # '.5', basic format) still differ; cloud_cli saves only the canonical
-    # isoformat(), so only hand-edited values can hit this; widen if they do.
+    # Installer helpers on Python 3.9/3.10 reject Z. Other newer ISO forms
+    # in older CLI output or manual settings may need resaving with cloud_cli.
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
     parsed = datetime.fromisoformat(value)
