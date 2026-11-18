@@ -155,11 +155,12 @@ def _semantic_proof(led, pid, mid, cfg=CFG, *, observation_quote=None):
 
 
 def seed(led, mid=1, pid=1, body='生活環境: 合成の居住記録。', state='full', *,
-         proof=True, semantic_quote=None):
+         proof=True, semantic_quote=None, posted_at=None):
     led.db.execute('INSERT OR IGNORE INTO patients(project_id,patient_name) VALUES (?,?)',
                    (pid, f'synthetic-{pid}'))
     led.db.commit()
-    led.save_messages([_message(mid, body, state, project_id=pid)])
+    message_kw = {'posted_at': posted_at} if posted_at is not None else {}
+    led.save_messages([_message(mid, body, state, project_id=pid, **message_kw)])
     led.db.execute('UPDATE messages SET first_seen=? WHERE message_id=?',
                    (stamp('2026-10-17T22:00:00'), mid))
     # The normal synthetic fixture has exhausted history; partial acquisition is explicit.
