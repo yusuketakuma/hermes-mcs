@@ -297,11 +297,12 @@ _LAB_ITEM_UNITS = {
 }
 # Capture explicit dose/count symbols too; an omitted output unit cannot hide them.
 _LAB_QUOTED_UNIT = r"(?:[a-zμ%/0-9.^²‰‱°錠包袋滴枚本個回単位]|カプセル)*"
-# After the number only a closed affirmative form states the measurement (nothing, デス/デシタ,
-# a plain high/low cue, a following ASCII item); any other tail (以内, より, 付近, 強, 思われる...) does not.
-# Kana in katakana: fold_surface folds the quote that way.
+# A closed affirmative form is required unless a separate named reading follows.
 _LAB_NUMBER_CLOSED_TAIL = re.compile(
-    r"(?:[トニ])?(?:高値|低値|高イ|低イ|高|低|上昇|低下|正常|異常)?(?:デス|デシタ|ダ|ダッタ)?(?:\([hl]\))?$|[a-z0-9]")
+    r"(?:[トニ])?(?:高値|低値|高イ|低イ|高|低|上昇|低下|正常|異常)?(?:デス|デシタ|ダ|ダッタ)?(?:\([hl]\))?$")
+_LAB_NEXT_NUMBER = re.compile(
+    r"(?:" + "|".join(re.escape(n) for names in _LAB_NAMES.values() for n in names)
+    + r")(?:値|ハ|:|=)*[+-]?[0-9]")
 _DATE = re.compile(r"(?<!\d)(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?(?!\d)")
 
 
@@ -432,6 +433,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                + r")(?![a-z])(?:値|ハ|:|=)*")
     allowed_units = _LAB_ITEM_UNITS.get(analyte, _LAB_UNITS)
     readings = []
+    source_map = None
     for match in re.finditer(pattern, quote):
         tail = quote[match.end():]
         if number is not None:
@@ -440,9 +442,18 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
             if result and normalized_quantity_number(result[1]) == number:
                 # an omitted unit must not bypass the item's units: the quoted one is checked too
                 after = re.split(r"[。、,;；\n]", tail[result.end():], maxsplit=1)[0]
-                if ((result[2] == unit_key) if unit_key else (not result[2] or result[2] in allowed_units)) \
-                        and _LAB_NUMBER_CLOSED_TAIL.match(after):
+                unit_matches = result[2] == unit_key if unit_key else not result[2] or result[2] in allowed_units
+                if unit_matches and _LAB_NUMBER_CLOSED_TAIL.match(after):
                     readings.append(match)
+                elif unit_key and result[2].startswith(unit_key) and isinstance(evidence, str):
+                    # Folding removed the column gap. Require it in the original before splitting the unit.
+                    unit_end = match.end() + result.start(2) + len(unit_key)
+                    if _LAB_NEXT_NUMBER.match(quote, unit_end):
+                        source_map = source_map or fold_map(evidence, casefold=True)
+                        _, starts, ends = source_map
+                        if (len(starts) == len(quote)
+                                and evidence[ends[unit_end - 1]:starts[unit_end]].isspace()):
+                            readings.append(match)
         elif tail.startswith(fold_surface(raw_value)) and raw_value:
             remainder = tail[len(fold_surface(raw_value)):]
             result_unit = re.match(_LAB_QUOTED_UNIT, remainder)
@@ -464,7 +475,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
     if re.search(r"予定|検査依頼|目標|基準|参考", quote):
         supported = False
     if readings and isinstance(evidence, str):
-        _, starts, ends = fold_map(evidence, casefold=True)
+        _, starts, ends = source_map or fold_map(evidence, casefold=True)
         reading = readings[0]
         if clinical_scope.patient_source_scope(evidence, starts[reading.start()], ends[reading.end() - 1],
                                         patient_name=patient_name) \

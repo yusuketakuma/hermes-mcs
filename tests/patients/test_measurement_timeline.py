@@ -149,12 +149,17 @@ def test_same_value_on_separate_measurement_days_remains_history_and_current():
 def test_plan_must_bind_the_named_measurement_value_and_unit():
     a = _record(1, "2026-10-03", "2026-10-01T09:00:00+09:00", "1.5")
     a["status"] = "planned"
-    body = "本人は2026-10-03に採血 Cr 1.0 mg/dLの検査予定、移動に1.5時間。"
-    a["source_body"] = a["evidence"] = body
-    a["evidence_span"] = [0, len(body)]
+    body = "本人は2026-10-03に空腹時採血 Cr 1.0 mg/dLの検査予定、移動に1.5時間。"
+    a.update(source_body=body, evidence=body, evidence_span=[0, len(body)])
     assert measurement_timeline.project_measurements([a], source_complete=True)["items"][0]["state"] == "unknown"
-    a["value"] = "1.0"
-    a["key"] = "potassium"
+    a.update(value="1.0", key="potassium")
+    assert measurement_timeline.project_measurements([a], source_complete=True)["items"][0]["state"] == "unknown"
+
+
+def test_plan_with_a_comparison_does_not_prove_an_exact_value():
+    a = _record(1, "2026-10-03", "2026-10-01T09:00:00+09:00", "1.0")
+    body = "本人は2026-10-03に空腹時採血 Cr 1.0 mg/dL未満の検査予定。"
+    a.update(status="planned", source_body=body, evidence=body, evidence_span=[0, len(body)])
     assert measurement_timeline.project_measurements([a], source_complete=True)["items"][0]["state"] == "unknown"
 
 
