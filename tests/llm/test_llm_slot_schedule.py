@@ -338,7 +338,7 @@ def test_scheduled_admission_keeps_minimum_budget_after_slot_wait(tmp_path, monk
     monkeypatch.setattr(schedule, "night", lambda: False)
     monkeypatch.setattr(local_llm, "_broker", lambda _: broker)
     required = patient_context_refresh_state.CALL_SECONDS + patient_context_refresh_state.COMMIT_MARGIN
-    clock, waits, posted = [1000.0], [], []
+    clock, waits, posted = [1000.0, 1_800_000_000.0], [], []
     deadline = clock[0] + required + 1
     with ExitStack() as holders:
         for preferred in (1, 2):
@@ -349,7 +349,8 @@ def test_scheduled_admission_keeps_minimum_budget_after_slot_wait(tmp_path, monk
             clock[0] += spent
             holders.close()
 
-        fake_time = SimpleNamespace(monotonic=lambda: clock[0], sleep=sleep)
+        fake_time = SimpleNamespace(monotonic=lambda: clock[0], sleep=sleep,
+                                    time=lambda: clock[1])
         monkeypatch.setattr(schedule, "time", fake_time)
         monkeypatch.setattr(local_llm, "time", fake_time)
 
