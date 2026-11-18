@@ -18,7 +18,8 @@ import notify_transport
 from notify_scope import (card_projects, card_row, render_row, stored_scope,
                           scope_fields, scope_matches, retired_transports,
                           TRANSPORT_VERSIONS, SUPPORTED_TRANSPORTS,
-                          RESTORE_BEYOND_JOURNAL_HORIZON as BEYOND_HORIZON)
+                          RESTORE_BEYOND_JOURNAL_HORIZON as BEYOND_HORIZON,
+                          RESTORE_UNRESOLVABLE_PART_REASONS)
 
 _RESOLVE_RESULTS = ("mark_not_sent", "mark_delivered")
 _PREFLIGHT_PROOF = "local_preflight_rejected"
@@ -484,8 +485,7 @@ PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
                      "prefetch_failed", "unsupported_part", "slack_attachment_incomplete",
                      "scope_mismatch", "no_target", "bad_render", "bad_slack_response",
                      "operator_part_resolve", BEYOND_HORIZON,
-                     "restore_group_spec_unverified", "restore_group_surface_missing",
-                     "restore_group_surface_unresolvable")
+                     *RESTORE_UNRESOLVABLE_PART_REASONS)
 
 
 # non-card part kinds an operator recovery command can name

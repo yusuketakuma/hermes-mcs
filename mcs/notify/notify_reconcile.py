@@ -52,7 +52,6 @@ import notify_scope
 import notify_spool
 from notify_scope import card_row
 from mcs_queries import HOLD_PROGRESS_SET
-from mcs_requests import valid_uuid
 from mcs_util import loads_dict
 from safe_io import fsync_dir, read_regular_nofollow
 import notify_transport
@@ -458,10 +457,8 @@ BEYOND_HORIZON = notify_recovery.BEYOND_HORIZON
 # A Discord file_group part that cannot share a verified surface attempt is
 # made ``unknown`` without one: ops.card_part_resolve cannot plan it, and the
 # receipt, notice and part_hold_report name why it needs manual investigation.
-GROUP_SPEC_UNVERIFIED = "restore_group_spec_unverified"
-GROUP_SURFACE_MISSING = "restore_group_surface_missing"
-GROUP_SURFACE_UNRESOLVABLE = "restore_group_surface_unresolvable"
-UNRESOLVABLE = (GROUP_SPEC_UNVERIFIED, GROUP_SURFACE_MISSING, GROUP_SURFACE_UNRESOLVABLE)
+UNRESOLVABLE = notify_scope.RESTORE_UNRESOLVABLE_PART_REASONS
+GROUP_SPEC_UNVERIFIED, GROUP_SURFACE_MISSING, GROUP_SURFACE_UNRESOLVABLE = UNRESOLVABLE
 
 
 def _discord_group_surfaces(db, delivery_id):
@@ -532,7 +529,7 @@ def promote_group_parts(db, now, delivery_id=None) -> list:
     return promoted
 
 
-def _unknown_beyond_horizon_parts(db, restored_at, now, slack_directory) -> list:
+def _unknown_beyond_horizon_parts(db, restored_at, now, dirs) -> list:
     """Mark the pending thread/body/attachment/file-group parts of each card's
     latest delivered render from the restored backup ``unknown``.
 
@@ -578,11 +575,11 @@ def _unknown_beyond_horizon_parts(db, restored_at, now, slack_directory) -> list
             "AND p.state='pending' "
             "ORDER BY p.delivery_id,p.idx", (restored_at, restored_at)).fetchall()
         flagged = []
-        slack_deliveries = set()
+        flagged_deliveries = set()
         grouped, unresolvable, surfaces = [], [], {}
         for row in rows:
             if row["transport"] == "slack" and row["kind"] == "file_group" and row["attempt_id"] is None:
-                slack_deliveries.add(row["delivery_id"])
+                flagged_deliveries.add(row["delivery_id"])
                 if db.execute(
                     "UPDATE notification_render_parts SET error_code=?,updated_at=? "
                     "WHERE delivery_id=? AND part_id=? AND state='pending' "
@@ -618,7 +615,12 @@ def _unknown_beyond_horizon_parts(db, restored_at, now, slack_directory) -> list
         promoted = promote_group_parts(db, now)
         for delivery_id in sorted({h["delivery_id"] for h in (*marked, *promoted)}):
             notify_parts.update_state(db, delivery_id, now)
-        _withdraw_slack_specs(db, slack_directory, slack_deliveries)
+        deliveries = flagged_deliveries | {part["delivery_id"] for part in (*marked, *promoted)}
+        for delivery_id in sorted(deliveries):
+            if _withdraw_spec(dirs, delivery_id) is not True:
+                raise OSError("restore_part_spec_withdraw_failed")
+        db.executemany("UPDATE notification_renders SET spec_published=0 WHERE delivery_id=?",
+                       [(delivery_id,) for delivery_id in deliveries])
     return [*marked, *flagged]
 
 
@@ -649,25 +651,6 @@ def _beyond_horizon_parts(db) -> tuple[list, list]:
         "ORDER BY p.delivery_id,p.idx", (*codes, BEYOND_HORIZON)).fetchall()]
     return ([p for p in parts if p["reason"] == BEYOND_HORIZON],
             [p for p in parts if p["reason"] != BEYOND_HORIZON])
-
-
-def _withdraw_slack_specs(db, directory, deliveries):
-    """Keep the sealed DB plan but prevent worker replay when the restore gate opens."""
-    if not deliveries:
-        return
-    for delivery_id in sorted(deliveries):
-        if not valid_uuid(delivery_id):
-            raise ValueError("invalid_restore_delivery_id")
-        try:
-            os.unlink(os.path.join(directory, delivery_id + ".json"))
-        except FileNotFoundError:
-            pass
-    try:
-        fsync_dir(directory)
-    except FileNotFoundError:
-        pass
-    db.executemany("UPDATE notification_renders SET spec_published=0 WHERE delivery_id=?",
-                   [(delivery_id,) for delivery_id in deliveries])
 
 
 def _hold_rows(db) -> int:
@@ -759,7 +742,7 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
                             BEYOND_HORIZON, dirs, now)
             verdicts.append(v)
             held.append(v)
-        parts_marked = _unknown_beyond_horizon_parts(db, restored_at, now, dirs["slack_render"])
+        parts_marked = _unknown_beyond_horizon_parts(db, restored_at, now, dirs)
         parts_held, parts_unresolvable = _beyond_horizon_parts(db)
     else:
         parts_marked, parts_held, parts_unresolvable = [], [], []
