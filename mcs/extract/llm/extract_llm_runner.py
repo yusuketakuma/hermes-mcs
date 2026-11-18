@@ -342,7 +342,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 "cloud_selection_incomplete": True, "cloud_selection_reason": str(error),
                 **({'gc_error': gc_error} if gc_error else {})}
     done, held_prior, deferred = (carry_settled[k] for k in ('done', 'held_prior', 'deferred'))
-    failed = lock_lost = 0
+    failed = lock_lost = unwritten = 0
     done_pids = set(carry_pids)
     endpoint_down = False
     breaker_fed = False
@@ -827,6 +827,14 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 (shadow_tasks if shadow is None else shadow).append((r, d, ctx, unit))
         return True
 
+    @contextlib.contextmanager
+    def _settle_lock():
+        # These writes are never carried; count a refused write instead of losing it unseen.
+        nonlocal unwritten
+        with _write_lock(per_write_lock) as held:
+            unwritten += not held
+            yield held
+
     def _handle(r, ctx, d, integrity, lease, chunks_out, qc=None):
         nonlocal done, failed, deferred, endpoint_down, lock_lost, slow_deferred
         nonlocal breaker_fed
@@ -858,7 +866,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             def cloud_retry():
                 # the paid cloud attempt failed and local produced nothing: the
                 # retry backoff keeps the next pass from re-sending the same body
-                with _write_lock(per_write_lock) as held:
+                with _settle_lock() as held:
                     if held and not _current(ledger, r["message_id"], r["content_hash"]):
                         _fail(ledger, r, r["attempts"], lease=lease)
             if d is _DEFERRED:
@@ -941,7 +949,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         # these writes are never carried: a skipped one
                         # re-selects the row for another paid call, so
                         # wait out the tick (default 60 s), not write_wait_s
-                        with _write_lock(per_write_lock) as held:
+                        with _settle_lock() as held:
                             if held:
                                 _commit_extraction_atomic(
                                     ledger, r, src["content"], ctx, None,
@@ -965,7 +973,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     if (src is not None and prior is not None
                             and prior["artifact_id"] == src["artifact_id"]
                             and prior["content"] == src["content"]):
-                        with _write_lock(per_write_lock) as held:
+                        with _settle_lock() as held:
                             if held:
                                 _commit_extraction_atomic(
                                     ledger, r, src["content"], ctx, None, None,
@@ -986,7 +994,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     if (content is not None and prior is not None and prior["artifact_id"] == r["thin_src"]
                             and prior["content"] == content):
                         r["_kept_prior"] = True
-                        with _write_lock(per_write_lock) as held:
+                        with _settle_lock() as held:
                             if held:
                                 _commit_extraction_atomic(
                                     ledger, r, content, ctx, None, None,
@@ -995,7 +1003,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                     expected_prior=_prior_identity(prior),
                                     adoption_guard=_rebuild_guard(ledger, r))
                     return
-                with _write_lock(per_write_lock) as held:
+                with _settle_lock() as held:
                     if held and not _current(ledger, r["message_id"],
                                              r["content_hash"]):
                         # _fail carries auto_retry so a revived refail
@@ -1464,6 +1472,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 'carried': carried, 'carry': carry_out, 'deferred': deferred, 'refilled': refilled,
                 **({'refill_stopped': True, 'refill_stop_error': refill_stop_error} if refill_stopped else {}),
                 'defer_reasons': dict(defer_reasons), 'fallback_codes': dict(fallback_codes),
+                'unwritten': unwritten,
                 'pids': sorted(done_pids), 'updated': True}
     for r, local_result, ctx, unit in shadow_tasks:
         if deadline - time.monotonic() < _MIN_CALL_S:
@@ -1526,7 +1535,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             **({"refill_stopped": True, "refill_stop_error": refill_stop_error} if refill_stopped else {}),
             "defer_reasons": dict(defer_reasons), "fallback_codes": dict(fallback_codes),
             "context_blocked": context_blocked,
-            "skipped": skipped, "lock_lost": lock_lost,
+            "skipped": skipped, "lock_lost": lock_lost, "unwritten": unwritten,
             "slow_deferred": slow_deferred,
             "circuit_open_s": round(circuit_s) or None,
             "disk_low": disk_low,

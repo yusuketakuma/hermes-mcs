@@ -66,19 +66,17 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
                     if r.get("_cloud_discard") and write and not _owns_current_source(ledger, r, lease):
                         r["_cloud_discard"]()
                     _release(ledger, r, lease)
-                    if not report:
-                        settled['deferred'] += 1
-                        _settle_note("write_unavailable" if not held else
-                                     "update_fence" if not write else "currentness_unverified")
+                    settled['deferred'] += 1
+                    _settle_note("write_unavailable" if not held else
+                                 "update_fence" if not write else "currentness_unverified")
                 else:
                     renewed = _renew(ledger, r, lease)
                     if renewed is None:
                         if r.get("_cloud_discard"):
                             r["_cloud_discard"]()
                         _release(ledger, r, lease)
-                        if not report:
-                            settled['deferred'] += 1
-                            _settle_note("lease_renewal_failed")
+                        settled['deferred'] += 1
+                        _settle_note("lease_renewal_failed")
                     else:
                         # written back at once: a transient sqlite error on a
                         # later item leaves this list to the resident's retry,
