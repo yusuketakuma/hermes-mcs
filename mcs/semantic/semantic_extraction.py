@@ -1021,12 +1021,14 @@ def extract_facts_v2(llm_fn, member: dict,
             failed.append(index)
             failure_reason = "deadline"
             break
-        if jev_client is not None:
-            jev_verdicts[cid] = _preflight_verdict(
-                jev_client, spec["text"], deadline, cid)
         with semantic_transport.trace_inference() as observed:
             parsed, reason = _chunk_llm(
                 llm_fn, _chunk_prompt(prompt_template, spec, manifest, source, chunk_size), deadline)
+        # after the call: an LLMNotSent (busy turn, unsent probe) raised above
+        # must not strand an uncached Jev preflight the retry would re-send
+        if jev_client is not None:
+            jev_verdicts[cid] = _preflight_verdict(
+                jev_client, spec["text"], deadline, cid)
         if reason is not None:
             failed.append(index)
             failure_reason = reason
