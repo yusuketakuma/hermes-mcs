@@ -154,7 +154,7 @@ def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim
         cfg, route="patient_context", purpose="quality_repair", root=extract_llm.HOME)
     if errors or selection is None:
         return "deferred", None
-    distinct = (selection['provider'] == 'openai' and selection['profile'] is not None
+    distinct = (selection['profile'] is not None
                 or cloud_inference.cloud_provider_contract(selection=selection) != patient_context_refresh_state._route(cfg, pid)["provider"])
     selected_tokens = selection["max_tokens"] if selection["max_tokens"] is not None else 1600
     if not spent and cloud_policy.budget_block_reason(
