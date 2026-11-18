@@ -673,6 +673,20 @@ def _date_text_supported(value) -> bool:
 # unrelated sentence's occurrence never confirms the provider.
 _ACTOR_AGENT = re.compile(r"(?:による|が|は)")
 
+# An actor value naming the patient themself is the recipient — never the
+# provider — when its occurrence sits in a receive clause
+# (「ご本人は…を受けました」「受診しました」); active self-performance
+# (「ご本人が…しました」) still binds.
+_SELF_ACTOR_VALUE = re.compile(
+    r"(?:ご本人|患者本人|本人|患者(?:さん|様)?|利用者(?:さん|様)?)(?:自身)?")
+_PATIENT_RECEIVE = re.compile(r"を受け|受診(?:し|する|した|して|ます)")
+
+
+def _actor_is_recipient(quote, left, right, value):
+    return bool(
+        _SELF_ACTOR_VALUE.fullmatch(value.strip())
+        and _PATIENT_RECEIVE.search(quote, left, right))
+
 
 def _actor_supported(value) -> bool:
     return bool(re.fullmatch(NAMED_PERSON, value) or _ACTOR_ROLE.search(value))
@@ -709,7 +723,10 @@ def _record_attribute_bound(quote, value, kind, match, target_end, *, actor=Fals
             pos = i + 1
             continue
         if left <= i and end <= right:
-            if not actor or _ACTOR_AGENT.match(quote, end):
+            if not actor:
+                return True
+            if (_ACTOR_AGENT.match(quote, end)
+                    and not _actor_is_recipient(quote, left, right, value)):
                 return True
         pos = i + 1
 
