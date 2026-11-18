@@ -70,6 +70,23 @@ def test_cli_failure_is_nonzero_and_private_status_is_sanitized(tmp_path, monkey
     assert json.loads(capsys.readouterr().out)["attachment_ocr"]["failed"] == 1
 
 
+@pytest.mark.parametrize("result, code", [
+    ({"local_done": 1, "local_deferred": 1}, 0),
+    ({"complete": 1, "deferred": 1, "local_done": 0, "local_deferred": 0}, 0),
+    ({"complete": 1, "deferred": 1, "reason": "memory_deferred", "local_done": 0, "local_deferred": 0}, 0),
+    ({"local_done": 0, "local_deferred": 1}, 1),
+    ({"complete": 0, "deferred": 1, "reason": "memory_deferred", "local_done": 0, "local_deferred": 0}, 1),
+    ({"local_done": 1, "local_deferred": 0, "complete": 0, "failed": 1}, 1),
+    ({"local_done": 1, "local_deferred": 1, "reason": "local_processing_failed"}, 1),
+    ({"local_done": 1, "local_deferred": 0, "reason": "snapshot_deferred"}, 1),
+])
+def test_cli_exit_code_treats_deferral_beside_progress_as_backlog(tmp_path, monkeypatch, result, code):
+    monkeypatch.setattr(mcs_ocr, "DATA", str(tmp_path))
+    monkeypatch.setattr(mcs_ocr, "run", lambda cfg: dict(result))
+    monkeypatch.setattr(mcs_ocr.sys, "argv", ["mcs_ocr", "--run"])
+    assert mcs_ocr.main() == code
+
+
 def test_configured_long_timeout_is_respected(tmp_path, monkeypatch):
     database = tmp_path / "synthetic.db"
     database.touch()
@@ -539,6 +556,7 @@ def _defer_drain(monkeypatch, tmp_path, local):
 ])
 def test_drain_records_the_call_reason_observed_during_a_deferral(tmp_path, monkeypatch, reason, code):
     import extract_llm
+    monkeypatch.delattr(extract_llm._CALL_NOTES, "defer_reason", raising=False)
 
     def local(*args, **kwargs):
         extract_llm._CALL_NOTES.defer_reason = reason
@@ -582,6 +600,7 @@ def test_drain_never_promotes_an_observation_to_the_hold_cause(tmp_path, monkeyp
 
 def test_drain_records_no_observation_for_a_successful_call(tmp_path, monkeypatch):
     import extract_llm
+    monkeypatch.delattr(extract_llm._CALL_NOTES, "defer_reason", raising=False)
     calls = iter([{"done": 1, "deferred": 0}, {"done": 0, "deferred": 0}])
 
     def local(*args, **kwargs):

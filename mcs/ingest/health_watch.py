@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 import safe_io  # noqa: E402
+import writer_lock  # noqa: E402
 
 from mcs_queries import JST
 from health_policy import (CARD_STALL_S, HEALTH_REL, STATUS_MAX_BYTES, RUN_GRACE_S,
@@ -920,6 +921,10 @@ def evaluate(home: str = HOME, now: float | None = None,
     report.update({"deadline_s": obs.get("deadline_s", deadline), "alert": alert,
                    "disk_low": disk_low, "disk_alert": disk_alert,
                    "watched_at": now, "alert_held": held})
+    # Informational only: why scheduled collection is yielding right now.
+    pause = writer_lock.gateway_restart_pause(os.path.join(home, "data"), now)
+    if pause:
+        report["gateway_restart_pause"] = pause
     if recovered_from is not None:
         report["recovered_from"] = recovered_from
     if transient_only and streak and streak["count"]:

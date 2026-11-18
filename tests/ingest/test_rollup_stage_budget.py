@@ -62,6 +62,41 @@ def test_derive_reserves_verification_and_existing_tail_for_every_stage(tmp_path
         ledger.close()
 
 
+@pytest.mark.parametrize(("deferrable", "work"), [(True, 450), (False, 296)])
+def test_derive_takes_the_publish_reserve_only_when_the_publish_is_held(
+        tmp_path, monkeypatch, deferrable, work):
+    ledger = _ledger(tmp_path)
+    seen, asked = {}, []
+    try:
+        monkeypatch.setattr(snapshots, "snapshot_verify_timeout_s", lambda path: 154)
+        monkeypatch.setattr(run_check.time, "monotonic", lambda: 0)
+        monkeypatch.setattr(run_check.maintenance, "snapshot_publish_deferrable",
+                            lambda path, *, now, deadline: asked.append(now) or deferrable)
+        def stage(name, value):
+            def run(*args, deadline, **kwargs):
+                seen[name] = deadline
+                return value
+            return run
+        monkeypatch.setattr(extract, "run_pending", stage("rules", {"done": 0, "pids": []}))
+        monkeypatch.setattr(drug_map, "configured", lambda cfg: (None, None))
+        monkeypatch.setattr(drug_map, "derive", stage("drugs", {"pids": [], "status": "complete"}))
+        monkeypatch.setattr(rollup, "scan_fair_dirty_projects",
+                            stage("scan", rollup.RollupScan((), (), False)))
+        monkeypatch.setattr(rollup, "rebuild_many", lambda *a, **k: 0)
+        monkeypatch.setattr(mcs_signals, "evaluate", stage("signals", {"errors": []}))
+        result = {"errors": []}
+        run_check.stage_derive(ledger, result, 480, {}, llm_budget_cap=0)
+        # released: only the fixed tail stays before the unchanged run cap
+        assert seen == pytest.approx({"rules": work / 2, "drugs": work / 3,
+                                      "scan": work / 3, "signals": work})
+        assert result["snapshot_reserve"] == ("released" if deferrable else "kept")
+        # decided once, for when the finish publish runs (the run deadline)
+        assert len(asked) == 1 and asked[0] == pytest.approx(time.time() + 480, abs=5)
+        assert run_check.RUN_DEADLINE_S == 480
+    finally:
+        ledger.close()
+
+
 def test_derive_reserves_rebuild_time_and_excludes_unknown_touched(tmp_path, monkeypatch):
     ledger = _ledger(tmp_path)
     clock = [20]

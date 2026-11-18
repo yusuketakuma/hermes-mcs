@@ -657,6 +657,23 @@ def test_semantic_run_leaves_tail_reserve(tmp_path, monkeypatch):
     db.close()
 
 
+def test_semantic_run_shares_a_released_publish_reserve(tmp_path, monkeypatch):
+    import maintenance
+    import snapshots
+    seen = {}
+    _sem_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(semantic_drain, 'run_due', lambda ledger, cfg, result, deadline, **kw: (
+        seen.__setitem__("deadline", deadline) or {"done": 1, "deferred": 0, "failed": 0}))
+    monkeypatch.setattr(maintenance, "snapshot_publish_deferrable", lambda *a, **k: True)
+    db = _ledger(tmp_path)
+    result = {"errors": []}
+    deadline = time.monotonic() + 400
+    run_check._run_semantic(db, _sem_args(), {}, result, deadline, True)
+    assert seen["deadline"] == deadline - snapshots.SNAPSHOT_WORK_TAIL_S
+    assert result["snapshot_reserve"] == "released"
+    db.close()
+
+
 def test_snapshot_work_deadline_delegates_to_shared_helper(tmp_path):
     import snapshots
     db = _ledger(tmp_path)

@@ -239,6 +239,19 @@ def test_services_removed_undesired_cron_leaves_manifest(
     assert scripts == [s for _, _, s in scheduled_jobs.CRON_JOBS]
 
 
+def test_services_flags_a_paused_registered_job_without_resuming_it(monkeypatch, tmp_path, capsys):
+    import json
+    present = _desired_cron_entries()
+    present[0]["state"] = "disabled"
+    calls, args = _services_env(monkeypatch, tmp_path, cron_entries=present)
+    assert mcs_setup.cmd_services(args) == 0
+    out = capsys.readouterr().out
+    assert f"'{present[0]['name']}'はHermes側で停止中（disabled）" in out
+    assert not any(call[1:2] == ["cron"] for call in calls)
+    manifest = json.loads((tmp_path / "data" / "service_manifest.json").read_text())
+    assert present[0]["id"] in {row.get("id") for row in manifest["cron"]}
+
+
 def test_services_noop_remove_keeps_created_job_owned(
         monkeypatch, tmp_path):
     """A create that lands and a remove that does not must both stay
@@ -584,3 +597,21 @@ def test_changed_standalone_plist_is_reloaded_into_launchd(monkeypatch, tmp_path
     assert ["launchctl", "bootout", f"gui/{mcs_setup.os.getuid()}/ai.mcs.standalone"] in calls
     assert any(c[:2] == ["launchctl", "bootstrap"] for c in calls)
     assert requests == []
+
+
+def test_check_reports_an_unverifiable_log_helper_instead_of_crashing(monkeypatch, tmp_path):
+    import run_log_install
+    from mcs_standalone import service
+
+    _services_env(monkeypatch, tmp_path)
+
+    def broken(*args, **kwargs):
+        raise run_log_install.LogInstallError("run_log_helper_untrusted")
+
+    monkeypatch.setattr(run_log_install, "helper_path", broken)
+    monkeypatch.setattr(service, "render_health", broken)
+    paths = mcs_setup._service_paths()
+    errors, warnings = service_management.script_drift(paths=paths)
+    assert len(errors) == 1 and "run_log_helper_untrusted" in errors[0] and "install.sh" in errors[0]
+    errors, _ = service_management.check_standalone_health(paths=paths)
+    assert len(errors) == 1 and "run_log_helper_untrusted" in errors[0]
