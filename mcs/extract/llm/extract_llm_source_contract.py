@@ -424,6 +424,19 @@ def _rule_hints(r):
 
 _GREETING_RE = re.compile(r"[\s、。，,.！？!?]*(?:おはようございます|こんにちは|こんばんは)[\s、。，,.！？!?]*")
 
+# Content-less courtesy phrases, as a positive closed form: a body made only
+# of these phrases and sentence marks carries nothing to extract. Longer
+# variants lead each alternation so a fullmatch never truncates a phrase.
+# よろしくお願いします is absent on purpose: the rule hints already read it
+# as a request, and a request is content.
+_EMPTY_POST = (r"ありがとうございました|ありがとうございます|ありがとう|"
+               r"失礼いたしました|失礼いたします|失礼します|"
+               r"お疲れ様でした|お疲れさまでした|お疲れ様です|お疲れさまです|"
+               r"承知いたしました|承知しました|承知です|"
+               r"了解いたしました|了解しました|了解です")
+_EMPTY_POST_RE = re.compile(
+    rf"[\s、。，,.！？!?]*(?:{_EMPTY_POST})(?:[\s、。，,.！？!?]+(?:{_EMPTY_POST}))*[\s、。，,.！？!?]*")
+
 
 _PREFILTER_CONTENT = ('{"meds":[],"symptoms":[],"events":[],'
                       '"requests":[],"vitals":{},'
