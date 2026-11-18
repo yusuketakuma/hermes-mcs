@@ -568,3 +568,89 @@ def test_interrupted_update_recovery_precedes_changed_guided_options(updater, mo
     monkeypatch.setattr(update_cli, 'recover_interrupted', updater.recover_interrupted)
     monkeypatch.setattr(update_recovery, 'recover_interrupted', updater.recover_interrupted)
     assert updater._apply_pipeline('v1.0.23', None, None, reinstall=True) == 7
+
+
+def test_schema_rollback_stop_failure_does_not_freeze_or_claim_a_stop(updater, monkeypatch):
+    """Regression: a failed rollback quiesce rewrote the journal as an
+    incomplete restore (permanent freeze) and reported writers as stopped."""
+    repo = _apply_env(updater, monkeypatch, precheck_errors=["schema_bump:7->8"])
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+    monkeypatch.setattr(update_apply, '_plan_runtime_migration', lambda *_args: None)
+    stops, reports = [], []
+
+    def quiesce():
+        stops.append(True)
+        updater._write_marker()
+        if len(stops) == 2:
+            raise updater.UpdateError("drainer_stop_failed: synthetic")
+        return []
+
+    def child_failed(_sha, *, run_lock_fd):
+        raise updater.UpdateError("post_merge_failed: synthetic")
+
+    monkeypatch.setattr(update_apply, "quiesce", quiesce)
+    monkeypatch.setattr(update_apply, "_run_post_merge", child_failed)
+    monkeypatch.setattr(update_apply, "_rollback_tree", lambda *_a, **_k: pytest.fail("no tree change"))
+    monkeypatch.setattr(update_apply, "_report", lambda *a, **k: reports.append((a, k)))
+    assert updater.apply("v1.1.0", target, "cid-schema") == 1
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == target
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"]["sha"] == target and not state["applying"].get("rollback")
+    assert not state["applying"].get("restore_incomplete")
+    assert not any(k.get("writers_stopped") for _a, k in reports)
+    assert Path(updater.MARKER_PATH).exists()
+
+
+def test_failed_restart_after_abort_leaves_the_journal_for_recovery(updater, monkeypatch):
+    """Regression: bail cleared the journal before restart_agents, which
+    returns without starting anything when a stop is unconfirmed."""
+    repo = _apply_env(updater, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+
+    def stop_failed():
+        raise updater.UpdateError("drainer_stop_failed: ai.mcs.synthetic")
+
+    monkeypatch.setattr(update_apply, "quiesce", stop_failed)
+    monkeypatch.setattr(update_apply, "restart_agents", lambda: ["drainer_stop_failed:ai.mcs.synthetic"])
+    assert updater.apply("v1.1.0", target, "cid-restart") == 1
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"] is None and state["stages"]
+    assert "done" not in [row.get("stage") for row in state["stages"]]
+    assert "restart:drainer_stop_failed" in state["executed"]["cid-restart"]["detail"]
+
+
+@pytest.mark.parametrize("installed", [False, True])
+def test_post_merge_bail_refuses_sdk_rollback_only_after_install_started(updater, monkeypatch, installed):
+    """Regression: the SDK-pin refusal also blocked rollbacks of failures before
+    install.sh, whose venv still had the old pins."""
+    repo = _apply_env(updater, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    previous = updater._head_sha()
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+    monkeypatch.setattr(update_apply, "_plan_runtime_migration", lambda *_args: None)
+    checked, reports = [], []
+
+    def child_failed(_sha, *, run_lock_fd):
+        if installed:
+            state = updater.journal_store.load_state(updater.STATE_PATH)
+            state["applying"]["reinstall_started"] = True
+            updater.journal_store.save_state(updater.STATE_PATH, state)
+        raise updater.UpdateError("post_merge_failed: synthetic")
+
+    monkeypatch.setattr(update_apply, "_run_post_merge", child_failed)
+    monkeypatch.setattr(update_apply, "_standalone_sdk_rollback_error",
+                        lambda entry, cfg: checked.append(True) or "standalone_sdk_rollback_unsupported")
+    monkeypatch.setattr(update_apply, "_report", lambda *a, **k: reports.append(a))
+    assert updater.apply("v1.1.0", target, "cid-sdk") == 1
+    assert bool(checked) is installed
+    if installed:
+        assert updater._head_sha() == target
+        assert reports[-1][0] == "runtime_restore_blocked"
+        assert "standalone_sdk_rollback_unsupported" in reports[-1][1]
+    else:
+        assert updater._head_sha() == previous
