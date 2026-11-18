@@ -327,8 +327,10 @@ The Jev incremental-value experiment is a separate synthetic comparison; its rep
     candidate does not hide it), when it was made before the current fact
     row and its candidate is not bound to the current facts
     (`empty_repair_over_earlier_facts`), when its candidate was written
-    by a local model that is no longer current and does not record a
-    negative audit answer or finding (`empty_repair_candidate_producer`), or
+    by a local model that is no longer current and would otherwise be
+    recovered with nothing recorded — every recovery gate satisfied,
+    provenance proven, `audit_state` `ready`/`inflight` and `partial_answers`
+    `{}` (`empty_repair_candidate_producer`), or
     when the summary/audit pair it was reserved over was superseded
     without its result (a newer row, or
     a recorded row now invalidated or stale) and its candidate would
