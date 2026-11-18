@@ -8,6 +8,7 @@ import pytest
 from ci.agent_control import REQUIRED_JOBS
 from ci.auto_merge import (
     BOT_LOGIN,
+    OWNER_APPROVAL_LABEL,
     GitHubAPI,
     RUNNER_INFRA_MESSAGES,
     _NoRedirect,
@@ -555,7 +556,7 @@ def test_approval_reevaluation_never_dispatches_or_reruns_ci():
     add_successful_ci_run(api, pr)
     api.list_data[_repo_path(REPO, "pulls/1/reviews")] = []
     result = run_controller(api, REPO, DEFAULT_BRANCH, automation_enabled=True, auto_merge_enabled=True)
-    assert result["results"][-1]["reason"] == "no formal approval"
+    assert result["results"][-1]["reason"] == "no authorized current-head human approval"
     assert not any(call[0] in {"POST", "PUT", "PATCH"} for call in api.calls)
 
 
@@ -651,3 +652,60 @@ def test_automation_switch_off_performs_no_api_operations():
     result = run_controller(api, REPO, DEFAULT_BRANCH, automation_enabled=False, auto_merge_enabled=True)
     assert result["state"] == "disabled"
     assert api.calls == []
+
+
+def _label_fixture(api, *, labeled_at="2026-11-18T13:00:00Z", actor="owner", actor_type="User",
+                   unlabel_after=False, runs=True, permission="admin"):
+    pr = make_pr()
+    pr["user"] = {"login": "owner", "type": "User"}
+    pr["labels"] = [{"name": OWNER_APPROVAL_LABEL}]
+    api.list_data[_repo_path(REPO, "pulls/1/reviews")] = []
+    events = [{"id": 1, "event": "labeled", "created_at": labeled_at,
+               "label": {"name": OWNER_APPROVAL_LABEL}, "actor": {"login": actor, "type": actor_type}}]
+    if unlabel_after:
+        events.append({"id": 2, "event": "unlabeled", "created_at": "2026-11-18T14:00:00Z",
+                       "label": {"name": OWNER_APPROVAL_LABEL}, "actor": {"login": actor, "type": actor_type}})
+    api.list_data[_repo_path(REPO, "issues/1/events")] = events
+    api.list_data[_repo_path(REPO, f"actions/workflows/ci.yml/runs?head_sha={HEAD}")] = (
+        [{"id": 5, "head_sha": HEAD, "event": "pull_request", "created_at": "2026-11-18T12:00:00Z"}]
+        if runs else [])
+    api.get_data[permission_route(actor)] = {"permission": permission, "user": {"login": actor}}
+    return pr
+
+
+@pytest.mark.parametrize("kwargs, expected", [
+    ({}, True),
+    ({"actor": "maintainer"}, True),
+    ({"labeled_at": "2026-11-18T11:00:00Z"}, False),
+    ({"actor": "github-actions[bot]", "actor_type": "Bot"}, False),
+    ({"actor": "writer", "permission": "write"}, False),
+    ({"unlabel_after": True}, False),
+    ({"runs": False}, False),
+])
+def test_owner_label_counts_only_after_current_head_push(kwargs, expected):
+    api = StubAPI()
+    pr = _label_fixture(api, **kwargs)
+    if kwargs.get("actor") == "maintainer":
+        api.get_data[permission_route("maintainer")] = {"permission": "admin", "user": {"login": "maintainer"}}
+    allowed, reason = human_approval(api, pr, REPO, HEAD)
+    assert allowed is expected, reason
+    if expected:
+        assert reason == "current-head owner approval label"
+
+
+def test_owner_label_does_not_override_changes_requested():
+    api = StubAPI()
+    pr = _label_fixture(api)
+    api.list_data[_repo_path(REPO, "pulls/1/reviews")] = [review(state="CHANGES_REQUESTED")]
+    allowed, reason = human_approval(api, pr, REPO, HEAD)
+    assert not allowed and reason == "outstanding changes requested"
+
+
+def test_owner_label_is_cleared_on_push_and_label_events_never_retry():
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[2] / ".github/workflows/agent-control.yml").read_text()
+    assert "converted_to_draft, labeled, unlabeled]" in text
+    clear = text.split("- name: Clear owner approval label on push", 1)[1].split("- name:", 1)[0]
+    assert "github.event.action == 'synchronize'" in clear and "-X DELETE" in clear
+    retry = next(line for line in text.splitlines() if "ALLOW_INFRA_RETRY:" in line)
+    assert "pull_request_target" not in retry

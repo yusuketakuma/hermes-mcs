@@ -22,6 +22,7 @@ API_VERSION = "2022-11-28"
 API_ROOT = "https://api.github.com"
 BOT_LOGIN = "github-actions[bot]"
 CI_WORKFLOW = "ci.yml"
+OWNER_APPROVAL_LABEL = "オーナー承認"
 RUNNER_INFRA_MESSAGES = frozenset({
     "The runner has received a shutdown signal. This can happen when the runner is shut down or a new version of the runner is available.",
     "The hosted runner lost communication with the server. Please check if the runner is running and has network connectivity.",
@@ -196,10 +197,78 @@ def human_approval(api, pr: dict, repo: str, head_sha: str) -> tuple[bool, str]:
         key = login.casefold()
         if key not in latest_by_user or item[:2] >= latest_by_user[key][:2]:
             latest_by_user[key] = item
-    if not latest_by_user:
-        return False, "no formal approval"
     if any(item[2].get("state") == "CHANGES_REQUESTED" for item in latest_by_user.values()):
         return False, "outstanding changes requested"
+    if _formal_approval(api, pr, repo, head_sha, latest_by_user):
+        return True, "current-head human approval"
+    if _owner_label_approval(api, pr, repo, head_sha):
+        return True, "current-head owner approval label"
+    return False, "no authorized current-head human approval"
+
+
+def _admin_or_owner(api, repo: str, login: str) -> bool:
+    if login.casefold() == repo.split("/", 1)[0].casefold():
+        return True
+    try:
+        permission = api.get(_repo_path(repo, f"collaborators/{quote(login, safe='')}/permission"))
+    except Exception:
+        return False
+    if not isinstance(permission, dict):
+        return False
+    user = permission.get("user") or {}
+    if not isinstance(user, dict) or not isinstance(user.get("login"), str):
+        return False
+    if user["login"].casefold() != login.casefold():
+        return False
+    return permission.get("permission") == "admin" or permission.get("role_name") == "admin"
+
+
+def _parse_time(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.timestamp() if parsed.tzinfo is not None else None
+
+
+def _owner_label_approval(api, pr: dict, repo: str, head_sha: str) -> bool:
+    """The owner's approval label counts only when added after the current head reached GitHub."""
+    labels = pr.get("labels") or []
+    if not any(isinstance(label, dict) and label.get("name") == OWNER_APPROVAL_LABEL for label in labels):
+        return False
+    try:
+        events = _api_list(api, _repo_path(repo, f"issues/{pr.get('number')}/events"))
+        runs = _workflow_runs(api, repo, head_sha)
+    except Exception:
+        return False
+    latest = None
+    for event in events:
+        if not isinstance(event, dict) or event.get("event") not in {"labeled", "unlabeled"}:
+            continue
+        if (event.get("label") or {}).get("name") != OWNER_APPROVAL_LABEL:
+            continue
+        when = _parse_time(event.get("created_at"))
+        if when is None:
+            return False
+        key = (when, int(event.get("id") or 0))
+        if latest is None or key >= latest[0]:
+            latest = (key, event)
+    if latest is None or latest[1].get("event") != "labeled":
+        return False
+    actor = latest[1].get("actor") or {}
+    login = actor.get("login") if isinstance(actor, dict) else None
+    if (not isinstance(login, str) or not login or actor.get("type") != "User"
+            or login.casefold().endswith("[bot]") or not _admin_or_owner(api, repo, login)):
+        return False
+    pushed = [_parse_time(run.get("created_at")) for run in runs]
+    if not pushed or any(value is None for value in pushed):
+        return False
+    return latest[0][0] > min(pushed)
+
+
+def _formal_approval(api, pr: dict, repo: str, head_sha: str, latest_by_user: dict) -> bool:
     author = ((pr.get("user") or {}).get("login") or "").casefold()
     for _, _, latest in sorted(latest_by_user.values(), key=lambda item: item[:2], reverse=True):
         if latest.get("state") != "APPROVED" or latest.get("commit_id") != head_sha:
@@ -224,8 +293,8 @@ def human_approval(api, pr: dict, repo: str, head_sha: str) -> tuple[bool, str]:
         if not isinstance(permission_login, str) or permission_login.casefold() != login.casefold():
             continue
         if role in {"write", "admin"} or role_name in {"maintain", "admin"}:
-            return True, "current-head human approval"
-    return False, "no authorized current-head human approval"
+            return True
+    return False
 
 
 def _latest_gate_status(api, repo: str, head_sha: str) -> bool:
