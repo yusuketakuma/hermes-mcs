@@ -491,7 +491,8 @@ def _installed_update(args, repo, tag):
         return 1
     if args.cmd == 'plan':
         print(json.dumps(report, ensure_ascii=False))
-        return 0
+        # Same contract as mcs_cli: a noop route can still carry blockers.
+        return 1 if report.get('route') == 'blocked' or report.get('blockers') else 0
     route = report.get('route')
     if (report.get('blockers') or route not in ('apply', 'reinstall', 'noop')
             or (route == 'reinstall' and not args.reinstall)):
