@@ -1,4 +1,4 @@
-# AGENTS.md — hermes-mcs
+# CLAUDE.md — hermes-mcs
 
 ## コード品質と構造設計
 
