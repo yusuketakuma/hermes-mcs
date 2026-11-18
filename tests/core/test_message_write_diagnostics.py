@@ -60,7 +60,8 @@ def test_unknown_diagnostic_is_not_serialized(value):
 
 
 @pytest.mark.parametrize('helper_fails', [False, True])
-def test_same_exception_no_additional_sql_or_transaction_operation(monkeypatch, helper_fails):
+@pytest.mark.parametrize('snapshot', [False, True])
+def test_same_exception_no_additional_sql_or_transaction_operation(monkeypatch, helper_fails, snapshot):
     exc = sqlite3.OperationalError(SYNTHETIC_SECRET)
     calls = []
 
@@ -78,7 +79,10 @@ def test_same_exception_no_additional_sql_or_transaction_operation(monkeypatch, 
             raise RuntimeError(SYNTHETIC_SECRET)
         monkeypatch.setattr(ledger_capture, 'message_write_failure_diagnostic', broken)
     with pytest.raises(sqlite3.OperationalError) as caught:
-        store._upsert_message(message())
+        if snapshot:
+            store._semantic_generation_snapshot([message()])
+        else:
+            store._upsert_message(message())
     assert caught.value is exc
     assert calls == ['UPDATE messages SET message_id=message_id WHERE 0']
     assert store.db.in_transaction
@@ -88,7 +92,8 @@ def test_same_exception_no_additional_sql_or_transaction_operation(monkeypatch, 
         assert not hasattr(exc, '_mcs_message_write_failure')
 
 
-def test_writer_busy_and_wal_snapshot_promotion(tmp_path):
+@pytest.mark.parametrize('snapshot', [False, True])
+def test_writer_busy_and_wal_snapshot_promotion(tmp_path, snapshot):
     path = tmp_path / 'synthetic.db'
     store = ledger.Ledger(str(path))
     other = sqlite3.connect(path, timeout=0)
@@ -96,7 +101,10 @@ def test_writer_busy_and_wal_snapshot_promotion(tmp_path):
     try:
         other.execute('BEGIN IMMEDIATE')
         with pytest.raises(sqlite3.OperationalError) as caught:
-            store._upsert_message(message())
+            if snapshot:
+                store._semantic_generation_snapshot([message()])
+            else:
+                store._upsert_message(message())
         data = diagnostic(caught.value)
         assert data['sqlite_errorcode'] == sqlite3.SQLITE_BUSY
         assert data['sqlite_errorname'] == 'SQLITE_BUSY'
@@ -110,7 +118,10 @@ def test_writer_busy_and_wal_snapshot_promotion(tmp_path):
         with other:
             other.execute("INSERT INTO patients(project_id,patient_name) VALUES(1,'synthetic')")
         with pytest.raises(sqlite3.OperationalError) as caught:
-            store._upsert_message(message())
+            if snapshot:
+                store._semantic_generation_snapshot([message()])
+            else:
+                store._upsert_message(message())
         data = diagnostic(caught.value)
         assert data['sqlite_errorcode'] == sqlite3.SQLITE_BUSY_SNAPSHOT
         assert data['sqlite_errorname'] == 'SQLITE_BUSY_SNAPSHOT'
