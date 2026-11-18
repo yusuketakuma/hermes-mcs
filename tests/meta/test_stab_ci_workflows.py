@@ -190,3 +190,29 @@ def test_test_matrices_finish_every_slice_with_their_own_artifacts():
         assert "fail-fast: false" in block
         assert f"name: pytest-report-{lane}-${{{{ matrix.slice }}}}" in block
         assert f"name: pytest-{lane}-${{{{ matrix.slice }}}}-${{{{ github.run_attempt }}}}" in block
+
+
+def test_perf_budgets_run_serially_after_the_shards_on_slice_one_only():
+    # Wall-time budgets are meaningless next to competing test processes:
+    # slice 1 runs the perf-marked tests serially after its shards finish,
+    # on tag pushes, the weekly schedule and manual runs only. The gates'
+    # fail-closed verdicts are pinned in test_ci_scope_gates.py.
+    jobs = _jobs((ROOT / ".github/workflows/ci.yml").read_text())
+    block = jobs["pytest-linux"]
+    pytest_step = block.split("      - name: pytest\n", 1)[1]
+    perf = pytest_step.split("      - name: pytest perf (serial)\n", 1)[1]
+    record = perf.split("      - name: record perf result\n", 1)[1]
+    for step in (perf, record):
+        assert "matrix.slice == 1 && github.event_name != 'pull_request'" in step
+    assert "id: perf" in perf
+    # a perf failure (or an empty collection, pytest exit 5) fails the job
+    assert "continue-on-error" not in perf
+    assert "run_tests.sh tests/notify/test_perf_cards.py -m perf" in perf
+    # the perf junit/log ride the slice's own diagnostics artifact glob
+    assert "mcs-pytest-perf-linux" in perf
+    # when the earlier steps failed, the skipped perf run is recorded
+    assert "if: always()" in record
+    assert "PERF_OUTCOME: ${{ steps.perf.outcome }}" in record
+    assert "perf-result.txt" in record
+    # the macOS lane holds meta/ops tests only — no perf step there
+    assert "pytest perf" not in jobs["pytest-macos"]

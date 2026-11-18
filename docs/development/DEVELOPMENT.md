@@ -1045,7 +1045,7 @@ setup/teardownの失敗時に領域が残る保証はなく、runner終了時に
 
 ### CIの構成と実行範囲
 
-`ci.yml`の job は11個です。必須チェックとリリース受入の6 lane（`lint-test`・`hygiene`・`standalone-sdk`・
+`ci.yml`の job は12個です。必須チェックとリリース受入の6 lane（`lint-test`・`hygiene`・`standalone-sdk`・
 `incident-gates`・`macos`・`hermes-integration`）の名前は変えず、「全6ジョブ」はこの6 lane を指します。
 テストは matrix job の`pytest-linux`（`tests/`・`integration/`）と`pytest-macos`（`tests/meta`・`tests/ops`）が実行し、
 `lint-test`と`macos`はそれらの結果を判定するだけの gate job です。ruff・同梱医薬品マスター・生成文書の検査は
@@ -1082,8 +1082,13 @@ draft・docs の run の gate は、テストを実行していない成功（jo
 full mode では skip を一切認めず、`scope`の失敗・不明な mode・上流の失敗による skip は失敗です。取り消された run では判定しません（`!cancelled()`）。
 
 `perf` marker の付いたテスト（合成規模での実時間・p95 の予算。現在は`tests/notify/test_perf_cards.py`の3件）は、
-pull request の CI だけが`MCS_CI_SKIP_PERF=1`で外します。タグ・schedule・手動実行と、`scripts/run_tests.sh`・`make test`・
-`ci_local.sh`はすべて実行します。終了や所有権を時間で確かめるテスト（ReDoS 防止・ハングガード等）と、規模での正しさを見るテストには付けません。
+実時間の予算を他のテストプロセスと競合する runner で測らないため、どの event でも shard 側が`MCS_CI_SKIP_PERF=1`で外し、
+タグ・schedule・手動実行では`pytest-linux`の slice 1 が自分の shard 群の完了後に直列の step で実行します。
+その step の JUnit・ログは slice の pytest diagnostics artifact 内の`mcs-pytest-perf-linux/`に shard 報告と分けて残し、
+上流失敗で実行されなかったことも`perf-result.txt`に記録します。perf の失敗や0件収集（pytest の終了コード5）は
+`continue-on-error`なしの step なので`pytest-linux`と lint-test ゲートを失敗にします。pull request では step 自体を実行しません。
+`scripts/run_tests.sh`・`make test`・`ci_local.sh`はすべて実行します。終了や所有権を時間で確かめるテスト
+（ReDoS 防止・ハングガード等）と、規模での正しさを見るテストには付けません。
 
 ### CIの並列実行と診断
 
@@ -1148,9 +1153,10 @@ slice・試行ごとの artifact として7日間保持します。全体を再�
 ### hosted CI を開始できない場合のローカル同等チェック
 
 課金・利用上限・runner 障害で最終 SHA の CI job が開始できない場合、または artifact 保存などインフラ要因だけで失敗した場合に限り、
-`scripts/development/ci_local.sh` で `ci.yml` の全11 job を、その SHA の clean な clone で直列に実行します。
+`scripts/development/ci_local.sh` で `ci.yml` の全12 job を、その SHA の clean な clone で直列に実行します。
 ローカル実行は常に full mode 相当で、`perf`テストも含みます（`MCS_CI_SKIP_PERF`・`MCS_CI_TEST_SCOPE`は解除）。
 `pytest-linux`・`pytest-macos`は CI と同じ slice・shard の分割で slice を順に実行し（同時に動くのは1 slice 分の2〜3プロセス）、
+linux では全 slice の後に perf テストを直列実行します（失敗は pipefail で job を失敗にします）、
 `lint-test`・`macos`はその shard 報告を CI と同じ`--verify-reports`で照合します。CI の gate が判定する needs の結果の代わりに、
 この runner の job ごとの結果を使います（`scope`・`lint-test`・`macos`の行は「判定のみ」）。pytest job が実行されていなければ gate は実行不能です。
 未commit・untracked の変更がある checkout では実行を拒否し、job・run 行・固定版はすべて clone 側のランナーと `ci.yml` から読みます。

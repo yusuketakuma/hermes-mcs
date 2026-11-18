@@ -128,8 +128,10 @@ jobs:
       MCS_CI_SLICES: ${{ needs.scope.outputs.mode == 'full' && '4' || '1' }}
       MCS_CI_PER_SLICE: "2"
       MCS_CI_TEST_SCOPE: ${{ needs.scope.outputs.mode }}
-      # perf-marked budget tests run on tags, the schedule and manual runs only
-      MCS_CI_SKIP_PERF: ${{ github.event_name == 'pull_request' && '1' || '' }}
+      # wall-time budgets are meaningless next to competing test processes:
+      # the shards always deselect perf tests, and slice 1 runs them
+      # serially after its shards on tag/schedule/manual runs
+      MCS_CI_SKIP_PERF: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
@@ -149,6 +151,24 @@ jobs:
           uv venv --python 3.14 --managed-python .venv
           uv pip install --python .venv/bin/python "pytest==9.2.0"
           python3 ci/run_pytest_groups.py linux --slice "$MCS_CI_SLICE/$MCS_CI_SLICES" --per-slice "$MCS_CI_PER_SLICE"
+      # wall-time budgets only mean anything on a runner without competing
+      # test processes: slice 1 runs the perf-marked tests serially after its
+      # shards finish (tag pushes, the schedule and manual runs; pull
+      # requests skip them). No continue-on-error: a perf failure or an
+      # empty collection (pytest exit 5) fails this job like any shard.
+      - name: pytest perf (serial)
+        id: perf
+        if: matrix.slice == 1 && github.event_name != 'pull_request'
+        run: |
+          mkdir -p "$RUNNER_TEMP/mcs-pytest-perf-linux"
+          sh scripts/run_tests.sh tests/notify/test_perf_cards.py -m perf -s -p no:cacheprovider -o junit_family=xunit1 --junitxml="$RUNNER_TEMP/mcs-pytest-perf-linux/perf.xml" 2>&1 | tee "$RUNNER_TEMP/mcs-pytest-perf-linux/perf.log"
+      - name: record perf result
+        if: always() && matrix.slice == 1 && github.event_name != 'pull_request'
+        env:
+          PERF_OUTCOME: ${{ steps.perf.outcome }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/mcs-pytest-perf-linux"
+          printf 'serial perf outcome: %s\n' "${PERF_OUTCOME:-not-run}" > "$RUNNER_TEMP/mcs-pytest-perf-linux/perf-result.txt"
       # small fixed-name artifact for the gate; a re-run of this slice replaces it
       - name: shard reports
         if: always()
