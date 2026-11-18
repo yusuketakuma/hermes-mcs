@@ -211,10 +211,21 @@ def test_headers_forbid_cache_external_resources_and_embedding():
 
 def test_server_is_loopback_only_and_capability_changes(monkeypatch):
     addresses = []
-    monkeypatch.setattr(chat.HTTPServer, "__init__", lambda self, address, handler: addresses.append(address))
+    monkeypatch.setattr(chat.ThreadingHTTPServer, "__init__", lambda self, address, handler: addresses.append(address))
     one, two = chat.ChatServer("synthetic", {1}), chat.ChatServer("synthetic", {1})
     assert addresses == [("127.0.0.1", 0), ("127.0.0.1", 0)]
     assert one.token != two.token and len(one.token) >= 40
+
+
+def test_browser_preconnections_do_not_block_other_clients(monkeypatch):
+    assert issubclass(chat.ChatServer, chat.ThreadingHTTPServer)
+    assert chat.ChatServer.daemon_threads
+    timeouts = []
+    obj = chat.ChatHandler.__new__(chat.ChatHandler)
+    obj.request = SimpleNamespace(settimeout=timeouts.append)
+    monkeypatch.setattr(chat.BaseHTTPRequestHandler, "setup", lambda self: None)
+    obj.setup()
+    assert timeouts == [10]
 
 
 @pytest.mark.parametrize("args", [[], ["--project", "0"], ["--project", "-1"], ["--all-patients", "--port", "65536"]])

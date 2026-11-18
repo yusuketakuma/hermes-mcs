@@ -8,7 +8,7 @@ from pathlib import Path
 import secrets
 import sqlite3
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -52,7 +52,7 @@ def response(snapshot, allowed, route, query):
         view.close()
 
 
-class ChatServer(HTTPServer):
+class ChatServer(ThreadingHTTPServer):
     def __init__(self, snapshot, allowed, port=0):
         self.snapshot = Path(snapshot)
         self.allowed = None if allowed is None else frozenset(allowed)
@@ -69,6 +69,10 @@ class ChatServer(HTTPServer):
 
 
 class ChatHandler(BaseHTTPRequestHandler):
+    def setup(self):
+        self.request.settimeout(10)
+        super().setup()
+
     # URLs contain a per-launch capability; never write them or clinical queries to logs.
     def log_message(self, *_args):
         pass
