@@ -80,6 +80,17 @@ _SCOPE_HEADING = re.compile(
 _REPORTING = re.compile(r"(?:より|から|が(?:報告|連絡|説明|相談|話)|は(?:報告|連絡|説明|相談|話))")
 
 CURRENT_MARK = re.compile(r"現在|今も|今は|本日|今日|続いて|持続|(?:昨日|先週|先月)から|(?:昨日|先週|先月)より")
+_CONTINUING = re.compile(r"持続|続いて|残って")
+# Closed forms of the target's own predicate: a time word right before it, or right after it a
+# time word and/or an affirmative presence/continuation that ends the predicate. Another noun or
+# predicate in between never lends its time, and any other ending (はいません, おりません) is unknown.
+_LEADING_CURRENT = re.compile(rf"(?:{CURRENT_MARK.pattern})(?:は|も|に|の)?[、,\s　]*$")
+_TARGET_PREDICATE = re.compile(
+    rf"(?:は|が|も)?[\s　]*(?:(?:いたしました|しました|した|して|し)(?:が|けど|けれど(?:も)?)?[、,\s　]*)?"
+    rf"(?P<now>{CURRENT_MARK.pattern})?(?:は|も)?[\s　]*"
+    rf"(?:(?P<cont>(?:{_CONTINUING.pattern})(?:して)?(?:いる|います|いた|いました|おり(?:ます)?)?)"
+    rf"|あり(?:ます)?|ある|(?:みられ|見られ)(?:る|ます)?)"
+    rf"(?=[。！？!?;；\n、,]|$|が|けど|けれど)")
 
 _NONCURRENT_MARK = re.compile(r"過去|既往|以前(?!から|より)|先月(?!から|より)|先週(?!から|より)|昨年|一昨年")
 
@@ -283,18 +294,46 @@ def patient_source_scope(body, start, end, *, patient_name=None, default="patien
     return subject if subject != "patient" or period == "current" else period
 
 
-def source_axes(body, start, end, *, default="patient"):
-    """Return independent reported person and period axes for a grounded assertion."""
-    subject, period = _source_scope_axes(body, start, end, default=default)
-    if period in ("conditional", "unknown"):
-        return subject, period
+def assertion_start(body, start):
+    """Start of the target's own assertion: its sentence part, from the nearest explicit owner."""
     left = max(body.rfind(mark, 0, start) for mark in "。！？!?;；\n") + 1
     left = max((m.end() for m in _SCOPE_BREAK.finditer(body, left, start)
                 if m.group() not in "、,"), default=left)
     # A later explicit owner begins a new assertion, not the earlier person's time.
     owners = list(_PERSON.finditer(body, left, start))
-    if owners:
-        left = owners[-1].start()
+    return owners[-1].start() if owners else left
+
+
+def assertion_stop(body, end, limit):
+    """End of the target's own assertion before ``limit``: a later explicit owner starts another one."""
+    owner = _PERSON.search(body, end, limit)
+    return owner.start() if owner else limit
+
+
+def _target_predicate(body, end, limit):
+    return _TARGET_PREDICATE.match(body, end, assertion_stop(body, end, limit))
+
+
+def target_continuing(body, end, limit):
+    """Whether the target's own predicate states that it continues."""
+    match = _target_predicate(body, end, limit)
+    return bool(match and match["cont"])
+
+
+def source_current(body, start, end, limit):
+    """Whether the target's own predicate states it as current; an unknown form is not current."""
+    if _LEADING_CURRENT.search(body[assertion_start(body, start):start]):
+        return True
+    match = _target_predicate(body, end, limit)
+    return bool(match and (match["now"] or match["cont"]))
+
+
+def source_axes(body, start, end, *, default="patient"):
+    """Return independent reported person and period axes for a grounded assertion."""
+    subject, period = _source_scope_axes(body, start, end, default=default)
+    if period in ("conditional", "unknown"):
+        return subject, period
+    left = assertion_start(body, start)
     before = body[left:start]
     if _has_condition(body, left, start, start):
         return subject, "conditional"
