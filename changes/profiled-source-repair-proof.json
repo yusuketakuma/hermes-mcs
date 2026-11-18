@@ -3,5 +3,6 @@
   "title": "同じ Anthropic プロファイルで原文の品質修復を完了できるように修正",
   "summary": "患者コンテキストの抽出と原文の品質修復に同じ Anthropic プロファイルを使う場合も、修復結果を保存して照合できます。照合に必要な応答と課金の証跡を保存します。",
   "upgrade": "追加操作は不要です。更新後に開始する原文の品質修復に適用されます。",
+  "details": ["照合に必要な証跡が欠けた既存の修復は引き続き保留します。"],
   "refs": ["mcs/patients/patient_context_quality_controller.py"]
 }

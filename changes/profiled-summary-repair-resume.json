@@ -3,5 +3,6 @@
   "title": "Anthropic の概況修復を保存済みの応答から再開",
   "summary": "患者コンテキストの生成と概況修復で同じ Anthropic プロファイルを使う場合も、修復済みの結果を再開時に利用できます。保存時に応答と課金の証跡を記録し、再開時に照合します。",
   "upgrade": "追加操作は不要です。更新後に保存する概況修復に適用されます。",
+  "details": ["照合に成功すれば、同じ入力を再送せずに修復結果を利用します。"],
   "refs": ["mcs/patients/patient_context_quality_controller.py"]
 }
