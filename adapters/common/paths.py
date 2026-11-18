@@ -121,6 +121,24 @@ def read_flags(root: str) -> dict:
     # Previously granted cards and dependent parts must see that hold too.
     if restore_marker_present(root):
         data["restore_pending"] = True
+    # Unreleased restore holds ride beside the flags file so the
+    # pre-send check can freeze one delivery without touching its
+    # spec — the spec stays as reconcile evidence.
+    try:
+        with open(os.path.join(root, "flags", "restore_holds.json"),
+                  "rb") as handle:
+            held = json.loads(handle.read().decode("utf-8"))
+        if isinstance(held, dict) \
+                and isinstance(held.get("held_delivery_ids"), list):
+            data["held_delivery_ids"] = held["held_delivery_ids"]
+        else:
+            data["restore_holds_unreadable"] = True
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, RecursionError):
+        # an unreadable hold list cannot name its frozen deliveries —
+        # the pre-send check must fail closed rather than guess
+        data["restore_holds_unreadable"] = True
     return data
 
 

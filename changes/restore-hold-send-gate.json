@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "DB復元後の照合で保留になった配送が、残ったspecから通知の部品を重複送信し得た問題を修正",
+  "summary": "DBを復元した後の照合で配送が保留（restore hold）になっても、通知workerが読むspecファイルは残ったままで、保留の解決前に未送信の部品（スレッド内ファイル群のまとめ更新など）が再送される可能性がありました。今後は照合が保留を記録すると配送ごとの保留一覧をworkerへ公開し、送信直前の共通判定でその配送の新しい送信を止めます。specは照合の証拠として保全され、保留は担当者の確認で解決するまで維持されます。",
+  "upgrade": "追加操作は不要です。保留中の配送はこれまでどおり通知の確認操作で解決します。",
+  "details": [
+    "照合（restore reconcile）が保留を記録すると flags/restore_holds.json に未解除の配送一覧を公開し、workerの送信直前判定（_send_allowed、再試行判定も同経路）がその配送の送信を拒否する。",
+    "配送開始の承認要求（transport begin）も未解除の保留を restore_hold として拒否し、render行が無いspecを unknown_delivery として取り下げない。",
+    "保留一覧は照合の完了時と定期処理のたびにDBの未解除holdから再生成され、保留の解決後は対象から外れる。",
+    "specファイルは照合の証拠として保全し、部品送信の直前確認・ジャーナル照合・人の承認による保留解除の意味は変更しない。"
+  ],
+  "refs": ["mcs/notify/notify_reconcile.py", "mcs/notify/notify_spool.py", "mcs/notify/notify_transport.py", "mcs/ingest/run_check.py", "adapters/common/paths.py", "adapters/common/worker.py"]
+}
