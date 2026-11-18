@@ -226,7 +226,7 @@ def test_scheduled_probe_waits_until_caller_deadline_then_bounds_wire(monkeypatc
     def wire(endpoint, method, body, timeout, deadline):
         assert body['id_slot'] == 2
         assert deadline == 30.0
-        return 200, {}, json.dumps({'choices': [{'message': {'content': '{"ok":true}'}}]}).encode()
+        return 200, {}, json.dumps({'choices': [{'message': {'content': '{"ok":true}'}, 'finish_reason': 'stop'}]}).encode()
 
     monkeypatch.setattr(local_llm, '_request_turn', turn)
     assert local_llm.probe_format(local_llm.ENDPOINT, 'synthetic', None,
