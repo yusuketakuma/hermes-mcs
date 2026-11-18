@@ -311,7 +311,8 @@ def _request_reply_lines(db, project_id, roll) -> list:
             state = "完了と取消の記録あり"
         line = (f"・{mmdd(r.get('at'))} "
                 f"{inline_text(r.get('ctx'), 40) or '内容不明'} — 返信: "
-                + (state or "記録なし"))
+                + (state or ("確認できない（評価未取得）" if r.get("reply_evaluation") == "unavailable"
+                             else "記録なし")))
         mid = r.get("mid")
         # only a candidate of the message's current revision counts —
         # the mcs_view / semantic_loops currency rule
@@ -1241,6 +1242,7 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         add(view["written_checks"], "原文に書かれた確認事項")
         # the heading already says 返答が見つからない; each row need not repeat it
         add([{**r, "reply": None} for r in view["unanswered"]], "返答が見つからない記録")
+        add([{**r, "reply": None} for r in view.get("reply_unknown", [])], "返答の確認ができない記録（評価未取得）")
         if section == "previsit":
             schedule = view["interventions"]
             records = schedule["records"]
@@ -1367,6 +1369,8 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
                             + ("記載が見つかりません: " if found_all
                                else "記載の有無は未確認（解析・取得が未完了）: ")
                             + "・".join(views.SECTION_LABELS.get(k, (k,))[0] for k in group["no_record"]))
+            elif group.get("no_record_unverified"):
+                head.append(f"{day}の前後14日で記載の有無は未確認（未解析の投稿あり）")
     elif section == "timeline":
         from referral_document import HEADER_FIELDS
         documents, pumps = views.document_timelines(db, project_id, cfg=cfg)
