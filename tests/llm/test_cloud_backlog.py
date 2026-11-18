@@ -1007,6 +1007,142 @@ def test_worker_retries_same_paid_carry_after_temporary_sqlite_lock(carry_worker
     assert state.carry == [] and state.closed
 
 
+@pytest.mark.parametrize('settled', [
+    {"done": 1, "held_prior": 0, "deferred": 0},
+    {"done": 0, "held_prior": 0, "deferred": 1, "defer_reasons": {"update_fence": 1}},
+    {"done": 0, "held_prior": 1, "deferred": 1, "defer_reasons": {"lease_renewal_failed": 1}},
+])
+def test_worker_records_carry_results_settled_outside_run_pending(
+        carry_worker, monkeypatch, capsys, settled):
+    """Results the worker's own settle saves or releases outside run_pending are
+    recorded as a cloud_carry_settled event; they are not added to pass.done."""
+    import extract_llm
+    state, fake_ledger = carry_worker
+    item = object()
+
+    def extract(ledger, **kw):
+        state.block = "stop"
+        state.carry = kw["carry"]
+        state.carry.append(item)
+        return {"done": 1, "carry": state.carry}
+
+    def settle(ledger, carry, **kw):
+        assert ledger is fake_ledger and carry == [item]
+        carry.clear()
+        return dict(settled), settled.get("done", 0), set()
+
+    def sleep(_):
+        if state.block:
+            state.alive = False
+
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+    monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(backlog.time, "sleep", sleep)
+    with legacy_cloud_routes():
+        backlog.worker(991)
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    events = [record for record in records if record['event'] == 'cloud_carry_settled']
+    assert len(events) == 1
+    assert events[0]['trigger'] == 'loop' and events[0]['done_unit'] == 'messages'
+    assert {key: events[0][key] for key in ('done', 'held_prior', 'deferred', 'defer_reasons')} == {
+        'done': settled.get('done', 0), 'held_prior': settled.get('held_prior', 0),
+        'deferred': settled.get('deferred', 0),
+        'defer_reasons': settled.get('defer_reasons') or {}}
+    passes = [record for record in records if record['event'] == 'cloud_backlog_pass']
+    assert [record['done'] for record in passes] == [1]
+
+
+def test_worker_carry_settle_without_results_emits_no_event(carry_worker, monkeypatch, capsys):
+    """A settle that saves or releases nothing writes no event."""
+    import extract_llm
+    state, _ = carry_worker
+    item = object()
+
+    def extract(ledger, **kw):
+        state.block = "stop"
+        state.carry = kw["carry"]
+        state.carry.append(item)
+        return {"done": 1, "carry": state.carry}
+
+    def settle(ledger, carry, **kw):
+        carry.clear()
+        return {"done": 0, "held_prior": 0, "deferred": 0, "defer_reasons": {}}, 0, set()
+
+    def sleep(_):
+        if state.block:
+            state.alive = False
+
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+    monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(backlog.time, "sleep", sleep)
+    with legacy_cloud_routes():
+        backlog.worker(991)
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [record for record in records if record['event'] == 'cloud_carry_settled'] == []
+
+
+def test_worker_exit_settle_records_its_results(carry_worker, monkeypatch, capsys):
+    """Deferred results still held when the worker exits are settled — and recorded —
+    once more with trigger 'exit'."""
+    import extract_llm
+    state, _ = carry_worker
+    item = object()
+
+    def extract(ledger, **kw):
+        state.memory = False
+        state.carry = [item]
+        return {"done": 1, "carry": state.carry}
+
+    def settle(ledger, carry, **kw):
+        return {"done": 0, "held_prior": 0, "deferred": len(carry),
+                "defer_reasons": {"write_unavailable": len(carry)}}, 0, set()
+
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+    monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
+    with legacy_cloud_routes():
+        backlog.worker(991)
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    events = [record for record in records if record['event'] == 'cloud_carry_settled']
+    assert [record['trigger'] for record in events] == ['loop', 'exit']
+    assert all(record['deferred'] == 1 and record['defer_reasons'] == {"write_unavailable": 1}
+               for record in events)
+
+
+def test_worker_budget_check_uses_the_purpose_limit(carry_worker, monkeypatch):
+    """Without provider_profiles the budget judgement runs against the purpose's
+    output limit (backlog: 8192), not the old 1600 fallback."""
+    import cloud_policy
+    state, _ = carry_worker
+    calls = []
+
+    def budget(ledger, settings, **kw):
+        calls.append(kw)
+        return "budget"
+
+    def sleep(_):
+        state.alive = False
+
+    monkeypatch.setattr(cloud_policy, "budget_block_reason", budget)
+    monkeypatch.setattr(backlog.time, "sleep", sleep)
+    with legacy_cloud_routes():
+        backlog.worker(991)
+    assert calls
+    for call in calls:
+        assert call["max_tokens"] == 8192
+        assert call["selection"]["max_tokens"] == 8192
+        assert call["selection"]["profile"] is None
+        assert call["selection"]["model"] == cloud_policy.PROVIDERS["anthropic"]
+
+
 def test_startup_wait_exits_on_memory_loss_without_opening_ledger(monkeypatch):
     import extract_llm
     import ledger
@@ -1045,6 +1181,7 @@ def test_worker_retires_only_after_paid_carry_settles(carry_worker, monkeypatch,
         assert carry == [item]
         state.events.append("settle")
         carry.clear()
+        return {"done": 0, "held_prior": 0, "deferred": 0}, 0, set()
 
     monkeypatch.setattr(extract_llm, "run_pending", extract)
     monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
