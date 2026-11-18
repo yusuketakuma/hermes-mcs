@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "telemetryの未使用_LEVELSを削除",
+  "summary": "利用者向けの実行時動作に変更はありません。telemetry収集コードで、どこからも参照されないprivate定数を削除しました。",
+  "upgrade": "追加操作は不要です。",
+  "details": ["_LEVELSを削除。log entryのlevelは既存の_log_levelがerror・warning・infoだけを返すため、このallowlistは参照されていませんでした。"],
+  "refs": ["adapters/sdc/telemetry.py"]
+}
