@@ -192,6 +192,19 @@ def test_event_record_actor_location_is_not_the_provider():
     assert out["event_records"][1]["actor"] == "訪問看護師"
 
 
+def test_event_record_actor_agent_position_is_scoped_to_own_clause():
+    body = ("病院が日程を確認しました。"
+            "ご本人は病院で訪問看護師による創部の処置を受けました。")
+    out = _validate(body, {"event_records": [
+        {"kind": "care", "subject": "patient", "status": "current",
+         "negated": False, "evidence": body, "actor": "病院"},
+        {"kind": "care", "subject": "patient", "status": "current",
+         "negated": False, "evidence": body, "actor": "訪問看護師"},
+    ]})
+    assert "actor" not in out["event_records"][0]
+    assert out["event_records"][1]["actor"] == "訪問看護師"
+
+
 def test_event_record_attributes_must_match_their_role():
     body = "ご本人は10月28日に訪問看護師による創部の処置を受けました。"
     out = _validate(body, {"event_records": [{

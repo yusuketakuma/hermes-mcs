@@ -667,23 +667,15 @@ def _date_text_supported(value) -> bool:
     return written_day(value) is not None or bool(_DATEISH.search(value))
 
 
-# An actor must stand in agent position — による/が/は — inside the
-# evidence. A location noun followed by で (病院で) or a bare role word
-# never confirms the provider.
+# An actor must stand in agent position — による/が/は — at the same
+# occurrence inside the record's own act clause. A location noun followed
+# by で (病院で), a transfer source (から/より) or an agent marker on an
+# unrelated sentence's occurrence never confirms the provider.
 _ACTOR_AGENT = re.compile(r"(?:による|が|は)")
 
 
-def _actor_supported(value, quote) -> bool:
-    if not (re.fullmatch(NAMED_PERSON, value) or _ACTOR_ROLE.search(value)):
-        return False
-    pos = 0
-    while True:
-        i = quote.find(value, pos)
-        if i < 0:
-            return False
-        if _ACTOR_AGENT.match(quote, i + len(value)):
-            return True
-        pos = i + 1
+def _actor_supported(value) -> bool:
+    return bool(re.fullmatch(NAMED_PERSON, value) or _ACTOR_ROLE.search(value))
 
 
 def _record_attribute_bound(quote, value, kind, match, target_end, *, actor=False):
@@ -695,7 +687,8 @@ def _record_attribute_bound(quote, value, kind, match, target_end, *, actor=Fals
     one same-kind cue stands, so an attribute of a neighbouring act or a
     second same-kind mention never attaches. ``actor`` occurrences marked
     as a transfer/referral source (から/より) describe the predecessor,
-    not the provider, and never bind.
+    not the provider, and never bind; an actor occurrence must also stand
+    in agent position (による/が/は) inside that same clause.
     """
     if not isinstance(value, str) or not value.strip():
         return False
@@ -716,7 +709,8 @@ def _record_attribute_bound(quote, value, kind, match, target_end, *, actor=Fals
             pos = i + 1
             continue
         if left <= i and end <= right:
-            return True
+            if not actor or _ACTOR_AGENT.match(quote, end):
+                return True
         pos = i + 1
 
 
@@ -898,7 +892,7 @@ def validate_record(item, body):
         if not isinstance(value, str) or not value.strip():
             continue
         if actor:
-            if not _actor_supported(value.strip(), quote):
+            if not _actor_supported(value.strip()):
                 continue
         elif not _date_text_supported(value.strip()):
             continue
