@@ -231,7 +231,8 @@ job_pytest_linux() {
     set -o pipefail
     mkdir -p "$RUNNER_TEMP/mcs-pytest-perf-linux"
     sh scripts/run_tests.sh tests/notify/test_perf_cards.py -m perf -s -p no:cacheprovider -o junit_family=xunit1 --junitxml="$RUNNER_TEMP/mcs-pytest-perf-linux/perf.xml" 2>&1 | tee "$RUNNER_TEMP/mcs-pytest-perf-linux/perf.log" || failed=1
-    PERF_OUTCOME=ran printf 'serial perf outcome: %s\n' "${PERF_OUTCOME:-not-run}" > "$RUNNER_TEMP/mcs-pytest-perf-linux/perf-result.txt"
+    PERF_OUTCOME=ran
+    printf 'serial perf outcome: %s\n' "${PERF_OUTCOME:-not-run}" > "$RUNNER_TEMP/mcs-pytest-perf-linux/perf-result.txt"
     return "$failed"
 }
 job_lint_test() {
