@@ -177,7 +177,7 @@ def _host_idle(live: dict) -> bool:
             and "update_marker" in live and live["update_marker"] is None)
 
 
-def _gateway_observation(home: str, cfg: dict, now: float) -> dict:
+def _gateway_observation(home: str, cfg: dict, now: float, *, deadline: float | None = None) -> dict:
     import card_worker_status
     import environment_diagnostics
 
@@ -198,14 +198,15 @@ def _gateway_observation(home: str, cfg: dict, now: float) -> dict:
             or not _stamp(record["at"]) or record["at"] > now
             or not _stamp(record["started_at"]) or not 0 < record["started_at"] <= record["at"]):
         raise ValueError("gateway_unavailable")
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + 3 if deadline is None else deadline
     pids = [environment_diagnostics.launchd_pid(f"{domain}/{os.getuid()}/{GATEWAY}", deadline=deadline)
             for domain in ("gui", "user")]
     if (any(pid is not None and (type(pid) is not int or pid <= 0) for pid in pids)
             or {pid for pid in pids if pid is not None} != {record["pid"]}):
         raise ValueError("gateway_unavailable")
     birth = environment_diagnostics.process_started_at(record["pid"], deadline=deadline)
-    if type(birth) not in (int, float) or birth != record["started_at"]:
+    if (type(birth) not in (int, float) or birth != record["started_at"]
+            or time.monotonic() >= deadline):
         raise ValueError("gateway_unavailable")
     worker = card_worker_status.status(data, transport, profile)
     expected = "started" if record["reason"] == "worker_started" else "disabled"
