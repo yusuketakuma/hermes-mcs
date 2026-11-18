@@ -545,9 +545,7 @@ def _apply_delivery_observation(obs: dict, state: dict, home: str, now: float,
     previous = state.get("delivery_current_reason")
     if not isinstance(previous, str) or previous not in _DELIVERY_UNRESOLVED:
         previous = None
-    notify = cfg.get("notify") if isinstance(cfg, dict) else None
-    if isinstance(cfg, dict) and notify is None:
-        notify = {}  # the optional block is absent: notifications are off (notify_scope.notify_cfg)
+    notify = cfg.get("notify", {}) if isinstance(cfg, dict) else None
     mode = cfg.get("runtime_mode", "hermes") if isinstance(cfg, dict) else None
     if mode not in ("hermes", "standalone") or not isinstance(notify, dict):
         if previous in _DELIVERY_UNRESOLVED:

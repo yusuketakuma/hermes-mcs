@@ -37,7 +37,8 @@ def world(tmp_path, monkeypatch):
           profile TEXT, application_id TEXT, team_id TEXT, guild_id TEXT, channel_id TEXT,
           state TEXT, created_at REAL, updated_at REAL);
         CREATE TABLE notification_render_parts(delivery_id TEXT, state TEXT, updated_at REAL);
-        CREATE TABLE notification_delivery_attempts(delivery_id TEXT, state TEXT, created_at REAL);
+        CREATE TABLE notification_delivery_attempts(
+          delivery_id TEXT, state TEXT, created_at REAL, finished_at REAL);
     """)
     db.close()
     path.chmod(0o600)
@@ -47,18 +48,26 @@ def world(tmp_path, monkeypatch):
 
 
 def _render(path, identifier, *, state="queued", created=NOW - 3600, updated=NOW - 3600,
-            transport="slack", epoch=2, **changes):
+            delivered_at=..., transport="slack", epoch=2, **changes):
     scope = {**SCOPE, **changes}
     with sqlite3.connect(path) as db:
-        db.execute("INSERT INTO notification_renders VALUES(?,NULL,?,?,?,?,?,?,?,?,?,?)", (
-            identifier, transport, epoch, scope.get("profile"), scope.get("application_id"),
-            scope.get("team_id"), scope.get("guild_id"), scope.get("channel_id"),
-            state, created, updated))
+        db.execute(
+            "INSERT INTO notification_renders(delivery_id,card_id,transport,route_epoch,"
+            "profile,application_id,team_id,guild_id,channel_id,state,created_at,updated_at) "
+            "VALUES(?,NULL,?,?,?,?,?,?,?,?,?,?)", (
+                identifier, transport, epoch, scope.get("profile"), scope.get("application_id"),
+                scope.get("team_id"), scope.get("guild_id"), scope.get("channel_id"),
+                state, created, updated))
+        if state == "delivered" and delivered_at is not False:
+            stamp = updated if delivered_at is ... else delivered_at
+            db.execute("INSERT INTO notification_delivery_attempts VALUES(?,?,?,?)",
+                       (identifier, "delivered", created, stamp))
 
 
-def _attempt(path, identifier, *, state="granted", created=NOW - 3601):
+def _attempt(path, identifier, *, state="granted", created=NOW - 3601, finished=None):
     with sqlite3.connect(path) as db:
-        db.execute("INSERT INTO notification_delivery_attempts VALUES(?,?,?)", (identifier, state, created))
+        db.execute("INSERT INTO notification_delivery_attempts VALUES(?,?,?,?)",
+                   (identifier, state, created, finished))
 
 
 def _observe(world, cfg=CFG):
@@ -502,18 +511,61 @@ def test_noop_rollup_is_not_delivery_progress(world):
                           "WHERE delivery_id='old'").fetchone()[0] == NOW - 7200
 
 
-def test_rollup_transition_still_counts_as_delivery_progress(world):
-    """Positive control: a parts_state transition is a real change and its
-    updated_at still counts as delivery progress."""
-    _render(world.db, "queued")
-    _render(world.db, "old", state="delivered", created=NOW - 7200, updated=NOW - 7200)
+def test_incomplete_part_settlement_without_new_delivery_is_not_progress(world):
+    """Settling a pending part of an old delivered parent as not_sent/unknown/held
+    updates parts_state and r.updated_at for state-tracking readers, but zero new
+    deliveries succeeded — waiting_without_progress must not clear into progressing."""
+    _render(world.db, "queued", created=NOW - 3601, updated=NOW - 3601)
+    _render(world.db, "old", state="delivered", created=NOW - 7200,
+            updated=NOW - 7200, delivered_at=NOW - 7200)
     _parts_state_schema(world.db)
     with sqlite3.connect(world.db) as db:
+        db.execute("UPDATE notification_renders SET parts_state='pending' "
+                   "WHERE delivery_id='old'")
         db.execute("INSERT INTO notification_render_parts VALUES('old','delivered',?)",
                    (NOW - 7200,))
-    assert _observe(world)["delivery"]["state"] == "waiting_without_progress"
+        db.execute("INSERT INTO notification_render_parts VALUES('old','pending',?)",
+                   (NOW - 7200,))
+    before = _observe(world)["delivery"]
+    assert before["state"] == "waiting_without_progress"
+    assert before["last_progress_at"] == NOW - 7200
+
     with sqlite3.connect(world.db) as db:
         db.row_factory = sqlite3.Row
-        assert notify_parts.update_state(db, "old", NOW - 1) == "complete"
-    assert _observe(world)["delivery"]["state"] == "progressing"
+        db.execute("UPDATE notification_render_parts SET state='not_sent',updated_at=? "
+                   "WHERE delivery_id='old' AND state='pending'", (NOW - 1,))
+        assert notify_parts.update_state(db, "old", NOW - 1) == "incomplete"
+        row = db.execute("SELECT parts_state,updated_at FROM notification_renders "
+                         "WHERE delivery_id='old'").fetchone()
+        assert (row["parts_state"], row["updated_at"]) == ("incomplete", NOW - 1)
+
+    after = _observe(world)["delivery"]
+    assert after["state"] == "waiting_without_progress"
+    assert after["issues"] == ["waiting_without_progress"]
+    assert after["last_progress_at"] == NOW - 7200
+
+    # A render row bumped without any delivered attempt or part is not progress either.
+    _render(world.db, "unbacked", state="delivered", created=NOW - 7200,
+            updated=NOW - 1, delivered_at=False)
+    assert _observe(world)["delivery"]["state"] == "waiting_without_progress"
+
+
+@pytest.mark.parametrize("via", ["part", "parent"])
+def test_actual_parent_or_part_delivery_counts_as_progress(world, via):
+    """Positive control: an actual successful part send or parent send within
+    the stall window proves delivery progress."""
+    _render(world.db, "queued", created=NOW - 3601, updated=NOW - 3601)
+    _render(world.db, "old", state="delivered", created=NOW - 7200,
+            updated=NOW - 7200, delivered_at=NOW - 7200)
+    assert _observe(world)["delivery"]["state"] == "waiting_without_progress"
+    if via == "part":
+        with sqlite3.connect(world.db) as db:
+            db.execute("INSERT INTO notification_render_parts VALUES('old','delivered',?)",
+                       (NOW - 1,))
+    else:
+        _render(world.db, "fresh-parent", state="delivered",
+                created=NOW - 10, updated=NOW - 1, delivered_at=NOW - 1)
+    observed = _observe(world)["delivery"]
+    assert observed["state"] == "progressing"
+    assert observed["last_progress_at"] == NOW - 1
 

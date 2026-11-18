@@ -140,10 +140,12 @@ def _identity(path):
 
 
 def _progress(db, source, where, params, now):
-    column = "p.updated_at" if source == "parts" else "r.updated_at"
+    column = "p.updated_at" if source == "parts" else "a.finished_at"
     tables = ("notification_render_parts p JOIN notification_renders r ON r.delivery_id=p.delivery_id"
-              if source == "parts" else "notification_renders r")
-    state = "p.state='delivered'" if source == "parts" else "r.state='delivered'"
+              if source == "parts" else
+              "notification_delivery_attempts a JOIN notification_renders r ON r.delivery_id=a.delivery_id")
+    state = ("p.state='delivered'" if source == "parts"
+             else "r.state='delivered' AND a.state='delivered'")
     invalid = f"typeof({column}) NOT IN ('integer','real') OR {column}<0 OR {column}>?"
     sql = (f"SELECT MAX(CASE WHEN NOT ({invalid}) THEN {column} END), "
            f"COALESCE(SUM(CASE WHEN {invalid} THEN 1 ELSE 0 END),0) FROM {tables} "

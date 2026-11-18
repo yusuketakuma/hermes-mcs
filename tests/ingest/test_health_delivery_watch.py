@@ -298,7 +298,6 @@ def test_unverified_or_non_gateway_config_is_not_observed(monkeypatch, cfg, bloc
         "allowed_user_ids": ["user"], "project_ids": [1]}}},
     {"runtime_mode": "standalone", "notify": {"interactive": "off"}},
     {},
-    {"notify": None},
 ])
 def test_valid_non_gateway_switch_discards_the_current_scope_without_claiming_recovery(tmp_path, monkeypatch, cfg):
     _health(tmp_path, at=4000, unread=4000, reasons=[], overall="ok")
@@ -314,6 +313,7 @@ def test_valid_non_gateway_switch_discards_the_current_scope_without_claiming_re
 
 
 @pytest.mark.parametrize("cfg,blocked", [
+    ({"notify": None}, False),
     ({"notify": {"interactive": "off", "card_thread": "invalid"}}, False),
     ({"runtime_mode": "standalone", "notify": {}, "notify_target": 42}, False),
     ({"runtime_mode": "standalone", "notify": {"interactive": "slack", "slack": {}}}, False),
@@ -329,6 +329,41 @@ def test_invalid_or_blocked_switch_keeps_previous_delivery_scope(monkeypatch, cf
     assert state == {"delivery_current_reason": "notification_delivery_waiting", "delivery_current_scope": "a" * 64}
     if not blocked:
         assert obs["state_reasons"] == ["notification_delivery_unverified"]
+
+
+def test_explicit_notify_null_keeps_previous_scope_and_marks_unverified_in_evaluate(tmp_path, monkeypatch):
+    _health(tmp_path, at=4000, unread=4000, reasons=[], overall="ok")
+    monkeypatch.setattr(health_watch, "_observe_delivery", lambda home, cfg, now: _snapshot(now))
+    assert health_watch.evaluate(str(tmp_path), 4000, cfg=CFG)["state_reasons"] == [
+        "notification_delivery_waiting"]
+    before = json.loads((tmp_path / health_watch.STATE_REL).read_text())
+    monkeypatch.setattr(health_watch, "_observe_delivery", lambda *args: pytest.fail("unexpected probe"))
+
+    report = health_watch.evaluate(str(tmp_path), 4001, cfg={"notify": None})
+    after = json.loads((tmp_path / health_watch.STATE_REL).read_text())
+    assert report["status"] == "degraded"
+    assert report["state_reasons"] == ["notification_delivery_unverified"]
+    assert "recovered_from" not in report
+    assert after["delivery_current_scope"] == before["delivery_current_scope"]
+    assert after["delivery_current_reason"] == "notification_delivery_waiting"
+
+
+def test_timed_out_delivery_and_parts_observations_never_display_as_zero(tmp_path, monkeypatch):
+    import health_delivery
+    path = Path(tmp_path) / "data" / "health.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "at": 4000, "unread_at": 4000, "overall": "degraded",
+        "state_reasons": ["notification_parts_incomplete"],
+        "notify": {"incomplete_parts": {"status": "unknown", "reason": "observation_limit", "total": None}},
+    }))
+    monkeypatch.setattr(health_watch, "_observe_delivery",
+                        lambda home, cfg, now: health_delivery._empty(now))
+    report = health_watch.evaluate(str(tmp_path), 4000, cfg=CFG)
+    text = "\n".join(health_watch._alert_lines({**report, "alert": True}))
+    assert "待機 不明、送信中 不明、結果不明 不明" in text
+    assert "件数は未測定: 観測が制限時間で打ち切られました" in text
+    assert "0件" not in text
 
 
 def test_degraded_health_without_reasons_alerts_immediately_despite_failed_probe(tmp_path, monkeypatch):
