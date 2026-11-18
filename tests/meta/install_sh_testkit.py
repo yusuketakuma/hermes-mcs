@@ -178,7 +178,8 @@ esac
 if [ "$1" = "-I" ] && [ "$2" = "-B" ] && [ "$3" = "-c" ]; then
     exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/runtime-check.py" "$@"
 fi
-if [ "$1" = "-" ] && [ "$2" = "$HOME/.mcs/config.json" ]; then
+# install.sh exports the physical root when ~/.mcs is a private link
+if [ "$1" = "-" ] && { [ "$2" = "$HOME/.mcs/config.json" ] || [ "$2" = "${MCS_ROOT:-}/config.json" ]; }; then
     exec "$STUB_PARSE_PYTHON" "$@"
 fi
 exit 0
