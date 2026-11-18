@@ -174,6 +174,36 @@ def test_shared_head_gets_one_ready_verdict_regardless_of_draft_order(draft_firs
     assert statuses[0]["state"] == "success"
 
 
+@pytest.mark.parametrize("agent_first", [False, True])
+@pytest.mark.parametrize("state", ["success", "pending"])
+def test_shared_ready_heads_choose_the_most_favorable_verdict(agent_first, state):
+    agent, normal = pr(1), pr(2)
+    normal["head"]["sha"] = agent["head"]["sha"]
+    normal["head"]["ref"] = "feature/plain"
+    api = GateAPI([agent, normal] if agent_first else [normal, agent])
+    if state == "pending":
+        api.lists[ROOT + f"commits/{'1' * 40}/check-runs"][0]["status"] = "queued"
+    result = merge_gate.publish_gates(api, REPO, "main", automation_enabled=False)
+    assert result == {"published": [2], "errors": []}
+    statuses = [body for method, path, body in api.calls if method == "POST" and "/statuses/" in path]
+    assert len(statuses) == 1
+    assert statuses[0]["state"] == state
+    assert any(path == ROOT + "pulls/1/files" for _, path, _ in api.calls)
+    assert any(path == ROOT + "pulls/2/files" for _, path, _ in api.calls)
+
+
+def test_error_in_one_shared_head_candidate_does_not_hide_another_success():
+    first, second = pr(1), pr(2)
+    second["head"]["sha"] = first["head"]["sha"]
+    api = GateAPI([first, second])
+    api.failures.add(("LIST", ROOT + "pulls/1/files"))
+    result = publish(api)
+    assert result["published"] == [2]
+    assert result["errors"][0]["pr"] == 1
+    statuses = [body for method, path, body in api.calls if method == "POST" and "/statuses/" in path]
+    assert len(statuses) == 1 and statuses[0]["state"] == "success"
+
+
 def bot_status():
     return dict(context="merge-gate", state="success", description="必須ジョブ実行済み・成功・要人間承認",
                 creator={"login": "github-actions[bot]", "type": "Bot"},

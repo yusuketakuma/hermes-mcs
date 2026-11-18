@@ -56,18 +56,25 @@ def publish_gates(api, repo, default_branch, *, automation_enabled, event="",
             if not default_branch_pr(pr, repo, default_branch):
                 continue
             sha = pr["head"]["sha"]
-            previous = candidates.get(sha)
-            if previous is None or (previous.get("draft") and not pr.get("draft")):
-                candidates[sha] = pr
+            candidates.setdefault(sha, []).append(pr)
         except Exception as exc:
             result["errors"].append({"pr": number, "reason": str(exc)})
-    for sha, pr in candidates.items():
-        number = pr["number"]
+    for sha, prs in candidates.items():
+        preferred = [pr for pr in prs if not pr.get("draft")] or prs
+        plans = []
+        for pr in preferred:
+            number = pr["number"]
+            try:
+                checks = api.list(_repo_path(repo, f"commits/{sha}/check-runs"), key="check_runs")
+                files = api.list(_repo_path(repo, f"pulls/{number}/files"))
+                behind = api.get(_repo_path(repo, f"compare/{quote(default_branch, safe='')}...{sha}"))["behind_by"]
+                plans.append((number, decide_gate(pr, checks, files, behind, automation_enabled)))
+            except Exception as exc:
+                result["errors"].append({"pr": number, "reason": str(exc)})
+        if not plans:
+            continue
+        number, plan = max(plans, key=lambda item: {"failure": 0, "pending": 1, "success": 2}[item[1]["state"]])
         try:
-            checks = api.list(_repo_path(repo, f"commits/{sha}/check-runs"), key="check_runs")
-            files = api.list(_repo_path(repo, f"pulls/{number}/files"))
-            behind = api.get(_repo_path(repo, f"compare/{quote(default_branch, safe='')}...{sha}"))["behind_by"]
-            plan = decide_gate(pr, checks, files, behind, automation_enabled)
             if _gate_unchanged(api, repo, sha, plan):
                 continue
             api.post(_repo_path(repo, f"statuses/{sha}"), {
