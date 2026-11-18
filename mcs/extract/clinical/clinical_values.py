@@ -558,11 +558,12 @@ def _nearest_vital_label(body: str, s: int, e: int):
 
 
 def _bp_side(body: str, s: int, e: int):
-    """120/80: before the slash is systolic, after is diastolic."""
-    if body[e:e + 1] in ("/", "／"):
-        return "sbp"
-    if body[s - 1:s] in ("/", "／"):
-        return "dbp"
+    """120 / 80: the pair's left side is systolic, its right diastolic."""
+    for m in _BP_PAIR.finditer(body):
+        if (s, e) == m.span(1):
+            return "sbp"
+        if (s, e) == m.span(2):
+            return "dbp"
     return None
 
 
