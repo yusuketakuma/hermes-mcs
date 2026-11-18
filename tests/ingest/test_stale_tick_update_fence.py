@@ -3,6 +3,7 @@ import json
 import os
 import sqlite3
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 import uuid
 
@@ -270,3 +271,13 @@ def test_update_marker_without_confirmed_consent_hold_runs_no_commands(tmp_path,
     fd = writer_lock.acquire_run_lock(str(data / 'run.lock'))
     assert fd is not None
     os.close(fd)
+
+
+def test_source_stamp_is_taken_before_the_tick_loads_other_modules():
+    """IA-081: a checkout landing mid-import must change the stamp the tick compares."""
+    source = Path(run_check.__file__).read_text()
+    stamp = source.index("_CODE_STAMP = writer_lock.code_stamp_checked()")
+    first_project_import = min(source.index(line) for line in (
+        "\nimport extract_validation", "\nimport semantic_drain", "\nfrom mcs_adapter import",
+        "\nfrom ledger import", "\nimport job_ops", "\nimport collection_stages"))
+    assert stamp < first_project_import

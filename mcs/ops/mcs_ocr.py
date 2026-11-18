@@ -180,6 +180,8 @@ def run(cfg=None, *, retry_errors=False):
     generation = writer_lock.updater_state()
     if generation[0]:
         return {'reason': 'writer_blocked'}
+    if writer_lock.gateway_restart_pause(DATA):
+        return {'reason': 'gateway_restart_pending'}
     job = acquire_run_lock(os.path.join(DATA, 'attachment_ocr_job.lock'))
     if job is None:
         return {'reason': 'busy'}
@@ -256,15 +258,19 @@ def main():
         result = run(None, retry_errors=True) if args.retry_errors else run(None)
     except (OSError, ValueError, sqlite3.Error):
         result = {"reason": "local_processing_failed"}
-    if result != {"reason": "busy"} and Path(DATA).is_dir():
+    if result.get("reason") not in ("busy", "gateway_restart_pending") and Path(DATA).is_dir():
         try:
             atomic_write(os.path.join(DATA, "attachment_ocr_status.json"),
                          lambda stream: stream.write(_status_text(result, time.time())), mode=0o600)
         except (OSError, ValueError, ProviderSettingsUnreadable):
             result["reason"] = "status_unavailable"
     print(json.dumps({"attachment_ocr": result}, ensure_ascii=False))
-    return 0 if (not result.get("failed", 0) and not result.get("deferred", 0) and not result.get("local_deferred", 0)
-                 and result.get("reason") in (None, "disabled", "writer_busy", "busy")) else 1
+    # Owner 2026-11-13: deferrals beside saved progress are backlog, not a stall; a run with no progress still fails.
+    progressed = bool(result.get("complete", 0) or result.get("local_done", 0))
+    deferred = result.get("deferred", 0) or result.get("local_deferred", 0)
+    accepted = (None, "disabled", "writer_busy", "busy", "gateway_restart_pending") + (("memory_deferred",) if progressed else ())
+    return 0 if (not result.get("failed", 0) and (progressed or not deferred)
+                 and result.get("reason") in accepted) else 1
 
 
 if __name__ == "__main__":
