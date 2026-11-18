@@ -177,6 +177,38 @@ def publish_flags(cfg: dict, root: str) -> bool:
     return True
 
 
+def publish_restore_holds(ledger, root: str) -> bool:
+    """flags/restore_holds.json — delivery_ids under an unreleased
+    restore hold. The delivery worker reads it DB-free at every pre-send
+    check, so a held delivery's spec (kept as reconcile evidence) can
+    never turn into a send. Published only when it changes."""
+    db = getattr(ledger, "db", ledger)
+    held = sorted(str(r[0]) for r in db.execute(
+        "SELECT delivery_id FROM notification_restore_holds "
+        "WHERE released_at IS NULL AND delivery_id IS NOT NULL"))
+    flags = {"held_delivery_ids": held, "at": time.time()}
+    raw = canonical(flags)
+    path = os.path.join(notify_dirs(root)["flags"], "restore_holds.json")
+    try:
+        with open(path, "rb") as f:
+            old = f.read()
+    except OSError:
+        old = None
+    if old is not None:
+        try:
+            prior = json.loads(old)
+            if isinstance(prior, dict):
+                prior.pop("at", None)
+                cur = dict(flags)
+                cur.pop("at", None)
+                if canonical(prior) == canonical(cur):
+                    return False
+        except (ValueError, RecursionError):
+            pass
+    publish_file(os.path.dirname(path), "restore_holds.json", raw)
+    return True
+
+
 def _cleanup_budget_held(db, delivery_id):
     """A held resource part, or a part a restore beyond the journal horizon
     made unknown, keeps its delivery off the spool: the worker replays a
@@ -249,12 +281,9 @@ def recover(ledger, cfg, result) -> dict:
     marks = []
     for r in db.execute(
             "SELECT delivery_id,spec_json,transport,state FROM notification_renders r "
-            "WHERE (state IN ('queued','held') OR (state='delivered' "
+            "WHERE state IN ('queued','held') OR (state='delivered' "
             "AND EXISTS (SELECT 1 FROM notification_render_parts p "
-            "WHERE p.delivery_id=r.delivery_id AND p.state='pending'))) "
-            "AND NOT EXISTS (SELECT 1 FROM notification_restore_holds h "
-            "WHERE h.released_at IS NULL AND (h.delivery_id=r.delivery_id "
-            "OR h.card_id=r.card_id))").fetchall():
+            "WHERE p.delivery_id=r.delivery_id AND p.state='pending'))").fetchall():
         if _cleanup_budget_held(db, r["delivery_id"]):
             continue
         path = os.path.join(dirs[r["transport"] + "_render"],
@@ -302,4 +331,5 @@ def recover(ledger, cfg, result) -> dict:
         result.setdefault("errors", []).append(
             f"claimed_specs_stale:{stale['live']}")
     publish_flags(cfg, root)
+    publish_restore_holds(ledger, root)
     return fixed

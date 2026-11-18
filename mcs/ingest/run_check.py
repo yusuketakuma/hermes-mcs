@@ -513,6 +513,7 @@ def _commands_only(lock_fd, deadline) -> int:
         _run_stage(result, "cmd_int_drain_again", deadline, lambda: notify_cmds.drain_int_commands(
             ledger, result, cfg, root, deadline=min(deadline, time.monotonic() + 30)), required=True)
         notify_spool.publish_flags(cfg, root)
+        notify_spool.publish_restore_holds(ledger, root)
         _run_stage(result, "cmd_card_gc", deadline, notify_cards.gc, ledger, cfg, required=True)
         dirty = notify_cards.snapshot_dirty(ledger)
         if dirty:
@@ -1155,6 +1156,7 @@ def _finish_run(ledger, cfg, result, run_id, deadline, *, run_lock_fd=None,
                        deadline=deadline, limit=16), required=True)
         _require_closed_transaction(ledger, result)
         notify_spool.publish_flags(cfg, os.path.join(HOME, "data"))
+        notify_spool.publish_restore_holds(ledger, os.path.join(HOME, "data"))
     except TickTransactionOpen:
         raise
     except Exception as e:

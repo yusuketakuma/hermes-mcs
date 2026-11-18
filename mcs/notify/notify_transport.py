@@ -572,6 +572,14 @@ def _unlink_spec(ledger, delivery_id, transport) -> None:
 def _begin_check(db, req, cfg) -> str | None:
     if not notify_scope.interactive_enabled(cfg):
         return "interactive_off"
+    if db.execute(
+            "SELECT 1 FROM notification_restore_holds WHERE "
+            "released_at IS NULL AND delivery_id=? LIMIT 1",
+            (req["delivery_id"],)).fetchone():
+        # an unreleased restore hold freezes the delivery — deny before
+        # the render lookup so a render-less spec is never unlinked as
+        # unknown_delivery while it is still reconcile evidence
+        return "restore_hold"
     render = render_row(db, req["delivery_id"])
     if render is None:
         return "unknown_delivery"

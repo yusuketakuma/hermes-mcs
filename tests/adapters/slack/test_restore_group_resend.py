@@ -1,7 +1,8 @@
 """Restore reconcile + lost ``file_group`` journal: commands_only
-reconciles, the held delivery's spec is withdrawn, and a real
-``worker.tick`` must never resend the unjournaled group — while an
-unrelated delivery and a hold-free first send still go through."""
+reconciles, the held delivery's spec is preserved as evidence while
+``flags/restore_holds.json`` freezes it, and a real ``worker.tick``
+must never resend the unjournaled group — while an unrelated delivery,
+a repeat reconcile, and a hold-free first send still behave."""
 import asyncio
 import json
 import os
@@ -12,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import notify_cards
+import notify_reconcile
 import notify_spool
 import run_check
 from adapters.common import envelopes, journal, registry
@@ -87,6 +89,12 @@ def _group_updates(client, remotes):
             and set(kw["file_ids"]) & set(remotes)]
 
 
+def _held_ids(world):
+    return set(json.loads(
+        (world.root / "flags" / "restore_holds.json").read_text()
+    )["held_delivery_ids"])
+
+
 def test_held_delivery_never_resends_the_lost_group(
         led, tmp_path, monkeypatch):
     world = _world(led, tmp_path, monkeypatch)
@@ -102,7 +110,9 @@ def test_held_delivery_never_resends_the_lost_group(
     _commands_only(led, tmp_path, monkeypatch)
     assert notify_spool.restore_pending(str(world.root)) is None
 
-    # the reconcile receipt and the durable hold row name the real scope
+    # the reconcile receipt, the durable hold row, and the worker-facing
+    # hold list all name the real scope — the spec itself is preserved
+    # as reconcile evidence and must still be on disk
     receipt = json.loads(
         (world.root / "restore_reconcile.json").read_text())
     held = [h for h in receipt["held"] if h["delivery_id"] == did]
@@ -112,16 +122,53 @@ def test_held_delivery_never_resends_the_lost_group(
         "SELECT delivery_id,reason,scope_json FROM notification_restore_holds "
         "WHERE released_at IS NULL AND delivery_id=?", (did,)).fetchall()
     assert rows and all(r["reason"] for r in rows)
-
-    # the held delivery's spec is withdrawn; a second commands_only
-    # recover pass must not republish it while the hold is unreleased
     spec_path = Path(world.dirs["render"]) / f"{did}.json"
-    assert not spec_path.exists()
-    _commands_only(led, tmp_path, monkeypatch)
-    assert not spec_path.exists()
+    assert spec_path.exists()
+    assert did in _held_ids(world)
 
-    # real worker ticks — including a fresh worker as a restart — never
-    # reach the delivery's parts and never re-emit the group update
+    # a second commands_only recover pass republishes nothing new and
+    # the hold list still freezes the delivery
+    _commands_only(led, tmp_path, monkeypatch)
+    assert spec_path.exists() and did in _held_ids(world)
+
+    # a repeat reconcile of the same restore must not drift: spec_linked
+    # stays proven and an unrelated interactive pending event survives
+    other = led.outbox_add("new_messages", None, {"message_ids": [102]})
+    led.db.execute(
+        "UPDATE notify_outbox SET route='interactive',state='pending' "
+        "WHERE event_id=?", (other,))
+    led.db.commit()
+    notify_spool.mark_restored(str(world.root), backup_path="b.db", by="test")
+    rep = notify_reconcile.reconcile_after_restore(led, SLACK)
+    verdict = next(v for v in rep["verdicts"]
+                   if v.get("delivery_id") == did and v["verdict"] == "held")
+    assert verdict["spec_linked"] is True
+    row = led.db.execute(
+        "SELECT state FROM notify_outbox WHERE event_id=?",
+        (other,)).fetchone()
+    assert row["state"] == "pending"
+
+    # a corrupt hold list cannot name its frozen deliveries — the
+    # pre-send gate fails closed until the file is republished
+    holds_path = world.root / "flags" / "restore_holds.json"
+    holds_path.write_bytes(b"{corrupt")
+    w0 = world.worker
+
+    async def one_tick(worker):
+        assert await worker._sender.bind()
+        worker.acquire_scope_lock()
+        try:
+            await worker.tick()
+        finally:
+            worker.release_scope_lock()
+
+    asyncio.run(one_tick(w0))
+    assert _group_updates(world.client, group_remotes) == []
+    notify_spool.publish_restore_holds(led, str(world.root))
+    assert did in _held_ids(world)
+
+    # real worker ticks — including a fresh worker as a restart — reach
+    # the spec but the hold stops every part send
     w = world.worker
     drove = []
     original = w._drive_parts
@@ -148,16 +195,17 @@ def test_held_delivery_never_resends_the_lost_group(
         worker_id=registry.new_worker_id(), log=lambda *_a, **_k: None)
     asyncio.run(drive_ticks(restarted))
 
-    assert did not in drove
+    # processing is reached — the hold, not a missing spec, stops the send
+    assert did in drove
     assert _group_updates(world.client, group_remotes) == []
 
     # an unrelated delivery on another project/thread still delivers
     _seed_thread(led, pid=2, root=200, mids=(200, 201))
     _attach(led, tmp_path, mid=200, name="other-0.jpg", blob=b"other-0")
     _attach(led, tmp_path, mid=200, name="other-1.pdf", blob=b"other-1")
-    other = _dispatch(
+    other_delivery = _dispatch(
         led, _intent(led, pid=2, payload={"message_ids": [200, 201]}), SLACK)
-    assert other["dispatched"]
+    assert other_delivery["dispatched"]
     other_spec = json.loads(led.db.execute(
         "SELECT spec_json FROM notification_renders WHERE delivery_id!=? "
         "ORDER BY render_rev DESC LIMIT 1", (did,)).fetchone()["spec_json"])
