@@ -274,6 +274,19 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     report['notify_unknown_part_outcomes'] = tracking['unknown'] if tracking else None
     report['notify_active_parts_breakdown'] = (_part_breakdown(tracking, tracking['total'])
         if tracking else report['notify_parts_breakdown'])
+    # the alert must tell a fresh count, a carried one and an unmeasured
+    # one apart: only 'recorded' is the current observation
+    parts_status = parts.get('status') if isinstance(parts, dict) else None
+    report['notify_parts_measurement'] = (
+        'unknown' if parts_unknown
+        else 'stale' if parts_status == 'stale_measurement'
+        else 'recorded' if parts_status == 'recorded' else None)
+    if report['notify_parts_measurement'] == 'stale':
+        observed = parts.get('observed_at')
+        report['notify_parts_observed_at'] = observed if finite_number(observed) else None
+    elif report['notify_parts_measurement'] == 'unknown':
+        reason = parts.get('reason')
+        report['notify_parts_reason'] = reason if _is_code(reason) else None
     held = notify.get("held_reasons")
     report["held_reasons"] = (
         held if isinstance(held, dict)
@@ -1199,21 +1212,33 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             extra = ((f" {int(n)}件" if finite_number(n) else "") + (f"（最古 {age}）" if age else "")
                      + _wait_summary(report.get("notify_wait"), report.get("observations_recorded", False)))
         elif base == "notification_parts_incomplete":
+            measurement = report.get('notify_parts_measurement')
             n = report.get('notify_active_incomplete_parts', report.get('notify_incomplete_parts'))
-            extra = f" {n}件" if _count(n) else ""
-            detail = _part_breakdown(report.get('notify_active_parts_breakdown', report.get('notify_parts_breakdown')), n)
-            if detail is not None:
-                states, plans = detail['by_state'], detail['by_plan']
-                labels = [('結果不明', states['unknown']), ('未送信', states['not_sent']),
-                          ('処理待ち', states['pending']), ('保留', states['held'])]
-                extra += (f"（現行{plans['current']}・過去{plans['superseded']}／"
-                          + '・'.join(f'{label}{count}' for label, count in labels if count) + '）')
-            unknown = report.get('notify_unknown_part_outcomes')
-            if _count(unknown) and unknown > (detail['by_state']['unknown'] if detail else 0):
-                extra += f"／結果不明の全記録 {unknown}件"
-            closed = report.get('notify_tracking_closed_parts')
-            if _count(closed) and closed:
-                extra += f"／別に運用終了・未回収 {closed}件"
+            if measurement == 'unknown':
+                why = {'observation_limit': '観測が制限時間で打ち切られました',
+                       'observation_unavailable': '観測に失敗しました'}.get(
+                           report.get('notify_parts_reason'), '観測できませんでした')
+                extra = f"（件数は未測定: {why}）"
+                action = "次回の収集で再確認します。続く場合は収集ログを確認"
+            else:
+                extra = f" {n}件" if _count(n) else ""
+                detail = _part_breakdown(report.get('notify_active_parts_breakdown', report.get('notify_parts_breakdown')), n)
+                if detail is not None:
+                    states, plans = detail['by_state'], detail['by_plan']
+                    labels = [('結果不明', states['unknown']), ('未送信', states['not_sent']),
+                              ('処理待ち', states['pending']), ('保留', states['held'])]
+                    extra += (f"（現行{plans['current']}・過去{plans['superseded']}／"
+                              + '・'.join(f'{label}{count}' for label, count in labels if count) + '）')
+                unknown = report.get('notify_unknown_part_outcomes')
+                if _count(unknown) and unknown > (detail['by_state']['unknown'] if detail else 0):
+                    extra += f"／結果不明の全記録 {unknown}件"
+                closed = report.get('notify_tracking_closed_parts')
+                if _count(closed) and closed:
+                    extra += f"／別に運用終了・未回収 {closed}件"
+                if measurement == 'stale':
+                    observed = report.get('notify_parts_observed_at')
+                    extra += (f"（記録時点の観測値: {_jst(observed)}）"
+                              if finite_number(observed) else "（記録時点の観測値）")
         elif base == "access_log_unwritable":
             since = report.get("access_log_since")
             extra = f"（{_jst(since)} から）" if finite_number(since) else ""
