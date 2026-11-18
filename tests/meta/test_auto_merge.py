@@ -325,6 +325,26 @@ def test_inherited_auto_merge_reservation_is_withdrawn_before_direct_merge():
     assert any(call[0] == "GRAPHQL" and call[2] == {"id": "PR_1"} for call in api.calls)
 
 
+@pytest.mark.parametrize("automation", ["true", "false"])
+def test_withdraw_only_covers_forks_and_drafts_without_running_controller(monkeypatch, automation):
+    from ci import auto_merge
+    api = StubAPI()
+    pulls = [make_pr(number=number) for number in (1, 2, 3)]
+    pulls[1]["draft"] = True
+    pulls[2]["head"]["repo"]["full_name"] = "fork/repo"
+    for pr in pulls:
+        pr["auto_merge"] = {"enabled_at": "2026-11-18T12:00:00Z"}
+        api.get_data[_repo_path(REPO, f"pulls/{pr['number']}")] = pr
+    api.list_data[_repo_path(REPO, "pulls?state=open&base=main")] = pulls
+    monkeypatch.setenv("GITHUB_TOKEN", "fixture-token")
+    monkeypatch.setattr(auto_merge, "GitHubAPI", lambda *args: api)
+    monkeypatch.setattr(auto_merge, "run_controller", lambda *args, **kwargs: pytest.fail("must only withdraw"))
+    assert auto_merge.main(["--repo", REPO, "--default-branch", "main",
+                            "--automation", automation, "--withdraw-inherited-only"]) == 0
+    assert [call[2]["id"] for call in api.calls if call[0] == "GRAPHQL"] == ["PR_1", "PR_2", "PR_3"]
+    assert not any(call[0] in {"POST", "PUT", "PATCH"} for call in api.calls)
+
+
 def test_head_race_immediately_before_merge_does_not_call_merge_api():
     api = StubAPI()
     pr = make_pr()

@@ -20,6 +20,7 @@ def test_controller_events_are_trusted_serialized_and_non_targeted():
     assert "Reconcile current PR heads" in control
     assert "python3 ci/auto_merge.py --withdraw-inherited" in control
     assert "--cancel-obsolete-ci-only" in control
+    assert control.index("run: python3 ci/auto_merge.py --withdraw-inherited-only") < control.index("name: Decide and publish merge-gate")
     assert "AUTO_MERGE_ENABLED" in control and "AUTOMATION_ENABLED" in control
     assert "Reserve or withdraw auto-merge" not in control
     assert "\n  auto-merge:\n" not in control and "withdraw-on-push:" not in control

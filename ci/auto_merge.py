@@ -129,11 +129,21 @@ def _sha(pr: dict) -> str:
     return (pr.get("head") or {}).get("sha", "")
 
 
+def default_branch_pr(pr: dict, repo: str, default_branch: str) -> bool:
+    base = pr.get("base") or {}
+    return (
+        pr.get("state") == "open"
+        and base.get("ref") == default_branch
+        and ((base.get("repo") or {}).get("full_name") or "").casefold() == repo.casefold()
+        and bool(HEAD_SHA.fullmatch(_sha(pr)))
+    )
+
+
 def eligible_pr(pr: dict, repo: str, default_branch: str) -> bool:
     head, base = pr.get("head") or {}, pr.get("base") or {}
     head_repo, base_repo = head.get("repo") or {}, base.get("repo") or {}
     return (
-        pr.get("state") == "open"
+        default_branch_pr(pr, repo, default_branch)
         and not pr.get("draft")
         and base.get("ref") == default_branch
         and (head_repo.get("full_name") or "").casefold() == repo.casefold()
@@ -254,12 +264,12 @@ def withdraw_inherited_reservations(api, repo: str, default_branch: str) -> list
     ))
     withdrawn = []
     for listed in pulls:
-        if not eligible_pr(listed, repo, default_branch):
+        if not default_branch_pr(listed, repo, default_branch):
             continue
         number = listed["number"]
         path = _repo_path(repo, f"pulls/{number}")
         pr = api.get(path)
-        if not eligible_pr(pr, repo, default_branch) or not pr.get("auto_merge"):
+        if not default_branch_pr(pr, repo, default_branch) or not pr.get("auto_merge"):
             continue
         node_id = pr.get("node_id")
         if not isinstance(node_id, str) or not node_id:
@@ -709,11 +719,13 @@ def main(argv=None) -> int:
                         default=int(os.environ["SOURCE_RUN_ID"]) if os.environ.get("SOURCE_RUN_ID") else None)
     parser.add_argument("--source-head", default=os.environ.get("SOURCE_HEAD", ""))
     parser.add_argument("--withdraw-inherited", action="store_true")
+    parser.add_argument("--withdraw-inherited-only", action="store_true")
     parser.add_argument("--pr", type=int, action="append", default=None)
     parser.add_argument("--target-head", default=os.environ.get("TARGET_HEAD", ""))
     args = parser.parse_args(argv)
     automation_enabled = args.automation == "true"
-    if not automation_enabled and not args.withdraw_inherited:
+    withdraw_requested = args.withdraw_inherited or args.withdraw_inherited_only
+    if not automation_enabled and not withdraw_requested:
         print(json.dumps({"state": "disabled", "reason": "AUTOMATION_ENABLED is not true"}, ensure_ascii=False))
         return 0
     token = os.environ.get("GITHUB_TOKEN", "")
@@ -722,8 +734,10 @@ def main(argv=None) -> int:
     api = GitHubAPI(token, args.repo)
     try:
         withdrawn = (withdraw_inherited_reservations(api, args.repo, args.default_branch)
-                     if args.withdraw_inherited else [])
-        if not automation_enabled:
+                     if withdraw_requested else [])
+        if args.withdraw_inherited_only:
+            result = {"state": "withdrawn"}
+        elif not automation_enabled:
             result = {"state": "disabled", "reason": "AUTOMATION_ENABLED is not true"}
         else:
             result = run_controller(
