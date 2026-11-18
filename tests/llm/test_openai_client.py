@@ -8,6 +8,8 @@ import time
 
 import pytest
 
+from mcs_util import payload_hash
+
 import anthropic_client
 import cloud_client
 import cloud_cli
@@ -437,7 +439,9 @@ def test_responses_uses_fixed_model_no_storage_and_exact_attempt_hooks():
         assert body["model"] == client.MODEL and body["max_output_tokens"] == 100
         assert body["reasoning"] == {"effort": "low"}
         assert body["service_tier"] == "default" and body["store"] is False and body["tools"] == []
-        assert body["prompt_cache_options"] == {"ttl": "30m"}
+        # no fixed head: explicit mode with no breakpoint writes nothing to the cache
+        assert body["prompt_cache_options"] == {"mode": "explicit", "ttl": "30m"}
+        assert body["input"] == "synthetic JSON request"
         sent.append(body)
         return 200, {"x-request-id": "req_synthetic"}, json.dumps(response()).encode()
 
@@ -691,3 +695,30 @@ def test_priority_uses_only_mcs_private_key_and_validates_split(tmp_path, monkey
     cfg["cloud_llm"]["provider_budgets"] = {"openai": {"daily_cost_limit_usd": 26, "monthly_cost_limit_usd": 15}}
     settings, errors = policy.resolve_settings(cfg, tmp_path)
     assert errors and settings["mode"] == "off"
+
+
+def test_fixed_head_is_posted_as_its_own_cache_block_without_changing_request_identity():
+    """The wire body marks the head; reservation and settlement keep the plain body."""
+    head, tail = "synthetic fixed instructions\n", "synthetic varying input"
+    posted, reserved, settled = [], [], []
+
+    def post(body, timeout):
+        posted.append(body)
+        return 200, {"x-request-id": "req_synthetic"}, json.dumps(response()).encode()
+
+    provider = client.OpenAIClient("synthetic-private", post_fn=post)
+    plain = provider.body(head + tail, 100, head)
+    provider.complete(head + tail, deadline=time.monotonic() + 10, max_tokens=100, cache_prefix=head,
+        reserve_fn=lambda body, timeout: reserved.append(body) or {"id": 1},
+        after_result=lambda reservation, meta, **kw: settled.append(meta))
+    assert reserved == [plain] and plain["input"] == head + tail
+    assert settled[0]["request_fp"] == payload_hash(plain)
+    assert posted[0]["prompt_cache_options"] == {"mode": "explicit", "ttl": "30m"}
+    assert posted[0]["input"] == [{"role": "user", "content": [
+        {"type": "input_text", "text": head, "prompt_cache_breakpoint": {"mode": "explicit"}},
+        {"type": "input_text", "text": tail}]}]
+    assert {key: value for key, value in posted[0].items() if key not in ("input", "prompt_cache_options")} == {
+        key: value for key, value in plain.items() if key not in ("input", "prompt_cache_options")}
+    # a prompt that is only the head carries no empty second block
+    assert provider.wire(provider.body(head, 100, head), head)["input"][0]["content"] == [
+        {"type": "input_text", "text": head, "prompt_cache_breakpoint": {"mode": "explicit"}}]

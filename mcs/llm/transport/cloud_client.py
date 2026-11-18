@@ -92,6 +92,11 @@ class CloudClient:
         # local contract at once (owner decision 2026-11-15). Jev keeps the shared classes.
         return kind, retryable and status < 500, {}
 
+    def wire(self, body, cache_prefix):
+        """The body as posted. Accounting and resend identity keep using ``body``
+        itself, so a provider may reshape only what goes on the wire."""
+        return body
+
     def complete(self, prompt, *, deadline, max_tokens=8192, before_attempt=None,
                  reserve_fn, after_result=None, cache_prefix=None):
         """Return the shared chat envelope; settle metadata and the answer together.
@@ -109,6 +114,7 @@ class CloudClient:
             raise CloudError("no_api_key")
         body = self.body(prompt, max_tokens, cache_prefix)
         limit = response_limit(max_tokens)
+        posted = self.wire(body, cache_prefix)
         last = CloudNotSent("budget_exceeded", "deadline", retryable=True)
         for attempt in range(self.max_attempts):
             remaining = deadline - time.monotonic()
@@ -145,9 +151,9 @@ class CloudClient:
             wait = None
             try:
                 if self._post_fn:
-                    status, headers, raw = self._post_fn(body, timeout)
+                    status, headers, raw = self._post_fn(posted, timeout)
                 else:
-                    status, headers, raw = self.request("POST", body, timeout, deadline=deadline,
+                    status, headers, raw = self.request("POST", posted, timeout, deadline=deadline,
                                                             max_bytes=limit)
                 if type(status) is not int or not 100 <= status <= 599:
                     raise CloudError("protocol_error", "status_invalid")

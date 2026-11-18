@@ -231,6 +231,20 @@ class OpenAIClient(CloudClient):
                 "store": False, "service_tier": "default",
                 "prompt_cache_options": {"ttl": "30m"}, "tools": []}
 
+    def wire(self, body, cache_prefix):
+        """Mark the fixed head as its own cache block (explicit mode), so a later
+        request that shares the head can read it back. A hit is not guaranteed
+        (short input, duplicate requests, expiry or routing can miss) and the
+        saving is not measured. With no head, no breakpoint is marked."""
+        posted = {**body, "prompt_cache_options": {"mode": "explicit", "ttl": "30m"}}
+        if cache_prefix:
+            content = [{"type": "input_text", "text": cache_prefix,
+                        "prompt_cache_breakpoint": {"mode": "explicit"}}]
+            if body["input"][len(cache_prefix):]:
+                content.append({"type": "input_text", "text": body["input"][len(cache_prefix):]})
+            posted["input"] = [{"role": "user", "content": content}]
+        return posted
+
     def answer(self, obj, meta):
         if not isinstance(obj, dict) or obj.get("model") != self.model:
             raise AnthropicError("model_mismatch")
