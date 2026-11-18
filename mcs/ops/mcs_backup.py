@@ -362,9 +362,9 @@ def _decode(bundle: Path, expected_sha256: str, key: bytes,
                 raise backup_evidence.BackupError("backup_plain_size_mismatch")
         if file_sha256(plain) != manifest["plain_sha256"]:
             raise backup_evidence.BackupError("backup_plain_checksum_failed")
-        if backup_evidence.inventory_snapshot(plain, **(
+        if not backup_evidence.inventory_matches(plain, manifest["inventory"], **(
                 {"max_steps": max_steps, "deadline": deadline}
-                if max_steps is not None else {})) != manifest["inventory"]:
+                if max_steps is not None else {})):
             raise backup_evidence.BackupError("backup_inventory_mismatch")
     except (ValueError, TypeError, KeyError, EOFError, gzip.BadGzipFile, zlib.error):
         raise backup_evidence.BackupError("backup_payload_invalid") from None

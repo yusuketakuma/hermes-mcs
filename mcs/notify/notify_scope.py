@@ -12,6 +12,7 @@ from mcs_util import loads_dict, payload_hash, strict_json, text_sha256, valid_h
 
 TRANSPORT_VERSIONS = {"discord": 1, "slack": 2, "lineworks": 3}
 SUPPORTED_TRANSPORTS = tuple(TRANSPORT_VERSIONS)
+RESTORE_BEYOND_JOURNAL_HORIZON = "restore_beyond_journal_horizon"
 INTERACTIVE_KINDS = frozenset({"new_messages", "signal", "daily_digest", "urgent_notice", "patient_history"})
 
 def scope_fields(transport: str) -> tuple[str, ...]:

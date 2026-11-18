@@ -354,6 +354,83 @@ def record_dependencies_tx(db, snapshots):
             loss.record_tx(db, snapshot)
 
 
+MAX_RECOVERY_CELLS = 2000
+
+
+def _without_redundant_cells(cells):
+    """Drop cells that carry no value and only repeat another cell's area; None if nothing is provably redundant.
+
+    A cell is redundant only when it is empty and lies inside another cell's rectangle, or
+    it exactly repeats another cell's rectangle — the single valued emission wins over
+    empty ones in either order, and equal texts keep the first. Differing text is never merged.
+    """
+    if len(cells) > MAX_RECOVERY_CELLS:
+        return None
+    boxes = [(c["row"], c["col"], c["row"] + c.get("row_span", 1), c["col"] + c.get("col_span", 1),
+              c.get("contents") or "") for c in cells]
+    kept = []
+    for i, (r0, c0, r1, c1, text) in enumerate(boxes):
+        redundant = False
+        for j, (s0, d0, s1, d1, other) in enumerate(boxes):
+            if j == i or not (s0 <= r0 and d0 <= c0 and r1 <= s1 and c1 <= d1):
+                continue
+            same_box = (s0, d0, s1, d1) == (r0, c0, r1, c1)
+            if same_box:
+                # Identical rectangles: the single valued emission wins over
+                # empties in either order; equal texts keep the first.
+                if (not text and (other or j < i)) or (text and other == text and j < i):
+                    redundant = True
+                    break
+            elif not text:
+                redundant = True
+                break
+        if not redundant:
+            kept.append(cells[i])
+    return kept if len(kept) < len(cells) else None
+
+
+def _table_text(cells):
+    rows, height, entries, content_size = {}, 0, 0, 0
+    for cell in cells:
+        row, col = cell["row"], cell["col"]
+        row_span, col_span = cell.get("row_span", 1), cell.get("col_span", 1)
+        if (row < 0 or col < 0 or type(row_span) is not int or row_span < 1
+                or type(col_span) is not int or col_span < 1
+                or row + row_span > MAX_OUTPUT + 1 or col + col_span > MAX_OUTPUT + 1):
+            raise ValueError("output_schema")
+        entries += row_span
+        content = cell.get("contents") or ""
+        content_size += len(content.encode("utf-8"))
+        if entries > MAX_TABLE_ENTRIES or content_size > MAX_OUTPUT:
+            raise ValueError("output_schema")
+        height = max(height, row + row_span)
+        for offset in range(row_span):
+            rows.setdefault(row + offset, []).append((col, col + col_span, content if offset == 0 else ""))
+    # Count every missing separator before allocating padding from runtime indices.
+    size = content_size + max(0, height - 1)
+    for row in rows.values():
+        row.sort()
+        end = 0
+        for col, stop, _ in row:
+            if col < end:
+                raise ValueError("output_schema_table_overlap")
+            end = stop
+        size += end - 1
+        if size > MAX_OUTPUT:
+            raise ValueError("output_schema")
+    lines = []
+    previous_row = 0
+    for number, row in sorted(rows.items()):
+        parts, previous_col = [], 0
+        for col, stop, content in row:
+            parts.extend(("\t" * (col - previous_col), content))
+            previous_col = col
+        parts.append("\t" * (stop - 1 - previous_col))
+        lines.extend(("\n" * (number - previous_row), "".join(parts)))
+        previous_row = number
+    return "".join(lines)
+
+
 def _document_text(document):
     if not isinstance(document, dict):
         raise ValueError("output_schema")
@@ -381,45 +458,13 @@ def _document_text(document):
                         or cell.get("contents") is not None and not isinstance(cell["contents"], str)
                         for cell in cells)):
                     raise ValueError("output_schema")
-                rows, height, entries, content_size = {}, 0, 0, 0
-                for cell in cells:
-                    row, col = cell["row"], cell["col"]
-                    row_span, col_span = cell.get("row_span", 1), cell.get("col_span", 1)
-                    if (row < 0 or col < 0 or type(row_span) is not int or row_span < 1
-                            or type(col_span) is not int or col_span < 1
-                            or row + row_span > MAX_OUTPUT + 1 or col + col_span > MAX_OUTPUT + 1):
-                        raise ValueError("output_schema")
-                    entries += row_span
-                    content = cell.get("contents") or ""
-                    content_size += len(content.encode("utf-8"))
-                    if entries > MAX_TABLE_ENTRIES or content_size > MAX_OUTPUT:
-                        raise ValueError("output_schema")
-                    height = max(height, row + row_span)
-                    for offset in range(row_span):
-                        rows.setdefault(row + offset, []).append((col, col + col_span, content if offset == 0 else ""))
-                # Count every missing separator before allocating padding from runtime indices.
-                size = content_size + max(0, height - 1)
-                for row in rows.values():
-                    row.sort()
-                    end = 0
-                    for col, stop, _ in row:
-                        if col < end:
-                            raise ValueError("output_schema_table_overlap")
-                        end = stop
-                    size += end - 1
-                    if size > MAX_OUTPUT:
-                        raise ValueError("output_schema")
-                lines = []
-                previous_row = 0
-                for number, row in sorted(rows.items()):
-                    parts, previous_col = [], 0
-                    for col, stop, content in row:
-                        parts.extend(("\t" * (col - previous_col), content))
-                        previous_col = col
-                    parts.append("\t" * (stop - 1 - previous_col))
-                    lines.extend(("\n" * (number - previous_row), "".join(parts)))
-                    previous_row = number
-                text = "".join(lines)
+                try:
+                    text = _table_text(cells)
+                except ValueError as error:
+                    reduced = _without_redundant_cells(cells) if str(error) == "output_schema_table_overlap" else None
+                    if reduced is None:
+                        raise
+                    text = _table_text(reduced)
             output_size += len(text.encode("utf-8")) + bool(blocks)
             if output_size > MAX_OUTPUT:
                 raise ValueError("output_schema")

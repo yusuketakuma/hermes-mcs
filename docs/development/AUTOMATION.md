@@ -187,6 +187,12 @@ gh secret set OPENAI_API_KEY --repo $R
 - `merge-gate` を main-protect の必須チェックに足すのは、合成の試験 PR でゲートの不合格を確かめてからにします。
 - 自動マージを使うときは、Settings → General の Allow auto-merge をオンにします。
 
+公開リポジトリでは、2026年12月2日から `pull_request_target` の起動に Actions event policy での明示的な許可が必要です。[GitHub の告知](https://github.blog/changelog/2026-11-02-pull_request_target-blocked-by-default-december-2/)
+
+Issue #121 には、Settings → Actions → Policies で `allow-pull-request-target-for-control-workflows` を作成した記録があります。
+対象は `agent-control.yml` と `labeler.yml` で、作成時の許可イベントは `pull_request_target`・`workflow_run`・`issues` です。現在の `agent-control.yml` には `workflow_dispatch` の許可も必要です。
+`pull_request_target` の許可がないと、PR 更新時の `merge-gate` の「実行待ち」表示と PR ラベルの自動付与が止まります。対象や起動イベントを変えたら、この設定も見直してください。
+
 `main-sync` の生成表 commit に使う deploy key は次の手順で設定します（鍵は手元で作り、秘密鍵は secret に入れたあと消します）。
 
 ```bash

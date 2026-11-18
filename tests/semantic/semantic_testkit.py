@@ -430,7 +430,7 @@ def _delivery_db(tmp_path, messages=()):
     return db
 
 
-def _summary(db, claims=1):
+def _summary(db, claims=1, model="Qwen3.5-9B"):
     from mcs_util import payload_hash
 
     bundle = semantic_store.thread_bundle(db.db, 1, 1)
@@ -450,7 +450,7 @@ def _summary(db, claims=1):
                     meta={VERSION_KEY: CURRENT_VERSION, "schema": semantic_policy.SCHEMA_VERSION, "fingerprint": fp})
     summary_id = db.artifact_add(
         "semantic_summary", json.dumps(content, ensure_ascii=False),
-        project_id=1, message_id=1, model="Qwen3.5-9B",
+        project_id=1, message_id=1, model=model,
         meta=common)
     audit = {"status": "PASS", "findings": [], "target_message_id": 1}
     binding = payload_hash({"project_id": 1, "message_id": 1, "fingerprint": fp, "policy": policy,

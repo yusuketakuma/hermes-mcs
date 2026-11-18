@@ -541,6 +541,13 @@ def _execute(ledger, adapter, cfg, root, row, now, deadline):
     return state
 
 
+def _move_behind(ledger, artifact_id):
+    """Re-order a row behind the others in the drain windows so a failing row cannot starve them."""
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET content=json_set(content,'$.updated_at',?) "
+                          "WHERE artifact_id=? AND kind=?", (time.time(), artifact_id, KIND))
+
+
 def drain(ledger, adapter, cfg, root, deadline):
     """Execute bounded queued work and reconcile unknowns; caller holds run.lock."""
     counts = {"confirmed": 0, "unknown": 0, "rejected": 0, "held": 0}
@@ -573,10 +580,7 @@ def drain(ledger, adapter, cfg, root, deadline):
                         and _approved(ledger.db, value["request"])):
                     _save_outcome(ledger, row["artifact_id"], value, state, "stamp_check_held")
                 else:
-                    # Move an unsaveable row behind the others so it cannot starve the window.
-                    with ledger.db:
-                        ledger.db.execute("UPDATE artifacts SET content=json_set(content,'$.updated_at',?) "
-                                          "WHERE artifact_id=? AND kind=?", (time.time(), row["artifact_id"], KIND))
+                    _move_behind(ledger, row["artifact_id"])
             value = json.loads(ledger.db.execute(
                 "SELECT content FROM artifacts WHERE artifact_id=?", (row["artifact_id"],)).fetchone()[0])
             try:
@@ -593,4 +597,5 @@ def drain(ledger, adapter, cfg, root, deadline):
             except Exception:
                 # The durable outcome stays authoritative if followup/render publication fails.
                 counts["held"] += 1
+                _move_behind(ledger, row["artifact_id"])    # a failing row must not pin the 4-row window
     return counts

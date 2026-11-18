@@ -9,6 +9,42 @@ from __future__ import annotations
 
 UNCLASSIFIED = "unclassified"
 
+# Fixed defer reasons the shared local extraction call records on its
+# per-thread notes while a page run is processed. Only these exact codes may
+# reach the status record, and only as call observations — an observed reason
+# is not proof that it caused the hold (a successful call can record one on
+# an optional repair path), so it never joins the cause breakdown.
+_LLM_DEFER_REASONS = frozenset({
+    "admission", "busy", "checkpoint_unverified", "circuit_open",
+    "currentness_unverified", "deadline", "endpoint_down", "not_sent",
+    "probe_unobserved", "quality_checkpoint_unverified", "repair_unavailable",
+    "local_rebuild_proof_changed", "local_rebuild_unverified",
+})
+_LLM_STATUS_CODES = frozenset(f"llm_{reason}" for reason in _LLM_DEFER_REASONS)
+
+
+def llm_reason(raw):
+    """Map one recorded extraction deferral to its fixed status code, or None."""
+    return "llm_" + raw if type(raw) is str and raw in _LLM_DEFER_REASONS else None
+
+
+def observed(reasons):
+    """Keep fixed call-observation codes with positive integer counts."""
+    if not isinstance(reasons, dict):
+        return {}
+    return {code: reasons[code] for code in sorted(reasons)
+            if code in _LLM_STATUS_CODES and type(reasons[code]) is int and reasons[code] > 0}
+
+
+def observed_valid(reasons, total):
+    """Whether observed call reasons stay within the deferrals that recorded them."""
+    return (type(reasons) is dict and type(total) is int and total > 0
+            and 0 < len(reasons) <= len(_LLM_STATUS_CODES)
+            and all(code in _LLM_STATUS_CODES and type(count) is int and count > 0
+                    for code, count in reasons.items())
+            and sum(reasons.values()) <= total)
+
+
 # Priority order: the same order the page run checks its admission
 # conditions, so a tie between counted codes resolves deterministically.
 LOCAL_DEFER_REASONS = (

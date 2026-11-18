@@ -431,6 +431,128 @@ def test_local_deferral_observation_failure_is_unclassified_and_keeps_the_outcom
     assert mcs_ocr._local_defer_reason(_probe_ledger(tmp_path), None, 0.1) == "unclassified"
 
 
+def _defer_drain(monkeypatch, tmp_path, local):
+    """Run one drain whose local stage is ``local`` against a real sqlite ledger."""
+    import sqlite3
+    import cloud_backlog
+    import extract_llm
+    database = tmp_path / "synthetic.db"
+    database.touch()
+    ledger = SimpleNamespace(db=sqlite3.connect(str(database)), close=lambda: None)
+    monkeypatch.setattr(mcs_ocr, "DB", str(database))
+    monkeypatch.setattr(mcs_ocr, "DATA", str(tmp_path))
+    monkeypatch.setattr(mcs_ocr.writer_lock, "updater_state", lambda: (False, 1))
+    monkeypatch.setattr(mcs_ocr.writer_lock, "wait_run_lock",
+                        lambda path, **kwargs: mcs_ocr.acquire_run_lock(path))
+    monkeypatch.setattr(mcs_ocr, "Ledger", lambda _: ledger)
+    monkeypatch.setattr(mcs_ocr.attachment_ocr, "run_pending", lambda *args, **kwargs: {"complete": 0})
+    monkeypatch.setattr(attachment_inference, "run_pending", local)
+    monkeypatch.setattr(extract_llm, "disk_free_mb", lambda db: 10_000.0)
+    monkeypatch.setattr(extract_llm, "disk_floor_mb", lambda: 100.0)
+    monkeypatch.setattr(cloud_backlog, "memory_headroom", lambda: 1 << 30)
+    cfg = {"attachment_ocr": {"enabled": True, "timeout_seconds": 120}}
+    try:
+        return mcs_ocr._drain(ledger, cfg, (False, 1), mcs_ocr.time.monotonic() + 600,
+                              live_config=False)
+    finally:
+        ledger.db.close()
+
+
+@pytest.mark.parametrize("reason,code", [
+    ("deadline", "llm_deadline"), ("admission", "llm_admission"), ("busy", "llm_busy"),
+    ("probe_unobserved", "llm_probe_unobserved"), ("endpoint_down", "llm_endpoint_down"),
+    ("quality_checkpoint_unverified", "llm_quality_checkpoint_unverified"),
+])
+def test_drain_records_the_call_reason_observed_during_a_deferral(tmp_path, monkeypatch, reason, code):
+    import extract_llm
+
+    def local(*args, **kwargs):
+        extract_llm._CALL_NOTES.defer_reason = reason
+        return {"done": 0, "deferred": 1}
+
+    result = _defer_drain(monkeypatch, tmp_path, local)
+    assert result["local_deferred_reasons"] == {"unclassified": 1}
+    assert result["local_llm_defer_reasons"] == {code: 1}
+    assert not hasattr(extract_llm._CALL_NOTES, "defer_reason")
+
+
+@pytest.mark.parametrize("reason", [None, "synthetic_free_text", {"nested": "value"}, 7,
+                                    "cloud_fallback", "cloud_deadline", "cloud_unit_unresolved"])
+def test_drain_ignores_call_reasons_outside_the_fixed_local_vocabulary(
+        tmp_path, monkeypatch, reason):
+    import extract_llm
+
+    def local(*args, **kwargs):
+        extract_llm._CALL_NOTES.defer_reason = reason
+        return {"done": 0, "deferred": 1}
+
+    result = _defer_drain(monkeypatch, tmp_path, local)
+    assert result["local_deferred_reasons"] == {"unclassified": 1}
+    assert "local_llm_defer_reasons" not in result
+
+
+def test_drain_never_promotes_an_observation_to_the_hold_cause(tmp_path, monkeypatch):
+    # A call that records a reason on a non-fatal path (optional repair) and is
+    # then held by something else keeps the observation out of the cause
+    # breakdown: the cause stays unclassified, the observation stays separate.
+    import extract_llm
+
+    def local(*args, **kwargs):
+        extract_llm._CALL_NOTES.defer_reason = "busy"
+        return {"done": 0, "deferred": 1}
+
+    result = _defer_drain(monkeypatch, tmp_path, local)
+    assert result["local_deferred_reasons"] == {"unclassified": 1}
+    assert result["local_llm_defer_reasons"] == {"llm_busy": 1}
+
+
+def test_drain_records_no_observation_for_a_successful_call(tmp_path, monkeypatch):
+    import extract_llm
+    calls = iter([{"done": 1, "deferred": 0}, {"done": 0, "deferred": 0}])
+
+    def local(*args, **kwargs):
+        result = next(calls)
+        if result["done"]:
+            extract_llm._CALL_NOTES.defer_reason = "busy"
+        return result
+
+    result = _defer_drain(monkeypatch, tmp_path, local)
+    assert result["local_done"] == 1 and "local_llm_defer_reasons" not in result
+    assert not hasattr(extract_llm._CALL_NOTES, "defer_reason")
+
+
+def test_drain_restores_a_preexisting_call_reason(tmp_path, monkeypatch):
+    import extract_llm
+    extract_llm._CALL_NOTES.defer_reason = "deadline"
+
+    def local(*args, **kwargs):
+        return {"done": 0, "deferred": 1}
+
+    try:
+        result = _defer_drain(monkeypatch, tmp_path, local)
+        assert result["local_deferred_reasons"] == {"unclassified": 1}
+        assert "local_llm_defer_reasons" not in result
+        assert extract_llm._CALL_NOTES.defer_reason == "deadline"
+    finally:
+        del extract_llm._CALL_NOTES.defer_reason
+
+
+def test_drain_clears_a_leftover_reason_before_the_call(tmp_path, monkeypatch):
+    import extract_llm
+    extract_llm._CALL_NOTES.defer_reason = "deadline"
+
+    def local(*args, **kwargs):
+        # The reason visible inside the call is the cleared one, not the leftover.
+        assert extract_llm._CALL_NOTES.defer_reason is None
+        return {"done": 0, "deferred": 1}
+
+    try:
+        result = _defer_drain(monkeypatch, tmp_path, local)
+        assert "local_llm_defer_reasons" not in result
+    finally:
+        del extract_llm._CALL_NOTES.defer_reason
+
+
 def _drain_with(monkeypatch, local):
     monkeypatch.setattr(mcs_ocr.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(attachment_inference, "run_pending", local)
@@ -481,13 +603,17 @@ def test_drain_early_return_still_normalizes_the_breakdown(monkeypatch):
 
 
 def test_status_breakdown_yields_to_the_reader_size_limit():
-    small = {"local_deferred": 1, "local_deferred_reasons": {"disk_low": 1}}
-    assert mcs_ocr.json.loads(mcs_ocr._status_text(small, 1000.0))["local_deferred_reasons"] == {"disk_low": 1}
+    small = {"local_deferred": 1, "local_deferred_reasons": {"disk_low": 1},
+             "local_llm_defer_reasons": {"llm_deadline": 1}}
+    kept = mcs_ocr.json.loads(mcs_ocr._status_text(small, 1000.0))
+    assert kept["local_deferred_reasons"] == {"disk_low": 1}
+    assert kept["local_llm_defer_reasons"] == {"llm_deadline": 1}
     block = {f"synthetic_key_{index:02d}": f"synthetic_value_{index:02d}" * 4 for index in range(16)}
     large = {**small, "snapshot_failure": block, "snapshot_timing": block,
              "failure_reason_counts": {f"synthetic_reason_{index:03d}": 1 for index in range(60)}}
     text = mcs_ocr._status_text(large, 1000.0)
     assert "local_deferred_reasons" not in mcs_ocr.json.loads(text)
+    assert "local_llm_defer_reasons" not in mcs_ocr.json.loads(text)
     assert mcs_ocr.json.loads(text)["snapshot_failure"] == block
 
 
@@ -498,7 +624,8 @@ def test_cli_status_file_carries_a_breakdown_the_health_reader_accepts(tmp_path,
     monkeypatch.setattr(mcs_ocr, "run", lambda cfg: {
         "complete": 0, "empty": 0, "failed": 0, "unsupported": 0, "deferred": 0, "pending_failed": 0,
         "queue_status": "known", "local_done": 0, "local_deferred": 2,
-        "local_deferred_reasons": {"memory_unknown": 2}})
+        "local_deferred_reasons": {"memory_unknown": 2},
+        "local_llm_defer_reasons": {"llm_deadline": 1, "llm_busy": 1}})
     assert mcs_ocr.main() == 1
     cfg = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/yomitoku"}}
     at = mcs_ocr.json.loads((tmp_path / "attachment_ocr_status.json").read_text())["at"]
@@ -506,3 +633,21 @@ def test_cli_status_file_carries_a_breakdown_the_health_reader_accepts(tmp_path,
     assert report["reason"] == "attachment_ocr_local_inference_deferred"
     assert report["local_deferred_reasons"] == {"memory_unknown": 2}
     assert report["local_deferred_primary"] == "memory_unknown"
+    assert report["local_llm_defer_reasons"] == {"llm_deadline": 1, "llm_busy": 1}
+
+
+def test_health_reader_drops_an_observation_breakdown_that_overcounts(tmp_path, monkeypatch):
+    import health_report
+    monkeypatch.setattr(mcs_ocr, "DATA", str(tmp_path))
+    monkeypatch.setattr(mcs_ocr.sys, "argv", ["mcs_ocr", "--run"])
+    monkeypatch.setattr(mcs_ocr, "run", lambda cfg: {
+        "complete": 0, "empty": 0, "failed": 0, "unsupported": 0, "deferred": 0, "pending_failed": 0,
+        "queue_status": "known", "local_done": 0, "local_deferred": 1,
+        "local_deferred_reasons": {"unclassified": 1},
+        "local_llm_defer_reasons": {"llm_deadline": 2}})
+    assert mcs_ocr.main() == 1
+    cfg = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/yomitoku"}}
+    at = mcs_ocr.json.loads((tmp_path / "attachment_ocr_status.json").read_text())["at"]
+    report = health_report.attachment_ocr_health(str(tmp_path), cfg, at + 1)
+    assert report["local_deferred_reasons"] == {"unclassified": 1}
+    assert "local_llm_defer_reasons" not in report
