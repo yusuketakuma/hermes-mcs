@@ -52,26 +52,38 @@ class LedgerSemanticSourcesMixin:
 
     def _semantic_generation_snapshot(self, messages) -> dict:
         """Capture touched rows and their thread generation before a batch."""
-        keys = set()
+        # Reserve the writer before reading either membership or generation.
+        # The enclosing intake transaction owns rollback and commit.
+        self._reserve_message_writer()
+        keys = {}
         for message in messages:
             rows = [message, *(getattr(message, "replies", None) or [])]
             for row in rows:
                 project_id = getattr(row, "project_id", None)
                 message_id = getattr(row, "message_id", None)
+                if project_id is None or message_id is None:
+                    continue
+                stored = self.db.execute(
+                    "SELECT COALESCE(parent_id,message_id) FROM messages "
+                    "WHERE project_id=? AND message_id=?",
+                    (project_id, message_id)).fetchone()
+                old_root = stored[0] if stored is not None else message_id
                 parent_id = getattr(row, "parent_id", None)
-                root = message_id if parent_id is None else parent_id
-                if project_id is not None and root is not None:
-                    keys.add((project_id, message_id, root))
+                # The writer retains a stored parent when the capture omits it.
+                new_root = old_root if parent_id is None else parent_id
+                roots = keys.setdefault((project_id, message_id), set())
+                roots.add(new_root)
+                if stored is not None:
+                    roots.add(old_root)
         snapshot = {}
         generations = {}
-        for project_id, message_id, root in keys:
-            thread_key = (project_id, root)
-            if thread_key not in generations:
-                generations[thread_key] = self._semantic_source_generation(
-                    project_id, root)
+        for (project_id, message_id), roots in keys.items():
+            for root in roots:
+                thread_key = (project_id, root)
+                if thread_key not in generations:
+                    generations[thread_key] = self._semantic_source_generation(project_id, root)
             snapshot[(project_id, message_id)] = (
-                root,
-                generations[thread_key],
+                {root: generations[(project_id, root)] for root in roots},
                 self._semantic_message_fingerprint(project_id, message_id),
             )
         return snapshot
@@ -130,18 +142,21 @@ class LedgerSemanticSourcesMixin:
         changed: dict[int, list[int]] = {}
         invalidated_roots = set() if invalidated_roots is None else invalidated_roots
         generations = {}
-        for (project_id, message_id), (root, previous, row_before) \
-                in before.items():
-            thread_key = (project_id, root)
-            if thread_key not in generations:
-                generations[thread_key] = self._semantic_source_generation(
-                    project_id, root)
-            current = generations[thread_key]
+        for (project_id, message_id), (roots, row_before) in before.items():
             row_after = self._semantic_message_fingerprint(project_id, message_id)
-            if current != previous and row_after != row_before:
+            if row_after == row_before:
+                continue
+            touched = False
+            for root, previous in roots.items():
+                thread_key = (project_id, root)
+                if thread_key not in generations:
+                    generations[thread_key] = self._semantic_source_generation(project_id, root)
+                if generations[thread_key] != previous:
+                    touched = True
+                    self._invalidate_thread_projections(
+                        project_id, root, invalidated_roots=invalidated_roots)
+            if touched:
                 changed.setdefault(project_id, []).append(message_id)
-                self._invalidate_thread_projections(
-                    project_id, root, invalidated_roots=invalidated_roots)
         for ids in changed.values():
             ids.sort()
         return changed

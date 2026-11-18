@@ -195,10 +195,10 @@ class LedgerCaptureMixin:
         notified so they never resurface as candidates."""
         now = time.time()
         new_ids = []
-        before_semantic = (self._semantic_generation_snapshot(p.messages)
-                           if semantic or self._needs_semantic_source_tracking() else {})
         invalidated_roots = set()
         with self._intake_transaction():  # commit on success, rollback on exception
+            before_semantic = (self._semantic_generation_snapshot(p.messages)
+                               if semantic or self._needs_semantic_source_tracking() else {})
             self.db.execute('UPDATE patients SET project_id=project_id WHERE 0')
             previous = self.db.execute("SELECT fetch_reason,project_type,karte_id,is_archived,fetch_state,patient_name FROM patients WHERE project_id=?", (p.project_id,)).fetchone()
             first = previous is None
@@ -438,10 +438,10 @@ class LedgerCaptureMixin:
         if notify_late and project_id and notify is None:
             # 0 = never imported: the initial history stays quiet
             late_after = self.high_watermark(project_id) or None
-        before_semantic = (self._semantic_generation_snapshot(msgs)
-                           if semantic or self._needs_semantic_source_tracking() else {})
         invalidated_roots = set()
         with self._intake_transaction():
+            before_semantic = (self._semantic_generation_snapshot(msgs)
+                               if semantic or self._needs_semantic_source_tracking() else {})
             for m in msgs:
                 self._save_tree(m, new_ids, now, project_id)
             changed_semantic = (self._semantic_changed_ids(
@@ -506,10 +506,10 @@ class LedgerCaptureMixin:
         notify_all_replies exempts new replies from that bound."""
         new_ids = []
         now = time.time()
-        before_semantic = (self._semantic_generation_snapshot(replies)
-                           if semantic or self._needs_semantic_source_tracking() else {})
         invalidated_roots = set()
         with self._intake_transaction():
+            before_semantic = (self._semantic_generation_snapshot(replies)
+                               if semantic or self._needs_semantic_source_tracking() else {})
             for m in replies:
                 self._save_tree(m, new_ids, now, project_id)
                 # reconcile against the STORED body, not the fetched one:
@@ -543,11 +543,8 @@ class LedgerCaptureMixin:
                 invalidated_roots=invalidated_roots)
         return new_ids
 
-    def _upsert_message(self, m) -> int:
-        """Returns 1 if newly inserted. Never downgrades a stored 'full' body
-        to a later 'snippet'."""
-        now = time.time()
-        chash = hashlib.sha256((m.body_html or "").encode()).hexdigest()
+    def _reserve_message_writer(self):
+        """Reserve the intake writer while preserving fixed SQLite failure diagnostics."""
         # A zero-row write reserves the writer without committing caller work.
         started = transaction_open = None
         with suppress(Exception):
@@ -566,6 +563,13 @@ class LedgerCaptureMixin:
                     "at": time.time(),
                 })
             raise
+
+    def _upsert_message(self, m) -> int:
+        """Returns 1 if newly inserted. Never downgrades a stored 'full' body
+        to a later 'snippet'."""
+        now = time.time()
+        chash = hashlib.sha256((m.body_html or "").encode()).hexdigest()
+        self._reserve_message_writer()
         existing = self.db.execute(
             "SELECT * FROM messages WHERE message_id=?",
             (m.message_id,)).fetchone()

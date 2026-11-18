@@ -226,3 +226,107 @@ def test_changed_source_invalidates_only_present_bound_extractions_once(world):
     revisions = [tuple(r) for r in store.db.execute('SELECT * FROM message_revisions ORDER BY message_id,seq')]
     assert _save_invalidation_count(store, 'messages', changed, False) == 0
     assert [tuple(r) for r in store.db.execute('SELECT * FROM message_revisions ORDER BY message_id,seq')] == revisions
+
+
+@pytest.mark.parametrize('path', ['patient', 'messages', 'replies'])
+@pytest.mark.parametrize('semantic', [False, True])
+@pytest.mark.parametrize('parent', [None, 1, 11])
+@pytest.mark.parametrize('edited', [False, True])
+def test_parent_omission_and_move_invalidate_old_and_new_threads(
+        world, path, semantic, parent, edited):
+    store, messages, own, foreign = world
+    reply = messages[1]
+    update = replace(reply, parent_id=parent,
+                     body_html='<p>synthetic edited reply</p>' if edited else reply.body_html)
+    changed = edited or parent == 11
+    expected_roots = (2 if parent == 11 else 1) if changed else 0
+    assert _save_invalidation_count(store, path, [update], semantic) == expected_roots
+    assert _invalidated(store, own) == [changed] * 6 + [parent == 11] * 6
+    assert _invalidated(store, foreign) == [False] * len(foreign)
+    assert store.db.execute('SELECT parent_id FROM messages WHERE message_id=2').fetchone()[0] == (parent or 1)
+    # Replaying the accepted input is not another source generation.
+    assert _save_invalidation_count(store, path, [update], semantic) == 0
+
+
+@pytest.mark.parametrize('path', ['patient', 'messages', 'replies'])
+@pytest.mark.parametrize('semantic', [False, True])
+def test_reparent_failure_rolls_back_both_threads(world, monkeypatch, path, semantic):
+    store, messages, _, _ = world
+    before = _saved_state(store)
+    queue = store._queue_saved_messages_tx
+
+    def fail_after_queue(*args, **kwargs):
+        queue(*args, **kwargs)
+        raise RuntimeError('synthetic reparent rollback')
+
+    monkeypatch.setattr(store, '_queue_saved_messages_tx', fail_after_queue)
+    with pytest.raises(RuntimeError, match='synthetic reparent rollback'):
+        _save(store, path, [replace(messages[1], parent_id=11)], semantic)
+    assert _saved_state(store) == before
+
+
+@pytest.mark.parametrize('parent', [None, 11])
+@pytest.mark.parametrize('semantic', [False, True])
+def test_old_thread_reader_rejects_retained_projection_immediately(world, parent, semantic):
+    from mcs_queries import current_message_facts
+    from test_canonical_projection import _artifact
+    store, messages, _, _ = world
+    # Same retained empty projection contract as existing reader tests, not a
+    # fabricated model PASS or clinical material proof.
+    for message in messages:
+        row = store.db.execute('SELECT content_hash FROM messages WHERE message_id=?',
+                               (message.message_id,)).fetchone()
+        _artifact(store.db, 'canonical_projection', message.message_id, {}, {'hash': row[0]})
+    store.db.commit()
+    assert current_message_facts(store.db, 1) is not None
+    assert current_message_facts(store.db, 3) is not None
+    _save(store, 'messages', [replace(messages[1], parent_id=parent,
+                                    body_html='<p>synthetic changed content</p>')], semantic)
+    assert current_message_facts(store.db, 1) is None
+    assert current_message_facts(store.db, 3) is None
+    assert (current_message_facts(store.db, 11) is None) == (parent == 11)
+
+
+@pytest.mark.parametrize('semantic', [False, True])
+def test_batch_reparent_deduplicates_both_changed_roots(world, semantic):
+    store, messages, own, foreign = world
+    updates = [replace(messages[1], parent_id=11), replace(messages[2], parent_id=11),
+               replace(messages[4], parent_id=1)]
+    assert _save_invalidation_count(store, 'messages', updates, semantic) == 2
+    assert _invalidated(store, own) == [True] * len(own)
+    assert _invalidated(store, foreign) == [False] * len(foreign)
+
+
+def test_generation_snapshot_reserves_writer_before_membership_read(world, monkeypatch):
+    store, messages, _, _ = world
+    fingerprint = store._semantic_message_fingerprint
+
+    def check_transaction(*args):
+        assert store.db.in_transaction
+        return fingerprint(*args)
+
+    monkeypatch.setattr(store, '_semantic_message_fingerprint', check_transaction)
+    _save(store, 'messages', [replace(messages[1], parent_id=None)], False)
+    assert not store.db.in_transaction
+
+
+@pytest.mark.parametrize('semantic', [False, True])
+def test_new_reply_has_no_phantom_previous_root(world, semantic):
+    store, _, own, _ = world
+    store.db.invalidation_count = 0
+    try:
+        assert _save(store, 'messages', [_message(4, parent_id=1)], semantic) == [4]
+        assert store.db.invalidation_count == 1
+    finally:
+        store.db.invalidation_count = None
+    assert _invalidated(store, own) == [True] * 6 + [False] * 6
+
+
+@pytest.mark.parametrize('semantic', [False, True])
+def test_reparent_project_mismatch_rolls_back(world, semantic):
+    store, messages, _, _ = world
+    before = _saved_state(store)
+    with pytest.raises(ValueError, match='message_project_mismatch'):
+        store.save_messages([replace(messages[1], project_id=2, parent_id=101)],
+                            project_id=2, semantic=semantic)
+    assert _saved_state(store) == before
