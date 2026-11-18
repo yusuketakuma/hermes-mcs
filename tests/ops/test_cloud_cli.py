@@ -41,7 +41,7 @@ from test_cloud_response_recovery import legacy_cloud_routes
 
 @pytest.fixture
 def world(tmp_path, monkeypatch):
-    now = datetime(2026, 10, 26, 12, tzinfo=cloud_policy.JST).timestamp()
+    now = datetime(2026, 11, 18, 12, tzinfo=cloud_policy.JST).timestamp()
     monkeypatch.setattr(cli.time, "time", lambda: now)
     for name in ("MCS_SETUP_PASSWORD", "TYPESAFE_API_KEY", "MCS_ANTHROPIC_API_KEY"):
         monkeypatch.delenv(name, raising=False)
@@ -59,7 +59,7 @@ def world(tmp_path, monkeypatch):
         db.db.commit()
         for mid, pid in ((1, 1), (2, 2)):
             db.save_messages([_message(mid, body="synthetic private body", project_id=pid,
-                                       posted_at="2026-10-26T10:00:00+09:00")])
+                                       posted_at="2026-11-18T10:00:00+09:00")])
             db.artifact_add("extract_llm", "{}", project_id=pid, message_id=mid,
                 meta={"hash": _hash(db, mid), "extract_version": extract_llm.EXTRACT_VERSION - 1})
         with db.db:
@@ -633,7 +633,7 @@ def test_estimate_separates_chunk_repair_and_shadow_without_fabricating_output_u
     config["cloud_llm"]["mode"] = "shadow"
     with closing(Ledger(str(path))) as db:
         db.save_messages([_message(1, body="合成文。" * 3000, project_id=1,
-                                   posted_at="2026-10-26T10:00:00+09:00")])
+                                   posted_at="2026-11-18T10:00:00+09:00")])
         db.artifact_add("extract_llm", "{}", project_id=1, message_id=1,
             meta={"hash": _hash(db, 1), "extract_version": extract_llm.EXTRACT_VERSION - 1})
         with db.db:
@@ -809,7 +809,7 @@ def test_bound_failure_at_accounting_returns_partial_report(world, monkeypatch):
 
 def test_period_budget_interruption_marks_the_right_section(world, monkeypatch):
     root, _path, config = world
-    config["cloud_llm"].update(window_start="2026-10-26T00:00:00+09:00", window_budget_usd=80)
+    config["cloud_llm"].update(window_start="2026-11-18T00:00:00+09:00", window_budget_usd=80)
 
     def broken(ledger, cfg):
         raise sqlite3.OperationalError("synthetic failure")
@@ -839,7 +839,7 @@ def test_failed_block_reason_is_not_counted_verified(world, monkeypatch):
 
 def test_unverified_period_spend_is_not_counted_verified(world, monkeypatch):
     root, _path, config = world
-    config["cloud_llm"].update(window_start="2026-10-26T00:00:00+09:00", window_budget_usd=80)
+    config["cloud_llm"].update(window_start="2026-11-18T00:00:00+09:00", window_budget_usd=80)
     monkeypatch.setattr(cli.policy, "window_history_pruned", lambda ledger, cfg: True)
 
     def interrupted(ledger, *, model):
@@ -858,7 +858,7 @@ def test_actual_shared_reader_budget_stops_at_original_section(world, monkeypatc
     import cloud_observation
 
     root, _path, config = world
-    config['cloud_llm'].update(window_start='2026-10-26T00:00:00+09:00', window_budget_usd=80)
+    config['cloud_llm'].update(window_start='2026-11-18T00:00:00+09:00', window_budget_usd=80)
     observed = []
 
     def exhaust(db):
@@ -1017,7 +1017,7 @@ def test_oversized_slot_is_unknown_and_keeps_the_estimate(world):
 
 def test_period_spending_is_unknown_once_usage_inside_it_was_pruned(world):
     root, path, config = world
-    config["cloud_llm"].update(window_start="2026-10-26T00:00:00+09:00", window_budget_usd=80)
+    config["cloud_llm"].update(window_start="2026-11-18T00:00:00+09:00", window_budget_usd=80)
     assert cli.observe(config, root=str(root))["period_budget"]["spent_or_reserved_usd"] == "0"
     with closing(Ledger(str(path))) as db:
         db.db.execute("INSERT INTO artifacts(kind,content,created_at) VALUES(?,?,?)",
