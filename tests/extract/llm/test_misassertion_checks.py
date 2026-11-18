@@ -142,6 +142,28 @@ def test_event_record_unbound_attributes_are_omitted():
     assert "actor" not in record
 
 
+def test_med_attributes_unlisted_sibling_drug_never_binds():
+    body = "合成薬GHは朝食前、合成薬IJは就寝前に服用しています。"
+    out = _validate(body, {"meds": [
+        _med("合成薬GH", body, timing="就寝前"),
+        _med("合成薬GH", body, timing="朝食前"),
+    ]})
+    gh = [m for m in out["meds"] if m["name"] == "合成薬GH"]
+    assert "timing" not in gh[0]
+    assert gh[1].get("timing") == "朝食前"
+
+
+def test_event_record_attributes_must_match_their_role():
+    body = "ご本人は10月28日に訪問看護師による創部の処置を受けました。"
+    out = _validate(body, {"event_records": [{
+        "kind": "care", "subject": "patient", "status": "current",
+        "negated": False, "evidence": body,
+        "date_text": "訪問看護師", "actor": "創部"}]})
+    record = out["event_records"][0]
+    assert "date_text" not in record
+    assert "actor" not in record
+
+
 def test_events_derive_from_event_records_without_events_key():
     body = "ご本人は居室で転倒しました。"
     out = _validate(body, {"event_records": [{

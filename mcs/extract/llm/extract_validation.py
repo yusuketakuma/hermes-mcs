@@ -15,6 +15,25 @@ from mcs_util import fold_map, locate_quote_span
 
 _VITAL_KEYS = {"bt", "hr", "rr", "sbp", "dbp", "spo2", "bs"}
 
+# A clause naming a medication the model did not list still bounds one
+# drug's attribute region: the name carries a drug morpheme and stands
+# in subject/object position (は/が/を/の). Tokens that merely end in a
+# person/place noun (薬剤師・薬局・医薬品…) never qualify.
+_OTHER_MED_MENTION = re.compile(
+    r"[一-龠々ァ-ヶーA-Za-z0-9]{0,15}"
+    r"(?:薬|剤|錠|カプセル|坐薬|注射|点眼|テープ|軟膏|貼付剤|散剤|"
+    r"内服薬|経口薬|外用薬|吸入薬|坐剤|ドリンク|ゼリー|ローション|クリーム|"
+    r"トローチ|目薬|うがい薬|浣腸|膣錠|腟錠|塗り薬|飲み薬|注射薬|貼付|吸入)"
+    r"[一-龠々ァ-ヶーA-Za-z0-9]{0,15}(?=[はがをの])")
+_OTHER_MED_NONDRUG_END = re.compile(r"[師局品袋缶味箱代瓶器店価]$")
+# A bare dose count (3錠) or a generic form word (内服薬・坐薬) names no
+# particular drug, so it never bounds an attribute region either.
+_OTHER_MED_GENERIC = re.compile(
+    r"(?:[0-9０-９.]+(?:錠|包|カプセル|錠剤)?|"
+    r"薬|剤|錠|カプセル|坐薬|注射|点眼|テープ|軟膏|貼付剤|散剤|内服薬|経口薬|"
+    r"外用薬|吸入薬|坐剤|ドリンク|ゼリー|ローション|クリーム|トローチ|目薬|"
+    r"うがい薬|浣腸|膣錠|腟錠|塗り薬|飲み薬|注射薬|貼付|吸入)")
+
 
 # Deterministic vital-sign thresholds, active only when the config
 # policy enables them (vital_threshold_policy). Vitals carry no
@@ -545,6 +564,23 @@ class Validator:
         if self.drops is not None and len(self.drops.setdefault("reasons", [])) < 5:
             self.drops["reasons"].append(reason)
 
+    def _clause_names_sibling_medication(self, clause, target) -> bool:
+        """True when a clause names a drug other than the target.
+
+        The model may list only one of several drugs sharing a sentence;
+        a medication-shaped name in subject/object position still ends
+        the attribute region so a sibling's wording never attaches.
+        """
+        target_flat = flat_text(target)
+        for match in _OTHER_MED_MENTION.finditer(clause):
+            name = match[0]
+            if (_OTHER_MED_NONDRUG_END.search(name)
+                    or _OTHER_MED_GENERIC.fullmatch(name)):
+                continue
+            if flat_text(name) != target_flat:
+                return True
+        return False
+
     def _med_attribute_region(self, item, assertion, med_names) -> str:
         """Source text bounding one drug's own attribute wording.
 
@@ -564,7 +600,8 @@ class Validator:
             stop = re.search(r"[。！？!?;；\n]", self.body[pos:limit])
             clause_end = pos + stop.start() if stop else limit
             clause = self.body[pos:clause_end]
-            if any(name and flat_text(name) in flat_text(clause) for name in med_names):
+            if (any(name and flat_text(name) in flat_text(clause) for name in med_names)
+                    or self._clause_names_sibling_medication(clause, item["name"])):
                 break
             right = clause_end + (1 if stop else 0)
             pos = right

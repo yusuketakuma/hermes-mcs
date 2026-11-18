@@ -3,7 +3,7 @@ import itertools
 import json
 import re
 
-from clinical_scope import REPORTED_ABSENCE, source_axes, source_polarity
+from clinical_scope import NAMED_PERSON, REPORTED_ABSENCE, source_axes, source_polarity
 from clinical_values import written_day
 from mcs_util import locate_quote_span
 
@@ -645,6 +645,32 @@ def _attribute_bound(quote, value, event_type, *, actor=False, bound=None):
         pos = i + 1
 
 
+# Top-level date_text/actor keep only values written in their own role:
+# a date expression for date_text, a person or role for actor. A source
+# substring in the wrong role — a provider stored as a date, a body part
+# stored as a provider — never binds even when it sits in the act clause.
+_DATEISH = re.compile(
+    r"[0-9０-９]{1,4}\s*[年/.-]|[0-9０-９]{1,2}\s*月|[0-9０-９]{1,2}\s*日"
+    r"|今日|昨日|明日|先日|昨夜|今朝|一昨日|明後日|先週|今週|来週|先月|今月|来月"
+    r"|前年|今年|来年|当日|翌日|前日|次回|前回|午前|午後|朝|昼|夜|夕方|早朝|深夜|未明|正午")
+_ACTOR_ROLE = re.compile(
+    r"看護師|介護士|ヘルパー|ケアマネ|医師|歯科|薬剤師|スタッフ|職員|担当者|管理者|"
+    r"責任者|先生|本人|患者|利用者|入所者|入居者|デイサービス|ショートステイ|"
+    r"グループホーム|施設|病院|クリニック|診療所|訪問介護|訪問看護|訪問リハ|"
+    r"ケアプラン|ソーシャル|MSW|心理|カウンセラー|牧師|神父|僧侶|運転|送迎|"
+    r"救急|救命|消防|警察|巡回|緊急|往診|主治医|担当医|セラピスト|リハビリ|"
+    r"栄養士|調理|清掃|洗濯|買い物|同行|付き添い|コーディネーター|ナース|ドクター|"
+    r"家族|娘|息子|妻|夫|母|父|姉|妹|兄|弟|祖父|祖母|義父|義母|同居|ご家族")
+
+
+def _date_text_supported(value) -> bool:
+    return written_day(value) is not None or bool(_DATEISH.search(value))
+
+
+def _actor_supported(value) -> bool:
+    return bool(re.fullmatch(NAMED_PERSON, value) or _ACTOR_ROLE.search(value))
+
+
 def _record_attribute_bound(quote, value, kind, match, target_end, *, actor=False):
     """True when a top-level ``date_text``/``actor`` binds to this record.
 
@@ -855,6 +881,9 @@ def validate_record(item, body):
         if value == 'unknown':
             value = None
         if not isinstance(value, str) or not value.strip():
+            continue
+        supported = _actor_supported if actor else _date_text_supported
+        if not supported(value.strip()):
             continue
         if _record_attribute_bound(quote, value, item['kind'], match,
                                    target_end - start, actor=actor):
