@@ -558,11 +558,12 @@ def _nearest_vital_label(body: str, s: int, e: int):
 
 
 def _bp_side(body: str, s: int, e: int):
-    """120/80: before the slash is systolic, after is diastolic."""
-    if body[e:e + 1] in ("/", "／"):
-        return "sbp"
-    if body[s - 1:s] in ("/", "／"):
-        return "dbp"
+    """120 / 80: the pair's left side is systolic, its right diastolic."""
+    for m in _BP_PAIR.finditer(body):
+        if (s, e) == m.span(1):
+            return "sbp"
+        if (s, e) == m.span(2):
+            return "dbp"
     return None
 
 
@@ -572,7 +573,7 @@ def _bp_side(body: str, s: int, e: int):
 # side-labelled single value.
 # numbers follow the guard's own grammar (\d+ with an optional ./． decimal)
 VITAL_NUMBER_TOKEN = r"\d+(?:[.．]\d+)?"
-_BP_PAIR = re.compile(rf"(?<![\d.．])({VITAL_NUMBER_TOKEN})\s*[/／]\s*({VITAL_NUMBER_TOKEN})(?![\d.．])")
+_BP_PAIR = re.compile(rf"(?<![\d.．])({VITAL_NUMBER_TOKEN})\s*[/／]\s*({VITAL_NUMBER_TOKEN})(?!\d)(?![.．]\d)")
 _BP_SIDE_WORD = re.compile(r"(収縮期|拡張期)(?:血圧)?[^0-9]*$")
 
 
@@ -785,7 +786,7 @@ VITAL_PATTERNS = {
     # 不整脈 is a finding, not a pulse label ("不整脈は20回" ≠ HR 20)
     "hr":   r"(?:脈拍|(?<!静)(?<!動)(?<!整)脈|HR|心拍数?)[:：は]?\s*(\d{2,3})(?![\d.．])",
     "rr":   r"(?:呼吸(?:数)?|RR)[:：は]?\s*(\d{1,2})(?![\d.．])",
-    "sbp":  r"(?:血圧|BP)[:：は]?\s*(\d{2,3})\s*[/／]\s*(\d{2,3})(?![\d.．])",
+    "sbp":  r"(?:血圧|BP)[:：は]?\s*(\d{2,3})\s*[/／]\s*(\d{2,3})(?!\d)(?![.．]\d)",
     # a number followed by a flow unit is oxygen delivery (酸素10L),
     # never a saturation reading
     "spo2": r"(?:SpO2|Spo2|SPO2|spo2|酸素)[:：は]?\s*(\d{2,3})(?![\d.．])"
