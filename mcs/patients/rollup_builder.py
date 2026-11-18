@@ -599,6 +599,14 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now, 
 
 _NEGATED_CANCEL = re.compile(r"(?:で|に|と)?(?:は|も)?(?:なら|あり|し|なり|され)?(?:ない|なく|ません|ず)|(?:では|じゃ)")
 
+# A predicate that already ended a clause before a comma marks a different
+# matter: 「9/15の測定値は正常です、訪問は9/22に延期」 does not move the 9/15 visit.
+_CLAUSE_PREDICATE_COMMA = re.compile(
+    r"(?:です|ます|した|だ|である|いる|ある|なる|おく|もらう|あげる|くれる|"
+    r"ください|ましょう|ません|ない|ぬ|んだ|のだ|という|ました|でした|"
+    r"ませんでした|なかった|でない|じゃない|でしょう|だろう|はず|べき|たい|"
+    r"らしい|ようだ|みたい)[ \t　]*[、,]")
+
 
 def _cancelled_visit_dates(body, patient_name=None):
     """Visit dates this post marks cancelled, postponed or undecided: (month, day) or ISO when a year is written."""
@@ -607,14 +615,19 @@ def _cancelled_visit_dates(body, patient_name=None):
     for match in re.finditer(r"(?<!\d)(?:(\d{4})[-－/／年])?(\d{1,2})[-－/／月](\d{1,2})(?!\d)日?", body):
         year, month, day = (int(v) if v else None for v in match.groups())
         try:
-            key = date(year, month, day).isoformat() if year else (month, day)
+            parsed = date(year if year is not None else 2000, month, day)
         except ValueError:
             key = None
+        else:
+            key = parsed.isoformat() if year is not None else (month, day)
         after = body[match.end():]
         postponed = re.match(r"[ \t　]*[にへ][ \t　]*延期", after)
         if postponed is not None:
-            # 「AはBに延期」: B is the new date; A, earlier in the same sentence, is the cancelled one
-            if previous is not None and not re.search(r"[。！？!?\n]", body[previous[2]:match.start()]):
+            # 「AはBに延期」: B is the new date; A, earlier in the same clause, is the cancelled one
+            middle = body[previous[2]:match.start()] if previous is not None else ""
+            if (previous is not None and key is not None
+                    and not re.search(r"[。！？!?\n]", middle)
+                    and not _CLAUSE_PREDICATE_COMMA.search(middle)):
                 tail = after[postponed.end():]
                 scope = clinical_scope.patient_source_scope(
                     body, previous[1], match.end() + postponed.end(),

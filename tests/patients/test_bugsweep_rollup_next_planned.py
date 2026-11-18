@@ -74,6 +74,27 @@ def test_family_negated_or_conditional_cancellation_keeps_the_plan(store, body):
 
 
 @pytest.mark.parametrize("body", [
+    "9/15の訪問は2099/02/30に延期します",
+    "9/15の訪問は13/40に延期します",
+    "9/15の測定値は正常です、訪問は9/22に延期します",
+])
+def test_postponement_with_unusable_evidence_keeps_the_plan(store, body):
+    _post(store, 1, "2099-09-01", "次回訪問は9/15です", "2099-09-15")
+    _post(store, 2, "2099-09-14", body)
+    assert rollup.build_rollup(store.db, 1)["next_planned"] == "2099-09-15"
+
+
+@pytest.mark.parametrize("body", [
+    "9/15の訪問は、9/22に延期します",
+    "9/15の訪問は患者の希望で、9/22に延期します",
+])
+def test_postponement_with_clause_comma_still_cancels(store, body):
+    _post(store, 1, "2099-09-01", "次回訪問は9/15です", "2099-09-15")
+    _post(store, 2, "2099-09-14", body, "2099-09-22")
+    assert rollup.build_rollup(store.db, 1)["next_planned"] == "2099-09-22"
+
+
+@pytest.mark.parametrize("body", [
     "母の9/15の訪問は9/22に延期します",
     "9/15の訪問は9/22に延期しません",
     "9/15の訪問は9/22に延期ではありません",
