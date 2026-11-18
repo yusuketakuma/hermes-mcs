@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "未送信通知に対応する添付の検索を軽量化",
+  "summary": "添付取得時に優先する未送信の新着通知を探す検索が、対象行の部分インデックスを使うようになります。通知に含まれる添付を先に取得する条件は変わりません。",
+  "upgrade": "追加操作は不要です。既存のSQLite ledgerは、次回のスキーマ初期化時に部分インデックスを自動作成します。",
+  "details": [
+    "索引対象は kind が new_messages、state が pending または failed、next_try が非NULLの行に限ります。",
+    "通知の配送条件と添付の優先判定は変更しません。"
+  ],
+  "refs": [
+    "mcs/core/ledger_schema.py",
+    "mcs/core/ledger.py",
+    "scripts/development/benchmark_notify_message_index.py"
+  ]
+}
