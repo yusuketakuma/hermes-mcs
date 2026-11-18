@@ -55,14 +55,17 @@ def api_lock(root):
                 until = json.load(stream)["until"]
             if not isinstance(until, int | float) or isinstance(until, bool) or not math.isfinite(until):
                 raise ValueError
-            if until > time.time() + 60:
-                # The only writer stamps now + 60: a later deadline is a stale
-                # wall-clock step and would otherwise block every send.
-                os.unlink(cooldown)
-            elif until > time.time():
+            now = time.time()
+            if until > now:
+                if until > now + 60:
+                    # A backward clock step or an old forward jump must never clear an
+                    # active cooldown: clamp to the official 60 s cap and still refuse.
+                    until = now + 60
+                    paths.atomic_write(cooldown, json.dumps({"until": until}).encode(), mode=0o600)
                 exc = ClientError("rate_limited", 429)
                 exc.until = until  # local preflight: nothing went on the wire
                 raise exc
+            os.unlink(cooldown)
         except FileNotFoundError:
             pass
         except (ValueError, KeyError, TypeError, RecursionError, OverflowError):
@@ -81,8 +84,9 @@ def api_lock(root):
 
 SENDER_BUSY_TRIES, SENDER_BUSY_WAIT = 10, 0.5
 COOLDOWN_TRIES = 5  # each wait is at most the 60 s official reset
-# A part outwaits the text CLI's whole hold (up to 10 sized uploads); the bound
-# keeps a wedged lock holder from stalling delivery without an outcome.
+# A part outwaits text-CLI holds (notify_flush caps one CLI call at <=180 s via
+# send_budget; back-to-back or direct multi-file CLI runs can hold longer) while
+# bounding how long a wedged lock holder can stall delivery without an outcome.
 PART_BUSY_LIMIT = 1800
 
 

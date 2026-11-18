@@ -1,9 +1,13 @@
 """Synthetic regressions: LINE WORKS parts that provably never reached the room
 settle not_sent (or are delivered), never stranded as unknown."""
 import asyncio
+import hashlib
 import io
 import json
 import os
+import signal
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -207,10 +211,229 @@ def test_stop_during_cooldown_journals_not_sent_promptly(tmp_path):
     assert w.client.calls == []
 
 
-def test_cooldown_deadline_far_beyond_the_official_reset_is_discarded(tmp_path):
+def test_signal_stops_worker_immediately_and_once_across_finally(tmp_path, monkeypatch):
+    from adapters.lineworks import __main__ as cli
+    from lineworks_testkit import SECRET
+
     w = world(tmp_path)
+    stops, callbacks = [], {}
+    saw_stop_before_finally = []
+
+    async def reconcile():
+        return {}
+
+    async def tick():
+        callbacks[signal.SIGTERM]()
+        saw_stop_before_finally.append(len(stops))
+
+    worker = SimpleNamespace(acquire_scope_lock=lambda: True, reconcile=reconcile, tick=tick,
+                             stop=lambda: stops.append("stop"), release_scope_lock=lambda: None)
+    http = SimpleNamespace(serve_forever=lambda: None, shutdown=lambda: None, server_close=lambda: None)
+    thread = SimpleNamespace(start=lambda: None, join=lambda **_kw: None)
+    monkeypatch.setattr(cli, "settings", lambda _root: w.settings)
+    monkeypatch.setattr(cli, "load_credentials", lambda *_args: (w.client, SECRET))
+    monkeypatch.setattr(cli, "DeliveryWorker", lambda **_kw: worker)
+    monkeypatch.setattr(cli, "CallbackInbox", lambda *_args: SimpleNamespace(
+        expire=lambda: None, pending=lambda: []))
+    monkeypatch.setattr(cli, "Actions", lambda *_args: SimpleNamespace(sweep_followups=reconcile))
+    monkeypatch.setattr(cli, "callback_server", lambda *_args, **_kw: http)
+    monkeypatch.setattr(cli, "threading", SimpleNamespace(Thread=lambda **_kw: thread))
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        monkeypatch.setattr(loop, "add_signal_handler", lambda sig, cb: callbacks.setdefault(sig, cb))
+        monkeypatch.setattr(loop, "remove_signal_handler", lambda sig: callbacks.pop(sig, None))
+        await cli.serve(tmp_path, 8788)
+
+    asyncio.run(run())
+    assert saw_stop_before_finally == [1]
+    assert stops == ["stop"]
+
+
+def test_api_lock_shares_429_cooldown_across_processes(tmp_path):
+    w = world(tmp_path)
+    repo = Path(__file__).resolve().parents[3]
+    script = (
+        "import sys; sys.path.insert(0, sys.argv[1]); sys.path.insert(0, sys.argv[1] + '/mcs'); "
+        "import _mcs_path; "
+        "from adapters.lineworks import delivery; "
+        "from adapters.lineworks.client import ClientError\n"
+        "try:\n"
+        "    with delivery.api_lock(sys.argv[2]):\n"
+        "        raise ClientError('rate_limited', 429)\n"
+        "except ClientError:\n"
+        "    pass\n"
+    )
+    child = subprocess.run([sys.executable, "-I", "-c", script, str(repo), str(w.data)],
+                           capture_output=True, text=True, timeout=15, check=False)
+    assert child.returncode == 0, child.stderr
     cooldown = Path(w.dirs["state"], "rate-limit.json")
-    cooldown.write_text(json.dumps({"until": time.time() + 365 * 86400}))
+    assert cooldown.is_file()
+    out = asyncio.run(w.sender.perform(overflow_spec()))
+    assert out == {"result": "not_sent", "error_code": "rate_limited"}
+    assert w.client.calls == []
+
+
+def test_api_lock_clamps_backward_clock_and_far_future_cooldown_then_releases(tmp_path, monkeypatch):
+    w = world(tmp_path)
+    now = [1000.0]
+    monkeypatch.setattr(delivery.time, "time", lambda: now[0])
+    cooldown = Path(w.dirs["state"], "rate-limit.json")
+
+    with pytest.raises(ClientError, match="rate_limited"):
+        with delivery.api_lock(str(w.data)):
+            raise ClientError("rate_limited", 429)
+    assert json.loads(cooldown.read_text())["until"] == 1060.0
+
+    # A 5 s backward wall-clock step makes until > now + 60; it must clamp to now + 60
+    # inside the lock and still refuse this call instead of deleting the active cooldown.
+    now[0] = 995.0
+    out = asyncio.run(w.sender.perform(overflow_spec()))
+    assert out == {"result": "not_sent", "error_code": "rate_limited"}
+    assert w.client.calls == []
+    assert json.loads(cooldown.read_text())["until"] == 1055.0
+
+    # A far-future deadline from an old clock jump is also clamped to now + 60 and refused once,
+    # never blocking forever and never letting the immediate call bypass cooldown.
+    cooldown.write_text(json.dumps({"until": now[0] + 365 * 86400}))
+    out = asyncio.run(w.sender.perform(overflow_spec()))
+    assert out == {"result": "not_sent", "error_code": "rate_limited"}
+    assert w.client.calls == []
+    assert json.loads(cooldown.read_text())["until"] == 1055.0
+
+    # Once the clamped official window expires, the lock clears the file and admits sends.
+    now[0] = 1055.0
     out = asyncio.run(w.sender.perform(overflow_spec()))
     assert out["result"] == "delivered" and len(w.client.calls) == 1
     assert not cooldown.exists()
+
+
+def test_card_attachment_part_24mib_budget_passes_http_worker(tmp_path, monkeypatch):
+    """Worker card parts bypass notify_sender's 180 s CLI cap and get 20 + 192 = 212 s."""
+    w = world(tmp_path)
+    seen = []
+
+    class Response:
+        def __init__(self, code, payload):
+            self.code = code
+            self.headers = {}
+            self._raw = json.dumps(payload).encode()
+
+        def read(self, limit):
+            return self._raw[:limit]
+
+        def close(self):
+            pass
+
+    class Opener:
+        def open(self, request, timeout):
+            url = request.full_url
+            seen.append((url, len(request.data), timeout))
+            if url == module.AUTH_URL:
+                return Response(200, TOKEN)
+            if url.endswith("/attachments"):
+                return Response(200, {"uploadUrl": STORAGE, "fileId": "file-24m"})
+            if url == STORAGE:
+                return Response(200, {"fileId": "file-24m"})
+            return Response(201, {})
+
+    def run(argv, *, input, timeout, **kwargs):
+        assert argv[-1] == "--http-worker"
+        output = io.StringIO()
+        monkeypatch.setattr(module.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(input)))
+        monkeypatch.setattr(module.sys, "stdout", output)
+        module._http_worker()
+        return SimpleNamespace(returncode=0, stdout=output.getvalue().encode())
+
+    monkeypatch.setattr(module.urllib.request, "build_opener", lambda *handlers: Opener())
+    monkeypatch.setattr(module.subprocess, "run", run)
+    blob = b"s" * (24 * 1024 * 1024)
+    monkeypatch.setattr(delivery.paths, "read_verified_attachment", lambda *args: blob)
+    worker = _worker(w)
+    worker._sender = delivery.Sender(client(module._http_request), w.settings, str(w.data))
+    out = asyncio.run(worker._perform_part({"spec": _published(w)}, ATTACHMENT, CTX))
+    assert out == {"result": "delivered", "remote_id": "file-24m"}
+    storage_calls = [(size, timeout) for url, size, timeout in seen if url == STORAGE]
+    assert len(storage_calls) == 1
+    size, timeout = storage_calls[0]
+    assert 24 * 1024 * 1024 < size <= module.MAX_REQUEST_BYTES
+    assert timeout == 20 + size // module.UPLOAD_MIN_BYTES_PER_S == 212
+    assert 180 < timeout <= module.REQUEST_TIMEOUT_MAX
+
+
+def test_text_cli_obeys_outer_send_budget_and_never_resends_partial_timeout(tmp_path, monkeypatch):
+    """Text CLI sends obey notify_sender.send_budget (<=180 s or caller deadline);
+    a timeout after the text post can be partial, so it holds unknown without resending."""
+    import ledger as ledger_mod
+    import notify_flush
+    import notify_sender
+
+    cfg = {
+        "notify_target": "lineworks:room-synthetic",
+        "notify": {"lineworks": {"channel_id": "room-synthetic"}},
+    }
+    clock = [100.0]
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
+    monkeypatch.setattr(notify_flush, "CONF_PATH", str(tmp_path / "config.json"))
+    monkeypatch.setattr(notify_flush.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(notify_sender.time, "monotonic", lambda: clock[0])
+
+    att_dir = tmp_path / "attachments"
+    att_dir.mkdir()
+    att_file = att_dir / "synthetic.bin"
+    payload_bytes = b"x" * 1024
+    att_file.write_bytes(payload_bytes)
+    digest = hashlib.sha256(payload_bytes).hexdigest()
+
+    led = ledger_mod.Ledger(str(tmp_path / "mcs.db"))
+    try:
+        led.db.execute(
+            "INSERT INTO patients(project_id, patient_name) VALUES (1, '合成患者')")
+        led.db.execute(
+            "INSERT INTO messages(message_id, project_id, sender_name, posted_at, body_text, body_state) "
+            "VALUES (10, 1, '合成送信者', '2026-11-18T10:00:00+09:00', '合成本文', 'present')")
+        led.db.execute(
+            "INSERT INTO attachments(attachment_id, message_id, file_id, name, state, local_path, bytes, sha256) "
+            "VALUES (1, 10, 'f1', 'synthetic.bin', 'downloaded', ?, ?, ?)",
+            (str(att_file), len(payload_bytes), digest))
+        led.db.commit()
+        eid = led.outbox_add("new_messages", 1, {"message_ids": [10]})
+
+        calls = []
+        mode = ["tempfail"]
+
+        def fake_run(argv, **kwargs):
+            calls.append((argv, kwargs["timeout"]))
+            if mode[0] == "tempfail":
+                return SimpleNamespace(returncode=75, stdout="", stderr="rate_limited\n")
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+        monkeypatch.setattr(notify_sender.subprocess, "run", fake_run)
+
+        # Insufficient caller deadline (<30 s) defers without starting CLI or marking sending.
+        res_low = notify_flush.flush(led, deadline=129.0)
+        assert res_low["send_budget_insufficient"] == 1 and calls == []
+
+        # Caller deadline of 60 s passes timeout=60; pre-send EX_TEMPFAIL refunds in-flight.
+        res_pre = notify_flush.flush(led, deadline=160.0)
+        assert res_pre["failed"] == 1 and calls[-1][1] == 60.0
+        row = led.db.execute("SELECT state, progress FROM notify_outbox WHERE event_id=?", (eid,)).fetchone()
+        assert row["state"] == "failed" and json.loads(row["progress"]).get("sending") is None
+        led.db.execute("UPDATE notify_outbox SET next_try=0 WHERE event_id=?", (eid,))
+        led.db.commit()
+
+        # Ample caller deadline (500 s remaining) still caps CLI timeout at 180 s (<192 s for 24 MiB@128 KiB/s);
+        # once CLI times out, outcome is unknown and held without automatic resend.
+        mode[0] = "timeout"
+        res_timeout = notify_flush.flush(led, deadline=600.0)
+        assert res_timeout["uncertain"] == 1 and calls[-1][1] == 180.0
+        held = led.db.execute(
+            "SELECT state, next_try, progress FROM notify_outbox WHERE event_id=?", (eid,)).fetchone()
+        assert held["state"] == "failed" and held["next_try"] is None
+        assert json.loads(held["progress"])["hold_reason"] == "send_outcome_unknown"
+
+        count_before = len(calls)
+        notify_flush.flush(led, deadline=600.0)
+        assert len(calls) == count_before
+    finally:
+        led.close()

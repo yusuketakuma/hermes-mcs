@@ -25,8 +25,8 @@ UPLOAD_HOSTS = frozenset({"apis-storage.worksmobile.com", "storage.worksmobile.c
 MAX_RESPONSE_BYTES = 262144
 MAX_MESSAGE_BODY_BYTES = 262144
 MAX_REQUEST_BYTES = 25 * 1024 * 1024
-UPLOAD_MIN_BYTES_PER_S = 128 * 1024  # ~1 Mbps: the slowest uplink a 24 MiB upload must survive
-REQUEST_TIMEOUT_MAX = 330  # cap; the 20 s default base + 25 MiB at the minimum rate is ~220 s
+UPLOAD_MIN_BYTES_PER_S = 128 * 1024  # ~1 Mbps floor for worker card parts (up to 24 MiB); text CLI still obeys notify_sender.send_budget
+REQUEST_TIMEOUT_MAX = 330  # cap; up to 120 s base + 25 MiB at the minimum rate fits within 330 s
 
 
 class ClientError(RuntimeError):
