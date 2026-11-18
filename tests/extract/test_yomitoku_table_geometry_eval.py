@@ -90,6 +90,17 @@ def test_exact_duplicate_cell_with_same_text_is_collapsed():
 
 
 @pytest.mark.parametrize("cells", [
+    [_cell(1, 1, "A"), _cell(1, 1, "")],
+    [_cell(1, 1, ""), _cell(1, 1, "A")],
+    [_cell(1, 1, "A"), _cell(1, 1, ""), _cell(1, 1, "")],
+    [_cell(1, 1, ""), _cell(1, 1, "A"), _cell(1, 1, "")],
+    [_cell(1, 1, ""), _cell(1, 1, ""), _cell(1, 1, "A")],
+])
+def test_same_box_valued_cell_wins_over_empty_emissions_in_any_order(cells):
+    assert ocr._document_text(_doc(cells)) == "\n\tA"
+
+
+@pytest.mark.parametrize("cells", [
     [_cell(1, 1, "A", 2, 2), _cell(1, 1, "B")],        # contained cell holds different text
     [_cell(1, 1, "A"), _cell(1, 1, "B")],              # conflicting duplicate
     [_cell(1, 1, "", 2, 2), _cell(1, 1, "B")],         # value would be lost under an empty span
