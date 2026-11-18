@@ -102,7 +102,7 @@ def _completed(runtime, cloud, monkeypatch, lane):
         resources["wire"] += 1
         try:
             blocked[0] = phase == lane
-            response = {"model": anthropic_client.MODEL, "stop_reason": "end_turn",
+            response = {"model": body["model"], "stop_reason": "end_turn",
                         "content": [{"type": "text", "text": text}],
                         "usage": {"input_tokens": 10, "output_tokens": 2}}
             return 200, {"Request-Id": "synthetic-completed-unit"}, json.dumps(response).encode()

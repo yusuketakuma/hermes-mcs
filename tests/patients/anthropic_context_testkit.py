@@ -133,12 +133,15 @@ def cloud(runtime, monkeypatch):
     follow_cloud_mode(monkeypatch, worker)
     monkeypatch.setattr(extract_llm_prepare, '_cloud_mode', worker._cloud_mode)
     class Provider:
-        model = "claude-haiku-5-5"
         def __init__(self, ledger, cfg, **kwargs):
             assert ledger is led
             self.current = kwargs["current"]
             self.discard_reason = kwargs.get("discard_reason")
-            self.contract = cloud_inference.cloud_provider_contract()
+            route = kwargs["route"]
+            purpose = kwargs.get("purpose") or ("patient_context" if route == "patient_context" else "backlog")
+            self.contract = cloud_inference.cloud_provider_contract(
+                cfg, route=route, purpose=purpose, selection=kwargs.get("selection"))
+            self.model = self.contract["model"]
             self.final_disposition = None
             self.possibly_sent = False
         def guard(self):

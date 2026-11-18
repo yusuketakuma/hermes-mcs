@@ -1094,9 +1094,10 @@ def _rejected_request(ledger, cfg, unit, mid, owner, prompt='another synthetic p
     selection, errors = cloud_policy.resolve_profile(cfg, route='patient_context', purpose='patient_context',
                                                     root=extract_llm.HOME)
     assert not errors
+    client = anthropic_client.AnthropicClient('synthetic-key', model=selection['model'], effort=selection['effort'])
     row = cloud_policy.usage_reserver(ledger, cfg, route='patient_context', project_id=1, message_id=mid,
         unit_key=unit, owner=owner, selection=selection)(
-            anthropic_client.AnthropicClient('synthetic-key').body(prompt, selection['max_tokens'] or 100, None), 30)
+            client.body(prompt, selection['max_tokens'] or 100, None), 30)
     cloud_policy.record_result(ledger, row, {'model': row['model'], 'request_fp': row['request_fp'], 'usage': None,
         'http_class': 'http_404', 'request_id': None, 'error_kind': 'contract_error'})
     return row
