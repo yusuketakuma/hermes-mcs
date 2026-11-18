@@ -211,6 +211,27 @@ def test_reset_keeps_the_facts_of_an_unpublished_context(built, tmp_path):
     assert expected <= _reset_now(ledger, clock, cfg, tmp_path)[1]
 
 
+def test_reset_keeps_scan_facts_for_a_karte_only_patient_without_a_context(built, tmp_path):
+    import patient_context_view as view
+    from test_patient_context_refresh import step
+
+    ledger, clock, cfg, _ = built
+    with ledger.db:
+        ledger.db.execute("UPDATE patients SET karte_id=99 WHERE project_id=1")
+        ledger.karte_summary_store(1, 99, {"comment": "生活環境：完全合成の在宅記録。"})
+        ledger.db.execute("DELETE FROM messages WHERE project_id=1")
+        ledger.db.execute("DELETE FROM artifacts WHERE project_id=1 AND kind IN (?,?)",
+                          (state.KIND, state.LEGACY_KIND))
+    for _ in range(5):
+        step(clock_runtime(ledger, clock), cfg=cfg, local_admit=lambda: False)
+        expected = reset._scan_fact_keys(ledger.db, 1, _disabled(cfg), view.reset_fact_key, {})
+        if expected:
+            break
+    assert expected, "the completed synthetic karte scan is readable"
+    assert state._latest(ledger.db, state.KIND, 1) == ({}, {})
+    assert expected <= _reset_now(ledger, clock, cfg, tmp_path)[1]
+
+
 def test_reset_keeps_scan_facts_after_the_cloud_setting_changed(built, tmp_path):
     """The scans were made on the published route: switching cloud off before the reset must not hide them."""
     ledger, clock, cfg, _ = built

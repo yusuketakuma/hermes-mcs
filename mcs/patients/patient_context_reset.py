@@ -195,8 +195,8 @@ def _record_prior_facts(db, now, cfg):
     pids = sorted({row[0] for row in db.execute(
         "SELECT DISTINCT project_id FROM messages WHERE project_id IS NOT NULL")}
         | {row[0] for row in db.execute(
-            "SELECT DISTINCT project_id FROM artifacts WHERE kind IN (?,?,?) AND project_id IS NOT NULL",
-            (state.KIND, state.LEGACY_KIND, RESET_PRIOR_KIND))})
+            "SELECT DISTINCT project_id FROM artifacts WHERE kind IN (?,?,?,?) AND project_id IS NOT NULL",
+            (state.KIND, state.LEGACY_KIND, state.SCAN, RESET_PRIOR_KIND))})
     rows, unreadable = [], 0
     for pid in pids:
         doc, meta = state._latest(db, state.KIND, pid)
