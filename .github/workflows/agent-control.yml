@@ -2,23 +2,29 @@ name: Agent control
 
 # merge-gate: 必須ジョブが現在の head で実際に実行・成功したかを commit status に出す。
 # 担当ロック: 1 Issue に 担当:* は1件だけ。試行回数: AIブランチの CI 失敗をIssueへ通算する。
-# 自動修正: 上限前の失敗で、担当が Claude なら agent-claude-repair.yml を起動する。
-# 自動マージ: vars.AUTO_MERGE_ENABLED が true のときだけ、対象の変更に予約する。
+# 自動マージ: default-branch controller が現在の head を再確認し、直接 merge する。
 # どのジョブも main 側の定義と ci/agent_control.py だけを使い、PR のコードは checkout も実行もしない。
 # 運用と停止手順: docs/development/AUTOMATION.md
 on:
   workflow_run:
-    workflows: [ci]
+    workflows: [ci, "PR review signal"]
     types: [completed]
-  # A ci run that main-sync started with GITHUB_TOKEN raises no workflow_run when it completes
-  # (GitHub starts no workflow from a GITHUB_TOKEN event except a dispatch), so ci.yml asks here instead.
-  # Such a request only publishes merge-gate: it never counts an attempt or asks for a repair.
+  # GITHUB_TOKEN-started CI may suppress workflow_run; ci.yml dispatches this controller with its source run id.
+  # The controller waits for that exact run to complete before considering retry or merge.
   workflow_dispatch:
     inputs:
       sha:
         description: "判定する PR head の commit（40桁）"
         required: true
         type: string
+      source_run_id:
+        description: "CI workflow run that requested this reconciliation"
+        required: false
+        type: number
+      pr_number:
+        description: "PR number associated with a branch-dispatched CI run"
+        required: false
+        type: number
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   issues:
@@ -35,27 +41,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
-      group: merge-gate-${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.sha }}
+      group: agent-control-${{ github.repository }}
       cancel-in-progress: false
     permissions:
-      contents: read
+      contents: write
       checks: read
       statuses: write
-      pull-requests: read
+      pull-requests: write
       issues: write
-      actions: write   # workflow_dispatch of agent-claude-repair.yml
-    outputs:
-      pr: ${{ steps.plan.outputs.pr }}
-      eligible: ${{ steps.plan.outputs.eligible }}
-      sha: ${{ steps.plan.outputs.sha }}
+      actions: write   # CI retry and main-sync workflow_dispatch
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # the default branch only: never the PR's code, never a tag or another branch named like it
           ref: refs/heads/${{ github.event.repository.default_branch }}
           persist-credentials: false
+      - name: Cancel obsolete branch-dispatched CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: python3 ci/pr_branch_sync.py --repo "$GH_REPO" --base "$DEFAULT_BRANCH" --cancel-obsolete-ci-only
       - name: Decide and publish merge-gate
         id: plan
+        if: github.event_name != 'workflow_run' || github.event.workflow_run.name == 'ci'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -64,27 +73,35 @@ jobs:
           RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           CONTROL_ATTEMPT: ${{ github.run_attempt }}
           PR_FROM_EVENT: ${{ github.event.pull_request.number }}
+          PR_INPUT: ${{ inputs.pr_number }}
           AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           work=$(mktemp -d)
           if [[ "$EVENT" == "workflow_run" ]]; then
-            prs=$(gh api "repos/$GH_REPO/commits/$RUN_SHA/pulls" --jq '[.[] | select(.state == "open") | .number] | join(" ")')
+            if [[ -n "$PR_INPUT" ]]; then
+              prs="$PR_INPUT"
+            else
+              prs=$(gh api "repos/$GH_REPO/commits/$RUN_SHA/pulls" --jq '[.[] | select(.state == "open") | .number] | join(" ")')
+            fi
             ci_conclusion="$RUN_CONCLUSION"
             # Re-running this workflow must not count the same CI failure again; a re-run of ci itself does.
             if [[ "$CONTROL_ATTEMPT" != "1" ]]; then ci_conclusion=""; fi
           elif [[ "$EVENT" == "workflow_dispatch" ]]; then
             # A dispatched sha is typed by a caller: accept a full commit id only. The PR head is compared below.
             [[ "$RUN_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a 40-digit commit id"; exit 1; }
-            prs=$(gh api "repos/$GH_REPO/commits/$RUN_SHA/pulls" --jq '[.[] | select(.state == "open") | .number] | join(" ")')
+            if [[ -n "$PR_INPUT" ]]; then
+              prs="$PR_INPUT"
+            else
+              prs=$(gh api "repos/$GH_REPO/commits/$RUN_SHA/pulls" --jq '[.[] | select(.state == "open") | .number] | join(" ")')
+            fi
             # Not bound to one ci run attempt, so it must not count one: the verdict only.
             ci_conclusion=""
           else
             prs="$PR_FROM_EVENT"
             ci_conclusion=""
           fi
-          last_pr=""; eligible=false; last_sha=""
           for pr in $prs; do
             gh api "repos/$GH_REPO/pulls/$pr" > "$work/pr.json"
             sha=$(jq -r .head.sha "$work/pr.json")
@@ -101,7 +118,6 @@ jobs:
             state=$(jq -r .state "$work/plan.json")
             gh api -X POST "repos/$GH_REPO/statuses/$sha" -f context=merge-gate -f state="$state" \
               -f description="$(jq -r .description "$work/plan.json")" > /dev/null
-            branch=$(jq -r .head.ref "$work/pr.json")
             for issue in $(jq -r '.attempts[].issue' "$work/plan.json"); do
               labels=$(gh api "repos/$GH_REPO/issues/$issue" --jq '[.labels[].name]')
               step=$(python3 ci/agent_control.py attempt --labels "$labels")
@@ -113,60 +129,19 @@ jobs:
                 gh issue comment "$issue" --body "AIによる試行が上限に達したため、担当を外して要オーナー対応にしました（PR #$pr の CI 失敗）。"
               fi
             done
-            # GITHUB_TOKEN may start workflow_dispatch; the repair run pushes as the Claude App, so CI runs again.
-            # The repair workflow re-reads every linked issue and refuses if any is exhausted, reassigned or held.
-            if [[ "$(jq '.attempts | length' "$work/plan.json")" != "0" && "$branch" == agent/claude-* &&
-                  "${AUTOMATION:-}" == "true" ]]; then
-              gh workflow run agent-claude-repair.yml --ref "$DEFAULT_BRANCH" -f pr="$pr"
-            fi
-            last_pr="$pr"; last_sha="$sha"
-            eligible=$(jq -r .auto_merge_eligible "$work/plan.json")
           done
-          echo "pr=$last_pr" >> "$GITHUB_OUTPUT"
-          echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
-          echo "sha=$last_sha" >> "$GITHUB_OUTPUT"
-
-  auto-merge:
-    needs: gate
-    # 既定では動かない。段階5の試験に合格してから vars.AUTO_MERGE_ENABLED を true にする。
-    if: needs.gate.outputs.pr != '' && vars.AUTO_MERGE_ENABLED == 'true' && vars.AUTOMATION_ENABLED == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - name: Reserve or withdraw auto-merge
+      - name: Reconcile current PR heads
+        if: ${{ !cancelled() && !failure() }}
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          PR: ${{ needs.gate.outputs.pr }}
-          ELIGIBLE: ${{ needs.gate.outputs.eligible }}
-          SHA: ${{ needs.gate.outputs.sha }}
-        run: |
-          set -euo pipefail
-          if [[ "$ELIGIBLE" == "true" ]]; then
-            # Bound to the evaluated head: a push after the decision cannot inherit this reservation.
-            gh pr merge "$PR" --auto --squash --match-head-commit "$SHA"
-          else
-            gh pr merge "$PR" --disable-auto 2>/dev/null || true
-          fi
-
-  withdraw-on-push:
-    # 新しい push のたびに自動マージの予約を外す。次の判定で対象なら付け直す。
-    if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize' && vars.AUTO_MERGE_ENABLED == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - name: Withdraw auto-merge
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-        run: gh pr merge "$PR" --disable-auto 2>/dev/null || true
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          AUTOMATION_ENABLED: ${{ vars.AUTOMATION_ENABLED }}
+          AUTO_MERGE_ENABLED: ${{ vars.AUTO_MERGE_ENABLED }}
+          ALLOW_INFRA_RETRY: ${{ (github.event_name == 'workflow_run' && github.event.workflow_run.name == 'ci') || (github.event_name == 'workflow_dispatch' && github.actor == 'github-actions[bot]' && inputs.source_run_id != '') }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id || inputs.source_run_id }}
+          SOURCE_HEAD: ${{ github.event.workflow_run.head_sha || inputs.sha }}
+        run: python3 ci/auto_merge.py --withdraw-inherited
 
   lock:
     if: github.event_name == 'issues' && startsWith(github.event.label.name, '担当:')

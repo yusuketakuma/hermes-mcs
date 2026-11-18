@@ -228,15 +228,18 @@ def test_labels_and_workflows_agree_with_the_module():
     # never check out PR code in a privileged workflow: the one checkout ref is the default branch's full ref
     assert control.count("ref:") == 1 and "ref: refs/heads/${{ github.event.repository.default_branch }}" in control
     assert "workflow_run" in control and "pull_request_target" in control
-    # main-sync's ci run raises no workflow_run: ci.yml asks for the verdict, only for a run the bot started,
-    # and the gate runs such a request only from the default branch (full ref: a tag named like it fails)
+    # GITHUB_TOKEN-triggered CI has a terminal hook; only its CI run id can enable retry.
     request = (ROOT / ".github/workflows/ci.yml").read_text().split("\n  merge-gate-request:\n")[1]
     assert "github.triggering_actor == 'github-actions[bot]'" in request and "actions: write" in request
-    assert 'agent-control.yml --ref "$DEFAULT_BRANCH" -f sha="$SHA"' in request
+    assert "github.event.pull_request.head.sha || github.sha" in request
+    assert '"source_run_id=$SOURCE_RUN_ID"' in request
+    assert "github.run_attempt > 1" in request
     assert "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)" in control
-    # one concurrency group per head, and a dispatched verdict never counts an attempt
-    assert "github.event.pull_request.head.sha || inputs.sha }}" in control
-    dispatched = control.split('elif [[ "$EVENT" == "workflow_dispatch" ]]; then', 1)[1].split("else", 1)[0]
+    assert "group: agent-control-" in control and "cancel-in-progress: false" in control
+    assert "SOURCE_RUN_ID:" in control and "SOURCE_HEAD:" in control
+    assert "ALLOW_INFRA_RETRY:" in control and "github.event.workflow_run.name == 'ci'" in control
+    assert "github.event.workflow_run.head_sha || inputs.sha }}" in control
+    dispatched = control.split('elif [[ "$EVENT" == "workflow_dispatch" ]]; then', 1)[1].split("\n          else\n", 1)[0]
     assert 'ci_conclusion=""' in dispatched
     claude = (ROOT / ".github/workflows/agent-claude.yml").read_text()
     assert "branch_prefix: agent/" in claude
@@ -244,12 +247,11 @@ def test_labels_and_workflows_agree_with_the_module():
     assert "github.repository_owner" in claude
     assert "--draft" not in claude, "PRs are opened ready for review, never as drafts"
     repair = (ROOT / ".github/workflows/agent-claude-repair.yml").read_text()
-    assert "agent-claude-repair.yml" in control
+    assert "agent-claude-repair.yml" not in control
     assert "workflow_dispatch" in repair and "issue_comment" not in repair and "pull_request" not in repair.split("jobs:")[0]
     assert repair.index("agent_control.py repair") < repair.index("ref: ${{ steps.pr.outputs.branch }}")
     assert "actions: read" in repair.split("additional_permissions")[1]
     assert "group: agent-claude-writer" in repair and "group: agent-claude-writer" in claude
-    assert "--match-head-commit" in control
     assert '"$control" assigned' in claude and '"$control" repair' in claude and "--owner-request" in claude
     assert claude.index("default_branch") < claude.index("name: Check the assignment")
     consult = (ROOT / ".github/workflows/agent-consult.yml").read_text()

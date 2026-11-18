@@ -28,11 +28,12 @@ class FakeGitHub:
     """Answers the calls Sync makes and records every write."""
 
     def __init__(self, prs, behind=3, refuse=None, comments=(), head_after=NEW,
-                 head_author="someone", ci_runs=1):
+                 head_author="someone", ci_runs=1, workflow_runs=()):
         self.prs, self.behind, self.refuse = prs, behind, refuse
         self.head_author, self.ci_runs = head_author, ci_runs
         self.comments = [dict(c) for c in comments]
         self.head_after = head_after
+        self.workflow_runs = workflow_runs
         self.writes = []
 
     def __call__(self, *args):
@@ -50,6 +51,10 @@ class FakeGitHub:
             if self.refuse:
                 raise sync.GitHubError(self.refuse)
             return {"message": "Updating pull request branch."}
+        if "/actions/workflows/ci.yml/runs?branch=" in path:
+            return [{"workflow_runs": self.workflow_runs}]
+        if path.endswith("/cancel"):
+            return {}
         if path.startswith(f"repos/{REPO}/pulls/"):
             pr = dict(self.prs[0])
             pr["head"] = dict(pr["head"], sha=self.head_after)
@@ -65,8 +70,8 @@ class FakeGitHub:
         return {}
 
 
-def _run(fake):
-    return sync.Sync(REPO, "main", api=fake, sleep=lambda s: None).run()
+def _run(fake, *, cancel_only=False):
+    return sync.Sync(REPO, "main", api=fake, sleep=lambda s: None).run(cancel_only=cancel_only)
 
 
 def test_behind_pr_is_merged_with_its_head_pinned_and_ci_dispatched():
@@ -77,7 +82,7 @@ def test_behind_pr_is_merged_with_its_head_pinned_and_ci_dispatched():
                        ("POST", f"repos/{REPO}/actions/workflows/ci.yml/dispatches"),
                        ("POST", f"repos/{REPO}/actions/workflows/release-notes.yml/dispatches")]
     assert fake.writes[0][2] == ("-f", f"expected_head_sha={OLD}")
-    assert fake.writes[1][2] == ("-f", "ref=feature-7")
+    assert fake.writes[1][2] == ("-f", "ref=feature-7", "-f", "inputs[pr_number]=7")
     # only the read-only PR check of release-notes.yml, never its default sync
     assert fake.writes[2][2] == ("-f", "ref=feature-7", "-f", "inputs[action]=pr_check")
 
@@ -128,6 +133,38 @@ def test_ci_is_not_dispatched_while_the_new_head_has_not_appeared():
     assert not any("dispatches" in p for _, p, _ in fake.writes)
 
 
+def test_new_head_cancels_only_obsolete_same_branch_workflow_dispatch_ci():
+    runs = [
+        {"id": 101, "event": "workflow_dispatch", "head_branch": "feature-7",
+         "display_title": f"ci-pr-7-branch-{OLD}",
+         "head_sha": OLD, "status": "in_progress", "repository": {"full_name": REPO}},
+        {"id": 102, "event": "workflow_dispatch", "head_branch": "feature-7",
+         "display_title": f"ci-pr-7-branch-{NEW}",
+         "head_sha": NEW, "status": "in_progress", "repository": {"full_name": REPO}},
+        {"id": 103, "event": "workflow_dispatch", "head_branch": "other-branch",
+         "display_title": f"ci-pr-8-branch-{OLD}",
+         "head_sha": OLD, "status": "in_progress", "repository": {"full_name": REPO}},
+        {"id": 104, "event": "pull_request", "head_branch": "feature-7",
+         "display_title": f"ci-pr-7-branch-{OLD}",
+         "head_sha": OLD, "status": "in_progress", "repository": {"full_name": REPO}},
+        {"id": 105, "event": "schedule", "head_branch": "feature-7",
+         "display_title": f"ci-pr-7-branch-{OLD}",
+         "head_sha": OLD, "status": "in_progress", "repository": {"full_name": REPO}},
+        {"id": 106, "event": "workflow_dispatch", "head_branch": "feature-7",
+         "display_title": f"ci-pr-7-tag-{OLD}",
+         "head_sha": OLD, "status": "in_progress", "repository": {"full_name": REPO}},
+        {"id": 107, "event": "workflow_dispatch", "head_branch": "feature-7",
+         "display_title": f"ci-pr-7-branch-{OLD}",
+         "head_sha": OLD, "status": "completed", "repository": {"full_name": REPO}},
+    ]
+    fake = FakeGitHub([_pr()], workflow_runs=runs)
+    assert _run(fake) == 0
+    cancelled = [path for method, path, _ in fake.writes if method == "POST" and path.endswith("/cancel")]
+    assert cancelled == [f"repos/{REPO}/actions/runs/101/cancel"]
+    assert fake.writes[-2][1].endswith("/actions/workflows/ci.yml/dispatches")
+    assert fake.writes[-2][2] == ("-f", "ref=feature-7", "-f", "inputs[pr_number]=7")
+
+
 def test_one_failing_pr_does_not_stop_the_others():
     class Flaky(FakeGitHub):
         def __call__(self, *args):
@@ -138,6 +175,39 @@ def test_one_failing_pr_does_not_stop_the_others():
     fake = Flaky([_pr(1), _pr(2)])
     assert _run(fake) == 1
     assert any(p == f"repos/{REPO}/pulls/2/update-branch" for _, p, _ in fake.writes)
+
+
+def test_cancel_only_mode_handles_human_push_without_sync_or_dispatch():
+    pr = _pr()
+    pr["head"]["sha"] = NEW
+    fake = FakeGitHub([pr], workflow_runs=[
+        {"id": 101, "event": "workflow_dispatch", "head_branch": "feature-7",
+         "display_title": f"ci-pr-7-branch-{OLD}", "head_sha": OLD, "status": "queued",
+         "repository": {"full_name": REPO}},
+    ])
+    assert _run(fake, cancel_only=True) == 0
+    assert fake.writes == [("POST", f"repos/{REPO}/actions/runs/101/cancel", ())]
+
+
+def test_cancel_only_mode_isolates_pr_errors():
+    class Unavailable(FakeGitHub):
+        def __call__(self, *args):
+            if "runs?branch=feature-1&" in args[0]:
+                raise sync.GitHubError("server error")
+            return super().__call__(*args)
+    fake = Unavailable([_pr(1), _pr(2)])
+    assert _run(fake, cancel_only=True) == 1
+    assert not fake.writes
+
+
+def test_cancel_only_mode_rechecks_head_before_canceling_a_newer_run():
+    fake = FakeGitHub([_pr()], head_after=NEW, workflow_runs=[
+        {"id": 101, "event": "workflow_dispatch", "head_branch": "feature-7",
+         "display_title": f"ci-pr-7-branch-{NEW}", "head_sha": NEW, "status": "queued",
+         "repository": {"full_name": REPO}},
+    ])
+    assert _run(fake, cancel_only=True) == 0
+    assert not fake.writes
 
 
 @pytest.mark.parametrize("author, runs, dispatched", [

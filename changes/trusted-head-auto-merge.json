@@ -1,0 +1,20 @@
+{
+  "category": "changed",
+  "title": "現在のコミットへの人承認とCI成功を必須にしてPRを自動マージ",
+  "summary": "同一リポジトリから既定ブランチへの通常PRを、変更パスやブランチ名で区別せず、作成者以外の書込み権限を持つ人の現在headへの承認、必須チェックの実際の成功、GitHubの保護条件が揃った場合だけmerge commitで統合します。承認だけでCIは再実行しません。",
+  "upgrade": "自動マージはAUTOMATION_ENABLEDとAUTO_MERGE_ENABLEDが両方trueの場合だけ動きます。現在値は未確認で、この変更は設定を有効化しません。所有者が保護設定と権限を確認してから有効にしてください。AUTOMATION_ENABLEDを切るとCI再試行も停止し、AUTO_MERGE_ENABLEDだけを切るとmergeだけ停止します。Allow auto-mergeの有効化は不要です。",
+  "details": [
+    "既定ブランチのcontrollerにPR受付・CI完了・読み取り専用review signalを集約し、cronや日次digestは追加しません。通常の待機や自動回復だけではコメント通知しません。",
+    "新headは古い承認やCI成功を引き継がず、新headのCIと人承認を並行して待ちます。旧PR CIと、識別可能な同一PRの旧branch-dispatch CIを取り消し、将来の自動マージ予約は作らず残存予約を撤回します。",
+    "最新CIの初回失敗でrunner基盤障害のannotationを明確に確認できる場合だけ、失敗ジョブと依存先を1回再試行します。テスト失敗・原因不明・再試行失敗はmergeを止め、ログリンク付き通知を更新します。",
+    "CI失敗からのClaude自動コード修正を廃止し、所有者による手動修正依頼は維持します。merge後はGITHUB_TOKENのイベント抑制に備えてmain-syncを明示的に起動します。",
+    "既存のcheck evidenceとdocs modeは変更しません。識別用run titleのない旧形式dispatch CIは、tagや手動実行を誤って取り消さないため自動取消しの対象外です。"
+  ],
+  "refs": [
+    "ci/auto_merge.py",
+    ".github/workflows/agent-control.yml",
+    ".github/workflows/pr-review-signal.yml",
+    "ci/pr_branch_sync.py",
+    "docs/development/AUTOMATION.md"
+  ]
+}

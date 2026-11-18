@@ -31,6 +31,7 @@ import json
 import subprocess
 import sys
 import time
+from urllib.parse import quote
 
 from agent_control import same_repository  # ci/ is this script's import root
 
@@ -109,10 +110,38 @@ class Sync:
                 return pr
         return None
 
-    def dispatch_ci(self, ref: str, workflows=None) -> None:
+    def dispatch_ci(self, ref: str, workflows=None, pr_number: int | None = None) -> None:
         for workflow in workflows or DISPATCHES:
+            inputs = ("-f", f"inputs[pr_number]={pr_number}") if workflow == "ci.yml" and pr_number else ()
             self.api("-X", "POST", f"repos/{self.repo}/actions/workflows/{workflow}/dispatches",
-                     "-f", f"ref={ref}", *DISPATCHES[workflow])
+                     "-f", f"ref={ref}", *inputs, *DISPATCHES[workflow])
+
+    def cancel_obsolete_dispatched_ci(self, ref: str, current_sha: str, pr_number: int) -> None:
+        path = (f"repos/{self.repo}/actions/workflows/ci.yml/runs"
+                f"?branch={quote(ref, safe='')}&event=workflow_dispatch&per_page=100")
+        pages = self.api(path, "--paginate", "--slurp")
+        runs = []
+        for page in pages or []:
+            if isinstance(page, dict):
+                runs.extend(page.get("workflow_runs") or [])
+            elif isinstance(page, list):
+                runs.extend(page)
+        for run in runs:
+            repository = (run.get("repository") or {}).get("full_name") or self.repo
+            if (run.get("event") != "workflow_dispatch" or run.get("head_branch") != ref
+                    or not (run.get("display_title") or "").startswith(f"ci-pr-{pr_number}-branch-")
+                    or not run.get("head_sha")
+                    or run.get("head_sha") == current_sha
+                    or run.get("status") not in {"queued", "in_progress", "waiting", "pending"}
+                    or repository.casefold() != self.repo.casefold()):
+                continue
+            run_id = run.get("id")
+            if isinstance(run_id, int):
+                latest = self.api(f"repos/{self.repo}/pulls/{pr_number}")
+                if (not same_repository(latest) or latest["head"]["ref"] != ref
+                        or latest["head"]["sha"] == run["head_sha"]):
+                    continue
+                self.api("-X", "POST", f"repos/{self.repo}/actions/runs/{run_id}/cancel")
 
     def missing_sync_ci(self, sha: str) -> list[str]:
         """Workflows that never ran on `sha`, when `sha` is this job's merge commit."""
@@ -132,7 +161,9 @@ class Sync:
             missing = self.missing_sync_ci(head["sha"])
             if missing:
                 # an earlier run merged but a dispatch failed or timed out
-                self.dispatch_ci(head["ref"], missing)
+                if "ci.yml" in missing:
+                    self.cancel_obsolete_dispatched_ci(head["ref"], head["sha"], number)
+                self.dispatch_ci(head["ref"], missing, pr_number=number)
                 return f"up to date; re-dispatched {', '.join(missing)} for an unchecked sync merge"
             return "skip: up to date"
         if pr.get("auto_merge"):
@@ -148,16 +179,22 @@ class Sync:
         updated = self.wait_for_new_head(number, head["sha"])
         if updated is None:
             return "merged, but the new head did not appear in time; CI not started"
-        self.dispatch_ci(updated["head"]["ref"])
+        self.cancel_obsolete_dispatched_ci(updated["head"]["ref"], updated["head"]["sha"], number)
+        self.dispatch_ci(updated["head"]["ref"], pr_number=number)
         self.comment(number, success_body(self.base, base_sha), only_if_exists=True)
         return f"merged {base_sha[:7]} -> {updated['head']['sha'][:7]}, CI dispatched"
 
-    def run(self) -> int:
-        base_sha = self.api(f"repos/{self.repo}/branches/{self.base}")["commit"]["sha"]
+    def run(self, *, cancel_only: bool = False) -> int:
+        base_sha = None if cancel_only else self.api(f"repos/{self.repo}/branches/{self.base}")["commit"]["sha"]
         errors = 0
         for pr in self.open_prs():
             try:
-                outcome = self.sync_one(pr, base_sha)
+                if cancel_only:
+                    if same_repository(pr):
+                        self.cancel_obsolete_dispatched_ci(pr["head"]["ref"], pr["head"]["sha"], pr["number"])
+                    outcome = "obsolete dispatched CI reconciled"
+                else:
+                    outcome = self.sync_one(pr, base_sha)
             except GitHubError as e:  # one PR's trouble must not stop the others
                 outcome, errors = f"error: {e}", errors + 1
             print(f"#{pr['number']} {pr['head']['ref']}: {outcome}")
@@ -168,8 +205,9 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--repo", required=True)
     ap.add_argument("--base", required=True)
+    ap.add_argument("--cancel-obsolete-ci-only", action="store_true")
     args = ap.parse_args(argv)
-    return Sync(args.repo, args.base).run()
+    return Sync(args.repo, args.base).run(cancel_only=args.cancel_obsolete_ci_only)
 
 
 if __name__ == "__main__":
