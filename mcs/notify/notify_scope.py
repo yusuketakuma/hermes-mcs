@@ -746,12 +746,18 @@ def unresolved_length_deliveries(db, delivery_ids, *, proof_state=None) -> set:
             and row['state'] == 'not_sent' and row['error_code'] in _LENGTH_ERRORS}
 
 
-def _tracked_incomplete_part_rows(db, cfg=None, observation=None):
-    """Yield (row, acknowledged) for unfinished parts; acknowledged rows are closed tracking."""
+def _tracked_incomplete_part_rows(db, cfg=None, observation=None,
+                                  checkpoint=None):
+    """Yield (row, acknowledged) for unfinished parts; acknowledged rows are closed tracking.
+
+    ``observation["phase"]`` records the operation active when a stop is detected.
+    """
     import notify_tracking_ack
     if observation is not None:
         observation["phase"] = "receipt_targets"
     index = notify_tracking_ack.receipt_targets(db)
+    if checkpoint is not None:
+        checkpoint()
     if observation is not None:
         observation["phase"] = "part_rows"
     for row in _incomplete_part_rows(db, cfg):
@@ -770,17 +776,21 @@ def active_incomplete_part_rows(db, cfg=None):
 
 
 def incomplete_parts_health(db, now: float, cfg=None, *, active_rows=None,
-                            observation=None) -> dict:
+                            observation=None, checkpoint=None) -> dict:
     """Read unfinished parts, excluding only matching later delivery evidence.
 
     ``active_rows``, when a list, receives each active row this same pass
-    counted, so a follow-up diagnostic needs no second tracking-ack proof."""
+    counted, so a follow-up diagnostic needs no second tracking-ack proof.
+    ``observation["phase"]`` records the operation active when a stop is
+    detected (``receipt_targets``, ``part_rows``, ``acknowledged``,
+    ``unknown_count``)."""
     states = dict.fromkeys(('pending', 'unknown', 'not_sent', 'held'), 0)
     by_plan = {"current": 0, "superseded": 0}
     active_states = dict(states)
     active_plans = dict(by_plan)
     cards, oldest, active_cards, active_oldest, closed = set(), None, set(), None, 0
-    for row, acknowledged in _tracked_incomplete_part_rows(db, cfg, observation=observation):
+    for row, acknowledged in _tracked_incomplete_part_rows(
+            db, cfg, observation=observation, checkpoint=checkpoint):
         states[row['state']] += 1
         by_plan["superseded" if row['superseded'] else "current"] += 1
         cards.add(row['card_id'])
@@ -797,6 +807,10 @@ def incomplete_parts_health(db, now: float, cfg=None, *, active_rows=None,
         active_cards.add(row['card_id'])
         if at is not None:
             active_oldest = min(active_oldest, at) if active_oldest is not None else at
+    if checkpoint is not None:
+        checkpoint()
+    if observation is not None:
+        observation["phase"] = "unknown_count"
     unknown = db.execute("SELECT COUNT(*) FROM notification_render_parts "
                          "WHERE kind!='card' AND state='unknown'").fetchone()[0]
     return {"active_total": sum(active_states.values()), "active_cards": len(active_cards),

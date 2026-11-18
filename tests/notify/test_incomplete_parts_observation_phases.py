@@ -539,8 +539,9 @@ def test_report_observation_marks_a_depleted_entry_budget(db, monkeypatch):
 
 
 def test_report_observation_marks_the_aggregation_phase_on_overrun(db, monkeypatch):
-    """An overrun inside the part aggregation names the phase that was
-    running, so entry-budget shortage and aggregation cost stay distinct."""
+    """An overrun inside receipt_targets is caught at its post-step boundary
+    check and recorded as phase=receipt_targets (the operation active when
+    the stop was detected), distinct from entry-budget shortage and later phases."""
     _plain_incomplete(db, _PART_COUNT)
     db.commit()
     clock = _FakeClock()
@@ -556,8 +557,47 @@ def test_report_observation_marks_the_aggregation_phase_on_overrun(db, monkeypat
     assert report["status"] == "unknown" and report["reason"] == "observation_limit"
     assert report["total"] is None
     assert report["observation"]["stop"] == "time_limit"
-    assert report["observation"]["phase"] in ("receipt_targets", "part_rows",
-                                              "acknowledged")
+    assert report["observation"]["phase"] == "receipt_targets"
+
+
+def test_sql_interrupt_during_unknown_count_records_fixed_unknown_count_phase(db, monkeypatch):
+    """If SQLite interrupts the trailing total-unknown COUNT(*), observation.phase
+    must name unknown_count (never part_rows), keep total=None, and emit no stored data."""
+    canary = "synthetic-private-canary-patient"
+    card_id = _card(db, f"{canary}-card", message_id=f"{canary}-msg")
+    delivery_id = _uuid(900_001)
+    _render(db, delivery_id=delivery_id, card_id=card_id, rev=1)
+    for idx in range(2500):
+        _part(db, delivery_id=delivery_id, part_id=f"u-{idx}", state="unknown",
+              error=f"{canary}-err", idx=idx, attempt_id=f"p:{delivery_id.replace('-', '')}:u-{idx}")
+    db.commit()
+
+    clock = _FakeClock()
+    monkeypatch.setattr(health_report, "time", clock)
+    seen_unknown_sql = []
+
+    def trace(sql):
+        if "WHERE kind!='card' AND state='unknown'" in sql:
+            seen_unknown_sql.append(True)
+            clock.advance(10.0)
+
+    db.set_trace_callback(trace)
+    try:
+        active_rows = []
+        report = health_report.incomplete_parts_health(
+            db, NOW, SLACK, seconds=0.05, active_rows=active_rows)
+    finally:
+        db.set_trace_callback(None)
+
+    assert seen_unknown_sql == [True]
+    assert active_rows == []
+    assert report["status"] == "unknown"
+    assert report["reason"] == "observation_limit"
+    assert report["total"] is None and report["cards"] is None
+    assert report["by_state"] == dict.fromkeys(("pending", "unknown", "not_sent", "held"))
+    assert report["observation"]["stop"] == "time_limit"
+    assert report["observation"]["phase"] == "unknown_count"
+    assert canary not in json.dumps(report, ensure_ascii=False)
 
 
 def test_production_wrapper_reports_honest_unknown_on_overrun(tmp_path, monkeypatch):
