@@ -948,10 +948,8 @@ def deferral_delay(reason):
 
 def _context_retry_delay(result):
     """Backoff for one context pass. selection_busy means another worker
-    holds the selection lock and is doing real work — retrying in seconds
-    just adds convoy noise, so wait longer. A unit waiting for the cloud
-    returns within seconds when the send slot was full; a cap, a circuit or
-    a pending result does not clear that fast."""
+    holds the selection lock (usually scanning, not necessarily doing work);
+    a scan that found nothing startable rarely finds work seconds later. A full cloud slot is retried sooner than a daily cap."""
     if result.get("done"):
         return 1
     reason = result.get("reason")
@@ -960,7 +958,9 @@ def _context_retry_delay(result):
     base, _, code = reason.partition(":") if type(reason) is str else ("", "", "")
     if base == "patient_context_cloud_deferred":
         return deferral_delay(reason)
-    if reason in ("patient_context_cloud_budget", "patient_context_other_role",
+    if reason == "patient_context_scan_incomplete" and result.get("covered") is False and not result.get("scan_interrupts"):
+        return 5  # The next page may still contain a due patient.
+    if reason in ("patient_context_waiting", "patient_context_scan_incomplete", "patient_context_cloud_budget", "patient_context_other_role",
                   "patient_context_nothing_due"):
         # Every patient the pass reached is served by the other worker role, or none was due.
         return 60

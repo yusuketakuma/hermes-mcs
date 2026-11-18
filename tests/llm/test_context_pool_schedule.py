@@ -83,12 +83,18 @@ def test_context_child_does_not_enter_after_source_generation_changes(runtime, r
     assert not posts and not document(ledger)
 
 
-def test_context_retry_delay_backs_off_for_selection_busy_and_cloud_defers():
+def test_context_retry_delay_distinguishes_partial_scans_from_idle_and_cloud_defers():
     assert cloud_backlog._context_retry_delay({"done": 1}) == 1
     assert cloud_backlog._context_retry_delay(
-        {"done": 0, "reason": "patient_context_selection_busy"}) == 20
+        {"done": 1, "reason": "patient_context_waiting"}) == 1
     assert cloud_backlog._context_retry_delay(
-        {"done": 0, "reason": "patient_context_waiting"}) == 5
+        {"done": 0, "reason": "patient_context_selection_busy"}) == 20
+    assert cloud_backlog._context_retry_delay({"done": 0, "reason": "patient_context_scan_incomplete",
+                                             "covered": False, "scan_interrupts": 0}) == 5
+    for reason in ("patient_context_waiting", "patient_context_scan_incomplete"):
+        assert cloud_backlog._context_retry_delay({"done": 0, "reason": reason}) == 60
+    assert cloud_backlog._context_retry_delay(
+        {"done": 0, "reason": "run_lock"}) == 5
     assert cloud_backlog._context_retry_delay({"done": 0}) == 5
     # A full send slot frees within seconds; a cap, a circuit or a pending result does not.
     assert cloud_backlog._context_retry_delay(
