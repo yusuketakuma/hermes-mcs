@@ -348,3 +348,31 @@ def test_item_scope_group_default_is_unknown_without_explicit_patient_source():
 ])
 def test_lab_candidate_unit_must_fit_the_named_item(name, value, unit, quote, expected):
     assert clinical_values.lab_candidate(name, value, unit, quote)["confirmation"] == expected
+
+
+@pytest.mark.parametrize("quote, expected", [
+    ("Cr 1.2mg/dLです。", "quote_supported"),
+    ("Cr 1.2mg/dLと高値です。", "quote_supported"),
+    ("Cr 1.2mg/dL以上です。", "unverified"),
+    ("Cr 1.2mg/dL未満でした。", "unverified"),
+    ("Cr 1.2mg/dLではありません。", "unverified"),
+    ("Cr 1.2mg/dLかもしれません。", "unverified"),
+    ("Cr 1.2mg/dL程度です。", "unverified"),
+    ("Cr 1.2mg/dL？", "unverified"),
+    ("Cr 1.2mg/dL、浮腫はない。", "quote_supported"),
+    ("Cr >=1.2mg/dLです。", "unverified"),
+    ("Cr 1.2mg/dL以内です。", "unverified"),
+    ("Cr 1.2mg/dLより高い。", "unverified"),
+    ("Cr 1.2mg/dLまでです。", "unverified"),
+    ("Cr 1.2mg/dL近くです。", "unverified"),
+    ("Cr 1.2mg/dL付近です。", "unverified"),
+    ("Cr 1.2mg/dL強です。", "unverified"),
+    ("Cr 1.2mg/dL弱です。", "unverified"),
+    ("Cr 1.2mg/dLを上回る。", "unverified"),
+    ("Cr 1.2mg/dLを下回る。", "unverified"),
+    ("Cr 1.2mg/dLと思われる。", "unverified"),
+    ("Cr 1.2mg/dLらしい。", "unverified"),
+    ("Cr 1.2mg/dL K 4.0mEq/L", "quote_supported"),
+])
+def test_numeric_lab_quote_is_not_confirmed_when_a_comparison_or_negation_follows(quote, expected):
+    assert clinical_values.lab_candidate("Cr", 1.2, "mg/dL", quote)["confirmation"] == expected

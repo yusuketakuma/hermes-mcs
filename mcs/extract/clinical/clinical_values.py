@@ -297,6 +297,11 @@ _LAB_ITEM_UNITS = {
 }
 # Capture explicit dose/count symbols too; an omitted output unit cannot hide them.
 _LAB_QUOTED_UNIT = r"(?:[a-zμ%/0-9.^²‰‱°錠包袋滴枚本個回単位]|カプセル)*"
+# After the number only a closed affirmative form states the measurement (nothing, デス/デシタ,
+# a plain high/low cue, a following ASCII item); any other tail (以内, より, 付近, 強, 思われる...) does not.
+# Kana in katakana: fold_surface folds the quote that way.
+_LAB_NUMBER_CLOSED_TAIL = re.compile(
+    r"(?:[トニ])?(?:高値|低値|高イ|低イ|高|低|上昇|低下|正常|異常)?(?:デス|デシタ|ダ|ダッタ)?(?:\([hl]\))?$|[a-z0-9]")
 _DATE = re.compile(r"(?<!\d)(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?(?!\d)")
 
 
@@ -434,7 +439,9 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                               f"({_LAB_QUOTED_UNIT})", tail)
             if result and normalized_quantity_number(result[1]) == number:
                 # an omitted unit must not bypass the item's units: the quoted one is checked too
-                if (result[2] == unit_key) if unit_key else (not result[2] or result[2] in allowed_units):
+                after = re.split(r"[。、,;；\n]", tail[result.end():], maxsplit=1)[0]
+                if ((result[2] == unit_key) if unit_key else (not result[2] or result[2] in allowed_units)) \
+                        and _LAB_NUMBER_CLOSED_TAIL.match(after):
                     readings.append(match)
         elif tail.startswith(fold_surface(raw_value)) and raw_value:
             remainder = tail[len(fold_surface(raw_value)):]
@@ -559,11 +566,16 @@ def _nearest_vital_label(body: str, s: int, e: int):
     return best[1] if best else None
 
 
+_BP_SLASH_AFTER = re.compile(r"\s*[/／]")
+_BP_SLASH_BEFORE = re.compile(r"[/／]\s*$")
+
+
 def _bp_side(body: str, s: int, e: int):
     """120/80: before the slash is systolic, after is diastolic."""
-    if body[e:e + 1] in ("/", "／"):
+    # the same slash grammar as _BP_PAIR: blanks around the slash are allowed
+    if _BP_SLASH_AFTER.match(body, e):
         return "sbp"
-    if body[s - 1:s] in ("/", "／"):
+    if _BP_SLASH_BEFORE.search(body, max(0, s - _VITAL_WIN_BACK), s):
         return "dbp"
     return None
 
