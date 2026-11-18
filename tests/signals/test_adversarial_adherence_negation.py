@@ -88,3 +88,26 @@ def test_other_person_question_conditional_are_not_concerns(text):
 def test_terminal_capability_concern_is_unchanged():
     assert "服薬管理できない" in mcs_signals._adherence_phrases(
         "本人は服薬管理できない。", patient_name="架空患者")
+
+
+# 「とは言えます」 is an affirmative judgement (a plain negation), while
+# 「とは言えない」 is a double negation; 「かと心配」 keeps the worry, but a
+# negated worry 「心配していません」 asserts no concern at all.
+@pytest.mark.parametrize("text", [
+    "飲み忘れがないとは言えない。",
+    "本人は服薬管理が難しくないかと心配です。",
+    "本人は服薬管理が難しくないかと心配しています。",
+])
+def test_affirmative_judgement_boundary_keeps_concern(text):
+    assert mcs_signals._adherence_phrases(text, patient_name="架空患者")
+
+
+@pytest.mark.parametrize("text", [
+    "飲み忘れはないとは言えます。",
+    "飲み忘れはないとは思います。",
+    "飲み忘れがないか心配していません。",
+    "飲み忘れがないか心配しない。",
+    "飲み忘れがないか心配はありません。",
+])
+def test_affirmative_judgement_boundary_drops_concern(text):
+    assert not mcs_signals._adherence_phrases(text, patient_name="架空患者")
