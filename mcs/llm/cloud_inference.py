@@ -82,6 +82,16 @@ def _history_read_error(phase, error, *, observation=None):
         pass  # Diagnostics must never replace the existing fail-closed refusal.
 
 
+def _send_blocked(reason):
+    """Name the policy code that refused a fresh send; the row itself defers."""
+    try:
+        print(json.dumps({"event": "cloud_send_blocked", "pid": os.getpid(), "ts": time.time(),
+                          "reason": reason if type(reason) is str and reason in cloud_send_admission.PRE_SEND_VERDICTS else "unknown"}),
+              file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
 def _current_cloud_settings():
     try:
         cfg = load_config()
@@ -526,6 +536,7 @@ class CloudInferenceUnit:
                     self._refuse("pre_send", self._blocked_code(blocked, settings=judged.get("cloud_llm")))
                     # Only a history-checked fresh request may use caller local fallback.
                     self.commit_guard()
+                    _send_blocked(blocked)
                     raise CloudFallback("cloud_send_blocked")
                 capacity = _current_cloud_settings()["max_concurrency"]
                 self._effect_started = True   # admission to new request work
