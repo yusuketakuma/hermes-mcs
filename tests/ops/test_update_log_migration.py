@@ -154,6 +154,25 @@ def test_uninstalled_legacy_recovery_directory_is_untouched(tmp_path):
     assert recovery.stat().st_mode & 0o777 == 0o755
 
 
+@pytest.mark.parametrize('mode', [0o755, 0o750, 0o775])
+def test_prepare_tightens_only_an_unwritable_legacy_recovery_directory(tmp_path, mode):
+    """Regression: a pre-v1.0.7 0755 recovery directory wedged every update
+    with run_log_helper_untrusted and nothing told the operator to chmod."""
+    root, checkout, recovery, _ = layout(tmp_path)
+    recovery.mkdir()
+    recovery.chmod(mode)
+    with pytest.raises(deploy.LogInstallError):
+        deploy.helper_path(root, recovery, checkout=checkout)   # read-only stays strict
+    assert recovery.stat().st_mode & 0o777 == mode
+    if mode & 0o022:
+        with pytest.raises(deploy.LogInstallError, match='run_log_helper_untrusted'):
+            deploy.prepare(root, checkout, recovery)
+        assert recovery.stat().st_mode & 0o777 == mode
+        return
+    assert deploy.prepare(root, checkout, recovery)['scope'] == 'verified_prefix'
+    assert recovery.stat().st_mode & 0o777 == 0o700
+
+
 def test_ancestor_aliases_use_one_canonical_namespace_without_plan_writes(tmp_path, monkeypatch):
     root, checkout, recovery, _ = layout(tmp_path)
     alias = tmp_path / 'ancestor-alias'

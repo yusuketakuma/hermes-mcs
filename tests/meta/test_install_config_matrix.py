@@ -120,7 +120,7 @@ def test_only_a_nonempty_model_list_reuses_external_server(tmp_path, response, s
     assert downloaded is not serving
 
 
-@pytest.mark.parametrize('busy', [False, True])
+@pytest.mark.parametrize('busy', [False, 'interpreter', 'framework_script'])
 def test_old_standalone_venv_is_preserved_and_busy_runtime_is_not_replaced(tmp_path, busy):
     home, _, _, env = _world(tmp_path)
     venv = home / '.mcs/venv'
@@ -129,8 +129,13 @@ def test_old_standalone_venv_is_preserved_and_busy_runtime_is_not_replaced(tmp_p
     py.write_text('#!/bin/sh\nexit 1\n')
     py.chmod(0o700)
     (venv / 'prior-marker').write_text('synthetic prior runtime')
-    if busy:
+    if busy == 'interpreter':
         env['STUB_VENV_PROCESS'] = str(py) + ' -m synthetic-runtime'
+    elif busy == 'framework_script':
+        # Homebrew's framework Python re-execs Python.app: the venv path is argv[1].
+        env['STUB_VENV_PROCESS'] = ('/opt/homebrew/Cellar/python@3.13/3.13.9/Frameworks/Python.framework/'
+                                    'Versions/3.13/Resources/Python.app/Contents/MacOS/Python '
+                                    + str(venv / 'bin/synthetic-gateway') + ' run')
     result = _run(env, None, '--mode', 'standalone', *FLAGS)
     assert result.returncode == (1 if busy else 0), result.stdout + result.stderr
     preserved = venv if busy else home / '.mcs/venv.pre-python314'
@@ -142,22 +147,54 @@ def test_old_standalone_venv_is_preserved_and_busy_runtime_is_not_replaced(tmp_p
         assert (venv / 'bin/python3').exists()
 
 
+@pytest.mark.parametrize('runtime', ['standalone', 'hermes'])
 @pytest.mark.parametrize('marker', ['ledger.db', 'service_manifest.json'])
-def test_existing_installation_cannot_race_a_scheduled_tick_during_runtime_rebuild(tmp_path, marker):
+def test_existing_installation_cannot_race_a_scheduled_tick_during_runtime_rebuild(tmp_path, runtime, marker):
     home, _, _, env = _world(tmp_path)
-    venv = home / '.mcs/venv'
+    venv = (home / '.mcs/venv' if runtime == 'standalone'
+            else home / '.hermes/hermes-agent/venv')
+    if runtime == 'hermes':
+        (venv.parent / '.git').mkdir(parents=True)
     (venv / 'bin').mkdir(parents=True)
     py = venv / 'bin/python3'
     py.write_text('#!/bin/sh\nexit 1\n')
     py.chmod(0o700)
     data = home / '.mcs/data'
-    data.mkdir()
+    data.mkdir(parents=True)
     (data / marker).write_text('synthetic established installation')
-    result = _run(env, None, '--mode', 'standalone', *FLAGS)
+    result = _run(env, None, '--mode', runtime, *FLAGS)
     assert result.returncode == 1
     assert 'Python 移行には更新ツールが必要' in result.stderr
+    assert 'venv.broken' not in result.stderr
+    assert '担当者に復旧を依頼' in result.stderr
     assert py.read_text() == '#!/bin/sh\nexit 1\n'
-    assert not (home / '.mcs/venv.pre-python314').exists()
+    assert not (venv.parent / (venv.name + '.pre-python314')).exists()
+    assert not (venv.parent / (venv.name + '.broken')).exists()
+
+
+@pytest.mark.parametrize('runtime', ['standalone', 'hermes'])
+@pytest.mark.parametrize('established', [False, True])
+def test_preflight_reports_unusable_established_runtime_with_its_way_out(tmp_path, runtime, established):
+    home, _, _, env = _world(tmp_path)
+    venv = (home / '.mcs/venv' if runtime == 'standalone'
+            else home / '.hermes/hermes-agent/venv')
+    if runtime == 'hermes':
+        (venv.parent / '.git').mkdir(parents=True)
+    (venv / 'bin').mkdir(parents=True)
+    py = venv / 'bin/python3'
+    py.write_text('#!/bin/sh\nexit 1\n')
+    py.chmod(0o700)
+    data = home / '.mcs/data'
+    data.mkdir(mode=0o700, parents=True)
+    if established:
+        (data / 'ledger.db').write_text('synthetic established installation')
+    result = _run(env, None, '--preflight', '--mode', runtime, *FLAGS)
+    assert result.returncode == (1 if established else 0), result.stdout + result.stderr
+    assert ('段階2では作り直しません' in result.stdout) is established
+    if established:
+        assert 'venv.broken' not in result.stdout
+        assert '担当者に復旧を依頼' in result.stdout
+    assert py.read_text() == '#!/bin/sh\nexit 1\n'
 
 
 @pytest.mark.parametrize('proof', ['valid', 'wrong_inode', 'closed', 'foreign_backup'])

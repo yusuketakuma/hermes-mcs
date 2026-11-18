@@ -291,6 +291,17 @@ def test_bootstrap_help_and_invalid_command_are_japanese(tmp_path):
         assert expected in result.stdout + result.stderr
 
 
+def test_bootstrap_missing_python_keeps_established_runtime_for_recovery(tmp_path):
+    env = dict(os.environ, HOME=str(tmp_path), MCS_ROOT=str(tmp_path / "root"))
+    result = subprocess.run(["/bin/sh", str(ROOT / "scripts/mcs"), "setup"],
+                            env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 1
+    output = result.stdout + result.stderr
+    assert "実行に必要なPythonが見つかりません" in output
+    assert "担当者に復旧を依頼" in output
+    assert "venv.broken" not in output and "退避手順" not in output
+
+
 def test_cli_update_help_is_japanese(pinned, capsys):
     with pytest.raises(SystemExit) as result:
         mcs_cli.main(["update", "--help"])
