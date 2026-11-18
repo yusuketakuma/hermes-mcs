@@ -1366,6 +1366,33 @@ def test_check_writes_and_applies_nothing_while_a_restore_holds(updater, monkeyp
     assert forbidden == []
 
 
+def test_pending_notices_and_approvals_wait_out_a_restore_hold(updater, tmp_path, monkeypatch):
+    """Combined hold: restore_held with a legacy pending_notices entry — no
+    notice id is saved, nothing is enqueued and approvals are not consumed
+    while held; after the hold lifts the same notice goes out exactly once."""
+    _pending_notice_check_env(updater, tmp_path, monkeypatch, [_abort(notice_id=None)])
+    scanned, applied = [], []
+    monkeypatch.setattr(update_cli, 'scan_pending_approvals',
+                        lambda state: scanned.append(state) or (
+                            [{"tag": "v9.9.9", "target_sha": "a" * 40,
+                              "command_id": "cid-held"}], []))
+    monkeypatch.setattr(update_cli, 'apply', lambda *a, **k: applied.append(a) or 0)
+    monkeypatch.setattr(update_cli, '_restore_hold_active', lambda: True)
+    assert updater.cmd_check() == 0
+    [pending] = updater.journal_store.load_state(updater.STATE_PATH)["pending_notices"]
+    assert "notice_id" not in pending
+    assert not (tmp_path / 'notice-ledger.db').exists()   # nothing was enqueued
+    assert scanned == [] and applied == []
+
+    monkeypatch.setattr(update_cli, '_restore_hold_active', lambda: False)
+    assert updater.cmd_check() == 0
+    events = _notice_events(tmp_path)
+    assert len(events) == 1 and events[0]["notice_code"] == "aborted"
+    assert "v1.1.0" in events[0]["text"] and isinstance(events[0]["notice_id"], str)
+    assert "pending_notices" not in updater.journal_store.load_state(updater.STATE_PATH)
+    assert scanned and applied           # normal approval flow resumes after release
+
+
 def test_apply_starts_nothing_while_a_restore_holds(updater, monkeypatch, capsys):
     repo = _apply_env(updater, monkeypatch)
     before = _git(repo, "rev-parse", "HEAD").stdout.strip()
