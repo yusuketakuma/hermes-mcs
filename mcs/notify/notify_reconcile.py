@@ -821,6 +821,10 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
     }
     notify_spool.publish_file(root, notify_spool.RESTORE_RECEIPT,
                        cards.canonical(receipt))
+    # publish the hold list before the marker can disappear: the moment
+    # restore_pending clears, the worker's pre-send check must already
+    # see which deliveries stay frozen
+    notify_spool.publish_restore_holds(ledger, root)
     if journal_incomplete and not marker:
         notify_spool.mark_restored(root, by="reconcile_incomplete", now=now)
     elif not journal_incomplete:

@@ -65,6 +65,77 @@ def test_restore_pending_marker_blocks_begins(world):
             / (spec["delivery_id"] + ".json")).exists()
 
 
+@pytest.mark.parametrize("prior_grant", [False, True])
+def test_delivery_hold_blocks_begin_without_changing_saved_evidence(world, prior_grant):
+    import sqlite3
+
+    world.seed()
+    before_dispatch = sqlite3.connect(":memory:")
+    try:
+        world.led.db.backup(before_dispatch)
+        world.dispatch()
+        delivery_id = world.render()["delivery_id"]
+        spec = world.spec(delivery_id)
+        req = envelopes.transport_begin(
+            {"attempt_id": registry.new_attempt_id(), "worker_id": "w" + "0" * 15,
+             "spec": spec, "payload_hash": envelopes.payload_hash(spec)})
+        if prior_grant:
+            assert notify_transport.apply_transport_begin(world.led, req, CFG)["granted"]
+        else:
+            before_dispatch.backup(world.led.db)
+    finally:
+        before_dispatch.close()
+
+    with world.led.db:
+        world.led.db.execute(
+            "INSERT INTO notification_restore_holds(delivery_id, reason, held_at) VALUES(?,?,?)",
+            (delivery_id, "synthetic", NOW))
+    reply = notify_transport.apply_transport_begin(world.led, req, CFG)
+    assert not reply["granted"] and reply["error"] == "denied_restore_hold"
+    assert world.led.db.execute("SELECT COUNT(*) FROM notification_delivery_attempts").fetchone()[0] == int(prior_grant)
+    assert (world.data / "discord_render" / (delivery_id + ".json")).is_file()
+    if prior_grant:
+        with world.led.db:
+            world.led.db.execute("UPDATE notification_restore_holds SET released_at=?", (NOW + 1,))
+        assert notify_transport.apply_transport_begin(world.led, req, CFG)["granted"]
+
+
+@pytest.mark.parametrize("spec_lost", [True, False])
+def test_commands_only_recover_republishes_under_hold_then_grants_follow_reconcile(
+        world, spec_lost):
+    """commands_only runs recover before reconcile: whether the spec file
+    survived the restore or recover republished it first, every grant
+    stays held until reconcile clears the marker — the worker.tick reach
+    is reconcile -> 印解除 -> existing spec, for both spec states."""
+    world.seed()
+    world.dispatch()
+    delivery_id = world.render()["delivery_id"]
+    spec_path = world.data / "discord_render" / (delivery_id + ".json")
+    spec = json.loads(spec_path.read_text())
+    if spec_lost:
+        spec_path.unlink()
+    notify_spool.mark_restored(str(world.data), backup_path="b.db", by="test")
+    # cmd_recover republishes the missing spec BEFORE the reconcile runs
+    fixed = notify_spool.recover(world.led, CFG, {})
+    assert fixed["republished"] == (1 if spec_lost else 0)
+    assert spec_path.exists()
+
+    def begin():
+        return notify_transport.apply_transport_begin(world.led,
+            envelopes.transport_begin(
+                {"attempt_id": registry.new_attempt_id(),
+                 "worker_id": "w" + "0" * 15, "spec": spec,
+                 "payload_hash": envelopes.payload_hash(spec)}), CFG)
+
+    held = begin()
+    assert held["granted"] is False and held["error"] == "denied_restore_pending"
+    notify_reconcile.reconcile_after_restore(world.led, CFG)
+    assert notify_spool.restore_pending(str(world.data)) is None
+    # the spec on disk is the same bytes the worker would claim
+    assert json.loads(spec_path.read_text()) == spec
+    assert begin()["granted"]
+
+
 def test_flags_publish_restore_pending(world):
     notify_spool.mark_restored(str(world.data), by="test")
     notify_spool.publish_flags(CFG, str(world.data))

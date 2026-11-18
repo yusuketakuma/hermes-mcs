@@ -935,6 +935,7 @@ class DeliveryWorker:
                 claim, dead=error not in (
                     "denied_interactive_off",
                     "denied_restore_pending",
+                    "denied_restore_hold",
                     "denied_signal_notify_off"))
             return
         if not self._verify_grant(claim, result):
@@ -954,6 +955,12 @@ class DeliveryWorker:
 
     async def _send_allowed(self, spec: dict | None = None) -> bool:
         flags = await asyncio.to_thread(paths.read_flags, self._root)
+        if flags.get("restore_holds_unreadable"):
+            return False           # hold list corrupt — cannot prove unheld
+        held = flags.get("held_delivery_ids")
+        if spec is not None and isinstance(held, list) \
+                and spec["delivery_id"] in held:
+            return False           # unreleased restore hold — spec kept
         return (not self._stopping and not self._journal_incomplete
                 and (self.send_admitted is None or self.send_admitted())
                 and paths.route_open(

@@ -177,6 +177,38 @@ def publish_flags(cfg: dict, root: str) -> bool:
     return True
 
 
+def publish_restore_holds(ledger, root: str) -> bool:
+    """flags/restore_holds.json — delivery_ids under an unreleased
+    restore hold. The delivery worker reads it DB-free at every pre-send
+    check, so a held delivery's spec (kept as reconcile evidence) can
+    never turn into a send. Published only when it changes."""
+    db = getattr(ledger, "db", ledger)
+    held = sorted(str(r[0]) for r in db.execute(
+        "SELECT delivery_id FROM notification_restore_holds "
+        "WHERE released_at IS NULL AND delivery_id IS NOT NULL"))
+    flags = {"held_delivery_ids": held, "at": time.time()}
+    raw = canonical(flags)
+    path = os.path.join(notify_dirs(root)["flags"], "restore_holds.json")
+    try:
+        with open(path, "rb") as f:
+            old = f.read()
+    except OSError:
+        old = None
+    if old is not None:
+        try:
+            prior = json.loads(old)
+            if isinstance(prior, dict):
+                prior.pop("at", None)
+                cur = dict(flags)
+                cur.pop("at", None)
+                if canonical(prior) == canonical(cur):
+                    return False
+        except (ValueError, RecursionError):
+            pass
+    publish_file(os.path.dirname(path), "restore_holds.json", raw)
+    return True
+
+
 def _spec_publication_blocked(db, delivery_id, transport):
     """A held resource part, a part a restore beyond the journal horizon
     made unknown, or an unstarted Slack file group keeps its delivery off
@@ -307,4 +339,5 @@ def recover(ledger, cfg, result) -> dict:
         result.setdefault("errors", []).append(
             f"claimed_specs_stale:{stale['live']}")
     publish_flags(cfg, root)
+    publish_restore_holds(ledger, root)
     return fixed

@@ -1404,6 +1404,46 @@ def test_interrupted_migration_undo_keeps_adopted_backup_without_freezing(
     assert Path(live).read_bytes() == db_bytes
 
 
+def test_interrupted_migration_undo_prefers_adopted_marker_over_sdk_mismatch(
+        updater, tmp_path, monkeypatch):
+    """Combined hold: an adopted backup marker, a schema bump and a standalone
+    SDK pin mismatch together — the marker protection fires before the SDK
+    refusal, so writers stay stopped and the journal, report and marker are
+    preserved instead of escalating."""
+    from ops_testkit import _git
+    _repo, live, back, before, _after, restarts = _schema_bump_world(
+        updater, tmp_path, monkeypatch)
+    repo = Path(updater.REPO)
+    (repo / "deployment").mkdir(exist_ok=True)
+    (repo / "deployment" / "requirements-standalone.txt").write_text("synthetic-sdk==2\n")
+    _git(repo, "add", "deployment/requirements-standalone.txt")
+    _git(repo, "commit", "-qm", "synthetic sdk pin")
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    applying = {"tag": "v1.1.0", "sha": head, "prev_sha": before, "schema_bump": True,
+                "backup_path": back, "runtime_migration": {"synthetic": True}}
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    state["applying"] = applying
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    marker, raw, inode = _adopted_marker(updater.DATA)
+    db_bytes = Path(live).read_bytes()
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {"runtime_mode": "standalone"})
+    # the SDK refusal would also fire on this journal — the marker must win the order
+    assert update_preflight._standalone_sdk_rollback_error(
+        applying, {"runtime_mode": "standalone"}) == "standalone_sdk_rollback_unsupported"
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("no worker start or escalation")
+
+    assert updater._undo_interrupted_migration(state, applying, forbidden, forbidden) == 1
+    report = json.loads(Path(updater.REPORT_PATH).read_text())
+    assert (report["result"], report["detail"]) == ("runtime_restore_blocked", "restore_marker_adopted")
+    assert Path(updater.MARKER_PATH).exists()            # writers stay held
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] == applying
+    assert updater._head_sha() == head and restarts == []
+    assert marker.read_bytes() == raw and marker.stat().st_ino == inode
+    assert Path(live).read_bytes() == db_bytes
+
+
 def test_post_merge_bail_keeps_adopted_backup_without_freezing(updater, tmp_path, monkeypatch):
     import local_backup
     from ops_testkit import _git, _make_repo, _mk_schema

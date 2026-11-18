@@ -131,6 +131,16 @@ def test_held_delivery_never_resends_the_lost_group(
         "WHERE released_at IS NULL AND delivery_id=?", (did,)).fetchall()
     assert rows and all(r["reason"] for r in rows)
 
+    # A worker may still hold the original spec in memory after withdrawal.
+    holds_path = world.root / "flags" / "restore_holds.json"
+    assert did in json.loads(holds_path.read_bytes())["held_delivery_ids"]
+    assert not asyncio.run(world.worker._send_allowed(spec))
+    holds_path.write_bytes(b"{corrupt")
+    assert not asyncio.run(world.worker._send_allowed())
+    notify_spool.publish_restore_holds(led, str(world.root))
+    assert asyncio.run(world.worker._send_allowed())
+    assert not asyncio.run(world.worker._send_allowed(spec))
+
     # the held delivery's spec is withdrawn into the reconcile-only archive;
     # another commands_only recover pass must not republish it while unreleased
     assert not spec_path.exists()

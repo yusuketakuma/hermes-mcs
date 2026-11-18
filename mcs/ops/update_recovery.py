@@ -688,17 +688,17 @@ def _undo_interrupted_migration(state, applying, drainers, escalate) -> int:
     Same order as rollback(): journal a rollback-shaped record, quiesce,
     then restore tree, venv and Hermes checkout; a pending restore consent
     holds with drainers stopped."""
+    if applying.get("schema_bump") and applying.get("backup_path") and _adopted_marker():
+        # before any journal rewrite, like the apply bail: writers stay stopped, a human decides
+        quiesce()
+        _report("runtime_restore_blocked", "restore_marker_adopted")
+        return 1
     # Like rollback(): the venv keeps the new SDK pins, so refuse before any change.
     sdk_error = _standalone_sdk_rollback_error(
         {**applying, "prev_sha": applying["sha"]} if applying.get("rollback") else applying,
         mcs_util.load_config())
     if sdk_error:
         return escalate(sdk_error)
-    if applying.get("schema_bump") and applying.get("backup_path") and _adopted_marker():
-        # before any journal rewrite, like the apply bail: writers stay stopped, a human decides
-        quiesce()
-        _report("runtime_restore_blocked", "restore_marker_adopted")
-        return 1
     if applying.get("rollback"):
         record, entry = applying, {**applying, "sha": applying["prev_sha"],
                                    "prev_sha": applying["sha"]}
