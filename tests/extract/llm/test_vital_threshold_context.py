@@ -3,6 +3,8 @@ common words (大丈夫/工夫), silencing the patient's own current reading."""
 import extract_llm_engine
 import extract_llm_runner
 import extract_validation
+import pytest
+
 import clinical_values
 import extract_llm
 
@@ -66,3 +68,19 @@ def test_family_kanji_inside_a_word_at_the_context_boundary_is_not_excluded():
     for word in ("大丈夫", "工夫"):
         body = word + "あ" * 34 + "SpO2 88%"
         assert clinical_values.vital_threshold_flags({"spo2": 88}, body, TH)
+
+
+@pytest.mark.parametrize("body", ["本人の血圧80/60。", "本人の血圧80 / 60。",
+                                  "本人の血圧80/60.", "本人の血圧80 / 60．"])
+def test_a_spaced_blood_pressure_pair_reaches_its_configured_threshold_flag(body):
+    flags = clinical_values.vital_threshold_flags({"sbp": 80, "dbp": 60}, body, {"sbp_lte": 90})
+    assert [f["key"] for f in flags] == ["sbp"], flags
+    assert flags[0]["rule"] == "sbp_lte_90"
+    assert "血圧80" in flags[0]["evidence"]
+
+
+@pytest.mark.parametrize("body", ["本人の血圧140/90。", "本人の血圧140 / 90。"])
+def test_the_gte_rule_flags_a_spaced_pair_the_same_way(body):
+    flags = clinical_values.vital_threshold_flags({"sbp": 140, "dbp": 90}, body, {"sbp_gte": 130})
+    assert [f["key"] for f in flags] == ["sbp"], flags
+    assert flags[0]["rule"] == "sbp_gte_130"

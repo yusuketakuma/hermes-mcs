@@ -11,9 +11,18 @@ import time
 import extract_llm
 import semantic_drain
 import semantic_jev as jev
-from extract_testkit import _hash, _ledger, _message, _qc_job, _v2_artifact
+from extract_testkit import _hash, _ledger, _qc_job, _v2_artifact
+from extract_testkit import _message as _kit_message
 from semantic_testkit import _FakeJev
 from inference_version import CURRENT_VERSION, VERSION_KEY
+
+
+def _message(*args, **kw):
+    # QC covers only posts inside the last 60 days (qc_scope_sql), so the
+    # default stamp is relative to now; a fixed date ages out of scope.
+    kw.setdefault("posted_at", time.strftime(
+        "%Y-%m-%dT%H:%M:%S+09:00", time.localtime(time.time() - 86400)))
+    return _kit_message(*args, **kw)
 
 
 def _cfg(**kw):
