@@ -24,6 +24,10 @@ assert.match(content(section), /母に糖尿病の既往あり/);
 assert.equal(section.children.find(node => node.tagName === "blockquote").textContent, "母に糖尿病の既往あり");
 const unknown = vm.runInContext('contextSection({patient_context:[{text:"合成記録",subject:"unspecified",evidence:"合成記録"}]})', sandbox);
 assert.match(content(unknown), /対象未確認/);
+const mixed = vm.runInContext('contextSection({patient_context:[{text:"アレルギー：なし",subject:"unspecified",evidence:"アレルギー：なし",source_evidence:"アレルギー：なし\\n訪問しました。体温36.5℃。",scope_note:"続きあり・分類範囲は未確認"}]})', sandbox);
+assert.equal(mixed.children.find(node => node.tagName === "blockquote").textContent, "アレルギー：なし");
+assert.doesNotMatch(mixed.children.filter(node => node.tagName === "p").map(content).join("\n"), /訪問しました/);
+assert.match(content(mixed.children.find(node => node.className === "context-source")), /原文全体（分類範囲は未確認）[\s\S]*訪問しました/);
 async function checkReplyRecords() {
   sandbox.reply = {project_id: 101, message_id: 3, parent_id: 1};
   sandbox.api = async (kind, params) => {

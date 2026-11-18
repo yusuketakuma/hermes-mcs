@@ -67,6 +67,7 @@ async function loadPatientContext(project) {
     for (const group of groups.slice(0, 4)) {
       const item = group.items[0], entry = el("div", null, "context-brief");
       entry.append(el("b", group.label), el("span", `${subjectLabels[item.subject] || "対象未確認"}: ${item.text || item.evidence || ""}`), el("small", fmt(item.posted_at_ts, {year:"numeric", month:"numeric", day:"numeric"})));
+      if (item.scope_note) entry.append(el("small", item.scope_note, "context-scope"));
       preview.append(entry);
     }
     const details = el("details", null, "context-records");
@@ -144,6 +145,12 @@ function contextSection(row) {
     context.append(el("p", `対象: ${subjectLabels[item.subject] || "対象未確認"}`, "context-subject"));
     context.append(el("p", item.text || item.evidence || item.category));
     if (item.evidence) context.append(el("blockquote", item.evidence));
+    if (item.scope_note) context.append(el("p", item.scope_note, "context-scope"));
+    if (item.source_evidence) {
+      const source = el("details", null, "context-source");
+      source.append(el("summary", "原文全体（分類範囲は未確認）"), el("blockquote", item.source_evidence));
+      context.append(source);
+    }
     for (const detail of item.details || []) {
       context.append(el("p", `${detail.key}: ${detail.value || detail.text || ""}`));
       if (detail.evidence) context.append(el("blockquote", detail.evidence));

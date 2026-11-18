@@ -4,6 +4,7 @@ from mcs_util import search_fold
 from stamp_format import stamp_counts, thread_stamp_line
 from structured_view import structured_lines
 from patient_context_view import SECTION_LABELS
+from patient_context import extract_context
 
 
 def require_project(project, allowed):
@@ -38,11 +39,9 @@ def read(view, allowed, kind, project, *, query="", cursor=None, message_id=None
         if query or cursor or message_id is not None:
             raise ValueError("bad_arguments")
         data = view.read("patient_context", project=project, view="background")
-        fields = ("message_id", "subject", "text", "quote", "posted_at_ts", "details")
         return {"snapshot": view.meta, "sections": [
             {"label": SECTION_LABELS.get(section["category"], (section["category"],))[0],
-             "items": [{**{key: item.get(key) for key in fields}, "evidence": item.get("quote")}
-                       for item in section["items"]]}
+             "items": [_context_item(item, section["category"]) for item in section["items"]]}
             for section in data["sections"]]}
     if kind not in ("timeline", "search", "thread", "attachments", "evidence"):
         raise ValueError("unknown_view")
@@ -57,12 +56,31 @@ def read(view, allowed, kind, project, *, query="", cursor=None, message_id=None
     return result
 
 
+def _context_item(item, category):
+    result = {key: item.get(key) for key in (
+        "message_id", "subject", "reported_subject", "text", "posted_at_ts", "details")}
+    evidence = item.get("evidence") or item.get("quote") or ""
+    result["evidence"] = evidence
+    lines = evidence.strip().splitlines()
+    if len(lines) > 1:
+        # A section quote proves its text exists, not that every following line belongs to its heading.
+        heading = extract_context(lines[0])
+        bounded = len(heading) == 1 and heading[0]["category"] == category
+        result.update(text=lines[0] if bounded else "複数行の記録（分類範囲は未確認）",
+                      evidence=lines[0] if bounded else None, details=[],
+                      source_evidence=evidence,
+                      scope_note="続きあり・分類範囲は未確認" if bounded else "原文の分類範囲は未確認")
+    return result
+
+
 def _message(view, row):
     keys = ("message_id", "project_id", "parent_id", "sender_name", "posted_at",
             "posted_at_ts", "body_state", "body_complete", "reply_count", "stored_replies",
             "attachments", "metadata_flags", "reaction_actors", "physician_viewed",
             "patient_context")
     result = {key: row.get(key) for key in keys}
+    result["patient_context"] = [_context_item(item, item["category"])
+                                 for item in row.get("patient_context") or []]
     result["parent_available"] = not row.get("parent_id") or view.db.execute(
         "SELECT 1 FROM messages WHERE project_id=? AND message_id=?",
         (row["project_id"], row["parent_id"])).fetchone() is not None

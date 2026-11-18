@@ -280,6 +280,51 @@ def test_patient_header_context_is_scoped_grounded_and_readonly(snapshot):
         chat.response(snapshot, {1}, "context", "project=1&message=123")
 
 
+@pytest.mark.parametrize("body,category,heading", [
+    ("アレルギー：なし\n訪問しました。体温36.5℃。朝食は全量。", "allergies", "アレルギー：なし"),
+    ("アレルギー：なし\nただし家族から合成薬による発疹の情報あり。確認中。", "allergies", "アレルギー：なし"),
+    ("服薬管理: 家族が管理\n本日は合成の訪問記録。", "medication_management", "服薬管理: 家族が管理"),
+    ("既往歴\n合成疾患の治療歴。\n後続の記録。", "history", None),
+])
+def test_multiline_context_never_promotes_unscoped_continuation(body, category, heading):
+    original = extract_context(body)[0]
+    assert original["category"] == category
+    projected = local_chat_view._context_item(original, category)
+    assert projected["source_evidence"] == body
+    assert projected["subject"] == "unspecified"
+    assert "分類範囲は未確認" in projected["scope_note"]
+    assert projected["details"] == []
+    assert projected["evidence"] == heading
+    assert "訪問しました" not in projected["text"]
+    assert "確認中" not in projected["text"]
+
+
+def test_multiline_context_boundary_applies_to_header_and_message(tmp_path):
+    path = tmp_path / "ledger.db"
+    store = ledger.Ledger(str(path))
+    body = "アレルギー：なし\n訪問しました。体温36.5℃。朝食は全量。"
+    try:
+        with store.db:
+            store.db.execute("INSERT INTO patients(project_id,patient_name) VALUES(1,'合成花子'),(2,'合成太郎')")
+            for mid, text in ((1, body), (2, "アレルギー：合成薬Bで発疹")):
+                store.db.execute("INSERT INTO messages(message_id,project_id,body_text,body_state,content_hash) "
+                                 "VALUES(?,?,?,'full',?)", (mid, mid, text, f"{mid:064x}"))
+                store.artifact_add_tx("extract_v1", json.dumps({"patient_context": extract_context(text)}),
+                                      project_id=mid, message_id=mid,
+                                      meta={"hash": f"{mid:064x}", VERSION_KEY: CURRENT_VERSION})
+        snapshot = ledger.publish_snapshot(str(path), str(tmp_path / "snapshots"))
+        header = chat.response(snapshot, {1, 2}, "context", "project=1")["sections"][0]["items"][0]
+        detail = chat.response(snapshot, {1, 2}, "evidence", "project=1&message=1")["message"]["patient_context"][0]
+        assert header["text"] == detail["text"] == "アレルギー：なし"
+        assert header["evidence"] == detail["evidence"] == "アレルギー：なし"
+        assert header["source_evidence"] == detail["source_evidence"] == body
+        other = chat.response(snapshot, {1, 2}, "context", "project=2")
+        assert "合成薬Bで発疹" in json.dumps(other, ensure_ascii=False)
+        assert "体温" not in json.dumps(other, ensure_ascii=False)
+    finally:
+        store.close()
+
+
 def test_orphan_reply_remains_readable_without_exposing_foreign_parent(tmp_path):
     path = tmp_path / "ledger.db"
     store = ledger.Ledger(str(path))
