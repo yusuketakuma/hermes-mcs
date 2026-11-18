@@ -568,4 +568,3 @@ def test_actual_parent_or_part_delivery_counts_as_progress(world, via):
     observed = _observe(world)["delivery"]
     assert observed["state"] == "progressing"
     assert observed["last_progress_at"] == NOW - 1
-
