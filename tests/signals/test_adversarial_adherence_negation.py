@@ -111,3 +111,53 @@ def test_affirmative_judgement_boundary_keeps_concern(text):
 ])
 def test_affirmative_judgement_boundary_drops_concern(text):
     assert not mcs_signals._adherence_phrases(text, patient_name="架空患者")
+
+
+# 「〜ないと断言/断定/言い切れない」 cannot establish the negation, so the
+# concern stays; an affirmative 「断言できる」 asserts the negation and drops
+# it. The same applies to 飲み忘れ stems, not only the adjective.
+@pytest.mark.parametrize("text", [
+    "本人は服薬管理が難しくないと断言できない。",
+    "本人は服薬管理が難しくないとは断言できない。",
+    "本人は服薬管理が難しくありませんと断言できません。",
+    "本人は服薬管理が難しくないと断定できない。",
+    "本人は服薬管理が難しくないと言い切れない。",
+    "本人は服薬管理が難しくないと言えない。",
+    "飲み忘れがないと断言できない。",
+])
+def test_uncertainty_tail_keeps_concern(text):
+    assert mcs_signals._adherence_phrases(text, patient_name="架空患者")
+
+
+@pytest.mark.parametrize("text", [
+    "本人は服薬管理が難しくないと断言できる。",
+    "本人は服薬管理が難しくないとは断言できます。",
+    "本人は服薬管理が難しくないと言えます。",
+])
+def test_asserted_negation_drops_concern(text):
+    assert not mcs_signals._adherence_phrases(text, patient_name="架空患者")
+
+
+# A particle may sit between 心配 and its negation (「心配はしていません」),
+# and 「心配しているわけではありません」 negates the worry proposition.
+@pytest.mark.parametrize("text", [
+    "飲み忘れがないか心配はしていません。",
+    "飲み忘れがないか心配もしていません。",
+    "飲み忘れがないか心配はしていない。",
+    "飲み忘れがないか心配もしていない。",
+    "飲み忘れがないか心配しているわけではありません。",
+    "飲み忘れがないか心配するわけではありません。",
+    "飲み忘れがないか心配はしているわけではありません。",
+])
+def test_negated_worry_particle_and_proposition_drop_concern(text):
+    assert not mcs_signals._adherence_phrases(text, patient_name="架空患者")
+
+
+# Worry double negations negate the negation itself, so the concern stays.
+@pytest.mark.parametrize("text", [
+    "本人は服薬管理が難しくないか心配しないわけではありません。",
+    "本人は服薬管理が難しくないか心配していないわけではありません。",
+    "本人は服薬管理が難しくないか心配しないこともない。",
+])
+def test_worry_double_negation_keeps_concern(text):
+    assert mcs_signals._adherence_phrases(text, patient_name="架空患者")
