@@ -30,6 +30,7 @@ class GateAPI:
             self.gets[ROOT + f"pulls/{number}"] = p
             self.gets[ROOT + f"issues/{number}"] = {"labels": []}
             self.gets[ROOT + f"compare/main...{sha}"] = {"behind_by": 0}
+            self.lists.setdefault(ROOT + f"commits/{sha}/statuses", [])
             self.lists[ROOT + f"pulls/{number}/files"] = [{"filename": "docs/test.md"}]
             self.lists[ROOT + f"commits/{sha}/check-runs"] = [
                 {"name": name, "head_sha": sha, "status": "completed", "conclusion": "success",
@@ -81,6 +82,7 @@ def test_every_wake_publishes_all_current_heads_but_only_counts_event_failure(ru
     ("GET", "pulls/1"),
     ("LIST", f"commits/{'1' * 40}/check-runs"),
     ("LIST", "pulls/1/files"),
+    ("LIST", f"commits/{'1' * 40}/statuses"),
     ("GET", f"compare/main...{'1' * 40}"),
     ("POST", f"statuses/{'1' * 40}"),
 ])
@@ -170,3 +172,60 @@ def test_shared_head_gets_one_ready_verdict_regardless_of_draft_order(draft_firs
     statuses = [body for method, path, body in api.calls if method == "POST" and "/statuses/" in path]
     assert len(statuses) == 1
     assert statuses[0]["state"] == "success"
+
+
+def bot_status():
+    return dict(context="merge-gate", state="success", description="必須ジョブ実行済み・成功・要人間承認",
+                creator={"login": "github-actions[bot]", "type": "Bot"},
+                created_at="2026-11-18T12:00:00Z", id=1)
+
+
+def test_unchanged_bot_status_is_not_republished():
+    api = GateAPI([pr(1)])
+    api.lists[ROOT + f"commits/{'1' * 40}/statuses"] = [bot_status()]
+    assert publish(api) == {"published": [], "errors": []}
+    assert not any(method == "POST" for method, _, _ in api.calls)
+
+
+@pytest.mark.parametrize("changes", [{"state": "failure"}, {"description": "old description"}])
+def test_changed_bot_status_is_republished(changes):
+    api = GateAPI([pr(1)])
+    status = bot_status()
+    status.update(changes)
+    api.lists[ROOT + f"commits/{'1' * 40}/statuses"] = [status]
+    assert publish(api) == {"published": [1], "errors": []}
+    statuses = [body for method, path, body in api.calls if method == "POST" and "/statuses/" in path]
+    assert statuses == [{"context": "merge-gate", "state": "success", "description": "必須ジョブ実行済み・成功・要人間承認"}]
+
+
+@pytest.mark.parametrize("changes", [
+    {"context": "other-context"},
+    {"creator": {"login": "human", "type": "User"}},
+    {"creator": {"login": "github-actions[bot]", "type": "User"}},
+])
+def test_unrelated_or_untrusted_status_does_not_suppress_publication(changes):
+    api = GateAPI([pr(1)])
+    status = bot_status()
+    status.update(changes)
+    api.lists[ROOT + f"commits/{'1' * 40}/statuses"] = [status]
+    assert publish(api) == {"published": [1], "errors": []}
+
+
+def test_latest_bot_status_not_an_older_matching_status_controls_deduplication():
+    api = GateAPI([pr(1)])
+    older, newer = bot_status(), bot_status()
+    newer.update(id=2, state="failure")
+    api.lists[ROOT + f"commits/{'1' * 40}/statuses"] = [older, newer]
+    assert publish(api) == {"published": [1], "errors": []}
+
+
+def test_unchanged_status_does_not_skip_source_ci_attempt_bookkeeping():
+    api = GateAPI([pr(1, draft=True)])
+    status = bot_status()
+    status.update(state="pending", description="下書きのため判定保留")
+    api.lists[ROOT + f"commits/{'1' * 40}/statuses"] = [status]
+    result = publish(api, event="workflow_run", run_workflow="ci", run_conclusion="failure",
+                     run_sha="1" * 40, source_prs=[{"number": 1}])
+    assert result == {"published": [], "errors": []}
+    assert not any(method == "POST" and "/statuses/" in path for method, path, _ in api.calls)
+    assert any(method == "POST" and path == ROOT + "issues/1/labels" for method, path, _ in api.calls)

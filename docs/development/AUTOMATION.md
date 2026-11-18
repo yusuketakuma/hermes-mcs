@@ -167,7 +167,8 @@ fork、別の base、閉じた PR、draft は対象外です。
 `pull_request_target` の PR 受付、CI 完了、review の提出・編集・取り消しで再評価します。review は
 `pr-review-signal.yml` の読み取り専用・checkout なしの no-op を完了させ、既定ブランチの `agent-control.yml` に `workflow_run` で伝えます。
 controller は常に既定ブランチのコードを使い、PR コードを実行しません。自動マージ判定に cron・日次巡回・digest はありません。
-1つの非キャンセル concurrency group に直列化し、review signal を含む各 wake で既定ブランチ向けの全 open PR の現在 head の `merge-gate` を再発行してから merge を評価します。ゲートの発行には fork・下書きも含めますが、自動 merge の対象にはしません。
+1つの非キャンセル concurrency group に直列化し、review signal を含む各 wake で既定ブランチ向けの全 open PR の現在 head の `merge-gate` を判定してから merge を評価します。ゲートの判定には fork・下書きも含めますが、自動 merge の対象にはしません。
+同じ head SHA は1件にまとめ、下書きと ready PR が共有している場合は ready PR の判定を優先します。最新の `github-actions[bot]` によるゲートと state・description が同じなら再発行せず、commit status の件数上限を浪費しません。
 最後の1本だけの出力には依存しません。全 PR の走査は判定だけを行い、Issue の試行回数は、失敗した CI run の `pull_requests` に記録された PR の現在 head が一致するときだけ、下書きも含め別に加算します。
 PR ごとの取得・ゲート発行に失敗しても残りの PR と controller の再評価を続け、最後に失敗した判定があったことをジョブ結果へ反映します。
 

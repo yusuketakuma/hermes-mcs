@@ -8,10 +8,10 @@ from urllib.parse import quote
 
 if __package__:
     from .agent_control import decide_gate, is_agent_branch, linked_issues, next_attempt, same_repository
-    from .auto_merge import GitHubAPI, GitHubAPIError, _repo_path, default_branch_pr
+    from .auto_merge import BOT_LOGIN, GitHubAPI, GitHubAPIError, _repo_path, default_branch_pr
 else:
     from agent_control import decide_gate, is_agent_branch, linked_issues, next_attempt, same_repository
-    from auto_merge import GitHubAPI, GitHubAPIError, _repo_path, default_branch_pr
+    from auto_merge import BOT_LOGIN, GitHubAPI, GitHubAPIError, _repo_path, default_branch_pr
 
 
 def _apply_attempts(api, repo, number, attempts):
@@ -29,6 +29,17 @@ def _apply_attempts(api, repo, number, attempts):
             api.post(_repo_path(repo, f"issues/{issue}/comments"), {
                 "body": f"AIによる試行が上限に達したため、担当を外して要オーナー対応にしました（PR #{number} の CI 失敗）。",
             })
+
+
+def _gate_unchanged(api, repo, sha, plan):
+    statuses = api.list(_repo_path(repo, f"commits/{sha}/statuses"))
+    gates = [status for status in statuses
+             if status.get("context") == "merge-gate"
+             and (status.get("creator") or {}).get("login") == BOT_LOGIN
+             and (status.get("creator") or {}).get("type") == "Bot"]
+    latest = max(gates, key=lambda status: (status.get("created_at") or "", status.get("id") or 0),
+                 default=None)
+    return latest is not None and all(latest.get(key) == plan[key] for key in ("state", "description"))
 
 
 def publish_gates(api, repo, default_branch, *, automation_enabled, event="",
@@ -59,6 +70,8 @@ def publish_gates(api, repo, default_branch, *, automation_enabled, event="",
             files = api.list(_repo_path(repo, f"pulls/{number}/files"))
             behind = api.get(_repo_path(repo, f"compare/{quote(default_branch, safe='')}...{sha}"))["behind_by"]
             plan = decide_gate(pr, checks, files, behind, automation_enabled)
+            if _gate_unchanged(api, repo, sha, plan):
+                continue
             api.post(_repo_path(repo, f"statuses/{sha}"), {
                 "context": "merge-gate", "state": plan["state"], "description": plan["description"],
             })
