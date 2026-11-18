@@ -24,8 +24,12 @@ _OTHER_MED_MENTION = re.compile(
     r"(?:薬|剤|錠|カプセル|坐薬|注射|点眼|テープ|軟膏|貼付剤|散剤|"
     r"内服薬|経口薬|外用薬|吸入薬|坐剤|ドリンク|ゼリー|ローション|クリーム|"
     r"トローチ|目薬|うがい薬|浣腸|膣錠|腟錠|塗り薬|飲み薬|注射薬|貼付|吸入)"
-    r"[一-龠々ァ-ヶーA-Za-z0-9]{0,15}(?=[はがをの])")
+    r"[一-龠々ァ-ヶーA-Za-z0-9]{0,15}(?=[はがをのも])")
 _OTHER_MED_NONDRUG_END = re.compile(r"[師局品袋缶味箱代瓶器店価]$")
+# Katakana or alphanumeric drug names carry no drug morpheme
+# (テストミン・ワルファリン), so a name-shaped token in
+# subject/object position bounds the region the same way.
+_OTHER_MED_KATAKANA = re.compile(r"[ァ-ヶーA-Za-z0-9]{3,16}(?=[はがをのも])")
 # A bare dose count (3錠) or a generic form word (内服薬・坐薬) names no
 # particular drug, so it never bounds an attribute region either.
 _OTHER_MED_GENERIC = re.compile(
@@ -564,7 +568,7 @@ class Validator:
         if self.drops is not None and len(self.drops.setdefault("reasons", [])) < 5:
             self.drops["reasons"].append(reason)
 
-    def _clause_names_sibling_medication(self, clause, target) -> bool:
+    def _clause_names_sibling_medication(self, clause, target, med_names=()) -> bool:
         """True when a clause names a drug other than the target.
 
         The model may list only one of several drugs sharing a sentence;
@@ -572,12 +576,20 @@ class Validator:
         the attribute region so a sibling's wording never attaches.
         """
         target_flat = flat_text(target)
+        folded = flat_text(clause)
+        for name in med_names:
+            claimed = flat_text(name) if name else ""
+            if claimed and claimed != target_flat and claimed in folded:
+                return True
         for match in _OTHER_MED_MENTION.finditer(clause):
             name = match[0]
             if (_OTHER_MED_NONDRUG_END.search(name)
-                    or _OTHER_MED_GENERIC.fullmatch(name)):
+                    or _OTHER_MED_GENERIC.fullmatch(name)
+                    or flat_text(name) == target_flat):
                 continue
-            if flat_text(name) != target_flat:
+            return True
+        for match in _OTHER_MED_KATAKANA.finditer(clause):
+            if flat_text(match[0]) != target_flat:
                 return True
         return False
 
@@ -595,13 +607,22 @@ class Validator:
         left = max(self.body.rfind(mark, 0, start)
                    for mark in "。！？!?;；\n") + 1
         left = max(left, quote_span[0])
+        # An earlier 、-segment of the same sentence may belong to a
+        # sibling drug (合成薬GHは朝食前、合成薬IJは就寝前…): when it
+        # names another medication the region starts at this drug's own
+        # segment so the sibling's wording never attaches from behind.
+        seg = max(left, max(self.body.rfind(mark, left, start)
+                            for mark in "、,，") + 1)
+        if seg > left and self._clause_names_sibling_medication(
+                self.body[left:seg], item["name"], med_names):
+            left = seg
         right, pos, limit = min(assertion[3], quote_span[1]), assertion[3], quote_span[1]
         while pos < limit:
             stop = re.search(r"[。！？!?;；\n]", self.body[pos:limit])
             clause_end = pos + stop.start() if stop else limit
             clause = self.body[pos:clause_end]
             if (any(name and flat_text(name) in flat_text(clause) for name in med_names)
-                    or self._clause_names_sibling_medication(clause, item["name"])):
+                    or self._clause_names_sibling_medication(clause, item["name"], med_names)):
                 break
             right = clause_end + (1 if stop else 0)
             pos = right

@@ -153,6 +153,45 @@ def test_med_attributes_unlisted_sibling_drug_never_binds():
     assert gh[1].get("timing") == "朝食前"
 
 
+def test_med_attributes_unlisted_sibling_never_binds_either_direction():
+    body = "合成薬GHは朝食前、合成薬IJは就寝前に服用しています。"
+    out = _validate(body, {"meds": [
+        _med("合成薬IJ", body, timing="朝食前"),
+        _med("合成薬IJ", body, timing="就寝前"),
+        _med("合成薬GH", body, timing="就寝前"),
+        _med("合成薬GH", body, timing="朝食前"),
+    ]})
+    ij = [m for m in out["meds"] if m["name"] == "合成薬IJ"]
+    gh = [m for m in out["meds"] if m["name"] == "合成薬GH"]
+    assert "timing" not in ij[0]
+    assert ij[1].get("timing") == "就寝前"
+    assert "timing" not in gh[0]
+    assert gh[1].get("timing") == "朝食前"
+
+
+def test_med_attributes_morpheme_less_sibling_never_binds():
+    body = "合成薬GHは朝食前、テストミンは就寝前に服用しています。"
+    out = _validate(body, {"meds": [
+        _med("合成薬GH", body, timing="就寝前"),
+        _med("合成薬GH", body, timing="朝食前"),
+    ]})
+    gh = [m for m in out["meds"] if m["name"] == "合成薬GH"]
+    assert "timing" not in gh[0]
+    assert gh[1].get("timing") == "朝食前"
+
+
+def test_event_record_actor_location_is_not_the_provider():
+    body = "ご本人は朝食後に病院で訪問看護師による創部の処置を受けました。"
+    out = _validate(body, {"event_records": [
+        {"kind": "care", "subject": "patient", "status": "current",
+         "negated": False, "evidence": body, "actor": "病院"},
+        {"kind": "care", "subject": "patient", "status": "current",
+         "negated": False, "evidence": body, "actor": "訪問看護師"},
+    ]})
+    assert "actor" not in out["event_records"][0]
+    assert out["event_records"][1]["actor"] == "訪問看護師"
+
+
 def test_event_record_attributes_must_match_their_role():
     body = "ご本人は10月28日に訪問看護師による創部の処置を受けました。"
     out = _validate(body, {"event_records": [{

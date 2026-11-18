@@ -667,8 +667,23 @@ def _date_text_supported(value) -> bool:
     return written_day(value) is not None or bool(_DATEISH.search(value))
 
 
-def _actor_supported(value) -> bool:
-    return bool(re.fullmatch(NAMED_PERSON, value) or _ACTOR_ROLE.search(value))
+# An actor must stand in agent position — による/が/は — inside the
+# evidence. A location noun followed by で (病院で) or a bare role word
+# never confirms the provider.
+_ACTOR_AGENT = re.compile(r"(?:による|が|は)")
+
+
+def _actor_supported(value, quote) -> bool:
+    if not (re.fullmatch(NAMED_PERSON, value) or _ACTOR_ROLE.search(value)):
+        return False
+    pos = 0
+    while True:
+        i = quote.find(value, pos)
+        if i < 0:
+            return False
+        if _ACTOR_AGENT.match(quote, i + len(value)):
+            return True
+        pos = i + 1
 
 
 def _record_attribute_bound(quote, value, kind, match, target_end, *, actor=False):
@@ -882,8 +897,10 @@ def validate_record(item, body):
             value = None
         if not isinstance(value, str) or not value.strip():
             continue
-        supported = _actor_supported if actor else _date_text_supported
-        if not supported(value.strip()):
+        if actor:
+            if not _actor_supported(value.strip(), quote):
+                continue
+        elif not _date_text_supported(value.strip()):
             continue
         if _record_attribute_bound(quote, value, item['kind'], match,
                                    target_end - start, actor=actor):
