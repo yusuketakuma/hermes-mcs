@@ -8,8 +8,8 @@ subject unless a conflicting holder heads the value; its text is not reclassifie
 by the fact shape. Raw evidence/details and independently named items are preserved.
 
 Existing adversarial inputs remain. Positive counterparts name the patient-bound
-relationship explicitly. Corpus numeric acceptance remains unchanged for X9 to
-resolve; no score/baseline has been lowered. All data are fully synthetic.
+relationship explicitly. The frozen generation-11 score is checked separately from
+the approved subject policy on the same corpus. All data are fully synthetic.
 """
 import copy
 import json
@@ -649,9 +649,9 @@ def test_annotate_keeps_the_details_of_a_heading_item():
     assert out[0]["subject"] == "family" and out[0]["details"] == items[0]["details"]
 
 
-def _score(annotate):
+def _score(annotate, cases=CASES):
     scores = [extract_bench._score_case(case, {"patient_context": annotate(extract_context(case["body"]))})
-              for case in CASES]
+              for case in cases]
     return scores, extract_bench._aggregate(scores)["patient_context"], extract_bench._false_assertions(scores)
 
 
@@ -662,12 +662,23 @@ def _unannotated(items):
 
 
 def test_rule30_removes_the_corpus_wrong_assertion_and_keeps_recall():
-    scores, row, wrong = _score(lambda items: annotate_heading_subjects(_unannotated(items)))
+    # The frozen corpus forbade an unspecified holder here. On the same input,
+    # the current policy forbids asserting either the patient or the family.
+    cases = copy.deepcopy(CASES)
+    daughter = next(case for case in cases if case["id"] == "alg-family-heading")
+    labels = daughter["forbid"]["patient_context"]
+    assert [label["subject"] for label in labels] == ["patient", "unspecified"]
+    labels[1]["subject"] = "family"
+    scores, row, wrong = _score(lambda items: annotate_heading_subjects(_unannotated(items)), cases)
+    for subject in ("patient", "family"):
+        scored = extract_bench._score_case(daughter, {"patient_context": [
+            {**item, "subject": subject} for item in extract_context(daughter["body"])]})
+        assert scored["forbid_violations"]
     assert wrong["total"] == 0, [(s["id"], s["forbid_violations"]) for s in scores if s["forbid_violations"]]
     # extract_bench reports recall rounded to 3 places; 8 of 12 reads as 0.667.
     assert row["recall"] >= 0.667 and row["fp"] == 0
     assert (row["tp"], row["fn"]) == (8, 4)
-    # Without rule 30 the same corpus asserts the family's allergy as the patient's.
+    # Reproduce the frozen generation-11 measurement with its original labels.
     scores, before, wrong = _score(_unannotated)
     assert wrong["total"] == 1 and (before["tp"], before["fn"]) == (8, 4)
     assert [s["id"] for s in scores if s["forbid_violations"]] == ["alg-family-heading"]
@@ -679,9 +690,10 @@ def test_corpus_items_outside_the_rule_stay_unspecified():
         for item in annotate_heading_subjects(_unannotated(extract_context(case["body"]))):
             if item["subject"] != "unspecified":
                 named[case["id"]] = (item["category"], item["subject"])
-    # 本人の意向 is the patient's; 長女は under an allergy heading is the family's.
-    assert named == {"acp-done-heading": ("preferences", "patient"),
-                     "alg-family-heading": ("allergies", "family")}
+    assert named == {"acp-done-heading": ("preferences", "patient")}
+    daughter = next(case for case in CASES if case["id"] == "alg-family-heading")
+    items = annotate_heading_subjects(_unannotated(extract_context(daughter["body"])))
+    assert [(item["category"], item["subject"]) for item in items] == [("allergies", "unspecified")]
 
 
 # NOT EXECUTED during this slice: final combined verification owns target calls.

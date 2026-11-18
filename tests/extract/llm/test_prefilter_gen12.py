@@ -151,10 +151,10 @@ def test_real_thread_reply_is_not_an_empty_candidate(tmp_path, body):
     with closing(_ledger(tmp_path)) as ledger:
         _source(ledger, "完全合成の依頼です。明日の訪問をお願いします。", mid=10)
         _source(ledger, body, parent_id=10)
-        jobs, skipped, blocked = prepare._prepare_jobs(ledger,
-            [dict(ledger.db.execute("SELECT m.*,NULL AS qc_src,NULL AS thin_src,NULL AS human_src "
-                                   "FROM messages m WHERE message_id=1").fetchone())],
-            worker._resolved_llm(), True, allow_cloud=False, load_checkpoints=False)
+        rows, _ = worker._select_pending(ledger, 1, {1}, None, False)
+        assert [row["message_id"] for row in rows] == [1]
+        jobs, skipped, blocked = prepare._prepare_jobs(
+            ledger, rows, worker._resolved_llm(), True, allow_cloud=False, load_checkpoints=False)
         assert len(jobs) == 1 and skipped == blocked == 0
         assert "_prefilter_prior" not in jobs[0][0]
         assert not _rows(ledger, worker.KIND)
@@ -422,7 +422,7 @@ def test_shared_capture_refusal_precedes_any_auxiliary_or_empty_write(tmp_path, 
 
     monkeypatch.setattr(runner, "_capture_checkpoint_state", refused)
     with closing(_ledger(tmp_path)) as ledger:
-        _source(ledger, "本人に発熱があります。" if refusal == "promotion" else "ありがとうございます。")
+        _source(ledger, "父は昨日、咳がありました。父は現在も同じ咳が続いています。本人の血圧120/80です。" if refusal == "promotion" else "ありがとうございます。")
         result = worker.run_pending(ledger, limit=1, budget_s=30, allow_cloud=False)
         assert result["skipped"] == result["done"] == 0 and result["deferred"] == 1
         assert result["defer_reasons"]["quality_checkpoint_unverified"] == 1
@@ -519,7 +519,7 @@ def test_existing_nonprotected_prior_change_refuses_before_any_new_write(tmp_pat
             before = [dict(item) for item in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
             writes = ledger.db.total_changes
             assert prepare._settle_prefiltered(ledger, row, hints=hints) == "rejected"
-            assert row["_commit_reject_reason"] == "checkpoint"
+            assert row["_commit_reject_reason"] == "commit_checkpoint"
             assert ledger.db.total_changes == writes
             assert before == [dict(item) for item in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
             assert not _rows(ledger, "extract_v1") and not _rows(ledger, worker.UPGRADE_KIND)
@@ -560,7 +560,7 @@ def test_existing_nonprotected_prior_change_inside_auxiliary_write_rolls_back_al
         monkeypatch.setattr(prepare, "_ensure_v1", changed_auxiliary)
         try:
             assert prepare._settle_prefiltered(ledger, row, hints=hints) == "rejected"
-            assert row["_commit_reject_reason"] == "checkpoint" and called == [when]
+            assert row["_commit_reject_reason"] == "commit_checkpoint" and called == [when]
             assert ledger.db.total_changes > writes  # rollback must undo actual SQL writes
             assert before == [dict(item) for item in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
             assert not _rows(ledger, "extract_v1") and not _rows(ledger, worker.UPGRADE_KIND)
@@ -585,7 +585,7 @@ def test_sqlite_error_in_adoption_guard_refuses_without_auxiliary_write(tmp_path
         monkeypatch.setattr(prepare, "_prefilter_evidence_absent", unavailable)
         try:
             assert prepare._settle_prefiltered(ledger, row, hints=hints) == "rejected"
-            assert row["_commit_reject_reason"] == "superseded_guard" and ledger.db.total_changes == writes
+            assert row["_commit_reject_reason"] == "commit_superseded_guard" and ledger.db.total_changes == writes
             assert before == [dict(item) for item in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
         finally:
             extract_llm_errors._release(ledger, row, lease)
