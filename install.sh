@@ -684,9 +684,9 @@ hermes_admits_314() {
 }
 
 # Established installs never rebuild a runtime here; a runtime that cannot
-# start at all is moved aside by the operator once its services are stopped.
+# start at all keeps its environment and records for the person in charge.
 venv_unusable_hint() {
-    printf '%s' "実行環境の Python が起動しない場合は、常駐サービスが止まっていることを確認し、mv $(shell_quote "$VENV") $(shell_quote "$VENV.broken") で退避してから install.sh を再実行してください（退避した環境は削除しません）"
+    printf '%s' "実行環境の Python が起動しない場合は、$(shell_quote "$VENV") や記録を手で移動・削除せずそのまま保持し、担当者に復旧を依頼してください"
 }
 
 preserve_old_venv() {
