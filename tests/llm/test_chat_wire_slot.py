@@ -76,3 +76,63 @@ def test_busy_preferred_slot_uses_the_other_acquired_slot(tmp_path, monkeypatch)
         assert held == 1
         assert local_llm.chat("synthetic", timeout=0.5, extra_payload={"id_slot": 1}, request_fn=request)
     assert captured == [2]
+
+
+def _transport_failure(tmp_path, monkeypatch, *, scheduled, extra):
+    """POST dies in transport after send; count the /slots idle polls."""
+    monkeypatch.setattr(local_llm, "SLOT_COUNT", 3)
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_POLL_S", 0.01)
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_MAX_S", 0.05)
+    monkeypatch.setattr(llm_slot_schedule, "night", lambda: True)
+    monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, str(tmp_path / "turn.lock"))
+    monkeypatch.delenv(local_llm.SCHEDULE_ENV, raising=False)
+    if scheduled:
+        monkeypatch.setenv(local_llm.SCHEDULE_ENV, str(tmp_path / "sched"))
+        monkeypatch.setenv(local_llm.WORK_CLASS_ENV, "BACKLOG")
+    posts, gets = [], []
+
+    def request(endpoint, method, body, timeout, deadline):
+        if method == "POST":
+            posts.append(body["id_slot"])
+            raise TimeoutError("synthetic transport timeout")
+        gets.append(method)
+        return 200, {}, json.dumps([{"id": s, "is_processing": False}
+                                    for s in range(3)]).encode()
+
+    err = {}
+    assert local_llm.chat("synthetic", extra_payload=extra, request_fn=request,
+                          error_out=err) is None
+    assert err["kind"] == "transport"
+    return posts, gets
+
+
+@pytest.mark.parametrize("extra", [None, {"id_slot": "1"}])
+def test_unpinned_legacy_request_gets_slot_but_skips_idle_wait(tmp_path, monkeypatch, extra):
+    posts, gets = _transport_failure(tmp_path, monkeypatch, scheduled=False, extra=extra)
+    assert posts == [local_llm.request_slot()] and gets == []
+
+
+@pytest.mark.parametrize("scheduled, extra", [(False, {"id_slot": 0}),
+                                              (False, {"id_slot": 3}),
+                                              (True, None)])
+def test_pinned_or_scheduled_request_still_waits_for_idle(tmp_path, monkeypatch, scheduled, extra):
+    posts, gets = _transport_failure(tmp_path, monkeypatch, scheduled=scheduled, extra=extra)
+    expected = 0 if extra == {"id_slot": 0} else local_llm.request_slot()
+    assert len(posts) == 1 and type(posts[0]) is int and gets
+    if not scheduled:
+        assert posts == [expected]
+
+
+def test_busy_turn_returns_before_any_send(monkeypatch):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def busy(*_a, **_k):
+        yield None
+    monkeypatch.setattr(local_llm, "_request_turn", busy)
+    sent = []
+    err = {}
+    assert local_llm.chat("synthetic", request_fn=lambda *a: sent.append(a),
+                          error_out=err) is None
+    assert sent == [] and err == {"kind": "busy"}
