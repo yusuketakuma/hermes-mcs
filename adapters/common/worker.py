@@ -935,6 +935,7 @@ class DeliveryWorker:
                 claim, dead=error not in (
                     "denied_interactive_off",
                     "denied_restore_pending",
+                    "denied_restore_hold",
                     "denied_signal_notify_off"))
             return
         if not self._verify_grant(claim, result):

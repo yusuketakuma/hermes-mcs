@@ -565,9 +565,10 @@ def test_prior_remote_id_is_valid_only_as_a_body_chunk_post_id(part_id,
         spec_mod.validate(bad)
 
 
+@pytest.mark.parametrize("temporary_denial", ["denied_signal_notify_off", "denied_restore_hold"])
 def test_signal_notify_off_stays_claimable_and_revoked_stays_dead(
-        tmp_path, monkeypatch):
-    """denied_signal_notify_off drops the claim without a dead tombstone.
+        tmp_path, monkeypatch, temporary_denial):
+    """A temporary denial drops the claim without a dead tombstone.
 
     A worker restart between OFF and ON reloads the registry and still
     claims the same spec; the grant then records a real send. A
@@ -607,13 +608,13 @@ def test_signal_notify_off_stays_claimable_and_revoked_stays_dead(
         assert reloaded.claimed(REVOKED_ID) is None
 
         denied = await deny(
-            w, reg, DELIVERY_ID, "denied_signal_notify_off")
+            w, reg, DELIVERY_ID, temporary_denial)
         assert reg.claimed(DELIVERY_ID) is None
         assert not reg.is_dead(DELIVERY_ID)
         assert _spec_path(tmp_path, DELIVERY_ID).is_file()
         assert len(bot.channels[42].sent) == sent_before
         assert any(r.get("phase") == "denied"
-                   and r.get("error") == "denied_signal_notify_off"
+                   and r.get("error") == temporary_denial
                    and r.get("delivery_id") == DELIVERY_ID
                    for r in _journal_rows(tmp_path))
 

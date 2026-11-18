@@ -439,6 +439,14 @@ def apply_transport_begin_tx(ledger, req, cfg, now, specs, unlinks) -> dict:
     if notify_spool.restore_pending(notify_spool.data_root(ledger)) is not None:
         return {"granted": False, "error": "denied_restore_pending",
                 "command_id": cid}
+    # A per-delivery hold also blocks replay of a pre-restore grant. A rewind
+    # may have erased its render, so do not record a new attempt against it.
+    if db.execute(
+            "SELECT 1 FROM notification_restore_holds WHERE "
+            "released_at IS NULL AND delivery_id=? LIMIT 1",
+            (req["delivery_id"],)).fetchone():
+        return {"granted": False, "error": "denied_restore_hold",
+                "command_id": cid}
     old = db.execute(
         "SELECT * FROM notification_delivery_attempts "
         "WHERE begin_command_id=?", (cid,)).fetchone()
@@ -579,14 +587,6 @@ def _unlink_spec(ledger, delivery_id, transport) -> None:
 def _begin_check(db, req, cfg) -> str | None:
     if not notify_scope.interactive_enabled(cfg):
         return "interactive_off"
-    if db.execute(
-            "SELECT 1 FROM notification_restore_holds WHERE "
-            "released_at IS NULL AND delivery_id=? LIMIT 1",
-            (req["delivery_id"],)).fetchone():
-        # an unreleased restore hold freezes the delivery — deny before
-        # the render lookup so a render-less spec is never unlinked as
-        # unknown_delivery while it is still reconcile evidence
-        return "restore_hold"
     render = render_row(db, req["delivery_id"])
     if render is None:
         return "unknown_delivery"
