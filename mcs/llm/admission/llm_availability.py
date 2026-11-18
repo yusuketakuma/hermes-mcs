@@ -3,6 +3,8 @@ import fcntl
 import json
 import math
 import os
+import subprocess
+import sys
 import time
 from contextlib import contextmanager, suppress
 
@@ -202,3 +204,31 @@ def disk_floor_mb() -> float:
         return value if math.isfinite(value) and value >= 0 else 512.0
     except ValueError:
         return 512.0
+
+
+# kern.memorystatus_vm_pressure_level: 1 normal, 2 warn, 4 critical.
+_PRESSURE_CRITICAL = 4
+_pressure_critical_last = False
+
+
+def memory_pressure_critical() -> bool:
+    """True only while macOS reports critical memory pressure; an unreadable
+    level adds no deferral (the free-memory reserve still decides)."""
+    global _pressure_critical_last
+    if sys.platform != "darwin":
+        return False
+    try:
+        level = int(subprocess.run(
+            ["/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"],
+            capture_output=True, text=True, timeout=2, check=True,
+            env={"PATH": "/usr/bin:/bin:/usr/sbin", "LC_ALL": "C"}).stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    critical = level == _PRESSURE_CRITICAL
+    if critical != _pressure_critical_last:
+        # One stderr event per transition records why background work waits.
+        _pressure_critical_last = critical
+        print(json.dumps({"event": "memory_pressure_deferral" if critical else "memory_pressure_cleared",
+                          "reason": "memory_pressure_critical", "level": level, "pid": os.getpid()}),
+              file=sys.stderr, flush=True)
+    return critical

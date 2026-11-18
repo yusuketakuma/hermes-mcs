@@ -275,6 +275,9 @@ def memory_headroom():
     """Return free bytes above the foreground reserve, or None while memory is unobservable."""
     try:
         if sys.platform == "darwin":
+            import llm_availability
+            if llm_availability.memory_pressure_critical():
+                return -1
             env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C"}
             total = int(subprocess.run(["/usr/sbin/sysctl", "-n", "hw.memsize"], capture_output=True,
                                        text=True, timeout=2, check=True, env=env).stdout.strip())

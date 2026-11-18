@@ -117,6 +117,25 @@ def test_unknown_and_low_memory_do_not_spawn(monkeypatch):
     assert backlog.memory_workers(32) == 0
 
 
+@pytest.mark.parametrize("level", ["1", "2", "4"])
+def test_critical_kernel_pressure_closes_background_admission(monkeypatch, level):
+    import llm_availability
+
+    def fake_run(argv, **kwargs):
+        output = {"/usr/sbin/sysctl": level if argv[-1] == "kern.memorystatus_vm_pressure_level"
+                  else str(16 * 2**30), "/usr/bin/memory_pressure":
+                  "System-wide memory free percentage: 60%\n"}[argv[0]]
+        return subprocess.CompletedProcess(argv, 0, output + "\n", "")
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(llm_availability, "_pressure_critical_last", False)
+    critical = level == "4"
+    # Free memory alone would admit both the shared gate and new pool workers.
+    assert extract_llm_resident._context_memory_available() is not critical
+    assert (backlog.memory_workers(32) == 0) is critical
+
+
 @pytest.mark.parametrize("context_only", [False, True])
 def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch, context_only):
     import extract_llm
