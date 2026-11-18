@@ -1,0 +1,224 @@
+"""Synthetic-only patient chat scope, snapshot, cursor and HTTP privacy contracts."""
+from email.message import Message
+import hashlib
+from io import BytesIO
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+import ledger
+import local_chat_view
+import mcs_local_chat as chat
+import mcs_view
+
+
+@pytest.fixture
+def snapshot(tmp_path):
+    path = tmp_path / "ledger.db"
+    store = ledger.Ledger(str(path))
+    try:
+        with store.db:
+            for pid, name in ((1, "合成 花子"), (2, "非対象 太郎")):
+                store.db.execute("INSERT INTO patients(project_id,patient_name,fetch_state) VALUES(?,?,'incomplete')", (pid, name))
+            for mid in range(1, 124):
+                pid = 2 if mid == 123 else 1
+                parent = 1 if 61 <= mid <= 115 else None
+                store.db.execute("INSERT INTO messages(message_id,project_id,parent_id,sender_id,sender_name,"
+                                 "profession,organization,posted_at_ts,body_text,body_state,content_hash,reply_count) "
+                                 "VALUES(?,?,?,7,'合成 看護師','看護師','合成事業所',?,?,'full',?,?)",
+                                 (mid, pid, parent, mid // 2, f'合成記録 {mid} ﾛｷｿﾆﾝ <script>alert(1)</script>', f'{mid:064x}', 55 if mid == 1 else 0))
+            store.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=122")
+            store.db.execute("UPDATE messages SET posted_at_ts=NULL WHERE message_id=121")
+            store.db.execute("INSERT INTO attachments(message_id,name,state,url,local_path,error) VALUES"
+                             "(1,'合成資料.pdf','failed','https://private.invalid/signed','/private/file','download_failed'),"
+                             "(122,'削除済み資料.pdf','failed',NULL,NULL,'download_failed')")
+        yield ledger.publish_snapshot(str(path), str(tmp_path / "snapshots"))
+    finally:
+        store.close()
+
+
+def test_patients_scope_and_fold(snapshot):
+    view = mcs_view.View(snapshot)
+    try:
+        got = local_chat_view.patients(view, {1}, query="合成")
+        assert [item["project_id"] for item in got["items"]] == [1]
+        assert "非対象" not in json.dumps(got, ensure_ascii=False)
+        assert local_chat_view.patients(view, set())["items"] == []
+        assert len(local_chat_view.patients(view, None)["items"]) == 2
+    finally:
+        view.close()
+
+
+@pytest.mark.parametrize("kind", ["timeline", "search", "thread", "attachments", "evidence"])
+def test_every_detail_route_rejects_foreign_patient(snapshot, kind):
+    with pytest.raises(ValueError, match="project_not_allowed"):
+        chat.response(snapshot, {1}, kind, "project=2&message=123&q=合成")
+
+
+@pytest.mark.parametrize("kind", ["thread", "attachments", "evidence"])
+def test_message_must_belong_to_patient(snapshot, kind):
+    with pytest.raises(ValueError):
+        chat.response(snapshot, {1}, kind, "project=1&message=123")
+
+
+def test_timeline_pages_have_no_gaps_or_duplicates_and_no_replies(snapshot):
+    seen, cursor = [], None
+    while True:
+        query = "project=1" + ("&cursor=" + cursor if cursor else "")
+        page = chat.response(snapshot, {1}, "timeline", query)
+        seen.extend(row["message_id"] for row in page["items"])
+        assert all(row["parent_id"] is None for row in page["items"])
+        cursor = page["next_cursor"]
+        if not cursor:
+            break
+    assert len(seen) == len(set(seen)) == 67
+    assert seen[-1] == 121  # unknown posting time is not invented
+
+
+def test_search_includes_replies_and_normalizes_japanese(snapshot):
+    page = chat.response(snapshot, {1}, "search", "project=1&q=ロキソニン")
+    assert any(row["parent_id"] == 1 for row in page["items"])
+    assert all(row["project_id"] == 1 for row in page["items"])
+    assert all("body_html" not in row and "source_url" not in row for row in page["items"])
+
+
+def test_thread_paginates_and_attachment_detail_has_no_paths(snapshot):
+    first = chat.response(snapshot, {1}, "thread", "project=1&message=1")
+    second = chat.response(snapshot, {1}, "thread", "project=1&message=1&cursor=" + first["next_cursor"])
+    assert len(first["items"]) + len(second["items"]) == 55
+    assert not ({r["message_id"] for r in first["items"]} & {r["message_id"] for r in second["items"]})
+    files = chat.response(snapshot, {1}, "attachments", "project=1&message=1")
+    assert files["items"][0]["name"] == "合成資料.pdf"
+    assert files["items"][0]["state"] == "failed"
+    assert "private" not in json.dumps(files)
+
+
+def test_deleted_post_hides_retained_body_and_attachment(snapshot):
+    result = chat.response(snapshot, {1}, "evidence", "project=1&message=122")["message"]
+    assert result["body_text"] is None
+    assert result["summary_lines"] == result["patient_context"] == result["attachments"] == []
+    assert chat.response(snapshot, {1}, "attachments", "project=1&message=122")["items"] == []
+
+
+def test_shared_summary_and_stamp_projection(snapshot, monkeypatch):
+    monkeypatch.setattr(local_chat_view, "structured_lines", lambda db, mid, **kwargs: [f"合成要約 {mid}"])
+    result = chat.response(snapshot, {1}, "evidence", "project=1&message=1")["message"]
+    assert result["summary_lines"] == ["合成要約 1"]
+    assert result["stamp_line"] == "スタンプ 未取得"
+    assert result["profession"] == "看護師"
+
+
+def test_cursor_binds_query_patient_and_generation(snapshot):
+    page = chat.response(snapshot, None, "timeline", "project=1")
+    cursor = page["next_cursor"]
+    for route, query in (("timeline", "project=2"), ("search", "project=1&q=合成")):
+        with pytest.raises(ValueError, match="cursor_scope_or_generation_changed"):
+            chat.response(snapshot, None, route, query + "&cursor=" + cursor)
+    view = mcs_view.View(snapshot)
+    try:
+        view.meta["generation_id"] = "another-synthetic-generation"
+        with pytest.raises(ValueError, match="cursor_scope_or_generation_changed"):
+            local_chat_view.read(view, {1}, "timeline", 1, cursor=cursor)
+    finally:
+        view.close()
+
+
+def test_live_ledger_and_missing_snapshot_are_rejected(tmp_path):
+    path = tmp_path / "live.db"
+    store = ledger.Ledger(str(path))
+    store.close()
+    with pytest.raises(ValueError):
+        chat.response(path, None, "patients", "")
+    with pytest.raises(SystemExit) as error:
+        chat.main(["--snapshot", str(tmp_path / "missing.db"), "--all-patients"])
+    assert error.value.code == 2
+
+
+def test_read_only_and_no_configuration_or_network(snapshot, monkeypatch):
+    import mcs_util
+    monkeypatch.setattr(mcs_util, "load_config", lambda: pytest.fail("must not load local configuration"))
+    path = Path(snapshot)
+    before = hashlib.sha256(path.read_bytes()).digest()
+    for kind, query in (("patients", ""), ("timeline", "project=1"), ("evidence", "project=1&message=1"), ("attachments", "project=1&message=1")):
+        chat.response(snapshot, {1}, kind, query)
+    assert hashlib.sha256(path.read_bytes()).digest() == before
+
+
+def handler(path, headers=None):
+    obj = chat.ChatHandler.__new__(chat.ChatHandler)
+    obj.server = SimpleNamespace(server_port=8765, token="synthetic-capability", snapshot="unused", allowed={1})
+    obj.path = path
+    obj.headers = Message()
+    for name, value in (headers if headers is not None else [("Host", "127.0.0.1:8765")]):
+        obj.headers[name] = value
+    results = []
+    obj._send = lambda *args: results.append(args)
+    return obj, results
+
+
+@pytest.mark.parametrize("headers", [[], [("Host", "evil.invalid:8765")],
+    [("Host", "127.0.0.1:8765"), ("Host", "127.0.0.1:8765")],
+    [("Host", "127.0.0.1:8765"), ("Origin", "http://evil.invalid")],
+    [("Host", "127.0.0.1:8765"), ("Sec-Fetch-Site", "cross-site")],
+    [("Host", "127.0.0.1:8765"), ("Sec-Fetch-Site", "same-site")]])
+def test_http_rejects_rebinding_and_cross_site(headers):
+    obj, result = handler("/synthetic-capability/", headers)
+    obj.do_GET()
+    assert result[0][0] == 403
+
+
+@pytest.mark.parametrize("path", ["/", "/wrong/", "/synthetic-capability/../config.json", "/synthetic-capability/style.css/../app.js", "/synthetic-capability/あ"])
+def test_http_requires_capability_and_allowlisted_routes(path):
+    obj, result = handler(path)
+    obj.do_GET()
+    assert result[0][0] == 404
+
+
+def test_assets_are_static_and_patient_text_is_not_html():
+    obj, result = handler("/synthetic-capability/")
+    obj.do_GET()
+    assert result[0][0] == 200
+    assert b"synthetic" not in result[0][1]
+    js = (chat.ASSETS / "app.js").read_text()
+    assert "textContent" in js and "innerHTML" not in js
+    assert "localStorage" not in js and "sessionStorage" not in js
+
+
+def test_http_errors_do_not_echo_paths_queries_or_exception(monkeypatch):
+    obj, result = handler("/synthetic-capability/api/patients?q=private")
+    monkeypatch.setattr(chat, "response", lambda *args: (_ for _ in ()).throw(ValueError("private")))
+    obj.do_GET()
+    assert result == [(400, b'{"error": "bad_request"}', "application/json")]
+
+
+def test_headers_forbid_cache_external_resources_and_embedding():
+    obj, _ = handler("/")
+    headers = {}
+    obj.send_response = lambda status: None
+    obj.send_header = lambda key, value: headers.update({key: value})
+    obj.end_headers = lambda: None
+    obj.wfile = BytesIO()
+    chat.ChatHandler._send(obj, 200, b"synthetic")
+    assert headers["Cache-Control"] == "no-store"
+    assert headers["Referrer-Policy"] == "no-referrer"
+    assert headers["X-Frame-Options"] == "DENY"
+    assert "default-src 'none'" in headers["Content-Security-Policy"]
+    assert "frame-ancestors 'none'" in headers["Content-Security-Policy"]
+    assert not any("Access-Control" in key for key in headers)
+
+
+def test_server_is_loopback_only_and_capability_changes(monkeypatch):
+    addresses = []
+    monkeypatch.setattr(chat.HTTPServer, "__init__", lambda self, address, handler: addresses.append(address))
+    one, two = chat.ChatServer("synthetic", {1}), chat.ChatServer("synthetic", {1})
+    assert addresses == [("127.0.0.1", 0), ("127.0.0.1", 0)]
+    assert one.token != two.token and len(one.token) >= 40
+
+
+@pytest.mark.parametrize("args", [[], ["--project", "0"], ["--project", "-1"], ["--all-patients", "--port", "65536"]])
+def test_cli_requires_explicit_valid_scope(args):
+    with pytest.raises(SystemExit) as error:
+        chat.main(["--snapshot", "synthetic", *args])
+    assert error.value.code == 2
