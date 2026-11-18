@@ -359,10 +359,6 @@ def hash_apply_state(v):
     return _digest(dict(schema_version=VERSIONS['state'], state=release.validate_release_state(v)))
 
 
-def hash_apply_report(v, *, now_ms):
-    return _digest(validate_apply_control('report', v, now_ms=now_ms))
-
-
 def validate_apply_typed_payload(purpose, value, **options):
     if purpose == PURPOSES[1]:
         v = validate_apply_operation(value, **options)
