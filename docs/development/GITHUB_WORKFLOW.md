@@ -10,7 +10,7 @@
 | 全体の計画 | ラベル [`roadmap`](https://github.com/yusuketakuma/hermes-mcs/issues?q=is%3Aopen+label%3Aroadmap) の issue |
 | 自分（Yusukeさん）がやること | [`要オーナー対応`](https://github.com/yusuketakuma/hermes-mcs/issues?q=is%3Aopen+label%3A%E8%A6%81%E3%82%AA%E3%83%BC%E3%83%8A%E3%83%BC%E5%AF%BE%E5%BF%9C) |
 | 今すぐ出すもの | [`即時適用`](https://github.com/yusuketakuma/hermes-mcs/issues?q=is%3Aopen+label%3A%E5%8D%B3%E6%99%82%E9%81%A9%E7%94%A8) |
-| 次の版に入るもの | [`v1.1.3`](https://github.com/yusuketakuma/hermes-mcs/issues?q=is%3Aopen+label%3Av1.1.3)・[`v1.1.4`](https://github.com/yusuketakuma/hermes-mcs/issues?q=is%3Aopen+label%3Av1.1.4) |
+| 次の版に入るもの | [`v1.2.0`](https://github.com/yusuketakuma/hermes-mcs/issues?q=is%3Aopen+label%3Av1.2.0) |
 | Mac での作業が要るもの | [`要実機作業`](https://github.com/yusuketakuma/hermes-mcs/issues?q=is%3Aopen+label%3A%E8%A6%81%E5%AE%9F%E6%A9%9F%E4%BD%9C%E6%A5%AD) |
 | まだ振り分けていない issue | [`要トリアージ`](https://github.com/yusuketakuma/hermes-mcs/issues?q=is%3Aopen+label%3A%E8%A6%81%E3%83%88%E3%83%AA%E3%82%A2%E3%83%BC%E3%82%B8) |
 
@@ -20,7 +20,7 @@
 
 | 軸 | ラベル | 付け方 |
 |---|---|---|
-| **版**（どの版で出すか） | `即時適用`・`v1.1.3`・`v1.1.4`・`版未定` | 人が1つだけ付ける。版が決まったら付け替える |
+| **版**（どの版で出すか） | `即時適用`・`v1.2.0`・`版未定` | 人が1つだけ付ける。版が決まったら付け替える |
 | **対応**（誰が何をするか） | `要オーナー対応`・`要実機作業`・`要再起動`・`要トリアージ`・`安全ゲート` | 人が必要なだけ付ける。`安全ゲート` は `ci/gates.py` などの変更で自動でも付く。自動では外さず、確認後に人が解除する |
 | **領域**（どこを変えるか） | `収集`・`抽出`・`患者コンテキスト`・`意味解析`・`LLM`・`通知`・`スタンプ`・`保存基盤`・`運用・導入`・`文書`・`CI・開発` | PR は変更したファイルから自動（[`.github/labeler.yml`](../../.github/labeler.yml)）。issue は人が付ける |
 | **大きさ** | `size: XS`〜`size: XL` | PR の変更行数から自動（50・200・500・1000行で区切る） |
@@ -30,7 +30,7 @@
 ### 版のラベルの意味
 
 - `即時適用`: 期限切れや停止を避けるため、通常の版を待たずに出すもの。例: クラウド料金表の再確認。
-- `v1.1.3`・`v1.1.4`: その版に入れると決めたもの。版のラベルと同名のマイルストーンもあり、完了率を見られます。ただしラベルとマイルストーンの関連付けは自動ではありません。版が決まった issue・PR には両方を個別に設定し、版の変更時も両方を見直します。
+- `v1.2.0`: その版に入れると決めたもの。版のラベルと同名のマイルストーンもあり、完了率を見られます。ただしラベルとマイルストーンの関連付けは自動ではありません。版が決まった issue・PR には両方を個別に設定し、版の変更時も両方を見直します。
 - `版未定`: 計画には入っているが、版はまだ決めていないもの。
 
 ラベルを付けても merge・リリース・配備の承認にはなりません。それらは今までどおり Yusukeさんが明示した範囲だけ行います。
@@ -50,7 +50,7 @@ main に1本入るたびに、開いているすべての PR へ main が取り�
 細かい PR を毎回 main に入れるより、グループでまとめて入れるほうが待ち時間も CI も減ります。
 
 - **グループの単位**: 1つの目的で、ふつう1つの領域に収まる作業です。例: 通知UIの残り、患者コンテキストの再構成、自動化基盤。
-  版のラベル（`v1.1.3` など）に合わせて区切ると、リリース単位とも揃います。
+  版のラベル（`v1.2.0` など）に合わせて区切ると、リリース単位とも揃います。
 - **ブランチと worktree**: グループごとに `group/<名前>`（英小文字とハイフン。例: `group/notify-ui`）を `origin/main` から作り、
   専用の worktree（Mac は `~/.mcs-wt/group-<名前>`）で作業します。開始と同時に、そのブランチから main への PR を1本開きます（下書きにしない）。
   本文の先頭にグループの目的と、入れる作業のチェックリストを書きます。この PR があると、main の更新が `main-sync` で自動的に取り込まれ、CI も回ります。
@@ -84,7 +84,7 @@ main に1本入るたびに、開いているすべての PR へ main が取り�
 
 `.github/labels.json` を編集して main に入れると、[`labels-sync`](../../.github/workflows/labels-sync.yml) が GitHub のラベルの色・説明を揃え、無いマイルストーンを作ります。
 定義から外したラベルとマイルストーンは自動では消しません（付いている issue を失わないため）。不要になったら GitHub の画面で消します。
-次の版（例: v1.1.5）を足すときは、`labels` と `milestones` の両方に1行ずつ足します。
+次の版（例: v1.2.1）を足すときは、`labels` と `milestones` の両方に1行ずつ足します。
 
 自動付与のワークフロー（[`labeler`](../../.github/workflows/labeler.yml)）は `pull_request_target` で動き、base 側の設定だけを読みます。PR のコードは checkout も実行もしません。
 

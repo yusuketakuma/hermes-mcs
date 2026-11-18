@@ -258,24 +258,59 @@ def _cloud_origin_for_checkpoint(provider, prompt, answer_text, *, finish_reason
     return provider.dispatch(read, result=True)
 
 
-def _cloud_mode(ledger, cfg, route, project_id):
+def _cloud_route_state(cfg, route, project_id):
+    """``(mode, stop)``: the mode a unit runs under and, when that is off, the check that decided it."""
     if not cloud_policy.route_open(route, cfg if isinstance(cfg, dict) else {}):
         # A closed send route can never need provider settings — resolving
         # them here would read provider keys for work that cannot send.
-        return "off"
+        return "off", "route_closed"
     settings = cloud_inference.resolve_cloud_settings(cfg)
     if not cloud_policy.eligible(settings, route, project_id):
-        return "off"
+        return "off", "scope"
     mode = settings["mode"]
     purpose = "patient_context" if route == "patient_context" else "backlog"
     selection, errors = cloud_policy.resolve_profile(cfg, route=route, purpose=purpose, root=HOME)
     if errors or selection is None:
-        return "off"
+        return "off", "profile_invalid"
     # Quota/circuit denial is decided after recovering/checking this input's
     # prior attempt. Turning the route off here could send an unknown unit locally.
     if mode in ("on", "shadow") and not cloud_policy.selected_key(HOME, cfg):
-        return "off"
-    return mode
+        # The key's problem is named now, with the mode: a key that the next read finds usable
+        # was a temporary read failure, which waits, never an unknown stop.
+        return "off", "key:" + (cloud_policy.selected_key_problem(HOME, cfg) or "env_file_unreadable")
+    return mode, None
+
+
+def _cloud_mode(ledger, cfg, route, project_id):
+    return _cloud_route_state(cfg, route, project_id)[0]
+
+
+def _off_code(cfg, stop, route, project_id):
+    """The ``cloud_send_admission.classify_refusal`` code of one :func:`_cloud_route_state` stop."""
+    if stop == "scope":
+        return cloud_policy.refusal_code(cfg if isinstance(cfg, dict) else {}, "scope", model=None, root=HOME,
+                                         route=route, project_id=project_id)
+    if type(stop) is str and stop.startswith("key:"):
+        return stop[len("key:"):]
+    return stop
+
+
+def cloud_route_mode(ledger, cfg, route, project_id):
+    """``(mode, off_reason)`` from one reading of the route, the scope and the key.
+
+    ``off_reason`` is :func:`cloud_off_reason` of that same reading, so a key read that fails
+    and then succeeds cannot pair an off mode with no reason. None unless the mode is off."""
+    mode, stop = _cloud_route_state(cfg, route, project_id)
+    return mode, (_off_code(cfg, stop, route, project_id) if mode == "off" else None)
+
+
+def cloud_off_reason(ledger, cfg, route, project_id):
+    """Why :func:`_cloud_mode` answers off, as a code for ``cloud_send_admission.classify_refusal``.
+
+    An explicit off, the patient's scope, a provider the facility review has not approved and a
+    closed route are named as such; a key that cannot be used is named by its own problem. None
+    while this configuration leaves the cloud available, which a caller reads as unknown."""
+    return _off_code(cfg, _cloud_route_state(cfg, route, project_id)[1], route, project_id)
 
 
 def _comparison_fact(source, kind, assertion, evidence=None, *, evidence_span=None):

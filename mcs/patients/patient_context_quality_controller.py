@@ -17,7 +17,8 @@ import patient_context_refresh_state
 
 
 def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim, current,
-                              deadline, admit, facts, assessment, threshold, quality_state, *, source_keys=None):
+                              deadline, admit, facts, assessment, threshold, quality_state, *, cloud_mode,
+                              source_keys=None):
     """Stage one repaired selection; the owner must re-audit it before publication.
 
     The caller owns a live patient claim and source-bound quality identity. A
@@ -140,9 +141,10 @@ def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim
         if patient_context_quality_receipts._profiled_summary_repair_exists(ledger.db, pid, identity['input_key']):
             return "held", None
         return "candidate", {"fact_ids": ids, "identity": next_identity}
+    if cloud_mode != "on":
+        return "cloud_off", None
     if (len(prompt) > context_plan.MAX_PROMPT_CHARS or patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.CALL_SECONDS + patient_context_refresh_state.COMMIT_MARGIN > deadline
-            or not admit() or not current()
-            or extract_llm._cloud_mode(ledger, cfg, "patient_context", pid) != "on"):
+            or not admit() or not current()):
         return "deferred", None
     # Check an unspent repair's exact bound before consuming its one-use
     # allowance. Spent attempts must still reach shared response recovery.
@@ -270,7 +272,8 @@ _SOURCE_REPAIR_HELD_CODES = frozenset({
 })
 
 
-def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, current, deadline, admit, threshold):
+def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, current, deadline, admit, threshold,
+                                *, cloud_mode):
     """Advance one reserved source repair unit; no saved slot may dispatch again."""
     import extract_llm
     import cloud_client
@@ -349,14 +352,16 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
     if header and header['phase'] == 'sealing':
         return _source_repair_seal(ledger, pid, source, binding, protected, header, identity, claim, current, deadline)
     saved = {key:header[key] for key in ('cursor','split') if header and key in header}
-    chunks, cursor, saved, _, _ = context_plan.scan_plan(source, saved)
+    chunks, cursor, saved, _ = context_plan.scan_plan(source, saved)
     span = [sum(map(len, chunks[:cursor])), sum(map(len, chunks[:cursor + 1]))]
     unit_key = patient_context_refresh_state._digest(['source-repair-unit/1', repair_key, span, saved.get('split', 0), PLAN_VERSION])
     if reserved_units and (not header or reserved_units[0]['meta']['unit_key'] != unit_key
                            or reserved_units[0]['chunk_span'] != span):
         return 'unknown', None
-    if (patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.CALL_SECONDS + patient_context_refresh_state.COMMIT_MARGIN > deadline or not admit()
-            or extract_llm._cloud_mode(ledger, cfg, 'patient_context', pid) != 'on'):
+    if cloud_mode != 'on':
+        return 'cloud_off', None
+    if (patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.CALL_SECONDS + patient_context_refresh_state.COMMIT_MARGIN > deadline
+            or not admit()):
         return 'deferred', None
     slot = [reserved_units[0]['artifact_id'] if reserved_units else None]
     def on_reserved(owner, reservation, artifact_id):
@@ -566,8 +571,12 @@ def _source_repair_seal(ledger, pid, source, binding, protected, header, identit
     return 'source_candidate', ref
 
 
-def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, base_doc=None, base_meta=None, source=None, source_candidate_ref=None):
-    """Audit one bounded page of the current candidate outside DB and run locks."""
+def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_mode, base_doc=None, base_meta=None,
+                  source=None, source_candidate_ref=None):
+    """Audit one bounded page of the current candidate outside DB and run locks.
+
+    ``cloud_mode`` is the cloud mode the caller's unit runs under; a repair, which only the cloud
+    makes, is sent only while it is ``on`` and is ``cloud_off`` otherwise."""
     import extract_llm
     import cloud_policy
     import cloud_client
@@ -875,12 +884,13 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, base_do
                 if source_candidate_ref is not None:
                     return "held", identity
                 return _source_quality_repair_step(ledger, pid, cfg, workday_id, initial,
-                    claim, current, deadline, admit, scfg["match_threshold"])
+                    claim, current, deadline, admit, scfg["match_threshold"], cloud_mode=cloud_mode)
             if not current():
                 return "deferred", None
             repair_status, candidate = _quality_repair_candidate(
                 ledger, pid, cfg, workday_id, doc, identity, claim, current, deadline, admit,
-                initial["facts"], assessment, scfg["match_threshold"], initial["state"], source_keys=source_keys)
+                initial["facts"], assessment, scfg["match_threshold"], initial["state"],
+                cloud_mode=cloud_mode, source_keys=source_keys)
             if repair_status == "candidate":
                 return "candidate", {**candidate, "facts": initial["facts"], "state": initial["state"]}
             return repair_status, identity

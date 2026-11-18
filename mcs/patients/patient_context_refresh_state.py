@@ -113,6 +113,16 @@ def _digest(value):
                                      separators=(",", ":")).encode()).hexdigest()
 
 
+def _digest_iter(items):
+    """_digest(list(items)) without holding the items: same bytes, one item at a time."""
+    h = hashlib.sha256(b"[")
+    for n, item in enumerate(items):
+        h.update(((b"," if n else b"") + json.dumps(item, sort_keys=True, ensure_ascii=False,
+                                                    separators=(",", ":")).encode()))
+    h.update(b"]")
+    return h.hexdigest()
+
+
 _facts_sig = context_artifacts.facts_signature
 
 
@@ -204,6 +214,23 @@ def _replace(ledger, kind, pid, content, meta, mid=None, *, write_count=None):
             raise ValueError("patient_context_source_adoption_changed")
         write_count[0] += deleted.rowcount + 1
     return artifact_id
+
+
+def _retire_cloud_scan_tx(ledger, pid, mid, source_key, source_sig):
+    """Take one source input's cloud scan and its units out of every selection.
+
+    Local work replaced their paid requests, so their receipts can never verify again. The
+    rows stay as invalidated history, like the scan rows of a source that changed."""
+    if not ledger.db.in_transaction:
+        raise RuntimeError("patient_context_source_transaction_required")
+    ledger.db.execute(
+        "UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true')) "
+        "WHERE kind IN (?,?) AND project_id=? AND message_id IS ? AND "
+        + current_meta_pred("meta", target=CURRENT_VERSION)
+        + " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.source_key') IS ? "
+        "AND json_extract(meta,'$.source_sig') IS ? AND json_type(meta,'$.provider')='object' "
+        "AND json_extract(meta,'$.invalidated') IS NOT 1 END",
+        (SCAN, CHUNK, pid, mid or None, source_key, source_sig))
 
 
 def _save_source_chunk_tx(ledger, pid, mid, source_key, chunk_span, facts, meta):
@@ -321,7 +348,10 @@ def _sources_intact(sources):
 
 
 def _cloud_input_binding(db, pid, snapshot):
-    """Bind paid-response adoption to original occurrences as well as the input contract."""
+    """Bind paid-response adoption to original occurrences as well as the input contract.
+
+    This is the overview's binding: its input is every source of the patient. A scan binds to
+    its own source instead (:func:`_cloud_scan_binding`)."""
     pairs = [(pid, source['message_id']) for source in snapshot['sources'] if source['source'] == 'chat']
     bindings = []
     for offset in range(0, len(pairs), 64):
@@ -331,9 +361,19 @@ def _cloud_input_binding(db, pid, snapshot):
             bindings.append(dependency_loss.source_binding(db, pid, 0, source_key=context_plan.source_key(source)))
     if any(not valid_hash(binding) for binding in bindings):
         raise ValueError('patient_context_cloud_source_changed')
-    # The scan-side signature: a summary-only code change keeps paid scan units.
+    # Signed without the summary contract: a summary-only code change keeps this binding.
     return _digest([snapshot['scan_source_sig'], snapshot['contract'], snapshot['route']['provider'], bindings,
                     [(context_plan.source_key(s), s.get('first_seen')) for s in snapshot['sources']]])
+
+
+def _cloud_scan_binding(source_sig, contract, provider, occurrence):
+    """Bind one source's paid scan answers to that source's own input.
+
+    A scan asks the cloud about one source, so the patient's other sources are no part of what
+    its answer depends on: the source signature, the scan contract, the provider and the
+    original occurrence are. The chunk span needs no place here: every scan request carries its
+    own span, and an answer is taken up only for the exact request."""
+    return _digest(["scan", source_sig, contract, provider, occurrence])
 
 
 route_accepts = context_artifacts.route_accepts
@@ -382,22 +422,29 @@ def _comparison_context(value, sources, *, facts=None, prefix_ids=()):
 
 def _scan_sig(db, pid, *, source_keys=None) -> str:
     """Digest of the patient's per-source scan rows, read at the caller's observation point."""
-    rows = [tuple(r) for r in db.execute(
-        "SELECT message_id,content,meta FROM artifacts WHERE kind IN (?,?) AND project_id=? AND "
-        + current_meta_pred("meta", target=CURRENT_VERSION) + " ORDER BY artifact_id",
-        (SCAN, CHUNK, pid))]
-    if source_keys is not None:
-        selected = set(source_keys)
-        rows = [row for row in rows if loads_dict(row[2]) is None
-                or (loads_dict(row[2]) or {}).get('source_key', row[0]) in selected]
-    keys = {(loads_dict(content) or {}).get("accepted_candidate_ref", {}).get("repair_input_key")
-            for mid, content, meta in rows if isinstance((loads_dict(content) or {}).get("accepted_candidate_ref"), dict)
-            and valid_hash((loads_dict(content) or {})["accepted_candidate_ref"].get("repair_input_key"))}
-    for key in sorted(keys):
-        rows.extend(tuple(row) for row in db.execute("SELECT message_id,content,meta FROM artifacts WHERE kind=? "
-            "AND project_id=? AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.repair_input_key') END=? "
-            "ORDER BY artifact_id", (SOURCE_REPAIR_CANDIDATE, pid, key)))
-    return _digest(rows)
+    selected = None if source_keys is None else set(source_keys)
+    keys = set()
+
+    def rows():
+        # One decode per row; rows stream into the digest instead of being held (digest input is unchanged).
+        for row in db.execute(
+                "SELECT message_id,content,meta FROM artifacts WHERE kind IN (?,?) AND project_id=? AND "
+                + current_meta_pred("meta", target=CURRENT_VERSION) + " ORDER BY artifact_id", (SCAN, CHUNK, pid)):
+            row = tuple(row)
+            if selected is not None:
+                meta = loads_dict(row[2])
+                if meta is not None and meta.get('source_key', row[0]) not in selected:
+                    continue
+            ref = (loads_dict(row[1]) or {}).get("accepted_candidate_ref")
+            if isinstance(ref, dict) and valid_hash(ref.get("repair_input_key")):
+                keys.add(ref["repair_input_key"])
+            yield row
+        for key in sorted(keys):
+            for row in db.execute("SELECT message_id,content,meta FROM artifacts WHERE kind=? "
+                    "AND project_id=? AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.repair_input_key') END=? "
+                    "ORDER BY artifact_id", (SOURCE_REPAIR_CANDIDATE, pid, key)):
+                yield tuple(row)
+    return _digest_iter(rows())
 
 
 def _out_of_scope(snapshot) -> bool:

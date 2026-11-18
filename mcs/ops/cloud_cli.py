@@ -309,14 +309,8 @@ def _route_counts(db, cfg, settings, deadline):
         for count, row in enumerate(rows, 1):
             _checkpoint(deadline, count)
             item = out["patient_context"]
-            try:
-                pending = context.pending_estimate(db, row["project_id"], cfg, now=time.time(), route=context_route)
-            except ValueError as error:
-                if error.args != ("patient_context_source_scope_invalid",):
-                    raise
-                # One unreadable stored scope is neither done work nor a reason to stop the whole plan.
-                item["invalid_rows"] += 1
-                continue
+            pending = context.pending_estimate(db, row["project_id"], cfg, now=time.time(), route=context_route)
+            item["invalid_rows"] += pending["invalid"]
             item["targets"] += pending["targets"]
             item["input_chars"] += pending["input_chars"]
             basic = pending["summary_units"] + pending["scan_sources"]

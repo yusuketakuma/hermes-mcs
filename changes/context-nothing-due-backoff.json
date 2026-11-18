@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "患者コンテキストの走査が全患者を確認して処理する対象がなかったとき、60秒待つ",
+  "summary": "全患者を1周回で確認し、処理待ちも待機もなかった周回は、専用の理由 patient_context_nothing_due で返し、次の周回まで60秒待ちます。一部の患者だけ確認した周回の間隔は変わりません。",
+  "upgrade": "追加操作は不要です。Hermes plugin ではなく常駐 worker とレーンの変更のため、反映には常駐処理の再起動が必要です。患者コンテキストの処理内容・順序・公開条件は変更していません。",
+  "details": [
+    "patient_context_refresh._run_due_unit は、走査が全患者を確認し（covered）、選択・待機・中断・読み飛ばしのいずれもなかった周回を、理由 patient_context_nothing_due 付きの complete で返します。確認していない患者が残る周回は、未確認の患者に処理待ちがあり得るため、従来どおり patient_context_scan_incomplete で5秒間隔のまま次の患者へ進みます。",
+    "cloud_backlog._context_retry_delay は、この理由でクラウド worker とローカルのレーンの双方を60秒待たせます（共通の経路）。周回の記録では既知の理由として数えます。",
+    "走査位置は候補の確認より前に書く既存の公平性の仕様を維持しています。9人以上の患者では1周回が複数の周回にまたがるため、処理する対象がない間の走査位置の書込みの頻度は今回は変えていません（別途の判断事項）。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_refresh.py",
+    "mcs/llm/cloud_backlog.py",
+    "tests/patients/test_context_scan_integration.py"
+  ]
+}
