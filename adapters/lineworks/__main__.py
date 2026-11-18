@@ -183,15 +183,25 @@ async def serve(root, port):
     stopping = asyncio.Event()
     loop = asyncio.get_running_loop()
     registered_signals = []
+    worker_stopped = False
+
+    def stop_worker():
+        nonlocal worker_stopped
+        stopping.set()
+        if not worker_stopped:
+            worker_stopped = True
+            worker.stop()
+
     try:
         for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, stopping.set)
+            # The worker's retry gate must see a stop even while a callback DM waits.
+            loop.add_signal_handler(sig, stop_worker)
             registered_signals.append(sig)
         reg.reload()
         with reg.batch():
             await worker.reconcile()
         inbox = CallbackInbox(Path(dirs["state"]) / "callbacks", scope, bot_secret)
-        actions = Actions(scope, dirs, reg, sender, _log)
+        actions = Actions(scope, dirs, reg, sender, _log, stopping.is_set)
         server = callback_server(inbox, port=port)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -213,6 +223,8 @@ async def serve(root, port):
                 try:
                     inbox.expire()
                     for pending in inbox.pending():
+                        if stopping.is_set():
+                            break  # untaken callbacks stay queued for the next start
                         working, event = inbox.take(pending)
                         try:
                             await actions.handle(event)
@@ -241,31 +253,33 @@ async def serve(root, port):
             except asyncio.TimeoutError:
                 pass
     finally:
-        worker.stop()
         try:
-            if delivery_task is not None:
-                try:
-                    await delivery_task
-                except Exception as exc:
-                    _log("tick_failed", error=type(exc).__name__)
+            stop_worker()
         finally:
             try:
-                if server:
+                if delivery_task is not None:
                     try:
-                        if server_started:
-                            await asyncio.to_thread(server.shutdown)
-                    finally:
-                        server.server_close()
+                        await delivery_task
+                    except Exception as exc:
+                        _log("tick_failed", error=type(exc).__name__)
             finally:
                 try:
-                    if thread and server_started:
-                        thread.join(timeout=5)
+                    if server:
+                        try:
+                            if server_started:
+                                await asyncio.to_thread(server.shutdown)
+                        finally:
+                            server.server_close()
                 finally:
                     try:
-                        worker.release_scope_lock()
+                        if thread and server_started:
+                            thread.join(timeout=5)
                     finally:
-                        for sig in registered_signals:
-                            loop.remove_signal_handler(sig)
+                        try:
+                            worker.release_scope_lock()
+                        finally:
+                            for sig in registered_signals:
+                                loop.remove_signal_handler(sig)
 
 
 def _wait_api_lock(root):
