@@ -507,20 +507,30 @@ ADHERENCE_TERMINAL = ("管理は出来ない", "管理はできない",
 # ません covers 「残薬ありません」 (the pattern consumes the あり);
 # an adverb may sit before the negation: 「飲み忘れは特にない」「残薬が全くない」;
 # く covers the adjective stem 「服薬管理が難し」+「くない/くありません」;
-# the lookahead keeps double negations and worry (「ないわけじゃない」「なくはない」
-# 「ないとは言えない」「ないはずがない」「ないか心配」) as concerns; the
-# とは-branch requires a negative ending so 「とは言えます」 stays a plain
-# negation, and か心配 accepts 「かと」 while a negated worry
-# (「心配していません」) does not keep the concern
+# the lookahead keeps double negations, uncertainty tails and worry
+# (「ないわけじゃない」「なくはない」「ないとは言えない」「ないはずがない」
+# 「ないか心配」「ないと断言できない」) as concerns; the と-branches require
+# a negative ending so 「とは言えます」「と断言できる」 stay plain negations;
+# か心配 accepts 「かと」, a particle before the negation
+# (「心配はしていません」) and a negated worry proposition
+# (「心配しているわけではありません」), while worry double negations
+# (「心配しないわけではありません」) still keep the concern
 _NEGATE_RE = re.compile(
     r"[はがも、。\s]*(?:(?:特に|全く|ほとんど|あまり|今のところ)[は、\s]*)?"
     r"(?:く|してい|てい|て)?(ない|なし|ありません|なく|ません)"
     r"(?!\s*(?:(?:わけ|訳|こと|事)(?:では|でも|じゃ|は|が|も)?(?:ない|ありません|なく)"
-    r"|は(?:ない|ありません)|とは(?:言え|いえ|限ら|限り|思え)(?:ない|ません|ぬ|ん)"
+    r"|は(?:ない|ありません)"
+    r"|と(?:は)?(?:言え|いえ|限ら|限り|思え)(?:ない|ません|ぬ|ん)"
+    r"|と(?:は)?(?:(?:断言|断定)でき|言い切れ)(?:ない|ません|ぬ|ん)"
     r"|はず(?:が|は)?(?:ない|ありません)"
-    r"|か(?:と)?心配(?!\s*(?:していません|していない|してません|しません|しない"
-    r"|はありません|はない|もありません|もない|ではありません|ではない"
-    r"|じゃありません|じゃない|でありません|でない|ありません|ぬ))))")
+    r"|か(?:と)?心配(?!\s*(?:"
+    r"(?:は|も)?(?:している|する|した)"
+    r"(?:(?:わけ|訳)(?:では|でも|じゃ|は|が|も)?|はず(?:が|は)?)(?:ありません|ない|ぬ)"
+    r"|(?:は|も)?(?:(?:で(?:は|も)?|じゃ)?(?:ありません|ない|ぬ)"
+    r"|(?:していません|していない|してません|しません|しない))"
+    r"(?!\s*(?:(?:わけ|訳|こと|事)(?:では|でも|じゃ|は|が|も)?|はず(?:が|は)?)"
+    r"(?:ありません|ない|ぬ|ん))"
+    r"))))")
 
 
 def _adherence_phrases(text, *, patient_name=None):
