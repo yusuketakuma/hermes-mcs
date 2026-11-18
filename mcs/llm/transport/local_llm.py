@@ -165,6 +165,23 @@ def request_slot() -> int:
     return BACKGROUND_SLOT
 
 
+def _env_slot() -> int | None:
+    """The ``MCS_LLM_SLOT`` override when it names a deployed slot, else
+    ``None`` — the env branch of ``request_slot`` without the scope."""
+    v = os.environ.get("MCS_LLM_SLOT")
+    if v is None:
+        return None
+    digits = v.strip()
+    if digits and digits.isascii() and digits.isdecimal():
+        try:
+            slot = int(digits)
+        except ValueError:
+            return None
+        if 0 <= slot < SLOT_COUNT:
+            return slot
+    return None
+
+
 def _turn_path():
     scoped = _BACKGROUND_SCOPE.get()
     return scoped[1] if scoped is not None else os.environ.get(TURN_LOCK_ENV)
@@ -717,9 +734,12 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
     # a reaped worker, so a slow response cannot extend the deadline
     send = request_fn or bounded_request
     selected_slot = body.get("id_slot", request_slot())
-    # Only a caller-pinned or scheduler-chosen slot holds the turn after a
-    # transport failure; an unpinned legacy request releases it at once.
-    wait_for_idle = scheduling_enabled() or type(body.get("id_slot")) is int
+    # Only an explicitly chosen slot — caller payload, scheduler path,
+    # scoped or env override — holds the turn after a transport failure;
+    # a request that fell back to the default slot releases it at once.
+    wait_for_idle = (scheduling_enabled() or type(body.get("id_slot")) is int
+                     or _BACKGROUND_SCOPE.get() is not None
+                     or _env_slot() is not None)
     if type(selected_slot) is not int or not 0 <= selected_slot < SLOT_COUNT:
         selected_slot = request_slot()
     slot_deadline = (time.monotonic() + timeout
