@@ -34,13 +34,13 @@ LONG = ''.join(f'本人は合成施設{index}で生活しています。' for in
 _USAGE = "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id"
 
 
-def _answer(payload):
+def _answer(payload, model):
     if 'source' in payload:
         answer = {'patient_context': [{'category': 'living', 'text': payload['source'],
             'evidence': payload['source'], 'subject': 'unspecified', 'details': []}]}
     else:
         answer = {'fact_ids': [item['id'] for item in payload['reports']]}
-    response = {'model': anthropic_client.MODEL, 'stop_reason': 'end_turn',
+    response = {'model': model, 'stop_reason': 'end_turn',
         'content': [{'type': 'text', 'text': json.dumps(answer)}],
         'usage': {'input_tokens': 10, 'output_tokens': 2}}
     return 200, {'Request-Id': 'synthetic-stop'}, json.dumps(response).encode()
@@ -59,7 +59,7 @@ def _wire(monkeypatch, script):
             raise outcome
         if isinstance(outcome, int):
             return outcome, {}, b'{"error":{"type":"synthetic_rejection"}}'
-        return outcome if outcome is not None else _answer(payload)
+        return outcome if outcome is not None else _answer(payload, body['model'])
 
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', request)
     monkeypatch.setattr(cloud_client, 'time', cloud_policy.time)
@@ -207,6 +207,8 @@ def test_unknown_result_after_send_goes_local_once(runtime, real_cloud, monkeypa
     cfg, _ = real_cloud
     seed(ledger, body=BODY)
 
+    model = state._route(cfg, 1)['provider']['model']
+
     def script(index, payload, limit):
         if index:
             return None
@@ -216,7 +218,7 @@ def test_unknown_result_after_send_goes_local_once(runtime, real_cloud, monkeypa
             return TimeoutError('synthetic timeout')
         if failure == 'too_large':
             return 200, {}, b'x' * (limit + 1)
-        return 200, {}, json.dumps({'model': anthropic_client.MODEL, 'stop_reason': 'end_turn',
+        return 200, {}, json.dumps({'model': model, 'stop_reason': 'end_turn',
             'content': [{'type': 'text', 'text': '{"patient_context":[]}'}]}).encode()
     sent = _wire(monkeypatch, script)
     first = step(runtime, cfg=cfg)
@@ -664,7 +666,7 @@ def test_young_missing_result_defers_and_stale_goes_local_without_adopting_a_lat
     assert first['status'] == 'progressed' and _local_sources(local_calls) == [sent[0]]
     assert _dispositions(ledger) == [(reservation['reservation_id'], 'superseded_local')]
     # The answer arrives after all: it settles the reservation and is never taken up.
-    status, _, raw = _answer(sent[0])
+    status, _, raw = _answer(sent[0], reservation['model'])
     text = json.loads(raw)['content'][0]['text']
     cloud_policy.record_result(ledger, reservation, {
         'model': reservation['model'], 'request_fp': reservation['request_fp'],
@@ -1062,18 +1064,20 @@ def test_patient_taken_out_of_the_cloud_scope_rebuilds_locally(runtime, real_clo
     assert _dispositions(ledger) == [(adopted, 'superseded_local')]
 
 
-def _response(**fields):
-    return 200, {}, json.dumps({'model': anthropic_client.MODEL, 'stop_reason': 'end_turn',
+def _response(model, **fields):
+    return 200, {}, json.dumps({'model': model, 'stop_reason': 'end_turn',
         'content': [{'type': 'text', 'text': '{"patient_context":[]}'}],
         'usage': {'input_tokens': 10, 'output_tokens': 2}, **fields}).encode()
 
 
 @pytest.mark.parametrize('failure,code', [
     (404, 'http_4xx'), (529, 'http_529'), ((200, {}, b'not json'), 'protocol_error'),
-    (_response(stop_reason='refusal'), 'contract_error')])
+    ('refusal', 'contract_error')])
 def test_failed_send_of_a_unit_with_cloud_work_goes_local_at_once(runtime, real_cloud, monkeypatch, failure, code):
     ledger, _, local_calls = runtime
     cfg, _ = real_cloud
+    if failure == 'refusal':
+        failure = _response(state._route(cfg, 1)['provider']['model'], stop_reason='refusal')
     sent = _partial_cloud_scan(runtime, cfg, monkeypatch,
                                script=lambda index, payload, limit: failure if index else None)
     adopted, = _reservations(ledger, 'scan:1')
@@ -1533,7 +1537,7 @@ def test_request_without_a_result_under_an_earlier_binding_waits_then_is_replace
     assert _reservations(ledger, 'scan:1') == [reservation['reservation_id']]
     assert _dispositions(ledger) == [(reservation['reservation_id'], 'superseded_local')]
     # The answer arrives after all: it settles the reservation and is never taken up.
-    _, _, raw = _answer(sent[0])
+    _, _, raw = _answer(sent[0], reservation['model'])
     text = json.loads(raw)['content'][0]['text']
     cloud_policy.record_result(ledger, reservation, {
         'model': reservation['model'], 'request_fp': reservation['request_fp'],

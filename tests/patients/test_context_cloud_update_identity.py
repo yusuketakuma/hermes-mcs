@@ -83,7 +83,7 @@ def real_cloud(runtime, cloud, monkeypatch):
         else:
             answer = {'fact_ids': [item['id'] for item in payload['reports']]}
         posts.append(payload)
-        response = {'model': anthropic_client.MODEL, 'stop_reason': 'end_turn',
+        response = {'model': body['model'], 'stop_reason': 'end_turn',
             'content': [{'type': 'text', 'text': json.dumps(answer)}],
             'usage': {'input_tokens': 10, 'output_tokens': 2}}
         return 200, {'Request-Id': 'synthetic-update'}, json.dumps(response).encode()
