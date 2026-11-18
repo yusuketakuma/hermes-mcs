@@ -77,6 +77,11 @@ def _drain_stages(ledger, cfg, generation, deadline, reasons, *, live_config, re
     local_blocked = False
     limited = False
     while any(active.values()) and time.monotonic() < deadline - 5:
+        if writer_lock.restart_intent_active(DATA):
+            # A live gateway-restart request ends the drain between items;
+            # the item in flight already finished and settled.
+            result['reason'] = 'restart_yield'
+            return result
         for stage in ('local', 'local', 'local', 'ocr'):
             if not active[stage] or time.monotonic() >= deadline - 5:
                 continue
@@ -189,7 +194,8 @@ def run(cfg=None, *, retry_errors=False):
                   expected_code_stamp=generation[1],
                   marker_path=os.path.join(DATA, writer_lock.UPDATE_MARKER_NAME)) if remaining > 0 else None)
         if fd is None:
-            return {'reason': 'writer_busy'}
+            return {'reason': ('restart_yield' if writer_lock.restart_intent_active(DATA)
+                               else 'writer_busy')}
         try:
             if writer_lock.updater_state() != generation:
                 return {'reason': 'writer_blocked'}
@@ -256,7 +262,7 @@ def main():
             result["reason"] = "status_unavailable"
     print(json.dumps({"attachment_ocr": result}, ensure_ascii=False))
     return 0 if (not result.get("failed", 0) and not result.get("deferred", 0) and not result.get("local_deferred", 0)
-                 and result.get("reason") in (None, "disabled", "writer_busy", "busy")) else 1
+                 and result.get("reason") in (None, "disabled", "writer_busy", "busy", "restart_yield")) else 1
 
 
 if __name__ == "__main__":

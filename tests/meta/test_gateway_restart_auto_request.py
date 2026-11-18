@@ -333,3 +333,25 @@ def test_frozen_program_carries_auto_contract(gateway):
     assert "gateway_restart_lock_fd_mismatch" in program
     assert "request_id" in program
     assert "update_lock_fd" in program
+
+
+def test_auto_helper_intent_carries_the_request_id_and_expected_pid(gateway, monkeypatch):
+    rec, data, agents, _, _, running = gateway
+    recorded = []
+    publish = rec.mcs_recovery_gateway._gateway_restart_intent_publish
+
+    def spy(data_dir, request_id, helper_started_at, not_after, expected_pid=None):
+        recorded.append({"request_id": request_id, "expected_pid": expected_pid})
+        return publish(data_dir, request_id, helper_started_at, not_after,
+                       expected_pid=expected_pid)
+
+    monkeypatch.setattr(rec.mcs_recovery_gateway, "_gateway_restart_intent_publish", spy)
+    running["pid"] = 303
+    fd = _lock_fd(data)
+    try:
+        assert rec._gateway_restart_run(
+            str(data), str(agents), 501, "101", REQUEST_ID, str(fd)) == 1
+    finally:
+        os.close(fd)
+    assert recorded == [{"request_id": REQUEST_ID, "expected_pid": 101}]
+    assert not (data / "gateway_restart_intent.json").exists()
