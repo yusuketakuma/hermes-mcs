@@ -64,6 +64,9 @@ OVERALL_STATUS = {"ok": "ok", "degraded": "degraded",
 # runtime_mode=standalone: the host's own status file (mcs_standalone)
 STANDALONE_STATUS_REL = os.path.join("data", "standalone-status.json")
 STANDALONE_HOST_STALE_S = 180      # heartbeat every 5 s; restart throttle 30 s
+# accepted clock skew on heartbeat times; the same -2 s bound on status age
+# that mcs_standalone/service.py requires of its own reads
+STANDALONE_STATUS_SKEW_S = 2
 STANDALONE_CHILD_FAILURES = 3      # consecutive failed exits of one job
 STANDALONE_CONNECTOR_DOWN_S = 600
 STANDALONE_UPDATE_STUCK_S = 2 * 3600
@@ -328,6 +331,16 @@ def standalone_host_reasons(home: str, now: float, cfg: dict, *, status=None):
         age = now - stamp if finite_number(stamp) else None
         return "failed", ["standalone_host_down"], (
             {"standalone_host_down": f"最終更新 {_hours(age)}前"} if age and age > 0 else {})
+    # a heartbeat written in the future (e.g. after the host clock stepped
+    # back) is not freshness evidence: the process may be dead while its
+    # stamp still looks fresh
+    if stamp > now + STANDALONE_STATUS_SKEW_S:
+        return "failed", ["standalone_clock_unverified"], {
+            "standalone_clock_unverified": "記録の時刻が未来で、時計を確認できていません"}
+    unverified = []       # finite fields whose future time cannot be verified
+
+    def _future(value):
+        return finite_number(value) and value > now + STANDALONE_STATUS_SKEW_S
     reasons, details = [], {}
     exits = status.get("exits") if isinstance(status.get("exits"), dict) else {}
     failing = []
@@ -341,27 +354,37 @@ def standalone_host_reasons(home: str, now: float, cfg: dict, *, status=None):
         details["standalone_child_failing"] = "、".join(failing)
     connector = status.get("connector") if isinstance(status.get("connector"), dict) else {}
     since = connector.get("failing_since")
-    if connector.get("state") == "waiting" and finite_number(since) \
-            and now - since >= STANDALONE_CONNECTOR_DOWN_S:
-        reasons.append("standalone_connector_down")
-        error = connector.get("last_error")
-        details["standalone_connector_down"] = f"{_hours(now - since)}" + (
-            f" {error}" if _is_code(error) else "")
+    if connector.get("state") == "waiting" and finite_number(since):
+        if _future(since):
+            unverified.append("connector.failing_since")
+        elif now - since >= STANDALONE_CONNECTOR_DOWN_S:
+            reasons.append("standalone_connector_down")
+            error = connector.get("last_error")
+            details["standalone_connector_down"] = f"{_hours(now - since)}" + (
+                f" {error}" if _is_code(error) else "")
     marker = status.get("update_marker") if isinstance(status.get("update_marker"), dict) else {}
     marked = marker.get("since")
-    if status.get("update_in_progress") is True and finite_number(marked) \
-            and now - marked >= STANDALONE_UPDATE_STUCK_S:
-        reasons.append("standalone_update_stuck")
-        state = marker.get("state")
-        details["standalone_update_stuck"] = f"{_hours(now - marked)}" + (
-            f" {state}" if _is_code(state) else "")
+    if status.get("update_in_progress") is True and finite_number(marked):
+        if _future(marked):
+            unverified.append("update_marker.since")
+        elif now - marked >= STANDALONE_UPDATE_STUCK_S:
+            reasons.append("standalone_update_stuck")
+            state = marker.get("state")
+            details["standalone_update_stuck"] = f"{_hours(now - marked)}" + (
+                f" {state}" if _is_code(state) else "")
     check = exits.get("mcs_check") if isinstance(exits.get("mcs_check"), dict) else {}
     last_ok = check.get("last_ok_at")
     reference = last_ok if finite_number(last_ok) else status.get("started_at")
-    if finite_number(reference) and now - reference > freshness_deadline(cfg):
-        reasons.append("standalone_check_stalled")
-        details["standalone_check_stalled"] = (f"最終成功 {_hours(now - last_ok)}前"
-                                               if finite_number(last_ok) else "起動後の成功なし")
+    if finite_number(reference):
+        if _future(reference):
+            unverified.append("last_ok_at" if finite_number(last_ok) else "started_at")
+        elif now - reference > freshness_deadline(cfg):
+            reasons.append("standalone_check_stalled")
+            details["standalone_check_stalled"] = (f"最終成功 {_hours(now - last_ok)}前"
+                                                   if finite_number(last_ok) else "起動後の成功なし")
+    if unverified:
+        reasons.append("standalone_clock_unverified")
+        details["standalone_clock_unverified"] = "、".join(unverified) + " の時刻が未来です"
     return ("degraded" if reasons else "ok"), reasons, details
 
 
@@ -909,6 +932,8 @@ _REASON_JA = {
                                 "必要なら python3 mcs/ops/mcs_update.py recover"),
     "standalone_check_stalled": ("hostの未読収集が成功していません",
                                  f"{_COLLECTION_LOG} を確認。続く場合は {_CHECK}"),
+    "standalone_clock_unverified": ("hostの時計を確認できていません",
+                                    f"{_STANDALONE_STATUS} の時刻と host の時計・時刻同期を確認"),
 }
 # attachment_ocr_local_inference_deferred: the writer record or the re-check
 # right after an admission-time deferral (fixed codes from
