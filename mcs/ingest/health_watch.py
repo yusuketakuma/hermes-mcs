@@ -286,7 +286,8 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         report['notify_parts_observed_at'] = observed if finite_number(observed) else None
     elif report['notify_parts_measurement'] == 'unknown':
         reason = parts.get('reason')
-        report['notify_parts_reason'] = reason if _is_code(reason) else None
+        report['notify_parts_reason'] = (reason if reason in (
+            'observation_limit', 'observation_unavailable') else None)
     held = notify.get("held_reasons")
     report["held_reasons"] = (
         held if isinstance(held, dict)
@@ -1049,22 +1050,38 @@ def _collection_known_empty(report: dict) -> bool:
             and value["incomplete"]["projects"] == 0 and value["incomplete"]["parent_bodies"] == 0)
 
 
+def _unverified_reason(report: dict, reason: str) -> bool:
+    """Notification evidence that was not measured this run — an
+    unmeasurable count or only a carried value — cannot assert a current
+    delay or defect; a recorded measurement or any other reason can."""
+    base = reason.split(":")[0]
+    if base == "notification_parts_incomplete":
+        return report.get('notify_parts_measurement') != 'recorded'
+    return base in ("notification_cards_unavailable",
+                    "notification_pending_unavailable")
+
+
 def _impact(report: dict, reasons) -> str:
     """One sentence a staff member can act on: what is affected and
     whether collection itself is still running."""
     if report["status"] in _SEVERE:
         return "新しい連絡の収集と通知が止まっている可能性があります。"
-    areas = []
+    seen = {}
     for r in reasons or []:
+        verified = not _unverified_reason(report, r)
         for prefix, name in _AREA_JA:
             if r.startswith(prefix):
                 if prefix == "collection_incomplete" and _collection_known_empty(report):
                     name = "収集判定の確認"
-                if name not in areas:
-                    areas.append(name)
+                if name not in seen or (verified and not seen[name]):
+                    seen[name] = verified
+    areas = [n for n, v in seen.items() if v]
+    unchecked = [n for n, v in seen.items() if not v]
     parts = []
     if areas:
         parts.append("・".join(areas) + "に遅れや不具合があります。")
+    if unchecked:
+        parts.append("・".join(unchecked) + "の配送状況を今回確認できません。")
     if report.get("run_status") == "ok":
         parts.append("収集は動いています。")
     return "".join(parts) or "稼働状況の確認が必要です。"

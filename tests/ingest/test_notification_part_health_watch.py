@@ -80,8 +80,8 @@ def test_stale_unknown_observation_stays_recorded_not_current(tmp_path):
     assert report["recorded_state_reasons"] == ["notification_parts_incomplete"]
 
 
-def _parts_block(status='recorded', observed_at=399, closed=559,
-                 unknown=67, not_sent=17, pending=0, held=0):
+def _parts_block(status='recorded', observed_at=399, closed=4,
+                 unknown=3, not_sent=2, pending=0, held=0):
     """Active unfinished parts plus acknowledged-closed ones, in the shape
     notify_scope.incomplete_parts_health reports them."""
     active_states = {'pending': pending, 'unknown': unknown,
@@ -120,7 +120,7 @@ def test_unmeasured_parts_are_labelled_not_counted(tmp_path):
     assert report["notify_parts_measurement"] == "unknown"
     rows = _rows(report)
     assert "件数は未測定: 観測が制限時間で打ち切られました" in rows
-    assert "次回の収集で再確認" in rows and "0件" not in rows and "84件" not in rows
+    assert "次回の収集で再確認" in rows and "0件" not in rows and "5件" not in rows
     lines = "\n".join(health_watch._alert_lines({**report, "alert": True}))
     assert "件数は未測定" in lines
 
@@ -130,8 +130,8 @@ def test_recorded_parts_show_current_counts_without_a_stale_marker(tmp_path):
                    parts=_parts_block(observed_at=399))
     assert report["notify_parts_measurement"] == "recorded"
     rows = _rows(report)
-    assert ("84件（現行82・過去2／結果不明67・未送信17）"
-            "／結果不明の全記録 68件／別に運用終了・未回収 559件") in rows
+    assert ("5件（現行3・過去2／結果不明3・未送信2）"
+            "／結果不明の全記録 4件／別に運用終了・未回収 4件") in rows
     assert "記録時点の観測値" not in rows and "件数は未測定" not in rows
 
 
@@ -144,7 +144,7 @@ def test_carried_parts_are_marked_as_a_past_observation(tmp_path):
     rows = _rows(report)
     # the carried counts still show — a worse carried value is not hidden —
     # but never as the current observation
-    assert "84件（現行82・過去2／結果不明67・未送信17）" in rows
+    assert "5件（現行3・過去2／結果不明3・未送信2）" in rows
     assert "記録時点の観測値" in rows and "件数は未測定" not in rows
     assert "配送記録と通知先を照合" in rows
 
@@ -156,7 +156,7 @@ def test_expired_carried_parts_read_as_unmeasured(tmp_path):
     report = _tick(tmp_path, 400, ["notification_parts_incomplete"], parts=stale)
     assert report["notify_parts_measurement"] == "unknown"
     rows = _rows(report)
-    assert "件数は未測定" in rows and "84件" not in rows
+    assert "件数は未測定" in rows and "5件" not in rows
 
 
 def test_measurement_states_keep_reason_and_breakdown_order(tmp_path):
@@ -164,8 +164,8 @@ def test_measurement_states_keep_reason_and_breakdown_order(tmp_path):
     # and the breakdown keeps its fixed label order in every measurable state
     for now, parts in ((400, _parts_block(observed_at=399)),
                        (700, {**_parts_block(status='stale_measurement',
-                                             observed_at=400, unknown=70,
-                                             not_sent=20),
+                                             observed_at=400, unknown=4,
+                                             not_sent=3),
                               'reason': 'observation_limit', 'age_s': 300.0}),
                        (1000, _unmeasured_parts()),
                        (1300, _parts_block(observed_at=1299))):
@@ -183,9 +183,68 @@ def test_measurement_states_keep_reason_and_breakdown_order(tmp_path):
 
 def test_worsened_carried_value_still_shows_marked(tmp_path):
     worse = _parts_block(status='stale_measurement', observed_at=100,
-                         unknown=70, not_sent=24)
+                         unknown=4, not_sent=3)
     worse['reason'] = 'observation_limit'
     worse['age_s'] = 300.0
     report = _tick(tmp_path, 400, ["notification_parts_incomplete"], parts=worse)
     rows = _rows(report)
-    assert "94件" in rows and "記録時点の観測値" in rows
+    assert "7件" in rows and "記録時点の観測値" in rows
+
+
+def _alert(tmp_path, now, reasons, parts=None, cards=None, overall="degraded"):
+    record = {"at": now - 1, "overall": overall, "state_reasons": reasons}
+    notify = {}
+    if parts is not None:
+        notify["incomplete_parts"] = parts
+    if cards is not None:
+        record["cards"] = cards
+    if notify:
+        record["notify"] = notify
+    path = tmp_path / "data" / "health.json"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps(record))
+    report = health_watch.evaluate(str(tmp_path), now, cfg={})
+    report["alert"] = True
+    return "\n".join(health_watch._alert_lines(report))
+
+
+def test_unmeasured_notification_reasons_do_not_assert_a_defect(tmp_path):
+    # the reported shape: both notification measurements unavailable
+    lines = _alert(tmp_path, 400,
+                   ["notification_parts_incomplete", "notification_cards_unavailable"],
+                   parts=_unmeasured_parts(),
+                   cards={"status": "unknown", "reason": "observation_limit",
+                          "observed_at": 399})
+    assert "通知の配送状況を今回確認できません。" in lines
+    assert "通知に遅れや不具合があります。" not in lines
+
+
+def test_carried_only_notification_evidence_also_cannot_assert_a_defect(tmp_path):
+    stale = _parts_block(status="stale_measurement", observed_at=100)
+    stale["reason"] = "observation_limit"
+    lines = _alert(tmp_path, 400, ["notification_parts_incomplete"], parts=stale)
+    assert "通知の配送状況を今回確認できません。" in lines
+    assert "通知に遅れや不具合があります。" not in lines
+
+
+def test_a_measured_notification_reason_keeps_the_defect_impact(tmp_path):
+    # unmeasured parts evidence plus a real notification anomaly: the
+    # measured anomaly's impact is kept and the unverified area merges
+    lines = _alert(tmp_path, 400,
+                   ["notification_parts_incomplete", "notification_cards_unavailable",
+                    "notification_held"],
+                   parts=_unmeasured_parts(),
+                   cards={"status": "unknown", "reason": "observation_limit",
+                          "observed_at": 399})
+    assert "通知に遅れや不具合があります。" in lines
+    assert "配送状況を今回確認できません" not in lines
+
+
+def test_recorded_parts_with_unavailable_cards_keep_the_defect_impact(tmp_path):
+    lines = _alert(tmp_path, 400,
+                   ["notification_parts_incomplete", "notification_cards_unavailable"],
+                   parts=_parts_block(observed_at=399),
+                   cards={"status": "unknown", "reason": "observation_limit",
+                          "observed_at": 399})
+    assert "通知に遅れや不具合があります。" in lines
+    assert "配送状況を今回確認できません" not in lines
