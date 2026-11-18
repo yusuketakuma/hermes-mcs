@@ -50,9 +50,14 @@ def test_all_auto_and_form_labels_exist_and_are_unique():
     # Type labels are pre-existing in GitHub, not maintained by labels.json.
     existing = {'bug', 'enhancement', 'documentation', 'dependencies'}
     for form in (ROOT / '.github/ISSUE_TEMPLATE').glob('*.yml'):
-        match = re.search(r'^labels: (\[.*\])$', form.read_text(), re.M)
-        if match:
-            assert set(json.loads(match[1])) <= set(names) | existing
+        text = form.read_text()
+        if not re.search(r'^labels:', text, re.M):
+            continue
+        match = re.search(r'^labels:[ \t]*(\[[^\n]*\]|(?:\n +-[ \t]+[^\n]+)+)$', text, re.M)
+        assert match, f'{form.name}: unrecognized labels list'
+        raw = match[1]
+        labels = json.loads(raw) if raw.startswith('[') else re.findall(r'\n +-[ \t]+([^\n]+)', raw)
+        assert set(labels) <= set(names) | existing, form.name
 
 
 @pytest.mark.parametrize('changed,size', [
