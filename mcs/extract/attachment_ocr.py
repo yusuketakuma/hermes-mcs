@@ -361,7 +361,8 @@ def _without_redundant_cells(cells):
     """Drop cells that carry no value and only repeat another cell's area; None if nothing is provably redundant.
 
     A cell is redundant only when it is empty and lies inside another cell's rectangle, or
-    it exactly repeats another cell's rectangle and text. Differing text is never merged.
+    it exactly repeats another cell's rectangle — the single valued emission wins over
+    empty ones in either order, and equal texts keep the first. Differing text is never merged.
     """
     if len(cells) > MAX_RECOVERY_CELLS:
         return None
@@ -374,7 +375,13 @@ def _without_redundant_cells(cells):
             if j == i or not (s0 <= r0 and d0 <= c0 and r1 <= s1 and c1 <= d1):
                 continue
             same_box = (s0, d0, s1, d1) == (r0, c0, r1, c1)
-            if (not text and (not same_box or j < i)) or (same_box and j < i and other == text):
+            if same_box:
+                # Identical rectangles: the single valued emission wins over
+                # empties in either order; equal texts keep the first.
+                if (not text and (other or j < i)) or (text and other == text and j < i):
+                    redundant = True
+                    break
+            elif not text:
                 redundant = True
                 break
         if not redundant:
