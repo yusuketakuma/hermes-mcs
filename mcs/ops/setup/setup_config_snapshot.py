@@ -237,8 +237,14 @@ def _init_split_changes(initial, cfg):
                 continue
             if key == 'model' and initial.get('replace_cloud') and name != selected:
                 continue
-            if key == 'profiles' and (initial.get('preserve_openai_profiles')
-                                      or initial.get('replace_cloud') and selected != 'openai'):
+            if key == 'profiles' and (
+                    (name == 'openai' and (initial.get('preserve_openai_profiles')
+                                           or initial.get('replace_cloud') and selected != 'openai'))
+                    or (name == 'anthropic' and (initial.get('preserve_anthropic_profiles')
+                                                 or initial.get('replace_cloud')
+                                                 and (selected != 'anthropic'
+                                                      or 'provider_profiles'
+                                                      not in cfg.get('cloud_llm', {}))))):
                 continue
             if changed(old_providers[name], new_providers[name], key):
                 if key in new_providers[name]:
@@ -329,6 +335,7 @@ def _init_reselect_provider(cfg, initial, set_args):
     candidate = deepcopy(cfg)
     candidate['cloud_llm'].pop('model', None)
     candidate['cloud_llm'].pop('profiles', None)
+    candidate['cloud_llm'].pop('provider_profiles', None)
     selection, errors = cloud_policy.resolve_settings(candidate, info['root'])
     if cloud_policy.blocking_errors(errors) or selection['provider'] == info['selected']:
         return
@@ -341,7 +348,19 @@ def _init_reselect_provider(cfg, initial, set_args):
             and 'profiles' not in before and isinstance(after.get('profiles'), dict)
             and isinstance(projected.get('profiles'), dict)):
         after['profiles'] = {**deepcopy(projected['profiles']), **after['profiles']}
-    for key in ('model', 'profiles'):
+    anthropic_leaf = any(name.startswith('cloud_llm.provider_profiles.anthropic.') for name in touched)
+    projected_anthropic = projected.get('provider_profiles', {})
+    if isinstance(projected_anthropic, dict):
+        projected_anthropic = projected_anthropic.get('anthropic')
+    after_anthropic = after.get('provider_profiles', {})
+    if isinstance(after_anthropic, dict):
+        after_anthropic = after_anthropic.get('anthropic')
+    if (selection['provider'] == 'anthropic' and anthropic_leaf
+            and 'cloud_llm.provider_profiles' not in touched
+            and 'cloud_llm.provider_profiles.anthropic' not in touched
+            and isinstance(after_anthropic, dict) and isinstance(projected_anthropic, dict)):
+        after['provider_profiles']['anthropic'] = {**deepcopy(projected_anthropic), **after_anthropic}
+    for key in ('model', 'profiles', 'provider_profiles'):
         explicit = any(name == 'cloud_llm.' + key or name.startswith('cloud_llm.' + key + '.')
                        for name in touched)
         old_value = {key: before[key]} if key in before else {}
@@ -350,6 +369,8 @@ def _init_reselect_provider(cfg, initial, set_args):
             continue
         if key == 'profiles' and selection['provider'] != 'openai':
             info['preserve_openai_profiles'] = True
+        if key == 'provider_profiles' and selection['provider'] != 'anthropic':
+            info['preserve_anthropic_profiles'] = True
         if key in projected:
             after[key] = deepcopy(projected[key])
         else:
