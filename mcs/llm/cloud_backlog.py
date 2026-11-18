@@ -20,7 +20,7 @@ if __name__ == "__main__":
     import _mcs_path  # noqa: F401
 
 import cloud_send_admission
-from run_log_install import helper_path, LogInstallError
+from run_log_install import current_helper, helper_path
 
 _parent = None
 
@@ -360,11 +360,7 @@ class CloudBacklogPool:
             target = min(settings["max_concurrency"], len(self.children))
         if target <= len(self.children) or now < self.retry_at:
             return
-        inherited = os.environ.get("MCS_RUN_LOG_HELPER")
-        recovery = str(Path(inherited).parent) if inherited and os.path.isabs(inherited) else None
-        helper = helper_path(self.root, recovery, require_installed=True)
-        if inherited and inherited != helper:
-            raise LogInstallError("run_log_helper_unverified")
+        helper = current_helper(self.root, installed=helper_path)
         for _ in range(max(0, target - len(self.children))):
             index = next(i for i in range(32) if i not in self.indices.values())
             child = subprocess.Popen(

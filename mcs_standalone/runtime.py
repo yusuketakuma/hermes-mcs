@@ -24,7 +24,7 @@ import uuid
 
 import runtime_entry
 import update_journal
-from run_log_install import helper_path, LogInstallError
+from run_log_install import current_helper, helper_path, LogInstallError
 from xml.sax.saxutils import escape
 
 from mcs_runtime import python_executable
@@ -701,11 +701,7 @@ class Runtime:
                 or now < self.retry_at.get(job, 0)):
             return
         try:
-            inherited = os.environ.get("MCS_RUN_LOG_HELPER")
-            directory = str(Path(inherited).parent) if inherited and os.path.isabs(inherited) else None
-            helper = helper_path(self.root, directory, require_installed=True)
-            if inherited and inherited != helper:
-                raise LogInstallError("run_log_helper_unverified")
+            helper = current_helper(self.root, installed=helper_path)
             entry = runtime_entry.current()
             child = subprocess.Popen(
                 [sys.executable,
@@ -848,11 +844,7 @@ class Runtime:
             request = {"pid": pid, "argv": list(self.argv[job]), "operation": int(operation) if operation else None,
                        "generation": self.generation, "owner_pid": os.getpid()}
             try:
-                inherited = os.environ.get("MCS_RUN_LOG_HELPER")
-                directory = str(Path(inherited).parent) if inherited and os.path.isabs(inherited) else None
-                helper = helper_path(self.root, directory, require_installed=True)
-                if inherited and inherited != helper:
-                    raise LogInstallError("run_log_helper_unverified")
+                helper = current_helper(self.root, installed=helper_path)
                 request["starting_argv"] = [sys.executable, "-I", helper, "exec", "--data-dir",
                                             str(self.data), "--", *self.argv[job]]
             except (OSError, LogInstallError):
