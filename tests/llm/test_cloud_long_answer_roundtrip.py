@@ -13,7 +13,7 @@ from mcs_util import payload_hash
 from test_cloud_response_recovery import legacy_cloud_routes, paid as paid
 
 
-@pytest.mark.parametrize('text', ['x' * 270000, '\x00' * 270000])
+@pytest.mark.parametrize('text', ['x' * 270000, '\x00' * 60000])
 def test_long_answer_is_settled_saved_and_recovered(paid, text):
     path, _cfg, _calls, _locks, _state, unit, _restart = paid
     sent = []
@@ -23,7 +23,7 @@ def test_long_answer_is_settled_saved_and_recovered(paid, text):
             sent.append(True)
             return 200, {}, json.dumps({'model': provider.client.model, 'stop_reason': 'end_turn',
                 'content': [{'type': 'text', 'text': text}],
-                'usage': {'input_tokens': 10, 'output_tokens': 30000}}).encode()
+                'usage': {'input_tokens': 10, 'output_tokens': 8192}}).encode()
         provider.client._post_fn = post
         with legacy_cloud_routes():
             answer = provider('synthetic prompt', deadline=time.monotonic() + 60, max_tokens=65536)

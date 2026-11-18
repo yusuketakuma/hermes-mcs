@@ -290,10 +290,13 @@ def test_invalid_or_different_paid_evidence_never_replays_or_resends(paid, damag
             elif damage == 'legacy':
                 ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.input_binding'),content='{}' "
                                   "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')")
+            elif damage == 'tokens':
+                ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.max_tokens',256,"
+                                  "'$.request_fp','0000000000000000000000000000000000000000000000000000000000000000') "
+                                  "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')")
     with closing(Ledger(path)) as ledger:
         with pytest.raises(cloud_client.CloudNotSent):
-            _ask(unit(ledger, binding='changed' if damage == 'input' else 'original-input'),
-                 tokens=101 if damage == 'tokens' else 100)
+            _ask(unit(ledger, binding='changed' if damage == 'input' else 'original-input'))
         assert len(calls) == 1
         assert len(ledger.artifacts('cloud_usage_reserve')) == (0 if damage == 'missing_reservation' else 1)
 

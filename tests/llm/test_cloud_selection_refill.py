@@ -383,18 +383,43 @@ def test_a_not_sent_timeout_through_the_runner_never_refills(routed, monkeypatch
 def test_a_recovered_answer_then_a_refused_quality_repair_never_frees_the_slot(cloud_candidates, monkeypatch):
     """Recovery hands back a paid answer, the engine asks for a quality repair, and that repair's
     request reaches the guard and is refused as a verified repeat: the used recovery keeps the
-    slot. With the same quality profile the engine reuses the root unit, so this pins that the
-    repair request is guarded, not that a separate repair child was created."""
+    slot. The repair runs on its own quality_repair contract, so this pins that the repair
+    request is guarded through its repair child."""
     import extract_llm as worker
-    led, _, calls, reservations, results = cloud_candidates
+    from anthropic_runtime_testkit import real_usage_reserver, real_record_result
+    import anthropic_client
+    import hashlib
+    led, cfg, calls, reservations, results = cloud_candidates
     head = _select(led, "extract")[0]["message_id"]
     recovered = []
+    prompts = []
+    real_body = anthropic_client.AnthropicClient.body
+    monkeypatch.setattr(anthropic_client.AnthropicClient, "body",
+                        lambda self, prompt, *a, **kw: prompts.append(prompt) or real_body(self, prompt, *a, **kw))
+    selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog", root=worker.HOME)
+    assert not errors and selection is not None
+    text = '{"symptoms":[]}'
 
     def recover(ledger, **kwargs):
         if kwargs.get("message_id") == head and not recovered:
             recovered.append(True)
-            return ({"reservation": {"reservation_id": "e" * 32}},
-                    {"status": 200, "text": '{"symptoms":[]}', "finish_reason": "stop"})
+            # The repair child needs a verified settled origin: seed a real
+            # reservation + result for this exact request envelope.
+            body = anthropic_client.AnthropicClient("synthetic-key").body(
+                prompts[-1], selection["max_tokens"], None)
+            resolved_cfg = {"cloud_llm": cloud_policy.resolve_settings(cfg)[0]}
+            reservation = real_usage_reserver(ledger, resolved_cfg, route="reextract",
+                project_id=1, message_id=head, unit_key=kwargs["unit_key"],
+                owner=kwargs["owner"], selection=selection,
+                input_binding=kwargs["input_binding"])(body, 1)
+            real_record_result(ledger, reservation,
+                {"model": reservation["model"], "request_fp": reservation["request_fp"],
+                 "usage": {"input_tokens": 10, "output_tokens": 5},
+                 "http_class": "http_200", "error_kind": None,
+                 "answer_text_sha256_v1": hashlib.sha256(text.encode()).hexdigest(),
+                 "answer_finish_reason_v1": "stop"})
+            return ({"reservation": reservation},
+                    {"status": 200, "text": text, "finish_reason": "stop"})
         return None
     monkeypatch.setattr(cloud_policy, "recover_response", recover)
     monkeypatch.setattr(worker.extract_quality, "completeness_issues", lambda *_args: ["synthetic-missing"])

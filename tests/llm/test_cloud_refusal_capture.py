@@ -131,9 +131,9 @@ def test_an_unknown_transport_outcome_is_an_after_send_refusal(priced, monkeypat
 
 def test_a_raw_response_past_its_bound_is_an_after_send_refusal(priced, monkeypatch):
     ledger, cfg, _, _ = priced
-    monkeypatch.setattr(anthropic_client.AnthropicClient, "request",
-                        _reply(size=cloud_client.response_limit(100) + 1))
     unit = _unit(ledger, cfg)
+    monkeypatch.setattr(anthropic_client.AnthropicClient, "request",
+                        _reply(size=cloud_client.response_limit(unit.selection['max_tokens']) + 1))
     _refused(unit, cloud_inference.CloudFallback, "cloud_unit_failed")
     assert unit.refusal == ("after_send", "response_too_large")
 

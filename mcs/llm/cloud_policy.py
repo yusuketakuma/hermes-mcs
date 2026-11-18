@@ -443,8 +443,10 @@ def profile_for_settings(cfg, settings, *, route, purpose):
             "max_tokens": limit, "price_version": _price_definition(model)["price_version"],
             "profile": profile}), []
     if provider != "openai":
+        # The original contract (unchanged model and effort) keeps the
+        # purpose's output limit; a missing profiles block is not opt-in.
         return MappingProxyType({"provider": provider, "model": settings["model"], "effort": None,
-            "max_tokens": None, "price_version": _price_definition(settings["model"])["price_version"],
+            "max_tokens": limit, "price_version": _price_definition(settings["model"])["price_version"],
             "profile": None}), []
     profiles = block.get("profiles", by_provider.get("openai", {}))
     if not isinstance(profiles, dict) or "openai" in by_provider and by_provider["openai"] != profiles:

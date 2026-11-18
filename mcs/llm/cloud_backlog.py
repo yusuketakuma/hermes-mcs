@@ -477,18 +477,26 @@ def worker(parent, *, index=None, context_only=False):
         def wait(code):
             _defer(waiting, code)
 
-        def settle_carry():
+        def settle_carry(trigger):
             deadline = time.monotonic() + 3.0
-            extract_llm._settle_carry(
+            settled, _count, _pids = extract_llm._settle_carry(
                 ledger, carry, final=False, fence=initial,
                 lock_context=extract_llm._write_lock(True, wait_s=1, deadline=deadline),
-                preserve_on_fence_loss=True, deadline=deadline)
+                preserve_on_fence_loss=True, deadline=deadline, report=False)
+            # Results the worker saves or releases outside run_pending would
+            # otherwise leave no record; fixed reason codes only, never ids.
+            if isinstance(settled, dict) and any(settled.values()):
+                _event("cloud_carry_settled", done=settled.get("done", 0),
+                       held_prior=settled.get("held_prior", 0),
+                       deferred=settled.get("deferred", 0),
+                       defer_reasons=settled.get("defer_reasons") or {},
+                       done_unit="messages", trigger=trigger)
 
         try:
             while os.getppid() == parent and writer_lock.updater_state() == initial and not initial[0]:
                 if carry:
                     try:
-                        settle_carry()
+                        settle_carry("loop")
                     except writer_lock.RunLockLost:
                         return
                     except Exception as error:
@@ -690,7 +698,7 @@ def worker(parent, *, index=None, context_only=False):
                     and writer_lock.updater_state() == initial
                     and extract_llm._writer_current(full=True)):
                 try:
-                    settle_carry()
+                    settle_carry("exit")
                 except Exception as error:
                     _event("cloud_carry_settle_error", **_exception_observation(error))
 

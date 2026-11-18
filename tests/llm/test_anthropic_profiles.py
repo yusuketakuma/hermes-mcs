@@ -84,6 +84,7 @@ def test_sonnet_prices_have_one_tier_and_their_own_cache_rates():
 
 @pytest.mark.parametrize("provider,model,effort,profile,tokens,valid", [
     ("anthropic", a.MODEL, None, None, None, True),
+    ("anthropic", a.MODEL, None, None, 8192, True),
     ("anthropic", a.MODEL, "medium", "haiku-medium", 8192, True),
     ("anthropic", a.SONNET_MODEL, "high", "sonnet-high", 16384, True),
     ("anthropic", a.SONNET_MODEL, "high", "haiku-medium", 16384, False),
@@ -101,12 +102,24 @@ def test_profile_contracts_are_finite_per_provider(provider, model, effort, prof
     assert accounting.profile_contract_valid(provider, model, effort, profile, tokens) is valid
 
 
-def test_anthropic_without_profiles_resolves_the_original_contract():
-    selection, errors = c.resolve_profile(_cfg(), route="reextract", purpose="backlog")
+@pytest.mark.parametrize("route,purpose,limit", [
+    ("reextract", "backlog", 8192),
+    ("semantic_backlog", "backlog", 8192),
+    ("patient_context", "patient_context", 16384),
+    ("patient_context", "quality_repair", 32768),
+    ("semantic_backlog", "quality_repair", 32768),
+])
+def test_anthropic_without_profiles_resolves_the_original_contract(route, purpose, limit):
+    """An unset profiles block keeps the original contract (model + effort) and now
+    carries the purpose's output limit instead of leaving max_tokens unset."""
+    selection, errors = c.resolve_profile(_cfg(), route=route, purpose=purpose)
     assert not errors
     assert (selection["model"], selection["effort"], selection["profile"], selection["max_tokens"]) \
-        == (a.MODEL, None, None, None)
+        == (a.MODEL, None, None, limit)
     assert cloud_inference.cloud_provider_contract(selection=selection) == cloud_inference._CLOUD_CONTRACT
+    assert accounting.profile_contract_valid(
+        selection["provider"], selection["model"], selection["effort"], selection["profile"],
+        selection["max_tokens"])
 
 
 @pytest.mark.parametrize("route,purpose,model,effort,limit", [

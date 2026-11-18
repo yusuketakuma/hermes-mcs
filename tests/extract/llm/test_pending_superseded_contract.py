@@ -217,7 +217,7 @@ def _real_reserve(ledger, cfg, monkeypatch, prompt="完全合成の予約確認�
     # reservation seed runs under the reopened route, like legacy_cloud_routes.
     with patch.object(cloud_policy, "send_route", lambda route: True):
         return reserve(anthropic_client.AnthropicClient("synthetic-unused").body(
-            prompt, 256, None), 30)
+            prompt, selection["max_tokens"], None), 30)
 
 
 def _guard(ledger, cfg, prompt):

@@ -8,6 +8,7 @@ import pytest
 import cloud_client
 import cloud_inference
 import cloud_policy
+import cloud_usage_accounting
 import openai_client
 from ledger import Ledger
 from test_cloud_response_recovery import legacy_cloud_routes, paid as paid
@@ -79,9 +80,23 @@ def test_actual_refusal_observes_recovery_without_new_send(paid, capsys, change,
             with ledger.db:
                 ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.input_binding') "
                                   "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')")
+        elif change == 'tokens':
+            # A changed output bound changes the stored request envelope; keep
+            # the reservation's reserved maximum consistent with it.
+            meta = json.loads(ledger.db.execute(
+                "SELECT meta FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()[0])
+            cost = str(cloud_usage_accounting._reservation_cost(
+                meta.get('input_bound', cloud_usage_accounting.INPUT_RESERVATION_BOUND),
+                256, legacy='input_bound' not in meta, model=meta['model'],
+                price_version=meta['price_version']))
+            with ledger.db:
+                ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.max_tokens',256,"
+                                  "'$.max_cost_usd',?,"
+                                  "'$.request_fp','0000000000000000000000000000000000000000000000000000000000000000') "
+                                  "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')", (cost,))
         before = [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
         with pytest.raises(cloud_client.CloudNotSent) as caught:
-            _ask(provider, 101 if change == 'tokens' else 100)
+            _ask(provider)
         assert (caught.value.kind, caught.value.detail) == ('budget_exceeded', 'cloud_unit_unresolved')
         assert caught.value.__cause__ is None and caught.value.__suppress_context__
         assert provider.possibly_sent and provider.unresolved
@@ -215,15 +230,21 @@ def test_observation_is_fresh_for_each_call_and_repair_child(paid, monkeypatch, 
             _ask(unit(ledger))
         provider = unit(ledger)
         child = provider.spawn_quality_repair()
+        # A changed output bound changes the stored envelope: each call now
+        # misses exact recovery and reaches the repeat guard instead.
+        with ledger.db:
+            ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.request_fp',"
+                              "'0000000000000000000000000000000000000000000000000000000000000000') "
+                              "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')")
         observed = []
         recover = cloud_policy.recover_response
         def capture(*args, **kwargs):
             observed.append(kwargs['observation'])
             return recover(*args, **kwargs)
         monkeypatch.setattr(cloud_policy, 'recover_response', capture)
-        for caller, tokens in [(provider, 101), (provider, 102), (child, 103)]:
+        for caller in [provider, provider, child]:
             with pytest.raises(cloud_client.CloudNotSent):
-                _ask(caller, tokens)
+                _ask(caller)
         assert len({id(value) for value in observed}) == 3
         assert len(calls) == 1
     assert all(event['recovery_path'] == 'no_exact_rows' for event in _events(capsys))
@@ -238,7 +259,7 @@ def test_observation_build_failure_preserves_original_refusal(paid, monkeypatch,
             _ask(unit(ledger))
         monkeypatch.setattr(cloud_policy, '_repeat_observation', failed)
         with pytest.raises(cloud_client.CloudNotSent) as caught:
-            _ask(unit(ledger), 101)
+            _ask(unit(ledger, binding='synthetic-changed'))
         assert (caught.value.kind, caught.value.detail) == ('budget_exceeded', 'cloud_unit_unresolved')
         assert len(calls) == 1
     event, = _events(capsys)
