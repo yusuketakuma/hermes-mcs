@@ -48,6 +48,7 @@ def test_slack_plan_and_receipt_shape_is_unchanged(case):
 
 def test_discord_cancel_uses_its_spool_and_worker_witness(case):
     spool = _move_to(case, "discord")
+    _adapter_lock(case, "discord")
     (case.data / "worker_status" / "discord-synthetic.json").write_text(json.dumps({
         "version": cancel.VERSION, "reason": "worker_started", "pid": FAKE_PID}))
     request = _request(case)
@@ -89,8 +90,8 @@ def test_unknown_transport_stays_unsupported(case):
         cancel.build_plan(case.led.db, case.events)
 
 
-def _adapter_lock(case):
-    state = case.data / "lineworks_state"
+def _adapter_lock(case, transport="lineworks"):
+    state = case.data / f"{transport}_state"
     state.mkdir(exist_ok=True)
     path = state / "send-synthetic.lock"
     path.touch()
