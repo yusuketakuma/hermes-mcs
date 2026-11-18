@@ -23,6 +23,12 @@ __all__ = ["cloud", "real_cloud", "runtime"]
 _REAL_CLOUD_MODE = extract_llm_provider._cloud_mode
 
 
+@pytest.fixture(autouse=True)
+def ample_memory(monkeypatch):
+    """The capacity retirement never samples this host's memory."""
+    monkeypatch.setattr(cloud_backlog, "memory_workers", lambda limit: limit)
+
+
 @pytest.mark.parametrize("cloud_ready", [True, False])
 def test_context_child_finishes_real_guarded_pipeline(runtime, real_cloud, monkeypatch, tmp_path, cloud_ready):
     ledger, clock, local_calls = runtime
@@ -264,7 +270,7 @@ def test_context_child_captures_only_this_pass_validated_writer_refusal(monkeypa
     monkeypatch.setattr(resident, "_context_memory_available", lambda: True)
     monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: len(events) < 2)
     monkeypatch.setattr(cloud_backlog, "_event", lambda event, **fields: events.append((event, fields)))
-    monkeypatch.setattr(cloud_backlog, "time", SimpleNamespace(sleep=lambda _: None))
+    monkeypatch.setattr(cloud_backlog, "time", SimpleNamespace(sleep=lambda _: None, monotonic=lambda: 0.0))
     def refresh(*args, **kwargs):
         assert kwargs == {"cloud_worker": True}
         if not events:
@@ -278,6 +284,39 @@ def test_context_child_captures_only_this_pass_validated_writer_refusal(monkeypa
                             "writer_reason": "source_generation_changed", "writer_stage": "generation_fence"}
     assert events[1][1] == {"status": "deferred", "done": 0, "reason": "unclassified"}
     assert "synthetic-private" not in json.dumps(events)
+
+
+@pytest.mark.parametrize("index,passes", [(5, 3), (6, 3), (7, 1), (9, 1)])
+def test_context_child_retires_when_memory_capacity_drops(monkeypatch, tmp_path, index, passes):
+    """Ten workers spawned at capacity 10; a drop to 6 retires index 7 and up
+    (one worker of hysteresis, as the backlog workers) at the next 60 s check,
+    after the pass in hand has returned."""
+    events, clock = [], SimpleNamespace(now=0.0)
+    capacity = {"value": 10}
+    initial = (False, "synthetic-current")
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: initial)
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda _: {"mode": "on", "max_concurrency": 10})
+    monkeypatch.setattr(resident, "_context_memory_available", lambda: True)
+    monkeypatch.setattr(cloud_backlog, "memory_workers", lambda limit: min(limit, capacity["value"]))
+    monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: len(events) < 3)
+    monkeypatch.setattr(cloud_backlog, "_event", lambda event, **fields: events.append((event, fields)))
+
+    def sleep(seconds):
+        clock.now += 60
+    monkeypatch.setattr(cloud_backlog, "time", SimpleNamespace(sleep=sleep, monotonic=lambda: clock.now))
+
+    def refresh(*args, **kwargs):
+        capacity["value"] = 6   # memory drops while the first pass runs
+        return {"status": "complete", "done": 1}
+    monkeypatch.setattr(resident, "_background_context_refresh", refresh)
+    cloud_backlog._context_worker(object(), initial, index)
+    assert [name for name, _ in events].count("patient_context_pass") == passes
+    if passes < 3:
+        assert events[-1] == ("cloud_worker_retired", {"reason": "capacity_reduced"})
+    else:
+        assert "cloud_worker_retired" not in [name for name, _ in events]
 
 
 def test_context_child_exits_before_engine_when_import_fence_is_stale(runtime, real_cloud, monkeypatch, tmp_path):
@@ -296,7 +335,8 @@ def test_context_child_exits_before_engine_when_import_fence_is_stale(runtime, r
     monkeypatch.setattr(resident, "_context_memory_available", lambda: True)
     monkeypatch.setattr(cloud_backlog, "_event", lambda event, **fields: events.append((event, fields)))
     monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: len(events) < 2)
-    monkeypatch.setattr(cloud_backlog, "time", SimpleNamespace(sleep=lambda seconds: sleeps.append(seconds)))
+    monkeypatch.setattr(cloud_backlog, "time", SimpleNamespace(
+        sleep=lambda seconds: sleeps.append(seconds), monotonic=lambda: 0.0))
     initial = writer_lock.updater_state()
     monkeypatch.setattr(extract_llm_source_contract, "_WRITER_STATE", (False, "synthetic-prior-generation"))
     cloud_backlog._context_worker(ledger, initial, 0)

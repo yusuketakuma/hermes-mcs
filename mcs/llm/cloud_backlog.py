@@ -303,6 +303,13 @@ def memory_workers(limit):
     return 0 if headroom is None else max(0, min(limit, headroom // _WORKER_BYTES))
 
 
+def capacity_reduced(index, limit):
+    """Whether an indexed worker is past the pool's memory target; one worker of
+    hysteresis, because its own resident memory is in the sample."""
+    capacity = memory_workers(limit)
+    return index >= min(limit, capacity + bool(capacity))
+
+
 class CloudBacklogPool:
     """Own child processes only while the normal lane-2 resident is alive."""
     def __init__(self, root, *, context_only=False):
@@ -643,8 +650,7 @@ def worker(parent, *, index=None, context_only=False):
                               or index >= settings["max_concurrency"])
                     if time.monotonic() - capacity_checked >= 60:
                         capacity_checked = time.monotonic()
-                        capacity = memory_workers(settings["max_concurrency"])
-                        retire = retire or index >= min(settings["max_concurrency"], capacity + bool(capacity))
+                        retire = retire or capacity_reduced(index, settings["max_concurrency"])
                     if retire:
                         _event("cloud_worker_retired", reason=(
                             "cloud_mode_off" if settings["mode"] != "on"
@@ -965,6 +971,7 @@ def _context_worker(ledger, initial, index):
     import writer_lock
     from mcs_util import HOME, ProviderSettingsUnreadable, load_config
 
+    capacity_checked = float("-inf")
     waiting = {"code": None, "at": 0.0}
     provider_seen = {"provider": None}
     role = None   # this child's ROLE_CLOUD hold; local lanes see the cloud lane served through it
@@ -983,7 +990,13 @@ def _context_worker(ledger, initial, index):
                 if (settings["mode"] != "on" or index is not None and index >= settings["max_concurrency"]
                         or not extract_llm_resident._context_memory_available()):
                     return
-                if role is None:
+                if index is not None and time.monotonic() - capacity_checked >= 60:
+                    capacity_checked = time.monotonic()
+                    if capacity_reduced(index, settings["max_concurrency"]):
+                        _event("cloud_worker_retired", reason="capacity_reduced")
+                        return
+                with writer_lock.capture_writer_refusal() as diagnostic:
+                        if role is None:
                     # A hold that failed is retried on every pass, so a live child never stays hidden.
                     role = hold_role(HOME, ROLE_CLOUD)
                 with writer_lock.capture_writer_refusal() as diagnostic:
