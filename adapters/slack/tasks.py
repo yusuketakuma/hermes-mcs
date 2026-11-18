@@ -4,9 +4,11 @@ The Hermes Slack adapter rebuilds its native ``AsyncApp`` on an
 in-process reconnect and re-runs the handler factory on the new app,
 while the previous supervisor is still alive and holds the scope lock.
 The newest supervisor for a scope therefore asks its in-process
-predecessor to stop and waits ``LOCK_WAIT_S`` for the lock, so the
-rebuilt app regains its MCS handlers without a process restart (the
-Discord supervisor does the same via ``bot.is_closed()``).
+predecessor to stop and waits for the lock: ``LOCK_WAIT_S`` for any
+owner, and past it while that stopped predecessor is still settling (a
+start-up backoff or a long tick), so the rebuilt app regains its MCS
+handlers without a process restart (the Discord supervisor does the same
+via ``bot.is_closed()``).
 """
 from __future__ import annotations
 
@@ -67,6 +69,10 @@ class Supervisor:
         self._stopping = False
         self._task = None
         self._ready = False
+        self._previous = None
+        # True once _run ended while this was still the scope's newest
+        # supervisor: no successor serves the scope (read by card_workers)
+        self.abandoned = False
 
     def start(self):
         key = registry.scope_key(self._settings)
@@ -74,6 +80,8 @@ class Supervisor:
         _LIVE[key] = self
         if previous is not None and previous is not self:
             previous.unload()          # superseded by a rebuilt app
+            # weak: a superseded supervisor must not outlive its own task
+            self._previous = weakref.ref(previous)
         self._task = self._ctx.spawn_task(
             self._run(), name=f"mcs-slack:{self._worker_id}")
         if self._task is None or self._task.done():
@@ -91,12 +99,20 @@ class Supervisor:
         self._worker.stop()
         self._actions.unload()
 
+    def _predecessor_leaving(self) -> bool:
+        previous = self._previous() if self._previous is not None else None
+        task = getattr(previous, "_task", None)
+        return (previous is not None and previous._stopping
+                and task is not None and not task.done())
+
     async def _run(self):
         try:
             # wait out a superseded in-process predecessor
             if not await self._worker.wait_scope_lock(
-                    LOCK_WAIT_S, lambda: self._stopping):
+                    LOCK_WAIT_S, lambda: self._stopping,
+                    self._predecessor_leaving):
                 return
+            self._previous = None
             reconciled = False
 
             async def ready():
@@ -144,6 +160,7 @@ class Supervisor:
             self._worker.release_scope_lock()
             key = registry.scope_key(self._settings)
             if _LIVE.get(key) is self:
+                self.abandoned = True
                 del _LIVE[key]
 
     async def _pass(self):
