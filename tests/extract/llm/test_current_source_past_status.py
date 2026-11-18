@@ -113,7 +113,15 @@ def test_other_symptom_time_or_continuation_not_borrowed(body):
     ("発熱は解熱したが咳が続いている。", False), ("発熱が続いている。", True), ("発熱したが現在も続いている。", True),
     ("発熱したが現在も続いていません。", False), ("発熱は持続せず。", False),
     ("発熱しましたが現在も続いている。", True), ("発熱は持続しています。", True),
-    ("発熱したが現在も続いてはいません。", False), ("発熱したが現在も続いておりません。", False)])
+    ("発熱したが現在も続いてはいません。", False), ("発熱したが現在も続いておりません。", False),
+    ("発熱が続いていた。", False), ("発熱が続いていました。", False)])
 def test_target_continuing_reads_only_target_predicate(body, expected):
     end = body.index("発熱") + 2
     assert clinical_scope.target_continuing(body, end, len(body) - 1) is expected
+
+@pytest.mark.parametrize("body,expected", [
+    ("昨日の検査に続いて発熱があった。", ("patient", "past")),
+    ("症状が続いて発熱があった。", ("patient", "current"))])
+def test_ordering_continue_marker_does_not_lend_current_period(body, expected):
+    start = body.index("発熱")
+    assert clinical_scope.source_axes(body, start, start + 2) == expected

@@ -79,7 +79,7 @@ _SCOPE_HEADING = re.compile(
 
 _REPORTING = re.compile(r"(?:より|から|が(?:報告|連絡|説明|相談|話)|は(?:報告|連絡|説明|相談|話))")
 
-CURRENT_MARK = re.compile(r"現在|今も|今は|本日|今日|続いて|持続|(?:昨日|先週|先月)から|(?:昨日|先週|先月)より")
+CURRENT_MARK = re.compile(r"現在|今も|今は|本日|今日|(?<!に)(?<!に引き)続いて|持続|(?:昨日|先週|先月)から|(?:昨日|先週|先月)より")
 _CONTINUING = re.compile(r"持続|続いて|残って")
 # Closed forms of the target's own predicate: a time word right before it, or right after it a
 # time word and/or an affirmative presence/continuation that ends the predicate. Another noun or
@@ -88,7 +88,7 @@ _LEADING_CURRENT = re.compile(rf"(?:{CURRENT_MARK.pattern})(?:は|も|に|の)?[
 _TARGET_PREDICATE = re.compile(
     rf"(?:は|が|も)?[\s　]*(?:(?:いたしました|しました|した|して|し)(?:が|けど|けれど(?:も)?)?[、,\s　]*)?"
     rf"(?P<now>{CURRENT_MARK.pattern})?(?:は|も)?[\s　]*"
-    rf"(?:(?P<cont>(?:{_CONTINUING.pattern})(?:して)?(?:いる|います|いた|いました|おり(?:ます)?)?)"
+    rf"(?:(?P<cont>(?:{_CONTINUING.pattern})(?:して)?(?:いる|います|おり(?:ます)?)?)"
     rf"|あり(?:ます)?|ある|(?:みられ|見られ)(?:る|ます)?)"
     rf"(?=[。！？!?;；\n、,]|$|が|けど|けれど)")
 
