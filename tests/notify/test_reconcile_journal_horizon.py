@@ -428,6 +428,51 @@ def test_discord_card_surface_group_takes_the_card_attempt(led, monkeypatch):
     assert plan["part_id"] == group["part_id"]
 
 
+def test_slack_unstarted_file_group_stays_pending_but_is_reported_beyond_horizon(led, tmp_path, monkeypatch):
+    from test_file_group_dependency_refusal import _refused
+    from adapters.common import journal
+    slack, render, _spec, _stage, group = _refused(led, tmp_path, monkeypatch)
+    aid = envelopes.part_attempt_id(render["delivery_id"], group["part_id"])
+    # a legacy pending group whose journal evidence is gone
+    journal.compact(slack.dirs["state"], active="", file_ok=lambda rows: True,
+                    prunable=lambda candidate, rows: candidate == aid)
+    with led.db:
+        led.db.execute("UPDATE notification_render_parts SET state='pending',error_code=NULL,"
+                       "attempt_id=NULL WHERE delivery_id=? AND part_id=?",
+                       (render["delivery_id"], group["part_id"]))
+    assert led.db.execute("SELECT state FROM notification_renders WHERE delivery_id=?",
+                          (render["delivery_id"],)).fetchone()["state"] == "delivered"
+    _restore_from(None, backup_names.JOURNAL_HORIZON_MAX_S + 86400,
+                  data=Path(notify_spool.data_root(led)))
+    receipt = notify_reconcile.reconcile_after_restore(led, SLACK, now=NOW)
+    row = _rows(led, render["delivery_id"])[group["part_id"]]
+    # #136: never started is not proven by a journal that may be compacted, so the
+    # group keeps its pending state (not asserted unsent) yet is named and flagged
+    assert (row["state"], row["attempt_id"], row["error_code"]) == ("pending", None, _HOLD)
+    listed = [p for p in receipt["parts_held"] if p["part_id"] == group["part_id"]]
+    assert [(p["delivery_id"], p["reason"]) for p in listed] == [(render["delivery_id"], _HOLD)]
+    assert receipt["parts_unresolvable"] == []
+    plan = notify_recovery.card_part_resolve_plan(led, render["delivery_id"], group["part_id"])
+    assert plan["expected_state"] == "pending"
+    worklist = notify_recovery.recovery_worklist(led.db)
+    # the refused stage (attach:0001) stays unknown and listed in its own right
+    assert [(i["part_id"], i["state"], i["status"]) for i in worklist["items"]
+            if i["delivery_id"] == render["delivery_id"] and i["part_id"] == group["part_id"]
+            ] == [(group["part_id"], "pending", "plannable")]
+
+    def notices():
+        return led.db.execute("SELECT payload FROM notify_outbox WHERE kind='update_notice'").fetchall()
+    assert len(notices()) == 1 and "part unknown=1件" in notices()[0]["payload"]
+    # a re-run (the marker stays while the journal is incomplete) reports the part
+    # again through parts_held but flags nothing new, so no second notice follows
+    assert notify_reconcile._unknown_beyond_horizon_parts(
+        led.db, NOW, NOW + 1, notify_spool.notify_dirs(notify_spool.data_root(led))) == []
+    assert [p["part_id"] for p in notify_reconcile._beyond_horizon_parts(led.db)[0]] == [group["part_id"]]
+    assert len(notices()) == 1
+    # the health-read hold report counts it by cause (state stays pending)
+    assert notify_recovery.part_hold_report(led)["parts"]["pending"][_HOLD] == 1
+
+
 # ---------- Discord group parts that cannot share a verified surface attempt ----------
 
 def _delivered_body_render(led):
