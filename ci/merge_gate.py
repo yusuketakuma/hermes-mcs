@@ -33,13 +33,11 @@ def _apply_attempts(api, repo, number, attempts):
 
 def _gate_unchanged(api, repo, sha, plan):
     statuses = api.list(_repo_path(repo, f"commits/{sha}/statuses"))
-    gates = [status for status in statuses
-             if status.get("context") == "merge-gate"
-             and (status.get("creator") or {}).get("login") == BOT_LOGIN
-             and (status.get("creator") or {}).get("type") == "Bot"]
-    latest = max(gates, key=lambda status: (status.get("created_at") or "", status.get("id") or 0),
-                 default=None)
-    return latest is not None and all(latest.get(key) == plan[key] for key in ("state", "description"))
+    latest = next((status for status in statuses if status.get("context") == "merge-gate"), None)
+    return (latest is not None
+            and (latest.get("creator") or {}).get("login") == BOT_LOGIN
+            and (latest.get("creator") or {}).get("type") == "Bot"
+            and all(latest.get(key) == plan[key] for key in ("state", "description")))
 
 
 def publish_gates(api, repo, default_branch, *, automation_enabled, event="",

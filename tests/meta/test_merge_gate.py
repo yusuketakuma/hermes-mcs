@@ -215,8 +215,17 @@ def test_latest_bot_status_not_an_older_matching_status_controls_deduplication()
     api = GateAPI([pr(1)])
     older, newer = bot_status(), bot_status()
     newer.update(id=2, state="failure")
-    api.lists[ROOT + f"commits/{'1' * 40}/statuses"] = [older, newer]
+    api.lists[ROOT + f"commits/{'1' * 40}/statuses"] = [newer, older]
     assert publish(api) == {"published": [1], "errors": []}
+
+
+def test_newer_other_creator_status_overrides_older_matching_bot_status():
+    api = GateAPI([pr(1)])
+    older, newer = bot_status(), bot_status()
+    newer.update(id=2, creator={"login": "other", "type": "User"})
+    api.lists[ROOT + f"commits/{'1' * 40}/statuses"] = [newer, older]
+    assert publish(api) == {"published": [1], "errors": []}
+    assert sum(method == "POST" and "/statuses/" in path for method, path, _ in api.calls) == 1
 
 
 def test_unchanged_status_does_not_skip_source_ci_attempt_bookkeeping():
