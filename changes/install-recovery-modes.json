@@ -1,11 +1,12 @@
 {
   "category": "fixed",
   "title": "古い導入で作られた ~/.mcs-recovery と復旧用ファイルのアクセス権を導入・更新時に直すように修正",
-  "summary": "v1.0.3〜v1.0.6 の install.sh は ~/.mcs-recovery を 0755 で作り、現行の版が求める 0700 と合わず、install.sh と更新が原因の分からない文言で止まり続けていました。今後は本人所有で他のユーザーが書き込めないフォルダーなら、install.sh と更新時の配置が 0700 に直して続けます。同時期の導入で他のユーザーも読める復旧ツール（mcs_recover.py）・repo_path・復旧監視の plist も、段階5の前に 0700・0600・0600 に揃えます。",
-  "upgrade": "install.sh を再実行すると直ります（更新ツールでは --reinstall を指定したときに install.sh が動きます）。--no-recovery・--no-services を指定してもファイルのアクセス権は直します。リンクと、他のユーザーが書き込めるフォルダー・ファイルはアクセス権を変えません。ファイルのアクセス権を変えられない場合は注意を表示して導入を続けますが、復旧監視の所有確認が通らないため recovery_python の切替えは止まったままになります。--dry-run と事前確認では何も変えず、注意だけを表示します。",
+  "summary": "v1.0.3〜v1.0.6 の install.sh は ~/.mcs-recovery を 0755 で作り、現行版が求める 0700 と合わず、install.sh と更新が原因の分からない文言で止まり続けていました。今後は本人所有で他者が書き込めないフォルダーなら、続行確認と排他ロック取得後に 0700 に直して続けます。同時期の導入で他者も読める復旧ツール（mcs_recover.py）・repo_path・復旧監視 plist も、本人所有で単一リンクの通常ファイルに限り段階5の前に 0700・0600・0600 に揃えます。",
+  "upgrade": "install.sh を再実行すると直ります（更新ツールでは --reinstall を指定したときに install.sh が動きます）。--no-recovery・--no-services を指定してもファイルのアクセス権は直します。リンク・複数リンク・他のユーザーが所有または書き込めるフォルダーやファイルはアクセス権を変えません。取消・不正入力・事前確認の失敗では権限を変更せず、--preflight と --dry-run でも ~/.mcs-recovery が 0755 のまま復旧用 Python の安全性を確認します。",
   "details": [
     "復旧監視の所有確認の条件（フォルダー 0700、復旧ツール 0700、repo_path と plist 0600 を要求すること）は変えていない。",
+    "~/.mcs-recovery の 0700 への変更は、事前確認（--preflight を含む復旧用 Python 検査）・対話の続行確認・導入排他ロック取得のすべてを通過した後に行う。",
     "更新時の読取り専用の確認は従来どおり 0700 を要求し、締め直すのは配置（書込み）の経路だけ。"
   ],
-  "refs": ["install.sh", "deployment/install/runtime.sh", "mcs/ops/run_log_install.py"]
+  "refs": ["install.sh", "deployment/install/runtime.sh", "mcs/ops/run_log_install.py", "tests/meta/test_install_sh_recovery.py", "tests/meta/test_install_log_sink.py"]
 }

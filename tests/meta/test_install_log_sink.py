@@ -56,6 +56,7 @@ def stage(tmp_path, *, broken=False, no_services=False):
     environment = {**os.environ, 'HOME': str(home), 'MCS_ROOT': str(home / '.mcs'),
                    'MCS_DATA': str(data), 'REPO': str(checkout), 'MCS_PY': sys.executable,
                    'RECOVERY_DIR': str(home / '.mcs-recovery'),
+                   'WATCH_PLIST': str(home / 'Library/LaunchAgents/org.mcs.recovery.plist'),
                    'SKIP_LLM': '1', 'RUNTIME_MODE': 'standalone',
                    'SKIP_SERVICES': '1' if no_services else '0', 'TRACE': str(trace)}
     result = subprocess.run(['/bin/sh', str(harness)], env=environment,

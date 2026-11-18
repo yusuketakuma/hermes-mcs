@@ -146,7 +146,7 @@ link_target() {
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 # Read-only bootstrap modes do not require checkout companions.
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
-INSTALL_RUNTIME_SHA256="6f9d3f7ea375b73552ee6832c51b609099a2918ea763448eb25fb706b9ecea8d"
+INSTALL_RUNTIME_SHA256="736416322442ae4ffd4c9a8ea4c9ea5a2c13f8be40ea7d0a0eb3fc7075860fd8"
 _install_stage_private_dir=""
 # shellcheck disable=SC2317,SC2329  # Invoked by EXIT after the sourced stage exits.
 _install_stage_cleanup() {
@@ -405,6 +405,7 @@ fi
 if [ "$RUNTIME_EXPLICIT" -eq 0 ] && [ -n "$ARG_HOME" ]; then RUNTIME_MODE=hermes; fi
 CONFIG_ABSENT=0
 CONFIG_EMPTY=0
+CONFIG_CONFIGURED=0
 RESUME_UNCONFIGURED=0
 CONFIG_BASE=""
 if [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ]; then
@@ -461,10 +462,10 @@ try:
     if mode not in ("hermes", "standalone"):
         raise ValueError
     token = ":".join(str(n) for n in ident(info)) + ":" + hashlib.sha256(raw).hexdigest()
-    if not cfg:
-        print(mode + ":empty:" + token)
-    else:
-        print(mode + ":existing:" + token)
+    configured = all(isinstance(cfg.get(k), str) and bool(cfg[k].strip())
+                     for k in ("mcs_login_id", "notify_target"))
+    state = "empty" if not cfg else ("configured" if configured else "existing")
+    print(mode + ":" + state + ":" + token)
 except (OSError, ValueError, AttributeError, TypeError, RecursionError):
     raise SystemExit(1) from None
 PYMODE
@@ -473,9 +474,10 @@ PYMODE
     RUNTIME_MODE="${MODE_STATUS%%:*}"
     MODE_DETAIL="${MODE_STATUS#*:}"
     CONFIG_BASE="${MODE_DETAIL#*:}"
-    if [ "${MODE_DETAIL%%:*}" = empty ]; then
-        CONFIG_EMPTY=1
-    fi
+    case "${MODE_DETAIL%%:*}" in
+        empty) CONFIG_EMPTY=1 ;;
+        configured) CONFIG_CONFIGURED=1 ;;
+    esac
     case "$RUNTIME_MODE" in hermes|standalone) ;; *) die "接続方法を読み取れません。--mode hermes または --mode standalone を指定してください" ;; esac
 else
     CONFIG_ABSENT=1
@@ -727,9 +729,9 @@ recovery_dir_loose() {  # own real directory, not 0700, but no group/other write
     [ -z "$(find "$RECOVERY_DIR" -prune \( -perm -0020 -o -perm -0002 \) -print)" ] || return 1
     [ -n "$(find "$RECOVERY_DIR" -prune ! -perm 0700 -print)" ]
 }
-recovery_runtime_ok() {  # <probe host Python>; never substitutes the template's executable
+recovery_runtime_ok() {  # <probe host Python> [allow_loose_dir: 0|1]; never substitutes the template's executable
     "$1" -I -B -c '
-import os, plistlib, sys
+import hashlib, os, plistlib, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1] + "/mcs")
 import _mcs_path
@@ -760,7 +762,15 @@ if "recovery_python" in cfg and os.path.lexists(
         raise SystemExit("復旧用 Python の設定と稼働設定が一致しません。処理が動いていないことを確認し、mcs setup init --yes、mcs setup services の順に修復してください")
 from html import escape
 text = Path(sys.argv[2]).read_text()
-helper = run_log_install.helper_path(Path(sys.argv[3]).parent, sys.argv[7], checkout=sys.argv[1])
+if sys.argv[8] == "1":
+    source = run_log_install.source_snapshot(sys.argv[1])
+    if source is None:
+        raise SystemExit("復旧サービスのテンプレートに問題があります: run_log_source_unavailable")
+    root_key = run_log_install._root(Path(sys.argv[3]).parent)
+    rec_key = run_log_install._canonical_leaf(sys.argv[7])
+    helper = os.path.join(rec_key, run_log_install._pointer(root_key)[:-5] + "-" + hashlib.sha256(source).hexdigest() + ".py")
+else:
+    helper = run_log_install.helper_path(Path(sys.argv[3]).parent, sys.argv[7], checkout=sys.argv[1])
 rendered = render_template(text, {"RECOVERY_PYTHON":escape(desired, quote=False),
     "RUN_LOG_HELPER":escape(helper, quote=False), "RECOVERY":escape(sys.argv[7], quote=False),
     "DATA":escape(str(Path(sys.argv[3]).parent / "data"), quote=False)})
@@ -776,7 +786,7 @@ if problem:
     print("復旧用 Python に問題があります: " + problem, file=sys.stderr)
     sys.exit(1)
 print(desired)
-' "$REPO" "$RECOVERY_TEMPLATE" "$MCS_ROOT/config.json" "$RECOVERY_OPTION" "$SKIP_RECOVERY" "$AGENTS_DIR" "$RECOVERY_DIR"
+' "$REPO" "$RECOVERY_TEMPLATE" "$MCS_ROOT/config.json" "$RECOVERY_OPTION" "$SKIP_RECOVERY" "$AGENTS_DIR" "$RECOVERY_DIR" "${2:-0}"
 }
 loaded() { launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1; }
 # launchd may still be tearing down a just-booted-out job ("5: Input/
@@ -895,11 +905,14 @@ preflight() {
     if _py="$(find_py)"; then pf_ok "Python 3.14: $_py"
     elif [ "$_brew_fills" -eq 1 ]; then pf_info "Python 3.14 は未導入です。段階1で python@3.14 を導入します"
     else pf_ng "実行できる Python 3.14 が見つかりません" "brew install python@3.14"; fi
+    _pf_loose_rec=0
     if recovery_wanted && recovery_dir_loose; then
-        # v1.0.3-v1.0.6 created it 0755; install tightens it before this check
-        pf_warn "${RECOVERY_DIR} の権限が 700 ではありません。導入時に 700 へ直してから復旧用 Python を確認します" ""
-    elif recovery_wanted; then
-        if [ -n "$_py" ] && RECOVERY_PYTHON="$(recovery_runtime_ok "$_py")"; then
+        _pf_loose_rec=1
+        # v1.0.3-v1.0.6 created it 0755; install tightens it after confirmation and lock
+        pf_warn "${RECOVERY_DIR} の権限が 700 ではありません。導入時に 700 へ直します" ""
+    fi
+    if recovery_wanted; then
+        if [ -n "$_py" ] && RECOVERY_PYTHON="$(recovery_runtime_ok "$_py" "$_pf_loose_rec")"; then
             pf_ok "復旧用 Python: 3.14以降で SQLite の安全条件を満たしています"
         elif [ -z "$_py" ] && [ -z "$RECOVERY_OPTION" ] && [ "$_brew_fills" -eq 1 ]; then
             # same as the install path: stage 6 re-verifies after stage 1 adds Python
@@ -1089,13 +1102,11 @@ if [ -f "$REPO/.git" ]; then
     warn "Git の作業用フォルダ（${REPO}）から実行しています。ここを削除するとサービスとプラグインが動かなくなります。恒久的なメインのフォルダを使ってください"
 fi
 
-if recovery_wanted && recovery_dir_loose; then
-    # The log helper requires exactly 0700; older installers left 0755.
-    chmod 700 "$RECOVERY_DIR" || die "${RECOVERY_DIR} の権限を 700 に直せません。chmod 700 ${RECOVERY_DIR} を実行してから再実行してください"
-fi
+_pre_loose_rec=0
+if recovery_wanted && recovery_dir_loose; then _pre_loose_rec=1; fi
 if recovery_wanted; then
     if _probe_host="$(find_py)"; then
-        RECOVERY_PYTHON="$(recovery_runtime_ok "$_probe_host")" \
+        RECOVERY_PYTHON="$(recovery_runtime_ok "$_probe_host" "$_pre_loose_rec")" \
             || die "指定した復旧用 Python の安全性が確認できないか、稼働設定と一致しません。変更は行っていません"
     elif [ -n "$RECOVERY_OPTION" ]; then
         die "--recovery-python は導入前に Python 3.14 で検証します。brew install python@3.14 などで導入して再実行してください。変更は行っていません"
@@ -1260,6 +1271,11 @@ if [ -n "${MCS_UPDATE_REINSTALL:-}" ] && [ -n "${MCS_UPDATE_OPTIONS_BASE:-}" ]; 
         || die "導入設定が変更されたため再導入を開始しません。現在の設定を確認してください"
 fi
 require_ocr_tools
+
+if recovery_wanted && recovery_dir_loose; then
+    # Tighten only after confirmation, the install lock and all read-only guards.
+    chmod 700 "$RECOVERY_DIR" || die "${RECOVERY_DIR} の権限を 700 に直せません。chmod 700 ${RECOVERY_DIR} を実行してから再実行してください"
+fi
 
 # Per-run id ties the stage journal to this invocation; a stale journal from
 # an older interrupted run is never reported as this run's stage.

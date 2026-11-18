@@ -1,7 +1,7 @@
 # shellcheck shell=sh
 # Sourced only by the verified install.sh after preflight and write guards.
 : "${_fresh_authorized?}" "${_legacy_uninitialized?}" "${_fresh_data_info?}"
-: "${RECOVERY_DIR:?}" "${SETUP:?}"
+: "${RECOVERY_DIR:?}" "${SETUP:?}" "${CONFIG_CONFIGURED?}"
 
 # Best-effort stage journal for interruption reporting; never stops the install.
 # All values are fixed literals or validated modes — nothing user-supplied is
@@ -626,18 +626,33 @@ else
             # the transfer and the rename) is not re-requested: a range
             # past the end answers 416 and would fail every re-run.
             _have=0; _want=""
-            if [ -f "$MODEL_FILE.part" ]; then
+            if [ -f "$MODEL_FILE.part" ] && [ ! -L "$MODEL_FILE.part" ]; then
                 _have="$(wc -c < "$MODEL_FILE.part" | tr -d ' ')"
+                case "$_have" in ''|*[!0-9]*) _have=0 ;; esac
                 _want="$(curl -fsIL -m 60 --retry 3 "$MODEL_URL" 2>/dev/null \
-                    | tr -d '\r' | awk 'tolower($1)=="content-length:"{v=$2} END{print v}')"
+                    | tr -d '\r' | awk '
+                        toupper($1) ~ /^HTTP\// { code=$2; v=""; bad=0; next }
+                        tolower($1) == "content-length:" {
+                            if (NF != 2 || (v != "" && v != $2)) bad=1
+                            v=$2
+                        }
+                        END { if (code == "200" && !bad) print v }
+                    ')"
+                case "$_want" in ''|*[!0-9]*) _want="" ;; esac
             fi
-            if [ -n "$_want" ] && [ "$_have" = "$_want" ]; then
+            if [ "$_have" -gt 0 ] && [ -n "$_want" ] && [ "$_have" = "$_want" ]; then
                 printf '  取得途中のファイルは全容量を取得済みです（%s バイト）\n' "$_have"
             else
-                # Keep about 1 GB free beside the remaining bytes (6 GiB when the
-                # size is unknown) so the ledger on the same volume can still write.
-                case "$_want" in ''|*[!0-9]*) _want_bytes=6442450944 ;; *) _want_bytes="$_want" ;; esac
-                _need_kb=$(( (_want_bytes - _have) / 1024 + 1048576 ))
+                # Keep about 1 GB free beside the remaining bytes. Only a final HTTP 200
+                # Content-Length >= the partial file reduces the estimate; a missing or
+                # smaller length falls back to the full 6 GiB bound so free space is
+                # never overestimated.
+                if [ -n "$_want" ] && [ "$_want" -ge "$_have" ]; then
+                    _rem_bytes=$((_want - _have))
+                else
+                    _rem_bytes=6442450944
+                fi
+                _need_kb=$(( _rem_bytes / 1024 + 1048576 ))
                 _free_kb="$(df -Pk "$MODEL_DIR" 2>/dev/null | awk 'NR==2 {print $4}')"
                 case "$_free_kb" in ''|*[!0-9]*)
                     die "$MODEL_DIR の空き容量を確認できません。モデルの取得は開始していません" ;;
@@ -671,12 +686,41 @@ else
         # A loaded job keeps its old definition until bootout/bootstrap, so a
         # reload deferred by an earlier run stays pending until it happens.
         _reload_pending="$MCS_DATA/.llama-reload-pending"
+        _valid_reload_pending() {
+            [ -f "$_reload_pending" ] && [ ! -L "$_reload_pending" ] || return 1
+            [ -n "$(find -P "$_reload_pending" -prune -type f -user "$(/usr/bin/id -u)" -links 1 ! \( -perm -020 -o -perm -002 \) -print 2>/dev/null)" ]
+        }
+        _clear_reload_pending() {
+            if [ ! -e "$_reload_pending" ] && [ ! -L "$_reload_pending" ]; then return 0; fi
+            _safe_dir "$MCS_DATA" && _valid_reload_pending && rm -f "$_reload_pending"
+        }
+        _mark_reload_pending() {
+            _safe_dir "$MCS_DATA" || return 1
+            if [ -e "$_reload_pending" ] || [ -L "$_reload_pending" ]; then
+                # Never truncate or overwrite an existing entry; keep a verified marker as-is.
+                _valid_reload_pending
+                return $?
+            fi
+            _rp_tmp="$(mktemp "$MCS_DATA/.llama-reload-pending.XXXXXXXX" 2>/dev/null)" || return 1
+            _rp_ok=0
+            if [ -n "$(find -P "$_rp_tmp" -prune -type f -user "$(/usr/bin/id -u)" -links 1 -perm 0600 -print 2>/dev/null)" ] \
+                    && _safe_dir "$MCS_DATA" \
+                    && ln "$_rp_tmp" "$_reload_pending" 2>/dev/null; then
+                _rp_ok=1
+            fi
+            rm -f "$_rp_tmp" 2>/dev/null || :
+            if [ "$_rp_ok" -eq 1 ]; then
+                _valid_reload_pending
+                return $?
+            fi
+            _valid_reload_pending
+        }
         _reload_was_pending=0
-        if [ -f "$_reload_pending" ]; then _reload_was_pending=1; _changed=1; fi
+        if _valid_reload_pending; then _reload_was_pending=1; _changed=1; fi
         if ! loaded ai.mcs.llamaserver; then
             bootstrap_agent ai.mcs.llamaserver "$LLAMA_PLIST" \
                 || die "AI サーバーの起動に失敗しました。$LLAMA_PLIST を確認し install.sh を再実行してください"
-            rm -f "$_reload_pending"
+            _clear_reload_pending || :
             ok "AI サーバーの常駐サービスを起動しました"
             sum "4/6 ローカルAI:      AI サーバーを起動"
         elif [ "$_changed" -eq 0 ]; then
@@ -684,7 +728,7 @@ else
             sum "4/6 ローカルAI:      AI サーバーは起動済み"
         elif [ "$SERVING" -eq 1 ]; then
             # never interrupt a serving model mid-request — tell the user
-            : > "$_reload_pending" 2>/dev/null \
+            _mark_reload_pending \
                 || warn "再起動待ちの記録を保存できません。次回の install.sh ではこの注意を表示しません"
             if [ "$_reload_was_pending" -eq 1 ]; then
                 warn "以前に更新した AI サーバーの起動設定がまだ反映されていません。稼働中の処理は保持しました。処理が終わってから次を実行して反映してください:"
@@ -697,7 +741,7 @@ else
             launchctl bootout "gui/$(id -u)/ai.mcs.llamaserver" 2>/dev/null || true
             bootstrap_agent ai.mcs.llamaserver "$LLAMA_PLIST" \
                 || die "AI サーバーの起動に失敗しました。$LLAMA_PLIST を確認し install.sh を再実行してください"
-            rm -f "$_reload_pending"
+            _clear_reload_pending || :
             ok "更新した設定で AI サーバーを再起動しました"
             sum "4/6 ローカルAI:      設定変更に合わせて AI サーバーを再起動"
         fi
@@ -718,9 +762,16 @@ mkdir -p "$MCS_ROOT" "$MCS_DATA" "$MCS_DATA/cmd" "$MCS_DATA/cmd_int"
 # here. Links and files others can write are left alone (the tool's bytes are
 # not verified). A failed repair only warns: the ownership check refuses itself.
 _private_recovery_file() {  # <mode> <file>
-    if [ ! -f "$2" ] || [ -L "$2" ]; then return 0; fi
-    _w="$(find "$2" -prune \( -perm -020 -o -perm -002 \) -print)" || _w=unknown
-    if [ -n "$_w" ] || ! chmod "$1" "$2"; then
+    if [ ! -e "$2" ] && [ ! -L "$2" ]; then return 0; fi
+    _prf_dir="$(dirname "$2")"
+    _prf_uid="$(/usr/bin/id -u)"
+    if [ ! -L "$_prf_dir" ] && [ -f "$2" ] && [ ! -L "$2" ] \
+            && [ -n "$(find -P "$2" -prune -type f -user "$_prf_uid" -links 1 -perm "0$1" -print 2>/dev/null)" ]; then
+        return 0
+    fi
+    if [ -L "$_prf_dir" ] || [ ! -f "$2" ] || [ ! -e "$2" ] || [ -L "$2" ] \
+            || [ -z "$(find -P "$2" -prune -type f -user "$_prf_uid" -links 1 ! \( -perm -020 -o -perm -002 \) -print 2>/dev/null)" ] \
+            || ! chmod "$1" "$2"; then
         warn "$2 のアクセス権を $1 に変更できませんでした。所有者と、他のユーザーが書き込めないことを確認してください。変更できるまで、復旧監視の Python の切替えは止まります"
     fi
 }
@@ -812,13 +863,9 @@ PYQ="$(shell_quote "$MCS_PY")"
 SETUPQ="$(shell_quote "$SETUP")"
 # `-m` resolves only from the checkout: install.sh may run from elsewhere.
 INREPO="cd $(shell_quote "$REPO") &&"
-# Display-only hint: a plain text match on the required keys keeps this
-# read free of interpreter runs; `mcs_setup.py check` does the real validation.
-_configured=0
-if grep -Eqs '"mcs_login_id"[[:space:]]*:[[:space:]]*"[^"]' "$MCS_ROOT/config.json" \
-        && grep -Eqs '"notify_target"[[:space:]]*:[[:space:]]*"[^"]' "$MCS_ROOT/config.json"; then
-    _configured=1
-fi
+# Display-only hint from the verified top-level config read in install.sh;
+# `mcs_setup.py check` still performs the full configuration validation.
+_configured="$CONFIG_CONFIGURED"
 printf '\n============================================================\n'
 if [ "$_configured" -eq 1 ]; then
     printf 'ソフトの準備が完了しました。必須の設定項目がそろっているため、初期設定の開始は不要です。\n'

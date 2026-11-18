@@ -138,6 +138,22 @@ def test_reinstall_over_complete_settings_does_not_ask_for_initial_setup(tmp_pat
     assert '設定は変更していません' not in result.stdout
 
 
+@pytest.mark.parametrize('raw,expected_configured', [
+    ('{\n  "runtime_mode": "hermes",\n  "mcs_login_id":\n    "synthetic-login",\n  "notify_target":\n    "synthetic-target"\n}\n', True),
+    ('{"runtime_mode":"hermes","nested":{"mcs_login_id":"synthetic-login","notify_target":"synthetic-target"}}', False),
+    ('{"runtime_mode":"hermes","mcs_login_id":"   ","notify_target":"synthetic-target"}', False),
+], ids=['multiline_top_level', 'nested_only', 'blank_login_id'])
+def test_multiline_and_nested_config_keys_do_not_misclassify_initial_setup(tmp_path, raw, expected_configured):
+    home, hermes_home, _, env = _world(tmp_path, configured=True)
+    config = home / '.mcs/config.json'
+    config.write_text(raw)
+    config.chmod(0o600)
+    result = _run(env, hermes_home, '--no-brew', '--no-llm', '--no-services', '--no-recovery')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ('初期設定の開始は不要です' in result.stdout) is expected_configured
+    assert ('まだ利用開始前の初期設定が必要' in result.stdout) is not expected_configured
+
+
 @pytest.mark.parametrize('runtime', ['hermes', 'standalone'])
 def test_explicit_runtime_is_written_into_new_private_config(tmp_path, runtime):
     home, _, _, env = _world(tmp_path)

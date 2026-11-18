@@ -119,6 +119,7 @@ if [ -n "$STUB_CURL_FAIL" ]; then
 fi
 case "$*" in -sSfIL*) exit 0 ;; esac            # preflight HEAD probe
 case "$*" in -fsIL*)                             # remote size probe
+    if [ -n "$STUB_MODEL_HEAD_RAW" ]; then printf '%b' "$STUB_MODEL_HEAD_RAW"; exit 0; fi
     [ -n "$STUB_MODEL_SIZE" ] && printf 'HTTP/2 200\r\ncontent-length: %s\r\n' "$STUB_MODEL_SIZE"
     exit 0 ;;
 esac
