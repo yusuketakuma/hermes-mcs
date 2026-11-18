@@ -42,8 +42,9 @@ def patient_item_scope(item, body, *, patient_name=None, surface=None, default="
     return clinical_scope.patient_source_scope(body, *span, patient_name=patient_name, default=default)
 
 
-def patient_current_vitals(values, body, *, patient_name=None):
-    """Keep source-consistent vitals and the trusted unscoped legacy contract."""
+def patient_current_vitals(values, body, *, patient_name=None, unmentioned=True):
+    """Keep source-consistent vitals and the trusted unscoped legacy contract.
+    ``unmentioned=False`` (the card) drops fields the body never names."""
     kept = patient_vitals(values, body, patient_name=patient_name)
     if isinstance(values, dict) and patient_item_scope({}, body, patient_name=patient_name) == "patient":
         # A source-labelled measurement overrides unscoped parsed compatibility.
@@ -66,8 +67,9 @@ def patient_current_vitals(values, body, *, patient_name=None):
                                                          match.end(), patient_name=patient_name,
                                                          measurement=True) == "patient"):
                     grounded[label] = values[label]
-        return {**{key: value for key, value in values.items() if key not in observed},
-                **_current_only(grounded, body, patient_name), **kept}
+        legacy = ({key: value for key, value in values.items() if key not in observed}
+                  if unmentioned else {})
+        return {**legacy, **_current_only(grounded, body, patient_name), **kept}
     return kept
 
 
@@ -295,6 +297,12 @@ _LAB_ITEM_UNITS = {
 }
 # Capture explicit dose/count symbols too; an omitted output unit cannot hide them.
 _LAB_QUOTED_UNIT = r"(?:[a-zμ%/0-9.^²‰‱°錠包袋滴枚本個回単位]|カプセル)*"
+# A closed affirmative form is required unless a separate named reading follows.
+_LAB_NUMBER_CLOSED_TAIL = re.compile(
+    r"(?:[トニ])?(?:高値|低値|高イ|低イ|高|低|上昇|低下|正常|異常)?(?:デス|デシタ|ダ|ダッタ)?(?:\([hl]\))?$")
+_LAB_NEXT_NUMBER = re.compile(
+    r"(?:" + "|".join(re.escape(n) for names in _LAB_NAMES.values() for n in names)
+    + r")(?:値|ハ|:|=)*[+-]?[0-9]")
 _DATE = re.compile(r"(?<!\d)(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?(?!\d)")
 
 
@@ -425,6 +433,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                + r")(?![a-z])(?:値|ハ|:|=)*")
     allowed_units = _LAB_ITEM_UNITS.get(analyte, _LAB_UNITS)
     readings = []
+    source_map = None
     for match in re.finditer(pattern, quote):
         tail = quote[match.end():]
         if number is not None:
@@ -432,8 +441,19 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                               f"({_LAB_QUOTED_UNIT})", tail)
             if result and normalized_quantity_number(result[1]) == number:
                 # an omitted unit must not bypass the item's units: the quoted one is checked too
-                if (result[2] == unit_key) if unit_key else (not result[2] or result[2] in allowed_units):
+                after = re.split(r"[。、,;；\n]", tail[result.end():], maxsplit=1)[0]
+                unit_matches = result[2] == unit_key if unit_key else not result[2] or result[2] in allowed_units
+                if unit_matches and _LAB_NUMBER_CLOSED_TAIL.match(after):
                     readings.append(match)
+                elif unit_key and result[2].startswith(unit_key) and isinstance(evidence, str):
+                    # Folding removed the column gap. Require it in the original before splitting the unit.
+                    unit_end = match.end() + result.start(2) + len(unit_key)
+                    if _LAB_NEXT_NUMBER.match(quote, unit_end):
+                        source_map = source_map or fold_map(evidence, casefold=True)
+                        _, starts, ends = source_map
+                        if (len(starts) == len(quote)
+                                and evidence[ends[unit_end - 1]:starts[unit_end]].isspace()):
+                            readings.append(match)
         elif tail.startswith(fold_surface(raw_value)) and raw_value:
             remainder = tail[len(fold_surface(raw_value)):]
             result_unit = re.match(_LAB_QUOTED_UNIT, remainder)
@@ -455,7 +475,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
     if re.search(r"予定|検査依頼|目標|基準|参考", quote):
         supported = False
     if readings and isinstance(evidence, str):
-        _, starts, ends = fold_map(evidence, casefold=True)
+        _, starts, ends = source_map or fold_map(evidence, casefold=True)
         reading = readings[0]
         if clinical_scope.patient_source_scope(evidence, starts[reading.start()], ends[reading.end() - 1],
                                         patient_name=patient_name) \
@@ -557,11 +577,16 @@ def _nearest_vital_label(body: str, s: int, e: int):
     return best[1] if best else None
 
 
+_BP_SLASH_AFTER = re.compile(r"\s*[/／]")
+_BP_SLASH_BEFORE = re.compile(r"[/／]\s*$")
+
+
 def _bp_side(body: str, s: int, e: int):
     """120/80: before the slash is systolic, after is diastolic."""
-    if body[e:e + 1] in ("/", "／"):
+    # the same slash grammar as _BP_PAIR: blanks around the slash are allowed
+    if _BP_SLASH_AFTER.match(body, e):
         return "sbp"
-    if body[s - 1:s] in ("/", "／"):
+    if _BP_SLASH_BEFORE.search(body, max(0, s - _VITAL_WIN_BACK), s):
         return "dbp"
     return None
 
@@ -785,7 +810,10 @@ VITAL_PATTERNS = {
     # 不整脈 is a finding, not a pulse label ("不整脈は20回" ≠ HR 20)
     "hr":   r"(?:脈拍|(?<!静)(?<!動)(?<!整)脈|HR|心拍数?)[:：は]?\s*(\d{2,3})(?![\d.．])",
     "rr":   r"(?:呼吸(?:数)?|RR)[:：は]?\s*(\d{1,2})(?![\d.．])",
-    "sbp":  r"(?:血圧|BP)[:：は]?\s*(\d{2,3})\s*[/／]\s*(\d{2,3})(?![\d.．])",
+    # 血圧 10/15 132/80: a month/day written between the label and the reading is not the reading
+    "sbp":  r"(?:血圧|BP)[:：は]?\s*(?:(?:1[0-2]|0?[1-9])[/／](?:3[01]|[12]\d|0?[1-9])"
+            r"(?:\s*[（(][月火水木金土日][）)])?\s*(?:は|に|の|で)?\s*(?=\d{2,3}\s*[/／]\s*\d{2,3}(?![\d.．])))?"
+            r"(\d{2,3})\s*[/／]\s*(\d{2,3})(?![\d.．])",
     # a number followed by a flow unit is oxygen delivery (酸素10L),
     # never a saturation reading
     "spo2": r"(?:SpO2|Spo2|SPO2|spo2|酸素)[:：は]?\s*(\d{2,3})(?![\d.．])"
@@ -797,7 +825,10 @@ VITAL_PATTERNS = {
 def vital_match_values(key: str, match) -> dict:
     """Values one VITAL_PATTERNS match reads: both blood-pressure sides, else one int or float."""
     if key == "sbp":
-        return {"sbp": int(match[1]), "dbp": int(match[2])}
+        sbp, dbp = int(match[1]), int(match[2])
+        # a pair outside physiological range (a date, a ratio) is not a blood pressure;
+        # the floor stays above any month (M/D dates) but keeps shock readings such as 40/20
+        return {"sbp": sbp, "dbp": dbp} if 30 <= sbp <= 300 and 10 <= dbp <= 200 and sbp > dbp else {}
     value = match[1].replace("．", ".")  # int/float take full-width digits
     return {key: float(value) if "." in value else int(value)}
 
@@ -821,15 +852,7 @@ def absolute_date(text: str) -> str | None:
         return None
 
 
-_VITAL_CTX_WIN = 40
-
-_VITAL_CTX_EXCLUDE = re.compile(
-    r"父|母|義父|義母|(?<![丈工])夫|妻|主人|息子|娘|兄|姉|弟|妹|祖父|祖母|家族|親族"
-    r"|なら|たら|れば|の場合|の際|切ったら|超えたら|下回ったら"
-    r"|を切ると|を超えると|を下回ると"
-    r"|だった|でした|ありました|していた|になった|なりました"
-    r"|先月|先週|昨日|以前|過去に"
-    r"|測定不能|測れ(?:な|ませ|ず)|測定でき(?:な|ませ|ず)|未測定|不明")
+_VITAL_UNMEASURED = re.compile(r"測定不能|測れ(?:な|ませ|ず)|測定でき(?:な|ませ|ず)|未測定")
 
 
 def vital_threshold_flags(vit: dict, body: str | None,
@@ -838,8 +861,9 @@ def vital_threshold_flags(vit: dict, body: str | None,
 
     Returns [{key, value, rule, evidence}] — the reading's own body
     span (±20 chars) as the verbatim quote. A crossing whose reading
-    cannot be anchored to its label, or whose context window shows a
-    family/conditional/past/unmeasurable marker, does not flag."""
+    cannot be anchored to its label, is not the patient's current reading
+    in its own source clause, or is bound to an unmeasurable marker in that
+    clause, does not flag."""
     if not body or not vit:
         return []
     toks = [(m.start(), m.end(), float(m.group().replace("．", ".")))
@@ -869,8 +893,10 @@ def vital_threshold_flags(vit: dict, body: str | None,
         if span is None:
             continue
         s, e = span
-        if _VITAL_CTX_EXCLUDE.search(
-                body, max(0, s - _VITAL_CTX_WIN), e + _VITAL_CTX_WIN):
+        clause = clinical_scope.source_assertion_span(body, body[s:e], anchor=(s, e))
+        text = body[clause[0]:clause[1]] if clause else ""
+        if (clinical_scope.patient_source_scope(body, s, e, measurement=True) != "patient"
+                or _VITAL_UNMEASURED.search(text)):
             continue
         out.append({"key": key, "value": val,
                     "rule": f"{key}_{op}_{limit:g}",

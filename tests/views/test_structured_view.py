@@ -528,17 +528,17 @@ def test_unverified_labs_render_apart_from_confirmed(db, kind, flag):
         "検査候補（未確認）: 合成候補検査 2mg/dL(高)"]
 
 
-def test_unverified_only_labs_keep_candidate_label_and_total_limit(db):
+def test_unverified_only_labs_keep_candidate_label_and_every_value(db):
+    # the 6-item cap silently dropped later labs (bug sweep 2026-11-13): every value is shown
     joined = _render(db, {"labs": [
         {"name": f"合成候補{n}", "value": n, "unverified": True}
         for n in range(7)]})
     assert joined.startswith("検査候補（未確認）: ")
-    assert "合成候補5 5" in joined
-    assert "合成候補6" not in joined
+    assert "合成候補5 5" in joined and "合成候補6 6" in joined
     assert "\n検査: " not in joined
 
 
-def test_mixed_labs_preserve_total_limit(db):
+def test_mixed_labs_keep_every_value_in_their_own_lines(db):
     with db.db:
         db.db.execute("UPDATE messages SET body_text=? WHERE message_id=1",
                       ("。".join(f"合成検査{n}:{n}" for n in range(7)),))
@@ -548,7 +548,7 @@ def test_mixed_labs_preserve_total_limit(db):
         for n in range(7)]})
     assert joined.splitlines() == [
         "検査: 合成検査1 1・合成検査3 3・合成検査5 5",
-        "検査候補（未確認）: 合成検査0 0・合成検査2 2・合成検査4 4"]
+        "検査候補（未確認）: 合成検査0 0・合成検査2 2・合成検査4 4・合成検査6 6"]
 
 
 @pytest.mark.parametrize("kind", ["extract_llm", "canonical_projection", "semantic_facts_v4"])
