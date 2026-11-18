@@ -1,6 +1,7 @@
 """O5: a restore from a backup older than the journal's capped horizon holds every delivery."""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -421,30 +422,6 @@ def test_discord_card_surface_group_takes_the_card_attempt(led, monkeypatch):
     assert plan["part_id"] == group["part_id"]
 
 
-def test_slack_unstarted_file_group_keeps_its_no_journal_started_path(led, tmp_path, monkeypatch):
-    from test_file_group_dependency_refusal import _refused
-    from adapters.common import journal
-    slack, render, _spec, _stage, group = _refused(led, tmp_path, monkeypatch)
-    aid = envelopes.part_attempt_id(render["delivery_id"], group["part_id"])
-    # a legacy pending group whose journal evidence is gone
-    journal.compact(slack.dirs["state"], active="", file_ok=lambda rows: True,
-                    prunable=lambda candidate, rows: candidate == aid)
-    with led.db:
-        led.db.execute("UPDATE notification_render_parts SET state='pending',error_code=NULL,"
-                       "attempt_id=NULL WHERE delivery_id=? AND part_id=?",
-                       (render["delivery_id"], group["part_id"]))
-    assert led.db.execute("SELECT state FROM notification_renders WHERE delivery_id=?",
-                          (render["delivery_id"],)).fetchone()["state"] == "delivered"
-    _restore_from(None, backup_names.JOURNAL_HORIZON_MAX_S + 86400,
-                  data=Path(notify_spool.data_root(led)))
-    receipt = notify_reconcile.reconcile_after_restore(led, SLACK, now=NOW)
-    row = _rows(led, render["delivery_id"])[group["part_id"]]
-    assert (row["state"], row["attempt_id"]) == ("pending", None)
-    assert group["part_id"] not in {p["part_id"] for p in receipt["parts_held"]}
-    plan = notify_recovery.card_part_resolve_plan(led, render["delivery_id"], group["part_id"])
-    assert plan["expected_state"] == "pending"
-
-
 # ---------- Discord group parts that cannot share a verified surface attempt ----------
 
 def _delivered_body_render(led):
@@ -599,3 +576,151 @@ def test_reconcile_rerun_promotes_a_group_whose_surface_became_usable(led):
     assert third["parts_held"] == again["parts_held"]
     assert third["parts_unresolvable"] == again["parts_unresolvable"]
     assert led.db.execute("SELECT COUNT(*) FROM notify_outbox WHERE kind='update_notice'").fetchone()[0] == 1
+
+
+def _compacted_pending_group(led, tmp_path, monkeypatch, *, error_code=None):
+    """A pre-restore Slack render whose file_group never started: the stage upload
+    is human-confirmed delivered, and the journal rows of the stage and the group
+    are gone, as a restore past the journal horizon leaves them. Rows that
+    survived would make reconcile settle the group from the journal (not_sent) or
+    hold the card over the stage's recorded failure, so neither would stay pending."""
+    from test_file_group_dependency_refusal import _confirm_stage, _refused
+    from adapters.common import journal
+    slack, render, spec, stage, group = _refused(led, tmp_path, monkeypatch)
+    _confirm_stage(led, render, stage)
+    parts = {stage["part_id"], group["part_id"]}
+    journal.compact(slack.dirs["state"], active="", file_ok=lambda rows: True,
+                    prunable=lambda candidate, rows: any(r.get("part_id") in parts for r in rows))
+    slack.worker._jview.invalidate()
+    with led.db:
+        led.db.execute("UPDATE notification_render_parts SET state='pending',error_code=?,"
+                       "attempt_id=NULL WHERE delivery_id=? AND part_id=?",
+                       (error_code, render["delivery_id"], group["part_id"]))
+    return slack, render, spec, group
+
+
+@pytest.mark.parametrize("error_code", [None, "stage_receipt_missing"])
+def test_slack_unstarted_file_group_beyond_horizon_refuses_a_journal_only_proof(
+        led, tmp_path, monkeypatch, error_code):
+    """#136: a pending Slack file_group of a pre-restore render must not be
+    resolved as unsent from journal rows that may be compacted away."""
+    slack, render, spec, group = _compacted_pending_group(led, tmp_path, monkeypatch, error_code=error_code)
+    data = Path(notify_spool.data_root(led))
+    age = backup_names.JOURNAL_HORIZON_MAX_S + 86400
+    published_spec = Path(slack.dirs["render"], render["delivery_id"] + ".json")
+    assert published_spec.is_file()
+    _restore_from(None, age, data=data)
+    receipt = notify_reconcile.reconcile_after_restore(led, SLACK, now=NOW)
+    assert [(p["part_id"], p["reason"]) for p in receipt["parts_held"]] == [(group["part_id"], _HOLD)]
+    _restore_from(None, age, data=data)
+    again = notify_reconcile.reconcile_after_restore(led, SLACK, now=NOW + 1)
+    assert again["parts_held"] == receipt["parts_held"]
+    assert led.db.execute("SELECT COUNT(*) FROM notify_outbox WHERE kind='update_notice'").fetchone()[0] == 1
+    worklist = notify_recovery.recovery_worklist(led.db)
+    assert [(item["part_id"], item["status"]) for item in worklist["items"]] == [(group["part_id"], "plannable")]
+    assert notify_recovery.part_hold_report(led)["parts"]["pending"][_HOLD] == 1
+    assert notify_spool.restore_pending(str(data)) is None
+    assert not published_spec.exists()
+    assert led.db.execute(
+        "SELECT spec_published,spec_json FROM notification_renders WHERE delivery_id=?",
+        (render["delivery_id"],),
+    ).fetchone()[:] == (0, render["spec_json"])
+    calls = list(slack.client.calls)
+    asyncio.run(slack.worker._resume_parts(spec))
+    assert slack.client.calls == calls
+    row = _rows(led, render["delivery_id"])[group["part_id"]]
+    assert (row["state"], row["attempt_id"], row["error_code"]) == ("pending", None, _HOLD)
+    plan = notify_recovery.card_part_resolve_plan(led, render["delivery_id"], group["part_id"])
+
+    def resolve(proof, n):
+        req = dict(plan, command_id=str(uuid.UUID(int=7000 + n)), actor="op-user",
+                   human_confirmed=True, reason="合成の復元後確認", result="mark_not_sent",
+                   evidence=dict(method="synthetic", ref="thread-check", proof=proof,
+                                 worker_stopped=True))
+        return notify_recovery.apply_card_part_resolve(led, req, SLACK, now=NOW + n)
+    receipt = resolve("no_journal_started", 1)
+    assert (receipt["outcome"], receipt["error"]) == ("rejected", "journal_cannot_vouch")
+    assert _rows(led, render["delivery_id"])[group["part_id"]]["state"] == "pending"
+    # a journal-independent proof still resolves it (it is not left blocking updates)
+    receipt = resolve("remote_absent", 2)
+    assert receipt["outcome"] == "applied", receipt
+    assert _rows(led, render["delivery_id"])[group["part_id"]]["state"] == "not_sent"
+    assert led.db.execute("SELECT COUNT(*) FROM notification_renders").fetchone()[0] == 1
+    assert slack.client.calls == calls
+
+
+def test_slack_restore_keeps_gate_closed_if_the_worker_spec_cannot_be_withdrawn(led, tmp_path, monkeypatch):
+    slack, render, _spec, group = _compacted_pending_group(led, tmp_path, monkeypatch)
+    data = Path(notify_spool.data_root(led))
+    _restore_from(None, backup_names.JOURNAL_HORIZON_MAX_S + 86400, data=data)
+    published_spec = Path(slack.dirs["render"], render["delivery_id"] + ".json")
+    unlink = os.unlink
+
+    def deny_spec_removal(path, *args, **kwargs):
+        if os.fspath(path) == str(published_spec):
+            raise PermissionError("synthetic refusal")
+        return unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(notify_reconcile.os, "unlink", deny_spec_removal)
+        with pytest.raises(PermissionError, match="synthetic refusal"):
+            notify_reconcile.reconcile_after_restore(led, SLACK, now=NOW)
+    assert published_spec.is_file()
+    assert notify_spool.restore_pending(str(data)) is not None
+    receipt = notify_reconcile.reconcile_after_restore(led, SLACK, now=NOW + 1)
+    assert not published_spec.exists()
+    assert notify_spool.restore_pending(str(data)) is None
+    assert [part["part_id"] for part in receipt["parts_held"]] == [group["part_id"]]
+
+
+@pytest.mark.parametrize("beyond,after_restore", [(False, False), (True, True)])
+def test_slack_pending_group_outside_restore_scope_is_unflagged(
+        led, tmp_path, monkeypatch, beyond, after_restore):
+    _slack, render, _spec, group = _compacted_pending_group(led, tmp_path, monkeypatch)
+    age = backup_names.JOURNAL_HORIZON_MAX_S + 86400 if beyond else 86400
+    restored_at = render["created_at"] - 1 if after_restore else NOW
+    _restore_from(None, age, restored_at=restored_at, data=Path(notify_spool.data_root(led)))
+    receipt = notify_reconcile.reconcile_after_restore(led, SLACK, now=NOW)
+    assert not receipt["parts_held"]
+    row = _rows(led, render["delivery_id"])[group["part_id"]]
+    assert (row["state"], row["error_code"]) == ("pending", None)
+
+
+def test_slack_pending_group_on_superseded_render_is_unflagged(led, tmp_path, monkeypatch):
+    _slack, render, _spec, group = _compacted_pending_group(led, tmp_path, monkeypatch)
+    with led.db:
+        led.db.execute(
+            "INSERT INTO notification_renders "
+            "(delivery_id,card_id,op,render_rev,route_epoch,transport,"
+            "payload_hash,correlation,state,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (str(uuid.UUID(int=7199)), render["card_id"], "update", render["render_rev"] + 1,
+             render["route_epoch"], "slack", render["payload_hash"], "synthetic-successor",
+             "cancelled", NOW, NOW),
+        )
+    _restore_from(None, backup_names.JOURNAL_HORIZON_MAX_S + 86400,
+                  data=Path(notify_spool.data_root(led)))
+    receipt = notify_reconcile.reconcile_after_restore(led, SLACK, now=NOW)
+    assert not receipt["parts_held"]
+    assert _rows(led, render["delivery_id"])[group["part_id"]]["error_code"] is None
+
+
+def test_slack_unstarted_file_group_beyond_horizon_resolves_as_delivered_when_observed(led, tmp_path, monkeypatch):
+    """#136: a posted file set the operator observed still settles a flagged
+    pending group (exact card id and file set re-checked, human approval kept)."""
+    slack, render, _spec, group = _compacted_pending_group(led, tmp_path, monkeypatch)
+    _restore_from(None, backup_names.JOURNAL_HORIZON_MAX_S + 86400,
+                  data=Path(notify_spool.data_root(led)))
+    notify_reconcile.reconcile_after_restore(led, SLACK, now=NOW)
+    plan = notify_recovery.card_part_resolve_plan(led, render["delivery_id"], group["part_id"])
+    card = led.db.execute("SELECT message_id FROM notification_cards WHERE card_id=?",
+                          (render["card_id"],)).fetchone()
+    req = dict(plan, command_id=str(uuid.UUID(int=7100)), actor="op-user", human_confirmed=True,
+               reason="合成の復元後確認", result="mark_delivered", remote_id=card["message_id"],
+               evidence=dict(method="synthetic", ref="thread-check", worker_stopped=True))
+    receipt = notify_recovery.apply_card_part_resolve(led, req, SLACK, now=NOW + 1)
+    assert receipt["outcome"] == "applied", receipt
+    assert _rows(led, render["delivery_id"])[group["part_id"]]["state"] == "delivered"
+
+    assert led.db.execute("SELECT COUNT(*) FROM notification_renders").fetchone()[0] == 1
+    assert not any(kind == "update" and "file_ids" in fields for kind, fields in slack.client.calls)
