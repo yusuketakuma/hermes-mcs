@@ -274,6 +274,36 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     report['notify_unknown_part_outcomes'] = tracking['unknown'] if tracking else None
     report['notify_active_parts_breakdown'] = (_part_breakdown(tracking, tracking['total'])
         if tracking else report['notify_parts_breakdown'])
+    # the alert must tell a fresh count, a carried one and an unmeasured
+    # one apart: only 'recorded' is the current observation
+    parts_status = parts.get('status') if isinstance(parts, dict) else None
+    measurement = ('unknown' if parts_unknown
+                   else 'stale' if parts_status == 'stale_measurement'
+                   else 'recorded' if parts_status == 'recorded' else None)
+    if measurement is None and isinstance(parts, dict) and 'status' not in parts:
+        # Writers before the status field stored only counts and observed_at;
+        # judge that observation by its own clock — consistent counts with
+        # a fresh clock are a current measurement, with an old clock a past
+        # one, anything else (missing, inconsistent, unreadable) is not a
+        # measurement at all.
+        observed = parts.get('observed_at')
+        if (finite_number(observed) and observed <= now
+                and report['notify_incomplete_parts'] is not None):
+            age = now - observed
+            if age <= CARD_STALL_S:
+                measurement = 'recorded'
+            else:
+                measurement = 'stale'
+        if measurement is None:
+            measurement = 'unknown'
+    report['notify_parts_measurement'] = measurement
+    if report['notify_parts_measurement'] == 'stale':
+        observed = parts.get('observed_at')
+        report['notify_parts_observed_at'] = observed if finite_number(observed) else None
+    elif report['notify_parts_measurement'] == 'unknown':
+        reason = parts.get('reason')
+        report['notify_parts_reason'] = (reason if reason in (
+            'observation_limit', 'observation_unavailable') else None)
     held = notify.get("held_reasons")
     report["held_reasons"] = (
         held if isinstance(held, dict)
@@ -927,6 +957,34 @@ _OCR_LOCAL_DEFER_JA = {
     "local_stage_error": ("ローカル解析の処理で異常を記録しました",
                           f"{_DOCTOR} で直近の実行結果を確認してください"),
 }
+# attachment_inference_deferral's llm_* observation codes, phrased as what the
+# page call recorded while it ran — never as the confirmed hold cause.
+_OCR_LLM_DEFER_JA = {
+    "llm_admission": "処理枠の空き待ち",
+    "llm_busy": "処理枠の競合",
+    "llm_checkpoint_unverified": "検証済み記録の未確認",
+    "llm_circuit_open": "呼出回路の停止",
+    "llm_currentness_unverified": "入力の現行性の未確認",
+    "llm_deadline": "処理期限の超過",
+    "llm_endpoint_down": "ローカルLLMの未到達",
+    "llm_local_rebuild_proof_changed": "再構築根拠の変更",
+    "llm_local_rebuild_unverified": "再構築根拠の未確認",
+    "llm_not_sent": "送信前の保留",
+    "llm_probe_unobserved": "形式確認の未観測",
+    "llm_quality_checkpoint_unverified": "品質確認の未検証",
+    "llm_repair_unavailable": "修復呼出の不可",
+}
+
+
+def _ocr_llm_defer_text(reasons) -> str:
+    """Observed call reasons as counts; '' unless the breakdown is usable."""
+    if not isinstance(reasons, dict):
+        return ""
+    return "・".join(f"{_OCR_LLM_DEFER_JA[code]}{count}件"
+                     for code, count in sorted(reasons.items())
+                     if code in _OCR_LLM_DEFER_JA and type(count) is int and count > 0)
+
+
 # runtime_mode=standalone: the host owns the connection and the workers,
 # so the Hermes gateway / per-agent hints do not apply
 _STANDALONE_ACTION = {
@@ -1036,22 +1094,38 @@ def _collection_known_empty(report: dict) -> bool:
             and value["incomplete"]["projects"] == 0 and value["incomplete"]["parent_bodies"] == 0)
 
 
+def _unverified_reason(report: dict, reason: str) -> bool:
+    """Notification evidence that was not measured this run — an
+    unmeasurable count or only a carried value — cannot assert a current
+    delay or defect; a recorded measurement or any other reason can."""
+    base = reason.split(":")[0]
+    if base == "notification_parts_incomplete":
+        return report.get('notify_parts_measurement') != 'recorded'
+    return base in ("notification_cards_unavailable",
+                    "notification_pending_unavailable")
+
+
 def _impact(report: dict, reasons) -> str:
     """One sentence a staff member can act on: what is affected and
     whether collection itself is still running."""
     if report["status"] in _SEVERE:
         return "新しい連絡の収集と通知が止まっている可能性があります。"
-    areas = []
+    seen = {}
     for r in reasons or []:
+        verified = not _unverified_reason(report, r)
         for prefix, name in _AREA_JA:
             if r.startswith(prefix):
                 if prefix == "collection_incomplete" and _collection_known_empty(report):
                     name = "収集判定の確認"
-                if name not in areas:
-                    areas.append(name)
+                if name not in seen or (verified and not seen[name]):
+                    seen[name] = verified
+    areas = [n for n, v in seen.items() if v]
+    unchecked = [n for n, v in seen.items() if not v]
     parts = []
     if areas:
         parts.append("・".join(areas) + "に遅れや不具合があります。")
+    if unchecked:
+        parts.append("・".join(unchecked) + "の配送状況を今回確認できません。")
     if report.get("run_status") == "ok":
         parts.append("収集は動いています。")
     return "".join(parts) or "稼働状況の確認が必要です。"
@@ -1199,21 +1273,33 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             extra = ((f" {int(n)}件" if finite_number(n) else "") + (f"（最古 {age}）" if age else "")
                      + _wait_summary(report.get("notify_wait"), report.get("observations_recorded", False)))
         elif base == "notification_parts_incomplete":
+            measurement = report.get('notify_parts_measurement')
             n = report.get('notify_active_incomplete_parts', report.get('notify_incomplete_parts'))
-            extra = f" {n}件" if _count(n) else ""
-            detail = _part_breakdown(report.get('notify_active_parts_breakdown', report.get('notify_parts_breakdown')), n)
-            if detail is not None:
-                states, plans = detail['by_state'], detail['by_plan']
-                labels = [('結果不明', states['unknown']), ('未送信', states['not_sent']),
-                          ('処理待ち', states['pending']), ('保留', states['held'])]
-                extra += (f"（現行{plans['current']}・過去{plans['superseded']}／"
-                          + '・'.join(f'{label}{count}' for label, count in labels if count) + '）')
-            unknown = report.get('notify_unknown_part_outcomes')
-            if _count(unknown) and unknown > (detail['by_state']['unknown'] if detail else 0):
-                extra += f"／結果不明の全記録 {unknown}件"
-            closed = report.get('notify_tracking_closed_parts')
-            if _count(closed) and closed:
-                extra += f"／別に運用終了・未回収 {closed}件"
+            if measurement == 'unknown':
+                why = {'observation_limit': '観測が制限時間で打ち切られました',
+                       'observation_unavailable': '観測に失敗しました'}.get(
+                           report.get('notify_parts_reason'), '観測できませんでした')
+                extra = f"（件数は未測定: {why}）"
+                action = "次回の収集で再確認します。続く場合は収集ログを確認"
+            else:
+                extra = f" {n}件" if _count(n) else ""
+                detail = _part_breakdown(report.get('notify_active_parts_breakdown', report.get('notify_parts_breakdown')), n)
+                if detail is not None:
+                    states, plans = detail['by_state'], detail['by_plan']
+                    labels = [('結果不明', states['unknown']), ('未送信', states['not_sent']),
+                              ('処理待ち', states['pending']), ('保留', states['held'])]
+                    extra += (f"（現行{plans['current']}・過去{plans['superseded']}／"
+                              + '・'.join(f'{label}{count}' for label, count in labels if count) + '）')
+                unknown = report.get('notify_unknown_part_outcomes')
+                if _count(unknown) and unknown > (detail['by_state']['unknown'] if detail else 0):
+                    extra += f"／結果不明の全記録 {unknown}件"
+                closed = report.get('notify_tracking_closed_parts')
+                if _count(closed) and closed:
+                    extra += f"／別に運用終了・未回収 {closed}件"
+                if measurement == 'stale':
+                    observed = report.get('notify_parts_observed_at')
+                    extra += (f"（記録時点の観測値: {_jst(observed)}）"
+                              if finite_number(observed) else "（記録時点の観測値）")
         elif base == "access_log_unwritable":
             since = report.get("access_log_since")
             extra = f"（{_jst(since)} から）" if finite_number(since) else ""
@@ -1232,6 +1318,10 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                 observed, todo = _OCR_LOCAL_DEFER_JA[cause]
                 extra = f"（直近の実行の再確認: {observed}）"
                 action = f"{todo}。文字起こしの失敗を示すものではありません"
+            elif isinstance(ocr, dict):
+                seen = _ocr_llm_defer_text(ocr.get("local_llm_defer_reasons"))
+                extra = (f"（保留の原因は未特定。処理中の観測: {seen}）" if seen
+                         else "（直近の実行で保留の原因は特定できていません）")
         elif base == "attachment_ocr_processing_failed":
             ocr = report.get("attachment_ocr")
             if (isinstance(ocr, dict)

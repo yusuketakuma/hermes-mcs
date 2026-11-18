@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 import semantic_store
+import semantic_transport
 
 from ledger import LedgerReader
 from stamp_read import reaction_actor_summary
@@ -544,6 +545,7 @@ class View:
                                    include_text=True)
         return result
 
+    @semantic_transport.with_local_model_scope
     def _semantic(self, pid, mid):
         """Phase-J artifacts for one message: bundle, proposition
         verdicts, verified fact candidates, audited summary, notify
@@ -588,6 +590,8 @@ class View:
                     current = current and bool(
                         policy
                         and meta.get("policy_fingerprint") == policy)
+                current = current and semantic_store.producer_current(
+                    kind, r["model"], meta)
                 effective = (meta.get("audit_status") or meta.get("technical_status")) \
                     if current else "STALE"
                 items.append({"artifact_id": r["artifact_id"],

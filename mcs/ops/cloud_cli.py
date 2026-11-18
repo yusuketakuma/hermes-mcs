@@ -1082,7 +1082,9 @@ def _time_value(text, *, end):
         date.fromisoformat(text)
         text += "T23:59:59+09:00" if end else "T00:00:00+09:00"
     mcs_util.until_epoch(text)
-    return text
+    # Save the canonical form: Python 3.9 helpers in install.sh cannot read
+    # 3.11-only spellings such as '.5', '+0900' or the basic format.
+    return datetime.fromisoformat(text).isoformat()
 
 
 def budget_command(args):

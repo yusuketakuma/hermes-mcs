@@ -313,6 +313,10 @@ def until_epoch(value) -> float:
     from datetime import datetime
     if not isinstance(value, str) or len(value) > 64:
         raise ValueError("until_invalid")
+    # Installer helpers on Python 3.9/3.10 reject Z. Other newer ISO forms
+    # in older CLI output or manual settings may need resaving with cloud_cli.
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("until_needs_offset")

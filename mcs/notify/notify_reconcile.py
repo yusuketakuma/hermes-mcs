@@ -51,7 +51,9 @@ import notify_scope
 import notify_spool
 from notify_scope import card_row
 from mcs_queries import HOLD_PROGRESS_SET
+from mcs_requests import valid_uuid
 from mcs_util import loads_dict
+from safe_io import fsync_dir
 import notify_transport
 import notify_journal
 import notify_parts
@@ -447,7 +449,7 @@ def promote_group_parts(db, now, delivery_id=None) -> list:
     return promoted
 
 
-def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
+def _unknown_beyond_horizon_parts(db, restored_at, now, slack_directory) -> list:
     """Mark the pending thread/body/attachment/file-group parts of each card's
     latest delivered render from the restored backup ``unknown``.
 
@@ -465,22 +467,10 @@ def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
     unknown with an attempt, they become ``unknown`` with no attempt and a
     reason in UNRESOLVABLE: still blocking, never planned, and reported for
     manual investigation until promote_group_parts finds their surface usable. Older superseded renders never block an update and
-    are left alone; a Slack file_group that never started keeps its own
-    ``no_journal_started`` path. A missing record is not proof of
-    non-delivery, so nothing becomes not_sent. Returns the parts this run
-    changed; re-runs find no pending parts left and change nothing."""
+    are left alone. A Slack file_group without a recorded attempt stays
+    pending and is flagged: a missing journal record cannot prove non-delivery.
+    Returns the parts newly marked or flagged by this run."""
     from adapters.common import envelopes
-    rows = db.execute(
-        "SELECT p.delivery_id,p.part_id,p.kind,p.attempt_id,r.card_id,r.transport "
-        "FROM notification_render_parts p JOIN notification_renders r "
-        "ON r.delivery_id=p.delivery_id WHERE r.state='delivered' "
-        "AND r.card_id IS NOT NULL AND (? IS NULL OR r.created_at <= ?) "
-        "AND r.render_rev=(SELECT MAX(x.render_rev) FROM notification_renders x "
-        "WHERE x.card_id=r.card_id) "
-        "AND p.kind IN ('thread','body_part','attachment_part','file_group') "
-        "AND p.state='pending' AND NOT (r.transport='slack' "
-        "AND p.kind='file_group' AND p.attempt_id IS NULL) "
-        "ORDER BY p.delivery_id,p.idx", (restored_at, restored_at)).fetchall()
     marked = []
 
     def mark(row, aid, reason=BEYOND_HORIZON):
@@ -494,8 +484,30 @@ def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
 
     with db:
         db.execute("BEGIN IMMEDIATE")
+        rows = db.execute(
+            "SELECT p.delivery_id,p.part_id,p.kind,p.attempt_id,r.card_id,r.transport "
+            "FROM notification_render_parts p JOIN notification_renders r "
+            "ON r.delivery_id=p.delivery_id WHERE r.state='delivered' "
+            "AND r.card_id IS NOT NULL AND (? IS NULL OR r.created_at <= ?) "
+            "AND r.render_rev=(SELECT MAX(x.render_rev) FROM notification_renders x "
+            "WHERE x.card_id=r.card_id) "
+            "AND p.kind IN ('thread','body_part','attachment_part','file_group') "
+            "AND p.state='pending' "
+            "ORDER BY p.delivery_id,p.idx", (restored_at, restored_at)).fetchall()
+        flagged = []
+        slack_deliveries = set()
         grouped, unresolvable, surfaces = [], [], {}
         for row in rows:
+            if row["transport"] == "slack" and row["kind"] == "file_group" and row["attempt_id"] is None:
+                slack_deliveries.add(row["delivery_id"])
+                if db.execute(
+                    "UPDATE notification_render_parts SET error_code=?,updated_at=? "
+                    "WHERE delivery_id=? AND part_id=? AND state='pending' "
+                    "AND attempt_id IS NULL AND error_code IS NOT ?",
+                    (BEYOND_HORIZON, now, row["delivery_id"], row["part_id"], BEYOND_HORIZON),
+                ).rowcount:
+                    flagged.append(_part_entry(row, None, BEYOND_HORIZON))
+                continue
             if row["transport"] == "discord" and row["kind"] in ("attachment_part", "file_group"):
                 if row["delivery_id"] not in surfaces:
                     surfaces[row["delivery_id"]] = _discord_group_surfaces(db, row["delivery_id"])
@@ -523,7 +535,8 @@ def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
         promoted = promote_group_parts(db, now)
         for delivery_id in sorted({h["delivery_id"] for h in (*marked, *promoted)}):
             notify_parts.update_state(db, delivery_id, now)
-    return marked
+        _withdraw_slack_specs(db, slack_directory, slack_deliveries)
+    return [*marked, *flagged]
 
 
 def _part_entry(row, aid, reason):
@@ -533,18 +546,45 @@ def _part_entry(row, aid, reason):
 
 
 def _beyond_horizon_parts(db) -> tuple[list, list]:
-    """Every part still ``unknown`` from a restore beyond the journal horizon,
-    so a re-run's receipt still lists what awaits ``ops.card_part_resolve``
-    (first) and what it cannot plan and needs manual investigation (second)."""
+    """Every part still ``unknown`` from a restore beyond the journal horizon
+    (and each pending Slack file_group flagged with it), so a re-run's receipt
+    still lists what awaits ``ops.card_part_resolve`` (first) and what it
+    cannot plan and needs manual investigation (second)."""
+    from adapters.common import envelopes
     codes = (BEYOND_HORIZON, *UNRESOLVABLE)
-    parts = [_part_entry(r, r["attempt_id"], r["error_code"]) for r in db.execute(
-        "SELECT p.delivery_id,p.part_id,p.kind,p.attempt_id,p.error_code,r.card_id "
+    # only a flagged pending group has no stored attempt id; its plan's value is
+    # derived, whereas an unknown part's (NULL for Discord) is reported as stored
+    parts = [_part_entry(r, r["attempt_id"] or (envelopes.part_attempt_id(r["delivery_id"], r["part_id"])
+                                                if r["state"] == "pending" else None),
+                         r["error_code"]) for r in db.execute(
+        "SELECT p.delivery_id,p.part_id,p.kind,p.state,p.attempt_id,p.error_code,r.card_id "
         "FROM notification_render_parts p JOIN notification_renders r "
-        "ON r.delivery_id=p.delivery_id WHERE p.state='unknown' "
-        f"AND p.error_code IN ({','.join('?' * len(codes))}) "
-        "ORDER BY p.delivery_id,p.idx", codes).fetchall()]
+        "ON r.delivery_id=p.delivery_id WHERE (p.state='unknown' "
+        f"AND p.error_code IN ({','.join('?' * len(codes))})) "
+        "OR (p.state='pending' AND r.transport='slack' AND p.kind='file_group' "
+        "AND p.attempt_id IS NULL AND p.error_code=?) "
+        "ORDER BY p.delivery_id,p.idx", (*codes, BEYOND_HORIZON)).fetchall()]
     return ([p for p in parts if p["reason"] == BEYOND_HORIZON],
             [p for p in parts if p["reason"] != BEYOND_HORIZON])
+
+
+def _withdraw_slack_specs(db, directory, deliveries):
+    """Keep the sealed DB plan but prevent worker replay when the restore gate opens."""
+    if not deliveries:
+        return
+    for delivery_id in sorted(deliveries):
+        if not valid_uuid(delivery_id):
+            raise ValueError("invalid_restore_delivery_id")
+        try:
+            os.unlink(os.path.join(directory, delivery_id + ".json"))
+        except FileNotFoundError:
+            pass
+    try:
+        fsync_dir(directory)
+    except FileNotFoundError:
+        pass
+    db.executemany("UPDATE notification_renders SET spec_published=0 WHERE delivery_id=?",
+                   [(delivery_id,) for delivery_id in deliveries])
 
 
 def _hold_rows(db) -> int:
@@ -635,7 +675,7 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
                             BEYOND_HORIZON, dirs, now)
             verdicts.append(v)
             held.append(v)
-        parts_marked = _unknown_beyond_horizon_parts(db, restored_at, now)
+        parts_marked = _unknown_beyond_horizon_parts(db, restored_at, now, dirs["slack_render"])
         parts_held, parts_unresolvable = _beyond_horizon_parts(db)
     else:
         parts_marked, parts_held, parts_unresolvable = [], [], []

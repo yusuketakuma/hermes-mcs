@@ -1,5 +1,6 @@
 """Synthetic contracts for assist-summary comparison and adoption."""
 import semantic_store
+import semantic_transport
 
 import json
 import uuid
@@ -24,7 +25,7 @@ def _command(cmd, project_id=1, **fields):
     }
 
 
-def _setup(tmp_path, *, publication_mode="assist", audit_status="PASS"):
+def _setup(tmp_path, *, publication_mode="assist", audit_status="PASS", provenance=None):
     db = Ledger(str(tmp_path / "ledger.db"))
     db.save_patient(
         type("Patient", (), {
@@ -53,14 +54,137 @@ def _setup(tmp_path, *, publication_mode="assist", audit_status="PASS"):
             "section": "status", "text": "新しい監査済み要約",
             "claim_kind": "reported_fact",
         }], "limitations": []}, ensure_ascii=False),
-        project_id=1, message_id=1, model="local",
+        project_id=1, message_id=1, model=semantic_transport.LLM_MODEL,
         meta={"fingerprint": bundle["source_fingerprint"],
               "policy_fingerprint": policy,
               "target_revision": bundle["members"][0]["revision"],
               "audit_status": audit_status,
-              "publication_mode": publication_mode},
+              "publication_mode": publication_mode,
+              **({"provider_provenance": provenance} if provenance else {})},
     )
     return db, candidate_id
+
+
+def test_local_model_change_makes_local_summary_not_adoptable(tmp_path, monkeypatch):
+    db, candidate_id = _setup(tmp_path)
+    assert summary_review.comparison(db.db, 1, 1, candidate_id)["adoptable"] is True
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
+    reviewed = summary_review.comparison(db.db, 1, 1, candidate_id)
+    assert reviewed["candidate"]["current"] is False
+    assert reviewed["adoptable"] is False
+    assert "candidate_producer_stale" in reviewed["reasons"]
+    rejected = mcs_requests.apply_command(db, _command(
+        "ops.adopt_summary", message_id=1, summary_artifact_id=candidate_id,
+        comparison_hash=reviewed["comparison_hash"], reason="古い要約は採用しない"))
+    assert rejected["outcome"] == "rejected"
+    db.close()
+
+
+def test_local_model_change_after_adoption_clears_current_adoption(tmp_path, monkeypatch):
+    db, candidate_id = _setup(tmp_path)
+    reviewed = summary_review.comparison(db.db, 1, 1, candidate_id)
+    applied = mcs_requests.apply_command(db, _command(
+        "ops.adopt_summary", message_id=1, summary_artifact_id=candidate_id,
+        comparison_hash=reviewed["comparison_hash"], reason="採用する"))
+    assert applied["outcome"] == "applied"
+    adopted = summary_review.comparison(db.db, 1, 1, candidate_id)
+    assert adopted["candidate"]["adopted"] is True
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
+    changed = summary_review.comparison(db.db, 1, 1, candidate_id)
+    assert changed["candidate"]["current"] is False
+    assert changed["candidate"]["adopted"] is False
+    assert changed["adoptions"] and not any(a["current"] for a in changed["adoptions"])
+    db.close()
+
+
+def test_local_model_change_keeps_cloud_summary_adoptable(tmp_path, monkeypatch):
+    db, candidate_id = _setup(
+        tmp_path, provenance={"providers": ["anthropic"], "complete": True})
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
+    reviewed = summary_review.comparison(db.db, 1, 1, candidate_id)
+    assert reviewed["candidate"]["current"] is True
+    assert reviewed["adoptable"] is True
+    assert "candidate_producer_stale" not in reviewed["reasons"]
+    db.close()
+
+
+@pytest.mark.parametrize("cloud,changed,expected", [
+    (False, False, "PASS"), (False, True, "STALE"), (True, True, "PASS")])
+def test_view_shows_summary_stale_after_local_model_change(
+        tmp_path, monkeypatch, cloud, changed, expected):
+    import ledger
+    import mcs_view
+    db, _ = _setup(tmp_path, provenance=(
+        {"providers": ["anthropic"], "complete": True} if cloud else None))
+    if changed:
+        monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
+    snapshot = ledger.publish_snapshot(
+        str(tmp_path / "ledger.db"), str(tmp_path / "snapshots"))
+    db.close()
+    view = mcs_view.View(snapshot)
+    try:
+        row = view.read("semantic", project=1, message_id=1)["semantic"]["semantic_summary"][0]
+        assert row["effective_status"] == expected
+    finally:
+        view.close()
+
+
+def _drifting_screen(tmp_path, monkeypatch):
+    """One screen: 3 local rows made by model A + 1 cloud row; the configured model drifts A→B."""
+    import ledger
+    import mcs_view
+    db, _ = _setup(tmp_path)
+    created_model = semantic_transport.LLM_MODEL
+    fingerprint = semantic_store.thread_bundle(db.db, 1, 1)["source_fingerprint"]
+    for kind in ("semantic_facts", "semantic_facts_v4"):
+        db.artifact_add(kind, "{}", project_id=1, message_id=1, model=created_model,
+                        meta={"fingerprint": fingerprint, "policy_fingerprint": "a" * 64,
+                              "technical_status": "PASS"})
+    db.artifact_add("semantic_facts", "{}", project_id=1, message_id=1, model="cloud-synthetic",
+                    meta={"fingerprint": fingerprint, "technical_status": "PASS",
+                          "provider_provenance": {"providers": ["anthropic"], "complete": True}})
+    snapshot = ledger.publish_snapshot(
+        str(tmp_path / "ledger.db"), str(tmp_path / "snapshots"))
+    db.close()
+    models = iter([created_model] + ["synthetic-local-b"] * 200)
+    calls = []
+
+    def drifting_model(*_a, **_k):
+        calls.append(1)
+        return next(models)
+
+    monkeypatch.setattr(semantic_transport, "llm_model", drifting_model)
+    return mcs_view.View(snapshot), created_model, calls
+
+
+def _statuses(out, created_model):
+    rows = [r for items in out.values() for r in items]
+    local = [r["effective_status"] for r in rows if r["model"] == created_model]
+    cloud = [r["effective_status"] for r in rows if r["model"] == "cloud-synthetic"]
+    return local, cloud
+
+
+def test_view_reads_local_model_once_so_one_screen_is_consistent(tmp_path, monkeypatch):
+    view, created_model, calls = _drifting_screen(tmp_path, monkeypatch)
+    try:
+        local, cloud = _statuses(view.read("semantic", project=1, message_id=1)["semantic"],
+                                 created_model)
+        assert len(local) >= 3 and len(set(local)) == 1
+        assert cloud == ["PASS"]
+        assert len(calls) == 1
+    finally:
+        view.close()
+
+
+def test_view_without_model_scope_would_split_one_screen(tmp_path, monkeypatch):
+    import mcs_view
+    view, created_model, calls = _drifting_screen(tmp_path, monkeypatch)
+    try:
+        out = mcs_view.View._semantic.__wrapped__(view, 1, 1)["semantic"]
+        local, _cloud = _statuses(out, created_model)
+        assert len(set(local)) > 1 and len(calls) > 1
+    finally:
+        view.close()
 
 
 def test_comparison_adoption_is_replayed_without_outbox_mutation(tmp_path):
