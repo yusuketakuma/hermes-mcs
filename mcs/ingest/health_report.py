@@ -801,7 +801,10 @@ HEALTH_OBSERVATION_ROW_BYTES = 2 * 1024 * 1024
 
 
 def bounded_health_read(db, read, seconds=None, *, observation=None):
-    """Bound additive reads on the tick-owned connection; preserve its transaction."""
+    """Bound additive reads on the tick-owned connection; preserve its transaction.
+
+    ``observation["phase"]`` records the operation active when a stop is detected.
+    """
     seconds = HEALTH_OBSERVATION_S if seconds is None else seconds  # read at call time
     started = time.monotonic()
     deadline = started + seconds
@@ -989,15 +992,17 @@ def incomplete_parts_health(db, now, cfg=None, seconds=None, active_rows=None) -
     """Observe unfinished notification counts within the existing reader budget.
 
     ``active_rows``, when a list, is extended only after a complete read with
-    the active rows that read counted; a stopped read leaves it untouched."""
+    the active rows that read counted; a stopped read leaves it untouched.
+    On failure ``observation["phase"]`` names the operation active when the
+    stop was detected."""
     import notify_scope
     collected = []
     sink = {} if active_rows is None else {"active_rows": collected}
     observation = {}
     try:
         report = bounded_health_read(
-            db, lambda _check: notify_scope.incomplete_parts_health(
-                db, now, cfg, observation=observation, **sink),
+            db, lambda check: notify_scope.incomplete_parts_health(
+                db, now, cfg, observation=observation, checkpoint=check, **sink),
             seconds=NOTIFICATION_OBSERVATION_S if seconds is None
             else min(seconds, NOTIFICATION_OBSERVATION_S),
             observation=observation)
