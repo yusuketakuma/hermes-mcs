@@ -219,3 +219,26 @@ def test_other_person_past_and_conditional_spaced_pairs_are_still_rejected(body)
     values = {"sbp": 120, "dbp": 80} if "160" not in body else {"sbp": 160, "dbp": 100}
     for layer in _layers(body, values):
         assert not ({"sbp", "dbp"} & layer.keys()), layer
+
+
+@pytest.mark.parametrize("body", [
+    "本人の血圧120/80.",
+    "本人の血圧120/80．",
+    "本人の血圧120 / 80.",
+    "本人の血圧120 / 80．",
+])
+def test_a_sentence_ending_period_still_rejects_an_inverted_pair(body):
+    for layer in _layers(body, {"sbp": 80, "dbp": 120}):
+        assert not ({"sbp", "dbp"} & layer.keys()), layer
+
+
+@pytest.mark.parametrize("body", ["本人の血圧120/80.", "本人の血圧120 / 80．"])
+def test_a_sentence_ending_period_keeps_a_stored_correct_pair(body):
+    for layer in _layers(body, {"sbp": 120, "dbp": 80}):
+        assert {k: layer[k] for k in ("sbp", "dbp")} == {"sbp": 120, "dbp": 80}
+
+
+def test_a_decimal_continuation_is_not_read_as_a_pair_with_a_period():
+    # 80.5 is one decimal value, never the pair '80' plus a period
+    for layer in _layers("本人の血圧120/80.5。", {"sbp": 120, "dbp": 80}):
+        assert "dbp" not in layer or layer["dbp"] != 80

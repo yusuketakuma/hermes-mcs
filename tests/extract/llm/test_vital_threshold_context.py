@@ -70,7 +70,8 @@ def test_family_kanji_inside_a_word_at_the_context_boundary_is_not_excluded():
         assert clinical_values.vital_threshold_flags({"spo2": 88}, body, TH)
 
 
-@pytest.mark.parametrize("body", ["本人の血圧80/60。", "本人の血圧80 / 60。"])
+@pytest.mark.parametrize("body", ["本人の血圧80/60。", "本人の血圧80 / 60。",
+                                  "本人の血圧80/60.", "本人の血圧80 / 60．"])
 def test_a_spaced_blood_pressure_pair_reaches_its_configured_threshold_flag(body):
     flags = clinical_values.vital_threshold_flags({"sbp": 80, "dbp": 60}, body, {"sbp_lte": 90})
     assert [f["key"] for f in flags] == ["sbp"], flags
