@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "空白を含む血圧ペアで上下の逆転が検証を通り、設定済み閾値フラグが落ちる問題を修正",
+  "summary": "血圧を「120 / 80」のようにスラッシュ前後に空白を含めて書いた記録で、抽出値の収縮期・拡張期の左右が判別できず、逆転した応答が検証を通り、条件に合う設定済みの閾値フラグも返りませんでした。ペアを受理する文法と同じ方法で左右を照合するようにしたため、空白の有無で値の対応やフラグが変わりません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "左右の判定を、受理済みペアのspanから照合する共通処理へ統一しました。空白なし・空白あり・全角スラッシュや全角空白で判定が変わりません。",
+    "逆転したペアは書き手側の検証と読み手側のreaderの両方で拒否され、片側だけの値・複数測定・他人・過去・条件付きの記述の扱いは変わりません。"
+  ],
+  "refs": [
+    "mcs/extract/clinical/clinical_values.py",
+    "tests/extract/clinical/test_bp_pair_guard.py",
+    "tests/extract/clinical/test_model_vitals_source_guard.py",
+    "tests/extract/llm/test_vital_threshold_context.py"
+  ]
+}
