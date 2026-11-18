@@ -140,11 +140,31 @@ def test_not_sent_timeout_and_non_transport_errors_skip_the_wait(turn, error, ki
     assert state["gets"] == 0 and err == {"kind": kind}
 
 
-def test_unpinned_request_skips_the_wait(turn):
-    send, state = _fake(turn, [False, False])
+@pytest.mark.parametrize("override", [None, "1"])
+def test_omitted_slot_is_pinned_and_waits_for_idle(turn, monkeypatch, override):
+    if override is None:
+        monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
+    else:
+        monkeypatch.setenv("MCS_LLM_SLOT", override)
+    monkeypatch.delenv(local_llm.SCHEDULE_ENV, raising=False)
+    send, state = _fake(turn, [True, False, False])
+    sent_slots = []
+
+    def request(endpoint, method, body, timeout, deadline):
+        if method == "POST":
+            sent_slots.append(body["id_slot"])
+            assert not _lock_is_free(turn)
+        return send(endpoint, method, body, timeout, deadline)
+
     err = {}
-    assert local_llm.chat("prompt", request_fn=send, error_out=err) is None
-    assert state["gets"] == 0 and err == {"kind": "transport"}
+    assert local_llm.chat("prompt", request_fn=request, error_out=err) is None
+    assert sent_slots == [1]
+    # Slot 0 remains busy in every sample. Only the pinned slot's two
+    # consecutive idle samples permit release, with the turn held throughout.
+    assert state["gets"] == 3 and state["locked"] == [False] * 3
+    assert err["kind"] == "transport" and err["slot_wait_confirmed"] == 1
+    assert type(err["slot_wait_ms"]) is int
+    assert _lock_is_free(turn)
 
 
 def test_admitted_chat_keeps_permit_unknown_after_confirmed_idle(turn, tmp_path, monkeypatch):

@@ -695,8 +695,8 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
             if error_out is not None:
                 error_out["kind"] = "busy"
             return None
-        if scheduling_enabled():
-            body["id_slot"] = turn
+        # The acquired turn owns the wire slot, including legacy and nested calls.
+        body["id_slot"] = turn
         try:
             status, _headers, raw = send(endpoint, "POST", body, timeout,
                                          deadline)
@@ -717,9 +717,8 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
             # a sent request that died in transport may still be decoding
             # on our slot: keep the turn until the slot reports idle
             if kind == "transport" and isinstance(error, OSError) \
-                    and (_turn_path() or scheduling_enabled()) \
-                    and type(body.get("id_slot")) is int:
-                _wait_slot_idle(send, endpoint, body["id_slot"], deadline,
+                    and (_turn_path() or scheduling_enabled()):
+                _wait_slot_idle(send, endpoint, turn, deadline,
                                 error_out)
             return None
     if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
