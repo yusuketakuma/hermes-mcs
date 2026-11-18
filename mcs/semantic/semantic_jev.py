@@ -218,7 +218,7 @@ def _decode_response(raw: bytes, *, retryable: bool = False):
 
 def finite_value(value) -> float | None:
     """Read a finite wire number without accepting bool or numeric strings."""
-    if type(value) is bool or not isinstance(value, int | float):
+    if type(value) is bool or not isinstance(value, (int, float)):
         return None
     try:
         v = float(value)
@@ -647,14 +647,13 @@ class JevClient:
                 raise
             except OSError as e:     # URLError and TimeoutError included
                 kind = "timeout" if isinstance(e, TimeoutError) else "transport"
-                last = JevError(kind, type(e).__name__,
-                                retryable=True)
+                # Only a refusal before dispatch proves the body never left; a
+                # sent request may already be billed and is never resent
+                # (the cloud client's rule, owner decision 2026-10-28).
+                last = JevError(kind, type(e).__name__, retryable=isinstance(
+                    e, (bounded_http.NotSentTimeout, ConnectionRefusedError)))
             else:
-                if time.monotonic() >= deadline:
-                    last = JevError("timeout", "job_deadline_exceeded",
-                                    retryable=True)
-                    self.last_error = last
-                    continue
+                # A late answer is still settled: dropping it would lose a billed result.
                 if len(raw) > MAX_RESPONSE_BYTES:
                     last = JevError("protocol_error", "response_too_large")
                 elif status != 200:

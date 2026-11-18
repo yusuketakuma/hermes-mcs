@@ -178,7 +178,7 @@ def daily_backup(db_path: str, *, deadline: float | None = None):
     os.close(fd)
     publish_backup(db_path, tmp, dest, deadline=deadline)
     _write_ok_marker(dest)
-    files = sorted(glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db")))
+    files = _daily_backups()
     for old in files[:-BACKUP_KEEP]:
         for path in (old, old + ".ok"):
             with suppress(OSError):
@@ -186,10 +186,16 @@ def daily_backup(db_path: str, *, deadline: float | None = None):
     prune_preupdate_backups()
 
 
+def _daily_backups() -> list[str]:
+    """Only owned daily files contribute to rotation and freshness."""
+    return sorted(path for path in glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db"))
+                  if backup_class(os.path.basename(path)) == "daily")
+
+
 def newest_backup_age_s() -> float | None:
     """Age of the newest daily backup; None when there is none."""
     stamps = []
-    for path in glob.glob(os.path.join(BACKUP_DIR, "ledger-*.db")):
+    for path in _daily_backups():
         with suppress(OSError):   # rotated away mid-scan
             stamps.append(os.path.getmtime(path))
     return time.time() - max(stamps) if stamps else None
@@ -233,7 +239,7 @@ def local_backup_status(*, now: float) -> dict:
             for n, entry in enumerate(entries):
                 if n >= LOCAL_STATUS_SCAN_MAX or monotonic() > stop:
                     return out("unknown")      # cannot know which is newest
-                if not (entry.name.startswith("ledger-") and entry.name.endswith(".db")):
+                if backup_class(entry.name) != "daily":
                     continue
                 try:
                     st = entry.stat(follow_symlinks=False)

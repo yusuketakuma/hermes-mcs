@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "保存済みの保護項目を失って保留になった投稿の記録に、失い方の内訳を残す",
+  "summary": "保存済みの否定・家族・他者の記載を再抽出の候補が失って保留になったとき、保留の記録に、失った項目の数を理由別に lost_class として残します。保留にするかどうかの判定は変わりません。",
+  "upgrade": "追加の操作は不要です。保留の記録の内容が変わるため、同じ投稿の保留の記録が1回だけ新しく作られます。",
+  "details": [
+    "lost_class の理由は absent・conflict・prior_unverifiable・unlocated の4つで、件数だけを残します。本文・症状名・引用は記録しません。",
+    "保存済みの保護項目を候補へ戻す処理（protected_carried・protected_conflict の計数を含む）は、今回は入れていません。保存済みの保護項目を抽出器へ渡す範囲も、これまでと同じです。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_quality.py",
+    "mcs/extract/llm/extract_llm_store.py",
+    "mcs/extract/llm/extract_llm_runner.py"
+  ]
+}

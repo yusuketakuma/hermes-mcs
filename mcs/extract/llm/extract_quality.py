@@ -1174,3 +1174,67 @@ def protected_lost(prior, candidate, body):
             if not any(retains_assertion(item, other) for other in new.get(field) or []):
                 lost[field] = lost.get(field, 0) + 1
     return lost
+
+
+# The identifying label of one item per field; other attributes must agree.
+_LOSS_LABEL = {"meds": "name", "symptoms": "text", "labs": "name", "event_records": "kind",
+                "requests": "action", "patient_context": "text"}
+_LOSS_IGNORED = ("evidence", "span", "normalized", "unverified")
+
+
+def _agrees(item, other, label):
+    """Every attribute both items state, besides the label, has the same value."""
+    return all(other[key] == item[key] for key in other
+               if key != label and key in item and key not in _LOSS_IGNORED
+               and not key.startswith("_") and other[key] is not None and item[key] is not None)
+
+
+def _lost_assertion_class(field, item, current, body):
+    """Return one fixed diagnostic code for an assertion already held for review."""
+    checked = extract_validation.validate({field: [item]}, body)
+    checked = checked.get(field) if isinstance(checked, dict) else None
+    if not isinstance(checked, list) or len(checked) != 1 or not retains_assertion(item, checked[0]):
+        return "prior_unverifiable"
+    kept_item, label = checked[0], _LOSS_LABEL.get(field)
+    span = locate_quote_span(body, kept_item.get("evidence"))
+    for other in current:
+        if not isinstance(other, dict):
+            continue
+        quote = other.get("evidence")
+        other_span = locate_quote_span(body, quote) if isinstance(quote, str) else None
+        overlap = span is not None and other_span is not None and other_span[0] < span[1] and span[0] < other_span[1]
+        if (retains_assertion({key: value for key, value in other.items() if key != "span"}, kept_item)
+                and (overlap or other_span is None)):
+            continue                    # the same assertion in a shorter form or narrower span
+        same = label is not None and other.get(label) == kept_item.get(label)
+        if not same and not overlap:
+            continue
+        if not same and _agrees(kept_item, other, label):
+            continue
+        return "conflict"
+    return "absent"
+
+
+def protected_loss_classes(prior, candidate, body, pieces=None):
+    """Classify each protected assertion protected_lost counts with fixed codes only.
+
+    "unlocated": the quote lies in no single piece; otherwise the
+    classification for that assertion alone: "absent" (no candidate
+    item disagrees), "conflict" or "prior_unverifiable"."""
+    classes = {}
+    if not isinstance(body, str):
+        return classes
+    new = extract_validation.validate(candidate if isinstance(candidate, dict) else {}, body) or {}
+    for field, item in ((field, item) for field, items in protected_assertions(prior, body).items()
+                        for item in items):
+        current = new.get(field) if isinstance(new.get(field), list) else []
+        if any(retains_assertion(item, other) for other in current):
+            continue
+        if pieces is not None and not any(locate_quote_span(piece, item["evidence"]) is not None
+                                          for piece in pieces):
+            code = "unlocated"
+        else:
+            code = _lost_assertion_class(field, item, current, body)
+        target = classes.setdefault(field, {})
+        target[code] = target.get(code, 0) + 1
+    return classes

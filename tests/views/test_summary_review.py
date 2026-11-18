@@ -9,6 +9,7 @@ import pytest
 
 import mcs_requests
 import summary_review
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from ledger import Ledger
 from semantic_testkit import _message
 
@@ -46,7 +47,7 @@ def _setup(tmp_path, *, publication_mode="assist", audit_status="PASS", provenan
     db.artifact_add(
         "extract_llm", json.dumps({"summary": "旧い要約", "points": ["旧い点"]}),
         project_id=1, message_id=1, model="local",
-        meta={"hash": source_hash},
+        meta={"hash": source_hash, VERSION_KEY: CURRENT_VERSION},
     )
     candidate_id = db.artifact_add(
         "semantic_summary",
