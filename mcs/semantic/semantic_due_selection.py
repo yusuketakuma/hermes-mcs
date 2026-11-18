@@ -221,6 +221,12 @@ _ELIGIBLE_SQL = "json_valid(payload) AND COALESCE(json_extract(payload,'$.eligib
 _REPROCESS_LAST_SQL = ("CASE WHEN NOT json_valid(payload) THEN 0 "
                        "WHEN json_type(payload,'$.reprocess_only')='true' "
                        "AND json_type(payload,'$.notification_free')='true' THEN 1 ELSE 0 END")
+# 0 for a notifiable arrival (eligible, not notification_free), else 1; CASE
+# order keeps json_extract away from malformed payloads.
+_ARRIVAL_FIRST_SQL = ("CASE WHEN NOT json_valid(payload) THEN 1 "
+                      "WHEN COALESCE(json_extract(payload,'$.eligible'),0)=1 "
+                      "AND COALESCE(json_extract(payload,'$.notification_free'),0)=0 "
+                      "THEN 0 ELSE 1 END")
 
 
 _MALFORMED_JOB_SQL = (

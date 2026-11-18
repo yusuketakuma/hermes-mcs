@@ -167,8 +167,18 @@ def _optional_blocks(h: dict) -> dict:
         interrupt = {"reason": last["reason"], "detected_at": last["detected_at"]}
     from collection_diagnostics import valid_stop
     stop = valid_stop(run.get("stop")) if h.get("run_status") in ("failed", "session_expired") else None
+    jobs = h.get("semantic_jobs") if isinstance(h.get("semantic_jobs"), dict) else {}
+    turns = jobs.get("resident_turns_24h")
+    semantic_detail = {
+        "user_facing_pending": jobs.get("user_facing_pending")
+        if _count(jobs.get("user_facing_pending")) else None,
+        "reprocess_pending": jobs.get("reprocess_pending")
+        if _count(jobs.get("reprocess_pending")) else None,
+        "resident_turns_24h": turns
+        if isinstance(turns, dict) and _count(turns.get("attempts")) and turns["attempts"]
+        and _count(turns.get("lock_busy")) and turns["lock_busy"] <= turns["attempts"] else None}
     return {"notify_wait": wait, "backup_local": backup_local,
-            "last_interrupt": interrupt, "run_stop": stop}
+            "last_interrupt": interrupt, "run_stop": stop, "semantic_detail": semantic_detail}
 
 
 
@@ -1300,6 +1310,20 @@ def _hours(seconds) -> str:
     return f"{seconds / 3600:.1f}時間" if finite_number(seconds) else ""
 
 
+def _semantic_stall_text(age: str, detail, recorded: bool) -> str:
+    """Oldest age plus the recorded split and lock-busy share; unread parts are left out."""
+    parts = [f"最古 {age}"] if age else []
+    detail = detail if isinstance(detail, dict) and not recorded else {}
+    user, again = detail.get("user_facing_pending"), detail.get("reprocess_pending")
+    if user is not None and again is not None:
+        parts.append(f"通知対象{user}件・再処理{again}件")
+    turns = detail.get("resident_turns_24h")
+    if turns:
+        parts.append(f"直近24時間の背景処理{turns['attempts']}回のうち実行ロック待ち"
+                     f"{turns['lock_busy']}回（{turns['lock_busy'] * 100 // turns['attempts']}%）")
+    return f"（{'／'.join(parts)}）" if parts else ""
+
+
 def _measurement_unknown(block, now) -> bool:
     """An unknown block, or a carried measurement past the render stall age, is unmeasured."""
     if not isinstance(block, dict):
@@ -1569,8 +1593,10 @@ def _reason_rows(report: dict, reasons) -> list[str]:
         elif base in ("backup_not_verified", "backup_deferred_deadline", "backup_local_overdue"):
             extra = ("" if report.get("observations_recorded")
                      else _backup_local_text(report.get("backup_local")))
-        elif base == "semantic_backlog_stalled" and _hours(oldest.get("semantic_jobs")):
-            extra = f"（最古 {_hours(oldest.get('semantic_jobs'))}）"
+        elif base == "semantic_backlog_stalled":
+            extra = _semantic_stall_text(_hours(oldest.get("semantic_jobs")),
+                                         report.get("semantic_detail"),
+                                         report.get("observations_recorded", False))
         elif base == "disk_low":
             free = report.get("disk_free_mb")
             extra = f"（残り {free} MB）" if finite_number(free) else "（残り 不明）"

@@ -21,6 +21,7 @@ import local_llm
 from ledger import Ledger, LedgerReader
 from mcs_util import CONF_PATH, HOME, load_config
 from writer_lock import acquire_run_lock
+import llm_availability
 from llm_availability import circuit_open_s, disk_floor_mb, disk_free_mb
 
 from extract_llm_admission import (
@@ -698,6 +699,9 @@ def _main() -> int:
                     if args.semantic and not carry:
                         started = time.monotonic()
                         sem = _background_semantic(led, stop)
+                        llm_availability.record_semantic_turn(
+                            os.path.join(HOME, "data", llm_availability.SEMANTIC_TURNS_NAME),
+                            sem.get("skipped") == "lock_busy")
                         print(json.dumps({"semantic": sem, "lane": args.lane, "pid": os.getpid(),
                                           "elapsed_s": round(time.monotonic() - started, 1),
                                           "ts": time.time()},

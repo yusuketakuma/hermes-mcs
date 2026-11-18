@@ -306,7 +306,7 @@ def test_startup_wait_uses_existing_job_budget_and_writer_fence(tmp_path, monkey
     def wait(path, *, wait_s, expected_code_stamp, marker_path):
         waits.append(path)
         assert path == str(tmp_path / "run.lock")
-        assert wait_s == work_deadline - now[0] - 5
+        assert wait_s == min(work_deadline - now[0] - 5, mcs_ocr.START_WAIT_S)
         assert expected_code_stamp == 7
         assert marker_path == str(tmp_path / "update_in_progress.marker")
         if outcome == "cancelled":
