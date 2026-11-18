@@ -240,6 +240,7 @@ class LedgerSemanticSourcesMixin:
         an evaluated thread revives the job as a new input generation."""
         from inference_version import CURRENT_VERSION, VERSION_KEY, is_current
         import semantic_intake_hold
+        import semantic_notice
         # Pause holds execution, not durable intake; OFF callers do not seed.
         if not message_ids:
             return
@@ -306,6 +307,22 @@ class LedgerSemanticSourcesMixin:
                 if isinstance(old_pl.get('intake_notification_targets'), dict) and not old_notification_free:
                     preserve_live |= any(semantic_intake_hold.notification_allowed(self, old_pl, project_id, mid)
                                          for mid in old_targets)
+                if (notification_free and execution is None
+                        and origin.get('source') in {"initial_history",
+                                                     "history_import"}
+                        and existing['state'] == 'pending'
+                        and old_eligible and not old_notification_free):
+                    # A past-post edit seeded with the quiet history
+                    # marker must not silence a live job that still
+                    # holds a verified, unconsumed arrival origin for
+                    # its other targets (the stored new_messages event
+                    # is the eligibility proof, not the `eligible`
+                    # ordering flag). The edited history target itself
+                    # stays silent through the per-target
+                    # origin_event_id gate in semantic_notice.
+                    preserve_live |= (semantic_notice.origin_event_id(
+                        self.db, project_id, sorted(old_targets))
+                        is not None)
                 pl = dict(old_pl)
                 pl["targets"] = sorted(old_targets | set(ids))
                 # once a job descends from a notify intent it keeps that

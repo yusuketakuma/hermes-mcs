@@ -5,6 +5,7 @@ import semantic_policy
 import semantic_store
 import json
 import time
+from datetime import datetime, timedelta, timezone
 import pytest
 from inference_version import CURRENT_VERSION, VERSION_KEY
 import ledger
@@ -305,6 +306,99 @@ def test_arrival_merge_keeps_eligibility(tmp_path):
                for r in rows)
     # the merged history post was still fully evaluated
     assert db.artifacts("semantic_audit", message_id=3)
+    db.close()
+
+
+def _post(mid, posted_ts, parent=None, body=BODY, unread=True):
+    return mcs_contract.Message(
+        message_id=mid, project_id=1, parent_id=parent,
+        sender_id=1, sender_name="sender", sender_type="user",
+        profession="", organization="",
+        posted_at=datetime.fromtimestamp(
+            posted_ts, timezone(timedelta(hours=9))).isoformat(),
+        body_html=f"<p>{body}</p>", body_state="full",
+        is_unread=unread, reply_count=0)
+
+
+def _cohort(db, boundary_ts):
+    db.db.execute("UPDATE patients SET initial_import=? WHERE project_id=1",
+                  (json.dumps({"version": 1,
+                               "cohort_id": "0" * 32,
+                               "boundary_ts": int(boundary_ts),
+                               "boundary_source": "server",
+                               "started_at": time.time(),
+                               "capture_phase": "capturing",
+                               "saved_count": 0,
+                               "updated_at": time.time()}),))
+
+
+def test_history_edit_merge_keeps_live_notice(tmp_path):
+    """Issue #183 regression: an initial-history root edit merges a quiet
+    seed into the shared job — the job must keep its live-arrival
+    notification right for the other targets. Eligibility proof is the
+    stored new_messages event, not the eligible flag (INV-20)."""
+    db = _ledger(tmp_path)
+    _patient(db)
+    now = time.time()
+    _cohort(db, now - 2 * 86400)
+    # initial history roots 10/20 (posted before the cohort boundary)
+    db.save_messages([_post(10, now - 3 * 86400, unread=False),
+                      _post(20, now - 3 * 86400, unread=False)],
+                     project_id=1, semantic=True)
+    # a genuine unread reply arriving later on root 10 shares its job
+    db.save_messages([_post(30, now - 86400, parent=10)],
+                     project_id=1, notify={"source": "unread"}, semantic=True)
+    pl = json.loads(db.db.execute(
+        "SELECT payload FROM fetch_jobs WHERE kind='semantic' "
+        "AND message_id=10").fetchone()["payload"])
+    assert pl.get("eligible") is True
+    assert pl.get("notification_free") is not True
+    assert set(pl["targets"]) == {10, 30}
+    # editing the history root must not quiet the whole job
+    db.save_messages([_post(10, now - 3 * 86400, body="編集した過去本文",
+                            unread=False)],
+                     project_id=1, semantic=True)
+    pl = json.loads(db.db.execute(
+        "SELECT payload FROM fetch_jobs WHERE kind='semantic' "
+        "AND message_id=10").fetchone()["payload"])
+    assert set(pl["targets"]) == {10, 30}
+    assert pl.get("eligible") is True
+    assert pl.get("notification_free") is not True
+    assert isinstance(pl.get("origin"), dict) \
+        and pl["origin"].get("event_id") is not None
+    out = semantic_drain.run_due(db, _cfg("enforce"), {"errors": []},
+                           time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=_llm)
+    assert out["done"] == 2
+    notified = {json.loads(r["payload"])["target_message_id"]
+                for r in db.db.execute(
+                    "SELECT payload FROM notify_outbox "
+                    "WHERE kind='semantic_notice'")}
+    assert notified == {30}   # the live reply notifies; the edit stays quiet
+    assert db.artifacts("semantic_audit", message_id=10)
+    db.close()
+
+
+def test_history_edit_merge_quiets_without_live_origin(tmp_path):
+    """Control for issue #183: when the stored arrival event is already
+    suppressed, the history-edit quiet merge still stamps the flag."""
+    db = _ledger(tmp_path)
+    _patient(db)
+    now = time.time()
+    _cohort(db, now - 2 * 86400)
+    db.save_messages([_post(10, now - 3 * 86400, unread=False)],
+                     project_id=1, semantic=True)
+    db.save_messages([_post(30, now - 86400, parent=10)],
+                     project_id=1, notify={"source": "unread"}, semantic=True)
+    db.db.execute("UPDATE notify_outbox SET state='suppressed' "
+                  "WHERE kind='new_messages'")
+    db.save_messages([_post(10, now - 3 * 86400, body="編集した過去本文",
+                            unread=False)],
+                     project_id=1, semantic=True)
+    pl = json.loads(db.db.execute(
+        "SELECT payload FROM fetch_jobs WHERE kind='semantic' "
+        "AND message_id=10").fetchone()["payload"])
+    assert pl.get("notification_free") is True
     db.close()
 
 
