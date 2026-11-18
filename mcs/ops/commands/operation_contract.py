@@ -1,6 +1,7 @@
 """Validate human operation payloads and retry decisions without mutating the ledger."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
@@ -101,6 +102,29 @@ def read_retry_payload(db, row, *, max_bytes=RETRY_PAYLOAD_MAX_BYTES):
         return decoded if decoded else None
     except UnicodeError:
         return None
+
+
+class _RetryObject(dict):
+    def __init__(self, pairs):
+        super().__init__(pairs)
+        from inference_version import VERSION_KEY
+        self.ambiguous_version = sum(k == VERSION_KEY for k, _ in pairs) > 1
+
+
+def parse_retry_object(raw):
+    """Parse stored semantic payload text with the one contract preview and writer share."""
+    if raw is None:
+        return None
+    # The writer historically accepts duplicate non-version keys.  Retain
+    # that behavior, but never choose a version from an ambiguous top-level
+    # marker (including escaped spellings of the same JSON key).
+    try:
+        payload = json.loads(raw, object_pairs_hook=_RetryObject)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if not isinstance(payload, dict) or payload.ambiguous_version:
+        return None
+    return payload
 
 
 def bounded_integer(value, low: int, high: int) -> bool:

@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "16KiBを超える保存済み意味解析ジョブも再試行画面で確認できる",
+  "summary": "保存済みの意味解析ジョブが16KiBを超えても、チャットの再試行確認が invalid_payload で拒否せず、実行側と同じ条件で確認できます。外部コマンドの16KiB上限は変わりません。",
+  "upgrade": "追加操作は不要です。Hermes プラグイン・独立アダプターは再起動で反映されます。",
+  "details": [
+    "確認画面は保存payloadを実行側と同じ読取り契約で解釈する。上限は保存payload側の1MiB。",
+    "重複した非version keyは実行側の既存互換どおり許し、曖昧なversion markerは引き続き拒否する。",
+    "attempts予算・人承認・receipt・payload_hashの照合は変更しない。"
+  ],
+  "refs": ["#180", "adapters/common/human_commands.py", "mcs/ops/commands/operation_contract.py", "mcs/ops/commands/mcs_operations.py"]
+}
