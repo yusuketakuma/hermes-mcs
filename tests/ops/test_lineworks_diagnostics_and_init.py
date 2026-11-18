@@ -166,6 +166,8 @@ def test_standalone_init_runs_the_lineworks_adapter_initializer(monkeypatch, yes
     assert argv == [sys.executable, "-m", "lineworks_adapter", "init", "--root", mcs_setup.HOME]
     # --yes never lets the adapter prompt for credentials.
     assert kw["stdin"] == (subprocess.DEVNULL if yes else None)
+    # A person typing hidden secrets is never killed mid-getpass (echo would stay off).
+    assert kw["timeout"] == (30 if yes else None)
     monkeypatch.setattr(mcs_setup.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1))
     assert mcs_setup._init_standalone_connectors(cfg, SimpleNamespace(yes=yes), True) is False
 

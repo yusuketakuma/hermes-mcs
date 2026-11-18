@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "~/.mcs がリンクの環境でSlack通知と監視警報が送信前に失敗する問題を修正",
+  "summary": "install.sh が対応している「~/.mcs を別の場所へのリンクにした構成」のHermesモードで、Slack宛ての患者通知と [MCSLOG] 監視警報が patient_profile_unverified / system_profile_unverified で送信前に失敗し続ける問題を修正しました。リンク先の実体ディレクトリで所有者と権限を確認するようになり、送信が再開します。",
+  "upgrade": "追加操作は不要です。対象は ~/.mcs がシンボリックリンクで、Hermesモードかつ通知先が slack: の環境です。通常のディレクトリの環境は変わりません。data がリンクの場合、本人以外が書込み可能な場合は従来どおり停止します。送信待ちに残った通知は、更新後に通常の再試行で送られます。",
+  "details": [
+    "slack_channel_setup の保存先確認でルートを実体パスへ解決してから所有者・権限を検査する。状態ファイルに記録するルートと照合するルートも同じ実体パスに揃えた。"
+  ],
+  "refs": ["mcs/ops/setup/slack_channel_setup.py", "tests/ops/test_slack_channel_setup.py"]
+}

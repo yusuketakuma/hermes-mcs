@@ -518,11 +518,13 @@ def _reset_section(cfg: dict, key: str, label: str) -> dict:
 
 def _init_apply_section_flags(cfg: dict, args) -> None:
     """Apply the semantic/signals flags and the manual self-identity override."""
-    if args.semantic_mode:
+    # An explicit scope narrows external analysis whether or not the mode is
+    # given: a key alone otherwise selects every project.
+    if args.semantic_mode or args.project_ids is not None:
         sem = _reset_section(cfg, "semantic", "意味解析設定")
         if args.semantic_mode == "auto":
             sem.pop("mode", None)
-        else:
+        elif args.semantic_mode:
             sem["mode"] = args.semantic_mode
         if args.project_ids is not None:
             sem["project_ids"] = args.project_ids
@@ -587,6 +589,19 @@ def _init_standalone_grants(cfg: dict, args, standalone_projects) -> None:
               " — カード権限は config.json の notify.<transport> に設定してください")
 
 
+_ENV_STORAGE_REFUSAL = (".env: 保存先の種類・所有者・権限を確認できないため保存していません。既存のファイルを保持しました。"
+                        ".envが本人だけ読み書きできる通常のファイルか（リンクでないか）、保存先フォルダーが本人専用かを確認してください")
+_ENV_REFUSALS = {
+    "invalid_env_update": ".env: 認証情報の形式が正しくありません。既存のファイルを保持しました",
+    "env_too_large": ".env: 保存すると.envが大きさの上限を超えるため保存していません。既存のファイルを保持しました。"
+                     "不要な行を整理してから再実行してください",
+    "env_changed": ".env: 保存中に別の処理が.envを変更したため保存していません。既存のファイルを保持しました。"
+                   "ほかの設定処理の終了を待って再実行してください",
+    "env_parent_changed": ".env: 保存中に保存先フォルダーが入れ替わったため保存していません。既存のファイルを保持しました。"
+                          "ほかの設定処理の終了を待って再実行してください",
+}
+
+
 def _init_store_secrets(args, login_id) -> int | None:
     """Store the MCS password in Keychain and the .env fallback; return 1 on failure."""
     updates = {}
@@ -609,6 +624,10 @@ def _init_store_secrets(args, login_id) -> int | None:
         if not lifecycle_io.valid_env_value(pw):
             print('パスワードの形式が正しくありません。保存を中止しました。')
             return 1
+        if not lifecycle_io.keychain_round_trips(pw):
+            print('タブなどの制御文字や前後の空白を含むパスワードは、Keychainから同じ値を'
+                  '読み戻せないため保存を中止しました。認証情報は変更していません。')
+            return 1
         # .env carries the same secret as the reboot fallback — after a
         # restart the login keychain is locked until first unlock, and
         # auto_login reads MCS_PASSWORD when the keychain can't answer.
@@ -620,25 +639,54 @@ def _init_store_secrets(args, login_id) -> int | None:
         else:
             print(f"Keychain: '{KEYCHAIN_SERVICE}' を登録しました")
 
+    # Validate the API keys now; they are written only after config.json holds the scope.
+    if _init_api_key_updates() is None:
+        return 1
+    if _init_write_env(updates):
+        return 1
+    if keychain_failed:
+        return 1
+    return None
+
+
+def _init_api_key_updates() -> dict[str, str] | None:
+    """Return the API keys passed in the environment; None after reporting a malformed one."""
+    updates = {}
     for name in ("TYPESAFE_API_KEY", "MCS_ANTHROPIC_API_KEY", "MCS_OPENAI_API_KEY"):
         key = os.environ.get(name)
         if key:
             if any(char.isspace() or ord(char) < 33 or ord(char) == 127 for char in key):
                 print(".env: APIキーの形式が正しくありません。既存のファイルを保持しました")
-                return 1
+                return None
             updates[name] = key
+    return updates
+
+
+def _init_store_api_keys() -> int | None:
+    """Store the environment API keys; init calls this only after config.json is saved.
+
+    A key alone enables every cloud service for all patients (cloud_config's
+    key-only default), so it must never precede the scope saved by the same init."""
+    updates = _init_api_key_updates()
+    if updates is None:
+        return 1
+    return _init_write_env(updates)
+
+
+def _init_write_env(updates) -> int | None:
+    """Merge init's secrets into .env; return 1 after reporting a failure."""
     if updates:
         try:
             lifecycle_io.write_env(ENV_PATH, updates)
-        except ValueError:
-            print(".env: 認証情報の形式が正しくありません。既存のファイルを保持しました")
+        except ValueError as error:
+            # Values were checked above; the refusal code names the size, a race, or the file and its folder.
+            print(".env: 既存の.envをUTF-8の文字として読み取れないため保存していません。既存のファイルを保持しました"
+                  if isinstance(error, UnicodeError) else _ENV_REFUSALS.get(str(error), _ENV_STORAGE_REFUSAL))
             return 1
         except OSError:
             print(".env: 保存結果を確認できません。認証情報の現在の状態を確認してください")
             return 1
         print(f".env: {sorted(updates)} を保存しました（本人のみ読書き可能）")
-    if keychain_failed:
-        return 1
     return None
 
 
@@ -655,7 +703,8 @@ def _init_standalone_connectors(cfg: dict, args, integration_ok: bool) -> bool:
                         "--transport", transport] + (["--yes"] if args.yes else [])
             # Terminal-bound getpass owns credentials; no secret ever travels in argv.
             try:
-                result = subprocess.run(argv, timeout=300 if not args.yes else 30,
+                # No bound while a person types secrets: a kill mid-getpass leaves echo off.
+                result = subprocess.run(argv, timeout=None if not args.yes else 30,
                                         cwd=REPO_ROOT,
                                         stdin=subprocess.DEVNULL if args.yes else None)
                 integration_ok = integration_ok and result.returncode == 0

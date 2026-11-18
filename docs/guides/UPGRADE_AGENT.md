@@ -417,6 +417,7 @@ SlackカードとSlackのテキスト通知のどちらも、通常の更新経�
 権限不足・名前の競合・作成結果不明などで止まった場合は、案内された条件を確認してから
 `mcs setup slack-channels`で準備を再開してください。`install.sh --no-services`で省略した準備も同じコマンドで再開できます。
 不明な作成・招待を繰り返したり、運用先を患者情報先へ戻したりしません。
+担当者がSlackで同名のチャンネルの有無を確かめた後は、`mcs setup slack-channels --discard-hold --request-id <記録のrequest_id> --confirm-human --reason <理由>`で記録を退避できます。記録は`data/slack-channel-setup.discarded-<request_id>.json`として残り、承認記録も作られます。作られていたチャンネルを使う場合は、そのIDを通知先に設定してから準備を再開してください。
 設定の保存と更新後の接続を確認します。カードを使う構成では通常の通知workerの起動確認も必要です。
 
 1. `restarts` に `gateway` があり Hermes モードなら、apply は再起動を依頼します。`data/gateway_restart.json` が `supervisor_restart_verified` になるまでは再起動未完了として扱い、`hermes gateway status` で稼働も確認してください。`requested`・`failed`・`unknown` は反映の証拠ではありません。Hermes の版によっては、実行中の処理を理由に再起動を拒否しません。再起動を確認できない間は、旧 worker が新しい通知形式を処理する可能性があります。処理状況を確認し、安全に再起動できる時点で管理担当者が対応してください。
