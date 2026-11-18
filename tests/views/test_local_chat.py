@@ -5,6 +5,8 @@ from io import BytesIO
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import shutil
+import subprocess
 
 import pytest
 
@@ -233,3 +235,11 @@ def test_cli_requires_explicit_valid_scope(args):
     with pytest.raises(SystemExit) as error:
         chat.main(["--snapshot", "synthetic", *args])
     assert error.value.code == 2
+
+
+def test_browser_dom_contracts():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is optional; browser DOM contract checks require it")
+    subprocess.run([node, str(Path(__file__).with_name("local_chat_dom_checks.js")),
+                    str(chat.ASSETS / "app.js")], check=True, capture_output=True, text=True)

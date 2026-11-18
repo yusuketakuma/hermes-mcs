@@ -100,6 +100,21 @@ async function loadTimeline(more = false) {
   finally {if (request === state.mainRequest) $("older").disabled = false;}
 }
 function section(title) {const node = el("section", null, "detail-section"); node.append(el("h3", title)); return node;}
+function contextSection(row) {
+  const context = section("投稿に記録された情報");
+  const subjects = {patient: "本人", family: "家族", other: "他者", unspecified: "対象未確認"};
+  for (const item of row.patient_context || []) {
+    context.append(el("p", `対象: ${subjects[item.subject] || "対象未確認"}`, "context-subject"));
+    context.append(el("p", item.text || item.evidence || item.category));
+    if (item.evidence) context.append(el("blockquote", item.evidence));
+    for (const detail of item.details || []) {
+      context.append(el("p", `${detail.key}: ${detail.value || detail.text || ""}`));
+      if (detail.evidence) context.append(el("blockquote", detail.evidence));
+    }
+  }
+  if (!row.patient_context?.length) context.append(el("p", "表示できる構造化記録はまだありません。"));
+  return context;
+}
 async function openDetail(row) {
   const request = ++state.detailRequest, project = state.project, root = row.parent_id || row.message_id;
   $("detail").classList.add("open"); $("close-detail").hidden = false; $("detail-content").replaceChildren(el("p", "詳細を読込中…", "empty"));
@@ -109,9 +124,7 @@ async function openDetail(row) {
     const original = section("元の投稿"); original.append(post(source.message, true));
     const flags = section("記録の状態");
     for (const text of source.message.metadata_flags || []) flags.append(el("p", text));
-    const context = section("投稿に記録された情報");
-    for (const item of source.message.patient_context || []) {context.append(el("p", item.text || item.evidence || item.category)); for (const detail of item.details || []) context.append(el("p", `${detail.key}: ${detail.value || detail.text || ""}`));}
-    if (!source.message.patient_context?.length) context.append(el("p", "表示できる構造化記録はまだありません。"));
+    const context = contextSection(source.message);
     const thread = section("返信"), older = el("button", "以前の返信を表示", "load-more"), list = el("div");
     let cursor = replies.next_cursor;
     const appendReplies = (data, prepend) => {const fragment = document.createDocumentFragment(); for (const reply of chronological(data.items)) {fragment.append(post(reply, true)); const files = el("button", "添付・記録の状態", "text-button"); files.onclick = () => showMessageInfo(reply, request); fragment.append(files);} prepend ? list.prepend(fragment) : list.append(fragment);};
