@@ -21,7 +21,7 @@ from extraction_provenance import (
     leaf_evidence as _leaf_evidence,
 )
 import extraction_refresh
-from clinical_chunking import PLAN_VERSION
+from clinical_chunking import PLAN_VERSION, plan_chunks
 import mcs_queries
 import mcs_util
 import extraction_context
@@ -90,7 +90,7 @@ from extract_llm_source_contract import (
     _unsealed_source_pred,
 )
 
-def _record_hold_tx(ledger, r, prior, reason, *, lost=None, feedback_id=None, remove_chunks=True):
+def _record_hold_tx(ledger, r, prior, reason, *, lost=None, lost_class=None, feedback_id=None, remove_chunks=True):
     if not ledger.db.in_transaction:
         ledger.db.execute('BEGIN IMMEDIATE')
     prior_row = ledger.db.execute(
@@ -110,6 +110,8 @@ def _record_hold_tx(ledger, r, prior, reason, *, lost=None, feedback_id=None, re
         "contract": _upgrade_contract()}
     if lost:
         receipt["lost"] = lost
+    if lost_class:
+        receipt["lost_class"] = lost_class
     if feedback_id is not None:
         receipt["feedback_id"] = feedback_id
     raw = json.dumps(receipt, sort_keys=True)
@@ -270,8 +272,14 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
                  and (human_failed or qc_failed))
     if old_carry or (lost and not (isinstance(human, dict) and human.get("applied") is True)):
         reason = ("human_failed" if human_failed else "qc_failed") if old_carry else "protected_loss"
+        # Fixed codes and counts only: no text, label or quote enters the receipt.
+        # shortcut: "unlocated" uses the root chunk layout, not length resplits; read the saved splits if they matter.
+        size = r.get("_chunk_size")
+        lost_class = extract_quality.protected_loss_classes(
+            old, loads_dict(content), source["body_text"],
+            pieces=plan_chunks(source["body_text"], size if type(size) is int and size > 0 else _CHUNK_SIZE)) if lost else None
         hold_witness = _record_hold_tx(ledger, r, prior, reason,
-                        lost=lost, feedback_id=human.get("feedback_id") if human else None,
+                        lost=lost, lost_class=lost_class, feedback_id=human.get("feedback_id") if human else None,
                         remove_chunks=not scoped_cleanup)
         held_prior = True
     else:
