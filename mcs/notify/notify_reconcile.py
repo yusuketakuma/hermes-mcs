@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import time
 import uuid
 
@@ -53,7 +54,7 @@ from notify_scope import card_row
 from mcs_queries import HOLD_PROGRESS_SET
 from mcs_requests import valid_uuid
 from mcs_util import loads_dict
-from safe_io import fsync_dir
+from safe_io import fsync_dir, read_regular_nofollow
 import notify_transport
 import notify_journal
 import notify_parts
@@ -61,26 +62,98 @@ import notify_recovery
 
 _RESULT_VALUES = ("delivered", "not_sent", "unknown")
 _TERMINAL = ("delivered", "not_sent", "cancelled")
+_SPEC_MAX_BYTES = 16 * 1024 * 1024
 
 
-def _read_spec(dirs: dict, delivery_id) -> dict | None:
-    """The published spec file survives a DB restore (it lives outside
-    the DB) — the only link from a lost delivery_id back to its intent
-    event ids."""
+def _safe_spec_name(delivery_id) -> str | None:
     if not isinstance(delivery_id, str) or not delivery_id:
         return None
     safe = "".join(c if c.isalnum() or c in "._-" else "_"
                    for c in delivery_id)
-    for t in notify_scope.SUPPORTED_TRANSPORTS:
-        try:
-            with open(os.path.join(dirs[t + "_render"], safe + ".json"),
-                      "rb") as fh:
-                spec = json.loads(fh.read().decode("utf-8"))
-        except (OSError, ValueError, RecursionError):
-            continue
-        if isinstance(spec, dict) and spec.get("delivery_id") == delivery_id:
-            return spec
+    if safe in ("", ".", ".."):
+        return None
+    return safe + ".json"
+
+
+def _restore_spec_dir(dirs: dict) -> str:
+    return (dirs.get("restore_specs")
+            or os.path.join(os.path.dirname(dirs["discord_render"]),
+                            "restore_specs"))
+
+
+def _load_spec_path(path: str, delivery_id: str) -> tuple[bytes, dict] | None:
+    try:
+        raw = read_regular_nofollow(path, _SPEC_MAX_BYTES, ValueError)
+        if len(raw) > _SPEC_MAX_BYTES:
+            return None
+        spec = json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return None
+    if isinstance(spec, dict) and spec.get("delivery_id") == delivery_id:
+        return raw, spec
     return None
+
+
+def _read_spec_bytes(dirs: dict, delivery_id) -> tuple[bytes, dict] | None:
+    name = _safe_spec_name(delivery_id)
+    if name is None:
+        return None
+    candidates = [*(os.path.join(dirs[t + "_render"], name)
+                    for t in notify_scope.SUPPORTED_TRANSPORTS),
+                  os.path.join(_restore_spec_dir(dirs), name)]
+    for path in candidates:
+        loaded = _load_spec_path(path, delivery_id)
+        if loaded is not None:
+            return loaded
+    return None
+
+
+def _read_spec(dirs: dict, delivery_id) -> dict | None:
+    """The published (or reconcile-archived) spec file survives a DB restore
+    (it lives outside the DB) — the only link from a lost delivery_id back
+    to its intent event ids."""
+    loaded = _read_spec_bytes(dirs, delivery_id)
+    return loaded[1] if loaded is not None else None
+
+
+def _withdraw_spec(dirs: dict, delivery_id) -> bool | None:
+    """Withdraw any published spec for delivery_id from worker render spools
+    into the reconcile-only archive, preserving its exact original bytes."""
+    name = _safe_spec_name(delivery_id)
+    if name is None:
+        return None
+    archive = _restore_spec_dir(dirs)
+    dst = os.path.join(archive, name)
+    try:
+        for t in notify_scope.SUPPORTED_TRANSPORTS:
+            render_dir = dirs[t + "_render"]
+            src = os.path.join(render_dir, name)
+            try:
+                st = os.lstat(src)
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                return False
+            os.makedirs(archive, mode=0o700, exist_ok=True)
+            archive_st = os.lstat(archive)
+            if not stat.S_ISDIR(archive_st.st_mode):
+                return False
+            try:
+                dst_st = os.lstat(dst)
+            except FileNotFoundError:
+                dst_st = None
+            if dst_st is not None and not stat.S_ISREG(dst_st.st_mode):
+                return False
+            if dst_st is not None and _load_spec_path(dst, delivery_id) is not None:
+                os.unlink(src)
+                fsync_dir(render_dir)
+            else:
+                os.replace(src, dst)
+                fsync_dir(render_dir)
+                fsync_dir(archive)
+        return True
+    except OSError:
+        return False
 
 
 def _spec_events(spec) -> list:
@@ -150,24 +223,13 @@ def _apply_hold(db, aid, delivery_id, reason, dirs, now,
                "spec_linked": bool(events)}
     # The worker never reads the DB: its spec file is the only claim and
     # resume handle, and part sends re-check it immediately before every
-    # wire call. A held delivery must not reach those sends, so withdraw
-    # the published spec now that the hold row is durable. recover skips
-    # unreleased holds, so the file stays gone until an operator resolves.
-    transport = render["transport"] if render is not None else None
-    if transport is None and isinstance(spec, dict):
-        delivery = spec.get("delivery")
-        transport = delivery.get("transport") \
-            if isinstance(delivery, dict) else None
-    if delivery_id is not None \
-            and transport in notify_scope.SUPPORTED_TRANSPORTS:
-        try:
-            os.unlink(os.path.join(
-                dirs[transport + "_render"], str(delivery_id) + ".json"))
-            verdict["spec_withdrawn"] = True
-        except FileNotFoundError:
-            verdict["spec_withdrawn"] = True
-        except OSError:
-            verdict["spec_withdrawn"] = False
+    # wire call. Withdraw the published spec into the reconcile-only
+    # archive now that the hold row is durable, preserving exact original
+    # bytes and delivery->intent linkage across repeated reconciles while
+    # recover skips unreleased holds until an operator resolves.
+    withdrawn = _withdraw_spec(dirs, delivery_id)
+    if withdrawn is not None:
+        verdict["spec_withdrawn"] = withdrawn
     return verdict
 
 
