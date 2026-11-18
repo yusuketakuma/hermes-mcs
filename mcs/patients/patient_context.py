@@ -347,38 +347,28 @@ def extract_context(body: str) -> list[dict]:
     return result
 
 
-# Rule 30: a heading names another subject only on an allow-list, because a wrong
-# family or other label hides the patient's own allergy or wish (unspecified, the
-# former behaviour, is the safe default). 本人の意向／本人の希望 is never relabelled, and
-# 家族の意向／家族の希望 is the family's only when a family-side kin word holds the value.
+# A heading can name a subject only through a closed, source-written role.
+# Bare kin words are relative to the writer: 母, 妻 and 長女 may all name the
+# patient. Their spelling alone never establishes a different person.
 _SUBJECT_HEADINGS = {"家族の意向": "family", "家族の希望": "family",
                      "本人の意向": "patient", "本人の希望": "patient"}
 _SUBJECT_CATEGORIES = frozenset({"preferences", "allergies", "adverse_events"})
 # A staff member holds only a policy; for a clinical fact or a wish they are a reporter.
 _STAFF_HELD_HEADINGS = frozenset({"方針", "療養方針", "治療方針"})
-# Words that can name the patient (本人・対象者・Pt・自身・私・彼・あの方), which a fact
-# never names.
 _PATIENT_REF = (r"本人|ほんにん|当人|当事者|患者|利用者|入居者|対象|被保険者|要介護者|被介護者"
                 r"|クライアント|お客様|自身|自分|じぶん|私|わたし|わたくし|当方|僕|俺|彼"
                 r"|(?:あの|この|その)方|(?<![A-Za-z])(?:pt|Pt|PT)(?![A-Za-z])")
-# Everyone but the patient (本人以外・他者・他人・第三者) contrasts with the patient, so a
-# fact of theirs implies one of the patient's: it holds nothing.
-_ALL_BUT_PATIENT = r"本人以外|他者|他人|第三者"
-# The head: a person word, then は. も says the patient shares the fact (妻も卵アレルギー),
-# が marks an actor or a reporter and の may be a drug the patient took (奥様の薬), so
-# none names a holder. Spacing and a bullet may come first.
 _LEAD = r"[ \t　]*(?:[■●◆#・＊*]+[ \t　]*)?"
+# Only a written relationship to the patient binds a kin holder. Other holders
+# are an explicitly different patient or a staff role, never 本人以外 as a group.
 _VALUE_HOLDER = re.compile(
-    rf"{_LEAD}(?:(?P<family>{clinical_scope.FAMILY_PERSON})|(?!{_ALL_BUT_PATIENT})(?P<other>{clinical_scope.OTHER_PERSON}))"
-    r"(?:ご本人|本人)?(?:自身)?は")
-# In a note to the family these kin words can be the patient (ご主人・お母様), so they hold nothing.
-_PATIENT_ALIAS_KIN = re.compile(r"ご?主人|旦那(?:さん|様)?|奥(?:さん|様)|お(?:母|父|兄|姉)(?:さん|様)?")
-# Under 家族の意向／家族の希望 nobody being named cannot be read from the text (家に帰りたいと
-# 話している is the patient's own voice), so only an explicit holder decides, and only a kin
-# word that cannot be the patient: not an alias (ご主人・お母様) and not an ascending kin or a
-# housemate relative to the writer, who may be the patient (母・祖父・義母・同居者; every
-# ascending kin word of the list holds 母 or 父).
-_WRITER_RELATIVE_KIN = re.compile(r"母|父|同居")
+    rf"{_LEAD}(?:(?:本人|患者|利用者)(?:さん|様)?の(?P<family>{clinical_scope.FAMILY_PERSON})"
+    rf"(?:ご本人|本人)?(?:自身)?|(?P<other>(?:他の|別の)(?:患者|利用者)|他患者|別患者|{clinical_scope.STAFF_PERSON}))は")
+# A conflicting holder under an explicitly patient-owned heading withdraws
+# only that heading's patient assertion. A bare kin may do so without being
+# affirmative evidence for a family holder. が and も are not this holder form.
+_PATIENT_HEADING_CONFLICT = re.compile(
+    rf"{_LEAD}(?:{clinical_scope.FAMILY_PERSON})(?:ご本人|本人)?(?:自身)?は")
 # A fact names one thing, never a person, a group that may include the patient or a
 # pointer back to the patient's record (皆・全員・入居者・本人同様・同じ・それ); the
 # closed shapes below guarantee everything else. A family or other word already covers
@@ -433,49 +423,46 @@ _ADVERSE_SYMPTOM = (r"眠気|ふらつき|めまい|発疹|薬疹|蕁麻疹|湿�
                     r"|腹痛|口渇|倦怠感|だるさ|むくみ|浮腫|動悸|低血圧|低血糖|食欲低下|食欲不振|肝障害|腎障害"
                     r"|せん妄|不眠|振戦|発熱")
 _DOING = r"(?:する|しない|している|していない|しています|されている|されています|です)?"
-# The whole value after the holder, per heading category; anything else is unspecified.
+_WISH = (rf"(?:希望|拒否|反対|賛成|了承|同意){_DOING}"
+         r"|望む|望まない|望んでいる|望んでいない|望んでいます|望みます")
+# The whole value after the holder, per heading category; a stance needs its
+# own self-contained object. A pointer or an objectless 同意 cannot supply it.
 _FACT = {
     "allergies": re.compile(
         rf"{_THING}アレルギー(?:あり|有り|がある|です)?|{_THING}で(?:{_ALLERGY_SYMPTOM})(?:あり|有り|が出た)?"
         r"|花粉症|(?:アレルギー)?(?:なし|無し|特になし)"),
     "adverse_events": re.compile(
         rf"{_THING}で(?:{_ADVERSE_SYMPTOM})(?:あり|有り|が出た)?|(?:副作用)?(?:なし|無し|特になし)"),
-    "preferences": re.compile(
-        rf"(?:{_OBJECT}を?)?(?:(?:希望|拒否|反対|賛成|了承|同意){_DOING}"
-        r"|望む|望まない|望んでいる|望んでいない|望んでいます|望みます)|(?:希望|特に)?なし"),
+    "preferences": re.compile(rf"{_OBJECT}を?(?:{_WISH})"),
 }
 _PROPOSAL = re.compile(rf"{_OBJECT}を?(?:提案|推奨|指示|予定){_DOING}")
 
 
 def heading_subject(label, value) -> str:
-    """Name the subject a preference, allergy or adverse-event heading states, else leave it unspecified."""
+    """Name a written heading or closed holder subject, leaving unresolved relative holders unspecified."""
     if not isinstance(label, str) or not isinstance(value, str):
         return "unspecified"
     category = _CATEGORY_FOLD.get(label.casefold())
     if category not in _SUBJECT_CATEGORIES:
         return "unspecified"
-    holder = None
-    person = _VALUE_HOLDER.match(value)
-    if person and not _PATIENT_ALIAS_KIN.fullmatch(person["family"] or ""):
-        shape = _FACT[category]
-        if person["other"] and re.fullmatch(clinical_scope.STAFF_PERSON, person["other"]):
-            shape = _PROPOSAL if label in _STAFF_HELD_HEADINGS else None
-        if shape and shape.fullmatch(value[person.end():].rstrip()):
-            holder = "family" if person["family"] else "other"
-    heading = _SUBJECT_HEADINGS.get(label, "unspecified")
-    if heading == "family":
-        # Only a family-side kin word alone at the head, holding a wish of the closed shape.
-        kin = person["family"] if holder == "family" else None
-        alone = kin is not None and value[person.end("family"):person.end()] == "は"
-        return "family" if alone and not _WRITER_RELATIVE_KIN.search(kin) else "unspecified"
+    heading = _SUBJECT_HEADINGS.get(label)
     if heading == "patient":
-        # A person heading the patient's own heading withdraws the assertion, never relabels it.
-        return "unspecified" if person else heading
-    return holder or heading
+        conflict = _VALUE_HOLDER.match(value) or _PATIENT_HEADING_CONFLICT.match(value)
+        return "unspecified" if conflict else "patient"
+    person = _VALUE_HOLDER.match(value)
+    if person is None:
+        return "unspecified"
+    holder = "family" if person["family"] else "other"
+    if heading == "family" and holder != "family":
+        return "unspecified"
+    shape = _FACT[category]
+    if person["other"] and re.fullmatch(clinical_scope.STAFF_PERSON, person["other"]):
+        shape = _PROPOSAL if label in _STAFF_HELD_HEADINGS else None
+    return holder if shape and shape.fullmatch(value[person.end():].rstrip()) else "unspecified"
 
 
 def annotate_heading_subjects(items) -> list:
-    """Return the items with each unspecified heading item's subject named by rule 30, inputs untouched."""
+    """Annotate only undecided heading items in a fresh list, leaving named subjects and inputs untouched."""
     if not isinstance(items, list):
         return []
     result = []
