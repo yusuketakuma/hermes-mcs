@@ -140,34 +140,9 @@ def _turn(deadline: float | None, min_s: float = 0.0):
         os.close(fd)  # closing the descriptor drops the flock
 
 
-def request_slot() -> int:
-    """Wire id_slot selected for this process. ``MCS_LLM_SLOT`` (decimal
-    wire value, lane - 1) overrides the default — scoped to whatever
-    process the operator sets it on; the check uses realtime (lane 1)
-    and the resident workers one of the two backlog lanes. Unset keeps
-    the lane-2 default. An override at or beyond the deployed slot
-    count is invalid — llama.cpp treats out-of-range id_slot as
-    UNPINNED, which could land on the real-time slot; fall back to the
-    background slot instead."""
-    scoped = _BACKGROUND_SCOPE.get()
-    if scoped is not None:
-        return scoped[0]
-    v = os.environ.get("MCS_LLM_SLOT")
-    if v is not None:
-        digits = v.strip()
-        if digits and digits.isascii() and digits.isdecimal():
-            try:
-                slot = int(digits)
-            except ValueError:
-                return BACKGROUND_SLOT
-            if 0 <= slot < SLOT_COUNT:
-                return slot
-    return BACKGROUND_SLOT
-
-
 def _env_slot() -> int | None:
     """The ``MCS_LLM_SLOT`` override when it names a deployed slot, else
-    ``None`` — the env branch of ``request_slot`` without the scope."""
+    ``None``. Slot 0 is a valid pin, not "unset"."""
     v = os.environ.get("MCS_LLM_SLOT")
     if v is None:
         return None
@@ -180,6 +155,22 @@ def _env_slot() -> int | None:
         if 0 <= slot < SLOT_COUNT:
             return slot
     return None
+
+
+def request_slot() -> int:
+    """Wire id_slot selected for this process. ``MCS_LLM_SLOT`` (decimal
+    wire value, lane - 1) overrides the default — scoped to whatever
+    process the operator sets it on; the check uses realtime (lane 1)
+    and the resident workers one of the two backlog lanes. Unset keeps
+    the lane-2 default. An override at or beyond the deployed slot
+    count is invalid — llama.cpp treats out-of-range id_slot as
+    UNPINNED, which could land on the real-time slot; fall back to the
+    background slot instead."""
+    scoped = _BACKGROUND_SCOPE.get()
+    if scoped is not None:
+        return scoped[0]
+    slot = _env_slot()
+    return slot if slot is not None else BACKGROUND_SLOT
 
 
 def _turn_path():
@@ -735,10 +726,12 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
     send = request_fn or bounded_request
     selected_slot = body.get("id_slot", request_slot())
     # Only an explicitly chosen slot — caller payload, scheduler path,
-    # scoped or env override — holds the turn after a transport failure;
-    # a request that fell back to the default slot releases it at once.
+    # scoped/env override or a turn already held by the caller — holds
+    # the turn after a transport failure; a request that fell back to
+    # the default slot releases it at once.
     wait_for_idle = (scheduling_enabled() or type(body.get("id_slot")) is int
                      or _BACKGROUND_SCOPE.get() is not None
+                     or _OWNED_TURN.get() is not None
                      or _env_slot() is not None)
     if type(selected_slot) is not int or not 0 <= selected_slot < SLOT_COUNT:
         selected_slot = request_slot()
