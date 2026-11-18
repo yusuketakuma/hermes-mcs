@@ -373,6 +373,9 @@ def test_lab_candidate_unit_must_fit_the_named_item(name, value, unit, quote, ex
     ("Cr 1.2mg/dLと思われる。", "unverified"),
     ("Cr 1.2mg/dLらしい。", "unverified"),
     ("Cr 1.2mg/dL K 4.0mEq/L", "quote_supported"),
+    ("Cr 1.2mg/dLK 4.0mEq/L", "unverified"),
+    ("Cr 1.2mg/dL x 4.0mEq/L", "unverified"),
+    ("Cr 1.2mg/dL以上 K 4.0mEq/L", "unverified"),
 ])
 def test_numeric_lab_quote_is_not_confirmed_when_a_comparison_or_negation_follows(quote, expected):
     assert clinical_values.lab_candidate("Cr", 1.2, "mg/dL", quote)["confirmation"] == expected
