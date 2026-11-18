@@ -719,3 +719,98 @@ def test_new_unit_deadline_preserves_paid_response_without_local_fallback(routed
     assert len(posts) == 1 and not led.artifacts("cloud_usage_disposition")
     assert [tuple(row) for row in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == saved
     assert not led.db.in_transaction
+
+
+def _provider_unavailable_load(cfg, unavailable):
+    def load():
+        return mcs_util._paid_routes_closed(cfg) if unavailable[0] else cfg
+    return load
+
+
+def _patch_load_config(monkeypatch, load):
+    monkeypatch.setattr(worker, "load_config", load)
+    monkeypatch.setattr(extract_llm_context, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_prepare, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_provider, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_qc, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_resident, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_runner, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_selection, 'load_config', worker.load_config)
+    monkeypatch.setattr(extract_llm_store, 'load_config', worker.load_config)
+    monkeypatch.setattr(cloud_inference, 'load_config', load)
+
+
+def test_provider_unavailable_before_send_holds_with_zero_accounting(routed, monkeypatch):
+    """The synthesized provider-unavailable view is a hold, not the owner's
+    stop: the unit is refused before any reservation and no accounting row is
+    written — unlike an explicit mode=off, which falls back instead."""
+    led, cfg, _, _, _ = routed
+    _use_real_cloud_accounting(monkeypatch)
+    unavailable = [True]
+    _patch_load_config(monkeypatch, _provider_unavailable_load(cfg, unavailable))
+    monkeypatch.setattr(AnthropicClient, "request",
+                        lambda *args, **kwargs: pytest.fail("unexpected post"))
+    deadline = time.monotonic() + 180
+
+    def unit():
+        return cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
+            unit_key="synthetic", deadline=deadline, current=lambda: True,
+            dispatch=lambda fn, **kwargs: fn())
+
+    with legacy_cloud_routes(), pytest.raises(cloud_inference.CloudObservationIncomplete,
+                                               match="cloud_provider_unverified"):
+        unit()("synthetic", deadline=deadline, max_tokens=100)
+    assert not led.artifacts("cloud_usage_reserve")
+    assert not led.artifacts("cloud_usage_result")
+    assert not led.artifacts("cloud_usage_disposition")
+    assert not led.db.in_transaction
+    # The synthesized view also carries mode=off; an explicit owner stop without
+    # the unavailable flag is a different outcome (fallback, not a hold).
+    off = {**cfg, "cloud_llm": {**cfg["cloud_llm"], "mode": "off"}}
+    _patch_load_config(monkeypatch, lambda: off)
+    with legacy_cloud_routes(), pytest.raises(cloud_inference.CloudFallback):
+        unit()("synthetic", deadline=deadline, max_tokens=100)
+    assert not led.artifacts("cloud_usage_reserve")
+    assert not led.artifacts("cloud_usage_result")
+    assert not led.artifacts("cloud_usage_disposition")
+    assert not led.db.in_transaction
+
+
+def test_provider_unavailable_after_a_paid_200_keeps_the_answer_for_recovery(routed, monkeypatch):
+    """A provider-file mismatch observed after a valid 200 keeps the paid answer:
+    the result row is saved without a disposition and recovery reuses it with
+    no second POST and no new reservation."""
+    led, cfg, _, _, _ = routed
+    _use_real_cloud_accounting(monkeypatch)
+    unavailable = [False]
+    posts = []
+    _patch_load_config(monkeypatch, _provider_unavailable_load(cfg, unavailable))
+
+    def request(self, method, body, timeout, **kwargs):
+        posts.append(1)
+        unavailable[0] = True
+        return 200, {}, json.dumps({"model": worker.anthropic_client.MODEL, "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": '{"symptoms":[]}'}],
+            "usage": {"input_tokens": 10, "output_tokens": 5}}).encode()
+
+    monkeypatch.setattr(AnthropicClient, "request", request)
+    deadline = time.monotonic() + 180
+    provider = cloud_inference.CloudInferenceUnit(led, cfg, route="reextract", project_id=1,
+        unit_key="synthetic", input_binding="d" * 64, deadline=deadline,
+        current=lambda: True, dispatch=lambda fn, **kwargs: fn())
+    with legacy_cloud_routes(), pytest.raises(cloud_inference.CloudObservationIncomplete,
+                                               match="cloud_provider_unverified"):
+        provider("synthetic", deadline=deadline, max_tokens=100)
+    reserves, results = led.artifacts("cloud_usage_reserve"), led.artifacts("cloud_usage_result")
+    assert len(posts) == len(reserves) == len(results) == 1
+    reservation, result = json.loads(reserves[0]["meta"]), json.loads(results[0]["meta"])
+    assert result["reservation_id"] == reservation["reservation_id"]
+    assert result["http_class"] == "http_200" and result["error_kind"] is None
+    assert result["usage"]["input_tokens"] == 10 and result["usage"]["output_tokens"] == 5
+    assert result.get("disposition") is None and not led.db.in_transaction
+    assert not led.artifacts("cloud_usage_disposition")
+    saved = [tuple(row) for row in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+    unavailable[0] = False
+    assert provider("synthetic", deadline=deadline, max_tokens=100)['reused_response'] is True
+    assert [tuple(row) for row in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == saved
+    assert len(posts) == len(led.artifacts("cloud_usage_reserve")) == len(led.artifacts("cloud_usage_result")) == 1

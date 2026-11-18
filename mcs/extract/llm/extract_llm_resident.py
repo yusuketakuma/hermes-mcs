@@ -587,10 +587,8 @@ def _main() -> int:
                             continue
                     if cloud_pool is not None:
                         try:
-                            synced = cloud_pool.last_sync
-                            cloud_pool.sync(load_config(), ledger=led)
-                            if cloud_pool.last_sync != synced:
-                                pool_error = None   # a throttled return decided nothing
+                            if cloud_pool.sync(load_config(), ledger=led):
+                                pool_error = None   # a throttled or still-failing pool decided nothing
                         except Exception as error:
                             # The pool is extra capacity: its failure must not
                             # skip this lane's own extraction and semantic work.

@@ -1382,7 +1382,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                                                   model=cloud_selection["model"])
                         or cloud_policy.setting_block_reason(cloud_settings)
                         or cloud_policy.budget_block_reason(ledger, cloud_settings,
-                            max_tokens=cloud_selection["max_tokens"] or 1600, selection=cloud_selection))
+                            max_tokens=cloud_selection["max_tokens"] if cloud_selection["max_tokens"] is not None else 1600, selection=cloud_selection))
                 if code in cloud_policy.REFINED_CODES:
                     code = cloud_policy.refusal_code(cfg, code, model=cloud_selection["model"],
                                                      root=extract_llm.HOME, settings=cloud_settings,
@@ -2090,7 +2090,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             if not failure and estimated_unit:
                 cloud_policy.dryrun_tx(ledger, route="patient_context", project_id=pid,
                     unit_key=lane, input_chars=sum(source.get("body_length", 0) for source in snapshot["sources"]),
-                    max_tokens=cloud_selection["max_tokens"] or 1600, model=cloud_selection["model"])
+                    max_tokens=cloud_selection["max_tokens"] if cloud_selection["max_tokens"] is not None else 1600, model=cloud_selection["model"])
             if not failure and shadow_call is not None:
                 shadow_unit = os.urandom(16).hex()
                 comparison_sources = [source] if lane != "A" else snapshot["sources"]

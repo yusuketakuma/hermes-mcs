@@ -763,7 +763,7 @@ def test_thinking_only_length_holds_summary_and_consumes_no_second_repair(runtim
 
     def length_only(prompt, *, deadline, max_tokens):
         return client.complete(prompt, deadline=deadline, max_tokens=max_tokens,
-            after_result=lambda reservation, meta, **_answer:results.append(meta))
+            after_result=lambda reservation, meta, **_answer:results.append(meta), reserve_fn=lambda *args: None)
 
     deadline = clock.mono + 600
     if stage == 'summary':

@@ -736,7 +736,8 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
         if row["attempt_id"] in attempts:
             continue
         v = _apply_hold(db, row["attempt_id"], row["delivery_id"],
-                        "unknown_attempt", dirs, now)
+                        notify_recovery.UNKNOWN_ATTEMPT_BEYOND_HORIZON if beyond_horizon
+                        else "unknown_attempt", dirs, now)
         verdicts.append(v)
         held.append(v)
     # Only intents that existed at the restore point are unverifiable. Later
@@ -812,17 +813,23 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
     counts = {}
     for v in verdicts:
         counts[v["verdict"]] = counts.get(v["verdict"], 0) + 1
+    # The receipt lists every unreleased hold, not only this run's: a rerun
+    # holds nothing new, and a partial list would hide what still awaits
+    # the operator.
+    hold_rows = db.execute(
+        "SELECT * FROM notification_restore_holds WHERE released_at IS NULL "
+        "ORDER BY hold_id").fetchall()
+    open_holds = [{"attempt_id": h["attempt_id"], "delivery_id": h["delivery_id"],
+                   "reason": h["reason"], "card_id": h["card_id"],
+                   "scope": loads_dict(h["scope_json"] or "{}") or {}}
+                  for h in hold_rows]
     receipt = {
         "v": 1, "at": now,
         "restored_at": marker.get("restored_at"),
         "by": marker.get("by"), "backup_path": marker.get("backup_path"),
         "counts": counts, "verdicts": verdicts,
-        "held": [{"attempt_id": h["attempt_id"],
-                  "delivery_id": h["delivery_id"],
-                  "reason": h["detail"], "card_id": h.get("card_id"),
-                  "scope": h.get("scope") or {}}
-                 for h in held],
-        "events_held": sum(h.get("events_held", 0) for h in held)
+        "held": open_holds,
+        "events_held": sum(len(notify_recovery.hold_events(h) or []) for h in hold_rows)
                         + mass_held + len(text_held),
         "text_held": text_held,
         "parts_held": parts_held,

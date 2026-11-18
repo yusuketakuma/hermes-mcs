@@ -578,6 +578,55 @@ def test_reconcile_rerun_promotes_a_group_whose_surface_became_usable(led):
     assert led.db.execute("SELECT COUNT(*) FROM notify_outbox WHERE kind='update_notice'").fetchone()[0] == 1
 
 
+def _held_attempt_row(world, render):
+    from test_notify_reconcile import _attempt_row
+    aid = envelopes.part_attempt_id(render["delivery_id"], "synthetic-lost")
+    _attempt_row(world.led, aid, render["delivery_id"])
+    return aid
+
+
+def test_horizon_attempt_row_hold_rejects_a_journal_only_absence_proof(world):
+    world.seed()
+    world.dispatch()
+    render = world.render()
+    aid = _held_attempt_row(world, render)
+    _restore_from(world, backup_names.JOURNAL_HORIZON_MAX_S + 86400)
+    notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW)
+    hold = next(h for h in world.holds() if h["attempt_id"] == aid)
+    assert hold["reason"] == notify_recovery.UNKNOWN_ATTEMPT_BEYOND_HORIZON
+    receipt = _resolve(world, render["delivery_id"], "mark_not_sent", aid,
+                       evidence={"method": "synthetic", "ref": "journal",
+                                 "proof": "no_journal_started", "worker_stopped": True})
+    assert (receipt["outcome"], receipt["error"]) == ("rejected", "journal_cannot_vouch")
+
+
+def test_attempt_row_hold_inside_the_cap_keeps_the_journal_proof(world):
+    world.seed()
+    world.dispatch()
+    render = world.render()
+    aid = _held_attempt_row(world, render)
+    _restore_from(world, 10 * 86400)
+    notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW)
+    assert next(h for h in world.holds() if h["attempt_id"] == aid)["reason"] == "unknown_attempt"
+    receipt = _resolve(world, render["delivery_id"], "mark_not_sent", aid,
+                       evidence={"method": "synthetic", "ref": "journal",
+                                 "proof": "no_journal_started", "worker_stopped": True})
+    assert receipt.get("error") != "journal_cannot_vouch"
+
+
+def test_rerun_receipt_still_lists_the_open_holds(world):
+    world.seed()
+    world.dispatch()
+    render = world.render()
+    _restore_from(world, backup_names.JOURNAL_HORIZON_MAX_S + 86400)
+    first = notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW)
+    assert render["delivery_id"] in {h["delivery_id"] for h in first["held"]}
+    # a rerun holds nothing new (renders are already held) yet keeps the list
+    again = notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW)
+    assert again["held"] == first["held"]
+    assert again["events_held"] == first["events_held"]
+
+
 def _compacted_pending_group(led, tmp_path, monkeypatch, *, error_code=None):
     """A pre-restore Slack render whose file_group never started: the stage upload
     is human-confirmed delivered, and the journal rows of the stage and the group

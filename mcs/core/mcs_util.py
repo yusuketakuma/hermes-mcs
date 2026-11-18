@@ -139,7 +139,8 @@ _TRANSIENT_PROVIDER_READ = frozenset({
 
 def _paid_routes_closed(common: dict) -> dict:
     """Common settings with every provider-owned paid route closed."""
-    cfg = dict(common)
+    # The mark lets guards hold (not discard) work: this "off" is synthesized, not the owner's.
+    cfg = {**common, "provider_unavailable": True}
     cloud = cfg.get("cloud_llm", {})
     semantic = cfg.get("semantic", {})
     if isinstance(cloud, dict):

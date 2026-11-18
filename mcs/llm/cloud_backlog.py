@@ -315,19 +315,32 @@ class CloudBacklogPool:
         self.retry_at = 0.0
         self.lock = None
         self.last_sync = 0.0
+        self.failed = False
         # The context pool's owner also keeps the stored-message workers of a
         # bounded reopening: they spawn only while that window is open.
         self.backlog = CloudBacklogPool(root) if context_only else None
 
     def sync(self, cfg, *, ledger=None):
+        """Return True only when a pass finished and no pool in the chain is
+        in a failure streak; a throttled return decided nothing. The owner
+        reads this, not ``last_sync``: a nested pool that raised is throttled
+        on the next call, and the outer pass alone must not count as recovery."""
+        decided = self.backlog.sync(cfg, ledger=ledger) if self.backlog is not None else False
+        now = time.monotonic()
+        if now - self.last_sync >= 10:
+            self.last_sync = now
+            try:
+                self._decide(cfg, ledger, now)
+            except Exception:
+                self.failed = True
+                raise
+            self.failed = False
+            decided = True
+        return decided and not (self.failed or (self.backlog is not None and self.backlog.failed))
+
+    def _decide(self, cfg, ledger, now):
         import cloud_inference
         import cloud_policy
-        if self.backlog is not None:
-            self.backlog.sync(cfg, ledger=ledger)
-        now = time.monotonic()
-        if now - self.last_sync < 10:
-            return
-        self.last_sync = now
         settings = cloud_inference.resolve_cloud_settings(cfg)
         self._reap(now)
         if not self._admits(cfg, settings, ledger):
@@ -435,7 +448,10 @@ class CloudBacklogPool:
 _WAIT_CODES = {"paused", "circuit_open", "pricing_unverified", "profile_invalid",
                "daily_cap", "daily_cost_cap", "monthly_cap", "provider_budget_missing",
                "provider_daily_cap", "provider_monthly_cap", "window_history_unverified",
-               "window_cap"}
+               "window_cap", "expired", "not_started",
+               # fixed circuit failure classes (semantic_runtime): global_block_reason returns one while open
+               "auth_error", "payment_required", "pricing_unverified", "contract_error", "transport",
+               "timeout", "rate_limited", "http_402", "http_429", "http_529", "http_5xx"}
 
 # Fixed defer-reason vocabulary reported by extract_llm.run_pending — a raw
 # error class, config value or id is never a valid reason in the pass record.
@@ -516,6 +532,14 @@ def _defer(waiting, code):
     time.sleep(10)
 
 
+def _note_provider(seen, settings):
+    """One fixed event when the selected provider changes between this worker's reads."""
+    provider = settings.get("provider")
+    if seen["provider"] is not None and provider != seen["provider"]:
+        _event("cloud_provider_changed", previous=seen["provider"], provider=provider)
+    seen["provider"] = provider
+
+
 def worker(parent, *, index=None, context_only=False):
     """Alternate guarded cloud extraction and semantic jobs with an independent ledger."""
     global _parent
@@ -555,6 +579,7 @@ def worker(parent, *, index=None, context_only=False):
         carry = []
         allow_exit_settle = True
         waiting = {"code": None, "at": 0.0}
+        provider_seen = {"provider": None}
         carry_failures = 0
         semantic_lock_failures = 0
         capacity_checked = float("-inf")
@@ -564,10 +589,19 @@ def worker(parent, *, index=None, context_only=False):
 
         def settle_carry():
             deadline = time.monotonic() + 3.0
-            extract_llm._settle_carry(
+            held = len(carry)
+            settled = extract_llm._settle_carry(
                 ledger, carry, final=False, fence=initial,
                 lock_context=extract_llm._write_lock(True, wait_s=1, deadline=deadline),
-                preserve_on_fence_loss=True, deadline=deadline)
+                preserve_on_fence_loss=True, deadline=deadline, report=False)[0]
+            if any(type(settled.get(key)) is int and settled[key] > 0 for key in ("done", "held_prior", "deferred")):
+                # A pass's `done` counts only what that run_pending call saved; work carried
+                # out of it is saved (done) or released (deferred) here, so it is reported here.
+                reasons = {key: count for key, count in (settled.get("defer_reasons") or {}).items()
+                           if key in _DEFER_REASONS and type(count) is int and count > 0}
+                _event("cloud_carry_settled", carried=held, kept=len(carry), done=settled["done"],
+                       done_unit="messages", held_prior=settled["held_prior"],
+                       deferred=settled["deferred"], defer_reasons=reasons)
 
         try:
             while os.getppid() == parent and writer_lock.updater_state() == initial and not initial[0]:
@@ -599,6 +633,7 @@ def worker(parent, *, index=None, context_only=False):
                     wait("provider_settings_unreadable")
                     continue
                 settings = cloud_inference.resolve_cloud_settings(cfg)
+                _note_provider(provider_seen, settings)
                 extract_open = cloud_policy.reextract_planned(settings)
                 semantic_open = ("semantic_backlog" in settings["routes"]
                                  and cloud_policy.route_open("semantic_backlog", settings))
@@ -930,6 +965,7 @@ def _context_worker(ledger, initial, index):
     from mcs_util import HOME, ProviderSettingsUnreadable, load_config
 
     waiting = {"code": None, "at": 0.0}
+    provider_seen = {"provider": None}
     role = None   # this child's ROLE_CLOUD hold; local lanes see the cloud lane served through it
     try:
         with local_llm.scheduling_scope(os.path.join(HOME, "data")):
@@ -942,6 +978,7 @@ def _context_worker(ledger, initial, index):
                     continue
                 waiting["code"] = None
                 settings = cloud_inference.resolve_cloud_settings(cfg)
+                _note_provider(provider_seen, settings)
                 if (settings["mode"] != "on" or index is not None and index >= settings["max_concurrency"]
                         or not extract_llm_resident._context_memory_available()):
                     return

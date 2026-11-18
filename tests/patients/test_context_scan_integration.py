@@ -519,10 +519,7 @@ def test_a_full_rotation_with_nothing_due_backs_off(runtime, monkeypatch):
 
 
 def test_a_partial_slice_with_nothing_due_does_not_back_off(runtime, monkeypatch):
-    """Nine patients, 8 candidate slots, none due: unvisited patients may be due, so the next slice is not delayed.
-
-    The fair turn re-yields already-checked patients within one pass, so 2 of the 8
-    candidate slots are spent on repeats and 6 patients are scanned."""
+    """Nine patients, 8 checked, none due: unvisited patients may be due, so the next slice is not delayed."""
     import cloud_backlog
     led, _, _ = runtime
     for pid in range(1, 10):
@@ -539,6 +536,5 @@ def test_a_partial_slice_with_nothing_due_does_not_back_off(runtime, monkeypatch
                         lambda *a, **k: (True, None, None))
     result = step(runtime)
     assert (result['status'], result['reason']) == ('deferred', 'patient_context_scan_incomplete'), result
-    assert result['scanned'] == 6 and not result['covered'] and not result['waiting']
+    assert result['scanned'] == 8 and not result['covered'] and not result['waiting']
     assert cloud_backlog._context_retry_delay(result) == 5
-

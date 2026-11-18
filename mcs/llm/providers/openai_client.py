@@ -193,9 +193,9 @@ class OpenAIClient(CloudClient):
             deadline=deadline, allowed_endpoints=(ENDPOINT,), auth="bearer",
             max_bytes=max_bytes)
 
-    def response_error(self, status, raw):
+    def response_error(self, status, raw, headers=None):
         if status != 429:
-            return super().response_error(status, raw)
+            return super().response_error(status, raw, headers)
         error, diagnostic = _error_429(raw)
         if diagnostic is None:
             code, kind = error.get("code"), error.get("type")
@@ -220,7 +220,7 @@ class OpenAIClient(CloudClient):
                     diagnostic = "unknown_type"
                 else:
                     diagnostic = "missing_code"
-        kind, retryable, _ = super().response_error(status, raw)
+        kind, retryable, _ = super().response_error(status, raw, headers)
         return kind, retryable, {"openai_429_diagnostic": diagnostic}
 
     def body(self, prompt, max_tokens, cache_prefix):
