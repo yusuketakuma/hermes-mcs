@@ -128,7 +128,7 @@ def test_source_ci_attempts_include_drafts_without_counting_other_prs_sharing_th
     api = GateAPI([source, unrelated])
     result = publish(api, event="workflow_run", run_workflow="ci", run_conclusion="failure",
                      run_sha=source["head"]["sha"], source_prs=[{"number": 1}, {"number": 1}])
-    assert result == {"published": [1, 2], "errors": []}
+    assert result == {"published": [2], "errors": []}
     labels = [path for method, path, _ in api.calls if method == "POST" and path.endswith("/labels")]
     assert labels == [ROOT + "issues/1/labels"]
     assert not any("/pulls" in path and "/commits/" in path for _, path, _ in api.calls)
@@ -159,3 +159,14 @@ def test_non_source_events_and_stale_heads_do_not_count_attempts(overrides):
     options.update(overrides)
     assert publish(api, **options) == {"published": [1], "errors": []}
     assert not any("/issues/" in path for _, path, _ in api.calls)
+
+
+@pytest.mark.parametrize("draft_first", [False, True])
+def test_shared_head_gets_one_ready_verdict_regardless_of_draft_order(draft_first):
+    draft, ready = pr(1, draft=True), pr(2)
+    draft["head"]["sha"] = ready["head"]["sha"]
+    api = GateAPI([draft, ready] if draft_first else [ready, draft])
+    assert publish(api) == {"published": [2], "errors": []}
+    statuses = [body for method, path, body in api.calls if method == "POST" and "/statuses/" in path]
+    assert len(statuses) == 1
+    assert statuses[0]["state"] == "success"

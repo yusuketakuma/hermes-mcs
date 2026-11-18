@@ -39,6 +39,7 @@ def publish_gates(api, repo, default_branch, *, automation_enabled, event="",
     except Exception as exc:
         result["errors"].append({"source": "PR discovery", "reason": str(exc)})
         pulls = []
+    candidates = {}
     for listed in pulls:
         number = listed.get("number")
         try:
@@ -46,6 +47,14 @@ def publish_gates(api, repo, default_branch, *, automation_enabled, event="",
             if not default_branch_pr(pr, repo, default_branch):
                 continue
             sha = pr["head"]["sha"]
+            previous = candidates.get(sha)
+            if previous is None or (previous.get("draft") and not pr.get("draft")):
+                candidates[sha] = pr
+        except Exception as exc:
+            result["errors"].append({"pr": number, "reason": str(exc)})
+    for sha, pr in candidates.items():
+        number = pr["number"]
+        try:
             checks = api.list(_repo_path(repo, f"commits/{sha}/check-runs"), key="check_runs")
             files = api.list(_repo_path(repo, f"pulls/{number}/files"))
             behind = api.get(_repo_path(repo, f"compare/{quote(default_branch, safe='')}...{sha}"))["behind_by"]
