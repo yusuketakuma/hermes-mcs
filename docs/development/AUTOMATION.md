@@ -167,13 +167,15 @@ fork、別の base、閉じた PR、draft は対象外です。
 `pull_request_target` の PR 受付、CI 完了、review の提出・編集・取り消しで再評価します。review は
 `pr-review-signal.yml` の読み取り専用・checkout なしの no-op を完了させ、既定ブランチの `agent-control.yml` に `workflow_run` で伝えます。
 controller は常に既定ブランチのコードを使い、PR コードを実行しません。自動マージ判定に cron・日次巡回・digest はありません。
-1つの非キャンセル concurrency group に直列化し、各 wake で全対象 PR を読み直すため、最後の1本だけの出力には依存しません。
+1つの非キャンセル concurrency group に直列化し、review signal を含む各 wake で全対象 PR の現在 head の `merge-gate` を再発行してから merge を評価します。
+最後の1本だけの出力には依存しません。Issue の試行回数の加算は、そのイベント自身の CI run と現在 head が一致する PR だけが対象です。
 
 承認の追加・変更では CI を dispatch も再実行もしません。CI と人の承認は並行して待ちます。
 新しい head では古い承認と成功を使わず、新しい head の CI と新しい人承認が必要です。
 PR CI は既存の concurrency で旧 run を取り消します。main-sync の branch-dispatch CI も、
 PR 番号・branch 種別を含む run title と SHA で絞り、現在の head を再確認して旧 run だけを取り消します。
 この title がない旧形式の dispatch run は、tag・手動実行との安全な識別ができないため取り消しません。tag・schedule・別 PR・現在の SHA は対象外です。
+取り消しが失敗した場合は run を再取得し、すでに完了していれば処理を続けます。まだ実行中か確認できない場合も警告だけを出し、新 head の CI 起動や判定は止めません。
 
 ### CI 基盤障害の再試行
 

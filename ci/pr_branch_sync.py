@@ -141,7 +141,17 @@ class Sync:
                 if (not same_repository(latest) or latest["head"]["ref"] != ref
                         or latest["head"]["sha"] == run["head_sha"]):
                     continue
-                self.api("-X", "POST", f"repos/{self.repo}/actions/runs/{run_id}/cancel")
+                try:
+                    self.api("-X", "POST", f"repos/{self.repo}/actions/runs/{run_id}/cancel")
+                except GitHubError as exc:
+                    try:
+                        refreshed = self.api(f"repos/{self.repo}/actions/runs/{run_id}")
+                        if refreshed.get("status") == "completed":
+                            continue
+                    except GitHubError:
+                        pass
+                    print(f"warning: PR #{pr_number} obsolete CI run {run_id} cancellation failed: {exc}",
+                          file=sys.stderr)
 
     def missing_sync_ci(self, sha: str) -> list[str]:
         """Workflows that never ran on `sha`, when `sha` is this job's merge commit."""

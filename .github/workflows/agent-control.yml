@@ -64,13 +64,13 @@ jobs:
         run: python3 ci/pr_branch_sync.py --repo "$GH_REPO" --base "$DEFAULT_BRANCH" --cancel-obsolete-ci-only
       - name: Decide and publish merge-gate
         id: plan
-        if: github.event_name != 'workflow_run' || github.event.workflow_run.name == 'ci'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
           RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_WORKFLOW: ${{ github.event.workflow_run.name }}
           CONTROL_ATTEMPT: ${{ github.run_attempt }}
           PR_FROM_EVENT: ${{ github.event.pull_request.number }}
           PR_INPUT: ${{ inputs.pr_number }}
@@ -79,7 +79,7 @@ jobs:
         run: |
           set -euo pipefail
           work=$(mktemp -d)
-          if [[ "$EVENT" == "workflow_run" ]]; then
+          if [[ "$EVENT" == "workflow_run" && "$RUN_WORKFLOW" == "ci" ]]; then
             if [[ -n "$PR_INPUT" ]]; then
               prs="$PR_INPUT"
             else
@@ -102,18 +102,27 @@ jobs:
             prs="$PR_FROM_EVENT"
             ci_conclusion=""
           fi
+          event_prs="$prs"
+          prs=$(gh api "repos/$GH_REPO/pulls?state=open&base=$DEFAULT_BRANCH&per_page=100" --paginate --jq '.[] | select(.draft != true) | .number')
           for pr in $prs; do
             gh api "repos/$GH_REPO/pulls/$pr" > "$work/pr.json"
+            if ! jq -e --arg repo "$GH_REPO" --arg base "$DEFAULT_BRANCH" \
+              '.state == "open" and (.draft != true) and .base.ref == $base and .head.repo.full_name == $repo and .base.repo.full_name == $repo' \
+              "$work/pr.json" > /dev/null; then continue; fi
             sha=$(jq -r .head.sha "$work/pr.json")
-            # A CI run for an older head says nothing about the current one.
-            if [[ "$EVENT" != "pull_request_target" && "$sha" != "$RUN_SHA" ]]; then continue; fi
+            pr_ci_conclusion=""
+            if [[ "$sha" == "$RUN_SHA" ]]; then
+              for event_pr in $event_prs; do
+                if [[ "$event_pr" == "$pr" ]]; then pr_ci_conclusion="$ci_conclusion"; fi
+              done
+            fi
             base=$(jq -r .base.ref "$work/pr.json")
             gh api "repos/$GH_REPO/commits/$sha/check-runs?per_page=100" --paginate --slurp > "$work/checks.json"
             gh api "repos/$GH_REPO/pulls/$pr/files?per_page=100" --paginate --slurp > "$work/files.json"
             behind=$(gh api "repos/$GH_REPO/compare/$base...$sha" --jq .behind_by)
             python3 ci/agent_control.py gate --pr "$work/pr.json" --checks "$work/checks.json" \
               --files "$work/files.json" --behind-by "$behind" --automation "${AUTOMATION:-}" \
-              --ci-conclusion "$ci_conclusion" > "$work/plan.json"
+              --ci-conclusion "$pr_ci_conclusion" > "$work/plan.json"
             cat "$work/plan.json"
             state=$(jq -r .state "$work/plan.json")
             gh api -X POST "repos/$GH_REPO/statuses/$sha" -f context=merge-gate -f state="$state" \

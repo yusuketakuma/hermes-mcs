@@ -210,6 +210,37 @@ def test_cancel_only_mode_rechecks_head_before_canceling_a_newer_run():
     assert not fake.writes
 
 
+@pytest.mark.parametrize("cancel_only", [False, True])
+@pytest.mark.parametrize("status", ["completed", "in_progress", "unavailable"])
+def test_cancel_failure_is_best_effort_and_does_not_block_dispatch(cancel_only, status, capsys):
+    class CancelFailure(FakeGitHub):
+        def __call__(self, *args):
+            path = args[2] if args[0] == "-X" else args[0]
+            if path.endswith("/cancel"):
+                super().__call__(*args)
+                raise sync.GitHubError("HTTP 409: run changed before cancellation")
+            if path == f"repos/{REPO}/actions/runs/101":
+                if status == "unavailable":
+                    raise sync.GitHubError("HTTP 503: unavailable")
+                return {"status": status}
+            return super().__call__(*args)
+    pr = _pr()
+    if cancel_only:
+        pr["head"]["sha"] = NEW
+    fake = CancelFailure([pr], workflow_runs=[
+        {"id": 101, "event": "workflow_dispatch", "head_branch": "feature-7",
+         "display_title": f"ci-pr-7-branch-{OLD}", "head_sha": OLD, "status": "in_progress",
+         "repository": {"full_name": REPO}},
+    ])
+    assert _run(fake, cancel_only=cancel_only) == 0
+    assert any(path.endswith("/cancel") for _, path, _ in fake.writes)
+    dispatches = [path for _, path, _ in fake.writes if path.endswith("/dispatches")]
+    assert bool(dispatches) is not cancel_only
+    if not cancel_only:
+        assert f"repos/{REPO}/actions/workflows/ci.yml/dispatches" in dispatches
+    assert ("warning:" in capsys.readouterr().err) == (status != "completed")
+
+
 @pytest.mark.parametrize("author, runs, dispatched", [
     ("github-actions[bot]", 0, True),    # our merge whose dispatch was lost
     ("github-actions[bot]", 1, False),   # CI already ran on it
