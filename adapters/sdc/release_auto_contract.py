@@ -344,9 +344,8 @@ def _object_pairs(pairs):
     return out
 
 
-def parse_typed(raw, definition, *, max_bytes=AUTO_INPUT_BYTES):
-    """bytes/strのwire入力をdefinitionへ照合して返す。ContractError(422相当)のみ送出。"""
-    _check(type(max_bytes) is int and 0 < max_bytes <= AUTO_INPUT_BYTES)
+def _parse_and_scan(raw, max_bytes):
+    """decode・strict JSON parse・ENC01検査を行い、照合前の値を返す。"""
     data = raw.encode('utf-8') if isinstance(raw, str) else bytes(raw)
     _check(len(data) <= max_bytes)
     try:
@@ -361,27 +360,19 @@ def parse_typed(raw, definition, *, max_bytes=AUTO_INPUT_BYTES):
     except Exception:
         raise ContractError('CONTRACT_INVALID') from None
     _scan_value(value, 0, {'n': 0})
-    return _validate(definition, value)
+    return value
+
+
+def parse_typed(raw, definition, *, max_bytes=AUTO_INPUT_BYTES):
+    """bytes/strのwire入力をdefinitionへ照合して返す。ContractError(422相当)のみ送出。"""
+    _check(type(max_bytes) is int and 0 < max_bytes <= AUTO_INPUT_BYTES)
+    return _validate(definition, _parse_and_scan(raw, max_bytes))
 
 
 def parse_document(raw, definition, *, max_bytes):
     """wire上限を超えるlocal耐久文書(owner state等)用。depth/node検査は同一。"""
     _check(type(max_bytes) is int and AUTO_INPUT_BYTES < max_bytes <= 8 * 1024 * 1024)
-    data = raw.encode('utf-8') if isinstance(raw, str) else bytes(raw)
-    _check(len(data) <= max_bytes)
-    try:
-        text = data.decode('utf-8')
-    except UnicodeDecodeError:
-        raise ContractError('CONTRACT_INVALID') from None
-    try:
-        value = json.loads(text, parse_int=_parse_int, parse_float=_parse_float,
-                           parse_constant=_reject_constant, object_pairs_hook=_object_pairs)
-    except ContractError:
-        raise
-    except Exception:
-        raise ContractError('CONTRACT_INVALID') from None
-    _scan_value(value, 0, {'n': 0})
-    return _validate(definition, value)
+    return _validate(definition, _parse_and_scan(raw, max_bytes))
 
 
 def canonical_typed(value, definition):
