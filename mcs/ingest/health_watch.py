@@ -927,6 +927,34 @@ _OCR_LOCAL_DEFER_JA = {
     "local_stage_error": ("ローカル解析の処理で異常を記録しました",
                           f"{_DOCTOR} で直近の実行結果を確認してください"),
 }
+# attachment_inference_deferral's llm_* observation codes, phrased as what the
+# page call recorded while it ran — never as the confirmed hold cause.
+_OCR_LLM_DEFER_JA = {
+    "llm_admission": "処理枠の空き待ち",
+    "llm_busy": "処理枠の競合",
+    "llm_checkpoint_unverified": "検証済み記録の未確認",
+    "llm_circuit_open": "呼出回路の停止",
+    "llm_currentness_unverified": "入力の現行性の未確認",
+    "llm_deadline": "処理期限の超過",
+    "llm_endpoint_down": "ローカルLLMの未到達",
+    "llm_local_rebuild_proof_changed": "再構築根拠の変更",
+    "llm_local_rebuild_unverified": "再構築根拠の未確認",
+    "llm_not_sent": "送信前の保留",
+    "llm_probe_unobserved": "形式確認の未観測",
+    "llm_quality_checkpoint_unverified": "品質確認の未検証",
+    "llm_repair_unavailable": "修復呼出の不可",
+}
+
+
+def _ocr_llm_defer_text(reasons) -> str:
+    """Observed call reasons as counts; '' unless the breakdown is usable."""
+    if not isinstance(reasons, dict):
+        return ""
+    return "・".join(f"{_OCR_LLM_DEFER_JA[code]}{count}件"
+                     for code, count in sorted(reasons.items())
+                     if code in _OCR_LLM_DEFER_JA and type(count) is int and count > 0)
+
+
 # runtime_mode=standalone: the host owns the connection and the workers,
 # so the Hermes gateway / per-agent hints do not apply
 _STANDALONE_ACTION = {
@@ -1232,6 +1260,10 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                 observed, todo = _OCR_LOCAL_DEFER_JA[cause]
                 extra = f"（直近の実行の再確認: {observed}）"
                 action = f"{todo}。文字起こしの失敗を示すものではありません"
+            elif isinstance(ocr, dict):
+                seen = _ocr_llm_defer_text(ocr.get("local_llm_defer_reasons"))
+                extra = (f"（保留の原因は未特定。処理中の観測: {seen}）" if seen
+                         else "（直近の実行で保留の原因は特定できていません）")
         elif base == "attachment_ocr_processing_failed":
             ocr = report.get("attachment_ocr")
             if (isinstance(ocr, dict)
