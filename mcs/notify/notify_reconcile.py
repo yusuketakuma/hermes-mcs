@@ -659,6 +659,44 @@ def _hold_rows(db) -> int:
         "SELECT COUNT(*) FROM notification_restore_holds").fetchone()[0]
 
 
+def _active_holds(db, text_held) -> tuple[list, int, bool]:
+    """Unreleased restore holds plus every intent id still quarantined by
+    them — the receipt's durable worklist, so a re-run reports what still
+    awaits an operator even when this run held nothing new. A damaged
+    stored record (unreadable events, progress, or scope) flags the
+    aggregate incomplete and contributes only the ids that confirm."""
+    holds, events, incomplete = [], set(), False
+    for r in db.execute(
+            "SELECT hold_id,card_id,delivery_id,attempt_id,events_json,"
+            "reason,scope_json FROM notification_restore_holds "
+            "WHERE released_at IS NULL ORDER BY hold_id").fetchall():
+        scope = loads_dict(r["scope_json"] or "{}")
+        if scope is None:
+            incomplete, scope = True, {}
+        holds.append({"hold_id": r["hold_id"], "card_id": r["card_id"],
+                      "delivery_id": r["delivery_id"],
+                      "attempt_id": r["attempt_id"], "reason": r["reason"],
+                      "scope": scope})
+        held_events = notify_recovery.hold_events(r)
+        if held_events is None:
+            incomplete = True
+        else:
+            events.update(held_events)
+    for ev in db.execute(
+            "SELECT event_id,progress FROM notify_outbox WHERE "
+            "COALESCE(route,'text')='interactive' AND state='failed' "
+            "AND next_try IS NULL").fetchall():
+        progress = loads_dict(ev["progress"] or "{}")
+        if not isinstance(progress, dict) or "invalid_progress" in progress:
+            incomplete = True   # parked row's quarantined list unreadable
+            continue
+        if progress.get("hold_reason") in (
+                "restore_hold", "restore_unlinked"):
+            events.add(ev["event_id"])
+    events.update(t["event_id"] for t in text_held)
+    return holds, len(events), incomplete
+
+
 def reconcile_after_restore(ledger, cfg, now=None) -> dict:
     """Journal <-> restored DB comparison + hold/settle for every
     disputed delivery scope. Clears the restore marker only after the
@@ -808,6 +846,8 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
                    "reason": h["reason"], "card_id": h["card_id"],
                    "scope": loads_dict(h["scope_json"] or "{}") or {}}
                   for h in hold_rows]
+    active_holds, active_events_held, active_incomplete = _active_holds(
+        db, text_held)
     receipt = {
         "v": 1, "at": now,
         "restored_at": marker.get("restored_at"),
@@ -820,6 +860,9 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
         "parts_held": parts_held,
         "parts_unresolvable": parts_unresolvable,
         "journal_incomplete": journal_incomplete,
+        "active_holds": active_holds,
+        "active_events_held": active_events_held,
+        "active_holds_incomplete": active_incomplete,
     }
     notify_spool.publish_file(root, notify_spool.RESTORE_RECEIPT,
                        cards.canonical(receipt))

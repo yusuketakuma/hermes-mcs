@@ -387,6 +387,7 @@ class CloudBacklogPool:
             self.children.append(child)
             self.indices[child] = index
             self.started[child] = now
+        return inner_done
 
     def _admits(self, cfg, settings, ledger):
         """Return whether mode, routes, key, profile and budget let this pool start children."""
