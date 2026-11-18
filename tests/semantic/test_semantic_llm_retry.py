@@ -917,6 +917,7 @@ def test_format_preflight_cannot_dispatch_after_budget_expires(monkeypatch, stag
         assert semantic_transport.last_llm_failure() == "deadline"
         assert probes == [1]
     else:
+        # The remaining budget cannot cover the probe and the first body call.
         with pytest.raises(semantic_runtime.LLMNotSent) as info:
             semantic_transport.llm_chat("synthetic expired preflight", timeout=4)
         assert info.value.stage == "probe_unsent"
