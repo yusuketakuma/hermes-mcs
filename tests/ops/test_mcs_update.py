@@ -1337,3 +1337,41 @@ def test_abort_pending_notice_carries_the_id_of_its_first_enqueue(updater, monke
     assert updater.apply("v1.1.0", "a" * 40, "cid-id") == 1
     [pending] = updater.journal_store.load_state(updater.STATE_PATH)["pending_notices"]
     assert ids == [pending["notice_id"]]
+
+
+def test_check_writes_and_applies_nothing_while_a_restore_holds(updater, monkeypatch):
+    """Regression: with an empty journal and a pending restore, the daily
+    check still queued notices and applied approved or auto updates."""
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {
+        "update": {"mode": "auto", "auto_delay_h": 0}})
+    monkeypatch.setattr(update_discovery, 'detect_latest',
+                        lambda pre, **_paths: ("v9.0.0", "a" * 40))
+    monkeypatch.setattr(update_discovery, 'current_version',
+                        lambda **_paths: ("v8.0.0", "b" * 40))
+    monkeypatch.setattr(update_cli, 'fetch_notes', lambda tag: "notes")
+    monkeypatch.setattr(update_cli, 'impact_summary', lambda a, b: [])
+    monkeypatch.setattr(update_cli, '_git',
+                        lambda args, timeout=None: subprocess.CompletedProcess(args, 1, "", ""))
+    monkeypatch.setattr(update_repository, '_git', update_cli._git)
+    monkeypatch.setattr(update_cli, 'scan_pending_approvals',
+                        lambda state: ([{"tag": "v9.0.0", "target_sha": "a" * 40,
+                                         "command_id": "c1"}], []))
+    monkeypatch.setattr(update_cli, '_restore_hold_active', lambda: True)
+    forbidden = []
+    monkeypatch.setattr(update_cli, '_enqueue_notice', lambda *a, **k: forbidden.append("notice"))
+    monkeypatch.setattr(update_cli, '_drug_info_notices', lambda cfg: forbidden.append("drug"))
+    monkeypatch.setattr(update_cli, 'apply', lambda *a, **k: forbidden.append("apply"))
+    monkeypatch.setattr(update_cli, 'recover_interrupted', lambda: forbidden.append("recover"))
+    assert updater.cmd_check() == 0
+    assert forbidden == []
+
+
+def test_apply_starts_nothing_while_a_restore_holds(updater, monkeypatch, capsys):
+    repo = _apply_env(updater, monkeypatch)
+    before = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(update_apply, '_restore_hold_active', lambda: True)
+    assert updater.apply("v1.1.0", "a" * 40, "cid-held") == 2
+    assert 'DBの復元' in capsys.readouterr().out
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["stages"] == [] and "cid-held" not in state.get("executed", {})

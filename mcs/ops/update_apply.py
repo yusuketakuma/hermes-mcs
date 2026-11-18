@@ -97,6 +97,7 @@ from update_repository import (
     _tree_clean,
 )
 from update_restore import (
+    _adopted_marker,
     _consent_hold,
     _hold_rollback_for_consent,
     _rollback_applying,
@@ -294,6 +295,9 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     rollback_failed = True
                     return _provider_migration_recovery_hold(expected_mode=hold_mode or "")
                 try:
+                    if entry.get("schema_bump") and _adopted_marker():
+                        # before any journal rewrite, like rollback()
+                        raise UpdateError("restore_marker_adopted")
                     _provider_rollback_preflight(entry.get("prev_sha"))
                     _check_runtime_restore(entry)
                     # only install.sh changes the venv's SDK pins
@@ -467,6 +471,11 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     # _rollback_tree it unlocked, then overwrite it
                     delegated = True
                     return recover_interrupted()
+                if _restore_hold_active():
+                    # Same restore gate as plan and recover: writes now would join its loss report.
+                    print("DBの復元が承認待ちまたは未完了のため、更新を開始しません（変更はありません）。"
+                          "復元を完了してから再実行してください。")
+                    return 2
 
             journal(state, "local_checks")
             errors = precheck_local(cfg, **before_args)

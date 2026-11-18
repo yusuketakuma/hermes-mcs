@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "独立復旧監視が読めない定期処理一覧を0件として扱う問題と、再起動失敗を通知しない問題を修正",
+  "summary": "独立復旧監視は、hermes cron list の出力から色付けの制御文字を除いて読み、形式を読み取れない一覧を0件とみなして整理を黙って飛ばさなくなりました。読めない場合は cron_list_unverifiable として「復旧できません（要手動対応）」の対象になります（mcs_update.py の復旧と同じ扱いです）。また、復旧できないと通知するときに、再起動できなかった常駐処理の名前を通知と記録（restart）に含めます。",
+  "upgrade": "追加操作は不要です。一覧が空であることは「No scheduled jobs」の表示でだけ確認します。独立復旧監視の変更は、この版で install.sh を再実行（更新の再導入を含む）して復旧ツールを入れ替えたときに反映されます。",
+  "details": [
+    "service_contract.parse_cron_listing と同じく、ANSI の色指定を除き、空一覧の目印が無い0件を確認不能とする。",
+    "escalate は mcs_update.py と同じく報告を先に残してから常駐処理を再起動し、再起動の失敗を recovery_report.json の restart と、その後に送る通知文に残す。通知済みの時刻は常駐処理の起動後、送信の直前に記録するので、起動の失敗で通知が止まることはない。"
+  ],
+  "refs": ["deployment/recovery/mcs_recovery_services.py", "deployment/recovery/mcs_recover.py"]
+}

@@ -66,6 +66,31 @@ def test_cron_job_removal_requires_successful_list(
     assert calls == expected
 
 
+@pytest.mark.parametrize("listing,unverifiable,removed", [
+    ("\x1b[1m  abcdef [disabled]\x1b[0m\n    Script:  /synthetic/mcs_removed.sh\n", False, True),
+    ("No scheduled jobs in profile 'default'.\n", False, False),
+    ("Jobs:\n  - abcdef mcs_removed.sh (disabled)\n", True, False),
+    ("", True, False),
+])
+def test_cron_listing_needs_a_recognised_format(rec, tmp_path, monkeypatch, listing, unverifiable, removed):
+    hermes = tmp_path / "synthetic-hermes"
+    hermes.write_text("# synthetic executable placeholder")
+    Path(rec.mcs_recovery_core.MANIFEST_PATH).write_text(json.dumps(
+        {"cron": [{"id": "abcdef", "script": "/synthetic/mcs_removed.sh"}]}))
+    monkeypatch.setattr(rec.shutil, "which", lambda name: str(hermes))
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(
+            argv, 0, listing if argv[1:] == ["cron", "list", "--all"] else "", "")
+
+    monkeypatch.setattr(rec.subprocess, "run", run)
+    problems = rec.mcs_recovery_services._reconcile_membership({"cron": [], "agents": []})
+    assert ("cron_list_unverifiable" in problems) is unverifiable
+    assert ([str(hermes), "cron", "remove", "abcdef"] in calls) is removed
+
+
 def test_reconcile_reports_failed_service_command(rec, tmp_path, monkeypatch):
     setup = tmp_path / "repo" / "mcs" / "ops" / "mcs_setup.py"
     setup.parent.mkdir(parents=True)
