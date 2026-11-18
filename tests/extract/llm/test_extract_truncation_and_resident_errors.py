@@ -279,7 +279,7 @@ def test_cloud_pool_sync_failure_still_runs_the_lane_once_logged(monkeypatch, ca
         def sync(self, cfg, *, ledger=None):
             syncs.append(now[0])
             if now[0] - self.last_sync < 10:
-                return
+                return False
             self.last_sync = now[0]
             raise run_log_install.LogInstallError("synthetic-private-error-detail")
 
@@ -300,4 +300,46 @@ def test_cloud_pool_sync_failure_still_runs_the_lane_once_logged(monkeypatch, ca
     failures = [item for item in events if item.get("event") == "cloud_pool_sync_error"]
     assert len(failures) == 1 and failures[0]["class"] == "LogInstallError"
     assert not any(item.get("event") == "extract_loop_error" for item in events)
+    assert "synthetic-private-error-detail" not in output
+
+
+def test_cloud_pool_sync_failure_relogs_only_after_a_full_completion(monkeypatch, capsys):
+    """A throttled sync that decided nothing does not clear the recorded
+    failure — the streak ends, and the log may repeat, only when a sync
+    completes its judgment."""
+    import cloud_backlog
+    import run_log_install
+    now = _stub_resident_loop(monkeypatch, ["--stop-after", "400"])
+    pools = []
+
+    class Pool:
+        def __init__(self, root, *, context_only=False):
+            assert context_only
+            self.last_sync = float("-inf")
+            self.judged = 0
+            pools.append(self)
+
+        def sync(self, cfg, *, ledger=None):
+            if now[0] - self.last_sync < 10:
+                return False
+            self.last_sync = now[0]
+            self.judged += 1
+            if self.judged == 2:   # one full completion mid-streak
+                return True
+            raise run_log_install.LogInstallError("synthetic-private-error-detail")
+
+        def close(self):
+            pass
+    monkeypatch.setattr(cloud_backlog, "CloudBacklogPool", Pool)
+
+    def run_pending(*args, **kwargs):
+        now[0] += 4
+        return {"done": 1, "failed": 0, "left": 1, "selected": 1}
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', run_pending)
+    assert extract_llm.main() == 0
+    assert pools and pools[0].judged >= 3
+    output = capsys.readouterr().err
+    events = [json.loads(line) for line in output.splitlines()]
+    failures = [item for item in events if item.get("event") == "cloud_pool_sync_error"]
+    assert len(failures) == 2   # once per streak, not per sync call
     assert "synthetic-private-error-detail" not in output

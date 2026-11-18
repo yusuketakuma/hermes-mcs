@@ -1546,3 +1546,50 @@ def test_parent_never_starts_a_child_its_own_memory_check_refuses(monkeypatch, p
     # Small Linux hosts keep at least 1 GiB for foreground work in both checks.
     if platform == "linux" and available_kb * 1024 < (1 << 30) + backlog._WORKER_BYTES:
         assert backlog.memory_workers(4) == 0
+
+@pytest.mark.parametrize("inner_done,throttle,expected", [
+    (False, False, False),
+    (True, True, False),
+    (False, True, False),
+    (True, False, True),
+], ids=["inner-throttled", "outer-throttled", "both-throttled", "both-done"])
+def test_sync_reports_done_only_when_both_legs_decided(tmp_path, monkeypatch, inner_done, throttle, expected):
+    """A throttled leg decided nothing: sync reports completion only when
+    the nested backlog and this pool both judged."""
+    (tmp_path / "data").mkdir()
+    cfg = {"cloud_llm": {"mode": "off", "project_ids": [1]}}
+    pool = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        monkeypatch.setattr(pool.backlog, "sync", lambda *a, **k: inner_done)
+        if throttle:
+            pool.last_sync = float("inf")
+        assert pool.sync(cfg) is expected
+    finally:
+        pool.close()
+
+
+def test_sync_without_a_nested_backlog_reports_its_own_completion(tmp_path, monkeypatch):
+    (tmp_path / "data").mkdir()
+    pool = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    pool.backlog = None
+    try:
+        assert pool.sync({"cloud_llm": {"mode": "off"}}) is True
+        pool.last_sync = float("inf")
+        assert pool.sync({"cloud_llm": {"mode": "off"}}) is False
+    finally:
+        pool.close()
+
+
+def test_sync_propagates_nested_errors_untouched(tmp_path, monkeypatch):
+    """A nested failure reaches the caller as-is; the recorded outer
+    failure state is for the caller to keep."""
+    (tmp_path / "data").mkdir()
+    pool = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        def boom(*a, **k):
+            raise RuntimeError("synthetic")
+        monkeypatch.setattr(pool.backlog, "sync", boom)
+        with pytest.raises(RuntimeError, match="synthetic"):
+            pool.sync({"cloud_llm": {"mode": "off"}})
+    finally:
+        pool.close()

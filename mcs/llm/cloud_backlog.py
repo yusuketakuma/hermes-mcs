@@ -235,13 +235,19 @@ class CloudBacklogPool:
         self.backlog = CloudBacklogPool(root) if context_only else None
 
     def sync(self, cfg, *, ledger=None):
+        """Whether this call completed its sync judgment. A throttled call
+        decided nothing (False); a finished judgment — admitted, gated,
+        or blocked — completed (True when the nested backlog also
+        completed). Exceptions propagate without touching the caller's
+        recorded failure."""
         import cloud_inference
         import cloud_policy
+        inner_done = True
         if self.backlog is not None:
-            self.backlog.sync(cfg, ledger=ledger)
+            inner_done = bool(self.backlog.sync(cfg, ledger=ledger))
         now = time.monotonic()
         if now - self.last_sync < 10:
-            return
+            return False
         self.last_sync = now
         settings = cloud_inference.resolve_cloud_settings(cfg)
         self._reap(now)
@@ -249,19 +255,19 @@ class CloudBacklogPool:
             # Children retire by policy while the gate is closed: those exits
             # are not crashes and never delay a restart once it reopens.
             self.quick_exits, self.retry_at = 0, 0.0
-            return
+            return inner_done
         directory = self.root / "data"
         if self.lock is None:
             self.lock = _lock(directory / ("context_pool.lock" if self.context_only else "cloud_pool.lock"))
             if self.lock is None:
-                return
+                return inner_done
         self._reap(now)
         target = memory_workers(settings["max_concurrency"])
         # Keep one worker of hysteresis: its resident memory changes the sample.
         if self.children and target > 0 and abs(target - len(self.children)) <= 1:
             target = min(settings["max_concurrency"], len(self.children))
         if target <= len(self.children) or now < self.retry_at:
-            return
+            return inner_done
         inherited = os.environ.get("MCS_RUN_LOG_HELPER")
         recovery = str(Path(inherited).parent) if inherited and os.path.isabs(inherited) else None
         helper = helper_path(self.root, recovery, require_installed=True)
@@ -278,6 +284,7 @@ class CloudBacklogPool:
             self.children.append(child)
             self.indices[child] = index
             self.started[child] = now
+        return inner_done
 
     def _admits(self, cfg, settings, ledger):
         """Return whether mode, routes, key, profile and budget let this pool start children."""

@@ -795,3 +795,125 @@ def test_adopted_backup_stops_cloud_sends_once_and_keeps_its_marker(world, monke
         cloud_policy.resume(world.led)
         notify_reconcile.reconcile_after_restore(world.led, CLOUD_CFG, now=NOW + 3)
         assert cloud_policy.global_block_reason(world.led) != "paused"
+
+
+# ---------- receipt: durable hold inventory across re-runs ----------
+
+def _stored_hold(led, events_json, reason, *, card_id=None, delivery_id=None,
+                 attempt_id=None, scope=None):
+    led.db.execute(
+        "INSERT INTO notification_restore_holds(card_id,delivery_id,"
+        "attempt_id,events_json,reason,scope_json,held_at) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (card_id, delivery_id, attempt_id, events_json, reason,
+         json.dumps(scope or CFG["notify"]["discord"]), NOW))
+    led.db.commit()
+    return led.db.execute(
+        "SELECT MAX(hold_id) FROM notification_restore_holds").fetchone()[0]
+
+
+def _held_outbox(led, event_id, route, progress):
+    led.db.execute(
+        "INSERT INTO notify_outbox(event_id,kind,project_id,payload,state,"
+        "attempts,next_try,route,progress,created_at,updated_at) "
+        "VALUES(?,?,?,?,'failed',1,NULL,?,?,?,?)",
+        (event_id, "new_messages", 1, "{}", route,
+         progress if isinstance(progress, str) else json.dumps(progress),
+         NOW, NOW))
+    led.db.commit()
+
+
+def _hold_inventory(world):
+    """Two stored holds (H1: ids 11,12 — H2: id 12), parked interactive
+    intents 12,13, and a quarantined text intent 14."""
+    h1 = _stored_hold(world.led, "[11,12]",
+                      "unknown_attempt:beyond_horizon",
+                      delivery_id="d-syn-a", attempt_id="syn-a1")
+    h2 = _stored_hold(world.led, "[12]", "restore_beyond_journal_horizon",
+                      delivery_id="d-syn-b")
+    _held_outbox(world.led, 12, "interactive", {"hold_reason": "restore_hold"})
+    _held_outbox(world.led, 13, "interactive", {"hold_reason": "restore_unlinked"})
+    _held_outbox(world.led, 14, "text", {"hold_reason": "restore_text_unverified"})
+    return h1, h2
+
+
+def test_receipt_reports_the_active_hold_inventory(world):
+    """held/events_held describe this run; active_* carry the durable
+    worklist so a re-run of reconcile does not report an empty receipt
+    while operators still owe releases."""
+    _hold_inventory(world)
+    rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
+    assert rep["held"] == []
+    assert rep["events_held"] == 1   # the parked text event stays counted
+    assert [h["hold_id"] for h in rep["active_holds"]] == [1, 2]
+    first = rep["active_holds"][0]
+    assert (first["attempt_id"], first["delivery_id"],
+            first["reason"]) == ("syn-a1", "d-syn-a",
+                                 "unknown_attempt:beyond_horizon")
+    assert first["scope"] == CFG["notify"]["discord"]
+    assert rep["active_events_held"] == 4
+    assert rep["active_holds_incomplete"] is False
+    again = notify_reconcile.reconcile_after_restore(world.led, CFG)
+    assert again["active_holds"] == rep["active_holds"]
+    assert again["active_events_held"] == 4
+    assert again["active_holds_incomplete"] is False
+
+
+def test_receipt_inventory_drops_released_holds(world):
+    h1, h2 = _hold_inventory(world)
+    notify_reconcile.reconcile_after_restore(world.led, CFG)
+    with world.led.db:
+        world.led.db.execute(
+            "UPDATE notification_restore_holds SET released_at=? "
+            "WHERE hold_id=?", (NOW, h1))
+    rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
+    assert [h["hold_id"] for h in rep["active_holds"]] == [h2]
+    assert rep["active_events_held"] == 3   # {12} ∪ {12,13} ∪ {14}
+    with world.led.db:
+        world.led.db.execute(
+            "UPDATE notification_restore_holds SET released_at=? "
+            "WHERE hold_id=?", (NOW, h2))
+        world.led.db.execute(
+            "UPDATE notify_outbox SET state='pending',next_try=? "
+            "WHERE event_id=12", (NOW,))
+    rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
+    assert rep["active_holds"] == []
+    assert rep["active_events_held"] == 2   # {13} ∪ {14}
+    assert rep["active_holds_incomplete"] is False
+
+
+def test_receipt_flags_damaged_hold_records(world):
+    """A stored record the receipt cannot confirm flags the inventory
+    incomplete — never silently counted as released work."""
+    _stored_hold(world.led, '[11,"bad"]', "unknown_attempt:beyond_horizon",
+                 delivery_id="d-syn-a", attempt_id="syn-a1")
+    _stored_hold(world.led, "[12]", "restore_beyond_journal_horizon",
+                 delivery_id="d-syn-b")
+    _held_outbox(world.led, 13, "interactive",
+                 {"hold_reason": "restore_hold"})
+    _held_outbox(world.led, 14, "text",
+                 {"hold_reason": "restore_text_unverified"})
+    rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
+    assert len(rep["active_holds"]) == 2
+    assert rep["active_events_held"] == 3   # {12} ∪ {13} ∪ {14}
+    assert rep["active_holds_incomplete"] is True
+
+
+def test_receipt_flags_unreadable_parked_progress_and_scope(world):
+    _stored_hold(world.led, "[12]", "restore_beyond_journal_horizon",
+                 delivery_id="d-syn-b", scope="not-json")
+    _held_outbox(world.led, 13, "interactive", "{broken")
+    _held_outbox(world.led, 14, "text",
+                 {"hold_reason": "restore_text_unverified"})
+    rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
+    assert len(rep["active_holds"]) == 1
+    assert rep["active_holds"][0]["scope"] == {}
+    assert rep["active_events_held"] == 2   # {12} ∪ {14}
+    assert rep["active_holds_incomplete"] is True
+
+
+def test_receipt_inventory_is_empty_on_a_clean_ledger(world):
+    rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
+    assert rep["active_holds"] == []
+    assert rep["active_events_held"] == 0
+    assert rep["active_holds_incomplete"] is False

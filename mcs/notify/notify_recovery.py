@@ -347,6 +347,18 @@ def _journal_contradiction(ledger, req) -> str | None:
     ``started`` row or a tainted journal (a corrupt line could hide
     one) refutes the ``no_journal_started`` proof. An unreadable
     journal proves nothing — fail closed."""
+    if (req["result"] == "mark_not_sent"
+            and req["evidence"].get("proof") == "no_journal_started"
+            and cards.connection(ledger).execute(
+                "SELECT 1 FROM notification_restore_holds WHERE "
+                "released_at IS NULL AND reason=? "
+                "AND (attempt_id IS ? OR delivery_id IS ?) LIMIT 1",
+                ("unknown_attempt:beyond_horizon",
+                 req["attempt_id"], req["delivery_id"])).fetchone()):
+        # the recorded hold marks a scope the journal's capped horizon may
+        # already have compacted away — its absence of a started row
+        # vouches for nothing; an external proof is required
+        return "journal_cannot_vouch"
     root = notify_spool.data_root(ledger)
     try:
         notify_spool.ensure_dirs(root)
