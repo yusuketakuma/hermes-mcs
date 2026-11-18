@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "復元の承認待ち中は project metadata の手動 sync を保留",
+  "summary": "バックアップ復元の承認待ちや未完了のあいだ、project metadata の手動 sync が取得記録を書き込まなくなります。復元時に評価するデータが固定されず、手動 sync だけが書き続けていました。",
+  "upgrade": "追加操作は不要です。復元の保留中は sync が held（restore_in_progress）を返して終了コード1になります。復元が完了または解除されたあとに再実行してください。view は影響を受けません。",
+  "details": [
+    "同種の cross_lists CLI と同じ共有の復元保留判定を、実行ロック取得後・Ledger と MCSAdapter の構築前に適用します。",
+    "保留の解除、再取得範囲、送信権限は変わりません。"
+  ],
+  "refs": [
+    "mcs/ingest/project_metadata.py",
+    "tests/ingest/test_project_metadata.py"
+  ]
+}
