@@ -581,6 +581,25 @@ def test_unsaveable_rows_rotate_behind_valid_queued_work(scene):
     assert _drain(scene)["confirmed"] == 1         # rotated behind, the approved one runs next
 
 
+def test_unpublishable_results_rotate_behind_later_confirmed_results(scene):
+    request = _command(scene)
+    assert _apply(scene, request)["stamp_state"] == "queued"
+    assert _drain(scene)["confirmed"] == 1
+    ledger = scene[0]
+    ledger.db.execute("UPDATE artifacts SET content=json_set(content,'$.result_published',json('false'),"
+                      "'$.updated_at',?) WHERE kind=?", (NOW - 50, stamp_write.KIND))
+    for n in range(4):
+        ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+                          "VALUES(?,1,100,?,'{}',?)", (stamp_write.KIND, json.dumps(
+                              {"state": "confirmed", "request": {"command_id": f"bogus-{n}"}}), NOW - 100))
+    ledger.db.commit()
+    _drain(scene)                                  # four unpublishable rows fill the publish window
+    _drain(scene)                                  # rotated behind, the real result is published next
+    row = ledger.db.execute("SELECT content FROM artifacts WHERE kind=? AND json_extract(meta,'$.command_id')=?",
+                            (stamp_write.KIND, request["command_id"])).fetchone()
+    assert json.loads(row[0])["result_published"] is True
+
+
 def test_intent_ages_from_the_human_confirm_time(scene):
     stale = dict(_command(scene), confirmed_at=NOW - stamp_write.INTENT_MAX_AGE_S - 1)
     result = _apply(scene, stale)
