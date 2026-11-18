@@ -149,6 +149,51 @@ def test_carried_parts_are_marked_as_a_past_observation(tmp_path):
     assert "配送記録と通知先を照合" in rows
 
 
+def _legacy_parts(observed_at=399, total=5,
+                  states=None):
+    """The pre-status writer shape: counts and observed_at, no status key."""
+    states = states or {'pending': 0, 'unknown': 3, 'not_sent': 2, 'held': 0}
+    return {'total': total, 'cards': 3, 'by_state': states,
+            'oldest_age_s': 20, 'observed_at': observed_at}
+
+
+def test_legacy_parts_with_a_fresh_clock_read_as_recorded(tmp_path):
+    report = _tick(tmp_path, 400, ["notification_parts_incomplete"],
+                   parts=_legacy_parts(observed_at=399))
+    assert report["notify_parts_measurement"] == "recorded"
+    assert report["notify_incomplete_parts"] == 5
+    rows = _rows(report)
+    assert "5件" in rows and "件数は未測定" not in rows
+    lines = "\n".join(health_watch._alert_lines({**report, "alert": True}))
+    assert "配送状況を今回確認できません" not in lines
+
+
+def test_legacy_parts_past_the_stall_age_read_as_a_past_observation(tmp_path):
+    report = _tick(tmp_path, 400, ["notification_parts_incomplete"],
+                   parts=_legacy_parts(
+                       observed_at=400 - health_watch.CARD_STALL_S - 1))
+    assert report["notify_parts_measurement"] == "stale"
+    rows = _rows(report)
+    assert "記録時点の観測値" in rows and "件数は未測定" not in rows
+
+
+@pytest.mark.parametrize("observed_at", [None, "399", 500])
+def test_legacy_parts_without_a_usable_clock_read_as_unmeasured(tmp_path, observed_at):
+    report = _tick(tmp_path, 400, ["notification_parts_incomplete"],
+                   parts=_legacy_parts(observed_at=observed_at))
+    assert report["notify_parts_measurement"] == "unknown"
+    rows = _rows(report)
+    assert "件数は未測定" in rows
+
+
+def test_legacy_parts_with_inconsistent_counts_read_as_unmeasured(tmp_path):
+    report = _tick(tmp_path, 400, ["notification_parts_incomplete"],
+                   parts=_legacy_parts(total=6))
+    assert report["notify_parts_measurement"] == "unknown"
+    rows = _rows(report)
+    assert "件数は未測定" in rows and "6件" not in rows
+
+
 def test_expired_carried_parts_read_as_unmeasured(tmp_path):
     stale = _parts_block(status='stale_measurement',
                          observed_at=400 - health_watch.CARD_STALL_S - 1)

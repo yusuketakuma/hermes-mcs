@@ -277,10 +277,24 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     # the alert must tell a fresh count, a carried one and an unmeasured
     # one apart: only 'recorded' is the current observation
     parts_status = parts.get('status') if isinstance(parts, dict) else None
-    report['notify_parts_measurement'] = (
-        'unknown' if parts_unknown
-        else 'stale' if parts_status == 'stale_measurement'
-        else 'recorded' if parts_status == 'recorded' else None)
+    measurement = ('unknown' if parts_unknown
+                   else 'stale' if parts_status == 'stale_measurement'
+                   else 'recorded' if parts_status == 'recorded' else None)
+    if measurement is None and isinstance(parts, dict) and 'status' not in parts:
+        # Writers before the status field stored only counts and observed_at;
+        # judge that observation by its own clock — fresh consistent counts
+        # are a current measurement, an old clock a past one, anything else
+        # is not a measurement at all.
+        observed = parts.get('observed_at')
+        if finite_number(observed) and observed <= now:
+            age = now - observed
+            if age <= CARD_STALL_S and report['notify_incomplete_parts'] is not None:
+                measurement = 'recorded'
+            elif age > CARD_STALL_S:
+                measurement = 'stale'
+        if measurement is None:
+            measurement = 'unknown'
+    report['notify_parts_measurement'] = measurement
     if report['notify_parts_measurement'] == 'stale':
         observed = parts.get('observed_at')
         report['notify_parts_observed_at'] = observed if finite_number(observed) else None
