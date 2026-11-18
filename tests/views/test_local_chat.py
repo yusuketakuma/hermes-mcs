@@ -230,6 +230,17 @@ def test_browser_preconnections_do_not_block_other_clients(monkeypatch):
     assert timeouts == [10]
 
 
+def test_loopback_bind_never_resolves_network_names(monkeypatch):
+    bound = []
+    monkeypatch.setattr(chat.TCPServer, "server_bind", lambda server: bound.append(server.server_address))
+    monkeypatch.setattr("socket.getfqdn", lambda *_: pytest.fail("loopback server must not trigger DNS or mDNS"))
+    server = chat.ChatServer.__new__(chat.ChatServer)
+    server.server_address = ("127.0.0.1", 12345)
+    server.server_bind()
+    assert bound == [("127.0.0.1", 12345)]
+    assert (server.server_name, server.server_port) == ("127.0.0.1", 12345)
+
+
 @pytest.mark.parametrize("args", [[], ["--project", "0"], ["--project", "-1"], ["--all-patients", "--port", "65536"]])
 def test_cli_requires_explicit_valid_scope(args):
     with pytest.raises(SystemExit) as error:

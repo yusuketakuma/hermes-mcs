@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import secrets
 import sqlite3
+from socketserver import TCPServer
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
@@ -58,6 +59,10 @@ class ChatServer(ThreadingHTTPServer):
         self.allowed = None if allowed is None else frozenset(allowed)
         self.token = secrets.token_urlsafe(32)
         super().__init__(("127.0.0.1", port), ChatHandler)
+
+    def server_bind(self):
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address
 
     @property
     def url(self):
