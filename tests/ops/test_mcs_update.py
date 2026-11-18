@@ -1402,3 +1402,23 @@ def test_apply_starts_nothing_while_a_restore_holds(updater, monkeypatch, capsys
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
     state = updater.journal_store.load_state(updater.STATE_PATH)
     assert state["stages"] == [] and "cid-held" not in state.get("executed", {})
+@pytest.mark.parametrize("delay", ["24", None, -1, True])
+def test_invalid_auto_delay_never_crashes_before_the_state_save(updater, monkeypatch, delay):
+    """Regression: a hand-edited auto_delay_h raised TypeError after the
+    notice was queued, so nothing was saved and the notice repeated daily."""
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {
+        "update": {"mode": "auto", "auto_delay_h": delay}})
+    monkeypatch.setattr(update_discovery, 'detect_latest', lambda pre, **_paths: ("v9.0.0", "a" * 40))
+    monkeypatch.setattr(update_discovery, 'current_version', lambda **_paths: ("v8.0.0", "b" * 40))
+    monkeypatch.setattr(update_cli, 'fetch_notes', lambda tag: "notes")
+    monkeypatch.setattr(update_cli, 'impact_summary', lambda a, b: [])
+    monkeypatch.setattr(update_cli, '_git',
+                        lambda args, timeout=None: subprocess.CompletedProcess(args, 1, "", ""))
+    monkeypatch.setattr(update_repository, '_git', update_cli._git)
+    monkeypatch.setattr(update_cli, 'scan_pending_approvals', lambda state: ([], []))
+    monkeypatch.setattr(update_cli, '_drug_info_notices', lambda cfg: None)
+    monkeypatch.setattr(update_cli, '_enqueue_notice', lambda *a, **k: True)
+    monkeypatch.setattr(update_cli, 'apply', lambda *a, **k: pytest.fail("no auto apply"))
+    assert updater.cmd_check() == 0
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["latest_tag"] == "v9.0.0" and state["notified_at"] == "v9.0.0"

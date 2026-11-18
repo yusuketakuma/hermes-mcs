@@ -61,7 +61,9 @@ from update_repository import (
     _index_has_flags,
     _ls_tree_paths,
     _norm,
+    _provider_prior_source_verified,
     _safe_relpath,
+    _split_source_extras,
     _split_target_source_matches,
     _tree_clean,
 )
@@ -218,6 +220,12 @@ def _provider_migration_needed() -> bool:
     return first["mode"] == "legacy_unverified"
 
 
+def _provider_bridge_verified(previous: str, target: str) -> bool:
+    """Legacy settings migrate only from a reviewed bridge source, as the post-merge guard requires."""
+    return (_provider_prior_source_verified(previous)
+            and _git(["merge-base", "--is-ancestor", previous, target]).returncode == 0)
+
+
 def _provider_rollback_preflight(target: str | object) -> bool | None:
     """Block unproven split-setting rollback before changing code or workers."""
     try:
@@ -230,7 +238,10 @@ def _provider_rollback_preflight(target: str | object) -> bool | None:
         first = provider_settings.read(HOME, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
         if (first["mode"] != "split" or target is not _PROVIDER_SETTINGS_ONLY
                 and not _split_target_source_matches(target, allow_reviewed_rollback=True)):
-            raise ProviderRollbackUnverified("provider_rollback_target_unverified")
+            extras = _split_source_extras() if first["mode"] == "split" else []
+            # Name what the operator must move; the hold itself is unchanged.
+            raise ProviderRollbackUnverified("provider_rollback_target_unverified" + (
+                ": untracked " + ",".join(extras)[:160] if extras else ""))
         second = provider_settings.read(HOME, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
         if second["mode"] != "split" or second["snapshot"] != first["snapshot"]:
             raise ProviderRollbackUnverified("provider_rollback_settings_changed")
