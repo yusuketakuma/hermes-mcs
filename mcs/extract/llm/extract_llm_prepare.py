@@ -86,9 +86,11 @@ def _reply_to_request(ledger, r) -> bool:
     if not r.get("parent_id") or ledger is None:
         return False
     row = ledger.db.execute(
-        "SELECT body_text FROM messages WHERE message_id=? AND project_id=?",
+        "SELECT body_text, body_state FROM messages WHERE message_id=? AND project_id=?",
         (r["parent_id"], r["project_id"])).fetchone()
-    if not row or not row[0]:
+    # Only a complete root body may deny a waiting request; a snippet may be
+    # missing the request's tail, so anything else fails safe to keep.
+    if not row or not row[0] or row["body_state"] not in (None, "full"):
         return True
     return bool(extract_quality._request_cues(row[0]))
 

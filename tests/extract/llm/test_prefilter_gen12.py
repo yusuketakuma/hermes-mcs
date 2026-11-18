@@ -101,6 +101,24 @@ def test_reply_to_a_request_thread_is_not_filtered(tmp_path, monkeypatch):
     db.close()
 
 
+@pytest.mark.parametrize("state", ["snippet", "partial"])
+def test_reply_to_a_partial_root_fails_safe(tmp_path, monkeypatch, state):
+    """A snippet root may be missing the request's tail: no denial, no filter."""
+    db = _ledger(tmp_path)
+    db.save_messages([
+        _message(mid=1, body="本日の血圧を", state=state),
+        _message(mid=2, body="ありがとうございます。", parent_id=1),
+    ])
+    calls = []
+    _stub_llm(monkeypatch, calls)
+
+    extract_llm.run_pending(db, limit=10, budget_s=30)
+
+    assert "ありがとうございます。" in calls
+    assert _prefilter_rows(db, 2) == []
+    db.close()
+
+
 def test_reply_with_unreadable_root_fails_safe(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     db.save_messages([
