@@ -1,0 +1,20 @@
+{
+  "category": "changed",
+  "title": "添付のローカル解析保留に、処理中に観測したLLM呼出の理由を別項目で記録",
+  "summary": "添付の文字起こし後のローカル解析が保留されたとき、状態ファイルに local_llm_defer_reasons として、そのページ処理の呼出中に実際に記録された固定の延期理由（llm_deadline・llm_busy など）を件数だけ別項目で残します。従来は保留の原因（local_deferred_reasons）が再確認できない限り unclassified のままで、LLM呼出が理由を記録していても状態に出ませんでした。観測した理由は原因の内訳には昇格させないため、成功した呼出の途中経過（任意修復の延期など）が最終的な保留原因と誤って結び付くことはありません。",
+  "upgrade": "追加操作は不要です。OCRは毎分のcron（mcs_ocr.sh）で別プロセスとして動くため、gatewayの再起動は要りません。ページ解析の契約（attachment_inference.py などのソースダイジェスト対象）と health_watch の案内は変更していないので、保存済みページの再解析・有償証拠の無効化は起きません。状態ファイルが読取り上限（4096 byte）を超える場合は、従来の内訳と同じく観測内訳も省いて書き出します。",
+  "details": [
+    "mcs/ops/mcs_ocr.py: ローカル段の呼出前に抽出側の呼出メモ（_CALL_NOTES.defer_reason）を空にし、呼出後に観測された固定理由だけを取得して直前の値へ戻します。前の呼出が残した理由を今回の保留に結び付けません。ローカル段が保留を返した呼出で観測があったときだけ、固定コードへ写像して件数を集計します。",
+    "観測は原因の内訳（local_deferred_reasons）とは別の local_llm_defer_reasons に記録し、原因には使いません。書込み拒否の優先・5秒の入場再確認窓・unclassified への退避は従来どおりです。",
+    "mcs/extract/attachment_inference_deferral.py: llm_reason・observed・observed_valid を追加し、ローカル段で到達し得る固定の延期理由だけを llm_ 接頭辞のコードに写像します。クラウド専用の理由（cloud_fallback など）と任意文字列は記録しません。",
+    "mcs/ingest/health_report.py: local_llm_defer_reasons が件数形式として正しく、観測合計が保留数を超えないときだけ健康レポートへ出します。不正な内訳は従来どおり省き、状態全体を corrupt にはしません。",
+    "mcs/ingest/health_watch.py: 保留の原因が既知の固定コードで分かる警報の案内は変えません。原因を特定できない保留（unclassified・内訳なし・不正な内訳）では「保留の原因は特定できていません」と示し、処理中に観測された固定理由があるときは「処理中の観測」として件数だけ併記します。観測は保留原因と確定したものではなく、LLM障害や対象ページ数の断定はしません。"
+  ],
+  "refs": [
+    "mcs/extract/attachment_inference_deferral.py",
+    "mcs/ops/mcs_ocr.py",
+    "mcs/ingest/health_report.py",
+    "mcs/ingest/health_watch.py",
+    "changes/attachment-ocr-local-defer-reasons.json"
+  ]
+}
