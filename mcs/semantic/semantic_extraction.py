@@ -1180,8 +1180,9 @@ def rebuild_facts_v2_cached(member: dict, db, source_fingerprint: str,
     assembled = assembly.assemble_facts(member, source, manifest, facts, obligations,
                                         presence, preflight, status, hints, signals,
                                         use_jev_preflight=jev_used)
-    from semantic_relations import reconcile_facts
-    reconciled = reconcile_facts([], assembled["facts"])
+    from semantic_relations import meta_relation_rule, reconcile_facts
+    # a stored document is re-derived under the rule it was made under (#158)
+    reconciled = reconcile_facts([], assembled["facts"], rule=meta_relation_rule(stored_meta))
     progress = assembly.chunk_progress(specs, completed, list(completed), [], None, 0, source_fp)
     result = assembly.assemble_document(assembly.source_binding(member, source_fp), manifest,
                                         assembled, reconciled, progress)
@@ -1214,7 +1215,8 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
                     rejected: dict, deadline: float | None = None,
                      *, chunk_size: int = 3000,
                      request_following: bool = False,
-                     coverage_missing: bool = False) -> dict:
+                     coverage_missing: bool = False,
+                     rule: int | None = None) -> dict:
     """Re-extract rejected owner chunks, or all chunks when source coverage is missing.
 
     Merge repaired items into a re-validated document.
@@ -1428,8 +1430,10 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
     # Relations referencing removed facts dangle — recompute over the
     # surviving set so every endpoint resolves.  A scan cut by the
     # deadline must not publish a partial set: keep the prior doc.
-    from semantic_relations import reconcile_facts
-    reconciled = reconcile_facts([], clean_facts, deadline=deadline)
+    from semantic_relations import RELATION_RULE, reconcile_facts
+    # a replay passes the rule the stored repaired document was made under (#158)
+    reconciled = reconcile_facts([], clean_facts, deadline=deadline,
+                                 rule=RELATION_RULE if rule is None else rule)
     if reconciled["pairs_skipped"]:
         return {**unchanged, "owner_chunk_ids": dispatched,
                 "relation_pairs_skipped": reconciled["pairs_skipped"]}
