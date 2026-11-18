@@ -645,11 +645,11 @@ def drain(ledger, adapter, cfg, root, deadline):
               "publish_failed": 0, "publish_retry_repaired": 0}
     if not enabled(cfg):
         return counts
-    now = time.time()
     # Distinct windows stop old unknowns starving newly approved other posts.
     seen = set()
     for state in ("queued", "unknown", "publish"):
         if state == "publish":
+            now = time.time()           # settled during this drain -> due at once
             rows = ledger.db.execute(
                 "SELECT artifact_id,project_id,message_id,content FROM ("
                 "SELECT artifact_id,project_id,message_id,content," + _PUBLISH_DUE +
@@ -668,7 +668,7 @@ def drain(ledger, adapter, cfg, root, deadline):
                 continue
             seen.add(row["artifact_id"])
             if time.monotonic() + 5 >= deadline:
-                return _publish_diagnostics(ledger.db, counts, now)
+                return _publish_diagnostics(ledger.db, counts, time.time())
             try:
                 if state != "publish":
                     counts[_execute(ledger, adapter, cfg, root, row, time.time(), deadline)] += 1
@@ -684,11 +684,11 @@ def drain(ledger, adapter, cfg, root, deadline):
             value = json.loads(ledger.db.execute(
                 "SELECT content FROM artifacts WHERE artifact_id=?", (row["artifact_id"],)).fetchone()[0])
             try:
-                attempts, eligible, repaired = _publish_state(value, now)
+                attempts, eligible, repaired = _publish_state(value, time.time())
                 if not eligible:
                     continue                        # publication backoff has not matured
                 counts["publish_retry_repaired"] += repaired
-                _reserve_publish(ledger, row["artifact_id"], attempts, now)
+                _reserve_publish(ledger, row["artifact_id"], attempts, time.time())
                 _publish_result(ledger, root, value)
             except Exception:
                 # A failed publication already committed its next retry slot.
@@ -710,4 +710,4 @@ def drain(ledger, adapter, cfg, root, deadline):
                 # spool recovery owns rerender, so this is not a publication failure.
                 counts["held"] += 1
                 _move_behind(ledger, row["artifact_id"])    # a failing row must not pin the 4-row window
-    return _publish_diagnostics(ledger.db, counts, now)
+    return _publish_diagnostics(ledger.db, counts, time.time())
