@@ -246,8 +246,9 @@ def _measurement_source_bound(db, m, kind, cfg, *, artifact_ref=_no_artifact_fen
         model = meta.get("actual_model")
         source = db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=?",
                             (m["project_id"], m["message_id"])).fetchone()
+        # The local model may change without invalidating a stored extraction.
         return (isinstance(model, str) and bool(model) and model == row["model"]
-                and model == expected_model
+                and isinstance(expected_model, str) and bool(expected_model)
                 and meta["source_binding"] == dependency_loss.source_binding(db, m["project_id"], m["message_id"])
                 and source is not None
                 and extract_llm.progress_for_message(db, source, model=model).get("state") == "complete")
@@ -380,16 +381,20 @@ def _measurement_source_page(db, page, kinds, refs, expected_model):
             continue
         meta = loads_dict(artifact['meta'])
         if (not isinstance(meta, dict) or not isinstance(meta.get('source_binding'), str)
-                or meta.get('actual_model') != expected_model or artifact['model'] != expected_model):
+                or not isinstance(meta.get('actual_model'), str) or not meta['actual_model']
+                or artifact['model'] != meta['actual_model']):
             continue
-        candidates.append((i, row, meta['source_binding']))
+        candidates.append((i, row, meta['source_binding'], meta['actual_model']))
     bindings = dependency_loss.source_bindings(
-        db, [(row['project_id'], row['message_id']) for _, row, _ in candidates])
-    ready = [(i, row) for (i, row, expected), actual in zip(candidates, bindings)
-             if expected == actual]
-    if ready:
-        progress = extract_llm.progress_for_messages(db, [row for _, row in ready], model=expected_model)
-        for (i, _), state in zip(ready, progress):
+        db, [(row['project_id'], row['message_id']) for _, row, _, _ in candidates])
+    # A stored extraction keeps the model it was made with (same as the single-row path).
+    ready = {}
+    for (i, row, expected, model), actual in zip(candidates, bindings):
+        if expected == actual:
+            ready.setdefault(model, []).append((i, row))
+    for model, items in ready.items():
+        progress = extract_llm.progress_for_messages(db, [row for _, row in items], model=model)
+        for (i, _), state in zip(items, progress):
             result[i] = state.get('state') == 'complete'
     return result
 

@@ -515,6 +515,8 @@ def _pending(db, pid, cfg, *, now=None, route=None, estimate=False, proof_for=No
         # execution still validates policy and reuses receipts before any request.
         quality_changed = meta.get("quality_schedule_key") != patient_context_refresh_state._digest([cfg, patient_context_refresh_state._quality_assessment_code()])
     summary_needed = (not old or not _bound_signature_matches(db, pid, cfg, meta, snapshot, snapshots)
+                    # Same route test as the display (`current` above): A->B->A must rebuild, not stay hidden.
+                    or not patient_context_refresh_state.route_accepts(snapshot["route"], meta)
                     or meta.get("publication_requested", meta.get("published")) != patient_context_refresh_state.options(cfg)["publication"]
                     or meta.get("summary_checked") is not True
                     or bool(quality_required and not meta.get("quality_audit_key"))
@@ -732,7 +734,7 @@ def _raw_extraction_current(db, row, cfg):
     candidate = dict(row)
     pid = candidate["project_id"]
     model = extract_llm.resolved_model(cfg)
-    latest = db.execute("SELECT meta FROM artifacts WHERE kind=? AND message_id=? "
+    latest = db.execute("SELECT meta, model FROM artifacts WHERE kind=? AND message_id=? "
                         "AND (project_id IS NULL OR project_id=?) AND "
                         + current_meta_pred("meta")
                         + " AND COALESCE(json_extract(CASE WHEN json_valid(meta) THEN meta END,"
@@ -742,6 +744,11 @@ def _raw_extraction_current(db, row, cfg):
     required = _required_cloud_extraction_contract(cfg, pid)
     if required is not None:
         return extract_llm.cloud_completion(db, row, required) == "complete", meta
+    # A local final keeps the model it was made with; a later model change does not stale it.
+    if (isinstance(model, str) and model
+            and isinstance(meta, dict) and isinstance(meta.get("actual_model"), str) and meta["actual_model"]
+            and latest["model"] == meta["actual_model"]):
+        model = meta["actual_model"]
     cloud = _saved_cloud_contract(meta)
     if cloud is not None:
         candidate["_provider_contract"] = cloud

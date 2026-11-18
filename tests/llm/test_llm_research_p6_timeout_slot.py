@@ -97,6 +97,7 @@ def test_never_idle_within_bound_releases_unconfirmed(turn, monkeypatch):
 
 def test_caller_deadline_ends_the_poll(turn, monkeypatch):
     monkeypatch.setattr(local_llm, "SLOT_WAIT_MAX_S", 5.0)
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_GRACE_S", 0.0)
     send, _state = _fake(turn, [True])
     err = {}
     started = time.monotonic()
@@ -105,6 +106,59 @@ def test_caller_deadline_ends_the_poll(turn, monkeypatch):
     assert _chat(send, err, deadline=time.monotonic() + 0.3) is None
     assert time.monotonic() - started < 1
     assert err["slot_wait_confirmed"] == 0 and err["slot_wait_ms"] < 5000
+
+
+def _clock_send(path, state, samples, clock, *, error=TimeoutError("http worker timeout")):
+    """POST advances the pseudo clock past the deadline, then raises;
+    GET serves `samples` for the pinned slot like _fake."""
+    def send(endpoint, method, body, timeout, deadline):
+        if method == "POST":
+            clock[0] += 10.0
+            raise error
+        state["gets"] += 1
+        state["locked"].append(_lock_is_free(path))
+        sample = samples[min(state["gets"] - 1, len(samples) - 1)]
+        raw = json.dumps([{"id": 0, "is_processing": True},
+                          {"id": 1, "is_processing": sample}]).encode()
+        return 200, {}, raw
+    return send
+
+
+def _fake_clock(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(local_llm, "time", SimpleNamespace(
+        monotonic=lambda: clock[0],
+        sleep=lambda s: clock.__setitem__(0, clock[0] + s)))
+    return clock
+
+
+def test_spent_deadline_still_confirms_idle_within_grace(turn, monkeypatch):
+    # the POST spends the caller deadline on the pseudo clock; without
+    # SLOT_WAIT_GRACE_S the poll ends before the first GET — with it the
+    # two idle samples still land inside the grace budget
+    clock = _fake_clock(monkeypatch)
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_GRACE_S", 0.5)
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_POLL_S", 0.05)
+    state = {"gets": 0, "locked": []}
+    send = _clock_send(turn, state, [False, False], clock)
+    err = {}
+    assert _chat(send, err, deadline=1005.0) is None
+    assert state["gets"] == 2 and state["locked"] == [False] * 2
+    assert err["slot_wait_confirmed"] == 1 and err["slot_wait_ms"] <= 500
+
+
+def test_spent_deadline_unconfirmed_poll_ends_at_the_grace(turn, monkeypatch):
+    # the same spent deadline bounds an unconfirmed poll to the grace
+    # budget, not to SLOT_WAIT_MAX_S and not to zero polls
+    clock = _fake_clock(monkeypatch)
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_GRACE_S", 0.5)
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_POLL_S", 0.05)
+    state = {"gets": 0, "locked": []}
+    send = _clock_send(turn, state, [True], clock)
+    err = {}
+    assert _chat(send, err, deadline=1005.0) is None
+    assert 0 < state["gets"] <= 12 and err["slot_wait_confirmed"] == 0
+    assert 400 <= err["slot_wait_ms"] <= 600
 
 
 def test_outcomes_are_reported_separately(turn, monkeypatch):
@@ -140,31 +194,11 @@ def test_not_sent_timeout_and_non_transport_errors_skip_the_wait(turn, error, ki
     assert state["gets"] == 0 and err == {"kind": kind}
 
 
-@pytest.mark.parametrize("override", [None, "1"])
-def test_omitted_slot_is_pinned_and_waits_for_idle(turn, monkeypatch, override):
-    if override is None:
-        monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
-    else:
-        monkeypatch.setenv("MCS_LLM_SLOT", override)
-    monkeypatch.delenv(local_llm.SCHEDULE_ENV, raising=False)
-    send, state = _fake(turn, [True, False, False])
-    sent_slots = []
-
-    def request(endpoint, method, body, timeout, deadline):
-        if method == "POST":
-            sent_slots.append(body["id_slot"])
-            assert not _lock_is_free(turn)
-        return send(endpoint, method, body, timeout, deadline)
-
+def test_unpinned_request_skips_the_wait(turn):
+    send, state = _fake(turn, [False, False])
     err = {}
-    assert local_llm.chat("prompt", request_fn=request, error_out=err) is None
-    assert sent_slots == [1]
-    # Slot 0 remains busy in every sample. Only the pinned slot's two
-    # consecutive idle samples permit release, with the turn held throughout.
-    assert state["gets"] == 3 and state["locked"] == [False] * 3
-    assert err["kind"] == "transport" and err["slot_wait_confirmed"] == 1
-    assert type(err["slot_wait_ms"]) is int
-    assert _lock_is_free(turn)
+    assert local_llm.chat("prompt", request_fn=send, error_out=err) is None
+    assert state["gets"] == 0 and err == {"kind": "transport"}
 
 
 def test_admitted_chat_keeps_permit_unknown_after_confirmed_idle(turn, tmp_path, monkeypatch):

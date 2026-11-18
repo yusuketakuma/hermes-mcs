@@ -34,6 +34,17 @@ def reviewed(quality_owner, tmp_path, monkeypatch):
     return (*quality_owner, tmp_path)
 
 
+def test_cloud_llm_stop_holds_the_quality_audit_without_asking_jev(reviewed):
+    import cloud_policy
+    led, clock, cfg, doc, sends, _behavior, _root = reviewed
+    cloud_policy.stop(led)
+    status, _ = _step(led, cfg, doc, clock, _local_meta(led))
+    assert status == "deferred" and not sends
+    cloud_policy.resume(led)
+    status, _ = _step(led, cfg, doc, clock, _local_meta(led))
+    assert status == "pending" and len(sends) == 1
+
+
 def test_local_summary_audit_asks_jev_while_the_review_covers_it(reviewed):
     led, clock, cfg, doc, sends, _behavior, _root = reviewed
     status, _ = _step(led, cfg, doc, clock, _local_meta(led))

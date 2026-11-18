@@ -1293,6 +1293,24 @@ def test_turn_wait_expiry_defers_without_charging_the_patient(monkeypatch):
         patient_context_quality_controller._ask({}, {}, patient_context_refresh_state.time.monotonic() + 600, lambda: True)
 
 
+@pytest.mark.parametrize("outcome,reason", [
+    ({"kind": "unreachable"}, "patient_context_endpoint_unsent"),
+    ({"kind": "not_sent"}, "patient_context_endpoint_unsent"),
+    ({"status": 503}, "patient_context_endpoint_unavailable"),
+])
+def test_never_sent_or_503_defers_without_charging_the_patient(monkeypatch, outcome, reason):
+    def refused(prompt, error_out=None, **kw):
+        if "kind" in outcome:
+            error_out["kind"] = outcome["kind"]
+            return None
+        return {"status": outcome["status"], "text": "", "finish_reason": None}
+    monkeypatch.setattr(context_refresh.local_llm, "chat", refused)
+    monkeypatch.setattr(context_refresh.local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(context_refresh.local_llm, "resolve", lambda cfg: ("http://127.0.0.1:8080", "synthetic"))
+    with pytest.raises(patient_context_refresh_state.Deferred, match=reason):
+        patient_context_quality_controller._ask({}, {}, patient_context_refresh_state.time.monotonic() + 600, lambda: True)
+
+
 def test_finished_inference_waits_briefly_for_the_run_lock(runtime, monkeypatch):
     led, clock, calls = runtime
     seed(led)

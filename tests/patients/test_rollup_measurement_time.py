@@ -480,9 +480,9 @@ def test_source_batch_matches_single_for_scope_model_and_source_selection(store)
     assert rollup._measurement_sources_bound(store.db, rows, kinds, refs, {}) == expected
     assert rollup._measurement_sources_bound(store.db, [row], ['extract_llm'], refs, None) == [False]
     wrong_model = {'local_llm': {'model': 'a-different-model'}}
-    assert not rollup._measurement_source_bound(store.db, row, 'extract_llm', wrong_model)
-    assert rollup._measurement_sources_bound(store.db, [row], ['extract_llm'], refs, wrong_model) == [
-        rollup._measurement_source_bound(store.db, row, 'extract_llm', wrong_model)]
+    # Changing the local model keeps a stored extraction current (owner decision 2026-11-17).
+    assert rollup._measurement_source_bound(store.db, row, 'extract_llm', wrong_model)
+    assert rollup._measurement_sources_bound(store.db, [row], ['extract_llm'], refs, wrong_model) == [True]
 
 
 def test_source_batch_matches_single_after_source_aba_and_missing_artifact(store):
@@ -1056,18 +1056,35 @@ def test_empty_body_stream_failure_closes_cursor_and_preserves_borrowed_transact
 
 
 @pytest.mark.parametrize('cfg', [None, {'local_llm': {'model': 'synthetic-other-model'}}])
-def test_patient_summary_with_unproven_model_does_not_show_cached_latest(store, cfg):
+def test_patient_summary_model_provenance_boundary(store, cfg):
     _seed_out_of_order(store)
     rollup.rebuild(store, 1, cfg={})
     before = store.db.execute('SELECT body_text FROM messages WHERE message_id=1').fetchone()[0]
     _, text = notify_views.patient_summary_text(store.db, 1, cfg=cfg)
     if cfg is None:
         assert '■ 薬・バイタル・予定: 集約の現行性を確認できません' in text
+        assert '36.4' not in text and '37.2' not in text
     else:
-        assert '■ バイタル: 未確認' in text
-    assert '36.4' not in text and '37.2' not in text
+        # owner decision 2026-11-17: a stored extraction keeps the model it
+        # was made with — a later local model change does not stale it
+        assert '■ バイタル: BT 36.4' in text
     assert '■ 未完了タスク' in text and '■ 背景・療養情報' in text
     assert store.db.execute('SELECT body_text FROM messages WHERE message_id=1').fetchone()[0] == before
+
+
+def test_patient_summary_with_inconsistent_model_provenance_hides_latest(store):
+    """An artifact whose model column no longer matches its recorded
+    actual_model is unproven — cached values stay hidden even with a
+    configured local model."""
+    _seed_out_of_order(store)
+    rollup.rebuild(store, 1, cfg={})
+    with store.db:
+        store.db.execute("UPDATE artifacts SET model='tampered-model' "
+                         "WHERE kind='extract_llm'")
+    _, text = notify_views.patient_summary_text(
+        store.db, 1, cfg={'local_llm': {'model': 'synthetic-other-model'}})
+    assert '■ バイタル: 未確認' in text
+    assert '36.4' not in text and '37.2' not in text
 
 
 def test_irrelevant_accounting_write_does_not_make_clean_patients_unknown(store, monkeypatch):

@@ -456,6 +456,21 @@ def quality_owner(runtime, monkeypatch):
     return led, clock, cfg, doc, sends, behavior
 
 
+def test_cloud_stop_defers_quality_step_and_resume_reevaluates(quality_owner, monkeypatch):
+    """`cloud-llm stop` holds the Jev check as deferred — never the sticky
+    'held' — so after resume the same step runs and reaches the send path."""
+    import cloud_policy
+    led, clock, cfg, doc, sends, _ = quality_owner
+    monkeypatch.setattr(cloud_policy, 'stopped', lambda *_: True)
+    status, _ = patient_context_quality_controller._quality_step(
+        led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
+    assert status == 'deferred' and not sends
+    monkeypatch.setattr(cloud_policy, 'stopped', lambda *_: False)
+    status, identity = patient_context_quality_controller._quality_step(
+        led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
+    assert status == 'pending' and len(sends) == 1
+
+
 def test_quality_owner_calls_jev_once_and_rechecks_saved_pass(quality_owner):
     led, clock, cfg, doc, sends, _ = quality_owner
     status, identity = patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True,

@@ -70,7 +70,8 @@ def _resolved_llm() -> tuple[str, str]:
             resolved_model(cfg))
 
 
-def _probe_format(deadline: float | None = None) -> str | None:
+def _probe_format(deadline: float | None = None,
+                  error_out: dict | None = None) -> str | None:
     """Detect the best response_format the server accepts, via the
     shared loopback adapter.  Fallback order: json_schema -> json_object
     -> plain; acceptance requires a parseable JSON object reply — a 200
@@ -84,22 +85,25 @@ def _probe_format(deadline: float | None = None) -> str | None:
             and time.monotonic() - _FMT_TS < _PROBE_RETRY_S:
         return _FMT_MODE
     endpoint, model = _resolved_llm()
+    err_out: dict = error_out if error_out is not None else {}
     if local_llm.admission_enabled():
         # T20: the probe sends real inference POSTs — it passes the
         # same admission gate and consumes its class budget
         mode = local_llm.admitted_probe_format(
             "mcs.extract", endpoint, model, extract_schema.SCHEMA, timeout=10,
             deadline=deadline, request_fn=_opener_request,
-            slot=_choose_slot(),
+            slot=_choose_slot(), error_out=err_out,
             verify=lambda text: json_object(text) is not None)
     else:
         mode = local_llm.probe_format(
             endpoint, model, extract_schema.SCHEMA, timeout=10,
             deadline=deadline, request_fn=_opener_request,
-            slot=_choose_slot(),
+            slot=_choose_slot(), error_out=err_out,
             verify=lambda text: json_object(text) is not None)
-    if mode is None:
-        return _FMT_MODE  # GPU turn busy: nothing sent, probe again next call
+    if mode is None or (mode == "plain" and err_out.get("kind") == "transport"):
+        # a probe run that ended unobserved/unconfirmed is not a verdict —
+        # defer the body even when a stale mode is still cached
+        return None
     _FMT_MODE = mode
     _FMT_TS = time.monotonic()
     return _FMT_MODE
@@ -140,7 +144,8 @@ def _note_list() -> list:
 
 
 def _integrity_note(response, kind: str = "first", probe: int = 0,
-                     downgrades: int = 0, err_out: dict | None = None) -> None:
+                     downgrades: int = 0, err_out: dict | None = None,
+                     *, probe_only: bool = False) -> None:
     """Bounded per-call integrity record for shared extraction paths: counts and
     token usage only — never payload text."""
     # Probe/downgrade counts ride on the answered call's note.
@@ -152,6 +157,10 @@ def _integrity_note(response, kind: str = "first", probe: int = 0,
         "timings": None if response is None else response.get("timings"),
         "kind": kind, "probe": probe, "downgrades": downgrades,
     }
+    if probe_only:
+        # the probe died before any body send: probe-run evidence only,
+        # never a first/repair call in the summary's call accounting
+        note["probe_only"] = True
     if type((err_out or {}).get("slot_wait_ms")) is int:
         note["slot_wait_ms"] = err_out["slot_wait_ms"]
         note["slot_wait_confirmed"] = err_out.get("slot_wait_confirmed")
@@ -171,6 +180,10 @@ def _integrity_summary(notes: list) -> dict:
     for note in notes:
         if note.get("reused_response") is True:
             reused += 1
+            continue
+        if note.get("probe_only") is True:
+            if type(note.get("probe")) is int:
+                probe_runs += note["probe"]
             continue
         calls += 1
         finish = note.get("finish_reason")
@@ -461,111 +474,196 @@ def _llm_call(prompt: str, deadline: float | None = None,
             and deadline - time.monotonic() < (need_s or 0):
         _CALL_NOTES.defer_reason = "deadline"
         return _DEFERRED
-    probed_at = _FMT_TS
-    fmt = _probe_format(deadline=deadline)
-    probe = int(_FMT_TS != probed_at)   # one format-check run may send multiple requests
-    if fmt is None:
-        _CALL_NOTES.defer_reason = ("currentness_unverified" if getattr(
-            _CALL_NOTES, "medication_source_changed", False) else "probe_unobserved")
-        return _DEFERRED   # no idle slot to probe on — nothing sent
+    floor = need_s or 0
+    # the probe spends the caller's budget, never adds to it: the body
+    # floor is reserved for the real call, and PROBE_TURN_MIN_S of probe
+    # margin joins the turn minimum only while a format check may still
+    # hit the wire. The held turn covers probe+first body only — every
+    # resend re-acquires through the existing per-send path.
+    # resolve the format cache once: a hit is used to completion and
+    # only a miss pays the probe margin inside the shared turn — a TTL
+    # crossing between two reads must not split probe and body turns
+    cached = (_FMT_MODE
+              if _FMT_MODE == "schema"
+              or _FMT_MODE is not None
+              and time.monotonic() - _FMT_TS < _PROBE_RETRY_S
+              else None)
+    probe_due = cached is None
+    margin = local_llm.PROBE_TURN_MIN_S if probe_due else 0.0
+    turn_deadline = (deadline if deadline is not None
+                     else time.monotonic() + TIMEOUT)
     endpoint, model = _resolved_llm()
     downgrades = 0
+    probe_err: dict = {}
+    # a probe that reached the wire is accounted exactly once: either it
+    # rides on the first body call's note, or a probe_only note on the
+    # defer path that never let a body leave
+    probe_unaccounted = 0
+
+    def _note_probe_only():
+        nonlocal probe_unaccounted
+        if probe_unaccounted:
+            _integrity_note(None, kind, probe_unaccounted, downgrades,
+                            probe_err, probe_only=True)
+            probe_unaccounted = 0
+
+    first = True
     while True:
-        # the same floor gates retries: a format degrade (4xx) loops
-        # back here and would otherwise re-fire a full call that can
-        # no longer finish before the deadline
-        if deadline is not None \
-                and deadline - time.monotonic() < (need_s or 0):
-            _CALL_NOTES.defer_reason = "deadline"
-            return _DEFERRED
-        rf = None
-        if fmt == "schema":
-            rf = {"type": "json_schema",
-                  "json_schema": schema or extract_schema.SCHEMA}
-        elif fmt == "object":
-            rf = {"type": "json_object"}
-        err_out: dict = {}
-        if local_llm.admission_enabled():
-            # T20: every backend request holds a class permit through
-            # confirmed terminal retirement — a held/deferred verdict
-            # parks the message, it never becomes a silent failure
-            response = local_llm.admitted_chat(
-                "mcs.extract", prompt, endpoint=endpoint, model=model,
-                max_tokens=max_tokens, timeout=TIMEOUT,
-                deadline=deadline, response_format=rf,
-                request_fn=_opener_request, error_out=err_out,
-                turn_min_s=need_s or 0)
-            if response is not None and response.get("admission"):
-                _CALL_NOTES.defer_reason = "admission"
+        with (local_llm.call_turn(turn_deadline, floor + margin,
+                                  slot=_choose_slot())
+              if first and probe_due else contextlib.nullcontext()
+              ) as held:
+            if first:
+                if probe_due:
+                    if held is None or (
+                            deadline is not None
+                            and deadline - time.monotonic() < floor + margin):
+                        # the turn never fit the probe+body minimum, or
+                        # the body floor + probe margin is already gone:
+                        # a finite busy refusal — inner sends never
+                        # re-acquire behind the caller's back
+                        _CALL_NOTES.defer_reason = "busy"
+                        return _DEFERRED
+                    fmt = _probe_format(
+                        deadline=(deadline - floor) if deadline is not None
+                        else None, error_out=probe_err)
+                    # one format-check run may send multiple requests;
+                    # err_out's per-call send evidence proves this call's
+                    # probe reached the wire even when it died before
+                    # caching a verdict — a sibling worker moving the
+                    # shared timestamp can neither fake nor double it
+                    probe = int(bool(probe_err.get("sent")))
+                    probe_unaccounted = probe
+                else:
+                    fmt, probe, probe_err = cached, 0, {}
+                first = False
+                if fmt is None:
+                    pkind = probe_err.get("kind")
+                    pstatus = probe_err.get("status")
+                    expired = (deadline is not None
+                               and time.monotonic() >= deadline)
+                    if pkind == "transport":
+                        # the probe left and died in transport — work was
+                        # consumed; record endpoint evidence and fail like
+                        # a sent body timeout, never a not-sent defer
+                        _CALL_NOTES.transport = ("expired" if expired
+                                                 else "transport")
+                        _CALL_NOTES.transport_at = time.monotonic()
+                        _note_probe_only()
+                        return None
+                    if pkind == "unreachable" or pstatus == 503:
+                        _CALL_NOTES.transport = ("unreachable"
+                                                 if pkind == "unreachable"
+                                                 else "unavailable")
+                        _CALL_NOTES.transport_at = time.monotonic()
+                        _CALL_NOTES.defer_reason = "endpoint_down"
+                        _note_probe_only()
+                        return _DEFERRED
+                    _CALL_NOTES.defer_reason = ("currentness_unverified" if getattr(
+                        _CALL_NOTES, "medication_source_changed", False) else "probe_unobserved")
+                    _note_probe_only()
+                    return _DEFERRED   # no idle slot to probe on — nothing sent
+            # the same floor gates retries: a format degrade (4xx) loops
+            # back here and would otherwise re-fire a full call that can
+            # no longer finish before the deadline
+            if deadline is not None \
+                    and deadline - time.monotonic() < (need_s or 0):
+                _CALL_NOTES.defer_reason = "deadline"
+                _note_probe_only()
                 return _DEFERRED
-        else:
-            response = local_llm.chat(
-                prompt, endpoint=endpoint, model=model,
-                max_tokens=max_tokens, timeout=TIMEOUT, deadline=deadline,
-                response_format=rf,
-                extra_payload={"id_slot": _choose_slot()},
-                request_fn=_opener_request, error_out=err_out,
-                turn_min_s=need_s or 0)
-        if getattr(_CALL_NOTES, "medication_source_changed", False):
-            _CALL_NOTES.transport = None
-            _CALL_NOTES.defer_reason = "currentness_unverified"
-            return _DEFERRED
-        # Endpoint health of this call for run_pending's breaker: refused /
-        # not sent and 503 are outages, a pre-deadline transport failure
-        # (timeout, reset) is a slow or stuck server, a 2xx answer (or a 200
-        # whose body is unusable) proves the endpoint alive;
-        # budget expiry says nothing about the endpoint.
-        expired = deadline is not None and time.monotonic() >= deadline
-        status = response.get("status") if response else None
-        _CALL_NOTES.transport = (
-            "unreachable" if response is None
-            and err_out.get("kind") in ("unreachable", "not_sent")
-            else "busy" if response is None and err_out.get("kind") == "busy"
-            else "unavailable" if status == 503
-            else "transport" if response is None and not expired
-            and err_out.get("kind") == "transport"
-            else "expired" if response is None and expired
-            and err_out.get("kind") == "transport"
-            else "answered" if type(status) is int and 200 <= status < 300
-            or response is None and err_out.get("kind") == "protocol"
-            else None)
-        _CALL_NOTES.transport_at = time.monotonic()
-        if _CALL_NOTES.transport == "expired":
+            rf = None
+            if fmt == "schema":
+                rf = {"type": "json_schema",
+                      "json_schema": schema or extract_schema.SCHEMA}
+            elif fmt == "object":
+                rf = {"type": "json_object"}
+            err_out: dict = {}
+            if local_llm.admission_enabled():
+                # T20: every backend request holds a class permit through
+                # confirmed terminal retirement — a held/deferred verdict
+                # parks the message, it never becomes a silent failure
+                response = local_llm.admitted_chat(
+                    "mcs.extract", prompt, endpoint=endpoint, model=model,
+                    max_tokens=max_tokens, timeout=TIMEOUT,
+                    deadline=deadline, response_format=rf,
+                    request_fn=_opener_request, error_out=err_out,
+                    turn_min_s=need_s or 0)
+                if response is not None and response.get("admission"):
+                    _CALL_NOTES.defer_reason = "admission"
+                    _note_probe_only()   # the body slot was refused pre-send
+                    return _DEFERRED
+            else:
+                response = local_llm.chat(
+                    prompt, endpoint=endpoint, model=model,
+                    max_tokens=max_tokens, timeout=TIMEOUT, deadline=deadline,
+                    response_format=rf,
+                    extra_payload={"id_slot": _choose_slot()},
+                    request_fn=_opener_request, error_out=err_out,
+                    turn_min_s=need_s or 0)
+            if getattr(_CALL_NOTES, "medication_source_changed", False):
+                _CALL_NOTES.transport = None
+                _CALL_NOTES.defer_reason = "currentness_unverified"
+                _note_probe_only()
+                return _DEFERRED
+            # Endpoint health of this call for run_pending's breaker: refused /
+            # not sent and 503 are outages, a pre-deadline transport failure
+            # (timeout, reset) is a slow or stuck server, a 2xx answer (or a 200
+            # whose body is unusable) proves the endpoint alive;
+            # budget expiry says nothing about the endpoint.
+            expired = deadline is not None and time.monotonic() >= deadline
+            status = response.get("status") if response else None
+            _CALL_NOTES.transport = (
+                "unreachable" if response is None
+                and err_out.get("kind") in ("unreachable", "not_sent")
+                else "busy" if response is None and err_out.get("kind") == "busy"
+                else "unavailable" if status == 503
+                else "transport" if response is None and not expired
+                and err_out.get("kind") == "transport"
+                else "expired" if response is None and expired
+                and err_out.get("kind") == "transport"
+                else "answered" if type(status) is int and 200 <= status < 300
+                or response is None and err_out.get("kind") == "protocol"
+                else None)
+            _CALL_NOTES.transport_at = time.monotonic()
+            if _CALL_NOTES.transport == "expired":
+                _integrity_note(response, kind, probe, downgrades, err_out)
+                probe_unaccounted = 0
+                return None  # a sent timeout consumes an attempt, not endpoint health
+            if response is None and (err_out.get("kind") in ("unreachable", "busy", "not_sent")
+                                     or expired) \
+                    or response is not None and response.get("status") == 503:
+                # Connection refused or 503 (still loading the model) — the
+                # server is down/starting, so the call did no work and
+                # consumed nothing. Defer like a deadline expiry instead of
+                # burning a retry attempt on every selected message (a llama
+                # restart or reboot used to stampede attempts on whole batches).
+                _CALL_NOTES.defer_reason = ("busy" if err_out.get("kind") == "busy" else
+                    "not_sent" if err_out.get("kind") == "not_sent" else
+                    "endpoint_down" if err_out.get("kind") == "unreachable" or status == 503 else
+                    "deadline")
+                _note_probe_only()
+                return _DEFERRED
+            # 4xx rejects THE REQUEST — walk down one rung and retry; the
+            # ladder ends at "plain" (no format to blame), and a plain-mode
+            # rejection is the message's own failure.
+            if status in (400, 404, 422) and fmt != "plain":
+                fmt = _FMT_MODE = _NEXT_FMT[fmt]
+                downgrades += 1
+                continue
             _integrity_note(response, kind, probe, downgrades, err_out)
-            return None  # a sent timeout consumes an attempt, not endpoint health
-        if response is None and (err_out.get("kind") in ("unreachable", "busy", "not_sent")
-                                 or expired) \
-                or response is not None and response.get("status") == 503:
-            # Connection refused or 503 (still loading the model) — the
-            # server is down/starting, so the call did no work and
-            # consumed nothing. Defer like a deadline expiry instead of
-            # burning a retry attempt on every selected message (a llama
-            # restart or reboot used to stampede attempts on whole batches).
-            _CALL_NOTES.defer_reason = ("busy" if err_out.get("kind") == "busy" else
-                "not_sent" if err_out.get("kind") == "not_sent" else
-                "endpoint_down" if err_out.get("kind") == "unreachable" or status == 503 else
-                "deadline")
-            return _DEFERRED
-        # 4xx rejects THE REQUEST — walk down one rung and retry; the
-        # ladder ends at "plain" (no format to blame), and a plain-mode
-        # rejection is the message's own failure.
-        if status in (400, 404, 422) and fmt != "plain":
-            fmt = _FMT_MODE = _NEXT_FMT[fmt]
-            downgrades += 1
-            continue
-        _integrity_note(response, kind, probe, downgrades, err_out)
-        # a length stop is truncated JSON: json_object would salvage an
-        # inner complete object (one med dict) that validates to {} and
-        # gets saved as the message's extraction — reject it as failed
-        if local_llm.acceptance_error(response) is not None:
-            return None
-        text = response.get("text")
-        if not isinstance(text, str):
-            return None
-        answer = json_object(text)
-        if isinstance(answer, dict):
-            _CALL_NOTES.provider_response = "local"
-        return answer
+            probe_unaccounted = 0
+            # a length stop is truncated JSON: json_object would salvage an
+            # inner complete object (one med dict) that validates to {} and
+            # gets saved as the message's extraction — reject it as failed
+            if local_llm.acceptance_error(response) is not None:
+                return None
+            text = response.get("text")
+            if not isinstance(text, str):
+                return None
+            answer = json_object(text)
+            if isinstance(answer, dict):
+                _CALL_NOTES.provider_response = "local"
+            return answer
 
 
 def _slots_busy(deadline: float | None) -> dict | None:

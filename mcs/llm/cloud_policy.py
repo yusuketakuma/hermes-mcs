@@ -1434,12 +1434,17 @@ def block_reason(ledger, cfg, route, project_id, *, model=None):
     return global_block_reason(ledger, model=_cfg(cfg)["model"] if model is None else model)
 
 
-def global_block_reason(ledger, *, model=MODEL):
-    """Return a fixed global stop/pricing code without evaluating patient scope."""
+def stopped(ledger) -> bool:
+    """Whether the standing `cloud-llm stop` switch is set (paid cloud and Jev sends)."""
     row = ledger.db.execute("SELECT content FROM artifacts WHERE kind='cloud_control' "
                             "AND project_id IS NULL AND message_id IS NULL "
                             "ORDER BY artifact_id DESC LIMIT 1").fetchone()
-    if row is not None and row["content"] != "running":
+    return row is not None and row["content"] != "running"
+
+
+def global_block_reason(ledger, *, model=MODEL):
+    """Return a fixed global stop/pricing code without evaluating patient scope."""
+    if stopped(ledger):
         return "paused"
     from semantic_runtime import circuit_open, _circuit_state
     if circuit_open(ledger, kind="cloud_circuit"):
