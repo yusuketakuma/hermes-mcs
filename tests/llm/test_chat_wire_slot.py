@@ -1,5 +1,6 @@
 """The wire slot follows the acquired turn on every shared-chat path."""
 import json
+import time
 
 import pytest
 
@@ -125,10 +126,13 @@ def test_pinned_or_scheduled_request_still_waits_for_idle(tmp_path, monkeypatch,
         assert posts == [expected]
 
 
-def test_env_pinned_request_waits_for_the_same_slot_idle(tmp_path, monkeypatch):
-    # MCS_LLM_SLOT is an explicit choice like a payload pin: the wire slot
-    # is confirmed idle while the turn lock is still held
-    monkeypatch.setenv("MCS_LLM_SLOT", "1")
+@pytest.mark.parametrize("env_value, slot", [("1", 1), ("0", 0)])
+def test_env_pinned_request_waits_for_the_same_slot_idle(
+        tmp_path, monkeypatch, env_value, slot):
+    # MCS_LLM_SLOT is an explicit choice like a payload pin — slot 0
+    # included — and the wire slot is confirmed idle while the turn
+    # lock is still held
+    monkeypatch.setenv("MCS_LLM_SLOT", env_value)
     monkeypatch.setattr(local_llm, "SLOT_COUNT", 3)
     monkeypatch.setattr(local_llm, "SLOT_WAIT_POLL_S", 0.01)
     monkeypatch.setattr(local_llm, "SLOT_WAIT_MAX_S", 0.05)
@@ -145,12 +149,44 @@ def test_env_pinned_request_waits_for_the_same_slot_idle(tmp_path, monkeypatch):
         locked.append(_lock_is_free(str(lock)))
         # the pinned slot stays busy for one sample, then reports idle twice
         busy = len(gets) == 1
-        return 200, {}, json.dumps([{"id": s, "is_processing": busy and s == 1}
+        return 200, {}, json.dumps([{"id": s, "is_processing": busy and s == slot}
                                     for s in range(3)]).encode()
 
     err = {}
     assert local_llm.chat("synthetic", request_fn=request, error_out=err) is None
-    assert posts == [1] and len(gets) == 3 and locked == [False] * 3
+    assert posts == [slot] and len(gets) == 3 and locked == [False] * 3
+    assert err["kind"] == "transport" and err["slot_wait_confirmed"] == 1
+
+
+def test_held_turn_slot_waits_for_idle_after_transport_timeout(tmp_path, monkeypatch):
+    # a turn held through call_turn is an explicit slot choice: the
+    # inner chat reuses it on the wire and, after a sent timeout, still
+    # confirms that same slot's idle while the outer lock is held
+    monkeypatch.setattr(local_llm, "SLOT_COUNT", 3)
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_POLL_S", 0.01)
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_MAX_S", 0.05)
+    lock = tmp_path / "turn.lock"
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, str(lock))
+    monkeypatch.delenv(local_llm.SCHEDULE_ENV, raising=False)
+    monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
+    posts, gets, locked = [], [], []
+
+    def request(endpoint, method, body, timeout, deadline):
+        if method == "POST":
+            posts.append(body["id_slot"])
+            raise TimeoutError("synthetic transport timeout")
+        gets.append(method)
+        locked.append(_lock_is_free(str(lock)))
+        # the held slot stays busy for one sample, then reports idle twice
+        busy = len(gets) == 1
+        return 200, {}, json.dumps([{"id": s, "is_processing": busy and s == 2}
+                                    for s in range(3)]).encode()
+
+    err = {}
+    with local_llm.call_turn(time.monotonic() + 5, 0.0, slot=2) as held:
+        assert held == 2
+        assert local_llm.chat("synthetic", request_fn=request, error_out=err) is None
+    assert posts == [2] and len(gets) == 3 and locked == [False] * 3
     assert err["kind"] == "transport" and err["slot_wait_confirmed"] == 1
 
 
