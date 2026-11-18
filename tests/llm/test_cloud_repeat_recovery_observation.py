@@ -59,14 +59,14 @@ def test_primary_reason_uses_fixed_precedence(removed, expected):
     assert cloud_policy._repeat_observation(previous, candidate, 'legacy_unproven')['primary_reason'] == expected
 
 
-@pytest.mark.parametrize('change,path,reason,comparison', [
-    ('tokens', 'no_exact_rows', 'request_envelope_mismatch', 'max_tokens_cmp'),
-    ('binding', 'no_exact_rows', 'input_binding_mismatch', 'binding_cmp'),
-    ('absent', 'skipped_binding', 'recovery_not_requested', 'binding_cmp'),
-    ('unit', 'no_exact_rows', 'unit_key_mismatch', 'unit_key_cmp'),
-    ('stored_absent', 'no_exact_rows', 'stored_binding_missing', 'binding_cmp'),
+@pytest.mark.parametrize('change,path,reason,comparison,match', [
+    ('tokens', 'no_exact_rows', 'request_envelope_mismatch', 'max_tokens_cmp', 'legacy_unproven'),
+    ('binding', 'no_exact_rows', 'input_binding_mismatch', 'binding_cmp', 'logical_equal'),
+    ('absent', 'skipped_binding', 'recovery_not_requested', 'binding_cmp', 'logical_equal'),
+    ('unit', 'no_exact_rows', 'unit_key_mismatch', 'unit_key_cmp', 'logical_equal'),
+    ('stored_absent', 'no_exact_rows', 'stored_binding_missing', 'binding_cmp', 'logical_equal'),
 ])
-def test_actual_refusal_observes_recovery_without_new_send(paid, capsys, change, path, reason, comparison):
+def test_actual_refusal_observes_recovery_without_new_send(paid, capsys, change, path, reason, comparison, match):
     dbpath, _cfg, calls, locks, _state, unit, _restart = paid
     if change == 'tokens':
         # quality_repair pinned to the backlog profile: same model and effort, only the
@@ -88,7 +88,9 @@ def test_actual_refusal_observes_recovery_without_new_send(paid, capsys, change,
                                   "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')")
         elif change == 'tokens':
             # A changed output bound changes the stored request envelope; keep
-            # the reservation's reserved maximum consistent with it.
+            # the reservation's reserved maximum consistent with it. A legacy
+            # envelope carries no logical fingerprint, so this row still misses
+            # recovery and reaches the repeat guard's refusal.
             meta = json.loads(ledger.db.execute(
                 "SELECT meta FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()[0])
             cost = str(cloud_usage_accounting._reservation_cost(
@@ -96,9 +98,10 @@ def test_actual_refusal_observes_recovery_without_new_send(paid, capsys, change,
                 256, legacy='input_bound' not in meta, model=meta['model'],
                 price_version=meta['price_version']))
             with ledger.db:
-                ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.max_tokens',256,"
+                ledger.db.execute("UPDATE artifacts SET meta=json_remove(json_set(meta,'$.max_tokens',256,"
                                   "'$.max_cost_usd',?,"
-                                  "'$.request_fp','0000000000000000000000000000000000000000000000000000000000000000') "
+                                  "'$.request_fp','0000000000000000000000000000000000000000000000000000000000000000'),"
+                                  "'$.logical_request_fp') "
                                   "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')", (cost,))
         before = [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
         with pytest.raises(cloud_client.CloudNotSent) as caught:
@@ -111,9 +114,35 @@ def test_actual_refusal_observes_recovery_without_new_send(paid, capsys, change,
     event, = _events(capsys)
     assert event['phase'] == 'request_send_block_reason' and event['history_refusal'] == 'repeat_success'
     assert event['recovery_path'] == path and event['primary_reason'] == reason
-    assert event['guard_match'] == 'logical_equal'
+    assert event['guard_match'] == match
     assert event[comparison] == {'absent': 'current_absent', 'stored_absent': 'stored_absent'}.get(change, 'different')
     assert event['effort_cmp'] == event['profile_cmp'] == 'same'
+
+
+def test_an_output_bound_change_recovers_the_settled_answer(paid, capsys):
+    dbpath, _cfg, calls, _locks, _state, unit, _restart = paid
+    with closing(Ledger(dbpath)) as ledger:
+        with legacy_cloud_routes():
+            _ask(unit(ledger))
+        # An output-limit change rewrites the request envelope while the prompt,
+        # model and effort are unchanged: the settled paid answer is reused and
+        # the unit is never resent nor stuck on a fingerprint.
+        meta = json.loads(ledger.db.execute(
+            "SELECT meta FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()[0])
+        cost = str(cloud_usage_accounting._reservation_cost(
+            meta.get('input_bound', cloud_usage_accounting.INPUT_RESERVATION_BOUND),
+            256, legacy='input_bound' not in meta, model=meta['model'],
+            price_version=meta['price_version']))
+        with ledger.db:
+            ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.max_tokens',256,"
+                              "'$.max_cost_usd',?,"
+                              "'$.request_fp','0000000000000000000000000000000000000000000000000000000000000000') "
+                              "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')", (cost,))
+        before = [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+        assert _ask(unit(ledger))['reused_response']
+        assert len(calls) == 1
+        assert [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
+    assert _events(capsys) == []
 
 
 @pytest.mark.parametrize('kind', ['logical_equal', 'legacy_unproven', 'legacy_low_verified'])
@@ -237,11 +266,12 @@ def test_observation_is_fresh_for_each_call_and_repair_child(paid, monkeypatch, 
             _ask(unit(ledger))
         provider = unit(ledger, binding='synthetic-provider')
         child = provider.spawn_quality_repair()
-        # A changed output bound changes the stored envelope: each call now
-        # misses exact recovery and reaches the repeat guard instead.
+        # A legacy envelope carries no logical fingerprint: each call now misses
+        # recovery and reaches the repeat guard instead.
         with ledger.db:
-            ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.request_fp',"
-                              "'0000000000000000000000000000000000000000000000000000000000000000') "
+            ledger.db.execute("UPDATE artifacts SET meta=json_remove(json_set(meta,'$.request_fp',"
+                              "'0000000000000000000000000000000000000000000000000000000000000000'),"
+                              "'$.logical_request_fp') "
                               "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')")
         observed = []
         recover = cloud_policy.recover_response
