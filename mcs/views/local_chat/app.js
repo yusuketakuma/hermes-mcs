@@ -149,6 +149,7 @@ function contextSection(row) {
     if (item.source_evidence) {
       const source = el("details", null, "context-source");
       source.append(el("summary", "原文全体（分類範囲は未確認）"), el("blockquote", item.source_evidence));
+      if (item.record_text) source.append(el("p", "保存された記載（分類範囲は未確認）"), el("p", item.record_text));
       context.append(source);
     }
     for (const detail of item.details || []) {

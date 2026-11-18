@@ -349,6 +349,27 @@ def test_narrow_context_fact_does_not_take_another_subjects_heading(subject):
     assert got["text"] != "アレルギー：なし"
 
 
+@pytest.mark.parametrize("subject,reported", [("unspecified", None), ("unspecified", "unspecified"),
+    ("unspecified", "family"), ("family", "family"), ("patient", "patient"), ("other", "other")])
+def test_multiline_derived_record_stays_out_of_classified_text(subject, reported):
+    evidence = "アレルギー：なし\n母は合成薬Eで発疹。"
+    item = {"text": "なし\n母は合成薬Eで発疹。", "evidence": evidence, "quote": evidence,
+            "subject": subject, "reported_subject": reported, "details": []}
+    got = local_chat_view._context_item(item, "allergies")
+    assert "\n" not in got["text"] and "合成薬E" not in got["text"]
+    assert got["subject"] == subject and got["reported_subject"] == reported
+    assert got["source_evidence"] == evidence
+    assert got["details"] == []
+
+
+def test_multiline_record_wording_not_in_raw_quote_is_preserved_separately():
+    item = {"text": "合成の保存済み記載。\nただし確認中。", "evidence": "確認中。", "subject": "unspecified"}
+    got = local_chat_view._context_item(item, "allergies")
+    assert got["text"] == "複数行の記録（分類範囲は未確認）"
+    assert got["record_text"] == item["text"]
+    assert got["source_evidence"] == item["evidence"]
+
+
 def test_orphan_reply_remains_readable_without_exposing_foreign_parent(tmp_path):
     path = tmp_path / "ledger.db"
     store = ledger.Ledger(str(path))

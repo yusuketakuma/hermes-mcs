@@ -61,9 +61,13 @@ def _context_item(item, category):
         "message_id", "subject", "reported_subject", "text", "posted_at_ts", "details")}
     evidence = item.get("evidence") or item.get("quote") or ""
     quote = item.get("quote") or evidence
+    text = item.get("text") or ""
     result["evidence"] = evidence
     if quote != evidence:
         result.update(source_evidence=quote, scope_note="周辺文を含む原文あり")
+    if len(text.splitlines()) > 1:
+        result.update(text="複数行の記録（分類範囲は未確認）", details=[],
+                      source_evidence=quote, scope_note="原文の分類範囲は未確認")
     lines = evidence.strip().splitlines()
     if len(lines) > 1:
         section = extract_context(evidence)
@@ -72,13 +76,15 @@ def _context_item(item, category):
                          and section[0]["text"] == item.get("text")
                          and section[0]["subject"] == item.get("subject")
                          and section[0]["evidence"] == evidence.strip()
-                         and item.get("reported_subject") is None and quote == evidence)
+                         and item.get("reported_subject") in (None, "unspecified") and quote == evidence)
         heading = extract_context(lines[0]) if whole_section else []
         bounded = len(heading) == 1 and heading[0]["category"] == category
         if whole_section:
             result.update(text=lines[0] if bounded else "複数行の記録（分類範囲は未確認）", details=[])
-        result.update(evidence=lines[0] if bounded else None, source_evidence=quote,
+        result.update(evidence=lines[0] if bounded else None, source_evidence=quote, details=[],
                       scope_note="続きあり・分類範囲は未確認" if bounded else "原文の分類範囲は未確認")
+    if result["text"] != text and text not in quote:
+        result["record_text"] = text
     return result
 
 
