@@ -698,9 +698,10 @@ def _incomplete_part_rows(db, cfg=None, *, delivery_ids=None, proof_state=None):
         "AND newer.state='delivered') superseded "
         "FROM notification_render_parts p "
         "JOIN notification_renders r USING(delivery_id) "
-        "JOIN notification_cards c USING(card_id) "
-        "WHERE r.state='delivered' AND c.revoked_at IS NULL "
-        "AND c.delivery_state NOT IN ('revoked','message_deleted') "
+        # Card-less notices (digest, urgent re-checks) also seal overflow parts.
+        "LEFT JOIN notification_cards c USING(card_id) "
+        "WHERE r.state='delivered' AND (r.card_id IS NULL OR (c.revoked_at IS NULL "
+        "AND c.delivery_state NOT IN ('revoked','message_deleted'))) "
         "AND p.kind!='card' AND p.state IN ('pending','unknown','not_sent','held') "
         # c.card_id (=r.card_id) defers this proof until revoked/deleted cards are filtered out.
         "AND NOT EXISTS (SELECT 1 FROM notification_renders done "
@@ -750,7 +751,7 @@ def _incomplete_part_rows(db, cfg=None, *, delivery_ids=None, proof_state=None):
 def unresolved_length_deliveries(db, delivery_ids, *, proof_state=None) -> set:
     """Retain sealed Slack bodies until the same delivery proofs resolve their rejection."""
     return {row['delivery_id'] for row in _incomplete_part_rows(db, delivery_ids=delivery_ids, proof_state=proof_state)
-            if row['transport'] == 'slack' and row['kind'] == 'body_part'
+            if row['card_id'] is not None and row['transport'] == 'slack' and row['kind'] == 'body_part'
             and row['state'] == 'not_sent' and row['error_code'] in _LENGTH_ERRORS}
 
 
@@ -791,7 +792,8 @@ def incomplete_parts_health(db, now: float, cfg=None, *, active_rows=None,
     for row, acknowledged in _tracked_incomplete_part_rows(db, cfg, observation=observation):
         states[row['state']] += 1
         by_plan["superseded" if row['superseded'] else "current"] += 1
-        cards.add(row['card_id'])
+        if row['card_id'] is not None:
+            cards.add(row['card_id'])
         at = _finite(row['oldest'])
         if at is not None:
             oldest = min(oldest, at) if oldest is not None else at
@@ -802,7 +804,8 @@ def incomplete_parts_health(db, now: float, cfg=None, *, active_rows=None,
             active_rows.append(row)
         active_states[row['state']] += 1
         active_plans["superseded" if row['superseded'] else "current"] += 1
-        active_cards.add(row['card_id'])
+        if row['card_id'] is not None:
+            active_cards.add(row['card_id'])
         if at is not None:
             active_oldest = min(active_oldest, at) if active_oldest is not None else at
     unknown = db.execute("SELECT COUNT(*) FROM notification_render_parts "
@@ -834,7 +837,7 @@ def layout_migration_counts(db) -> list:
 
 
 def _delivery_latency(db, retired, now):
-    """Sample root ingestion to full-plan receipt confirmation, never remote arrival or reading."""
+    """Sample root ingestion to the card's first delivered render, never later updates, arrival or reading."""
     from stats_math import finite_number, percentile
     from notify_render import source_fingerprint
     live = f" AND r.transport NOT IN ({','.join('?' * len(retired))})" if retired else ""
@@ -842,13 +845,14 @@ def _delivery_latency(db, retired, now):
     for row in db.execute(
             "SELECT c.*,r.delivery_id,r.render_rev rendered_rev,r.created_at render_created_at,"
             "m.first_seen,v.card_id manifest_card_id,v.render_rev manifest_rev,"
-            "v.source_generation manifest_source,v.presentation_generation manifest_presentation,"
             "v.shown,v.invalidated FROM notification_renders r "
             "JOIN notification_cards c ON c.card_id=r.card_id "
             "LEFT JOIN messages m ON m.message_id=c.root_message_id AND m.project_id=c.project_id "
             "LEFT JOIN notification_view_manifests v ON v.manifest_id=r.manifest_id "
             "WHERE r.op IN ('create','update') AND r.state='delivered' AND r.parts_state='complete' "
-            "AND r.render_rev=(SELECT MAX(newer.render_rev) FROM notification_renders newer WHERE newer.card_id=r.card_id) "
+            # Later updates (extraction, ack, stamps) would measure response delay, not delivery.
+            "AND r.render_rev=(SELECT MIN(early.render_rev) FROM notification_renders early "
+            "WHERE early.card_id=r.card_id AND early.op IN ('create','update') AND early.state='delivered') "
             "AND EXISTS(SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=r.delivery_id) "
             "AND NOT EXISTS(SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=r.delivery_id AND p.state!='delivered')"
             + live + " ORDER BY r.updated_at DESC LIMIT 20", retired):
@@ -863,9 +867,9 @@ def _delivery_latency(db, retired, now):
         if (row['kind'] != 'thread' or not isinstance(shown, list)
                 or not all(type(mid) is int and mid > 0 for mid in shown)
                 or row['root_message_id'] not in shown or not valid_hash(row['source_fp'])
+                # The first render's manifest predates later generation bumps, so bind it by card and rev.
                 or row['manifest_card_id'] != row['card_id'] or row['manifest_rev'] != row['rendered_rev']
-                or row['manifest_source'] != row['source_generation']
-                or row['manifest_presentation'] != row['presentation_generation'] or row['invalidated'] != 0):
+                or row['invalidated'] != 0):
             reason = 'source_binding_unverified'
         elif source_fingerprint(db, row) != row['source_fp']:
             reason = 'source_changed'
@@ -884,8 +888,8 @@ def _delivery_latency(db, retired, now):
             excluded[reason] = excluded.get(reason, 0) + 1
     return {"status": "recorded" if samples else "unavailable", "observed_at": now,
             "reason": None if samples else 'no_verified_delivery_samples',
-            "scope": "latest_20_complete_root_thread_renders_nonretired_transport",
-            "basis": "root_first_seen_to_all_parts_receipt_confirmation_not_remote_arrival_or_readership",
+            "scope": "latest_20_complete_first_root_thread_renders_nonretired_transport",
+            "basis": "root_first_seen_to_first_render_all_parts_receipt_confirmation_not_remote_arrival_or_readership",
             "sample_limit": 20, "examined": examined, "count": len(samples),
             "unavailable_by_reason": excluded,
             "min_s": min(samples) if samples else None, "max_s": max(samples) if samples else None,
