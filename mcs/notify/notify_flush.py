@@ -1269,13 +1269,29 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
     cfg = _config()
     res = {"sent": 0, "failed": 0, "skipped": 0, "suppressed": 0,
            "parked": 0}
+    from private_previsit import dispatch_due, prepare_night
+    prepare_night(ledger, cfg)
+    for outcome in dispatch_due(ledger, cfg, limit=max(1, min(limit, 20))):
+        if outcome["state"] == "accepted":
+            res["sent"] += 1
+        elif outcome["state"] == "retry":
+            res["failed"] += 1
+        elif outcome["state"] == "suppressed":
+            res["suppressed"] += 1
+        elif outcome["state"] == "held":
+            res["failed"] += 1
+            res["parked"] += 1
+        else:
+            res["skipped"] += 1
     # a reply parked on its parent's thread resumes once that thread exists
     import notify_cards
     with ledger.db:
         woken = notify_cards.wake_ready_reply_holds(ledger.db, time.time())
     if woken:
         res["reply_woken"] = woken
-    due = ledger.outbox_due(limit, history_fair=True)
+    due = [event for event in ledger.outbox_due(limit, history_fair=True)
+           if event["kind"] != "private_previsit_note"
+           and event["route"] != "private_previsit"]
     import notify_parts
     thread_attachments = notify_parts.late_attachment_thread(cfg)
 
