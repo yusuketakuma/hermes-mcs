@@ -130,6 +130,23 @@ def read_retry_payload(db, row, *, max_bytes=RETRY_PAYLOAD_MAX_BYTES):
         return None
 
 
+def retry_updated_payload(payload, command_id: str, additional_attempts, attempts: int):
+    """Canonical stored payload the retry writer saves for this command.
+
+    Adds ``retry_command_id`` and, for a manual extension,
+    ``manual_attempt_limit`` — the same fields the writer appends — so the
+    preview/confirm path can apply the writer's stored-size limit to the
+    exact bytes it would persist.  Raises ValueError/TypeError on values
+    the canonical encoder rejects (e.g. non-finite numbers).
+    """
+    from mcs_requests import canonical
+    updated = dict(payload)
+    updated["retry_command_id"] = command_id
+    if additional_attempts is not None:
+        updated["manual_attempt_limit"] = attempts + additional_attempts
+    return canonical(updated).decode("utf-8")
+
+
 def bounded_integer(value, low: int, high: int) -> bool:
     return type(value) is int and low <= value <= high
 

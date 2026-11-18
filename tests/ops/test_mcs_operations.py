@@ -634,6 +634,68 @@ def test_retry_preview_matches_writer_rejections(tmp_path, raw):
         db.close()
 
 
+@pytest.mark.parametrize('constant', ['NaN', 'Infinity', '-Infinity'])
+def test_retry_preview_and_writer_reject_non_finite_numbers(tmp_path, constant):
+    from adapters.common.human_commands import _semantic_job
+
+    db = Ledger(str(tmp_path / 'ledger.db'))
+    try:
+        db.ensure_patient(1)
+        job_id = db.job_add('semantic', 1, 42, payload={})
+        raw = ('{"inference_engine_version":"%s","targets":[42],"note":%s}'
+               % (CURRENT_VERSION, constant))
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET payload=?,state='failed',attempts=2 "
+                          "WHERE job_id=?", (raw, job_id))
+        before = dict(_job(db, job_id))
+        db.db.execute('BEGIN')
+        assert _semantic_job(SimpleNamespace(db=db.db), mcs_requests, 1, job_id) == (
+            None, 'invalid_payload', None)
+        db.db.rollback()
+        receipt = mcs_requests.apply_command(db, _command(
+            'ops.retry', job_id=job_id, expected_payload_hash='a' * 64))
+        assert receipt['outcome'] == 'rejected' and receipt['error'] == 'invalid_payload'
+        assert dict(_job(db, job_id)) == before
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize(('additional_attempts', 'attempts'), [(None, 2), (1, 99)])
+def test_retry_preview_applies_writer_stored_size_limit(tmp_path, additional_attempts, attempts):
+    from adapters.common.human_commands import _semantic_job
+
+    db = Ledger(str(tmp_path / 'ledger.db'))
+    try:
+        db.ensure_patient(1)
+        # Sized so the stored payload fits the 1MiB read limit but the
+        # canonical payload the writer saves (retry_command_id and, for a
+        # manual extension, manual_attempt_limit appended) exceeds it.
+        payload = {VERSION_KEY: CURRENT_VERSION, 'targets': [42],
+                   'note': 'x' * (1024 * 1024 - 100)}
+        job_id = db.job_add('semantic', 1, 42, payload=payload)
+        with db.db:
+            # 99 attempts = past the default limit so a manual extension is allowed
+            db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=? "
+                          "WHERE job_id=?", (attempts, job_id))
+        stored = db.db.execute(
+            "SELECT length(CAST(payload AS BLOB)) FROM fetch_jobs WHERE job_id=?",
+            (job_id,)).fetchone()[0]
+        assert stored <= 1024 * 1024
+        request = _command('ops.retry', job_id=job_id,
+                           expected_payload_hash=mcs_requests.payload_hash(payload))
+        if additional_attempts is not None:
+            request['additional_attempts'] = additional_attempts
+            request['reason'] = 'synthetic extension'
+        db.db.execute('BEGIN')
+        assert _semantic_job(SimpleNamespace(db=db.db), mcs_requests, 1, job_id,
+                             additional_attempts) == (None, 'invalid_payload', None)
+        db.db.rollback()
+        receipt = mcs_requests.apply_command(db, request)
+        assert receipt['outcome'] == 'rejected' and receipt['error'] == 'invalid_payload'
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize('shadow_count', [0, 1, 2])
 def test_retry_uses_actual_rowid_in_nonstandard_schema(tmp_path, shadow_count):
     from adapters.common.human_commands import _semantic_job
