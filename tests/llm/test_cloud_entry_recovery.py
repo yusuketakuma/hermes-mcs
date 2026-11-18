@@ -93,7 +93,8 @@ def unrelated_reservation(ledger, cfg, route, *, project_id=1, message_id=1):
     purpose = 'patient_context' if route == 'patient_context' else 'backlog'
     selection, errors = cloud_policy.resolve_profile(cfg, route=route, purpose=purpose)
     assert not errors and selection['provider'] == 'anthropic'
-    client = anthropic_client.AnthropicClient('synthetic-key')
+    client = anthropic_client.AnthropicClient(
+        'synthetic-key', model=selection['model'], effort=selection['effort'])
     return cloud_policy.usage_reserver(ledger,
         {'cloud_llm': cloud_inference.resolve_cloud_settings(cfg)}, route=route, project_id=project_id,
         message_id=message_id, unit_key='unrelated-old-unit', selection=selection)(
