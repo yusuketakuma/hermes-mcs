@@ -645,6 +645,40 @@ def _attribute_bound(quote, value, event_type, *, actor=False, bound=None):
         pos = i + 1
 
 
+def _record_attribute_bound(quote, value, kind, match, target_end, *, actor=False):
+    """True when a top-level ``date_text``/``actor`` binds to this record.
+
+    Same rule as ``_attribute_bound``: the occurrence must sit inside the
+    act clause holding the record's own cue — after the previous verb+、
+    boundary and before the next one or the sentence end — where exactly
+    one same-kind cue stands, so an attribute of a neighbouring act or a
+    second same-kind mention never attaches. ``actor`` occurrences marked
+    as a transfer/referral source (から/より) describe the predecessor,
+    not the provider, and never bind.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return False
+    sent_left, sent_right = _sentence_bounds(quote, match.start())
+    left = _detail_clause_left(quote, match.start(), sent_left)
+    marker = _ACT_END.search(quote, target_end)
+    right = min(marker.end() + 1, sent_right) if marker is not None else sent_right
+    cue = _DIRECT.get(kind)
+    if cue is not None and sum(1 for _ in cue.finditer(quote, left, right)) != 1:
+        return False
+    pos = 0
+    while True:
+        i = quote.find(value, pos)
+        if i < 0:
+            return False
+        end = i + len(value)
+        if actor and quote[end:end + 2] in ('から', 'より'):
+            pos = i + 1
+            continue
+        if left <= i and end <= right:
+            return True
+        pos = i + 1
+
+
 def _detail_shared_instance(detail, quote, anchor):
     """Return the shared cue/target span, or None when binding is unproved.
 
@@ -813,6 +847,18 @@ def validate_record(item, body):
         target_end = start + extended
     if shared is not None:
         target_end = start + shared[1]
+    # Top-level date_text/actor are optional annotations like care_detail:
+    # only a value bound to this record's own act instance is kept; an
+    # unbound or absent claim simply leaves the field out.
+    for field, actor in (('date_text', False), ('actor', True)):
+        value = item.get(field)
+        if value == 'unknown':
+            value = None
+        if not isinstance(value, str) or not value.strip():
+            continue
+        if _record_attribute_bound(quote, value, item['kind'], match,
+                                   target_end - start, actor=actor):
+            result[field] = value.strip()
     _, clause_end = _clause(body, anchor, target_end)
     actual_subject, actual_status = source_axes(body, anchor, target_end, default='unknown')
     actual_negated = _polarity(body, anchor, clause_end, target_end, actual_status)
