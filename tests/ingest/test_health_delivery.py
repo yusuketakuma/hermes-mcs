@@ -13,6 +13,7 @@ import environment_diagnostics
 import health_delivery as delivery
 import health_recovery
 import health_watch
+import notify_parts
 
 
 NOW = 1_800_000_000.0
@@ -474,3 +475,45 @@ def test_timeout_and_invalid_child_response_return_unknown(world, monkeypatch):
 def test_unverified_scope_does_not_start_observation_child(world, monkeypatch, cfg):
     monkeypatch.setattr(delivery.subprocess, "run", lambda *args, **kwargs: pytest.fail("child started"))
     assert delivery.observe(world.home, cfg, NOW) == delivery._empty(NOW)
+
+def _parts_state_schema(path):
+    with sqlite3.connect(path) as db:
+        db.execute("ALTER TABLE notification_renders ADD COLUMN parts_state TEXT")
+
+
+def test_noop_rollup_is_not_delivery_progress(world):
+    """A repeated update_state rollup that changes nothing is bookkeeping:
+    it must not bump updated_at into fresh delivery progress."""
+    _render(world.db, "queued")
+    _render(world.db, "old", state="delivered", created=NOW - 7200, updated=NOW - 7200)
+    _parts_state_schema(world.db)
+    with sqlite3.connect(world.db) as db:
+        db.execute("INSERT INTO notification_render_parts VALUES('old','delivered',?)",
+                   (NOW - 7200,))
+        db.execute("UPDATE notification_renders SET parts_state='complete' "
+                   "WHERE delivery_id='old'")
+    assert _observe(world)["delivery"]["state"] == "waiting_without_progress"
+    with sqlite3.connect(world.db) as db:
+        db.row_factory = sqlite3.Row
+        assert notify_parts.update_state(db, "old", NOW - 1) == "complete"
+    assert _observe(world)["delivery"]["state"] == "waiting_without_progress"
+    with sqlite3.connect(world.db) as db:
+        assert db.execute("SELECT updated_at FROM notification_renders "
+                          "WHERE delivery_id='old'").fetchone()[0] == NOW - 7200
+
+
+def test_rollup_transition_still_counts_as_delivery_progress(world):
+    """Positive control: a parts_state transition is a real change and its
+    updated_at still counts as delivery progress."""
+    _render(world.db, "queued")
+    _render(world.db, "old", state="delivered", created=NOW - 7200, updated=NOW - 7200)
+    _parts_state_schema(world.db)
+    with sqlite3.connect(world.db) as db:
+        db.execute("INSERT INTO notification_render_parts VALUES('old','delivered',?)",
+                   (NOW - 7200,))
+    assert _observe(world)["delivery"]["state"] == "waiting_without_progress"
+    with sqlite3.connect(world.db) as db:
+        db.row_factory = sqlite3.Row
+        assert notify_parts.update_state(db, "old", NOW - 1) == "complete"
+    assert _observe(world)["delivery"]["state"] == "progressing"
+

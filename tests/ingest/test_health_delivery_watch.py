@@ -535,6 +535,52 @@ def test_scope_change_ends_only_delivery_reflap_history(tmp_path, monkeypatch):
     assert state["unknown_deliveries"] == [witness]
 
 
+def test_delivery_failure_streak_resets_on_scope_switch(tmp_path, monkeypatch):
+    """Two failed delivery observations under target A must not count toward
+    target B: the scope switch clears only the delivery reasons' streak
+    count and first-observation time, preserving other transient reasons."""
+    _health(tmp_path, at=4000, unread=4000, reasons=["notification_pending"], overall="degraded")
+    monkeypatch.setattr(health_watch, "_observe_delivery",
+                        lambda *args: (_ for _ in ()).throw(ValueError("synthetic")))
+    health_watch.evaluate(str(tmp_path), 4000, cfg=CFG)
+    _health(tmp_path, at=4001, unread=4001, reasons=["notification_pending"], overall="degraded")
+    health_watch.evaluate(str(tmp_path), 4001, cfg=CFG)
+    state = json.loads((tmp_path / health_watch.STATE_REL).read_text())
+    assert state["streak"]["count"] == {"notification_delivery_unverified": 2,
+                                      "notification_pending": 2}
+    assert state["streak"]["first_at"]["notification_delivery_unverified"] == 4000
+
+    changed = {"notify": {"interactive": "slack", "slack": {
+        **CFG["notify"]["slack"], "channel_id": "C_OTHER_SYNTHETIC"}}}
+    _health(tmp_path, at=4002, unread=4002, reasons=["notification_pending"], overall="degraded")
+    health_watch.evaluate(str(tmp_path), 4002, cfg=changed)
+    state = json.loads((tmp_path / health_watch.STATE_REL).read_text())
+    assert state["streak"]["count"]["notification_delivery_unverified"] == 1
+    assert state["streak"]["first_at"]["notification_delivery_unverified"] == 4002
+    assert state["streak"]["count"]["notification_pending"] == 3
+    assert state["streak"]["first_at"]["notification_pending"] == 4000
+
+
+def test_delivery_failure_streak_resets_on_scope_switch_same_observation(tmp_path, monkeypatch):
+    """A scope switch with an unchanged health.json must still restart the
+    delivery reasons: the same observation now belongs to the new target."""
+    _health(tmp_path, at=4000, unread=4000, reasons=["notification_pending"], overall="degraded")
+    monkeypatch.setattr(health_watch, "_observe_delivery",
+                        lambda *args: (_ for _ in ()).throw(ValueError("synthetic")))
+    health_watch.evaluate(str(tmp_path), 4000, cfg=CFG)
+    _health(tmp_path, at=4001, unread=4001, reasons=["notification_pending"], overall="degraded")
+    health_watch.evaluate(str(tmp_path), 4001, cfg=CFG)
+    state = json.loads((tmp_path / health_watch.STATE_REL).read_text())
+    assert state["streak"]["count"]["notification_delivery_unverified"] == 2
+
+    changed = {"notify": {"interactive": "slack", "slack": {
+        **CFG["notify"]["slack"], "channel_id": "C_OTHER_SYNTHETIC"}}}
+    health_watch.evaluate(str(tmp_path), 4002, cfg=changed)
+    state = json.loads((tmp_path / health_watch.STATE_REL).read_text())
+    assert state["streak"]["count"]["notification_delivery_unverified"] == 1
+    assert state["streak"]["first_at"]["notification_delivery_unverified"] == 4001
+
+
 def test_recorded_reason_filter_rejects_non_string_values():
     obs = {"status": "stale", "health_at": 10,
            "recorded_state_reasons": [{"synthetic": "secret"}, "worker_restart_required"]}

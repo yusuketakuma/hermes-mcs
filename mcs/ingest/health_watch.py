@@ -665,8 +665,12 @@ def _alert_reasons(obs: dict) -> list:
     return [r for r in obs.get("state_reasons") or [] if r.split(":")[0] != "code_changed"]
 
 
-def _streak(state: dict, obs: dict) -> tuple[dict | None, bool]:
-    """(streak block to persist, whether it can be trusted for holding an alert back)."""
+def _streak(state: dict, obs: dict, *, fresh=()) -> tuple[dict | None, bool]:
+    """(streak block to persist, whether it can be trusted for holding an alert back).
+
+    ``fresh`` names transient reasons whose previous count and first
+    observation belong to another target: a delivery-scope switch must not
+    carry one target's failures into the next target's first observation."""
     prior = state.get("streak")
     valid = "streak" not in state or (
         isinstance(prior, dict) and finite_number(prior.get("health_at"))
@@ -678,11 +682,26 @@ def _streak(state: dict, obs: dict) -> tuple[dict | None, bool]:
         return (prior if valid else None), valid      # not a fresh observation: nothing to count
     reasons = {r.split(":")[0] for r in _alert_reasons(obs)} & TRANSIENT_REASONS
     if valid and prior and at == prior["health_at"]:
-        return prior, True                            # the same observation read again
+        if not fresh:
+            return prior, True                        # the same observation read again
+        # a scope switch under an unchanged observation still restarts the
+        # named reasons: they now belong to the new target's first reading
+        count = dict(prior["count"])
+        first = dict(prior["first_at"])
+        for r in reasons:
+            if r in fresh:
+                count[r] = 1
+                first[r] = at
+        return {"health_at": at, "count": count, "first_at": first}, True
     newer = bool(valid and prior and at > prior["health_at"])
-    count = {r: (prior["count"].get(r, 0) + 1 if newer else 1) for r in reasons}
-    first = {r: (prior["first_at"].get(r, at) if newer and r in prior["count"] else at)
-             for r in reasons}
+
+    def _carry(r):
+        if not newer or r in fresh or r not in prior["count"]:
+            return 0, at
+        return prior["count"][r], prior["first_at"].get(r, at)
+
+    count = {r: _carry(r)[0] + 1 for r in reasons}
+    first = {r: _carry(r)[1] for r in reasons}
     return {"health_at": at, "count": count, "first_at": first}, valid
 
 
@@ -866,7 +885,8 @@ def evaluate(home: str = HOME, now: float | None = None,
         and ocr_detail.get('alert_required') is False)
     alert = not acknowledged_ocr_only and obs["status"] != "ok" and (
         (transition and not reflap) or realert or new_reason)
-    streak, trusted = _streak(state, obs)
+    streak, trusted = _streak(state, obs,
+                               fresh=_DELIVERY_UNRESOLVED if delivery_scope_changed else ())
     trusted = trusted and not _state_unreadable(state_path)
     bases = {r.split(":")[0] for r in reasons}
     transient_only = (obs["status"] == "degraded" and bool(bases)

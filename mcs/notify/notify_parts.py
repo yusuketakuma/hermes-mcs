@@ -1590,7 +1590,9 @@ def rollup_state(db, delivery_id) -> str:
 
 def update_state(db, delivery_id, now) -> str:
     state = rollup_state(db, delivery_id)
+    # an unchanged rollup is bookkeeping, not delivery progress: keep
+    # updated_at for real transitions so observers do not see phantom progress
     db.execute(
         "UPDATE notification_renders SET parts_state=?,updated_at=? "
-        "WHERE delivery_id=?", (state, now, delivery_id))
+        "WHERE delivery_id=? AND parts_state IS NOT ?", (state, now, delivery_id, state))
     return state
