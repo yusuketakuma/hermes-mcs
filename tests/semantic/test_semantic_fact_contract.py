@@ -1,5 +1,6 @@
 """semantic-facts/v2 contract tests: enums, stable IDs, validators,
 importance policy, and the committed synthetic completeness corpus."""
+import hashlib
 import json
 from pathlib import Path
 
@@ -49,6 +50,22 @@ def _fact(**overrides):
         "workflow_status": "ordered", "event_time": "本日",
         "validation_status": "unverified", "action": "start",
         **overrides})
+
+
+@pytest.mark.parametrize("text", ["", "ascii", "患者", "𠮷", "é", "e\u0301"])
+def test_text_sha256_hashes_exact_utf8_bytes(text):
+    assert sf.text_sha256(text) == hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def test_text_sha256_does_not_normalize_unicode():
+    assert sf.text_sha256("é") != sf.text_sha256("e\u0301")
+
+
+def test_text_sha256_preserves_encode_errors():
+    with pytest.raises(AttributeError):
+        sf.text_sha256(None)
+    with pytest.raises(UnicodeEncodeError):
+        sf.text_sha256("\ud800")
 
 
 def test_ids_are_deterministic_across_retries_and_chunk_layout():
