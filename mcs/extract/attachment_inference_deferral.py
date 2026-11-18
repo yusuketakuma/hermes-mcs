@@ -1,9 +1,9 @@
 """添付ページのローカル解析が保留された理由を固定コードで定義し、件数だけを正規化する。
 
-The OCR job re-observes the admission conditions right after a deferral and
-records only these fixed codes with integer counts: never patient data, paths
-or exception text. ``unclassified`` means no condition was confirmed on the
-re-check, not that nothing was wrong.
+The local page run reports the fixed code from the gate that actually stopped
+it, with integer counts only: never patient data, paths or exception text, and
+never a post-hoc lock or resource re-probe. ``unclassified`` means no fixed
+gate cause was proven for that deferral, not that nothing was wrong.
 """
 from __future__ import annotations
 
@@ -48,12 +48,12 @@ def observed_valid(reasons, total):
 # Priority order: the same order the page run checks its admission
 # conditions, so a tie between counted codes resolves deterministically.
 LOCAL_DEFER_REASONS = (
-    "writer_refused",       # the shared writer fence recorded a fixed refusal code
-    "disk_unknown",         # free space could not be measured on the re-check
-    "disk_low",             # free space under the configured floor on the re-check
-    "memory_unknown",       # memory headroom could not be observed on the re-check
-    "memory_low",           # memory headroom below the shared reserve on the re-check
-    "inference_lock_busy",  # another process held the page-inference lock
+    "writer_refused",       # the stopping writer fence recorded a fixed refusal code
+    "disk_unknown",         # free space could not be measured at the stopping gate
+    "disk_low",             # free space under the configured floor at the stopping gate
+    "memory_unknown",       # memory headroom could not be observed at admission
+    "memory_low",           # memory headroom below the shared reserve at admission
+    "inference_lock_busy",  # another process held the page-inference lock at admission
     "local_stage_error",    # the local stage raised; the job records it as a failure
 )
 KNOWN = frozenset((*LOCAL_DEFER_REASONS, UNCLASSIFIED))
