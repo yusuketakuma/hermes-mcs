@@ -339,17 +339,19 @@ def test_item_scope_group_default_is_unknown_without_explicit_patient_source():
     assert clinical_values.patient_item_scope(item, "本人はCr 0.9mg/dL", default="unknown") == "patient"
 
 
-@pytest.mark.parametrize("quote", [
-    "Cr 1.2mg/dLです。",
-    "Cr 1.2mg/dL、大丈夫です",
-    "食事の工夫でCr 1.2mg/dL",
-    "Cr 1.2mg/dL (前回 0.9)",
+@pytest.mark.parametrize("name,value,unit,quote", [
+    ("Cr", 1.2, "mg/dL", "Cr 1.2mg/dLです。"),
+    ("Cr", 1.2, "mg/dL", "Cr 1.2mg/dL、大丈夫です"),
+    ("Cr", 1.2, "mg/dL", "食事の工夫でCr 1.2mg/dL"),
+    ("Cr", 1.2, "mg/dL", "Cr 1.2mg/dL (前回 0.9)"),
+    ("血糖", 210, "mg/dL", "本日の血糖210mg/dLで超速効型インスリン投与"),
+    ("Cr", 1.2, "mg/dL", "Cr 1.2mg/dLを測定しました"),
 ])
-def test_numeric_lab_quote_with_a_closed_suffix_is_supported(quote):
+def test_numeric_lab_quote_with_a_closed_suffix_is_supported(name, value, unit, quote):
     # Given: a number+unit quote ending in a closed tail (copula, clause end,
-    # a plain statement). When: confirmation is computed.
+    # a plain statement, a dosing clause). When: confirmation is computed.
     # Then: the quote still supports the reading.
-    assert clinical_values.lab_candidate("Cr", 1.2, "mg/dL", quote)["confirmation"] == "quote_supported"
+    assert clinical_values.lab_candidate(name, value, unit, quote)["confirmation"] == "quote_supported"
 
 
 def test_numeric_lab_high_flag_cue_still_confirms():

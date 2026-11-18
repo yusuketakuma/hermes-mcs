@@ -546,8 +546,9 @@ _LAB_RESULT_TAIL = re.compile(fold_surface(
     r"|なし|予定|中"
     r"|[のでにとをはがも]"
     # A drug name ends its clause in a dosing action and contains no comparison,
-    # negation or hedge word (以上で投与中止, ではないので投与中止 stay out).
-    r"|(?:(?!(?:まで|以上|以下|未満|以内|程度|前後|ほど|くらい|ぐらい|を?超"
+    # negation or hedge word (以上で投与中止, ではないので投与中止 stay out;
+    # 超速効型インスリン投与 is a real drug name).
+    r"|(?:(?!(?:まで|以上|以下|未満|以内|程度|前後|ほど|くらい|ぐらい|を?超(?:え|過)"
     r"|を?(?:下|上)回|より|では|じゃ|疑い|かもしれ|ない|なく|ありませ))[ァ-ヺー一-龯]){1,24}"
     r"(?=中止|継続|内服|服用|使用|投与|点滴|注射|外用|開始|休止|再開|増量|減量|変更|追加))*"))
 _LAYOUT_REACH = 256   # characters read on each side of a reading; longer lines are no layout
