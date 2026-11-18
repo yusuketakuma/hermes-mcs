@@ -331,9 +331,8 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
         origin.update(provider=route['provider'], model=route['provider']['model'])
     binding = context_artifacts.quality_binding(origin)
     repair_provider = cloud_inference.cloud_provider_contract(selection=selection)
-    distinct = (selection['provider'] == 'openai' and selection['profile'] is not None
-                or repair_provider != origin.get('provider'))
-    if distinct:
+    needs_response_proof = selection['profile'] is not None or repair_provider != origin.get('provider')
+    if needs_response_proof:
         origin.update(repair_provider=repair_provider, quality_assessment=identity['assessment'],
                       quality_threshold=threshold)
     if header is None and (patient_context_refresh_sources._source_repair_units(ledger.db, pid, repair_key) or ledger.db.execute(
@@ -420,7 +419,7 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
     try:
         response = []
         result = _scan(cfg, source, saved, workday_id, deadline, admit, provider=provider,
-                       **({'evidence_out': response} if distinct else {}),
+                       **({'evidence_out': response} if needs_response_proof else {}),
                        source_repair={'codes':codes, 'protected':protected,
                            'historical_by_id':{fact['id']:{'historical':fact['historical']} if 'historical' in fact else {}
                                                for fact in captured['facts']}})
@@ -444,7 +443,7 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
     evidence = cloud_policy.reservation_evidence(ledger.db, owned[0]['meta']['reservation_artifact_id'])
     split = result.get('chunk_span') is None
     proof = None
-    if distinct:
+    if needs_response_proof:
         if len(response) != 1:
             return 'unknown', None
         finish_reason = evidence['result'].get('answer_finish_reason_v1')
@@ -508,7 +507,7 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
             next_header = {'phase':'sealing' if result['complete'] else 'scanning',
                            'cursor':result['cursor'],'split':result.get('split',0)}
             patient_context_refresh_sources._source_repair_update_tx(ledger.db, header, next_header)
-            if distinct:
+            if needs_response_proof:
                 patient_context_refresh_sources._source_repair_parts(ledger.db, pid, source, binding, repair_key, require_complete=False)
             stored_header = patient_context_refresh_sources._source_repair_header(ledger.db, pid, repair_key)
             if (ledger.db.total_changes - before_writes != expected_writes

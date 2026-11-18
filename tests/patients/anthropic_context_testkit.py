@@ -254,7 +254,7 @@ def source_repair(runtime, cloud, monkeypatch):
     control = {'sent':[], 'fault':None, 'qa_fault':None}
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
     monkeypatch.setattr(worker.cloud_policy, 'pricing_valid',
-                        lambda now=None, *, model=worker.anthropic_client.MODEL: model == worker.anthropic_client.MODEL)
+                        lambda *_args, **_kwargs: True)
     class InitialProvider(original_provider):
         def __call__(self, prompt, **kwargs):
             payload = json.loads(prompt)
@@ -282,7 +282,7 @@ def source_repair(runtime, cloud, monkeypatch):
         content = ([{'type':'redacted_thinking','data':'synthetic-hidden'}]
                    if length and control['fault'] == 'thinking_length_once' else
                    [{'type':'text','text':json.dumps({'patient_context':items}, ensure_ascii=False)}])
-        raw = json.dumps({'model':worker.anthropic_client.MODEL,
+        raw = json.dumps({'model':body['model'],
             'usage':{'input_tokens':1,'output_tokens':1}, 'stop_reason':stop,
             'content':content},
             ensure_ascii=False).encode()
