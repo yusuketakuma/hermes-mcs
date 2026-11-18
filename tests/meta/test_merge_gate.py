@@ -4,7 +4,7 @@ import pytest
 
 from ci import merge_gate
 from ci.agent_control import REQUIRED_JOBS
-from ci.auto_merge import GitHubAPIError
+from ci.auto_merge import GitHubAPIError, eligible_pr
 
 REPO = "owner/repo"
 ROOT = f"/repos/{REPO}/"
@@ -99,6 +99,16 @@ def test_discovery_error_is_reported_without_raising():
     result = publish(api)
     assert result["published"] == []
     assert result["errors"][0]["source"] == "PR discovery"
+
+
+def test_forks_and_drafts_get_gate_verdicts_but_remain_ineligible_for_auto_merge():
+    pulls = [pr(1), pr(2, head_repo="fork/repo"), pr(3, draft=True)]
+    api = GateAPI(pulls)
+    assert publish(api) == {"published": [1, 2, 3], "errors": []}
+    states = [body["state"] for method, path, body in api.calls if method == "POST" and "/statuses/" in path]
+    assert states == ["success", "success", "pending"]
+    assert not eligible_pr(pulls[1], REPO, "main")
+    assert not eligible_pr(pulls[2], REPO, "main")
 
 
 def test_cli_returns_failure_after_attempting_remaining_prs(monkeypatch):

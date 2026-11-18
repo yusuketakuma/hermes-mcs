@@ -8,10 +8,10 @@ from urllib.parse import quote
 
 if __package__:
     from .agent_control import decide_gate, next_attempt
-    from .auto_merge import GitHubAPI, GitHubAPIError, _repo_path, eligible_pr
+    from .auto_merge import GitHubAPI, GitHubAPIError, _repo_path, default_branch_pr
 else:
     from agent_control import decide_gate, next_attempt
-    from auto_merge import GitHubAPI, GitHubAPIError, _repo_path, eligible_pr
+    from auto_merge import GitHubAPI, GitHubAPIError, _repo_path, default_branch_pr
 
 
 def _apply_attempts(api, repo, number, attempts):
@@ -51,7 +51,7 @@ def publish_gates(api, repo, default_branch, *, automation_enabled, event="",
         number = listed.get("number")
         try:
             pr = api.get(_repo_path(repo, f"pulls/{number}"))
-            if not eligible_pr(pr, repo, default_branch):
+            if not default_branch_pr(pr, repo, default_branch):
                 continue
             sha = pr["head"]["sha"]
             checks = api.list(_repo_path(repo, f"commits/{sha}/check-runs"), key="check_runs")
