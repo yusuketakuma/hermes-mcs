@@ -584,7 +584,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                  and _protected_prior_current(ledger.db, r)),
                 dispatch_current=lambda: not r.get("_checkpoint_conflict"),
                 dispatch=_owner_call, owner={"lease": leases[index]}, selection=r["_cloud_selection"],
-                cache_heads=(_PROMPT_HEAD, _BATCH_HEAD), input_binding=_chunk_context(r, ctx, checkpoint=True)))
+                cache_heads=(_PROMPT_HEAD, _BATCH_HEAD), input_binding=_chunk_context(r, ctx, checkpoint=True),
+                changed=lambda: _source_provably_changed(ledger, r)))
         if provider is not None:
             try:
                 with cloud_slots:
@@ -1475,7 +1476,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 message_id=r["message_id"], unit_key=str(r["message_id"]), deadline=deadline,
                 current=lambda r=r: _current(ledger, r["message_id"], r["content_hash"]),
                 dispatch=lambda fn, **kw: fn(), owner={"after_commit": True}, selection=r["_cloud_selection"],
-                cache_heads=(_PROMPT_HEAD, _BATCH_HEAD), input_binding=_chunk_context(r, ctx, checkpoint=True))
+                cache_heads=(_PROMPT_HEAD, _BATCH_HEAD), input_binding=_chunk_context(r, ctx, checkpoint=True),
+                changed=lambda r=r: _source_provably_changed(ledger, r))
             cloud_result = llm_extract(r["body_text"], context=ctx, hints=_rule_hints(r),
                 deadline=deadline, meta_out=comparison_meta, posted_at=r["posted_at"],
                 vital_policy=vital_policy, provider=provider,
