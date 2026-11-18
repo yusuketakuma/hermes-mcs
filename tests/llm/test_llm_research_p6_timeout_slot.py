@@ -161,6 +161,16 @@ def test_spent_deadline_unconfirmed_poll_ends_at_the_grace(turn, monkeypatch):
     assert 400 <= err["slot_wait_ms"] <= 600
 
 
+def test_spent_deadline_still_gets_the_grace_budget(turn, monkeypatch):
+    # a timeout means the caller's deadline is already spent; the idle
+    # check must still run for the short grace, not end after one miss
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_GRACE_S", 1.0)
+    send, state = _fake(turn, [True, True, False, False])
+    err = {}
+    assert _chat(send, err, deadline=time.monotonic() + 0.3) is None
+    assert state["gets"] == 4 and err["slot_wait_confirmed"] == 1
+
+
 def test_outcomes_are_reported_separately(turn, monkeypatch):
     confirmed, expired = {}, {}
     _chat(_fake(turn, [False, False])[0], confirmed)

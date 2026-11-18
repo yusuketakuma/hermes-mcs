@@ -587,3 +587,35 @@ def test_slot_health_updates_hold_the_slot_lock(tmp_path, monkeypatch):
     assert call() is None and _health_streak(tmp_path, 1) == 1
     assert seen == [("clear", 1, True), ("mark", 1, True),
                     ("clear", 1, True), ("mark", 1, True)]
+
+
+def test_chat_marks_an_unconfirmed_slot_and_clears_it_on_an_answer(tmp_path, monkeypatch):
+    _scheduling(tmp_path, monkeypatch)
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_MAX_S", 0.05)
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_GRACE_S", 0.0)
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_POLL_S", 0.01)
+    busy = json.dumps([{"id": i, "is_processing": True} for i in range(3)]).encode()
+    ok = json.dumps({"choices": [{"message": {"content": "{}"},
+                                  "finish_reason": "stop"}]}).encode()
+    answer = {"post": None}
+
+    def send(endpoint, method, body, timeout, deadline):
+        if method == "GET":
+            return 200, {}, busy
+        if answer["post"] is None:
+            raise TimeoutError("http worker timeout")
+        return 200, {}, answer["post"]
+
+    def call():
+        return local_llm.chat("p", request_fn=send, extra_payload={"id_slot": 1})
+
+    for _ in range(schedule.STUCK_TRIP):
+        assert call() is None
+    assert 1 in schedule._cooling(tmp_path)
+    answer["post"] = ok
+    monkeypatch.setattr(schedule, "COOL_S", -1.0)    # cooldown over: slot 1 is tried again
+    schedule.mark_stuck(tmp_path, 1)                 # (renews with an expired window)
+    assert schedule._cooling(tmp_path) == set()
+    assert schedule._health_path(tmp_path, 1).exists()
+    assert call() is not None
+    assert not schedule._health_path(tmp_path, 1).exists()
