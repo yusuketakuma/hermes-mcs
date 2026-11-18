@@ -26,7 +26,8 @@ def drop_total(v: dict | None) -> float:
             + sum(bool(lab.get("unverified")) for lab in v.get("labs") or []))
 
 
-_FACT_LIST_FIELDS = ("meds", "symptoms", "labs", "events", "event_records", "requests", "patient_context")
+_FACT_LIST_FIELDS = ("meds", "symptoms", "labs", "allergies", "events", "event_records",
+                     "requests", "patient_context")
 
 
 def facts(v: dict | None, split_conditions: bool = False) -> set:
@@ -1053,6 +1054,13 @@ def quality_improves(candidate, prior, body, hints=None):
 
     The one exception: a medication action the source contradicts (_rx_superseded)
     may be replaced by the same item with the source's action."""
+    if (prior is not None and prior.get("allergies") is not None
+            and (candidate is None or not _retains_clinical_items(
+                prior["allergies"], candidate.get("allergies")))):
+        return False
+    # Allergy candidates must stay, but cannot prove or veto a gain in another field.
+    candidate = {key: value for key, value in candidate.items() if key != "allergies"} if candidate is not None else None
+    prior = {key: value for key, value in prior.items() if key != "allergies"} if prior is not None else None
     gone = _rx_superseded(prior, candidate, hints, body)
     if gone:
         prior = {**prior, "meds": [med for med in prior.get("meds") or [] if not (
