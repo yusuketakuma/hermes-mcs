@@ -172,6 +172,63 @@ def test_an_exhausted_marker_less_job_is_not_revived_by_a_bump(store, monkeypatc
     assert dict(_job(store)) == before
 
 
+def _append_per_post_meta(store, change):
+    """Keep a valid older assessment behind the malformed newest observation."""
+    rows = store.db.execute("SELECT * FROM artifacts WHERE kind='semantic_assess' AND message_id=1 "
+                            "ORDER BY artifact_id DESC").fetchall()
+    original = next(row for row in rows if "fact_id" not in json.loads(row["meta"]))
+    meta = json.loads(original["meta"])
+    raw = change(meta)
+    aid = store.artifact_add(original["kind"], original["content"], project_id=1,
+                             message_id=1, model=original["model"], meta=meta)
+    with store.db:
+        store.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (raw, aid))
+
+
+def _assert_unknown_assessment_is_not_adopted(store, cfg, monkeypatch):
+    import semantic_reprocess
+    monkeypatch.setattr(jev, "REGISTRY_VERSION", BUMPED)
+    assert _state(store, cfg) == "repair_required"
+    assert not semantic_reprocess._reprocess_unbound_done(
+        store, _row(store), "repair_required", json.loads(_job(store)["payload"]))
+    before = dict(_job(store))
+    artifacts = [dict(row) for row in store.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+    for _ in range(12):
+        drain.reprocess_step(store, cfg)
+    assert _counted_drain(store, cfg) == (0, 0)
+    assert dict(_job(store)) == before
+    assert [dict(row) for row in store.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == artifacts
+
+
+@pytest.mark.parametrize("registry_meta", [
+    pytest.param({}, id="missing"),
+    pytest.param({"registry": None}, id="null"),
+    pytest.param({"registry": True}, id="bool"),
+    pytest.param({"registry": 1}, id="number"),
+    pytest.param({"registry": []}, id="list"),
+    pytest.param({"registry": {}}, id="object"),
+])
+def test_a_missing_or_non_string_registry_is_not_adopted(store, monkeypatch, registry_meta):
+    cfg = _cfg(loop_mode="off")
+    _evaluated(store, cfg, "live_arrival")
+
+    def changed(meta):
+        meta.pop("registry")
+        meta.update(registry_meta)
+        return json.dumps(meta)
+
+    _append_per_post_meta(store, changed)
+    _assert_unknown_assessment_is_not_adopted(store, cfg, monkeypatch)
+
+
+@pytest.mark.parametrize("raw", ["{", "[]"])
+def test_malformed_latest_assessment_meta_is_not_adopted(store, monkeypatch, raw):
+    cfg = _cfg(loop_mode="off")
+    _evaluated(store, cfg, "live_arrival")
+    _append_per_post_meta(store, lambda _meta: raw)
+    _assert_unknown_assessment_is_not_adopted(store, cfg, monkeypatch)
+
+
 def test_execution_generation_names_the_registry_but_not_local_labels(monkeypatch):
     base = semantic_policy.runtime_config(_cfg("assist"))[0]
     extra = semantic_policy.runtime_config(_cfg("assist", extra_propositions=["E01"]))[0]

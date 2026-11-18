@@ -139,18 +139,10 @@ def _reprocess_unbound_done(ledger, row, state, pl):
     if state != 'repair_required' or runtime.execution_marker_state(pl, None) != 'legacy':
         return False
     import semantic_jev
-    from semantic_policy import KIND_ASSESS
-    for stored in ledger.db.execute('SELECT meta FROM artifacts WHERE kind=? AND project_id=? '
-                                    'AND message_id=? ORDER BY artifact_id DESC',
-                                    (KIND_ASSESS, row['project_id'], row['message_id'])):
-        meta = mcs_util.loads_dict(stored['meta'])
-        if meta is None:
-            return False
-        if meta.get('fact_id') is not None:
-            continue
-        registry = meta.get('registry')
-        return type(registry) is str and registry != semantic_jev.REGISTRY_VERSION
-    return False
+    from semantic_prior_registry import latest_post_assessment
+    _, meta = latest_post_assessment(ledger.db, row['project_id'], row['message_id'])
+    registry = meta.get('registry') if meta is not None else None
+    return type(registry) is str and registry != semantic_jev.REGISTRY_VERSION
 
 
 def _job_identity_same(token, current):
