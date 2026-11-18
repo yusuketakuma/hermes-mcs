@@ -135,7 +135,7 @@ def test_prior_success_without_hash_keeps_accounting_and_has_no_proof(tmp_path, 
 
 
 @pytest.mark.parametrize('bad', [None, True, 7, 'A' * 64, 'z' * 64, 'f' * 63])
-def test_invalid_stored_answer_hash_refuses_evidence_but_preserves_accounting(tmp_path, monkeypatch, bad):
+def test_invalid_stored_answer_hash_blocks_receipt_pricing_and_new_reservations(tmp_path, monkeypatch, bad):
     monkeypatch.setattr(policy, 'pricing_valid', lambda *args, **kwargs: True)
     cfg = {'cloud_llm': {'mode': 'on', 'provider': 'openai', 'project_ids': [1]}}
     instance = client.OpenAIClient('synthetic')
@@ -154,8 +154,14 @@ def test_invalid_stored_answer_hash_refuses_evidence_but_preserves_accounting(tm
         with pytest.raises(ValueError, match='cloud_receipt_invalid'):
             policy.reservation_evidence(ledger.db, reservation_id)
         report = policy.usage_report(ledger)
-        assert report['pricing_unverified'] is False
-        assert Decimal(report['monthly_cost_usd']) == policy.usage_cost(usage(), model=client.MODEL)
+        assert report['pricing_unverified'] is True and report['unresolved_requests'] == 1
+        maximum = Decimal(reservation['max_cost_usd'])
+        assert Decimal(report['monthly_cost_usd']) == Decimal(report['max_reserved_cost_usd']) == maximum
+        assert Decimal(report['settled_cost_usd']) == 0
+        with pytest.raises(AnthropicError, match='pricing_unverified'):
+            policy.usage_reserver(ledger, cfg, route='patient_context', project_id=1, unit_key='another')(
+                instance.body('synthetic prompt', 100, None), 2)
+        assert len(ledger.artifacts('cloud_usage_reserve')) == len(ledger.artifacts('cloud_usage_result')) == 1
 
 
 @pytest.mark.parametrize('bad', [None, True, 'A' * 64, 'not-a-hash'])
