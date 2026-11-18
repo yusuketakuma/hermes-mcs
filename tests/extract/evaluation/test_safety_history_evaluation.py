@@ -18,6 +18,7 @@ import extract_validation
 ROOT = Path(__file__).resolve().parents[3]
 CORPUS = ROOT / "evaluation" / "extract_cases_safety_history.json"
 BASELINE = ROOT / "evaluation" / "extract_baseline_gen11_safety_history.json"
+CURRENT_BASELINE = ROOT / "evaluation" / "extract_baseline_rule30_safety_history.json"
 CASES = json.loads(CORPUS.read_bytes())["cases"]
 BY_ID = {case["id"]: case for case in CASES}
 ACP = {"care_detail": {"event_type": "acp_discussion"}}
@@ -283,7 +284,7 @@ def test_context_label_subject_accepts_unspecified_only_as_a_known_value():
 
 
 def test_baseline_fixture_is_the_rule_extractors_patient_context_for_this_corpus():
-    baseline = json.loads(BASELINE.read_bytes())
+    baseline = json.loads(CURRENT_BASELINE.read_bytes())
     assert baseline["corpus_sha256"] == hashlib.sha256(CORPUS.read_bytes()).hexdigest()
     assert baseline["scored_fields"] == ["patient_context"]
     # Not measured is not a result: the fixture carries no counts and no LLM outputs.
@@ -299,12 +300,14 @@ def test_baseline_fixture_is_the_rule_extractors_patient_context_for_this_corpus
             case["body"], case["posted_at"]).get("patient_context", [])} for case in CASES}
 
 
-def test_baseline_scores_offline_and_names_what_it_does_not_measure(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("baseline_path,rule_version", [(BASELINE, 29), (CURRENT_BASELINE, 30)])
+def test_baseline_scores_offline_and_names_what_it_does_not_measure(
+        tmp_path, monkeypatch, capsys, baseline_path, rule_version):
     monkeypatch.setattr(extract_llm, "llm_extract",
                         lambda *args, **kwargs: pytest.fail("score must not call a model"))
     report = tmp_path / "baseline.json"
     assert extract_bench.cmd_score(SimpleNamespace(
-        cases=str(CORPUS), outputs=str(BASELINE), tag="gen11-rule", out=str(report))) == 0
+        cases=str(CORPUS), outputs=str(baseline_path), tag="gen11-rule", out=str(report))) == 0
     result = json.loads(report.read_text())
     assert {name: [row["tp"], row["fp"], row["fn"]] for name, row in result["fields"].items()} == {
         "patient_context": [8, 0, 4], "patient_context.allergies": [3, 0, 1],
@@ -315,8 +318,8 @@ def test_baseline_scores_offline_and_names_what_it_does_not_measure(tmp_path, mo
     assert [(case["id"], case["forbid_violations"]) for case in result["cases"]
             if case["forbid_violations"]] == [("alg-family-heading", ["patient_context:allergies"])]
     assert result["source"] == "stored_outputs"
-    assert result["generations"] == {"rule": 29, "patient_context": 4}
-    assert result["outputs_sha256"] == hashlib.sha256(BASELINE.read_bytes()).hexdigest()
+    assert result["generations"] == {"rule": rule_version, "patient_context": 4}
+    assert result["outputs_sha256"] == hashlib.sha256(baseline_path.read_bytes()).hexdigest()
     assert (result["tag"], result["n_cases"], result["errors"]) == ("gen11-rule", 39, [])
     # Unmeasured stays null and out-of-scope fields carry no number.
     assert result["call_stats"] is None and result["performance"] is None and result["model"] is None

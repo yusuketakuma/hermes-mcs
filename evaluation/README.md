@@ -37,6 +37,7 @@
 | `extract_cases_injection.json` | 本文や参照文に混入した命令 |
 | `extract_cases_safety_history.json` | アレルギー・副作用歴と ACP の誤断定（否定、家族、別患者、予定・仮定、引用された過去記録、疑い、対照） |
 | `extract_baseline_gen11_safety_history.json` | 上の資料に対する世代11の基準値。`score` の入力形式で、集計値は持たない |
+| `extract_baseline_rule30_safety_history.json` | 同じ完全合成資料に対する規則抽出30・文脈4の出力。旧基準値は変更せず保持 |
 
 - 合成ベンチは回帰ゲートです。合格しても実データでの品質は示さず、昇格の根拠にしません。
 - 基準値に入っているのは、通信なしで再現できるルール抽出（RULE 29、文脈4）の `patient_context` だけです。ルール抽出の症状・薬・イベントは採点器が前提とする形と違うので、対象外として数値を持たせていません。
@@ -44,3 +45,24 @@
 - 世代11には、主体・時制・否定の軸を持つアレルギー欄がありません。この欄の再現率0・誤断定0は「欄なし（未取得）」で、誤断定が無いという意味ではありません。採点の報告は `fields_without_output` でこれを区別します。
 - アレルギー欄の出力形（`extract_bench_assertions.py` の冒頭）は評価側の仮の形です。欄を初めて出す世代が形を決めたら、同じファイルの `units` だけを合わせます。
 - 新しい資料は意味解析の評価（`semantic_bench`）と Jev の評価（`mcs_setup`）の許可一覧には足していません。外部や別の評価へ送る本文の範囲を広げないためです。
+
+規則抽出30の基準値は、旧基準値のメタデータを引き継ぎ、`generations` を実行時の
+`extract.RULE_VERSION` と `extract_llm.PATIENT_CONTEXT_VERSION` にした上で、次の既存の
+抽出手順で全39件の `outputs` を生成しました。集計値やLLM出力は手作成していません。
+`tests/extract/evaluation/test_safety_history_evaluation.py` が現行出力との完全一致と、
+新旧両方のオフライン採点を検証します。
+
+```python
+outputs = {
+    case["id"]: {"patient_context": extract.extract_message(
+        case["body"], case["posted_at"]).get("patient_context", [])}
+    for case in cases
+}
+```
+
+```sh
+python3 mcs/extract/eval/extract_bench.py score \
+  --cases evaluation/extract_cases_safety_history.json \
+  --outputs evaluation/extract_baseline_rule30_safety_history.json \
+  --tag rule30 --out baseline-rule30.json
+```

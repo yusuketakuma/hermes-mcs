@@ -1,0 +1,229 @@
+{
+ "version": 1,
+ "note": "完全合成の資料に対する規則抽出30・文脈4の基準値。extract.extract_message で生成し、score で都度集計する。合成ベンチは回帰ゲートで、昇格の根拠にしない。LLM抽出の世代11は未測定のまま。",
+ "corpus": "extract_cases_safety_history.json",
+ "corpus_sha256": "7006056eb3ddf588ad96c2616fbd2db11cd7b57e0ec5bdc4ebc8a64d7fecb6a2",
+ "engine": "rule",
+ "validated": true,
+ "generations": {
+  "rule": 30,
+  "patient_context": 4
+ },
+ "scored_fields": [
+  "patient_context"
+ ],
+ "scope": "ルール抽出（extract.extract_message）の出力から patient_context だけを写した。症状・薬・イベントなどはルール出力の形が採点器の前提（LLM抽出の検証済み出力）と違うため対象外で、数値を持たせない。",
+ "unmeasured": {
+  "llm_extract": {
+   "generation": 11,
+   "reason": "実モデルの実行が必要。完全合成の資料を使い、所有者が承認した手動実行（extract_bench.py run）の報告を score に渡して埋める。未測定を合格や0件として扱わない。"
+  },
+  "allergies": {
+   "reason": "世代11の出力に主体・時制・否定の軸を持つ allergies 欄が無い。再現率0・誤断定0は「欄なし（未取得）」で、誤断定が無いことを意味しない。"
+  }
+ },
+ "outputs": {
+  "alg-confirmed-drug-heading": {
+   "patient_context": [
+    {
+     "category": "allergies",
+     "text": "合成薬Aで発疹\n本日の訪問では皮膚の異常はありませんでした。",
+     "evidence": "アレルギー：合成薬Aで発疹\n本日の訪問では皮膚の異常はありませんでした。",
+     "origin": "explicit_heading",
+     "subject": "unspecified"
+    }
+   ]
+  },
+  "alg-confirmed-food-prose": {
+   "patient_context": []
+  },
+  "alg-confirmed-two-drugs": {
+   "patient_context": [
+    {
+     "category": "allergies",
+     "text": "合成薬C（じんましん）、架空薬D（息苦しさ）",
+     "evidence": "薬剤アレルギー：合成薬C（じんましん）、架空薬D（息苦しさ）",
+     "origin": "explicit_heading",
+     "subject": "unspecified"
+    }
+   ]
+  },
+  "alg-confirmed-beside-tolerated": {
+   "patient_context": []
+  },
+  "adr-history-heading": {
+   "patient_context": [
+    {
+     "category": "adverse_events",
+     "text": "合成薬Gで眠気（昨年）",
+     "evidence": "副作用歴：合成薬Gで眠気（昨年）",
+     "origin": "explicit_heading",
+     "subject": "unspecified"
+    }
+   ]
+  },
+  "adr-history-prose": {
+   "patient_context": []
+  },
+  "adr-history-current-heading": {
+   "patient_context": [
+    {
+     "category": "adverse_events",
+     "text": "合成薬Jによる便秘",
+     "evidence": "副作用：合成薬Jによる便秘",
+     "origin": "explicit_heading",
+     "subject": "unspecified"
+    },
+    {
+     "category": "adverse_events",
+     "text": "水分を増やして経過をみる",
+     "evidence": "副作用への対応：水分を増やして経過をみる",
+     "origin": "explicit_heading",
+     "subject": "unspecified",
+     "details": [
+      {
+       "key": "response",
+       "value": "水分を増やして経過をみる",
+       "evidence": "副作用への対応：水分を増やして経過をみる"
+      }
+     ]
+    }
+   ]
+  },
+  "alg-negated-heading": {
+   "patient_context": [
+    {
+     "category": "allergies",
+     "text": "なし\n本日の体調は安定しています。",
+     "evidence": "アレルギー：なし\n本日の体調は安定しています。",
+     "origin": "explicit_heading",
+     "subject": "unspecified"
+    }
+   ]
+  },
+  "alg-negated-prose": {
+   "patient_context": []
+  },
+  "adr-negated-heading": {
+   "patient_context": [
+    {
+     "category": "adverse_events",
+     "text": "特になし",
+     "evidence": "副作用歴：特になし",
+     "origin": "explicit_heading",
+     "subject": "unspecified"
+    }
+   ]
+  },
+  "adr-negated-specific": {
+   "patient_context": []
+  },
+  "alg-negated-by-test": {
+   "patient_context": []
+  },
+  "alg-family-daughter": {
+   "patient_context": []
+  },
+  "alg-family-heading": {
+   "patient_context": [
+    {
+     "category": "allergies",
+     "text": "長女は架空果実Mで口がかゆくなる",
+     "evidence": "アレルギー：長女は架空果実Mで口がかゆくなる",
+     "origin": "explicit_heading",
+     "subject": "unspecified"
+    }
+   ]
+  },
+  "adr-family-spouse": {
+   "patient_context": []
+  },
+  "alg-other-roommate": {
+   "patient_context": []
+  },
+  "adr-other-same-surname": {
+   "patient_context": []
+  },
+  "alg-planned-test": {
+   "patient_context": []
+  },
+  "adr-conditional-instruction": {
+   "patient_context": []
+  },
+  "alg-to-be-asked": {
+   "patient_context": []
+  },
+  "adr-worry-only": {
+   "patient_context": []
+  },
+  "alg-quoted-record-denied": {
+   "patient_context": []
+  },
+  "adr-quoted-old-summary": {
+   "patient_context": []
+  },
+  "alg-context-only": {
+   "patient_context": []
+  },
+  "adr-context-only": {
+   "patient_context": []
+  },
+  "adr-suspected": {
+   "patient_context": []
+  },
+  "alg-suspected": {
+   "patient_context": []
+  },
+  "acp-done-meeting": {
+   "patient_context": []
+  },
+  "acp-done-heading": {
+   "patient_context": [
+    {
+     "category": "preferences",
+     "text": "10月に実施済み",
+     "evidence": "ACP：10月に実施済み",
+     "origin": "explicit_heading",
+     "subject": "unspecified"
+    },
+    {
+     "category": "preferences",
+     "text": "自宅で最期を迎えたい",
+     "evidence": "本人の意向：自宅で最期を迎えたい",
+     "origin": "explicit_heading",
+     "subject": "unspecified"
+    }
+   ]
+  },
+  "acp-done-wish": {
+   "patient_context": []
+  },
+  "acp-done-natural-wording": {
+   "patient_context": []
+  },
+  "acp-planned": {
+   "patient_context": []
+  },
+  "acp-not-yet": {
+   "patient_context": []
+  },
+  "acp-conditional": {
+   "patient_context": []
+  },
+  "acp-family-wish": {
+   "patient_context": []
+  },
+  "acp-other-patient": {
+   "patient_context": []
+  },
+  "alg-ctl-antiallergic-drug": {
+   "patient_context": []
+  },
+  "alg-ctl-unrelated": {
+   "patient_context": []
+  },
+  "acp-ctl-care-conference": {
+   "patient_context": []
+  }
+ }
+}
