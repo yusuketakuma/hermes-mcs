@@ -17,7 +17,8 @@ import notify_journal
 import notify_transport
 from notify_scope import (card_projects, card_row, render_row, stored_scope,
                           scope_fields, scope_matches, retired_transports,
-                          TRANSPORT_VERSIONS, SUPPORTED_TRANSPORTS)
+                          TRANSPORT_VERSIONS, SUPPORTED_TRANSPORTS,
+                          RESTORE_BEYOND_JOURNAL_HORIZON as BEYOND_HORIZON)
 
 _RESOLVE_RESULTS = ("mark_not_sent", "mark_delivered")
 _PREFLIGHT_PROOF = "local_preflight_rejected"
@@ -448,8 +449,6 @@ def card_part_resolve_plan(ledger, delivery_id, part_id, *, include_related=Fals
 
 
 # every fixed reason a producer stores on a held or unknown part; others count as 'unknown'
-# a part made unknown by a restore beyond the journal horizon (notify_reconcile)
-BEYOND_HORIZON = "restore_beyond_journal_horizon"
 PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
                      "blank_part_unrepresentable", "attachment_upload_identity_unverified", "card_revoked",
                      *_PREFLIGHT_ERRORS, _DEPENDENCY_ERROR,

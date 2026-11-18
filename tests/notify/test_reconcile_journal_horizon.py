@@ -620,6 +620,10 @@ def test_slack_unstarted_file_group_beyond_horizon_refuses_a_journal_only_proof(
     assert [(item["part_id"], item["status"]) for item in worklist["items"]] == [(group["part_id"], "plannable")]
     assert notify_recovery.part_hold_report(led)["parts"]["pending"][_HOLD] == 1
     assert notify_spool.restore_pending(str(data)) is None
+    for _ in range(2):
+        assert notify_spool.recover(led, SLACK, {})["republished"] == 0
+        assert not published_spec.exists()
+    assert notify_spool.publish_specs(led.db, notify_spool.notify_dirs(str(data)), [spec], NOW + 1) == []
     assert not published_spec.exists()
     assert led.db.execute(
         "SELECT spec_published,spec_json FROM notification_renders WHERE delivery_id=?",
@@ -649,6 +653,21 @@ def test_slack_unstarted_file_group_beyond_horizon_refuses_a_journal_only_proof(
     assert slack.client.calls == calls
 
 
+def test_slack_recovery_cannot_republish_with_another_pending_part(led, tmp_path, monkeypatch):
+    slack, render, _spec, group = _compacted_pending_group(led, tmp_path, monkeypatch)
+    data = Path(notify_spool.data_root(led))
+    _restore_from(None, backup_names.JOURNAL_HORIZON_MAX_S + 86400, data=data)
+    notify_reconcile.reconcile_after_restore(led, SLACK, now=NOW)
+    with led.db:
+        led.db.execute(
+            "INSERT INTO notification_render_parts (delivery_id,part_id,idx,kind,state,updated_at) "
+            "VALUES (?,?,?,?,?,?)", (render["delivery_id"], "body:9999", 9999, "body_part", "pending", NOW),
+        )
+    assert _rows(led, render["delivery_id"])[group["part_id"]]["error_code"] == _HOLD
+    assert notify_spool.recover(led, SLACK, {})["republished"] == 0
+    assert not Path(slack.dirs["render"], render["delivery_id"] + ".json").exists()
+
+
 def test_slack_restore_keeps_gate_closed_if_the_worker_spec_cannot_be_withdrawn(led, tmp_path, monkeypatch):
     slack, render, _spec, group = _compacted_pending_group(led, tmp_path, monkeypatch)
     data = Path(notify_spool.data_root(led))
@@ -676,7 +695,7 @@ def test_slack_restore_keeps_gate_closed_if_the_worker_spec_cannot_be_withdrawn(
 @pytest.mark.parametrize("beyond,after_restore", [(False, False), (True, True)])
 def test_slack_pending_group_outside_restore_scope_is_unflagged(
         led, tmp_path, monkeypatch, beyond, after_restore):
-    _slack, render, _spec, group = _compacted_pending_group(led, tmp_path, monkeypatch)
+    slack, render, _spec, group = _compacted_pending_group(led, tmp_path, monkeypatch)
     age = backup_names.JOURNAL_HORIZON_MAX_S + 86400 if beyond else 86400
     restored_at = render["created_at"] - 1 if after_restore else NOW
     _restore_from(None, age, restored_at=restored_at, data=Path(notify_spool.data_root(led)))
@@ -684,6 +703,11 @@ def test_slack_pending_group_outside_restore_scope_is_unflagged(
     assert not receipt["parts_held"]
     row = _rows(led, render["delivery_id"])[group["part_id"]]
     assert (row["state"], row["error_code"]) == ("pending", None)
+    published_spec = Path(slack.dirs["render"], render["delivery_id"] + ".json")
+    published_spec.unlink()
+    assert notify_spool.recover(led, SLACK, {})["republished"] == 1
+    assert published_spec.read_text() == render["spec_json"]
+    assert notify_spool.recover(led, SLACK, {})["republished"] == 0
 
 
 def test_slack_pending_group_on_superseded_render_is_unflagged(led, tmp_path, monkeypatch):
