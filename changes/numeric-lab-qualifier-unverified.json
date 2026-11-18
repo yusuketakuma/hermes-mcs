@@ -4,5 +4,5 @@
   "summary": "「Cr 1.2mg/dL以上」「Cr 1.2mg/dLではありません」のように数値の後ろに比較・否定・推量がある引用を、正確な測定値として表示しなくなりました。未確認の候補として扱います。「以内」「より」「付近」など列挙外の表現も同様です。",
   "upgrade": "追加操作は不要です。Hermes gateway の再起動後に反映されます。既存の保存済み抽出結果は再抽出まで変わりません。",
   "details": ["共通の lab_candidate が、数値・単位の直後の同じ節に閉じた肯定形（なし・です・でした・高値/低値の合図）以外が続けば根拠一致とみなさない。"],
-  "refs": ["mcs/extract/clinical/clinical_values.py", "Issue #160"]
+  "refs": ["mcs/extract/clinical/clinical_values.py", "#160"]
 }
