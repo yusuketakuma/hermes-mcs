@@ -61,7 +61,12 @@ def test_source_repair_slot_is_bound_to_raw_occurrence_across_contract_changes(r
         spent("d" * 64, occurrence)
 
 
-def test_source_normal_fail_repairs_all_units_preserving_original_chunks_and_supported_fact(runtime, source_repair):
+@pytest.mark.parametrize('profile', [None, 'sonnet-high'])
+def test_source_normal_fail_repairs_all_units_preserving_original_chunks_and_supported_fact(
+        runtime, source_repair, monkeypatch, profile):
+    if profile:
+        monkeypatch.setitem(CFG['cloud_llm'], 'provider_profiles', {'anthropic': {
+            'patient_context': profile, 'quality_repair': profile}})
     led, _, _ = runtime
     # Stop before any repair POST, retaining exactly the original extraction.
     for _ in range(20):
