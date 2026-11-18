@@ -140,6 +140,15 @@ def test_lab_candidate_when_explicit_sampling_date_and_fullwidth_units():
     ("Cr", 1.2, "mg/dL", "Cr 1.2mg/dLを目標に検査予定"),
     ("Cr", 1.2, "mg/dL", "基準範囲 Cr 1.2mg/dL"),
     ("Cr", 1.2, "mg/dL", "Cr 1.2mg/dL、Cr 1.2mg/dL"),
+    ("Cr", 1.2, "mg/dL", "Cr 1.2mg/dL以上です。"),
+    ("Cr", 1.2, "mg/dL", "Cr 1.2mg/dLではありません。"),
+    ("Cr", 1.2, "mg/dL", "Cr 1.2mg/dLではない。"),
+    ("Cr", 1.2, "mg/dL", "Cr 1.2mg/dL未満です。"),
+    ("Cr", 1.2, "mg/dL", "Cr 1.2mg/dLを超えました。"),
+    ("Cr", 1.2, "mg/dL", "Cr 1.2mg/dL疑いです。"),
+    ("Cr", 1.2, "mg/dL", "Cr>1.2mg/dLです。"),
+    ("Cr", 1.2, "mg/dL", "Cr 1.2mg/dL程度です。"),
+    ("INR", 2.1, None, "INR 2.1ではありません。"),
     ("K", 4.1, None, "Kさん4.1回"),
     ("K", 4.1, None, "K4.1回"),
     ("Cr", 1.2, None, "Cr1.2"),
@@ -328,6 +337,25 @@ def test_item_scope_group_default_is_unknown_without_explicit_patient_source():
     item = {"evidence": "Cr 0.9mg/dL"}
     assert clinical_values.patient_item_scope(item, "Cr 0.9mg/dL", default="unknown") == "unknown"
     assert clinical_values.patient_item_scope(item, "本人はCr 0.9mg/dL", default="unknown") == "patient"
+
+
+@pytest.mark.parametrize("quote", [
+    "Cr 1.2mg/dLです。",
+    "Cr 1.2mg/dL、大丈夫です",
+    "食事の工夫でCr 1.2mg/dL",
+    "Cr 1.2mg/dL (前回 0.9)",
+])
+def test_numeric_lab_quote_with_a_closed_suffix_is_supported(quote):
+    # Given: a number+unit quote ending in a closed tail (copula, clause end,
+    # a plain statement). When: confirmation is computed.
+    # Then: the quote still supports the reading.
+    assert clinical_values.lab_candidate("Cr", 1.2, "mg/dL", quote)["confirmation"] == "quote_supported"
+
+
+def test_numeric_lab_high_flag_cue_still_confirms():
+    # Given: a quote whose closed tail carries the high cue the flag asks for.
+    lab = clinical_values.lab_candidate("Cr", 1.2, "mg/dL", "Cr 1.2mg/dL高値です。", flag="high")
+    assert lab["confirmation"] == "quote_supported"
 
 
 @pytest.mark.parametrize("name,value,unit,quote,expected", [
