@@ -16,12 +16,36 @@ _OTHER_PERSON_CUE = re.compile(rf"(?:{FAMILY_PERSON}|{OTHER_PERSON})(?:さん|�
 _OTHER_TOPIC = re.compile(rf"(?:{FAMILY_PERSON}|{OTHER_PERSON})(?:本人|自身)?"
                           r"(?:の(?:話|件|こと|記録|情報|状態)|について)")
 
-_PLAN_WITHDRAWN = re.compile(
+_PLAN_PREDICATE_LEAD = re.compile(
     r"^\s*(?:(?:だった|でした|であった)\s*(?:が|けれど(?:も)?)\s*)?[、,]?\s*"
-    r"(?:では|じゃ|は|が|を|も)?\s*(?:(?:すでに|既に|本日|今日|今回)\s*)?"
-    r"(?:(?:ない|なし|無い|なくなった|なかった|ありません)"
-    r"|(?:中止|キャンセル|取消|撤回)(?:した|しました|になった|になりました|する|です|だ)?"
-    r"|(?:取り消|見送|取りやめ)(?:した|しました|った|りました|た|ました|す|る))(?=\s*(?:$|[、,]))")
+    r"(?:では|じゃ|は|が|を|も)?\s*(?:(?:すでに|既に|本日|今日|今回)\s*)?")
+_PLAN_ABSENCE = re.compile(r"ない|なし|無い|なくな|なかった|ありません|ございません")
+_PLAN_CANCEL_ACTION = re.compile(r"中止|キャンセル|取消|撤回|取り消|見送|取りやめ")
+_PLAN_CANCEL_NEGATION = re.compile(
+    r"(?:し(?:ない|なかった|ません(?:でした)?)|せず|され(?:ない|なかった|ません(?:でした)?)|"
+    r"[さら](?:ない|なかった|ず)|ない|なかった|ず|では(?:ない|ありません(?:でした)?))"
+    r"(?=\s*(?:$|[、,]|に(?:実施|行う|続行|継続)))")
+_PLAN_CANCEL_NAMED_TARGET = re.compile(r"(?:する|した|している|された)の(?:は|が)\s*(.+)")
+_MEASUREMENT_PLAN_TARGET = re.compile(r"検査|採血|測定|この予定|その予定|当該予定")
+
+
+def _plan_is_withdrawn_or_uncertain(tail, name):
+    predicate = tail[_PLAN_PREDICATE_LEAD.match(tail).end():]
+    if _PLAN_ABSENCE.match(predicate):
+        return True
+    action = _PLAN_CANCEL_ACTION.match(predicate)
+    if action is None:
+        return False
+    ending = predicate[action.end():]
+    if _PLAN_CANCEL_NEGATION.match(ending):
+        return False
+    separate_target = _PLAN_CANCEL_NAMED_TARGET.match(ending)
+    if separate_target is not None:
+        target = separate_target[1]
+        return name in target or _MEASUREMENT_PLAN_TARGET.search(target) is not None
+    # Once the original names a direct cancellation, an unclear ending
+    # cannot establish that the plan is still in force.
+    return True
 
 
 def ambiguous_patient_context(body, target):
@@ -147,7 +171,7 @@ def _candidate(record):
             verified_source = subject == "patient" and period == record["status"] and marker is not None
             if marker is not None:
                 tail = re.split(r"[。！？!?;；\n]", body[anchor + marker.end():], maxsplit=1)[0]
-                if _PLAN_WITHDRAWN.match(tail):
+                if _plan_is_withdrawn_or_uncertain(tail, name):
                     verified_source = False
                 # This is a contiguous original prefix, used only to prove the label/value relation.
                 validation_quote = evidence[:evidence.index(name) + marker.start()]

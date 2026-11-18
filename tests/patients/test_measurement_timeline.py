@@ -373,6 +373,12 @@ def test_denied_or_cancelled_lab_plan_is_not_projected(suffix, short_quote):
 @pytest.mark.parametrize("suffix, status, expected", [
     ("はすでに中止した。", "planned", "unknown"),
     ("は取りやめた。", "planned", "unknown"),
+    ("はありませんでした。", "planned", "unknown"),
+    ("は中止されました。", "planned", "unknown"),
+    ("を中止し、日程を再調整する。", "planned", "unknown"),
+    ("を中止するか確認中。", "planned", "unknown"),
+    ("は中止しませんでした。", "planned", "plan"),
+    ("、中止するのはこの検査のみ。", "planned", "unknown"),
     ("は中止せず、実施する。", "planned", "plan"),
     ("、中止するのは点滴のみ。", "planned", "plan"),
     ("なら、中止するのは点滴のみ。", "conditional", "plan"),
