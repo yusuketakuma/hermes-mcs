@@ -1,4 +1,5 @@
 """Validate source-grounded extraction fields and merge document chunks without I/O."""
+import clinical_allergies
 import clinical_scope
 import clinical_events
 import json
@@ -293,6 +294,7 @@ def validate(d: dict, body: str | None = None,
         v.events(d, out)
         v.requests(d, out)
         v.patient_context(d, out)
+        v.allergies(d, out)
         v.reply(d, out)
         v.vitals(d, out)
         v.scalars(d, out)
@@ -699,6 +701,19 @@ class Validator:
             items.append({key: clean[key] for key in
                           ("category", "text", "evidence", "subject", "details") if key in clean})
         out["patient_context"] = items
+
+    def allergies(self, d: dict, out: dict):
+        if "allergies" not in d:
+            return
+        if not isinstance(d["allergies"], list):
+            self.drop_item("allergies")
+            return
+        # X2 keeps every grounded claim as an unverified candidate; no
+        # certainty/status rewriting here — nothing becomes confirmed.
+        kept, dropped = clinical_allergies.validate_items(
+            d["allergies"], self.body, self.drops, ctx=self.ctx)
+        out["allergies"] = kept
+        self.items_dropped += dropped
 
     def meds(self, d: dict, out: dict):
         if "meds" not in d:
@@ -1184,6 +1199,7 @@ def merge(outs: list[dict]) -> dict:
     seen_requests: set = set()
     seen_context: dict = {}
     seen_meds: set = set()
+    seen_allergies: set = set()
     seen_symptoms: set = set()
     seen_labs: set = set()
     seen_events: set = set()
@@ -1195,6 +1211,11 @@ def merge(outs: list[dict]) -> dict:
             if key not in seen_meds:
                 seen_meds.add(key)
                 out.setdefault("meds", []).append(m)
+        for a in d.get("allergies") or []:
+            key = json.dumps(a, sort_keys=True, ensure_ascii=False)
+            if key not in seen_allergies:
+                seen_allergies.add(key)
+                out.setdefault("allergies", []).append(a)
         for s in d.get("symptoms") or []:
             key = json.dumps(s, sort_keys=True, ensure_ascii=False)
             if key not in seen_symptoms:

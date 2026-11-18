@@ -176,6 +176,7 @@ _LOADED_SOURCE_PATHS.update({
     'patient_read_scope': str(Path(__file__).resolve().parents[2] / 'core' / 'patient_read_scope.py'),
     'attachment_feedback': str(Path(__file__).resolve().parents[1] / 'attachment_feedback.py'),
     'attachment_observation_seeds': str(Path(__file__).resolve().parents[1] / 'clinical' / 'attachment_observation_seeds.py'),
+    'clinical_allergies': str(Path(__file__).resolve().parents[1] / 'clinical' / 'clinical_allergies.py'),
     'measurement_sources': str(Path(__file__).resolve().parents[2] / 'patients' / 'measurement_sources.py'),
     'measurement_timeline': str(Path(__file__).resolve().parents[2] / 'patients' / 'measurement_timeline.py'),
     'ocr_model_contract': str(Path(__file__).resolve().parents[1] / 'ocr_model_contract.py'),
@@ -246,7 +247,7 @@ _HOLD_SOURCES = frozenset({
     "inference_version", "extract", "extract_schema", "extract_validation", "extract_quality",
     "extract_llm_engine", "extract_llm_prompts", "extraction_medications", "drug_mentions",
     "patient_state_context", "patient_context", "clinical_values", "clinical_urgency",
-    "clinical_scope", "clinical_events", "clinical_chunking", "intervention_schedule",
+    "clinical_scope", "clinical_events", "clinical_chunking", "clinical_allergies", "intervention_schedule",
     "semantic_quantities", "semantic_facts"})
 
 

@@ -493,7 +493,7 @@ def test_a_new_import_in_the_deciding_code_must_be_classified():
     assert unclassified == {}
 
 
-@pytest.mark.parametrize("source_label", ["clinical_urgency", "extract_schema", "extract_validation", "extract_quality", "clinical_scope", "patient_context", "clinical_values", "clinical_chunking", "clinical_events", "inference_version", "extract", "extract_llm_engine", "extract_llm_prompts", "extraction_medications", "drug_mentions", "patient_state_context", "intervention_schedule", "semantic_quantities", "semantic_facts"])
+@pytest.mark.parametrize("source_label", ["clinical_urgency", "extract_schema", "extract_validation", "extract_quality", "clinical_scope", "patient_context", "clinical_values", "clinical_chunking", "clinical_events", "clinical_allergies", "inference_version", "extract", "extract_llm_engine", "extract_llm_prompts", "extraction_medications", "drug_mentions", "patient_state_context", "intervention_schedule", "semantic_quantities", "semantic_facts"])
 def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(tmp_path, monkeypatch, source_label):
     import semantic_candidate
     db, aid, row = seed(tmp_path)
