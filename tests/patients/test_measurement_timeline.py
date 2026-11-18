@@ -368,3 +368,21 @@ def test_denied_or_cancelled_lab_plan_is_not_projected(suffix, short_quote):
     a.update(status="planned", source_body=body, evidence=evidence, evidence_span=[0, len(evidence)])
     item = measurement_timeline.project_measurements([a], source_complete=True)["items"][0]
     assert (item["state"], item["value"]) == ("unknown", None)
+
+
+@pytest.mark.parametrize("suffix, status, expected", [
+    ("はすでに中止した。", "planned", "unknown"),
+    ("は取りやめた。", "planned", "unknown"),
+    ("は中止せず、実施する。", "planned", "plan"),
+    ("、中止するのは点滴のみ。", "planned", "plan"),
+    ("なら、中止するのは点滴のみ。", "conditional", "plan"),
+])
+@pytest.mark.parametrize("short_quote", [False, True])
+def test_lab_plan_checks_its_own_affirmative_predicate(suffix, status, expected, short_quote):
+    a = _record(1, "2026-10-03", "2026-10-01T09:00:00+09:00", "1.0")
+    plan = "本人は2026-10-03に空腹時採血 Cr 1.0 mg/dLの検査予定"
+    body = plan + suffix
+    evidence = plan if short_quote else body
+    a.update(status=status, source_body=body, evidence=evidence, evidence_span=[0, len(evidence)])
+    item = measurement_timeline.project_measurements([a], source_complete=True)["items"][0]
+    assert (item["state"], item["value"]) == (expected, "1.0" if expected == "plan" else None)

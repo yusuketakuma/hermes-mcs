@@ -434,6 +434,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
     allowed_units = _LAB_ITEM_UNITS.get(analyte, _LAB_UNITS)
     readings = []
     source_map = None
+    ambiguous = False
     for match in re.finditer(pattern, quote):
         tail = quote[match.end():]
         if number is not None:
@@ -458,8 +459,10 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                         repeats = any(
                             item[1] in names and evidence[ends[item.start() - 1]:starts[item.start()]].isspace()
                             for item in _LAB_NEXT_NUMBER.finditer(quote, unit_end, row_end))
-                        if not repeats:
-                            readings.append((match, unit_end))
+                        if repeats:
+                            ambiguous = True
+                            break
+                        readings.append((match, unit_end))
         elif tail.startswith(fold_surface(raw_value)) and raw_value:
             remainder = tail[len(fold_surface(raw_value)):]
             result_unit = re.match(_LAB_QUOTED_UNIT, remainder)
@@ -469,7 +472,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
             complete = re.match(r"(?:デス|デシタ)?(?:[。、,;；]|$)", suffix)
             if complete and (unit_key is None or (result_unit and result_unit[0] == unit_key)):
                 readings.append((match, len(quote)))
-    supported = (len(readings) == 1 and not unverified
+    supported = (len(readings) == 1 and not ambiguous and not unverified
                  and (unit_key is None or unit_key in allowed_units)
                  and (number is not None or not any(c.isdigit() for c in raw_value)))
     if supported and number is not None:
