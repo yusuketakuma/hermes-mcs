@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+from datetime import date
 
 from mcs_util import valid_text
 from mcs_util import positive, valid_hash
@@ -340,6 +341,55 @@ def _v_update(req: dict, base: set) -> str | None:
     return None
 
 
+def _v_previsit(req: dict, base: set) -> str | None:
+    command = req.get("cmd")
+    if command == "ops.previsit_assignment_set":
+        allowed = base | {"staff_id", "transport", "account_scope", "recipient_id",
+                          "expected_revision", "reason"}
+        if req.keys() - allowed:
+            return "unknown_field"
+        if (not isinstance(req.get("staff_id"), str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}", req["staff_id"])):
+            return "bad_staff_id"
+        if req.get("transport") not in ("lineworks", "slack", "discord"):
+            return "bad_transport"
+        recipient = req.get("recipient_id")
+        if (not isinstance(recipient, str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._@+-]{0,63}", recipient)):
+            return "bad_recipient_id"
+        scope = req.get("account_scope")
+        scope_fields = {"profile", "application_id", "team_id", "route_epoch"}
+        if not isinstance(scope, dict) or scope.keys() != scope_fields:
+            return "bad_account_scope"
+        if any(not isinstance(scope.get(key), str)
+               or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}", scope[key])
+               for key in ("profile", "application_id", "team_id")):
+            return "bad_account_scope"
+        if type(scope.get("route_epoch")) is not int or scope["route_epoch"] < 1:
+            return "bad_account_scope"
+    elif command == "ops.previsit_assignment_revoke":
+        allowed = base | {"expected_revision", "reason"}
+        if req.keys() - allowed:
+            return "unknown_field"
+    elif command == "ops.previsit_visit_date_set":
+        allowed = base | {"visit_date", "expected_revision", "reason"}
+        if req.keys() - allowed:
+            return "unknown_field"
+        try:
+            if (not isinstance(req.get("visit_date"), str)
+                    or date.fromisoformat(req["visit_date"]).isoformat() != req["visit_date"]):
+                return "bad_visit_date"
+        except ValueError:
+            return "bad_visit_date"
+    else:
+        return "unknown_ops_cmd"
+    if type(req.get("expected_revision")) is not int or req["expected_revision"] < 0:
+        return "bad_expected_revision"
+    if not valid_text(req.get("reason"), 2000):
+        return "bad_reason"
+    return None
+
+
 def _v_local_rebuild(req, base):
     from extract_llm_local_rebuild import validate_operation
     return validate_operation(req, base)
@@ -380,6 +430,9 @@ _OPS_VALIDATORS = {
     "ops.restore_approve": _v_restore_approve,
     "ops.update_apply": _v_update,
     "ops.update_rollback": _v_update,
+    "ops.previsit_assignment_set": _v_previsit,
+    "ops.previsit_assignment_revoke": _v_previsit,
+    "ops.previsit_visit_date_set": _v_previsit,
 }
 
 
