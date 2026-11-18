@@ -1105,7 +1105,10 @@ def quality_improves(candidate, prior, body, hints=None):
     for key in _FACT_LIST_FIELDS:
         for item in candidate.get(key) or []:
             if isinstance(item, dict) and not facts({key: [item]}, split_conditions=True) <= protected:
-                if item.get("unverified") and not (key == 'event_records' and verified_gain
+                # Every allergy candidate is unverified by contract — grounding is
+                # already enforced by the quote check below, so the blanket
+                # unverified rejection would ban them from any repair.
+                if item.get("unverified") and key != 'allergies' and not (key == 'event_records' and verified_gain
                         and clinical_events.candidate_span(item, body) is not None):
                     return False
                 if locate_quote_span(body, item.get("evidence")) is None:

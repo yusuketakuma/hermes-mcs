@@ -43,6 +43,17 @@ def test_a_dropped_negated_allergy_reports_protected_loss(monkeypatch):
     assert not quality.improves({"allergies": []}, prior)
 
 
+def test_a_repair_may_add_a_grounded_allergy_candidate():
+    # Allergy candidates are unverified by contract; a repair that adds a
+    # source-located one is an improvement, not a rejection.
+    prior = {"symptoms": [{"text": "咳", "subject": "patient", "negated": False,
+                           "evidence": "発疹が出たことがあります。"}]}
+    candidate = {**prior, "allergies": [copy.deepcopy(ALLERGY_F)]}
+    assert quality.quality_improves(candidate, prior, BODY)
+    bad = {**prior, "allergies": [{**copy.deepcopy(ALLERGY_F), "evidence": "どこにもない引用"}]}
+    assert not quality.quality_improves(bad, prior, BODY)
+
+
 def test_a_kept_negated_allergy_reports_no_loss(monkeypatch):
     prior = {"allergies": [{**ALLERGY_E, "negated": True}]}
     candidate = {"allergies": [copy.deepcopy(prior["allergies"][0])]}

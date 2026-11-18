@@ -55,5 +55,11 @@ def test_merge_dedupes_allergy_candidates_across_chunks():
     first = extract_validation.validate({"allergies": [_claim()]}, BODY)
     second = extract_validation.validate({"allergies": [_claim(), _claim(reaction="発疹")]}, BODY)
     merged = extract_validation.merge([first, second])
-    assert merged["allergies"] == [{**_claim(), "unverified": True},
+    assert merged["allergies"] == [{**_claim(reaction="発疹"), "unverified": True}]
+    # A written reaction fills an empty copy in either chunk order.
+    assert extract_validation.merge([second, first])["allergies"] == merged["allergies"]
+    # Distinct written reactions stay separate candidates.
+    other = extract_validation.validate({"allergies": [_claim(reaction="頭痛")]}, BODY)
+    merged = extract_validation.merge([other, second])
+    assert merged["allergies"] == [{**_claim(reaction="頭痛"), "unverified": True},
                                    {**_claim(reaction="発疹"), "unverified": True}]

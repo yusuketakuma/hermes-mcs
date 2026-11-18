@@ -1199,7 +1199,6 @@ def merge(outs: list[dict]) -> dict:
     seen_requests: set = set()
     seen_context: dict = {}
     seen_meds: set = set()
-    seen_allergies: set = set()
     seen_symptoms: set = set()
     seen_labs: set = set()
     seen_events: set = set()
@@ -1212,10 +1211,15 @@ def merge(outs: list[dict]) -> dict:
                 seen_meds.add(key)
                 out.setdefault("meds", []).append(m)
         for a in d.get("allergies") or []:
-            key = json.dumps(a, sort_keys=True, ensure_ascii=False)
-            if key not in seen_allergies:
-                seen_allergies.add(key)
-                out.setdefault("allergies", []).append(a)
+            # Same contract as validate_items' _merge: one assertion whose
+            # axes match counts once; a written reaction fills an empty one.
+            for index, prior in enumerate(out.setdefault("allergies", [])):
+                if clinical_allergies.same_assertion(prior, a):
+                    if not prior.get("reaction") and a.get("reaction"):
+                        out["allergies"][index] = a
+                    break
+            else:
+                out["allergies"].append(a)
         for s in d.get("symptoms") or []:
             key = json.dumps(s, sort_keys=True, ensure_ascii=False)
             if key not in seen_symptoms:
