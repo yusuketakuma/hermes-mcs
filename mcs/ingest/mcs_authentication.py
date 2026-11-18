@@ -397,7 +397,9 @@ class MCSAuthenticationMixin:
         return 0 <= time.time() - at < backoff, state
 
     def _login_rejected(self, state: dict) -> None:
-        """Record one submitted login that never produced a session."""
+        """Record one submitted login that never produced a verified
+        session — a proven rejection or a post-submit check that could
+        not confirm (送信後確認不能)."""
         failures = state.get("failures")
         state = dict(state, failures=(failures + 1 if type(failures) is int
                                       and failures >= 0 else 1),
