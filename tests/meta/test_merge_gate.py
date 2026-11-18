@@ -25,7 +25,6 @@ class GateAPI:
         self.failures = set()
         self.gets = {}
         self.lists = {ROOT + "pulls?state=open&base=main": prs}
-        self.lists[ROOT + f"commits/{'1' * 40}/pulls"] = [p for p in prs if p["number"] == 1]
         for p in prs:
             number, sha = p["number"], p["head"]["sha"]
             self.gets[ROOT + f"pulls/{number}"] = p
@@ -68,7 +67,8 @@ def publish(api, **kwargs):
 def test_every_wake_publishes_all_current_heads_but_only_counts_event_failure(run_workflow, numbers):
     api = GateAPI([pr(n) for n in numbers])
     result = publish(api, event="workflow_run", run_workflow=run_workflow,
-                     run_sha="1" * 40, run_conclusion="failure")
+                     run_sha="1" * 40, run_conclusion="failure",
+                     source_prs=[{"number": 1}] if numbers else [])
     assert result == {"published": numbers, "errors": []}
     statuses = [(path, body) for method, path, body in api.calls if method == "POST" and "/statuses/" in path]
     assert [path for path, _ in statuses] == [ROOT + f"statuses/{str(n) * 40}" for n in numbers]
@@ -120,3 +120,42 @@ def test_cli_returns_failure_after_attempting_remaining_prs(monkeypatch):
         monkeypatch.setenv(name, value)
     assert merge_gate.main() == 1
     assert any(method == "POST" and path == ROOT + f"statuses/{'2' * 40}" for method, path, _ in api.calls)
+
+
+def test_source_ci_attempts_include_drafts_without_counting_other_prs_sharing_the_head():
+    source, unrelated = pr(1, draft=True), pr(2)
+    unrelated["head"]["sha"] = source["head"]["sha"]
+    api = GateAPI([source, unrelated])
+    result = publish(api, event="workflow_run", run_workflow="ci", run_conclusion="failure",
+                     run_sha=source["head"]["sha"], source_prs=[{"number": 1}, {"number": 1}])
+    assert result == {"published": [1, 2], "errors": []}
+    labels = [path for method, path, _ in api.calls if method == "POST" and path.endswith("/labels")]
+    assert labels == [ROOT + "issues/1/labels"]
+    assert not any("/pulls" in path and "/commits/" in path for _, path, _ in api.calls)
+
+
+def test_gate_status_error_does_not_skip_source_ci_attempt_counting():
+    api = GateAPI([pr(1, draft=True), pr(2)])
+    api.failures.add(("POST", ROOT + f"statuses/{'1' * 40}"))
+    result = publish(api, event="workflow_run", run_workflow="ci", run_conclusion="failure",
+                     run_sha="1" * 40, source_prs=[{"number": 1}])
+    assert result["published"] == [2]
+    assert len(result["errors"]) == 1
+    assert any(method == "POST" and path == ROOT + "issues/1/labels" for method, path, _ in api.calls)
+
+
+@pytest.mark.parametrize("overrides", [
+    {"event": "workflow_dispatch"},
+    {"run_workflow": "PR review signal"},
+    {"run_conclusion": "success"},
+    {"control_attempt": 2},
+    {"source_prs": []},
+    {"run_sha": "9" * 40},
+])
+def test_non_source_events_and_stale_heads_do_not_count_attempts(overrides):
+    api = GateAPI([pr(1)])
+    options = dict(event="workflow_run", run_workflow="ci", run_conclusion="failure",
+                   run_sha="1" * 40, source_prs=[{"number": 1}])
+    options.update(overrides)
+    assert publish(api, **options) == {"published": [1], "errors": []}
+    assert not any("/issues/" in path for _, path, _ in api.calls)

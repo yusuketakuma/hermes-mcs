@@ -162,13 +162,14 @@ fork、別の base、閉じた PR、draft は対象外です。
   GitHub の `mergeable_state` も `clean` でなければ merge しません。branch protection を迂回したり、必須チェックを変更したりしません。
 - merge 直前に PR の head・review・check evidence を読み直し、`GITHUB_TOKEN` だけで REST merge を要求します。
   head SHA を楽観ロックに指定し、`merge_method=merge` の merge commit でグループの履歴を保持します。squash・rebase・admin bypass・PAT は使いません。
-  将来の成功を待つ `--auto` 予約は作りません。残っていた予約は、既定ブランチの controller が新しい push を含む再評価時に撤回します。
+  将来の成功を待つ `--auto` 予約は作りません。残っていた予約は、既定ブランチの controller が新しい push を含む再評価時、どの `merge-gate` を発行するよりも前に全対象から撤回します。fork・下書きの残存予約も含め、撤回を確認できなければその wake ではゲートを発行しません。
 
 `pull_request_target` の PR 受付、CI 完了、review の提出・編集・取り消しで再評価します。review は
 `pr-review-signal.yml` の読み取り専用・checkout なしの no-op を完了させ、既定ブランチの `agent-control.yml` に `workflow_run` で伝えます。
 controller は常に既定ブランチのコードを使い、PR コードを実行しません。自動マージ判定に cron・日次巡回・digest はありません。
-1つの非キャンセル concurrency group に直列化し、review signal を含む各 wake で全対象 PR の現在 head の `merge-gate` を再発行してから merge を評価します。
-最後の1本だけの出力には依存しません。Issue の試行回数の加算は、そのイベント自身の CI run と現在 head が一致する PR だけが対象です。
+1つの非キャンセル concurrency group に直列化し、review signal を含む各 wake で既定ブランチ向けの全 open PR の現在 head の `merge-gate` を再発行してから merge を評価します。ゲートの発行には fork・下書きも含めますが、自動 merge の対象にはしません。
+最後の1本だけの出力には依存しません。全 PR の走査は判定だけを行い、Issue の試行回数は、失敗した CI run の `pull_requests` に記録された PR の現在 head が一致するときだけ、下書きも含め別に加算します。
+PR ごとの取得・ゲート発行に失敗しても残りの PR と controller の再評価を続け、最後に失敗した判定があったことをジョブ結果へ反映します。
 
 承認の追加・変更では CI を dispatch も再実行もしません。CI と人の承認は並行して待ちます。
 新しい head では古い承認と成功を使わず、新しい head の CI と新しい人承認が必要です。

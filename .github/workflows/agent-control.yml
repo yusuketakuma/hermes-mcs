@@ -79,8 +79,7 @@ jobs:
           RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           RUN_WORKFLOW: ${{ github.event.workflow_run.name }}
           CONTROL_ATTEMPT: ${{ github.run_attempt }}
-          PR_FROM_EVENT: ${{ github.event.pull_request.number }}
-          PR_INPUT: ${{ inputs.pr_number }}
+          RUN_PRS: ${{ toJSON(github.event.workflow_run.pull_requests) }}
           AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: python3 ci/merge_gate.py

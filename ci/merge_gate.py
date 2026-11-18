@@ -7,10 +7,10 @@ import sys
 from urllib.parse import quote
 
 if __package__:
-    from .agent_control import decide_gate, next_attempt
+    from .agent_control import decide_gate, is_agent_branch, linked_issues, next_attempt, same_repository
     from .auto_merge import GitHubAPI, GitHubAPIError, _repo_path, default_branch_pr
 else:
-    from agent_control import decide_gate, next_attempt
+    from agent_control import decide_gate, is_agent_branch, linked_issues, next_attempt, same_repository
     from auto_merge import GitHubAPI, GitHubAPIError, _repo_path, default_branch_pr
 
 
@@ -32,21 +32,13 @@ def _apply_attempts(api, repo, number, attempts):
 
 
 def publish_gates(api, repo, default_branch, *, automation_enabled, event="",
-                  run_workflow="", run_sha="", run_conclusion="", control_attempt=1):
+                  run_workflow="", run_sha="", run_conclusion="", control_attempt=1, source_prs=()):
     result = {"published": [], "errors": []}
-    event_prs = set()
-    count_failure = (event == "workflow_run" and run_workflow == "ci"
-                     and run_conclusion == "failure" and control_attempt == 1)
-    if count_failure:
-        try:
-            event_prs = {pr["number"] for pr in api.list(_repo_path(repo, f"commits/{run_sha}/pulls"))}
-        except Exception as exc:
-            result["errors"].append({"source": "CI PR discovery", "reason": str(exc)})
     try:
         pulls = api.list(_repo_path(repo, f"pulls?state=open&base={quote(default_branch, safe='')}"))
     except Exception as exc:
         result["errors"].append({"source": "PR discovery", "reason": str(exc)})
-        return result
+        pulls = []
     for listed in pulls:
         number = listed.get("number")
         try:
@@ -57,15 +49,25 @@ def publish_gates(api, repo, default_branch, *, automation_enabled, event="",
             checks = api.list(_repo_path(repo, f"commits/{sha}/check-runs"), key="check_runs")
             files = api.list(_repo_path(repo, f"pulls/{number}/files"))
             behind = api.get(_repo_path(repo, f"compare/{quote(default_branch, safe='')}...{sha}"))["behind_by"]
-            conclusion = "failure" if number in event_prs and sha == run_sha else None
-            plan = decide_gate(pr, checks, files, behind, automation_enabled, conclusion)
+            plan = decide_gate(pr, checks, files, behind, automation_enabled)
             api.post(_repo_path(repo, f"statuses/{sha}"), {
                 "context": "merge-gate", "state": plan["state"], "description": plan["description"],
             })
             result["published"].append(number)
-            _apply_attempts(api, repo, number, plan["attempts"])
         except Exception as exc:
             result["errors"].append({"pr": number, "reason": str(exc)})
+    if (event == "workflow_run" and run_workflow == "ci"
+            and run_conclusion == "failure" and control_attempt == 1):
+        for number in sorted({source["number"] for source in source_prs}):
+            try:
+                pr = api.get(_repo_path(repo, f"pulls/{number}"))
+                if (not default_branch_pr(pr, repo, default_branch) or pr["head"]["sha"] != run_sha
+                        or not same_repository(pr) or not is_agent_branch(pr["head"]["ref"])):
+                    continue
+                attempts = [{"issue": issue} for issue in linked_issues(pr.get("body"))]
+                _apply_attempts(api, repo, number, attempts)
+            except Exception as exc:
+                result["errors"].append({"pr": number, "source": "CI attempts", "reason": str(exc)})
     return result
 
 
@@ -77,6 +79,7 @@ def main() -> int:
         event=os.environ.get("EVENT", ""), run_workflow=os.environ.get("RUN_WORKFLOW", ""),
         run_sha=os.environ.get("RUN_SHA", ""), run_conclusion=os.environ.get("RUN_CONCLUSION", ""),
         control_attempt=int(os.environ.get("CONTROL_ATTEMPT", "1")),
+        source_prs=json.loads(os.environ.get("RUN_PRS", "null")) or [],
     )
     print(json.dumps(result, ensure_ascii=False))
     for error in result["errors"]:
