@@ -15,11 +15,10 @@ evidence or the generation is explicitly non-PASS — no silent omission.
 """
 from __future__ import annotations
 
-import hashlib
 import re
 import unicodedata
 
-from mcs_util import payload_hash
+from mcs_util import payload_hash, text_sha256 as _text_sha256
 
 CONTRACT_VERSION = "semantic-facts/v2"
 
@@ -97,7 +96,7 @@ def _fail(reason: str) -> None:
 
 
 def text_sha256(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return _text_sha256(text)
 
 
 def _id_value(value, field: str) -> str:
