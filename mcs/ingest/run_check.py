@@ -38,6 +38,8 @@ import json
 import math
 import os
 import sqlite3
+from pathlib import Path
+from types import SimpleNamespace
 import sys
 import time
 from datetime import datetime, timezone
@@ -406,13 +408,38 @@ def stage_derive(ledger, result, deadline, cfg=None,
 
 # ---------- main ----------
 
-def _consent_only(lock_fd) -> int:
+def _consent_store():
+    """The handle the consent drain writes its receipt through. A held
+    rollback runs the OLD tree against the NEWER-schema DB, which Ledger
+    refuses (preflight) and which must not be migrated while the loss
+    report stands — so an existing DB is opened bare: the receipt only
+    needs command_receipts (apply_command checks its schema floor)."""
+    try:
+        con = sqlite3.connect(Path(DB).resolve().as_uri() + "?mode=rw",
+                              uri=True, timeout=30)
+    except sqlite3.OperationalError:
+        if os.path.lexists(DB):
+            raise
+        return Ledger(DB)   # no DB yet: nothing to protect from migration
+    try:
+        con.row_factory = sqlite3.Row
+        for pragma in ("foreign_keys=ON", "busy_timeout=30000", "fullfsync=ON"):
+            con.execute("PRAGMA " + pragma)
+    except BaseException:
+        con.close()
+        raise
+    # shortcut: assumes command_receipts keeps its 7 columns in newer schemas;
+    # if that table ever changes, bind consent to a DB-external receipt.
+    return SimpleNamespace(db=con, close=con.close)
+
+
+def _consent_only(lock_fd, commands_only=False) -> int:
     """Tick while a schema-bump DB replace awaits human consent: drain
     ONLY the ops.restore_approve channel (drain_commands defers every
     other file while the marker stands). No adapter, no ingest, no
     reconcile — nothing may write a table the loss report counts."""
     try:
-        ledger = Ledger(DB)
+        ledger = _consent_store()
     except Exception:
         os.close(lock_fd)
         print(json.dumps({"ok": False, "error": "ledger_init_failed"}))
@@ -429,7 +456,7 @@ def _consent_only(lock_fd) -> int:
         import notify_spool
         marker = notify_spool.restore_awaiting_consent(
             os.path.join(HOME, "data"))
-        if marker and marker.get("backup_path"):
+        if marker and marker.get("backup_path") and (result["commands"] or not commands_only):
             try:
                 import restore_evidence
                 report = restore_evidence.create_loss_report(
@@ -1431,7 +1458,7 @@ def _main() -> int:
         os.close(lock_fd)
         raise
     if consent_only:
-        return _consent_only(lock_fd)
+        return _consent_only(lock_fd, args.commands_only)
     if not code_current:
         os.close(lock_fd)
         print(json.dumps({"ok": False, "error": "code_changed_or_update_pending"}))
@@ -1443,15 +1470,15 @@ def _main() -> int:
         os.close(lock_fd)
         print(json.dumps({"ok": False, "error": "run_deadline_exceeded"}))
         return 3
-    if args.commands_only:
-        return _commands_only(lock_fd, deadline)
     import notify_spool
     if notify_spool.restore_awaiting_consent(
             os.path.join(HOME, "data")) is not None:
         # schema-bump DB replace held for human consent — ingest,
         # derive, reconcile and sends all stay frozen so the approved
         # loss report cannot drift; only the consent command drains
-        return _consent_only(lock_fd)
+        return _consent_only(lock_fd, args.commands_only)
+    if args.commands_only:
+        return _commands_only(lock_fd, deadline)
     adapter = MCSAdapter(token_cache=CACHE)
     adapter.set_deadline(deadline)
     # this process's own interruption evidence; None never blocks the run

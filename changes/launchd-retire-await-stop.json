@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "不要になった常駐処理の停止確認が即時の1回だけで、処理中の旧workerがあると services が失敗する問題を修正",
+  "summary": "Hermes経由から独立モードへ切り替えたときなどに、services が不要になった常駐処理（抽出worker・local.mcs-cmd・local.mcs-int など）を止める際、停止を1回だけ確認していました。抽出の途中で終了処理に時間がかかる worker があると「稼働中または停止を確認できない」と判定され、services が終了コード1で止まり、独立hostも起動しませんでした。停止の指示後、launchd に処理が残っている間は最大30秒待ち、消えたことを確認してから設定を削除します。",
+  "upgrade": "追加操作は不要です。次に services（install.sh・更新の後処理を含む）を実行したときに適用されます。30秒待っても停止を確認できない場合や、状態を確認できない場合は、従来どおり設定を残して新しい処理を起動せずに止まります。その場合は処理の終了を待って mcs_setup.py services を再実行してください。",
+  "details": [
+    "agent_absent は bootout の後、launchctl print が0（まだ登録あり）を返す間は0.5秒おきに最大60回確認し、113（not found）で停止と判定する。0と113以外（時間切れ・起動不可など）は従来どおり直ちに停止未確認とする。",
+    "retire_agents（独立モードの旧agent退役・Hermesモードの不要agent退役・SDCの退役）と retire_previous_runtime（実行方法の切替）が同じ確認を使う。"
+  ],
+  "refs": ["mcs/ops/services/service_management.py", "tests/ops/test_setup_retirement_verification.py"]
+}
