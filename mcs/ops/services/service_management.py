@@ -26,6 +26,7 @@ import runtime_inspection
 import service_contract as contract
 import owned_process
 import update_launch
+import writer_lock
 import run_log_install
 from mcs_config import recovery_python_problem, validate_notify
 import scheduled_jobs
@@ -409,9 +410,36 @@ def agent_loaded(label: str, *, paths: ServicePaths, deadline=None) -> bool | No
     return r.returncode == 0
 
 def agent_absent(label: str, *, paths: ServicePaths) -> bool:
-    """True only when launchd reports `label` not found (113): any other
-    probe failure is not proof that a booted-out agent stopped."""
-    return lifecycle_io.run_bounded(['launchctl', 'print', f'gui/{paths.uid}/{label}']).returncode == 113
+    """After a bootout: True only once launchd reports `label` not found (113).
+    A job still listed (0) may be draining, so it is polled for STOP_POLLS x 0.5 s;
+    any other probe failure is not proof that a booted-out agent stopped."""
+    for _ in range(STOP_POLLS):
+        rc = lifecycle_io.run_bounded(['launchctl', 'print', f'gui/{paths.uid}/{label}'], timeout=10).returncode
+        if rc != 0:
+            return rc == 113
+        time.sleep(0.5)
+    return False
+
+# Deferred reload: launchd can still be tearing the job down (the standalone host
+# drains for minutes) after bootout returns, so wait for "not found" (113) before a
+# bootstrap that would otherwise fail against the dying job. 750 x 5 s outlasts the
+# host's ExitTimeOut (3660 s).
+AWAIT_RELOAD_SCRIPT = ('i=0; while launchctl print "$2" >/dev/null 2>&1 || [ $? -ne 113 ]; do '
+                       'i=$((i+1)); [ "$i" -ge 750 ] && exit 1; sleep 5; done; '
+                       'i=0; until launchctl bootstrap "$3" "$4"; do '
+                       'i=$((i+1)); [ "$i" -ge 3 ] && exit 1; sleep 1; done')
+RELOAD_SCRIPT = 'while kill -0 "$1" 2>/dev/null; do sleep 5; done; launchctl bootout "$2"; ' + AWAIT_RELOAD_SCRIPT
+STOP_POLLS = 60   # x0.5 s after bootout before a stop counts as unconfirmed
+
+
+def _defer_reload(script: str, label: str, dst: str, *, paths: ServicePaths) -> None:
+    """Hand the reload of `label` to a detached waiter that outlives this run."""
+    uid = paths.uid
+    env = update_launch.without_job_identity(os.environ)
+    waiter = os.environ.get('MCS_JOB_PID') or str(os.getpid())
+    helper = run_log_install.helper_path(paths.root, paths.recovery_dir, require_installed=True)
+    subprocess.Popen([sys.executable, '-I', helper, 'exec', '--data-dir', os.path.join(paths.root, 'data'), '--', '/bin/sh', '-c', script, 'mcs-reload', waiter, f'gui/{uid}/{label}', f'gui/{uid}', dst], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, close_fds=True, start_new_session=True)
+
 
 def agent_reconcile(label: str, dst: str, note, dry: bool, *, paths: ServicePaths) -> bool:
     """Bootout+bootstrap when the plist changed; bootstrap when absent.
@@ -420,17 +448,18 @@ def agent_reconcile(label: str, dst: str, note, dry: bool, *, paths: ServicePath
     if os.environ.get('XPC_SERVICE_NAME') == label:
         note(f'常駐処理{label}: この設定処理の終了後に読み込み直します')
         if not dry:
-            target = f'gui/{uid}/{label}'
-            script = 'while kill -0 "$1" 2>/dev/null; do sleep 5; done; launchctl bootout "$2"; launchctl bootstrap "$3" "$4"'
-            env = update_launch.without_job_identity(os.environ)
-            waiter = os.environ.get('MCS_JOB_PID') or str(os.getpid())
-            helper = run_log_install.helper_path(paths.root, paths.recovery_dir, require_installed=True)
-            subprocess.Popen([sys.executable, '-I', helper, 'exec', '--data-dir', os.path.join(paths.root, 'data'), '--', '/bin/sh', '-c', script, 'mcs-reload', waiter, target, f'gui/{uid}', dst], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, close_fds=True, start_new_session=True)
+            _defer_reload(RELOAD_SCRIPT, label, dst, paths=paths)
         return True
     if agent_loaded(label, paths=paths):
         note(f'常駐処理{label}: 設定が変わったため読み込み直します')
         if not dry:
             lifecycle_io.run_bounded(['launchctl', 'bootout', f'gui/{uid}/{label}'])
+            if not agent_absent(label, paths=paths):
+                # A print answering 0 for the dying job is not a new load, and a later
+                # run sees the written plist as current: the reload must not wait for one.
+                note(f'  常駐処理{label}: 以前の処理が終了処理中のため、終了後に自動で読み込み直します')
+                _defer_reload(AWAIT_RELOAD_SCRIPT, label, dst, paths=paths)
+                return True
     else:
         note(f'常駐処理{label}: 起動します')
     if dry:
@@ -822,6 +851,14 @@ def retire_previous_runtime(prev, desired_mode, note, dry, *, paths: ServicePath
     if dry:
         note('以前のHermes経由のMCS処理を停止します: ' + ', '.join(sorted(labels | scripts)))
         return 0
+    # Observe the cron side before stopping anything: an unknown listing must
+    # leave the previous runtime whole, not half retired with nothing started.
+    if scripts:
+        exe = mcs_util.hermes_exe(mcs_util.load_config())
+        entries = inspect_cron(exe)
+        if entries is None:
+            note('以前のHermes定期処理の状態を確認できないため、以前の処理を停止せず、新しい処理も起動していません')
+            return 1
     for label in sorted(labels):
         lifecycle_io.run_bounded(['launchctl', 'bootout', f'gui/{paths.uid}/{label}'])
         if not agent_absent(label, paths=paths):
@@ -830,11 +867,6 @@ def retire_previous_runtime(prev, desired_mode, note, dry, *, paths: ServicePath
         with suppress(FileNotFoundError):
             os.unlink(os.path.join(paths.agents_dir, label + '.plist'))
     if scripts:
-        exe = mcs_util.hermes_exe(mcs_util.load_config())
-        entries = inspect_cron(exe)
-        if entries is None:
-            note('以前のHermes定期処理の状態を確認できないため、新しい処理は起動していません')
-            return 1
         for entry in entries:
             if entry.get('script') in scripts:
                 if lifecycle_io.run_bounded([exe, 'cron', 'remove', entry['id']]).returncode:
@@ -866,7 +898,11 @@ def sync_standalone_service(manifest, note, dry, *, paths: ServicePaths):
             if lifecycle_io.run_bounded(['systemctl', '--user', 'daemon-reload']).returncode:
                 return 1
         reload = paths.platform == 'darwin' and running and changed and (current is not None)
-        if running and (not reload):
+        if running and (not reload) and os.path.lexists(os.path.join(paths.root, 'data', writer_lock.UPDATE_MARKER_NAME)):
+            # The host cannot restart while the updater (often its own child) runs, and an
+            # early request blocks the drainers the updater verifies; it restarts after bookkeeping.
+            note('独立動作の常駐処理: 更新処理中のため、再起動は更新の完了後に行います')
+        elif running and (not reload):
             try:
                 request_restart(paths.root)
             except (OSError, ValueError):
@@ -946,7 +982,16 @@ def apply_services(cfg, *, paths: ServicePaths, dry_run=False, note):
         return ServiceResult(1, message)
     if sync_recovery(cfg, note, dry, paths=paths):
         return ServiceResult(1, message)
+    if selected_mode == 'standalone' and not prev and os.path.lexists(paths.manifest_path):
+        # An existing but unreadable record may list Hermes cron jobs this switch
+        # must retire; stop for a human instead of leaving both runtimes (IA-047).
+        return ServiceResult(1, '常駐設定: 管理記録を読み取れないため、以前の定期処理を確実に止められません。'
+                             '変更していません。管理記録（' + paths.manifest_path + '）を確認し、担当者に相談してください')
     if retire_previous_runtime(prev, selected_mode, note, dry, paths=paths):
+        return ServiceResult(1, message)
+    if selected_mode == 'standalone' and retire_agents(set(contract.AGENT_LABELS) - {contract.HEALTH_LABEL}, note, dry, paths=paths):
+        # Hermes-only agents never belong to the host; a missing or stale manifest
+        # must not leave them running beside it.
         return ServiceResult(1, message)
     sync_scripts(subs, manifest, note, dry, paths=paths)
     if selected_mode == 'standalone':

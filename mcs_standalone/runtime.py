@@ -43,6 +43,8 @@ REPO = Path(__file__).resolve().parents[1]
 BACKGROUND = {"extract-0": "ai.mcs.extract-drainer", "extract-2": "ai.mcs.extract-drainer-2",
               "extract-night": "ai.mcs.extract-drainer-night"}
 COMMANDS = {"cmd": "local.mcs-cmd", "cmd_int": "local.mcs-int"}
+# Restore witnesses whose hold run_check itself resolves (notify_spool.restore_writer_hold).
+RESTORE_OWNERS = ("mcs_update", "mcs_recover")
 
 # Crash restarts back off exponentially (30 s doubling) up to this cap, for
 # child jobs and for the Slack/Discord connector alike; a success resets it.
@@ -901,7 +903,7 @@ class Runtime:
             log("child_ended", job=job, code=None, adopted=True)
             return
         failures = prev.get("failures", 0) + 1 if code else 0
-        if updating:
+        if updating and not row.get("restore_hold"):
             backoff = 0
         elif code == 0:
             # Card/approval intake is local and cheap: match launchd's 10 s throttle
@@ -1082,25 +1084,16 @@ class Runtime:
                             self._save_fired()
                 elif now - row["stopping_at"] >= STOP_GRACE_S:
                     child.kill()
-        if (not updating and not self.restarting and not draining
+        if (not self.restarting and not draining
                 and self._restart_reservation is None and not self._restart_reservation_uncertain
                 and self.native_admission.snapshot()["open"]):
-            for job in [*BACKGROUND, *(["lineworks"] if "lineworks" in self.argv else [])]:
-                self.start(job, "background", now)
-            for job in COMMANDS:
-                names = {path.name for path in (self.data / job).glob("*.json")}
-                if not names:
-                    if self.drained.get(job) is not None:
-                        self.drained[job] = set()
-                    continue
-                # A new card click after a successful run must not wait out the backoff
-                # (Discord waits 20 s). Only cmd_int: `cmd` contacts MCS. Failures and
-                # files left by a consent hold still wait.
-                drained = self.drained.get(job)
-                if job == "cmd_int" and drained is not None and names - drained:
-                    self.retry_at.pop(job, None)
-                self.start(job, "core", now, names)
-            self._schedule(now)
+            if not updating:
+                for job in [*BACKGROUND, *(["lineworks"] if "lineworks" in self.argv else [])]:
+                    self.start(job, "background", now)
+                self._start_commands(now, COMMANDS)
+                self._schedule(now)
+            else:
+                self._start_commands(now, *self._restore_intakes(), hold=True)
         self._start_identity()
         self._publish_status(now, updating)
         if self.restarting:
@@ -1110,6 +1103,49 @@ class Runtime:
         return (self.restarting and not self.children and not self.orphan_candidates
                 and self.identity_probe is None and not native["queued"]
                 and not native["running"] and not self.delivery_admission.snapshot()["active_passes"])
+
+    def _start_commands(self, now, jobs, unconditional=(), *, hold=False):
+        for job in jobs:
+            names = {path.name for path in (self.data / job).glob("*.json")}
+            if not names and job not in unconditional:
+                if self.drained.get(job) is not None:
+                    self.drained[job] = set()
+                continue
+            # A new card click after a successful run must not wait out the backoff
+            # (Discord waits 20 s). Only cmd_int: `cmd` contacts MCS. Failures and
+            # files left by a consent hold still wait.
+            drained = self.drained.get(job)
+            if job == "cmd_int" and drained is not None and names - drained:
+                self.retry_at.pop(job, None)
+            self.start(job, "core", now, names)
+            if hold and job in self.children:
+                # files a hold leaves queued must not restart it every tick
+                self.children[job]["restore_hold"] = True
+
+    def _restore_intakes(self):
+        """(jobs, start-without-files) still run during an updater/recover
+        restore hold. run_check limits itself there, as under Hermes launchd:
+        an awaiting consent drains only ops.restore_approve from data/cmd, and
+        --commands-only runs the reconcile that clears a restored marker.
+        Every other hold (unreadable, journal-only, a backup restore, a live
+        update) starts nothing."""
+        if "update" in self.children:
+            return (), ()
+        try:
+            import notify_spool
+            root = str(self.data)
+            marker = notify_spool.restore_awaiting_consent(root)
+            if marker is not None:
+                return ((("cmd",), ()) if marker.get("phase") == "awaiting_consent"
+                        and marker.get("by") in RESTORE_OWNERS else ((), ()))
+            marker = notify_spool.restore_pending(root)
+            if (marker is not None and marker.get("phase") == "restored"
+                    and marker.get("by") in RESTORE_OWNERS
+                    and not os.path.lexists(self.data / UPDATE_MARKER_NAME)):
+                return ("cmd_int",), ("cmd_int",)
+        except Exception:
+            pass
+        return (), ()
 
     def _restart_requested(self, now):
         for generation in (self.generation, None):
