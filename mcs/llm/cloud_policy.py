@@ -1113,7 +1113,8 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
             if _confirmed_rejection(result, settled, previous['model']):
                 continue
             # A confirmed successful result may be deliberately reprocessed
-            # with another model. An ambiguous send never grants that retry.
+            # with a different selection (model, output bound or effort).
+            # An ambiguous send never grants that retry.
             if (not local_fallback and prompt_verified and settled and result.get('usage') is not None and result.get('http_class') == 'http_200'
                     and result.get('error_kind') is None and _selection_differs(previous, candidate, current_body)):
                 continue
@@ -1891,6 +1892,7 @@ def _saved_answer(answer, metadata, reservation):
 
 
 def recover_response(ledger, *, route, project_id, message_id, unit_key, input_binding, request_fp,
+                     logical_request_fp=None, model=None, effort=None,
                      owner=None, scope=None, observation=None):
     """Read one exact paid answer; ambiguous, discarded or answerless attempts stay closed."""
     with _accounting_snapshot(ledger.db):
@@ -1900,6 +1902,18 @@ def recover_response(ledger, *, route, project_id, message_id, unit_key, input_b
             "json_extract(meta,'$.unit_key')=? AND json_extract(meta,'$.input_binding')=? AND "
             "json_extract(meta,'$.request_fp')=? END ORDER BY artifact_id",
             (KINDS[0], project_id, message_id, route, unit_key, input_binding, request_fp)).fetchall()
+        if not rows and logical_request_fp is not None:
+            # An output-bound change rewrites the envelope fingerprint while the
+            # prompt itself stays identical. A settled answer for the same prompt,
+            # model and effort is reused; the send guard still refuses the resend.
+            rows = ledger.db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
+                "FROM artifacts WHERE kind=? AND project_id=? AND message_id IS ? AND "
+                "CASE WHEN json_valid(meta) THEN json_extract(meta,'$.route')=? AND "
+                "json_extract(meta,'$.unit_key')=? AND json_extract(meta,'$.input_binding')=? AND "
+                "json_extract(meta,'$.logical_request_fp')=? AND json_extract(meta,'$.model')=? AND "
+                "json_extract(meta,'$.effort') IS ? END ORDER BY artifact_id",
+                (KINDS[0], project_id, message_id, route, unit_key, input_binding,
+                 logical_request_fp, model, effort)).fetchall()
         if route == 'reextract' and message_id is None and owner is not None and valid_hash(scope):
             from attachment_cloud_identity import recovery_rows
             rows.extend(recovery_rows(ledger.db, project_id=project_id, unit_key=unit_key,
