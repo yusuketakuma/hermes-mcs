@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "復元の承認待ち中に project metadata の手動 sync が書き込む問題を修正",
+  "summary": "復元が承認待ち・未完了の間、project_metadata.py sync は共有の復元 writer 保留を確認し、held/restore_in_progress を返して writer と adapter を開きません。復元時の評価対象データが固定される契約と一致し、保留中は取得 attempt artifact も追記されなくなります。",
+  "upgrade": "追加操作は不要です。保留が解除されれば従来どおり sync を実行できます。",
+  "details": [
+    "lock 取得成功後・Ledger/MCSAdapter 構築前に共有の restore_writer_hold を確認する( cross_lists CLI と同じ配置・同じ出力 )。",
+    "view コマンドの読取り契約と writers_resumed の方針は変更しません。"
+  ],
+  "refs": ["mcs/ingest/project_metadata.py"]
+}

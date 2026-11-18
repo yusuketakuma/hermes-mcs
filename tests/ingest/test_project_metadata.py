@@ -205,6 +205,70 @@ def test_out_of_range_number_records_failure_without_losing_complete_artifact(
     assert not payload["complete"]
 
 
+def test_cli_busy_lock_never_opens_writer_or_adapter(store, tmp_path, monkeypatch, capsys):
+    import os
+    import ledger
+    import mcs_adapter
+    import project_metadata
+    import writer_lock
+
+    lock_fd = writer_lock.acquire_run_lock(str(tmp_path / "run.lock"))
+    assert lock_fd is not None
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("writer and adapter must not be opened while lock is busy")
+
+    monkeypatch.setattr(ledger, "Ledger", forbidden)
+    monkeypatch.setattr(mcs_adapter, "MCSAdapter", forbidden)
+    try:
+        assert project_metadata.main([
+            "sync", "--database", str(tmp_path / "synthetic.db"), "--project-id", "1",
+            "--dataset", "medication_periods", "--read-only-get",
+            "--token-cache", str(tmp_path / "synthetic-cache"),
+        ]) == 1
+    finally:
+        os.close(lock_fd)
+    assert json.loads(capsys.readouterr().out) == {"state": "held", "reason": "run_lock_busy"}
+
+
+@pytest.mark.parametrize("witness", ["restored", "awaiting", "corrupt", "journal"])
+@pytest.mark.parametrize("alias", [False, True])
+def test_cli_restore_hold_precedes_writer_and_adapter(store, tmp_path, monkeypatch, capsys, witness, alias):
+    import ledger
+    import mcs_adapter
+    import project_metadata
+    import update_journal
+
+    marker = tmp_path / "restore_pending.json"
+    if witness == "journal":
+        state = update_journal.default_state()
+        state["applying"] = {"restore_incomplete": True}
+        (tmp_path / "update_state.json").write_text(json.dumps(state))
+    elif witness == "corrupt":
+        marker.write_text("{invalid")
+    else:
+        marker.write_text(json.dumps({"by": "mcs_update", "phase":
+                                     "restored" if witness == "restored" else "awaiting_consent"}))
+    before = (tmp_path / "synthetic.db").read_bytes()
+    directory = tmp_path
+    if alias:
+        directory = tmp_path / "alias"
+        directory.symlink_to(tmp_path, target_is_directory=True)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("restore hold must precede writer and adapter construction")
+
+    monkeypatch.setattr(ledger, "Ledger", forbidden)
+    monkeypatch.setattr(mcs_adapter, "MCSAdapter", forbidden)
+    assert project_metadata.main([
+        "sync", "--database", str(directory / "synthetic.db"), "--project-id", "1",
+        "--dataset", "medication_periods", "--read-only-get",
+        "--token-cache", str(tmp_path / "synthetic-cache"),
+    ]) == 1
+    assert json.loads(capsys.readouterr().out) == {"state": "held", "reason": "restore_in_progress"}
+    assert (tmp_path / "synthetic.db").read_bytes() == before
+
+
 @pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt, SystemExit])
 def test_cli_writer_close_failure_still_releases_owned_run_lock(tmp_path, monkeypatch, failure):
     import errno
