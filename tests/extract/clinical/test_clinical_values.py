@@ -379,3 +379,21 @@ def test_lab_candidate_unit_must_fit_the_named_item(name, value, unit, quote, ex
 ])
 def test_numeric_lab_quote_is_not_confirmed_when_a_comparison_or_negation_follows(quote, expected):
     assert clinical_values.lab_candidate("Cr", 1.2, "mg/dL", quote)["confirmation"] == expected
+
+
+@pytest.mark.parametrize("flag, cue", [("high", "高値"), ("low", "低値")])
+def test_lab_flag_is_bound_to_its_own_reading(flag, cue):
+    first = f"Cr 1.2mg/dL{cue}、K 4.0mEq/L"
+    neighboring = f"Cr 1.2mg/dL K 4.0mEq/L{cue}"
+    assert clinical_values.lab_candidate("Cr", 1.2, "mg/dL", first, flag=flag)["confirmation"] == "quote_supported"
+    assert clinical_values.lab_candidate("Cr", 1.2, "mg/dL", neighboring, flag=flag)["confirmation"] == "unverified"
+    validated = extract_validation.validate({"labs": [{
+        "name": "Cr", "value": 1.2, "unit": "mg/dL", "flag": flag, "evidence": neighboring,
+    }]}, neighboring)
+    assert validated["labs"][0]["unverified"] is True
+
+
+@pytest.mark.parametrize("tail", ["Cr 1.2mg/dL", "クレアチニン 1.2mg/dL", "K 4.0mEq/L Cr 1.2mg/dL"])
+def test_repeated_lab_reading_in_separate_columns_is_unverified(tail):
+    quote = f"Cr 1.2mg/dL {tail}"
+    assert clinical_values.lab_candidate("Cr", 1.2, "mg/dL", quote)["confirmation"] == "unverified"

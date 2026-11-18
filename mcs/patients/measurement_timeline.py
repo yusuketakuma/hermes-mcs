@@ -16,6 +16,11 @@ _OTHER_PERSON_CUE = re.compile(rf"(?:{FAMILY_PERSON}|{OTHER_PERSON})(?:さん|�
 _OTHER_TOPIC = re.compile(rf"(?:{FAMILY_PERSON}|{OTHER_PERSON})(?:本人|自身)?"
                           r"(?:の(?:話|件|こと|記録|情報|状態)|について)")
 
+_PLAN_WITHDRAWN = re.compile(
+    r"^\s*(?:(?:だった|でした|であった)\s*(?:が|けれど(?:も)?)\s*)?[、,]?\s*"
+    r"(?:は|が|を|も|では|じゃ)?\s*(?:ない|なし|無い|なくな|なかった|ありません|"
+    r"中止|キャンセル|取り消|取消|撤回|見送)")
+
 
 def ambiguous_patient_context(body, target):
     """Hold a bare patient reference when an earlier topic names another person."""
@@ -139,6 +144,9 @@ def _candidate(record):
                                evidence[evidence.index(name):])
             verified_source = subject == "patient" and period == record["status"] and marker is not None
             if marker is not None:
+                tail = re.split(r"[。！？!?;；\n]", body[anchor + marker.end():], maxsplit=1)[0]
+                if _PLAN_WITHDRAWN.match(tail):
+                    verified_source = False
                 # This is a contiguous original prefix, used only to prove the label/value relation.
                 validation_quote = evidence[:evidence.index(name) + marker.start()]
     if verified_source:

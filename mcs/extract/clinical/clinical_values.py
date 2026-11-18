@@ -301,7 +301,7 @@ _LAB_QUOTED_UNIT = r"(?:[a-zμ%/0-9.^²‰‱°錠包袋滴枚本個回単位]|�
 _LAB_NUMBER_CLOSED_TAIL = re.compile(
     r"(?:[トニ])?(?:高値|低値|高イ|低イ|高|低|上昇|低下|正常|異常)?(?:デス|デシタ|ダ|ダッタ)?(?:\([hl]\))?$")
 _LAB_NEXT_NUMBER = re.compile(
-    r"(?:" + "|".join(re.escape(n) for names in _LAB_NAMES.values() for n in names)
+    r"(" + "|".join(re.escape(n) for names in _LAB_NAMES.values() for n in names)
     + r")(?:値|ハ|:|=)*[+-]?[0-9]")
 _DATE = re.compile(r"(?<!\d)(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?(?!\d)")
 
@@ -444,16 +444,22 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                 after = re.split(r"[。、,;；\n]", tail[result.end():], maxsplit=1)[0]
                 unit_matches = result[2] == unit_key if unit_key else not result[2] or result[2] in allowed_units
                 if unit_matches and _LAB_NUMBER_CLOSED_TAIL.match(after):
-                    readings.append(match)
+                    readings.append((match, len(quote)))
                 elif unit_key and result[2].startswith(unit_key) and isinstance(evidence, str):
                     # Folding removed the column gap. Require it in the original before splitting the unit.
                     unit_end = match.end() + result.start(2) + len(unit_key)
                     if _LAB_NEXT_NUMBER.match(quote, unit_end):
                         source_map = source_map or fold_map(evidence, casefold=True)
                         _, starts, ends = source_map
-                        if (len(starts) == len(quote)
-                                and evidence[ends[unit_end - 1]:starts[unit_end]].isspace()):
-                            readings.append(match)
+                        if len(starts) != len(quote) or not evidence[ends[unit_end - 1]:starts[unit_end]].isspace():
+                            continue
+                        next_clause = re.search(r"[。、,;；]", quote[unit_end:])
+                        row_end = unit_end + next_clause.start() if next_clause else len(quote)
+                        repeats = any(
+                            item[1] in names and evidence[ends[item.start() - 1]:starts[item.start()]].isspace()
+                            for item in _LAB_NEXT_NUMBER.finditer(quote, unit_end, row_end))
+                        if not repeats:
+                            readings.append((match, unit_end))
         elif tail.startswith(fold_surface(raw_value)) and raw_value:
             remainder = tail[len(fold_surface(raw_value)):]
             result_unit = re.match(_LAB_QUOTED_UNIT, remainder)
@@ -462,12 +468,12 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
             # 陰性疑い etc. must stay candidates, without guessing their value.
             complete = re.match(r"(?:デス|デシタ)?(?:[。、,;；]|$)", suffix)
             if complete and (unit_key is None or (result_unit and result_unit[0] == unit_key)):
-                readings.append(match)
+                readings.append((match, len(quote)))
     supported = (len(readings) == 1 and not unverified
                  and (unit_key is None or unit_key in allowed_units)
                  and (number is not None or not any(c.isdigit() for c in raw_value)))
     if supported and number is not None:
-        matched_label = re.sub(r"(?:値|ハ|:|=)*$", "", readings[0].group())
+        matched_label = re.sub(r"(?:値|ハ|:|=)*$", "", readings[0][0].group())
         if len(matched_label) <= 2 and unit_key is None:
             supported = False
     # Subject, plans, comparators and reference intervals do not establish
@@ -476,14 +482,14 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
         supported = False
     if readings and isinstance(evidence, str):
         _, starts, ends = source_map or fold_map(evidence, casefold=True)
-        reading = readings[0]
+        reading, _ = readings[0]
         if clinical_scope.patient_source_scope(evidence, starts[reading.start()], ends[reading.end() - 1],
                                         patient_name=patient_name) \
                 not in ("patient", "past"):
             supported = False
     if flag:
         cues = r"高|↑|high" if flag == "high" else r"低|↓|low"
-        tail = quote[readings[0].end():] if readings else ""
+        tail = quote[readings[0][0].end():readings[0][1]] if readings else ""
         value_token = re.match(r"[+-]?[0-9]+(?:\.[0-9]+)?" + _LAB_QUOTED_UNIT, tail)
         suffix = tail[value_token.end():] if value_token else ""
         if not re.match(r"(?:ト|デ|ガ|[,、:（(])*(" + cues + ")", suffix):
@@ -493,7 +499,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
     # Do not mistake another sentence's date or a posting date for sampling.
     clause = ""
     if readings:   # the clause that contains the matched reading itself
-        at = readings[0].start()
+        at = readings[0][0].start()
         start = max((m.end() for m in re.finditer(r"[。、;；\n]", quote[:at])), default=0)
         stop = re.search(r"[。、;；\n]", quote[at:])
         clause = quote[start:at + stop.start() if stop else len(quote)]
