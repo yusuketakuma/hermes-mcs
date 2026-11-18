@@ -178,12 +178,18 @@ def publish_flags(cfg: dict, root: str) -> bool:
 
 
 def _spec_publication_blocked(db, delivery_id, transport):
+    """A held resource part, a part a restore beyond the journal horizon
+    made unknown, or an unstarted Slack file group keeps its delivery off
+    the spool: the worker replays a spec from the journal alone, and the
+    compacted journal cannot show that such a part never ran."""
     return db.execute(
         "SELECT 1 FROM notification_render_parts WHERE delivery_id=? AND ("
         "(state='held' AND error_code IN ('thread_cleanup_budget_exceeded','part_budget_exceeded',"
         "'blank_part_unrepresentable','attachment_upload_identity_unverified')) OR "
+        "(state='unknown' AND error_code=?) OR "
         "(?='slack' AND state='pending' AND kind='file_group' AND attempt_id IS NULL AND error_code=?)) "
-        "LIMIT 1", (delivery_id, transport, notify_scope.RESTORE_BEYOND_JOURNAL_HORIZON),
+        "LIMIT 1", (delivery_id, notify_scope.RESTORE_BEYOND_JOURNAL_HORIZON,
+                    transport, notify_scope.RESTORE_BEYOND_JOURNAL_HORIZON),
     ).fetchone() is not None
 
 
