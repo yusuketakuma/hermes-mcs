@@ -304,3 +304,11 @@ def test_recorded_parts_with_unavailable_cards_keep_the_defect_impact(tmp_path):
                           "observed_at": 399})
     assert "通知に遅れや不具合があります。" in lines
     assert "配送状況を今回確認できません" not in lines
+
+
+def test_live_delivery_unverified_and_parts_share_one_impact():
+    reasons = ["notification_delivery_unverified", "notification_parts_incomplete"]
+    report = {"status": "degraded", "notify_parts_measurement": "unknown"}
+    assert health_watch._impact(report, reasons) == "通知の状態を確認できません。"
+    report["notify_parts_measurement"] = "recorded"
+    assert health_watch._impact(report, reasons) == "通知に遅れや不具合があります。"
