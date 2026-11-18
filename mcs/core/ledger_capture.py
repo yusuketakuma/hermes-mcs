@@ -754,8 +754,9 @@ class LedgerCaptureMixin:
     def save_metadata_shadow(self, m, *, error=None, publish=False):
         """Save refresh observations without changing chat, coverage or delivery.
 
-        publish=True also writes a successful refresh to capture in the
-        same transaction; a failure never touches capture."""
+        publish=True also writes a publishable refresh to capture in the
+        same transaction; a fetch failure or an error that is not a
+        field-only invalid never touches capture."""
         row = self.db.execute(
             "SELECT project_id FROM messages WHERE message_id=?", (m.message_id,)).fetchone()
         if row is None or row["project_id"] != m.project_id:
@@ -766,7 +767,9 @@ class LedgerCaptureMixin:
         now = time.time()
         with self.db:
             self._save_message_metadata(m, source="shadow", now=now)
-            if publish is True and error is None and not getattr(m, "metadata_errors", []):
+            from message_observations import publishable_metadata_errors
+            if (publish is True and error is None
+                    and publishable_metadata_errors(getattr(m, "metadata_errors", []))):
                 self._save_message_metadata(m, source="capture", now=now)
 
     def save_reaction_actors(self, message_id, rows, complete, *, error=None, now=None):

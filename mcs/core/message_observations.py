@@ -121,6 +121,11 @@ _FIELDS = {"reactions": (valid_stored_reactions, "reactions_status"),
 _FIELD_ONLY_ERRORS = {k + "_invalid" for k in _FIELDS if k != "reactions"}
 
 
+def publishable_metadata_errors(errors) -> bool:
+    """capture出版を止めないフィールド単位の不正だけかを判定する。"""
+    return all(e in _FIELD_ONLY_ERRORS for e in errors)
+
+
 ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 

@@ -1041,7 +1041,7 @@ def stage_metadata_shadow(adapter, ledger, result, deadline, *, publish=False,
                           actors=False, cfg=None):
     """Bounded opt-in metadata refresh after delivery; never changes message state.
 
-    publish=True also writes successful refreshes to capture (22-E);
+    publish=True also writes publishable refreshes to capture (22-E);
     actors=True then walks reaction actors in the remaining budget (22-F)."""
     started = time.monotonic()
     shadow_deadline = min(deadline - 30, started + 25)
@@ -1092,7 +1092,9 @@ def stage_metadata_shadow(adapter, ledger, result, deadline, *, publish=False,
                 continue
             ledger.save_metadata_shadow(m, publish=publish)
             stats["fetched"] += 1
-            stats["published"] += bool(publish and not m.metadata_errors)
+            stats["published"] += bool(
+                publish and message_observations.publishable_metadata_errors(
+                    m.metadata_errors))
             if m.metadata_errors:
                 stats["errors"].append({"message_id": m.message_id, "kind": "schema_error"})
         if actors:

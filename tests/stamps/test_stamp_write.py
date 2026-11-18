@@ -10,6 +10,7 @@ import pytest
 
 from mcs_payload import normalize_message
 from mcs_requests import apply_command
+from message_observations import get_message_metadata
 from notify_testkit import (
     CFG, CLICKER, NOW, _attach, _card, _dispatch, _intent, _seed_thread, _spec,
     _token_for, _uuid, led, pinned_clock,
@@ -272,6 +273,15 @@ def test_non_reaction_metadata_error_does_not_invalidate_fresh_stamp_observation
     assert _drain(scene)["confirmed"] == 1
     assert api.posts == [(100, "viewed", False)]
     assert _receipt(scene, request)["stamp_state"] == "confirmed"
+    # The unrelated field error must not hold back the published capture:
+    # display/add-cancel targets read the fresh own stamp observation.
+    capture = get_message_metadata(scene[0].db, 100)
+    assert capture["reactions"] == [{"type": "viewed", "count": 1, "self_reacted": True}]
+    assert capture["reactions_status"] == "observed"
+    status_key = {"mentions_invalid": "mentions_status",
+                  "is_bookmarked_invalid": "bookmark_status",
+                  "is_pinned_invalid": "pin_status"}[error]
+    assert capture[status_key] == "invalid" and capture["last_error"] is None
 
 
 @pytest.mark.parametrize("change", ["archived", "actor", "account"])

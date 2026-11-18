@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "有効なスタンプ再取得が無関係なメタデータエラーで表示に反映されない問題を修正",
+  "summary": "反応の再取得が有効でも、mentions・ブックマーク・ピンのどれか1項目だけが不正だと、shadowには新しいスタンプを保存しながら表示・操作対象のcaptureが古いままでした。フィールド単位の不正だけを含む再取得はcaptureへ出版するようになり、正常に観測できた反応が表示・通知・スタンプ操作の対象へ届きます。",
+  "upgrade": "追加操作は不要です。反応自体の不正や取得失敗を含む再取得はこれまでどおりcaptureを更新せず、部分エラーはcapture行のlast_errorと各項目のinvalid表示に残ります。",
+  "details": [
+    "capture出版の条件を、フィールド単位の不正（mentions_invalid・is_bookmarked_invalid・is_pinned_invalid）だけを含む取得は成功扱いとし、reactions_invalid・取得失敗・未知のエラーは出版を止める条件へ絞りました。判定は観測契約の所有者であるmessage_observationsの共有述語を使います。",
+    "metadata_shadowのpublished統計も同じ条件で数えるため、診断値と実際の出版が一致します。"
+  ],
+  "refs": [
+    "mcs/core/ledger_capture.py",
+    "mcs/core/message_observations.py",
+    "mcs/ingest/collection_stages.py"
+  ]
+}
