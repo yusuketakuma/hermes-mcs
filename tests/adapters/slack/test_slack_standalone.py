@@ -384,7 +384,7 @@ def test_config_change_before_post_is_not_sent(monkeypatch, tmp_path):
 
     def fake_client(creds, verify):
         async def post(**kw):
-            verify()  # Client._request -> session._verify() precedes HTTP
+            st._GuardedSession(None, verify_current=verify)._verify()  # Client._request precedes HTTP
             posted.append(kw)
 
         async def close():

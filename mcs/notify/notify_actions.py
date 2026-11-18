@@ -301,10 +301,12 @@ def _stamp_press(db, base, card, actor, token, params, cfg, now, req) -> dict:
     old = db.execute("SELECT receipt_json FROM command_receipts WHERE command_id=?",
                      (command_id,)).fetchone()
     if old:
-        out = json.loads(old[0])
+        # A replay answers what execution concluded, not only the admission.
+        out = stamp_write.receipt_result(json.loads(old[0]))
         return {**base, "outcome": out.get("outcome"), "error": out.get("error"),
                 "action": "stamp_press", "stamp_op": out.get("stamp_op"),
-                "stamp_command_id": command_id}
+                "stamp_command_id": command_id,
+                **{k: out[k] for k in ("stamp_state", "stamp_error") if out.get(k) is not None}}
     post = next((p for p in form["posts"] if p["message_id"] == params.get("message_id")), None)
     kind, op = params.get("kind"), params.get("op")
     if post is None or kind not in dict(form["types"]) or op not in ("add", "cancel"):
@@ -349,12 +351,22 @@ def stamp_press(ledger, req, cfg, root, now, apply_human):
         db.execute("BEGIN")
         built = _apply_notification_tx(db, req, cfg, now, [], replay=None)
     if built.get("outcome") != "applied" or "stamp_command" not in built:
-        return built                       # refused, or the replay of the first press
+        return _await_result(db, built, req)   # refused, or the replay of the first press
     command = built.pop("stamp_command")
     out = apply_human(command)
     # The press answers once; the card shows the MCS-confirmed state after readback.
-    return {**built, "outcome": out.get("outcome"), "error": out.get("error"),
-            "stamp_op": command["op"], "stamp_command_id": command["command_id"]}
+    return _await_result(db, {**built, "outcome": out.get("outcome"), "error": out.get("error"),
+                              "stamp_op": command["op"], "stamp_command_id": command["command_id"],
+                              **({"stamp_state": out["stamp_state"]} if out.get("stamp_state") else {})}, req)
+
+
+def _await_result(db, result, req):
+    """A queued press keeps its followup waiting only once execution will answer this click."""
+    import stamp_write
+    if result.get("stamp_state") == "queued" and not stamp_write.watch_result(
+            db, result.get("stamp_command_id"), req.get("request_id")):
+        result = {k: v for k, v in result.items() if k != "stamp_state"}
+    return result
 
 
 def _stamp_command_id(click_command_id: str) -> str:

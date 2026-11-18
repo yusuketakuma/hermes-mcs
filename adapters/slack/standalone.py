@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 from adapters.common import eventlog
 from adapters.common.paths import read_verified_attachment
-from adapters.common.worker import await_settled
+from adapters.common.worker import SendNotAdmitted, await_settled
 from mcs_standalone.credential_gate import protected
 from .delivery import _TS, _failed, _payload, _upload_file_id
 from .tasks import Supervisor
@@ -81,7 +81,13 @@ class _GuardedSession:
 
     def _verify(self):
         if self._verify_current is not None:
-            self._verify_current()
+            try:
+                self._verify_current()
+            except Exception as exc:
+                # Runs before any HTTP I/O of this request: provably unsent.
+                # A fixed ValueError code (e.g. *_restart_required) keeps the
+                # connector's reconnect classification; other text stays out.
+                raise SendNotAdmitted(code=str(exc) if isinstance(exc, ValueError) else None) from exc
 
     @asynccontextmanager
     async def request(self, method, url, **kwargs):
@@ -416,9 +422,9 @@ async def send(root, target, payload):
             raise
         except Exception as exc:
             # current() runs in _verify() before any HTTP I/O: provably unsent.
-            if isinstance(exc, ValueError) \
-                    and str(exc) == "slack_configuration_changed_restart_required":
-                return {"result": "not_sent", "error_code": str(exc)}
+            if isinstance(exc, SendNotAdmitted):
+                return {"result": "not_sent",
+                        "error_code": "slack_configuration_changed_restart_required"}
             return _failed(exc, "create", None)
         message_id = response.get("ts")
         if response.get("ok") is not True \
