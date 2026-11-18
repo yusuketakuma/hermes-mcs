@@ -223,7 +223,7 @@ job_pytest_linux() {
     mkdir -p "$RUNNER_TEMP"
     MCS_CI_SLICES=4 MCS_CI_PER_SLICE=2 failed=0
     for MCS_CI_SLICE in 1 2 3 4; do
-        python3 ci/run_pytest_groups.py linux --slice "$MCS_CI_SLICE/$MCS_CI_SLICES" --per-slice "$MCS_CI_PER_SLICE" || failed=1
+        MCS_CI_SKIP_PERF=1 python3 ci/run_pytest_groups.py linux --slice "$MCS_CI_SLICE/$MCS_CI_SLICES" --per-slice "$MCS_CI_PER_SLICE" || failed=1
     done
     # the perf-marked tests run serially after the slices (local runs are
     # always full mode). pipefail propagates the pytest status past tee so

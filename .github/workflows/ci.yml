@@ -160,6 +160,7 @@ jobs:
         id: perf
         if: matrix.slice == 1 && github.event_name != 'pull_request'
         run: |
+          set -o pipefail
           mkdir -p "$RUNNER_TEMP/mcs-pytest-perf-linux"
           sh scripts/run_tests.sh tests/notify/test_perf_cards.py -m perf -s -p no:cacheprovider -o junit_family=xunit1 --junitxml="$RUNNER_TEMP/mcs-pytest-perf-linux/perf.xml" 2>&1 | tee "$RUNNER_TEMP/mcs-pytest-perf-linux/perf.log"
       - name: record perf result
