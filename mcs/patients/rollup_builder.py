@@ -608,10 +608,17 @@ def _cancelled_visit_dates(body, patient_name=None):
         except ValueError:
             key = None
         after = body[match.end():]
-        if re.match(r"[ \t　]*[にへ][ \t　]*延期", after):
+        postponed = re.match(r"[ \t　]*[にへ][ \t　]*延期", after)
+        if postponed is not None:
             # 「AはBに延期」: B is the new date; A, earlier in the same sentence, is the cancelled one
-            if previous is not None and not re.search(r"[。！？!?\n]", body[previous[1]:match.start()]):
-                out.add(previous[0])
+            if previous is not None and not re.search(r"[。！？!?\n]", body[previous[2]:match.start()]):
+                tail = after[postponed.end():]
+                scope = clinical_scope.patient_source_scope(
+                    body, previous[1], match.end() + postponed.end(),
+                    patient_name=patient_name, provider_fields=True)
+                # the patient's own, affirmative postponement only (same scope gate as the extractor)
+                if scope not in ("family", "other", "unknown", "conditional") and not _NEGATED_CANCEL.match(tail):
+                    out.add(previous[0])
         elif key is not None and (cue := _NEXT_CANCELLED.match(after)):
             tail = after[cue.end():]
             scope = clinical_scope.patient_source_scope(body, match.start(), match.end() + cue.end(),
@@ -619,7 +626,7 @@ def _cancelled_visit_dates(body, patient_name=None):
             # the patient's own, affirmative, unconditional cancellation only (same scope gate as the extractor)
             if scope not in ("family", "other", "unknown", "conditional") and not _NEGATED_CANCEL.match(tail):
                 out.add(key)
-        previous = (key, match.end()) if key is not None else None
+        previous = (key, match.start(), match.end()) if key is not None else None
     return out
 
 

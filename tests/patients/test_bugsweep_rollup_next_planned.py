@@ -71,3 +71,15 @@ def test_family_negated_or_conditional_cancellation_keeps_the_plan(store, body):
     _post(store, 1, "2099-09-01", "次回訪問は9/15です", "2099-09-15")
     _post(store, 2, "2099-09-14", body)
     assert rollup.build_rollup(store.db, 1)["next_planned"] == "2099-09-15"
+
+
+@pytest.mark.parametrize("body", [
+    "母の9/15の訪問は9/22に延期します",
+    "9/15の訪問は9/22に延期しません",
+    "9/15の訪問は9/22に延期ではありません",
+    "9/15の訪問が9/22に延期になる場合は連絡します",
+])
+def test_family_negated_or_conditional_postponement_keeps_the_plan(store, body):
+    _post(store, 1, "2099-09-01", "次回訪問は9/15です", "2099-09-15")
+    _post(store, 2, "2099-09-14", body)
+    assert rollup.build_rollup(store.db, 1)["next_planned"] == "2099-09-15"
