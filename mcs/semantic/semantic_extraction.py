@@ -809,7 +809,6 @@ FACTS_V2_BUILD = "hint-span/1"
 _V1_CATEGORY_FIELDS = {
     "medication": ("medications", "rx_actions", "med_periods"),
     "adherence_administration": ("adherence_flags",),
-    "symptom_state": ("symptoms",),
     "vital_lab": ("vitals",),
     "request_pending": ("requests",),
     "care_event": ("events", "visit_date", "next_planned"),
@@ -818,11 +817,14 @@ _V1_CATEGORY_FIELDS = {
 
 def _symptom_names(source, names):
     """Keep symptom reports; an explicit PRN instruction alone is not a symptom report."""
+    import extract
     result = []
     for name in names:
         if not isinstance(name, str) or not name:
             continue
         for match in re.finditer(re.escape(name), source):
+            if extract.symptom_is_drug_class(source, match.end()):
+                continue
             tail = re.split(r"[。！？!?;；\n]", source[match.end():], maxsplit=1)[0]
             contingency = re.match(
                 r"\s*(?:(?:の)?(?:時(?!間|刻|期|点|々)|とき(?!どき))(?:に|には|は|のみ|だけ)?|"
@@ -862,7 +864,7 @@ def _v1_hint_items(source: str, posted_at: str) -> list:
                 " ".join(p for p in (str(med.get("name") or ""),
                                      str(med.get("dose") or "")) if p),
                 med.get("name"))
-    for name in _symptom_names(source, hints.get("symptoms") or []):
+    for name in _symptom_names(source, list(extract.symptom_matches(source))):
         add("symptom_state", str(name), name)
     vit = hints.get("vitals")
     if isinstance(vit, dict):
@@ -885,8 +887,8 @@ def _v1_category_signals(source: str, posted_at: str) -> set:
         return set()
     signals = {category for category, fields in _V1_CATEGORY_FIELDS.items()
             if any(hints.get(field) for field in fields)}
-    if not _symptom_names(source, hints.get("symptoms") or []):
-        signals.discard("symptom_state")
+    if _symptom_names(source, list(extract.symptom_matches(source))):
+        signals.add("symptom_state")
     return signals
 
 
