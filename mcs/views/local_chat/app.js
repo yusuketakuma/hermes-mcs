@@ -1,6 +1,7 @@
 "use strict";
 const $ = id => document.getElementById(id);
-const state = {patients: [], patientCursor: null, project: null, cursor: null, query: "", generation: null, mainRequest: 0, detailRequest: 0, patientRequest: 0};
+const state = {patients: [], patientCursor: null, project: null, cursor: null, query: "", generation: null, mainRequest: 0, detailRequest: 0, patientRequest: 0, contextRequest: 0};
+const subjectLabels = {patient: "本人", family: "家族", other: "他者", unspecified: "対象未確認"};
 const fmt = (ts, options = {}) => ts == null ? "時刻未取得" : new Date(ts * 1000).toLocaleString("ja-JP", {timeZone: "Asia/Tokyo", ...options});
 function el(tag, text, cls) {const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node;}
 function fail(error) {$("error").textContent = error.message || "表示できませんでした。更新して再度お試しください。"; $("error").hidden = false;}
@@ -51,7 +52,39 @@ function selectPatient(patient) {
   const fetchLabels = {pending: "未取得", complete: "取得済み", incomplete: "一部未取得", partial: "一部取得", failed: "取得失敗"};
   $("coverage").textContent = `取得状態: ${fetchLabels[patient.fetch_state] || "取得状況を要確認"} · ${patient.history_floor === -1 ? "履歴の終端までの取得記録あり" : "履歴全体の取得は未確認"}`;
   $("coverage").hidden = false;
-  closeDetail(); patientList(); loadTimeline();
+  closeDetail(); patientList(); loadPatientContext(patient.project_id); loadTimeline();
+}
+async function loadPatientContext(project) {
+  const request = ++state.contextRequest, panel = $("patient-context");
+  panel.replaceChildren(el("h2", "患者コンテキスト"), el("p", "背景情報を読込中…"));
+  try {
+    const data = await api("context", {project});
+    if (request !== state.contextRequest || project !== state.project) return;
+    const groups = data.sections.filter(group => group.items.length);
+    panel.replaceChildren(el("h2", "患者コンテキスト"));
+    if (!groups.length) {panel.append(el("p", "表示できる患者コンテキストはまだ保存されていません。")); return;}
+    const preview = el("div", null, "context-preview");
+    for (const group of groups.slice(0, 4)) {
+      const item = group.items[0], entry = el("div", null, "context-brief");
+      entry.append(el("b", group.label), el("span", `${subjectLabels[item.subject] || "対象未確認"}: ${item.text || item.evidence || ""}`), el("small", fmt(item.posted_at_ts, {year:"numeric", month:"numeric", day:"numeric"})));
+      preview.append(entry);
+    }
+    const details = el("details", null, "context-records");
+    const total = groups.reduce((count, group) => count + group.items.length, 0);
+    details.append(el("summary", `背景・根拠をすべて表示 · ${total}件`));
+    for (const group of groups) {
+      const section = el("section"); section.append(el("h3", group.label));
+      for (const item of group.items) {
+        const record = contextSection({patient_context: [item]});
+        record.firstElementChild.textContent = fmt(item.posted_at_ts, {year:"numeric", month:"numeric", day:"numeric"});
+        section.append(record);
+      }
+      details.append(section);
+    }
+    panel.append(preview, details);
+  } catch (error) {
+    if (request === state.contextRequest && project === state.project) panel.replaceChildren(el("h2", "患者コンテキスト"), el("p", "背景情報を取得できませんでした。「更新」で読み直してください。"));
+  }
 }
 function post(row, detailed = false) {
   const article = el("article", null, "post");
@@ -98,17 +131,17 @@ async function loadTimeline(more = false) {
     }
     else {$("timeline").replaceChildren(fragment); panel.scrollTop = state.query ? 0 : panel.scrollHeight;}
     $("older").hidden = !state.cursor;
-    $("timeline-status").textContent = state.query ? "一致する保存済みの投稿はありません。" : "保存済みの投稿はありません。";
-    $("timeline-status").hidden = !!$("timeline").children.length;
+    const empty = !$("timeline").children.length;
+    $("timeline-status").hidden = !empty;
+    $("timeline-status").textContent = empty ? (state.query ? "一致する保存済みの投稿はありません。" : "保存済みの投稿はありません。") : "";
   } catch (error) {if (request === state.mainRequest) {fail(error); $("timeline-status").hidden = true;}}
   finally {if (request === state.mainRequest) $("older").disabled = false;}
 }
 function section(title) {const node = el("section", null, "detail-section"); node.append(el("h3", title)); return node;}
 function contextSection(row) {
   const context = section("投稿に記録された情報");
-  const subjects = {patient: "本人", family: "家族", other: "他者", unspecified: "対象未確認"};
   for (const item of row.patient_context || []) {
-    context.append(el("p", `対象: ${subjects[item.subject] || "対象未確認"}`, "context-subject"));
+    context.append(el("p", `対象: ${subjectLabels[item.subject] || "対象未確認"}`, "context-subject"));
     context.append(el("p", item.text || item.evidence || item.category));
     if (item.evidence) context.append(el("blockquote", item.evidence));
     for (const detail of item.details || []) {

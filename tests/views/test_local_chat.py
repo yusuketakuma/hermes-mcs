@@ -14,6 +14,8 @@ import ledger
 import local_chat_view
 import mcs_local_chat as chat
 import mcs_view
+from patient_context import extract_context
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 @pytest.fixture
@@ -36,6 +38,12 @@ def snapshot(tmp_path):
             store.db.execute("INSERT INTO attachments(message_id,name,state,url,local_path,error) VALUES"
                              "(1,'合成資料.pdf','failed','https://private.invalid/signed','/private/file','download_failed'),"
                              "(122,'削除済み資料.pdf','failed',NULL,NULL,'download_failed')")
+            for mid, pid in ((1, 1), (122, 1), (123, 2)):
+                body = f"病名: 合成疾患{mid}\n合成記録 {mid} ﾛｷｿﾆﾝ <script>alert(1)</script>"
+                store.db.execute("UPDATE messages SET body_text=? WHERE message_id=?", (body, mid))
+                store.artifact_add_tx("extract_v1", json.dumps({"patient_context": extract_context(body)}),
+                                      project_id=pid, message_id=mid,
+                                      meta={"hash": f"{mid:064x}", VERSION_KEY: CURRENT_VERSION})
         yield ledger.publish_snapshot(str(path), str(tmp_path / "snapshots"))
     finally:
         store.close()
@@ -53,7 +61,7 @@ def test_patients_scope_and_fold(snapshot):
         view.close()
 
 
-@pytest.mark.parametrize("kind", ["timeline", "search", "thread", "attachments", "evidence"])
+@pytest.mark.parametrize("kind", ["timeline", "search", "thread", "attachments", "evidence", "context"])
 def test_every_detail_route_rejects_foreign_patient(snapshot, kind):
     with pytest.raises(ValueError, match="project_not_allowed"):
         chat.response(snapshot, {1}, kind, "project=2&message=123&q=合成")
@@ -254,6 +262,22 @@ def test_browser_dom_contracts():
         pytest.skip("Node is optional; browser DOM contract checks require it")
     subprocess.run([node, str(Path(__file__).with_name("local_chat_dom_checks.js")),
                     str(chat.ASSETS / "app.js")], check=True, capture_output=True, text=True)
+
+
+def test_patient_header_context_is_scoped_grounded_and_readonly(snapshot):
+    before = hashlib.sha256(Path(snapshot).read_bytes()).digest()
+    data = chat.response(snapshot, {1}, "context", "project=1")
+    text = json.dumps(data, ensure_ascii=False)
+    assert "合成疾患1" in text
+    assert "合成疾患122" not in text  # deleted source
+    assert "合成疾患123" not in text  # different patient
+    assert "source_url" not in text and "local_path" not in text
+    assert data["sections"][0]["label"] == "主病名"
+    assert data["sections"][0]["items"][0]["evidence"].startswith("病名:")
+    assert hashlib.sha256(Path(snapshot).read_bytes()).digest() == before
+    assert chat.response(snapshot, {2}, "context", "project=2")["sections"]
+    with pytest.raises(ValueError):
+        chat.response(snapshot, {1}, "context", "project=1&message=123")
 
 
 def test_orphan_reply_remains_readable_without_exposing_foreign_parent(tmp_path):

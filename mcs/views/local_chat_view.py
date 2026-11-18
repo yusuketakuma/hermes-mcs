@@ -3,6 +3,7 @@ from mcs_queries import register_search_fold
 from mcs_util import search_fold
 from stamp_format import stamp_counts, thread_stamp_line
 from structured_view import structured_lines
+from patient_context_view import SECTION_LABELS
 
 
 def require_project(project, allowed):
@@ -33,6 +34,16 @@ def patients(view, allowed, *, query="", cursor=None):
 
 def read(view, allowed, kind, project, *, query="", cursor=None, message_id=None):
     require_project(project, allowed)
+    if kind == "context":
+        if query or cursor or message_id is not None:
+            raise ValueError("bad_arguments")
+        data = view.read("patient_context", project=project, view="background")
+        fields = ("message_id", "subject", "text", "quote", "posted_at_ts", "details")
+        return {"snapshot": view.meta, "sections": [
+            {"label": SECTION_LABELS.get(section["category"], (section["category"],))[0],
+             "items": [{**{key: item.get(key) for key in fields}, "evidence": item.get("quote")}
+                       for item in section["items"]]}
+            for section in data["sections"]]}
     if kind not in ("timeline", "search", "thread", "attachments", "evidence"):
         raise ValueError("unknown_view")
     if kind == "attachments" and view._require_message(project, message_id)["body_state"] == "deleted":

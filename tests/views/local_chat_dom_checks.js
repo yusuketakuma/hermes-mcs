@@ -61,9 +61,30 @@ async function checkDatePagination() {
   await vm.runInContext("loadTimeline(true)", sandbox);
   const timeline = document.getElementById("timeline");
   assert.equal(timeline.children.filter(node => node.className === "date-divider").length, 1);
+  assert.equal(document.getElementById("timeline-status").textContent, "");
   assert.match(content(timeline), /合成 1[\s\S]*合成 2[\s\S]*合成 3[\s\S]*合成 4/);
   await vm.runInContext("loadTimeline(true)", sandbox);
   assert.equal(timeline.children.filter(node => node.className === "date-divider").length, 2);
 }
-async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); console.log("local chat DOM contracts passed");}
+async function checkPatientContext() {
+  const context = text => ({sections:[{label:"病名",items:[{subject:"patient",text,evidence:`根拠 ${text}`,posted_at_ts:1793491200}]}]});
+  vm.runInContext("state.project = 101", sandbox);
+  sandbox.api = async (kind, params) => {assert.equal(kind, "context"); assert.equal(params.project, 101); return context("合成疾患A");};
+  await vm.runInContext("loadPatientContext(101)", sandbox);
+  assert.match(content(document.getElementById("patient-context")), /合成疾患A/);
+  assert.match(content(document.getElementById("patient-context")), /根拠 合成疾患A/);
+  let finishOld;
+  sandbox.api = (kind, params) => params.project === 101 ? new Promise(resolve => {finishOld = resolve;}) : Promise.resolve(context("合成疾患B"));
+  const old = vm.runInContext("loadPatientContext(101)", sandbox);
+  assert.doesNotMatch(content(document.getElementById("patient-context")), /合成疾患A/);
+  vm.runInContext("state.project = 102", sandbox);
+  await vm.runInContext("loadPatientContext(102)", sandbox);
+  finishOld(context("古い患者の合成記録")); await old;
+  assert.match(content(document.getElementById("patient-context")), /合成疾患B/);
+  assert.doesNotMatch(content(document.getElementById("patient-context")), /古い患者/);
+  sandbox.api = async () => ({sections:[]});
+  await vm.runInContext("loadPatientContext(102)", sandbox);
+  assert.match(content(document.getElementById("patient-context")), /まだ保存されていません/);
+}
+async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); console.log("local chat DOM contracts passed");}
 main().catch(error => {console.error(error); process.exitCode = 1;});
