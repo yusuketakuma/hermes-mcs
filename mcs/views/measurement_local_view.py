@@ -86,7 +86,10 @@ def read_snapshot(path, project_id, *, cfg=None, timeout_s=_TIMEOUT_S, cursor=No
         checkpoint()
         offset = 0
         if cursor is not None:
-            position = _decode_cursor(cursor, project_id, meta, identity)
+            try:
+                position = _decode_cursor(cursor, project_id, meta, identity)
+            except ValueError:
+                return _unknown("cursor_changed")
             offset = position["offset"]
             previous = db.execute("SELECT message_id FROM messages WHERE project_id=? "
                                   "ORDER BY message_id DESC LIMIT 1 OFFSET ?",
