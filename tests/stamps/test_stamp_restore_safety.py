@@ -1,5 +1,6 @@
 """Synthetic publication failures and restored approvals never authorize a second POST."""
 import hashlib
+import itertools
 import json
 import os
 from pathlib import Path
@@ -112,6 +113,21 @@ def test_failed_publications_rotate_and_later_results_still_publish(scene, monke
     counts = _drain(scene)
     assert counts["publish_failed"] == 1
     assert scene[3].posts == [(100, "viewed", False)] and scene[3].gets == [(1, 100, None), (1, 100, None)]
+
+
+def test_result_settled_mid_drain_publishes_in_the_same_drain(scene, monkeypatch):
+    # The wall clock moves while queued work executes; a result must publish in
+    # its own drain instead of waiting for the next collection interval.
+    request = _command(scene)
+    assert _apply(scene, request)["stamp_state"] == "queued"
+    ticks = itertools.count()
+    monkeypatch.setattr(stamp_write.time, "time", lambda: NOW + next(ticks))
+    counts = _drain(scene)
+    assert counts["confirmed"] == 1 and counts["publish_failed"] == 0
+    assert counts["publish_pending"] == 0
+    assert json.loads(_operation(scene, request)["content"])["result_published"] is True
+    result = Path(notify_spool.notify_dirs(scene[2])["cmd_results"]) / (request["command_id"] + ".json")
+    assert json.loads(result.read_bytes())["stamp_state"] == "confirmed"
 
 
 def test_rerender_failure_after_publish_is_not_a_publish_failure(scene, monkeypatch):
