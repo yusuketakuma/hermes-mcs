@@ -570,6 +570,7 @@ def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(
     ("semantic_assembly", "normalise_facts_v2"),
     ("semantic_assembly", "MANIFEST_VERSION"),
     ("semantic_facts", "text_sha256"),
+    ("mcs_util", "text_sha256"),
     ("llm_availability", "circuit_failure"),
     ("llm_availability", "llm_health"),
     ("self_identity", "latest_self_profile"),

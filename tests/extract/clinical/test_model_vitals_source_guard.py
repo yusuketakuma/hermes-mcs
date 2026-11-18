@@ -179,3 +179,10 @@ def test_every_reader_of_stored_vitals_leaves_out_the_superseded_reading():
     assert clinical_values.patient_vitals(dict(stored), SUPERSEDED) == {}
     assert clinical_values.patient_current_vitals(dict(stored), SUPERSEDED) == {}
     assert clinical_display.scoped_vitals(dict(stored), (SUPERSEDED, None, "patient")) == {}
+
+
+@pytest.mark.parametrize("body", ["本人の血圧120/80。", "本人の血圧120 / 80。"])
+def test_validation_rejects_an_inverted_pair_whatever_the_spacing(body):
+    assert "sbp" not in _validated(body, {"sbp": 80, "dbp": 120})
+    assert "dbp" not in _validated(body, {"sbp": 80, "dbp": 120})
+    assert _validated(body, {"sbp": 120, "dbp": 80}) == {"sbp": 120.0, "dbp": 80.0}
