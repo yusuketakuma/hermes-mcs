@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "取込み済みの旧ログが消えた・変わった導入先で、中断した更新の復旧が毎回止まる問題を修正",
+  "summary": "data/run.log などの取込み済みの旧ログを手で整理した、または導入先をコピーで移した後でも、mcs_update.py recover（日次の確認を含む）は旧ログの取込み確認に失敗した時点で止まらず、更新記録の分類・常駐処理の再開・中断マーカーの除去まで進みます。これまでは毎回 recovery_incomplete（run_log_tail_unverified）で終わり、収集と抽出が止まったままでした。",
+  "upgrade": "追加操作は不要です。旧ログの取込みは従来どおり原本と退避コピーを残し、不確かな記録を取り込み直しません。取込みを確認できない回は、復旧結果の記録（data/recovery_report.json）に run_log_tail_unverified を書いてから復旧を続けます。後の記録で置き換わることがあります。常駐処理の設定（services）の段で同じ原因により失敗した場合は、「復旧できません（要手動対応）」として通知され、常駐処理は再開されます。",
+  "details": [
+    "recover_interrupted の旧ログ取込み失敗を、結果 run_log_tail_unverified の記録に留めて分類へ進む。",
+    "更新適用前の検査（merge 前の確認）と巻戻し時の services の扱いは変えていない。"
+  ],
+  "refs": ["mcs/ops/update_recovery.py"]
+}
