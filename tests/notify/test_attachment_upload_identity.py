@@ -178,6 +178,11 @@ def test_collected_upload_with_insufficient_or_conflicting_evidence_is_held(
                            "WHERE delivery_id=? AND part_id=?", (state, did, pid))
             if fault == "pending_sending":
                 led.db.execute("UPDATE notification_renders SET state='sending' WHERE delivery_id=?", (did,))
+    if fault in ("unknown", "pending_delivered"):
+        # The delivered render's part is still in flight: the update waits before any build.
+        _waits_then_holds_unproven(led, world, edit["delivery_id"], did, pid, NOW + 4)
+        return
+    with led.db:
         emitted = []
         notify_cards.issue_render(led.db, 1, SLACK, NOW + 4, emitted, force=True)
     assert emitted == []
@@ -186,6 +191,38 @@ def test_collected_upload_with_insufficient_or_conflicting_evidence_is_held(
     errors = {r[0] for r in led.db.execute(
         "SELECT error_code FROM notification_render_parts WHERE delivery_id=?", (latest["delivery_id"],))}
     assert errors == {"attachment_upload_identity_unverified"}
+    assert len(world.client.upload_calls) == uploads and len(world.client.thread_posts) == posts
+
+
+def _stored(led):
+    return [[tuple(row) for row in led.db.execute(f"SELECT * FROM {table} ORDER BY rowid")]
+            for table in ("notification_renders", "notification_render_parts", "notification_intent_cards",
+                          "notification_delivery_attempts", "notification_action_tokens",
+                          "notification_view_manifests")]
+
+
+def _waits_then_holds_unproven(led, world, latest_id, did, pid, now):
+    """An update over a delivered part still in flight issues nothing and changes no row; once
+    that part settles with no usable evidence, the update is built and held, and nothing is re-sent."""
+    uploads, posts = len(world.client.upload_calls), len(world.client.thread_posts)
+    before = _stored(led)
+    with led.db:
+        emitted = []
+        assert notify_cards.issue_render(led.db, 1, SLACK, now, emitted, force=True) is None
+    assert emitted == [] and _stored(led) == before and _latest_render(led)["delivery_id"] == latest_id
+    with led.db:
+        # Synthetic fixture: the part settles as delivered with no remote id, an invalid record that
+        # proves nothing (not a forged success receipt).
+        led.db.execute("UPDATE notification_render_parts SET state='delivered',remote_id=NULL "
+                       "WHERE delivery_id=? AND part_id=?", (did, pid))
+        emitted = []
+        notify_cards.issue_render(led.db, 1, SLACK, now + 1, emitted, force=True)
+    assert emitted == []
+    latest = _latest_render(led)
+    assert latest["delivery_id"] != latest_id and latest["state"] == "held"
+    assert {r[0] for r in led.db.execute(
+        "SELECT error_code FROM notification_render_parts WHERE delivery_id=?", (latest["delivery_id"],))} \
+        == {"attachment_upload_identity_unverified"}
     assert len(world.client.upload_calls) == uploads and len(world.client.thread_posts) == posts
 
 
@@ -300,6 +337,11 @@ def test_missing_prior_receipt_blocks_new_upload_even_if_later_caption_delivered
             led.db.execute("UPDATE notification_render_parts SET state=?,remote_id=NULL "
                            "WHERE delivery_id=? AND part_id=?", (state, original["delivery_id"], part["part_id"]))
     led.attachment_saved(attachment_id, str(path), len(blob), hashlib.sha256(blob).hexdigest())
+    if fault != "delivered_no_remote":
+        # The original render's part is still unknown: the update waits before any build.
+        pid = "attach:9999" if fault == "unknown_same_attachment" else part["part_id"]
+        _waits_then_holds_unproven(led, world, synthetic_id, original["delivery_id"], pid, NOW + 2)
+        return
     uploads, posts = len(world.client.upload_calls), len(world.client.thread_posts)
     with led.db:
         emitted = []

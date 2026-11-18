@@ -827,6 +827,8 @@ def _deliver(ledger, args, cfg, result, deadline):
         # revokes, deferral expiry, stuck spec repair — bounded
         result["card_sweep"] = notify_cards.sweep(
             ledger, cfg, limit=50)
+        if result["card_sweep"].get("failed"):
+            result["errors"].append("card_sweep: card_sweep_card_failed")
     except Exception as e:
         result["errors"].append(f"card_sweep: {type(e).__name__}")
     _require_closed_transaction(ledger, result)
