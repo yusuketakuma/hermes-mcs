@@ -182,14 +182,16 @@ def _spec_publication_blocked(db, delivery_id, transport):
     made unknown, or an unstarted Slack file group keeps its delivery off
     the spool: the worker replays a spec from the journal alone, and the
     compacted journal cannot show that such a part never ran."""
+    restore_reasons = (notify_scope.RESTORE_BEYOND_JOURNAL_HORIZON,
+                       *notify_scope.RESTORE_UNRESOLVABLE_PART_REASONS)
+    marks = ",".join("?" for _ in restore_reasons)
     return db.execute(
         "SELECT 1 FROM notification_render_parts WHERE delivery_id=? AND ("
         "(state='held' AND error_code IN ('thread_cleanup_budget_exceeded','part_budget_exceeded',"
         "'blank_part_unrepresentable','attachment_upload_identity_unverified')) OR "
-        "(state='unknown' AND error_code=?) OR "
+        f"(state='unknown' AND error_code IN ({marks})) OR "
         "(?='slack' AND state='pending' AND kind='file_group' AND attempt_id IS NULL AND error_code=?)) "
-        "LIMIT 1", (delivery_id, notify_scope.RESTORE_BEYOND_JOURNAL_HORIZON,
-                    transport, notify_scope.RESTORE_BEYOND_JOURNAL_HORIZON),
+        "LIMIT 1", (delivery_id, *restore_reasons, transport, notify_scope.RESTORE_BEYOND_JOURNAL_HORIZON),
     ).fetchone() is not None
 
 

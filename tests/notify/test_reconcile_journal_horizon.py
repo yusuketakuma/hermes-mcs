@@ -202,8 +202,14 @@ def test_delivered_card_with_pending_parts_is_made_resolvable(world):
     world.dispatch()
     render = _deliver_card_only(world)
     assert render["state"] == "delivered"
+    spec_path = world.data / "discord_render" / (render["delivery_id"] + ".json")
+    original = spec_path.read_bytes()
     _restore_from(world, backup_names.JOURNAL_HORIZON_MAX_S + 86400)
     receipt = notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW)
+    assert notify_spool.restore_pending(str(world.data)) is None
+    assert not spec_path.exists(), "a worker can replay the old spec after the restore gate opens"
+    assert (world.data / "restore_specs" / spec_path.name).read_bytes() == original
+    assert notify_spool.recover(world.led, CFG, {})["republished"] == 0
     parts = _parts(world, render["delivery_id"])
     assert parts["card"]["state"] == "delivered"
     pending = sorted(p for p in parts if p != "card")
@@ -449,6 +455,12 @@ def _assert_reported(led, receipt, render, part_ids, reason):
     notice = led.db.execute("SELECT payload FROM notify_outbox WHERE kind='update_notice'").fetchone()
     assert f"part 要調査={len(receipt['parts_unresolvable'])}件" in notice["payload"]
     assert "個別調査が必要" in notice["payload"]
+    root = Path(notify_spool.data_root(led))
+    spec_name = render["delivery_id"] + ".json"
+    assert (root / "restore_specs" / spec_name).is_file()
+    assert not (root / "discord_render" / spec_name).exists()
+    assert notify_spool.publish_specs(led.db, notify_spool.notify_dirs(str(root)),
+                                      [json.loads(render["spec_json"])], NOW + 1) == []
 
 
 def test_unbound_group_spec_is_reported_not_left_pending(led):
@@ -673,16 +685,16 @@ def test_slack_restore_keeps_gate_closed_if_the_worker_spec_cannot_be_withdrawn(
     data = Path(notify_spool.data_root(led))
     _restore_from(None, backup_names.JOURNAL_HORIZON_MAX_S + 86400, data=data)
     published_spec = Path(slack.dirs["render"], render["delivery_id"] + ".json")
-    unlink = os.unlink
+    replace = os.replace
 
-    def deny_spec_removal(path, *args, **kwargs):
-        if os.fspath(path) == str(published_spec):
+    def deny_spec_withdrawal(src, dst):
+        if os.fspath(src) == str(published_spec):
             raise PermissionError("synthetic refusal")
-        return unlink(path, *args, **kwargs)
+        return replace(src, dst)
 
     with monkeypatch.context() as patch:
-        patch.setattr(notify_reconcile.os, "unlink", deny_spec_removal)
-        with pytest.raises(PermissionError, match="synthetic refusal"):
+        patch.setattr(notify_reconcile.os, "replace", deny_spec_withdrawal)
+        with pytest.raises(OSError, match="restore_part_spec_withdraw_failed"):
             notify_reconcile.reconcile_after_restore(led, SLACK, now=NOW)
     assert published_spec.is_file()
     assert notify_spool.restore_pending(str(data)) is not None
