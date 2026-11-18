@@ -169,21 +169,29 @@ def upgrade_status(db, *, model: str | None) -> dict:
     rows = db.execute(f"""SELECT m.*, ({current_v4_id()}) AS projection,
         (SELECT a.meta FROM artifacts a WHERE a.kind='{KIND}' AND a.message_id=m.message_id
             {current_extract_pred()} ORDER BY a.artifact_id DESC LIMIT 1) AS latest_meta,
+        (SELECT a.model FROM artifacts a WHERE a.kind='{KIND}' AND a.message_id=m.message_id
+            {current_extract_pred()} ORDER BY a.artifact_id DESC LIMIT 1) AS latest_model,
         ({pending_pred(db)}) AS pending, ({_retry_budget_sql()}) AS retryable,
         EXISTS ({_hold_sql()}) AS held,
         EXISTS (SELECT 1 {_ERROR_ROWS_SQL}
             AND COALESCE(json_extract({json_or_null('e.meta')},'$.attempts'),0)>=5) AS failed
         FROM messages m WHERE {ELIGIBLE_MESSAGE}""", (KIND, EXTRACT_VERSION))
     for row in rows:
-        integrity = (loads_dict(row["latest_meta"]) or {}).get("integrity")
+        meta = loads_dict(row["latest_meta"]) or {}
+        integrity = meta.get("integrity")
         validation = integrity.get("validation") if isinstance(integrity, dict) else None
         dropped = isinstance(validation, dict) and any(
             type(validation.get(key)) is int and validation[key] > 0
             for key in ("items_dropped", "evidence_dropped"))
+        row_model = model
+        actual = meta.get("actual_model")
+        if (isinstance(model, str) and model and isinstance(actual, str) and actual
+                and row["latest_model"] == actual):
+            row_model = actual
         state = ("projection_shadowed" if row["projection"] is not None else
                  "failed" if row["failed"] else "held_prior" if row["held"] else
                  "pending" if row["pending"] and row["retryable"] else
-                 "done_clean" if not dropped and progress_for_message(db, row, model=model)["state"] == "complete" else
+                 "done_clean" if not dropped and progress_for_message(db, row, model=row_model)["state"] == "complete" else
                  "needs_review")
         out[state] += 1
     return {"target_version": EXTRACT_VERSION, **out, "total": sum(out.values())}

@@ -127,7 +127,8 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, re
                and final_meta.get("invalidated") in (None, False, 0)
                and final_meta.get("hash") == r["content_hash"]
                and inference.is_current(final_meta, target=_INFERENCE_VERSION)
-               and final_meta.get("extract_version") == EXTRACT_VERSION)
+               and final_meta.get("extract_version") == EXTRACT_VERSION
+               and final_meta.get("actual_model") == model and final["model"] == model)
     # A retained result owns its original frame, even after a newer attempt.
     if settled:
         snapshot = (final_meta["context_snapshot"],) if "context_snapshot" in final_meta else None
@@ -201,6 +202,7 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, re
         bound = (isinstance(meta, dict) and meta.get("hash") == r["content_hash"]
                  and inference.is_current(meta, target=_INFERENCE_VERSION)
                  and meta.get("extract_version") == EXTRACT_VERSION
+                 and meta.get("actual_model") == model and final["model"] == model
                  and meta.get("plan_version") == PLAN_VERSION and meta.get("context_binding") == binding)
         if "context_snapshot" in meta and _frame_meta(r) != {
                 key: meta.get(key) for key in ("context_snapshot", "context_digest", "patient_state_context")}:

@@ -582,7 +582,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, base_do
     if ledger.db.in_transaction:
         raise RuntimeError("patient_summary_transaction_active")
     if cloud_policy.stopped(ledger):
-        return "held", None   # `cloud-llm stop` also stops sends to Jev
+        return "deferred", None   # `cloud-llm stop` also stops sends to Jev without sticking after resume
     key = semantic_jev.api_key()
     cloud_key = cloud_policy.selected_key(extract_llm.HOME, cfg)
     scfg, errors = semantic_policy.semantic_config(cfg, key_present=bool(key))
@@ -695,6 +695,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, base_do
                     # a run that asks Jev stops once the live config no longer lets Jev be asked
                     or skip_reason is None and (live_semantic["mode"] == "off" or live_semantic["jev_held"])
                     or paused(ledger.db, pid)
+                    or cloud_policy.stopped(ledger)
                     or cloud_policy.selected_key(extract_llm.HOME, live) != cloud_key
                     or live_semantic["project_ids"] is not None and pid not in live_semantic["project_ids"]
                     or patient_context_refresh_state._quality_assessment(live_semantic) != assessment):
@@ -931,7 +932,7 @@ def _ask(cfg, payload, deadline, admit, *, provider=None, evidence_out=None, loc
         # without charging the patient an attempt
         raise patient_context_refresh_state.Deferred(
             "patient_context_turn_busy" if err.get("kind") == "busy" else "patient_context_endpoint_unsent")
-    if response and response.get("status") == 503:
+    if provider is None and response and response.get("status") == 503:
         # still loading the model: the call did no work, same no-charge hold
         # (sent, so not in the proven-unsent generation return)
         raise patient_context_refresh_state.Deferred("patient_context_endpoint_unavailable")

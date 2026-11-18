@@ -709,7 +709,7 @@ def _raw_extraction_current(db, row, cfg):
     candidate = dict(row)
     pid = candidate["project_id"]
     model = extract_llm.resolved_model(cfg)
-    latest = db.execute("SELECT meta FROM artifacts WHERE kind=? AND message_id=? "
+    latest = db.execute("SELECT meta, model FROM artifacts WHERE kind=? AND message_id=? "
                         "AND (project_id IS NULL OR project_id=?) AND "
                         + current_meta_pred("meta")
                         + " AND COALESCE(json_extract(CASE WHEN json_valid(meta) THEN meta END,"
@@ -720,7 +720,9 @@ def _raw_extraction_current(db, row, cfg):
     if required is not None:
         return extract_llm.cloud_completion(db, row, required) == "complete", meta
     # A local final keeps the model it was made with; a later model change does not stale it.
-    if isinstance(meta, dict) and isinstance(meta.get("actual_model"), str) and meta["actual_model"]:
+    if (isinstance(model, str) and model
+            and isinstance(meta, dict) and isinstance(meta.get("actual_model"), str) and meta["actual_model"]
+            and latest["model"] == meta["actual_model"]):
         model = meta["actual_model"]
     cloud = _saved_cloud_contract(meta)
     if cloud is not None:

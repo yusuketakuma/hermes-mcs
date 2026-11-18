@@ -247,7 +247,8 @@ def _measurement_source_bound(db, m, kind, cfg, *, artifact_ref=_no_artifact_fen
         source = db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=?",
                             (m["project_id"], m["message_id"])).fetchone()
         # The local model may change without invalidating a stored extraction.
-        return (isinstance(model, str) and bool(model) and isinstance(expected_model, str) and bool(expected_model)
+        return (isinstance(model, str) and bool(model) and model == row["model"]
+                and isinstance(expected_model, str) and bool(expected_model)
                 and meta["source_binding"] == dependency_loss.source_binding(db, m["project_id"], m["message_id"])
                 and source is not None
                 and extract_llm.progress_for_message(db, source, model=model).get("state") == "complete")
@@ -380,7 +381,8 @@ def _measurement_source_page(db, page, kinds, refs, expected_model):
             continue
         meta = loads_dict(artifact['meta'])
         if (not isinstance(meta, dict) or not isinstance(meta.get('source_binding'), str)
-                or not isinstance(meta.get('actual_model'), str) or not meta['actual_model']):
+                or not isinstance(meta.get('actual_model'), str) or not meta['actual_model']
+                or artifact['model'] != meta['actual_model']):
             continue
         candidates.append((i, row, meta['source_binding'], meta['actual_model']))
     bindings = dependency_loss.source_bindings(
