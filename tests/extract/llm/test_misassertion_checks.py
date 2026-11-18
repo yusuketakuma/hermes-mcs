@@ -233,6 +233,23 @@ def test_event_record_patient_exam_recipient_is_not_the_actor():
     assert "actor" not in out["event_records"][0]
 
 
+def test_event_record_honorific_exam_recipient_is_not_the_actor():
+    for tail in ("受診されました", "受診なさいました", "受診いたしました",
+                 "受診なさいます", "受診頂きました"):
+        body = f"ご本人は10月28日にクリニックを{tail}。"
+        out = _validate(body, {"event_records": [{
+            "kind": "exam", "subject": "patient", "status": "current",
+            "negated": False, "evidence": body, "actor": "ご本人"}]})
+        assert "actor" not in out["event_records"][0], tail
+    for actor, body in (
+            ("患者さん", "患者さんは10月28日にクリニックを受診されました。"),
+            ("利用者", "利用者は10月28日にクリニックを受診いたしました。")):
+        out = _validate(body, {"event_records": [{
+            "kind": "exam", "subject": "patient", "status": "current",
+            "negated": False, "evidence": body, "actor": actor}]})
+        assert "actor" not in out["event_records"][0], actor
+
+
 def test_event_record_attributes_must_match_their_role():
     body = "ご本人は10月28日に訪問看護師による創部の処置を受けました。"
     out = _validate(body, {"event_records": [{
