@@ -1,7 +1,10 @@
 """JSON output shapes and shared medication syntax for extraction validation."""
+from copy import deepcopy
 import re
 
+import clinical_allergies
 from clinical_events import CARE_DETAIL_TYPES
+import patient_context
 from patient_context import CATEGORIES, DETAIL_KEYS
 
 SCHEMA = {
@@ -150,18 +153,46 @@ SCHEMA = {
 # Batch envelope: same per-message object plus the target index. The
 # index is required — an item without "i" cannot be routed to its body
 # and is dropped, never guessed.
-BATCH_ITEM = dict(SCHEMA["schema"])
-BATCH_ITEM["properties"] = dict(SCHEMA["schema"]["properties"])
-BATCH_ITEM["properties"]["i"] = {"type": "integer"}
-BATCH_ITEM["required"] = [*SCHEMA["schema"]["required"], "i"]
+def batch_schema(single):
+    """Wrap the individual response shape with its required target index."""
+    item = dict(single["schema"])
+    item["properties"] = {**single["schema"]["properties"], "i": {"type": "integer"}}
+    item["required"] = [*single["schema"]["required"], "i"]
+    return {
+        "name": "mcs_extract_batch",
+        "schema": {"type": "object",
+                   "properties": {"items": {"type": "array", "items": item}},
+                   "required": ["items"],
+                   "additionalProperties": False}}
 
-SCHEMA_BATCH = {
-    "name": "mcs_extract_batch",
-    "schema": {"type": "object",
-               "properties": {"items": {"type": "array",
-                                        "items": BATCH_ITEM}},
-               "required": ["items"],
-               "additionalProperties": False}}
+
+SCHEMA_BATCH = batch_schema(SCHEMA)
+BATCH_ITEM = SCHEMA_BATCH["schema"]["properties"]["items"]["items"]
+
+
+def gen12_schema():
+    """Build the next response contract without selecting it for runtime use."""
+    # X9 selects this contract together with the generation and prompt switch.
+    # Never mutate SCHEMA: it also describes saved responses from the current generation.
+    schema = deepcopy(SCHEMA)
+    props = schema["schema"]["properties"]
+    context = props["patient_context"]["items"]["properties"]
+    context["category"]["enum"] = sorted(patient_context.CATEGORIES)
+    context["details"]["items"]["properties"]["key"]["enum"] = sorted(patient_context.DETAIL_KEYS)
+    props[clinical_allergies.FIELD] = {"type": "array", "items": {
+        "type": "object", "properties": {
+            "allergen": {"type": ["string", "null"]},
+            "kind": {"type": "string", "enum": list(clinical_allergies.KINDS)},
+            "reaction": {"type": ["string", "null"]},
+            "subject": {"type": "string", "enum": list(clinical_allergies.SUBJECTS)},
+            "status": {"type": "string", "enum": list(clinical_allergies.STATUSES)},
+            "negated": {"type": "boolean"},
+            "certainty": {"type": "string", "enum": list(clinical_allergies.CERTAINTIES)},
+            "evidence": {"type": ["string", "null"]}},
+        "required": ["kind", "subject", "status", "negated", "certainty"],
+        "additionalProperties": False}}
+    return schema
+
 
 RX_DOSE_ONE = (r"\s*[0-9０-９.．]+\s*(?:mg|μg|mcg|g|mL|ml|錠|%|単位|包|枚|本|カプセル|cap|Cap|CAP)"
                 # 5mg錠, 5mg1錠: the strength's form or count, kept as written

@@ -21,6 +21,7 @@ import local_llm
 import original_source_keys
 import attachment_feedback
 import patient_priority
+import upgrade_scope
 import writer_lock
 from mcs_util import load_config
 from mcs_util import payload_hash as payload_hash
@@ -254,6 +255,7 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
     if memory_code is not None:
         return _defer_result(counts, memory_code if stage == 'local' else None)
     root = attachment_ocr._data_root(ledger)
+    scope = upgrade_scope.resolve(cfg)
     fd = writer_lock.acquire_run_lock(str(root / ('attachment_inference_' + stage + '.lock')))
     if fd is None:
         return _defer_result(counts, 'inference_lock_busy' if stage == 'local' else None)
@@ -309,6 +311,9 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
                     continue  # a current cloud result does not depend on the local model
                 source['_feedback_revision'] = attachment_feedback.revision(
                     ledger.db, row['project_id'], key, source['_source_binding'])
+                if not upgrade_scope.attachment_admitted(ledger.db, scope, row['project_id'], key,
+                        source['_source_binding'], _contract(cfg), source['_feedback_revision']):
+                    continue  # a closed upgrade scope keeps this earlier-contract page
                 if used >= limit or time.monotonic() >= deadline:
                     finished = False
                     break
