@@ -998,8 +998,7 @@ def _context_worker(ledger, initial, index):
                     if capacity_reduced(index, settings["max_concurrency"]):
                         _event("cloud_worker_retired", reason="capacity_reduced")
                         return
-                with writer_lock.capture_writer_refusal() as diagnostic:
-                        if role is None:
+                if role is None:
                     # A hold that failed is retried on every pass, so a live child never stays hidden.
                     role = hold_role(HOME, ROLE_CLOUD)
                 with writer_lock.capture_writer_refusal() as diagnostic:
