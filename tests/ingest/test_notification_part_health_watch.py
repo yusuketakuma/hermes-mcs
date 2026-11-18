@@ -194,6 +194,17 @@ def test_legacy_parts_with_inconsistent_counts_read_as_unmeasured(tmp_path):
     assert "件数は未測定" in rows and "6件" not in rows
 
 
+def test_legacy_parts_inconsistent_counts_stay_unmeasured_past_the_window(tmp_path):
+    # Count consistency gates both clocks: an old observed_at cannot turn
+    # an inconsistent legacy count into a past observation.
+    report = _tick(tmp_path, 10000, ["notification_parts_incomplete"],
+                   parts=_legacy_parts(
+                       observed_at=5000, total=6))
+    assert report["notify_parts_measurement"] == "unknown"
+    rows = _rows(report)
+    assert "件数は未測定" in rows and "記録時点の観測値" not in rows
+
+
 def test_expired_carried_parts_read_as_unmeasured(tmp_path):
     stale = _parts_block(status='stale_measurement',
                          observed_at=400 - health_watch.CARD_STALL_S - 1)

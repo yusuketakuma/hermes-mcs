@@ -282,15 +282,17 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
                    else 'recorded' if parts_status == 'recorded' else None)
     if measurement is None and isinstance(parts, dict) and 'status' not in parts:
         # Writers before the status field stored only counts and observed_at;
-        # judge that observation by its own clock — fresh consistent counts
-        # are a current measurement, an old clock a past one, anything else
-        # is not a measurement at all.
+        # judge that observation by its own clock — consistent counts with
+        # a fresh clock are a current measurement, with an old clock a past
+        # one, anything else (missing, inconsistent, unreadable) is not a
+        # measurement at all.
         observed = parts.get('observed_at')
-        if finite_number(observed) and observed <= now:
+        if (finite_number(observed) and observed <= now
+                and report['notify_incomplete_parts'] is not None):
             age = now - observed
-            if age <= CARD_STALL_S and report['notify_incomplete_parts'] is not None:
+            if age <= CARD_STALL_S:
                 measurement = 'recorded'
-            elif age > CARD_STALL_S:
+            else:
                 measurement = 'stale'
         if measurement is None:
             measurement = 'unknown'
