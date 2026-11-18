@@ -35,7 +35,7 @@ def notify_dirs(root: str) -> dict:
     return {name: os.path.join(root, name) for name in
             ("discord_render", "discord_state", "slack_render", "slack_state",
              "lineworks_render", "lineworks_state", "flags",
-             "cmd_int", "cmd_results")}
+             "cmd_int", "cmd_results", "restore_specs")}
 
 
 def ensure_dirs(root: str) -> None:

@@ -774,20 +774,119 @@ def test_reconcile_idempotent(world):
     notify_spool.mark_restored(str(world.data))
     rep1 = notify_reconcile.reconcile_after_restore(world.led, CFG)
     rep2 = notify_reconcile.reconcile_after_restore(world.led, CFG)
-    # held verdicts withdraw the spec file, so file-derived fields
-    # (spec_linked/events_held/spec_withdrawn) legitimately differ on a
-    # rerun — the durable outcome (hold set, notice count) must not drift
-    stable = {"attempt_id", "delivery_id", "verdict", "detail",
-              "card_id", "scope"}
-    assert [{k: v for k, v in x.items() if k in stable}
-            for x in rep1["verdicts"]] == \
-        [{k: v for k, v in x.items() if k in stable}
-         for x in rep2["verdicts"]]
+    assert rep1["verdicts"] == rep2["verdicts"]
     assert rep1["held"] == rep2["held"]
     assert len(world.holds()) == 1
     assert world.led.db.execute(
         "SELECT COUNT(*) FROM notify_outbox WHERE kind='update_notice'"
     ).fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("rewound_render", [False, True])
+@pytest.mark.parametrize("resolve_result", ["mark_delivered", "mark_not_sent"])
+def test_repeat_reconcile_preserves_exact_spec_bytes_and_unrelated_pending_intent(
+        world, tmp_path, rewound_render, resolve_result):
+    import sqlite3
+    import uuid
+    from contextlib import closing
+
+    world.seed()
+    world.led.db.execute(
+        "INSERT INTO patients(project_id,patient_name,is_archived) VALUES(?,?,0)",
+        (2, "患者B"))
+    world.led.db.execute(
+        "INSERT INTO messages(message_id,project_id,sender_name,posted_at,"
+        "posted_at_ts,body_text,content_hash,body_state,parent_id) "
+        "VALUES(?,?,?,?,?,?,?,?,?)",
+        (202, 2, "職員", "2026-09-24T08:02", int(NOW) + 202,
+         "別スレッド本文", f"{202:064x}", "full", None))
+    disputed_eid = world.led.outbox_add(
+        "new_messages", 1, {"message_ids": [100, 101]})
+    other_eid = world.led.outbox_add(
+        "new_messages", 2, {"message_ids": [202]})
+    world.led.db.execute(
+        "UPDATE notify_outbox SET route='interactive', state='pending' "
+        "WHERE event_id IN (?,?)", (disputed_eid, other_eid))
+    world.led.db.commit()
+
+    backup = tmp_path / "pre_dispatch.db"
+    if rewound_render:
+        with closing(sqlite3.connect(str(backup))) as dest:
+            world.led.db.backup(dest)
+
+    ev = dict(world.led.db.execute(
+        "SELECT * FROM notify_outbox WHERE event_id=?",
+        (disputed_eid,)).fetchone())
+    notify_cards.dispatch_intent(world.led, ev, CFG, now=NOW)
+    did = world.render()["delivery_id"]
+    published_path = world.data / "discord_render" / f"{did}.json"
+    original_bytes = published_path.read_bytes()
+    spec = json.loads(original_bytes.decode("utf-8"))
+    assert "transport" not in spec["delivery"]
+
+    state = str(world.data / "discord_state")
+    aid = _journal_claim(state, "w1", spec)
+    if resolve_result == "mark_delivered":
+        _journal_result(state, "w1", aid, did, "delivered", message_id="999001")
+    else:
+        journal.append(state, "w1", {
+            "phase": "started", "attempt_id": aid, "delivery_id": did})
+
+    seen = []
+    for _ in range(2):
+        if rewound_render:
+            with closing(sqlite3.connect(str(backup))) as src:
+                src.backup(world.led.db)
+            assert world.led.db.execute(
+                "SELECT 1 FROM notification_renders WHERE delivery_id=?",
+                (did,)).fetchone() is None
+        notify_spool.mark_restored(str(world.data), backup_path="b.db")
+        rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
+        verdict = next(v for v in rep["verdicts"] if v["attempt_id"] == aid)
+        other_row = world.led.db.execute(
+            "SELECT state, progress FROM notify_outbox WHERE event_id=?",
+            (other_eid,)).fetchone()
+        seen.append((
+            verdict["spec_linked"],
+            verdict["events_held"],
+            verdict["spec_withdrawn"],
+            other_row["state"],
+            json.loads(other_row["progress"] or "{}").get("hold_reason"),
+        ))
+        assert not published_path.exists()
+        archived_path = world.data / "restore_specs" / f"{did}.json"
+        assert archived_path.read_bytes() == original_bytes
+
+    assert seen[0] == seen[1] == (True, 1, True, "pending", None)
+    dirs = notify_spool.notify_dirs(str(world.data))
+    assert notify_reconcile._read_spec_bytes(dirs, did) == (original_bytes, spec)
+
+    # Unrelated pending interactive notification still dispatches normally.
+    other_ev = dict(world.led.db.execute(
+        "SELECT * FROM notify_outbox WHERE event_id=?",
+        (other_eid,)).fetchone())
+    assert notify_cards.dispatch_intent(world.led, other_ev, CFG, now=NOW + 5)["dispatched"]
+
+    # Human-approved resolution preserves its exact contract after repeated reconcile.
+    req = {"version": 1, "cmd": "ops.card_resolve",
+           "command_id": str(uuid.uuid4()),
+           "actor": "op-user", "human_confirmed": True,
+           "reason": "合成チャネル確認による保留解除",
+           "delivery_id": did, "attempt_id": aid,
+           "result": resolve_result, **CFG["notify"]["discord"],
+           "evidence": {"method": "synthetic", "ref": "channel:42"}}
+    if resolve_result == "mark_delivered":
+        req["message_id"] = "999001"
+    else:
+        req["evidence"].update(worker_stopped=True, proof="remote_absent")
+    out = notify_recovery.apply_card_resolve(world.led, req, CFG, now=NOW + 10)
+    assert out["outcome"] == "applied"
+    assert all(h["released_at"] is not None for h in world.holds())
+    disputed_state = world.led.db.execute(
+        "SELECT state FROM notify_outbox WHERE event_id=?",
+        (disputed_eid,)).fetchone()["state"]
+    if rewound_render:
+        assert disputed_state == ("accepted" if resolve_result == "mark_delivered" else "pending")
 
 
 # --- cloud sends after a restore ---------------------------------------------
