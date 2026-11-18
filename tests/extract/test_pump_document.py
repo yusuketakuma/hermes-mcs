@@ -1,4 +1,6 @@
 """PCA projections preserve candidate status and never infer a date or dose."""
+import pytest
+
 import pump_document
 
 
@@ -19,6 +21,15 @@ def test_document_date_does_not_date_undated_or_separate_line_candidate():
     rows = _project('PCAポンプ\n作成日:2026年11月5日\n測定日:2026年11月4日\n残量:10mL\n')['events']
     assert rows[0]['dates'] == [] and rows[0]['time'] is None
     assert not _project('食事残量:10mL')['identified']
+
+
+@pytest.mark.parametrize('raw', ['2026年00月00日', '2026年11月0日'])
+def test_zero_measurement_date_stays_ambiguous_with_source(raw):
+    row, = _project(f'PCAポンプ\n測定日:{raw} 残量:10mL\n')['events']
+    assert row['time_state'] == 'ambiguous' and row['time'] is None
+    assert row['dates'][0] == {'raw': raw, 'value': None, 'precision': 'day',
+                               'valid': False, 'role': 'event'}
+    assert row['number'] == '10' and row['unverified'] is True
 
 
 def test_multiple_dates_and_missing_year_stay_unresolved():

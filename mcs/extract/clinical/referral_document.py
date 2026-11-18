@@ -66,21 +66,25 @@ def written_dates(text, role="event"):
             year = parts["y"] or parts["iy"]
             month, day = parts["m"] or parts["im"] or parts["sm"], parts["d"] or parts["id"] or parts["sd"]
         year = int(year) if year is not None else None
-        month = int(month) if month else None
-        day = int(day) if day else None
-        precision = "month_day" if year is None else "day" if day else "month" if month else "year"
+        month = int(month) if month is not None else None
+        day = int(day) if day is not None else None
+        precision = ("month_day" if year is None else "day" if day is not None
+                     else "month" if month is not None else "year")
         valid, value = True, None
         try:
             check_year = year if year is not None else 2000
-            first = date(check_year, month or 1, day or 1)
-            last = date(check_year, month or 12,
-                        day or calendar.monthrange(check_year, month or 12)[1])
+            first = date(check_year, month if month is not None else 1,
+                         day if day is not None else 1)
+            last = date(check_year, month if month is not None else 12,
+                        day if day is not None else
+                        calendar.monthrange(check_year, month if month is not None else 12)[1])
             if era == "明治" and year < 1873 and month is not None:
                 raise ValueError("pre-Gregorian era month")
             if era and (era_year < 1 or first > _ERAS[era][2] or last < _ERAS[era][1]):
                 raise ValueError("outside era")
             value = (f"--{month:02d}-{day:02d}" if year is None else
-                     f"{year:04d}" + (f"-{month:02d}" if month else "") + (f"-{day:02d}" if day else ""))
+                     f"{year:04d}" + (f"-{month:02d}" if month is not None else "")
+                     + (f"-{day:02d}" if day is not None else ""))
         except ValueError:
             valid = False
         result.append({"raw": match[0], "value": value, "precision": precision, "valid": valid, "role": role})
