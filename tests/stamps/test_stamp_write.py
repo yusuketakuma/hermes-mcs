@@ -286,7 +286,9 @@ def test_changed_authorization_or_target_before_admission_never_writes(scene, ch
         cfg["stamps"]["account_user_id"] = 88
     ledger.db.commit()
     assert _apply(scene, request)["outcome"] == "rejected"
-    assert _drain(scene) == {"confirmed": 0, "unknown": 0, "rejected": 0, "held": 0}
+    assert _drain(scene) == {"confirmed": 0, "unknown": 0, "rejected": 0, "held": 0,
+                             "publish_pending": 0, "publish_oldest_wait_s": 0,
+                             "publish_failed": 0, "publish_retry_repaired": 0}
     assert api.posts == [] and api.gets == [] and api.profiles == 0
 
 
@@ -498,7 +500,9 @@ def test_expired_execution_window_leaves_queued_intent_without_api_calls(scene):
     assert _apply(scene, request)["stamp_state"] == "queued"
     ledger, cfg, root, api, _ = scene
     assert stamp_write.drain(ledger, api, cfg, root, time.monotonic()) == {
-        "confirmed": 0, "unknown": 0, "rejected": 0, "held": 0}
+        "confirmed": 0, "unknown": 0, "rejected": 0, "held": 0,
+        "publish_pending": 0, "publish_oldest_wait_s": 0,
+        "publish_failed": 0, "publish_retry_repaired": 0}
     assert _receipt(scene, request)["stamp_state"] == "queued"
     assert api.posts == [] and api.gets == [] and api.profiles == 0
 
