@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "通知の未完了部品の件数を、status の無い旧形式の記録でも新鮮な観測なら実測として表示",
+  "summary": "監視が読む通知の未完了部品の件数について、status 欄を持たない旧形式の記録でも、観測時刻が新鮮で件数が整合するときは実測の件数として表示します。従来は status が無いだけで「配送状況を今回確認できません」「件数は未測定」と表示し、実際に測定済みの件数を未確認扱いしていました。壊れた値・未来や古い観測時刻・件数の不整合は従来どおり現在の実測とは断定しません。",
+  "upgrade": "追加操作は不要です。health_watch（health.json の読み手）だけの変更で、書き手（health_report）は変わりません。新旧の読み手が混在する間は、同じ記録でも旧い読み手は status の無い旧形式を未測定と表示し続けます（誤った断定はしません）。",
+  "details": [
+    "mcs/ingest/health_watch.py: status の無い incomplete_parts を status 導入前の旧形式として扱い、件数検査（total が by_state の合計と一致）を新鮮・古い観測の共通前提とします。観測時刻が有限・未来でなく CARD_STALL_S（1800秒）以内なら 'recorded'（現在の実測）、窓を超えるなら 'stale'（記録時点の観測値として件数と時刻を表示）とし、件数不整合・欠落・文字列・未来の時刻は 'unknown'（件数は未測定）とします。",
+    "status を明示する新形式（recorded・stale_measurement・unknown+reason）の判定と、stale の鮮度窓・unknown の理由表示は変えていません。",
+    "tests/ingest/test_notification_part_health_watch.py: 旧形式の新鮮な観測・期限切れ・欠落/文字列/未来の観測時刻・件数不整合（新鮮/古い観測時刻の両方）の回帰を追加しました。"
+  ],
+  "refs": [
+    "mcs/ingest/health_watch.py",
+    "tests/ingest/test_notification_part_health_watch.py",
+    "changes/ocr-local-defer-observed-reasons.json"
+  ]
+}
