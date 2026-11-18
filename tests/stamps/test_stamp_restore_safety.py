@@ -42,17 +42,128 @@ def test_terminal_result_publication_retries_from_committed_status_without_post(
 
     monkeypatch.setattr(notify_spool, "publish_file", fail_result)
     counts = _drain(scene)
-    assert counts["confirmed"] == 1 and counts["held"] == 1
+    assert counts["confirmed"] == 1 and counts["held"] == 1 and counts["publish_failed"] == 1
     assert _receipt(scene, request)["stamp_state"] == "confirmed"
     assert json.loads(_operation(scene, request)["content"])["result_published"] is False
     posts, gets = list(scene[3].posts), list(scene[3].gets)
     assert posts == [(100, "viewed", False)]
+    # The retry slot is committed up front, so the row sits out the backoff.
+    assert json.loads(_operation(scene, request)["content"])["publish_next_at"] == (
+        NOW + stamp_write.PUBLISH_BACKOFF_BASE_S)
+    idle = _drain(scene)
+    assert idle["publish_failed"] == 0 and idle["publish_pending"] == 1
     monkeypatch.setattr(notify_spool, "publish_file", original)
+    monkeypatch.setattr(stamp_write.time, "time", lambda: NOW + stamp_write.PUBLISH_BACKOFF_BASE_S)
     _drain(scene)
     result = Path(notify_spool.notify_dirs(scene[2])["cmd_results"]) / (request["command_id"] + ".json")
     assert json.loads(result.read_bytes())["stamp_state"] == "confirmed"
     assert json.loads(_operation(scene, request)["content"])["result_published"] is True
     assert scene[3].posts == posts and scene[3].gets == gets
+
+
+def _stuck_publication(scene, request, wait=100, **fields):
+    """Settle an applied operation without publishing its result (synthetic)."""
+    row = _operation(scene, request)
+    content = json.loads(row["content"])
+    content.update(state="confirmed", updated_at=NOW - wait, result_published=False)
+    content.pop("publish_attempts", None)
+    content.pop("publish_next_at", None)
+    content.update(fields)
+    scene[0].db.execute("UPDATE artifacts SET content=?,created_at=? WHERE artifact_id=?",
+                        (json.dumps(content), NOW - wait, row["artifact_id"]))
+    scene[0].db.commit()
+
+
+def _block_publications(monkeypatch, keep):
+    original = notify_spool.publish_file
+
+    def fail_matching(directory, name, raw):
+        if Path(directory).name == "cmd_results" and name != keep:
+            raise OSError("synthetic result publication failure")
+        return original(directory, name, raw)
+
+    monkeypatch.setattr(notify_spool, "publish_file", fail_matching)
+    return original
+
+
+def test_failed_publications_rotate_and_later_results_still_publish(scene, monkeypatch):
+    # A queued witness in the same namespace holds new operations, so the stuck
+    # rows settle before the healthy request is admitted.
+    for n in range(5):
+        req = _command(scene, serial=800 + n)
+        assert _apply(scene, req)["stamp_state"] == "queued"
+        _stuck_publication(scene, req)
+    request = _command(scene)
+    assert _apply(scene, request)["stamp_state"] == "queued"
+    scene[0].db.commit()
+    _block_publications(monkeypatch, request["command_id"] + ".json")
+    counts = _drain(scene)          # the bounded publish window holds four of them
+    assert counts["confirmed"] == 1
+    assert counts["publish_failed"] == 4 and counts["held"] == 4
+    assert counts["publish_pending"] == 5 and counts["publish_oldest_wait_s"] == 100
+    assert json.loads(_operation(scene, request)["content"])["result_published"] is True
+    # Deferred rows still retry once their backoff matures, without any wire call.
+    counts = _drain(scene)
+    assert counts["publish_failed"] == 1 and counts["publish_pending"] == 5
+    monkeypatch.setattr(stamp_write.time, "time",
+                        lambda: NOW + stamp_write.PUBLISH_BACKOFF_BASE_S)
+    counts = _drain(scene)
+    assert counts["publish_failed"] == 4 and counts["publish_pending"] == 5
+    counts = _drain(scene)
+    assert counts["publish_failed"] == 1
+    assert scene[3].posts == [(100, "viewed", False)] and scene[3].gets == [(1, 100, None), (1, 100, None)]
+
+
+def test_rerender_failure_after_publish_is_not_a_publish_failure(scene, monkeypatch):
+    request = _command(scene)
+    assert _apply(scene, request)["stamp_state"] == "queued"
+    import notify_cards
+
+    def fail(*args, **kwargs):
+        raise OSError("synthetic render failure")
+
+    monkeypatch.setattr(notify_cards, "rerender_message_cards", fail)
+    counts = _drain(scene)
+    assert counts["confirmed"] == 1 and counts["held"] == 1 and counts["publish_failed"] == 0
+    assert json.loads(_operation(scene, request)["content"])["result_published"] is True
+    result = Path(notify_spool.notify_dirs(scene[2])["cmd_results"]) / (request["command_id"] + ".json")
+    assert json.loads(result.read_bytes())["stamp_state"] == "confirmed"
+    sent = []
+    original = notify_spool.publish_file
+
+    def watch(directory, name, raw):
+        sent.append(name)
+        return original(directory, name, raw)
+
+    monkeypatch.setattr(notify_spool, "publish_file", watch)
+    monkeypatch.setattr(notify_cards, "rerender_message_cards", lambda *a, **k: None)
+    counts = _drain(scene)
+    assert counts["publish_failed"] == 0 and sent == []
+
+
+@pytest.mark.parametrize("fields", [
+    {},                                          # pre-backoff rows carry no retry fields
+    {"publish_attempts": "two"},                  # corrupt count restarts at zero
+    {"publish_attempts": True},
+    {"publish_next_at": "soon"},
+    {"publish_next_at": -5},
+    {"publish_next_at": NOW + 10 * stamp_write.PUBLISH_BACKOFF_CAP_S},
+    {"publish_next_at": 1e300},
+])
+def test_corrupt_or_missing_publish_retry_fields_are_normalized(scene, monkeypatch, fields):
+    request = _command(scene)
+    assert _apply(scene, request)["stamp_state"] == "queued"
+    _stuck_publication(scene, request, **fields)
+    scene[0].db.commit()
+    counts = _drain(scene)
+    assert counts["publish_failed"] == 0 and counts["publish_pending"] == 0, counts
+    assert counts["publish_retry_repaired"] == (0 if fields == {} else 1), counts
+    stored = json.loads(scene[0].db.execute("SELECT content FROM artifacts WHERE kind=?",
+                                            (stamp_write.KIND,)).fetchone()[0])
+    assert stored["result_published"] is True
+    assert stored["publish_attempts"] == 1
+    assert stored["publish_next_at"] == NOW + stamp_write.PUBLISH_BACKOFF_BASE_S
+    assert scene[3].posts == [] and scene[3].gets == [] and scene[3].profiles == 0
 
 
 def test_started_witness_visible_after_publication_error_allows_get_only(scene, monkeypatch):
