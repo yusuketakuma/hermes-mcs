@@ -34,3 +34,22 @@ def test_first_jobs_only_health_cannot_claim_unread_freshness(tmp_path, monkeypa
     observed = health_watch.classify_health(str(path), 2001, 1800)
     assert observed["status"] == "degraded"
     assert "unread_collection_unknown" in observed["state_reasons"]
+
+
+def test_standalone_future_heartbeat_cannot_claim_a_live_host(tmp_path):
+    import os
+    data = tmp_path / "data"
+    data.mkdir()
+    now = 1_800_000_000.0
+    (data / "health.json").write_text(json.dumps(
+        {"overall": "ok", "at": now - 60, "unread_at": now - 60, "state_reasons": []}))
+    (data / "standalone-status.json").write_text(json.dumps({
+        "pid": os.getpid(), "updated_at": now + 2000, "started_at": now + 1900,
+        "update_in_progress": False, "update_marker": None, "children": {},
+        "exits": {"mcs_check": {"last_exit": 0, "failures": 0, "last_ok_at": now + 1950}},
+        "connector": {"state": "running", "failures": 0, "failing_since": None,
+                      "last_error": None, "retry_at": None}}))
+    report = health_watch.evaluate(home=str(tmp_path), now=now,
+                                   cfg={"runtime_mode": "standalone"})
+    assert report["status"] != "ok"
+    assert report["state_reasons"] == ["standalone_clock_unverified"]
