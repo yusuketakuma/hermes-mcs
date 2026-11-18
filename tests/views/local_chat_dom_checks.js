@@ -21,4 +21,16 @@ assert.match(content(section), /母に糖尿病の既往あり/);
 assert.equal(section.children.find(node => node.tagName === "blockquote").textContent, "母に糖尿病の既往あり");
 const unknown = vm.runInContext('contextSection({patient_context:[{text:"合成記録",subject:"unspecified",evidence:"合成記録"}]})', sandbox);
 assert.match(content(unknown), /対象未確認/);
-console.log("local chat DOM contracts passed");
+async function checkReplyRecords() {
+  sandbox.reply = {project_id: 101, message_id: 3, parent_id: 1};
+  sandbox.api = async (kind, params) => {
+    assert.equal(params.message, 3);
+    return kind === "attachments" ? {items: []} : {message: {patient_context:[{text:"合成の返信の記録",subject:"family",evidence:"合成の家族情報"}]}};
+  };
+  await vm.runInContext("showMessageInfo(reply, state.detailRequest)", sandbox);
+  const text = content(document.getElementById("message-info"));
+  assert.match(text, /合成の返信の記録/);
+  assert.match(text, /対象: 家族/);
+  assert.match(text, /合成の家族情報/);
+}
+checkReplyRecords().then(() => console.log("local chat DOM contracts passed")).catch(error => {console.error(error); process.exitCode = 1;});

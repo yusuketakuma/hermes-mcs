@@ -141,7 +141,10 @@ async function openDetail(row) {
 }
 async function showMessageInfo(row, request) {
   try {
-    const data = await api("attachments", {project: state.project, message: row.message_id});
+    const [data, source] = await Promise.all([
+      api("attachments", {project: state.project, message: row.message_id}),
+      api("evidence", {project: state.project, message: row.message_id})
+    ]);
     if (request !== state.detailRequest) return;
     const files = section(`添付 · 投稿 ${row.message_id}`);
     const labels = {downloaded:"取得済み", pending:"未取得", failed:"取得失敗", pruned:"原本保持期間終了", unavailable:"利用不可", unprocessed:"未処理", complete:"処理済み", empty:"文字記録なし"};
@@ -153,7 +156,7 @@ async function showMessageInfo(row, request) {
     files.append(more);
     if (!data.items.length) files.append(el("p", "保存済みの添付はありません。"));
     if (row.parent_id) {files.append(el("h3", "この返信の状態")); for (const text of row.metadata_flags || []) files.append(el("p", text));}
-    $("message-info").replaceChildren(files);
+    $("message-info").replaceChildren(files, contextSection(source.message));
   } catch (error) {if (request === state.detailRequest) fail(error);}
 }
 $("patient-form").onsubmit = event => {event.preventDefault(); loadPatients();};
