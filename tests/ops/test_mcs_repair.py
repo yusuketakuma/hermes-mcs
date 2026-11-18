@@ -142,7 +142,10 @@ def test_plan_is_deterministic_readonly_and_never_trusts_floor(world):
     assert _hash(world["snapshot"]) == before
     assert sorted(p.name for p in world["snapshot"].parent.iterdir()) == files
     assert "SYNTHETIC_PRIVATE" not in json.dumps(result)
-    assert "project_id" not in json.dumps(result)
+    # upgrade_scope echoes the operator's own configured scope (input, not an
+    # observation); nothing else in the plan may carry identifiers.
+    observed = {k: v for k, v in result.items() if k != "upgrade_scope"}
+    assert "project_id" not in json.dumps(observed)
     assert "SELECT " not in json.dumps(result)
 
 
@@ -236,6 +239,24 @@ def test_stale_v1_counts_split_scope_held_version_drift(world, monkeypatch, tmp_
     counts = repair.plan(snapshot, nonce=NONCE)["counts"]
     assert counts["stale_v1_messages"] == 1
     assert counts["stale_v1_messages_outside_scope"] == 1
+
+
+def test_plan_revalidates_under_the_stored_scope_after_the_setting_changes(
+        world, monkeypatch, tmp_path):
+    """The scope resolved at plan time is saved with the plan, so a live
+    setting change mid-repair cannot strand the audit trail."""
+    snapshot = world["snapshot"]
+    _change(snapshot, "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+                      "VALUES('extract_v1',1,101,'{}',?,200)",
+            (json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": "synthetic-hash",
+                         "rule_version": RULE_VERSION - 1}),))
+    config = tmp_path / "config.json"
+    monkeypatch.setattr(mcs_util, "CONF_PATH", str(config))
+    config.write_text(json.dumps({"extract": {"upgrade_scope": "none"}}), encoding="utf-8")
+    saved = repair.plan(snapshot, nonce=NONCE)
+    assert saved["upgrade_scope"] == {"mode": "none", "project_ids": []}
+    config.write_text(json.dumps({"extract": {"upgrade_scope": "all"}}), encoding="utf-8")
+    repair._validate_plan(saved, snapshot, NONCE, saved["plan_digest"])
 
 
 def test_old_supported_columns_remain_unknown(world):

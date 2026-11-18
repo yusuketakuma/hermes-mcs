@@ -63,6 +63,7 @@ class RepairPlan(TypedDict):
     gapless_verified: bool
     exact_missing_ranges: None
     warnings: list[str]
+    upgrade_scope: dict
     plan_digest: str
 
 
@@ -161,11 +162,13 @@ def _stages() -> list[Stage]:
 
 
 def plan(snapshot: str | Path, *, nonce: str | None = None,
-         max_steps: int = 10_000_000) -> RepairPlan:
+         max_steps: int = 10_000_000, scope=None) -> RepairPlan:
     """Return bounded, count-only observations of an explicit published snapshot.
 
     Zero means no recorded candidate under the stated criterion, not absence
     of an action or gapless acquisition. Missing old columns yield None.
+    ``scope`` overrides the live upgrade scope (a saved plan re-validates
+    under its stored scope, not whatever the host is set to now).
     """
     nonce = str(uuid.uuid4()) if nonce is None else nonce
     if not valid_uuid(nonce):
@@ -253,8 +256,11 @@ def plan(snapshot: str | Path, *, nonce: str | None = None,
         # The same live-scope fragment the rule pass selects with: a closed
         # scope keeps version-drifted earlier-generation rows out of rebuild
         # candidates; they are reported under their own count instead. An open
-        # scope leaves the fragment empty and both counts read as before.
-        scope = upgrade_scope.live()
+        # scope leaves the fragment empty and both counts read as before. The
+        # resolved scope is saved with the plan so re-validation does not
+        # depend on what the host is configured with at verify time.
+        if scope is None:
+            scope = upgrade_scope.live()
         in_scope = upgrade_scope.selection_sql(scope, "rule")
         stale_deps = ({"artifacts": "kind message_id project_id meta",
                        "messages": "message_id content_hash project_id body_state"}
@@ -344,6 +350,8 @@ def plan(snapshot: str | Path, *, nonce: str | None = None,
                      "no_absence_or_completion_inference", "floor_unchanged",
                      "records_are_not_execution_authority",
                      "distinct_device_is_not_disaster_recovery_proof"],
+        "upgrade_scope": {"mode": scope.mode,
+                          "project_ids": sorted(scope.project_ids)},
     }
     report["plan_digest"] = canonical_digest({k: v for k, v in report.items() if k != "plan_digest"})
     return report
@@ -355,7 +363,17 @@ def _validate_plan(value, snapshot, nonce, digest):
             or value.get("nonce") != nonce or value.get("plan_digest") != digest \
             or not valid_hash(digest):
         raise ValueError("plan_incompatible")
-    expected = plan(snapshot, nonce=nonce, max_steps=value["max_steps"])
+    import upgrade_scope
+    # The scope resolved at plan time is part of the plan: re-verification uses
+    # it, so changing the live setting mid-repair never strands an audit trail.
+    stored = value.get("upgrade_scope")
+    if not isinstance(stored, dict) or stored.keys() != {"mode", "project_ids"} \
+            or stored["mode"] not in ("all", "none", "projects") \
+            or not isinstance(stored["project_ids"], list) \
+            or any(type(p) is not int or p <= 0 for p in stored["project_ids"]):
+        raise ValueError("plan_incompatible")
+    scope = upgrade_scope.Scope(stored["mode"], tuple(stored["project_ids"]))
+    expected = plan(snapshot, nonce=nonce, max_steps=value["max_steps"], scope=scope)
     if canonical(expected) != canonical(value):
         raise ValueError("plan_tampered_or_snapshot_changed")
     if not value["snapshot_binding"] or not value["audit"]["ok"]:
