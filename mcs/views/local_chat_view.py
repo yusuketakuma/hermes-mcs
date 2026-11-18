@@ -52,6 +52,9 @@ def _message(view, row):
             "attachments", "metadata_flags", "reaction_actors", "physician_viewed",
             "patient_context")
     result = {key: row.get(key) for key in keys}
+    result["parent_available"] = not row.get("parent_id") or view.db.execute(
+        "SELECT 1 FROM messages WHERE project_id=? AND message_id=?",
+        (row["project_id"], row["parent_id"])).fetchone() is not None
     result["body_text"] = None if row.get("body_state") == "deleted" else row.get("body_text")
     result["summary_lines"] = structured_lines(view.db, row["message_id"], drug_candidates=False,
                                                 plain=True, request_first=True)

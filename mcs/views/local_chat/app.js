@@ -91,7 +91,11 @@ async function loadTimeline(more = false) {
       fragment.append(post(row));
     }
     const panel = $("timeline-panel"), height = panel.scrollHeight;
-    if (more) {$("timeline").prepend(fragment); panel.scrollTop += panel.scrollHeight - height;}
+    if (more) {
+      const first = $("timeline").firstElementChild;
+      if (first?.className === "date-divider" && first.textContent === lastDay) first.remove();
+      $("timeline").prepend(fragment); panel.scrollTop += panel.scrollHeight - height;
+    }
     else {$("timeline").replaceChildren(fragment); panel.scrollTop = state.query ? 0 : panel.scrollHeight;}
     $("older").hidden = !state.cursor;
     $("timeline-status").textContent = state.query ? "一致する保存済みの投稿はありません。" : "保存済みの投稿はありません。";
@@ -116,12 +120,14 @@ function contextSection(row) {
   return context;
 }
 async function openDetail(row) {
-  const request = ++state.detailRequest, project = state.project, root = row.parent_id || row.message_id;
+  const request = ++state.detailRequest, project = state.project;
+  const root = row.parent_id && row.parent_available !== false ? row.parent_id : row.message_id;
   $("detail").classList.add("open"); $("close-detail").hidden = false; $("detail-content").replaceChildren(el("p", "詳細を読込中…", "empty"));
   try {
     const [source, replies] = await Promise.all([api("evidence", {project, message: root}), api("thread", {project, message: root})]);
     if (request !== state.detailRequest) return;
     const original = section("元の投稿"); original.append(post(source.message, true));
+    if (row.parent_id && row.parent_available === false) original.prepend(el("p", "元の投稿は未取得です。保存済みの返信を表示しています。", "state-note"));
     const flags = section("記録の状態");
     for (const text of source.message.metadata_flags || []) flags.append(el("p", text));
     const context = contextSection(source.message);
@@ -136,10 +142,10 @@ async function openDetail(row) {
     if (source.message.reply_count > source.message.stored_replies) thread.append(el("p", "未取得の返信があります。", "state-note"));
     const info = el("div"); info.id = "message-info";
     $("detail-content").replaceChildren(original, flags, context, thread, info);
-    await showMessageInfo(row, request);
+    await showMessageInfo(row, request, row.message_id !== root);
   } catch (error) {if (request === state.detailRequest) {$("detail-content").replaceChildren(el("p", "詳細を取得できませんでした。", "empty")); fail(error);}}
 }
-async function showMessageInfo(row, request) {
+async function showMessageInfo(row, request, withContext = true) {
   try {
     const [data, source] = await Promise.all([
       api("attachments", {project: state.project, message: row.message_id}),
@@ -156,7 +162,7 @@ async function showMessageInfo(row, request) {
     files.append(more);
     if (!data.items.length) files.append(el("p", "保存済みの添付はありません。"));
     if (row.parent_id) {files.append(el("h3", "この返信の状態")); for (const text of row.metadata_flags || []) files.append(el("p", text));}
-    $("message-info").replaceChildren(files, contextSection(source.message));
+    $("message-info").replaceChildren(files, ...(withContext ? [contextSection(source.message)] : []));
   } catch (error) {if (request === state.detailRequest) fail(error);}
 }
 $("patient-form").onsubmit = event => {event.preventDefault(); loadPatients();};

@@ -2,10 +2,13 @@
 // Dependency-free DOM contract checks, run by the Python test when Node is available.
 const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
 class Element {
-  constructor(tag) {this.tagName = tag; this.children = []; this.className = ""; this.textContent = ""; this.hidden = false; this.value = ""; this.classList = {add(){}, remove(){}};}
-  append(...nodes) {for (const node of nodes) {if (node.tagName === "fragment") this.append(...node.children); else this.children.push(node);}}
-  prepend(node) {this.children.unshift(...(node.tagName === "fragment" ? node.children : [node]));}
+  constructor(tag) {this.tagName = tag; this.children = []; this.className = ""; this.textContent = ""; this.hidden = false; this.value = ""; this.scrollTop = 0; this.scrollHeight = 0; this.isConnected = true; this.classList = {add(){}, remove(){}};}
+  append(...nodes) {for (const node of nodes) {if (node.tagName === "fragment") this.append(...node.children); else {node.parentNode = this; this.children.push(node);}}}
+  prepend(node) {const items = node.tagName === "fragment" ? node.children : [node]; for (const item of items) item.parentNode = this; this.children.unshift(...items);}
   replaceChildren(...nodes) {this.children = []; this.append(...nodes);}
+  get firstElementChild() {return this.children[0];}
+  remove() {this.parentNode.children = this.parentNode.children.filter(node => node !== this);}
+  set id(value) {nodes.set(value, this);}
   setAttribute() {}
 }
 const nodes = new Map();
@@ -33,4 +36,34 @@ async function checkReplyRecords() {
   assert.match(text, /対象: 家族/);
   assert.match(text, /合成の家族情報/);
 }
-checkReplyRecords().then(() => console.log("local chat DOM contracts passed")).catch(error => {console.error(error); process.exitCode = 1;});
+async function checkOrphanReply() {
+  sandbox.orphan = {project_id: 101, message_id: 7, parent_id: 999, parent_available: false, body_text:"合成の孤立した返信", body_state:"full"};
+  sandbox.api = async (kind, params) => {
+    assert.equal(params.message, 7, "never request the unavailable parent");
+    return kind === "evidence" ? {message: sandbox.orphan} : {items: []};
+  };
+  await vm.runInContext("openDetail(orphan)", sandbox);
+  const text = content(document.getElementById("detail-content"));
+  assert.match(text, /元の投稿は未取得/);
+  assert.match(text, /合成の孤立した返信/);
+}
+async function checkDatePagination() {
+  vm.runInContext("state.project = 101; state.query = ''", sandbox);
+  const row = (id, day) => ({message_id:id, posted_at_ts:day, body_state:"full", body_text:`合成 ${id}`});
+  const day = 1793491200;
+  const pages = [
+    {items:[row(4, day + 40), row(3, day + 30)], next_cursor:"older"},
+    {items:[row(2, day + 20), row(1, day + 10)], next_cursor:"oldest"},
+    {items:[row(0, day - 86400)], next_cursor:null}
+  ];
+  sandbox.api = async () => pages.shift();
+  await vm.runInContext("loadTimeline()", sandbox);
+  await vm.runInContext("loadTimeline(true)", sandbox);
+  const timeline = document.getElementById("timeline");
+  assert.equal(timeline.children.filter(node => node.className === "date-divider").length, 1);
+  assert.match(content(timeline), /合成 1[\s\S]*合成 2[\s\S]*合成 3[\s\S]*合成 4/);
+  await vm.runInContext("loadTimeline(true)", sandbox);
+  assert.equal(timeline.children.filter(node => node.className === "date-divider").length, 2);
+}
+async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); console.log("local chat DOM contracts passed");}
+main().catch(error => {console.error(error); process.exitCode = 1;});

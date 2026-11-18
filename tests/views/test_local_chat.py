@@ -243,3 +243,22 @@ def test_browser_dom_contracts():
         pytest.skip("Node is optional; browser DOM contract checks require it")
     subprocess.run([node, str(Path(__file__).with_name("local_chat_dom_checks.js")),
                     str(chat.ASSETS / "app.js")], check=True, capture_output=True, text=True)
+
+
+def test_orphan_reply_remains_readable_without_exposing_foreign_parent(tmp_path):
+    path = tmp_path / "ledger.db"
+    store = ledger.Ledger(str(path))
+    try:
+        with store.db:
+            store.db.execute("INSERT INTO patients(project_id,patient_name) VALUES(1,'合成'),(2,'別患者')")
+            store.db.execute("INSERT INTO messages(message_id,project_id,parent_id,body_text,body_state) VALUES"
+                             "(7,1,999,'合成の孤立した返信','full'),(999,2,NULL,'別患者の本文','full')")
+        snapshot = ledger.publish_snapshot(str(path), str(tmp_path / "snapshots"))
+        data = chat.response(snapshot, {1}, "search", "project=1&q=合成")
+        assert data["items"][0]["parent_available"] is False
+        assert "別患者" not in json.dumps(data, ensure_ascii=False)
+        evidence = chat.response(snapshot, {1}, "evidence", "project=1&message=7")
+        assert evidence["message"]["body_text"] == "合成の孤立した返信"
+        assert chat.response(snapshot, {1}, "thread", "project=1&message=7")["items"] == []
+    finally:
+        store.close()
