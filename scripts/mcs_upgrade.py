@@ -134,7 +134,7 @@ def _run_updater(command, **kwargs):
         raise
 
 
-def _git(repo: str, *args: str, binary: bool = False):
+def _git(repo: str, *args: str, binary: bool = False, check: bool = True):
     try:
         r = subprocess.run(["git", "-C", repo, *args], capture_output=True,
                            text=not binary, timeout=120,
@@ -144,14 +144,23 @@ def _git(repo: str, *args: str, binary: bool = False):
     except OSError as exc:
         raise SystemExit(f"git {args[0]} を起動できませんでした。Gitの導入状態を確認してください（{exc.strerror}）") from None
     if r.returncode != 0:
+        if not check:
+            return None
         # Git can echo credential-bearing remote URLs; keep diagnostics fixed.
         raise SystemExit(f"git {args[0]} に失敗しました。接続とアクセス権を確認してください（終了コード {r.returncode}）")
     return r.stdout
 
 
-def latest_tag(repo: str) -> str:
+def _origin_tags(repo: str) -> set:
+    """Release tag names origin publishes now; a withdrawn local tag is not one."""
+    return {line.rpartition("refs/tags/")[2]
+            for line in _git(repo, "ls-remote", "--tags", "--refs", "origin").splitlines()
+            if "\trefs/tags/" in line}
+
+
+def latest_tag(repo: str, published=None) -> str:
     found = [m for m in map(SEMVER_RE.fullmatch, _git(repo, "tag", "--list").split())
-             if m and m.group(4) is None]
+             if m and m.group(4) is None and (published is None or m.group(0) in published)]
     if not found:
         raise SystemExit("公開版が見つかりません。git fetch --tags origin で版情報を取得してください")
     return max(found, key=lambda m: tuple(map(int, m.groups()[:3]))).group(0)
@@ -353,13 +362,19 @@ def _post_apply_plan(command, env, repo, *, installed=False, expected_sha=None):
         checked = subprocess.run(command, env=env, cwd=repo, capture_output=True, text=True,
                                  timeout=600, **_lifetime_fds())
         report = json.loads(checked.stdout)
+        blockers = report.get('blockers') if isinstance(report, dict) else None
+        # The update's own pre-update backup can push free space below the
+        # next update's reserve; that blocks the next update, not this one.
         if (checked.returncode or not isinstance(report, dict)
-                or report.get('route') != 'noop' or report.get('blockers')):
+                or report.get('route') != 'noop' or blockers and blockers != ['insufficient_disk']):
             raise ValueError
         if installed:
             pins = _installed_plan_pins(report, command, repo)
             if pins[1] != expected_sha or pins[3] != expected_sha:
                 raise ValueError('installed_update_incomplete')
+        if blockers:
+            print('更新は完了しましたが、空き容量が次の更新に必要な量を下回っています。'
+                  '次の更新の前に空き容量を確保してください。')
         return report
     except (subprocess.TimeoutExpired, OSError, ValueError, TypeError, RecursionError):
         print('更新の完了を確認できませんでした。再度更新する前に mcs recover と mcs doctor で状態を確認してください。')
@@ -416,7 +431,7 @@ def interactive_update(cmd, env, repo, *, installed=False):
         elif "standalone_external_apply" in report.get("blockers", []):
             print("MCS 単独実行の構成は、この自動更新では適用できません。担当者に docs/guides/STANDALONE.md と docs/guides/UPGRADE_AGENT.md の手動更新手順を依頼してください。")
         elif "restore_consent_pending" in report.get("blockers", []):
-            print("データを戻す前の人による確認が必要です。通知された内容を担当者と確認してください。")
+            print("データを戻す前の人による確認が必要です。承認待ちの間は通知が出ないため、data/restore_report.json の report_id・backup_sha256・backup_schema を担当者と確認してください。")
         else:
             print("担当者に mcs doctor と mcs update plan での確認を依頼してください。")
         return 1
@@ -524,7 +539,7 @@ def _main(argv=None) -> int:
     ap.add_argument("--repo", default=".", help="MCSの保存先フォルダ（省略時: 現在のフォルダ）")
     ap.add_argument('--installed-standalone', action='store_true', help=argparse.SUPPRESS)
     ap.add_argument("--no-fetch", action="store_true",
-                    help="通信せず、取得済みの版情報を使う")
+                    help="版情報の事前取得を省き、取得済みの版情報を使う（apply の版の照合は通信する）")
     sub = ap.add_subparsers(dest="cmd", required=True)
     recovery = sub.add_parser('reconcile-settings', help='導入設定の移行保留を確認・再開する')
     recovery.add_argument('--to', required=True, help='確認済みの移行先の版')
@@ -590,11 +605,16 @@ def _main(argv=None) -> int:
             print('release制御の確認中または状態が不明なため、通常の更新を停止しました。')
             return 2
         repo = os.path.realpath(_git(args.repo, "rev-parse", "--show-toplevel").strip())
-        if not args.no_fetch and candidate_sha is None:
-            _git(repo, "fetch", "--tags", "origin")
+        fetched = not args.no_fetch and candidate_sha is None
+        if fetched and _git(repo, "fetch", "--tags", "origin", check=False) is None:
+            # git exits 1 when one moved tag would clobber a local one, yet
+            # fetches the rest; the updater verifies the chosen tag on origin.
+            print("git fetch で一部の版情報を取得できませんでした。ローカルのタグが origin と"
+                  "異なる可能性があります（git fetch --tags origin の表示を確認してください）。"
+                  "取得済みの版情報で確認を続けます。")
         if getattr(args, 'keep_hermes_checkout', None) and not COMMIT_SHA_RE.fullmatch(args.keep_hermes_checkout):
             raise SystemExit("--keep-hermes-checkout には省略しない40桁の16進数のコミット識別子が必要です")
-        tag = candidate_sha or args.to or latest_tag(repo)
+        tag = candidate_sha or args.to or latest_tag(repo, _origin_tags(repo) if fetched else None)
         if candidate_sha is not None:
             try:
                 candidate_available = (_git(repo, "cat-file", "-t", candidate_sha).strip() == "commit"

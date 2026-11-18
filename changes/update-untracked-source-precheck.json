@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "ソース配下の追跡外ファイル1つで更新が切替後に止まり、原因も表示されない問題を修正",
+  "summary": "Finder が作る .DS_Store など、mcs・deployment・scripts などのソース配下に追跡外のファイルがあると、これまでは更新がプログラム切替後の検査で失敗し、常駐処理が止まったまま原因のファイル名も示されませんでした。今後は常駐処理を止める前に更新を中止し、該当するファイル名を更新記録と中止通知に残します。中断した更新の復旧が同じ理由で保留されるときも、recovery_report.json の理由に該当ファイル名を付けます。",
+  "upgrade": "追加操作は不要です。更新が source_untracked_files で中止された場合は、表示されたファイルをソース配下の外へ移動するか削除してから、更新をやり直してください。ソース配下で許される追跡外ファイルは __pycache__ 内の .pyc だけで、この条件は変えていません。",
+  "details": [
+    "追跡外ファイルの判定を update_repository._split_source_extras にまとめ、post-merge の移行ガードと merge 前の確認で同じ関数を使う。",
+    "release 経路（release_ref）の更新は対象外のまま。",
+    "この中止は更新前のDBバックアップと導入設定の移行より前に判定するため、中止のたびにバックアップを取り直さず、config.json も書き換えない。"
+  ],
+  "refs": ["mcs/ops/update_apply.py", "mcs/ops/update_preflight.py", "mcs/ops/update_repository.py"]
+}

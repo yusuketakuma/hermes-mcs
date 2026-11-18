@@ -4,12 +4,14 @@
 導入先は ~/.mcs-recovery/mcs_recover.py です。MCS 本体のプログラムが
 起動できなくても、data/update_state.json の更新記録に基づいて復旧します。
 
-使い方:
-  python3 mcs_recover.py --help      この説明を表示（変更しません）
-  python3 mcs_recover.py --status    現在の状態を JSON で表示（変更しません）
-  python3 mcs_recover.py --interactive  日本語の案内で状態確認と復旧を進める
-  python3 mcs_recover.py             中断を確認し、必要な復旧を実行
-  python3 mcs_recover.py --if-stale  定期監視用。30 分以上進んでいない更新だけを復旧
+使い方（PY は導入時に記録した復旧用 Python。config.json の recovery_python で、
+org.mcs.recovery の plist に登録されたものと同じ。Python 3.14 以上と修正済みの
+SQLite が必要で、このツール自身は版を確かめないため、標準の python3 では実行しない）:
+  PY -I -B mcs_recover.py --help      この説明を表示（変更しません）
+  PY -I -B mcs_recover.py --status    現在の状態を JSON で表示（変更しません）
+  PY -I -B mcs_recover.py --interactive  日本語の案内で状態確認と復旧を進める
+  PY -I -B mcs_recover.py             中断を確認し、必要な復旧を実行
+  PY -I -B mcs_recover.py --if-stale  定期監視用。30 分以上進んでいない更新だけを復旧
 
 復旧はプログラムや常駐処理を変更する場合があります。データベースを
 バックアップから戻す際は、失われるデータの確認と、その復元への人の承認が必要です。
@@ -599,6 +601,15 @@ def _provider_settings_state():
         os.close(root_fd)
 
 
+def _rendered_wrapper(head, path):
+    """= update_repository: a standalone cron wrapper rendered from a tracked template."""
+    name = path[len("scripts/"):]
+    if not path.startswith("scripts/") or "/" in name or not name.endswith(".sh"):
+        return False
+    found = mcs_recovery_core._git(["cat-file", "-e", head + ":deployment/scripts/" + name])
+    return found is not None and found.returncode == 0
+
+
 def _split_checkout_hold(applying):
     """Why a settled split install must not take a watchdog route, or None.
 
@@ -623,6 +634,7 @@ def _split_checkout_hold(applying):
     extras = mcs_recovery_core._git(["ls-files", "--others", "-z", "--", *_SPLIT_SOURCE_ROOTS])
     if extras is None or extras.returncode != 0 or any(
             path and not (path.endswith(".pyc") and "__pycache__" in path.split("/"))
+            and not _rendered_wrapper(head, path)
             for path in extras.stdout.split("\0")):
         return "provider_checkout_hold"
     return None if mcs_recovery_core._head() == head else "provider_checkout_hold"
