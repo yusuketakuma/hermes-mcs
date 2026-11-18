@@ -2,8 +2,8 @@
 
 The caller owns borrowed SQLite lifetime and commits new renders before
 publish_specs. Publication witnesses commit in bounded groups after the files are durable. Recovery repairs
-already committed stored bytes in its existing transaction; it never sends or
-consumes worker claims. Scope/config APIs accept plain values, never providers.
+already committed stored bytes; it never sends or consumes worker claims.
+The caller's run lock serializes publication with restore reconciliation.
 """
 from __future__ import annotations
 
@@ -177,11 +177,14 @@ def publish_flags(cfg: dict, root: str) -> bool:
     return True
 
 
-def _cleanup_budget_held(db, delivery_id):
-    return db.execute("SELECT 1 FROM notification_render_parts WHERE delivery_id=? AND state='held' "
-                      "AND error_code IN ('thread_cleanup_budget_exceeded','part_budget_exceeded',"
-                      "'blank_part_unrepresentable','attachment_upload_identity_unverified') "
-                      "LIMIT 1", (delivery_id,)).fetchone() is not None
+def _spec_publication_blocked(db, delivery_id, transport):
+    return db.execute(
+        "SELECT 1 FROM notification_render_parts WHERE delivery_id=? AND ("
+        "(state='held' AND error_code IN ('thread_cleanup_budget_exceeded','part_budget_exceeded',"
+        "'blank_part_unrepresentable','attachment_upload_identity_unverified')) OR "
+        "(?='slack' AND state='pending' AND kind='file_group' AND attempt_id IS NULL AND error_code=?)) "
+        "LIMIT 1", (delivery_id, transport, notify_scope.RESTORE_BEYOND_JOURNAL_HORIZON),
+    ).fetchone() is not None
 
 
 def _mark_published(db, marks):
@@ -199,9 +202,9 @@ def publish_specs(db, dirs, specs, now) -> list:
     published, marks = [], []
     try:
         for spec in specs:
-            if _cleanup_budget_held(db, spec["delivery_id"]):
-                continue
             transport = spec["delivery"].get("transport", "discord")
+            if _spec_publication_blocked(db, spec["delivery_id"], transport):
+                continue
             path = publish_file(dirs[transport + "_render"],
                                 spec["delivery_id"] + ".json", canonical(spec))
             marks.append((now, now, spec["delivery_id"]))
@@ -246,7 +249,7 @@ def recover(ledger, cfg, result) -> dict:
             "WHERE state IN ('queued','held') OR (state='delivered' "
             "AND EXISTS (SELECT 1 FROM notification_render_parts p "
             "WHERE p.delivery_id=r.delivery_id AND p.state='pending'))").fetchall():
-        if _cleanup_budget_held(db, r["delivery_id"]):
+        if _spec_publication_blocked(db, r["delivery_id"], r["transport"]):
             continue
         path = os.path.join(dirs[r["transport"] + "_render"],
                             r["delivery_id"] + ".json")
