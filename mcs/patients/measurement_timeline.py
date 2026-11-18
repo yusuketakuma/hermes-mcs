@@ -31,7 +31,8 @@ _PLAN_CANCEL_NAMED_TARGET = re.compile(
     r"(?:する|した|している|された)の(?:は|が)\s*(?P<label>[^、,]+?)\s*"
     r"(?:(?:のみ|だけ)?(?:です|でした|だ)?\s*$|(?:のみ|だけ)で\s*[、,]\s*(?P<followup>.*))")
 _PLAN_EXECUTION_CLAUSE = re.compile(
-    r"(?P<label>.+?)\s*(?:は|が|を)\s*(?:(?:実施|続行|継続)(?:する|します)|行う|行います)\s*")
+    r"(?P<label>.+?)\s*(?:は|が|を)\s*(?:予定(?:どおり|通り)\s*)?"
+    r"(?:(?:実施|続行|継続)(?:する|します)|行う|行います)\s*")
 _PLAN_MEASUREMENT_SUFFIX = re.compile(r"(?:の)?(?:検査|採血|測定)$")
 _SEPARATE_PROCEDURES = frozenset(("点滴", "輸液"))
 
@@ -195,7 +196,8 @@ def _candidate(record):
                                evidence[evidence.index(name):])
             verified_source = subject == "patient" and period == record["status"] and marker is not None
             if marker is not None:
-                tail = re.split(r"[。！？!?;；\n]", body[anchor + marker.end():], maxsplit=1)[0]
+                # Keep question marks so a question cannot match an affirmative predicate.
+                tail = re.match(r"[^。！？!?;；\n]*[？?]?", body[anchor + marker.end():])[0]
                 if _plan_is_withdrawn_or_uncertain(tail, name):
                     verified_source = False
                 # This is a contiguous original prefix, used only to prove the label/value relation.
