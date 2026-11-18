@@ -35,6 +35,18 @@ def test_llama_plist_change_reloads_only_when_not_serving(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "起動設定を更新しました" in r.stderr and "launchctl bootout" in r.stderr
     assert len(_bootstraps(stub_root, "ai.mcs.llamaserver")) == 2
+    # The deferred reload is not forgotten once the plist on disk is current.
+    r = _run({**env, "STUB_LLM_SERVING": "1"}, hermes_home)
+    assert r.returncode == 0, r.stderr
+    assert "まだ反映されていません" in r.stderr and "起動設定にも変更はありません" not in r.stdout
+    assert len(_bootstraps(stub_root, "ai.mcs.llamaserver")) == 2
+    r = _run(env, hermes_home)
+    assert r.returncode == 0, r.stderr
+    assert len(_bootstraps(stub_root, "ai.mcs.llamaserver")) == 3
+    r = _run(env, hermes_home)
+    assert r.returncode == 0, r.stderr
+    assert "起動設定にも変更はありません" in r.stdout
+    assert len(_bootstraps(stub_root, "ai.mcs.llamaserver")) == 3
 
 
 def test_model_download_resumes_from_part(tmp_path):
@@ -49,7 +61,18 @@ def test_model_download_resumes_from_part(tmp_path):
     model = hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf"
     assert model.read_text() == "stub-model-bytes\n"
     dl = [c for c in _calls(stub_root) if c.startswith("curl") and ".part" in c]
-    assert dl and all("-C -" in c and "--retry" in c for c in dl)
+    assert dl and all("-C -" in c and "--retry" in c and "--speed-time" in c for c in dl)
+    heads = [c for c in _calls(stub_root) if c.startswith("curl -fsIL")]
+    assert heads and all(" -m " in c for c in heads)
+
+
+def test_model_download_stops_before_filling_the_volume(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    r = _run({**env, "STUB_DF_KB": "1000"}, hermes_home)
+    assert r.returncode == 1
+    assert "空き容量が不足" in r.stderr
+    assert not [c for c in _calls(stub_root) if c.startswith("curl") and " -o " in c]
+    assert not (hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf.part").exists()
 
 
 def test_complete_part_is_not_requested_again(tmp_path):
@@ -189,3 +212,86 @@ def test_model_checksum_env_needs_the_explicit_override_flag(tmp_path):
     assert r.returncode == 1 and "モデルの整合性が確認できません" in r.stderr
     assert "MCS_ALLOW_MODEL_SHA_OVERRIDE=1 がないため無視" in r.stderr
     assert not (hermes_home / "models" / "Qwen3.5-9B-Q4_K_M.gguf").exists()
+
+
+def test_reload_pending_never_truncates_existing_or_linked_files(tmp_path):
+    import os
+
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    assert _run(env, hermes_home).returncode == 0
+    plist = home / "Library/LaunchAgents/ai.mcs.llamaserver.plist"
+    pending = home / ".mcs/data/.llama-reload-pending"
+
+    # An existing owned single-link marker is preserved without truncating its bytes.
+    pending.write_bytes(b"keep-existing-sentinel")
+    pending.chmod(0o600)
+    r = _run({**env, "STUB_LLM_SERVING": "1"}, hermes_home)
+    assert r.returncode == 0, r.stderr
+    assert pending.read_bytes() == b"keep-existing-sentinel"
+    assert "まだ反映されていません" in r.stderr
+
+    # A symlink or multi-link file is never truncated or overwritten; warning is emitted.
+    pending.unlink()
+    outside = tmp_path / "outside-target"
+    outside.write_bytes(b"outside-sentinel")
+    outside.chmod(0o600)
+    pending.symlink_to(outside)
+    plist.write_text(plist.read_text().replace("49152", "4096"))
+    r_sym = _run({**env, "STUB_LLM_SERVING": "1"}, hermes_home)
+    assert r_sym.returncode == 0, r_sym.stderr
+    assert outside.read_bytes() == b"outside-sentinel"
+    assert pending.is_symlink()
+    assert "再起動待ちの記録を保存できません" in r_sym.stderr
+
+    pending.unlink()
+    hard_src = tmp_path / "hard-target"
+    hard_src.write_bytes(b"hardlink-sentinel")
+    hard_src.chmod(0o600)
+    os.link(hard_src, pending)
+    plist.write_text(plist.read_text().replace("49152", "4096"))
+    r_hard = _run({**env, "STUB_LLM_SERVING": "1"}, hermes_home)
+    assert r_hard.returncode == 0, r_hard.stderr
+    assert hard_src.read_bytes() == b"hardlink-sentinel"
+    assert "再起動待ちの記録を保存できません" in r_hard.stderr
+
+
+def test_model_resume_uses_only_final_http_content_length_and_never_overestimates_space(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    models = hermes_home / "models"
+    models.mkdir(parents=True)
+    part = models / "Qwen3.5-9B-Q4_K_M.gguf.part"
+    part.write_bytes(b"p" * 2048)
+
+    # Redirect has Content-Length: 120, final 200 has none -> falls back to 6 GiB + 1 GiB,
+    # so 2 GB free (~2097152 KB) must stop before starting curl -o.
+    redirect_missing_final = (
+        "HTTP/1.1 302 Found\\r\\nContent-Length: 120\\r\\n\\r\\n"
+        "HTTP/2 200\\r\\nServer: synthetic\\r\\n\\r\\n"
+    )
+    r_missing = _run({**env, "STUB_DF_KB": "2097152",
+                      "STUB_MODEL_HEAD_RAW": redirect_missing_final},
+                     hermes_home, "--no-brew", "--no-plugin", "--no-services", "--no-recovery")
+    assert r_missing.returncode == 1
+    assert "空き容量が不足" in r_missing.stderr
+    assert part.read_bytes() == b"p" * 2048
+
+    # Final 200 Content-Length smaller than .part (512 < 2048) -> must not go negative.
+    smaller_final = "HTTP/2 200\\r\\nContent-Length: 512\\r\\n\\r\\n"
+    r_smaller = _run({**env, "STUB_DF_KB": "2097152",
+                      "STUB_MODEL_HEAD_RAW": smaller_final},
+                     hermes_home, "--no-brew", "--no-plugin", "--no-services", "--no-recovery")
+    assert r_smaller.returncode == 1
+    assert "空き容量が不足" in r_smaller.stderr
+    assert part.read_bytes() == b"p" * 2048
+
+    # Redirect (Content-Length: 120) followed by final 200 with exact complete length -> adopts final.
+    exact_final = (
+        "HTTP/1.1 302 Found\\r\\nContent-Length: 120\\r\\n\\r\\n"
+        f"HTTP/2 200\\r\\nContent-Length: {part.stat().st_size}\\r\\n\\r\\n"
+    )
+    r_ok = _run({**env, "STUB_DF_KB": "2097152",
+                 "STUB_MODEL_HEAD_RAW": exact_final,
+                 "MCS_MODEL_SHA256": hashlib.sha256(b"p" * 2048).hexdigest()},
+                hermes_home, "--no-brew", "--no-plugin", "--no-services", "--no-recovery")
+    assert r_ok.returncode == 0, r_ok.stderr
+    assert (models / "Qwen3.5-9B-Q4_K_M.gguf").read_bytes() == b"p" * 2048

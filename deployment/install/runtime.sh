@@ -1,7 +1,7 @@
 # shellcheck shell=sh
 # Sourced only by the verified install.sh after preflight and write guards.
 : "${_fresh_authorized?}" "${_legacy_uninitialized?}" "${_fresh_data_info?}"
-: "${RECOVERY_DIR:?}" "${SETUP:?}"
+: "${RECOVERY_DIR:?}" "${SETUP:?}" "${CONFIG_CONFIGURED?}"
 
 # Best-effort stage journal for interruption reporting; never stops the install.
 # All values are fixed literals or validated modes — nothing user-supplied is
@@ -308,12 +308,6 @@ esac
 sum "2/6 Hermes:   $_ck; $_venv; $_shimsum"
 fi
 
-if [ "$WITH_YOMITOKU" -eq 1 ]; then
-    "$MCS_PY" "$REPO/scripts/setup_yomitoku.py" --root "$MCS_ROOT" \
-        || die "OCR専用環境の導入に失敗しました。既存モデルは保持しています"
-    sum "追加OCR: $MCS_ROOT/ocr-venv/bin/yomitoku（利用開始は別途設定）"
-fi
-
 # Publish a pinned lifecycle entrypoint for both runtimes. A foreign command
 # is never overwritten; an MCS shim from another checkout needs --force-repo.
 MCS_BODY="$(printf '#!/bin/sh\n# MCS lifecycle launcher\nunset PYTHONPATH PYTHONHOME\nexport MCS_LIFECYCLE_PINNED=1\nexec %s %s "$@"' \
@@ -532,6 +526,13 @@ if [ "$_fresh_authorized" -eq 1 ]; then
         || die "初回導入の安全性を確認できません。設定と保留記録を保持し、担当者に確認してください"
 fi
 _install_progress_hold=""
+# The OCR model cache lives in data/; a fresh install fetches it only after
+# bootstrap-fresh has verified the exact initial data inventory.
+if [ "$WITH_YOMITOKU" -eq 1 ]; then
+    "$MCS_PY" "$REPO/scripts/setup_yomitoku.py" --root "$MCS_ROOT" \
+        || die "OCR専用環境の導入に失敗しました。既存モデルは保持しています"
+    sum "追加OCR: $MCS_ROOT/ocr-venv/bin/yomitoku（利用開始は別途設定）"
+fi
 # -------------------------------------------------------- 3. plugin
 say "【3/6】Slack／Discord の操作カード用プラグイン"
 _install_progress plugin running
@@ -625,15 +626,41 @@ else
             # the transfer and the rename) is not re-requested: a range
             # past the end answers 416 and would fail every re-run.
             _have=0; _want=""
-            if [ -f "$MODEL_FILE.part" ]; then
+            if [ -f "$MODEL_FILE.part" ] && [ ! -L "$MODEL_FILE.part" ]; then
                 _have="$(wc -c < "$MODEL_FILE.part" | tr -d ' ')"
-                _want="$(curl -fsIL --retry 3 "$MODEL_URL" 2>/dev/null \
-                    | tr -d '\r' | awk 'tolower($1)=="content-length:"{v=$2} END{print v}')"
+                case "$_have" in ''|*[!0-9]*) _have=0 ;; esac
+                _want="$(curl -fsIL -m 60 --retry 3 "$MODEL_URL" 2>/dev/null \
+                    | tr -d '\r' | awk '
+                        toupper($1) ~ /^HTTP\// { code=$2; v=""; bad=0; next }
+                        tolower($1) == "content-length:" {
+                            if (NF != 2 || (v != "" && v != $2)) bad=1
+                            v=$2
+                        }
+                        END { if (code == "200" && !bad) print v }
+                    ')"
+                case "$_want" in ''|*[!0-9]*) _want="" ;; esac
             fi
-            if [ -n "$_want" ] && [ "$_have" = "$_want" ]; then
+            if [ "$_have" -gt 0 ] && [ -n "$_want" ] && [ "$_have" = "$_want" ]; then
                 printf '  取得途中のファイルは全容量を取得済みです（%s バイト）\n' "$_have"
             else
-                curl -fL --retry 5 --retry-delay 5 -C - --progress-bar \
+                # Keep about 1 GB free beside the remaining bytes. Only a final HTTP 200
+                # Content-Length >= the partial file reduces the estimate; a missing or
+                # smaller length falls back to the full 6 GiB bound so free space is
+                # never overestimated.
+                if [ -n "$_want" ] && [ "$_want" -ge "$_have" ]; then
+                    _rem_bytes=$((_want - _have))
+                else
+                    _rem_bytes=6442450944
+                fi
+                _need_kb=$(( _rem_bytes / 1024 + 1048576 ))
+                _free_kb="$(df -Pk "$MODEL_DIR" 2>/dev/null | awk 'NR==2 {print $4}')"
+                case "$_free_kb" in ''|*[!0-9]*)
+                    die "$MODEL_DIR の空き容量を確認できません。モデルの取得は開始していません" ;;
+                esac
+                [ "$_free_kb" -ge "$_need_kb" ] \
+                    || die "$MODEL_DIR の空き容量が不足しています（空き約 $((_free_kb / 1048576)) GB、必要約 $(((_need_kb + 1048575) / 1048576)) GB）。空き容量を増やして install.sh を再実行してください。取得途中のファイルは保持しています"
+                # A stalled transfer stops (and resumes on re-run) instead of waiting forever.
+                curl -fL --retry 5 --retry-delay 5 -C - --speed-limit 1024 --speed-time 300 --progress-bar \
                         -o "$MODEL_FILE.part" "$MODEL_URL" \
                     || die "モデル取得に失敗しました。install.sh を再実行すると再開します（途中のファイル: $MODEL_FILE.part）"
             fi
@@ -656,9 +683,44 @@ else
             > "$LLAMA_PLIST.tmp"
         _changed=0
         if publish "$LLAMA_PLIST.tmp" "$LLAMA_PLIST"; then _changed=1; fi
+        # A loaded job keeps its old definition until bootout/bootstrap, so a
+        # reload deferred by an earlier run stays pending until it happens.
+        _reload_pending="$MCS_DATA/.llama-reload-pending"
+        _valid_reload_pending() {
+            [ -f "$_reload_pending" ] && [ ! -L "$_reload_pending" ] || return 1
+            [ -n "$(find -P "$_reload_pending" -prune -type f -user "$(/usr/bin/id -u)" -links 1 ! \( -perm -020 -o -perm -002 \) -print 2>/dev/null)" ]
+        }
+        _clear_reload_pending() {
+            if [ ! -e "$_reload_pending" ] && [ ! -L "$_reload_pending" ]; then return 0; fi
+            _safe_dir "$MCS_DATA" && _valid_reload_pending && rm -f "$_reload_pending"
+        }
+        _mark_reload_pending() {
+            _safe_dir "$MCS_DATA" || return 1
+            if [ -e "$_reload_pending" ] || [ -L "$_reload_pending" ]; then
+                # Never truncate or overwrite an existing entry; keep a verified marker as-is.
+                _valid_reload_pending
+                return $?
+            fi
+            _rp_tmp="$(mktemp "$MCS_DATA/.llama-reload-pending.XXXXXXXX" 2>/dev/null)" || return 1
+            _rp_ok=0
+            if [ -n "$(find -P "$_rp_tmp" -prune -type f -user "$(/usr/bin/id -u)" -links 1 -perm 0600 -print 2>/dev/null)" ] \
+                    && _safe_dir "$MCS_DATA" \
+                    && ln "$_rp_tmp" "$_reload_pending" 2>/dev/null; then
+                _rp_ok=1
+            fi
+            rm -f "$_rp_tmp" 2>/dev/null || :
+            if [ "$_rp_ok" -eq 1 ]; then
+                _valid_reload_pending
+                return $?
+            fi
+            _valid_reload_pending
+        }
+        _reload_was_pending=0
+        if _valid_reload_pending; then _reload_was_pending=1; _changed=1; fi
         if ! loaded ai.mcs.llamaserver; then
             bootstrap_agent ai.mcs.llamaserver "$LLAMA_PLIST" \
                 || die "AI サーバーの起動に失敗しました。$LLAMA_PLIST を確認し install.sh を再実行してください"
+            _clear_reload_pending || :
             ok "AI サーバーの常駐サービスを起動しました"
             sum "4/6 ローカルAI:      AI サーバーを起動"
         elif [ "$_changed" -eq 0 ]; then
@@ -666,13 +728,20 @@ else
             sum "4/6 ローカルAI:      AI サーバーは起動済み"
         elif [ "$SERVING" -eq 1 ]; then
             # never interrupt a serving model mid-request — tell the user
-            warn "AI サーバーの起動設定を更新しましたが、稼働中の処理は保持しました。処理が終わってから次を実行して反映してください:"
-            warn "  launchctl bootout gui/$(id -u)/ai.mcs.llamaserver; launchctl bootstrap gui/$(id -u) $(shell_quote "$LLAMA_PLIST")"
+            _mark_reload_pending \
+                || warn "再起動待ちの記録を保存できません。次回の install.sh ではこの注意を表示しません"
+            if [ "$_reload_was_pending" -eq 1 ]; then
+                warn "以前に更新した AI サーバーの起動設定がまだ反映されていません。稼働中の処理は保持しました。処理が終わってから次を実行して反映してください:"
+            else
+                warn "AI サーバーの起動設定を更新しましたが、稼働中の処理は保持しました。処理が終わってから次を実行して反映してください:"
+            fi
+            warn "  launchctl bootout gui/$(id -u)/ai.mcs.llamaserver; launchctl bootstrap gui/$(id -u) $(shell_quote "$LLAMA_PLIST") && rm -f $(shell_quote "$_reload_pending")"
             sum "4/6 ローカルAI:      起動設定を更新、再起動待ち（上の注意を参照）"
         else
             launchctl bootout "gui/$(id -u)/ai.mcs.llamaserver" 2>/dev/null || true
             bootstrap_agent ai.mcs.llamaserver "$LLAMA_PLIST" \
                 || die "AI サーバーの起動に失敗しました。$LLAMA_PLIST を確認し install.sh を再実行してください"
+            _clear_reload_pending || :
             ok "更新した設定で AI サーバーを再起動しました"
             sum "4/6 ローカルAI:      設定変更に合わせて AI サーバーを再起動"
         fi
@@ -687,6 +756,28 @@ _install_progress services running
 # the agents stage 5/6 load log to / watch these — they must exist first
 # (new ones are 0700 via umask; existing modes are kept)
 mkdir -p "$MCS_ROOT" "$MCS_DATA" "$MCS_DATA/cmd" "$MCS_DATA/cmd_int"
+# Installs before umask 077 left the watchdog's tool, repo_path and plist
+# readable by others, and services refuse the watchdog as unowned unless they
+# are private. Stage 5 runs before stage 6 republishes them, so tighten them
+# here. Links and files others can write are left alone (the tool's bytes are
+# not verified). A failed repair only warns: the ownership check refuses itself.
+_private_recovery_file() {  # <mode> <file>
+    if [ ! -e "$2" ] && [ ! -L "$2" ]; then return 0; fi
+    _prf_dir="$(dirname "$2")"
+    _prf_uid="$(/usr/bin/id -u)"
+    if [ ! -L "$_prf_dir" ] && [ -f "$2" ] && [ ! -L "$2" ] \
+            && [ -n "$(find -P "$2" -prune -type f -user "$_prf_uid" -links 1 -perm "0$1" -print 2>/dev/null)" ]; then
+        return 0
+    fi
+    if [ -L "$_prf_dir" ] || [ ! -f "$2" ] || [ ! -e "$2" ] || [ -L "$2" ] \
+            || [ -z "$(find -P "$2" -prune -type f -user "$_prf_uid" -links 1 ! \( -perm -020 -o -perm -002 \) -print 2>/dev/null)" ] \
+            || ! chmod "$1" "$2"; then
+        warn "$2 のアクセス権を $1 に変更できませんでした。所有者と、他のユーザーが書き込めないことを確認してください。変更できるまで、復旧監視の Python の切替えは止まります"
+    fi
+}
+_private_recovery_file 700 "$RECOVERY_DIR/mcs_recover.py"
+_private_recovery_file 600 "$RECOVERY_DIR/repo_path"
+_private_recovery_file 600 "$WATCH_PLIST"
 if [ "$SKIP_SERVICES" -eq 1 ]; then
     skip "--no-services のため省略します。後で次のコマンドで登録してください:"
     skip "  $(shell_quote "$MCS_PY") $(shell_quote "$SETUP") services"
@@ -772,10 +863,21 @@ PYQ="$(shell_quote "$MCS_PY")"
 SETUPQ="$(shell_quote "$SETUP")"
 # `-m` resolves only from the checkout: install.sh may run from elsewhere.
 INREPO="cd $(shell_quote "$REPO") &&"
+# Display-only hint from the verified top-level config read in install.sh;
+# `mcs_setup.py check` still performs the full configuration validation.
+_configured="$CONFIG_CONFIGURED"
 printf '\n============================================================\n'
-printf 'ソフトの準備が完了しました。まだ利用開始前の初期設定が必要です。\n'
+if [ "$_configured" -eq 1 ]; then
+    printf 'ソフトの準備が完了しました。必須の設定項目がそろっているため、初期設定の開始は不要です。\n'
+else
+    printf 'ソフトの準備が完了しました。まだ利用開始前の初期設定が必要です。\n'
+fi
 printf '%s' "$SUMMARY"
 printf '============================================================\n'
+if [ "$_configured" -eq 1 ]; then
+    printf '\n設定と接続の状態は次のコマンドで確認できます:\n    %s %s check\n' "$PYQ" "$SETUPQ"
+    printf '設定を見直す場合:\n    %s setup\n' "$(shell_quote "$MCS_SHIM")"
+else
 printf '\n次は MCS のログイン情報と通知先を設定します。\n'
 printf 'アカウント情報は、ご自身の端末で入力してください。\n'
 printf '準備ができていない項目は初期設定の案内に従って後で設定できます。\n'
@@ -800,6 +902,7 @@ elif [ -t 0 ] && [ -t 1 ]; then
             printf '入力内容や表示された問題を確認し、次のコマンドで再開してください:\n    %s setup\n' "$(shell_quote "$MCS_SHIM")"
         fi
     fi
+fi
 fi
 # Explicit installer lifecycle only; ordinary runtime startup never creates an intent.
 if [ "$SETUP_STATUS" -eq 0 ]; then

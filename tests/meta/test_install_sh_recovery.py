@@ -361,3 +361,247 @@ def test_fresh_install_stop_keeps_hold_guidance_not_stage_claim(tmp_path):
     assert r.returncode != 0
     assert "導入は保留中です" in r.stderr
     assert "担当者に確認してください" in r.stderr
+
+
+def test_unchanged_world_readable_repo_pointer_is_made_private(tmp_path):
+    """Installs from before umask 077 left repo_path 0644 with the same content;
+    services refuse the watchdog as unowned unless it is 0600, so the mode is
+    repaired before stage 5 (here stage 5 fails and stage 6 never runs)."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(mode=0o700, parents=True)
+    pointer = rec / "repo_path"
+    pointer.write_text(str(ROOT) + "\n")
+    pointer.chmod(0o644)
+    r = _run({**env, "STUB_FAIL_SERVICES": "1"}, hermes_home)
+    assert r.returncode != 0
+    assert "常駐サービスの登録に問題があります" in r.stderr
+    assert pointer.read_text() == str(ROOT) + "\n"
+    assert pointer.stat().st_mode & 0o777 == 0o600
+
+
+def test_unrepairable_repo_pointer_does_not_stop_install_without_watchdog(tmp_path):
+    """A repo_path whose mode cannot be changed (another owner, uchg) only
+    warns: services and recovery are skipped here, and stage 5's ownership
+    check refuses on its own when it is reached."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    (stub_root / "bin/chmod").write_text(
+        '#!/bin/sh\ncase "$2" in */repo_path) exit 1 ;; esac\nexec /bin/chmod "$@"\n')
+    (stub_root / "bin/chmod").chmod(0o700)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(mode=0o700, parents=True)
+    pointer = rec / "repo_path"
+    pointer.write_text(str(ROOT) + "\n")
+    pointer.chmod(0o644)
+    r = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin",
+             "--no-services", "--no-recovery")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "注意:" in r.stderr and "repo_path のアクセス権" in r.stderr
+    assert pointer.read_text() == str(ROOT) + "\n"
+    assert pointer.stat().st_mode & 0o777 == 0o644
+
+
+def test_unchanged_world_readable_watchdog_files_are_made_private(tmp_path):
+    """The pre-umask tool (0755) and plist (0644) also fail the ownership
+    check, and stage 5 runs before stage 6 could republish them; files others
+    can write are not laundered into private ones."""
+    # An existing install: a fresh one refuses the leftover watchdog plist first.
+    home, hermes_home, stub_root, env = _world(tmp_path, configured=True)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(mode=0o700, parents=True)
+    tool, pointer = rec / "mcs_recover.py", rec / "repo_path"
+    watch = home / "Library/LaunchAgents/org.mcs.recovery.plist"
+    watch.parent.mkdir(parents=True)
+    tool.write_bytes(b"# synthetic prior tool\n")
+    pointer.write_text(str(ROOT) + "\n")
+    watch.write_bytes(plistlib.dumps({"Label": "org.mcs.recovery", "ProgramArguments": [
+        "/usr/bin/python3", str(tool), "--if-stale"]}))
+    tool.chmod(0o755)
+    pointer.chmod(0o664)
+    watch.chmod(0o644)
+    before = {path: path.read_bytes() for path in (tool, pointer, watch)}
+    r = _run({**env, "STUB_FAIL_SERVICES": "1"}, hermes_home)
+    assert r.returncode != 0
+    assert "常駐サービスの登録に問題があります" in r.stderr
+    assert {path: path.read_bytes() for path in before} == before
+    assert tool.stat().st_mode & 0o777 == 0o700
+    assert watch.stat().st_mode & 0o777 == 0o600
+    assert pointer.stat().st_mode & 0o777 == 0o664
+    assert "repo_path のアクセス権を 600 に変更できませんでした" in r.stderr
+
+
+def _loose(directory):
+    import os
+    import re
+    import subprocess
+    function = re.search(r"^recovery_dir_loose\(\) \{.*?^\}\n", INSTALL.read_text(), re.M | re.S).group(0)
+    result = subprocess.run(["/bin/sh", "-c", function + 'recovery_dir_loose'],
+                            env={**os.environ, "RECOVERY_DIR": str(directory)}, timeout=10)
+    return result.returncode == 0
+
+
+@pytest.mark.parametrize("mode, loose", [(0o755, True), (0o700, False), (0o775, False), (0o757, False)])
+def test_only_an_own_recovery_directory_without_group_or_other_write_is_tightened(tmp_path, mode, loose):
+    directory = tmp_path / "recovery"
+    directory.mkdir()
+    directory.chmod(mode)
+    assert _loose(directory) is loose
+
+
+def test_linked_and_missing_recovery_directories_are_left_alone(tmp_path):
+    target = tmp_path / "real"
+    target.mkdir()
+    target.chmod(0o755)
+    link = tmp_path / "link"
+    link.symlink_to(target)
+    assert not _loose(link)
+    assert not _loose(tmp_path / "missing")
+
+
+def test_legacy_0755_recovery_directory_is_tightened_by_install(tmp_path):
+    """v1.0.3-v1.0.6 created ~/.mcs-recovery 0755; the log helper requires 0700."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(parents=True)
+    rec.chmod(0o755)
+    _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin", "--no-services")
+    assert rec.stat().st_mode & 0o777 == 0o700
+
+
+def test_dry_run_leaves_a_legacy_recovery_directory_unchanged(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(parents=True)
+    rec.chmod(0o755)
+    _run(env, hermes_home, "--dry-run")
+    assert rec.stat().st_mode & 0o777 == 0o755
+
+
+def test_private_recovery_file_skips_symlinks_and_hardlinks_without_chmod(tmp_path):
+    import os
+
+    home, hermes_home, stub_root, env = _world(tmp_path, configured=True)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(mode=0o700, parents=True)
+    sym_target = tmp_path / "sym-target"
+    sym_target.write_text("synthetic\n")
+    sym_target.chmod(0o644)
+    (rec / "repo_path").symlink_to(sym_target)
+
+    hard_target = tmp_path / "hard-target"
+    hard_target.write_bytes(b"# synthetic tool\n")
+    hard_target.chmod(0o755)
+    os.link(hard_target, rec / "mcs_recover.py")
+
+    r = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin",
+             "--no-services", "--no-recovery")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert sym_target.stat().st_mode & 0o777 == 0o644
+    assert hard_target.stat().st_mode & 0o777 == 0o755
+    assert "repo_path のアクセス権" in r.stderr
+    assert "mcs_recover.py のアクセス権" in r.stderr
+
+
+def test_loose_0755_recovery_dir_checks_python_in_preflight_and_tightens_only_after_confirm_and_lock(tmp_path):
+    import errno
+    import fcntl
+    import os
+    import pty
+    import select
+    import subprocess
+    import time
+
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(parents=True)
+    rec.chmod(0o755)
+    selected = stub_root / "explicit-bad-python"
+    selected.touch()
+    selected.chmod(0o700)
+
+    # 1. Preflight with 0755 recovery dir MUST NOT skip explicit recovery Python validation.
+    r_pf_bad = _run({**env, "STUB_RECOVERY_RUNTIME": "unsafe"}, hermes_home,
+                    "--preflight", "--no-brew", "--no-llm", "--no-plugin", "--no-services",
+                    "--recovery-python", str(selected))
+    assert r_pf_bad.returncode == 1
+    assert "権限が 700 ではありません" in r_pf_bad.stdout
+    assert "要対処" in r_pf_bad.stdout
+    assert f"runtime-metadata {selected}" in _calls(stub_root)
+    assert rec.stat().st_mode & 0o777 == 0o755
+
+    # Preflight with valid recovery Python warns about 0755 and passes without chmod.
+    r_pf_ok = _run(env, hermes_home, "--preflight", "--no-brew", "--no-llm", "--no-plugin", "--no-services")
+    assert r_pf_ok.returncode == 0, r_pf_ok.stdout + r_pf_ok.stderr
+    assert "権限が 700 ではありません" in r_pf_ok.stdout
+    assert "復旧用 Python: 3.14以降で SQLite の安全条件を満たしています" in r_pf_ok.stdout
+    assert rec.stat().st_mode & 0o777 == 0o755
+
+    # 2. Invalid CLI flag and bad explicit --recovery-python in install mode leave 0755 untouched.
+    r_flag = _run(env, hermes_home, "--unknown-flag")
+    assert r_flag.returncode == 2
+    assert rec.stat().st_mode & 0o777 == 0o755
+
+    r_inst_bad = _run({**env, "STUB_RECOVERY_RUNTIME": "unsafe"}, hermes_home,
+                      "--no-brew", "--no-llm", "--no-plugin", "--no-services",
+                      "--recovery-python", str(selected))
+    assert r_inst_bad.returncode == 1
+    assert rec.stat().st_mode & 0o777 == 0o755
+    assert not (home / ".mcs/data/update.lock").exists()
+
+    # 3. Interactive invalid input + cancellation leaves 0755 untouched.
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(
+        ["sh", str(INSTALL), "--mode", "hermes", "--no-brew", "--no-llm", "--no-plugin", "--no-services"],
+        stdin=slave, stdout=slave, stderr=slave, env=env)
+    os.close(slave)
+    out = b""
+    deadline = time.monotonic() + 30
+    try:
+        while "この内容で導入する（推奨）".encode() not in out:
+            assert select.select([master], [], [], max(0.1, deadline - time.monotonic()))[0]
+            out += os.read(master, 4096)
+        os.write(master, b"9\n")
+        while "1 または 2 を入力してください".encode() not in out:
+            assert select.select([master], [], [], max(0.1, deadline - time.monotonic()))[0]
+            out += os.read(master, 4096)
+        os.write(master, b"2\n")
+        while proc.poll() is None:
+            if select.select([master], [], [], 1.0)[0]:
+                try:
+                    out += os.read(master, 4096)
+                except OSError as exc:
+                    if exc.errno == errno.EIO:
+                        break
+                    raise
+        assert proc.wait(timeout=5) == 130
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        os.close(master)
+    assert rec.stat().st_mode & 0o777 == 0o755
+
+    # 4. Contended install lock also stops before tightening 0755.
+    data = home / ".mcs/data"
+    data.mkdir(mode=0o700, parents=True)
+    (home / ".mcs").chmod(0o700)
+    lock_path = data / "update.lock"
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # lockf on macOS shares flock or fcntl depending on lockf; hold via lockf child if available.
+        holder = subprocess.Popen(
+            ["python3", "-c", "import fcntl, os, sys, time; fd=os.open(sys.argv[1], os.O_RDWR); fcntl.flock(fd, fcntl.LOCK_EX); sys.stdout.write('held\\n'); sys.stdout.flush(); time.sleep(30)",
+             str(lock_path)], stdout=subprocess.PIPE, text=True)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        try:
+            assert holder.stdout.readline().strip() == "held"
+            r_locked = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin", "--no-services")
+            assert r_locked.returncode == 1
+            assert "進行中です" in r_locked.stderr
+            assert rec.stat().st_mode & 0o777 == 0o755
+        finally:
+            holder.terminate()
+            holder.wait(timeout=5)
+    finally:
+        os.close(fd)

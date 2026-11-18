@@ -43,6 +43,14 @@
 set -eu
 # files this script creates are the owner's only; existing modes are kept
 umask 077
+runnable_py() {  # <preferred interpreter>; first of it and python3 that actually starts
+    for _rp in "$1" "$(command -v python3 || true)"; do
+        if [ -n "$_rp" ] && [ -x "$_rp" ] && "$_rp" -c '' >/dev/null 2>&1; then
+            printf '%s\n' "$_rp"; return 0
+        fi
+    done
+    return 1
+}
 
 usage() {
     # Keep the complete Japanese prerequisites and option explanations above.
@@ -138,7 +146,7 @@ link_target() {
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 # Read-only bootstrap modes do not require checkout companions.
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
-INSTALL_RUNTIME_SHA256="1d81ab2fe3ae3a13a4f02f1c6b731a2813fcdc2ca8928fb8a6f188de5d6cf409"
+INSTALL_RUNTIME_SHA256="736416322442ae4ffd4c9a8ea4c9ea5a2c13f8be40ea7d0a0eb3fc7075860fd8"
 _install_stage_private_dir=""
 # shellcheck disable=SC2317,SC2329  # Invoked by EXIT after the sourced stage exits.
 _install_stage_cleanup() {
@@ -292,9 +300,8 @@ EOF
     fi
     _safe_dir "$_lock_data" || _unsafe_dir "データフォルダー"
     if [ -n "${MCS_UPDATE_REINSTALL:-}" ]; then
-        _lock_py="$MCS_ROOT/venv/bin/python3"
-        [ -x "$_lock_py" ] || _lock_py="$(command -v python3 || true)"
-        [ -n "$_lock_py" ] || die "更新の排他制御を確認する Python が必要です"
+        _lock_py="$(runnable_py "$MCS_ROOT/venv/bin/python3")" \
+            || die "更新の排他制御を確認する Python を実行できません（venv の Python と python3 のどちらも起動しません）"
         "$_lock_py" -I -c '
 # mcs-installer-inherited-lock
 import fcntl, os, stat, sys
@@ -341,7 +348,31 @@ EOF
             die "排他制御ファイルの所有者または権限を確認できません"
         fi
         if command -v lockf >/dev/null 2>&1; then
-            lockf -s -t 0 "$_install_lock_fd" || die "別の導入または更新が進行中です。完了後に再実行してください"
+            # Only EX_TEMPFAIL means the lock is held. A lockf without descriptor
+            # support (macOS 13-14, EX_USAGE) falls back to the same flock the
+            # reinstall branch takes on the inherited descriptor.
+            _lock_status=0
+            lockf -s -t 0 "$_install_lock_fd" || _lock_status=$?
+            case "$_lock_status" in
+                0) ;;
+                75) die "別の導入または更新が進行中です。完了後に再実行してください" ;;
+                *)
+                    _flock_py="$(runnable_py "$MCS_ROOT/venv/bin/python3")" \
+                        || die "排他制御（lockf）を実行できず（終了コード ${_lock_status}）、代わりに使う Python も起動しません。変更は行っていません。担当者に確認してください"
+                    _lock_status=0
+                    "$_flock_py" -I -c '
+# mcs-installer-flock-fallback
+import fcntl, sys
+try: fcntl.flock(int(sys.argv[1]), fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError: raise SystemExit(75) from None
+except (OSError, ValueError, OverflowError): raise SystemExit(1) from None
+' "$_install_lock_fd" || _lock_status=$?
+                    case "$_lock_status" in
+                        0) ;;
+                        75) die "別の導入または更新が進行中です。完了後に再実行してください" ;;
+                        *) die "排他制御を実行できません（lockf と Python の flock のどちらも使えません）。変更は行っていません。担当者に確認してください" ;;
+                    esac ;;
+            esac
         elif command -v flock >/dev/null 2>&1; then
             flock -n "$_install_lock_fd" || die "別の導入または更新が進行中です。完了後に再実行してください"
         else
@@ -360,9 +391,8 @@ EOF
     if [ -e "$_lock_data/.provider-settings-pending.json" ] || [ -L "$_lock_data/.provider-settings-pending.json" ] \
         || [ -e "$_lock_data/.provider-settings-authority.json" ] || [ -L "$_lock_data/.provider-settings-authority.json" ] \
         || [ -e "$_lock_data/provider_settings" ] || [ -L "$_lock_data/provider_settings" ]; then
-        _provider_py="$MCS_ROOT/venv/bin/python3"
-        [ -x "$_provider_py" ] || _provider_py="$(command -v python3 || true)"
-        [ -n "$_provider_py" ] || die "提供元設定の確認には Python が必要です。変更は行っていません"
+        _provider_py="$(runnable_py "$MCS_ROOT/venv/bin/python3")" \
+            || die "提供元設定の確認に使う Python を実行できません（venv の Python と python3 のどちらも起動しません）。変更は行っていません"
         "$_provider_py" -B "$REPO/mcs/ops/install_options.py" provider-check "$MCS_ROOT/config.json" "$_lock_data/install_options.json" - \
             || die "提供元設定を確認できないため変更せず中止しました"
     fi
@@ -375,12 +405,12 @@ fi
 if [ "$RUNTIME_EXPLICIT" -eq 0 ] && [ -n "$ARG_HOME" ]; then RUNTIME_MODE=hermes; fi
 CONFIG_ABSENT=0
 CONFIG_EMPTY=0
+CONFIG_CONFIGURED=0
 RESUME_UNCONFIGURED=0
 CONFIG_BASE=""
 if [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ]; then
-    MODE_PY="$MCS_ROOT/venv/bin/python3"
-    if [ ! -x "$MODE_PY" ]; then MODE_PY="$(command -v python3 || true)"; fi
-    [ -n "$MODE_PY" ] || die "既存設定の接続方法を確認するには Python が必要です。Python を導入して再実行してください"
+    MODE_PY="$(runnable_py "$MCS_ROOT/venv/bin/python3")" \
+        || die "既存設定の接続方法を確認する Python を実行できません（venv の Python と python3 のどちらも起動しません）。Python を導入または修復して再実行してください"
     read_install_config() {
     "$MODE_PY" - "$MCS_ROOT/config.json" "$RUNTIME_EXPLICIT" "$RUNTIME_MODE" <<'PYMODE'
 import json
@@ -432,10 +462,10 @@ try:
     if mode not in ("hermes", "standalone"):
         raise ValueError
     token = ":".join(str(n) for n in ident(info)) + ":" + hashlib.sha256(raw).hexdigest()
-    if not cfg:
-        print(mode + ":empty:" + token)
-    else:
-        print(mode + ":existing:" + token)
+    configured = all(isinstance(cfg.get(k), str) and bool(cfg[k].strip())
+                     for k in ("mcs_login_id", "notify_target"))
+    state = "empty" if not cfg else ("configured" if configured else "existing")
+    print(mode + ":" + state + ":" + token)
 except (OSError, ValueError, AttributeError, TypeError, RecursionError):
     raise SystemExit(1) from None
 PYMODE
@@ -444,9 +474,10 @@ PYMODE
     RUNTIME_MODE="${MODE_STATUS%%:*}"
     MODE_DETAIL="${MODE_STATUS#*:}"
     CONFIG_BASE="${MODE_DETAIL#*:}"
-    if [ "${MODE_DETAIL%%:*}" = empty ]; then
-        CONFIG_EMPTY=1
-    fi
+    case "${MODE_DETAIL%%:*}" in
+        empty) CONFIG_EMPTY=1 ;;
+        configured) CONFIG_CONFIGURED=1 ;;
+    esac
     case "$RUNTIME_MODE" in hermes|standalone) ;; *) die "接続方法を読み取れません。--mode hermes または --mode standalone を指定してください" ;; esac
 else
     CONFIG_ABSENT=1
@@ -654,6 +685,12 @@ hermes_admits_314() {
     "$_ha_py" -I "$REPO/mcs/ops/requires_python_admits.py" "$HERMES_DIR/pyproject.toml"
 }
 
+# Established installs never rebuild a runtime here; a runtime that cannot
+# start at all keeps its environment and records for the person in charge.
+venv_unusable_hint() {
+    printf '%s' "実行環境の Python が起動しない場合は、$(shell_quote "$VENV") や記録を手で移動・削除せずそのまま保持し、担当者に復旧を依頼してください"
+}
+
 preserve_old_venv() {
     if [ ! -e "$VENV" ] && [ ! -L "$VENV" ]; then return; fi
     if [ -n "${MCS_UPDATE_RUN_LOCK_FD:-}" ] || [ -n "${MCS_UPDATE_RUNTIME_BACKUP:-}" ]; then
@@ -663,12 +700,14 @@ preserve_old_venv() {
         # A scheduled tick can start after a process check; established installs
         # require the updater's inherited run.lock for runtime migration.
         if [ -e "$MCS_DATA/ledger.db" ] || [ -e "$MCS_DATA/service_manifest.json" ]; then
-            die "導入済み MCS の Python 移行には更新ツールが必要です。既存環境は保持しました。リリースの更新手順に従ってください"
+            die "導入済み MCS の Python 移行には更新ツールが必要です。既存環境は保持しました。動作する旧版の Python からの移行はリリースの更新手順に従ってください。$(venv_unusable_hint)"
         fi
         _runtime_processes="$(ps -axo command=)" \
             || die "実行環境の停止を確認できません。既存の Python 環境は保持しました"
+        # Homebrew's framework Python re-execs Python.app, so a venv script
+        # shows up as an argument rather than argv[0]; match the whole line.
         if printf '%s\n' "$_runtime_processes" | MCS_VENV_PREFIX="$VENV/" awk '
-            index($0, ENVIRON["MCS_VENV_PREFIX"]) == 1 { busy=1 }
+            index($0, ENVIRON["MCS_VENV_PREFIX"]) > 0 { busy=1 }
             END { exit !busy }'; then
             die "既存環境は稼働中です。Gateway または独立接続サービスを通常の停止手順で止めてから再実行してください。既存環境は保持しました"
         fi
@@ -684,9 +723,15 @@ preserve_old_venv() {
     ok "旧実行環境の退避先: $_prior_venv"
 }
 
-recovery_runtime_ok() {  # <probe host Python>; never substitutes the template's executable
+recovery_dir_loose() {  # own real directory, not 0700, but no group/other write: safe to tighten
+    [ -d "$RECOVERY_DIR" ] && [ ! -L "$RECOVERY_DIR" ] || return 1
+    [ -n "$(find "$RECOVERY_DIR" -prune -user "$(id -u)" -print)" ] || return 1
+    [ -z "$(find "$RECOVERY_DIR" -prune \( -perm -0020 -o -perm -0002 \) -print)" ] || return 1
+    [ -n "$(find "$RECOVERY_DIR" -prune ! -perm 0700 -print)" ]
+}
+recovery_runtime_ok() {  # <probe host Python> [allow_loose_dir: 0|1]; never substitutes the template's executable
     "$1" -I -B -c '
-import os, plistlib, sys
+import hashlib, os, plistlib, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1] + "/mcs")
 import _mcs_path
@@ -717,7 +762,15 @@ if "recovery_python" in cfg and os.path.lexists(
         raise SystemExit("復旧用 Python の設定と稼働設定が一致しません。処理が動いていないことを確認し、mcs setup init --yes、mcs setup services の順に修復してください")
 from html import escape
 text = Path(sys.argv[2]).read_text()
-helper = run_log_install.helper_path(Path(sys.argv[3]).parent, sys.argv[7], checkout=sys.argv[1])
+if sys.argv[8] == "1":
+    source = run_log_install.source_snapshot(sys.argv[1])
+    if source is None:
+        raise SystemExit("復旧サービスのテンプレートに問題があります: run_log_source_unavailable")
+    root_key = run_log_install._root(Path(sys.argv[3]).parent)
+    rec_key = run_log_install._canonical_leaf(sys.argv[7])
+    helper = os.path.join(rec_key, run_log_install._pointer(root_key)[:-5] + "-" + hashlib.sha256(source).hexdigest() + ".py")
+else:
+    helper = run_log_install.helper_path(Path(sys.argv[3]).parent, sys.argv[7], checkout=sys.argv[1])
 rendered = render_template(text, {"RECOVERY_PYTHON":escape(desired, quote=False),
     "RUN_LOG_HELPER":escape(helper, quote=False), "RECOVERY":escape(sys.argv[7], quote=False),
     "DATA":escape(str(Path(sys.argv[3]).parent / "data"), quote=False)})
@@ -733,7 +786,7 @@ if problem:
     print("復旧用 Python に問題があります: " + problem, file=sys.stderr)
     sys.exit(1)
 print(desired)
-' "$REPO" "$RECOVERY_TEMPLATE" "$MCS_ROOT/config.json" "$RECOVERY_OPTION" "$SKIP_RECOVERY" "$AGENTS_DIR" "$RECOVERY_DIR"
+' "$REPO" "$RECOVERY_TEMPLATE" "$MCS_ROOT/config.json" "$RECOVERY_OPTION" "$SKIP_RECOVERY" "$AGENTS_DIR" "$RECOVERY_DIR" "${2:-0}"
 }
 loaded() { launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1; }
 # launchd may still be tearing down a just-booted-out job ("5: Input/
@@ -852,8 +905,14 @@ preflight() {
     if _py="$(find_py)"; then pf_ok "Python 3.14: $_py"
     elif [ "$_brew_fills" -eq 1 ]; then pf_info "Python 3.14 は未導入です。段階1で python@3.14 を導入します"
     else pf_ng "実行できる Python 3.14 が見つかりません" "brew install python@3.14"; fi
+    _pf_loose_rec=0
+    if recovery_wanted && recovery_dir_loose; then
+        _pf_loose_rec=1
+        # v1.0.3-v1.0.6 created it 0755; install tightens it after confirmation and lock
+        pf_warn "${RECOVERY_DIR} の権限が 700 ではありません。導入時に 700 へ直します" ""
+    fi
     if recovery_wanted; then
-        if [ -n "$_py" ] && RECOVERY_PYTHON="$(recovery_runtime_ok "$_py")"; then
+        if [ -n "$_py" ] && RECOVERY_PYTHON="$(recovery_runtime_ok "$_py" "$_pf_loose_rec")"; then
             pf_ok "復旧用 Python: 3.14以降で SQLite の安全条件を満たしています"
         elif [ -z "$_py" ] && [ -z "$RECOVERY_OPTION" ] && [ "$_brew_fills" -eq 1 ]; then
             # same as the install path: stage 6 re-verifies after stage 1 adds Python
@@ -886,8 +945,14 @@ preflight() {
     if [ "$SKIP_LLM" -eq 0 ] && [ "$OS" = Darwin ] && [ ! -f "$MODEL_FILE" ]; then _need_hf=1; fi
     pf_net huggingface.co "$MODEL_URL" "$_need_hf"
 
+    _venv_established=0
+    if [ -e "$MCS_DATA/ledger.db" ] || [ -e "$MCS_DATA/service_manifest.json" ]; then _venv_established=1; fi
     if [ "$RUNTIME_MODE" = standalone ]; then
         pf_info "MCS 単独接続の実行環境: ${VENV}（Hermes は不要です）"
+        if { [ -e "$VENV" ] || [ -L "$VENV" ]; } && ! py_ok "$VENV_PY" 14 15 && [ "$_venv_established" -eq 1 ]; then
+            pf_ng "導入済みの実行環境で Python 3.14 を使用できません（段階2では作り直しません）" \
+                "動作する旧版の Python はリリースの更新手順で移行してください。$(venv_unusable_hint)"
+        fi
         pf_net pypi.org https://pypi.org 1
     else
     if command -v hermes >/dev/null 2>&1; then pf_info "Hermes コマンド: $(command -v hermes)"
@@ -898,11 +963,14 @@ preflight() {
         if ! _h="$(git -C "$HERMES_DIR" rev-parse HEAD 2>/dev/null)"; then
             pf_ng "$HERMES_DIR の現在の版（HEAD）を読み取れません" "mv $(shell_quote "$HERMES_DIR") $(shell_quote "$HERMES_DIR.bak")   # 段階2で再取得します"
         elif [ "$_h" = "$HERMES_PIN" ]; then pf_ok "Hermes は検証済みの固定版です"
-        else pf_warn "Hermes は $_h です。検証済み固定版 $HERMES_PIN と異なります（現状を保持します）" "git -C $(shell_quote "$HERMES_DIR") checkout --detach $HERMES_PIN"; fi
+        else pf_warn "Hermes は $_h です。検証済み固定版 $HERMES_PIN と異なります（現状を保持します）" "版の変更はリリースの更新手順（更新ツール）で行ってください。手作業で checkout すると依存関係が更新されません"; fi
     elif [ -e "$HERMES_DIR" ]; then
         pf_ng "$HERMES_DIR は存在しますが Git で取得したフォルダではありません" "mv $(shell_quote "$HERMES_DIR") $(shell_quote "$HERMES_DIR.bak")"
     else pf_info "Hermes は未取得です。段階2で $HERMES_PIN を取得します"; fi
     if py_ok "$VENV_PY" 14 15; then pf_ok "Hermes 用 Python: $VENV_PY"
+    elif { [ -e "$VENV" ] || [ -L "$VENV" ]; } && [ "$_venv_established" -eq 1 ]; then
+        pf_ng "導入済みの Hermes 用 Python 3.14 を使用できません（段階2では作り直しません）" \
+            "動作する旧版の Python はリリースの更新手順で移行してください。$(venv_unusable_hint)"
     elif [ -e "$VENV" ]; then pf_info "Hermes 用 Python 3.14 が使用できません。段階2で環境を再作成します"
     else pf_info "Hermes 用 Python 環境は未作成です。段階2で作成します"; fi
     fi
@@ -1034,9 +1102,11 @@ if [ -f "$REPO/.git" ]; then
     warn "Git の作業用フォルダ（${REPO}）から実行しています。ここを削除するとサービスとプラグインが動かなくなります。恒久的なメインのフォルダを使ってください"
 fi
 
+_pre_loose_rec=0
+if recovery_wanted && recovery_dir_loose; then _pre_loose_rec=1; fi
 if recovery_wanted; then
     if _probe_host="$(find_py)"; then
-        RECOVERY_PYTHON="$(recovery_runtime_ok "$_probe_host")" \
+        RECOVERY_PYTHON="$(recovery_runtime_ok "$_probe_host" "$_pre_loose_rec")" \
             || die "指定した復旧用 Python の安全性が確認できないか、稼働設定と一致しません。変更は行っていません"
     elif [ -n "$RECOVERY_OPTION" ]; then
         die "--recovery-python は導入前に Python 3.14 で検証します。brew install python@3.14 などで導入して再実行してください。変更は行っていません"
@@ -1201,6 +1271,11 @@ if [ -n "${MCS_UPDATE_REINSTALL:-}" ] && [ -n "${MCS_UPDATE_OPTIONS_BASE:-}" ]; 
         || die "導入設定が変更されたため再導入を開始しません。現在の設定を確認してください"
 fi
 require_ocr_tools
+
+if recovery_wanted && recovery_dir_loose; then
+    # Tighten only after confirmation, the install lock and all read-only guards.
+    chmod 700 "$RECOVERY_DIR" || die "${RECOVERY_DIR} の権限を 700 に直せません。chmod 700 ${RECOVERY_DIR} を実行してから再実行してください"
+fi
 
 # Per-run id ties the stage journal to this invocation; a stale journal from
 # an older interrupted run is never reported as this run's stage.

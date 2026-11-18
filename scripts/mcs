@@ -21,5 +21,5 @@ for PY in "${MCS_ROOT:-$HOME/.mcs}/venv/bin/python3" \
         exec "$PY" "$REPO/mcs/ops/mcs_cli.py" "$@"
     fi
 done
-printf '%s\n' '実行に必要なPythonが見つかりません。次のコマンドで導入してください: sh scripts/mcs install' >&2
+printf '%s\n' '実行に必要なPythonが見つかりません。次のコマンドで導入してください: sh scripts/mcs install（導入済みで実行環境の Python が起動しない場合は、環境と記録を保持したまま担当者に復旧を依頼してください）' >&2
 exit 1
