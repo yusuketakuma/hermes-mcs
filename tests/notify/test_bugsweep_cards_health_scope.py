@@ -7,7 +7,7 @@ from test_notification_delivery_guidance import _complete_render
 LINEWORKS = {'notify': {'interactive': 'lineworks'}}
 
 
-def test_latency_after_a_later_update_is_measured_on_the_first_delivery(led, monkeypatch):
+def test_latency_after_a_later_update_is_measured_on_the_first_delivery(led, monkeypatch):  # noqa: F811 - pytest injects the imported fixture
     create = _complete_render(led)
     db = led.db
     # Hours later an ack/extraction update bumps the generations and becomes the latest render.
@@ -44,7 +44,7 @@ def _notice(db, states, transport):
     return delivery
 
 
-def test_cardless_notice_not_sent_overflow_part_is_counted(stored):
+def test_cardless_notice_not_sent_overflow_part_is_counted(stored):  # noqa: F811 - pytest injects the imported fixture
     _notice(stored, [('card', 'delivered', None), ('body_part', 'not_sent', 'synthetic_failure')], 'lineworks')
     report = notify_scope.incomplete_parts_health(stored, NOW, LINEWORKS)
     assert report['total'] == report['active_total'] == 1
@@ -53,7 +53,7 @@ def test_cardless_notice_not_sent_overflow_part_is_counted(stored):
     assert report['oldest_age_s'] == 60
 
 
-def test_cardless_notice_length_rejection_does_not_retain_its_spec(stored):
+def test_cardless_notice_length_rejection_does_not_retain_its_spec(stored):  # noqa: F811 - pytest injects the imported fixture
     delivery = _notice(stored, [('card', 'delivered', None), ('body_part', 'not_sent', 'msg_too_long')], 'slack')
     assert notify_scope.incomplete_parts_health(stored, NOW, {'notify': {'interactive': 'slack'}})['total'] == 1
     assert notify_scope.unresolved_length_deliveries(stored, [delivery]) == set()
