@@ -517,6 +517,7 @@ v1.1.2は、品質を確認した資料から患者コンテキストの概況�
 | 読む目的 | 文書 |
 |---|---|
 | 使い方・画面・データの読み方 | [利用者ガイド](docs/guides/USER_GUIDE.md) |
+| Mac内の患者別チャット閲覧 | [ローカル患者タイムライン](docs/guides/LOCAL_CHAT.md)（明示起動・公開スナップショット専用） |
 | 導入・接続・設定・トラブル対応 | [導入ガイド](docs/guides/INSTALLATION.md) · [LINE WORKS接続](docs/guides/LINEWORKS.md) · [スタンドアローン](docs/guides/STANDALONE.md) · [エージェント向け手順](docs/guides/SETUP_AGENT.md) |
 | データ取扱い・安全境界・AI・復旧の限界 | [SECURITY](SECURITY.md) |
 | 更新・バックアップ・復旧 | [更新ガイド](docs/guides/UPGRADE_AGENT.md) · [1.1.0のリリース資料](docs/releases/v1.1.0/README.md) · [1.0.24の受入票](docs/releases/v1.0.24/ACCEPTANCE_1.0.24.md) · [ライフサイクル仕様](docs/specs/lifecycle-spec.md) · [鍵escrow・端末喪失ガイド](docs/guides/BACKUP.md) · [配備資産](deployment/README.md) · [収集の診断](docs/guides/COLLECTION_DIAGNOSTICS.md) · [保存済み添付の点検](docs/guides/ATTACHMENT_RECOVERY.md) |
