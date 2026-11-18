@@ -729,7 +729,8 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
     # scoped/env override or a turn already held by the caller — holds
     # the turn after a transport failure; a request that fell back to
     # the default slot releases it at once.
-    wait_for_idle = (scheduling_enabled() or type(body.get("id_slot")) is int
+    caller_pinned_slot = type(body.get("id_slot")) is int
+    wait_for_idle = (scheduling_enabled() or caller_pinned_slot
                      or _BACKGROUND_SCOPE.get() is not None
                      or _OWNED_TURN.get() is not None
                      or _env_slot() is not None)
@@ -769,17 +770,18 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
             if kind == "transport" and isinstance(error, OSError) \
                     and (_turn_path() or scheduling_enabled()) \
                     and wait_for_idle:
-                confirmed = _wait_slot_idle(send, endpoint, body["id_slot"],
+                sent_slot = body["id_slot"]
+                confirmed = _wait_slot_idle(send, endpoint, sent_slot,
                                             deadline, error_out)
                 if scheduling_enabled():
                     import llm_slot_schedule
                     directory = os.environ[SCHEDULE_ENV]
                     if confirmed:
                         llm_slot_schedule.clear_stuck(directory,
-                                                      body["id_slot"])
+                                                      sent_slot)
                     else:
                         llm_slot_schedule.mark_stuck(directory,
-                                                     body["id_slot"])
+                                                     sent_slot)
             return None
         if status == 200 and scheduling_enabled():
             # proven usable while the turn still holds the slot lock, so a

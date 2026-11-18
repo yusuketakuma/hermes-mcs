@@ -90,7 +90,9 @@ def _transport_failure(tmp_path, monkeypatch, *, scheduled, extra):
     monkeypatch.setenv(local_llm.TURN_LOCK_ENV, str(tmp_path / "turn.lock"))
     monkeypatch.delenv(local_llm.SCHEDULE_ENV, raising=False)
     if scheduled:
-        monkeypatch.setenv(local_llm.SCHEDULE_ENV, str(tmp_path))
+        schedule_root = tmp_path / "sched"
+        schedule_root.mkdir()
+        monkeypatch.setenv(local_llm.SCHEDULE_ENV, str(schedule_root))
         monkeypatch.setenv(local_llm.WORK_CLASS_ENV, "BACKLOG")
     posts, gets = [], []
 
