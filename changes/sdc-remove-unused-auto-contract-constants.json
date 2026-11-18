@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "auto契約の未使用定数を削除",
+  "summary": "利用者向けの実行時動作に変更はありません。auto更新v3契約検証コードで、どこからも参照されないモジュール定数を削除しました。",
+  "upgrade": "追加操作は不要です。",
+  "details": ["AUTO_PAYLOAD_BYTES・AUTO_ERROR_SCHEMA・AUTO_PURPOSESを削除。purpose一覧は利用中のAUTO_PURPOSE_DEFINITIONSが担います。規約interfaceの例外型HoldError・PersistenceUnknownはcontracts/mcs-auto/v3/interfaces.pyiが宣言するため保持しました。"],
+  "refs": ["adapters/sdc/release_auto_contract.py"]
+}

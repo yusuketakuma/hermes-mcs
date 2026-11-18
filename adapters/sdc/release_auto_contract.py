@@ -19,18 +19,10 @@ DEFS = SCHEMA['$defs']
 AUTO_INPUT_BYTES = 16384
 AUTO_DEPTH = 32
 AUTO_NODES = 10000
-AUTO_PAYLOAD_BYTES = 8192
-AUTO_ERROR_SCHEMA = 'mcs.release-error.v3'
 HASH_DOMAIN = 'MCS-AUTO-v3\n'
 _UINT64_MAX = 2**64 - 1
 _KIND = re.compile(r'[a-z0-9][a-z0-9._-]{0,62}')
 
-AUTO_PURPOSES = (
-    'mcs-auto-offer-v3', 'mcs-auto-compatibility-v3', 'mcs-auto-grant-v3', 'mcs-auto-ack-v3',
-    'mcs-auto-status-v3', 'mcs-publication-plan-v3', 'mcs-release-acceptance-v3',
-    'mcs-auto-health-ack-v3', 'mcs-auto-consent-preview-v3', 'mcs-auto-consent-receipt-v3',
-    'mcs-rollout-policy-v3',
-)
 AUTO_PURPOSE_DEFINITIONS = {
     'mcs-auto-offer-v3': 'Offer', 'mcs-auto-compatibility-v3': 'Compatibility',
     'mcs-auto-grant-v3': 'StartGrant', 'mcs-auto-ack-v3': 'OutcomeAck',
