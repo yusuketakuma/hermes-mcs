@@ -84,6 +84,83 @@ def test_ops_retry_records_optional_reason_in_receipt(tmp_path):
     db.close()
 
 
+def test_private_previsit_operations_are_human_confirmed_revisioned_and_idempotent(tmp_path):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        db.ensure_patient(1)
+        assignment = _command(
+            "ops.previsit_assignment_set", expected_revision=0,
+            staff_id="staff-42", transport="lineworks",
+            account_scope={"profile": "synthetic", "application_id": "2000001",
+                           "team_id": "3000001", "route_epoch": 4},
+            recipient_id="staff42@example.invalid", reason="synthetic approval")
+        receipt = mcs_requests.apply_command(db, assignment)
+        assert receipt["outcome"] == "applied" and receipt["revision"] == 1
+        assert mcs_requests.apply_command(db, assignment) == receipt
+        row = db.db.execute(
+            "SELECT content,meta FROM artifacts WHERE kind=? ORDER BY artifact_id DESC LIMIT 1",
+            ("private_previsit_assignment_v1",)).fetchone()
+        assert json.loads(row["content"])["recipient_id"] == "staff42@example.invalid"
+        assert json.loads(row["meta"])["command_id"] == assignment["command_id"]
+
+        stale = _command(
+            "ops.previsit_assignment_set", expected_revision=0,
+            staff_id="staff-43", transport="lineworks",
+            account_scope=assignment["account_scope"],
+            recipient_id="staff43@example.invalid", reason="stale synthetic approval")
+        rejected = mcs_requests.apply_command(db, stale)
+        assert rejected["outcome"] == "rejected"
+        assert rejected["error"] == "previsit_revision_stale"
+        assert rejected["current_revision"] == 1
+
+        revoke = _command("ops.previsit_assignment_revoke", expected_revision=1,
+                          reason="synthetic revoke")
+        revoked = mcs_requests.apply_command(db, revoke)
+        assert revoked["outcome"] == "applied" and revoked["revision"] == 2
+        revoked_state = json.loads(db.db.execute(
+            "SELECT content FROM artifacts WHERE kind=? ORDER BY artifact_id DESC LIMIT 1",
+            ("private_previsit_assignment_v1",)).fetchone()[0])
+        assert revoked_state == {"active": False}
+
+        visit = _command("ops.previsit_visit_date_set", expected_revision=0,
+                         visit_date="2026-06-02", reason="synthetic date registration")
+        registered = mcs_requests.apply_command(db, visit)
+        assert registered["outcome"] == "applied" and registered["revision"] == 1
+        assert mcs_requests.apply_command(db, visit) == registered
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize(("command", "fields", "expected"), [
+    ("ops.previsit_assignment_set", {"expected_revision": 0, "staff_id": "staff-42",
+     "transport": "lineworks", "account_scope": {"profile": "synthetic",
+     "application_id": "2000001", "team_id": "3000001", "route_epoch": 4},
+     "recipient_id": "staff42@example.invalid"}, "bad_reason"),
+    ("ops.previsit_assignment_set", {"expected_revision": 0, "staff_id": "free text name",
+     "transport": "lineworks", "account_scope": {"profile": "synthetic",
+     "application_id": "2000001", "team_id": "3000001", "route_epoch": 4},
+     "recipient_id": "staff42@example.invalid", "reason": "synthetic"}, "bad_staff_id"),
+    ("ops.previsit_visit_date_set", {"expected_revision": 0, "visit_date": "2026-02-30",
+     "reason": "synthetic"}, "bad_visit_date"),
+])
+def test_private_previsit_operations_reject_bad_or_unapproved_requests(
+        tmp_path, command, fields, expected):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        db.ensure_patient(1)
+        req = _command(command, **fields)
+        if expected != "bad_reason":
+            req["reason"] = fields.get("reason")
+        else:
+            req.pop("reason", None)
+        receipt = mcs_requests.apply_command(db, req)
+        assert receipt["outcome"] == "rejected" and receipt["error"] == expected
+        assert db.db.execute(
+            "SELECT COUNT(*) FROM artifacts WHERE kind LIKE 'private_previsit_%'").fetchone()[0] == 0
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize("version,allowed", [
     (CURRENT_VERSION, True), (LEGACY_VERSION, True),
     ("2.0", False), ("0.2", False), (None, False),
