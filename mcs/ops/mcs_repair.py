@@ -363,21 +363,29 @@ def _validate_plan(value, snapshot, nonce, digest):
             or value.get("nonce") != nonce or value.get("plan_digest") != digest \
             or not valid_hash(digest):
         raise ValueError("plan_incompatible")
+    scope = _stored_scope(value)
+    expected = plan(snapshot, nonce=nonce, max_steps=value["max_steps"], scope=scope)
+    if canonical(expected) != canonical(value):
+        raise ValueError("plan_tampered_or_snapshot_changed")
+    if not value["snapshot_binding"] or not value["audit"]["ok"]:
+        raise ValueError("plan_prerequisites_unverified")
+
+
+def _stored_scope(value):
+    """The upgrade scope resolved at plan time, saved with the plan.
+
+    Re-verification and every observation in the audit trail use it, so
+    changing the live setting mid-repair can neither strand the trail nor
+    make before/after counts disagree on an unchanged snapshot.
+    """
     import upgrade_scope
-    # The scope resolved at plan time is part of the plan: re-verification uses
-    # it, so changing the live setting mid-repair never strands an audit trail.
     stored = value.get("upgrade_scope")
     if not isinstance(stored, dict) or stored.keys() != {"mode", "project_ids"} \
             or stored["mode"] not in ("all", "none", "projects") \
             or not isinstance(stored["project_ids"], list) \
             or any(type(p) is not int or p <= 0 for p in stored["project_ids"]):
         raise ValueError("plan_incompatible")
-    scope = upgrade_scope.Scope(stored["mode"], tuple(stored["project_ids"]))
-    expected = plan(snapshot, nonce=nonce, max_steps=value["max_steps"], scope=scope)
-    if canonical(expected) != canonical(value):
-        raise ValueError("plan_tampered_or_snapshot_changed")
-    if not value["snapshot_binding"] or not value["audit"]["ok"]:
-        raise ValueError("plan_prerequisites_unverified")
+    return upgrade_scope.Scope(stored["mode"], tuple(stored["project_ids"]))
 
 
 def _private_parent(path):
@@ -528,7 +536,8 @@ def record(value: RepairPlan, snapshot: str | Path, current_snapshot: str | Path
             or (status == "blocked" and reason not in (
                 "prerequisite_unverified", "owner_decision_pending", "execution_failed")):
         raise ValueError("stage_reason_invalid")
-    after = plan(current_snapshot, nonce=nonce, max_steps=value["max_steps"])
+    after = plan(current_snapshot, nonce=nonce, max_steps=value["max_steps"],
+                 scope=_stored_scope(value))
     if not after["audit"]["ok"] or not after["snapshot_binding"]:
         raise ValueError("current_snapshot_unverified")
     if not backup_db or not backup_sha256:
@@ -611,7 +620,8 @@ def finalize(value: RepairPlan, snapshot: str | Path, current_snapshot: str | Pa
              backup_db: str | Path, backup_sha256: str):
     """Aggregate recorded evidence, including blocked/unfinished work, not repair success."""
     _validate_plan(value, snapshot, nonce, plan_digest)
-    after = plan(current_snapshot, nonce=nonce, max_steps=value["max_steps"])
+    after = plan(current_snapshot, nonce=nonce, max_steps=value["max_steps"],
+                 scope=_stored_scope(value))
     with _log(log, create=False) as stream:
         fcntl.flock(stream.fileno(), fcntl.LOCK_SH)
         entries = _entries(stream, plan_digest, nonce, value["counts"].keys())
