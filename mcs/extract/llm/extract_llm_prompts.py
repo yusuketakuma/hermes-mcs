@@ -125,6 +125,102 @@ _BASE_PROMPT_SPEC = _PROMPT_SPEC
 _PROMPT_HEAD = _PROMPT_SPEC + _PROMPT_EXAMPLES
 
 
+# Completely synthetic examples for the generation selected in X9.
+_GEN12_PROMPT_EXAMPLES = """例1:
+対象本文:
+<<<
+本人は夕食後に模擬薬ウの錠剤を1錠服用中。姉は先週で模擬薬ネを中止したそうです。
+>>>
+JSON:{"symptoms":[],"meds":[
+  {"name":"模擬薬ウ","dose":"1錠","action":"none","subject":"patient","status":"current","negated":false,
+   "evidence":"本人は夕食後に模擬薬ウの錠剤を1錠服用中"},
+  {"name":"模擬薬ネ","action":"stop","subject":"family","status":"past","negated":false,
+   "evidence":"姉は先週で模擬薬ネを中止した"}
+]}
+
+例2:
+対象本文:
+<<<
+居室の棚に本人用の在宅酸素装置を設置しました。実際に使用したかは記録がありません。本人の脈拍は71回/分と記録。
+>>>
+JSON:{"symptoms":[],"vitals":{"hr":71},"patient_context":[
+  {"category":"devices","subject":"patient","text":"本人用の在宅酸素装置を設置しました",
+   "evidence":"居室の棚に本人用の在宅酸素装置を設置しました"}
+]}
+
+例3:
+対象本文:
+<<<
+本人は先月、模擬食品ルを食べた後に口のかゆみがあり、アレルギーだったかもしれないと話した。妹は模擬食品ニでアレルギーはないと話した。
+>>>
+JSON:{"symptoms":[{"text":"口のかゆみ","subject":"patient","status":"past","negated":false,
+  "evidence":"先月、模擬食品ルを食べた後に口のかゆみがあり"}],"allergies":[
+  {"allergen":"模擬食品ル","kind":"allergy","reaction":"口のかゆみ","subject":"patient","status":"past",
+   "negated":false,"certainty":"suspected",
+   "evidence":"本人は先月、模擬食品ルを食べた後に口のかゆみがあり、アレルギーだったかもしれないと話した"},
+  {"allergen":"模擬食品ニ","kind":"allergy","subject":"family","status":"current","negated":true,
+   "certainty":"confirmed","evidence":"妹は模擬食品ニでアレルギーはないと話した"}
+]}
+
+例4:
+対象本文:
+<<<
+本人の受診は11月4日の予定です。看護師から介護士へ、次の通所日に食事量を記録してください。
+>>>
+JSON:{"symptoms":[],"event_records":[
+  {"kind":"exam","subject":"patient","status":"planned","negated":false,
+   "evidence":"本人の受診は11月4日の予定です。","span":{"start":0,"end":17}}
+],"requests":[
+  {"to":"介護士","from":"看護師","kind":"request","action":"食事量を記録","due_text":"次の通所日",
+   "evidence":"看護師から介護士へ、次の通所日に食事量を記録してください"}
+]}
+
+例5:
+対象本文:
+<<<
+本人は最近、粒のあるおかゆを残す日が増えたと記録。今回の排便回数は記載されていません。
+>>>
+JSON:{"symptoms":[],"patient_context":[
+  {"category":"nutrition","subject":"patient","text":"粒のあるおかゆを残す日が増えた",
+   "evidence":"本人は最近、粒のあるおかゆを残す日が増えたと記録",
+   "details":[{"key":"food_texture","value":"粒のあるおかゆ","evidence":"粒のあるおかゆを残す日が増えた"}]}
+]}
+
+例6:
+対象本文:
+<<<
+前回の本人の採血結果にAST 19 U/Lと記載。今日は採血の予定だけがあり、結果の記載はない。
+>>>
+JSON:{"symptoms":[],"labs":[
+  {"name":"AST","value":19,"unit":"U/L","subject":"patient","status":"past",
+   "evidence":"前回の本人の採血結果にAST 19 U/Lと記載"}
+]}
+
+例7:
+対象本文:
+<<<
+本人の呼びかけへの返答が昼前から弱くなりました。看護師から医師へ、至急の確認をお願いします。
+>>>
+JSON:{"symptoms":[{"text":"返答の減弱","subject":"patient","status":"new","negated":false,
+  "evidence":"本人の呼びかけへの返答が昼前から弱くなりました"}],"requests":[
+  {"to":"医師","from":"看護師","kind":"request","action":"至急の確認",
+   "evidence":"看護師から医師へ、至急の確認をお願いします"}
+],"urgency":"high","urgency_evidence":["至急の確認をお願いします"]}
+
+例8:
+対象本文:
+<<<
+本人に息切れはありません。夕食のときに吐き気が出た場合に限り、介護士は看護師へ知らせてください。
+>>>
+JSON:{"symptoms":[{"text":"息切れ","subject":"patient","negated":true,
+  "evidence":"本人に息切れはありません"}],"requests":[
+  {"to":"介護士","from":null,"kind":"request","action":"看護師へ連絡","condition":"夕食のときに吐き気が出た場合に限り",
+   "evidence":"夕食のときに吐き気が出た場合に限り、介護士は看護師へ知らせてください"}
+],"urgency":"routine"}
+
+"""
+
+
 _CTX_HEAD = """参考コンテキスト(同じスレッドの過去投稿。参照専用 — ここからの項目抽出・evidence引用は禁止):
 返信判定: 対象本文がコンテキスト中の依頼・質問に答えている場合のみ "reply": {"kind": "ack|intent|progress|answer|done|cancel", "evidence": "対象本文の完全一致引用"} を出力する。「承知しました」「確認しました」「拝見しました」のみで対象の明示が無ければ ack、「対応します」は intent、一部のみ確認・実施済みは progress、質問への回答のみは answer、依頼された対象と完了を示す語が揃う場合のみ done、依頼の取り消し・中止は cancel。「ありがとうございます」だけの投稿は reply を出力しない。
 <<<
@@ -215,12 +311,16 @@ def gen12_prompt_heads():
     # The validator owns unverified=True. Model certainty is a reported axis,
     # never a verified clinical assertion. X9 alone selects these heads.
     allergy_shape = json.dumps(schema["allergies"]["items"], ensure_ascii=False, separators=(",", ":"))
-    spec = ("".join(lines) + '- "allergies": 対象本文のアレルギー・副作用の未確認候補の配列。'
+    spec = "".join(lines).replace(
+        "在宅酸素・人工呼吸器など調剤薬局の扱わない療法・機器は meds に入れない",
+        "在宅酸素療法や人工呼吸器などの療法・機器自体は meds に入れない",
+    )
+    spec += ('- "allergies": 対象本文のアレルギー・副作用の未確認候補の配列。'
             '本人・家族・過去・予定・条件・否定を原文のまま区別する。'
             'certaintyは本文の確かさの表現であり、confirmedでも検証済みの確定を意味しない。'
             '各項目のJSON形状は次のとおり。不明なallergen/reaction/evidenceは省略またはnullとし、'
             'unverifiedは出力しない。\n' + allergy_shape + "\n\n")
-    return spec, spec + _PROMPT_EXAMPLES, spec + _BATCH_FMT
+    return spec, spec + _GEN12_PROMPT_EXAMPLES, spec + _BATCH_FMT
 
 
 _BATCH_TARGET = """対象{i}(投稿日時: {posted}):
@@ -271,6 +371,20 @@ patient_context.detailsのvalueはevidenceに含まれる原文の連続した�
 
 問題:
 """
+
+
+def gen12_repair_head():
+    """Build the next repair head without selecting it for runtime use."""
+    schema = extract_schema.gen12_schema()["schema"]
+    required = set(schema["required"])
+    properties = schema["properties"]
+    fields = "、".join(f'{name}={shape["type"]}{"（必須）" if name in required else ""}'
+                     for name, shape in properties.items())
+    allergy_fields = "、".join(properties["allergies"]["items"]["properties"])
+    return (_REPAIR_HEAD.removesuffix("問題:\n")
+            + f"JSONの最上位項目: {fields}。\n"
+            + f"allergiesの各候補の項目: {allergy_fields}。本人・家族、否定、時点、確かさを原文のまま保持し、"
+            "検証済みとは扱わない。\n\n問題:\n")
 
 
 _REPAIR_MID = """
