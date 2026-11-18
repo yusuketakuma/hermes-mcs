@@ -131,6 +131,14 @@ def _restart_import(ledger, req, now):
         return "restarted"
 
 
+def _asserts_never_started(req) -> bool:
+    """An approved card/part resolve that settles on the journal's
+    ``no_journal_started`` proof (the operator's not-sent attestation)."""
+    evidence = req.get("evidence") if isinstance(req, dict) else None
+    return (isinstance(evidence, dict) and evidence.get("proof") == "no_journal_started"
+            and req.get("result") == "mark_not_sent" and req.get("cmd") in ("ops.card_resolve", "ops.card_part_resolve"))
+
+
 def drain_commands(ledger, result, cmd_dir: str = CMD_DIR, *, consent_only=False):
     """Consume queued bot requests into durable fetch_jobs FIRST. Files may
     arrive mid-write (producer writes non-atomically): a parse failure is
@@ -139,9 +147,12 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR, *, consent_only=False
         import notify_spool
         consent_only = consent_only or notify_spool.restore_awaiting_consent(
             os.path.dirname(cmd_dir)) is not None
+        # While the restore marker stands, the journal-vs-DB reconcile has not
+        # finished: a "never started" approval could still be refuted by it.
+        reconcile_pending = notify_spool.restore_pending(os.path.dirname(cmd_dir)) is not None
     except Exception:
         # Preserve queued writes when the restore guard cannot be read.
-        consent_only = True
+        consent_only = reconcile_pending = True
     try:
         # A writer holding the queue lock is publishing an earlier command: wait for the
         # next drain instead of overtaking it (mcs_requests.queue_lock).
@@ -172,6 +183,8 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR, *, consent_only=False
                              or req.get("cmd") != "ops.restore_approve"):
             # All writes, including legacy imports, stay queued while a
             # restore can replace this database after human consent.
+            continue
+        if reconcile_pending and _asserts_never_started(req):
             continue
         if isinstance(req, dict) and isinstance(req.get("cmd"), str) \
                 and (req["cmd"].startswith("request.")
