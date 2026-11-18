@@ -746,12 +746,20 @@ def unresolved_length_deliveries(db, delivery_ids, *, proof_state=None) -> set:
             and row['state'] == 'not_sent' and row['error_code'] in _LENGTH_ERRORS}
 
 
-def _tracked_incomplete_part_rows(db, cfg=None):
+def _tracked_incomplete_part_rows(db, cfg=None, observation=None):
     """Yield (row, acknowledged) for unfinished parts; acknowledged rows are closed tracking."""
     import notify_tracking_ack
+    if observation is not None:
+        observation["phase"] = "receipt_targets"
     index = notify_tracking_ack.receipt_targets(db)
+    if observation is not None:
+        observation["phase"] = "part_rows"
     for row in _incomplete_part_rows(db, cfg):
+        if observation is not None:
+            observation["phase"] = "acknowledged"
         yield row, notify_tracking_ack.acknowledged(db, row, index, cfg=cfg)
+        if observation is not None:
+            observation["phase"] = "part_rows"
 
 
 def active_incomplete_part_rows(db, cfg=None):
@@ -761,7 +769,8 @@ def active_incomplete_part_rows(db, cfg=None):
             yield row
 
 
-def incomplete_parts_health(db, now: float, cfg=None, *, active_rows=None) -> dict:
+def incomplete_parts_health(db, now: float, cfg=None, *, active_rows=None,
+                            observation=None) -> dict:
     """Read unfinished parts, excluding only matching later delivery evidence.
 
     ``active_rows``, when a list, receives each active row this same pass
@@ -771,7 +780,7 @@ def incomplete_parts_health(db, now: float, cfg=None, *, active_rows=None) -> di
     active_states = dict(states)
     active_plans = dict(by_plan)
     cards, oldest, active_cards, active_oldest, closed = set(), None, set(), None, 0
-    for row, acknowledged in _tracked_incomplete_part_rows(db, cfg):
+    for row, acknowledged in _tracked_incomplete_part_rows(db, cfg, observation=observation):
         states[row['state']] += 1
         by_plan["superseded" if row['superseded'] else "current"] += 1
         cards.add(row['card_id'])

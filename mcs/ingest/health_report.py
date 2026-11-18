@@ -993,11 +993,14 @@ def incomplete_parts_health(db, now, cfg=None, seconds=None, active_rows=None) -
     import notify_scope
     collected = []
     sink = {} if active_rows is None else {"active_rows": collected}
+    observation = {}
     try:
         report = bounded_health_read(
-            db, lambda _check: notify_scope.incomplete_parts_health(db, now, cfg, **sink),
+            db, lambda _check: notify_scope.incomplete_parts_health(
+                db, now, cfg, observation=observation, **sink),
             seconds=NOTIFICATION_OBSERVATION_S if seconds is None
-            else min(seconds, NOTIFICATION_OBSERVATION_S))
+            else min(seconds, NOTIFICATION_OBSERVATION_S),
+            observation=observation)
         if active_rows is not None:
             active_rows.extend(collected)
     except Exception as exc:
@@ -1005,7 +1008,8 @@ def incomplete_parts_health(db, now, cfg=None, seconds=None, active_rows=None) -
                 "by_state": dict.fromkeys(("pending", "unknown", "not_sent", "held")),
                 "by_plan": dict.fromkeys(("current", "superseded")),
                 "oldest_age_s": None, "observed_at": now,
-                "status": "unknown", "reason": _observation_failure(exc)}
+                "status": "unknown", "reason": _observation_failure(exc),
+                "observation": observation}
     return {**report, "status": "recorded"}
 
 
@@ -1058,8 +1062,10 @@ def carried_measurement(current: dict, previous, now: float) -> dict:
     observed = previous.get("observed_at") if isinstance(previous, dict) else None
     if (previous is None or previous.get("status") not in (None, "recorded", "stale_measurement")
             or not finite_number(observed) or not 0 <= now - observed <= CARD_STALL_S
-            # every field the unknown block would publish must be carried
-            or any(k not in previous for k in current if k not in ("status", "reason"))):
+            # every field the unknown block would publish must be carried;
+            # observation is this read's own stop diagnostic, not carried data
+            or any(k not in previous for k in current
+                   if k not in ("status", "reason", "observation"))):
         return current
     # The original observed_at is kept so chained carries still expire.
     return {**previous, **{k: current[k] for k in ("observation",) if k in current},
