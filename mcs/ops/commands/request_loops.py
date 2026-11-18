@@ -231,6 +231,7 @@ def _effective_loop_state(db, r, state, policy, relation_limit,
     pid = r["project_id"]
     events = []                       # (created_at, event)
     evaluated_pairs = set()
+    unrelated_triggers = set()
     if event_rows is None:
         event_rows = db.execute(
             "SELECT content,meta,created_at FROM artifacts "
@@ -269,12 +270,16 @@ def _effective_loop_state(db, r, state, policy, relation_limit,
             evaluated_pairs.add((trigger_id, ev["trigger_revision"]))
         if ev.get("relation") == "unrelated":
             # Keep unrelated evaluations for dedup, hide them from the display.
+            if ev.get("loop_artifact_id") == r["artifact_id"]:
+                unrelated_triggers.add(trigger_id)
             continue
         if ev.get("loop_artifact_id") == r["artifact_id"] or (
                 ev.get("loop_artifact_id") is None
                 and ev.get("loop_origin_id") == r["message_id"]):
             events.append((e["created_at"], ev))
     cand["relation_events"] = [ev for _, ev in events[:relation_limit]]
+    cand["unrelated_trigger_ids"] = sorted(
+        t for t in unrelated_triggers if positive(t))
     unavailable = set()
     if current:
         if rejection_rows is None:

@@ -544,15 +544,12 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now, 
             continue
         seen = []
         reply_events = []
-        # shortcut: `unrelated` evaluations are hidden by request_loops, so they count as
-        # evaluated whatever their staleness; expose evaluated pairs there to tighten this.
-        evaluated = {event.get("trigger_message_id") for event in matched[0]["relation_events"]
-                     if not event.get("stale")} | {r[0] for r in db.execute(
-                         "SELECT json_extract(content,'$.trigger_message_id') FROM artifacts "
-                         "WHERE kind='loop_event' AND project_id=? AND json_valid(content) "
-                         "AND json_extract(content,'$.loop_artifact_id')=? "
-                         "AND json_extract(content,'$.relation')='unrelated'",
-                         (project_id, matched[0]["artifact_id"]))}
+        # `unrelated` evaluations are hidden from relation_events but count as
+        # evaluated whatever their staleness; request_loops exposes their
+        # trigger ids on the candidate so no per-request query is needed.
+        evaluated = ({event.get("trigger_message_id") for event in matched[0]["relation_events"]
+                      if not event.get("stale")}
+                     | set(matched[0].get("unrelated_trigger_ids") or ()))
         for event in matched[0]["relation_events"]:
             relation = event.get("relation")
             kind = kinds.get(relation) if isinstance(relation, str) else None
