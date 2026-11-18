@@ -5,6 +5,7 @@ import semantic_audit
 import semantic_render
 import semantic_store
 import semantic_transport
+import itertools
 import json
 import hashlib
 import sqlite3
@@ -475,9 +476,9 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
         return None, reserved
 
     try:
-        row = db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? '
-                         'AND message_id=? ORDER BY artifact_id DESC LIMIT 1',
-                         (KIND_CANDIDATE, pid, mid)).fetchone()
+        rows = db.execute('SELECT * FROM artifacts WHERE kind=? AND project_id=? '
+                          'AND message_id=? ORDER BY artifact_id DESC', (KIND_CANDIDATE, pid, mid))
+        row = next(rows, None)
         content, meta = (strict_json(row['content']), strict_json(row['meta'])) if row else (None, None)
         candidate_bound = (isinstance(meta, dict) and meta.get('stage') == 'empty_repair'
                            and meta.get('fingerprint') == fp)
@@ -495,10 +496,27 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
             return held('empty_repair_marker_binding', candidate_bound)
         if not is_current(marker_meta) or marker_meta.get('invalidated') or marker_meta.get('stale'):
             return held('empty_repair_marker_currentness')
-        if (candidate_bound and isinstance(content, dict) and type(meta.get('repair_artifact_id')) is int
-                and meta['repair_artifact_id'] == marker['artifact_id']
-                and _empty_repair_consumed(db, pid, mid, fp, policy, row['artifact_id'], content)):
-            return held('empty_repair_consumed', False)
+        # The consumed result and the producer belong to this marker's own
+        # empty-repair candidate, which a later (redone) pre-audit candidate
+        # may follow. An unreadable older row fails closed (validation_unavailable).
+        for repair_row in itertools.chain([row] if row is not None else [], rows):
+            repair_content, repair_meta = strict_json(repair_row['content']), strict_json(repair_row['meta'])
+            if (isinstance(repair_meta, dict) and repair_meta.get('stage') == 'empty_repair'
+                    and repair_meta.get('fingerprint') == fp
+                    and type(repair_meta.get('repair_artifact_id')) is int
+                    and repair_meta['repair_artifact_id'] == marker['artifact_id']):
+                if (isinstance(repair_content, dict)
+                        and _empty_repair_consumed(db, pid, mid, fp, policy, repair_row['artifact_id'],
+                                                   repair_content)):
+                    return held('empty_repair_consumed', False)
+                # A candidate written by an earlier local model is never
+                # recovered; one with a recorded negative is never released.
+                if (repair_meta.get('audit_state') != 'held' and not repair_meta.get('partial_answers')
+                        and not semantic_store.producer_current(
+                            KIND_CANDIDATE, repair_row['model'] if 'model' in repair_row.keys() else None,
+                            repair_meta)):
+                    return held('empty_repair_candidate_producer', False)
+                break
         if (fact_kind is not None
                 and semantic_store.facts_rewritten_after(db, fact_kind, mid, fp, marker['artifact_id'])
                 and not (candidate_bound and isinstance(content, dict)
