@@ -146,6 +146,10 @@ def _restart_intent(tmp_path, **overrides):
     return row
 
 
+def _clear_intent_cache():
+    writer_lock._restart_helper_check.clear()
+
+
 def _fake_clock(monkeypatch):
     clock = [0.0]
     monkeypatch.setattr(writer_lock.time, "monotonic", lambda: clock[0])
@@ -155,6 +159,7 @@ def _fake_clock(monkeypatch):
 
 
 def test_wait_yields_early_for_a_live_restart_intent(tmp_path, monkeypatch):
+    _clear_intent_cache()
     row = _restart_intent(tmp_path)
     monkeypatch.setattr(writer_lock, "_helper_process_started_at",
                         lambda pid, **kw: row["helper_started_at"])
@@ -172,6 +177,7 @@ def test_wait_yields_early_for_a_live_restart_intent(tmp_path, monkeypatch):
 @pytest.mark.parametrize("fault", ["schema", "expired", "dead_pid", "started_at",
                                    "request_id", "expected_pid", "absent"])
 def test_stale_or_forged_restart_intent_never_shortens_the_wait(tmp_path, monkeypatch, fault):
+    _clear_intent_cache()
     if fault != "absent":
         if fault == "schema":
             _restart_intent(tmp_path, schema="other/0")
@@ -204,6 +210,7 @@ def test_stale_or_forged_restart_intent_never_shortens_the_wait(tmp_path, monkey
 
 
 def test_restart_intent_appearing_mid_wait_ends_it(tmp_path, monkeypatch):
+    _clear_intent_cache()
     monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda path: None)
     clock = _fake_clock(monkeypatch)
     slept = [0]
@@ -226,6 +233,8 @@ def test_restart_intent_appearing_mid_wait_ends_it(tmp_path, monkeypatch):
 
 
 def test_lock_won_as_the_intent_appears_is_given_back(tmp_path, monkeypatch):
+    _clear_intent_cache()
+    monkeypatch.setattr(writer_lock, "code_stamp", lambda: 1)
     row = _restart_intent(tmp_path)
     monkeypatch.setattr(writer_lock, "_helper_process_started_at",
                         lambda pid, **kw: row["helper_started_at"])

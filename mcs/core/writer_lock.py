@@ -205,7 +205,7 @@ def _restart_helper_alive(pid: int, started_at: int, deadline=None) -> bool:
     """Liveness verdict for one intent's helper, cached briefly per (pid, start)."""
     key = (pid, started_at)
     checked = time.monotonic()
-    if (_restart_helper_check["key"] == key
+    if (_restart_helper_check.get("key") == key
             and checked - _restart_helper_check["at"] < _RESTART_HELPER_CHECK_S):
         return _restart_helper_check["verdict"]
     try:

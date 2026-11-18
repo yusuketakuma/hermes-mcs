@@ -511,12 +511,13 @@ def test_cli_status_file_carries_a_breakdown_the_health_reader_accepts(tmp_path,
 def test_live_restart_intent_yields_before_opening_the_database(tmp_path, monkeypatch):
     db = tmp_path / "chat.db"
     db.touch()
-    cfg = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/yomitoku", "db": str(db)}}
+    cfg = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/yomitoku"}}
     monkeypatch.setattr(mcs_ocr, "DB", str(db))
     monkeypatch.setattr(mcs_ocr, "DATA", str(tmp_path))
     monkeypatch.setattr(mcs_ocr.writer_lock, "updater_state", lambda: (False, 1))
+    job_fd = mcs_ocr.os.open(str(tmp_path / "job.lock"), mcs_ocr.os.O_RDWR | mcs_ocr.os.O_CREAT)
     monkeypatch.setattr(mcs_ocr, "acquire_run_lock",
-                        lambda path: object() if "attachment_ocr" in path else None)
+                        lambda path: job_fd if "attachment_ocr" in path else None)
     monkeypatch.setattr(mcs_ocr.writer_lock, "wait_run_lock", lambda *a, **k: None)
     monkeypatch.setattr(mcs_ocr.writer_lock, "restart_intent_active", lambda *a, **k: True)
     class ForbiddenLedger:

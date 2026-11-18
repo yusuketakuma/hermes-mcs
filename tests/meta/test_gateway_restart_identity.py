@@ -583,10 +583,8 @@ def test_pid_changed_before_first_restart_is_verified_without_restart(gateway, m
     assert report['previous_pid'] == 101 and report['pid'] == 303
 
 
-def test_restart_helper_publishes_and_clears_its_intent(tmp_path, monkeypatch):
-    rec = ops_testkit._load()
-    data = tmp_path / "data"
-    data.mkdir()
+def test_restart_helper_publishes_and_clears_its_intent(gateway, monkeypatch):
+    rec, data, agents, _, _, _ = gateway
     recorded = []
     publish = rec.mcs_recovery_gateway._gateway_restart_intent_publish
 
@@ -597,8 +595,7 @@ def test_restart_helper_publishes_and_clears_its_intent(tmp_path, monkeypatch):
                        expected_pid=expected_pid)
 
     monkeypatch.setattr(rec.mcs_recovery_gateway, "_gateway_restart_intent_publish", spy)
-    monkeypatch.setattr(rec.mcs_recovery_gateway, "_gateway_restart_report", lambda *a, **k: 0)
-    assert rec._gateway_restart_run(str(data), [], "launcher") == 0
+    assert rec._gateway_restart_run(str(data), str(agents), 501) == 0
     assert len(recorded) == 1
     intent = recorded[0]
     assert intent["request_id"] is not None and len(intent["request_id"]) == 32
@@ -607,7 +604,7 @@ def test_restart_helper_publishes_and_clears_its_intent(tmp_path, monkeypatch):
 
 
 def test_intent_clear_keeps_a_newer_helpers_file(tmp_path):
-    rec = ops_testkit._load()
+    rec = _load()
     data = tmp_path / "data"
     data.mkdir()
     other = {"schema": "gateway-restart-intent/1", "request_id": "f" * 32,
@@ -618,7 +615,7 @@ def test_intent_clear_keeps_a_newer_helpers_file(tmp_path):
 
 
 def test_frozen_program_carries_the_intent_helpers():
-    rec = ops_testkit._load()
+    rec = _load()
     program = rec.mcs_recovery_gateway._GATEWAY_RESTART_PROGRAM
     assert "def _gateway_restart_intent_publish" in program
     assert "def _gateway_restart_intent_clear" in program
