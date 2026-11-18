@@ -22,7 +22,9 @@ import semantic_runtime as runtime
 from semantic_policy import QC_ARTIFACT, QC_JOB_KIND, runtime_config
 
 QC_MAX_ITEMS = 16
-_QC_SECTIONS = ("vitals", "meds", "symptoms", "labs", "events")
+# Audited sections in round-robin order; allergies come last so earlier
+# extractions (which carry none) keep their exact question layout.
+_QC_SECTIONS = ("vitals", "meds", "symptoms", "labs", "events", "allergies")
 # QC covers posts from the last 60 days. A pending job that ages past
 # the window is reaped rather than evaluated late.
 QC_REALTIME_MAX_AGE_S = 60 * 86400
@@ -212,9 +214,10 @@ def _qc_questions(ex: dict) -> tuple[dict, list, dict]:
         layout.append((qid, section, index))
     urg = ex.get("urgency")
     if urg in ("high", "routine", "unclear"):
+        # The extracted class is compared with the answer afterwards, never
+        # shown to the evaluator: the audit must not be anchored on it.
         questions["urg"] = jev.choice_question(
-            "対象の投稿本文の緊急度として最も妥当なものを選ぶ"
-            f"（抽出側の分類: {urg}）",
+            "対象の投稿本文の緊急度として最も妥当なものを選ぶ",
             {"high": "早急な対応が必要な内容",
              "routine": "通常対応で足りる内容",
              "unclear": "本文だけでは判断できない"})
@@ -427,8 +430,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
                               scfg["nomatch_threshold"]),
                           "noul": ans.get("noul")})
     by_field = {}
-    for field in ("meds", "symptoms", "events", "labs", "requests",
-                  "vitals", "summary", "points", "urgency"):
+    for field in (*_QC_SECTIONS, "requests", "summary", "points", "urgency"):
         value = ex.get(field)
         total = len(value) if isinstance(value, list | dict) \
             else int(isinstance(value, str) and bool(value))
@@ -442,8 +444,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
     content = {"qc": "done", "items": items,
                "coverage": {"checked": checked_items, "total": total_items,
                             "unchecked": total_items - checked_items,
-                            "capped": sum(by_field[s]["total"] for s in
-                                ("meds", "symptoms", "events", "labs", "vitals"))
+                            "capped": sum(by_field[s]["total"] for s in _QC_SECTIONS)
                                 > QC_MAX_ITEMS,
                             "by_field": by_field}}
     if urgency is not None:

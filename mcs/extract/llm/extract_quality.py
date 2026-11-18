@@ -26,7 +26,8 @@ def drop_total(v: dict | None) -> float:
             + sum(bool(lab.get("unverified")) for lab in v.get("labs") or []))
 
 
-_FACT_LIST_FIELDS = ("meds", "symptoms", "labs", "events", "event_records", "requests", "patient_context")
+_FACT_LIST_FIELDS = ("meds", "symptoms", "labs", "allergies", "events", "event_records",
+                     "requests", "patient_context")
 
 
 def facts(v: dict | None, split_conditions: bool = False) -> set:

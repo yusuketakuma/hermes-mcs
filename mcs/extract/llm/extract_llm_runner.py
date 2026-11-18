@@ -60,6 +60,7 @@ from extract_llm_prepare import (
     _plan_units,
     _prefilter_enabled,
     _prepare_jobs,
+    _settle_prefiltered,
 )
 from extract_llm_prompts import (
     _BATCH_HEAD,
@@ -1042,8 +1043,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # stability gates before any claim: an open circuit breaker (dead
     # endpoint) or a nearly-full volume skips the LLM lane entirely —
     # rows stay pending for the next drain instead of churning leases
-    # and timeouts. Prefilter markers above still settled no-signal
-    # rows, since they never needed the endpoint.
+    # and timeouts. Clean prefilter candidates below still use a real claim
+    # and the shared atomic adoption without needing the endpoint.
     circuit_s = circuit_open_s(ledger.db)
     free_mb = disk_free_mb(ledger.db)
     disk_low = free_mb is not None and free_mb < disk_floor_mb()
@@ -1060,14 +1061,14 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         """Claim from the next unvisited candidate on, at most ``wanted`` in the cloud
         pass; returns the newly claimed. A later same-pass wave leaves error cleanup
         to the execution finally that already owns every claim."""
-        nonlocal skipped, context_blocked, deferred
+        nonlocal skipped, context_blocked, deferred, held_prior
         first = len(claimed)
         source = rows if cloud_only else jobs
         try:
             while visit[0] < len(source):
                 index, candidate = visit[0], source[visit[0]]
                 visit[0] += 1
-                if disk_low:
+                if disk_low and cloud_only:
                     break
                 if cloud_only:
                     if time.monotonic() >= deadline:
@@ -1102,7 +1103,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         _defer_note("deadline")
                         break
                 r, ctx, saved, hints, qc = candidate
-                if circuit_s and r.get("_cloud_mode") != "on":
+                prefiltered = "_prefilter_prior" in r
+                if (disk_low or circuit_s and r.get("_cloud_mode") != "on") and not prefiltered:
                     continue
                 if _resume_admission_refused(r, saved, hints):
                     # Prepare already proved this job's saved resume evidence
@@ -1130,6 +1132,25 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         _release(ledger, r, lease)
                         deferred += 1
                         _defer_note("quality_checkpoint_unverified")
+                        continue
+                    if prefiltered:
+                        claimed.pop()
+                        try:
+                            outcome = _settle_prefiltered(ledger, r, hints=hints)
+                            if outcome == "written":
+                                skipped += 1
+                                done_pids.add(r["project_id"])
+                            elif outcome == "held":
+                                held_prior += 1
+                            elif outcome != "current":
+                                deferred += 1
+                                r["_commit_hold"] = True
+                                reason = r.get("_commit_reject_reason")
+                                _defer_note(reason if reason in cloud_backlog._COMMIT_REJECTION_CODES
+                                            else "commit_rejected")
+                        finally:
+                            _release(ledger, r, lease)
+                            leases.pop(index, None)
                         continue
                     # the v3 pass performs the v1/v2 (rule) work simultaneously —
                     # claimed rows mint/refresh their extract_v1 artifact here so

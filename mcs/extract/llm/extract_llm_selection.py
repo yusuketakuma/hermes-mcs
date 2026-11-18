@@ -15,6 +15,7 @@ import extract_llm_local_rebuild as local_rebuild
 import inference_dependency_loss
 import mcs_util
 import patient_priority
+import upgrade_scope
 from mcs_queries import (ELIGIBLE_MESSAGE, current_extract_pred,
                          current_v4_id, json_or_null)
 from mcs_util import HOME, load_config, loads_dict, strict_json
@@ -441,25 +442,27 @@ _FOCUS: dict = {}
 _FOCUS_PATIENTS = 3
 
 
-def _focus_patients(ledger) -> list:
+def _focus_patients(ledger, scope_sql: str = "") -> list:
     """Active patients with the fewest selectable pending posts (cached).
     Rows waiting out a retry backoff are not counted, so a patient whose
-    rest is not due yet does not hold a focus place."""
+    rest is not due yet does not hold a focus place; ``scope_sql`` (the
+    upgrade-scope fragment) keeps posts the scope holds back from counting."""
     key = _left_estimate_key(ledger)
     hit = _FOCUS.get(key)
-    if hit is None or time.monotonic() - hit["at"] >= _LEFT_ESTIMATE_S:
+    if (hit is None or hit.get("scope", "") != scope_sql
+            or time.monotonic() - hit["at"] >= _LEFT_ESTIMATE_S):
         pids = [r[0] for r in ledger.db.execute(
             "SELECT m.project_id FROM messages m WHERE m.project_id IS NOT NULL"
             " AND NOT EXISTS (SELECT 1 FROM patients p WHERE p.project_id=m.project_id"
             " AND COALESCE(p.is_archived,0)!=0)"
-            f" AND {pending_pred(ledger.db)} AND ({_retry_budget_sql()})"
+            f" AND {pending_pred(ledger.db)} AND ({_retry_budget_sql()}){scope_sql}"
             f" AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try')) {_ERROR_ROWS_SQL}), 0) <= ?"
             # focus selects re-extraction only, so a patient whose rest is all
             # new arrivals would hold a place it cannot use
             f" GROUP BY m.project_id HAVING SUM(CASE WHEN {_FRESH_SQL} THEN 0 ELSE 1 END) > 0"
             " ORDER BY COUNT(*), m.project_id LIMIT ?",
             (KIND, EXTRACT_VERSION, time.time(), _FOCUS_PATIENTS))]
-        hit = _FOCUS[key] = {"at": time.monotonic(), "pids": pids}
+        hit = _FOCUS[key] = {"at": time.monotonic(), "pids": pids, "scope": scope_sql}
     return hit["pids"]
 
 
@@ -628,6 +631,10 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
         # quality gates remain in this same query before its SQL limit.
         adm_sql += " AND m.message_id NOT IN (SELECT value FROM json_each(?))"
         adm_params.append(json.dumps(sorted(exclude_ids)))
+    # A closed extract.upgrade_scope keeps earlier-generation posts out of
+    # both lanes before LIMIT; an open scope adds nothing to the SQL.
+    scope_sql = upgrade_scope.selection_sql(upgrade_scope.live(), "llm")
+    adm_sql += scope_sql
     required_contract = None
     if cloud_only:
         raw_cfg = load_config()
@@ -810,7 +817,8 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
 
     rows, fresh_selected = [], None if oldest_first else 0
     # an admission set (canonical engine) already decides what may run
-    focus = [] if oldest_first or admitted_ids is not None or prioritize_patients else _focus_patients(ledger)
+    focus = ([] if oldest_first or admitted_ids is not None or prioritize_patients
+             else _focus_patients(ledger, scope_sql))
     # NULL project rows must survive the exclusion (NULL NOT IN is NULL)
     rest = (" AND (m.project_id IS NULL OR m.project_id NOT IN ("
             + ",".join("?" * len(focus)) + "))") if focus else ""

@@ -451,7 +451,7 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
 
 def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, extra_meta,
                               used_keys, *, check_current, mark_context=None, expected_prior=None,
-                              adoption_guard=None):
+                              adoption_guard=None, before_replace_tx=None):
     if isinstance(r, dict):
         r.pop("_commit_reject_reason", None)
         r.pop("_completeness_reject_reason", None)
@@ -515,11 +515,32 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
                 # adopted leaves' content — run-time metadata alone cannot
                 # mint a resolved result over unresolved leaves.
                 return _commit_rejected(r, "completeness")
+            if before_replace_tx is not None:
+                # Auxiliary SQL writes (e.g. rule coverage) commit with the adoption, never alone.
+                before_replace_tx()
+                if (not _source_writable(ledger.db, r)
+                        or not _owns_current_source(ledger, r, r.get("_current_lease"))
+                        or not _prior_matches(ledger.db, r, pinned_prior if expected_prior is None else expected_prior)
+                        or not _protected_prior_current(ledger.db, r)
+                        or not _checkpoint_state_matches(r, expected, used_keys,
+                            _checkpoint_identity(ledger.db, r, context, r["_chunk_size"]))
+                        or adoption_guard is not None and not adoption_guard()):
+                    raise _CheckpointChanged()
             witness = []
             outcome = _replace_current_tx(ledger, r, content,
                                           ctx=context is not None if mark_context is None else mark_context,
                                           integrity=integrity, qc_fix=qc_fix,
                                           extra_meta=extra_meta, scoped_cleanup=True, result_witness=witness)
+            if before_replace_tx is not None:
+                if outcome not in ("held", "written"):
+                    ledger.db.rollback()
+                    return outcome
+                if (not _source_writable(ledger.db, r)
+                        or not _owns_current_source(ledger, r, r.get("_current_lease"))
+                        or not _checkpoint_state_matches(r, expected, used_keys,
+                            _checkpoint_identity(ledger.db, r, context, r["_chunk_size"]))
+                        or adoption_guard is not None and not adoption_guard()):
+                    raise _CheckpointChanged()
             if outcome == "held":
                 if current != r["_checkpoint_identity"]:
                     raise _CheckpointChanged()

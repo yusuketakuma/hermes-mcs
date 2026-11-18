@@ -136,7 +136,7 @@ _DETAILS = (
     "certainty", "observation_name", "value", "unit", "measured_on", "condition",
     "swallowing", "self_management", "supporter", "support_method", "followup",
     "assignee", "due_text", "observed_on", "last_confirmed_on", "confirmed_by",
-    # planned pharmacy details (plan T10); not yet runtime DETAIL_KEYS
+    # Frozen CLI vocabulary; schema_vocabulary is selected separately at X9.
     "storage_status", "storage_place", "medication_manager", "inquiry_result",
     "interaction_check", "valid_period", "body_site", "food_texture",
 )
@@ -163,6 +163,34 @@ FIELD_PATHS = frozenset(
         "visit", "exam", "admission", "discharge", "transfer", "fall", "eol",
         "care", "family_contact", "other", "prescription_inquiry", "interaction_check"}}
 )
+
+
+def schema_vocabulary(schema: dict) -> tuple[frozenset[str], frozenset[str]]:
+    """Derive a card vocabulary from an explicit response schema, without selecting it."""
+    # X9 may select the new vocabulary. The CLI's existing FIELD_PATHS and ENUMS
+    # remain unchanged until that coordinated switch; no runtime imports here.
+    fields, enums = set(), {"missing", "true", "false"}
+    pending = [("", schema["schema"])]
+    while pending:
+        path, shape = pending.pop()
+        enums.update(value for value in shape.get("enum", ()) if isinstance(value, str))
+        for name, child in shape.get("properties", {}).items():
+            child_path = f"{path}.{name}" if path else name
+            fields.add(child_path)
+            pending.append((child_path, child))
+        if isinstance(shape.get("items"), dict):
+            pending.append((path, shape["items"]))
+    props = schema["schema"]["properties"]
+    context = props["patient_context"]["items"]["properties"]
+    categories = context["category"]["enum"]
+    details = context["details"]["items"]["properties"]["key"]["enum"]
+    fields.update(f"patient_context.{category}" for category in categories)
+    fields.update(f"patient_context.{category}.{detail}"
+                  for category in categories for detail in details)
+    fields.update(f"events:{event}" for event in props["events"]["items"]["enum"])
+    return frozenset(fields), frozenset(enums)
+
+
 _KEYS = frozenset({
     "class", "field_paths", "attributes", "counts", "current_shape", "expected_shape",
     *ATTRIBUTES, "posts", "patients", "professions",

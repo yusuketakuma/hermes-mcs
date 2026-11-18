@@ -119,6 +119,8 @@ JSON:{"symptoms":[{"text":"発赤","negated":false,"status":"new","evidence":"�
 _PROMPT_SPEC = _PROMPT_SPEC.replace("__SUMMARY_MAX_CHARS__", str(extract_validation.SUMMARY_MAX_CHARS)).replace(
     "__POINT_MAX_CHARS__", str(extract_validation.POINT_MAX_CHARS))
 
+_BASE_PROMPT_SPEC = _PROMPT_SPEC
+
 
 _PROMPT_HEAD = _PROMPT_SPEC + _PROMPT_EXAMPLES
 
@@ -184,6 +186,41 @@ i は対象Nの番号。抽出項目が一つも無い対象でも {"i": N, "sym
 
 
 _BATCH_HEAD = _PROMPT_SPEC + _BATCH_FMT
+
+
+def gen12_prompt_heads():
+    """Build the next prompt heads while leaving runtime and cache heads unchanged."""
+    schema = extract_schema.gen12_schema()["schema"]["properties"]
+    context = schema["patient_context"]["items"]["properties"]
+    enum_lines = {
+        '- "patient_context":': ("category", context["category"]["enum"]),
+        '- patient_context の各項目に任意の "details":': (
+            "key", context["details"]["items"]["properties"]["key"]["enum"]),
+    }
+    lines, replaced = [], set()
+    for line in _BASE_PROMPT_SPEC.splitlines(keepends=True):
+        for prefix, (key, values) in enum_lines.items():
+            if line.startswith(prefix):
+                marker = f'"{key}": "'
+                before, found, rest = line.partition(marker)
+                _old, end, after = rest.partition('"')
+                if prefix in replaced or not found or not end:
+                    raise ValueError("prompt_contract")
+                line = before + found + "|".join(values) + end + after
+                replaced.add(prefix)
+                break
+        lines.append(line)
+    if replaced != enum_lines.keys():
+        raise ValueError("prompt_contract")
+    # The validator owns unverified=True. Model certainty is a reported axis,
+    # never a verified clinical assertion. X9 alone selects these heads.
+    allergy_shape = json.dumps(schema["allergies"]["items"], ensure_ascii=False, separators=(",", ":"))
+    spec = ("".join(lines) + '- "allergies": 対象本文のアレルギー・副作用の未確認候補の配列。'
+            '本人・家族・過去・予定・条件・否定を原文のまま区別する。'
+            'certaintyは本文の確かさの表現であり、confirmedでも検証済みの確定を意味しない。'
+            '各項目のJSON形状は次のとおり。不明なallergen/reaction/evidenceは省略またはnullとし、'
+            'unverifiedは出力しない。\n' + allergy_shape + "\n\n")
+    return spec, spec + _PROMPT_EXAMPLES, spec + _BATCH_FMT
 
 
 _BATCH_TARGET = """対象{i}(投稿日時: {posted}):

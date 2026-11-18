@@ -231,10 +231,15 @@ def stage_derive(ledger, result, deadline, cfg=None,
     work_deadline = _snapshot_work_deadline(ledger, deadline)
     try:
         import extract
+        import upgrade_scope
         # Leave a fair share for medication mapping, rollups and signals.
         rule_deadline = time.monotonic() + max(0, work_deadline - time.monotonic()) / 2
+        # The host extract.upgrade_scope, read as the LLM selection reads it,
+        # keeps a closed scope's earlier rule versions; open passes "" (query unchanged).
+        rule_scope = upgrade_scope.selection_sql(upgrade_scope.live(), "rule")
         ex = _run_stage(result, "derive_rules", work_deadline,
-                        lambda: extract.run_pending(ledger, deadline=rule_deadline), required=True)
+                        lambda: extract.run_pending(ledger, deadline=rule_deadline, scope_sql=rule_scope),
+                        required=True)
         result["extracted"] = ex["done"]
         result["extracted_pids"] = ex["pids"]
         if ex.get("reconcile_error") is not None:
