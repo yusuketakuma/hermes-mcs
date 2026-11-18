@@ -325,6 +325,30 @@ def test_multiline_context_boundary_applies_to_header_and_message(tmp_path):
         store.close()
 
 
+def test_context_retains_wider_published_quote_and_subject():
+    quote = "母の記録です。\nアレルギー：なし\nただし合成薬について確認中。"
+    item = {"text": "なし", "evidence": "アレルギー：なし", "quote": quote,
+            "subject": "unspecified", "reported_subject": "family", "details": []}
+    got = local_chat_view._context_item(item, "allergies")
+    assert got["text"] == item["text"]
+    assert got["evidence"] == item["evidence"]
+    assert got["source_evidence"] == quote
+    assert got["reported_subject"] == "family"
+    assert "原文あり" in got["scope_note"]
+
+
+@pytest.mark.parametrize("subject", ["family", "patient", "other", "unspecified"])
+def test_narrow_context_fact_does_not_take_another_subjects_heading(subject):
+    evidence = "アレルギー：なし\n母は合成薬Bで発疹。"
+    item = {"text": "母は合成薬Bで発疹。", "evidence": evidence, "subject": subject}
+    got = local_chat_view._context_item(item, "allergies")
+    assert got["text"] == item["text"]
+    assert got["subject"] == subject
+    assert got["source_evidence"] == evidence
+    assert got["evidence"] is None
+    assert got["text"] != "アレルギー：なし"
+
+
 def test_orphan_reply_remains_readable_without_exposing_foreign_parent(tmp_path):
     path = tmp_path / "ledger.db"
     store = ledger.Ledger(str(path))
