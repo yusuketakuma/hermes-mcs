@@ -1200,6 +1200,37 @@ def test_human_confirmed_discard_sets_the_unknown_intent_aside(tmp_path):
     assert again['outcome'] == 'applied' and kept.read_bytes() == before      # replayed receipt
 
 
+def test_local_discard_checks_confirmation_and_update_hold_before_writing(tmp_path, monkeypatch):
+    from contextlib import closing
+    from ledger import Ledger
+    import mcs_requests
+    import mcs_util
+
+    state = _held(tmp_path)
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    req = {"version": 1, "cmd": "ops.slack_setup_discard", "actor": "synthetic-human",
+           "command_id": "00000000-0000-4000-8000-000000000033", "request_id": state["request_id"],
+           "human_confirmed": False, "project_id": None, "reason": "synthetic check"}
+    data = tmp_path / "data"
+    path = data / "ledger.db"
+    with pytest.raises(ValueError, match="human_confirmation_required"):
+        mcs_requests.apply_local_operation(req)
+    assert not path.exists()
+
+    with closing(Ledger(str(path))):
+        pass
+    marker = data / "update_in_progress.marker"
+    marker.touch()
+    req["human_confirmed"] = True
+    with pytest.raises(ValueError, match="update_in_progress"):
+        mcs_requests.apply_local_operation(req)
+    assert setup.read(tmp_path) == state
+    marker.unlink()
+    receipt = mcs_requests.apply_local_operation(req)
+    assert receipt["outcome"] == "applied"
+    assert mcs_requests.apply_local_operation(req) == receipt
+
+
 def test_discard_refuses_another_or_settled_intent(tmp_path):
     state = _held(tmp_path)
     other = _discard(tmp_path, '00000000-0000-4000-8000-000000000000')
