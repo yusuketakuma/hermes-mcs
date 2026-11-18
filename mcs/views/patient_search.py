@@ -6,7 +6,7 @@ import time
 import attachment_ocr
 import inference_dependency_loss
 import original_source_keys
-from mcs_queries import JST, source_patient_context, attachment_context_items
+from mcs_queries import JST, current_message_facts, source_patient_context, attachment_context_items
 from mcs_util import payload_hash, positive, search_fold, valid_hash
 from patient_context import LABELS
 from patient_read_scope import patient_scope_valid
@@ -92,13 +92,15 @@ def _record(db, pid, key, cfg):
 
 
 def _facts(db, record, cfg):
+    """(facts, classified): classified is False while no current analysis exists to judge a category."""
     if record['source'] == 'chat':
-        return source_patient_context(db, record)
+        return (source_patient_context(db, record),
+                current_message_facts(db, record['message_id']) is not None)
     import attachment_extraction
     current = attachment_extraction.current(db, record['project_id'], record['source_key'], cfg=cfg)
     if not current or current.get('ready') is not True:
-        return []
-    return attachment_context_items(current['document'], record)
+        return [], False
+    return attachment_context_items(current['document'], record), True
 
 
 def _candidates(db, pid, filters, boundary):
@@ -154,7 +156,7 @@ def _search(db, pid, query, *, cfg=None, cursor=None, limit=PAGE_SIZE):
     if not patient_scope_valid(db, pid):
         raise ValueError('patient_scope_unavailable')
     deadline = time.monotonic() + READ_SECONDS
-    items, scanned, pending, unavailable, last, limited = [], 0, 0, 0, boundary, False
+    items, scanned, pending, unavailable, unclassified, last, limited = [], 0, 0, 0, 0, boundary, False
     ocr_enabled = (not attachment_ocr.config_error(cfg)
                    and isinstance(cfg.get('attachment_ocr'), dict)
                    and cfg['attachment_ocr'].get('enabled') is True)
@@ -163,7 +165,7 @@ def _search(db, pid, query, *, cfg=None, cursor=None, limit=PAGE_SIZE):
         return scanned >= SCAN_LIMIT or scanned > 0 and time.monotonic() >= deadline
 
     def accept(key, position, row):
-        nonlocal scanned, unavailable, last
+        nonlocal scanned, unavailable, unclassified, last
         if exhausted() or len(items) >= limit:
             return False
         scanned += 1
@@ -174,8 +176,10 @@ def _search(db, pid, query, *, cfg=None, cursor=None, limit=PAGE_SIZE):
             return True
         if not all(term in search_fold(record['body_text']) for term in terms):
             return True
-        facts = _facts(db, record, cfg)
+        facts, classified = _facts(db, record, cfg)
         if filters.get('category') and not any(f.get('category') == filters['category'] for f in facts):
+            # a text match without current analysis is undecided, not a non-match
+            unclassified += not classified
             return True
         items.append({'source': record['source'], 'message_id': row['message_id'],
                       'posted_at': row['posted_at'], 'profession': row['profession'],
@@ -230,6 +234,7 @@ def _search(db, pid, query, *, cfg=None, cursor=None, limit=PAGE_SIZE):
         if filters['source'] == 'ocr' and not ocr_enabled:
             scanned += 1
     return {'items': items, 'scanned': scanned, 'pending': pending, 'unavailable': unavailable,
+            'unclassified': unclassified,
             'range_complete': not limited, 'limited': limited,
             'ocr_available': ocr_enabled, 'filters': filters,
             'next_cursor': {'binding': binding, 'position': list(last)} if limited and last else None}

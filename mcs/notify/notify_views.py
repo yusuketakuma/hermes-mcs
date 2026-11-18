@@ -330,10 +330,12 @@ def _request_reply_lines(db, project_id, roll) -> list:
 def _karte_summary_from_artifact(db, project_id) -> dict | None:
     """Newest karte_summary artifact in the rollup's block shape; None
     when the summary was never fetched or the newest one is unreadable —
-    an older summary never stands in for it."""
+    an older summary never stands in for it. A summary of another karte
+    than the patient's current one is not this patient's (read_model rule)."""
     row = db.execute(
-        "SELECT content FROM artifacts WHERE kind='karte_summary' "
-        "AND project_id=? ORDER BY artifact_id DESC LIMIT 1",
+        "SELECT a.content,a.meta,p.karte_id FROM artifacts a "
+        "LEFT JOIN patients p ON p.project_id=a.project_id WHERE a.kind='karte_summary' "
+        "AND a.project_id=? ORDER BY a.artifact_id DESC LIMIT 1",
         (project_id,)).fetchone()
     if not row:
         return None
@@ -341,7 +343,15 @@ def _karte_summary_from_artifact(db, project_id) -> dict | None:
         c = json.loads(row["content"])
     except (ValueError, TypeError, RecursionError):
         return None
+    try:
+        meta = json.loads(row["meta"] or "{}")
+    except (ValueError, TypeError, RecursionError):
+        meta = None
     if not isinstance(c, dict):
+        return None
+    # patients.karte_id is never cleared once linked (COALESCE upsert); a NULL one is a pre-link legacy row
+    if row["karte_id"] is not None and not (isinstance(meta, dict) and type(meta.get("karte_id")) is int
+                                            and meta["karte_id"] == row["karte_id"]):
         return None
     return karte_summary_block(c)
 
@@ -692,13 +702,19 @@ def patient_search_view(db, project_id, query, *, cfg=None, cursor=None) -> dict
         notes.append(f"この範囲にOCR未完了・確認不能の添付が{result['pending']}件あります。")
     if result['unavailable']:
         notes.append(f"この範囲に本文未取得・確認不能の原資料が{result['unavailable']}件あります。")
+    if result['unclassified']:
+        notes.append(f"解析未完了のため分類を判定できない原資料が{result['unclassified']}件あります。")
     if not result['ocr_available']:
         notes.append('添付OCRは設定で無効、または利用を確認できないため検索していません。')
     return {"title": f"🔎 {name} — 「{inline_text(query, 40)}」の検索結果",
             "head": head, "items": items, "more": 0,
             "next_cursor": result['next_cursor'], "range_complete": result['range_complete'],
-            "empty": "この範囲には一致する原資料がありません。" if result['next_cursor'] else
-                     "検索した取得済み原資料に一致するものはありません。",
+            # an unscanned range keeps its scope wording: no match there is not no record
+            "empty": ("この範囲の解析が完了した原資料には、この分類で一致するものはありません。"
+                      if result['unclassified'] and result['next_cursor'] else
+                      "解析が完了した原資料には、この分類で一致するものはありません。" if result['unclassified'] else
+                      "この範囲には一致する原資料がありません。" if result['next_cursor'] else
+                      "検索した取得済み原資料に一致するものはありません。"),
             "notes": notes}
 
 
@@ -726,6 +742,9 @@ def _candidate_line(ref, dictionary_active: bool) -> str:
     references never name an ingredient (same rule as candidate_note).
     Without an active dictionary nothing was looked up: no line (the
     head says why once)."""
+    if structured_view.dictionary_unmatched(ref):
+        # rule-only candidates are never annotated: "next run" would never come
+        return "\n　→ 規則抽出の候補のため辞書照合の対象外です" if dictionary_active else ""
     if ref is None:
         return "\n　→ 辞書照合はまだありません（次回の処理で反映）" \
             if dictionary_active else ""
@@ -885,9 +904,10 @@ def meds_view(db, project_id, message_id, *, can_report=False,
             except (ValueError, TypeError, KeyError, RuntimeError, OSError, RecursionError):
                 return None
             return ref
-        meds = [(text, current(ref)) for text, ref in meds]
-        unverified = [(text, current(ref)) for text, ref in unverified]
-    refs = [ref for _, ref in meds + unverified if ref]
+        meds = [(text, ref if structured_view.dictionary_unmatched(ref) else current(ref)) for text, ref in meds]
+        unverified = [(text, ref if structured_view.dictionary_unmatched(ref) else current(ref))
+                      for text, ref in unverified]
+    refs = [ref for _, ref in meds + unverified if ref and not structured_view.dictionary_unmatched(ref)]
     when = f"{mmdd(row['posted_at'])} {posted_hhmm(row['posted_at'])}"
     head = [f"{'日時不明' if '?' in when else when} "
             f"{inline_text(row['profession'], 20) or '職種不明'}の投稿 — "
