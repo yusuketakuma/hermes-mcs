@@ -406,6 +406,9 @@ def test_busy_timeout_journals_every_refused_round(gateway, monkeypatch):
     assert report["status"] == "unknown" and report["error"] == "gateway_restart_busy_timeout"
     journal = _journal(data, REQUEST_ID)
     assert journal["state"] == "ended" and journal["outcome"] == "gateway_restart_busy_timeout"
+    # The ended journal is written before the receipt: the supervisor requires
+    # receipt.at >= exited_at to prove the attempt.
+    assert journal["exited_at"] <= report["at"]
     assert journal["expected_pid"] == 101 and journal["pid_changed"] is False
     assert report["at"] <= journal["exited_at"] <= wall[0]
     assert len(journal["rounds"]) == len(launches) > 0

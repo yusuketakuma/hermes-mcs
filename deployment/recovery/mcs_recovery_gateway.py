@@ -207,11 +207,13 @@ def _gateway_restart_run(data, agents, uid, request_id=None, expected_pid=None,
 
     def report(status, **facts):
         try:
-            _gateway_restart_report(data, status, request_id=request_id, **facts)
+            # End the journal before the receipt so the receipt's stamp is never
+            # earlier than exited_at; the supervisor requires that ordering.
             _gateway_attempt_journal(data, request_id, {
                 "state": "ended", "outcome": facts.get("error") or status,
                 "rounds": journal["rounds"],
                 "pid_changed": journal["pid_changed"], "exited_at": time.time()})
+            _gateway_restart_report(data, status, request_id=request_id, **facts)
         finally:
             # Every exit after the lock goes through report; release the
             # helper lock here so a retained frame cannot wedge a later helper.

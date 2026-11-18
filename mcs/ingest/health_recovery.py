@@ -121,8 +121,8 @@ def _valid_state(state) -> bool:
                 or not _stamp(row["observed_at"]) or row["observed_at"] < row["reserved_at"]
                 or row.get("receipt_at") is not None and row["receipt_at"] > row["observed_at"]
                 or not _generation(row["target"], row["observed_generation"])
-                or (row["observed_generation"] == row["generation"])
-                == (row["observation"] == "healthy_observed")):
+                or (row["observation"] == "healthy_observed"
+                    and row["observed_generation"] == row["generation"])):
             return False
     return True
 

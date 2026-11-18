@@ -515,6 +515,23 @@ def test_blocked_helper_journal_proves_no_effect_without_receipt(gateway):
     assert _run(gateway, now=NOW + 3)["actions"] and len(gateway["calls"]) == 2
 
 
+def test_no_effect_resolves_after_another_actor_changed_the_generation(gateway):
+    _run(gateway)
+    pending = _pending(gateway)
+    _attempt(gateway, pending["operation_id"],
+             outcome="blocked_existing_helper", rounds=[], expected_pid=None,
+             deadline_at=NOW + 1)
+    # Another helper restarted the gateway; its new worker is also unhealthy.
+    gateway["native"].update(pid=PID + 2, started_at=NOW + 1)
+    _record(gateway, at=NOW + 2)
+    assert _run(gateway, now=NOW + 3)["reason"] == "no_effect"
+    state = recovery._load_state(str(gateway["home"]))
+    row = state["history"][-1]
+    assert (row["observation"] == "no_effect"
+            and row["observed_generation"] != row["generation"])
+    assert state["targets"][recovery.GATEWAY]["pending"] is None
+
+
 @pytest.mark.parametrize("alive", [False, True])
 def test_no_effect_journal_releases_or_holds_an_old_unknown_receipt(gateway, alive):
     request_id = "d" * 32
