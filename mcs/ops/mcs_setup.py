@@ -716,14 +716,28 @@ def _semantic_queue_warnings(db, sem: dict, now: float):
                    f"{age_d:.1f}日です。解析処理の処理能力を確認してください")
 
 
-def _extract_queue_warnings(db):
-    """Yield extraction backlog warnings using the worker's shared predicate."""
+def _extract_queue_warnings(db, cfg):
+    """Distinguish admitted extraction work from raw pending sources, without proving readiness."""
     import extract_llm
-    backlog = db.execute(
-        "SELECT COUNT(*) FROM messages m WHERE " + extract_llm.pending_pred(db)
-    ).fetchone()[0]
-    if backlog > 500:
-        yield (f"AI解析の待機は{backlog}件です。"
+    import upgrade_scope
+    scope = upgrade_scope.resolve(cfg)
+    if scope.error:
+        yield "AI解析の更新対象を確認できません。解析設定を確認してください"
+        return
+    scope_sql = upgrade_scope.selection_sql(scope, "llm")
+    # Both counts share one SQL snapshot and the same raw pending population.
+    # The selection fragment changes only upgrade work, never source readiness.
+    raw, admitted = db.execute(
+        "SELECT COUNT(*), COALESCE(SUM(CASE WHEN 1" + scope_sql
+        + " THEN 1 ELSE 0 END),0) FROM messages m WHERE " + extract_llm.pending_pred(db)
+    ).fetchone()
+    excluded = raw - admitted
+    if excluded:
+        yield (f"AI解析の未完了は{raw}件です（更新対象の待機{admitted}件・"
+               f"更新対象外の過去世代{excluded}件）。"
+               "更新対象外でも解析済みにはならず、患者コンテキストの準備判定は変わりません")
+    if admitted > 500:
+        yield (f"AI解析の待機は{admitted}件です。"
                "解析処理（ai.mcs.extract-drainer*）は実行可能な新しい投稿から処理します。"
                "待機件数と最近の進捗を確認してください")
 
@@ -769,7 +783,7 @@ def _queue_warnings(cfg: dict | None = None) -> list[str]:
             from semantic_policy import runtime_config
             sem = runtime_config(cfg or {}, root=HOME)[0]
             out.extend(_semantic_queue_warnings(db, sem, now))
-            out.extend(_extract_queue_warnings(db))
+            out.extend(_extract_queue_warnings(db, cfg))
             out.extend(_fact_pipeline_warnings(db, sem))
             from upgrade_scope import doctor_warnings
             out.extend(doctor_warnings(db, cfg))
