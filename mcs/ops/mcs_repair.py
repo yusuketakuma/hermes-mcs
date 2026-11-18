@@ -249,16 +249,34 @@ def plan(snapshot: str | Path, *, nonce: str | None = None,
                 OR json_extract(payload,'$.last_pass_at')>?
               ELSE 1 END""", (binding["generated_at"] if binding else 0,))
         from extract import RULE_VERSION
-        count("stale_v1_messages",
-              {"artifacts": "kind message_id meta", "messages": "message_id content_hash"},
-              """SELECT CASE WHEN SUM(NOT json_valid(a.meta)
+        import upgrade_scope
+        # The same live-scope fragment the rule pass selects with: a closed
+        # scope keeps version-drifted earlier-generation rows out of rebuild
+        # candidates; they are reported under their own count instead. An open
+        # scope leaves the fragment empty and both counts read as before.
+        scope = upgrade_scope.live()
+        in_scope = upgrade_scope.selection_sql(scope, "rule")
+        stale_deps = ({"artifacts": "kind message_id project_id meta",
+                       "messages": "message_id content_hash project_id body_state"}
+                      if in_scope else
+                      {"artifacts": "kind message_id meta",
+                       "messages": "message_id content_hash"})
+        count("stale_v1_messages", stale_deps,
+              f"""SELECT CASE WHEN SUM(NOT json_valid(a.meta)
                 OR m.content_hash IS NULL)>0 THEN NULL ELSE
               COUNT(DISTINCT CASE WHEN json_valid(a.meta) THEN CASE WHEN
                 json_extract(a.meta,'$.hash') IS NULL
                 OR json_extract(a.meta,'$.hash')!=m.content_hash
-                OR COALESCE(json_extract(a.meta,'$.rule_version'),0)!=?
+                OR (COALESCE(json_extract(a.meta,'$.rule_version'),0)!=? AND (1{in_scope}))
                 THEN a.message_id END END) END FROM artifacts a
               JOIN messages m ON m.message_id=a.message_id WHERE a.kind='extract_v1'""",
+              (RULE_VERSION,))
+        count("stale_v1_messages_outside_scope", stale_deps,
+              f"""SELECT COUNT(DISTINCT a.message_id) FROM artifacts a
+              JOIN messages m ON m.message_id=a.message_id WHERE a.kind='extract_v1'
+                AND json_valid(a.meta)
+                AND COALESCE(json_extract(a.meta,'$.rule_version'),0)!=?
+                AND ({'0' if scope.is_open else 'NOT (1' + in_scope + ')'})""",
               (RULE_VERSION,))
         # Same dirty criterion as rollup, evaluated at published snapshot time.
         counts["dirty_rollups"] = None

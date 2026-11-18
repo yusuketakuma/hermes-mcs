@@ -9,6 +9,7 @@ import pytest
 import attachment_feedback
 import attachment_inference as worker
 import attachment_ocr
+import mcs_util
 import original_source_keys
 import upgrade_scope
 from test_anthropic_runtime import routed
@@ -17,6 +18,14 @@ from test_cloud_after_local import local_then_cloud
 from test_cloud_response_recovery import legacy_cloud_routes
 
 __all__ = ["routed", "local_then_cloud", "page_store"]
+
+
+def _live_config(monkeypatch, tmp_path, value):
+    """Put ``extract.upgrade_scope`` in the live configuration the worker reads."""
+    path = tmp_path / "config.json"
+    if value is not None:
+        path.write_text(json.dumps({"extract": {"upgrade_scope": value}}), encoding="utf-8")
+    monkeypatch.setattr(mcs_util, "CONF_PATH", str(path))
 
 
 def _run(ledger, cfg):
@@ -45,10 +54,13 @@ def _results(ledger):
     (None, True), ("all", True), ("none", False), ({"project_ids": [1]}, True),
     ({"project_ids": [2]}, False), ({"project_ids": []}, False), ("everything", False),
 ], ids=repr)
-def test_earlier_contract_pages_follow_the_scope(page_store, value, rebuilt):
+def test_earlier_contract_pages_follow_the_scope(page_store, value, rebuilt,
+                                                 monkeypatch, tmp_path):
     ledger, cfg, key, local_calls, *_ = page_store
     assert _run(ledger, cfg)["done"] == 1
     _earlier_contract(ledger, cfg, key)
+    _live_config(monkeypatch, tmp_path, value)
+    cfg = dict(cfg)
     if value is not None:
         cfg["extract"] = {"upgrade_scope": value}
     calls = len(local_calls)
@@ -63,9 +75,11 @@ def test_earlier_contract_pages_follow_the_scope(page_store, value, rebuilt):
     assert after["attachment_pages"] == (0 if rebuilt else 1)
 
 
-def test_a_new_page_and_a_pending_correction_still_run_under_none(page_store):
+def test_a_new_page_and_a_pending_correction_still_run_under_none(
+        page_store, monkeypatch, tmp_path):
     ledger, cfg, key, *_ = page_store
-    cfg["extract"] = {"upgrade_scope": "none"}
+    _live_config(monkeypatch, tmp_path, "none")
+    cfg = {**cfg, "extract": {"upgrade_scope": "none"}}
     assert _run(ledger, cfg)["done"] == 1  # a page without any result is new work
     prior = _earlier_contract(ledger, cfg, key)
     assert _run(ledger, cfg)["done"] == 0
@@ -87,6 +101,23 @@ def test_disabled_ocr_reports_no_attachment_work(page_store):
     assert upgrade_scope.prior_generation_remaining(ledger.db, cfg)["attachment_pages"] == 0
 
 
+def test_the_scope_comes_from_the_live_config_not_the_caller(
+        page_store, monkeypatch, tmp_path):
+    """A caller cfg without ``extract`` (or with the opposite value) never
+    widens the closed live scope, and a closed caller value never narrows an
+    open live one — the same convention as the LLM and rule selections."""
+    ledger, cfg, key, local_calls, *_ = page_store
+    assert _run(ledger, cfg)["done"] == 1
+    _earlier_contract(ledger, cfg, key)
+    _live_config(monkeypatch, tmp_path, "none")
+    cfg = {**cfg, "extract": {"upgrade_scope": "all"}}
+    calls = len(local_calls)
+    assert _run(ledger, cfg)["done"] == 0 and len(local_calls) == calls
+    _live_config(monkeypatch, tmp_path, "all")
+    cfg = {**cfg, "extract": {"upgrade_scope": "none"}}
+    assert _run(ledger, cfg)["done"] == 1
+
+
 def _cloud(ledger, cfg):
     (attachment_ocr._data_root(ledger) / "attachment_inference_cloud_cursor.json").unlink(missing_ok=True)
     with legacy_cloud_routes():
@@ -106,14 +137,14 @@ def _age_every_result(ledger):
 @pytest.mark.parametrize("value,rebuilt", [
     (None, True), ("all", True), ("none", False), ({"project_ids": [2]}, False), ("everything", False),
 ], ids=repr)
-def test_cloud_stage_follows_the_same_scope(page_store, value, rebuilt):
+def test_cloud_stage_follows_the_same_scope(page_store, value, rebuilt,
+                                            monkeypatch, tmp_path):
     ledger, cfg, key, local_calls, cloud_calls, _ = page_store
     assert _run(ledger, cfg)["done"] == 1
     cfg["cloud_llm"]["mode"] = "on"
     assert _cloud(ledger, cfg)["done"] == 1 and len(cloud_calls) == 1
     _age_every_result(ledger)  # both stages now carry an earlier extraction contract
-    if value is not None:
-        cfg["extract"] = {"upgrade_scope": value}
+    _live_config(monkeypatch, tmp_path, value)
     # The cloud stage runs first here, so only its own scope check (and its
     # need for a current local result) decides; a closed scope sends nothing.
     assert _cloud(ledger, cfg)["done"] == 0 and len(cloud_calls) == 1

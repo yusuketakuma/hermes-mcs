@@ -21,6 +21,7 @@ from test_ledger_audit import _database
 import drug_map
 import rollup
 import mcs_repair
+import mcs_util
 from inference_version import CURRENT_VERSION, VERSION_KEY
 
 NONCE = "00000000-0000-4000-8000-000000000013"
@@ -210,6 +211,31 @@ def test_plan_aggregates_evidenced_candidates_without_private_values(world):
     assert result["groups"]["attachment_reasons"] == {"unknown": 1}
     assert "SYNTHETIC_PRIVATE" not in json.dumps(result)
     assert _hash(snapshot) == before
+
+
+def test_stale_v1_counts_split_scope_held_version_drift(world, monkeypatch, tmp_path):
+    """A closed upgrade scope moves version-drifted earlier-generation rows out
+    of rebuild candidates; hash drift is always a candidate."""
+    snapshot = world["snapshot"]
+    _change(snapshot, "INSERT INTO messages(message_id,project_id,body_state,content_hash,updated_seen) "
+                      "VALUES(102,1,'full','synthetic-hash',10)")
+    drift = json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": "synthetic-hash",
+                        "rule_version": RULE_VERSION - 1})
+    edited = json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": "old",
+                         "rule_version": RULE_VERSION})
+    _change(snapshot, "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+                      "VALUES('extract_v1',1,102,'{}',?,200)", (drift,))
+    _change(snapshot, "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+                      "VALUES('extract_v1',1,101,'{}',?,200)", (edited,))
+    config = tmp_path / "config.json"
+    monkeypatch.setattr(mcs_util, "CONF_PATH", str(config))
+    counts = repair.plan(snapshot, nonce=NONCE)["counts"]
+    assert counts["stale_v1_messages"] == 2
+    assert counts["stale_v1_messages_outside_scope"] == 0
+    config.write_text(json.dumps({"extract": {"upgrade_scope": "none"}}), encoding="utf-8")
+    counts = repair.plan(snapshot, nonce=NONCE)["counts"]
+    assert counts["stale_v1_messages"] == 1
+    assert counts["stale_v1_messages_outside_scope"] == 1
 
 
 def test_old_supported_columns_remain_unknown(world):

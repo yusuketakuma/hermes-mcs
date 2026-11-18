@@ -183,7 +183,7 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
     if not extract_llm._context_memory_available():
         return {**counts, 'deferred': 1}
     root = attachment_ocr._data_root(ledger)
-    scope = upgrade_scope.resolve(cfg)
+    scope = upgrade_scope.live()  # the same live configuration the other selection paths read
     fd = writer_lock.acquire_run_lock(str(root / ('attachment_inference_' + stage + '.lock')))
     if fd is None:
         return {**counts, 'deferred': 1}
