@@ -189,7 +189,7 @@ def _med_followup(db, now, th, sig_cfg):
     for key, found in mentions.items():
         # gate: the LATEST mention must itself still be pending
         if found[max(found)]:
-            episodes[key] = sorted(mid for (_, mid), pending in found.items() if pending)
+            episodes[key] = [mid for (_, mid), pending in sorted(found.items()) if pending]
     for (pid, med), mids in sorted(episodes.items()):
         yield _key("med_change_no_followup", pid, med), {
             "type": "med_change_no_followup", "project_id": pid,
