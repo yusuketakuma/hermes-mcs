@@ -8,6 +8,7 @@ import json
 import pytest
 
 import notify_flush
+from inference_version import VERSION_KEY
 from semantic_testkit import (_cfg, _delivery_db, _delivery_patient, _message,
                               _semantic_event)
 
@@ -398,7 +399,7 @@ def test_degraded_producer_keeps_live_reply_from_mixed_history_origin(tmp_path, 
                       "ON CONFLICT(message_id,source) DO UPDATE SET content=excluded.content",
                       (json.dumps({"_initial_import": {"role":"history", "cohort_id":"a"*32}}),))
         db.db.commit()
-        monkeypatch.setattr(semantic_notice.semantic_transport, "llm_model", lambda: None)
+        monkeypatch.setattr(semantic_notice.semantic_transport, "llm_model", lambda cfg=None: None)
         assert semantic_notice.emit_degraded(db, scfg) == 1
         event = db.db.execute("SELECT * FROM notify_outbox WHERE kind='semantic_notice'").fetchone()
         payload = json.loads(event["payload"])
@@ -408,3 +409,156 @@ def test_degraded_producer_keeps_live_reply_from_mixed_history_origin(tmp_path, 
         assert json.loads(db.db.execute("SELECT payload FROM notify_outbox WHERE event_id=?", (source,)).fetchone()[0])["message_ids"] == [1,2]
     finally:
         db.close()
+
+
+def test_notice_defers_until_the_summary_is_replaced_then_is_terminal(tmp_path, monkeypatch):
+    import semantic_transport
+    from semantic_testkit import _summary
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "Qwen3.5-9B")
+    db = _delivery_db(tmp_path, [_message()])
+    monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))
+    event = _semantic_event(db)
+    payload = json.loads(event["payload"])
+    semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
+
+    # model changed, nothing rebuilt yet: retried, not ended
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
+    with pytest.raises(semantic_send_gate.DeferredSend, match="summary_unverified"):
+        semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
+
+    # back to the original model before any rebuild: the notice still sends
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "Qwen3.5-9B")
+    semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
+
+    # a summary rebuilt by the new model replaces it: the old notice ends
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
+    _summary(db, model="synthetic-local-b")
+    for in_progress, error in ((False, semantic_send_gate.StaleSend), (True, semantic_send_gate.FreezeSend)):
+        with pytest.raises(error, match="stale_generation"):
+            semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config(), in_progress)
+    db.close()
+
+
+def test_gate_never_reads_host_config_for_the_local_model(tmp_path, monkeypatch):
+    import semantic_transport
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "Qwen3.5-9B")
+    db = _delivery_db(tmp_path, [_message()])
+    cfg = _cfg("enforce")
+    monkeypatch.setattr(notify_flush, "_config", lambda: cfg)
+    event = _semantic_event(db)
+    payload = json.loads(event["payload"])
+    host_reads = []
+    real = semantic_transport.llm_conf
+    monkeypatch.setattr(semantic_transport, "llm_conf",
+                        lambda c=None: host_reads.append(1) or real(c) if c is None else real(c))
+    semantic_send_gate.semantic_gate(db.db, event, payload, cfg)
+    assert host_reads == []
+    db.close()
+
+
+def test_notice_on_superseded_summary_is_terminal_and_unknown_summary_stays_unverified(tmp_path, monkeypatch):
+    from semantic_testkit import _summary
+    db = _delivery_db(tmp_path, [_message()])
+    monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))
+    event = _semantic_event(db)
+    payload = json.loads(event["payload"])
+    unknown = dict(payload, summary_artifact_id=10 ** 6)
+    with pytest.raises(semantic_send_gate.DeferredSend, match="summary_unverified"):
+        semantic_send_gate.semantic_gate(db.db, event, unknown, notify_flush._config())
+    _summary(db)
+    with pytest.raises(semantic_send_gate.StaleSend, match="stale_generation"):
+        semantic_send_gate.semantic_gate(db.db, event, payload, notify_flush._config())
+    db.close()
+
+
+def _rebuilt_pair(db, status, model):
+    """A rebuilt summary + audit pair of the same input, stored with ``status``."""
+    summary = db.artifacts("semantic_summary", message_id=1)[-1]
+    audit = db.artifacts("semantic_audit", message_id=1)[-1]
+    content = dict(json.loads(summary["content"]), audit_status=status)
+    summary_id = db.artifact_add("semantic_summary", json.dumps(content), project_id=1, message_id=1,
+                                 model=model, meta=dict(json.loads(summary["meta"]), audit_status=status))
+    db.artifact_add("semantic_audit", json.dumps(dict(json.loads(audit["content"]), status=status)),
+                    project_id=1, message_id=1,
+                    meta=dict(json.loads(audit["meta"]), audit_status=status, summary_artifact_id=summary_id))
+    return content
+
+
+def _flush_notice(db):
+    with db.db:
+        db.db.execute("UPDATE notify_outbox SET next_try=0 WHERE kind='semantic_notice'")
+    notify_flush.flush(db)
+    return db.db.execute("SELECT state FROM notify_outbox WHERE kind='semantic_notice'").fetchone()["state"]
+
+
+def test_flush_holds_the_notice_while_rebuilding_and_ends_it_once_rebuilt_even_if_rejected(
+        tmp_path, monkeypatch):
+    import mcs_util
+    import notify_sender
+    import semantic_transport
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "Qwen3.5-9B")
+    db = _delivery_db(tmp_path, [_message()])
+    monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))
+    monkeypatch.setattr(mcs_util, "hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(notify_sender, "target", lambda *a: "channel")
+    monkeypatch.setattr(notify_sender, "send", lambda *a, **kw: pytest.fail("stale notice was sent"))
+    _semantic_event(db)
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
+    # model changed, rebuild not started, then still PENDING: held
+    assert _flush_notice(db) == "pending"
+    _rebuilt_pair(db, "PENDING", "synthetic-local-b")
+    assert _flush_notice(db) == "pending"
+    # the rebuild finished but its audit rejected it: never current, the old notice still ends
+    _rebuilt_pair(db, "NEEDS_REVIEW", "synthetic-local-b")
+    assert _flush_notice(db) == "suppressed"
+    db.close()
+
+
+def test_rebuilt_summary_adds_no_semantic_notice(tmp_path, monkeypatch):
+    import mcs_util
+    import notify_sender
+    import semantic_notice
+    import semantic_transport
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "Qwen3.5-9B")
+    db = _delivery_db(tmp_path, [_message()])
+    monkeypatch.setattr(notify_flush, "_config", lambda: _cfg("enforce"))
+    monkeypatch.setattr(mcs_util, "hermes_exe", lambda *a: "/bin/sh")
+    monkeypatch.setattr(notify_sender, "target", lambda *a: "channel")
+    monkeypatch.setattr(notify_sender, "send", lambda *a, **kw: pytest.fail("stale notice was sent"))
+    _semantic_event(db)
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
+    policy = semantic_policy.policy_fingerprint(semantic_policy.semantic_config(_cfg("enforce"))[0])
+
+    def rebuild(status):
+        summary = _rebuilt_pair(db, status, "synthetic-local-b")
+        with db.db:
+            semantic_notice.record_notice_plan_tx(
+                db, 1, 1, 1, bundle["source_fingerprint"], policy, summary, status,
+                bundle["members"][0], [1], mode="enforce", summary_mode="enforce",
+                notification_free=False, origin=None, content_quality="full")
+        return [row["state"] for row in db.db.execute("SELECT state FROM notify_outbox WHERE kind='semantic_notice'")]
+
+    assert rebuild("PASS") == ["pending"]
+    assert _flush_notice(db) == "suppressed"
+    assert rebuild("PASS") == ["suppressed"]
+    db.close()
+
+
+def test_rebuild_parked_without_a_summary_ends_the_notice(tmp_path, monkeypatch):
+    import semantic_transport
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "Qwen3.5-9B")
+    db = _delivery_db(tmp_path, [_message()])
+    event = _semantic_event(db)
+    payload = json.loads(event["payload"])
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
+    with pytest.raises(semantic_send_gate.DeferredSend, match="summary_unverified"):
+        semantic_send_gate.semantic_gate(db.db, event, payload, _cfg("enforce"))
+    meta = json.loads(db.artifacts("semantic_audit", message_id=1)[-1]["meta"])
+    db.artifact_add("semantic_audit", json.dumps({"status": "NEEDS_REVIEW", "findings": [], "target_message_id": 1}),
+                    project_id=1, message_id=1,
+                    meta={key: meta[key] for key in (VERSION_KEY, "fingerprint", "policy_fingerprint")}
+                    | {"audit_status": "NEEDS_REVIEW", "technical_status": "needs_review"})
+    with pytest.raises(semantic_send_gate.StaleSend, match="stale_generation"):
+        semantic_send_gate.semantic_gate(db.db, event, payload, _cfg("enforce"))
+    db.close()

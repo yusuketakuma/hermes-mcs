@@ -419,6 +419,48 @@ def current_summary(db, project_id: int, message_id: int,
     return row
 
 
+def _summary_superseded(db, project_id, message_id, summary_id, fingerprint, policy) -> bool:
+    """Whether the rebuild of the summary a notice was built on has finished.
+
+    True once a terminal audit (PASS, SKIPPED or NEEDS_REVIEW) of this input
+    records a summary newer than the notice's own, whether it became current or
+    not, or a NEEDS_REVIEW was parked without a summary. The notice's own
+    summary must exist for the same message. While the rebuild is pending (no
+    newer result, or only PENDING ones) the notice stays unverified and is
+    retried; returning to the old model before the rebuild stores anything still
+    lets it send. A notice ended this way is not rebuilt for the replacing summary."""
+    from inference_version import is_current
+    if type(summary_id) is not int or summary_id <= 0:
+        return False
+    try:
+        row = db.execute("SELECT kind,project_id,message_id FROM artifacts WHERE artifact_id=?",
+                         (summary_id,)).fetchone()
+        if (row is None or row["kind"] != semantic_policy.KIND_SUMMARY
+                or row["project_id"] != project_id or row["message_id"] != message_id):
+            return False
+        audits = db.execute("SELECT artifact_id,meta FROM artifacts WHERE kind=? AND project_id=? AND message_id=? "
+                            "AND artifact_id>?", (semantic_policy.KIND_AUDIT, project_id, message_id,
+                                                  summary_id)).fetchall()
+    except sqlite3.Error:
+        return False
+    for audit in audits:
+        try:
+            meta = strict_json(audit["meta"])
+        except (ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
+            continue
+        if not (isinstance(meta, dict) and is_current(meta) and _receipt_not_invalidated(meta)
+                and meta.get("fingerprint") == fingerprint and meta.get("policy_fingerprint") == policy):
+            continue
+        rebuilt = meta.get("summary_artifact_id")
+        # the audit of a newer summary row, or a NEEDS_REVIEW parked without a summary
+        if (meta.get("audit_status") in ("PASS", "SKIPPED", "NEEDS_REVIEW")
+                and type(rebuilt) is int and summary_id < rebuilt < audit["artifact_id"]
+                or "summary_artifact_id" not in meta and meta.get("audit_status") == "NEEDS_REVIEW"
+                and meta.get("technical_status") == "needs_review"):
+            return True
+    return False
+
+
 def enforce_block_reason(db, scfg: dict, project_id) -> str | None:
     """The reason semantic content must not ride this send, or None.
 
@@ -516,6 +558,11 @@ def _source_event(db, project_id: int, event_id: int, *, read_progress=True):
 
 def marker_source_gate(db, project_id, payload, *, in_progress=False, cfg=None):
     """Recheck the exact arrival and target inside the send-marker transaction."""
+    with semantic_transport.config_model_scope(cfg if isinstance(cfg, dict) else None):
+        return _marker_source_gate(db, project_id, payload, in_progress, cfg)
+
+
+def _marker_source_gate(db, project_id, payload, in_progress, cfg):
     import semantic_intake_hold
     if payload.get('degraded') is True or 'degraded_receipt_id' in payload:
         if not _degraded_receipt_current(db, project_id, payload):
@@ -591,6 +638,11 @@ def _has_initial_history(db, project_id, ids):
 def semantic_gate(db, ev, payload: dict, cfg: dict,
                   in_progress: bool = False):
     """Recheck a semantic intent immediately before every external post."""
+    with semantic_transport.config_model_scope(cfg):
+        return _semantic_gate(db, ev, payload, cfg, in_progress)
+
+
+def _semantic_gate(db, ev, payload: dict, cfg: dict, in_progress: bool = False):
     if not isinstance(payload, dict):
         raise ValueError("payload_invalid")
     scfg, _ = semantic_policy.runtime_config(cfg)
@@ -685,6 +737,8 @@ def semantic_gate(db, ev, payload: dict, cfg: dict,
         current = current_summary(db, project_id, target, bundle, policy,
                                   fact_source=scfg.get("fact_source"))
         summary_id, summary_hash = payload.get("summary_artifact_id"), payload.get("summary_hash")
+        if _summary_superseded(db, project_id, target, summary_id, fp, policy):
+            _stale("stale_generation", in_progress)
         notice_text, notice_hash = payload.get("text"), payload.get("notice_text_hash")
         try:
             bound = (current is not None and type(summary_id) is int and summary_id > 0
