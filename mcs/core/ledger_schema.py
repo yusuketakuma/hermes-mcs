@@ -788,6 +788,52 @@ def install_cloud_usage_guard(db) -> None:
             (0 if malformed else 1, time.time(), 0 if installed == _CLOUD_USAGE_DDL else 1))
 
 
+# A performance-only index that lets the accounting history be read in artifact_id
+# order without a temporary sort (H5). It is not part of the H4 guard: a missing or
+# different index only means the readers keep their original plan.
+CLOUD_USAGE_ORDER_INDEX = "idx_cloud_usage_artifact_order"
+CLOUD_USAGE_ORDER_KINDS_SQL = "kind IN ('cloud_usage_reserve','cloud_usage_result')"
+CLOUD_USAGE_ORDER_DDL = (f"CREATE INDEX {CLOUD_USAGE_ORDER_INDEX} ON artifacts(artifact_id) "
+                         f"WHERE {CLOUD_USAGE_ORDER_KINDS_SQL}")
+
+
+def cloud_usage_order_index_state(db) -> str:
+    """'present' only for the exact index on artifacts; 'absent' or 'schema_mismatch' otherwise."""
+    row = db.execute("SELECT type,tbl_name,sql FROM sqlite_master WHERE name=?",
+                     (CLOUD_USAGE_ORDER_INDEX,)).fetchone()
+    if row is None:
+        return "absent"
+    return "present" if tuple(row) == ("index", "artifacts", CLOUD_USAGE_ORDER_DDL) else "schema_mismatch"
+
+
+def install_cloud_usage_order_index(db, *, deadline: float) -> str:
+    """Create the order index on this connection unless it exists or the deadline passes.
+
+    Returns 'created', 'present', 'schema_mismatch' or 'deadline'. A same-named object of
+    another shape is kept as it is. BUSY and other database errors propagate to the
+    caller, which owns the connection, its busy wait and its progress handler."""
+    state = cloud_usage_order_index_state(db)
+    if state != "absent":
+        return state
+    if time.monotonic() >= deadline:
+        return "deadline"
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        state = cloud_usage_order_index_state(db)
+        if state != "absent":
+            db.rollback()
+            return state
+        db.execute(CLOUD_USAGE_ORDER_DDL)
+        if time.monotonic() >= deadline:
+            db.rollback()
+            return "deadline"
+        db.commit()
+    except BaseException:
+        db.rollback()
+        raise
+    return "created"
+
+
 def _script(db, s: str):
     """Run a ;-separated DDL/DML script inside the caller's transaction
     (executescript commits implicitly — do NOT use it mid-migration)."""
