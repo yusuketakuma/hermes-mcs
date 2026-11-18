@@ -163,10 +163,19 @@ class Sender:
     def __init__(self, client, settings, root):
         self.client, self.settings, self.root = client, settings, root
 
-    def send(self, content, *, user_id=None):
+    def send(self, content, *, user_id=None, verify_scope=None):
+        if user_id is not None and (not isinstance(user_id, str) or not user_id.strip()):
+            raise ClientError("validation_invalid")
         with api_lock(self.root):
             if not self.route_current({"delivery": {"route_epoch": self.settings["route_epoch"]}}):
                 raise ClientError("scope_mismatch")
+            if verify_scope is not None:
+                try:
+                    verified = verify_scope() is True
+                except Exception:
+                    verified = False
+                if not verified:
+                    raise ClientError("scope_mismatch")
             result = self.client.send_message(
                 content, user_id=user_id,
                 channel_id=None if user_id else self.settings["channel_id"])

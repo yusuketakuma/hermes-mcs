@@ -418,6 +418,11 @@ def _initialize(db, *, schema_version: int) -> bool:
             ON notify_outbox(event_id) WHERE state IN ('pending','failed');
           CREATE INDEX IF NOT EXISTS idx_outbox_kind_created
             ON notify_outbox(kind, created_at);
+          CREATE INDEX IF NOT EXISTS idx_outbox_pending_new_message_due
+            ON notify_outbox(kind, next_try)
+            WHERE kind='new_messages'
+              AND state IN ('pending','failed')
+              AND next_try IS NOT NULL;
           CREATE INDEX IF NOT EXISTS idx_fetch_jobs_failed_recent
             ON fetch_jobs(updated_at, kind) WHERE state='failed';
           CREATE UNIQUE INDEX IF NOT EXISTS uq_attachments_msg_file
