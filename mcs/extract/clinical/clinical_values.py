@@ -545,7 +545,11 @@ _LAB_RESULT_TAIL = re.compile(fold_surface(
     r"|継続|中止|開始|休止|再開|増量|減量|変更|追加)(?:し(?:ます|ました|ています|て))?"
     r"|なし|予定|中"
     r"|[のでにとをはがも]"
-    r"|[ァ-ヺー一-龯]{1,24}(?=中止|継続|内服|服用|使用|投与|点滴|注射|外用|開始|休止|再開|増量|減量|変更|追加))*"))
+    # A drug name ends its clause in a dosing action and contains no comparison,
+    # negation or hedge word (以上で投与中止, ではないので投与中止 stay out).
+    r"|(?:(?!(?:まで|以上|以下|未満|以内|程度|前後|ほど|くらい|ぐらい|を?超"
+    r"|を?(?:下|上)回|より|では|じゃ|疑い|かもしれ|ない|なく|ありませ))[ァ-ヺー一-龯]){1,24}"
+    r"(?=中止|継続|内服|服用|使用|投与|点滴|注射|外用|開始|休止|再開|増量|減量|変更|追加))*"))
 _LAYOUT_REACH = 256   # characters read on each side of a reading; longer lines are no layout
 _BP_DATE_LABEL = re.compile(r"(?:BP|血圧)", re.I)
 _BP_DATE_LETTER = re.compile(r"[A-Za-z]", re.I)
