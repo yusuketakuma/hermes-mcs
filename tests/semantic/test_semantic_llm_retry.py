@@ -891,12 +891,14 @@ def test_format_mark_retention_is_bounded(monkeypatch, tmp_path):
 @pytest.mark.parametrize("stage", ["probe", "long_marks"])
 def test_format_preflight_cannot_dispatch_after_budget_expires(monkeypatch, stage):
     import local_llm
+    monkeypatch.setattr(semantic_transport, "_FMT_MODE", None)
     clock = [1000.0]
     monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
-    calls = []
+    calls, probes = [], []
 
     def probe(*args):
+        probes.append(1)
         if stage == "probe":
             clock[0] += 4.0
         return "plain"
@@ -910,11 +912,15 @@ def test_format_preflight_cannot_dispatch_after_budget_expires(monkeypatch, stag
     monkeypatch.setattr(semantic_transport, '_long_marks', marks)
     monkeypatch.setattr(local_llm, "chat", lambda *a, **kw: calls.append(kw) or {
         "status": 200, "text": "{}", "finish_reason": "stop"})
-    # the probe+body turn minimum (floor+PROBE_TURN_MIN_S) no longer fits
-    # the 4 s budget — the probe never leaves: a not-sent defer, zero sends
-    with pytest.raises(semantic_runtime.LLMNotSent) as info:
-        semantic_transport.llm_chat("synthetic expired preflight", timeout=4)
-    assert info.value.stage == "probe_unsent"
+    if stage == "probe":
+        assert semantic_transport.llm_chat("synthetic expired preflight", timeout=4) is None
+        assert semantic_transport.last_llm_failure() == "deadline"
+        assert probes == [1]
+    else:
+        with pytest.raises(semantic_runtime.LLMNotSent) as info:
+            semantic_transport.llm_chat("synthetic expired preflight", timeout=4)
+        assert info.value.stage == "probe_unsent"
+        assert probes == []
     assert calls == []
 
 
@@ -922,6 +928,7 @@ def test_format_preflight_cannot_dispatch_after_budget_expires(monkeypatch, stag
 @pytest.mark.parametrize("stage", ["response", "persistence"])
 def test_format_rejection_cannot_retry_after_budget_expires(monkeypatch, status, stage):
     import local_llm
+    monkeypatch.setattr(semantic_transport, "_FMT_MODE", "object")
     clock = [1000.0]
     monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
@@ -945,6 +952,7 @@ def test_format_rejection_cannot_retry_after_budget_expires(monkeypatch, status,
     assert semantic_transport.llm_chat("synthetic expired format retry", timeout=4) is None
     assert len(calls) == 1
     assert calls[0]["deadline"] == 1004.0
+    assert calls[0]["response_format"] == {"type": "json_object"}
 
 
 @pytest.mark.parametrize("limitations", [0, 1, False, True,
@@ -1128,6 +1136,7 @@ def test_llm_chat_probe_deadline_reserves_body_floor(monkeypatch):
     """The probe's deadline stops the body floor short of the call
     deadline — a 45 s call reserves min(60, 45/2) = 22.5 s for the body."""
     import local_llm
+    monkeypatch.setattr(semantic_transport, "_FMT_MODE", None)
     clock = [1000.0]
     monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
     seen = {}
@@ -1148,6 +1157,7 @@ def test_llm_chat_long_level_reserves_620_and_defers_short(monkeypatch):
     """A prompt marked for the long ceiling reserves LONG_MIN_CALL_S for
     the body; a budget below it defers before the probe fires."""
     import local_llm
+    monkeypatch.setattr(semantic_transport, "_FMT_MODE", None)
     clock = [1000.0]
     monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
     model = semantic_transport.llm_conf()[1]
