@@ -504,8 +504,9 @@ def role_candidates(items) -> list:
 # Written by the patient-context reset when it erases every context result. The rebuild finds
 # again the facts in records that existed before it, so those are not new to any reader.
 RESET_MARK_KIND = "patient_context_reset_mark_v1"
-# One row per patient, written in the same reset: the facts its published context held, so the
-# rebuild hides only what it found again and still shows what it found for the first time.
+# One row per patient, written in the same reset: keys of the facts its context (published or not)
+# and completed scans held, so the rebuild hides only what it found again and still shows what it
+# found for the first time.
 RESET_PRIOR_KIND = "patient_context_reset_prior_v1"
 
 
@@ -521,7 +522,7 @@ def reset_fact_key(fact) -> str:
 
 
 def _reset_prior(db, project_id):
-    """The fact keys this patient's context held before the latest reset; None when unrecorded."""
+    """The fact keys this patient's context and scans held before the latest reset; None when unrecorded."""
     row = db.execute("SELECT content FROM artifacts WHERE kind=? AND project_id=? "
                      "ORDER BY artifact_id DESC LIMIT 1", (RESET_PRIOR_KIND, project_id)).fetchone()
     try:
@@ -546,7 +547,7 @@ def changes(db, ev, since_ts) -> dict:
     earlier; edited / deleted = a revision observed since (a deleted post returns its id and
     observation time only); backfill_found = a context fact found since in an older record, except
     one the rebuild after a patient-context reset found again: a record seen before that reset whose
-    fact (record, revision, category) the erased context already held."""
+    fact (record, revision, category) the erased context or its current scans already held."""
     seen = {r[0]: (r[1], r[2]) for r in db.execute(
         "SELECT message_id, first_seen, posted_at_ts FROM messages WHERE project_id=?", (ev["project_id"],))}
     revised = {}
@@ -565,9 +566,13 @@ def changes(db, ev, since_ts) -> dict:
     prior = _reset_prior(db, ev["project_id"]) if reset_at is not None else None
 
     def found_again(item, first):
-        # found in a record seen before the reset and already in the context it erased
-        return (reset_at is not None and isinstance(first, (int, float)) and first < reset_at
-                and (prior is None or reset_fact_key(item) in prior))
+        # a recorded patient: the erased context or its scans already held this fact (karte and OCR facts have no
+        # messages row, so the record's first_seen cannot decide); unrecorded: a record seen before
+        if reset_at is None:
+            return False
+        if prior is not None:
+            return reset_fact_key(item) in prior
+        return isinstance(first, (int, float)) and first < reset_at
 
     def kind(item):
         # the reader's own observation decides first: a post first seen since is new (or
