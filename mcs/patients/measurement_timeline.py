@@ -24,11 +24,15 @@ _PLAN_CANCEL_ACTION = re.compile(r"中止|キャンセル|取消|撤回|取り�
 _PLAN_CANCEL_NEGATION = re.compile(
     r"(?:し(?:ない|なかった|ません(?:でした)?)|せず|され(?:ない|なかった|ません(?:でした)?)|"
     r"[さら](?:ない|なかった|ず)|ない|なかった|ず|では(?:ない|ありません(?:でした)?))"
-    r"(?:\s*(?:方針(?:です|だ|とした|としました)?|ことに(?:した|しました|決まった|決まりました)))?"
+    r"(?:\s*(?:方針(?:です|だ|とした|としました)?|"
+    r"ことに(?:した|しました|なった|なりました|決まった|決まりました)))?"
     r"\s*(?:$|(?:[、,]\s*|に)(?:(?:実施|続行|継続)(?:する|します|した|しました)?|行う)\s*$)")
 _PLAN_CANCEL_NAMED_TARGET = re.compile(
     r"(?:する|した|している|された)の(?:は|が)\s*(?P<label>[^、,]+?)\s*"
-    r"(?:(?:のみ|だけ)?(?:です|でした|だ)?\s*$|(?:のみ|だけ)で\s*[、,])")
+    r"(?:(?:のみ|だけ)?(?:です|でした|だ)?\s*$|(?:のみ|だけ)で\s*[、,]\s*(?P<followup>.*))")
+_PLAN_EXECUTION_CLAUSE = re.compile(
+    r"(?P<label>.+?)\s*(?:は|が|を)\s*(?:(?:実施|続行|継続)(?:する|します)|行う|行います)\s*")
+_PLAN_MEASUREMENT_SUFFIX = re.compile(r"(?:の)?(?:検査|採血|測定)$")
 _SEPARATE_PROCEDURES = frozenset(("点滴", "輸液"))
 
 
@@ -42,19 +46,31 @@ def _plan_is_withdrawn_or_uncertain(tail, name):
     ending = predicate[action.end():]
     if _PLAN_CANCEL_NEGATION.match(ending):
         return False
-    separate_target = _PLAN_CANCEL_NAMED_TARGET.match(ending)
-    if separate_target is not None:
-        target = separate_target["label"].strip()
-        target_label = re.sub(r"(?:の)?(?:検査|採血|測定)$", "", target)
-        if fold_surface(target_label) == fold_surface(name):
-            return True
-        planned_analyte, cancelled_analyte = lab_analyte(name), lab_analyte(target_label)
-        if planned_analyte and cancelled_analyte:
-            return planned_analyte == cancelled_analyte
-        return target not in _SEPARATE_PROCEDURES
-    # Once the original names a direct cancellation, an unclear ending
-    # cannot establish that the plan is still in force.
-    return True
+    named_target = _PLAN_CANCEL_NAMED_TARGET.match(ending)
+    if named_target is None:
+        return True
+
+    target = named_target["label"].strip()
+    target_label = _PLAN_MEASUREMENT_SUFFIX.sub("", target)
+    if fold_surface(target_label) == fold_surface(name):
+        return True
+    planned_analyte, cancelled_analyte = lab_analyte(name), lab_analyte(target_label)
+    different_analyte = planned_analyte and cancelled_analyte and planned_analyte != cancelled_analyte
+    if not different_analyte and target not in _SEPARATE_PROCEDURES:
+        return True
+
+    followup = named_target["followup"]
+    if followup is None:
+        return False
+    execution = _PLAN_EXECUTION_CLAUSE.fullmatch(followup)
+    if execution is None:
+        return True
+    label = execution["label"].strip()
+    if label in ("この検査", "その検査", "当該検査"):
+        return False
+    label = _PLAN_MEASUREMENT_SUFFIX.sub("", label)
+    return not (fold_surface(label) == fold_surface(name)
+                or (planned_analyte and lab_analyte(label) == planned_analyte))
 
 
 def ambiguous_patient_context(body, target):
