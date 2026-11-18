@@ -577,14 +577,14 @@ def _active_holds(db, text_held) -> tuple[list, int, bool]:
             events.update(held_events)
     for ev in db.execute(
             "SELECT event_id,progress FROM notify_outbox WHERE "
-            "COALESCE(route,'text')='interactive' AND state='failed' "
-            "AND next_try IS NULL").fetchall():
+            "state='failed' AND next_try IS NULL").fetchall():
         progress = loads_dict(ev["progress"] or "{}")
         if not isinstance(progress, dict) or "invalid_progress" in progress:
             incomplete = True   # parked row's quarantined list unreadable
             continue
         if progress.get("hold_reason") in (
-                "restore_hold", "restore_unlinked"):
+                "restore_hold", "restore_unlinked",
+                "restore_text_unverified"):
             events.add(ev["event_id"])
     events.update(t["event_id"] for t in text_held)
     return holds, len(events), incomplete

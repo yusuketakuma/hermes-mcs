@@ -905,10 +905,11 @@ def test_receipt_flags_unreadable_parked_progress_and_scope(world):
     _held_outbox(world.led, 13, "interactive", "{broken")
     _held_outbox(world.led, 14, "text",
                  {"hold_reason": "restore_text_unverified"})
+    _held_outbox(world.led, 15, "text", "{broken")
     rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
     assert len(rep["active_holds"]) == 1
     assert rep["active_holds"][0]["scope"] == {}
-    assert rep["active_events_held"] == 2   # {12} ∪ {14}
+    assert rep["active_events_held"] == 2   # {12} ∪ {14}; 13 and 15 unreadable
     assert rep["active_holds_incomplete"] is True
 
 
