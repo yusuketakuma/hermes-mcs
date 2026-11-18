@@ -70,6 +70,7 @@ jobs:
         run: python3 ci/pr_branch_sync.py --repo "$GH_REPO" --base "$DEFAULT_BRANCH" --cancel-obsolete-ci-only
       - name: Decide and publish merge-gate
         id: plan
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -82,69 +83,7 @@ jobs:
           PR_INPUT: ${{ inputs.pr_number }}
           AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          set -euo pipefail
-          work=$(mktemp -d)
-          if [[ "$EVENT" == "workflow_run" && "$RUN_WORKFLOW" == "ci" ]]; then
-            if [[ -n "$PR_INPUT" ]]; then
-              prs="$PR_INPUT"
-            else
-              prs=$(gh api "repos/$GH_REPO/commits/$RUN_SHA/pulls" --jq '[.[] | select(.state == "open") | .number] | join(" ")')
-            fi
-            ci_conclusion="$RUN_CONCLUSION"
-            # Re-running this workflow must not count the same CI failure again; a re-run of ci itself does.
-            if [[ "$CONTROL_ATTEMPT" != "1" ]]; then ci_conclusion=""; fi
-          elif [[ "$EVENT" == "workflow_dispatch" ]]; then
-            # A dispatched sha is typed by a caller: accept a full commit id only. The PR head is compared below.
-            [[ "$RUN_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a 40-digit commit id"; exit 1; }
-            if [[ -n "$PR_INPUT" ]]; then
-              prs="$PR_INPUT"
-            else
-              prs=$(gh api "repos/$GH_REPO/commits/$RUN_SHA/pulls" --jq '[.[] | select(.state == "open") | .number] | join(" ")')
-            fi
-            # Not bound to one ci run attempt, so it must not count one: the verdict only.
-            ci_conclusion=""
-          else
-            prs="$PR_FROM_EVENT"
-            ci_conclusion=""
-          fi
-          event_prs="$prs"
-          prs=$(gh api "repos/$GH_REPO/pulls?state=open&base=$DEFAULT_BRANCH&per_page=100" --paginate --jq '.[] | select(.draft != true) | .number')
-          for pr in $prs; do
-            gh api "repos/$GH_REPO/pulls/$pr" > "$work/pr.json"
-            if ! jq -e --arg repo "$GH_REPO" --arg base "$DEFAULT_BRANCH" \
-              '.state == "open" and (.draft != true) and .base.ref == $base and .head.repo.full_name == $repo and .base.repo.full_name == $repo' \
-              "$work/pr.json" > /dev/null; then continue; fi
-            sha=$(jq -r .head.sha "$work/pr.json")
-            pr_ci_conclusion=""
-            if [[ "$sha" == "$RUN_SHA" ]]; then
-              for event_pr in $event_prs; do
-                if [[ "$event_pr" == "$pr" ]]; then pr_ci_conclusion="$ci_conclusion"; fi
-              done
-            fi
-            base=$(jq -r .base.ref "$work/pr.json")
-            gh api "repos/$GH_REPO/commits/$sha/check-runs?per_page=100" --paginate --slurp > "$work/checks.json"
-            gh api "repos/$GH_REPO/pulls/$pr/files?per_page=100" --paginate --slurp > "$work/files.json"
-            behind=$(gh api "repos/$GH_REPO/compare/$base...$sha" --jq .behind_by)
-            python3 ci/agent_control.py gate --pr "$work/pr.json" --checks "$work/checks.json" \
-              --files "$work/files.json" --behind-by "$behind" --automation "${AUTOMATION:-}" \
-              --ci-conclusion "$pr_ci_conclusion" > "$work/plan.json"
-            cat "$work/plan.json"
-            state=$(jq -r .state "$work/plan.json")
-            gh api -X POST "repos/$GH_REPO/statuses/$sha" -f context=merge-gate -f state="$state" \
-              -f description="$(jq -r .description "$work/plan.json")" > /dev/null
-            for issue in $(jq -r '.attempts[].issue' "$work/plan.json"); do
-              labels=$(gh api "repos/$GH_REPO/issues/$issue" --jq '[.labels[].name]')
-              step=$(python3 ci/agent_control.py attempt --labels "$labels")
-              for name in $(jq -r '.remove[]' <<< "$step"); do
-                gh api -X DELETE "repos/$GH_REPO/issues/$issue/labels/$(jq -rn --arg n "$name" '$n|@uri')" > /dev/null || true
-              done
-              gh api -X POST "repos/$GH_REPO/issues/$issue/labels" --input <(jq '{labels: .add}' <<< "$step") > /dev/null
-              if [[ "$(jq -r .exhausted <<< "$step")" == "true" ]]; then
-                gh issue comment "$issue" --body "AIによる試行が上限に達したため、担当を外して要オーナー対応にしました（PR #$pr の CI 失敗）。"
-              fi
-            done
-          done
+        run: python3 ci/merge_gate.py
       - name: Reconcile current PR heads
         if: ${{ !cancelled() && !failure() }}
         env:
@@ -157,6 +96,9 @@ jobs:
           SOURCE_RUN_ID: ${{ github.event.workflow_run.id || inputs.source_run_id }}
           SOURCE_HEAD: ${{ github.event.workflow_run.head_sha || inputs.sha }}
         run: python3 ci/auto_merge.py --withdraw-inherited
+      - name: Report gate publication errors
+        if: ${{ !cancelled() && steps.plan.outcome == 'failure' }}
+        run: exit 1
 
   lock:
     if: github.event_name == 'issues' && startsWith(github.event.label.name, '担当:')

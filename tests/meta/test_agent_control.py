@@ -239,8 +239,7 @@ def test_labels_and_workflows_agree_with_the_module():
     assert "SOURCE_RUN_ID:" in control and "SOURCE_HEAD:" in control
     assert "ALLOW_INFRA_RETRY:" in control and "github.event.workflow_run.name == 'ci'" in control
     assert "github.event.workflow_run.head_sha || inputs.sha }}" in control
-    dispatched = control.split('elif [[ "$EVENT" == "workflow_dispatch" ]]; then', 1)[1].split("\n          else\n", 1)[0]
-    assert 'ci_conclusion=""' in dispatched
+    assert "run: python3 ci/merge_gate.py" in control
     claude = (ROOT / ".github/workflows/agent-claude.yml").read_text()
     assert "branch_prefix: agent/" in claude
     assert "vars.AUTOMATION_ENABLED == 'true'" in claude
