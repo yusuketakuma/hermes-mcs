@@ -572,7 +572,7 @@ def repair(tmp_path, monkeypatch):
         sent.append(json.loads(body['messages'][0]['content']))
         if responses[0] == 'timeout':
             raise TimeoutError('synthetic transport uncertainty')
-        return 200, {}, json.dumps({'model': worker.anthropic_client.MODEL, 'stop_reason': 'end_turn',
+        return 200, {}, json.dumps({'model': body['model'], 'stop_reason': 'end_turn',
             'content': [{'type': 'text', 'text': json.dumps({'fact_ids': responses})}],
             'usage': {'input_tokens': 2, 'output_tokens': 1}}).encode()
     monkeypatch.setattr(worker.anthropic_client.AnthropicClient, 'request', request)
@@ -589,14 +589,21 @@ def repair(tmp_path, monkeypatch):
 
 def test_failed_candidate_repairs_once_and_resume_reuses_saved_ids(repair):
     led, run, facts, _, sent, _, _ = repair
+    worker.load_config()['cloud_llm']['provider_profiles'] = {
+        'anthropic': {'patient_context': 'sonnet-high', 'quality_repair': 'sonnet-high'}}
     status, result = run()
     assert status == 'candidate' and result['fact_ids'] == [facts[1]['id']]
     assert len(sent) == 1 and sent[0]['findings'] == [{'fact_id': facts[1]['id'], 'code': 'important_missing'}]
     assert len(led.artifacts(patient_context_refresh_state.QUALITY_REPAIR)) == 1
     [saved] = led.artifacts(patient_context_refresh_state.QUALITY_REPAIR_CANDIDATE)
-    assert json.loads(saved['content']) == {'fact_ids': [facts[1]['id']]}
+    stored = json.loads(saved['content'])
+    proof = stored.pop(patient_context_refresh_state._INTERNAL_PROOF, None)
+    assert stored == {'fact_ids': [facts[1]['id']]}
+    reservation, = led.artifacts('cloud_usage_reserve', project_id=1)
+    assert json.loads(reservation['meta'])['profile'] == 'sonnet-high'
+    assert proof is not None and result.get('repair_ref')
     assert '合成の重要な変更。' not in saved['content']
-    assert run()[0] == 'candidate' and len(sent) == 1
+    assert run() == ('candidate', result) and len(sent) == 1
 
 
 @pytest.mark.parametrize('damage', ['none', 'answer', 'receipt', 'audit'])
