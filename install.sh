@@ -25,13 +25,15 @@
 #   --with-yomitoku           非商用OCR専用 Python 3.13 環境とモデルを導入。
 #                             OCRの利用開始は attachment_ocr の別途設定が必要です。
 #   --no-brew                 基本ソフトの導入を省略（導入済みの場合）。
-#   --no-llm                  ローカル AI の導入を省略。別途 OpenAI 互換
+#   --no-llm                  段階4（ローカル AI のモデルと常駐サーバー）を省略。
+#                             llama.cpp 本体は段階1で導入されます。別途 OpenAI 互換
 #                             サーバーを 127.0.0.1:8080 で動かしてください。
 #   --no-plugin               Hermes の操作カード用プラグインの導入を省略。
 #                             Hermes の Slack／Discord 連携には必要です。
 #                             MCS 単独接続では使用しません。
 #   --no-services             定期収集などの常駐サービスの登録を省略。
 #   --no-recovery             復旧ツールと更新監視の導入を省略。
+#                             ログ処理プログラムの配置と旧ログの取込みは省略しません。
 #   -h, --help                この説明を表示します。
 #
 # 通常のユーザーで実行してください（sudo は使いません）。
@@ -143,10 +145,14 @@ link_target() {
     physpath "$_t"
 }
 
+# A relative HERMES_HOME names the invocation directory, before an install
+# may change into a pinned ~/.mcs link target.
+if [ -n "$ARG_HOME" ]; then ARG_HOME="$(abspath "$ARG_HOME")"; fi
+
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 # Read-only bootstrap modes do not require checkout companions.
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
-INSTALL_RUNTIME_SHA256="736416322442ae4ffd4c9a8ea4c9ea5a2c13f8be40ea7d0a0eb3fc7075860fd8"
+INSTALL_RUNTIME_SHA256="68a3de05807b2159ea4b32b14f0fcf810f263574587e76f3b1567698ea5c6112"
 _install_stage_private_dir=""
 # shellcheck disable=SC2317,SC2329  # Invoked by EXIT after the sourced stage exits.
 _install_stage_cleanup() {
@@ -278,6 +284,11 @@ EOF
         _safe_dir . || _unsafe_dir "設定フォルダー"
         _verify_root_alias || die "設定フォルダーのリンクが変更されました。記録を保持してください"
         MCS_ROOT="$(pwd -P)" || _unsafe_dir "設定フォルダー"
+        # Only a missing config is created under the target's parent (the same
+        # case runtime.sh checks); an existing install keeps its parent as is.
+        if [ ! -e "$MCS_ROOT/config.json" ] && [ ! -L "$MCS_ROOT/config.json" ]; then
+            _safe_dir "$(dirname -- "$MCS_ROOT")" || _unsafe_dir "設定フォルダーのリンク先の親フォルダー"
+        fi
         export MCS_ROOT
     fi
     _lock_data="$MCS_ROOT/data"
@@ -759,7 +770,7 @@ if "recovery_python" in cfg and os.path.lexists(
     deployed = runtime_inspection.recovery_executable(runtime_inspection.read_recovery_plist(
         Path(sys.argv[6], service_contract.RECOVERY_LABEL + ".plist")))
     if deployed != desired:
-        raise SystemExit("復旧用 Python の設定と稼働設定が一致しません。処理が動いていないことを確認し、mcs setup init --yes、mcs setup services の順に修復してください")
+        raise SystemExit("復旧用 Python の設定と稼働設定が一致しません。処理が動いていないことを確認し、mcs setup init --yes --recovery-python <使う Python の絶対パス> を実行してから mcs setup services で修復してください")
 from html import escape
 text = Path(sys.argv[2]).read_text()
 if sys.argv[8] == "1":
@@ -1034,6 +1045,7 @@ dry_run_plan() {
     if [ "$RUNTIME_MODE" = standalone ]; then plan_line "3/6 プラグイン" "MCS 単独接続では使用しません"
     elif [ "$SKIP_PLUGIN" -eq 1 ]; then plan_line "3/6 プラグイン" "省略（--no-plugin。LINE WORKS では不要）"
     else plan_line "3/6 プラグイン" "リンク $PLUGIN_LINK [$(state "$PLUGIN_LINK")] -> $REPO/hermes_plugin; hermes plugins enable mcs-discord-commands"; fi
+    plan_line "実行ログ" "ログ処理プログラムを $RECOVERY_DIR に配置し、既存の実行ログを取り込む（--no-recovery・--no-services・--no-llm でも実行）"
     if [ "$SKIP_LLM" -eq 1 ] || [ "$OS" != Darwin ]; then plan_line "4/6 ローカルAI" "省略"
     else
         # mirror stage 4's order: a hermes-managed agent or a foreign
