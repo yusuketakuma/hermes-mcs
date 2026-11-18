@@ -1,0 +1,13 @@
+{
+  "category": "changed",
+  "title": "意味解析の文字列ハッシュ実装を共通化",
+  "summary": "文字列のハッシュ結果・Unicodeの扱い・入力エラーは変わりません。重複していた内部実装だけを共通化し、利用者の追加操作はありません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "semantic_facts.text_sha256は既存の公開関数として維持し、mcs_util.text_sha256へ委譲します。UTF-8バイト列のハッシュと入力時のencode例外を維持します。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_facts.py",
+    "mcs/core/mcs_util.py"
+  ]
+}
