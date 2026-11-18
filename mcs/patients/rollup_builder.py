@@ -544,18 +544,18 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now, 
             continue
         seen = []
         reply_events = []
-        # `unrelated` evaluations are hidden from relation_events but count as
-        # evaluated whatever their staleness; request_loops exposes their
-        # trigger ids on the candidate so no per-request query is needed.
-        evaluated = ({event.get("trigger_message_id") for event in matched[0]["relation_events"]
-                      if not event.get("stale")}
-                     | set(matched[0].get("unrelated_trigger_ids") or ()))
+        # Only a current, valid, conclusive relation evaluation covers a
+        # trigger: unclear, stale or invalid evidence leaves the reply
+        # unevaluated. `unrelated` evaluations are hidden from
+        # relation_events; request_loops exposes their current trigger ids
+        # on the candidate so no per-request query is needed.
+        evaluated = set(matched[0].get("unrelated_trigger_ids") or ())
         for event in matched[0]["relation_events"]:
             relation = event.get("relation")
             kind = kinds.get(relation) if isinstance(relation, str) else None
             trigger = by_id.get(event.get("trigger_message_id"))
             confidence = jev.finite_value(event.get("confidence"))
-            if (not kind or event.get("stale") or not trigger
+            if (event.get("stale") or relation == "unclear" or not trigger
                     or type(event.get("loop_artifact_id")) is not int
                     or event["loop_artifact_id"] != matched[0]["artifact_id"]
                     or not isinstance(event.get("trigger_revision"), str)
@@ -566,6 +566,9 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now, 
                     or event["reported_relation"] != relation
                     or trigger["body_state"] not in (None, "full")
                     or (trigger["parent_id"] or trigger["message_id"]) != root):
+                continue
+            evaluated.add(event.get("trigger_message_id"))
+            if not kind:
                 continue
             other = normalize_sender_id(trigger["sender_id"])
             at = trigger["posted_at_ts"]

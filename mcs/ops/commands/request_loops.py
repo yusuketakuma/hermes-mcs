@@ -269,8 +269,11 @@ def _effective_loop_state(db, r, state, policy, relation_limit,
                 and ev.get("reported_relation") in jev.LOOP_RELATION_OPTIONS):
             evaluated_pairs.add((trigger_id, ev["trigger_revision"]))
         if ev.get("relation") == "unrelated":
-            # Keep unrelated evaluations for dedup, hide them from the display.
-            if ev.get("loop_artifact_id") == r["artifact_id"]:
+            # Keep current unrelated evaluations for dedup, hide them from
+            # the display; stale or invalid evidence stays unevaluated.
+            if (ev.get("loop_artifact_id") == r["artifact_id"] and not ev["stale"]
+                    and confidence is not None and 0 <= confidence <= 1
+                    and ev.get("reported_relation") == "unrelated"):
                 unrelated_triggers.add(trigger_id)
             continue
         if ev.get("loop_artifact_id") == r["artifact_id"] or (
