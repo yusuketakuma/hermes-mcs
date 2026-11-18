@@ -246,9 +246,12 @@ def recover(ledger, cfg, result) -> dict:
     marks = []
     for r in db.execute(
             "SELECT delivery_id,spec_json,transport,state FROM notification_renders r "
-            "WHERE state IN ('queued','held') OR (state='delivered' "
+            "WHERE (state IN ('queued','held') OR (state='delivered' "
             "AND EXISTS (SELECT 1 FROM notification_render_parts p "
-            "WHERE p.delivery_id=r.delivery_id AND p.state='pending'))").fetchall():
+            "WHERE p.delivery_id=r.delivery_id AND p.state='pending'))) "
+            "AND NOT EXISTS (SELECT 1 FROM notification_restore_holds h "
+            "WHERE h.released_at IS NULL AND (h.delivery_id=r.delivery_id "
+            "OR h.card_id=r.card_id))").fetchall():
         if _spec_publication_blocked(db, r["delivery_id"], r["transport"]):
             continue
         path = os.path.join(dirs[r["transport"] + "_render"],
