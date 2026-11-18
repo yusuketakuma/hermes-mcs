@@ -1,6 +1,8 @@
 """Synthetic measurement timeline: source time, identity and uncertainty remain separate."""
 import hashlib
 
+import pytest
+
 import measurement_timeline
 
 
@@ -354,3 +356,15 @@ def test_vital_anchor_follows_the_written_number_not_python_spelling():
         item = _vital(body, value)
         assert (item["state"], item["verification"], item["measured_on"]) == ("observed", "quote_supported", "2026-10-01")
     assert _vital(integer, 38.0)["state"] == "unknown"
+
+
+@pytest.mark.parametrize("suffix", ["はない。", "を中止した。", "だったが、取り消した。"])
+@pytest.mark.parametrize("short_quote", [False, True])
+def test_denied_or_cancelled_lab_plan_is_not_projected(suffix, short_quote):
+    a = _record(1, "2026-10-03", "2026-10-01T09:00:00+09:00", "1.0")
+    plan = "本人は2026-10-03に空腹時採血 Cr 1.0 mg/dLの検査予定"
+    body = plan + suffix
+    evidence = plan if short_quote else body
+    a.update(status="planned", source_body=body, evidence=evidence, evidence_span=[0, len(evidence)])
+    item = measurement_timeline.project_measurements([a], source_complete=True)["items"][0]
+    assert (item["state"], item["value"]) == ("unknown", None)
