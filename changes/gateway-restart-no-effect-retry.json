@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "ゲートウェイ再起動が何もしなかったと証明できる場合だけ再要求できるように修正",
+  "summary": "再起動ヘルパーがロック競合や全ラウンドのビジー拒否で一度も再起動に及ばなかったことがジャーナルで証明できるときだけ、監視側が保留中の再起動要求を「効果なし」として解決し、同じ試行回数・時間枠の予算内で新しい要求を出せるようになりました。証明できない古い unknown 結果はこれまで通り保留のままです。",
+  "upgrade": "追加操作は不要です。ヘルパーは data/gateway_restart_attempts/ に試行ごとのジャーナルを書き、data/gateway_restart_helper.lock で同時実行を1つに制限します。",
+  "details": [
+    "ジャーナルが「状態 ended・PID 未変更・全ラウンドが正式なビジー拒否」か「既存ヘルパーでブロック」、かつ記録されたヘルパーが終了（または PID が他プロセスに再利用）している場合だけ効果なしとみなす。",
+    "gateway_restart_busy_timeout 以外の unknown（非0終了、PID 不変）や request_id のない旧形式レシートは保留のまま。",
+    "手動呼び出しにも request_id を発行し、レシートと引数に載せる。"
+  ],
+  "refs": ["mcs/ingest/health_recovery.py", "deployment/recovery/mcs_recovery_gateway.py"]
+}

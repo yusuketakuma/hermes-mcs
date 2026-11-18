@@ -73,8 +73,8 @@ def _options(cfg: dict) -> tuple[bool, int, int] | None:
 
 def _valid_pending(row, target=TARGET) -> bool:
     reasons = {"worker_start_failed"} if target == GATEWAY else HOST_RESTART_REASONS
-    results = ("reserved", "requested", "unknown", "failed", "process_replaced") if target == GATEWAY \
-        else ("reserved", "requested", "unknown")
+    results = ("reserved", "requested", "unknown", "failed", "process_replaced", "no_effect") \
+        if target == GATEWAY else ("reserved", "requested", "unknown")
     common = (type(row) is dict and set(row) == _pending_keys(target)
             and _identity(row["operation_id"]) and _generation(target, row["generation"])
             and _stamp(row["reserved_at"])
@@ -116,11 +116,13 @@ def _valid_state(state) -> bool:
         if (set(row) != keys | {
                 "target", "observation", "observed_at", "observed_generation"}
                 or not _valid_pending({key: row[key] for key in keys}, row["target"])
-                or row["target"] not in TARGETS or row["observation"] != "healthy_observed"
+                or row["target"] not in TARGETS
+                or row["observation"] not in ("healthy_observed", "no_effect")
                 or not _stamp(row["observed_at"]) or row["observed_at"] < row["reserved_at"]
                 or row.get("receipt_at") is not None and row["receipt_at"] > row["observed_at"]
                 or not _generation(row["target"], row["observed_generation"])
-                or row["observed_generation"] == row["generation"]):
+                or (row["observed_generation"] == row["generation"])
+                == (row["observation"] == "healthy_observed")):
             return False
     return True
 
@@ -259,8 +261,59 @@ def _gateway_previous_clear(home: str, now: float) -> bool:
                      and row["previous_pid"] > 0)
                 and row["pid"] != row["previous_pid"])
     # A later native PID cannot prove a delayed restart helper has finished acting.
-    # Requested/unknown receipts stay held regardless of elapsed time or replacement.
+    # Requested/unknown receipts stay held unless their own attempt journal
+    # proves the request never acted (blocked helper or only canonical refusals).
+    if (row.get("status") in ("requested", "unknown")
+            and _identity(row.get("request_id"))):
+        return _gateway_no_effect(home, row["request_id"], row["at"], now)
     return False
+
+
+def _gateway_attempt_journal(home: str, request_id: str):
+    try:
+        row = _read(Path(home) / "data/gateway_restart_attempts" / (request_id + ".json"),
+                    64 * 1024)
+        return row if type(row) is dict else None
+    except (OSError, ValueError, TypeError, RecursionError, UnicodeError):
+        return None
+
+
+def _gateway_no_effect(home: str, request_id: str, receipt_at, now: float) -> bool:
+    """Prove a restart request never acted: every round refused or never launched.
+
+    True only when the attempt journal shows the helper ended, never changed the
+    target PID, and either could not take the helper lock (so it never spawned
+    the restart CLI) or saw nothing but canonical busy refusals. Anything less
+    keeps the receipt held as before."""
+    import environment_diagnostics
+    row = _gateway_attempt_journal(home, request_id)
+    if (type(row) is not dict or row.get("schema") != "gateway-restart-attempt/1"
+            or row.get("request_id") != request_id or row.get("state") != "ended"
+            or type(row.get("helper_pid")) is not int or row["helper_pid"] <= 0
+            or not _stamp(row.get("deadline_at")) or now < row["deadline_at"]
+            or not _stamp(row.get("exited_at")) or row["exited_at"] > now
+            or row.get("pid_changed") is not False):
+        return False
+    rounds = row.get("rounds")
+    if row.get("outcome") == "blocked_existing_helper":
+        pass  # It exited before ever launching the restart child.
+    elif row.get("outcome") == "gateway_restart_busy_timeout":
+        if (type(receipt_at) not in (int, float) or receipt_at < row["exited_at"]
+                or type(rounds) is not list or not rounds
+                or any(type(item) is not dict or item.get("outcome") != "busy_refusal"
+                       or not _stamp(item.get("at"))
+                       or type(row.get("expected_pid")) is int
+                       and item.get("observed_pid") != row["expected_pid"]
+                       for item in rounds)):
+            return False
+    else:
+        return False
+    # The recorded helper is dead, or its PID was reused by another process.
+    # Without a recorded start time only a dead PID can prove it ended.
+    started = environment_diagnostics.process_started_at(row["helper_pid"])
+    if _stamp(row.get("helper_started_at")):
+        return started != row["helper_started_at"]
+    return started is None
 
 
 def _gateway_receipt(home: str, pending: dict, now: float, cfg: dict) -> bool:
@@ -358,6 +411,25 @@ def run(report: dict, home: str, cfg: dict, now: float) -> dict:
                     _save_state(home, state)
                 except (OSError, ValueError):
                     return {**result, "reason": "state_persist_failed"}
+            if (pending["result"] in ("requested", "unknown")
+                    and _gateway_no_effect(
+                        home, pending["operation_id"], pending.get("receipt_at"), now)):
+                # The helper's own journal proves every round was refused or it
+                # never launched: the request had no effect and is safe to retry.
+                pending["result"] = "no_effect"
+            if pending["result"] == "no_effect":
+                # Every restart round was refused and nothing acted: resolve the
+                # attempt on the same generation; the next pass may re-request
+                # under the same attempts/window budget.
+                state["history"] = (state["history"] + [{**pending, "target": target,
+                    "observation": "no_effect", "observed_generation": live["generation"],
+                    "observed_at": now}])[-HISTORY_MAX:]
+                row["pending"] = None
+                try:
+                    _save_state(home, state)
+                except (OSError, ValueError):
+                    return {**result, "reason": "state_persist_failed"}
+                return {**result, "reason": "no_effect"}
             return {**result, "reason": "outcome_unresolved"}
         if any(item["pending"] is not None for item in state["targets"].values()):
             return {**result, "reason": "outcome_unresolved"}
