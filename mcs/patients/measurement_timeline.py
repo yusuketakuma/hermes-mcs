@@ -24,9 +24,12 @@ _PLAN_CANCEL_ACTION = re.compile(r"中止|キャンセル|取消|撤回|取り�
 _PLAN_CANCEL_NEGATION = re.compile(
     r"(?:し(?:ない|なかった|ません(?:でした)?)|せず|され(?:ない|なかった|ません(?:でした)?)|"
     r"[さら](?:ない|なかった|ず)|ない|なかった|ず|では(?:ない|ありません(?:でした)?))"
-    r"(?=\s*(?:$|[、,]|に(?:実施|行う|続行|継続)))")
-_PLAN_CANCEL_NAMED_TARGET = re.compile(r"(?:する|した|している|された)の(?:は|が)\s*(.+)")
-_MEASUREMENT_PLAN_TARGET = re.compile(r"検査|採血|測定|この予定|その予定|当該予定")
+    r"(?:\s*(?:方針(?:です|だ|とした|としました)?|ことに(?:した|しました|決まった|決まりました)))?"
+    r"\s*(?:$|(?:[、,]\s*|に)(?:(?:実施|続行|継続)(?:する|します|した|しました)?|行う)\s*$)")
+_PLAN_CANCEL_NAMED_TARGET = re.compile(
+    r"(?:する|した|している|された)の(?:は|が)\s*(?P<label>[^、,]+?)\s*"
+    r"(?:(?:のみ|だけ)?(?:です|でした|だ)?\s*$|(?:のみ|だけ)で\s*[、,])")
+_SEPARATE_PROCEDURES = frozenset(("点滴", "輸液"))
 
 
 def _plan_is_withdrawn_or_uncertain(tail, name):
@@ -41,8 +44,14 @@ def _plan_is_withdrawn_or_uncertain(tail, name):
         return False
     separate_target = _PLAN_CANCEL_NAMED_TARGET.match(ending)
     if separate_target is not None:
-        target = separate_target[1]
-        return name in target or _MEASUREMENT_PLAN_TARGET.search(target) is not None
+        target = separate_target["label"].strip()
+        target_label = re.sub(r"(?:の)?(?:検査|採血|測定)$", "", target)
+        if fold_surface(target_label) == fold_surface(name):
+            return True
+        planned_analyte, cancelled_analyte = lab_analyte(name), lab_analyte(target_label)
+        if planned_analyte and cancelled_analyte:
+            return planned_analyte == cancelled_analyte
+        return target not in _SEPARATE_PROCEDURES
     # Once the original names a direct cancellation, an unclear ending
     # cannot establish that the plan is still in force.
     return True
