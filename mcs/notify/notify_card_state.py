@@ -117,6 +117,14 @@ def _parts_in_flight(db, latest) -> bool:
         + PARTS_IN_FLIGHT_SQL + " LIMIT 1", (latest["delivery_id"],)).fetchone() is not None
 
 
+def _card_parts_in_flight(db, card_id) -> bool:
+    """_parts_in_flight over every delivered render of the card, in one query."""
+    return db.execute(
+        "SELECT 1 FROM notification_renders r JOIN notification_render_parts p ON p.delivery_id=r.delivery_id "
+        f"WHERE r.card_id=? AND r.state='delivered' AND {PARTS_IN_FLIGHT_SQL} LIMIT 1",
+        (card_id,)).fetchone() is not None
+
+
 def _cancel_render(db, delivery_id, now):
     """Cancel one render and unbind the intents it was carrying."""
     db.execute("UPDATE notification_renders SET state='cancelled',"

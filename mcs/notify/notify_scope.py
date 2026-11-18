@@ -178,7 +178,7 @@ RESEAT_REASONS = frozenset({
     "notice_render_live", "notice_interactive_off", "notice_digest_unset",
     "notice_superseded", "notice_render_issued", "alert_outcome_pending",
     "alert_render_live", "alert_render_issued", "signals_off_sealed",
-    "intent_cards_unsettled", "intent_cards_issued"})
+    "signals_interactive_off", "intent_cards_unsettled", "intent_cards_issued"})
 
 
 _ATTENTION_REASONS = frozenset({
@@ -275,15 +275,17 @@ def pending_breakdown(db, now: float, *, checkpoint=lambda: None) -> dict:
         "  JOIN notification_cards c ON c.card_id=ic.card_id "
         "  WHERE ic.event_id=o.event_id AND ic.state='pending' "
         "    AND c.delivery_state='delivery_unknown'),"
-        # the parts gate of the card's latest render, as _parts_in_flight
+        # the parts gate as an update's admission applies it (every delivered render of a
+        # card bound for update, _card_parts_in_flight), and as before the latest render's
         " (SELECT MAX(CASE WHEN p.state='unknown' THEN 2 ELSE 1 END) "
         "  FROM notification_intent_cards ic "
+        "  JOIN notification_cards c ON c.card_id=ic.card_id "
         "  JOIN notification_renders r ON r.card_id=ic.card_id "
         "  JOIN notification_render_parts p ON p.delivery_id=r.delivery_id "
-        "  WHERE ic.event_id=o.event_id AND ic.state='pending' "
-        "    AND r.state='delivered' AND r.render_rev=(SELECT MAX(render_rev) "
-        "      FROM notification_renders WHERE card_id=ic.card_id) "
-        "    AND " + PARTS_IN_FLIGHT_SQL + "), "
+        "  WHERE ic.event_id=o.event_id AND ic.state='pending' AND r.state='delivered' "
+        "    AND ((c.delivery_state!='revoked' AND c.message_id IS NOT NULL) "
+        "      OR r.render_rev=(SELECT MAX(render_rev) FROM notification_renders WHERE card_id=ic.card_id)) "
+        f"    AND {PARTS_IN_FLIGHT_SQL}), "
         " (SELECT json_extract(c.ui_state,'$.history_latest.phase') FROM notification_intent_cards i "
         "  JOIN notification_cards c ON c.card_id=i.card_id WHERE i.event_id=o.event_id "
         "  AND i.state='pending' AND c.kind='patient_history' AND c.delivery_state='delivered' "
