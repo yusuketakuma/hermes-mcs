@@ -10,7 +10,8 @@
     "最新CIの初回失敗でrunner基盤障害のannotationを明確に確認できる場合だけ、失敗ジョブと依存先を1回再試行します。テスト失敗・原因不明・再試行失敗はmergeを止め、ログリンク付き通知を更新します。",
     "CI失敗からのClaude自動コード修正を廃止し、所有者による手動修正依頼は維持します。merge後はGITHUB_TOKENのイベント抑制に備えてmain-syncを明示的に起動します。",
     "既存のcheck evidenceとdocs modeは変更しません。識別用run titleのない旧形式dispatch CIは、tagや手動実行を誤って取り消さないため自動取消しの対象外です。旧CIの取消しが競合やAPI障害で失敗しても、状態を再確認して警告にとどめ、新headのCI起動は続けます。",
-    "オーナーが現在の head へ `オーナー承認` ラベルを付けると、formal review の代わりに人の承認として扱います。ラベルは push で無効になり自動で外れます。"
+    "オーナーが現在の head へ `オーナー承認` ラベルを付けると、formal review の代わりに人の承認として扱います。ラベルは push で無効になり自動で外れます。",
+    "label の追加・削除では CI が再実行されなくなります。`full-ci` を付けると PR ブランチに full の CI を起動します（fork の PR は push か reopen が必要）。"
   ],
   "refs": [
     "ci/auto_merge.py",

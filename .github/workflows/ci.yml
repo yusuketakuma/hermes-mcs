@@ -6,10 +6,12 @@ on:
   # the weekly schedule or a manual dispatch — never for a plain push to main
   push:
     tags: ['v*']
-  # ready_for_review and the full-ci label start the full run of a draft;
-  # the scope job decides what each pull request run needs (ci/ci_scope.py)
+  # ready_for_review starts the full run of a draft; the scope job decides what
+  # each pull request run needs (ci/ci_scope.py). A label never starts a run here:
+  # an approval label must not rerun passing CI. agent-control.yml dispatches a
+  # full run on the PR branch when full-ci is added.
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    types: [opened, synchronize, reopened, ready_for_review]
   # weekly run on main: a runner image, Python patch or SQLite update that
   # breaks the suite surfaces without waiting for the next release
   schedule:
@@ -26,11 +28,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  # A label other than full-ci does not change what a run tests, so its run
-  # waits for the running one instead of cancelling it. It is not cut short
-  # either: a run that skipped everything would report green gates for the
-  # same head SHA and could replace a real result in the required checks.
-  cancel-in-progress: ${{ !(contains(fromJSON('["labeled", "unlabeled"]'), github.event.action) && github.event.label.name != 'full-ci') }}
+  cancel-in-progress: true
 
 jobs:
   publication-request:

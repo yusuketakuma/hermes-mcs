@@ -159,7 +159,7 @@ fork、別の base、閉じた PR、draft は対象外です。
   bot、自分の PR への承認、read-only ユーザー、所有者のコメントは承認として扱いません。
 - formal review の代わりに、オーナー（リポジトリ所有者か admin）が付けた `オーナー承認` ラベルも人の承認として扱います。作成者本人の PR にも使えます。
   ラベルを付けた時刻が現在の head の最初の CI 実行より後の場合だけ有効です。push すると無効になり、`pull_request_target` の synchronize で外します。
-  未解決の `CHANGES_REQUESTED` はラベルがあっても止めます。ラベルの追加は `ci.yml` の `labeled` イベントとして同じ head の CI を1回起動します。
+  未解決の `CHANGES_REQUESTED` はラベルがあっても止めます。ラベルの追加・削除では CI を起動しません（`ci.yml` は label イベントで動きません）。
   未解決の `CHANGES_REQUESTED` があれば止めます。古い・dismissed・不明・取得失敗の review を有効な承認として流用しません。
 - 現在の head の最新 CI run が完了して成功し、既存の6ジョブの実際の成功と `merge-gate` の成功が必要です。
   GitHub の `mergeable_state` も `clean` でなければ merge しません。branch protection を迂回したり、必須チェックを変更したりしません。

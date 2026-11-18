@@ -101,6 +101,9 @@ class GitHubAPI:
     def patch(self, path: str, body: dict):
         return self.request("PATCH", path, body)
 
+    def delete(self, path: str):
+        return self.request("DELETE", path)
+
     def graphql(self, query: str, variables: dict):
         return self.request("POST", "graphql", {"query": query, "variables": variables})
 
@@ -201,7 +204,7 @@ def human_approval(api, pr: dict, repo: str, head_sha: str) -> tuple[bool, str]:
         return False, "outstanding changes requested"
     if _formal_approval(api, pr, repo, head_sha, latest_by_user):
         return True, "current-head human approval"
-    if _owner_label_approval(api, pr, repo, head_sha):
+    if _owner_label_state(api, pr, repo, head_sha) == "valid":
         return True, "current-head owner approval label"
     return False, "no authorized current-head human approval"
 
@@ -233,16 +236,25 @@ def _parse_time(value):
     return parsed.timestamp() if parsed.tzinfo is not None else None
 
 
-def _owner_label_approval(api, pr: dict, repo: str, head_sha: str) -> bool:
-    """The owner's approval label counts only when added after the current head reached GitHub."""
+def _head_pushed_at(runs: list[dict]):
+    """When the current head reached GitHub: its latest pull_request CI run, else its first dispatched run."""
+    pushes = [run for run in runs if run.get("event") == "pull_request"]
+    times = [_parse_time(run.get("created_at")) for run in (pushes or runs)]
+    if not times or any(value is None for value in times):
+        return None
+    return max(times) if pushes else min(times)
+
+
+def _owner_label_state(api, pr: dict, repo: str, head_sha: str) -> str:
+    """absent, valid, stale (added before the current head was pushed) or invalid."""
     labels = pr.get("labels") or []
     if not any(isinstance(label, dict) and label.get("name") == OWNER_APPROVAL_LABEL for label in labels):
-        return False
+        return "absent"
     try:
         events = _api_list(api, _repo_path(repo, f"issues/{pr.get('number')}/events"))
         runs = _workflow_runs(api, repo, head_sha)
     except Exception:
-        return False
+        return "invalid"
     latest = None
     for event in events:
         if not isinstance(event, dict) or event.get("event") not in {"labeled", "unlabeled"}:
@@ -251,21 +263,33 @@ def _owner_label_approval(api, pr: dict, repo: str, head_sha: str) -> bool:
             continue
         when = _parse_time(event.get("created_at"))
         if when is None:
-            return False
+            return "invalid"
         key = (when, int(event.get("id") or 0))
         if latest is None or key >= latest[0]:
             latest = (key, event)
     if latest is None or latest[1].get("event") != "labeled":
-        return False
+        return "invalid"
+    pushed = _head_pushed_at(runs)
+    if pushed is None:
+        return "invalid"
+    if latest[0][0] <= pushed:
+        return "stale"
     actor = latest[1].get("actor") or {}
     login = actor.get("login") if isinstance(actor, dict) else None
     if (not isinstance(login, str) or not login or actor.get("type") != "User"
             or login.casefold().endswith("[bot]") or not _admin_or_owner(api, repo, login)):
+        return "invalid"
+    return "valid"
+
+
+def _clear_stale_owner_label(api, pr: dict, repo: str) -> bool:
+    if _owner_label_state(api, pr, repo, _sha(pr)) != "stale":
         return False
-    pushed = [_parse_time(run.get("created_at")) for run in runs]
-    if not pushed or any(value is None for value in pushed):
+    try:
+        api.delete(_repo_path(repo, f"issues/{pr['number']}/labels/{quote(OWNER_APPROVAL_LABEL, safe='')}"))
+    except Exception:
         return False
-    return latest[0][0] > min(pushed)
+    return True
 
 
 def _formal_approval(api, pr: dict, repo: str, head_sha: str, latest_by_user: dict) -> bool:
@@ -756,6 +780,7 @@ def run_controller(api, repo: str, default_branch: str, *, automation_enabled: b
                     or (target_head and _sha(current) != target_head)):
                 results.append({"pr": number, "action": "wait", "reason": "PR head changed"})
                 continue
+            _clear_stale_owner_label(api, current, repo)
             _, review_reason = human_approval(api, current, repo, _sha(current))
             if review_reason == "outstanding changes requested":
                 _actionable_notification(api, repo, number, _sha(current), "changes-requested",

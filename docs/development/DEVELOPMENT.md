@@ -1077,8 +1077,8 @@ draft mode は、それでも下書きのまま届いた PR（Copilot が GitHub
 **下書きの pull request にはテスト結果が付きません。** テストを流すには Ready for review にするか`full-ci` label を付けます。
 draft・docs の run の gate は、テストを実行していない成功（job summary に「tests not run」と表示）で、テストの証拠ではありません。
 準備完了・label 追加の run は少し遅れて始まるため、その間は同じ head SHA に draft の成功が見えます。merge 判断には準備完了後の run の結果を使ってください。
-`full-ci`以外の label の追加・削除で始まる run は、実行中の run を取り消さず、その終了を待ってから同じ mode で実行します
-（何もしない run は同じ SHA の必須チェックを成功で上書きし得るため、途中で打ち切りません）。
+label の追加・削除では`ci.yml`は始まりません（承認ラベルで成功済みの CI を流し直さないため）。`full-ci`を付けると`agent-control.yml`が
+PR ブランチに full の run を dispatch します。fork の PR はブランチを dispatch できないので、label を付けたあとに push か reopen が必要です。
 
 `lint-test`・`macos` gate は`ci/ci_gate.py`の表で、必要な job がすべて成功か、その mode で設計上 skip されたものだけかを判定します。
 full mode では skip を一切認めず、`scope`の失敗・不明な mode・上流の失敗による skip は失敗です。取り消された run では判定しません（`!cancelled()`）。

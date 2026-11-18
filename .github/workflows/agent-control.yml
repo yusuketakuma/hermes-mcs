@@ -41,7 +41,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
-      group: agent-control-${{ github.repository }}
+      # A CI completion owns its retry, so it gets its own group and is never displaced by a
+      # queued label/review/PR wake; those only re-evaluate and may replace one another.
+      group: agent-control-${{ github.repository }}-${{ github.event.workflow_run.id || inputs.source_run_id || 'signal' }}
       cancel-in-progress: false
     permissions:
       contents: write
@@ -56,14 +58,6 @@ jobs:
           # the default branch only: never the PR's code, never a tag or another branch named like it
           ref: refs/heads/${{ github.event.repository.default_branch }}
           persist-credentials: false
-      - name: Clear owner approval label on push
-        if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-        # The controller also ignores a label added before the head reached GitHub.
-        run: gh api -X DELETE "repos/$GH_REPO/issues/$PR/labels/%E3%82%AA%E3%83%BC%E3%83%8A%E3%83%BC%E6%89%BF%E8%AA%8D" > /dev/null 2>&1 || true
       - name: Withdraw inherited auto-merge reservations
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -106,6 +100,29 @@ jobs:
       - name: Report gate publication errors
         if: ${{ !cancelled() && steps.plan.outcome == 'failure' }}
         run: exit 1
+
+  full-ci:
+    # ci.yml ignores label events, so the full-ci label asks for a full run of the PR branch here.
+    # A fork branch cannot be dispatched: push again or reopen the PR after adding the label.
+    if: >-
+      github.event_name == 'pull_request_target' && github.event.action == 'labeled' &&
+      github.event.label.name == 'full-ci' && github.event.pull_request.state == 'open' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: full-ci-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch a full CI run on the PR branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REF: ${{ github.event.pull_request.head.ref }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh workflow run ci.yml --repo "$GH_REPO" --ref "$REF" -f pr_number="$PR"
 
   lock:
     if: github.event_name == 'issues' && startsWith(github.event.label.name, '担当:')

@@ -56,5 +56,5 @@ def test_gate_errors_are_reported_only_after_controller_reconciliation():
     assert "run: python3 ci/merge_gate.py" in plan
     assert control.index("name: Reconcile current PR heads") < control.index("name: Report gate publication errors")
     assert "steps.plan.outcome == 'failure'" in control
-    assert control.split("name: Report gate publication errors", 1)[1].split("\n  lock:", 1)[0].endswith("run: exit 1\n")
+    assert control.split("name: Report gate publication errors", 1)[1].split("\n  full-ci:", 1)[0].endswith("run: exit 1\n")
     assert "toJSON(github.event.workflow_run.pull_requests)" in plan

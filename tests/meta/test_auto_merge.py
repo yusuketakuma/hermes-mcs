@@ -9,6 +9,8 @@ from ci.agent_control import REQUIRED_JOBS
 from ci.auto_merge import (
     BOT_LOGIN,
     OWNER_APPROVAL_LABEL,
+    _clear_stale_owner_label,
+    _owner_label_state,
     GitHubAPI,
     RUNNER_INFRA_MESSAGES,
     _NoRedirect,
@@ -102,6 +104,10 @@ class StubAPI:
     def patch(self, path, body):
         self.calls.append(("PATCH", path, deepcopy(body)))
         return {}
+
+    def delete(self, path):
+        self.calls.append(("DELETE", path, None))
+        return None
 
 
 def make_pr(number=1, sha=HEAD, branch="feature/any-name", mergeable_state="clean"):
@@ -701,11 +707,45 @@ def test_owner_label_does_not_override_changes_requested():
     assert not allowed and reason == "outstanding changes requested"
 
 
-def test_owner_label_is_cleared_on_push_and_label_events_never_retry():
+def test_owner_label_for_an_earlier_push_of_the_same_head_is_stale():
+    api = StubAPI()
+    pr = _label_fixture(api)
+    api.list_data[_repo_path(REPO, f"actions/workflows/ci.yml/runs?head_sha={HEAD}")] = [
+        {"id": 5, "head_sha": HEAD, "event": "pull_request", "created_at": "2026-11-18T12:00:00Z"},
+        {"id": 6, "head_sha": HEAD, "event": "pull_request", "created_at": "2026-11-18T13:30:00Z"},
+    ]
+    assert _owner_label_state(api, pr, REPO, HEAD) == "stale"
+    assert not human_approval(api, pr, REPO, HEAD)[0]
+
+
+def test_main_sync_head_uses_its_first_dispatched_run_as_push_time():
+    api = StubAPI()
+    pr = _label_fixture(api)
+    api.list_data[_repo_path(REPO, f"actions/workflows/ci.yml/runs?head_sha={HEAD}")] = [
+        {"id": 5, "head_sha": HEAD, "event": "workflow_dispatch", "created_at": "2026-11-18T12:00:00Z"},
+        {"id": 6, "head_sha": HEAD, "event": "workflow_dispatch", "created_at": "2026-11-18T13:30:00Z"},
+    ]
+    assert _owner_label_state(api, pr, REPO, HEAD) == "valid"
+
+
+@pytest.mark.parametrize("labeled_at, removed", [
+    ("2026-11-18T11:00:00Z", True),
+    ("2026-11-18T13:00:00Z", False),
+])
+def test_controller_removes_only_a_label_older_than_the_current_head(labeled_at, removed):
+    api = StubAPI()
+    pr = _label_fixture(api, labeled_at=labeled_at)
+    assert _clear_stale_owner_label(api, pr, REPO) is removed
+    deletes = [call for call in api.calls if call[0] == "DELETE"]
+    assert bool(deletes) is removed
+
+
+def test_label_events_never_retry_and_ci_completions_are_not_displaced():
     from pathlib import Path
     text = (Path(__file__).resolve().parents[2] / ".github/workflows/agent-control.yml").read_text()
     assert "converted_to_draft, labeled, unlabeled]" in text
-    clear = text.split("- name: Clear owner approval label on push", 1)[1].split("- name:", 1)[0]
-    assert "github.event.action == 'synchronize'" in clear and "-X DELETE" in clear
+    assert "Clear owner approval label" not in text
+    assert ("group: agent-control-${{ github.repository }}-${{ github.event.workflow_run.id"
+            " || inputs.source_run_id || 'signal' }}") in text
     retry = next(line for line in text.splitlines() if "ALLOW_INFRA_RETRY:" in line)
     assert "pull_request_target" not in retry
