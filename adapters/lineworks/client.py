@@ -25,6 +25,8 @@ UPLOAD_HOSTS = frozenset({"apis-storage.worksmobile.com", "storage.worksmobile.c
 MAX_RESPONSE_BYTES = 262144
 MAX_MESSAGE_BODY_BYTES = 262144
 MAX_REQUEST_BYTES = 25 * 1024 * 1024
+UPLOAD_MIN_BYTES_PER_S = 128 * 1024  # ~1 Mbps: the slowest uplink a 24 MiB upload must survive
+REQUEST_TIMEOUT_MAX = 330  # cap; the 20 s default base + 25 MiB at the minimum rate is ~220 s
 
 
 class ClientError(RuntimeError):
@@ -282,7 +284,7 @@ def _http_worker():
         timeout = data["timeout"]
         if (not _allowed_url(url) or data["method"] != "POST"
                 or isinstance(timeout, bool) or not isinstance(timeout, int | float)
-                or not math.isfinite(timeout) or not 0 < timeout <= 120):
+                or not math.isfinite(timeout) or not 0 < timeout <= REQUEST_TIMEOUT_MAX):
             raise ValueError
         body = base64.b64decode(data["body"], validate=True)
         if len(body) > MAX_REQUEST_BYTES:
@@ -376,7 +378,9 @@ class LineWorksClient:
             with self._wire_lock:
                 if self.monotonic() < self._not_before:
                     raise ClientError("rate_limited", 429)
-                status, response_headers, raw = self.transport("POST", url, headers, body, self.timeout)
+                # Upload bodies get time in proportion to their size; small JSON keeps the base.
+                timeout = min(self.timeout + len(body) // UPLOAD_MIN_BYTES_PER_S, REQUEST_TIMEOUT_MAX)
+                status, response_headers, raw = self.transport("POST", url, headers, body, timeout)
                 if status == 429:
                     try:
                         reset = float(next(value for key, value in response_headers.items()
@@ -428,23 +432,23 @@ class LineWorksClient:
             try:
                 _, raw = self._request(AUTH_URL, body, "application/x-www-form-urlencoded")
                 response = _json(raw)
+                token = response.get("access_token")
+                lifetime = response.get("expires_in")
+                if isinstance(lifetime, str) and len(lifetime) <= 5 \
+                        and lifetime.isascii() and lifetime.isdigit():
+                    lifetime = int(lifetime)
+                token_type = response.get("token_type")
+                if (not valid_protocol_text(token, 8192) or not isinstance(token_type, str)
+                        or token_type.casefold() != "bearer"
+                        or isinstance(lifetime, bool) or not isinstance(lifetime, int)
+                        or not 60 <= lifetime <= 86400):
+                    raise ClientError("response_invalid")
             except ClientError as exc:
                 # Only the token endpoint was contacted: no message or file
                 # request has been made, so the caller's post provably
                 # never began (see delivery.failure).
                 exc.pre_send = True
                 raise
-            token = response.get("access_token")
-            lifetime = response.get("expires_in")
-            if isinstance(lifetime, str) and len(lifetime) <= 5 \
-                    and lifetime.isascii() and lifetime.isdigit():
-                lifetime = int(lifetime)
-            token_type = response.get("token_type")
-            if (not valid_protocol_text(token, 8192) or not isinstance(token_type, str)
-                    or token_type.casefold() != "bearer"
-                    or isinstance(lifetime, bool) or not isinstance(lifetime, int)
-                    or not 60 <= lifetime <= 86400):
-                raise ClientError("response_invalid")
             self._token = token
             self._expires = started + lifetime - 30
             self._expires_wall = started_wall + lifetime - 30
@@ -478,6 +482,16 @@ class LineWorksClient:
         if (not isinstance(data, bytes) or len(data) > self.max_upload_bytes
                 or not valid_filename(filename)):
             raise ClientError("validation_invalid")
+        try:
+            return self._upload(data, filename)
+        except ClientError as exc:
+            # Neither the attachment slot nor the storage upload posts to the room:
+            # the file message (send_message) has provably not begun.
+            if getattr(exc, "pre_send", False) is not True:
+                exc.pre_send, exc.stage = True, "upload"
+            raise
+
+    def _upload(self, data, filename):
         token = self._access_token()
         url = f"{API_BASE}/bots/{self.credentials.bot_id}/attachments"
         _, raw = self._request(url, json.dumps({"fileName": filename}).encode("utf-8"),

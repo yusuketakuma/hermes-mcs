@@ -55,7 +55,11 @@ def api_lock(root):
                 until = json.load(stream)["until"]
             if not isinstance(until, int | float) or isinstance(until, bool) or not math.isfinite(until):
                 raise ValueError
-            if until > time.time():
+            if until > time.time() + 60:
+                # The only writer stamps now + 60: a later deadline is a stale
+                # wall-clock step and would otherwise block every send.
+                os.unlink(cooldown)
+            elif until > time.time():
                 exc = ClientError("rate_limited", 429)
                 exc.until = until  # local preflight: nothing went on the wire
                 raise exc
@@ -77,34 +81,58 @@ def api_lock(root):
 
 SENDER_BUSY_TRIES, SENDER_BUSY_WAIT = 10, 0.5
 COOLDOWN_TRIES = 5  # each wait is at most the 60 s official reset
+# A part outwaits the text CLI's whole hold (up to 10 sized uploads); the bound
+# keeps a wedged lock holder from stalling delivery without an outcome.
+PART_BUSY_LIMIT = 1800
 
 
-async def locked(fn, *args, wait_cooldown=False, retry_allowed=None):
-    """Run a lock-taking Sender call, waiting out a brief api.lock hold.
+async def _wait(seconds, retry_allowed):
+    """Sleep in 1 s slices, rechecking authority so a stop ends the wait promptly."""
+    while True:
+        step = min(seconds, 1.0)
+        await asyncio.sleep(step)
+        seconds -= step
+        if retry_allowed is not None and not await retry_allowed():
+            return False
+        if seconds <= 0:
+            return True
+
+
+async def locked(fn, *args, wait_cooldown=False, retry_allowed=None,
+                 busy_tries=SENDER_BUSY_TRIES, cooldown_tries=COOLDOWN_TRIES):
+    """Run a lock-taking Sender call, waiting out an api.lock hold.
 
     sender_busy is a local preflight (nothing sent), so retrying cannot duplicate;
     a journaled part result is terminal, so failing at once would drop the part.
     With wait_cooldown (parts), a 429 — the shared cooldown preflight or a wire
     rejection, both proving nothing committed — is waited out and retried too.
-    A worker borrows its current authority for each retry; losing it preserves
-    the original rejection, never turns a known not_sent into unknown."""
+    busy_tries=None (parts) waits sender_busy out up to PART_BUSY_LIMIT seconds
+    instead of a number of tries.
+    A worker borrows its current authority for each retry; losing it (stop,
+    route, withdrawn spec) preserves the original rejection, never turns a
+    known not_sent into unknown."""
     busy = cooled = 0
+    busy_since = None
     while True:
         try:
             return await asyncio.to_thread(fn, *args)
         except ClientError as exc:
             until = getattr(exc, "until", None)
-            if wait_cooldown and until is not None and cooled < COOLDOWN_TRIES - 1:
+            if wait_cooldown and until is not None and cooled < cooldown_tries - 1:
                 cooled += 1
-                await asyncio.sleep(min(max(until - time.time(), 0), 60) + 0.05)
-                if retry_allowed is not None and not await retry_allowed():
+                if not await _wait(min(max(until - time.time(), 0), 60) + 0.05, retry_allowed):
                     raise
                 continue
             busy += 1
-            if exc.error_code != "sender_busy" or busy == SENDER_BUSY_TRIES:
+            if exc.error_code != "sender_busy":
                 raise
-            await asyncio.sleep(SENDER_BUSY_WAIT)
-            if retry_allowed is not None and not await retry_allowed():
+            if busy_tries is None:
+                busy_since = time.monotonic() if busy_since is None else busy_since
+                if time.monotonic() - busy_since >= PART_BUSY_LIMIT:
+                    raise
+            elif busy == busy_tries:
+                raise
+            if not await _wait(SENDER_BUSY_WAIT, retry_allowed):
                 raise
 
 
@@ -115,11 +143,12 @@ def failure(exc):
                  "private_key_permissions", "signature_failed", "upload_url_invalid",
                  "rate_state_invalid", "scope_mismatch"}
         rejected = isinstance(exc.status, int) and 400 <= exc.status < 500
-        # pre_send: the access-token request failed before any post was made.
+        # pre_send: the token or upload stage failed before any room post was made.
         pre_send = getattr(exc, "pre_send", False) is True
         code = exc.error_code
         # A token endpoint 5xx is an outage, not a verdict: keep it transient.
-        if pre_send and isinstance(exc.status, int) and exc.status >= 500:
+        if pre_send and getattr(exc, "stage", "token") == "token" \
+                and isinstance(exc.status, int) and exc.status >= 500:
             code = "lineworks_token_unavailable"
         return {"result": "not_sent" if rejected or pre_send or exc.error_code in local
                 else "unknown",
@@ -271,7 +300,8 @@ class DeliveryWorker(BaseWorker):
                     return {"result": "not_sent", "error_code": "body_part_missing"}
                 text = chunk_text(spec, part.get("name") or "", chunks[index])
                 await locked(self._sender.send, {"type": "text", "text": text},
-                             wait_cooldown=True, retry_allowed=self._retry_gate(spec))
+                             wait_cooldown=True, busy_tries=None,
+                             retry_allowed=self._retry_gate(spec))
                 rid = _part_remote_id(spec, part)
             elif part["kind"] == "attachment_part":
                 if part.get("unavailable"):
@@ -281,7 +311,8 @@ class DeliveryWorker(BaseWorker):
                         # Its 取得失敗 line is already in the room — never repeat it.
                         return {"result": "delivered", "remote_id": part["prior_remote_id"]}
                     await locked(self._sender.send, {"type": "text", "text": part["caption"]},
-                                 wait_cooldown=True, retry_allowed=self._retry_gate(spec))
+                                 wait_cooldown=True, busy_tries=None,
+                                 retry_allowed=self._retry_gate(spec))
                     return {"result": "delivered", "remote_id": _part_remote_id(spec, part)}
                 if part.get("prior_remote_id"):
                     return {"result": "delivered", "remote_id": part["prior_remote_id"]}
@@ -290,7 +321,8 @@ class DeliveryWorker(BaseWorker):
                 if blob is None:
                     return {"result": "not_sent", "error_code": "attachment_mismatch"}
                 rid = await locked(self._sender.attachment, blob, part.get("name") or "file",
-                                   wait_cooldown=True, retry_allowed=self._retry_gate(spec))
+                                   wait_cooldown=True, busy_tries=None,
+                                   retry_allowed=self._retry_gate(spec))
             else:
                 return {"result": "not_sent", "error_code": "unsupported_part"}
         except Exception as exc:
