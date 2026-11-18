@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "意味チェック停止の警報に、通知対象と再処理の件数・実行ロック待ちの割合を表示",
+  "summary": "「意味チェックが6時間以上止まっています」の警報に、待ち行列のうち通知対象の件数と再処理だけの件数、直近24時間の背景処理のうち実行ロックが空かずに見送った回数と割合を書き添えます。通知が必要な分が実際にどれだけ待っているかと、止まっている原因の手がかりを警報だけで見分けられます。警報を出す条件・通知の重複抑止・既読化・収集は変わりません。",
+  "upgrade": "追加操作は不要です。件数は収集が新しいコードで動いた時点から、ロック待ちの割合は抽出の常駐処理（extract-drainer）が新しいコードで起動して記録が貯まってから表示されます。記録がない・読めない値は表示しません。",
+  "details": [
+    "health.json の semantic_jobs に user_facing_pending（通知対象の未処理件数）・reprocess_pending（再処理だけの未処理件数）・resident_turns_24h（直近24時間の背景処理の回数とロック待ちの回数）を追加しました。読取りは既存の時間上限つきの健康観測の中で行い、上限に達した場合は値を null にします。",
+    "抽出の常駐処理は意味チェックの順番が来るたびに、実行ロックが空いていたかどうかと時刻だけを ledger と同じ場所の semantic_turns.json に記録します。24時間より古い記録と2000件を超える分は捨てます。患者・投稿の内容は記録しません。",
+    "停止の判定（semantic_backlog_stalled）にはこれらの値を使いません。"
+  ],
+  "refs": ["mcs/ingest/health_report.py", "mcs/ingest/health_watch.py", "mcs/llm/admission/llm_availability.py", "mcs/extract/llm/extract_llm_resident.py", "tests/ingest/test_health_observation_budget.py"]
+}

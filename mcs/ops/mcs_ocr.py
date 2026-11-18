@@ -26,6 +26,7 @@ DATA = str(Path(DB).parent)
 
 DRAIN_BUDGET_S = 900
 LOCAL_CALL_S = 300
+START_WAIT_S = 5
 _RAW_COUNTS = frozenset({'complete', 'empty', 'failed', 'unsupported', 'deferred'})
 STATUS_LIMIT = 4096
 
@@ -192,7 +193,7 @@ def run(cfg=None, *, retry_errors=False):
         work_deadline = snapshots.snapshot_work_deadline(deadline, DB)
         fd = acquire_run_lock(os.path.join(DATA, 'run.lock'))
         if fd is None:
-            remaining = work_deadline - time.monotonic() - 5
+            remaining = min(work_deadline - time.monotonic() - 5, START_WAIT_S)
             fd = (writer_lock.wait_run_lock(os.path.join(DATA, 'run.lock'), wait_s=remaining,
                   expected_code_stamp=generation[1],
                   marker_path=os.path.join(DATA, writer_lock.UPDATE_MARKER_NAME)) if remaining > 0 else None)

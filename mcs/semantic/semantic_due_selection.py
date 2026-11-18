@@ -216,6 +216,12 @@ _ARCHIVED_JOB = ("EXISTS (SELECT 1 FROM patients p "
 
 
 _ELIGIBLE_SQL = "json_valid(payload) AND COALESCE(json_extract(payload,'$.eligible'),0)=1"
+# 0 for a notifiable arrival (eligible, not notification_free), else 1; CASE
+# order keeps json_extract away from malformed payloads.
+_ARRIVAL_FIRST_SQL = ("CASE WHEN NOT json_valid(payload) THEN 1 "
+                      "WHEN COALESCE(json_extract(payload,'$.eligible'),0)=1 "
+                      "AND COALESCE(json_extract(payload,'$.notification_free'),0)=0 "
+                      "THEN 0 ELSE 1 END")
 
 
 _MALFORMED_JOB_SQL = (
