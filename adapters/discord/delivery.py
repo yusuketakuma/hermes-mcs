@@ -405,18 +405,6 @@ class DeliveryWorker(worker.DeliveryWorker):
         by_id = {p["part_id"]: p for p in manifest}
         return [by_id[m] for m in group.get("members") or () if m in by_id]
 
-    @staticmethod
-    def _wire_names(name) -> set:
-        """Filenames a member's attachment may carry remotely — the
-        sealed name plus the SPOILER_ normalization discord.py applies."""
-        name = str(name or "")
-        uploaded = name
-        while uploaded.startswith("SPOILER_"):
-            uploaded = uploaded[8:]
-        if uploaded != name or cards.spoiler_attachment(name):
-            uploaded = "SPOILER_" + uploaded
-        return {name, uploaded}
-
     async def _member_files(self, members: list) -> list | None:
         """discord.File per member, bytes re-verified against the sealed
         sha256/bytes — None when any blob fails verification."""
