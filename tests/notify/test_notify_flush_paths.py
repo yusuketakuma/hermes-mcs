@@ -81,7 +81,8 @@ def test_missing_notification_channel_stays_retryable(monkeypatch, flush_ledger)
 
         def outbox_due(self, limit, **kwargs):
             return [{"event_id": 1, "kind": "new_messages", "project_id": 1,
-                     "payload": "{}", "attempts": 0, "progress": None}]
+                     "payload": "{}", "attempts": 0, "progress": None,
+                     "route": "text"}]
 
         def is_archived(self, project_id):
             return False
