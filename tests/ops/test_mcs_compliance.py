@@ -45,6 +45,31 @@ def test_review_never_sums_overflow_counts_of_repeated_reads():
     assert row["patients"] == 201 and row["patients_at_least"] and row["flags"] == []
 
 
+def test_request_project_can_be_an_omitted_patient(tmp_path):
+    import access_log
+    entry = access_log.record(str(tmp_path), via="slack", actor="synthetic", op="read",
+                              patients=range(1, 202), project_id=201, now=1790000000)
+    assert len(entry["patients"]) == 200 and entry["patients_more"] == 1
+    row, = mcs_compliance.review([entry], max_patients=201)
+    assert row["patients"] == 201 and row["patients_at_least"]
+    assert "many_patients" not in row["flags"]
+
+
+def test_patient_lower_bound_never_exceeds_synthetic_actual_union(tmp_path):
+    import access_log
+    for request_id in (None, 1, 201, 250):
+        entries = [access_log.record(str(tmp_path), via="slack", actor="synthetic", op="read",
+                   patients=range(1, 202), project_id=request_id, now=1790000000)] * 3
+        entries.append({"via": "slack", "actor": "synthetic", "patients": [201, 202],
+                        "project_id": None, "outcome": "ok"})
+        row, = mcs_compliance.review(entries, max_patients=202)
+        actual = set(range(1, 203)) | ({request_id} if request_id is not None else set())
+        known = set(range(1, 201)) | {201, 202} | ({request_id} if request_id is not None else set())
+        assert len(known) <= row["patients"] <= len(actual)
+        assert row["patients_at_least"]
+        assert ("many_patients" in row["flags"]) == (len(known) > 202)
+
+
 # --- receipted facility review (ops.external_transfer_acknowledge) -----------------------------
 
 
