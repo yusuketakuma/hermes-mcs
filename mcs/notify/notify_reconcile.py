@@ -144,10 +144,31 @@ def _apply_hold(db, aid, delivery_id, reason, dirs, now,
                  json.dumps(events), reason,
                  json.dumps(scope, sort_keys=True), now))
         cards.mark_snapshot_dirty(db)
-    return {"attempt_id": aid, "delivery_id": delivery_id,
-            "verdict": "held", "detail": reason, "card_id": card_id,
-            "scope": scope, "events_held": len(events),
-            "spec_linked": bool(events)}
+    verdict = {"attempt_id": aid, "delivery_id": delivery_id,
+               "verdict": "held", "detail": reason, "card_id": card_id,
+               "scope": scope, "events_held": len(events),
+               "spec_linked": bool(events)}
+    # The worker never reads the DB: its spec file is the only claim and
+    # resume handle, and part sends re-check it immediately before every
+    # wire call. A held delivery must not reach those sends, so withdraw
+    # the published spec now that the hold row is durable. recover skips
+    # unreleased holds, so the file stays gone until an operator resolves.
+    transport = render["transport"] if render is not None else None
+    if transport is None and isinstance(spec, dict):
+        delivery = spec.get("delivery")
+        transport = delivery.get("transport") \
+            if isinstance(delivery, dict) else None
+    if delivery_id is not None \
+            and transport in notify_scope.SUPPORTED_TRANSPORTS:
+        try:
+            os.unlink(os.path.join(
+                dirs[transport + "_render"], str(delivery_id) + ".json"))
+            verdict["spec_withdrawn"] = True
+        except FileNotFoundError:
+            verdict["spec_withdrawn"] = True
+        except OSError:
+            verdict["spec_withdrawn"] = False
+    return verdict
 
 
 def _republish_receipt(ledger, db, cfg, aid, delivery_id, info,
@@ -722,6 +743,10 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
                 continue
         text_held.append({"event_id": ev["event_id"], "kind": ev["kind"],
                           "reason": "restore_text_unverified"})
+    # a spec withdrawal that failed leaves the held delivery claimable —
+    # keep the restore marker so the next run retries the unlink
+    journal_incomplete = journal_incomplete or any(
+        v.get("spec_withdrawn") is False for v in verdicts)
     counts = {}
     for v in verdicts:
         counts[v["verdict"]] = counts.get(v["verdict"], 0) + 1
