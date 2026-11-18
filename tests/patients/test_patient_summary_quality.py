@@ -463,11 +463,13 @@ def test_cloud_stop_defers_quality_step_and_resume_reevaluates(quality_owner, mo
     led, clock, cfg, doc, sends, _ = quality_owner
     monkeypatch.setattr(cloud_policy, 'stopped', lambda *_: True)
     status, _ = patient_context_quality_controller._quality_step(
-        led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
+        led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True,
+        cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
     assert status == 'deferred' and not sends
     monkeypatch.setattr(cloud_policy, 'stopped', lambda *_: False)
     status, identity = patient_context_quality_controller._quality_step(
-        led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
+        led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True,
+        cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
     assert status == 'pending' and len(sends) == 1
 
 
@@ -517,7 +519,7 @@ def test_requested_cloud_with_missing_key_falls_back_to_local(runtime, monkeypat
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: None)
     result = refresh.run_due(led, cfg, deadline=runtime[1].mono + 600, admit=lambda: True)
     assert result['status'] == 'progressed' and local_calls
-    assert patient_context_refresh_state._route(cfg, 1)['provider'] == cloud_inference.cloud_provider_contract()
+    assert patient_context_refresh_state._route(cfg, 1)['provider'] == cloud_inference.cloud_provider_contract(cfg, route='patient_context', purpose='patient_context')
     for _ in range(60):
         result = step(runtime, cfg=cfg)
         if result['status'] == 'complete':
@@ -789,7 +791,7 @@ def test_exact_repair_prompt_over_cost_cap_does_not_spend_repair(repair, monkeyp
         return 'daily_cost_cap'
     monkeypatch.setattr(worker.cloud_policy, 'budget_block_reason', unavailable)
     assert run() == ('deferred', None) and not sent and not led.artifacts(patient_context_refresh_state.QUALITY_REPAIR)
-    assert seen and seen[0]['max_tokens'] == 1600 and seen[0]['input_bound'] > 0
+    assert seen and seen[0]['max_tokens'] == seen[0]['selection']['max_tokens'] and seen[0]['input_bound'] > 0
 
 
 def test_unknown_after_send_spends_repair_and_does_not_retry(repair):
