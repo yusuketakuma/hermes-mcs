@@ -416,6 +416,22 @@ def test_non_field_errors_never_publish(db, errors):
     assert shadow["last_error"] == ",".join(errors)
 
 
+def test_field_only_publish_keeps_actor_fetch_eligible(db):
+    save(db, message(reactions=[]))
+    refreshed = message(reactions=reactions(good=1))
+    refreshed.metadata_errors = ["mentions_invalid"]
+    db.save_metadata_shadow(refreshed, publish=True)
+    # capture and shadow both carry the partial error: the post is still
+    # picked for an actor walk instead of silently dropping out.
+    assert [r["message_id"] for r in stamp_read.reaction_actor_targets(db.db)] == [1]
+    db.save_reaction_actors(1, ok(5)["actors"], True)
+    newer = message(reactions=reactions(good=2))
+    newer.metadata_errors = ["is_pinned_invalid"]
+    db.save_metadata_shadow(newer, publish=True)
+    # the partial-error publish still counts as a reactions change.
+    assert reaction_actor_summary(db.db, 1)["state"] == "stale"
+
+
 def test_publish_stage_counts_field_only_errors(db):
     save(db, message(reactions=[]))
 

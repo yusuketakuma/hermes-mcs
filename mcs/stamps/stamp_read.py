@@ -5,7 +5,7 @@ import sqlite3
 import time
 from contextlib import suppress
 
-from message_observations import METADATA_SHADOW_BACKOFF_S
+from message_observations import METADATA_SHADOW_BACKOFF_S, field_only_metadata_errors_sql
 
 REACTION_ACTORS_TTL_S = 24 * 3600
 
@@ -29,7 +29,8 @@ def reaction_actor_targets(db, limit=4, *, now=None):
           ) w ON w.message_id=m.message_id
           JOIN message_metadata md ON md.message_id=m.message_id AND md.source=(
             SELECT source FROM message_metadata latest
-            WHERE latest.message_id=m.message_id AND latest.last_error IS NULL
+            WHERE latest.message_id=m.message_id
+              AND """ + field_only_metadata_errors_sql("latest.last_error") + """
               AND json_valid(latest.content)
               AND json_type(latest.content,'$.reactions.value')='array'
             ORDER BY latest.checked_at DESC,latest.source='capture' DESC LIMIT 1)
@@ -87,7 +88,8 @@ def reaction_actor_summary(db, message_id, *, now=None) -> dict:
                 out["self_included"] = False
             seen = db.execute(
                 "SELECT json_extract(content,'$.reactions.observed_at') FROM message_metadata "
-                "WHERE message_id=? AND last_error IS NULL AND json_valid(content) "
+                "WHERE message_id=? AND " + field_only_metadata_errors_sql() +
+                " AND json_valid(content) "
                 "AND json_type(content,'$.reactions.value')='array' "
                 "ORDER BY checked_at DESC,source='capture' DESC LIMIT 1",
                 (message_id,)).fetchone()

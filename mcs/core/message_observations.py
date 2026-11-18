@@ -126,6 +126,14 @@ def publishable_metadata_errors(errors) -> bool:
     return all(e in _FIELD_ONLY_ERRORS for e in errors)
 
 
+def field_only_metadata_errors_sql(column="last_error") -> str:
+    """格納 last_error がフィールド単位の不正だけを含むSQL条件を返す。"""
+    allowed = ", ".join(f"'{e}'" for e in sorted(_FIELD_ONLY_ERRORS))
+    return (f"({column} IS NULL OR NOT EXISTS(SELECT 1 FROM json_each("
+            f"'[\"'||replace({column},',','\",\"')||'\"]') tok "
+            f"WHERE tok.value NOT IN ({allowed})))")
+
+
 ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 
