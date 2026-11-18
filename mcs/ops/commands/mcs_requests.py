@@ -230,33 +230,11 @@ def apply_local_operation(req):
     (5 s bounded wait), refuse during an update or restore hold, then the
     receipt-first transaction. Returns the receipt, or None when the writer
     stayed busy."""
-    from contextlib import closing
-    from ledger import Ledger
-    import notify_spool
-    from writer_lock import acquire_run_lock, wait_run_lock, code_stamp
+    import locked_command
     error = validate(req)
     if error:
         raise ValueError(error)
-    expected_code = code_stamp()
-    path = Path(mcs_util.HOME) / "data" / "ledger.db"
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("ledger_unavailable")
-    lock_fd = acquire_run_lock(str(path.parent / "run.lock"))
-    if lock_fd is None:
-        lock_fd = wait_run_lock(str(path.parent / "run.lock"), wait_s=5.0,
-                                expected_code_stamp=expected_code,
-                                marker_path=str(path.parent / "update_in_progress.marker"))
-    if lock_fd is None:
-        return None
-    try:
-        if (path.parent / "update_in_progress.marker").exists() or code_stamp() != expected_code:
-            raise ValueError("update_in_progress")
-        if notify_spool.restore_writer_hold(str(path.parent)) is not None:
-            raise ValueError("restore_in_progress")
-        with closing(Ledger(str(path))) as ledger:
-            return apply_command(ledger, req)
-    finally:
-        os.close(lock_fd)
+    return locked_command.apply_locked(req)
 
 
 def apply_command(ledger, req, *, cfg=None, data_dir=None):
