@@ -5,6 +5,7 @@ import pytest
 
 import local_llm
 import llm_slot_schedule
+from test_local_llm import _lock_is_free
 
 
 @pytest.mark.parametrize("scheduled", [False, True])
@@ -88,7 +89,7 @@ def _transport_failure(tmp_path, monkeypatch, *, scheduled, extra):
     monkeypatch.setenv(local_llm.TURN_LOCK_ENV, str(tmp_path / "turn.lock"))
     monkeypatch.delenv(local_llm.SCHEDULE_ENV, raising=False)
     if scheduled:
-        monkeypatch.setenv(local_llm.SCHEDULE_ENV, str(tmp_path / "sched"))
+        monkeypatch.setenv(local_llm.SCHEDULE_ENV, str(tmp_path))
         monkeypatch.setenv(local_llm.WORK_CLASS_ENV, "BACKLOG")
     posts, gets = [], []
 
@@ -122,6 +123,35 @@ def test_pinned_or_scheduled_request_still_waits_for_idle(tmp_path, monkeypatch,
     assert len(posts) == 1 and type(posts[0]) is int and gets
     if not scheduled:
         assert posts == [expected]
+
+
+def test_env_pinned_request_waits_for_the_same_slot_idle(tmp_path, monkeypatch):
+    # MCS_LLM_SLOT is an explicit choice like a payload pin: the wire slot
+    # is confirmed idle while the turn lock is still held
+    monkeypatch.setenv("MCS_LLM_SLOT", "1")
+    monkeypatch.setattr(local_llm, "SLOT_COUNT", 3)
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_POLL_S", 0.01)
+    monkeypatch.setattr(local_llm, "SLOT_WAIT_MAX_S", 0.05)
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, str(tmp_path / "turn.lock"))
+    monkeypatch.delenv(local_llm.SCHEDULE_ENV, raising=False)
+    lock = tmp_path / "turn.lock"
+    posts, gets, locked = [], [], []
+
+    def request(endpoint, method, body, timeout, deadline):
+        if method == "POST":
+            posts.append(body["id_slot"])
+            raise TimeoutError("synthetic transport timeout")
+        gets.append(method)
+        locked.append(_lock_is_free(str(lock)))
+        # the pinned slot stays busy for one sample, then reports idle twice
+        busy = len(gets) == 1
+        return 200, {}, json.dumps([{"id": s, "is_processing": busy and s == 1}
+                                    for s in range(3)]).encode()
+
+    err = {}
+    assert local_llm.chat("synthetic", request_fn=request, error_out=err) is None
+    assert posts == [1] and len(gets) == 3 and locked == [False] * 3
+    assert err["kind"] == "transport" and err["slot_wait_confirmed"] == 1
 
 
 def test_busy_turn_returns_before_any_send(monkeypatch):
