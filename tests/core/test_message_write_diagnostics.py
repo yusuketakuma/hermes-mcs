@@ -60,13 +60,21 @@ def test_unknown_diagnostic_is_not_serialized(value):
 
 
 @pytest.mark.parametrize('helper_fails', [False, True])
-@pytest.mark.parametrize('snapshot', [False, True])
-def test_same_exception_no_additional_sql_or_transaction_operation(monkeypatch, helper_fails, snapshot):
+@pytest.mark.parametrize('entry', ['upsert', 'snapshot', 'patient', 'messages', 'replies'])
+def test_same_exception_no_additional_sql_or_transaction_operation(monkeypatch, helper_fails, entry):
     exc = sqlite3.OperationalError(SYNTHETIC_SECRET)
     calls = []
 
     class Connection:
         in_transaction = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, _exc_val, _exc_tb):
+            if exc_type is not None:
+                self.in_transaction = False
+            return False
 
         def execute(self, sql):
             calls.append(sql)
@@ -79,13 +87,19 @@ def test_same_exception_no_additional_sql_or_transaction_operation(monkeypatch, 
             raise RuntimeError(SYNTHETIC_SECRET)
         monkeypatch.setattr(ledger_capture, 'message_write_failure_diagnostic', broken)
     with pytest.raises(sqlite3.OperationalError) as caught:
-        if snapshot:
+        if entry == 'snapshot':
             store._semantic_generation_snapshot([message()])
-        else:
+        elif entry == 'upsert':
             store._upsert_message(message())
+        elif entry == 'patient':
+            store.save_patient(SimpleNamespace(project_id=1, messages=[message()]), semantic=False)
+        elif entry == 'messages':
+            store.save_messages([message()], project_id=1, semantic=False)
+        else:
+            store.save_thread_replies([message()], project_id=1, semantic=False)
     assert caught.value is exc
     assert calls == ['UPDATE messages SET message_id=message_id WHERE 0']
-    assert store.db.in_transaction
+    assert store.db.in_transaction is (entry in ('upsert', 'snapshot'))
     if not helper_fails:
         assert diagnostic(exc)['transaction_open_before'] is True
     else:

@@ -50,8 +50,34 @@ def bump_semantic_job_state_epoch_tx(db):
 class LedgerSemanticSourcesMixin:
     """Maintain derivation input witnesses and jobs using the caller's existing connection."""
 
+    def _message_thread_roots(self, project_id: int, message_id: int,
+                              *roots: int | None) -> set[int]:
+        """Include the message itself when stored direct replies still treat it as root."""
+        affected = {root for root in roots if root is not None}
+        if message_id not in affected and self.db.execute(
+                "SELECT 1 FROM messages WHERE project_id=? AND parent_id=? LIMIT 1",
+                (project_id, message_id)).fetchone() is not None:
+            affected.add(message_id)
+        return affected
+
+    def _begin_semantic_generation_snapshot(self, messages, *,
+                                            semantic: bool) -> dict:
+        """Reserve the writer before checking tracking state in the intake transaction."""
+        if not isinstance(messages, (list, tuple)):
+            messages = list(messages)
+        if not messages:
+            return {}
+        self._reserve_message_writer()
+        if not (semantic or self._needs_semantic_source_tracking()):
+            return {}
+        return self._semantic_generation_snapshot(messages)
+
     def _semantic_generation_snapshot(self, messages) -> dict:
         """Capture touched rows and their thread generation before a batch."""
+        if not isinstance(messages, (list, tuple)):
+            messages = list(messages)
+        if not messages:
+            return {}
         # Reserve the writer before reading either membership or generation.
         # The enclosing intake transaction owns rollback and commit.
         self._reserve_message_writer()
@@ -72,9 +98,9 @@ class LedgerSemanticSourcesMixin:
                 # The writer retains a stored parent when the capture omits it.
                 new_root = old_root if parent_id is None else parent_id
                 roots = keys.setdefault((project_id, message_id), set())
-                roots.add(new_root)
-                if stored is not None:
-                    roots.add(old_root)
+                roots.update(self._message_thread_roots(
+                    project_id, message_id, new_root,
+                    old_root if stored is not None else None))
         snapshot = {}
         generations = {}
         for (project_id, message_id), roots in keys.items():

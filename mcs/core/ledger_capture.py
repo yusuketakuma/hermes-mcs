@@ -197,8 +197,8 @@ class LedgerCaptureMixin:
         new_ids = []
         invalidated_roots = set()
         with self._intake_transaction():  # commit on success, rollback on exception
-            before_semantic = (self._semantic_generation_snapshot(p.messages)
-                               if semantic or self._needs_semantic_source_tracking() else {})
+            before_semantic = self._begin_semantic_generation_snapshot(
+                p.messages, semantic=semantic)
             self.db.execute('UPDATE patients SET project_id=project_id WHERE 0')
             previous = self.db.execute("SELECT fetch_reason,project_type,karte_id,is_archived,fetch_state,patient_name FROM patients WHERE project_id=?", (p.project_id,)).fetchone()
             first = previous is None
@@ -432,6 +432,8 @@ class LedgerCaptureMixin:
         paths find it present and never announce it. Only those rows
         notify, as 'history' under the same age gate; older new rows in
         the same batch (replies included) stay quiet."""
+        if not isinstance(msgs, (list, tuple)):
+            msgs = list(msgs)
         new_ids = []
         now = time.time()
         late_after = None
@@ -440,8 +442,8 @@ class LedgerCaptureMixin:
             late_after = self.high_watermark(project_id) or None
         invalidated_roots = set()
         with self._intake_transaction():
-            before_semantic = (self._semantic_generation_snapshot(msgs)
-                               if semantic or self._needs_semantic_source_tracking() else {})
+            before_semantic = self._begin_semantic_generation_snapshot(
+                msgs, semantic=semantic)
             for m in msgs:
                 self._save_tree(m, new_ids, now, project_id)
             changed_semantic = (self._semantic_changed_ids(
@@ -504,12 +506,14 @@ class LedgerCaptureMixin:
         replies that must not announce. New read replies with a known
         timestamp inside the bound also qualify for notification;
         notify_all_replies exempts new replies from that bound."""
+        if not isinstance(replies, (list, tuple)):
+            replies = list(replies)
         new_ids = []
         now = time.time()
         invalidated_roots = set()
         with self._intake_transaction():
-            before_semantic = (self._semantic_generation_snapshot(replies)
-                               if semantic or self._needs_semantic_source_tracking() else {})
+            before_semantic = self._begin_semantic_generation_snapshot(
+                replies, semantic=semantic)
             for m in replies:
                 self._save_tree(m, new_ids, now, project_id)
                 # reconcile against the STORED body, not the fetched one:
@@ -843,7 +847,11 @@ class LedgerCaptureMixin:
             attachment_ocr.record_dependencies_tx(self.db, dependencies)
             if row and before is not None and before != self._semantic_message_fingerprint(
                     row["project_id"], row["message_id"]):
-                self._invalidate_thread_projections(row["project_id"], row["root"])
+                invalidated_roots = set()
+                for root in self._message_thread_roots(
+                        row["project_id"], row["message_id"], row["root"]):
+                    self._invalidate_thread_projections(
+                        row["project_id"], root, invalidated_roots=invalidated_roots)
                 if semantic:
                     self.semantic_seed_tx(row["project_id"], [row["message_id"]],
                                            {"source": "attachment"})
@@ -887,7 +895,11 @@ class LedgerCaptureMixin:
                 state = self.db.execute("SELECT state FROM attachments WHERE attachment_id=?",
                                         (attachment_id,)).fetchone()[0]
                 if state != source["state"]:
-                    self._invalidate_thread_projections(source["project_id"], source["root"])
+                    invalidated_roots = set()
+                    for root in self._message_thread_roots(
+                            source["project_id"], source["message_id"], source["root"]):
+                        self._invalidate_thread_projections(
+                            source["project_id"], root, invalidated_roots=invalidated_roots)
                     if semantic:
                         self.semantic_seed_tx(source["project_id"], [source["message_id"]],
                                                {"source": "attachment"})
