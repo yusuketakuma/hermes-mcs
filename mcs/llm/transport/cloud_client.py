@@ -207,10 +207,10 @@ class CloudClient:
                 raise last
             if attempt + 1 < self.max_attempts:
                 left = max(0.0, deadline - time.monotonic())
-                if wait is not None and wait >= left:
-                    break   # the provider's own wait outlasts the unit: fail now, do not hold the slot
                 # Retry-After alone when given (as Jev), else bounded exponential backoff
-                delay = min(wait if wait is not None else 2**attempt + random.uniform(0, 0.5), left)
+                delay = wait if wait is not None else 2**attempt + random.uniform(0, 0.5)
+                if delay >= left:
+                    raise last   # no retry fits before the deadline: do not hold the slot asleep
                 if delay:
                     (self._wait_fn if self._wait_fn is not None else time.sleep)(delay)
         raise last
