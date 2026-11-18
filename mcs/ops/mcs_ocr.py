@@ -60,16 +60,20 @@ def _local_defer_reason(ledger, diagnostic, elapsed_s):
 
 
 def _drain(ledger, cfg, generation, deadline, *, live_config, retry_failed_before=None):
-    reasons = {}
-    result = _drain_stages(ledger, cfg, generation, deadline, reasons, live_config=live_config,
-                           retry_failed_before=retry_failed_before)
+    reasons, observed = {}, {}
+    result = _drain_stages(ledger, cfg, generation, deadline, reasons, observed,
+                           live_config=live_config, retry_failed_before=retry_failed_before)
     if result.get('local_deferred', 0) > 0:
         result['local_deferred_reasons'] = attachment_inference_deferral.normalize(
             reasons, result['local_deferred'])
+        kept = attachment_inference_deferral.observed(observed)
+        if kept:
+            result['local_llm_defer_reasons'] = kept
     return result
 
 
-def _drain_stages(ledger, cfg, generation, deadline, reasons, *, live_config, retry_failed_before=None):
+def _drain_stages(ledger, cfg, generation, deadline, reasons, observed, *, live_config,
+                  retry_failed_before=None):
     import attachment_inference
 
     result = {'local_done': 0, 'local_deferred': 0}
@@ -106,9 +110,24 @@ def _drain_stages(ledger, cfg, generation, deadline, reasons, *, live_config, re
             try:
                 if stage == 'local':
                     started = time.monotonic()
-                    with writer_lock.capture_writer_refusal() as diagnostic:
-                        local = attachment_inference.run_pending(ledger, cfg, stage='local',
-                            deadline=min(deadline - 5, time.monotonic() + LOCAL_CALL_S), limit=1)
+                    import extract_llm
+                    notes = extract_llm._CALL_NOTES
+                    previous_reason = getattr(notes, 'defer_reason', None)
+                    reason_was_set = hasattr(notes, 'defer_reason')
+                    notes.defer_reason = None
+                    try:
+                        with writer_lock.capture_writer_refusal() as diagnostic:
+                            local = attachment_inference.run_pending(ledger, cfg, stage='local',
+                                deadline=min(deadline - 5, time.monotonic() + LOCAL_CALL_S), limit=1)
+                    finally:
+                        observed_reason = getattr(notes, 'defer_reason', None)
+                        if reason_was_set:
+                            notes.defer_reason = previous_reason
+                        else:
+                            try:
+                                del notes.defer_reason
+                            except AttributeError:
+                                pass
                     result['local_done'] += local['done']
                     result['local_deferred'] += local['deferred']
                     if local.get('paid_recovery_pending') is True:
@@ -118,6 +137,9 @@ def _drain_stages(ledger, cfg, generation, deadline, reasons, *, live_config, re
                     if type(local['deferred']) is int and local['deferred'] > 0:
                         code = _local_defer_reason(ledger, diagnostic, time.monotonic() - started)
                         reasons[code] = reasons.get(code, 0) + local['deferred']
+                        observed_code = attachment_inference_deferral.llm_reason(observed_reason)
+                        if observed_code is not None:
+                            observed[observed_code] = observed.get(observed_code, 0) + local['deferred']
                 else:
                     with writer_lock.capture_writer_refusal() as diagnostic:
                         raw = attachment_ocr.run_pending(ledger, cfg, limit=1, deadline=deadline - 5,
@@ -146,10 +168,11 @@ def _drain_stages(ledger, cfg, generation, deadline, reasons, *, live_config, re
 
 
 def _status_text(result, at):
-    """Serialize the status record; the optional deferral breakdown yields to the reader's size limit."""
+    """Serialize the status record; the optional deferral breakdowns yield to the reader's size limit."""
     data = json.dumps({"at": at, **result})
-    if len(data.encode()) > STATUS_LIMIT and 'local_deferred_reasons' in result:
-        data = json.dumps({"at": at, **{k: v for k, v in result.items() if k != 'local_deferred_reasons'}})
+    shed = {"local_deferred_reasons", "local_llm_defer_reasons"}
+    if len(data.encode()) > STATUS_LIMIT and shed & result.keys():
+        data = json.dumps({"at": at, **{k: v for k, v in result.items() if k not in shed}})
     return data
 
 
