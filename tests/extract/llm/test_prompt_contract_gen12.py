@@ -1,6 +1,9 @@
 """Synthetic next-contract builders stay inert until the explicit generation switch."""
 from copy import deepcopy
 import json
+from pathlib import Path
+import re
+import unicodedata
 
 import pytest
 
@@ -33,7 +36,7 @@ def test_builders_leave_runtime_schema_prompt_cache_heads_and_cli_unchanged():
     assert clinical_allergies.FIELD in single["schema"]["properties"]
     assert "allergies.allergen" in fields - pattern_cards.FIELD_PATHS
     assert set(clinical_allergies.KINDS) <= enums
-    assert head == spec + prompts._PROMPT_EXAMPLES
+    assert head == spec + prompts._GEN12_PROMPT_EXAMPLES
     assert batch_head == spec + prompts._BATCH_FMT
     assert prompts._PROMPT_HEAD == prompts._PROMPT_SPEC + prompts._PROMPT_EXAMPLES
     assert prompts._BATCH_HEAD == prompts._PROMPT_SPEC + prompts._BATCH_FMT
@@ -43,6 +46,68 @@ def test_builders_leave_runtime_schema_prompt_cache_heads_and_cli_unchanged():
     single["schema"]["properties"]["symptoms"]["items"]["properties"].clear()
     assert extract_schema.gen12_schema()["schema"]["properties"]["symptoms"]["items"]["properties"]
     assert _defaults() == before
+
+
+def _case_grams(text):
+    folded = re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", text))
+    return {part[i:i + 12] for part in (text, folded) for i in range(len(part) - 11)}
+
+
+def test_next_prompt_examples_are_bounded_and_disjoint_from_evaluation():
+    spec, head, _ = prompts.gen12_prompt_heads()
+    examples = head.removeprefix(spec)
+    assert 0 < len(examples) <= 6_000
+    assert "在宅酸素は調剤対象外" not in head
+    prefix, *blocks = re.split(r"(?m)^例[0-9]+:\n", examples)
+    assert not prefix and blocks
+    example_grams = set()
+    outputs = {}
+    for block in blocks:
+        body, separator, response = block.removeprefix("対象本文:\n<<<\n").partition("\n>>>\nJSON:")
+        assert block.startswith("対象本文:\n<<<\n") and body and separator
+        outputs[body] = json.loads(response)
+        assert isinstance(outputs[body]["symptoms"], list)
+        example_grams.update(_case_grams(body))
+
+    allergy_body, = (body for body in outputs if "模擬食品ル" in body)
+    allergy, = (item for item in outputs[allergy_body]["allergies"] if item["allergen"] == "模擬食品ル")
+    assert allergy["status"] == "past" and "先月" in allergy["evidence"]
+    assert allergy["evidence"] in allergy_body
+
+    request_body, = (body for body in outputs if "介護士は看護師へ" in body)
+    request, = outputs[request_body]["requests"]
+    assert (request["to"], request["action"], request["from"]) == ("介護士", "看護師へ連絡", None)
+    assert "介護士は看護師へ" in request["evidence"] and request["evidence"] in request_body
+
+    evaluation = Path(__file__).resolve().parents[3] / "evaluation"
+    corpora = {
+        "extract_cases_safety_history.json": ("cases",),
+        "extract_cases_gen12_fields.json": ("cases",),
+        "extract_cases_safety_history_gen12.json": ("cases", "claims", "recall_posts"),
+    }
+    for name, groups in corpora.items():
+        corpus = json.loads((evaluation / name).read_bytes())
+        for group in groups:
+            assert corpus[group], (name, group)
+            for case in corpus[group]:
+                assert example_grams.isdisjoint(_case_grams(case["body"] + case.get("context", ""))), (name, case["id"])
+
+
+def test_next_repair_head_summarizes_the_selected_schema(monkeypatch):
+    legacy = prompts._REPAIR_HEAD
+    schema = extract_schema.gen12_schema()
+    schema["schema"]["properties"]["synthetic_extension"] = {"type": "string"}
+    monkeypatch.setattr(extract_schema, "gen12_schema", lambda: schema)
+
+    head = prompts.gen12_repair_head()
+
+    assert head.startswith(legacy.removesuffix("問題:\n"))
+    assert head.endswith("\n\n問題:\n") and head.count("問題:\n") == 1
+    assert "symptoms=array（必須）" in head
+    assert "vitals=object" in head and "allergies=array" in head
+    assert "synthetic_extension=string" in head
+    assert "allergiesの各候補の項目: allergen、kind、reaction、subject、status、negated、certainty、evidence" in head
+    assert prompts._REPAIR_HEAD == legacy
 
 
 @pytest.mark.parametrize("single", [extract_schema.SCHEMA, None], ids=["current", "next"])

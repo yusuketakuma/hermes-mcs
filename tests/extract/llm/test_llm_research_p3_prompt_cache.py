@@ -1,5 +1,7 @@
 """Prompt layouts keep their fixed head first so llama.cpp's per-slot
 prefix cache is reusable; cache_hit_ratio aggregates Σcache_n/(Σcache_n+Σprompt_n)."""
+from hashlib import sha256
+
 import extract_llm_engine
 import extract_llm_runner
 
@@ -11,11 +13,24 @@ import os
 import sys
 
 import extract_llm
+import extract_llm_prompts
 import semantic_extraction as extraction
 import semantic_llm
 from test_semantic_facts_v2 import FP
 
 POSTED = "2026-01-01T09:00:00+09:00"
+
+
+def test_next_prompt_builders_preserve_existing_cloud_cache_head_bytes():
+    extract_llm_prompts.gen12_prompt_heads()
+    extract_llm_prompts.gen12_repair_head()
+    # Fixed cloud batch prefixes and the existing repair prefix, from the X6a baseline.
+    heads = (extract_llm_runner._PROMPT_HEAD, extract_llm_runner._BATCH_HEAD, extract_llm._REPAIR_HEAD)
+    assert tuple(sha256(head.encode("utf-8")).hexdigest() for head in heads) == (
+        "c14b498ff6c2a02b5bd7f065dd86e6ec3bec075c24da239cd878f147852065c7",
+        "e3fbd1edcce01e25858f0cd347b60d66fa21728ac188420d791a5dd923bb1952",
+        "510ba8d646b45446cfdd7cdb0864d0ea574d99e2109bfea8a367f3a580d76b77",
+    )
 
 
 def test_single_batch_repair_share_fixed_leading_bytes(monkeypatch):
