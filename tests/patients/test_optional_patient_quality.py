@@ -14,6 +14,14 @@ from test_anthropic_context_refresh import cloud as cloud
 import patient_context_refresh as refresh
 import cloud_inference
 import pytest
+import time
+
+
+def _recent_posted_at():
+    # QC covers only posts inside the last 60 days (qc_scope_sql), so the
+    # stamp is relative to now; a fixed date ages out of scope.
+    return time.strftime("%Y-%m-%dT%H:%M:%S+09:00",
+                         time.localtime(time.time() - 86400))
 
 
 def test_unavailable_jev_records_bound_skip_without_a_pass(quality_owner):
@@ -118,7 +126,7 @@ def test_post_semantic_and_qc_skips_admit_patient_context(runtime, cloud, monkey
                                'fact_source': 'shadow', 'summary_mode': 'shadow',
                                'loop_mode': 'shadow', 'extract_qc': 'annotate'}}
     body = '合成の話題を確認しました。'
-    seed(ledger, body=body, proof=False)
+    seed(ledger, body=body, proof=False, posted_at=_recent_posted_at())
     _raw_proof(ledger, 1, 1)
     ledger.semantic_seed(1, [1], {'source': 'history_import', 'notification_free': True})
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *args: None)
