@@ -422,6 +422,22 @@ def _cloud_scan_for(ledger, cfg):
     return enabled
 
 
+def _cloud_serves_every_patient(ledger, cfg):
+    """Whether the cloud lane serves every patient, which leaves nothing for a local lane.
+
+    True only when the scope names no patient list and excludes nobody and the cloud is on for
+    the first patient. The first patient's answer stands for every patient, as
+    ``_cloud_scan_for`` already reuses one patient's mode within an observation."""
+    import cloud_policy
+    scope, errors = cloud_policy.cloud_config(cfg, key_present=True)
+    if (errors or scope["project_ids"] is not None or scope["exclude_project_ids"]
+            or not cloud_policy.route_open("patient_context", scope)):
+        return False
+    row = ledger.db.execute("SELECT project_id FROM patients WHERE project_id>0 "
+                            "ORDER BY project_id LIMIT 1").fetchone()
+    return row is not None and _cloud_scan_for(ledger, cfg)(row[0])
+
+
 def _bound_signature_matches(db, pid, cfg, record, snapshot, snapshots):
     """Compare one source cohort without changing the observer's whole snapshot."""
     recorded_scope = patient_context_refresh_sources._source_scope(record.get('source_scope'))

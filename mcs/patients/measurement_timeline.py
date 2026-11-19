@@ -64,6 +64,30 @@ def _condition_binds_measurement(body, assertion, evidence, condition, anchor, k
                         re.IGNORECASE) is not None
 
 
+def _vital_token_matches(quote, base, day, key, value, unit):
+    """Number tokens in `quote` written as `value`, located in the source body.
+
+    `base` is the body offset of `quote`; each returned token keeps its original
+    surface spelling and body-coordinate span, so a float's Python spelling
+    ("37.0") is never matched against the text literally.
+    """
+    vital_class = _VITAL_CLASS[key]
+    matches = []
+    for piece in re.finditer(r"[^。！？!?;；\n]+", quote):
+        clause = piece.group()
+        if written_day(clause) != ("ymd", day):
+            continue
+        for match in _vital_numbers(clause):
+            tail = clause[match.end():].lstrip()
+            unit_ok = (unit is None or unicodedata.normalize("NFKC", tail).casefold().startswith(
+                unicodedata.normalize("NFKC", unit).casefold()))
+            if (_bp_number(match[0]) == value and _nearest_vital_label(clause, *match.span()) == vital_class
+                    and unit_ok and grounded_vitals(clause, {key: value}) == {key: value}):
+                start = base + piece.start() + match.start()
+                matches.append((match[0], (start, base + piece.start() + match.end())))
+    return matches
+
+
 def _candidate(record):
     """Check source binding; clinical value and subject validation belongs to the caller."""
     span, body, evidence = record.get("evidence_span"), record.get("source_body"), record.get("evidence")
@@ -101,17 +125,28 @@ def _candidate(record):
     name, condition = record.get("name"), record.get("condition")
     if record.get("kind") == "lab" and (not isinstance(name, str) or not 0 < len(name.strip()) <= 40):
         verified_source = False
+    vital_token = None
     if verified_source:
-        surface = name if record.get("kind") == "lab" else str(value)
-        target = body.find(surface, span[0], span[1]) if isinstance(surface, str) else -1
+        if record.get("kind") == "vital" and record.get("key") in _VITAL_CLASS and type(value) in (int, float):
+            found = _vital_token_matches(evidence, span[0], day, record["key"], value, unit)
+            vital_token = found[0] if len(found) == 1 else None
+        surface = name if record.get("kind") == "lab" else (vital_token[0] if vital_token else str(value))
+        target = (vital_token[1][0] if vital_token
+                  else body.find(surface, span[0], span[1]) if isinstance(surface, str) else -1)
         left = max((body.rfind(mark, 0, target) for mark in "。！？!?;；\n"), default=-1) + 1
         if (target < 0 or _OTHER_PERSON_CUE.search(body[left:target])
                 or ambiguous_patient_context(body, target)):
             # An unrecognized owner or recipient must not default to the patient.
             verified_source = False
     if condition is not None:
-        anchor = name if record.get("kind") == "lab" else str(value)
-        assertion = source_assertion_span(body, anchor) if valid_span and isinstance(anchor, str) else None
+        if record.get("kind") == "lab":
+            anchor, token_span = name, None
+        elif vital_token is not None:
+            anchor, token_span = vital_token
+        else:
+            anchor, token_span = str(value), None
+        assertion = (source_assertion_span(body, anchor, anchor=token_span)
+                     if valid_span and isinstance(anchor, str) else None)
         if (not valid_span or not _condition_binds_measurement(
                 body, assertion, evidence, condition, anchor, record.get("kind"))):
             verified_source = False
@@ -140,23 +175,11 @@ def _candidate(record):
                                and patient_item_scope(record, body, patient_name=record.get("patient_name"),
                                                       surface=name) in allowed_scope)
         elif record.get("kind") == "vital" and record.get("key") in _VITAL_CLASS and type(value) in (int, float):
-            vital_class = _VITAL_CLASS[record["key"]]
-            clauses = re.split(r"[。！？!?;；\n]", validation_quote)
-            matching = []
-            for clause in clauses:
-                if written_day(clause) != ("ymd", day):
-                    continue
-                for match in _vital_numbers(clause):
-                    tail = clause[match.end():].lstrip()
-                    unit_ok = (unit is None or unicodedata.normalize("NFKC", tail).casefold().startswith(
-                        unicodedata.normalize("NFKC", unit).casefold()))
-                    if (_bp_number(match[0]) == value and _nearest_vital_label(clause, *match.span()) == vital_class
-                            and unit_ok and grounded_vitals(clause, {record["key"]: value}) == {record["key"]: value}):
-                        matching.append(clause)
+            matching = _vital_token_matches(validation_quote, span[0], day, record["key"], value, unit)
             verified_source = (len(matching) == 1
                                and patient_item_scope(record, body, patient_name=record.get("patient_name"),
-                                                      surface=str(value)) in allowed_scope)
-            comparison = (str(value), unicodedata.normalize("NFKC", unit).casefold() if unit else None)
+                                                      surface=matching[0][0]) in allowed_scope)
+            comparison = (float(value), unicodedata.normalize("NFKC", unit).casefold() if unit else None)
         else:
             verified_source = False
     verified = (verified_source and day is not None and day.isoformat() == measured and quote_day == ("ymd", day)

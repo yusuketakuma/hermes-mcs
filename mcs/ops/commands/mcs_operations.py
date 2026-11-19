@@ -21,8 +21,9 @@ import time
 from mcs_util import valid_text
 from mcs_requests import canonical, payload_hash
 from update_policy import RELEASE_TAG_RE
-from operation_contract import (RETRY_PAYLOAD_MAX_BYTES, bounded_integer, read_retry_payload,
-                                retry_error, retry_job_row, retry_payload_codec)
+from operation_contract import (RETRY_PAYLOAD_MAX_BYTES, bounded_integer, parse_retry_payload,
+                                read_retry_payload, retry_error, retry_job_row, retry_payload_codec,
+                                retry_updated_payload)
 from mcs_queries import SEMANTIC_CONTROL_KIND as _CONTROL_ARTIFACT
 from safe_io import fsync_dir, fdopen_owned
 
@@ -130,19 +131,7 @@ def _apply_retry_tx(db, req: dict, now: float, cfg=None) -> tuple[str | None, di
     raw = read_retry_payload(db, row)
     if raw is None:
         return "invalid_payload", {"job_id": row["job_id"]}
-    # The writer historically accepts duplicate non-version keys.  Retain
-    # that behavior, but never choose a version from an ambiguous top-level
-    # marker (including escaped spellings of the same JSON key).
-    from inference_version import VERSION_KEY
-    class _RetryObject(dict):
-        def __init__(self, pairs):
-            super().__init__(pairs)
-            self.ambiguous_version = sum(k == VERSION_KEY for k, _ in pairs) > 1
-
-    try:
-        payload = json.loads(raw, object_pairs_hook=_RetryObject)
-    except (ValueError, TypeError, RecursionError):
-        return "invalid_payload", {"job_id": row["job_id"]}
+    payload = parse_retry_payload(raw)
     if not isinstance(payload, dict) or payload.ambiguous_version:
         return "invalid_payload", {"job_id": row["job_id"]}
     try:
@@ -170,23 +159,22 @@ def _apply_retry_tx(db, req: dict, now: float, cfg=None) -> tuple[str | None, di
                        "attempts": row["attempts"]}
     from semantic_runtime import attempt_limit
     old_limit = attempt_limit(payload)
-    # Keep the accumulated attempt/generation/source fields intact while
-    # invalidating a worker that captured the pre-retry payload.
-    payload["retry_command_id"] = req["command_id"]
     extra = {"job_id": row["job_id"], "attempts": row["attempts"]}
     if "reason" in req:
         extra["reason"] = req["reason"]
     if "diagnosis_hash" in req:
         extra.update(diagnosis_hash=req["diagnosis_hash"], remediation=req["remediation"])
     if additional is not None:
-        new_limit = row["attempts"] + additional
-        payload["manual_attempt_limit"] = new_limit
         extra.update({
             "old_attempt_limit": old_limit,
-            "new_attempt_limit": new_limit,
+            "new_attempt_limit": row["attempts"] + additional,
             "additional_attempts": additional,
         })
-    updated_payload = canonical(payload).decode("utf-8")
+    try:
+        updated_payload = retry_updated_payload(payload, req["command_id"],
+                                                additional, row["attempts"])
+    except (TypeError, ValueError, RecursionError):
+        return "invalid_payload", {"job_id": row["job_id"]}
     if len(updated_payload.encode(retry_payload_codec(db))) > RETRY_PAYLOAD_MAX_BYTES:
         return "invalid_payload", {"job_id": row["job_id"]}
     rowid_alias = row['retry_rowid_alias']
