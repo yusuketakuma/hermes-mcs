@@ -10,9 +10,9 @@ def test_scan_cursor_and_complete_quoted_unit_do_not_mutate_inputs():
     source = {"body_text": item["text"], "items": [item]}
     saved = {"cursor": True, "facts": [{"id": "obsolete"}]}
     original = copy.deepcopy((source, saved))
-    chunks, cursor, reusable, items, covered = plan.scan_plan(source, saved)
+    chunks, cursor, reusable, items = plan.scan_plan(source, saved)
     assert chunks == [item["text"]] and cursor == 0 and reusable == {}
-    assert items == [item] and covered is False  # A complete quote does not prove complete extraction.
+    assert items == [item]  # A complete quote does not prove complete extraction.
     assert plan.scan_items({"patient_context": [item]}, chunks[0]) == [item]
     with pytest.raises(ValueError, match="patient_context_unsupported_items"):
         plan.scan_items({"patient_context": [{**item, "text": "家族は転居を希望しています。"}]}, chunks[0])
@@ -27,7 +27,7 @@ def test_split_scan_resumes_where_the_stopped_chunk_began_and_is_bounded():
     coarse = plan.plan_chunks(body, plan.SCAN_CHUNK)
     finer = plan.split_scan(source, {}, 0)
     assert finer == {"cursor": 0, "chunks": len(plan.plan_chunks(body, plan.SCAN_CHUNK >> 1)), "split": 1}
-    chunks, cursor, _, _, _ = plan.scan_plan(source, finer)
+    chunks, cursor, _, _ = plan.scan_plan(source, finer)
     assert "".join(chunks) == body and cursor == 0 and len(chunks) > len(coarse)
     second = plan.split_scan(source, finer, 1)      # stopped at the second finer chunk
     finest = plan.plan_chunks(body, plan.SCAN_CHUNK >> second["split"])
@@ -55,7 +55,7 @@ def test_an_invalid_cursor_restarts_the_plan_and_its_split_together():
     body = "本日訪問しました。合成の記録として、ご本人は落ち着いて過ごされていました。" * 160
     source = {"body_text": body, "items": []}
     for cursor in (True, -1, 999):
-        chunks, at, saved, _, _ = plan.scan_plan(source, {"split": 1, "cursor": cursor})
+        chunks, at, saved, _ = plan.scan_plan(source, {"split": 1, "cursor": cursor})
         assert at == 0 and saved == {} and chunks == plan.plan_chunks(body, plan.SCAN_CHUNK)
 
 

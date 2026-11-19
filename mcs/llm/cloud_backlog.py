@@ -20,7 +20,7 @@ if __name__ == "__main__":
     import _mcs_path  # noqa: F401
 
 import cloud_send_admission
-from run_log_install import helper_path, LogInstallError
+from run_log_install import current_helper, helper_path
 
 _parent = None
 
@@ -275,6 +275,9 @@ def memory_headroom():
     """Return free bytes above the foreground reserve, or None while memory is unobservable."""
     try:
         if sys.platform == "darwin":
+            import llm_availability
+            if llm_availability.memory_pressure_critical():
+                return -1
             env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C"}
             total = int(subprocess.run(["/usr/sbin/sysctl", "-n", "hw.memsize"], capture_output=True,
                                        text=True, timeout=2, check=True, env=env).stdout.strip())
@@ -303,6 +306,13 @@ def memory_workers(limit):
     return 0 if headroom is None else max(0, min(limit, headroom // _WORKER_BYTES))
 
 
+def capacity_reduced(index, limit):
+    """Whether an indexed worker is past the pool's memory target; one worker of
+    hysteresis, because its own resident memory is in the sample."""
+    capacity = memory_workers(limit)
+    return index >= min(limit, capacity + bool(capacity))
+
+
 class CloudBacklogPool:
     """Own child processes only while the normal lane-2 resident is alive."""
     def __init__(self, root, *, context_only=False):
@@ -315,19 +325,32 @@ class CloudBacklogPool:
         self.retry_at = 0.0
         self.lock = None
         self.last_sync = 0.0
+        self.failed = False
         # The context pool's owner also keeps the stored-message workers of a
         # bounded reopening: they spawn only while that window is open.
         self.backlog = CloudBacklogPool(root) if context_only else None
 
     def sync(self, cfg, *, ledger=None):
+        """Return True only when a pass finished and no pool in the chain is
+        in a failure streak; a throttled return decided nothing. The owner
+        reads this, not ``last_sync``: a nested pool that raised is throttled
+        on the next call, and the outer pass alone must not count as recovery."""
+        decided = self.backlog.sync(cfg, ledger=ledger) if self.backlog is not None else False
+        now = time.monotonic()
+        if now - self.last_sync >= 10:
+            self.last_sync = now
+            try:
+                self._decide(cfg, ledger, now)
+            except Exception:
+                self.failed = True
+                raise
+            self.failed = False
+            decided = True
+        return decided and not (self.failed or (self.backlog is not None and self.backlog.failed))
+
+    def _decide(self, cfg, ledger, now):
         import cloud_inference
         import cloud_policy
-        if self.backlog is not None:
-            self.backlog.sync(cfg, ledger=ledger)
-        now = time.monotonic()
-        if now - self.last_sync < 10:
-            return
-        self.last_sync = now
         settings = cloud_inference.resolve_cloud_settings(cfg)
         self._reap(now)
         if not self._admits(cfg, settings, ledger):
@@ -347,11 +370,7 @@ class CloudBacklogPool:
             target = min(settings["max_concurrency"], len(self.children))
         if target <= len(self.children) or now < self.retry_at:
             return
-        inherited = os.environ.get("MCS_RUN_LOG_HELPER")
-        recovery = str(Path(inherited).parent) if inherited and os.path.isabs(inherited) else None
-        helper = helper_path(self.root, recovery, require_installed=True)
-        if inherited and inherited != helper:
-            raise LogInstallError("run_log_helper_unverified")
+        helper = current_helper(self.root, installed=helper_path)
         for _ in range(max(0, target - len(self.children))):
             index = next(i for i in range(32) if i not in self.indices.values())
             child = subprocess.Popen(
@@ -435,7 +454,10 @@ class CloudBacklogPool:
 _WAIT_CODES = {"paused", "circuit_open", "pricing_unverified", "profile_invalid",
                "daily_cap", "daily_cost_cap", "monthly_cap", "provider_budget_missing",
                "provider_daily_cap", "provider_monthly_cap", "window_history_unverified",
-               "window_cap"}
+               "window_cap", "expired", "not_started",
+               # fixed circuit failure classes (semantic_runtime): global_block_reason returns one while open
+               "auth_error", "payment_required", "pricing_unverified", "contract_error", "transport",
+               "timeout", "rate_limited", "http_402", "http_429", "http_529", "http_5xx"}
 
 # Fixed defer-reason vocabulary reported by extract_llm.run_pending — a raw
 # error class, config value or id is never a valid reason in the pass record.
@@ -516,6 +538,14 @@ def _defer(waiting, code):
     time.sleep(10)
 
 
+def _note_provider(seen, settings):
+    """One fixed event when the selected provider changes between this worker's reads."""
+    provider = settings.get("provider")
+    if seen["provider"] is not None and provider != seen["provider"]:
+        _event("cloud_provider_changed", previous=seen["provider"], provider=provider)
+    seen["provider"] = provider
+
+
 def worker(parent, *, index=None, context_only=False):
     """Alternate guarded cloud extraction and semantic jobs with an independent ledger."""
     global _parent
@@ -555,6 +585,7 @@ def worker(parent, *, index=None, context_only=False):
         carry = []
         allow_exit_settle = True
         waiting = {"code": None, "at": 0.0}
+        provider_seen = {"provider": None}
         carry_failures = 0
         semantic_lock_failures = 0
         capacity_checked = float("-inf")
@@ -564,10 +595,19 @@ def worker(parent, *, index=None, context_only=False):
 
         def settle_carry():
             deadline = time.monotonic() + 3.0
-            extract_llm._settle_carry(
+            held = len(carry)
+            settled = extract_llm._settle_carry(
                 ledger, carry, final=False, fence=initial,
                 lock_context=extract_llm._write_lock(True, wait_s=1, deadline=deadline),
-                preserve_on_fence_loss=True, deadline=deadline)
+                preserve_on_fence_loss=True, deadline=deadline, report=False)[0]
+            if any(type(settled.get(key)) is int and settled[key] > 0 for key in ("done", "held_prior", "deferred")):
+                # A pass's `done` counts only what that run_pending call saved; work carried
+                # out of it is saved (done) or released (deferred) here, so it is reported here.
+                reasons = {key: count for key, count in (settled.get("defer_reasons") or {}).items()
+                           if key in _DEFER_REASONS and type(count) is int and count > 0}
+                _event("cloud_carry_settled", carried=held, kept=len(carry), done=settled["done"],
+                       done_unit="messages", held_prior=settled["held_prior"],
+                       deferred=settled["deferred"], defer_reasons=reasons)
 
         try:
             while os.getppid() == parent and writer_lock.updater_state() == initial and not initial[0]:
@@ -599,6 +639,7 @@ def worker(parent, *, index=None, context_only=False):
                     wait("provider_settings_unreadable")
                     continue
                 settings = cloud_inference.resolve_cloud_settings(cfg)
+                _note_provider(provider_seen, settings)
                 extract_open = cloud_policy.reextract_planned(settings)
                 semantic_open = ("semantic_backlog" in settings["routes"]
                                  and cloud_policy.route_open("semantic_backlog", settings))
@@ -608,8 +649,7 @@ def worker(parent, *, index=None, context_only=False):
                               or index >= settings["max_concurrency"])
                     if time.monotonic() - capacity_checked >= 60:
                         capacity_checked = time.monotonic()
-                        capacity = memory_workers(settings["max_concurrency"])
-                        retire = retire or index >= min(settings["max_concurrency"], capacity + bool(capacity))
+                        retire = retire or capacity_reduced(index, settings["max_concurrency"])
                     if retire:
                         _event("cloud_worker_retired", reason=(
                             "cloud_mode_off" if settings["mode"] != "on"
@@ -781,13 +821,15 @@ def worker(parent, *, index=None, context_only=False):
 
 
 _CONTEXT_PASS_REASONS = frozenset({
-    "transaction_active", "patient_context_waiting", "patient_context_scan_incomplete",
+    "transaction_active", "patient_context_waiting", "patient_context_scan_incomplete", "patient_context_nothing_due",
     "patient_context_patient_invalid",
     "patient_context_readiness_unverified", "patient_context_generation_changed", "run_lock",
     "patient_context_selection_busy", "patient_context_selection_unavailable",
     "patient_context_completed_expired", "patient_context_capacity_or_deadline", "patient_context_admission_deferred",
-    "patient_context_turn_busy", "patient_context_local_capacity", "patient_context_source_changed", "patient_context_cloud_budget",
+    "patient_context_turn_busy", "patient_context_endpoint_unsent", "patient_context_endpoint_unavailable",
+    "patient_context_local_capacity", "patient_context_source_changed", "patient_context_cloud_budget",
     "patient_context_generation_active", "patient_context_generation_clock_changed",
+    "patient_context_generation_unverified",
     "patient_context_generation_daily_limit", "patient_context_generation_interval",
     "patient_context_cloud_not_sent", "patient_context_cloud_pending", "patient_context_cloud_source_changed",
     "patient_context_cloud_deferred", "patient_context_role_changed", "patient_context_other_role",
@@ -866,6 +908,11 @@ def _context_pass_observation(result):
     skipped = result.get("skip_patient_code")
     if skipped is not None:
         record["skip_patient_code"] = skipped if _bounded_pass_code(skipped) else "unclassified"
+    # The generation quota's own denial reason (fixed identifiers only).
+    generation = result.get("generation_reason")
+    if generation is not None:
+        record["generation_reason"] = (generation if type(generation) is str
+                                       and generation in _CONTEXT_PASS_REASONS else "unclassified")
     covered = result.get("covered")
     if type(covered) is bool:
         record["covered"] = covered
@@ -878,7 +925,7 @@ def _context_pass_observation(result):
     # wait for a child (up to 64 more ``waiting``), and its passes are not
     # recorded here.
     for key, limit in (("waiting", 16), ("scan_reads", 16), ("scan_interrupts", 1),
-                       ("skip_patient_invalid", 8),
+                       ("skip_patient_invalid", 8), ("unverified_records", 1 << 20),
                        ("wait_no_eligible_sources", 8), ("wait_no_due_lane", 16),
                        ("wait_generation_quota", 8), ("wait_readiness_unverified", 16),
                        ("wait_dependency_incomplete", 16), ("wait_patient_busy", 8),
@@ -889,12 +936,16 @@ def _context_pass_observation(result):
     return record
 
 
+def deferral_delay(reason):
+    """Seconds before a unit the cloud deferred is tried again: a full send slot clears within
+    seconds, every other deferral (cap, circuit, pending result, waiting child) does not."""
+    return 5 if reason == "patient_context_cloud_deferred:cloud_capacity" else 60
+
+
 def _context_retry_delay(result):
     """Backoff for one context pass. selection_busy means another worker
-    holds the selection lock and is doing real work — retrying in seconds
-    just adds convoy noise, so wait longer. A unit waiting for the cloud
-    returns within seconds when the send slot was full; a cap, a circuit or
-    a pending result does not clear that fast."""
+    holds the selection lock (usually scanning, not necessarily doing work);
+    a scan that found nothing startable rarely finds work seconds later. A full cloud slot is retried sooner than a daily cap."""
     if result.get("done"):
         return 1
     reason = result.get("reason")
@@ -902,9 +953,12 @@ def _context_retry_delay(result):
         return 20
     base, _, code = reason.partition(":") if type(reason) is str else ("", "", "")
     if base == "patient_context_cloud_deferred":
-        return 5 if code == "cloud_capacity" else 60
-    if reason in ("patient_context_cloud_budget", "patient_context_other_role"):
-        # Every patient the pass reached is served by the other worker role.
+        return deferral_delay(reason)
+    if reason == "patient_context_scan_incomplete" and result.get("covered") is False and not result.get("scan_interrupts"):
+        return 5  # The next page may still contain a due patient.
+    if reason in ("patient_context_waiting", "patient_context_scan_incomplete", "patient_context_cloud_budget", "patient_context_other_role",
+                  "patient_context_nothing_due"):
+        # Every patient the pass reached is served by the other worker role, or none was due.
         return 60
     return 5
 
@@ -916,7 +970,9 @@ def _context_worker(ledger, initial, index):
     import writer_lock
     from mcs_util import HOME, ProviderSettingsUnreadable, load_config
 
+    capacity_checked = float("-inf")
     waiting = {"code": None, "at": 0.0}
+    provider_seen = {"provider": None}
     role = None   # this child's ROLE_CLOUD hold; local lanes see the cloud lane served through it
     try:
         with local_llm.scheduling_scope(os.path.join(HOME, "data")):
@@ -929,9 +985,15 @@ def _context_worker(ledger, initial, index):
                     continue
                 waiting["code"] = None
                 settings = cloud_inference.resolve_cloud_settings(cfg)
+                _note_provider(provider_seen, settings)
                 if (settings["mode"] != "on" or index is not None and index >= settings["max_concurrency"]
                         or not extract_llm_resident._context_memory_available()):
                     return
+                if index is not None and time.monotonic() - capacity_checked >= 60:
+                    capacity_checked = time.monotonic()
+                    if capacity_reduced(index, settings["max_concurrency"]):
+                        _event("cloud_worker_retired", reason="capacity_reduced")
+                        return
                 if role is None:
                     # A hold that failed is retried on every pass, so a live child never stays hidden.
                     role = hold_role(HOME, ROLE_CLOUD)

@@ -25,12 +25,15 @@ def test_retirement_requires_verified_absence(tmp_path, monkeypatch, route, stat
         return SimpleNamespace(returncode=status if argv[1] == "print" else 0)
 
     monkeypatch.setattr(lifecycle_io, 'run_bounded', run)
+    monkeypatch.setattr(service_management, "time", SimpleNamespace(sleep=lambda _s: None))
     if route == "retire":
         result = service_management.retire_agents({label}, notes.append, False, paths=mcs_setup._service_paths())
     else:
         previous = {"runtime_mode": "hermes", "agents": [{"label": label}], "cron": []}
         result = service_management.retire_previous_runtime(previous, 'standalone', notes.append, False, paths=mcs_setup._service_paths())
-    assert [call[1] for call in calls] == ["bootout", "print"]
+    # A still-listed job (0) is polled while it drains; other codes decide at once.
+    polls = service_management.STOP_POLLS if status == 0 else 1
+    assert [call[1] for call in calls] == ["bootout"] + ["print"] * polls
     assert result == (0 if status == 113 else 1)
     assert plist.exists() is (status != 113)
     if status != 113:
@@ -51,3 +54,25 @@ def test_retirement_dry_run_never_contacts_services(tmp_path, monkeypatch, route
         previous = {"runtime_mode": "hermes", "agents": [{"label": label}], "cron": []}
         result = service_management.retire_previous_runtime(previous, 'standalone', lambda _message: None, True, paths=mcs_setup._service_paths())
     assert result == 0 and plist.read_text() == "synthetic owned service"
+
+
+@pytest.mark.parametrize("route", ["retire", "switch"])
+def test_retirement_waits_for_a_draining_agent_to_leave(tmp_path, monkeypatch, route):
+    # A busy drainer is still listed right after bootout; one immediate probe
+    # must not fail services when launchd reports it gone a few polls later.
+    label = "ai.mcs.extract-drainer"
+    plist = tmp_path / (label + ".plist")
+    plist.write_text("synthetic owned service")
+    monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
+    monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(tmp_path))
+    answers, sleeps = [0, 0, 0, 113], []
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda argv, **_kw: SimpleNamespace(
+        returncode=answers.pop(0) if argv[1] == "print" else 0))
+    monkeypatch.setattr(service_management, "time", SimpleNamespace(sleep=sleeps.append))
+    if route == "retire":
+        result = service_management.retire_agents({label}, lambda _m: None, False, paths=mcs_setup._service_paths())
+    else:
+        previous = {"runtime_mode": "hermes", "agents": [{"label": label}], "cron": []}
+        result = service_management.retire_previous_runtime(previous, 'standalone', lambda _m: None, False, paths=mcs_setup._service_paths())
+    assert result == 0 and answers == [] and sleeps == [0.5] * 3
+    assert not plist.exists()

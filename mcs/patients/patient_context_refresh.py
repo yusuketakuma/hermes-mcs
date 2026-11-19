@@ -1,18 +1,18 @@
 """Advance fair patient context work while preserving inference and publication evidence."""
 from contextlib import closing as closing, contextmanager as contextmanager
-from datetime import datetime as datetime, timedelta as timedelta
+from datetime import datetime as datetime
 import copy as copy
 import hashlib as hashlib
 import json as json
-import math as math
 import os as os
 from pathlib import Path as Path
 import re as re
 import sqlite3 as sqlite3
-from types import SimpleNamespace as SimpleNamespace
 import local_llm as local_llm
+import semantic_policy
 import initial_import_state as initial_import_state
 import cloud_inference as cloud_inference
+import cloud_backlog as cloud_backlog
 import inference_dependency_loss as dependency_loss
 import patient_context_artifacts as context_artifacts
 from clinical_chunking import PLAN_VERSION as PLAN_VERSION
@@ -33,7 +33,6 @@ from patient_context_refresh_state import (
     CALL_SECONDS as CALL_SECONDS,
     CHUNK as CHUNK,
     COMMIT_MARGIN as COMMIT_MARGIN,
-    CONTRACT as CONTRACT,
     CURRENT_VERSION as CURRENT_VERSION,
     Deferred as Deferred,
     KIND as KIND,
@@ -52,9 +51,6 @@ from patient_context_refresh_state import (
     _INTERNAL_PROOF as _INTERNAL_PROOF,
     _SCAN_CODE as _SCAN_CODE,
     _SUMMARY_CODE as _SUMMARY_CODE,
-    _adoption_artifact_matches as _adoption_artifact_matches,
-    _adoption_epoch_expected as _adoption_epoch_expected,
-    _artifact_meta as _artifact_meta,
     _checks as _checks,
     _cloud_input_binding as _cloud_input_binding,
     _comparison_context as _comparison_context,
@@ -82,37 +78,17 @@ from patient_context_refresh_state import (
     workday_window as workday_window
 )
 from patient_context_quality_receipts import (
-    _has_prior_quality_failure as _has_prior_quality_failure,
     _new_summary_repair_response as _new_summary_repair_response,
-    _other_summary_repair_spent as _other_summary_repair_spent,
-    _profiled_summary_repair_exists as _profiled_summary_repair_exists,
     _quality_answers as _quality_answers,
     _quality_claim as _quality_claim,
     _quality_failed as _quality_failed,
-    _quality_failure_allows_remainder as _quality_failure_allows_remainder,
-    _quality_integrity as _quality_integrity,
-    _quality_mark_pass as _quality_mark_pass,
-    _quality_mark_skipped as _quality_mark_skipped,
     _quality_owns as _quality_owns,
     _quality_pass_content as _quality_pass_content,
-    _quality_pass_present as _quality_pass_present,
     _quality_passed as _quality_passed,
-    _quality_record_failure as _quality_record_failure,
-    _quality_release as _quality_release,
-    _quality_repair_spent as _quality_repair_spent,
-    _quality_reserve_repair_tx as _quality_reserve_repair_tx,
-    _quality_retry as _quality_retry,
-    _quality_scope_allowed as _quality_scope_allowed,
-    _quality_skip_evidence as _quality_skip_evidence,
     _quality_skip_receipt as _quality_skip_receipt,
-    _quality_store_answers as _quality_store_answers,
-    _repair_response as _repair_response,
-    _stored_quality_answers as _stored_quality_answers,
-    _summary_repair_response as _summary_repair_response
+    _quality_store_answers as _quality_store_answers
 )
 from patient_context_refresh_sources import (
-    _ScanConnection as _ScanConnection,
-    _ScanCursor as _ScanCursor,
     _ScanInterrupted as _ScanInterrupted,
     _all_facts as _all_facts,
     _candidate_reader as _candidate_reader,
@@ -124,17 +100,12 @@ from patient_context_refresh_sources import (
     _quality_input as _quality_input,
     _scan_check as _scan_check,
     _scan_facts as _scan_facts,
-    _scan_read_binding as _scan_read_binding,
     _scan_read_owner as _scan_read_owner,
     _scan_ready as _scan_ready,
-    _scan_writer_wait as _scan_writer_wait,
     _scans_from_read as _scans_from_read,
     _snapshot as _snapshot,
-    _source_chunk_marker_matches as _source_chunk_marker_matches,
-    _source_chunk_rows as _source_chunk_rows,
     _source_chunks as _source_chunks,
     _source_occurrence as _source_occurrence,
-    _source_occurrence_disposition as _source_occurrence_disposition,
     _source_quality_capture as _source_quality_capture,
     _source_quality_verified as _source_quality_verified,
     _source_repair_chunks as _source_repair_chunks,
@@ -147,7 +118,6 @@ from patient_context_refresh_sources import (
     _verify_source_repair_rows as _verify_source_repair_rows
 )
 from patient_context_refresh_readiness import (
-    _LANE_CODES as _LANE_CODES,
     _capture_readiness as _capture_readiness,
     _cloud_extraction_ready as _cloud_extraction_ready,
     _context_view_input as _context_view_input,
@@ -157,10 +127,8 @@ from patient_context_refresh_readiness import (
     _inference_ready as _inference_ready,
     _observe_readiness as _observe_readiness,
     _pending as _pending,
-    _publication_route as _publication_route,
     _quality_publication_allowed as _quality_publication_allowed,
     _raw_extraction_current as _raw_extraction_current,
-    _readiness_environment as _readiness_environment,
     _readiness_for_write as _readiness_for_write,
     _ready as _ready,
     _required_cloud_extraction_contract as _required_cloud_extraction_contract,
@@ -175,10 +143,8 @@ from patient_context_refresh_readiness import (
 )
 from patient_context_quality_controller import (
     _ask as _ask,
-    _quality_repair_candidate as _quality_repair_candidate,
     _quality_step as _quality_step,
     _scan as _scan,
-    _source_quality_repair_step as _source_quality_repair_step,
     _source_repair_seal as _source_repair_seal,
     _summary as _summary
 )
@@ -234,6 +200,9 @@ CHILD_WAIT_REASON = "patient_context_cloud_deferred:cloud_worker_unavailable"
 CHILD_WAIT_S = 60
 CHILD_WAIT_UNITS = 8
 _CHILD_WAIT = "_patient_context_child_wait"
+# A pass over more patients than its candidate budget that found nothing due, waiting or
+# interrupted. ``cloud_backlog._context_retry_delay`` paces it like other idle waits.
+NOTHING_DUE_REASON = "patient_context_nothing_due"
 
 
 def _scan_key(role):
@@ -278,13 +247,18 @@ def _advance_patient_scan(ledger, expected, bookmark, deadline, admit, *, observ
         if observed_out is not None:
             observed_out['scan_refusal'] = reason
 
+    # Admission may start external commands (the memory check): never under the write lock.
+    if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline:
+        _mark('deadline')
+        return None
+    if not admit():
+        _mark('admission')
+        return None
     with patient_context_refresh_sources._scan_writer_wait(ledger.db, deadline):
         try:
             ledger.db.execute('BEGIN IMMEDIATE')
             if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline:
                 refusal = 'deadline'
-            elif not admit():
-                refusal = 'admission'
             elif not extract_llm._writer_current(full=True):
                 refusal = 'writer_generation'
             elif patient_context_refresh_state._latest(ledger.db, patient_context_refresh_state.PROGRESS, 0) != expected:
@@ -386,6 +360,23 @@ _WAIT_COUNTER_KEYS = (
 # context child, do not use the pass's candidate budget, up to this many.
 _ROLE_SKIP_LIMIT = 64
 _SCAN_COUNTER_KEYS = _WAIT_COUNTER_KEYS + ('skip_patient_invalid',)
+_DENIAL_KEYS = ('generation_reason', 'unverified_records')
+_GENERATION_UNVERIFIED = 'patient_context_generation_unverified'
+
+
+def _note_generation_denial(observed_out, quota):
+    """Keep one generation-quota denial per pass; an unreadable record outranks other reasons.
+
+    The record count always belongs to the reason kept, never a mix of patients."""
+    reason = quota.get('reason')
+    if reason is None:
+        return
+    records = quota.get('unverified_records', 0)
+    held = observed_out.get('generation_reason')
+    if held is None or (reason == _GENERATION_UNVERIFIED and held != _GENERATION_UNVERIFIED):
+        observed_out['generation_reason'], observed_out['unverified_records'] = reason, records
+    elif held == reason:
+        observed_out['unverified_records'] = max(observed_out['unverified_records'], records)
 
 
 def _raise_if_systemic(unreadable, scanned):
@@ -422,16 +413,23 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
         if observed_out is not None:
             observed_out[key] += 1
 
+    def passed(pid):
+        """Count a patient another role serves, or whose unit waits for a context child."""
+        nonlocal waiting
+        if role in ("local", "cloud") and cloud_scan(pid) != (role == "cloud"):
+            count('wait_other_role')
+            return True
+        if pid in passed_over:
+            count('wait_cloud_worker')
+            waiting += 1
+            return True
+        return False
+
     def consider(reader, pid):
         """Evaluate one patient: ``selected``, ``checked`` (then test coverage) or ``skipped``."""
         nonlocal scanned, waiting, scan_reads
         seen.add(pid)
-        if role in ("local", "cloud") and cloud_scan(pid) != (role == "cloud"):
-            count('wait_other_role')
-            return 'other_role'
-        if pid in passed_over:
-            count('wait_cloud_worker')
-            waiting += 1
+        if passed(pid):
             return 'other_role'
         scanned += 1
         lock = _patient_lock(reader.db, pid)
@@ -445,6 +443,8 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
             waiting_before = waiting
             counters_before = ({key: observed_out[key] for key in _WAIT_COUNTER_KEYS}
                                if observed_out is not None else None)
+            denial_before = ({key: observed_out.get(key) for key in _DENIAL_KEYS}
+                             if observed_out is not None else None)
             whole = None
             try:
                 published = patient_context_refresh_state._published_version(reader.db, pid)
@@ -495,11 +495,15 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                                                           cohort=lanes != ('A',))
                             quota = (context_quota.inspect(reader.db, pid, generation['input_key'],
                                 now=now, catchup=generation['catchup']) if generation['needed'] else {'allowed': True})
-                        except ValueError:
+                        except ValueError as exc:
                             generation, quota = None, {'allowed': False}
+                            if exc.args == (_GENERATION_UNVERIFIED,):
+                                quota['reason'] = _GENERATION_UNVERIFIED
                         candidate['_generation_plan'] = generation
                         if not quota['allowed']:
-                            count('wait_generation_quota')
+                            if observed_out is not None:
+                                observed_out['wait_generation_quota'] += 1
+                                _note_generation_denial(observed_out, quota)
                             due['A'] = False
                             waiting += 1
                             if not any(due[lane] for lane in lanes):
@@ -530,6 +534,11 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                 waiting = waiting_before
                 if observed_out is not None:
                     observed_out.update(counters_before)
+                    for key, value in denial_before.items():
+                        if value is None:
+                            observed_out.pop(key, None)
+                        else:
+                            observed_out[key] = value
                 if patient_context_refresh_readiness._unreadable_in_scope(reader.db, pid, cfg, whole):
                     waiting += 1
                     count('skip_patient_invalid')
@@ -555,25 +564,44 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                 candidates += 1
                 if consider(reader, prefer) == 'selected':
                     selected = prefer
-            while selected is None and candidates < 8:
-                patient_context_refresh_sources._scan_check(reader.db)
-                original = rotation[0].get(scan_key)
-                reserved = context_schedule.advance_turn(original)
-                rotation = _advance_patient_scan(ledger, rotation, reserved, deadline, admit,
+            # A patient skipped for its role moves only this in-memory bookmark; the next write
+            # (the next candidate's, or the one at the end of the pass) carries it.
+            bookmark = rotation[0].get(scan_key)
+
+            def persist(value):
+                nonlocal rotation
+                rotation = _advance_patient_scan(ledger, rotation, value, deadline, admit,
                                                  observed_out=observed_out, key=scan_key)
                 if rotation is None:
                     raise patient_context_refresh_sources._ScanInterrupted('patient_context_scan_changed')
+
+            while selected is None and candidates < 8:
+                patient_context_refresh_sources._scan_check(reader.db)
+                original = bookmark
                 # Expensive activity ordering must not consume the fair turn's chance.
                 reader.db.scan_until = min(deadline - patient_context_refresh_state.COMMIT_MARGIN, patient_context_refresh_state.time.monotonic() + 1.0)
                 try:
                     plan = context_schedule.plan(reader.db, original)
+                except Exception:
+                    # A cancelled candidate query still uses up its turn; the query's own error
+                    # is the one the pass reports.
+                    try:
+                        persist(context_schedule.advance_turn(original))
+                    except Exception:
+                        pass
+                    raise
                 finally:
                     reader.db.scan_until = deadline - patient_context_refresh_state.COMMIT_MARGIN
-                rotation = _advance_patient_scan(ledger, rotation, plan['next'], deadline, admit,
-                                                 observed_out=observed_out, key=scan_key)
-                if rotation is None:
-                    raise patient_context_refresh_sources._ScanInterrupted('patient_context_scan_changed')
+                bookmark = plan['next']
                 pid = plan['project_id']
+                if pid is not None and pid not in seen and passed(pid):
+                    seen.add(pid)
+                    role_skips += 1
+                    if role_skips >= _ROLE_SKIP_LIMIT or _scan_covered(reader.db, seen):
+                        covered = role_skips < _ROLE_SKIP_LIMIT
+                        break
+                    continue
+                persist(bookmark)
                 if pid is None or pid in seen:
                     candidates += 1
                     if _scan_covered(reader.db, seen):
@@ -581,12 +609,7 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                         break
                     continue
                 outcome = consider(reader, pid)
-                if outcome == 'other_role':
-                    role_skips += 1
-                    if role_skips >= _ROLE_SKIP_LIMIT:
-                        break
-                else:
-                    candidates += 1
+                candidates += 1
                 if outcome == 'skipped':
                     continue
                 if outcome == 'selected':
@@ -595,6 +618,8 @@ def _select_patient(ledger, cfg, now, deadline, admit, complete, *, observed_out
                 if _scan_covered(reader.db, seen):
                     covered = True
                     break
+            if bookmark != rotation[0].get(scan_key):
+                persist(bookmark)   # the skips after the last write: once per pass
             _raise_if_systemic(unreadable, scanned)
     # scan_interrupts counts every early abort (contention, deadline or
     # read failure) — finite-slice completion keeps it at 0.
@@ -838,10 +863,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         return {"status": "deferred", "done": 0, "reason": "transaction_active"}
     local_admit = local_admit or admit
     now = patient_context_refresh_state.time.time()
-    window = patient_context_refresh_state.workday_window(now)
-    if not patient_context_refresh_state.options(cfg)["enabled"] or not window:
+    if not patient_context_refresh_state.options(cfg)["enabled"]:
         return {"status": "off", "done": 0}
-    workday_id, _ = window
+    workday_id = patient_context_refresh_state.workday_window(now)[0]
     if patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline or not admit():
         return {"status": "deferred", "done": 0}
     if role == "local" and patient_context_refresh_readiness._cloud_serves_every_patient(ledger, cfg):
@@ -861,7 +885,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                  "scan_reads": scan_reads, "scan_interrupts": scan_interrupts,
                  "scan_ms": int((patient_context_refresh_state.time.monotonic() - started) * 1000)}
         stats.update({key: scan_observed[key] for key in _SCAN_COUNTER_KEYS if key in scan_observed})
-        for key in ('scan_refusal', 'skip_patient_code'):
+        for key in ('scan_refusal', 'skip_patient_code', 'generation_reason', 'unverified_records'):
             if scan_observed.get(key) is not None:
                 stats[key] = scan_observed[key]
         if scan_rotation is None:
@@ -876,11 +900,16 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                 # Every patient belongs to the other worker role. A pass that ended on its
                 # budget first reports an incomplete scan, which keeps the caller's pacing.
                 return {"status": "deferred", "done": 0, "reason": "patient_context_other_role", **stats}
+            # A pass that covered every patient with nothing due or waiting and no interruption is a
+            # full rotation with nothing to do, so callers back off. A partial slice never does: the
+            # patients it did not reach may be due.
+            idle = scanned and covered and not scan_interrupts and not waiting
             reason = ("patient_context_scan_incomplete" if skipped and scan_interrupts
                       else "patient_context_patient_invalid" if skipped
-                      else "patient_context_waiting" if waiting else "patient_context_scan_incomplete")
+                      else "patient_context_waiting" if waiting
+                      else NOTHING_DUE_REASON if idle else "patient_context_scan_incomplete")
             return {"status": "deferred" if waiting or not covered else "complete", "done": 0,
-                    **({"reason": reason} if waiting or not covered else {}), **stats}
+                    **({"reason": reason} if waiting or not covered or idle else {}), **stats}
         snapshot, progress, frozen_ver = best[lane]
         source_keys = snapshot.get('source_scope')
         generation_plan = snapshot.pop('_generation_plan', None) if lane == 'A' else None
@@ -1353,10 +1382,11 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                                                   model=cloud_selection["model"])
                         or cloud_policy.setting_block_reason(cloud_settings)
                         or cloud_policy.budget_block_reason(ledger, cloud_settings,
-                            max_tokens=cloud_selection["max_tokens"] or 1600, selection=cloud_selection))
+                            max_tokens=cloud_selection["max_tokens"] if cloud_selection["max_tokens"] is not None else 1600, selection=cloud_selection))
                 if code in cloud_policy.REFINED_CODES:
                     code = cloud_policy.refusal_code(cfg, code, model=cloud_selection["model"],
-                                                     root=extract_llm.HOME, settings=cloud_settings)
+                                                     root=extract_llm.HOME, settings=cloud_settings,
+                                                     route="patient_context", project_id=pid)
                 verdict, code, _ = cloud_stop(("pre_send", code), False, False) if code else (None, None, False)
         except Exception:
             return   # the send path decides again, with the same table
@@ -1546,7 +1576,6 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     facts, total = repaired["facts"], repaired["facts_total"]
                     changed = repaired["facts_sig"]
                     projected = repaired["temporal_view"]
-                import semantic_policy
                 quality_policy, problems = semantic_policy.runtime_config(cfg)
                 if problems or not patient_context_quality_receipts._quality_scope_allowed(ledger.db, pid, quality_policy, snapshot["sources"]):
                     raise patient_context_refresh_state.Deferred("summary_quality_promotion")
@@ -1613,7 +1642,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                                     source_binding=selected_occurrence[0]["source_binding"])
                         scan_input[0] = patient_context_refresh_state._cloud_scan_binding(
                             meta["source_sig"], meta["contract"], snapshot["route"]["provider"], selected_occurrence[0])
-                        planned, planned_cursor, _, _, _ = context_plan.scan_plan(source, saved)
+                        planned, planned_cursor, _, _ = context_plan.scan_plan(source, saved)
                         planned_span = [sum(map(len, planned[:planned_cursor])), sum(map(len, planned[:planned_cursor + 1]))]
                         route = snapshot["route"]
                         # The unit this pass would write: the route's fresh unit, or the local
@@ -1692,7 +1721,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
         deferred_reason = str(exc) or "patient_context_waiting"
         if (generation_claim is not None and not generation_decision['resume'] and not generation_quality
                 and not generation_uncertain and not generation_contacted and (deferred_reason in (
-                    'patient_context_capacity_or_deadline', 'patient_context_admission_deferred', 'patient_context_turn_busy', 'patient_context_local_capacity')
+                    'patient_context_capacity_or_deadline', 'patient_context_admission_deferred', 'patient_context_turn_busy', 'patient_context_endpoint_unsent', 'patient_context_local_capacity')
                     or deferred_reason.startswith('patient_context_cloud_deferred:'))
                 and (provider is None or not provider.possibly_sent)):
             return_generation('unsent', proven_unsent=True)
@@ -1851,7 +1880,6 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                     ledger.db.rollback()
                     return {"status": "source_changed", "done": 0}
             if source_quality_identity is not None:
-                import semantic_policy
                 live_cfg = extract_llm.load_config()
                 live_policy, problems = semantic_policy.runtime_config(live_cfg)
                 import semantic_jev
@@ -1964,8 +1992,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                         **({"source_sig": snapshot["source_sig"], "source_scope": source_keys} if lane == "A" else {}),
                         **(retry if lane == "A" and deferred_reason is None else {})}
             if lane == "A" and deferred_reason is not None:
-                progress["next_try"] = ((generation_wait.get('next_at') or now + 60) if generation_wait is not None
-                    else now if deferred_reason == "summary_quality_pending" else now + 60)
+                wait = cloud_backlog.deferral_delay(deferred_reason)
+                progress["next_try"] = ((generation_wait.get('next_at') or now + wait) if generation_wait is not None
+                    else now if deferred_reason == "summary_quality_pending" else now + wait)
                 progress["quality_state"] = (deferred_reason[len("summary_quality_"):]
                     if deferred_reason.startswith("summary_quality_") else None)
             elif lane == "A":
@@ -2061,7 +2090,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             if not failure and estimated_unit:
                 cloud_policy.dryrun_tx(ledger, route="patient_context", project_id=pid,
                     unit_key=lane, input_chars=sum(source.get("body_length", 0) for source in snapshot["sources"]),
-                    max_tokens=cloud_selection["max_tokens"] or 1600, model=cloud_selection["model"])
+                    max_tokens=cloud_selection["max_tokens"] if cloud_selection["max_tokens"] is not None else 1600, model=cloud_selection["model"])
             if not failure and shadow_call is not None:
                 shadow_unit = os.urandom(16).hex()
                 comparison_sources = [source] if lane != "A" else snapshot["sources"]

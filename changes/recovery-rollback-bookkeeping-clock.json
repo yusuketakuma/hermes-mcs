@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "中断した実行環境移行の巻戻しを完了しても適用済みに残る問題と、未来時刻の更新記録で独立復旧監視が動かない問題を修正",
+  "summary": "実行環境の移行を伴う更新の巻戻しが中断し、復旧がそれを元に戻して完了したとき、巻き戻した更新を適用済みの一覧（mcs_update.py status の applied）から外すようになりました。また、時計が一時的に進んでいた間に書かれた更新記録のうち、古さの判定時間（30分）より先の時刻のものを、15分ごとの独立復旧監視（--if-stale）と mcs_update.py の同じ判定が「進行中」と見なし続けず、古い記録として復旧するようになりました。",
+  "upgrade": "追加操作は不要です。すでに巻戻し済みの更新が applied に残っている導入先は自動では直しません。必要なら次の更新で整合します。独立復旧監視の変更は、この版で install.sh を再実行（更新の再導入を含む）して復旧ツールを入れ替えたときに反映されます。",
+  "details": [
+    "_undo_interrupted_migration が巻戻し形の記録を完了したとき、_finish_resumed と同じ共通処理（_drop_reverted）で applied の末尾を外し、attempts に rolled_back を記録する。",
+    "記録の最新時刻が現在より後なら新しい記録とは見なさない（経過秒が0以上 STALE_S 未満のときだけ新しい）。"
+  ],
+  "refs": ["mcs/ops/update_recovery.py", "deployment/recovery/mcs_recover.py"]
+}

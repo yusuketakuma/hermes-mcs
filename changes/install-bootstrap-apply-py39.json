@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "Hermes 方式の初回設定前に install.sh を対話で再実行すると誤った理由で止まる問題を修正",
+  "summary": "Hermes 方式で初回設定を終える前に install.sh を端末から再実行したとき（--mode や --recovery-python を付けた場合を含む）、PATH の python3 が macOS 標準の 3.9 でも初回設定の確認が通るようになりました。これまでは確認用の部品が 3.9 で読み込めず、何も変更しないまま毎回「初回設定が変更されたため停止しました」と表示して止まっていました。",
+  "upgrade": "追加操作は不要です。この状態で止まっていた導入先は、この修正を含むコードで同じ install.sh を再実行してください。",
+  "details": [
+    "初回設定の確認に使う統計用の共通部品を、Python 3.9 でも読み込めるようにした。",
+    "install.sh が venv の無い状態で使う導入設定の確認処理と、その import 先が Python 3.9 で読み込めることを静的テストで固定した。"
+  ],
+  "refs": ["mcs/core/stats_math.py", "tests/meta/test_install_helpers_py39.py"]
+}

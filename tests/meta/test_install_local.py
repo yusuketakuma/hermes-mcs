@@ -135,6 +135,60 @@ def test_empty_explicit_dest_with_spaces_is_cloned(home, source, tmp_path):
     assert Path(_ran(home)[0]) == dest.resolve()
 
 
+# Synthetic files carrying only the headers Finder metadata starts with.
+FINDER_METADATA = {".DS_Store": b"\0\0\0\1Bud1" + bytes(24), ".localized": b"",
+                   "._README": b"\0\x05\x16\x07" + bytes(28)}
+
+
+def test_dest_with_only_finder_metadata_is_cloned(home, source, tmp_path):
+    dest = tmp_path / "Finder folder"
+    dest.mkdir()
+    for name, raw in FINDER_METADATA.items():
+        (dest / name).write_bytes(raw)
+    assert install_local.main(["--dest", str(dest)], source=str(source)) == 0
+    assert (dest / "README").read_text() == "mcs"
+    assert not any((dest / name).exists() for name in FINDER_METADATA)
+    previous = dest / ".git" / "mcs-previous-directory"
+    assert {p.name: p.read_bytes() for p in previous.iterdir()} == FINDER_METADATA
+
+
+def test_clone_restores_files_changed_after_planning(home, source, tmp_path, monkeypatch):
+    dest = tmp_path / "Finder folder"
+    dest.mkdir()
+    (dest / ".DS_Store").write_bytes(FINDER_METADATA[".DS_Store"])
+    rename = install_local.os.rename
+
+    def change_during_placement(old, new):
+        if Path(old) == dest:
+            (dest / ".DS_Store").write_bytes(b"synthetic user content")
+        return rename(old, new)
+
+    monkeypatch.setattr(install_local.os, "rename", change_during_placement)
+    assert install_local.main(["--dest", str(dest)], source=str(source)) == 4
+    assert (dest / ".DS_Store").read_bytes() == b"synthetic user content"
+    assert not (dest / ".git").exists()
+
+
+@pytest.mark.parametrize("other", ["notes.txt", ".DS_Store/", "._notes", ".DS_Store", ".localized"])
+def test_finder_metadata_does_not_hide_other_content(home, source, tmp_path, other, capsys):
+    """Names alone never make a file disposable: a user's own ._notes or a
+    .DS_Store/.localized without Finder's format is content and is kept."""
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    if other.endswith("/"):
+        (dest / other).mkdir()
+    else:
+        for name, raw in FINDER_METADATA.items():
+            if name != other:
+                (dest / name).write_bytes(raw)
+        (dest / other).write_text("fictional")
+    before = sorted(p.name for p in dest.iterdir())
+    assert install_local.main(["--dest", str(dest)], source=str(source)) == 2
+    assert sorted(p.name for p in dest.iterdir()) == before
+    assert other.endswith("/") or (dest / other).read_text() == "fictional"
+    assert repr(other.rstrip("/")) in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("root_value", ["empty", "different"])
 def test_unsupported_data_root_is_refused_before_clone(home, source, tmp_path, monkeypatch, capsys, root_value):
     dest = tmp_path / "permanent-source"
@@ -204,6 +258,27 @@ def test_source_that_is_not_a_checkout_is_refused(home, tmp_path):
     plain = tmp_path / "zip-download"
     plain.mkdir()
     assert install_local.main([], source=str(plain)) == 2
+
+
+def test_unpacked_source_inside_another_repository_is_refused(home, tmp_path):
+    outer = _repo(tmp_path / "unrelated-project", marker="other")
+    unpacked = outer / "downloads" / "hermes-mcs"
+    unpacked.mkdir(parents=True)
+    (unpacked / "install.sh").write_text(FAKE_INSTALL)
+    assert install_local.main([], source=str(unpacked)) == 2
+    assert not (home / ".mcs").exists() and not (home / "install-ran").exists()
+
+
+def test_home_repository_does_not_turn_data_only_runtime_root_into_a_checkout(home, source, capsys):
+    _git(home, "init", "-q", "-b", "main")
+    runtime = home / ".mcs"
+    (runtime / "data").mkdir(parents=True)
+    (runtime / "config.json").write_text("{}")
+    assert install_local.main([], source=str(source)) == 0
+    dest = home / ".local" / "share" / "hermes-mcs"
+    assert (dest / "README").read_text() == "mcs" and Path(_ran(home)[0]) == dest.resolve()
+    assert sorted(p.name for p in runtime.iterdir()) == ["config.json", "data"]
+    assert "設定・データだけ" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("problem", [

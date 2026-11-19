@@ -37,8 +37,9 @@ def test_slow_rules_and_llm_leave_medication_rollup_and_signal_slices(tmp_path, 
     monkeypatch.setattr(extract_llm_admission, 'legacy_admissions', extract_llm.legacy_admissions)
     monkeypatch.setattr(extract_llm_resident, 'legacy_admissions', extract_llm.legacy_admissions)
 
-    def rules(ledger, *, deadline):
+    def rules(ledger, *, deadline, scope_sql):
         assert clock[0] < deadline < 270
+        assert scope_sql == ""  # no host extract.upgrade_scope: the rule query is unrestricted, as before
         seen.append("rules")
         clock[0] = deadline
         return {"done": 1, "pids": []}

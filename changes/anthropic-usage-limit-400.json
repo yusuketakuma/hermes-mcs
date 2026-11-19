@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "Anthropic の利用上限（HTTP 400）を支払い停止として扱う",
+  "summary": "Anthropic が利用上限を 400 で返したとき、一般の契約エラーではなく支払い停止（payment_required）として外部AI送信の回路を止めます。上限が解除されるまで無駄な再送をしません。Retry-After の無い 429 は従来どおり再試行せず待ちます。",
+  "upgrade": "追加操作は不要です。Hermes の gateway 再起動後に反映されます。",
+  "details": ["本文が invalid_request_error で、利用上限の文言で始まる 400 だけを対象にする。他の 400 は従来どおり contract_error。"],
+  "refs": ["mcs/llm/providers/anthropic_client.py", "#230"]
+}

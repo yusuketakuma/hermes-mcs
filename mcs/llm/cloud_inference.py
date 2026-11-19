@@ -82,6 +82,16 @@ def _history_read_error(phase, error, *, observation=None):
         pass  # Diagnostics must never replace the existing fail-closed refusal.
 
 
+def _send_blocked(reason):
+    """Name the policy code that refused a fresh send; the row itself defers."""
+    try:
+        print(json.dumps({"event": "cloud_send_blocked", "pid": os.getpid(), "ts": time.time(),
+                          "reason": reason if type(reason) is str and reason in cloud_send_admission.PRE_SEND_VERDICTS else "unknown"}),
+              file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
 def _current_cloud_settings():
     try:
         cfg = load_config()
@@ -142,7 +152,8 @@ class CloudInferenceUnit:
     def __init__(self, ledger, cfg, *, route, project_id, unit_key, deadline,
                  current, dispatch, message_id=None, owner=None, discard_reason=None,
                  max_attempts=None, on_reserved_tx=None, reserve_dispatch=None, transport=None,
-                 purpose=None, selection=None, cache_heads=(), input_binding=None, dispatch_current=None):
+                 purpose=None, selection=None, cache_heads=(), input_binding=None, dispatch_current=None,
+                 changed=None):
         purpose = purpose or ("patient_context" if route == "patient_context" else "backlog")
         raw_cfg = copy.deepcopy(cfg)
         resolved, errors = cloud_policy.resolve_profile(cfg, route=route, purpose=purpose, root=HOME)
@@ -189,6 +200,10 @@ class CloudInferenceUnit:
         # a paid answer discarded after sending (mode off mid-flight) keeps stage pre_send with
         # possibly_sent true; its verdict is the same.
         self.refusal = None
+        # ``changed`` proves the unit's input changed; without it every denial closes the unit.
+        self._changed = changed
+        self._denial_proven = False
+        self._unbilled = []
 
         reserved_caps = {}
 
@@ -212,8 +227,12 @@ class CloudInferenceUnit:
                 live = load_config()
                 if not isinstance(live, dict) or not live:
                     raise CloudObservationIncomplete('cloud_config_unverified')
+                if live.get('provider_unavailable'):
+                    # A provider-file mismatch is not the owner's stop: hold, keep any response.
+                    raise CloudObservationIncomplete('cloud_provider_unverified')
                 if isinstance(live.get('cloud_llm'), dict) and live['cloud_llm'].get('mode') == 'off':
                     refuse('pre_send', 'mode_off')
+                    self._denial_proven = True
                     raise CloudFallback('cloud_unit_changed')
                 now = resolve_cloud_settings(live)
                 chosen, errors = cloud_policy.resolve_profile(live, route=route, purpose=purpose, root=HOME)
@@ -224,12 +243,12 @@ class CloudInferenceUnit:
                     raise CloudObservationIncomplete('cloud_key_unverified')
                 # The run window gates each new POST (retries included); a result that
                 # already arrived is still judged only by scope, not by the clock.
-                denied = (dict(chosen) != dict(self.selection)
-                          or writer_lock.updater_state() != updater
-                          or updater[0] or live_key != key
-                          or cloud_policy.scope_generation({"cloud_llm": now}) != scope
-                          # A paid result is kept while its scope holds, even if the send window closes.
-                          or not cloud_policy.in_scope(now, route, project_id))
+                changed_scope = (dict(chosen) != dict(self.selection) or live_key != key
+                                 or cloud_policy.scope_generation({"cloud_llm": now}) != scope
+                                 # A paid result is kept while its scope holds, even if the send window closes.
+                                 or not cloud_policy.in_scope(now, route, project_id))
+                denied = (changed_scope or writer_lock.updater_state() != updater
+                          or updater[0])
                 if denied:
                     try:
                         if not cloud_policy.in_scope(now, route, project_id):
@@ -253,6 +272,7 @@ class CloudInferenceUnit:
             except Exception:
                 raise CloudObservationIncomplete("cloud_guard_unverified") from None
             if denied:
+                self._denial_proven = changed_scope
                 raise CloudFallback("cloud_unit_changed")
             if inference and dispatch_current is not None:
                 try:
@@ -321,6 +341,7 @@ class CloudInferenceUnit:
                 self.possibly_sent = True
                 # Named before the write: saving a 200 without usage raises.
                 refuse("after_send", _after_send_code(metadata))
+            unbilled = cloud_policy._confirmed_rejection(metadata, True, self.model)
             def write():
                 try:
                     guard(inference=False)
@@ -328,9 +349,14 @@ class CloudInferenceUnit:
                     # Unknown readiness does not prove the paid response lost its scope.
                     outcome = dict(metadata)
                 except CloudFallback:
-                    if self.final_disposition is None:
-                        self.final_disposition = discard_reason() if discard_reason else "discarded_scope"
-                    outcome = {**metadata, "disposition": self.final_disposition}
+                    if unbilled or not self._proven_change():
+                        # Nothing billed to close, or no proof the answer went stale:
+                        # keep it recoverable instead of closing the unit for good.
+                        outcome = dict(metadata)
+                    else:
+                        if self.final_disposition is None:
+                            self.final_disposition = discard_reason() if discard_reason else "discarded_scope"
+                        outcome = {**metadata, "disposition": self.final_disposition}
                 else:
                     outcome = dict(metadata)
                 value = _save_result(lambda: cloud_policy.record_result(ledger, reservation, outcome,
@@ -341,6 +367,8 @@ class CloudInferenceUnit:
                         # receipts: the unit stays held like a send with no response.
                         and not (metadata['http_class'] == 'http_200' and metadata.get('usage') is None)):
                     self._unresolved = False
+                if unbilled:
+                    self._unbilled.append(reservation)
                 self.completed_reservations.append(reservation)
                 if answer is not None:
                     self.answered_reservations.append(reservation)
@@ -369,7 +397,8 @@ class CloudInferenceUnit:
             return reason
         try:
             return cloud_policy.refusal_code(load_config() if cfg is None else cfg, reason,
-                                             model=self.model, root=HOME, settings=settings)
+                                             model=self.model, root=HOME, settings=settings,
+                                             route=self.route, project_id=self.project_id)
         except Exception:
             return {"window_history_unverified": "window_history_pruned", "scope": "unknown"}.get(reason, reason)
 
@@ -377,19 +406,33 @@ class CloudInferenceUnit:
         """Append the unit's final disposition without mutating financial results."""
         for child in self._children:
             child.discard()
-        if not self.completed_reservations or self.discarded:
+        # A not-sent or confirmed-rejected reservation billed nothing and stays retryable.
+        reservations = [r for r in self.completed_reservations if r not in self._unbilled]
+        if not reservations or self.discarded:
             return
         def write():
+            if not self._proven_change():
+                return
             if self.ledger.db.in_transaction:
                 raise RuntimeError("cloud_disposition_owner_transaction_active")
             with self.ledger.db:
                 self.ledger.db.execute("BEGIN IMMEDIATE")
                 reason = self.final_disposition or (self.discard_reason() if self.discard_reason else "discarded_scope")
-                for reservation in self.completed_reservations:
+                for reservation in reservations:
                     cloud_policy.record_disposition_tx(self.ledger, reservation, reason)
             self.final_disposition = reason
             self.discarded = True
         return self.dispatch(write, result=True)
+
+    def _proven_change(self):
+        """Only a proven scope or input change closes a paid answer; an
+        unverifiable currentness or an update fence leaves it recoverable."""
+        if self._denial_proven or self._changed is None:
+            return True
+        try:
+            return self._changed() is True
+        except Exception:
+            return False
 
     @property
     def possibly_sent(self):
@@ -493,6 +536,7 @@ class CloudInferenceUnit:
                     self._refuse("pre_send", self._blocked_code(blocked, settings=judged.get("cloud_llm")))
                     # Only a history-checked fresh request may use caller local fallback.
                     self.commit_guard()
+                    _send_blocked(blocked)
                     raise CloudFallback("cloud_send_blocked")
                 capacity = _current_cloud_settings()["max_concurrency"]
                 self._effect_started = True   # admission to new request work

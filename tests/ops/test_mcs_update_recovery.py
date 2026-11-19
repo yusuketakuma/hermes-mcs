@@ -51,6 +51,49 @@ def test_recover_interrupted_pre_merge(updater, tmp_path, monkeypatch):
     assert after["applying"] is None and after["stages"] == []
 
 
+@pytest.mark.parametrize("services_fail", [False, True])
+def test_recover_previous_head_after_post_merge_reconciles_old_services(
+        updater, tmp_path, monkeypatch, services_fail):
+    import service_management
+    from ops_testkit import patch_lifecycle_lookup
+
+    repo, _ = _make_repo(tmp_path)
+    mcs_update.REPO = str(repo)
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
+    patch_lifecycle_lookup(monkeypatch, updater, "_enqueue_notice", lambda *a, **k: True)
+    calls = []
+
+    def services():
+        calls.append("services")
+        if services_fail:
+            raise updater.UpdateError("services_failed: synthetic")
+
+    patch_lifecycle_lookup(monkeypatch, updater, "_services_reconcile", services)
+    monkeypatch.setattr(service_management, "retire_to_snapshot",
+                        lambda snapshot, **kwargs: calls.append(("retire", snapshot)) or [])
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    snapshot = {"agents": [], "cron": []}
+    state = updater.journal_store.default_state()
+    # The new code ran (post_merge) and its failed bail rollback reset the tree to prev.
+    state["applying"] = {"tag": "v9.9.9", "sha": "f" * 40, "prev_sha": head,
+                         "manifest_snapshot": snapshot, "at": time.time() - 4000}
+    state["stages"] = [{"stage": name, "at": time.time() - 3000}
+                       for name in ("quiesce", "merge", "post_merge")]
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    report_path = Path(mcs_update.REPORT_PATH)
+    if services_fail:
+        assert updater.recover_interrupted() == 1
+        assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] == state["applying"]
+        assert "rollback services: services_failed" in json.loads(report_path.read_text())["detail"]
+    else:
+        assert updater.recover_interrupted() == 0
+        after = updater.journal_store.load_state(updater.STATE_PATH)
+        assert after["applying"] is None and after["stages"] == []
+        assert json.loads(report_path.read_text())["result"] == "post_merge_reverted"
+    assert calls == [("retire", snapshot), "services"]
+
+
 def test_recover_merge_head_abort(updater, tmp_path, monkeypatch):
     repo, _ = _make_repo(tmp_path)
     mcs_update.REPO = str(repo)

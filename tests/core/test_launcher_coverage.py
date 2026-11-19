@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 # 常駐業務入口。各々がapp importより前にQ SHを取得する(m3-autoupdate-design §3.3)。
 _MANAGED = {
-    'mcs_standalone/__main__.py': '_runtime_entry.acquire()',
+    'mcs_standalone/__main__.py': '_runtime_entry.acquire(',
     'lineworks_adapter/__main__.py': '_runtime_entry.acquire()',
     'adapters/lineworks/__main__.py': '_runtime_entry.acquire()',
     'hermes_plugin/__init__.py': 'runtime_entry.acquire()',

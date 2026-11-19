@@ -72,3 +72,19 @@ def test_an_empty_prior_shows_every_fact_first_found_after_the_reset():
     _prior(db)   # the patient had records but no published context when the reset ran
     groups = _changes(db)
     assert [item["message_id"] for item in groups["backfill_found"]] == [1]
+
+
+def test_a_recorded_patient_is_judged_by_identity_even_for_a_fact_without_a_message_row():
+    karte = {"source": "karte_summary", "source_key": "karte:1", "message_id": 0, "content_hash": "k",
+             "category": "病状", "discovery": "backfill_found", "found_at": 700.0}
+    db = _db(reset_at=500.0)
+    _prior(db, karte)
+    assert _changes(db, [karte])["backfill_found"] == [], "held before the reset: not new"
+    unheld = {**karte, "content_hash": "other"}
+    assert _changes(db, [unheld])["backfill_found"] == [unheld], "unheld: shown although it has no first_seen"
+
+
+def test_a_recorded_patient_is_not_hidden_by_first_seen_alone():
+    db = _db(reset_at=500.0)
+    _prior(db, _found(2))   # the erased context held another record's fact only
+    assert _changes(db, [_found(1)])["backfill_found"] == [_found(1)]

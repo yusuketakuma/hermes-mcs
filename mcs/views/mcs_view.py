@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 import semantic_store
+import semantic_transport
 
 from ledger import LedgerReader
 from stamp_read import reaction_actor_summary
@@ -325,7 +326,10 @@ class View:
     def _karte_summary_state(self, pid):
         """(fetched_at, empty) of the newest 連携サマリー artifact, (None, None) when never fetched.
 
+        A summary bound to another karte_id than the patient's current one is not fetched.
         The comment itself never leaves the artifact."""
+        patient = self.db.execute("SELECT * FROM patients WHERE project_id=?", (pid,)).fetchone()
+        karte_id = patient["karte_id"] if patient and "karte_id" in patient.keys() else None
         row = self.db.execute(
             "SELECT content,meta FROM artifacts WHERE kind='karte_summary' "
             "AND project_id=? "
@@ -333,7 +337,8 @@ class View:
         if not row:
             return None, None
         content, meta = loads_dict(row["content"]), loads_dict(row["meta"])
-        if content is None or meta is None:
+        if (content is None or meta is None or type(meta.get("karte_id")) is not int
+                or meta["karte_id"] != karte_id):
             return None, None
         at = meta.get("fetched_at")
         empty = content.get("empty")
@@ -427,7 +432,7 @@ class View:
         summary.setdefault("verdicts", {})
         # The historical annotations stay visible after their post ages out;
         # pending counts only current extractions eligible for another audit.
-        scope, scope_params = qc_scope_sql(time.time())
+        scope, scope_params = qc_scope_sql(self.meta["generated_at"])
         scope_counts = self.db.execute(f"""
           WITH sources AS (
             SELECT m.message_id, {scope} AS eligible,
@@ -544,6 +549,7 @@ class View:
                                    include_text=True)
         return result
 
+    @semantic_transport.with_local_model_scope
     def _semantic(self, pid, mid):
         """Phase-J artifacts for one message: bundle, proposition
         verdicts, verified fact candidates, audited summary, notify
@@ -588,6 +594,8 @@ class View:
                     current = current and bool(
                         policy
                         and meta.get("policy_fingerprint") == policy)
+                current = current and semantic_store.producer_current(
+                    kind, r["model"], meta)
                 effective = (meta.get("audit_status") or meta.get("technical_status")) \
                     if current else "STALE"
                 items.append({"artifact_id": r["artifact_id"],

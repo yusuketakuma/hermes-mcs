@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "生成回数の記録が読めないときの停止理由をクラウド処理の記録に表示",
+  "summary": "患者コンテキストの生成回数の記録が読めず新しい生成を止めたとき、クラウド処理の記録の理由が unclassified になり原因が見えませんでした。理由 patient_context_generation_unverified と、確認できなかった記録の件数を記録に出します。生成の上限・予約の判定は変わりません。",
+  "upgrade": "追加操作は不要です。Hermes gateway の再起動後に反映されます。runtime_mode=standalone では standalone の再起動後に反映されます。",
+  "details": [
+    "停止理由は generation_reason、確認できなかった記録の件数は unverified_records として、既存の患者コンテキスト処理の記録に加わります。間隔・日次上限などほかの生成枠の理由も generation_reason に出ます。",
+    "1周に記録する理由は1つです。patient_context_generation_unverified は他の理由より優先し、件数は記録した理由のものだけです。要約の取得範囲や追い付き生成の記録が読めず判定が例外になった場合も同じ理由を記録します（この場合 unverified_records は 0 です）。",
+    "別の患者の読み取りに失敗して飛ばした場合、その患者で記録した理由と件数は戻します。"
+  ],
+  "refs": [
+    "mcs/llm/cloud_backlog.py",
+    "mcs/patients/patient_context_refresh.py",
+    "docs/specs/patient-context.md"
+  ]
+}

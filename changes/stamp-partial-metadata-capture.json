@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "無関係なメタデータの不正があっても、有効なスタンプ再取得を表示へ反映",
+  "summary": "メンション・ブックマーク・ピンのどれかだけが不正でも、有効な反応の再取得結果をcaptureへ保存し、自分のスタンプ表示と取消・追加の対象が古いままになりません。",
+  "upgrade": "追加操作は不要です。再取得が有効な環境で次の更新から反映されます。反応自体の不正や取得失敗は従来どおりcaptureを更新しません。",
+  "details": ["captureへの出版条件を、反応以外の項目単位の不正だけなら許可する共通判定に統一した。不正な項目はinvalidとして記録され、無関係な失敗は隠さない。"],
+  "refs": ["mcs/core/ledger_capture.py", "mcs/core/message_observations.py", "mcs/ingest/collection_stages.py", "#181"]
+}

@@ -212,3 +212,17 @@ def test_split_heading_does_not_fuse_unknown_body_columns_or_unbounded_lines(tex
     sections = _extract(text)["sections"]
     assert len(sections) == 1 and sections[0]["category"] == "other"
     assert sections[0]["text"] == text
+
+
+def test_repeated_labels_on_one_line_keep_candidate_text_linear_and_unconfirmed():
+    count = 256
+    result = _extract("PCAポンプ\n" + "残量:" * count + "\n")
+    candidates = result["pump_candidates"]
+    assert len(candidates) == count
+    assert all(item["status"] == "needs_review" and "number" not in item for item in candidates)
+    # Each raw_value stops at the next label; the old suffix copy summed to 3*N*(N-1)/2 characters.
+    assert sum(len(item["raw_value"]) for item in candidates) == 0
+    assert all(item["evidence"] == "残量:" * count + "\n" for item in candidates)
+    first, second = _extract("PCAポンプ\n残量:10mL 総投与量:5mL\n")["pump_candidates"]
+    assert (first["raw_value"], second["raw_value"]) == ("10mL", "5mL")
+    assert first["status"] == second["status"] == "needs_review"

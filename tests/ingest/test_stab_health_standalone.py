@@ -110,3 +110,20 @@ def test_host_dying_during_a_stale_episode_alerts_again(tmp_path):
     report = health_watch.evaluate(home=str(tmp_path), now=NOW + 120, cfg=CFG)
     assert report["state_reasons"] == ["standalone_host_down"] and report["alert"] is True
     assert health_watch.evaluate(home=str(tmp_path), now=NOW + 180, cfg=CFG)["alert"] is False
+
+
+def test_future_stamps_are_not_freshness_evidence(tmp_path):
+    """Clock rolled back: future heartbeat/last_ok/started_at must not read as healthy."""
+    _status(tmp_path, updated_at=NOW + 2000, started_at=NOW + 1900,
+            exits={"mcs_check": {"last_exit": 0, "failures": 0, "last_ok_at": NOW + 1950}})
+    severity, reasons, details = health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)
+    assert (severity, reasons) == ("failed", ["standalone_host_down"])
+    assert "未来" in details["standalone_host_down"]
+    _status(tmp_path, updated_at=NOW + 1)      # within the 2 s tolerance stays healthy
+    assert health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)[0] == "ok"
+    # current heartbeat but future last_ok_at / started_at
+    _status(tmp_path, exits={"mcs_check": {"last_exit": 0, "failures": 0, "last_ok_at": NOW + 1950}})
+    severity, reasons, details = health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)
+    assert (severity, reasons) == ("degraded", ["standalone_check_stalled"])
+    _status(tmp_path, started_at=NOW + 1900, exits={})
+    assert health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)[1] == ["standalone_check_stalled"]

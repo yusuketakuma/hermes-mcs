@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "クラウド背景処理の持ち越し結果の保存・解放を記録",
+  "summary": "クラウド背景処理で持ち越した結果の保存・解放の件数が、cloud_carry_settled として記録に出ます。cloud_backlog_pass の done はその回に保存した分だけです。",
+  "upgrade": "追加操作は不要です。クラウド背景ワーカーの再起動後から反映されます。",
+  "details": ["保存件数・保留件数・解放件数と固定の理由だけを記録し、本文・ID・提供元の詳細は含めない。"],
+  "refs": ["mcs/llm/cloud_backlog.py"]
+}

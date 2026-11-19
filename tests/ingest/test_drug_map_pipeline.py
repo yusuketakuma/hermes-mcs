@@ -85,6 +85,7 @@ def test_dictionary_io_failure_retires_old_candidates_and_recovers(store, tmp_pa
     monkeypatch.setattr(mcs_signals, "evaluate", lambda *args, **kwargs: {})
     with monkeypatch.context() as scoped:
         _fail_dictionary_io(scoped, path, failure)
+        scoped.setattr(drug_map, "_LOADED", [None, None])
         result = {"errors": []}
         run_check.stage_derive(store, result, 100, config, llm_budget_cap=0)
     assert result["errors"] == ["drug_map: invalid_dictionary"]

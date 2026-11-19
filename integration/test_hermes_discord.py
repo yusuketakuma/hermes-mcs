@@ -20,6 +20,7 @@ import semantic_drain
 import semantic_policy
 import semantic_store
 
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from ledger import Ledger, publish_snapshot
 from mcs_contract import Message
 import job_ops
@@ -234,7 +235,8 @@ async def test_native_discord_confirmation_uses_snapshot_and_durable_inbox(tmp_p
         policy = semantic_policy.policy_fingerprint(assist)
         db.artifact_add('semantic_policy', policy)
         db.artifact_add('extract_llm', json.dumps({'summary': 'Old synthetic summary', 'points': []}),
-                        project_id=1, message_id=1, meta={'hash': member['revision']})
+                        project_id=1, message_id=1,
+                        meta={'hash': member['revision'], VERSION_KEY: CURRENT_VERSION})
         with db.db:
             semantic_drain._write_result(db, 1, 1, {
                 'summary': {'target_message_id': 1, 'claims': [{'section': 'requests', 'text': body,

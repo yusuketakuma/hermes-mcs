@@ -50,28 +50,66 @@ def bump_semantic_job_state_epoch_tx(db):
 class LedgerSemanticSourcesMixin:
     """Maintain derivation input witnesses and jobs using the caller's existing connection."""
 
+    def _message_thread_roots(self, project_id: int, message_id: int,
+                              *roots: int | None) -> set[int]:
+        """Include the message itself when stored direct replies still treat it as root."""
+        affected = {root for root in roots if root is not None}
+        if message_id not in affected and self.db.execute(
+                "SELECT 1 FROM messages WHERE project_id=? AND parent_id=? LIMIT 1",
+                (project_id, message_id)).fetchone() is not None:
+            affected.add(message_id)
+        return affected
+
+    def _begin_semantic_generation_snapshot(self, messages, *,
+                                            semantic: bool) -> dict:
+        """Reserve the writer before checking tracking state in the intake transaction."""
+        if not isinstance(messages, (list, tuple)):
+            messages = list(messages)
+        if not messages:
+            return {}
+        self._reserve_message_writer()
+        if not (semantic or self._needs_semantic_source_tracking()):
+            return {}
+        return self._semantic_generation_snapshot(messages)
+
     def _semantic_generation_snapshot(self, messages) -> dict:
         """Capture touched rows and their thread generation before a batch."""
-        keys = set()
+        if not isinstance(messages, (list, tuple)):
+            messages = list(messages)
+        if not messages:
+            return {}
+        # Reserve the writer before reading either membership or generation.
+        # The enclosing intake transaction owns rollback and commit.
+        self._reserve_message_writer()
+        keys = {}
         for message in messages:
             rows = [message, *(getattr(message, "replies", None) or [])]
             for row in rows:
                 project_id = getattr(row, "project_id", None)
                 message_id = getattr(row, "message_id", None)
+                if project_id is None or message_id is None:
+                    continue
+                stored = self.db.execute(
+                    "SELECT COALESCE(parent_id,message_id) FROM messages "
+                    "WHERE project_id=? AND message_id=?",
+                    (project_id, message_id)).fetchone()
+                old_root = stored[0] if stored is not None else message_id
                 parent_id = getattr(row, "parent_id", None)
-                root = message_id if parent_id is None else parent_id
-                if project_id is not None and root is not None:
-                    keys.add((project_id, message_id, root))
+                # The writer retains a stored parent when the capture omits it.
+                new_root = old_root if parent_id is None else parent_id
+                roots = keys.setdefault((project_id, message_id), set())
+                roots.update(self._message_thread_roots(
+                    project_id, message_id, new_root,
+                    old_root if stored is not None else None))
         snapshot = {}
         generations = {}
-        for project_id, message_id, root in keys:
-            thread_key = (project_id, root)
-            if thread_key not in generations:
-                generations[thread_key] = self._semantic_source_generation(
-                    project_id, root)
+        for (project_id, message_id), roots in keys.items():
+            for root in roots:
+                thread_key = (project_id, root)
+                if thread_key not in generations:
+                    generations[thread_key] = self._semantic_source_generation(project_id, root)
             snapshot[(project_id, message_id)] = (
-                root,
-                generations[thread_key],
+                {root: generations[(project_id, root)] for root in roots},
                 self._semantic_message_fingerprint(project_id, message_id),
             )
         return snapshot
@@ -130,18 +168,21 @@ class LedgerSemanticSourcesMixin:
         changed: dict[int, list[int]] = {}
         invalidated_roots = set() if invalidated_roots is None else invalidated_roots
         generations = {}
-        for (project_id, message_id), (root, previous, row_before) \
-                in before.items():
-            thread_key = (project_id, root)
-            if thread_key not in generations:
-                generations[thread_key] = self._semantic_source_generation(
-                    project_id, root)
-            current = generations[thread_key]
+        for (project_id, message_id), (roots, row_before) in before.items():
             row_after = self._semantic_message_fingerprint(project_id, message_id)
-            if current != previous and row_after != row_before:
+            if row_after == row_before:
+                continue
+            touched = False
+            for root, previous in roots.items():
+                thread_key = (project_id, root)
+                if thread_key not in generations:
+                    generations[thread_key] = self._semantic_source_generation(project_id, root)
+                if generations[thread_key] != previous:
+                    touched = True
+                    self._invalidate_thread_projections(
+                        project_id, root, invalidated_roots=invalidated_roots)
+            if touched:
                 changed.setdefault(project_id, []).append(message_id)
-                self._invalidate_thread_projections(
-                    project_id, root, invalidated_roots=invalidated_roots)
         for ids in changed.values():
             ids.sort()
         return changed
@@ -304,6 +345,19 @@ class LedgerSemanticSourcesMixin:
                                      "SELECT 1 FROM notify_outbox WHERE event_id=? AND project_id=? "
                                      "AND kind='new_messages' AND state!='suppressed'",
                                      (arrival, project_id)).fetchone() is not None)
+                # An initial-history edit only adds its own target to a job that
+                # already carries a live arrival; per-target notice eligibility
+                # (origin_event_id) keeps the history target silent, so the job
+                # itself must not be quieted for the live sibling.
+                old_event = old_origin.get("event_id") if isinstance(old_origin, dict) else None
+                if (execution is None and isinstance(origin, dict)
+                        and origin.get("source") == "initial_history"
+                        and old_eligible and not old_notification_free
+                        and type(old_event) is int and self.db.execute(
+                            "SELECT 1 FROM notify_outbox WHERE event_id=? AND project_id=? "
+                            "AND kind='new_messages' AND state!='suppressed'",
+                            (old_event, project_id)).fetchone() is not None):
+                    preserve_live = True
                 if isinstance(old_pl.get('intake_notification_targets'), dict) and not old_notification_free:
                     preserve_live |= any(semantic_intake_hold.notification_allowed(self, old_pl, project_id, mid)
                                          for mid in old_targets)
@@ -358,10 +412,19 @@ class LedgerSemanticSourcesMixin:
                     pl["notification_free"] = True
                 source_changed = (old_targets != set(pl['targets'])
                                   or pl.get('source_generation') != source_generation)
+                # A done job without an execution marker (arrival and history
+                # seeds write none) was never bound to a generation. The
+                # reprocess pass replays one only when its assessment predates
+                # the registry (or its source changed); it binds it once, as a
+                # new budget.
+                unbound_done = (existing['state'] == 'done'
+                                and 'execution_contract' not in old_pl
+                                and 'execution_generation' not in old_pl)
                 input_changed = (not is_current(old_pl)
                                  or (execution is not None
-                                     and old_pl.get('execution_contract') == 1
-                                     and old_pl.get('execution_generation') != execution)
+                                     and (unbound_done
+                                          or (old_pl.get('execution_contract') == 1
+                                              and old_pl.get('execution_generation') != execution)))
                                  or source_changed)
                 if execution is not None and existing['state'] == 'done' and not input_changed:
                     # Enumeration is not a request to obtain a different

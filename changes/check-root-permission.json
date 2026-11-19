@@ -1,0 +1,10 @@
+{
+  "category": "changed",
+  "title": "mcs setup check が、ほかの利用者に書込み権限のある ~/.mcs・data を問題として表示する",
+  "summary": "~/.mcs や data にグループ・その他の利用者の書込み権限がある場合（umask 002 で作った場合など）、Slack への送信や監視の警報などの保護された処理は、安全のため送信前に止まります。これまで mcs setup check はこの状態を表示しなかったため、送信が止まる原因が分かりませんでした。今後は check が問題として表示し、chmod go-w の対処を案内します。送信前に止まる動作は変えていません。",
+  "upgrade": "この版への更新だけで有効になります。check がこの問題を表示した場合は、案内された chmod go-w を実行してください。",
+  "details": [
+    "mcs_setup.cmd_check にルートと data の所有者・書込み権限の確認を追加する（リンクの先の実体を確認）。更新の事前確認には加えていない。"
+  ],
+  "refs": ["mcs/ops/mcs_setup.py"]
+}

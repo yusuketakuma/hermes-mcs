@@ -22,6 +22,7 @@ case "${1:-}" in
             "$repo/integration/test_hermes_slack.py" \
             "$repo/integration/test_hermes_config.py" \
             "$repo/tests/adapters/discord/test_discord_sdk_real.py" \
+            "$repo/tests/adapters/discord/test_discord_file_group_views.py" \
             -o addopts= -q -s -r fEs
         ;;
     *)

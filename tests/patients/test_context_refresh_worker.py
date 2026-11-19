@@ -303,6 +303,8 @@ def test_macos_memory(monkeypatch, percent, expected):
     monkeypatch.setattr(worker.sys, "platform", "darwin")
     def probe(argv, **kwargs):
         assert kwargs["timeout"] == 2
+        if argv == ["/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"]:
+            return SimpleNamespace(stdout="1\n")
         if argv == ["/usr/sbin/sysctl", "-n", "hw.memsize"]:
             return SimpleNamespace(stdout="17179869184\n")
         assert argv == ["/usr/bin/memory_pressure", "-Q"]

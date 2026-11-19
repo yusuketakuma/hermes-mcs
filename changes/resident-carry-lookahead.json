@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "常駐抽出の記録にレーン・所要時間・保存できなかった件数を追加",
+  "summary": "常駐の抽出workerが出すパス・待機・意味処理の記録に、レーン番号、プロセスID、所要時間、パスの種類が入ります。保存待ちの結果を手放した件数と、ロックを取れず書けなかった失敗記録の件数も記録されます。抽出・保存・再試行の挙動は変わりません。",
+  "upgrade": "追加操作は不要です。常駐の抽出workerを再起動すると反映されます。",
+  "details": [
+    "パス記録に lane・pid・elapsed_s・turn（normal / oldest / recent_only / carry）が入る。",
+    "待機記録に lane・pid、意味処理の記録に lane・pid・elapsed_s が入る。",
+    "レーン3と昼のレーン1が保存待ちで待つときも、carry_waiting の記録を出す。",
+    "保存待ちの結果を手放した件数と理由を carry_settled に記録する。",
+    "人の指摘・QC・thin の再保存や失敗記録をロックの都合で書けなかった回数を unwritten に記録する。保留の判定には使わない。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_llm_resident.py",
+    "mcs/extract/llm/extract_llm_carry.py",
+    "mcs/extract/llm/extract_llm_runner.py"
+  ]
+}

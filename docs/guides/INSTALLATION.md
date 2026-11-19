@@ -166,6 +166,7 @@ B は `install.sh --mode standalone`（[STANDALONE.md](STANDALONE.md)）の場�
 | 通知先アプリ | Slack app・Discord botは両形態で作成・権限設定（付録A/B）。Path Bでは[独立モード](STANDALONE.md#slackとdiscordの接続準備)へ認証情報を登録する。LINE WORKS Botは両形態で[独立接続](LINEWORKS.md)を設定 |
 
 共通設定は `config.json`、提供元別の設定は `data/provider_settings/` の私有JSON、APIキーはMCS専用 `.env` に保持します。設定変更には既存の設定画面またはCLIを使います。
+提供元設定の全ファイルを保存した直後に中断し、保留記録が残った場合は、担当者が `mcs_setup.py provider-pending-finalize --operation <記録のoperation> --confirm-human --reason <理由>` を実行できます。保存済みファイルと記録のハッシュが一致すると、承認を記録して保留記録を退避します。
 Jev・Anthropic・OpenAIには患者名を含み得る本文・文脈を匿名化せず送ります。キー登録前に[対象・予算・保持条件](ANTHROPIC.md)を確認してください。明示したOFFと低い予算は維持します。
 
 導入時の取得物と運用中の通信は別です。基本ツールはHomebrew、Python依存はPyPI、Hermes連携本体はGitHub、モデルはHugging Faceから必要に応じて取得します。モデル・Chrome・通知SDKはこのリポジトリへ同梱していません。`--no-llm`はモデル取得とAI常駐の設定を省略しますが、AIの処理が利用可能になったことを意味しません。
@@ -815,6 +816,7 @@ Slackカードを使う導入・更新（`notify.interactive=slack`）では、�
 チャンネルを自動作成せず、分離済みの既存IDを`notify_system_target`へ指定します。
 権限不足・名前の競合・作成結果の不明などで止まった場合は、案内された条件を確認してから
 `mcs setup slack-channels`で準備を再開してください。結果が不明な作成・招待は自動で繰り返しません。
+担当者がSlackで同名のチャンネルの有無を確かめた後は、`mcs setup slack-channels --discard-hold --request-id <記録のrequest_id> --confirm-human --reason <理由>`で記録を退避できます。記録は`data/slack-channel-setup.discarded-<request_id>.json`として残り、承認記録も作られます。作られていたチャンネルを使う場合は、そのIDを通知先に設定してから準備を再開してください。
 
 Slack公式仕様: [チャンネル作成](https://docs.slack.dev/reference/methods/conversations.create/)・[非公開チャンネルの管理権限](https://docs.slack.dev/reference/scopes/groups.write/)・[操作者の招待](https://docs.slack.dev/reference/methods/conversations.invite/)。
 

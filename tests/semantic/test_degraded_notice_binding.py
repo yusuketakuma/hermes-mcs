@@ -290,3 +290,18 @@ def test_degraded_summaries_require_every_target(monkeypatch):
     assert not gate._degraded_summaries_ready(None, 1, {}, [1, 2], cfg)
     present.add(2)
     assert gate._degraded_summaries_ready(None, 1, {}, [1, 2], cfg)
+
+
+def test_marker_gate_decides_summary_readiness_under_the_config_model(world, monkeypatch):
+    import semantic_transport
+    from semantic_testkit import _summary
+    db, cfg, event, payload = world
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "Qwen3.5-9B")
+    _summary(db, model="Qwen3.5-9B")
+    host_reads = []
+    real = semantic_transport.llm_conf
+    monkeypatch.setattr(semantic_transport, "llm_conf",
+                        lambda c=None: host_reads.append(1) or real(c) if c is None else real(c))
+    with pytest.raises(gate.StaleSend, match="summary_ready"):
+        gate.marker_source_gate(db.db, 1, payload, cfg=cfg)
+    assert host_reads == []
