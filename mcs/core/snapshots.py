@@ -15,6 +15,7 @@ import uuid
 from contextlib import contextmanager, suppress
 
 from safe_io import fdopen_owned, fsync_dir
+from writer_lock import RUN_LOCK_REACQUIRE_S
 
 
 SNAPSHOT_VERIFY_TIMEOUT_S = 30.0
@@ -29,6 +30,14 @@ SNAPSHOT_VERIFY_EXTRA_MAX_S = 150.0
 # Fixed room every caller keeps after the size-based verify budget: the
 # copy, the marker write and the caller's own tail all draw from it.
 SNAPSHOT_WORK_TAIL_S = 30.0
+# Room the verification window must leave untouched so the gate can wait
+# out a competing writer during reacquire and still publish inside the
+# caller's deadline. A commands run can hold the released lock for well
+# over SNAPSHOT_WORK_TAIL_S; reserving only the tail let reacquire_s hit
+# the bound and convert every run into gate-unverified (no terminal
+# writes, health.json frozen). RUN_LOCK_REACQUIRE_S is the lock's own
+# designed wait budget, so the reserve reuses it.
+SNAPSHOT_GATE_RESERVE_S = RUN_LOCK_REACQUIRE_S + SNAPSHOT_WORK_TAIL_S
 
 
 def snapshot_verify_timeout_s(path: str) -> float:
@@ -399,24 +408,37 @@ def _publish_snapshot_locked(db_path: str, dest_dir: str, fd: int, *,
         verify_by = copied + max(snapshot_verify_timeout_s(tmp), min(
             SNAPSHOT_VERIFY_TIMEOUT_S + SNAPSHOT_VERIFY_EXTRA_MAX_S, 1.5 * (copied - started)))
         if deadline is not None:
-            # the fixed tail is reserved for the gate's reacquire and the
-            # publication below: a verify window that ran to the deadline
-            # left the reacquire bounded wait nothing (run_lock_timeout),
-            # which forbade every terminal write incl. the health write.
-            verify_by = min(verify_by, deadline - SNAPSHOT_WORK_TAIL_S)
+            # The gate path keeps room for the reacquire wait plus the
+            # publish tail; the plain path holds the lock throughout, so
+            # it only needs the fixed tail. A verify window that ran to
+            # the deadline left the reacquire bounded wait nothing
+            # (run_lock_timeout), which forbade every terminal write
+            # incl. the health write.
+            reserve = (SNAPSHOT_GATE_RESERVE_S if verification_context is not None
+                       else SNAPSHOT_WORK_TAIL_S)
+            verify_by = min(verify_by, deadline - reserve)
         if verification_context is None:
             if not _valid_snapshot_candidate(tmp, deadline=verify_by, fence_fd=fd, state=state):
                 _status.failure.setdefault("reason", "validator_false")
                 _fail(_status.failure["reason"], copy_s=round(copied - started, 3),
                       capped_by_deadline=deadline is not None
-                      and verify_by == deadline - SNAPSHOT_WORK_TAIL_S)
+                      and verify_by == deadline - reserve)
                 return None
             verified = monotonic()
         else:
+            # Fail fast while the lock is still held: an empty verify
+            # window would release the lock only to fail at start, then
+            # pay a pointless reacquire race against queued writers.
+            if monotonic() >= verify_by:
+                _fail("verify_deadline_at_start",
+                      copy_s=round(copied - started, 3),
+                      capped_by_deadline=deadline is not None
+                      and verify_by == deadline - reserve)
+                return None
             # The gate's reacquire bound is the publish deadline: the
-            # reserved tail stays usable after verification. Without a
-            # publish deadline the old bound (verify_by) keeps the gate
-            # engaged — deadline=None would disengage it entirely.
+            # reserve stays usable after verification. Without a publish
+            # deadline the old bound (verify_by) keeps the gate engaged —
+            # deadline=None would disengage it entirely.
             with verification_context(
                     deadline=deadline if deadline is not None else verify_by) as gate:
                 inside = _valid_snapshot_candidate(tmp, deadline=verify_by,
@@ -429,7 +451,7 @@ def _publish_snapshot_locked(db_path: str, dest_dir: str, fd: int, *,
                 _status.failure.setdefault("reason", "validator_false")
                 _fail(_status.failure["reason"], copy_s=round(copied - started, 3),
                       capped_by_deadline=deadline is not None
-                      and verify_by == deadline - SNAPSHOT_WORK_TAIL_S)
+                      and verify_by == deadline - reserve)
                 return None
         if verified >= verify_by:
             _fail("verify_deadline", copy_s=round(copied - started, 3),
