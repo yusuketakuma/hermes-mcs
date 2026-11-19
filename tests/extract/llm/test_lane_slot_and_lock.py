@@ -452,9 +452,14 @@ def test_night_resident_keeps_carry_guard_and_only_claims_at_night(monkeypatch, 
         return {"done": 0, "failed": 0, "left": 0, "selected": 0, "carry": []}
 
     monkeypatch.setattr(module, "run_pending", run)
+    context = []
+    # At night lane 1 serves patient context first, on its own slot.
+    monkeypatch.setattr(module, "_background_context_refresh", lambda *a, **k: context.append(
+        module.local_llm.request_slot()) or {"status": "deferred", "done": 0})
     assert module.main() == 0
     assert bool(calls) is night
     assert all(item == (0, True) for item in calls)
+    assert bool(context) is night and all(slot == 0 for slot in context)
     assert settlements and now[0] == 11
 
 

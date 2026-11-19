@@ -1213,9 +1213,12 @@ def guard_local_fallback(ledger, *, route, project_id, message_id, unit_key, req
     """Prove local substitution safe without sending, reserving, or changing accounting.
 
     ``allow_supersede`` (patient context only) also passes the paid requests that
-    :func:`supersede_local_tx` would record as replaced; it still writes nothing."""
+    :func:`supersede_local_tx` would record as replaced; it still writes nothing. Returns the
+    reservation ids of those requests: empty when there is nothing left to record, as after
+    that function ran, and always empty without ``allow_supersede``."""
     if allow_supersede and route != 'patient_context':
         raise ValueError('cloud_supersede_scope_invalid')
+    targets = []
     with _accounting_snapshot(ledger.db):
         rows = _verified_request_history(ledger, route=route, project_id=project_id,
                                         message_id=message_id, unit_key=unit_key)
@@ -1224,7 +1227,8 @@ def guard_local_fallback(ledger, *, route, project_id, message_id, unit_key, req
         if rows:
             candidate, body = request_factory()
             _guard_repeated_request(ledger, candidate, current_body=body, local_fallback=True,
-                                    **({'supersede': []} if allow_supersede else {}))
+                                    **({'supersede': targets} if allow_supersede else {}))
+    return [reservation['reservation_id'] for reservation in targets]
 
 
 def supersede_local_tx(ledger, *, route, project_id, message_id, unit_key, request_factory, now=None):
@@ -1266,14 +1270,49 @@ def supersede_local_tx(ledger, *, route, project_id, message_id, unit_key, reque
         return written
 
 
-def unit_reserved(db, *, route, project_id, message_id, unit_key):
-    """True when this unit key has any reservation for the message; an unreadable one counts."""
-    return db.execute(
-        "SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND message_id IS ? AND "
-        "CASE WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
-        "WHEN json_type(meta)!='object' THEN 1 "
-        "ELSE json_extract(meta,'$.route') IS ? AND json_extract(meta,'$.unit_key') IS ? END LIMIT 1",
-        (KINDS[0], project_id, message_id, route, unit_key)).fetchone() is not None
+def _proven_unsent(ledger, row):
+    """True when a reservation row is proven to have left nothing with the provider: its one
+    result settles it as never sent and no disposition names it. Anything missing, repeated
+    or unreadable is not proof."""
+    try:
+        reservation = _receipt_meta(row['meta'])
+        maximum = _reserve_valid(reservation, row)
+        rid = reservation['reservation_id']
+        results = _matching_bound_rows(ledger, KINDS[1], rid)
+        if (len(results) != 1 or len(_matching_bound_rows(ledger, KINDS[0], rid)) != 1
+                or _matching_bound_rows(ledger, 'cloud_usage_disposition', rid)):
+            return False
+        result = _receipt_meta(results[0]['meta'])
+        _, settled = _settled(reservation, maximum, [(result, results[0])])
+        return bool(_never_sent(result, settled) and result.get('usage') is None
+                    and not result.get('disposition'))
+    except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
+        return False
+
+
+def unit_reserved(ledger, *, route, project_id, message_id, unit_key, source_sig=None, sent_only=False):
+    """True when this unit key has any reservation for the message; an unreadable one counts.
+
+    With ``source_sig`` only a reservation made for that input (its owner's source signature)
+    counts: one unit key serves every later input of the same message or patient, and a request
+    made for an earlier input can never be taken up by the current one.
+
+    With ``sent_only`` a reservation proven never sent does not count. A request is reserved
+    before the last checks ahead of its send; one they refuse is settled as ``not_sent``, costs
+    nothing and holds no answer, now or later. Every other reservation holds or may hold paid
+    work and still counts, as does one whose rows cannot prove it."""
+    with _accounting_snapshot(ledger.db):
+        rows = ledger.db.execute(
+            "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
+            "WHERE kind=? AND project_id=? AND message_id IS ? AND "
+            "CASE WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
+            "WHEN json_type(meta)!='object' THEN 1 "
+            "ELSE json_extract(meta,'$.route') IS ? AND json_extract(meta,'$.unit_key') IS ? "
+            "AND (? IS NULL OR json_extract(meta,'$.owner.source_sig') IS ?) END ORDER BY artifact_id"
+            + ("" if sent_only else " LIMIT 1"),
+            (KINDS[0], project_id, message_id, route, unit_key, source_sig, source_sig)).fetchall()
+        return any(not sent_only or not _proven_unsent(ledger, row) for row in rows)
+
 
 def usage_report(ledger, *, now=None, period="month"):
     """Aggregate JST attempts; ambiguous results retain the full reserved amount.
@@ -1869,9 +1908,13 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
     return reserve
 
 
+def _never_sent(result, settled):
+    return settled and result.get('http_class') == 'not_sent'
+
+
 def _confirmed_rejection(result, settled, model):
     # A known rejection permits another attempt while retaining its reserved cost.
-    return (settled and result.get('http_class') == 'not_sent'
+    return (_never_sent(result, settled)
             or result.get('http_class') == 'http_429' and result.get('error_kind') == 'rate_limited'
             and result.get('usage') is None or _confirmed_openai_quota(result, model))
 
