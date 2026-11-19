@@ -28,7 +28,8 @@ def test_verified_local_context_covers_every_input_without_cloud_replay_after_re
     assert expected['body_text'] == body
     assert any(item['text'] == summary for item in expected['derived_summaries'])
     with monkeypatch.context() as blocked:
-        blocked.setattr(cloud_policy, 'block_reason', lambda *args, **kwargs: 'circuit_open')
+        # The owner's stop is definitive; a cooling-down circuit would make the unit wait.
+        blocked.setattr(cloud_policy, 'block_reason', lambda *args, **kwargs: 'paused')
         for _ in range(60):
             step(runtime, cfg=cfg)
             if readiness.context_view_input(ledger.db, 1, cfg=cfg):

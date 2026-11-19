@@ -317,6 +317,30 @@ def test_patient_input_recovery_binding_detects_aba_even_when_original_text_retu
         assert binding() != original
 
 
+def test_scan_recovery_binding_detects_aba_of_its_own_source_and_ignores_other_sources(paid):
+    import mcs_queries
+    import patient_context_artifacts
+    import patient_context_plan
+    import patient_context_refresh_state
+
+    path, *_ = paid
+    with closing(Ledger(path)) as ledger:
+        def binding():
+            source = next(row for row in mcs_queries.patient_context_sources(ledger.db, 1, hydrate=False)
+                          if row['message_id'] == 1)
+            return patient_context_refresh_state._cloud_scan_binding(
+                patient_context_plan.source_signature(source), {'version': 'synthetic'}, None,
+                patient_context_artifacts.source_occurrence(ledger.db, 1, source))
+        original = binding()
+        # Another message of the patient is no part of this source's input.
+        ledger.save_messages([_message(mid=2, body='合成の別の連絡。')])
+        assert binding() == original
+        ledger.save_messages([_message(body='合成の変更後本文。')])
+        assert binding() != original
+        ledger.save_messages([_message()])
+        assert binding() != original
+
+
 @pytest.mark.parametrize('denial', ['owner', 'updater', 'scope'])
 def test_recovery_rechecks_current_adoption_authority(paid, denial):
     path, cfg, calls, _locks, state, unit, _restart = paid

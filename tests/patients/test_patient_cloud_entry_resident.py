@@ -98,7 +98,12 @@ def test_patient_resident_next_pass_checks_old_input(runtime, monkeypatch, prior
     elif prior == 'unknown':
         assert not answers and not local
     else:
-        assert len(local) == len(answers) == 1
+        # A day's cap and a cooling-down circuit are transient: a unit with no cloud work waits
+        # for them too instead of being pinned to local (owner decision 2026-11-16).
+        assert not local and not answers
+        assert again['reason'] == 'patient_context_cloud_deferred:' + (
+            'daily_cost_cap' if barrier == 'budget' else 'circuit_open')
+        assert again['cloud_refusal'] == again['reason'].partition(':')[2]
 
 
 def test_send_cap_does_not_reset_a_persisted_cloud_cursor(runtime, partial_cloud, monkeypatch):

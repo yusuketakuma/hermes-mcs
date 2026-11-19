@@ -528,8 +528,8 @@ def _client_class(selection):
     return provider_registry.PROVIDER_MODULES[selection['provider']].client_class()
 
 
-def guard_context_local(ledger, cfg, prompt, *, project_id, message_id, unit_key, owner):
-    """Check patient-context paid history against the wire body the selected profile's client would send."""
+def _context_local_request(cfg, prompt, *, project_id, message_id, unit_key, owner):
+    """The wire body the selected profile's client would send for this patient-context prompt, built on demand."""
     def request():
         from types import SimpleNamespace
         settings = resolve_cloud_settings(cfg)
@@ -544,8 +544,30 @@ def guard_context_local(ledger, cfg, prompt, *, project_id, message_id, unit_key
             project_id=project_id, message_id=message_id, unit_key=unit_key,
             owner=owner, selection=selection, input_binding=None)
         return candidate, body
-    cloud_policy.guard_local_fallback(ledger, route='patient_context', project_id=project_id,
-        message_id=message_id, unit_key=unit_key, request_factory=request)
+    return request
+
+
+def guard_context_local(ledger, cfg, prompt, *, project_id, message_id, unit_key, owner,
+                        allow_supersede=False):
+    """Check patient-context paid history against the wire body the selected profile's client would send.
+
+    ``allow_supersede`` also passes what :func:`supersede_context_local` would record as
+    replaced, and returns those reservation ids; the check itself writes nothing."""
+    return cloud_policy.guard_local_fallback(ledger, route='patient_context', project_id=project_id,
+        message_id=message_id, unit_key=unit_key, allow_supersede=allow_supersede,
+        request_factory=_context_local_request(cfg, prompt, project_id=project_id,
+            message_id=message_id, unit_key=unit_key, owner=owner))
+
+
+def supersede_context_local(ledger, cfg, prompt, *, project_id, message_id, unit_key, owner):
+    """Record this unit's paid requests of the same prompt as replaced by local work.
+
+    Runs inside the caller's transaction, beside the local result it commits with; returns
+    the newly written disposition rows (see :func:`cloud_policy.supersede_local_tx`)."""
+    return cloud_policy.supersede_local_tx(ledger, route='patient_context', project_id=project_id,
+        message_id=message_id, unit_key=unit_key,
+        request_factory=_context_local_request(cfg, prompt, project_id=project_id,
+            message_id=message_id, unit_key=unit_key, owner=owner))
 
 
 def guard_reextract_local(ledger, cfg, prompt, *, project_id, message_id, unit_key,
