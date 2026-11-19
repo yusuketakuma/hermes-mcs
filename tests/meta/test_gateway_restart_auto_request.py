@@ -67,16 +67,27 @@ def _spawned(monkeypatch, rec):
     return spawned
 
 
-def test_manual_request_keeps_argv_and_receipt_shape(gateway, monkeypatch):
+def test_manual_request_mints_request_id_for_argv_and_receipt(gateway, monkeypatch):
     rec, data, agents, _, _, _ = gateway
     spawned = _spawned(monkeypatch, rec)
     assert rec.request_gateway_restart(str(data), str(agents), 501)
     argv, kw = spawned[0]
-    assert argv[4:] == [str(data), str(agents), "501"]
+    request_id = argv[-1]
+    assert argv[4:] == [str(data), str(agents), "501", request_id]
+    assert __import__("re").fullmatch(r"[0-9a-f]{32}", request_id)
     assert kw["pass_fds"] == ()
     report = json.loads((data / "gateway_restart.json").read_text())
     assert report["status"] == "requested"
-    assert "request_id" not in report
+    assert report["request_id"] == request_id
+
+
+def test_request_rejects_malformed_request_id_without_receipt(gateway, monkeypatch):
+    rec, data, agents, _, _, _ = gateway
+    spawned = _spawned(monkeypatch, rec)
+    assert not rec.request_gateway_restart(str(data), str(agents), 501,
+                                           request_id="A" * 32)
+    assert spawned == []
+    assert not (data / "gateway_restart.json").exists()
 
 
 def test_auto_request_extends_argv_and_binds_request(gateway, monkeypatch):
@@ -90,7 +101,7 @@ def test_auto_request_extends_argv_and_binds_request(gateway, monkeypatch):
     finally:
         os.close(fd)
     argv, kw = spawned[0]
-    assert argv[4:] == [str(data), str(agents), "501", "101", REQUEST_ID, str(fd)]
+    assert argv[4:] == [str(data), str(agents), "501", REQUEST_ID, "101", str(fd)]
     assert kw["pass_fds"] == (fd,)
     report = json.loads((data / "gateway_restart.json").read_text())
     assert report["status"] == "requested"
@@ -99,7 +110,6 @@ def test_auto_request_extends_argv_and_binds_request(gateway, monkeypatch):
 
 @pytest.mark.parametrize("kwargs", [
     {"expected_pid": 101},
-    {"request_id": REQUEST_ID},
     {"update_lock_fd": 3},
     {"expected_pid": True, "request_id": REQUEST_ID, "update_lock_fd": 3},
     {"expected_pid": 101, "request_id": "A" * 32, "update_lock_fd": 3},
@@ -169,7 +179,7 @@ def test_auto_run_target_changed_never_issues_restart(gateway):
     fd = _lock_fd(data)
     try:
         assert rec._gateway_restart_run(
-            str(data), str(agents), 501, "101", REQUEST_ID, str(fd)) == 1
+            str(data), str(agents), 501, REQUEST_ID, "101", str(fd)) == 1
     finally:
         os.close(fd)
     report = json.loads((data / "gateway_restart.json").read_text())
@@ -187,7 +197,7 @@ def test_auto_run_zero_observed_pid_is_target_changed_not_success(gateway):
     fd = _lock_fd(data)
     try:
         assert rec._gateway_restart_run(
-            str(data), str(agents), 501, "101", REQUEST_ID, str(fd)) == 1
+            str(data), str(agents), 501, REQUEST_ID, "101", str(fd)) == 1
     finally:
         os.close(fd)
     report = json.loads((data / "gateway_restart.json").read_text())
@@ -202,7 +212,7 @@ def test_auto_run_verifies_replacement_with_request_id(gateway):
     fd = _lock_fd(data)
     try:
         assert rec._gateway_restart_run(
-            str(data), str(agents), 501, "101", REQUEST_ID, str(fd)) == 0
+            str(data), str(agents), 501, REQUEST_ID, "101", str(fd)) == 0
     finally:
         os.close(fd)
     report = json.loads((data / "gateway_restart.json").read_text())
@@ -238,7 +248,7 @@ def test_auto_run_rechecks_pid_before_each_retry(gateway, monkeypatch):
     fd = _lock_fd(data)
     try:
         assert rec._gateway_restart_run(
-            str(data), str(agents), 501, "101", REQUEST_ID, str(fd)) == 1
+            str(data), str(agents), 501, REQUEST_ID, "101", str(fd)) == 1
     finally:
         os.close(fd)
     assert len(launches) == 1
@@ -254,7 +264,7 @@ def test_auto_run_rejects_malformed_args(gateway):
     fd = _lock_fd(data)
     try:
         assert rec._gateway_restart_run(
-            str(data), str(agents), 501, "abc", REQUEST_ID, str(fd)) == 1
+            str(data), str(agents), 501, REQUEST_ID, "abc", str(fd)) == 1
     finally:
         os.close(fd)
     report = json.loads((data / "gateway_restart.json").read_text())
@@ -270,7 +280,7 @@ def test_auto_run_rejects_malformed_args_never_echoes_request_id(gateway, bad_id
     fd = _lock_fd(data)
     try:
         assert rec._gateway_restart_run(
-            str(data), str(agents), 501, "abc", bad_id, str(fd)) == 1
+            str(data), str(agents), 501, bad_id, "abc", str(fd)) == 1
     finally:
         os.close(fd)
     report = json.loads((data / "gateway_restart.json").read_text())
@@ -288,7 +298,7 @@ def test_auto_run_rejects_foreign_lock_fd(gateway, tmp_path):
     fd = os.open(str(other), os.O_RDWR)
     try:
         assert rec._gateway_restart_run(
-            str(data), str(agents), 501, "101", REQUEST_ID, str(fd)) == 1
+            str(data), str(agents), 501, REQUEST_ID, "101", str(fd)) == 1
     finally:
         os.close(fd)
     report = json.loads((data / "gateway_restart.json").read_text())
@@ -333,3 +343,119 @@ def test_frozen_program_carries_auto_contract(gateway):
     assert "gateway_restart_lock_fd_mismatch" in program
     assert "request_id" in program
     assert "update_lock_fd" in program
+
+
+def _journal(data, request_id):
+    row = json.loads((data / "gateway_restart_attempts" / (request_id + ".json")).read_text())
+    assert row["schema"] == "gateway-restart-attempt/1" and row["request_id"] == request_id
+    return row
+
+
+def test_concurrent_helper_is_blocked_and_journaled(gateway):
+    rec, data, agents, _, calls, running = gateway
+    held = rec.mcs_recovery_gateway._gateway_helper_lock(str(data))
+    assert held is not None
+    fd = _lock_fd(data)
+    try:
+        assert rec._gateway_restart_run(
+            str(data), str(agents), 501, REQUEST_ID, "101", str(fd)) == 1
+    finally:
+        os.close(fd)
+        os.close(held)
+    journal = _journal(data, REQUEST_ID)
+    assert journal["state"] == "ended" and journal["outcome"] == "blocked_existing_helper"
+    assert journal["rounds"] == [] and journal["pid_changed"] is False
+    assert journal["helper_pid"] > 0 and journal["deadline_at"] <= journal["exited_at"]
+    assert not (data / "gateway_restart.json").exists()
+    assert not any(c[-4:] == ["-p", "default", "gateway", "restart"] for c in calls)
+
+
+def test_busy_timeout_journals_every_refused_round(gateway, monkeypatch):
+    rec, data, agents, plist, calls, running = gateway
+    running["pid"] = 101
+    refusal = ("✗ Refusing to restart the gateway: 2 live session(s) would be interrupted.\n"
+               "  • alpha\n  • beta\n"
+               "  Let them finish, or interrupt them deliberately:\n"
+               "    hermes gateway restart --yes   # interrupts 2 live session(s)\n").encode()
+    launches = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if argv[-4:] == ["-p", "default", "gateway", "restart"]:
+            launches.append(argv)
+            kwargs["stdout"].write(refusal)
+            kwargs["stdout"].flush()
+            return subprocess.CompletedProcess(argv, 1)
+        assert argv[0] == "launchctl"
+        pid = running["pid"]
+        return subprocess.CompletedProcess(argv, 0, f"path = {plist}\npid = {pid}\n")
+
+    monkeypatch.setattr(rec.subprocess, "run", run)
+    clock = [0.0]
+    wall = [1_000_000.0]
+    monkeypatch.setattr(rec.mcs_recovery_gateway, "time", SimpleNamespace(
+        time=lambda: wall[0], monotonic=lambda: clock[0],
+        sleep=lambda n: clock.__setitem__(0, clock[0] + n) or wall.__setitem__(0, wall[0] + n)))
+    fd = _lock_fd(data)
+    try:
+        assert rec._gateway_restart_run(
+            str(data), str(agents), 501, REQUEST_ID, "101", str(fd)) == 1
+    finally:
+        os.close(fd)
+    report = json.loads((data / "gateway_restart.json").read_text())
+    assert report["status"] == "unknown" and report["error"] == "gateway_restart_busy_timeout"
+    journal = _journal(data, REQUEST_ID)
+    assert journal["state"] == "ended" and journal["outcome"] == "gateway_restart_busy_timeout"
+    # The ended journal is written before the receipt: the supervisor requires
+    # receipt.at >= exited_at to prove the attempt.
+    assert journal["exited_at"] <= report["at"]
+    assert journal["expected_pid"] == 101 and journal["pid_changed"] is False
+    assert report["at"] <= journal["exited_at"] <= wall[0]
+    assert len(journal["rounds"]) == len(launches) > 0
+    assert all(item["outcome"] == "busy_refusal" and item["observed_pid"] == 101
+               for item in journal["rounds"])
+
+
+def test_successful_round_is_journaled_as_ended(gateway):
+    rec, data, agents, _, calls, running = gateway
+    fd = _lock_fd(data)
+    try:
+        assert rec._gateway_restart_run(
+            str(data), str(agents), 501, REQUEST_ID, "101", str(fd)) == 0
+    finally:
+        os.close(fd)
+    journal = _journal(data, REQUEST_ID)
+    assert journal["state"] == "ended" and journal["outcome"] == "supervisor_restart_verified"
+    assert journal["rounds"][-1]["outcome"] == "success"
+
+
+def test_nonzero_round_is_journaled_as_ended(gateway, monkeypatch):
+    rec, data, agents, plist, calls, running = gateway
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if argv[-4:] == ["-p", "default", "gateway", "restart"]:
+            return subprocess.CompletedProcess(argv, 2)
+        assert argv[0] == "launchctl"
+        return subprocess.CompletedProcess(argv, 0, f"path = {plist}\npid = {running['pid']}\n")
+
+    monkeypatch.setattr(rec.subprocess, "run", run)
+    fd = _lock_fd(data)
+    try:
+        assert rec._gateway_restart_run(
+            str(data), str(agents), 501, REQUEST_ID, "101", str(fd)) == 1
+    finally:
+        os.close(fd)
+    journal = _journal(data, REQUEST_ID)
+    assert journal["state"] == "ended" and journal["outcome"] == "gateway_restart_nonzero"
+    assert journal["rounds"][-1]["outcome"] == "nonzero"
+
+
+def test_frozen_program_carries_journal_contract(gateway):
+    rec, *_ = gateway
+    program = rec.mcs_recovery_gateway._GATEWAY_RESTART_PROGRAM
+    assert "_gateway_attempt_journal" in program
+    assert "_gateway_helper_lock" in program
+    assert "_gateway_self_started_at" in program
+    assert "gateway_restart_attempts" in program
+    assert "gateway-restart-attempt/1" in program

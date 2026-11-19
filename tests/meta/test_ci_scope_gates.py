@@ -374,11 +374,15 @@ def test_actions_are_pinned_and_only_the_known_ones():
     assert "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2" in WORKFLOW.read_text()
 
 
-def test_pull_request_types_and_label_events_do_not_cancel():
+def test_label_events_never_start_ci_and_full_ci_is_dispatched():
     text = WORKFLOW.read_text()
-    assert "types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]" in text
-    cancel = re.search(r"^  cancel-in-progress: (.*)$", text, re.M).group(1)
-    assert "github.event.label.name != 'full-ci'" in cancel and cancel.startswith("${{ !(")
+    assert "    types: [opened, synchronize, reopened, ready_for_review]\n" in text
+    assert re.search(r"^  cancel-in-progress: true$", text, re.M)
+    control = (WORKFLOW.parent / "agent-control.yml").read_text()
+    job = control.split("\n  full-ci:\n", 1)[1].split("\n  lock:\n", 1)[0]
+    assert "github.event.label.name == 'full-ci'" in job
+    assert "head.repo.full_name == github.repository" in job
+    assert 'gh workflow run ci.yml --repo "$GH_REPO" --ref "$REF" -f pr_number="$PR"' in job
 
 
 # ---------- the fixed matrix ----------
