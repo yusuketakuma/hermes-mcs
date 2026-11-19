@@ -73,7 +73,7 @@ def test_setup_separate_python_pinned_source_and_repeatable_cache(monkeypatch, t
     model_call = next(call for call in calls if 'snapshot_download' in str(call))
     assert json.loads(model_call[4]) == json.loads(ocr_model_contract.MODEL_JSON)
     assert len(ocr_model_contract.MODELS) == 4
-    assert all('dewarp' not in repo and 'middle' not in repo
+    assert all('dewarp' not in repo and 'tiny' not in repo
                for repo, _ in ocr_model_contract.MODELS.values())
     requirements = (REPO / 'deployment/requirements-ocr.txt').read_text()
     assert '@6ba6a7843bc96d2dedbfcc63d1808f929eb0c8e5' in requirements

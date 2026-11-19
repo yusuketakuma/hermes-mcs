@@ -6,7 +6,7 @@
   "details": [
     "公式タグv0.16.3のコミット6ba6a7843bc96d2dedbfcc63d1808f929eb0c8e5へ固定する。",
     "0.16.1からの差分は幾何補正（dewarper）系のみで、OCR・レイアウト・表構造の推論経路は変更なし。幾何補正は従来どおり有効化しない。",
-    "Python 3.13の独立環境、CPU実行、4種類の固定モデルを維持する。",
+    "Python 3.13の独立環境、CPU実行、4種類の固定モデルを維持する。文字認識モデルを parseq-tiny-dynw-v5 から parseq-middle-dynw-v5（revision cfe941a992ba3eedbdd3d54ef22ef34d39a88fa7固定）へ変更し、認識精度を上げる。既存のOCR結果は契約変更により原本から順次読み直される。",
     "OCRの有効化設定とMCSの本番コードの適用は別に行う。"
   ],
   "refs": [

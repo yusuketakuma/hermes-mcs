@@ -72,7 +72,7 @@ def ocr(image):
             from yomitoku import DocumentAnalyzer
             analyzer = DocumentAnalyzer(device="cpu", visualize=False, configs={
                 "ocr": {"text_detector": {"infer_onnx": False, "path_cfg": paths["detector"]}, "text_recognizer": {
-                    "model_name": "parseq-tiny-dynw-v5", "source_downscale": True,
+                    "model_name": "parseq-middle-dynw-v5", "source_downscale": True,
                     "num_parallel_batches": 1, "path_cfg": paths["recognizer"]}},
                 "layout_analyzer": {"layout_parser": {"path_cfg": paths["layout"]},
                     "table_structure_recognizer": {"path_cfg": paths["table"]}}})
