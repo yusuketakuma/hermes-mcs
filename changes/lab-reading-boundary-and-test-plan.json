@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "同じ行の検査値と検査予定を判定できるように修正",
+  "summary": "単位の後ろに空白を挟んで別の検査項目とその数値が続くとき、先の検査値を照合できます。「の検査予定」などで示された検査は予定として扱います。",
+  "upgrade": "追加操作は不要です。更新後に反映されます。",
+  "details": ["比較・否定を含む値や、単位と次の項目が空白なしでつながる値は未確認のままです。"],
+  "refs": ["mcs/extract/clinical/clinical_values.py", "mcs/patients/measurement_timeline.py"]
+}

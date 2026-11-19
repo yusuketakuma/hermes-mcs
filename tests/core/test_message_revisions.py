@@ -11,7 +11,9 @@ from ledger import Ledger, publish_snapshot
 
 
 def message(body, state="full"):
-    row = _message(mid=1, state=state)
+    # Revisions of one message keep one occurrence: a fresh default posted_at
+    # per save would look like a different source occurrence to the digest.
+    row = _message(mid=1, state=state, posted_at="2026-09-19T00:00:00+09:00")
     row.body_html = body
     return row
 

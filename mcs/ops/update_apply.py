@@ -4,6 +4,7 @@ import copy
 import json
 import os
 import time
+import uuid
 from contextlib import ExitStack
 import mcs_runtime  # noqa: E402
 import mcs_util  # noqa: E402
@@ -50,7 +51,11 @@ from update_lifecycle_context import (
     _POST_MERGE_UPDATE_FD,
     _PROVIDER_SETTINGS_ONLY,
     _TRANSIENT_BAIL,
+    _NETWORK_BAIL,
+    _PRE_CHANGE_STAGES,
     _acquire_run_lock_wait,
+    _alert_due,
+    _alert_key,
     _bounded_timeout,
     _call_legacy,
     _enqueue_notice,
@@ -78,8 +83,10 @@ from update_preflight import (
     _install_options_snapshot,
     _precheck_target_runtime_files,
     _precheck_target_tree,
+    _provider_bridge_verified,
     _provider_migration_needed,
     _provider_rollback_preflight,
+    _standalone_sdk_rollback_error,
     precheck_local,
 )
 from update_recovery import (
@@ -92,9 +99,11 @@ from update_repository import (
     _head_sha,
     _local_changes_outside,
     _release_git_scope,
+    _split_source_extras,
     _tree_clean,
 )
 from update_restore import (
+    _adopted_marker,
     _consent_hold,
     _hold_rollback_for_consent,
     _rollback_applying,
@@ -113,6 +122,12 @@ from update_services import (
     restart_agents,
     restart_services,
 )
+
+def _recover_first() -> int:
+    """An open journal belongs to recovery; say the requested change did not run."""
+    print("中断した更新の記録があるため、要求した更新・巻戻しは行わず、中断した更新の復旧を先に行います。")
+    return recover_interrupted()
+
 
 def apply(tag: str | None, sha: str | None, command_id: str | None,
           base_sha: str | None = None, reinstall: bool = False,
@@ -165,7 +180,7 @@ def _apply_pre_lock_checks(tag, sha, command_id, base_sha, reinstall,
         print("更新履歴を読み取れないため停止しました。update_state.jsonを削除せず、管理者に確認してください")
         return 2
     if state.get("applying") or state.get("stages"):
-        return recover_interrupted()
+        return _recover_first()
     options_base = None
     try:
         options_base, current_options = _install_options_snapshot()
@@ -268,8 +283,12 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
 
         def _bail(reason: str) -> int:
             nonlocal rollback_failed, consent_hold, state, terminal
-            transient = reason.split(":")[0] in _TRANSIENT_BAIL
+            stopped = False                # set only once a rollback quiesce returned
             stages = [s.get("stage") for s in state.get("stages", [])]
+            unreachable = (any(reason == code or reason.startswith(code + ":") or reason.startswith(code + " ")
+                               for code in _NETWORK_BAIL)
+                           and set(stages) <= _PRE_CHANGE_STAGES)
+            transient = reason.split(":")[0] in _TRANSIENT_BAIL or unreachable
             merged = "merge" in stages or "post_merge" in stages
             if merged and state.get("applying"):
                 # A recovery hold can return before the final failure bookkeeping.
@@ -278,11 +297,27 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     failed_state = journal_store.load_state(STATE_PATH)
                     if failed_state.get("_corrupt"):
                         raise UpdateError("failure_journal_unreadable")
+                    if failed_state.get("applying") is None and "done" in [
+                            s.get("stage") for s in failed_state.get("stages", [])]:
+                        # The child applied and announced the update; only the
+                        # parent's tail failed. Recovery completes 'done'
+                        # bookkeeping — never roll back a finished update.
+                        rollback_failed = True
+                        _report("recovery_incomplete", "after_done: " + reason[:200])
+                        print("更新は適用されましたが、その後の記録処理を完了できませんでした。"
+                              "mcs recover で後始末を完了してください。")
+                        return 1
                     _record_attempt(failed_state, tag, "failed", reason)
                     journal_store.save_state(STATE_PATH, failed_state)
                 except Exception:
                     rollback_failed = True  # A failed diagnostic write must keep the marker.
                     raise
+                child = failed_state.get("applying") or {}
+                if (child.get("sha"), child.get("prev_sha")) == (
+                        state["applying"].get("sha"), state["applying"].get("prev_sha")):
+                    # The child may have journaled more (runtime_migration,
+                    # reinstall_done); roll back and save from its record.
+                    state = failed_state
                 # the tree is already on the new code — a plain abort would
                 # leave the system running NEW code while claiming nothing
                 # happened; fall back to the surgical rollback path
@@ -291,10 +326,27 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     rollback_failed = True
                     return _provider_migration_recovery_hold(expected_mode=hold_mode or "")
                 try:
+                    if entry.get("schema_bump") and _adopted_marker():
+                        # before any journal rewrite, like rollback()
+                        raise UpdateError("restore_marker_adopted")
                     _provider_rollback_preflight(entry.get("prev_sha"))
                     _check_runtime_restore(entry)
+                    # only install.sh changes the venv's SDK pins
+                    ran = failed_state.get("applying") or {}
+                    sdk_error = (_standalone_sdk_rollback_error(entry, cfg)
+                                 if ran.get("reinstall_started") or ran.get("reinstall_done") else None)
+                    if sdk_error:
+                        raise UpdateError(sdk_error)
                 except UpdateError as e:
                     rollback_failed = True
+
+                    def tell_held() -> None:
+                        # The hold lasts until a recovery pass; never leave it silent.
+                        # Fixed text only: the child's output stays in the report.
+                        print("更新後の処理に失敗し、元の版へ自動で戻せないため保留しました。"
+                              "mcs_update.py status と recovery_report.json を確認し、管理者に連絡してください。")
+                        _enqueue_notice(f"[MCS] 更新 {tag or ''} を元の版へ戻せないため保留しました（要手動対応）",
+                                        use_run_lock=run_fd is None, notice_code="rollback_failed", tag=tag)
                     try:
                         marker = _ensure_recovery_marker()
                         if hold_mode is None:
@@ -307,23 +359,32 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                         _report("runtime_restore_blocked", str(e) + "; stop_unverified: "
                                 + type(stop_error).__name__, writers_stopped=False,
                                 apply_failure=reason)
+                        tell_held()
                         return 1           # retain journal; stopping was not proven
                     _report("runtime_restore_blocked", str(e), writers_stopped=True,
                             apply_failure=reason)
+                    tell_held()
                     return 1               # retain the original journal and marker
-                if entry.get("schema_bump") and entry.get("backup_path"):
-                    # journal rollback-shaped BEFORE the reset, like
-                    # rollback(): a failed/interrupted DB restore must
-                    # classify as head == target on the next recover pass
-                    # and retry _restore_db — an apply-shaped record would
-                    # read head == prev and 'finish' on the newer schema
-                    state["applying"] = _rollback_applying(
-                        entry, entry.get("sha"),
-                        command_id or entry.get("command_id"))
-                    journal(state, "rollback")
                 try:
                     # The post-merge child may have restarted writers before failing.
                     quiesce()
+                    stopped = True
+                    if entry.get("schema_bump") and entry.get("backup_path"):
+                        # journal rollback-shaped BEFORE the reset, like
+                        # rollback(): a failed/interrupted DB restore must
+                        # classify as head == target on the next recover pass
+                        # and retry _restore_db — an apply-shaped record would
+                        # read head == prev and 'finish' on the newer schema.
+                        # A failed quiesce changed nothing, so it keeps the
+                        # apply-shaped record (forward recovery, no freeze).
+                        state["applying"] = _rollback_applying(
+                            entry, entry.get("sha"),
+                            command_id or entry.get("command_id"))
+                        try:
+                            journal(state, "rollback")
+                        except BaseException:
+                            state["applying"] = entry   # nothing reset: never record a frozen restore
+                            raise
                     schema_hold = bool(entry.get("schema_bump") and entry.get("backup_path"))
                     if schema_hold:
                         consent_hold = True
@@ -383,11 +444,28 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                         # newer schema: recovery keeps writers stopped until the
                         # restore completes (no consent report exists to hold on)
                         state["applying"]["restore_incomplete"] = True
+            stages_before_abort = list(state.get("stages") or [])
             if not rollback_failed:
                 # keep remnants when the rollback itself failed — recovery
                 # must still be able to see and escalate the wedged state
                 state["applying"] = None
-                state["stages"] = []
+            if quiesced and not rollback_failed:
+                # The update is unfinished until the drainers are restarted: save the journal with
+                # its stages first, so an interrupt during the restart keeps the marker and
+                # recovery (finish_pre_merge) restarts them, as it does after a failed restart.
+                # A non-transient abort consumes its command in that same save, so the approval
+                # never becomes a candidate again once applying is cleared.
+                state["stages"] = [row for row in stages_before_abort if row.get("stage") != "done"]
+                if command_id and not transient:
+                    _record_executed(state, command_id, "failed", reason)
+                journal_store.save_state(STATE_PATH, state)
+            problems = restart_agents() if quiesced and not rollback_failed else []
+            if problems:
+                reason += " restart:" + ",".join(problems)
+            if not rollback_failed:
+                # a failed restart keeps the stages: recovery then restarts
+                # the drainers instead of seeing a finished journal
+                state["stages"] = state["stages"] if problems else []
             if transient and not rollback_failed:
                 # never attempted: clean journal, leave the receipt
                 # pending, no attempt record, no notification — the next
@@ -395,6 +473,9 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 state["stages"] = []
                 journal_store.save_state(STATE_PATH, state)
                 terminal = True
+                print("origin に接続できないため、この更新は開始していません。承認は保留のまま、次の確認で再試行します。"
+                      if unreachable else
+                      "実行ロックを取得できないため、この更新は開始していません。承認は保留のまま、次の確認で再試行します。")
                 return 2
             if command_id:
                 _record_executed(state, command_id, "failed", reason)
@@ -405,15 +486,20 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 # same report-only freeze as recover_interrupted's escalate: an
                 # outbox notice would write the newer-schema DB under the old
                 # code and join the later restore's loss report
-                _report("escalate", reason, writers_stopped=True)
+                _report("escalate", reason, writers_stopped=stopped)
                 return 1
             if quiesced and not rollback_failed:
-                problems = restart_agents()
                 _remove_marker()
-                if problems:
-                    reason += " restart:" + ",".join(problems)
-            _enqueue_notice(f"[MCS] 更新 {tag or ''} を中止しました: {reason}",
-                            use_run_lock=run_fd is None, notice_code="aborted", tag=tag)
+            text = f"[MCS] 更新 {tag or ''} を中止しました: {reason}"
+            notice_id = uuid.uuid4().hex
+            if not _enqueue_notice(text, use_run_lock=run_fd is None,
+                                   notice_code="aborted", tag=tag, notice_id=notice_id) and run_fd is None:
+                # A tick held run.lock and the receipt is already consumed:
+                # keep the notice for the next daily check to send.
+                state["pending_notices"] = [*(state.get("pending_notices") or []),
+                                            {"text": text, "notice_code": "aborted", "tag": tag,
+                                             "notice_id": notice_id}][-10:]
+                journal_store.save_state(STATE_PATH, state)
             return 1
 
         try:
@@ -438,7 +524,12 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     # which would treat that journal as this apply's own and
                     # _rollback_tree it unlocked, then overwrite it
                     delegated = True
-                    return recover_interrupted()
+                    return _recover_first()
+                if _restore_hold_active():
+                    # Same restore gate as plan and recover: writes now would join its loss report.
+                    print("DBの復元が承認待ちまたは未完了のため、更新を開始しません（変更はありません）。"
+                          "復元を完了してから再実行してください。")
+                    return 2
 
             journal(state, "local_checks")
             errors = precheck_local(cfg, **before_args)
@@ -463,9 +554,11 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     remote = update_discovery.remote_tag_sha(tag, checkout=REPO, environment=os.environ)
                 except update_discovery.DiscoveryError as exc:
                     raise UpdateError(str(exc)) from exc
+                if remote is None:
+                    return bail("tag_not_on_origin: origin にこの版がありません — 要再レビュー")
                 if sha is None:
                     sha = remote                # manual `apply --tag` convenience
-                if sha is None or remote != sha:
+                if remote != sha:
                     return bail("tag_moved: remote sha changed — 要再レビュー")
 
                 journal(state, "fetch")
@@ -496,6 +589,24 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
 
             if borrowed is not None and _release_migration_probe(borrowed.prequiesce_deadline) != 'none':
                 return bail('settings_migration_requires_manual_update')
+
+            # Both refusals run before the backup and the settings migration so
+            # their "nothing changed" text holds; an already-applied target exits below.
+            if borrowed is None and _head_sha() != sha:
+                try:
+                    bridge_needed = _provider_migration_needed()
+                except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
+                    return bail("provider_settings_unverified")
+                # The legacy post-merge guard refuses a split from any unreviewed source;
+                # refuse here, before writers stop, instead of holding after the merge.
+                if bridge_needed and not _provider_bridge_verified(_head_sha(), sha):
+                    return bail("provider_update_bridge_required: 提供元別設定へ移行する橋渡し版を先に適用してください（変更はありません）")
+                # The same guard refuses any untracked file in the source trees
+                # (ignored ones such as .DS_Store included); name it while nothing changed.
+                extras = _split_source_extras()
+                if extras:
+                    return bail("source_untracked_files: " + ",".join(extras)[:160]
+                                + " — 追跡外のファイルを移動してから再実行してください（変更はありません）")
 
             journal(state, "backup")
             import local_backup
@@ -567,7 +678,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 return 0
 
             try:
-                provider_migration_needed = _provider_migration_needed()
+                provider_migration_needed = _provider_migration_needed()  # re-read under run.lock
             except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
                 return bail("provider_settings_unverified")
             state["applying"] = {
@@ -676,7 +787,7 @@ def rollback(command_id: str | None = None) -> int:
     # an interrupted apply/rollback journal belongs to recovery — rolling
     # back the last APPLIED entry would overwrite it (same rule as apply)
     if state.get("applying") or state.get("stages"):
-        return recover_interrupted()
+        return _recover_first()
     upd_fd = acquire_update_lock()
     if upd_fd is None:
         print("別の更新処理が動いています。完了するまで待ってから再実行してください")
@@ -695,7 +806,7 @@ def rollback(command_id: str | None = None) -> int:
         if state.get("applying") or state.get("stages"):
             os.close(upd_fd)
             upd_fd = None
-            return recover_interrupted()
+            return _recover_first()
         applied = state.get("applied") or []
         entry = applied[-1] if applied else None
         if not entry or not entry.get("prev_sha"):
@@ -706,6 +817,7 @@ def rollback(command_id: str | None = None) -> int:
             return 0
         run_fd = _acquire_run_lock_wait()
         if run_fd is None:
+            print("実行ロックを取得できないため、巻戻しは開始していません。承認は保留のまま、次の確認で再試行します。")
             return 2                    # transient — receipt stays
         prev = entry["prev_sha"]
         try:
@@ -713,14 +825,25 @@ def rollback(command_id: str | None = None) -> int:
                 raise UpdateError("tree_dirty_before_rollback")
             _provider_rollback_preflight(prev)
             # an unusable backup aborts before the journal: nothing runs
-            err = _rollback_backup_error(entry) or _rollback_layout_error(entry)
+            err = (_rollback_backup_error(entry) or _rollback_layout_error(entry)
+                   or _standalone_sdk_rollback_error(entry, mcs_util.load_config()))
             if err:
                 raise UpdateError(err)
             try:
                 _check_runtime_restore(entry)
             except UpdateError as e:
-                _report("runtime_restore_blocked", str(e))
+                # The receipt stays so the rollback can run once the checkout is
+                # fixed; the approver hears about the hold once per condition (IA-090).
+                key = _alert_key({"applying": {"rollback_of": entry.get("sha"), "command_id": command_id}},
+                                 "runtime_restore_blocked")
+                notify, notified_at = _alert_due("runtime_restore_blocked", key, time.time())
+                _report("runtime_restore_blocked", str(e), alert_key=key, notified_at=notified_at)
                 print("Hermes のソースが更新記録と一致しないため、変更せず停止しました。詳細:", e)
+                if notify and not _enqueue_notice(
+                        "[MCS] 元の版へ戻す操作を保留しました（要手動対応）: Hermes のソースが更新記録と一致しません。"
+                        "承認は保留のままです。mcs_update.py status を確認してください",
+                        notice_code="rollback_failed"):
+                    _report("runtime_restore_blocked", str(e), alert_key=key)   # retry the notice next pass
                 return 1
             foreign = _local_changes_outside(entry.get("sha"), prev)
             if foreign:

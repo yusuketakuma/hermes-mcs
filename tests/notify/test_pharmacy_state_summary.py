@@ -14,7 +14,8 @@ def test_private_summary_shows_report_wording_with_group_and_subject(tmp_path):
     led = _ledger(tmp_path)
     quote = "以前、家族の合成薬Aと合成薬Bは残薬3錠、今後の支援は未確認。"
     try:
-        save(led, 1, quote, [context(quote, names=("合成薬A", "合成薬B"), subject="family")])
+        save(led, 1, quote, [context(quote, names=("合成薬A", "合成薬B"), subject="family")],
+             posted_at="2026-09-19T00:00:00+09:00")
         state = rollup.build_rollup(led.db, 1)
         led.db.execute("PRAGMA query_only=ON")
         lines = notify_views._pharmacy_state_lines(led.db, 1, state)

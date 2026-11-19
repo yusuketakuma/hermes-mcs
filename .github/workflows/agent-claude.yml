@@ -1,6 +1,8 @@
 name: Agent Claude
+# The number leads the run name: issue-status.yml matches runs to issues by it.
+run-name: "Agent Claude #${{ github.event.issue.number || github.event.pull_request.number }} ${{ github.event.issue.title || github.event.pull_request.title }}"
 
-# Claude Code GitHub Action を、所有者が 担当:claude を付けた Issue と、
+# Claude Code GitHub Action を、所有者（または vars.DOTS_ACTOR の Dots）が 担当:claude を付けた Issue と、
 # 所有者が担当中の Issue・PR に書いた @claude にだけ反応させる。
 # 停止スイッチ vars.AUTOMATION_ENABLED が true でなければ起動しない（既定は停止）。
 # 書くのは agent/claude- ブランチとPRだけ（下書きPRは使わない）。マージ・タグ・配備はしない。
@@ -21,10 +23,12 @@ jobs:
     # The event decides only whether to look; the "Check the assignment" step decides whether to run.
     if: >-
       vars.AUTOMATION_ENABLED == 'true' &&
-      github.event.sender.login == github.repository_owner &&
       (
-        (github.event_name == 'issues' && github.event.label.name == '担当:claude') ||
-        (github.event_name != 'issues' && contains(github.event.comment.body, '@claude') &&
+        (github.event_name == 'issues' && github.event.label.name == '担当:claude' &&
+          (github.event.sender.login == github.repository_owner ||
+           (vars.DOTS_ACTOR != '' && github.event.sender.login == vars.DOTS_ACTOR))) ||
+        (github.event_name != 'issues' && github.event.sender.login == github.repository_owner &&
+          contains(github.event.comment.body, '@claude') &&
           (github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request ||
            contains(github.event.issue.labels.*.name, '担当:claude')))
       )
@@ -57,9 +61,18 @@ jobs:
           NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
           ON_PR: ${{ github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request != null }}
           AUTOMATION: ${{ vars.AUTOMATION_ENABLED }}
+          EVENT: ${{ github.event_name }}
+          SENDER: ${{ github.event.sender.login }}
+          OWNER: ${{ github.repository_owner }}
+          DOTS: ${{ vars.DOTS_ACTOR }}
         run: |
           set -euo pipefail
           control=control/ci/agent_control.py
+          # The condition above compares logins case-insensitively; the labeler must match exactly.
+          if [[ "$EVENT" == "issues" &&
+                "$(python3 "$control" labeler --sender "$SENDER" --owner "$OWNER" --dots-actor "${DOTS:-}" | jq -r .allowed)" != "true" ]]; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"; echo "::notice::not started: $SENDER may not assign"; exit 0
+          fi
           # Read the labels now, not from the event: the lock job may have just removed a second 担当:*,
           # and a run that waited in the queue must not act on an assignment withdrawn meanwhile.
           if [[ "$ON_PR" == "true" ]]; then

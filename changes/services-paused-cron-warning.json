@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "Hermes側で停止中のMCS定期処理を services が「登録済み」とだけ表示する問題を修正",
+  "summary": "Hermesの定期処理一覧で無効化・一時停止（[disabled] など）になっているMCSの定期処理について、mcs_setup.py services は「登録済み」に続けて「Hermes側で停止中のため実行されません」と注意を表示します。保守で止めたまま戻し忘れた収集などに気付けるようになります。停止中の処理を自動で再開することはありません。",
+  "upgrade": "追加操作は不要です。注意が表示されたら、意図した停止かどうかを確認し、必要なら Hermes 側で再開してください。services の終了コードと管理記録への記録は変わりません。mcs_setup.py check は定期処理の一覧を読まないため、この注意は services の実行時だけ表示されます。",
+  "details": [
+    "service_contract.parse_cron_listing が見出し行の [状態] を state として保持する。状態の表示がない一覧は従来どおり有効として扱う。",
+    "sync_cron は登録済み・間隔変更の処理で state が active 以外なら注意を表示する。"
+  ],
+  "refs": ["mcs/ops/services/service_contract.py", "mcs/ops/services/service_management.py", "tests/ops/test_service_contract.py", "tests/ops/test_mcs_setup_services.py"]
+}

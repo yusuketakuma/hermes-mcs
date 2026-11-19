@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "PCA候補は上限に達した時点で生成を止める",
+  "summary": "PCA文書の候補を、上限(4096件)を超えて作らなくなり、ラベルが大量に並ぶ入力でもメモリ増加を抑えます。上限超過時のlimited表示や候補の内容は変わりません。",
+  "upgrade": "追加操作は不要です。次回のOCR解析から適用されます。",
+  "details": ["pump_document.projectがmedical_document.extractへ上限+1件を渡し、超過分の候補を作らない。"],
+  "refs": ["mcs/extract/clinical/medical_document.py", "mcs/extract/clinical/pump_document.py"]
+}

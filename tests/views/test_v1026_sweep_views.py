@@ -26,7 +26,8 @@ def test_mention_groups_have_japanese_headings_and_a_fixed_rank():
 def test_transition_anchors_once_per_post():
     ev = {"items": [_item(6, "course", "本人は本日退院しました。"),
                     _item(6, "course", "架空病院から退院"), _item(6, "followup", "退院後の架空薬の残数"),
-                    _item(5, "adl", "歩行は介助"), _item(1, "diagnoses", "架空病A")]}
+                    _item(5, "adl", "歩行は介助"), _item(1, "diagnoses", "架空病A")],
+          "unanalysed_posts": []}   # every post analysed: only then may an absence be shown
     course = pcv.transition_course(ev)["items"]
     assert len(course) == 2
     group = course[0]

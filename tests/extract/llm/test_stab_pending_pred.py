@@ -252,3 +252,22 @@ def test_scoped_pass_skips_global_backlog_report(tmp_path, monkeypatch, scope, e
         assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind=?", (KIND,)).fetchone()[0] == expected_done
     finally:
         db.close()
+
+
+def test_an_explicit_running_generation_builds_the_same_pending_sql(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        for thin in (True, False):
+            assert extract_llm.pending_pred(db.db, include_thin=thin, version=EXTRACT_VERSION) == (
+                extract_llm.pending_pred(db.db, include_thin=thin))
+        db.save_messages([_message(mid=1, body="短い本文です 1"), _message(mid=2, body="短い本文です 2")])
+        _add(db, 1)
+        _add(db, 2, {"extract_version": EXTRACT_VERSION + 1})
+
+        def pending(version):
+            return {row[0] for row in db.db.execute(
+                "SELECT m.message_id FROM messages m WHERE " + extract_llm.pending_pred(db.db, version=version))}
+        # The same rows read as pending exactly when their generation is not the one asked about.
+        assert pending(EXTRACT_VERSION) == {2} and pending(EXTRACT_VERSION + 1) == {1}
+    finally:
+        db.close()

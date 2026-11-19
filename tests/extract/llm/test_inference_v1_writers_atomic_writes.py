@@ -131,7 +131,9 @@ def test_adoption_failure_rolls_back_source_artifact_epoch_and_cached_rollup_tog
 ])
 def test_both_v1_writers_store_compact_source_bound_interventions(source, writer, body, state):
     led, _ = source
-    led.save_messages([_message(body=body)])
+    # The scenario's planned date (9/21) must stay after the post date, so pin
+    # posted_at instead of taking the recent default.
+    led.save_messages([_message(body=body, posted_at="2026-09-19T00:00:00+09:00")])
     row = _intervention_row(led)
     result = _write_intervention_v1(led, row, writer)
     [record] = result['records']

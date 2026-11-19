@@ -47,6 +47,9 @@ EXPIRE_EVERY_S = 300.0         # registry TTL sweep cadence (TTLs are
                                # check expiry on access anyway)
 RECONCILE_EVERY_S = 300.0      # retry receipt recovery without restarting the sender
 STARTUP_RETRY_MAX_S = 300.0    # cap on the supervisor start-up retry backoff
+STARTUP_STOP_CHECK_S = 8.0     # a backoff sleep re-checks stopping() this often,
+                               # so a superseded supervisor frees its scope lock
+                               # well inside a successor's handoff window
 RESTORE_MARGIN_S = 86400.0     # journal rows this much older than the restore
                                # horizon are no longer restore evidence
 
@@ -103,8 +106,9 @@ async def await_settled(coroutine, *, on_cancel=None):
 class SendNotAdmitted(RuntimeError):
     """Current authority refused a write before it reached the transport."""
 
-    def __init__(self, last_status=None):
-        super().__init__("current send authority unavailable")
+    def __init__(self, last_status=None, code=None):
+        # ``code`` keeps a caller's fixed refusal code in str(exc) for logs.
+        super().__init__(code or "current send authority unavailable")
         # A preceding 429 is an observed refusal, never an ambiguous send.
         self.status = 429 if last_status == 429 else None
 
@@ -154,7 +158,11 @@ async def retry_startup(step, stopping, log) -> bool:
             raise
         except Exception as exc:
             log("startup_retry", error=type(exc).__name__)
-        await asyncio.sleep(wait)
+        slept = 0.0
+        while slept < wait and not stopping():
+            nap = min(wait - slept, STARTUP_STOP_CHECK_S)
+            await asyncio.sleep(nap)
+            slept += nap
         wait = min(wait * 2, STARTUP_RETRY_MAX_S)
     return False
 
@@ -231,15 +239,26 @@ class DeliveryWorker:
             os.close(self._lock_fd)
             self._lock_fd = None
 
-    async def wait_scope_lock(self, timeout: float, give_up) -> bool:
+    async def wait_scope_lock(self, timeout: float, give_up,
+                              handoff=lambda: False) -> bool:
         """Poll for the scope lock up to ``timeout`` seconds — a dying
         predecessor releases it within the window, but a live foreign
-        owner is never raced. ``give_up()`` aborts early."""
+        owner is never raced. ``give_up()`` aborts early; while
+        ``handoff()`` says an in-process predecessor that was told to stop
+        still runs, the wait outlasts the window (that owner is leaving)."""
         deadline = time.monotonic() + timeout
+        extended = False
         while not self.acquire_scope_lock():
-            if give_up() or time.monotonic() >= deadline:
+            if give_up():
                 self._log("scope_lock_unavailable")
                 return False
+            if time.monotonic() >= deadline:
+                if not handoff():
+                    self._log("scope_lock_unavailable")
+                    return False
+                if not extended:
+                    extended = True
+                    self._log("scope_lock_handoff_wait")
             await asyncio.sleep(0.25)
         return True
 
@@ -934,6 +953,7 @@ class DeliveryWorker:
                 claim, dead=error not in (
                     "denied_interactive_off",
                     "denied_restore_pending",
+                    "denied_restore_hold",
                     "denied_signal_notify_off"))
             return
         if not self._verify_grant(claim, result):
@@ -953,6 +973,12 @@ class DeliveryWorker:
 
     async def _send_allowed(self, spec: dict | None = None) -> bool:
         flags = await asyncio.to_thread(paths.read_flags, self._root)
+        if flags.get("restore_holds_unreadable"):
+            return False           # hold list corrupt — cannot prove unheld
+        held = flags.get("held_delivery_ids")
+        if spec is not None and isinstance(held, list) \
+                and spec["delivery_id"] in held:
+            return False           # unreleased restore hold — spec kept
         return (not self._stopping and not self._journal_incomplete
                 and (self.send_admitted is None or self.send_admitted())
                 and paths.route_open(

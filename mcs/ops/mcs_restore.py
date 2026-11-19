@@ -348,6 +348,8 @@ def main(argv: list[str] | None = None) -> int:
     """Explicit local CLI; no ambient destination, identity or custody policy."""
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
+    check = sub.add_parser("resumed", help="read-only: exit 0 only while an adopted backup has verifiably resumed writers")
+    check.add_argument("--destination", required=True)
     for action in ("plan", "approve", "resume"):
         p = sub.add_parser(action)
         p.add_argument("--destination", required=True)
@@ -365,6 +367,12 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--receipt-sha256", required=True)
     args = vars(parser.parse_args(argv))
     action = args.pop("action")
+    if action == "resumed":
+        # The independent watchdog and gateway helper ask the checkout instead of
+        # copying this proof (IA-099); writers_resumed already fails closed.
+        resumed = writers_resumed(args["destination"])
+        print(json.dumps({"ok": True, "writers_resumed": resumed}, sort_keys=True))
+        return 0 if resumed else 1
     try:
         result = {"plan": plan, "approve": approve, "resume": resume}[action](**args)
     except (OSError, ValueError, KeyError, TypeError, RecursionError, OverflowError,

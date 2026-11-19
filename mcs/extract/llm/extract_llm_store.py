@@ -21,7 +21,7 @@ from extraction_provenance import (
     leaf_evidence as _leaf_evidence,
 )
 import extraction_refresh
-from clinical_chunking import PLAN_VERSION
+from clinical_chunking import PLAN_VERSION, plan_chunks
 import mcs_queries
 import mcs_util
 import extraction_context
@@ -90,7 +90,7 @@ from extract_llm_source_contract import (
     _unsealed_source_pred,
 )
 
-def _record_hold_tx(ledger, r, prior, reason, *, lost=None, feedback_id=None, remove_chunks=True):
+def _record_hold_tx(ledger, r, prior, reason, *, lost=None, lost_class=None, feedback_id=None, remove_chunks=True):
     if not ledger.db.in_transaction:
         ledger.db.execute('BEGIN IMMEDIATE')
     prior_row = ledger.db.execute(
@@ -110,6 +110,8 @@ def _record_hold_tx(ledger, r, prior, reason, *, lost=None, feedback_id=None, re
         "contract": _upgrade_contract()}
     if lost:
         receipt["lost"] = lost
+    if lost_class:
+        receipt["lost_class"] = lost_class
     if feedback_id is not None:
         receipt["feedback_id"] = feedback_id
     raw = json.dumps(receipt, sort_keys=True)
@@ -270,8 +272,14 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
                  and (human_failed or qc_failed))
     if old_carry or (lost and not (isinstance(human, dict) and human.get("applied") is True)):
         reason = ("human_failed" if human_failed else "qc_failed") if old_carry else "protected_loss"
+        # Fixed codes and counts only: no text, label or quote enters the receipt.
+        # shortcut: "unlocated" uses the root chunk layout, not length resplits; read the saved splits if they matter.
+        size = r.get("_chunk_size")
+        lost_class = extract_quality.protected_loss_classes(
+            old, loads_dict(content), source["body_text"],
+            pieces=plan_chunks(source["body_text"], size if type(size) is int and size > 0 else _CHUNK_SIZE)) if lost else None
         hold_witness = _record_hold_tx(ledger, r, prior, reason,
-                        lost=lost, feedback_id=human.get("feedback_id") if human else None,
+                        lost=lost, lost_class=lost_class, feedback_id=human.get("feedback_id") if human else None,
                         remove_chunks=not scoped_cleanup)
         held_prior = True
     else:
@@ -451,7 +459,7 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
 
 def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, extra_meta,
                               used_keys, *, check_current, mark_context=None, expected_prior=None,
-                              adoption_guard=None):
+                              adoption_guard=None, before_replace_tx=None):
     if isinstance(r, dict):
         r.pop("_commit_reject_reason", None)
         r.pop("_completeness_reject_reason", None)
@@ -515,11 +523,32 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
                 # adopted leaves' content — run-time metadata alone cannot
                 # mint a resolved result over unresolved leaves.
                 return _commit_rejected(r, "completeness")
+            if before_replace_tx is not None:
+                # Auxiliary SQL writes (e.g. rule coverage) commit with the adoption, never alone.
+                before_replace_tx()
+                if (not _source_writable(ledger.db, r)
+                        or not _owns_current_source(ledger, r, r.get("_current_lease"))
+                        or not _prior_matches(ledger.db, r, pinned_prior if expected_prior is None else expected_prior)
+                        or not _protected_prior_current(ledger.db, r)
+                        or not _checkpoint_state_matches(r, expected, used_keys,
+                            _checkpoint_identity(ledger.db, r, context, r["_chunk_size"]))
+                        or adoption_guard is not None and not adoption_guard()):
+                    raise _CheckpointChanged()
             witness = []
             outcome = _replace_current_tx(ledger, r, content,
                                           ctx=context is not None if mark_context is None else mark_context,
                                           integrity=integrity, qc_fix=qc_fix,
                                           extra_meta=extra_meta, scoped_cleanup=True, result_witness=witness)
+            if before_replace_tx is not None:
+                if outcome not in ("held", "written"):
+                    ledger.db.rollback()
+                    return outcome
+                if (not _source_writable(ledger.db, r)
+                        or not _owns_current_source(ledger, r, r.get("_current_lease"))
+                        or not _checkpoint_state_matches(r, expected, used_keys,
+                            _checkpoint_identity(ledger.db, r, context, r["_chunk_size"]))
+                        or adoption_guard is not None and not adoption_guard()):
+                    raise _CheckpointChanged()
             if outcome == "held":
                 if current != r["_checkpoint_identity"]:
                     raise _CheckpointChanged()

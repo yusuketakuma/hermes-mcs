@@ -1970,3 +1970,30 @@ def test_guard_rejects_malformed_execution_marker(store):
     _set_execution_marker(store, 1, 1, execution_contract=1,
                           execution_generation=expected)
     runtime.guard(store, runtime.JobToken.from_row(_job(store, 1)), **guard_kw)
+
+
+def _history_edit_seed(store, mid):
+    with store.db:
+        store.semantic_seed_tx(1, [mid], {'source': 'initial_history', 'notification_free': True})
+    return json.loads(_job(store, mid)['payload'])
+
+
+def test_initial_history_edit_does_not_quiet_a_live_arrival_in_the_shared_job(store):
+    _save(store, 10)
+    _save(store, 30, parent=10)
+    with store.db:
+        event = store._outbox_insert('new_messages', 1, {'source': 'unread', 'message_ids': [30]})
+        store.semantic_seed_tx(1, [30], {'source': 'unread', 'event_id': event})
+    payload = _history_edit_seed(store, 10)
+    assert payload['targets'] == [10, 30] and payload['eligible'] is True
+    assert payload['origin']['event_id'] == event
+    assert 'notification_free' not in payload
+    # An explicit replay of the live arrival keeps its existing quiet policy.
+    with store.db:
+        store.semantic_seed_tx(1, [30], {'source': 'replay', 'notification_free': True})
+    assert json.loads(_job(store, 10)['payload'])['notification_free'] is True
+
+
+def test_initial_history_edit_alone_stays_quiet(store):
+    _save(store, 10)
+    assert _history_edit_seed(store, 10)['notification_free'] is True

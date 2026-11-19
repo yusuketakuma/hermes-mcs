@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "standaloneの--root指定が実行枠の取得に反映されない不具合を修正",
+  "summary": "mcs_standaloneを--root付きで起動したとき、指定したrootではなく既定rootの実行枠（Q）を取っていたため、更新・復旧中のrootでも保留されず動き出す可能性がありました。--rootを先に読んでからそのrootの実行枠を取ります。",
+  "upgrade": "追加操作は不要です。次回のstandalone再起動から適用されます。--rootを指定しない起動は従来どおりです。",
+  "details": [
+    "実行枠の取得（保留判定を含む）は業務処理より前のままで、取得できなければ従来どおり保留します。"
+  ],
+  "refs": [
+    "mcs_standalone/__main__.py"
+  ]
+}

@@ -456,6 +456,23 @@ def quality_owner(runtime, monkeypatch):
     return led, clock, cfg, doc, sends, behavior
 
 
+def test_cloud_stop_defers_quality_step_and_resume_reevaluates(quality_owner, monkeypatch):
+    """`cloud-llm stop` holds the Jev check as deferred — never the sticky
+    'held' — so after resume the same step runs and reaches the send path."""
+    import cloud_policy
+    led, clock, cfg, doc, sends, _ = quality_owner
+    monkeypatch.setattr(cloud_policy, 'stopped', lambda *_: True)
+    status, _ = patient_context_quality_controller._quality_step(
+        led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True,
+        cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
+    assert status == 'deferred' and not sends
+    monkeypatch.setattr(cloud_policy, 'stopped', lambda *_: False)
+    status, identity = patient_context_quality_controller._quality_step(
+        led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True,
+        cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
+    assert status == 'pending' and len(sends) == 1
+
+
 def test_quality_owner_calls_jev_once_and_rechecks_saved_pass(quality_owner):
     led, clock, cfg, doc, sends, _ = quality_owner
     status, identity = patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True,
@@ -502,7 +519,7 @@ def test_requested_cloud_with_missing_key_falls_back_to_local(runtime, monkeypat
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: None)
     result = refresh.run_due(led, cfg, deadline=runtime[1].mono + 600, admit=lambda: True)
     assert result['status'] == 'progressed' and local_calls
-    assert patient_context_refresh_state._route(cfg, 1)['provider'] == cloud_inference.cloud_provider_contract()
+    assert patient_context_refresh_state._route(cfg, 1)['provider'] == cloud_inference.cloud_provider_contract(cfg, route='patient_context', purpose='patient_context')
     for _ in range(60):
         result = step(runtime, cfg=cfg)
         if result['status'] == 'complete':
@@ -572,7 +589,7 @@ def repair(tmp_path, monkeypatch):
         sent.append(json.loads(body['messages'][0]['content']))
         if responses[0] == 'timeout':
             raise TimeoutError('synthetic transport uncertainty')
-        return 200, {}, json.dumps({'model': worker.anthropic_client.MODEL, 'stop_reason': 'end_turn',
+        return 200, {}, json.dumps({'model': body['model'], 'stop_reason': 'end_turn',
             'content': [{'type': 'text', 'text': json.dumps({'fact_ids': responses})}],
             'usage': {'input_tokens': 2, 'output_tokens': 1}}).encode()
     monkeypatch.setattr(worker.anthropic_client.AnthropicClient, 'request', request)
@@ -589,14 +606,21 @@ def repair(tmp_path, monkeypatch):
 
 def test_failed_candidate_repairs_once_and_resume_reuses_saved_ids(repair):
     led, run, facts, _, sent, _, _ = repair
+    worker.load_config()['cloud_llm']['provider_profiles'] = {
+        'anthropic': {'patient_context': 'sonnet-high', 'quality_repair': 'sonnet-high'}}
     status, result = run()
     assert status == 'candidate' and result['fact_ids'] == [facts[1]['id']]
     assert len(sent) == 1 and sent[0]['findings'] == [{'fact_id': facts[1]['id'], 'code': 'important_missing'}]
     assert len(led.artifacts(patient_context_refresh_state.QUALITY_REPAIR)) == 1
     [saved] = led.artifacts(patient_context_refresh_state.QUALITY_REPAIR_CANDIDATE)
-    assert json.loads(saved['content']) == {'fact_ids': [facts[1]['id']]}
+    stored = json.loads(saved['content'])
+    proof = stored.pop(patient_context_refresh_state._INTERNAL_PROOF, None)
+    assert stored == {'fact_ids': [facts[1]['id']]}
+    reservation, = led.artifacts('cloud_usage_reserve', project_id=1)
+    assert json.loads(reservation['meta'])['profile'] == 'sonnet-high'
+    assert proof is not None and result.get('repair_ref')
     assert '合成の重要な変更。' not in saved['content']
-    assert run()[0] == 'candidate' and len(sent) == 1
+    assert run() == ('candidate', result) and len(sent) == 1
 
 
 @pytest.mark.parametrize('damage', ['none', 'answer', 'receipt', 'audit'])
@@ -767,7 +791,7 @@ def test_exact_repair_prompt_over_cost_cap_does_not_spend_repair(repair, monkeyp
         return 'daily_cost_cap'
     monkeypatch.setattr(worker.cloud_policy, 'budget_block_reason', unavailable)
     assert run() == ('deferred', None) and not sent and not led.artifacts(patient_context_refresh_state.QUALITY_REPAIR)
-    assert seen and seen[0]['max_tokens'] == 1600 and seen[0]['input_bound'] > 0
+    assert seen and seen[0]['max_tokens'] == seen[0]['selection']['max_tokens'] and seen[0]['input_bound'] > 0
 
 
 def test_unknown_after_send_spends_repair_and_does_not_retry(repair):

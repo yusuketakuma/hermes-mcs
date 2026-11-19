@@ -525,6 +525,22 @@ def test_preflight_verdicts_cached_with_chunk(request):
     sf.validate_facts_doc(second["doc"])
 
 
+def test_unsent_chunk_call_spends_no_preflight(request):
+    """A busy GPU turn short-defers the job, so the not-sent chunk must not
+    have spent an uncached Jev preflight the retry would re-send."""
+    import semantic_runtime
+
+    def unsent(_prompt):
+        raise semantic_runtime.LLMNotSent("probe_unsent")
+
+    jev = _FakeJev()
+    with pytest.raises(semantic_runtime.LLMNotSent):
+        extraction.extract_facts_v2(
+            unsent, _member("一段落目です。" + "あ" * 50), ledger=_FakeLedger(request),
+            source_fingerprint=FP, chunk_size=40, jev_client=jev)
+    assert jev.calls == 0
+
+
 def test_deadline_between_chunks_leaves_pending():
     body = "あ" * 50 + "\n" + "い" * 50 + "\n" + "う" * 50
 

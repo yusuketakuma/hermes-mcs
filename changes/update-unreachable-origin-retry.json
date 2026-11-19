@@ -1,0 +1,10 @@
+{
+  "category": "changed",
+  "title": "origin に接続できなかった更新を失敗として記録せず、次の確認で再試行する",
+  "summary": "自動更新や承認済みの更新が、版の照合（ls-remote）で origin に接続できずに中止すると、その版は失敗として記録され、以後は自動で再試行されず、承認も消費されていました。一時的な通信の不調だけで、その版を手で適用し直す必要がありました。今後は、変更を始める前の段階（事前確認・版の照合・取得）で git_timeout・git_spawn_failed・ls-remote の失敗が起きた場合だけ、失敗に数えず、承認を保留したまま次の確認で再試行します。端末には「origin に接続できないため、この更新は開始していません」と表示します。バックアップの作成以降の失敗と、版の付け替え（tag_moved）などの照合の不一致は従来どおり失敗として扱います。",
+  "upgrade": "この版への更新だけで有効になります。docs/specs/lifecycle-spec.md の「失敗 tag は自動再試行しない」に例外を追記しました。",
+  "details": [
+    "update_lifecycle_context に _NETWORK_BAIL と _PRE_CHANGE_STAGES を追加し、update_apply の bail が既存の一時的な失敗（run_lock_timeout）と同じ扱いにする。"
+  ],
+  "refs": ["mcs/ops/update_apply.py", "mcs/ops/update_lifecycle_context.py", "docs/specs/lifecycle-spec.md"]
+}

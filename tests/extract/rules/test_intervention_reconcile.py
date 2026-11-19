@@ -24,7 +24,10 @@ def ledger(tmp_path, monkeypatch):
 
 def _install_invalid(ledger, mids):
     body = '看護師が2026年9月21日に本人を訪問する予定です。'
-    ledger.save_messages([_message(mid=mid, body=body) for mid in mids])
+    # The planned visit must stay in the future of the posting date; the
+    # shared default posted_at is "now", which would make 9/21 a past date.
+    posted_at = '2026-09-19T10:00:00+09:00'
+    ledger.save_messages([_message(mid=mid, body=body, posted_at=posted_at) for mid in mids])
     with ledger.db:
         for mid in mids:
             ledger.db.execute('UPDATE messages SET body_html=? WHERE message_id=?', ('broken', mid))
@@ -48,7 +51,7 @@ def test_repaired_html_is_rechecked_once_without_changing_binding(ledger, repair
         assert extract.run_pending(ledger)['done'] == 0
         assert _latest(ledger, 1)[0] == before_id
     if repair == 'upsert':
-        ledger.save_messages([_message(body=body)])
+        ledger.save_messages([_message(body=body, posted_at='2026-09-19T10:00:00+09:00')])
     else:
         with ledger.db:
             ledger.db.execute('UPDATE messages SET body_html=? WHERE message_id=1', (body,))

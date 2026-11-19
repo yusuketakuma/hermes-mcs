@@ -27,8 +27,21 @@ def message_progress(db, row, *, cfg=None):
                     policy_fingerprint=policy_fingerprint(scfg))
             else:
                 import extract_llm
-                progress = extract_llm.progress_for_message(
-                    db, row, model=extract_llm.resolved_model(cfg))
+                model = extract_llm.resolved_model(cfg)
+                if isinstance(model, str) and model:
+                    latest = db.execute(
+                        "SELECT model, meta FROM artifacts WHERE kind=? AND message_id=? "
+                        "AND (project_id IS NULL OR project_id=?) AND "
+                        + extract_llm.inference.current_meta_pred("meta", target=extract_llm._INFERENCE_VERSION)
+                        + " AND COALESCE(json_extract(CASE WHEN json_valid(meta) THEN meta END,"
+                          "'$.invalidated'),0)=0 ORDER BY artifact_id DESC LIMIT 1",
+                        (extract_llm.KIND, row["message_id"], row["project_id"])).fetchone()
+                    meta = extract_llm.loads_dict(latest["meta"]) if latest else None
+                    if (isinstance(meta, dict) and not meta.get("error")
+                            and isinstance(meta.get("actual_model"), str) and meta["actual_model"]
+                            and latest["model"] == meta["actual_model"]):
+                        model = meta["actual_model"]
+                progress = extract_llm.progress_for_message(db, row, model=model)
         # A rolled-back tree can leave the reader off sys.path; show unknown, not a crash.
         except (ImportError, sqlite3.DatabaseError, ValueError, TypeError, KeyError, AttributeError,
                 RecursionError):

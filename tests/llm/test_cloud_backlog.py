@@ -117,6 +117,25 @@ def test_unknown_and_low_memory_do_not_spawn(monkeypatch):
     assert backlog.memory_workers(32) == 0
 
 
+@pytest.mark.parametrize("level", ["1", "2", "4"])
+def test_critical_kernel_pressure_closes_background_admission(monkeypatch, level):
+    import llm_availability
+
+    def fake_run(argv, **kwargs):
+        output = {"/usr/sbin/sysctl": level if argv[-1] == "kern.memorystatus_vm_pressure_level"
+                  else str(16 * 2**30), "/usr/bin/memory_pressure":
+                  "System-wide memory free percentage: 60%\n"}[argv[0]]
+        return subprocess.CompletedProcess(argv, 0, output + "\n", "")
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(llm_availability, "_pressure_critical_last", False)
+    critical = level == "4"
+    # Free memory alone would admit both the shared gate and new pool workers.
+    assert extract_llm_resident._context_memory_available() is not critical
+    assert (backlog.memory_workers(32) == 0) is critical
+
+
 @pytest.mark.parametrize("context_only", [False, True])
 def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch, context_only):
     import extract_llm
@@ -699,6 +718,13 @@ def test_worker_keeps_unreadable_config_closed_without_work(carry_worker, monkey
     ('global-unknown', 'cloud_blocked'),
     ('budget-daily_cap', 'daily_cap'),
     ('budget-unknown', 'cloud_blocked'),
+    ('global-http_429', 'http_429'),
+    ('global-auth_error', 'auth_error'),
+    ('global-payment_required', 'payment_required'),
+    ('global-contract_error', 'contract_error'),
+    ('global-transport', 'transport'),
+    ('budget-expired', 'expired'),
+    ('budget-not_started', 'not_started'),
 ])
 def test_worker_reports_each_wait_reason_once_per_change(carry_worker, monkeypatch, capsys, gate, code):
     import extract_llm
@@ -715,8 +741,10 @@ def test_worker_reports_each_wait_reason_once_per_change(carry_worker, monkeypat
     elif gate == 'global-unknown':
         monkeypatch.setattr(extract_llm.cloud_policy, 'global_block_reason',
                             lambda *a, **kw: 'synthetic-private-detail')
-    elif gate == 'budget-daily_cap':
-        monkeypatch.setattr(extract_llm.cloud_policy, 'budget_block_reason', lambda *a, **kw: 'daily_cap')
+    elif gate.startswith('global-'):
+        monkeypatch.setattr(extract_llm.cloud_policy, 'global_block_reason', lambda *a, **kw: code)
+    elif gate in ('budget-daily_cap', 'budget-expired', 'budget-not_started'):
+        monkeypatch.setattr(extract_llm.cloud_policy, 'budget_block_reason', lambda *a, **kw: code)
     else:
         monkeypatch.setattr(extract_llm.cloud_policy, 'budget_block_reason',
                             lambda *a, **kw: 'synthetic-private-detail')
@@ -846,6 +874,37 @@ def test_worker_does_not_settle_old_carry_after_update_fence(
     assert len(passes) == 1
     assert passes[0]['updated'] is True and passes[0]['deferred'] == 2
     assert passes[0]['defer_reasons'] == expected
+    assert 'synthetic-private-detail' not in json.dumps(records)
+
+
+def test_worker_reports_carry_settlement_with_fixed_reasons(carry_worker, monkeypatch, capsys):
+    import extract_llm
+    state, _ = carry_worker
+    item = object()
+
+    def extract(ledger, **kw):
+        state.memory = False
+        state.carry = [item]
+        return {"done": 1, "carry": state.carry}
+
+    def settle(ledger, carry, **kw):
+        assert kw["report"] is False
+        carry.clear()
+        return {"done": 2, "held_prior": 1, "deferred": 3,
+                "defer_reasons": {"update_fence": 2, "synthetic-private-detail": 1}}, 3, set()
+
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+    monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
+    monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
+    with legacy_cloud_routes():
+        backlog.worker(991)
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    settled = [r for r in records if r['event'] == 'cloud_carry_settled']
+    assert len(settled) == 1
+    assert {k: settled[0][k] for k in ('carried', 'kept', 'done', 'held_prior', 'deferred', 'defer_reasons')} == {
+        'carried': 1, 'kept': 0, 'done': 2, 'held_prior': 1, 'deferred': 3, 'defer_reasons': {'update_fence': 2}}
     assert 'synthetic-private-detail' not in json.dumps(records)
 
 
@@ -1546,3 +1605,95 @@ def test_parent_never_starts_a_child_its_own_memory_check_refuses(monkeypatch, p
     # Small Linux hosts keep at least 1 GiB for foreground work in both checks.
     if platform == "linux" and available_kb * 1024 < (1 << 30) + backlog._WORKER_BYTES:
         assert backlog.memory_workers(4) == 0
+
+
+def test_note_provider_reports_only_a_change(capsys):
+    seen = {'provider': None}
+    for name in ('anthropic', 'anthropic', 'openai', 'openai'):
+        backlog._note_provider(seen, {'provider': name, 'private': 'synthetic-private-detail'})
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [(r['event'], r['previous'], r['provider']) for r in records] == [
+        ('cloud_provider_changed', 'anthropic', 'openai')]
+    assert 'synthetic-private-detail' not in json.dumps(records)
+
+
+def test_pool_sync_reports_recovery_only_after_the_nested_pool_recovers(tmp_path, monkeypatch):
+    # a nested pool that raised is throttled on the next call: the outer
+    # pass alone must not read as recovery, or the owner logs the same
+    # failure again every other cycle
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    outcomes = iter([RuntimeError("synthetic"), None])
+
+    def decide(cfg, ledger, now):
+        item = next(outcomes)
+        if item:
+            raise item
+    monkeypatch.setattr(owner.backlog, "_decide", decide)
+    monkeypatch.setattr(owner, "_decide", lambda cfg, ledger, now: None)
+    with pytest.raises(RuntimeError):
+        owner.sync({})
+    owner.last_sync -= 11
+    assert owner.sync({}) is False          # nested throttled and still failed
+    owner.backlog.last_sync -= 11
+    owner.last_sync -= 11
+    assert owner.sync({}) is True
+    assert owner.sync({}) is False          # throttled: nothing decided
+
+
+_CONTEXT_ONLY_WINDOW = {"cloud_llm": {
+    "mode": "on", "project_ids": [1], "provider": "anthropic", "max_concurrency": 4,
+    "routes": ["patient_context"], "window_start": "2026-11-01T00:00:00+09:00",
+    "window_budget_usd": 60, "reextract_backlog_until": "2999-01-01T00:00:00+09:00"}}
+
+
+def test_an_open_window_without_the_reextract_route_plans_no_backlog():
+    import cloud_policy
+    with_route = {"cloud_llm": {**_CONTEXT_ONLY_WINDOW["cloud_llm"], "routes": ["patient_context", "reextract"]}}
+    assert cloud_policy.reextract_backlog_window(_CONTEXT_ONLY_WINDOW)
+    assert not cloud_policy.reextract_planned(_CONTEXT_ONLY_WINDOW)
+    assert cloud_policy.reextract_planned(with_route)
+
+
+def test_indexed_worker_retires_when_the_window_is_open_but_the_route_is_not(carry_worker, monkeypatch, capsys):
+    import extract_llm
+    import mcs_util
+    state, _ = carry_worker
+    monkeypatch.setattr(mcs_util, "load_config", lambda: _CONTEXT_ONLY_WINDOW)
+    monkeypatch.setenv(extract_llm.cloud_policy.BACKLOG_WORKER_ENV, "1")
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: 4)
+    monkeypatch.setattr(extract_llm, "run_pending",
+                        lambda *a, **kw: pytest.fail("closed route admitted extract"))
+    monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+    backlog.worker(991, index=0)
+    assert state.events == [] and state.closed
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert records[-1] == {**records[-1], "event": "cloud_worker_retired", "reason": "cloud_route_closed"}
+
+
+def test_no_backlog_worker_spawns_while_the_window_is_open_but_the_route_is_not(tmp_path, monkeypatch):
+    import extract_llm
+    (tmp_path / "data").mkdir()
+    monkeypatch.setattr(extract_llm.cloud_policy, "api_key", lambda *a: "synthetic-key")
+    monkeypatch.setattr(backlog, "memory_workers", lambda limit: min(2, limit))
+    spawned = []
+
+    class Child:
+        def __init__(self, command, **kw):
+            spawned.append("--context-only" in command)
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(backlog.subprocess, "Popen", Child)
+    owner = backlog.CloudBacklogPool(tmp_path, context_only=True)
+    try:
+        owner.sync(_CONTEXT_ONLY_WINDOW)
+        assert spawned == [True, True]            # patient-context children only
+    finally:
+        owner.close()

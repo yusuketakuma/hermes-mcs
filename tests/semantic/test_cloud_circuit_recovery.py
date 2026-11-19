@@ -93,3 +93,20 @@ def test_jev_duplicate_keys_fail_closed_for_the_bounded_cooldown(tmp_path):
         assert state['failure_class'] == 'malformed'
         assert runtime.circuit_open(ledger, now=state['open_until'] - 1)
         assert not runtime.circuit_open(ledger, now=state['open_until'] + 1)
+
+
+def test_cloud_failure_class_change_keeps_the_consecutive_count(tmp_path):
+    rate = AnthropicError('rate_limited', retryable=True, status=429)
+    server = AnthropicError('transport', retryable=True, status=503)
+    with closing(Ledger(str(tmp_path / 'ledger.db'))) as ledger:
+        runtime.record_circuit_result(ledger, rate, now=1000, kind='cloud_circuit')
+        runtime.record_circuit_result(ledger, server, now=1001, kind='cloud_circuit')
+        assert runtime.record_circuit_result(ledger, rate, now=1002, kind='cloud_circuit')
+
+
+def test_cloud_refusal_is_a_unit_failure_and_never_opens_the_circuit(tmp_path):
+    refusal = AnthropicError('contract_error', 'refusal')
+    with closing(Ledger(str(tmp_path / 'ledger.db'))) as ledger:
+        for index in range(5):
+            assert not runtime.record_circuit_result(ledger, refusal, now=1000 + index, kind='cloud_circuit')
+        assert not runtime.circuit_open(ledger, now=1010, kind='cloud_circuit')

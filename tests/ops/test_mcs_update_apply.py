@@ -108,6 +108,24 @@ def test_apply_transient_lock_failure_keeps_receipt(updater, tmp_path,
     assert after["stages"] == []       # journal cleaned, not wedged
 
 
+@pytest.mark.parametrize("failure", ["git_timeout: ls-remote", "git_failed: ls-remote (exit=128)", "git_spawn_failed"])
+def test_apply_unreachable_origin_keeps_receipt_and_attempts(updater, tmp_path, monkeypatch, capsys, failure):
+    """IA-116: a remote lookup that cannot reach origin is not a failed tag."""
+    _apply_env(updater, monkeypatch)
+
+    def unreachable(tag, **_kwargs):
+        raise update_discovery.DiscoveryError(failure)
+
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', unreachable)
+    rc = updater.apply("v1.1.0", None, "cid-offline")
+    assert rc == 2
+    assert "origin に接続できない" in capsys.readouterr().out
+    after = updater.journal_store.load_state(updater.STATE_PATH)
+    assert "cid-offline" not in after.get("executed", {})
+    assert "v1.1.0" not in after.get("attempts", {})
+    assert after["stages"] == []
+
+
 def test_apply_update_lock_busy_returns_cleanly(updater, tmp_path,
                                                monkeypatch, capsys):
     """A live updater holds update.lock — a second apply must exit
@@ -502,7 +520,9 @@ def test_post_merge_preflight_hold_reestablishes_verified_stop(updater, monkeypa
     monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
     monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
-    monkeypatch.setattr(updater, "_enqueue_notice", lambda *_a, **_k: pytest.fail("unexpected notice"))
+    notices = []
+    # Requirement change (IA-072): the hold is no longer silent.
+    monkeypatch.setattr(updater, "_enqueue_notice", lambda *_a, **k: notices.append(k.get("notice_code")) or True)
     monkeypatch.setattr(update_apply, '_enqueue_notice', updater._enqueue_notice)
     monkeypatch.setattr(update_cli, '_enqueue_notice', updater._enqueue_notice)
     monkeypatch.setattr(update_recovery, '_enqueue_notice', updater._enqueue_notice)
@@ -510,6 +530,7 @@ def test_post_merge_preflight_hold_reestablishes_verified_stop(updater, monkeypa
     monkeypatch.setattr(update_services, '_enqueue_notice', updater._enqueue_notice)
 
     assert updater.apply("v1.1.0", target, "synthetic-command") == 1
+    assert notices == ["rollback_failed"]
     assert updater._head_sha() == target
     state = updater.journal_store.load_state(updater.STATE_PATH)
     # The failed apply is durable even when rollback preflight holds before
@@ -568,3 +589,236 @@ def test_interrupted_update_recovery_precedes_changed_guided_options(updater, mo
     monkeypatch.setattr(update_cli, 'recover_interrupted', updater.recover_interrupted)
     monkeypatch.setattr(update_recovery, 'recover_interrupted', updater.recover_interrupted)
     assert updater._apply_pipeline('v1.0.23', None, None, reinstall=True) == 7
+
+
+def _refuse_before_backup(monkeypatch):
+    """Regression: these refusals said nothing changed, yet ran after the
+    pre-update DB backup and the install-settings migration."""
+    import local_backup
+    monkeypatch.setattr(local_backup, "preupdate_backup",
+                        lambda *_a, **_k: pytest.fail("refusal must precede the backup"))
+    monkeypatch.setattr(update_apply.update_migrations, "apply",
+                        lambda *_a, **_k: pytest.fail("refusal must precede the settings migration"))
+
+
+def test_legacy_settings_without_bridge_stop_before_writers(updater, monkeypatch):
+    """Regression: a legacy-settings install merged an unbridged tag, then
+    the post-merge guard held it with writers stopped and no way back."""
+    repo = _apply_env(updater, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    before = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+    monkeypatch.setattr(updater, "_provider_migration_needed", lambda: True)
+    monkeypatch.setattr(update_apply, '_provider_migration_needed', updater._provider_migration_needed)
+    monkeypatch.setattr(update_apply, "quiesce", lambda: pytest.fail("writers must not stop"))
+    _refuse_before_backup(monkeypatch)
+    assert updater.apply("v1.1.0", target, "cid-bridge") == 1
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"] is None and state["stages"] == []
+    assert state["attempts"]["v1.1.0"]["detail"].startswith("provider_update_bridge_required")
+    assert not Path(updater.MARKER_PATH).exists()
+
+
+def test_untracked_source_file_stops_before_writers_and_is_named(updater, monkeypatch):
+    """Regression: an ignored Finder .DS_Store under a source tree passed the
+    pre-merge checks, then failed the post-merge guard with writers stopped."""
+    repo = _apply_env(updater, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    before = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    (repo / "mcs" / "__pycache__").mkdir(parents=True)
+    (repo / "mcs" / "__pycache__" / "synthetic.cpython-314.pyc").write_bytes(b"")
+    (repo / "mcs" / ".DS_Store").write_bytes(b"synthetic")
+    assert update_repository._split_source_extras() == ["mcs/.DS_Store"]
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+    monkeypatch.setattr(update_apply, "quiesce", lambda: pytest.fail("writers must not stop"))
+    _refuse_before_backup(monkeypatch)
+    assert updater.apply("v1.1.0", target, "cid-untracked") == 1
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"] is None and state["stages"] == []
+    detail = state["attempts"]["v1.1.0"]["detail"]
+    assert detail.startswith("source_untracked_files: mcs/.DS_Store")
+
+
+def test_interrupted_apply_keeps_marker_with_journal(updater, monkeypatch):
+    """Regression: Ctrl+C after quiesce dropped only the update marker, so
+    ticks resumed on a half-updated tree while the journal stayed open."""
+    repo = _apply_env(updater, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+    monkeypatch.setattr(update_apply, "quiesce", lambda: (updater._write_marker(), [])[1])
+
+    def interrupted(_sha, *, run_lock_fd):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(update_apply, "_run_post_merge", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        updater.apply("v1.1.0", target, "cid-interrupt")
+    assert Path(updater.MARKER_PATH).exists()
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"]["sha"] == target
+
+
+def test_schema_rollback_stop_failure_does_not_freeze_or_claim_a_stop(updater, monkeypatch):
+    """Regression: a failed rollback quiesce rewrote the journal as an
+    incomplete restore (permanent freeze) and reported writers as stopped."""
+    repo = _apply_env(updater, monkeypatch, precheck_errors=["schema_bump:7->8"])
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+    monkeypatch.setattr(update_apply, '_plan_runtime_migration', lambda *_args: None)
+    stops, reports = [], []
+
+    def quiesce():
+        stops.append(True)
+        updater._write_marker()
+        if len(stops) == 2:
+            raise updater.UpdateError("drainer_stop_failed: synthetic")
+        return []
+
+    def child_failed(_sha, *, run_lock_fd):
+        raise updater.UpdateError("post_merge_failed: synthetic")
+
+    monkeypatch.setattr(update_apply, "quiesce", quiesce)
+    monkeypatch.setattr(update_apply, "_run_post_merge", child_failed)
+    monkeypatch.setattr(update_apply, "_rollback_tree", lambda *_a, **_k: pytest.fail("no tree change"))
+    monkeypatch.setattr(update_apply, "_report", lambda *a, **k: reports.append((a, k)))
+    assert updater.apply("v1.1.0", target, "cid-schema") == 1
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == target
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"]["sha"] == target and not state["applying"].get("rollback")
+    assert not state["applying"].get("restore_incomplete")
+    assert not any(k.get("writers_stopped") for _a, k in reports)
+    assert Path(updater.MARKER_PATH).exists()
+
+
+
+
+def test_bail_rolls_back_from_the_childs_journal(updater, monkeypatch):
+    """Regression: bail used the parent's post_merge snapshot, so a
+    runtime migration the child journaled was neither checked nor restored."""
+    repo = _apply_env(updater, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+    migration = {"venv": "/synthetic/venv", "backup_path": "/synthetic/venv.pre"}
+
+    def child_failed(_sha, *, run_lock_fd):
+        current = updater.journal_store.load_state(updater.STATE_PATH)
+        current["applying"]["runtime_migration"] = migration
+        current["stages"].append({"stage": "runtime_migration", "at": 1.0})
+        updater.journal_store.save_state(updater.STATE_PATH, current)
+        raise updater.UpdateError("post_merge_failed: synthetic")
+
+    seen = []
+
+    def runtime(entry):
+        seen.append(entry.get("runtime_migration"))
+        raise updater.UpdateError("runtime_restore_checkout_changed")
+
+    monkeypatch.setattr(update_apply, "_run_post_merge", child_failed)
+    monkeypatch.setattr(update_apply, "_check_runtime_restore", runtime)
+    monkeypatch.setattr(update_apply, "_quiesce_for_mode", lambda _mode: [])
+    monkeypatch.setattr(update_apply, "_rollback_tree", lambda *_a, **_k: pytest.fail("held, not reset"))
+    assert updater.apply("v1.1.0", target, "cid-child") == 1
+    assert seen == [migration]
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"]["runtime_migration"] == migration
+
+
+def test_parent_tail_failure_after_child_done_never_rolls_back(updater, monkeypatch):
+    repo = _apply_env(updater, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+
+    def child_done_then_tail_failed(_sha, *, run_lock_fd):
+        current = updater.journal_store.load_state(updater.STATE_PATH)
+        current.setdefault("applied", []).append({"tag": "v1.1.0", "sha": target,
+                                                  "prev_sha": current["applying"]["prev_sha"]})
+        current["stages"].append({"stage": "done", "at": 1.0})
+        current["applying"] = None
+        updater.journal_store.save_state(updater.STATE_PATH, current)
+        raise updater.UpdateError("run_log_tail_unverified")
+
+    monkeypatch.setattr(update_apply, "_run_post_merge", child_done_then_tail_failed)
+    monkeypatch.setattr(update_apply, "_rollback_tree", lambda *_a, **_k: pytest.fail("no rollback"))
+    assert updater.apply("v1.1.0", target, "cid-done") == 1
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == target
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applied"][-1]["sha"] == target and state["applying"] is None
+    assert "done" in [stage["stage"] for stage in state["stages"]]
+
+
+def test_failed_restart_after_abort_leaves_the_journal_for_recovery(updater, monkeypatch):
+    """Regression: bail cleared the journal before restart_agents, which
+    returns without starting anything when a stop is unconfirmed."""
+    repo = _apply_env(updater, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+
+    def stop_failed():
+        raise updater.UpdateError("drainer_stop_failed: ai.mcs.synthetic")
+
+    monkeypatch.setattr(update_apply, "quiesce", stop_failed)
+    monkeypatch.setattr(update_apply, "restart_agents", lambda: ["drainer_stop_failed:ai.mcs.synthetic"])
+    assert updater.apply("v1.1.0", target, "cid-restart") == 1
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"] is None and state["stages"]
+    assert "done" not in [row.get("stage") for row in state["stages"]]
+    assert "restart:drainer_stop_failed" in state["executed"]["cid-restart"]["detail"]
+
+
+@pytest.mark.parametrize("installed", [False, True])
+def test_post_merge_bail_refuses_sdk_rollback_only_after_install_started(updater, monkeypatch, installed):
+    """Regression: the SDK-pin refusal also blocked rollbacks of failures before
+    install.sh, whose venv still had the old pins."""
+    repo = _apply_env(updater, monkeypatch)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    previous = updater._head_sha()
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+    monkeypatch.setattr(update_apply, "_plan_runtime_migration", lambda *_args: None)
+    checked, reports = [], []
+
+    def child_failed(_sha, *, run_lock_fd):
+        if installed:
+            state = updater.journal_store.load_state(updater.STATE_PATH)
+            state["applying"]["reinstall_started"] = True
+            updater.journal_store.save_state(updater.STATE_PATH, state)
+        raise updater.UpdateError("post_merge_failed: synthetic")
+
+    monkeypatch.setattr(update_apply, "_run_post_merge", child_failed)
+    monkeypatch.setattr(update_apply, "_standalone_sdk_rollback_error",
+                        lambda entry, cfg: checked.append(True) or "standalone_sdk_rollback_unsupported")
+    monkeypatch.setattr(update_apply, "_report", lambda *a, **k: reports.append(a))
+    assert updater.apply("v1.1.0", target, "cid-sdk") == 1
+    assert bool(checked) is installed
+    if installed:
+        assert updater._head_sha() == target
+        assert reports[-1][0] == "runtime_restore_blocked"
+        assert "standalone_sdk_rollback_unsupported" in reports[-1][1]
+    else:
+        assert updater._head_sha() == previous
+
+
+def test_apply_says_when_it_ran_recovery_or_did_not_start(updater, monkeypatch, capsys):
+    """Regression: a delegated recovery or a busy run.lock returned 0/2 with
+    no output, so a direct caller could not tell the tag was not applied."""
+    repo = _apply_env(updater, monkeypatch)
+    sha = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: sha)
+    monkeypatch.setattr(update_apply, "_acquire_run_lock_wait", lambda **_kw: None)
+    assert updater.apply("v1.1.0", sha, "cid-busy") == 2
+    assert "この更新は開始していません" in capsys.readouterr().out
+    state = updater.journal_store.default_state()
+    state["stages"] = [{"stage": "local_checks", "at": 1.0}]
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    monkeypatch.setattr(update_apply, "recover_interrupted", lambda: 0)
+    assert updater.apply("v1.1.0", sha, "cid-delegated") == 0
+    assert "中断した更新の復旧を先に行います" in capsys.readouterr().out

@@ -11,8 +11,11 @@ connects a fresh one) re-run the factory on a NEW Bot while the old
 supervisor may still be alive. Two guards keep the interaction surface
 recoverable: the running loop exits once ``bot.is_closed()`` (releasing
 the scope lock), and a successor waits ``LOCK_WAIT_S`` for that release
-before declaring the scope unavailable — so a rebuilt adapter regains
-its listener without a process restart.
+— and past it while that closed predecessor is still settling (a start-up
+backoff or a long tick) — before declaring the scope unavailable, so a
+rebuilt adapter regains its listener without a process restart. A
+closed client also stops new sends at once: they would fail before
+HTTP yet be journaled as unknown.
 """
 from __future__ import annotations
 
@@ -74,8 +77,9 @@ class Supervisor:
             worker_id=self._worker_id, log=log)
         self._delivery = getattr(ctx, "delivery_admission", None)
         self._delivery_identity = getattr(ctx, "delivery_identity", None)
-        if self._delivery is not None:
-            self._worker.send_admitted = lambda: self._delivery.send_allowed(self._delivery_identity)
+        self._worker.send_admitted = lambda: not _bot_closed(bot) and (
+            self._delivery is None
+            or self._delivery.send_allowed(self._delivery_identity))
         self._actions = actions.Actions(
             bot=bot, settings=settings, root=self._root,
             reg=self._reg, log=log,
@@ -83,6 +87,10 @@ class Supervisor:
         self._task = None
         self._stopping = False
         self._ready = False
+        self._previous = None
+        # True once _run ended while this was still the scope's newest
+        # supervisor: no successor serves the scope (read by card_workers)
+        self.abandoned = False
 
     # -- lifecycle -------------------------------------------------------
 
@@ -90,6 +98,11 @@ class Supervisor:
         """Register the interaction listener on THIS Bot and spawn the
         supervised poll loop. Returns False when startup deterministically
         failed (visible stopped state, no silent retry)."""
+        key = registry.scope_key(self._settings)
+        previous = _LIVE.get(key)
+        if previous is not None and previous is not self:
+            # weak: a superseded supervisor must not outlive its own task
+            self._previous = weakref.ref(previous)
         self._task = self._ctx.spawn_task(
             self._run(), name=f"mcs-discord:{self._worker_id}")
         # spawn_task returns the asyncio.Task; task is None or done()
@@ -98,7 +111,6 @@ class Supervisor:
             self._stop_listener()
             self._log("worker_start_failed")
             return False
-        key = registry.scope_key(self._settings)
         _LIVE[key] = self
         _hook_unload(self._ctx, key)
         return True
@@ -115,6 +127,14 @@ class Supervisor:
         self._worker.stop()
         self._stop_listener()
 
+    def _predecessor_leaving(self) -> bool:
+        """An in-process predecessor whose bot closed (or that was unloaded)
+        and whose task still runs — it is about to release the lock."""
+        previous = self._previous() if self._previous is not None else None
+        task = getattr(previous, "_task", None)
+        return (previous is not None and task is not None and not task.done()
+                and (previous._stopping or _bot_closed(previous._bot)))
+
     # -- the poll loop ---------------------------------------------------
 
     async def _run(self) -> None:
@@ -124,8 +144,10 @@ class Supervisor:
             # which releases the lock within one poll)
             if not await self._worker.wait_scope_lock(
                     LOCK_WAIT_S,
-                    lambda: self._stopping or _bot_closed(self._bot)):
+                    lambda: self._stopping or _bot_closed(self._bot),
+                    self._predecessor_leaving):
                 return
+            self._previous = None
             async def reconcile():
                 await await_settled(self._worker.reload_reconcile(), on_cancel=self.unload)
                 return True
@@ -171,6 +193,7 @@ class Supervisor:
             self._worker.release_scope_lock()
             key = registry.scope_key(self._settings)
             if _LIVE.get(key) is self:
+                self.abandoned = True
                 del _LIVE[key]
 
     async def _pass(self):

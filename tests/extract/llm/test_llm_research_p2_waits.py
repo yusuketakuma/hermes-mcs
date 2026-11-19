@@ -212,7 +212,7 @@ def test_idle_line_is_numeric_only(tmp_path, monkeypatch, capsys):
     lines = [json.loads(ln) for ln in capsys.readouterr().out.splitlines() if "idle_s" in ln]
     assert lines
     for line in lines:
-        assert set(line) == {"idle_s", "due_in_s", "carried", "ts"}
+        assert set(line) == {"idle_s", "due_in_s", "carried", "lane", "pid", "ts"}
         assert all(v is None or type(v) in (int, float) for v in line.values())
 
 

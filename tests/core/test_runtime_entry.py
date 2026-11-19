@@ -344,7 +344,7 @@ def test_wired_entries_acquire_before_app_imports():
     root = Path(__file__).resolve().parents[2]
     cases = {
         'mcs_standalone/__main__.py': [
-            'import mcs_standalone', '_runtime_entry.acquire()',
+            'import mcs_standalone', '_runtime_entry.acquire(',
             'from adapters.common.paths import'],
         'lineworks_adapter/__main__.py': [
             'import _mcs_path', '_runtime_entry.acquire()',
@@ -358,3 +358,18 @@ def test_wired_entries_acquire_before_app_imports():
         text = (root / rel).read_text()
         positions = [text.index(marker) for marker in markers]
         assert positions == sorted(positions), f'{rel}: acquire must precede app imports'
+
+
+@pytest.mark.parametrize('argv, expected', [
+    (['run'], None),
+    (['run', '--root', '/tmp/rootB'], '/tmp/rootB'),
+    (['--root=/tmp/rootB', 'check'], '/tmp/rootB'),
+    (['send', '--to', 'x', '--root', '/tmp/rootB'], '/tmp/rootB'),
+    (['run', '--root'], None),
+])
+def test_standalone_q_namespace_follows_explicit_root(argv, expected):
+    """--root は既定rootの実行枠を取る前に確定し、その値でQの名前空間を決める。"""
+    from mcs_standalone.__main__ import _requested_root
+    assert _requested_root(argv) == expected
+    assert runtime_entry.control_root(_requested_root(['run', '--root', '/tmp/rootB'])) \
+        != runtime_entry.control_root(_requested_root(['run']))

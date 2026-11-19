@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "患者コンテキストの更新が、送っていない失敗で待ち時間を延ばさない",
+  "summary": "ローカルLLMが接続拒否・未送信・503だった場合、患者コンテキストの更新は失敗回数に数えず保留に戻します。以後の再試行が600秒から24時間へ延びなくなります。追加操作は不要です。",
+  "upgrade": "追加操作は不要です。Hermes plugin の変更ではなく mcs 本体の変更で、次回の更新から適用されます。",
+  "details": [
+    "抽出・意味解析と同じく、接続拒否・未送信・503は失敗を計上しない保留として扱う。",
+    "接続拒否・未送信は、世代の送信前返却の対象にも加える。"
+  ],
+  "refs": ["mcs/patients/patient_context_quality_controller.py", "mcs/patients/patient_context_refresh.py", "mcs/llm/cloud_backlog.py"]
+}

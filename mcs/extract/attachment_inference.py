@@ -12,6 +12,7 @@ import time
 import attachment_ocr
 import attachment_extraction
 import attachment_inference_checkpoints
+import attachment_inference_deferral
 import cloud_inference
 import cloud_client
 import cloud_policy
@@ -20,6 +21,7 @@ import local_llm
 import original_source_keys
 import attachment_feedback
 import patient_priority
+import upgrade_scope
 import writer_lock
 from mcs_util import load_config
 from mcs_util import payload_hash as payload_hash
@@ -60,13 +62,56 @@ def _local_checkpoints(ledger, source, cfg, generation, deadline=None):
         write=lambda fn: _write(ledger, source, cfg, generation, fn, deadline=deadline))
 
 
+class _PageDefer(ValueError):
+    """Carry the proven gate code when a page-level write or guard defers."""
+
+    def __init__(self, message, defer_reason):
+        super().__init__(message)
+        self.defer_reason = defer_reason
+
+
+def _capture_writer_fence(fn):
+    with writer_lock.capture_writer_refusal() as refusal:
+        ok = fn()
+    if refusal['writer_reason'] != 'writer_refusal_unclassified':
+        writer_lock.record_writer_refusal(refusal['writer_reason'], refusal['writer_stage'])
+    code = ('writer_refused' if refusal['writer_reason'] != 'writer_refusal_unclassified'
+            else attachment_inference_deferral.UNCLASSIFIED)
+    return ok, code
+
+
+def _defer_result(counts, code):
+    result = {**counts, 'deferred': 1}
+    if code is not None:
+        result['defer_reasons'] = {code: 1}
+    return result
+
+
+def _memory_defer_reason():
+    import cloud_backlog
+    import extract_llm_resident
+    if extract_llm._context_memory_available is extract_llm_resident._context_memory_available:
+        return attachment_inference_deferral.memory_reason(cloud_backlog.memory_headroom())
+    return None if extract_llm._context_memory_available() else attachment_inference_deferral.UNCLASSIFIED
+
+
 def _guard(ledger, source, cfg, generation):
     live = load_config()
+
+    def _guard_fence():
+        state = writer_lock.updater_state()
+        if state != generation and not state[0]:
+            writer_lock.record_writer_refusal('source_generation_changed', 'generation_fence')
+        return state == generation and not generation[0] and extract_llm._writer_current(full=True)
+
+    fence_ok, fence_code = _capture_writer_fence(_guard_fence)
+    if not fence_ok:
+        raise _PageDefer('attachment_inference_source_changed', fence_code)
     free = extract_llm.disk_free_mb(ledger.db)
-    if (writer_lock.updater_state() != generation or generation[0]
-            or not extract_llm._writer_current(full=True)
-            or free is None or free < extract_llm.disk_floor_mb()
-            or attachment_ocr.config_error(live)
+    disk_code = attachment_inference_deferral.disk_reason(free, extract_llm.disk_floor_mb())
+    if disk_code is not None:
+        raise _PageDefer('attachment_inference_source_changed', disk_code)
+    if (attachment_ocr.config_error(live)
             or not live.get('attachment_ocr', {}).get('enabled', False)
             or original_source_keys.binding(ledger.db, source['project_id'], source['source_key'])
             != source['_source_binding'] or _contract(cfg) != _contract(live)
@@ -83,13 +128,27 @@ def _write(ledger, source, cfg, generation, fn, *, result=False, deadline=None):
     wait_s = _WRITE_LOCK_WAIT_S
     if deadline is not None:
         wait_s = min(wait_s, max(deadline - time.monotonic() - 1.0, 0.0))
-    fd = writer_lock.wait_run_lock(str(root / 'run.lock'), wait_s=wait_s,
-        expected_code_stamp=generation[1], marker_path=str(root / writer_lock.UPDATE_MARKER_NAME))
-    if fd is None:
-        raise ValueError('attachment_inference_writer_busy')
+    fd = None
+
+    def _lock():
+        nonlocal fd
+        fd = writer_lock.wait_run_lock(str(root / 'run.lock'), wait_s=wait_s,
+            expected_code_stamp=generation[1], marker_path=str(root / writer_lock.UPDATE_MARKER_NAME))
+        return fd is not None
+
+    locked, lock_code = _capture_writer_fence(_lock)
+    if not locked:
+        raise _PageDefer('attachment_inference_writer_busy', lock_code)
     try:
-        if writer_lock.updater_state() != generation or generation[0]:
-            raise ValueError('attachment_inference_writer_changed')
+        def _post_lock_fence():
+            state = writer_lock.updater_state()
+            if state != generation and not state[0]:
+                writer_lock.record_writer_refusal('source_generation_changed', 'generation_fence')
+            return state == generation and not generation[0]
+
+        fence_ok, fence_code = _capture_writer_fence(_post_lock_fence)
+        if not fence_ok:
+            raise _PageDefer('attachment_inference_writer_changed', fence_code)
         if not result:
             _guard(ledger, source, cfg, generation)
         return fn()
@@ -168,23 +227,38 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
         return counts
     deadline = min(deadline or time.monotonic() + 120, time.monotonic() + 900)
     if ledger.db.in_transaction:
-        return {**counts, 'deferred': 1}
-    generation = writer_lock.updater_state()
-    if generation[0] or not extract_llm._writer_current(full=True):
-        return {**counts, 'deferred': 1}
-    if not _recover_paid_results(ledger, generation, deadline=deadline):
+        return _defer_result(counts, attachment_inference_deferral.UNCLASSIFIED if stage == 'local' else None)
+    generation = None
+
+    def _admit_writer():
+        nonlocal generation
+        generation = writer_lock.updater_state()
+        return not generation[0] and extract_llm._writer_current(full=True)
+
+    writer_ok, writer_code = _capture_writer_fence(_admit_writer)
+    if not writer_ok:
+        return _defer_result(counts, writer_code if stage == 'local' else None)
+    if stage == 'local':
+        with writer_lock.capture_writer_refusal():
+            recovered = _recover_paid_results(ledger, generation, deadline=deadline)
+    else:
+        recovered = _recover_paid_results(ledger, generation, deadline=deadline)
+    if not recovered:
         if stage == 'cloud':
             return {**counts, 'deferred': 1}
         counts['paid_recovery_pending'] = True
     free = extract_llm.disk_free_mb(ledger.db)
-    if free is None or free < extract_llm.disk_floor_mb():
-        return {**counts, 'deferred': 1}
-    if not extract_llm._context_memory_available():
-        return {**counts, 'deferred': 1}
+    disk_code = attachment_inference_deferral.disk_reason(free, extract_llm.disk_floor_mb())
+    if disk_code is not None:
+        return _defer_result(counts, disk_code if stage == 'local' else None)
+    memory_code = _memory_defer_reason()
+    if memory_code is not None:
+        return _defer_result(counts, memory_code if stage == 'local' else None)
     root = attachment_ocr._data_root(ledger)
+    scope = upgrade_scope.resolve(cfg)
     fd = writer_lock.acquire_run_lock(str(root / ('attachment_inference_' + stage + '.lock')))
     if fd is None:
-        return {**counts, 'deferred': 1}
+        return _defer_result(counts, 'inference_lock_busy' if stage == 'local' else None)
     try:
         # Alternate recent active patients with a keyset history lane.
         from safe_io import atomic_write, read_json_nofollow
@@ -214,6 +288,7 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
         if not rows:
             after, after_page = 0, 0
         used = 0
+        defer_reasons = {}
         for row in rows:
             position = after if priority else row['artifact_id']
             if time.monotonic() >= deadline or used >= limit:
@@ -236,6 +311,9 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
                     continue  # a current cloud result does not depend on the local model
                 source['_feedback_revision'] = attachment_feedback.revision(
                     ledger.db, row['project_id'], key, source['_source_binding'])
+                if not upgrade_scope.attachment_admitted(ledger.db, scope, row['project_id'], key,
+                        source['_source_binding'], _contract(cfg), source['_feedback_revision']):
+                    continue  # a closed upgrade scope keeps this earlier-contract page
                 if used >= limit or time.monotonic() >= deadline:
                     finished = False
                     break
@@ -281,11 +359,17 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
                             or not _save(ledger, source, cfg, generation, stage, result, meta, unit, local,
                                      deadline=deadline)):
                         counts['deferred'] += 1
+                        if stage == 'local':
+                            defer_reasons[attachment_inference_deferral.UNCLASSIFIED] = (
+                                defer_reasons.get(attachment_inference_deferral.UNCLASSIFIED, 0) + 1)
                     else:
                         counts['done'] += 1
-                except (cloud_inference.CloudFallback, cloud_client.CloudNotSent, OSError, ValueError, sqlite3.Error):
+                except (cloud_inference.CloudFallback, cloud_client.CloudNotSent, OSError, ValueError, sqlite3.Error) as err:
                     # Paid response uncertainty is retained by the shared unit; never local-fallback or discard.
                     counts['deferred'] += 1
+                    if stage == 'local':
+                        code = getattr(err, 'defer_reason', attachment_inference_deferral.UNCLASSIFIED)
+                        defer_reasons[code] = defer_reasons.get(code, 0) + 1
             if finished:
                 after, after_page = position + 1, 0
         if priority:
@@ -294,6 +378,9 @@ def run_pending(ledger, cfg, *, stage='local', deadline=None, limit=1):
             cursor.update(after=after, page=after_page)
         cursor['turn'] += 1
         atomic_write(cursor_path, lambda stream: json.dump(cursor, stream), mode=0o600)
+        if stage == 'local' and counts['deferred'] > 0:
+            counts['defer_reasons'] = attachment_inference_deferral.normalize(
+                defer_reasons, counts['deferred'])
         return counts
     finally:
         os.close(fd)

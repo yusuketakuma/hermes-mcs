@@ -119,6 +119,7 @@ if [ -n "$STUB_CURL_FAIL" ]; then
 fi
 case "$*" in -sSfIL*) exit 0 ;; esac            # preflight HEAD probe
 case "$*" in -fsIL*)                             # remote size probe
+    if [ -n "$STUB_MODEL_HEAD_RAW" ]; then printf '%b' "$STUB_MODEL_HEAD_RAW"; exit 0; fi
     [ -n "$STUB_MODEL_SIZE" ] && printf 'HTTP/2 200\r\ncontent-length: %s\r\n' "$STUB_MODEL_SIZE"
     exit 0 ;;
 esac
@@ -177,7 +178,8 @@ esac
 if [ "$1" = "-I" ] && [ "$2" = "-B" ] && [ "$3" = "-c" ]; then
     exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/runtime-check.py" "$@"
 fi
-if [ "$1" = "-" ] && [ "$2" = "$HOME/.mcs/config.json" ]; then
+# install.sh exports the physical root when ~/.mcs is a private link
+if [ "$1" = "-" ] && { [ "$2" = "$HOME/.mcs/config.json" ] || [ "$2" = "${MCS_ROOT:-}/config.json" ]; }; then
     exec "$STUB_PARSE_PYTHON" "$@"
 fi
 exit 0

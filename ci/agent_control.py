@@ -14,6 +14,13 @@ imports nothing from the application. Standard library only.
            current labels of its linked issues
   lock     whether a newly added 担当:* label conflicts with another one
   assigned whether an agent label is the issue's only assignment
+  review   which review findings on a Claude PR to send to the repair run,
+           and whether they cost a new attempt
+  ready    the `merge-ready` commit status: the gate, the base and the review
+           verdict of the current head together
+  review-request  whether the cloud Claude reviewer may review a PR head now
+  labeler  whether the sender may add a 担当:* label
+  findings which of the given reviews report findings (the repair run's re-check)
 
 The verdict is evidence, not trust in "CI is green": every required job must
 have run on the current head and succeeded (GitHub counts skipped and neutral
@@ -62,6 +69,28 @@ HOLD_LABELS = ("失敗:CI基盤", "失敗:利用枠", "失敗:不明")
 _USES_LINE = re.compile(r"^[+-]\s*(-\s+)?uses:\s+[\w.-]+/[\w./-]+@[0-9a-f]{40}(\s+#.*)?$")
 _TEST_SKIP = re.compile(r"pytest\.mark\.(skip|skipif|xfail)|pytest\.(skip|xfail)\(|unittest\.skip|@skip\b")
 _TEST_DEF = re.compile(r"^\s*(async\s+)?def\s+test_")
+# Reviews that may start a repair: the owner's request for changes, and these
+# bots' reviews when they report findings on the PR (an unknown format never counts).
+REVIEW_FINDINGS = {
+    "coderabbitai[bot]": re.compile(r"Actionable comments posted:\s*(\d+)"),
+    "devin-ai-integration[bot]": re.compile(r"\*\*Devin Review\*\* found (\d+) (?:new )?potential issue"),
+}
+# Progress of a review on its PR, written only by the workflows (GITHUB_TOKEN):
+# queued = counted and dispatched, handled = a repair run took it (or refused it),
+# dropped = the owner was told the review is of an older head and was not sent.
+REVIEW_MARK_AUTHOR = "github-actions[bot]"
+_REVIEW_MARK = re.compile(r"<!-- agent-review:(queued|handled|dropped) ([\d,]+) -->")
+# A PR body can name any number of issues; each costs an API call per sweep.
+MAX_LINKED_ISSUES = 5
+# The review verdict ("レビュー合格"). REVIEW_ACTORS lists the logins whose formal review
+# decides, highest priority first (Dots, then claude[bot]); see review_verdict().
+VERDICTS = ("APPROVED", "CHANGES_REQUESTED")
+REVIEWER_LOGIN = "claude[bot]"
+GATE_AUTHOR = "github-actions[bot]"
+# Until Dots has its own login it reviews from the owner's account and writes this as a comment's first line.
+# Written by agent-review.yml (GITHUB_TOKEN) before Claude starts, so a run that posts nothing is not retried.
+_REVIEW_STARTED = re.compile(r"<!-- claude-review:started ([0-9a-f]{40}) -->")
+_DOTS_MARK = re.compile(r"<!-- dots-review verdict=(approved|changes_requested) head=([0-9a-f]{40}) -->")
 _LINKED_ISSUE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)", re.I)
 
 
@@ -220,6 +249,8 @@ def repair_refusal(pr, issue_labels, automation_enabled, owner_request=False):
     issues = linked_issues(pr.get("body"))
     if not issues:
         return "結ばれた Issue がない"
+    if len(issues) > MAX_LINKED_ISSUES:
+        return f"結ばれた Issue が {MAX_LINKED_ISSUES} 件を超える"
     for number in issues:
         labels = issue_labels.get(str(number), issue_labels.get(number))
         if labels is None:
@@ -230,6 +261,221 @@ def repair_refusal(pr, issue_labels, automation_enabled, owner_request=False):
         if held:
             return f"#{number} が保留中（{', '.join(held)}）"
     return None
+
+
+def actionable_review(review, owner):
+    """True for the owner's request for changes, or a listed bot's review that reports findings."""
+    login = (review.get("user") or {}).get("login", "")
+    if review.get("state") == "DISMISSED":
+        return False
+    if login == owner:
+        return review.get("state") == "CHANGES_REQUESTED"
+    pattern = REVIEW_FINDINGS.get(login)
+    found = pattern.search(review.get("body") or "") if pattern else None
+    return bool(found) and int(found.group(1)) > 0
+
+
+def review_marks(comments):
+    """{kind: review ids} from the workflows' markers; anyone else's text is ignored."""
+    marks = {"queued": set(), "handled": set(), "dropped": set()}
+    for comment in comments:
+        if (comment.get("user") or {}).get("login") != REVIEW_MARK_AUTHOR:
+            continue
+        for kind, ids in _REVIEW_MARK.findall(comment.get("body") or ""):
+            marks[kind].update(int(n) for n in ids.split(",") if n)
+    return marks
+
+
+def only_merges_since(commits, since, head):
+    """True when `head` reaches `since` along first parents through merge commits only (main-sync's Update branch).
+
+    `commits` is the head's history with parents (GET commits?sha=head); a chain
+    that leaves it, or any ordinary commit on the way, is False.
+    """
+    parents = {c.get("sha"): [p.get("sha") for p in c.get("parents") or []] for c in commits}
+    sha = head
+    for _ in range(len(parents) + 1):
+        if sha == since:
+            return True
+        chain = parents.get(sha) or []
+        if len(chain) < 2:
+            return False
+        sha = chain[0]
+    return False
+
+
+def review_plan(pr, issue_labels, reviews, comments, automation_enabled, owner, repair_busy, commits=()):
+    """The review findings to send to the repair run now, and whether they cost an attempt.
+
+    A review counts when it is of the current head, or of an earlier head that
+    only main merges have moved since; a review of a head a fix replaced is
+    dropped, and the owner's request for changes is then reported once (`dropped`).
+    While a Claude writer run waits or runs nothing is sent: another waiting run
+    would cancel it. New reviews cost one attempt for all of them together and are
+    never counted again; a counted review no repair run took is sent again later
+    without a new attempt.
+    """
+    refusal = repair_refusal(pr, issue_labels, automation_enabled)
+    if refusal:
+        return {"reviews": [], "count": False, "dropped": [], "reason": refusal}
+    marks = review_marks(comments)
+    head = pr["head"]["sha"]
+    fresh, dropped = set(), set()
+    for r in reviews:
+        if r["id"] in marks["queued"] or not actionable_review(r, owner):
+            continue
+        if r.get("commit_id") == head or only_merges_since(commits, r.get("commit_id"), head):
+            fresh.add(r["id"])
+        elif (r.get("user") or {}).get("login") == owner and r["id"] not in marks["dropped"]:
+            dropped.add(r["id"])
+    plan = {"reviews": [], "count": False, "dropped": sorted(dropped), "reason": ""}
+    waiting = marks["queued"] - marks["handled"]
+    if repair_busy and (fresh or waiting):
+        plan["reason"] = "Claude の実行中のため次の判定に回す"
+    elif fresh:
+        plan.update(reviews=sorted(fresh | waiting), count=True)
+    elif waiting:
+        plan["reviews"] = sorted(waiting)
+    else:
+        plan["reason"] = "新しい指摘なし"
+    return plan
+
+
+def _login(item):
+    return (item.get("user") or {}).get("login", "")
+
+
+def review_actors(value):
+    """The REVIEW_ACTORS variable as an ordered list of exact logins."""
+    return [name.strip() for name in (value or "").split(",") if name.strip()]
+
+
+def verdict_candidates(pr, reviews, comments, actors, dots_actor, owner):
+    """Every verdict that may decide the PR, on any head: [{rank, source, state, commit, at, url}].
+
+    rank orders the sources (lower decides): the bridge marker, then REVIEW_ACTORS
+    in order. The owner (and so every seat, which reviews from the owner's account)
+    and the PR's author never count. claude[bot] can only reject: its approval never
+    counts. An empty actor list counts nothing. Of the bridge markers only the newest
+    unedited one counts, whatever head it names (an owner-authored PR included).
+    """
+    if not actors:
+        return []
+    author = _login(pr)
+    found = []
+    for rank, actor in enumerate(actors):
+        if actor in (author, owner):
+            continue
+        source = "dots" if dots_actor and actor == dots_actor else "claude" if actor == REVIEWER_LOGIN else actor
+        states = ("CHANGES_REQUESTED",) if actor == REVIEWER_LOGIN else VERDICTS
+        found += [{"rank": rank, "source": source, "state": r["state"], "commit": r.get("commit_id"),
+                   "at": r.get("submitted_at") or "", "url": r.get("html_url")}
+                  for r in reviews if r.get("state") in states and _login(r) == actor]
+    marks = []
+    for comment in comments if not dots_actor else ():
+        lines = (comment.get("body") or "").splitlines()
+        # An edited comment no longer shows what was written when it was posted.
+        unedited = comment.get("created_at") and comment.get("updated_at") == comment.get("created_at")
+        mark = _DOTS_MARK.fullmatch(lines[0]) if lines and unedited and _login(comment) == owner else None
+        if mark:
+            marks.append({"rank": -1, "source": "dots・つなぎ", "state": mark.group(1).upper(),
+                          "commit": mark.group(2), "at": comment["created_at"], "url": comment.get("html_url")})
+    return found + ([max(marks, key=lambda m: m["at"])] if marks else [])
+
+
+def review_verdict(pr, reviews, comments, actors, dots_actor, owner):
+    """The review verdict of the current head: the highest-priority source's latest verdict on it.
+
+    passed only for an approval; no verdict on the head (or no actors) fails closed.
+    """
+    head = pr["head"]["sha"]
+    on_head = [c for c in verdict_candidates(pr, reviews, comments, actors, dots_actor, owner) if c["commit"] == head]
+    if not on_head:
+        return {"passed": False, "state": None, "source": "", "commit": None, "at": "", "url": None}
+    rank = min(c["rank"] for c in on_head)
+    pick = max((c for c in on_head if c["rank"] == rank), key=lambda c: c["at"])
+    return {**pick, "passed": pick["state"] == "APPROVED"}
+
+
+def merge_ready(pr, gate, behind_by, verdict):
+    """(state, description) of `merge-ready` for the gate plan of the current head."""
+    if not same_repository(pr):
+        return "failure", "fork の PR は対象外"
+    if gate["human_reasons"]:
+        return "failure", "所有者がマージ: " + gate["human_reasons"][0]
+    if gate["state"] != "success":
+        return ("failure" if gate["state"] == "failure" else "pending"), "merge-gate: " + gate["description"]
+    if pr.get("draft"):
+        return "pending", "下書き"
+    if behind_by:
+        return "pending", f"base より {behind_by} コミット遅れ"
+    if verdict["state"] == "CHANGES_REQUESTED":
+        return "failure", f"修正依頼（{verdict['source']}）"
+    if not verdict["passed"]:
+        return "pending", "現在の head のレビュー合格待ち"
+    return "success", f"承認（{verdict['source']}）"
+
+
+def posted_status(status, context):
+    """The latest status of `context` the workflows posted on a head (combined status API), or None.
+
+    Anyone with write access can post a status of any name: only github-actions[bot]'s counts.
+    """
+    return next((s for s in (status or {}).get("statuses", [])
+                 if s.get("context") == context and (s.get("creator") or {}).get("login") == GATE_AUTHOR), None)
+
+
+def gate_state(status):
+    """The merge-gate state the workflows posted on a head, or "" when none."""
+    return (posted_status(status, "merge-gate") or {}).get("state", "")
+
+
+def ready_precheck(status):
+    """What the merge-ready sweep does for a head from its status alone (one API call).
+
+    evaluate: merge-gate is success, so fetch the rest and judge. withdraw: merge-gate is
+    not success but an old merge-ready success stands, so write pending without fetching.
+    skip: nothing to change.
+    """
+    gate = gate_state(status)
+    if gate == "success":
+        return {"action": "evaluate", "gate": gate}
+    if (posted_status(status, "merge-ready") or {}).get("state") == "success":
+        return {"action": "withdraw", "gate": gate, "state": "pending",
+                "description": f"merge-gate: {gate or '未判定'}"}
+    return {"action": "skip", "gate": gate}
+
+
+def review_request_refusal(pr, reviews, comments, gate, actors, dots_actor, owner, automation_enabled,
+                           owner_request=False):
+    """Why the cloud Claude reviewer may not review the current head now, or None.
+
+    Automatically once per head: never after a verdict on it, Claude's own review of it, or a
+    started review of it (the workflows' marker). The owner's explicit request may review a head again.
+    """
+    if not automation_enabled:
+        return "自動化の停止中"
+    if pr.get("state") != "open" or not same_repository(pr):
+        return "このリポジトリの開いた PR ではない"
+    if _login(pr) == REVIEWER_LOGIN:
+        return "Claude が作った PR"
+    if gate != "success":
+        return "merge-gate が success ではない"
+    if owner_request:
+        return None
+    if review_verdict(pr, reviews, comments, actors, dots_actor, owner)["state"]:
+        return "現在の head にレビューの判定あり"
+    head = pr["head"]["sha"]
+    if any(_login(r) == REVIEWER_LOGIN and r.get("commit_id") == head for r in reviews):
+        return "Claude がこの head をレビュー済み"
+    if any(head in _REVIEW_STARTED.findall(c.get("body") or "") for c in comments if _login(c) == GATE_AUTHOR):
+        return "この head のレビューは開始済み"
+    return None
+
+
+def labeler_allowed(sender, owner, dots_actor):
+    """True when `sender` may add a 担当:* label: the owner, or exactly the DOTS_ACTOR login when set."""
+    return sender == owner or (bool(dots_actor) and sender == dots_actor)
 
 
 def decide_gate(pr, check_runs, files, behind_by, automation_enabled, ci_conclusion=None):
@@ -320,6 +566,42 @@ def main(argv=None):
     assigned = sub.add_parser("assigned")
     assigned.add_argument("--labels", required=True, help="JSON list of label names")
     assigned.add_argument("--agent", required=True)
+    review = sub.add_parser("review")
+    review.add_argument("--pr", required=True)
+    review.add_argument("--issue-labels", required=True, help="JSON object: issue number -> label names")
+    review.add_argument("--reviews", required=True, help="the PR's reviews (gh --paginate --slurp)")
+    review.add_argument("--comments", required=True, help="the PR's issue comments (gh --paginate --slurp)")
+    review.add_argument("--owner", required=True)
+    review.add_argument("--automation", default="")
+    review.add_argument("--busy", action="store_true", help="a Claude writer run is queued or running")
+    review.add_argument("--commits", help="the head's history with parents (gh api commits?sha=HEAD)")
+    findings = sub.add_parser("findings")
+    findings.add_argument("--reviews", required=True, help="JSON list of reviews")
+    findings.add_argument("--owner", required=True)
+    ready = sub.add_parser("ready")
+    ready.add_argument("--pr", required=True)
+    ready.add_argument("--checks", required=True)
+    ready.add_argument("--files", required=True)
+    ready.add_argument("--behind-by", type=int, required=True)
+    ready.add_argument("--automation", default="")
+    request = sub.add_parser("review-request")
+    for p in (ready, request):
+        p.add_argument("--reviews", required=True, help="the PR's reviews (gh --paginate --slurp)")
+        p.add_argument("--comments", required=True, help="the PR's issue comments (gh --paginate --slurp)")
+        p.add_argument("--actors", default="", help="vars.REVIEW_ACTORS")
+        p.add_argument("--dots-actor", default="", help="vars.DOTS_ACTOR")
+        p.add_argument("--owner", required=True)
+    ready.add_argument("--status", required=True, help="the head's combined status")
+    precheck = sub.add_parser("ready-precheck")
+    precheck.add_argument("--status", required=True, help="the head's combined status")
+    request.add_argument("--pr", required=True)
+    request.add_argument("--status", required=True, help="the head's combined status")
+    request.add_argument("--automation", default="")
+    request.add_argument("--owner-request", action="store_true", help="the owner asked on the PR")
+    labeler = sub.add_parser("labeler")
+    labeler.add_argument("--sender", required=True)
+    labeler.add_argument("--owner", required=True)
+    labeler.add_argument("--dots-actor", default="")
     args = parser.parse_args(argv)
     if args.command == "gate":
         plan = decide_gate(_load(args.pr), _flatten_checks(_load(args.checks)), _flatten(_load(args.files)),
@@ -333,6 +615,32 @@ def main(argv=None):
         refusal = repair_refusal(_load(args.pr), _load(args.issue_labels), args.automation == "true",
                                  args.owner_request)
         plan = {"allowed": refusal is None, "reason": refusal or ""}
+    elif args.command == "review":
+        plan = review_plan(_load(args.pr), _load(args.issue_labels), _flatten(_load(args.reviews)),
+                           _flatten(_load(args.comments)), args.automation == "true", args.owner, args.busy,
+                           _flatten(_load(args.commits)) if args.commits else ())
+    elif args.command == "findings":
+        plan = {"reviews": [r["id"] for r in _load(args.reviews) if actionable_review(r, args.owner)]}
+    elif args.command == "ready":
+        pr = _load(args.pr)
+        gate = decide_gate(pr, _flatten_checks(_load(args.checks)), _flatten(_load(args.files)), args.behind_by,
+                           args.automation == "true")
+        verdict = review_verdict(pr, _flatten(_load(args.reviews)), _flatten(_load(args.comments)),
+                                 review_actors(args.actors), args.dots_actor, args.owner)
+        state, description = merge_ready(pr, gate, args.behind_by, verdict)
+        current = posted_status(_load(args.status), "merge-ready") or {}
+        plan = {"sha": gate["sha"], "state": state, "description": description[:140],
+                "write": (current.get("state"), current.get("description")) != (state, description[:140])}
+    elif args.command == "review-request":
+        pr = _load(args.pr)
+        refusal = review_request_refusal(pr, _flatten(_load(args.reviews)), _flatten(_load(args.comments)),
+                                         gate_state(_load(args.status)), review_actors(args.actors),
+                                         args.dots_actor, args.owner, args.automation == "true", args.owner_request)
+        plan = {"run": refusal is None, "reason": refusal or "", "pr": pr.get("number"), "sha": pr["head"]["sha"]}
+    elif args.command == "ready-precheck":
+        plan = ready_precheck(_load(args.status))
+    elif args.command == "labeler":
+        plan = {"allowed": labeler_allowed(args.sender, args.owner, args.dots_actor)}
     elif args.command == "assigned":
         plan = {"assigned": assigned_to(json.loads(args.labels), args.agent)}
     else:

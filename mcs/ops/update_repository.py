@@ -320,6 +320,23 @@ def _provider_prior_source_verified(ref):
     return hashlib.sha256(raw).hexdigest() in _PROVIDER_PRIOR_SOURCE_WITNESSES
 
 
+def _split_source_extras(trees=()) -> list[str]:
+    """Untracked paths in the executable source trees, including ignored ones.
+
+    Untracked code in any executable tree can shadow a reader. Python does
+    not import source-less files from __pycache__; ordinary caches are safe.
+    """
+    extras = _git_out(["ls-files", "--others", "-z", "--", *_SPLIT_SOURCE_ROOTS]).split("\0")
+    # Standalone services renders cron wrappers into <root>/scripts, the
+    # checkout in the default layout; a shell wrapper cannot shadow an import.
+    templates = _git_out(["ls-files", "-z", "--", "deployment/scripts"]).split("\0")
+    templates += [path for tree in trees for _, _, _, path in tree]
+    wrappers = {"scripts/" + path.split("/")[2] for path in templates
+                if path.startswith("deployment/scripts/") and path.count("/") == 2 and path.endswith(".sh")}
+    return [path for path in extras
+            if path and path not in wrappers and not (path.endswith(".pyc") and "__pycache__" in path.split("/"))]
+
+
 def _split_target_source_matches(target: str, *, allow_reviewed_rollback=False) -> bool:
     """Verify runtime source identity, or an explicitly reviewed rollback tree.
 
@@ -348,12 +365,9 @@ def _split_target_source_matches(target: str, *, allow_reviewed_rollback=False) 
     if any(not required.issubset({path for _, _, _, path in tree}) for tree in (current, candidate)):
         return False
     # Ignore index hide flags and metadata caches: hash each actual file.
-    # Untracked code in any executable tree can shadow a reader. Python does
-    # not import source-less files from __pycache__; ordinary caches are safe.
     if _git_out(["status", "--porcelain=v1", "-z", "--untracked-files=no", "--", *_SPLIT_SOURCE_ROOTS]):
         return False
-    extras = _git_out(["ls-files", "--others", "-z", "--", *_SPLIT_SOURCE_ROOTS]).split("\0")
-    if any(path and not (path.endswith(".pyc") and "__pycache__" in path.split("/")) for path in extras):
+    if _split_source_extras((current, candidate)):
         return False
     root = os.open(REPO, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:

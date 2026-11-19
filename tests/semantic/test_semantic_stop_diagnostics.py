@@ -148,6 +148,173 @@ def test_committed_empty_repair_result_reserves_nothing(empty_candidate, tamper)
         assert result == (None, True) and diag == {'code': 'empty_repair_prior_unverified'}
 
 
+def test_consumed_empty_repair_is_judged_on_its_own_candidate(empty_candidate):
+    """A redone pre-audit candidate written after the committed result does not hide it."""
+    db, content, meta, _, calls, seed = empty_candidate
+    seed(content, meta)
+    audit = {'status': 'PASS', 'findings': [], 'target_message_id': 1}
+    audit_meta = {VERSION_KEY: CURRENT_VERSION, 'fingerprint': 'fp', 'policy_fingerprint': 'policy',
+                  'audit_status': 'PASS', 'repair_count': 1, 'summary_artifact_id': 3,
+                  'summary_hash': summary.mcs_util.payload_hash(content)}
+    redone = dict(meta, stage='pre_audit')
+    redone.pop('repair_artifact_id')
+    for artifact_id, kind, body, body_meta in (
+            (3, summary.KIND_SUMMARY, content, {}), (4, summary.KIND_AUDIT, audit, audit_meta),
+            (5, summary.KIND_CANDIDATE, content, redone)):
+        db.execute('INSERT INTO artifacts VALUES (?,?,1,1,?,?)',
+                   (artifact_id, kind, json.dumps(body), json.dumps(body_meta)))
+    db.commit()
+    diag = {}
+    assert summary._empty_repair_candidate(db, 1, 1, 'fp', 'policy', 'revision', 'assist', [],
+                                         reason_out=diag) == (None, False)
+    assert diag == {'code': 'empty_repair_consumed'}
+
+
+def test_empty_repair_candidate_of_an_earlier_local_model_is_not_recovered(empty_candidate, monkeypatch):
+    db, content, meta, _, calls, seed = empty_candidate
+    seed(content, meta)
+    seen = []
+    monkeypatch.setattr(summary.semantic_store, 'producer_current',
+                        lambda kind, model, row_meta: seen.append((kind, row_meta)) or False)
+    diag = {}
+    assert summary._empty_repair_candidate(db, 1, 1, 'fp', 'policy', 'revision', 'assist', [],
+                                         reason_out=diag) == (None, False)
+    assert diag == {'code': 'empty_repair_candidate_producer'}
+    assert seen == [(summary.KIND_CANDIDATE, meta)]
+    assert calls == ['producer', 'binding', 'prior', 'proof']
+
+
+def test_earlier_model_repair_is_released_under_a_redone_pre_audit_candidate(empty_candidate, monkeypatch):
+    """The producer is judged on the marker's own candidate, not on a later pre-audit one."""
+    db, content, meta, _, calls, seed = empty_candidate
+    seed(content, meta)
+    redone = dict(meta, stage='pre_audit')
+    redone.pop('repair_artifact_id')
+    db.execute('INSERT INTO artifacts VALUES (5,?,1,1,?,?)',
+               (summary.KIND_CANDIDATE, json.dumps(content), json.dumps(redone)))
+    db.commit()
+    monkeypatch.setattr(summary.semantic_store, 'producer_current',
+                        lambda kind, model, row_meta: row_meta.get('stage') != 'empty_repair')
+    diag = {}
+    assert summary._empty_repair_candidate(db, 1, 1, 'fp', 'policy', 'revision', 'assist', [],
+                                         reason_out=diag) == (None, False)
+    assert diag == {'code': 'empty_repair_candidate_producer'}
+
+
+@pytest.mark.parametrize('record', [
+    {'audit_state': 'held', 'partial_answers': {'answers': {}, 'findings': []}},
+    {'audit_state': 'inflight', 'partial_answers': {'answers': {}, 'findings': []}},
+    {'audit_state': 'held', 'partial_answers': {
+        'answers': {'c1': {'choice': 'not_supported', 'confidence': 0.95}},
+        'findings': [{'code': 'claim_not_supported', 'claim': 'c1'}],
+    }},
+])
+def test_recorded_negative_of_an_earlier_model_is_not_released(empty_candidate, monkeypatch, record):
+    db, content, meta, _, calls, seed = empty_candidate
+    claim_content = {'target_message_id': 1, 'claims': [{'claim_id': 'c1'}, {'claim_id': 'c2'}]}
+    seed(claim_content, dict(meta, **record))
+    monkeypatch.setattr(summary.semantic_store, 'producer_current', lambda *_: False)
+    diag = {}
+    assert summary._empty_repair_candidate(db, 1, 1, 'fp', 'policy', 'revision', 'assist', [],
+                                         reason_out=diag) == (None, True)
+    assert diag == {'code': 'empty_repair_audit_not_ready'}
+
+
+@pytest.mark.parametrize('where,key,value,reason', [
+    ('candidate', 'audit_state', 'waiting', 'audit_not_ready'),
+    ('candidate', 'audit_state', None, 'audit_not_ready'),
+    ('candidate', 'audit_state', 'done', 'audit_not_ready'),
+    ('candidate', 'partial_answers', None, 'audit_not_ready'),
+    ('candidate', 'partial_answers', [], 'audit_not_ready'),
+    ('candidate', 'partial_answers', '', 'audit_not_ready'),
+    ('candidate', 'partial_answers', False, 'audit_not_ready'),
+    ('candidate', 'invalidated', True, 'candidate_currentness'),
+    ('candidate', 'stale', True, 'candidate_currentness'),
+    ('candidate', VERSION_KEY, '0', 'candidate_currentness'),
+    ('candidate', 'schema', 'other', 'candidate_binding'),
+    ('candidate', 'policy_fingerprint', 'other', 'candidate_binding'),
+    ('candidate', 'publication_mode', 'enforce', 'candidate_binding'),
+    ('candidate', 'target_revision', 'other', 'candidate_binding'),
+    ('marker_content', 'target_message_id', 2, 'marker_link'),
+    ('marker', 'policy_fingerprint', 'other', 'marker_link'),
+    ('marker', 'repair_count', 2, 'marker_link'),
+    ('content', 'target_message_id', 2, 'claims_invalid'),
+    ('content', 'claims', [], 'claims_invalid'),
+    ('candidate', 'claim_input_binding', 'other', 'claim_binding'),
+    ('candidate', 'prior', ['unverified'], 'prior_unverified'),
+    ('candidate', 'provider_provenance', {'tampered': True}, 'provenance_unverified'),
+])
+@pytest.mark.parametrize('followed_by_pre_audit', [False, True])
+def test_unrecoverable_earlier_model_candidate_never_releases_reservation(
+        empty_candidate, where, key, value, reason, followed_by_pre_audit):
+    from semantic_transport import local_model_scope
+    db, content, meta, marker, _, seed = empty_candidate
+    content = copy.deepcopy(content)
+    meta = copy.deepcopy(meta)
+    marker = copy.deepcopy(marker)
+    marker_content = {'target_message_id': 1}
+    {'content': content, 'candidate': meta, 'marker': marker,
+     'marker_content': marker_content}[where][key] = value
+    seed(content, meta, marker_content=marker_content, marker_meta=marker)
+    db.execute('ALTER TABLE artifacts ADD COLUMN model')
+    db.execute("UPDATE artifacts SET model='synthetic-old-model' WHERE kind=?", (summary.KIND_CANDIDATE,))
+    if followed_by_pre_audit:
+        redone = {VERSION_KEY: CURRENT_VERSION, 'schema': summary.SCHEMA_VERSION, 'stage': 'pre_audit',
+                  'fingerprint': 'fp', 'policy_fingerprint': 'policy', 'publication_mode': 'assist',
+                  'target_revision': 'revision'}
+        db.execute('INSERT INTO artifacts(artifact_id,kind,project_id,message_id,content,meta,model) '
+                   'VALUES (5,?,1,1,?,?,?)',
+                   (summary.KIND_CANDIDATE, json.dumps({'target_message_id': 1, 'claims': [{'synthetic': True}]}),
+                    json.dumps(redone), 'synthetic-new-model'))
+    db.commit()
+    with local_model_scope('synthetic-new-model'):
+        diag = {}
+        result = summary._empty_repair_candidate(db, 1, 1, 'fp', 'policy', 'revision', 'assist', [],
+                                                 reason_out=diag)
+    assert result == (None, True)
+    expected = 'candidate_binding' if followed_by_pre_audit else reason
+    assert diag == {'code': 'empty_repair_' + expected}
+
+
+def test_non_dict_earlier_model_candidate_content_stays_held(empty_candidate):
+    from semantic_transport import local_model_scope
+    db, _, meta, _, _, seed = empty_candidate
+    seed(['not-a-dict'], meta)
+    db.execute('ALTER TABLE artifacts ADD COLUMN model')
+    db.execute("UPDATE artifacts SET model='synthetic-old-model' WHERE kind=?", (summary.KIND_CANDIDATE,))
+    db.commit()
+    with local_model_scope('synthetic-new-model'):
+        diag = {}
+        result = summary._empty_repair_candidate(db, 1, 1, 'fp', 'policy', 'revision', 'assist', [],
+                                                 reason_out=diag)
+    assert result == (None, True) and diag == {'code': 'empty_repair_candidate_invalid'}
+
+
+def test_empty_repair_candidate_follows_the_local_model_actually_in_use(empty_candidate):
+    """Changing the scoped local model, not a stub, decides whether the candidate is recovered."""
+    from semantic_transport import local_model_scope
+    db, content, meta, _, calls, seed = empty_candidate
+    seed(content, meta)
+    db.execute('ALTER TABLE artifacts ADD COLUMN model')
+    db.execute("UPDATE artifacts SET model='synthetic-old-model' WHERE kind=?", (summary.KIND_CANDIDATE,))
+    db.commit()
+
+    def run():
+        diag = {}
+        result = summary._empty_repair_candidate(db, 1, 1, 'fp', 'policy', 'revision', 'assist', [],
+                                                 reason_out=diag)
+        return result, diag
+
+    with local_model_scope('synthetic-old-model'):
+        (recovered, reserved), diag = run()
+    assert reserved is True and recovered['content'] == content and diag == {}
+    calls.clear()
+    with local_model_scope('synthetic-new-model'):
+        result, diag = run()
+    assert result == (None, False) and diag == {'code': 'empty_repair_candidate_producer'}
+    assert calls == ['producer', 'binding', 'prior', 'proof']
+
+
 def test_empty_validation_exception_hides_error_text():
     class Unavailable:
         def execute(self, *_):

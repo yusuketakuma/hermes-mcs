@@ -1,0 +1,20 @@
+{
+  "category": "fixed",
+  "title": "DB復元後に保留した配送を、送信直前にも確認する",
+  "summary": "DB復元後に確認が必要になった配送は、通知ワーカーが配送計画をすでに読み込んでいても送信を止めます。復元前の送信許可も、保留中は再利用しません。担当者が保留を解除すると、通常の送信条件を満たす配送は再開できます。",
+  "upgrade": "収集プロセスと通知ワーカーを更新してください。Hermesプラグインではゲートウェイ、独立アダプターでは対象のアダプターを再起動すると反映されます。保留中の配送は従来の確認操作で解決できます。",
+  "details": [
+    "照合（restore reconcile）が保留を記録すると flags/restore_holds.json に未解除の配送一覧を公開し、workerの送信直前判定（_send_allowed、再試行判定も同経路）がその配送の送信を拒否する。",
+    "配送の開始要求は、復元前の許可を返す前に配送ごとの保留を確認する。保留中は新たな試行を記録しない。復元で配送行が失われた場合も、照合用の記録を残す。",
+    "保留一覧は照合の完了時と定期処理のたびにDBの未解除holdから再生成され、保留の解決後は対象から外れる。",
+    "specファイルは照合の証拠として保全し、部品送信の直前確認・ジャーナル照合・人の承認による保留解除の意味は変更しない。"
+  ],
+  "refs": [
+    "mcs/notify/notify_reconcile.py",
+    "mcs/notify/notify_spool.py",
+    "mcs/notify/notify_transport.py",
+    "mcs/ingest/run_check.py",
+    "adapters/common/paths.py",
+    "adapters/common/worker.py"
+  ]
+}

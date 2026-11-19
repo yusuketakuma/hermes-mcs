@@ -60,11 +60,53 @@ _LISTED_SYMPTOM = "|".join(map(re.escape, sorted(clinical_scope.SYMPTOMS, key=le
 _SYMPTOM_NEGATION = re.compile(
     r"さ?(?:[はもがの]|の?訴え|症状|等|など|特に|本日|今日|今回|現在|今朝|夜間|日中|明らかな|[ \t　]"
     r"|[・/／、とや](?:" + _LISTED_SYMPTOM + r"))*"
-    r"(?:なし|無し|なく|無く|ありません|ない|認めず|認めない|認めません|認められず|認められない|認められません"
-    r"|見られず|見られない|見られません|見当たらない"
+    r"(?:なし|無し|なく|無く|ありません|ない|なかった|無かった|無い|ございません"
+    r"|認めず|認めない|認めません|認めなかった|認められず|認められない|認められません|認められなかった"
+    r"|[見み]られず|[見み]られない|[見み]られません|[見み]られなかった|見受けられ(?:ず|ない|ません)|見当たらない"
+    r"|出て(?:いない|いません|おらず)"
     r"|否定(?!でき|しきれ|し(?:難|がた|ない|ません)|されない|されず)|[(（][-−－][)）])"
     # 「なくはない」「なくもない」 negate the negation: the symptom stays
     r"(?!(?:では|じゃ)(?:ない|ありません)|わけ(?:では|じゃ)(?:ない|ありません)|[はも](?:ない|ありません))")
+_SYMPTOM_DRUG_CLASS = re.compile(r"止め|薬")
+# Same contingency reading as semantic_extraction._symptom_names: a PRN condition
+# in a medication sentence that reports no current use or course.
+_SYMPTOM_CONTINGENCY = re.compile(r"\s*(?:の)?(?:時(?!間|刻|期|点|々)|とき(?!どき))(?:に|には|は|のみ|だけ)?")
+_SYMPTOM_PRN_MED = re.compile(r"薬|処方|内服|服用|服薬|使用|頓用|頓服|投与|mg|錠|包|坐薬|座薬|外用|貼付|飲(?:む|ん|み)")
+# a use that already happened, or an injury at the event (転倒時に打撲), reports the symptom
+_SYMPTOM_REPORTED = re.compile(
+    r"(?:使用|服用|内服|頓服|投与|貼付|塗布|挿入|吸入)"
+    r"(?:した|しました|済|して(?:い|お)|中|あり|し(?=[、,。]|解熱|効果|軽快|改善|$))"
+    r"|効果(?:あり|あっ|なし|乏し)|奏効|解熱(?!剤|薬)|(?:軽快|改善)(?:し|あり)"
+    r"|飲んだ|飲みました|飲んで(?:い|お)|現在|持続|続いて|悪化|強い"
+    r"|打撲|受傷|骨折|出血|負傷|外傷|怪我|けが|ケガ")
+
+
+def symptom_is_drug_class(body, end):
+    """Return whether a symptom mention names a drug class."""
+    return bool(_SYMPTOM_DRUG_CLASS.match(body, end))
+
+
+def _symptom_as_medication(body, end):
+    """True when the symptom word only names a drug class or the condition of a PRN instruction."""
+    if symptom_is_drug_class(body, end):
+        return True
+    tail = re.split(r"[。！？!?;；\n]", body[end:], maxsplit=1)[0]
+    return bool(_SYMPTOM_CONTINGENCY.match(tail) and _SYMPTOM_PRN_MED.search(tail)
+                and not _SYMPTOM_REPORTED.search(tail))
+
+
+def symptom_matches(body):
+    """End offsets of symptom mentions that are neither directly negated nor drug-class names."""
+    found = {}
+    for s in clinical_scope.SYMPTOMS:
+        ends = [m.end() for m in re.finditer(re.escape(s) + ("(?!定)" if s == "不安" else ""), body)
+                if not _SYMPTOM_NEGATION.match(body, m.end())
+                and not symptom_is_drug_class(body, m.end())]
+        if ends:
+            found[s] = ends
+    return found
+
+
 _ADHERENCE = ("残薬", "飲み忘れ", "飲み残し", "未使用", "服薬不良",
               "アドヒアランス", "一包化", "お薬カレンダー", "自己注射",
               "残あり", "残なし")
@@ -83,6 +125,10 @@ _REQUESTS = ((r"ご?確認(?:を|お願い|ください|をお願い)", "confirm
              (r"教えて(?:ください|いただけ|欲しい)", "ask"),
              (r"報告(?:いたします|します|をお願い)", "report"))
 
+_VITAL_CHANGE_AFTER = re.compile(
+    r"[ \t　]*(?:[%％℃度]|mmHg)?[ \t　]*(?:(?:→|⇒|->|から)[ \t　]*\d"
+    # その後/再検 change a vital only when a reading follows (その後90%), not a duration (その後30分)
+    r"|[、,]?[ \t　]*(?:その後|再検(?:で|にて|時)?)[ \t　]*\d+(?:[.．]\d+)?[ \t　]*(?:[%％℃度/／]|mmHg))")
 _MED_CTX = re.compile(r"薬|処方|内服|外用|点眼|貼付|mg|錠|剤|坐薬|座薬|注射")
 # rx_actions keep at most RX_ACTIONS_CAP entries, each ctx starting RX_CTX_BACK chars before its word
 RX_ACTIONS_CAP = 10
@@ -93,7 +139,7 @@ _MED_PERIOD = re.compile(
     r"\s*[-–~〜]\s*(?:(\d{4})/)?(\d{1,2}/\d{1,2})(?!\d)")
 # Facility/provider names and service explanations are not encounter evidence.
 ENCOUNTER_CUE = clinical_events.ENCOUNTER_CUE
-RULE_VERSION = 29
+RULE_VERSION = 30
 _VISIT_DATE = re.compile(
     r"(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})日?[　\s]*(?:\(|（)?[月火水木金土日]?"
     r"(?:\)|）)?[　\s]*(?:訪問(?:診療)?|診察|往診)")
@@ -109,6 +155,14 @@ _NEXT_CANCELLED = re.compile(
     r"^[ \t　、,（(]*(?:\d{1,2}[:：時](?:\d{1,2}分?)?[ \t　]*)?"
     r"(?:の|に)?(?:訪問(?:診療)?|往診|診察)?(?:予定(?:していました|していた)?)?(?:です|でした)?(?:が|は|を)?"
     r"[ \t　、,]*(?:中止|キャンセル|延期|未定)")
+_PLAN_DATE = re.compile(
+    r"(?<!\d)(?:(?P<year>\d{4})[-－/／年])?(?P<month>\d{1,2})[-－/／月](?P<day>\d{1,2})(?!\d)日?"
+    r"(?:[ \t　]*[（(][月火水木金土日](?:曜(?:日)?)?[）)])?")
+_PLAN_MOVED = re.compile(r"[ \t　]*(?P<word>→|⇒|->|から)[ \t　]*(?=(?:\d{4}[-－/／年])?\d{1,2}[-－/／月]\d)")
+# 決まりました/なりました/決定しました announce a plan; 実施します/実施予定 are not done either.
+_PLAN_DONE = re.compile(
+    r"済|実施(?!しま|いたしま|致しま|予定)|(?<!決まりま)(?<!なりま)(?<!決めま)(?<!決定しま)した(?![いらく])"
+    r"|でした|行いました|伺いました")
 _PLANNED_BEFORE = re.compile(r"次回|予定(?!通り|どおり)|明日|明後日|今度|来週")
 # 予定通りなら (conditional) right before the date, beyond the 6-char window
 _PLANNED_IF = re.compile(r"予定(?:通り|どおり)なら[　\s、,，]*$")
@@ -129,7 +183,25 @@ def _next_planned_matches(body):
                   for start in (match.start(), match.start("year") if match["year"] else match.start("month")))
         if any(scope in ("family", "other", "unknown", "past", "conditional") for scope in scopes):
             continue
+        sentence = re.split(r"[。！？!?\n]", body[match.end():], maxsplit=1)[0]
+        # The loose 次回… arm also catches done or earlier dates (次回分は11/10に処方済み, 前回11/1と同じ).
+        if not match["scheduled"] and (re.search(r"前回|済|実施", body[match.start():match.start("month")])
+                                       or _PLAN_DONE.search(sentence)):
+            continue
+        moved = _PLAN_MOVED.match(body, match.end())
+        if moved and (moved["word"] != "から" or re.search(r"変更|変わ", sentence)):  # 11/20から11/27まで is a span
+            # 11/20→11/27に変更: the old date is superseded; take the new one only when it is the last.
+            new = _PLAN_DATE.match(body, moved.end())
+            if new is None or _PLAN_MOVED.match(body, new.end()):
+                continue
+            yield new
+            continue
+        if re.match(r"[ \t　]*(?:を|が)?[ \t　]*変更", sentence):
+            continue  # 次回訪問11/20変更: changed without a new date
         yield match
+
+
+_YEAR_WRAP_DAYS = 62
 
 
 def _ymd(month: int, day: int, year: int | None,
@@ -139,8 +211,10 @@ def _ymd(month: int, day: int, year: int | None,
       'past'   — event already happened (visit_date): never after posted
       'future' — planned date (next_planned): never before posted
       'any'    — explicit year or neutral
-    Year wraps at Dec/Jan are resolved by shifting the year, not by
-    guessing (Oracle B26)."""
+    Year wraps are resolved by shifting the year, not by guessing (Oracle
+    B26): a same-year date within _YEAR_WRAP_DAYS on the wrong side of the
+    post is an already-passed (or not yet reached) date and gives None; a
+    farther one is a year wrap (posted 11/20, 次回 2/15 -> next February)."""
     if year is None:
         return None
     years = (year,) if mode == "any" else (year, year + 1, year - 1)
@@ -155,6 +229,9 @@ def _ymd(month: int, day: int, year: int | None,
             continue        # push to next year
         if mode == "past" and d > posted.date():
             continue        # pull to last year
+        same = _md_date(month, day, year)
+        if y != year and same is not None and abs((same - posted.date()).days) <= _YEAR_WRAP_DAYS:
+            return None     # an already-passed (or not yet reached) date, not a year wrap
         return d.isoformat()
     return None
 
@@ -320,24 +397,31 @@ def extract_message(body: str, posted_at: str) -> dict:
         out["rx_actions"] = acts[:RX_ACTIONS_CAP]
 
     # --- vitals ---
-    vit, mentions = {}, []
+    # The latest labelled reading of a vital is its current value (朝 BT36.5 夕 BT38.0 -> 38.0).
+    # A latest reading followed by an unlabelled change (98%から88%, 36.5℃→38.2℃) is not
+    # current and the rule cannot read the new value, so it keeps none for that vital.
+    latest, mentions = {}, []
     for k, pat in clinical_values.VITAL_PATTERNS.items():
         for m in re.finditer(pat, body):
             scope = clinical_scope.patient_source_scope(body, m.start(), m.end(), measurement=True)
             values = clinical_values.vital_match_values(k, m)
             mentions.append({"scope": scope, "values": values, "evidence": m.group(0)})
             if scope == "patient":
+                superseded = bool(_VITAL_CHANGE_AFTER.match(body, m.end()))
                 for key, value in values.items():
-                    vit.setdefault(key, value)
+                    latest[key] = (value, superseded)
+    vit = {key: value for key, (value, superseded) in latest.items() if not superseded}
     if vit:
         out["vitals"] = vit
     if any(mention["scope"] != "patient" for mention in mentions):
         out["vital_mentions"] = mentions
 
     # --- symptoms / adherence flags ---
-    # A symptom counts when at least one mention is not directly negated (発熱なし, 吐き気は見られません).
+    # A symptom counts when at least one mention is not directly negated (発熱なし, 吐き気は見られません)
+    # and is not a drug-class name or a PRN condition (痛み止め, 発熱時カロナール).
     sym = [s for s in clinical_scope.SYMPTOMS
-           if any(not _SYMPTOM_NEGATION.match(body, m.end()) for m in re.finditer(re.escape(s) + ("(?!定)" if s == "不安" else ""), body))]
+           if any(not _SYMPTOM_NEGATION.match(body, m.end()) and not _symptom_as_medication(body, m.end())
+                  for m in re.finditer(re.escape(s) + ("(?!定)" if s == "不安" else ""), body))]
     if sym:
         out["symptoms"] = sym
     adh = [s for s in _ADHERENCE if s in body]
@@ -413,11 +497,15 @@ def _delete_stale(ledger) -> set:
     return {r['message_id'] for r in rows if r['ok']}
 
 
-def run_pending(ledger, *, deadline: float | None = None) -> dict:
+def run_pending(ledger, *, deadline: float | None = None, scope_sql: str = "") -> dict:
     """Extract messages lacking an extract_v1 artifact, and re-extract
     ones whose body changed on the server (content_hash drift — see
     _delete_stale). Returns {done, pids} so rollups can rebuild touched
-    patients."""
+    patients. ``scope_sql`` is the caller's AND-fragment over messages ``m``
+    (``upgrade_scope.selection_sql(scope, "rule")``) that keeps rows of an
+    earlier rule version out of a closed upgrade scope; empty selects all."""
+    if type(scope_sql) is not str:
+        raise ValueError("extract_scope_invalid")
     if deadline is not None and time.monotonic() >= deadline:
         return {"done": 0, "pids": []}
     if ledger.db.in_transaction:
@@ -432,7 +520,7 @@ def run_pending(ledger, *, deadline: float | None = None) -> dict:
         AND NOT EXISTS (SELECT 1 FROM artifacts a
           WHERE a.kind=? AND a.message_id=m.message_id
           {current_extract_pred(error_check=False)}
-          AND json_extract(a.meta,'$.rule_version')=?)
+          AND json_extract(a.meta,'$.rule_version')=?){scope_sql}
       ORDER BY EXISTS (SELECT 1 FROM patients p
                        WHERE p.project_id=m.project_id AND p.is_archived),
                m.posted_at_ts DESC
