@@ -384,6 +384,98 @@ def test_untrusted_enum_text_is_not_exposed_by_inventory(world):
     assert report["inventory"]["states"]["patients"]["other"] == 1
 
 
+_FETCH_JOB_KINDS_AND_STATES = (
+    ("reply", "pending"), ("thread", "pending"), ("history", "pending"),
+    ("history_head", "pending"), ("reconcile", "pending"),
+    ("discovery", "pending"), ("semantic", "pending"),
+    ("extract_claim", "pending"), ("extract_qc", "pending"),
+    ("semantic_sched", "done"), ("extract_stale_gc", "done"),
+    ("intervention_source_reconcile", "done"),
+    ("semantic_intake_unstored_epoch_v1", "done"),
+    ("semantic_intake_unstored_v1", "pending"),
+    ("semantic_intake_unstored_root_v1", "pending"),
+    ("semantic_intake_archive_v1", "done"),
+    ("patient_context_summary_quality_claim", "pending"),
+)
+
+
+def test_inventory_counts_real_patient_notify_and_job_states(world):
+    with closing(sqlite3.connect(world[0])) as db:
+        db.execute("DELETE FROM patients")
+        db.execute("DELETE FROM notify_outbox")
+        db.execute("DELETE FROM fetch_jobs")
+        for i, state in enumerate(
+                ("pending", "complete", "incomplete", "forbidden",
+                 "SYNTHETIC_UNKNOWN_STATE")):
+            db.execute(
+                "INSERT INTO patients(project_id,fetch_state,last_seen,"
+                "created_at) VALUES(?,?,0,0)", (100 + i, state))
+        for i, state in enumerate(("pending", "accepted", "failed", "suppressed")):
+            db.execute(
+                "INSERT INTO notify_outbox(kind,project_id,payload,state,"
+                "created_at,updated_at) VALUES('synthetic',?,'{}',?,0,0)",
+                (200 + i, state))
+        for kind, state in _FETCH_JOB_KINDS_AND_STATES:
+            db.execute(
+                "INSERT INTO fetch_jobs(kind,project_id,message_id,payload,"
+                "state,created_at,updated_at) VALUES(?,?,0,'{}',?,0,0)",
+                (kind, 300 + len(kind), state))
+        db.execute(
+            "INSERT INTO fetch_jobs(kind,project_id,message_id,payload,"
+            "state,created_at,updated_at) "
+            "VALUES('SYNTHETIC_UNKNOWN_KIND',400,0,'{}','pending',0,0)")
+        db.commit()
+    receipt = _create(world)
+    report = backup.verify(receipt["bundle"], receipt["sha256"], world[3], lambda: KEY)
+    inventory = report["inventory"]
+    assert inventory["states"]["patients"] == {
+        "pending": 1, "complete": 1, "incomplete": 1, "failed": 0,
+        "forbidden": 1, "other": 1}
+    assert inventory["states"]["notify_outbox"] == {
+        "pending": 1, "accepted": 1, "failed": 1, "suppressed": 1, "other": 0}
+    assert "SYNTHETIC_UNKNOWN_STATE" not in json.dumps(report)
+    jobs = inventory["jobs"]
+    for kind, state in _FETCH_JOB_KINDS_AND_STATES:
+        assert jobs[kind][state] == 1
+        assert set(jobs[kind]) == {"pending", "done", "failed", "other"}
+    assert jobs["other"]["pending"] == 1  # SYNTHETIC_UNKNOWN_KIND only
+    assert all(jobs[kind]["other"] == 0 for kind, _ in _FETCH_JOB_KINDS_AND_STATES)
+
+
+def _re_mac_bundle(path: Path, manifest: dict, ciphertext: bytes) -> None:
+    header = backup._canonical(manifest)
+    payload = backup.MAGIC + len(header).to_bytes(4, "big") + header + ciphertext
+    mac_key = hashlib.pbkdf2_hmac(
+        "sha256", KEY, b"MCS backup MAC v1\0" + bytes.fromhex(manifest["mac_salt"]),
+        600000, dklen=32)
+    path.write_bytes(payload + hmac.digest(mac_key, payload, "sha256"))
+
+
+def test_legacy_generation_inventory_still_verifies(world):
+    receipt = _create(world)
+    path = Path(receipt["bundle"])
+    manifest, ciphertext = _parts(path)
+    manifest["inventory"] = backup_evidence.inventory_snapshot(
+        Path(world[0]), enum_version=1)
+    _re_mac_bundle(path, manifest, ciphertext)
+    report = backup.verify(str(path), backup.file_sha256(path), world[3],
+                           lambda: KEY)
+    assert report["inventory"]["states"]["patients"] == manifest[
+        "inventory"]["states"]["patients"]
+
+
+def test_tampered_legacy_inventory_is_still_rejected(world):
+    receipt = _create(world)
+    path = Path(receipt["bundle"])
+    manifest, ciphertext = _parts(path)
+    manifest["inventory"] = backup_evidence.inventory_snapshot(
+        Path(world[0]), enum_version=1)
+    manifest["inventory"]["states"]["patients"]["other"] += 1
+    _re_mac_bundle(path, manifest, ciphertext)
+    with pytest.raises(backup_evidence.BackupError, match="inventory_mismatch"):
+        backup.verify(str(path), backup.file_sha256(path), world[3], lambda: KEY)
+
+
 def test_snapshot_and_copy_limits_leave_no_published_output(world, tmp_path):
     snapshot, _, _, policy = world
     with pytest.raises(backup_evidence.BackupError):

@@ -24,6 +24,7 @@ import cloud_inference
 import patient_context_refresh as context_refresh
 from extract_testkit import _message
 from test_patient_context_refresh import _prepare_summary, _raw_proof, _semantic_proof, document, seed, stamp
+from common_testkit import follow_cloud_mode
 from anthropic_context_testkit import (
     _SOURCE_REPAIR_PROVIDER as _SOURCE_REPAIR_PROVIDER,
     _SOURCE_REPAIR_JEV as _SOURCE_REPAIR_JEV,
@@ -501,6 +502,7 @@ def test_cloud_budget_wait_uses_verified_local_context(runtime, cloud, monkeypat
     led, _, local_calls = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
     monkeypatch.setattr(worker, "_cloud_mode", lambda *args: "off")
+    follow_cloud_mode(monkeypatch, worker)
     monkeypatch.setattr(extract_llm_prepare, '_cloud_mode', worker._cloud_mode)
     result = step(runtime)
     assert result['status'] == 'progressed'

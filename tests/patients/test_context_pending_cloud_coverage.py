@@ -11,6 +11,7 @@ import patient_context_refresh_readiness as readiness
 import patient_context_refresh_sources as sources
 import patient_context_refresh_state as state
 from test_patient_context_refresh import CFG, runtime, seed, step
+from common_testkit import follow_cloud_mode
 
 __all__ = ['runtime']
 
@@ -51,6 +52,7 @@ def test_phase_scope_filter_never_promotes_assumed_key_to_available(runtime, mon
         checked.append((actual['cloud_llm']['mode'], route, pid))
         return 'off'
     monkeypatch.setattr(extract_llm, '_cloud_mode', mode)
+    follow_cloud_mode(monkeypatch, extract_llm)
     observe = readiness._cloud_scan_for(led, cfg)
     assert not observe(1)  # Out-of-scope first must not populate the availability cache.
     assert checked == []
@@ -62,6 +64,7 @@ def test_phase_scope_filter_never_promotes_assumed_key_to_available(runtime, mon
     assert not readiness._cloud_scan_for(led, changed)(2)
     assert len(checked) == 1
     monkeypatch.setattr(extract_llm, '_cloud_mode', lambda *args: checked.append('new') or 'on')
+    follow_cloud_mode(monkeypatch, extract_llm)
     assert readiness._cloud_scan_for(led, cfg)(2)
     assert checked[-1] == 'new'
 
@@ -71,6 +74,7 @@ def test_patient_selection_resolves_once_after_out_of_scope_patient(runtime, mon
     cfg = {**CFG, 'cloud_llm': {'mode': 'on', 'provider': 'anthropic', 'project_ids': [2]}}
     checked, observed = [], []
     monkeypatch.setattr(extract_llm, '_cloud_mode', lambda *args: checked.append(args[-1]) or 'on')
+    follow_cloud_mode(monkeypatch, extract_llm)
     plans = iter([1, 2])
     monkeypatch.setattr(refresh.context_schedule, 'plan', lambda *args: {'project_id': next(plans), 'next': None})
     monkeypatch.setattr(refresh.context_schedule, 'advance_turn', lambda *args: None)
@@ -99,6 +103,7 @@ def test_status_reuses_availability_only_for_its_own_phase(runtime, monkeypatch)
     cfg = {**CFG, 'cloud_llm': {'mode': 'on', 'provider': 'anthropic', 'project_ids': [2, 3]}}
     checked, observed = [], []
     monkeypatch.setattr(extract_llm, '_cloud_mode', lambda *args: checked.append(args[-1]) or 'on')
+    follow_cloud_mode(monkeypatch, extract_llm)
     monkeypatch.setattr(state, '_out_of_scope', lambda snapshot: False)
     @contextmanager
     def owner(*args):
@@ -124,6 +129,7 @@ def test_pinned_estimate_never_resolves_availability(runtime, monkeypatch):
     route = state._route(CFG, 1)
     monkeypatch.setattr(extract_llm, '_cloud_mode', lambda *args: (_ for _ in ()).throw(
         AssertionError('pinned estimate must not resolve credentials')))
+    follow_cloud_mode(monkeypatch, extract_llm)
     result = readiness.pending_estimate(led.db, 1, CFG, route=route)
     assert result['scan_sources'] == 1
 

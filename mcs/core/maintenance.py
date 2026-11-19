@@ -999,6 +999,27 @@ def _mark_cloud_usage_pruned(con, cutoff):
         con.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (repr(float(cutoff)), rows[0][0]))
 
 
+def _prune_local_replacement_records(con, pid, raw):
+    """Delete the ``superseded_local`` records of one reservation that was just pruned.
+
+    Local work may replace a paid request long after it was sent, so the record of that is
+    younger than its reservation. It says nothing without the reservation and would otherwise
+    stay behind as a disposition no reservation explains."""
+    from ledger_schema import CLOUD_USAGE_KINDS_SQL, CLOUD_USAGE_RESERVATION_SQL
+    from mcs_util import strict_json
+    try:
+        reservation_id = strict_json(raw).get('reservation_id')
+    except (TypeError, ValueError, RecursionError, OverflowError, AttributeError):
+        return 0
+    if not isinstance(reservation_id, str):
+        return 0
+    return con.execute(
+        f"DELETE FROM artifacts WHERE kind IN {CLOUD_USAGE_KINDS_SQL} AND kind='cloud_usage_disposition' "
+        f"AND {CLOUD_USAGE_RESERVATION_SQL}=? AND project_id IS ? "
+        "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.disposition') END='superseded_local'",
+        (reservation_id, pid)).rowcount
+
+
 def _prune_cloud_usage(con, cutoff):
     """Delete expired cloud accounting, keeping evidence that repairs, attachment OCR and patient context still cite."""
     total, last_id = 0, 0
@@ -1032,7 +1053,10 @@ def _prune_cloud_usage(con, cutoff):
             for artifact_id, kind, pid, raw in rows:
                 if kind in ('cloud_usage_reserve', 'cloud_usage_result', 'cloud_usage_disposition') and (pid in held or artifact_id in pinned_ids):
                     continue
-                total += con.execute('DELETE FROM artifacts WHERE artifact_id=? AND kind=?', (artifact_id, kind)).rowcount
+                deleted = con.execute('DELETE FROM artifacts WHERE artifact_id=? AND kind=?', (artifact_id, kind)).rowcount
+                total += deleted
+                if deleted and kind == 'cloud_usage_reserve':
+                    total += _prune_local_replacement_records(con, pid, raw)
         if len(rows) < RETENTION_BATCH:
             return total
         last_id = rows[-1][0]
