@@ -526,6 +526,31 @@ _LAB_TAIL = re.compile(fold_surface(
     r"|報告(?:します|しました|あり)?|採血|検査|測定)"
     r"|でした|です|だった|である)*"))
 _LAB_TAIL_END = re.compile(fold_surface(r"[、。;]|,(?![0-9])|の?ため|により"))
+# A quoted number+unit confirms only when the rest of its clause is a closed
+# positive form: the _LAB_TAIL words (copula, flags, report or measurement words,
+# other readings, a previous value) or a dosing clause — enumerated schedule and
+# course words (分3, 朝夕内服中, 頓服使用なし, 週1回採血, 食後採血, の検査予定),
+# where a drug name may appear only directly before a dosing action
+# (塩化カリウム中止, 酸化マグネシウム継続). Comparisons, negations, hedges and
+# other free prose keep the reading a candidate (1.2mg/dL以上, 1.2mg/dLではありません).
+_LAB_RESULT_TAIL = re.compile(fold_surface(
+    rf"(?:[/:|・=]|-(?!$)|\((?![0-9.]+\))[^()]*\)|前回(?:は|:)?[0-9]+(?:\.[0-9]+)?(?:{_READING_UNIT})?|{_READING}"
+    r"|[でとにがはも]?(?:高値|低値|高め|低め|高|低|↑+|↓+|high|low|上昇|低下|改善|悪化|横ばい|不変"
+    r"|著変なし|変化なし|安定|再検査?|要?経過観察|推移|正常(?:範囲|値)?内?|異常なし|基準(?:値|範囲)?内"
+    r"|報告(?:します|しました|あり)?|(?:採血|検査|測定)(?:し(?:ます|ました)|され(?:ます|ました))?)"
+    r"|でした|です|だった|である"
+    r"|分[0-9]+|[0-9]+錠|週[0-9]+回|月[0-9]+|隔週|毎(?:朝|日|食後|週)|朝夕|朝1夕1|朝|夕(?:のみ)?"
+    r"|食後|食前|夕食後|朝食後|就寝前|寝る前|起床時"
+    r"|(?:内服|服用|頓服|投与|点滴|注射|外用|使用|持続"
+    r"|継続|中止|開始|休止|再開|増量|減量|変更|追加)(?:し(?:ます|ました|ています|て))?"
+    r"|なし|予定|中"
+    r"|[のでにとをはがも]"
+    # A drug name ends its clause in a dosing action and contains no comparison,
+    # negation or hedge word (以上で投与中止, ではないので投与中止 stay out;
+    # 超速効型インスリン投与 is a real drug name).
+    r"|(?:(?!(?:まで|以上|以下|未満|以内|程度|前後|ほど|くらい|ぐらい|を?超(?:え|過)"
+    r"|を?(?:下|上)回|より|では|じゃ|疑い|かもしれ|ない|なく|ありませ))[ァ-ヺー一-龯]){1,24}"
+    r"(?=中止|継続|内服|服用|使用|投与|点滴|注射|外用|開始|休止|再開|増量|減量|変更|追加))*"))
 _LAYOUT_REACH = 256   # characters read on each side of a reading; longer lines are no layout
 _BP_DATE_LABEL = re.compile(r"(?:BP|血圧)", re.I)
 _BP_DATE_LETTER = re.compile(r"[A-Za-z]", re.I)
@@ -663,7 +688,8 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
         # Positions, not slices: each match costs only its own surroundings.
         if number is not None:
             # The number and its unit end with their source line (カリウム 4.0\nCr 0.9).
-            result = _QUOTED_RESULT.match(quote, match.end(), _line_span(quote, match.start(), lines)[1])
+            line_end = _line_span(quote, match.start(), lines)[1]
+            result = _QUOTED_RESULT.match(quote, match.end(), line_end)
             if result and normalized_quantity_number(result[1]) == number:
                 if (_RANGE_FOLLOWS.match(quote, result.end()) or (
                         analyte in _SPECIMEN_SHARED_ITEMS and _QUALITATIVE_RESULT.match(quote, result.end()))):
@@ -676,7 +702,16 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                 # spellings of one unit (×10^3, ×10³, x10^3) compare by their display form
                 if ((_LAB_UNITS.get(quoted, quoted) == normalized_unit) if unit_key
                         else (not quoted or quoted in allowed_units)):
-                    readings.append(match)
+                    # A prefix is not the complete result: 1.2mg/dL以上,
+                    # 1.2mg/dLではありません etc. must stay candidates, without
+                    # guessing their value. Only a closed tail (copula, high/low
+                    # cues, report or measurement words, a dosing clause)
+                    # confirms the reading.
+                    stop = _LAB_TAIL_END.search(quote, result.end(),
+                                                min(line_end, result.end() + _LAYOUT_REACH))
+                    stop = stop.start() if stop else line_end
+                    if _LAB_RESULT_TAIL.fullmatch(quote, result.end(), stop):
+                        readings.append(match)
         elif raw_value and quote.startswith(folded_value, match.end()):
             value_end = match.end() + len(folded_value)
             result_unit = _QUOTED_UNIT.match(quote, value_end)

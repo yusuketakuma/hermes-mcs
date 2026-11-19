@@ -205,6 +205,18 @@ def test_context_detail_attributes_reach_evidence_without_aggregate_values(conte
         view.close()
 
 
+@pytest.mark.parametrize("body", [
+    "架空検査23mg/dL以上です。", "架空検査23mg/dLではありません。",
+])
+def test_numeric_lab_comparison_or_denial_displays_as_unverified_candidate(body):
+    # A number+unit quote followed by a comparison or denial is no confirmed
+    # measurement: the view lists it as an unverified candidate, not 検査.
+    item = {"name": "架空検査", "value": 23, "unit": "mg/dL", "evidence": body}
+    lines = structured_view._lab_lines({"labs": [item]}, body)
+    assert len(lines) == 1
+    assert lines[0].startswith("検査候補（未確認）:") and "架空検査" in lines[0]
+
+
 @pytest.mark.parametrize("context,suffix", [
     ({"subject": "family"}, "対象:家族"), ({"subject": "other"}, "対象:本人以外"),
     ({"status": "planned"}, "予定"), ({"condition": "空腹時のみ"}, "条件:空腹時のみ")])
