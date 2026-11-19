@@ -525,8 +525,9 @@ def test_a_partial_slice_with_nothing_due_does_not_back_off(runtime, monkeypatch
     candidate slots are spent on repeats and 6 patients are scanned."""
     import cloud_backlog
     led, _, _ = runtime
+    posted_at = '2026-09-19T00:00:00+09:00'
     for pid in range(1, 10):
-        seed(led, mid=pid, pid=pid)
+        seed(led, mid=pid, pid=pid, posted_at=posted_at)
     original = patient_context_refresh_readiness._pending
 
     def pending(*args, **kwargs):
