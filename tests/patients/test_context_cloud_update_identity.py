@@ -83,13 +83,14 @@ def real_cloud(runtime, cloud, monkeypatch):
         else:
             answer = {'fact_ids': [item['id'] for item in payload['reports']]}
         posts.append(payload)
-        response = {'model': anthropic_client.MODEL, 'stop_reason': 'end_turn',
+        response = {'model': body['model'], 'stop_reason': 'end_turn',
             'content': [{'type': 'text', 'text': json.dumps(answer)}],
             'usage': {'input_tokens': 10, 'output_tokens': 2}}
         return 200, {'Request-Id': 'synthetic-update'}, json.dumps(response).encode()
 
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', request)
-    seed(ledger, body='本人は合成の自宅で生活しています。')
+    seed(ledger, body='本人は合成の自宅で生活しています。',
+         posted_at='2026-09-19T00:00:00+09:00')
     return cfg, posts
 
 

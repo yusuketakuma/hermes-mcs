@@ -85,8 +85,9 @@ def routed(tmp_path, monkeypatch):
                                       meta={"attempt": reservation["n"], "disposition": reason})
     monkeypatch.setattr(cloud_policy, "record_disposition_tx", disposition)
     class Client(AnthropicClient):
-        def __init__(self, key):
+        def __init__(self, key, *, model=AnthropicClient.MODEL, effort=None):
             assert key == "synthetic-key"
+            super().__init__(key, model=model, effort=effort)
         def complete(self, prompt, *, deadline, max_tokens, before_attempt, reserve_fn, after_result,
                      cache_prefix=None):
             before_attempt()

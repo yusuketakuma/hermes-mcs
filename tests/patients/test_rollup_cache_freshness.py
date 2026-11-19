@@ -78,8 +78,13 @@ def assert_no_latest(result):
     assert not result.get("recent_labs")
 
 
-def test_model_change_cannot_reuse_previous_model_cache(ledger):
+def test_model_change_preserves_source_bound_latest_until_binding_breaks(ledger):
+    # A configured model change rebuilds from the same source-bound snapshot, so
+    # the stored extraction's measurement survives; only a broken source binding
+    # invalidates it.
     assert read(ledger.db)["latest_vitals"]["bt"] == 36.4
+    assert read(ledger.db, CFG_B)["latest_vitals"]["bt"] == 36.4
+    ledger.save_messages([_message(mid=1, body=EDITED, posted_at=POSTED)])
     assert_no_latest(read(ledger.db, CFG_B))
 
 

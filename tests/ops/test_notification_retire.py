@@ -326,6 +326,8 @@ def test_cli_plan_then_apply_round_trip(case, capsys, monkeypatch, wait_seconds)
     witnesses.mkdir(exist_ok=True)
     (witnesses / "slack-synthetic.json").write_text(json.dumps({
         "version": cancel.VERSION, "reason": "worker_started", "pid": 999999}))
+    (case.data / "slack_state").mkdir(exist_ok=True)
+    (case.data / "slack_state" / "send-synthetic.lock").touch()
     db.commit()
     assert cancel.main(["--root", root, "plan", "--event-id", str(digest)]) == 0
     legacy_plan = json.loads(capsys.readouterr().out)

@@ -4,7 +4,7 @@ import json
 import os
 import sys
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from functools import partial, wraps
 
@@ -571,7 +571,9 @@ def _remember_plain(endpoint: str, model: str) -> None:
         pass
 
 
-def _probe_format(endpoint: str, model: str, timeout: float = 10) -> str:
+def _probe_format(endpoint: str, model: str, timeout: float = 10,
+                  deadline: float | None = None,
+                  error_out: dict | None = None) -> str | None:
     global _FMT_MODE, _FMT_TS
     if _format_key(endpoint, model) in _format_marks():
         return "plain"
@@ -581,9 +583,10 @@ def _probe_format(endpoint: str, model: str, timeout: float = 10) -> str:
             and time.monotonic() - _FMT_TS < _PROBE_RETRY_S:
         return _FMT_MODE
     try:
-        kw = dict(timeout=min(10, timeout),
+        err_out: dict = error_out if error_out is not None else {}
+        kw = dict(timeout=min(10, timeout), deadline=deadline,
                   request_fn=local_llm.bounded_request,
-                  slot=local_llm.request_slot(),
+                  slot=local_llm.request_slot(), error_out=err_out,
                   verify=lambda text: json_object(text) is not None)
         if local_llm.admission_enabled():
             # T20: the probe sends real inference POSTs — it takes a
@@ -592,12 +595,15 @@ def _probe_format(endpoint: str, model: str, timeout: float = 10) -> str:
                 "mcs.semantic", endpoint, model, None, **kw)
         else:
             mode = local_llm.probe_format(endpoint, model, None, **kw)
-        if mode is None:
-            return _FMT_MODE  # GPU turn busy: nothing sent, probe again next call
+        if mode is None or (mode == "plain" and err_out.get("kind") == "transport"):
+            # a probe run that ended unobserved/unconfirmed is not a
+            # verdict — defer the body even when a stale mode is cached
+            return None
         _FMT_MODE = mode
     except Exception:
-        # an unobserved probe is not a plain verdict — stay unprobed
-        return _FMT_MODE
+        # an unobserved probe is not a plain verdict — a stale cached
+        # mode must not wave the body through either
+        return None
     _FMT_TS = time.monotonic()
     return _FMT_MODE
 
@@ -722,72 +728,132 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
     # the probe spends the caller's budget, never adds to it: the
     # runtime sized ``timeout`` to the job deadline (absolute)
     call_deadline = time.monotonic() + timeout
-    fmt = _probe_format(endpoint, model, timeout)
-    if fmt is None:
-        # the probe never left — an unobserved format defers the real
-        # call like any other admission hold, never a silent plain send
-        _failed("probe_unsent")
-        raise runtime.LLMNotSent("probe_unsent")
-    rf = {"type": "json_object"} if fmt == "object" else None
     key = _long_key(model, prompt)
     level = _long_marks().get(key, 0)
     if level >= 2:
         return _failed("long_ceiling")   # even the long ceiling stopped on length
-    timeout = call_deadline - time.monotonic()
-    if timeout <= 0:
-        return _failed("deadline")
-    if level and timeout < LONG_MIN_CALL_S:
+    remaining = call_deadline - time.monotonic()
+    # reserve the body floor for the real call: the probe's deadline
+    # stops short of it; one physical turn covers probe+first body so
+    # the body reuses the probed slot, while every resend re-acquires
+    floor = LONG_MIN_CALL_S if level \
+        else min(_TURN_MIN_CALL_S, remaining / 2)
+    if level and 0 < remaining < LONG_MIN_CALL_S:
         _failed("long_output_needs_budget")
         raise runtime.LLMNotSent("long_output_needs_budget")
+    # probe+first body share one turn only while a format check may hit
+    # the wire; remembered/plain-cached formats skip the probe margin and
+    # every resend re-acquires through the existing per-send path
+    fkey = _format_key(endpoint, model)
+    # resolve the format cache once, mirroring _probe_format's early
+    # returns: a hit is used to completion and only a miss pays the
+    # probe margin inside the shared turn — a TTL crossing between two
+    # reads must not split probe and body turns
+    cached = ("plain" if fkey in _format_marks()
+              else _FMT_MODE
+              if _FMT_MODE == "object"
+              or _FMT_MODE is not None
+              and time.monotonic() - _FMT_TS < _PROBE_RETRY_S
+              else None)
+    probe_due = cached is None
+    margin = local_llm.PROBE_TURN_MIN_S if probe_due else 0.0
+    turn_deadline = call_deadline
+    first = True
     while True:
-        timeout = call_deadline - time.monotonic()
-        if timeout <= 0:
-            return _failed("deadline")
-        response = send(
-            prompt, endpoint=endpoint, model=model,
-            timeout=timeout, deadline=call_deadline,
-            max_tokens=max(max_tokens, LLM_LONG_MAX_TOKENS)
-            if level else max_tokens,
-            response_format=rf,
-            extra_payload={"id_slot": local_llm.request_slot()},
-            request_fn=local_llm.bounded_request, error_out=err_out,
-            turn_min_s=LONG_MIN_CALL_S if level
-            else min(_TURN_MIN_CALL_S, timeout / 2))
-        if response is not None and response.get("admission"):
-            # a denial/deferral never left — the verdict, never model text
-            raise runtime.LLMNotSent(
-                f"llm_admission:{response['admission']}")
-        timeout = call_deadline - time.monotonic()
-        if rf is not None and response is not None \
-                and response.get("status") in _FMT_REJECT_STATUSES:
-            # the server rejected the constraint (restart / model
-            # swap): degrade to plain for this and later calls —
-            # the retry shares what is left of the caller's budget
-            _FMT_MODE, _FMT_TS = "plain", time.monotonic()
-            _remember_plain(endpoint, model)
+        with (local_llm.call_turn(turn_deadline, floor + margin,
+                                  slot=local_llm.request_slot())
+              if first and probe_due else nullcontext()) as held:
+            if first:
+                if probe_due:
+                    if held is None or (
+                            call_deadline - time.monotonic() < floor + margin):
+                        # the turn never fit probe+body, or the body floor
+                        # + probe margin is already gone: the probe never
+                        # left — a not-sent defer, never an inner
+                        # re-acquire behind the caller's back
+                        _failed("probe_unsent")
+                        raise runtime.LLMNotSent("probe_unsent")
+                    probe_err: dict = {}
+                    fmt = _probe_format(endpoint, model, timeout,
+                                        call_deadline - floor, probe_err)
+                else:
+                    fmt = cached
+                first = False
+                if fmt is None:
+                    kind = probe_err.get("kind")
+                    if probe_err.get("status") == 503:
+                        _failed("unavailable")
+                        raise runtime.LLMNotSent("llm_unavailable")
+                    if kind == "unreachable":
+                        _failed("unreachable")
+                        raise runtime.LLMNotSent("llm_unreachable")
+                    if kind == "transport":
+                        # the probe left and died in transport — work was
+                        # consumed; a model failure, never a not-sent defer
+                        return _failed("transport")
+                    _failed("probe_unsent")
+                    raise runtime.LLMNotSent("probe_unsent")
+                if not level and call_deadline - time.monotonic() < floor:
+                    # the probe's own elapsed time can spend the floor the
+                    # turn was acquired for — the first body never leaves
+                    # below it (equality still sends); long levels keep
+                    # their own 620s not-sent gate below
+                    return _failed("deadline")
+                rf = {"type": "json_object"} if fmt == "object" else None
+                timeout = call_deadline - time.monotonic()
+                if timeout <= 0:
+                    return _failed("deadline")
+                if level and timeout < LONG_MIN_CALL_S:
+                    _failed("long_output_needs_budget")
+                    raise runtime.LLMNotSent("long_output_needs_budget")
             timeout = call_deadline - time.monotonic()
-            rf = None
             if timeout <= 0:
-                # A format refusal is not a plain-prompt rejection.
-                # Exhausted work stays retryable without another send.
-                return _failed("format_rejected")
-            if level and timeout < LONG_MIN_CALL_S:
-                # The rejected request already left: do not report a
-                # free not-sent defer, or send a long call that cannot
-                # fit. A format refusal says nothing about the prompt,
-                # so this is a retryable model failure, never the plain
-                # HTTP 400 terminal rejection; plain is remembered and
-                # the mark kept for a later adequately sized try.
-                return _failed("format_rejected")
-            continue
-        if response is not None \
-                and response.get("finish_reason") == "length":
-            level += 1
-            _long_mark(key, level)
+                return _failed("deadline")
+            response = send(
+                prompt, endpoint=endpoint, model=model,
+                timeout=timeout, deadline=call_deadline,
+                max_tokens=max(max_tokens, LLM_LONG_MAX_TOKENS)
+                if level else max_tokens,
+                response_format=rf,
+                extra_payload={"id_slot": local_llm.request_slot()},
+                request_fn=local_llm.bounded_request, error_out=err_out,
+                turn_min_s=LONG_MIN_CALL_S if level
+                else min(_TURN_MIN_CALL_S, timeout / 2))
+            if response is not None and response.get("admission"):
+                # a denial/deferral never left — the verdict, never model text
+                raise runtime.LLMNotSent(
+                    f"llm_admission:{response['admission']}")
             timeout = call_deadline - time.monotonic()
-            if level == 1 and timeout >= LONG_MIN_CALL_S:
-                continue  # one long-ceiling retry in what is left
-        break
+            if rf is not None and response is not None \
+                    and response.get("status") in _FMT_REJECT_STATUSES:
+                # the server rejected the constraint (restart / model
+                # swap): degrade to plain for this and later calls —
+                # the retry shares what is left of the caller's budget
+                _FMT_MODE, _FMT_TS = "plain", time.monotonic()
+                _remember_plain(endpoint, model)
+                timeout = call_deadline - time.monotonic()
+                rf = None
+                if timeout <= 0:
+                    # A format refusal is not a plain-prompt rejection.
+                    # Exhausted work stays retryable without another send.
+                    return _failed("format_rejected")
+                if level and timeout < LONG_MIN_CALL_S:
+                    # The rejected request already left: do not report a
+                    # free not-sent defer, or send a long call that cannot
+                    # fit. A format refusal says nothing about the prompt,
+                    # so this is a retryable model failure, never the plain
+                    # HTTP 400 terminal rejection; plain is remembered and
+                    # the mark kept for a later adequately sized try.
+                    return _failed("format_rejected")
+                continue
+            if response is not None \
+                    and response.get("finish_reason") == "length":
+                level += 1
+                _long_mark(key, level)
+                timeout = call_deadline - time.monotonic()
+                if level == 1 and timeout >= LONG_MIN_CALL_S:
+                    continue  # one long-ceiling retry in what is left
+            break
     if response is None and err_out.get("kind") == "busy":
         # the other backlog lane held the GPU turn past the deadline:
         # nothing sent, endpoint healthy — a short defer, no backoff

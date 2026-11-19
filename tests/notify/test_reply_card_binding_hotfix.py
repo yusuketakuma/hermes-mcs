@@ -132,6 +132,20 @@ def test_parent_drift_denies_sealed_reply_and_preserves_existing_remote_identity
     begun = _begin(led, render, cfg, 300)
     assert not begun["granted"] and begun["error"] == "denied_reply_thread_changed"
     after = notify_scope.card_row(led.db, reply["card_id"])
+    old = led.db.execute("SELECT state FROM notification_renders WHERE delivery_id=?",
+                         (render["delivery_id"],)).fetchone()
+    assert old["state"] == "cancelled"
+    if op == "create" and fault == "recreated":
+        # never sent: the reply follows the re-created root instead of its dead thread
+        assert (after["message_id"], after["thread_id"]) == (None, "new-root")
+        new = _latest_render(led, reply["card_id"])
+        assert new["state"] == "queued" and new["delivery_id"] != render["delivery_id"]
+        assert json.loads(new["spec_json"])["delivery"]["thread_id"] == "new-root"
+        specs = []
+        with led.db:
+            notify_cards.issue_render(led.db, reply["card_id"], cfg, NOW + 6, specs, force=True)
+        assert specs == []    # the live replacement is not duplicated
+        return
     assert (after["message_id"], after["thread_id"]) == (before["message_id"], before["thread_id"])
     assert _latest_render(led, reply["card_id"])["state"] == "cancelled"
     specs = []

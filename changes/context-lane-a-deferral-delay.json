@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "患者コンテキストのクラウド先送り後の再試行間隔を理由別にそろえる",
+  "summary": "クラウドの送信枠が埋まって先送りした患者は5秒後に、上限・回路・結果待ちなどの先送りは60秒後に再試行します。従来は理由によらず60秒でした。追加操作は不要で、クラウド処理が on のときだけ適用されます。",
+  "upgrade": "追加操作は不要です。コンテキスト用の子プロセスの再起動後に有効になります。",
+  "details": ["先送りの間隔は cloud_backlog.deferral_delay に集約し、子の待機と概況の走査位置の次回時刻が同じ値を使う。"],
+  "refs": ["mcs/llm/cloud_backlog.py", "mcs/patients/patient_context_refresh.py"]
+}

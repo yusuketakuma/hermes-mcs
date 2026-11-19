@@ -25,9 +25,27 @@ if __package__ in (None, ""):
     __package__ = "mcs_standalone"
 
 import mcs_standalone  # noqa: E402,F401  (path bootstrap)
+
+
+def _root_options(default):
+    """--root の定義の正本。main の各サブコマンドと、Q取得前の先読みが共有する。"""
+    parent = argparse.ArgumentParser(add_help=False)
+    parent.add_argument("--root", default=default, help="設定とdataの保存先（既定: ~/.mcs）")
+    return parent
+
+
+def _requested_root(argv):
+    """Q（実行枠）の名前空間を決める root。未指定は None（既定の HOME）。"""
+    try:
+        return _root_options(None).parse_known_args(argv)[0].root
+    except SystemExit:  # 不正な引数は main の parse が正式に報告する
+        return None
+
+
 if __name__ == "__main__":
     import runtime_entry as _runtime_entry  # noqa: E402
-    _RUNTIME_ENTRY = _runtime_entry.acquire()  # noqa: E402  (Q SH; process lifetime via runtime_entry.current())
+    # Q SH; process lifetime via runtime_entry.current(). --root selects the namespace, so resolve it first.
+    _RUNTIME_ENTRY = _runtime_entry.acquire(_requested_root(sys.argv[1:]))  # noqa: E402
 from adapters.common.paths import read_verified_attachment  # noqa: E402
 from mcs_util import HOME  # noqa: E402
 from safe_io import fdopen_owned  # noqa: E402
@@ -379,8 +397,8 @@ def main(argv=None) -> int:
                         "status": "機械処理用のJSONで稼働状態を表示します",
                         "service": "常駐サービスの設定内容を表示します",
                         "credential-status": "認証情報の保留状態を読み取ります"}
-        sub = subs.add_parser(name, help=descriptions[name], description=descriptions[name])
-        sub.add_argument("--root", default=HOME, help="設定とdataの保存先（既定: ~/.mcs）")
+        sub = subs.add_parser(name, help=descriptions[name], description=descriptions[name],
+                              parents=[_root_options(HOME)])
         if name == "send":
             sub.add_argument("--to", required=True)
             sub.add_argument("--quiet", action="store_true")

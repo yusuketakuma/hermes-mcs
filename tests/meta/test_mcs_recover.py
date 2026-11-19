@@ -821,7 +821,113 @@ def test_status_keeps_json_contract(rec, monkeypatch, capsys):
         "settings_migration_pending": False}
 
 
+def test_escalation_alert_names_workers_that_failed_to_restart(rec, tmp_path, monkeypatch):
+    _make_repo(tmp_path)
+    state = _applying("0" * 40, sha="f" * 40, stage="merge")   # HEAD is neither: unclassifiable
+    Path(rec.mcs_recovery_core.STATE_PATH).write_text(json.dumps(state))
+    notices = []
+    monkeypatch.setattr(rec.mcs_recovery_services, "_notify", notices.append)
+    monkeypatch.setattr(rec.mcs_recovery_services, "_restart_drainers",
+                        lambda **kwargs: ["local.mcs-synthetic"])
+    assert rec.recover() == 1
+    report = json.loads(Path(rec.mcs_recovery_core.REPORT_PATH).read_text())
+    assert report["result"] == "escalate" and report["restart"] == ["local.mcs-synthetic"]
+    assert len(notices) == 1 and notices[0].endswith(" restart:local.mcs-synthetic")
+
+
+def test_escalation_reports_before_a_failing_worker_start(rec, tmp_path, monkeypatch):
+    _make_repo(tmp_path)
+    state = _applying("0" * 40, sha="f" * 40, stage="merge")   # HEAD is neither: unclassifiable
+    Path(rec.mcs_recovery_core.STATE_PATH).write_text(json.dumps(state))
+    notices = []
+    monkeypatch.setattr(rec.mcs_recovery_services, "_notify", notices.append)
+
+    def start(**_kwargs):
+        raise OSError("synthetic start failure")
+
+    monkeypatch.setattr(rec.mcs_recovery_services, "_restart_drainers", start)
+    assert rec.recover() == 2
+    report = json.loads(Path(rec.mcs_recovery_core.REPORT_PATH).read_text())
+    assert report["result"] == "escalate" and "restart" not in report
+    assert "notified_at" not in report             # the notice is not yet earned
+    assert notices == []
+    monkeypatch.setattr(rec.mcs_recovery_services, "_restart_drainers", lambda **kwargs: [])
+    Path(rec.mcs_recovery_core.STATE_PATH).write_text(json.dumps(state))   # marker/journal as left by the failed pass
+    assert rec.recover() == 1
+    assert len(notices) == 1                        # sent once, not suppressed
+    assert rec.recover() == 1
+    assert len(notices) == 1                        # and never resent
+
+
+def test_future_journal_timestamp_is_not_fresh(rec):
+    import update_recovery
+
+    state = _applying("p" * 40, ago=-3600)        # stamped while the clock ran ahead
+    assert rec._journal_fresh(state) is False
+    assert update_recovery._journal_is_fresh(state, state["applying"]) is False
+    state = _applying("p" * 40, ago=600)
+    assert rec._journal_fresh(state) is True
+    assert update_recovery._journal_is_fresh(state, state["applying"]) is True
+
+
+@pytest.mark.parametrize("problems", [[], ["services_failed"]])
+def test_previous_head_after_post_merge_reconciles_old_services(rec, tmp_path, monkeypatch, problems):
+    repo = _make_repo(tmp_path)
+    prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    state = _applying(prev, sha="f" * 40, stage="post_merge")
+    state["applying"]["manifest_snapshot"] = {"agents": [], "cron": []}
+    Path(rec.mcs_recovery_core.STATE_PATH).write_text(json.dumps(state))
+    calls = []
+    monkeypatch.setattr(rec.mcs_recovery_services, "_reconcile_membership",
+                        lambda snapshot: calls.append(snapshot) or list(problems))
+    notices = []
+    monkeypatch.setattr(rec.mcs_recovery_services, "_notify", notices.append)
+    report_path = Path(rec.mcs_recovery_core.REPORT_PATH)
+    if problems:
+        assert rec.recover() == 1
+        assert json.loads(Path(rec.mcs_recovery_core.STATE_PATH).read_text())["applying"] == state["applying"]
+        assert json.loads(report_path.read_text())["detail"] == "resume incomplete: services_failed"
+    else:
+        assert rec.recover() == 0
+        assert json.loads(report_path.read_text())["result"] == "post_merge_reverted"
+        # The completed recovery must reach users as a completion, not "unknown".
+        finished = [n for n in notices if "巻戻しが途中で止まっていた" in n]
+        assert len(finished) == 1
+        assert "MCS-UPD-RECOVERY-COMPLETED" in rec.mcs_recovery_services._notification_text(finished[0])
+    assert calls == [state["applying"]["manifest_snapshot"]]
+
+
+@pytest.mark.parametrize("failed_during_this_apply", [True, False])
+def test_failed_apply_at_target_is_not_promoted_without_postcheck(
+        rec, tmp_path, monkeypatch, failed_during_this_apply):
+    repo = _make_repo(tmp_path)
+    prev = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "f.txt").write_text("target")
+    _git(repo, "commit", "-qam", "target")
+    target = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    state = _applying(prev, sha=target, stage="post_merge")
+    # bail() records the failed attempt; an older failure of the same tag predates this apply.
+    at = state["applying"]["at"] + (100 if failed_during_this_apply else -100)
+    state["attempts"]["v1.1.0"] = {"result": "failed", "at": at, "detail": "postcheck_failed"}
+    Path(rec.mcs_recovery_core.STATE_PATH).write_text(json.dumps(state))
+    monkeypatch.setattr(rec.mcs_recovery_services, "_reconcile_membership", lambda snapshot: [])
+    after_state = None
+    if failed_during_this_apply:
+        assert rec.recover() == 1
+        after_state = json.loads(Path(rec.mcs_recovery_core.STATE_PATH).read_text())
+        assert after_state["applying"] == state["applying"] and after_state["applied"] == []
+        report = json.loads(Path(rec.mcs_recovery_core.REPORT_PATH).read_text())
+        assert report["result"] == "escalate" and "apply failed after merge" in report["detail"]
+    else:
+        assert rec.recover() == 0
+        after_state = json.loads(Path(rec.mcs_recovery_core.STATE_PATH).read_text())
+        assert after_state["applying"] is None and after_state["applied"] == [state["applying"]]
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == target
+
+
 @pytest.mark.parametrize("detail,expected", [
+    ("apply failed after merge — rollback incomplete", "適用済みとは扱わず"),
+    ("rollback db restore: restore_marker_adopted", "バックアップを採用した導入先"),
     ("git unverifiable: rev-parse HEAD", "保存状態を確認できません"),
     ("rollback db restore: restore_consent_pending:synthetic", "人の承認待ち"),
     ("rollback db restore: restore_failed: synthetic-private-path", "保留を維持"),

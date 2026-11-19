@@ -376,3 +376,15 @@ def test_an_unpublished_row_with_a_malformed_source_scope_keeps_its_in_progress_
     result = status.state_counts(ledger.db)
     assert result["invalid_rows"] == 0 and result["partition"]["invalid"] == 0
     _assert_partition(result)
+
+
+@pytest.mark.parametrize("scope", [[0], "7", [], [7, 7], {"a": 1}, [True]])
+def test_a_progress_row_with_an_unreadable_source_scope_is_invalid_for_that_patient_only(ledger, scope):
+    _patients(ledger, 1, 2)
+    _progress(ledger, 1, {"source_scope": scope, "failure": "patient_context_length_stop"})
+    _progress(ledger, 2, {"source_scope": [7], "failure": "patient_context_length_stop"})
+    result = status.state_counts(ledger.db)
+    assert result["invalid_rows"] == 1 and result["partition"]["invalid"] == 1
+    assert result["partition"]["failed"] == 1
+    assert result["summary_failed"] == {"patients": 1, "codes": {"patient_context_length_stop": 1}}
+    _assert_partition(result)

@@ -447,10 +447,11 @@ def test_lane_pauses_after_a_pass_that_found_only_other_role_patients(lanes, mon
     ('patient_context_cloud_deferred:daily_cap', 60, 60), ('patient_context_cloud_budget', 60, 60),
     ('patient_context_selection_busy', 20, 20), ('patient_context_other_role', 60, 60),
     ('patient_context_cloud_deferred:cloud_worker_unavailable', 60, 20),
-    ('patient_context_cloud_deferred:cloud_capacity', 5, 0), ('patient_context_waiting', 5, 0)])
+    ('patient_context_cloud_deferred:cloud_capacity', 5, 0), ('patient_context_waiting', 60, 60)])
 def test_lane_paces_its_passes_like_the_children(lanes, monkeypatch, reason, child, pause):
     """Owner Q12: a cloud wait pauses the lane's context passes for a minute like a child's, and
-    another worker in the selection for 20 s; a full send slot or ordinary waiting does not. A
+    another worker in the selection for 20 s; only a full send slot does not. A waiting scan
+    pauses a minute too: nothing startable rarely changes within seconds. A
     takeover pass that found only patients waiting for a child waits like a busy selection
     (its unit holds back only its patient, which the selection passes over)."""
     assert cloud_backlog._context_retry_delay({'reason': reason}) == child
@@ -625,10 +626,13 @@ def _many_other_role(runtime, cfg, monkeypatch, others):
     cfg['semantic'] = {**cfg['semantic'], 'project_ids': None}
     own = others + 1
     cfg['cloud_llm']['project_ids'] = [own]
+    posted_at = '2026-09-19T00:00:00+09:00'
     for pid in range(1, own):
-        seed(ledger, mid=pid, pid=pid, body=f'本人は合成の自宅{pid}で生活しています。')
+        seed(ledger, mid=pid, pid=pid, body=f'本人は合成の自宅{pid}で生活しています。',
+             posted_at=posted_at)
     for index in range(3):
-        seed(ledger, mid=1000 + index, pid=own, body=IN_SCOPE + f'記録{index}。')
+        seed(ledger, mid=1000 + index, pid=own, body=IN_SCOPE + f'記録{index}。',
+             posted_at=posted_at)
     return own
 
 
@@ -652,6 +656,32 @@ def test_other_role_patients_do_not_use_the_candidate_budget(runtime, real_cloud
         if outcomes[-1]['status'] == 'progressed':
             break
     assert outcomes[-1]['status'] == 'progressed', outcomes
+
+
+def test_skipped_patients_write_no_bookmark_and_admission_runs_outside_the_write_lock(
+        runtime, real_cloud, monkeypatch):
+    """Reproduction: every other-role patient wrote the bookmark twice, and each write ran the
+    admission check (which may start external commands) under BEGIN IMMEDIATE."""
+    ledger, clock, _ = runtime
+    cfg, _ = real_cloud
+    _many_other_role(runtime, cfg, monkeypatch, 70)
+    real, writes, admitted = refresh._advance_patient_scan, [], []
+
+    def counted(*args, **kwargs):
+        writes.append(1)
+        return real(*args, **kwargs)
+
+    def admit():
+        admitted.append(ledger.db.in_transaction)
+        return True
+
+    monkeypatch.setattr(refresh, '_advance_patient_scan', counted)
+    first = refresh.run_due(ledger, cfg, deadline=clock.mono + 600, admit=admit, role='cloud')
+    assert 8 < first['wait_other_role'] <= refresh._ROLE_SKIP_LIMIT, first
+    # At most one write per candidate, one for the skips at the end and one for a cancelled
+    # query, never one per skipped patient.
+    assert len(writes) <= 10 and len(writes) < first['wait_other_role'], (len(writes), first)
+    assert admitted and not any(admitted), admitted
 
 
 def test_no_preference_while_the_rebuilding_patients_context_is_visible(runtime, monkeypatch):
@@ -828,3 +858,26 @@ def test_passed_over_patients_do_not_use_the_candidate_budget(lanes, monkeypatch
                               admit=lambda: True, role='local_takeover')
     assert outcome['status'] == 'progressed' and outcome['wait_cloud_worker'] >= 9, outcome
     assert IN_SCOPE in ''.join(_bodies(lanes.calls))
+
+
+def test_the_takeover_start_is_recorded_once_per_absence(monkeypatch, capsys):
+    clock = [1000.0]
+    alive = [False]
+    monkeypatch.setattr(resident.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(cloud_backlog, 'role_alive', lambda root, name: alive[0])
+    lane = SimpleNamespace()
+
+    def probes(count):
+        roles = []
+        for _ in range(count):
+            roles.append(resident._context_role(lane, cloud_worker=False, cloud_on=True))
+            clock[0] += resident.CHILD_ABSENT_GRACE_S / 2 + 1
+        return roles
+
+    assert probes(5) == ['local', 'local', 'local_takeover', 'local_takeover', 'local_takeover']
+    assert capsys.readouterr().err.count('"context_local_takeover"') == 1   # once, not per pass
+    alive[0] = True
+    assert probes(1) == ['local']
+    alive[0] = False
+    assert probes(4)[-1] == 'local_takeover'
+    assert capsys.readouterr().err.count('"context_local_takeover"') == 1   # the next absence

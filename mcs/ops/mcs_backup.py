@@ -362,10 +362,9 @@ def _decode(bundle: Path, expected_sha256: str, key: bytes,
                 raise backup_evidence.BackupError("backup_plain_size_mismatch")
         if file_sha256(plain) != manifest["plain_sha256"]:
             raise backup_evidence.BackupError("backup_plain_checksum_failed")
-        if not backup_evidence.inventory_matches(
-                plain, manifest["inventory"], **(
-                    {"max_steps": max_steps, "deadline": deadline}
-                    if max_steps is not None else {})):
+        if not backup_evidence.inventory_matches(plain, manifest["inventory"], **(
+                {"max_steps": max_steps, "deadline": deadline}
+                if max_steps is not None else {})):
             raise backup_evidence.BackupError("backup_inventory_mismatch")
     except (ValueError, TypeError, KeyError, EOFError, gzip.BadGzipFile, zlib.error):
         raise backup_evidence.BackupError("backup_payload_invalid") from None
@@ -645,8 +644,15 @@ def main(argv: list[str] | None = None, *,
                 backup_evidence.record_failure(records, state, args.action, exc)
                 raise
             if args.scheduled and policy.periodic_drill is not None:
-                result = {**result, "periodic_drill": _periodic_drill(
-                    records, policy, key, key_source="keychain" if args.keychain else "key_fd")}
+                try:
+                    drill = _periodic_drill(
+                        records, policy, key, key_source="keychain" if args.keychain else "key_fd")
+                except (backup_evidence.BackupError, OSError, ValueError, TypeError,
+                        sqlite3.Error, RecursionError) as exc:
+                    # The completed action's receipt is still printed; the drill alone failed.
+                    drill = {"status": "failed", "due": True,
+                             "error": backup_evidence.failure_code(exc)}
+                result = {**result, "periodic_drill": drill}
         print(json.dumps(result, sort_keys=True))
         if result.get("periodic_drill", {}).get("status") in ("failed", "unverified"):
             return 1

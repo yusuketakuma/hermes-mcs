@@ -216,6 +216,17 @@ _ARCHIVED_JOB = ("EXISTS (SELECT 1 FROM patients p "
 
 
 _ELIGIBLE_SQL = "json_valid(payload) AND COALESCE(json_extract(payload,'$.eligible'),0)=1"
+# 1 for a notification-free reprocess row (owner 2026-11-13: served locally,
+# after every other due semantic job), else 0; unreadable rows are not buried.
+_REPROCESS_LAST_SQL = ("CASE WHEN NOT json_valid(payload) THEN 0 "
+                       "WHEN json_type(payload,'$.reprocess_only')='true' "
+                       "AND json_type(payload,'$.notification_free')='true' THEN 1 ELSE 0 END")
+# 0 for a notifiable arrival (eligible, not notification_free), else 1; CASE
+# order keeps json_extract away from malformed payloads.
+_ARRIVAL_FIRST_SQL = ("CASE WHEN NOT json_valid(payload) THEN 1 "
+                      "WHEN COALESCE(json_extract(payload,'$.eligible'),0)=1 "
+                      "AND COALESCE(json_extract(payload,'$.notification_free'),0)=0 "
+                      "THEN 0 ELSE 1 END")
 
 
 _MALFORMED_JOB_SQL = (
@@ -227,6 +238,10 @@ _MALFORMED_JOB_SQL = (
     "OR json_array_length(payload,'$.targets')=0)) OR "
     "(json_type(payload,'$.generation') IS NOT NULL AND json_type(payload,'$.generation')!='text')) "
     "THEN 1 ELSE 0 END ELSE 0 END)")
+
+
+def _reprocess_last(job):
+    return job['kind'] == JOB_KIND and semantic_store.reprocess_only(runtime.parse_payload(job))
 
 
 def _held_cursor_for(job, lane):
@@ -353,7 +368,7 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int,
         # max_jobs/deadline/request budget. Preserve contested-slot turns.
         if arrivals_due < max_jobs - share:
             share = min(backlog_due, max_jobs - arrivals_due)
-    order = "CASE WHEN kind=? THEN 0 ELSE 1 END, job_id"
+    order = f"CASE WHEN kind=? THEN 0 ELSE 1 END, {_REPROCESS_LAST_SQL}, job_id"
     arrivals = ledger.db.execute(f"""
       SELECT * FROM fetch_jobs
       WHERE state='pending' AND next_try <= ? AND kind IN ({kind_ph})
@@ -436,11 +451,13 @@ def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
             first = select_class(ledger, lane, kinds, qc_active, max_jobs,
                                       long_defers, archive_first,
                                       excluded=excluded, turns=turns, held_after=after)
-            if first[0]:
+            if first[0] and not _reprocess_last(first[0][0]):
                 return first
-            return select_class(ledger, lane, kinds, qc_active,
+            # The archive turn never puts reprocess rows ahead of other work.
+            second = select_class(ledger, lane, kinds, qc_active,
                                      max_jobs, long_defers, not archive_first,
                                      excluded=excluded, turns=turns, held_after=after)
+            return second if second[0] and (not first[0] or not _reprocess_last(second[0][0])) else first
     else:
         def select(after):
             active = select_class(
@@ -512,7 +529,7 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
                 " AND json_extract(s.value,'$.g')=CASE WHEN json_valid("
                 "fetch_jobs.payload) THEN json_extract(fetch_jobs.payload,"
                 "'$.generation') END) "
-                f"ORDER BY {_REALTIME_ORDER} LIMIT ?",
+                f"ORDER BY {_REPROCESS_LAST_SQL}, {_REALTIME_ORDER} LIMIT ?",
                 (time.time(), JOB_KIND, excluded_json, json.dumps(long_defers or {}),
                  max_jobs + 8 + len(long_defers or {}))).fetchall()
             # a payload from before the generation field: its generation
@@ -534,7 +551,7 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
                     for row in ledger.db.execute(
                         "SELECT * FROM fetch_jobs WHERE state='pending' "
                         f"AND next_try<=? AND kind=? AND {scope} ORDER BY "
-                        + priority + f"{'next_try, job_id' if kind == QC_JOB_KIND else 'job_id'} LIMIT ?",
+                        + ('' if kind == QC_JOB_KIND else _REPROCESS_LAST_SQL + ', ') + priority + f"{'next_try, job_id' if kind == QC_JOB_KIND else 'job_id'} LIMIT ?",
                         (time.time(), kind, excluded_json, max_jobs + 8)).fetchall()]
         # Include extra candidates so another worker's current job cannot
         # hide the next runnable item. Work remains bounded by max_jobs.

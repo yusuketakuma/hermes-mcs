@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "同じ行にPCAラベルが多数あっても候補の保持量が二乗に増えない",
+  "summary": "PCA文書の1行に同じラベルが大量に並んでも、各候補の値は次のラベルまでだけ保持し、メモリと処理量の増加を抑えます。単一ラベルの値や未確認の扱いは変わりません。",
+  "upgrade": "追加操作は不要です。次回のOCR解析から適用されます。",
+  "details": ["複数ラベル行のraw_valueを次のラベル直前までに限定する。evidenceと範囲は行全体のまま。"],
+  "refs": ["mcs/extract/clinical/medical_document.py"]
+}

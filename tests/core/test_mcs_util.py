@@ -101,3 +101,21 @@ def test_corrupt_circuit_bytes_do_not_stop_lane(tmp_path, monkeypatch, raw):
     assert llm_availability.circuit_open_s(None) == 0
     llm_availability.circuit_failure(None)
     assert json.loads(path.read_text())["failures"] == 1
+
+
+def test_until_z_suffix_parses_like_python311_on_older_fromisoformat(monkeypatch):
+    import datetime as datetime_module
+
+    real = datetime_module.datetime
+
+    class Py310DateTime(real):
+        @classmethod
+        def fromisoformat(cls, value):
+            if value.endswith("Z"):  # Python < 3.11 rejects the UTC designator
+                raise ValueError(f"Invalid isoformat string: {value!r}")
+            return real.fromisoformat(value)
+
+    monkeypatch.setattr(datetime_module, "datetime", Py310DateTime)
+    assert util.until_epoch("2026-12-31T23:59:59Z") == util.until_epoch("2026-12-31T23:59:59+00:00")
+    with pytest.raises(ValueError):
+        util.until_epoch("2026-12-31T23:59:59")

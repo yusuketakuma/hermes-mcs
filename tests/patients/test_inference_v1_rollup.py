@@ -211,8 +211,8 @@ def test_extraction_signature_rejects_ambiguous_artifact_rowid_schema():
 def test_paged_rollup_matches_whole_snapshot_oracle_across_pages(tmp_path, monkeypatch, request_limit):
     with closing(_seed(tmp_path)) as ledger:
         ledger.ensure_patient(2)
-        ledger.save_messages([_message(mid=i, body=f'完全合成の投稿 {i}') for i in range(2, 132)]
-                             + [_message(mid=900, project_id=2, body='別患者')])
+        ledger.save_messages([_message(mid=i, body=f'完全合成の投稿 {i}', posted_at="2026-09-19T00:00:00+09:00") for i in range(2, 132)]
+                             + [_message(mid=900, project_id=2, body='別患者', posted_at="2026-09-19T00:00:00+09:00")])
         for mid in (2, 63, 64, 65, 130, 131, 900):
             row = ledger.db.execute('SELECT project_id,content_hash FROM messages WHERE message_id=?', (mid,)).fetchone()
             meta = {inference.VERSION_KEY: inference.CURRENT_VERSION, 'hash': row['content_hash']}

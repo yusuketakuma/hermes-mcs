@@ -31,6 +31,49 @@ def test_registry_scope_is_explicit():
         assert p["true"] and p["false"]
 
 
+def test_proposition_labels_are_distinct_japanese_names():
+    import re
+    labels = {pid: p["label_ja"] for pid, p in {**jev.PROPOSITIONS, **jev.OPTIONAL_PROPOSITIONS}.items()}
+    for pid, label in labels.items():
+        assert re.search(r"[ぁ-んァ-ヶ一-龠]", label), pid
+        assert not re.search(r"[A-Za-z_]", label), pid
+    assert len(set(labels.values())) == len(labels)
+
+
+def test_verdicts_brief_names_each_proposition_in_japanese():
+    import re
+    import semantic_llm
+    brief = semantic_llm._verdicts_brief({"P01": {"verdict": "MATCH"}, "E02": {"verdict": "NO_MATCH"}})
+    assert brief.splitlines() == [f"P01 {jev.PROPOSITIONS['P01']['label_ja']}: MATCH",
+                                  f"E02 {jev.OPTIONAL_PROPOSITIONS['E02']['label_ja']}: NO_MATCH"]
+    assert all(re.fullmatch(r"[PE]\d\d [^A-Za-z_]+: [A-Z_]+", line) for line in brief.splitlines())
+
+
+def test_jev_requests_never_carry_proposition_labels(tmp_path):
+    """Regression pin: the evaluator sees instructions and criteria only, so a label is local wording."""
+    class Capture(_FakeJev):
+        def __init__(self):
+            super().__init__(choice="routine")
+            self.questions = []
+
+        def evaluate(self, state, questions, deadline):
+            self.questions.extend(questions.values())
+            return super().evaluate(state, questions, deadline)
+
+    db = _seeded(tmp_path)
+    try:
+        fake = Capture()
+        semantic_drain.run_due(db, _cfg("shadow", extra_propositions=["E01"]), {"errors": []},
+                               time.monotonic() + 300, jev_client=fake, llm_fn=_llm)
+        sent = json.dumps(fake.questions, ensure_ascii=False)
+        assert any(p["instructions"] in sent for p in jev.PROPOSITIONS.values())
+        assert "label_ja" not in sent
+        for p in (*jev.PROPOSITIONS.values(), jev.OPTIONAL_PROPOSITIONS["E01"]):
+            assert p["label_ja"] not in sent
+    finally:
+        db.close()
+
+
 def test_noul_without_confidence_ok():
     q = {"q1": jev.noul_question("i", "t", "f")}
     out = jev.validate_answers(

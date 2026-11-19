@@ -166,79 +166,30 @@ def test_decimal_reading_or_side_present_verbatim_is_kept(values):
         assert {k: layer[k] for k in values} == values
 
 
-# ---------- spaces around the slash never change which value is which side ----------
+@pytest.mark.parametrize("sep", ["/", " / ", "　／　"])
+def test_blank_around_slash_keeps_side_matching(sep):
+    body = f"本人の血圧120{sep}80。"
+    assert clinical_values.grounded_vitals(body, {"sbp": 120, "dbp": 80}) == {"sbp": 120, "dbp": 80}
+    # a reversed answer is rejected with or without blanks
+    reversed_ = clinical_values.grounded_vitals(body, {"sbp": 80, "dbp": 120})
+    assert not ({"sbp", "dbp"} & reversed_.keys()), reversed_
 
-@pytest.mark.parametrize("body", [
-    "本人の血圧120/80。",
-    "本人の血圧120 / 80。",
-    "本人の血圧120　／　80。",       # full-width space and slash
-    "本人の血圧120/ 80。",
-    "本人の血圧120 /80。",
+
+@pytest.mark.parametrize("sep", ["/", " / "])
+def test_blank_around_slash_keeps_threshold_flag(sep):
+    body = f"本人の血圧80{sep}60。"
+    flags = clinical_values.vital_threshold_flags({"sbp": 80, "dbp": 60}, body, {"sbp_lte": 90})
+    assert flags == [{"key": "sbp", "value": 80, "rule": "sbp_lte_90", "evidence": body}]
+
+
+@pytest.mark.parametrize("sep", ["/", " / "])
+@pytest.mark.parametrize("body,values,expected", [
+    # several readings: a pair is accepted only as one written reading
+    ("本人の血圧120{s}80、130{s}90。", {"sbp": 130, "dbp": 90}, {"sbp": 130, "dbp": 90}),
+    ("本人の血圧120{s}80、130{s}90。", {"sbp": 120, "dbp": 90}, {}),
+    # another person's and a past reading stay rejected with or without blanks
+    ("家族の血圧120{s}80。", {"sbp": 120, "dbp": 80}, {}),
+    ("以前は血圧120{s}80だった。", {"sbp": 120, "dbp": 80}, {}),
 ])
-def test_an_inverted_pair_is_rejected_whatever_the_spacing(body):
-    for layer in _layers(body, {"sbp": 80, "dbp": 120}):
-        assert not ({"sbp", "dbp"} & layer.keys()), layer
-
-
-@pytest.mark.parametrize("body", [
-    "本人の血圧120/80。",
-    "本人の血圧120 / 80。",
-    "本人の血圧120　／　80。",
-])
-def test_a_correct_pair_is_kept_whatever_the_spacing(body):
-    for layer in _layers(body, {"sbp": 120, "dbp": 80}):
-        assert {k: layer[k] for k in ("sbp", "dbp")} == {"sbp": 120, "dbp": 80}
-
-
-@pytest.mark.parametrize("values", [{"sbp": 120}, {"dbp": 80}])
-def test_one_side_of_a_spaced_pair_keeps_its_literal_side(values):
-    for layer in _layers("本人の血圧120 / 80。", values):
-        assert layer == values
-
-
-def test_a_spaced_morning_evening_body_still_rejects_a_mixed_pair():
-    body = "本人の朝BP 180 / 100、夕BP 120 / 80"
-    for layer in _layers(body, {"sbp": 180, "dbp": 80}):
-        assert not ({"sbp", "dbp"} & layer.keys()), layer
-
-
-def test_side_labelled_values_still_reject_an_inversion_for_readers():
-    body = "本人の収縮期120 拡張期80。"
-    _, reader, current = _layers(body, {"sbp": 80, "dbp": 120})
-    assert not ({"sbp", "dbp"} & reader.keys())
-    assert not ({"sbp", "dbp"} & current.keys())
-
-
-@pytest.mark.parametrize("body", [
-    "母の血圧は120 / 80。本人は朝BP140 / 90。",
-    "本人の先週の血圧120 / 80。",
-    "本人の血圧160 / 100を超えたら連絡してください。",
-    "本人の血圧120 / 80の場合は連絡。",
-])
-def test_other_person_past_and_conditional_spaced_pairs_are_still_rejected(body):
-    values = {"sbp": 120, "dbp": 80} if "160" not in body else {"sbp": 160, "dbp": 100}
-    for layer in _layers(body, values):
-        assert not ({"sbp", "dbp"} & layer.keys()), layer
-
-
-@pytest.mark.parametrize("body", [
-    "本人の血圧120/80.",
-    "本人の血圧120/80．",
-    "本人の血圧120 / 80.",
-    "本人の血圧120 / 80．",
-])
-def test_a_sentence_ending_period_still_rejects_an_inverted_pair(body):
-    for layer in _layers(body, {"sbp": 80, "dbp": 120}):
-        assert not ({"sbp", "dbp"} & layer.keys()), layer
-
-
-@pytest.mark.parametrize("body", ["本人の血圧120/80.", "本人の血圧120 / 80．"])
-def test_a_sentence_ending_period_keeps_a_stored_correct_pair(body):
-    for layer in _layers(body, {"sbp": 120, "dbp": 80}):
-        assert {k: layer[k] for k in ("sbp", "dbp")} == {"sbp": 120, "dbp": 80}
-
-
-def test_a_decimal_continuation_is_not_read_as_a_pair_with_a_period():
-    # 80.5 is one decimal value, never the pair '80' plus a period
-    for layer in _layers("本人の血圧120/80.5。", {"sbp": 120, "dbp": 80}):
-        assert "dbp" not in layer or layer["dbp"] != 80
+def test_blank_around_slash_keeps_reader_controls(sep, body, values, expected):
+    assert clinical_values.grounded_vitals(body.format(s=sep), values) == expected

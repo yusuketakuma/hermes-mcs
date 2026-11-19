@@ -59,6 +59,7 @@ from update_preflight import (
     _fresh_rollback_state,
     _provider_migration_needed,
     _provider_rollback_preflight,
+    _standalone_sdk_rollback_error,
 )
 from update_repository import (
     _git,
@@ -69,8 +70,10 @@ from update_repository import (
     _tree_clean,
 )
 from update_restore import (
+    _adopted_marker,
     _consent_hold,
     _restore_db,
+    _restore_entered,
     _rollback_applying,
     _rollback_tree,
 )
@@ -127,7 +130,24 @@ def _journal_is_fresh(state: dict, applying: dict | None) -> bool:
     last = max(
         [s.get("at", 0) for s in state.get("stages", [])]
         + [(applying or {}).get("at", 0)])
-    return bool(last and time.time() - last < STALE_S)
+    return bool(last and abs(time.time() - last) < STALE_S)   # far future = clock moved back
+
+
+def _rollback_not_started(state: dict, applying: dict) -> bool:
+    """A rollback of the last applied version that stopped at or before
+    quiesce: its writer freezes before any change (hold_before_change), no
+    freeze or restore witness exists and the clean tree is still on that
+    version, so the version and its DB are unchanged and consistent."""
+    applied = state.get("applied") or []
+    try:
+        return bool(applying.get("hold_before_change") is True
+                    and not applying.get("restore_incomplete")
+                    and applied and applied[-1].get("sha") == applying.get("prev_sha")
+                    and _restore_writer_hold_marker() is None
+                    and not os.path.exists(os.path.join(REPO, ".git", "MERGE_HEAD"))
+                    and _head_sha() == applying.get("prev_sha") and _tree_clean())
+    except (UpdateError, OSError):
+        return False
 
 
 def _journal_consent_from_marker(state: dict, applying: dict) -> None:
@@ -173,17 +193,22 @@ def _complete_done_bookkeeping(state: dict) -> int:
     return 0
 
 
+def _drop_reverted(state: dict, rollback: dict) -> None:
+    """A finished rollback removes the version it reverted from applied."""
+    applied = state.get("applied") or []
+    if applied and applied[-1].get("sha") == rollback.get("prev_sha"):
+        reverted = applied[-1]
+        state["applied"] = applied[:-1]
+        state.setdefault("attempts", {})[reverted.get("tag") or "?"] = {
+            "result": "rolled_back", "at": time.time()}
+
+
 def _finish_resumed(state: dict, applying: dict) -> int:
     """Record a resumed apply or rollback as complete and restart services."""
     if not _provider_recovery_ready():
         return 1
     if applying.get("rollback"):
-        applied = state.get("applied") or []
-        if applied and applied[-1].get("sha") == applying.get("prev_sha"):
-            reverted = applied[-1]
-            state["applied"] = applied[:-1]
-            state.setdefault("attempts", {})[reverted.get("tag") or "?"] = {
-                "result": "rolled_back", "at": time.time()}
+        _drop_reverted(state, applying)
         result = "rolled_back"
     else:
         state.setdefault("applied", []).append(applying)
@@ -302,7 +327,7 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                            and applying.get("schema_bump") is not False
                            and (applying.get("schema_bump") is not None
                                 or applying.get("backup_path")))
-        if schema_rollback:
+        if schema_rollback and not _rollback_not_started(state, applying):
             # Older journals can lack both the durable freeze and its launcher
             # marker. Neither is proof that already-running writers stopped.
             try:
@@ -325,9 +350,11 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                 return 1
         try:
             _migrate_log_tail()
-        except UpdateError:
-            _report('recovery_incomplete', 'run_log_tail_unverified')
-            return 1
+        except UpdateError as error:
+            # The legacy-log import keeps its originals and never re-imports an
+            # uncertain record; it gates no writer, so a source that changed or
+            # vanished must not stop recovery. A later report may replace this.
+            _report("run_log_tail_unverified", str(error) + " — recovery continues")
         if not applying and not stages:
             if not _provider_recovery_ready():
                 return 1
@@ -496,7 +523,13 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                         pass
                 except (update_migrations.MigrationError, UpdateError):
                     return _provider_migration_recovery_hold()
-            if applying.get("rollback") and applying.get("backup_path"):
+            if rollback_shaped and not schema_rollback and not _restore_entered(state):
+                # Like _rollback_tree, a rollback without a schema change never
+                # restores its backup (maintenance may have pruned it). Drop a
+                # hold an earlier recovery set for that unneeded restore.
+                if applying.pop("restore_incomplete", None):
+                    journal_store.save_state(STATE_PATH, state)
+            elif rollback_shaped:
                 # Old rollback journals may predate the durable freeze.
                 # Persist it before entering any DB restore operation.
                 applying["restore_incomplete"] = True
@@ -607,6 +640,7 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
             if continuation == "undo_interrupted_migration":
                 # journaled the migration undo, then died before the reset
                 return _undo_interrupted_migration(state, applying, drainers, escalate)
+            result = "interrupted_pre_merge"
             if continuation == "reset_previous_tree":
                 # crash mid-merge checkout without MERGE_HEAD — the
                 # mixed-tree case stage-gating could never reach (F1)
@@ -619,8 +653,22 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                 _git_out(["reset", "--hard", prev])
                 if _head_sha() != prev or not _tree_clean():
                     return escalate("prev tree could not be cleaned")
-                return _finish_recovery(state, "mixed_tree_reset", removed)
-            return _finish_recovery(state, "interrupted_pre_merge", removed)
+                result = "mixed_tree_reset"
+            if not applying.get("rollback") and "post_merge" in stages:
+                # The new code ran and its failed rollback reset the tree but
+                # may not have re-rendered services: redo them, as _rollback_tree.
+                try:
+                    problems = service_management.retire_to_snapshot(
+                        applying["manifest_snapshot"] if "manifest_snapshot" in applying
+                        else state.get("manifest_snapshot"),
+                        cfg=mcs_util.load_config(), paths=_service_paths())
+                    _services_reconcile()
+                except UpdateError as e:
+                    return escalate("rollback services: " + str(e))
+                if problems:
+                    return escalate("membership: " + ",".join(problems))
+                result = "post_merge_reverted"
+            return _finish_recovery(state, result, removed)
         return escalate("unclassifiable repo state — "
                         f"HEAD={head[:12]} prev={str(prev)[:12]} "
                         f"target={str(target)[:12]} clean={clean}")
@@ -640,6 +688,17 @@ def _undo_interrupted_migration(state, applying, drainers, escalate) -> int:
     Same order as rollback(): journal a rollback-shaped record, quiesce,
     then restore tree, venv and Hermes checkout; a pending restore consent
     holds with drainers stopped."""
+    if applying.get("schema_bump") and applying.get("backup_path") and _adopted_marker():
+        # before any journal rewrite, like the apply bail: writers stay stopped, a human decides
+        quiesce()
+        _report("runtime_restore_blocked", "restore_marker_adopted")
+        return 1
+    # Like rollback(): the venv keeps the new SDK pins, so refuse before any change.
+    sdk_error = _standalone_sdk_rollback_error(
+        {**applying, "prev_sha": applying["sha"]} if applying.get("rollback") else applying,
+        mcs_util.load_config())
+    if sdk_error:
+        return escalate(sdk_error)
     if applying.get("rollback"):
         record, entry = applying, {**applying, "sha": applying["prev_sha"],
                                    "prev_sha": applying["sha"]}
@@ -688,6 +747,8 @@ def _undo_interrupted_migration(state, applying, drainers, escalate) -> int:
     if problems:
         return escalate("runtime migration rollback: " + ",".join(problems))
     state = journal_store.load_state(STATE_PATH)
+    if applying.get("rollback"):
+        _drop_reverted(state, applying)
     state.setdefault("attempts", {})[applying.get("tag") or "?"] = {
         "result": "rolled_back", "at": time.time()}
     cid = record.get("command_id")

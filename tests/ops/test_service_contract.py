@@ -27,6 +27,15 @@ def test_unknown_and_verified_empty_never_share_an_action_plan():
     assert contract.parse_cron_listing("No scheduled jobs.\n", 1) is None
 
 
+def test_cron_listing_keeps_the_header_state():
+    listing = ("  abcdef [disabled]\n    Name:      a\n    Schedule:  */5 * * * *\n    Script:    mcs_check.sh\n"
+               "  123abc [active]\n    Name:      b\n    Schedule:  0 0 * * *\n    Script:    b.sh\n"
+               "  456def\n    Name:      c\n    Schedule:  0 1 * * *\n    Script:    c.sh\n")
+    entries = contract.parse_cron_listing(listing, 0)
+    assert [(e["id"], e.get("state")) for e in entries] == [
+        ("abcdef", "disabled"), ("123abc", "active"), ("456def", None)]
+
+
 def test_duplicates_collision_and_order_are_preserved_without_mutation():
     previous = {"cron": [{"script": "old.sh"}]}
     observed = [entry("other.sh"), entry("old.sh", name="previous")]

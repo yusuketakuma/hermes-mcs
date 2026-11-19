@@ -167,7 +167,8 @@ def validate(req):
                           "ops.patient_context_reset",
                           "ops.update_apply", "ops.update_rollback",
                           "ops.restore_approve", "ops.drug_alias_apply", "ops.drug_alias_rollback",
-                          "ops.external_transfer_acknowledge"):
+                          "ops.external_transfer_acknowledge", "ops.slack_setup_discard",
+                          "ops.provider_pending_finalize"):
         # System-wide lifecycle ops are projectless — they govern the
         # whole install, not one patient. The shared identity fields
         # (human_confirmed/actor/command_id) were already checked above;
@@ -220,6 +221,20 @@ def replay_receipt(db, command_id, digest) -> tuple:
     if old["payload_hash"] != digest:
         return True, {"outcome": "rejected", "error": "command_id_conflict"}
     return True, json.loads(old["receipt_json"])
+
+
+def apply_local_operation(req):
+    """Apply one human-confirmed projectless ops.* command from a local CLI.
+
+    Shared by the CLI entries: validate before opening a writer, take run.lock
+    (5 s bounded wait), refuse during an update or restore hold, then the
+    receipt-first transaction. Returns the receipt, or None when the writer
+    stayed busy."""
+    import locked_command
+    error = validate(req)
+    if error:
+        raise ValueError(error)
+    return locked_command.apply_locked(req)
 
 
 def apply_command(ledger, req, *, cfg=None, data_dir=None):

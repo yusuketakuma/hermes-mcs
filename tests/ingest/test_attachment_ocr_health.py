@@ -460,6 +460,9 @@ def test_malformed_snapshot_diagnostics_stay_corrupt(tmp_path, extra):
 
 _GENERIC_LOCAL_DEFER = ["・添付の文字起こし後のローカル解析が保留されています",
                         "　→ ローカルLLMの稼働状態と処理枠を確認してください。文字起こしの失敗を示すものではありません"]
+_UNCLASSIFIED_LOCAL_DEFER = ["・添付の文字起こし後のローカル解析が保留されています"
+                             "（直近の実行で保留の原因は特定できていません）",
+                             _GENERIC_LOCAL_DEFER[1]]
 
 
 def _local_deferred(tmp_path, **extra):
@@ -467,11 +470,11 @@ def _local_deferred(tmp_path, **extra):
     return health_report.attachment_ocr_health(str(tmp_path), CFG, 1000)
 
 
-def test_status_without_breakdown_keeps_the_current_guidance(tmp_path):
+def test_status_without_breakdown_says_the_cause_is_unidentified(tmp_path):
     report = _local_deferred(tmp_path)
     assert report["state"] == "deferred" and report["reason"] == "attachment_ocr_local_inference_deferred"
     assert "local_deferred_reasons" not in report and "local_deferred_primary" not in report
-    assert health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]]) == _GENERIC_LOCAL_DEFER
+    assert health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]]) == _UNCLASSIFIED_LOCAL_DEFER
 
 
 def test_valid_breakdown_is_exposed_with_its_primary_reason(tmp_path):
@@ -494,13 +497,14 @@ def test_invalid_breakdown_is_ignored_without_marking_the_status_corrupt(tmp_pat
     assert report["state"] == ("deferred" if total else "ok")
     assert "local_deferred_reasons" not in report and "local_deferred_primary" not in report
     if total:
-        assert health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]]) == _GENERIC_LOCAL_DEFER
+        assert health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]]) == _UNCLASSIFIED_LOCAL_DEFER
 
 
 def test_every_known_reason_has_matching_guidance():
     import attachment_inference_deferral as deferral
     assert set(health_watch._OCR_LOCAL_DEFER_JA) == set(deferral.LOCAL_DEFER_REASONS)
     assert deferral.UNCLASSIFIED not in health_watch._OCR_LOCAL_DEFER_JA
+    assert set(health_watch._OCR_LLM_DEFER_JA) == set(deferral._LLM_STATUS_CODES)
 
 
 @pytest.mark.parametrize("code", sorted(health_watch._OCR_LOCAL_DEFER_JA))
@@ -514,10 +518,38 @@ def test_primary_reason_selects_its_guidance(tmp_path, code):
 
 
 @pytest.mark.parametrize("reasons", [{"unclassified": 1}, {"disk_low": 1, "unclassified": 1}])
-def test_unconfirmed_reason_falls_back_to_the_current_guidance(tmp_path, reasons):
+def test_unconfirmed_reason_reports_an_unidentified_cause(tmp_path, reasons):
     report = _local_deferred(tmp_path, local_deferred=sum(reasons.values()), local_deferred_reasons=reasons)
     assert report["local_deferred_primary"] == "unclassified"
-    assert health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]]) == _GENERIC_LOCAL_DEFER
+    assert health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]]) == _UNCLASSIFIED_LOCAL_DEFER
+
+
+def test_observed_call_reasons_are_shown_as_unconfirmed_observations(tmp_path):
+    report = _local_deferred(tmp_path, local_deferred=2,
+                             local_deferred_reasons={"unclassified": 2},
+                             local_llm_defer_reasons={"llm_deadline": 1, "llm_busy": 1})
+    assert report["local_llm_defer_reasons"] == {"llm_deadline": 1, "llm_busy": 1}
+    rows = health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]])
+    assert rows == ["・添付の文字起こし後のローカル解析が保留されています"
+                    "（保留の原因は未特定。処理中の観測: 処理枠の競合1件・処理期限の超過1件）",
+                    _GENERIC_LOCAL_DEFER[1]]
+    assert "AI判定" not in "\n".join(rows)
+
+
+@pytest.mark.parametrize("observed", [
+    {"llm_deadline": 2},          # more observations than deferrals: dropped upstream
+    {"synthetic_free_text": 1},   # outside the fixed vocabulary
+    {"llm_deadline": 0},
+    {"llm_deadline": True},
+    "llm_deadline",
+    [],
+])
+def test_unusable_observations_fall_back_to_the_unidentified_cause(tmp_path, observed):
+    report = _local_deferred(tmp_path, local_deferred=1,
+                             local_deferred_reasons={"unclassified": 1},
+                             local_llm_defer_reasons=observed)
+    assert "local_llm_defer_reasons" not in report
+    assert health_watch._reason_rows({"attachment_ocr": report}, [report["reason"]]) == _UNCLASSIFIED_LOCAL_DEFER
 
 
 @pytest.mark.parametrize("mode", [{"runtime_mode": "standalone"}, {"notify_transport": "lineworks"}])

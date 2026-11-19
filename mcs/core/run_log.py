@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
 
 
@@ -20,6 +21,7 @@ LOG = "mcs.log"
 STATE = ".mcs-log-state.json"
 LOCK = ".mcs-log.lock"
 BACKUPS = "mcs-log-backups"
+LOCK_WAIT_S = 120     # a wedged holder must not stall every service behind this helper
 BLOCK = 65536
 MAX_STATE = 262144
 LEGACY_NAMES = tuple(name + suffix for name in (
@@ -206,7 +208,15 @@ def _locked(data_dir):
     directory = _directory(data_dir)
     try:
         with _file(directory, LOCK, os.O_RDWR | os.O_CREAT) as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+            until = time.monotonic() + LOCK_WAIT_S
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= until:
+                        raise RunLogError("run_log_lock_timeout") from None
+                    time.sleep(0.2)
             _check(directory, directory=True)
             if _identity(os.fstat(lock)) != _identity(os.stat(LOCK, dir_fd=directory, follow_symlinks=False)):
                 raise RunLogError("run_log_lock_changed")
@@ -584,6 +594,51 @@ def _rebind_source_device(directory, backup, state, name, source, info, record):
     return state["sources"][name]
 
 
+def _archived_record(backup, source, info):
+    """Copy a legacy file's current bytes to a retained stage; return the record covering them."""
+    with _new_stage(backup) as (stage_name, stage):
+        position = 0
+        while position < info.st_size:
+            raw = os.pread(source, min(BLOCK, info.st_size - position), position)
+            if not raw:
+                raise RunLogError("run_log_legacy_changed")
+            _write(stage, raw)
+            position += len(raw)
+        digest = _digest(stage, info.st_size)
+    if _identity(os.fstat(source)) != _identity(info) or _digest(source, info.st_size) != digest:
+        raise RunLogError("run_log_legacy_changed")
+    return {"identity": _identity(info), "offset": info.st_size,
+            "sha256": digest, "backup": stage_name}
+
+
+def _migrate_one(directory, backup, state, name):
+    """Import one old log's verified growth; return "absent", "imported" or None."""
+    with ExitStack() as scope:
+        try:
+            source = scope.enter_context(_legacy(directory, name))
+        except FileNotFoundError:
+            if name in state["sources"]:
+                raise RunLogError("run_log_legacy_missing") from None
+            return "absent"
+        info = os.fstat(source)
+        old = state["sources"].get(name)
+        offset = 0
+        if old is not None:
+            if isinstance(old, dict) and old.get("identity") != _identity(info):
+                old = _rebind_source_device(directory, backup, state, name, source, info, old)
+            if (not isinstance(old, dict) or old.get("identity") != _identity(info)
+                    or type(old.get("offset")) is not int or not 0 <= old["offset"] <= info.st_size
+                    or _digest(source, old["offset"]) != old.get("sha256")):
+                raise RunLogError("run_log_legacy_changed")
+            offset = old["offset"]
+        if offset == info.st_size:
+            return None
+        next_source = _archived_record(backup, source, info)
+        _prepare(directory, backup, state, next_source["backup"], start=offset,
+                 source=name, next_source=next_source)
+        return "imported"
+
+
 def migrate(data_dir, names=None):
     """Import verified growing prefixes of allowlisted old logs; retain every original and backup."""
     names = LEGACY_NAMES if names is None else tuple(names)
@@ -592,44 +647,40 @@ def migrate(data_dir, names=None):
     imported, absent = [], []
     with _locked(data_dir) as (directory, backup, state):
         for name in names:
+            outcome = _migrate_one(directory, backup, state, name)
+            if outcome == "imported":
+                imported.append(name)
+            elif outcome == "absent":
+                absent.append(name)
+    return {"imported": imported, "absent": absent, "originals_retained": True}
+
+
+def retire_drifted(data_dir):
+    """Re-baseline recorded old logs that migrate() refuses; keep every original and import.
+
+    Installed helper copies that predate this command run their own
+    migrate(), so the result uses only shapes they already accept: no record
+    for a missing file, and a record covering the whole current file
+    otherwise. Its unimported content is retained, never imported."""
+    drifted = []
+    with _locked(data_dir) as (directory, backup, state):
+        for name in sorted(state["sources"]):
+            try:
+                _migrate_one(directory, backup, state, name)  # same check, incl. the remount rebind
+                continue
+            except RunLogError as error:
+                if str(error) not in ("run_log_legacy_missing", "run_log_legacy_changed"):
+                    raise
             with ExitStack() as scope:
                 try:
                     source = scope.enter_context(_legacy(directory, name))
                 except FileNotFoundError:
-                    if name in state["sources"]:
-                        raise RunLogError("run_log_legacy_missing") from None
-                    absent.append(name)
-                    continue
-                info = os.fstat(source)
-                old = state["sources"].get(name)
-                offset = 0
-                if old is not None:
-                    if isinstance(old, dict) and old.get("identity") != _identity(info):
-                        old = _rebind_source_device(directory, backup, state, name, source, info, old)
-                    if (not isinstance(old, dict) or old.get("identity") != _identity(info)
-                            or type(old.get("offset")) is not int or not 0 <= old["offset"] <= info.st_size
-                            or _digest(source, old["offset"]) != old.get("sha256")):
-                        raise RunLogError("run_log_legacy_changed")
-                    offset = old["offset"]
-                if offset == info.st_size:
-                    continue
-                with _new_stage(backup) as (stage_name, stage):
-                    position = 0
-                    while position < info.st_size:
-                        raw = os.pread(source, min(BLOCK, info.st_size - position), position)
-                        if not raw:
-                            raise RunLogError("run_log_legacy_changed")
-                        _write(stage, raw)
-                        position += len(raw)
-                    digest = _digest(stage, info.st_size)
-                if _identity(os.fstat(source)) != _identity(info) or _digest(source, info.st_size) != digest:
-                    raise RunLogError("run_log_legacy_changed")
-                next_source = {"identity": _identity(info), "offset": info.st_size,
-                               "sha256": digest, "backup": stage_name}
-                _prepare(directory, backup, state, stage_name, start=offset,
-                         source=name, next_source=next_source)
-                imported.append(name)
-    return {"imported": imported, "absent": absent, "originals_retained": True}
+                    del state["sources"][name]
+                else:
+                    state["sources"][name] = _archived_record(backup, source, os.fstat(source))
+            _save(directory, backup, state)
+            drifted.append(name)
+    return drifted
 
 
 def enable_rotation(data_dir, *, legacy_writers_closed):
@@ -882,7 +933,7 @@ def main(argv=None):
 
     parser = argparse.ArgumentParser(description="MCS private runtime log")
     commands = parser.add_subparsers(dest="command", required=True)
-    for command in ("append-stdin", "append-file", "exec", "_drain"):
+    for command in ("append-stdin", "append-file", "exec", "_drain", "retire-drifted"):
         sub = commands.add_parser(command)
         sub.add_argument("--data-dir", required=True)
         if command == "append-file":
@@ -899,6 +950,9 @@ def main(argv=None):
         elif args.command == "exec":
             values = args.args[1:] if args.args[:1] == ["--"] else args.args
             exec_logged(args.data_dir, values)
+        elif args.command == "retire-drifted":
+            # Allowlisted legacy names only, so they are safe to print.
+            print("\n".join(retire_drifted(args.data_dir)) or "none")
         else:
             if len(args.args) != 2:
                 raise ValueError("run_log_drain_fd_invalid")

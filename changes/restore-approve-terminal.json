@@ -1,0 +1,15 @@
+{
+  "category": "added",
+  "title": "DB 復元の承認を端末からも送れるようにする",
+  "summary": "スキーマ変更を伴う更新の巻戻しで、DB 復元の承認を端末から送れるようになりました。これまで承認はチャットの /mcs からだけで、独立実行（runtime_mode=standalone）では承認待ちの間 /mcs が使えず、承認する手段がありませんでした。今後は mcs_update.py restore-approve で、/mcs と同じ承認（ops.restore_approve）を命令の受付場所（data/cmd）へ送れます。承認の検証と処理の経路は /mcs と同じです。",
+  "upgrade": "この版への更新だけで使えます。独立実行で、承認待ちの間にホストが再起動した場合の起動拒否（restore_in_progress）は変えていません。その場合は従来どおり担当者が確認してください。",
+  "details": [
+    "update_cli に restore-approve を追加し、/mcs と同じ検証（mcs_requests.validate）を通して mcs_requests.enqueue で命令を投入する。",
+    "--confirm-human・--actor・--reason がそろわない場合は投入しない。",
+    "指定は --report-id --backup-sha256 --backup-schema --confirm-human --actor --reason。値は data/restore_report.json で確認したものを使う。",
+    "承認は損失報告とバックアップに束縛される（/mcs と同じ）。"
+  ],
+  "refs": [
+    "mcs/ops/update_cli.py"
+  ]
+}

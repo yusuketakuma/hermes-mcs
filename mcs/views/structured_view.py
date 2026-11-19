@@ -315,10 +315,9 @@ def _lab_lines(llm: dict, body: str | None = None, *, patient_name=None, default
             d += "(" + _TIME_SCOPE_JP[scope] + ")"
         if isinstance(lb.get("condition"), str) and lb["condition"]:
             d += f"(条件:{lb['condition']})"
+        # owner rule 2026-10-05: the 要約 shows every lab value — no caps
         (candidates if normalized["confirmation"] == "unverified"
          else confirmed).append(d)
-        if len(confirmed) + len(candidates) == 6:
-            break
     lines = []
     if confirmed:
         lines.append(_item_line("検査", confirmed, "・", multiline))
@@ -394,10 +393,19 @@ def _med_display_name(item, *, body=None):
     return f"{name}（用量要確認: {dose}）"
 
 
+NOT_DICTIONARY_MATCHED = {"status": "not_matched"}
+
+
+def dictionary_unmatched(ref) -> bool:
+    """True for an entry the dictionary derivation never annotates."""
+    return isinstance(ref, dict) and ref.get("status") == NOT_DICTIONARY_MATCHED["status"]
+
+
 def _med_entries(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient")) -> tuple[list, list]:
     """(confirmed, unverified) medication entries as ``(text, ref)`` —
     ``ref`` is the current dictionary annotation of exactly that mention
-    (same source list index and surface name), else None. The card's
+    (same source list index and surface name), NOT_DICTIONARY_MATCHED for
+    a mention no annotation ever covers, else None. The card's
     薬剤 lines and the 💊 薬剤を確認 view share this one selection."""
     annotations = {(r["source_kind"] == "extract_v1", r["i"]): r for r in refs}
 
@@ -435,15 +443,17 @@ def _med_entries(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient"
     if _empty_field(llm, "meds"):
         # v1 fallback only when the LLM saw NO meds — if it saw meds
         # but all were filtered (negated/family/past), falling back to
-        # v1 would re-display the very mentions that were filtered out
+        # v1 would re-display the very mentions that were filtered out.
+        # The dictionary annotates only the selected fact source, so v1
+        # mentions behind an LLM document and rx_actions are never matched.
         unverified.extend(
             (_med_display_name(m, body=context[0]),
-             ref_of(True, i, m))
+             ref_of(True, i, m) if not llm else NOT_DICTIONARY_MATCHED)
             for i, m in enumerate(_items(v1, "medications"))
             if isinstance(m, dict) and m.get("name")
             and item_scope(m, context, str(m["name"])) == "patient")
         unverified.extend(
-            (f"{RX_LABEL[a['action']]}:{a['ctx']}", None)
+            (f"{RX_LABEL[a['action']]}:{a['ctx']}", NOT_DICTIONARY_MATCHED)
             for a in _items(v1, "rx_actions")
             if isinstance(a, dict) and _label(RX_LABEL, a.get("action"))
             and isinstance(a.get("ctx"), str) and a["ctx"]
@@ -477,6 +487,12 @@ def _med_lines(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient"),
     return lines
 
 
+def _live_ref(dictionary, name, i, source_kind):
+    """A resolve() made now carries the same generation fields as a stored annotation."""
+    return {**dictionary.resolve(name, i), 'dict_id': dictionary.dict_id, 'dict_sha256': dictionary.sha256,
+            'resolver_version': drug_map.RESOLVER_VERSION, 'source_kind': source_kind}
+
+
 def attachment_medication_entries(db, mid: int, *, cfg=None, annotate=True, report_refs=None) -> tuple[list, list]:
     """Select ready attachment medications with the same clinical filters as post medications."""
     import attachment_extraction
@@ -492,7 +508,7 @@ def attachment_medication_entries(db, mid: int, *, cfg=None, annotate=True, repo
         dictionary = None
     confirmed, uncertain = [], []
     for source in attachment_extraction.iter_sources(db, row['project_id'], mid=mid, cfg=cfg):
-        refs = [{**dictionary.resolve(item['name'], i), 'source_kind': 'attachment_ocr'}
+        refs = [_live_ref(dictionary, item['name'], i, 'attachment_ocr')
                 for i, item in enumerate(_items(source['document'], 'meds'))
                 if dictionary is not None and isinstance(item, dict) and item.get('name')]
         meds, unverified = _med_entries(source['document'], {}, refs,
@@ -579,7 +595,8 @@ def _pharmacy_detail_lines(db, mid: int) -> list[str]:
             label = _CARD_DETAIL_LABEL.get(detail.get("key"))
             if label is None:
                 continue
-            line = (f"服薬管理（{label}）: 「{str(detail['value'])[:40]}」"
+            # the whole quote: a cut would drop a trailing negation (…していない)
+            line = (f"服薬管理（{label}）: 「{detail['value']}」"
                     + (f"(対象:{scope})" if scope else "") + reference_text(detail.get("refers_to")))
             if line not in lines:
                 lines.append(line)
@@ -652,7 +669,7 @@ def structured_lines(db, mid: int, *, drug_candidates: bool = True,
     if urgency == "llm":
         # quote only the patient-scoped reason; raw evidence[0] may be a family member's
         if details["reasons"]:
-            suffix = f" — 根拠:「{str(details['reasons'][0])[:40]}」"
+            suffix = f" — 根拠:「{details['reasons'][0]}」"  # uncut: the tail may negate or qualify
         suffix += urgency_qc_suffix(db, mid)
     head = _head_ranked(selected, v1, urgency, suffix)
     lines: list[str] = [line for _, line in head]

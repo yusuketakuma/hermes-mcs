@@ -66,7 +66,7 @@ def test_patient_resident_next_pass_checks_old_input(runtime, monkeypatch, prior
         if prior == 'unknown':
             raise Interrupted()
         calls.append(body)
-        return 200, {}, json.dumps({'model': anthropic_client.MODEL, 'stop_reason': 'end_turn',
+        return 200, {}, json.dumps({'model': body['model'], 'stop_reason': 'end_turn',
             'content': [{'type': 'text', 'text': '{"patient_context":[]}'}],
             'usage': {'input_tokens': 10, 'output_tokens': 2}}).encode()
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', request)

@@ -29,7 +29,7 @@ def _legacy(db, runtime=LEGACY):
                    (runtime, ocr.KIND))
 
 
-@pytest.mark.parametrize("runtime", [LEGACY, ocr.RUNTIME_CONTRACT.replace("0.16.1", "0.16.0")])
+@pytest.mark.parametrize("runtime", [LEGACY, ocr.RUNTIME_CONTRACT.replace(ocr.ENGINE_VERSION, "0.16.0")])
 def test_legacy_table_source_is_reprocessed_without_overwriting_history(setup, runtime):
     ledger, cfg, _, calls, _ = setup
     assert ocr.run_pending(ledger, cfg)['complete'] == 1

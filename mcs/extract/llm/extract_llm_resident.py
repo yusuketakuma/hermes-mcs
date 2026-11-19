@@ -21,6 +21,7 @@ import local_llm
 from ledger import Ledger, LedgerReader
 from mcs_util import CONF_PATH, HOME, load_config
 from writer_lock import acquire_run_lock
+import llm_availability
 from llm_availability import circuit_open_s, disk_floor_mb, disk_free_mb
 
 from extract_llm_admission import (
@@ -129,6 +130,8 @@ def _same_but_operating_limits(current, cfg):
 CHILD_ABSENT_GRACE_S = 900
 # The lane's ledger keeps (first, last) monotonic times of the probes that saw no child.
 _CHILD_ABSENT = "_context_child_absent"
+# The lane's ledger marks a takeover that has been recorded, so it is recorded once.
+_TAKEOVER = "_context_takeover"
 # The lane's ledger keeps (until, reason) of the pause after a context pass that waits.
 _CONTEXT_PAUSE = "_context_pause"
 # The pause after a takeover pass whose patients all wait for a context child: the wait of a
@@ -154,6 +157,7 @@ def _context_role(ledger, *, cloud_worker, cloud_on):
         return "cloud" if cloud_backlog.role_alive(HOME, cloud_backlog.ROLE_LOCAL) is True else "any"
     if not cloud_on:
         ledger.__dict__.pop(_CHILD_ABSENT, None)
+        ledger.__dict__.pop(_TAKEOVER, None)
         return "any"
     alive = cloud_backlog.role_alive(HOME, cloud_backlog.ROLE_CLOUD)
     if (alive is None) != ledger.__dict__.get("_context_role_probe_unavailable", False):
@@ -164,6 +168,7 @@ def _context_role(ledger, *, cloud_worker, cloud_on):
                   file=sys.stderr, flush=True)
     if alive is not False:
         ledger.__dict__.pop(_CHILD_ABSENT, None)
+        ledger.__dict__.pop(_TAKEOVER, None)
         return "local"
     now = time.monotonic()
     since, last = ledger.__dict__.get(_CHILD_ABSENT, (now, now))
@@ -172,7 +177,15 @@ def _context_role(ledger, *, cloud_worker, cloud_on):
         # between (the lane was off, not admitted or extracting). The grace starts again.
         since = now
     ledger.__dict__[_CHILD_ABSENT] = (since, now)
-    return "local_takeover" if now - since >= CHILD_ABSENT_GRACE_S else "local"
+    if now - since < CHILD_ABSENT_GRACE_S:
+        ledger.__dict__.pop(_TAKEOVER, None)
+        return "local"
+    if not ledger.__dict__.get(_TAKEOVER):
+        # One record when the lane starts pinning cloud patients' sources locally, not one per pass.
+        ledger.__dict__[_TAKEOVER] = True
+        print(json.dumps({"event": "context_local_takeover", "pid": os.getpid(), "ts": time.time(),
+                          "absent_s": int(now - since)}), file=sys.stderr, flush=True)
+    return "local_takeover"
 
 
 def _background_context_refresh(ledger, initial_state, stop=None, *, cloud_worker=False):
@@ -505,7 +518,8 @@ def _main() -> int:
                     seconds = min(seconds, max(_IDLE_FLOOR_S, due))
                 print(json.dumps({"idle_s": round(seconds, 1),
                                   "due_in_s": None if due is None else round(due, 1),
-                                  "carried": len(carry), "ts": time.time()}), flush=True)
+                                  "carried": len(carry), "lane": args.lane, "pid": os.getpid(),
+                                  "ts": time.time()}), flush=True)
                 pause(seconds)
 
             total = {"done": 0, "failed": 0, "left": 0}
@@ -531,6 +545,11 @@ def _main() -> int:
                           file=sys.stderr, flush=True)
                 return 0
 
+            def carry_waiting():
+                # The lane 1/2 resume record has the same shape; carry rows are never logged.
+                print(json.dumps({"carry_waiting": True, "carried": len(carry), "lane": args.lane,
+                                  "pid": os.getpid(), "ts": time.time()}), flush=True)
+
             while True:
                 if not _writer_current(full=True):
                     return retire()
@@ -552,6 +571,8 @@ def _main() -> int:
                         if not llm_slot_schedule.night():
                             # A busy database here is the loop's transient error, not an exit.
                             _settle_carry(led, carry, final=False, fence=context_state)
+                            if carry:
+                                carry_waiting()
                             pause(_IDLE_FLOOR_S)
                             continue
                     if carry and not context_lane:
@@ -561,24 +582,26 @@ def _main() -> int:
                         if resume_budget <= 0:
                             total["stopped"] = "stop_after"
                             break
+                        started = time.monotonic()
                         resumed = run_pending(led, limit=1, budget_s=resume_budget,
                             per_write_lock=True, write_wait_s=_RESIDENT_WRITE_WAIT_S, carry=carry)
+                        elapsed = time.monotonic() - started
                         carry = resumed.pop("carry", carry)
                         if resumed.get("updated"):
                             return retire()
                         total["done"] += resumed["done"]
                         total["failed"] += resumed["failed"]
                         total["left"] = resumed["left"]
-                        print(json.dumps({**resumed, "ts": time.time()}, ensure_ascii=False), flush=True)
+                        print(json.dumps({**resumed, "lane": args.lane, "pid": os.getpid(),
+                                          "elapsed_s": round(elapsed, 1), "turn": "carry",
+                                          "ts": time.time()}, ensure_ascii=False), flush=True)
                         if carry:
                             pause(2)
                             continue
                     if cloud_pool is not None:
                         try:
-                            synced = cloud_pool.last_sync
-                            cloud_pool.sync(load_config(), ledger=led)
-                            if cloud_pool.last_sync != synced:
-                                pool_error = None   # a throttled return decided nothing
+                            if cloud_pool.sync(load_config(), ledger=led):
+                                pool_error = None   # a throttled or still-failing pool decided nothing
                         except Exception as error:
                             # The pool is extra capacity: its failure must not
                             # skip this lane's own extraction and semantic work.
@@ -601,6 +624,7 @@ def _main() -> int:
                             return 0
                         _settle_carry(led, carry, final=False, fence=context_state)
                         if carry:
+                            carry_waiting()
                             pause(2)
                             continue
                         context_refresh = _background_context_refresh(led, context_state, stop)
@@ -639,6 +663,9 @@ def _main() -> int:
                     extract_limit = (cloud_cfg["max_concurrency"] if cloud_turn
                                      and cloud_cfg["mode"] == "on"
                                      and cloud_policy.send_route("reextract") else 1)
+                    turn = ("oldest" if oldest_turn else "recent_only" if semantic_priority
+                            else "normal")
+                    started = time.monotonic()
                     r = run_pending(led, limit=extract_limit if args.semantic else 8,
                                     budget_s=min(budget, 900),
                                     oldest_first=oldest_turn,
@@ -653,6 +680,7 @@ def _main() -> int:
                                     allow_cloud=True, background=True,
                                     write_wait_s=_RESIDENT_WRITE_WAIT_S,
                                     carry=carry)
+                    elapsed = time.monotonic() - started
                     if oldest_turn:
                         semantic_archive_turn = not semantic_archive_turn
                     if oldest_turn:
@@ -669,8 +697,13 @@ def _main() -> int:
                     sem = None
                     ran_semantic = False
                     if args.semantic and not carry:
+                        started = time.monotonic()
                         sem = _background_semantic(led, stop)
-                        print(json.dumps({"semantic": sem,
+                        llm_availability.record_semantic_turn(
+                            os.path.join(HOME, "data", llm_availability.SEMANTIC_TURNS_NAME),
+                            sem.get("skipped") == "lock_busy")
+                        print(json.dumps({"semantic": sem, "lane": args.lane, "pid": os.getpid(),
+                                          "elapsed_s": round(time.monotonic() - started, 1),
                                           "ts": time.time()},
                                          ensure_ascii=False), flush=True)
                         ran_semantic = any(
@@ -702,7 +735,9 @@ def _main() -> int:
                 total["done"] += r["done"]
                 total["failed"] += r["failed"]
                 total["left"] = r["left"]
-                print(json.dumps({**r, "ts": time.time()}, ensure_ascii=False),
+                print(json.dumps({**r, "lane": args.lane, "pid": os.getpid(),
+                                  "elapsed_s": round(elapsed, 1), "turn": turn,
+                                  "ts": time.time()}, ensure_ascii=False),
                       flush=True)
                 # a semantic-first pass extracts little: do not idle on it
                 if sem and (sem.get("done") or sem.get("progressed")

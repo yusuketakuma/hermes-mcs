@@ -86,8 +86,9 @@ def test_daytime_cloud_needs_no_local_gpu_capacity(runtime, cloud):
     assert patient_context_refresh_readiness.context_view_input(led.db, 1, cfg=CFG)
     scan = led.db.execute("SELECT meta FROM artifacts WHERE kind=?", (patient_context_refresh_state.SCAN,)).fetchone()
     meta = json.loads(scan[0])
-    assert meta["provider"] == cloud_inference.cloud_provider_contract()
-    assert meta["model"] == "claude-haiku-5-5"
+    assert meta["provider"] == cloud_inference.cloud_provider_contract(
+        CFG, route="patient_context", purpose="patient_context")
+    assert meta["model"] == "claude-sonnet-5-5"
     assert meta["contract"] == patient_context_refresh_state._contract()
     assert meta["provenance"] == {"backend": meta["provider"]["backend"], "model": meta["model"],
                                   "profile": meta["provenance"]["profile"]}
@@ -490,9 +491,13 @@ def test_dryrun_context_records_selected_provider_model_and_price(runtime, cloud
     assert step(runtime)["status"] == "progressed"
     estimates = led.artifacts("cloud_usage_dryrun")
     assert len(estimates) == 1
-    assert estimates[0]["model"] == model
+    selection, selection_errors = worker.cloud_policy.profile_for_settings(
+        {"cloud_llm": {"provider": provider, "model": model}}, settings,
+        route="patient_context", purpose="patient_context")
+    assert not selection_errors and selection is not None
+    assert estimates[0]["model"] == selection["model"]
     meta = json.loads(estimates[0]["meta"])
-    assert meta["price_version"] == version and meta["route"] == "patient_context"
+    assert meta["price_version"] == selection["price_version"] and meta["route"] == "patient_context"
     assert estimates[0]["project_id"] is None and estimates[0]["message_id"] is None
     assert local_calls and not cloud[0]
     assert not led.db.in_transaction

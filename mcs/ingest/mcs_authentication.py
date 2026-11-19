@@ -261,6 +261,8 @@ class MCSAuthenticationMixin:
             # A stalled ACL prompt is temporarily unreadable. Preserve the
             # existing .env fallback only while the run still has time.
             raise KeychainLocked(service) from None
+        except (OSError, subprocess.SubprocessError):
+            return None   # no `security` tool: fall back like a missing entry
         if r.returncode == 0:
             return r.stdout.strip() or None
         err = (r.stderr or "").lower()
@@ -397,7 +399,9 @@ class MCSAuthenticationMixin:
         return 0 <= time.time() - at < backoff, state
 
     def _login_rejected(self, state: dict) -> None:
-        """Record one submitted login that never produced a session."""
+        """Record one submitted login that never produced a verified
+        session — a proven rejection or a post-submit check that could
+        not confirm (送信後確認不能)."""
         failures = state.get("failures")
         state = dict(state, failures=(failures + 1 if type(failures) is int
                                       and failures >= 0 else 1),
@@ -527,7 +531,8 @@ class MCSAuthenticationMixin:
         except Exception:
             return "failed"
         # poll for a fresh session token
-        deadline = time.monotonic() + wait_s
+        own_deadline = time.monotonic() + wait_s
+        deadline = own_deadline
         if self._deadline is not None:
             deadline = min(deadline, self._deadline)
         while time.monotonic() < deadline:
@@ -541,11 +546,18 @@ class MCSAuthenticationMixin:
                 try:
                     ok = self.check_session()
                 except MCSError:
+                    # submitted but unverified (not proven rejected): the
+                    # same credential still waits out the backoff
+                    self._login_rejected(login)
                     return "failed"
                 if ok:
                     self._write_cache(tok)
                     return "ok"
                 # token present but not yet valid, or MFA page — keep waiting
+        if deadline < own_deadline:
+            # the run budget cut the wait short: the outcome is unknown,
+            # not a rejection, so the credential is not backed off
+            return "failed"
         # submitted and never validated: this credential waits out the
         # backoff before the form is sent again (H5)
         self._login_rejected(login)

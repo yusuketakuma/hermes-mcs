@@ -1,6 +1,8 @@
 """Synthetic measurement timeline: source time, identity and uncertainty remain separate."""
 import hashlib
 
+import pytest
+
 import measurement_timeline
 
 
@@ -149,12 +151,17 @@ def test_same_value_on_separate_measurement_days_remains_history_and_current():
 def test_plan_must_bind_the_named_measurement_value_and_unit():
     a = _record(1, "2026-10-03", "2026-10-01T09:00:00+09:00", "1.5")
     a["status"] = "planned"
-    body = "本人は2026-10-03に採血 Cr 1.0 mg/dLの検査予定、移動に1.5時間。"
-    a["source_body"] = a["evidence"] = body
-    a["evidence_span"] = [0, len(body)]
+    body = "本人は2026-10-03に空腹時採血 Cr 1.0 mg/dLの検査予定、移動に1.5時間。"
+    a.update(source_body=body, evidence=body, evidence_span=[0, len(body)])
     assert measurement_timeline.project_measurements([a], source_complete=True)["items"][0]["state"] == "unknown"
-    a["value"] = "1.0"
-    a["key"] = "potassium"
+    a.update(value="1.0", key="potassium")
+    assert measurement_timeline.project_measurements([a], source_complete=True)["items"][0]["state"] == "unknown"
+
+
+def test_plan_with_a_comparison_does_not_prove_an_exact_value():
+    a = _record(1, "2026-10-03", "2026-10-01T09:00:00+09:00", "1.0")
+    body = "本人は2026-10-03に空腹時採血 Cr 1.0 mg/dL未満の検査予定。"
+    a.update(status="planned", source_body=body, evidence=body, evidence_span=[0, len(body)])
     assert measurement_timeline.project_measurements([a], source_complete=True)["items"][0]["state"] == "unknown"
 
 
@@ -384,3 +391,77 @@ def test_future_or_missing_measurement_date_is_not_returned_as_a_measured_date()
     missing["measured_on"] = None
     item = measurement_timeline.project_measurements([missing], source_complete=True)["items"][0]
     assert item["state"] == "unknown" and item["measured_on"] is None
+
+
+def _vital(body, value):
+    a = _record(1, "2026-10-01", "2026-10-01T09:00:00+09:00", value)
+    a.update(kind="vital", key="bt", unit="℃", condition="安静時", source_body=body, evidence=body,
+             evidence_span=[0, len(body)], source_ref={"artifact_id": 1, "field": "vitals"})
+    return measurement_timeline.project_measurements([a], source_complete=False)["items"][0]
+
+
+def test_vital_anchor_follows_the_written_number_not_python_spelling():
+    integer = "本人は2026-10-01安静時測定の体温37℃。"
+    decimal = "本人は2026-10-01安静時測定の体温37.0℃。"
+    for body, value in ((integer, 37), (integer, 37.0), (decimal, 37.0), (decimal, 37)):
+        item = _vital(body, value)
+        assert (item["state"], item["verification"], item["measured_on"]) == ("observed", "quote_supported", "2026-10-01")
+    assert _vital(integer, 38.0)["state"] == "unknown"
+
+
+@pytest.mark.parametrize("suffix", ["はない。", "を中止した。", "だったが、取り消した。"])
+@pytest.mark.parametrize("short_quote", [False, True])
+def test_denied_or_cancelled_lab_plan_is_not_projected(suffix, short_quote):
+    a = _record(1, "2026-10-03", "2026-10-01T09:00:00+09:00", "1.0")
+    plan = "本人は2026-10-03に空腹時採血 Cr 1.0 mg/dLの検査予定"
+    body = plan + suffix
+    evidence = plan if short_quote else body
+    a.update(status="planned", source_body=body, evidence=evidence, evidence_span=[0, len(evidence)])
+    item = measurement_timeline.project_measurements([a], source_complete=True)["items"][0]
+    assert (item["state"], item["value"]) == ("unknown", None)
+
+
+@pytest.mark.parametrize("suffix, status, expected", [
+    ("はすでに中止した。", "planned", "unknown"),
+    ("は取りやめた。", "planned", "unknown"),
+    ("はありませんでした。", "planned", "unknown"),
+    ("は中止されました。", "planned", "unknown"),
+    ("を中止し、日程を再調整する。", "planned", "unknown"),
+    ("を中止するか確認中。", "planned", "unknown"),
+    ("は中止しませんでした。", "planned", "plan"),
+    ("は中止しない方針です。", "planned", "plan"),
+    ("は中止しないことにした。", "planned", "plan"),
+    ("は中止しないことになった。", "planned", "plan"),
+    ("は中止しないか確認中。", "planned", "unknown"),
+    ("は中止しない、という案もある。", "planned", "unknown"),
+    ("、中止するのはこの検査のみ。", "planned", "unknown"),
+    ("は中止せず、実施する。", "planned", "plan"),
+    ("は中止せず、実施するか確認中。", "planned", "unknown"),
+    ("、中止するのは点滴のみ。", "planned", "plan"),
+    ("、中止するのは点滴のみで、この検査は実施する。", "planned", "plan"),
+    ("、中止するのは点滴のみで、この検査は実施します。", "planned", "plan"),
+    ("、中止するのは点滴のみで、この検査は実施します？", "planned", "unknown"),
+    ("、中止するのは点滴のみで、この検査は予定どおり行う。", "planned", "plan"),
+    ("、中止するのは点滴のみで、この検査は予定どおり行う？", "planned", "unknown"),
+    ("、中止するのは点滴のみで、この検査は予定どおり行う?", "planned", "unknown"),
+    ("、中止するのは点滴のみで、クレアチニンの検査は実施する。", "planned", "plan"),
+    ("、中止するのは点滴のみで、この検査を実施するかは確認中。", "planned", "unknown"),
+    ("、中止するのは点滴のみで、この検査は実施未定。", "planned", "unknown"),
+    ("、中止するのは点滴のみで、この検査の実施は保留。", "planned", "unknown"),
+    ("、中止するのは点滴のみで、カリウムの検査は実施する。", "planned", "unknown"),
+    ("、中止するのはクレアチニンのみ。", "planned", "unknown"),
+    ("、中止するのはクレアチニンの測定のみ。", "planned", "unknown"),
+    ("、中止するのはカリウムのみ。", "planned", "plan"),
+    ("、中止するのは例の処置のみ。", "planned", "unknown"),
+    ("、中止するのは点滴、クレアチニンも。", "planned", "unknown"),
+    ("なら、中止するのは点滴のみ。", "conditional", "plan"),
+])
+@pytest.mark.parametrize("short_quote", [False, True])
+def test_lab_plan_checks_its_own_affirmative_predicate(suffix, status, expected, short_quote):
+    a = _record(1, "2026-10-03", "2026-10-01T09:00:00+09:00", "1.0")
+    plan = "本人は2026-10-03に空腹時採血 Cr 1.0 mg/dLの検査予定"
+    body = plan + suffix
+    evidence = plan if short_quote else body
+    a.update(status=status, source_body=body, evidence=evidence, evidence_span=[0, len(evidence)])
+    item = measurement_timeline.project_measurements([a], source_complete=True)["items"][0]
+    assert (item["state"], item["value"]) == (expected, "1.0" if expected == "plan" else None)

@@ -510,9 +510,10 @@ def test_admitted_probe_format_injects_token(admitted_env):
     assert row["state"] == "terminal"
 
 
-@pytest.mark.parametrize("failure,state", [(TimeoutError, "unknown"),
-                                         (ConnectionRefusedError, "terminal")])
-def test_admitted_probe_failure_preserves_backend_uncertainty(admitted_env, failure, state):
+@pytest.mark.parametrize("failure,state,mode", [(TimeoutError, "unknown", "plain"),
+                                               # never sent: no format verdict
+                                               (ConnectionRefusedError, "terminal", None)])
+def test_admitted_probe_failure_preserves_backend_uncertainty(admitted_env, failure, state, mode):
     import local_llm
 
     def unavailable(*args):
@@ -520,7 +521,7 @@ def test_admitted_probe_failure_preserves_backend_uncertainty(admitted_env, fail
 
     assert local_llm.admitted_probe_format(
         "mcs.extract", local_llm.ENDPOINT, "m", None,
-        request_fn=unavailable) == "plain"
+        request_fn=unavailable) == mode
     broker = _live_broker(admitted_env)
     row = broker.db.execute("SELECT state,outcome FROM permits").fetchone()
     assert row["state"] == state
