@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "provider分離設定でAnthropicへの切替とprofile編集が拒否される問題を修正",
+  "summary": "provider設定を分離保存している構成で、Anthropic側に既存profileがある状態でのprovider切替、または切替と同時の `cloud_llm.provider_profiles.anthropic.*` 指定が、正しい変更なのに `provider_settings_unrepresentable` で拒否されていました。切替・編集が保存されるようになり、切替で外れる側のprofileと `cloud_llm` 全体置換でも非選択側の保存profileが消えなくなりました。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "選択先providerのviewにAnthropicの用途別profileを再投影し、`cloud_llm.provider_profiles.anthropic.<用途>` のleaf編集を既存profileへのマージとして扱います。",
+    "非選択側のOpenAI・Anthropicの私有profileは従来どおり保持され、選択側Anthropicの保存profileを暗黙に消す `cloud_llm` 全体置換は従来どおり拒否されます（明示の `provider_profiles` で置換・消去できます）。",
+    "最終view等価性・snapshot/authority照合・編集lock・原子的保存の検査は変更していません。"
+  ],
+  "refs": [
+    "mcs/ops/setup/setup_config_snapshot.py",
+    "tests/ops/test_mcs_setup_split_init.py"
+  ]
+}
