@@ -762,8 +762,11 @@ def test_pin_refresh_restore_preserves_source_drift_and_both_environments(
         pytest.fail("source drift must stop before journals, venvs, or workers change")
 
     for name in ("_clean_stale_git_locks", "_services_reconcile", "restart_agents",
-                 "_enqueue_notice", "quiesce", "_reinstall"):
+                 "quiesce", "_reinstall"):
         patch_lifecycle_lookup(monkeypatch, updater, name, forbidden)
+    notices = []
+    patch_lifecycle_lookup(monkeypatch, updater, "_enqueue_notice",
+                           lambda *a, **k: notices.append((a, k)) or True)
     for attempt in range(2):
         if operation == "restore":
             with pytest.raises(updater.UpdateError, match="runtime_restore_checkout_changed"):
