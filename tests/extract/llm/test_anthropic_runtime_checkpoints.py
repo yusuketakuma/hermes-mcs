@@ -423,7 +423,10 @@ def test_high_repair_final_proof_survives_checkpoint_cleanup(routed, monkeypatch
     class Client(real_client):
         def request(self, method, request, timeout, **kwargs):
             assert timeout > 0 and not led.db.in_transaction
-            prompt = request['input']
+            value = request['input']
+            prompt = (value if isinstance(value, str) else ''.join(
+                part['text'] for block in value for part in block.get('content', [])
+                if isinstance(part, dict) and isinstance(part.get('text'), str)))
             piece = prompt.rsplit('<<<\n', 1)[1].split('\n>>>', 1)[0]
             sends.append((request['model'], request['reasoning']['effort'], piece))
             truncated = (piece == body and (split == 'initial' and request['reasoning']['effort'] != 'high'
