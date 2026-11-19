@@ -214,6 +214,7 @@ def test_finish_run_publishes_by_change_and_clears_dirty_only_on_publish(
     monkeypatch.setattr(run_check, "_hard_deadline", lambda: hard)
     monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **k: None)
     monkeypatch.setattr(notify_spool, "publish_flags", lambda *a, **k: None)
+    monkeypatch.setattr(notify_spool, "publish_restore_holds", lambda *a, **k: None)
     monkeypatch.setattr(notify_cards, "snapshot_dirty", lambda _l: dirty)
     monkeypatch.setattr(notify_cards, "clear_snapshot_dirty",
                         lambda _l, _g: calls.setdefault("cleared", True))
@@ -261,6 +262,7 @@ def test_snapshot_failure_leaves_health_time_and_preserves_prior_publication(
         monkeypatch.setattr(run_check, "_WATCHDOG_EXIT_AT", 540.0)
         monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **k: None)
         monkeypatch.setattr(notify_spool, "publish_flags", lambda *a, **k: None)
+        monkeypatch.setattr(notify_spool, "publish_restore_holds", lambda *a, **k: None)
         monkeypatch.setattr(notify_cards, "snapshot_dirty", lambda _: True)
         cleared = []
         monkeypatch.setattr(notify_cards, "clear_snapshot_dirty",

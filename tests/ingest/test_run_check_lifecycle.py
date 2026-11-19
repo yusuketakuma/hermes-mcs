@@ -187,9 +187,10 @@ def test_tail_command_failure_marks_run_partial(tmp_path, monkeypatch, capsys):
                  "run_reply_jobs", "run_history_jobs", "run_reconcile_jobs",
                  "seed_trickle"):
         monkeypatch.setattr(job_ops, name, lambda *a, **k: None)
-    for name in ("ensure_dirs", "recover", "sweep", "publish_flags",
+    for name in ("ensure_dirs", "recover", "publish_flags", "publish_restore_holds",
                  "gc", "clear_snapshot_dirty"):
-        monkeypatch.setattr((notify_spool if name in {'recover', 'publish_flags', 'ensure_dirs'} else notify_cards), name, lambda *a, **k: None)
+        monkeypatch.setattr((notify_spool if name in {'recover', 'publish_flags', 'publish_restore_holds', 'ensure_dirs'} else notify_cards), name, lambda *a, **k: None)
+    monkeypatch.setattr(notify_cards, "sweep", lambda *a, **k: {})
     monkeypatch.setattr(self_identity, "record_self_profile", lambda *a: False)
     monkeypatch.setattr(local_backup, "daily_backup", lambda *a: None)
     monkeypatch.setattr(maintenance, "rotate_log", lambda *a: None)
@@ -320,8 +321,8 @@ def test_overdue_tick_defers_later_stages_but_records_run_and_health(
     import notify_spool
     import notify_cmds
     monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **k: None)
-    for name in ("publish_flags", "clear_snapshot_dirty"):
-        monkeypatch.setattr((notify_spool if name in {'publish_flags'} else notify_cards), name, lambda *a, **k: None)
+    for name in ("publish_flags", "publish_restore_holds", "clear_snapshot_dirty"):
+        monkeypatch.setattr((notify_spool if name in {'publish_flags', 'publish_restore_holds'} else notify_cards), name, lambda *a, **k: None)
     monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a, **k: True)
     monkeypatch.setattr(sys, "argv", ["run_check", "--no-notify"])
     assert run_check._main() == 0
@@ -460,8 +461,11 @@ def test_entry_reports_only_observed_writer_refusal(
         if cause == "busy":
             assert 100 + run_check.LOCK_WAIT_S <= clock[0] < 100 + run_check.LOCK_WAIT_S + 0.3
         if fd is not None:
-            with pytest.raises(OSError):
-                os.fstat(fd)
+            if cause == "marker":
+                os.fstat(fd)   # the update marker is seen before any acquire: fd stays open
+            else:
+                with pytest.raises(OSError):
+                    os.fstat(fd)
     finally:
         if fd is not None:
             try:
@@ -542,8 +546,11 @@ def test_command_worker_catches_short_lock_window_without_crossing_update(
             assert capsys.readouterr().out == ""
         else:
             assert calls == []
-        with pytest.raises(OSError):
-            os.fstat(fd)  # every accepted or refused lock is released
+        if fence == "marker":
+            os.fstat(fd)   # the marker fence exits before the lock is taken
+        else:
+            with pytest.raises(OSError):
+                os.fstat(fd)  # every accepted or refused lock is released
     finally:
         try:
             os.close(fd)
@@ -703,7 +710,7 @@ def test_commands_snapshot_keeps_original_deadline_and_dirty_on_failure(
     monkeypatch.setattr(run_check, "Ledger", FakeLedger)
     monkeypatch.setattr(run_check, "_config", lambda: {})
     monkeypatch.setattr(run_check, "_hard_deadline", lambda: None)
-    for name in ("ensure_dirs", "recover", "publish_flags"):
+    for name in ("ensure_dirs", "recover", "publish_flags", "publish_restore_holds"):
         monkeypatch.setattr(notify_spool, name, lambda *a, **kw: None)
     for name in ("restore_awaiting_consent", "restore_pending"):
         monkeypatch.setattr(notify_spool, name, lambda *a, **kw: None)
