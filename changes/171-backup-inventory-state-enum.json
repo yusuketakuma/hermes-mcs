@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "バックアップ棚卸しが正常な患者取得状態をotherに数える問題を修正",
+  "summary": "バックアップ証拠の棚卸しで、患者の取得状態 complete・incomplete・forbidden と通知の抑止 suppressed、および実在のジョブ種別が「不明（other）」と数えられなくなり、正常・取得途中・未知の値を区別できます。未知の値は従来どおりotherへ集約され、値そのものは記録されません。",
+  "upgrade": "追加操作は不要です。これまでに作成した既存のバックアップも、集計方式を2世代で保持したため従来どおり検証・復元できます。",
+  "details": [
+    "patients.fetch_state の許可リストを実writerが書く pending/complete/incomplete/forbidden とreaderが正当値として扱う failed に合わせ、ok は書かれないため外しました。",
+    "notify_outbox.state に正規の状態 suppressed を追加しました。",
+    "fetch_jobs.kind の許可リストを実在の17種へ拡張し、bookkeeping 行も自名義で数えます。",
+    "保存済み棚卸しとの厳密な一致比較は維持し、旧世代の集計でも再計算して受理するため、旧バックアップの検証が失敗しなくなりました。"
+  ],
+  "refs": [
+    "mcs/ops/backup/backup_evidence.py",
+    "mcs/ops/mcs_backup.py",
+    "mcs/ops/mcs_restore.py"
+  ]
+}

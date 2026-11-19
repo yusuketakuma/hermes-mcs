@@ -488,6 +488,214 @@ def test_retry_preview_and_writer_accept_utf16_sqlite_text(tmp_path, encoding):
         db.close()
 
 
+@pytest.mark.parametrize('note_size', [16400, 17064, 20000, 100000])
+def test_retry_preview_and_writer_share_stored_payload_limit(tmp_path, note_size):
+    from adapters.common.human_commands import _semantic_job
+
+    db = Ledger(str(tmp_path / 'ledger.db'))
+    try:
+        db.ensure_patient(1)
+        payload = {VERSION_KEY: CURRENT_VERSION, 'targets': [42],
+                   'note': 'x' * note_size}
+        stored = json.dumps(payload, ensure_ascii=False)
+        assert len(stored.encode('utf-8')) > mcs_requests.MAX_COMMAND_BYTES
+        job_id = db.job_add('semantic', 1, 42, payload=payload)
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=2 WHERE job_id=?",
+                          (job_id,))
+        db.db.execute('BEGIN')
+        row, error, digest = _semantic_job(SimpleNamespace(db=db.db), mcs_requests, 1, job_id)
+        db.db.rollback()
+        assert error is None and row['attempts'] == 2
+        assert digest == mcs_requests.payload_hash(payload)
+        request = _command('ops.retry', job_id=job_id, expected_payload_hash=digest)
+        receipt = mcs_requests.apply_command(db, request)
+        assert receipt['outcome'] == 'applied'
+        current = _job(db, job_id)
+        assert current['state'] == 'pending' and current['attempts'] == 2
+        written = json.loads(current['payload'])
+        assert written['note'] == payload['note']
+        assert written['retry_command_id'] == request['command_id']
+    finally:
+        db.close()
+
+
+def test_retry_preview_matches_writer_on_oversized_stored_payload(tmp_path):
+    from adapters.common.human_commands import _semantic_job
+
+    db = Ledger(str(tmp_path / 'ledger.db'))
+    try:
+        db.ensure_patient(1)
+        job_id = db.job_add('semantic', 1, 42, payload={})
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET payload=?,state='failed',attempts=2 "
+                          "WHERE job_id=?", ('x' * (1024 * 1024 + 1), job_id))
+        before = dict(_job(db, job_id))
+        db.db.execute('BEGIN')
+        assert _semantic_job(SimpleNamespace(db=db.db), mcs_requests, 1, job_id) == (
+            None, 'invalid_payload', None)
+        db.db.rollback()
+        receipt = mcs_requests.apply_command(db, _command(
+            'ops.retry', job_id=job_id, expected_payload_hash='a' * 64))
+        assert receipt['outcome'] == 'rejected' and receipt['error'] == 'invalid_payload'
+        assert dict(_job(db, job_id)) == before
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('encoding', ['UTF-16le', 'UTF-16be'])
+def test_retry_preview_and_writer_accept_utf16_payload_over_command_limit(tmp_path, encoding):
+    from adapters.common.human_commands import _semantic_job
+
+    path = tmp_path / 'ledger.db'
+    init = sqlite3.connect(path)
+    try:
+        init.execute(f"PRAGMA encoding='{encoding}'")
+        init.execute('CREATE TABLE encoding_setup(value)')
+        init.execute('DROP TABLE encoding_setup')
+        init.commit()
+    finally:
+        init.close()
+    db = Ledger(str(path))
+    try:
+        db.ensure_patient(1)
+        payload = {VERSION_KEY: CURRENT_VERSION, 'targets': [42],
+                   'note': '合成' + 'x' * 17000}
+        stored = json.dumps(payload, ensure_ascii=False)
+        assert len(stored.encode('utf-8')) > mcs_requests.MAX_COMMAND_BYTES
+        job_id = db.job_add('semantic', 1, 42, payload=payload)
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=2 WHERE job_id=?",
+                          (job_id,))
+        db.db.execute('BEGIN')
+        row, error, digest = _semantic_job(SimpleNamespace(db=db.db), mcs_requests, 1, job_id)
+        db.db.rollback()
+        assert error is None and row['attempts'] == 2
+        assert digest == mcs_requests.payload_hash(payload)
+        request = _command('ops.retry', job_id=job_id, expected_payload_hash=digest)
+        assert mcs_requests.apply_command(db, request)['outcome'] == 'applied'
+        current = _job(db, job_id)
+        assert current['state'] == 'pending' and current['attempts'] == 2
+    finally:
+        db.close()
+
+
+def test_retry_preview_accepts_non_version_duplicate_keys_like_writer(tmp_path):
+    from adapters.common.human_commands import _semantic_job
+
+    db = Ledger(str(tmp_path / 'ledger.db'))
+    try:
+        db.ensure_patient(1)
+        job_id = db.job_add('semantic', 1, 42, payload={})
+        raw = ('{"inference_engine_version":"1.0","targets":[42],'
+               '"extra":{"inference_engine_version":"2.0",'
+               '"inference_engine_version":"1.0"},"x":1,"x":2}')
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET payload=?,state='failed',attempts=2 "
+                          "WHERE job_id=?", (raw, job_id))
+        db.db.execute('BEGIN')
+        row, error, digest = _semantic_job(SimpleNamespace(db=db.db), mcs_requests, 1, job_id)
+        db.db.rollback()
+        assert error is None and row['attempts'] == 2
+        assert digest == mcs_requests.payload_hash(json.loads(raw))
+        request = _command('ops.retry', job_id=job_id, expected_payload_hash=digest)
+        assert mcs_requests.apply_command(db, request)['outcome'] == 'applied'
+        assert _job(db, job_id)['attempts'] == 2
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('raw', [
+    '{"inference_engine_version":"2.0","inference_engine_\\u0076ersion":"1.0","targets":[42]}',
+    '[{"targets":42}]',
+    '42',
+])
+def test_retry_preview_matches_writer_rejections(tmp_path, raw):
+    from adapters.common.human_commands import _semantic_job
+
+    db = Ledger(str(tmp_path / 'ledger.db'))
+    try:
+        db.ensure_patient(1)
+        job_id = db.job_add('semantic', 1, 42, payload={})
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET payload=?,state='failed',attempts=2 "
+                          "WHERE job_id=?", (raw, job_id))
+        before = dict(_job(db, job_id))
+        db.db.execute('BEGIN')
+        assert _semantic_job(SimpleNamespace(db=db.db), mcs_requests, 1, job_id) == (
+            None, 'invalid_payload', None)
+        db.db.rollback()
+        receipt = mcs_requests.apply_command(db, _command(
+            'ops.retry', job_id=job_id,
+            expected_payload_hash=mcs_requests.payload_hash(json.loads(raw))))
+        assert receipt['outcome'] == 'rejected' and receipt['error'] == 'invalid_payload'
+        assert dict(_job(db, job_id)) == before
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('constant', ['NaN', 'Infinity', '-Infinity'])
+def test_retry_preview_and_writer_reject_non_finite_numbers(tmp_path, constant):
+    from adapters.common.human_commands import _semantic_job
+
+    db = Ledger(str(tmp_path / 'ledger.db'))
+    try:
+        db.ensure_patient(1)
+        job_id = db.job_add('semantic', 1, 42, payload={})
+        raw = ('{"inference_engine_version":"%s","targets":[42],"note":%s}'
+               % (CURRENT_VERSION, constant))
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET payload=?,state='failed',attempts=2 "
+                          "WHERE job_id=?", (raw, job_id))
+        before = dict(_job(db, job_id))
+        db.db.execute('BEGIN')
+        assert _semantic_job(SimpleNamespace(db=db.db), mcs_requests, 1, job_id) == (
+            None, 'invalid_payload', None)
+        db.db.rollback()
+        receipt = mcs_requests.apply_command(db, _command(
+            'ops.retry', job_id=job_id, expected_payload_hash='a' * 64))
+        assert receipt['outcome'] == 'rejected' and receipt['error'] == 'invalid_payload'
+        assert dict(_job(db, job_id)) == before
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize(('additional_attempts', 'attempts'), [(None, 2), (1, 99)])
+def test_retry_preview_applies_writer_stored_size_limit(tmp_path, additional_attempts, attempts):
+    from adapters.common.human_commands import _semantic_job
+
+    db = Ledger(str(tmp_path / 'ledger.db'))
+    try:
+        db.ensure_patient(1)
+        # Sized so the stored payload fits the 1MiB read limit but the
+        # canonical payload the writer saves (retry_command_id and, for a
+        # manual extension, manual_attempt_limit appended) exceeds it.
+        payload = {VERSION_KEY: CURRENT_VERSION, 'targets': [42],
+                   'note': 'x' * (1024 * 1024 - 100)}
+        job_id = db.job_add('semantic', 1, 42, payload=payload)
+        with db.db:
+            # 99 attempts = past the default limit so a manual extension is allowed
+            db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=? "
+                          "WHERE job_id=?", (attempts, job_id))
+        stored = db.db.execute(
+            "SELECT length(CAST(payload AS BLOB)) FROM fetch_jobs WHERE job_id=?",
+            (job_id,)).fetchone()[0]
+        assert stored <= 1024 * 1024
+        request = _command('ops.retry', job_id=job_id,
+                           expected_payload_hash=mcs_requests.payload_hash(payload))
+        if additional_attempts is not None:
+            request['additional_attempts'] = additional_attempts
+            request['reason'] = 'synthetic extension'
+        db.db.execute('BEGIN')
+        assert _semantic_job(SimpleNamespace(db=db.db), mcs_requests, 1, job_id,
+                             additional_attempts) == (None, 'invalid_payload', None)
+        db.db.rollback()
+        receipt = mcs_requests.apply_command(db, request)
+        assert receipt['outcome'] == 'rejected' and receipt['error'] == 'invalid_payload'
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize('shadow_count', [0, 1, 2])
 def test_retry_uses_actual_rowid_in_nonstandard_schema(tmp_path, shadow_count):
     from adapters.common.human_commands import _semantic_job
