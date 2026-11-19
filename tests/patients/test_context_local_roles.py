@@ -447,10 +447,11 @@ def test_lane_pauses_after_a_pass_that_found_only_other_role_patients(lanes, mon
     ('patient_context_cloud_deferred:daily_cap', 60, 60), ('patient_context_cloud_budget', 60, 60),
     ('patient_context_selection_busy', 20, 20), ('patient_context_other_role', 60, 60),
     ('patient_context_cloud_deferred:cloud_worker_unavailable', 60, 20),
-    ('patient_context_cloud_deferred:cloud_capacity', 5, 0), ('patient_context_waiting', 5, 0)])
+    ('patient_context_cloud_deferred:cloud_capacity', 5, 0), ('patient_context_waiting', 60, 60)])
 def test_lane_paces_its_passes_like_the_children(lanes, monkeypatch, reason, child, pause):
     """Owner Q12: a cloud wait pauses the lane's context passes for a minute like a child's, and
-    another worker in the selection for 20 s; a full send slot or ordinary waiting does not. A
+    another worker in the selection for 20 s; only a full send slot does not. A waiting scan
+    pauses a minute too: nothing startable rarely changes within seconds. A
     takeover pass that found only patients waiting for a child waits like a busy selection
     (its unit holds back only its patient, which the selection passes over)."""
     assert cloud_backlog._context_retry_delay({'reason': reason}) == child
