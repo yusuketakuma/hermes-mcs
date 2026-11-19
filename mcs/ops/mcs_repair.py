@@ -63,6 +63,7 @@ class RepairPlan(TypedDict):
     gapless_verified: bool
     exact_missing_ranges: None
     warnings: list[str]
+    upgrade_scope: dict
     plan_digest: str
 
 
@@ -161,11 +162,13 @@ def _stages() -> list[Stage]:
 
 
 def plan(snapshot: str | Path, *, nonce: str | None = None,
-         max_steps: int = 10_000_000) -> RepairPlan:
+         max_steps: int = 10_000_000, scope=None) -> RepairPlan:
     """Return bounded, count-only observations of an explicit published snapshot.
 
     Zero means no recorded candidate under the stated criterion, not absence
     of an action or gapless acquisition. Missing old columns yield None.
+    ``scope`` overrides the live upgrade scope (a saved plan re-validates
+    under its stored scope, not whatever the host is set to now).
     """
     nonce = str(uuid.uuid4()) if nonce is None else nonce
     if not valid_uuid(nonce):
@@ -249,16 +252,37 @@ def plan(snapshot: str | Path, *, nonce: str | None = None,
                 OR json_extract(payload,'$.last_pass_at')>?
               ELSE 1 END""", (binding["generated_at"] if binding else 0,))
         from extract import RULE_VERSION
-        count("stale_v1_messages",
-              {"artifacts": "kind message_id meta", "messages": "message_id content_hash"},
-              """SELECT CASE WHEN SUM(NOT json_valid(a.meta)
+        import upgrade_scope
+        # The same live-scope fragment the rule pass selects with: a closed
+        # scope keeps version-drifted earlier-generation rows out of rebuild
+        # candidates; they are reported under their own count instead. An open
+        # scope leaves the fragment empty and both counts read as before. The
+        # resolved scope is saved with the plan so re-validation does not
+        # depend on what the host is configured with at verify time.
+        if scope is None:
+            scope = upgrade_scope.live()
+        in_scope = upgrade_scope.selection_sql(scope, "rule")
+        stale_deps = ({"artifacts": "kind message_id project_id meta",
+                       "messages": "message_id content_hash project_id body_state"}
+                      if in_scope else
+                      {"artifacts": "kind message_id meta",
+                       "messages": "message_id content_hash"})
+        count("stale_v1_messages", stale_deps,
+              f"""SELECT CASE WHEN SUM(NOT json_valid(a.meta)
                 OR m.content_hash IS NULL)>0 THEN NULL ELSE
               COUNT(DISTINCT CASE WHEN json_valid(a.meta) THEN CASE WHEN
                 json_extract(a.meta,'$.hash') IS NULL
                 OR json_extract(a.meta,'$.hash')!=m.content_hash
-                OR COALESCE(json_extract(a.meta,'$.rule_version'),0)!=?
+                OR (COALESCE(json_extract(a.meta,'$.rule_version'),0)!=? AND (1{in_scope}))
                 THEN a.message_id END END) END FROM artifacts a
               JOIN messages m ON m.message_id=a.message_id WHERE a.kind='extract_v1'""",
+              (RULE_VERSION,))
+        count("stale_v1_messages_outside_scope", stale_deps,
+              f"""SELECT COUNT(DISTINCT a.message_id) FROM artifacts a
+              JOIN messages m ON m.message_id=a.message_id WHERE a.kind='extract_v1'
+                AND json_valid(a.meta)
+                AND COALESCE(json_extract(a.meta,'$.rule_version'),0)!=?
+                AND ({'0' if scope.is_open else 'NOT (1' + in_scope + ')'})""",
               (RULE_VERSION,))
         # Same dirty criterion as rollup, evaluated at published snapshot time.
         counts["dirty_rollups"] = None
@@ -326,6 +350,8 @@ def plan(snapshot: str | Path, *, nonce: str | None = None,
                      "no_absence_or_completion_inference", "floor_unchanged",
                      "records_are_not_execution_authority",
                      "distinct_device_is_not_disaster_recovery_proof"],
+        "upgrade_scope": {"mode": scope.mode,
+                          "project_ids": sorted(scope.project_ids)},
     }
     report["plan_digest"] = canonical_digest({k: v for k, v in report.items() if k != "plan_digest"})
     return report
@@ -337,11 +363,29 @@ def _validate_plan(value, snapshot, nonce, digest):
             or value.get("nonce") != nonce or value.get("plan_digest") != digest \
             or not valid_hash(digest):
         raise ValueError("plan_incompatible")
-    expected = plan(snapshot, nonce=nonce, max_steps=value["max_steps"])
+    scope = _stored_scope(value)
+    expected = plan(snapshot, nonce=nonce, max_steps=value["max_steps"], scope=scope)
     if canonical(expected) != canonical(value):
         raise ValueError("plan_tampered_or_snapshot_changed")
     if not value["snapshot_binding"] or not value["audit"]["ok"]:
         raise ValueError("plan_prerequisites_unverified")
+
+
+def _stored_scope(value):
+    """The upgrade scope resolved at plan time, saved with the plan.
+
+    Re-verification and every observation in the audit trail use it, so
+    changing the live setting mid-repair can neither strand the trail nor
+    make before/after counts disagree on an unchanged snapshot.
+    """
+    import upgrade_scope
+    stored = value.get("upgrade_scope")
+    if not isinstance(stored, dict) or stored.keys() != {"mode", "project_ids"} \
+            or stored["mode"] not in ("all", "none", "projects") \
+            or not isinstance(stored["project_ids"], list) \
+            or any(type(p) is not int or p <= 0 for p in stored["project_ids"]):
+        raise ValueError("plan_incompatible")
+    return upgrade_scope.Scope(stored["mode"], tuple(stored["project_ids"]))
 
 
 def _private_parent(path):
@@ -492,7 +536,8 @@ def record(value: RepairPlan, snapshot: str | Path, current_snapshot: str | Path
             or (status == "blocked" and reason not in (
                 "prerequisite_unverified", "owner_decision_pending", "execution_failed")):
         raise ValueError("stage_reason_invalid")
-    after = plan(current_snapshot, nonce=nonce, max_steps=value["max_steps"])
+    after = plan(current_snapshot, nonce=nonce, max_steps=value["max_steps"],
+                 scope=_stored_scope(value))
     if not after["audit"]["ok"] or not after["snapshot_binding"]:
         raise ValueError("current_snapshot_unverified")
     if not backup_db or not backup_sha256:
@@ -575,7 +620,8 @@ def finalize(value: RepairPlan, snapshot: str | Path, current_snapshot: str | Pa
              backup_db: str | Path, backup_sha256: str):
     """Aggregate recorded evidence, including blocked/unfinished work, not repair success."""
     _validate_plan(value, snapshot, nonce, plan_digest)
-    after = plan(current_snapshot, nonce=nonce, max_steps=value["max_steps"])
+    after = plan(current_snapshot, nonce=nonce, max_steps=value["max_steps"],
+                 scope=_stored_scope(value))
     with _log(log, create=False) as stream:
         fcntl.flock(stream.fileno(), fcntl.LOCK_SH)
         entries = _entries(stream, plan_digest, nonce, value["counts"].keys())

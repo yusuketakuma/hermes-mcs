@@ -945,9 +945,16 @@ def main() -> int:
             print(json.dumps({"ok": False, "error": "lock_held"}))
             return 3
     try:
+        # The manual entry honours the same live upgrade scope as the tick
+        # path: a closed scope never rebuilds earlier rule generations.
+        # --stats stays a plain count report and reads no configuration.
+        scope_sql = ""
+        if not args.stats:
+            import upgrade_scope
+            scope_sql = upgrade_scope.selection_sql(upgrade_scope.live(), "rule")
         led = LedgerReader(DB) if args.stats else Ledger(DB)
         try:
-            q = f"SELECT m.message_id FROM messages m WHERE {ELIGIBLE_MESSAGE}"
+            q = f"SELECT m.message_id FROM messages m WHERE {ELIGIBLE_MESSAGE}{scope_sql}"
             params: list = []
             if args.project:
                 q += " AND m.project_id=?"

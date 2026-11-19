@@ -21,6 +21,7 @@ from test_ledger_audit import _database
 import drug_map
 import rollup
 import mcs_repair
+import mcs_util
 from inference_version import CURRENT_VERSION, VERSION_KEY
 
 NONCE = "00000000-0000-4000-8000-000000000013"
@@ -141,7 +142,10 @@ def test_plan_is_deterministic_readonly_and_never_trusts_floor(world):
     assert _hash(world["snapshot"]) == before
     assert sorted(p.name for p in world["snapshot"].parent.iterdir()) == files
     assert "SYNTHETIC_PRIVATE" not in json.dumps(result)
-    assert "project_id" not in json.dumps(result)
+    # upgrade_scope echoes the operator's own configured scope (input, not an
+    # observation); nothing else in the plan may carry identifiers.
+    observed = {k: v for k, v in result.items() if k != "upgrade_scope"}
+    assert "project_id" not in json.dumps(observed)
     assert "SELECT " not in json.dumps(result)
 
 
@@ -210,6 +214,62 @@ def test_plan_aggregates_evidenced_candidates_without_private_values(world):
     assert result["groups"]["attachment_reasons"] == {"unknown": 1}
     assert "SYNTHETIC_PRIVATE" not in json.dumps(result)
     assert _hash(snapshot) == before
+
+
+def test_stale_v1_counts_split_scope_held_version_drift(world, monkeypatch, tmp_path):
+    """A closed upgrade scope moves version-drifted earlier-generation rows out
+    of rebuild candidates; hash drift is always a candidate."""
+    snapshot = world["snapshot"]
+    _change(snapshot, "INSERT INTO messages(message_id,project_id,body_state,content_hash,updated_seen) "
+                      "VALUES(102,1,'full','synthetic-hash',10)")
+    drift = json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": "synthetic-hash",
+                        "rule_version": RULE_VERSION - 1})
+    edited = json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": "old",
+                         "rule_version": RULE_VERSION})
+    _change(snapshot, "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+                      "VALUES('extract_v1',1,102,'{}',?,200)", (drift,))
+    _change(snapshot, "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+                      "VALUES('extract_v1',1,101,'{}',?,200)", (edited,))
+    config = tmp_path / "config.json"
+    monkeypatch.setattr(mcs_util, "CONF_PATH", str(config))
+    counts = repair.plan(snapshot, nonce=NONCE)["counts"]
+    assert counts["stale_v1_messages"] == 2
+    assert counts["stale_v1_messages_outside_scope"] == 0
+    config.write_text(json.dumps({"extract": {"upgrade_scope": "none"}}), encoding="utf-8")
+    counts = repair.plan(snapshot, nonce=NONCE)["counts"]
+    assert counts["stale_v1_messages"] == 1
+    assert counts["stale_v1_messages_outside_scope"] == 1
+
+
+def test_plan_revalidates_under_the_stored_scope_after_the_setting_changes(
+        independent, monkeypatch, tmp_path):
+    """The scope resolved at plan time is saved with the plan, so a live
+    setting change mid-repair can neither strand the audit trail nor make
+    before/after counts disagree on an unchanged snapshot."""
+    world = independent
+    snapshot = world["snapshot"]
+    _change(snapshot, "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+                      "VALUES('extract_v1',1,101,'{}',?,200)",
+            (json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": "synthetic-hash",
+                         "rule_version": RULE_VERSION - 1}),))
+    world["backup"].write_bytes(snapshot.read_bytes())  # the backup tracks the snapshot
+    config = tmp_path / "config.json"
+    monkeypatch.setattr(mcs_util, "CONF_PATH", str(config))
+    config.write_text(json.dumps({"extract": {"upgrade_scope": "none"}}), encoding="utf-8")
+    saved = repair.plan(snapshot, nonce=NONCE)
+    assert saved["upgrade_scope"] == {"mode": "none", "project_ids": []}
+    assert saved["counts"]["stale_v1_messages"] == 0
+    config.write_text(json.dumps({"extract": {"upgrade_scope": "all"}}), encoding="utf-8")
+    repair._validate_plan(saved, snapshot, NONCE, saved["plan_digest"])
+    repair.record(saved, snapshot, snapshot, world["log"], nonce=NONCE,
+                  plan_digest=saved["plan_digest"], stage="backup", status="observed",
+                  confirm_human=True, reason="operator_observation",
+                  operator_sha256=OPERATOR, code_version="1.0.13",
+                  backup_db=world["backup"], backup_sha256=saved["snapshot_sha256"])
+    entry = json.loads(world["log"].read_text(encoding="utf-8").splitlines()[0])
+    # The live "all" scope would count the drift row again; the stored scope wins.
+    assert entry["after"]["stale_v1_messages"] == 0
+    assert entry["after"]["stale_v1_messages_outside_scope"] == 1
 
 
 def test_old_supported_columns_remain_unknown(world):
