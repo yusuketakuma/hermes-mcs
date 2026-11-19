@@ -5,6 +5,7 @@ test module (no ``test_`` prefix); sibling files import it via the
 tests/ sys.path bootstrap."""
 import mcs_contract
 import json
+import time
 
 import extract_llm
 from inference_version import CURRENT_VERSION, VERSION_KEY
@@ -15,8 +16,12 @@ _ledger = make_ledger
 
 
 def _message(mid=1, body="body", state="full", project_id=1,
-             parent_id=None, unread=False,
-             posted_at="2026-09-19T00:00:00+09:00", profession=""):
+             parent_id=None, unread=False, posted_at=None, profession=""):
+    if posted_at is None:
+        # A fixed date silently ages out of bounded windows (QC's 60-day
+        # realtime scope); default to a recent post instead.
+        posted_at = time.strftime("%Y-%m-%dT%H:%M:%S+09:00",
+                                  time.localtime(time.time() - 3600))
     return mcs_contract.Message(
         message_id=mid, project_id=project_id, parent_id=parent_id,
         sender_id=1, sender_name="sender", sender_type="user",
