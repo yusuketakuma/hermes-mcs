@@ -5,11 +5,10 @@ test module (no ``test_`` prefix); sibling files import it via the
 tests/ sys.path bootstrap."""
 import mcs_contract
 import json
-import time
 
 import extract_llm
 from inference_version import CURRENT_VERSION, VERSION_KEY
-from common_testkit import make_ledger
+from common_testkit import make_ledger, recent_posted_at
 
 
 _ledger = make_ledger
@@ -20,8 +19,7 @@ def _message(mid=1, body="body", state="full", project_id=1,
     if posted_at is None:
         # A fixed date silently ages out of bounded windows (QC's 60-day
         # realtime scope); default to a recent post instead.
-        posted_at = time.strftime("%Y-%m-%dT%H:%M:%S+09:00",
-                                  time.localtime(time.time() - 3600))
+        posted_at = recent_posted_at()
     return mcs_contract.Message(
         message_id=mid, project_id=project_id, parent_id=parent_id,
         sender_id=1, sender_name="sender", sender_type="user",
