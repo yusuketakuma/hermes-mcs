@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "新規導入で --with-yomitoku を付けると初回導入の確認で止まる問題を修正",
+  "summary": "新しい Mac で install.sh（または sh scripts/mcs install）に --with-yomitoku を付けても、OCR モデルの取得後に「初回導入の安全性を確認できません」で止まらなくなります。OCR 専用環境とモデルの導入を、初回導入の確認（データフォルダーの中身の照合）が終わった後に行うよう順序を変えました。",
+  "upgrade": "導入済みの環境では追加操作は不要です。この不具合で一度止まった新規導入の Mac は、設定ファイルと保留記録が残っているため再実行では先へ進みません。担当者が状態を確認してください。--with-yomitoku を付けない導入と更新ツールからの再導入の動作は変わりません。",
+  "details": [
+    "deployment/install/runtime.sh の OCR 導入（scripts/setup_yomitoku.py）を、段階2の直後から bootstrap-fresh と導入記録の保留解除の後へ移した。OCR のキャッシュは data/huggingface に置かれ、bootstrap-fresh は data/ の中身が update.lock と初回導入の記録だけであることを要求するため。"
+  ],
+  "refs": ["deployment/install/runtime.sh", "install.sh", "tests/meta/install_sh_testkit.py", "tests/meta/test_install_sh_standalone.py"]
+}
