@@ -159,7 +159,10 @@ def seed(led, mid=1, pid=1, body='生活環境: 合成の居住記録。', state
     led.db.execute('INSERT OR IGNORE INTO patients(project_id,patient_name) VALUES (?,?)',
                    (pid, f'synthetic-{pid}'))
     led.db.commit()
-    led.save_messages([_message(mid, body, state, project_id=pid, posted_at=posted_at)])
+    # shortcut: default posted_at tracks the frozen fixture wall (first_seen below);
+    # a real-clock default would post messages from the future under the mock clock.
+    led.save_messages([_message(mid, body, state, project_id=pid,
+                                posted_at=posted_at or '2026-10-17T22:00:00+09:00')])
     led.db.execute('UPDATE messages SET first_seen=? WHERE message_id=?',
                    (stamp('2026-10-17T22:00:00'), mid))
     # The normal synthetic fixture has exhausted history; partial acquisition is explicit.
