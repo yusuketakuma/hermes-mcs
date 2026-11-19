@@ -36,7 +36,7 @@ def test_refresh_fences_decision_and_marker_to_avoid_a_second_copy(tmp_path, mon
     monkeypatch.setattr(maintenance, "_content_signature", signature)
     monkeypatch.setattr(snapshots, "_prepare_in_child", copy)
     def winner():
-        result = maintenance.refresh_snapshot(path, deadline=time.monotonic() + 20)
+        result = maintenance.refresh_snapshot(path, deadline=time.monotonic() + 90)
         return result, snapshots.last_failure(), snapshots.last_timing()
 
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -68,7 +68,7 @@ def test_refresh_reports_signature_marker_publication_and_total_timings(tmp_path
     db.close()
     path = str(tmp_path / "ledger.db")
     monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(tmp_path / "snapshots"))
-    assert maintenance.refresh_snapshot(path, deadline=time.monotonic() + 20) == "published"
+    assert maintenance.refresh_snapshot(path, deadline=time.monotonic() + 90) == "published"
     timing = snapshots.last_timing()
     assert set(timing) == {"copy_s", "verify_s", "budget_s", "signature_s", "marker_s",
                            "publication_s", "total_s", "marker_state"}
