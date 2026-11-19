@@ -189,7 +189,7 @@ def test_signed_thinking_is_not_saved_in_usage_records(cloud, monkeypatch):
 
     def request(self, method, body, timeout, **kwargs):
         calls.append(True)
-        return 200, {}, json.dumps(_reply(content=content)).encode()
+        return 200, {}, json.dumps(_reply(model=body["model"], content=content)).encode()
 
     monkeypatch.setattr(a.AnthropicClient, "request", request)
     deadline = time.monotonic() + 10
@@ -577,7 +577,7 @@ def test_patient_context_retry_wait_releases_writer_lock_after_settlement(cloud,
         events.append("post")
         if events == ["post"]:
             return 429, {"Retry-After": "2"}, b""
-        reply = _reply() if provider == "anthropic" else response(model=unit.model)
+        reply = _reply(model=args[1]["model"]) if provider == "anthropic" else response(model=unit.model)
         return 200, {}, json.dumps(reply).encode()
 
     def wait(delay):

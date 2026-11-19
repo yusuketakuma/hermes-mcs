@@ -748,7 +748,7 @@ def test_warm_probe_outage_feeds_breaker_once(tmp_path, monkeypatch,
     assert failures == [1]
     assert successes == []
     assert res["failed"] == 0
-    assert res["llm_calls"]["probe_runs"] == probe_runs
+    assert (res["llm_calls"] or {}).get("probe_runs", 0) == probe_runs
     db.close()
 
 
@@ -812,7 +812,7 @@ def test_warm_probe_busy_never_reaches_wire_observation(tmp_path, monkeypatch):
     res = extract_llm.run_pending(db, limit=10, budget_s=200, workers=2)
     assert failures == []
     assert res["done"] == 2
-    assert res["llm_calls"]["probe_runs"] == 0   # busy never hit the wire
+    assert (res["llm_calls"] or {}).get("probe_runs", 0) == 0   # busy never hit the wire
     db.close()
 
 

@@ -162,7 +162,7 @@ def test_a_unit_settles_a_200_refusal_with_its_usage_and_sends_nothing_more(rout
     def post(body, timeout):
         sent.append(body["model"])
         return 200, {"request-id": "req_synthetic_refusal"}, json.dumps(
-            {**_reply(a.MODEL, stop="refusal"), "content": []}).encode()
+            {**_reply(body["model"], stop="refusal"), "content": []}).encode()
 
     monkeypatch.setattr(a, "AnthropicClient", lambda key, **kw: _Recording(key, post, **kw))
     monkeypatch.setattr(openai_client, "OpenAIClient",
@@ -172,7 +172,7 @@ def test_a_unit_settles_a_200_refusal_with_its_usage_and_sends_nothing_more(rout
         current=lambda: True, dispatch=lambda fn, **kwargs: fn(), max_attempts=3)
     with pytest.raises(cloud_inference.CloudFallback):
         provider("synthetic prompt", deadline=time.monotonic() + 180, max_tokens=100)
-    assert sent == [a.MODEL]                                  # one POST, never retried
+    assert sent == [a.SONNET_MODEL]                           # one POST, never retried
     rows = led.db.execute("SELECT meta FROM artifacts WHERE kind='cloud_usage_result'").fetchall()
     assert len(rows) == 1
     meta = json.loads(rows[0][0])
@@ -217,10 +217,10 @@ def test_five_units_with_200_refusals_each_send_once_and_never_open_the_circuit(
     def post(body, timeout):
         posts.append(body["model"])
         return 200, {"request-id": f"req_refusal_{len(posts)}"}, json.dumps(
-            {**_reply(a.MODEL, stop="refusal"), "content": []}).encode()
+            {**_reply(body["model"], stop="refusal"), "content": []}).encode()
     for index in range(5):
         _real_unit(led, cfg, monkeypatch, f"synthetic-refusal-{index}", f"synthetic prompt {index}", post)
-    assert posts == [a.MODEL] * 5
+    assert posts == [a.SONNET_MODEL] * 5
     metas = _result_metas(led)
     assert len(metas) == 5
     for meta in metas:
@@ -248,7 +248,7 @@ def test_request_scoped_contract_errors_never_open_the_circuit_and_keep_the_maxi
     for index in range(5):
         _real_unit(led, cfg, monkeypatch, f"synthetic-4xx-{status}-{index}",
                    f"synthetic prompt {status}-{index}", post)
-    assert posts == [a.MODEL] * 5
+    assert posts == [a.SONNET_MODEL] * 5
     metas = _result_metas(led)
     assert len(metas) == 5
     assert all(meta["http_class"] == f"http_{status}" and meta["error_kind"] == "contract_error"
@@ -270,11 +270,11 @@ def test_genuine_200_contract_violations_open_the_cloud_circuit(routed, monkeypa
     def post(body, timeout):
         posts.append(body["model"])
         return 200, {"request-id": f"req_contract_{len(posts)}"}, json.dumps(
-            _reply(a.MODEL, stop="incomplete")).encode()
+            _reply(body["model"], stop="incomplete")).encode()
     for index in range(3):
         _real_unit(led, cfg, monkeypatch, f"synthetic-contract-{index}",
                    f"synthetic prompt contract-{index}", post)
-    assert posts == [a.MODEL] * 3
+    assert posts == [a.SONNET_MODEL] * 3
     metas = _result_metas(led)
     assert len(metas) == 3
     assert all(meta["http_class"] == "http_200" and meta["error_kind"] == "contract_error"
@@ -304,7 +304,7 @@ def test_a_verified_payment_limit_is_stored_and_opens_the_payment_circuit(routed
         return status, {}, json.dumps(body).encode()
     _real_unit(led, cfg, monkeypatch, f"synthetic-payment-{status}",
                f"synthetic prompt payment-{status}", post)
-    assert posts == [a.MODEL]
+    assert posts == [a.SONNET_MODEL]
     meta, = _result_metas(led)
     assert meta["http_class"] == f"http_{status}" and meta["error_kind"] == "payment_required"
     assert meta["usage"] is None and meta[marker_key] == marker_value
