@@ -36,6 +36,22 @@ def test_schedule_uses_jst_boundaries(monkeypatch, utc_hour, utc_minute, expecte
     assert schedule.night() is expected
 
 
+@pytest.mark.parametrize("jst,expected", [
+    ("07:59:30", 30), ("12:00:00", 0), ("08:00:00", 0), ("19:59:59", 0),
+    ("20:00:00", 43200), ("23:30:00", 30600), ("00:00:00", 28800),
+])
+def test_seconds_until_day(monkeypatch, jst, expected):
+    instant = datetime.fromisoformat(f"2026-11-07T{jst}+09:00")
+
+    class Clock:
+        @staticmethod
+        def now(zone):
+            return instant.astimezone(zone)
+
+    monkeypatch.setattr(schedule, "datetime", Clock)
+    assert schedule.seconds_until_day() == expected
+
+
 def test_day_has_two_background_slots_and_active_rt_allows_both(tmp_path, monkeypatch):
     monkeypatch.setattr(schedule, "night", lambda: False)
     with turn(tmp_path) as bg1, turn(tmp_path) as bg2:

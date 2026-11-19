@@ -20,6 +20,17 @@ def night() -> bool:
     return hour >= 20 or hour < 8
 
 
+def seconds_until_day() -> float:
+    """Seconds left before 08:00 JST at night; 0 by day."""
+    now = datetime.now(JST)
+    if 8 <= now.hour < 20:
+        return 0.0
+    day = now.replace(hour=8, minute=0, second=0, microsecond=0)
+    if now.hour >= 20:
+        day += timedelta(days=1)
+    return (day - now).total_seconds()
+
+
 def _open(directory, name):
     fd = safe_io.open_lock_file(Path(directory) / name)
     info = os.fstat(fd)

@@ -1,4 +1,5 @@
 """Synthetic patient-quality skip receipts and ownership checks."""
+import extract_llm
 import extract_llm_context
 import extract_llm_prepare
 import extract_llm_provider
@@ -28,7 +29,8 @@ def test_unavailable_jev_records_bound_skip_without_a_pass(quality_owner):
     ledger, clock, cfg, doc, sends, _ = quality_owner
     cfg['semantic']['daily_request_budget'] = 0
     status, identity = refresh._quality_step(
-        ledger, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
+        ledger, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True,
+        cloud_mode=extract_llm._cloud_mode(ledger, cfg, 'patient_context', 1))
     assert status == 'skipped'
     assert not sends
     assert not refresh._quality_passed(ledger.db, 1, identity)
@@ -42,11 +44,13 @@ def test_uncertain_prior_request_cannot_be_converted_to_skip(quality_owner):
     ledger, clock, cfg, doc, sends, behavior = quality_owner
     behavior['timeout'] = True
     status, _ = refresh._quality_step(
-        ledger, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
+        ledger, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True,
+        cloud_mode=extract_llm._cloud_mode(ledger, cfg, 'patient_context', 1))
     assert status in ('deferred', 'unknown') and sends
     cfg['semantic']['daily_request_budget'] = 0
     with pytest.raises(ValueError, match='patient_summary_quality_unresolved_request'):
-        refresh._quality_step(ledger, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
+        refresh._quality_step(ledger, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True,
+                              cloud_mode=extract_llm._cloud_mode(ledger, cfg, 'patient_context', 1))
     assert not ledger.artifacts(refresh.QUALITY_SKIP)
 
 
@@ -54,7 +58,8 @@ def test_prior_negative_quality_answer_cannot_be_converted_to_skip(quality_owner
     ledger, clock, cfg, doc, sends, behavior = quality_owner
     behavior['negative'] = True
     status, identity = refresh._quality_step(
-        ledger, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
+        ledger, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True,
+        cloud_mode=extract_llm._cloud_mode(ledger, cfg, 'patient_context', 1))
     assert status == 'pending' and sends
     assert refresh._quality_failed(ledger.db, 1, identity)
     original = [(row['artifact_id'], row['content'], row['meta'])
@@ -63,7 +68,8 @@ def test_prior_negative_quality_answer_cannot_be_converted_to_skip(quality_owner
     sent = list(sends)
     cfg['semantic']['daily_request_budget'] = 0
     status, after_identity = refresh._quality_step(
-        ledger, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
+        ledger, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True,
+        cloud_mode=extract_llm._cloud_mode(ledger, cfg, 'patient_context', 1))
     assert status in ('held', 'deferred', 'unknown')
     assert after_identity == identity
     assert refresh._quality_failed(ledger.db, 1, identity)

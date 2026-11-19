@@ -149,6 +149,156 @@ def test_split_init_provider_switch_applies_profile_overrides_to_private_default
     assert saved['providers']['anthropic'] == providers['anthropic']
 
 
+def test_split_init_switch_to_anthropic_preserves_saved_profiles(split):
+    root, providers, owners = split
+    providers['anthropic']['profiles'] = {'patient_context': 'sonnet-high'}
+    common = {'cloud_llm': {'mode': 'off', 'provider': 'openai'}, 'semantic': {'mode': 'off'}}
+    _set_split(root, common, providers)
+    cfg, initial = mcs_setup._init_config_snapshot()
+    cfg['cloud_llm']['provider'] = 'anthropic'
+    mcs_setup._init_reselect_provider(cfg, initial, ['cloud_llm.provider="anthropic"'])
+    assert cfg['cloud_llm']['provider_profiles'] == {'anthropic': {'patient_context': 'sonnet-high'}}
+    mcs_setup._init_save_config(cfg, initial, SimpleNamespace(_config_publication_started=False))
+    saved = _read(root, owners)
+    assert saved['providers']['anthropic'] == providers['anthropic']
+    assert saved['providers']['openai'] == providers['openai']
+
+
+def test_split_init_switch_to_openai_preserves_anthropic_profiles(split):
+    root, providers, owners = split
+    providers['anthropic']['profiles'] = {'patient_context': 'sonnet-high'}
+    common = {'cloud_llm': {'mode': 'off', 'provider': 'anthropic'}, 'semantic': {'mode': 'off'}}
+    _set_split(root, common, providers)
+    cfg, initial = mcs_setup._init_config_snapshot()
+    cfg['cloud_llm']['provider'] = 'openai'
+    mcs_setup._init_reselect_provider(cfg, initial, ['cloud_llm.provider="openai"'])
+    assert 'provider_profiles' not in cfg['cloud_llm']
+    mcs_setup._init_save_config(cfg, initial, SimpleNamespace(_config_publication_started=False))
+    saved = _read(root, owners)
+    assert saved['providers']['anthropic'] == providers['anthropic']
+    assert saved['providers']['openai'] == providers['openai']
+
+
+def test_split_init_switching_away_from_anthropic_rejects_anthropic_profile_leaf(split):
+    root, providers, owners = split
+    providers['anthropic']['profiles'] = {'patient_context': 'sonnet-high'}
+    common = {'cloud_llm': {'mode': 'off', 'provider': 'anthropic'}, 'semantic': {'mode': 'off'}}
+    _set_split(root, common, providers)
+    cfg, initial = mcs_setup._init_config_snapshot()
+    set_args = ['cloud_llm.provider="openai"',
+                'cloud_llm.provider_profiles.anthropic.patient_context="haiku-medium"']
+    assert mcs_setup._init_apply_set_overrides(cfg, set_args) is None
+    mcs_setup._init_reselect_provider(cfg, initial, set_args)
+    before = {p: p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    with pytest.raises(ValueError, match='provider_settings_unrepresentable'):
+        mcs_setup._init_save_config(cfg, initial, SimpleNamespace(_config_publication_started=False))
+    assert all(path.read_bytes() == value for path, value in before.items())
+
+
+@pytest.mark.parametrize(('private_profiles', 'overrides', 'expected'), [
+    ({'backlog': 'haiku-medium', 'patient_context': 'sonnet-high'},
+     ['cloud_llm.provider_profiles.anthropic.quality_repair="sonnet-high"'],
+     {'backlog': 'haiku-medium', 'patient_context': 'sonnet-high', 'quality_repair': 'sonnet-high'}),
+    ({'backlog': 'haiku-medium', 'patient_context': 'sonnet-high'},
+     ['cloud_llm.provider_profiles.anthropic.backlog="sonnet-high"',
+      'cloud_llm.provider_profiles.anthropic.quality_repair="haiku-medium"'],
+     {'backlog': 'sonnet-high', 'patient_context': 'sonnet-high', 'quality_repair': 'haiku-medium'}),
+    (None, ['cloud_llm.provider_profiles.anthropic.quality_repair="sonnet-high"'],
+     {'quality_repair': 'sonnet-high'}),
+    ({'backlog': 'haiku-medium', 'patient_context': 'sonnet-high'},
+     ['cloud_llm.provider_profiles.anthropic={"quality_repair":"sonnet-high"}'],
+     {'quality_repair': 'sonnet-high'}),
+    ({'backlog': 'haiku-medium'},
+     ['cloud_llm.provider_profiles.anthropic={}',
+      'cloud_llm.provider_profiles.anthropic.quality_repair="sonnet-high"'],
+     {'quality_repair': 'sonnet-high'}),
+])
+def test_split_init_switch_to_anthropic_applies_profile_overrides(
+        split, private_profiles, overrides, expected):
+    root, providers, owners = split
+    if private_profiles is not None:
+        providers['anthropic']['profiles'] = private_profiles
+    common = {'cloud_llm': {'mode': 'off', 'provider': 'openai'}, 'semantic': {'mode': 'off'}}
+    _set_split(root, common, providers)
+    cfg, initial = mcs_setup._init_config_snapshot()
+    set_args = ['cloud_llm.provider="anthropic"', *overrides]
+    assert mcs_setup._init_apply_set_overrides(cfg, set_args) is None
+    mcs_setup._init_reselect_provider(cfg, initial, set_args)
+    assert cfg['cloud_llm']['provider_profiles'] == {'anthropic': expected}
+    mcs_setup._init_save_config(cfg, initial, SimpleNamespace(_config_publication_started=False))
+    saved = _read(root, owners)
+    assert saved['providers']['anthropic']['profiles'] == expected
+    assert saved['providers']['openai'] == providers['openai']
+
+
+def test_split_init_switch_to_anthropic_keeps_unselected_openai_profiles(split):
+    root, providers, owners = split
+    providers['openai']['profiles'] = {'patient_context': 'sol-medium'}
+    common = {'cloud_llm': {'mode': 'off', 'provider': 'openai'}, 'semantic': {'mode': 'off'}}
+    _set_split(root, common, providers)
+    cfg, initial = mcs_setup._init_config_snapshot()
+    set_args = ['cloud_llm.provider="anthropic"',
+                'cloud_llm.provider_profiles.anthropic.patient_context="sonnet-high"']
+    assert mcs_setup._init_apply_set_overrides(cfg, set_args) is None
+    mcs_setup._init_reselect_provider(cfg, initial, set_args)
+    mcs_setup._init_save_config(cfg, initial, SimpleNamespace(_config_publication_started=False))
+    saved = _read(root, owners)
+    assert saved['providers']['anthropic']['profiles'] == {'patient_context': 'sonnet-high'}
+    assert saved['providers']['openai'] == providers['openai']
+
+
+@pytest.mark.parametrize('selected', ['openai', 'anthropic'])
+def test_split_init_replacing_cloud_block_preserves_unselected_anthropic_profiles(split, selected):
+    root, providers, owners = split
+    providers['anthropic']['profiles'] = {'patient_context': 'sonnet-high'}
+    common = {'cloud_llm': {'mode': 'off', 'provider': selected}, 'semantic': {'mode': 'off'}}
+    _set_split(root, common, providers)
+    cfg, initial = mcs_setup._init_config_snapshot()
+    cloud = {'mode': 'off', 'provider': 'openai',
+             'provider_budgets': cfg['cloud_llm']['provider_budgets']}
+    set_args = ['cloud_llm=' + json.dumps(cloud)]
+    assert mcs_setup._init_apply_set_overrides(cfg, set_args) is None
+    mcs_setup._init_reselect_provider(cfg, initial, set_args)
+    mcs_setup._init_save_config(cfg, initial, SimpleNamespace(_config_publication_started=False))
+    saved = _read(root, owners)
+    assert saved['providers']['anthropic'] == providers['anthropic']
+    assert saved['providers']['openai'] == {'budget': providers['openai']['budget']}
+    assert saved['providers']['jev'] == providers['jev']
+
+
+@pytest.mark.parametrize('selected', ['openai', 'anthropic'])
+def test_split_init_replacing_cloud_block_without_provider_profiles_rejects(split, selected):
+    root, providers, owners = split
+    providers['anthropic']['profiles'] = {'patient_context': 'sonnet-high'}
+    common = {'cloud_llm': {'mode': 'off', 'provider': selected}, 'semantic': {'mode': 'off'}}
+    _set_split(root, common, providers)
+    cfg, initial = mcs_setup._init_config_snapshot()
+    set_args = ['cloud_llm=' + json.dumps({'mode': 'off', 'provider': 'anthropic'})]
+    assert mcs_setup._init_apply_set_overrides(cfg, set_args) is None
+    mcs_setup._init_reselect_provider(cfg, initial, set_args)
+    before = {p: p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    with pytest.raises(ValueError, match='provider_settings_unrepresentable'):
+        mcs_setup._init_save_config(cfg, initial, SimpleNamespace(_config_publication_started=False))
+    assert all(path.read_bytes() == value for path, value in before.items())
+
+
+def test_split_init_replacing_cloud_block_explicit_empty_anthropic_profiles(split):
+    root, providers, owners = split
+    providers['anthropic']['profiles'] = {'patient_context': 'sonnet-high'}
+    common = {'cloud_llm': {'mode': 'off', 'provider': 'openai'}, 'semantic': {'mode': 'off'}}
+    _set_split(root, common, providers)
+    cfg, initial = mcs_setup._init_config_snapshot()
+    cloud = {'mode': 'off', 'provider': 'anthropic', 'provider_profiles': {'anthropic': {}},
+             'provider_budgets': cfg['cloud_llm']['provider_budgets']}
+    set_args = ['cloud_llm=' + json.dumps(cloud)]
+    assert mcs_setup._init_apply_set_overrides(cfg, set_args) is None
+    mcs_setup._init_reselect_provider(cfg, initial, set_args)
+    mcs_setup._init_save_config(cfg, initial, SimpleNamespace(_config_publication_started=False))
+    saved = _read(root, owners)
+    assert saved['providers']['anthropic']['profiles'] == {}
+    assert saved['providers']['openai'] == providers['openai']
+
+
 def test_split_init_rechecks_after_own_directory_changes(split):
     root, providers, owners = split
     cfg, initial = mcs_setup._init_config_snapshot()
