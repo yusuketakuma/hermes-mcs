@@ -56,7 +56,7 @@ def test_backfill_replay_records_each_coverage_gap_once(tmp_path):
     db = _ledger(tmp_path)
     for pid, mid in ((1, 100), (2, 200)):
         db.ensure_patient(pid)
-        db.save_messages([_message(mid=mid, project_id=pid)])
+        db.save_messages([_message(mid=mid, project_id=pid, posted_at="2026-09-19T00:00:00+09:00")])
         db.set_history_floor(pid, 0)
         db.set_coverage(pid, db.high_watermark(pid))
     items = [{"id": mid, "comment": "synthetic post",

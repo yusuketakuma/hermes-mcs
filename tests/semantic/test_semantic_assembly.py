@@ -104,7 +104,7 @@ def test_cached_rebuild_refuses_an_unfinished_relation_set(request, monkeypatch)
     changes = ledger.db.total_changes
     comparisons = []
 
-    def incomplete(active, facts, *, deadline=None):
+    def incomplete(active, facts, *, deadline=None, rule=None):
         assert active == [] and len(facts) == 2 and deadline is None
         comparisons.append(True)
         return {"relations": [], "pairs_skipped": 1}

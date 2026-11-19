@@ -159,8 +159,10 @@ def seed(led, mid=1, pid=1, body='生活環境: 合成の居住記録。', state
     led.db.execute('INSERT OR IGNORE INTO patients(project_id,patient_name) VALUES (?,?)',
                    (pid, f'synthetic-{pid}'))
     led.db.commit()
-    message_kw = {'posted_at': posted_at} if posted_at is not None else {}
-    led.save_messages([_message(mid, body, state, project_id=pid, **message_kw)])
+    # shortcut: default posted_at tracks the frozen fixture wall (first_seen below);
+    # a real-clock default would post messages from the future under the mock clock.
+    led.save_messages([_message(mid, body, state, project_id=pid,
+                                posted_at=posted_at or '2026-10-17T22:00:00+09:00')])
     led.db.execute('UPDATE messages SET first_seen=? WHERE message_id=?',
                    (stamp('2026-10-17T22:00:00'), mid))
     # The normal synthetic fixture has exhausted history; partial acquisition is explicit.
@@ -222,14 +224,15 @@ def _prepare_summary(runtime, *, cfg=CFG):
 @pytest.mark.parametrize('new_arrivals', [False, True])
 def test_worker_rotates_ready_patients_despite_clock_and_new_arrivals(runtime, offsets, new_arrivals):
     led, clock, _ = runtime
+    posted_at = '2026-09-19T00:00:00+09:00'
     for pid in (1, 2, 3):
-        seed(led, mid=pid, pid=pid)
+        seed(led, mid=pid, pid=pid, posted_at=posted_at)
     started = clock.wall
     selected = []
     for index, offset in enumerate(offsets):
         clock.wall = started + offset
         if new_arrivals and index:
-            seed(led, mid=10 + index, pid=1)
+            seed(led, mid=10 + index, pid=1, posted_at=posted_at)
         outcome = step(runtime)
         assert outcome['status'] == 'progressed', outcome
         selected.append(led.db.execute(
@@ -1122,8 +1125,9 @@ def test_summary_budget_preserves_complete_source_reports_in_detail(runtime, mon
 
 def test_linked_summary_checkpoint_has_no_fake_message_reference(runtime):
     led, _, calls = runtime
-    seed(led)
-    seed(led, mid=2, pid=2)
+    posted_at = '2026-09-19T00:00:00+09:00'
+    seed(led, posted_at=posted_at)
+    seed(led, mid=2, pid=2, posted_at=posted_at)
     led.db.execute("UPDATE patients SET karte_id=10 WHERE project_id=1")
     led.db.commit()
     led.karte_summary_store(1, 10, {
@@ -1291,6 +1295,24 @@ def test_turn_wait_expiry_defers_without_charging_the_patient(monkeypatch):
     monkeypatch.setattr(context_refresh.local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(context_refresh.local_llm, "resolve", lambda cfg: ("http://127.0.0.1:8080", "synthetic"))
     with pytest.raises(patient_context_refresh_state.Deferred, match="patient_context_turn_busy"):
+        patient_context_quality_controller._ask({}, {}, patient_context_refresh_state.time.monotonic() + 600, lambda: True)
+
+
+@pytest.mark.parametrize("outcome,reason", [
+    ({"kind": "unreachable"}, "patient_context_endpoint_unsent"),
+    ({"kind": "not_sent"}, "patient_context_endpoint_unsent"),
+    ({"status": 503}, "patient_context_endpoint_unavailable"),
+])
+def test_never_sent_or_503_defers_without_charging_the_patient(monkeypatch, outcome, reason):
+    def refused(prompt, error_out=None, **kw):
+        if "kind" in outcome:
+            error_out["kind"] = outcome["kind"]
+            return None
+        return {"status": outcome["status"], "text": "", "finish_reason": None}
+    monkeypatch.setattr(context_refresh.local_llm, "chat", refused)
+    monkeypatch.setattr(context_refresh.local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(context_refresh.local_llm, "resolve", lambda cfg: ("http://127.0.0.1:8080", "synthetic"))
+    with pytest.raises(patient_context_refresh_state.Deferred, match=reason):
         patient_context_quality_controller._ask({}, {}, patient_context_refresh_state.time.monotonic() + 600, lambda: True)
 
 

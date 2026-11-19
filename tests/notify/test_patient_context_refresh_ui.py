@@ -209,13 +209,16 @@ def test_pagination_preserves_quotes_and_sources(led, monkeypatch):
 def test_intervention_history_reaches_older_posts_without_crossing_patient_scope(led):
     spec = _delivered_card(led)
     older = "看護師が2026年11月3日に本人を訪問する予定です。"
-    led.save_messages([_message(1000, body=older)] +
+    posted_at = '2026-09-19T00:00:00+09:00'
+    led.save_messages([_message(1000, body=older, posted_at=posted_at)] +
                       [_message(mid, body=(f"看護師が2026年11月{mid - 1189}日に本人を訪問する予定です。"
-                                           if mid >= 1190 else "完全合成の一般連絡です。"))
+                                           if mid >= 1190 else "完全合成の一般連絡です。"),
+                               posted_at=posted_at)
                        for mid in range(1001, 1202)],
                       project_id=1)
     led.ensure_patient(2)
-    led.save_messages([_message(2000, pid=2, body="医師が2026年11月3日に本人を往診する予定です。")], project_id=2)
+    led.save_messages([_message(2000, pid=2, body="医師が2026年11月3日に本人を往診する予定です。",
+                                posted_at=posted_at)], project_id=2)
     previsit = open_section(led, spec, entry=2)
     start = next(button for button in previsit["navigation"] if button["label"] == "介入の履歴を見る")
     history = click(led, start["token"], now=NOW + 1)

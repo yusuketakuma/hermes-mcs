@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "カードの再更新で緊急度の再通知時刻がずれる問題と、送信待ちでカードが再送停止になる問題を修正",
+  "summary": "受理済みの新着通知は、同じカードが後で更新されても最初の受理時刻を保ちます。このため緊急度の段階通知（urgency_escalation を有効にしている場合）が、カードの再描画のたびに抑止・延期されなくなります。また LINE WORKS で別の送信が送信ロックを使っている間に起きた送信待ち（sender_busy）は、自動再送の上限3回に数えなくなり、未送信のカードが再送停止のまま残りません。",
+  "upgrade": "追加操作は不要です。反映には通知処理の再起動（Hermes gateway、LINE WORKS は独立アダプター）が必要です。設定・既定値の変更はありません。",
+  "details": [
+    "complete_intent は notify_outbox がすでに accepted の行の受理時刻を書き換えない。添付の後続投稿の確認は従来どおり毎回行う（重複投入はしない）。",
+    "resend_exhausted が数える実失敗から、何も送っていないことが確かな sender_busy を除外する。"
+  ],
+  "refs": ["mcs/notify/notify_card_state.py"]
+}

@@ -12,7 +12,7 @@ def facts_signature(facts):
 
 def scan_source(source, saved, workday_id, *, answer_for, clock, metrics=None, source_repair=None):
     """Validate one answer through the shared scan and protected-fact rules."""
-    chunks, cursor, saved, items, covered = context_plan.scan_plan(source, saved)
+    chunks, cursor, saved, items = context_plan.scan_plan(source, saved)
     chunk = chunks[cursor]
     offset = sum(map(len, chunks[:cursor]))
     summaries = source.get("derived_summaries", []) if cursor == 0 and source_repair is None else []
@@ -24,110 +24,109 @@ def scan_source(source, saved, workday_id, *, answer_for, clock, metrics=None, s
                 if source_repair is None else source_repair["protected"])
     if source_repair is not None:
         items = []  # No unverified seed from the rejected original candidate.
-    if not covered:
-        payload = {"instruction": context_plan.SCAN_INSTRUCTION,
-            **context_plan.scan_schema(), "already_found": items, "source": chunk}
-        # Repairs replay the original-only wire protocol and keep its paid receipts.
-        if source_repair is None:
-            payload["source_identity"] = {"key": context_plan.source_key(source),
-                "signature": context_plan.source_signature(source), "span": [offset, offset + len(chunk)],
-                "content_hash": source.get("content_hash")}
-        if summaries:
-            payload["instruction"] += "derived_summariesは原文から作られた補助要約で、事実の根拠ではありません。引用はsourceだけから選ぶ。"
-        if source_repair is not None:
-            payload["source_quality_findings"] = source_repair["codes"]
-        def asked(body):
-            """The answer, or the finer re-plan when it stopped at the answer budget."""
-            try:
-                pages = []
-                if summaries:
-                    # Leave envelope room and allow six-character JSON escapes.
-                    room = context_plan.MAX_PROMPT_CHARS - len(json.dumps(body, ensure_ascii=False)) - 512
-                    if room < 6:
-                        raise ValueError("patient_context_prompt_capacity")
-                    width = min(context_plan.SCAN_CHUNK, room // 6)
-                    for summary in summaries:
-                        start = 0
-                        for text in context_plan.plan_chunks(summary["text"], width):
-                            # Pages carry what the source signature binds, not the artifact id.
-                            pages.append({"kind": summary["kind"], "text": text,
-                                          "span": [start, start + len(text)], "length": len(summary["text"])})
-                            start += len(text)
-                groups, group = [], []
-                for page in pages:
-                    if group and len(json.dumps({**body, "derived_summaries": group + [page]},
-                                                ensure_ascii=False)) > context_plan.MAX_PROMPT_CHARS:
-                        groups.append(group)
-                        group = []
-                    group.append(page)
-                if group:
+    payload = {"instruction": context_plan.SCAN_INSTRUCTION,
+        **context_plan.scan_schema(), "already_found": items, "source": chunk}
+    # Repairs replay the original-only wire protocol and keep its paid receipts.
+    if source_repair is None:
+        payload["source_identity"] = {"key": context_plan.source_key(source),
+            "signature": context_plan.source_signature(source), "span": [offset, offset + len(chunk)],
+            "content_hash": source.get("content_hash")}
+    if summaries:
+        payload["instruction"] += "derived_summariesは原文から作られた補助要約で、事実の根拠ではありません。引用はsourceだけから選ぶ。"
+    if source_repair is not None:
+        payload["source_quality_findings"] = source_repair["codes"]
+    def asked(body):
+        """The answer, or the finer re-plan when it stopped at the answer budget."""
+        try:
+            pages = []
+            if summaries:
+                # Leave envelope room and allow six-character JSON escapes.
+                room = context_plan.MAX_PROMPT_CHARS - len(json.dumps(body, ensure_ascii=False)) - 512
+                if room < 6:
+                    raise ValueError("patient_context_prompt_capacity")
+                width = min(context_plan.SCAN_CHUNK, room // 6)
+                for summary in summaries:
+                    start = 0
+                    for text in context_plan.plan_chunks(summary["text"], width):
+                        # Pages carry what the source signature binds, not the artifact id.
+                        pages.append({"kind": summary["kind"], "text": text,
+                                      "span": [start, start + len(text)], "length": len(summary["text"])})
+                        start += len(text)
+            groups, group = [], []
+            for page in pages:
+                if group and len(json.dumps({**body, "derived_summaries": group + [page]},
+                                            ensure_ascii=False)) > context_plan.MAX_PROMPT_CHARS:
                     groups.append(group)
-                answers = [answer_for({**body, **({"derived_summaries": group} if group else {})})
-                           for group in groups or [None]]
-                if len(answers) == 1:
-                    return answers[0], None
-                merged = []
-                for answer in answers:
-                    if (not isinstance(answer, dict) or set(answer) != {"patient_context"}
-                            or not isinstance(answer["patient_context"], list)):
-                        return answer, None
-                    for item in answer["patient_context"]:
-                        if item not in merged:
-                            merged.append(item)
-                return {"patient_context": merged}, None
-            except ValueError as exc:
-                finer = str(exc) == "patient_context_length_stop" and context_plan.split_scan(source, saved, cursor)
-                if not finer:
-                    raise
-                # nothing was accepted from this chunk: resume on the finer plan, keeping facts
-                return None, {**finer, "complete": False, "facts": saved.get("facts", []), "audited": False,
-                              **({"repairs": repairs} if repairs else {})}
-        answer, replan = asked(payload)
+                    group = []
+                group.append(page)
+            if group:
+                groups.append(group)
+            answers = [answer_for({**body, **({"derived_summaries": group} if group else {})})
+                       for group in groups or [None]]
+            if len(answers) == 1:
+                return answers[0], None
+            merged = []
+            for answer in answers:
+                if (not isinstance(answer, dict) or set(answer) != {"patient_context"}
+                        or not isinstance(answer["patient_context"], list)):
+                    return answer, None
+                for item in answer["patient_context"]:
+                    if item not in merged:
+                        merged.append(item)
+            return {"patient_context": merged}, None
+        except ValueError as exc:
+            finer = str(exc) == "patient_context_length_stop" and context_plan.split_scan(source, saved, cursor)
+            if not finer:
+                raise
+            # nothing was accepted from this chunk: resume on the finer plan, keeping facts
+            return None, {**finer, "complete": False, "facts": saved.get("facts", []), "audited": False,
+                          **({"repairs": repairs} if repairs else {})}
+    answer, replan = asked(payload)
+    if replan:
+        return replan
+    try:
+        checked = context_plan.scan_items(answer, chunk)
+    except ValueError as exc:
+        if str(exc) == "patient_context_scan_capacity":
+            finer = context_plan.split_scan(source, saved, cursor)
+            if finer:
+                return {**finer, "complete": False, "facts": [], "audited": False, "repairs": repairs}
+            raise ValueError("patient_context_unsplittable_assertion") from exc
+        if str(exc) == "patient_context_invalid_items" and source_repair is None:
+            # a malformed answer on an over-dense chunk gets the same finer
+            # re-plan as a length stop; each finer chunk is still validated whole
+            finer = context_plan.split_scan(source, saved, cursor)
+            if finer:
+                return {**finer, "complete": False, "facts": saved.get("facts", []),
+                        "audited": False, **({"repairs": repairs} if repairs else {})}
+            raise
+        if str(exc) != "patient_context_unsupported_items" or source_repair is not None:
+            raise
+        # one bounded repair: name the refused items by index and fixed reason only;
+        # it must pass whole and keep every item that already passed on its own
+        kept = context_plan.grounded_items(answer, chunk)
+        if metrics is not None:
+            metrics["rejected"] = len(context_plan.rejected_items(answer, chunk))
+        answer, replan = asked({**payload, "instruction": payload["instruction"]
+                                + "前回の回答のrejectedの項目は、原文と完全一致しないか、属性が引用の中にありません。"
+                                "原文に完全一致する引用だけでJSON全体を返し直す。裏付けできない項目は含めない。",
+                                "rejected": context_plan.rejected_items(answer, chunk)})
         if replan:
             return replan
         try:
             checked = context_plan.scan_items(answer, chunk)
-        except ValueError as exc:
-            if str(exc) == "patient_context_scan_capacity":
-                finer = context_plan.split_scan(source, saved, cursor)
-                if finer:
-                    return {**finer, "complete": False, "facts": [], "audited": False, "repairs": repairs}
-                raise ValueError("patient_context_unsplittable_assertion") from exc
-            if str(exc) == "patient_context_invalid_items" and source_repair is None:
-                # a malformed answer on an over-dense chunk gets the same finer
-                # re-plan as a length stop; each finer chunk is still validated whole
-                finer = context_plan.split_scan(source, saved, cursor)
-                if finer:
-                    return {**finer, "complete": False, "facts": saved.get("facts", []),
-                            "audited": False, **({"repairs": repairs} if repairs else {})}
-                raise
-            if str(exc) != "patient_context_unsupported_items" or source_repair is not None:
-                raise
-            # one bounded repair: name the refused items by index and fixed reason only;
-            # it must pass whole and keep every item that already passed on its own
-            kept = context_plan.grounded_items(answer, chunk)
-            if metrics is not None:
-                metrics["rejected"] = len(context_plan.rejected_items(answer, chunk))
-            answer, replan = asked({**payload, "instruction": payload["instruction"]
-                                    + "前回の回答のrejectedの項目は、原文と完全一致しないか、属性が引用の中にありません。"
-                                    "原文に完全一致する引用だけでJSON全体を返し直す。裏付けできない項目は含めない。",
-                                    "rejected": context_plan.rejected_items(answer, chunk)})
-            if replan:
-                return replan
-            try:
-                checked = context_plan.scan_items(answer, chunk)
-                if any(item not in checked for item in kept):
-                    raise ValueError("patient_context_unsupported_items")
-            except ValueError:
-                # the bounded repair could not ground this chunk either: resume on
-                # the finer plan instead of failing the whole source at this size
-                finer = context_plan.split_scan(source, saved, cursor)
-                if finer:
-                    return {**finer, "complete": False, "facts": saved.get("facts", []),
-                            "audited": False, **({"repairs": repairs} if repairs else {})}
-                raise
-            repairs += 1
-        items += checked
+            if any(item not in checked for item in kept):
+                raise ValueError("patient_context_unsupported_items")
+        except ValueError:
+            # the bounded repair could not ground this chunk either: resume on
+            # the finer plan instead of failing the whole source at this size
+            finer = context_plan.split_scan(source, saved, cursor)
+            if finer:
+                return {**finer, "complete": False, "facts": saved.get("facts", []),
+                        "audited": False, **({"repairs": repairs} if repairs else {})}
+            raise
+        repairs += 1
+    items += checked
     if metrics is not None:
         metrics.setdefault("rejected", 0)
         metrics["repairs"] = repairs - prior_repairs

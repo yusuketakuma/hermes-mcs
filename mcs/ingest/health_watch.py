@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 import safe_io  # noqa: E402
+import writer_lock  # noqa: E402
 
 from mcs_queries import JST
 from health_policy import (CARD_STALL_S, HEALTH_REL, STATUS_MAX_BYTES, RUN_GRACE_S,
@@ -51,6 +52,7 @@ TRANSIENT_REASONS = frozenset({"stage_errors", "run_deadline_exceeded", "collect
                                "notification_pending", "notification_parts_incomplete",
                                "notification_cards_unavailable",
                                "notification_pending_unavailable",
+                               "notification_delivery_unverified",
                                "provider_settings_unreadable"})
 STREAK_ALERT = 3
 CONFIG_BLOCKED = "provider_settings_unreadable"
@@ -61,9 +63,40 @@ UNKNOWN_HISTORY = 50        # retained uncertain-delivery records
 OVERALL_STATUS = {"ok": "ok", "degraded": "degraded",
                   "failed": "failed"}
 
+_DELIVERY_CURRENT = {
+    "waiting_without_progress": "notification_delivery_waiting",
+    "outcome_unconfirmed": "notification_delivery_outcome_unconfirmed",
+}
+_DELIVERY_UNVERIFIED = "notification_delivery_unverified"
+_DELIVERY_UNRESOLVED = frozenset((*_DELIVERY_CURRENT.values(), _DELIVERY_UNVERIFIED))
+_RECORDED_DELIVERY_JA = {
+    "worker_start_unverified": "通知workerの起動を確認できない記録",
+    "worker_start_failed": "通知workerの起動失敗",
+    "worker_restart_required": "通知workerの再起動が必要との記録",
+    "route_flags_unready": "通知workerの配送条件が整っていない記録",
+    "profile_mismatch": "通知workerの担当profileの不一致",
+    "owner_unverified": "通知workerの所有profileを確認できない記録",
+    "application_mismatch": "通知先アプリケーションの不一致",
+    "standalone_owned": "独立動作が配送を担当している記録",
+    "card_delivery_stalled": "通知カードの配送停滞",
+    "restore_delivery_held": "復元後の通知の保留",
+    "notification_failed": "通知の送信失敗",
+    "notification_deferred": "通知の先送り",
+    "notification_parked": "通知の待機",
+    "notification_held": "通知の保留",
+    "notification_pending": "通知の送信待ち",
+    "notification_parts_incomplete": "通知の本文・添付の送信完了が未確認",
+    "notification_cards_unavailable": "通知カードの配送状況が未確認",
+    "notification_pending_unavailable": "通知の送信待ち件数が未確認",
+}
+_WORKER_REASONS = frozenset({"worker_started", "worker_start_unverified", "worker_start_failed",
+    "worker_restart_required", "route_flags_unready", "profile_mismatch", "owner_unverified",
+    "application_mismatch", "standalone_owned"})
+
 # runtime_mode=standalone: the host's own status file (mcs_standalone)
 STANDALONE_STATUS_REL = os.path.join("data", "standalone-status.json")
 STANDALONE_HOST_STALE_S = 180      # heartbeat every 5 s; restart throttle 30 s
+STANDALONE_CLOCK_SKEW_S = 2        # same tolerance as mcs_standalone.service.read_status
 STANDALONE_CHILD_FAILURES = 3      # consecutive failed exits of one job
 STANDALONE_CONNECTOR_DOWN_S = 600
 STANDALONE_UPDATE_STUCK_S = 2 * 3600
@@ -134,8 +167,18 @@ def _optional_blocks(h: dict) -> dict:
         interrupt = {"reason": last["reason"], "detected_at": last["detected_at"]}
     from collection_diagnostics import valid_stop
     stop = valid_stop(run.get("stop")) if h.get("run_status") in ("failed", "session_expired") else None
+    jobs = h.get("semantic_jobs") if isinstance(h.get("semantic_jobs"), dict) else {}
+    turns = jobs.get("resident_turns_24h")
+    semantic_detail = {
+        "user_facing_pending": jobs.get("user_facing_pending")
+        if _count(jobs.get("user_facing_pending")) else None,
+        "reprocess_pending": jobs.get("reprocess_pending")
+        if _count(jobs.get("reprocess_pending")) else None,
+        "resident_turns_24h": turns
+        if isinstance(turns, dict) and _count(turns.get("attempts")) and turns["attempts"]
+        and _count(turns.get("lock_busy")) and turns["lock_busy"] <= turns["attempts"] else None}
     return {"notify_wait": wait, "backup_local": backup_local,
-            "last_interrupt": interrupt, "run_stop": stop}
+            "last_interrupt": interrupt, "run_stop": stop, "semantic_detail": semantic_detail}
 
 
 
@@ -274,6 +317,36 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     report['notify_unknown_part_outcomes'] = tracking['unknown'] if tracking else None
     report['notify_active_parts_breakdown'] = (_part_breakdown(tracking, tracking['total'])
         if tracking else report['notify_parts_breakdown'])
+    # the alert must tell a fresh count, a carried one and an unmeasured
+    # one apart: only 'recorded' is the current observation
+    parts_status = parts.get('status') if isinstance(parts, dict) else None
+    measurement = ('unknown' if parts_unknown
+                   else 'stale' if parts_status == 'stale_measurement'
+                   else 'recorded' if parts_status == 'recorded' else None)
+    if measurement is None and isinstance(parts, dict) and 'status' not in parts:
+        # Writers before the status field stored only counts and observed_at;
+        # judge that observation by its own clock — consistent counts with
+        # a fresh clock are a current measurement, with an old clock a past
+        # one, anything else (missing, inconsistent, unreadable) is not a
+        # measurement at all.
+        observed = parts.get('observed_at')
+        if (finite_number(observed) and observed <= now
+                and report['notify_incomplete_parts'] is not None):
+            age = now - observed
+            if age <= CARD_STALL_S:
+                measurement = 'recorded'
+            else:
+                measurement = 'stale'
+        if measurement is None:
+            measurement = 'unknown'
+    report['notify_parts_measurement'] = measurement
+    if report['notify_parts_measurement'] == 'stale':
+        observed = parts.get('observed_at')
+        report['notify_parts_observed_at'] = observed if finite_number(observed) else None
+    elif report['notify_parts_measurement'] == 'unknown':
+        reason = parts.get('reason')
+        report['notify_parts_reason'] = (reason if reason in (
+            'observation_limit', 'observation_unavailable') else None)
     held = notify.get("held_reasons")
     report["held_reasons"] = (
         held if isinstance(held, dict)
@@ -324,10 +397,13 @@ def standalone_host_reasons(home: str, now: float, cfg: dict, *, status=None):
     status = _read_standalone_status(home) if status is None else status
     stamp = status.get("updated_at") if status else None
     if status is None or not finite_number(stamp) or not _pid_alive(status.get("pid")) \
-            or now - stamp > STANDALONE_HOST_STALE_S:
+            or not -STANDALONE_CLOCK_SKEW_S <= now - stamp <= STANDALONE_HOST_STALE_S:
         age = now - stamp if finite_number(stamp) else None
+        # a future stamp (clock rolled back) is not freshness evidence
         return "failed", ["standalone_host_down"], (
-            {"standalone_host_down": f"最終更新 {_hours(age)}前"} if age and age > 0 else {})
+            {"standalone_host_down": f"最終更新 {_hours(age)}前"} if age and age > 0 else
+            {"standalone_host_down": "最終更新が現在より未来"}
+            if age and age < -STANDALONE_CLOCK_SKEW_S else {})
     reasons, details = [], {}
     exits = status.get("exits") if isinstance(status.get("exits"), dict) else {}
     failing = []
@@ -358,10 +434,14 @@ def standalone_host_reasons(home: str, now: float, cfg: dict, *, status=None):
     check = exits.get("mcs_check") if isinstance(exits.get("mcs_check"), dict) else {}
     last_ok = check.get("last_ok_at")
     reference = last_ok if finite_number(last_ok) else status.get("started_at")
-    if finite_number(reference) and now - reference > freshness_deadline(cfg):
-        reasons.append("standalone_check_stalled")
-        details["standalone_check_stalled"] = (f"最終成功 {_hours(now - last_ok)}前"
-                                               if finite_number(last_ok) else "起動後の成功なし")
+    if finite_number(reference):
+        age = now - reference
+        future = age < -STANDALONE_CLOCK_SKEW_S
+        if future or age > freshness_deadline(cfg):
+            reasons.append("standalone_check_stalled")
+            details["standalone_check_stalled"] = (
+                "時刻が現在より未来" if future else
+                f"最終成功 {_hours(age)}前" if finite_number(last_ok) else "起動後の成功なし")
     return ("degraded" if reasons else "ok"), reasons, details
 
 
@@ -406,6 +486,161 @@ def _apply_attachment_ocr(obs: dict, home: str, now: float, cfg: dict) -> None:
     if bad or old is not None:
         obs["state_reasons"] = reasons
 
+
+def _observe_delivery(home: str, cfg: dict, now: float):
+    import health_delivery
+    return health_delivery.observe(home, cfg, now)
+
+
+def _delivery_snapshot(value, now: float):
+    """Keep only bounded, fixed-code observations from the independent reader."""
+    if (not finite_number(now) or now < 0 or not isinstance(value, dict)
+            or not finite_number(value.get("observed_at"))
+            or value["observed_at"] != now):
+        return None
+    worker, delivery, restart = (value.get(key) for key in ("worker", "delivery", "restart_request"))
+    if not all(isinstance(row, dict) for row in (worker, delivery, restart)):
+        return None
+    if (worker.get("state") not in ("started", "disabled", "unknown")
+            or not isinstance(worker.get("reason"), str) or worker["reason"] not in _WORKER_REASONS
+            or delivery.get("state") not in (*_DELIVERY_CURRENT, "progressing", "pending", "idle", "unknown")
+            or restart.get("state") not in ("requested", "unknown", "failed",
+                                             "supervisor_restart_verified", "unverified")):
+        return None
+    issues = delivery.get("issues") if "issues" in delivery else (
+        [delivery["state"]] if delivery["state"] in _DELIVERY_CURRENT else [])
+    if (not isinstance(issues, list)
+            or any(not isinstance(issue, str) or issue not in _DELIVERY_CURRENT for issue in issues)
+            or issues != [issue for issue in _DELIVERY_CURRENT if issue in issues]
+            or (bool(issues) != (delivery["state"] in _DELIVERY_CURRENT))
+            or issues and delivery["state"] != issues[0]):
+        return None
+    queued, sending, unknown = (delivery.get(key) for key in ("queued", "sending", "unknown"))
+    if any(count is not None and not _count(count) for count in (queued, sending, unknown)):
+        return None
+    stamps = (worker.get("started_at"), delivery.get("oldest_created_at"),
+              delivery.get("last_progress_at"), restart.get("at"))
+    if any(stamp is not None and (not finite_number(stamp) or not 0 <= stamp <= now)
+           for stamp in stamps):
+        return None
+    if (issues and None in (queued, sending, unknown)
+            or "waiting_without_progress" in issues and (
+            not queued or stamps[1] is None or now - stamps[1] <= CARD_STALL_S
+            or stamps[2] is not None and now - stamps[2] <= CARD_STALL_S)
+            or "outcome_unconfirmed" in issues and not (sending or unknown)
+            or delivery["state"] in ("idle", "progressing") and None in (queued, sending, unknown)
+            or delivery["state"] == "progressing" and (
+                unknown != 0 or stamps[2] is None or now - stamps[2] > CARD_STALL_S)
+            or delivery["state"] == "pending" and (
+                None in (queued, sending, unknown) or unknown != 0 or not (queued or sending)
+                or queued and (stamps[1] is None or now - stamps[1] > CARD_STALL_S)
+                or stamps[2] is not None and now - stamps[2] <= CARD_STALL_S)
+            or delivery["state"] == "idle" and any((queued, sending, unknown))):
+        return None
+    return {
+        "observed_at": now,
+        "worker": {key: worker.get(key) for key in ("state", "reason", "started_at")},
+        "delivery": {**{key: delivery.get(key) for key in (
+            "state", "queued", "sending", "unknown", "oldest_created_at", "last_progress_at")},
+            "issues": list(issues)},
+        "restart_request": {key: restart.get(key) for key in ("state", "at")},
+    }
+
+
+def _add_delivery_reason(obs: dict, reason: str) -> None:
+    reasons = obs.get("state_reasons")
+    if reason == _DELIVERY_UNVERIFIED and not reasons and obs["status"] in ("degraded", "failed"):
+        return  # an unknown cause stays unknown: a transient probe note must not delay its alert
+    obs["state_reasons"] = [reason] + [r for r in reasons or [] if r != reason]
+    if obs["status"] == "ok":
+        obs["status"] = "degraded"
+
+
+def _apply_delivery_observation(obs: dict, state: dict, home: str, now: float,
+                                cfg: dict, *, config_blocked: bool) -> bool:
+    """Add current delivery evidence without treating an old receipt as a cause."""
+    if config_blocked:
+        return False
+    previous = state.get("delivery_current_reason")
+    if not isinstance(previous, str) or previous not in _DELIVERY_UNRESOLVED:
+        previous = None
+    notify = cfg.get("notify", {}) if isinstance(cfg, dict) else None
+    mode = cfg.get("runtime_mode", "hermes") if isinstance(cfg, dict) else None
+    if mode not in ("hermes", "standalone") or not isinstance(notify, dict):
+        if previous in _DELIVERY_UNRESOLVED:
+            _add_delivery_reason(obs, _DELIVERY_UNVERIFIED)
+        return False
+    try:
+        import mcs_config
+        import notify_scope
+        from mcs_util import payload_hash, valid_hash
+        if (mcs_config.validate_notify(notify) or mode == "standalone" and (
+                mcs_config.validate_standalone(cfg) or mcs_config.validate_standalone_scope(cfg)
+                or any(key in cfg and mcs_config.CONFIG_RULES[key][1](cfg[key])
+                       for key in ("notify_target", "notify_system_target")))):
+            if previous in _DELIVERY_UNRESOLVED:
+                _add_delivery_reason(obs, _DELIVERY_UNVERIFIED)
+            return False
+        if mode == "standalone" or notify.get("interactive", "off") in ("off", "lineworks"):
+            scope_changed = "delivery_current_scope" in state or "delivery_current_reason" in state
+            state.pop("delivery_current_reason", None)
+            state.pop("delivery_current_scope", None)
+            return scope_changed
+        if notify.get("interactive") not in ("slack", "discord"):
+            if previous in _DELIVERY_UNRESOLVED:
+                _add_delivery_reason(obs, _DELIVERY_UNVERIFIED)
+            return False
+        scope = notify_scope.delivery_scope(cfg)
+        if scope is None:
+            if previous in _DELIVERY_UNRESOLVED:
+                _add_delivery_reason(obs, _DELIVERY_UNVERIFIED)
+            return False
+        scope_id = payload_hash({"scope": scope, "epoch": notify_scope.route_epoch(cfg)})
+        prior_scope = state.get("delivery_current_scope")
+        if previous in _DELIVERY_UNRESOLVED and not valid_hash(prior_scope):
+            _add_delivery_reason(obs, _DELIVERY_UNVERIFIED)
+            return False
+        scope_changed = valid_hash(prior_scope) and prior_scope != scope_id
+        state["delivery_current_scope"] = scope_id
+        if scope_changed and previous in _DELIVERY_UNRESOLVED:
+            previous = _DELIVERY_UNVERIFIED
+            state["delivery_current_reason"] = previous
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        if previous in _DELIVERY_UNRESOLVED:
+            _add_delivery_reason(obs, _DELIVERY_UNVERIFIED)
+        return False
+    try:
+        snapshot = _delivery_snapshot(_observe_delivery(home, cfg, now), now)
+    except Exception:  # the independent probe must never suppress existing health alerts
+        snapshot = None
+    if snapshot is not None:
+        obs["delivery_observation"] = snapshot
+    current = snapshot["delivery"]["state"] if snapshot is not None else "unknown"
+    if current in ("unknown", "pending"):
+        reasons = ([_DELIVERY_UNVERIFIED] if current == "unknown" or previous in _DELIVERY_UNRESOLVED
+                   else [])
+    else:
+        reasons = [_DELIVERY_CURRENT[issue] for issue in snapshot["delivery"]["issues"]]
+    if reasons:
+        state["delivery_current_reason"] = reasons[0]
+        state["delivery_current_scope"] = scope_id
+    else:
+        state.pop("delivery_current_reason", None)
+    for reason in reversed(reasons):
+        _add_delivery_reason(obs, reason)
+    return scope_changed
+
+
+def _recorded_delivery_reasons(obs: dict, now: float) -> list[str]:
+    """Select old delivery facts without promoting them to current causes."""
+    at, reasons = obs.get("health_at"), obs.get("recorded_state_reasons")
+    if (obs.get("status") != "stale" or not finite_number(at) or not 0 <= at <= now
+            or not isinstance(reasons, list)):
+        return []
+    return list(dict.fromkeys(reason for reason in reasons
+                              if isinstance(reason, str) and reason in _RECORDED_DELIVERY_JA))
+
+
 def _apply_config_blocked(obs: dict) -> None:
     """The watcher's own strict settings read failed: name it as current
     evidence (a settings commit window is brief, so it alerts by streak)."""
@@ -447,8 +682,12 @@ def _alert_reasons(obs: dict) -> list:
     return [r for r in obs.get("state_reasons") or [] if r.split(":")[0] != "code_changed"]
 
 
-def _streak(state: dict, obs: dict) -> tuple[dict | None, bool]:
-    """(streak block to persist, whether it can be trusted for holding an alert back)."""
+def _streak(state: dict, obs: dict, *, fresh=()) -> tuple[dict | None, bool]:
+    """(streak block to persist, whether it can be trusted for holding an alert back).
+
+    ``fresh`` names transient reasons whose previous count and first
+    observation belong to another target: a delivery-scope switch must not
+    carry one target's failures into the next target's first observation."""
     prior = state.get("streak")
     valid = "streak" not in state or (
         isinstance(prior, dict) and finite_number(prior.get("health_at"))
@@ -460,11 +699,26 @@ def _streak(state: dict, obs: dict) -> tuple[dict | None, bool]:
         return (prior if valid else None), valid      # not a fresh observation: nothing to count
     reasons = {r.split(":")[0] for r in _alert_reasons(obs)} & TRANSIENT_REASONS
     if valid and prior and at == prior["health_at"]:
-        return prior, True                            # the same observation read again
+        if not fresh:
+            return prior, True                        # the same observation read again
+        # a scope switch under an unchanged observation still restarts the
+        # named reasons: they now belong to the new target's first reading
+        count = dict(prior["count"])
+        first = dict(prior["first_at"])
+        for r in reasons:
+            if r in fresh:
+                count[r] = 1
+                first[r] = at
+        return {"health_at": at, "count": count, "first_at": first}, True
     newer = bool(valid and prior and at > prior["health_at"])
-    count = {r: (prior["count"].get(r, 0) + 1 if newer else 1) for r in reasons}
-    first = {r: (prior["first_at"].get(r, at) if newer and r in prior["count"] else at)
-             for r in reasons}
+
+    def _carry(r):
+        if not newer or r in fresh or r not in prior["count"]:
+            return 0, at
+        return prior["count"][r], prior["first_at"].get(r, at)
+
+    count = {r: _carry(r)[0] + 1 for r in reasons}
+    first = {r: _carry(r)[1] for r in reasons}
     return {"health_at": at, "count": count, "first_at": first}, valid
 
 
@@ -535,9 +789,14 @@ def evaluate(home: str = HOME, now: float | None = None,
     if isinstance(cfg, dict) and cfg.get("runtime_mode") == "standalone":
         _apply_standalone(obs, home, now, cfg)
     _apply_attachment_ocr(obs, home, now, cfg)
+    state = load_config(state_path)
+    previous_delivery = state.get("delivery_current_reason")
+    if not isinstance(previous_delivery, str) or previous_delivery not in _DELIVERY_UNRESOLVED:
+        previous_delivery = None
+    delivery_scope_changed = _apply_delivery_observation(obs, state, home, now, cfg,
+                                                         config_blocked=config_blocked)
     if config_blocked:
         _apply_config_blocked(obs)
-    state = load_config(state_path)
     last = state.get("last")
     last = last if isinstance(last, dict) else {}
     key = (obs["status"],
@@ -547,8 +806,24 @@ def evaluate(home: str = HOME, now: float | None = None,
                 else None)
     prior_known = bool(last)
     transition = key != last_key
+    recorded = _recorded_delivery_reasons(obs, now)
+    recorded_seen = state.get("alerted_recorded_delivery_reasons")
+    if last.get("status") != "stale":
+        recorded_seen = set()
+    elif recorded_seen is None:
+        recorded_seen = set(recorded)  # an old state cannot prove these records are new
+    else:
+        recorded_seen = (set(recorded_seen) if isinstance(recorded_seen, list)
+                         and all(isinstance(r, str) and r in _RECORDED_DELIVERY_JA for r in recorded_seen)
+                         else set())
+    recorded_new = bool(obs["status"] == "stale" and last.get("status") == "stale"
+                        and set(recorded) - recorded_seen)
+    if recorded:
+        obs["recorded_delivery_reasons"] = recorded
     recovered_from = None
-    if transition and obs["status"] == "ok" and isinstance(last.get("status"), str):
+    if (transition and not (delivery_scope_changed and previous_delivery in _DELIVERY_UNRESOLVED)
+            and obs["status"] == "ok"
+            and isinstance(last.get("status"), str)):
         # Only a fresh in-deadline 'ok' file ends an episode. No notice is
         # sent (owner decision, 1.0.16); the bounded record is the history.
         recovered_from = last["status"]
@@ -578,6 +853,8 @@ def evaluate(home: str = HOME, now: float | None = None,
     else:
         seen = (set(seen) if isinstance(seen, list)
                 and all(isinstance(r, str) for r in seen) else set())
+    if delivery_scope_changed:
+        seen.difference_update(_DELIVERY_UNRESOLVED)
     # a stale file's own codes are not current, but the standalone
     # host's evidence merged into it is (a host that died mid-episode)
     gained = set(reasons) - seen
@@ -585,7 +862,8 @@ def evaluate(home: str = HOME, now: float | None = None,
                   and obs["status"] != "ok"
                   and (obs["status"] != "stale"
                        or any(r.startswith(("standalone_", "attachment_ocr_", CONFIG_BLOCKED))
-                              for r in gained)))
+                              or r in _DELIVERY_CURRENT.values()
+                              for r in gained))) or recorded_new
     from mcs_util import valid_hash
     ocr_detail = obs.get('attachment_ocr') or {}
     cohort = ocr_detail.get('failure_cohort')
@@ -608,8 +886,13 @@ def evaluate(home: str = HOME, now: float | None = None,
     episode_reasons = episode.get("reasons")
     episode_reasons = (set(episode_reasons) if isinstance(episode_reasons, list)
                        and all(isinstance(r, str) for r in episode_reasons) else None)
+    if delivery_scope_changed and episode_reasons is not None:
+        # A later fault in the new scope must not inherit the old scope's reflap suppression.
+        episode_reasons.difference_update(_DELIVERY_UNRESOLVED)
+        state["alerted_episode"] = {**episode, "reasons": sorted(episode_reasons)}
     reflap = (transition and obs["status"] == "degraded"
               and episode.get("status") == "degraded" and not realert
+              and not (delivery_scope_changed and set(reasons) & _DELIVERY_UNRESOLVED)
               and episode_reasons is not None and set(reasons) <= episode_reasons)
     if reflap:
         seen = set(episode_reasons)
@@ -619,7 +902,8 @@ def evaluate(home: str = HOME, now: float | None = None,
         and ocr_detail.get('alert_required') is False)
     alert = not acknowledged_ocr_only and obs["status"] != "ok" and (
         (transition and not reflap) or realert or new_reason)
-    streak, trusted = _streak(state, obs)
+    streak, trusted = _streak(state, obs,
+                               fresh=_DELIVERY_UNRESOLVED if delivery_scope_changed else ())
     trusted = trusted and not _state_unreadable(state_path)
     bases = {r.split(":")[0] for r in reasons}
     transient_only = (obs["status"] == "degraded" and bool(bases)
@@ -647,6 +931,10 @@ def evaluate(home: str = HOME, now: float | None = None,
     report.update({"deadline_s": obs.get("deadline_s", deadline), "alert": alert,
                    "disk_low": disk_low, "disk_alert": disk_alert,
                    "watched_at": now, "alert_held": held})
+    # Informational only: why scheduled collection is yielding right now.
+    pause = writer_lock.gateway_restart_pause(os.path.join(home, "data"), now)
+    if pause:
+        report["gateway_restart_pause"] = pause
     if recovered_from is not None:
         report["recovered_from"] = recovered_from
     if transient_only and streak and streak["count"]:
@@ -665,6 +953,11 @@ def evaluate(home: str = HOME, now: float | None = None,
                                         else set()))}
     state["alerted_reasons"] = sorted(seen | set(reasons) if alert
                                       else seen)
+    if obs["status"] == "stale":
+        state["alerted_recorded_delivery_reasons"] = sorted(
+            recorded_seen | set(recorded) if alert else recorded_seen)
+    else:
+        state.pop("alerted_recorded_delivery_reasons", None)
     delivery = _reconcile_delivery(state, obs["status"], key, alert,
                                    disk_low, disk_alert, transition,
                                    new_reason or realert, now, alert_active=not acknowledged_ocr_only)
@@ -849,6 +1142,12 @@ _REASON_JA = {
                           f"{_DOCTOR} で保留理由を確認"),
     "notification_pending": ("送信待ちの通知があります",
                              f"{_DOCTOR} で待ちの理由と通知先・gateway の稼働を確認"),
+    "notification_delivery_waiting": ("古い通知が待機し、直近の配送進捗を確認できません",
+                                      "通知先・配送記録と通知workerの稼働状況を確認してください"),
+    "notification_delivery_outcome_unconfirmed": ("通知の送信結果を確認できません",
+        "配送記録と通知先を照合してください。結果が不明な通知は自動で再送しません"),
+    "notification_delivery_unverified": ("現在の通知配送状況を確認できません",
+        "通知先と配送記録、監視の状態を確認してください"),
     "notification_parts_incomplete": ("本文・添付などの送信完了を確認できません",
                                       "配送記録と通知先を照合。送信結果が不明な部品は自動で再送しません"),
     "notification_cards_unavailable": ("通知カードの配送状況を確認できません",
@@ -927,6 +1226,34 @@ _OCR_LOCAL_DEFER_JA = {
     "local_stage_error": ("ローカル解析の処理で異常を記録しました",
                           f"{_DOCTOR} で直近の実行結果を確認してください"),
 }
+# attachment_inference_deferral's llm_* observation codes, phrased as what the
+# page call recorded while it ran — never as the confirmed hold cause.
+_OCR_LLM_DEFER_JA = {
+    "llm_admission": "処理枠の空き待ち",
+    "llm_busy": "処理枠の競合",
+    "llm_checkpoint_unverified": "検証済み記録の未確認",
+    "llm_circuit_open": "呼出回路の停止",
+    "llm_currentness_unverified": "入力の現行性の未確認",
+    "llm_deadline": "処理期限の超過",
+    "llm_endpoint_down": "ローカルLLMの未到達",
+    "llm_local_rebuild_proof_changed": "再構築根拠の変更",
+    "llm_local_rebuild_unverified": "再構築根拠の未確認",
+    "llm_not_sent": "送信前の保留",
+    "llm_probe_unobserved": "形式確認の未観測",
+    "llm_quality_checkpoint_unverified": "品質確認の未検証",
+    "llm_repair_unavailable": "修復呼出の不可",
+}
+
+
+def _ocr_llm_defer_text(reasons) -> str:
+    """Observed call reasons as counts; '' unless the breakdown is usable."""
+    if not isinstance(reasons, dict):
+        return ""
+    return "・".join(f"{_OCR_LLM_DEFER_JA[code]}{count}件"
+                     for code, count in sorted(reasons.items())
+                     if code in _OCR_LLM_DEFER_JA and type(count) is int and count > 0)
+
+
 # runtime_mode=standalone: the host owns the connection and the workers,
 # so the Hermes gateway / per-agent hints do not apply
 _STANDALONE_ACTION = {
@@ -970,17 +1297,31 @@ _AREA_JA = (("semantic", "意味チェック（任意機能）"), ("extract_back
             ("ledger", "保存データ"), ("backup", "バックアップ"), ("access_log", "閲覧・操作記録"))
 
 
-def _jst(ts) -> str:
+def _jst(ts, *, with_year: bool = False) -> str:
     if not finite_number(ts):
         return "不明"
     try:
-        return datetime.fromtimestamp(ts, JST).strftime("%m-%d %H:%M")
+        return datetime.fromtimestamp(ts, JST).strftime("%Y-%m-%d %H:%M" if with_year else "%m-%d %H:%M")
     except (OverflowError, OSError, ValueError):
         return "不明"
 
 
 def _hours(seconds) -> str:
     return f"{seconds / 3600:.1f}時間" if finite_number(seconds) else ""
+
+
+def _semantic_stall_text(age: str, detail, recorded: bool) -> str:
+    """Oldest age plus the recorded split and lock-busy share; unread parts are left out."""
+    parts = [f"最古 {age}"] if age else []
+    detail = detail if isinstance(detail, dict) and not recorded else {}
+    user, again = detail.get("user_facing_pending"), detail.get("reprocess_pending")
+    if user is not None and again is not None:
+        parts.append(f"通知対象{user}件・再処理{again}件")
+    turns = detail.get("resident_turns_24h")
+    if turns:
+        parts.append(f"直近24時間の背景処理{turns['attempts']}回のうち実行ロック待ち"
+                     f"{turns['lock_busy']}回（{turns['lock_busy'] * 100 // turns['attempts']}%）")
+    return f"（{'／'.join(parts)}）" if parts else ""
 
 
 def _measurement_unknown(block, now) -> bool:
@@ -1036,22 +1377,41 @@ def _collection_known_empty(report: dict) -> bool:
             and value["incomplete"]["projects"] == 0 and value["incomplete"]["parent_bodies"] == 0)
 
 
+def _unverified_reason(report: dict, reason: str) -> bool:
+    """Notification evidence that was not measured this run — an
+    unmeasurable count or only a carried value — cannot assert a current
+    delay or defect; a recorded measurement or any other reason can."""
+    base = reason.split(":")[0]
+    if base == "notification_parts_incomplete":
+        return report.get('notify_parts_measurement') != 'recorded'
+    return base in (_DELIVERY_UNVERIFIED, "notification_cards_unavailable",
+                    "notification_pending_unavailable")
+
+
 def _impact(report: dict, reasons) -> str:
     """One sentence a staff member can act on: what is affected and
     whether collection itself is still running."""
     if report["status"] in _SEVERE:
         return "新しい連絡の収集と通知が止まっている可能性があります。"
-    areas = []
+    seen = {}
     for r in reasons or []:
+        verified = not _unverified_reason(report, r)
         for prefix, name in _AREA_JA:
             if r.startswith(prefix):
                 if prefix == "collection_incomplete" and _collection_known_empty(report):
                     name = "収集判定の確認"
-                if name not in areas:
-                    areas.append(name)
+                if name not in seen or (verified and not seen[name]):
+                    seen[name] = verified
+    areas = [n for n, v in seen.items() if v]
+    unchecked = [n for n, v in seen.items() if not v]
     parts = []
     if areas:
         parts.append("・".join(areas) + "に遅れや不具合があります。")
+    if unchecked:
+        if _DELIVERY_UNVERIFIED in reasons:
+            parts.append("通知の状態を確認できません。")
+        else:
+            parts.append("・".join(unchecked) + "の配送状況を今回確認できません。")
     if report.get("run_status") == "ok":
         parts.append("収集は動いています。")
     return "".join(parts) or "稼働状況の確認が必要です。"
@@ -1067,6 +1427,7 @@ _WAIT_JA = {
     "alert_render_live": "緊急通知の送信中",
     "alert_render_issued": "緊急通知の作成待ち",
     "signals_off_sealed": "設定によりシグナル通知を保留",
+    "signals_interactive_off": "カード表示が無効のためシグナル通知を保留",
     "intent_cards_unsettled": "カードの配信完了待ち",
     "intent_cards_issued": "カードの作成待ち",
     "intent_card_delivery_unknown": "カードの配信結果が不明",
@@ -1199,29 +1560,43 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             extra = ((f" {int(n)}件" if finite_number(n) else "") + (f"（最古 {age}）" if age else "")
                      + _wait_summary(report.get("notify_wait"), report.get("observations_recorded", False)))
         elif base == "notification_parts_incomplete":
+            measurement = report.get('notify_parts_measurement')
             n = report.get('notify_active_incomplete_parts', report.get('notify_incomplete_parts'))
-            extra = f" {n}件" if _count(n) else ""
-            detail = _part_breakdown(report.get('notify_active_parts_breakdown', report.get('notify_parts_breakdown')), n)
-            if detail is not None:
-                states, plans = detail['by_state'], detail['by_plan']
-                labels = [('結果不明', states['unknown']), ('未送信', states['not_sent']),
-                          ('処理待ち', states['pending']), ('保留', states['held'])]
-                extra += (f"（現行{plans['current']}・過去{plans['superseded']}／"
-                          + '・'.join(f'{label}{count}' for label, count in labels if count) + '）')
-            unknown = report.get('notify_unknown_part_outcomes')
-            if _count(unknown) and unknown > (detail['by_state']['unknown'] if detail else 0):
-                extra += f"／結果不明の全記録 {unknown}件"
-            closed = report.get('notify_tracking_closed_parts')
-            if _count(closed) and closed:
-                extra += f"／別に運用終了・未回収 {closed}件"
+            if measurement == 'unknown':
+                why = {'observation_limit': '観測が制限時間で打ち切られました',
+                       'observation_unavailable': '観測に失敗しました'}.get(
+                           report.get('notify_parts_reason'), '観測できませんでした')
+                extra = f"（件数は未測定: {why}）"
+                action = "次回の収集で再確認します。続く場合は収集ログを確認"
+            else:
+                extra = f" {n}件" if _count(n) else ""
+                detail = _part_breakdown(report.get('notify_active_parts_breakdown', report.get('notify_parts_breakdown')), n)
+                if detail is not None:
+                    states, plans = detail['by_state'], detail['by_plan']
+                    labels = [('結果不明', states['unknown']), ('未送信', states['not_sent']),
+                              ('処理待ち', states['pending']), ('保留', states['held'])]
+                    extra += (f"（現行{plans['current']}・過去{plans['superseded']}／"
+                              + '・'.join(f'{label}{count}' for label, count in labels if count) + '）')
+                unknown = report.get('notify_unknown_part_outcomes')
+                if _count(unknown) and unknown > (detail['by_state']['unknown'] if detail else 0):
+                    extra += f"／結果不明の全記録 {unknown}件"
+                closed = report.get('notify_tracking_closed_parts')
+                if _count(closed) and closed:
+                    extra += f"／別に運用終了・未回収 {closed}件"
+                if measurement == 'stale':
+                    observed = report.get('notify_parts_observed_at')
+                    extra += (f"（記録時点の観測値: {_jst(observed)}）"
+                              if finite_number(observed) else "（記録時点の観測値）")
         elif base == "access_log_unwritable":
             since = report.get("access_log_since")
             extra = f"（{_jst(since)} から）" if finite_number(since) else ""
         elif base in ("backup_not_verified", "backup_deferred_deadline", "backup_local_overdue"):
             extra = ("" if report.get("observations_recorded")
                      else _backup_local_text(report.get("backup_local")))
-        elif base == "semantic_backlog_stalled" and _hours(oldest.get("semantic_jobs")):
-            extra = f"（最古 {_hours(oldest.get('semantic_jobs'))}）"
+        elif base == "semantic_backlog_stalled":
+            extra = _semantic_stall_text(_hours(oldest.get("semantic_jobs")),
+                                         report.get("semantic_detail"),
+                                         report.get("observations_recorded", False))
         elif base == "disk_low":
             free = report.get("disk_free_mb")
             extra = f"（残り {free} MB）" if finite_number(free) else "（残り 不明）"
@@ -1232,6 +1607,10 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                 observed, todo = _OCR_LOCAL_DEFER_JA[cause]
                 extra = f"（直近の実行の再確認: {observed}）"
                 action = f"{todo}。文字起こしの失敗を示すものではありません"
+            elif isinstance(ocr, dict):
+                seen = _ocr_llm_defer_text(ocr.get("local_llm_defer_reasons"))
+                extra = (f"（保留の原因は未特定。処理中の観測: {seen}）" if seen
+                         else "（直近の実行で保留の原因は特定できていません）")
         elif base == "attachment_ocr_processing_failed":
             ocr = report.get("attachment_ocr")
             if (isinstance(ocr, dict)
@@ -1303,6 +1682,27 @@ def _query_codes(reasons) -> str:
     return ",".join(codes) if codes else "MCS-HLT-UNKNOWN"
 
 
+def _delivery_observation_lines(report: dict) -> list[str]:
+    snapshot = _delivery_snapshot(report.get("delivery_observation"), report.get("watched_at"))
+    if snapshot is None:
+        return []
+    worker, delivery, restart = (snapshot[key] for key in ("worker", "delivery", "restart_request"))
+    worker_label = {"started": "起動済み", "disabled": "起動していない", "unknown": "未確認"}[worker["state"]]
+    restart_label = {"requested": "要求の記録", "unknown": "結果不明", "failed": "失敗の記録",
+                     "supervisor_restart_verified": "gatewayプロセス確認の記録", "unverified": "未確認"}[restart["state"]]
+    queued = str(delivery["queued"]) + "件" if delivery["queued"] is not None else "不明"
+    sending = str(delivery["sending"]) + "件" if delivery["sending"] is not None else "不明"
+    unknown = str(delivery["unknown"]) + "件" if delivery["unknown"] is not None else "不明"
+    return [
+        f"通知の現在の観測（{_jst(snapshot['observed_at'])} JST）: "
+        f"worker {worker_label}（起動 {_jst(worker['started_at'], with_year=True)}）、待機 {queued}、"
+        f"送信中 {sending}、結果不明 {unknown}",
+        f"配送の時刻: 待機中通知の最古の作成 {_jst(delivery['oldest_created_at'], with_year=True)} / "
+        f"直近の進捗 {_jst(delivery['last_progress_at'], with_year=True)}（JST）",
+        f"再起動の記録（{_jst(restart['at'], with_year=True)} JST）: {restart_label}",
+    ]
+
+
 def _alert_lines(report: dict) -> list[str]:
     """Staff-readable alert: severity and status first, then the impact,
     each reason with its next step, timestamps in JST, and the raw codes
@@ -1324,6 +1724,13 @@ def _alert_lines(report: dict) -> list[str]:
         lines.extend(line for line in reason_rows if line not in shared)
         for line in dict.fromkeys(line for line in reason_rows if line in shared):
             lines.append("共通の対処: " + line.removeprefix("　→ "))
+        lines.extend(_delivery_observation_lines(report))
+        recorded = report.get("recorded_delivery_reasons")
+        if status == "stale" and isinstance(recorded, list):
+            past = list(dict.fromkeys(_RECORDED_DELIVERY_JA[code] for code in recorded
+                                      if isinstance(code, str) and code in _RECORDED_DELIVERY_JA))
+            if past:
+                lines.append(f"過去の通知記録（{_jst(report.get('health_at'), with_year=True)} JST）: " + "、".join(past))
         interrupt = report.get("last_interrupt")
         at = report.get("health_at")
         if (interrupt and not report.get("observations_recorded")

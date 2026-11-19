@@ -36,7 +36,7 @@ def test_cloud_guard_resident_refusal_does_not_starve_following_local_source(rou
         if provider is not None:
             attempted.append(provider.message_id)
             if reserved:
-                provider.reserve(provider.client.body('synthetic unresolved input', 100, None), 30)
+                provider.reserve(provider.client.body('synthetic unresolved input', provider.selection['max_tokens'], None), 30)
             raise cloud_inference.CloudObservationIncomplete('synthetic source observation unavailable')
         local.append(body)
         return {'symptoms': []}

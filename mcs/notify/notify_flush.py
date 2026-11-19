@@ -896,6 +896,14 @@ def _record_dispatch_outcome(ledger, ev, res, outcome):
         res["dispatched"] = res.get("dispatched", 0) + 1
 
 
+def _dispatch_committed(ledger, ev) -> bool:
+    """A grouped dispatch that raised after its commit already moved this
+    row (reseat, suppress, accept); a pre-commit failure left it as due."""
+    row = ledger.db.execute("SELECT state,next_try,attempts,progress FROM notify_outbox "
+                            "WHERE event_id=?", (ev["event_id"],)).fetchone()
+    return row is None or any(row[key] != ev[key] for key in ("state", "next_try", "attempts", "progress"))
+
+
 def _dispatch_failed(ledger, ev, res):
     if ev["attempts"] >= 4:
         ledger.outbox_hold(ev["event_id"], "internal_failure")
@@ -1257,12 +1265,40 @@ def _archive_dispatch(ledger, ev, cfg, res):
         res["failed"] += 1
         return
     began = progress.get("sending")
-    if began is not None:
+    if began is not None or not _archive_close_unsent(ledger, ev):
         hold_event(ledger, ev, cfg, reason="send_outcome_unknown", rescue=False)
         res["uncertain"] = res.get("uncertain", 0) + 1
         return
-    ledger.outbox_suppress(ev["event_id"])
     res["suppressed"] += 1
+
+
+def _archive_close_unsent(ledger, ev) -> bool:
+    """Suppress an archived event only when its card/notice sends provably
+    never began; False leaves it for a send_outcome_unknown hold. Card-plane
+    evidence lives in renders/attempts, not in the outbox progress."""
+    import notify_cards
+    db, eid, now = ledger.db, ev["event_id"], time.time()
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        if ev["kind"] == "urgent_notice" or ev["kind"] in notify_cards.NOTICE_KINDS:
+            renders = notify_cards._notice_renders(db, eid)
+            if not notify_cards._notice_unsent(db, renders):
+                return False
+            notify_cards._close_notice(db, eid, renders, now)
+        else:
+            if db.execute(
+                    "SELECT 1 FROM notification_intent_cards ic "
+                    "LEFT JOIN notification_renders r ON r.delivery_id=ic.delivery_id "
+                    "WHERE ic.event_id=? AND (ic.state='delivered' "
+                    "OR r.state IN ('sending','unknown','delivered') OR EXISTS("
+                    "SELECT 1 FROM notification_delivery_attempts a WHERE "
+                    "a.delivery_id=ic.delivery_id AND a.state IN ('granted','unknown'))) LIMIT 1",
+                    (eid,)).fetchone():
+                return False
+            db.execute("UPDATE notify_outbox SET state='suppressed',next_try=NULL,"
+                       "updated_at=? WHERE event_id=?", (now, eid))
+        notify_cards.mark_snapshot_dirty(db)
+    return True
 
 
 def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
@@ -1316,7 +1352,11 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
         except Exception as error:
             outcomes = [error] * len(pending)
         for event, outcome in zip(pending, outcomes, strict=True):
-            if isinstance(outcome, Exception):
+            if isinstance(outcome, Exception) and _dispatch_committed(ledger, event):
+                # publication failed after the commit: the committed state stands
+                # and spool.recover republishes its unpublished spec_json
+                res["publish_failed"] = res.get("publish_failed", 0) + 1
+            elif isinstance(outcome, Exception):
                 _dispatch_failed(ledger, event, res)
             elif outcome.get("deadline"):
                 res["skipped"] += 1

@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "外部AI送信は予約の関数なしでは送らない",
+  "summary": "外部AIへの送信呼出しは、予約の関数が渡されないと送信せず拒否します。呼出し元の取り違えで、上限・予算・承認を通らない送信は起きません。本番の呼出しは常に予約を渡しており、通常の動作は変わりません。",
+  "upgrade": "追加操作は不要です。反映には処理の再起動が必要です。",
+  "details": [
+    "CloudClient.complete は reserve_fn が呼び出せるものでないとき、HTTP 送信の前に ValueError(reserve_fn_invalid) を返します。"
+  ],
+  "refs": [
+    "mcs/llm/transport/cloud_client.py"
+  ]
+}

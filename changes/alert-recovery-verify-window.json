@@ -1,12 +1,19 @@
 {
   "category": "changed",
   "title": "自動復旧する一時障害の通知を復旧確認後まで遅延",
-  "summary": "ヘルス書込み失敗や実行失敗など自動復旧し得るシステムアラートは、発生直後ではなく約20分の検証ウィンドウを置いてから送信可否を判定します。ウィンドウ内に後続の正常なヘルス書込みや成功・部分成功の実行が確認できた場合、通知は静かに抑制されます。復旧しないまま残った障害だけが通知されます。セッション切れ・更新通知など復旧対象でないアラートの即時通知は変更ありません。",
+  "summary": "ヘルス書込み失敗や実行失敗など自動復旧し得るシステムアラートは、発生直後ではなく約20分の検証ウィンドウを置いてから送信可否を判定します。ウィンドウ内に後続の正常なヘルス書込みや同種の成功した実行が確認できた場合、通知は静かに抑制されます。同種の成功を期間内に確認できない障害は通知されます。セッション切れ・更新通知など復旧対象でないアラートの即時通知は変更ありません。",
   "upgrade": "追加操作は不要です。対象は health_write_failed と run_failed の2種で、既存の通知スロットル（6時間）も維持されます。抑制された障害は notify_outbox に suppressed として記録され、監査可能です。",
   "details": [
-    "mcs/notify/alert_recovery.py を追加。RECOVERABLE_KINDS（health_write_failed・run_failed）に対し next_try で初回送信を約20分遅延し、送信直前に suppression_reason が回復証拠を再確認します。health_write_failed は health.json の at がインシデントより新しい場合、run_failed は run_id より後または created_at より後に ok/partial の実行がある場合に recovered_before_send で抑制します。",
+    "mcs/notify/alert_recovery.py を追加。RECOVERABLE_KINDS（health_write_failed・run_failed）に対し next_try で初回送信を約20分遅延し、送信直前に suppression_reason が回復証拠を再確認します。health_write_failed は health.json の at がインシデントより新しい場合、run_failed は run_id より後に同種の最新完了実行が ok の場合に recovered_before_send で抑制します。",
     "queue_run_alert が recoverable kind に next_try を設定し、スロットル判定から suppressed/withdrawn 行を除外します（抑制済みは通知未到達のため、直後の新規障害の通知を妨げません）。run_check._write_health の health_write_failed も同経路に統一しました。",
     "notify_flush._content が SYSTEM_ALERT 送信前に suppression_reason を評価し、回復済みなら semantic_send_gate.StaleSend 経由で outbox_suppress（suppressed）へ遷移させます。accepted/unknown/held の既存セマンティクスは変更していません。"
   ],
-  "refs": ["mcs/notify/alert_recovery.py", "mcs/notify/notify_flush.py", "mcs/ingest/collection_stages.py", "mcs/ingest/run_check.py", "mcs/core/ledger.py", "tests/notify/test_alert_recovery.py"]
+  "refs": [
+    "mcs/notify/alert_recovery.py",
+    "mcs/notify/notify_flush.py",
+    "mcs/ingest/collection_stages.py",
+    "mcs/ingest/run_check.py",
+    "mcs/core/ledger.py",
+    "tests/notify/test_alert_recovery.py"
+  ]
 }

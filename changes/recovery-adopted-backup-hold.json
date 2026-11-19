@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "バックアップを採用した導入先で、復旧監視と gateway の再起動が採用の記録を復元の同意待ちと誤る問題を修正",
+  "summary": "mcs_restore でバックアップを採用して収集を再開した導入先で、独立した復旧監視（~/.mcs-recovery）と更新後の gateway 再起動が、採用の記録を復元の同意待ちと誤っていました。このため中断した更新の復旧が最大24時間遅れ、更新のたびに gateway の再起動が gateway_restart_restore_hold で失敗していました。今後は mcs_restore.py resumed で書込みの再開を検証できた場合だけ保留と扱いません。配送の保留は変わりません。",
+  "upgrade": "復旧監視の側は、install.sh の再実行（更新の再導入を含む）で復旧ツールを入れ替えると有効になります。",
+  "details": [
+    "mcs_restore.py に読取り専用の resumed を追加（writers_resumed の結果だけを返す）。",
+    "mcs_recovery_gateway._adoption_resumed を追加し、gateway 再起動の処理（切り離して動く同じソース）と mcs_recovery_core._awaiting_consent が使う。補助ファイルの固定ハッシュを更新。",
+    "採用の記録は restore_pending.json（by=mcs_backup_restore）。MCS 本体はもともと採用後の書込み再開を検証して保留と扱わず、復旧監視と gateway 再起動の処理にだけこの検証がなかった。",
+    "導入済みのチェックアウトの resumed（読取り専用）に尋ねられない・時間切れ・検証できない場合は、従来どおり保留のままにする。"
+  ],
+  "refs": ["mcs/ops/mcs_restore.py", "deployment/recovery/mcs_recovery_gateway.py", "deployment/recovery/mcs_recovery_core.py", "deployment/recovery/mcs_recover.py"]
+}

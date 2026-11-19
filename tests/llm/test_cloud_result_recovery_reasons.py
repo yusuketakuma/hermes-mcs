@@ -51,9 +51,12 @@ def _damage(ledger, damage):
             reservation = json.loads(ledger.artifacts('cloud_usage_reserve')[0]['meta'])
             cloud_policy.record_disposition_tx(ledger, reservation, 'discarded_scope')
         elif damage == 'unsettled':
-            ledger.db.execute("UPDATE artifacts SET "
-                              "meta=json_set(meta,'$.http_class','http_500','$.error_kind','transport') "
-                              "WHERE kind='cloud_usage_result'")
+            reservation = json.loads(ledger.artifacts('cloud_usage_reserve')[0]['meta'])
+            ledger.db.execute("UPDATE artifacts SET content='{}', meta=json_remove(json_set(meta,"
+                              "'$.http_class','http_500','$.error_kind','transport','$.usage',NULL,"
+                              "'$.cost_usd',?),"
+                              "'$.answer_text_sha256_v1','$.answer_finish_reason_v1') "
+                              "WHERE kind='cloud_usage_result'", (reservation['max_cost_usd'],))
         elif damage == 'binding_mismatch':
             ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.request_fp') "
                               "WHERE kind='cloud_usage_result'")

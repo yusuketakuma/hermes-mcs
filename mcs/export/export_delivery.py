@@ -18,12 +18,16 @@ from c1_envelopes import (CONTRACT as C1_CONTRACT, RECEIPT_CONTRACT,
                           WITHDRAW_REASONS, encode_envelope, encode_withdrawal,
                           parse_envelope)
 from stats_math import finite_number
-from safe_io import fdopen_owned, atomic_write, fsync_dir, read_regular_nofollow
+from safe_io import (STAGING_SUFFIX, fdopen_owned, atomic_write, fsync_dir,
+                     read_regular_nofollow)
+
+_JOURNAL_NAME = re.compile(r"[0-9a-f]{24}\.json")
+_TMP_PREFIX = ".t-"
 
 
 def _write_json(path: Path, obj) -> None:
     """Atomic write — a crash must not leave a torn journal/ack."""
-    atomic_write(str(path), lambda fh: fh.write(export_contract.canonical_text(obj)), tmp_prefix=".t-")
+    atomic_write(str(path), lambda fh: fh.write(export_contract.canonical_text(obj)), tmp_prefix=_TMP_PREFIX)
 
 
 def load_authorization(path, now: float | None = None, *, c1: bool = False) -> dict:
@@ -71,7 +75,7 @@ class LocalSink:
         if not dest.exists():                      # idempotent store
             if envelope["contract"] == C1_CONTRACT:
                 payload = encode_envelope(envelope).decode("utf-8")
-                atomic_write(str(dest), lambda fh: fh.write(payload), tmp_prefix=".t-")
+                atomic_write(str(dest), lambda fh: fh.write(payload), tmp_prefix=_TMP_PREFIX)
             else:
                 _write_json(dest, envelope)
         if not self.drop_ack:
@@ -174,7 +178,7 @@ class HandoffSink(LocalSink):
         folder = self.root / "withdrawals"
         folder.mkdir(mode=0o700, exist_ok=True)
         atomic_write(str(folder / f"{envelope_id}.json"), lambda fh: fh.write(raw),
-                     tmp_prefix=".t-")
+                     tmp_prefix=_TMP_PREFIX)
 
 
 class GovernedExporter:
@@ -508,7 +512,7 @@ class GovernedExporter:
             try:
                 targets = []
                 for path in sorted(journal_paths(self.dir)):
-                    if re.fullmatch(r"[0-9a-f]{24}\.json", path.name) is None:
+                    if _JOURNAL_NAME.fullmatch(path.name) is None:
                         continue
                     entry = self._journal(path.stem)
                     if entry.get("snapshot_generation_id") == generation_id \
@@ -628,7 +632,8 @@ def health(state: str | Path, *, auth_path: str | Path | None = None,
     if type(max_entries) is not int or not 1 <= max_entries <= 10_000:
         raise export_contract.ContractError("health_entry_limit_invalid")
     counts: dict[str, int] = dict.fromkeys(
-        ("held", "delete_held", "acked", "withdrawn", "refused", "rejected", "corrupt"), 0)
+        ("held", "delete_held", "acked", "withdrawn", "refused", "rejected", "corrupt",
+         "stale_staging"), 0)
     report: ExportHealth = {
         "status": "unknown", "complete": True, "counts": counts,
         "reasons": [], "oldest_held_age_s": None,
@@ -639,6 +644,11 @@ def health(state: str | Path, *, auth_path: str | Path | None = None,
     reasons = set()
     try:
         for path in journal_paths(state, max_entries):
+            # A crash between atomic_write's mkstemp and os.replace leaves this
+            # staging file; it is not a journal entry, so it is counted apart.
+            if path.name.startswith(_TMP_PREFIX) and path.name.endswith(STAGING_SUFFIX):
+                counts["stale_staging"] += 1
+                continue
             try:
                 eid = export_contract.validate_envelope_id(path.stem)
                 if path.suffix != ".json":

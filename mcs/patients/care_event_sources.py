@@ -273,9 +273,10 @@ def collect(db, project_id, *, cfg=None, limit=_MAX_MESSAGES, event_limit=_MAX_E
             meta, document = loads_dict(artifact["meta"]), loads_dict(artifact["content"])
             binding = inference_dependency_loss.source_binding(db, project_id, m["message_id"])
             if (not isinstance(meta, dict) or not isinstance(document, dict) or not isinstance(model, str)
-                    or not model or artifact["model"] != model or meta.get("actual_model") != model
+                    or not model or not isinstance(meta.get("actual_model"), str) or not meta["actual_model"]
+                    or artifact["model"] != meta["actual_model"]
                     or not isinstance(binding, str) or meta.get("source_binding") != binding
-                    or extract_llm.progress_for_message(db, m, model=model).get("state") != "complete"):
+                    or extract_llm.progress_for_message(db, m, model=meta["actual_model"]).get("state") != "complete"):
                 coverage["unverified_extraction"] += 1
                 continue
             items = document.get("event_records")

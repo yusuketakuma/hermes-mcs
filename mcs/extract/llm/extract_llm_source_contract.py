@@ -43,6 +43,7 @@ import clinical_values
 import clinical_urgency
 import clinical_scope
 import clinical_events
+import clinical_allergies
 import extract_schema
 import extract_validation
 import extract_quality
@@ -149,6 +150,7 @@ _LOADED_SOURCE_PATHS = dict((("extract_llm", str(Path(__file__).with_name("extra
                        ("clinical_urgency", clinical_urgency.__file__),
                        ("clinical_scope", clinical_scope.__file__),
                        ("clinical_events", clinical_events.__file__),
+                       ("clinical_allergies", clinical_allergies.__file__),
                        ("clinical_chunking", clinical_chunking.__file__),
                        ("semantic_quantities", semantic_quantities.__file__),
                        ("extraction_refresh", extraction_refresh.__file__),
@@ -246,7 +248,7 @@ _HOLD_SOURCES = frozenset({
     "inference_version", "extract", "extract_schema", "extract_validation", "extract_quality",
     "extract_llm_engine", "extract_llm_prompts", "extraction_medications", "drug_mentions",
     "patient_state_context", "patient_context", "clinical_values", "clinical_urgency",
-    "clinical_scope", "clinical_events", "clinical_chunking", "intervention_schedule",
+    "clinical_scope", "clinical_events", "clinical_allergies", "clinical_chunking", "intervention_schedule",
     "semantic_quantities", "semantic_facts"})
 
 

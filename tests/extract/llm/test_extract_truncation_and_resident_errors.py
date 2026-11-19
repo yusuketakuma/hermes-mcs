@@ -279,7 +279,7 @@ def test_cloud_pool_sync_failure_still_runs_the_lane_once_logged(monkeypatch, ca
         def sync(self, cfg, *, ledger=None):
             syncs.append(now[0])
             if now[0] - self.last_sync < 10:
-                return
+                return False
             self.last_sync = now[0]
             raise run_log_install.LogInstallError("synthetic-private-error-detail")
 

@@ -316,6 +316,7 @@ def test_provider_failure_preserves_common_disables_paid_routes_and_recovers(
     assert mcs_util.load_config_checked(str(config)) is None
     loaded = mcs_util.load_config(str(config))
     expected = dict(common)
+    expected["provider_unavailable"] = True
     expected["cloud_llm"] = {**common["cloud_llm"], "mode": "off"}
     expected["semantic"] = {**common["semantic"], "daily_request_budget": 0}
     assert loaded == expected

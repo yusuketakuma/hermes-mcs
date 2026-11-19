@@ -83,6 +83,7 @@ from setup_integration import (
     _init_apply_section_flags as _init_apply_section_flags,
     _init_standalone_grants as _init_standalone_grants,
     _init_store_secrets as _init_store_secrets,
+    _init_store_api_keys as _init_store_api_keys,
     _init_standalone_connectors as _init_standalone_connectors,
     PLUGIN_SETTINGS as PLUGIN_SETTINGS,
 )
@@ -259,7 +260,15 @@ def cmd_init(args) -> int:
     if not args.yes:
         interactive = (cfg.get("notify") or {}).get("interactive")
         if not mcs_runtime.standalone(cfg) and interactive in ("slack", "discord"):
-            args.plugin_profile = _plugin_profile(args, interactive)
+            # The wizard already chose notify.slack.profile; asking again could only disagree.
+            args.plugin_profile = (slack_channel_setup.binding_profile(cfg)
+                                   if interactive == "slack" and getattr(args, "plugin_profile", None) is None
+                                   else _plugin_profile(args, interactive))
+    try:
+        slack_channel_setup.check_profile(cfg, args)
+    except ValueError as error:
+        return slack_channel_setup.report_problem(error)
+    if not args.yes:
         import cloud_cli
         # a missing config is published with the pending facility review (_init_save_config)
         if not setup_wizard.confirm_save(cfg, plugin_profile=getattr(args, "plugin_profile", None),
@@ -326,7 +335,11 @@ def cmd_init(args) -> int:
     args._config_saved = True
     print(f"設定ファイルを保存しました: {CONF_PATH}")
     api_key_result = 0
-    if not args.yes:
+    if _init_store_api_keys():
+        api_key_result = 1
+        print('初期設定: 設定は保存済みですが、APIキーの保存を確認できていません。'
+              '上の表示を確認し、mcs setup api-keys で続けてください。')
+    elif not args.yes:
         import api_key_setup
         if api_key_setup.is_terminal():
             api_key_result = api_key_setup.run(HOME)
@@ -431,6 +444,8 @@ def cmd_slack_channels(args):
     """Complete the same channel provisioning flow after an authorized update."""
     from types import SimpleNamespace
     import slack_channel_setup
+    if getattr(args, 'discard_hold', False):
+        return _discard_slack_hold(args)
     try:
         cfg, initial = _init_config_snapshot()
         if not slack_channel_setup.required(cfg):
@@ -453,6 +468,37 @@ def cmd_slack_channels(args):
         return 0
     except (OSError, ValueError, TimeoutError) as error:
         return slack_channel_setup.report_problem(error)
+
+
+def _discard_slack_hold(args) -> int:
+    """Human-confirmed exit from a blocked/unknown channel setup intent (IA-033)."""
+    import uuid
+    import mcs_requests
+    import slack_channel_setup
+    if not args.confirm_human or not mcs_util.valid_text(args.reason, 2000) or not args.request_id:
+        print('--discard-hold には --request-id（保留中の準備記録の request_id）、--confirm-human、--reason が必要です')
+        return 1
+    req = {'version': 1, 'cmd': 'ops.slack_setup_discard', 'command_id': args.command_id or str(uuid.uuid4()),
+           'actor': args.actor, 'human_confirmed': True, 'project_id': None,
+           'reason': args.reason, 'request_id': args.request_id}
+    error = mcs_requests.validate(req)
+    if error:
+        print('Slackチャンネル準備: 指定を確認してください（' + error + '）')
+        return 1
+    try:
+        receipt = mcs_requests.apply_local_operation(req)
+    except (OSError, ValueError) as error:
+        return slack_channel_setup.report_problem(error)
+    if receipt is None:
+        print('Slackチャンネル準備: ほかの保存処理が終わってから再試行してください')
+        return 3
+    print(json.dumps({k: receipt.get(k) for k in ('command_id', 'outcome', 'error', 'slack_setup_discarded')},
+                     ensure_ascii=False))
+    if receipt['outcome'] == 'applied':
+        print('保留中の準備記録を退避しました（data/slack-channel-setup.discarded-<request_id>.json）。'
+              'Slack で同名のチャンネルが作られていないか確認し、作られている場合はその ID を通知先に設定してから、'
+              'mcs setup slack-channels を実行してください。')
+    return 0 if receipt['outcome'] == 'applied' else 1
 
 
 def _shipped_g6_criteria() -> tuple[dict, str]:
@@ -716,14 +762,28 @@ def _semantic_queue_warnings(db, sem: dict, now: float):
                    f"{age_d:.1f}日です。解析処理の処理能力を確認してください")
 
 
-def _extract_queue_warnings(db):
-    """Yield extraction backlog warnings using the worker's shared predicate."""
+def _extract_queue_warnings(db, cfg):
+    """Distinguish admitted extraction work from raw pending sources, without proving readiness."""
     import extract_llm
-    backlog = db.execute(
-        "SELECT COUNT(*) FROM messages m WHERE " + extract_llm.pending_pred(db)
-    ).fetchone()[0]
-    if backlog > 500:
-        yield (f"AI解析の待機は{backlog}件です。"
+    import upgrade_scope
+    scope = upgrade_scope.resolve(cfg)
+    if scope.error:
+        yield "AI解析の更新対象を確認できません。解析設定を確認してください"
+        return
+    scope_sql = upgrade_scope.selection_sql(scope, "llm")
+    # Both counts share one SQL snapshot and the same raw pending population.
+    # The selection fragment changes only upgrade work, never source readiness.
+    raw, admitted = db.execute(
+        "SELECT COUNT(*), COALESCE(SUM(CASE WHEN 1" + scope_sql
+        + " THEN 1 ELSE 0 END),0) FROM messages m WHERE " + extract_llm.pending_pred(db)
+    ).fetchone()
+    excluded = raw - admitted
+    if excluded:
+        yield (f"AI解析の未完了は{raw}件です（更新対象の待機{admitted}件・"
+               f"更新対象外の過去世代{excluded}件）。"
+               "更新対象外でも解析済みにはならず、患者コンテキストの準備判定は変わりません")
+    if admitted > 500:
+        yield (f"AI解析の待機は{admitted}件です。"
                "解析処理（ai.mcs.extract-drainer*）は実行可能な新しい投稿から処理します。"
                "待機件数と最近の進捗を確認してください")
 
@@ -769,8 +829,10 @@ def _queue_warnings(cfg: dict | None = None) -> list[str]:
             from semantic_policy import runtime_config
             sem = runtime_config(cfg or {}, root=HOME)[0]
             out.extend(_semantic_queue_warnings(db, sem, now))
-            out.extend(_extract_queue_warnings(db))
+            out.extend(_extract_queue_warnings(db, cfg))
             out.extend(_fact_pipeline_warnings(db, sem))
+            from upgrade_scope import doctor_warnings
+            out.extend(doctor_warnings(db, cfg))
     except Exception as e:
         out.append(f"待機処理の状態を読み取れません（{type(e).__name__}）")
     return out
@@ -860,6 +922,21 @@ def _install_progress_warning():
             "実行中の場合は完了を待ち、終了していれば install.sh を同じ引数で再実行すると途中から再開します")
 
 
+def _root_permission_errors() -> list[str]:
+    """Show in check what the protected send paths refuse at send time (IA-035)."""
+    errors = []
+    for directory in (Path(HOME).resolve(), Path(HOME).resolve() / "data"):
+        try:
+            info = directory.stat()
+        except OSError:
+            continue
+        if info.st_uid != os.getuid() or info.st_mode & 0o022:
+            errors.append(f"{directory} にほかの利用者の書込み権限があるか所有者が違うため、"
+                          "Slackへの送信など保護された処理が送信前に止まります — "
+                          f"`chmod go-w {directory}`")
+    return errors
+
+
 def cmd_check(args) -> int:
     try:
         cfg = _diagnostic_config()
@@ -876,7 +953,7 @@ def cmd_check(args) -> int:
     e1, w1 = validate_config(cfg)
     e2, w2 = check_environment(cfg)
     e3, w3 = service_management.script_drift(paths=_service_paths()) if cfg.get("runtime_mode", "hermes") in ("hermes", "standalone") else ([], [])
-    errors = e0 + e1 + e2 + e3
+    errors = e0 + e1 + e2 + e3 + _root_permission_errors()
     warnings = w0 + w1 + w2 + w3 + _queue_warnings(cfg) + _journal_warnings()
     progress_warning = _install_progress_warning()
     if progress_warning is not None:
@@ -1514,6 +1591,13 @@ def main(argv: list[str] | None = None) -> int:
                    help='変更予定だけを表示します（設定やサービスは変更しません）')
     p.set_defaults(fn=cmd_services, yes=True)
     p = sub.add_parser("slack-channels", help='Slackの患者情報先を保持して運用ログ先を準備します')
+    p.add_argument("--discard-hold", action="store_true",
+                   help='作成結果が不明・保留の準備記録を、人の確認と記録を伴って退避します（記録は削除しません）')
+    p.add_argument("--request-id", help='退避する準備記録の request_id（data/slack-channel-setup.json の値）')
+    p.add_argument("--confirm-human", action="store_true")
+    p.add_argument("--reason")
+    p.add_argument("--actor", default="local-human")
+    p.add_argument("--command-id", help='同じ操作を再試行する場合の承認記録UUID')
     p.set_defaults(fn=cmd_slack_channels, yes=True)
     p = sub.add_parser("features", help='任意機能のセットアップ案内を表示するかを選びます（CSDCは現在既定で省略）')
     p.set_defaults(fn=cmd_features, yes=False)

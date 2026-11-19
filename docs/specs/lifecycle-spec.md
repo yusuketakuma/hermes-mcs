@@ -200,7 +200,7 @@ LLM・サービスの追加probeは明示した範囲だけに限る。`init` �
   旧コード services）→ drainer/gateway 再起動 → 通知。
   **中断復旧はジャーナル+実測（HEAD/porcelain/stale .git lock）で判定**
   （HEAD 単独では混在ツリーと区別不能 — 再現指摘済み）。
-  失敗 tag は自動再試行しない
+  失敗 tag は自動再試行しない。ただし、変更を始める前の段階（local_checks・remote_verify・fetch）で origin に接続できなかった場合（git_timeout・git_spawn_failed・ls-remote の失敗）は失敗に数えず、承認を保留したまま次の確認で再試行する
 - **独立復旧経路**: `~/.mcs-recovery/mcs_recover.py`（install 時配置・
   repo 外・stdlib+git のみ — 新版コードが壊れていても git 復旧+
   manifest snapshot reconcile が実行可能）。**検出は独立 launchd

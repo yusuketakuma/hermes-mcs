@@ -3,6 +3,7 @@ import json
 import pytest
 import config_edit
 import mcs_setup
+import external_transfer
 import safe_io
 import setup_config_snapshot
 from test_mcs_setup import _init_env
@@ -95,6 +96,7 @@ def test_init_interrupt_after_config_publication_reports_unknown(monkeypatch, tm
     assert mcs_setup.main(['init', '--yes', '--login-id', 'synthetic', '--notify-target', 'local',
                            '--set', 'self_posts=true']) == 130
     assert json.loads(path.read_text())['self_posts'] is True
+    assert existing or (path.parent / external_transfer.FILE_NAME).exists()
     out = capsys.readouterr().out
     assert 'config.jsonの保存結果を確認できません' in out
     assert '認証情報や辞書の準備が済んでいる場合があります' in out
@@ -153,6 +155,33 @@ def test_init_env_fsync_failure_reports_unknown_after_keychain_save(monkeypatch,
     assert '.env: 保存結果を確認できません' in out
     assert 'config.jsonは保存していません' in out and '認証情報や辞書' in out
     assert 'SYNTHETIC_PRIVATE_MARKER' not in out
+
+
+def test_init_saves_environment_api_key_only_after_config(monkeypatch, tmp_path, capsys):
+    # A key alone enables cloud sends for every patient, so a failed config
+    # save (the old, unscoped config stays) must leave no key behind.
+    original_store, original_save = mcs_setup._init_store_secrets, mcs_setup._init_save_config
+    cfg, path = _setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(mcs_setup, '_init_store_secrets', original_store)
+    monkeypatch.setenv('MCS_ANTHROPIC_API_KEY', 'synthetic-cloud-key')
+    env = tmp_path / '.env'
+    argv = ['init', '--yes', '--login-id', 'synthetic', '--notify-target', 'local']
+
+    def conflict(*_a, **_k):
+        assert not env.exists()
+        raise config_edit.ConfigConflict('synthetic')
+    monkeypatch.setattr(mcs_setup, '_init_save_config', conflict)
+    assert mcs_setup.main(argv) == 1
+    assert json.loads(path.read_text()) == cfg and not env.exists()
+
+    seen = []
+    def save(*args, **kwargs):
+        seen.append(env.exists())
+        return original_save(*args, **kwargs)
+    monkeypatch.setattr(mcs_setup, '_init_save_config', save)
+    assert mcs_setup.main(argv) == 0
+    assert seen == [False] and 'MCS_ANTHROPIC_API_KEY=synthetic-cloud-key' in env.read_text()
+    assert 'synthetic-cloud-key' not in capsys.readouterr().out
 
 
 def test_broken_symlink_backup_keeps_the_target(monkeypatch, tmp_path):

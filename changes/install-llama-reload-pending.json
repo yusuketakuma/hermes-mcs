@@ -4,7 +4,7 @@
   "summary": "AI サーバー（llama-server）が処理中のため起動設定の反映を見送った場合、反映されるまで install.sh を実行するたびに反映待ちであることと反映の手順を表示します。AI サーバーが処理をしていないときに install.sh を実行すると、その場で新しい起動設定で再起動します。これまでは2回目以降の install.sh が「起動設定にも変更はありません」と表示し、古い設定のまま動き続けていました。",
   "upgrade": "追加操作は不要です。反映待ちの記録は data/.llama-reload-pending に保存されます。表示された手順（launchctl bootout と bootstrap）で手動で反映した場合は、同じ手順の最後の rm -f で記録も消えます。日次の再起動（kickstart）はこの記録を見ないため、反映は install.sh か表示された手順で行ってください。",
   "details": [
-    "deployment/install/runtime.sh: 処理中のため反映を見送ったときに data/.llama-reload-pending を作り、記録がある間は起動設定の変更があるものとして扱う。起動または再起動に成功したら記録を消す。",
+    "deployment/install/runtime.sh: 処理中のため反映を見送ったときに、本人所有・単一リンクを確認した排他発行で data/.llama-reload-pending を作成し（既存の記録がある場合は切り詰めず保持し、リンクや不正なファイルは上書きしない）、記録がある間は起動設定の変更があるものとして扱う。起動または再起動に成功したら確認済みの記録を消す。",
     "install.sh の INSTALL_RUNTIME_SHA256 を更新した。"
   ],
   "refs": ["deployment/install/runtime.sh", "install.sh", "tests/meta/test_install_sh_models.py"]
