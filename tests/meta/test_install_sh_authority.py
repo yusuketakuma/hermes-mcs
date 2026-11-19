@@ -91,6 +91,65 @@ def test_install_stops_before_software_when_update_lock_is_held(tmp_path):
         os.close(fd)
 
 
+def _stub_lockf(stub_root, status):
+    lockf = stub_root / 'bin/lockf'
+    lockf.write_text(f'#!/bin/sh\necho "lockf $*" >> "$STUB_LOG"\nexit {status}\n')
+    lockf.chmod(0o755)
+
+
+def test_lockf_without_descriptor_support_falls_back_to_python_flock(tmp_path):
+    """macOS 13-14 lockf answers EX_USAGE; that is neither a running install nor fatal."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    _stub_lockf(stub_root, 64)
+    result = _run(env, hermes_home, '--no-llm')
+    assert '別の導入または更新' not in result.stderr
+    assert '排他制御を実行できません' not in result.stderr
+    assert '排他制御（lockf）を実行できず' not in result.stderr
+    assert any(call.startswith('lockf ') for call in _calls(stub_root))
+    assert any('mcs-installer-flock-fallback' in call for call in _calls(stub_root))
+
+
+def test_lockf_fallback_still_detects_a_held_install_lock(tmp_path):
+    import fcntl
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    _stub_lockf(stub_root, 64)
+    data = home / '.mcs/data'
+    data.mkdir(parents=True, mode=0o700)
+    fd = os.open(data / 'update.lock', os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = _run(env, hermes_home, '--no-llm')
+        assert result.returncode != 0
+        assert '別の導入または更新' in result.stderr
+        assert not any(call.startswith(('brew', 'git clone', 'uv ')) for call in _calls(stub_root))
+        assert not (home / '.mcs/config.json').exists()
+    finally:
+        os.close(fd)
+
+
+def _runnable(tmp_path, preferred, system_python):
+    import re
+    function = re.search(r"^runnable_py\(\) \{.*?^\}\n", INSTALL.read_text(), re.M | re.S).group(0)
+    bin_dir = tmp_path / "rp-bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "python3"
+    stub.write_text(f"#!/bin/sh\nexit {0 if system_python else 1}\n")
+    stub.chmod(0o755)
+    result = subprocess.run(["/bin/sh", "-c", function + 'runnable_py "$1"', "sh", str(preferred)],
+                            env={"PATH": f"{bin_dir}:/bin"}, capture_output=True, text=True, timeout=10)
+    return result.returncode, result.stdout.strip()
+
+
+def test_fallback_python_must_start_before_it_is_used(tmp_path):
+    """A python3 that cannot start is not used, so it is not blamed on config.json."""
+    broken = tmp_path / "venv-python"
+    broken.write_text("#!/bin/sh\nexit 1\n")
+    broken.chmod(0o755)
+    assert _runnable(tmp_path, broken, True) == (0, str(tmp_path / "rp-bin" / "python3"))
+    assert _runnable(tmp_path, broken, False)[0] == 1
+    assert _runnable(tmp_path, tmp_path / "missing", False)[0] == 1
+
+
 def test_install_rejects_symlinked_update_lock(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     data = home / '.mcs/data'
