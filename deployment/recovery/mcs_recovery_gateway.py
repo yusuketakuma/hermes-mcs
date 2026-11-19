@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from contextlib import suppress
 from pathlib import Path
 
@@ -81,7 +82,62 @@ def _gateway_restart_report(data, status, request_id=None, **facts):
                  ".gateway-restart.", suffix="")
 
 
-def _gateway_restart_run(data, agents, uid, expected_pid=None, request_id=None,
+def _gateway_self_started_at():
+    """This process's start time via `ps -o lstart=`, as the supervisor probes it."""
+    try:
+        result = subprocess.run(["ps", "-o", "lstart=", "-p", str(os.getpid())],
+                                capture_output=True, text=True, timeout=10,
+                                env={**os.environ, "LC_ALL": "C"})
+        stamp = re.sub(r"\s+", " ", (result.stdout or "").strip())
+        return (time.mktime(time.strptime(stamp, "%a %b %d %H:%M:%S %Y"))
+                if result.returncode == 0 else None)
+    except Exception:
+        # Best effort: a missing probe only means the supervisor cannot prove
+        # this helper ended, which holds the receipt — never a wrong retry.
+        return None
+
+
+def _gateway_helper_lock(data):
+    """fd holding the helper flock, or None while another helper is alive."""
+    import fcntl
+    try:
+        fd = os.open(os.path.join(data, "gateway_restart_helper.lock"),
+                     os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError:
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def _gateway_attempt_journal(data, request_id, fields):
+    """Best-effort durable record of one restart attempt for the supervisor."""
+    if not (type(request_id) is str
+            and re.fullmatch(r"[0-9a-f]{32}", request_id) is not None):
+        return
+    try:
+        directory = os.path.join(data, "gateway_restart_attempts")
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, request_id + ".json")
+        try:
+            value = _read_local_json(path, 64 * 1024)
+            if not isinstance(value, dict) \
+                    or value.get("schema") != "gateway-restart-attempt/1" \
+                    or value.get("request_id") != request_id:
+                value = {}
+        except Exception:
+            value = {}
+        value.update(schema="gateway-restart-attempt/1",
+                     request_id=request_id, **fields)
+        _atomic_json(path, value, ".gateway-restart-attempt.", suffix="")
+    except Exception:
+        pass
+
+
+def _gateway_restart_run(data, agents, uid, request_id=None, expected_pid=None,
                          update_lock_fd=None):
     """Resolve the owned gateway, then verify a changed PID in a detached child."""
     # Local imports: _GATEWAY_RESTART_PROGRAM runs this source without the module header.
@@ -89,8 +145,13 @@ def _gateway_restart_run(data, agents, uid, expected_pid=None, request_id=None,
     import shlex
     import shutil
 
-    auto = expected_pid is not None or request_id is not None \
-        or update_lock_fd is not None
+    auto = expected_pid is not None or update_lock_fd is not None
+    if not (request_id is None or type(request_id) is str
+            and re.fullmatch(r"[0-9a-f]{32}", request_id) is not None):
+        _gateway_restart_report(
+            data, "failed", request_id=None,
+            error="gateway_restart_auto_args_invalid")
+        return 1
     if auto:
         try:
             if not (type(expected_pid) in (int, str)
@@ -125,6 +186,38 @@ def _gateway_restart_run(data, agents, uid, expected_pid=None, request_id=None,
                 data, "failed", request_id=request_id,
                 error="gateway_restart_lock_fd_mismatch")
             return 1
+    helper_lock = _gateway_helper_lock(data)
+    if helper_lock is None:
+        # Another helper owns the restart path; this attempt never started a
+        # restart child, which the journal alone can prove (no receipt here).
+        _gateway_attempt_journal(data, request_id, {
+            "state": "ended", "outcome": "blocked_existing_helper",
+            "helper_pid": os.getpid(),
+            "helper_started_at": _gateway_self_started_at(),
+            "deadline_at": time.time(), "rounds": [], "pid_changed": False,
+            "exited_at": time.time()})
+        return 1
+    journal = {"pid_changed": False, "rounds": []}
+    _gateway_attempt_journal(data, request_id, {
+        "state": "reserved", "helper_pid": os.getpid(),
+        "helper_started_at": _gateway_self_started_at(),
+        "deadline_at": time.time() + 660,
+        "expected_pid": expected_pid if auto else None,
+        "rounds": [], "pid_changed": False})
+
+    def report(status, **facts):
+        try:
+            # End the journal before the receipt so the receipt's stamp is never
+            # earlier than exited_at; the supervisor requires that ordering.
+            _gateway_attempt_journal(data, request_id, {
+                "state": "ended", "outcome": facts.get("error") or status,
+                "rounds": journal["rounds"],
+                "pid_changed": journal["pid_changed"], "exited_at": time.time()})
+            _gateway_restart_report(data, status, request_id=request_id, **facts)
+        finally:
+            # Every exit after the lock goes through report; release the
+            # helper lock here so a retained frame cannot wedge a later helper.
+            os.close(helper_lock)
 
     # One normal collection run (480s), lock wait (150s), PID observation (30s).
     deadline = time.monotonic() + 660
@@ -312,71 +405,80 @@ def _gateway_restart_run(data, agents, uid, expected_pid=None, request_id=None,
                         + match.group(1) + " live session(s)")
 
         target, old_pid = current()
+        if not auto:
+            _gateway_attempt_journal(data, request_id, {"expected_pid": old_pid})
         if auto and old_pid != expected_pid:
-            _gateway_restart_report(
-                data, "failed", request_id=request_id,
-                error="gateway_restart_target_changed",
-                expected_pid=expected_pid, observed_pid=old_pid)
+            report("failed", error="gateway_restart_target_changed",
+                   expected_pid=expected_pid, observed_pid=old_pid)
             return 1
+        base_pid = expected_pid if auto else old_pid
         env = dict(os.environ, HOME=str(home), HERMES_HOME=hermes_home)
         while time.monotonic() < deadline:
             target, pid = current()
+            if pid and pid != base_pid:
+                journal["pid_changed"] = True
             if auto:
                 if pid != expected_pid:
-                    _gateway_restart_report(
-                        data, "failed", request_id=request_id,
-                        error="gateway_restart_target_changed",
-                        expected_pid=expected_pid, observed_pid=pid)
+                    report("failed", error="gateway_restart_target_changed",
+                           expected_pid=expected_pid, observed_pid=pid)
                     return 1
             elif pid and pid != old_pid:
-                _gateway_restart_report(data, "supervisor_restart_verified", service=target,
-                                        previous_pid=old_pid or None, pid=pid,
-                                        request_id=request_id)
+                report("supervisor_restart_verified", service=target,
+                       previous_pid=old_pid or None, pid=pid)
                 return 0
             if time.monotonic() >= deadline:
                 raise ValueError("gateway_restart_busy_timeout")
             issued = True
+            if len(journal["rounds"]) == 0:
+                _gateway_attempt_journal(data, request_id, {"state": "in_flight"})
             # Unlinked private output avoids persisting live-session descriptions.
             with tempfile.TemporaryFile() as output:
-                result = subprocess.run([launcher, "-p", "default", "gateway", "restart"],
-                                        stdin=subprocess.DEVNULL, stdout=output, stderr=output,
-                                        env=env, cwd="/",
-                                        timeout=max(0.001, min(300, deadline - time.monotonic())))
+                try:
+                    result = subprocess.run(
+                        [launcher, "-p", "default", "gateway", "restart"],
+                        stdin=subprocess.DEVNULL, stdout=output, stderr=output,
+                        env=env, cwd="/",
+                        timeout=max(0.001, min(300, deadline - time.monotonic())))
+                except subprocess.TimeoutExpired:
+                    journal["rounds"].append({"at": time.time(), "outcome": "timeout",
+                                              "observed_pid": pid})
+                    raise
                 output.seek(0)
                 refused = result.returncode == 1 and busy_refusal(output.read(65537))
+            journal["rounds"].append({"at": time.time(),
+                "outcome": "success" if not result.returncode
+                    else "busy_refusal" if refused else "nonzero",
+                "observed_pid": pid})
+            _gateway_attempt_journal(data, request_id, {"rounds": journal["rounds"]})
             if not result.returncode:
                 break
             if not refused:
-                _gateway_restart_report(data, "unknown", error="gateway_restart_nonzero",
-                                        service=target, previous_pid=old_pid or None,
-                                        request_id=request_id)
+                report("unknown", error="gateway_restart_nonzero",
+                       service=target, previous_pid=old_pid or None)
                 return 1
             remaining = deadline - time.monotonic()
             if remaining > 0:
                 time.sleep(min(5, remaining))
         else:
-            _gateway_restart_report(data, "unknown", error="gateway_restart_busy_timeout",
-                                    service=target, previous_pid=old_pid or None,
-                                    request_id=request_id)
+            report("unknown", error="gateway_restart_busy_timeout",
+                   service=target, previous_pid=old_pid or None)
             return 1
         until = min(deadline, time.monotonic() + 30)
         while time.monotonic() < until:
             target, pid = current()
             if pid and pid != old_pid:
-                _gateway_restart_report(data, "supervisor_restart_verified", service=target,
-                                        previous_pid=old_pid or None, pid=pid,
-                                        request_id=request_id)
+                report("supervisor_restart_verified", service=target,
+                       previous_pid=old_pid or None, pid=pid)
                 return 0
             time.sleep(min(0.2, max(0, until - time.monotonic())))
-        _gateway_restart_report(data, "unknown", error="gateway_pid_not_replaced",
-                                service=target, previous_pid=old_pid or None,
-                                request_id=request_id)
+        report("unknown", error="gateway_pid_not_replaced",
+               service=target, previous_pid=old_pid or None)
     except (OSError, subprocess.TimeoutExpired, ValueError, TypeError,
             RecursionError, plistlib.InvalidFileException) as exc:
         code = str(exc) if isinstance(exc, ValueError) and str(exc).startswith("gateway_") \
             else "gateway_restart_unverifiable"
         status = "unknown" if issued else "failed"
-        _gateway_restart_report(data, status, error=code, request_id=request_id)
+        report(status, error=code)
     return 1
 
 
@@ -387,6 +489,9 @@ _GATEWAY_RESTART_PROGRAM = (
     + "\n" + inspect.getsource(_read_local_json)
     + "\n" + inspect.getsource(_atomic_json)
     + "\n" + inspect.getsource(_gateway_restart_report)
+    + "\n" + inspect.getsource(_gateway_self_started_at)
+    + "\n" + inspect.getsource(_gateway_helper_lock)
+    + "\n" + inspect.getsource(_gateway_attempt_journal)
     + "\n" + inspect.getsource(_gateway_restart_run)
     + "\nsys.exit(_gateway_restart_run(*sys.argv[1:]))\n")
 
@@ -394,12 +499,13 @@ _GATEWAY_RESTART_PROGRAM = (
 def request_gateway_restart(data, agents, uid, *, expected_pid=None,
                             request_id=None, update_lock_fd=None):
     """Queue a detached verified restart; callers have already saved bookkeeping."""
-    auto = expected_pid is not None or request_id is not None \
-        or update_lock_fd is not None
+    if request_id is not None and not (type(request_id) is str
+            and re.fullmatch(r"[0-9a-f]{32}", request_id) is not None):
+        return False
+    request_id = request_id or uuid.uuid4().hex
+    auto = expected_pid is not None or update_lock_fd is not None
     if auto:
         valid = (type(expected_pid) is int and expected_pid > 0
-                 and type(request_id) is str
-                 and re.fullmatch(r"[0-9a-f]{32}", request_id) is not None
                  and type(update_lock_fd) is int and update_lock_fd >= 0)
         if not valid:
             return False
@@ -419,10 +525,10 @@ def request_gateway_restart(data, agents, uid, *, expected_pid=None,
         env = {key: value for key, value in os.environ.items()
                if key not in ("XPC_SERVICE_NAME", "MCS_JOB_PID")}
         argv = [sys.executable, "-I", "-c", _GATEWAY_RESTART_PROGRAM,
-                data, agents, str(uid)]
+                data, agents, str(uid), request_id]
         pass_fds = ()
         if auto:
-            argv += [str(expected_pid), request_id, str(update_lock_fd)]
+            argv += [str(expected_pid), str(update_lock_fd)]
             pass_fds = (update_lock_fd,)
         # -I: no cwd/PYTHON* on sys.path — the child needs only stdlib.
         subprocess.Popen(argv, env=env, cwd="/",
