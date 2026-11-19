@@ -10,7 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = [ROOT / ".github/workflows" / name
-             for name in ("ci.yml", "release-notes.yml", "main-sync.yml")]
+             for name in ("ci.yml", "release-notes.yml", "main-sync.yml", "pr-review-signal.yml")]
 
 
 def _jobs(text):
