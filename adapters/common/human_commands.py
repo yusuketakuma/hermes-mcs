@@ -225,27 +225,38 @@ def _project_exists(view, project_id: int) -> bool:
 
 
 def _semantic_job(view, requests, project_id: int, job_id: int, additional_attempts=None):
-    from operation_contract import read_retry_payload, retry_error, retry_job_row
+    from operation_contract import (RETRY_PAYLOAD_MAX_BYTES, parse_retry_payload,
+                                    read_retry_payload, retry_error, retry_job_row,
+                                    retry_payload_codec, retry_updated_payload)
     row, error = retry_job_row(view.db, project_id, job_id)
     if error:
         return None, error, None
-    # SQLite UTF-16 can use two bytes for each UTF-8 ASCII byte. The
-    # existing parser enforces the exact UTF-8 command limit after decode.
-    raw = read_retry_payload(view.db, row, max_bytes=2 * requests.MAX_COMMAND_BYTES)
+    raw = read_retry_payload(view.db, row)
     if raw is None:
         return None, "invalid_payload", None
-    try:
-        parsed = requests.parse_command(raw.encode("utf-8"))
-    except (ValueError, TypeError, UnicodeError, RecursionError):
-        return None, "invalid_payload", None
-    if not isinstance(parsed, dict):
+    parsed = parse_retry_payload(raw)
+    if not isinstance(parsed, dict) or parsed.ambiguous_version:
         return None, "invalid_payload", None
     error = retry_error(row, parsed, additional_attempts)
     if error:
         return None, error, None
+    # The writer appends retry_command_id (a UUID, always 36 chars) and,
+    # for a manual extension, manual_attempt_limit before enforcing the
+    # stored-size limit — check the same bytes so a preview never promises
+    # a retry the writer would reject.
+    try:
+        updated = retry_updated_payload(parsed, "0" * 36, additional_attempts,
+                                        row["attempts"])
+    except (TypeError, ValueError, RecursionError):
+        return None, "invalid_payload", None
+    if len(updated.encode(retry_payload_codec(view.db))) > RETRY_PAYLOAD_MAX_BYTES:
+        return None, "invalid_payload", None
     from semantic_runtime import attempt_limit
     row = {**dict(row), "attempt_limit": attempt_limit(parsed)}
-    return row, None, requests.payload_hash(parsed)
+    try:
+        return row, None, requests.payload_hash(parsed)
+    except (TypeError, ValueError, RecursionError):
+        return None, "invalid_payload", None
 
 
 def _summary_comparison(view, project_id: int, message_id: int,
