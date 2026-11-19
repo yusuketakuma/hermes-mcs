@@ -30,8 +30,8 @@ def _artifacts(db, mid):
 
 def test_low_signal_unit():
     assert extract_llm._low_signal("こんにちは。", {"v": 1})
-    assert not extract_llm._low_signal("了解です。", {"v": 1})
-    assert not extract_llm._low_signal("ありがとうございます", {"v": 1})
+    assert extract_llm._low_signal("了解です。", {"v": 1})
+    assert extract_llm._low_signal("ありがとうございます", {"v": 1})
     # digits, clinical words, request vocabulary -> keep on the LLM path
     assert not extract_llm._low_signal("3時に伺います", {"v": 1})
     assert not extract_llm._low_signal("体調の報告です", {"v": 1})
@@ -275,8 +275,7 @@ def test_only_three_complete_greetings_are_skipped(body):
     assert extract_llm._low_signal(body, {"v": 1})
 
 
-@pytest.mark.parametrize("body", ["了解です。", "承知しました。", "ありがとうございます。",
-                                  "ご飯がうまく飲み込めない。", "口からこぼれる。",
+@pytest.mark.parametrize("body", ["ご飯がうまく飲み込めない。", "口からこぼれる。",
                                   "こんにちは。ご飯がうまく飲み込めない。"])
 def test_replies_and_keyword_free_details_reach_inference(tmp_path, monkeypatch, body):
     db = _ledger(tmp_path)

@@ -54,10 +54,12 @@ from extract_llm_selection import (
     _LEFT_ESTIMATE_S,
     _left_estimate_key,
 )
+from clinical_allergies import cue_spans
 from extract_llm_source_contract import (
     EXTRACT_VERSION,
     KIND,
     _CHUNK_SIZE,
+    _EMPTY_POST_RE,
     _GREETING_RE,
     _INFERENCE_VERSION,
     _PREFILTER_CONTENT,
@@ -77,18 +79,42 @@ def _prefilter_enabled() -> bool:
         not in ("0", "off", "false")
 
 
-def _low_signal(body: str, hints: dict | None) -> bool:
-    """Skip only a standalone greeting with no rule findings or failed hint parse."""
+def _reply_to_request(ledger, r) -> bool:
+    """A reply whose thread root carries a request (確認/連絡/教えて) stays on
+    the LLM path — the answer may carry the requested facts. An unreadable
+    root body fails safe to keep."""
+    if not r.get("parent_id") or ledger is None:
+        return False
+    row = ledger.db.execute(
+        "SELECT body_text, body_state FROM messages WHERE message_id=? AND project_id=?",
+        (r["parent_id"], r["project_id"])).fetchone()
+    # Only a complete root body may deny a waiting request; a snippet may be
+    # missing the request's tail, so anything else fails safe to keep.
+    if not row or not row[0] or row["body_state"] not in (None, "full"):
+        return True
+    return bool(extract_quality._request_cues(row[0]))
+
+
+def _low_signal(body: str, hints: dict | None,
+                r: dict | None = None, ledger=None) -> bool:
+    """Skip only a standalone greeting or content-less phrase with no rule
+    findings, no clinical cue word, and no request waiting in its thread."""
     if hints is None or len(hints) > 1:
         return False
-    return isinstance(body, str) and _GREETING_RE.fullmatch(body) is not None
+    if not isinstance(body, str) or (
+            _GREETING_RE.fullmatch(body) is None
+            and _EMPTY_POST_RE.fullmatch(body) is None):
+        return False
+    if cue_spans(body):
+        return False
+    return not (r is not None and _reply_to_request(ledger, r))
 
 
 def _mark_prefiltered(ledger, r) -> bool:
     """Settle a no-signal row without an LLM call — same guarded write
     path as _replace_current (v4 fence, hash gate, supersede sweep)."""
     hints = _rule_hints(r)
-    if not _low_signal(r["body_text"], hints):
+    if not _low_signal(r["body_text"], hints, r, ledger):
         return False
     record = {**_hint_coverage(loads_dict(_PREFILTER_CONTENT), hints, r["body_text"]),
               "checked_hint_candidates": 0}
@@ -330,7 +356,7 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         hints = _rule_hints(r)
         if prefilter and not cloud_only and qc is None and not r["thin_src"] and rebuild_state is None \
                 and not r["human_src"] \
-                and _low_signal(r["body_text"] or "", hints):
+                and _low_signal(r["body_text"] or "", hints, r, ledger):
             # no clinical signal on either net — settle with a durable
             # marker + v1 coverage instead of burning an LLM call
             _ensure_v1(ledger, r, hints)
