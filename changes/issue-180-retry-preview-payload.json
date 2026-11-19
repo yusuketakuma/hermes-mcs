@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "16KiBを超える保存ジョブを再試行画面が拒否する問題を修正",
+  "summary": "意味解析ジョブの再試行確認画面が、保存済みpayloadを外部操作コマンドと同じ16KiB上限で検査していたため、writerが正常に再試行できるジョブをinvalid_payloadと表示していました。保存payloadの読取り・構文検査をwriterと共通の契約(上限1MiB・非version重複key許容・曖昧version marker拒否)へ揃えました。",
+  "upgrade": "追加操作は不要です。外部からの操作コマンドの16KiB上限は変わりません。",
+  "details": [
+    "保存payloadの共通parseをoperation_contract.pyに追加し、preview/confirmとwriterの両方が使います。",
+    "曖昧なversion marker・非dict・1MiB超の保存payloadは従来どおり両側でinvalid_payloadです。",
+    "payload_hash照合・attempts予算・人承認・receiptの条件は変わりません。"
+  ],
+  "refs": ["adapters/common/human_commands.py", "mcs/ops/commands/operation_contract.py", "mcs/ops/commands/mcs_operations.py"]
+}
