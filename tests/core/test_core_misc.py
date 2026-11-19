@@ -188,12 +188,13 @@ def test_message_refetch_repairs_missing_posted_at(tmp_path):
     first = _message()
     first.posted_at = ""
     db.save_messages([first])
-    db.save_messages([_message()])
+    second = _message()
+    db.save_messages([second])
 
     row = db.db.execute(
         "SELECT posted_at,posted_at_ts FROM messages WHERE message_id=1"
     ).fetchone()
-    assert row["posted_at"] == "2026-09-19T00:00:00+09:00"
+    assert row["posted_at"] == second.posted_at
     assert row["posted_at_ts"] > 0
     db.close()
 

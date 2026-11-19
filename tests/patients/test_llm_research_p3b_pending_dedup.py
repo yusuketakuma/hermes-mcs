@@ -35,9 +35,9 @@ def counted(monkeypatch, led):
     return counts
 
 
-def seed_three(led):
+def seed_three(led, *, posted_at=None):
     for pid in (1, 2, 3):
-        seed(led, mid=pid, pid=pid)
+        seed(led, mid=pid, pid=pid, posted_at=posted_at)
 
 
 def test_lane_a_reads_selection_snapshot_once(runtime, monkeypatch):
@@ -98,11 +98,13 @@ def test_source_edit_during_selection_is_rejected(runtime, monkeypatch, lane):
 
 def test_result_reports_scan_size(runtime):
     led, _, _ = runtime
-    seed_three(led)
+    posted_at = '2026-09-19T00:00:00+09:00'
+    seed_three(led, posted_at=posted_at)
     result = step(runtime)
     assert result['scanned'] == 1 and type(result['scan_ms']) is int and result['scan_ms'] >= 0
     # A real unprocessed edit excludes patient 2; scoped work ignores the legacy whole-patient callback.
-    led.save_messages([_message(2, '生活環境: 合成の編集後記録。', 'full', project_id=2)])
+    led.save_messages([_message(2, '生活環境: 合成の編集後記録。', 'full', project_id=2,
+                                posted_at=posted_at)])
     assert step(runtime)['scanned'] == 2
     _raw_proof(led, 2, 2)
     _semantic_proof(led, 2, 2)

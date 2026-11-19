@@ -24,7 +24,7 @@ import semantic_facts as sf
 import semantic_jev as jev
 import mcs_test_guard as test_guard
 from inference_version import CURRENT_VERSION, VERSION_KEY
-from common_testkit import make_ledger
+from common_testkit import make_ledger, recent_posted_at
 
 
 BODY = "明日からカロナール300mgを1日3回に変更します。確認お願いします。"
@@ -33,12 +33,17 @@ BODY = "明日からカロナール300mgを1日3回に変更します。確認�
 _ledger = make_ledger
 
 
-def _message(mid=1, pid=1, parent=None, body=BODY, unread=True):
+def _message(mid=1, pid=1, parent=None, body=BODY, unread=True,
+             posted_at=None):
+    if posted_at is None:
+        # A fixed date silently ages out of bounded windows (QC's 60-day
+        # realtime scope); default to a recent post instead.
+        posted_at = recent_posted_at()
     return mcs_contract.Message(
         message_id=mid, project_id=pid, parent_id=parent,
         sender_id=1, sender_name="sender", sender_type="user",
         profession="", organization="",
-        posted_at="2026-09-19T00:00:00+09:00",
+        posted_at=posted_at,
         body_html=f"<p>{body}</p>", body_state="full",
         is_unread=unread, reply_count=0)
 

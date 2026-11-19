@@ -626,10 +626,13 @@ def _many_other_role(runtime, cfg, monkeypatch, others):
     cfg['semantic'] = {**cfg['semantic'], 'project_ids': None}
     own = others + 1
     cfg['cloud_llm']['project_ids'] = [own]
+    posted_at = '2026-09-19T00:00:00+09:00'
     for pid in range(1, own):
-        seed(ledger, mid=pid, pid=pid, body=f'本人は合成の自宅{pid}で生活しています。')
+        seed(ledger, mid=pid, pid=pid, body=f'本人は合成の自宅{pid}で生活しています。',
+             posted_at=posted_at)
     for index in range(3):
-        seed(ledger, mid=1000 + index, pid=own, body=IN_SCOPE + f'記録{index}。')
+        seed(ledger, mid=1000 + index, pid=own, body=IN_SCOPE + f'記録{index}。',
+             posted_at=posted_at)
     return own
 
 
