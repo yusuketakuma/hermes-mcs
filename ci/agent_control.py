@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Decide the merge gate, the agent lock and the attempt budget for pull requests from GitHub API data.
 
-`.github/workflows/agent-control.yml` fetches the data with `gh` and applies
-the plan this script prints; the script itself makes no network call and
+`ci/merge_gate.py` fetches the data and applies the gate plan for the trusted
+workflow; this script itself makes no network call and
 imports nothing from the application. Standard library only.
 
   gate     verdict for the `merge-gate` commit status of a PR head, whether
