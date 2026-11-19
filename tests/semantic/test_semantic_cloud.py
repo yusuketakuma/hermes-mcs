@@ -987,7 +987,8 @@ def test_semantic_defer_counts_are_fixed_and_do_not_expose_unknown_reason(cloud,
 
 def _profile_body(selection, prompt):
     """A wire body that satisfies the resolved profile's model/effort/max_tokens contract."""
-    client = anthropic_client.AnthropicClient('synthetic', effort=selection['effort'])
+    client = anthropic_client.AnthropicClient('synthetic', model=selection['model'],
+                                              effort=selection['effort'])
     return client.body(prompt, selection['max_tokens'], None)
 
 
