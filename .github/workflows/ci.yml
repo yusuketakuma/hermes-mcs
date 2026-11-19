@@ -1,30 +1,34 @@
 name: ci
+run-name: ci-pr-${{ inputs.pr_number || github.event.pull_request.number || 'unscoped' }}-${{ github.ref_type }}-${{ github.event.pull_request.head.sha || github.sha }}
 
 on:
   # release gate only: the full suite runs for a vX.Y.Z tag, a pull request,
   # the weekly schedule or a manual dispatch — never for a plain push to main
   push:
     tags: ['v*']
-  # ready_for_review and the full-ci label start the full run of a draft;
-  # the scope job decides what each pull request run needs (ci/ci_scope.py)
+  # ready_for_review starts the full run of a draft; the scope job decides what
+  # each pull request run needs (ci/ci_scope.py). A label never starts a run here:
+  # an approval label must not rerun passing CI. agent-control.yml dispatches a
+  # full run on the PR branch when full-ci is added.
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    types: [opened, synchronize, reopened, ready_for_review]
   # weekly run on main: a runner image, Python patch or SQLite update that
   # breaks the suite surfaces without waiting for the next release
   schedule:
     - cron: "17 3 * * 1"
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number for a main-sync branch run"
+        required: false
+        type: number
 
 permissions:
   contents: read   # read-only everywhere: no job pushes to the repository
 
 concurrency:
   group: ci-${{ github.ref }}
-  # A label other than full-ci does not change what a run tests, so its run
-  # waits for the running one instead of cancelling it. It is not cut short
-  # either: a run that skipped everything would report green gates for the
-  # same head SHA and could replace a real result in the required checks.
-  cancel-in-progress: ${{ !(contains(fromJSON('["labeled", "unlabeled"]'), github.event.action) && github.event.label.name != 'full-ci') }}
+  cancel-in-progress: true
 
 jobs:
   publication-request:
@@ -455,16 +459,14 @@ jobs:
         run: sh scripts/development/check_pinned_sdks.sh hermes
 
   merge-gate-request:
-    # main-sync starts this run with GITHUB_TOKEN after it merges main into a PR,
-    # and GitHub raises no workflow_run for a run started that way: agent-control.yml
-    # would never judge the new head. A dispatch is the one event GITHUB_TOKEN may
-    # start, so this run asks for the judgement itself once the required jobs are done.
-    # A run a person started reaches agent-control.yml through workflow_run, which
-    # also counts a failure against the linked issue; this request only publishes the
-    # verdict. It names the commit and nothing else: agent-control.yml runs from the
-    # default branch and reads the check runs itself, so nothing this job says is trusted.
+    # GITHUB_TOKEN-started runs do not raise workflow_run. Ask the trusted
+    # default-branch controller to re-read this completed run after required jobs.
     needs: [lint-test, hygiene, standalone-sdk, incident-gates, macos, hermes-integration]
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.triggering_actor == 'github-actions[bot]' }}
+    if: >-
+      ${{ !cancelled() &&
+          ((github.event_name == 'workflow_dispatch' && github.triggering_actor == 'github-actions[bot]') ||
+           (github.event_name == 'pull_request' && github.run_attempt > 1 &&
+            github.triggering_actor == 'github-actions[bot]')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -475,5 +477,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          SHA: ${{ github.sha }}
-        run: gh workflow run agent-control.yml --ref "$DEFAULT_BRANCH" -f sha="$SHA"
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          SOURCE_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          args=(-f "sha=$SHA" -f "source_run_id=$SOURCE_RUN_ID")
+          if [[ -n "$PR_NUMBER" ]]; then args+=(-f "pr_number=$PR_NUMBER"); fi
+          gh workflow run agent-control.yml --ref "$DEFAULT_BRANCH" "${args[@]}"
