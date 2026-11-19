@@ -399,16 +399,26 @@ def _publish_snapshot_locked(db_path: str, dest_dir: str, fd: int, *,
         verify_by = copied + max(snapshot_verify_timeout_s(tmp), min(
             SNAPSHOT_VERIFY_TIMEOUT_S + SNAPSHOT_VERIFY_EXTRA_MAX_S, 1.5 * (copied - started)))
         if deadline is not None:
-            verify_by = min(verify_by, deadline)
+            # the fixed tail is reserved for the gate's reacquire and the
+            # publication below: a verify window that ran to the deadline
+            # left the reacquire bounded wait nothing (run_lock_timeout),
+            # which forbade every terminal write incl. the health write.
+            verify_by = min(verify_by, deadline - SNAPSHOT_WORK_TAIL_S)
         if verification_context is None:
             if not _valid_snapshot_candidate(tmp, deadline=verify_by, fence_fd=fd, state=state):
                 _status.failure.setdefault("reason", "validator_false")
                 _fail(_status.failure["reason"], copy_s=round(copied - started, 3),
-                      capped_by_deadline=deadline is not None and verify_by == deadline)
+                      capped_by_deadline=deadline is not None
+                      and verify_by == deadline - SNAPSHOT_WORK_TAIL_S)
                 return None
             verified = monotonic()
         else:
-            with verification_context(deadline=verify_by) as gate:
+            # The gate's reacquire bound is the publish deadline: the
+            # reserved tail stays usable after verification. Without a
+            # publish deadline the old bound (verify_by) keeps the gate
+            # engaged — deadline=None would disengage it entirely.
+            with verification_context(
+                    deadline=deadline if deadline is not None else verify_by) as gate:
                 inside = _valid_snapshot_candidate(tmp, deadline=verify_by,
                                                    fence_fd=fd, state=state)
                 # Sampled inside the unlock scope: the reacquire cost is
@@ -418,7 +428,8 @@ def _publish_snapshot_locked(db_path: str, dest_dir: str, fd: int, *,
             if not inside:
                 _status.failure.setdefault("reason", "validator_false")
                 _fail(_status.failure["reason"], copy_s=round(copied - started, 3),
-                      capped_by_deadline=deadline is not None and verify_by == deadline)
+                      capped_by_deadline=deadline is not None
+                      and verify_by == deadline - SNAPSHOT_WORK_TAIL_S)
                 return None
         if verified >= verify_by:
             _fail("verify_deadline", copy_s=round(copied - started, 3),
