@@ -89,7 +89,8 @@ def real_cloud(runtime, cloud, monkeypatch):
         return 200, {'Request-Id': 'synthetic-update'}, json.dumps(response).encode()
 
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', request)
-    seed(ledger, body='本人は合成の自宅で生活しています。')
+    seed(ledger, body='本人は合成の自宅で生活しています。',
+         posted_at='2026-09-19T00:00:00+09:00')
     return cfg, posts
 
 
