@@ -420,3 +420,131 @@ def test_hermes_launchers_opt_in_to_live_recovery():
     assert plist["ProgramArguments"][-2:] == ["__REPO__/mcs/ingest/health_watch.py", "--send"]
     assert '"$PY" __REPO__/mcs/ingest/health_watch.py --send' in (
         root / "deployment/scripts/mcs_health.sh").read_text()
+
+
+def _attempt(world, rid, **fields):
+    row = {"schema": "gateway-restart-attempt/1", "request_id": rid,
+           "state": "ended", "outcome": "gateway_restart_busy_timeout",
+           "helper_pid": PID + 9, "helper_started_at": BIRTH - 50,
+           "deadline_at": NOW + 2, "exited_at": NOW + 1,
+           "expected_pid": PID, "pid_changed": False,
+           "rounds": [{"at": NOW + 1, "outcome": "busy_refusal", "observed_pid": PID}]}
+    row.update(fields)
+    _private(world["home"] / "data/gateway_restart_attempts" / (row["request_id"] + ".json"), row)
+    return row
+
+
+def _busy_receipt(world, request_id, **fields):
+    receipt = {"request_id": request_id, "status": "unknown",
+               "error": "gateway_restart_busy_timeout", "previous_pid": PID,
+               "service": f"gui/{os.getuid()}/{recovery.GATEWAY}", "at": NOW + 1}
+    receipt.update(fields)
+    _private(world["home"] / "data/gateway_restart.json", receipt)
+    return receipt
+
+
+def test_busy_timeout_with_no_effect_journal_resolves_and_retries(gateway):
+    _run(gateway)
+    pending = _pending(gateway)
+    _busy_receipt(gateway, pending["operation_id"])
+    _attempt(gateway, pending["operation_id"])
+    assert _run(gateway, now=NOW + 3)["reason"] == "no_effect"
+    state = recovery._load_state(str(gateway["home"]))
+    assert state["targets"][recovery.GATEWAY]["pending"] is None
+    row = state["history"][-1]
+    assert row["observation"] == "no_effect" and row["result"] == "no_effect"
+    assert row["observed_generation"] == row["generation"] and state["attempts"] == 1
+    # The next pass re-requests under the same attempts/window budget.
+    assert _run(gateway, now=NOW + 3)["actions"]
+    assert len(gateway["calls"]) == 2
+    assert _pending(gateway)["operation_id"] != pending["operation_id"]
+
+
+def test_no_effect_reservation_still_respects_the_shared_budget(gateway):
+    _run(gateway)
+    pending = _pending(gateway)
+    _busy_receipt(gateway, pending["operation_id"])
+    _attempt(gateway, pending["operation_id"])
+    assert _run(gateway, now=NOW + 3)["reason"] == "no_effect"
+    state = recovery._load_state(str(gateway["home"]))
+    state["attempts"] = 3
+    recovery._save_state(str(gateway["home"]), state)
+    assert _run(gateway, now=NOW + 3)["reason"] == "budget_exhausted"
+    assert len(gateway["calls"]) == 1
+
+
+@pytest.mark.parametrize("damage", [
+    "missing", "in_flight", "helper_alive", "pid_changed", "deadline_pending",
+    "nonzero_round", "empty_rounds", "other_outcome", "exited_after_receipt",
+    "wrong_schema", "wrong_request", "bad_observed_pid",
+])
+def test_journal_without_full_no_effect_proof_stays_held(gateway, damage):
+    _run(gateway)
+    pending = _pending(gateway)
+    _busy_receipt(gateway, pending["operation_id"])
+    if damage != "missing":
+        fields = {
+            "in_flight": {"state": "in_flight"},
+            "helper_alive": {"helper_pid": PID, "helper_started_at": BIRTH},
+            "pid_changed": {"pid_changed": True},
+            "deadline_pending": {"deadline_at": NOW + 10},
+            "nonzero_round": {"rounds": [{"at": NOW + 1, "outcome": "nonzero",
+                                          "observed_pid": PID}]},
+            "empty_rounds": {"rounds": []},
+            "other_outcome": {"outcome": "gateway_restart_nonzero"},
+            "exited_after_receipt": {"exited_at": NOW + 2},
+            "wrong_schema": {"schema": "gateway-restart-attempt/0"},
+            "wrong_request": {"request_id": "e" * 32},
+            "bad_observed_pid": {"rounds": [{"at": NOW + 1, "outcome": "busy_refusal",
+                                             "observed_pid": PID + 1}]},
+        }[damage]
+        _attempt(gateway, pending["operation_id"], **fields)
+    out = _run(gateway, now=NOW + 3)
+    assert out["reason"] == "outcome_unresolved" and out["actions"] == []
+    assert _pending(gateway)["operation_id"] == pending["operation_id"]
+    assert len(gateway["calls"]) == 1
+
+
+def test_blocked_helper_journal_proves_no_effect_without_receipt(gateway):
+    _run(gateway)
+    pending = _pending(gateway)
+    _attempt(gateway, pending["operation_id"],
+             outcome="blocked_existing_helper", rounds=[], expected_pid=None,
+             deadline_at=NOW + 1)
+    assert _run(gateway, now=NOW + 3)["reason"] == "no_effect"
+    assert _run(gateway, now=NOW + 3)["actions"] and len(gateway["calls"]) == 2
+
+
+def test_no_effect_resolves_after_another_actor_changed_the_generation(gateway):
+    _run(gateway)
+    pending = _pending(gateway)
+    _attempt(gateway, pending["operation_id"],
+             outcome="blocked_existing_helper", rounds=[], expected_pid=None,
+             deadline_at=NOW + 1)
+    # Another helper restarted the gateway; its new worker is also unhealthy.
+    gateway["native"].update(pid=PID + 2, started_at=NOW + 1)
+    _record(gateway, at=NOW + 2)
+    assert _run(gateway, now=NOW + 3)["reason"] == "no_effect"
+    state = recovery._load_state(str(gateway["home"]))
+    row = state["history"][-1]
+    assert (row["observation"] == "no_effect"
+            and row["observed_generation"] != row["generation"])
+    assert state["targets"][recovery.GATEWAY]["pending"] is None
+
+
+@pytest.mark.parametrize("alive", [False, True])
+def test_no_effect_journal_releases_or_holds_an_old_unknown_receipt(gateway, alive):
+    request_id = "d" * 32
+    _private(gateway["home"] / "data/gateway_restart.json",
+             {"status": "unknown", "error": "gateway_restart_busy_timeout",
+              "previous_pid": PID - 1, "service": f"gui/{os.getuid()}/{recovery.GATEWAY}",
+              "at": NOW - 1, "request_id": request_id})
+    _attempt(gateway, request_id,
+             exited_at=NOW - 1, deadline_at=NOW - 1, expected_pid=PID - 1,
+             rounds=[{"at": NOW - 1, "outcome": "busy_refusal", "observed_pid": PID - 1}],
+             **({"helper_pid": PID, "helper_started_at": BIRTH} if alive else {}))
+    out = _run(gateway)
+    if alive:
+        assert out["reason"] == "gateway_request_unresolved" and gateway["calls"] == []
+    else:
+        assert out["actions"] and len(gateway["calls"]) == 1
