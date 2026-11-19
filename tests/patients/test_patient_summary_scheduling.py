@@ -39,8 +39,17 @@ def cloud_schedule(runtime, monkeypatch):
     class Cloud:
         def __init__(self, ledger, config, **kwargs):
             assert ledger is led
-            self.contract = cloud_inference.cloud_provider_contract()
-            self.model = self.contract['model']
+            route = kwargs.get('route') or 'patient_context'
+            purpose = 'patient_context' if route == 'patient_context' else 'backlog'
+            resolved, errors = worker.cloud_policy.resolve_profile(
+                config, route=route, purpose=purpose, root=worker.HOME)
+            assert not errors and resolved is not None
+            selection = kwargs.get('selection')
+            if selection is not None:
+                assert dict(selection) == dict(resolved)
+            self.contract = cloud_inference.cloud_provider_contract(
+                config, route=route, purpose=purpose, selection=resolved)
+            self.model = resolved['model']
             self.possibly_sent = False
         def __call__(self, prompt, **kwargs):
             assert not led.db.in_transaction
