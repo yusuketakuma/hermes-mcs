@@ -218,6 +218,15 @@ def test_workflow_progression_does_not_complete_a_later_plan(axis, planned_at, d
     assert result["relations"] == [relation]
     assert result["active_preserved"] == result["new_preserved"] == 1
     assert (planned, done) == original
+    # Active/new boundaries and batch order must not change candidates or proof.
+    for active, new in (([done], [planned]), ([], [planned, done]), ([], [done, planned])):
+        reordered = sr.reconcile_facts(active, new)
+        assert reordered["relations"] == [relation]
+        assert reordered["fingerprint"] == result["fingerprint"]
+        assert reordered["active_preserved"] == len(active)
+        assert reordered["new_preserved"] == len(new)
+    assert sr._classify_pair(done, planned) == relation
+    assert (planned, done) == original
 
 
 @pytest.mark.parametrize("kind", ["workflow", "action", "polarity"])
@@ -348,3 +357,27 @@ def test_generic_action_word_is_not_a_shared_entity():
                  event_time="2026-09-02", evidence=("ev_c",))
     rel = sr._classify_pair(left, same)
     assert rel is not None and rel["type"] == "EXPLICIT_SUPERSESSION"
+
+
+@pytest.mark.parametrize("conflict", ["action", "polarity"])
+def test_reversed_workflow_keeps_action_and_polarity_priority(conflict):
+    left = _fact("fact_plan", "合成薬剤A開始", workflow="planned",
+                 event_time="2026-11-01", action="start")
+    right = _fact("fact_done", "合成薬剤A中止", workflow="done",
+                  event_time="2026-11-03", action="stop")
+    if conflict == "polarity":
+        left["action"] = right["action"] = "unknown"
+        right["polarity"] = "negated"
+    forward = sr._classify_pair(left, right)
+    assert forward["type"] == "EXPLICIT_SUPERSESSION"
+    assert sr._classify_pair(right, left) == forward
+
+
+def test_same_statement_later_plan_is_unresolved_in_both_orders():
+    planned = _fact("fact_plan", "CT検査", kind="care_event", workflow="planned",
+                    event_time="2026-11-03")
+    done = _fact("fact_done", "CT検査", kind="care_event", workflow="done",
+                 event_time="2026-11-01")
+    forward = sr._classify_pair(planned, done)
+    assert forward["type"] == "UNRESOLVED"
+    assert sr._classify_pair(done, planned) == forward
