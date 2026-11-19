@@ -84,6 +84,11 @@ def _scan_rows(ledger):
     return [(json.loads(row['content']), json.loads(row['meta'])) for row in ledger.artifacts(state.SCAN)]
 
 
+def _scan_done(ledger):
+    rows = _scan_rows(ledger)
+    return bool(rows) and rows[-1][0].get('complete') is True
+
+
 def _drain(runtime, cfg, *, limit=40, until=None, **kw):
     """Step until the context is complete (or ``until`` holds); the outcomes of every pass."""
     ledger, _, _ = runtime
@@ -411,10 +416,16 @@ def test_paused_goes_local(runtime, real_cloud, monkeypatch, progress):
         seed(ledger, body=BODY)
     before, kept = len(sent), _reservations(ledger, 'scan:1')
     cloud_policy.stop(ledger)
-    _drain(runtime, cfg)
-    assert readiness.context_view_input(ledger.db, 1, cfg=cfg)
+    # cloud-llm stop finishes the source scans locally; the summary quality audit
+    # (a Jev send) is deferred until resume, so the pass waits, not completes.
+    _drain(runtime, cfg, until=lambda outcome: _scan_done(ledger)
+           or outcome['status'] == 'complete')
+    assert _scan_done(ledger)
     assert len(sent) == before and local_calls
     assert _dispositions(ledger) == [(rid, 'superseded_local') for rid in kept]
+    cloud_policy.resume(ledger)
+    _drain(runtime, cfg)
+    assert readiness.context_view_input(ledger.db, 1, cfg=cfg)
 
 
 _COOLDOWN_CLASSES = ('circuit_open', 'rate_limited', 'http_429', 'transport', 'timeout', 'http_5xx',
