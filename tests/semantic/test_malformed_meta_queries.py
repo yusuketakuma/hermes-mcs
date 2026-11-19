@@ -76,7 +76,10 @@ def test_qc_seed_skips_malformed_meta(tmp_path):
     from extract_testkit import _qc_job, _v2_artifact
     db = _ledger(tmp_path)
     try:
-        db.save_messages([_message()])
+        # QC covers only posts inside the last 60 days (qc_scope_sql), so the
+        # stamp is relative to now; a fixed date ages out of scope.
+        db.save_messages([_message(posted_at=time.strftime(
+            "%Y-%m-%dT%H:%M:%S+09:00", time.localtime(time.time() - 86400)))])
         for kind in ("extract_llm", "extract_qc", "signal_v1"):
             _add_malformed(db, kind, mids=(1,))
         source_id = _v2_artifact(db, 1, _hash(db))

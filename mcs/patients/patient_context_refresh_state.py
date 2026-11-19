@@ -206,6 +206,23 @@ def _replace(ledger, kind, pid, content, meta, mid=None, *, write_count=None):
     return artifact_id
 
 
+def _retire_cloud_scan_tx(ledger, pid, mid, source_key, source_sig):
+    """Take one source input's cloud scan and its units out of every selection.
+
+    Local work replaced their paid requests, so their receipts can never verify again. The
+    rows stay as invalidated history, like the scan rows of a source that changed."""
+    if not ledger.db.in_transaction:
+        raise RuntimeError("patient_context_source_transaction_required")
+    ledger.db.execute(
+        "UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true')) "
+        "WHERE kind IN (?,?) AND project_id=? AND message_id IS ? AND "
+        + current_meta_pred("meta", target=CURRENT_VERSION)
+        + " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.source_key') IS ? "
+        "AND json_extract(meta,'$.source_sig') IS ? AND json_type(meta,'$.provider')='object' "
+        "AND json_extract(meta,'$.invalidated') IS NOT 1 END",
+        (SCAN, CHUNK, pid, mid or None, source_key, source_sig))
+
+
 def _save_source_chunk_tx(ledger, pid, mid, source_key, chunk_span, facts, meta):
     """Replace one source unit and its dependency record within the borrowed writer transaction."""
     if not ledger.db.in_transaction:
@@ -321,7 +338,10 @@ def _sources_intact(sources):
 
 
 def _cloud_input_binding(db, pid, snapshot):
-    """Bind paid-response adoption to original occurrences as well as the input contract."""
+    """Bind paid-response adoption to original occurrences as well as the input contract.
+
+    This is the overview's binding: its input is every source of the patient. A scan binds to
+    its own source instead (:func:`_cloud_scan_binding`)."""
     pairs = [(pid, source['message_id']) for source in snapshot['sources'] if source['source'] == 'chat']
     bindings = []
     for offset in range(0, len(pairs), 64):
@@ -331,9 +351,19 @@ def _cloud_input_binding(db, pid, snapshot):
             bindings.append(dependency_loss.source_binding(db, pid, 0, source_key=context_plan.source_key(source)))
     if any(not valid_hash(binding) for binding in bindings):
         raise ValueError('patient_context_cloud_source_changed')
-    # The scan-side signature: a summary-only code change keeps paid scan units.
+    # Signed without the summary contract: a summary-only code change keeps this binding.
     return _digest([snapshot['scan_source_sig'], snapshot['contract'], snapshot['route']['provider'], bindings,
                     [(context_plan.source_key(s), s.get('first_seen')) for s in snapshot['sources']]])
+
+
+def _cloud_scan_binding(source_sig, contract, provider, occurrence):
+    """Bind one source's paid scan answers to that source's own input.
+
+    A scan asks the cloud about one source, so the patient's other sources are no part of what
+    its answer depends on: the source signature, the scan contract, the provider and the
+    original occurrence are. The chunk span needs no place here: every scan request carries its
+    own span, and an answer is taken up only for the exact request."""
+    return _digest(["scan", source_sig, contract, provider, occurrence])
 
 
 route_accepts = context_artifacts.route_accepts
