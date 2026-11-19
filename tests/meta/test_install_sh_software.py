@@ -26,6 +26,9 @@ def test_existing_hermes_checkout_never_rewritten(tmp_path):
     calls = _calls(stub_root)
     assert not any(c.startswith("git clone") for c in calls)
     assert not any(" checkout " in c for c in calls)
+    # A hand checkout would skip the updater's dependency refresh.
+    pre = _run(env, hermes_home, "--preflight")
+    assert "更新手順" in pre.stdout and "checkout --detach" not in pre.stdout
 
 
 def test_plugin_link_collision_is_bounded_error(tmp_path):
