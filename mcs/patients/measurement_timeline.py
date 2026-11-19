@@ -16,6 +16,63 @@ _OTHER_PERSON_CUE = re.compile(rf"(?:{FAMILY_PERSON}|{OTHER_PERSON})(?:さん|�
 _OTHER_TOPIC = re.compile(rf"(?:{FAMILY_PERSON}|{OTHER_PERSON})(?:本人|自身)?"
                           r"(?:の(?:話|件|こと|記録|情報|状態)|について)")
 
+_PLAN_PREDICATE_LEAD = re.compile(
+    r"^\s*(?:(?:だった|でした|であった)\s*(?:が|けれど(?:も)?)\s*)?[、,]?\s*"
+    r"(?:では|じゃ|は|が|を|も)?\s*(?:(?:すでに|既に|本日|今日|今回)\s*)?")
+_PLAN_ABSENCE = re.compile(r"ない|なし|無い|なくな|なかった|ありません|ございません")
+_PLAN_CANCEL_ACTION = re.compile(r"中止|キャンセル|取消|撤回|取り消|見送|取りやめ")
+_PLAN_CANCEL_NEGATION = re.compile(
+    r"(?:し(?:ない|なかった|ません(?:でした)?)|せず|され(?:ない|なかった|ません(?:でした)?)|"
+    r"[さら](?:ない|なかった|ず)|ない|なかった|ず|では(?:ない|ありません(?:でした)?))"
+    r"(?:\s*(?:方針(?:です|だ|とした|としました)?|"
+    r"ことに(?:した|しました|なった|なりました|決まった|決まりました)))?"
+    r"\s*(?:$|(?:[、,]\s*|に)(?:(?:実施|続行|継続)(?:する|します|した|しました)?|行う)\s*$)")
+_PLAN_CANCEL_NAMED_TARGET = re.compile(
+    r"(?:する|した|している|された)の(?:は|が)\s*(?P<label>[^、,]+?)\s*"
+    r"(?:(?:のみ|だけ)?(?:です|でした|だ)?\s*$|(?:のみ|だけ)で\s*[、,]\s*(?P<followup>.*))")
+_PLAN_EXECUTION_CLAUSE = re.compile(
+    r"(?P<label>.+?)\s*(?:は|が|を)\s*(?:予定(?:どおり|通り)\s*)?"
+    r"(?:(?:実施|続行|継続)(?:する|します)|行う|行います)\s*")
+_PLAN_MEASUREMENT_SUFFIX = re.compile(r"(?:の)?(?:検査|採血|測定)$")
+_SEPARATE_PROCEDURES = frozenset(("点滴", "輸液"))
+
+
+def _plan_is_withdrawn_or_uncertain(tail, name):
+    predicate = tail[_PLAN_PREDICATE_LEAD.match(tail).end():]
+    if _PLAN_ABSENCE.match(predicate):
+        return True
+    action = _PLAN_CANCEL_ACTION.match(predicate)
+    if action is None:
+        return False
+    ending = predicate[action.end():]
+    if _PLAN_CANCEL_NEGATION.match(ending):
+        return False
+    named_target = _PLAN_CANCEL_NAMED_TARGET.match(ending)
+    if named_target is None:
+        return True
+
+    target = named_target["label"].strip()
+    target_label = _PLAN_MEASUREMENT_SUFFIX.sub("", target)
+    if fold_surface(target_label) == fold_surface(name):
+        return True
+    planned_analyte, cancelled_analyte = lab_analyte(name), lab_analyte(target_label)
+    different_analyte = planned_analyte and cancelled_analyte and planned_analyte != cancelled_analyte
+    if not different_analyte and target not in _SEPARATE_PROCEDURES:
+        return True
+
+    followup = named_target["followup"]
+    if followup is None:
+        return False
+    execution = _PLAN_EXECUTION_CLAUSE.fullmatch(followup)
+    if execution is None:
+        return True
+    label = execution["label"].strip()
+    if label in ("この検査", "その検査", "当該検査"):
+        return False
+    label = _PLAN_MEASUREMENT_SUFFIX.sub("", label)
+    return not (fold_surface(label) == fold_surface(name)
+                or (planned_analyte and lab_analyte(label) == planned_analyte))
+
 
 def ambiguous_patient_context(body, target):
     """Hold a bare patient reference when an earlier topic names another person."""
@@ -159,9 +216,14 @@ def _candidate(record):
         else:
             anchor = span[0] + evidence.index(name)
             subject, period = source_axes(body, anchor, anchor + len(name))
-            marker = re.search(r"予定|計画|検討中|見込み|なら|場合|たら|とき|れば", evidence[evidence.index(name):])
+            marker = re.search(r"(?:の(?:検査|採血|測定))?(?:予定|計画|検討中|見込み)|なら|場合|たら|とき|れば",
+                               evidence[evidence.index(name):])
             verified_source = subject == "patient" and period == record["status"] and marker is not None
             if marker is not None:
+                # Keep question marks so a question cannot match an affirmative predicate.
+                tail = re.match(r"[^。！？!?;；\n]*[？?]?", body[anchor + marker.end():])[0]
+                if _plan_is_withdrawn_or_uncertain(tail, name):
+                    verified_source = False
                 # This is a contiguous original prefix, used only to prove the label/value relation.
                 validation_quote = evidence[:evidence.index(name) + marker.start()]
     if verified_source:

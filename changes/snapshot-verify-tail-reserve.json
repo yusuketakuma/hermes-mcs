@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "スナップショット検証が実行期限の末尾予約を侵食して稼働状態が更新されなくなる問題を修正",
+  "summary": "台帳スナップショットの検証が実行期限いっぱいまで使い切ると、検証後に実行ロックを取り直す余裕が残らず、実行が「snapshot_gate_unverified」で終わって health.json など終端の書込みが毎回止まる問題を直しました。",
+  "upgrade": "検証窓は実行期限から固定の末尾予約（30秒、再取得と公開のための時間）を引いた位置までに制限されるようになり、検証が期限に食い込んでも通常の失敗として扱われ、稼働状態の書込みは続きます。台帳が大きい環境で health.json が古いまま止まる症状が解消されます。",
+  "details": [
+    "検証の締切 verify_by を deadline - SNAPSHOT_WORK_TAIL_S までに制限する。",
+    "検証ゲートのロック再取得期限は公開締切（publish deadline）とし、予約した末尾の時間を再取得に使えるようにする。公開締切なしの呼出しは従来どおり verify_by を再取得の上限にする。",
+    "検証が末尾予約に届かず失敗する場合は、ゲート未検証の書込み禁止経路ではなく通常の検証失敗（verify_deadline_at_start / validator_timeout）として扱われる。"
+  ],
+  "refs": [
+    "mcs/core/snapshots.py",
+    "tests/ingest/test_snapshot_gate.py",
+    "tests/core/test_snapshot_failure_reason.py",
+    "tests/core/test_snapshot_refresh_timing.py"
+  ]
+}
