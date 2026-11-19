@@ -98,7 +98,7 @@ def test_pre_fix_frame_keeps_paid_recovery_or_unknown_hold_at_next_cap(routed, m
         provider = kwargs.get('provider')
         assert provider is not None, 'a prior unknown must not fall back locally'
         if first_pass[0] and outcome == 'unknown':
-            provider.reserve(provider.client.body('synthetic migration prompt', 100, None), 30)
+            provider.reserve(provider.client.body('synthetic migration prompt', provider.selection['max_tokens'], None), 30)
         else:
             answer = provider('synthetic migration prompt', deadline=kwargs['deadline'], max_tokens=100)
             replay.append(bool(answer.get('reused_response')))

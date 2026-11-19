@@ -408,6 +408,10 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
             for key in ("enabled", "publication"):
                 if key in context_settings and type(context_settings[key]) is not bool:
                     errors.append(f"{prefix}.{key}: true（有効）かfalse（無効）を指定してください")
+    from upgrade_scope import config_problems as upgrade_scope_problems
+    scope_errors, scope_warnings = upgrade_scope_problems(cfg)
+    errors.extend(scope_errors)
+    warnings.extend(scope_warnings)
     if isinstance(sig, dict) and "notify" in sig and type(sig["notify"]) is not bool:
         errors.append("signals.notify: true（有効）かfalse（無効）を指定してください")
     ntf = cfg.get("notify") if isinstance(cfg.get("notify"), dict) else {}

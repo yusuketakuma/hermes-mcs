@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "適用後の巻戻しが途中で止まった更新を「切替前の中断」として終え、新版の常駐処理設定が残る問題を修正",
+  "summary": "更新の適用後（post-merge）に失敗し、更新前の版への巻戻しがプログラムを戻した後で止まった場合、復旧（mcs_update.py recover・日次の確認・独立復旧監視）は、更新前の版で常駐処理と定期処理の設定（mcs_setup.py services 相当）を整え直してから復旧を完了します。これまでは「切替前に中断した更新」として記録を消すだけで、新版が書いた設定が旧版のまま動き続けることがありました。整え直せない場合は「復旧できません（要手動対応）」として報告し、更新記録を残します。",
+  "upgrade": "追加操作は不要です。対象は、新版の post-merge 処理が始まった後の更新記録で、HEAD が更新前の版に戻っている場合だけです。完了時の結果名は post_merge_reverted になります。独立復旧監視の変更は、この版で install.sh を再実行（更新の再導入を含む）して復旧ツールを入れ替えたときに反映されます。",
+  "details": [
+    "リポジトリ内の復旧は retire_to_snapshot と services の再実行を、巻戻しの後処理（_rollback_tree）と同じ順で行う。",
+    "独立復旧監視は既存の _reconcile_membership（services の再実行を含む）を使う。",
+    "失敗時は escalate する（常駐処理の再開と更新記録の保持は既存の方針どおり）。",
+    "独立復旧監視の完了通知（post_merge_reverted）は、ほかの復旧完了と同じ「更新・復旧の処理完了」として届く。"
+  ],
+  "refs": ["mcs/ops/update_recovery.py", "deployment/recovery/mcs_recover.py"]
+}

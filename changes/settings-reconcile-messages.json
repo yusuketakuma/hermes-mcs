@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "導入設定の移行保留の確認で、原因が表示されず保留なしでも失敗扱いになる問題を修正",
+  "summary": "mcs_upgrade.py reconcile-settings は、原因にかかわらず「移行保留を安全に確認できません」とだけ表示し、保留がないときも同じ文言で終了コード1になっていました。今後は失敗時に固定の理由コード（例: config_unverified）を表示し、config_unverified では chmod 600 を案内します。保留がない場合は「導入設定の移行保留はありません」と表示して終了コード0で終わります。",
+  "upgrade": "追加操作は不要です。config_unverified が表示された場合は、config.json を本人所有・権限600・ハードリンクなしにしてから再実行してください。",
+  "details": [
+    "表示する理由はコード内の固定の識別子か例外の型名だけで、設定値やパスは表示しない。",
+    "config.json の権限600の要求は変えていない。",
+    "対象は settings_migration_reconcile.py。これまでは config.json の権限が600でないことが原因でも、対処が分からなかった。"
+  ],
+  "refs": ["mcs/ops/settings_migration_reconcile.py"]
+}

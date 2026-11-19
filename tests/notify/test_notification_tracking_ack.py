@@ -236,7 +236,8 @@ def test_observer_global_unknown_cannot_be_hidden_by_zero_current_parts(tmp_path
     plans = {'current': 0, 'superseded': 0}
     parts = {'total': 0, 'cards': 0, 'by_state': states, 'by_plan': plans,
              'active_total': 0, 'active_cards': 0, 'active_by_state': states,
-             'active_by_plan': plans, 'acknowledged_unresolved_total': 0, 'unknown_parts_total': 1}
+             'active_by_plan': plans, 'acknowledged_unresolved_total': 0, 'unknown_parts_total': 1,
+             'observed_at': NOW}
     path = tmp_path / 'health.json'
     path.write_text(json.dumps({'at': NOW, 'overall': 'ok', 'state_reasons': [],
                                'notify': {'incomplete_parts': parts}}))

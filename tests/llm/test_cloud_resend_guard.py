@@ -33,9 +33,9 @@ def _db(tmp_path):
 
 def _reserve(ledger, prompt, provider='anthropic', *, max_tokens=100, cache_prefix=None, unit='synthetic-unit', owner=None, message_id=1, route='semantic_backlog', selection=None):
     cfg = {'cloud_llm': {'mode': 'on', 'project_ids': [1], 'provider': provider}}
-    client = (anthropic_client.AnthropicClient('synthetic') if provider == 'anthropic'
-              else openai_client.OpenAIClient('synthetic', **({'model': selection['model'], 'effort': selection['effort']}
-                                                             if selection is not None else {})))
+    client_type = anthropic_client.AnthropicClient if provider == 'anthropic' else openai_client.OpenAIClient
+    client = client_type('synthetic', **({'model': selection['model'], 'effort': selection['effort']}
+                                         if selection is not None else {}))
     body = client.body(prompt, max_tokens, cache_prefix)
     return cloud_policy.usage_reserver(ledger, cfg, route=route, project_id=1,
                                       message_id=message_id, unit_key=unit, owner=owner, selection=selection)(body, 2)
@@ -763,3 +763,250 @@ def test_inconsistent_receipt_is_classified_apart_from_a_repeat(tmp_path, monkey
             ledger.db.execute("UPDATE artifacts SET meta=? WHERE kind='cloud_usage_reserve'",
                               ('{"unit_key":"other","unit_key":"synthetic-unit"}',))
         assert _refusal_of(ledger, 'synthetic prompt') == 'receipt_inconsistent'
+
+
+@pytest.mark.parametrize('status,marker', [
+    ('http_400', {'anthropic_400_diagnostic': 'usage_limit'}),
+    ('http_429', {'anthropic_error_code': 'enforced_spend_limit_reached'})])
+def test_anthropic_verified_payment_retries_only_after_receipted_human_resume(tmp_path, monkeypatch, status, marker):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    monkeypatch.setattr(cloud_policy, 'selected_key', lambda *args, **kwargs: 'synthetic')
+    monkeypatch.setattr(mcs_util, 'HOME', str(tmp_path))
+    (tmp_path / 'config.json').write_text(json.dumps({
+        'mcs_login_id': 'synthetic', 'notify_target': 'synthetic',
+        'cloud_llm': {'mode': 'on', 'project_ids': [1], 'provider': 'anthropic'},
+    }))
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt')
+        cloud_policy.record_result(ledger, reservation, {
+            **_result(reservation, status, 'payment_required'), **marker})
+        usage = cloud_policy.usage_report(ledger)
+        assert usage['unresolved_requests'] == 1
+        assert usage['max_reserved_cost_usd'] == reservation['max_cost_usd']
+        with pytest.raises(anthropic_client.AnthropicError):
+            _reserve(ledger, 'synthetic prompt')
+        req = {'version': 1, 'cmd': 'ops.cloud_resume', 'command_id': str(uuid.uuid4()),
+               'actor': 'synthetic human', 'human_confirmed': False,
+               'project_id': None, 'reason': 'synthetic approval'}
+        denied = mcs_requests.apply_command(ledger, req)
+        assert denied['outcome'] == 'rejected' and denied['error'] == 'human_confirmation_required'
+        with pytest.raises(anthropic_client.AnthropicError):
+            _reserve(ledger, 'synthetic prompt')
+        req.update(command_id=str(uuid.uuid4()), human_confirmed=True)
+        receipt = mcs_requests.apply_command(ledger, req)
+        assert receipt['outcome'] == 'applied'
+        _reserve(ledger, 'synthetic prompt')
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 2
+        assert cloud_policy.usage_report(ledger)['unresolved_requests'] == 2
+
+
+@pytest.mark.parametrize('status,error', [('http_400', 'payment_required'),
+                                          ('http_429', 'payment_required')])
+def test_an_old_unmarked_anthropic_payment_receipt_still_blocks_after_resume(tmp_path, monkeypatch, status, error):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt')
+        cloud_policy.record_result(ledger, reservation, _result(reservation, status, error))
+        cloud_policy.resume(ledger)
+        with pytest.raises(anthropic_client.AnthropicError) as caught:
+            _reserve(ledger, 'synthetic prompt')
+        assert caught.value.detail == 'cloud_unit_unresolved'
+
+
+@pytest.mark.parametrize('change', ['marker_false', 'marker_integer', 'marker_string',
+                                    'wrong_status', 'wrong_kind', 'wrong_provider', 'usage_missing',
+                                    'openai_marker_mixed'])
+def test_corrupt_anthropic_payment_marker_cannot_prove_retry(tmp_path, monkeypatch, change):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt')
+        cloud_policy.record_result(ledger, reservation, {
+            **_result(reservation, 'http_429', 'payment_required'),
+            'anthropic_error_code': 'enforced_spend_limit_reached'})
+        expressions = {'marker_false': "'$.anthropic_error_code',json('false')",
+                       'marker_integer': "'$.anthropic_error_code',1",
+                       'marker_string': "'$.anthropic_error_code','synthetic_unknown'",
+                       'wrong_status': "'$.http_class','http_400'",
+                       'wrong_kind': "'$.error_kind','rate_limited'",
+                       'wrong_provider': "'$.model','gpt-6-luna'",
+                       'openai_marker_mixed': "'$.openai_error_code','insufficient_quota'"}
+        with ledger.db:
+            if change == 'usage_missing':
+                ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.usage') "
+                                  "WHERE kind='cloud_usage_result'")
+            else:
+                ledger.db.execute("UPDATE artifacts SET meta=json_set(meta," + expressions[change] + ") "
+                                  "WHERE kind='cloud_usage_result'")
+        assert cloud_policy.usage_report(ledger)['pricing_unverified'] is True
+        with pytest.raises(anthropic_client.AnthropicError):
+            _reserve(ledger, 'synthetic prompt')
+
+
+@pytest.mark.parametrize('evidence', [
+    {'answer_text_sha256_v1': 'a' * 64},
+    {'answer_finish_reason_v1': 'stop'},
+    {'contract_error_detail': 'refusal'}])
+def test_stored_payment_marker_mixed_with_200_evidence_stays_held(tmp_path, monkeypatch, evidence):
+    """record_result can never write a payment marker beside 200-only evidence;
+    a stored row that mixes them is corrupt, so it must hold as unresolved —
+    never prove a resendable rejection, even after a receipted resume."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt')
+        cloud_policy.record_result(ledger, reservation, {
+            **_result(reservation, 'http_429', 'payment_required'),
+            'anthropic_error_code': 'enforced_spend_limit_reached'})
+        field, value = next(iter(evidence.items()))
+        with ledger.db:
+            ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,?,?) "
+                              "WHERE kind='cloud_usage_result'", ('$.' + field, value))
+        stored = ledger.db.execute("SELECT meta FROM artifacts WHERE kind='cloud_usage_result'").fetchone()[0]
+        assert cloud_policy.usage_report(ledger)['pricing_unverified'] is True
+        with pytest.raises(anthropic_client.AnthropicError):
+            _reserve(ledger, 'synthetic prompt')
+        cloud_policy.resume(ledger)
+        with pytest.raises(anthropic_client.AnthropicError):
+            _reserve(ledger, 'synthetic prompt')
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+        assert ledger.db.execute("SELECT meta FROM artifacts WHERE kind='cloud_usage_result'").fetchone()[0] == stored
+
+
+def test_stored_rate_limited_mixed_with_200_evidence_stays_held(tmp_path, monkeypatch):
+    """The generic http_429 rate_limited rejection carries no provider marker;
+    a stored row mixing it with 200-only evidence is just as impossible and
+    must hold instead of authorizing another attempt."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt')
+        cloud_policy.record_result(ledger, reservation, _result(reservation, 'http_429', 'rate_limited'))
+        with ledger.db:
+            ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.answer_text_sha256_v1',?) "
+                              "WHERE kind='cloud_usage_result'", ('a' * 64,))
+        assert cloud_policy.usage_report(ledger)['pricing_unverified'] is True
+        with pytest.raises(anthropic_client.AnthropicError):
+            _reserve(ledger, 'synthetic prompt')
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+def _anthropic_profile(route, purpose):
+    selected, errors = cloud_policy.resolve_profile(
+        {'cloud_llm': {'mode': 'on', 'project_ids': [1], 'provider': 'anthropic'}},
+        route=route, purpose=purpose)
+    assert not errors
+    return selected
+
+
+def test_c1_pending_unit_is_not_resent_under_the_new_profile(tmp_path, monkeypatch):
+    """A paid attempt without a result stays unresolved across the C1 profile change."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    selected = _anthropic_profile('patient_context', 'patient_context')
+    with closing(_db(tmp_path)) as ledger:
+        _reserve(ledger, 'synthetic prompt', 'anthropic', route='patient_context', unit='old',
+                 owner={'workday_id': 'old', 'source_sig': 'old'})
+        with pytest.raises(anthropic_client.AnthropicError) as caught:
+            _reserve(ledger, 'synthetic prompt', 'anthropic', route='patient_context', unit='new',
+                     owner={'workday_id': 'new', 'source_sig': 'new'},
+                     max_tokens=selected['max_tokens'], selection=selected)
+        assert caught.value.detail == 'cloud_unit_unresolved'
+        assert caught.value.history_refusal == 'result_missing'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+def test_c1_failed_unit_is_not_resent_under_the_new_profile(tmp_path, monkeypatch):
+    """A settled paid failure stays failed; the new profile cannot resend it."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    selected = _anthropic_profile('patient_context', 'patient_context')
+    with closing(_db(tmp_path)) as ledger:
+        previous = _reserve(ledger, 'synthetic prompt', 'anthropic', route='patient_context', unit='old',
+                            owner={'workday_id': 'old', 'source_sig': 'old'})
+        cloud_policy.record_result(ledger, previous, {
+            **_result(previous, 'http_200', 'contract_error'),
+            'usage': {'input_tokens': 10, 'output_tokens': 2}})
+        with pytest.raises(anthropic_client.AnthropicError) as caught:
+            _reserve(ledger, 'synthetic prompt', 'anthropic', route='patient_context', unit='new',
+                     owner={'workday_id': 'new', 'source_sig': 'new'},
+                     max_tokens=selected['max_tokens'], selection=selected)
+        assert caught.value.detail == 'cloud_unit_unresolved'
+        assert caught.value.history_refusal == 'repeat_failed'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+def test_c1_completed_backlog_is_not_rebuilt_under_haiku_medium(tmp_path, monkeypatch):
+    """Completed backlog work keeps its Haiku result: same model with effort
+    None to medium is not a proven selection change, so nothing is resent."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    selected = _anthropic_profile('semantic_backlog', 'backlog')
+    assert (selected['model'], selected['effort'], selected['profile']) == (
+        anthropic_client.MODEL, 'medium', 'haiku-medium')
+    with closing(_db(tmp_path)) as ledger:
+        previous = _reserve(ledger, 'synthetic prompt', 'anthropic', route='semantic_backlog',
+                            unit='old', owner=_owner())
+        cloud_policy.record_result(ledger, previous, {
+            **_result(previous, 'http_200', None),
+            'usage': {'input_tokens': 10, 'output_tokens': 2}})
+        with pytest.raises(anthropic_client.AnthropicError) as caught:
+            _reserve(ledger, 'synthetic prompt', 'anthropic', route='semantic_backlog',
+                     unit='new', owner=_owner(),
+                     max_tokens=selected['max_tokens'], selection=selected)
+        assert caught.value.detail == 'cloud_unit_unresolved'
+        assert caught.value.history_refusal == 'repeat_success'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+@pytest.mark.parametrize('purpose', ['patient_context', 'quality_repair'])
+def test_c1_completed_patient_work_is_rebuilt_once_under_sonnet(tmp_path, monkeypatch, purpose):
+    """Completed patient-context work may be rebuilt exactly once under Sonnet;
+    the rebuilt unit then blocks any further resend as a repeat success."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    selected = _anthropic_profile('patient_context', purpose)
+    assert (selected['model'], selected['effort'], selected['profile']) == (
+        anthropic_client.SONNET_MODEL, 'high', 'sonnet-high')
+    with closing(_db(tmp_path)) as ledger:
+        previous = _reserve(ledger, 'synthetic prompt', 'anthropic', route='patient_context',
+                            unit='old', owner={'workday_id': 'old', 'source_sig': 'old'})
+        cloud_policy.record_result(ledger, previous, {
+            **_result(previous, 'http_200', None),
+            'usage': {'input_tokens': 10, 'output_tokens': 2}})
+        rebuilt = _reserve(ledger, 'synthetic prompt', 'anthropic', route='patient_context',
+                           unit='new', owner={'workday_id': 'new', 'source_sig': 'new'},
+                           max_tokens=selected['max_tokens'], selection=selected)
+        assert rebuilt['model'] == anthropic_client.SONNET_MODEL
+        cloud_policy.record_result(ledger, rebuilt, {
+            **_result(rebuilt, 'http_200', None),
+            'usage': {'input_tokens': 10, 'output_tokens': 2}})
+        with pytest.raises(anthropic_client.AnthropicError) as caught:
+            _reserve(ledger, 'synthetic prompt', 'anthropic', route='patient_context',
+                     unit='third', owner={'workday_id': 'third', 'source_sig': 'third'},
+                     max_tokens=selected['max_tokens'], selection=selected)
+        assert caught.value.detail == 'cloud_unit_unresolved'
+        assert caught.value.history_refusal == 'repeat_success'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 2
+
+
+def test_c1_completed_semantic_quality_repair_is_rebuilt_once_under_sonnet(tmp_path, monkeypatch):
+    """The same one-time Sonnet rebuild applies to quality repair on the
+    semantic backlog route."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    selected = _anthropic_profile('semantic_backlog', 'quality_repair')
+    assert (selected['model'], selected['effort'], selected['profile']) == (
+        anthropic_client.SONNET_MODEL, 'high', 'sonnet-high')
+    with closing(_db(tmp_path)) as ledger:
+        previous = _reserve(ledger, 'synthetic prompt', 'anthropic', route='semantic_backlog',
+                            unit='old', owner=_owner())
+        cloud_policy.record_result(ledger, previous, {
+            **_result(previous, 'http_200', None),
+            'usage': {'input_tokens': 10, 'output_tokens': 2}})
+        rebuilt = _reserve(ledger, 'synthetic prompt', 'anthropic', route='semantic_backlog',
+                           unit='new', owner=_owner(),
+                           max_tokens=selected['max_tokens'], selection=selected)
+        assert rebuilt['model'] == anthropic_client.SONNET_MODEL
+        cloud_policy.record_result(ledger, rebuilt, {
+            **_result(rebuilt, 'http_200', None),
+            'usage': {'input_tokens': 10, 'output_tokens': 2}})
+        with pytest.raises(anthropic_client.AnthropicError) as caught:
+            _reserve(ledger, 'synthetic prompt', 'anthropic', route='semantic_backlog',
+                     unit='third', owner=_owner(),
+                     max_tokens=selected['max_tokens'], selection=selected)
+        assert caught.value.detail == 'cloud_unit_unresolved'
+        assert caught.value.history_refusal == 'repeat_success'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 2

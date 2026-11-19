@@ -105,6 +105,8 @@ def _change_local_model(db, monkeypatch):
 @pytest.fixture
 def cloud_over_local(tmp_path, monkeypatch):
     """Both members PASS with cloud summaries over facts of local model A."""
+    # the stub never calls llm_chat, which is what resets a failure left by an earlier test
+    monkeypatch.setattr(semantic_transport, "_LLM_FAILURE", None)
     monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-a")
     db = _seeded_two(tmp_path)
     _run(db, _Model(), rounds=2)
@@ -333,7 +335,7 @@ class _LocalSummaryModel(_Model):
 
 @pytest.mark.parametrize("variant,stage", [
     ("reword", "interrupted"), ("identical", "interrupted"), ("nochange", "interrupted"),
-    ("action", "completed"), ("local_summary", "completed")])
+    ("local_summary", "interrupted"), ("action", "completed"), ("local_summary", "completed")])
 def test_empty_repair_candidate_over_earlier_facts(tmp_path, monkeypatch, variant, stage):
     """An empty repair holds nothing once its facts are redone or its result was committed.
 
@@ -341,7 +343,9 @@ def test_empty_repair_candidate_over_earlier_facts(tmp_path, monkeypatch, varian
     the repaired text was audited and its PASS committed, then the summary
     is dropped — by a fact document change that leaves the projection
     unchanged (``action``), or because a local summary is redone after a
-    local model change while the cloud facts stay (``local_summary``)."""
+    local model change while the cloud facts stay (``local_summary``). With
+    ``local_summary``/``interrupted`` the first audit after the model change
+    stops once too, so a redone pre-audit candidate follows the released one."""
     import semantic_summary_stages
     monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-a")
     db = _seeded_two(tmp_path)
@@ -359,10 +363,11 @@ def test_empty_repair_candidate_over_earlier_facts(tmp_path, monkeypatch, varian
     monkeypatch.setattr(semantic_drain, "summarize", summarize)
     monkeypatch.setattr(semantic_summary_stages, "summarize", semantic_drain.summarize)
     real_audit = semantic_audit.audit_claims
-    stop = [stage == "interrupted"]
+    stop = [float("inf") if stage == "interrupted" else 0]
 
     def audit(client, bundle, summary, *args, **kwargs):
         if stop[0] and summary["target_message_id"] == 1:
+            stop[0] -= 1
             raise runtime.LLMNotSent("synthetic_audit_stop")
         return real_audit(client, bundle, summary, *args, **kwargs)
     monkeypatch.setattr(semantic_audit, "audit_claims", audit)
@@ -378,13 +383,15 @@ def test_empty_repair_candidate_over_earlier_facts(tmp_path, monkeypatch, varian
         else:
             assert calls == [(1, False), (1, True), (2, False)] and _state(db) == "done"
             assert _summary(db, 1)
-        stop[0] = False
+        restop = (variant, stage) == ("local_summary", "interrupted")
+        stop[0] = 1 if restop else 0
         if variant != "nochange":
             _change_local_model(db, monkeypatch)
         reasons = _reasons(monkeypatch)
         del calls[:]
         _run(db, model(), rounds=1 if stage == "completed" else 3)
-        assert _state(db) == "done" and _summary(db, 1) and not reasons
+        assert _state(db) == "done" and _summary(db, 1)
+        assert "empty_repair_candidate_binding" not in reasons and (restop or not reasons)
         # reworded facts or a redone local summary: summarized once more,
         # never repaired again; otherwise the repaired candidate bound to
         # the current facts is audited

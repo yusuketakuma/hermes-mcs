@@ -12,6 +12,7 @@ import math
 import os
 from pathlib import Path
 import re
+import sqlite3
 import stat
 import time
 import uuid
@@ -272,6 +273,8 @@ def enqueue_tx(db, req, cfg, root, now):
         return "stamp_target_invalid", {}
     if req["form_hash"] not in (current["form_hash"], _form_hash(current, legacy=True)):
         return "stamp_target_changed", {}
+    if post["own"]["state"] == "pending":
+        return "stamp_result_unknown", {}
     if post["own"]["state"] != "observed":
         return "stamp_observation_required", {}
     if (req["expected_own"]["type"] != post["own"]["type"]
@@ -284,6 +287,8 @@ def enqueue_tx(db, req, cfg, root, now):
             return "stamp_witness_capacity", {}
         if any(w["state"] not in TERMINAL for w in witnesses.values()):
             return "stamp_result_unknown", {}
+    except StampRefused as exc:
+        return str(exc), {}
     except (OSError, ValueError, KeyError, TypeError):
         return "stamp_restore_hold", {}
     # The intent ages from the human confirm, not from when the runner got to it.
@@ -312,13 +317,15 @@ def _scope_witnesses(directory, req, namespace):
             if len(found) >= MAX_SCOPE_OPERATIONS or not entry.name.endswith(".json"):
                 raise StampRefused("stamp_witness_capacity")
             key = entry.name[:-5]
-            if str(uuid.UUID(key)) != key:
-                raise StampRefused("stamp_witness_invalid")
-            value = _json(scope / entry.name)
+            try:
+                value = _json(scope / entry.name) if str(uuid.UUID(key)) == key else {}
+            except ValueError:    # a bad name or an unreadable/non-JSON record (StampRefused too)
+                value = {}
             if (value.get("namespace") != namespace or value.get("command_id") != key
                     or value.get("scope") != [req[k] for k in ("project_id", "message_id", "mcs_user_id")]
                     or not valid_hash(value.get("payload_hash"))
-                    or value.get("state") not in {"started", "unknown", "confirmed", "rejected"}):
+                    or value.get("state") not in {"started", "unknown", "confirmed", "rejected"}
+                    or not valid_text(value.get("error"), 64, nullable=True)):
                 raise StampRefused("stamp_witness_invalid")
             found[key] = value
     return scope, found
@@ -362,6 +369,28 @@ def _save_outcome(ledger, artifact_id, value, state, error=None):
     return value
 
 
+def receipt_result(receipt):
+    """The answer a stamp receipt gives: an execution-time rejection ends the command as rejected."""
+    result = dict(receipt)
+    if result.get("stamp_state") == "rejected":
+        result.update(outcome="rejected", error=result.get("stamp_error") or "stamp_target_changed")
+    return result
+
+
+def watch_result(db, command_id, request_id):
+    """Route a queued press's later result to its click followup; False when it cannot."""
+    try:
+        if str(uuid.UUID(request_id)) != request_id:
+            return False
+        with db:
+            return db.execute("UPDATE artifacts SET meta=json_set(meta,'$.followup_request_id',?) "
+                              "WHERE kind=? AND json_extract(meta,'$.command_id')=? "
+                              "AND json_extract(content,'$.state')='queued'",
+                              (request_id, KIND, command_id)).rowcount > 0
+    except (AttributeError, TypeError, ValueError, sqlite3.Error):
+        return False
+
+
 def _publish_result(ledger, root, value):
     """Publish committed status on the existing private followup channel."""
     import notify_spool
@@ -372,12 +401,17 @@ def _publish_result(ledger, root, value):
                             (req["command_id"],)).fetchone()
     if row is None:
         return
-    result = json.loads(row[0])
-    if result.get("stamp_state") == "rejected":
-        result.update(outcome="rejected", error=result.get("stamp_error") or "stamp_target_changed")
+    result = receipt_result(json.loads(row[0]))
     notify_spool.ensure_dirs(root)
-    notify_spool.publish_file(notify_spool.notify_dirs(root)["cmd_results"],
-                              req["command_id"] + ".json", canonical(result))
+    results = notify_spool.notify_dirs(root)["cmd_results"]
+    notify_spool.publish_file(results, req["command_id"] + ".json", canonical(result))
+    click = ledger.db.execute("SELECT json_extract(meta,'$.followup_request_id') FROM artifacts "
+                              "WHERE kind=? AND json_extract(meta,'$.command_id')=?",
+                              (KIND, req["command_id"])).fetchone()
+    if click and isinstance(click[0], str) and result.get("stamp_state") != "queued":
+        # A card press's followup reads only its click's request_id (written by watch_result).
+        notify_spool.publish_file(results, str(uuid.UUID(click[0])) + ".json",
+                                  canonical({**result, "request_id": click[0]}))
     with ledger.db:
         ledger.db.execute("UPDATE artifacts SET content=json_set(content,'$.result_published',json('true')) "
                           "WHERE kind=? AND json_extract(meta,'$.command_id')=?",
@@ -459,7 +493,9 @@ def _execute(ledger, adapter, cfg, root, row, now, deadline):
         raise StampRefused("stamp_witness_invalid")
     if prior is not None and prior["state"] in TERMINAL:
         # Restore replays the original observed outcome, not the post's later state.
-        _save_outcome(ledger, row["artifact_id"], value, prior["state"])
+        # Only the server-refusal path writes a rejected witness; older ones carry no error.
+        _save_outcome(ledger, row["artifact_id"], value, prior["state"], prior.get("error") or (
+            "stamp_server_rejected" if prior["state"] == "rejected" else None))
         return prior["state"]
     try:
         # Reconciliation remains GET-only after intent expiry; authorization and
@@ -532,13 +568,20 @@ def _execute(ledger, adapter, cfg, root, row, now, deadline):
         except Exception:
             state = "unknown"
     witness["state"] = state
+    witness["error"] = "stamp_server_rejected" if state == "rejected" else None
     if prior is None and not path.exists():
         publish_new_bytes(path, canonical(witness))
     else:
         atomic_write(str(path), lambda f: f.write(canonical(witness).decode()), mode=0o600, makedirs=False)
-    _save_outcome(ledger, row["artifact_id"], value, state,
-                  "stamp_server_rejected" if state == "rejected" else None)
+    _save_outcome(ledger, row["artifact_id"], value, state, witness["error"])
     return state
+
+
+def _move_behind(ledger, artifact_id):
+    """Re-order a row behind the others in the drain windows so a failing row cannot starve them."""
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET content=json_set(content,'$.updated_at',?) "
+                          "WHERE artifact_id=? AND kind=?", (time.time(), artifact_id, KIND))
 
 
 def drain(ledger, adapter, cfg, root, deadline):
@@ -573,10 +616,7 @@ def drain(ledger, adapter, cfg, root, deadline):
                         and _approved(ledger.db, value["request"])):
                     _save_outcome(ledger, row["artifact_id"], value, state, "stamp_check_held")
                 else:
-                    # Move an unsaveable row behind the others so it cannot starve the window.
-                    with ledger.db:
-                        ledger.db.execute("UPDATE artifacts SET content=json_set(content,'$.updated_at',?) "
-                                          "WHERE artifact_id=? AND kind=?", (time.time(), row["artifact_id"], KIND))
+                    _move_behind(ledger, row["artifact_id"])
             value = json.loads(ledger.db.execute(
                 "SELECT content FROM artifacts WHERE artifact_id=?", (row["artifact_id"],)).fetchone()[0])
             try:
@@ -593,4 +633,5 @@ def drain(ledger, adapter, cfg, root, deadline):
             except Exception:
                 # The durable outcome stays authoritative if followup/render publication fails.
                 counts["held"] += 1
+                _move_behind(ledger, row["artifact_id"])    # a failing row must not pin the 4-row window
     return counts

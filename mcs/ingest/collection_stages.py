@@ -1092,7 +1092,7 @@ def stage_metadata_shadow(adapter, ledger, result, deadline, *, publish=False,
                 continue
             ledger.save_metadata_shadow(m, publish=publish)
             stats["fetched"] += 1
-            stats["published"] += bool(publish and not m.metadata_errors)
+            stats["published"] += bool(publish and message_observations.only_field_errors(m.metadata_errors))
             if m.metadata_errors:
                 stats["errors"].append({"message_id": m.message_id, "kind": "schema_error"})
         if actors:

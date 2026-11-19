@@ -25,7 +25,8 @@ SYMPTOMS = ("発熱", "お熱", "高熱", "血尿", "疼痛", "痛み", "嘔気"
              "咳", "痰", "喘鳴", "息苦し", "呼吸困難", "呼吸停止",
              "意識消失", "意識障害", "意識低下", "意識がない", "意識なし",
              "意識不明", "反応がない", "食欲低下", "食欲不振", "不眠", "せん妄",
-             "誤嚥", "嚥下", "出血", "褥瘡", "皮膚", "倦怠", "疲労", "脱水",
+             # 嚥下/皮膚 alone are a function and a site (嚥下良好・皮膚状態良好), not symptoms
+             "誤嚥", "嚥下困難", "嚥下障害", "出血", "褥瘡", "倦怠", "疲労", "脱水",
              "低血糖",
              # care/nursing wording: excretion, swallowing, skin, behaviour, incidents
              "失禁", "尿閉", "頻尿", "血便", "下血", "むせ", "口腔乾燥", "口内炎", "しびれ", "麻痺",
@@ -78,7 +79,18 @@ _SCOPE_HEADING = re.compile(
 
 _REPORTING = re.compile(r"(?:より|から|が(?:報告|連絡|説明|相談|話)|は(?:報告|連絡|説明|相談|話))")
 
-CURRENT_MARK = re.compile(r"現在|今も|今は|本日|今日|続いて|持続|(?:昨日|先週|先月)から|(?:昨日|先週|先月)より")
+CURRENT_MARK = re.compile(r"現在|今も|今は|本日|今日|(?<!に)(?<!に引き)続いて|持続|(?:昨日|先週|先月)から|(?:昨日|先週|先月)より")
+_CONTINUING = re.compile(r"持続|続いて|残って")
+# Closed forms of the target's own predicate: a time word right before it, or right after it a
+# time word and/or an affirmative presence/continuation that ends the predicate. Another noun or
+# predicate in between never lends its time, and any other ending (はいません, おりません) is unknown.
+_LEADING_CURRENT = re.compile(rf"(?:{CURRENT_MARK.pattern})(?:は|も|に|の)?[、,\s　]*$")
+_TARGET_PREDICATE = re.compile(
+    rf"(?:は|が|も)?[\s　]*(?:(?:いたしました|しました|した|して|し)(?:が|けど|けれど(?:も)?)?[、,\s　]*)?"
+    rf"(?P<now>{CURRENT_MARK.pattern})?(?:は|も)?[\s　]*"
+    rf"(?:(?P<cont>(?:{_CONTINUING.pattern})(?:して)?(?:いる|います|おり(?:ます)?)?)"
+    rf"|あり(?:ます)?|ある|(?:みられ|見られ)(?:る|ます)?)"
+    rf"(?=[。！？!?;；\n、,]|$|が|けど|けれど)")
 
 _NONCURRENT_MARK = re.compile(r"過去|既往|以前(?!から|より)|先月(?!から|より)|先週(?!から|より)|昨年|一昨年")
 
@@ -93,6 +105,14 @@ _CONDITIONAL_MARK = re.compile(
     r"ない|なく(?!ても)|なかった|よう|ろ|もら(?:う|い|った)|らせ|らべ|っかり)|"
     r"万一|万が一|(?:場合|とき|(?<![0-9０-９一二三四五六七八九十])(?<!採血)(?<!測定)(?<!検査)(?<!服用)(?<!投与)(?<!訪問)(?<!往診)時)(?:は|には|に)|"
     r"なら(?!ない|なく|なかった|れ|ず|ぬ)|たら(?!しい)|れば")
+
+# A standing order's comparator on a number (SpO2 90%以下で酸素開始) is a threshold, not a reading;
+# 以下で推移/経過/安定 still reports the patient's own course. It conditions only its own clause
+# (no break between it and the span), never a later measured value or request after a 、.
+_THRESHOLD_MARK = re.compile(
+    r"(?<=[0-9０-９%％℃度台LgＬ分回])[ \t　]*(?:(?:以上|以下|未満|超)"
+    r"(?:で(?!推移|経過|安定|維持|続|変動|あ|し|す)|は|なら|の?(?:場合|時|とき))"
+    r"|(?:を超え|を下回|を切)(?:る|た|った)?(?:と(?!の|こ)|なら|場合|時|とき))")
 
 _UNCERTAIN_ADDITIVE = re.compile(
     r"もし(?:て(?:下さい|ください|頂|いただ|ほしい|欲しい|くれ)|たい|たこと|"
@@ -109,10 +129,16 @@ _ADDITIVE_MOSHI = re.compile(r"(?<=[一-龥々ァ-ヶーA-Za-z0-9])もし(?=[、
 _CONSEQUENT = re.compile(r"[^。！？!?\n]*?(?:れば|ければ|たら|なら|ても|場合|とき|際)")
 
 
-def _has_condition(body, start, end):
+def _has_condition(body, start, end, span=None):
     for match in _CONDITIONAL_MARK.finditer(body, start, end):
         if (not match.group().startswith("もし") or not _ADDITIVE_MOSHI.match(body, match.start())
                 or _CONSEQUENT.match(body, match.end())):
+            return True
+    for match in _THRESHOLD_MARK.finditer(body, start, end):
+        if span is None:
+            return True
+        gap = body[span:match.start()] if match.start() >= span else body[match.end():span]
+        if _SCOPE_BREAK.search(gap) is None:
             return True
     return False
 
@@ -232,7 +258,7 @@ def _source_scope_axes(body, start, end, *, patient_name=None, default="patient"
     sentence = max(body.rfind(c, 0, start) for c in "。！？!?;；\n") + 1
     condition_start = max((m.end() for m in _SCOPE_BREAK.finditer(body, sentence, start)
                            if m.group() not in "、,"), default=sentence)
-    if _has_condition(body, condition_start, right.start() if right else len(body)):
+    if _has_condition(body, condition_start, right.start() if right else len(body), start):
         return scope, "conditional"
     if (_QUESTION.search(clause) or right is not None and body[right.start()] in "？?"):
         return scope, "unknown"
@@ -268,20 +294,48 @@ def patient_source_scope(body, start, end, *, patient_name=None, default="patien
     return subject if subject != "patient" or period == "current" else period
 
 
-def source_axes(body, start, end, *, default="patient"):
-    """Return independent reported person and period axes for a grounded assertion."""
-    subject, period = _source_scope_axes(body, start, end, default=default)
-    if period in ("conditional", "unknown"):
-        return subject, period
+def assertion_start(body, start):
+    """Start of the target's own assertion: its sentence part, from the nearest explicit owner."""
     left = max(body.rfind(mark, 0, start) for mark in "。！？!?;；\n") + 1
     left = max((m.end() for m in _SCOPE_BREAK.finditer(body, left, start)
                 if m.group() not in "、,"), default=left)
     # A later explicit owner begins a new assertion, not the earlier person's time.
     owners = list(_PERSON.finditer(body, left, start))
-    if owners:
-        left = owners[-1].start()
+    return owners[-1].start() if owners else left
+
+
+def assertion_stop(body, end, limit):
+    """End of the target's own assertion before ``limit``: a later explicit owner starts another one."""
+    owner = _PERSON.search(body, end, limit)
+    return owner.start() if owner else limit
+
+
+def _target_predicate(body, end, limit):
+    return _TARGET_PREDICATE.match(body, end, assertion_stop(body, end, limit))
+
+
+def target_continuing(body, end, limit):
+    """Whether the target's own predicate states that it continues."""
+    match = _target_predicate(body, end, limit)
+    return bool(match and match["cont"])
+
+
+def source_current(body, start, end, limit):
+    """Whether the target's own predicate states it as current; an unknown form is not current."""
+    if _LEADING_CURRENT.search(body[assertion_start(body, start):start]):
+        return True
+    match = _target_predicate(body, end, limit)
+    return bool(match and (match["now"] or match["cont"]))
+
+
+def source_axes(body, start, end, *, default="patient"):
+    """Return independent reported person and period axes for a grounded assertion."""
+    subject, period = _source_scope_axes(body, start, end, default=default)
+    if period in ("conditional", "unknown"):
+        return subject, period
+    left = assertion_start(body, start)
     before = body[left:start]
-    if _has_condition(body, left, start):
+    if _has_condition(body, left, start, start):
         return subject, "conditional"
     times = [(m.end(), "current") for m in CURRENT_MARK.finditer(before)]
     times += [(m.end(), "past") for rx in (_NONCURRENT_MARK, _MEASURED_PAST_MARK)

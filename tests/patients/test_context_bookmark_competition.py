@@ -17,13 +17,14 @@ __all__ = ['runtime']
 @pytest.mark.parametrize('drift', ['bookmark', 'unit_progress', 'metadata', 'bad_bookmark'])
 def test_other_patient_bookmark_does_not_reject_selected_source(runtime, monkeypatch, lane, drift):
     led, clock, calls = runtime
-    seed(led, mid=1, pid=1)
+    posted_at = '2026-10-17T22:00:00+09:00'
+    seed(led, mid=1, pid=1, posted_at=posted_at)
     if lane == 'C':
         first = step(runtime)
         assert first['status'] == 'progressed' and first['lane'] == 'B'
         assert document(led, state.SCAN)['complete']
         assert not document(led, state.SCAN)['audited']
-    seed(led, mid=2, pid=2, proof=False)
+    seed(led, mid=2, pid=2, proof=False, posted_at=posted_at)
     content, meta = state._latest(led.db, state.PROGRESS, 0)
     # Start this selection at patient 1; preserve the real B/C lane rotation.
     state._replace(led, state.PROGRESS, 0, {**content, 'patient_scan': None}, meta)

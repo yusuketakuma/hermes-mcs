@@ -38,6 +38,8 @@ from update_lifecycle_context import (
 )
 from update_preflight import (
     _candidate_args_valid,
+    _provider_bridge_verified,
+    _provider_migration_needed,
     precheck_local,
     precheck_tag,
     recorded_install_args,
@@ -139,6 +141,15 @@ def _plan(tag, cfg, state, current, target_sha, *, candidate: bool = False) -> d
         entry_context="installed_standalone" if installed else "external")
     blockers, reinstall = decision["blockers"], decision["reinstall"]
     noop = cur_sha == target_sha
+    if not noop:
+        # The same refusal apply makes before writers stop (IA-110): report it here.
+        try:
+            bridge_needed = _provider_migration_needed()
+        except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
+            blockers.append("provider_settings_unverified")
+        else:
+            if bridge_needed and not _provider_bridge_verified(cur_sha, target_sha):
+                blockers.append("provider_update_bridge_required")
     try:
         if settings_migration_receipt.pending(DATA):
             migration_status = "pending"
@@ -151,6 +162,8 @@ def _plan(tag, cfg, state, current, target_sha, *, candidate: bool = False) -> d
         migration_status = "unverified"
         blockers.append("settings_migration_unverified")
     route = decision["route"]
+    if {"provider_settings_unverified", "provider_update_bridge_required"} & set(blockers):
+        route = "blocked"
     if noop and migration_status == "required" and not blockers:
         if reinstall:
             blockers.append("settings_migration_requires_reinstall")

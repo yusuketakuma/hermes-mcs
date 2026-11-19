@@ -83,7 +83,9 @@ def _pinned_history_adapter(count=32, created_at="2026-09-19T01:00:00+09:00"):
 def _lagging_patient(tmp_path):
     db = _ledger(tmp_path)
     db.ensure_patient(1)
-    db.save_messages([_message(mid=100)])
+    # The stored head must predate the pinned adapter items (2026-09-19T01:00)
+    # for the coverage lag to exist; a "now" default would invert the direction.
+    db.save_messages([_message(mid=100, posted_at="2026-09-19T00:00:00+09:00")])
     db.set_history_floor(1, 0)
     db.set_coverage(1, db.high_watermark(1))
     return db

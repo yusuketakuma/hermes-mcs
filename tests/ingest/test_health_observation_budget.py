@@ -37,10 +37,12 @@ def _empty(now=NOW):
 
 
 def _assert_unknown(parts, reason):
-    assert parts == {"total": None, "cards": None, "by_state": dict.fromkeys(STATES),
-                     "by_plan": dict.fromkeys(("current", "superseded")),
-                     "oldest_age_s": None, "observed_at": NOW,
-                     "status": "unknown", "reason": reason}
+    # observation carries the bounded read's own stop diagnostics, not counts.
+    assert {k: v for k, v in parts.items() if k != "observation"} == {
+        "total": None, "cards": None, "by_state": dict.fromkeys(STATES),
+        "by_plan": dict.fromkeys(("current", "superseded")),
+        "oldest_age_s": None, "observed_at": NOW,
+        "status": "unknown", "reason": reason}
 
 
 @pytest.mark.parametrize("reader", ["cards", "parts", "holds"])
@@ -139,7 +141,7 @@ def test_failed_part_observation_is_unknown_without_losing_outer_transaction(sto
     original_limit = stored.getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
     stored.execute("INSERT INTO runs(started_at,status,error) VALUES(?,'ok','')", (NOW,))
     before = stored.total_changes
-    def read(db, now, cfg=None):
+    def read(db, now, cfg=None, **_kwargs):
         if failure == "unavailable":
             raise ValueError("SYNTHETIC_PRIVATE_ERROR")
         db.execute("SELECT zeroblob(?)", (health_report.HEALTH_OBSERVATION_ROW_BYTES + 1,)).fetchone()
@@ -165,7 +167,7 @@ def test_sql_deadline_clears_handler_and_preserves_connection(stored, monkeypatc
     clock = [100.0]
     monkeypatch.setattr(health_report.time, "monotonic", lambda: clock[0])
 
-    def read(db, now, cfg=None):
+    def read(db, now, cfg=None, **_kwargs):
         clock[0] += health_report.NOTIFICATION_OBSERVATION_S + 0.1
         # Exercise the real SQLite progress handler, not a raised stub timeout.
         db.execute("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 "
@@ -289,6 +291,8 @@ def test_exhausted_sql_budget_reports_unknowns_never_fake_counts(stored, monkeyp
     assert notify["held"] is None and notify["retired_held"] is None
     assert notify["state"] == "incomplete"
     assert report["semantic_jobs"]["pending"] is None
+    assert report["semantic_jobs"]["user_facing_pending"] is None
+    assert report["semantic_jobs"]["reprocess_pending"] is None
     assert report["extract_qc_jobs"]["status"] == "unknown"
     assert report["extract_v2_coverage"]["status"] == "unknown"
     assert report["extract_v2_coverage"]["current"] is None
@@ -661,3 +665,84 @@ def test_card_cleanup_failure_is_unknown_and_attributed_to_cleanup(stored, monke
     assert stored.getlimit(sqlite3.SQLITE_LIMIT_LENGTH) == original_limit
     assert stored.execute("PRAGMA busy_timeout").fetchone()[0] == 7000
     assert not stored.in_transaction
+
+
+SEMANTIC_ON = {"semantic": {"mode": "shadow", "project_ids": []}}
+
+
+def _semantic_job(db, mid, payload):
+    # due and untouched for seven hours: the stall verdict fires on its own
+    db.execute(
+        "INSERT INTO fetch_jobs(kind,project_id,message_id,payload,state,next_try,"
+        "created_at,updated_at) VALUES('semantic',1,?,?,'pending',?,?,?)",
+        (mid, payload, NOW - 7 * 3600, NOW - 7 * 3600, NOW - 7 * 3600))
+
+
+def test_semantic_stall_detail_splits_pending_and_keeps_the_verdict(stored, monkeypatch):
+    for mid, payload in enumerate((
+            '{"reprocess_only": true, "notification_free": true}',
+            '{"reprocess_only": true, "notification_free": true}',
+            '{"eligible": true}', '{"notification_free": true}', 'not json'), 1):
+        _semantic_job(stored, mid, payload)
+    stalls = health_report.backlog_stalls(stored, SEMANTIC_ON, NOW, marks={})
+    assert "semantic_backlog_stalled" in stalls
+    jobs = health_report.build_health(stored, {"errors": [], "notify": {}}, "ok", cfg={})["semantic_jobs"]
+    assert jobs["pending"] == 5
+    assert (jobs["user_facing_pending"], jobs["reprocess_pending"]) == (1, 2)
+    assert jobs["resident_turns_24h"] is None   # no resident turn recorded yet
+    import llm_availability
+    path = llm_availability.semantic_turns_path(stored)
+    for at, busy in ((NOW - 90_000, True), (NOW - 60, True), (NOW - 30, False), (NOW - 10, True)):
+        monkeypatch.setattr(llm_availability.time, "time", lambda at=at: at)
+        llm_availability.record_semantic_turn(str(path), busy)
+    monkeypatch.setattr(llm_availability.time, "time", lambda: NOW)   # same module as health_report.time
+    jobs = health_report.build_health(stored, {"errors": [], "notify": {}}, "ok", cfg={})["semantic_jobs"]
+    # the turn older than 24 h is dropped from the file and the count
+    assert jobs["resident_turns_24h"] == {"attempts": 3, "lock_busy": 2}
+    assert len(json.loads(path.read_text())["turns"]) == 3
+    # the observation never feeds the verdict
+    assert health_report.backlog_stalls(stored, SEMANTIC_ON, NOW, marks={}) == stalls
+
+
+def test_semantic_turns_ignore_a_malformed_file_and_stay_bounded(stored, monkeypatch):
+    import llm_availability
+    path = llm_availability.semantic_turns_path(stored)
+    path.write_text('{"turns": [[1, 1], "x", [null, 0], [199990, 2]]}')
+    assert llm_availability.semantic_turns_24h(stored, now=NOW) is None
+    monkeypatch.setattr(llm_availability, "_SEMANTIC_TURNS_MAX", 3)
+    monkeypatch.setattr(llm_availability.time, "time", lambda: NOW)
+    for _ in range(5):
+        llm_availability.record_semantic_turn(str(path), True)
+    assert llm_availability.semantic_turns_24h(stored, now=NOW) == {"attempts": 3, "lock_busy": 3}
+
+
+def _stall_alert(tmp_path, jobs):
+    path = tmp_path / "health.json"
+    path.write_text(json.dumps({"overall": "degraded", "at": NOW,
+                                "state_reasons": ["semantic_backlog_stalled"],
+                                "semantic_jobs": jobs}))
+    report = health_watch.classify_health(str(path), NOW + 1, 1800)
+    lines = health_watch._alert_lines({**report, "alert": True, "disk_alert": False})
+    return report, next(line for line in lines if line.startswith("・意味チェック"))
+
+
+def test_semantic_stall_alert_names_the_split_and_lock_busy_share(tmp_path):
+    report, line = _stall_alert(tmp_path, {
+        "pending": 13421, "oldest_age_s": 7200.0, "user_facing_pending": 173,
+        "reprocess_pending": 13248, "resident_turns_24h": {"attempts": 261, "lock_busy": 178}})
+    assert report["state_reasons"] == ["semantic_backlog_stalled"]
+    assert line == ("・意味チェックが6時間以上止まっています（最古 2.0時間／通知対象173件・再処理13248件／"
+                    "直近24時間の背景処理261回のうち実行ロック待ち178回（68%））")
+
+
+@pytest.mark.parametrize("jobs", [
+    {"user_facing_pending": None, "reprocess_pending": 3, "resident_turns_24h": None},
+    {"user_facing_pending": 1.5, "reprocess_pending": -1,
+     "resident_turns_24h": {"attempts": 2, "lock_busy": 3}},
+    {"resident_turns_24h": {"attempts": 0, "lock_busy": 0}},
+    {"user_facing_pending": True, "resident_turns_24h": "x"},
+])
+def test_semantic_stall_alert_leaves_out_unread_detail(tmp_path, jobs):
+    report, line = _stall_alert(tmp_path, {"pending": 3, "oldest_age_s": 7200.0, **jobs})
+    assert report["state_reasons"] == ["semantic_backlog_stalled"]
+    assert line == "・意味チェックが6時間以上止まっています（最古 2.0時間）"

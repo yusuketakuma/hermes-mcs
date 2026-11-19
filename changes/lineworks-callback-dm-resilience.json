@@ -1,0 +1,21 @@
+{
+  "category": "fixed",
+  "title": "LINE WORKSの1:1返信と操作結果が届かず失われる問題を修正",
+  "summary": "LINE WORKSの1:1トークで、添付の誤り報告ボタンが長い表示結果、認証の一時障害中の操作結果、カード配送中や429待機中のフォーム入力が、送られないまま失われていた問題を修正します。送られたことが確認できないDMは従来どおり再送しません。受け付けられなかったCallbackは固定コードでログに残し、statusの不明件数に数えます。",
+  "upgrade": "既存の更新手順で適用し、LINE WORKS独立アダプターを再起動してください。設定変更は不要です。",
+  "details": [
+    "1:1トークのボタン表示名は、すべてLINE WORKSの上限20文字に切り詰める。押したときに送る内容（token）は変えない。",
+    "操作結果のDMで、1片も送っておらず、送っていないことが証明できる一時的な失敗（api.lockの使用中・429・アクセストークン取得の通信失敗や5xx）か送信前の保存失敗であれば、結果を次回の巡回へ戻す。戻すのは元の有効期限（14分）の間だけで、戻しても期限は延びない。4xxや送信前の検査で拒まれたDMは、巡回ごとに送り直さない。送った可能性がある失敗は従来どおり再送しない。",
+    "Callback処理中のDMは、カードや本文の配送が保持するapi.lockを最長約60秒、共有の429待機を1回待ってから送る。大きな添付の送信でapi.lockがそれより長く使われている場合は送らない。サービス停止時は1秒以内に待機をやめ、未着手のCallbackは次回起動まで残す。操作結果の巡回は待たずに次回へ戻す。",
+    "フォームの次の質問や確定前の確認が送れなかったと証明できるときは、入力前の状態にフォームを戻し、同じ回答を送り直せば続きから進める。",
+    "Callback受信箱が満杯（250件）または保存に失敗して503を返したとき、callback_inbox_full / callback_persist_failed をmcs.logに記録し、内容を含まない不明記録を残してstatusのunknown_callbacksに数える。Callbackの本文や入力内容は記録しない。"
+  ],
+  "refs": [
+    "adapters/lineworks/actions.py",
+    "adapters/lineworks/__main__.py",
+    "adapters/common/registry.py",
+    "adapters/lineworks/delivery.py",
+    "adapters/lineworks/server.py",
+    "tests/adapters/lineworks/test_bugsweep_lineworks_actions.py"
+  ]
+}

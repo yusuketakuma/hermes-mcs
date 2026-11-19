@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "standalone 用 SDK 依存を最新安定版に更新",
+  "summary": "runtime_mode=standalone で使う Slack SDK を slack-sdk 3.46.0 から最新安定版 3.47.0 に更新しました。あわせて開発用の ruff pin を 0.17.5 に更新しています。次回の install.sh / 更新経路の実行で同じ版が再インストールされ、それまで既存環境の SDK はそのまま動作します。",
+  "upgrade": "追加操作は不要です。次回 install.sh または通常の更新実行時に、pin との差分検出で SDK 一式が同じ内容に揃え直されます。",
+  "details": [
+    "deployment/requirements-standalone.txt の slack-sdk を 3.46.0 から 3.47.0（2026-11-13公開）へ更新。残り12パッケージ（discord-py 2.7.1・slack-bolt 1.30.0・aiohttp 3.14.5 等）は解決結果どおり既に最新安定版のため変更なし。",
+    "requirements-ocr.txt の yomitoku は同じ作業で 0.16.3（最新公式タグ commit）へ更新済み。",
+    "Makefile の ruff pin を 0.17.3 から 0.17.5（2026-11-12公開）へ更新。最新の 0.17.6 は公開直後のため採用していない。pytest 9.2.0 pin は最新のため変更なし。",
+    "cards.single_post の _VERIFIED_SDK は discord.py 2.7.1 のまま。discord-py が更新された場合はガードの検証版一覧も更新が必要。"
+  ],
+  "refs": [
+    "deployment/requirements-standalone.txt",
+    "Makefile"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "DB復元の承認待ちの間、数秒ごとのコマンド取込がDBとbackupを毎回読み直す問題を修正",
+  "summary": "DB復元の承認待ちが続く間、数秒ごとに動くコマンド取込（run_check.py --commands-only）が、承認コマンドの有無に関係なく毎回、喪失レポートを作り直していました。作り直しのたびにDB全体とbackupを読んでhashを計算し、run.lockを握り続けるため、承認後の更新処理やほかのtickを待たせることがありました。コマンド取込が承認を取り込まなかった回は、この作り直しと更新処理の再起動確認を行わないようにします。",
+  "upgrade": "この修正を含む版へ既存の更新手順で更新すると反映されます。追加の操作は不要です。承認の条件（喪失レポートのreport_id・backupのsha256・schemaとの束縛、human_confirmed）と、承認以外のコマンドを保留する動作は変わりません。",
+  "details": [
+    "コマンド取込が承認を取り込んだ回は、従来どおり喪失レポートを作り直し、束縛された承認があれば更新処理を起動します。",
+    "定期のtick（--commands-only なし）は従来どおり毎回この確認を行うため、以前に記録された承認の取りこぼしは定期tickで拾われます。"
+  ],
+  "refs": ["mcs/ingest/run_check.py", "tests/ingest/test_stale_tick_update_fence.py"]
+}

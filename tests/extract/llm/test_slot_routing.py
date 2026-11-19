@@ -126,15 +126,15 @@ def test_extract_probe_format_uses_choose_slot(monkeypatch):
 
 
 def test_extract_busy_probe_keeps_cached_mode(monkeypatch):
-    """A probe that lost the GPU turn (None) must not erase the cached
-    mode: the next row waits its turn instead of re-probing and deferring."""
+    """A probe that lost the GPU turn (None) is not a verdict: the body
+    defers, but the cached mode itself must not be erased."""
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "object")
     monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
     monkeypatch.setattr(extract_llm, "_FMT_TS", 0.0)
     monkeypatch.setattr(extract_llm_provider, '_FMT_TS', extract_llm._FMT_TS)
     monkeypatch.setattr(local_llm, "probe_format", lambda *a, **k: None)
     monkeypatch.setattr(local_llm, "admitted_probe_format", lambda *a, **k: None)
-    assert extract_llm._probe_format() == "object"
+    assert extract_llm._probe_format() is None
     assert extract_llm_provider._FMT_MODE == "object" and extract_llm_provider._FMT_TS == 0.0
 
 

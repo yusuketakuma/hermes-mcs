@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "独立モードでHermes用の常駐処理が管理記録なしに残り続ける問題を修正",
+  "summary": "独立モード（runtime_mode=standalone）の services は、管理記録（service_manifest.json）に載っていなくても、配置済みのHermes用常駐処理（local.mcs-cmd・local.mcs-int・抽出worker 3本）を停止して設定を削除してから独立hostを起動します。以前のHermesモードの services が途中で問題を返して管理記録を保存しなかった場合や、記録が古い場合に、Hermes側のworkerが独立hostと二重に動き続けることがなくなります。",
+  "upgrade": "追加操作は不要です。次に services（install.sh・更新の後処理を含む）を実行したときに適用されます。停止を確認できない処理があれば、従来の切替と同じく設定を残して新しい処理を起動せずに止まります。ローカルAI・復旧監視・SDC・LINE WORKS の常駐処理は対象外です。管理記録が読めない場合のHermes定期処理（cron）の扱いは変わりません。",
+  "details": [
+    "apply_services の独立モード分岐で、AGENT_LABELS から local.mcs-health を除いたラベルを retire_agents（bootout→not found 確認→plist削除）で退役させる。"
+  ],
+  "refs": ["mcs/ops/services/service_management.py", "tests/ops/test_mcs_setup_services.py"]
+}

@@ -154,7 +154,7 @@ def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim
         cfg, route="patient_context", purpose="quality_repair", root=extract_llm.HOME)
     if errors or selection is None:
         return "deferred", None
-    distinct = (selection['provider'] == 'openai' and selection['profile'] is not None
+    distinct = (selection['profile'] is not None
                 or cloud_inference.cloud_provider_contract(selection=selection) != patient_context_refresh_state._route(cfg, pid)["provider"])
     selected_tokens = selection["max_tokens"] if selection["max_tokens"] is not None else 1600
     if not spent and cloud_policy.budget_block_reason(
@@ -331,9 +331,8 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
         origin.update(provider=route['provider'], model=route['provider']['model'])
     binding = context_artifacts.quality_binding(origin)
     repair_provider = cloud_inference.cloud_provider_contract(selection=selection)
-    distinct = (selection['provider'] == 'openai' and selection['profile'] is not None
-                or repair_provider != origin.get('provider'))
-    if distinct:
+    needs_response_proof = selection['profile'] is not None or repair_provider != origin.get('provider')
+    if needs_response_proof:
         origin.update(repair_provider=repair_provider, quality_assessment=identity['assessment'],
                       quality_threshold=threshold)
     if header is None and (patient_context_refresh_sources._source_repair_units(ledger.db, pid, repair_key) or ledger.db.execute(
@@ -352,7 +351,7 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
     if header and header['phase'] == 'sealing':
         return _source_repair_seal(ledger, pid, source, binding, protected, header, identity, claim, current, deadline)
     saved = {key:header[key] for key in ('cursor','split') if header and key in header}
-    chunks, cursor, saved, _, _ = context_plan.scan_plan(source, saved)
+    chunks, cursor, saved, _ = context_plan.scan_plan(source, saved)
     span = [sum(map(len, chunks[:cursor])), sum(map(len, chunks[:cursor + 1]))]
     unit_key = patient_context_refresh_state._digest(['source-repair-unit/1', repair_key, span, saved.get('split', 0), PLAN_VERSION])
     if reserved_units and (not header or reserved_units[0]['meta']['unit_key'] != unit_key
@@ -420,7 +419,7 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
     try:
         response = []
         result = _scan(cfg, source, saved, workday_id, deadline, admit, provider=provider,
-                       **({'evidence_out': response} if distinct else {}),
+                       **({'evidence_out': response} if needs_response_proof else {}),
                        source_repair={'codes':codes, 'protected':protected,
                            'historical_by_id':{fact['id']:{'historical':fact['historical']} if 'historical' in fact else {}
                                                for fact in captured['facts']}})
@@ -444,7 +443,7 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
     evidence = cloud_policy.reservation_evidence(ledger.db, owned[0]['meta']['reservation_artifact_id'])
     split = result.get('chunk_span') is None
     proof = None
-    if distinct:
+    if needs_response_proof:
         if len(response) != 1:
             return 'unknown', None
         finish_reason = evidence['result'].get('answer_finish_reason_v1')
@@ -508,7 +507,7 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
             next_header = {'phase':'sealing' if result['complete'] else 'scanning',
                            'cursor':result['cursor'],'split':result.get('split',0)}
             patient_context_refresh_sources._source_repair_update_tx(ledger.db, header, next_header)
-            if distinct:
+            if needs_response_proof:
                 patient_context_refresh_sources._source_repair_parts(ledger.db, pid, source, binding, repair_key, require_complete=False)
             stored_header = patient_context_refresh_sources._source_repair_header(ledger.db, pid, repair_key)
             if (ledger.db.total_changes - before_writes != expected_writes
@@ -590,6 +589,8 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
 
     if ledger.db.in_transaction:
         raise RuntimeError("patient_summary_transaction_active")
+    if cloud_policy.stopped(ledger):
+        return "deferred", None   # `cloud-llm stop` also stops sends to Jev without sticking after resume
     key = semantic_jev.api_key()
     cloud_key = cloud_policy.selected_key(extract_llm.HOME, cfg)
     scfg, errors = semantic_policy.semantic_config(cfg, key_present=bool(key))
@@ -702,6 +703,7 @@ def _quality_step(ledger, pid, cfg, workday_id, doc, deadline, admit, *, cloud_m
                     # a run that asks Jev stops once the live config no longer lets Jev be asked
                     or skip_reason is None and (live_semantic["mode"] == "off" or live_semantic["jev_held"])
                     or paused(ledger.db, pid)
+                    or cloud_policy.stopped(ledger)
                     or cloud_policy.selected_key(extract_llm.HOME, live) != cloud_key
                     or live_semantic["project_ids"] is not None and pid not in live_semantic["project_ids"]
                     or patient_context_refresh_state._quality_assessment(live_semantic) != assessment):
@@ -933,10 +935,16 @@ def _ask(cfg, payload, deadline, admit, *, provider=None, evidence_out=None, loc
                                          error_out=err, turn_min_s=patient_context_refresh_state.CALL_SECONDS + patient_context_refresh_state.COMMIT_MARGIN)
     if response and response.get("admission"):
         raise patient_context_refresh_state.Deferred("patient_context_admission_deferred")
-    if provider is None and response is None and err.get("kind") == "busy":
-        # lane 2 held the GPU turn for the whole call window: nothing
-        # was sent, so the patient is not charged a failure
-        raise patient_context_refresh_state.Deferred("patient_context_turn_busy")
+    if provider is None and response is None and err.get("kind") in ("busy", "unreachable", "not_sent"):
+        # nothing reached the model (lane 2 held the GPU turn, connection
+        # refused, request never sent): like extraction/semantic, a hold
+        # without charging the patient an attempt
+        raise patient_context_refresh_state.Deferred(
+            "patient_context_turn_busy" if err.get("kind") == "busy" else "patient_context_endpoint_unsent")
+    if provider is None and response and response.get("status") == 503:
+        # still loading the model: the call did no work, same no-charge hold
+        # (sent, so not in the proven-unsent generation return)
+        raise patient_context_refresh_state.Deferred("patient_context_endpoint_unavailable")
     if (evidence_out is not None and isinstance(response, dict) and response.get("status") == 200
             and isinstance(response.get("text"), str)):
         evidence_out.append((prompt, response["text"]))

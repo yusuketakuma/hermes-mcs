@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "設定を読めないときも cloud-llm stop を記録",
+  "summary": "設定ファイルを読めない状態でも、cloud-llm stop が停止を記録するようになりました。resume は従来どおり、設定を確認できないと拒否します。",
+  "upgrade": "追加操作は不要です。設定の読込みに失敗している環境で stop を再実行すると記録されます。",
+  "details": ["stop は設定を使わないため、読込み失敗を拒否の理由にしない。"],
+  "refs": ["mcs/ops/cloud_cli.py"]
+}

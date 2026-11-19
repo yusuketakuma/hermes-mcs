@@ -142,7 +142,9 @@ def review(entries, *, max_patients: int) -> list[dict]:
         row["patients"].update(ids)
         # IDs past the per-record limit are only counted, so they cannot be deduplicated across
         # records: the widest single access is a lower bound, never a sum of overflows.
-        row["widest"] = max(row["widest"], len(ids) + more)
+        # project_id may itself be among the omitted IDs, so do not add it twice.
+        listed = {pid for pid in entry.get("patients") or () if type(pid) is int}
+        row["widest"] = max(row["widest"], len(listed) + more)
         row["partial"] = row["partial"] or more > 0
     result = []
     for (via, actor), row in sorted(actors.items(), key=lambda item: str(item[0])):

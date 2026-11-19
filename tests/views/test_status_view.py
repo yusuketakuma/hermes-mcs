@@ -1,7 +1,7 @@
 """mcs_view `status` — 連携サマリー fetch state per project (#21).
 
 karte_summary_at / karte_summary_empty come from the newest
-karte_summary artifact only; the comment text never enters the row.
+karte_summary artifact bound to the current karte_id only; the comment text never enters the row.
 """
 import json
 
@@ -15,6 +15,8 @@ def test_status_rows_expose_karte_summary_state(tmp_path):
         for pid in (1, 2, 3):
             db.ensure_patient(pid)
             db.save_messages([_message(mid=pid, project_id=pid)])
+        with db.db:
+            db.db.execute("UPDATE patients SET karte_id=project_id*10")
         db.karte_summary_store(2, 20, None)
         db.karte_summary_store(3, 30, {
             "comment": "合成サマリー本文", "updated_at": "2026-09-30",

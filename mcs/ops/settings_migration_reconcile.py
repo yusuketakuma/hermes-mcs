@@ -206,6 +206,9 @@ def main(argv=None):
     parser.add_argument('--reason', default='', help='確認理由。患者情報や認証情報を含めないでください。')
     args = parser.parse_args(argv)
     try:
+        if not receipt.pending(Path(args.root) / 'data'):
+            print('導入設定の移行保留はありません。')
+            return 0
         if not args.confirm_human:
             evidence, _ = receipt.read_evidence(Path(args.root) / 'data')
             state, _, _ = _classification(Path(args.root) / 'config.json',
@@ -224,8 +227,15 @@ def main(argv=None):
     except (KeyboardInterrupt, EOFError):
         print('\n移行保留の復旧を中断しました。設定と記録の保存状態を担当者に確認してください。', file=sys.stderr)
         return 130
-    except (OSError, ValueError, TypeError, RecursionError):
-        print('移行保留を安全に確認できません。設定と記録の保存状態を担当者に確認してください。', file=sys.stderr)
+    except (OSError, ValueError, TypeError, RecursionError) as error:
+        # Fixed reason tokens only; parser or OS messages may quote values or paths.
+        code = (error.args[0] if type(error) is ValueError and len(error.args) == 1
+                and isinstance(error.args[0], str) and error.args[0].isascii()
+                and error.args[0].replace('_', '').isalpha() and error.args[0].islower()
+                else type(error).__name__)
+        hint = ('config.json を本人所有・権限600（chmod 600）・ハードリンクなしにしてから再実行してください。'
+                if code == 'config_unverified' else '設定と記録の保存状態を担当者に確認してください。')
+        print(f'移行保留を安全に確認できません（理由: {code}）。' + hint, file=sys.stderr)
         return 1
 
 
