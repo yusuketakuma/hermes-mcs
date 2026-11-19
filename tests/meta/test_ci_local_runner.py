@@ -68,7 +68,10 @@ def test_runner_lists_ci_jobs_in_order():
 
 def test_runner_contains_every_ci_run_line():
     runner = RUNNER.read_text()
+    github_only = re.search(r'^GITHUB_ONLY="([^"]*)"$', runner, re.MULTILINE).group(1).split()
     for job, lines in _ci_jobs().items():
+        if job in github_only:
+            continue
         body = runner.split(f"job_{job.replace('-', '_')}() {{\n", 1)[1].split("\n}\n", 1)[0]
         for line in lines:
             if line and not SETUP.match(line):
