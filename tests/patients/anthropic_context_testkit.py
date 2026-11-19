@@ -25,6 +25,7 @@ import patient_context_refresh as context_refresh
 import patient_context_refresh_sources as context_sources
 from test_patient_context_refresh import CFG as BASE_CFG, JST, runtime, seed, step as base_step
 import semantic_jev as _source_repair_jev
+from common_testkit import follow_cloud_mode
 
 __all__ = ["runtime"]
 
@@ -129,6 +130,7 @@ def cloud(runtime, monkeypatch):
         {"cloud_llm": {"mode": mode[0], "project_ids": [1], "provider": "anthropic",
                         "routes": ["patient_context"]}}, worker.HOME)[0])
     monkeypatch.setattr(worker, "_cloud_mode", lambda *args: mode[0])
+    follow_cloud_mode(monkeypatch, worker)
     monkeypatch.setattr(extract_llm_prepare, '_cloud_mode', worker._cloud_mode)
     class Provider:
         model = "claude-haiku-5-5"

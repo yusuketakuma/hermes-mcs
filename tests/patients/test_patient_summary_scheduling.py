@@ -24,6 +24,7 @@ import extract_llm as worker
 import cloud_inference
 import initial_import_state
 from test_patient_context_refresh import CFG, document, finish, runtime, seed, step
+from common_testkit import follow_cloud_mode
 
 __all__ = ['runtime']
 
@@ -33,6 +34,7 @@ def cloud_schedule(runtime, monkeypatch):
     led, _, _ = runtime
     cfg = {**CFG, 'cloud_llm': {'mode': 'on', 'project_ids': [1, 2], 'routes': ['patient_context']}}
     monkeypatch.setattr(worker, '_cloud_mode', lambda *_: 'on')
+    follow_cloud_mode(monkeypatch, worker)
     monkeypatch.setattr(extract_llm_prepare, '_cloud_mode', worker._cloud_mode)
     class Cloud:
         def __init__(self, ledger, config, **kwargs):
@@ -174,7 +176,7 @@ def test_unapproved_canonical_quality_never_spends_or_falls_back(runtime, monkey
     monkeypatch.setattr(worker.cloud_policy, 'api_key', lambda *_: 'synthetic-anthropic-key')
     monkeypatch.setattr(semantic_jev, 'JevClient', lambda **_: pytest.fail('unapproved source made a request'))
     assert patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', {}, clock.mono + 600,
-                                 lambda: True) == ('deferred', None)
+                                 lambda: True, cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1)) == ('deferred', None)
     assert not led.artifacts('semantic_usage')
 
 
