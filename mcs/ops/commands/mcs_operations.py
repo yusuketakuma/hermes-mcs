@@ -695,6 +695,9 @@ def apply_tx(db, req: dict, now: float | None = None, *,
     """Apply one validated operation without committing its transaction."""
     owner, db = db, getattr(db, "db", db)
     current = time.time() if now is None else float(now)
+    if req["cmd"].startswith("ops.previsit_"):
+        from previsit_ops import apply_tx as apply_previsit_tx
+        return apply_previsit_tx(db, req, current)
     if req["cmd"] == "ops.mcs_reaction":
         from stamp_write import enqueue_tx
         return enqueue_tx(db, req, cfg, data_dir, current)
