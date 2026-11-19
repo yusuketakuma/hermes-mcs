@@ -1,5 +1,6 @@
 """Synthetic patient-summary quality audits under the facility review of Jev."""
 import pytest
+import extract_llm
 
 import external_transfer
 import mcs_util
@@ -20,7 +21,8 @@ def _local_meta(led):
 
 def _step(led, cfg, doc, clock, meta):
     return patient_context_quality_controller._quality_step(
-        led, 1, cfg, "2026-10-17", doc, clock.mono + 600, lambda: True, base_meta=meta)
+        led, 1, cfg, "2026-10-17", doc, clock.mono + 600, lambda: True, base_meta=meta,
+        cloud_mode=extract_llm._cloud_mode(led, cfg, "patient_context", 1))
 
 
 @pytest.fixture

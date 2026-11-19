@@ -30,3 +30,17 @@ def ledger_fixture(*, data_dir=False, name="led", patients=()):
         db.close()
 
     return _ledger_fixture
+
+
+def follow_cloud_mode(monkeypatch, module):
+    """After a test answers ``module._cloud_mode`` with a stub, let the unit's single reading
+    (``cloud_route_mode``) follow it, with the off reason from ``module.cloud_off_reason``."""
+    import extract_llm_provider
+
+    def route_mode(ledger, cfg, route, project_id):
+        if module._cloud_mode is extract_llm_provider._cloud_mode:
+            # The test put the real mode back: the real single reading applies again.
+            return extract_llm_provider.cloud_route_mode(ledger, cfg, route, project_id)
+        mode = module._cloud_mode(ledger, cfg, route, project_id)
+        return mode, (module.cloud_off_reason(ledger, cfg, route, project_id) if mode == "off" else None)
+    monkeypatch.setattr(module, "cloud_route_mode", route_mode)

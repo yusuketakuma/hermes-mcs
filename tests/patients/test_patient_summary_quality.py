@@ -31,6 +31,7 @@ import semantic_runtime as semantic_runtime
 from test_patient_context_refresh import runtime as runtime, seed, finish, step, document, CFG
 from semantic_jev import JevError
 from extract_testkit import _ledger, _message
+from common_testkit import follow_cloud_mode
 
 _REAL_CLOUD_PROVIDER = cloud_inference.CloudInferenceUnit
 
@@ -457,10 +458,12 @@ def quality_owner(runtime, monkeypatch):
 
 def test_quality_owner_calls_jev_once_and_rechecks_saved_pass(quality_owner):
     led, clock, cfg, doc, sends, _ = quality_owner
-    status, identity = patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
+    status, identity = patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True,
+            cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
     assert status == 'pending' and len(sends) == 1
     assert len(led.artifacts('semantic_usage')) == 1
-    status, identity = patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
+    status, identity = patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True,
+            cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
     assert status == 'passed' and len(sends) == 1 and patient_context_quality_receipts._quality_passed(led.db, 1, identity)
     answers = led.artifacts(patient_context_refresh_state.QUALITY)
     assert {json.loads(row['meta'])['fact_id'] for row in answers} == set(identity['fact_ids'])
@@ -469,7 +472,8 @@ def test_quality_owner_calls_jev_once_and_rechecks_saved_pass(quality_owner):
     led.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (answer['artifact_id'],))
     led.db.commit()
     with pytest.raises(ValueError, match='patient_summary_quality_unresolved_request'):
-        patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
+        patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True,
+            cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
     assert len(sends) == 1
 
 
@@ -532,6 +536,7 @@ def repair(tmp_path, monkeypatch):
     responses, sent, enabled, current = [facts[1]['id']], [], [True], [True]
     repair_cfg = {'cloud_llm': {'mode': 'on', 'provider': 'anthropic', 'project_ids': [1]}}
     monkeypatch.setattr(worker, '_cloud_mode', lambda *_: 'on' if enabled[0] else 'off')
+    follow_cloud_mode(monkeypatch, worker)
     monkeypatch.setattr(extract_llm_prepare, '_cloud_mode', worker._cloud_mode)
     monkeypatch.setattr(worker.cloud_policy, 'budget_block_reason', lambda *args, **kwargs: None)
     monkeypatch.setattr(worker.cloud_policy, 'provider_key', lambda *_args: 'synthetic-key')
@@ -576,7 +581,8 @@ def repair(tmp_path, monkeypatch):
         return patient_context_quality_controller._quality_repair_candidate(led, 1, repair_cfg, '2026-10-27',
             {'summary': summary, 'temporal_view': {}}, identity, claim, lambda *_: current[0],
             time.monotonic() + 600, lambda: True, facts, assessment, 0.8,
-            {'groups': {}, 'relations': []})
+            {'groups': {}, 'relations': []},
+            cloud_mode=worker._cloud_mode(led, repair_cfg, 'patient_context', 1))
     yield led, run, facts, responses, sent, enabled, current
     led.close()
 
@@ -731,7 +737,7 @@ def test_summary_high_repair_retains_response_receipt_for_resume(repair, monkeyp
         return patient_context_quality_controller._quality_repair_candidate(led, 1, cfg, night,
             {'summary':summary, 'temporal_view':{}}, identity, claim, lambda *_: True,
             time.monotonic() + 600, lambda: True, facts, {'model':'synthetic'}, 0.8,
-            {'groups':{}, 'relations':[]})
+            {'groups':{}, 'relations':[]}, cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
     status, candidate = run('synthetic-night')
     assert status == 'candidate' and len(posts) == 1 and candidate['repair_ref']
     assert posts[0]['model'] == 'gpt-6.1-sol' and posts[0]['reasoning'] == {'effort':'high'}
@@ -749,7 +755,8 @@ def test_summary_high_repair_retains_response_receipt_for_resume(repair, monkeyp
 def test_budget_unavailable_does_not_spend_repair(repair):
     led, run, _, _, sent, enabled, _ = repair
     enabled[0] = False
-    assert run() == ('deferred', None) and not sent and not led.artifacts(patient_context_refresh_state.QUALITY_REPAIR)
+    # With the cloud off for the unit, the repair is not asked and spends nothing.
+    assert run() == ('cloud_off', None) and not sent and not led.artifacts(patient_context_refresh_state.QUALITY_REPAIR)
 
 
 def test_exact_repair_prompt_over_cost_cap_does_not_spend_repair(repair, monkeypatch):
@@ -865,12 +872,13 @@ def test_unknown_quality_request_survives_later_tick_reopen_day_and_cleanup(qual
         with monkeypatch.context() as patch:
             patch.setattr(patient_context_quality_receipts, '_quality_store_answers', denied)
             with pytest.raises(patient_context_refresh_state.Deferred, match='patient_summary_quality_lock'):
-                patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
+                patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True,
+            cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))
         assert not led.artifacts(patient_context_refresh_state.QUALITY) and not led.artifacts(patient_context_refresh_state.QUALITY_FAIL)
     else:
         behavior[fault] = True
         assert patient_context_quality_controller._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600,
-                                     lambda: True)[0] == 'unknown'
+                                     lambda: True, cloud_mode=worker._cloud_mode(led, cfg, 'patient_context', 1))[0] == 'unknown'
         assert not led.artifacts(patient_context_refresh_state.QUALITY_SKIP)
     count = 2 if fault == 'partial' else 1
     assert len(sends) == count
@@ -884,7 +892,8 @@ def test_unknown_quality_request_survives_later_tick_reopen_day_and_cleanup(qual
     path = led.db.execute('PRAGMA database_list').fetchone()[2]
     with closing(ledger.Ledger(path)) as reopened:
         status, _ = patient_context_quality_controller._quality_step(reopened, 1, cfg, '2026-10-17', doc,
-                                           clock.mono + 600, lambda: True)
+                                           clock.mono + 600, lambda: True,
+                                           cloud_mode=worker._cloud_mode(reopened, cfg, 'patient_context', 1))
         assert status == 'unknown'
     assert len(sends) == count
     assert not led.artifacts(patient_context_refresh_state.QUALITY_PASS)
