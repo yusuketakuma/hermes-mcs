@@ -766,7 +766,7 @@ def test_pin_refresh_restore_preserves_source_drift_and_both_environments(
         patch_lifecycle_lookup(monkeypatch, updater, name, forbidden)
     notices = []
     patch_lifecycle_lookup(monkeypatch, updater, "_enqueue_notice",
-                           lambda *a, **k: notices.append((a, k)) or True)
+                           lambda *a, **k: notices.append(k.get("notice_code")) or True)
     for attempt in range(2):
         if operation == "restore":
             with pytest.raises(updater.UpdateError, match="runtime_restore_checkout_changed"):
@@ -774,6 +774,7 @@ def test_pin_refresh_restore_preserves_source_drift_and_both_environments(
         else:
             assert (updater.recover_interrupted() if operation == "recover"
                     else updater.rollback()) == 1
+        assert notices == (["rollback_failed"] if operation == "rollback" else [])
         assert Path(updater.STATE_PATH).read_bytes() == journal
         assert (checkout / "f").read_bytes() == source
         assert _git(checkout, "rev-parse", "HEAD").stdout.strip() == head
