@@ -64,25 +64,29 @@ def _health_watch_recovered(db, created_at):
     return type(at) in (int, float) and at > created_at
 
 
-def _run_failed_recovered(db, ev, created_at):
-    """A later run that did not fail proves the pipeline recovered."""
+def _run_failed_recovered(db, ev):
+    """Only the latest completed run of the failed run's kind proves recovery.
+
+    Partial runs do not persist stage-level success evidence. Neither a
+    different kind nor a timestamp alone proves that the failed work ran.
+    Missing legacy run records therefore leave the alert pending.
+    """
     try:
         payload = json.loads(ev["payload"])
     except (ValueError, TypeError, RecursionError):
         payload = {}
     run_id = payload.get("run_id") if isinstance(payload, dict) else None
-    if type(run_id) is int:
-        if db.execute(
-                "SELECT 1 FROM runs WHERE run_id>? "
-                "AND status IN ('ok','partial') LIMIT 1",
-                (run_id,)).fetchone() is not None:
-            return True
-    if created_at is None:
+    if type(run_id) is not int:
         return False
-    return db.execute(
-        "SELECT 1 FROM runs WHERE finished_at>? "
-        "AND status IN ('ok','partial') LIMIT 1",
-        (created_at,)).fetchone() is not None
+    failed = db.execute(
+        "SELECT kind FROM runs WHERE run_id=?", (run_id,)).fetchone()
+    if failed is None or failed["kind"] not in ("tick", "deep"):
+        return False
+    latest = db.execute(
+        "SELECT status,finished_at FROM runs WHERE run_id>? AND kind=? "
+        "AND finished_at IS NOT NULL AND status != 'running' "
+        "ORDER BY run_id DESC LIMIT 1", (run_id, failed["kind"])).fetchone()
+    return latest is not None and latest["status"] == "ok" and latest["finished_at"] is not None
 
 
 def suppression_reason(db, ev):
@@ -95,6 +99,6 @@ def suppression_reason(db, ev):
         return "recovered_before_send"
     if kind == "health_watch_stalled" and _health_watch_recovered(db, created_at):
         return "recovered_before_send"
-    if kind == "run_failed" and _run_failed_recovered(db, ev, created_at):
+    if kind == "run_failed" and _run_failed_recovered(db, ev):
         return "recovered_before_send"
     return None

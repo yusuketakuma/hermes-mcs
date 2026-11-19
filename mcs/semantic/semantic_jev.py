@@ -218,7 +218,7 @@ def _decode_response(raw: bytes, *, retryable: bool = False):
 
 def finite_value(value) -> float | None:
     """Read a finite wire number without accepting bool or numeric strings."""
-    if type(value) is bool or not isinstance(value, int | float):
+    if type(value) is bool or not isinstance(value, (int, float)):
         return None
     try:
         v = float(value)
@@ -647,14 +647,13 @@ class JevClient:
                 raise
             except OSError as e:     # URLError and TimeoutError included
                 kind = "timeout" if isinstance(e, TimeoutError) else "transport"
-                last = JevError(kind, type(e).__name__,
-                                retryable=True)
+                # Only a refusal before dispatch proves the body never left; a
+                # sent request may already be billed and is never resent
+                # (the cloud client's rule, owner decision 2026-10-28).
+                last = JevError(kind, type(e).__name__, retryable=isinstance(
+                    e, (bounded_http.NotSentTimeout, ConnectionRefusedError)))
             else:
-                if time.monotonic() >= deadline:
-                    last = JevError("timeout", "job_deadline_exceeded",
-                                    retryable=True)
-                    self.last_error = last
-                    continue
+                # A late answer is still settled: dropping it would lose a billed result.
                 if len(raw) > MAX_RESPONSE_BYTES:
                     last = JevError("protocol_error", "response_too_large")
                 elif status != 200:
@@ -750,7 +749,8 @@ class JevClient:
 # ---------- proposition registry (spec §14.1) ----------
 # instructions evaluate the REPORTED meaning of state.target.text using
 # state.context only for reference resolution — they never ask whether
-# the underlying clinical fact is true.
+# the underlying clinical fact is true. label_ja is local wording only
+# (the summary prompt and per-patient statistics); Jev never receives it.
 
 def _p(pid, label_ja, instructions, true_c, false_c):
     return {"id": pid, "label_ja": label_ja, "instructions": instructions,
@@ -758,7 +758,7 @@ def _p(pid, label_ja, instructions, true_c, false_c):
 
 
 PROPOSITIONS = {
-    "P01": _p("P01", "medication_change_mention",
+    "P01": _p("P01", "薬の開始・中止・変更の記載",
               "Evaluate only state.target.text, using state.context only "
               "to resolve references. Does the target explicitly mention "
               "a medication being started, stopped, changed in dose, "
@@ -768,52 +768,52 @@ PROPOSITIONS = {
               "or change (considered/planned/instructed/reported all count).",
               "The target does not mention any medication change. This "
               "does not establish that no change exists in care."),
-    "P02": _p("P02", "adverse_effect_mention",
+    "P02": _p("P02", "薬の副作用の記載",
               "Evaluate only state.target.text with state.context for "
               "reference resolution. Does the target mention a suspected "
               "or denied adverse effect linked to a medication?",
               "A medication-linked adverse effect is suspected, reported, "
               "or explicitly denied in the target.",
               "No medication-linked adverse effect is mentioned."),
-    "P03": _p("P03", "administration_problem",
+    "P03": _p("P03", "服薬・投与の困難の記載",
               "Evaluate only state.target.text with state.context for "
               "reference resolution. Does the target report difficulty "
               "with administering/taking medication (swallowing, feeding "
               "tube, refusal, missed doses)?",
               "The target reports a medication administration problem.",
               "No administration problem is reported."),
-    "P04": _p("P04", "clinical_change_report",
+    "P04": _p("P04", "状態の変化の記載",
               "Evaluate only state.target.text with state.context for "
               "reference resolution. Does the target describe a change "
               "in the patient's condition?",
               "The target describes a condition change.",
               "No condition change is described."),
-    "P05": _p("P05", "pain_or_rescue_report",
+    "P05": _p("P05", "痛みの状況・頓用薬の記載",
               "Evaluate only state.target.text with state.context for "
               "reference resolution. Does the target mention pain "
               "control status or rescue medication use?",
               "Pain control or rescue medication is mentioned.",
               "No pain control or rescue use is mentioned."),
-    "P06": _p("P06", "respiratory_report",
+    "P06": _p("P06", "呼吸・酸素・痰・誤嚥の記載",
               "Evaluate only state.target.text with state.context for "
               "reference resolution. Does the target mention breathing, "
               "oxygenation, sputum, or aspiration?",
               "Respiration/oxygenation/sputum/aspiration is mentioned.",
               "No respiratory topic is mentioned."),
-    "P07": _p("P07", "escalation_event_mention",
+    "P07": _p("P07", "急変・緊急連絡・入院の記載",
               "Evaluate only state.target.text with state.context for "
               "reference resolution. Does the target mention sudden "
               "deterioration, emergency contact, or hospitalization? "
               "This does NOT judge current urgency.",
               "An escalation event is mentioned.",
               "No escalation event is mentioned."),
-    "P08": _p("P08", "pharmacy_explicit_request",
+    "P08": _p("P08", "薬局への明示の依頼",
               "Evaluate only state.target.text with state.context for "
               "reference resolution. Does the target contain an explicit "
               "request directed at the pharmacy/pharmacist?",
               "The target contains an explicit request to pharmacy.",
               "No explicit pharmacy-directed request is present."),
-    "P09": _p("P09", "pharmacy_pending_response",
+    "P09": _p("P09", "薬局の回答・準備待ちの記載",
               "Evaluate only state.target.text with state.context for "
               "reference resolution. Does the target state that a "
               "pharmacy-related answer, confirmation, or preparation is "
@@ -821,20 +821,20 @@ PROPOSITIONS = {
               "The target says a pharmacy response/confirmation/"
               "preparation is pending.",
               "No pharmacy-pending state is described."),
-    "P10": _p("P10", "unresolved_item",
+    "P10": _p("P10", "未解決・検討中の事項の記載",
               "Evaluate only state.target.text with state.context for "
               "reference resolution. Does the target mention an "
               "unresolved item, an item under consideration, or one "
               "awaiting an answer?",
               "An unresolved/pending/awaiting item is mentioned.",
               "No unresolved item is mentioned."),
-    "P11": _p("P11", "schedule_mention",
+    "P11": _p("P11", "訪問・受診・入退院・予定の記載",
               "Evaluate only state.target.text with state.context for "
               "reference resolution. Does the target mention a visit, "
               "appointment, admission/discharge, or schedule change?",
               "A schedule or schedule change is mentioned.",
               "No schedule is mentioned."),
-    "P12": _p("P12", "care_preference_mention",
+    "P12": _p("P12", "家族の希望・療養方針の記載",
               "Evaluate only state.target.text with state.context for "
               "reference resolution. Does the target mention family "
               "wishes or care policy/preferences?",

@@ -133,12 +133,15 @@ def cloud(runtime, monkeypatch):
     follow_cloud_mode(monkeypatch, worker)
     monkeypatch.setattr(extract_llm_prepare, '_cloud_mode', worker._cloud_mode)
     class Provider:
-        model = "claude-haiku-5-5"
         def __init__(self, ledger, cfg, **kwargs):
             assert ledger is led
             self.current = kwargs["current"]
             self.discard_reason = kwargs.get("discard_reason")
-            self.contract = cloud_inference.cloud_provider_contract()
+            route = kwargs["route"]
+            purpose = kwargs.get("purpose") or ("patient_context" if route == "patient_context" else "backlog")
+            self.contract = cloud_inference.cloud_provider_contract(
+                cfg, route=route, purpose=purpose, selection=kwargs.get("selection"))
+            self.model = self.contract["model"]
             self.final_disposition = None
             self.possibly_sent = False
         def guard(self):
@@ -222,14 +225,13 @@ def _source_repair_wire_protocol(monkeypatch, cloud):
     monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_args: nullcontext(True))
     monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
-    monkeypatch.setattr(worker.cloud_policy, 'pricing_valid',
-                        lambda now=None, *, model=worker.anthropic_client.MODEL: model == worker.anthropic_client.MODEL)
+    monkeypatch.setattr(worker.cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     def post(body, timeout):
         prompt = json.loads(body['messages'][0]['content'])
         cloud[0].append(prompt)
         text = prompt['source']
         answer = {'patient_context':[{'category':'living','text':text,'evidence':text,'subject':'unspecified','details':[]}]}
-        return 200, {}, json.dumps({'model':worker.anthropic_client.MODEL,'usage':{'input_tokens':1,'output_tokens':1},
+        return 200, {}, json.dumps({'model':body['model'],'usage':{'input_tokens':1,'output_tokens':1},
             'stop_reason':'end_turn','content':[{'type':'text','text':json.dumps(answer)}]}).encode()
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
         lambda key, **kwargs:_SOURCE_REPAIR_CLIENT(key, post_fn=post, **kwargs))
@@ -251,7 +253,7 @@ def source_repair(runtime, cloud, monkeypatch):
     control = {'sent':[], 'fault':None, 'qa_fault':None}
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
     monkeypatch.setattr(worker.cloud_policy, 'pricing_valid',
-                        lambda now=None, *, model=worker.anthropic_client.MODEL: model == worker.anthropic_client.MODEL)
+                        lambda *_args, **_kwargs: True)
     class InitialProvider(original_provider):
         def __call__(self, prompt, **kwargs):
             payload = json.loads(prompt)
@@ -279,7 +281,7 @@ def source_repair(runtime, cloud, monkeypatch):
         content = ([{'type':'redacted_thinking','data':'synthetic-hidden'}]
                    if length and control['fault'] == 'thinking_length_once' else
                    [{'type':'text','text':json.dumps({'patient_context':items}, ensure_ascii=False)}])
-        raw = json.dumps({'model':worker.anthropic_client.MODEL,
+        raw = json.dumps({'model':body['model'],
             'usage':{'input_tokens':1,'output_tokens':1}, 'stop_reason':stop,
             'content':content},
             ensure_ascii=False).encode()

@@ -282,7 +282,8 @@ def test_patient_candidate_refs_keep_source_indices_after_scope_filter(
               "subject": "family", "evidence": family_quote}
     content["meds"].insert(position, family)
     store.save_messages([_message(mid=1, body="".join(
-        med["evidence"] for med in content["meds"]))])
+        med["evidence"] for med in content["meds"]),
+        posted_at="2026-09-19T00:00:00+09:00")])
     meta["hash"] = _hash(store, 1)
     store.db.execute("UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?",
                      (json.dumps(content), json.dumps(meta), aid))

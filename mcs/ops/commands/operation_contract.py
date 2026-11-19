@@ -147,6 +147,29 @@ def retry_updated_payload(payload, command_id: str, additional_attempts, attempt
     return canonical(updated).decode("utf-8")
 
 
+class _RetryObject(dict):
+    def __init__(self, pairs):
+        super().__init__(pairs)
+        from inference_version import VERSION_KEY
+        self.ambiguous_version = sum(k == VERSION_KEY for k, _ in pairs) > 1
+
+
+def parse_retry_object(raw):
+    """Parse stored semantic payload text with the one contract preview and writer share."""
+    if raw is None:
+        return None
+    # The writer historically accepts duplicate non-version keys.  Retain
+    # that behavior, but never choose a version from an ambiguous top-level
+    # marker (including escaped spellings of the same JSON key).
+    try:
+        payload = json.loads(raw, object_pairs_hook=_RetryObject)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if not isinstance(payload, dict) or payload.ambiguous_version:
+        return None
+    return payload
+
+
 def bounded_integer(value, low: int, high: int) -> bool:
     return type(value) is int and low <= value <= high
 
@@ -240,6 +263,31 @@ def _v_cloud_control(req: dict, base: set) -> str | None:
         return "unknown_field"
     if not valid_text(req.get("reason"), 2000):
         return "bad_reason"
+    return None
+
+
+def _v_slack_setup_discard(req: dict, base: set) -> str | None:
+    if req.get("project_id") is not None:
+        return "bad_project_id"
+    if req.keys() - (base | {"reason", "request_id"}):
+        return "unknown_field"
+    if not valid_text(req.get("reason"), 2000):
+        return "bad_reason"
+    from mcs_requests import valid_uuid    # the shared envelope's UUID rule
+    if not valid_uuid(req.get("request_id")):
+        return "bad_request_id"
+    return None
+
+
+def _v_provider_pending_finalize(req: dict, base: set) -> str | None:
+    if req.get("project_id") is not None:
+        return "bad_project_id"
+    if req.keys() - (base | {"reason", "operation"}):
+        return "unknown_field"
+    if not valid_text(req.get("reason"), 2000):
+        return "bad_reason"
+    if not isinstance(req.get("operation"), str) or re.fullmatch(r"[0-9a-f]{32}", req["operation"]) is None:
+        return "bad_operation"
     return None
 
 
@@ -461,6 +509,8 @@ _OPS_VALIDATORS = {
     "ops.cloud_resume": _v_cloud_control,
     "ops.cloud_local_rebuild_approve": _v_local_rebuild,
     "ops.patient_context_reset": _v_patient_context_reset,
+    "ops.slack_setup_discard": _v_slack_setup_discard,
+    "ops.provider_pending_finalize": _v_provider_pending_finalize,
     "ops.scan": _v_scan,
     "ops.retry": _v_retry,
     "ops.pause": _v_pause_resume,

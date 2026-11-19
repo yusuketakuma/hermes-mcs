@@ -104,6 +104,9 @@ PROBE_TURN_MIN_S = 2.0
 # turn is held while /slots is polled so the other lane does not start
 # into a still-busy GPU.
 SLOT_WAIT_MAX_S = 10.0
+# A timeout spends the caller's whole deadline, so the idle check keeps
+# this short budget of its own when the deadline leaves less than it.
+SLOT_WAIT_GRACE_S = 2.0
 SLOT_WAIT_POLL_S = 0.5
 SLOT_WAIT_IDLE_SAMPLES = 2
 
@@ -125,8 +128,8 @@ def _turn(deadline: float | None, min_s: float = 0.0):
                 break
             except BlockingIOError:
                 if deadline is not None \
-                        and time.monotonic() + TURN_LOCK_POLL_S >= deadline:
-                    yield False
+                        and time.monotonic() + min_s + TURN_LOCK_POLL_S >= deadline:
+                    yield False  # even a won turn could not fit min_s now
                     return
                 time.sleep(TURN_LOCK_POLL_S)
         if deadline is not None and time.monotonic() + min_s > deadline:
@@ -135,6 +138,23 @@ def _turn(deadline: float | None, min_s: float = 0.0):
         yield True
     finally:
         os.close(fd)  # closing the descriptor drops the flock
+
+
+def _env_slot() -> int | None:
+    """The ``MCS_LLM_SLOT`` override when it names a deployed slot, else
+    ``None``. Slot 0 is a valid pin, not "unset"."""
+    v = os.environ.get("MCS_LLM_SLOT")
+    if v is None:
+        return None
+    digits = v.strip()
+    if digits and digits.isascii() and digits.isdecimal():
+        try:
+            slot = int(digits)
+        except ValueError:
+            return None
+        if 0 <= slot < SLOT_COUNT:
+            return slot
+    return None
 
 
 def request_slot() -> int:
@@ -149,17 +169,8 @@ def request_slot() -> int:
     scoped = _BACKGROUND_SCOPE.get()
     if scoped is not None:
         return scoped[0]
-    v = os.environ.get("MCS_LLM_SLOT")
-    if v is not None:
-        digits = v.strip()
-        if digits and digits.isascii() and digits.isdecimal():
-            try:
-                slot = int(digits)
-            except ValueError:
-                return BACKGROUND_SLOT
-            if 0 <= slot < SLOT_COUNT:
-                return slot
-    return BACKGROUND_SLOT
+    slot = _env_slot()
+    return slot if slot is not None else BACKGROUND_SLOT
 
 
 def _turn_path():
@@ -232,6 +243,34 @@ def pinned_slot(slot):
             os.environ.pop("MCS_LLM_SLOT", None)
         else:
             os.environ["MCS_LLM_SLOT"] = previous
+
+
+@contextmanager
+def call_turn(deadline: float | None, min_s: float,
+               slot: int | None = None, *, held_slots=None):
+    """Hold one physical turn across a caller's probe+body send sequence.
+
+    Sends inside the block reuse the held slot through ``_OWNED_TURN``
+    instead of re-queueing for it; each send still takes its own permit
+    and honours its own deadline. ``held_slots=None`` resolves the
+    admission broker's held slots when the shared boundary is enabled,
+    matching ``admitted_chat``'s avoidance. Yields the held slot, or
+    ``None`` when no slot fit before ``deadline`` — the block then runs
+    with each send acquiring its own turn exactly as before."""
+    if held_slots is None and scheduling_enabled() and admission_enabled():
+        broker = _broker()
+        held_slots = broker.held_slots if broker.is_open() else None
+    with _request_turn(deadline, min_s,
+                       slot if slot is not None else request_slot(),
+                       held_slots=held_slots) as selected:
+        if selected is None:
+            yield None
+            return
+        token = _OWNED_TURN.set(selected)
+        try:
+            yield selected
+        finally:
+            _OWNED_TURN.reset(token)
 
 
 # ---------- cross-client admission boundary (T20, default off) ----------
@@ -308,10 +347,12 @@ def _slots_idle(endpoint: str, deadline: float | None, request=None,
 
 
 def _wait_slot_idle(request, endpoint: str, slot: int,
-                    deadline: float | None, error_out: dict | None) -> None:
+                    deadline: float | None, error_out: dict | None) -> bool:
     """Hold the turn until the pinned slot reports idle in
     SLOT_WAIT_IDLE_SAMPLES consecutive samples, or SLOT_WAIT_MAX_S / the
-    caller's deadline passes. A single idle sample, a missing slot, bad
+    caller's deadline passes — the deadline caps the wait but never below
+    SLOT_WAIT_GRACE_S, since a spent deadline is exactly the timeout case
+    this check exists for. A single idle sample, a missing slot, bad
     JSON or a failed GET resets the run. Expiry is UNCONFIRMED but still
     releases the turn — it is never held forever. Idle is a stop
     observation, not a cancel receipt: a slot-pinned request the server
@@ -320,7 +361,7 @@ def _wait_slot_idle(request, endpoint: str, slot: int,
     start = time.monotonic()
     until = start + SLOT_WAIT_MAX_S
     if deadline is not None:
-        until = min(until, deadline)
+        until = min(until, max(deadline, start + SLOT_WAIT_GRACE_S))
     idle = 0
     while idle < SLOT_WAIT_IDLE_SAMPLES and time.monotonic() < until:
         idle = idle + 1 if _slots_idle(endpoint, until, request=request,
@@ -332,6 +373,7 @@ def _wait_slot_idle(request, endpoint: str, slot: int,
     if error_out is not None:
         error_out["slot_wait_ms"] = int((time.monotonic() - start) * 1000)
         error_out["slot_wait_confirmed"] = int(idle >= SLOT_WAIT_IDLE_SAMPLES)
+    return idle >= SLOT_WAIT_IDLE_SAMPLES
 
 
 def admitted_chat(client_route: str, prompt: str, *,
@@ -683,6 +725,15 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
     # a reaped worker, so a slow response cannot extend the deadline
     send = request_fn or bounded_request
     selected_slot = body.get("id_slot", request_slot())
+    # Only an explicitly chosen slot — caller payload, scheduler path,
+    # scoped/env override or a turn already held by the caller — holds
+    # the turn after a transport failure; a request that fell back to
+    # the default slot releases it at once.
+    caller_pinned_slot = type(body.get("id_slot")) is int
+    wait_for_idle = (scheduling_enabled() or caller_pinned_slot
+                     or _BACKGROUND_SCOPE.get() is not None
+                     or _OWNED_TURN.get() is not None
+                     or _env_slot() is not None)
     if type(selected_slot) is not int or not 0 <= selected_slot < SLOT_COUNT:
         selected_slot = request_slot()
     slot_deadline = (time.monotonic() + timeout
@@ -695,8 +746,8 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
             if error_out is not None:
                 error_out["kind"] = "busy"
             return None
-        if scheduling_enabled():
-            body["id_slot"] = turn
+        # The acquired turn owns the wire slot, including legacy and nested calls.
+        body["id_slot"] = turn
         try:
             status, _headers, raw = send(endpoint, "POST", body, timeout,
                                          deadline)
@@ -718,10 +769,26 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
             # on our slot: keep the turn until the slot reports idle
             if kind == "transport" and isinstance(error, OSError) \
                     and (_turn_path() or scheduling_enabled()) \
-                    and type(body.get("id_slot")) is int:
-                _wait_slot_idle(send, endpoint, body["id_slot"], deadline,
-                                error_out)
+                    and wait_for_idle:
+                sent_slot = body["id_slot"]
+                confirmed = _wait_slot_idle(send, endpoint, sent_slot,
+                                            deadline, error_out)
+                if scheduling_enabled():
+                    import llm_slot_schedule
+                    directory = os.environ[SCHEDULE_ENV]
+                    if confirmed:
+                        llm_slot_schedule.clear_stuck(directory,
+                                                      sent_slot)
+                    else:
+                        llm_slot_schedule.mark_stuck(directory,
+                                                     sent_slot)
             return None
+        if status == 200 and scheduling_enabled():
+            # proven usable while the turn still holds the slot lock, so a
+            # later call's failure record cannot be erased by this release
+            import llm_slot_schedule
+            llm_slot_schedule.clear_stuck(os.environ[SCHEDULE_ENV],
+                                          body["id_slot"])
     if status != 200 or len(raw) > bounded_http.MAX_RESPONSE_BYTES:
         return {"text": None, "finish_reason": None, "usage": None,
                 "status": status}
@@ -794,15 +861,28 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
     Returns the accepted mode, or ``"plain"`` when every constraint was
     rejected; transport failure after the request left aborts probing
     and also yields ``"plain"`` (callers cache the result for a bounded
-    cooldown), while a probe deferred by admission (``busy``) or whose
+    cooldown), while a probe deferred by admission (``busy``), whose
     deadline expired before the request was handed to the wire
-    (``not_sent``) returns ``None`` so callers can defer instead of
-    caching a blind verdict.
+    (``not_sent``), refused by the connection (``unreachable``) or
+    answered 503 (server not ready) returns ``None`` so callers can
+    defer instead of caching a blind verdict.
     *slot* pins the probe's wire ``id_slot``; ``None`` resolves it via
     :func:`request_slot`, so the per-process ``MCS_LLM_SLOT`` override —
     or the caller's own slot decision — governs probes exactly as it
     does the calls they precede.
     """
+    if scheduling_enabled() and deadline is not None and _OWNED_TURN.get() is None:
+        _validate_chat_args('Reply with {"ok": true}', endpoint, timeout, 20, deadline)
+        preferred = slot if type(slot) is int and 0 <= slot < SLOT_COUNT else request_slot()
+        with _request_turn(deadline, PROBE_TURN_MIN_S, preferred) as selected:
+            if selected is None:
+                return None
+            token = _OWNED_TURN.set(selected)
+            try:
+                return probe_format(endpoint, model, schema, timeout, verify, deadline,
+                                    request_fn, selected, admission_token, error_out)
+            finally:
+                _OWNED_TURN.reset(token)
     verify = verify or (lambda text: isinstance(_json_obj(text), dict))
     if error_out is None:
         error_out = {}
@@ -847,13 +927,33 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
                 request_fn=request_fn, error_out=error_out,
                 turn_min_s=PROBE_TURN_MIN_S)
             if response is None:
-                if error_out.get("kind") in ("busy", "not_sent"):
+                if error_out.get("kind") in ("busy", "not_sent", "unreachable"):
                     return None  # nothing sent: probe again next call
+                # transport/protocol death: the wire was reached or the
+                # outcome is uncertain — per-call send evidence, never a
+                # global timestamp another worker could have moved
+                error_out["sent"] = True
                 error_out.setdefault("kind", "transport")
                 break
+            error_out["sent"] = True
+            # every HTTP status is evidence: a pure format-rejection
+            # streak can only be told apart when unusable 200s and 5xx
+            # appear beside the rejections, never filtered out
+            sts = error_out.setdefault("statuses", [])
+            if response["status"] not in sts and len(sts) < 8:
+                sts.append(response["status"])
+            if response["status"] == 503:
+                error_out["status"] = 503  # evidence beside kind, never a rewrite
+                return None  # server not ready (model loading): no verdict
             if response["status"] != 200:
                 continue
-            if acceptance_error(response) is not None:
+            # endpoint health evidence is a completed answer, not any 200:
+            # empty/length-truncated bodies stay unproven, while a valid
+            # completion that merely fails the format verify still proves
+            # the endpoint alive (the verify outcome picks the mode)
+            if acceptance_error(response) is None:
+                error_out["answered"] = True
+            else:
                 continue
             content = response["text"]
             if (isinstance(content, str) and verify(content)
@@ -861,6 +961,7 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
                          or _json_obj(content) == {"probe": "schema"})):
                 return mode
         except (OSError, ValueError):
+            error_out["sent"] = True
             error_out.setdefault("kind", "transport")
             break                   # transport dead — stop probing
     # a deadline spent before the first send is an unobserved probe —

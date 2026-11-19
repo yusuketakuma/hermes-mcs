@@ -3,7 +3,7 @@ import itertools
 import json
 import re
 
-from clinical_scope import REPORTED_ABSENCE, source_axes, source_polarity
+from clinical_scope import NAMED_PERSON, REPORTED_ABSENCE, source_axes, source_polarity
 from clinical_values import written_day
 from mcs_util import locate_quote_span
 
@@ -645,6 +645,93 @@ def _attribute_bound(quote, value, event_type, *, actor=False, bound=None):
         pos = i + 1
 
 
+# Top-level date_text/actor keep only values written in their own role:
+# a date expression for date_text, a person or role for actor. A source
+# substring in the wrong role — a provider stored as a date, a body part
+# stored as a provider — never binds even when it sits in the act clause.
+_DATEISH = re.compile(
+    r"[0-9０-９]{1,4}\s*[年/.-]|[0-9０-９]{1,2}\s*月|[0-9０-９]{1,2}\s*日"
+    r"|今日|昨日|明日|先日|昨夜|今朝|一昨日|明後日|先週|今週|来週|先月|今月|来月"
+    r"|前年|今年|来年|当日|翌日|前日|次回|前回|午前|午後|朝|昼|夜|夕方|早朝|深夜|未明|正午")
+_ACTOR_ROLE = re.compile(
+    r"看護師|介護士|ヘルパー|ケアマネ|医師|歯科|薬剤師|スタッフ|職員|担当者|管理者|"
+    r"責任者|先生|本人|患者|利用者|入所者|入居者|デイサービス|ショートステイ|"
+    r"グループホーム|施設|病院|クリニック|診療所|訪問介護|訪問看護|訪問リハ|"
+    r"ケアプラン|ソーシャル|MSW|心理|カウンセラー|牧師|神父|僧侶|運転|送迎|"
+    r"救急|救命|消防|警察|巡回|緊急|往診|主治医|担当医|セラピスト|リハビリ|"
+    r"栄養士|調理|清掃|洗濯|買い物|同行|付き添い|コーディネーター|ナース|ドクター|"
+    r"家族|娘|息子|妻|夫|母|父|姉|妹|兄|弟|祖父|祖母|義父|義母|同居|ご家族")
+
+
+def _date_text_supported(value) -> bool:
+    return written_day(value) is not None or bool(_DATEISH.search(value))
+
+
+# An actor must stand in agent position — による/が/は — at the same
+# occurrence inside the record's own act clause. A location noun followed
+# by で (病院で), a transfer source (から/より) or an agent marker on an
+# unrelated sentence's occurrence never confirms the provider.
+_ACTOR_AGENT = re.compile(r"(?:による|が|は)")
+
+# An actor value naming the patient themself is the recipient — never the
+# provider — when its occurrence sits in a receive clause
+# (「ご本人は…を受けました」「受診しました」); active self-performance
+# (「ご本人が…しました」) still binds.
+_SELF_ACTOR_VALUE = re.compile(
+    r"(?:ご本人|患者本人|本人|患者(?:さん|様)?|利用者(?:さん|様)?)(?:自身)?")
+_PATIENT_RECEIVE = re.compile(
+    r"を受け|受診(?:し|する|した|して|ます|され|なさ|いた|頂)")
+
+
+def _actor_is_recipient(quote, left, right, value):
+    return bool(
+        _SELF_ACTOR_VALUE.fullmatch(value.strip())
+        and _PATIENT_RECEIVE.search(quote, left, right))
+
+
+def _actor_supported(value) -> bool:
+    return bool(re.fullmatch(NAMED_PERSON, value) or _ACTOR_ROLE.search(value))
+
+
+def _record_attribute_bound(quote, value, kind, match, target_end, *, actor=False):
+    """True when a top-level ``date_text``/``actor`` binds to this record.
+
+    Same rule as ``_attribute_bound``: the occurrence must sit inside the
+    act clause holding the record's own cue — after the previous verb+、
+    boundary and before the next one or the sentence end — where exactly
+    one same-kind cue stands, so an attribute of a neighbouring act or a
+    second same-kind mention never attaches. ``actor`` occurrences marked
+    as a transfer/referral source (から/より) describe the predecessor,
+    not the provider, and never bind; an actor occurrence must also stand
+    in agent position (による/が/は) inside that same clause.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return False
+    sent_left, sent_right = _sentence_bounds(quote, match.start())
+    left = _detail_clause_left(quote, match.start(), sent_left)
+    marker = _ACT_END.search(quote, target_end)
+    right = min(marker.end() + 1, sent_right) if marker is not None else sent_right
+    cue = _DIRECT.get(kind)
+    if cue is not None and sum(1 for _ in cue.finditer(quote, left, right)) != 1:
+        return False
+    pos = 0
+    while True:
+        i = quote.find(value, pos)
+        if i < 0:
+            return False
+        end = i + len(value)
+        if actor and quote[end:end + 2] in ('から', 'より'):
+            pos = i + 1
+            continue
+        if left <= i and end <= right:
+            if not actor:
+                return True
+            if (_ACTOR_AGENT.match(quote, end)
+                    and not _actor_is_recipient(quote, left, right, value)):
+                return True
+        pos = i + 1
+
+
 def _detail_shared_instance(detail, quote, anchor):
     """Return the shared cue/target span, or None when binding is unproved.
 
@@ -813,6 +900,23 @@ def validate_record(item, body):
         target_end = start + extended
     if shared is not None:
         target_end = start + shared[1]
+    # Top-level date_text/actor are optional annotations like care_detail:
+    # only a value bound to this record's own act instance is kept; an
+    # unbound or absent claim simply leaves the field out.
+    for field, actor in (('date_text', False), ('actor', True)):
+        value = item.get(field)
+        if value == 'unknown':
+            value = None
+        if not isinstance(value, str) or not value.strip():
+            continue
+        if actor:
+            if not _actor_supported(value.strip()):
+                continue
+        elif not _date_text_supported(value.strip()):
+            continue
+        if _record_attribute_bound(quote, value, item['kind'], match,
+                                   target_end - start, actor=actor):
+            result[field] = value.strip()
     _, clause_end = _clause(body, anchor, target_end)
     actual_subject, actual_status = source_axes(body, anchor, target_end, default='unknown')
     actual_negated = _polarity(body, anchor, clause_end, target_end, actual_status)

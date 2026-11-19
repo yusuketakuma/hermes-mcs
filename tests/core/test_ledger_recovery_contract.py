@@ -254,6 +254,25 @@ def test_backup_rotation_removes_markers(tmp_path, monkeypatch):
     assert oks == dbs
 
 
+def test_backup_rotation_keeps_hand_made_copies(tmp_path, monkeypatch):
+    """IA-096: only ledger-YYYYMMDD.db is rotated; a manual copy survives and keeps the count."""
+    source, _ = _build_fixture(tmp_path)
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(mode=0o700)
+    manual = backup_dir / "ledger-before-move.db"
+    manual.write_bytes(b"manual copy")
+    monkeypatch.setattr(local_backup, "BACKUP_DIR", str(backup_dir))
+    assert local_backup.newest_backup_age_s() is None
+    assert local_backup.local_backup_status(now=time.time())["state"] == "missing"
+    stamps = iter(f"202609{d:02d}" for d in range(1, 20))
+    monkeypatch.setattr(local_backup.time, "strftime", lambda _f: next(stamps))
+    for _ in range(local_backup.BACKUP_KEEP + 2):
+        local_backup.daily_backup(str(source))
+    daily = sorted(p.name for p in backup_dir.glob("ledger-2026*.db"))
+    assert len(daily) == local_backup.BACKUP_KEEP
+    assert manual.read_bytes() == b"manual copy"
+
+
 def test_independent_restore_preserves_relations_fts_snapshot_and_attachment_hash(
     tmp_path, monkeypatch
 ):

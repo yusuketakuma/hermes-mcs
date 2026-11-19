@@ -260,3 +260,44 @@ def test_cli_writer_close_failure_still_releases_owned_run_lock(tmp_path, monkey
                 except OSError as cleanup:
                     if cleanup.errno != errno.EBADF:
                         raise
+
+
+@pytest.mark.parametrize("witness", ["restored", "awaiting", "corrupt", "journal"])
+@pytest.mark.parametrize("alias", [False, True])
+def test_cli_sync_restore_hold_precedes_writer_and_adapter(tmp_path, monkeypatch, capsys, witness, alias):
+    import os
+    import ledger
+    import mcs_adapter
+    import project_metadata
+    import update_journal
+    import writer_lock
+
+    if witness == "journal":
+        state = update_journal.default_state()
+        state["applying"] = {"restore_incomplete": True}
+        (tmp_path / "update_state.json").write_text(json.dumps(state))
+    elif witness == "corrupt":
+        (tmp_path / "restore_pending.json").write_text("{invalid")
+    else:
+        (tmp_path / "restore_pending.json").write_text(json.dumps(
+            {"by": "mcs_update", "phase": "restored" if witness == "restored" else "awaiting_consent"}))
+    database = tmp_path / "synthetic.db"
+    database.write_bytes(b"synthetic, never opened")
+    directory = tmp_path
+    if alias:
+        directory = tmp_path / "alias"
+        directory.symlink_to(tmp_path, target_is_directory=True)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("restore hold must precede writer and adapter construction")
+
+    monkeypatch.setattr(ledger, "Ledger", forbidden)
+    monkeypatch.setattr(mcs_adapter, "MCSAdapter", forbidden)
+    assert project_metadata.main(["sync", "--database", str(directory / "synthetic.db"),
+                                  "--project-id", "1", "--dataset", "medication_periods",
+                                  "--read-only-get", "--token-cache", str(tmp_path / "t.json")]) == 1
+    assert json.loads(capsys.readouterr().out) == {"state": "held", "reason": "restore_in_progress"}
+    assert database.read_bytes() == b"synthetic, never opened"
+    probe = writer_lock.acquire_run_lock(str(tmp_path / "run.lock"))
+    assert probe is not None
+    os.close(probe)

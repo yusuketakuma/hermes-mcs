@@ -15,6 +15,7 @@ from clinical_chunking import PLAN_VERSION, plan_chunks
 import inference_dependency_loss
 import mcs_util
 import extraction_context
+import extract_llm_historical
 from mcs_queries import (json_or_null)
 from mcs_util import loads_dict
 
@@ -80,7 +81,11 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, re
     queued/held scheduling probes and the thin-retry clause of the review
     probe are skipped, so a merely scheduled thin or upgrade retry never
     reads as invalid material. Adverse evidence — actionable QC flags and
-    human reports — still blocks through ``review_material``.
+    human reports — still blocks through ``review_material``. A leaf-sealed
+    final bound under exactly one owner-approved retired generation
+    (``extract_llm_historical.material_contracts``) also satisfies the
+    context binding for patient material only. The authenticity check for an
+    adopted rebuild still requires its current binding.
 
     ``adverse_review=False`` (material only) asks whether the selected final is still the
     authentic adoption it was, not whether it may be published now: the adverse review, the
@@ -203,7 +208,10 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, re
                  and inference.is_current(meta, target=_INFERENCE_VERSION)
                  and meta.get("extract_version") == EXTRACT_VERSION
                  and meta.get("actual_model") == model and final["model"] == model
-                 and meta.get("plan_version") == PLAN_VERSION and meta.get("context_binding") == binding)
+                 and meta.get("plan_version") == PLAN_VERSION
+                 and (meta.get("context_binding") == binding
+                      or (material and adverse_review and leaf_claims is not None
+                          and _material_retired_binding(r, context, meta.get("context_binding")))))
         if "context_snapshot" in meta and _frame_meta(r) != {
                 key: meta.get(key) for key in ("context_snapshot", "context_digest", "patient_state_context")}:
             return out
@@ -294,6 +302,16 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, re
     elif queued:
         out["state"] = "processing"
     return out
+
+
+def _material_retired_binding(r, context, recorded):
+    """True only when exactly one owner-approved retired generation reproduces the binding."""
+    try:
+        retired = extract_llm_historical.material_contracts()
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        return False
+    return sum(_chunk_context(r, context, prompt_head=head, schema=schema) == recorded
+               for _gen_id, head, schema in retired) == 1
 
 
 def _progress_probe(db, probe):

@@ -338,7 +338,18 @@ def test_prefilter_completes_only_an_explicitly_checked_greeting(source):
     led.save_messages([_message(body="こんにちは。")])
     row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
     row['_source_binding'] = dependency_loss.source_binding(led.db,row['project_id'],row['message_id'])
-    assert llm._mark_prefiltered(led, row)
+    assert not llm._mark_prefiltered(led, row)  # no real claim, no settlement
+    rows, _ = llm._select_pending(led, 1, None, None, False)
+    jobs, skipped, blocked = llm._prepare_jobs(led, rows, llm._resolved_llm(), True, allow_cloud=False)
+    assert len(jobs) == 1 and skipped == blocked == 0
+    row, context, _saved, _hints, _qc = jobs[0]
+    lease = extract_llm_errors._claim(led, row)
+    assert lease is not None
+    try:
+        extract_llm_proofs._capture_checkpoint_state(led.db, row, context)
+        assert llm._mark_prefiltered(led, row)
+    finally:
+        extract_llm_errors._release(led, row, lease)
     meta = json.loads(led.artifacts(llm.KIND)[0]["meta"])
     assert meta["integrity"]["completeness_chunks"] == 1
     assert meta["integrity"]["completeness"]["0"] == {

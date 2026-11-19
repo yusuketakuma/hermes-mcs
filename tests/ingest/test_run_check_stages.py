@@ -541,7 +541,7 @@ def test_pinned_slot_busy_never_peeks_under_admission(monkeypatch):
 def test_backfill_tail_survives_a_completed_deep_import(tmp_path):
     db = _ledger(tmp_path)
     db.ensure_patient(1)
-    db.save_messages([_message(mid=100)])
+    db.save_messages([_message(mid=100, posted_at="2026-09-19T00:00:00+09:00")])
     db.set_history_floor(1, 0)
     db.set_coverage(1, db.high_watermark(1))
     result = {"errors": [], "backfilled": 0}
@@ -563,7 +563,7 @@ def test_backfill_deferred_certification_is_not_an_error(tmp_path):
     — with lag=0 nothing is suspected missing, hence no error/gap."""
     db = _ledger(tmp_path)
     db.ensure_patient(1)
-    db.save_messages([_message(mid=100)])
+    db.save_messages([_message(mid=100, posted_at="2026-09-19T00:00:00+09:00")])
     db.set_history_floor(1, 0)
     db.set_coverage(1, db.high_watermark(1))
     result = {"errors": [], "backfilled": 0}
@@ -654,6 +654,23 @@ def test_semantic_run_leaves_tail_reserve(tmp_path, monkeypatch):
     # The shared size-based calculation must preserve the 60s minimum.
     assert seen["deadline"] <= deadline - 60
     assert seen["deadline"] == run_check._snapshot_work_deadline(db, deadline)
+    db.close()
+
+
+def test_semantic_run_shares_a_released_publish_reserve(tmp_path, monkeypatch):
+    import maintenance
+    import snapshots
+    seen = {}
+    _sem_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(semantic_drain, 'run_due', lambda ledger, cfg, result, deadline, **kw: (
+        seen.__setitem__("deadline", deadline) or {"done": 1, "deferred": 0, "failed": 0}))
+    monkeypatch.setattr(maintenance, "snapshot_publish_deferrable", lambda *a, **k: True)
+    db = _ledger(tmp_path)
+    result = {"errors": []}
+    deadline = time.monotonic() + 400
+    run_check._run_semantic(db, _sem_args(), {}, result, deadline, True)
+    assert seen["deadline"] == deadline - snapshots.SNAPSHOT_WORK_TAIL_S
+    assert result["snapshot_reserve"] == "released"
     db.close()
 
 

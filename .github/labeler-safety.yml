@@ -1,0 +1,4 @@
+# 安全ゲートは追加のみ。人が付けたラベルや過去に検出したリスクを自動で解除しない。
+"安全ゲート":
+  - changed-files:
+      - any-glob-to-any-file: ["ci/gates.py", "ci/mine_gates.py", "SECURITY.md", "deployment/requirements-standalone.txt"]

@@ -107,6 +107,24 @@ def test_scheduled_offsite_and_periodic_drill_commit_both_results(world, tmp_pat
     assert state["last_offsite_at"] == state["last_periodic_drill_at"] == NOW
 
 
+def test_scheduled_offsite_prints_its_receipt_when_the_drill_precheck_fails(world, tmp_path, capsys):
+    policy = replace(world[3], periodic_drill=evidence.PeriodicDrill(
+        interval_seconds=60, max_steps=100_000_000, max_seconds=30,
+        max_records=10, retain_plaintext=True))
+    args = _cli_args((*world[:3], policy), tmp_path, scheduled=True)
+    drills = tmp_path / "records" / "drills"
+    drills.mkdir(mode=0o700, parents=True)
+    (drills / ".DS_Store").write_bytes(b"synthetic finder metadata")
+    assert backup.main(["offsite", *args, "--scheduled", "--keychain", "--snapshot", str(world[0])],
+                       keychain_reader=lambda: KEY) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["periodic_drill"] == {"status": "failed", "due": True,
+                                        "error": "backup_periodic_capacity"}
+    state = json.loads((tmp_path / "records/backup_state.json").read_text())
+    assert state["receipt"]["sha256"] == result["sha256"]
+    assert "last_periodic_drill_at" not in state
+
+
 def test_failed_attempt_requires_matching_review_and_owner_removal(world, tmp_path, monkeypatch):
     records, policy = _recorded(world, tmp_path)
     monkeypatch.setattr(backup, "verify", lambda *_a, **_k: (_ for _ in ()).throw(OSError("synthetic")))

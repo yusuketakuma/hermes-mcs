@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "独立実行で、復元の承認待ち・復元後の照合待ちが解除されない問題を修正",
+  "summary": "runtime_mode=standalone で、更新の巻戻しや独立復旧の監視によるDB復元が保留になったとき、承認コマンドの取込や復元後の照合が起動されず、収集・抽出・通知が止まったままになる問題を修正します。保留中もホストは必要な取込だけを起動し、それ以外の処理は従来どおり止めたままにします。",
+  "upgrade": "既存の更新手順で反映されます。反映には独立実行ホスト（ai.mcs.standalone）の再起動が必要です。Hermes連携（runtime_mode未指定）の動作は変わりません。保留中にホストを再起動すると、従来どおり restore_in_progress で起動しません。承認の条件（喪失レポートとbackupへの束縛、human_confirmed）は変わりません。",
+  "details": [
+    "更新（mcs_update）または独立復旧（mcs_recover）による復元が承認待ちの間、ホストは data/cmd にファイルがあれば cmd の取込だけを起動します。この取込（run_check）は ops.restore_approve だけを処理し、ほかのコマンドはキューに残します。抽出worker・LINE WORKS接続・定期ジョブは起動しません。",
+    "mcs_update または mcs_recover が復元を終えて照合待ち（restored）になり、更新マーカーが残っていない場合は、cmd_int の取込（run_check --commands-only）を起動して復元後の照合を行い、照合が終わると保留が解除されます。",
+    "読取不能な復元マーカー、更新記録だけに残る保留、バックアップ復元（mcs_backup_restore）の承認待ち、更新処理の実行中は、従来どおり何も起動しません。",
+    "保留中に終了した取込は通常の再起動間隔（cmd 30秒・cmd_int 10秒、失敗時は指数的な間隔）を守り、キューに残ったファイルのために毎tick再起動することはありません。"
+  ],
+  "refs": ["mcs_standalone/runtime.py", "tests/adapters/standalone/test_stab_runtime_supervision.py"]
+}

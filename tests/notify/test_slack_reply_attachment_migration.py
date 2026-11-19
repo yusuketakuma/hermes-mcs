@@ -154,3 +154,81 @@ def test_parent_attachment_is_reused_only_with_complete_same_thread_evidence(
     finally:
         led.db.execute("ROLLBACK TO child_group_unknown")
         led.db.execute("RELEASE child_group_unknown")
+
+
+def test_a_held_reply_update_replans_once_the_parents_thread_receipt_lands(led, tmp_path, monkeypatch):
+    import notify_card_renders
+    import notify_flush
+    import notify_scope
+    clock = [NOW]
+    monkeypatch.setattr(notify_cards.time, "time", lambda: clock[0])
+    _seed_thread(led, mids=(100,))
+    _msg(led, 201, parent=100, body="Synthetic historical reply", ts=int(NOW - 10))
+    aid, _, _ = _attach(led, tmp_path, mid=201)
+    with monkeypatch.context() as legacy:      # the old parent plan carried the reply's attachment
+        from slack_testkit import legacy_attachment_parts
+        legacy_attachment_parts(legacy)
+        legacy.setattr(notify_parts, "_thread_plan_ids", lambda *a, **kw: [100, 201])
+        assert _dispatch(led, _intent(led, payload={"message_ids": [100]}), SLACK)["dispatched"]
+    world = _mkworld(led)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    parent = led.db.execute("SELECT * FROM notification_cards ORDER BY card_id LIMIT 1").fetchone()
+    old = led.db.execute("SELECT delivery_id FROM notification_renders WHERE card_id=? ORDER BY render_rev DESC LIMIT 1",
+                         (parent["card_id"],)).fetchone()[0]
+    # The reply card is created while its file is not ready, so the reply itself holds no receipt
+    # for it (not even an uncertain one); only the parent can prove the file afterwards.
+    with led.db:
+        led.db.execute("UPDATE attachments SET state='pending' WHERE attachment_id=?", (aid,))
+    _dispatch(led, _intent(led, payload={"message_ids": [201]}), SLACK, now=NOW + 1)
+    notify_spool.publish_flags(SLACK, str(world.root))
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    reply = led.db.execute("SELECT * FROM notification_cards WHERE card_key LIKE '%|reply:201'").fetchone()
+    assert reply["delivery_state"] == "delivered"
+    assert led.db.execute("SELECT 1 FROM notification_render_parts p JOIN notification_renders r "
+                          "ON r.delivery_id=p.delivery_id WHERE r.card_id=? AND p.attachment_id=?",
+                          (reply["card_id"], aid)).fetchone() is None
+    uploads = len(world.client.upload_calls)
+    with led.db:
+        led.db.execute("UPDATE attachments SET state='downloaded' WHERE attachment_id=?", (aid,))
+        # The parent's thread receipt has not landed yet.
+        led.db.execute("UPDATE notification_render_parts SET state='pending' WHERE delivery_id=? AND kind='thread'",
+                       (old,))
+        before_rev = led.db.execute("SELECT MAX(render_rev) FROM notification_renders WHERE card_id=?",
+                                    (reply["card_id"],)).fetchone()[0]
+        # A held build is stored but not returned (issue_render returns None for a budget hold).
+        assert notify_cards.issue_render(led.db, reply["card_id"], SLACK, NOW + 2, [], force=True) is None
+
+    def held():
+        return led.db.execute(
+            "SELECT r.delivery_id FROM notification_renders r WHERE r.card_id=? AND r.state='held' AND EXISTS("
+            "SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=r.delivery_id "
+            "AND p.error_code='attachment_upload_identity_unverified')", (reply["card_id"],)).fetchall()
+    [hold] = held()
+    assert led.db.execute("SELECT render_rev FROM notification_renders WHERE delivery_id=?",
+                          (hold[0],)).fetchone()[0] == before_rev + 1
+    bound = [tuple(row) for row in led.db.execute(
+        "SELECT event_id,delivery_id FROM notification_intent_cards WHERE card_id=? ORDER BY event_id",
+        (reply["card_id"],))]
+    assert notify_card_renders._replan_blocked(led.db, notify_scope.card_row(led.db, reply["card_id"]), hold[0])
+    clock[0] = NOW + 11 + notify_cards.RESEAT_S
+    for _ in range(2):           # the parent's thread is still pending: nothing is replanned
+        notify_cards.sweep(led, SLACK)
+        assert [tuple(row) for row in held()] == [tuple(hold)]
+        assert [tuple(row) for row in led.db.execute(
+            "SELECT event_id,delivery_id FROM notification_intent_cards WHERE card_id=? ORDER BY event_id",
+            (reply["card_id"],))] == bound
+    with led.db:
+        led.db.execute("UPDATE notification_render_parts SET state='delivered' WHERE delivery_id=? AND kind='thread'",
+                       (old,))
+    notify_cards.sweep(led, SLACK)
+    assert not held()
+    latest = led.db.execute("SELECT delivery_id,state,spec_json FROM notification_renders WHERE card_id=? "
+                            "ORDER BY render_rev DESC LIMIT 1", (reply["card_id"],)).fetchone()
+    assert latest["delivery_id"] != hold[0] and latest["state"] == "queued"
+    migrated = next(p for p in json.loads(latest["spec_json"])["parts"]["manifest"] if p.get("attachment_id") == aid)
+    assert migrated["prior_owner_message_id"] == parent["message_id"]
+    notify_flush.flush(led)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    assert len(world.client.upload_calls) == uploads            # the parent's file is reused, not re-sent
+    assert led.db.execute("SELECT state FROM notification_renders WHERE delivery_id=?",
+                          (latest["delivery_id"],)).fetchone()[0] == "delivered"

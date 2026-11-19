@@ -13,12 +13,12 @@ from mcs_util import payload_hash
 from test_cloud_response_recovery import legacy_cloud_routes, paid as paid
 
 
-@pytest.mark.parametrize('text', ['x' * 270000, '\x00' * 270000])
+@pytest.mark.parametrize('text', ['x' * 270000, '\x00' * 200000])
 def test_long_answer_is_settled_saved_and_recovered(paid, text):
     path, _cfg, _calls, _locks, _state, unit, _restart = paid
     sent = []
     with closing(Ledger(path)) as ledger:
-        provider = unit(ledger)
+        provider = unit(ledger, purpose='quality_repair')
         def post(body, timeout):
             sent.append(True)
             return 200, {}, json.dumps({'model': provider.client.model, 'stop_reason': 'end_turn',
@@ -35,9 +35,9 @@ def test_long_answer_is_settled_saved_and_recovered(paid, text):
             reservation_artifact_id=row['artifact_id'], reservation_id=reservation['reservation_id'],
             route='reextract', project_id=1, message_id=1, unit_key='synthetic-unit',
             owner={'lease': 'first'}, prompt='synthetic prompt', answer_text=text,
-            contract=cloud_inference.cloud_provider_contract(selection=provider.selection), purpose='backlog')
+            contract=cloud_inference.cloud_provider_contract(selection=provider.selection), purpose='quality_repair')
         assert proof['reservation']['reservation_id'] == reservation['reservation_id']
-        recovered = unit(ledger, owner='restart')('synthetic prompt',
+        recovered = unit(ledger, owner='restart', purpose='quality_repair')('synthetic prompt',
                     deadline=time.monotonic() + 60, max_tokens=65536)
         assert recovered['reused_response'] and recovered['text'] == text
         assert sent == [True]

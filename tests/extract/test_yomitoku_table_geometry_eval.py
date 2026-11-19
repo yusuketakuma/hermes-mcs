@@ -68,3 +68,51 @@ def test_grid_without_spans_renders_plain_table_and_blank_cells():
 def test_containment_threshold_boundary_is_strict(ratio_box, contained):
     cell_box = [0, 0, 100, 100]
     assert upstream.is_contained(ratio_box, cell_box) is contained
+
+
+def _doc(cells):
+    return {"paragraphs": [], "tables": [{"cells": cells}]}
+
+
+def _cell(row, col, text, row_span=1, col_span=1):
+    return {"row": row, "col": col, "row_span": row_span, "col_span": col_span, "contents": text}
+
+
+def test_empty_survivor_inside_span_cell_is_dropped_and_text_renders():
+    cells = upstream.filter_contained_cells_within_spancell(_grid_2x2(), [[15, 15, 200, 200]])
+    for cell in cells:
+        cell["contents"] = "合成見出し" if cell["row_span"] == 2 else ""
+    assert ocr._document_text(_doc(cells)) == "\n\t合成見出し\t\n\t\t"
+
+
+def test_exact_duplicate_cell_with_same_text_is_collapsed():
+    assert ocr._document_text(_doc([_cell(1, 1, "A"), _cell(1, 1, "A"), _cell(1, 2, "B")])) == "\n\tA\tB"
+
+
+@pytest.mark.parametrize("cells", [
+    [_cell(1, 1, "A"), _cell(1, 1, "")],
+    [_cell(1, 1, ""), _cell(1, 1, "A")],
+    [_cell(1, 1, "A"), _cell(1, 1, ""), _cell(1, 1, "")],
+    [_cell(1, 1, ""), _cell(1, 1, "A"), _cell(1, 1, "")],
+    [_cell(1, 1, ""), _cell(1, 1, ""), _cell(1, 1, "A")],
+])
+def test_same_box_valued_cell_wins_over_empty_emissions_in_any_order(cells):
+    assert ocr._document_text(_doc(cells)) == "\n\tA"
+
+
+@pytest.mark.parametrize("cells", [
+    [_cell(1, 1, "A", 2, 2), _cell(1, 1, "B")],        # contained cell holds different text
+    [_cell(1, 1, "A"), _cell(1, 1, "B")],              # conflicting duplicate
+    [_cell(1, 1, "", 2, 2), _cell(1, 1, "B")],         # value would be lost under an empty span
+    [_cell(1, 1, "A", 1, 2), _cell(1, 2, "B", 1, 2)],  # partial overlap, neither contains the other
+])
+def test_conflicting_overlaps_stay_rejected(cells):
+    with pytest.raises(ValueError, match="^output_schema_table_overlap$"):
+        ocr._document_text(_doc(cells))
+
+
+def test_recovery_is_bounded_by_cell_count():
+    cells = [_cell(1, 1, "A")] + [_cell(1, 1, "") for _ in range(ocr.MAX_RECOVERY_CELLS)]
+    with pytest.raises(ValueError, match="^output_schema_table_overlap$"):
+        ocr._document_text(_doc(cells))
+    assert ocr._document_text(_doc(cells[:ocr.MAX_RECOVERY_CELLS])) == "\n\tA"

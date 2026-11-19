@@ -315,7 +315,7 @@ def test_baseline_scores_offline_and_names_what_it_does_not_measure(tmp_path, mo
     assert [(case["id"], case["forbid_violations"]) for case in result["cases"]
             if case["forbid_violations"]] == [("alg-family-heading", ["patient_context:allergies"])]
     assert result["source"] == "stored_outputs"
-    assert result["generations"] == {"rule": 29, "patient_context": 4}
+    assert result["generations"] == {"rule": 30, "patient_context": 4}
     assert result["outputs_sha256"] == hashlib.sha256(BASELINE.read_bytes()).hexdigest()
     assert (result["tag"], result["n_cases"], result["errors"]) == ("gen11-rule", 39, [])
     # Unmeasured stays null and out-of-scope fields carry no number.

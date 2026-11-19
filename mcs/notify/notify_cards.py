@@ -26,7 +26,7 @@ writes the protected cmd_int inbox.
 
 Config (config.json):
   "notify": {
-    "interactive": "discord" | "off",       # kill switch
+    "interactive": "slack" | "discord" | "lineworks" | "off",  # kill switch
     "route_epoch": 1,                        # bump on delivery change
     "operator": "<discord user id>",
     "card_thread": true,
@@ -765,6 +765,11 @@ def _dispatch_intent_tx(ledger, ev, cfg, now, specs) -> dict:
         # flush — a due-forever intent would starve outbox_due slots
         _reseat(db, event_id, now, "signals_off_sealed")
         return {"skipped": True}
+    if batch is None and row["kind"] == "signal" and not notify_scope.interactive_enabled(cfg):
+        # kill switch off: never seal onto the discord fallback; wait unsealed
+        # (no attempt used) until a real transport is configured again
+        _reseat(db, event_id, now, "signals_interactive_off")
+        return {"skipped": True}
     if batch is not None:
         if notify_scope.interactive_enabled(cfg) and batch["transport"] != notify_scope.active_transport(cfg):
             return {"error": "transport_mismatch"}
@@ -1156,8 +1161,10 @@ def revoke_card(db, card_id, now) -> list:
     _cancel_open_renders(db, card_id, now)
     # A delivered card's unsent thread/body/attachment parts would
     # otherwise resume from the retained spec. 'held' marks them
-    # planned-but-blocked; parts the worker already started keep their
-    # journaled truth for reconcile.
+    # planned-but-blocked. The worker reports only results, so a part it
+    # already posted is still 'pending' here and is held too; its later
+    # receipt meets a terminal part and settle_part_receipt answers
+    # part_conflict (not applied).
     withdrawn = db.execute(
         "SELECT DISTINCT r.delivery_id,r.transport FROM notification_renders r "
         "JOIN notification_render_parts p ON p.delivery_id=r.delivery_id "
@@ -1212,38 +1219,53 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
                ORDER BY updated_at,card_id LIMIT ?""", (max(0, limit),)).fetchall()
         scanned = len(cards)
         history_renders = 0
+        failed = []
         for row in cards:
             card = notify_scope.card_row(db, row["card_id"])
             if card is None:
                 continue
-            if positive(card["project_id"]) and db.execute(
-                    "SELECT 1 FROM patients WHERE project_id=? "
-                    "AND is_archived=1", (card["project_id"],)).fetchone():
-                withdrawn += revoke_card(db, card["card_id"], now)
-            tri = db.execute(
-                "SELECT state,defer_until FROM notification_triage "
-                "WHERE card_id=?", (card["card_id"],)).fetchone()
-            if tri and tri["state"] == "deferred" \
-                    and tri["defer_until"] is not None \
-                    and tri["defer_until"] <= now:
-                db.execute(
-                    "UPDATE notification_triage SET state='open',"
-                    "revision=revision+1,updated_at=? WHERE card_id=?",
-                    (now, card["card_id"]))
-            before = (card["source_generation"],
-                      card["presentation_generation"],
-                      card["desired_render_rev"])
-            history_due = card["kind"] == "patient_history" and notify_history.refresh_needed(db, card, now)
-            history_deferred = history_due and history_renders >= 2
-            if card["kind"] != "patient_history" or history_due and not history_deferred:
-                issue_render(db, card["card_id"], cfg, now, specs)
-                history_renders += card["kind"] == "patient_history"
-            if card["kind"] == "patient_history":
-                notify_history.emit_completion_tx(ledger, notify_scope.card_row(db, card["card_id"]), now)
-            after = notify_scope.card_row(db, card["card_id"])
-            if (after["source_generation"], after["presentation_generation"],
-                    after["desired_render_rev"]) != before:
-                updated += 1
+            marks = len(specs), len(withdrawn), history_renders
+            history_deferred = False
+            db.execute("SAVEPOINT sweep_card")
+            try:
+                if positive(card["project_id"]) and db.execute(
+                        "SELECT 1 FROM patients WHERE project_id=? "
+                        "AND is_archived=1", (card["project_id"],)).fetchone():
+                    withdrawn += revoke_card(db, card["card_id"], now)
+                tri = db.execute(
+                    "SELECT state,defer_until FROM notification_triage "
+                    "WHERE card_id=?", (card["card_id"],)).fetchone()
+                if tri and tri["state"] == "deferred" \
+                        and tri["defer_until"] is not None \
+                        and tri["defer_until"] <= now:
+                    db.execute(
+                        "UPDATE notification_triage SET state='open',"
+                        "revision=revision+1,updated_at=? WHERE card_id=?",
+                        (now, card["card_id"]))
+                before = (card["source_generation"],
+                          card["presentation_generation"],
+                          card["desired_render_rev"])
+                history_due = card["kind"] == "patient_history" and notify_history.refresh_needed(db, card, now)
+                history_deferred = history_due and history_renders >= 2
+                if card["kind"] != "patient_history" or history_due and not history_deferred:
+                    issue_render(db, card["card_id"], cfg, now, specs)
+                    history_renders += card["kind"] == "patient_history"
+                if card["kind"] == "patient_history":
+                    notify_history.emit_completion_tx(ledger, notify_scope.card_row(db, card["card_id"]), now)
+                after = notify_scope.card_row(db, card["card_id"])
+                if (after["source_generation"], after["presentation_generation"],
+                        after["desired_render_rev"]) != before:
+                    updated += 1
+            except Exception as error:
+                # One poison card must not stop the sweep or pin the window:
+                # undo its work, record a fixed code (no text) and rotate on.
+                db.execute("ROLLBACK TO sweep_card")
+                del specs[marks[0]:], withdrawn[marks[1]:]
+                history_renders, history_deferred = marks[2], False
+                failed.append({"card_id": card["card_id"], "error": "card_sweep_card_failed",
+                               "type": type(error).__name__})
+            finally:
+                db.execute("RELEASE sweep_card")
             # Rotate inert history too; quota-deferred work keeps its place
             # ahead of the two renders just processed in this separate window.
             if not history_deferred:
@@ -1268,8 +1290,10 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
             os.unlink(os.path.join(dirs[transport + "_render"],
                                    delivery_id + ".json"))
     notify_spool.publish_specs(db, dirs, specs, now)
-    return {"scanned": scanned, "updated": updated,
-            "republished": len(specs)}
+    out = {"scanned": scanned, "updated": updated, "republished": len(specs)}
+    if failed:
+        out["failed"] = failed
+    return out
 
 
 def gc(ledger, cfg=None, now=None, limit=500) -> dict:

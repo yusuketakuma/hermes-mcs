@@ -324,7 +324,7 @@ def test_late_history_member_reopens_completed_summary_without_reopening_capture
     render = _latest_render(led)
     assert _begin(led, render)["granted"]
     _receipt(led, render, f"{1:016x}")
-    led.save_messages([_message(2)], project_id=1)
+    led.save_messages([_message(2, posted_at='2026-09-19T00:00:00+09:00')], project_id=1)
     assert initial_import_state.load(led.db, 1)["capture_phase"] == "complete"
     assert json.loads(_card(led)["ui_state"])["history_source_dirty"]
     notify_cards.sweep(led, CFG, now=NOW + 1)

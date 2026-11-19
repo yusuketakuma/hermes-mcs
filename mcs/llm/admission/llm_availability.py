@@ -3,6 +3,8 @@ import fcntl
 import json
 import math
 import os
+import subprocess
+import sys
 import time
 from contextlib import contextmanager, suppress
 
@@ -141,6 +143,39 @@ def _mark_llm_down(db) -> None:
     _health_write(llm_health_path(db), state)
 
 
+# Resident semantic turns and whether the run lock was busy, kept for the
+# stall alert only (observation; never read by admission).
+SEMANTIC_TURNS_NAME = "semantic_turns.json"   # beside the ledger, like llm_health.json
+SEMANTIC_TURNS_WINDOW_S = 86400.0
+_SEMANTIC_TURNS_MAX = 2000
+
+
+def semantic_turns_path(db):
+    return circuit_state_path(db).with_name(SEMANTIC_TURNS_NAME)
+
+
+def _semantic_turns(path, now: float) -> list:
+    turns = load_config(path).get("turns")
+    return [t for t in turns if isinstance(t, list) and len(t) == 2
+            and _finite_ts(t[0]) is not None and 0 <= now - t[0] < SEMANTIC_TURNS_WINDOW_S
+            and t[1] in (0, 1)] if isinstance(turns, list) else []
+
+
+def record_semantic_turn(path, lock_busy: bool) -> None:
+    """Append one resident semantic turn; an unwritable file only loses the sample."""
+    with _circuit_lock(path):
+        now = time.time()
+        turns = _semantic_turns(path, now) + [[now, 1 if lock_busy else 0]]
+        _health_write(path, {"turns": turns[-_SEMANTIC_TURNS_MAX:]})
+
+
+def semantic_turns_24h(db, now: float | None = None) -> dict | None:
+    """{"attempts", "lock_busy"} over the last 24 h, or None when none was recorded."""
+    turns = _semantic_turns(semantic_turns_path(db), time.time() if now is None else now)
+    return ({"attempts": len(turns), "lock_busy": sum(t[1] for t in turns)}
+            if turns else None)
+
+
 def circuit_success(db) -> None:
     """Any answered call proves the endpoint is alive — reset state."""
     path = circuit_state_path(db)
@@ -202,3 +237,31 @@ def disk_floor_mb() -> float:
         return value if math.isfinite(value) and value >= 0 else 512.0
     except ValueError:
         return 512.0
+
+
+# kern.memorystatus_vm_pressure_level: 1 normal, 2 warn, 4 critical.
+_PRESSURE_CRITICAL = 4
+_pressure_critical_last = False
+
+
+def memory_pressure_critical() -> bool:
+    """True only while macOS reports critical memory pressure; an unreadable
+    level adds no deferral (the free-memory reserve still decides)."""
+    global _pressure_critical_last
+    if sys.platform != "darwin":
+        return False
+    try:
+        level = int(subprocess.run(
+            ["/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"],
+            capture_output=True, text=True, timeout=2, check=True,
+            env={"PATH": "/usr/bin:/bin:/usr/sbin", "LC_ALL": "C"}).stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    critical = level == _PRESSURE_CRITICAL
+    if critical != _pressure_critical_last:
+        # One stderr event per transition records why background work waits.
+        _pressure_critical_last = critical
+        print(json.dumps({"event": "memory_pressure_deferral" if critical else "memory_pressure_cleared",
+                          "reason": "memory_pressure_critical", "level": level, "pid": os.getpid()}),
+              file=sys.stderr, flush=True)
+    return critical

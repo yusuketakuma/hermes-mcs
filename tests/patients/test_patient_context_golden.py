@@ -52,8 +52,9 @@ def _product(led):
 
 def test_three_post_patient_reaches_the_reviewed_final_product(runtime):  # noqa: F811
     led, _, _ = runtime
+    posted_at = '2026-09-19T00:00:00+09:00'
     for mid, body in POSTS:
-        seed(led, mid=mid, pid=1, body=body)
+        seed(led, mid=mid, pid=1, body=body, posted_at=posted_at)
     finish(runtime)
     product = _product(led)
     assert product["published"] is not None, "the finite workload must publish a context"

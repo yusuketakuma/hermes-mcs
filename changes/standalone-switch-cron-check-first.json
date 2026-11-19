@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "独立モードへの切替でHermesの定期処理を確認できないとき両方が止まる問題を修正",
+  "summary": "Hermes経由から独立モード（runtime_mode=standalone）へ切り替える services は、以前のHermes定期処理（cron）の一覧を先に確認してから、以前の常駐処理（local.mcs-cmd・local.mcs-int・local.mcs-health・抽出worker）を停止します。gatewayが応答しない・一覧が時間内に返らないなどで確認できない場合は、以前の処理を止めずに終了コード1で止まります。これまでは以前の常駐処理を先に停止・削除してから止まるため、抽出・コマンド取込・外部ヘルス監視がどちらの方式でも動かない状態になっていました。",
+  "upgrade": "追加操作は不要です。確認できない原因（gateway停止など）を直して services を再実行してください。Hermesを先に削除して一覧を確認できない環境は、従来どおり切替が完了しません。この場合の扱いは未決定です。",
+  "details": [
+    "retire_previous_runtime で inspect_cron を launchd の bootout・plist削除より前に実行する。停止の確認条件（113）とcronの削除・再確認は変更していない。"
+  ],
+  "refs": ["mcs/ops/services/service_management.py", "tests/ops/test_mcs_setup_services.py"]
+}
