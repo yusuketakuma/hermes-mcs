@@ -1,0 +1,15 @@
+name: PR review signal
+
+on:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+
+permissions: {}
+
+jobs:
+  signal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Finish read-only review signal
+        run: echo "Review event received."

@@ -1,6 +1,7 @@
 """Validate human operation payloads and retry decisions without mutating the ledger."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
@@ -89,6 +90,31 @@ def retry_payload_codec(db):
     return codec
 
 
+def _RetryObjectFactory():
+    # The stored payload historically accepts duplicate non-version keys.
+    # Retain that behavior, but never choose a version from an ambiguous
+    # top-level marker (including escaped spellings of the same JSON key).
+    from inference_version import VERSION_KEY
+    class _RetryObject(dict):
+        def __init__(self, pairs):
+            super().__init__(pairs)
+            self.ambiguous_version = sum(k == VERSION_KEY for k, _ in pairs) > 1
+    return _RetryObject
+
+
+def parse_retry_payload(raw):
+    """Parse a stored retry payload under the shared writer/preview contract.
+
+    Returns the decoded JSON value on success (dicts carry an
+    ``ambiguous_version`` flag) and ``None`` on malformed input.  Callers
+    reject non-dict results and ambiguous version markers themselves.
+    """
+    try:
+        return json.loads(raw, object_pairs_hook=_RetryObjectFactory())
+    except (ValueError, TypeError, RecursionError):
+        return None
+
+
 def read_retry_payload(db, row, *, max_bytes=RETRY_PAYLOAD_MAX_BYTES):
     """Read at most the retry payload limit without copying a larger value."""
     if row["payload_type"] != "text":
@@ -102,6 +128,23 @@ def read_retry_payload(db, row, *, max_bytes=RETRY_PAYLOAD_MAX_BYTES):
         return decoded if decoded else None
     except UnicodeError:
         return None
+
+
+def retry_updated_payload(payload, command_id: str, additional_attempts, attempts: int):
+    """Canonical stored payload the retry writer saves for this command.
+
+    Adds ``retry_command_id`` and, for a manual extension,
+    ``manual_attempt_limit`` — the same fields the writer appends — so the
+    preview/confirm path can apply the writer's stored-size limit to the
+    exact bytes it would persist.  Raises ValueError/TypeError on values
+    the canonical encoder rejects (e.g. non-finite numbers).
+    """
+    from mcs_requests import canonical
+    updated = dict(payload)
+    updated["retry_command_id"] = command_id
+    if additional_attempts is not None:
+        updated["manual_attempt_limit"] = attempts + additional_attempts
+    return canonical(updated).decode("utf-8")
 
 
 def bounded_integer(value, low: int, high: int) -> bool:

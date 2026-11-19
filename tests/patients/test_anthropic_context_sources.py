@@ -922,7 +922,8 @@ def test_legacy_source_pass_is_enriched_only_with_original_evidence(runtime, clo
     source = next(mcs_queries.patient_context_sources(led.db, 1, mid=1))
     def recheck():
         return patient_context_quality_controller._quality_step(led, 1, CFG, 'synthetic', {}, clock.mono + 180,
-                                             lambda: True, source=source)
+                                             lambda: True, source=source,
+                                             cloud_mode=worker._cloud_mode(led, CFG, 'patient_context', 1))
 
     if damage in ('pass_content', 'low_confidence'):
         with pytest.raises(ValueError, match='patient_source_quality_receipt_missing'):

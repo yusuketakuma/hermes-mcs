@@ -12,12 +12,12 @@
     {"name": "release", "color": "20c997", "description": "種別: リリース準備・作業。タグ作成・公開・配備の許可ではない"},
     {"name": "breaking change", "color": "b60205", "description": "注意: 互換性を壊す変更。影響・移行・復旧方法を明記。承認とは別"},
     {"name": "即時適用", "color": "d73a4a", "description": "版: 次の緊急版で出す。期限切れ・停止の回避など待てない変更"},
-    {"name": "v1.1.3", "color": "5319e7", "description": "版: v1.1.3 に入れる"},
-    {"name": "v1.1.4", "color": "5319e7", "description": "版: v1.1.4 に入れる"},
+    {"name": "v1.2.0", "color": "5319e7", "description": "版: v1.2.0 に入れる", "rename_from": "v1.1.3"},
     {"name": "版未定", "color": "5319e7", "description": "版: 入れる版をまだ決めていない（計画済み）"},
     {"name": "要オーナー対応", "color": "fbca04", "description": "対応: Yusukeさんの判断・承認・外部とのやり取りが必要"},
     {"name": "要実機作業", "color": "fbca04", "description": "対応: Macへの配備・実データの操作が必要（明示承認の範囲だけ）"},
     {"name": "要再起動", "color": "fbca04", "description": "対応: 反映に Hermes gateway か LINE WORKS アダプターの再起動が要る"},
+    {"name": "オーナー承認", "color": "0e8a16", "description": "判定: 現headへのオーナー承認。自動マージの人承認として扱う。pushで無効・解除。付けるのはオーナー"},
     {"name": "マージ前確認済み", "color": "0e8a16", "description": "判定: 現head/baseのCI・差分・レビュー・依存を確認済み。更新時に解除。マージ・配備の許可ではない"},
     {"name": "要トリアージ", "color": "fbca04", "description": "対応: 版・領域をまだ決めていない新しい issue"},
     {"name": "自動スキャン", "color": "c5def5", "description": "種別: 自動スキャンが起票した未確認の指摘。担当は付かない。不要なら閉じる（再起票されない）"},
@@ -62,5 +62,5 @@
     {"name": "失敗:利用枠", "color": "c5def5", "description": "自動化: AIの利用枠・予算の不足で失敗。有料経路へ切り替えず保留"},
     {"name": "失敗:不明", "color": "c5def5", "description": "自動化: 結果不明。同じ作業を再発注せず人が確認"}
   ],
-  "milestones": [{"title": "v1.1.3", "description": "ラベル v1.1.3 と同じ範囲"}, {"title": "v1.1.4", "description": "ラベル v1.1.4 と同じ範囲"}]
+  "milestones": [{"title": "v1.2.0", "description": "ラベル v1.2.0 と同じ範囲"}]
 }
