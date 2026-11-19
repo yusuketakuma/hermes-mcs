@@ -80,3 +80,69 @@ def test_off_reason_of_an_unresolvable_profile_and_an_unnamed_key_problem(monkey
     monkeypatch.setattr(cloud_policy, 'private_env_problem', lambda *args: None)
     assert provider._cloud_mode(None, cfg, 'patient_context', 1) == 'off'
     assert provider.cloud_off_reason(None, cfg, 'patient_context', 1) == 'env_file_unreadable'
+
+
+def _flaky_once(monkeypatch, name, first, then):
+    """Answer ``first`` on the first read of ``cloud_policy.<name>`` and ``then`` afterwards."""
+    calls = []
+
+    def read(*args, **kwargs):
+        calls.append(1)
+        return first() if len(calls) == 1 else then()
+
+    monkeypatch.setattr(cloud_policy, name, read)
+    return calls
+
+
+_OMITTED = {'provider': 'anthropic', 'project_ids': [1], 'routes': ['patient_context']}
+
+
+@pytest.mark.parametrize('flaky', ['key', 'review'])
+def test_a_read_that_fails_once_waits_instead_of_a_scope_stop(monkeypatch, flaky):
+    import cloud_send_admission
+    import external_transfer
+    cfg = {'cloud_llm': dict(_OMITTED)}
+    monkeypatch.setattr(cloud_policy, 'private_env_problem', lambda *args: None)
+    if flaky == 'key':
+        monkeypatch.setattr(external_transfer, 'status', lambda root=None: dict(_REVIEW_OPEN))
+        calls = _flaky_once(monkeypatch, 'provider_key', lambda: None, lambda: 'synthetic-key')
+    else:
+        monkeypatch.setattr(cloud_policy, 'provider_key', lambda backend, root=None: 'synthetic-key')
+        reads = []
+
+        def status(root=None):
+            reads.append(1)
+            return ({'state': 'pending', 'auto_enable': False} if len(reads) == 1 else dict(_REVIEW_OPEN))
+
+        monkeypatch.setattr(external_transfer, 'status', status)
+        calls = reads
+    mode, reason = provider.cloud_route_mode(None, cfg, 'patient_context', 1)
+    assert len(calls) >= 2
+    # The configuration names this patient for the cloud: the stop is a read that recovered,
+    # which waits with any paid answer kept, never a definite scope that pins the input locally.
+    assert (mode, reason) == ('off', 'env_file_unreadable')
+    for progress in (False, True):
+        assert cloud_send_admission.classify_refusal('pre_send', reason, progress=progress) == 'defer'
+
+
+def test_a_declared_exclusion_stays_a_scope_stop_after_a_flaky_key_read(monkeypatch):
+    import external_transfer
+    monkeypatch.setattr(external_transfer, 'status', lambda root=None: dict(_REVIEW_OPEN))
+    monkeypatch.setattr(cloud_policy, 'private_env_problem', lambda *args: None)
+    _flaky_once(monkeypatch, 'provider_key', lambda: None, lambda: 'synthetic-key')
+    cfg = {'cloud_llm': {**_OMITTED, 'project_ids': [2]}}
+    assert provider.cloud_route_mode(None, cfg, 'patient_context', 1) == ('off', 'scope')
+    assert cloud_policy.refusal_code(cfg, 'scope', model=None, route='patient_context',
+                                     project_id=1) == 'scope'
+
+
+def test_a_closed_backlog_window_stays_a_scope_stop(monkeypatch):
+    import external_transfer
+    monkeypatch.setattr(external_transfer, 'status', lambda root=None: dict(_REVIEW_OPEN))
+    monkeypatch.setattr(cloud_policy, 'provider_key', lambda backend, root=None: 'synthetic-key')
+    monkeypatch.delenv(cloud_policy.BACKLOG_WORKER_ENV, raising=False)
+    cfg = {'cloud_llm': {**_ON, 'routes': ['reextract', 'patient_context']}}
+    # The route is closed outside the backlog worker: a second reading cannot reopen it.
+    assert cloud_policy.refusal_code(cfg, 'scope', model=None, route='reextract', project_id=1) == 'scope'
+    assert cloud_policy.refusal_code(cfg, 'scope', model=None, route='patient_context',
+                                     project_id=1) == 'env_file_unreadable'

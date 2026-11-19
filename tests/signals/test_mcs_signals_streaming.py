@@ -92,8 +92,10 @@ def _expected(name, th):
                             ("合成薬1", range(1, MED_MENTIONS, 2)),
                             ("合成薬Z", range(MED_MENTIONS))):
                 mids = [base + k for k in ks]
+                # evidence follows posting time (oldest first); the fixture
+                # posts at NOW-(8+8k)d so larger k is older -> mid descending
                 out.append((f"med_change_no_followup:{100 + r}:{med}", {
-                    "message_ids": mids[-10:], "mention_count": len(mids)}))
+                    "message_ids": mids[::-1][-10:], "mention_count": len(mids)}))
         return out
     if name == "_pharmacist_request":
         for m in posts:

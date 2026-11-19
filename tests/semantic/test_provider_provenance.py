@@ -305,7 +305,7 @@ def test_failed_preflight_followed_by_cached_reuse_does_not_prove_order(tmp_path
         first = semantic_extraction.extract_facts_v2(
             observed, member, ledger=ledger, source_fingerprint=bundle['source_fingerprint'],
             project_id=1, jev_client=FailedJev())
-        assert first['extraction_complete'] and events == ['jev', 'local']
+        assert first['extraction_complete'] and events == ['local', 'jev']
         chunk = ledger.db.execute('SELECT content FROM artifacts WHERE kind=?',
                                   (semantic_extraction.KIND_CHUNK_V2,)).fetchone()
         assert 'jev_preflight' not in json.loads(chunk['content'])

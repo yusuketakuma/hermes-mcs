@@ -2,17 +2,22 @@
 
 Drives the update lifecycle documented in docs/dev-records/auto-update-plan.md:
 
+  check     (also with no subcommand) daily cron driver: detect latest
+            tag, notify once, scan the command_receipts approval queue,
+            auto-apply when mode=auto
   status    print update_state.json + current/latest tag summary
-  check     daily cron driver: detect latest tag, notify once, scan the
-            command_receipts approval queue, auto-apply when mode=auto
+  plan      read-only JSON of the route and blockers for a tag or candidate
   apply     run the staged apply pipeline for a pending approval (or
             --tag explicit). Takes update.lock -> run.lock, journals
             every stage, quiesces resident drainers, merges, then runs
             post-merge steps in a NEW-code subprocess (locks held).
   rollback  restore the last applied entry's prev_sha (+ DB restore when
             the apply carried a schema_bump)
-  recover   journal-driven interrupted-apply recovery (also invoked by
-            the independent launchd watchdog via mcs_recover.py)
+  recover   journal-driven interrupted-apply recovery. The independent
+            launchd watchdog (~/.mcs-recovery/mcs_recover.py) is a
+            stdlib-only copy that never runs this module.
+  reinstall-done  operator acknowledgement after finishing install.sh
+  auto-disable / consent-preview / consent-confirm  v3 auto-update consent
 
 Safety invariants: preserves protected paths (data/, config.json, .env);
 normal update and reinstall may migrate validated legacy install options into config.json

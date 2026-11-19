@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "macOSのメモリ圧迫が危機的なときは背景処理の開始を待つ",
+  "summary": "macOSがメモリ圧迫を危機的（critical）と報告している間は、添付のOCRと抽出、患者コンテキストの更新、クラウド再抽出の背景workerを新しく始めません。新着の収集・通知・既読化と即時の処理はこの判定で止まりません。これまでは空きメモリの割合だけを見ていたため、スワップがほぼ埋まった状態でも背景workerが起動していました。",
+  "upgrade": "追加操作は不要です。macOSだけが対象で、警告（WARN）の段階では待ちません。圧迫の段階を読み取れないときは、この判定では待たせず、従来の空きメモリの判定だけが働きます。待ちに入るときと解除されるときに、`memory_pressure_deferral`・`memory_pressure_cleared` の記録（理由 `memory_pressure_critical`）を処理のエラー出力に1回ずつ残します。",
+  "details": [
+    "圧迫の段階は標準の `sysctl kern.memorystatus_vm_pressure_level` から読みます。4（critical）のときだけ背景処理の受入れを閉じます。",
+    "クラウドの背景workerの目標本数も0になるため、動いているworkerは既存の手順（課金済みの結果を確定してから退役）で減ります。",
+    "添付OCRの状態は従来どおり `memory_deferred` として表示します。"
+  ],
+  "refs": [
+    "mcs/llm/admission/llm_availability.py",
+    "mcs/extract/llm/extract_llm_resident.py",
+    "mcs/llm/cloud_backlog.py"
+  ]
+}

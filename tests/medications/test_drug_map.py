@@ -83,6 +83,7 @@ def test_dictionary_io_failure_is_safe_and_closes_acquired_fd(tmp_path, monkeypa
     dictionary = _dictionary(tmp_path)
     path = tmp_path / "fictional-drug-map.json"
     opened, real_fstat = _fail_dictionary_io(monkeypatch, path, failure)
+    monkeypatch.setattr(drug_map, "_LOADED", [None, None])
     with pytest.raises(ValueError, match="^drug_map_file$"):
         drug_map.load(path, expected_sha256=dictionary.sha256)
     assert len(opened) == 1

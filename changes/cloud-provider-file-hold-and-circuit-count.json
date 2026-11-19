@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "プロバイダー設定を確認できないときは保留にし、クラウド回路の数え方を直す",
+  "summary": "プロバイダーの設定ファイルが一時的に読めないとき、送信済みの回答を捨てず保留にして、直ったら続きから進みます。失敗の種類が変わっても連続回数を戻さず、refusal では回路を開きません。",
+  "upgrade": "追加操作は不要です。Hermes・standalone ともプロセスの再起動後に反映されます。適用条件はクラウド LLM を使っている環境です。",
+  "details": [
+    "合成した停止（プロバイダー設定の不一致）に印を付け、送信前の確認では CloudObservationIncomplete として保留にします。所有者が設定した mode=off は従来どおり停止です。",
+    "印の付いた設定では、既存の予約の範囲を取り消し済みとは扱いません。",
+    "クラウド回路は、失敗の分類が変わっても連続回数を0に戻しません。stop_reason の refusal は、その投稿の入力に固有の失敗として回路の対象から外します。"
+  ],
+  "refs": [
+    "mcs/core/mcs_util.py",
+    "mcs/llm/cloud_inference.py",
+    "mcs/llm/cloud_policy.py",
+    "mcs/semantic/semantic_runtime.py"
+  ]
+}

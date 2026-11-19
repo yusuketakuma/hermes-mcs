@@ -54,6 +54,7 @@ def _repaired_projection_producer(db, pid, mid, fp, policy, member, doc, meta):
     import cloud_inference
     import semantic_audit
     import semantic_extraction
+    import semantic_relations
     import semantic_runtime
     from inference_dependency_loss import source_binding
 
@@ -168,7 +169,8 @@ def _repaired_projection_producer(db, pid, mid, fp, policy, member, doc, meta):
             return answer['text']
 
         replay = semantic_extraction.repair_facts_v2(reply, member, original, rejected,
-                                                    coverage_missing=coverage_missing)
+                                                    coverage_missing=coverage_missing,
+                                                    rule=semantic_relations.meta_relation_rule(meta))
         if (index != len(answers) or not replay['repaired']
                 or replay['owner_chunk_ids'] != completed.get('owner_chunk_ids')
                 or replay['repaired_fact_ids'] != completed.get('repaired_fact_ids')

@@ -103,7 +103,7 @@ def _http_worker_main() -> int:
                 or not all(isinstance(e, str) for e in allowed)
                 or not _worker_endpoint_allowed(endpoint, allowed)
                 or method not in ("GET", "POST")
-                or not isinstance(timeout, int | float)
+                or not isinstance(timeout, (int, float))
                 or isinstance(timeout, bool) or not math.isfinite(timeout)
                 or timeout <= 0
                 or (api_key is not None and not isinstance(api_key, str))
@@ -222,14 +222,14 @@ def bounded_http_request(endpoint: str, method: str, body,
             raise ValueError("local_endpoint_not_allowed")
     elif not isinstance(api_key, str) or endpoint not in allowed:
         raise ValueError("endpoint_not_allowed")
-    if (isinstance(timeout, bool) or not isinstance(timeout, int | float)
+    if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
             or abs(timeout) > sys.float_info.max
             or not math.isfinite(timeout) or timeout <= 0):
         raise ValueError("timeout_invalid")
     operation_deadline = time.monotonic() + float(timeout)
     if deadline is not None:
         if (isinstance(deadline, bool)
-                or not isinstance(deadline, int | float)
+                or not isinstance(deadline, (int, float))
                 or abs(deadline) > sys.float_info.max
                 or not math.isfinite(deadline)):
             raise ValueError("deadline_invalid")
@@ -271,8 +271,8 @@ def bounded_http_request(endpoint: str, method: str, body,
         with suppress(Exception):
             worker_process.reap_worker(process)
         raise
-    if time.monotonic() >= operation_deadline:
-        raise TimeoutError("http worker deadline exceeded")
+    # A worker that finished in time may have returned a billed answer;
+    # whether a late answer is used is the caller's decision.
     if process.returncode != 0:
         raise OSError("http worker failed")
     try:

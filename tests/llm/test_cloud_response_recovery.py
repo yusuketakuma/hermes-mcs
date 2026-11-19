@@ -36,7 +36,7 @@ def paid(tmp_path, monkeypatch):
         calls.append(body)
         if state.get('reject_first') and len(calls) == 1:
             return 429, {'Retry-After': '0'}, b'{}'
-        return 200, {}, json.dumps({'model': original.MODEL, 'stop_reason': 'end_turn',
+        return 200, {}, json.dumps({'model': body['model'], 'stop_reason': 'end_turn',
             'content': [{'type': 'text', 'text': '{"synthetic":"answer"}'}],
             'usage': {'input_tokens': 10, 'output_tokens': 2}}).encode()
 
@@ -55,11 +55,13 @@ def paid(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cloud_policy, 'record_result', store)
 
-    def unit(ledger, *, binding='original-input', owner='first', current=None, hook=None):
-        return cloud_inference.CloudInferenceUnit(ledger, cfg, route='reextract', project_id=1,
+    def unit(ledger, *, binding='original-input', owner='first', current=None, hook=None,
+             route='reextract', purpose=None):
+        return cloud_inference.CloudInferenceUnit(ledger, cfg, route=route, project_id=1,
             message_id=1, unit_key='synthetic-unit', deadline=time.monotonic() + 120,
             current=current or (lambda: state['current']), dispatch=lambda fn, **_kw: fn(),
-            owner={'lease': owner}, input_binding=payload_hash(binding), on_reserved_tx=hook)
+            owner={'lease': owner}, input_binding=payload_hash(binding), on_reserved_tx=hook,
+            purpose=purpose)
 
     return path, cfg, calls, locks, state, unit, Restart
 
@@ -267,7 +269,8 @@ def test_invalid_or_different_paid_evidence_never_replays_or_resends(paid, damag
     path, _cfg, calls, _locks, _state, unit, _restart = paid
     with closing(Ledger(path)) as ledger:
         with legacy_cloud_routes():
-            _ask(unit(ledger))
+            _ask(unit(ledger, route='patient_context', purpose='quality_repair')
+                 if damage == 'tokens' else unit(ledger))
         with ledger.db:
             if damage in ('answer', 'missing_answer'):
                 content = '{}' if damage == 'missing_answer' else '{"text":"tampered","finish_reason":"stop"}'
@@ -292,7 +295,9 @@ def test_invalid_or_different_paid_evidence_never_replays_or_resends(paid, damag
                                   "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')")
     with closing(Ledger(path)) as ledger:
         with pytest.raises(cloud_client.CloudNotSent):
-            _ask(unit(ledger, binding='changed' if damage == 'input' else 'original-input'),
+            _ask(unit(ledger, binding='changed' if damage == 'input' else 'original-input',
+                      route='patient_context', purpose='patient_context') if damage == 'tokens'
+                 else unit(ledger, binding='changed' if damage == 'input' else 'original-input'),
                  tokens=101 if damage == 'tokens' else 100)
         assert len(calls) == 1
         assert len(ledger.artifacts('cloud_usage_reserve')) == (0 if damage == 'missing_reservation' else 1)

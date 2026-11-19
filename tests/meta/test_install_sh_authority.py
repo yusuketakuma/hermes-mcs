@@ -353,7 +353,10 @@ def test_new_install_updates_opt_outs_without_a_legacy_record(tmp_path):
     assert not (home / '.mcs' / 'data' / 'install_options.json').exists()
 
 
-def test_conflicting_legacy_record_stops_before_install_side_effects(tmp_path):
+def test_direct_install_with_a_new_selection_updates_the_legacy_record(tmp_path):
+    # Requirement change (IA-015): a direct run that differs from the pre-1.1
+    # record no longer stops; config and the legacy record both take the new
+    # selection, so a rollback to an old version repeats the latest choice.
     home, hermes_home, stub, env = _world(tmp_path)
     data = home / '.mcs' / 'data'
     data.mkdir(parents=True)
@@ -361,10 +364,8 @@ def test_conflicting_legacy_record_stops_before_install_side_effects(tmp_path):
     config.write_text('{}')
     legacy = data / 'install_options.json'
     legacy.write_text('{"v": 1, "install_args": ["--no-llm"]}')
-    original = legacy.read_bytes()
-    result = _run(env, hermes_home, '--no-brew', '--no-llm')
-    assert result.returncode != 0
-    assert '旧記録' in result.stderr
-    assert config.read_text() == '{}'
-    assert legacy.read_bytes() == original
-    assert not any(c.startswith(('brew install', 'git clone', 'uv ', 'launchctl bootstrap')) for c in _calls(stub))
+    result = _run(env, hermes_home, '--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode == 0, result.stderr
+    assert '旧記録' not in result.stderr
+    assert json.loads(config.read_text())['install_args'] == ['--no-brew', '--no-llm', '--no-plugin', '--no-recovery']
+    assert json.loads(legacy.read_text()) == {'v': 1, 'install_args': ['--no-brew', '--no-llm', '--no-plugin', '--no-recovery']}

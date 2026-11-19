@@ -17,7 +17,9 @@ import notify_journal
 import notify_transport
 from notify_scope import (card_projects, card_row, render_row, stored_scope,
                           scope_fields, scope_matches, retired_transports,
-                          TRANSPORT_VERSIONS, SUPPORTED_TRANSPORTS)
+                          TRANSPORT_VERSIONS, SUPPORTED_TRANSPORTS,
+                          RESTORE_BEYOND_JOURNAL_HORIZON as BEYOND_HORIZON,
+                          RESTORE_UNRESOLVABLE_PART_REASONS)
 
 _RESOLVE_RESULTS = ("mark_not_sent", "mark_delivered")
 _PREFLIGHT_PROOF = "local_preflight_rejected"
@@ -139,7 +141,8 @@ def apply_card_resolve(ledger, req, cfg=None, now=None) -> dict:
                 # the operator's proof never outranks the worker's own
                 # witness — settling not_sent over a journaled send
                 # would reissue it (double post)
-                error = _journal_contradiction(ledger, req)
+                error = (_journal_contradiction(ledger, req)
+                         or _horizon_hold_cannot_vouch(db, req))
             if error == "unknown_attempt":
                 # the restore may have erased the attempt row — a
                 # recorded restore hold is the operator's handle for
@@ -340,6 +343,21 @@ def _resolve_check(attempt, render, card, req) -> str | None:
     return None
 
 
+def _horizon_hold_cannot_vouch(db, req) -> str | None:
+    """An attempt row held after a restore past the journal horizon needs
+    proof independent of the journal, like an attempt-less hold
+    (_rebind_check): the rows that could witness its send may be compacted."""
+    if req["result"] == "mark_not_sent" \
+            and req["evidence"].get("proof") == "no_journal_started" \
+            and db.execute(
+                "SELECT 1 FROM notification_restore_holds WHERE attempt_id=? "
+                "AND delivery_id=? AND reason=? AND released_at IS NULL",
+                (req["attempt_id"], req["delivery_id"],
+                 UNKNOWN_ATTEMPT_BEYOND_HORIZON)).fetchone():
+        return "journal_cannot_vouch"
+    return None
+
+
 def _journal_contradiction(ledger, req) -> str | None:
     """Check an attempt-row resolve against the delivery journal (the
     same scan post-restore reconcile trusts). A delivered ``result``
@@ -448,8 +466,9 @@ def card_part_resolve_plan(ledger, delivery_id, part_id, *, include_related=Fals
 
 
 # every fixed reason a producer stores on a held or unknown part; others count as 'unknown'
-# a part made unknown by a restore beyond the journal horizon (notify_reconcile)
-BEYOND_HORIZON = "restore_beyond_journal_horizon"
+# the hold reconcile gives a granted/unknown attempt row the journal never saw
+# in a restore past the journal horizon: its journal rows may be compacted away
+UNKNOWN_ATTEMPT_BEYOND_HORIZON = "unknown_attempt:beyond_horizon"
 PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
                      "blank_part_unrepresentable", "attachment_upload_identity_unverified", "card_revoked",
                      *_PREFLIGHT_ERRORS, _DEPENDENCY_ERROR,
@@ -466,8 +485,7 @@ PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
                      "prefetch_failed", "unsupported_part", "slack_attachment_incomplete",
                      "scope_mismatch", "no_target", "bad_render", "bad_slack_response",
                      "operator_part_resolve", BEYOND_HORIZON,
-                     "restore_group_spec_unverified", "restore_group_surface_missing",
-                     "restore_group_surface_unresolvable")
+                     *RESTORE_UNRESOLVABLE_PART_REASONS)
 
 
 # non-card part kinds an operator recovery command can name
@@ -534,7 +552,7 @@ def part_hold_report(ledger) -> dict:
     db = cards.connection(ledger)
     marks = ",".join("?" * len(PART_HOLD_REASONS))
     by_state = {state: dict.fromkeys((*PART_HOLD_REASONS, "not_recorded", "unknown"), 0)
-                for state in ("held", "unknown")}
+                for state in ("held", "unknown", "pending")}
     resolvable = 0
     for row in db.execute(
             f"SELECT state, CASE WHEN error_code IN ({marks}) THEN error_code "
@@ -544,6 +562,10 @@ def part_hold_report(ledger) -> dict:
             "GROUP BY 1,2", PART_HOLD_REASONS):
         by_state[row[0]][row[1]] += row[2]
         resolvable += row[3]
+    # a pending Slack file_group a restore beyond the journal horizon flagged
+    by_state["pending"][BEYOND_HORIZON] = db.execute(
+        "SELECT COUNT(*) FROM notification_render_parts WHERE kind='file_group' "
+        "AND state='pending' AND attempt_id IS NULL AND error_code=?", (BEYOND_HORIZON,)).fetchone()[0]
     spec = db.execute(
         "SELECT COALESCE(SUM(spec_json IS NOT NULL),0), COALESCE(SUM(spec_published=1),0), "
         "COALESCE(SUM(EXISTS(SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=r.delivery_id "
@@ -563,8 +585,10 @@ def _worklist_where(cfg):
     where = ("p.kind!='card' AND r.state!='cancelled'" + live +
              " AND (p.state='unknown' "
              "OR (p.state='held' AND p.error_code='attachment_upload_identity_unverified') "
-             "OR (p.state='not_sent' AND p.kind='file_group' AND p.error_code=?))")
-    return where, (*retired, _DEPENDENCY_ERROR)
+             "OR (p.state='not_sent' AND p.kind='file_group' AND p.error_code=?) "
+             "OR (p.state='pending' AND r.transport='slack' AND p.kind='file_group' "
+             "AND p.attempt_id IS NULL AND p.error_code=?))")
+    return where, (*retired, _DEPENDENCY_ERROR, BEYOND_HORIZON)
 
 
 def recovery_worklist_keys(db, cfg=None, *, checkpoint=lambda: None) -> list:
@@ -583,7 +607,8 @@ def recovery_worklist(db, cfg=None, *, limit=20, offset=0) -> dict:
 
     Read-only on the caller's connection. Candidates are non-card parts
     that are ``unknown``, held awaiting attachment-identity confirmation,
-    or dependency-rejected ``file_groups``; each is then verified through
+    dependency-rejected ``file_groups``, or pending Slack ``file_groups``
+    flagged by a restore beyond the journal horizon; each is then verified through
     the same plan the approval command uses, so ``status``/``blocker``
     report real plan eligibility rather than a guess. Cancelled renders
     and retired transports are excluded. ``total`` counts every candidate
@@ -807,8 +832,14 @@ def validate_card_part_resolve(req) -> str | None:
             return "bad_dependency_resolution"
         return None
     if req["expected_state"] == "pending":
-        if (transport != "slack" or req["part_id"] != "file_group" or req["result"] != "mark_not_sent"
-                or evidence.get("proof") != "no_journal_started" or "remote_id" in req or "related_plans" in req):
+        if transport != "slack" or req["part_id"] != "file_group" or "related_plans" in req:
+            return "bad_pending_resolution"
+        if req["result"] == "mark_delivered":
+            if "proof" in evidence:
+                return "bad_pending_resolution"
+            # observed posted: the exact card id and file set are re-checked at apply
+            return None if valid_text(req.get("remote_id"), 64) else "remote_id_required"
+        if evidence.get("proof") not in ("no_journal_started", "remote_absent") or "remote_id" in req:
             return "bad_pending_resolution"
         return None
     if "related_plans" in req:
@@ -1431,14 +1462,19 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
             render = render_row(db, req["delivery_id"])
             card = card_row(db, render["card_id"])
             preflight = req["evidence"].get("proof") == _PREFLIGHT_PROOF
+            part = db.execute(
+                "SELECT kind,error_code FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+                (req["delivery_id"], req["part_id"])).fetchone()
+            restored_group = req["expected_state"] == "pending" and part["error_code"] == BEYOND_HORIZON
             group_retry = (req["result"] == "mark_not_sent" and req["transport"] == "slack"
-                           and db.execute(
-                "SELECT kind FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
-                (req["delivery_id"], req["part_id"])).fetchone()[0] == "file_group")
+                           and part["kind"] == "file_group" and not restored_group)
+            if req["expected_state"] == "pending" and not restored_group \
+                    and req["evidence"].get("proof") != "no_journal_started":
+                error = "bad_pending_resolution"
             for plan in plans:
-                error = _file_group_resolution_error(db, render, card, plan, req)
                 if error:
                     break
+                error = _file_group_resolution_error(db, render, card, plan, req)
             targets = _preflight_recovery_targets(db, render, card, plans) if preflight else None
             if not error and preflight and targets is None:
                 error = "preflight_target_unverified"
@@ -1498,7 +1534,8 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
             receipt.update(outcome="rejected", error=error)
         db.execute("INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
                    (req["command_id"], digest, None, None, receipt["outcome"], canonical(receipt).decode(), now))
-        if (error is None and not preflight and not group_retry and card is not None and card["delivery_state"] != "update_failed"
+        if (error is None and not preflight and not group_retry and not restored_group
+                and card is not None and card["delivery_state"] != "update_failed"
                 and notify_spool.restore_pending(notify_spool.data_root(ledger)) is None
                 and not cards.resend_exhausted(db, card["card_id"])):
             cards.issue_render(db, card["card_id"], cfg, now, specs, force=req["result"] == "mark_not_sent")

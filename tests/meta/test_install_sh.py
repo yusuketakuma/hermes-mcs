@@ -402,7 +402,7 @@ def test_dry_run_prints_plan_and_writes_nothing(tmp_path, with_ocr):
     assert "uv pip install -e hermes-agent[messaging]（Hermes ディレクトリで実行）" in r.stdout
     if with_ocr:
         from ocr_model_contract import ENGINE_VERSION
-        assert f'Python 3.13・Yomitoku {ENGINE_VERSION}・CPU lite' in r.stdout
+        assert f'Python 3.13・Yomitoku {ENGINE_VERSION}・CPUモデル' in r.stdout
         assert '0.16.0' not in r.stdout
     else:
         assert '追加OCR' not in r.stdout

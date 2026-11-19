@@ -276,15 +276,16 @@ def test_overview_and_quota_completion_roll_back_together(runtime, monkeypatch):
 
 def test_partial_overview_first_full_catchup_can_run_before_three_hours(runtime):
     led, clock, _ = runtime
-    seed(led)
-    seed(led, mid=2, proof=False, body='生活環境: 合成の未解析記録。')
+    posted_at = '2026-10-17T22:00:00+09:00'
+    seed(led, posted_at=posted_at)
+    seed(led, mid=2, proof=False, body='生活環境: 合成の未解析記録。', posted_at=posted_at)
     _ready_sources(runtime, keys=[1])
     assert step(runtime)['status'] == 'progressed'
     first, = _records(led)
     before_meta = json.loads(led.db.execute('SELECT meta FROM artifacts WHERE kind=? AND project_id=1',
                                            (state.KIND,)).fetchone()[0])
     assert before_meta['source_coverage']['unreflected'] == 1
-    seed(led, mid=2, body='生活環境: 合成の未解析記録。')
+    seed(led, mid=2, body='生活環境: 合成の未解析記録。', posted_at=posted_at)
     for _ in range(20):
         outcome = step(runtime)
         if len(_records(led)) == 2:

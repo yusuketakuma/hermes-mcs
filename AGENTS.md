@@ -54,7 +54,7 @@ python3 ci/gates.py
 python3 ci/mine_gates.py --check
 ```
 
-- `make test|lint|readme|check` も使える（uv があれば ephemeral 実行）。`integration/` も同じ runner に対象を指定する。
+- `make lint`・`make readme`・`make check` も使える（uv があれば ephemeral 実行）。`integration/` も同じ runner に対象を指定する。
 - `run_tests.sh` は `MCS_TEST_PYTHON`→`$VIRTUAL_ENV`→repo 直下の `.venv` の順に Python を選ぶ。worktree には `.venv` が無いので、pytest の入った Python を `MCS_TEST_PYTHON` に指定する。
 - ユーザー指示（2026-10-31）により、失敗項目を修正して再検証が通れば、既存結果と合わせて全体を合格扱いとし、全体 suite・同一SHAの全6ジョブの再実行は必須にしない。実行済み・失敗後に再検証済み・未実行を区別し、実行していないCIを実測成功と記録しない。記録方法は `docs/development/RELEASE_NOTES.md` に従う。
 - 作業は原則 git worktree で行う（所有者 2026-11-17）。作業（ブランチ）ごとに1つ作り、既存の checkout でブランチを切り替えない。終わったら片付ける。

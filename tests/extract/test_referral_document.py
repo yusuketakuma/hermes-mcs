@@ -61,6 +61,14 @@ def test_narrative_is_not_a_document(text):
     ("大正元年7月30日", "1912-07-30", "day", True),
     ("明治45年7月30日", None, "day", False),
     ("令和0年", None, "year", False),
+    ("2026年00月00日", None, "day", False),
+    ("2026年11月0日", None, "day", False),
+    ("2026年0月", None, "month", False),
+    ("２０２６年００月００日", None, "day", False),
+    ("令和8年00月00日", None, "day", False),
+    ("令和8年11月0日", None, "day", False),
+    ("2026/00/00", None, "day", False),
+    ("2024年2月29日", "2024-02-29", "day", True),
 ])
 def test_dates_keep_precision_and_validate_calendar_and_era(raw, value, precision, valid):
     row = _project("紹介状\n現病歴：" + raw + " 合成所見")["events"][0]

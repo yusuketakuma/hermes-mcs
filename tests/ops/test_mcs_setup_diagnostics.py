@@ -674,3 +674,16 @@ def test_install_progress_warning_swallows_unreadable_file(monkeypatch, tmp_path
     (tmp_path / "data" / "config.json").write_text("{}")
     assert mcs_setup._install_progress_warning() == (
         "導入の途中経過の記録を確認できませんでした。install.sh の状態を確認してください")
+
+
+def test_check_reports_a_root_writable_by_others(monkeypatch, tmp_path):
+    """IA-035: check shows the permission that makes protected sends stop."""
+    root = tmp_path / "mcs-root"
+    (root / "data").mkdir(parents=True)
+    root.chmod(0o700)
+    (root / "data").chmod(0o700)
+    monkeypatch.setattr(mcs_setup, "HOME", str(root))
+    assert mcs_setup._root_permission_errors() == []
+    (root / "data").chmod(0o770)
+    errors = mcs_setup._root_permission_errors()
+    assert len(errors) == 1 and f"`chmod go-w {(root / 'data').resolve()}`" in errors[0]

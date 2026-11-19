@@ -519,6 +519,7 @@ def main(argv: list[str] | None = None) -> int:
     from ledger import Ledger, LedgerReader
     from mcs_adapter import MCSAdapter
     from writer_lock import acquire_run_lock
+    from notify_spool import restore_writer_hold
     from project_metadata_view import get_project_metadata
 
     parser = argparse.ArgumentParser(description=__doc__)
@@ -556,6 +557,9 @@ def main(argv: list[str] | None = None) -> int:
                 os.path.dirname(os.path.abspath(args.database)), "run.lock"))
             if lock_fd is None:
                 print(json.dumps({"state": "held", "reason": "run_lock_busy"}))
+                return 1
+            if restore_writer_hold(os.path.dirname(os.path.abspath(args.database))) is not None:
+                print(json.dumps({"state": "held", "reason": "restore_in_progress"}))
                 return 1
         store = Ledger(args.database) if args.command == "sync" else LedgerReader(args.database)
         if args.command == "view":

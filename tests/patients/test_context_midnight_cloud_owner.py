@@ -34,9 +34,9 @@ _REAL_WRITER_CURRENT = worker._writer_current
 
 
 @pytest.mark.parametrize(('start', 'finish', 'unknown'), [
-    ('2026-10-26T23:59:30', '2026-10-27T00:00:01', False),
-    ('2026-10-31T23:59:30', '2026-11-01T00:00:01', False),
-    ('2026-10-26T23:59:30', '2026-10-27T00:00:01', True),
+    ('2026-11-16T23:59:30', '2026-11-17T00:00:01', False),
+    ('2026-11-30T23:59:30', '2026-12-01T00:00:01', False),
+    ('2026-11-16T23:59:30', '2026-11-17T00:00:01', True),
 ])
 def test_real_owner_reservation_and_response_across_midnight(runtime, cloud, monkeypatch, start, finish, unknown):
     led, clock, _ = runtime
@@ -107,7 +107,7 @@ def test_real_owner_reservation_and_response_across_midnight(runtime, cloud, mon
         answer = {'fact_ids': [item['id'] for item in prompt['reports'][:12]]}
         clock.wall = stamp(finish)
         clock.mono += 31
-        response = {'model': anthropic_client.MODEL, 'stop_reason': 'end_turn',
+        response = {'model': body['model'], 'stop_reason': 'end_turn',
                     'content': [{'type': 'text', 'text': json.dumps(answer)}],
                     'usage': {'input_tokens': 10, 'output_tokens': 2}}
         if unknown:

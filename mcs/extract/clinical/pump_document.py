@@ -12,7 +12,8 @@ _PUMP = re.compile(r'PCA|ポンプ', re.I)
 
 def project(pages):
     """Keep PCA text and optional quantities unverified, with no date or dose imputation."""
-    candidates = (medical_document.extract(pages)['pump_candidates']
+    # One past the cap is enough to decide `limited`; later candidates are never built.
+    candidates = (medical_document.extract(pages, _MAX_RECORDS + 1)['pump_candidates']
                   if any(_PUMP.search(page['text']) for page in pages) else [])
     output = {'schema': SCHEMA, 'identified': bool(candidates), 'events': []}
     records = 0

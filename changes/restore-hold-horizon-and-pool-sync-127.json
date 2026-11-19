@@ -1,0 +1,18 @@
+{
+  "category": "fixed",
+  "title": "復元後の保留解除と通知poolのログ重複を修正",
+  "summary": "保持期間外の復元で送信記録が残る保留も、journal だけの未送信証明では解除できなくなります。再実行した復元照合でも保留一覧と件数が空になりません。クラウド pool の同期失敗ログが交互に繰り返されません。",
+  "upgrade": "通知側の反映には gateway の再起動、常駐抽出の反映にはその再起動が必要です。実機の既存の保留は reason が変わらないため、保持期間外の復元は新しい版で照合し直したときから効きます。",
+  "details": [
+    "保持期間外の復元で journal が見ていない granted・unknown の送信記録を、reason `unknown_attempt:beyond_horizon` で保留する。`ops.card_resolve` は、この保留に `no_journal_started` の mark_not_sent を journal_cannot_vouch で拒否する。保持期間内の保留は変えない。",
+    "restore_reconcile.json の held と events_held を、未解除の保留表から毎回作る。counts・verdicts・アラート判定は変えない。",
+    "CloudBacklogPool.sync は、判断まで完了し入れ子の pool も失敗中でないときだけ真を返す。常駐は last_sync でなくこの戻り値で pool_error を消す。"
+  ],
+  "refs": [
+    "#127",
+    "mcs/notify/notify_recovery.py",
+    "mcs/notify/notify_reconcile.py",
+    "mcs/llm/cloud_backlog.py",
+    "mcs/extract/llm/extract_llm_resident.py"
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "category": "added",
+  "title": "過去世代の抽出結果を作り直す範囲を絞る設定 extract.upgrade_scope を追加",
+  "summary": "config.json の extract.upgrade_scope で、更新後に以前の世代・識別値の抽出結果（LLM抽出、規則抽出、添付OCRページの解析）を作り直す範囲を選べます。未指定と \"all\" は従来どおりすべて作り直し、\"none\" は作り直さず、{\"project_ids\": [...]} はその患者だけを作り直します。新着、本文の編集、同じ世代の品質再試行、人の修正報告はどの値でも止めません。",
+  "upgrade": "追加操作は不要です。未指定の既存環境は従来と同じ動作です。使う場合は extract.upgrade_scope を設定します。設定ファイルは処理のたびに読み直すため、収集の定期処理と添付OCRは次の実行から、抽出の常駐処理（Hermesモードは ai.mcs.extract-drainer 系、独立動作は host）も次の選択から従います。この版自体で起きる一度だけの再処理は、検査値の判定変更の記録を参照してください。",
+  "details": [
+    "不正な値（空の一覧・0以下・重複・文字列の患者ID、未知の文字列など）、extract がオブジェクトでない場合、設定ファイルを読めない場合は \"none\" と同じく作り直しを止めます。不正な値は設定検査でエラー、\"all\" 以外の値は警告になります。",
+    "設定ファイルを読めないときに作り直しを止める点は、提供元設定を分けた環境で提供元の設定が一時的に読めない場合も同じです。その間は新着の抽出だけが進み、読めるようになると作り直しを再開します。",
+    "実機診断（mcs_setup.py check の待機処理の警告）は、範囲を絞っているときに止まっている件数（投稿・規則・添付ページ）を表示します。患者IDの無い投稿は患者IDの一覧では許可されず、範囲外として数えます。",
+    "この設定は extract の設定の一部として意味解析の候補の識別値に含まれます。semantic.fact_source を承認して切り替えている環境で値を設定・変更すると承認と一致しなくなり、再承認まで意味解析が止まります。",
+    "選択条件は範囲が開いているとき（未指定・\"all\"）は何も足さず、抽出の選択の問い合わせは従来と同一です。"
+  ],
+  "refs": [
+    "mcs/extract/upgrade_scope.py",
+    "mcs/extract/llm/extract_llm_selection.py",
+    "mcs/extract/llm/extract_llm_qc.py",
+    "mcs/extract/rules/extract.py",
+    "mcs/extract/attachment_inference.py",
+    "mcs/ingest/run_check.py",
+    "mcs/ops/mcs_setup.py",
+    "mcs/core/mcs_config.py",
+    "tests/extract/test_upgrade_scope.py",
+    "tests/ingest/test_derive_upgrade_scope.py"
+  ]
+}

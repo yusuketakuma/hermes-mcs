@@ -57,7 +57,8 @@ def test_all_mention_classes_preserved_with_dates_and_uncertainty(corpus):
     assert [r["mention"] for r in report["items"]] == meds
     assert {r["subject_bucket"] for r in report["items"]} == {"patient", "family", "unknown", "other"}
     assert report["coverage"]["no_current_extraction"] == 0
-    assert "照合中" in report["explanation"]
+    # No dictionary is configured, so no matching is pending.
+    assert "照合中" not in report["explanation"]
     assert report["coverage"]["attachments"] == "excluded_ocr_not_performed"
 
 
@@ -218,14 +219,24 @@ def test_canonical_original_document_and_generation_change(tmp_path):
 
 def test_changed_dictionary_pin_hides_old_candidates(corpus, tmp_path):
     import drug_map
-    from medications_testkit import _dictionary
+    from copy import deepcopy
+    from medications_testkit import DOCUMENT, _dictionary
     current(corpus, 1, [{"name": "キラナ", "subject": "patient"}])
     drug_map.derive(corpus, _dictionary(tmp_path))
     assert drug_timeline.timeline(view_of(corpus), 1)["items"][0]["candidate"]
+    newer = tmp_path / "new"
+    newer.mkdir()
+    document = deepcopy(DOCUMENT)
+    document["dict_id"] = "fictional-v2"
+    pinned = _dictionary(newer, document)
     report = drug_timeline.timeline(view_of(corpus), 1,
-        cfg={"drug_map": {"path": str(tmp_path / "new.json"), "sha256": "f" * 64}})
+        cfg={"drug_map": {"path": str(newer / "fictional-drug-map.json"), "sha256": pinned.sha256}})
     assert report["items"][0]["candidate"] is None
     assert report["coverage"]["dictionary"] == "pending" and "照合中" in report["explanation"]
+    report = drug_timeline.timeline(view_of(corpus), 1,
+        cfg={"drug_map": {"path": str(tmp_path / "absent.json"), "sha256": "f" * 64}})
+    assert report["items"][0]["candidate"] is None
+    assert report["coverage"]["dictionary"] == "invalid" and "照合中" not in report["explanation"]
 
 
 def test_timeline_reuses_dictionary_progress_in_its_borrowed_snapshot(corpus, tmp_path, monkeypatch):
@@ -291,5 +302,5 @@ def test_canonical_unestablished_names_keep_evidence_without_guessing(corpus, mo
     assert item["mention"]["name"] == "薬名不明"
     assert item["mention"]["name_state"] == ("ambiguous" if case == "ambiguous" else "unknown")
     assert item["mention"]["statement"] == "キラナ錠5mgを開始"
-    assert item["candidate"] is None and item["matching"] == "pending"
+    assert item["candidate"] is None and item["matching"] == "not_applicable"
     assert not drug_timeline.timeline(view_of(corpus), 1, name="5mg")["items"]

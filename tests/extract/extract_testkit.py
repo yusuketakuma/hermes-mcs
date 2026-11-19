@@ -8,15 +8,18 @@ import json
 
 import extract_llm
 from inference_version import CURRENT_VERSION, VERSION_KEY
-from common_testkit import make_ledger
+from common_testkit import make_ledger, recent_posted_at
 
 
 _ledger = make_ledger
 
 
 def _message(mid=1, body="body", state="full", project_id=1,
-             parent_id=None, unread=False,
-             posted_at="2026-09-19T00:00:00+09:00", profession=""):
+             parent_id=None, unread=False, posted_at=None, profession=""):
+    if posted_at is None:
+        # A fixed date silently ages out of bounded windows (QC's 60-day
+        # realtime scope); default to a recent post instead.
+        posted_at = recent_posted_at()
     return mcs_contract.Message(
         message_id=mid, project_id=project_id, parent_id=parent_id,
         sender_id=1, sender_name="sender", sender_type="user",

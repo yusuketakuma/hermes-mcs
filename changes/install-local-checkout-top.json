@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "install_local.py が別の Git リポジトリの内側のフォルダをソースフォルダと誤認する問題を修正",
+  "summary": "scripts/install_local.py は、フォルダ自身が Git の作業ツリーの最上位である場合だけソースフォルダとして扱います。ホームフォルダーを Git で管理している環境でも、設定・データだけがある ~/.mcs は文書どおり ~/.local/share/hermes-mcs への配置に進みます。ZIP などで別のリポジトリの中に展開した hermes-mcs から実行した場合は、外側のリポジトリを ~/.mcs へ複製せず、Git で取得するよう案内して止まります。",
+  "upgrade": "追加操作は不要です。別のリポジトリの内側の空フォルダを --dest に指定した場合は、拒否せず新しいソースフォルダを作ります。",
+  "details": [
+    "_is_checkout は git rev-parse --show-toplevel の結果がそのフォルダ自身（realpath で比較）と一致する場合だけ真を返す。",
+    "これにより導入先の「別のソースフォルダの内側です」の判定は不要になったため削除した。内側のフォルダは空なら新規作成、設定・データがあれば既存の退避先への配置、それ以外は「空ではないフォルダです」で拒否する。"
+  ],
+  "refs": ["scripts/install_local.py", "tests/meta/test_install_local.py"]
+}

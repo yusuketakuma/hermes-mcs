@@ -22,6 +22,7 @@ import owned_process  # noqa: E402
 import run_log_install  # noqa: E402
 import ledger  # noqa: E402
 import notify_spool  # noqa: E402
+import restore_evidence  # noqa: E402
 import notify_flush  # noqa: E402,F401 - restore text quarantine
 import notify_digest  # noqa: E402,F401 - restored digest card reissue
 import notify_urgent  # noqa: E402,F401 - restored alert settlement
@@ -48,14 +49,18 @@ except ImportError:
 
 def _load_gateway_restart():
     """Capture the independent restart helper before apply/rollback changes
-    the tree. A missing/broken helper must not disable the whole updater:
-    restart_gateway then reports that the restart could not be requested."""
-    try:
-        return runpy.run_path(os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-            "deployment", "recovery", "mcs_recover.py"))["request_gateway_restart"]
-    except Exception:  # noqa: BLE001 — any load failure is the same "unavailable"
-        return None
+    the tree. An older launcher's copy lacks the helper's support files, so
+    the installed checkout's helper is the fallback. A missing/broken helper
+    must not disable the whole updater: restart_gateway then reports that
+    the restart could not be requested."""
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    for root in dict.fromkeys(os.path.realpath(path) for path in (here, REPO)):
+        try:
+            return runpy.run_path(os.path.join(
+                root, "deployment", "recovery", "mcs_recover.py"))["request_gateway_restart"]
+        except Exception:  # noqa: BLE001 — any load failure is the same "unavailable"
+            continue
+    return None
 
 
 _request_gateway_restart = _load_gateway_restart()
@@ -188,6 +193,10 @@ HERMES_PREVIOUS_PINS = frozenset({"b7758d8555931846f4b8f798d4ea9715f65077ca",
 
 
 _TRANSIENT_BAIL = frozenset({"run_lock_timeout"})
+# Network failures of the remote tag lookup, before any local change: the tag
+# did not fail, the check could not reach origin (IA-116).
+_NETWORK_BAIL = frozenset({"git_timeout", "git_spawn_failed", "git_failed: ls-remote"})
+_PRE_CHANGE_STAGES = frozenset({"local_checks", "candidate_verify", "remote_verify", "fetch"})
 
 
 class UpdateError(Exception):
@@ -480,20 +489,29 @@ def _remove_marker() -> None:
         os.unlink(MARKER_PATH)
 
 
+# A notice_id names one notification intent: a replay after an unacknowledged
+# (possibly committed) enqueue reuses the event instead of adding another.
+_NOTICE_SEEN_SQL = ("SELECT 1 FROM notify_outbox WHERE kind='update_notice' "
+                    "AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.notice_id')=? END LIMIT 1")
 _NOTICE_CHILD = (
     "import sys, json; sys.path.insert(0, sys.argv[1]); import _mcs_path, ledger\n"
     "db = ledger.Ledger(sys.argv[2])\n"
+    "payload = json.loads(sys.argv[3])\n"
     "try:\n"
-    "    db.outbox_add('update_notice', None, json.loads(sys.argv[3]))\n"
+    "    if payload.get('notice_id') is None or db.db.execute(sys.argv[4], (payload['notice_id'],)).fetchone() is None:\n"
+    "        db.outbox_add('update_notice', None, payload)\n"
     "finally:\n"
     "    db.db.close()\n")
 
 
-def _enqueue_notice(text: str, use_run_lock: bool = False, *, notice_code=None, tag=None) -> bool:
+def _enqueue_notice(text: str, use_run_lock: bool = False, *, notice_code=None, tag=None,
+                    notice_id=None) -> bool:
     """Freeze sanitized text into an update_notice outbox event.
     use_run_lock=True for the daily check (NB acquire — a busy tick
     defers the notify to the next check); the apply child skips it
-    because its parent already holds the lock."""
+    because its parent already holds the lock. With notice_id the
+    enqueue is idempotent; False then means "maybe enqueued", so retry
+    with the same id."""
     fd = None
     if use_run_lock:
         fd = acquire_run_lock(RUN_LOCK)
@@ -505,19 +523,27 @@ def _enqueue_notice(text: str, use_run_lock: bool = False, *, notice_code=None, 
             payload["notice_code"] = notice_code
         if tag is not None:
             payload["tag"] = tag
+        if notice_id is not None:
+            payload["notice_id"] = notice_id
         live = os.path.join(REPO, "mcs")
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        if os.path.realpath(here) != os.path.realpath(live):
-            # launcher copy (scripts/mcs_upgrade.py): this code's Ledger
-            # would migrate the live DB past what the live tree runs, so
-            # only the live tree's own Ledger may open it
+        stored = restore_evidence.database_version(LEDGER)
+        loaded = getattr(ledger, "SCHEMA_VERSION", None)
+        if os.path.realpath(here) != os.path.realpath(live) or (
+                stored is not None and loaded is not None and stored != loaded):
+            # launcher copy (scripts/mcs_upgrade.py), or this process loaded
+            # another schema than the DB holds (the tree moved since start):
+            # this code's Ledger would migrate the live DB past what the live
+            # tree runs, so only the live tree's own Ledger may open it
             r = _run_with_lifetime(
-                [sys.executable, "-c", _NOTICE_CHILD, live, LEDGER, json.dumps(payload)],
+                [sys.executable, "-c", _NOTICE_CHILD, live, LEDGER, json.dumps(payload),
+                 _NOTICE_SEEN_SQL],
                 stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
             return r.returncode == 0
         db = ledger.Ledger(LEDGER)
         try:
-            db.outbox_add("update_notice", None, payload)
+            if notice_id is None or db.db.execute(_NOTICE_SEEN_SQL, (notice_id,)).fetchone() is None:
+                db.outbox_add("update_notice", None, payload)
         finally:
             db.db.close()
         return True

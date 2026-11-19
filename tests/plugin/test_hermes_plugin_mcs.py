@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import semantic_store
+import semantic_transport
 import pytest
 
 from hermes_plugin import card_workers
@@ -17,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import hermes_plugin
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from adapters.common import projects
 import job_ops
 import ledger
@@ -478,14 +480,14 @@ def test_summary_comparison_adoption_preview_confirm_and_stale_guard(tmp_path):
     db.artifact_add(
         "extract_llm", json.dumps(baseline, ensure_ascii=False),
         project_id=1, message_id=1, model="local",
-        meta={"hash": source_hash})
+        meta={"hash": source_hash, VERSION_KEY: CURRENT_VERSION})
     candidate = {
         "target_message_id": 1,
         "claims": [{"section": "plan", "text": "確認依頼を採用"}],
     }
     candidate_id = db.artifact_add(
         "semantic_summary", json.dumps(candidate, ensure_ascii=False),
-        project_id=1, message_id=1, model="local",
+        project_id=1, message_id=1, model=semantic_transport.LLM_MODEL,
         meta={"fingerprint": bundle["source_fingerprint"],
               "policy_fingerprint": policy,
               "target_revision": member["revision"],

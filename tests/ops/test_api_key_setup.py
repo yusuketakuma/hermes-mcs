@@ -121,6 +121,40 @@ def test_untrusted_env_is_not_replaced(tmp_path, terminal, bad):
     assert path.is_symlink() if bad == 'symlink' else path.exists()
 
 
+def test_untrusted_env_reports_nothing_was_saved(tmp_path, terminal, capsys):
+    path = tmp_path / '.env'
+    path.write_text('MCS_PASSWORD=synthetic\n')
+    path.chmod(0o644)
+    terminal.setattr('builtins.input', lambda _: pytest.fail('unexpected prompt'))
+    assert api_key_setup.run(tmp_path) == 1
+    text = capsys.readouterr().out
+    assert 'APIキーは保存していません' in text and '保存結果を確認できません' not in text
+
+
+@pytest.mark.parametrize('cause,expected', [
+    ('configuration_changed', 'この操作を始めた後に設定が変更されました'),
+    ('no_hidden_input', '入力を非表示にできません'),
+    ('not_utf8', 'UTF-8の文字として読み取れません')])
+def test_refusal_before_saving_names_its_own_cause(tmp_path, terminal, capsys, cause, expected):
+    # Only a storage refusal points at the .env permissions.
+    path = tmp_path / '.env'
+    path.write_bytes(b'\xffSYNTHETIC=1\n' if cause == 'not_utf8' else b'MCS_PASSWORD=synthetic\n')
+    path.chmod(0o600)
+    before = path.read_bytes()
+
+    def hidden_input_unavailable(_prompt):
+        raise api_key_setup.getpass.GetPassWarning('synthetic')
+
+    terminal.setattr('builtins.input', lambda _: '1')
+    terminal.setattr(api_key_setup.getpass, 'getpass', hidden_input_unavailable)
+    admission = (lambda: False) if cause == 'configuration_changed' else None
+    assert api_key_setup.run(tmp_path, admission=admission) == 1
+    text = capsys.readouterr().out
+    assert 'APIキーは保存していません' in text and expected in text
+    assert '権限0600' not in text and '保存結果を確認できません' not in text
+    assert path.read_bytes() == before
+
+
 def test_noninteractive_does_not_prompt_or_write(tmp_path, monkeypatch):
     monkeypatch.setattr(api_key_setup, 'is_terminal', lambda: False)
     monkeypatch.setattr('builtins.input', lambda _: pytest.fail('unexpected prompt'))
