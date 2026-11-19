@@ -760,7 +760,7 @@ def test_thinking_only_length_holds_summary_and_consumes_no_second_repair(runtim
     def post(body, timeout):
         assert not led.db.in_transaction
         calls.append(body)
-        return 200, {}, json.dumps({'model':worker.anthropic_client.MODEL,'stop_reason':'max_tokens',
+        return 200, {}, json.dumps({'model':body['model'],'stop_reason':'max_tokens',
             'content':[{'type':'thinking','thinking':'synthetic-hidden'}],
             'usage':{'input_tokens':10,'output_tokens':10}}).encode()
 
