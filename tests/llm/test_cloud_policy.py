@@ -787,8 +787,10 @@ def test_month_crossing_bindings_use_batched_queries_and_linear_python_decoding(
         guard_checks = [sql for sql in selects if sql.startswith("SELECT name,sql FROM sqlite_master")
                         or "FROM cloud_usage_guard" in sql]
         carryover = [sql for sql in selects if c.CARRYOVER_KIND in sql]
+        order_index = [sql for sql in selects if "idx_cloud_usage_artifact_order" in sql]
         period_queries = [sql for sql in selects if sql not in anchors and sql not in timestamp_checks
-                          and sql not in guard_checks and sql not in carryover]
+                          and sql not in guard_checks and sql not in carryover and sql not in order_index]
+        assert len(order_index) == 1
         assert len(anchors) == len(timestamp_checks) == len(carryover) == 1
         assert "UNION ALL SELECT NULL" in anchors[0]
         assert "typeof(created_at)" in timestamp_checks[0]

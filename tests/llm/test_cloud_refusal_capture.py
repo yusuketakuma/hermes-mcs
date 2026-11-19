@@ -34,21 +34,32 @@ def _refused(unit, error_type, message, prompt="synthetic prompt"):
     return caught.value
 
 
-def _reply(status=200, usage=True, size=None):
+def _reply(status=200, usage=True, size=None, headers=None):
     def request(self, method, body, timeout, **kwargs):
         if size is not None:
             return 200, {}, b" " * size
-        payload = {"model": anthropic_client.MODEL, "stop_reason": "end_turn",
+        payload = {"model": body["model"], "stop_reason": "end_turn",
                    "content": [{"type": "text", "text": '{"facts": []}'}]}
         if usage:
             payload["usage"] = {"input_tokens": 10, "output_tokens": 10}
-        return status, {}, json.dumps(payload).encode()
+        return status, headers or {}, json.dumps(payload).encode()
     return request
 
 
 @pytest.fixture
 def priced(cloud, monkeypatch):
     monkeypatch.setattr(policy, "pricing_valid", lambda *args, **kwargs: True)
+    ledger, _cfg_value, _job, calls = cloud
+
+    def request(self, method, body, timeout, **kw):
+        assert not ledger.db.in_transaction
+        calls.append(body)
+        return 200, {}, json.dumps({
+            "model": body["model"], "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": '{"facts": []}'}],
+            "usage": {"input_tokens": 10, "output_tokens": 10}}).encode()
+
+    monkeypatch.setattr(anthropic_client.AnthropicClient, "request", request)
     return cloud
 
 
@@ -131,9 +142,9 @@ def test_an_unknown_transport_outcome_is_an_after_send_refusal(priced, monkeypat
 
 def test_a_raw_response_past_its_bound_is_an_after_send_refusal(priced, monkeypatch):
     ledger, cfg, _, _ = priced
-    monkeypatch.setattr(anthropic_client.AnthropicClient, "request",
-                        _reply(size=cloud_client.response_limit(100) + 1))
     unit = _unit(ledger, cfg)
+    monkeypatch.setattr(anthropic_client.AnthropicClient, "request",
+                        _reply(size=cloud_client.response_limit(unit.selection["max_tokens"]) + 1))
     _refused(unit, cloud_inference.CloudFallback, "cloud_unit_failed")
     assert unit.refusal == ("after_send", "response_too_large")
 
@@ -241,7 +252,8 @@ def test_a_retry_that_succeeds_clears_the_attempt_before_it(priced, monkeypatch)
     ledger, cfg, _, _ = priced
     replies = iter([429, 200])
     monkeypatch.setattr(anthropic_client.AnthropicClient, "request",
-                        lambda self, method, body, timeout, **kw: _reply(next(replies))(self, method, body, timeout))
+                        lambda self, method, body, timeout, **kw: _reply(
+                            next(replies), headers={"Retry-After": "1"})(self, method, body, timeout))
     monkeypatch.setattr(cloud_client.time, "sleep", lambda delay: None)
     unit = _unit(ledger, cfg, max_attempts=2)
     assert _ask(unit)["text"] == '{"facts": []}'
