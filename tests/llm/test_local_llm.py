@@ -306,6 +306,74 @@ def test_probe_rejects_length_stops(schema, content, expected):
         request_fn=send) == expected
 
 
+@pytest.mark.parametrize("fail", [
+    ConnectionRefusedError("synthetic"),
+    503,
+])
+def test_probe_that_reached_no_model_fixes_no_format(fail):
+    """A refused connection or a 503 (server loading) is not a "plain"
+    verdict: the probe is unobserved and the caller probes again."""
+    def send(endpoint, method, body, timeout, deadline=None):
+        if isinstance(fail, Exception):
+            raise fail
+        return fail, {}, b""
+
+    assert local_llm.probe_format(
+        local_llm.ENDPOINT, "synthetic", None, request_fn=send) is None
+
+
+@pytest.mark.parametrize(("status", "text", "finish", "mode",
+                          "answered", "statuses"), [
+    # a completed 200 proves the endpoint alive and picks the mode
+    (200, '{"ok":true}', "stop", "object", True, [200]),
+    # server errors are endpoint trouble, never a health signal
+    (500, "", "stop", "plain", False, [500]),
+    # a pure format-rejection streak stays distinct from 5xx
+    (400, "", "stop", "plain", False, [400]),
+    # a 200 whose body cannot complete is not health evidence — and the
+    # 200 stays in statuses so it cannot pass as a pure rejection streak
+    (200, "", "stop", "plain", False, [200]),
+    (200, '{"a":1', "length", "plain", False, [200]),
+    # a completed answer that fails the format verify still proves the
+    # endpoint alive — format selection and health stay separate
+    (200, "not json at all", "stop", "plain", True, [200]),
+])
+def test_probe_error_out_separates_format_from_endpoint_health(
+        status, text, finish, mode, answered, statuses):
+    """Real probe_format + synthetic request_fn: the wire evidence
+    distinguishes usable answers, unusable 200s, 5xx streaks and pure
+    format rejections instead of collapsing them into one flag."""
+    def send(endpoint, method, body, timeout, deadline=None):
+        return status, {}, json.dumps(
+            _response(text, finish=finish)).encode()
+
+    err = {}
+    assert local_llm.probe_format(
+        local_llm.ENDPOINT, "synthetic", None,
+        request_fn=send, error_out=err) == mode
+    assert err.get("sent") is True
+    assert bool(err.get("answered")) is answered
+    assert err.get("statuses", []) == statuses
+
+
+def test_probe_statuses_keep_mixed_rejection_and_unusable_200():
+    """A 400 beside an unusable 200 is not a pure format-rejection
+    streak: every response status stays in the evidence, in order."""
+    def send(endpoint, method, body, timeout, deadline=None):
+        rf = (body.get("response_format") or {}).get("type") \
+            if isinstance(body, dict) else None
+        if rf == "json_schema":
+            return 400, {}, b""
+        return 200, {}, json.dumps(_response("", finish="stop")).encode()
+
+    err = {}
+    assert local_llm.probe_format(
+        local_llm.ENDPOINT, "synthetic", {"name": "synthetic"},
+        request_fn=send, error_out=err) == "plain"
+    assert err["statuses"] == [400, 200]
+    assert "answered" not in err
+
+
 def test_extract_llm_call_pins_background_slot(monkeypatch):
     """The legacy extract path pins the same background slot."""
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
@@ -524,3 +592,66 @@ def test_probe_uncontended_turn_is_sent(tmp_path, monkeypatch):
     assert local_llm.probe_format(
         "http://127.0.0.1:8080/v1/chat/completions", "m", None, timeout=10,
         request_fn=_fake_request(_response('{"ok": true}'))) == "object"
+
+
+def test_call_turn_holds_one_slot_across_inner_sends(tmp_path, monkeypatch):
+    """One call_turn keeps a single physical turn: inner sends reuse the
+    owned slot instead of re-taking the lock, and ownership is released
+    on exit."""
+    path = str(tmp_path / "turn.lock")
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, path)
+    slots = []
+
+    def send(endpoint, method, body, timeout, deadline=None):
+        slots.append(body.get("id_slot"))
+        return 200, {}, json.dumps(_response("{}")).encode()
+
+    with local_llm.call_turn(time.monotonic() + 30, 1.0) as held:
+        assert held == local_llm.request_slot()
+        assert local_llm._OWNED_TURN.get() == held
+        local_llm.chat("p", request_fn=send)
+        local_llm.chat("p", request_fn=send)
+    assert local_llm._OWNED_TURN.get() is None
+    assert slots == [held, held]
+    assert _lock_is_free(path)
+
+
+def test_call_turn_waits_out_held_lock_then_sends(tmp_path, monkeypatch):
+    """A call_turn that waits out a held GPU turn still gets one slot
+    for the whole probe+body sequence."""
+    path = str(tmp_path / "turn.lock")
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, path)
+    monkeypatch.setattr(local_llm, "TURN_LOCK_POLL_S", 0.01)
+    timer = _hold_turn_for(path, 0.3, monkeypatch)
+    slots = []
+    try:
+        def send(endpoint, method, body, timeout, deadline=None):
+            slots.append(body.get("id_slot"))
+            return 200, {}, json.dumps(_response("{}")).encode()
+
+        with local_llm.call_turn(time.monotonic() + 5, 1.0) as held:
+            assert held == local_llm.request_slot()
+            local_llm.chat("p", request_fn=send)
+            local_llm.chat("p", request_fn=send)
+        assert slots == [held, held]
+    finally:
+        if timer.is_alive():
+            timer.join()
+        else:
+            timer.cancel()
+    assert _lock_is_free(path)
+
+
+def test_call_turn_yields_none_when_floor_unmet(tmp_path, monkeypatch):
+    """When no turn fits the deadline the block still runs — sends then
+    acquire their own turn exactly as before (here: busy, nothing sent)."""
+    monkeypatch.setenv(local_llm.TURN_LOCK_ENV, str(tmp_path / "turn.lock"))
+    err = {}
+    with local_llm.call_turn(time.monotonic() + 1.0, 5.0) as held:
+        assert held is None
+        assert local_llm._OWNED_TURN.get() is None
+        assert local_llm.chat(
+            "p", deadline=time.monotonic() + 1.0, turn_min_s=5.0,
+            request_fn=lambda *a, **k: pytest.fail("sent"),
+            error_out=err) is None
+    assert err == {"kind": "busy"}

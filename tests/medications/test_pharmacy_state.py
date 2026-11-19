@@ -17,9 +17,9 @@ def context(quote, *, subject="patient", names=("合成薬A",), values=("3錠",)
                 *({"key": key, "value": value, "evidence": quote} for value in values)]}
 
 
-def save(led, mid, body, items, *, pid=1):
+def save(led, mid, body, items, *, pid=1, posted_at=None):
     led.ensure_patient(pid)
-    led.save_messages([_message(mid=mid, project_id=pid, body=body)])
+    led.save_messages([_message(mid=mid, project_id=pid, body=body, posted_at=posted_at)])
     return led.artifact_add("extract_llm", json.dumps({"patient_context": items}), project_id=pid,
                             message_id=mid, meta={"hash": _hash(led, mid), VERSION_KEY: CURRENT_VERSION})
 

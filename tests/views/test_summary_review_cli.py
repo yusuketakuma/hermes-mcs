@@ -9,6 +9,7 @@ import uuid
 import job_ops
 import ledger
 import mcs_view
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_testkit import _cfg, _seeded
 
 
@@ -23,7 +24,8 @@ def test_comparison_cli_and_confirmed_adoption(tmp_path, monkeypatch, capsys):
         bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
         member = next(item for item in bundle["members"] if item["message_id"] == 1)
         db.artifact_add("extract_llm", json.dumps({"summary": "Old summary", "points": []}),
-                        project_id=1, message_id=1, meta={"hash": member["revision"]})
+                        project_id=1, message_id=1, meta={"hash": member["revision"],
+                                                        VERSION_KEY: CURRENT_VERSION})
         with db.db:
             semantic_drain._write_result(db, 1, 1, {
                 "summary": {"target_message_id": 1, "claims": [{"section": "medication", "text": member["body_original"],

@@ -540,6 +540,13 @@ def _command_outcomes(ledger, pending, cfg, root, result, deadline, limit):
                         out = {"outcome": "rejected", "error": f"crash:{type(exc).__name__}",
                                "command_id": cid}
                     db.execute("RELEASE transport_command")
+                    crash = str(out.get("error") or "").startswith("crash:")
+                    if crash or out.get("successor_error"):
+                        result.setdefault("errors", []).append(
+                            f"{req['op']}_{out['error']}" if crash
+                            else f"{req['op']}_successor_{out['successor_error']}")
+                    if crash and req["op"] == "transport_receipt":
+                        continue  # a factual receipt is never consumed by a crash; the next drain retries it
                 committed.append((path, req, error, out, specs, unlinks, now))
         for path, req, error, out, specs, unlinks, now in committed:
             try:

@@ -67,10 +67,16 @@ def test_primary_reason_uses_fixed_precedence(removed, expected):
 ])
 def test_actual_refusal_observes_recovery_without_new_send(paid, capsys, change, path, reason, comparison):
     dbpath, _cfg, calls, locks, _state, unit, _restart = paid
+    if change == 'tokens':
+        # quality_repair pinned to the backlog profile: same model and effort, only the
+        # purpose token bound differs — the repeat is a request-envelope change.
+        _cfg['cloud_llm']['provider_profiles'] = {'anthropic': {'quality_repair': 'haiku-medium'}}
     with closing(Ledger(dbpath)) as ledger:
         with legacy_cloud_routes():
             _ask(unit(ledger))
-        provider = unit(ledger, binding='synthetic-changed' if change == 'binding' else 'original-input')
+        provider = (unit(ledger, purpose='quality_repair')
+                    if change == 'tokens' else
+                    unit(ledger, binding='synthetic-changed' if change == 'binding' else 'original-input'))
         if change == 'absent':
             provider.input_binding = None
         elif change == 'unit':
@@ -210,10 +216,11 @@ def test_changed_history_can_make_exact_keys_same_without_proving_a_race(paid, m
 
 def test_observation_is_fresh_for_each_call_and_repair_child(paid, monkeypatch, capsys):
     dbpath, _cfg, calls, _locks, _state, unit, _restart = paid
+    _cfg['cloud_llm']['provider_profiles'] = {'anthropic': {'quality_repair': 'haiku-medium'}}
     with closing(Ledger(dbpath)) as ledger:
         with legacy_cloud_routes():
             _ask(unit(ledger))
-        provider = unit(ledger)
+        provider = unit(ledger, binding='synthetic-provider')
         child = provider.spawn_quality_repair()
         observed = []
         recover = cloud_policy.recover_response
@@ -233,9 +240,10 @@ def test_observation_build_failure_preserves_original_refusal(paid, monkeypatch,
     dbpath, _cfg, calls, _locks, _state, unit, _restart = paid
     def failed(*args, **kwargs):
         raise RuntimeError('synthetic-private')
+    _cfg['cloud_llm']['provider_profiles'] = {'anthropic': {'quality_repair': 'haiku-medium'}}
     with closing(Ledger(dbpath)) as ledger:
         with legacy_cloud_routes():
-            _ask(unit(ledger))
+            _ask(unit(ledger, purpose='quality_repair'))
         monkeypatch.setattr(cloud_policy, '_repeat_observation', failed)
         with pytest.raises(cloud_client.CloudNotSent) as caught:
             _ask(unit(ledger), 101)

@@ -483,9 +483,10 @@ class Registry:
     # -- followups --------------------------------------------------
 
     @_locked
-    def put_followup(self, command_id: str, record: dict) -> None:
+    def put_followup(self, command_id: str, record: dict, *, expires: float | None = None) -> None:
+        """``expires`` keeps an existing deadline (a retried record is not renewed)."""
         self._data["followups"][command_id] = {
-            **record, "expires": time.time() + FOLLOWUP_TTL_S}
+            **record, "expires": time.time() + FOLLOWUP_TTL_S if expires is None else expires}
         self.save(immediate=True)
 
     @_locked

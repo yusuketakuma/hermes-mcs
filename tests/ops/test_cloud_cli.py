@@ -41,7 +41,7 @@ from test_cloud_response_recovery import legacy_cloud_routes
 
 @pytest.fixture
 def world(tmp_path, monkeypatch):
-    now = datetime(2026, 10, 26, 12, tzinfo=cloud_policy.JST).timestamp()
+    now = datetime(2026, 11, 18, 12, tzinfo=cloud_policy.JST).timestamp()
     monkeypatch.setattr(cli.time, "time", lambda: now)
     for name in ("MCS_SETUP_PASSWORD", "TYPESAFE_API_KEY", "MCS_ANTHROPIC_API_KEY"):
         monkeypatch.delenv(name, raising=False)
@@ -59,7 +59,7 @@ def world(tmp_path, monkeypatch):
         db.db.commit()
         for mid, pid in ((1, 1), (2, 2)):
             db.save_messages([_message(mid, body="synthetic private body", project_id=pid,
-                                       posted_at="2026-10-26T10:00:00+09:00")])
+                                       posted_at="2026-11-18T10:00:00+09:00")])
             db.artifact_add("extract_llm", "{}", project_id=pid, message_id=mid,
                 meta={"hash": _hash(db, mid), "extract_version": extract_llm.EXTRACT_VERSION - 1})
         with db.db:
@@ -268,6 +268,9 @@ def test_stop_resume_and_idempotent_receipt_share_one_transaction(world):
                               "ORDER BY artifact_id DESC LIMIT 1").fetchone()
         assert json.loads(scope[0]) == {'version': 2, 'command_id': req['command_id']}
         assert cloud_policy.history_thread_allowed(db.db, 1, 1)
+        models = {m for (m,) in db.db.execute(
+            "SELECT model FROM artifacts WHERE kind IN ('cloud_control','cloud_circuit')")}
+        assert models == {""}      # provider-neutral: never a fixed Haiku label
         count = db.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0]
         env.unlink()
         assert mcs_requests.apply_command(db, req) == resume
@@ -319,7 +322,7 @@ def test_cli_commands_use_nested_parser_and_never_touch_network(world, capsys):
     assert '"outcome": "applied"' in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("action", ["plan", "outstanding", "stop", "resume"])
+@pytest.mark.parametrize("action", ["plan", "outstanding", "resume"])
 def test_corrupt_provider_settings_never_open_control_or_report(world, monkeypatch, capsys, action):
     import ledger
     root, _, _ = world
@@ -338,7 +341,7 @@ def test_corrupt_provider_settings_never_open_control_or_report(world, monkeypat
     assert marker.exists()
 
 
-@pytest.mark.parametrize("action", ["stop", "resume"])
+@pytest.mark.parametrize("action", ["resume"])
 def test_control_rechecks_provider_settings_inside_transaction(world, monkeypatch, action):
     root, path, _ = world
     original = mcs_util._load_config
@@ -357,6 +360,17 @@ def test_control_rechecks_provider_settings_inside_transaction(world, monkeypatc
         assert receipt["outcome"] == "rejected"
         assert json.loads(receipt["receipt_json"])["error"] == "cloud_config_invalid"
     assert calls[0] >= 2 and root.exists()
+
+
+def test_stop_is_recorded_even_when_provider_settings_are_unreadable(world, monkeypatch, capsys):
+    root, path, _ = world
+    def unreadable(config_path):
+        raise mcs_util.ProviderSettingsUnreadable("synthetic-private-canary")
+    monkeypatch.setattr(mcs_util, "_load_config", unreadable)
+    assert mcs_setup.main(["cloud-llm", "stop", "--confirm-human", "--reason", "synthetic"]) == 0
+    assert "synthetic-private-canary" not in capsys.readouterr().out
+    with closing(Ledger(str(path))) as db:
+        assert [row["content"] for row in db.artifacts("cloud_control")] == ["paused"]
 
 
 @pytest.mark.parametrize("obstacle", ["busy", "updating", "code_changed"])
@@ -433,6 +447,7 @@ def test_init_secret_storage_uses_dotenv_without_printing_secret_or_path(world, 
     monkeypatch.setenv("MCS_ANTHROPIC_API_KEY", "synthetic-incoming-key")
     monkeypatch.delenv("MCS_SETUP_PASSWORD", raising=False)
     assert mcs_setup._init_store_secrets(SimpleNamespace(yes=True), "synthetic") is None
+    assert mcs_setup._init_store_api_keys() is None
     assert cloud_policy.api_key(str(root)) == "synthetic-incoming-key"
     output = capsys.readouterr().out
     assert "synthetic-incoming-key" not in output and str(root) not in output
@@ -619,7 +634,7 @@ def test_estimate_separates_chunk_repair_and_shadow_without_fabricating_output_u
     config["cloud_llm"]["mode"] = "shadow"
     with closing(Ledger(str(path))) as db:
         db.save_messages([_message(1, body="合成文。" * 3000, project_id=1,
-                                   posted_at="2026-10-26T10:00:00+09:00")])
+                                   posted_at="2026-11-18T10:00:00+09:00")])
         db.artifact_add("extract_llm", "{}", project_id=1, message_id=1,
             meta={"hash": _hash(db, 1), "extract_version": extract_llm.EXTRACT_VERSION - 1})
         with db.db:
@@ -795,7 +810,7 @@ def test_bound_failure_at_accounting_returns_partial_report(world, monkeypatch):
 
 def test_period_budget_interruption_marks_the_right_section(world, monkeypatch):
     root, _path, config = world
-    config["cloud_llm"].update(window_start="2026-10-26T00:00:00+09:00", window_budget_usd=80)
+    config["cloud_llm"].update(window_start="2026-11-18T00:00:00+09:00", window_budget_usd=80)
 
     def broken(ledger, cfg):
         raise sqlite3.OperationalError("synthetic failure")
@@ -825,7 +840,7 @@ def test_failed_block_reason_is_not_counted_verified(world, monkeypatch):
 
 def test_unverified_period_spend_is_not_counted_verified(world, monkeypatch):
     root, _path, config = world
-    config["cloud_llm"].update(window_start="2026-10-26T00:00:00+09:00", window_budget_usd=80)
+    config["cloud_llm"].update(window_start="2026-11-18T00:00:00+09:00", window_budget_usd=80)
     monkeypatch.setattr(cli.policy, "window_history_pruned", lambda ledger, cfg: True)
 
     def interrupted(ledger, *, model):
@@ -844,7 +859,7 @@ def test_actual_shared_reader_budget_stops_at_original_section(world, monkeypatc
     import cloud_observation
 
     root, _path, config = world
-    config['cloud_llm'].update(window_start='2026-10-26T00:00:00+09:00', window_budget_usd=80)
+    config['cloud_llm'].update(window_start='2026-11-18T00:00:00+09:00', window_budget_usd=80)
     observed = []
 
     def exhaust(db):
@@ -1003,7 +1018,7 @@ def test_oversized_slot_is_unknown_and_keeps_the_estimate(world):
 
 def test_period_spending_is_unknown_once_usage_inside_it_was_pruned(world):
     root, path, config = world
-    config["cloud_llm"].update(window_start="2026-10-26T00:00:00+09:00", window_budget_usd=80)
+    config["cloud_llm"].update(window_start="2026-11-18T00:00:00+09:00", window_budget_usd=80)
     assert cli.observe(config, root=str(root))["period_budget"]["spent_or_reserved_usd"] == "0"
     with closing(Ledger(str(path))) as db:
         db.db.execute("INSERT INTO artifacts(kind,content,created_at) VALUES(?,?,?)",
@@ -1129,3 +1144,26 @@ def test_safe_log_reports_a_superseded_local_disposition(kind):
     assert "synthetic-private" not in json.dumps(safe)
     unknown = cli._safe_log({"kind": kind, "created_at": 1, "model": None}, {**meta, "disposition": "synthetic"})
     assert "disposition" not in unknown
+
+
+@pytest.mark.parametrize(("given", "stored"), [
+    ("2026-12-31T23:59:59.5Z", "2026-12-31T23:59:59.500000+00:00"),
+    ("2026-12-31T23:59:59+0900", "2026-12-31T23:59:59+09:00"),
+    ("20261231T235959+09:00", "2026-12-31T23:59:59+09:00"),
+    ("2026-12-31T23:59:59+09:00", "2026-12-31T23:59:59+09:00"),
+])
+def test_cloud_budget_saves_times_in_a_form_python39_helpers_can_read(monkeypatch, given, stored):
+    # install.sh reads these with the PATH python3 (3.9), whose fromisoformat
+    # rejects 3.11-only spellings; the saved text must be the canonical form.
+    import config_edit
+
+    cfg = {"cloud_llm": {"mode": "off"}}
+    monkeypatch.setattr(cli, "_settings_for_edit", lambda: cfg)
+    saved = []
+    def apply(changes, defaults):
+        saved.append(changes)
+        return cfg, []
+    monkeypatch.setattr(config_edit, "apply", apply)
+    assert cli.budget_command(SimpleNamespace(until=given)) == 0
+    assert saved == [{"cloud_llm.until": stored}]
+    assert mcs_util.until_epoch(stored) == mcs_util.until_epoch(given)

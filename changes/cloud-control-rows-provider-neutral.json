@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "外部AIの回路・停止の記録に、特定のモデル名を付けない",
+  "summary": "外部AIの回路と stop/resume の記録に、Anthropic のモデル名（Haiku）が固定で付いていました。OpenAI などを使う設置でも誤った名前が残らないよう、モデル名を空にしました。送信・停止・回路の判定は変わりません。",
+  "upgrade": "追加操作は不要です。更新後に作られる記録から適用され、既存の記録は書き換えません。",
+  "details": [
+    "対象は cloud_circuit・cloud_control の記録行の model 欄だけです。読み手はこの欄を使っていません。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_runtime.py",
+    "mcs/ops/cloud_cli.py",
+    "mcs/llm/cloud_policy.py"
+  ]
+}

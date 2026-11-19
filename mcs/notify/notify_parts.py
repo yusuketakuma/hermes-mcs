@@ -737,6 +737,19 @@ def attachment_identity_witness(db, delivery_id):
     return {"version": 1, "payload_hash": render["payload_hash"], "proofs": proofs} if proofs else None
 
 
+def attachment_history_card(db, card, op):
+    """(card whose sealed attachment receipts an update reuses, inherited): a Slack reply card
+    reuses its canonical parent's receipts only while the parent names the reply's native
+    thread; (None, True) when that parent no longer does (its attachments stay unverified)."""
+    if card["transport"] == "slack" and op in ("create", "update") and "|reply:" in card["card_key"]:
+        # Reuse the canonical parent's sealed receipts, never its body plan.
+        # The native thread and scope must still be the ones this reply names.
+        from notify_cards import reply_thread_target
+        parent = reply_thread_target(db, card)
+        return (parent if parent is not None and parent["thread_id"] == card["thread_id"] else None), True
+    return card, False
+
+
 def _same_thread_delivered_parts(db, card):
     """Earlier delivered parts with this card's current scope and thread receipt."""
     body, attachments, identities = {}, {}, {}
@@ -1223,18 +1236,10 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
     posts = prior_body_posts(db, card) if update else {}
     keyed = []                             # (post key, chunk)
     cleanup = []
-    attachment_card = card
-    inherited_attachments = False
-    if card["transport"] == "slack" and spec["op"] in ("create", "update") and "|reply:" in card["card_key"]:
-        # Reuse the canonical parent's sealed receipts, never its body plan.
-        # The native thread and scope must still be the ones this reply names.
-        from notify_cards import reply_thread_target
-        parent = reply_thread_target(db, card)
-        if parent is None or parent["thread_id"] != card["thread_id"]:
-            budget_hold = "attachment_upload_identity_unverified"
-        else:
-            attachment_card = parent
-            inherited_attachments = True
+    attachment_card, inherited_attachments = attachment_history_card(db, card, spec["op"])
+    if attachment_card is None:
+        attachment_card, inherited_attachments = card, False
+        budget_hold = "attachment_upload_identity_unverified"
     verified_body, verified_attachments, attachment_identities = (
         _same_thread_delivered_parts(db, attachment_card)
         if update or inherited_attachments else ({}, {}, {}))
@@ -1308,7 +1313,10 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
         # Hold the render as a whole: retaining the earliest chunks silently
         # loses new replies and can overwrite already delivered content.
         budget_hold = "part_budget_exceeded"
-        keyed = [("truncated#1", _TRUNCATED_PART)]
+        # LINE WORKS card text continues in display#k (cards.validate needs
+        # them); only the per-post groups are withheld.
+        keyed = [kc for kc in keyed if kc[0].startswith("display#")] + [
+            ("truncated#1", _TRUNCATED_PART)]
         attachments = []
     if len(keyed) + len(attachments) + len(cleanup) + group_cost > MAX_PARTS - 2:
         # Keep the resource bound and withhold this whole render: never
@@ -1590,7 +1598,9 @@ def rollup_state(db, delivery_id) -> str:
 
 def update_state(db, delivery_id, now) -> str:
     state = rollup_state(db, delivery_id)
+    # an unchanged rollup is bookkeeping, not delivery progress: keep
+    # updated_at for real transitions so observers do not see phantom progress
     db.execute(
         "UPDATE notification_renders SET parts_state=?,updated_at=? "
-        "WHERE delivery_id=?", (state, now, delivery_id))
+        "WHERE delivery_id=? AND parts_state IS NOT ?", (state, now, delivery_id, state))
     return state

@@ -49,7 +49,7 @@ def test_resident_next_pass_reaches_input_recovery(routed, monkeypatch, prior, b
         if provider is None:
             local.append(body)
         elif pending[0] == 'unknown':
-            provider.reserve(provider.client.body('synthetic resident input', 100, None), 30)
+            provider.reserve(provider.client.body('synthetic resident input', provider.selection['max_tokens'], None), 30)
             pending[0] = 'done'
         else:
             answer = provider('synthetic resident input', deadline=kwargs['deadline'], max_tokens=100)

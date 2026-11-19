@@ -139,7 +139,8 @@ _TRANSIENT_PROVIDER_READ = frozenset({
 
 def _paid_routes_closed(common: dict) -> dict:
     """Common settings with every provider-owned paid route closed."""
-    cfg = dict(common)
+    # The mark lets guards hold (not discard) work: this "off" is synthesized, not the owner's.
+    cfg = {**common, "provider_unavailable": True}
     cloud = cfg.get("cloud_llm", {})
     semantic = cfg.get("semantic", {})
     if isinstance(cloud, dict):
@@ -313,6 +314,10 @@ def until_epoch(value) -> float:
     from datetime import datetime
     if not isinstance(value, str) or len(value) > 64:
         raise ValueError("until_invalid")
+    # Installer helpers on Python 3.9/3.10 reject Z. Other newer ISO forms
+    # in older CLI output or manual settings may need resaving with cloud_cli.
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("until_needs_offset")

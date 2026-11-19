@@ -290,9 +290,13 @@ def refresh_cards_allowed(db, project_id, message_id):
         "SELECT j.payload FROM messages m JOIN fetch_jobs j ON j.kind='semantic' "
         'AND j.project_id=m.project_id AND j.message_id=COALESCE(m.parent_id,m.message_id) '
         'WHERE m.project_id=? AND m.message_id=?', (project_id, message_id)).fetchone()
-    payload = loads_dict(row[0]) if row is not None else {}
-    return not (isinstance(payload, dict) and payload.get('reprocess_only') is True
-                and payload.get('notification_free') is True)
+    return not reprocess_only(loads_dict(row[0]) if row is not None else {})
+
+
+def reprocess_only(payload):
+    """Whether a semantic job payload is a notification-free reprocess."""
+    return (isinstance(payload, dict) and payload.get('reprocess_only') is True
+            and payload.get('notification_free') is True)
 
 
 

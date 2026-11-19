@@ -381,3 +381,47 @@ def test_same_statement_later_plan_is_unresolved_in_both_orders():
     forward = sr._classify_pair(planned, done)
     assert forward["type"] == "UNRESOLVED"
     assert sr._classify_pair(done, planned) == forward
+
+
+def test_stored_document_rule_keeps_pre_normalization_relations():
+    planned = _fact("fact_plan", "合成薬剤A開始", workflow="planned",
+                    event_time="2026-11-01", action="start")
+    done = _fact("fact_done", "合成薬剤A開始", workflow="done",
+                 event_time="2026-11-03", action="start")
+    # new evaluation: order of the batch does not matter
+    assert sr.reconcile_facts([], [done, planned]) == sr.reconcile_facts([], [planned, done])
+    # a document made before the rule (no marker) is re-derived with rule 1
+    legacy = sr.meta_relation_rule({})
+    assert legacy == 1
+    assert sr.reconcile_facts([], [done, planned], rule=legacy) == \
+        sr.reconcile_facts([], [done, planned], rule=1)
+    assert sr._classify_pair(done, planned, None, 1) != sr._classify_pair(done, planned)
+
+
+def test_meta_relation_rule_accepts_only_the_current_marker():
+    assert sr.meta_relation_rule({"relation_rule": sr.RELATION_RULE}) == sr.RELATION_RULE
+    for meta in (None, {}, {"relation_rule": True}, {"relation_rule": "2"}, {"relation_rule": 99}):
+        assert sr.meta_relation_rule(meta) == 1
+
+
+@pytest.mark.parametrize("planned_at,done_at", [
+    ("2026-11-01", "2026-11-01"),
+    ("2026-11-01T09:00:00+09:00", "2026-11-01T09:00:00+09:00"),
+    (None, None),
+    ("2026-11-01", None),
+    (None, "2026-11-01"),
+])
+def test_same_timestamp_and_unknown_time_workflow_progression_is_order_invariant(planned_at, done_at):
+    planned = _fact("fact_plan", "CT検査予定", kind="care_event", workflow="planned",
+                    event_time=planned_at)
+    done = _fact("fact_done", "CT検査実施", kind="care_event", workflow="done",
+                 event_time=done_at)
+    expected = sr._classify_pair(planned, done)
+    assert expected["type"] == "TRANSITION"
+    assert expected["left_fact_id"] == "fact_plan" and expected["right_fact_id"] == "fact_done"
+    assert sr._classify_pair(done, planned) == expected
+    baseline = sr.reconcile_facts([planned], [done])
+    for active, new in (([done], [planned]), ([], [planned, done]), ([], [done, planned])):
+        reordered = sr.reconcile_facts(active, new)
+        assert reordered["relations"] == baseline["relations"] == [expected]
+        assert reordered["fingerprint"] == baseline["fingerprint"]

@@ -274,6 +274,55 @@ def test_manual_rollback_quiesce_failure_before_tree_change_does_not_freeze(
     assert not Path(updater.MARKER_PATH).exists()
     state = updater.journal_store.load_state(updater.STATE_PATH)
     assert not (state.get("applying") or {}).get("restore_incomplete")
+    # The next recovery must not freeze the unchanged applied version.
+    monkeypatch.setattr(updater, "_migrate_log_tail", lambda: None)
+    monkeypatch.setattr(update_execution, '_migrate_log_tail', updater._migrate_log_tail)
+    monkeypatch.setattr(update_recovery, '_migrate_log_tail', updater._migrate_log_tail)
+    assert updater.recover_interrupted() == 0
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"] is None and state["stages"] == []
+    assert state["applied"][-1]["sha"] == after
+    assert updater._head_sha() == after and Path(live).read_bytes() == live_bytes
+    assert restarts == [1, 1] and not Path(updater.MARKER_PATH).exists()
+
+
+@pytest.mark.parametrize("engine", ["updater", "watchdog"])
+@pytest.mark.parametrize("flagged", [True, False])
+def test_unstarted_rollback_of_applied_version_is_not_frozen(
+        updater, tmp_path, monkeypatch, engine, flagged):
+    from ops_testkit import _git
+
+    tool, recover, repo, live, _back, _before, restarts = _synthetic_flagless_rollback(
+        updater, tmp_path, monkeypatch, engine)
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    after = state["applying"]["prev_sha"]
+    assert state["applied"][-1]["sha"] == after
+    _git(repo, "reset", "-q", "--hard", after)      # died at quiesce: tree unchanged
+    if flagged:
+        state["applying"]["hold_before_change"] = True
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    db_bytes = Path(live).read_bytes()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("an unstarted rollback must not restore or reset")
+
+    patch_lifecycle_lookup(monkeypatch, tool, "_restore_db", forbidden)
+    if engine == "watchdog":
+        patch_lifecycle_lookup(monkeypatch, tool, "_runtime_mode", lambda: "hermes")
+        patch_lifecycle_lookup(monkeypatch, tool, "_restart_drainers", lambda bounce=True: restarts.append(1) or [])
+        patch_lifecycle_lookup(monkeypatch, tool, "_restart_services", lambda *a, **k: 0)
+    if flagged:
+        assert recover() == 0
+        state = updater.journal_store.load_state(updater.STATE_PATH)
+        assert state["applying"] is None and state["applied"][-1]["sha"] == after
+        assert restarts == [1] and not Path(updater.MARKER_PATH).exists()
+    else:
+        # A legacy record cannot prove that no change happened: keep the freeze.
+        assert recover() == 1
+        assert updater.journal_store.load_state(updater.STATE_PATH)["applying"]["restore_incomplete"] is True
+        assert restarts == [] and Path(updater.MARKER_PATH).exists()
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == after
+    assert Path(live).read_bytes() == db_bytes
 
 
 def test_manual_schema_rollback_persists_hold_before_tree_change(
@@ -713,8 +762,11 @@ def test_pin_refresh_restore_preserves_source_drift_and_both_environments(
         pytest.fail("source drift must stop before journals, venvs, or workers change")
 
     for name in ("_clean_stale_git_locks", "_services_reconcile", "restart_agents",
-                 "_enqueue_notice", "quiesce", "_reinstall"):
+                 "quiesce", "_reinstall"):
         patch_lifecycle_lookup(monkeypatch, updater, name, forbidden)
+    notices = []
+    patch_lifecycle_lookup(monkeypatch, updater, "_enqueue_notice",
+                           lambda *a, **k: notices.append(k.get("notice_code")) or True)
     for attempt in range(2):
         if operation == "restore":
             with pytest.raises(updater.UpdateError, match="runtime_restore_checkout_changed"):
@@ -722,6 +774,7 @@ def test_pin_refresh_restore_preserves_source_drift_and_both_environments(
         else:
             assert (updater.recover_interrupted() if operation == "recover"
                     else updater.rollback()) == 1
+        assert notices == (["rollback_failed"] if operation == "rollback" else [])
         assert Path(updater.STATE_PATH).read_bytes() == journal
         assert (checkout / "f").read_bytes() == source
         assert _git(checkout, "rev-parse", "HEAD").stdout.strip() == head
@@ -936,6 +989,95 @@ def test_flagless_rollback_reaches_existing_restore_outcomes(
     else:
         assert state["applying"] is None and restarts == [1]
         assert not Path(updater.MARKER_PATH).exists()
+
+
+@pytest.mark.parametrize("engine", ["updater", "watchdog"])
+@pytest.mark.parametrize("earlier_hold", [False, True])
+def test_non_schema_rollback_resumes_without_pruned_backup(
+        updater, tmp_path, monkeypatch, engine, earlier_hold):
+    tool, recover, _repo, _live, back, _before, restarts = _synthetic_flagless_rollback(
+        updater, tmp_path, monkeypatch, engine)
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    # Maintenance pruned the preupdate backup of an update without a schema change.
+    Path(back).unlink()
+    state["applying"]["schema_bump"] = False
+    if earlier_hold:
+        state["applying"]["restore_incomplete"] = True   # set by an earlier recovery pass
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("a rollback without a schema change must not restore its backup")
+
+    patch_lifecycle_lookup(monkeypatch, tool, "_restore_db", forbidden)
+    if engine == "updater":
+        monkeypatch.setattr(updater, "_restore_runtime", lambda entry: None)
+        monkeypatch.setattr(update_recovery, '_restore_runtime', updater._restore_runtime)
+        monkeypatch.setattr(update_restore, '_restore_runtime', updater._restore_runtime)
+        monkeypatch.setattr(updater, "restart_services", lambda *a, **k: None)
+        monkeypatch.setattr(update_apply, 'restart_services', updater.restart_services)
+        monkeypatch.setattr(update_recovery, 'restart_services', updater.restart_services)
+        monkeypatch.setattr(update_services, 'restart_services', updater.restart_services)
+    else:
+        patch_lifecycle_lookup(monkeypatch, tool, "_runtime_mode", lambda: "hermes")
+        patch_lifecycle_lookup(monkeypatch, tool, "_reconcile_membership", lambda snapshot: [])
+        patch_lifecycle_lookup(monkeypatch, tool, "_restart_drainers", lambda bounce=True: restarts.append(1) or [])
+        patch_lifecycle_lookup(monkeypatch, tool, "_restart_services", lambda *a, **k: 0)
+    assert recover() == 0
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"] is None and restarts == [1]
+    assert not Path(updater.MARKER_PATH).exists()
+
+
+def _adopted_marker(data):
+    """A backup-adoption marker and its report, as mcs_backup restore leaves them."""
+    marker = Path(data, "restore_pending.json")
+    marker.write_text(json.dumps({"v": 1, "phase": "awaiting_consent", "backup_path": None,
+                                  "by": "mcs_backup_restore", "at": 1, "report_id": "a" * 64}))
+    marker.chmod(0o600)
+    Path(data, "restore.json").write_text("{}")
+    return marker, marker.read_bytes(), marker.stat().st_ino
+
+
+@pytest.mark.parametrize("live_version", [7, 8])
+def test_update_restore_never_rewrites_backup_adoption_marker(
+        updater, tmp_path, monkeypatch, live_version):
+    import sqlite3
+
+    _repo, live, back, _before, after, restarts = _schema_bump_world(updater, tmp_path, monkeypatch)
+    if live_version == 7:
+        con = sqlite3.connect(live)
+        con.execute("PRAGMA user_version=7")
+        con.commit()
+        con.close()
+    marker, raw, inode = _adopted_marker(updater.DATA)
+    db_bytes = Path(live).read_bytes()
+    with pytest.raises(updater.UpdateError, match="restore_marker_adopted"):
+        updater._restore_db(back)
+    # Manual rollback refuses before journaling or resetting.
+    assert updater.rollback("synthetic-adopted-rollback") != 0
+    assert updater._head_sha() == after and restarts == []
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] is None
+    assert marker.read_bytes() == raw and marker.stat().st_ino == inode
+    assert Path(live).read_bytes() == db_bytes
+
+
+@pytest.mark.parametrize("live_version", [7, 8])
+def test_watchdog_restore_never_rewrites_backup_adoption_marker(
+        updater, tmp_path, monkeypatch, live_version):
+    from ops_testkit import _load
+    from mcs_recover_testkit import _mk_db
+
+    recovery = _load()
+    data = tmp_path / "watchdog-data"
+    data.mkdir()
+    live, back = data / "ledger.db", data / "backup.db"
+    _mk_db(live, live_version)
+    _mk_db(back, 7)
+    patch_lifecycle_lookup(monkeypatch, recovery, "DATA", str(data))
+    patch_lifecycle_lookup(monkeypatch, recovery, "LEDGER", str(live))
+    marker, raw, inode = _adopted_marker(data)
+    assert recovery.mcs_recovery_database._restore_db(str(back)) == "restore_marker_adopted"
+    assert marker.read_bytes() == raw and marker.stat().st_ino == inode
 
 
 @pytest.mark.parametrize("engine", ["updater", "watchdog"])
@@ -1240,3 +1382,137 @@ def test_manual_rollback_checks_frozen_journal_before_reset(updater, tmp_path, m
     assert Path(updater.MARKER_PATH).exists() and restarts == []
     assert Path(live).read_bytes() == db_bytes
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == after
+
+
+def test_interrupted_migration_undo_keeps_adopted_backup_without_freezing(
+        updater, tmp_path, monkeypatch):
+    _repo, live, back, before, after, restarts = _schema_bump_world(updater, tmp_path, monkeypatch)
+    applying = {"tag": "v1.1.0", "sha": after, "prev_sha": before, "schema_bump": True,
+                "backup_path": back, "runtime_migration": {"synthetic": True}}
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    state["applying"] = applying
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    marker, raw, inode = _adopted_marker(updater.DATA)
+    db_bytes = Path(live).read_bytes()
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("no worker start or escalation")
+
+    assert updater._undo_interrupted_migration(state, applying, forbidden, forbidden) == 1
+    report = json.loads(Path(updater.REPORT_PATH).read_text())
+    assert (report["result"], report["detail"]) == ("runtime_restore_blocked", "restore_marker_adopted")
+    assert Path(updater.MARKER_PATH).exists()            # writers stay held
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] == applying
+    assert updater._head_sha() == after and restarts == []
+    assert marker.read_bytes() == raw and marker.stat().st_ino == inode
+    assert Path(live).read_bytes() == db_bytes
+
+
+def test_interrupted_migration_undo_prefers_adopted_marker_over_sdk_mismatch(
+        updater, tmp_path, monkeypatch):
+    """Combined hold: an adopted backup marker, a schema bump and a standalone
+    SDK pin mismatch together — the marker protection fires before the SDK
+    refusal, so writers stay stopped and the journal, report and marker are
+    preserved instead of escalating."""
+    from ops_testkit import _git
+    _repo, live, back, before, _after, restarts = _schema_bump_world(
+        updater, tmp_path, monkeypatch)
+    repo = Path(updater.REPO)
+    (repo / "deployment").mkdir(exist_ok=True)
+    (repo / "deployment" / "requirements-standalone.txt").write_text("synthetic-sdk==2\n")
+    _git(repo, "add", "deployment/requirements-standalone.txt")
+    _git(repo, "commit", "-qm", "synthetic sdk pin")
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    applying = {"tag": "v1.1.0", "sha": head, "prev_sha": before, "schema_bump": True,
+                "backup_path": back, "runtime_migration": {"synthetic": True}}
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    state["applying"] = applying
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    marker, raw, inode = _adopted_marker(updater.DATA)
+    db_bytes = Path(live).read_bytes()
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {"runtime_mode": "standalone"})
+    # the SDK refusal would also fire on this journal — the marker must win the order
+    assert update_preflight._standalone_sdk_rollback_error(
+        applying, {"runtime_mode": "standalone"}) == "standalone_sdk_rollback_unsupported"
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("no worker start or escalation")
+
+    assert updater._undo_interrupted_migration(state, applying, forbidden, forbidden) == 1
+    report = json.loads(Path(updater.REPORT_PATH).read_text())
+    assert (report["result"], report["detail"]) == ("runtime_restore_blocked", "restore_marker_adopted")
+    assert Path(updater.MARKER_PATH).exists()            # writers stay held
+    assert updater.journal_store.load_state(updater.STATE_PATH)["applying"] == applying
+    assert updater._head_sha() == head and restarts == []
+    assert marker.read_bytes() == raw and marker.stat().st_ino == inode
+    assert Path(live).read_bytes() == db_bytes
+
+
+def test_post_merge_bail_keeps_adopted_backup_without_freezing(updater, tmp_path, monkeypatch):
+    import local_backup
+    from ops_testkit import _git, _make_repo, _mk_schema
+    monkeypatch.setattr(updater, "_provider_migration_needed", lambda: False)
+    monkeypatch.setattr(update_apply, '_provider_migration_needed', updater._provider_migration_needed)
+    monkeypatch.setattr(update_recovery, '_provider_migration_needed', updater._provider_migration_needed)
+    repo, _ = _make_repo(tmp_path)
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    for module in (updater, update_apply, update_cli, update_execution, update_lifecycle_context,
+                   update_preflight, update_recovery, update_repository, update_runtime_migration,
+                   update_services):
+        monkeypatch.setattr(module, "REPO", str(repo))
+    sha = _git(repo, "rev-list", "-n1", "v1.1.0").stdout.strip()
+    live = str(tmp_path / "data" / "ledger.db")
+    for module in (updater, update_apply, update_execution, update_lifecycle_context,
+                   update_planning, update_preflight, update_restore):
+        monkeypatch.setattr(module, "LEDGER", live)
+    back = tmp_path / "data" / "backups" / "pre.db"
+    back.parent.mkdir(parents=True, exist_ok=True)
+    _mk_schema(back, 7, messages=2)
+    _mk_schema(live, 8, messages=5)
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {"update": {"mode": "notify"}})
+    monkeypatch.setattr(updater, "precheck_local", lambda c: [])
+    monkeypatch.setattr(update_apply, 'precheck_local', updater.precheck_local)
+    monkeypatch.setattr(update_planning, 'precheck_local', updater.precheck_local)
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_paths: sha)
+    monkeypatch.setattr(updater, "precheck_tag", lambda t: ["schema_bump:7->8"])
+    monkeypatch.setattr(update_execution, 'precheck_tag', updater.precheck_tag)
+    monkeypatch.setattr(update_planning, 'precheck_tag', updater.precheck_tag)
+    monkeypatch.setattr(local_backup, "preupdate_backup", lambda p: str(back))
+    monkeypatch.setattr(updater, "_baseline_check", lambda c: [])
+    monkeypatch.setattr(update_apply, '_baseline_check', updater._baseline_check)
+    monkeypatch.setattr(updater, "quiesce", lambda: (updater._write_marker(), [])[1])
+    monkeypatch.setattr(update_apply, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_recovery, 'quiesce', updater.quiesce)
+    monkeypatch.setattr(update_apply, "_quiesce_for_mode", lambda mode: [])
+    monkeypatch.setattr(updater, "restart_agents", lambda: pytest.fail("no worker start"))
+    monkeypatch.setattr(update_apply, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_recovery, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(update_runtime_migration, 'restart_agents', updater.restart_agents)
+    monkeypatch.setattr(updater, "_services_reconcile", lambda: None)
+    monkeypatch.setattr(update_recovery, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_restore, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(update_runtime_migration, '_services_reconcile', updater._services_reconcile)
+    monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda m, **_kwargs: [])
+    for module in (updater, update_apply, update_cli, update_recovery, update_runtime_migration,
+                   update_services):
+        monkeypatch.setattr(module, "_enqueue_notice", lambda *a, **k: True)
+    monkeypatch.setattr(updater, "restart_gateway", lambda c: None)
+    monkeypatch.setattr(update_services, 'restart_gateway', updater.restart_gateway)
+    adopted = []
+
+    def post_merge(_s, *, run_lock_fd):
+        adopted.append(_adopted_marker(updater.DATA))
+        raise updater.UpdateError("post_merge_failed: synthetic")
+
+    monkeypatch.setattr(updater, "_run_post_merge", post_merge)
+    monkeypatch.setattr(update_apply, '_run_post_merge', updater._run_post_merge)
+    assert updater.apply("v1.1.0", sha, "cid-apply") == 1
+    applying = updater.journal_store.load_state(updater.STATE_PATH)["applying"]
+    # Still apply-shaped: no rollback record, no restore_incomplete freeze.
+    assert not applying.get("rollback") and "restore_incomplete" not in applying
+    assert updater._head_sha() == sha
+    report = json.loads(Path(updater.REPORT_PATH).read_text())
+    assert report["result"] == "runtime_restore_blocked"
+    assert "restore_marker_adopted" in report["detail"]
+    marker, raw, inode = adopted[0]
+    assert marker.read_bytes() == raw and marker.stat().st_ino == inode

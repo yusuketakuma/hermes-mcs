@@ -800,6 +800,31 @@ def test_plan_blocks(updater, monkeypatch, tmp_path, kw, errors, blocker):
     assert p["route"] == "blocked" and blocker in p["blockers"]
 
 
+@pytest.mark.parametrize("needed, bridged, blocker", [
+    (True, False, "provider_update_bridge_required"),
+    (OSError("synthetic"), False, "provider_settings_unverified"),
+    (True, True, None),
+    (False, False, None),
+])
+def test_plan_reports_the_provider_bridge_refusal_apply_would_make(updater, monkeypatch, tmp_path,
+                                                                   needed, bridged, blocker):
+    """IA-110: plan shows the provider-bridge refusal instead of apply discovering it."""
+    _plan_env(updater, monkeypatch, tmp_path, [])
+
+    def migration_needed():
+        if isinstance(needed, Exception):
+            raise needed
+        return needed
+
+    monkeypatch.setattr(update_planning, "_provider_migration_needed", migration_needed)
+    monkeypatch.setattr(update_planning, "_provider_bridge_verified", lambda previous, target: bridged)
+    p = updater.plan("v1.2.0")
+    if blocker is None:
+        assert not {"provider_update_bridge_required", "provider_settings_unverified"} & set(p["blockers"])
+    else:
+        assert p["route"] == "blocked" and blocker in p["blockers"]
+
+
 def test_plan_reports_interrupted_update(updater, monkeypatch, tmp_path):
     _plan_env(updater, monkeypatch, tmp_path, [])
     state = updater.journal_store.default_state()
@@ -1615,3 +1640,60 @@ def test_plan_exposes_reinstall_recovery_repair(updater, monkeypatch, tmp_path, 
     report = updater.plan("v1.2.0")
     assert report["route"] == "reinstall"
     assert report["reinstall_requires_recovery_repair"] is repair
+
+
+@pytest.mark.parametrize("blockers,complete", [(["insufficient_disk"], True),
+                                              (["insufficient_disk", "tree_dirty"], False)])
+def test_post_apply_low_disk_alone_does_not_fail_a_finished_update(monkeypatch, capsys, blockers, complete):
+    """Regression: the update's own backup pushed free space below the next
+    update's reserve, and the launcher then reported the finished update failed."""
+    launcher = _launcher()
+    report = {"route": "noop", "blockers": blockers}
+    monkeypatch.setattr(launcher.subprocess, "run", lambda *a, **kw:
+                        subprocess.CompletedProcess(a[0], 0, json.dumps(report), ""))
+    result = launcher._post_apply_plan(["python", "updater", "plan"], {}, "/synthetic")
+    output = capsys.readouterr().out
+    assert (result == report) is complete
+    assert ("空き容量" in output) is complete and ("完了を確認できません" in output) is not complete
+
+
+def test_launcher_tolerates_a_refused_moved_tag_and_skips_withdrawn_tags(tmp_path, monkeypatch):
+    """Regression: one moved tag made `git fetch --tags` exit 1 and stopped
+    every update; a tag withdrawn from origin was offered as the newest."""
+    launcher = _launcher()
+    monkeypatch.setattr(launcher.subprocess, "run", lambda *a, **kw:
+                        subprocess.CompletedProcess(a[0], 1, "", "would clobber existing tag"))
+    assert launcher._git(str(tmp_path), "fetch", "--tags", "origin", check=False) is None
+    listing = {"tag": "v1.2.0\nv1.3.0\n",
+               "ls-remote": "a" * 40 + "\trefs/tags/v1.2.0\n" + "b" * 40 + "\trefs/tags/v1.1.0\n"}
+    monkeypatch.setattr(launcher, "_git", lambda repo, command, *a, **k: listing[command])
+    assert launcher._origin_tags("unused") == {"v1.2.0", "v1.1.0"}
+    assert launcher.latest_tag("unused", launcher._origin_tags("unused")) == "v1.2.0"
+    assert launcher.latest_tag("unused") == "v1.3.0"
+
+
+def test_apply_names_a_tag_missing_from_origin(updater, monkeypatch):
+    repo = _apply_env(updater, monkeypatch)
+    before = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: None)
+    assert updater.apply("v1.1.0", None, "cid-withdrawn") == 1
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["attempts"]["v1.1.0"]["detail"].startswith("tag_not_on_origin")
+
+
+@pytest.mark.parametrize('report, code', [
+    ({'route': 'apply', 'blockers': []}, 0),
+    ({'route': 'noop', 'blockers': ['synthetic_interrupted']}, 1),
+    ({'route': 'blocked', 'blockers': []}, 1),
+])
+def test_installed_plan_exit_code_reports_blockers(tmp_path, monkeypatch, capfd, report, code):
+    """IA-126: plan through the installed updater exits 1 when it would not proceed."""
+    launcher = _launcher()
+    updater = tmp_path / 'mcs' / 'ops' / 'mcs_update.py'
+    updater.parent.mkdir(parents=True)
+    updater.write_text('# synthetic\n')
+    monkeypatch.setattr(launcher, '_update_plan', lambda *a, **k: report)
+    args = type('Args', (), {'cmd': 'plan'})()
+    assert launcher._installed_update(args, str(tmp_path.resolve()), 'v1.2.0') == code
+    assert json.loads(capfd.readouterr().out) == report

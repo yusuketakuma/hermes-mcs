@@ -1,5 +1,7 @@
 """An interrupted apply or rollback keeps its unfinished journal fenced by the update marker;
 settled outcomes keep their existing cleanup."""
+import json
+import time
 from pathlib import Path
 
 import pytest
@@ -10,7 +12,7 @@ import update_discovery
 import update_recovery
 from mcs_update_testkit import (_apply_env as _apply_env, prepared_run_log as prepared_run_log,
                                 updater as updater)
-from ops_testkit import _git, in_process_post_merge
+from ops_testkit import _git, _receipts_db, in_process_post_merge
 
 __all__ = ["updater", "prepared_run_log"]
 
@@ -191,10 +193,11 @@ def test_a_failed_marker_restore_is_noted_on_the_interrupt_and_left_visible(upda
 
 
 @pytest.mark.parametrize("marker_removed", [False, True])
-def test_an_interrupt_after_bail_saved_the_terminal_journal_is_not_unfinished(
+def test_an_interrupt_during_the_restart_after_bail_leaves_the_restart_to_recovery(
         updater, monkeypatch, marker_removed):
-    """bail saved the aborted journal, then restart_agents was interrupted: nothing is left to
-    recover, so the marker is not recreated."""
+    """bail saved the journal with its stages (applying cleared) and restart_agents was then
+    interrupted: the update is not finished until the drainers run again, so the marker stays
+    and recovery takes the finish_pre_merge route, which restarts them (73245967)."""
     _world(updater, monkeypatch)
     target = _git(Path(updater.REPO), "rev-parse", "v1.1.0^{commit}").stdout.strip()
 
@@ -206,11 +209,34 @@ def test_an_interrupt_after_bail_saved_the_terminal_journal_is_not_unfinished(
         raise KeyboardInterrupt
     restart = _released_then_interrupted(updater, []) if marker_removed else before_marker_removal
     _patch_restart(updater, monkeypatch, restart)
+    import update_execution
+    # the human approval this apply consumes, as the scheduled receipt the scan reads
+    con = _receipts_db(updater.LEDGER)
+    con.execute("INSERT INTO command_receipts VALUES(?,?,NULL,NULL,'applied',?,?)",
+                ("synthetic-command", "h" * 64, json.dumps({
+                    "cmd": "ops.update_apply", "scheduled": True, "command_id": "synthetic-command",
+                    "tag": "v1.1.0", "target_sha": target}), time.time()))
+    con.commit()
+    con.close()
+    candidates, _consumed = update_execution.scan_pending_approvals(updater.journal_store.default_state())
+    assert [c["command_id"] for c in candidates] == ["synthetic-command"]     # positive control
     with pytest.raises(KeyboardInterrupt):
         updater.apply("v1.1.0", target, "synthetic-command")
     state = _journal(updater)
-    assert not state["applying"] and not state["stages"]
-    assert not Path(updater.MARKER_PATH).exists()
+    assert not state["applying"] and state["stages"]
+    assert Path(updater.MARKER_PATH).exists()
+    import update_policy
+    assert update_policy.classify_recovery_journal_position(
+        has_applying=False, has_done="done" in [s.get("stage") for s in state["stages"]]) == "finish_pre_merge"
+    # the approval is already consumed: recovery restarts the drainers and it is never re-run
+    assert state["executed"]["synthetic-command"]["result"] == "failed"
+    restarted = []
+    _patch_restart(updater, monkeypatch, lambda **_kw: restarted.append(True) or [])
+    assert updater.recover_interrupted() == 0 and restarted
+    after = _journal(updater)
+    assert after["executed"]["synthetic-command"]["result"] == "failed"
+    candidates, _consumed = update_execution.scan_pending_approvals(after)
+    assert all(c["command_id"] != "synthetic-command" for c in candidates)
 
 
 

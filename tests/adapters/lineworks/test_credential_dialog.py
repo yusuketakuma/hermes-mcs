@@ -84,6 +84,30 @@ def test_no_echo_fallback_is_rejected_before_secret_input(monkeypatch, tmp_path,
     assert "Warning: Password input may be echoed" not in out.out + out.err
 
 
+@pytest.mark.parametrize("command", ["init", "credentials"])
+def test_missing_lineworks_settings_point_at_configuration(monkeypatch, tmp_path, capsys, command):
+    (tmp_path / "config.json").write_text(json.dumps({"mcs_login_id": "synthetic"}))
+    _terminal(monkeypatch, ["2"] if command == "credentials" else [])
+    monkeypatch.setattr(cli.getpass, "getpass", lambda _: pytest.fail("must not ask for secret"))
+    assert cli.main([command, "--root", str(tmp_path)]) == 1
+    out = capsys.readouterr()
+    assert "notify.lineworks" in out.out and "秘密鍵" not in out.out
+    assert "lineworks_configuration_invalid" in out.err
+
+
+@pytest.mark.parametrize("command", ["init", "credentials"])
+@pytest.mark.parametrize("error", [EOFError, KeyboardInterrupt])
+def test_interrupted_secret_entry_reports_nothing_changed(monkeypatch, tmp_path, capsys, command, error):
+    world(tmp_path)
+    (tmp_path / "config.json").write_text(json.dumps(CONFIG))
+    _terminal(monkeypatch, ["2"] if command == "credentials" else [])
+    monkeypatch.setattr(cli.getpass, "getpass", lambda _: (_ for _ in ()).throw(error()))
+    assert cli.main([command, "--root", str(tmp_path)]) == 1
+    assert not config.credentials_path(tmp_path).exists()
+    out = capsys.readouterr().out
+    assert "変更していません" in out and "登録結果を確認できません" not in out
+
+
 @pytest.mark.parametrize("error", [EOFError, KeyboardInterrupt])
 def test_cancelled_choice_never_starts_registration(monkeypatch, tmp_path, error):
     monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))

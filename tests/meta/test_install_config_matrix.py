@@ -147,43 +147,53 @@ def test_old_standalone_venv_is_preserved_and_busy_runtime_is_not_replaced(tmp_p
         assert (venv / 'bin/python3').exists()
 
 
+@pytest.mark.parametrize('runtime', ['standalone', 'hermes'])
 @pytest.mark.parametrize('marker', ['ledger.db', 'service_manifest.json'])
-def test_existing_installation_cannot_race_a_scheduled_tick_during_runtime_rebuild(tmp_path, marker):
+def test_existing_installation_cannot_race_a_scheduled_tick_during_runtime_rebuild(tmp_path, runtime, marker):
     home, _, _, env = _world(tmp_path)
-    venv = home / '.mcs/venv'
+    venv = (home / '.mcs/venv' if runtime == 'standalone'
+            else home / '.hermes/hermes-agent/venv')
+    if runtime == 'hermes':
+        (venv.parent / '.git').mkdir(parents=True)
     (venv / 'bin').mkdir(parents=True)
     py = venv / 'bin/python3'
     py.write_text('#!/bin/sh\nexit 1\n')
     py.chmod(0o700)
     data = home / '.mcs/data'
-    data.mkdir()
+    data.mkdir(parents=True)
     (data / marker).write_text('synthetic established installation')
-    result = _run(env, None, '--mode', 'standalone', *FLAGS)
+    result = _run(env, None, '--mode', runtime, *FLAGS)
     assert result.returncode == 1
     assert 'Python 移行には更新ツールが必要' in result.stderr
-    assert 'venv.broken' in result.stderr and '常駐サービスが止まっている' in result.stderr
+    assert 'venv.broken' not in result.stderr
+    assert '担当者に復旧を依頼' in result.stderr
     assert py.read_text() == '#!/bin/sh\nexit 1\n'
-    assert not (home / '.mcs/venv.pre-python314').exists()
-    assert not (home / '.mcs/venv.broken').exists()
+    assert not (venv.parent / (venv.name + '.pre-python314')).exists()
+    assert not (venv.parent / (venv.name + '.broken')).exists()
 
 
+@pytest.mark.parametrize('runtime', ['standalone', 'hermes'])
 @pytest.mark.parametrize('established', [False, True])
-def test_preflight_reports_unusable_established_runtime_with_its_way_out(tmp_path, established):
+def test_preflight_reports_unusable_established_runtime_with_its_way_out(tmp_path, runtime, established):
     home, _, _, env = _world(tmp_path)
-    venv = home / '.mcs/venv'
+    venv = (home / '.mcs/venv' if runtime == 'standalone'
+            else home / '.hermes/hermes-agent/venv')
+    if runtime == 'hermes':
+        (venv.parent / '.git').mkdir(parents=True)
     (venv / 'bin').mkdir(parents=True)
     py = venv / 'bin/python3'
     py.write_text('#!/bin/sh\nexit 1\n')
     py.chmod(0o700)
     data = home / '.mcs/data'
-    data.mkdir(mode=0o700)
+    data.mkdir(mode=0o700, parents=True)
     if established:
         (data / 'ledger.db').write_text('synthetic established installation')
-    result = _run(env, None, '--preflight', '--mode', 'standalone', *FLAGS)
+    result = _run(env, None, '--preflight', '--mode', runtime, *FLAGS)
     assert result.returncode == (1 if established else 0), result.stdout + result.stderr
     assert ('段階2では作り直しません' in result.stdout) is established
     if established:
-        assert 'venv.broken' in result.stdout
+        assert 'venv.broken' not in result.stdout
+        assert '担当者に復旧を依頼' in result.stdout
     assert py.read_text() == '#!/bin/sh\nexit 1\n'
 
 

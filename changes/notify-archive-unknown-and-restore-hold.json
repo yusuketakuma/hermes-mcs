@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "送信中の通知を退所時や配信ファイル書込み失敗で取り消さないよう修正",
+  "summary": "患者を退所（アーカイブ）にした時点で送信中または結果不明だったカード・至急通知は、未送信扱いで抑止せず、送信結果不明として保留します。後から届いた配信済みの受領で正しく記録されます。カード通知をまとめて確定した後に配信ファイルの書込みだけが失敗した場合も、確定済みの抑止・受理を失敗で上書きせず、配信ファイルは既存の復旧処理が出し直します。バックアップから復元した後は、再試行待ちの失敗状態のカード通知も保留し、同じ内容の二重投稿を防ぎます。",
+  "upgrade": "追加操作は不要です。反映には通知処理（Hermes gateway または独立実行）の再起動が必要です。新たに保留された通知は既存の要確認・復元保留の解除手順で扱います。",
+  "details": [
+    "notify_flush の退所処理は、至急通知・日次要約では既存の未送信判定（全 render が queued/not_sent/cancelled で granted/unknown の試行なし）を満たすときだけ取り消して抑止し、カード通知では結び付いた render・試行に送信中・結果不明・配信済みがあれば send_outcome_unknown で保留します。",
+    "notify_flush のまとめ配信は、例外後に通知行が確定前の状態から変わっていれば確定済みとみなし、失敗に数えず publish_failed として件数を残します。",
+    "notify_reconcile の復元保留（個別と一括）は、text 経路と同じく state が pending または failed で next_try のある行を対象にします。保留済み（next_try なし）の行には触れません。"
+  ],
+  "refs": ["mcs/notify/notify_flush.py", "mcs/notify/notify_reconcile.py", "tests/notify/test_bugsweep_flush_archive_reconcile.py"]
+}

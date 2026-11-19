@@ -17,6 +17,7 @@ import extract_schema
 import extract_validation
 import extract_quality
 import extract_llm_local_rebuild as local_rebuild
+import local_llm
 from extraction_provenance import (
     provider_evidence as _provider_evidence,
     EvidenceLeaf as _EvidenceLeaf,
@@ -59,6 +60,7 @@ from extract_llm_prepare import (
     _plan_units,
     _prefilter_enabled,
     _prepare_jobs,
+    _settle_prefiltered,
 )
 from extract_llm_prompts import (
     _BATCH_HEAD,
@@ -70,7 +72,6 @@ from extract_llm_prompts import (
 from extract_llm_proofs import (
     _capture_checkpoint_state,
 )
-import extract_llm_provider
 from extract_llm_provider import (
     _actual_model,
     _cloud_compare,
@@ -341,7 +342,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 "cloud_selection_incomplete": True, "cloud_selection_reason": str(error),
                 **({'gc_error': gc_error} if gc_error else {})}
     done, held_prior, deferred = (carry_settled[k] for k in ('done', 'held_prior', 'deferred'))
-    failed = lock_lost = 0
+    failed = lock_lost = unwritten = 0
     done_pids = set(carry_pids)
     endpoint_down = False
     breaker_fed = False
@@ -583,7 +584,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                  and _protected_prior_current(ledger.db, r)),
                 dispatch_current=lambda: not r.get("_checkpoint_conflict"),
                 dispatch=_owner_call, owner={"lease": leases[index]}, selection=r["_cloud_selection"],
-                cache_heads=(_PROMPT_HEAD, _BATCH_HEAD), input_binding=_chunk_context(r, ctx, checkpoint=True)))
+                cache_heads=(_PROMPT_HEAD, _BATCH_HEAD), input_binding=_chunk_context(r, ctx, checkpoint=True),
+                changed=lambda: _source_provably_changed(ledger, r)))
         if provider is not None:
             try:
                 with cloud_slots:
@@ -825,6 +827,14 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 (shadow_tasks if shadow is None else shadow).append((r, d, ctx, unit))
         return True
 
+    @contextlib.contextmanager
+    def _settle_lock():
+        # These writes are never carried; count a refused write instead of losing it unseen.
+        nonlocal unwritten
+        with _write_lock(per_write_lock) as held:
+            unwritten += not held
+            yield held
+
     def _handle(r, ctx, d, integrity, lease, chunks_out, qc=None):
         nonlocal done, failed, deferred, endpoint_down, lock_lost, slow_deferred
         nonlocal breaker_fed
@@ -856,7 +866,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             def cloud_retry():
                 # the paid cloud attempt failed and local produced nothing: the
                 # retry backoff keeps the next pass from re-sending the same body
-                with _write_lock(per_write_lock) as held:
+                with _settle_lock() as held:
                     if held and not _current(ledger, r["message_id"], r["content_hash"]):
                         _fail(ledger, r, r["attempts"], lease=lease)
             if d is _DEFERRED:
@@ -939,7 +949,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         # these writes are never carried: a skipped one
                         # re-selects the row for another paid call, so
                         # wait out the tick (default 60 s), not write_wait_s
-                        with _write_lock(per_write_lock) as held:
+                        with _settle_lock() as held:
                             if held:
                                 _commit_extraction_atomic(
                                     ledger, r, src["content"], ctx, None,
@@ -963,7 +973,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     if (src is not None and prior is not None
                             and prior["artifact_id"] == src["artifact_id"]
                             and prior["content"] == src["content"]):
-                        with _write_lock(per_write_lock) as held:
+                        with _settle_lock() as held:
                             if held:
                                 _commit_extraction_atomic(
                                     ledger, r, src["content"], ctx, None, None,
@@ -984,7 +994,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     if (content is not None and prior is not None and prior["artifact_id"] == r["thin_src"]
                             and prior["content"] == content):
                         r["_kept_prior"] = True
-                        with _write_lock(per_write_lock) as held:
+                        with _settle_lock() as held:
                             if held:
                                 _commit_extraction_atomic(
                                     ledger, r, content, ctx, None, None,
@@ -993,7 +1003,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                                     expected_prior=_prior_identity(prior),
                                     adoption_guard=_rebuild_guard(ledger, r))
                     return
-                with _write_lock(per_write_lock) as held:
+                with _settle_lock() as held:
                     if held and not _current(ledger, r["message_id"],
                                              r["content_hash"]):
                         # _fail carries auto_retry so a revived refail
@@ -1042,8 +1052,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # stability gates before any claim: an open circuit breaker (dead
     # endpoint) or a nearly-full volume skips the LLM lane entirely —
     # rows stay pending for the next drain instead of churning leases
-    # and timeouts. Prefilter markers above still settled no-signal
-    # rows, since they never needed the endpoint.
+    # and timeouts. Clean prefilter candidates below still use a real claim
+    # and the shared atomic adoption without needing the endpoint.
     circuit_s = circuit_open_s(ledger.db)
     free_mb = disk_free_mb(ledger.db)
     disk_low = free_mb is not None and free_mb < disk_floor_mb()
@@ -1060,14 +1070,14 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         """Claim from the next unvisited candidate on, at most ``wanted`` in the cloud
         pass; returns the newly claimed. A later same-pass wave leaves error cleanup
         to the execution finally that already owns every claim."""
-        nonlocal skipped, context_blocked, deferred
+        nonlocal skipped, context_blocked, deferred, held_prior
         first = len(claimed)
         source = rows if cloud_only else jobs
         try:
             while visit[0] < len(source):
                 index, candidate = visit[0], source[visit[0]]
                 visit[0] += 1
-                if disk_low:
+                if disk_low and cloud_only:
                     break
                 if cloud_only:
                     if time.monotonic() >= deadline:
@@ -1102,7 +1112,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         _defer_note("deadline")
                         break
                 r, ctx, saved, hints, qc = candidate
-                if circuit_s and r.get("_cloud_mode") != "on":
+                prefiltered = "_prefilter_prior" in r
+                if (disk_low or circuit_s and r.get("_cloud_mode") != "on") and not prefiltered:
                     continue
                 if _resume_admission_refused(r, saved, hints):
                     # Prepare already proved this job's saved resume evidence
@@ -1130,6 +1141,25 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         _release(ledger, r, lease)
                         deferred += 1
                         _defer_note("quality_checkpoint_unverified")
+                        continue
+                    if prefiltered:
+                        claimed.pop()
+                        try:
+                            outcome = _settle_prefiltered(ledger, r, hints=hints)
+                            if outcome == "written":
+                                skipped += 1
+                                done_pids.add(r["project_id"])
+                            elif outcome == "held":
+                                held_prior += 1
+                            elif outcome != "current":
+                                deferred += 1
+                                r["_commit_hold"] = True
+                                reason = r.get("_commit_reject_reason")
+                                _defer_note(reason if reason in cloud_backlog._COMMIT_REJECTION_CODES
+                                            else "commit_rejected")
+                        finally:
+                            _release(ledger, r, lease)
+                            leases.pop(index, None)
                         continue
                     # the v3 pass performs the v1/v2 (rule) work simultaneously —
                     # claimed rows mint/refresh their extract_v1 artifact here so
@@ -1261,10 +1291,39 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             # workers would otherwise race to mutate the global mode.
             # Below the smallest floor every unit defers anyway, so the
             # probe would be a call nobody uses.
-            if any(r.get("_cloud_mode") != "on" for _, r, *_ in claimed) and deadline - time.monotonic() >= _MIN_CALL_S:
-                probed_at = extract_llm_provider._FMT_TS
-                _probe_format(deadline=deadline)
-                pre_probes = int(extract_llm_provider._FMT_TS != probed_at)
+            # the warm probe obeys the same floor+probe-minimum contract
+            # as a body call: below it no probe POST may leave at all
+            if any(r.get("_cloud_mode") != "on" for _, r, *_ in claimed) \
+                    and deadline - time.monotonic() >= _MIN_CALL_S + local_llm.PROBE_TURN_MIN_S:
+                probe_err: dict = {}
+                _probe_format(deadline=deadline - _MIN_CALL_S,
+                              error_out=probe_err)
+                # per-call wire evidence, not the shared timestamp: a
+                # probe that reached the wire counts even when it died
+                # before caching, and a cache hit or refused send does not
+                pre_probes = int(bool(probe_err.get("sent")))
+                # the warm probe is a real inference run on this thread —
+                # feed its endpoint observation like a body call. Format
+                # selection stays separate from endpoint health: only a
+                # completed answer or a pure format-rejection streak
+                # proves the endpoint alive, while 5xx, unusable 200s and
+                # transport/protocol deaths are endpoint trouble; a cached
+                # verdict or unsent probe stays silent
+                kind = probe_err.get("kind")
+                if kind == "unreachable":
+                    _observe("unreachable", time.monotonic())
+                elif probe_err.get("status") == 503:
+                    _observe("unavailable", time.monotonic())
+                elif kind in ("transport", "protocol"):
+                    _observe("transport", time.monotonic())
+                elif probe_err.get("answered"):
+                    _observe("answered", time.monotonic())
+                elif probe_err.get("sent"):
+                    sts = probe_err.get("statuses") or []
+                    if sts and all(s in (400, 404, 422) for s in sts):
+                        _observe("answered", time.monotonic())
+                    else:
+                        _observe("transport", time.monotonic())
             from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
             with ThreadPoolExecutor(
                     max_workers=min(pool_workers, len(units))) as pool, contextlib.ExitStack() as cleanup:
@@ -1413,6 +1472,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 'carried': carried, 'carry': carry_out, 'deferred': deferred, 'refilled': refilled,
                 **({'refill_stopped': True, 'refill_stop_error': refill_stop_error} if refill_stopped else {}),
                 'defer_reasons': dict(defer_reasons), 'fallback_codes': dict(fallback_codes),
+                'unwritten': unwritten,
                 'pids': sorted(done_pids), 'updated': True}
     for r, local_result, ctx, unit in shadow_tasks:
         if deadline - time.monotonic() < _MIN_CALL_S:
@@ -1425,7 +1485,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 message_id=r["message_id"], unit_key=str(r["message_id"]), deadline=deadline,
                 current=lambda r=r: _current(ledger, r["message_id"], r["content_hash"]),
                 dispatch=lambda fn, **kw: fn(), owner={"after_commit": True}, selection=r["_cloud_selection"],
-                cache_heads=(_PROMPT_HEAD, _BATCH_HEAD), input_binding=_chunk_context(r, ctx, checkpoint=True))
+                cache_heads=(_PROMPT_HEAD, _BATCH_HEAD), input_binding=_chunk_context(r, ctx, checkpoint=True),
+                changed=lambda r=r: _source_provably_changed(ledger, r))
             cloud_result = llm_extract(r["body_text"], context=ctx, hints=_rule_hints(r),
                 deadline=deadline, meta_out=comparison_meta, posted_at=r["posted_at"],
                 vital_policy=vital_policy, provider=provider,
@@ -1474,7 +1535,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             **({"refill_stopped": True, "refill_stop_error": refill_stop_error} if refill_stopped else {}),
             "defer_reasons": dict(defer_reasons), "fallback_codes": dict(fallback_codes),
             "context_blocked": context_blocked,
-            "skipped": skipped, "lock_lost": lock_lost,
+            "skipped": skipped, "lock_lost": lock_lost, "unwritten": unwritten,
             "slow_deferred": slow_deferred,
             "circuit_open_s": round(circuit_s) or None,
             "disk_low": disk_low,

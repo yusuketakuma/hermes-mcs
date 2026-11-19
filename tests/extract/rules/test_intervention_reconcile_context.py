@@ -25,7 +25,7 @@ def test_intervention_repair_keeps_receipts_and_reuses_the_context_scan(runtime,
     # Approval storage is synthetic and does not access the real MCS root.
     monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
     body = "看護師が2026年9月21日に本人を訪問する予定です。"
-    seed(led, body=body)
+    seed(led, body=body, posted_at="2026-09-19T10:00:00+09:00")
     with led.db:
         led.db.execute("UPDATE messages SET body_html='broken' WHERE message_id=1")
     assert extract.run_pending(led)["done"] == 1

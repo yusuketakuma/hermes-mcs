@@ -33,7 +33,11 @@ from mcs_util import has_sqlite_sidecars, strict_json
 MAX_RECORD_BYTES = 65536
 READ_CHUNK = 65536
 
-class Inventory(TypedDict):
+class _InventoryFormat(TypedDict, total=False):
+    v: int
+
+
+class Inventory(_InventoryFormat):
     schema: int
     counts: dict[str, int | None]
     states: dict[str, dict[str, int] | None]
@@ -576,49 +580,11 @@ def _inventory_connection(path: Path, max_steps: int | None, deadline: float | N
 
 
 
-# Enumeration generations for `states`/`jobs` in the inventory. v1 is what
-# backups written before the allowlist fix stored; v2 lists the values the
-# writers actually use. Unknown values still collapse into `other` and the
-# values themselves are never copied into the inventory.
-_STATE_ENUM_V1 = (
-    ("patients", "fetch_state", ("pending", "ok", "failed")),
-    ("messages", "body_state", ("unknown", "snippet", "full", "deleted")),
-    ("fetch_jobs", "state", ("pending", "done", "failed")),
-    ("attachments", "state",
-     ("pending", "downloaded", "failed", "pruned", "withdrawn")),
-    ("notify_outbox", "state", ("pending", "accepted", "failed")),
-)
-_STATE_ENUM_V2 = (
-    ("patients", "fetch_state",
-     ("pending", "complete", "incomplete", "failed", "forbidden")),
-    ("messages", "body_state", ("unknown", "snippet", "full", "deleted")),
-    ("fetch_jobs", "state", ("pending", "done", "failed")),
-    ("attachments", "state",
-     ("pending", "downloaded", "failed", "pruned", "withdrawn")),
-    ("notify_outbox", "state", ("pending", "accepted", "failed", "suppressed")),
-)
-_JOB_KINDS_V1 = ("reply", "thread", "history", "reconcile", "semantic")
-_JOB_KINDS_V2 = (
-    "reply", "thread", "history", "history_head", "reconcile", "discovery",
-    "semantic", "extract_claim", "extract_qc", "semantic_sched",
-    "extract_stale_gc", "intervention_source_reconcile",
-    "semantic_intake_unstored_epoch_v1", "semantic_intake_unstored_v1",
-    "semantic_intake_unstored_root_v1", "semantic_intake_archive_v1",
-    "patient_context_summary_quality_claim",
-)
-_ENUM_GENERATIONS = ((2, _STATE_ENUM_V2, _JOB_KINDS_V2),
-                     (1, _STATE_ENUM_V1, _JOB_KINDS_V1))
-
-
-
-def inventory_snapshot(path: Path, *, max_steps: int | None = None,
-               deadline: float | None = None,
-               enum_version: int = 2) -> Inventory:
-    """Validate static SQLite and report only allowlisted counts/timestamps."""
-    generation = next((g for g in _ENUM_GENERATIONS if g[0] == enum_version), None)
-    if generation is None:
-        raise ValueError("unknown inventory enum_version")
-    _, state_enum, job_kinds = generation
+def inventory_snapshot(path: Path, *, version: int = 2, max_steps: int | None = None,
+               deadline: float | None = None) -> Inventory:
+    """Validate static SQLite and report allowlisted counts; default v2 sets saved format."""
+    if type(version) is not int or version not in (1, 2):
+        raise BackupError("backup_inventory_mismatch")
     if max_steps is None and not valid_mcs_db(str(path)):
         raise BackupError("backup_invalid_database")
     with _inventory_connection(path, max_steps, deadline) as db:
@@ -637,7 +603,18 @@ def inventory_snapshot(path: Path, *, max_steps: int | None = None,
         # Never copy state values verbatim: a corrupted/malicious row could
         # contain PHI in a nominal enum column. Unknown states are counted.
         states: dict[str, dict[str, int] | None] = {}
-        for table, column, allowed in state_enum:
+        for table, column, allowed in (
+            ("patients", "fetch_state", ("pending", "ok", "failed")),
+            ("messages", "body_state", ("unknown", "snippet", "full", "deleted")),
+            ("fetch_jobs", "state", ("pending", "done", "failed")),
+            ("attachments", "state",
+             ("pending", "downloaded", "failed", "pruned", "withdrawn")),
+            ("notify_outbox", "state", ("pending", "accepted", "failed")),
+        ):
+            if version == 2 and table == "patients":
+                allowed = ("pending", "complete", "incomplete", "forbidden")
+            elif version == 2 and table == "notify_outbox":
+                allowed = ("pending", "accepted", "failed", "suppressed")
             columns = {r[1] for r in db.execute(f'PRAGMA table_info("{table}")')}
             if column not in columns:
                 states[table] = None
@@ -675,34 +652,37 @@ def inventory_snapshot(path: Path, *, max_steps: int | None = None,
             metrics[name] = value
         jobs: dict[str, dict[str, int]] | None = None
         if "fetch_jobs" in tables:
-            kinds = job_kinds
+            kinds = ("reply", "thread", "history", "reconcile", "semantic")
+            if version == 2:
+                kinds = ("reply", "thread", "history", "history_head", "reconcile", "discovery",
+                         "semantic", "extract_qc", "semantic_sched", "extract_claim", "extract_stale_gc",
+                         "intervention_source_reconcile", "patient_context_summary_quality_claim",
+                         "semantic_intake_unstored_v1", "semantic_intake_unstored_epoch_v1",
+                         "semantic_intake_unstored_root_v1", "semantic_intake_archive_v1")
             jobs = {k: dict.fromkeys(("pending", "done", "failed", "other"), 0)
                     for k in (*kinds, "other")}
             for kind, state, count in db.execute(
                     "SELECT kind,state,COUNT(*) FROM fetch_jobs GROUP BY kind,state"):
                 jobs[kind if kind in kinds else "other"][
                     state if state in ("pending", "done", "failed") else "other"] += count
-        return {"schema": db.execute("PRAGMA user_version").fetchone()[0],
+        result: Inventory = {"schema": db.execute("PRAGMA user_version").fetchone()[0],
                 "counts": counts, "states": states, "metrics": metrics, "jobs": jobs,
                 "last_successful_run": latest}
+        if version == 2:
+            result["v"] = 2
+        return result
 
 
-
-def inventory_matches(path: Path, stored: Inventory, *,
-                      max_steps: int | None = None,
+def inventory_matches(path: Path, expected: Inventory, *, max_steps: int | None = None,
                       deadline: float | None = None) -> bool:
-    """Accept a stored inventory recomputed under any enumeration generation.
-
-    Backups written before the allowlist fix stored v1 inventories whose
-    `other` buckets cannot be unfolded; verify/drill therefore recompute with
-    the current generation first and fall back to older generations, keeping
-    strict full-dict equality in every case.
-    """
-    for version, _, _ in _ENUM_GENERATIONS:
-        if inventory_snapshot(path, max_steps=max_steps, deadline=deadline,
-                              enum_version=version) == stored:
-            return True
-    return False
+    """Compare every inventory field using only the saved inventory's format."""
+    if not isinstance(expected, dict):
+        return False
+    version = expected.get("v")
+    if "v" in expected and (type(version) is not int or version != 2):
+        return False
+    return inventory_snapshot(path, version=2 if "v" in expected else 1,
+                              max_steps=max_steps, deadline=deadline) == expected
 
 
 

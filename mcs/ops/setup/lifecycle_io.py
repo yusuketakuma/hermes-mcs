@@ -131,6 +131,15 @@ def write_env(path: str, updates: dict[str, str]):
         raise OSError("env_edit_lock_unavailable") from exc
 
 
+def keychain_round_trips(value: str) -> bool:
+    """False for passwords known to read back changed before any Keychain write."""
+    # The login and keychain_to_env readers strip surrounding whitespace, and
+    # `find-generic-password -w` cannot print control characters as text.
+    # Other non-ASCII text is left to store_keychain's read-back verify: its
+    # `security` output form is unverified on real machines.
+    return value == value.strip() and not any(c < " " or c == "\x7f" for c in value)
+
+
 def store_keychain(account: str, pw: str, *, service: str = KEYCHAIN_SERVICE) -> bool:
     """Store the MCS password in the login keychain without exposing it
     in child-process argv (`ps` shows argv to every local user).
@@ -147,7 +156,7 @@ def store_keychain(account: str, pw: str, *, service: str = KEYCHAIN_SERVICE) ->
     def _q(v: str) -> str:
         return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
-    if (not service.strip()
+    if (not service.strip() or not keychain_round_trips(pw)
             or any(c in value for value in (account, pw, service) for c in "\r\n\x00")):
         return False
     # Update the item the adapter's service-only read resolves to, under

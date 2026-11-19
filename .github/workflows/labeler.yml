@@ -4,7 +4,7 @@ name: PR labels
 # pull_request_target で base 側の設定だけを使い、PR のコードは checkout も実行もしない。
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
 
 permissions: {}
 
@@ -14,12 +14,19 @@ concurrency:
 
 jobs:
   label:
+    # base 変更時は差分を再評価する。本文・タイトル編集だけでは API を呼ばない。
+    if: github.event.action != 'edited' || github.event.changes.base
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: write
     steps:
+      # 対応判断ラベルは同期削除から分離し、手動付与も保持する。
+      - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13  # v7.0.0
+        with:
+          configuration-path: .github/labeler-safety.yml
+          sync-labels: false
       - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13  # v7.0.0
         with:
           configuration-path: .github/labeler.yml

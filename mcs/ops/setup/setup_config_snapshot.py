@@ -237,24 +237,18 @@ def _init_split_changes(initial, cfg):
                 continue
             if key == 'model' and initial.get('replace_cloud') and name != selected:
                 continue
-            if key == 'profiles' and (
-                    (name == 'openai' and (initial.get('preserve_openai_profiles')
-                                           or initial.get('replace_cloud') and selected != 'openai'))
-                    or (name == 'anthropic' and (initial.get('preserve_anthropic_profiles')
-                                                 or initial.get('replace_cloud')
-                                                 and (selected != 'anthropic'
-                                                      or 'provider_profiles'
-                                                      not in cfg.get('cloud_llm', {}))))):
+            # Only the selected provider's profiles are in the view; the others stay private.
+            if key == 'profiles' and name != selected:
                 continue
             if changed(old_providers[name], new_providers[name], key):
                 if key in new_providers[name]:
                     providers[name][key] = deepcopy(new_providers[name][key])
                 else:
                     providers[name].pop(key, None)
-    if initial.get('replace_cloud') and 'model' not in new_providers[selected]:
-        providers[selected].pop('model', None)
-    if initial.get('replace_cloud') and selected == 'openai' and 'profiles' not in new_providers['openai']:
-        providers['openai'].pop('profiles', None)
+    if initial.get('replace_cloud'):
+        for key in ('model', 'profiles'):
+            if key not in new_providers[selected]:
+                providers[selected].pop(key, None)
     actual = provider_settings.execution_view(common, providers, selected_provider=selected,
                                               model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
     if mcs_util.canonical(actual) != mcs_util.canonical(cfg):
@@ -313,6 +307,20 @@ def _locked_current_state(split_initial, base):
     return current_state
 
 
+def _overlay_paths(base, override, paths):
+    """Copy each explicitly set path of ``override`` onto a copy of ``base``; ancestors keep their entries."""
+    result = deepcopy(base)
+    for path in sorted(paths, key=len):
+        source, target = override, result
+        for part in path[:-1]:
+            source = source[part]
+            if not isinstance(target.get(part), dict):
+                target[part] = {}
+            target = target[part]
+        target[path[-1]] = deepcopy(source[path[-1]])
+    return result
+
+
 def _init_reselect_provider(cfg, initial, set_args):
     if initial[0] != 'split':
         return
@@ -335,7 +343,6 @@ def _init_reselect_provider(cfg, initial, set_args):
     candidate = deepcopy(cfg)
     candidate['cloud_llm'].pop('model', None)
     candidate['cloud_llm'].pop('profiles', None)
-    candidate['cloud_llm'].pop('provider_profiles', None)
     selection, errors = cloud_policy.resolve_settings(candidate, info['root'])
     if cloud_policy.blocking_errors(errors) or selection['provider'] == info['selected']:
         return
@@ -343,23 +350,15 @@ def _init_reselect_provider(cfg, initial, set_args):
     view = provider_settings.execution_view(info['state']['common'], info['state']['providers'],
         selected_provider=selection['provider'], model_owners=info['owners'], jev_model=semantic_jev.JEV_MODEL)
     projected = view.get('cloud_llm', {})
-    profile_leaf = any(name.startswith('cloud_llm.profiles.') for name in touched)
-    if (selection['provider'] == 'openai' and profile_leaf and 'cloud_llm.profiles' not in touched
-            and 'profiles' not in before and isinstance(after.get('profiles'), dict)
-            and isinstance(projected.get('profiles'), dict)):
-        after['profiles'] = {**deepcopy(projected['profiles']), **after['profiles']}
-    anthropic_leaf = any(name.startswith('cloud_llm.provider_profiles.anthropic.') for name in touched)
-    projected_anthropic = projected.get('provider_profiles', {})
-    if isinstance(projected_anthropic, dict):
-        projected_anthropic = projected_anthropic.get('anthropic')
-    after_anthropic = after.get('provider_profiles', {})
-    if isinstance(after_anthropic, dict):
-        after_anthropic = after_anthropic.get('anthropic')
-    if (selection['provider'] == 'anthropic' and anthropic_leaf
-            and 'cloud_llm.provider_profiles' not in touched
-            and 'cloud_llm.provider_profiles.anthropic' not in touched
-            and isinstance(after_anthropic, dict) and isinstance(projected_anthropic, dict)):
-        after['provider_profiles']['anthropic'] = {**deepcopy(projected_anthropic), **after_anthropic}
+    for key in ('profiles', 'provider_profiles'):
+        leaves = [name.split('.')[2:] for name in touched if name.startswith('cloud_llm.' + key + '.')]
+        if (leaves and 'cloud_llm.' + key not in touched and key not in before
+                and isinstance(projected.get(key), dict)):
+            # Leaf overrides apply on top of the new selection's private profiles.
+            try:
+                after[key] = _overlay_paths(projected[key], after[key], leaves)
+            except (KeyError, TypeError, AttributeError):
+                pass  # a malformed override stays as given; the view check rejects it
     for key in ('model', 'profiles', 'provider_profiles'):
         explicit = any(name == 'cloud_llm.' + key or name.startswith('cloud_llm.' + key + '.')
                        for name in touched)
@@ -367,10 +366,6 @@ def _init_reselect_provider(cfg, initial, set_args):
         new_value = {key: after[key]} if key in after else {}
         if explicit or mcs_util.canonical(old_value) != mcs_util.canonical(new_value):
             continue
-        if key == 'profiles' and selection['provider'] != 'openai':
-            info['preserve_openai_profiles'] = True
-        if key == 'provider_profiles' and selection['provider'] != 'anthropic':
-            info['preserve_anthropic_profiles'] = True
         if key in projected:
             after[key] = deepcopy(projected[key])
         else:

@@ -21,9 +21,8 @@ import time
 from mcs_util import valid_text
 from mcs_requests import canonical, payload_hash
 from update_policy import RELEASE_TAG_RE
-from operation_contract import (RETRY_PAYLOAD_MAX_BYTES, bounded_integer, parse_retry_payload,
-                                read_retry_payload, retry_error, retry_job_row, retry_payload_codec,
-                                retry_updated_payload)
+from operation_contract import (RETRY_PAYLOAD_MAX_BYTES, bounded_integer, parse_retry_object, read_retry_payload,
+                                retry_error, retry_job_row, retry_payload_codec)
 from mcs_queries import SEMANTIC_CONTROL_KIND as _CONTROL_ARTIFACT
 from safe_io import fsync_dir, fdopen_owned
 
@@ -128,11 +127,8 @@ def _apply_retry_tx(db, req: dict, now: float, cfg=None) -> tuple[str | None, di
     row, error = retry_job_row(db, req["project_id"], req["job_id"])
     if error:
         return error, {}
-    raw = read_retry_payload(db, row)
-    if raw is None:
-        return "invalid_payload", {"job_id": row["job_id"]}
-    payload = parse_retry_payload(raw)
-    if not isinstance(payload, dict) or payload.ambiguous_version:
+    payload = parse_retry_object(read_retry_payload(db, row))
+    if payload is None:
         return "invalid_payload", {"job_id": row["job_id"]}
     try:
         current_hash = payload_hash(payload)
@@ -159,22 +155,23 @@ def _apply_retry_tx(db, req: dict, now: float, cfg=None) -> tuple[str | None, di
                        "attempts": row["attempts"]}
     from semantic_runtime import attempt_limit
     old_limit = attempt_limit(payload)
+    # Keep the accumulated attempt/generation/source fields intact while
+    # invalidating a worker that captured the pre-retry payload.
+    payload["retry_command_id"] = req["command_id"]
     extra = {"job_id": row["job_id"], "attempts": row["attempts"]}
     if "reason" in req:
         extra["reason"] = req["reason"]
     if "diagnosis_hash" in req:
         extra.update(diagnosis_hash=req["diagnosis_hash"], remediation=req["remediation"])
     if additional is not None:
+        new_limit = row["attempts"] + additional
+        payload["manual_attempt_limit"] = new_limit
         extra.update({
             "old_attempt_limit": old_limit,
-            "new_attempt_limit": row["attempts"] + additional,
+            "new_attempt_limit": new_limit,
             "additional_attempts": additional,
         })
-    try:
-        updated_payload = retry_updated_payload(payload, req["command_id"],
-                                                additional, row["attempts"])
-    except (TypeError, ValueError, RecursionError):
-        return "invalid_payload", {"job_id": row["job_id"]}
+    updated_payload = canonical(payload).decode("utf-8")
     if len(updated_payload.encode(retry_payload_codec(db))) > RETRY_PAYLOAD_MAX_BYTES:
         return "invalid_payload", {"job_id": row["job_id"]}
     rowid_alias = row['retry_rowid_alias']
@@ -698,9 +695,6 @@ def apply_tx(db, req: dict, now: float | None = None, *,
     """Apply one validated operation without committing its transaction."""
     owner, db = db, getattr(db, "db", db)
     current = time.time() if now is None else float(now)
-    if req["cmd"].startswith("ops.previsit_"):
-        from previsit_ops import apply_tx as apply_previsit_tx
-        return apply_previsit_tx(db, req, current)
     if req["cmd"] == "ops.mcs_reaction":
         from stamp_write import enqueue_tx
         return enqueue_tx(db, req, cfg, data_dir, current)
@@ -719,6 +713,12 @@ def apply_tx(db, req: dict, now: float | None = None, *,
     if req["cmd"] == "ops.patient_context_reset":
         from patient_context_reset import apply_tx as reset_tx
         return reset_tx(db, req, current)
+    if req["cmd"] == "ops.slack_setup_discard":
+        from slack_channel_setup import discard_hold_tx
+        return discard_hold_tx(db, req, filesystem_changes)
+    if req["cmd"] == "ops.provider_pending_finalize":
+        from config_edit import finalize_provider_pending_tx
+        return finalize_provider_pending_tx(db, req, filesystem_changes)
     if req["cmd"] == "ops.scan":
         return _apply_scan_tx(db, req, current)
     if req["cmd"] == "ops.retry":

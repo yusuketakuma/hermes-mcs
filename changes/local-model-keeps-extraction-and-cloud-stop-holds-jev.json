@@ -1,0 +1,21 @@
+{
+  "category": "changed",
+  "title": "ローカルのモデルを変えても投稿の抽出結果を使い続け、cloud-llm stop で患者コンテキストの Jev 確認も止める",
+  "summary": "local_llm.model を変えても、作成済みの投稿の抽出結果は完了として扱い、作り直しません。意味解析と患者コンテキストは従来どおり作り直します。cloud-llm stop 中は、患者コンテキストの品質確認（Jev への送信）も一時保留し、cloud-llm resume 後に再開します。",
+  "upgrade": "追加操作は不要です。設定のモデルを変えた後に投稿の再抽出は走りません。cloud-llm stop の停止中は患者コンテキストの品質確認が一時保留になるので、再開は cloud-llm resume で行います。意味解析本体の Jev 送信は今回変えていません（設計確認待ち）。",
+  "details": [
+    "抽出の完了判定（進捗表示・患者の出来事・集計・測定値・患者コンテキストの準備判定）から設定中のローカルモデルとの一致を外し、保存された抽出行のモデルとハッシュの一致で検証するようにしました。クラウド契約の照合は従来どおりです。",
+    "cloud-llm stop 中の患者コンテキスト品質確認は恒久保留（held）ではなく一時保留（deferred）とし、実行中の停止も Jev 予約前に再照合して止め、cloud-llm resume 後に設定変更なしで再評価されるようにしました。",
+    "モデルを A から B、B から A へ戻したとき、要約が現在の経路条件を満たさず非表示のまま作り直されない不具合を直しました。作り直しの要否に、表示と同じ経路の照合を加えました。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_llm_selection.py",
+    "mcs/patients/care_event_sources.py",
+    "mcs/patients/rollup_builder.py",
+    "mcs/patients/measurement_sources.py",
+    "mcs/patients/patient_context_refresh_readiness.py",
+    "mcs/patients/patient_context_quality_controller.py",
+    "mcs/views/extraction_progress.py",
+    "mcs/llm/cloud_policy.py"
+  ]
+}

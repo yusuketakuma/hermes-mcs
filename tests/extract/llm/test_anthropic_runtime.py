@@ -68,7 +68,18 @@ def test_cloud_unit_pins_profile_through_body_and_reservation(routed, monkeypatc
 @pytest.mark.parametrize("local_circuit", [0, 60])
 @pytest.mark.parametrize("background", [False, True])
 def test_parallel_http_hooks_stay_on_ledger_owner(routed, monkeypatch, local_circuit, background):
+    from threading import BoundedSemaphore
     led, cfg, calls, reserves, results = routed
+    # Exercise the real parallel dispatcher with two available slots; the disk-backed
+    # admission lock can legitimately defer a worker during its 100 ms acquisition window.
+    capacity = cfg["cloud_llm"]["max_concurrency"]
+    slots = BoundedSemaphore(capacity)
+
+    def request_slot(_root, limit):
+        assert limit == capacity
+        return slots
+
+    monkeypatch.setattr(worker.cloud_backlog, "request_slot", request_slot)
     if background:
         led.save_messages([_message(mid, "完全合成の過去記録。", project_id=1) for mid in (1, 2)])
         with led.db:
@@ -572,7 +583,8 @@ def test_resident_checks_source_before_config_and_stop(tmp_path, monkeypatch, mo
         assert worker.main() == 0
         assert len(calls) == (2 if mode == "unchanged" else 1)
         assert events.count("pool_sync") == 1  # resuming carry admits no new pool work
-        assert events.count("discard") == events.count("release") == 1
+        # A code update fences the old worker: it releases without closing the paid answer.
+        assert events.count("discard") == 0 and events.count("release") == 1
         assert events[-2:] == ["pool_closed", "ledger_closed"]
         assert [dict(row) for row in ledger.artifacts("synthetic_paid_result")] == saved
     finally:

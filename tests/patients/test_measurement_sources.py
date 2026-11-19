@@ -656,6 +656,18 @@ def test_tampered_source_binding_blocks_coverage_without_reviving_prior_value(tm
         assert all(item["state"] == "unknown" for item in series["items"])
 
 
+def test_local_model_change_does_not_flag_a_stored_extraction(tmp_path, monkeypatch):
+    with closing(_setup(tmp_path, monkeypatch)) as ledger:
+        body = "本人は2026-10-01の採血 Cr 1.0 mg/dL。"
+        _save(ledger, 1, body, {"labs": [_lab(body, "1.0")]}, "2026-10-01T09:00:00+09:00")
+        messages = ledger.db.execute("SELECT * FROM messages WHERE project_id=1").fetchall()
+        blobs = mcs_queries.current_extraction_blobs(ledger.db, 1)
+        refs = rollup._clinical_artifact_refs(ledger.db, 1, blobs)
+        cfg = {"local_llm": {"model": "synthetic-other-model"}}
+        result = measurement_sources.collect_measurements(ledger.db, 1, messages, blobs, refs, cfg=cfg)
+        assert result["coverage"]["analysis_attention"] == 0
+
+
 def test_unknown_config_cannot_be_treated_as_a_completed_model_contract(tmp_path, monkeypatch):
     with closing(_setup(tmp_path, monkeypatch)) as ledger:
         body = "本人は2026-10-01の採血 Cr 1.0 mg/dL。"

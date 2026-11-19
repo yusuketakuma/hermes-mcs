@@ -10,6 +10,7 @@ from contextlib import suppress
 from time import monotonic
 
 import initial_import_state
+from message_observations import only_field_errors
 from mcs_util import RETRY_LATER_4XX, html_to_text, loads_dict, valid_hash
 from mcs_queries import posted_epoch
 
@@ -195,10 +196,10 @@ class LedgerCaptureMixin:
         notified so they never resurface as candidates."""
         now = time.time()
         new_ids = []
-        before_semantic = (self._semantic_generation_snapshot(p.messages)
-                           if semantic or self._needs_semantic_source_tracking() else {})
         invalidated_roots = set()
         with self._intake_transaction():  # commit on success, rollback on exception
+            before_semantic = self._begin_semantic_generation_snapshot(
+                p.messages, semantic=semantic)
             self.db.execute('UPDATE patients SET project_id=project_id WHERE 0')
             previous = self.db.execute("SELECT fetch_reason,project_type,karte_id,is_archived,fetch_state,patient_name FROM patients WHERE project_id=?", (p.project_id,)).fetchone()
             first = previous is None
@@ -432,16 +433,18 @@ class LedgerCaptureMixin:
         paths find it present and never announce it. Only those rows
         notify, as 'history' under the same age gate; older new rows in
         the same batch (replies included) stay quiet."""
+        if not isinstance(msgs, (list, tuple)):
+            msgs = list(msgs)
         new_ids = []
         now = time.time()
         late_after = None
         if notify_late and project_id and notify is None:
             # 0 = never imported: the initial history stays quiet
             late_after = self.high_watermark(project_id) or None
-        before_semantic = (self._semantic_generation_snapshot(msgs)
-                           if semantic or self._needs_semantic_source_tracking() else {})
         invalidated_roots = set()
         with self._intake_transaction():
+            before_semantic = self._begin_semantic_generation_snapshot(
+                msgs, semantic=semantic)
             for m in msgs:
                 self._save_tree(m, new_ids, now, project_id)
             changed_semantic = (self._semantic_changed_ids(
@@ -504,12 +507,14 @@ class LedgerCaptureMixin:
         replies that must not announce. New read replies with a known
         timestamp inside the bound also qualify for notification;
         notify_all_replies exempts new replies from that bound."""
+        if not isinstance(replies, (list, tuple)):
+            replies = list(replies)
         new_ids = []
         now = time.time()
-        before_semantic = (self._semantic_generation_snapshot(replies)
-                           if semantic or self._needs_semantic_source_tracking() else {})
         invalidated_roots = set()
         with self._intake_transaction():
+            before_semantic = self._begin_semantic_generation_snapshot(
+                replies, semantic=semantic)
             for m in replies:
                 self._save_tree(m, new_ids, now, project_id)
                 # reconcile against the STORED body, not the fetched one:
@@ -543,11 +548,8 @@ class LedgerCaptureMixin:
                 invalidated_roots=invalidated_roots)
         return new_ids
 
-    def _upsert_message(self, m) -> int:
-        """Returns 1 if newly inserted. Never downgrades a stored 'full' body
-        to a later 'snippet'."""
-        now = time.time()
-        chash = hashlib.sha256((m.body_html or "").encode()).hexdigest()
+    def _reserve_message_writer(self):
+        """Reserve the intake writer while preserving fixed SQLite failure diagnostics."""
         # A zero-row write reserves the writer without committing caller work.
         started = transaction_open = None
         with suppress(Exception):
@@ -566,6 +568,13 @@ class LedgerCaptureMixin:
                     "at": time.time(),
                 })
             raise
+
+    def _upsert_message(self, m) -> int:
+        """Returns 1 if newly inserted. Never downgrades a stored 'full' body
+        to a later 'snippet'."""
+        now = time.time()
+        chash = hashlib.sha256((m.body_html or "").encode()).hexdigest()
+        self._reserve_message_writer()
         existing = self.db.execute(
             "SELECT * FROM messages WHERE message_id=?",
             (m.message_id,)).fetchone()
@@ -755,7 +764,9 @@ class LedgerCaptureMixin:
         """Save refresh observations without changing chat, coverage or delivery.
 
         publish=True also writes a successful refresh to capture in the
-        same transaction; a failure never touches capture."""
+        same transaction, including fields that validated while another
+        field was invalid (the bad one is recorded as invalid); a failed
+        fetch or an invalid reactions field never touches capture."""
         row = self.db.execute(
             "SELECT project_id FROM messages WHERE message_id=?", (m.message_id,)).fetchone()
         if row is None or row["project_id"] != m.project_id:
@@ -766,7 +777,7 @@ class LedgerCaptureMixin:
         now = time.time()
         with self.db:
             self._save_message_metadata(m, source="shadow", now=now)
-            if publish is True and error is None and not getattr(m, "metadata_errors", []):
+            if publish is True and error is None and only_field_errors(getattr(m, "metadata_errors", [])):
                 self._save_message_metadata(m, source="capture", now=now)
 
     def save_reaction_actors(self, message_id, rows, complete, *, error=None, now=None):
@@ -839,7 +850,11 @@ class LedgerCaptureMixin:
             attachment_ocr.record_dependencies_tx(self.db, dependencies)
             if row and before is not None and before != self._semantic_message_fingerprint(
                     row["project_id"], row["message_id"]):
-                self._invalidate_thread_projections(row["project_id"], row["root"])
+                invalidated_roots = set()
+                for root in self._message_thread_roots(
+                        row["project_id"], row["message_id"], row["root"]):
+                    self._invalidate_thread_projections(
+                        row["project_id"], root, invalidated_roots=invalidated_roots)
                 if semantic:
                     self.semantic_seed_tx(row["project_id"], [row["message_id"]],
                                            {"source": "attachment"})
@@ -883,7 +898,11 @@ class LedgerCaptureMixin:
                 state = self.db.execute("SELECT state FROM attachments WHERE attachment_id=?",
                                         (attachment_id,)).fetchone()[0]
                 if state != source["state"]:
-                    self._invalidate_thread_projections(source["project_id"], source["root"])
+                    invalidated_roots = set()
+                    for root in self._message_thread_roots(
+                            source["project_id"], source["message_id"], source["root"]):
+                        self._invalidate_thread_projections(
+                            source["project_id"], root, invalidated_roots=invalidated_roots)
                     if semantic:
                         self.semantic_seed_tx(source["project_id"], [source["message_id"]],
                                                {"source": "attachment"})

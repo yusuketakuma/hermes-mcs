@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "妨げ条件がある mcs update plan を終了コード1に修正",
+  "summary": "最新版が現在の版と同じ（route が noop）でも、中断した更新・更新記録の破損・復元の同意待ち・再導入の未完了などの妨げ条件（blockers）があれば、mcs update plan は終了コード1を返します。終了コードだけを見る手順やエージェントが、問題のある状態を「更新済み」と誤認しなくなります。出力するJSONの内容は変わりません。",
+  "upgrade": "追加操作は不要です。mcs update plan の終了コードを判定に使っている手順は、blockers がある noop を失敗として扱うようになります。",
+  "details": [
+    "mcs_cli の plan 分岐で route が blocked のときに加え、blockers が空でないときも1を返す。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_cli.py",
+    "tests/ops/test_mcs_cli.py"
+  ]
+}

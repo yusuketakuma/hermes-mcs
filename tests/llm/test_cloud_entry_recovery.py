@@ -42,7 +42,7 @@ def test_next_unit_checks_history_before_fresh_send_denial(paid, monkeypatch, ol
         elif old != 'fresh':
             first = unit(ledger)
             with legacy_cloud_routes():
-                first.reserve(first.client.body('synthetic prompt', 100, None), 30)
+                first.reserve(first.client.body('synthetic prompt', first.selection['max_tokens'], None), 30)
             if old in ('legacy', 'tampered'):
                 row = ledger.artifacts('cloud_usage_reserve')[0]
                 meta = json.loads(row['meta'])
@@ -93,7 +93,8 @@ def unrelated_reservation(ledger, cfg, route, *, project_id=1, message_id=1):
     purpose = 'patient_context' if route == 'patient_context' else 'backlog'
     selection, errors = cloud_policy.resolve_profile(cfg, route=route, purpose=purpose)
     assert not errors and selection['provider'] == 'anthropic'
-    client = anthropic_client.AnthropicClient('synthetic-key')
+    client = anthropic_client.AnthropicClient(
+        'synthetic-key', model=selection['model'], effort=selection['effort'])
     return cloud_policy.usage_reserver(ledger,
         {'cloud_llm': cloud_inference.resolve_cloud_settings(cfg)}, route=route, project_id=project_id,
         message_id=message_id, unit_key='unrelated-old-unit', selection=selection)(
@@ -130,7 +131,7 @@ def test_same_text_new_source_occurrence_never_reuses_or_falls_back_at_cap(paid,
             if old == 'saved':
                 original('synthetic prompt', deadline=time.monotonic() + 60, max_tokens=100)
             else:
-                original.reserve(original.client.body('synthetic prompt', 100, None), 30)
+                original.reserve(original.client.body('synthetic prompt', original.selection['max_tokens'], None), 30)
         cfg['cloud_llm']['daily_cost_limit_usd'] = 0
         before = len(calls), len(locks)
         different_occurrence = unit(ledger, binding='different-source-occurrence')

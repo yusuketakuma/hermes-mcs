@@ -679,6 +679,7 @@ def test_candidate_updater_extracted_to_temp_calls_real_parent_and_child(legacy_
     import shutil
     import local_backup
     import mcs_util
+    import update_apply
 
     repo, runtime, data = legacy_entry['repo'], legacy_entry['runtime'], legacy_entry['data']
     # Construct a synthetic installed tree and copy only tracked development source.
@@ -727,6 +728,8 @@ def test_candidate_updater_extracted_to_temp_calls_real_parent_and_child(legacy_
     patch_lifecycle_lookup(monkeypatch, updater, 'precheck_local', lambda *_a, **_k: [])
     patch_lifecycle_lookup(monkeypatch, updater, 'precheck_tag', lambda *_a, **_k: [])
     patch_lifecycle_lookup(monkeypatch, updater, '_baseline_check', lambda *_a, **_k: [])
+    patch_lifecycle_lookup(monkeypatch, updater, '_provider_migration_needed', lambda: True)
+    monkeypatch.setattr(update_apply, '_provider_bridge_verified', lambda *_a, **_k: True)
     patch_lifecycle_lookup(monkeypatch, updater, '_plan_runtime_migration', lambda *_a, **_k: None)
     patch_lifecycle_lookup(monkeypatch, updater, 'quiesce', lambda: updater._write_marker())
     patch_lifecycle_lookup(monkeypatch, updater, '_enqueue_notice', lambda *_a, **_k: None)

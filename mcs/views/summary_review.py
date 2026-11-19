@@ -11,6 +11,7 @@ import semantic_store
 import difflib
 import sqlite3
 
+from mcs_queries import current_message_artifact_query, selected_artifact_proof_valid
 from mcs_requests import parse_command, payload_hash, positive, validate
 from mcs_util import loads_dict, valid_hash
 
@@ -133,6 +134,9 @@ def _current_candidate(db, project_id: int, message_id: int,
     if not policy or meta.get("policy_fingerprint") != policy:
         reasons.append("candidate_policy_stale")
         fresh = False
+    if not semantic_store.producer_current("semantic_summary", candidate.get("model"), meta):
+        reasons.append("candidate_producer_stale")
+        fresh = False
     if meta.get("stale"):
         reasons.append("candidate_stale")
         fresh = False
@@ -142,7 +146,8 @@ def _current_candidate(db, project_id: int, message_id: int,
 def _adoption_rows(db, project_id: int, message_id: int,
                    comparison_hash: str | None, source_fingerprint: str | None,
                    policy_fingerprint: str | None,
-                   summary_artifact_id: int) -> list[dict]:
+                   summary_artifact_id: int,
+                   candidate_current: bool) -> list[dict]:
     rows = db.execute(
         "SELECT artifact_id,content,meta FROM artifacts "
         "WHERE kind=? AND project_id=? AND message_id=? "
@@ -198,7 +203,7 @@ def _adoption_rows(db, project_id: int, message_id: int,
             except (sqlite3.Error, ValueError, TypeError):
                 pass
         current = bool(
-            receipt_verified and comparison_hash
+            candidate_current and receipt_verified and comparison_hash
             and content.get("comparison_hash") == comparison_hash
             and content.get("summary_artifact_id") == summary_artifact_id
             and meta.get("source_fingerprint") == source_fingerprint
@@ -211,13 +216,25 @@ def _adoption_rows(db, project_id: int, message_id: int,
 
 def _load_baseline(db, project_id: int, message_id: int,
                    source_full: bool, source_hash, reasons: list):
-    """Latest extract_llm artifact + its staleness classification."""
-    row = db.execute(
-        "SELECT artifact_id,content,meta FROM artifacts "
-        "WHERE kind=? AND project_id=? AND message_id=? "
-        "ORDER BY artifact_id DESC LIMIT 1",
-        ("extract_llm", project_id, message_id),
-    ).fetchone()
+    """Current extract_llm artifact (latest one if none) + its staleness classification."""
+    # The same current-version / newer-marked / proof contract as every other reader.
+    current = db.execute(current_message_artifact_query(field="artifact_id"),
+                         ("extract_llm", message_id)).fetchone()
+    current_id = current[0] if current and selected_artifact_proof_valid(db, current[0]) else None
+    row = None
+    if current_id is not None:
+        row = db.execute(
+            "SELECT artifact_id,content,meta FROM artifacts "
+            "WHERE artifact_id=? AND kind=? AND project_id=? AND message_id=?",
+            (current_id, "extract_llm", project_id, message_id),
+        ).fetchone()
+    if row is None:
+        row = db.execute(
+            "SELECT artifact_id,content,meta FROM artifacts "
+            "WHERE kind=? AND project_id=? AND message_id=? "
+            "ORDER BY artifact_id DESC LIMIT 1",
+            ("extract_llm", project_id, message_id),
+        ).fetchone()
     if row is None:
         reasons.append("baseline_missing")
         return None
@@ -227,7 +244,8 @@ def _load_baseline(db, project_id: int, message_id: int,
     baseline_error = bool(baseline["meta"].get("error")
                           or baseline["content"].get("_error"))
     baseline["current"] = bool(
-        baseline_ok and baseline_has_text and not baseline_error and source_full
+        baseline["artifact_id"] == current_id
+        and baseline_ok and baseline_has_text and not baseline_error and source_full
         and valid_hash(source_hash)
         and baseline["meta"].get("hash") == source_hash)
     if baseline_error:
@@ -244,14 +262,14 @@ def _load_candidate(db, project_id: int, message_id: int,
     """The audited assist summary — latest, or the pinned artifact_id."""
     if summary_artifact_id is None:
         row = db.execute(
-            "SELECT artifact_id,content,meta FROM artifacts "
+            "SELECT artifact_id,content,meta,model FROM artifacts "
             "WHERE kind=? AND project_id=? AND message_id=? "
             "ORDER BY artifact_id DESC LIMIT 1",
             ("semantic_summary", project_id, message_id),
         ).fetchone()
     else:
         row = db.execute(
-            "SELECT artifact_id,content,meta FROM artifacts "
+            "SELECT artifact_id,content,meta,model FROM artifacts "
             "WHERE artifact_id=? AND kind=? AND project_id=? AND message_id=?",
             (summary_artifact_id, "semantic_summary", project_id,
              message_id),
@@ -266,6 +284,7 @@ def _load_candidate(db, project_id: int, message_id: int,
         reasons.append("candidate_missing")
         return None
     candidate = _artifact(row, "candidate")
+    candidate["model"] = row["model"]
     candidate_has_text = validate_comparison_candidate(candidate["content"])
     if not candidate_has_text:
         reasons.append("candidate_empty")
@@ -358,7 +377,8 @@ def comparison(db, project_id: int, message_id: int,
     adoptions = _adoption_rows(
         db, project_id, message_id, comparison_hash,
         bundle["source_fingerprint"] if bundle else None,
-        policy, candidate["artifact_id"] if candidate else -1)
+        policy, candidate["artifact_id"] if candidate else -1,
+        bool(candidate and candidate["current"]))
     adopted = any(adoption["current"] for adoption in adoptions)
     if candidate is not None:
         candidate["adopted"] = adopted
