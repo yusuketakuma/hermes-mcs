@@ -361,6 +361,7 @@ def test_scan_deadline_stays_partial_and_reaches_existing_health_deferred_guidan
     assert rebuilt == [1] and result['rollup_scan']['state'] == 'unknown'
     monkeypatch.setattr(notify_cmds, 'drain_int_commands', lambda *a, **k: None)
     monkeypatch.setattr(notify_spool, 'publish_flags', lambda *a, **k: None)
+    monkeypatch.setattr(notify_spool, 'publish_restore_holds', lambda *a, **k: None)
     monkeypatch.setattr(notify_cards, 'snapshot_dirty', lambda *a, **k: False)
     monkeypatch.setattr(run_check.maintenance, 'refresh_snapshot', lambda *a, **k: 'unchanged')
     run_id = ledger.begin_run(None)
@@ -392,6 +393,7 @@ def test_rebuild_deadline_stays_partial_and_reaches_existing_health_guidance(
                            unknown=(2, 3), reasons={'deadline': 2})
     monkeypatch.setattr(notify_cmds, 'drain_int_commands', lambda *a, **k: None)
     monkeypatch.setattr(notify_spool, 'publish_flags', lambda *a, **k: None)
+    monkeypatch.setattr(notify_spool, 'publish_restore_holds', lambda *a, **k: None)
     monkeypatch.setattr(notify_cards, 'snapshot_dirty', lambda *a, **k: False)
     monkeypatch.setattr(run_check.maintenance, 'refresh_snapshot', lambda *a, **k: 'unchanged')
     run_id = ledger.begin_run(None)
