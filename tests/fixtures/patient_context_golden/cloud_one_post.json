@@ -3,25 +3,25 @@
   [
    "cloud_usage_reserve",
    "patient_context",
-   "claude-haiku-5-5",
+   "claude-sonnet-5-5",
    null
   ],
   [
    "cloud_usage_reserve",
    "patient_context",
-   "claude-haiku-5-5",
+   "claude-sonnet-5-5",
    null
   ],
   [
    "cloud_usage_result",
    "patient_context",
-   "claude-haiku-5-5",
+   "claude-sonnet-5-5",
    "http_200"
   ],
   [
    "cloud_usage_result",
    "patient_context",
-   "claude-haiku-5-5",
+   "claude-sonnet-5-5",
    "http_200"
   ]
  ],

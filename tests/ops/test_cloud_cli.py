@@ -447,6 +447,7 @@ def test_init_secret_storage_uses_dotenv_without_printing_secret_or_path(world, 
     monkeypatch.setenv("MCS_ANTHROPIC_API_KEY", "synthetic-incoming-key")
     monkeypatch.delenv("MCS_SETUP_PASSWORD", raising=False)
     assert mcs_setup._init_store_secrets(SimpleNamespace(yes=True), "synthetic") is None
+    assert mcs_setup._init_store_api_keys() is None
     assert cloud_policy.api_key(str(root)) == "synthetic-incoming-key"
     output = capsys.readouterr().out
     assert "synthetic-incoming-key" not in output and str(root) not in output

@@ -507,6 +507,7 @@ def _finish_env(tmp_path, monkeypatch):
     monkeypatch.setattr(run_check, "_WATCHDOG_EXIT_AT", time.monotonic() + 60)
     monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **kw: 0)
     monkeypatch.setattr(notify_spool, "publish_flags", lambda *a, **kw: None)
+    monkeypatch.setattr(notify_spool, "publish_restore_holds", lambda *a, **kw: None)
     return db, updater, lock_fd, baseline
 
 

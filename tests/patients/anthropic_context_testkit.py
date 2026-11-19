@@ -225,14 +225,13 @@ def _source_repair_wire_protocol(monkeypatch, cloud):
     monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_args: nullcontext(True))
     monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
-    monkeypatch.setattr(worker.cloud_policy, 'pricing_valid',
-                        lambda now=None, *, model=worker.anthropic_client.MODEL: model == worker.anthropic_client.MODEL)
+    monkeypatch.setattr(worker.cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     def post(body, timeout):
         prompt = json.loads(body['messages'][0]['content'])
         cloud[0].append(prompt)
         text = prompt['source']
         answer = {'patient_context':[{'category':'living','text':text,'evidence':text,'subject':'unspecified','details':[]}]}
-        return 200, {}, json.dumps({'model':worker.anthropic_client.MODEL,'usage':{'input_tokens':1,'output_tokens':1},
+        return 200, {}, json.dumps({'model':body['model'],'usage':{'input_tokens':1,'output_tokens':1},
             'stop_reason':'end_turn','content':[{'type':'text','text':json.dumps(answer)}]}).encode()
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
         lambda key, **kwargs:_SOURCE_REPAIR_CLIENT(key, post_fn=post, **kwargs))
