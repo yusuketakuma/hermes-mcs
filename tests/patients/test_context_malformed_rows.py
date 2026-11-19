@@ -399,3 +399,15 @@ def test_status_counts_invalid_patient_and_keeps_others(runtime):
     assert counts['invalid'] == 1
     assert counts['initial_pending'] == 1 and counts['history_pending'] == 1
     assert not led.db.in_transaction
+
+
+def test_pending_estimate_reports_an_unreadable_scope_as_invalid_and_keeps_others(runtime):
+    led, _, _ = runtime
+    for pid in (1, 2):
+        seed(led, mid=pid, pid=pid)
+    _bad_progress(led, 1)
+    bad = readiness.pending_estimate(led.db, 1, CFG)
+    good = readiness.pending_estimate(led.db, 2, CFG)
+    assert bad == {key: int(key == 'invalid') for key in bad}
+    assert good['invalid'] == 0 and good['targets'] == 1
+    assert not led.db.in_transaction

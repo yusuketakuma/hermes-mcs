@@ -2,8 +2,8 @@
 
 The caller owns borrowed SQLite lifetime and commits new renders before
 publish_specs. Publication witnesses commit in bounded groups after the files are durable. Recovery repairs
-already committed stored bytes in its existing transaction; it never sends or
-consumes worker claims. Scope/config APIs accept plain values, never providers.
+already committed stored bytes; it never sends or consumes worker claims.
+The caller's run lock serializes publication with restore reconciliation.
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def notify_dirs(root: str) -> dict:
     return {name: os.path.join(root, name) for name in
             ("discord_render", "discord_state", "slack_render", "slack_state",
              "lineworks_render", "lineworks_state", "flags",
-             "cmd_int", "cmd_results")}
+             "cmd_int", "cmd_results", "restore_specs")}
 
 
 def ensure_dirs(root: str) -> None:
@@ -177,11 +177,54 @@ def publish_flags(cfg: dict, root: str) -> bool:
     return True
 
 
-def _cleanup_budget_held(db, delivery_id):
-    return db.execute("SELECT 1 FROM notification_render_parts WHERE delivery_id=? AND state='held' "
-                      "AND error_code IN ('thread_cleanup_budget_exceeded','part_budget_exceeded',"
-                      "'blank_part_unrepresentable','attachment_upload_identity_unverified') "
-                      "LIMIT 1", (delivery_id,)).fetchone() is not None
+def publish_restore_holds(ledger, root: str) -> bool:
+    """flags/restore_holds.json — delivery_ids under an unreleased
+    restore hold. The delivery worker reads it DB-free at every pre-send
+    check, so a held delivery's spec (kept as reconcile evidence) can
+    never turn into a send. Published only when it changes."""
+    db = getattr(ledger, "db", ledger)
+    held = sorted(str(r[0]) for r in db.execute(
+        "SELECT delivery_id FROM notification_restore_holds "
+        "WHERE released_at IS NULL AND delivery_id IS NOT NULL"))
+    flags = {"held_delivery_ids": held, "at": time.time()}
+    raw = canonical(flags)
+    path = os.path.join(notify_dirs(root)["flags"], "restore_holds.json")
+    try:
+        with open(path, "rb") as f:
+            old = f.read()
+    except OSError:
+        old = None
+    if old is not None:
+        try:
+            prior = json.loads(old)
+            if isinstance(prior, dict):
+                prior.pop("at", None)
+                cur = dict(flags)
+                cur.pop("at", None)
+                if canonical(prior) == canonical(cur):
+                    return False
+        except (ValueError, RecursionError):
+            pass
+    publish_file(os.path.dirname(path), "restore_holds.json", raw)
+    return True
+
+
+def _spec_publication_blocked(db, delivery_id, transport):
+    """A held resource part, a part a restore beyond the journal horizon
+    made unknown, or an unstarted Slack file group keeps its delivery off
+    the spool: the worker replays a spec from the journal alone, and the
+    compacted journal cannot show that such a part never ran."""
+    restore_reasons = (notify_scope.RESTORE_BEYOND_JOURNAL_HORIZON,
+                       *notify_scope.RESTORE_UNRESOLVABLE_PART_REASONS)
+    marks = ",".join("?" for _ in restore_reasons)
+    return db.execute(
+        "SELECT 1 FROM notification_render_parts WHERE delivery_id=? AND ("
+        "(state='held' AND error_code IN ('thread_cleanup_budget_exceeded','part_budget_exceeded',"
+        "'blank_part_unrepresentable','attachment_upload_identity_unverified')) OR "
+        f"(state='unknown' AND error_code IN ({marks})) OR "
+        "(?='slack' AND state='pending' AND kind='file_group' AND attempt_id IS NULL AND error_code=?)) "
+        "LIMIT 1", (delivery_id, *restore_reasons, transport, notify_scope.RESTORE_BEYOND_JOURNAL_HORIZON),
+    ).fetchone() is not None
 
 
 def _mark_published(db, marks):
@@ -199,9 +242,9 @@ def publish_specs(db, dirs, specs, now) -> list:
     published, marks = [], []
     try:
         for spec in specs:
-            if _cleanup_budget_held(db, spec["delivery_id"]):
-                continue
             transport = spec["delivery"].get("transport", "discord")
+            if _spec_publication_blocked(db, spec["delivery_id"], transport):
+                continue
             path = publish_file(dirs[transport + "_render"],
                                 spec["delivery_id"] + ".json", canonical(spec))
             marks.append((now, now, spec["delivery_id"]))
@@ -243,10 +286,13 @@ def recover(ledger, cfg, result) -> dict:
     marks = []
     for r in db.execute(
             "SELECT delivery_id,spec_json,transport,state FROM notification_renders r "
-            "WHERE state IN ('queued','held') OR (state='delivered' "
+            "WHERE (state IN ('queued','held') OR (state='delivered' "
             "AND EXISTS (SELECT 1 FROM notification_render_parts p "
-            "WHERE p.delivery_id=r.delivery_id AND p.state='pending'))").fetchall():
-        if _cleanup_budget_held(db, r["delivery_id"]):
+            "WHERE p.delivery_id=r.delivery_id AND p.state='pending'))) "
+            "AND NOT EXISTS (SELECT 1 FROM notification_restore_holds h "
+            "WHERE h.released_at IS NULL AND (h.delivery_id=r.delivery_id "
+            "OR h.card_id=r.card_id))").fetchall():
+        if _spec_publication_blocked(db, r["delivery_id"], r["transport"]):
             continue
         path = os.path.join(dirs[r["transport"] + "_render"],
                             r["delivery_id"] + ".json")
@@ -293,4 +339,5 @@ def recover(ledger, cfg, result) -> dict:
         result.setdefault("errors", []).append(
             f"claimed_specs_stale:{stale['live']}")
     publish_flags(cfg, root)
+    publish_restore_holds(ledger, root)
     return fixed

@@ -94,10 +94,23 @@ def test_helper_function_change_changes_candidate_identity(monkeypatch):
     assert candidate.candidate_fingerprint(CFG) != before
 
 
-def test_loaded_helper_digest_change_changes_candidate_identity(monkeypatch):
+@pytest.mark.parametrize('key', ['extract_llm_engine', 'clinical_allergies'])
+def test_loaded_helper_digest_change_changes_candidate_identity(monkeypatch, key):
     monkeypatch.setattr(candidate, '_LOADED_SOURCES', None)
     before = candidate.candidate_fingerprint(CFG)
-    key = 'extract_llm_engine'
     replacement = 'a' * 64 if extract_llm._LOADED_SOURCE_DIGESTS[key] != 'a' * 64 else 'b' * 64
     monkeypatch.setitem(extract_llm._LOADED_SOURCE_DIGESTS, key, replacement)
     assert candidate.candidate_fingerprint(CFG) != before
+
+
+def test_allergy_helper_is_bound_to_the_loaded_and_hold_contract(monkeypatch):
+    import clinical_allergies
+    import extract_llm_qc as quality_control
+
+    name = "clinical_allergies"
+    assert extract_llm._LOADED_SOURCE_PATHS[name] == clinical_allergies.__file__
+    assert name in quality_control._HOLD_SOURCES
+    before = quality_control._upgrade_contract()
+    replacement = "a" * 64 if extract_llm._LOADED_SOURCE_DIGESTS[name] != "a" * 64 else "b" * 64
+    monkeypatch.setitem(extract_llm._LOADED_SOURCE_DIGESTS, name, replacement)
+    assert quality_control._upgrade_contract() != before

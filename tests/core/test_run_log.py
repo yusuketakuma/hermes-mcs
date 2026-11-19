@@ -678,3 +678,37 @@ def test_a_torn_mirror_is_regenerated_from_canonical(data):
     canonical = json.loads((data / run_log.BACKUPS / run_log.STATE).read_text())
     assert mirror == canonical
     assert (data / run_log.LOG).read_bytes() == b"base\nnext\n"
+
+
+def test_wedged_lock_holder_fails_closed_after_the_bound(data, monkeypatch):
+    """IA-103: the helper's lock wait is bounded instead of stalling every service behind it."""
+    run_log.append(str(data), b"synthetic first\n")
+    holder = os.open(data / run_log.LOCK, os.O_RDWR)
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    clock = [0.0]
+    monkeypatch.setattr(run_log.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(run_log.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    try:
+        with pytest.raises(run_log.RunLogError, match="run_log_lock_timeout"):
+            run_log.append(str(data), b"synthetic second\n")
+        assert run_log.LOCK_WAIT_S <= clock[0] < run_log.LOCK_WAIT_S + 1
+    finally:
+        os.close(holder)
+    run_log.append(str(data), b"synthetic second\n")
+    assert (data / run_log.LOG).read_bytes() == b"synthetic first\nsynthetic second\n"
+
+
+def test_consume_fd_reports_lock_timeout_and_drains_remaining_output(data, monkeypatch):
+    @contextmanager
+    def locked(_data):
+        raise run_log.RunLogError('run_log_lock_timeout')
+        yield
+
+    monkeypatch.setattr(run_log, '_locked', locked)
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b'first\nsecond\n')
+    os.close(write_fd)
+    with pytest.raises(run_log.RunLogError, match='run_log_capture_failed'):
+        run_log._consume_fd(data, read_fd)
+    with pytest.raises(OSError):
+        os.fstat(read_fd)

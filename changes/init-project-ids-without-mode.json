@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "init の --project-ids が --semantic-mode なしでは保存されない問題を修正",
+  "summary": "mcs_setup.py init で --semantic-mode を付けずに --project-ids を指定しても、外部解析（Jev）の対象プロジェクトが config.json の semantic.project_ids に保存されます。これまでは指定が黙って捨てられ、APIキーがあると指定していないプロジェクトの投稿まで外部解析の対象になっていました。",
+  "upgrade": "追加操作は不要です。過去に --semantic-mode なしで --project-ids を指定して導入した場合、対象は保存されていません。semantic.project_ids を確認し、必要なら init --project-ids で指定し直してください。--semantic-mode を同時に指定した場合の動作は変わりません。",
+  "details": [
+    "_init_apply_section_flags で --project-ids を --semantic-mode の有無と独立に semantic.project_ids へ書き込む。mode を省略した場合はキーの有無による既定（assist）のまま、対象だけを絞る。"
+  ],
+  "refs": ["mcs/ops/setup/setup_integration.py", "tests/ops/test_mcs_setup_initialization.py"]
+}

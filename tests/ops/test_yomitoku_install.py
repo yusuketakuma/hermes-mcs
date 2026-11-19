@@ -69,14 +69,14 @@ def test_setup_separate_python_pinned_source_and_repeatable_cache(monkeypatch, t
     monkeypatch.setenv('HF_HUB_CACHE', '/synthetic/unused-cache/hub')
     setup_yomitoku.setup(root, REPO)
     assert ['--python', '3.13'] == calls[0][2:4]
-    assert any('version("yomitoku")' in str(call) and "0.16.1" in str(call) for call in calls)
+    assert any('version("yomitoku")' in str(call) and "0.16.3" in str(call) for call in calls)
     model_call = next(call for call in calls if 'snapshot_download' in str(call))
     assert json.loads(model_call[4]) == json.loads(ocr_model_contract.MODEL_JSON)
     assert len(ocr_model_contract.MODELS) == 4
-    assert all('dewarp' not in repo and 'middle' not in repo
+    assert all('dewarp' not in repo and 'tiny' not in repo
                for repo, _ in ocr_model_contract.MODELS.values())
     requirements = (REPO / 'deployment/requirements-ocr.txt').read_text()
-    assert '@0279cf256e2588430d085e2dc958e8740be82921' in requirements
+    assert '@6ba6a7843bc96d2dedbfcc63d1808f929eb0c8e5' in requirements
     marker = root / 'ocr-venv/.mcs-ocr-requirements'
     marker.write_bytes(marker.read_bytes() + b'synthetic-prior-model\n')
     calls.clear()

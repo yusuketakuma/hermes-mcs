@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "バックアップの取得状態と通知状態の誤集計を修正",
+  "summary": "バックアップの集計で、取得完了・取得途中・閲覧不可の患者状態と、送信を抑止した通知を未知の状態から区別します。処理待ちジョブの既知の種類も個別に集計します。",
+  "upgrade": "更新後の集計から適用されます。追加設定は不要です。新規inventoryは版2になります。旧形式のバックアップと復元待ちの記録は引き続き検証できます。版2を含むバックアップや復元待ちの記録は、コードを旧版へ戻すとbackup_inventory_mismatchまたはrestore_inventory_mismatchで検証・復元できません。",
+  "details": [
+    "患者のfetch_stateはpending・complete・incomplete・forbiddenを区別し、NULLと許可値以外はotherに集約します。保存値をそのまま表示しません。",
+    "notify_outboxはsuppressedを追加します。held・deliveredは別の配送記録の状態で、outboxの許可値には加えません。",
+    "messages.body_state、attachments.state、fetch_jobs.stateは書込み経路を照合し、許可値の変更が不要であることを確認しました。fetch_jobs.kindは確認済みの固定値を追加し、任意の値はotherのままにします。",
+    "版番号はinventory内に置き、暗号化bundleのmanifestの版とMACの検証順序は変更しません。版のない保存済みinventoryは旧集計、整数2は新集計で全体を比較し、不一致時に別の版で照合し直しません。未知の版は拒否します。",
+    "readinessのfactsとバックアップ・復元の報告で集計のキーが変わります。既存のbundle・復元待ちの記録と、復元するデータ自体は書き換えません。"
+  ],
+  "refs": ["mcs/ops/backup/backup_evidence.py", "mcs/ops/mcs_backup.py", "mcs/ops/mcs_restore.py"]
+}

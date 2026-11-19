@@ -732,7 +732,7 @@ def verify_source_repair_rows(db, pid, source_key, origin, rows):
                     or proof['finish_reason'] not in ('stop', 'length')
                     or any(_INTERNAL_PROOF in part[2] or 'repair_response' in part[2] for part in parts[1:])):
                 raise ValueError('patient_context_source_repair_invalid')
-            planned, cursor, normalized, _, _ = context_plan.scan_plan(
+            planned, cursor, normalized, _ = context_plan.scan_plan(
                 source, {'cursor':proof['cursor'], 'split':proof['split']})
             start = sum(map(len, planned[:cursor]))
             span = [start, start + len(planned[cursor])]

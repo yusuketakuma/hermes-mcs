@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import time
 import uuid
 
@@ -52,6 +53,7 @@ import notify_spool
 from notify_scope import card_row
 from mcs_queries import HOLD_PROGRESS_SET
 from mcs_util import loads_dict
+from safe_io import fsync_dir, read_regular_nofollow
 import notify_transport
 import notify_journal
 import notify_parts
@@ -59,26 +61,98 @@ import notify_recovery
 
 _RESULT_VALUES = ("delivered", "not_sent", "unknown")
 _TERMINAL = ("delivered", "not_sent", "cancelled")
+_SPEC_MAX_BYTES = 16 * 1024 * 1024
 
 
-def _read_spec(dirs: dict, delivery_id) -> dict | None:
-    """The published spec file survives a DB restore (it lives outside
-    the DB) — the only link from a lost delivery_id back to its intent
-    event ids."""
+def _safe_spec_name(delivery_id) -> str | None:
     if not isinstance(delivery_id, str) or not delivery_id:
         return None
     safe = "".join(c if c.isalnum() or c in "._-" else "_"
                    for c in delivery_id)
-    for t in notify_scope.SUPPORTED_TRANSPORTS:
-        try:
-            with open(os.path.join(dirs[t + "_render"], safe + ".json"),
-                      "rb") as fh:
-                spec = json.loads(fh.read().decode("utf-8"))
-        except (OSError, ValueError, RecursionError):
-            continue
-        if isinstance(spec, dict) and spec.get("delivery_id") == delivery_id:
-            return spec
+    if safe in ("", ".", ".."):
+        return None
+    return safe + ".json"
+
+
+def _restore_spec_dir(dirs: dict) -> str:
+    return (dirs.get("restore_specs")
+            or os.path.join(os.path.dirname(dirs["discord_render"]),
+                            "restore_specs"))
+
+
+def _load_spec_path(path: str, delivery_id: str) -> tuple[bytes, dict] | None:
+    try:
+        raw = read_regular_nofollow(path, _SPEC_MAX_BYTES, ValueError)
+        if len(raw) > _SPEC_MAX_BYTES:
+            return None
+        spec = json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return None
+    if isinstance(spec, dict) and spec.get("delivery_id") == delivery_id:
+        return raw, spec
     return None
+
+
+def _read_spec_bytes(dirs: dict, delivery_id) -> tuple[bytes, dict] | None:
+    name = _safe_spec_name(delivery_id)
+    if name is None:
+        return None
+    candidates = [*(os.path.join(dirs[t + "_render"], name)
+                    for t in notify_scope.SUPPORTED_TRANSPORTS),
+                  os.path.join(_restore_spec_dir(dirs), name)]
+    for path in candidates:
+        loaded = _load_spec_path(path, delivery_id)
+        if loaded is not None:
+            return loaded
+    return None
+
+
+def _read_spec(dirs: dict, delivery_id) -> dict | None:
+    """The published (or reconcile-archived) spec file survives a DB restore
+    (it lives outside the DB) — the only link from a lost delivery_id back
+    to its intent event ids."""
+    loaded = _read_spec_bytes(dirs, delivery_id)
+    return loaded[1] if loaded is not None else None
+
+
+def _withdraw_spec(dirs: dict, delivery_id) -> bool | None:
+    """Withdraw any published spec for delivery_id from worker render spools
+    into the reconcile-only archive, preserving its exact original bytes."""
+    name = _safe_spec_name(delivery_id)
+    if name is None:
+        return None
+    archive = _restore_spec_dir(dirs)
+    dst = os.path.join(archive, name)
+    try:
+        for t in notify_scope.SUPPORTED_TRANSPORTS:
+            render_dir = dirs[t + "_render"]
+            src = os.path.join(render_dir, name)
+            try:
+                st = os.lstat(src)
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                return False
+            os.makedirs(archive, mode=0o700, exist_ok=True)
+            archive_st = os.lstat(archive)
+            if not stat.S_ISDIR(archive_st.st_mode):
+                return False
+            try:
+                dst_st = os.lstat(dst)
+            except FileNotFoundError:
+                dst_st = None
+            if dst_st is not None and not stat.S_ISREG(dst_st.st_mode):
+                return False
+            if dst_st is not None and _load_spec_path(dst, delivery_id) is not None:
+                os.unlink(src)
+                fsync_dir(render_dir)
+            else:
+                os.replace(src, dst)
+                fsync_dir(render_dir)
+                fsync_dir(archive)
+        return True
+    except OSError:
+        return False
 
 
 def _spec_events(spec) -> list:
@@ -91,7 +165,7 @@ def _spec_events(spec) -> list:
 def _apply_hold(db, aid, delivery_id, reason, dirs, now,
                 scope=None) -> dict:
     """Freeze one disputed scope — render held, card delivery_unknown,
-    pending linked intents quarantined — plus a durable
+    due linked intents quarantined — plus a durable
     notification_restore_holds row the operator resolves against."""
     render = notify_scope.render_row(db, delivery_id) if delivery_id else None
     card = card_row(db, render["card_id"]) \
@@ -127,7 +201,8 @@ def _apply_hold(db, aid, delivery_id, reason, dirs, now,
             db.execute(
                 "UPDATE notify_outbox SET state='failed',next_try=NULL,"
                 f"{HOLD_PROGRESS_SET},updated_at=? "
-                "WHERE event_id=? AND state='pending'",
+                "WHERE event_id=? AND state IN ('pending','failed') "
+                "AND next_try IS NOT NULL",
                 ("restore_hold", now, eid))
         existing = db.execute(
             "SELECT 1 FROM notification_restore_holds WHERE "
@@ -142,10 +217,20 @@ def _apply_hold(db, aid, delivery_id, reason, dirs, now,
                  json.dumps(events), reason,
                  json.dumps(scope, sort_keys=True), now))
         cards.mark_snapshot_dirty(db)
-    return {"attempt_id": aid, "delivery_id": delivery_id,
-            "verdict": "held", "detail": reason, "card_id": card_id,
-            "scope": scope, "events_held": len(events),
-            "spec_linked": bool(events)}
+    verdict = {"attempt_id": aid, "delivery_id": delivery_id,
+               "verdict": "held", "detail": reason, "card_id": card_id,
+               "scope": scope, "events_held": len(events),
+               "spec_linked": bool(events)}
+    # The worker never reads the DB: its spec file is the only claim and
+    # resume handle, and part sends re-check it immediately before every
+    # wire call. Withdraw the published spec into the reconcile-only
+    # archive now that the hold row is durable, preserving exact original
+    # bytes and delivery->intent linkage across repeated reconciles while
+    # recover skips unreleased holds until an operator resolves.
+    withdrawn = _withdraw_spec(dirs, delivery_id)
+    if withdrawn is not None:
+        verdict["spec_withdrawn"] = withdrawn
+    return verdict
 
 
 def _republish_receipt(ledger, db, cfg, aid, delivery_id, info,
@@ -373,10 +458,8 @@ BEYOND_HORIZON = notify_recovery.BEYOND_HORIZON
 # A Discord file_group part that cannot share a verified surface attempt is
 # made ``unknown`` without one: ops.card_part_resolve cannot plan it, and the
 # receipt, notice and part_hold_report name why it needs manual investigation.
-GROUP_SPEC_UNVERIFIED = "restore_group_spec_unverified"
-GROUP_SURFACE_MISSING = "restore_group_surface_missing"
-GROUP_SURFACE_UNRESOLVABLE = "restore_group_surface_unresolvable"
-UNRESOLVABLE = (GROUP_SPEC_UNVERIFIED, GROUP_SURFACE_MISSING, GROUP_SURFACE_UNRESOLVABLE)
+UNRESOLVABLE = notify_scope.RESTORE_UNRESOLVABLE_PART_REASONS
+GROUP_SPEC_UNVERIFIED, GROUP_SURFACE_MISSING, GROUP_SURFACE_UNRESOLVABLE = UNRESOLVABLE
 
 
 def _discord_group_surfaces(db, delivery_id):
@@ -447,7 +530,7 @@ def promote_group_parts(db, now, delivery_id=None) -> list:
     return promoted
 
 
-def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
+def _unknown_beyond_horizon_parts(db, restored_at, now, dirs) -> list:
     """Mark the pending thread/body/attachment/file-group parts of each card's
     latest delivered render from the restored backup ``unknown``.
 
@@ -465,22 +548,10 @@ def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
     unknown with an attempt, they become ``unknown`` with no attempt and a
     reason in UNRESOLVABLE: still blocking, never planned, and reported for
     manual investigation until promote_group_parts finds their surface usable. Older superseded renders never block an update and
-    are left alone; a Slack file_group that never started keeps its own
-    ``no_journal_started`` path. A missing record is not proof of
-    non-delivery, so nothing becomes not_sent. Returns the parts this run
-    changed; re-runs find no pending parts left and change nothing."""
+    are left alone. A Slack file_group without a recorded attempt stays
+    pending and is flagged: a missing journal record cannot prove non-delivery.
+    Returns the parts newly marked or flagged by this run."""
     from adapters.common import envelopes
-    rows = db.execute(
-        "SELECT p.delivery_id,p.part_id,p.kind,p.attempt_id,r.card_id,r.transport "
-        "FROM notification_render_parts p JOIN notification_renders r "
-        "ON r.delivery_id=p.delivery_id WHERE r.state='delivered' "
-        "AND r.card_id IS NOT NULL AND (? IS NULL OR r.created_at <= ?) "
-        "AND r.render_rev=(SELECT MAX(x.render_rev) FROM notification_renders x "
-        "WHERE x.card_id=r.card_id) "
-        "AND p.kind IN ('thread','body_part','attachment_part','file_group') "
-        "AND p.state='pending' AND NOT (r.transport='slack' "
-        "AND p.kind='file_group' AND p.attempt_id IS NULL) "
-        "ORDER BY p.delivery_id,p.idx", (restored_at, restored_at)).fetchall()
     marked = []
 
     def mark(row, aid, reason=BEYOND_HORIZON):
@@ -494,8 +565,30 @@ def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
 
     with db:
         db.execute("BEGIN IMMEDIATE")
+        rows = db.execute(
+            "SELECT p.delivery_id,p.part_id,p.kind,p.attempt_id,r.card_id,r.transport "
+            "FROM notification_render_parts p JOIN notification_renders r "
+            "ON r.delivery_id=p.delivery_id WHERE r.state='delivered' "
+            "AND r.card_id IS NOT NULL AND (? IS NULL OR r.created_at <= ?) "
+            "AND r.render_rev=(SELECT MAX(x.render_rev) FROM notification_renders x "
+            "WHERE x.card_id=r.card_id) "
+            "AND p.kind IN ('thread','body_part','attachment_part','file_group') "
+            "AND p.state='pending' "
+            "ORDER BY p.delivery_id,p.idx", (restored_at, restored_at)).fetchall()
+        flagged = []
+        flagged_deliveries = set()
         grouped, unresolvable, surfaces = [], [], {}
         for row in rows:
+            if row["transport"] == "slack" and row["kind"] == "file_group" and row["attempt_id"] is None:
+                flagged_deliveries.add(row["delivery_id"])
+                if db.execute(
+                    "UPDATE notification_render_parts SET error_code=?,updated_at=? "
+                    "WHERE delivery_id=? AND part_id=? AND state='pending' "
+                    "AND attempt_id IS NULL AND error_code IS NOT ?",
+                    (BEYOND_HORIZON, now, row["delivery_id"], row["part_id"], BEYOND_HORIZON),
+                ).rowcount:
+                    flagged.append(_part_entry(row, None, BEYOND_HORIZON))
+                continue
             if row["transport"] == "discord" and row["kind"] in ("attachment_part", "file_group"):
                 if row["delivery_id"] not in surfaces:
                     surfaces[row["delivery_id"]] = _discord_group_surfaces(db, row["delivery_id"])
@@ -523,7 +616,13 @@ def _unknown_beyond_horizon_parts(db, restored_at, now) -> list:
         promoted = promote_group_parts(db, now)
         for delivery_id in sorted({h["delivery_id"] for h in (*marked, *promoted)}):
             notify_parts.update_state(db, delivery_id, now)
-    return marked
+        deliveries = flagged_deliveries | {part["delivery_id"] for part in (*marked, *promoted)}
+        for delivery_id in sorted(deliveries):
+            if _withdraw_spec(dirs, delivery_id) is not True:
+                raise OSError("restore_part_spec_withdraw_failed")
+        db.executemany("UPDATE notification_renders SET spec_published=0 WHERE delivery_id=?",
+                       [(delivery_id,) for delivery_id in deliveries])
+    return [*marked, *flagged]
 
 
 def _part_entry(row, aid, reason):
@@ -533,16 +632,24 @@ def _part_entry(row, aid, reason):
 
 
 def _beyond_horizon_parts(db) -> tuple[list, list]:
-    """Every part still ``unknown`` from a restore beyond the journal horizon,
-    so a re-run's receipt still lists what awaits ``ops.card_part_resolve``
-    (first) and what it cannot plan and needs manual investigation (second)."""
+    """Every part still ``unknown`` from a restore beyond the journal horizon
+    (and each pending Slack file_group flagged with it), so a re-run's receipt
+    still lists what awaits ``ops.card_part_resolve`` (first) and what it
+    cannot plan and needs manual investigation (second)."""
+    from adapters.common import envelopes
     codes = (BEYOND_HORIZON, *UNRESOLVABLE)
-    parts = [_part_entry(r, r["attempt_id"], r["error_code"]) for r in db.execute(
-        "SELECT p.delivery_id,p.part_id,p.kind,p.attempt_id,p.error_code,r.card_id "
+    # only a flagged pending group has no stored attempt id; its plan's value is
+    # derived, whereas an unknown part's (NULL for Discord) is reported as stored
+    parts = [_part_entry(r, r["attempt_id"] or (envelopes.part_attempt_id(r["delivery_id"], r["part_id"])
+                                                if r["state"] == "pending" else None),
+                         r["error_code"]) for r in db.execute(
+        "SELECT p.delivery_id,p.part_id,p.kind,p.state,p.attempt_id,p.error_code,r.card_id "
         "FROM notification_render_parts p JOIN notification_renders r "
-        "ON r.delivery_id=p.delivery_id WHERE p.state='unknown' "
-        f"AND p.error_code IN ({','.join('?' * len(codes))}) "
-        "ORDER BY p.delivery_id,p.idx", codes).fetchall()]
+        "ON r.delivery_id=p.delivery_id WHERE (p.state='unknown' "
+        f"AND p.error_code IN ({','.join('?' * len(codes))})) "
+        "OR (p.state='pending' AND r.transport='slack' AND p.kind='file_group' "
+        "AND p.attempt_id IS NULL AND p.error_code=?) "
+        "ORDER BY p.delivery_id,p.idx", (*codes, BEYOND_HORIZON)).fetchall()]
     return ([p for p in parts if p["reason"] == BEYOND_HORIZON],
             [p for p in parts if p["reason"] != BEYOND_HORIZON])
 
@@ -613,7 +720,8 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
         if row["attempt_id"] in attempts:
             continue
         v = _apply_hold(db, row["attempt_id"], row["delivery_id"],
-                        "unknown_attempt", dirs, now)
+                        notify_recovery.UNKNOWN_ATTEMPT_BEYOND_HORIZON if beyond_horizon
+                        else "unknown_attempt", dirs, now)
         verdicts.append(v)
         held.append(v)
     # Only intents that existed at the restore point are unverifiable. Later
@@ -635,7 +743,7 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
                             BEYOND_HORIZON, dirs, now)
             verdicts.append(v)
             held.append(v)
-        parts_marked = _unknown_beyond_horizon_parts(db, restored_at, now)
+        parts_marked = _unknown_beyond_horizon_parts(db, restored_at, now, dirs)
         parts_held, parts_unresolvable = _beyond_horizon_parts(db)
     else:
         parts_marked, parts_held, parts_unresolvable = [], [], []
@@ -650,7 +758,8 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
         mass_held = db.execute(
             "UPDATE notify_outbox SET state='failed',next_try=NULL,"
             f"{HOLD_PROGRESS_SET},updated_at=? "
-            "WHERE state='pending' AND route='interactive' "
+            "WHERE state IN ('pending','failed') AND next_try IS NOT NULL "
+            "AND route='interactive' "
             "AND (? IS NULL OR created_at IS NULL OR created_at <= ?)",
             ("restore_unlinked" if unlinked else "restore_hold",
              now, restored_at, restored_at)).rowcount
@@ -682,20 +791,30 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
                 continue
         text_held.append({"event_id": ev["event_id"], "kind": ev["kind"],
                           "reason": "restore_text_unverified"})
+    # a spec withdrawal that failed leaves the held delivery claimable —
+    # keep the restore marker so the next run retries the unlink
+    journal_incomplete = journal_incomplete or any(
+        v.get("spec_withdrawn") is False for v in verdicts)
     counts = {}
     for v in verdicts:
         counts[v["verdict"]] = counts.get(v["verdict"], 0) + 1
+    # The receipt lists every unreleased hold, not only this run's: a rerun
+    # holds nothing new, and a partial list would hide what still awaits
+    # the operator.
+    hold_rows = db.execute(
+        "SELECT * FROM notification_restore_holds WHERE released_at IS NULL "
+        "ORDER BY hold_id").fetchall()
+    open_holds = [{"attempt_id": h["attempt_id"], "delivery_id": h["delivery_id"],
+                   "reason": h["reason"], "card_id": h["card_id"],
+                   "scope": loads_dict(h["scope_json"] or "{}") or {}}
+                  for h in hold_rows]
     receipt = {
         "v": 1, "at": now,
         "restored_at": marker.get("restored_at"),
         "by": marker.get("by"), "backup_path": marker.get("backup_path"),
         "counts": counts, "verdicts": verdicts,
-        "held": [{"attempt_id": h["attempt_id"],
-                  "delivery_id": h["delivery_id"],
-                  "reason": h["detail"], "card_id": h.get("card_id"),
-                  "scope": h.get("scope") or {}}
-                 for h in held],
-        "events_held": sum(h.get("events_held", 0) for h in held)
+        "held": open_holds,
+        "events_held": sum(len(notify_recovery.hold_events(h) or []) for h in hold_rows)
                         + mass_held + len(text_held),
         "text_held": text_held,
         "parts_held": parts_held,
@@ -704,6 +823,10 @@ def reconcile_after_restore(ledger, cfg, now=None) -> dict:
     }
     notify_spool.publish_file(root, notify_spool.RESTORE_RECEIPT,
                        cards.canonical(receipt))
+    # publish the hold list before the marker can disappear: the moment
+    # restore_pending clears, the worker's pre-send check must already
+    # see which deliveries stay frozen
+    notify_spool.publish_restore_holds(ledger, root)
     if journal_incomplete and not marker:
         notify_spool.mark_restored(root, by="reconcile_incomplete", now=now)
     elif not journal_incomplete:

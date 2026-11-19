@@ -4,9 +4,18 @@ Not a test module (no ``test_`` prefix); the tests/ conftest puts this
 directory on sys.path, so test files import it as ``common_testkit``."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 import ledger
+
+_JST = timezone(timedelta(hours=9))
+
+
+def recent_posted_at():
+    """ISO timestamp one hour ago in JST, the same instant on any host TZ."""
+    return (datetime.now(_JST) - timedelta(hours=1)).isoformat(timespec="seconds")
 
 
 def make_ledger(tmp_path, *, data_dir=False):

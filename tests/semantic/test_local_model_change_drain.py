@@ -119,6 +119,20 @@ def test_local_semantic_results_are_redone_for_a_new_local_model(drained):
     assert _current_summaries(db) == {1: None, 2: None}
 
 
+def test_rebuild_for_a_new_local_model_adds_no_semantic_notice(drained):
+    db, monkeypatch = drained
+
+    def notices():
+        return sorted(row[0] for row in db.db.execute(
+            "SELECT json_extract(payload, '$.delivery_key') FROM notify_outbox WHERE kind='semantic_notice'"))
+    before = notices()
+    assert before
+    monkeypatch.setattr(semantic_transport, "LLM_MODEL", "synthetic-local-b")
+    _drain(db, [], _PassJev(), requeue=True)
+    assert all(_current_summaries(db).values())
+    assert notices() == before
+
+
 def test_cloud_produced_semantic_results_survive_a_local_model_change(cloud_drained):
     db, monkeypatch, _ = cloud_drained
     before = _current_summaries(db)

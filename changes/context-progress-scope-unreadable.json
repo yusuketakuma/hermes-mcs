@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "患者文脈の進捗の範囲が読めない患者を、状態の件数でも読めない行として数える",
+  "summary": "進捗の source_scope が壊れた患者を doctor の状態別件数でも invalid_rows に数え、進行中・失敗には数えません。クラウド見積りの除外は共通の見積り関数に移し、挙動は同じです。追加操作は不要です。",
+  "upgrade": "追加操作は不要です。常駐処理の再起動以降に反映されます。",
+  "details": ["state_counts が進捗行の source_scope も検証する。", "pending_estimate が読めない範囲を invalid として返し、cloud_cli の例外捕捉を外す。"],
+  "refs": ["#222", "mcs/patients/patient_context_status.py", "mcs/patients/patient_context_refresh_readiness.py", "mcs/ops/cloud_cli.py"]
+}

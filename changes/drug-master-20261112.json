@@ -1,0 +1,21 @@
+{
+  "category": "changed",
+  "title": "同梱の公式医薬品マスターを20261112版に更新",
+  "summary": "システム版に同梱する厚生労働省の医薬品マスターを、20261013版（19,286件）から最新の20261112版（19,324件）に更新しました。同梱するだけで、薬剤辞書の作成・承認・有効化は自動では行いません。",
+  "upgrade": "同梱マスターから薬剤辞書を作っている場合は、`mcs drug status` で同梱版との違いを確認し、必要なら `mcs drug install-bundled` で作り直して、従来どおり `mcs_setup.py init --set 'drug_map=...'` で切り替えてください。旧版で作った辞書はそのまま使えますが、旧版用の私有pinでは新しい変換を行えません。作成時には基準日と次の見直し日も確認してください。候補の対象日が来ても作成済み辞書は自動更新されないため、必要な日に再作成・比較・明示切替を行います。基準日のない旧辞書は状態表示で確認を促します。",
+  "details": [
+    "resources/drug-master/20261112/ に公開ZIPを無加工で同梱し、manifest に出典・版・SHA・件数・利用条件参照を記録した。旧20260930版・20261013版の原本とmanifestは残している。",
+    "import_drug_master.EDITION を20261112に更新した。layout・変更区分・日付番兵の検査は変更していない。",
+    "2026-11-19に公式downloadMenuとyFileを新規確認し、19,324件・令和8年11月12日・member y_20261112.csv の記載と取得物が一致した。変更区分は既知の値（0/3/5）のみで未知の値はなく、廃止日99999999・経過措置期限なし0の番兵も仕様どおり。",
+    "全19,324行をconverterで検証でき、既存のstatus policy（変更区分0/3/5）では12,260件・約7.4MBと20,000件・8MiBの上限内だった。次の境界は2027-03-01。",
+    "承認・status policyを渡さないreport-only変換は conversion_held=terms_unconfirmed で保留される。私有辞書の作成・承認・config有効化は運用者の操作のまま。"
+  ],
+  "refs": [
+    "resources/drug-master/20261112/manifest.json",
+    "mcs/ops/import_drug_master.py",
+    "docs/specs/official-drug-master.md",
+    "tests/ops/test_import_drug_master.py",
+    "tests/ops/test_mcs_drug_bundled.py",
+    "tests/meta/test_drug_master_bundle.py"
+  ]
+}

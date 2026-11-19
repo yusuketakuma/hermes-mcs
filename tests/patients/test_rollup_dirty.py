@@ -73,7 +73,7 @@ def test_deletion_possibility_changes_are_immediate(db, monkeypatch):
     now = [1_790_000_000.0]
     monkeypatch.setattr(rollup.time, 'time', lambda: now[0])
     _setup(db, now)
-    older = _message(mid=2, body='古い合成投稿')
+    older = _message(mid=2, body='古い合成投稿', posted_at='2026-09-19T00:00:00+09:00')
     db.save_messages([older])
     with db.db:
         db.db.execute('UPDATE messages SET updated_seen=? WHERE message_id=2',
@@ -174,7 +174,7 @@ def test_tombstone_is_not_excluded_from_unrefreshed_ids(db, monkeypatch):
     now = [1_790_000_000.0]
     monkeypatch.setattr(rollup.time, 'time', lambda: now[0])
     _setup(db, now)
-    db.save_messages([_message(mid=2, body='古い合成投稿')])
+    db.save_messages([_message(mid=2, body='古い合成投稿', posted_at='2026-09-19T00:00:00+09:00')])
     with db.db:
         db.db.execute("UPDATE messages SET updated_seen=?, body_state='deleted', body_text='' "
                       "WHERE message_id=2", (now[0] - rollup.STALE_DAYS * 86400 - 120,))

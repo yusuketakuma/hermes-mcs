@@ -309,14 +309,8 @@ def _route_counts(db, cfg, settings, deadline):
         for count, row in enumerate(rows, 1):
             _checkpoint(deadline, count)
             item = out["patient_context"]
-            try:
-                pending = context.pending_estimate(db, row["project_id"], cfg, now=time.time(), route=context_route)
-            except ValueError as error:
-                if error.args != ("patient_context_source_scope_invalid",):
-                    raise
-                # One unreadable stored scope is neither done work nor a reason to stop the whole plan.
-                item["invalid_rows"] += 1
-                continue
+            pending = context.pending_estimate(db, row["project_id"], cfg, now=time.time(), route=context_route)
+            item["invalid_rows"] += pending["invalid"]
             item["targets"] += pending["targets"]
             item["input_chars"] += pending["input_chars"]
             basic = pending["summary_units"] + pending["scan_sources"]
@@ -846,9 +840,8 @@ def apply_control_tx(db, req, now):
     """Write global control/circuit and its receipt in the caller's existing transaction."""
     try:
         cfg = mcs_util._load_config(str(Path(mcs_util.HOME) / "config.json"))
-    except mcs_util.ProviderSettingsUnreadable:
-        return "cloud_config_invalid", {}
-    except (OSError, ValueError, UnicodeError, RecursionError):
+    except (OSError, ValueError, UnicodeError, RecursionError, mcs_util.ProviderSettingsUnreadable):
+        # stop must stay recordable when settings cannot be read; resume needs a valid config
         if req["cmd"] == "ops.cloud_resume":
             return "cloud_config_invalid", {}
         cfg = None
@@ -873,11 +866,11 @@ def apply_control_tx(db, req, now):
         state = {"consecutive_failures": 0, "open_until": 0.0,
                  "failure_class": None, "updated_at": now}
         db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
-            ("cloud_circuit", json.dumps(state), policy.MODEL, '{"state":"closed"}', now))
+            ("cloud_circuit", json.dumps(state), "", '{"state":"closed"}', now))
     content = "paused" if req["cmd"] == "ops.cloud_stop" else "running"
     meta = {"command_id": req["command_id"], "actor": req["actor"], "reason": req["reason"]}
     db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
-        ("cloud_control", content, policy.MODEL, json.dumps(meta, ensure_ascii=False), now))
+        ("cloud_control", content, "", json.dumps(meta, ensure_ascii=False), now))
     return None, {"reason": req["reason"], "control": content}
 
 
@@ -887,7 +880,9 @@ def command(args):
         try:
             cfg = mcs_util._load_config(str(Path(mcs_util.HOME) / "config.json")) or {}
         except mcs_util.ProviderSettingsUnreadable:
-            raise
+            if action != "stop":  # stop stays recordable without readable settings
+                raise
+            cfg = {}
         except (OSError, ValueError, TypeError, RecursionError):
             cfg = {}
         if action == "local-rebuild-plan":
@@ -1088,7 +1083,9 @@ def _time_value(text, *, end):
         date.fromisoformat(text)
         text += "T23:59:59+09:00" if end else "T00:00:00+09:00"
     mcs_util.until_epoch(text)
-    return text
+    # Save the canonical form: Python 3.9 helpers in install.sh cannot read
+    # 3.11-only spellings such as '.5', '+0900' or the basic format.
+    return datetime.fromisoformat(text).isoformat()
 
 
 def budget_command(args):

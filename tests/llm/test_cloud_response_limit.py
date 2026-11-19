@@ -35,7 +35,8 @@ def _reply(provider, text='{"synthetic":true}', model=None):
 
 def _complete(client, results, **kw):
     return client.complete("synthetic", deadline=kw.pop("deadline", time.monotonic() + 10),
-                           after_result=lambda _reservation, meta, **_answer: results.append(meta), **kw)
+                           after_result=lambda _reservation, meta, **_answer: results.append(meta),
+                           reserve_fn=lambda *args: None, **kw)
 
 
 @pytest.mark.parametrize("provider", sorted(PROVIDERS))

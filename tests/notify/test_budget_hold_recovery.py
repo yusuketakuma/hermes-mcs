@@ -40,3 +40,34 @@ def test_resource_hold_is_never_published_or_granted(led, monkeypatch, error_cod
     assert _latest_render(led)["spec_published"] == 0
     assert not _begin(led, held, n=1600)["granted"]
     assert _latest_render(led)["state"] == "held"
+
+
+def test_unknown_beyond_horizon_part_is_never_republished(led):
+    """A part a restore beyond the journal horizon marked unknown keeps its
+    delivery off the spool even while a sibling part stays pending: the
+    compacted journal cannot prove that part never ran."""
+    _seed_thread(led, mids=(100,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    render = _latest_render(led)
+    parts = led.db.execute(
+        "SELECT part_id FROM notification_render_parts WHERE delivery_id=? "
+        "ORDER BY idx", (render["delivery_id"],)).fetchall()
+    assert len(parts) >= 2
+    with led.db:
+        led.db.execute("UPDATE notification_renders SET state='delivered' "
+                       "WHERE delivery_id=?", (render["delivery_id"],))
+        led.db.execute(
+            "UPDATE notification_render_parts SET state='unknown',error_code=?,"
+            "attempt_id='aa' WHERE delivery_id=? AND part_id=?",
+            (notify_recovery.BEYOND_HORIZON, render["delivery_id"], parts[0]["part_id"]))
+        led.db.execute(
+            "UPDATE notification_render_parts SET state='pending' "
+            "WHERE delivery_id=? AND part_id=?",
+            (render["delivery_id"], parts[1]["part_id"]))
+    dirs = notify_spool.notify_dirs(notify_spool.data_root(led))
+    path = Path(dirs["discord_render"]) / (render["delivery_id"] + ".json")
+    path.unlink(missing_ok=True)
+    assert notify_spool.recover(led, CFG, {})["republished"] == 0
+    assert notify_spool.publish_specs(led.db, dirs,
+                                      [json.loads(render["spec_json"])], NOW + 1) == []
+    assert not path.exists()

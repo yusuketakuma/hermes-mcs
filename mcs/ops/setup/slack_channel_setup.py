@@ -1,6 +1,7 @@
 """Persist explicit Slack channel setup requests without changing patient routes."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
 import json
@@ -21,10 +22,13 @@ def _hash(value):
                                     ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
 
+def _root(root):
+    # install.sh supports a linked ~/.mcs; residents see the link, setup the target.
+    return Path(root).absolute().resolve()
+
+
 def path(root):
-    root = Path(root).absolute()
-    if root.resolve() != root:
-        raise ValueError('slack_setup_root_unverified')
+    root = _root(root)
     for directory in (root, root / 'data'):
         if not directory.exists():
             continue
@@ -38,7 +42,7 @@ def path(root):
 def _validate(root, state):
     try:
         if (not isinstance(state, dict) or type(state.get('version')) is not int or state['version'] != 1
-                or state.get('root') != str(Path(root).absolute())
+                or state.get('root') != str(_root(root))
                 or str(uuid.UUID(state['request_id'])) != state['request_id']
                 or state.get('state') not in ('pending', 'blocked', 'unknown', 'verified', 'applied')):
             raise ValueError
@@ -246,6 +250,53 @@ def save(root, state):
         json.dumps(state, sort_keys=True, ensure_ascii=False, allow_nan=False) + '\n'), mode=0o600)
 
 
+@contextmanager
+def _set_aside(current, kept):
+    """Move the held intent aside; put it back unless the receipt commits."""
+    os.replace(current, kept)
+    try:
+        yield
+    except BaseException:
+        os.replace(kept, current)
+        raise
+
+
+def discard_hold_tx(db, req, filesystem_changes):
+    """Human-approved discard of a blocked/unknown channel intent (IA-033).
+
+    Bound to the hold's request_id. The record is kept beside the live path as
+    evidence, never deleted; a later setup plans afresh, and Slack's unique
+    channel names refuse a second channel of the same name."""
+    if filesystem_changes is None:
+        raise RuntimeError('slack_setup_transaction_scope_required')
+    main = db.execute('PRAGMA database_list').fetchone()['file']
+    if not main:
+        return 'slack_setup_no_data_dir', {}
+    root = Path(os.path.abspath(main)).parent.parent
+    try:
+        live = path(root)
+        filesystem_changes.enter_context(config_edit._edit_lock(str(live)))
+        state = read(root)
+    except ValueError as error:
+        return str(error), {}
+    if state is None:
+        return 'slack_setup_hold_missing', {}
+    if state['request_id'] != req['request_id']:
+        return 'slack_setup_hold_changed', {}
+    if state['state'] not in ('blocked', 'unknown'):
+        return 'slack_setup_not_held', {}
+    kept = live.with_name('slack-channel-setup.discarded-' + state['request_id'] + '.json')
+    if os.path.lexists(kept):
+        return 'slack_setup_discard_exists', {}
+    try:
+        filesystem_changes.enter_context(_set_aside(live, kept))
+    except OSError:
+        return 'slack_setup_io_error', {}
+    return None, {'slack_setup_discarded': {
+        'request_id': state['request_id'], 'state': state['state'], 'reason': state.get('reason'),
+        'roles': {role: record['state'] for role, record in sorted(state['roles'].items())}}}
+
+
 def required(cfg):
     """Identify Slack setup targets without reading credentials or external settings."""
     patient = cfg.get('notify_target')
@@ -340,6 +391,19 @@ def creation_unneeded(cfg, state):
     return _configured_channels(cfg) and (state is None or _post_complete(state))
 
 
+def binding_profile(cfg):
+    """The Hermes profile that serves this Slack binding."""
+    scope = (cfg.get('notify') or {}).get('slack') or {}
+    return scope.get('profile') or cfg.get('notify_bot_profile') or 'default'
+
+
+def check_profile(cfg, args):
+    """Refuse an explicit profile that cannot serve the Slack binding."""
+    if (required(cfg) and cfg.get('runtime_mode', 'hermes') == 'hermes'
+            and getattr(args, 'plugin_profile', None) not in (None, binding_profile(cfg))):
+        raise ValueError('slack_setup_binding_mismatch')
+
+
 def plan(cfg, *, users=None):
     """Keep explicit separate system routes and describe only missing Slack destinations."""
     if not required(cfg):
@@ -347,7 +411,7 @@ def plan(cfg, *, users=None):
     roles = _channel_roles(cfg)
     scope = (cfg.get('notify') or {}).get('slack') or {}
     binding = {key: scope.get(key) for key in ('team_id', 'application_id', 'profile')}
-    binding['profile'] = binding['profile'] or cfg.get('notify_bot_profile') or 'default'
+    binding['profile'] = binding_profile(cfg)
     if any(not isinstance(binding[key], str) or not binding[key].strip()
            for key in binding):
         raise ValueError('slack_setup_identity_required')
@@ -412,7 +476,7 @@ def prepare(root, cfg, *, users=None):
                 elif not _legacy_plan_match(state.get('plan'), desired, cfg):
                     raise ValueError('slack_setup_existing_intent_conflict')
             return state
-        state = {'version': 1, 'root': str(Path(root).absolute()), 'request_id': str(uuid.uuid4()), 'plan_hash': key,
+        state = {'version': 1, 'root': str(_root(root)), 'request_id': str(uuid.uuid4()), 'plan_hash': key,
                  'plan': desired, 'roles': deepcopy(desired['roles']), 'state': 'pending'}
         save(root, state)
         return state
@@ -454,11 +518,8 @@ def run_setup(root, cfg, args):
     state = prepare(root, cfg)
     if state is None:
         if required(cfg) and cfg.get('runtime_mode', 'hermes') == 'hermes':
-            scope = (cfg.get('notify') or {}).get('slack') or {}
-            profile = scope.get('profile') or cfg.get('notify_bot_profile') or 'default'
-            if getattr(args, 'plugin_profile', None) not in (None, profile):
-                raise ValueError('slack_setup_binding_mismatch')
-            args.plugin_profile = profile
+            check_profile(cfg, args)
+            args.plugin_profile = binding_profile(cfg)
         print('既存の通知先を保持し、チャンネルの新規作成は行いません。')
         return cfg
     binding = state['plan']['binding']
@@ -556,13 +617,20 @@ def report_problem(error):
              'slack_setup_channel_unverified', 'slack_setup_members_unverified',
              'slack_setup_invite_unverified', 'slack_setup_gateway_unavailable',
              'slack_setup_receipt_pending', 'slack_setup_credentials_or_scope_required',
-             'slack_setup_profile_conflict',
+             'slack_setup_profile_conflict', 'slack_setup_binding_mismatch',
              'slack_setup_not_ready_or_config_changed'}
     if code not in known:
         code = 'slack_setup_unverified'
     print('Slackのチャンネル準備は未完了です（' + code + '）。既存の患者情報先は保持しています。')
     if code == 'slack_setup_scope_required':
         print('Slackアプリにgroups:write・groups:readを許可して再インストールし、設定を確認してください。')
+    elif code in ('slack_setup_create_unverified', 'slack_setup_unverified', 'slack_setup_name_conflict'):
+        print('作成の結果が確認できない準備記録が残っている場合は、Slackで同名のチャンネルを確認したうえで、'
+              'mcs setup slack-channels --discard-hold --request-id <記録のrequest_id> --confirm-human --reason <理由> '
+              'で記録を退避できます（記録は削除しません）。')
+    elif code == 'slack_setup_binding_mismatch':
+        print('指定したHermesの設定名が、Slackの接続に使う設定名（notify.slack.profile）と一致しません。'
+              '同じ設定名を指定して再実行してください。')
     return 1
 
 

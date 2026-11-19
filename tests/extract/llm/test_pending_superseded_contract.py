@@ -215,9 +215,10 @@ def _real_reserve(ledger, cfg, monkeypatch, prompt="完全合成の予約確認�
         unit_key="1", owner={}, selection=selection)
     # reextract sends are retired in the live policy; only the historical
     # reservation seed runs under the reopened route, like legacy_cloud_routes.
+    client = anthropic_client.AnthropicClient(
+        "synthetic-unused", model=selection["model"], effort=selection["effort"])
     with patch.object(cloud_policy, "send_route", lambda route: True):
-        return reserve(anthropic_client.AnthropicClient("synthetic-unused").body(
-            prompt, 256, None), 30)
+        return reserve(client.body(prompt, selection["max_tokens"], None), 30)
 
 
 def _guard(ledger, cfg, prompt):

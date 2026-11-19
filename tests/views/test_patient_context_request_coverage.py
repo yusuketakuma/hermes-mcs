@@ -33,11 +33,9 @@ def test_explicit_full_request_read_keeps_old_request_and_its_reply(tmp_path, ol
         assert [r["mid"] for r in full] == list(range(16, 0, -1))
         assert all(r["reply_state"] == "done" for r in full[:-1])
         assert full[-1].get("reply_state") == old_reply
-        if source_kind == "extract_llm":
-            assert full[:-1] == ordinary
-        else:
-            # Preserve the saved rollup's historical LLM-only reply scan.
-            assert all("reply_state" not in r for r in ordinary)
+        # Rule requests share the saved rollup's reply scan as well, so the
+        # capped rows match the full read's annotations for the same requests.
+        assert full[:-1] == ordinary
         # The three patient screens use the full projection, not the ordinary
         # bounded rollup. A reply outside the old cap must also be respected.
         evidence = {"project_id": 1, "items": [], "as_of": None, "coverage": {}}
@@ -72,7 +70,10 @@ def _apply_relations(requests, replies, monkeypatch, *, related=None):
     sources = [{"message_id": row["mid"], "artifact_id": i + 1} for i, (row, *_) in enumerate(requests)]
     loops = {i + 1: {"adoption_eligible": True, "description": row["ctx"],
                  "relation_events": [event for index, event in enumerate(events.get(root, []))
-                                     if related is None or (i, index) in related]}
+                                     if related is None or (i, index) in related],
+                 "unrelated_trigger_ids": sorted(
+                     event["trigger_message_id"] for index, event in enumerate(events.get(root, []))
+                     if related is not None and (i, index) not in related)}
              for i, (row, root, *_rest) in enumerate(requests)}
     calls = []
 
@@ -126,6 +127,13 @@ def test_reply_relations_match_explicit_evidence_for_mixed_threads_and_times(mon
             row = dict(row)
             seen = [(at, kind, reply_ids[root, j]) for j, (at, other, kind) in enumerate(replies.get(root, ()))
                     if (i, j) in related and at > ts and sender is not None and other is not None and other != sender]
+            if sender is None:
+                # Requests without a known sender cannot be matched to replies;
+                # observed later posts still mark the evaluation unavailable.
+                later = sum(1 for at, _sender, _kind in replies.get(root, ()) if at > ts)
+                if later:
+                    row["reply_evaluation"] = "unavailable"
+                    row["reply_evaluation_unavailable"] = later
             if seen:
                 row["reply_state"] = max((kind for _, kind, _ in seen), key=ranks.get)
                 ordered = sorted(seen, key=lambda event: (event[0], event[2], relations[event[1]]))

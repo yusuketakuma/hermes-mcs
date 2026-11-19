@@ -91,6 +91,8 @@ def updater(tmp_path, monkeypatch):
     monkeypatch.setattr(update_apply, 'DATA', mcs_update.DATA)
     monkeypatch.setattr(update_lifecycle_context, 'DATA', mcs_update.DATA)
     monkeypatch.setattr(update_planning, 'DATA', mcs_update.DATA)
+    # Like _apply_env: provider-bridge refusals have their own plan/apply tests.
+    monkeypatch.setattr(update_planning, '_provider_migration_needed', lambda: False)
     monkeypatch.setattr(update_preflight, 'DATA', mcs_update.DATA)
     monkeypatch.setattr(update_recovery, 'DATA', mcs_update.DATA)
     monkeypatch.setattr(update_restore, 'DATA', mcs_update.DATA)

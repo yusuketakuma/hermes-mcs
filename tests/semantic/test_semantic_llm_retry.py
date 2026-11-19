@@ -24,6 +24,13 @@ def isolated_format_marks(monkeypatch, tmp_path):
     monkeypatch.setattr(semantic_transport, '_FMT_PATH', str(tmp_path / "format.json"))
 
 
+def _format_cached_plain(monkeypatch):
+    """Pin a fresh plain verdict so budget-tight calls skip the probe —
+    the body floor alone then decides the turn, as before probing."""
+    monkeypatch.setattr(semantic_transport, '_FMT_MODE', "plain")
+    monkeypatch.setattr(semantic_transport, '_FMT_TS', time.monotonic())
+
+
 def _run_with_missing_model(db):
     return semantic_drain.run_due(
         db, _cfg("shadow"), {"errors": []}, time.monotonic() + 300,
@@ -152,6 +159,7 @@ def test_llm_chat_worker_enforces_absolute_deadline_and_no_auth(local_http,
         return process
 
     monkeypatch.setattr(bounded_http.subprocess, "Popen", popen_after_post)
+    _format_cached_plain(monkeypatch)
     # The byte-trickled response takes ~20 s; returning None far below that
     # after the POST landed proves the absolute deadline cut the in-flight
     # response instead of a per-read idle timeout.
@@ -281,6 +289,8 @@ def test_request_never_sent_does_not_consume_attempts(tmp_path, monkeypatch,
     ("llm_unreachable", 0, "deferred"),
     ("llm_unreachable", 1, "deferred_backoff"),
     ("llm_turn_busy", 1, "deferred"),
+    ("probe_unsent", 1, "deferred"),
+    ("llm_admission:held", 1, "deferred_backoff"),
 ])
 def test_not_sent_llm_defers_only_when_no_jev_was_spent(
         monkeypatch, stage, jev_spent, expected):
@@ -421,11 +431,13 @@ def test_semantic_llm_chat_requests_json_object_after_probe(monkeypatch):
         return 200, {}, json.dumps(_response(text)).encode()
 
     monkeypatch.setattr(local_llm, "bounded_request", send)
-    assert semantic_transport.llm_chat("抽出 JSON:", timeout=4) == '{"facts": []}'
+    # timeout=5 leaves floor(2.5s)+probe margin(2s) inside the window —
+    # the probe still spends the caller's budget instead of adding to it
+    assert semantic_transport.llm_chat("抽出 JSON:", timeout=5) == '{"facts": []}'
     assert semantic_transport._FMT_MODE == "object"
     assert bodies[-1]["response_format"] == {"type": "json_object"}
     assert bodies[-1]["id_slot"] == local_llm.BACKGROUND_SLOT
-    assert len(timeouts) == 2 and all(t <= 4 for t in timeouts)
+    assert len(timeouts) == 2 and all(t <= 5 for t in timeouts)
     # cached: a second call does not re-probe
     semantic_transport.llm_chat("次 JSON:")
     assert sum("Reply with" in b["messages"][0]["content"] for b in bodies) == 1
@@ -504,7 +516,8 @@ def test_remembered_long_output_format_retry_rechecks_remaining_budget(
     import local_llm
     _long_env(monkeypatch, tmp_path, [], True)
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
-    monkeypatch.setattr(semantic_transport, '_probe_format', lambda *a: "object")
+    # a cached "object" verdict, resolved once before any probe could run
+    monkeypatch.setattr(semantic_transport, '_FMT_MODE', "object")
     semantic_transport._long_mark(semantic_transport._long_key(semantic_transport.llm_conf()[1], "synthetic"), 1)
     clock = [0.0]
     monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
@@ -528,6 +541,38 @@ def test_remembered_long_output_format_retry_rechecks_remaining_budget(
         assert calls[1]["response_format"] is None
     assert semantic_transport._long_marks()[semantic_transport._long_key(
         semantic_transport.llm_conf()[1], "synthetic")] == 1
+
+
+@pytest.mark.parametrize("spent,expected_calls", [(51.0, 0), (50.0, 1)])
+def test_first_body_never_leaves_below_the_original_floor(
+        monkeypatch, tmp_path, spent, expected_calls):
+    """The probe's own elapsed time can spend the floor the shared turn
+    was acquired for: below it the first body POST count is zero, at
+    equality it still sends — pinned on a fixed clock."""
+    import local_llm
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(semantic_transport, '_FMT_MODE', None)
+    monkeypatch.setattr(semantic_transport, '_FMT_TS', 0.0)
+    monkeypatch.setattr(semantic_transport, '_long_marks', lambda: {})
+    clock = [0.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    calls = []
+
+    def probe(*args, **kwargs):
+        clock[0] += spent
+        return "object"
+
+    def chat(*args, **kwargs):
+        calls.append(kwargs)
+        return {"status": 200, "text": '{"facts": []}',
+                "finish_reason": "stop"}
+
+    monkeypatch.setattr(semantic_transport, '_probe_format', probe)
+    monkeypatch.setattr(local_llm, "chat", chat)
+    # timeout=100 -> ordinary floor min(60, 100/2) = 50
+    out = semantic_transport.llm_chat("synthetic", timeout=100)
+    assert len(calls) == expected_calls
+    assert out == ('{"facts": []}' if expected_calls else None)
 
 
 @pytest.mark.parametrize("long_ok", [True, False])
@@ -728,7 +773,7 @@ def test_constrained_long_rejection_is_a_retryable_summary_failure(monkeypatch, 
     import local_llm
     _long_env(monkeypatch, tmp_path, [], True)
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
-    monkeypatch.setattr(semantic_transport, '_probe_format', lambda *a: "object")
+    monkeypatch.setattr(semantic_transport, '_FMT_MODE', "object")
     # All generated synthetic summary prompts are remembered as long.
     monkeypatch.setattr(semantic_transport, '_long_marks', lambda: {"synthetic-key": 1})
     monkeypatch.setattr(semantic_transport, '_long_key', lambda *a: "synthetic-key")
@@ -760,7 +805,7 @@ def test_format_persistence_time_is_charged_to_retry_budget(monkeypatch, tmp_pat
     import local_llm
     _long_env(monkeypatch, tmp_path, [], True)
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
-    monkeypatch.setattr(semantic_transport, '_probe_format', lambda *a: "object")
+    monkeypatch.setattr(semantic_transport, '_FMT_MODE', "object")
     semantic_transport._long_mark(semantic_transport._long_key(semantic_transport.llm_conf()[1], "synthetic"), 1)
     clock = [0.0]
     monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
@@ -787,7 +832,7 @@ def test_format_persistence_io_failure_keeps_same_call_fallback(monkeypatch, tmp
     blocked.write_text("synthetic")
     monkeypatch.setattr(semantic_transport, '_FMT_PATH', str(blocked / "format.json"))
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
-    monkeypatch.setattr(semantic_transport, '_probe_format', lambda *a: "object")
+    monkeypatch.setattr(semantic_transport, '_FMT_MODE', "object")
     monkeypatch.setattr(semantic_transport, '_long_marks', lambda: {})
     calls = []
 
@@ -848,12 +893,14 @@ def test_format_mark_retention_is_bounded(monkeypatch, tmp_path):
 @pytest.mark.parametrize("stage", ["probe", "long_marks"])
 def test_format_preflight_cannot_dispatch_after_budget_expires(monkeypatch, stage):
     import local_llm
+    monkeypatch.setattr(semantic_transport, "_FMT_MODE", None)
     clock = [1000.0]
     monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
-    calls = []
+    calls, probes = [], []
 
     def probe(*args):
+        probes.append(1)
         if stage == "probe":
             clock[0] += 4.0
         return "plain"
@@ -867,7 +914,16 @@ def test_format_preflight_cannot_dispatch_after_budget_expires(monkeypatch, stag
     monkeypatch.setattr(semantic_transport, '_long_marks', marks)
     monkeypatch.setattr(local_llm, "chat", lambda *a, **kw: calls.append(kw) or {
         "status": 200, "text": "{}", "finish_reason": "stop"})
-    assert semantic_transport.llm_chat("synthetic expired preflight", timeout=4) is None
+    if stage == "probe":
+        assert semantic_transport.llm_chat("synthetic expired preflight", timeout=4) is None
+        assert semantic_transport.last_llm_failure() == "deadline"
+        assert probes == [1]
+    else:
+        # The remaining budget cannot cover the probe and the first body call.
+        with pytest.raises(semantic_runtime.LLMNotSent) as info:
+            semantic_transport.llm_chat("synthetic expired preflight", timeout=4)
+        assert info.value.stage == "probe_unsent"
+        assert probes == []
     assert calls == []
 
 
@@ -875,6 +931,7 @@ def test_format_preflight_cannot_dispatch_after_budget_expires(monkeypatch, stag
 @pytest.mark.parametrize("stage", ["response", "persistence"])
 def test_format_rejection_cannot_retry_after_budget_expires(monkeypatch, status, stage):
     import local_llm
+    monkeypatch.setattr(semantic_transport, "_FMT_MODE", "object")
     clock = [1000.0]
     monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
@@ -898,6 +955,7 @@ def test_format_rejection_cannot_retry_after_budget_expires(monkeypatch, status,
     assert semantic_transport.llm_chat("synthetic expired format retry", timeout=4) is None
     assert len(calls) == 1
     assert calls[0]["deadline"] == 1004.0
+    assert calls[0]["response_format"] == {"type": "json_object"}
 
 
 @pytest.mark.parametrize("limitations", [0, 1, False, True,
@@ -1064,6 +1122,7 @@ def test_turn_won_with_scraps_of_window_is_busy(tmp_path, monkeypatch):
         return real_flock(fd, operation)
 
     monkeypatch.setattr(local_llm.fcntl, "flock", flock)
+    _format_cached_plain(monkeypatch)
     try:
         with pytest.raises(semantic_runtime.LLMNotSent) as info:
             semantic_transport.llm_chat("synthetic JSON:", timeout=2)
@@ -1074,3 +1133,119 @@ def test_turn_won_with_scraps_of_window_is_busy(tmp_path, monkeypatch):
             timer[0].join()
         else:
             os.close(holder)
+
+
+def test_llm_chat_probe_deadline_reserves_body_floor(monkeypatch):
+    """The probe's deadline stops the body floor short of the call
+    deadline — a 45 s call reserves min(60, 45/2) = 22.5 s for the body."""
+    import local_llm
+    monkeypatch.setattr(semantic_transport, "_FMT_MODE", None)
+    clock = [1000.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    seen = {}
+
+    def probe(endpoint, model, timeout=10, deadline=None, error_out=None):
+        seen["deadline"] = deadline
+        return "plain"
+
+    monkeypatch.setattr(semantic_transport, "_probe_format", probe)
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(local_llm, "chat", lambda *a, **kw: {
+        "status": 200, "text": "{}", "finish_reason": "stop"})
+    assert semantic_transport.llm_chat("p JSON:", timeout=45) == "{}"
+    assert seen["deadline"] == pytest.approx(1000.0 + 45 - 22.5)
+
+
+def test_llm_chat_long_level_reserves_620_and_defers_short(monkeypatch):
+    """A prompt marked for the long ceiling reserves LONG_MIN_CALL_S for
+    the body; a budget below it defers before the probe fires."""
+    import local_llm
+    monkeypatch.setattr(semantic_transport, "_FMT_MODE", None)
+    clock = [1000.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    model = semantic_transport.llm_conf()[1]
+    marks = {semantic_transport._long_key(model, "p JSON:"): 1}
+    monkeypatch.setattr(semantic_transport, "_long_marks", lambda: marks)
+    calls = []
+
+    def probe(endpoint, model_, timeout=10, deadline=None, error_out=None):
+        calls.append(deadline)
+        return "plain"
+
+    monkeypatch.setattr(semantic_transport, "_probe_format", probe)
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(local_llm, "chat", lambda *a, **kw: {
+        "status": 200, "text": "{}", "finish_reason": "stop"})
+    # 700 s leaves 80 s for the probe after the 620 s body floor
+    assert semantic_transport.llm_chat("p JSON:", timeout=700) == "{}"
+    assert calls == [pytest.approx(1000.0 + 700 - 620)]
+    # 600 s cannot fit the long floor — deferred before any probe send
+    calls.clear()
+    with pytest.raises(semantic_runtime.LLMNotSent) as info:
+        semantic_transport.llm_chat("p JSON:", timeout=600)
+    assert info.value.stage == "long_output_needs_budget"
+    assert calls == []
+
+
+@pytest.mark.parametrize("kind,status,stage,failure", [
+    ("unreachable", None, "llm_unreachable", "unreachable"),
+    (None, 503, "llm_unavailable", "unavailable"),
+    ("transport", None, None, "transport"),
+    ("busy", None, "probe_unsent", "probe_unsent"),
+])
+def test_probe_failure_classification(monkeypatch, kind, status, stage, failure):
+    """An unobserved/failed probe keeps its transport evidence: refused
+    connections and 503 stay not-sent defers, a post-send transport death
+    is a model failure, and busy/unsent stays a probe_unsent defer — the
+    body never sends on any of them."""
+    import local_llm
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(semantic_transport, "_FMT_MODE", None)
+    monkeypatch.setattr(semantic_transport, "_FMT_TS", 0.0)
+
+    def probe(endpoint, model, timeout=10, deadline=None, error_out=None):
+        if kind:
+            error_out["kind"] = kind
+        if status:
+            error_out["status"] = status
+        return None
+
+    monkeypatch.setattr(semantic_transport, "_probe_format", probe)
+    monkeypatch.setattr(local_llm, "chat",
+                        lambda *a, **kw: pytest.fail("body sent"))
+    if stage is None:
+        assert semantic_transport.llm_chat("synthetic", timeout=200) is None
+    else:
+        with pytest.raises(semantic_runtime.LLMNotSent) as info:
+            semantic_transport.llm_chat("synthetic", timeout=200)
+        assert info.value.stage == stage
+    assert semantic_transport._LLM_FAILURE == failure
+
+
+def test_format_reject_retry_releases_held_turn(monkeypatch):
+    """The held turn covers probe+first body only: a format-reject retry
+    reacquires through the ordinary per-send path, so the resend runs
+    with no enclosing _OWNED_TURN."""
+    import local_llm
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(semantic_transport, "_FMT_MODE", None)
+    monkeypatch.setattr(semantic_transport, "_FMT_TS", 0.0)
+
+    def probe(endpoint, model, timeout=10, deadline=None, error_out=None):
+        return "object"
+
+    monkeypatch.setattr(semantic_transport, "_probe_format", probe)
+    owned, formats = [], []
+
+    def fake_chat(prompt, **kw):
+        owned.append(local_llm._OWNED_TURN.get())
+        formats.append(kw.get("response_format"))
+        if len(formats) == 1:
+            return {"status": 400, "text": "", "finish_reason": None}
+        return {"status": 200, "text": "{}", "finish_reason": "stop"}
+
+    monkeypatch.setattr(local_llm, "chat", fake_chat)
+    assert semantic_transport.llm_chat("synthetic", timeout=200) == "{}"
+    assert formats == [{"type": "json_object"}, None]
+    assert owned[0] is not None      # first body inside the held turn
+    assert owned[1] is None          # reject retry acquired its own

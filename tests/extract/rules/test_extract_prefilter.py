@@ -1,6 +1,6 @@
 """Low-signal prefilter tests (B1).
 
-Only an exact standalone greeting with no rule findings
+Only a complete standalone greeting or explicitly allowed thanks with no rule findings
 is settled with a durable meta.prefilter='no_signal' marker instead of
 an LLM call — recorded, out of pending, and re-evaluated on edit.
 Synthetic fixtures + temp DB only.
@@ -275,7 +275,7 @@ def test_only_three_complete_greetings_are_skipped(body):
     assert extract_llm._low_signal(body, {"v": 1})
 
 
-@pytest.mark.parametrize("body", ["了解です。", "承知しました。", "ありがとうございます。",
+@pytest.mark.parametrize("body", ["了解です。", "承知しました。", "ありがとうございます。明日伺います。",
                                   "ご飯がうまく飲み込めない。", "口からこぼれる。",
                                   "こんにちは。ご飯がうまく飲み込めない。"])
 def test_replies_and_keyword_free_details_reach_inference(tmp_path, monkeypatch, body):

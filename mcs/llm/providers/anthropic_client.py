@@ -7,7 +7,8 @@ from types import MappingProxyType
 
 import bounded_http
 from cloud_client import CloudClient, CloudError, MAX_TOKENS, SYSTEM  # noqa: F401
-from mcs_util import payload_hash
+from llm_retry import retry_after
+from mcs_util import payload_hash, strict_json
 
 AnthropicError = CloudError
 MODEL = "claude-haiku-5-5"
@@ -26,6 +27,35 @@ PRICES_20261026 = MappingProxyType({"input": "0.1", "output": "0.5", "long_input
     "long_output": "2.5", "cache_write_5m_multiplier": "1.25",
     "cache_write_1h_multiplier": "2", "cache_read_multiplier": "0.1"})
 PRICES = PRICES_20261026
+# 429 body error.details.error_code values that mean a spend limit, not a pause.
+SPEND_LIMIT_ERROR_CODES = frozenset({"enforced_spend_limit_reached"})
+# A 400 invalid_request_error whose message opens with this is the account's usage limit.
+USAGE_LIMIT_400_PREFIX = "You have reached your specified API usage limits"
+# The finite diagnostic a confirmed usage-limit 400 stamps on its result row.
+USAGE_LIMIT_400_DIAGNOSTIC = "usage_limit"
+USAGE_LIMIT_400_DIAGNOSTICS = frozenset({USAGE_LIMIT_400_DIAGNOSTIC})
+
+
+def _spend_limit_429(raw):
+    """The spend-limit error_code of a bounded, well-formed 429 body, else None."""
+    try:
+        error = strict_json(raw.decode("utf-8"))["error"]
+        if error["type"] != "rate_limit_error":
+            return None
+        code = error["details"]["error_code"]
+        return code if code in SPEND_LIMIT_ERROR_CODES else None
+    except (AttributeError, KeyError, TypeError, ValueError, RecursionError, OverflowError):
+        return None
+
+
+def _usage_limit_400(raw):
+    """True only for a bounded, well-formed 400 body that names the account usage limit."""
+    try:
+        error = strict_json(raw.decode("utf-8"))["error"]
+        return (error["type"] == "invalid_request_error" and type(error["message"]) is str
+                and error["message"].startswith(USAGE_LIMIT_400_PREFIX))
+    except (AttributeError, KeyError, TypeError, ValueError, RecursionError, OverflowError):
+        return False
 
 
 # Usage metadata known not to change the price at its listed values; any other
@@ -188,6 +218,22 @@ class AnthropicClient(CloudClient):
             ENDPOINT, method, body, timeout, api_key=self.api_key,
             deadline=deadline, allowed_endpoints=(ENDPOINT,), auth="anthropic",
             max_bytes=max_bytes)
+
+    def response_error(self, status, raw, headers=None):
+        kind, retryable, meta = super().response_error(status, raw, headers)
+        bounded = isinstance(raw, bytes) and len(raw) <= bounded_http.MAX_RESPONSE_BYTES
+        if status == 400 and bounded and _usage_limit_400(raw):
+            # every later call fails until the limit lifts
+            meta["anthropic_400_diagnostic"] = USAGE_LIMIT_400_DIAGNOSTIC
+            return "payment_required", False, meta
+        if status != 429:
+            return kind, retryable, meta
+        code = _spend_limit_429(raw) if bounded else None
+        if code is not None:
+            meta["anthropic_error_code"] = code
+            return "payment_required", False, meta
+        # A 429 without Retry-After is not a short pause: a retry only burns reserved budget.
+        return kind, retryable and retry_after(headers or {}) is not None, meta
 
     def body(self, prompt, max_tokens, cache_prefix):
         content = prompt

@@ -279,7 +279,7 @@ def test_owned_unknown_unit_holds_while_independent_local_proceeds(routed, monke
         if provider is None:
             local.append(body)
             return {}
-        provider.reserve(provider.client.body('synthetic owned input', 100, None), 30)
+        provider.reserve(provider.client.body('synthetic owned input', provider.selection['max_tokens'], None), 30)
         return worker._DEFERRED
     monkeypatch.setattr(worker, 'llm_extract', seed_then_defer)
     monkeypatch.setattr(extract_llm_runner, 'llm_extract', worker.llm_extract)

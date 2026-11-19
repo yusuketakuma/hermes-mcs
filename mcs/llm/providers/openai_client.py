@@ -193,9 +193,9 @@ class OpenAIClient(CloudClient):
             deadline=deadline, allowed_endpoints=(ENDPOINT,), auth="bearer",
             max_bytes=max_bytes)
 
-    def response_error(self, status, raw):
+    def response_error(self, status, raw, headers=None):
         if status != 429:
-            return super().response_error(status, raw)
+            return super().response_error(status, raw, headers)
         error, diagnostic = _error_429(raw)
         if diagnostic is None:
             code, kind = error.get("code"), error.get("type")
@@ -220,7 +220,7 @@ class OpenAIClient(CloudClient):
                     diagnostic = "unknown_type"
                 else:
                     diagnostic = "missing_code"
-        kind, retryable, _ = super().response_error(status, raw)
+        kind, retryable, _ = super().response_error(status, raw, headers)
         return kind, retryable, {"openai_429_diagnostic": diagnostic}
 
     def body(self, prompt, max_tokens, cache_prefix):
@@ -230,6 +230,20 @@ class OpenAIClient(CloudClient):
                 "max_output_tokens": max_tokens, "reasoning": {"effort": self.effort},
                 "store": False, "service_tier": "default",
                 "prompt_cache_options": {"ttl": "30m"}, "tools": []}
+
+    def wire(self, body, cache_prefix):
+        """Mark the fixed head as its own cache block (explicit mode), so a later
+        request that shares the head can read it back. A hit is not guaranteed
+        (short input, duplicate requests, expiry or routing can miss) and the
+        saving is not measured. With no head, no breakpoint is marked."""
+        posted = {**body, "prompt_cache_options": {"mode": "explicit", "ttl": "30m"}}
+        if cache_prefix:
+            content = [{"type": "input_text", "text": cache_prefix,
+                        "prompt_cache_breakpoint": {"mode": "explicit"}}]
+            if body["input"][len(cache_prefix):]:
+                content.append({"type": "input_text", "text": body["input"][len(cache_prefix):]})
+            posted["input"] = [{"role": "user", "content": content}]
+        return posted
 
     def answer(self, obj, meta):
         if not isinstance(obj, dict) or obj.get("model") != self.model:

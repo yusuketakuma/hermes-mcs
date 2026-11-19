@@ -113,13 +113,15 @@ def test_mutating_update_retains_existing_entrypoints(pinned, monkeypatch, phase
         assert argv[1:] == [str(ROOT / "mcs/ops/mcs_update.py"), "rollback"]
 
 
-@pytest.mark.parametrize("route,exit_code", [("apply", 0), ("blocked", 1)])
+@pytest.mark.parametrize("route,blockers,exit_code", [
+    ("apply", [], 0), ("blocked", ["tree_dirty"], 1), ("noop", [], 0),
+    ("noop", ["update_in_progress_or_interrupted"], 1)])
 def test_plan_uses_target_bootstrap_without_fetch_or_live_writes(
-        pinned, monkeypatch, tmp_path, capsys, route, exit_code):
+        pinned, monkeypatch, tmp_path, capsys, route, blockers, exit_code):
     monkeypatch.setattr(mcs_cli, 'load_config', lambda: {'runtime_mode': 'hermes'})
     repo, bare = _make_repo(tmp_path)
     stub = ("import json,os,sys\nprint(json.dumps("
-            f"{{'route':{route!r},'argv':sys.argv[1:],"
+            f"{{'route':{route!r},'blockers':{blockers!r},'argv':sys.argv[1:],"
             "'repo':os.environ['MCS_UPDATE_REPO']}))\n")
     _release(tmp_path / "remote-work", bare, "v1.2.0",
              {"mcs/ops/mcs_update.py": stub, "mcs/_mcs_path.py": ""})
@@ -289,6 +291,17 @@ def test_bootstrap_help_and_invalid_command_are_japanese(tmp_path):
                                 env=env, capture_output=True, text=True, timeout=10)
         assert result.returncode == code
         assert expected in result.stdout + result.stderr
+
+
+def test_bootstrap_missing_python_keeps_established_runtime_for_recovery(tmp_path):
+    env = dict(os.environ, HOME=str(tmp_path), MCS_ROOT=str(tmp_path / "root"))
+    result = subprocess.run(["/bin/sh", str(ROOT / "scripts/mcs"), "setup"],
+                            env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 1
+    output = result.stdout + result.stderr
+    assert "実行に必要なPythonが見つかりません" in output
+    assert "担当者に復旧を依頼" in output
+    assert "venv.broken" not in output and "退避手順" not in output
 
 
 def test_cli_update_help_is_japanese(pinned, capsys):

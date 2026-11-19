@@ -195,6 +195,7 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
         else:
             v2_doc = v2_result["doc"]
             from semantic_extraction import FACTS_V2_BUILD
+            from semantic_relations import RELATION_RULE
             doc_build = FACTS_V2_BUILD
             meta = {VERSION_KEY: CURRENT_VERSION, "fingerprint": fp,
                     "policy_fingerprint": policy,
@@ -207,6 +208,7 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
                         v2_doc["coverage"]
                         ["open_obligation_ids"]),
                     "build": FACTS_V2_BUILD,
+                    "relation_rule": RELATION_RULE,
                     # newly normalised this run (reused chunks excluded)
                     "null_contexts_omitted":
                         v2_result.get("null_contexts_omitted", 0)}
@@ -397,6 +399,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                             "s3_repair", "reserved",
                             doc_hash=doc_hash)
             from semantic_extraction import repair_facts_v2
+            from semantic_relations import RELATION_RULE
             sent, answers = [], []
 
             def repair_llm(prompt):
@@ -489,6 +492,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                           "schema": SCHEMA_VERSION,
                           "fact_source": fact_source,
                           "repaired": True,
+                          "relation_rule": RELATION_RULE,
                           **({'repair_artifact_id': completed_id} if evidence is not None else {}),
                           "coverage_status":
                               v2_doc["coverage"]["status"],
