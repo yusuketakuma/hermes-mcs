@@ -541,7 +541,7 @@ def test_pinned_slot_busy_never_peeks_under_admission(monkeypatch):
 def test_backfill_tail_survives_a_completed_deep_import(tmp_path):
     db = _ledger(tmp_path)
     db.ensure_patient(1)
-    db.save_messages([_message(mid=100)])
+    db.save_messages([_message(mid=100, posted_at="2026-09-19T00:00:00+09:00")])
     db.set_history_floor(1, 0)
     db.set_coverage(1, db.high_watermark(1))
     result = {"errors": [], "backfilled": 0}
@@ -563,7 +563,7 @@ def test_backfill_deferred_certification_is_not_an_error(tmp_path):
     — with lag=0 nothing is suspected missing, hence no error/gap."""
     db = _ledger(tmp_path)
     db.ensure_patient(1)
-    db.save_messages([_message(mid=100)])
+    db.save_messages([_message(mid=100, posted_at="2026-09-19T00:00:00+09:00")])
     db.set_history_floor(1, 0)
     db.set_coverage(1, db.high_watermark(1))
     result = {"errors": [], "backfilled": 0}
