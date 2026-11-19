@@ -1,6 +1,7 @@
 """Validate source-grounded extraction fields and merge document chunks without I/O."""
 import clinical_scope
 import clinical_events
+import clinical_allergies
 import json
 import math
 import re
@@ -13,6 +14,29 @@ from patient_context import CATEGORIES, context_items
 from mcs_util import fold_map, locate_quote_span
 
 _VITAL_KEYS = {"bt", "hr", "rr", "sbp", "dbp", "spo2", "bs"}
+
+# A clause naming a medication the model did not list still bounds one
+# drug's attribute region: the name carries a drug morpheme and stands
+# in subject/object position (は/が/を/の). Tokens that merely end in a
+# person/place noun (薬剤師・薬局・医薬品…) never qualify.
+_OTHER_MED_MENTION = re.compile(
+    r"[一-龠々ァ-ヶーA-Za-z0-9]{0,15}"
+    r"(?:薬|剤|錠|カプセル|坐薬|注射|点眼|テープ|軟膏|貼付剤|散剤|"
+    r"内服薬|経口薬|外用薬|吸入薬|坐剤|ドリンク|ゼリー|ローション|クリーム|"
+    r"トローチ|目薬|うがい薬|浣腸|膣錠|腟錠|塗り薬|飲み薬|注射薬|貼付|吸入)"
+    r"[一-龠々ァ-ヶーA-Za-z0-9]{0,15}(?=[はがをのも])")
+_OTHER_MED_NONDRUG_END = re.compile(r"[師局品袋缶味箱代瓶器店価]$")
+# Katakana or alphanumeric drug names carry no drug morpheme
+# (テストミン・ワルファリン), so a name-shaped token in
+# subject/object position bounds the region the same way.
+_OTHER_MED_KATAKANA = re.compile(r"[ァ-ヶーA-Za-z0-9]{3,16}(?=[はがをのも])")
+# A bare dose count (3錠) or a generic form word (内服薬・坐薬) names no
+# particular drug, so it never bounds an attribute region either.
+_OTHER_MED_GENERIC = re.compile(
+    r"(?:[0-9０-９.]+(?:錠|包|カプセル|錠剤)?|"
+    r"薬|剤|錠|カプセル|坐薬|注射|点眼|テープ|軟膏|貼付剤|散剤|内服薬|経口薬|"
+    r"外用薬|吸入薬|坐剤|ドリンク|ゼリー|ローション|クリーム|トローチ|目薬|"
+    r"うがい薬|浣腸|膣錠|腟錠|塗り薬|飲み薬|注射薬|貼付|吸入)")
 
 
 # Deterministic vital-sign thresholds, active only when the config
@@ -290,10 +314,12 @@ def validate(d: dict, body: str | None = None,
         v.meds(d, out)
         v.symptoms(d, out)
         v.labs(d, out)
+        v.allergies(d, out)
         v.events(d, out)
         v.requests(d, out)
         v.patient_context(d, out)
         v.reply(d, out)
+        v.vital_readings(d, out)
         v.vitals(d, out)
         v.scalars(d, out)
         if v.ev_dropped:
@@ -458,6 +484,8 @@ class Validator:
         self.flat = flat_text(body) if body is not None else None
         self.ev_dropped = 0
         self.items_dropped = 0
+        self.vital_reading_candidates = {}
+        self.med_claimed_names = set()
 
     def grounded(self, text) -> bool:
         """True when text occurs in the body after NFKC + whitespace
@@ -540,6 +568,66 @@ class Validator:
         if self.drops is not None and len(self.drops.setdefault("reasons", [])) < 5:
             self.drops["reasons"].append(reason)
 
+    def _clause_names_sibling_medication(self, clause, target, med_names=()) -> bool:
+        """True when a clause names a drug other than the target.
+
+        The model may list only one of several drugs sharing a sentence;
+        a medication-shaped name in subject/object position still ends
+        the attribute region so a sibling's wording never attaches.
+        """
+        target_flat = flat_text(target)
+        folded = flat_text(clause)
+        for name in med_names:
+            claimed = flat_text(name) if name else ""
+            if claimed and claimed != target_flat and claimed in folded:
+                return True
+        for match in _OTHER_MED_MENTION.finditer(clause):
+            name = match[0]
+            if (_OTHER_MED_NONDRUG_END.search(name)
+                    or _OTHER_MED_GENERIC.fullmatch(name)
+                    or flat_text(name) == target_flat):
+                continue
+            return True
+        for match in _OTHER_MED_KATAKANA.finditer(clause):
+            if flat_text(match[0]) != target_flat:
+                return True
+        return False
+
+    def _med_attribute_region(self, item, assertion, med_names) -> str:
+        """Source text bounding one drug's own attribute wording.
+
+        From the clause holding the drug name through the following
+        clauses of the same quote, stopping before the first clause that
+        names any medication — a sibling drug's timing never attaches.
+        """
+        quote_span = locate_quote_span(self.body, item.get("evidence"))
+        if quote_span is None:
+            return ""
+        start = assertion[1]
+        left = max(self.body.rfind(mark, 0, start)
+                   for mark in "。！？!?;；\n") + 1
+        left = max(left, quote_span[0])
+        # An earlier 、-segment of the same sentence may belong to a
+        # sibling drug (合成薬GHは朝食前、合成薬IJは就寝前…): when it
+        # names another medication the region starts at this drug's own
+        # segment so the sibling's wording never attaches from behind.
+        seg = max(left, max(self.body.rfind(mark, left, start)
+                            for mark in "、,，") + 1)
+        if seg > left and self._clause_names_sibling_medication(
+                self.body[left:seg], item["name"], med_names):
+            left = seg
+        right, pos, limit = min(assertion[3], quote_span[1]), assertion[3], quote_span[1]
+        while pos < limit:
+            stop = re.search(r"[。！？!?;；\n]", self.body[pos:limit])
+            clause_end = pos + stop.start() if stop else limit
+            clause = self.body[pos:clause_end]
+            if (any(name and flat_text(name) in flat_text(clause) for name in med_names)
+                    or self._clause_names_sibling_medication(clause, item["name"], med_names)):
+                break
+            right = clause_end + (1 if stop else 0)
+            pos = right
+        return self.body[left:right]
+
     def medication_continuation(self, item, assertion):
         """Prove one positive current medication continuation inside a complete quoted sentence."""
         quote = item.get("evidence")
@@ -591,8 +679,12 @@ class Validator:
             self.uncertain(item, "negated")
         if symptom:
             resolved = clinical_scope.source_resolution(self.body, start, assertion_end, target_end=end)
-            continuing = re.search(r"持続|続いて|残って", tail)
+            continuing = clinical_scope.target_continuing(self.body, end, assertion_end)
             if status in ("new", "ongoing") and resolved is True:
+                self.uncertain(item, "status")
+            elif (status == "past" and period == "current" and polarity is False and resolved is None
+                  and clinical_scope.source_current(self.body, start, end, assertion_end)):
+                # An explicitly current, present, unresolved assertion of the same owner contradicts "past".
                 self.uncertain(item, "status")
             elif status == "resolved" and (continuing or resolved is not True):
                 self.uncertain(item, "status")
@@ -642,6 +734,17 @@ class Validator:
             return None
         v = str(v).strip().lower()
         return v if v in allowed else False
+
+    def allergies(self, d: dict, out: dict):
+        if "allergies" not in d:
+            return
+        if not isinstance(d["allergies"], list):
+            self.drop_item("allergies")
+            return
+        items, dropped = clinical_allergies.validate_items(
+            d["allergies"], self.body, self.drops, ctx=self.ctx)
+        out["allergies"] = items
+        self.items_dropped += dropped
 
     def patient_context(self, d: dict, out: dict):
         if "patient_context" not in d:
@@ -707,6 +810,8 @@ class Validator:
             self.drop_item("meds")
             return
         meds = []
+        med_names = [x["name"] for x in d["meds"]
+                     if isinstance(x, dict) and isinstance(x.get("name"), str)]
         for index, m in enumerate(d["meds"]):
             st = self.enum(m, "status", _MED_STATUSES) \
                 if isinstance(m, dict) else False
@@ -801,6 +906,20 @@ class Validator:
                     item["unverified"] = True
                 else:
                     self.identity_attributes(item, assertion)
+                    # form/timing/days/period survive only as the source's
+                    # own wording inside this drug's attribute region —
+                    # its name clause plus following clauses up to the
+                    # next clause naming a drug; anything else is dropped
+                    # while the medication item remains.
+                    region = self._med_attribute_region(item, assertion, med_names)
+                    for key in ("form", "timing", "days", "period"):
+                        raw = m.get(key)
+                        if raw is None:
+                            continue
+                        value = _clean_text(raw, 30)
+                        if value and clinical_values.medication_attribute_supported(
+                                key, value, region, surface=item["name"]):
+                            item[key] = value
                     continuation = self.medication_continuation(item, assertion)
                     if continuation is not None:
                         for key, supported in continuation.items():
@@ -842,6 +961,12 @@ class Validator:
                             self.uncertain(item, "negated")
             item["normalized"] = clinical_values.medication_surface(item["name"])
             meds.append(item)
+        for item in meds:
+            self.med_claimed_names.add(clinical_values.fold_surface(item["name"]))
+            for key in ("surface", "base"):
+                value = (item.get("normalized") or {}).get(key)
+                if isinstance(value, str):
+                    self.med_claimed_names.add(value)
         out["meds"] = meds
 
     def symptoms(self, d: dict, out: dict):
@@ -948,11 +1073,16 @@ class Validator:
                 else:
                     self.drop_item("labs." + key)
                     item["unverified"] = True
+            if self._family_bp(item, subject):
+                self.drop_item("labs")
+                continue
             item["normalized"] = clinical_values.lab_candidate(
                 item["name"], item["value"], item.get("unit"),
                 item.get("evidence"), unverified=(
                     item.get("unverified", False)
-                    or lb.get("unverified", False) is not False),
+                    or lb.get("unverified", False) is not False
+                    or clinical_values.fold_surface(item["name"])
+                    in self.med_claimed_names),
                 flag=item.get("flag"), subject=subject, status=status,
                 measured_on=item.get("measured_on"), condition=item.get("condition"))
             if item["normalized"]["confirmation"] == "unverified":
@@ -963,6 +1093,17 @@ class Validator:
                         notes.append(f"labs.{item['name']} の値・単位・根拠を確認できません")
             labs.append(item)
         out["labs"] = labs
+
+    def _family_bp(self, item: dict, subject) -> bool:
+        """A blood-pressure reading belongs to vitals, never labs — and a
+        family member's reading belongs to neither."""
+        name = clinical_values.fold_surface(item["name"])
+        if clinical_values._VITAL_LABELS["bp"].search(name) is None:
+            return False
+        if subject == "family":
+            return True
+        return clinical_values.patient_item_scope(
+            item, self.body, surface=item["name"], default="unknown") == "family"
 
     def events(self, d: dict, out: dict):
         if 'events' not in d and 'event_records' not in d:
@@ -1075,23 +1216,133 @@ class Validator:
         else:
             self.drop_item("reply")
 
+    def vital_readings(self, d: dict, out: dict):
+        """labs-style vital readings -> the legacy vitals dict.
+
+        Each value must sit inside its own evidence quote at a span the
+        measurement axes call the patient's current reading; duplicates
+        of one measurement collapse and conflicting values drop that
+        key. The readings themselves are never saved and never enter
+        labs."""
+        if "vital_readings" not in d:
+            return
+        readings = d["vital_readings"]
+        if not isinstance(readings, list):
+            self.drop_item("vital_readings")
+            return
+        found, conflicts = {}, set()
+        for item in readings:
+            for key, val in self._vital_reading_values(item):
+                if key in conflicts:
+                    continue
+                if key in found and found[key] != val:
+                    del found[key]
+                    conflicts.add(key)
+                else:
+                    found[key] = val
+        self.vital_reading_candidates = found
+
+    def _vital_reading_values(self, item) -> list:
+        """(vital key, value) pairs one vital_readings item proves."""
+        if not (isinstance(item, dict) and self.body is not None
+                and isinstance(item.get("name"), str) and item["name"].strip()
+                and isinstance(item.get("evidence"), str)
+                and item["evidence"].strip()):
+            self.drop_item("vital_readings")
+            return []
+        span = locate_quote_span(self.body, item["evidence"])
+        if span is None:
+            self.drop_item("vital_readings")
+            return []
+        quote = self.body[span[0]:span[1]]
+        classes = [cls for cls, rx in clinical_values._VITAL_LABELS.items()
+                   if rx.search(clinical_values.fold_surface(item["name"]))]
+        if len(classes) != 1:
+            self.drop_item("vital_readings")
+            return []
+        cls = classes[0]
+        raw = item.get("value")
+        if type(raw) in (int, float):
+            numbers = [float(raw)]
+        elif isinstance(raw, str):
+            numbers = [float(n.replace("．", "."))
+                       for n in re.findall(r"\d+(?:[.．]\d+)?", raw)]
+        else:
+            numbers = []
+        numbers = [n for n in numbers if math.isfinite(n)]
+        if cls == "bp":
+            if len(numbers) == 2 and "/" in raw.replace("／", "/"):
+                pairs = [("sbp", numbers[0]), ("dbp", numbers[1])]
+            elif len(numbers) == 1:
+                pairs = [(None, numbers[0])]
+            else:
+                self.drop_item("vital_readings")
+                return []
+        else:
+            if len(numbers) != 1:
+                self.drop_item("vital_readings")
+                return []
+            pairs = [(cls, numbers[0])]
+        # Each number must occur inside the quote at a span the
+        # measurement axes call the patient's current reading.
+        used = set()
+        out = []
+        for key_hint, val in pairs:
+            hit = None
+            for m in re.finditer(r"\d+(?:[.．]\d+)?", quote):
+                if m.start() in used \
+                        or float(m[0].replace("．", ".")) != val:
+                    continue
+                bs, be = span[0] + m.start(), span[0] + m.end()
+                if clinical_scope.patient_source_scope(
+                        self.body, bs, be, measurement=True) != "patient":
+                    continue
+                hit = (bs, be)
+                break
+            if hit is None:
+                continue
+            used.add(hit[0] - span[0])
+            bs, be = hit
+            if key_hint is None:
+                # A lone blood-pressure number takes its side from the
+                # slash position in the source, never from the values.
+                if self.body[be:be + 1] in ("/", "／"):
+                    key_hint = "sbp"
+                elif self.body[bs - 1:bs] in ("/", "／"):
+                    key_hint = "dbp"
+                else:
+                    continue
+            out.append((key_hint, val))
+        return out
+
     def vitals(self, d: dict, out: dict):
-        if "vitals" not in d:
+        if "vitals" not in d and not self.vital_reading_candidates:
             return
-        v = d["vitals"]
-        if not isinstance(v, dict):
+        v = d.get("vitals")
+        if v is not None and not isinstance(v, dict):
             self.drop_item("vitals")
-            return
+            v = None
         vit = {}
-        for k in _VITAL_KEYS:
-            val = v.get(k)
-            if val is None:
+        if isinstance(v, dict):
+            for k in _VITAL_KEYS:
+                val = v.get(k)
+                if val is None:
+                    continue
+                if type(val) not in (int, float) \
+                        or not -1e308 <= val <= 1e308:
+                    self.drop_item("vitals")
+                    continue
+                vit[k] = float(val)
+        blocked = set()
+        for k, val in self.vital_reading_candidates.items():
+            if k in blocked:
                 continue
-            if type(val) not in (int, float) \
-                    or not -1e308 <= val <= 1e308:
-                self.drop_item("vitals")
-                continue
-            vit[k] = float(val)
+            if k in vit:
+                if vit[k] != val:
+                    vit.pop(k)
+                    blocked.add(k)
+            else:
+                vit[k] = val
         if vit and self.body is not None:
             vit = clinical_values.grounded_vitals(self.body, vit, self.drops)
         if vit:
@@ -1206,6 +1457,16 @@ def merge(outs: list[dict]) -> dict:
             if key not in seen_labs:
                 seen_labs.add(key)
                 out.setdefault("labs", []).append(lab)
+        if isinstance(d.get("allergies"), list):
+            allergies = out.setdefault("allergies", [])
+            for item in d["allergies"]:
+                for index, prior in enumerate(allergies):
+                    if clinical_allergies.same_assertion(prior, item):
+                        if not prior.get("reaction") and item.get("reaction"):
+                            allergies[index] = item
+                        break
+                else:
+                    allergies.append(item)
         for rq in d.get("requests") or []:
             # condition/due_text change what is asked: two chunks'
             # requests differing only there are distinct, never merged

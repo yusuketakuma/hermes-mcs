@@ -97,12 +97,18 @@ def _rollback_applying(entry, prev_sha, command_id) -> dict:
         "sha": entry["prev_sha"],
         "prev_sha": prev_sha,
         "rollback": True,
+        # Every writer of this record persists restore_incomplete before any
+        # tree, runtime or DB change; older records may not, so recovery must
+        # not read a missing freeze as "nothing changed" without this flag.
+        "hold_before_change": True,
         "plugin_changed": entry.get("plugin_changed"),
         "schema_bump": entry.get("schema_bump"),
         "backup_path": entry.get("backup_path"),
         "manifest_snapshot": entry.get("manifest_snapshot"),
         **({"runtime_migration": entry["runtime_migration"]}
            if entry.get("runtime_migration") else {}),
+        **({"reinstall_started": False}
+           if entry.get("reinstall_started") is False and not entry.get("reinstall_done") else {}),
         **({"target_kind": "release"} if entry.get('target_kind') == 'release' else {}),
         **({"release_ref": entry["release_ref"]} if "release_ref" in entry else {}),
         "command_id": command_id,
@@ -142,9 +148,26 @@ def _rollback_backup_error(entry: dict) -> str | None:
     path = entry.get("backup_path")
     if not isinstance(path, str) or not path.strip():
         return "backup_invalid: missing or invalid backup path"
+    if _adopted_marker():
+        return "restore_marker_adopted"
     if ledger.valid_mcs_db(path):
         return None
     return "backup_invalid: " + path
+
+
+def _adopted_marker() -> bool:
+    """The backup-adoption marker stands. Its bytes and inode are bound by
+    writers_resumed, so an update restore must never rewrite it."""
+    marker = notify_spool.restore_pending(DATA)
+    return bool(marker) and marker.get("by") == "mcs_backup_restore"
+
+
+def _restore_entered(state: dict) -> bool:
+    """A DB restore already began: a consent record, or a restore marker that is
+    not the backup-adoption marker (an unreadable one counts, fail closed)."""
+    marker = notify_spool.restore_pending(DATA)
+    return bool(state.get("restore_consent")) or (
+        marker is not None and marker.get("by") != "mcs_backup_restore")
 
 
 def _target_card_layout(ref: str) -> int:
@@ -220,6 +243,8 @@ def _rollback_tree(entry: dict, on_hold=None, *, expected_rollback=None) -> None
     backup_path = entry.get("backup_path")
     if entry.get("schema_bump") and (not isinstance(backup_path, str) or not backup_path.strip()):
         raise UpdateError("backup_invalid: missing or invalid backup path")
+    if entry.get("schema_bump") and _adopted_marker():
+        raise UpdateError("restore_marker_adopted")   # before any tree change
     if expected_rollback is not None:
         _fresh_rollback_state(expected_rollback)
     _provider_rollback_preflight(prev)
@@ -237,6 +262,12 @@ def _rollback_tree(entry: dict, on_hold=None, *, expected_rollback=None) -> None
     _git_out(["reset", "--hard", prev])
     if _head_sha() != prev or not _tree_clean():
         raise UpdateError("rollback_verify_failed")
+    if entry.get("reinstall"):
+        # install.sh may have replaced these even when it failed; only install.sh places them.
+        # A closed or full stdout must not cut the rollback short before the DB restore.
+        with suppress(OSError, ValueError):
+            print("再導入で入れ替えたローカルAIの起動設定と復旧ツールは元に戻していません。"
+                  "更新前の版で ./install.sh --no-services を再実行してください")
     if entry.get("schema_bump") and entry.get("backup_path"):
         expected = expected_rollback
         _restore_db(entry["backup_path"], on_hold=on_hold)
@@ -472,6 +503,10 @@ def _restore_db(backup_path: str, on_hold=None) -> None:
     marker = notify_spool.restore_pending(DATA)
     if marker and marker.get("unreadable"):
         raise UpdateError("restore_marker_unreadable")
+    if marker and marker.get("by") == "mcs_backup_restore":
+        # Rewriting the adoption marker would revoke writers_resumed for good
+        # (it binds the marker's bytes and inode); a human decides instead.
+        raise UpdateError("restore_marker_adopted")
     if not ledger.valid_mcs_db(backup_path):
         raise UpdateError("backup_invalid: " + backup_path)
     live_ver = restore_evidence.database_version(LEDGER)

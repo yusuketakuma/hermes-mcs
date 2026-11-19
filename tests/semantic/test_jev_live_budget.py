@@ -88,14 +88,29 @@ def test_retries_reserve_each_http_and_preserve_unknown_attempt(home):
     (home / "config.json").write_text(json.dumps({"semantic": {"daily_request_budget": 2}}))
     sent = []
 
-    def fail(*args):
+    def refused(*args):
         sent.append(1)
-        raise OSError("synthetic lost response")
+        raise ConnectionRefusedError("synthetic refusal before dispatch")
 
-    with jev.live_client("synthetic", operation="semantic_bench", root=str(home), post_fn=fail) as client:
+    with jev.live_client("synthetic", operation="semantic_bench", root=str(home), post_fn=refused) as client:
         with pytest.raises(jev.JevError, match="budget_exceeded"):
             _evaluate(client)
     assert len(sent) == 2 and _used(home) == 2
+
+
+def test_lost_response_is_not_resent_and_keeps_its_reservation(home):
+    (home / "config.json").write_text(json.dumps({"semantic": {"daily_request_budget": 2}}))
+    sent = []
+
+    def lost(*args):
+        sent.append(1)
+        raise OSError("synthetic lost response")
+
+    with jev.live_client("synthetic", operation="semantic_bench", root=str(home), post_fn=lost) as client:
+        with pytest.raises(jev.JevError, match="transport") as raised:
+            _evaluate(client)
+    assert raised.value.retryable is False
+    assert len(sent) == 1 and _used(home) == 1
 
 
 def test_models_get_consumes_same_shared_reservation(home, monkeypatch):
@@ -307,12 +322,14 @@ def test_lowered_budget_is_read_before_each_request_in_same_live_scope(home):
     assert sent == [1] and _used(home) == 1
 
 
-def test_update_between_retries_preserves_first_unknown_reservation(home):
+def test_update_between_retries_preserves_first_reservation(home):
+    # Only a provably unsent attempt is retried; a lost response is never resent
+    # (test_lost_response_is_not_resent_and_keeps_its_reservation).
     sent = []
     def failed_post(*args):
         sent.append(1)
         (home / "data" / "update_in_progress.marker").write_text("synthetic")
-        raise OSError("synthetic_lost_response")
+        raise ConnectionRefusedError("synthetic_refused_before_dispatch")
     with jev.live_client("synthetic", operation="semantic_bench", root=str(home), post_fn=failed_post) as client:
         with pytest.raises(jev.JevError, match="budget_exceeded") as error:
             _evaluate(client)

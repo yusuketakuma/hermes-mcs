@@ -165,9 +165,9 @@ def _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread, requ
         row = {"kind": rq.get("kind"), "ctx": rq.get("ctx"),
                "at": m["posted_at"], "mid": m["message_id"]}
         requests.append(row)
-        # Full patient views also check replies to rule-only requests;
-        # the ordinary saved rollup retains its historical LLM-only scan.
-        if request_limit is None:
+        # Rule-only requests share the LLM rows' reply scan and cap, so an
+        # unevaluated thread reply is never shown as 記録なし.
+        if request_limit is None or len(requests) <= request_limit:
             req_thread.append((row, root, ts, sender_id))
     # negated/speculative/ungrounded requests stay flagged for the
     # readers; any flag other than a literal False fails closed
@@ -246,8 +246,9 @@ def _measurement_source_bound(db, m, kind, cfg, *, artifact_ref=_no_artifact_fen
         model = meta.get("actual_model")
         source = db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=?",
                             (m["project_id"], m["message_id"])).fetchone()
+        # The local model may change without invalidating a stored extraction.
         return (isinstance(model, str) and bool(model) and model == row["model"]
-                and model == expected_model
+                and isinstance(expected_model, str) and bool(expected_model)
                 and meta["source_binding"] == dependency_loss.source_binding(db, m["project_id"], m["message_id"])
                 and source is not None
                 and extract_llm.progress_for_message(db, source, model=model).get("state") == "complete")
@@ -380,16 +381,20 @@ def _measurement_source_page(db, page, kinds, refs, expected_model):
             continue
         meta = loads_dict(artifact['meta'])
         if (not isinstance(meta, dict) or not isinstance(meta.get('source_binding'), str)
-                or meta.get('actual_model') != expected_model or artifact['model'] != expected_model):
+                or not isinstance(meta.get('actual_model'), str) or not meta['actual_model']
+                or artifact['model'] != meta['actual_model']):
             continue
-        candidates.append((i, row, meta['source_binding']))
+        candidates.append((i, row, meta['source_binding'], meta['actual_model']))
     bindings = dependency_loss.source_bindings(
-        db, [(row['project_id'], row['message_id']) for _, row, _ in candidates])
-    ready = [(i, row) for (i, row, expected), actual in zip(candidates, bindings)
-             if expected == actual]
-    if ready:
-        progress = extract_llm.progress_for_messages(db, [row for _, row in ready], model=expected_model)
-        for (i, _), state in zip(ready, progress):
+        db, [(row['project_id'], row['message_id']) for _, row, _, _ in candidates])
+    # A stored extraction keeps the model it was made with (same as the single-row path).
+    ready = {}
+    for (i, row, expected, model), actual in zip(candidates, bindings):
+        if expected == actual:
+            ready.setdefault(model, []).append((i, row))
+    for model, items in ready.items():
+        progress = extract_llm.progress_for_messages(db, [row for _, row in items], model=model)
+        for (i, _), state in zip(items, progress):
             result[i] = state.get('state') == 'complete'
     return result
 
@@ -493,7 +498,7 @@ def _noncurrent_vital_reference(body, values):
 
 
 def _match_request_replies(db, project_id, req_thread, requests, messages, now, *, cfg=None):
-    """Annotate only uniquely matched requests with current Loop relation evidence."""
+    """Annotate uniquely matched requests with current Loop relation evidence, and mark unevaluable replies."""
     from request_loops import effective_loop_states, latest_policy
     import semantic_jev as jev
 
@@ -509,11 +514,9 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now, 
     wanted = {(row["mid"], row["ctx"]) for row, _root, _ts, sender in req_thread
               if isinstance(row.get("ctx"), str) and sender is not None
               and counts[(row["mid"], row["ctx"])] == 1}
-    if not wanted:
-        return
     candidates = {}
     policy = latest_policy(db)
-    sources = db.execute(
+    sources = [] if not wanted else db.execute(
         "SELECT artifact_id,project_id,message_id,content,meta FROM artifacts a "
         "WHERE kind='loop_candidate' AND project_id=? AND EXISTS ("
         "SELECT 1 FROM json_each(?) requested WHERE "
@@ -526,21 +529,38 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now, 
         key = (source_mids[loop["artifact_id"]], loop["description"])
         candidates.setdefault(key, []).append(loop)
     by_id = {m["message_id"]: m for m in messages}
+    threads = {}
+    for m in messages:
+        threads.setdefault(m["parent_id"] or m["message_id"], []).append(m)
     for row, root, ts, sender in req_thread:
         if not isinstance(row.get("ctx"), str):
             continue
         key = (row["mid"], row["ctx"])
         matched = candidates.get(key, [])
+        # Later posts by someone else in the thread: the replies a relation evaluation must cover.
+        later = {m["message_id"] for m in threads.get(root, ())
+                 if m["message_id"] != row["mid"] and m["body_state"] != "deleted"
+                 and m["posted_at_ts"] is not None and 0 < ts < m["posted_at_ts"] <= now
+                 and (sender is None or normalize_sender_id(m["sender_id"]) != sender)}
         if sender is None or counts[key] != 1 or len(matched) != 1:
+            if later:  # replies exist but none could be matched to this request
+                row["reply_evaluation"] = "unavailable"
+                row["reply_evaluation_unavailable"] = len(later)
             continue
         seen = []
         reply_events = []
+        # Only a current, valid, conclusive relation evaluation covers a
+        # trigger: unclear, stale or invalid evidence leaves the reply
+        # unevaluated. `unrelated` evaluations are hidden from
+        # relation_events; request_loops exposes their current trigger ids
+        # on the candidate so no per-request query is needed.
+        evaluated = set(matched[0].get("unrelated_trigger_ids") or ())
         for event in matched[0]["relation_events"]:
             relation = event.get("relation")
             kind = kinds.get(relation) if isinstance(relation, str) else None
             trigger = by_id.get(event.get("trigger_message_id"))
             confidence = jev.finite_value(event.get("confidence"))
-            if (not kind or event.get("stale") or not trigger
+            if (event.get("stale") or relation == "unclear" or not trigger
                     or type(event.get("loop_artifact_id")) is not int
                     or event["loop_artifact_id"] != matched[0]["artifact_id"]
                     or not isinstance(event.get("trigger_revision"), str)
@@ -551,6 +571,9 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now, 
                     or event["reported_relation"] != relation
                     or trigger["body_state"] not in (None, "full")
                     or (trigger["parent_id"] or trigger["message_id"]) != root):
+                continue
+            evaluated.add(event.get("trigger_message_id"))
+            if not kind:
                 continue
             other = normalize_sender_id(trigger["sender_id"])
             at = trigger["posted_at_ts"]
@@ -573,6 +596,59 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now, 
             row["reply_state"] = max((kind for _, kind in seen), key=_REPLY_STAGE.get)
             if {kind for _, kind in seen} >= {"done", "cancel"}:
                 row["reply_conflict"] = True
+        elif later - evaluated:
+            # not yet evaluated, rejected or stale: unknown, not "no reply"
+            row["reply_evaluation"] = "unavailable"
+            row["reply_evaluation_unavailable"] = len(later - evaluated)
+
+
+_NEGATED_CANCEL = re.compile(r"(?:で|に|と)?(?:は|も)?(?:なら|あり|し|なり|され)?(?:ない|なく|ません|ず)|(?:では|じゃ)")
+
+# A predicate that already ended a clause before a comma marks a different
+# matter: 「9/15の測定値は正常です、訪問は9/22に延期」 does not move the 9/15 visit.
+_CLAUSE_PREDICATE_COMMA = re.compile(
+    r"(?:です|ます|した|だ|である|いる|ある|なる|おく|もらう|あげる|くれる|"
+    r"ください|ましょう|ません|ない|ぬ|んだ|のだ|という|ました|でした|"
+    r"ませんでした|なかった|でない|じゃない|でしょう|だろう|はず|べき|たい|"
+    r"らしい|ようだ|みたい)[ \t　]*[、,]")
+
+
+def _cancelled_visit_dates(body, patient_name=None):
+    """Visit dates this post marks cancelled, postponed or undecided: (month, day) or ISO when a year is written."""
+    from extract import _NEXT_CANCELLED  # shortcut: reuses the rule extractor's cancel cue without a RULE_VERSION bump
+    out, previous = set(), None
+    for match in re.finditer(r"(?<!\d)(?:(\d{4})[-－/／年])?(\d{1,2})[-－/／月](\d{1,2})(?!\d)日?", body):
+        year, month, day = (int(v) if v else None for v in match.groups())
+        try:
+            parsed = date(year if year is not None else 2000, month, day)
+        except ValueError:
+            key = None
+        else:
+            key = parsed.isoformat() if year is not None else (month, day)
+        after = body[match.end():]
+        postponed = re.match(r"[ \t　]*[にへ][ \t　]*延期", after)
+        if postponed is not None:
+            # 「AはBに延期」: B is the new date; A, earlier in the same clause, is the cancelled one
+            middle = body[previous[2]:match.start()] if previous is not None else ""
+            if (previous is not None and key is not None
+                    and not re.search(r"[。！？!?\n]", middle)
+                    and not _CLAUSE_PREDICATE_COMMA.search(middle)):
+                tail = after[postponed.end():]
+                scope = clinical_scope.patient_source_scope(
+                    body, previous[1], match.end() + postponed.end(),
+                    patient_name=patient_name, provider_fields=True)
+                # the patient's own, affirmative postponement only (same scope gate as the extractor)
+                if scope not in ("family", "other", "unknown", "conditional") and not _NEGATED_CANCEL.match(tail):
+                    out.add(previous[0])
+        elif key is not None and (cue := _NEXT_CANCELLED.match(after)):
+            tail = after[cue.end():]
+            scope = clinical_scope.patient_source_scope(body, match.start(), match.end() + cue.end(),
+                                                        patient_name=patient_name, provider_fields=True)
+            # the patient's own, affirmative, unconditional cancellation only (same scope gate as the extractor)
+            if scope not in ("family", "other", "unknown", "conditional") and not _NEGATED_CANCEL.match(tail):
+                out.add(key)
+        previous = (key, match.start(), match.end()) if key is not None else None
+    return out
 
 
 def _close_rollup_cursor(cursor):
@@ -708,6 +784,8 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
     # Request rows retain source/thread identity for grounded Loop matching.
     req_thread = []
     next_planned = None
+    next_planned_closed = False
+    cancelled = set()
     senders = {}
     summary = None
     # Retain only fields needed later for reply matching and observation age;
@@ -878,9 +956,22 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
                         "importance": f.get("importance"),
                         "evidence": f.get("evidence_quote"),
                         "last": m["posted_at"], "mid": m["message_id"]}
-            if next_planned is None and isinstance(v1.get("next_planned"), str) \
-                    and v1["next_planned"]:
-                next_planned = v1["next_planned"]
+            if next_planned is None and not next_planned_closed:
+                # Newest-first: a later cancellation of a date hides that older plan.
+                if m["body_state"] in (None, "full") and isinstance(m["body_text"], str):
+                    cancelled |= _cancelled_visit_dates(m["body_text"], patient_name)
+                planned = v1.get("next_planned")
+                if isinstance(planned, str) and planned:
+                    try:
+                        day = date.fromisoformat(planned[:10])
+                    except ValueError:
+                        day = None
+                    if day is None or (day >= as_of and (day.month, day.day) not in cancelled
+                                       and day.isoformat() not in cancelled):
+                        next_planned = planned
+                    else:
+                        # A past or cancelled newest plan supersedes every older one.
+                        next_planned_closed = True
 
     clinical_facts = dependency_loss.bind_facts(db, [*med_state.values(), *symptom_facts.values()])
     dependencies = dependency_loss.read(db, project_id)

@@ -265,3 +265,23 @@ def test_directory_sync_failure_after_unlink_keeps_audit_and_data(pending, monke
     assert (config.read_bytes(), legacy.read_bytes()) == original
     assert not (root / receipt.NAME).exists()
     assert len(list(root.glob('.install-options-migration.reconcile.*'))) == 1
+
+
+def test_status_without_pending_record_is_not_an_error(tmp_path, capsys):
+    (tmp_path / 'data').mkdir(mode=0o700)
+    tmp_path.chmod(0o700)
+    assert recovery.main(['--root', str(tmp_path)]) == 0
+    assert '移行保留はありません' in capsys.readouterr().out
+
+
+def test_loose_config_mode_names_the_cause_without_values(pending, capsys):
+    """Regression: a 0644 config.json failed with a generic message, so the
+    operator could not learn that chmod 600 clears the hold."""
+    root, config, legacy = pending
+    config.chmod(0o644)
+    before = config.read_bytes(), legacy.read_bytes(), (root / receipt.NAME).read_bytes()
+    assert recovery.main(['--root', str(root), '--confirm-human', '--reason', 'synthetic review']) == 1
+    output = capsys.readouterr()
+    assert 'config_unverified' in output.err and 'chmod 600' in output.err
+    assert '--no-llm' not in output.out + output.err
+    assert (config.read_bytes(), legacy.read_bytes(), (root / receipt.NAME).read_bytes()) == before

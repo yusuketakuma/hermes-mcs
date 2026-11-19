@@ -31,7 +31,7 @@ def scan_schema():
 
 
 def scan_plan(source, saved):
-    """Choose one chunk; quoted text coverage alone never proves fact coverage."""
+    """Choose one chunk (chunks, cursor, saved, already-found items); quoted text alone never proves fact coverage."""
     split = saved.get("split", 0)
     if type(split) is not int or not 0 <= split <= MAX_SCAN_SPLIT:
         split, saved = 0, {}
@@ -43,7 +43,7 @@ def scan_plan(source, saved):
         chunks = plan_chunks(source["body_text"], SCAN_CHUNK)
     chunk = chunks[cursor]
     items = context_items({"patient_context": source["items"]}, chunk)
-    return chunks, cursor, saved, items, False
+    return chunks, cursor, saved, items
 
 
 def split_scan(source, saved, cursor):

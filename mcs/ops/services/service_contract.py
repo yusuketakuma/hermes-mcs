@@ -98,9 +98,11 @@ def parse_cron_listing(stdout: str, returncode: int) -> list[dict] | None:
     cur = None
     output = re.sub(r"\x1b\[[0-9;]*m", "", stdout)
     for line in output.splitlines():
-        m = re.match(r"^\s{2}([0-9a-f]{6,})\b", line)
+        m = re.match(r"^\s{2}([0-9a-f]{6,})\b(?:\s+\[([a-z_]+)\])?", line)
         if m:
             cur = {"id": m.group(1)}
+            if m.group(2):
+                cur["state"] = m.group(2)   # e.g. active / disabled / paused
             out.append(cur)
             continue
         m = re.match(r"^\s+(Name|Schedule|Script):\s*(.+?)\s*$", line)

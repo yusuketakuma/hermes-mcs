@@ -155,6 +155,32 @@ def test_only_current_relation_to_unique_request_counts(tmp_path, fault):
         db.close()
 
 
+@pytest.mark.parametrize("fault", ["unclear", "stale", "invalid_confidence",
+                                    "mismatched_relation", "unrelated_stale"])
+def test_inconclusive_or_invalid_reply_evidence_is_unavailable(tmp_path, fault):
+    db, event, meta, row = _setup(tmp_path)
+    try:
+        if fault == "unclear":
+            event["relation"] = event["reported_relation"] = "unclear"
+        elif fault == "stale":
+            event["trigger_revision"] = "old"
+        elif fault == "invalid_confidence":
+            event["confidence"] = True
+        elif fault == "mismatched_relation":
+            event["reported_relation"] = "acknowledges"
+        elif fault == "unrelated_stale":
+            event["relation"] = event["reported_relation"] = "unrelated"
+            event["trigger_revision"] = "old"
+        db.artifact_add("loop_event", json.dumps(event), project_id=1, message_id=2, meta=meta)
+        messages = list(db.db.execute("SELECT * FROM messages WHERE project_id=1"))
+        rollup._match_request_replies(db.db, 1, [(row, 1, 101, 1)], [row], messages, 1000)
+        assert row.get("reply_evaluation") == "unavailable"
+        assert row["reply_evaluation_unavailable"] == 1
+        assert "reply_state" not in row and "reply_events" not in row
+    finally:
+        db.close()
+
+
 def test_reply_events_keep_all_accepted_sources_and_do_not_order_equal_times(tmp_path):
     db, event, meta, row = _setup(tmp_path, extra=(3, 4, 5), times={3: 103, 4: 103, 5: 104})
     try:

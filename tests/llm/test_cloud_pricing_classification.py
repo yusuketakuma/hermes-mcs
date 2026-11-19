@@ -63,7 +63,7 @@ def test_same_prompt_changed_binding_classifies_full_receipt_set(paid, damage, e
                   "('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")]
         # Miss exact answer recovery while keeping logical_request_fp equal.
         provider = unit(ledger, binding='different-synthetic-occurrence')
-        body = provider.client.body('synthetic same prompt', 100, None)
+        body = provider.client.body('synthetic same prompt', provider.selection['max_tokens'], None)
         with pytest.raises(cloud_client.CloudNotSent) as held:
             provider('synthetic same prompt', deadline=time.monotonic() + 60, max_tokens=100)
         assert held.value.detail == 'cloud_unit_unresolved' and len(calls) == 1

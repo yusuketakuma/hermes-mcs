@@ -148,3 +148,33 @@ def test_env_only_password_revision_follows_the_supervisor(adapter, tmp_path, mo
     mirrored = adapter._credential_fp("synthetic-id", "env")
     ppid[0] = 4300
     assert adapter._credential_fp("synthetic-id", "env") == mirrored
+
+
+def test_post_submit_probe_error_backs_off_like_a_rejection(adapter, tmp_path, monkeypatch):
+    """#156: a token that cannot be verified after submit still records
+    the backoff, so the next tick does not click again."""
+    monkeypatch.setattr(adapter, "_token_via_cdp", lambda: "t" * 32)
+
+    def probe_down():
+        raise mcs_contract.MCSError("network_error", retryable=True)
+    monkeypatch.setattr(adapter, "check_session", probe_down)
+    assert adapter.auto_login(wait_s=5) == "failed"
+    assert _state(tmp_path)["failures"] == 1
+    assert "synthetic-secret-1" not in (tmp_path / mcs_adapter.LOGIN_STATE_NAME).read_text()
+    assert adapter.auto_login(wait_s=5) == "manual_required:backoff"
+    assert adapter.calls == {"click": 1, "fill": 1}
+
+
+@pytest.mark.parametrize("step", ["fill", "click"])
+def test_failure_before_submit_is_not_recorded(adapter, tmp_path, monkeypatch, step):
+    def cdp_eval(ws, expr):
+        if "btn.click()" in expr:
+            return "no_button" if step == "click" else "clicked"
+        if "pwEl.value" in expr:
+            return "bad_origin" if step == "fill" else "filled"
+        return "need_both"
+    monkeypatch.setattr(adapter, "_cdp_eval", cdp_eval)
+    monkeypatch.setattr(adapter, "_cdp_eval_owned",
+                        lambda ws, profile, chrome, expr: cdp_eval(ws, expr))
+    assert adapter.auto_login(wait_s=0) == "failed"
+    assert not (tmp_path / mcs_adapter.LOGIN_STATE_NAME).exists()

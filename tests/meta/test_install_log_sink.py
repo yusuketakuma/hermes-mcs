@@ -53,14 +53,21 @@ def stage(tmp_path, *, broken=False, no_services=False):
                        + '_split_runtime_token=""\n' + script[runtime_start:runtime_end] + '\n'
                        + 'SETUP=' + shlex.quote(str(setup)) + '\n' + script[start:end])
     trace = tmp_path / 'services.trace'
+    return run_stage(tmp_path, no_services=no_services), home, data, trace
+
+
+def run_stage(tmp_path, *, no_services=False):
+    """Run the hook staged by stage() again against the same synthetic home."""
+    home = tmp_path / 'home'
     environment = {**os.environ, 'HOME': str(home), 'MCS_ROOT': str(home / '.mcs'),
-                   'MCS_DATA': str(data), 'REPO': str(checkout), 'MCS_PY': sys.executable,
-                   'RECOVERY_DIR': str(home / '.mcs-recovery'),
+                   'MCS_DATA': str(home / '.mcs/data'), 'REPO': str(tmp_path / 'checkout'),
+                   'MCS_PY': sys.executable, 'RECOVERY_DIR': str(home / '.mcs-recovery'),
+                   'WATCH_PLIST': str(home / 'Library/LaunchAgents/org.mcs.recovery.plist'),
                    'SKIP_LLM': '1', 'RUNTIME_MODE': 'standalone',
-                   'SKIP_SERVICES': '1' if no_services else '0', 'TRACE': str(trace)}
-    result = subprocess.run(['/bin/sh', str(harness)], env=environment,
-                            capture_output=True, text=True, timeout=15)
-    return result, home, data, trace
+                   'SKIP_SERVICES': '1' if no_services else '0',
+                   'TRACE': str(tmp_path / 'services.trace')}
+    return subprocess.run(['/bin/sh', str(tmp_path / 'service-stage.sh')], env=environment,
+                          capture_output=True, text=True, timeout=15)
 
 
 @pytest.mark.parametrize('no_services', [False, True])
@@ -80,6 +87,28 @@ def test_installer_holds_before_services_when_legacy_source_is_untrusted(tmp_pat
     assert 'ログの統合準備を確認できません' in result.stderr
     assert (data / 'run.log').is_symlink()
     assert (tmp_path / 'retained.log').read_bytes() == b'synthetic outside original\n'
+
+
+def test_installer_names_retire_drifted_and_resumes_after_it(tmp_path):
+    """Regression (IA-014): a deleted, already imported old log held every
+    later install with no file name or way out shown."""
+    result, _, data, trace = stage(tmp_path)
+    assert result.returncode == 0, result.stderr
+    (data / 'run.log').rename(tmp_path / 'retained-original')
+    trace.unlink()
+    held = run_stage(tmp_path)
+    assert held.returncode != 0 and not trace.exists()
+    assert 'run_log_prepare_failed: run_log_legacy_missing' in held.stderr
+    hint = held.stderr.split('もう一度実行してください: ', 1)[1].splitlines()[0]
+    command = shlex.split(hint)
+    assert command[1:4] == ['-I', str(tmp_path / 'checkout/mcs/core/run_log.py'), 'retire-drifted']
+    retired = subprocess.run(command, capture_output=True, text=True, timeout=15)
+    assert retired.returncode == 0 and retired.stdout == 'run.log\n', retired.stderr
+    resumed = run_stage(tmp_path)
+    assert resumed.returncode == 0 and resumed.stderr == '', resumed.stderr
+    assert trace.exists()
+    assert (tmp_path / 'retained-original').read_bytes() == b'synthetic installer prefix\n'
+    assert (data / 'mcs.log').read_bytes() == b'synthetic installer prefix\n'
 
 
 @pytest.mark.parametrize('kind', ['llama', 'recovery'])

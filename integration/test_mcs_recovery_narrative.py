@@ -908,21 +908,27 @@ def _run_narrative(tmp_path, *, reply_cards=True):
             (recovery_delivery_id,)).fetchone()
         parts3 = _parts(led, r3["delivery_id"])
         body3 = [p for p in parts3.values() if p["kind"] == "body_part"]
-        delivered3 = [p for p in body3 if p["state"] == "delivered"]
         unknown3 = [p for p in body3 if p["state"] == "unknown"]
         posts3 = _body_posts(sw3.client)[body_posts_before_recovery + posts_at_crash:]
-        N.check("resume_after_restore_no_duplicates",
-                len(posts3) + posts_at_crash == len(delivered3)
+        # attempt_lost:delivered is fail-closed: the scope whose send was
+        # journaled delivered but lost to the restore is held, never re-sent.
+        # "no duplicates" is now a wire property — zero resumed posts and
+        # no part re-posted under a second remote id.
+        remote_ids = [p["remote_id"] for p in body3 if p.get("remote_id")]
+        N.check("restore_holds_lost_delivery_no_duplicates",
+                r3["state"] == "held"
+                and any(h.get("delivery_id") == recovery_delivery_id
+                        and h.get("reason") == "attempt_lost:delivered"
+                        for h in rec.get("held") or [])
+                and len(posts3) == 0
                 and len(unknown3) == 1
                 and unknown3[0]["error_code"] == "worker_crash"
-                and all(p["remote_id"] for p in delivered3)
-                and len({p["remote_id"] for p in delivered3}) == len(delivered3)
-                and len(delivered3) > 0
-                and len(sw3.client.upload_calls) == uploads_before_recovery + 1
+                and len(set(remote_ids)) == len(remote_ids)
                 and r3["parts_state"] == "incomplete",
                 {"posts_before": posts_at_crash,
                  "posts_resumed": len(posts3),
-                 "delivered": len(delivered3),
+                 "render_state": r3["state"],
+                 "held": [h.get("reason") for h in rec.get("held") or []],
                  "unknown": [p["part_id"] for p in unknown3],
                  "parts_state": r3["parts_state"]})
         N.check("no_permit_leaks", N.live_permits() == 0

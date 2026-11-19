@@ -475,3 +475,133 @@ def test_dry_run_leaves_a_legacy_recovery_directory_unchanged(tmp_path):
     rec.chmod(0o755)
     _run(env, hermes_home, "--dry-run")
     assert rec.stat().st_mode & 0o777 == 0o755
+
+
+def test_private_recovery_file_skips_symlinks_and_hardlinks_without_chmod(tmp_path):
+    import os
+
+    home, hermes_home, stub_root, env = _world(tmp_path, configured=True)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(mode=0o700, parents=True)
+    sym_target = tmp_path / "sym-target"
+    sym_target.write_text("synthetic\n")
+    sym_target.chmod(0o644)
+    (rec / "repo_path").symlink_to(sym_target)
+
+    hard_target = tmp_path / "hard-target"
+    hard_target.write_bytes(b"# synthetic tool\n")
+    hard_target.chmod(0o755)
+    os.link(hard_target, rec / "mcs_recover.py")
+
+    r = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin",
+             "--no-services", "--no-recovery")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert sym_target.stat().st_mode & 0o777 == 0o644
+    assert hard_target.stat().st_mode & 0o777 == 0o755
+    assert "repo_path のアクセス権" in r.stderr
+    assert "mcs_recover.py のアクセス権" in r.stderr
+
+
+def test_loose_0755_recovery_dir_checks_python_in_preflight_and_tightens_only_after_confirm_and_lock(tmp_path):
+    import errno
+    import fcntl
+    import os
+    import pty
+    import select
+    import subprocess
+    import time
+
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    rec = home / ".mcs-recovery"
+    rec.mkdir(parents=True)
+    rec.chmod(0o755)
+    selected = stub_root / "explicit-bad-python"
+    selected.touch()
+    selected.chmod(0o700)
+
+    # 1. Preflight with 0755 recovery dir MUST NOT skip explicit recovery Python validation.
+    r_pf_bad = _run({**env, "STUB_RECOVERY_RUNTIME": "unsafe"}, hermes_home,
+                    "--preflight", "--no-brew", "--no-llm", "--no-plugin", "--no-services",
+                    "--recovery-python", str(selected))
+    assert r_pf_bad.returncode == 1
+    assert "権限が 700 ではありません" in r_pf_bad.stdout
+    assert "要対処" in r_pf_bad.stdout
+    assert f"runtime-metadata {selected}" in _calls(stub_root)
+    assert rec.stat().st_mode & 0o777 == 0o755
+
+    # Preflight with valid recovery Python warns about 0755 and passes without chmod.
+    r_pf_ok = _run(env, hermes_home, "--preflight", "--no-brew", "--no-llm", "--no-plugin", "--no-services")
+    assert r_pf_ok.returncode == 0, r_pf_ok.stdout + r_pf_ok.stderr
+    assert "権限が 700 ではありません" in r_pf_ok.stdout
+    assert "復旧用 Python: 3.14以降で SQLite の安全条件を満たしています" in r_pf_ok.stdout
+    assert rec.stat().st_mode & 0o777 == 0o755
+
+    # 2. Invalid CLI flag and bad explicit --recovery-python in install mode leave 0755 untouched.
+    r_flag = _run(env, hermes_home, "--unknown-flag")
+    assert r_flag.returncode == 2
+    assert rec.stat().st_mode & 0o777 == 0o755
+
+    r_inst_bad = _run({**env, "STUB_RECOVERY_RUNTIME": "unsafe"}, hermes_home,
+                      "--no-brew", "--no-llm", "--no-plugin", "--no-services",
+                      "--recovery-python", str(selected))
+    assert r_inst_bad.returncode == 1
+    assert rec.stat().st_mode & 0o777 == 0o755
+    assert not (home / ".mcs/data/update.lock").exists()
+
+    # 3. Interactive invalid input + cancellation leaves 0755 untouched.
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(
+        ["sh", str(INSTALL), "--mode", "hermes", "--no-brew", "--no-llm", "--no-plugin", "--no-services"],
+        stdin=slave, stdout=slave, stderr=slave, env=env)
+    os.close(slave)
+    out = b""
+    deadline = time.monotonic() + 30
+    try:
+        while "この内容で導入する（推奨）".encode() not in out:
+            assert select.select([master], [], [], max(0.1, deadline - time.monotonic()))[0]
+            out += os.read(master, 4096)
+        os.write(master, b"9\n")
+        while "1 または 2 を入力してください".encode() not in out:
+            assert select.select([master], [], [], max(0.1, deadline - time.monotonic()))[0]
+            out += os.read(master, 4096)
+        os.write(master, b"2\n")
+        while proc.poll() is None:
+            if select.select([master], [], [], 1.0)[0]:
+                try:
+                    out += os.read(master, 4096)
+                except OSError as exc:
+                    if exc.errno == errno.EIO:
+                        break
+                    raise
+        assert proc.wait(timeout=5) == 130
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        os.close(master)
+    assert rec.stat().st_mode & 0o777 == 0o755
+
+    # 4. Contended install lock also stops before tightening 0755.
+    data = home / ".mcs/data"
+    data.mkdir(mode=0o700, parents=True)
+    (home / ".mcs").chmod(0o700)
+    lock_path = data / "update.lock"
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # lockf on macOS shares flock or fcntl depending on lockf; hold via lockf child if available.
+        holder = subprocess.Popen(
+            ["python3", "-c", "import fcntl, os, sys, time; fd=os.open(sys.argv[1], os.O_RDWR); fcntl.flock(fd, fcntl.LOCK_EX); sys.stdout.write('held\\n'); sys.stdout.flush(); time.sleep(30)",
+             str(lock_path)], stdout=subprocess.PIPE, text=True)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        try:
+            assert holder.stdout.readline().strip() == "held"
+            r_locked = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin", "--no-services")
+            assert r_locked.returncode == 1
+            assert "進行中です" in r_locked.stderr
+            assert rec.stat().st_mode & 0o777 == 0o755
+        finally:
+            holder.terminate()
+            holder.wait(timeout=5)
+    finally:
+        os.close(fd)

@@ -269,8 +269,8 @@ def test_long_unbroken_paragraph_is_structured_and_can_be_selected_without_summa
 def test_complete_quote_is_not_a_fact_completeness_proof():
     body = '生活環境: 家族が訪問し、本人の保管場所は棚です。'
     value = {'category':'living','text':body,'evidence':body,'subject':'unspecified'}
-    _,_,_,items,covered = refresh.context_plan.scan_plan({'body_text':body,'items':[value]}, {})
-    assert items == [value] and covered is False
+    _,_,_,items = refresh.context_plan.scan_plan({'body_text':body,'items':[value]}, {})
+    assert items == [value]
 
 
 def test_more_than_128_facts_resume_as_bounded_chunks_without_cumulative_loss(runtime,monkeypatch):

@@ -207,3 +207,28 @@ def test_chat_classifies_not_sent_timeout(error, kind):
     assert local_llm.chat("p", endpoint=URL, request_fn=request_fn,
                           error_out=out) is None
     assert out["kind"] == kind
+
+
+def test_scheduled_probe_waits_until_caller_deadline_then_bounds_wire(monkeypatch):
+    from contextlib import contextmanager
+
+    clock = [0.0]
+    deadlines = []
+    monkeypatch.setenv(local_llm.SCHEDULE_ENV, '/synthetic')
+    monkeypatch.setattr(local_llm.time, 'monotonic', lambda: clock[0])
+
+    @contextmanager
+    def turn(deadline, min_s, slot, **kwargs):
+        deadlines.append(deadline)
+        clock[0] = 20.0
+        yield 2
+
+    def wire(endpoint, method, body, timeout, deadline):
+        assert body['id_slot'] == 2
+        assert deadline == 30.0
+        return 200, {}, json.dumps({'choices': [{'message': {'content': '{"ok":true}'}, 'finish_reason': 'stop'}]}).encode()
+
+    monkeypatch.setattr(local_llm, '_request_turn', turn)
+    assert local_llm.probe_format(local_llm.ENDPOINT, 'synthetic', None,
+                                  timeout=10, deadline=100, request_fn=wire) == 'object'
+    assert deadlines[0] == 100

@@ -368,3 +368,31 @@ def test_repair_keeps_ambiguous_obligation_open():
     med_obs = [o for o in new["obligations"]
                if o["category"] == "medication" and o["fact_ids"]]
     assert med_obs and all(o["status"] == "ambiguous" for o in med_obs)
+
+
+def test_repair_relations_follow_the_requested_rule(monkeypatch):
+    """A replay of a legacy repaired document re-derives relations under its stored rule (#158)."""
+    import semantic_relations as sr
+    doc, body = _doc()
+    rejected = next(f for f in doc["facts"] if f["provenance"] == "local_llm")
+    seen = []
+    real = sr.reconcile_facts
+    monkeypatch.setattr(sr, "reconcile_facts",
+                        lambda *a, **kw: seen.append(kw.get("rule")) or real(*a, **kw))
+
+    def repair_llm(prompt):
+        return json.dumps(
+            {"facts": [{"statement": "アムロジピン5mg中止指示",
+                        "kind": "medication_event", "action": "stop",
+                        "subject_role": "patient", "polarity": "affirmed",
+                        "workflow_status": "ordered", "importance": "T1",
+                        "evidence_quote": "アムロジピン5mgを中止"}],
+             "category_presence": dict(NO_FACTS, medication="one")},
+            ensure_ascii=False)
+
+    for rule in (None, 1):
+        extra = {} if rule is None else {"rule": rule}
+        out = extraction.repair_facts_v2(repair_llm, _member(body), doc,
+                                         {rejected["fact_id"]: "x"}, **extra)
+        assert out["repaired"]
+    assert seen == [sr.RELATION_RULE, 1]

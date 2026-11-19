@@ -1,4 +1,7 @@
 """Small statistics helpers shared by the runtime views and offline evaluation."""
+# mcs_config imports this; install.sh may run those helpers on macOS Python 3.9.
+from __future__ import annotations
+
 import math
 
 

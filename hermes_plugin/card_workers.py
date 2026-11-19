@@ -106,6 +106,21 @@ def _worker_witness(settings, transport, reason):
         _event_logger("mcs_" + transport)("worker_status_failed")
 
 
+def _witness_abandoned(supervisor, settings, transport):
+    """The started witness is written when the task spawns; a supervisor
+    whose task then ends with no successor (scope lock unavailable, or a
+    worker exit) must not leave that witness reading 'started'."""
+    add = getattr(getattr(supervisor, "_task", None), "add_done_callback", None)
+    if not callable(add):
+        return
+
+    def done(task):
+        if not task.cancelled() and getattr(supervisor, "abandoned", False):
+            _event_logger("mcs_" + transport)("worker_disabled", reason="worker_start_failed")
+            _worker_witness(settings, transport, "worker_start_failed")
+    add(done)
+
+
 def _owner_allowed(ctx, adapter, settings, transport):
     profile, source = _owner_identity(ctx, adapter)
     log = _event_logger("mcs_" + transport)
@@ -167,6 +182,7 @@ def make_discord_factory(ctx):
             return None
         _event_logger("mcs_discord")("worker_started")
         _worker_witness(settings, "discord", "worker_started")
+        _witness_abandoned(supervisor, settings, "discord")
         return supervisor
     return factory
 
@@ -240,7 +256,15 @@ def _start_slack_setup(ctx, native, adapter):
     if state['plan'].get('runtime_mode') != 'hermes':
         return None
     # Native client lifecycle and credentials remain owned by the existing gateway.
-    task = ctx.spawn_task(consume(root, native.client, binding), name='mcs-slack-setup')
+    # Hermes keeps one client per workspace and native.client is only the
+    # first one; without the binding's own client the intent stays pending.
+    clients = getattr(adapter, '_team_clients', None)
+    get_client = getattr(adapter, '_get_client', None)
+    if not isinstance(clients, dict) or binding['team_id'] not in clients \
+            or not callable(get_client):
+        raise ValueError('slack_setup_client_unverified')
+    client = get_client('', team_id=binding['team_id'])
+    task = ctx.spawn_task(consume(root, client, binding), name='mcs-slack-setup')
     if task is not None:
         task.add_done_callback(lambda finished: None if finished.cancelled() else finished.exception())
     return task
@@ -296,5 +320,6 @@ def make_slack_factory(ctx):
             return _SlackSetupOwner(bootstrap) if bootstrap is not None else None
         _event_logger("mcs_slack")("worker_started")
         _worker_witness(settings, "slack", "worker_started")
+        _witness_abandoned(supervisor, settings, "slack")
         return _SlackSetupOwner(bootstrap, supervisor) if bootstrap is not None else supervisor
     return factory

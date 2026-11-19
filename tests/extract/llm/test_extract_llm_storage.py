@@ -438,10 +438,9 @@ def test_v3_pass_folds_v1v2_inline(tmp_path, monkeypatch):
     v1 = db.artifacts("extract_v1", message_id=1)
     assert v1 and "カロナール" in v1[0]["content"]
     import extract
-    body = db.db.execute(
-        "SELECT body_text FROM messages WHERE message_id=1").fetchone()[0]
-    assert seen["hints"] == extract.extract_message(
-        body, "2026-09-19T00:00:00+09:00")
+    body, posted_at = db.db.execute(
+        "SELECT body_text, posted_at FROM messages WHERE message_id=1").fetchone()
+    assert seen["hints"] == extract.extract_message(body, posted_at)
     db.close()
 
 
