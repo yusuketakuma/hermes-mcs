@@ -227,6 +227,57 @@ def test_vital_reference_points_to_fixed_field_without_a_list_index():
     assert result["items"][0]["source_ref"] is None
 
 
+def _vital_record(mid, value, body, *, condition="安静時"):
+    record = _record(mid, "2026-10-01", "2026-10-01T09:00:00+09:00", value)
+    record.update(kind="vital", key="bt", unit="℃", condition=condition, source_body=body, evidence=body,
+                  evidence_span=[0, len(body)], source_ref={"artifact_id": mid, "field": "vitals"})
+    return record
+
+
+def test_vital_value_spelling_difference_does_not_drop_the_measurement():
+    cases = [
+        (37, "本人は2026-10-01安静時測定の体温37℃。", "observed", 37),
+        (37.0, "本人は2026-10-01安静時測定の体温37℃。", "observed", 37.0),
+        (37.0, "本人は2026-10-01安静時測定の体温37.0℃。", "observed", 37.0),
+        (38.0, "本人は2026-10-01安静時測定の体温37℃。", "unknown", None),
+    ]
+    for value, body, state, expected in cases:
+        item = measurement_timeline.project_measurements(
+            [_vital_record(1, value, body)], source_complete=False)["items"][0]
+        assert item["state"] == state
+        assert item["value"] == expected
+        if state == "observed":
+            assert item["measured_on"] == "2026-10-01" and item["condition"] == "安静時"
+        else:
+            assert item["measured_on"] is None and item["condition"] is None
+
+
+def test_vital_float_value_keeps_condition_and_rejects_another_persons_topic():
+    body = "本人は2026-10-01安静時測定の体温37℃。"
+    record = _vital_record(1, 37.0, body)
+    item = measurement_timeline.project_measurements([record], source_complete=False)["items"][0]
+    assert item["state"] == "observed" and item["condition"] == "安静時"
+    prefix = "家族の話です。"
+    record["source_body"] = prefix + body
+    record["evidence_span"] = [len(prefix), len(prefix) + len(body)]
+    item = measurement_timeline.project_measurements([record], source_complete=False)["items"][0]
+    assert item["state"] == "unknown" and item["subject"] == "unknown"
+
+
+def test_same_day_equal_int_and_float_vitals_are_one_record():
+    body = "本人は2026-10-01安静時測定の体温37℃。"
+    records = [_vital_record(1, 37, body), _vital_record(2, 37.0, body)]
+    result = measurement_timeline.project_measurements(records, source_complete=True)
+    assert [item["state"] for item in result["items"]] == ["current", "current"]
+
+
+def test_vital_equal_value_written_twice_stays_ambiguous():
+    body = "本人は2026-10-01安静時測定の体温37℃と37℃。"
+    item = measurement_timeline.project_measurements(
+        [_vital_record(1, 37.0, body)], source_complete=False)["items"][0]
+    assert item["state"] == "unknown" and item["value"] is None
+
+
 def test_same_written_condition_and_unit_compare_by_measurement_day():
     old = _record(1, "2026-10-01", "2026-10-01T09:00:00+09:00", "1.0")
     new = _record(2, "2026-10-02", "2026-10-02T09:00:00+09:00", "1.5")
