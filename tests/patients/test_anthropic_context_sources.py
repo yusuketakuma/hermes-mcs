@@ -131,14 +131,18 @@ def test_source_quality_negative_stays_held_without_resampling(runtime, cloud, m
         assert step(runtime)['reason'] == 'patient_context_waiting'
         assert len(led.synthetic_jev_requests) == before
     if negative_target == "source_facts":
+        # A candidate rewritten outside the repair write path cannot be
+        # replayed against its sealed origin: the held negative, its
+        # receipts and the untouched rows stay exact while the changed
+        # candidate is rejected fail-closed instead of adopted.
         extra_id = _extend_source_candidate(led)
         for _ in range(10):
             clock.wall += 61
             result = step(runtime)
-            if result.get("reason") == "source_quality_held":
+            if result.get("reason") == "source_quality_unavailable:patient_context_artifact_invalid":
                 break
         else:
-            pytest.fail("changed candidate did not preserve the original negative")
+            pytest.fail("rewritten candidate was not rejected fail-closed")
         requested = set()
         for body in led.synthetic_jev_requests[before:]:
             if body['state']['target']['id'] == 'source_facts':
@@ -147,8 +151,11 @@ def test_source_quality_negative_stays_held_without_resampling(runtime, cloud, m
         assert requested == {extra_id}
         assert not any("reports" in call for call in cloud[0])
         for old in saved:
-            if old[1] in ('semantic_usage', 'patient_context_source_quality_v1'):
+            if old[1] in ('semantic_usage', 'patient_context_source_quality_v1',
+                          'patient_context_source_quality_fail_v1'):
                 assert tuple(led.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (old[0],)).fetchone()) == old
+        scan = json.loads(led.artifacts(patient_context_refresh_state.SCAN, project_id=1)[-1]['content'])
+        assert scan.get('accepted_candidate_ref') is None
 
 
 @pytest.mark.parametrize("archived", [False, True])
