@@ -97,6 +97,12 @@ def _directory(path, *, write=True):
                             dir_fd=fd)
             os.close(fd)
             fd = child
+        info = os.fstat(fd)
+        if (write and stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
+                and not info.st_mode & 0o022 and stat.S_IMODE(info.st_mode) != 0o700):
+            # Installers before v1.0.7 created it 0755. Nobody else could write
+            # into it, so tighten it to the required 0700 instead of refusing.
+            os.fchmod(fd, 0o700)
         _checked(fd, directory=True)
         if not write:
             yield fd

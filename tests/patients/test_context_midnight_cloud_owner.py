@@ -25,6 +25,7 @@ import semantic_runtime
 import patient_context_refresh as context_refresh
 from test_anthropic_context_refresh import cloud
 from test_patient_context_refresh import CFG, document, runtime, seed, stamp, step
+from common_testkit import follow_cloud_mode
 
 __all__ = ['runtime', 'cloud']
 
@@ -89,6 +90,7 @@ def test_real_owner_reservation_and_response_across_midnight(runtime, cloud, mon
         monkeypatch.setattr(cloud_inference, 'time', module.time)
     monkeypatch.setattr(cloud_inference, 'resolve_cloud_settings', lambda _cfg: settings)
     monkeypatch.setattr(worker, '_cloud_mode', lambda *_args: 'on')
+    follow_cloud_mode(monkeypatch, worker)
     monkeypatch.setattr(extract_llm_prepare, '_cloud_mode', worker._cloud_mode)
     monkeypatch.setattr(cloud_policy, 'api_key', lambda *_args: 'synthetic-key')
     # Fixed calendar boundaries exercise accounting, not the live price-table date.
