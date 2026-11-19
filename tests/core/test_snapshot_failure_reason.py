@@ -66,10 +66,11 @@ def test_validator_exit_codes_are_told_apart(db, tmp_path, monkeypatch, code, re
 
 def test_validator_timeout_reports_budget_and_deadline_cap(db, tmp_path, monkeypatch):
     _child(monkeypatch, "import time; time.sleep(30)")
-    assert snapshots.publish_snapshot(db, str(tmp_path / "out"), deadline=monotonic() + 1) is None
+    assert snapshots.publish_snapshot(db, str(tmp_path / "out"),
+                                      deadline=monotonic() + 35) is None
     failure = snapshots.last_failure()
     assert failure["reason"] == "validator_timeout" and failure["capped_by_deadline"] is True
-    assert failure["budget_s"] <= 1
+    assert failure["budget_s"] <= 5         # deadline less the reserved reacquire tail
 
 
 def test_busy_validation_lock(db, tmp_path, monkeypatch):
@@ -130,8 +131,8 @@ def test_verify_budget_follows_a_slow_copy_within_the_cap(db, tmp_path, monkeypa
     assert snapshots.publish_snapshot(db, str(tmp_path / "out"))
     assert seen["budget"] == 150.0                    # 1.5 x copy, not the ~30 s size floor
     clock["t"] = 0.0
-    assert snapshots.publish_snapshot(db, str(tmp_path / "out"), deadline=120.0)
-    assert seen["budget"] == 20.0                     # never past the caller's hard deadline
+    assert snapshots.publish_snapshot(db, str(tmp_path / "out"), deadline=160.0)
+    assert seen["budget"] == 30.0                     # the deadline less the reserved tail
 
 
 def test_unreaped_copy_is_fenced_and_cannot_publish_late(db, tmp_path, monkeypatch):
@@ -179,8 +180,8 @@ def test_expiry_during_candidate_fsync_prevents_replace(db, tmp_path, monkeypatc
                         lambda db, tmp, deadline, fd, state:
                         snapshots._prepare_snapshot(db, tmp, deadline) is None)
     monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", lambda *a, **kw: True)
-    monkeypatch.setattr(snapshots.os, "fsync", lambda fd: clock.__setitem__(0, 10.0))
-    assert snapshots.publish_snapshot(db, str(output), deadline=10.0) is None
+    monkeypatch.setattr(snapshots.os, "fsync", lambda fd: clock.__setitem__(0, 40.0))
+    assert snapshots.publish_snapshot(db, str(output), deadline=40.0) is None
     assert snapshots.last_failure()["reason"] == "publish_deadline"
     assert published.read_bytes() == b"synthetic old snapshot"
 
@@ -196,7 +197,7 @@ def test_directory_fsync_failure_reports_uncertain_publication(db, tmp_path, mon
         raise OSError("synthetic fsync failure")
 
     monkeypatch.setattr(snapshots, "fsync_dir", fail)
-    assert snapshots.publish_snapshot(db, str(output), deadline=monotonic() + 10) is None
+    assert snapshots.publish_snapshot(db, str(output), deadline=monotonic() + 90) is None
     assert snapshots.last_failure()["reason"] == "publication_uncertain"
     assert published.read_bytes() != b"synthetic old snapshot"
     assert snapshots.last_timing() == {}
@@ -256,7 +257,7 @@ def test_pending_cleanup_keeps_fence_until_child_exits(db, tmp_path, monkeypatch
     monkeypatch.setattr(snapshots.subprocess, "Popen", spawn_cleanup)
     output = tmp_path / "out"
     try:
-        assert snapshots.publish_snapshot(db, str(output), deadline=monotonic() + 10) is None
+        assert snapshots.publish_snapshot(db, str(output), deadline=monotonic() + 90) is None
         assert snapshots.last_failure()["reason"] == "validator_rejected"
         assert snapshots.last_failure()["cleanup_pending"] is True
         assert len(pending) == 1 and pending[0].waits == [1]
