@@ -985,6 +985,12 @@ def test_semantic_defer_counts_are_fixed_and_do_not_expose_unknown_reason(cloud,
     assert not calls and not rows(led, 'cloud_usage_reserve')
 
 
+def _profile_body(selection, prompt):
+    """A wire body that satisfies the resolved profile's model/effort/max_tokens contract."""
+    client = anthropic_client.AnthropicClient('synthetic', effort=selection['effort'])
+    return client.body(prompt, selection['max_tokens'], None)
+
+
 def _member_targets(led, job):
     """Grow the job's targets with a reply member, then re-capture the scope."""
     led.save_messages([_message(2, parent=1, body='synthetic member reply')])
@@ -1028,7 +1034,7 @@ def test_owned_member_unknown_unit_holds_without_local_restart(cloud):
         unit_key=f"semantic:{job['job_id']}:",
         owner={'semantic_target_id': 2, 'semantic_thread_root': 1},
         input_binding='ab' * 32, selection=selection)
-    body = anthropic_client.AnthropicClient('synthetic').body('synthetic member prompt', 100, None)
+    body = _profile_body(selection, 'synthetic member prompt')
     with legacy_cloud_routes():
         reserver(body, 30)
     local = []
@@ -1058,7 +1064,7 @@ def test_unowned_job_stays_local_under_closed_route(cloud):
         owner={'semantic_target_id': 3, 'semantic_thread_root': 3},
         input_binding='ab' * 32, selection=selection)
     with legacy_cloud_routes():
-        reserver(anthropic_client.AnthropicClient('synthetic').body('synthetic other prompt', 100, None), 30)
+        reserver(_profile_body(selection, 'synthetic other prompt'), 30)
     with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
                                      lambda: True, direct) as chat:
         assert chat is None
@@ -1115,7 +1121,7 @@ def _member_reservation(led, cfg, job, mid):
         unit_key=f"semantic:{job['job_id']}:",
         owner={'semantic_target_id': mid, 'semantic_thread_root': 1},
         input_binding='ab' * 32, selection=selection)
-    body = anthropic_client.AnthropicClient('synthetic').body('synthetic member prompt', 100, None)
+    body = _profile_body(selection, 'synthetic member prompt')
     with legacy_cloud_routes():
         reserver(body, 30)
 
