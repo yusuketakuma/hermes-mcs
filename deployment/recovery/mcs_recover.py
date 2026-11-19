@@ -4,12 +4,14 @@
 導入先は ~/.mcs-recovery/mcs_recover.py です。MCS 本体のプログラムが
 起動できなくても、data/update_state.json の更新記録に基づいて復旧します。
 
-使い方:
-  python3 mcs_recover.py --help      この説明を表示（変更しません）
-  python3 mcs_recover.py --status    現在の状態を JSON で表示（変更しません）
-  python3 mcs_recover.py --interactive  日本語の案内で状態確認と復旧を進める
-  python3 mcs_recover.py             中断を確認し、必要な復旧を実行
-  python3 mcs_recover.py --if-stale  定期監視用。30 分以上進んでいない更新だけを復旧
+使い方（PY は導入時に記録した復旧用 Python。config.json の recovery_python で、
+org.mcs.recovery の plist に登録されたものと同じ。Python 3.14 以上と修正済みの
+SQLite が必要で、このツール自身は版を確かめないため、標準の python3 では実行しない）:
+  PY -I -B mcs_recover.py --help      この説明を表示（変更しません）
+  PY -I -B mcs_recover.py --status    現在の状態を JSON で表示（変更しません）
+  PY -I -B mcs_recover.py --interactive  日本語の案内で状態確認と復旧を進める
+  PY -I -B mcs_recover.py             中断を確認し、必要な復旧を実行
+  PY -I -B mcs_recover.py --if-stale  定期監視用。30 分以上進んでいない更新だけを復旧
 
 復旧はプログラムや常駐処理を変更する場合があります。データベースを
 バックアップから戻す際は、失われるデータの確認と、その復元への人の承認が必要です。
@@ -48,7 +50,7 @@ import types
 import linecache
 
 # The entrypoint and each retained .prev select only their own complete generation.
-SUPPORT_FILES = {'mcs_recovery_gateway.py': '7ec709827092a1090b469ec412790c5dbd6f7b88c217f8ecffe14f1c6f2299a0', 'mcs_recovery_core.py': '3bc35ad1e7b051bbfaaef52c46814856105919a36570090347327bd636b3408e', 'mcs_recovery_services.py': '0b05f8b8147d6d23876d27d7e7d6b6d9ca182009b959d1e0cf66d03e9cc379c8', 'mcs_recovery_database.py': '728a8fef544b9dddbbb2a92bf54e4d67eeb8abf439d2a8d1e616e292c1ea5f4a'}
+SUPPORT_FILES = {'mcs_recovery_gateway.py': '1258f41e8c1be1235b6d9c1d8390ccc8333bf6e1887a6f4a9c0a6c33120dcf4f', 'mcs_recovery_core.py': 'ae51f18b713895c6a65c9925847c9865dad27b477bb5d0b4e7cbc2f3a973e288', 'mcs_recovery_services.py': 'fc2744167bb3fb2cda588df2151cf74fa08b10878909d1c1f3413fc8e2873b75', 'mcs_recovery_database.py': '10db4c452233806944496a527c66b92c7fcec61390c3979d4f18255a11b04a0b'}
 
 
 class _PinnedSourceLoader(importlib.abc.SourceLoader):
@@ -291,6 +293,8 @@ def _recovery_explanation(detail):
         "restore_consent_pending:": "データベースの復元は人の承認待ちです。損失報告を確認してください。" + mcs_recovery_database.RESTORE_LOSS_NOTICE,
         "restore_failed:": "データベースを復元できません。保留を維持して復旧結果の記録を確認してください。",
         "restore_verify_failed": "復元後のデータベースを確認できません。復旧結果の記録を確認してください。",
+        "restore_marker_adopted": "バックアップを採用した導入先では、更新の巻戻しでデータベースを戻しません。保留を維持し、戻すかどうかを担当者が判断してください。",
+        "apply failed after merge": "更新の適用に失敗し、更新前の版への巻戻しも完了していません。適用済みとは扱わず、mcs_update.py recover で状態を確認してください。",
     }
     if detail.startswith("rollback db restore: "):
         detail = detail[len("rollback db restore: "):]
@@ -597,6 +601,15 @@ def _provider_settings_state():
         os.close(root_fd)
 
 
+def _rendered_wrapper(head, path):
+    """= update_repository: a standalone cron wrapper rendered from a tracked template."""
+    name = path[len("scripts/"):]
+    if not path.startswith("scripts/") or "/" in name or not name.endswith(".sh"):
+        return False
+    found = mcs_recovery_core._git(["cat-file", "-e", head + ":deployment/scripts/" + name])
+    return found is not None and found.returncode == 0
+
+
 def _split_checkout_hold(applying):
     """Why a settled split install must not take a watchdog route, or None.
 
@@ -621,6 +634,7 @@ def _split_checkout_hold(applying):
     extras = mcs_recovery_core._git(["ls-files", "--others", "-z", "--", *_SPLIT_SOURCE_ROOTS])
     if extras is None or extras.returncode != 0 or any(
             path and not (path.endswith(".pyc") and "__pycache__" in path.split("/"))
+            and not _rendered_wrapper(head, path)
             for path in extras.stdout.split("\0")):
         return "provider_checkout_hold"
     return None if mcs_recovery_core._head() == head else "provider_checkout_hold"
@@ -680,7 +694,29 @@ def _journal_fresh(state):
         return False
     last = max([s.get("at", 0) for s in state.get("stages", [])]
                + [(applying or {}).get("at", 0)])
-    return bool(last) and time.time() - last < mcs_recovery_core.STALE_S
+    return bool(last) and abs(time.time() - last) < mcs_recovery_core.STALE_S  # far future: clock moved back
+
+
+def _restore_entered(state):
+    """= mcs_update._restore_entered: a consent record, or a restore marker
+    other than the backup-adoption one (unreadable counts, fail closed)."""
+    marker = mcs_recovery_core._awaiting_consent() or mcs_recovery_core._unreconciled_restore()
+    return bool(state.get("restore_consent")) or (
+        marker is not None and marker.get("by") != "mcs_backup_restore")
+
+
+def _rollback_not_started(state, applying):
+    """= mcs_update._rollback_not_started, stricter: any restore marker keeps
+    the freeze. The rollback of the last applied version stopped at or before
+    quiesce, so that version and its DB are unchanged."""
+    applied = state.get("applied") or []
+    if not (applying.get("hold_before_change") is True
+            and not applying.get("restore_incomplete") and not state.get("restore_consent")
+            and applied and applied[-1].get("sha") == applying.get("prev_sha")
+            and not os.path.lexists(os.path.join(mcs_recovery_core.DATA, "restore_pending.json"))
+            and not os.path.lexists(os.path.join(mcs_recovery_core.REPO, ".git", "MERGE_HEAD"))):
+        return False
+    return mcs_recovery_core._head() == applying.get("prev_sha") and mcs_recovery_core._clean() is True
 
 
 def _clear_hold():
@@ -839,7 +875,7 @@ def _recover_legacy(if_stale=False):
         schema_rollback = (isinstance(applying, dict) and applying.get("rollback")
                            and applying.get("schema_bump") is not False
                            and (applying.get("schema_bump") is not None or applying.get("backup_path")))
-        if schema_rollback:
+        if schema_rollback and not _rollback_not_started(state, applying):
             try:
                 # This marker prevents new launches; it is not stop evidence.
                 mcs_recovery_core._ensure_recovery_marker()
@@ -921,11 +957,23 @@ def _recover_legacy(if_stale=False):
                     "at": time.time()}
                 mcs_recovery_core._save_state(state)
             dkey = mcs_recovery_core._drainers_key(state, head)
-            _report_alert("escalate", state, detail,
-                          "[MCS] 更新の中断復旧ができません"
-                          f"（要手動対応）: {_recovery_explanation(detail)}",
-                          drainers_key=dkey)
-            drainers(dkey)
+            # = mcs_update: report before the start (it may raise), then notify
+            key = mcs_recovery_core._alert_key(state, detail)
+            notify, notified_at = mcs_recovery_core._alert_due("escalate", key, time.time())
+            fields = {"alert_key": key, "drainers_key": dkey}
+            # a start failure must not leave a notified_at the notice never
+            # earned: stamp it only after the start, right before the send
+            mcs_recovery_core._report("escalate", detail, **fields,
+                                      **({} if notify else {"notified_at": notified_at}))
+            problems = drainers(dkey)
+            if notify or problems:
+                mcs_recovery_core._report("escalate", detail, notified_at=notified_at,
+                                          **({"restart": problems} if problems else {}), **fields)
+            if notify:
+                mcs_recovery_services._notify(
+                    "[MCS] 更新の中断復旧ができません"
+                    f"（要手動対応）: {_recovery_explanation(detail)}"
+                    + (" restart:" + ",".join(problems) if problems else ""))
             mcs_recovery_core._remove_marker()
             return 1
 
@@ -1014,7 +1062,17 @@ def _recover_legacy(if_stale=False):
                     return git_failed("status")
                 if not clean:
                     return escalate("target tree could not be cleaned")
-            if applying.get("rollback") and applying.get("backup_path"):
+            if rollback_shaped and not schema_rollback and not _restore_entered(state):
+                # = mcs_update: a rollback without a schema change never restores
+                # its (possibly pruned) backup; drop a hold set for that restore.
+                if applying.pop("restore_incomplete", None):
+                    try:
+                        mcs_recovery_core._save_state(state)
+                    except (OSError, ValueError, TypeError, RecursionError):
+                        mcs_recovery_core._report("restore_hold_unverified",
+                                "rollback hold could not be saved or verified")
+                        return 1
+            elif rollback_shaped:
                 # Older rollback journals did not record the restore hold.
                 # Seal it under both locks before touching the database so
                 # every failure and a process interruption remains held.
@@ -1094,6 +1152,15 @@ def _recover_legacy(if_stale=False):
                 held_before = state.pop("restore_consent", None) is not None
                 if applying.pop("restore_incomplete", None) or held_before:
                     mcs_recovery_core._save_state(state)
+            attempt = (state.get("attempts") or {}).get(applying.get("tag"))
+            if (not applying.get("rollback") and isinstance(attempt, dict)
+                    and attempt.get("result") == "failed"
+                    and type(attempt.get("at")) in (int, float)
+                    and attempt["at"] >= (applying.get("at") or 0)):
+                # This apply already failed (its own postcheck included) and its
+                # rollback did not finish; this helper has no postcheck to
+                # promote it with, so it never records it applied.
+                return escalate("apply failed after merge — rollback incomplete")
             if not applying.get("rollback") and applying.get("reinstall") \
                     and not applying.get("reinstall_done"):
                 # install.sh is never re-run unattended; the operator
@@ -1151,8 +1218,18 @@ def _recover_legacy(if_stale=False):
                 mcs_recovery_core._git_out(["reset", "--hard", prev])
                 if mcs_recovery_core._head() != prev or mcs_recovery_core._clean() is not True:
                     return escalate("prev tree could not be cleaned")
-                return _finish(state, "mixed_tree_reset", removed)
-            return _finish(state, "interrupted_pre_merge", removed)
+                result = "mixed_tree_reset"
+            else:
+                result = "interrupted_pre_merge"
+            if not applying.get("rollback") and "post_merge" in stages:
+                # = mcs_update: the new code ran and its failed rollback may have
+                # reset the tree without re-rendering services; redo them here.
+                problems = mcs_recovery_services._reconcile_membership(
+                    applying.get("manifest_snapshot") or state.get("manifest_snapshot"))
+                if problems:
+                    return escalate("resume incomplete: " + ",".join(problems))
+                result = "post_merge_reverted"
+            return _finish(state, result, removed)
         return escalate("unclassifiable repo state — no destructive "
                         f"action taken (HEAD={head[:12]})")
     finally:
@@ -1194,6 +1271,7 @@ def _finish(state, result, removed):
         "merge_aborted": "中断されたプログラムの統合を取り消し、更新前の状態に戻しました。",
         "mixed_tree_reset": "更新前後のファイルが混在していたため、更新前の状態に戻しました。",
         "interrupted_pre_merge": "プログラムの切り替え前に中断した更新を終了しました。",
+        "post_merge_reverted": "更新前の版への巻戻しが途中で止まっていたため、更新前の版で常駐処理の設定を整え直しました。",
     }.get(result, "中断された更新の復旧を完了しました。")
     mcs_recovery_services._notify("[MCS] " + explanation)
     # = mcs_update._finish_recovery: the tree is back on prev, so the

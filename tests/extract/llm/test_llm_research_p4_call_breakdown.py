@@ -136,7 +136,10 @@ def test_probe_is_counted_once_per_format_check(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
     monkeypatch.setattr(extract_llm_runner, '_llm_up', extract_llm._llm_up)
     monkeypatch.setattr(extract_llm.local_llm, "admission_enabled", lambda: False)
-    monkeypatch.setattr(extract_llm.local_llm, "probe_format", lambda *a, **kw: "object")
+    def _probe(*a, **kw):
+        kw["error_out"]["sent"] = True
+        return "object"
+    monkeypatch.setattr(extract_llm.local_llm, "probe_format", _probe)
     monkeypatch.setattr(extract_llm.local_llm, "chat", lambda prompt, **kw: {
         "status": 200, "text": '{"symptoms":[],"summary":"合成"}', "finish_reason": "stop"})
     first, second = {}, {}
@@ -191,6 +194,10 @@ def test_probe_run_counts_one_ladder_with_two_requests(monkeypatch):
 def test_sent_timeout_keeps_one_call_and_slot_wait_note(monkeypatch, deadline_expired, kind):
     now = [100.0]
     monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(extract_llm, "_FMT_MODE", "plain")
+    monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
+    monkeypatch.setattr(extract_llm, "_FMT_TS", 100.0)
+    monkeypatch.setattr(extract_llm_provider, '_FMT_TS', extract_llm._FMT_TS)
     monkeypatch.setattr(extract_llm, "_probe_format", lambda **kw: "plain")
     monkeypatch.setattr(extract_llm_provider, '_probe_format', extract_llm._probe_format)
     monkeypatch.setattr(extract_llm_runner, '_probe_format', extract_llm._probe_format)

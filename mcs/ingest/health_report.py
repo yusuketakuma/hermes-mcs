@@ -96,12 +96,13 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
                      'policy_rejected_exhausted', 'policy_rejected_unacknowledged')
     snapshot_fields = ("snapshot_failure", "snapshot_timing")
     defer_field = "local_deferred_reasons"
+    observed_field = "local_llm_defer_reasons"
     try:
         value = strict_json(safe_io.read_private_bytes(path, limit=4096))
         if (not isinstance(value, dict) or set(value) - {
                 "at", "reason", "queue_status", "paid_recovery_pending", *counts, *writer_fields,
                 *failure_fields, *ack_fields, *policy_fields, 'failure_cohort', *snapshot_fields,
-                defer_field}
+                defer_field, observed_field}
                 or not finite_number(value.get("at")) or not 0 <= value["at"] <= now):
             raise ValueError("ocr_status_invalid")
         # mcs_ocr records why its publish after new pages was deferred; the
@@ -177,9 +178,14 @@ def attachment_ocr_health(data: str, cfg: dict | None, now: float) -> dict:
     defer_detail = ({defer_field: defer_reasons,
                      "local_deferred_primary": attachment_inference_deferral.primary(defer_reasons)}
                     if attachment_inference_deferral.valid(defer_reasons, value.get("local_deferred")) else {})
+    observed_reasons = value.get(observed_field)
+    observed_detail = ({observed_field: observed_reasons}
+                       if attachment_inference_deferral.observed_valid(
+                           observed_reasons, value.get("local_deferred")) else {})
     detail = {"at": value["at"], "age_s": round(now - value["at"], 1),
               **{key: value[key] for key in (*counts, "paid_recovery_pending", "queue_status", 'failure_cohort') if key in value},
-              **writer_detail, **failure_detail, **ack_detail, **policy_detail, **defer_detail}
+              **writer_detail, **failure_detail, **ack_detail, **policy_detail, **defer_detail,
+              **observed_detail}
     if now - value["at"] > freshness_deadline(cfg):
         return {**detail, "state": "unknown", "reason": "attachment_ocr_status_stale"}
     waiting_reasons = (None, "busy", "writer_busy", "snapshot_deferred", "memory_deferred")
@@ -726,12 +732,17 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
             return False
         # extract_llm's own pending predicate, minus exhausted rows
         import extract_llm
+        import upgrade_scope
         _phase("llm_due_extract")
+        scope = upgrade_scope.resolve(cfg)
+        if scope.error:
+            raise ValueError("extract_upgrade_scope_unverified")
+        scope_sql = upgrade_scope.selection_sql(scope, "llm")
         return db.execute(
             f"SELECT 1 FROM messages m WHERE {extract_llm.pending_pred(db)} "
             "AND COALESCE((SELECT MAX(COALESCE(json_extract(e.meta,"
             f"'$.attempts'),0)) {extract_llm._ERROR_ROWS_SQL}), 0) < 5 "
-            "LIMIT 1", (extract_llm.KIND, extract_llm.EXTRACT_VERSION)
+            + scope_sql + " LIMIT 1", (extract_llm.KIND, extract_llm.EXTRACT_VERSION)
         ).fetchone() is not None
 
     # the LLM lane's own health record (llm_health.json): None means
@@ -787,6 +798,29 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
     return reasons
 
 
+def semantic_stall_detail(db, now: float, *, seconds=None) -> dict:
+    """Counts that explain a semantic stall (never part of its verdict):
+    pending user-facing vs reprocess-only jobs, and the resident lanes'
+    last-24 h semantic turns that found the run lock busy. None = unread."""
+    from semantic_due_selection import _ARRIVAL_FIRST_SQL
+    try:
+        user_facing, reprocess = bounded_health_read(db, lambda _check: db.execute(
+            f"SELECT COALESCE(SUM({_ARRIVAL_FIRST_SQL}=0),0), "
+            # CASE order keeps json_extract away from malformed payloads
+            "COALESCE(SUM(CASE WHEN NOT json_valid(payload) THEN 0 "
+            "WHEN COALESCE(json_extract(payload,'$.reprocess_only'),0)=1 THEN 1 ELSE 0 END),0) "
+            "FROM fetch_jobs WHERE kind='semantic' AND state='pending'").fetchone(),
+            seconds=seconds)
+    except Exception:
+        user_facing = reprocess = None
+    try:
+        turns = llm_availability.semantic_turns_24h(db, now=now)
+    except Exception:
+        turns = None
+    return {"user_facing_pending": user_facing, "reprocess_pending": reprocess,
+            "resident_turns_24h": turns}
+
+
 HEALTH_OBSERVATION_S = 0.25
 NOTIFICATION_OBSERVATION_S = 2.0
 HEALTH_SQL_BUDGET_S = 30.0  # one shared window for every SQL read build_health owns
@@ -795,7 +829,10 @@ HEALTH_OBSERVATION_ROW_BYTES = 2 * 1024 * 1024
 
 
 def bounded_health_read(db, read, seconds=None, *, observation=None):
-    """Bound additive reads on the tick-owned connection; preserve its transaction."""
+    """Bound additive reads on the tick-owned connection; preserve its transaction.
+
+    ``observation["phase"]`` records the operation active when a stop is detected.
+    """
     seconds = HEALTH_OBSERVATION_S if seconds is None else seconds  # read at call time
     started = time.monotonic()
     deadline = started + seconds
@@ -983,15 +1020,20 @@ def incomplete_parts_health(db, now, cfg=None, seconds=None, active_rows=None) -
     """Observe unfinished notification counts within the existing reader budget.
 
     ``active_rows``, when a list, is extended only after a complete read with
-    the active rows that read counted; a stopped read leaves it untouched."""
+    the active rows that read counted; a stopped read leaves it untouched.
+    On failure ``observation["phase"]`` names the operation active when the
+    stop was detected."""
     import notify_scope
     collected = []
     sink = {} if active_rows is None else {"active_rows": collected}
+    observation = {}
     try:
         report = bounded_health_read(
-            db, lambda _check: notify_scope.incomplete_parts_health(db, now, cfg, **sink),
+            db, lambda check: notify_scope.incomplete_parts_health(
+                db, now, cfg, observation=observation, checkpoint=check, **sink),
             seconds=NOTIFICATION_OBSERVATION_S if seconds is None
-            else min(seconds, NOTIFICATION_OBSERVATION_S))
+            else min(seconds, NOTIFICATION_OBSERVATION_S),
+            observation=observation)
         if active_rows is not None:
             active_rows.extend(collected)
     except Exception as exc:
@@ -999,7 +1041,8 @@ def incomplete_parts_health(db, now, cfg=None, seconds=None, active_rows=None) -
                 "by_state": dict.fromkeys(("pending", "unknown", "not_sent", "held")),
                 "by_plan": dict.fromkeys(("current", "superseded")),
                 "oldest_age_s": None, "observed_at": now,
-                "status": "unknown", "reason": _observation_failure(exc)}
+                "status": "unknown", "reason": _observation_failure(exc),
+                "observation": observation}
     return {**report, "status": "recorded"}
 
 
@@ -1052,8 +1095,10 @@ def carried_measurement(current: dict, previous, now: float) -> dict:
     observed = previous.get("observed_at") if isinstance(previous, dict) else None
     if (previous is None or previous.get("status") not in (None, "recorded", "stale_measurement")
             or not finite_number(observed) or not 0 <= now - observed <= CARD_STALL_S
-            # every field the unknown block would publish must be carried
-            or any(k not in previous for k in current if k not in ("status", "reason"))):
+            # every field the unknown block would publish must be carried;
+            # observation is this read's own stop diagnostic, not carried data
+            or any(k not in previous for k in current
+                   if k not in ("status", "reason", "observation"))):
         return current
     # The original observed_at is kept so chained carries still expire.
     return {**previous, **{k: current[k] for k in ("observation",) if k in current},
@@ -1208,6 +1253,7 @@ def build_health(db, result: dict, status: str,
             seconds=remaining())
     except Exception:
         _pending_rows = None
+    semantic_detail = semantic_stall_detail(db, now, seconds=remaining())
     source = ledger_key(db)
     coverage = cached_coverage(extract_llm.EXTRACT_VERSION, now, source)
     if coverage is None:
@@ -1466,12 +1512,13 @@ def build_health(db, result: dict, status: str,
                    "held_pinned_attachments": held_pins,
                    "incomplete_parts": incomplete_parts,
                    "part_holds": part_holds},
-        "semantic_jobs": ({"pending": _pending_rows[0]["c"],
-                           "oldest_age_s": (round(now - _pending_rows[0]["o"], 1)
-                                            if _pending_rows[0]["o"] else 0)}
-                          if _pending_rows is not None else
-                          {"pending": None, "oldest_age_s": None,
-                           "status": "unknown", "observed_at": now}),
+        "semantic_jobs": {**({"pending": _pending_rows[0]["c"],
+                              "oldest_age_s": (round(now - _pending_rows[0]["o"], 1)
+                                               if _pending_rows[0]["o"] else 0)}
+                             if _pending_rows is not None else
+                             {"pending": None, "oldest_age_s": None,
+                              "status": "unknown", "observed_at": now}),
+                          **semantic_detail},
         "extract_qc_jobs": ({"pending": _pending_rows[1]["c"],
                              "oldest_age_s": (round(now - _pending_rows[1]["o"], 1)
                                               if _pending_rows[1]["o"] else 0)}

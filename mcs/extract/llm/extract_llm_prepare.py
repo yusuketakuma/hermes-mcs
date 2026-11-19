@@ -9,6 +9,7 @@ import inference_version as inference
 import cloud_client
 import cloud_policy
 import cloud_inference
+import clinical_allergies
 import extract_llm_engine
 import extract_llm_local_rebuild as local_rebuild
 from clinical_chunking import plan_chunks
@@ -34,6 +35,7 @@ from extract_llm_prompts import (
     _hint_coverage,
 )
 from extract_llm_proofs import (
+    _CheckpointChanged,
     _saved_chunk_size,
     _saved_chunk_state,
 )
@@ -65,7 +67,7 @@ from extract_llm_source_contract import (
     _source_writable,
 )
 from extract_llm_store import (
-    _replace_current,
+    _commit_extraction_atomic,
 )
 
 def _prefilter_enabled() -> bool:
@@ -78,25 +80,62 @@ def _prefilter_enabled() -> bool:
 
 
 def _low_signal(body: str, hints: dict | None) -> bool:
-    """Skip only a standalone greeting with no rule findings or failed hint parse."""
-    if hints is None or len(hints) > 1:
+    """Recognize only complete greetings or the requested standalone thanks."""
+    if (not isinstance(body, str) or not isinstance(hints, dict) or len(hints) > 1
+            or clinical_allergies.cue_spans(body)):
         return False
-    return isinstance(body, str) and _GREETING_RE.fullmatch(body) is not None
+    return _GREETING_RE.fullmatch(body) is not None or body.strip() == "ありがとうございます。"
+
+
+def _prefilter_evidence_absent(db, r) -> bool:
+    # Metadata cannot prove that old, foreign-context or damaged recovery rows are unrelated.
+    return (db.execute("SELECT 1 FROM artifacts WHERE kind='extract_llm_chunk' "
+                       "AND message_id=? LIMIT 1", (r["message_id"],)).fetchone() is None
+            and not cloud_policy.owns_request(db, route="reextract",
+                project_id=r["project_id"], message_id=r["message_id"]))
+
+
+def _settle_prefiltered(ledger, r, *, hints=None):
+    """Adopt an empty candidate only under the runner's real claim and atomic gates."""
+    if (not isinstance(r, dict) or "_prefilter_prior" not in r
+            or r.get("parent_id") is not None
+            or r.get("_resume_refused") or r.get("_checkpoint_conflict")):
+        return "declined"
+    hints = _rule_hints(r) if hints is None else hints
+    if not _low_signal(r["body_text"], hints):
+        return "declined"
+
+    def prepare_write():
+        def prior_current():
+            prior = _prior_extract(ledger.db, r)
+            return (_prior_identity(prior) if prior is not None else None) == r["_prefilter_prior"]
+        if not prior_current():
+            raise _CheckpointChanged()
+        _ensure_v1(ledger, r, hints)
+        if not prior_current():
+            raise _CheckpointChanged()
+
+    def adopt():
+        try:
+            return _prefilter_evidence_absent(ledger.db, r)
+        except sqlite3.Error:
+            return False
+
+    record = {**_hint_coverage(loads_dict(_PREFILTER_CONTENT), hints, r["body_text"]),
+              "checked_hint_candidates": 0}
+    return _commit_extraction_atomic(
+        ledger, r, _PREFILTER_CONTENT, r.get("_context"),
+        {"validation": {"items_dropped": 0, "evidence_dropped": 0},
+         "completeness_chunks": 1, "completeness": {"0": record}},
+        None, {"prefilter": "no_signal"}, (), check_current=True, mark_context=False,
+        expected_prior=r.get("_expected_prior"),
+        adoption_guard=adopt,
+        before_replace_tx=prepare_write)
 
 
 def _mark_prefiltered(ledger, r) -> bool:
-    """Settle a no-signal row without an LLM call — same guarded write
-    path as _replace_current (v4 fence, hash gate, supersede sweep)."""
-    hints = _rule_hints(r)
-    if not _low_signal(r["body_text"], hints):
-        return False
-    record = {**_hint_coverage(loads_dict(_PREFILTER_CONTENT), hints, r["body_text"]),
-              "checked_hint_candidates": 0}
-    return _replace_current(
-        ledger, r, _PREFILTER_CONTENT,
-        integrity={"validation": {"items_dropped": 0, "evidence_dropped": 0},
-                   "completeness_chunks": 1, "completeness": {"0": record}},
-        extra_meta={"prefilter": "no_signal"})
+    """Keep the boolean helper API while using the runner's claimed settlement path."""
+    return _settle_prefiltered(ledger, r) == "written"
 
 
 @contextlib.contextmanager
@@ -244,6 +283,7 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
             block("prepare_deadline")
             continue
         r = dict(r)
+        r.pop("_prefilter_prior", None)
         binding = inference_dependency_loss.source_binding_from_row(r)
         if (not isinstance(binding, str) or not binding
                 or r.get('_source_binding', binding) != binding
@@ -328,15 +368,9 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         if r["qc_src"] and qc is None:
             continue   # flagged in SQL but the audit is gone or clean
         hints = _rule_hints(r)
-        if prefilter and not cloud_only and qc is None and not r["thin_src"] and rebuild_state is None \
-                and not r["human_src"] \
-                and _low_signal(r["body_text"] or "", hints):
-            # no clinical signal on either net — settle with a durable
-            # marker + v1 coverage instead of burning an LLM call
-            _ensure_v1(ledger, r, hints)
-            if _mark_prefiltered(ledger, r):
-                skipped += 1
-            continue
+        prefilter_candidate = (prefilter and not cloud_only and qc is None
+            and not r["thin_src"] and not r["human_src"] and rebuild_state is None
+            and r.get("parent_id") is None and _low_signal(r["body_text"] or "", hints))
         base = _thread_context(ledger.db, r, budget=600) if enabled else _thread_context(ledger.db, r)
         r['_input_context'] = base
         r['_input_context_budget'] = 600 if enabled else _CTX_TOTAL_MAX
@@ -409,6 +443,13 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         r.pop("_expected_prior", None)
         r.pop("_protected_prior_ref", None)
         prior = _prior_extract(ledger.db, r)
+        if prefilter_candidate:
+            try:
+                if _prefilter_evidence_absent(ledger.db, r):
+                    r["_prefilter_prior"] = _prior_identity(prior) if prior is not None else None
+            except sqlite3.Error:
+                block("prepare_database_unavailable")
+                continue
         if prior is not None and extract_quality.protected_assertions(loads_dict(prior["content"]), r["body_text"]):
             r["_protected_prior"] = dict(prior)
             r["_expected_prior"] = _prior_identity(prior)

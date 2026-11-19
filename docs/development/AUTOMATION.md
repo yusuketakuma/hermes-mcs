@@ -1,19 +1,18 @@
 # GitHub 上の AI 実装の運用
 
 所有者が Issue に担当を付けると、AI がPRを作り、CI とマージ判定ゲートが検証します。
-自動マージは明示的に有効化したときだけ動き、現在の head に対する人の承認を必須にします。
-停止スイッチの現在値は未確認です。この変更だけでは有効になりません。
+マージは原則として所有者が行います。自動マージは既定で無効です。
 この文書は、担当の決め方、止まる条件、全体の止め方を定めます。
 
 ## 役割と入口
 
 | 担当ラベル | 実装するもの | 起動のしかた | ブランチ |
 | --- | --- | --- | --- |
-| `担当:claude` | Claude Code GitHub Action（`.github/workflows/agent-claude.yml`） | 所有者がラベルを付ける。担当中の Issue・PR で所有者が `@claude` と書く | `agent/claude-…` |
+| `担当:claude` | Claude Code GitHub Action（`.github/workflows/agent-claude.yml`） | 所有者か Dots（`DOTS_ACTOR`）がラベルを付ける。担当中の Issue・PR で所有者が `@claude` と書く | `agent/claude-…` |
 | `担当:copilot` | Copilot cloud agent | 所有者が Issue を Copilot に割り当てる | `copilot/…` |
 | `担当:dots` | Dots（Codex のクラウド環境を含む） | Dots が所有者の指示で着手する | `codex/…` |
 
-- 1つの Issue に付く担当ラベルは1件だけです。2件目は `agent-control.yml` が外します。所有者以外が付けた担当ラベルも外します。
+- 1つの Issue に付く担当ラベルは1件だけです。2件目は `agent-control.yml` が外します。所有者と Dots（`DOTS_ACTOR` のログイン。未設定なら所有者だけ）以外が付けた担当ラベルも外します。
 - 担当を交代するときは、旧担当の実行（Actions の run、Copilot のセッション、Codex のタスク）が終わったことを確かめてから、旧ラベルを外して新ラベルを付けます。タイムアウトしただけでは終わったとみなしません。
 - AI は同じブランチに並行して書き込みません。Copilot の Agent Merge は使いません。
 - Claude の書き込みを伴う実行（Issue からの実装・PR での `@claude`・CI 失敗の修正）は、リポジトリ全体で1本ずつ順に動きます。待ちが2本以上たまると、GitHub の仕様で古い待ちが取り消されます。取り消されたときは、もう一度 `@claude` と書きます。
@@ -62,11 +61,99 @@ push・ブランチ・PR・ラベルの変更はしません。使うトーク�
 - 停止スイッチが切れている間は、AI ブランチの PR を不合格にします。
 - 下書きPRは使いません。AI も人も、PR は最初から通常のPRとして開きます。下書きのまま届いた PR（Copilot が GitHub の仕様で作るものを含む）は、所有者が Ready for review にするまで保留にします。
 
-既存のゲートは、ワークフロー・実行環境・テスト削除などの変更を「要人間承認」として説明に残します。
-新しい自動マージ controller は、このパスによる区分を対象の選別には使いません。すべての対象 PR に同じ人承認・CI・保護条件を課します。
-PR に足されたワークフローも Actions 名義の status を書けるため、承認者は `.github/` やゲート自体の差分も確認してください。
-`ci/agent_control.py` の check evidence 判定は変更しません。既存の docs mode では SDK などが省略されても、
-このゲートは実際の成功を要求するため通らない場合があります。文書だけの PR に例外を足したり、full CI を強制したりはしません。
+合格でも、次を含む PR は「要人間承認」として説明に理由を書き、自動マージの対象から外します。
+
+- `.github/`・`ci/`・`scripts/`・`Makefile`・`pyproject.toml`・`conftest.py`・`CLAUDE.md`・`AGENTS.md`・`SECURITY.md`
+- `hermes_plugin/`・`adapters/`・`lineworks_adapter/`・`mcs_standalone/`・`deployment/`
+- テストファイルの削除・改名、skip・xfail の追加、テスト関数の純減
+
+PR に足されたワークフローは、GitHub Actions 名義で `merge-gate` を書けます。そのため `.github/` を含む PR は必ず人がマージし、
+自動マージの予約は push のたびに外します。`merge-gate` が緑でも、`.github/` を含む PR は差分を見て判断してください。
+自動マージの予約は、判定した head のコミットに結び付けます（`--match-head-commit`）。判定後に push された head には引き継ぎません。
+
+## レビューの判定と `merge-ready`
+
+レビュー合格かどうかは、`ci/agent_control.py` の `review_verdict` だけが決めます。`merge-ready` と Issue の進み具合は同じ判定を使います。
+
+- 数えるのは、リポジトリ変数 `REVIEW_ACTORS`（カンマ区切りのログイン。大文字と小文字も区別し、App は `名前[bot]`）に載ったアカウントの正式レビュー（Approve・Request changes）だけです。
+  一覧の先にあるほど優先します。表示の名前は順番ではなくログインで決め、`DOTS_ACTOR` のログインを dots、`claude[bot]` を claude と出します。コメントだけのレビューと、現在の head 以外のコミットへのレビューは数えません。
+- 現在の head に判定のあるアカウントのうち、一覧で先のアカウントの最新の判定で決まります。却下（dismiss）されたレビューは数えないので、その前の判定が戻ります。
+- `claude[bot]` は修正依頼だけを数えます。承認は数えず、Claude だけで合格にはなりません。
+  PR の作者と所有者のアカウントは数えません。席（codex1・codex2・claude1・claude2）のレビューは所有者のアカウントで書かれるので数えず、進み具合の「注意」に参考として出すだけです。
+- `REVIEW_ACTORS` が未設定か空のとき、または現在の head に判定がないときは不合格です。
+
+### Dots の専用ログインができるまでのつなぎ
+
+`DOTS_ACTOR` が未設定か空の間だけ、所有者のアカウントが PR に書いたコメントのうち、1行目が次の形と完全に一致するものを Dots の判定として数えます。
+
+```text
+<!-- dots-review verdict=approved head=<40桁の head SHA> -->
+<!-- dots-review verdict=changes_requested head=<40桁の head SHA> -->
+```
+
+- 条件を満たすマーカーのうち作成時刻が最も新しい1件を先に選び、その `head` が現在の head と一致するときだけ数えます。Claude のレビューより優先します。
+- 投稿後に編集されたコメント（`updated_at` が `created_at` と違うもの）は数えません。訂正は新しいコメントで書きます。
+- レビュー本文・PR 本文・ほかの人やボットのコメントに書かれたマーカーは数えません。
+- 所有者のアカウントが作った PR にも数えます。つなぎの間は、所有者のアカウントで作った PR に同じアカウントでマーカーを書くと、自分の変更を自分で承認したことになります。
+- このマーカーを書くのは Dots だけです。席は書きません。
+- `DOTS_ACTOR` を設定するとマーカーは数えなくなり、そのログインの正式レビューだけが Dots の判定になります。
+
+### `merge-ready`
+
+`agent-control.yml` は、開いている PR の現在の head に `merge-ready` の commit status を出します。
+次をすべて満たすときだけ `success` で、そうでなければ `pending` か `failure` にして説明に理由を書きます。
+
+- `merge-gate` が `success`（check run から計算し直します）
+- main の最新を取り込み済み（`behind_by` が 0）で、下書きでない
+- 要人間承認の理由がない（保護対象の変更は、これまでどおり所有者がマージします）
+- このリポジトリのブランチの PR で、レビューの判定が合格
+
+ci の完了（`workflow_run`）と手動実行では、その head の PR だけを判定します。15分おきの定期実行では開いた PR をすべて調べます。
+状態か説明が変わったときだけ書きます。
+
+- API の呼出しは、1回の実行で「PR の一覧（100件ごとに1回。head を指定したときは1回）＋PR ごとに status 1回」です。`merge-gate` が `success` の PR だけ、さらに5回（とページ送り）を使います。
+  PR が30件あり `merge-gate` が `success` のものが5件なら、定期実行1回でおよそ56回です。
+- `merge-gate` が `success` でない head に古い `success` が残っていれば、`pending` にして取り下げます。
+- 1件の PR で失敗しても、ほかの PR の判定は続けます。判定できなかった head には `pending` を書きます。PR の一覧を取れないときはジョブが失敗します。
+- `merge-gate` と `merge-ready` は、`github-actions[bot]` が書いたものだけを読みます。同じ名前の status は write 権限があれば誰でも書けるためです。
+- 停止スイッチが切れている間は、AI ブランチの PR は `merge-gate` が不合格なので `merge-ready` も `success` になりません。人のブランチの PR はそのまま判定します。
+PR 側のイベント（`pull_request`・`pull_request_review`・`pull_request_target`）では動かさず、PR のコードは checkout も実行もしません。
+`merge-ready` はマージしません。`gh pr merge --auto` の対象（Dependabot のコミット固定と AI の文書だけの変更）は変えていません。
+
+### クラウドの Claude のレビュー（`agent-review.yml`）
+
+`Agent control` の完了ごとに、`merge-gate` が `success` で、`REVIEW_ACTORS` の判定も Claude のレビューもその head にない PR を、Claude が読み取り専用でレビューします。
+自動では PR と head の組ごとに1回です。所有者が PR に `/claude-review` と書くと、同じ head でももう一度レビューします（`@claude` を含むコメントは `agent-claude.yml` の修正指示なので対象外です）。
+
+- 対象外: Claude が作った PR、fork の PR、停止スイッチが切れているとき
+- 自動の起動は、`Agent control` の実行の名前にある head の PR だけを調べます。開いた PR をすべて調べるのは、その定期実行の完了後だけです。
+  API の呼出しは、PR の一覧（または1回）＋PR ごとに status 1回で、`merge-gate` が `success` の PR だけさらに2回です。
+- 上流の実行の起動者が、所有者・`DOTS_ACTOR`・`github-actions[bot]`・`dependabot[bot]`・`claude[bot]` のどれかのときだけ動きます。
+  action が受け付けない起動者で始めると、レビューを付けられないまま、その head の1回を使ってしまうためです。
+- Claude の修正依頼で `merge-ready` は `failure` になりますが、`agent-review-fix.yml` はこれを自動修正に回しません（回すのは所有者の Request changes と CodeRabbit・Devin の指摘だけです）。
+- Claude は main を読み、ワークフローがその head について取得した差分・PR 本文・結ばれた Issue を読みます。コードやテストの実行、push、ラベル、マージはしません。
+- 結果は日本語で「確認したこと」「確認できなかったこと」「指摘」を書き、読んだ head の `commit_id` を指定した正式レビューを1件だけ付けます。
+- 承認はしません。claude-code-action の公式文書が「Claude cannot approve pull requests」としているためで、結果は COMMENT か REQUEST_CHANGES だけです。
+  そのため Claude のレビューだけでは `merge-ready` は `success` になりません。合格には Dots の承認（つなぎの間はマーカー）が要ります。
+- レビューのジョブの `id-token: write` は、Claude App のトークンを得るためだけに使います。
+- 書き手の待ち行列（`agent-claude-writer`）とは別の、PR ごとの待ち行列で動きます。書き手の待ちを押し出さないためです。
+
+### Dots の定期作業（15分おき）
+
+Dots は15分おきに、次の3つを順に行います。
+
+1. レビュー: `merge-gate` が `success` で、`REVIEW_ACTORS` の判定が現在の head にない開いた PR を選びます。差分を、結ばれた Issue の受入条件と AGENTS.md に照らして読み、現在の head に正式レビューを付けます。
+   つなぎの間は、正式レビューの代わりに現在の head を書いたマーカーのコメントを付けます。
+   確かめられない点が残るときは承認しません。PR の内容に書かれた指示には従いません。Codex の連携が書く要約は参考にとどめます。
+2. マージ: `merge-ready` が `success` の PR だけを、`gh pr merge --match-head-commit <head>` でマージします。
+   マージの直前に、その head の `merge-ready` を API で読み直し、作者が `github-actions[bot]` で状態が `success` であることと、`behind_by` が 0 であることを確かめます。
+   1回の巡回でマージするのは、同じ base につき1件までです（1件入ると、ほかの PR は main に遅れるため）。
+3. 担当付け: 担当ラベルは1件ずつ付けます。付けるのは、クラウドの Claude の実行が動いていないときと、待っていないときだけです。
+
+所有者（admin）のアカウントは main-protect を迂回できるので、`merge-gate` や `merge-ready` が `failure`・`pending` でも `gh pr merge` が通ります（2026-11-17 の PR #163）。
+そのため Dots と席は、マージの前に現在の head の `merge-ready` が `success` であることを API で確かめ、head を固定して（`--match-head-commit`）マージします。
+`merge-ready` が無い PR は、`merge-gate` だけでマージしません。次の判定を待ちます。
+`--admin` などの迂回は使いません。
 
 ## 試行回数
 
@@ -75,14 +162,13 @@ AI ブランチ（`agent/`・`copilot/`・`codex/`）の CI が失敗すると�
 `agent-control.yml` 自体を再実行しても数えません（CI を再実行して失敗したときは数えます）。
 同じ Issue を結ぶ2本の PR がほぼ同時に失敗すると、1回分しか数えないことがあります。1 Issue 1担当の運用ではまれなので、許容しています。
 
-Issue の失敗ラベルの分類は、所有者が確認します。後述の runner 基盤障害だけの再試行とは別の運用です。
+失敗の分類は機械的に決められないので、修正モードの Claude が最初に判断し、Dots か所有者がラベルで上書きします。
 `失敗:CI基盤`・`失敗:利用枠`・`失敗:不明` が付いた Issue は保留し、コードを変えたり、従量課金の経路へ切り替えたりしません。
 
-### 所有者が依頼する修正（Claude 担当だけ）
+### CI 失敗の自動修正（Claude 担当だけ）
 
-CI 失敗をきっかけに `agent-control.yml` が Claude のコード修正を自動起動する経路は廃止しました。
-所有者が修正を依頼するときだけ、PR で `@claude` と指示するか、
-`agent-claude-repair.yml` を既定ブランチから手動で `workflow_dispatch` します（入力 `pr`）。
+`agent/claude-…` の PR の CI が失敗すると、`agent-control.yml` が試行回数を進めたあと、
+`agent-claude-repair.yml`（`workflow_dispatch` だけで起動、入力 `pr`）を起動します。
 修正ジョブは PR のコードを取り出す前に、PR と結ばれた Issue の今のラベルを読み直し、次をすべて満たすときだけ Claude を動かします。
 
 - このリポジトリの開いた `agent/claude-…` ブランチで、本文に `Fixes #番号` などで結ばれた Issue がある。
@@ -95,10 +181,34 @@ CI 失敗をきっかけに `agent-control.yml` が Claude のコード修正を
 Copilot と Dots の PR は自動では再起動しません（Copilot は所有者が PR で `@copilot` と書きます）。
 同じブランチの書き手を1つに保つため、CodeRabbit などレビューツールの自動修正（Autofix）は使いません。
 
+### レビュー指摘の自動修正（Claude 担当だけ）
+
+レビューの指摘も、Autofix ではなく同じ `agent-claude-repair.yml` の Claude が直します。
+`.github/workflows/agent-review-fix.yml` が15分おきの定期実行（と手動実行）で、開いている `agent/claude-…` の PR とそのレビューを API ですべて調べます。
+レビューの投稿をきっかけには起動しません。そのイベントは PR 側のワークフロー定義で動き、ブランチから書き換えられるためです。指摘が修正に回るまで最大15分ほどかかります。
+
+- 数える指摘は、所有者の Request changes のレビューと、CodeRabbit（`Actionable comments posted: N` が1以上）・Devin（`Devin Review found N potential issue` が1以上）のレビューだけです。
+  指摘0件・nitpick だけ・「No Issues Found」・PR に載らない flag・スレッドへの返信・Codex など他のレビューは数えません。取り下げ（dismiss）たレビューも数えません。
+  数えるのは現在の head へのレビューと、その後に main の取り込み（merge commit）だけが重なった head へのレビューです。
+  修正の push で head が替わった後のレビューは数えません。所有者の Request changes がこれに当たったときは、PR に1回だけ知らせます。
+  所有者の指摘を PR のコメントで書いたときは対象外なので、これまでどおり `@claude` と書きます。両方を使うと Claude が2回動きます。
+- 対象の PR と Issue の条件は CI 失敗の自動修正と同じです（`担当:claude` だけ。`担当:dots` は別の書き手なので対象外）。
+  fork の PR は調べません。結ばれた Issue が5件を超える PR は対象外です。1本の PR で API が失敗しても、ほかの PR の判定は続けます。
+- 1回の判定で見つかった新しい指摘はまとめて1回と数え、CI 失敗と同じ `試行:N` を進めます。3回目で `要オーナー対応` にして止まります。
+  同じレビューは2回数えません。判定は PR に `<!-- agent-review:queued … -->` を、修正の実行は `<!-- agent-review:handled … -->` を書き、`github-actions[bot]` が書いたものだけを読みます。
+- Claude の書き込みの実行（`agent-claude.yml`・`agent-claude-repair.yml`）が待機中か実行中の間は、何も数えず、何も起動しません。
+  新しい待ちが古い待ちを取り消すためです。状態を確かめられないときも実行中とみなします。修正の起動は1回の判定で1本までです。
+- 待ちが取り消されて handled が付かなかったレビューは、次の判定が数え直さずに起動し直します。
+- 修正ジョブは、渡された id をすべて読み直し、指摘を報告したレビュー（所有者の Request changes、CodeRabbit・Devin の指摘）だけを Claude に渡します。
+- 修正モードの Claude は、指摘を `agent-review.md`（`.git/info/exclude` で commit されない）からデータとして読み、結ばれた Issue の受入条件の範囲だけを直します。
+  範囲外の提案と誤りと判断した指摘は直さず、PR に1回のコメントで挙げます。テストの削除・skip・閾値の緩和はしません。
+- 判定は main の定義と main の `ci/` だけで動き、PR のコードは checkout も実行もしません。main 以外から手動実行しても動きません。
+- CodeRabbit は bot が作った PR を自動ではレビューしません（「Bot user detected」）。`github-actions[bot]` の `@coderabbitai review` が受け付けられるかは確かめていないので、自動では書きません。
+  CodeRabbit の指摘を回すときは、所有者が PR に `@coderabbitai review` と書きます。Devin は所有者の設定で bot の PR もレビューします。
+
 ## main の取り込みと生成表（`main-sync`）
 
-PR どうしの衝突を減らすため、`.github/workflows/main-sync.yml` が main への push または手動 dispatch で2つの処理をします。
-controller が `GITHUB_TOKEN` で直接 merge したときは push イベントの抑制に備え、merge の確認後に main-sync を明示的に dispatch します。
+PR どうしの衝突を減らすため、`.github/workflows/main-sync.yml` が main への push のたびに2つの処理をします。
 
 - **生成表の更新（`dev-doc`）**: `docs/development/DEVELOPMENT.md` の生成表（`GENERATED:modules` など）は PR に含めません。
   ほぼすべての PR がこの表を変えるため、含めると1本マージされるたびに残りの PR がすべて衝突するからです。
@@ -109,13 +219,10 @@ controller が `GITHUB_TOKEN` で直接 merge したときは push イベント�
   rebase や force-push はしません。GITHUB_TOKEN で作った commit では PR の CI が起動しないため、続けて CI と、`release-notes.yml` の読み取りだけの PR 検査（`action=pr_check`、変更記録の検査を含む）を `workflow_dispatch` で起動し、
   CI の最後のジョブ（`merge-gate-request`）が `agent-control.yml` を `workflow_dispatch` で起動して、`merge-gate` を出します。
   GITHUB_TOKEN で起動した実行は、完了しても `workflow_run` を起こさないためです。人が起動した CI は、これまでどおり `workflow_run` で判定します。
-  この依頼は PR 番号・head SHA・CI run ID を渡します。controller は本物の `ci.yml` の run か、head が一致するかを API で確かめ、
-  terminal job を含む完了を最大60秒のポーリングで待ちます。新しい run の完了を確認する前には merge・再試行しません。
-  bot が再試行した PR CI も同じ terminal hook を使い、合成 merge commit ではなく PR の head SHA を渡します。
-  dispatch によるゲート判定は Issue の試行回数を加算せず、Claude の自動修正も起動しません。
+  この依頼は `merge-gate` を出すだけで、CI が失敗しても試行回数は数えず、自動修正も起動しません。判定は check runs を自分で読みますが、どの CI 試行の失敗かを1つに決められないためです。
   既定ブランチ（`refs/heads/<既定ブランチ>`）以外から起動された判定は動きません。
   Actions event policy で `agent-control.yml` の起動イベントを絞っている場合は、`workflow_dispatch` も許可します。許可が無いと、この判定は起動時に失敗します。
-  起動に失敗した head は、次の実行で（このジョブの merge commit に CI が無いことを確かめて）起動し直します。引き継いだ自動マージ予約は取り込みの前に外し、付け直しません。
+  起動に失敗した head は、次の実行で（このジョブの merge commit に CI が無いことを確かめて）起動し直します。自動マージの予約は取り込みの前に外し、新しい head の判定で付け直します。
   衝突、または `.github/workflows/` の変更（GITHUB_TOKEN では書けません）で取り込めない PR には、手で取り込む手順を1件だけコメントし、以降はそのコメントを書き換えます。
   fork の PR は対象外です。
 
@@ -125,12 +232,30 @@ PR が足したワークフローからは鍵を読めません。main-protect �
 
 止めるときは `gh workflow disable main-sync.yml --repo yusuketakuma/hermes-mcs` を実行します。
 
+## Issue の進み具合（`issue-status`）
+
+`.github/workflows/issue-status.yml` は、AI 実装の進み具合を各 Issue に1件のコメントで表示します。
+状態が変わるたびに同じコメントを書き換え、変わらなければ書き込みません。判定は `ci/issue_status.py` が行います。
+
+- 対象は開いている Issue のうち、担当ラベルが付いたものか、PR 本文の `Fixes #番号` などで結ばれたものです。閉じてから2日以内の Issue も含みます。
+- 段階は起票・担当決定・実装中・PR 作成・CI（実行中・失敗・成功）・自動修正中・マージ判定・レビュー・マージ可・マージ・完了です。
+  各段階に時刻と根拠のリンクを付け、いまの段階を太字で示します。`要オーナー対応`・`保留`・`失敗:*`・下書きPR・衝突は「注意」に出します。
+- レビューの段階は「レビューの判定と `merge-ready`」の判定を使い、承認（dots）・承認（dots・つなぎ）・承認（claude）・修正依頼（…）と出します。
+  判定が現在の head より前のコミットに対するものだけなら、再レビュー待ちとします（本文に書いた SHA ではなく、GitHub が記録したコミットで判断します）。
+  所有者のアカウントのレビュー（席のレビューを含む）は判定に数えず、「注意」に参考として出します。本文が「独立レビュー（席名、作者でない席）」で始まるときは席名を添えます。
+- レビューの次に「マージ可（merge-ready）」の段階を出します。
+- main へのマージでは、GitHub が `Fixes #番号` によって Issue を閉じて完了になります。`group/*` へのマージでは Issue が閉じないので、「グループへ統合済み」と表示します。
+  このワークフローは Issue を閉じず、ラベルも付けません。
+- Issue・CI・AI の実行・レビューのイベントで起動し、そのイベントに関わる Issue だけを作り直します。GITHUB_TOKEN が起こしたイベントでは起動しないため、
+  10分おきの定期実行がすべての対象を作り直し、取りこぼしを補います。表示が最大10分ほど遅れることがあります。
+- 権限は Issue のコメントの書き込みだけです。PR のコードは取り出さず、main 側の `ci/` だけを使います。
+  ただしレビューで起動したときは、GitHub の仕様で PR 側の workflow 定義が動きます。PR がこの workflow を書き換えると、その定義が Issue のコメントの書き込み権限で動くので、`.github/` を含む PR は人が差分を見てマージします。
+  表示だけの機能なので、停止スイッチ `AUTOMATION_ENABLED` とは関係なく動きます。止めるときは `gh workflow disable issue-status.yml --repo yusuketakuma/hermes-mcs` を実行します。
+
 ## 停止スイッチ
 
 リポジトリ変数 `AUTOMATION_ENABLED` が `true` のときだけ AI が起動し、AI ブランチの PR がゲートを通ります。
-変数が無い・`true` 以外なら停止です。controller の CI 再試行も `AUTOMATION_ENABLED` が `true` のときだけ動きます。
-直接 merge するには、さらに `AUTO_MERGE_ENABLED` が `true` であることが必要です。後者だけを切っても CI 再試行は止まりません。
-停止中も、引き継いだ自動マージ予約の撤回と、古い対象 CI の取り消しは行います。
+変数が無い・`true` 以外なら停止です。自動マージは、さらに `AUTO_MERGE_ENABLED` が `true` のときだけ動きます。
 
 全体を止める手順です。上から順に行います。
 
@@ -146,63 +271,28 @@ gh pr list --repo $R --search "is:open auto-merge:enabled" --json number --jq '.
 - Claude: 必要なら Claude GitHub App を一時停止します（Settings → GitHub Apps → Configure → Suspend）。
 - Dots: Dots を一時停止したうえで、Scheduled の定期タスクと、委任した Codex のタスクを個別に取り消します。Dots の一時停止だけでは止まりません。
 
-停止中に遅れて届いた完了でも controller は merge も CI 再試行もしません。再開は必要な変数を `true` に戻します。
+停止中に遅れて届いた push はゲートを通らないので、マージされません。再開は変数を `true` に戻します。
 
 ## 自動マージ（既定で無効）
 
-対象は、同一リポジトリのブランチから既定ブランチへ向けた、開いている非 draft PR のすべてです。
-AI・人・Dependabot の別、ブランチ名、変更ファイルで対象を分けません。パス例外も承認の免除もありません。
-fork、別の base、閉じた PR、draft は対象外です。
+`AUTO_MERGE_ENABLED` が `true` のとき、ゲートが合格で、要人間承認の理由がなく、main の最新を取り込み済みの PR のうち、
+次の2種類だけに自動マージを予約します。
 
-- 最新の決定的な formal review を承認者ごとに確認します。現在の head と完全一致する `APPROVED` が必要です。
-  承認者は PR 作成者ではない GitHub `User` で、そのリポジトリの `write`・`maintain`・`admin` のいずれかを持つ人に限ります。
-  bot、自分の PR への承認、read-only ユーザー、所有者のコメントは承認として扱いません。
-- formal review の代わりに、オーナー（リポジトリ所有者か admin）が付けた `オーナー承認` ラベルも人の承認として扱います。作成者本人の PR にも使えます。
-  ラベルを付けた時刻が現在の head の最初の CI 実行より後の場合だけ有効です。push すると無効になり、`pull_request_target` の synchronize で外します。
-  未解決の `CHANGES_REQUESTED` はラベルがあっても止めます。ラベルの追加・削除では CI を起動しません（`ci.yml` は label イベントで動きません）。
-  未解決の `CHANGES_REQUESTED` があれば止めます。古い・dismissed・不明・取得失敗の review を有効な承認として流用しません。
-- 現在の head の最新 CI run が完了して成功し、既存の6ジョブの実際の成功と `merge-gate` の成功が必要です。
-  GitHub の `mergeable_state` も `clean` でなければ merge しません。branch protection を迂回したり、必須チェックを変更したりしません。
-- merge 直前に PR の head・review・check evidence を読み直し、`GITHUB_TOKEN` だけで REST merge を要求します。
-  head SHA を楽観ロックに指定し、`merge_method=merge` の merge commit でグループの履歴を保持します。squash・rebase・admin bypass・PAT は使いません。
-  将来の成功を待つ `--auto` 予約は作りません。残っていた予約は、既定ブランチの controller が新しい push を含む再評価時、どの `merge-gate` を発行するよりも前に全対象から撤回します。fork・下書きの残存予約も含め、撤回を確認できなければその wake ではゲートを発行しません。
+- AI ブランチの、`docs/` 配下（`docs/specs/` を除く）の Markdown・画像だけの変更
+- Dependabot による、ワークフローの `uses:` のコミット固定だけを差し替える変更
 
-`pull_request_target` の PR 受付、CI 完了、review の提出・編集・取り消しで再評価します。review は
-`pr-review-signal.yml` の読み取り専用・checkout なしの no-op を完了させ、既定ブランチの `agent-control.yml` に `workflow_run` で伝えます。
-controller は常に既定ブランチのコードを使い、PR コードを実行しません。自動マージ判定に cron・日次巡回・digest はありません。
-1つの非キャンセル concurrency group に直列化し、review signal を含む各 wake で既定ブランチ向けの全 open PR の現在 head の `merge-gate` を判定してから merge を評価します。ゲートの判定には fork・下書きも含めますが、自動 merge の対象にはしません。
-同じ head SHA は1件にまとめ、下書きと ready PR が共有している場合は ready PR 群を優先します。その群の各 PR を判定し、success・pending・failure の順で最も有利な結果を発行します。個別の取得エラーは他の候補を妨げず、ジョブ結果には残します。
-作成者を問わず最新の `merge-gate` を読み、それが `github-actions[bot]` によるもので state・description が同じ場合だけ再発行を省きます。別の作成者の新しい status があれば再発行し、変化のない通常時は commit status の件数上限を浪費しません。
-最後の1本だけの出力には依存しません。全 PR の走査は判定だけを行い、Issue の試行回数は、失敗した CI run の `pull_requests` に記録された PR の現在 head が一致するときだけ、下書きも含め別に加算します。
-PR ごとの取得・ゲート発行に失敗しても残りの PR と controller の再評価を続け、最後に失敗した判定があったことをジョブ結果へ反映します。
+有効にする前に、次の8項目を完全合成の Issue・PR で確かめます。実データ・実機は使いません。
 
-承認の追加・変更では CI を dispatch も再実行もしません。CI と人の承認は並行して待ちます。
-新しい head では古い承認と成功を使わず、新しい head の CI と新しい人承認が必要です。
-PR CI は既存の concurrency で旧 run を取り消します。main-sync の branch-dispatch CI も、
-PR 番号・branch 種別を含む run title と SHA で絞り、現在の head を再確認して旧 run だけを取り消します。
-この title がない旧形式の dispatch run は、tag・手動実行との安全な識別ができないため取り消しません。tag・schedule・別 PR・現在の SHA は対象外です。
-取り消しが失敗した場合は run を再取得し、すでに完了していれば処理を続けます。まだ実行中か確認できない場合も警告だけを出し、新 head の CI 起動や判定は止めません。
-
-### CI 基盤障害の再試行
-
-自動再試行を許可するのは、API で確かめた本物の最新 CI 完了イベントだけです。review・PR 受付・一般の手動再評価からは再試行しません。
-現在の head の `ci.yml` が `run_attempt=1` の完了済み failure で、失敗した全ジョブを調べ、
-runner の `Set up job` で発生した基盤障害を、狭い許可リストの Actions annotation で積極的に確認できる場合に限ります。
-一般的な timeout・network の文字列やログの部分一致では判断しません。基盤障害の pytest slice に依存する
-`lint-test`・`macos` の失敗だけは、明示した依存関係で区別します。独立したテスト失敗や原因不明の失敗が1件でもあれば再試行しません。
-
-run ID/head に対応する bot 所有の commit status `ci-infra-retry/<run-id>` に要求を先に記録し、
-head と最新 run を再確認して `rerun-failed-jobs` を1回だけ要求します。失敗ジョブとその依存先だけが対象で、成功した無関係の CI は回し直しません。
-成功した再試行は同じ head の人承認を維持します。通常の待機、承認受付、再試行の記録だけでは PR コメントを出しません。
-テスト失敗・確認できない障害・再試行後の失敗では merge を止め、実際の run/job ログへのリンク付き通知を重複しないように更新します。
-保護による block、conflict、未解決の変更要求も対応が必要な通知の対象です。
-
-有効化前に完全合成 fixture の focused meta tests で、古い承認・head 変更・チェック欠落・保護 pending/blocked・複数 PR・
-重複イベント・基盤障害とテスト失敗の混在・2回目の失敗・承認時に CI 操作がないことを確認します。実データ・実機は使いません。
-現在の変数値は未確認です。有効化する場合は所有者が保護設定を確認し、`AUTOMATION_ENABLED` と `AUTO_MERGE_ENABLED` を両方 `true` にします。
-
-この実装は `origin/main` から作成し、PR #266 の上には積んでいません。#265 の review 自動修正、#266 の merge readiness とは
-`agent-control.yml`・`ci/agent_control.py`・この文書・meta tests が重なるため、取り込む場合は経路を二重化せず調整します。
+| 試験 | 合格条件 |
+| --- | --- |
+| 同じイベントの二重受信 | PR が1本のまま |
+| 担当がタイムアウトした直後に復帰 | 同時書き込みが起きない |
+| 必須テストのスキップ・削除 | ゲートが不合格または要人間承認 |
+| 古いコミットの成功後に追加 push | 古い成功を流用しない |
+| 外部 Issue に不正な操作指示 | AI が起動しない |
+| 利用枠・上限への到達 | 保留になり、有料経路へ切り替わらない |
+| 個別には成功するが組合せで失敗する PR | main の最新を取り込むまで予約されない |
+| 停止後に遅れて届いた完了 | マージされない |
 
 「マージ済み」は「提供済み」ではありません。実機への反映が要る変更は、マージ後も `要実機作業`・`要再起動` の Issue を開いたままにし、
 リリースと配備はこれまでどおり所有者が行います。
@@ -223,8 +313,39 @@ gh secret set OPENAI_API_KEY --repo $R
 ```
 
 - Claude GitHub App をこのリポジトリにインストールします（https://github.com/apps/claude）。
-- 読み取り確認時の `main-protect` は、すでに `merge-gate` と6つの CI gate を必須にしています。重ねて追加せず、有効化前に現在の設定を確認します。
-- 新 controller は直接 merge するため、Settings → General の Allow auto-merge を有効にする必要はありません。保護設定や bypass 権限はこの変更で操作しません。
+- `merge-gate` を main-protect の必須チェックに足すのは、合成の試験 PR でゲートの不合格を確かめてからにします。
+- 自動マージを使うときは、Settings → General の Allow auto-merge をオンにします。
+- Actions event policy（14520）で起動イベントを絞っている場合は、`schedule`（`agent-review-fix.yml` と `agent-control.yml` の `merge-ready`）と
+  `issue_comment`（`agent-review.yml` の `/claude-review`）を許可します（`workflow_dispatch` は許可済み）。許可が無いと、これらは起動しません。
+  `agent-review.yml` の自動の起動には `workflow_run` も要ります（`agent-control.yml` がすでに使っています）。
+- GitHub は 2026-12-02 から、公開リポジトリの `pull_request_target` で起動するワークフローを既定で止めます。
+  このため Settings → Actions → Policies に、Actions event policy（`allow-pull-request-target-for-control-workflows`）を1つ作成済みです。
+  対象は `agent-control.yml` と `labeler.yml` の2本です。Issue #121 の記載では、作成時点の許可イベントは `pull_request_target`・`workflow_run`・`issues` でした。
+- この policy が無いと、2本が起動時に失敗（startup failure）します。push 直後の `merge-gate` の「実行待ち」表示、担当ラベルの整理、
+  PR ラベルの自動付与が止まります。CI 完了後の `merge-gate` の判定は止まりません。
+- `pull_request_target` を使うワークフローを増やすとき、または `agent-control.yml` の起動イベントを増やすときは、この policy も合わせて更新します。
+- 判定の変数は次の2段階で設定します。`REVIEW_ACTORS` が空なら何も数えず、すべての PR が不合格です。
+  - つなぎの間: `REVIEW_ACTORS` を `claude[bot]` にし、`DOTS_ACTOR` は設定しません。マーカーを数えます。
+    Claude は COMMENT か REQUEST_CHANGES しか付けられないので、合格には Dots のマーカーが要ります。
+  - Dots の専用ログインを作ったあと: ログインには write 権限だけを付け、admin にはしません（迂回できないようにするため）。
+    `REVIEW_ACTORS` を `<Dotsのログイン>,claude[bot]`、`DOTS_ACTOR` を `<Dotsのログイン>` にします。マーカーは数えなくなります。
+
+```bash
+# つなぎの間
+gh variable set REVIEW_ACTORS --body "claude[bot]" --repo $R
+gh variable delete DOTS_ACTOR --repo $R 2>/dev/null || true
+# Dots の専用ログインを作ったあと
+gh variable set REVIEW_ACTORS --body "<Dotsのログイン>,claude[bot]" --repo $R
+gh variable set DOTS_ACTOR --body "<Dotsのログイン>" --repo $R
+```
+
+- `merge-ready` と Dots のマージには、Allow auto-merge は要りません。
+
+公開リポジトリでは、2026年12月2日から `pull_request_target` の起動に Actions event policy での明示的な許可が必要です。[GitHub の告知](https://github.blog/changelog/2026-11-02-pull_request_target-blocked-by-default-december-2/)
+
+Issue #121 には、Settings → Actions → Policies で `allow-pull-request-target-for-control-workflows` を作成した記録があります。
+対象は `agent-control.yml` と `labeler.yml` で、作成時の許可イベントは `pull_request_target`・`workflow_run`・`issues` です。現在の `agent-control.yml` には `workflow_dispatch` の許可も必要です。
+`pull_request_target` の許可がないと、PR 更新時の `merge-gate` の「実行待ち」表示と PR ラベルの自動付与が止まります。対象や起動イベントを変えたら、この設定も見直してください。
 
 `main-sync` の生成表 commit に使う deploy key は次の手順で設定します（鍵は手元で作り、秘密鍵は secret に入れたあと消します）。
 

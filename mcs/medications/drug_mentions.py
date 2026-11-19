@@ -10,6 +10,7 @@ import unicodedata
 import clinical_values
 import drug_map
 import extract_validation
+import mcs_util
 
 MAX_BODY = 3000
 MAX_ALIASES = 200000
@@ -28,8 +29,7 @@ def _safe_label(value):
                         or unicodedata.category(c) in ("Zl", "Zp") for c in value))
 
 
-def _expanded_end(body, start, alias):
-    end = start + len(alias)
+def _expanded_end(body, start, end, alias):
     base = clinical_values.medication_surface(alias)["base"]
     for stop in range(end + 1, min(len(body), end + 32, start + 80) + 1):
         surface = clinical_values.medication_surface(body[start:stop])
@@ -86,8 +86,14 @@ def build(db, cfg, body, *, deadline):
                            "resolver_version": drug_map.RESOLVER_VERSION}, **computed}
 
 
-def _matches(dictionary, body, deadline):
-    """Derive a bounded complete or explicitly partial candidate set in memory."""
+# (dict_id, sha256) -> folded alias table; a sha pin fixes the dictionary content.
+_TABLE: list = [None, None, False, 0]
+
+
+def _alias_table(dictionary, deadline):
+    key = (dictionary.dict_id, dictionary.sha256)
+    if _TABLE[0] == key:
+        return None if _TABLE[3] > MAX_ALIASES else (_TABLE[1], _TABLE[2])
     aliases, scanned, partial = {}, 0, False
     for entry in dictionary.entries.values():
         if entry.kind == "class":
@@ -104,18 +110,34 @@ def _matches(dictionary, body, deadline):
             if not _safe_label(entry.id) or not _safe_label(entry.display):
                 partial = True
                 continue
-            aliases.setdefault(alias, {})[entry.id] = entry
+            aliases.setdefault(extract_validation.flat_text(alias), {})[entry.id] = entry
+    _TABLE[:] = [key, aliases, partial, scanned]
+    return aliases, partial
+
+
+def _matches(dictionary, body, deadline):
+    """Derive a bounded complete or explicitly partial candidate set in memory."""
+    table = _alias_table(dictionary, deadline)
+    if table is None:
+        return None
+    aliases, partial = table
+    # Compare under the same width folding as validation and DrugMap.resolve,
+    # then report original-text spans so body[span] stays the surface.
+    folded, starts, ends = mcs_util.fold_map(body)
     matches = {}
-    for alias, entries in aliases.items():
+    for needle, entries in aliases.items():
         if time.monotonic() >= deadline:
             return None
-        start = body.find(alias)
-        while start >= 0:
+        left = folded.find(needle) if needle else -1
+        while left >= 0:
             if time.monotonic() >= deadline:
                 return None
-            end = _expanded_end(body, start, alias)
+            start, alias_end = starts[left], ends[left + len(needle) - 1]
+            alias = body[start:alias_end]
+            end = _expanded_end(body, start, alias_end, alias)
             surface = body[start:end]
-            if ((len(alias) > 2 or _short_context(body, start, end))
+            if (2 <= len(alias) <= 80 and not any(c.isspace() for c in alias)
+                    and (len(needle) > 2 or _short_context(body, start, end))
                     and (start, end) in extract_validation._med_name_spans(body, surface)):
                 key = (start, end)
                 if key not in matches and len(matches) >= MAX_OCCURRENCES:
@@ -126,7 +148,7 @@ def _matches(dictionary, body, deadline):
                         old = found.get(code)
                         if old is None or len(alias) > len(old[1]):
                             found[code] = (entry, alias)
-            start = body.find(alias, start + 1)
+            left = folded.find(needle, left + 1)
     spans = sorted(matches)
     # Only containment can be merged without making two mentions one.
     kept = [span for span in spans if not any(

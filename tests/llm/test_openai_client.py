@@ -8,6 +8,8 @@ import time
 
 import pytest
 
+from mcs_util import payload_hash
+
 import anthropic_client
 import cloud_client
 import cloud_cli
@@ -133,7 +135,7 @@ def test_prior_success_without_hash_keeps_accounting_and_has_no_proof(tmp_path, 
 
 
 @pytest.mark.parametrize('bad', [None, True, 7, 'A' * 64, 'z' * 64, 'f' * 63])
-def test_invalid_stored_answer_hash_refuses_evidence_but_preserves_accounting(tmp_path, monkeypatch, bad):
+def test_invalid_stored_answer_hash_blocks_receipt_pricing_and_new_reservations(tmp_path, monkeypatch, bad):
     monkeypatch.setattr(policy, 'pricing_valid', lambda *args, **kwargs: True)
     cfg = {'cloud_llm': {'mode': 'on', 'provider': 'openai', 'project_ids': [1]}}
     instance = client.OpenAIClient('synthetic')
@@ -152,8 +154,14 @@ def test_invalid_stored_answer_hash_refuses_evidence_but_preserves_accounting(tm
         with pytest.raises(ValueError, match='cloud_receipt_invalid'):
             policy.reservation_evidence(ledger.db, reservation_id)
         report = policy.usage_report(ledger)
-        assert report['pricing_unverified'] is False
-        assert Decimal(report['monthly_cost_usd']) == policy.usage_cost(usage(), model=client.MODEL)
+        assert report['pricing_unverified'] is True and report['unresolved_requests'] == 1
+        maximum = Decimal(reservation['max_cost_usd'])
+        assert Decimal(report['monthly_cost_usd']) == Decimal(report['max_reserved_cost_usd']) == maximum
+        assert Decimal(report['settled_cost_usd']) == 0
+        with pytest.raises(AnthropicError, match='pricing_unverified'):
+            policy.usage_reserver(ledger, cfg, route='patient_context', project_id=1, unit_key='another')(
+                instance.body('synthetic prompt', 100, None), 2)
+        assert len(ledger.artifacts('cloud_usage_reserve')) == len(ledger.artifacts('cloud_usage_result')) == 1
 
 
 @pytest.mark.parametrize('bad', [None, True, 'A' * 64, 'not-a-hash'])
@@ -196,7 +204,7 @@ def test_reasoning_only_length_has_hash_for_returned_empty_text():
     recorded = []
     instance = client.OpenAIClient('synthetic', post_fn=lambda *args: (200, {}, raw))
     result = instance.complete('synthetic prompt', deadline=time.monotonic() + 10, max_tokens=100,
-                               after_result=lambda _reservation, meta, **_answer: recorded.append(meta))
+                               after_result=lambda _reservation, meta, **_answer: recorded.append(meta), reserve_fn=lambda *args: None)
     assert result['text'] == '' and result['finish_reason'] == 'length'
     assert recorded[0]['answer_text_sha256_v1'] == hashlib.sha256(b'').hexdigest()
     assert recorded[0]['answer_finish_reason_v1'] == 'length'
@@ -209,7 +217,7 @@ def test_non_utf8_encodable_answer_is_charged_without_proof():
     instance = client.OpenAIClient('synthetic', post_fn=lambda *args: (200, {}, json.dumps(result).encode()))
     with pytest.raises(AnthropicError, match='contract_error'):
         instance.complete('synthetic prompt', deadline=time.monotonic() + 10, max_tokens=100,
-                          after_result=lambda _reservation, meta, **_answer: recorded.append(meta))
+                          after_result=lambda _reservation, meta, **_answer: recorded.append(meta), reserve_fn=lambda *args: None)
     assert len(recorded) == 1 and recorded[0]['usage'] == usage()
     assert recorded[0]['error_kind'] == 'contract_error' and 'answer_text_sha256_v1' not in recorded[0]
 
@@ -362,7 +370,7 @@ def test_success_with_non_strict_json_keeps_usage_unknown(kind):
     provider = client.OpenAIClient("synthetic", post_fn=lambda *args: (calls.append(True) or 200, {}, raw))
     with pytest.raises(AnthropicError, match="protocol_error"):
         provider.complete("synthetic", deadline=time.monotonic() + 10,
-                          after_result=lambda _reservation, meta, **_answer: recorded.append(meta))
+                          after_result=lambda _reservation, meta, **_answer: recorded.append(meta), reserve_fn=lambda *args: None)
     assert len(calls) == len(recorded) == 1
     assert recorded[0]["http_class"] == "http_200" and recorded[0]["usage"] is None
 
@@ -371,7 +379,7 @@ def test_reasoning_only_output_limit_returns_length_for_split():
     doc = response(status="incomplete", incomplete_details={"reason": "max_output_tokens"},
                    output=[{"type": "reasoning"}])
     provider = client.OpenAIClient("synthetic", post_fn=lambda *args: (200, {}, json.dumps(doc).encode()))
-    out = provider.complete("synthetic", deadline=time.monotonic() + 10)
+    out = provider.complete("synthetic", deadline=time.monotonic() + 10, reserve_fn=lambda *args: None)
     assert out["text"] == "" and out["finish_reason"] == "length" and out["usage"] == usage()
 
 
@@ -385,7 +393,7 @@ def test_reasoning_only_output_limit_returns_length_for_split():
 def test_other_empty_outputs_are_not_accepted(doc):
     provider = client.OpenAIClient("synthetic", post_fn=lambda *args: (200, {}, json.dumps(doc).encode()))
     with pytest.raises(AnthropicError, match="contract_error"):
-        provider.complete("synthetic", deadline=time.monotonic() + 10)
+        provider.complete("synthetic", deadline=time.monotonic() + 10, reserve_fn=lambda *args: None)
 
 
 def test_proven_unsent_timeout_releases_only_that_synthetic_reservation(tmp_path, monkeypatch):
@@ -437,7 +445,9 @@ def test_responses_uses_fixed_model_no_storage_and_exact_attempt_hooks():
         assert body["model"] == client.MODEL and body["max_output_tokens"] == 100
         assert body["reasoning"] == {"effort": "low"}
         assert body["service_tier"] == "default" and body["store"] is False and body["tools"] == []
-        assert body["prompt_cache_options"] == {"ttl": "30m"}
+        # no fixed head: explicit mode with no breakpoint writes nothing to the cache
+        assert body["prompt_cache_options"] == {"mode": "explicit", "ttl": "30m"}
+        assert body["input"] == "synthetic JSON request"
         sent.append(body)
         return 200, {"x-request-id": "req_synthetic"}, json.dumps(response()).encode()
 
@@ -478,7 +488,7 @@ def test_uncertain_send_is_recorded_once_and_never_retried():
     provider = client.OpenAIClient("synthetic-private", post_fn=post)
     with pytest.raises(AnthropicError):
         provider.complete("synthetic JSON", deadline=time.monotonic() + 10,
-            after_result=lambda *a, **_answer: records.append(a))
+            after_result=lambda *a, **_answer: records.append(a), reserve_fn=lambda *args: None)
     assert len(sent) == len(records) == 1 and records[0][1]["usage"] is None
 
 
@@ -498,7 +508,7 @@ def test_quota_429_is_one_attempt_and_only_fixed_metadata(fields, expected):
         calls.append(True) or 429, {"unknown": "synthetic-secret-canary"}, body))
     with pytest.raises(AnthropicError) as caught:
         provider.complete("synthetic", deadline=time.monotonic() + 10,
-                          after_result=lambda *args, **_answer: records.append(args))
+                          after_result=lambda *args, **_answer: records.append(args), reserve_fn=lambda *args: None)
     assert caught.value.kind == "payment_required" and not caught.value.retryable
     assert len(calls) == len(records) == 1
     metadata = records[0][1]
@@ -526,7 +536,7 @@ def test_unknown_429_keeps_legacy_status_class_without_leaking_body(body):
         wait_fn=delays.append)
     with pytest.raises(AnthropicError) as caught:
         provider.complete("synthetic", deadline=time.monotonic() + 10,
-                          after_result=lambda *args, **_answer: records.append(args))
+                          after_result=lambda *args, **_answer: records.append(args), reserve_fn=lambda *args: None)
     assert caught.value.kind == "rate_limited" and caught.value.retryable
     assert len(calls) == len(records) == 3 and delays == [0.25, 0.25]
     assert all("openai_error_code" not in meta for _, meta in records)
@@ -561,7 +571,7 @@ def test_openai_429_diagnostic_is_bounded_and_contains_only_fixed_labels(body, e
         sent.append(True) or 429, {"unknown": "synthetic-secret-canary"}, body))
     with pytest.raises(AnthropicError, match="rate_limited"):
         provider.complete("synthetic", deadline=time.monotonic() + 10,
-                          after_result=lambda _reservation, meta, **_answer: recorded.append(meta))
+                          after_result=lambda _reservation, meta, **_answer: recorded.append(meta), reserve_fn=lambda *args: None)
     assert len(sent) == len(recorded) == 1
     assert recorded[0]["openai_429_diagnostic"] == expected
     assert "openai_error_code" not in recorded[0]
@@ -576,7 +586,7 @@ def test_openai_429_decoder_recursion_is_bounded(recursion_limited_json):
         sent.append(True) or 429, {}, body))
     with pytest.raises(AnthropicError, match="rate_limited"):
         provider.complete("synthetic", deadline=time.monotonic() + 10,
-                          after_result=lambda _reservation, meta, **_answer: recorded.append(meta))
+                          after_result=lambda _reservation, meta, **_answer: recorded.append(meta), reserve_fn=lambda *args: None)
     assert recursion_limited_json and len(sent) == len(recorded) == 1
     assert recorded[0]["openai_429_diagnostic"] == "body_too_deep"
     assert "openai_error_code" not in recorded[0]
@@ -589,7 +599,7 @@ def test_known_openai_rate_limit_keeps_bounded_retry_after():
         calls.append(True) or 429, {"Retry-After": "0.25"}, raw), wait_fn=delays.append)
     with pytest.raises(AnthropicError, match="rate_limited"):
         provider.complete("synthetic", deadline=time.monotonic() + 10,
-                          after_result=lambda _reservation, meta, **_answer: recorded.append(meta))
+                          after_result=lambda _reservation, meta, **_answer: recorded.append(meta), reserve_fn=lambda *args: None)
     assert len(calls) == len(recorded) == 3 and delays == [0.25, 0.25]
     assert all(item["openai_429_diagnostic"] == "rate_limit_exceeded" for item in recorded)
 
@@ -691,3 +701,30 @@ def test_priority_uses_only_mcs_private_key_and_validates_split(tmp_path, monkey
     cfg["cloud_llm"]["provider_budgets"] = {"openai": {"daily_cost_limit_usd": 26, "monthly_cost_limit_usd": 15}}
     settings, errors = policy.resolve_settings(cfg, tmp_path)
     assert errors and settings["mode"] == "off"
+
+
+def test_fixed_head_is_posted_as_its_own_cache_block_without_changing_request_identity():
+    """The wire body marks the head; reservation and settlement keep the plain body."""
+    head, tail = "synthetic fixed instructions\n", "synthetic varying input"
+    posted, reserved, settled = [], [], []
+
+    def post(body, timeout):
+        posted.append(body)
+        return 200, {"x-request-id": "req_synthetic"}, json.dumps(response()).encode()
+
+    provider = client.OpenAIClient("synthetic-private", post_fn=post)
+    plain = provider.body(head + tail, 100, head)
+    provider.complete(head + tail, deadline=time.monotonic() + 10, max_tokens=100, cache_prefix=head,
+        reserve_fn=lambda body, timeout: reserved.append(body) or {"id": 1},
+        after_result=lambda reservation, meta, **kw: settled.append(meta))
+    assert reserved == [plain] and plain["input"] == head + tail
+    assert settled[0]["request_fp"] == payload_hash(plain)
+    assert posted[0]["prompt_cache_options"] == {"mode": "explicit", "ttl": "30m"}
+    assert posted[0]["input"] == [{"role": "user", "content": [
+        {"type": "input_text", "text": head, "prompt_cache_breakpoint": {"mode": "explicit"}},
+        {"type": "input_text", "text": tail}]}]
+    assert {key: value for key, value in posted[0].items() if key not in ("input", "prompt_cache_options")} == {
+        key: value for key, value in plain.items() if key not in ("input", "prompt_cache_options")}
+    # a prompt that is only the head carries no empty second block
+    assert provider.wire(provider.body(head, 100, head), head)["input"][0]["content"] == [
+        {"type": "input_text", "text": head, "prompt_cache_breakpoint": {"mode": "explicit"}}]

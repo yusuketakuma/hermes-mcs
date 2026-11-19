@@ -9,7 +9,7 @@ import pytest
 import cloud_policy
 import extract_llm as worker
 import cloud_inference
-from anthropic_client import AnthropicClient, MODEL
+from anthropic_client import AnthropicClient
 from test_anthropic_runtime import old
 from test_anthropic_runtime import routed as routed
 from test_cloud_response_recovery import legacy_cloud_routes
@@ -149,7 +149,7 @@ def test_reserve_refusal_defers_without_send_or_local_fallback(routed, monkeypat
         sent.append(True)
         pytest.fail('a refused reservation still sent')
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
-                        lambda key: AnthropicClient(key, post_fn=post, max_attempts=1))
+                        lambda key, **kw: AnthropicClient(key, post_fn=post, max_attempts=1, **kw))
     monkeypatch.setattr(worker, 'circuit_open_s', lambda db: 60)
     monkeypatch.setattr(extract_llm_resident, 'circuit_open_s', worker.circuit_open_s)
     monkeypatch.setattr(extract_llm_runner, 'circuit_open_s', worker.circuit_open_s)
@@ -189,7 +189,7 @@ def test_post_reservation_guard_refusal_never_sends_or_burns_retry(routed, monke
         sent.append(True)
         pytest.fail('guard refused before HTTP')
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
-                        lambda key: AnthropicClient(key, post_fn=post, max_attempts=1))
+                        lambda key, **kw: AnthropicClient(key, post_fn=post, max_attempts=1, **kw))
     monkeypatch.setattr(worker, 'circuit_open_s', lambda db: 60)
     monkeypatch.setattr(extract_llm_resident, 'circuit_open_s', worker.circuit_open_s)
     monkeypatch.setattr(extract_llm_runner, 'circuit_open_s', worker.circuit_open_s)
@@ -217,10 +217,10 @@ def test_post_result_failure_records_backoff_if_owner_is_available(routed, monke
                         lambda *args: (_ for _ in ()).throw(RuntimeError('synthetic failure')))
     def post(body, timeout):
         sent.append(True)
-        return 200, {}, json.dumps({'model': MODEL, 'usage': {'input_tokens': 10, 'output_tokens': 2},
+        return 200, {}, json.dumps({'model': body['model'], 'usage': {'input_tokens': 10, 'output_tokens': 2},
             'content': [{'type': 'text', 'text': '{}'}], 'stop_reason': 'end_turn'}).encode()
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
-                        lambda key: AnthropicClient(key, post_fn=post, max_attempts=1))
+                        lambda key, **kw: AnthropicClient(key, post_fn=post, max_attempts=1, **kw))
     monkeypatch.setattr(worker, 'circuit_open_s', lambda db: 60)
     monkeypatch.setattr(extract_llm_resident, 'circuit_open_s', worker.circuit_open_s)
     monkeypatch.setattr(extract_llm_runner, 'circuit_open_s', worker.circuit_open_s)
@@ -252,7 +252,7 @@ def test_scope_denial_after_response_is_sticky_even_if_scope_restores(routed, mo
     def post(body, timeout):
         sent.append(True)
         cfg['cloud_llm']['exclude_project_ids'] = [1]
-        return 200, {}, json.dumps({'model': MODEL, 'usage': {'input_tokens': 10, 'output_tokens': 2},
+        return 200, {}, json.dumps({'model': body['model'], 'usage': {'input_tokens': 10, 'output_tokens': 2},
             'content': [{'type': 'text', 'text': '{}'}], 'stop_reason': 'end_turn'}).encode()
     def finish(ledger, reservation, metadata, **kwargs):
         assert metadata['disposition'] == 'discarded_scope'
@@ -263,7 +263,7 @@ def test_scope_denial_after_response_is_sticky_even_if_scope_restores(routed, mo
     monkeypatch.setattr(cloud_policy, 'record_result', finish)
     monkeypatch.setattr(cloud_policy, 'record_disposition_tx', _REAL_DISPOSITION)
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
-                        lambda key: AnthropicClient(key, post_fn=post, max_attempts=1))
+                        lambda key, **kw: AnthropicClient(key, post_fn=post, max_attempts=1, **kw))
     monkeypatch.setattr(worker, 'circuit_open_s', lambda db: 60 if accounting_fails else 0)
     monkeypatch.setattr(extract_llm_resident, 'circuit_open_s', worker.circuit_open_s)
     monkeypatch.setattr(extract_llm_runner, 'circuit_open_s', worker.circuit_open_s)
@@ -313,7 +313,7 @@ def test_unknown_attempt_then_retry_scope_denial_still_records_backoff(routed, m
     monkeypatch.setattr(cloud_policy, 'record_result', finish)
     monkeypatch.setattr(cloud_policy, 'record_disposition_tx', discard)
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
-                        lambda key: AnthropicClient(key, post_fn=post, max_attempts=2))
+                        lambda key, **kw: AnthropicClient(key, post_fn=post, max_attempts=2, **kw))
     monkeypatch.setattr(worker.anthropic_client.time, 'sleep', lambda _: None)
     monkeypatch.setattr(worker, 'circuit_open_s', lambda db: 60)
     monkeypatch.setattr(extract_llm_resident, 'circuit_open_s', worker.circuit_open_s)
@@ -352,7 +352,7 @@ def test_changed_source_never_receives_a_previous_attempt_failure(routed, monkey
     monkeypatch.setattr(cloud_policy, 'record_result', finish)
     monkeypatch.setattr(cloud_policy, 'record_disposition_tx', _REAL_DISPOSITION)
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
-                        lambda key: AnthropicClient(key, post_fn=post, max_attempts=2))
+                        lambda key, **kw: AnthropicClient(key, post_fn=post, max_attempts=2, **kw))
     monkeypatch.setattr(worker.anthropic_client.time, 'sleep', lambda _: None)
     monkeypatch.setattr(worker, 'circuit_open_s', lambda db: 60)
     monkeypatch.setattr(extract_llm_resident, 'circuit_open_s', worker.circuit_open_s)
@@ -401,7 +401,7 @@ def test_provider_reservation_dispatch_releases_owner_lock_before_http(routed, m
         return 1
     def post(body, timeout):
         assert not lock['held'] and not led.db.in_transaction
-        return 200, {}, json.dumps({'model': MODEL, 'usage': {'input_tokens': 10, 'output_tokens': 2},
+        return 200, {}, json.dumps({'model': body['model'], 'usage': {'input_tokens': 10, 'output_tokens': 2},
             'content': [{'type': 'text', 'text': '{}'}], 'stop_reason': 'end_turn'}).encode()
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
                         lambda key, **kw: AnthropicClient(key, post_fn=post, **kw))

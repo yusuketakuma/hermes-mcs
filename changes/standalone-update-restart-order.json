@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "独立モードの自動更新・定期確認からの更新が毎回巻き戻る問題を修正",
+  "summary": "runtime_mode=standalone で、毎日の定期ジョブ update が自動更新（update.mode=auto）や承認済みの更新を適用すると、更新の途中の services が独立hostへ再起動を要求し、抽出workerが起動できずに restart_failed: drainer_not_running で必ず巻き戻っていました。更新中（更新markerがある間）は services が再起動を要求せず、更新の記録が確定した後の再起動に一本化します。自動更新が適用できるようになり、承認済みの更新も消費されずに完了します。",
+  "upgrade": "追加操作は不要です。更新途中の services は新しい版のコードで実行されるため、この版への更新から有効です。対象は runtime_mode=standalone の環境です。更新markerがない時に手動で services を実行した場合は、従来どおりhostを再起動します。",
+  "details": [
+    "sync_standalone_service は、plistに変更がなくhostが稼働中でも、data/update_in_progress.marker がある間は request_restart を出さず、更新の完了後に再起動すると表示する。hostの再起動は update_services.restart_services（記録確定後）が要求する。",
+    "端末の mcs update でも、抽出workerの復帰確認は旧hostのまま行い、hostは更新の完了後に新しいコードで再起動する。STANDALONE.md の説明と同じ順序になる。",
+    "plist が変わる版（ログ処理プログラムの変更など）で hostの子から更新した場合の再読込は対象外。"
+  ],
+  "refs": [
+    "mcs/ops/services/service_management.py",
+    "tests/ops/test_mcs_setup_services.py"
+  ]
+}

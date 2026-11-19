@@ -232,21 +232,49 @@ def wake_ready_reply_holds(db, now, limit: int = 200) -> int:
     return len(woken)
 
 
+# Adds the thread hold beside any existing receipt, as _WAIT_PROGRESS_SET.
+_THREAD_HOLD_SET = (
+    "progress=json_set(CASE WHEN progress IS NULL OR progress='' THEN '{}' "
+    "WHEN json_valid(progress) AND json_type(progress)='object' "
+    "THEN progress ELSE json_object('invalid_progress',progress) END,"
+    "'$.thread_hold',?)")
+
+
 def _hold_pending_for_thread(db, card_id, now) -> None:
-    """Defer the card's pending intents until its source thread is ready."""
-    for event in db.execute("SELECT event_id FROM notification_intent_cards WHERE card_id=? "
-                            "AND state='pending'", (card_id,)).fetchall():
-        db.execute("UPDATE notify_outbox SET progress=?,next_try=?,updated_at=? WHERE event_id=?",
-                   (json.dumps({"thread_hold": "source_thread_not_ready"}), now + RESEAT_S, now, event[0]))
+    """Defer the card's pending intents until its source thread is ready.
+
+    Only a live pending event is touched: a quarantined one (failed with
+    next_try NULL and its hold_reason) must never become due again."""
+    db.execute(
+        f"UPDATE notify_outbox SET {_THREAD_HOLD_SET},next_try=?,updated_at=? "
+        "WHERE event_id IN (SELECT event_id FROM notification_intent_cards "
+        "WHERE card_id=? AND state='pending') AND state='pending' AND next_try IS NOT NULL",
+        ("source_thread_not_ready", now + RESEAT_S, now, card_id))
+
+
+def _never_sent(db, card_id) -> bool:
+    """No render of this card may have reached the transport: no granted,
+    delivered or unknown attempt, no in-flight or settled-sent render and
+    no delivered/unknown part. Anything else may be a remote post."""
+    return db.execute(
+        "SELECT 1 FROM notification_renders r WHERE r.card_id=? AND ("
+        "r.state IN ('sending','delivered','unknown','held') "
+        "OR EXISTS (SELECT 1 FROM notification_delivery_attempts a WHERE a.delivery_id=r.delivery_id "
+        "AND a.state IN ('granted','delivered','unknown')) "
+        "OR EXISTS (SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=r.delivery_id "
+        "AND p.state IN ('delivered','unknown'))) LIMIT 1", (card_id,)).fetchone() is None
 
 
 def _bind_reply_thread(db, card, now) -> tuple[dict, bool]:
-    """Bind an undelivered reply once; retain stale bindings and wait for proof."""
+    """Bind an undelivered reply; rebind a stale thread only when nothing was ever sent."""
     root = reply_thread_target(db, card)
     if (root is not None and card["thread_state"] == "created"
             and card["thread_id"] == root["thread_id"]):
         return card, False
-    if root is not None and not card["thread_id"] and not card["message_id"]:
+    # the root was re-created in a new thread: a reply that never reached
+    # the transport follows it, or it would wait on the dead thread forever
+    if root is not None and not card["message_id"] and (
+            not card["thread_id"] or _never_sent(db, card["card_id"])):
         db.execute("UPDATE notification_cards SET thread_id=?,thread_state='created',updated_at=? "
                    "WHERE card_id=?", (root["thread_id"], now, card["card_id"]))
         return notify_scope.card_row(db, card["card_id"]), False

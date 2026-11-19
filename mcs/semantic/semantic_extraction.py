@@ -809,7 +809,6 @@ FACTS_V2_BUILD = "hint-span/1"
 _V1_CATEGORY_FIELDS = {
     "medication": ("medications", "rx_actions", "med_periods"),
     "adherence_administration": ("adherence_flags",),
-    "symptom_state": ("symptoms",),
     "vital_lab": ("vitals",),
     "request_pending": ("requests",),
     "care_event": ("events", "visit_date", "next_planned"),
@@ -818,11 +817,14 @@ _V1_CATEGORY_FIELDS = {
 
 def _symptom_names(source, names):
     """Keep symptom reports; an explicit PRN instruction alone is not a symptom report."""
+    import extract
     result = []
     for name in names:
         if not isinstance(name, str) or not name:
             continue
         for match in re.finditer(re.escape(name), source):
+            if extract.symptom_is_drug_class(source, match.end()):
+                continue
             tail = re.split(r"[。！？!?;；\n]", source[match.end():], maxsplit=1)[0]
             contingency = re.match(
                 r"\s*(?:(?:の)?(?:時(?!間|刻|期|点|々)|とき(?!どき))(?:に|には|は|のみ|だけ)?|"
@@ -862,7 +864,7 @@ def _v1_hint_items(source: str, posted_at: str) -> list:
                 " ".join(p for p in (str(med.get("name") or ""),
                                      str(med.get("dose") or "")) if p),
                 med.get("name"))
-    for name in _symptom_names(source, hints.get("symptoms") or []):
+    for name in _symptom_names(source, list(extract.symptom_matches(source))):
         add("symptom_state", str(name), name)
     vit = hints.get("vitals")
     if isinstance(vit, dict):
@@ -885,8 +887,8 @@ def _v1_category_signals(source: str, posted_at: str) -> set:
         return set()
     signals = {category for category, fields in _V1_CATEGORY_FIELDS.items()
             if any(hints.get(field) for field in fields)}
-    if not _symptom_names(source, hints.get("symptoms") or []):
-        signals.discard("symptom_state")
+    if _symptom_names(source, list(extract.symptom_matches(source))):
+        signals.add("symptom_state")
     return signals
 
 
@@ -1021,12 +1023,14 @@ def extract_facts_v2(llm_fn, member: dict,
             failed.append(index)
             failure_reason = "deadline"
             break
-        if jev_client is not None:
-            jev_verdicts[cid] = _preflight_verdict(
-                jev_client, spec["text"], deadline, cid)
         with semantic_transport.trace_inference() as observed:
             parsed, reason = _chunk_llm(
                 llm_fn, _chunk_prompt(prompt_template, spec, manifest, source, chunk_size), deadline)
+        # after the call: an LLMNotSent (busy turn, unsent probe) raised above
+        # must not strand an uncached Jev preflight the retry would re-send
+        if jev_client is not None:
+            jev_verdicts[cid] = _preflight_verdict(
+                jev_client, spec["text"], deadline, cid)
         if reason is not None:
             failed.append(index)
             failure_reason = reason
@@ -1180,8 +1184,9 @@ def rebuild_facts_v2_cached(member: dict, db, source_fingerprint: str,
     assembled = assembly.assemble_facts(member, source, manifest, facts, obligations,
                                         presence, preflight, status, hints, signals,
                                         use_jev_preflight=jev_used)
-    from semantic_relations import reconcile_facts
-    reconciled = reconcile_facts([], assembled["facts"])
+    from semantic_relations import meta_relation_rule, reconcile_facts
+    # a stored document is re-derived under the rule it was made under (#158)
+    reconciled = reconcile_facts([], assembled["facts"], rule=meta_relation_rule(stored_meta))
     progress = assembly.chunk_progress(specs, completed, list(completed), [], None, 0, source_fp)
     result = assembly.assemble_document(assembly.source_binding(member, source_fp), manifest,
                                         assembled, reconciled, progress)
@@ -1214,7 +1219,8 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
                     rejected: dict, deadline: float | None = None,
                      *, chunk_size: int = 3000,
                      request_following: bool = False,
-                     coverage_missing: bool = False) -> dict:
+                     coverage_missing: bool = False,
+                     rule: int | None = None) -> dict:
     """Re-extract rejected owner chunks, or all chunks when source coverage is missing.
 
     Merge repaired items into a re-validated document.
@@ -1428,8 +1434,10 @@ def repair_facts_v2(llm_fn, member: dict, doc: dict,
     # Relations referencing removed facts dangle — recompute over the
     # surviving set so every endpoint resolves.  A scan cut by the
     # deadline must not publish a partial set: keep the prior doc.
-    from semantic_relations import reconcile_facts
-    reconciled = reconcile_facts([], clean_facts, deadline=deadline)
+    from semantic_relations import RELATION_RULE, reconcile_facts
+    # a replay passes the rule the stored repaired document was made under (#158)
+    reconciled = reconcile_facts([], clean_facts, deadline=deadline,
+                                 rule=RELATION_RULE if rule is None else rule)
     if reconciled["pairs_skipped"]:
         return {**unchanged, "owner_chunk_ids": dispatched,
                 "relation_pairs_skipped": reconciled["pairs_skipped"]}

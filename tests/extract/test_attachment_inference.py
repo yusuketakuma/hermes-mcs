@@ -98,9 +98,31 @@ def test_recursive_dispatch_and_post_response_source_loss(page_store):
         dispatch(lambda: None)
 
 
-@pytest.mark.parametrize('free', [None, 0])
-def test_unverified_or_low_disk_never_starts_inference(page_store, monkeypatch, free):
+@pytest.mark.parametrize('free,code', [(None, 'disk_unknown'), (0, 'disk_low')])
+def test_unverified_or_low_disk_never_starts_inference(page_store, monkeypatch, free, code):
     ledger, cfg, _key, local_calls, cloud_calls, _ = page_store
     monkeypatch.setattr(worker.extract_llm, 'disk_free_mb', lambda db: free)
-    assert run(ledger, cfg, 'local')['deferred'] == 1
+    result = run(ledger, cfg, 'local')
+    assert result['deferred'] == 1 and result['defer_reasons'] == {code: 1}
     assert not local_calls and not cloud_calls and not ledger.artifacts(worker.KIND)
+
+
+def test_page_save_refusal_and_unproven_hold_report_exact_causes_without_retry(page_store, monkeypatch):
+    ledger, cfg, _key, local_calls, _, _ = page_store
+    real_wait = worker.writer_lock.wait_run_lock
+    monkeypatch.setattr(worker.writer_lock, 'wait_run_lock',
+                        lambda path, **kw: None)
+
+    def busy_lock(path, **kw):
+        worker.writer_lock.record_writer_refusal('run_lock_not_acquired', 'write_lock')
+        return None
+
+    monkeypatch.setattr(worker.writer_lock, 'wait_run_lock', busy_lock)
+    refused = run(ledger, cfg, 'local')
+    assert refused['deferred'] == 1 and refused['defer_reasons'] == {'writer_refused': 1}
+    assert len(local_calls) == 1 and not ledger.artifacts(worker.KIND)
+    monkeypatch.setattr(worker.writer_lock, 'wait_run_lock', real_wait)
+    monkeypatch.setattr(worker.extract_llm, 'llm_extract', lambda *a, **kw: None)
+    unproven = run(ledger, cfg, 'local')
+    assert unproven['deferred'] == 1 and unproven['defer_reasons'] == {'unclassified': 1}
+    assert len(local_calls) == 1

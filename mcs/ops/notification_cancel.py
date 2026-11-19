@@ -199,10 +199,11 @@ def _transports(db, event_ids):
     return found
 
 
-def _hold_adapter_locks(data, locks):
-    """The LINE WORKS adapter holds its send scope lock for its whole life.
-    Holding every one until apply returns also prevents it from starting."""
-    state = Path(notify_dirs(str(data))["lineworks_state"])
+def _hold_adapter_locks(data, transport, locks):
+    """Every delivery worker (Hermes, standalone or the LINE WORKS adapter)
+    holds its send scope lock for its whole life. Holding every one until
+    apply returns also prevents it from starting."""
+    state = Path(notify_dirs(str(data))[transport + "_state"])
     if state.is_symlink():
         raise ValueError("unsafe_data_path")
     held = sorted(state.glob("send-*.lock"))
@@ -221,14 +222,34 @@ def _workers_stopped(data, transports, locks=None):
     if not transports or not transports <= set(TRANSPORTS):
         raise ValueError("worker_stop_unverified")
     for transport in sorted(transports):
-        if transport == "lineworks":
-            if locks is not None:  # a recheck runs while the first call's locks are held
-                _hold_adapter_locks(data, locks)
-            continue
-        _witnesses_stopped(data, transport)
+        if locks is not None:  # a recheck runs while the first call's locks are held
+            _hold_adapter_locks(data, transport, locks)
+        if transport != "lineworks":
+            _witnesses_stopped(data, transport)
+
+
+def _standalone(data):
+    """Effective runtime_mode from flags/notify.json, as the Hermes plugin reads it.
+    Unreadable or malformed flags count as Hermes, so the witnesses stay checked."""
+    flags_dir = data / "flags"
+    try:
+        if flags_dir.is_symlink():
+            return False
+        raw = read_regular_nofollow(str(flags_dir / "notify.json"), 4096, ValueError)
+        flags = json.loads(raw) if len(raw) <= 4096 else None
+    except (OSError, ValueError, RecursionError):
+        return False
+    return isinstance(flags, dict) and flags.get("runtime_mode") == "standalone"
 
 
 def _witnesses_stopped(data, transport):
+    """A Hermes gateway that recorded a witness must also be gone; the
+    standalone host records none, so the held scope lock is its proof.
+    Under standalone the Hermes plugin starts no card worker, so a witness
+    there is a leftover (old version, reused pid); a Hermes worker started
+    before the switch still holds its scope lock and is refused by it."""
+    if _standalone(data):
+        return
     witnesses = list((data / "worker_status").glob(f"{transport}-*.json"))
     if not witnesses:
         raise ValueError("worker_stop_unverified")

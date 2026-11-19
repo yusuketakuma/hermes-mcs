@@ -1,0 +1,19 @@
+{
+  "category": "fixed",
+  "title": "添付のローカル解析保留の原因分類を、実際に処理を止めた判定の固定コードに修正",
+  "summary": "添付の文字起こし後のローカル解析が保留されたとき、保留直後の再確認や別処理の書込み拒否記録から原因を推定せず、実際にローカル解析を止めた判定の固定コードだけを状態ファイルの local_deferred_reasons に集計します。保存先の空き容量不足の直後に空きが戻った場合に未到達のメモリー不足と表示される誤分類や、課金結果の回復待ち・OCR段のロック競合がローカル解析の書込み拒否と表示される誤分類を防ぎます。固定の原因が証明されていない保留は unclassified とし、文字起こしの成否とローカル解析の保留は従来どおり分けて扱います。",
+  "upgrade": "設定変更は不要です。OCRは毎分の定期実行（mcs_ocr.sh）で別プロセスとして動くため、通常のコード更新で次回実行から反映されます。attachment_inference.py の変更により個別ページの解析契約が更新されるため、保存済みOCRページのローカル解析結果と途中保存は順次作り直されます（元のOCR文字起こしはやり直さず、課金済みの予約・会計記録は保持します）。状態ファイルの項目形式は変わらないため、既存の監視読取りとの互換性は維持されます。",
+  "details": [
+    "mcs/extract/attachment_inference.py: ローカル段（stage=local）の入場判定（書込み確認、空き容量の不明・不足、メモリー余裕の不明・不足、解析ロックの競合）およびページ保存・途中保存の確認で実際に処理を止めた分岐から、固定コードの件数を defer_reasons として返します。先行する課金結果の回復処理（_recover_paid_results）がロック待ちで未完了となった場合は paid_recovery_pending=True を維持したまま書込み拒否記録を分離し、後続のローカル判定の理由を上書きしません。LLM応答なし・品質保留・原資料や設定の変化・固定コード未記録の拒否は unclassified とします。",
+    "mcs/ops/mcs_ocr.py: 保留直後の5秒再確認窓と診断用の解析ロック再取得（_local_defer_reason）を廃止し、ローカル段が返した固定コード件数をそのまま集計します。同一実行内でOCR段とローカル段がそれぞれ書込み拒否を記録しても、段階ごとの捕捉を分離してローカル段の保留理由へOCR段のロックコードを混ぜません。",
+    "mcs/extract/attachment_inference_deferral.py・docs/specs/ocr-processing.md: 事後の再確認ではなく停止地点の固定コードを集計する仕様へ説明を更新しました。語彙・優先順・旧状態ファイルの読取り条件・再試行回数・処理枠は変更していません。"
+  ],
+  "refs": [
+    "mcs/extract/attachment_inference.py",
+    "mcs/extract/attachment_inference_deferral.py",
+    "mcs/ops/mcs_ocr.py",
+    "docs/specs/ocr-processing.md",
+    "tests/extract/test_attachment_inference.py",
+    "tests/ops/test_mcs_ocr_entry.py"
+  ]
+}

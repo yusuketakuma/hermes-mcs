@@ -5,7 +5,9 @@ import copy
 
 import pytest
 
-discord = pytest.importorskip("discord")
+from discord_sdk_testkit import require_real_discord
+
+discord = require_real_discord()
 
 from adapters.common.spec import discord_file_name  # noqa: E402
 from adapters.discord import cards  # noqa: E402

@@ -15,6 +15,8 @@ from mcs_util import payload_hash, strict_json
 from safe_io import atomic_write, fsync_dir, read_private_bytes
 
 SCHEMA = 'attachment-paid-result/v1'
+BATCH = 64
+SCAN_LIMIT = 1024
 LIMIT = 6 * bounded_http.MAX_RESPONSE_BYTES_CEILING + 65536
 
 
@@ -97,10 +99,17 @@ def pending(root):
     except FileNotFoundError:
         return []
     result = []
+    scanned = 0
     with os.scandir(directory) as entries:
-        for index, entry in enumerate(entries):
-            if index >= 64:
+        for entry in entries:
+            if len(result) >= BATCH:
                 break
+            if scanned >= SCAN_LIMIT:
+                # Ignored staging leftovers may hide journals; empty here is not "nothing pending".
+                if not result:
+                    raise ValueError('attachment_paid_scan_incomplete')
+                break
+            scanned += 1
             if entry.name.startswith('.atomic.') and entry.name.endswith('.tmp'):
                 continue
             if re.fullmatch(r'[0-9a-f]{32}\.json', entry.name) is None:

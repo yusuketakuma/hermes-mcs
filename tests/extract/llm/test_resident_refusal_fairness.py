@@ -74,7 +74,7 @@ def test_unresolved_paid_source_yields_without_rewriting_its_evidence(routed, mo
             return {'symptoms': []}
         assert provider.message_id == 1
         if not seeded:
-            seeded.append(provider.reserve(provider.client.body('synthetic unresolved input', 100, None), 30))
+            seeded.append(provider.reserve(provider.client.body('synthetic unresolved input', provider.selection['max_tokens'], None), 30))
             return extract_llm._DEFERRED
         return provider('synthetic unresolved input', deadline=kwargs['deadline'], max_tokens=100)
 

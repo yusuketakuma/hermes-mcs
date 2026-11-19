@@ -5,6 +5,7 @@ import semantic_audit
 import semantic_render
 import semantic_store
 import semantic_transport
+import itertools
 import json
 import hashlib
 import sqlite3
@@ -475,9 +476,9 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
         return None, reserved
 
     try:
-        row = db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? '
-                         'AND message_id=? ORDER BY artifact_id DESC LIMIT 1',
-                         (KIND_CANDIDATE, pid, mid)).fetchone()
+        rows = db.execute('SELECT * FROM artifacts WHERE kind=? AND project_id=? '
+                          'AND message_id=? ORDER BY artifact_id DESC', (KIND_CANDIDATE, pid, mid))
+        row = next(rows, None)
         content, meta = (strict_json(row['content']), strict_json(row['meta'])) if row else (None, None)
         candidate_bound = (isinstance(meta, dict) and meta.get('stage') == 'empty_repair'
                            and meta.get('fingerprint') == fp)
@@ -495,10 +496,77 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
             return held('empty_repair_marker_binding', candidate_bound)
         if not is_current(marker_meta) or marker_meta.get('invalidated') or marker_meta.get('stale'):
             return held('empty_repair_marker_currentness')
-        if (candidate_bound and isinstance(content, dict) and type(meta.get('repair_artifact_id')) is int
-                and meta['repair_artifact_id'] == marker['artifact_id']
-                and _empty_repair_consumed(db, pid, mid, fp, policy, row['artifact_id'], content)):
-            return held('empty_repair_consumed', False)
+        def _validate_candidate(cand_content, cand_meta):
+            if not isinstance(cand_content, dict) or not isinstance(cand_meta, dict):
+                return None, 'empty_repair_candidate_invalid'
+            proof = cand_meta.get('provider_provenance')
+            producer = _summary_producer({'content': cand_content, 'meta': cand_meta}, fp, policy, revision)
+            # Keep the original predicate order and short-circuiting; these labels
+            # only describe the first failed gate, never weaken a recovery gate.
+            if not is_current(cand_meta) or cand_meta.get('invalidated') or cand_meta.get('stale'):
+                return None, 'empty_repair_candidate_currentness'
+            if (cand_meta.get('schema') != SCHEMA_VERSION or cand_meta.get('stage') != 'empty_repair'
+                    or cand_meta.get('fingerprint') != fp or cand_meta.get('policy_fingerprint') != policy
+                    or cand_meta.get('publication_mode') != mode or cand_meta.get('target_revision') != revision):
+                return None, 'empty_repair_candidate_binding'
+            if (type(cand_meta.get('repair_artifact_id')) is not int
+                    or cand_meta['repair_artifact_id'] != marker['artifact_id']
+                    or marker_content != {'target_message_id': mid}
+                    or marker_meta.get('policy_fingerprint') != policy
+                    or type(marker_meta.get('repair_count')) is not int or marker_meta['repair_count'] != 1):
+                return None, 'empty_repair_marker_link'
+            if (type(cand_content.get('target_message_id')) is not int or cand_content['target_message_id'] != mid
+                    or not isinstance(cand_content.get('claims'), list) or not cand_content['claims']):
+                return None, 'empty_repair_claims_invalid'
+            if cand_meta.get('claim_input_binding') != _claim_input_binding(
+                    pid, mid, fp, policy, revision, cand_content, facts):
+                return None, 'empty_repair_claim_binding'
+            prior = _empty_repair_prior(db, pid, mid)
+            superseded = cand_meta.get('prior') != prior
+            if superseded and not _empty_repair_prior_superseded(db, cand_meta.get('prior'), prior):
+                return None, 'empty_repair_prior_unverified'
+            if proof != _summary_provenance(producer, fp, policy, revision, cand_content):
+                return None, 'empty_repair_provenance_unverified'
+            # 'inflight' with no recorded answer: the pass stopped (a crash or
+            # any other stop before the answers were recorded) while the
+            # repaired text was audited. Like a stored PENDING summary (AT-058)
+            # it is audited again; only a recorded negative answer or finding
+            # holds it. Recorded negative answers are recovered with the
+            # candidate, only to finish that audit over the claims not yet
+            # answered and commit it (NEEDS_REVIEW, never a PASS).
+            recorded = _recorded_claim_audit(cand_meta, cand_content)
+            if recorded is None and (cand_meta.get('audit_state') not in ('ready', 'inflight')
+                                    or cand_meta.get('partial_answers') != {}):
+                return None, 'empty_repair_audit_not_ready'
+            return ({'content': cand_content, 'meta': cand_meta, 'producer': producer,
+                     'recorded_audit': recorded, 'superseded': superseded}, None)
+
+        # The consumed result and the producer belong to this marker's own
+        # empty-repair candidate, which a later (redone) pre-audit candidate
+        # may follow. An unreadable older row fails closed (validation_unavailable).
+        repair_checked = None
+        for repair_row in itertools.chain([row] if row is not None else [], rows):
+            repair_content, repair_meta = strict_json(repair_row['content']), strict_json(repair_row['meta'])
+            if (isinstance(repair_meta, dict) and repair_meta.get('stage') == 'empty_repair'
+                    and repair_meta.get('fingerprint') == fp
+                    and type(repair_meta.get('repair_artifact_id')) is int
+                    and repair_meta['repair_artifact_id'] == marker['artifact_id']):
+                if (isinstance(repair_content, dict)
+                        and _empty_repair_consumed(db, pid, mid, fp, policy, repair_row['artifact_id'],
+                                                   repair_content)):
+                    return held('empty_repair_consumed', False)
+                # A candidate written by an earlier local model is never
+                # recovered; it releases the marker only when every ordinary
+                # recovery gate passes with nothing recorded.
+                if not semantic_store.producer_current(
+                        KIND_CANDIDATE, repair_row['model'] if 'model' in repair_row.keys() else None,
+                        repair_meta):
+                    validated, fail_reason = _validate_candidate(repair_content, repair_meta)
+                    if validated is not None and validated['recorded_audit'] is None:
+                        return held('empty_repair_candidate_producer', False)
+                    if repair_row is row:
+                        repair_checked = fail_reason or 'empty_repair_audit_not_ready'
+                break
         if (fact_kind is not None
                 and semantic_store.facts_rewritten_after(db, fact_kind, mid, fp, marker['artifact_id'])
                 and not (candidate_bound and isinstance(content, dict)
@@ -507,53 +575,19 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts, *, 
             return held('empty_repair_over_earlier_facts', False)
         if row is None:
             return held('empty_repair_candidate_missing')
-        if not isinstance(content, dict) or not isinstance(meta, dict):
-            return held('empty_repair_candidate_invalid')
-        proof = meta.get('provider_provenance')
-        producer = _summary_producer({'content': content, 'meta': meta}, fp, policy, revision)
-        # Keep the original predicate order and short-circuiting; these labels
-        # only describe the first failed gate, never weaken a recovery gate.
-        if not is_current(meta) or meta.get('invalidated') or meta.get('stale'):
-            return held('empty_repair_candidate_currentness')
-        if (meta.get('schema') != SCHEMA_VERSION or meta.get('stage') != 'empty_repair'
-                or meta.get('fingerprint') != fp or meta.get('policy_fingerprint') != policy
-                or meta.get('publication_mode') != mode or meta.get('target_revision') != revision):
-            return held('empty_repair_candidate_binding')
-        if (type(meta.get('repair_artifact_id')) is not int or meta['repair_artifact_id'] != marker['artifact_id']
-                or marker_content != {'target_message_id': mid}
-                or marker_meta.get('policy_fingerprint') != policy
-                or type(marker_meta.get('repair_count')) is not int or marker_meta['repair_count'] != 1):
-            return held('empty_repair_marker_link')
-        if (type(content.get('target_message_id')) is not int or content['target_message_id'] != mid
-                or not isinstance(content.get('claims'), list) or not content['claims']):
-            return held('empty_repair_claims_invalid')
-        if meta.get('claim_input_binding') != _claim_input_binding(pid, mid, fp, policy, revision, content, facts):
-            return held('empty_repair_claim_binding')
-        prior = _empty_repair_prior(db, pid, mid)
-        superseded = meta.get('prior') != prior
-        if superseded and not _empty_repair_prior_superseded(db, meta.get('prior'), prior):
-            return held('empty_repair_prior_unverified')
-        if proof != _summary_provenance(producer, fp, policy, revision, content):
-            return held('empty_repair_provenance_unverified')
-        # 'inflight' with no recorded answer: the pass stopped (a crash or
-        # any other stop before the answers were recorded) while the
-        # repaired text was audited. Like a stored PENDING summary (AT-058)
-        # it is audited again; only a recorded negative answer or finding
-        # holds it. Recorded negative answers are recovered with the
-        # candidate, only to finish that audit over the claims not yet
-        # answered and commit it (NEEDS_REVIEW, never a PASS).
-        recorded = _recorded_claim_audit(meta, content)
-        if recorded is None and (meta.get('audit_state') not in ('ready', 'inflight')
-                                or meta.get('partial_answers') != {}):
-            return held('empty_repair_audit_not_ready')
+        if repair_checked is not None:
+            return held(repair_checked)
+        validated, fail_reason = _validate_candidate(content, meta)
+        if fail_reason is not None:
+            return held(fail_reason)
         # A superseded prior pair frees only a candidate the gates above
         # would recover with nothing recorded: it reserves nothing, and the
         # ordinary path audits it.
-        if superseded:
-            if recorded is not None:
+        if validated['superseded']:
+            if validated['recorded_audit'] is not None:
                 return held('empty_repair_audit_not_ready')
             return held('empty_repair_prior_superseded', False)
-        return {'content': content, 'meta': meta, 'producer': producer, 'recorded_audit': recorded}, True
+        return {k: v for k, v in validated.items() if k != 'superseded'}, True
     except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
         return held('empty_repair_validation_unavailable')
 

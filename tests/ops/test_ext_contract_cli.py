@@ -357,7 +357,7 @@ def test_health_counts_and_authorization_are_readonly_and_redacted(
     assert code == 2 and report["status"] == "unknown"
     assert report["counts"] == {
         "held": 2, "delete_held": 1, "acked": 1, "withdrawn": 1,
-        "refused": 1, "rejected": 1, "corrupt": 1}
+        "refused": 1, "rejected": 1, "corrupt": 1, "stale_staging": 0}
     assert report["oldest_held_age_s"] == 30
     assert report["authorization"] == {"state": "valid", "seconds_left": 3600}
     assert "payload_missing" in report["reasons"]

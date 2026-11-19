@@ -69,7 +69,7 @@ def test_installer_recovery_gate_uses_public_inspection_without_real_commands(
     monkeypatch.setattr(sys, "path", list(sys.path))
     monkeypatch.setattr(sys, "argv", ["synthetic-probe", str(checkout), str(template),
                                      str(config), "", "0", str(agents),
-                                     str(tmp_path / "private-recovery")])
+                                     str(tmp_path / "private-recovery"), "0"])
     script = compile(_installer_recovery_script(), "<synthetic-installer-recovery>", "exec")
     if case == "safe":
         exec(script, {})

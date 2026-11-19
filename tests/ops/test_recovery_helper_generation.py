@@ -70,6 +70,21 @@ class RecoveryHelperGenerationTests(unittest.TestCase):
                     {'recovery_python': paths.hermes_python}, paths=paths), [])
             self.assertEqual({path: path.read_bytes() for path in recovery.iterdir()}, before)
 
+    def test_running_host_keeps_its_inherited_generation_after_promotion(self):
+        """IA-018/IA-046: a host started with the old helper keeps launching children."""
+        with promoted_helper() as (root, _checkout, recovery, old, _plist, _paths):
+            current = deploy.helper_path(root, recovery, require_installed=True)
+            with patch.dict(os.environ, {'MCS_RUN_LOG_HELPER': str(old)}):
+                self.assertEqual(deploy.current_helper(root), str(old))
+            with patch.dict(os.environ, {'MCS_RUN_LOG_HELPER': current}):
+                self.assertEqual(deploy.current_helper(root), current)
+            with patch.dict(os.environ, {'MCS_RUN_LOG_HELPER': str(recovery / 'unknown.py')}):
+                with self.assertRaises(deploy.LogInstallError):
+                    deploy.current_helper(root)
+            with patch.dict(os.environ, {'MCS_RUN_LOG_HELPER': 'relative/helper.py'}):
+                with self.assertRaises(deploy.LogInstallError):
+                    deploy.current_helper(root)
+
     def test_untrusted_helpers_or_current_receipts_remain_rejected(self):
         for defect in ('unknown', 'other_root', 'outside', 'symlink', 'hardlink', 'changed',
                        'writable', 'directory_mode', 'filename_hash', 'receipt_invalid',

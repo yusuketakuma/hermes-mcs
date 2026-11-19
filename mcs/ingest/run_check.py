@@ -38,6 +38,8 @@ import json
 import math
 import os
 import sqlite3
+from pathlib import Path
+from types import SimpleNamespace
 import sys
 import time
 from datetime import datetime, timezone
@@ -49,6 +51,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 import safe_io  # noqa: E402
+import writer_lock
+
+# Stamp the source before the other imports: a merge checkout that lands
+# while they load then changes the stamp and the tick refuses (IA-081).
+try:
+    _CODE_STAMP = writer_lock.code_stamp_checked()
+except OSError:
+    _CODE_STAMP = None
 import extract_validation
 import semantic_drain
 import semantic_policy
@@ -56,7 +66,6 @@ from mcs_adapter import MCSAdapter
 from mcs_contract import MCSError, SessionExpired, describe_error
 from ledger import Ledger, message_write_failure_diagnostic
 from mcs_util import CACHE, CONF_PATH, DB, HOME, load_config
-import writer_lock
 from writer_lock import RUN_LOCK, UPDATE_MARKER_NAME, RunLockLost, acquire_run_lock
 import job_ops
 import collection_diagnostics
@@ -118,12 +127,6 @@ def _write_health(ledger, result: dict, status: str,
                 collection_stages.queue_run_alert(
                     ledger, "health_write_failed", run_id, type(e).__name__)
 LOCK_WAIT_S = 150
-
-
-try:
-    _CODE_STAMP = writer_lock.code_stamp_checked()
-except OSError:
-    _CODE_STAMP = None
 
 
 def _entry_code_current() -> bool:
@@ -214,6 +217,25 @@ def _snapshot_work_deadline(ledger, deadline: float) -> float:
     return snapshots.snapshot_work_deadline(deadline, source_db)
 
 
+def _optional_work_deadline(ledger, result, deadline: float) -> float:
+    """Work deadline for derive and realtime semantic. Once per run, when
+    the finish publish will be held by SNAPSHOT_MIN_INTERVAL_S anyway, the
+    verify reserve goes to this work and the finish keeps no publish
+    (``snapshot_reserve`` = 'released'); otherwise it stays 'kept'."""
+    import snapshots
+    work_deadline = _snapshot_work_deadline(ledger, deadline)
+    if "snapshot_reserve" not in result:
+        # the finish publish runs about when this run's deadline falls
+        finish_at = time.time() + max(0.0, deadline - time.monotonic())
+        source_db = ledger.db.execute("PRAGMA database_list").fetchone()[2]
+        released = maintenance.snapshot_publish_deferrable(
+            source_db, now=finish_at, deadline=min(work_deadline, time.monotonic() + 10))
+        result["snapshot_reserve"] = "released" if released else "kept"
+    if result["snapshot_reserve"] == "released":
+        return deadline - snapshots.SNAPSHOT_WORK_TAIL_S
+    return work_deadline
+
+
 def stage_derive(ledger, result, deadline, cfg=None,
                  llm_budget_cap: float = 90, run_lock_fd=None):
     """Run bounded rule/LLM extraction, medication mapping, rollups and signals.
@@ -227,14 +249,20 @@ def stage_derive(ledger, result, deadline, cfg=None,
 
     transaction_pending()
     # Keep the existing run cap and verification policy. Derived work yields
-    # early enough for size-based snapshot validation and the existing tail.
-    work_deadline = _snapshot_work_deadline(ledger, deadline)
+    # early enough for size-based snapshot validation (unless this run's
+    # publish is held by the interval) and the existing tail.
+    work_deadline = _optional_work_deadline(ledger, result, deadline)
     try:
         import extract
+        import upgrade_scope
         # Leave a fair share for medication mapping, rollups and signals.
         rule_deadline = time.monotonic() + max(0, work_deadline - time.monotonic()) / 2
+        # The host extract.upgrade_scope, read as the LLM selection reads it,
+        # keeps a closed scope's earlier rule versions; open passes "" (query unchanged).
+        rule_scope = upgrade_scope.selection_sql(upgrade_scope.live(), "rule")
         ex = _run_stage(result, "derive_rules", work_deadline,
-                        lambda: extract.run_pending(ledger, deadline=rule_deadline), required=True)
+                        lambda: extract.run_pending(ledger, deadline=rule_deadline, scope_sql=rule_scope),
+                        required=True)
         result["extracted"] = ex["done"]
         result["extracted_pids"] = ex["pids"]
         if ex.get("reconcile_error") is not None:
@@ -401,13 +429,38 @@ def stage_derive(ledger, result, deadline, cfg=None,
 
 # ---------- main ----------
 
-def _consent_only(lock_fd) -> int:
+def _consent_store():
+    """The handle the consent drain writes its receipt through. A held
+    rollback runs the OLD tree against the NEWER-schema DB, which Ledger
+    refuses (preflight) and which must not be migrated while the loss
+    report stands — so an existing DB is opened bare: the receipt only
+    needs command_receipts (apply_command checks its schema floor)."""
+    try:
+        con = sqlite3.connect(Path(DB).resolve().as_uri() + "?mode=rw",
+                              uri=True, timeout=30)
+    except sqlite3.OperationalError:
+        if os.path.lexists(DB):
+            raise
+        return Ledger(DB)   # no DB yet: nothing to protect from migration
+    try:
+        con.row_factory = sqlite3.Row
+        for pragma in ("foreign_keys=ON", "busy_timeout=30000", "fullfsync=ON"):
+            con.execute("PRAGMA " + pragma)
+    except BaseException:
+        con.close()
+        raise
+    # shortcut: assumes command_receipts keeps its 7 columns in newer schemas;
+    # if that table ever changes, bind consent to a DB-external receipt.
+    return SimpleNamespace(db=con, close=con.close)
+
+
+def _consent_only(lock_fd, commands_only=False) -> int:
     """Tick while a schema-bump DB replace awaits human consent: drain
     ONLY the ops.restore_approve channel (drain_commands defers every
     other file while the marker stands). No adapter, no ingest, no
     reconcile — nothing may write a table the loss report counts."""
     try:
-        ledger = Ledger(DB)
+        ledger = _consent_store()
     except Exception:
         os.close(lock_fd)
         print(json.dumps({"ok": False, "error": "ledger_init_failed"}))
@@ -424,7 +477,7 @@ def _consent_only(lock_fd) -> int:
         import notify_spool
         marker = notify_spool.restore_awaiting_consent(
             os.path.join(HOME, "data"))
-        if marker and marker.get("backup_path"):
+        if marker and marker.get("backup_path") and (result["commands"] or not commands_only):
             try:
                 import restore_evidence
                 report = restore_evidence.create_loss_report(
@@ -513,6 +566,7 @@ def _commands_only(lock_fd, deadline) -> int:
         _run_stage(result, "cmd_int_drain_again", deadline, lambda: notify_cmds.drain_int_commands(
             ledger, result, cfg, root, deadline=min(deadline, time.monotonic() + 30)), required=True)
         notify_spool.publish_flags(cfg, root)
+        notify_spool.publish_restore_holds(ledger, root)
         _run_stage(result, "cmd_card_gc", deadline, notify_cards.gc, ledger, cfg, required=True)
         dirty = notify_cards.snapshot_dirty(ledger)
         if dirty:
@@ -623,16 +677,11 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
     history drains, trickle seeding, reconcile and self profile."""
     # cmd ingest first so requests are due THIS run; discovery and
     # trickle seeding only enqueue — the drains below execute them.
-    job_ops.drain_commands(ledger, result)
-    _require_closed_transaction(ledger, result)
     try:
-        # interactive-notification command channel: plugin receipts
-        # and card actions apply mid-tick, not just via the watcher
         import notify_spool
-        import notify_cmds
         notify_spool.ensure_dirs(os.path.join(HOME, "data"))
-        # a DB restore holds send grants until the journal-vs-DB
-        # reconcile lands — run it before draining cmd_int traffic
+        # a DB restore holds send grants until the journal-vs-DB reconcile
+        # lands — run it before any command (a never-started approval) applies
         if notify_spool.restore_pending(
                 os.path.join(HOME, "data")) is not None:
             import notify_reconcile
@@ -640,6 +689,17 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
                 ledger, cfg)
             result["restore_reconcile"] = rep["counts"]
             _require_closed_transaction(ledger, result)
+    except TickTransactionOpen:
+        raise
+    except Exception as e:
+        result["errors"].append(f"restore_reconcile:{type(e).__name__}")
+    _require_closed_transaction(ledger, result)
+    job_ops.drain_commands(ledger, result)
+    _require_closed_transaction(ledger, result)
+    try:
+        # interactive-notification command channel: plugin receipts
+        # and card actions apply mid-tick, not just via the watcher
+        import notify_cmds
         notify_cmds.drain_int_commands(
             ledger, result, cfg, os.path.join(HOME, "data"),
             deadline=deadline)
@@ -821,6 +881,8 @@ def _deliver(ledger, args, cfg, result, deadline):
         # revokes, deferral expiry, stuck spec repair — bounded
         result["card_sweep"] = notify_cards.sweep(
             ledger, cfg, limit=50)
+        if result["card_sweep"].get("failed"):
+            result["errors"].append("card_sweep: card_sweep_card_failed")
     except Exception as e:
         result["errors"].append(f"card_sweep: {type(e).__name__}")
     _require_closed_transaction(ledger, result)
@@ -854,7 +916,7 @@ def _run_semantic(ledger, args, cfg, result, deadline, sem_on,
         result["semantic"] = _semantic_skipped(cfg, "background_worker")
         return
     try:
-        work_deadline = _snapshot_work_deadline(ledger, deadline)
+        work_deadline = _optional_work_deadline(ledger, result, deadline)
     except Exception as e:
         result["errors"].append(f"semantic: {type(e).__name__}")
         result["semantic"] = _semantic_skipped(cfg, "work_deadline_unavailable")
@@ -1149,6 +1211,7 @@ def _finish_run(ledger, cfg, result, run_id, deadline, *, run_lock_fd=None,
                        deadline=deadline, limit=16), required=True)
         _require_closed_transaction(ledger, result)
         notify_spool.publish_flags(cfg, os.path.join(HOME, "data"))
+        notify_spool.publish_restore_holds(ledger, os.path.join(HOME, "data"))
     except TickTransactionOpen:
         raise
     except Exception as e:
@@ -1184,6 +1247,7 @@ def _finish_run(ledger, cfg, result, run_id, deadline, *, run_lock_fd=None,
         state = _run_stage(result, "finish_snapshot", deadline,
                            lambda: maintenance.refresh_snapshot(
                                DB, dirty=bool(dirty), deadline=snapshot_deadline,
+                               publish=result.get("snapshot_reserve") != "released",
                                verification_context=(
                                    _verification_context_factory(
                                        ledger, run_lock_fd, gate_state, db_baseline)
@@ -1372,6 +1436,11 @@ def _main() -> int:
     # Command receipts also wait for short writer windows. The existing
     # generation/update fence applies. Only commands count waiting against
     # their run budget; scheduled collection retains its full work budget.
+    if not args.commands_only and writer_lock.gateway_restart_pause(os.path.join(HOME, "data")):
+        # Free the single cron slot before any lock wait or fetch so the
+        # pending gateway restart can pass; fetch and mark-read stay coupled.
+        print(json.dumps({"ok": False, "error": "gateway_restart_pending"}))
+        return 3
     lock_started = time.monotonic()
     lock_fd = acquire_run_lock(LOCKFILE)
     if lock_fd is None:
@@ -1416,7 +1485,7 @@ def _main() -> int:
         os.close(lock_fd)
         raise
     if consent_only:
-        return _consent_only(lock_fd)
+        return _consent_only(lock_fd, args.commands_only)
     if not code_current:
         os.close(lock_fd)
         print(json.dumps({"ok": False, "error": "code_changed_or_update_pending"}))
@@ -1428,15 +1497,15 @@ def _main() -> int:
         os.close(lock_fd)
         print(json.dumps({"ok": False, "error": "run_deadline_exceeded"}))
         return 3
-    if args.commands_only:
-        return _commands_only(lock_fd, deadline)
     import notify_spool
     if notify_spool.restore_awaiting_consent(
             os.path.join(HOME, "data")) is not None:
         # schema-bump DB replace held for human consent — ingest,
         # derive, reconcile and sends all stay frozen so the approved
         # loss report cannot drift; only the consent command drains
-        return _consent_only(lock_fd)
+        return _consent_only(lock_fd, args.commands_only)
+    if args.commands_only:
+        return _commands_only(lock_fd, deadline)
     adapter = MCSAdapter(token_cache=CACHE)
     adapter.set_deadline(deadline)
     # this process's own interruption evidence; None never blocks the run

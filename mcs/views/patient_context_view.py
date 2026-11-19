@@ -326,6 +326,8 @@ def _evidence(db, project_id, *, cfg=None) -> dict:
     return {"project_id": project_id, "snapshot": snapshot_meta(db), "items": items,
             "historical_items": _historical_karte_items(db, project_id, context_refresh),
             "summary": summary,
+            "unanalysed_posts": [rec["posted_at_ts"] for rec in records
+                                 if rec["extraction_eligible"] and rec["state"] != "current"],
             # summary fact_ids resolve here; empty when unpublished or no longer valid
             "context_facts": scoped_facts,
             "as_of": (context_refresh or {}).get("as_of"),
@@ -504,8 +506,9 @@ def role_candidates(items) -> list:
 # Written by the patient-context reset when it erases every context result. The rebuild finds
 # again the facts in records that existed before it, so those are not new to any reader.
 RESET_MARK_KIND = "patient_context_reset_mark_v1"
-# One row per patient, written in the same reset: the facts its published context held, so the
-# rebuild hides only what it found again and still shows what it found for the first time.
+# One row per patient, written in the same reset: keys of the facts its context (published or not)
+# and completed scans held, so the rebuild hides only what it found again and still shows what it
+# found for the first time.
 RESET_PRIOR_KIND = "patient_context_reset_prior_v1"
 
 
@@ -521,7 +524,7 @@ def reset_fact_key(fact) -> str:
 
 
 def _reset_prior(db, project_id):
-    """The fact keys this patient's context held before the latest reset; None when unrecorded."""
+    """The fact keys this patient's context and scans held before the latest reset; None when unrecorded."""
     row = db.execute("SELECT content FROM artifacts WHERE kind=? AND project_id=? "
                      "ORDER BY artifact_id DESC LIMIT 1", (RESET_PRIOR_KIND, project_id)).fetchone()
     try:
@@ -546,7 +549,7 @@ def changes(db, ev, since_ts) -> dict:
     earlier; edited / deleted = a revision observed since (a deleted post returns its id and
     observation time only); backfill_found = a context fact found since in an older record, except
     one the rebuild after a patient-context reset found again: a record seen before that reset whose
-    fact (record, revision, category) the erased context already held."""
+    fact (record, revision, category) the erased context or its current scans already held."""
     seen = {r[0]: (r[1], r[2]) for r in db.execute(
         "SELECT message_id, first_seen, posted_at_ts FROM messages WHERE project_id=?", (ev["project_id"],))}
     revised = {}
@@ -565,9 +568,13 @@ def changes(db, ev, since_ts) -> dict:
     prior = _reset_prior(db, ev["project_id"]) if reset_at is not None else None
 
     def found_again(item, first):
-        # found in a record seen before the reset and already in the context it erased
-        return (reset_at is not None and isinstance(first, (int, float)) and first < reset_at
-                and (prior is None or reset_fact_key(item) in prior))
+        # a recorded patient: the erased context or its scans already held this fact (karte and OCR facts have no
+        # messages row, so the record's first_seen cannot decide); unrecorded: a record seen before
+        if reset_at is None:
+            return False
+        if prior is not None:
+            return reset_fact_key(item) in prior
+        return isinstance(first, (int, float)) and first < reset_at
 
     def kind(item):
         # the reader's own observation decides first: a post first seen since is new (or
@@ -621,11 +628,22 @@ def replies(db, project_id) -> dict:
         {"message_id": r.get("mid"), "at": r.get("at"), "text": r.get("ctx"), "sender": asked_by(r.get("mid")),
          "reply_state": r.get("reply_state"), "unverified": item_unverified(r),
          "reply_events": [dict(event) for event in r.get("reply_events", [])],
+         "reply_evaluation": r.get("reply_evaluation"),
          "reply": ("返信あり（完了と取消の記録あり）" if r.get("reply_conflict") is True else
                    f"返信あり（{REPLY_LABELS[r['reply_state']]}・記録上）"
-                   if r.get("reply_state") in REPLY_LABELS else "返答が見つからない"),
+                   if r.get("reply_state") in REPLY_LABELS else
+                   "返答の確認ができない（評価未取得）" if r.get("reply_evaluation") == "unavailable"
+                   else "返答が見つからない"),
          "reply_conflict": r.get("reply_conflict") is True} for r in rows],
         "next_planned": roll.get("next_planned")}
+
+
+def _open_requests(talk):
+    """Verified requests without a recorded reply: none found apart from replies that could not be evaluated."""
+    # an unverified request candidate is not a written request awaiting a reply
+    rows = [r for r in talk["items"] if r["reply_state"] is None and not r["unverified"]]
+    return {"unanswered": [r for r in rows if r.get("reply_evaluation") != "unavailable"],
+            "reply_unknown": [r for r in rows if r.get("reply_evaluation") == "unavailable"]}
 
 
 def previsit(db, ev, now, *, days=7, intervention_history=False, intervention_cursor=None, care=None) -> dict:
@@ -638,11 +656,9 @@ def previsit(db, ev, now, *, days=7, intervention_history=False, intervention_cu
     interventions = (read_source_schedule_page(db, ev["project_id"], cursor=intervention_cursor,
                                                consistency="page") if intervention_history
                      else read_source_schedule(db, ev["project_id"]))
-    picked = {"written_checks": [], "unanswered": []}
+    picked = {"written_checks": [], "unanswered": [], "reply_unknown": []}
     for group, rows in (("written_checks", [i for i in ev["items"] if i["category"] == "followup"]),
-                        # an unverified request candidate is not a written request awaiting a reply
-                        ("unanswered", [r for r in talk["items"] if r["reply_state"] is None
-                                        and not r["unverified"]])):
+                        *_open_requests(talk).items()):
         seen = set()
         for row in rows:
             identity = _assertion_key(row)
@@ -972,7 +988,7 @@ def handoff(db, ev) -> dict:
     talk = replies(db, ev["project_id"])
     return {"view": "handoff", "coverage": ev["coverage"], "as_of": ev["as_of"],
             "written_checks": [i for i in ev["items"] if i["category"] == "followup"],
-            "unanswered": [r for r in talk["items"] if r["reply_state"] is None and not r["unverified"]]}
+            **_open_requests(talk)}
 
 
 def search(db, project_id, query, *, cfg=None, cursor=None) -> dict:
@@ -1006,6 +1022,9 @@ def transition_course(ev) -> dict:
         key = (i.get("source"), i.get("message_id") if i.get("message_id") is not None else id(i),
                i.get("content_hash"), kind)
         by_post.setdefault(key, []).append((i, scopes))
+    # A post without a current extraction (pending, held, stale) may carry the item, so it can
+    # never establish an absence; an unknown posting time may fall in any window.
+    unanalysed = ev.get("unanalysed_posts")
     out = []
     for key, reports in by_post.items():
         anchors = [{**item, "transition_scope": scopes} for item, scopes in reports]
@@ -1015,9 +1034,14 @@ def transition_course(ev) -> dict:
                 and math.isfinite(i["posted_at_ts"])
                 and abs(i["posted_at_ts"] - anchor["posted_at_ts"]) <= _WINDOW
                 and not any(i is original for original, _ in reports)]
+        absent = sorted({"medication_management", "adl", "care_services", "followup"}
+                        - {i["category"] for i in near + anchors}) if current else []
+        analysed = not absent or isinstance(unanalysed, list) and not any(
+            type(ts) not in (int, float) or not math.isfinite(ts)
+            or abs(ts - anchor["posted_at_ts"]) <= _WINDOW for ts in unanalysed)
         out.append({"anchor": anchor, "anchors": anchors, "anchor_kind": key[-1], "nearby": near,
-                    "no_record": sorted({"medication_management", "adl", "care_services", "followup"}
-                                        - {i["category"] for i in near + anchors}) if current else []})
+                    "no_record": absent if analysed else [],
+                    "no_record_unverified": bool(absent) and not analysed})
     return {"view": "transition_course", "items": out}
 
 

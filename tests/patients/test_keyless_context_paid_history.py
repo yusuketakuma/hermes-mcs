@@ -62,6 +62,10 @@ def test_definite_api_error_uses_local_without_erasing_reserved_cost(runtime, re
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', rejected)
     monkeypatch.setattr(cloud_client, 'time', cloud_policy.time)
     seed(ledger, body='本人は合成の自宅で生活しています。')
+    if status == 429:
+        # The rate-limit circuit opens only after three consecutive cloud
+        # failures; a second source gives the cloud lane enough units to reach it.
+        seed(ledger, mid=2, body='合成の通院記録があります。')
     waited = []
     for _ in range(40):
         result = step(runtime, cfg=cfg)

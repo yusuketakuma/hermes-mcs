@@ -1026,6 +1026,7 @@ def release_root(ledger, project_id, root, *, expected_job_sha256,
                 ledger.db.execute('INSERT INTO main.artifacts(kind,project_id,model,content,meta,created_at) '
                                   'VALUES(?,?,?,?,?,?)', (RELEASE_RECEIPT_KIND, project_id, expected_snapshot_sha256, data,
                                   json.dumps({'receipt_sha256': hashlib.sha256(data.encode()).hexdigest()}), time.time()))
+                _release_schema(ledger.db)
                 return {'released': len(rows), 'job_id': new.lastrowid, 'previous_job_id': job['job_id']}
         finally:
             ledger.db.set_progress_handler(None, 0)

@@ -237,7 +237,8 @@ def test_document_table_rejects_invalid_indices_and_spans(cell):
     ({}, {}), ({"row_span": 2}, {"row": 1}), ({"col_span": 2}, {"col": 1}),
 ])
 def test_document_table_rejects_duplicate_or_overlapping_cells(first, second):
-    cells = [{"row": 0, "col": 0, **first}, {"row": 0, "col": 0, **second}]
+    cells = [{"row": 0, "col": 0, "contents": "A", **first},
+             {"row": 0, "col": 0, "contents": "B", **second}]
     with pytest.raises(ValueError, match="^output_schema_table_overlap$"):
         ocr._document_text({"paragraphs": [], "tables": [{"cells": cells}]})
 

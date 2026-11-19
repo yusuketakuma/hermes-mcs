@@ -394,7 +394,7 @@ def test_a_recovered_answer_then_a_refused_quality_repair_never_frees_the_slot(c
         if kwargs.get("message_id") == head and not recovered:
             recovered.append(True)
             return ({"reservation": {"reservation_id": "e" * 32}},
-                    {"status": 200, "text": '{"symptoms":[]}', "finish_reason": "stop"})
+                    {"status": 200, "text": '{"summary":"synthetic-recovered"}', "finish_reason": "stop"})
         return None
     monkeypatch.setattr(cloud_policy, "recover_response", recover)
     monkeypatch.setattr(worker.extract_quality, "completeness_issues", lambda *_args: ["synthetic-missing"])

@@ -273,6 +273,7 @@ def test_finish_stops_before_run_commit_when_tail_leaves_a_transaction(tmp_path,
 
         monkeypatch.setattr(notify_cmds, "drain_int_commands", failed_tail)
         monkeypatch.setattr(notify_spool, "publish_flags", lambda *a: calls.append("publish"))
+        monkeypatch.setattr(notify_spool, "publish_restore_holds", lambda *a, **k: None)
         monkeypatch.setattr(store, "finish_run", lambda *a: calls.append("finish"))
         result = {"errors": [], "incomplete": []}
         with pytest.raises(run_check.TickTransactionOpen):

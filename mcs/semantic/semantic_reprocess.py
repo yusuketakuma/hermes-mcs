@@ -126,6 +126,25 @@ def _reprocess_execution_unverifiable(pl):
     return runtime.execution_marker_state(pl, None) == 'unverifiable'
 
 
+def _reprocess_unbound_done(ledger, row, state, pl):
+    """Completed marker-less job whose per-post assessment predates the registry.
+
+    Arrival and history seeds write no execution marker, so a done job of
+    theirs cannot show which interpretation it was evaluated under. Only a
+    registry bump is read from its results: the newest per-post assessment
+    (the one without a fact_id) names an older registry. Any other outdated
+    result keeps the existing repair_required contract. The pass adopts the
+    job once under the current generation; the rebuilt assessment names the
+    current registry, so it is not adopted again."""
+    if state != 'repair_required' or runtime.execution_marker_state(pl, None) != 'legacy':
+        return False
+    import semantic_jev
+    from semantic_prior_registry import latest_post_assessment
+    _, meta = latest_post_assessment(ledger.db, row['project_id'], row['message_id'])
+    registry = meta.get('registry') if meta is not None else None
+    return type(registry) is str and registry != semantic_jev.REGISTRY_VERSION
+
+
 def _job_identity_same(token, current):
     """Full fetch_jobs identity captured before adoption, mirroring
     runtime.job_matches field coverage plus the raw payload."""
@@ -469,6 +488,7 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
                 sources[key] = ledger._semantic_source_generation(*key)
             if (not is_current(pl)
                     or _reprocess_execution_stale(pl, generation)
+                    or _reprocess_unbound_done(ledger, row, state, pl)
                     or pl.get('source_generation') != sources[key]
                     or not isinstance(pl.get('targets'), list) or row['message_id'] not in pl['targets']):
                 arrival = _reprocess_arrival_event(

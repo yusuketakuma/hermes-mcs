@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "Anthropic の上限到達と長い待ち指示で、送信を続けない",
+  "summary": "Anthropic が月額上限に達した応答（429）を返したら、再送せず支払い停止として扱います。Retry-After の無い 429 と、残り時間を超える Retry-After も再送せず、枠を握ったまま待ちません。",
+  "upgrade": "追加操作は不要です。Anthropic を使う外部AI送信に適用され、反映には処理の再起動が必要です。上限に達した場合は、上限の解除を確認してから resume してください。",
+  "details": [
+    "上限の判定は 429 本文の error.details.error_code が enforced_spend_limit_reached のときだけです。本文が読めないときは従来の 429 として扱います。",
+    "待ち時間が単位の残り時間以上のときは、眠らずに失敗として返します。OpenAI にも同じ規則が働きます。",
+    "CloudClient.complete は reserve_fn を必須の引数にしました。本番の呼出しは常に渡しています。"
+  ],
+  "refs": [
+    "mcs/llm/transport/cloud_client.py",
+    "mcs/llm/providers/anthropic_client.py",
+    "mcs/llm/providers/openai_client.py"
+  ]
+}

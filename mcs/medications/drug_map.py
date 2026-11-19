@@ -317,11 +317,16 @@ def _source_identity(entry) -> bool:
             and len(rows) == 1 and rows[0]["medicine"] == code)
 
 
+# (path, pin, dev, ino, size, mtime_ns, ctime_ns) -> immutable DrugMap; ctime changes on any rewrite.
+_LOADED: list = [None, None]
+
+
 def load(path: str | Path, *, expected_sha256: str) -> DrugMap | None:
     """Load only an explicit absolute, owner-private regular file with a SHA pin.
 
     Missing files are unavailable. Invalid, oversized, shared or unpinned files
     raise ValueError. No default path, environment lookup or service is used.
+    The last parsed file is reused while its pin and file identity are unchanged.
     An unapproved dictionary may be resolved in isolation but derive refuses
     production application unless its caller explicitly selects synthetic mode.
     """
@@ -342,6 +347,10 @@ def load(path: str | Path, *, expected_sha256: str) -> DrugMap | None:
                 if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
                         or info.st_mode & 0o077 or info.st_size > MAX_BYTES):
                     raise ValueError("drug_map_private_or_size")
+                identity = (str(path), expected_sha256, info.st_dev, info.st_ino, info.st_size,
+                       info.st_mtime_ns, info.st_ctime_ns)
+                if _LOADED[0] == identity:
+                    return _LOADED[1]
                 raw = stream.read(MAX_BYTES + 1)
         finally:
             os.close(fd)
@@ -432,9 +441,11 @@ def load(path: str | Path, *, expected_sha256: str) -> DrugMap | None:
             aliases.setdefault(alias, []).append(candidate)
     provenance = Source(source["name"], source["url"], source["terms_checked_on"],
                         source.get("approved_by", ""), as_of, next_boundary)
-    return DrugMap(document["dict_id"], sha, provenance,
-                   MappingProxyType({key: tuple(values)
-                                     for key, values in aliases.items()}))
+    loaded = DrugMap(document["dict_id"], sha, provenance,
+                     MappingProxyType({key: tuple(values)
+                                       for key, values in aliases.items()}))
+    _LOADED[:] = [identity, loaded]
+    return loaded
 
 
 def _source(db: sqlite3.Connection, mid: int):
@@ -465,17 +476,19 @@ def config_error(value) -> str | None:
 
 
 def configured(cfg) -> tuple["DrugMap | None", str | None]:
-    """The config-pinned dictionary: (map, None); (None, None) when unset
-    or the file is absent; (None, "invalid_config"|"invalid_dictionary")."""
+    """The config-pinned dictionary: (map, None); (None, None) when unset;
+    (None, "invalid_config"|"invalid_dictionary"|"missing_dictionary")."""
     setting = (cfg or {}).get("drug_map") if isinstance(cfg, dict) else None
     if setting is None:
         return None, None
     if config_error(setting) is not None:
         return None, "invalid_config"
     try:
-        return load(setting["path"], expected_sha256=setting["sha256"]), None
+        dictionary = load(setting["path"], expected_sha256=setting["sha256"])
     except ValueError:
         return None, "invalid_dictionary"
+    # A configured file that vanished is an error, never "unconfigured".
+    return (dictionary, None) if dictionary is not None else (None, "missing_dictionary")
 
 
 def active_dictionary(db: sqlite3.Connection, cfg) -> tuple["DrugMap | None", str]:
