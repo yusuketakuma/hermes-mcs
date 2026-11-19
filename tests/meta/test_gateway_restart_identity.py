@@ -118,7 +118,9 @@ def test_request_is_detached_and_does_not_claim_restart_success(gateway, monkeyp
     argv, kw = calls[0]
     assert argv[1:3] == ['-I', '-c'] and kw['start_new_session'] is True
     assert kw['cwd'] == '/'
-    assert argv[-3:] == [str(data), str(agents), '501']
+    assert argv[-4:-1] == [str(data), str(agents), '501']
+    import re as _re
+    assert _re.fullmatch(r'[0-9a-f]{32}', argv[-1])
     assert 'XPC_SERVICE_NAME' not in kw['env'] and 'MCS_JOB_PID' not in kw['env']
     assert json.loads((data / 'gateway_restart.json').read_text())['status'] == 'requested'
     compile(argv[3], '<restart>', 'exec')

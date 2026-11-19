@@ -177,3 +177,39 @@ def test_unreadable_receipt_of_a_citing_patient_is_retained(tmp_path):
         assert not {damaged['reserve'], damaged['disposition']}.intersection(remaining)
     finally:
         db.close()
+
+
+@pytest.mark.parametrize('batch', [1, 5000])
+def test_a_young_local_replacement_record_is_pruned_with_its_expired_reservation(tmp_path, monkeypatch, batch):
+    db = _ledger(tmp_path)
+    try:
+        now = time.time()
+        replaced = _repair_accounting(db, 1, 'a', header=False, slot=False)
+        cited = _repair_accounting(db, 1, 'b', header=False, slot=False)
+        discarded = _repair_accounting(db, 1, 'c', header=False, slot=False)
+        foreign = _repair_accounting(db, 2, 'd', header=False, slot=False)
+        _cite(db, 1, cited)
+        _expire_repair_accounting(db, now)
+        # Local work replaced these old paid requests only now: the record of that is young.
+        for rows, value, pid in ((replaced, 'superseded_local', 1), (cited, 'superseded_local', 1),
+                                 (discarded, 'discarded_scope', 1), (foreign, 'superseded_local', 2)):
+            db.db.execute("UPDATE artifacts SET created_at=?,meta=json_set(meta,'$.disposition',?) "
+                          "WHERE artifact_id=?", (now, value, rows['disposition']))
+        # Another patient's record that names the first reservation is not this reservation's.
+        stray = db.artifact_add('cloud_usage_disposition', '{}', project_id=2, meta={
+            'project_id': 2, 'reservation_id': 'a' * 32, 'disposition': 'superseded_local'})
+        db.db.commit()
+        monkeypatch.setattr(maintenance, 'RETENTION_BATCH', batch)
+        maintenance._prune_cloud_usage(db.db, now - maintenance.CLOUD_USAGE_KEEP_S)
+        remaining = {row[0] for row in db.db.execute('SELECT artifact_id FROM artifacts')}
+        # A replacement record says nothing once its reservation is gone: it leaves with it,
+        # so no later reader meets a disposition without a reservation.
+        assert not _kept(replaced).intersection(remaining)
+        assert not _kept(foreign).intersection(remaining)
+        # A reservation a current context still cites keeps its whole history, the record too.
+        assert _kept(cited) <= remaining
+        # Other dispositions and other scopes keep their own retention.
+        assert {discarded['disposition'], stray} <= remaining
+        assert not {discarded['reserve'], discarded['result']}.intersection(remaining)
+    finally:
+        db.close()
