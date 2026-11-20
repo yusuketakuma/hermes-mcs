@@ -1,7 +1,7 @@
 {
   "category": "added",
   "title": "Anthropic で用途ごとのモデル（Haiku 5.5 medium・Sonnet 5.5 high）を選べるようにする",
-  "summary": "クラウド推論の提供元が Anthropic のとき、用途ごとのモデルを設定で選べるようにしました。再抽出と意味解析は Haiku 5.5 の medium、品質修復と患者コンテキストは Sonnet 5.5 の high が既定です。Sonnet 5.5 の料金（入力100万トークンあたり2ドル、出力10ドル、キャッシュ書込み5分2.5ドル・1時間4ドル、読取り0.10ドル）を追加しました。設定を足すまでは、これまでどおり Haiku 5.5 の low で送り、送信内容・予約額・課金記録は変わりません。",
+  "summary": "クラウド推論の提供元が Anthropic のとき、用途ごとのモデルを設定で選べるようにしました。再抽出と意味解析は Haiku 5.5 の medium、品質修復と患者コンテキストは Sonnet 5.5 の high が既定です。Sonnet 5.5 の料金（入力100万トークンあたり2ドル、出力10ドル、キャッシュ書込み5分2.5ドル・1時間4ドル、読取り0.10ドル）を追加しました。",
   "upgrade": "追加操作は不要です。使うときは、Anthropic の提供元設定に profiles を置きます（一つの設定ファイルの形式では cloud_llm.provider_profiles.anthropic）。空の {} なら上の既定、用途ごとに haiku-medium か sonnet-high を指定できます。cloud_llm.profiles は従来どおり OpenAI 用です。",
   "details": [
     "使えるのは haiku-medium と sonnet-high の2つと、従来の Haiku 5.5 low（profile なし）だけです。ほかのモデル・effort・profile・料金版は拒否します。",
