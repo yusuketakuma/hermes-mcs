@@ -429,3 +429,19 @@ def test_mark_due_commit_failure_leaves_no_open_transaction(tmp_path):
         ledger.Ledger.karte_summary_mark_due(SimpleNamespace(db=FailingCommit()), 1)
     assert not real.in_transaction
     db.close()
+
+
+def test_intake_transaction_reports_hold_time_over_threshold(tmp_path, capsys, monkeypatch):
+    """hold>=TX_HOLD_REPORT_S の intake 取引が stderr へ JSON イベントを出す。"""
+    monkeypatch.setattr(ledger, "TX_HOLD_REPORT_S", 0)
+    db = _ledger(tmp_path)
+    try:
+        with db._intake_transaction(stage="probe"):
+            pass
+    finally:
+        db.close()
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()
+              if "intake_tx_hold" in line]
+    assert events[-1]["event"] == "intake_tx_hold"
+    assert events[-1]["stage"] == "probe"
+    assert events[-1]["hold_s"] >= 0
