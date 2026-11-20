@@ -9,6 +9,10 @@
   "repeat_success（成功済み）・repeat_unsettled（結果不明）・result_missing・disposition・receipt_inconsistent・legacy_unproven の拒否契約は不変",
   "admission 層の history 判定（履歴拒否時はローカル処理へフォールバック）は変更なし。supersede によるローカル置換の記録・優先順位も不変"
  ],
- "risk": "失敗した送信はプロバイダ側で課金済みのため、再送は追加課金になる。ユニットあたりの重複課金は「未決着中の再送を result_missing が拒否する」構造で1試行ずつに限定される",
- "verify": "tests/llm/test_cloud_resend_guard.py と tests/llm/test_cloud_supersede_local.py に新契約を追加（決済済み失敗→新規 reserve 作成・その後の3重目送信は result_missing で拒否・repeat_success/unsettled は引き続き拒否）。本番適用後は cloud_unit_unresolved の内訳で repeat_failed の消失と、新規 reservation の増加を観測する"
+ "upgrade": "適用後、止まっていた課金済み失敗ユニット(repeat_failed)が予算内で再送され追加課金になります。成功済み・未決着・結果不明の履歴は従来どおり拒否されます",
+ "refs": [
+  "mcs/llm/cloud_policy.py",
+  "tests/llm/test_cloud_resend_guard.py",
+  "tests/llm/test_cloud_supersede_local.py"
+ ]
 }
