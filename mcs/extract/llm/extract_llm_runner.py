@@ -270,8 +270,13 @@ class _DeferredGuard:
     def prepare(self):
         self._prepared = self._resolved = None
         try:
+            # The fence must precede the evaluation: the guard reads a pinned
+            # snapshot, so a cloud write landing mid-evaluation is invisible to
+            # the verdict yet present in a post-evaluation fence — capturing
+            # first makes any such write break the commit-time comparison.
+            fence = self._fence()
             verdict = bool(self._evaluate())
-            self._prepared = (verdict, self._fence() if verdict else None)
+            self._prepared = (verdict, fence if verdict else None)
         except Exception:
             self._prepared = None
 
