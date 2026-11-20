@@ -630,13 +630,19 @@ def _refresh_snapshot_locked(db_path: str, *, force: bool, dirty: bool, now, dea
                                      signature_s=round(signature_s, 3),
                                      total_s=round(time.perf_counter() - total_started, 3))
             return "retry_deferred"
-    if (deadline is not None
-            and deadline - monotonic() < snapshots.SNAPSHOT_MIN_WINDOW_S):
-        # Too little window left for copy + verify + tail: defer before
-        # the copy so the attempt cannot burn the verify budget.
-        snapshots._record_timing(defer_reason="window_insufficient",
-                                 remaining_s=round(deadline - monotonic(), 3))
-        return "deferred"
+    if deadline is not None:
+        # The gate path reserves the reacquire wait plus publish tail, so
+        # it needs the larger window before the copy may start.
+        min_window = (snapshots.SNAPSHOT_MIN_WINDOW_GATE_S
+                      if verification_context is not None
+                      else snapshots.SNAPSHOT_MIN_WINDOW_S)
+        if deadline - monotonic() < min_window:
+            # Too little window left for copy + verify + tail: defer before
+            # the copy so the attempt cannot burn the verify budget.
+            snapshots._record_timing(defer_reason="window_insufficient",
+                                     remaining_s=round(deadline - monotonic(), 3),
+                                     gate=verification_context is not None)
+            return "deferred"
     if not publish_snapshot(db_path, deadline=deadline, _lock_fd=lock_fd,
                             verification_context=verification_context):
         if commands_retry:
