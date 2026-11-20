@@ -487,13 +487,15 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         diagnostics["jev_skip_reason"] = reason
         guard("jev_skip")
 
+    history_rows = semantic_store._assessment_history_rows(ledger.db, pid, all_targets)
     for mid in all_targets:
         semantic_transport.set_inference_target(mid)
         member = members[mid]
         # restart-safe: a complete assessment for THIS fingerprint is
         # reused; retry_wait/error/pending ones are re-attempted
         try:
-            prev, previous = semantic_store._primary_assessment_history(ledger.db, pid, mid, fp, policy)
+            prev, previous = semantic_store._primary_assessment_history(
+                ledger.db, pid, mid, fp, policy, rows=history_rows.get(mid, ()))
             valid = (prev is None or (semantic_store._valid_primary_assessment(
                 prev["content"], prev["meta"], prev["model"], mid, fp, policy, scfg,
                 prefiltered=(prev["meta"].get("skipped") == "prefilter_no_signal"

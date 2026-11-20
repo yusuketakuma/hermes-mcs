@@ -616,6 +616,8 @@ def _commands_only(lock_fd, deadline) -> int:
             elif state == "published":
                 notify_cards.clear_snapshot_dirty(ledger, dirty)
             elif state is None:
+                import snapshots
+                result["snapshot_failure"] = snapshots.last_failure()
                 result["ok"] = False
                 result["errors"].append("snapshot_publish_failed")
         print(json.dumps(result, ensure_ascii=False))
