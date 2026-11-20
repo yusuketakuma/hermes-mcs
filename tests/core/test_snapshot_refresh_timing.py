@@ -44,9 +44,12 @@ def test_refresh_fences_decision_and_marker_to_avoid_a_second_copy(tmp_path, mon
         first = pool.submit(winner)
         assert signature_started.wait(10)
         try:
-            # No second caller may take a stale decision while the first owns the fence.
-            assert maintenance.refresh_snapshot(path, deadline=time.monotonic() + 20) is None
-            assert snapshots.last_failure()["reason"] == "snapshot_lock_busy"
+            # A second refresh defers while the first owns the fence — the
+            # busy lock is a scheduled retry, not a publish failure.
+            assert maintenance.refresh_snapshot(
+                path, deadline=time.monotonic() + 20) == "deferred"
+            assert snapshots.last_failure() == {}
+            assert snapshots.last_timing()["defer_reason"] == "publication_lock_busy"
             assert snapshots.publish_snapshot(path, maintenance.SNAPSHOT_DIR) is None
             assert snapshots.last_failure()["reason"] == "snapshot_lock_busy"
             assert signatures == [True]

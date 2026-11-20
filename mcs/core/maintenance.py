@@ -579,6 +579,12 @@ def refresh_snapshot(db_path: str, *, force: bool = False, dirty: bool = False,
         return None
     with snapshots._publication_lock(SNAPSHOT_DIR) as lock_fd:
         if lock_fd is None:
+            if snapshots.last_failure().get("reason") == "snapshot_lock_busy":
+                # Another publisher is mid-copy: retry next run instead
+                # of recording a publish failure.
+                snapshots._status.failure.clear()
+                snapshots._record_timing(defer_reason="publication_lock_busy")
+                return "deferred"
             return None
         return _refresh_snapshot_locked(db_path, force=force, dirty=dirty, now=now, publish=publish,
                                         deadline=deadline,
