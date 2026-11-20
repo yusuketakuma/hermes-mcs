@@ -1,6 +1,7 @@
 """Synthetic freshness checks share publication fencing and expose bounded timings."""
 from concurrent.futures import ThreadPoolExecutor
 import fcntl
+import json
 import os
 import threading
 import time
@@ -164,7 +165,7 @@ def test_refresh_defers_without_copy_when_window_is_too_small(tmp_path, monkeypa
     assert copies == [True]
 
 
-def test_refresh_gate_path_defers_with_larger_window(tmp_path, monkeypatch):
+def test_refresh_gate_path_defers_with_larger_window(tmp_path, monkeypatch, capsys):
     db = _ledger(tmp_path)
     db.save_messages([_message(1, body="合成の経過記録")])
     db.close()
@@ -191,6 +192,9 @@ def test_refresh_gate_path_defers_with_larger_window(tmp_path, monkeypatch):
     timing = snapshots.last_timing()
     assert timing["defer_reason"] == "window_insufficient"
     assert timing["gate"] is True
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()
+              if "snapshot_window_deferred" in line]
+    assert events and events[0]["gate"] is True
     assert not (tmp_path / "snapshots" / "ledger-snapshot.db").exists()
     assert maintenance.refresh_snapshot(
         path, deadline=time.monotonic() + window) == "published"

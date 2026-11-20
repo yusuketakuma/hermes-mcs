@@ -15,6 +15,7 @@ import re
 import shutil
 import sqlite3
 import stat
+import sys
 import time
 from pathlib import Path
 from contextlib import closing, suppress
@@ -639,9 +640,17 @@ def _refresh_snapshot_locked(db_path: str, *, force: bool, dirty: bool, now, dea
         if deadline - monotonic() < min_window:
             # Too little window left for copy + verify + tail: defer before
             # the copy so the attempt cannot burn the verify budget.
+            gate = verification_context is not None
             snapshots._record_timing(defer_reason="window_insufficient",
                                      remaining_s=round(deadline - monotonic(), 3),
-                                     gate=verification_context is not None)
+                                     gate=gate)
+            # Deferred attempts otherwise leave no log trace: emit the same
+            # fields so the window check's effect is observable in mcs.log.
+            print(json.dumps({"event": "snapshot_window_deferred",
+                              "pid": os.getpid(), "ts": time.time(),
+                              "gate": gate,
+                              "remaining_s": round(deadline - monotonic(), 3)}),
+                  file=sys.stderr, flush=True)
             return "deferred"
     if not publish_snapshot(db_path, deadline=deadline, _lock_fd=lock_fd,
                             verification_context=verification_context):
