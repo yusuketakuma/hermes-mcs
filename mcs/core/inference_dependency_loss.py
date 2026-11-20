@@ -447,16 +447,16 @@ def capture_tx(db, pid, mid, *, artifact_ids=None, source_key=None):
             'kind': 'patient_context_audit_unverified', 'artifact_id': None})
     # Resolve only explicit, affirmed correction targets using the same exact
     # quote/person/category relation contract as the clinical projection.
-    consumed_targets = []
+    referenced_targets = []
     for fact, origin in list(bound_facts.values()):
         refs = [ref for ref in (fact.get('temporal') or {}).get('corrections', [])
                 if ref.get('affirmed') is True and type(ref.get('message_id')) is int]
         for target_mid in {ref['message_id'] for ref in refs}:
+            referenced_targets.append(target_mid)    # fence absent targets too — an insert mid-flight must break the fence
             target_row = db.execute('SELECT * FROM messages WHERE project_id=? AND message_id=?',
                                     (pid, target_mid)).fetchone()
             if target_row is None:
                 continue
-            consumed_targets.append(target_mid)
             target_source = dict(target_row)
             target_source['_binding'] = source_binding(db, pid, target_mid)
             candidates = {}
@@ -505,7 +505,7 @@ def capture_tx(db, pid, mid, *, artifact_ids=None, source_key=None):
         gaps.append({'message_id': mid, 'content_hash': source['content_hash'], 'revision': revision,
                      'binding': binding, 'source_key': source_key if source_key is not None else mid, 'kind': 'unanalysed', 'artifact_id': None})
     return {'project_id': pid, 'message_id': mid, 'records': records, 'gaps': gaps, 'observed': observed, 'source_key': source_key, 'audited': audited, 'quality_required': quality_required,
-            'fence_targets': sorted(set(consumed_targets))}
+            'fence_targets': sorted(set(referenced_targets))}
 
 
 
