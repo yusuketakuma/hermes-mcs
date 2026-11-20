@@ -65,6 +65,11 @@ from extract_llm_source_contract import (
 )
 
 _SEMANTIC_WORK = ("done", "retry", "failed", "deferred_short", "error")
+# Bounded wait for the run lock on the background semantic slot. The
+# slot only runs while this worker has no carry work, so waiting costs
+# idle capacity, and gaps between run holds are sub-second to seconds —
+# a non-blocking try misses almost all of them.
+_SEMANTIC_LOCK_WAIT_S = 60.0
 
 
 def _recent_arrivals(ledger) -> set:
@@ -77,12 +82,24 @@ def _recent_arrivals(ledger) -> set:
 def _background_semantic(ledger, stop=None):
     """Serve one oldest semantic/QC job on this worker's background slot."""
     import semantic_drain
-    lock_fd = acquire_run_lock()
+    cfg = load_config()
+    budget = semantic_policy.semantic_config(cfg)[0]["job_budget_seconds"] + 30
+    # Called only when this worker has no carry work: a bounded wait is
+    # free capacity the old non-blocking try always missed under a busy
+    # lock. Keep room for one job so an acquired lock is never spent on
+    # an instant defer.
+    wait_s = _SEMANTIC_LOCK_WAIT_S
+    if stop is not None:
+        wait_s = min(wait_s, max(0.0, stop - time.monotonic() - budget))
+    lock_fd = (acquire_run_lock() if wait_s <= 0 else
+               writer_lock.wait_run_lock(
+                   writer_lock.RUN_LOCK, wait_s=wait_s,
+                   expected_code_stamp=writer_lock.code_stamp(),
+                   marker_path=os.path.join(
+                       HOME, "data", writer_lock.UPDATE_MARKER_NAME)))
     if lock_fd is None:
         return {"skipped": "lock_busy"}
     try:
-        cfg = load_config()
-        budget = semantic_policy.semantic_config(cfg)[0]["job_budget_seconds"] + 30
         deadline = time.monotonic() + budget
         if stop is not None:
             deadline = min(deadline, stop)
@@ -785,22 +802,19 @@ def _main() -> int:
             _settle_carry(led, carry, fence=context_state)
             print(json.dumps(total, ensure_ascii=False))
         else:
-            # Bounded single batch: keep the whole-run lock so the batch
-            # is atomic against a concurrent tick.
-            lock_fd = acquire_run_lock()
-            if lock_fd is None:
-                print(json.dumps({"ok": False, "error": "lock_held"}))
-                return 3
-            try:
-                adm, vpol = _admitted()
-                print(json.dumps(
-                    run_pending(led, args.limit, args.budget,
-                                batch_k=args.batch,
-                                vital_policy=vpol,
-                                admitted_ids=adm),
-                    ensure_ascii=False))
-            finally:
-                os.close(lock_fd)
+            # Bounded single batch: claims lease per row and commits land
+            # per-write, so holding the whole-run lock only starved ticks
+            # without buying atomicity (the carry-resume call above uses
+            # the same per-write configuration).
+            adm, vpol = _admitted()
+            print(json.dumps(
+                run_pending(led, args.limit, args.budget,
+                            batch_k=args.batch,
+                            vital_policy=vpol,
+                            admitted_ids=adm,
+                            per_write_lock=True,
+                            write_wait_s=_RESIDENT_WRITE_WAIT_S),
+                ensure_ascii=False))
     finally:
         if local_role[0] is not None:
             os.close(local_role[0])

@@ -21,7 +21,7 @@ from mcs_queries import (ELIGIBLE_MESSAGE, current_extract_pred,
 from mcs_util import HOME, load_config, loads_dict, strict_json
 
 from extract_llm_progress import (
-    cloud_completion,
+    cloud_completion_any,
     progress_for_message,
 )
 from extract_llm_qc import (
@@ -276,11 +276,18 @@ class _StaleGCDeadline(Exception):
     pass
 
 
+# Write transactions holding the SQLite writer lock past this are reported as
+# *_tx_hold events — same stderr drain path as ledger.intake_tx_hold; behavior
+# is unchanged (instrumentation for the writer-lock contention survey).
+_TX_HOLD_REPORT_S = 5.0
+
+
 @contextlib.contextmanager
 def _stale_gc_transaction(db, deadline):
     """Bound writer acquisition and SQL, clearing cancellation before rollback."""
     previous_wait = db.execute("PRAGMA busy_timeout").fetchone()[0]
     limited_wait = False
+    hold_started = None
     try:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -290,6 +297,7 @@ def _stale_gc_transaction(db, deadline):
         db.execute(f"PRAGMA busy_timeout={wait_ms}")
         db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
         db.execute('BEGIN IMMEDIATE')
+        hold_started = time.monotonic()
         yield
         if time.monotonic() >= deadline:
             raise _StaleGCDeadline()
@@ -310,6 +318,13 @@ def _stale_gc_transaction(db, deadline):
     finally:
         db.set_progress_handler(None, 0)
         db.execute(f"PRAGMA busy_timeout={previous_wait}")
+        if hold_started is not None:
+            held = time.monotonic() - hold_started
+            if held >= _TX_HOLD_REPORT_S:
+                # stderr: same drain path as ledger.intake_tx_hold (survey only).
+                print(json.dumps({"event": "gc_stale_tx_hold", "pid": os.getpid(),
+                                  "ts": time.time(), "hold_s": round(held, 2)}),
+                      file=sys.stderr, flush=True)
 
 
 def _gc_stale_artifacts(ledger, lock, per_write_lock: bool, *, deadline=None) -> None:
@@ -639,8 +654,12 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
     if cloud_only:
         raw_cfg = load_config()
         cfg = cloud_inference.resolve_cloud_settings(raw_cfg)
-        selection, errors = cloud_policy.resolve_profile(raw_cfg, route="reextract", purpose="backlog", root=HOME)
-        if not errors and selection is not None:
+        selection, errors = cloud_policy.resolve_profile(
+            raw_cfg, route="reextract", purpose="backlog", root=HOME, ledger=ledger, ordered=True)
+        if selection is None:
+            selection, errors = cloud_policy.resolve_profile(
+                raw_cfg, route="reextract", purpose="backlog", root=HOME)
+        if selection is not None:
             required_contract = cloud_inference.cloud_provider_contract(selection=selection)
         if (cfg["mode"] != "on" or "reextract" not in cfg["routes"]
                 or not cloud_policy.route_open("reextract", cfg)):
@@ -696,7 +715,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                 if (cloud_policy.history_target_ready(ledger.db, row["project_id"], row["message_id"])
                         and receipt_check(row["project_id"], row["message_id"])
                         and required_contract is not None
-                        and cloud_completion(ledger.db, row, required_contract) is None
+                        and cloud_completion_any(ledger.db, row)[0] is None
                         and (row["project_id"], row["message_id"]) not in rebuilds):
                     selected.append(row)
                     if len(selected) >= n:

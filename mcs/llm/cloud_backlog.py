@@ -7,6 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
+import random
 import re
 import sqlite3
 import stat
@@ -386,7 +387,6 @@ class CloudBacklogPool:
     def _admits(self, cfg, settings, ledger):
         """Return whether mode, routes, key, profile and budget let this pool start children."""
         import cloud_policy
-        import extract_llm
         if settings["mode"] != "on":
             # Workers retire at the idle boundary after paid carry is settled.
             return False
@@ -406,12 +406,9 @@ class CloudBacklogPool:
             if not cloud_policy.selected_key(self.root):
                 return False
             selection, errors = cloud_policy.resolve_profile(
-                cfg, route="reextract" if extract_open else "semantic_backlog", purpose="backlog", root=self.root)
+                cfg, route="reextract" if extract_open else "semantic_backlog",
+                purpose="backlog", root=self.root, ledger=ledger, ordered=True)
             if errors or selection is None:
-                return False
-            limit = selection["max_tokens"] if selection["max_tokens"] is not None else extract_llm.MAX_TOKENS
-            if ledger is not None and (cloud_policy.global_block_reason(ledger, model=selection["model"])
-                    or cloud_policy.budget_block_reason(ledger, settings, max_tokens=limit, selection=selection)):
                 return False
         return True
 
@@ -618,7 +615,9 @@ def worker(parent, *, index=None, context_only=False):
                         return
                     except Exception as error:
                         carry_failures += 1
-                        delay = min(60, 2 ** min(carry_failures, 6))
+                        # Jitter keeps sibling workers' settle retries from
+                        # landing on the same contended second (thundering herd).
+                        delay = min(60, 2 ** min(carry_failures, 6) * random.uniform(0.5, 1.5))
                         _event("cloud_carry_settle_error", **_exception_observation(error),
                                retry_s=delay, failures=carry_failures)
                         time.sleep(delay)
@@ -659,9 +658,8 @@ def worker(parent, *, index=None, context_only=False):
                 if routes_open and not (semantic_open if phase % 2 else extract_open):
                     phase += 1
                 selection, errors = cloud_policy.resolve_profile(
-                    cfg, route="semantic_backlog" if phase % 2 else "reextract", purpose="backlog")
-                limit = (selection["max_tokens"] if selection is not None and selection["max_tokens"] is not None
-                         else extract_llm.MAX_TOKENS)
+                    cfg, route="semantic_backlog" if phase % 2 else "reextract",
+                    purpose="backlog", ledger=ledger, ordered=True)
                 if settings["mode"] != "on":
                     wait("cloud_mode_off")
                     continue
@@ -669,13 +667,11 @@ def worker(parent, *, index=None, context_only=False):
                     wait("cloud_route_closed")
                     continue
                 if errors or selection is None:
-                    wait("cloud_profile_unavailable")
-                    continue
-                blocked = (cloud_policy.global_block_reason(ledger, model=selection["model"])
-                           or cloud_policy.budget_block_reason(
-                               ledger, settings, max_tokens=limit, selection=selection))
-                if blocked:
-                    wait(blocked if blocked in _WAIT_CODES else "cloud_blocked")
+                    blocked = errors[0] if errors else None
+                    if not blocked or str(blocked).startswith("config:"):
+                        wait("cloud_profile_unavailable")
+                    else:
+                        wait(blocked if blocked in _WAIT_CODES else "cloud_blocked")
                     continue
                 started = time.monotonic()
                 try:

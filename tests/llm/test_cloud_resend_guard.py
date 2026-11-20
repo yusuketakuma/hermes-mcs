@@ -721,8 +721,6 @@ def _refusal_of(ledger, prompt):
 @pytest.mark.parametrize('status,error,usage,expected', [
     ('timeout', 'timeout', None, 'repeat_unsettled'),
     ('http_200', None, {'input_tokens': 10, 'output_tokens': 2}, 'repeat_success'),
-    # a paid answer refused after validation (e.g. a refusal): settled by its usage, not a success
-    ('http_200', 'contract_error', {'input_tokens': 10, 'output_tokens': 2}, 'repeat_failed'),
 ])
 def test_repeat_refusal_carries_its_fixed_class_without_changing_the_refusal(
         tmp_path, monkeypatch, status, error, usage, expected):
@@ -734,6 +732,18 @@ def test_repeat_refusal_carries_its_fixed_class_without_changing_the_refusal(
         cloud_policy.record_result(ledger, reservation, {**_result(reservation, status, error), 'usage': usage})
         assert _refusal_of(ledger, 'synthetic prompt') == expected
         assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+def test_a_settled_paid_failure_allows_a_new_billed_resend(tmp_path, monkeypatch):
+    """A settled failure left the unit unanswered: resending is a separate billed
+    attempt, not a duplicate. Success and unsettled results still refuse."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt')
+        cloud_policy.record_result(ledger, reservation, {**_result(reservation, 'http_200', 'contract_error'),
+                                                         'usage': {'input_tokens': 10, 'output_tokens': 2}})
+        _reserve(ledger, 'synthetic prompt')
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 2
 
 
 def test_reservation_without_result_is_result_missing_not_a_broken_receipt(tmp_path, monkeypatch):
@@ -912,8 +922,9 @@ def test_c1_pending_unit_is_not_resent_under_the_new_profile(tmp_path, monkeypat
         assert len(ledger.artifacts('cloud_usage_reserve')) == 1
 
 
-def test_c1_failed_unit_is_not_resent_under_the_new_profile(tmp_path, monkeypatch):
-    """A settled paid failure stays failed; the new profile cannot resend it."""
+def test_c1_failed_unit_is_resent_as_a_new_billed_attempt(tmp_path, monkeypatch):
+    """A settled paid failure stays settled; the resend guard now allows the unit
+    to be sent again as a separate billed attempt (rule change 2026-11-20)."""
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     selected = _anthropic_profile('patient_context', 'patient_context')
     with closing(_db(tmp_path)) as ledger:
@@ -922,13 +933,10 @@ def test_c1_failed_unit_is_not_resent_under_the_new_profile(tmp_path, monkeypatc
         cloud_policy.record_result(ledger, previous, {
             **_result(previous, 'http_200', 'contract_error'),
             'usage': {'input_tokens': 10, 'output_tokens': 2}})
-        with pytest.raises(anthropic_client.AnthropicError) as caught:
-            _reserve(ledger, 'synthetic prompt', 'anthropic', route='patient_context', unit='new',
-                     owner={'workday_id': 'new', 'source_sig': 'new'},
-                     max_tokens=selected['max_tokens'], selection=selected)
-        assert caught.value.detail == 'cloud_unit_unresolved'
-        assert caught.value.history_refusal == 'repeat_failed'
-        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+        _reserve(ledger, 'synthetic prompt', 'anthropic', route='patient_context', unit='new',
+                 owner={'workday_id': 'new', 'source_sig': 'new'},
+                 max_tokens=selected['max_tokens'], selection=selected)
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 2
 
 
 def test_c1_completed_backlog_is_not_rebuilt_under_haiku_medium(tmp_path, monkeypatch):

@@ -204,6 +204,44 @@ def test_second_worker_runs_semantic_on_its_own_slot(monkeypatch, tmp_path, lane
     assert "MCS_LLM_SLOT" not in os.environ          # main() restored the process
 
 
+def test_background_semantic_waits_bounded_for_the_run_lock(monkeypatch):
+    """The background slot has no carry work when it runs, so it can
+    afford a bounded wait — a non-blocking try misses the sub-second
+    gaps a busy lock leaves."""
+    import semantic_drain as drain
+    waits, due = [], []
+    fd = os.open(os.devnull, os.O_RDONLY)
+    monkeypatch.setattr(extract_llm_resident, "load_config", lambda: {})
+    monkeypatch.setattr(writer_lock, "wait_run_lock",
+                        lambda *a, **k: waits.append(k) or fd)
+    monkeypatch.setattr(writer_lock, "code_stamp", lambda: 7)
+    monkeypatch.setattr(writer_lock, "RUN_LOCK", "/synthetic/run.lock")
+    monkeypatch.setattr(extract_llm_resident, "acquire_run_lock",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("non-blocking path reached")))
+    monkeypatch.setattr(drain, "run_due", lambda *a, **k: due.append(1) or {"done": 0})
+    assert extract_llm_resident._background_semantic(object()) == {"done": 0, "errors": []}
+    assert waits[0]["wait_s"] == extract_llm_resident._SEMANTIC_LOCK_WAIT_S
+    assert waits[0]["expected_code_stamp"] == 7
+    assert due == [1]
+
+
+def test_background_semantic_skips_the_wait_without_job_room(monkeypatch):
+    """A stop that leaves less than one job budget falls back to the
+    old non-blocking try — waiting would buy a lock spent on an instant
+    defer."""
+    acquires = []
+    monkeypatch.setattr(extract_llm_resident, "load_config", lambda: {})
+    monkeypatch.setattr(writer_lock, "wait_run_lock",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("wait path reached")))
+    monkeypatch.setattr(extract_llm_resident, "acquire_run_lock",
+                        lambda *a, **k: acquires.append(1) or None)
+    out = extract_llm_resident._background_semantic(
+        object(), stop=time.monotonic())
+    assert out == {"skipped": "lock_busy"} and acquires == [1]
+
+
 def test_direct_background_pass_keeps_the_default_lane(monkeypatch, tmp_path):
     import semantic_drain as drain
     seen = []

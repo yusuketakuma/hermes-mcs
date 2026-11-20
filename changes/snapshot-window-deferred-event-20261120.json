@@ -1,0 +1,14 @@
+{
+  "category": "improved",
+  "title": "窓不足によるスナップショット延期をイベントとして記録する",
+  "summary": "残り実行時間が足りずコピー前に延期される場合（window_insufficient）、これまでは last_timing() にのみ記録され mcs.log には痕跡が残らず、最小窓判定の効果を稼働観測で検証できませんでした。延期時に snapshot_window_deferred イベント（gate・remaining_s 同報）を stderr へ出力し、延期の発生と経路（gate/plain）を直接観測できるようにします。",
+  "upgrade": "追加操作は不要です。延期の発生条件・戻り値・タイミング記録は従来どおりで、観測イベントが追加されるだけです。",
+  "details": [
+    "maintenance._refresh_snapshot_locked の window_insufficient 分岐で stderr JSON イベントを出力。pid/ts/gate/remaining_s を同報する。",
+    "テストでは延期時にイベントが gate=true で出力されることもあわせて検証。"
+  ],
+  "refs": [
+    "mcs/core/maintenance.py",
+    "tests/core/test_snapshot_refresh_timing.py"
+  ]
+}

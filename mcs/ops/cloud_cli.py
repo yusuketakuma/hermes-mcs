@@ -320,11 +320,9 @@ def _route_counts(db, cfg, settings, deadline):
             item["requests_estimate"] += pending["summary_units"] + chunks
     if "reextract" in settings["routes"] and policy.reextract_planned(settings):
         import extract_llm as extract
-        import cloud_inference
         selection, errors = policy.profile_for_settings(cfg, settings, route="reextract", purpose="backlog")
         if errors or selection is None:
             raise ValueError("cloud_profile_unverified")
-        contract = cloud_inference.cloud_provider_contract(selection=selection)
         scope, params = _source_scope(settings)
         scope += (" AND COALESCE(qc_src,0)=0 AND COALESCE(thin_src,0)=0 "
                   "AND COALESCE(human_src,0)=0 AND attempts=0 "
@@ -345,7 +343,7 @@ def _route_counts(db, cfg, settings, deadline):
                 # only when strict completion needs its original clinical text.
                 source = db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=?",
                                     (row["project_id"], row["message_id"])).fetchone()
-                completion = extract.cloud_completion(db, source, contract) if source is not None else None
+                completion = extract.cloud_completion_any(db, source)[0] if source is not None else None
                 _check_reader(db, deadline)  # proof readers may catch a bounded-row interruption
                 if completion in ("complete", "attention"):
                     continue
