@@ -650,22 +650,46 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
 
         A caller's already-open transaction is committed with it on success
         (the method has always owned that commit); on failure only this unit
-        is undone through a savepoint, so the caller's earlier writes stay."""
-        savepoint = f"karte_summary_{uuid.uuid4().hex}" if self.db.in_transaction else None
+        is undone through a savepoint, so the caller's earlier writes stay.
+
+        When this method owns the transaction it first captures the
+        dependency-loss footprint on a deferred read transaction — the
+        patient-wide context parse runs off the writer lock. The write
+        transaction then re-proves the captured read set through a fence
+        digest; only a real mid-flight change falls back to capturing inside
+        the write transaction as before."""
+        own_tx = not self.db.in_transaction
+        savepoint = f"karte_summary_{uuid.uuid4().hex}" if not own_tx else None
         if savepoint:
             self.db.execute(f"SAVEPOINT {savepoint}")    # fails before anything is written
-        hold_started = capture_s = None
+        hold_started = capture_s = fence_fresh = None
         try:
+            import inference_dependency_loss as dependency_loss
+            footprint = fence = None
+            if source_changed and own_tx:
+                self.db.execute('BEGIN')
+                try:
+                    capture_started = monotonic()
+                    footprint = dependency_loss.capture_current_karte_tx(self.db, project_id)
+                    fence = dependency_loss.karte_capture_fence(self.db, project_id, footprint)
+                    capture_s = monotonic() - capture_started
+                finally:
+                    if self.db.in_transaction:
+                        self.db.rollback()
             if not self.db.in_transaction:
                 self.db.execute('BEGIN IMMEDIATE')
                 hold_started = monotonic()
-            import inference_dependency_loss as dependency_loss
             if source_changed:
-                capture_started = monotonic()
-                footprint = dependency_loss.capture_current_karte_tx(self.db, project_id)
-                capture_s = monotonic() - capture_started
-            else:
-                footprint = None
+                if fence is not None:
+                    fence_fresh = dependency_loss.karte_capture_fresh(self.db, project_id, fence)
+                    if not fence_fresh:
+                        capture_started = monotonic()
+                        footprint = dependency_loss.capture_current_karte_tx(self.db, project_id)
+                        capture_s = monotonic() - capture_started
+                elif not own_tx:
+                    capture_started = monotonic()
+                    footprint = dependency_loss.capture_current_karte_tx(self.db, project_id)
+                    capture_s = monotonic() - capture_started
             write()
             if footprint is not None:
                 dependency_loss.record_tx(self.db, footprint)
@@ -685,6 +709,7 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
                     print(json.dumps({"event": "karte_tx_hold", "pid": os.getpid(),
                                       "ts": time.time(), "project_id": project_id,
                                       "capture_s": round(capture_s, 2) if capture_s is not None else None,
+                                      "fence_fresh": fence_fresh,
                                       "hold_s": round(held, 2)}),
                           file=sys.stderr, flush=True)
 
