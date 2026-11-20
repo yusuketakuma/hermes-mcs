@@ -80,6 +80,7 @@ def _exception_observation(error):
 
 
 _TRANSPORT_SECONDS = ("llm_transport_s", "llm_reacquire_s", "jev_transport_s", "jev_reacquire_s")
+_LOCK_HOLD_KEYS = ("hold_max_s", "hold_sum_s", "hold_count")
 
 
 def _pass_timing_observation(result):
@@ -98,6 +99,9 @@ def _pass_timing_observation(result):
         record["run_lock_lost_detail"] = {
             "kind": detail["kind"], **{key: seconds(detail.get(key))
                 for key in ("transport_s", "reacquire_s", "window_s")}}
+    hold = result.get("lock_hold")
+    if isinstance(hold, dict):
+        record["lock_hold"] = {key: seconds(hold.get(key)) for key in _LOCK_HOLD_KEYS}
     return record
 
 
