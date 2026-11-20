@@ -520,17 +520,29 @@ def test_karte_scope_fence_detects_pid_writes_and_ignores_other_projects(tmp_pat
         _karte_due_patient(db)
         db.upsert_patient_info(_unread_patient(2))
         db.db.execute("BEGIN")
+        fence = dependency_loss.karte_capture_fence(db.db, 1, None)
+        db.db.commit()
+        other = sqlite3.connect(str(tmp_path / "ledger.db"))
         try:
-            fence = dependency_loss.karte_capture_fence(db.db, 1, None)
-            db.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+            # フェンス取得と再検証の間に他接続がcommitしたケースを再現（実フローと同じ2tx構造）
+            other.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
                           "VALUES('probe',2,NULL,'{}','{}',0)")
+            other.commit()
+            db.db.execute("BEGIN")
             assert dependency_loss.karte_capture_fresh(db.db, 1, fence)
-            db.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+            db.db.commit()
+            other.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
                           "VALUES('probe',1,NULL,'{}','{}',0)")
+            other.commit()
+            db.db.execute("BEGIN")
             assert not dependency_loss.karte_capture_fresh(db.db, 1, fence)
-            db.db.execute("UPDATE patients SET last_seen=last_seen WHERE project_id=1")
-            assert not dependency_loss.karte_capture_fresh(db.db, 1, fence)
-        finally:
             db.db.rollback()
+            other.execute("UPDATE patients SET last_seen=last_seen WHERE project_id=1")
+            other.commit()
+            db.db.execute("BEGIN")
+            assert not dependency_loss.karte_capture_fresh(db.db, 1, fence)
+            db.db.rollback()
+        finally:
+            other.close()
     finally:
         db.close()

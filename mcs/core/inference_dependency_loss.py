@@ -563,14 +563,19 @@ def karte_capture_fence(db, pid, snapshot):
     messages table is unnecessary."""
     _active(db)
     targets = (snapshot or {}).get('fence_targets') or []
-    return {'scope': _karte_scope_digest(db, pid),
+    return {'dv': db.execute('PRAGMA data_version').fetchone()[0],
+            'scope': _karte_scope_digest(db, pid),
             'targets': {mid: source_binding(db, pid, mid) for mid in targets}}
 
 
 def karte_capture_fresh(db, pid, fence):
     """True when the fence still matches — the outside-lock capture is reusable."""
     _active(db)
-    if not isinstance(fence, dict) or fence.get('scope') != _karte_scope_digest(db, pid):
+    if not isinstance(fence, dict):
+        return False
+    if fence.get('dv') is not None and fence['dv'] == db.execute('PRAGMA data_version').fetchone()[0]:
+        return True    # no commits landed between the read and write transactions
+    if fence.get('scope') != _karte_scope_digest(db, pid):
         return False
     targets = fence.get('targets') or {}
     return all(source_binding(db, pid, mid) == binding
