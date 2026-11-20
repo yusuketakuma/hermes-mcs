@@ -65,6 +65,11 @@ from extract_llm_source_contract import (
 )
 
 _SEMANTIC_WORK = ("done", "retry", "failed", "deferred_short", "error")
+# Bounded wait for the run lock on the background semantic slot. The
+# slot only runs while this worker has no carry work, so waiting costs
+# idle capacity, and gaps between run holds are sub-second to seconds —
+# a non-blocking try misses almost all of them.
+_SEMANTIC_LOCK_WAIT_S = 60.0
 
 
 def _recent_arrivals(ledger) -> set:
@@ -77,12 +82,24 @@ def _recent_arrivals(ledger) -> set:
 def _background_semantic(ledger, stop=None):
     """Serve one oldest semantic/QC job on this worker's background slot."""
     import semantic_drain
-    lock_fd = acquire_run_lock()
+    cfg = load_config()
+    budget = semantic_policy.semantic_config(cfg)[0]["job_budget_seconds"] + 30
+    # Called only when this worker has no carry work: a bounded wait is
+    # free capacity the old non-blocking try always missed under a busy
+    # lock. Keep room for one job so an acquired lock is never spent on
+    # an instant defer.
+    wait_s = _SEMANTIC_LOCK_WAIT_S
+    if stop is not None:
+        wait_s = min(wait_s, max(0.0, stop - time.monotonic() - budget))
+    lock_fd = (acquire_run_lock() if wait_s <= 0 else
+               writer_lock.wait_run_lock(
+                   writer_lock.RUN_LOCK, wait_s=wait_s,
+                   expected_code_stamp=writer_lock.code_stamp(),
+                   marker_path=os.path.join(
+                       HOME, "data", writer_lock.UPDATE_MARKER_NAME)))
     if lock_fd is None:
         return {"skipped": "lock_busy"}
     try:
-        cfg = load_config()
-        budget = semantic_policy.semantic_config(cfg)[0]["job_budget_seconds"] + 30
         deadline = time.monotonic() + budget
         if stop is not None:
             deadline = min(deadline, stop)
