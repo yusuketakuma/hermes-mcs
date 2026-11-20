@@ -1115,6 +1115,7 @@ def test_repeated_carry_failure_backs_off_without_sending_again(carry_worker, mo
     monkeypatch.setattr(extract_llm_resident, '_settle_carry', extract_llm._settle_carry)
     monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
     monkeypatch.setattr(backlog.time, "sleep", sleep)
+    monkeypatch.setattr(backlog.random, "uniform", lambda lo, hi: 1.0)
     with legacy_cloud_routes():
         backlog.worker(991)
     assert delays == [2, 4, 8, 16, 32, 60, 60]
