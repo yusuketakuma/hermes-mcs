@@ -44,6 +44,24 @@ def test_deferred_guard_reevals_when_fence_breaks():
     assert state["evals"] == 2
 
 
+def test_deferred_guard_fence_predates_evaluation():
+    """A cloud write landing mid-evaluation must break the commit-time fence:
+    the guard's pinned snapshot cannot see it, so a post-evaluation fence
+    would wrongly accept the stale verdict."""
+    fence_state = {"k": (1, 1)}
+    evals = []
+
+    def evaluate():
+        evals.append(1)
+        fence_state["k"] = (2, 2)   # cloud artifact commit during evaluation
+        return True
+
+    guard = runner._DeferredGuard(evaluate, lambda: dict(fence_state))
+    guard.prepare()
+    assert guard() is True
+    assert len(evals) == 2   # fence mismatch forced the in-transaction re-eval
+
+
 def test_deferred_guard_reevals_false_verdict_without_fence():
     state = {"evals": 0}
 
