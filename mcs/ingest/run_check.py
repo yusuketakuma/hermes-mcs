@@ -80,6 +80,7 @@ import run_interrupt
 # module attribute names (monkeypatch surface for tests) unchanged
 LOCKFILE = RUN_LOCK
 RUN_DEADLINE_S = 480          # whole-run cap; per-request timeouts are not enough
+RUN_BUSY_TIMEOUT_MS = 120_000  # heartbeat writes wait out the worker lock lottery
 REALTIME_CARRY_S = 86400      # notified arrivals stay on the realtime slot this long
 # the armed watchdog's exit time (monotonic); backup and DB upkeep start
 # only when they fit before it, less this margin for the tail stages
@@ -1529,7 +1530,8 @@ def _main() -> int:
     try:
         ledger = Ledger(
             DB, notify_all_replies=(not args.jobs_only
-                                    and _config().get("notify_all_replies") is True))
+                                    and _config().get("notify_all_replies") is True),
+            busy_timeout_ms=RUN_BUSY_TIMEOUT_MS)
         # Writer-owned baseline for the snapshot gate: taken while the
         # run lock is held and the connection just opened this path.
         db_baseline = _db_identity(ledger)

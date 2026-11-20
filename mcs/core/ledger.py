@@ -114,9 +114,10 @@ TX_HOLD_REPORT_S = 5.0
 
 
 class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
-    def __init__(self, path: str, *, notify_all_replies: bool = False):
+    def __init__(self, path: str, *, notify_all_replies: bool = False,
+                 busy_timeout_ms: int = 30000):
         self.notify_all_replies = notify_all_replies is True
-        self.db = sqlite3.connect(path, timeout=30)
+        self.db = sqlite3.connect(path, timeout=busy_timeout_ms / 1000)
         try:
             os.chmod(path, 0o600)   # PHI store: never umask-loose
             self.db.row_factory = sqlite3.Row
@@ -126,7 +127,7 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
             ledger_schema.preflight(self.db, tables, version=version,
                                     schema_version=SCHEMA_VERSION)
             self.db.execute("PRAGMA foreign_keys=ON")
-            self.db.execute("PRAGMA busy_timeout=30000")
+            self.db.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
             # macOS fsync() leaves data in the drive cache; no-ops elsewhere.
             # Set before _init so the first schema writes/migration are covered.
             self.db.execute("PRAGMA fullfsync=ON")

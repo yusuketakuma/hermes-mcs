@@ -445,3 +445,11 @@ def test_intake_transaction_reports_hold_time_over_threshold(tmp_path, capsys, m
     assert events[-1]["event"] == "intake_tx_hold"
     assert events[-1]["stage"] == "probe"
     assert events[-1]["hold_s"] >= 0
+
+
+def test_ledger_busy_timeout_override_reaches_pragma(tmp_path):
+    db = ledger.Ledger(str(tmp_path / "t.db"), busy_timeout_ms=120000)
+    try:
+        assert db.db.execute("PRAGMA busy_timeout").fetchone()[0] == 120000
+    finally:
+        db.close()
