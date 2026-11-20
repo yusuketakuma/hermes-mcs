@@ -207,6 +207,62 @@ class ReleaseNotesTest(unittest.TestCase):
             git("commit", "-m", "document deletion")
             notes.require_fragment(root, base)
 
+    def test_release_body_stays_identical_within_the_limit(self):
+        item = dict(category="fixed", title="合成の修正", summary="通知を更新します。",
+                    upgrade="追加操作は不要です。", details=["根拠を記録。"], refs=["#1"])
+        text = "## [Unreleased]\n\n## [1.0.0] — 2026-09-21\n\n" + notes.render(
+            [item], "通知を修正", "合成の説明です。")
+        body = notes.release_body(text, "1.0.0")
+        self.assertEqual(body, notes.section(text, "1.0.0"))
+        self.assertIn("<details>", body)
+
+    def big_changelog(self, summaries, details):
+        items = ([dict(category="fixed", title=f"修正{n}", summary=s,
+                       upgrade="追加操作は不要です。", details=details, refs=["#1"])
+                  for n, s in enumerate(summaries)])
+        body = notes.render(items, "合成版", "合成の説明です。")
+        return "## [Unreleased]\n\n## [1.2.0] — 2026-11-21\n\n" + body, items
+
+    def test_release_body_links_details_when_over_the_limit(self):
+        details = ["x" * 400] * 400  # ~160k chars of technical details
+        text, _ = self.big_changelog(["説明です。"], details)
+        body = notes.release_body(text, "1.2.0")
+        self.assertLessEqual(len(body), notes.BODY_LIMIT)
+        self.assertNotIn("<details>", body)
+        self.assertIn("### 技術詳細\n\n- 技術詳細・変更の根拠は [CHANGELOG v1.2.0]", body)
+        self.assertIn("/blob/v1.2.0/CHANGELOG.md#120--2026-11-21", body)
+        self.assertIn("### 更新時の注意\n\n- 追加操作は不要です。", body)
+        self.assertIn("説明です。", body)  # short fixes keep their summaries
+
+    def test_release_body_collapses_fix_headings_when_still_over(self):
+        text, _ = self.big_changelog(["x" * 5000] * 30, ["根拠。"])
+        body = notes.release_body(text, "1.2.0")
+        self.assertLessEqual(len(body), notes.BODY_LIMIT)
+        self.assertIn("- **修正0**", body)
+        self.assertIn("- **修正29**", body)
+        self.assertNotIn("x" * 200, body)  # summaries moved behind the link
+        self.assertIn("各修正の説明・根拠は [CHANGELOG v1.2.0]", body)
+        self.assertIn("### 更新時の注意", body)
+
+    def test_release_body_refuses_when_even_the_short_form_overflows(self):
+        huge = dict(category="fixed", title="修正", summary="説明です。",
+                    upgrade="y" * (notes.BODY_LIMIT + 100), details=["根拠。"], refs=["#1"])
+        text = "## [Unreleased]\n\n## [1.2.0] — 2026-11-21\n\n" + notes.render(
+            [huge], "合成版", "合成の説明です。")
+        with self.assertRaises(ValueError):
+            notes.release_body(text, "1.2.0")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "CHANGELOG.md").write_text(text, encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                notes.main(["--root", tmp, "export", "--version", "1.2.0",
+                            "--output", str(root / "out.md")])
+            self.assertFalse((root / "out.md").exists())
+
+    def test_changelog_anchor_matches_github_heading_slug(self):
+        self.assertEqual(notes._changelog_anchor("## [1.2.0] — 2026-11-21\n", "1.2.0"),
+                         "120--2026-11-21")
+
     def test_adapter_runtime_changes_require_fragment(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -21,6 +21,8 @@ HEADINGS = [*GROUPS.values(), "更新時の注意", "技術詳細"]
 VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 IMAGES = re.compile(r"!\[(?P<alt>[^\]\n]*)\]\((?P<url>[^\s)]+)\)")
 REPOSITORY_PATH = "/yusuketakuma/hermes-mcs"
+# GitHub Release本文は125,000字が上限。検査では余裕をもって12万字で止める。
+BODY_LIMIT = 120_000
 
 
 def repository_image_path(target):
@@ -165,6 +167,47 @@ def check_body(body, release_version):
         raise ValueError("技術詳細は折りたたみに記載してください")
 
 
+def _changelog_anchor(text, release_version):
+    """GitHubの見出しslug化と同じ規則で対象版の見出しアンカーを作る。"""
+    match = next((h for h in re.finditer(r"^## \[([^\]]+)\].*$", text, re.M)
+                  if h.group(1) == release_version), None)
+    label = match.group(0)[3:] if match is not None else f"[{release_version}]"
+    return re.sub(r" ", "-", re.sub(r"[^\w\- ]", "", label.strip().lower()))
+
+
+def _collapse_fixed(body, link, release_version):
+    """不具合修正を見出しだけへ畳み、詳細はCHANGELOGのリンクへ送る。"""
+    start = re.search(r"^### 不具合修正$", body, re.M)
+    if start is None:
+        return body
+    nxt = re.search(r"^### ", body[start.end():], re.M)
+    end = start.end() + (nxt.start() if nxt else len(body) - start.end())
+    titles = re.findall(r"^- (\*\*.+\*\*)$", body[start.end():end], re.M)
+    return (body[:start.start()] + "### 不具合修正\n\n"
+            + "\n".join(f"- {title}" for title in titles) + "\n\n"
+            + f"- 各修正の説明・根拠は [CHANGELOG v{release_version}]({link}) を参照してください。\n\n"
+            + body[end:])
+
+
+def release_body(text, release_version):
+    """公開用の本文。上限内はCHANGELOGの節そのまま、超える版だけ要約へ置き換える。"""
+    body = section(text, release_version)
+    check_body(body, release_version)
+    if len(body) <= BODY_LIMIT:
+        return body
+    link = (f"https://github.com{REPOSITORY_PATH}/blob/v{release_version}"
+            f"/CHANGELOG.md#{_changelog_anchor(text, release_version)}")
+    details = re.search(r"^### 技術詳細$", body, re.M)
+    short = (body[:details.start()] + "### 技術詳細\n\n"
+             f"- 技術詳細・変更の根拠は [CHANGELOG v{release_version}]({link}) "
+             "を参照してください。\n")
+    if len(short) > BODY_LIMIT:
+        short = _collapse_fixed(short, link, release_version)
+    if len(short) > BODY_LIMIT:
+        raise ValueError(f"Release本文が{BODY_LIMIT}文字の上限を超えています")
+    return short
+
+
 def check_changelog(text):
     headers = list(re.finditer(r"^## \[([^\]]+)\](.*)$", text, re.M))
     names = [h.group(1) for h in headers]
@@ -280,8 +323,7 @@ def main(argv=None):
         elif args.command == "export":
             text = (args.root / "CHANGELOG.md").read_text(encoding="utf-8")
             check_changelog(text)
-            body = section(text, args.version)
-            check_body(body, args.version)
+            body = release_body(text, args.version)
             args.output.write_text(body, encoding="utf-8")
             if args.title_output:
                 args.title_output.write_text(release_title(body, args.version) + "\n", encoding="utf-8")
