@@ -746,6 +746,47 @@ def test_a_settled_paid_failure_allows_a_new_billed_resend(tmp_path, monkeypatch
         assert len(ledger.artifacts('cloud_usage_reserve')) == 2
 
 
+def _settled_failure(ledger, prompt='synthetic prompt'):
+    reservation = _reserve(ledger, prompt)
+    cloud_policy.record_result(ledger, reservation, {
+        **_result(reservation, 'http_200', 'contract_error'),
+        'usage': {'input_tokens': 10, 'output_tokens': 2}})
+    return reservation
+
+
+def test_settled_failure_resends_stop_at_the_third_billed_attempt(tmp_path, monkeypatch):
+    """Owner rule 2026-11-21: the same logical request bills at most three settled
+    failures, the first send included; the fourth verified repeat refuses."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        _settled_failure(ledger)
+        _settled_failure(ledger)
+        third = _reserve(ledger, 'synthetic prompt')
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 3
+        cloud_policy.record_result(ledger, third, {
+            **_result(third, 'http_200', 'contract_error'),
+            'usage': {'input_tokens': 10, 'output_tokens': 2}})
+        assert _refusal_of(ledger, 'synthetic prompt') == 'repeat_failed'
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 3
+
+
+@pytest.mark.parametrize('status,error,usage,expected', [
+    ('http_200', None, {'input_tokens': 10, 'output_tokens': 2}, 'repeat_success'),
+    ('timeout', 'timeout', None, 'repeat_unsettled'),
+])
+def test_settled_failure_keeps_other_verified_outcomes_refused(
+        tmp_path, monkeypatch, status, error, usage, expected):
+    """The resend allowance covers settled failures only: a proven success or an
+    unsettled outcome in the same request's history keeps the old refusal."""
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        _settled_failure(ledger)
+        other = _reserve(ledger, 'synthetic prompt')
+        cloud_policy.record_result(ledger, other, {**_result(other, status, error), 'usage': usage})
+        assert _refusal_of(ledger, 'synthetic prompt') == expected
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 2
+
+
 def test_reservation_without_result_is_result_missing_not_a_broken_receipt(tmp_path, monkeypatch):
     monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     with closing(_db(tmp_path)) as ledger:

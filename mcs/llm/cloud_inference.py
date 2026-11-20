@@ -40,7 +40,8 @@ _HISTORY_OBSERVATIONS = {
     'guard_match': frozenset({'logical_equal', 'legacy_low_verified', 'legacy_unproven'}),
     'primary_reason': frozenset({'recovery_not_requested', 'unit_key_mismatch', 'stored_binding_missing',
         'input_binding_mismatch', 'request_envelope_mismatch', 'exact_keys_same_unexplained', 'observation_unknown'}),
-    'recovery_path': frozenset({'skipped_binding', 'no_exact_rows', 'confirmed_rejection_only', 'unknown'}),
+    'recovery_path': frozenset({'skipped_binding', 'no_exact_rows', 'confirmed_rejection_only',
+                                'settled_failure_only', 'unknown'}),
 }
 
 
