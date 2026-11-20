@@ -490,6 +490,11 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
     r.pop("_inline_extract_proof", None)
     hold_started = None
     try:
+        if adoption_guard is not None and hasattr(adoption_guard, "prepare"):
+            # Off-transaction evaluation: the guard's verdict and artifact
+            # fence are captured before BEGIN IMMEDIATE so the in-transaction
+            # calls only re-prove the fence instead of rescanning accounting.
+            adoption_guard.prepare()
         with ledger.db:
             ledger.db.execute("BEGIN IMMEDIATE")
             hold_started = time.monotonic()
