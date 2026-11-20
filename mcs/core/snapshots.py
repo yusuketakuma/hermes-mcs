@@ -25,7 +25,9 @@ SNAPSHOT_VERIFY_TIMEOUT_S = 30.0
 # out past 34 s under heavier load while the copy took 2 s, so the rate
 # leaves several times the measured read speed as headroom.
 SNAPSHOT_VERIFY_RATE_BPS = 4 * 1024 * 1024
-SNAPSHOT_VERIFY_EXTRA_MAX_S = 150.0
+# Cap recalibrated for ~1.2 GB snapshots: quick_check was observed needing
+# ~200 s under writer contention + cold cache, so 150 s refused every publish.
+SNAPSHOT_VERIFY_EXTRA_MAX_S = 300.0
 # Fixed room every caller keeps after the size-based verify budget: the
 # copy, the marker write and the caller's own tail all draw from it.
 SNAPSHOT_WORK_TAIL_S = 30.0
