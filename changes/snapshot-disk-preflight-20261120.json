@@ -1,0 +1,5 @@
+{"id": "snapshot-disk-preflight-20261120", "date": "2026-11-20",
+ "summary": "snapshot公開試行前にdisk空きを検査し不足時はdeferredに変更",
+ "detail": "tmpコピーはledger1個分+共有floor(disk_floor_mb)の空きを要求。不足時はdefer_reason=disk_low(free_mb/need_mb記録)+snapshot_disk_deferredイベントを出してdeferredを返し、mid-copyのdisk-fullとpublish失敗記録を防ぐ。stat失敗時は従来経路。",
+ "files": ["mcs/core/maintenance.py", "tests/core/test_snapshot_refresh_timing.py"],
+ "tests": ["tests/core/test_snapshot_refresh_timing.py 14 passed"]}

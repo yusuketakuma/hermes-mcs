@@ -637,6 +637,25 @@ def _refresh_snapshot_locked(db_path: str, *, force: bool, dirty: bool, now, dea
                                      signature_s=round(signature_s, 3),
                                      total_s=round(time.perf_counter() - total_started, 3))
             return "retry_deferred"
+    # The tmp copy needs a ledger's worth of free disk above the shared
+    # floor; starting below it fills the disk mid-copy, so defer instead
+    # of recording a publish failure.
+    try:
+        free_mb = shutil.disk_usage(SNAPSHOT_DIR).free / (1024 * 1024)
+        need_mb = os.path.getsize(db_path) / (1024 * 1024) \
+            + local_backup.disk_floor_mb()
+    except OSError:
+        free_mb = need_mb = None
+    if free_mb is not None and free_mb < need_mb:
+        snapshots._record_timing(defer_reason="disk_low",
+                                 free_mb=round(free_mb, 1),
+                                 need_mb=round(need_mb, 1))
+        print(json.dumps({"event": "snapshot_disk_deferred",
+                          "pid": os.getpid(), "ts": time.time(),
+                          "free_mb": round(free_mb, 1),
+                          "need_mb": round(need_mb, 1)}),
+              file=sys.stderr, flush=True)
+        return "deferred"
     if deadline is not None:
         # The gate path reserves the reacquire wait plus publish tail, so
         # it needs the larger window before the copy may start.
