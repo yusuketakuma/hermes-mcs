@@ -1,7 +1,7 @@
 {
   "category": "fixed",
   "title": "notify_remote_verify: 部品フラグ尊重・history完全性・承認属性の誤記を修正",
-  "summary": "診断スクリプト notify_remote_verify.py が、manifest で unavailable または prior_remote_id を持つ部品にも resolve コマンドを発行し得た問題、conversations.replies が has_more/200件で打ち切られた履歴を完全と誤認し得た問題、人の承認なしに human_confirmed/worker_stopped を固定 True で書き得た問題を修正しました。body_part は delivery.py と同じ escape+照合規則で本文一致を確認するようになりました。利用者への影響はなく、診断実行時のみ関係します。",
+  "summary": "診断スクリプト notify_remote_verify.py が、manifest で unavailable または prior_remote_id を持つ部品にも resolve コマンドを発行し得た問題、打ち切られた履歴を完全と誤認し得た問題、承認なしに human_confirmed/worker_stopped を書き得た問題を修正しました。body_part は delivery.py と同じ escape+照合規則で本文一致を確認します。診断実行時のみ関係します。",
   "upgrade": "追加操作は不要です。--emit で発行する場合、人の明示承認を証明するには --confirm-human を付けてください。",
   "details": [
     "spec_json の manifest で unavailable:true または prior_remote_id 付きの部品は skipped として報告のみで emit しない。",
