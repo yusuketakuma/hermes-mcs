@@ -40,6 +40,12 @@ SNAPSHOT_WORK_TAIL_S = 30.0
 # writes, health.json frozen). RUN_LOCK_REACQUIRE_S is the lock's own
 # designed wait budget, so the reserve reuses it.
 SNAPSHOT_GATE_RESERVE_S = RUN_LOCK_REACQUIRE_S + SNAPSHOT_WORK_TAIL_S
+# Minimum window a publish attempt needs before its copy may start:
+# copy plus verify plus the tail. Sized from observed runs (copy ~60 s
+# typical/~170 s under disk contention, verify ~120 s typical); below it
+# the copy alone can consume the verify window and the attempt ends in a
+# deadline-capped verify plus orphaned tmp residue.
+SNAPSHOT_MIN_WINDOW_S = 300.0
 
 
 def snapshot_verify_timeout_s(path: str) -> float:
