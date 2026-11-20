@@ -51,6 +51,23 @@ from extract_llm_source_contract import (
     _PROGRESS_MAX_NODES,
 )
 
+def cloud_completion_any(db, row):
+    """Cloud completion under whichever supported provider contract produced it.
+
+    The producing provider is evidence, not the inference generation: a stored
+    result satisfies the check under its own contract no matter which provider
+    is selected now. Returns ``(state, contract)`` so callers that need the
+    producing backend can still record it."""
+    best_state, best_contract = None, None
+    for contract in cloud_inference.supported_cloud_contracts():
+        state = cloud_completion(db, row, contract)
+        if state == "complete":
+            return state, contract
+        if state is not None and best_state is None:
+            best_state, best_contract = state, contract
+    return best_state, best_contract
+
+
 def cloud_completion(db, row, contract):
     """Read a source-bound cloud execution separately from clinical completeness."""
     if not isinstance(contract, dict) or set(contract) != {"backend", "model", "prompt"}:

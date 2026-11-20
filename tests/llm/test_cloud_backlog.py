@@ -733,7 +733,7 @@ def test_worker_reports_each_wait_reason_once_per_change(carry_worker, monkeypat
         state.block = 'mode'
     elif gate == 'profile':
         monkeypatch.setattr(extract_llm.cloud_policy, 'resolve_profile',
-                            lambda *a, **kw: (None, ['synthetic-private-detail']))
+                            lambda *a, **kw: (None, ['config: synthetic-private-detail']))
     elif gate == 'global-paused':
         monkeypatch.setattr(extract_llm.cloud_policy, 'global_block_reason', lambda *a, **kw: 'paused')
     elif gate == 'global-circuit':
