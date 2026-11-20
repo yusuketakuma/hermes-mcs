@@ -239,6 +239,56 @@ def _rebuild_guard(ledger, r):
     return lambda: local_rebuild.permit_for(ledger, r["_local_rebuild"]) in local_rebuild.RUNNABLE
 
 
+def _cloud_guard_fence(db):
+    """COUNT+MAX snapshot of every cloud_* artifact kind the accounting guard reads.
+
+    Cloud accounting rows are append-only with monotonic artifact ids and no
+    UPDATE path touches them, so any reserve/result/disposition/carryover or
+    control/circuit write moves this snapshot while unrelated artifact traffic
+    does not."""
+    return {kind: (count, top) for kind, count, top in db.execute(
+        "SELECT kind, COUNT(*), COALESCE(MAX(artifact_id),0) FROM artifacts "
+        "WHERE kind GLOB 'cloud_*' GROUP BY kind")}
+
+
+class _DeferredGuard:
+    """Evaluate an adoption guard before the write transaction, then re-prove
+    its artifact fence inside it.
+
+    ``prepare`` runs the guard once outside the transaction and captures the
+    fence; each in-transaction call accepts that verdict only while the fence
+    still matches, otherwise it falls back to a full evaluation — the same
+    result the un-deferred guard would produce. A prepare-time failure leaves
+    the guard unprepared so in-transaction calls evaluate normally."""
+
+    def __init__(self, evaluate, fence):
+        self._evaluate = evaluate
+        self._fence = fence
+        self._prepared = None
+        self._resolved = None
+
+    def prepare(self):
+        self._prepared = self._resolved = None
+        try:
+            verdict = bool(self._evaluate())
+            self._prepared = (verdict, self._fence() if verdict else None)
+        except Exception:
+            self._prepared = None
+
+    def __call__(self):
+        if self._resolved is not None:
+            return self._resolved
+        if self._prepared is None:
+            return bool(self._evaluate())
+        verdict, fence = self._prepared
+        try:
+            fresh = fence is not None and self._fence() == fence
+        except Exception:
+            fresh = False
+        self._resolved = verdict if fresh else bool(self._evaluate())
+        return self._resolved
+
+
 def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 admitted_ids: set | None = None,
                 per_write_lock: bool = False, workers: int = 1,
@@ -715,7 +765,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         OSError, RuntimeError):
                     return False
                 return True
-            r["_superseded_guard"] = adoption_guard
+            r["_superseded_guard"] = _DeferredGuard(
+                adoption_guard, lambda: _cloud_guard_fence(ledger.db))
         elif r.get("_local_rebuild") is not None:
             # An approved local rebuild: every local dispatch (first, repair, split) and the
             # adoption re-prove the same permit; provider stays None so no path reaches cloud.

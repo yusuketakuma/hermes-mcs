@@ -372,7 +372,7 @@ def test_adoption_boundary_reverifies_and_rejects_a_late_hold(
 
     def late_hold(ledger_, cfg_, prompt, **kw):
         guard_calls.append(prompt)
-        if len(guard_calls) >= 3:   # prepare ok, dispatch ok, adoption holds
+        if len(guard_calls) >= 3:   # request guards ok; deferred adoption eval holds
             raise cloud_client.CloudError("budget_exceeded", "cloud_unit_unresolved")
         return real_guard(ledger_, cfg_, prompt, **kw)
 
@@ -385,7 +385,9 @@ def test_adoption_boundary_reverifies_and_rejects_a_late_hold(
 
     monkeypatch.setattr(extract_llm_engine, "_llm_call", fake_call)
     report = worker.run_pending(ledger, limit=1, budget_s=180)
-    assert report["done"] == 0 and len(prompts) == 1 and len(guard_calls) == 3
+    # two request guards, the deferred off-transaction adoption eval, and its
+    # in-transaction re-evaluation of the held verdict
+    assert report["done"] == 0 and len(prompts) == 1 and len(guard_calls) == 4
     assert not ledger.db.execute(
         "SELECT 1 FROM artifacts a JOIN messages m ON a.message_id=m.message_id "
         "WHERE a.kind=? " + mcs_queries.current_extract_pred()
