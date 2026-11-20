@@ -12,7 +12,6 @@ Run with the hermes venv that has slack_sdk:
         scripts/diagnostics/notify_remote_verify.py [--emit]
 """
 import asyncio
-import glob
 import json
 import os
 import sqlite3
@@ -113,7 +112,6 @@ def _command(part, verdict, remote_id):
             "ref": "slack conversations.replies no matching file",
             "worker_stopped": True, "proof": "remote_absent"}
         remote = None
-    from notify_recovery import card_part_resolve_plan
     return result, evidence, remote
 
 
