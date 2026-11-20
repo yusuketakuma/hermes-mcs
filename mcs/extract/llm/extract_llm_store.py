@@ -5,6 +5,7 @@ import math
 import os
 import re
 import sqlite3
+import sys
 import time
 import inference_version as inference
 import cloud_policy
@@ -90,6 +91,22 @@ from extract_llm_source_contract import (
     _unsealed_source_pred,
 )
 
+# Write transactions holding the SQLite writer lock past this are reported as
+# *_tx_hold events — same stderr drain path as ledger.intake_tx_hold; behavior
+# is unchanged (instrumentation for the writer-lock contention survey).
+_TX_HOLD_REPORT_S = 5.0
+
+
+def _report_tx_hold(event: str, started, r) -> None:
+    if started is None:
+        return
+    held = time.monotonic() - started
+    if held >= _TX_HOLD_REPORT_S:
+        print(json.dumps({"event": event, "pid": os.getpid(), "ts": time.time(),
+                          "message_id": r.get("message_id") if isinstance(r, dict) else None,
+                          "hold_s": round(held, 2)}), file=sys.stderr, flush=True)
+
+
 def _record_hold_tx(ledger, r, prior, reason, *, lost=None, lost_class=None, feedback_id=None, remove_chunks=True):
     if not ledger.db.in_transaction:
         ledger.db.execute('BEGIN IMMEDIATE')
@@ -161,10 +178,12 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
     if (ledger.db.in_transaction or not isinstance(r, dict)
             or not isinstance(r.get("_source_binding"), str)):
         return False
+    hold_started = None
     try:
         with ledger.db:
             if not ledger.db.in_transaction:
                 ledger.db.execute("BEGIN IMMEDIATE")
+                hold_started = time.monotonic()
             witness = []
             outcome = _replace_current_tx(ledger, r, content, ctx, integrity, qc_fix, extra_meta,
                                           result_witness=witness)
@@ -184,6 +203,8 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
         if isinstance(r, dict) and r.get("_cloud_discard"):
             r["_cloud_discard"]()
         return False
+    finally:
+        _report_tx_hold("replace_current_tx_hold", hold_started, r)
     if outcome != "rejected":
         project_id = r.get("project_id")
         if project_id is None:
@@ -467,9 +488,11 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
     if ledger.db.in_transaction:
         return _commit_rejected(r, "transaction")
     r.pop("_inline_extract_proof", None)
+    hold_started = None
     try:
         with ledger.db:
             ledger.db.execute("BEGIN IMMEDIATE")
+            hold_started = time.monotonic()
             if r.get("_checkpoint_conflict"):
                 return _commit_rejected(r, "checkpoint")
             if (not _source_writable(ledger.db, r)
@@ -581,6 +604,8 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
         if r.get("_cloud_discard"):
             r["_cloud_discard"]()
         return _commit_rejected(r, "cloud_guard")
+    finally:
+        _report_tx_hold("extract_commit_tx_hold", hold_started, r)
     if outcome != "rejected":
         _rerender_cards(ledger, r["project_id"], r["message_id"])
     return outcome
