@@ -208,3 +208,27 @@ def test_refresh_gate_path_defers_with_larger_window(tmp_path, monkeypatch, caps
         deadline=time.monotonic() + snapshots.SNAPSHOT_MIN_WINDOW_S - 1) == "deferred"
     assert snapshots.last_timing()["gate"] is False
     assert copies == [True]
+
+
+def test_refresh_defers_without_copy_when_disk_is_low(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(1, body="合成の経過記録")])
+    db.close()
+    path = str(tmp_path / "ledger.db")
+    monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(tmp_path / "snapshots"))
+
+    class _NoRoom:
+        free = 0
+
+    monkeypatch.setattr(maintenance.shutil, "disk_usage",
+                        lambda *_a, **_kw: _NoRoom())
+    copies = []
+    monkeypatch.setattr(snapshots, "_prepare_in_child",
+                        lambda *a, **kw: copies.append(True) or True)
+    assert maintenance.refresh_snapshot(
+        path, deadline=time.monotonic() + 3600) == "deferred"
+    assert copies == []
+    timing = snapshots.last_timing()
+    assert timing["defer_reason"] == "disk_low"
+    assert timing["need_mb"] > timing["free_mb"]
+    assert not (tmp_path / "snapshots" / "ledger-snapshot.db").exists()
