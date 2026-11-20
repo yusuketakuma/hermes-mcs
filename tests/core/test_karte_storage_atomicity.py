@@ -447,6 +447,27 @@ def test_intake_transaction_reports_hold_time_over_threshold(tmp_path, capsys, m
     assert events[-1]["hold_s"] >= 0
 
 
+def test_intake_hold_event_carries_substage_times(tmp_path, capsys, monkeypatch):
+    """save経路のサブステージ計時が intake_tx_hold イベントに載る。"""
+    monkeypatch.setattr(ledger, "TX_HOLD_REPORT_S", 0)
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(1, body="計時", project_id=1)],
+                         project_id=1)
+        with db._intake_transaction(stage="unmarked"):
+            pass
+    finally:
+        db.close()
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()
+              if "intake_tx_hold" in line]
+    marked = [e for e in events if e["stage"] == "save_messages"]
+    stages = marked[0]["stages"]
+    assert {"sem_snap", "save_tree", "changed_ids", "queue"} <= set(stages)
+    assert all(v >= 0 for v in stages.values())
+    assert all("stages" not in e for e in events
+               if e["stage"] == "unmarked")
+
+
 def test_ledger_busy_timeout_override_reaches_pragma(tmp_path):
     db = ledger.Ledger(str(tmp_path / "t.db"), busy_timeout_ms=120000)
     try:
