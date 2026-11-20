@@ -51,7 +51,7 @@ def test_schema11_preserves_released_v110_parts_and_adds_group_only_after_commit
     with closing(ledger.Ledger(str(path))) as store:
         assert store.db.execute("PRAGMA user_version").fetchone()[0] == ledger.SCHEMA_VERSION == 12
         assert [tuple(row) for row in store.db.execute(
-            "SELECT * FROM notification_render_parts ORDER BY delivery_id,part_id")] == [(*row, None) for row in original_parts]
+            "SELECT * FROM notification_render_parts ORDER BY delivery_id,part_id")] == [(*row, None, None) for row in original_parts]
         assert {row[1] for row in store.db.execute("PRAGMA index_list(notification_render_parts)")} >= {
             "idx_nparts_pending", "idx_nparts_state_delivery"}
         assert store.db.execute("PRAGMA foreign_key_check").fetchall() == []

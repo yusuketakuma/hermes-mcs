@@ -1079,3 +1079,38 @@ def test_sealed_part_still_rejects_missing_payload_hash(led):
     req = {**req, "payload_sha256": None}
     result = notify_recovery.apply_card_part_resolve(led, req, CFG, NOW + 1)
     assert result["error"] == "stale_part_plan"
+
+
+def test_remote_absent_rejects_part_with_sealed_prior(led):
+    _seed_thread(led, mids=(100,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    first = _latest_render(led)
+    assert _begin(led, first)["granted"]
+    assert _receipt(led, first, f"{1:016x}")["applied"]
+    with led.db:
+        led.db.execute("UPDATE notification_render_parts SET state='delivered',"
+                       "remote_id='syn-'||part_id WHERE delivery_id=?",
+                       (first["delivery_id"],))
+        notify_cards.issue_render(led.db, 1, CFG, NOW + 1, [], force=True)
+    update = _latest_render(led)
+    spec = json.loads(update["spec_json"])
+    target = next(p for p in spec["parts"]["manifest"]
+                  if p["kind"] == "body_part" and p.get("prior_remote_id"))
+    assert _begin(led, update, n=2)["granted"]
+    for p in spec["parts"]["manifest"][1:]:
+        _part_receipt(led, update, p["part_id"],
+                      result="unknown" if p is target else "delivered",
+                      remote_id=None if p is target else "syn-" + p["part_id"])
+    renders_before = led.db.execute(
+        "SELECT COUNT(*) AS c FROM notification_renders").fetchone()["c"]
+    plan = notify_recovery.card_part_resolve_plan(led, update["delivery_id"], target["part_id"])
+    assert "error" not in plan and plan["prior_remote_id"] == target["prior_remote_id"]
+    req = {**plan, "command_id": _uuid(920), "actor": "synthetic-operator",
+           "human_confirmed": True, "reason": "合成の配送確認",
+           "result": "mark_not_sent",
+           "evidence": {"method": "synthetic_lookup", "ref": "synthetic-proof",
+                        "worker_stopped": True, "proof": "remote_absent"}}
+    receipt = notify_recovery.apply_card_part_resolve(led, req, CFG, NOW + 2)
+    assert receipt["error"] == "remote_absent_prior_present"
+    assert led.db.execute(
+        "SELECT COUNT(*) AS c FROM notification_renders").fetchone()["c"] == renders_before
