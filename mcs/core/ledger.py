@@ -195,6 +195,8 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
         """Identify failures after a held intent was attempted, including commit errors."""
         previous = getattr(self, '_intake_hold_touched', False)
         self._intake_hold_touched = False
+        prev_stage_times = getattr(self, '_tx_stage_times', None)
+        self._tx_stage_times = {}
         started = monotonic()
         try:
             with self.db:
@@ -205,14 +207,27 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
             raise
         finally:
             self._intake_hold_touched = previous
+            stage_times, self._tx_stage_times = self._tx_stage_times, prev_stage_times
             held = monotonic() - started
             if held >= TX_HOLD_REPORT_S:
                 # stderr: stdout stays clean for --json consumers; the drainer
                 # captures both streams into mcs.log for the tx-hold survey.
-                print(json.dumps({"event": "intake_tx_hold", "pid": os.getpid(),
-                                  "ts": time.time(), "stage": stage,
-                                  "hold_s": round(held, 2)}),
-                      file=sys.stderr, flush=True)
+                event = {"event": "intake_tx_hold", "pid": os.getpid(),
+                         "ts": time.time(), "stage": stage,
+                         "hold_s": round(held, 2)}
+                if stage_times:
+                    event["stages"] = {k: round(v, 2)
+                                       for k, v in stage_times.items()}
+                print(json.dumps(event), file=sys.stderr, flush=True)
+
+    def _tx_stage_mark(self, name: str, started: float) -> float:
+        """Accumulate time since ``started`` under a sub-stage label and
+        return the new mark — attribution for the tx-hold survey."""
+        now = monotonic()
+        marks = getattr(self, '_tx_stage_times', None)
+        if marks is not None:
+            marks[name] = marks.get(name, 0.0) + (now - started)
+        return now
 
 
     def _reply_job_unread(self, m) -> bool:
