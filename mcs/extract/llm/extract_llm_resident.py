@@ -67,9 +67,10 @@ from extract_llm_source_contract import (
 _SEMANTIC_WORK = ("done", "retry", "failed", "deferred_short", "error")
 # Bounded wait for the run lock on the background semantic slot. The
 # slot only runs while this worker has no carry work, so waiting costs
-# idle capacity, and gaps between run holds are sub-second to seconds —
-# a non-blocking try misses almost all of them.
-_SEMANTIC_LOCK_WAIT_S = 60.0
+# idle capacity. Measured production holds run ~7min between releases,
+# so a 60s window almost never sees a release; 150s matches the
+# run-check reacquire horizon while staying bounded by job budget.
+_SEMANTIC_LOCK_WAIT_S = 150.0
 
 
 def _recent_arrivals(ledger) -> set:
