@@ -406,3 +406,26 @@ def test_a_failed_full_undo_closes_the_connection(tmp_path):
                 != "synthetic-pending"
     finally:
         db.close()                                             # a second close is harmless
+
+
+def test_mark_due_commit_failure_leaves_no_open_transaction(tmp_path):
+    """A commit refused under lock must not leak the implicit transaction."""
+    from types import SimpleNamespace
+    db = _ledger(tmp_path)
+    real = db.db
+
+    class FailingCommit:
+        def execute(self, *args, **kwargs):
+            return real.execute(*args, **kwargs)
+        def commit(self):
+            raise sqlite3.OperationalError("database is locked")
+        def rollback(self):
+            return real.rollback()
+        @property
+        def in_transaction(self):
+            return real.in_transaction
+
+    with pytest.raises(sqlite3.OperationalError):
+        ledger.Ledger.karte_summary_mark_due(SimpleNamespace(db=FailingCommit()), 1)
+    assert not real.in_transaction
+    db.close()

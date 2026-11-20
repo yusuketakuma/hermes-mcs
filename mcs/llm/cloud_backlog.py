@@ -7,6 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
+import random
 import re
 import sqlite3
 import stat
@@ -618,7 +619,9 @@ def worker(parent, *, index=None, context_only=False):
                         return
                     except Exception as error:
                         carry_failures += 1
-                        delay = min(60, 2 ** min(carry_failures, 6))
+                        # Jitter keeps sibling workers' settle retries from
+                        # landing on the same contended second (thundering herd).
+                        delay = min(60, 2 ** min(carry_failures, 6) * random.uniform(0.5, 1.5))
                         _event("cloud_carry_settle_error", **_exception_observation(error),
                                retry_s=delay, failures=carry_failures)
                         time.sleep(delay)

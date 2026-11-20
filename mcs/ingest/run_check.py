@@ -202,6 +202,16 @@ def _require_closed_transaction(ledger, result):
 def _report_open_transaction(ledger, result):
     if not ledger.db.in_transaction:
         return False
+    # A leaked transaction (bare commit failed under SQLITE_BUSY, or a crashed
+    # writer) would make _fail_run/_write_health skip too: recover it here so
+    # the run and health records still land. Rollback can itself hit the same
+    # lock — only when the transaction is really gone may the caller proceed.
+    with suppress(Exception):
+        ledger.db.rollback()
+    if not ledger.db.in_transaction:
+        if "tick: transaction_open_rolled_back" not in result["errors"]:
+            result["errors"].append("tick: transaction_open_rolled_back")
+        return False
     if "tick: transaction_open" not in result["errors"]:
         result["errors"].append("tick: transaction_open")
     result["ok"] = False

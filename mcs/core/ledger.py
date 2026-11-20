@@ -692,10 +692,16 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
         stage on a non-retryable failure (the next new message re-arms
         it). The flag persists for a project whose karte_id is still
         unknown and fires once it is."""
-        self.db.execute(
-            "UPDATE patients SET karte_summary_due=? WHERE project_id=?",
-            (1 if due else 0, project_id))
-        self.db.commit()
+        try:
+            self.db.execute(
+                "UPDATE patients SET karte_summary_due=? WHERE project_id=?",
+                (1 if due else 0, project_id))
+            self.db.commit()
+        except Exception:
+            # A failed commit leaves the implicit transaction open; the next
+            # writer probe then trips transaction_open. Close it before raising.
+            self.db.rollback()
+            raise
 
     def karte_summary_due(self) -> list:
         """Projects flagged for a summary GET that have a karte_id, newest last_seen first.
