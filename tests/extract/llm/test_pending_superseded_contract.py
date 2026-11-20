@@ -385,9 +385,9 @@ def test_adoption_boundary_reverifies_and_rejects_a_late_hold(
 
     monkeypatch.setattr(extract_llm_engine, "_llm_call", fake_call)
     report = worker.run_pending(ledger, limit=1, budget_s=180)
-    # two request guards, the deferred off-transaction adoption eval, and its
-    # in-transaction re-evaluation of the held verdict
-    assert report["done"] == 0 and len(prompts) == 1 and len(guard_calls) == 4
+    # two request guards plus the deferred off-transaction adoption eval,
+    # whose held verdict rejects without an in-transaction rescan
+    assert report["done"] == 0 and len(prompts) == 1 and len(guard_calls) == 3
     assert not ledger.db.execute(
         "SELECT 1 FROM artifacts a JOIN messages m ON a.message_id=m.message_id "
         "WHERE a.kind=? " + mcs_queries.current_extract_pred()

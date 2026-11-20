@@ -30,18 +30,19 @@ def test_deferred_guard_reuses_verdict_while_fence_holds():
     assert state["evals"] == 1
 
 
-def test_deferred_guard_reevals_when_fence_breaks():
+def test_deferred_guard_rejects_when_fence_breaks():
     state = {"evals": 0, "fence": {"cloud_usage_reserve": (1, 10)}}
 
     def evaluate():
         state["evals"] += 1
-        return state["evals"] < 2
+        return True
 
     guard = runner._DeferredGuard(evaluate, lambda: dict(state["fence"]))
     guard.prepare()
     state["fence"] = {"cloud_usage_reserve": (2, 11)}
     assert guard() is False
-    assert state["evals"] == 2
+    assert state["evals"] == 1   # no in-transaction rescan: reject and retry
+    assert guard.path == "miss_reject"
 
 
 def test_deferred_guard_fence_predates_evaluation():
@@ -58,11 +59,11 @@ def test_deferred_guard_fence_predates_evaluation():
 
     guard = runner._DeferredGuard(evaluate, lambda: dict(fence_state))
     guard.prepare()
-    assert guard() is True
-    assert len(evals) == 2   # fence mismatch forced the in-transaction re-eval
+    assert guard() is False       # stale verdict is rejected, never reused
+    assert len(evals) == 1
 
 
-def test_deferred_guard_reevals_false_verdict_without_fence():
+def test_deferred_guard_rejects_held_verdict_without_fence():
     state = {"evals": 0}
 
     def evaluate():
@@ -71,8 +72,9 @@ def test_deferred_guard_reevals_false_verdict_without_fence():
 
     guard = runner._DeferredGuard(evaluate, lambda: {"f": (1, 1)})
     guard.prepare()
-    assert guard() is True
-    assert state["evals"] == 2
+    assert guard() is False
+    assert state["evals"] == 1
+    assert guard.path == "prepared_hold"
 
 
 def test_deferred_guard_falls_back_when_prepare_fails():
@@ -88,6 +90,25 @@ def test_deferred_guard_falls_back_when_prepare_fails():
     guard.prepare()
     assert guard() is True
     assert state["evals"] == 2
+
+
+def test_deferred_guard_reports_resolution_path():
+    state = {"fence": {"k": (1, 1)}, "evals": 0}
+
+    def evaluate():
+        state["evals"] += 1
+        return True
+
+    guard = runner._DeferredGuard(evaluate, lambda: dict(state["fence"]))
+    guard.prepare()
+    assert guard.path == "prepared"
+    assert guard() is True and guard.path == "reuse"
+    guard.prepare()
+    state["fence"] = {"k": (2, 2)}   # break between prepare and the check
+    assert guard() is False and guard.path == "miss_reject"
+
+    direct = runner._DeferredGuard(evaluate, lambda: {})
+    assert direct() is True and direct.path == "direct"
 
 
 def test_deferred_guard_prepare_runs_outside_write_transaction(source):
