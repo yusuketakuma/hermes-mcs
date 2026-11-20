@@ -46,6 +46,11 @@ SNAPSHOT_GATE_RESERVE_S = RUN_LOCK_REACQUIRE_S + SNAPSHOT_WORK_TAIL_S
 # the copy alone can consume the verify window and the attempt ends in a
 # deadline-capped verify plus orphaned tmp residue.
 SNAPSHOT_MIN_WINDOW_S = 300.0
+# The gate path keeps the reacquire wait and publish tail on top of the
+# verify window (SNAPSHOT_GATE_RESERVE_S instead of SNAPSHOT_WORK_TAIL_S),
+# so its pre-copy window is the plain minimum plus that difference.
+SNAPSHOT_MIN_WINDOW_GATE_S = (SNAPSHOT_MIN_WINDOW_S + SNAPSHOT_GATE_RESERVE_S
+                              - SNAPSHOT_WORK_TAIL_S)
 
 
 def snapshot_verify_timeout_s(path: str) -> float:

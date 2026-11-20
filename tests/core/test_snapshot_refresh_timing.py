@@ -162,3 +162,42 @@ def test_refresh_defers_without_copy_when_window_is_too_small(tmp_path, monkeypa
     assert maintenance.refresh_snapshot(
         path, deadline=time.monotonic() + snapshots.SNAPSHOT_MIN_WINDOW_S + 60) == "published"
     assert copies == [True]
+
+
+def test_refresh_gate_path_defers_with_larger_window(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(1, body="合成の経過記録")])
+    db.close()
+    path = str(tmp_path / "ledger.db")
+    monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(tmp_path / "snapshots"))
+    copies = []
+    original_copy = snapshots._prepare_in_child
+
+    def copy(*args, **kwargs):
+        copies.append(True)
+        return original_copy(*args, **kwargs)
+
+    def unexpected_context(*, deadline):
+        raise AssertionError("verification_context invoked before the window check")
+
+    monkeypatch.setattr(snapshots, "_prepare_in_child", copy)
+    # A window that satisfies the plain minimum but not the gate minimum
+    # defers the gate path before any copy; the plain path still publishes.
+    window = snapshots.SNAPSHOT_MIN_WINDOW_S + 60
+    assert maintenance.refresh_snapshot(
+        path, deadline=time.monotonic() + window,
+        verification_context=unexpected_context) == "deferred"
+    assert copies == []
+    timing = snapshots.last_timing()
+    assert timing["defer_reason"] == "window_insufficient"
+    assert timing["gate"] is True
+    assert not (tmp_path / "snapshots" / "ledger-snapshot.db").exists()
+    assert maintenance.refresh_snapshot(
+        path, deadline=time.monotonic() + window) == "published"
+    assert copies == [True]
+    # The plain path still uses the smaller window and reports gate=False.
+    assert maintenance.refresh_snapshot(
+        path, force=True,
+        deadline=time.monotonic() + snapshots.SNAPSHOT_MIN_WINDOW_S - 1) == "deferred"
+    assert snapshots.last_timing()["gate"] is False
+    assert copies == [True]
