@@ -401,6 +401,22 @@ def _journal_contradiction(ledger, req) -> str | None:
     return None
 
 
+def _sealed_prior_remote_id(render, part_id):
+    """prior_remote_id sealed in the render spec for one manifest entry.
+
+    None means the sealed spec carries no prior reference for the part;
+    the plan's payload_hash binding still covers spec identity."""
+    try:
+        spec = json.loads(render["spec_json"]) if render["spec_json"] else None
+        manifest = ((spec or {}).get("parts") or {}).get("manifest") or []
+        entry = next((p for p in manifest if isinstance(p, dict)
+                      and p.get("part_id") == part_id), None)
+        value = (entry or {}).get("prior_remote_id")
+    except (ValueError, TypeError, AttributeError, RecursionError, KeyError, IndexError):
+        return None
+    return value if isinstance(value, str) and value else None
+
+
 def card_part_resolve_plan(ledger, delivery_id, part_id, *, include_related=False) -> dict:
     """Read sealed identity on a borrowed ledger/db without writes or source text.
 
@@ -443,7 +459,9 @@ def card_part_resolve_plan(ledger, delivery_id, part_id, *, include_related=Fals
             "delivery_id": delivery_id, "part_id": part_id,
             "attempt_id": part["attempt_id"] or f"p:{delivery_id.replace('-', '')}:{part_id}",
             "manifest_sha256": render["payload_hash"], "payload_sha256": part["payload_sha256"],
-            "expected_state": part["state"]}
+            "expected_state": part["state"],
+            "prior_remote_id": part["prior_remote_id"]
+                or _sealed_prior_remote_id(render, part_id)}
     if include_related:
         if render["transport"] != "slack" or render["op"] != "update" or render["card_id"] is None:
             return {"error": "related_parts_unresolvable"}
@@ -796,7 +814,8 @@ def validate_card_part_resolve(req) -> str | None:
         return "bad_transport"
     allowed = {"version", "cmd", "command_id", "actor", "human_confirmed", "reason",
                "delivery_id", "attempt_id", "part_id", "manifest_sha256", "payload_sha256",
-               "expected_state", "result", "remote_id", "evidence", "transport", "related_plans"} | set(scope_fields(transport))
+               "expected_state", "result", "remote_id", "evidence", "transport", "related_plans",
+               "prior_remote_id"} | set(scope_fields(transport))
     if req.keys() - allowed:
         return "unknown_field"
     if type(req.get("version")) is not int or req["version"] != 1 or req.get("cmd") != "ops.card_part_resolve":
@@ -856,13 +875,14 @@ def validate_card_part_resolve(req) -> str | None:
         if len(canonical(req)) > MAX_COMMAND_BYTES:
             return "command_too_large"
         keys = {"version", "cmd", "transport", "delivery_id", "part_id", "attempt_id",
-                "manifest_sha256", "payload_sha256", "expected_state"} | set(scope_fields(transport))
+                "manifest_sha256", "payload_sha256", "expected_state",
+                "prior_remote_id"} | set(scope_fields(transport))
         seen = {req["part_id"]}
         base = {key: value for key, value in req.items() if key != "related_plans"}
         for plan in related:
             if not isinstance(plan, dict) or plan.keys() != keys:
                 return "bad_related_plan"
-            if any(plan[key] != req[key] for key in keys - {"part_id", "attempt_id", "payload_sha256"}):
+            if any(plan[key] != req[key] for key in keys - {"part_id", "attempt_id", "payload_sha256", "prior_remote_id"}):
                 return "related_plan_scope_mismatch"
             error = validate_card_part_resolve({**base, **plan})
             if error:
@@ -881,6 +901,12 @@ def validate_card_part_resolve(req) -> str | None:
         return "bad_proof"
     elif transport == "lineworks" and evidence.get("proof") == "remote_absent" and evidence.get("duplicate_risk_accepted") is not True:
         return "duplicate_risk_acknowledgement_required"
+    if (evidence.get("proof") == "remote_absent"
+            and isinstance(req.get("prior_remote_id"), str) and req["prior_remote_id"]):
+        # the sealed spec still references an earlier remote post/file —
+        # absence of this attempt's target says nothing about that prior,
+        # so remote_absent can never settle the part on its own
+        return "remote_absent_prior_present"
     return None
 
 
