@@ -1,10 +1,13 @@
 {
   "category": "fixed",
   "title": "独立実行への切替で、常駐設定の管理記録が読めないときは変更せずに止める",
-  "summary": "Hermes 連携から独立実行（runtime_mode=standalone）へ切り替える mcs setup services は、常駐設定の管理記録に載っている以前の Hermes の定期ジョブを止めてから独立ホストを登録します。管理記録はあるのに壊れていて読めない場合、記録を空として扱い、以前の定期ジョブを止めないまま独立ホストを登録していたため、両方の方式が同時に動くおそれがありました。今後は、管理記録が存在するのに読めない場合、何も変更せずに止まり、記録の確認を案内します。管理記録がない場合（以前の実行が記録を保存しなかった場合）の扱いは変えていません。",
+  "summary": "Hermes 連携から独立実行（runtime_mode=standalone）へ切り替える mcs setup services は、管理記録に載っている以前の Hermes の定期ジョブを止めてから独立ホストを登録します。管理記録が壊れて読めないと、記録を空として扱い、以前のジョブを止めないまま登録するため、両方の方式が同時に動くおそれがありました。今後は何も変更せずに止まり、記録の確認を案内します。",
   "upgrade": "この版への更新だけで有効になります。この理由で止まった場合は、管理記録のファイルを確認し、担当者に相談してください。",
   "details": [
-    "service_management の apply_services が、standalone の選択時に管理記録の存在と読取り結果を確かめてから以前の方式を退役させる。"
+    "service_management の apply_services が、standalone の選択時に管理記録の存在と読取り結果を確かめてから以前の方式を退役させる。",
+    "管理記録がない場合（以前の実行が記録を保存しなかった場合）の扱いは変えていない。"
   ],
-  "refs": ["mcs/ops/services/service_management.py"]
+  "refs": [
+    "mcs/ops/services/service_management.py"
+  ]
 }

@@ -1,5 +1,5 @@
 {
-  "category": "improved",
+  "category": "changed",
   "title": "karte・抽出commit・stale GCの書込みロック保持時間を観測する計装を追加",
   "summary": "データベースの書込み競合（SQLITE_BUSY）の主な原因候補である、連携サマリー保存・LLM抽出結果の確定・古い成果物の整理が、実際にどのくらい書込みロックを保持しているかを測る観測を追加しました。5秒を超える取引は karte_tx_hold / extract_commit_tx_hold / replace_current_tx_hold / gc_stale_tx_hold イベントとして稼働ログに記録されます。読み書きの動作自体は変わりません。",
   "upgrade": "通常のアップデーターで適用されます。適用直後から data/mcs.log に計測が残ります。",

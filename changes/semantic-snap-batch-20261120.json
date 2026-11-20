@@ -1,13 +1,15 @@
 {
-  "category": "improved",
+  "category": "changed",
   "title": "保存時の書込みロック保持が短くなりました",
   "summary": "患者・メッセージ保存のトランザクション内で、意味解析用スナップショット取得が投稿ごとの個別問い合わせから一括問い合わせへ変わりました。実測で書込みロック保持時間のほぼ全体（15.2秒中15.19秒）を占めていた区間が短くなり、同じロックを待つ収集・要約・抽出処理の滞留が減ります。スナップショットの内容・判定結果は従来と同一です。",
   "upgrade": "通常のアップデーターで適用されます。追加操作はありません。",
   "details": [
     "_semantic_generation_snapshot で、保存対象メッセージの既存ルート・子孫有無・指紋行・添付をメッセージごとの SELECT からプロジェクト単位の IN 一括問い合わせへ変更。",
     "出力は従来実装と同一（親子混在データで新旧スナップショットを直接比較し差分0を確認）。",
-    "intake_tx_hold の stages 計測で sem_snap が保持時間の99.9%を占めると実測した区間の改善。"
+    "intake_tx_hold の stages 計測で sem_snap が保持時間の99.9%を占めると実測した区間の改善。",
+    "検証: tests/semantic + tests/core/test_karte_storage_atomicity.py: 3636 pass（1件は単体・ファイル単位で再現しない既存flake）"
   ],
-  "refs": ["mcs/core/ledger_semantic_sources.py"],
-  "verification": "tests/semantic + tests/core/test_karte_storage_atomicity.py: 3636 pass（1件は単体・ファイル単位で再現しない既存flake）"
+  "refs": [
+    "mcs/core/ledger_semantic_sources.py"
+  ]
 }

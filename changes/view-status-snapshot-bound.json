@@ -1,12 +1,19 @@
 {
   "category": "fixed",
   "title": "参照画面の集計と状態を公開済みスナップショットの時点にそろえる",
-  "summary": "`mcs_view qc` の対象・未処理・対象外の件数は、コマンドを実行した時刻ではなく、読んでいるスナップショットの生成時刻で数えます。同じ世代を何度読んでも件数は変わりません。`mcs_view status` の連携サマリー状態は、患者の現在の karte_id に結び付いたサマリーだけを使います。紐付け先のカルテが変わって新しいカルテがまだ取得されていない場合は、旧カルテの「取得済み・空」を出さずに未取得として示します。測定値の参照で、スナップショットが公開し直された後の古いページ位置（cursor）は、測定値を読めないという意味の measurement_unavailable ではなく cursor_changed として返します。",
+  "summary": "`mcs_view qc` の件数は、実行時刻ではなく読んでいるスナップショットの生成時刻で数えます。`mcs_view status` の連携サマリー状態は、患者の現在の karte_id に結び付いたものだけを使い、カルテが変わって未取得なら未取得として示します。測定値参照の古い cursor は cursor_changed として返します。",
   "upgrade": "追加操作は不要です。対象は `mcs_view qc` の件数、`mcs_view status` の karte_summary_at・karte_summary_empty、ローカル測定値参照の cursor 理由の3点です。収集・抽出・通知・既読化の挙動は変わりません。",
   "details": [
     "View._qc の QC 対象期間判定を qc_scope_sql(snapshot の generated_at) に変更。",
     "View._karte_summary_state は最新の karte_summary の meta.karte_id が patients.karte_id と一致する場合だけ状態を返し、一致しなければ (None, None) を返す（read_model._project_metadata と同じ規則）。",
-    "measurement_local_view.read_snapshot は cursor の照合失敗を cursor_changed として返す。"
+    "measurement_local_view.read_snapshot は cursor の照合失敗を cursor_changed として返す。",
+    "`mcs_view qc` の対象・未処理・対象外の件数は、同じ世代を何度読んでも変わらない。",
+    "紐付け先のカルテが変わって新しいカルテがまだ取得されていない場合は、旧カルテの「取得済み・空」を出さずに未取得として示す。",
+    "スナップショットが公開し直された後の古いページ位置（cursor）は、測定値を読めないという意味の measurement_unavailable ではなく cursor_changed として返す。"
   ],
-  "refs": ["mcs/views/mcs_view.py", "mcs/views/measurement_local_view.py", "tests/views/test_bugsweep_view_status.py"]
+  "refs": [
+    "mcs/views/mcs_view.py",
+    "mcs/views/measurement_local_view.py",
+    "tests/views/test_bugsweep_view_status.py"
+  ]
 }

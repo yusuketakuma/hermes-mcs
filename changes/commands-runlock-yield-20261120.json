@@ -1,5 +1,5 @@
 {
-  "category": "improved",
+  "category": "changed",
   "title": "コマンド処理後にrun lockを一度手放し、待機中のtickを通す",
   "summary": "コマンド専用実行はカード操作をtick完了を待たず処理するため実行全体をrun lock下で行っていましたが、コマンド適用後のhousekeeping（フラグ再公開・カードGC・スナップショット）まで含めて数分間lockを保持し、頻度の高い実行が連続するとtickの開始が遅れていました。コマンド適用が終わった時点で一度lockを手放し、上限30秒で再取得するよう変更します。lockが取れなければhousekeepingだけを次回へ延期し、適用済みコマンドの結果は従来どおり返します。",
   "upgrade": "追加操作は不要です。延期時は出力の housekeeping_deferred フィールドに理由が記録されます。",

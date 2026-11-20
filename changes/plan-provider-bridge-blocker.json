@@ -1,10 +1,13 @@
 {
   "category": "fixed",
   "title": "更新の計画（plan）が、適用時に止まる提供元設定の橋渡し要件を表示しない問題を修正",
-  "summary": "提供元別の設定へまだ移行していない導入先で、橋渡しの版を経ずに新しい版を適用すると、apply は変更前に provider_update_bridge_required で止まります。しかし plan はこの条件を見ておらず、route を apply と表示していたため、計画どおりに進めると適用の段階で初めて止まりました。今後は plan も同じ判定を行い、該当する場合は route を blocked にして blockers に provider_update_bridge_required を表示します。設定を確認できない場合は provider_settings_unverified を表示します。最新版の確認（noop）では判定しません。",
+  "summary": "提供元別の設定へ未移行の導入先で、橋渡しの版を経ずに新しい版を適用すると apply は変更前に provider_update_bridge_required で止まりますが、plan は route を apply と表示していました。今後は plan も同じ判定を行い、該当する場合は route を blocked にして blockers に provider_update_bridge_required を表示します。",
   "upgrade": "この版への更新だけで有効になります。",
   "details": [
+    "設定を確認できない場合は provider_settings_unverified を表示する。最新版の確認（noop）では判定しない。",
     "update_planning._plan が update_preflight の _provider_migration_needed と _provider_bridge_verified を apply と同じ条件で使う。"
   ],
-  "refs": ["mcs/ops/update_planning.py"]
+  "refs": [
+    "mcs/ops/update_planning.py"
+  ]
 }

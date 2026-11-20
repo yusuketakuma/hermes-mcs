@@ -1,12 +1,22 @@
 {
   "category": "added",
   "title": "作成結果が不明なまま止まった Slack チャンネル準備の記録を、人の確認で退避できるようにする",
-  "summary": "Slack の通知先チャンネルの自動作成で、作成や招待の結果が確認できないまま止まると、準備の記録（data/slack-channel-setup.json）が保留のまま残り、mcs setup slack-channels でも再開できず、解除する手段がありませんでした。今後は、担当者が Slack で同名のチャンネルの有無を確かめたうえで、mcs setup slack-channels --discard-hold --request-id <記録の request_id> --confirm-human --reason <理由> を実行すると、記録を data/slack-channel-setup.discarded-<request_id>.json へ退避できます。操作は承認記録（command_receipts）に残り、記録の中身は削除しません。保留でない記録や、指定した request_id と違う記録は退避しません。退避後の準備は新しく計画し直します。Slack のチャンネル名は重複できないため、同名のチャンネルがすでにあれば作成は拒否され、二重には作られません。作られていたチャンネルを使う場合は、その ID を通知先に設定してから準備を再開してください。",
+  "summary": "Slack の通知先チャンネルの自動作成が結果不明のまま止まると、準備の記録が保留のまま残り、再開も解除もできませんでした。今後は担当者が同名チャンネルの有無を確かめたうえで、mcs setup slack-channels --discard-hold を --confirm-human と --reason 付きで実行すると、記録を退避できます。操作は承認記録に残り、記録の中身は削除しません。",
   "upgrade": "この版への更新だけで使えます。保留の記録が残っていない導入先には影響がありません。",
   "details": [
     "新しい人承認操作 ops.slack_setup_discard を operation_contract・mcs_requests・mcs_operations の共通経路に追加。承認記録の確定前に失敗した場合は、退避した記録を元に戻す。",
     "cloud-llm stop/resume と同じロック・更新中・復元中の確認を mcs_requests.apply_local_operation にまとめ、両方の CLI から使う。",
-    "停止時の案内（slack_channel_setup.report_problem）と INSTALLATION.md・UPGRADE_AGENT.md に退避の手順を追記。"
+    "停止時の案内（slack_channel_setup.report_problem）と INSTALLATION.md・UPGRADE_AGENT.md に退避の手順を追記。",
+    "対象の記録は data/slack-channel-setup.json。実行時は --request-id に記録の request_id を指定する。退避先は data/slack-channel-setup.discarded-（request_id）.json。操作は承認記録（command_receipts）に残る。",
+    "保留でない記録や、指定した request_id と違う記録は退避しない。退避後の準備は新しく計画し直す。",
+    "Slack のチャンネル名は重複できないため、同名のチャンネルがすでにあれば作成は拒否され、二重には作られない。作られていたチャンネルを使う場合は、その ID を通知先に設定してから準備を再開する。"
   ],
-  "refs": ["mcs/ops/setup/slack_channel_setup.py", "mcs/ops/commands/operation_contract.py", "mcs/ops/commands/mcs_requests.py", "mcs/ops/commands/mcs_operations.py", "mcs/ops/mcs_setup.py", "mcs/ops/cloud_cli.py"]
+  "refs": [
+    "mcs/ops/setup/slack_channel_setup.py",
+    "mcs/ops/commands/operation_contract.py",
+    "mcs/ops/commands/mcs_requests.py",
+    "mcs/ops/commands/mcs_operations.py",
+    "mcs/ops/mcs_setup.py",
+    "mcs/ops/cloud_cli.py"
+  ]
 }
