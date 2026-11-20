@@ -1273,6 +1273,35 @@ def test_timing_observation_filters_unknown_lock_loss_kind(detail):
     assert record["transport"] == dict.fromkeys(backlog._TRANSPORT_SECONDS)
 
 
+def test_timing_observation_forwards_only_fixed_lock_hold_keys():
+    record = backlog._pass_timing_observation({
+        "lock_hold": {"hold_max_s": 12.5, "hold_sum_s": 30.0, "hold_count": 3,
+                      "private": "synthetic-private-detail"}})
+    assert record["lock_hold"] == {"hold_max_s": 12.5, "hold_sum_s": 30.0,
+                                   "hold_count": 3}
+    assert "synthetic-private-detail" not in json.dumps(record)
+
+
+@pytest.mark.parametrize("value", [None, True, -1, float("nan"), float("inf"),
+                                  "synthetic-private-detail", [], {}])
+def test_timing_observation_does_not_fabricate_lock_hold_seconds(value):
+    record = backlog._pass_timing_observation({
+        "lock_hold": {"hold_max_s": value, "hold_sum_s": value, "hold_count": value}})
+    assert record["lock_hold"] == {"hold_max_s": None, "hold_sum_s": None,
+                                   "hold_count": None}
+    assert "synthetic-private-detail" not in json.dumps(record, allow_nan=False)
+
+
+@pytest.mark.parametrize("result", [{}, {"transport": {}}, {"lock_hold": None},
+                                    {"lock_hold": []}, {"lock_hold": "synthetic-private-detail"}])
+def test_timing_observation_omits_lock_hold_for_passes_without_it(result):
+    # extract-side per-write passes and fd-less semantic passes carry no
+    # lock_hold — the record must not fabricate the key either
+    record = backlog._pass_timing_observation(result)
+    assert "lock_hold" not in record
+    assert "synthetic-private-detail" not in json.dumps(record)
+
+
 def test_worker_forwards_measured_semantic_timings_without_payload(carry_worker, monkeypatch, capsys):
     import extract_llm
     import semantic_drain
@@ -1281,9 +1310,12 @@ def test_worker_forwards_measured_semantic_timings_without_payload(carry_worker,
     detail = {"kind": "jev", "transport_s": 3.25, "reacquire_s": 5, "window_s": 6}
     monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: {"done": 1})
     monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
+    hold = {"hold_max_s": 5.5, "hold_sum_s": 9.0, "hold_count": 2,
+            "private": "synthetic-private-detail"}
     def semantic(*args, **kwargs):
         state.alive = False
         return {"done": 0, "transport": {**measured, "private": "synthetic-private-detail"},
+                "lock_hold": dict(hold),
                 "run_lock_lost_detail": {**detail, "project_id": "synthetic-private-detail",
                                          "error": "synthetic-private-detail"}}
     monkeypatch.setattr(semantic_drain, "run_due", semantic)
@@ -1297,8 +1329,10 @@ def test_worker_forwards_measured_semantic_timings_without_payload(carry_worker,
                "saved_work_units_not_patient_clinical_or_delivery_completion" for p in passes)
     assert passes[0]["transport"] == dict.fromkeys(backlog._TRANSPORT_SECONDS)
     assert passes[0]["run_lock_lost_detail"] is None
+    assert "lock_hold" not in passes[0]      # the extract pass emits none
     assert passes[1]["transport"] == measured
     assert passes[1]["run_lock_lost_detail"] == detail
+    assert passes[1]["lock_hold"] == {k: hold[k] for k in backlog._LOCK_HOLD_KEYS}
     assert passes[1]["transport_basis"] == "unlocked_call_wall_not_gpu_or_http_only"
     assert passes[1]["request_slot_wait_s"] is passes[1]["worker_rss_bytes"] is None
     assert "synthetic-private-detail" not in json.dumps(records, allow_nan=False)
