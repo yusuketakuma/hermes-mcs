@@ -576,6 +576,25 @@ def _commands_only(lock_fd, deadline) -> int:
         # a second drain: commands queued by the first pass's receipts
         _run_stage(result, "cmd_int_drain_again", deadline, lambda: notify_cmds.drain_int_commands(
             ledger, result, cfg, root, deadline=min(deadline, time.monotonic() + 30)), required=True)
+        # Command priority ends here: the rest is housekeeping (flag
+        # republish, GC, snapshot) that a queued tick may safely precede.
+        # Yield the run lock once so such a tick is not starved by the
+        # frequent commands passes; the reacquire wait is bounded and a
+        # busy lock only defers idempotent cleanup to the next pass.
+        yield_budget = deadline - time.monotonic()
+        if yield_budget > 0:
+            os.close(lock_fd)
+            lock_fd = None
+            with writer_lock.capture_writer_refusal() as yield_diag:
+                lock_fd = writer_lock.wait_run_lock(
+                    LOCKFILE,
+                    wait_s=min(30.0, yield_budget),
+                    expected_code_stamp=_CODE_STAMP,
+                    marker_path=os.path.join(HOME, "data", UPDATE_MARKER_NAME))
+            if lock_fd is None:
+                result["housekeeping_deferred"] = yield_diag.get("writer_reason", "run_lock_busy")
+                print(json.dumps(result, ensure_ascii=False))
+                return 0 if result["ok"] else 1
         notify_spool.publish_flags(cfg, root)
         notify_spool.publish_restore_holds(ledger, root)
         _run_stage(result, "cmd_card_gc", deadline, notify_cards.gc, ledger, cfg, required=True)
@@ -612,7 +631,8 @@ def _commands_only(lock_fd, deadline) -> int:
         try:
             ledger.close()
         finally:
-            os.close(lock_fd)
+            if lock_fd is not None:
+                os.close(lock_fd)
 
 
 def _semantic_enabled(ledger, cfg, result) -> bool:
