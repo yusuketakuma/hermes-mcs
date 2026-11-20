@@ -785,22 +785,19 @@ def _main() -> int:
             _settle_carry(led, carry, fence=context_state)
             print(json.dumps(total, ensure_ascii=False))
         else:
-            # Bounded single batch: keep the whole-run lock so the batch
-            # is atomic against a concurrent tick.
-            lock_fd = acquire_run_lock()
-            if lock_fd is None:
-                print(json.dumps({"ok": False, "error": "lock_held"}))
-                return 3
-            try:
-                adm, vpol = _admitted()
-                print(json.dumps(
-                    run_pending(led, args.limit, args.budget,
-                                batch_k=args.batch,
-                                vital_policy=vpol,
-                                admitted_ids=adm),
-                    ensure_ascii=False))
-            finally:
-                os.close(lock_fd)
+            # Bounded single batch: claims lease per row and commits land
+            # per-write, so holding the whole-run lock only starved ticks
+            # without buying atomicity (the carry-resume call above uses
+            # the same per-write configuration).
+            adm, vpol = _admitted()
+            print(json.dumps(
+                run_pending(led, args.limit, args.budget,
+                            batch_k=args.batch,
+                            vital_policy=vpol,
+                            admitted_ids=adm,
+                            per_write_lock=True,
+                            write_wait_s=_RESIDENT_WRITE_WAIT_S),
+                ensure_ascii=False))
     finally:
         if local_role[0] is not None:
             os.close(local_role[0])
