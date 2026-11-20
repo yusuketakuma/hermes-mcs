@@ -21,7 +21,7 @@ from mcs_queries import (ELIGIBLE_MESSAGE, current_extract_pred,
 from mcs_util import HOME, load_config, loads_dict, strict_json
 
 from extract_llm_progress import (
-    cloud_completion,
+    cloud_completion_any,
     progress_for_message,
 )
 from extract_llm_qc import (
@@ -639,8 +639,12 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
     if cloud_only:
         raw_cfg = load_config()
         cfg = cloud_inference.resolve_cloud_settings(raw_cfg)
-        selection, errors = cloud_policy.resolve_profile(raw_cfg, route="reextract", purpose="backlog", root=HOME)
-        if not errors and selection is not None:
+        selection, errors = cloud_policy.resolve_profile(
+            raw_cfg, route="reextract", purpose="backlog", root=HOME, ledger=ledger, ordered=True)
+        if selection is None:
+            selection, errors = cloud_policy.resolve_profile(
+                raw_cfg, route="reextract", purpose="backlog", root=HOME)
+        if selection is not None:
             required_contract = cloud_inference.cloud_provider_contract(selection=selection)
         if (cfg["mode"] != "on" or "reextract" not in cfg["routes"]
                 or not cloud_policy.route_open("reextract", cfg)):
@@ -696,7 +700,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                 if (cloud_policy.history_target_ready(ledger.db, row["project_id"], row["message_id"])
                         and receipt_check(row["project_id"], row["message_id"])
                         and required_contract is not None
-                        and cloud_completion(ledger.db, row, required_contract) is None
+                        and cloud_completion_any(ledger.db, row)[0] is None
                         and (row["project_id"], row["message_id"]) not in rebuilds):
                     selected.append(row)
                     if len(selected) >= n:

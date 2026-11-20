@@ -37,7 +37,7 @@ from extract_llm_context import (
     _thread_context,
 )
 from extract_llm_progress import (
-    cloud_completion,
+    cloud_completion_any,
 )
 from extract_llm_prompts import (
     MAX_TOKENS,
@@ -429,8 +429,9 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
             selection = r.get("_cloud_selection")
             if selection is None:
                 selection, errors = cloud_policy.resolve_profile(
-                    r.get("_cloud_config") or load_config(), route="reextract", purpose="backlog", root=HOME)
-                if errors or selection is None:
+                    r.get("_cloud_config") or load_config(), route="reextract",
+                    purpose="backlog", root=HOME, ledger=ledger, ordered=True)
+                if selection is None:
                     raise cloud_inference.CloudFallback("cloud_profile_invalid")
             cloud_policy.dryrun_tx(ledger, route="reextract", project_id=r["project_id"],
                 unit_key=str(r["message_id"]), input_chars=len(r["body_text"] or ""),
@@ -487,7 +488,7 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
                 return _commit_rejected(r, "checkpoint")
             if check_current:
                 required = r.get("_required_cloud_contract")
-                already_current = (cloud_completion(ledger.db, r, required) is not None if required is not None
+                already_current = (cloud_completion_any(ledger.db, r)[0] is not None if required is not None
                                    else _current(ledger, r["message_id"], r["content_hash"]))
                 if already_current:
                     return "current"
