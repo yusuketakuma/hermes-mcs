@@ -90,6 +90,25 @@ def test_deferred_guard_falls_back_when_prepare_fails():
     assert state["evals"] == 2
 
 
+def test_deferred_guard_reports_resolution_path():
+    state = {"fence": {"k": (1, 1)}, "evals": 0}
+
+    def evaluate():
+        state["evals"] += 1
+        return True
+
+    guard = runner._DeferredGuard(evaluate, lambda: dict(state["fence"]))
+    guard.prepare()
+    assert guard.path == "prepared"
+    assert guard() is True and guard.path == "reuse"
+    guard.prepare()
+    state["fence"] = {"k": (2, 2)}   # break between prepare and the check
+    assert guard() is True and guard.path == "reeval"
+
+    direct = runner._DeferredGuard(evaluate, lambda: {})
+    assert direct() is True and direct.path == "direct"
+
+
 def test_deferred_guard_prepare_runs_outside_write_transaction(source):
     led, row = source
     seen = []

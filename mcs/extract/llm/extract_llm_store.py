@@ -97,14 +97,18 @@ from extract_llm_source_contract import (
 _TX_HOLD_REPORT_S = 5.0
 
 
-def _report_tx_hold(event: str, started, r) -> None:
+def _report_tx_hold(event: str, started, r, guard=None) -> None:
     if started is None:
         return
     held = time.monotonic() - started
     if held >= _TX_HOLD_REPORT_S:
-        print(json.dumps({"event": event, "pid": os.getpid(), "ts": time.time(),
-                          "message_id": r.get("message_id") if isinstance(r, dict) else None,
-                          "hold_s": round(held, 2)}), file=sys.stderr, flush=True)
+        payload = {"event": event, "pid": os.getpid(), "ts": time.time(),
+                   "message_id": r.get("message_id") if isinstance(r, dict) else None,
+                   "hold_s": round(held, 2)}
+        if guard is not None:
+            payload["guard_path"] = getattr(guard, "path", None)
+            payload["guard_verdict"] = getattr(guard, "verdict", None)
+        print(json.dumps(payload), file=sys.stderr, flush=True)
 
 
 def _record_hold_tx(ledger, r, prior, reason, *, lost=None, lost_class=None, feedback_id=None, remove_chunks=True):
@@ -610,7 +614,7 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
             r["_cloud_discard"]()
         return _commit_rejected(r, "cloud_guard")
     finally:
-        _report_tx_hold("extract_commit_tx_hold", hold_started, r)
+        _report_tx_hold("extract_commit_tx_hold", hold_started, r, adoption_guard)
     if outcome != "rejected":
         _rerender_cards(ledger, r["project_id"], r["message_id"])
     return outcome

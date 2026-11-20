@@ -266,9 +266,12 @@ class _DeferredGuard:
         self._fence = fence
         self._prepared = None
         self._resolved = None
+        self.path = "none"
+        self.verdict = None
 
     def prepare(self):
         self._prepared = self._resolved = None
+        self.path = "prepare_failed"
         try:
             # The fence must precede the evaluation: the guard reads a pinned
             # snapshot, so a cloud write landing mid-evaluation is invisible to
@@ -277,6 +280,7 @@ class _DeferredGuard:
             fence = self._fence()
             verdict = bool(self._evaluate())
             self._prepared = (verdict, fence if verdict else None)
+            self.path = "prepared"
         except Exception:
             self._prepared = None
 
@@ -284,14 +288,17 @@ class _DeferredGuard:
         if self._resolved is not None:
             return self._resolved
         if self._prepared is None:
-            return bool(self._evaluate())
+            self.path = "direct"
+            self.verdict = bool(self._evaluate())
+            return self.verdict
         verdict, fence = self._prepared
         try:
             fresh = fence is not None and self._fence() == fence
         except Exception:
             fresh = False
-        self._resolved = verdict if fresh else bool(self._evaluate())
-        return self._resolved
+        self.path = "reuse" if fresh else "reeval"
+        self.verdict = verdict if fresh else bool(self._evaluate())
+        return self.verdict
 
 
 def run_pending(ledger, limit: int = 20, budget_s: float = 180,
