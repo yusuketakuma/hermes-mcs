@@ -256,14 +256,16 @@ class _DeferredGuard:
     its artifact fence inside it.
 
     ``prepare`` runs the guard once outside the transaction and captures the
-    fence; each in-transaction call accepts that verdict only while the fence
-    still matches, otherwise it falls back to a full evaluation — the same
-    result the un-deferred guard would produce. A prepare-time failure leaves
-    the guard unprepared so in-transaction calls evaluate normally."""
+    fence; an in-transaction call accepts that verdict only while the fence
+    still matches. A stale fence rejects the adoption — the row stays pending
+    and the next attempt re-evaluates — so the write transaction never rescans
+    accounting. A held verdict rejects outright, and a prepare-time failure
+    leaves the guard unprepared so in-transaction calls evaluate normally."""
 
-    def __init__(self, evaluate, fence):
+    def __init__(self, evaluate, fence, event_extra=None):
         self._evaluate = evaluate
         self._fence = fence
+        self._event_extra = event_extra
         self._prepared = None
         self._resolved = None
         self.path = "none"
@@ -292,13 +294,23 @@ class _DeferredGuard:
             self.verdict = bool(self._evaluate())
             return self.verdict
         verdict, fence = self._prepared
+        if fence is None:
+            self.path = "prepared_hold"
+            self.verdict = False
+            return False
         try:
-            fresh = fence is not None and self._fence() == fence
+            fresh = self._fence() == fence
         except Exception:
             fresh = False
-        self.path = "reuse" if fresh else "reeval"
-        self.verdict = verdict if fresh else bool(self._evaluate())
-        return self.verdict
+        if fresh:
+            self.path, self.verdict = "reuse", verdict
+            return verdict
+        self.path, self.verdict = "miss_reject", False
+        print(json.dumps({"event": "extract_guard_fence_miss",
+                          "pid": os.getpid(), "ts": time.time(),
+                          **(self._event_extra or {})}),
+              file=sys.stderr, flush=True)
+        return False
 
 
 def run_pending(ledger, limit: int = 20, budget_s: float = 180,
@@ -778,7 +790,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     return False
                 return True
             r["_superseded_guard"] = _DeferredGuard(
-                adoption_guard, lambda: _cloud_guard_fence(ledger.db))
+                adoption_guard, lambda: _cloud_guard_fence(ledger.db),
+                {"message_id": r.get("message_id"),
+                 "project_id": r.get("project_id")})
         elif r.get("_local_rebuild") is not None:
             # An approved local rebuild: every local dispatch (first, repair, split) and the
             # adoption re-prove the same permit; provider stays None so no path reaches cloud.
