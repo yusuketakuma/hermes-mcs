@@ -23,6 +23,8 @@ IMAGES = re.compile(r"!\[(?P<alt>[^\]\n]*)\]\((?P<url>[^\s)]+)\)")
 REPOSITORY_PATH = "/yusuketakuma/hermes-mcs"
 # GitHub Release本文は125,000字が上限。検査では余裕をもって12万字で止める。
 BODY_LIMIT = 120_000
+# GitHubは1MBを超えるMarkdownを描画しない。版別の詳細ファイルはこの未満に保つ。
+DETAILS_FILE_LIMIT = 1_000_000
 
 
 def repository_image_path(target):
@@ -167,24 +169,28 @@ def check_body(body, release_version):
         raise ValueError("技術詳細は折りたたみに記載してください")
 
 
-def _changelog_anchor(text, release_version):
-    """GitHubの見出しslug化と同じ規則で対象版の見出しアンカーを作る。"""
-    match = next((h for h in re.finditer(r"^## \[([^\]]+)\].*$", text, re.M)
-                  if h.group(1) == release_version), None)
-    label = match.group(0)[3:] if match is not None else f"[{release_version}]"
-    return re.sub(r" ", "-", re.sub(r"[^\w\- ]", "", label.strip().lower()))
+def _details_file_link(release_version):
+    """1MB未満で描画される版別詳細ファイルへの固定URL。"""
+    return (f"https://github.com{REPOSITORY_PATH}/blob/v{release_version}"
+            f"/docs/releases/v{release_version}/changelog-{release_version}.md")
 
 
 def _collapse_fixed(body, link, release_version):
-    """不具合修正を見出しだけへ畳み、詳細はCHANGELOGのリンクへ送る。"""
+    """不具合修正を見出しだけへ畳み、詳細は版別ファイルのリンクへ送る。
+    セキュリティ項目は複数行の説明も全部保持し、拾えない項目があれば失敗する。"""
     start = re.search(r"^### 不具合修正$", body, re.M)
     if start is None:
         return body
     nxt = re.search(r"^### ", body[start.end():], re.M)
     end = start.end() + (nxt.start() if nxt else len(body) - start.end())
-    titles = re.findall(r"^- (\*\*.+\*\*)$", body[start.end():end], re.M)
+    content = body[start.end():end]
+    entries = re.findall(r"^- (\*\*.+\*\*)((?:\n  .+)*)", content, re.M)
+    if len(entries) != len(re.findall(r"^- .+$", content, re.M)):
+        raise ValueError("不具合修正の項目を取りこぼしたため畳み込みを中止します")
+    kept = [(f"- {title}{rest}" if title.startswith("**セキュリティ：")
+             else f"- {title}") for title, rest in entries]
     return (body[:start.start()] + "### 不具合修正\n\n"
-            + "\n".join(f"- {title}" for title in titles) + "\n\n"
+            + "\n\n".join(kept) + "\n\n"
             + f"- 各修正の説明・根拠は [CHANGELOG v{release_version}]({link}) を参照してください。\n\n"
             + body[end:])
 
@@ -195,8 +201,7 @@ def release_body(text, release_version):
     check_body(body, release_version)
     if len(body) <= BODY_LIMIT:
         return body
-    link = (f"https://github.com{REPOSITORY_PATH}/blob/v{release_version}"
-            f"/CHANGELOG.md#{_changelog_anchor(text, release_version)}")
+    link = _details_file_link(release_version)
     details = re.search(r"^### 技術詳細$", body, re.M)
     short = (body[:details.start()] + "### 技術詳細\n\n"
              f"- 技術詳細・変更の根拠は [CHANGELOG v{release_version}]({link}) "
@@ -317,7 +322,15 @@ def main(argv=None):
     try:
         if args.command == "check":
             load_fragments(args.root)
-            check_changelog((args.root / "CHANGELOG.md").read_text(encoding="utf-8"))
+            text = (args.root / "CHANGELOG.md").read_text(encoding="utf-8")
+            versions = check_changelog(text)
+            for p in sorted((args.root / "docs" / "releases").glob("v*/changelog-*.md")):
+                if p.stat().st_size >= DETAILS_FILE_LIMIT:
+                    raise ValueError(f"{p} が1MBを超えています")
+            for v in versions:
+                if len(section(text, v)) > BODY_LIMIT and not (
+                        args.root / "docs" / "releases" / f"v{v}" / f"changelog-{v}.md").is_file():
+                    raise ValueError(f"v{v}: 上限超過の版に版別詳細ファイルがありません")
             if args.base:
                 require_fragment(args.root, args.base)
         elif args.command == "export":
@@ -358,8 +371,15 @@ def main(argv=None):
             new_readme = readme_release.render(
                 readme.read_text(encoding="utf-8"), new_text)
             readme_release.check_links(args.root, new_readme)
+            details = f"## [{args.version}] — {args.date}\n\n" + body.rstrip() + "\n"
+            if len(details.encode("utf-8")) >= DETAILS_FILE_LIMIT:
+                raise ValueError("版別詳細ファイルが1MBを超えます")
             archive.mkdir(parents=True)
             path.write_text(new_text, encoding="utf-8")
+            details_path = (args.root / "docs" / "releases" / f"v{args.version}"
+                            / f"changelog-{args.version}.md")
+            details_path.parent.mkdir(parents=True, exist_ok=True)
+            details_path.write_text(details, encoding="utf-8")
             readme.write_text(new_readme, encoding="utf-8")
             for source, _ in fragments:
                 source.rename(archive / source.name)
