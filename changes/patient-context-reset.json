@@ -2,7 +2,7 @@
   "category": "added",
   "title": "患者コンテキストを消去して作り直す人承認コマンドを追加",
   "summary": "患者コンテキストの公開版・調査結果・品質判定・生成枠と、その外部AIの会計記録を、人の確認と記録を伴って消去できるようにしました（cloud-llm context-reset-plan・context-reset）。消去の前にバックアップを取ります。使った額は引き継ぎ、上限判定と使用額の表示は消去の前と同じ額を数え続けます。",
-  "upgrade": "追加操作は不要です。実行する場合は、設定で extract.patient_context.enabled を false にし、cloud-llm stop で送信を止め、cloud-llm estimate で作り直しの見積りを取ってから context-reset-plan を実行し、表示された preview_hash を context-reset に渡してください。終わったら enabled を戻し、cloud-llm resume で再開します。消去後は、結果が分からないまま残っていた患者コンテキストの送信と同じ内容を、作り直しで改めて送ることがあります（context-reset-plan の unsettled_reservations が件数です）。",
+  "upgrade": "追加操作は不要です。実行する場合は、設定で extract.patient_context.enabled を false にし、cloud-llm stop で送信を止め、cloud-llm estimate で作り直しの見積りを取ってから context-reset-plan を実行し、表示された preview_hash を context-reset に渡してください。終わったら cloud-llm resume で再開してから enabled を戻します（逆の順だと、資料がローカルの代替処理に固定されます）。消去後は、結果が分からないまま残っていた患者コンテキストの送信と同じ内容を、作り直しで改めて送ることがあります（context-reset-plan の unsettled_reservations が件数です）。",
   "details": [
     "公開中の患者コンテキストはすぐ表示されなくなり、送信を再開すると通常の処理で作り直します。",
     "再抽出・意味解析・添付OCRの会計記録と、通知カードの表示記録は消しません。",
