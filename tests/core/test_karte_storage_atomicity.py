@@ -522,6 +522,10 @@ def test_karte_scope_fence_detects_pid_writes_and_ignores_other_projects(tmp_pat
         db.db.execute("BEGIN")
         fence = dependency_loss.karte_capture_fence(db.db, 1, None)
         db.db.commit()
+        # 他接続のcommitが無い新txでは data_version 不変 → digest skip の fast-path で fresh
+        db.db.execute("BEGIN")
+        assert dependency_loss.karte_capture_fresh(db.db, 1, fence)
+        db.db.commit()
         other = sqlite3.connect(str(tmp_path / "ledger.db"))
         try:
             # フェンス取得と再検証の間に他接続がcommitしたケースを再現（実フローと同じ2tx構造）
