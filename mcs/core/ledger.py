@@ -654,11 +654,18 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
         savepoint = f"karte_summary_{uuid.uuid4().hex}" if self.db.in_transaction else None
         if savepoint:
             self.db.execute(f"SAVEPOINT {savepoint}")    # fails before anything is written
+        hold_started = capture_s = None
         try:
             if not self.db.in_transaction:
                 self.db.execute('BEGIN IMMEDIATE')
+                hold_started = monotonic()
             import inference_dependency_loss as dependency_loss
-            footprint = dependency_loss.capture_current_karte_tx(self.db, project_id) if source_changed else None
+            if source_changed:
+                capture_started = monotonic()
+                footprint = dependency_loss.capture_current_karte_tx(self.db, project_id)
+                capture_s = monotonic() - capture_started
+            else:
+                footprint = None
             write()
             if footprint is not None:
                 dependency_loss.record_tx(self.db, footprint)
@@ -670,6 +677,16 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
             if self.db.in_transaction:                    # SQLite may already have rolled back
                 self._undo_karte_summary_write(savepoint)
             raise
+        finally:
+            if hold_started is not None:
+                held = monotonic() - hold_started
+                if held >= TX_HOLD_REPORT_S:
+                    # stderr: same drain path as intake_tx_hold (survey only).
+                    print(json.dumps({"event": "karte_tx_hold", "pid": os.getpid(),
+                                      "ts": time.time(), "project_id": project_id,
+                                      "capture_s": round(capture_s, 2) if capture_s is not None else None,
+                                      "hold_s": round(held, 2)}),
+                          file=sys.stderr, flush=True)
 
     def _undo_karte_summary_write(self, savepoint) -> None:
         """Undo the unit; if that fails, drop the whole uncommitted transaction,
