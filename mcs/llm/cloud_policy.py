@@ -1153,12 +1153,16 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                     and result.get('error_kind') is None and _selection_differs(previous, candidate, current_body)):
                 continue
             # The one validated result of the same request: a proven success, a settled
-            # failure, or an unsettled one. Counts only; none of them permits a resend.
+            # failure, or an unsettled one. A settled failure permits a resend (the unit
+            # stayed unanswered and fully accounted; the new send is a separate billed
+            # attempt); success and unknown outcomes still refuse duplicates.
             refusal = ('repeat_unsettled' if not settled else
                        'repeat_success' if (result.get('usage') is not None and result.get('http_class') == 'http_200'
                                             and result.get('error_kind') is None) else 'repeat_failed')
             if supersede is not None and prompt_verified and own_unit:
                 supersede.append(_accounting_meta(row['meta']))
+                continue
+            if refusal == 'repeat_failed':
                 continue
             raise ValueError('already_sent_or_unknown')
         except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
