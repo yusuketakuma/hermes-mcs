@@ -230,19 +230,34 @@ class ReleaseNotesTest(unittest.TestCase):
         self.assertLessEqual(len(body), notes.BODY_LIMIT)
         self.assertNotIn("<details>", body)
         self.assertIn("### 技術詳細\n\n- 技術詳細・変更の根拠は [CHANGELOG v1.2.0]", body)
-        self.assertIn("/blob/v1.2.0/CHANGELOG.md#120--2026-11-21", body)
+        self.assertIn("/blob/v1.2.0/docs/releases/v1.2.0/changelog-1.2.0.md", body)
         self.assertIn("### 更新時の注意\n\n- 追加操作は不要です。", body)
         self.assertIn("説明です。", body)  # short fixes keep their summaries
 
-    def test_release_body_collapses_fix_headings_when_still_over(self):
-        text, _ = self.big_changelog(["x" * 5000] * 30, ["根拠。"])
+    def test_release_body_collapses_fix_headings_but_not_security(self):
+        items = [dict(category="security", title="重大な修正", summary="認証を確認してください。",
+                      upgrade="再起動が必要です。", details=["根拠。"], refs=["#9"])]
+        items += [dict(category="fixed", title=f"修正{n}", summary="x" * 5000,
+                       upgrade="追加操作は不要です。", details=["根拠。"], refs=["#1"])
+                  for n in range(30)]
+        body = notes.render(items, "合成版", "合成の説明です。")
+        body = body.replace("  認証を確認してください。",
+                            "  認証を確認してください。\n  影響範囲は全利用者です。")
+        text = "## [Unreleased]\n\n## [1.2.0] — 2026-11-21\n\n" + body
         body = notes.release_body(text, "1.2.0")
         self.assertLessEqual(len(body), notes.BODY_LIMIT)
         self.assertIn("- **修正0**", body)
         self.assertIn("- **修正29**", body)
-        self.assertNotIn("x" * 200, body)  # summaries moved behind the link
+        self.assertNotIn("x" * 200, body)  # ordinary summaries moved behind the link
+        self.assertIn("- **セキュリティ：重大な修正**\n  認証を確認してください。"
+                      "\n  影響範囲は全利用者です。", body)
         self.assertIn("各修正の説明・根拠は [CHANGELOG v1.2.0]", body)
         self.assertIn("### 更新時の注意", body)
+
+    def test_collapse_fixed_fails_closed_on_uncaptured_items(self):
+        bad = "### 不具合修正\n\n- **項目**\n  説明\n- 太字でない項目\n  説明\n"
+        with self.assertRaises(ValueError):
+            notes._collapse_fixed("### 新機能\n\n- **x**\n  y\n\n" + bad, "link", "1.2.0")
 
     def test_release_body_refuses_when_even_the_short_form_overflows(self):
         huge = dict(category="fixed", title="修正", summary="説明です。",
@@ -259,9 +274,47 @@ class ReleaseNotesTest(unittest.TestCase):
                             "--output", str(root / "out.md")])
             self.assertFalse((root / "out.md").exists())
 
-    def test_changelog_anchor_matches_github_heading_slug(self):
-        self.assertEqual(notes._changelog_anchor("## [1.2.0] — 2026-11-21\n", "1.2.0"),
-                         "120--2026-11-21")
+    def test_details_file_written_by_build_and_size_checked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "changes").mkdir()
+            (root / "changes/001.json").write_text(json.dumps(self.item()), encoding="utf-8")
+            (root / "CHANGELOG.md").write_text("## [Unreleased]\n\n", encoding="utf-8")
+            (root / "README.md").write_text("# Preserved\n<!-- BEGIN GENERATED:release -->\n"
+                                          "<!-- END GENERATED:release -->\n", encoding="utf-8")
+            self.assertEqual(notes.main(
+                ["--root", tmp, "build", "--version", "1.0.8", "--date", "2026-10-01",
+                 "--headline", "通知の改善", "--summary", "返信を更新します。"]), 0)
+            details = root / "docs/releases/v1.0.8/changelog-1.0.8.md"
+            self.assertTrue(details.is_file())
+            text = details.read_text(encoding="utf-8")
+            self.assertTrue(text.startswith("## [1.0.8] — 2026-10-01"))
+            self.assertIn("### 技術詳細", text)
+            self.assertLess(details.stat().st_size, notes.DETAILS_FILE_LIMIT)
+            self.assertEqual(notes.main(["--root", tmp, "check"]), 0)
+            details.write_text("x" * notes.DETAILS_FILE_LIMIT, encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                notes.main(["--root", tmp, "check"])
+
+    def test_oversized_details_file_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "changes").mkdir()
+            item = self.item() | {"details": ["x" * notes.DETAILS_FILE_LIMIT]}
+            record = root / "changes/001.json"
+            record.write_text(json.dumps(item), encoding="utf-8")
+            changelog = root / "CHANGELOG.md"
+            changelog.write_text("## [Unreleased]\n\n", encoding="utf-8")
+            readme = root / "README.md"
+            readme.write_text("# Preserved\n<!-- BEGIN GENERATED:release -->\n"
+                              "<!-- END GENERATED:release -->\n", encoding="utf-8")
+            before = {p: p.read_bytes() for p in (record, changelog, readme)}
+            with self.assertRaises(SystemExit):
+                notes.main(["--root", tmp, "build", "--version", "1.0.8",
+                            "--date", "2026-10-01", "--headline", "変更", "--summary", "説明。"])
+            self.assertEqual({p: p.read_bytes() for p in before}, before)
+            self.assertFalse((root / "changes/archive").exists())
+            self.assertFalse((root / "docs").exists())
 
     def test_adapter_runtime_changes_require_fragment(self):
         with tempfile.TemporaryDirectory() as tmp:
