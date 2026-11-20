@@ -1,7 +1,7 @@
 {
   "category": "fixed",
   "title": "再抽出の経路が閉じているときにクラウドworkerを常駐させず、患者コンテキストのworkerも空きメモリに合わせて減らす",
-  "summary": "cloud_llm.routes に reextract が含まれていないときは、再抽出期間（reextract_backlog_until）が開いていても再抽出用のクラウドworkerを起動せず、起動済みのworkerは退役します。これまでは空の処理を繰り返してメモリを使い続けていました。患者コンテキストのクラウドworkerも、空きメモリが上限を超えると退役します。",
+  "summary": "cloud_llm.routes に reextract が含まれていないときは、再抽出期間（reextract_backlog_until）が開いていても再抽出用のクラウドworkerを起動せず、起動済みのworkerは退役します。これまでは空の処理を繰り返してメモリを使い続けていました。患者コンテキストのクラウドworkerも、空きメモリから求めた本数を超える分は退役します。",
   "upgrade": "追加操作は不要です。反映には常駐する抽出処理（レーン2）の再起動が必要です。送信の範囲・予算・モデル・既読化・人承認の条件は変わりません。再抽出を再開するときは、期間に加えて cloud_llm.routes に reextract を入れてください。",
   "details": [
     "再抽出のクラウド送信を計画するかどうかの判定（reextract_planned）に、routes に reextract が含まれることを条件として加えた。クラウド送信の見積り（mcs/ops/cloud_cli.py）はすでに同じ条件を使っている。",

@@ -1,7 +1,7 @@
 {
   "category": "fixed",
   "title": "Slack・Discordの再接続でカード配送が止まったままになる問題を修正",
-  "summary": "Hermesモードで通信障害中にSlackアプリやDiscordアダプターが作り直されると、配送の引き継ぎに失敗してカード配送・ボタン・Slackのスラッシュコマンドが止まり、ゲートウェイの再起動が必要でした。前の処理の停止を最大8秒以内に検知して引き継ぐようにし、閉じたDiscordクライアントでは新しい送信を始めません。",
+  "summary": "Hermesモードで通信障害中にSlackアプリやDiscordアダプターが作り直されると、配送の引き継ぎに失敗してカード配送・ボタン・Slackのスラッシュコマンドが止まり、ゲートウェイの再起動が必要でした。前の処理は停止の指示を最大8秒以内に検知して送信ロックを手放し、新しい処理はそれを待って引き継ぐようにしました。また、閉じたDiscordクライアントでは新しい送信を始めません。",
   "upgrade": "Hermesゲートウェイの再起動で反映されます。設定変更は不要です。送信ロックによる単一送信者の保証、設定先workspaceの身元確認（team_idの一致）、配送結果の記録方法は変わりません。設定先workspaceのclientを確認できない場合、チャンネル作成の準備は実行されずに保留のまま残り、ログにsetup_unverifiedが出ます。",
   "details": [
     "Hermesモードで通信障害中にSlackアプリやDiscordアダプターが作り直されると、前の配送処理が起動の再試行待ち（最大300秒）の間に新しい処理が30秒（Discordは10秒）で待機を諦めることがありました。この場合、どちらの処理も終了し、ゲートウェイを再起動するまでカード配送・ボタン・Slackのスラッシュコマンドが止まっていました。",
@@ -20,6 +20,6 @@
     "adapters/slack/tasks.py",
     "adapters/discord/tasks.py",
     "hermes_plugin/card_workers.py",
-    "tests/adapters/test_bugsweep_supervisor_handoff.py"
+    "tests/adapters/common/test_bugsweep_supervisor_handoff.py"
   ]
 }
