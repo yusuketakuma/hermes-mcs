@@ -22,6 +22,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import time
 from time import monotonic
 import uuid
@@ -106,6 +107,11 @@ KARTE_SUMMARY_REFRESH_S = 24 * 3600  # deep runs refresh source summaries daily
 # WAL size a checkpoint truncates back to (bytes)
 JOURNAL_SIZE_LIMIT = 64 * 1024 * 1024
 
+# Intake transactions holding a write lock past this are reported as
+# intake_tx_hold events — instrumentation for the writer-lock contention
+# survey; read/write behavior is unchanged.
+TX_HOLD_REPORT_S = 5.0
+
 
 class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
     def __init__(self, path: str, *, notify_all_replies: bool = False):
@@ -184,10 +190,11 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
     # ---------- patients + messages ----------
 
     @contextmanager
-    def _intake_transaction(self):
+    def _intake_transaction(self, *, stage=None):
         """Identify failures after a held intent was attempted, including commit errors."""
         previous = getattr(self, '_intake_hold_touched', False)
         self._intake_hold_touched = False
+        started = monotonic()
         try:
             with self.db:
                 yield
@@ -197,6 +204,14 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
             raise
         finally:
             self._intake_hold_touched = previous
+            held = monotonic() - started
+            if held >= TX_HOLD_REPORT_S:
+                # stderr: stdout stays clean for --json consumers; the drainer
+                # captures both streams into mcs.log for the tx-hold survey.
+                print(json.dumps({"event": "intake_tx_hold", "pid": os.getpid(),
+                                  "ts": time.time(), "stage": stage,
+                                  "hold_s": round(held, 2)}),
+                      file=sys.stderr, flush=True)
 
 
     def _reply_job_unread(self, m) -> bool:

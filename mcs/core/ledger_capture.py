@@ -197,7 +197,7 @@ class LedgerCaptureMixin:
         now = time.time()
         new_ids = []
         invalidated_roots = set()
-        with self._intake_transaction():  # commit on success, rollback on exception
+        with self._intake_transaction(stage="save_patient"):  # commit on success, rollback on exception
             before_semantic = self._begin_semantic_generation_snapshot(
                 p.messages, semantic=semantic)
             self.db.execute('UPDATE patients SET project_id=project_id WHERE 0')
@@ -442,7 +442,7 @@ class LedgerCaptureMixin:
             # 0 = never imported: the initial history stays quiet
             late_after = self.high_watermark(project_id) or None
         invalidated_roots = set()
-        with self._intake_transaction():
+        with self._intake_transaction(stage="save_messages"):
             before_semantic = self._begin_semantic_generation_snapshot(
                 msgs, semantic=semantic)
             for m in msgs:
@@ -512,7 +512,7 @@ class LedgerCaptureMixin:
         new_ids = []
         now = time.time()
         invalidated_roots = set()
-        with self._intake_transaction():
+        with self._intake_transaction(stage="save_thread_replies"):
             before_semantic = self._begin_semantic_generation_snapshot(
                 replies, semantic=semantic)
             for m in replies:
