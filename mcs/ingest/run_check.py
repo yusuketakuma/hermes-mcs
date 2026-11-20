@@ -1005,11 +1005,14 @@ def _rotate_logs(result) -> None:
     """Every tick: housekeeping may be deferred for days by slow ticks,
     and rotation is one lstat per log unless a log is over the cap."""
     try:
-        maintenance.rotate_log()
+        rotated = maintenance.rotate_log()
     except maintenance.MaintenanceError as e:
         result["errors"].append(f"log_rotate: {e}")  # fixed reason token
     except Exception as e:
         result["errors"].append(f"log_rotate: {type(e).__name__}")
+    else:
+        if isinstance(rotated, dict) and rotated.get("reason"):
+            result["errors"].append(f"log_rotate: {rotated['reason']}")
 
 
 def _overdue_housekeeping(result) -> None:

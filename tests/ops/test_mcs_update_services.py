@@ -13,6 +13,7 @@ import service_contract
 import service_management
 import owned_process
 import runtime_inspection
+import json
 import os
 import subprocess
 import sys
@@ -425,3 +426,12 @@ def test_stopping_an_update_child_closes_its_pipes(updater):
     child.communicate = real
     assert child.returncode is not None
     assert child.stdout.closed and child.stderr.closed
+
+
+def test_enable_log_rotation_certifies_cooperative_writers(updater):
+    """After services restart under current code the lifecycle owner certifies
+    mcs.log rotation — a fresh state can never again leave the log unbounded."""
+    import run_log
+    update_services._enable_log_rotation()
+    state = json.loads((Path(mcs_update.DATA) / ".mcs-log-state.json").read_text())
+    assert state["rotation_ready"] is True
