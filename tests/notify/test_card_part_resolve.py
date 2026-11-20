@@ -8,6 +8,7 @@ import pytest
 import mcs_requests
 import notify_spool
 import notify_transport as transport
+import notify_cards
 from notify_testkit import (CFG, NOW, _begin, _dispatch, _intent, _latest_render,
 
                             _part_receipt, _receipt, _seed_thread, _uuid, led as led)
@@ -1049,3 +1050,32 @@ def test_withdrawal_exception_rejects_any_drift_in_its_proof(led, monkeypatch, c
                            (value, withdrawn[0]["attempt_id"]))
     path.write_text("".join(json.dumps(row) + "\n" for row in rows + withdrawn))
     reject_preflight(led, req, monkeypatch, "preflight_target_unverified")
+
+
+def test_unsealed_part_resolves_by_remote_verify(led):
+    # 封印前世代の部品は payload_sha256 を持たない。plan の封印値と一致する
+    # None を受理し、封印済み部品での省略は従来どおり stale で落ちる。
+    req = prepare(led)
+    db = notify_cards.connection(led)
+    db.execute("UPDATE notification_render_parts SET payload_sha256=NULL "
+               "WHERE delivery_id=? AND part_id=?",
+               (req["delivery_id"], req["part_id"]))
+    db.commit()
+    plan = notify_recovery.card_part_resolve_plan(led, req["delivery_id"], req["part_id"])
+    assert "error" not in plan and plan["payload_sha256"] is None
+    req = {**plan, "command_id": _uuid(911), "actor": "synthetic-operator",
+           "human_confirmed": True, "reason": "remote照合で実在を確認",
+           "result": "mark_delivered", "remote_id": "F0REMOTEID01",
+           "evidence": {"method": "remote_api_verify",
+                        "ref": "conversations.replies file match",
+                        "worker_stopped": True}}
+    assert notify_recovery.validate_card_part_resolve(req) is None
+    receipt = notify_recovery.apply_card_part_resolve(led, req, CFG, NOW + 1)
+    assert receipt["outcome"] == "applied" and receipt["part_state"] == "delivered"
+
+
+def test_sealed_part_still_rejects_missing_payload_hash(led):
+    req = prepare(led)
+    req = {**req, "payload_sha256": None}
+    result = notify_recovery.apply_card_part_resolve(led, req, CFG, NOW + 1)
+    assert result["error"] == "stale_part_plan"

@@ -811,7 +811,9 @@ def validate_card_part_resolve(req) -> str | None:
     for key in scope_fields(transport):
         if not valid_text(req.get(key), 200):
             return "bad_" + key
-    if any(not valid_hash(req.get(key)) for key in ("manifest_sha256", "payload_sha256")):
+    if not valid_hash(req.get("manifest_sha256")) or (
+            req.get("payload_sha256") is not None
+            and not valid_hash(req["payload_sha256"])):
         return "bad_hash"
     if req.get("expected_state") not in ("unknown", "not_sent", "pending") or req.get("result") not in _RESOLVE_RESULTS:
         return "bad_resolution"
