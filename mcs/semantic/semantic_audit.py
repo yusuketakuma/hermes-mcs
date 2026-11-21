@@ -194,25 +194,31 @@ def audit_claims(jev_client, bundle: dict, summary: dict,
             win = ""
         metadata = {key: src.get(key) for key in
                     ("message_id", "parent_id", "revision", "posted_at", "sender")} if src else None
-        ev_ctx[ev["evidence_id"]] = (quote, win, metadata)
+        ev_ctx[ev["evidence_id"]] = (quote, win, metadata, ev["message_id"])
     for start in range(0, len(claims), per_request):
         chunk = claims[start:start + per_request]
         ctx, questions = {}, {}
         for c in chunk:
             cited = []
             for ev in c["evidence_refs"]:
-                quote, win, metadata = ev_ctx.get(ev, ("", "", None))
+                quote, win, metadata, mid = ev_ctx.get(ev, ("", "", None, None))
                 entries = [{"id": ev, "role": "evidence_quote",
                             "text": quote}]
                 if win and win != quote:
-                    entries.append({"id": f"{ev}_ctx",
+                    # one context entry per source message: evidences from
+                    # the same post would otherwise each send a full copy
+                    # of its body, and large audits cross the Jev input
+                    # limit and fail as audit_jev_hard (AT-028 unchanged:
+                    # the cited entry still carries the whole body).
+                    entries.append({"id": f"ctx_{mid}",
                                     "role": "evidence_context", "text": win})
                 if metadata is not None:
                     entries.append({"id": f"{ev}_meta", "role": "evidence_metadata",
                                     "text": json.dumps(metadata, ensure_ascii=False)})
                 for entry in entries:
                     ctx[entry["id"]] = entry      # a shared source is sent once
-                    cited.append(entry["id"])
+                    if entry["id"] not in cited:
+                        cited.append(entry["id"])
             questions[c["claim_id"]] = jev.choice_question(
                 _CLAIM_QUESTION.format(claim=c["claim_id"],
                                        entries=", ".join(cited) or "none"),
