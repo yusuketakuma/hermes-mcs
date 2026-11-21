@@ -10,6 +10,6 @@
   ],
   "refs": [
     "mcs/ingest/health_watch.py",
-    "https://github.com/yusuketakuma/hermes-mcs/issues/185"
+    "#185"
   ]
 }
