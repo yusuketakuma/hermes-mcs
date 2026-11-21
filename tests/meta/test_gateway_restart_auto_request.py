@@ -81,6 +81,21 @@ def test_manual_request_mints_request_id_for_argv_and_receipt(gateway, monkeypat
     assert report["request_id"] == request_id
 
 
+def test_request_absolutizes_relative_paths_for_detached_child(gateway, monkeypatch,
+                                                               tmp_path):
+    rec, data, agents, _, _, _ = gateway
+    spawned = _spawned(monkeypatch, rec)
+    monkeypatch.chdir(tmp_path)
+    os.symlink(data, tmp_path / "rel-data")
+    os.symlink(agents, tmp_path / "rel-agents")
+    assert rec.request_gateway_restart("rel-data", "rel-agents", 501)
+    argv, _ = spawned[0]
+    assert argv[4] == str(tmp_path / "rel-data")
+    assert argv[5] == str(tmp_path / "rel-agents")
+    assert json.loads((data / "gateway_restart.json").read_text())["status"] \
+        == "requested"
+
+
 def test_request_rejects_malformed_request_id_without_receipt(gateway, monkeypatch):
     rec, data, agents, _, _, _ = gateway
     spawned = _spawned(monkeypatch, rec)

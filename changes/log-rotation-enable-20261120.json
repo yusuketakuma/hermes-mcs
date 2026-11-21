@@ -1,0 +1,20 @@
+{
+  "category": "fixed",
+  "title": "運用ログ mcs.log のローテーションが本番で有効化されない欠落を修正",
+  "summary": "運用ログを定期的に小さく保つ仕組み（ローテーション）が、更新プログラムから有効化する配線を持たず、本番では一度も動いていませんでした。稼働中は誰もログファイルを握り続けないことを、サービス一式の再起動・検証に成功した時点で更新側が証明して有効化するようにしました。あわせて、有効化されていないために回転を見送った場合、その理由を実行記録のエラー欄に残すようにし、無効のまま動き続ける状態が見えない問題を解消しました。",
+  "upgrade": "通常のアップデーターで適用されます。適用後の次回更新（または手動の更新適用）でローテーションが有効化されます。",
+  "details": [
+    "run_log.enable_rotation（停止証明の受理）はこれまでテストからしか呼ばれておらず、本番の状態は常に rotation_ready=False で、rotate() が legacy_writers_unknown で毎回見送っていた（mcs.log が 479MB まで無制限に成長した原因）。",
+    "post-merge 正常経路（restart_agents 成功後）と中断回復の resume 経路（drainers・postcheck 通過後）で、現行コードの協調 writer のみが稼働していることを証明して enable_rotation を呼ぶ。失敗しても更新を巻き戻さない（衛生機能のため非致命）。",
+    "run_check の _rotate_logs が rotate() の見送り理由を捨てていた問題を直し、legacy_writers_unknown 等の理由を実行記録のエラー欄に記録する。回転不能が続く状態が健全性記録から読み取れる。",
+    "install.sh 単独実行やデータ領域の再作成など、更新経路を通らない状態再生成では rotation_ready が False に戻り得るが、今回の可視化により run 記録で検出可能になった。"
+  ],
+  "refs": [
+    "mcs/ops/update_services.py",
+    "mcs/ops/update_runtime_migration.py",
+    "mcs/ops/update_recovery.py",
+    "mcs/ingest/run_check.py",
+    "tests/ops/test_mcs_update_services.py",
+    "tests/ingest/test_run_check_failure_paths.py"
+  ]
+}

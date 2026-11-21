@@ -82,6 +82,8 @@ def test_a_cap_reached_at_reservation_is_a_pre_send_refusal(priced, monkeypatch)
     seen = []
 
     def budget(*args, **kwargs):
+        if 'input_bound' not in kwargs:
+            return None   # provider-order probe inside resolve_profile: not an admission check
         seen.append(True)
         return None if len(seen) == 1 else "daily_cost_cap"
 

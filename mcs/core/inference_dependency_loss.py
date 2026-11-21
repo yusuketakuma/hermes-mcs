@@ -447,10 +447,12 @@ def capture_tx(db, pid, mid, *, artifact_ids=None, source_key=None):
             'kind': 'patient_context_audit_unverified', 'artifact_id': None})
     # Resolve only explicit, affirmed correction targets using the same exact
     # quote/person/category relation contract as the clinical projection.
+    referenced_targets = []
     for fact, origin in list(bound_facts.values()):
         refs = [ref for ref in (fact.get('temporal') or {}).get('corrections', [])
                 if ref.get('affirmed') is True and type(ref.get('message_id')) is int]
         for target_mid in {ref['message_id'] for ref in refs}:
+            referenced_targets.append(target_mid)    # fence absent targets too — an insert mid-flight must break the fence
             target_row = db.execute('SELECT * FROM messages WHERE project_id=? AND message_id=?',
                                     (pid, target_mid)).fetchone()
             if target_row is None:
@@ -502,7 +504,8 @@ def capture_tx(db, pid, mid, *, artifact_ids=None, source_key=None):
     if artifact_ids is None and not analysed and source.get('body_state') in (None, 'full') and source.get('body_text'):
         gaps.append({'message_id': mid, 'content_hash': source['content_hash'], 'revision': revision,
                      'binding': binding, 'source_key': source_key if source_key is not None else mid, 'kind': 'unanalysed', 'artifact_id': None})
-    return {'project_id': pid, 'message_id': mid, 'records': records, 'gaps': gaps, 'observed': observed, 'source_key': source_key, 'audited': audited, 'quality_required': quality_required}
+    return {'project_id': pid, 'message_id': mid, 'records': records, 'gaps': gaps, 'observed': observed, 'source_key': source_key, 'audited': audited, 'quality_required': quality_required,
+            'fence_targets': sorted(set(referenced_targets))}
 
 
 
@@ -513,6 +516,71 @@ def capture_current_karte_tx(db, pid):
         "WHERE a.kind='karte_summary' AND a.project_id=? AND CASE WHEN json_valid(a.meta) "
         "THEN json_extract(a.meta,'$.karte_id')=p.karte_id END ORDER BY a.artifact_id DESC LIMIT 1", (pid,)).fetchone()
     return capture_tx(db, pid, 0, source_key='karte:' + str(row[0])) if row is not None else None
+
+
+def _fence_feed(h, value):
+    """Feed one SQL value as tag+length+bytes: str/bytes/int/float/None never alias."""
+    if value is None:
+        tag, data = 0, b''
+    elif isinstance(value, bytes):
+        tag, data = 1, value
+    elif isinstance(value, str):
+        tag, data = 2, value.encode('utf-8')
+    elif isinstance(value, int):
+        tag, data = 3, str(value).encode()
+    else:
+        tag, data = 4, repr(value).encode()
+    h.update(bytes((tag,)))
+    h.update(len(data).to_bytes(8, 'little'))
+    h.update(data)
+
+
+def _karte_scope_digest(db, pid):
+    """Digest every row the karte capture path can read except correction targets.
+
+    The capture's whole read set is pid-scoped artifacts rows (karte head,
+    context chunks, scans, loss receipts, semantic receipts — NULL-project
+    artifacts are in scope for the shared helpers) plus the patients row that
+    the head query and scope occurrence join on. Reading raw bytes is cheap
+    next to capture's per-row JSON decode and dependency analysis."""
+    h = hashlib.sha256()
+    for row in db.execute('SELECT * FROM artifacts '
+                          'WHERE project_id=? OR project_id IS NULL ORDER BY artifact_id', (pid,)):
+        for value in row:
+            _fence_feed(h, value)
+    for row in db.execute('SELECT * FROM patients WHERE project_id=?', (pid,)):
+        for value in row:
+            _fence_feed(h, value)
+    return h.hexdigest()
+
+
+def karte_capture_fence(db, pid, snapshot):
+    """Fence the read set of a capture just taken inside this same transaction.
+
+    Re-checking it inside a later write transaction proves the read-tx capture
+    still describes committed state, without repeating the expensive analysis.
+    Correction-target messages are bound individually so a digest pass over the
+    messages table is unnecessary."""
+    _active(db)
+    targets = (snapshot or {}).get('fence_targets') or []
+    return {'dv': db.execute('PRAGMA data_version').fetchone()[0],
+            'scope': _karte_scope_digest(db, pid),
+            'targets': {mid: source_binding(db, pid, mid) for mid in targets}}
+
+
+def karte_capture_fresh(db, pid, fence):
+    """True when the fence still matches — the outside-lock capture is reusable."""
+    _active(db)
+    if not isinstance(fence, dict):
+        return False
+    if fence.get('dv') is not None and fence['dv'] == db.execute('PRAGMA data_version').fetchone()[0]:
+        return True    # no commits landed between the read and write transactions
+    if fence.get('scope') != _karte_scope_digest(db, pid):
+        return False
+    targets = fence.get('targets') or {}
+    return all(source_binding(db, pid, mid) == binding
+               for mid, binding in targets.items())
+
 
 def record_tx(db, snapshot, *, replacement_id=None, replacement_ids=(), audited_source=False):
     """Persist lost dependencies atomically; never persist quote, clinical value or support hash."""

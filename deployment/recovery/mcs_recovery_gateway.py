@@ -526,6 +526,9 @@ def request_gateway_restart(data, agents, uid, *, expected_pid=None,
             and re.fullmatch(r"[0-9a-f]{32}", request_id) is not None):
         return False
     request_id = request_id or uuid.uuid4().hex
+    # The detached child runs with cwd="/": relative paths would silently miss.
+    data = os.path.abspath(data)
+    agents = os.path.abspath(agents)
     auto = expected_pid is not None or update_lock_fd is not None
     if auto:
         valid = (type(expected_pid) is int and expected_pid > 0

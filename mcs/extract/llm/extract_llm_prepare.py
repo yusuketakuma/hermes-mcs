@@ -354,8 +354,12 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         if mode in ("on", "shadow", "dry_run"):
             r["_cloud_config"] = copy.deepcopy(cfg)
             r["_cloud_settings"] = cloud_inference.resolve_cloud_settings(cfg)
-            selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog", root=HOME)
-            if errors or selection is None:
+            selection, errors = cloud_policy.resolve_profile(
+                cfg, route="reextract", purpose="backlog", root=HOME, ledger=ledger, ordered=True)
+            if selection is None:
+                selection, errors = cloud_policy.resolve_profile(
+                    cfg, route="reextract", purpose="backlog", root=HOME)
+            if selection is None:
                 block("prepare_profile_unavailable")
                 continue
             r["_cloud_selection"] = selection

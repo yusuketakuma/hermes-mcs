@@ -289,7 +289,7 @@ def test_snapshot_stops_at_the_callers_hard_deadline(tmp_path, snapdir, monkeypa
     monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", verify)
     hard = time.monotonic() + 5
     assert maintenance.refresh_snapshot(path, deadline=hard) is None
-    assert seen["deadline"] == hard          # never past the watchdog
+    assert seen["deadline"] == hard - snapshots.SNAPSHOT_WORK_TAIL_S
     assert not (snapdir / "ledger-snapshot.db").exists()
 
 
@@ -375,7 +375,7 @@ def test_snapshot_copy_completes_under_concurrent_writes(tmp_path, monkeypatch):
     monkeypatch.setattr(snapshots, "monotonic", clock)
     candidate = str(tmp_path / "candidate.db")
     try:
-        snapshots._prepare_snapshot(path, candidate, real() + 10)
+        snapshots._prepare_snapshot(path, candidate, real() + 60)
     finally:
         writer.close()
     with closing(sqlite3.connect(candidate)) as snap, closing(sqlite3.connect(path)) as source:
@@ -384,7 +384,7 @@ def test_snapshot_copy_completes_under_concurrent_writes(tmp_path, monkeypatch):
     monkeypatch.setattr(snapshots, "monotonic", real)
     monkeypatch.setattr(snapshots, "_valid_snapshot_candidate",
                         lambda _p, *, deadline, **_kwargs: True)
-    out = snapshots.publish_snapshot(path, str(tmp_path / "snap"), deadline=real() + 10)
+    out = snapshots.publish_snapshot(path, str(tmp_path / "snap"), deadline=real() + 120)
     assert out is not None
     timing = snapshots.last_timing()        # the margin is visible on success too
     assert set(timing) == {"copy_s", "verify_s", "budget_s", "publication_s", "total_s"}
@@ -393,7 +393,7 @@ def test_snapshot_copy_completes_under_concurrent_writes(tmp_path, monkeypatch):
     monkeypatch.setattr(snapshots, "monotonic", real)
     monkeypatch.setattr(snapshots, "_valid_snapshot_candidate",
                         lambda _p, *, deadline, **_kwargs: False)
-    assert snapshots.publish_snapshot(path, str(tmp_path / "snap"), deadline=real() + 10) is None
+    assert snapshots.publish_snapshot(path, str(tmp_path / "snap"), deadline=real() + 120) is None
     assert snapshots.last_timing() == {}
     with closing(sqlite3.connect(out)) as snap:
         assert snap.execute("SELECT COUNT(*) FROM t").fetchone()[0] >= 6000

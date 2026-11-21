@@ -341,6 +341,12 @@ class DeliveryWorker(worker.DeliveryWorker):
                 return {"result": "not_sent",
                         "error_code": "attachment_unavailable"}
             if part.get("prior_remote_id"):
+                if part.get("prior_kind") == "file":
+                    # the bound prior is an uploaded file — already
+                    # remote, and the unavailable caption has no editable
+                    # message target; never a second caption post
+                    return {"result": "delivered",
+                            "remote_id": str(part["prior_remote_id"])}
                 if post_scoped(spec):
                     return await self._text_part(
                         spec, thread, part, cards.escape_md(part["caption"]), ctx)

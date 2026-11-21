@@ -312,3 +312,52 @@ def test_sqlite_crash_exports_fixed_fields_without_exception_text(
             'sqlite_errorname': 'SQLITE_BUSY', 'transaction_open_before': False,
             'elapsed_s': .01, 'at': 100.,
         }
+
+
+def test_report_open_transaction_recovers_a_leaked_transaction():
+    """A leaked transaction is rolled back so _fail_run/_write_health still record."""
+    class FakeDB:
+        in_transaction = True
+        def __init__(self):
+            self.calls = []
+        def rollback(self):
+            self.calls.append("rollback")
+            self.in_transaction = False
+    db = FakeDB()
+    result = {"errors": [], "ok": True}
+    assert run_check._report_open_transaction(SimpleNamespace(db=db), result) is False
+    assert db.calls == ["rollback"]
+    assert result["errors"] == ["tick: transaction_open_rolled_back"]
+    assert result["ok"] is True
+
+
+def test_report_open_transaction_still_suppresses_when_rollback_fails(capsys):
+    class FakeDB:
+        in_transaction = True
+        def rollback(self):
+            raise RuntimeError("synthetic lock")
+    result = {"errors": [], "ok": True}
+    assert run_check._report_open_transaction(SimpleNamespace(db=FakeDB()), result) is True
+    assert result["errors"] == ["tick: transaction_open"]
+    assert result["ok"] is False
+    assert "transaction_open" in capsys.readouterr().out
+
+
+def test_rotate_logs_surfaces_rotation_refusal(monkeypatch):
+    """A refused rotation (rotation never enabled) reaches run errors instead
+    of staying invisible, so a fresh state cannot silently disable rotation."""
+    monkeypatch.setattr(maintenance, "rotate_log",
+                        lambda: {"rotated": False, "reason": "legacy_writers_unknown"})
+    result = {"errors": []}
+    run_check._rotate_logs(result)
+    assert result["errors"] == ["log_rotate: legacy_writers_unknown"]
+
+
+def test_rotate_logs_quiet_when_under_cap_or_rotated(monkeypatch):
+    monkeypatch.setattr(maintenance, "rotate_log", lambda: {"rotated": False})
+    result = {"errors": []}
+    run_check._rotate_logs(result)
+    assert result["errors"] == []
+    monkeypatch.setattr(maintenance, "rotate_log", lambda: None)
+    run_check._rotate_logs(result)
+    assert result["errors"] == []
