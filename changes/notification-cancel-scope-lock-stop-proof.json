@@ -6,7 +6,7 @@
   "details": [
     "Hermes から独立実行へ切り替えた導入では、古い起動記録のせいで、動いている独立実行のワーカーを停止済みと誤認することもあった。",
     "送信scope lockは apply が終わるまで保持する。",
-    "_workers_stopped は通知先ごとに data/（通知先）_state/send-*.lock をすべて取得し、apply が終わるまで保持します。どれか1つでも取得できなければ worker_not_stopped、lockのファイルが1つも無ければ worker_stop_unverified で停止します。LINE WORKS の従来の判定と同じ処理です。",
+    "_workers_stopped は通知先ごとに data/通知先名_state/send-*.lock をすべて取得し、apply が終わるまで保持します。どれか1つでも取得できなければ worker_not_stopped、lockのファイルが1つも無ければ worker_stop_unverified で停止します。LINE WORKS の従来の判定と同じ処理です。",
     "data/worker_status/（slackまたはdiscord）-*.json の起動記録は、ファイルが無いことだけでは拒否しなくなりました。記録がある場合は、version・reason の検証とプロセス停止の確認を従来どおり行い、トランザクション内でも再確認します。"
   ],
   "refs": [

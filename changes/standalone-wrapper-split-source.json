@@ -8,10 +8,10 @@
     "標準の配置では導入先とチェックアウトが同じ ~/.mcs のため、独立実行の導入先ではほぼ必ず起きていた。",
     "同じファイルのため、release_ref で指定した版を適用する経路（release-owner）もソース照合と post-merge 前の確認で保留になり、SDC への状態報告では MCS の版が「不明」になっていた。",
     "release-owner の経路と SDC の状態報告では、同じ8つのファイル名を .gitignore に名前ごとに載せて対象外にする。そのほかの追跡外ファイルは従来どおり不合格。",
-    "update_repository._split_source_extras が、現在のチェックアウトに追跡されている deployment/scripts/ の .sh（照合時は現在の版と対象の版の両方）と同名の scripts/（ファイル名）.sh を追跡外の検出から外す。ソース照合（_split_target_source_matches）、merge 前の検出（update_apply）、事前確認（update_preflight）が同じ判定を使う。",
+    "update_repository._split_source_extras が、現在のチェックアウトに追跡されている deployment/scripts/ の .sh（照合時は現在の版と対象の版の両方）と同名の scripts/ファイル名.sh を追跡外の検出から外す。ソース照合（_split_target_source_matches）、merge 前の検出（update_apply）、事前確認（update_preflight）が同じ判定を使う。",
     "mcs_recover._split_checkout_hold も、現在の HEAD の deployment/scripts/ に同名の .sh がある場合だけ同じ扱いにする。",
     "scripts/ の下の階層にあるファイル、.sh 以外のファイル、テンプレートの無い名前は従来どおり保留・不合格にする。",
-    ".gitignore に /scripts/（ファイル名）.sh を deployment/scripts/ の8ファイル分だけ追加する。release_owner_source.verify_checkout（--exclude-standard）、release_apply_owner の post-merge 前の確認（git status --untracked-files=all）、sdc_cli.facts（git status）は無視規則に従うため、これらのファイルを追跡外のソースや未コミットの変更として扱わなくなる。",
+    ".gitignore に /scripts/ファイル名.sh を deployment/scripts/ の8ファイル分だけ追加する。release_owner_source.verify_checkout（--exclude-standard）、release_apply_owner の post-merge 前の確認（git status --untracked-files=all）、sdc_cli.facts（git status）は無視規則に従うため、これらのファイルを追跡外のソースや未コミットの変更として扱わなくなる。",
     "照合の処理自体は変えていない。.gitignore 自体の書換えは、追跡済みファイルの変更として従来どおり保留になる。"
   ],
   "refs": [

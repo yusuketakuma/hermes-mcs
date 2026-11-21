@@ -7,7 +7,7 @@
     "新しい人承認操作 ops.slack_setup_discard を operation_contract・mcs_requests・mcs_operations の共通経路に追加。承認記録の確定前に失敗した場合は、退避した記録を元に戻す。",
     "cloud-llm stop/resume と同じロック・更新中・復元中の確認を mcs_requests.apply_local_operation にまとめ、両方の CLI から使う。",
     "停止時の案内（slack_channel_setup.report_problem）と INSTALLATION.md・UPGRADE_AGENT.md に退避の手順を追記。",
-    "対象の記録は data/slack-channel-setup.json。実行時は --request-id に記録の request_id を指定する。退避先は data/slack-channel-setup.discarded-（request_id）.json。操作は承認記録（command_receipts）に残る。",
+    "対象の記録は data/slack-channel-setup.json。実行時は --request-id に記録の request_id を指定する。退避先は data/slack-channel-setup.discarded-request_id.json。操作は承認記録（command_receipts）に残る。",
     "保留でない記録や、指定した request_id と違う記録は退避しない。退避後の準備は新しく計画し直す。",
     "Slack のチャンネル名は重複できないため、同名のチャンネルがすでにあれば作成は拒否され、二重には作られない。作られていたチャンネルを使う場合は、その ID を通知先に設定してから準備を再開する。"
   ],
