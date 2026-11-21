@@ -12,9 +12,9 @@
 
 ## 検証済み（この作業の範囲・ローカル実測）
 
-対象は `release/prep-20261121` 先端（440件で再生成した時点の候補）。実行日は 2026-11-21（JST）。
+対象は `release/prep-20261121` の `eaaff91bf`（440件での再生成・AUTOMATION.md の同期を含む候補）と、その後のレビュー対応で加えた修正を含む作業ツリー。各項目は測定した時点の候補で実行した。実行日は 2026-11-21（JST）。
 
-- `release_notes.py check`: 合格（archive 440件・CHANGELOG構造・詳細ファイル 823,229B・本文 91,911字）。
+- `release_notes.py check`: 合格（archive 440件・CHANGELOG構造・詳細ファイル 823,436B・本文 91,911字）。
 - `scripts/run_tests.sh tests/release/`: 59 passed + 128 subtests。
 - `scripts/run_tests.sh tests/ingest/test_derive_transaction_ownership.py`: 15 passed。main では `fetch_error` が失敗していた（`_fail_run` の `alert` kwarg にテストスタブが未対応）。スタブ修正と fetch_error の期待値（finish・health の記録）を合わせて再検証し合格。失敗修正＋影響範囲の再検証として記録する。
 - `update_readme.py --check`: drift なし。

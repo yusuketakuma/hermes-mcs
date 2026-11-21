@@ -3038,7 +3038,7 @@
    "category": "fixed",
    "id": "vital-date-only-note-20261121",
    "path": "changes/archive/1.2.0/vital-date-only-note-20261121.json",
-   "sha256": "4f48f278f6c6d42241651613899cf15b8339d8efb101c83e84fddbdbf9bf0f36",
+   "sha256": "7e027735013f1437d42791f9efeea5267d342d6253bf2965b7da6e0afb143141",
    "title": "日付だけの記載がバイタル測定値として扱われる問題を修正"
   },
   {

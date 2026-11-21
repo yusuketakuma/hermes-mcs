@@ -59,7 +59,8 @@ push・ブランチ・PR・ラベルの変更はしません。使うトーク�
 - `gate`: `merge-gate` の判定と公開、自動マージ予約の引き継ぎ整理、古くなったブランチ起動 CI の取り消しを行います。`issues`・`schedule` では動きません。`workflow_dispatch` は既定ブランチの定義からの起動だけを受け付けます。
 - `full-ci`: 開いた PR に `full-ci` ラベルが付いたとき、そのブランチで full mode の CI を `workflow_dispatch` で起動します（`ci.yml` はラベルのイベントでは起動しないため）。fork のブランチは起動できないので、ラベルを付けてから PR を開き直すか push し直します。
 - `lock`: `担当:` ラベルが付いたとき、担当が1件だけであることと、付けたのが所有者か Dots（`DOTS_ACTOR`）であることを確かめ、条件を外れたラベルを外して理由をコメントします。
-- `ready`: `gate` のあとに、開いた PR の現在の head へ `merge-ready` を出します。定期実行（15分おき）では開いた PR をすべて調べます（下記「`merge-ready`」）。レビューにはイベントが起きないため、この定期実行が拾います。
+- `ready`: `gate` のあとに、開いた PR の現在の head へ `merge-ready` を出します。定期実行（15分おき）では開いた PR をすべて調べます（下記「`merge-ready`」）。
+  レビューの投稿・編集・取り下げは `pr-review-signal.yml`（`PR review signal`）が拾い、その完了が `ready` を起動するため、レビュー直後は定期実行を待たずに判定されます。
 
 ## マージ判定ゲート（`merge-gate`）
 
