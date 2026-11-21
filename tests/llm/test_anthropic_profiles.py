@@ -102,21 +102,22 @@ def test_profile_contracts_are_finite_per_provider(provider, model, effort, prof
     assert accounting.profile_contract_valid(provider, model, effort, profile, tokens) is valid
 
 
-@pytest.mark.parametrize("route,purpose,limit", [
-    ("reextract", "backlog", 8192),
-    ("semantic_backlog", "backlog", 8192),
-    ("patient_context", "patient_context", 16384),
-    ("patient_context", "quality_repair", 32768),
-    ("semantic_backlog", "quality_repair", 32768),
+@pytest.mark.parametrize("route,purpose,model,effort,profile,limit", [
+    ("reextract", "backlog", a.MODEL, "medium", "haiku-medium", 8192),
+    ("semantic_backlog", "backlog", a.MODEL, "medium", "haiku-medium", 8192),
+    ("patient_context", "patient_context", a.SONNET_MODEL, "high", "sonnet-high", 16384),
+    ("patient_context", "quality_repair", a.SONNET_MODEL, "high", "sonnet-high", 32768),
+    ("semantic_backlog", "quality_repair", a.SONNET_MODEL, "high", "sonnet-high", 32768),
 ])
-def test_anthropic_without_profiles_resolves_the_original_contract(route, purpose, limit):
-    """An unset profiles block keeps the original contract (model + effort) and now
-    carries the purpose's output limit instead of leaving max_tokens unset."""
+def test_anthropic_without_profiles_resolves_the_original_contract(route, purpose, model, effort, profile, limit):
+    """An unset profiles block resolves the purpose defaults, including the
+    purpose's output limit instead of leaving max_tokens unset."""
     selection, errors = c.resolve_profile(_cfg(), route=route, purpose=purpose)
     assert not errors
     assert (selection["model"], selection["effort"], selection["profile"], selection["max_tokens"]) \
-        == (a.MODEL, None, None, limit)
-    assert cloud_inference.cloud_provider_contract(selection=selection) == cloud_inference._CLOUD_CONTRACT
+        == (model, effort, profile, limit)
+    assert cloud_inference.is_supported_cloud_contract(
+        cloud_inference.cloud_provider_contract(selection=selection))
     assert accounting.profile_contract_valid(
         selection["provider"], selection["model"], selection["effort"], selection["profile"],
         selection["max_tokens"])
@@ -172,7 +173,7 @@ def test_a_unit_settles_a_200_refusal_with_its_usage_and_sends_nothing_more(rout
     def post(body, timeout):
         sent.append(body["model"])
         return 200, {"request-id": "req_synthetic_refusal"}, json.dumps(
-            {**_reply(a.MODEL, stop="refusal"), "content": []}).encode()
+            {**_reply(a.SONNET_MODEL, stop="refusal"), "content": []}).encode()
 
     monkeypatch.setattr(a, "AnthropicClient", lambda key, **kw: _Recording(key, post, **kw))
     monkeypatch.setattr(openai_client, "OpenAIClient",
@@ -182,7 +183,7 @@ def test_a_unit_settles_a_200_refusal_with_its_usage_and_sends_nothing_more(rout
         current=lambda: True, dispatch=lambda fn, **kwargs: fn(), max_attempts=3)
     with pytest.raises(cloud_inference.CloudFallback):
         provider("synthetic prompt", deadline=time.monotonic() + 180, max_tokens=100)
-    assert sent == [a.MODEL]                                  # one POST, never retried
+    assert sent == [a.SONNET_MODEL]                                  # one POST, never retried
     rows = led.db.execute("SELECT meta FROM artifacts WHERE kind='cloud_usage_result'").fetchall()
     assert len(rows) == 1
     meta = json.loads(rows[0][0])

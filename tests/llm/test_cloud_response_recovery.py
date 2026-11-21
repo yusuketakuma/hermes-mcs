@@ -316,11 +316,16 @@ def test_invalid_or_different_paid_evidence_never_replays_or_resends(paid, damag
                 ledger.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.input_binding'),content='{}' "
                                   "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')")
     with closing(Ledger(path)) as ledger:
-        with pytest.raises(cloud_client.CloudNotSent):
-            _ask(unit(ledger, binding='changed' if damage == 'input' else 'original-input',
-                      route='patient_context', purpose='patient_context') if damage == 'tokens'
-                 else unit(ledger, binding='changed' if damage == 'input' else 'original-input'),
-                 tokens=101 if damage == 'tokens' else 100)
+        if damage == 'tokens':
+            # An output-bound change rewrites the envelope fingerprint, but a settled
+            # answer for the same prompt/model/effort is reused: no resend is needed.
+            answer = _ask(unit(ledger, route='patient_context', purpose='patient_context'),
+                          tokens=101)
+            assert isinstance(answer, dict)
+        else:
+            with pytest.raises(cloud_client.CloudNotSent):
+                _ask(unit(ledger, binding='changed' if damage == 'input' else 'original-input'),
+                     tokens=101 if damage == 'tokens' else 100)
         assert len(calls) == 1
         assert len(ledger.artifacts('cloud_usage_reserve')) == (0 if damage == 'missing_reservation' else 1)
 

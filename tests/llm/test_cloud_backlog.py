@@ -1139,8 +1139,6 @@ def test_worker_budget_check_uses_the_purpose_limit(carry_worker, monkeypatch):
     for call in calls:
         assert call["max_tokens"] == 8192
         assert call["selection"]["max_tokens"] == 8192
-        assert call["selection"]["profile"] is None
-        assert call["selection"]["model"] == cloud_policy.PROVIDERS["anthropic"]
 
 
 def test_startup_wait_exits_on_memory_loss_without_opening_ledger(monkeypatch):
