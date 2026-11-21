@@ -145,14 +145,17 @@ def _has_condition(body, start, end, span=None):
 
 # A period ends a clause only when it closes a value, so 120/80. ends its
 # sentence while 80.5, a.m. and ... stay inside the clause they belong to.
-# 「昨日、1. 体温38.5℃」's 1. is a list number, not a value end: the digit run
-# before the period must not open right after a hard separator or the text
-# start (「血圧 80.」's space is ordinary spacing, not a list marker).
-# The run-length cases are enumerated because look-behind must be fixed width.
+# 「昨日、1. 体温38.5℃」's 1. is a list number, not a value end: a period does
+# not break when its 1-2 digit run opens right after a hard separator (with
+# optional spacing) — but 「血圧 80.」's space before a value is ordinary
+# spacing. Widths are enumerated because look-behind must be fixed width.
 _PERIOD_BREAK = (
-    r"(?<=[^、,。:：;；！？!?\n\d]\d)[.．](?!\d)"
-    r"|(?<=[^、,。:：;；！？!?\n\d]\d\d)[.．](?!\d)"
-    r"|(?<=\d\d\d)[.．](?!\d)"
+    r"(?<=\d)"
+    r"(?<![、,。:：;；！？!?\n]\d)(?<![、,。:：;；！？!?\n][\s　]\d)"
+    r"(?<![、,。:：;；！？!?\n][\s　][\s　]\d)"
+    r"(?<![、,。:：;；！？!?\n]\d\d)(?<![、,。:：;；！？!?\n][\s　]\d\d)"
+    r"(?<![、,。:：;；！？!?\n][\s　][\s　]\d\d)"
+    r"[.．](?!\d)"
 )
 _SCOPE_BREAK = re.compile(rf"[。！？!?;；\n、,]|{_PERIOD_BREAK}|しかし|ただし|だが|けれど(?:も)?|(?<![一-龥ぁ-んァ-ヶ])一方(?:で)?(?=$|[、, \t　])")
 
