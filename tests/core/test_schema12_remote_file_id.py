@@ -51,7 +51,7 @@ def test_upgrade_preserves_all_thirteen_columns_and_remote_id(tmp_path, version)
         assert store.db.execute("PRAGMA user_version").fetchone()[0] == 12
         after = [tuple(row) for row in store.db.execute(
             "SELECT * FROM notification_render_parts ORDER BY delivery_id,part_id")]
-        assert after == [(*row, None) for row in before]
+        assert after == [(*row, None, None) for row in before]
         store.db.execute("UPDATE notification_render_parts SET remote_file_id='993' "
                          "WHERE delivery_id='synthetic-identity' AND part_id='attach:0002'")
         store.db.commit()

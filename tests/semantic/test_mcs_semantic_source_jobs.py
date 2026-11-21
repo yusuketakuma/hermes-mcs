@@ -619,7 +619,11 @@ def test_identical_resave_does_not_reseed(tmp_path):
                      time.monotonic() + 300,
                      jev_client=_FakeJev(), llm_fn=_llm)
     assert db.job_state("semantic", 1, 1) == "done"
-    db.save_messages([_message(1, unread=False)], project_id=1,
+    # posted_at defaults to "now" at second precision: a boundary crossing
+    # between seed and re-save made the message look revised and re-seeded.
+    posted_at = db.db.execute(
+        "SELECT posted_at FROM messages WHERE message_id=1").fetchone()["posted_at"]
+    db.save_messages([_message(1, unread=False, posted_at=posted_at)], project_id=1,
                      notify={"source": "history"}, semantic=True)
     assert db.job_state("semantic", 1, 1) == "done"
     db.close()

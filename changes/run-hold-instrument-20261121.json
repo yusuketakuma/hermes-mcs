@@ -1,0 +1,18 @@
+{
+  "category": "added",
+  "title": "semantic drain の run.lock 保持区間を計測するログ項目を追加",
+  "summary": "バックログ semantic drain が run.lock を保持したままモデル通信の合間に費やした時間を、cloud_backlog_pass イベントの lock_hold 項目（hold_max_s・hold_sum_s・hold_count）で記録するようになりました。処理結果や通知内容に変更はありません。",
+  "upgrade": "追加操作は不要です。lock_hold はログ出力のみで、保存済みの semantic_drain_run 記録や抽出側の計測レコードには含まれません。",
+  "details": [
+    "run.lock を借用した semantic drain パスで、unlocked_transport による解放〜再取得の合間にロックを保持していた区間を計測します。run_due 開始から最初の解放まで・各再取得から次の解放まで・復帰までの末尾区間を合算し、区間数を hold_count に記録します。",
+    "preamble（投影無効化・再処理・再投影）や選択失敗・スケジューラ不可・run_lock 喪失・通常復帰のいずれの終了経路でも計測を閉じます。",
+    "run.lock を持たないパス（standalone 実行・書込みごとの抽出パス）では lock_hold 項目自体を出力しません。",
+    "cloud_backlog は固定3キーのみを有限の非負数として検査して転送し、ジョブ識別子や任意の診断キーは転送しません。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_drain.py",
+    "mcs/llm/cloud_backlog.py",
+    "tests/semantic/test_run_lock_diag.py",
+    "tests/llm/test_cloud_backlog.py"
+  ]
+}

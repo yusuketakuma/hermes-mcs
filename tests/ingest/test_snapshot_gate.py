@@ -431,7 +431,7 @@ def test_gate_verify_in_budget_but_publish_after_deadline_stays_unpublished(
     state = {"allowed": False, "attempted": False}
     clock = [time.monotonic()]
     monkeypatch.setattr(snapshots, "monotonic", lambda: clock[0])
-    outer_deadline = clock[0] + 90        # leaves the verify window its budget
+    outer_deadline = clock[0] + 240       # leaves the verify window its budget
 
     def context_factory(*, deadline):
         gate = run_check._verification_context_factory(
@@ -503,11 +503,11 @@ def test_publish_without_verification_context_keeps_legacy_behaviour(
 
 def test_verify_window_reserves_the_reacquire_tail(tmp_path, monkeypatch):
     """The publish deadline no longer lets validation consume the whole
-    window: verify is capped at deadline - SNAPSHOT_WORK_TAIL_S and the
-    gate's reacquire bound is the publish deadline itself, so the fixed
-    tail always remains for reacquire + publication. A verify window
-    bound to the deadline ended runs as run_lock_timeout — which forbids
-    the terminal health write every tick."""
+    window: verify is capped at deadline - SNAPSHOT_GATE_RESERVE_S and the
+    gate's reacquire bound is the publish deadline itself, so the
+    reacquire wait and publication always fit. A verify window bound to
+    the deadline ended runs as run_lock_timeout — which forbids the
+    terminal health write every tick."""
     db, updater, lock_fd, baseline = _env(tmp_path, monkeypatch)
     seen = {}
 
@@ -526,15 +526,16 @@ def test_verify_window_reserves_the_reacquire_tail(tmp_path, monkeypatch):
     monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", validating)
     snapshots._reset_status()
     # Tight enough that the uncapped size budget would reach the deadline;
-    # the tail reservation must bind instead.
-    outer = time.monotonic() + snapshots.SNAPSHOT_VERIFY_TIMEOUT_S + 10
+    # the gate reservation must bind instead — yet still positive so the
+    # fast-fail before unlock does not skip the window entirely.
+    outer = time.monotonic() + snapshots.SNAPSHOT_GATE_RESERVE_S + 20
     with snapshots._publication_lock(maintenance.SNAPSHOT_DIR) as fence:
         dest = snapshots._publish_snapshot_locked(
             str(tmp_path / "ledger.db"), maintenance.SNAPSHOT_DIR, fence,
             deadline=outer, verification_context=context_factory)
     assert dest is not None
     assert seen["gate_deadline"] == outer
-    assert seen["verify_deadline"] == outer - snapshots.SNAPSHOT_WORK_TAIL_S
+    assert seen["verify_deadline"] == outer - snapshots.SNAPSHOT_GATE_RESERVE_S
     os.close(lock_fd)
     db.close()
 
@@ -542,7 +543,7 @@ def test_verify_window_reserves_the_reacquire_tail(tmp_path, monkeypatch):
 def _finish_env(tmp_path, monkeypatch):
     db, updater, lock_fd, baseline = _env(tmp_path, monkeypatch)
     monkeypatch.setattr(run_check, "DB", str(tmp_path / "ledger.db"))
-    monkeypatch.setattr(run_check, "_WATCHDOG_EXIT_AT", time.monotonic() + 150)
+    monkeypatch.setattr(run_check, "_WATCHDOG_EXIT_AT", time.monotonic() + 400)
     monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **kw: 0)
     monkeypatch.setattr(notify_spool, "publish_flags", lambda *a, **kw: None)
     monkeypatch.setattr(notify_spool, "publish_restore_holds", lambda *a, **kw: None)

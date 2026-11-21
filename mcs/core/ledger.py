@@ -22,6 +22,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import time
 from time import monotonic
 import uuid
@@ -106,11 +107,17 @@ KARTE_SUMMARY_REFRESH_S = 24 * 3600  # deep runs refresh source summaries daily
 # WAL size a checkpoint truncates back to (bytes)
 JOURNAL_SIZE_LIMIT = 64 * 1024 * 1024
 
+# Intake transactions holding a write lock past this are reported as
+# intake_tx_hold events — instrumentation for the writer-lock contention
+# survey; read/write behavior is unchanged.
+TX_HOLD_REPORT_S = 5.0
+
 
 class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
-    def __init__(self, path: str, *, notify_all_replies: bool = False):
+    def __init__(self, path: str, *, notify_all_replies: bool = False,
+                 busy_timeout_ms: int = 30000):
         self.notify_all_replies = notify_all_replies is True
-        self.db = sqlite3.connect(path, timeout=30)
+        self.db = sqlite3.connect(path, timeout=busy_timeout_ms / 1000)
         try:
             os.chmod(path, 0o600)   # PHI store: never umask-loose
             self.db.row_factory = sqlite3.Row
@@ -120,7 +127,7 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
             ledger_schema.preflight(self.db, tables, version=version,
                                     schema_version=SCHEMA_VERSION)
             self.db.execute("PRAGMA foreign_keys=ON")
-            self.db.execute("PRAGMA busy_timeout=30000")
+            self.db.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
             # macOS fsync() leaves data in the drive cache; no-ops elsewhere.
             # Set before _init so the first schema writes/migration are covered.
             self.db.execute("PRAGMA fullfsync=ON")
@@ -184,10 +191,13 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
     # ---------- patients + messages ----------
 
     @contextmanager
-    def _intake_transaction(self):
+    def _intake_transaction(self, *, stage=None):
         """Identify failures after a held intent was attempted, including commit errors."""
         previous = getattr(self, '_intake_hold_touched', False)
         self._intake_hold_touched = False
+        prev_stage_times = getattr(self, '_tx_stage_times', None)
+        self._tx_stage_times = {}
+        started = monotonic()
         try:
             with self.db:
                 yield
@@ -197,6 +207,27 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
             raise
         finally:
             self._intake_hold_touched = previous
+            stage_times, self._tx_stage_times = self._tx_stage_times, prev_stage_times
+            held = monotonic() - started
+            if held >= TX_HOLD_REPORT_S:
+                # stderr: stdout stays clean for --json consumers; the drainer
+                # captures both streams into mcs.log for the tx-hold survey.
+                event = {"event": "intake_tx_hold", "pid": os.getpid(),
+                         "ts": time.time(), "stage": stage,
+                         "hold_s": round(held, 2)}
+                if stage_times:
+                    event["stages"] = {k: round(v, 2)
+                                       for k, v in stage_times.items()}
+                print(json.dumps(event), file=sys.stderr, flush=True)
+
+    def _tx_stage_mark(self, name: str, started: float) -> float:
+        """Accumulate time since ``started`` under a sub-stage label and
+        return the new mark — attribution for the tx-hold survey."""
+        now = monotonic()
+        marks = getattr(self, '_tx_stage_times', None)
+        if marks is not None:
+            marks[name] = marks.get(name, 0.0) + (now - started)
+        return now
 
 
     def _reply_job_unread(self, m) -> bool:
@@ -634,15 +665,46 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
 
         A caller's already-open transaction is committed with it on success
         (the method has always owned that commit); on failure only this unit
-        is undone through a savepoint, so the caller's earlier writes stay."""
-        savepoint = f"karte_summary_{uuid.uuid4().hex}" if self.db.in_transaction else None
+        is undone through a savepoint, so the caller's earlier writes stay.
+
+        When this method owns the transaction it first captures the
+        dependency-loss footprint on a deferred read transaction — the
+        patient-wide context parse runs off the writer lock. The write
+        transaction then re-proves the captured read set through a fence
+        digest; only a real mid-flight change falls back to capturing inside
+        the write transaction as before."""
+        own_tx = not self.db.in_transaction
+        savepoint = f"karte_summary_{uuid.uuid4().hex}" if not own_tx else None
         if savepoint:
             self.db.execute(f"SAVEPOINT {savepoint}")    # fails before anything is written
+        hold_started = capture_s = fence_fresh = None
         try:
+            import inference_dependency_loss as dependency_loss
+            footprint = fence = None
+            if source_changed and own_tx:
+                self.db.execute('BEGIN')
+                try:
+                    capture_started = monotonic()
+                    footprint = dependency_loss.capture_current_karte_tx(self.db, project_id)
+                    fence = dependency_loss.karte_capture_fence(self.db, project_id, footprint)
+                    capture_s = monotonic() - capture_started
+                finally:
+                    if self.db.in_transaction:
+                        self.db.rollback()
             if not self.db.in_transaction:
                 self.db.execute('BEGIN IMMEDIATE')
-            import inference_dependency_loss as dependency_loss
-            footprint = dependency_loss.capture_current_karte_tx(self.db, project_id) if source_changed else None
+                hold_started = monotonic()
+            if source_changed:
+                if fence is not None:
+                    fence_fresh = dependency_loss.karte_capture_fresh(self.db, project_id, fence)
+                    if not fence_fresh:
+                        capture_started = monotonic()
+                        footprint = dependency_loss.capture_current_karte_tx(self.db, project_id)
+                        capture_s = monotonic() - capture_started
+                elif not own_tx:
+                    capture_started = monotonic()
+                    footprint = dependency_loss.capture_current_karte_tx(self.db, project_id)
+                    capture_s = monotonic() - capture_started
             write()
             if footprint is not None:
                 dependency_loss.record_tx(self.db, footprint)
@@ -654,6 +716,17 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
             if self.db.in_transaction:                    # SQLite may already have rolled back
                 self._undo_karte_summary_write(savepoint)
             raise
+        finally:
+            if hold_started is not None:
+                held = monotonic() - hold_started
+                if held >= TX_HOLD_REPORT_S:
+                    # stderr: same drain path as intake_tx_hold (survey only).
+                    print(json.dumps({"event": "karte_tx_hold", "pid": os.getpid(),
+                                      "ts": time.time(), "project_id": project_id,
+                                      "capture_s": round(capture_s, 2) if capture_s is not None else None,
+                                      "fence_fresh": fence_fresh,
+                                      "hold_s": round(held, 2)}),
+                          file=sys.stderr, flush=True)
 
     def _undo_karte_summary_write(self, savepoint) -> None:
         """Undo the unit; if that fails, drop the whole uncommitted transaction,
@@ -692,10 +765,16 @@ class Ledger(LedgerCaptureMixin, LedgerSemanticSourcesMixin):
         stage on a non-retryable failure (the next new message re-arms
         it). The flag persists for a project whose karte_id is still
         unknown and fires once it is."""
-        self.db.execute(
-            "UPDATE patients SET karte_summary_due=? WHERE project_id=?",
-            (1 if due else 0, project_id))
-        self.db.commit()
+        try:
+            self.db.execute(
+                "UPDATE patients SET karte_summary_due=? WHERE project_id=?",
+                (1 if due else 0, project_id))
+            self.db.commit()
+        except Exception:
+            # A failed commit leaves the implicit transaction open; the next
+            # writer probe then trips transaction_open. Close it before raising.
+            self.db.rollback()
+            raise
 
     def karte_summary_due(self) -> list:
         """Projects flagged for a summary GET that have a karte_id, newest last_seen first.
