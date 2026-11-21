@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "添付OCR実行でsnapshot公開ロック競合時に延期理由が消える問題を修正",
+  "summary": "添付OCRの定期実行がsnapshot公開のロック競合で延期されたとき、実行結果に延期理由（snapshot_deferred・snapshot_lock_busy）が記録されず空の結果になる不具合を修正しました。公開窓不足や公開失敗での延期と同じ記録になります。",
+  "details": [
+    "maintenance.refresh_snapshot は公開ロック競合時に \"deferred\" を返すが（5c465f773）、mcs/ops/mcs_ocr.py の run() は None のみを延期として扱っていたため reason が未設定のまま返っていた",
+    "\"deferred\" も reason='snapshot_deferred' として扱い、公開ロック競合時は last_failure() が空のため timing.defer_reason=='publication_lock_busy' から snapshot_failure={'reason':'snapshot_lock_busy'} を補完する",
+    "検証: tests/ops/test_ocr_independent_drain.py::test_real_publisher_defers_on_busy_publication_lock"
+  ],
+  "upgrade": "追加操作は不要です。",
+  "refs": [
+    "mcs/ops/mcs_ocr.py",
+    "tests/ops/test_ocr_independent_drain.py"
+  ]
+}
