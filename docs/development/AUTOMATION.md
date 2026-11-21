@@ -50,9 +50,20 @@ push・ブランチ・PR・ラベルの変更はしません。使うトーク�
   （実在するファイルを指す、長さの上限内、既存と重複しない、トークンに見える長い文字列を含まない）だけを受け取ります。
 - 指摘は AI がコードを読んだ推定です。確かめる前に事実として扱いません。
 
+## `agent-control.yml` の構成
+
+`agent-control.yml` は4つの job（`gate`・`full-ci`・`lock`・`ready`）で動き、実行名に対象の head SHA を入れます（`issue-status.yml` が、その実行に関わる Issue だけを作り直せるようにするため）。
+起動のきっかけは、CI（`ci`）と `PR review signal` の完了（`workflow_run`）、`ci.yml` からの `workflow_dispatch`、PR の作成・更新・ラベル・下書き解除（`pull_request_target`）、Issue への `担当:` ラベル付与（`issues`）、15分おきの定期実行（`schedule`）です。
+どの job も main 側の定義と `ci/` だけを使い、PR のコードは checkout も実行もしません。
+
+- `gate`: `merge-gate` の判定と公開、自動マージ予約の引き継ぎ整理、古くなったブランチ起動 CI の取り消しを行います。`issues`・`schedule` では動きません。`workflow_dispatch` は既定ブランチの定義からの起動だけを受け付けます。
+- `full-ci`: 開いた PR に `full-ci` ラベルが付いたとき、そのブランチで full mode の CI を `workflow_dispatch` で起動します（`ci.yml` はラベルのイベントでは起動しないため）。fork のブランチは起動できないので、ラベルを付けてから PR を開き直すか push し直します。
+- `lock`: `担当:` ラベルが付いたとき、担当が1件だけであることと、付けたのが所有者か Dots（`DOTS_ACTOR`）であることを確かめ、条件を外れたラベルを外して理由をコメントします。
+- `ready`: `gate` のあとに、開いた PR の現在の head へ `merge-ready` を出します。定期実行（15分おき）では開いた PR をすべて調べます（下記「`merge-ready`」）。レビューにはイベントが起きないため、この定期実行が拾います。
+
 ## マージ判定ゲート（`merge-gate`）
 
-`agent-control.yml` が CI 完了のたびに、PR の現在の head に `merge-gate` の commit status を出します。
+`agent-control.yml` の `gate` job が CI 完了のたびに、PR の現在の head に `merge-gate` の commit status を出します。
 判定は `ci/agent_control.py` が行い、main 側の定義だけを使います。
 
 - `lint-test`・`hygiene`・`standalone-sdk`・`incident-gates`・`macos`・`hermes-integration` が、現在の head で、GitHub Actions によって実行され `success` であること。
@@ -108,7 +119,7 @@ PR に足されたワークフローは、GitHub Actions 名義で `merge-gate` 
 - 要人間承認の理由がない（保護対象の変更は、これまでどおり所有者がマージします）
 - このリポジトリのブランチの PR で、レビューの判定が合格
 
-ci の完了（`workflow_run`）と手動実行では、その head の PR だけを判定します。15分おきの定期実行では開いた PR をすべて調べます。
+CI（`ci`）と `PR review signal` の完了（`workflow_run`）、および手動実行では、その head の PR だけを判定します。15分おきの定期実行では開いた PR をすべて調べます。
 状態か説明が変わったときだけ書きます。
 
 - API の呼出しは、1回の実行で「PR の一覧（100件ごとに1回。head を指定したときは1回）＋PR ごとに status 1回」です。`merge-gate` が `success` の PR だけ、さらに5回（とページ送り）を使います。

@@ -4,17 +4,17 @@
 
 ## 今回の対象
 
-- v1.1.2（タグ 2026-11-08）以降の変更記録438件を `changes/archive/1.2.0/` へ全件収録。形式は `release_notes.py` の検証を通過する厳格スキーマへ統一し、category の規定外値（improved 等）・独自スキーマ・summary 280字超過・detail/ref 中の記号を全件修正した（`cfff1edb7`・`b11ddfa14`・`e9cdf7751`・`a45f75f9d` と本票作成時の54件の追補修正）。
+- v1.1.2（タグ 2026-11-08）以降の変更記録440件を `changes/archive/1.2.0/` へ全件収録。形式は `release_notes.py` の検証を通過する厳格スキーマへ統一し、category の規定外値（improved 等）・独自スキーマ・summary 280字超過・detail/ref 中の記号を全件修正した（`cfff1edb7`・`b11ddfa14`・`e9cdf7751`・`a45f75f9d` と本票作成時の54件の追補修正）。収録後に出た修正の記録3件を追加し、同一修正の重複記録 `bp-pair-space-side`（未採用の実装を記した版）を外して再生成した。
 - 収録からの除外は2件: `reseed-flake-fix-20261120`（テストのみの修正で本番動作に変更なし）と `cloud-backlog-drain-window-20261120`（本番設定のみの記録でコード変更を伴わない）（`a45f75f9d`・`84e1fab4a`）。いずれも変更記録を要しない区分として意図的に外した。
-- CHANGELOG の v1.2.0 節・README のリリース案内を生成し、`--summary-file` による比較表と説明図2点を導入部へ掲載（`572c30a2e`）。公開本文は上限内の91,845字。
-- 説明図は通知カード・クラウドAIの2点（SVG正本・PNG描画）。来歴とhashは `visual-source.json`、438件の対応表は `change-map.json`。
+- CHANGELOG の v1.2.0 節・README のリリース案内を生成し、`--summary-file` による比較表と説明図2点を導入部へ掲載（`572c30a2e`、440件で再生成）。公開本文は上限内の91,911字。
+- 説明図は通知カード・クラウドAIの2点（SVG正本・PNG描画）。来歴とhashは `visual-source.json`、440件の対応表は `change-map.json`。
 - `docs/development/readme-review.json` を 1.2.0 へ更新し、README本文の見直し結果を記録済み。
 
 ## 検証済み（この作業の範囲・ローカル実測）
 
-対象は `release/prep-20261121` 先端 `572c30a2e` と、本票と同じ変更で加えたテストスタブ修正。実行日は 2026-11-21（JST）。
+対象は `release/prep-20261121` 先端（440件で再生成した時点の候補）。実行日は 2026-11-21（JST）。
 
-- `release_notes.py check`: 合格（archive 438件・CHANGELOG構造・詳細ファイル 821,160B・本文 91,845字）。
+- `release_notes.py check`: 合格（archive 440件・CHANGELOG構造・詳細ファイル 823,229B・本文 91,911字）。
 - `scripts/run_tests.sh tests/release/`: 59 passed + 128 subtests。
 - `scripts/run_tests.sh tests/ingest/test_derive_transaction_ownership.py`: 15 passed。main では `fetch_error` が失敗していた（`_fail_run` の `alert` kwarg にテストスタブが未対応）。スタブ修正と fetch_error の期待値（finish・health の記録）を合わせて再検証し合格。失敗修正＋影響範囲の再検証として記録する。
 - `update_readme.py --check`: drift なし。
@@ -28,14 +28,13 @@
 
 ## 未実行・残条件
 
-- 全体 suite（pytest-linux/macos matrix）: この候補SHAでは未実行。
-- CI の全6 lane（lint-test・hygiene・standalone-sdk・incident-gates・macos・hermes-integration）: `release/prep-20261121` の先端 `572c30a2e` では実行記録なし。PR または tag run での実測が必要で、draft・docs mode の成功は受入の実測に使えない。
-- 独立レビュー（別コンテキストのレビュアーによる最終検証）: 未実施。
+- 全体 suite・CI の全6 lane: PR #314 の run で `49ff711f2` 時点の pytest matrix・lint-test・hygiene・standalone-sdk・incident-gates・macos・hermes-integration 等22 job が全件合格。記録の再生成と追加修正を含む最新SHAでは再走が必要。tag run（常に full mode・perf 含む）が最終の実測証拠になる。
+- 独立レビュー（別コンテキストのレビュアーによる最終検証）: 敵対的レビューを実施し、発見された実バグ（文末ピリオドの血圧・日付のみ記載のバイタル誤読など）を修正済み。
 - tag `v1.2.0` の作成・GitHub Release の公開・説明図 PNG の release asset 添付と到達・表示確認: 未実施。本文中の画像URLは公開後に照合が必要。
 - 本番適用・常駐サービスの再起動: 未実施。
 
 ## 参照
 
 - 変更の要点と収録物: [README.md](README.md)
-- 全438件の対応表: [change-map.json](change-map.json)
+- 全440件の対応表: [change-map.json](change-map.json)
 - 図の来歴・hash: [visual-source.json](visual-source.json)

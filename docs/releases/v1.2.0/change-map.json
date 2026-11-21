@@ -1,6 +1,6 @@
 {
- "fragment_count": 438,
- "scope": "v1.2.0 の変更記録438件を全件収録。最終候補SHAの固定・受入証拠ではない。",
+ "fragment_count": 440,
+ "scope": "v1.2.0 の変更記録440件を全件収録。最終候補SHAの固定・受入証拠ではない。",
  "status": "unpublished_preparation",
  "records": [
   {
@@ -292,10 +292,10 @@
   },
   {
    "category": "fixed",
-   "id": "bp-pair-space-side",
-   "path": "changes/archive/1.2.0/bp-pair-space-side.json",
-   "sha256": "949fb609280a8097bb8ad1cc3e677e2d869f62501919a81d2c187454681e01b5",
-   "title": "空白を含む血圧ペアで上下の逆転が検証を通り、設定済み閾値フラグが落ちる問題を修正"
+   "id": "bp-pair-sentence-period-20261121",
+   "path": "changes/archive/1.2.0/bp-pair-sentence-period-20261121.json",
+   "sha256": "4e42dfd87fd078382a47b6fcf348968ff736807a64d2c6153b07ec5460e1e754",
+   "title": "文末ピリオド直前の血圧ペアが抽出できない問題を修正"
   },
   {
    "category": "fixed",
@@ -1591,6 +1591,13 @@
    "path": "changes/archive/1.2.0/ocr-snapshot-budget-reserve.json",
    "sha256": "470ec1bfd641406a35e74718475a39ed70439d12ed4523ab0eb4ccf39540556e",
    "title": "添付OCR処理がスナップショット検証に必要な時間をサイズに応じて確保"
+  },
+  {
+   "category": "fixed",
+   "id": "ocr-snapshot-publish-deferred-20261121",
+   "path": "changes/archive/1.2.0/ocr-snapshot-publish-deferred-20261121.json",
+   "sha256": "3edbac3abae1222e57f88e79076e9ccba290b43a9b57fc823ea4b2993af201ad",
+   "title": "添付OCR実行でsnapshot公開ロック競合時に延期理由が消える問題を修正"
   },
   {
    "category": "fixed",
@@ -3026,6 +3033,13 @@
    "path": "changes/archive/1.2.0/view-status-snapshot-bound.json",
    "sha256": "d6aeeea9bfed994ddc200a095423ea1b621fe6423b6daaf3bcf5f881be0efbe9",
    "title": "参照画面の集計と状態を公開済みスナップショットの時点にそろえる"
+  },
+  {
+   "category": "fixed",
+   "id": "vital-date-only-note-20261121",
+   "path": "changes/archive/1.2.0/vital-date-only-note-20261121.json",
+   "sha256": "4f48f278f6c6d42241651613899cf15b8339d8efb101c83e84fddbdbf9bf0f36",
+   "title": "日付だけの記載がバイタル測定値として扱われる問題を修正"
   },
   {
    "category": "fixed",

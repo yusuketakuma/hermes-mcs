@@ -525,8 +525,8 @@ v1.2.0は、通知カードの確認・担当をボタンにし、処理状況�
 - **LLM性能測定で常駐worker全3本の停止を確認**
   性能測定用スクリプトが、夜間workerを含む現行の常駐worker全3本の停止を確認するようにしました。停止していないworkerが1本でもある場合は測定を始めず、別処理が混ざった結果で性能を判断することを防ぎます。
 
-- **空白を含む血圧ペアで上下の逆転が検証を通り、設定済み閾値フラグが落ちる問題を修正**
-  血圧を「120 / 80」のようにスラッシュ前後に空白を含めて書いた記録で、抽出値の収縮期・拡張期の左右が判別できず、逆転した応答が検証を通り、条件に合う設定済みの閾値フラグも返りませんでした。ペアを受理する文法と同じ方法で左右を照合するようにしたため、空白の有無で値の対応やフラグが変わりません。
+- **文末ピリオド直前の血圧ペアが抽出できない問題を修正**
+  「血圧120/80.」のように文末の半角・全角ピリオドで終わる記録で、血圧のペアが数値の途中と誤判定されて抽出されませんでした。小数点を含む数値（80.5 など）は引き続き一つの数値として扱い、文末のピリオドとは区別するため、記録の書き方で値の有無が変わりません。
 
 - **血圧の「120 / 80」の空白で上下が取り違えられる問題を修正**
   スラッシュの前後に空白のある血圧でも、上の値と下の値を空白なしと同じ方法で照合します。逆転した値が検証を通る問題と、設定済みの閾値フラグが出ない問題を直します。
@@ -923,6 +923,9 @@ v1.2.0は、通知カードの確認・担当をボタンにし、処理状況�
 
 - **添付OCR処理がスナップショット検証に必要な時間をサイズに応じて確保**
   添付OCRの独立処理が、読み取り専用スナップショットの公開に必要な検証時間をデータベースサイズに応じてあらかじめ確保するようになりました。これまで公開処理にはコード上約5秒の上限があり、サイズ連動の検証予算（下限30秒）を要する大きなデータベースでは公開が延期される構造でした。処理と公開は同じ絶対期限を共有し、公開直前にサイズ変化を再評価して足りなければ従来どおり延期します。
+
+- **添付OCR実行でsnapshot公開ロック競合時に延期理由が消える問題を修正**
+  添付OCRの定期実行がsnapshot公開のロック競合で延期されたとき、実行結果に延期理由（snapshot_deferred・snapshot_lock_busy）が記録されず空の結果になる不具合を修正しました。公開窓不足や公開失敗での延期と同じ記録になります。
 
 - **添付OCRの保存を取得時点と親投稿へ束縛**
   OCR実行中に添付が再取得されたり親投稿が編集されたりした場合、古い取得分の結果を新しい資料の結果として保存しません。本文が元に戻る編集も投稿の改訂履歴で検出します。
@@ -1328,6 +1331,9 @@ v1.2.0は、通知カードの確認・担当をボタンにし、処理状況�
 
 - **参照画面の集計と状態を公開済みスナップショットの時点にそろえる**
   `mcs_view qc` の件数は、実行時刻ではなく読んでいるスナップショットの生成時刻で数えます。`mcs_view status` の連携サマリー状態は、患者の現在の karte_id に結び付いたものだけを使い、カルテが変わって未取得なら未取得として示します。測定値参照の古い cursor は cursor_changed として返します。
+
+- **日付だけの記載がバイタル測定値として扱われる問題を修正**
+  「血圧 11/20.」のように測定値ではなく日付だけを書いた記録が、患者のバイタル測定として扱われ、棚卸しで最新の確認済みバイタルが隠れることがありました。生理的にあり得ないペア（11/20 など）は測定値として数えないようになりました。
 
 - **原文37℃の測定値37.0が表記の違いで消える問題を修正**
   体温などの測定値が数値として原文と同じなら、原文が「37℃」で値が37.0でも測定日と値を残します。以前は文字列の表記が違うだけで未検証として落ちていました。値が違う場合や他者・条件の照合は従来どおりです。
@@ -2477,11 +2483,12 @@ v1.2.0は、通知カードの確認・担当をボタンにし、処理状況�
 - lock_held の事前失敗（exit 3）は除去され、書込み毎のbounded待機とdeferへ変わる。
 - 根拠: mcs/extract/llm/extract_llm_resident.py、tests/llm/test_bounded_batch_per_write_lock.py
 
-#### 空白を含む血圧ペアで上下の逆転が検証を通り、設定済み閾値フラグが落ちる問題を修正
+#### 文末ピリオド直前の血圧ペアが抽出できない問題を修正
 
-- 左右の判定を、受理済みペアのspanから照合する共通処理へ統一しました。空白なし・空白あり・全角スラッシュや全角空白で判定が変わりません。
-- 逆転したペアは書き手側の検証と読み手側のreaderの両方で拒否され、片側だけの値・複数測定・他人・過去・条件付きの記述の扱いは変わりません。
-- 根拠: mcs/extract/clinical/clinical_values.py、tests/extract/clinical/test_bp_pair_guard.py、tests/extract/clinical/test_model_vitals_source_guard.py、tests/extract/llm/test_vital_threshold_context.py
+- 血圧ペアの受理条件の末尾判定を、直後が数字でないことと、ピリオドの直後に数字が続かないことの2条件に分けました。120/80.5 のような小数はペアの右側の数値として読み続けます。
+- 同じ判定を日付付き記述（血圧 10/15 132/80）の前方確認にも揃えました。
+- あわせて、節の切れ目の判定にも数字を伴わないピリオドを加え、『目標の血圧120/80. 現在は測定できません。』のように次の文の時点表現がピリオドを越えて目標値に及ぶ誤判定を防ぎます。
+- 根拠: mcs/extract/clinical/clinical_values.py、mcs/extract/clinical/clinical_scope.py、tests/extract/clinical/test_bp_pair_guard.py、tests/extract/llm/test_vital_threshold_context.py
 
 #### 血圧の「120 / 80」の空白で上下が取り違えられる問題を修正
 
@@ -3875,6 +3882,13 @@ v1.2.0は、通知カードの確認・担当をボタンにし、処理状況�
 - mcs_ocr は作業系（run.lock 待機・ローカル解析・OCR呼出）へ work_deadline を渡し、スナップショット公開には残り全量の絶対期限を渡します。公開前にデータベースサイズを再評価し、予算が足りなければ snapshot_deferred で安全に見送ります。
 - snapshot_deferred 時は、run.lock 取得待ちの期限切れ・取得失敗を writer_lock_wait / publish_window_exhausted として、公開処理側の失敗は snapshots.last_failure の理由コードと last_timing の数値として結果へ記録し、既存の状態ファイル（attachment_ocr_status.json）へ残す形です。
 - 根拠: mcs/core/snapshots.py、mcs/ingest/run_check.py、mcs/ops/mcs_ocr.py、tests/ops/test_ocr_independent_drain.py、tests/ops/test_mcs_ocr_entry.py、tests/core/test_stab_db_maintenance.py、tests/ingest/test_run_check_stages.py
+
+#### 添付OCR実行でsnapshot公開ロック競合時に延期理由が消える問題を修正
+
+- maintenance.refresh_snapshot は公開ロック競合時に "deferred" を返すが（5c465f773）、mcs/ops/mcs_ocr.py の run() は None のみを延期として扱っていたため reason が未設定のまま返っていた
+- "deferred" も reason='snapshot_deferred' として扱い、公開ロック競合時は last_failure() が空のため timing.defer_reason=='publication_lock_busy' から snapshot_failure={'reason':'snapshot_lock_busy'} を補完する
+- 検証: tests/ops/test_ocr_independent_drain.py::test_real_publisher_defers_on_busy_publication_lock
+- 根拠: mcs/ops/mcs_ocr.py、tests/ops/test_ocr_independent_drain.py
 
 #### 添付OCRの保存を取得時点と親投稿へ束縛
 
@@ -5394,6 +5408,11 @@ v1.2.0は、通知カードの確認・担当をボタンにし、処理状況�
 - 紐付け先のカルテが変わって新しいカルテがまだ取得されていない場合は、旧カルテの「取得済み・空」を出さずに未取得として示す。
 - スナップショットが公開し直された後の古いページ位置（cursor）は、測定値を読めないという意味の measurement_unavailable ではなく cursor_changed として返す。
 - 根拠: mcs/views/mcs_view.py、mcs/views/measurement_local_view.py、tests/views/test_bugsweep_view_status.py
+
+#### 日付だけの記載がバイタル測定値として扱われる問題を修正
+
+- 棚卸しのバイタル検出で、血圧ペアの生理学的な妥当性（30以上300以下・拡張期より収縮期が大きいこと）を確認するようになりました。測定値の判定にはこれまでどおり本人・現在の文脈確認も行います。
+- 根拠: mcs/patients/rollup_builder.py、mcs/extract/clinical/clinical_values.py
 
 #### 原文37℃の測定値37.0が表記の違いで消える問題を修正
 
