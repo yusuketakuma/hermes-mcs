@@ -86,8 +86,11 @@ def _history_read_error(phase, error, *, observation=None):
 def _send_blocked(reason):
     """Name the policy code that refused a fresh send; the row itself defers."""
     try:
+        # 許可集合の正規値だけを書く（env由来の生の理由文字列をそのまま出さない）
+        verdict = next((code for code in cloud_send_admission.PRE_SEND_VERDICTS
+                        if type(reason) is str and code == reason), "unknown")
         print(json.dumps({"event": "cloud_send_blocked", "pid": os.getpid(), "ts": time.time(),
-                          "reason": reason if type(reason) is str and reason in cloud_send_admission.PRE_SEND_VERDICTS else "unknown"}),
+                          "reason": verdict}),
               file=sys.stderr, flush=True)
     except Exception:
         pass
