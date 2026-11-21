@@ -282,9 +282,13 @@ def _cloud_route_state(cfg, route, project_id):
         return "off", "scope"
     mode = settings["mode"]
     purpose = "patient_context" if route == "patient_context" else "backlog"
-    selection, errors = cloud_policy.resolve_profile(cfg, route=route, purpose=purpose, root=HOME)
-    if errors or selection is None:
-        return "off", "profile_invalid"
+    selection, errors = cloud_policy.resolve_profile(
+        cfg, route=route, purpose=purpose, root=HOME, ordered=True)
+    if selection is None:
+        selection, errors = cloud_policy.resolve_profile(
+            cfg, route=route, purpose=purpose, root=HOME)
+        if errors or selection is None:
+            return "off", "profile_invalid"
     # Quota/circuit denial is decided after recovering/checking this input's
     # prior attempt. Turning the route off here could send an unknown unit locally.
     if mode in ("on", "shadow") and not cloud_policy.selected_key(HOME, cfg):

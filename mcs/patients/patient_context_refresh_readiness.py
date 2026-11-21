@@ -721,7 +721,7 @@ def _cloud_extraction_ready(db, pid, cfg, *, deadline=None):
         for row in db.execute("SELECT * FROM messages WHERE project_id=? AND body_state IS NOT 'deleted' "
                               "AND body_text IS NOT NULL AND body_text!=''", (pid,)):
             if (deadline is not None and patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline
-                    or extract_llm.cloud_completion(db, row, contract) != "complete"):
+                    or extract_llm.cloud_completion_any(db, row)[0] != "complete"):
                 return False
         return True
     except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError):
@@ -743,7 +743,7 @@ def _raw_extraction_current(db, row, cfg):
     meta = loads_dict(latest[0]) if latest else None
     required = _required_cloud_extraction_contract(cfg, pid)
     if required is not None:
-        return extract_llm.cloud_completion(db, row, required) == "complete", meta
+        return extract_llm.cloud_completion_any(db, row)[0] == "complete", meta
     # A local final keeps the model it was made with; a later model change does not stale it.
     if (isinstance(model, str) and model
             and isinstance(meta, dict) and isinstance(meta.get("actual_model"), str) and meta["actual_model"]

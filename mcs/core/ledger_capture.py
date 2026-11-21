@@ -197,9 +197,11 @@ class LedgerCaptureMixin:
         now = time.time()
         new_ids = []
         invalidated_roots = set()
-        with self._intake_transaction():  # commit on success, rollback on exception
+        with self._intake_transaction(stage="save_patient"):  # commit on success, rollback on exception
+            t = monotonic()
             before_semantic = self._begin_semantic_generation_snapshot(
                 p.messages, semantic=semantic)
+            t = self._tx_stage_mark("sem_snap", t)
             self.db.execute('UPDATE patients SET project_id=project_id WHERE 0')
             previous = self.db.execute("SELECT fetch_reason,project_type,karte_id,is_archived,fetch_state,patient_name FROM patients WHERE project_id=?", (p.project_id,)).fetchone()
             first = previous is None
@@ -215,6 +217,7 @@ class LedgerCaptureMixin:
                 fetch_reason = previous[0]
             else:
                 fetch_reason = 'semantic_intake_unstored' if unstored else p.fetch_reason
+            t = self._tx_stage_mark("patient_probe", t)
             import inference_dependency_loss as dependency_loss
             old_karte = (dependency_loss.capture_current_karte_tx(self.db, p.project_id)
                 if previous is not None and getattr(p, 'karte_id', None) is not None
@@ -258,8 +261,10 @@ class LedgerCaptureMixin:
                 self.bump_inference_source_epoch_tx()
             if first and notify and observation_ts is not None:
                 self._start_initial_import_tx(p.project_id, observation_ts, now)
+            t = self._tx_stage_mark("patient_write", t)
             for m in p.messages:
                 self._save_tree(m, new_ids, now, p.project_id)
+            t = self._tx_stage_mark("save_tree", t)
             changed_semantic = (self._semantic_changed_ids(
                 before_semantic, invalidated_roots=invalidated_roots)
                                 if before_semantic else {})
@@ -272,11 +277,13 @@ class LedgerCaptureMixin:
                 if t.is_unread]
             notify_ids = (list(dict.fromkeys(
                 new_ids + self._unnotified(fresh_unread))) if notify else [])
+            t = self._tx_stage_mark("changed_ids", t)
             self._queue_saved_messages_tx(
                 p.project_id, new_ids, changed_semantic.get(p.project_id, []),
                 notify_ids, notify=notify, semantic=semantic, now=now,
                 notify_max_age_s=notify_max_age_s,
                 invalidated_roots=invalidated_roots)
+            self._tx_stage_mark("queue", t)
         return new_ids
 
     def _queue_saved_messages_tx(self, project_id, new_ids, changed_ids,
@@ -442,14 +449,18 @@ class LedgerCaptureMixin:
             # 0 = never imported: the initial history stays quiet
             late_after = self.high_watermark(project_id) or None
         invalidated_roots = set()
-        with self._intake_transaction():
+        with self._intake_transaction(stage="save_messages"):
+            t = monotonic()
             before_semantic = self._begin_semantic_generation_snapshot(
                 msgs, semantic=semantic)
+            t = self._tx_stage_mark("sem_snap", t)
             for m in msgs:
                 self._save_tree(m, new_ids, now, project_id)
+            t = self._tx_stage_mark("save_tree", t)
             changed_semantic = (self._semantic_changed_ids(
                 before_semantic, invalidated_roots=invalidated_roots)
                                 if before_semantic else {})
+            t = self._tx_stage_mark("changed_ids", t)
             if project_id:
                 # Previously stored rows qualify when freshly unread;
                 # the shared gate also admits new recent read arrivals.
@@ -478,6 +489,7 @@ class LedgerCaptureMixin:
                     notify_max_age_s=notify_max_age_s,
                     invalidated_roots=invalidated_roots,
                     late_only=bool(late))
+                self._tx_stage_mark("queue", t)
             else:
                 # init_data saves mixed projects without requesting individual notifications.
                 grouped = {}
@@ -491,6 +503,7 @@ class LedgerCaptureMixin:
                         ids, notify=None, semantic=semantic, now=now,
                         notify_max_age_s=notify_max_age_s,
                         invalidated_roots=invalidated_roots)
+                self._tx_stage_mark("queue", t)
         return new_ids
 
     def save_thread_replies(self, replies: list, project_id: int,
@@ -512,7 +525,7 @@ class LedgerCaptureMixin:
         new_ids = []
         now = time.time()
         invalidated_roots = set()
-        with self._intake_transaction():
+        with self._intake_transaction(stage="save_thread_replies"):
             before_semantic = self._begin_semantic_generation_snapshot(
                 replies, semantic=semantic)
             for m in replies:

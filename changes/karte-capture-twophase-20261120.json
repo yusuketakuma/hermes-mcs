@@ -1,0 +1,19 @@
+{
+  "category": "improved",
+  "title": "連携サマリー保存の書込みロック保持を短縮（依存解析を書込み取引の外へ移動＋整合フェンス）",
+  "summary": "連携サマリーの保存が、患者全体の成果物スキャンと依存解析を書込み取引（BEGIN IMMEDIATE）の中で行っていたため、書込みロックを長く保持して他処理のSQLITE_BUSY・lock_heldを招いていました。今回、依存解析を読取り専用の事前取引へ移し、書込み取引開始時に読取範囲が変わっていないことをフェンス（要約ハッシュ）で確認してから書き込む2相構成に変更しました。読取範囲に変更が入った場合は従来どおり書込み取引の中で解析をやり直すため、結果の正しさは維持されます。",
+  "upgrade": "通常のアップデーターで適用されます。適用後、data/mcs.log の karte_tx_hold イベントに capture_s（解析時間）と fence_fresh（事前解析の採用可否）が併記され、短縮効果を確認できます。",
+  "details": [
+    "_karte_summary_write が自分で取引を持つ場合のみ2相化。呼出側が既に取引を持つ場合は従来のsavepoint内動作を維持し、原子的性質を変えない。",
+    "事前取引（deferred BEGIN）で capture_current_karte_tx を実行し、読取スコープの digest（同一projectのartifacts全列＋patients行）と訂正対象のsource bindingをフェンスとして保持。",
+    "BEGIN IMMEDIATE 取得後に karte_capture_fresh で digest を再計算。一致なら事前解析の結果を採用、不一致なら書込み取引内で再捕捉（正しさ優先のフォールバック）。",
+    "digestは他projectの書込みで揺れないため、混雑時に常時フォールバックへ戻る既存data_versionフェンスの課題を回避。",
+    "karte_tx_hold イベントに capture_s・fence_fresh を併記。due-flag消込・epoch加算・record_tx の順序は不変。"
+  ],
+  "refs": [
+    "mcs/core/ledger.py",
+    "mcs/core/inference_dependency_loss.py",
+    "tests/core/test_karte_storage_atomicity.py",
+    "changes/karte-capture-twophase-20261120.json"
+  ]
+}

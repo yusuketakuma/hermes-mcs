@@ -333,6 +333,7 @@ from extract_llm_qc import (
 )
 from extract_llm_progress import (
     cloud_completion as cloud_completion,
+    cloud_completion_any as cloud_completion_any,
     _progress_steps as _progress_steps,
     _progress_probe as _progress_probe,
     _finish_progress as _finish_progress,

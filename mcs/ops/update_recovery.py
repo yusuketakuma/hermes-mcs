@@ -86,6 +86,7 @@ from update_runtime_migration import (
 )
 from update_services import (
     _clean_stale_git_locks,
+    _enable_log_rotation,
     _gateway_restart_if_needed,
     _quiesce_for_mode,
     _restart_runtime_mode,
@@ -624,6 +625,7 @@ def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: b
                 if problems or errors:
                     return escalate("resume postcheck: "
                                     + ",".join(problems + errors))
+                _enable_log_rotation()
                 return _finish_resumed(state, applying)
             except UpdateError as e:
                 return escalate("resume failed: " + str(e))

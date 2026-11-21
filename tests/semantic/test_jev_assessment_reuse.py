@@ -27,9 +27,9 @@ def test_corrupt_complete_assessment_never_reaches_following_stage(tmp_path, mon
     real = drain._primary_assessment_history
     seen = []
 
-    def artifact(database, pid, mid, fp, policy):
+    def artifact(database, pid, mid, fp, policy, **kwargs):
         if mid != 1:
-            return real(database, pid, mid, fp, policy)
+            return real(database, pid, mid, fp, policy, **kwargs)
         seen.append(True)
         content = {'target_message_id': mid, 'verdicts': _complete(scfg)}
         meta = {VERSION_KEY: CURRENT_VERSION, 'fingerprint': fp, 'policy_fingerprint': policy,

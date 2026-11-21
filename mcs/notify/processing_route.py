@@ -140,12 +140,9 @@ def cloud_followup(db, project_id, message_id, cfg):
             return None
         if not cloud_policy.history_thread_allowed(db, project_id, message_id):
             return provider, "unverified"
-        selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog", root=extract_llm.HOME)
-        if errors or selection is None:
-            return provider, "unverified"
-        provider = selection["provider"]
-        contract = cloud_inference.cloud_provider_contract(selection=selection)
-        state = extract_llm.cloud_completion(db, row, contract)
+        state, contract = extract_llm.cloud_completion_any(db, row)
+        if contract is not None:
+            provider = contract["backend"]
         return provider, {"complete": "done", "attention": "attention", None: "incomplete"}.get(state, "unverified")
     except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, cloud_inference.CloudFallback):
         return provider, "unverified"

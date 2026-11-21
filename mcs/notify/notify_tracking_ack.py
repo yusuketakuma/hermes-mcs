@@ -34,7 +34,8 @@ def _negative_resolution(db, render, part, command_id):
     if len(rows) > 32:
         return None
     bound = {**dict(render), 'part_id': part['part_id'], 'part_attempt': part['attempt_id'],
-             'payload_sha256': part['payload_sha256'], 'remote_id': part['remote_id']}
+             'payload_sha256': part['payload_sha256'], 'remote_id': part['remote_id'],
+             'prior_remote_id': part['prior_remote_id']}
     witnesses = []
     for saved in rows:
         try:
