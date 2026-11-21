@@ -5,6 +5,7 @@
 ## 今回の対象
 
 - v1.1.2（タグ 2026-11-08）以降の変更記録438件を `changes/archive/1.2.0/` へ全件収録。形式は `release_notes.py` の検証を通過する厳格スキーマへ統一し、category の規定外値（improved 等）・独自スキーマ・summary 280字超過・detail/ref 中の記号を全件修正した（`cfff1edb7`・`b11ddfa14`・`e9cdf7751`・`a45f75f9d` と本票作成時の54件の追補修正）。
+- 収録からの除外は2件: `reseed-flake-fix-20261120`（テストのみの修正で本番動作に変更なし）と `cloud-backlog-drain-window-20261120`（本番設定のみの記録でコード変更を伴わない）（`a45f75f9d`・`84e1fab4a`）。いずれも変更記録を要しない区分として意図的に外した。
 - CHANGELOG の v1.2.0 節・README のリリース案内を生成し、`--summary-file` による比較表と説明図2点を導入部へ掲載（`572c30a2e`）。公開本文は上限内の91,815字。
 - 説明図は通知カード・クラウドAIの2点（SVG正本・PNG描画）。来歴とhashは `visual-source.json`、438件の対応表は `change-map.json`。
 - `docs/development/readme-review.json` を 1.2.0 へ更新し、README本文の見直し結果を記録済み。
