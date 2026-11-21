@@ -465,13 +465,26 @@ def _dated_vitals(m, values, patient_name):
 def _has_patient_vital(body, patient_name):
     if not isinstance(body, str):
         return False
-    # vital_match_values drops implausible pairs (「血圧 11/20.」 is a date, not a
-    # reading), so a date-only note does not count as a patient's measured vital.
+
+    def written(key, match):
+        values = vital_match_values(key, match)
+        if values or key != "sbp":
+            return bool(values)
+        # 「血圧 11/20.」は月/日の日付であって測定値ではない。日付になり得ない
+        # ペア（80/80 など）も書かれた読み値として残す: 抽出が落とした記載を
+        # 「記載なし」と扱うと、古い確定パネルが最新のように見えてしまう。
+        sbp, dbp = int(match[1]), int(match[2])
+        try:
+            date(2000, sbp, dbp)
+        except ValueError:
+            return True
+        return False
+
     return any(clinical_scope.patient_source_scope(body, *match.span(), patient_name=patient_name,
                                                     measurement=True) == "patient"
                for key, pattern in (*VITAL_PATTERNS.items(), ("pulse", _PULSE_LABEL))
                for match in re.finditer(pattern, body, re.I)
-               if vital_match_values(key, match))
+               if written(key, match))
 
 
 def _noncurrent_vital_reference(body, values):
