@@ -959,3 +959,79 @@ def test_legacy_sealed_group_reselas_to_current_on_identity_confirm(led, uploade
     assert led.db.execute("SELECT payload_sha256 FROM notification_render_parts "
                           "WHERE delivery_id=? AND part_id='file_group'",
                           (did,)).fetchone()[0] == new_group["sha256"]
+
+
+def _part_remote(led, delivery_id, part_id):
+    return led.db.execute(
+        "SELECT remote_id FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+        (delivery_id, part_id)).fetchone()["remote_id"]
+
+
+def _fail_attachment(led, attachment_id):
+    with led.db:
+        led.db.execute("UPDATE attachments SET state='failed' WHERE attachment_id=?",
+                       (attachment_id,))
+
+
+def _attachment_entry(led, emitted, part_id):
+    spec, = emitted
+    return next(p for p in spec["parts"]["manifest"] if p["part_id"] == part_id)
+
+
+def test_unavailable_after_file_delivery_seals_file_prior_kind(led, tmp_path, monkeypatch):
+    from slack_testkit import legacy_attachment_parts
+    legacy_attachment_parts(monkeypatch)
+    _world, prior, _spec, part, attachment_id = _uploaded(led, tmp_path, monkeypatch)
+    remote = _part_remote(led, prior["delivery_id"], part["part_id"])
+    _fail_attachment(led, attachment_id)
+    emitted = []
+    with led.db:
+        notify_cards.issue_render(led.db, 1, SLACK, NOW + 1, emitted, force=True)
+    current = _attachment_entry(led, emitted, part["part_id"])
+    assert current["unavailable"] is True
+    assert current["prior_remote_id"] == remote and current["prior_kind"] == "file"
+
+
+def test_unavailable_text_prior_still_inherits_message_ts(led, tmp_path, monkeypatch):
+    from slack_testkit import legacy_attachment_parts
+    legacy_attachment_parts(monkeypatch)
+    monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
+    _seed_thread(led, mids=(100,))
+    _attach(led, tmp_path, mid=100, name="gone.bin", state="failed")
+    assert _dispatch(led, _intent(led, payload={"message_ids": [100]}), SLACK)["dispatched"]
+    world = _mkworld(led)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    render = _latest_render(led)
+    spec = json.loads(render["spec_json"])
+    part = next(p for p in spec["parts"]["manifest"] if p["kind"] == "attachment_part")
+    ts = _part_remote(led, render["delivery_id"], part["part_id"])
+    assert ts
+    emitted = []
+    with led.db:
+        notify_cards.issue_render(led.db, 1, SLACK, NOW + 1, emitted, force=True)
+    current = _attachment_entry(led, emitted, part["part_id"])
+    assert current["prior_remote_id"] == ts and "prior_kind" not in current
+
+
+def test_unprovable_prior_receipt_holds_the_render(led, tmp_path, monkeypatch):
+    from slack_testkit import legacy_attachment_parts
+    legacy_attachment_parts(monkeypatch)
+    _world, prior, _spec, part, attachment_id = _uploaded(led, tmp_path, monkeypatch)
+    remote = _part_remote(led, prior["delivery_id"], part["part_id"])
+    _fail_attachment(led, attachment_id)
+    emitted = []
+    with led.db:
+        led.db.execute(
+            "INSERT INTO notification_render_parts("
+            "delivery_id,part_id,kind,idx,state,remote_id,attachment_id,"
+            "payload_sha256,bytes,name,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (prior["delivery_id"], "attach:999999", "attachment_part", 999,
+             "delivered", remote, attachment_id, None, None, "ghost.bin", NOW))
+        result = notify_cards.issue_render(led.db, 1, SLACK, NOW + 1, emitted, force=True)
+    assert not result and not emitted
+    held = _latest_render(led)
+    assert held["state"] == "held"
+    row = led.db.execute(
+        "SELECT error_code FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+        (held["delivery_id"], part["part_id"])).fetchone()
+    assert row["error_code"] == "attachment_upload_identity_unverified"

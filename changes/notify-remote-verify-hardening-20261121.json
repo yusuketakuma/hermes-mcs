@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "notify_remote_verify: 部品フラグ尊重・history完全性・承認属性の誤記を修正",
+  "summary": "診断スクリプト notify_remote_verify.py が、manifest で unavailable または prior_remote_id を持つ部品にも resolve コマンドを発行し得た問題、打ち切られた履歴を完全と誤認し得た問題、承認なしに human_confirmed/worker_stopped を書き得た問題を修正しました。body_part は delivery.py と同じ escape+照合規則で本文一致を確認します。診断実行時のみ関係します。",
+  "upgrade": "追加操作は不要です。--emit で発行する場合、人の明示承認を証明するには --confirm-human を付けてください。",
+  "details": [
+    "spec_json の manifest で unavailable:true または prior_remote_id 付きの部品は skipped として報告のみで emit しない。",
+    "conversations.replies が has_more または 200件到達の場合、そのカードの全 part を unverified とする。",
+    "human_confirmed と evidence.worker_stopped は --confirm-human 指定時のみ書き込む。",
+    "body_part は thread_body_parts の本文を escape(quote=False) して _remote_match と同規則(投稿者限定・完全一致・emoji pattern・ts一意消費)で照合し、1件一致=delivered候補/0件=remote_absent候補/複数・part_owner_ambiguous=unverified とする。",
+    "未使用の glob import と _command 内の dead import を除去。"
+  ],
+  "refs": [
+    "scripts/diagnostics/notify_remote_verify.py",
+    "adapters/slack/delivery.py"
+  ]
+}

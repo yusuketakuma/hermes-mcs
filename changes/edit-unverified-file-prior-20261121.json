@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "取得失敗した添付キャプションの更新で配信済み添付を編集対象と誤認する問題を修正",
+  "summary": "Slack・Discord の通知で、取得に失敗した添付ファイルのキャプションを後から更新する処理が、アップロード済みファイルのIDをメッセージの編集対象として照合し、対象不明(unknown)として失敗していました。ファイルは既にリモートへ配信済みのため、リモートへの書き込みを行わず配信済み(delivered)として扱うよう修正しました。",
+  "upgrade": "追加操作は不要です。通常のメッセージ編集の対象検証は従来どおり維持されます。",
+  "details": [
+    "unavailable 部品が prior_remote_id を持ち、かつ prior_kind が file（prior がファイルIDでメッセージのタイムスタンプではない）のとき、本文キャプションの編集照合を行わず {result: delivered, remote_id: prior} を返します。",
+    "prior_kind が file 以外または未設定の場合は、従来どおり編集対象の検証を行います。",
+    "LINE WORKS は unavailable 部品に prior があれば常に delivered を返す既存構造のため変更していません。"
+  ],
+  "refs": [
+    "adapters/slack/delivery.py",
+    "adapters/discord/delivery.py",
+    "tests/adapters/slack/test_slack_edit_only_parts.py",
+    "tests/adapters/discord/test_discord_edit_only_parts.py"
+  ]
+}

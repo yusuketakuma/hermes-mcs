@@ -741,6 +741,7 @@ def test_commands_snapshot_keeps_original_deadline_and_dirty_on_failure(
     assert ("snapshot_publish_failed" in out) is (state is None)
     result = json.loads(out)
     if state == "retry_deferred":
+
         # no copy started: not a publish, not a failure, the dirty mark stays
         assert result["snapshot"] is False and result["snapshot_state"] == "retry_deferred"
         assert (result["snapshot_retry_reason"], result["snapshot_retry_after_s"]) \
@@ -751,3 +752,53 @@ def test_commands_snapshot_keeps_original_deadline_and_dirty_on_failure(
     # every step that can hold the writer reports how long it took
     assert set(json.loads(out)["stage_elapsed_s"]) == {
         "cmd_recover", "cmd_drain", "cmd_int_drain", "cmd_int_drain_again", "cmd_card_gc", "cmd_snapshot"}
+
+
+def test_commands_housekeeping_yields_run_lock_to_queued_tick(
+        tmp_path, monkeypatch, capsys):
+    """After the command drains the run lock is released once and
+    reacquired with a bounded wait; a busy lock defers only the
+    idempotent housekeeping, keeping the applied commands' result."""
+    import notify_cards
+    import notify_cmds
+    import notify_spool
+
+    class FakeLedger:
+        def __init__(self, path):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(run_check, "Ledger", FakeLedger)
+    monkeypatch.setattr(run_check, "_config", lambda: {})
+    monkeypatch.setattr(run_check, "_hard_deadline", lambda: None)
+    for name in ("ensure_dirs", "recover", "publish_flags",
+                 "publish_restore_holds"):
+        monkeypatch.setattr(notify_spool, name, lambda *a, **kw: None)
+    for name in ("restore_awaiting_consent", "restore_pending"):
+        monkeypatch.setattr(notify_spool, name, lambda *a, **kw: None)
+    monkeypatch.setattr(job_ops, "drain_commands", lambda *a, **kw: None)
+    monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **kw: None)
+    monkeypatch.setattr(notify_cards, "gc",
+                        lambda *a, **kw: pytest.fail("gc ran without the lock"))
+    monkeypatch.setattr(notify_cards, "snapshot_dirty",
+                        lambda ledger: pytest.fail("snapshot check ran without the lock"))
+
+    released = []
+    real_close = os.close
+
+    def closing(fd):
+        released.append(fd)
+        return real_close(fd)
+
+    monkeypatch.setattr(run_check.os, "close", closing)
+    monkeypatch.setattr(run_check.writer_lock, "wait_run_lock", lambda *a, **kw: None)
+    fd = os.open(str(tmp_path / "synthetic.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    assert run_check._commands_only(fd, time.monotonic() + 60) == 0
+    assert fd in released                       # the original lock was given back
+    result = json.loads(capsys.readouterr().out)
+    assert result["ok"] is True and result["commands"] == 0
+    assert result["housekeeping_deferred"] is not None
+    assert set(result["stage_elapsed_s"]) == {
+        "cmd_recover", "cmd_drain", "cmd_int_drain", "cmd_int_drain_again"}

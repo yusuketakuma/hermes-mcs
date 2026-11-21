@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "snapshot公開ロック競合を失敗ではなく延期として扱うよう変更",
+  "summary": "別の公開処理がコピー中にrefresh_snapshotへ到達した場合、公開失敗ではなく延期（deferred）を返すようにしました。",
+  "upgrade": "更新後の追加操作は不要です。",
+  "refs": [
+    "mcs/core/maintenance.py",
+    "tests/core/test_snapshot_refresh_timing.py"
+  ],
+  "details": [
+    "snapshot_lock_busy のみを延期へ変換し、セットアップ・ロック検証系のエラーは従来どおり失敗として記録します。",
+    "延期理由は last_timing() の defer_reason=publication_lock_busy として観測できます。",
+    "専用の公開処理が別プロセスで動く構成でも、実行中ランが誤って失敗扱いにならないようにするための変更です。"
+  ]
+}

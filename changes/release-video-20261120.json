@@ -1,0 +1,15 @@
+{
+  "category": "added",
+  "title": "リリース動画をリポジトリの素材から自動生成する開発ツールを追加",
+  "summary": "docs/screenshots/release-video.json のシーン定義（タイトルカード・Slack/LINE WORKS ギャラリー・Discord 静止画）と macOS の say 音声合成、ffmpeg から、縦型 1080x1920 のナレーション付き mp4 をローカルで生成できます。MCS 本体の動作への影響はありません。",
+  "upgrade": "追加操作は不要です。利用時は ffmpeg/ffprobe・macOS の say・sips が PATH に必要です。生成物 docs/screenshots/*.mp4 は git 管理外です。",
+  "details": [
+    "scripts/development/generate_release_video.py がシーンを順に PNG 化し、say でナレーションを合成、シーンごとの mp4 を concat で連結する。",
+    "カードシーンは SVG を sips でラスタライズし、ギャラリー/静止画シーンは既存 PNG を 1080x1920 のレターボックスに収める。",
+    "ナレーションがシーン秒数を超える場合は音声長+0.5秒まで自動延長し、apad で無音を埋める。"
+  ],
+  "refs": [
+    "scripts/development/generate_release_video.py",
+    "docs/screenshots/release-video.json"
+  ]
+}

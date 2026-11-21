@@ -180,7 +180,7 @@ CREATE TABLE IF NOT EXISTS notification_render_parts(
   state TEXT NOT NULL DEFAULT 'pending'
     CHECK(state IN ('pending','delivered','not_sent','unknown','held')),
   remote_id TEXT, error_code TEXT, attempt_id TEXT,
-  updated_at REAL, remote_file_id TEXT,
+  updated_at REAL, remote_file_id TEXT, prior_remote_id TEXT,
   PRIMARY KEY(delivery_id, part_id));
 CREATE TABLE IF NOT EXISTS notification_view_manifests(
   manifest_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1122,6 +1122,8 @@ def _migrate_body(db, cols, old_version: int):
     _script(db, NOTIFICATION_SCHEMA)
     if "remote_file_id" not in cols("notification_render_parts"):
         db.execute("ALTER TABLE notification_render_parts ADD COLUMN remote_file_id TEXT")
+    if "prior_remote_id" not in cols("notification_render_parts"):
+        db.execute("ALTER TABLE notification_render_parts ADD COLUMN prior_remote_id TEXT")
     # Additive transport scope: old rows and immutable spec bytes remain
     # Discord. A Slack workspace is never stored in the guild column.
     for table in ("notification_cards", "notification_renders",

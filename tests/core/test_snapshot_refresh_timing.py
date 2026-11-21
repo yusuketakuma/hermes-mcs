@@ -1,6 +1,7 @@
 """Synthetic freshness checks share publication fencing and expose bounded timings."""
 from concurrent.futures import ThreadPoolExecutor
 import fcntl
+import json
 import os
 import threading
 import time
@@ -36,16 +37,19 @@ def test_refresh_fences_decision_and_marker_to_avoid_a_second_copy(tmp_path, mon
     monkeypatch.setattr(maintenance, "_content_signature", signature)
     monkeypatch.setattr(snapshots, "_prepare_in_child", copy)
     def winner():
-        result = maintenance.refresh_snapshot(path, deadline=time.monotonic() + 90)
+        result = maintenance.refresh_snapshot(path, deadline=time.monotonic() + 600)
         return result, snapshots.last_failure(), snapshots.last_timing()
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         first = pool.submit(winner)
         assert signature_started.wait(10)
         try:
-            # No second caller may take a stale decision while the first owns the fence.
-            assert maintenance.refresh_snapshot(path, deadline=time.monotonic() + 20) is None
-            assert snapshots.last_failure()["reason"] == "snapshot_lock_busy"
+            # A second refresh defers while the first owns the fence — the
+            # busy lock is a scheduled retry, not a publish failure.
+            assert maintenance.refresh_snapshot(
+                path, deadline=time.monotonic() + 20) == "deferred"
+            assert snapshots.last_failure() == {}
+            assert snapshots.last_timing()["defer_reason"] == "publication_lock_busy"
             assert snapshots.publish_snapshot(path, maintenance.SNAPSHOT_DIR) is None
             assert snapshots.last_failure()["reason"] == "snapshot_lock_busy"
             assert signatures == [True]
@@ -68,7 +72,7 @@ def test_refresh_reports_signature_marker_publication_and_total_timings(tmp_path
     db.close()
     path = str(tmp_path / "ledger.db")
     monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(tmp_path / "snapshots"))
-    assert maintenance.refresh_snapshot(path, deadline=time.monotonic() + 90) == "published"
+    assert maintenance.refresh_snapshot(path, deadline=time.monotonic() + 600) == "published"
     timing = snapshots.last_timing()
     assert set(timing) == {"copy_s", "verify_s", "budget_s", "signature_s", "marker_s",
                            "publication_s", "total_s", "marker_state"}
@@ -138,3 +142,93 @@ def test_marker_failure_keeps_verified_publication_but_reports_unavailable_marke
     timing = snapshots.last_timing()
     assert timing["marker_state"] == "unavailable" and timing["marker_s"] >= 0
     assert snapshots.last_failure() == {}
+
+
+def test_refresh_defers_without_copy_when_window_is_too_small(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(1, body="合成の経過記録")])
+    db.close()
+    path = str(tmp_path / "ledger.db")
+    monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(tmp_path / "snapshots"))
+    copies = []
+    original_copy = snapshots._prepare_in_child
+
+    def copy(*args, **kwargs):
+        copies.append(True)
+        return original_copy(*args, **kwargs)
+
+    monkeypatch.setattr(snapshots, "_prepare_in_child", copy)
+    assert maintenance.refresh_snapshot(
+        path, deadline=time.monotonic() + snapshots.SNAPSHOT_MIN_WINDOW_S - 1) == "deferred"
+    assert copies == []
+    assert snapshots.last_timing()["defer_reason"] == "window_insufficient"
+    assert not (tmp_path / "snapshots" / "ledger-snapshot.db").exists()
+    assert maintenance.refresh_snapshot(
+        path, deadline=time.monotonic() + snapshots.SNAPSHOT_MIN_WINDOW_S + 60) == "published"
+    assert copies == [True]
+
+
+def test_refresh_gate_path_defers_with_larger_window(tmp_path, monkeypatch, capsys):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(1, body="合成の経過記録")])
+    db.close()
+    path = str(tmp_path / "ledger.db")
+    monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(tmp_path / "snapshots"))
+    copies = []
+    original_copy = snapshots._prepare_in_child
+
+    def copy(*args, **kwargs):
+        copies.append(True)
+        return original_copy(*args, **kwargs)
+
+    def unexpected_context(*, deadline):
+        raise AssertionError("verification_context invoked before the window check")
+
+    monkeypatch.setattr(snapshots, "_prepare_in_child", copy)
+    # A window that satisfies the plain minimum but not the gate minimum
+    # defers the gate path before any copy; the plain path still publishes.
+    window = snapshots.SNAPSHOT_MIN_WINDOW_S + 60
+    assert maintenance.refresh_snapshot(
+        path, deadline=time.monotonic() + window,
+        verification_context=unexpected_context) == "deferred"
+    assert copies == []
+    timing = snapshots.last_timing()
+    assert timing["defer_reason"] == "window_insufficient"
+    assert timing["gate"] is True
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()
+              if "snapshot_window_deferred" in line]
+    assert events and events[0]["gate"] is True
+    assert not (tmp_path / "snapshots" / "ledger-snapshot.db").exists()
+    assert maintenance.refresh_snapshot(
+        path, deadline=time.monotonic() + window) == "published"
+    assert copies == [True]
+    # The plain path still uses the smaller window and reports gate=False.
+    assert maintenance.refresh_snapshot(
+        path, force=True,
+        deadline=time.monotonic() + snapshots.SNAPSHOT_MIN_WINDOW_S - 1) == "deferred"
+    assert snapshots.last_timing()["gate"] is False
+    assert copies == [True]
+
+
+def test_refresh_defers_without_copy_when_disk_is_low(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    db.save_messages([_message(1, body="合成の経過記録")])
+    db.close()
+    path = str(tmp_path / "ledger.db")
+    monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(tmp_path / "snapshots"))
+
+    class _NoRoom:
+        free = 0
+
+    monkeypatch.setattr(maintenance.shutil, "disk_usage",
+                        lambda *_a, **_kw: _NoRoom())
+    copies = []
+    monkeypatch.setattr(snapshots, "_prepare_in_child",
+                        lambda *a, **kw: copies.append(True) or True)
+    assert maintenance.refresh_snapshot(
+        path, deadline=time.monotonic() + 3600) == "deferred"
+    assert copies == []
+    timing = snapshots.last_timing()
+    assert timing["defer_reason"] == "disk_low"
+    assert timing["need_mb"] > timing["free_mb"]
+    assert not (tmp_path / "snapshots" / "ledger-snapshot.db").exists()

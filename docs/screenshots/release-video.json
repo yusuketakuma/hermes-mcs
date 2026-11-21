@@ -1,0 +1,108 @@
+{
+  "voice": "Kyoko",
+  "rate": 190,
+  "scenes": [
+    {
+      "type": "card",
+      "title": "訪問薬剤管理・在宅医療の現場課題",
+      "lines": [
+        "残薬確認の依頼がチャットに散在する",
+        "担当と期限は人それぞれ",
+        "情報が次の訪問に活きない"
+      ],
+      "seconds": 7,
+      "narration": "訪問薬剤管理の現場では、残薬確認の依頼がチャットに散在し、担当と期限が人それぞれです。"
+    },
+    {
+      "type": "card",
+      "title": "情報はあるのに、次の行動につながらない",
+      "lines": [
+        "確認済みか分からない",
+        "誰がいつ対応するか曖昧",
+        "記録と共有が二重になる"
+      ],
+      "seconds": 6,
+      "narration": "確認が済んだか、誰がいつ対応するか。記録と共有が二重で、次の行動につながりにくい構造です。"
+    },
+    {
+      "type": "card",
+      "title": "hermes-mcs",
+      "lines": [
+        "医療・介護チャットを収集・解析",
+        "確認とタスクを現場へ返す",
+        "患者データはローカルで処理"
+      ],
+      "seconds": 7,
+      "narration": "そこで生まれたのが hermes-mcs。チャットを収集・解析し、確認とタスクを現場へ返します。"
+    },
+    {
+      "type": "card",
+      "title": "いつものチャットのまま",
+      "lines": [
+        "Slack に対応",
+        "Discord に対応",
+        "LINE WORKS に対応"
+      ],
+      "seconds": 5,
+      "narration": "Slack、Discord、LINE WORKS。いつものチャットのまま使えます。"
+    },
+    {
+      "type": "gallery",
+      "gallery": "slack",
+      "screen": "01-overview",
+      "seconds": 6,
+      "narration": "投稿のカードに、原文も添付もまとまります。"
+    },
+    {
+      "type": "gallery",
+      "gallery": "slack",
+      "screen": "02-notification",
+      "seconds": 5,
+      "narration": "返信ごとのカードで、確認と担当を共有できます。"
+    },
+    {
+      "type": "gallery",
+      "gallery": "slack",
+      "screen": "06-task-list",
+      "seconds": 5,
+      "narration": "依頼はタスクへ。未完了を一覧で確認し、対応状況を記録します。"
+    },
+    {
+      "type": "image",
+      "path": "docs/screenshots/discord-card.png",
+      "seconds": 4,
+      "narration": "Discord でも、投稿ごとのカードで情報を整理します。"
+    },
+    {
+      "type": "image",
+      "path": "docs/screenshots/discord-thread.png",
+      "seconds": 4,
+      "narration": "スレッドのやり取りも、カードとして表示されます。"
+    },
+    {
+      "type": "gallery",
+      "gallery": "lineworks",
+      "screen": "01-delivery",
+      "seconds": 5,
+      "narration": "LINE WORKS でも、解析結果がトークルームへ届きます。"
+    },
+    {
+      "type": "gallery",
+      "gallery": "lineworks",
+      "screen": "02-task-confirm",
+      "seconds": 5,
+      "narration": "タスクの確認も、いつものトーク画面で完結します。"
+    },
+    {
+      "type": "card",
+      "title": "現場の次の行動へ。",
+      "lines": [
+        "医療・介護チャットを収集・解析",
+        "確認とタスクを現場のチャットへ",
+        "hermes-mcs"
+      ],
+      "seconds": 5,
+      "narration": "情報を集めるだけでなく、現場の次の行動へ。hermes-mcs でした。"
+    }
+  ]
+}
