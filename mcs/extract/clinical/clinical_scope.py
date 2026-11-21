@@ -143,7 +143,9 @@ def _has_condition(body, start, end, span=None):
     return False
 
 
-_SCOPE_BREAK = re.compile(r"[。！？!?;；\n、,]|しかし|ただし|だが|けれど(?:も)?|(?<![一-龥ぁ-んァ-ヶ])一方(?:で)?(?=$|[、, \t　])")
+# A period ends a clause only when it is not a decimal point inside a number
+# (80.5 stays one value; 120/80. ends the sentence it closes).
+_SCOPE_BREAK = re.compile(r"[。！？!?;；\n、,]|[.．](?!\d)|しかし|ただし|だが|けれど(?:も)?|(?<![一-龥ぁ-んァ-ヶ])一方(?:で)?(?=$|[、, \t　])")
 
 _REASON_CUE = re.compile(r"至急|緊急|救急|搬送|急変|意識|反応|呼吸|SpO2|血圧|体温|発熱|高熱|疼痛|痛み|[胸腹頭背腰]痛|苦し|出血|転倒|死亡|逝去|心肺|酸素|けいれん|痙攣|脱水|嘔吐|吐血|血尿|冷汗|(?:BP|BS|Glu)\s*\d", re.I)
 
@@ -164,14 +166,14 @@ def person_scope(person, patient_name):
 @functools.lru_cache(maxsize=32)
 def _scope_puncts(body):
     """Positions of the single-character _SCOPE_BREAK marks, cached per body."""
-    return tuple(m.start() for m in re.finditer(r"[。！？!?;；、,\n]", body))
+    return tuple(m.start() for m in re.finditer(r"[。！？!?;；、,\n]|[.．](?!\d)", body))
 
 @functools.lru_cache(maxsize=32)
 def _scope_events(body, patient_name, provider_fields):
     """Collect span-independent person/period events once per body, sorted by position, for patient_source_scope."""
     events, assignments = [], []
     # _REPORTING/_CLINICAL_ACTOR are matched in place (pos), never on a copied tail.
-    stops = [m.start() for m in re.finditer(r"[。！？!?;；\n]", body)]
+    stops = [m.start() for m in re.finditer(r"[。！？!?;；\n]|[.．](?!\d)", body)]
     for match in _SCOPE_HEADING.finditer(body):
         label = (match[1] or match[2] or match[3] or "").strip()
         if (provider_fields and (
