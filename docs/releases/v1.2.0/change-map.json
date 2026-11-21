@@ -2093,7 +2093,7 @@
    "category": "changed",
    "id": "release-body-limit-20261121",
    "path": "changes/archive/1.2.0/release-body-limit-20261121.json",
-   "sha256": "9a7f3eb98491d15f3639116159bc8160ca80fcffff4a4dc78e5e6409a2233ebe",
+   "sha256": "1a634f2dfdd945c66a5e1d3425ed554773a2c04523376190984d48a02554fbdb",
    "title": "GitHub Release本文の長さ上限対応（大きな版は要約＋CHANGELOGリンク）"
   },
   {
