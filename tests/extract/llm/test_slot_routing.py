@@ -7,6 +7,7 @@ import json
 
 import extract_llm
 import local_llm
+import time
 
 
 def test_request_slot_default(monkeypatch):
@@ -128,14 +129,15 @@ def test_extract_probe_format_uses_choose_slot(monkeypatch):
 def test_extract_busy_probe_keeps_cached_mode(monkeypatch):
     """A probe that lost the GPU turn (None) is not a verdict: the body
     defers, but the cached mode itself must not be erased."""
+    stale = time.monotonic() - extract_llm_provider._PROBE_RETRY_S - 1
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "object")
     monkeypatch.setattr(extract_llm_provider, '_FMT_MODE', extract_llm._FMT_MODE)
-    monkeypatch.setattr(extract_llm, "_FMT_TS", 0.0)
+    monkeypatch.setattr(extract_llm, "_FMT_TS", stale)
     monkeypatch.setattr(extract_llm_provider, '_FMT_TS', extract_llm._FMT_TS)
     monkeypatch.setattr(local_llm, "probe_format", lambda *a, **k: None)
     monkeypatch.setattr(local_llm, "admitted_probe_format", lambda *a, **k: None)
     assert extract_llm._probe_format() is None
-    assert extract_llm_provider._FMT_MODE == "object" and extract_llm_provider._FMT_TS == 0.0
+    assert extract_llm_provider._FMT_MODE == "object" and extract_llm_provider._FMT_TS == stale
 
 
 def test_slot_override_out_of_range_falls_back(monkeypatch):

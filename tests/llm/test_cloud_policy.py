@@ -532,7 +532,7 @@ def test_a_200_refusal_detail_reaches_the_circuit_without_opening_it(tmp_path, n
                    for error in seen)
         assert c.block_reason(ledger, _cfg(), "patient_context", 1) is None
         stored = [json.loads(row["meta"]) for row in ledger.artifacts("cloud_usage_result")]
-        assert all("contract_error_detail" not in meta for meta in stored)
+        assert all(meta["contract_error_detail"] == "refusal" for meta in stored)
         report = c.usage_report(ledger)
         assert report["unresolved_requests"] == 0 and report["daily_requests"] == 5
 

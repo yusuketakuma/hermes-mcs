@@ -1,0 +1,19 @@
+{
+  "category": "fixed",
+  "title": "gateway再起動の補助が相対パス指定で失敗する問題を修正",
+  "summary": "検証付きのgateway再起動の補助（request_gateway_restart）に data/agents を相対パスで渡すと、子プロセスが保存先を見つけられず、報告が requested のまま残り、以後の再起動が止まっていました。今後は両方の引数を絶対パスにしてから処理します。",
+  "upgrade": "checkout外の復旧ツール ~/.mcs-recovery/mcs_recover.py は、更新ガイドの手順で同じ世代へ同期したときに有効になります。--no-recovery で同期を省略した環境では旧ツールのままです。",
+  "details": [
+    "切り離した子プロセスは cwd=\"/\" で起動するため、相対パスの data/agents を解決できなかった。",
+    "報告が requested のまま残ると gateway_request_unresolved が以後の再起動を止める。",
+    "本番の更新経路は既に絶対パスを渡しており、臨時の復旧操作で相対パスを渡した場合に起きていた。",
+    "報告の書込みと argv の組立ての前に、両方の引数を絶対パスにする。",
+    "検証: tests/meta/test_gateway_restart_auto_request.py（相対パスの新規ケースを含む34件）、tests/meta/test_mcs_recover.py、tests/meta/test_recovery_bundle_distribution.py、tests/ingest/test_health_recovery_gateway.py で197件が通過。",
+    "備考: pinned-source loader の要件に従い、mcs_recover.py の SUPPORT_FILES にある mcs_recovery_gateway.py の pin を更新した。"
+  ],
+  "refs": [
+    "deployment/recovery/mcs_recovery_gateway.py",
+    "deployment/recovery/mcs_recover.py",
+    "tests/meta/test_gateway_restart_auto_request.py"
+  ]
+}

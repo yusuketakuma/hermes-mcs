@@ -148,6 +148,42 @@ class ReleaseNotesTest(unittest.TestCase):
                 notes.main(args)
             self.assertEqual(changelog.read_text(encoding="utf-8"), text)
 
+    def test_build_summary_file_with_table_and_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "changes").mkdir()
+            (root / "changes/001.json").write_text(json.dumps(self.item()), encoding="utf-8")
+            (root / "CHANGELOG.md").write_text(
+                "# Changelog\n\n## [Unreleased]\n\n## [1.0.7] — 2026-09-29\n\n"
+                + notes.render([self.item()], "旧版", "旧版の変更です。"), encoding="utf-8")
+            (root / "README.md").write_text("# intro\n<!-- BEGIN GENERATED:release -->\n"
+                                          "<!-- END GENERATED:release -->\n", encoding="utf-8")
+            summary = ("要約の段落です。\n\n| 変更 | 以前 | 今回 |\n|---|---|---|\n"
+                       "| 通知 | メニュー | ボタン |\n\n"
+                       "![説明図](https://github.com/yusuketakuma/hermes-mcs"
+                       "/releases/download/v1.0.8/fig.png)\n")
+            fig = root / "docs/releases/v1.0.8"
+            fig.mkdir(parents=True)
+            (fig / "fig.png").write_bytes(b"png")
+            sf = root / "summary.md"
+            sf.write_text(summary, encoding="utf-8")
+            args = ["--root", tmp, "build", "--version", "1.0.8", "--date", "2026-10-01",
+                    "--headline", "通知の改善", "--summary-file", str(sf)]
+            # --summary と --summary-file は排他
+            with self.assertRaises(SystemExit):
+                notes.main(args + ["--summary", "説明。"])
+            with self.assertRaises(SystemExit):
+                notes.main(args[:-2])
+            # HTMLを含む要約は拒否
+            sf.write_text("表 <table>", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                notes.main(args)
+            sf.write_text(summary, encoding="utf-8")
+            self.assertEqual(notes.main(args), 0)
+            sect = notes.section((root / "CHANGELOG.md").read_text(encoding="utf-8"), "1.0.8")
+            self.assertIn("| 通知 | メニュー | ボタン |", sect)
+            self.assertIn("![説明図](https://github.com", sect)
+
     def test_invalid_bump_leaves_pending_records_and_release_files_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -206,6 +242,115 @@ class ReleaseNotesTest(unittest.TestCase):
             git("add", ".")
             git("commit", "-m", "document deletion")
             notes.require_fragment(root, base)
+
+    def test_release_body_stays_identical_within_the_limit(self):
+        item = dict(category="fixed", title="合成の修正", summary="通知を更新します。",
+                    upgrade="追加操作は不要です。", details=["根拠を記録。"], refs=["#1"])
+        text = "## [Unreleased]\n\n## [1.0.0] — 2026-09-21\n\n" + notes.render(
+            [item], "通知を修正", "合成の説明です。")
+        body = notes.release_body(text, "1.0.0")
+        self.assertEqual(body, notes.section(text, "1.0.0"))
+        self.assertIn("<details>", body)
+
+    def big_changelog(self, summaries, details):
+        items = ([dict(category="fixed", title=f"修正{n}", summary=s,
+                       upgrade="追加操作は不要です。", details=details, refs=["#1"])
+                  for n, s in enumerate(summaries)])
+        body = notes.render(items, "合成版", "合成の説明です。")
+        return "## [Unreleased]\n\n## [1.2.0] — 2026-11-21\n\n" + body, items
+
+    def test_release_body_links_details_when_over_the_limit(self):
+        details = ["x" * 400] * 400  # ~160k chars of technical details
+        text, _ = self.big_changelog(["説明です。"], details)
+        body = notes.release_body(text, "1.2.0")
+        self.assertLessEqual(len(body), notes.BODY_LIMIT)
+        self.assertNotIn("<details>", body)
+        self.assertIn("### 技術詳細\n\n- 技術詳細・変更の根拠は [CHANGELOG v1.2.0]", body)
+        self.assertIn("/blob/v1.2.0/docs/releases/v1.2.0/changelog-1.2.0.md", body)
+        self.assertIn("### 更新時の注意\n\n- 追加操作は不要です。", body)
+        self.assertIn("説明です。", body)  # short fixes keep their summaries
+
+    def test_release_body_collapses_fix_headings_but_not_security(self):
+        items = [dict(category="security", title="重大な修正", summary="認証を確認してください。",
+                      upgrade="再起動が必要です。", details=["根拠。"], refs=["#9"])]
+        items += [dict(category="fixed", title=f"修正{n}", summary="x" * 5000,
+                       upgrade="追加操作は不要です。", details=["根拠。"], refs=["#1"])
+                  for n in range(30)]
+        body = notes.render(items, "合成版", "合成の説明です。")
+        body = body.replace("  認証を確認してください。",
+                            "  認証を確認してください。\n  影響範囲は全利用者です。")
+        text = "## [Unreleased]\n\n## [1.2.0] — 2026-11-21\n\n" + body
+        body = notes.release_body(text, "1.2.0")
+        self.assertLessEqual(len(body), notes.BODY_LIMIT)
+        self.assertIn("- **修正0**", body)
+        self.assertIn("- **修正29**", body)
+        self.assertNotIn("x" * 200, body)  # ordinary summaries moved behind the link
+        self.assertIn("- **セキュリティ：重大な修正**\n  認証を確認してください。"
+                      "\n  影響範囲は全利用者です。", body)
+        self.assertIn("各修正の説明・根拠は [CHANGELOG v1.2.0]", body)
+        self.assertIn("### 更新時の注意", body)
+
+    def test_collapse_fixed_fails_closed_on_uncaptured_items(self):
+        bad = "### 不具合修正\n\n- **項目**\n  説明\n- 太字でない項目\n  説明\n"
+        with self.assertRaises(ValueError):
+            notes._collapse_fixed("### 新機能\n\n- **x**\n  y\n\n" + bad, "link", "1.2.0")
+
+    def test_release_body_refuses_when_even_the_short_form_overflows(self):
+        huge = dict(category="fixed", title="修正", summary="説明です。",
+                    upgrade="y" * (notes.BODY_LIMIT + 100), details=["根拠。"], refs=["#1"])
+        text = "## [Unreleased]\n\n## [1.2.0] — 2026-11-21\n\n" + notes.render(
+            [huge], "合成版", "合成の説明です。")
+        with self.assertRaises(ValueError):
+            notes.release_body(text, "1.2.0")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "CHANGELOG.md").write_text(text, encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                notes.main(["--root", tmp, "export", "--version", "1.2.0",
+                            "--output", str(root / "out.md")])
+            self.assertFalse((root / "out.md").exists())
+
+    def test_details_file_written_by_build_and_size_checked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "changes").mkdir()
+            (root / "changes/001.json").write_text(json.dumps(self.item()), encoding="utf-8")
+            (root / "CHANGELOG.md").write_text("## [Unreleased]\n\n", encoding="utf-8")
+            (root / "README.md").write_text("# Preserved\n<!-- BEGIN GENERATED:release -->\n"
+                                          "<!-- END GENERATED:release -->\n", encoding="utf-8")
+            self.assertEqual(notes.main(
+                ["--root", tmp, "build", "--version", "1.0.8", "--date", "2026-10-01",
+                 "--headline", "通知の改善", "--summary", "返信を更新します。"]), 0)
+            details = root / "docs/releases/v1.0.8/changelog-1.0.8.md"
+            self.assertTrue(details.is_file())
+            text = details.read_text(encoding="utf-8")
+            self.assertTrue(text.startswith("## [1.0.8] — 2026-10-01"))
+            self.assertIn("### 技術詳細", text)
+            self.assertLess(details.stat().st_size, notes.DETAILS_FILE_LIMIT)
+            self.assertEqual(notes.main(["--root", tmp, "check"]), 0)
+            details.write_text("x" * notes.DETAILS_FILE_LIMIT, encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                notes.main(["--root", tmp, "check"])
+
+    def test_oversized_details_file_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "changes").mkdir()
+            item = self.item() | {"details": ["x" * notes.DETAILS_FILE_LIMIT]}
+            record = root / "changes/001.json"
+            record.write_text(json.dumps(item), encoding="utf-8")
+            changelog = root / "CHANGELOG.md"
+            changelog.write_text("## [Unreleased]\n\n", encoding="utf-8")
+            readme = root / "README.md"
+            readme.write_text("# Preserved\n<!-- BEGIN GENERATED:release -->\n"
+                              "<!-- END GENERATED:release -->\n", encoding="utf-8")
+            before = {p: p.read_bytes() for p in (record, changelog, readme)}
+            with self.assertRaises(SystemExit):
+                notes.main(["--root", tmp, "build", "--version", "1.0.8",
+                            "--date", "2026-10-01", "--headline", "変更", "--summary", "説明。"])
+            self.assertEqual({p: p.read_bytes() for p in before}, before)
+            self.assertFalse((root / "changes/archive").exists())
+            self.assertFalse((root / "docs").exists())
 
     def test_adapter_runtime_changes_require_fragment(self):
         with tempfile.TemporaryDirectory() as tmp:
