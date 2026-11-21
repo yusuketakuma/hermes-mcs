@@ -5,10 +5,12 @@
   "upgrade": "追加操作は不要です。",
   "details": [
     "血圧ペアの受理条件の末尾判定を、直後が数字でないことと、ピリオドの直後に数字が続かないことの2条件に分けました。120/80.5 のような小数はペアの右側の数値として読み続けます。",
-    "同じ判定を日付付き記述（血圧 10/15 132/80）の前方確認にも揃えました。"
+    "同じ判定を日付付き記述（血圧 10/15 132/80）の前方確認にも揃えました。",
+    "あわせて、節の切れ目の判定にも数字を伴わないピリオドを加え、『目標の血圧120/80. 現在は測定できません。』のように次の文の時点表現がピリオドを越えて目標値に及ぶ誤判定を防ぎます。"
   ],
   "refs": [
     "mcs/extract/clinical/clinical_values.py",
+    "mcs/extract/clinical/clinical_scope.py",
     "tests/extract/clinical/test_bp_pair_guard.py",
     "tests/extract/llm/test_vital_threshold_context.py"
   ]
