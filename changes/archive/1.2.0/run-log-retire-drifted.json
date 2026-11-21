@@ -1,0 +1,20 @@
+{
+  "category": "fixed",
+  "title": "取込み済みの旧ログが消えたり書き換わったりすると、導入と更新が止まり続ける問題に解除手順を追加",
+  "summary": "旧ログ（data/run.log など）の原本を共通ログ mcs.log へ取り込んだ後に削除・変更すると、install.sh・更新・復旧が run_log_legacy_missing / run_log_legacy_changed で止まり続け、解除できませんでした。新コマンド run_log.py retire-drifted で、確認できなくなった旧ログの取込み記録だけを今のファイルに合わせ直せます。取込み済みの内容・原本・退避用の写しは消しません。",
+  "upgrade": "通常は追加操作は不要です。install.sh や更新・復旧が run_log_legacy_missing または run_log_legacy_changed で止まる場合は、旧ログの原本を確認してから python3 -I \"$MCS_ROOT/mcs/core/run_log.py\" retire-drifted --data-dir \"$MCS_ROOT/data\" を実行し、表示された名前を確認してから install.sh・mcs update・mcs recover のいずれかをやり直してください。ツリーが修正前の版のままなら、取得済みの修正版タグから mcs/core/run_log.py を取り出して同じコマンドを実行します。導入済みのログ処理を入れ替える必要はありません。",
+  "details": [
+    "retire-drifted は、記録済みの旧ログごとに通常の取込みと同じ検査を行い、run_log_legacy_missing または run_log_legacy_changed になるものだけを合わせ直す。ボリュームの再マウントで st_dev だけが変わった場合は従来どおり取り込みを続ける。",
+    "消えた名前は記録を外すため、同じ名前のファイルが後から作られると新しいファイルとして先頭から取り込む。書き換わった名前は、合わせ直した後に増えた分だけを取り込む。",
+    "合わせ直した時点の内容は退避用の写しとして mcs-log-backups に残す。",
+    "取込み済みの旧ログが変化したときに止まる既定の動作は変えていない。",
+    "対象には別の Mac への移行や旧版への巻戻しも含む。止まっていた理由の表示は「ログの統合準備を確認できません」など。",
+    "消えたファイルは記録を外し、書き換わったファイルは今の内容を取込み済みとして扱う（その内容は mcs.log へ取り込まない）。",
+    "この記録は導入済みの旧版のログ処理もそのまま読めるので、旧版の install.sh・mcs update・mcs recover もやり直せば先へ進む。",
+    "install.sh がこの理由で止まったときは、実行するコマンドを停止表示に出す。"
+  ],
+  "refs": [
+    "mcs/core/run_log.py",
+    "mcs/ops/run_log_install.py"
+  ]
+}

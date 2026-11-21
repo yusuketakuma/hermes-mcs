@@ -238,8 +238,13 @@ def test_turn_wait_expiry_is_not_an_outage(monkeypatch):
     assert calls == ["synthetic prompt"]
 
 
-def test_unobserved_probe_defers_without_sending_prompt(monkeypatch):
+def test_unobserved_probe_defers_without_sending_prompt(monkeypatch, tmp_path):
     import local_llm
+    # Probe decisions read module state and a persisted marks file: pin both
+    # to unprobed so no earlier test's cache can skip the probe path.
+    monkeypatch.setattr(semantic_transport, "_FMT_MODE", None)
+    monkeypatch.setattr(semantic_transport, "_FMT_TS", 0.0)
+    monkeypatch.setattr(semantic_transport, "_FMT_PATH", str(tmp_path / "fmt-marks.json"))
     monkeypatch.setattr(semantic_transport, "_probe_format", lambda *args: None)
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
     calls = []

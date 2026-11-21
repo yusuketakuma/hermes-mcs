@@ -8,6 +8,7 @@
 
 | 版 | 記録 |
 |---|---|
+| 1.2.0（候補） | [受入・残条件](v1.2.0/ACCEPTANCE_1.2.0.md) · [変更の要点](v1.2.0/README.md) · [変更記録の対応表](v1.2.0/change-map.json) · [説明図](v1.2.0/notification-card-v120.png) |
 | 1.1.2（候補） | [受入・残条件](v1.1.2/ACCEPTANCE_1.1.2.md) · [変更の要点](v1.1.2/README.md) · [変更記録の対応表](v1.1.2/change-map.json) · [説明図](v1.1.2/cloud-continuity.png) |
 | 1.1.1 | [受入・残条件](v1.1.1/ACCEPTANCE_1.1.1.md) · [変更の要点](v1.1.1/README.md) · [変更記録の対応表](v1.1.1/change-map.json) · [説明図](v1.1.1/inference-flow.png) |
 | 1.1.0（候補） | [受入・残条件](v1.1.0/ACCEPTANCE_1.1.0.md) · [変更の要点](v1.1.0/README.md) · [変更記録の対応表](v1.1.0/change-map.json) |

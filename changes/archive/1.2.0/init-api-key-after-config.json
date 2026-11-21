@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "初期設定の途中失敗でAPIキーだけが先に有効になる問題を修正",
+  "summary": "mcs_setup.py init に環境変数で渡したAPIキー（MCS_ANTHROPIC_API_KEY・MCS_OPENAI_API_KEY・TYPESAFE_API_KEY）は、config.json の保存が成功した後に .env へ保存します。以前は設定の保存前にキーが有効になり、保存が失敗すると対象患者やモードが未保存のままキーだけが残り、外部AIが全患者を対象に動いて指定より広い範囲の投稿本文と文脈が外部へ送られる場合がありました。",
+  "upgrade": "追加操作は不要です。キーの形式確認はこれまでどおり他の認証情報と一緒に先に行います。設定の保存後にキーを保存できなかった場合は init が失敗を表示するので、mcs setup api-keys で登録を続けてください。MCSのパスワードとKeychainの保存順は変わりません。",
+  "details": [
+    "以前は、設定の保存より先にキーを保存していた。キーだけがある状態では外部AIが全患者を対象に動く。Slackチャンネルの準備や設定の保存が失敗した場合に加え、成功する場合もSlack準備の間は同じ状態だった。",
+    "init が途中で失敗したとき、環境変数のAPIキーは .env に書き込まれません。",
+    "対話の init で端末から入力するAPIキーは、これまでどおり設定の保存後に登録します。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_setup.py",
+    "mcs/ops/setup/setup_integration.py"
+  ]
+}

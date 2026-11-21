@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "karte・抽出commit・stale GCの書込みロック保持時間を観測する計装を追加",
+  "summary": "データベースの書込み競合（SQLITE_BUSY）の主な原因候補である、連携サマリー保存・LLM抽出結果の確定・古い成果物の整理が、実際にどのくらい書込みロックを保持しているかを測る観測を追加しました。5秒を超える取引は karte_tx_hold / extract_commit_tx_hold / replace_current_tx_hold / gc_stale_tx_hold イベントとして稼働ログに記録されます。読み書きの動作自体は変わりません。",
+  "upgrade": "通常のアップデーターで適用されます。適用直後から data/mcs.log に計測が残ります。",
+  "details": [
+    "_karte_summary_write に保持時間と依存捕捉時間の計測を追加（karte_tx_hold・capture_s 併記）。呼出側が既に取引を持つ場合はその取引に内包されるため発火しない（intake_tx_hold と同じ計測境界）。",
+    "_commit_extraction_atomic と _replace_current に保持時間計測を追加（extract_commit_tx_hold / replace_current_tx_hold・message_id 併記）。",
+    "_stale_gc_transaction に保持時間計測を追加（gc_stale_tx_hold）。",
+    "閾値は intake_tx_hold と同じ5秒。測定で患者全体の依存解析を含む長時間保持の所在を確定してから、取引分割や捕捉の取引外移動の設計判断に進む。"
+  ],
+  "refs": [
+    "mcs/core/ledger.py",
+    "mcs/extract/llm/extract_llm_store.py",
+    "mcs/extract/llm/extract_llm_selection.py",
+    "changes/tx-hold-survey-20261120.json"
+  ]
+}

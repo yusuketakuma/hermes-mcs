@@ -16,6 +16,7 @@ import mcs_adapter
 import mcs_view
 import notify_flush
 import run_check
+import run_log
 import health_report
 from test_supported_schema_upgrade import (
     FIXTURES, RELEASES, _historical, _preserved, _records,
@@ -57,6 +58,9 @@ def test_origin_migration_tick_extract_snapshot_view(tmp_path, monkeypatch, caps
         _preserved(db_path, expected)
     with closing(ledger.Ledger(str(db_path))) as db:
         assert db.db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+    # update_services と同じ協調 writer 証明でローテーションを有効化し、
+    # 新設の拒否理由が run errors に残らない経路に合わせる
+    run_log.enable_rotation(str(data), legacy_writers_closed=True)
 
     class Adapter(mcs_adapter.MCSAdapter):
         def _get(self, path, params=None, extend_session=True):
