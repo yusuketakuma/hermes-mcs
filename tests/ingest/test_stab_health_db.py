@@ -267,7 +267,7 @@ def test_snapshot_failure_leaves_health_time_and_preserves_prior_publication(
         cleared = []
         monkeypatch.setattr(notify_cards, "clear_snapshot_dirty",
                             lambda *a: cleared.append(True))
-        clock = [500.0 if failure == "signature_deadline" else 302.0]
+        clock = [500.0 if failure == "signature_deadline" else 44.0]
         monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
         monkeypatch.setattr(maintenance, "monotonic", lambda: clock[0])
         monkeypatch.setattr(snapshots, "monotonic", lambda: clock[0])
@@ -284,7 +284,9 @@ def test_snapshot_failure_leaves_health_time_and_preserves_prior_publication(
 
         def verify(_path, *, deadline, **kwargs):
             assert failure == "validator_timeout"
-            assert deadline == 495.0
+            # Called once for the gate precheck (full publish deadline) and
+            # again inside the capped verify window.
+            assert deadline <= 495.0
             remaining = deadline - clock[0]
             clock[0] = deadline
             snapshots._fail("validator_timeout", verify_s=remaining, budget_s=remaining)

@@ -94,7 +94,7 @@ def test_tick_closes_open_transaction_without_delivery_or_run_commit(tmp_path, m
     monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
     calls = []
     monkeypatch.setattr(run_check, "_deliver", lambda *a: calls.append("delivery"))
-    monkeypatch.setattr(run_check, "_fail_run", lambda *a: calls.append("finish"))
+    monkeypatch.setattr(run_check, "_fail_run", lambda *a, **k: calls.append("finish"))
     monkeypatch.setattr(run_check, "_write_health", lambda *a, **k: calls.append("health"))
 
     def open_transaction(ledger):
@@ -120,7 +120,9 @@ def test_tick_closes_open_transaction_without_delivery_or_run_commit(tmp_path, m
     monkeypatch.setattr(run_check, "_run_jobs", jobs)
     monkeypatch.setattr(extract, "run_pending", failed_stage)
     assert run_check._main() == 1
-    assert calls == []
+    # Rollback of the leaked transaction lets the failure epilogue run;
+    # deadline/code-changed exits still skip it.
+    assert calls == (['finish', 'health'] if mode == 'fetch_error' else [])
     assert "tick: transaction_open" in capsys.readouterr().out
     with sqlite3.connect(data / "ledger.db") as reader:
         assert reader.execute("SELECT error FROM runs ORDER BY run_id DESC LIMIT 1").fetchone()[0] != "合成未確定"

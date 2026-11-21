@@ -231,7 +231,7 @@ def run(cfg=None, *, retry_errors=False):
                     else:
                         import maintenance
                         if maintenance.refresh_snapshot(DB, force=True,
-                                deadline=deadline) is None:
+                                deadline=deadline) in (None, 'deferred'):
                             result['reason'] = 'snapshot_deferred'
                             failure = snapshots.last_failure()
                             if failure:

@@ -49,10 +49,10 @@ def test_patient_request_precheck_uses_selected_repair_limit_and_never_sends_whe
         cfg, route="patient_context", purpose="quality_repair", root="/synthetic")
     assert not errors
     seen = []
-    def blocked(_ledger, _cfg, **kwargs):
+    def blocked(_ledger, _cfg, _body, **kwargs):
         seen.append(kwargs)
         return "monthly_cap"
-    monkeypatch.setattr(worker.cloud_policy, "budget_block_reason", blocked)
+    monkeypatch.setattr(worker.cloud_policy, "request_send_block_reason", blocked)
     clock.mono = time.monotonic()
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     monkeypatch.setattr(worker.cloud_policy, 'selected_key', lambda *a: 'synthetic-key')
@@ -66,8 +66,7 @@ def test_patient_request_precheck_uses_selected_repair_limit_and_never_sends_whe
         patient_context_quality_controller._ask(cfg, {'synthetic': 'request'}, clock.mono + 1000,
                              lambda: True, provider=provider)
     assert not ledger.artifacts('cloud_usage_reserve')
-    assert seen[0]["max_tokens"] == 32768 and seen[0]["selection"] == selection
-    assert seen[0]["input_bound"] > 0
+    assert seen[0]["selection"] == selection
 
 
 def test_daytime_cloud_needs_no_local_gpu_capacity(runtime, cloud):

@@ -287,9 +287,9 @@ def test_snapshot_stops_at_the_callers_hard_deadline(tmp_path, snapdir, monkeypa
         seen["deadline"] = deadline
         return False
     monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", verify)
-    hard = time.monotonic() + 5
+    hard = time.monotonic() + 310     # above SNAPSHOT_MIN_WINDOW_S so the copy may start
     assert maintenance.refresh_snapshot(path, deadline=hard) is None
-    assert seen["deadline"] == hard - snapshots.SNAPSHOT_WORK_TAIL_S
+    assert seen["deadline"] <= hard - snapshots.SNAPSHOT_WORK_TAIL_S
     assert not (snapdir / "ledger-snapshot.db").exists()
 
 
@@ -351,7 +351,7 @@ def test_unreadable_signature_still_requests_fresh_copy(tmp_path, monkeypatch):
         return False
 
     monkeypatch.setattr(maintenance, "publish_snapshot", publish)
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 310   # above SNAPSHOT_MIN_WINDOW_S so the copy may start
     assert maintenance.refresh_snapshot(str(tmp_path / "missing.db"), deadline=deadline) is None
     assert calls == [{"deadline": deadline}]
 

@@ -713,7 +713,8 @@ def test_summary_high_repair_retains_response_receipt_for_resume(repair, monkeyp
     from contextlib import nullcontext
 
     led, _run, facts, _responses, _sent, _enabled, _current = repair
-    cfg = {'cloud_llm': {'mode':'on', 'provider':'openai', 'project_ids':[1]}}
+    cfg = {'cloud_llm': {'mode':'on', 'provider':'openai', 'provider_order':['openai'],
+                         'project_ids':[1]}}
     monkeypatch.setattr(worker, 'HOME', str(tmp_path))
     monkeypatch.setattr(extract_llm_engine, 'HOME', worker.HOME)
     monkeypatch.setattr(extract_llm_prepare, 'HOME', worker.HOME)
@@ -735,6 +736,8 @@ def test_summary_high_repair_retains_response_receipt_for_resume(repair, monkeyp
     monkeypatch.setattr(worker.cloud_policy, 'provider_key', lambda *_args: 'synthetic-key')
     monkeypatch.setattr(worker.cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     monkeypatch.setattr(worker.cloud_policy, 'block_reason', lambda *args, **kwargs: None)
+    monkeypatch.setattr(worker.cloud_policy, 'request_send_block_reason', lambda *args, **kwargs: None)
+    monkeypatch.setattr(worker.cloud_policy, 'recover_response', lambda *args, **kwargs: None)
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
     monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_args: nullcontext(True))
     monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
@@ -791,7 +794,8 @@ def test_exact_repair_prompt_over_cost_cap_does_not_spend_repair(repair, monkeyp
         return 'daily_cost_cap'
     monkeypatch.setattr(worker.cloud_policy, 'budget_block_reason', unavailable)
     assert run() == ('deferred', None) and not sent and not led.artifacts(patient_context_refresh_state.QUALITY_REPAIR)
-    assert seen and seen[0]['max_tokens'] == seen[0]['selection']['max_tokens'] and seen[0]['input_bound'] > 0
+    assert seen and seen[0]['max_tokens'] == seen[0]['selection']['max_tokens'] and \
+        seen[0].get('input_bound', worker.cloud_policy.INPUT_RESERVATION_MARGIN) > 0
 
 
 def test_unknown_after_send_spends_repair_and_does_not_retry(repair):

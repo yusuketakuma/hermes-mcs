@@ -543,7 +543,7 @@ def test_verify_window_reserves_the_reacquire_tail(tmp_path, monkeypatch):
 def _finish_env(tmp_path, monkeypatch):
     db, updater, lock_fd, baseline = _env(tmp_path, monkeypatch)
     monkeypatch.setattr(run_check, "DB", str(tmp_path / "ledger.db"))
-    monkeypatch.setattr(run_check, "_WATCHDOG_EXIT_AT", time.monotonic() + 400)
+    monkeypatch.setattr(run_check, "_WATCHDOG_EXIT_AT", time.monotonic() + 600)
     monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **kw: 0)
     monkeypatch.setattr(notify_spool, "publish_flags", lambda *a, **kw: None)
     monkeypatch.setattr(notify_spool, "publish_restore_holds", lambda *a, **kw: None)
@@ -787,7 +787,7 @@ def test_main_gate_failure_writes_nothing_terminal(tmp_path, monkeypatch, capsys
     monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", validating)
     # faulthandler has no fileno under capture — set the watchdog
     # deadline directly so _hard_deadline() stays finite.
-    monkeypatch.setattr(run_check, "_WATCHDOG_EXIT_AT", time.monotonic() + 300)
+    monkeypatch.setattr(run_check, "_WATCHDOG_EXIT_AT", time.monotonic() + 600)
     # Pre-seed the snapshot reuse marker: a failed publish must leave its
     # bytes untouched (it is only rewritten after a successful publish).
     sig_path = maintenance._snapshot_sig_path()

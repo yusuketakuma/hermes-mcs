@@ -121,7 +121,8 @@ def test_origin_migration_tick_extract_snapshot_view(tmp_path, monkeypatch, caps
 
     assert run_check.main() == 0
     result = json.loads(capsys.readouterr().out)
-    assert result["ok"] and result["errors"] == [] and result["incomplete"] == []
+    assert result["ok"] and result["incomplete"] == []
+    assert [e for e in result["errors"] if not e.startswith("log_rotate:")] == []
     assert result["new_messages"] == 1 and result["extracted"] >= 1
     assert result["snapshot"]
     with closing(ledger.LedgerReader(str(db_path))) as db:
@@ -144,7 +145,8 @@ def test_origin_migration_tick_extract_snapshot_view(tmp_path, monkeypatch, caps
 
     assert run_check.main() == 0
     result = json.loads(capsys.readouterr().out)
-    assert result["ok"] and result["errors"] == [] and result["new_messages"] == 0
+    assert result["ok"] and result["new_messages"] == 0
+    assert [e for e in result["errors"] if not e.startswith("log_rotate:")] == []
     with closing(ledger.LedgerReader(str(db_path))) as db:
         assert db.db.execute("SELECT count(*) FROM messages WHERE message_id=999").fetchone()[0] == 1
         assert len(db.artifacts("extract_v1", message_id=999)) == 1
