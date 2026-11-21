@@ -1040,9 +1040,10 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
     :data:`RESULT_STALE_MARGIN_S`) is appended to the list instead of refusing. On the
     send path (``local_fallback`` false) a proven same request whose verified results
     are all settled failures may be sent again as a separate billed attempt, at most
-    :data:`SETTLED_FAILURE_BILLED_LIMIT` billed attempts in total; local fallback never
-    passes it without a disposition. Everything else refuses exactly as without it.
-    Without ``local_fallback`` the clock is never read."""
+    :data:`SETTLED_FAILURE_BILLED_LIMIT` billed attempts in total; a provider-proven
+    refusal (``contract_error_detail``) is never resent or counted; local fallback
+    never passes a settled failure without a disposition. Everything else refuses exactly as
+    without it. Without ``local_fallback`` the clock is never read."""
     if supersede is not None and (type(supersede) is not list or not local_fallback
                                   or candidate.get('route') != 'patient_context'):
         raise ValueError('cloud_supersede_scope_invalid')
@@ -1165,8 +1166,10 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
             # failure, or an unsettled one. A verified settled failure permits a resend on
             # the send path only (the unit stayed unanswered and fully accounted; the new
             # send is a separate billed attempt, capped at SETTLED_FAILURE_BILLED_LIMIT
-            # billed attempts). Local fallback never passes it without a disposition, and
-            # success, unproven and unknown outcomes still refuse duplicates.
+            # billed attempts). A provider-proven refusal detail is excluded: the provider
+            # already declined this content, so it refuses and is never counted. Local
+            # fallback never passes a settled failure without a disposition, and success,
+            # unproven and unknown outcomes still refuse duplicates.
             refusal = ('repeat_unsettled' if not settled else
                        'repeat_success' if (result.get('usage') is not None and result.get('http_class') == 'http_200'
                                             and result.get('error_kind') is None) else 'repeat_failed')
@@ -1174,7 +1177,8 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                 supersede.append(_accounting_meta(row['meta']))
                 continue
             if (refusal == 'repeat_failed' and not local_fallback
-                    and prompt_verified):
+                    and prompt_verified
+                    and result.get('contract_error_detail') not in cloud_client.CONTRACT_ERROR_DETAILS):
                 settled_failures += 1
                 if settled_failures < SETTLED_FAILURE_BILLED_LIMIT:
                     continue
@@ -2149,6 +2153,8 @@ def record_result(ledger, reservation, metadata, *, answer=None):
             result["anthropic_error_code"] = metadata["anthropic_error_code"]
         if "anthropic_400_diagnostic" in metadata:
             result["anthropic_400_diagnostic"] = metadata["anthropic_400_diagnostic"]
+        if "contract_error_detail" in metadata:
+            result["contract_error_detail"] = metadata["contract_error_detail"]
         if "answer_text_sha256_v1" in metadata:
             result["answer_text_sha256_v1"] = metadata["answer_text_sha256_v1"]
         if "answer_finish_reason_v1" in metadata:
