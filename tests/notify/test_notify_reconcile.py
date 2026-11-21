@@ -1017,13 +1017,13 @@ def _hold_inventory(world):
 
 
 def test_receipt_reports_the_active_hold_inventory(world):
-    """held/events_held describe this run; active_* carry the durable
-    worklist so a re-run of reconcile does not report an empty receipt
-    while operators still owe releases."""
+    """held/events_held list every unreleased hold, and active_* carry the
+    durable worklist so a re-run of reconcile does not report an empty
+    receipt while operators still owe releases."""
     _hold_inventory(world)
     rep = notify_reconcile.reconcile_after_restore(world.led, CFG)
-    assert rep["held"] == []
-    assert rep["events_held"] == 1   # the parked text event stays counted
+    assert [h["attempt_id"] for h in rep["held"]] == ["syn-a1", None]
+    assert rep["events_held"] == 4   # 2+1 hold-quarantined events + the parked text event
     assert [h["hold_id"] for h in rep["active_holds"]] == [1, 2]
     first = rep["active_holds"][0]
     assert (first["attempt_id"], first["delivery_id"],
