@@ -608,8 +608,10 @@ def test_unpublishable_results_rotate_behind_later_confirmed_results(scene):
     assert _apply(scene, request)["stamp_state"] == "queued"
     assert _drain(scene)["confirmed"] == 1
     ledger = scene[0]
-    ledger.db.execute("UPDATE artifacts SET content=json_set(content,'$.result_published',json('false'),"
-                      "'$.updated_at',?) WHERE kind=?", (NOW - 50, stamp_write.KIND))
+    ledger.db.execute("UPDATE artifacts SET content=json_remove(json_set(content,"
+                      "'$.result_published',json('false'),'$.updated_at',?),"
+                      "'$.publish_next_at','$.publish_attempts') WHERE kind=?",
+                      (NOW - 50, stamp_write.KIND))
     for n in range(4):
         ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
                           "VALUES(?,1,100,?,'{}',?)", (stamp_write.KIND, json.dumps(
