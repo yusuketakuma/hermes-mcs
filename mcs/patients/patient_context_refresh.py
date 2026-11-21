@@ -1006,9 +1006,14 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
     cloud_selection = None
     if cloud_settings is not None:
         cloud_selection, errors = cloud_policy.resolve_profile(
-            cfg, route="patient_context", purpose="patient_context", root=extract_llm.HOME)
-        if errors or cloud_selection is None:
-            return {"status": "source_changed", "done": 0, **stats}
+            cfg, route="patient_context", purpose="patient_context",
+            root=extract_llm.HOME, ledger=ledger, ordered=True)
+        if cloud_selection is None:
+            cloud_selection, errors = cloud_policy.resolve_profile(
+                cfg, route="patient_context", purpose="patient_context",
+                root=extract_llm.HOME)
+            if errors or cloud_selection is None:
+                return {"status": "source_changed", "done": 0, **stats}
     estimated_unit = False
     shadow_call = None
     shadow_unit = None
@@ -1068,9 +1073,13 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             return True   # the source's occurrence is gone
         except sqlite3.Error:
             return False   # a failed read proves nothing about the answer
-        return patient_context_refresh_state._cloud_scan_binding(
-            context_plan.source_signature(actual), latest["contract"], latest["route"]["provider"],
-            occurrence) != scan_input[0]
+        source_sig = context_plan.source_signature(actual)
+        return scan_input[0] not in {
+            patient_context_refresh_state._cloud_scan_binding(
+                source_sig, latest["contract"], None, occurrence),
+            # Bindings written before provider identity left the scan signature.
+            patient_context_refresh_state._cloud_scan_binding(
+                source_sig, latest["contract"], latest["route"]["provider"], occurrence)}
 
     def current(*, after_commit=False):
         """Whether this pass may still send and save. ``readiness_state`` names a refusal:
@@ -1641,7 +1650,7 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
                         meta.update(source_occurrence_version=1, source_occurrence=selected_occurrence[0],
                                     source_binding=selected_occurrence[0]["source_binding"])
                         scan_input[0] = patient_context_refresh_state._cloud_scan_binding(
-                            meta["source_sig"], meta["contract"], snapshot["route"]["provider"], selected_occurrence[0])
+                            meta["source_sig"], meta["contract"], None, selected_occurrence[0])
                         planned, planned_cursor, _, _ = context_plan.scan_plan(source, saved)
                         planned_span = [sum(map(len, planned[:planned_cursor])), sum(map(len, planned[:planned_cursor + 1]))]
                         route = snapshot["route"]

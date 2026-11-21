@@ -151,9 +151,14 @@ def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim
     request_texts = {"system": extract_llm.anthropic_client.SYSTEM,
                      "messages": [{"content": prompt}]}
     selection, errors = cloud_policy.resolve_profile(
-        cfg, route="patient_context", purpose="quality_repair", root=extract_llm.HOME)
-    if errors or selection is None:
-        return "deferred", None
+        cfg, route="patient_context", purpose="quality_repair",
+        root=extract_llm.HOME, ledger=ledger, ordered=True)
+    if selection is None:
+        selection, errors = cloud_policy.resolve_profile(
+            cfg, route="patient_context", purpose="quality_repair",
+            root=extract_llm.HOME)
+        if errors or selection is None:
+            return "deferred", None
     distinct = (selection['profile'] is not None
                 or cloud_inference.cloud_provider_contract(selection=selection) != patient_context_refresh_state._route(cfg, pid)["provider"])
     selected_tokens = selection["max_tokens"] if selection["max_tokens"] is not None else 1600
@@ -286,9 +291,14 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
     occurrence = patient_context_refresh_sources._source_occurrence(ledger.db, pid, source)
     route = patient_context_refresh_state._route(cfg, pid)
     selection, errors = cloud_policy.resolve_profile(
-        cfg, route='patient_context', purpose='quality_repair', root=extract_llm.HOME)
-    if errors or selection is None:
-        return 'deferred', None
+        cfg, route='patient_context', purpose='quality_repair',
+        root=extract_llm.HOME, ledger=ledger, ordered=True)
+    if selection is None:
+        selection, errors = cloud_policy.resolve_profile(
+            cfg, route='patient_context', purpose='quality_repair',
+            root=extract_llm.HOME)
+        if errors or selection is None:
+            return 'deferred', None
     def other_spent(db):
         return context_artifacts.other_repair_spent(
             db, pid, context_plan.source_key(source), repair_key,
