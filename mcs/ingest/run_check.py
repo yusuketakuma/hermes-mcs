@@ -80,6 +80,7 @@ import run_interrupt
 # module attribute names (monkeypatch surface for tests) unchanged
 LOCKFILE = RUN_LOCK
 RUN_DEADLINE_S = 480          # whole-run cap; per-request timeouts are not enough
+RUN_BUSY_TIMEOUT_MS = 120_000  # heartbeat writes wait out the worker lock lottery
 REALTIME_CARRY_S = 86400      # notified arrivals stay on the realtime slot this long
 # the armed watchdog's exit time (monotonic); backup and DB upkeep start
 # only when they fit before it, less this margin for the tail stages
@@ -201,6 +202,16 @@ def _require_closed_transaction(ledger, result):
 
 def _report_open_transaction(ledger, result):
     if not ledger.db.in_transaction:
+        return False
+    # A leaked transaction (bare commit failed under SQLITE_BUSY, or a crashed
+    # writer) would make _fail_run/_write_health skip too: recover it here so
+    # the run and health records still land. Rollback can itself hit the same
+    # lock — only when the transaction is really gone may the caller proceed.
+    with suppress(Exception):
+        ledger.db.rollback()
+    if not ledger.db.in_transaction:
+        if "tick: transaction_open_rolled_back" not in result["errors"]:
+            result["errors"].append("tick: transaction_open_rolled_back")
         return False
     if "tick: transaction_open" not in result["errors"]:
         result["errors"].append("tick: transaction_open")
@@ -565,6 +576,25 @@ def _commands_only(lock_fd, deadline) -> int:
         # a second drain: commands queued by the first pass's receipts
         _run_stage(result, "cmd_int_drain_again", deadline, lambda: notify_cmds.drain_int_commands(
             ledger, result, cfg, root, deadline=min(deadline, time.monotonic() + 30)), required=True)
+        # Command priority ends here: the rest is housekeeping (flag
+        # republish, GC, snapshot) that a queued tick may safely precede.
+        # Yield the run lock once so such a tick is not starved by the
+        # frequent commands passes; the reacquire wait is bounded and a
+        # busy lock only defers idempotent cleanup to the next pass.
+        yield_budget = deadline - time.monotonic()
+        if yield_budget > 0:
+            os.close(lock_fd)
+            lock_fd = None
+            with writer_lock.capture_writer_refusal() as yield_diag:
+                lock_fd = writer_lock.wait_run_lock(
+                    LOCKFILE,
+                    wait_s=min(30.0, yield_budget),
+                    expected_code_stamp=_CODE_STAMP,
+                    marker_path=os.path.join(HOME, "data", UPDATE_MARKER_NAME))
+            if lock_fd is None:
+                result["housekeeping_deferred"] = yield_diag.get("writer_reason", "run_lock_busy")
+                print(json.dumps(result, ensure_ascii=False))
+                return 0 if result["ok"] else 1
         notify_spool.publish_flags(cfg, root)
         notify_spool.publish_restore_holds(ledger, root)
         _run_stage(result, "cmd_card_gc", deadline, notify_cards.gc, ledger, cfg, required=True)
@@ -586,6 +616,8 @@ def _commands_only(lock_fd, deadline) -> int:
             elif state == "published":
                 notify_cards.clear_snapshot_dirty(ledger, dirty)
             elif state is None:
+                import snapshots
+                result["snapshot_failure"] = snapshots.last_failure()
                 result["ok"] = False
                 result["errors"].append("snapshot_publish_failed")
         print(json.dumps(result, ensure_ascii=False))
@@ -601,7 +633,8 @@ def _commands_only(lock_fd, deadline) -> int:
         try:
             ledger.close()
         finally:
-            os.close(lock_fd)
+            if lock_fd is not None:
+                os.close(lock_fd)
 
 
 def _semantic_enabled(ledger, cfg, result) -> bool:
@@ -995,11 +1028,14 @@ def _rotate_logs(result) -> None:
     """Every tick: housekeeping may be deferred for days by slow ticks,
     and rotation is one lstat per log unless a log is over the cap."""
     try:
-        maintenance.rotate_log()
+        rotated = maintenance.rotate_log()
     except maintenance.MaintenanceError as e:
         result["errors"].append(f"log_rotate: {e}")  # fixed reason token
     except Exception as e:
         result["errors"].append(f"log_rotate: {type(e).__name__}")
+    else:
+        if isinstance(rotated, dict) and rotated.get("reason"):
+            result["errors"].append(f"log_rotate: {rotated['reason']}")
 
 
 def _overdue_housekeeping(result) -> None:
@@ -1516,7 +1552,8 @@ def _main() -> int:
     try:
         ledger = Ledger(
             DB, notify_all_replies=(not args.jobs_only
-                                    and _config().get("notify_all_replies") is True))
+                                    and _config().get("notify_all_replies") is True),
+            busy_timeout_ms=RUN_BUSY_TIMEOUT_MS)
         # Writer-owned baseline for the snapshot gate: taken while the
         # run lock is held and the connection just opened this path.
         db_baseline = _db_identity(ledger)
