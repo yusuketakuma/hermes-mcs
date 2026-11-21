@@ -851,10 +851,20 @@
       "path": "changes/archive/1.2.0/jev-block-bounded-read.json",
       "sha256": "454e975858f6b3e6412523873a3f00aea57d5570dfd2ddfbb3d508d8539fdcce"
     },
+    "jev-claim-audit-context-dedup-20261121": {
+      "title": "大きなスレッドの照合が入力超過で失敗する問題を修正",
+      "path": "changes/archive/1.2.0/jev-claim-audit-context-dedup-20261121.json",
+      "sha256": "0e8f0e6bd0fb16ea8d4039ffe819411bf831d101b33dd535a5060ad1114d43b6"
+    },
     "jev-unknown-outcome-no-resend": {
       "title": "送信結果が不明なJevの要求を同じ評価の中で再送しないように修正",
       "path": "changes/archive/1.2.0/jev-unknown-outcome-no-resend.json",
       "sha256": "222297ed71ae7b7d4d518e8c97c9199232fb44c5db8c9131e8ae410e9d343426"
+    },
+    "jobs-failed-read-budget-20261121": {
+      "title": "失敗ジョブの診断が大きな履歴で確認不可になる問題を修正",
+      "path": "changes/archive/1.2.0/jobs-failed-read-budget-20261121.json",
+      "sha256": "d031228a67617333fed9b4aaaada5509b3fa0f1ba74bc7d5b97de0ef4b40af12"
     },
     "karte-capture-twophase-20261120": {
       "title": "連携サマリー保存の書込みロック保持を短縮（依存解析を書込み取引の外へ移動＋整合フェンス）",

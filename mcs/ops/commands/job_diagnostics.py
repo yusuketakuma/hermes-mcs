@@ -90,7 +90,7 @@ def _metrics(db, job_ids, *, stop_when_bound=False):
         counts = dict.fromkeys(job_ids, 0)
         query = """
             SELECT artifact_id, kind FROM main.artifacts NOT INDEXED
-            WHERE artifact_id<=? AND mcs_job_metric_budget()=1
+            WHERE kind='semantic_drain_run' AND artifact_id<=? AND mcs_job_metric_budget()=1
             ORDER BY artifact_id DESC LIMIT 128
         """
         bytes_read = 0
@@ -108,9 +108,18 @@ def _metrics(db, job_ids, *, stop_when_bound=False):
                 before = artifact_id - 1
                 if kind != 'semantic_drain_run':
                     continue
-                raw = db.execute("SELECT CASE WHEN typeof(content)='text' "
-                                 "AND length(CAST(content AS BLOB))<=1048576 THEN content END "
-                                 "FROM main.artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()[0]
+                # The content column is bounded by bytes_read below, not the
+                # caller's shared observation budget: a caller row_factory that
+                # meters every fetched row would exhaust itself here long
+                # before the scan's own 16MiB cap.
+                factory = db.row_factory
+                try:
+                    db.row_factory = None
+                    raw = db.execute("SELECT CASE WHEN typeof(content)='text' "
+                                     "AND length(CAST(content AS BLOB))<=1048576 THEN content END "
+                                     "FROM main.artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()[0]
+                finally:
+                    db.row_factory = factory
                 if raw is None:
                     return out
                 bytes_read += len(raw) * 4
