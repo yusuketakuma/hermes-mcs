@@ -6,7 +6,7 @@
 
 - v1.1.2（タグ 2026-11-08）以降の変更記録438件を `changes/archive/1.2.0/` へ全件収録。形式は `release_notes.py` の検証を通過する厳格スキーマへ統一し、category の規定外値（improved 等）・独自スキーマ・summary 280字超過・detail/ref 中の記号を全件修正した（`cfff1edb7`・`b11ddfa14`・`e9cdf7751`・`a45f75f9d` と本票作成時の54件の追補修正）。
 - 収録からの除外は2件: `reseed-flake-fix-20261120`（テストのみの修正で本番動作に変更なし）と `cloud-backlog-drain-window-20261120`（本番設定のみの記録でコード変更を伴わない）（`a45f75f9d`・`84e1fab4a`）。いずれも変更記録を要しない区分として意図的に外した。
-- CHANGELOG の v1.2.0 節・README のリリース案内を生成し、`--summary-file` による比較表と説明図2点を導入部へ掲載（`572c30a2e`）。公開本文は上限内の91,815字。
+- CHANGELOG の v1.2.0 節・README のリリース案内を生成し、`--summary-file` による比較表と説明図2点を導入部へ掲載（`572c30a2e`）。公開本文は上限内の91,845字。
 - 説明図は通知カード・クラウドAIの2点（SVG正本・PNG描画）。来歴とhashは `visual-source.json`、438件の対応表は `change-map.json`。
 - `docs/development/readme-review.json` を 1.2.0 へ更新し、README本文の見直し結果を記録済み。
 
@@ -14,7 +14,7 @@
 
 対象は `release/prep-20261121` 先端 `572c30a2e` と、本票と同じ変更で加えたテストスタブ修正。実行日は 2026-11-21（JST）。
 
-- `release_notes.py check`: 合格（archive 438件・CHANGELOG構造・詳細ファイル 821,133B・本文 91,815字）。
+- `release_notes.py check`: 合格（archive 438件・CHANGELOG構造・詳細ファイル 821,133B・本文 91,845字）。
 - `scripts/run_tests.sh tests/release/`: 59 passed + 128 subtests。
 - `scripts/run_tests.sh tests/ingest/test_derive_transaction_ownership.py`: 15 passed。main では `fetch_error` が失敗していた（`_fail_run` の `alert` kwarg にテストスタブが未対応）。スタブ修正と fetch_error の期待値（finish・health の記録）を合わせて再検証し合格。失敗修正＋影響範囲の再検証として記録する。
 - `update_readme.py --check`: drift なし。

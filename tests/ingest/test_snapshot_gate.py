@@ -722,7 +722,9 @@ def test_released_reserve_holds_a_mid_run_urgent_publish_for_the_next_tick(
     path = str(tmp_path / "ledger.db")
     assert maintenance.refresh_snapshot(path) == "published"
     marker = open(maintenance._snapshot_sig_path()).read()
-    deadline = time.monotonic() + 400
+    # above SNAPSHOT_MIN_WINDOW_GATE_S so a doubly-broken reserve release
+    # still reaches the publish stub instead of deferring at the window gate
+    deadline = time.monotonic() + 600
     result = {"notify": {}, "errors": [], "incomplete": []}
     assert run_check._optional_work_deadline(db, result, deadline) == pytest.approx(
         deadline - snapshots.SNAPSHOT_WORK_TAIL_S)

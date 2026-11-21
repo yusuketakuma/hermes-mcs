@@ -267,7 +267,9 @@ def test_snapshot_failure_leaves_health_time_and_preserves_prior_publication(
         cleared = []
         monkeypatch.setattr(notify_cards, "clear_snapshot_dirty",
                             lambda *a: cleared.append(True))
-        clock = [500.0 if failure == "signature_deadline" else 302.0]
+        # deadline=495 minus the gate window (SNAPSHOT_MIN_WINDOW_GATE_S=450)
+        # leaves clock <= 45 for the copy to start; 30 keeps the timeouts positive.
+        clock = [500.0 if failure == "signature_deadline" else 30.0]
         monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
         monkeypatch.setattr(maintenance, "monotonic", lambda: clock[0])
         monkeypatch.setattr(snapshots, "monotonic", lambda: clock[0])
@@ -284,7 +286,7 @@ def test_snapshot_failure_leaves_health_time_and_preserves_prior_publication(
 
         def verify(_path, *, deadline, **kwargs):
             assert failure == "validator_timeout"
-            assert deadline == 495.0
+            assert deadline == 495.0 - snapshots.SNAPSHOT_WORK_TAIL_S
             remaining = deadline - clock[0]
             clock[0] = deadline
             snapshots._fail("validator_timeout", verify_s=remaining, budget_s=remaining)
