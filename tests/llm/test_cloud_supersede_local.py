@@ -122,13 +122,13 @@ def test_supersede_rejects_other_routes(ledger, monkeypatch):
     assert _dispositions(ledger) == []
 
 
-@pytest.mark.parametrize("status,error,usage", [
-    ("timeout", "timeout", None),                 # repeat_unsettled
-    ("http_200", None, USAGE),                    # repeat_success
-    ("http_200", "contract_error", USAGE),        # repeat_failed
+@pytest.mark.parametrize("status,error,usage,blocks_before", [
+    ("timeout", "timeout", None, True),                # repeat_unsettled
+    ("http_200", None, USAGE, True),                   # repeat_success
+    ("http_200", "contract_error", USAGE, False),      # repeat_failed: a settled failure may resend
 ])
 def test_supersede_appends_one_row_per_verified_same_request_and_changes_no_receipt(
-        ledger, status, error, usage):
+        ledger, status, error, usage, blocks_before):
     rejected = _reserve(ledger)
     _settle(ledger, rejected, "http_429", "rate_limited")          # a confirmed rejection: no row
     paid = _reserve(ledger)
@@ -137,7 +137,10 @@ def test_supersede_appends_one_row_per_verified_same_request_and_changes_no_rece
     _settle(ledger, other, "timeout", "timeout")
     before, report = _financial(ledger), policy.usage_report(ledger)
     total = policy._tally(ledger).total
-    _refusal(lambda: _guard(ledger))
+    if blocks_before:
+        _refusal(lambda: _guard(ledger))
+    else:
+        _guard(ledger)
     written = _supersede(ledger)
     assert len(written) == 1 and _dispositions(ledger) == [
         {**policy._receipt_binding(paid), "disposition": "superseded_local"}]
@@ -299,7 +302,6 @@ def test_allow_mode_passes_discarded_without_writing(ledger, inline):
 @pytest.mark.parametrize("status,error,usage,expected", [
     ("timeout", "timeout", None, "repeat_unsettled"),
     ("http_200", None, USAGE, "repeat_success"),
-    ("http_200", "contract_error", USAGE, "repeat_failed"),
     (None, None, None, "result_missing"),
     ("disposition", "discarded_scope", None, "disposition"),
     ("disposition", "superseded_local", None, "disposition"),
@@ -329,6 +331,17 @@ def test_default_guard_path_is_unchanged(ledger, status, error, usage, expected)
     if expected in ("disposition", "receipt_inconsistent") and error != "superseded_local":
         assert _refusal(lambda: _guard(ledger)).history_refusal == expected
     assert [tuple(row) for row in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == before
+
+
+def test_default_guard_path_allows_resend_after_a_settled_failure(ledger):
+    reservation = _reserve(ledger)
+    _settle(ledger, reservation, "http_200", "contract_error", USAGE)   # repeat_failed
+    _reserve(ledger)                                                  # a new billed attempt
+    kinds = [row[0] for row in ledger.db.execute(
+        "SELECT kind FROM artifacts ORDER BY artifact_id")]
+    assert kinds.count("cloud_usage_reserve") == 2
+    # The resent attempt is still unsettled: a further send stays refused until it settles.
+    assert _refusal(lambda: _guard(ledger)).history_refusal == 'result_missing'
 
 
 def test_allow_guard_names_what_is_left_to_record_until_the_supersede_ran(ledger):

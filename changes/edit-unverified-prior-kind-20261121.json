@@ -1,0 +1,24 @@
+{
+  "category": "fixed",
+  "title": "取得失敗添付のprior継承を受領証拠で検証し、file由来priorの誤用とremote_absent悪用を防止",
+  "summary": "取得に失敗した添付ファイルの更新通知で、直前にアップロード済みのファイルIDを本文メッセージの編集対象として誤って引き継ぎ、編集対象不明(unknown)で再送を繰り返す問題への恒久対策です。prior_remote_id の継承は受領証拠で検証し、証拠がない・矛盾する場合は通知全体を保留(attachment_upload_identity_unverified)します。ファイル受領が確認できた場合は prior_kind:'file' を封印し、配送時にメッセージ編集へ回さず配信済みとして扱います。",
+  "upgrade": "追加操作は不要です。既存DBには notification_render_parts.prior_remote_id 列が自動追加されます。この変更より前に承認・記録された復旧コマンドの検証も従来どおり動作します。prior_remote_id を持つ部品への remote_absent 解決は今後拒否されるため、そのような部品は別の証拠(no_journal_started / api_rejected / preflight)で解決してください。",
+  "details": [
+    "unavailable 添付の prior_remote_id 継承を証拠分岐: unavailable 本文のみの受領なら従来どおりメッセージtsを継承、file受領のみなら prior_remote_id を残し prior_kind:'file' を封印、証拠不明・混在は attachment_upload_identity_unverified で render を保留する。",
+    "card_part_resolve_plan が封印済み prior_remote_id を plan に含める。値は notification_render_parts.prior_remote_id 列(封印specから seed 時に永続化、spec GC後も安定)を優先し、旧行は封印spec_jsonへフォールバックする。",
+    "proof=remote_absent かつ sealed prior_remote_id が非空の解決要求を remote_absent_prior_present で拒否する。現在attemptの不在証明は旧いremote対象を消さないため。",
+    "ops.card_part_resolve の要求digest再構成(_part_resolution_request)は prior_remote_id 追加前後両方の形式を受理し、既存の承認済みレシート検証を維持する。"
+  ],
+  "refs": [
+    "mcs/notify/notify_parts.py",
+    "mcs/notify/notify_recovery.py",
+    "mcs/notify/notify_tracking_ack.py",
+    "mcs/core/ledger_schema.py",
+    "adapters/common/spec.py",
+    "tests/notify/test_attachment_upload_identity.py",
+    "tests/notify/test_card_part_resolve.py",
+    "tests/core/test_initial_history_schema.py",
+    "tests/core/test_schema11_released_upgrade.py",
+    "tests/core/test_schema12_remote_file_id.py"
+  ]
+}

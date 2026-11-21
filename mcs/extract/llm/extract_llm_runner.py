@@ -239,6 +239,80 @@ def _rebuild_guard(ledger, r):
     return lambda: local_rebuild.permit_for(ledger, r["_local_rebuild"]) in local_rebuild.RUNNABLE
 
 
+def _cloud_guard_fence(db):
+    """COUNT+MAX snapshot of every cloud_* artifact kind the accounting guard reads.
+
+    Cloud accounting rows are append-only with monotonic artifact ids and no
+    UPDATE path touches them, so any reserve/result/disposition/carryover or
+    control/circuit write moves this snapshot while unrelated artifact traffic
+    does not."""
+    return {kind: (count, top) for kind, count, top in db.execute(
+        "SELECT kind, COUNT(*), COALESCE(MAX(artifact_id),0) FROM artifacts "
+        "WHERE kind GLOB 'cloud_*' GROUP BY kind")}
+
+
+class _DeferredGuard:
+    """Evaluate an adoption guard before the write transaction, then re-prove
+    its artifact fence inside it.
+
+    ``prepare`` runs the guard once outside the transaction and captures the
+    fence; an in-transaction call accepts that verdict only while the fence
+    still matches. A stale fence rejects the adoption — the row stays pending
+    and the next attempt re-evaluates — so the write transaction never rescans
+    accounting. A held verdict rejects outright, and a prepare-time failure
+    leaves the guard unprepared so in-transaction calls evaluate normally."""
+
+    def __init__(self, evaluate, fence, event_extra=None):
+        self._evaluate = evaluate
+        self._fence = fence
+        self._event_extra = event_extra
+        self._prepared = None
+        self._resolved = None
+        self.path = "none"
+        self.verdict = None
+
+    def prepare(self):
+        self._prepared = self._resolved = None
+        self.path = "prepare_failed"
+        try:
+            # The fence must precede the evaluation: the guard reads a pinned
+            # snapshot, so a cloud write landing mid-evaluation is invisible to
+            # the verdict yet present in a post-evaluation fence — capturing
+            # first makes any such write break the commit-time comparison.
+            fence = self._fence()
+            verdict = bool(self._evaluate())
+            self._prepared = (verdict, fence if verdict else None)
+            self.path = "prepared"
+        except Exception:
+            self._prepared = None
+
+    def __call__(self):
+        if self._resolved is not None:
+            return self._resolved
+        if self._prepared is None:
+            self.path = "direct"
+            self.verdict = bool(self._evaluate())
+            return self.verdict
+        verdict, fence = self._prepared
+        if fence is None:
+            self.path = "prepared_hold"
+            self.verdict = False
+            return False
+        try:
+            fresh = self._fence() == fence
+        except Exception:
+            fresh = False
+        if fresh:
+            self.path, self.verdict = "reuse", verdict
+            return verdict
+        self.path, self.verdict = "miss_reject", False
+        print(json.dumps({"event": "extract_guard_fence_miss",
+                          "pid": os.getpid(), "ts": time.time(),
+                          **(self._event_extra or {})}),
+              file=sys.stderr, flush=True)
+        return False
+
+
 def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 admitted_ids: set | None = None,
                 per_write_lock: bool = False, workers: int = 1,
@@ -715,7 +789,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         OSError, RuntimeError):
                     return False
                 return True
-            r["_superseded_guard"] = adoption_guard
+            r["_superseded_guard"] = _DeferredGuard(
+                adoption_guard, lambda: _cloud_guard_fence(ledger.db),
+                {"message_id": r.get("message_id"),
+                 "project_id": r.get("project_id")})
         elif r.get("_local_rebuild") is not None:
             # An approved local rebuild: every local dispatch (first, repair, split) and the
             # adoption re-prove the same permit; provider stays None so no path reaches cloud.

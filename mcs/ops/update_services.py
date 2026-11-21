@@ -192,6 +192,19 @@ def _restart_runtime_mode():
     return mode if mode in ("hermes", "standalone") else None
 
 
+def _enable_log_rotation() -> None:
+    """Certify mcs.log rotation once services run under this code — every
+    writer is then a cooperative append() caller, so rename-rotation strands
+    no held descriptor. Fail-soft by design: a refused rotation already
+    surfaces every run as a log_rotate error token, and a failed enable must
+    not roll back an otherwise verified update."""
+    try:
+        import run_log
+        run_log.enable_rotation(DATA, legacy_writers_closed=True)
+    except Exception:
+        pass
+
+
 def restart_agents(bounce: bool = True) -> list[str]:
     """Stop resident drainers before releasing the hold, then verify startup; watchers are
     verified loaded only (R20). Returns list of verify failures. Labels

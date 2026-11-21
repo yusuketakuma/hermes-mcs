@@ -275,6 +275,9 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     flip mid-run takes effect at the next job boundary (AT-060)."""
     started_at = time.perf_counter()
     started_wall = time.time()
+    # run-lock hold epoch for lock_hold accounting: the caller holds the
+    # lock from run_due entry until the first unlocked_transport release
+    held_since = time.monotonic()
     if lane not in (None, "realtime", "backlog"):
         raise ValueError("semantic_lane_invalid")
     if cloud_only and (lane != "backlog" or llm_fn is not None):
@@ -295,12 +298,30 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
            "progressed": 0,
            # fixed-shape phase timings for the preamble maintenance calls
            "invalidate_s": None, "reprocess_s": None, "reproject_s": None}
+    # Log-only hold segments (never in the drain_run artifact, no job
+    # identity): seconds the borrowed run lock stayed held outside
+    # transport windows — from each reacquire (run_due entry for the
+    # first) to the next unlocked_transport entry, plus one tail segment
+    # at return. Only a borrowed fd makes the release/reacquire real;
+    # fd-less passes (standalone, per-write extract) emit nothing.
+    lock_hold = None
+    if run_lock_fd is not None:
+        lock_hold = out["lock_hold"] = {"hold_max_s": 0.0, "hold_sum_s": 0.0,
+                                        "hold_count": 0}
+
+    def _hold_tail():
+        if lock_hold is not None:
+            hold = time.monotonic() - held_since
+            lock_hold["hold_sum_s"] += hold
+            lock_hold["hold_max_s"] = max(lock_hold["hold_max_s"], hold)
+            lock_hold["hold_count"] += 1
     if scfg['mode'] != 'off':
         try:
             initial_sched, _ = _reservation_sched(ledger)
         except Exception:
             result['errors'].append('semantic: long_defer_reservation_failed')
             out['long_defer_reservation_failed'] = True
+            _hold_tail()
             return out
     global _invalidated_at
     # The scan is O(corpus) (thread_bundle per canonical thread) and the
@@ -316,6 +337,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         out["invalidate_s"] = round(time.perf_counter() - _phase_t, 3)
         _invalidated_at = time.monotonic()
     if scfg["mode"] == "off":
+        _hold_tail()
         return out
     if not cloud_only:
         _phase_t = time.perf_counter()
@@ -336,6 +358,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     if free_mb is not None \
             and free_mb < llm_availability.disk_floor_mb():
         out["disk_free_mb"] = round(free_mb)
+        _hold_tail()
         return out
     # Deterministic maintenance (no model, no Jev — not gated by the
     # endpoint breaker or LLM admission): bring current projection/v4
@@ -351,6 +374,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     circuit_s = llm_availability.circuit_open_s(ledger.db)
     if circuit_s and not cloud_only:
         out["circuit_open_s"] = round(circuit_s)
+        _hold_tail()
         return out
     drain_started = time.perf_counter()
     # maintenance ahead of the job loop, and jobs skipped without a
@@ -405,7 +429,13 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     shadow_stats = out["shadow_v2"] = {"calls": 0, "incomplete": 0, "s": 0.0}
 
     def _unlocked(kind, call, *args, **kwargs):
+        nonlocal held_since
         started, ended = time.monotonic(), None
+        if lock_hold is not None:
+            hold = started - held_since
+            lock_hold["hold_sum_s"] += hold
+            lock_hold["hold_max_s"] = max(lock_hold["hold_max_s"], hold)
+            lock_hold["hold_count"] += 1
         try:
             with unlocked_transport(ledger.db, run_lock_fd, wait_s=reacquire_s,
                                     deadline=deadline):
@@ -427,6 +457,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 # raw sums: rounding each call would drop short calls
                 transport[f"{kind}_transport_s"] += ended - started
                 transport[f"{kind}_reacquire_s"] += time.monotonic() - ended
+            held_since = time.monotonic()
 
     # Endpoint health shared with the extract lane's breaker: a refused
     # connection / 503 never consumes an attempt here (LLMNotSent -> free
@@ -506,10 +537,12 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     except _CloudSelectionIncomplete as error:
         out['cloud_selection_incomplete'] = True
         out['cloud_selection_reason'] = str(error)
+        _hold_tail()
         return out
     except _SchedulerUnavailable:
         result['errors'].append('semantic: long_defer_reservation_failed')
         out['long_defer_reservation_failed'] = True
+        _hold_tail()
         return out
     due = first_batch[0]
     consumed_turns = {}
@@ -876,6 +909,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                                         else "updated" if e.updated
                                         else "timeout")
                 result["errors"].append("semantic: run_lock_lost")
+                _hold_tail()
                 return out
             except Exception as e:
                 _why(diagnostics, f"exception_{type(e).__name__}")
@@ -1020,6 +1054,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         _persist_drain_accounting(ledger, scfg, out, result, selected,
                                   qc_active, sched_mut, None,
                                   long_defers)
+    _hold_tail()
     return out
 
 

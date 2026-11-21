@@ -434,7 +434,12 @@ def llm_extract(body: str, *, context: str | None = None,
                     profile_cfg = getattr(provider, "_profile_cfg", None)
                     if base_selection is not None and profile_cfg is not None:
                         selected, errors = cloud_policy.resolve_profile(
-                            profile_cfg, route="reextract", purpose="quality_repair", root=HOME)
+                            profile_cfg, route="reextract", purpose="quality_repair",
+                            root=HOME, ordered=True)
+                        if errors or selected is None:
+                            selected, errors = cloud_policy.resolve_profile(
+                                profile_cfg, route="reextract", purpose="quality_repair",
+                                root=HOME)
                         if errors or selected is None:
                             _CALL_NOTES.defer_reason = "repair_unavailable"
                             return _DEFERRED
