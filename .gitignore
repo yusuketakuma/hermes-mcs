@@ -28,6 +28,7 @@ uv.lock
 .senpi/
 .claude/
 venv/
+.venv
 .venv/
 ocr-venv/
 # Standalone services renders deployment/scripts/*.sh into <root>/scripts, the
