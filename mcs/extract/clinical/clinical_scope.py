@@ -143,9 +143,10 @@ def _has_condition(body, start, end, span=None):
     return False
 
 
-# A period ends a clause only when it is not a decimal point inside a number
-# (80.5 stays one value; 120/80. ends the sentence it closes).
-_SCOPE_BREAK = re.compile(r"[。！？!?;；\n、,]|[.．](?!\d)|しかし|ただし|だが|けれど(?:も)?|(?<![一-龥ぁ-んァ-ヶ])一方(?:で)?(?=$|[、, \t　])")
+# A period ends a clause only when it closes a number, so 120/80. ends its
+# sentence while 80.5, a.m. and ... stay inside the clause they belong to.
+_PERIOD_BREAK = r"(?<=\d)[.．](?!\d)"
+_SCOPE_BREAK = re.compile(rf"[。！？!?;；\n、,]|{_PERIOD_BREAK}|しかし|ただし|だが|けれど(?:も)?|(?<![一-龥ぁ-んァ-ヶ])一方(?:で)?(?=$|[、, \t　])")
 
 _REASON_CUE = re.compile(r"至急|緊急|救急|搬送|急変|意識|反応|呼吸|SpO2|血圧|体温|発熱|高熱|疼痛|痛み|[胸腹頭背腰]痛|苦し|出血|転倒|死亡|逝去|心肺|酸素|けいれん|痙攣|脱水|嘔吐|吐血|血尿|冷汗|(?:BP|BS|Glu)\s*\d", re.I)
 
@@ -166,14 +167,14 @@ def person_scope(person, patient_name):
 @functools.lru_cache(maxsize=32)
 def _scope_puncts(body):
     """Positions of the single-character _SCOPE_BREAK marks, cached per body."""
-    return tuple(m.start() for m in re.finditer(r"[。！？!?;；、,\n]|[.．](?!\d)", body))
+    return tuple(m.start() for m in re.finditer(rf"[。！？!?;；、,\n]|{_PERIOD_BREAK}", body))
 
 @functools.lru_cache(maxsize=32)
 def _scope_events(body, patient_name, provider_fields):
     """Collect span-independent person/period events once per body, sorted by position, for patient_source_scope."""
     events, assignments = [], []
     # _REPORTING/_CLINICAL_ACTOR are matched in place (pos), never on a copied tail.
-    stops = [m.start() for m in re.finditer(r"[。！？!?;；\n]|[.．](?!\d)", body)]
+    stops = [m.start() for m in re.finditer(rf"[。！？!?;；\n]|{_PERIOD_BREAK}", body)]
     for match in _SCOPE_HEADING.finditer(body):
         label = (match[1] or match[2] or match[3] or "").strip()
         if (provider_fields and (
@@ -257,7 +258,7 @@ def _source_scope_axes(body, start, end, *, patient_name=None, default="patient"
     left = max((m.end() for m in _SCOPE_BREAK.finditer(body, left, start)), default=left)
     right = _SCOPE_BREAK.search(body, end)
     clause = body[left:right.start() if right else len(body)]
-    sentence = max(body.rfind(c, 0, start) for c in "。！？!?;；\n") + 1
+    sentence = max((m.end() for m in re.finditer(rf"[。！？!?;；\n]|{_PERIOD_BREAK}", body[:start])), default=0)
     condition_start = max((m.end() for m in _SCOPE_BREAK.finditer(body, sentence, start)
                            if m.group() not in "、,"), default=sentence)
     if _has_condition(body, condition_start, right.start() if right else len(body), start):
@@ -268,7 +269,7 @@ def _source_scope_axes(body, start, end, *, patient_name=None, default="patient"
         return scope, "unknown"
     if period != "current" and not CURRENT_MARK.search(clause):
         return scope, period
-    sentence = max(body.rfind(c, 0, start) for c in "。！？!?\n") + 1
+    sentence = max((m.end() for m in re.finditer(rf"[。！？!?\n]|{_PERIOD_BREAK}", body[:start])), default=0)
     if measurement and CURRENT_MARK.search(clause) and (
             _NONCURRENT_MARK.search(clause) or _MEASURED_PAST_MARK.search(clause)):
         # 「昨日の体温38.5℃と本日の体温36.5℃」: one clause with both times — each reading
