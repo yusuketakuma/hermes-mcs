@@ -465,10 +465,13 @@ def _dated_vitals(m, values, patient_name):
 def _has_patient_vital(body, patient_name):
     if not isinstance(body, str):
         return False
+    # vital_match_values drops implausible pairs (「血圧 11/20.」 is a date, not a
+    # reading), so a date-only note does not count as a patient's measured vital.
     return any(clinical_scope.patient_source_scope(body, *match.span(), patient_name=patient_name,
                                                     measurement=True) == "patient"
-               for pattern in (*VITAL_PATTERNS.values(), _PULSE_LABEL)
-               for match in re.finditer(pattern, body, re.I))
+               for key, pattern in (*VITAL_PATTERNS.items(), ("pulse", _PULSE_LABEL))
+               for match in re.finditer(pattern, body, re.I)
+               if vital_match_values(key, match))
 
 
 def _noncurrent_vital_reference(body, values):
