@@ -28,6 +28,8 @@ uv.lock
 .senpi/
 .claude/
 venv/
+.venv
+.venv/
 ocr-venv/
 # Standalone services renders deployment/scripts/*.sh into <root>/scripts, the
 # checkout in the default layout. Name each one: a glob would cover tracked scripts.

@@ -263,6 +263,28 @@ def test_recovery_keeps_a_known_rejected_attempt_and_reuses_the_later_paid_answe
         assert len(calls) == 2 and len(locks) == 1
 
 
+def test_settled_paid_failure_resends_through_the_entry_as_a_new_billed_attempt(paid):
+    """A settled failure holds no saved answer: recovery misses it, the
+    reservation guard admits one new billed send, and the entry answers fresh."""
+    path, _cfg, calls, _locks, _state, unit, _restart = paid
+    with closing(Ledger(path)) as ledger:
+        first = unit(ledger)
+        with legacy_cloud_routes():
+            reservation = first.reserve(
+                first.client.body('synthetic prompt', first.selection['max_tokens'], None), 30)
+        cloud_policy.record_result(ledger, reservation, {
+            'model': reservation['model'], 'request_fp': reservation['request_fp'],
+            'usage': {'input_tokens': 10, 'output_tokens': 2},
+            'http_class': 'http_200', 'request_id': None, 'error_kind': 'contract_error'})
+        assert calls == []
+        with legacy_cloud_routes():
+            answer = _ask(unit(ledger, owner='resend'))
+        assert answer['text'] == '{"synthetic":"answer"}'
+        assert 'reused_response' not in answer
+        assert len(calls) == 1
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 2
+
+
 @pytest.mark.parametrize('damage', ['answer', 'duplicate', 'unknown', 'missing_answer',
                                    'missing_receipt', 'missing_reservation', 'discarded', 'legacy', 'input', 'tokens'])
 def test_invalid_or_different_paid_evidence_never_replays_or_resends(paid, damage):
