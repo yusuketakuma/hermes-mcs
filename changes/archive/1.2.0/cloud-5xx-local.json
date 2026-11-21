@@ -1,0 +1,14 @@
+{
+  "category": "changed",
+  "title": "外部AIの5xx・529は待たずにローカルLLMへ回す",
+  "summary": "Anthropic・OpenAI が 500番台や 529（混雑）を返したとき、待って再試行せず、その単位をすぐローカルLLMの処理へ回します。待って再試行する間、クラウドの送信枠を占めていました。429（回数制限）の扱いと Jev の再試行は変わりません。",
+  "upgrade": "追加操作は不要です。5xx・529 のときにクラウドの送信枠を待ちで占めなくなります。",
+  "details": [
+    "CloudClient.response_error は 5xx を再試行しない分類にします（所有者の決定 2026-11-15）。"
+  ],
+  "refs": [
+    "mcs/llm/transport/cloud_client.py",
+    "docs/guides/ANTHROPIC.md",
+    "tests/llm/test_anthropic_client.py"
+  ]
+}

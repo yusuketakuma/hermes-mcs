@@ -226,7 +226,7 @@ def test_five_units_with_200_refusals_each_send_once_and_never_open_the_circuit(
     for meta in metas:
         assert meta["usage"]["input_tokens"] == 10 and meta["error_kind"] == "contract_error"
         assert meta["http_class"] == "http_200" and "answer_text_sha256_v1" not in meta
-        assert "contract_error_detail" not in meta      # the detail reaches the circuit, not the row
+        assert meta["contract_error_detail"] == "refusal"  # the detail reaches the circuit and the row
     report = c.usage_report(led)
     assert report["daily_requests"] == 5 and report["unresolved_requests"] == 0
     assert not semantic_runtime.circuit_open(led, kind="cloud_circuit")

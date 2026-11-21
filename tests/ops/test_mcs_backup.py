@@ -428,8 +428,9 @@ def test_inventory_counts_real_patient_notify_and_job_states(world):
     receipt = _create(world)
     report = backup.verify(receipt["bundle"], receipt["sha256"], world[3], lambda: KEY)
     inventory = report["inventory"]
+    # v2 の正常状態集合には "failed" は無く、残存する旧値は other に数える
     assert inventory["states"]["patients"] == {
-        "pending": 1, "complete": 1, "incomplete": 1, "failed": 0,
+        "pending": 1, "complete": 1, "incomplete": 1,
         "forbidden": 1, "other": 1}
     assert inventory["states"]["notify_outbox"] == {
         "pending": 1, "accepted": 1, "failed": 1, "suppressed": 1, "other": 0}
@@ -456,7 +457,7 @@ def test_legacy_generation_inventory_still_verifies(world):
     path = Path(receipt["bundle"])
     manifest, ciphertext = _parts(path)
     manifest["inventory"] = backup_evidence.inventory_snapshot(
-        Path(world[0]), enum_version=1)
+        Path(world[0]), version=1)
     _re_mac_bundle(path, manifest, ciphertext)
     report = backup.verify(str(path), backup.file_sha256(path), world[3],
                            lambda: KEY)
@@ -469,7 +470,7 @@ def test_tampered_legacy_inventory_is_still_rejected(world):
     path = Path(receipt["bundle"])
     manifest, ciphertext = _parts(path)
     manifest["inventory"] = backup_evidence.inventory_snapshot(
-        Path(world[0]), enum_version=1)
+        Path(world[0]), version=1)
     manifest["inventory"]["states"]["patients"]["other"] += 1
     _re_mac_bundle(path, manifest, ciphertext)
     with pytest.raises(backup_evidence.BackupError, match="inventory_mismatch"):

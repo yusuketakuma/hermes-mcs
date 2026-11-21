@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "添付の解析結果を、確認済みの更新では作り直さないようにした",
+  "summary": "添付資料（OCR済みページ）のローカル解析の結果と途中経過が、更新を入れるたびに無効になり、同じページを何度も解析し直していました。今後は、更新の前に開発側が差分を確認して記録（witness）を作った更新に限り、更新前の結果と途中経過をそのまま使います。この更新自体も、本番の eb19abef9ea17f5c41e6935bd3b2e6c13fc30f4d から入れる場合は既存の結果を保ちます。",
+  "upgrade": "利用者の追加操作は不要です。記録が効くのは、記録に書いた更新前の版（現在は eb19abef9ea17f5c41e6935bd3b2e6c13fc30f4d）から入れたときだけです。別の版から入れたときや、記録を作り直していない更新では、これまでどおり添付の解析を一度やり直します。開発側は、本番へ入れる版を決めたあと、その版で python3 scripts/development/update_attachment_contract_witness.py --baseline 本番の commit SHA を実行し、差分を確認してから記録を commit します。",
+  "details": [
+    "記録は resources/inference-contracts/attachment-refactor-20261105.json に1件だけ置きます。更新前の版から変わったモジュールと、その更新前の digest を並べたものです。",
+    "抽出の内容を左右するモジュール（extract_llm_source_contract の _HOLD_SOURCES：プロンプト・schema・抽出エンジン・検証・品質・臨床値など）と、添付の解析内容を左右するモジュール（OCRの読取り・修正依頼・観察の種・クラウド送信の識別・患者の読取り範囲・測定値の出所）が変わった更新、推論・抽出・文脈の版番号が変わった更新、モジュールが削除された更新では、記録を作りません。この場合は結果を作り直します。",
+    "記録を作るときは、更新前の版を外部通信なしで読み込み、現在の版が同じ識別子になることを確かめます。一致しなければ記録を元に戻して止まります。",
+    "ローカルモデルを変更したときは、以前のローカルモデルで作った結果を再解析します。クラウドで作った結果は引き続き使えます。チャットの抽出、クラウド送信の条件、人の承認の経路は変わりません。"
+  ],
+  "refs": [
+    "mcs/extract/attachment_inference_contract.py",
+    "scripts/development/update_attachment_contract_witness.py",
+    "resources/inference-contracts/attachment-refactor-20261105.json"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "category": "added",
+  "title": "通知の未完了部品の観測が上限で止まったとき、停止検知時の処理を記録に残す",
+  "summary": "health.json の notify.incomplete_parts が観測上限で不明になったとき、停止を検知した時点の処理を示す observation 項目（phase・stop・budget_s・elapsed_s・remaining_s）を記録に含めます。時間窓が読み取り前に尽きたのか集計途中で超過したのかを区別できます。件数の判定・警告の条件・再送の扱いは変わりません。",
+  "upgrade": "追加操作は不要です。health.json の notify.incomplete_parts に、読み取り失敗時だけ observation 項目が増えます。読み手（health_watch）は従来どおり件数項目だけを使うため表示は変わりません。",
+  "details": [
+    "mcs/notify/notify_scope.py: incomplete_parts_health が observation 辞書と境界確認を受け取り、停止検知時の処理として receipt_targets（受領索引）・part_rows（部品行の走査と証明）・acknowledged（行ごとの受領再証明）・unknown_count（末尾の unknown 全件数集計）を固定 phase として記録します。receipt_targets 終了直後と unknown_count 開始直前でも期限を確認するため、直前の処理での超過が後続 phase へ持ち越されません。既定では記録しないため、他の呼出しの動作は変わりません。",
+    "mcs/ingest/health_report.py: incomplete_parts_health が bounded_health_read の observation と境界確認を集計へ渡し、読み取り失敗時の報告に observation を含めます（phase は停止検知時の処理を示し、total=null と実データ非出力を維持します）。stop=budget_exhausted は開始前の予算不足、stop=time_limit・item_limit 等は集計中の停止を示します。carried_measurement の持ち越し判定では observation を計測項目の必須キーから外し、前回の記録に observation が無くても stale_measurement の持ち越しが効くようにしました（observation は今回の読み取り自身の停止診断であり、持ち越す計測値ではありません）。",
+    "tests/notify/test_incomplete_parts_observation_phases.py: 入口予算枯渇（budget_exhausted・connection_setup・集計未呼出）、receipt_targets 終了直後の期限確認、および末尾 unknown_count での SQL interrupt 時に part_rows にならず unknown_count として記録される回帰を追加しました。",
+    "tests/ingest/test_health_observation_budget.py: incomplete_parts_health の差替え読取りに observation 引数を許容させ、unknown 報告の observation 項目を件数検査の対象外にしました。",
+    "対象の観測上限は observation_limit・observation_unavailable。従来は理由だけでは、共有の観測時間窓が読み取り開始前に尽きたのか、部品集計の途中で超過したのか区別できなかった。期限超過時は total=null とし実データを出力しない。"
+  ],
+  "refs": [
+    "mcs/notify/notify_scope.py",
+    "mcs/ingest/health_report.py",
+    "tests/notify/test_incomplete_parts_observation_phases.py",
+    "tests/ingest/test_health_observation_budget.py"
+  ]
+}

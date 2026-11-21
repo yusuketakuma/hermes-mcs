@@ -125,7 +125,7 @@ def test_supersede_rejects_other_routes(ledger, monkeypatch):
 @pytest.mark.parametrize("status,error,usage,blocks_before", [
     ("timeout", "timeout", None, True),                # repeat_unsettled
     ("http_200", None, USAGE, True),                   # repeat_success
-    ("http_200", "contract_error", USAGE, False),      # repeat_failed: a settled failure may resend
+    ("http_200", "contract_error", USAGE, True),       # repeat_failed: resend is send-path only
 ])
 def test_supersede_appends_one_row_per_verified_same_request_and_changes_no_receipt(
         ledger, status, error, usage, blocks_before):
@@ -157,6 +157,18 @@ def test_supersede_appends_one_row_per_verified_same_request_and_changes_no_rece
     # another unit's history is untouched
     _refusal(lambda: _guard(ledger, unit="synthetic-other", prompt="synthetic other"))
     assert _financial(ledger) == before
+
+
+def test_plain_local_guard_never_passes_a_settled_failure_without_disposition(ledger):
+    """allow_supersede=False writes nothing, so a settled paid failure must not pass
+    silently: local substitution stays refused and the send path owns the resend."""
+    paid = _reserve(ledger)
+    _settle(ledger, paid, "http_200", "contract_error", usage=USAGE)
+    refused = _refusal(lambda: _guard(ledger))
+    assert refused.history_refusal == "repeat_failed"
+    assert _dispositions(ledger) == []
+    written = _supersede(ledger)
+    assert len(written) == 1 and _dispositions(ledger)[0]["disposition"] == "superseded_local"
 
 
 def test_a_young_missing_result_is_never_superseded(ledger):
@@ -341,7 +353,9 @@ def test_default_guard_path_allows_resend_after_a_settled_failure(ledger):
         "SELECT kind FROM artifacts ORDER BY artifact_id")]
     assert kinds.count("cloud_usage_reserve") == 2
     # The resent attempt is still unsettled: a further send stays refused until it settles.
-    assert _refusal(lambda: _guard(ledger)).history_refusal == 'result_missing'
+    assert _refusal(lambda: _reserve(ledger)).history_refusal == 'result_missing'
+    # The plain local guard refuses earlier, at the settled failure itself.
+    assert _refusal(lambda: _guard(ledger)).history_refusal == 'repeat_failed'
 
 
 def test_allow_guard_names_what_is_left_to_record_until_the_supersede_ran(ledger):

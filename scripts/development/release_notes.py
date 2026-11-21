@@ -21,6 +21,10 @@ HEADINGS = [*GROUPS.values(), "更新時の注意", "技術詳細"]
 VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 IMAGES = re.compile(r"!\[(?P<alt>[^\]\n]*)\]\((?P<url>[^\s)]+)\)")
 REPOSITORY_PATH = "/yusuketakuma/hermes-mcs"
+# GitHub Release本文は125,000字が上限。検査では余裕をもって12万字で止める。
+BODY_LIMIT = 120_000
+# GitHubは1MBを超えるMarkdownを描画しない。版別の詳細ファイルはこの未満に保つ。
+DETAILS_FILE_LIMIT = 1_000_000
 
 
 def repository_image_path(target):
@@ -165,6 +169,50 @@ def check_body(body, release_version):
         raise ValueError("技術詳細は折りたたみに記載してください")
 
 
+def _details_file_link(release_version):
+    """1MB未満で描画される版別詳細ファイルへの固定URL。"""
+    return (f"https://github.com{REPOSITORY_PATH}/blob/v{release_version}"
+            f"/docs/releases/v{release_version}/changelog-{release_version}.md")
+
+
+def _collapse_fixed(body, link, release_version):
+    """不具合修正を見出しだけへ畳み、詳細は版別ファイルのリンクへ送る。
+    セキュリティ項目は複数行の説明も全部保持し、拾えない項目があれば失敗する。"""
+    start = re.search(r"^### 不具合修正$", body, re.M)
+    if start is None:
+        return body
+    nxt = re.search(r"^### ", body[start.end():], re.M)
+    end = start.end() + (nxt.start() if nxt else len(body) - start.end())
+    content = body[start.end():end]
+    entries = re.findall(r"^- (\*\*.+\*\*)((?:\n  .+)*(?:\n\n  .+(?:\n  .+)*)*)", content, re.M)
+    if len(entries) != len(re.findall(r"^- .+$", content, re.M)):
+        raise ValueError("不具合修正の項目を取りこぼしたため畳み込みを中止します")
+    kept = [(f"- {title}{rest}" if title.startswith("**セキュリティ：")
+             else f"- {title}") for title, rest in entries]
+    return (body[:start.start()] + "### 不具合修正\n\n"
+            + "\n\n".join(kept) + "\n\n"
+            + f"- 各修正の説明・根拠は [CHANGELOG v{release_version}]({link}) を参照してください。\n\n"
+            + body[end:])
+
+
+def release_body(text, release_version):
+    """公開用の本文。上限内はCHANGELOGの節そのまま、超える版だけ要約へ置き換える。"""
+    body = section(text, release_version)
+    check_body(body, release_version)
+    if len(body) <= BODY_LIMIT:
+        return body
+    link = _details_file_link(release_version)
+    details = re.search(r"^### 技術詳細$", body, re.M)
+    short = (body[:details.start()] + "### 技術詳細\n\n"
+             f"- 技術詳細・変更の根拠は [CHANGELOG v{release_version}]({link}) "
+             "を参照してください。\n")
+    if len(short) > BODY_LIMIT:
+        short = _collapse_fixed(short, link, release_version)
+    if len(short) > BODY_LIMIT:
+        raise ValueError(f"Release本文が{BODY_LIMIT}文字の上限を超えています")
+    return short
+
+
 def check_changelog(text):
     headers = list(re.finditer(r"^## \[([^\]]+)\](.*)$", text, re.M))
     names = [h.group(1) for h in headers]
@@ -188,8 +236,10 @@ def check_changelog(text):
 def render(items, headline, summary):
     if not headline.strip() or not summary.strip() or len(headline) > 100:
         raise ValueError("headline・summaryは必須です。headlineは100文字以内です")
-    if any(x in headline + summary for x in ("\n", "\r", "<", ">")):
-        raise ValueError("headline・summaryはHTMLなしの1行で指定してください")
+    if any(x in headline for x in ("\n", "\r", "<", ">")):
+        raise ValueError("headlineはHTMLなしの1行で指定してください")
+    if any(x in summary for x in ("\r", "<", ">")):
+        raise ValueError("summaryはHTMLなしで指定してください")
     out = [f"**{headline}**", "", summary, ""]
     upgrades = list(dict.fromkeys(item["upgrade"] for item in items))
     critical = [item for item in items if item["category"] in ("security", "breaking")]
@@ -265,7 +315,8 @@ def main(argv=None):
     build.add_argument("--version", required=True)
     build.add_argument("--date", required=True)
     build.add_argument("--headline", required=True)
-    build.add_argument("--summary", required=True)
+    build.add_argument("--summary")
+    build.add_argument("--summary-file", type=Path)
     export = sub.add_parser("export")
     export.add_argument("--version", required=True)
     export.add_argument("--output", type=Path, required=True)
@@ -274,14 +325,21 @@ def main(argv=None):
     try:
         if args.command == "check":
             load_fragments(args.root)
-            check_changelog((args.root / "CHANGELOG.md").read_text(encoding="utf-8"))
+            text = (args.root / "CHANGELOG.md").read_text(encoding="utf-8")
+            versions = check_changelog(text)
+            for p in sorted((args.root / "docs" / "releases").glob("v*/changelog-*.md")):
+                if p.stat().st_size >= DETAILS_FILE_LIMIT:
+                    raise ValueError(f"{p} が1MBを超えています")
+            for v in versions:
+                if len(section(text, v)) > BODY_LIMIT and not (
+                        args.root / "docs" / "releases" / f"v{v}" / f"changelog-{v}.md").is_file():
+                    raise ValueError(f"v{v}: 上限超過の版に版別詳細ファイルがありません")
             if args.base:
                 require_fragment(args.root, args.base)
         elif args.command == "export":
             text = (args.root / "CHANGELOG.md").read_text(encoding="utf-8")
             check_changelog(text)
-            body = section(text, args.version)
-            check_body(body, args.version)
+            body = release_body(text, args.version)
             args.output.write_text(body, encoding="utf-8")
             if args.title_output:
                 args.title_output.write_text(release_title(body, args.version) + "\n", encoding="utf-8")
@@ -306,7 +364,11 @@ def main(argv=None):
             archive = args.root / "changes" / "archive" / args.version
             if archive.exists():
                 raise ValueError("archiveが既に存在します")
-            body = render([item for _, item in fragments], args.headline, args.summary)
+            if (args.summary is None) == (args.summary_file is None):
+                raise ValueError("--summary か --summary-file のどちらか一方が必要です")
+            summary = (args.summary if args.summary is not None
+                       else args.summary_file.read_text(encoding="utf-8").strip())
+            body = render([item for _, item in fragments], args.headline, summary)
             replacement = (f"## [Unreleased]\n\n## [{args.version}] — {args.date}\n\n"
                            + body.rstrip())
             new_text = text.replace("## [Unreleased]", replacement, 1)
@@ -316,8 +378,18 @@ def main(argv=None):
             new_readme = readme_release.render(
                 readme.read_text(encoding="utf-8"), new_text)
             readme_release.check_links(args.root, new_readme)
+            details = f"## [{args.version}] — {args.date}\n\n" + body.rstrip() + "\n"
+            if len(details.encode("utf-8")) >= DETAILS_FILE_LIMIT:
+                raise ValueError("版別詳細ファイルが1MBを超えます")
+            # exportと同じ本文上限をarchive前に検査し、超過版が記録を取り込んだまま
+            # 再build不能になるのを防ぐ（release_bodyは超過時にValueErrorを投げる）
+            release_body(new_text, args.version)
             archive.mkdir(parents=True)
             path.write_text(new_text, encoding="utf-8")
+            details_path = (args.root / "docs" / "releases" / f"v{args.version}"
+                            / f"changelog-{args.version}.md")
+            details_path.parent.mkdir(parents=True, exist_ok=True)
+            details_path.write_text(details, encoding="utf-8")
             readme.write_text(new_readme, encoding="utf-8")
             for source, _ in fragments:
                 source.rename(archive / source.name)
