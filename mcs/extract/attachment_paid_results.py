@@ -160,7 +160,8 @@ def replay(ledger, paths, cfg):
         obsolete = original_source_keys.binding(ledger.db, origin['project_id'], origin['source_key']) != origin['source_binding']
         if isinstance(cfg, dict) and cfg:
             settings, errors = cloud_policy.resolve_settings(cfg)
-            chosen, profile_errors = cloud_policy.resolve_profile(cfg, route='reextract', purpose=origin['purpose'])
+            chosen, profile_errors = cloud_policy.resolve_profile(
+                cfg, route='reextract', purpose=origin['purpose'], ledger=ledger, ordered=True)
             if not errors and not profile_errors and chosen is not None:
                 obsolete = (obsolete or cloud_policy.scope_generation({'cloud_llm': settings}) != origin['scope']
                             or dict(chosen) != origin['selection'])

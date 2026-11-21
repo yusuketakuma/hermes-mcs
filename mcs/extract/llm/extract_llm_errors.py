@@ -24,7 +24,7 @@ from extract_llm_context import (
     _thread_context,
 )
 from extract_llm_progress import (
-    cloud_completion,
+    cloud_completion_any,
 )
 from extract_llm_proofs import (
     _checkpoint_identity,
@@ -343,7 +343,7 @@ def _claim(ledger, r, lease_s: float = _EXTRACT_LEASE_S, *, lease_for=None) -> f
                                cloud_followup=bool(r.get('_required_cloud_contract'))),
                 (KIND, EXTRACT_VERSION, r['message_id'], None, 1, 0, now,
                  KIND, EXTRACT_VERSION, now, 1)).fetchone()
-            if (r.get('_required_cloud_contract') and cloud_completion(ledger.db, r, r['_required_cloud_contract']) is not None):
+            if (r.get('_required_cloud_contract') and cloud_completion_any(ledger.db, r)[0] is not None):
                 ledger.db.commit()
                 return None
             if current is None or any(current[key] != r.get(key)

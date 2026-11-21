@@ -408,12 +408,39 @@ def select_settings(cfg, key_present, transfer_status):
     return c, errors, held
 
 
-def resolve_profile(cfg, *, route, purpose, root=None):
-    """Resolve one explicit use to a bounded, immutable provider selection."""
+def resolve_profile(cfg, *, route, purpose, root=None, ledger=None, ordered=False):
+    """Resolve one explicit use to a bounded, immutable provider selection.
+
+    With ``ordered`` the first provider in ``provider_order`` that may actually
+    send wins: provider identity is not the inference generation, so the same
+    unit answers to whichever configured provider can pay for it. A provider
+    whose model is globally stopped or over budget falls through to the next
+    entry. When every provider is blocked the first resolvable selection is
+    still returned beside the block reason: a unit keeps the ordered contract
+    it was reserved under, and send-time admission reports the reason."""
     settings, errors = resolve_settings(cfg, root)
     if errors:
         return None, errors
-    return profile_for_settings(cfg, settings, route=route, purpose=purpose)
+    if not ordered:
+        return profile_for_settings(cfg, settings, route=route, purpose=purpose)
+    reason = None
+    first = None
+    for provider in settings["provider_order"]:
+        selection, provider_errors = profile_for_settings(
+            cfg, settings, route=route, purpose=purpose, provider=provider)
+        if provider_errors or selection is None:
+            errors = provider_errors or errors
+            continue
+        if first is None:
+            first = selection
+        limit = selection["max_tokens"] if selection["max_tokens"] is not None else 1600
+        reason = ledger is not None and (
+            global_block_reason(ledger, model=selection["model"])
+            or budget_block_reason(ledger, settings, max_tokens=limit, selection=selection))
+        if reason:
+            continue
+        return selection, []
+    return first, ([reason] if reason else []) + errors
 
 
 def _profile_map_valid(module, mapping):
@@ -422,7 +449,7 @@ def _profile_map_valid(module, mapping):
                     for role, value in mapping.items()))
 
 
-def profile_for_settings(cfg, settings, *, route, purpose):
+def profile_for_settings(cfg, settings, *, route, purpose, provider=None):
     """Resolve a profile from a provider already selected by the caller."""
     valid_purposes = {"reextract": {"backlog", "quality_repair"},
                       "semantic_backlog": {"backlog", "quality_repair"},
@@ -430,7 +457,7 @@ def profile_for_settings(cfg, settings, *, route, purpose):
     if (not isinstance(route, str) or not isinstance(purpose, str)
             or route not in valid_purposes or purpose not in valid_purposes[route]):
         return None, ["config: cloud_profile_purpose_invalid"]
-    provider = settings["provider"]
+    provider = provider or settings["provider"]
     block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
     block = block if isinstance(block, dict) else {}
     by_provider = block.get("provider_profiles", {})
@@ -1126,12 +1153,16 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                     and result.get('error_kind') is None and _selection_differs(previous, candidate, current_body)):
                 continue
             # The one validated result of the same request: a proven success, a settled
-            # failure, or an unsettled one. Counts only; none of them permits a resend.
+            # failure, or an unsettled one. A settled failure permits a resend (the unit
+            # stayed unanswered and fully accounted; the new send is a separate billed
+            # attempt); success and unknown outcomes still refuse duplicates.
             refusal = ('repeat_unsettled' if not settled else
                        'repeat_success' if (result.get('usage') is not None and result.get('http_class') == 'http_200'
                                             and result.get('error_kind') is None) else 'repeat_failed')
             if supersede is not None and prompt_verified and own_unit:
                 supersede.append(_accounting_meta(row['meta']))
+                continue
+            if refusal == 'repeat_failed':
                 continue
             raise ValueError('already_sent_or_unknown')
         except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):

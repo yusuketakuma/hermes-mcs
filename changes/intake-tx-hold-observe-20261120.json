@@ -1,0 +1,17 @@
+{
+  "category": "improved",
+  "title": "intake 取引の書込みロック保持時間を観測する計装を追加",
+  "summary": "データベースの書込み競合（SQLITE_BUSY）の主な原因と考えられる、患者・メッセージ保存の長い取引について、実際にどの処理が何秒ロックを保持しているかを測る観測を追加しました。5秒を超える取引は intake_tx_hold イベントとして稼働ログに記録されます。読み書きの動作自体は変わりません。",
+  "upgrade": "通常のアップデーターで適用されます。適用直後から data/mcs.log に計測が残ります。",
+  "details": [
+    "_intake_transaction に stage ラベル付きの保持時間計測を追加（save_patient / save_messages / save_thread_replies）。",
+    "保持5秒超過で stderr へ JSON イベントを出力。stdout は --json 消費者のため触れず、drainer が両ストリームを mcs.log へ集約する既存経路を利用する。",
+    "測定は with ブロック全体の経過時間（ロック保持の上限値）。観測結果で30秒超の取引がどの経路に集中するかを確定してから、取引分割の設計判断（B11 atomicity）に進む。",
+    "job_ops drain・settle_carry のコミット区間など他の長時間候補は、この計装の実績を見てから追加する。"
+  ],
+  "refs": [
+    "mcs/core/ledger.py",
+    "mcs/core/ledger_capture.py",
+    "changes/intake-tx-hold-observe-20261120.json"
+  ]
+}

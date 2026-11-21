@@ -99,3 +99,21 @@ def test_edit_unknown_is_journaled_and_never_resubmitted_on_resume(world, tmp_pa
     records = w._jview.refresh()
     asyncio.run(w._drive_parts(claim, [part], ctx, records))
     assert len(calls) == 1 and len(t.sent) == 2
+
+
+def test_unavailable_caption_with_file_prior_is_delivered_without_remote_calls(world):
+    """prior_kind='file': the bound prior is an uploaded file — already
+    remote, and the unavailable caption has no editable message target."""
+    w, thread, *_rest = world
+    spec = _spec(["x"], op="update", thread_id="7700")
+    spec["parts"]["post_source_id"] = "synthetic-post"
+    part = {"kind": "attachment_part", "part_id": "attach:0001",
+            "unavailable": True, "caption": "📎 synthetic.bin — 取得失敗",
+            "prior_remote_id": "F_SYNTHETIC_0001", "prior_kind": "file"}
+    ctx = {"thread_id": "7700", "thread": thread, "history": None, "consumed": set()}
+    sent = len(thread.sent)
+    edits = sum(getattr(m, "edits", 0) for m in thread.sent)
+    out = asyncio.run(w._part(_claim(spec), part, ctx))
+    assert out == {"result": "delivered", "remote_id": "F_SYNTHETIC_0001"}
+    assert len(thread.sent) == sent
+    assert sum(getattr(m, "edits", 0) for m in thread.sent) == edits

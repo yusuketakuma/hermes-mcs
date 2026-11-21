@@ -8,6 +8,7 @@ import pytest
 import mcs_requests
 import notify_spool
 import notify_transport as transport
+import notify_cards
 from notify_testkit import (CFG, NOW, _begin, _dispatch, _intent, _latest_render,
 
                             _part_receipt, _receipt, _seed_thread, _uuid, led as led)
@@ -1049,3 +1050,67 @@ def test_withdrawal_exception_rejects_any_drift_in_its_proof(led, monkeypatch, c
                            (value, withdrawn[0]["attempt_id"]))
     path.write_text("".join(json.dumps(row) + "\n" for row in rows + withdrawn))
     reject_preflight(led, req, monkeypatch, "preflight_target_unverified")
+
+
+def test_unsealed_part_resolves_by_remote_verify(led):
+    # 封印前世代の部品は payload_sha256 を持たない。plan の封印値と一致する
+    # None を受理し、封印済み部品での省略は従来どおり stale で落ちる。
+    req = prepare(led)
+    db = notify_cards.connection(led)
+    db.execute("UPDATE notification_render_parts SET payload_sha256=NULL "
+               "WHERE delivery_id=? AND part_id=?",
+               (req["delivery_id"], req["part_id"]))
+    db.commit()
+    plan = notify_recovery.card_part_resolve_plan(led, req["delivery_id"], req["part_id"])
+    assert "error" not in plan and plan["payload_sha256"] is None
+    req = {**plan, "command_id": _uuid(911), "actor": "synthetic-operator",
+           "human_confirmed": True, "reason": "remote照合で実在を確認",
+           "result": "mark_delivered", "remote_id": "F0REMOTEID01",
+           "evidence": {"method": "remote_api_verify",
+                        "ref": "conversations.replies file match",
+                        "worker_stopped": True}}
+    assert notify_recovery.validate_card_part_resolve(req) is None
+    receipt = notify_recovery.apply_card_part_resolve(led, req, CFG, NOW + 1)
+    assert receipt["outcome"] == "applied" and receipt["part_state"] == "delivered"
+
+
+def test_sealed_part_still_rejects_missing_payload_hash(led):
+    req = prepare(led)
+    req = {**req, "payload_sha256": None}
+    result = notify_recovery.apply_card_part_resolve(led, req, CFG, NOW + 1)
+    assert result["error"] == "stale_part_plan"
+
+
+def test_remote_absent_rejects_part_with_sealed_prior(led):
+    _seed_thread(led, mids=(100,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    first = _latest_render(led)
+    assert _begin(led, first)["granted"]
+    assert _receipt(led, first, f"{1:016x}")["applied"]
+    with led.db:
+        led.db.execute("UPDATE notification_render_parts SET state='delivered',"
+                       "remote_id='syn-'||part_id WHERE delivery_id=?",
+                       (first["delivery_id"],))
+        notify_cards.issue_render(led.db, 1, CFG, NOW + 1, [], force=True)
+    update = _latest_render(led)
+    spec = json.loads(update["spec_json"])
+    target = next(p for p in spec["parts"]["manifest"]
+                  if p["kind"] == "body_part" and p.get("prior_remote_id"))
+    assert _begin(led, update, n=2)["granted"]
+    for p in spec["parts"]["manifest"][1:]:
+        _part_receipt(led, update, p["part_id"],
+                      result="unknown" if p is target else "delivered",
+                      remote_id=None if p is target else "syn-" + p["part_id"])
+    renders_before = led.db.execute(
+        "SELECT COUNT(*) AS c FROM notification_renders").fetchone()["c"]
+    plan = notify_recovery.card_part_resolve_plan(led, update["delivery_id"], target["part_id"])
+    assert "error" not in plan and plan["prior_remote_id"] == target["prior_remote_id"]
+    req = {**plan, "command_id": _uuid(920), "actor": "synthetic-operator",
+           "human_confirmed": True, "reason": "合成の配送確認",
+           "result": "mark_not_sent",
+           "evidence": {"method": "synthetic_lookup", "ref": "synthetic-proof",
+                        "worker_stopped": True, "proof": "remote_absent"}}
+    receipt = notify_recovery.apply_card_part_resolve(led, req, CFG, NOW + 2)
+    assert receipt["error"] == "remote_absent_prior_present"
+    assert led.db.execute(
+        "SELECT COUNT(*) AS c FROM notification_renders").fetchone()["c"] == renders_before

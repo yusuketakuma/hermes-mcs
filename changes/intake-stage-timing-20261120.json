@@ -1,0 +1,18 @@
+{
+  "category": "added",
+  "title": "長時間の書込み取引が内部のどの処理に時間を使ったかを観測できるようにしました",
+  "summary": "患者・メッセージ保存で書込みロックを長く保持した場合、従来の合計保持時間に加えて、意味スナップショット・患者情報読み書き・メッセージ保存・変更検出・通知登録の区間別時間をログへ記録するようになりました。長時間保持（実測43〜71秒）の原因切り分けができ、今後の短縮改修の判断材料になります。動作自体の変更はありません。",
+  "upgrade": "通常のアップデーターで適用されます。追加操作はありません。",
+  "details": [
+    "ledger._intake_transaction が intake_tx_hold イベントへ stages 辞書を同報する（保持時間が TX_HOLD_REPORT_S 未満なら従来どおり記録しない）。",
+    "_tx_stage_mark を追加し、save_patient は sem_snap/patient_probe/patient_write/save_tree/changed_ids/queue、save_messages は sem_snap/save_tree/changed_ids/queue の各区間を計時する。",
+    "取引外・マークなし取引では stages キー自体を出さず後方互換。ネストした取引でも計時辞書は退避・復元される。",
+    "queue マーク以降のコミット処理自体は区間に含まれないため、stages の合計は hold_s より小さくなる。"
+  ],
+  "refs": [
+    "mcs/core/ledger.py",
+    "mcs/core/ledger_capture.py",
+    "tests/core/test_karte_storage_atomicity.py"
+  ],
+  "verification": "run_tests.sh tests/core/test_karte_storage_atomicity.py: 52 pass"
+}

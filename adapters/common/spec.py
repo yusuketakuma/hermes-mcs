@@ -105,6 +105,8 @@ MAX_POST_ACTIONS = 5
 PART_ENTRY_KEYS = frozenset({
     "part_id", "kind", "index", "sha256", "bytes", "name",
     "attachment_id", "path", "unavailable", "prior_remote_id", "prior_owner_message_id", "caption", "edit_only", "broadcast", "operator_verified",
+    # what a part's prior_remote_id refers to when it is not a text post
+    "prior_kind",
     # discord file_group anchors: the surface part and its member ids
     "surface", "members", "face_at", "prior_remote_file_id"})
 MAX_CAPTION = 300

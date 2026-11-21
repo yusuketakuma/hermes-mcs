@@ -406,3 +406,168 @@ def test_a_failed_full_undo_closes_the_connection(tmp_path):
                 != "synthetic-pending"
     finally:
         db.close()                                             # a second close is harmless
+
+
+def test_mark_due_commit_failure_leaves_no_open_transaction(tmp_path):
+    """A commit refused under lock must not leak the implicit transaction."""
+    from types import SimpleNamespace
+    db = _ledger(tmp_path)
+    real = db.db
+
+    class FailingCommit:
+        def execute(self, *args, **kwargs):
+            return real.execute(*args, **kwargs)
+        def commit(self):
+            raise sqlite3.OperationalError("database is locked")
+        def rollback(self):
+            return real.rollback()
+        @property
+        def in_transaction(self):
+            return real.in_transaction
+
+    with pytest.raises(sqlite3.OperationalError):
+        ledger.Ledger.karte_summary_mark_due(SimpleNamespace(db=FailingCommit()), 1)
+    assert not real.in_transaction
+    db.close()
+
+
+def test_intake_transaction_reports_hold_time_over_threshold(tmp_path, capsys, monkeypatch):
+    """hold>=TX_HOLD_REPORT_S の intake 取引が stderr へ JSON イベントを出す。"""
+    monkeypatch.setattr(ledger, "TX_HOLD_REPORT_S", 0)
+    db = _ledger(tmp_path)
+    try:
+        with db._intake_transaction(stage="probe"):
+            pass
+    finally:
+        db.close()
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()
+              if "intake_tx_hold" in line]
+    assert events[-1]["event"] == "intake_tx_hold"
+    assert events[-1]["stage"] == "probe"
+    assert events[-1]["hold_s"] >= 0
+
+
+def test_intake_hold_event_carries_substage_times(tmp_path, capsys, monkeypatch):
+    """save経路のサブステージ計時が intake_tx_hold イベントに載る。"""
+    monkeypatch.setattr(ledger, "TX_HOLD_REPORT_S", 0)
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(1, body="計時", project_id=1)],
+                         project_id=1)
+        with db._intake_transaction(stage="unmarked"):
+            pass
+    finally:
+        db.close()
+    events = [json.loads(line) for line in capsys.readouterr().err.splitlines()
+              if "intake_tx_hold" in line]
+    marked = [e for e in events if e["stage"] == "save_messages"]
+    stages = marked[0]["stages"]
+    assert {"sem_snap", "save_tree", "changed_ids", "queue"} <= set(stages)
+    assert all(v >= 0 for v in stages.values())
+    assert all("stages" not in e for e in events
+               if e["stage"] == "unmarked")
+
+
+def test_ledger_busy_timeout_override_reaches_pragma(tmp_path):
+    db = ledger.Ledger(str(tmp_path / "t.db"), busy_timeout_ms=120000)
+    try:
+        assert db.db.execute("PRAGMA busy_timeout").fetchone()[0] == 120000
+    finally:
+        db.close()
+
+
+# ---------- karte dependency capture: read-tx fence + in-tx fallback ----------
+
+def test_karte_write_reuses_read_capture_when_scope_is_unchanged(tmp_path, monkeypatch):
+    """読取txの捕捉はfence一致でそのまま採用され、write tx内の再捕捉は走らない。"""
+    import inference_dependency_loss as dependency_loss
+    calls = []
+    real_capture = dependency_loss.capture_current_karte_tx
+
+    def counting(db_, pid):
+        calls.append(pid)
+        return real_capture(db_, pid)
+
+    monkeypatch.setattr(dependency_loss, 'capture_current_karte_tx', counting)
+    db = _ledger(tmp_path)
+    try:
+        _karte_due_patient(db)
+        db.karte_summary_store(1, 10, _summary())
+        assert len(calls) == 1
+        assert db.karte_summary_due() == []
+        assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='karte_summary'").fetchone()[0] == 1
+    finally:
+        db.close()
+
+
+def test_karte_write_recaptures_when_concurrent_commit_breaks_fence(tmp_path, monkeypatch):
+    """読取txと書込みの間に他接続のcommitが入るとfence不一致→write tx内で再捕捉して保存。"""
+    import inference_dependency_loss as dependency_loss
+    calls = []
+    real_capture = dependency_loss.capture_current_karte_tx
+
+    def counting(db_, pid):
+        calls.append(pid)
+        return real_capture(db_, pid)
+
+    monkeypatch.setattr(dependency_loss, 'capture_current_karte_tx', counting)
+    db = _ledger(tmp_path)
+    try:
+        _karte_due_patient(db)
+        real_fence = dependency_loss.karte_capture_fence
+
+        def racing_fence(db_, pid, snapshot):
+            fence = real_fence(db_, pid, snapshot)
+            with closing(sqlite3.connect(str(tmp_path / "ledger.db"))) as other:
+                other.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+                              "VALUES('probe',?,NULL,'{}','{}',0)", (pid,))
+                other.commit()
+            return fence
+
+        monkeypatch.setattr(dependency_loss, 'karte_capture_fence', racing_fence)
+        db.karte_summary_store(1, 10, _summary())
+        assert len(calls) == 2
+        assert db.karte_summary_due() == []
+        assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='karte_summary'").fetchone()[0] == 1
+    finally:
+        db.close()
+
+
+def test_karte_scope_fence_detects_pid_writes_and_ignores_other_projects(tmp_path):
+    """fence digest は同一pidのartifacts/patients変化のみ検出し、他pidの書込みで揺れない。"""
+    import inference_dependency_loss as dependency_loss
+    db = _ledger(tmp_path)
+    try:
+        _karte_due_patient(db)
+        db.upsert_patient_info(_unread_patient(2))
+        db.db.execute("BEGIN")
+        fence = dependency_loss.karte_capture_fence(db.db, 1, None)
+        db.db.commit()
+        # 他接続のcommitが無い新txでは data_version 不変 → digest skip の fast-path で fresh
+        db.db.execute("BEGIN")
+        assert dependency_loss.karte_capture_fresh(db.db, 1, fence)
+        db.db.commit()
+        other = sqlite3.connect(str(tmp_path / "ledger.db"))
+        try:
+            # フェンス取得と再検証の間に他接続がcommitしたケースを再現（実フローと同じ2tx構造）
+            other.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+                          "VALUES('probe',2,NULL,'{}','{}',0)")
+            other.commit()
+            db.db.execute("BEGIN")
+            assert dependency_loss.karte_capture_fresh(db.db, 1, fence)
+            db.db.commit()
+            other.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+                          "VALUES('probe',1,NULL,'{}','{}',0)")
+            other.commit()
+            db.db.execute("BEGIN")
+            assert not dependency_loss.karte_capture_fresh(db.db, 1, fence)
+            db.db.rollback()
+            other.execute("UPDATE patients SET last_seen=last_seen WHERE project_id=1")
+            other.commit()
+            db.db.execute("BEGIN")
+            assert not dependency_loss.karte_capture_fresh(db.db, 1, fence)
+            db.db.rollback()
+        finally:
+            other.close()
+    finally:
+        db.close()

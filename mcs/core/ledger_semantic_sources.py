@@ -81,36 +81,83 @@ class LedgerSemanticSourcesMixin:
         # Reserve the writer before reading either membership or generation.
         # The enclosing intake transaction owns rollback and commit.
         self._reserve_message_writer()
-        keys = {}
+        flat = []
         for message in messages:
-            rows = [message, *(getattr(message, "replies", None) or [])]
-            for row in rows:
+            for row in [message, *(getattr(message, "replies", None) or [])]:
                 project_id = getattr(row, "project_id", None)
                 message_id = getattr(row, "message_id", None)
-                if project_id is None or message_id is None:
-                    continue
-                stored = self.db.execute(
-                    "SELECT COALESCE(parent_id,message_id) FROM messages "
-                    "WHERE project_id=? AND message_id=?",
-                    (project_id, message_id)).fetchone()
-                old_root = stored[0] if stored is not None else message_id
-                parent_id = getattr(row, "parent_id", None)
-                # The writer retains a stored parent when the capture omits it.
-                new_root = old_root if parent_id is None else parent_id
-                roots = keys.setdefault((project_id, message_id), set())
-                roots.update(self._message_thread_roots(
-                    project_id, message_id, new_root,
-                    old_root if stored is not None else None))
-        snapshot = {}
+                if project_id is not None and message_id is not None:
+                    flat.append((row, project_id, message_id))
+        if not flat:
+            return {}
+        by_pid = {}
+        for _, project_id, message_id in flat:
+            by_pid.setdefault(project_id, set()).add(message_id)
+        # Membership, stored parents and fingerprints used to be per-message
+        # queries (~3 per row); batch them per project so a large intake does
+        # not spend its write transaction in thousands of point SELECTs.
+        stored_root = {}
+        has_children = {}
+        fingerprint_row = {}
+        attachments = {}
+        for project_id, mids in by_pid.items():
+            q = ",".join("?" * len(mids))
+            for r in self.db.execute(
+                    "SELECT message_id,COALESCE(parent_id,message_id) FROM messages "
+                    f"WHERE project_id=? AND message_id IN ({q})",
+                    (project_id, *mids)):
+                stored_root[(project_id, r[0])] = r[1]
+            for r in self.db.execute(
+                    "SELECT DISTINCT parent_id FROM messages "
+                    f"WHERE project_id=? AND parent_id IN ({q})",
+                    (project_id, *mids)):
+                has_children.setdefault(project_id, set()).add(r[0])
+            for r in self.db.execute(
+                    "SELECT message_id,parent_id,content_hash,body_state,body_text,"
+                    "reply_count,sender_id,sender_name,sender_type,profession,"
+                    "organization,posted_at,(SELECT COALESCE(MAX(r.seq),1) FROM "
+                    "message_revisions r WHERE r.message_id=messages.message_id) "
+                    "AS source_occurrence FROM messages "
+                    f"WHERE project_id=? AND message_id IN ({q})",
+                    (project_id, *mids)):
+                fingerprint_row[(project_id, r["message_id"])] = r
+            for r in self.db.execute(
+                    "SELECT message_id,attachment_id,file_id,name,bytes,sha256,state "
+                    f"FROM attachments WHERE message_id IN ({q}) "
+                    "AND state != 'withdrawn' ORDER BY attachment_id",
+                    tuple(mids)):
+                item = dict(r)
+                attachments.setdefault(item.pop("message_id"), []).append(item)
+        keys = {}
+        for row, project_id, message_id in flat:
+            stored = stored_root.get((project_id, message_id))
+            old_root = stored if stored is not None else message_id
+            parent_id = getattr(row, "parent_id", None)
+            # The writer retains a stored parent when the capture omits it.
+            new_root = old_root if parent_id is None else parent_id
+            affected = {root for root in
+                        (new_root, stored if stored is not None else None)
+                        if root is not None}
+            if (message_id not in affected
+                    and message_id in has_children.get(project_id, ())):
+                affected.add(message_id)
+            keys.setdefault((project_id, message_id), set()).update(affected)
+        needed_roots = {}
+        for (project_id, _), roots in keys.items():
+            needed_roots.setdefault(project_id, set()).update(roots)
         generations = {}
+        for project_id, roots in needed_roots.items():
+            for root, generation in self._semantic_source_generations(
+                    project_id, roots).items():
+                generations[(project_id, root)] = generation
+        snapshot = {}
         for (project_id, message_id), roots in keys.items():
-            for root in roots:
-                thread_key = (project_id, root)
-                if thread_key not in generations:
-                    generations[thread_key] = self._semantic_source_generation(project_id, root)
+            frow = fingerprint_row.get((project_id, message_id))
             snapshot[(project_id, message_id)] = (
                 {root: generations[(project_id, root)] for root in roots},
-                self._semantic_message_fingerprint(project_id, message_id),
+                self._semantic_digest(self._semantic_member(
+                    frow, attachments.get(message_id, [])))
+                if frow is not None else None,
             )
         return snapshot
 
@@ -230,31 +277,53 @@ class LedgerSemanticSourcesMixin:
         input generation so replaying the same input cannot silently erase
         its accumulated attempts.
         """
-        rows = self.db.execute(
-            "SELECT message_id,parent_id,content_hash,body_state,body_text,"
-            "reply_count,sender_id,sender_name,sender_type,profession,"
-            "organization,posted_at FROM messages WHERE project_id=? "
-            "AND (message_id=? OR parent_id=?) "
-            "ORDER BY posted_at_ts,message_id", (project_id, root, root))
-        first = rows.fetchone()
-        if first is None:
-            return self._semantic_digest([])
-        attachments = {}
+        return self._semantic_source_generations(project_id, {root})[root]
+
+    def _semantic_source_generations(self, project_id: int, roots) -> dict:
+        """Batch equivalent of _semantic_source_generation for many roots.
+
+        A row belongs to a thread root when message_id=root or parent_id=root;
+        one range scan per project replaces the per-root point scans so a large
+        intake does not spend its write transaction in repeated thread reads.
+        """
+        roots = set(roots)
+        if not roots:
+            return {}
+        q = ",".join("?" * len(roots))
+        thread_rows = {root: [] for root in roots}
         for row in self.db.execute(
-                "SELECT a.message_id,a.attachment_id,a.file_id,a.name,a.bytes,a.sha256,a.state "
-                "FROM attachments a JOIN messages m ON m.message_id=a.message_id "
-                "WHERE m.project_id=? AND (m.message_id=? OR m.parent_id=?) "
-                "AND a.state != 'withdrawn' ORDER BY a.attachment_id", (project_id, root, root)):
-            item = dict(row)
-            message_id = item.pop("message_id")
-            attachments.setdefault(message_id, []).append(item)
-        occurrences = {row[0]: row[1] for row in self.db.execute(
-            'SELECT message_id,MAX(seq) FROM message_revisions WHERE message_id IN '
-            '(SELECT message_id FROM messages WHERE project_id=? AND (message_id=? OR parent_id=?)) '
-            'GROUP BY message_id', (project_id, root, root))}
-        members = [self._semantic_member({**dict(row), 'source_occurrence': occurrences.get(row['message_id'], 1)},
-                                        attachments.get(row['message_id'], [])) for row in [first, *rows]]
-        return self._semantic_digest(members)
+                "SELECT message_id,parent_id,content_hash,body_state,body_text,"
+                "reply_count,sender_id,sender_name,sender_type,profession,"
+                "organization,posted_at FROM messages WHERE project_id=? "
+                f"AND (message_id IN ({q}) OR parent_id IN ({q})) "
+                "ORDER BY posted_at_ts,message_id",
+                (project_id, *roots, *roots)):
+            message_id, parent_id = row["message_id"], row["parent_id"]
+            if message_id in roots:
+                thread_rows[message_id].append(row)
+            if parent_id in roots and parent_id != message_id:
+                thread_rows[parent_id].append(row)
+        mids = {row["message_id"] for rows in thread_rows.values() for row in rows}
+        attachments = {}
+        occurrences = {}
+        if mids:
+            mq = ",".join("?" * len(mids))
+            for row in self.db.execute(
+                    "SELECT message_id,attachment_id,file_id,name,bytes,sha256,state "
+                    f"FROM attachments WHERE message_id IN ({mq}) "
+                    "AND state != 'withdrawn' ORDER BY attachment_id", tuple(mids)):
+                item = dict(row)
+                attachments.setdefault(item.pop("message_id"), []).append(item)
+            occurrences = {row[0]: row[1] for row in self.db.execute(
+                    "SELECT message_id,MAX(seq) FROM message_revisions "
+                    f"WHERE message_id IN ({mq}) GROUP BY message_id", tuple(mids))}
+        return {root: self._semantic_digest([
+                    self._semantic_member(
+                        {**dict(row),
+                         "source_occurrence": occurrences.get(row["message_id"], 1)},
+                        attachments.get(row["message_id"], []))
+                    for row in rows])
+                for root, rows in thread_rows.items()}
 
     def _semantic_message_fingerprint(self, project_id: int,
                                       message_id: int) -> str | None:

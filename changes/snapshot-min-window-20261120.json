@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "スナップショットが残り時間不足でもコピーを開始し検証が必ず失敗する問題を修正",
+  "summary": "台帳スナップショットの公開試行は、コピー開始時点で残り実行時間がコピー＋検証＋末尾の合計に足りなくても開始され、コピーが検証窓を食い尽くして検証が実行期限で打ち切られ、一時ファイルだけが残る問題を直しました。残り 300 秒（SNAPSHOT_MIN_WINDOW_S）未満ではコピーを開始せず延期し、前回公開したスナップショットをそのまま維持します。",
+  "upgrade": "追加操作は不要です。残り時間が 300 秒未満の実行ではスナップショットが deferred となり、次に窓が足りる実行で公開されます。deadline を渡さない呼出しは従来どおりです。",
+  "details": [
+    "snapshots.py に SNAPSHOT_MIN_WINDOW_S = 300.0 を追加。実測のコピー約60秒（ディスク競合時約170秒）・検証約120秒・末尾30秒に余裕を持たせた値で、検証のサイズ連動上限（最大330秒）ではなく典型的に成功する窓を基準にしている。",
+    "maintenance._refresh_snapshot_locked で、鮮度スキップと commands 再試行待ちの判定後・publish_snapshot 呼出しの直前に、deadline - monotonic() が SNAPSHOT_MIN_WINDOW_S 未満ならコピーを開始せず \"deferred\" を返す。失敗（None）ではないため snapshot_state=deferred として記録され、マーカーと前回公開は維持される。",
+    "窓不足の延期は snapshots.last_timing() に defer_reason=\"window_insufficient\" と remaining_s を記録する。",
+    "force=True の呼出しも同じ窓検査を受ける。公開を強制する運用経路でも、残り時間が足りなければコピー未着手で延期される。"
+  ],
+  "refs": [
+    "mcs/core/snapshots.py",
+    "mcs/core/maintenance.py",
+    "tests/core/test_snapshot_refresh_timing.py"
+  ]
+}

@@ -12,7 +12,8 @@ import semantic_drain
 import semantic_policy
 import semantic_store
 import semantic_runtime as runtime
-from semantic_testkit import _cfg, _FakeJev, _llm, _llm_v2, _seeded
+from semantic_testkit import (_cfg, _FakeJev, _ledger, _llm, _llm_v2,
+                              _message, _patient, _seeded)
 
 KEYS = {"llm_transport_s", "llm_reacquire_s", "jev_transport_s", "jev_reacquire_s"}
 
@@ -214,4 +215,78 @@ def test_other_fact_sources_report_no_shadow_cost(tmp_path):
                                llm_fn=_llm)
         assert out["shadow_v2"] == {"calls": 0, "incomplete": 0, "s": 0.0}
     finally:
+        db.close()
+
+
+def test_lock_hold_counts_each_held_segment_once(lock_env, monkeypatch):
+    """Each unlocked_transport entry closes one held segment — run_due
+    entry to the first release, reacquire to the next, and one tail at
+    return. Log-only: never in the drain_run artifact."""
+    tmp_path, _, fd = lock_env
+    clock = [1000.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    calls = []
+
+    def model(prompt):
+        calls.append(1)
+        clock[0] += 0.04                     # transport only; reacquire is 0
+        return _llm(prompt)
+
+    db = _ledger(tmp_path)
+    p = _patient(db)
+    p.messages = [_message(1)]
+    db.save_patient(p, notify={"source": "unread"}, semantic=True)
+    try:
+        out = semantic_drain.run_due(db, _cfg(), {"errors": []}, clock[0] + 480,
+                               llm_fn=model, jev_client=_FakeJev(), run_lock_fd=fd)
+        assert len(calls) == 2
+        hold = out["lock_hold"]
+        assert hold == {"hold_max_s": 0.0, "hold_sum_s": 0.0, "hold_count": 3}
+        assert set(out["transport"]) == KEYS    # the four transport values unchanged
+        [run] = db.db.execute("SELECT content FROM artifacts "
+                              "WHERE kind='semantic_drain_run'").fetchall()
+        assert "lock_hold" not in json.loads(run[0]) and "transport" not in json.loads(run[0])
+    finally:
+        db.close()
+
+
+def test_lock_hold_is_absent_without_a_borrowed_run_lock(tmp_path):
+    """fd-less passes (standalone CLI, per-write extract) have no
+    release/reacquire to measure — the key is not emitted at all."""
+    db = _seeded(tmp_path)
+    try:
+        out = semantic_drain.run_due(db, _cfg(), {"errors": []},
+                               time.monotonic() + 480, jev_client=_FakeJev(),
+                               llm_fn=_llm, lane="backlog", max_jobs=1)
+        assert "lock_hold" not in out
+        assert set(out["transport"]) == KEYS
+    finally:
+        db.close()
+
+
+def test_lock_hold_survives_a_lost_reacquire(lock_env, monkeypatch):
+    """RunLockLost still returns a well-formed record: the hold segments
+    measured before the loss stay, and the tail closes the count."""
+    tmp_path, path, fd = lock_env
+    monkeypatch.setattr(writer_lock, "RUN_LOCK_REACQUIRE_S", 0.05)
+    monkeypatch.setattr(writer_lock, "RUN_LOCK_POLL_S", 0.01)
+    db = _seeded(tmp_path)
+    other = []
+
+    def model(prompt):
+        other.append(writer_lock.acquire_run_lock(path))   # the tick holds it
+        return _llm(prompt)
+
+    try:
+        out = semantic_drain.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 480,
+                               llm_fn=model, jev_client=_FakeJev(), run_lock_fd=fd)
+        assert out["run_lock_lost"] == "timeout"
+        hold = out["lock_hold"]
+        assert hold["hold_count"] >= 1 and hold["hold_sum_s"] >= 0 \
+            and hold["hold_max_s"] >= 0 and hold["hold_max_s"] <= hold["hold_sum_s"] + 1e-9
+        assert out["run_lock_lost_detail"]["kind"] == "llm"
+    finally:
+        for o in other:
+            if o is not None:
+                os.close(o)
         db.close()
