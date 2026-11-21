@@ -184,7 +184,7 @@ def _collapse_fixed(body, link, release_version):
     nxt = re.search(r"^### ", body[start.end():], re.M)
     end = start.end() + (nxt.start() if nxt else len(body) - start.end())
     content = body[start.end():end]
-    entries = re.findall(r"^- (\*\*.+\*\*)((?:\n  .+)*)", content, re.M)
+    entries = re.findall(r"^- (\*\*.+\*\*)((?:\n  .+)*(?:\n\n  .+(?:\n  .+)*)*)", content, re.M)
     if len(entries) != len(re.findall(r"^- .+$", content, re.M)):
         raise ValueError("不具合修正の項目を取りこぼしたため畳み込みを中止します")
     kept = [(f"- {title}{rest}" if title.startswith("**セキュリティ：")
@@ -381,6 +381,9 @@ def main(argv=None):
             details = f"## [{args.version}] — {args.date}\n\n" + body.rstrip() + "\n"
             if len(details.encode("utf-8")) >= DETAILS_FILE_LIMIT:
                 raise ValueError("版別詳細ファイルが1MBを超えます")
+            # exportと同じ本文上限をarchive前に検査し、超過版が記録を取り込んだまま
+            # 再build不能になるのを防ぐ（release_bodyは超過時にValueErrorを投げる）
+            release_body(new_text, args.version)
             archive.mkdir(parents=True)
             path.write_text(new_text, encoding="utf-8")
             details_path = (args.root / "docs" / "releases" / f"v{args.version}"
