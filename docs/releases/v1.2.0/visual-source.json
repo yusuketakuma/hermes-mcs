@@ -1,0 +1,41 @@
+{
+ "artifacts": [
+  {
+   "path": "docs/releases/v1.2.0/cloud-ai-v120.svg",
+   "sha256": "d2ad3ed75ed86eb8ef09901fea71c31f70c1968ff55cc25ff3c29cdab564981b"
+  },
+  {
+   "path": "docs/releases/v1.2.0/cloud-ai-v120.png",
+   "sha256": "4685ee4cbc32e2f82e915006439ae6244b92b66f1501009db035e85f2eb198e8"
+  },
+  {
+   "path": "docs/releases/v1.2.0/notification-card-v120.svg",
+   "sha256": "4f0bb61e5cfa9d52cb9c75194547d0675212dc417317758e18fed440500386f6"
+  },
+  {
+   "path": "docs/releases/v1.2.0/notification-card-v120.png",
+   "sha256": "c835c56db878ca1c658d87eb639058fbe2a7197f9be5906f7ea1ffe074f47917"
+  }
+ ],
+ "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
+ "notes": [
+  "図2点はv1.2.0の主要な変更（通知カードの操作優先の構成、施設の確認記録を条件とするクラウドAI送信）を説明する合成図。実画面・測定結果・患者データを含まない。",
+  "SVG原稿とPNG描画は commit f0d49b3f2 で作成（Claude Sonnet 5.5 共同作業）。生成wrapper・描画手順の詳細は当該セッションの記録で、本ファイルは成果物のhash照合と公開時の原本照合用の固定記録。",
+  "GitHub Release への画像添付と外部表示は未実施。CHANGELOG・export本文では releases/download/v1.2.0/ 配下のURLを参照し、README生成時はリポジトリ内相対パスへ変換される。tag・asset未公開のため到達・表示は未確認。",
+  "各図の直下に説明文を添え、『実画面や測定結果ではありません』の注記を図内にも記載。"
+ ],
+ "scope": "v1.2.0 の主要な変更の説明図2点（通知カードの比較図・クラウドAI送信条件の説明図）。最終候補SHAの固定・受入証拠ではない。",
+ "source": "docs/releases/v1.2.0/notification-card-v120.svg, docs/releases/v1.2.0/cloud-ai-v120.svg",
+ "source_checkout_observation": {
+  "head": "572c30a2ec2eb0533fbefb66ccded0c0cdbcfa37",
+  "dirty": false,
+  "observed_at": "2026-11-21T05:00:00+00:00",
+  "release_sha_fixed": false
+ },
+ "status": "unpublished_preparation",
+ "visual_check": {
+  "checked": "2026-11-21、1960x840のPNGを1372x588相当へ縮小した表示で文字欠落・重なり・余白を確認。",
+  "narrow_width_ok": true,
+  "png_rendered": true
+ }
+}

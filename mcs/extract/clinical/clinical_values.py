@@ -845,7 +845,7 @@ def _bp_side(body: str, s: int, e: int):
 # side-labelled single value.
 # numbers follow the guard's own grammar (\d+ with an optional ./． decimal)
 VITAL_NUMBER_TOKEN = r"\d+(?:[.．]\d+)?"
-_BP_PAIR = re.compile(rf"(?<![\d.．])({VITAL_NUMBER_TOKEN})\s*[/／]\s*({VITAL_NUMBER_TOKEN})(?![\d.．])")
+_BP_PAIR = re.compile(rf"(?<![\d.．])({VITAL_NUMBER_TOKEN})\s*[/／]\s*({VITAL_NUMBER_TOKEN})(?!\d)(?![.．]\d)")
 _BP_SIDE_WORD = re.compile(r"(収縮期|拡張期)(?:血圧)?[^0-9]*$")
 
 
@@ -1060,8 +1060,8 @@ VITAL_PATTERNS = {
     "rr":   r"(?:呼吸(?:数)?|RR)[:：は]?\s*(\d{1,2})(?![\d.．])",
     # 血圧 10/15 132/80: a month/day written between the label and the reading is not the reading
     "sbp":  r"(?:血圧|BP)[:：は]?\s*(?:(?:1[0-2]|0?[1-9])[/／](?:3[01]|[12]\d|0?[1-9])"
-            r"(?:\s*[（(][月火水木金土日][）)])?\s*(?:は|に|の|で)?\s*(?=\d{2,3}\s*[/／]\s*\d{2,3}(?![\d.．])))?"
-            r"(\d{2,3})\s*[/／]\s*(\d{2,3})(?![\d.．])",
+            r"(?:\s*[（(][月火水木金土日][）)])?\s*(?:は|に|の|で)?\s*(?=\d{2,3}\s*[/／]\s*\d{2,3}(?!\d)(?![.．]\d)))?"
+            r"(\d{2,3})\s*[/／]\s*(\d{2,3})(?!\d)(?![.．]\d)",
     # a number followed by a flow unit is oxygen delivery (酸素10L),
     # never a saturation reading
     "spo2": r"(?:SpO2|Spo2|SPO2|spo2|酸素)[:：は]?\s*(\d{2,3})(?![\d.．])"

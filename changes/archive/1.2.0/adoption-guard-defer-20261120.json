@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "クラウド移行済み抽出の採用判定を書込み取引の外へ前倒し",
+  "summary": "過去にクラウド課金で処理された記録をローカルで再抽出する際、採用直前の会計ガード評価（全期間の課金履歴スキャン）をデータベース書込みロック取得前へ移し、書込み取引内ではクラウド系artifactの件数・最新ID照合だけを行うようにしました。これまで1件あたり十数秒〜40秒級かかっていた書込みロック保持が短くなり、同じロックを使う収集・要約・他の抽出処理の待ち時間が減ります。判定の安全条件は変わりません。",
+  "upgrade": "通常のアップデーターで適用されます。追加操作はありません。",
+  "details": [
+    "extract_llm_runner._DeferredGuard を追加。prepare() でガードを取引外に1回評価し、cloud_* kind の artifacts に対する COUNT+MAX(artifact_id) スナップショットを採取する。",
+    "extract_llm_store._commit_extraction_atomic が BEGIN IMMEDIATE の前に prepare() を呼ぶ。取引内のガード呼出は fence が一致する限り採取済み判定を再利用し、不一致・判定不成立・fence取得失敗のいずれでも取引内で完全な再評価を行う（従来と同一の結果）。",
+    "クラウド会計artifactは追記専用・ID単調・UPDATE経路なしを確認済み。無関係なartifact増加ではfenceが壊れないため、再評価への退避は稀。",
+    "対象は _superseded_local（クラウド移行済み再抽出）経路の adoption_guard のみ。_local_rebuild の permit 再証明は読取範囲が異なるため従来どおり取引内評価を維持する。",
+    "効果は extract_commit_tx_hold（5秒超の書込み保持）の実測で確認する。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_llm_runner.py",
+    "mcs/extract/llm/extract_llm_store.py",
+    "changes/adoption-guard-defer-20261120.json"
+  ]
+}

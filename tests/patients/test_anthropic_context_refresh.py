@@ -44,7 +44,8 @@ def test_patient_context_accepts_only_known_current_or_historical_cloud_contract
 
 def test_patient_request_precheck_uses_selected_repair_limit_and_never_sends_when_exhausted(runtime, monkeypatch):
     ledger, clock, _ = runtime
-    cfg = {"cloud_llm": {"mode": "on", "provider": "openai", "project_ids": [1]}}
+    cfg = {"cloud_llm": {"mode": "on", "provider": "openai", "provider_order": ["openai"],
+                         "project_ids": [1]}}
     selection, errors = worker.cloud_policy.resolve_profile(
         cfg, route="patient_context", purpose="quality_repair", root="/synthetic")
     assert not errors
@@ -66,8 +67,10 @@ def test_patient_request_precheck_uses_selected_repair_limit_and_never_sends_whe
         patient_context_quality_controller._ask(cfg, {'synthetic': 'request'}, clock.mono + 1000,
                              lambda: True, provider=provider)
     assert not ledger.artifacts('cloud_usage_reserve')
-    assert seen[0]["max_tokens"] == 32768 and seen[0]["selection"] == selection
-    assert seen[0]["input_bound"] > 0
+    precheck = [call for call in seen if "input_bound" in call]
+    assert len(precheck) == 1
+    assert precheck[0]["max_tokens"] == 32768 and precheck[0]["selection"] == selection
+    assert precheck[0]["input_bound"] > 0
 
 
 def test_daytime_cloud_needs_no_local_gpu_capacity(runtime, cloud):

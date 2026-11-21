@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "bounded抽出バッチをper-write lock構成へ移行",
+  "summary": "extract_llm の --all なし bounded batch がバッチ全体を run.lock 下で実行していたのを、claim lease（行単位排他）とper-writeコミットへ変更し、連続した lock 占有を解消します。",
+  "upgrade": "この版への更新で有効になります。追加の操作は要りません。",
+  "details": [
+    "従来は acquire_run_lock() でバッチ全体を1回保持し、数十分規模の連続占有がtickのlock取得を飢餓させていた。",
+    "run_pending を per_write_lock=True・write_wait_s=_RESIDENT_WRITE_WAIT_S で呼ぶ構成へ変更。resident内側のrun_pendingおよびcarry-resume呼出と同じ、本番実績のある構成。",
+    "whole-batch atomicityが防いでいたのはtickとの interleave のみで、claim leaseとfail-closed会計はlock粒度に依存しない。バッチ後の排他性を前提とする呼出元はない。",
+    "lock_held の事前失敗（exit 3）は除去され、書込み毎のbounded待機とdeferへ変わる。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_llm_resident.py",
+    "tests/llm/test_bounded_batch_per_write_lock.py"
+  ]
+}
