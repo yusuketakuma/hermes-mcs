@@ -12,7 +12,7 @@
 
 ## 検証済み（この作業の範囲・ローカル実測）
 
-対象は `release/prep-20261121` の `f364d740f`（441件での再生成・AUTOMATION.md の同期を含む候補）と、その後のレビュー対応で加えた修正を含む作業ツリー。各項目は測定した時点の候補で実行した。実行日は 2026-11-21（JST）。
+対象は `release/prep-20261121` の `de0002bd8`（441件での再生成・AUTOMATION.md の同期・レビュー対応の修正を含む候補）と、その後の修正を含む作業ツリー。各項目は測定した時点の候補で実行した。実行日は 2026-11-21（JST）。
 
 - `release_notes.py check`: 合格（archive 441件・CHANGELOG構造・詳細ファイル 824,578B・本文 91,951字）。
 - `scripts/run_tests.sh tests/release/`: 59 passed + 128 subtests。
