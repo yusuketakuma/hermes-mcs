@@ -145,13 +145,13 @@ def test_future_stamps_are_not_freshness_evidence(tmp_path):
     _status(tmp_path, updated_at=NOW + 2000, started_at=NOW + 1900,
             exits={"mcs_check": {"last_exit": 0, "failures": 0, "last_ok_at": NOW + 1950}})
     severity, reasons, details = health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)
-    assert (severity, reasons) == ("failed", ["standalone_host_down"])
-    assert "未来" in details["standalone_host_down"]
+    assert (severity, reasons) == ("failed", ["standalone_clock_unverified"])
+    assert "未来" in details["standalone_clock_unverified"]
     _status(tmp_path, updated_at=NOW + 1)      # within the 2 s tolerance stays healthy
     assert health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)[0] == "ok"
     # current heartbeat but future last_ok_at / started_at
     _status(tmp_path, exits={"mcs_check": {"last_exit": 0, "failures": 0, "last_ok_at": NOW + 1950}})
     severity, reasons, details = health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)
-    assert (severity, reasons) == ("degraded", ["standalone_check_stalled"])
+    assert (severity, reasons) == ("degraded", ["standalone_clock_unverified"])
     _status(tmp_path, started_at=NOW + 1900, exits={})
-    assert health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)[1] == ["standalone_check_stalled"]
+    assert health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)[1] == ["standalone_clock_unverified"]
