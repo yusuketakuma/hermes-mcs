@@ -39,3 +39,6 @@ ocr-venv/
 /scripts/mcs_ocr.sh
 /scripts/mcs_offsite.sh
 /scripts/mcs_update.sh
+
+# Generated release video artifacts
+docs/screenshots/*.mp4

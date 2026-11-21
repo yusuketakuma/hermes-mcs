@@ -412,10 +412,30 @@ def _valid_primary_assessment(content, meta, model, mid, fp, policy, scfg, *, pr
         return False
 
 
-def _primary_assessment_history(db, pid, mid, fp, policy):
+def _assessment_history_rows(db, pid, mids):
+    """Fetch assessment rows for many messages in one ordered pass.
+
+    Same rows the per-message lookup reads — grouped here so a
+    whole-target scope does not spend its run-lock window on
+    thousands of point SELECTs."""
+    mids = tuple(mids)
+    if not mids:
+        return {}
+    q = ",".join("?" * len(mids))
+    rows = {}
+    for stored in db.execute(
+            'SELECT message_id,content,meta,model FROM artifacts WHERE kind=? AND project_id=? '
+            f'AND message_id IN ({q}) ORDER BY artifact_id DESC', (KIND_ASSESS, pid, *mids)):
+        rows.setdefault(stored['message_id'], []).append(stored)
+    return rows
+
+
+def _primary_assessment_history(db, pid, mid, fp, policy, *, rows=None):
     assessment, previous = None, []
-    for stored in db.execute('SELECT content,meta,model FROM artifacts WHERE kind=? AND project_id=? '
-                             'AND message_id=? ORDER BY artifact_id DESC', (KIND_ASSESS, pid, mid)):
+    stored_rows = (rows if rows is not None else db.execute(
+        'SELECT content,meta,model FROM artifacts WHERE kind=? AND project_id=? '
+        'AND message_id=? ORDER BY artifact_id DESC', (KIND_ASSESS, pid, mid)))
+    for stored in stored_rows:
         content, meta = strict_json(stored['content']), strict_json(stored['meta'])
         if not isinstance(content, dict) or not isinstance(meta, dict):
             raise ValueError('semantic_assessment_history_invalid')

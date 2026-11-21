@@ -19,6 +19,7 @@ from mcs_util import HOME, ATTACH_DIR, strict_json, valid_hash
 from llm_availability import disk_floor_mb
 import local_backup
 import maintenance
+import semantic_intake_hold   # top-level: keep first-import compile out of the deadline-bound tail
 
 HEALTH_FILE = os.path.join(HOME, HEALTH_REL)
 ATTACH_DISK_MARGIN_MB = 2048
@@ -1292,7 +1293,6 @@ def build_health(db, result: dict, status: str,
                 "counted_at": now, "source": source, "status": "recorded"}
     coll = collection(result)
     try:
-        import semantic_intake_hold
         unstored_state = 'present' if bounded_health_read(
             db, lambda _check: semantic_intake_hold.unstored_epoch(db),
             seconds=remaining()) else 'none_observed'

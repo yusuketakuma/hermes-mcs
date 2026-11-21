@@ -319,6 +319,8 @@ def test_cap_reached_at_reservation_defers_without_local_work(runtime, real_clou
 
     def budget(*args, **kwargs):
         # The send check passes; another request takes the day's last room before the reservation.
+        if 'input_bound' not in kwargs:
+            return None   # provider-order probe inside resolve_profile: not an admission check
         seen.append(True)
         return None if len(seen) == 1 else 'daily_cost_cap'
     monkeypatch.setattr(cloud_policy, 'budget_block_reason', budget)
@@ -1600,7 +1602,7 @@ def test_scan_request_is_stored_under_its_own_source_input(runtime, real_cloud, 
     expected = {}
     for source in mcs_queries.patient_context_sources(ledger.db, 1, cfg=cfg):
         expected[source['message_id']] = state._cloud_scan_binding(
-            plan.source_signature(source), route['contract'], route['provider'],
+            plan.source_signature(source), route['contract'], None,
             patient_context_artifacts.source_occurrence(ledger.db, 1, source))
     # Each request names the input of its own source, whatever else the patient holds: that is
     # what counts it as cloud work for the source and what its answer is taken up for.

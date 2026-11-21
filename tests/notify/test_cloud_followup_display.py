@@ -27,11 +27,11 @@ def test_legacy_cloud_reader_has_no_invented_transport_status(led, monkeypatch, 
     contract = {"backend": "openai", "model": "synthetic", "prompt": "a" * 16}
     monkeypatch.setattr(cloud_inference, "cloud_provider_contract", lambda **kw: contract)
     calls = []
-    monkeypatch.setattr(extract_llm, "cloud_completion", lambda db, row, selected: calls.append(
-        (row["project_id"], row["message_id"], selected)) or completion)
-    monkeypatch.setattr(extract_llm_errors, 'cloud_completion', extract_llm.cloud_completion)
-    monkeypatch.setattr(extract_llm_selection, 'cloud_completion', extract_llm.cloud_completion)
-    monkeypatch.setattr(extract_llm_store, 'cloud_completion', extract_llm.cloud_completion)
+    monkeypatch.setattr(extract_llm, "cloud_completion_any", lambda db, row: calls.append(
+        (row["project_id"], row["message_id"])) or (completion, contract))
+    monkeypatch.setattr(extract_llm_errors, 'cloud_completion_any', extract_llm.cloud_completion_any)
+    monkeypatch.setattr(extract_llm_selection, 'cloud_completion_any', extract_llm.cloud_completion_any)
+    monkeypatch.setattr(extract_llm_store, 'cloud_completion_any', extract_llm.cloud_completion_any)
     reserve, post = Mock(side_effect=AssertionError("display reserved cloud")), Mock(side_effect=AssertionError("display sent cloud"))
     monkeypatch.setattr(cloud_policy, "usage_reserver", reserve)
     monkeypatch.setattr(cloud_client.CloudClient, "complete", post)
@@ -40,7 +40,7 @@ def test_legacy_cloud_reader_has_no_invented_transport_status(led, monkeypatch, 
     with monkeypatch.context() as legacy:
         legacy.setattr(cloud_policy, "send_route", lambda route: route == "reextract")
         assert processing_route.cloud_followup(led.db, 1, 100, CFG) == ("openai", expected)
-    assert calls == [(1, 100, contract)]
+    assert calls == [(1, 100)]
     calls.clear()
     assert processing_route.cloud_followup(led.db, 1, 100, CFG) is None
     assert calls == []
@@ -66,10 +66,10 @@ def test_legacy_cloud_reader_respects_history_permission(led, monkeypatch):
     monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda cfg: {"mode": "on", "provider": "openai"})
     monkeypatch.setattr(cloud_policy, "eligible", lambda *args: True)
     monkeypatch.setattr(cloud_policy, "history_thread_allowed", lambda *args: False)
-    monkeypatch.setattr(extract_llm, "cloud_completion", lambda *args: pytest.fail("unapproved source read"))
-    monkeypatch.setattr(extract_llm_errors, 'cloud_completion', extract_llm.cloud_completion)
-    monkeypatch.setattr(extract_llm_selection, 'cloud_completion', extract_llm.cloud_completion)
-    monkeypatch.setattr(extract_llm_store, 'cloud_completion', extract_llm.cloud_completion)
+    monkeypatch.setattr(extract_llm, "cloud_completion_any", lambda *args: pytest.fail("unapproved source read"))
+    monkeypatch.setattr(extract_llm_errors, 'cloud_completion_any', extract_llm.cloud_completion_any)
+    monkeypatch.setattr(extract_llm_selection, 'cloud_completion_any', extract_llm.cloud_completion_any)
+    monkeypatch.setattr(extract_llm_store, 'cloud_completion_any', extract_llm.cloud_completion_any)
     assert processing_route.cloud_followup(led.db, 1, 100, CFG) is None
     with monkeypatch.context() as legacy:
         legacy.setattr(cloud_policy, "send_route", lambda route: route == "reextract")
@@ -77,16 +77,15 @@ def test_legacy_cloud_reader_respects_history_permission(led, monkeypatch):
     assert processing_route.cloud_followup(led.db, 1, 100, CFG) is None
 
 
-def test_legacy_cloud_reader_keeps_unresolved_contract_unverified(led, monkeypatch):
+def test_legacy_cloud_reader_marks_missing_cloud_result_incomplete(led, monkeypatch):
     _seed_thread(led, mids=(100,))
     monkeypatch.setattr(cloud_inference, "resolve_cloud_settings", lambda cfg: {"mode": "on", "provider": "openai"})
     monkeypatch.setattr(cloud_policy, "eligible", lambda *args: True)
     monkeypatch.setattr(cloud_policy, "history_thread_allowed", lambda *args: True)
-    monkeypatch.setattr(cloud_policy, "resolve_profile", lambda *args, **kw: (None, ["unverified"]))
     assert processing_route.cloud_followup(led.db, 1, 100, CFG) is None
     with monkeypatch.context() as legacy:
         legacy.setattr(cloud_policy, "send_route", lambda route: route == "reextract")
-        assert processing_route.cloud_followup(led.db, 1, 100, CFG) == ("openai", "unverified")
+        assert processing_route.cloud_followup(led.db, 1, 100, CFG) == ("openai", "incomplete")
     assert processing_route.cloud_followup(led.db, 1, 100, CFG) is None
 
 
