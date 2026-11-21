@@ -1,0 +1,5 @@
+{"id": "backup-keep3-20261120", "date": "2026-11-20",
+ "summary": "日次backup保持数を7→3に変更（ユーザー承認のdisk逼迫対策）",
+ "detail": "ledger ~1.1GB×7本で~7.5GB常設していた保持を3本へ削減。2026-11-20のdisk逼迫(root空き149MB)を受けユーザーがkeep3恒久化を承認。既存のledger-20261114..17は手動削除済み。prune経路はBACKUP_KEEP参照のため変更不要。",
+ "files": ["mcs/core/local_backup.py"],
+ "tests": ["tests/core/test_ledger_recovery_contract.py はBACKUP_KEEP定数参照で整合"]}

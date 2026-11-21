@@ -76,6 +76,7 @@ from update_repository import (
     _tree_clean,
 )
 from update_services import (
+    _enable_log_rotation,
     _quiesce_for_mode,
     restart_agents,
 )
@@ -438,6 +439,7 @@ def _post_merge(state: dict, *, native_provider_migration: bool = False,
     if problems:
         raise UpdateError("restart_failed: " + ",".join(problems))
     journal(state, "restart")
+    _enable_log_rotation()
     errors = _postcheck(state, applying["sha"])
     if errors:
         raise UpdateError("postcheck_failed: " + ",".join(errors))

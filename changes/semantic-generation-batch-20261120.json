@@ -1,0 +1,15 @@
+{
+  "category": "improved",
+  "title": "意味スレッド世代ダイジェストをプロジェクト単位の一括問い合わせへ",
+  "summary": "save_messages の取込トランザクションで意味スナップショットを作るとき、触れたスレッドごとにスレッド全体の本文・添付・リビジョンを読んでハッシュしていた逐次問い合わせを、プロジェクト単位の一括問い合わせに置き換えました。大量取込で BEGIN IMMEDIATE 内の作業時間（本番実測 27 秒超、ほぼ全てが sem_snap 区間）を短縮します。生成するダイジェストの内容は従来と完全に同一です。",
+  "upgrade": "追加操作は不要です。外部から参照する _semantic_source_generation(project_id, root) は従来どおり単一スレッドを返し、内部で一括版へ委譲するため呼出側の挙動は変わりません。",
+  "details": [
+    "_semantic_source_generations(project_id, roots) を追加。スレッド所属判定（message_id=root または parent_id=root）、行順（posted_at_ts,message_id）、添付・リビジョン回数の収集、member 構築とダイジェストを従来実装と同一規約のまま一括化する。",
+    "_semantic_source_generation は単一 root の一括呼出しへ委譲。semantic_reprocess・semantic_intake_hold・semantic_due_selection 等の既存呼出しは変更なし。",
+    "_semantic_generation_snapshot は keys 構築後に必要 root をプロジェクト単位で集約し、世代ダイジェストを一括取得する。",
+    "本番 ledger.db の 150 スレッドで新旧ダイジェストを直接比較し一致を確認（diff 0）。tests 284 件 pass。"
+  ],
+  "refs": [
+    "mcs/core/ledger_semantic_sources.py"
+  ]
+}
