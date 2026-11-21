@@ -7,7 +7,8 @@
 - v1.1.2（タグ 2026-11-08）以降の変更記録441件を `changes/archive/1.2.0/` へ全件収録。形式は `release_notes.py` の検証を通過する厳格スキーマへ統一し、category の規定外値（improved 等）・独自スキーマ・summary 280字超過・detail/ref 中の記号を全件修正した（`cfff1edb7`・`b11ddfa14`・`e9cdf7751`・`a45f75f9d` と本票作成時の54件の追補修正）。収録後に出た修正の記録4件を追加し、同一修正の重複記録 `bp-pair-space-side`（未採用の実装を記した版）を外して再生成した。
 - 収録からの除外は2件: `reseed-flake-fix-20261120`（テストのみの修正で本番動作に変更なし）と `cloud-backlog-drain-window-20261120`（本番設定のみの記録でコード変更を伴わない）（`a45f75f9d`・`84e1fab4a`）。いずれも変更記録を要しない区分として意図的に外した。
 - CHANGELOG の v1.2.0 節・README のリリース案内を生成し、`--summary-file` による比較表と説明図2点を導入部へ掲載（`572c30a2e`、441件で再生成）。公開本文は上限内の91,951字。
-- 説明図は通知カード・クラウドAIの2点（SVG正本・PNG描画）。来歴とhashは `visual-source.json`、441件の対応表は `change-map.json`。
+- 本番適用後に見つかった2件の不具合修正（`jobs-failed-read-budget-20261121`・`jev-claim-audit-context-dedup-20261121`、それぞれ `7bdca8757`・`b0cf76a8a`）を収録し、443件で再生成。再生成は archive からの全件再投入で、441件の既存記述は変更なし（git diff で加算のみを確認）。
+- 説明図は通知カード・クラウドAIの2点（SVG正本・PNG描画）。来歴とhashは `visual-source.json`、443件の対応表は `change-map.json`。
 - `docs/development/readme-review.json` を 1.2.0 へ更新し、README本文の見直し結果を記録済み。
 
 ## 検証済み（この作業の範囲・ローカル実測）
@@ -26,12 +27,19 @@
 - 図版: PNG 2点（1960×840）を縮小表示で文字欠落・重なりを確認。`visual-source.json` に hash を記録。
 - `patient_context_quality_identity.QA_VERSION`: 確認の結果 bump 不要と判断。`fb6ffbfab` 以降の `patient_context_quality_controller.py`・`_receipts.py` の差分は送信経路・skip理由（REVIEW_HELD 追加）・deferred 条件の変更で、PASS 判定と答えの解釈は `QUALITY_FUNCTIONS`・`QUALITY_CONSTANTS` の hash 対象内の変更に限られる。`semantic_usage_receipts.py` に差分なし。
 
+### 本番適用後の追加検証（`cfb0f4da5`→`7bdca8757`→`b0cf76a8a`、2026-11-21実施）
+
+- 本番稼働観察で発見・修正した2件（両方とも work/ ブランチで回帰テスト先行・red/green 確認）:
+  - `7bdca8757`: `mcs jobs failed` が大きな履歴で観測予算を使い切り診断不能になる問題。tests/ops 計102件 pass・本番 read-only 実行で13件の診断を2.59秒で取得・適用後の実CLIで診断ハッシュ付き返却を確認。
+  - `b0cf76a8a`: claim監査が同一メッセージの証拠ごとに投稿本文を重複送信し大型jobが決定論的 audit_jev_hard になる問題。tests/semantic 計239件 pass・ruff clean。適用後に failed job 1019566 を retry 適用（pending 復帰・次回drainで検証）。
+- 本番適用実績: `mcs_upgrade.py`（§2-A候補適用経路）で `cfb0f4da5`→`7bdca8757`→`b0cf76a8a` を順次適用。両適用とも route=apply・schema_bumpなし・blockers空・gateway再起動のみ。適用後 `mcs_setup.py check` 問題0・drainer3本稼働・収集正常再開（21:51JST以降も継続）。
+
 ## 未実行・残条件
 
 - 全体 suite・CI の全6 lane: PR #314 の run で `49ff711f2` 時点の pytest matrix・lint-test・hygiene・standalone-sdk・incident-gates・macos・hermes-integration 等22 job が全件合格。記録の再生成と追加修正を含む最新SHAでは再走が必要。tag run（常に full mode・perf 含む）が最終の実測証拠になる。
-- 独立レビュー（別コンテキストのレビュアーによる最終検証）: 敵対的レビューを実施し、発見された実バグ（文末ピリオドの血圧・日付のみ記載のバイタル誤読など）を修正済み。
+- 独立レビュー（別コンテキストのレビュアーによる最終検証）: 敵対的レビューを実施し、発見された実バグ（文末ピリオドの血圧・日付のみ記載のバイタル誤読など）を修正済み。追加2修正のレビューは devin 席へ依頼中（devin1-010・devin1-014、着信次第記録）。
 - tag `v1.2.0` の作成・GitHub Release の公開・説明図 PNG の release asset 添付と到達・表示確認: 未実施。本文中の画像URLは公開後に照合が必要。
-- 本番適用・常駐サービスの再起動: 未実施。
+- 本番適用・常駐サービスの再起動: **実施済み**（`b0cf76a8a`・`candidate:` 記録に applied・gateway再起動確認・`applying: null`）。稼働観察は継続中で、retry した job 1019566 の次回drain結果は未確認。
 
 ## 参照
 

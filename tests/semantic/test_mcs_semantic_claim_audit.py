@@ -265,9 +265,9 @@ def test_each_question_names_only_its_own_claim_and_evidence():
     assert state["target"]["claims"] == [{"id": "claim_1_0", "text": "合成の主張0"},
                                          {"id": "claim_1_1", "text": "合成の主張1"}]
     assert {e["id"] for e in state["context"]} == {
-        "ev_0", "ev_0_ctx", "ev_0_meta", "ev_1", "ev_1_ctx", "ev_1_meta"}
+        "ev_0", "ctx_1", "ev_0_meta", "ev_1", "ctx_2", "ev_1_meta"}
     first = questions["claim_1_0"]["instructions"]
-    assert "id claim_1_0 " in first and "entries: ev_0, ev_0_ctx, ev_0_meta)" in first
+    assert "id claim_1_0 " in first and "entries: ev_0, ctx_1, ev_0_meta)" in first
     assert "ev_1" not in first
     assert "合成の主張0" not in first                 # claim text stays data
 
@@ -278,9 +278,47 @@ def test_a_shared_source_is_sent_once():
     semantic_audit.audit_claims(client, bundle, summary, time.monotonic() + 60)
     [(state, questions)] = client.sent
     assert [e["id"] for e in state["context"]] == [
-        "ev_shared", "ev_shared_ctx", "ev_shared_meta"]
-    assert all("entries: ev_shared, ev_shared_ctx, ev_shared_meta)" in q["instructions"]
+        "ev_shared", "ctx_1", "ev_shared_meta"]
+    assert all("entries: ev_shared, ctx_1, ev_shared_meta)" in q["instructions"]
                for q in questions.values())
+
+
+def test_evidences_on_one_message_send_the_context_once():
+    """2026-11-21 regression: every evidence carried the whole source body
+    as its own {ev}_ctx entry, so a job citing many evidences from the
+    same post multiplied the request by the body size — large audits
+    crossed the Jev input limit and died deterministically as
+    audit_jev_hard (http_400 before any tokens). One message context
+    entry serves every evidence that cites it (AT-028 unchanged: each
+    claim still sees the full surrounding body for its quote)."""
+    body = "合成の記録です。続きの文があります。"
+    members = [{"message_id": 5, "parent_id": None, "revision": 1,
+                "posted_at": "2026-01-01T00:00:00",
+                "sender": {"type": "synthetic"}, "body_original": body}]
+    facts = [{"_evidence": {"evidence_id": "ev_a", "message_id": 5,
+                            "quote": body[:7], "start_codepoint": 0,
+                            "end_codepoint": 7}},
+             {"_evidence": {"evidence_id": "ev_b", "message_id": 5,
+                            "quote": body[7:], "start_codepoint": 7,
+                            "end_codepoint": len(body)}}]
+    claims = [{"claim_id": "claim_1_0", "claim_kind": "reported_fact",
+               "text": "合成の主張0", "evidence_refs": ["ev_a"]},
+              {"claim_id": "claim_1_1", "claim_kind": "reported_fact",
+               "text": "合成の主張1", "evidence_refs": ["ev_b"]}]
+    client = _ClaimCapture()
+    findings, evaluated = semantic_audit.audit_claims(
+        client, {"members": members},
+        {"claims": claims, "_facts": facts}, time.monotonic() + 60)
+    assert evaluated and findings == []
+    [(state, questions)] = client.sent
+    ctx_entries = [e for e in state["context"]
+                   if e["role"] == "evidence_context"]
+    assert ctx_entries == [{"id": "ctx_5", "role": "evidence_context",
+                            "text": body}]
+    assert "entries: ev_a, ctx_5, ev_a_meta)" \
+        in questions["claim_1_0"]["instructions"]
+    assert "entries: ev_b, ctx_5, ev_b_meta)" \
+        in questions["claim_1_1"]["instructions"]
 
 
 def test_a_claim_without_evidence_cites_none():
