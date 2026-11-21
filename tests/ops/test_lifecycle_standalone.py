@@ -16,6 +16,7 @@ import service_contract
 import update_launch
 import runtime_inspection
 import json
+import re
 
 import mcs_update
 from ops_testkit import _load
@@ -36,7 +37,8 @@ def test_update_restarts_the_connector_or_gateway(monkeypatch, tmp_path):
     monkeypatch.setattr(mcs_update, "_uid", lambda: 501)
     monkeypatch.setattr(update_services, '_uid', mcs_update._uid)
     mcs_update.restart_gateway({})
-    assert started[-1][1:3] == ["-I", "-c"] and started[-1][-1] == "501"
+    assert started[-1][1:3] == ["-I", "-c"] and started[-1][-2] == "501" \
+        and re.fullmatch(r"[0-9a-f]{32}", started[-1][-1])
     from mcs_standalone import service
     requests = []
     monkeypatch.setattr(service, "request_restart", lambda root: requests.append(root))
@@ -80,7 +82,7 @@ def test_recovery_tool_follows_the_runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "AGENTS_DIR", str(tmp_path))
     started = _popen_log(monkeypatch, services)
     services._restart_gateway()
-    assert started[-1][1:3] == ["-I", "-c"] and started[-1][-3] == core.DATA
+    assert started[-1][1:3] == ["-I", "-c"] and started[-1][-4] == core.DATA
     (tmp_path / "config.json").write_text(json.dumps({"runtime_mode": "standalone"}))
     (tmp_path / "ai.mcs.standalone.plist").write_text("")
     monkeypatch.setattr(services, "_standalone_status", lambda: {"generation": "a" * 32})

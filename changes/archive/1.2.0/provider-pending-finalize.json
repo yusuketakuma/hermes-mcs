@@ -1,0 +1,21 @@
+{
+  "category": "added",
+  "title": "提供元設定の保存の最後で止まったときの保留を、人の確認で解除できるようにする",
+  "summary": "提供元別設定の保存中に電源断や強制終了が起きると、保存中の記録（.provider-settings-pending.json）が残り、書込み処理がすべて保留されたまま解除できませんでした。今後は mcs_setup.py provider-pending-finalize を --confirm-human と理由付きで実行すると、保存後の状態を確かめたうえで記録を退避し、解除できます。",
+  "upgrade": "この版への更新だけで使えます。保留の記録がない導入先には影響がありません。",
+  "details": [
+    "provider_settings.committed_pending を追加（読取りのみ、設定編集ロックの下で全ファイルのハッシュと v2 の権限記録を照合）。",
+    "人承認操作 ops.provider_pending_finalize を共通経路に追加し、記録は削除せず退避する。INSTALLATION.md に手順を追記。",
+    "提供元別の設定（config.json と provider_settings/）の保存は、保存中の記録を置いてから書き換え、最後にその記録を消します。最後の記録を消す前に中断すると、すべてのファイルが保存後の状態でも記録が残っていました。",
+    "実行は mcs_setup.py provider-pending-finalize --operation に記録の operation 値 --confirm-human --reason に理由 です。全ファイルと権限の記録が記録どおりの保存後の状態であることを確かめたうえで、記録を data/.provider-settings-pending.resolved- に operation 値を続けた名前.json へ退避します。",
+    "操作は承認記録に残ります。退避後に設定の読取り確認が通らなければ記録を元に戻します。保存前の状態へ戻す必要がある場合など、ほかの状態では解除しません。"
+  ],
+  "refs": [
+    "mcs/core/provider_settings.py",
+    "mcs/ops/setup/config_edit.py",
+    "mcs/ops/commands/operation_contract.py",
+    "mcs/ops/commands/mcs_requests.py",
+    "mcs/ops/commands/mcs_operations.py",
+    "docs/guides/INSTALLATION.md"
+  ]
+}

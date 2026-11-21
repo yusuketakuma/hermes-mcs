@@ -287,6 +287,9 @@ def test_snapshot_stops_at_the_callers_hard_deadline(tmp_path, snapdir, monkeypa
         seen["deadline"] = deadline
         return False
     monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", verify)
+    # The min-window gate defers tiny budgets before the copy; this test checks
+    # deadline propagation, so lift the gate.
+    monkeypatch.setattr(snapshots, "SNAPSHOT_MIN_WINDOW_S", 0.0)
     hard = time.monotonic() + 5
     assert maintenance.refresh_snapshot(path, deadline=hard) is None
     assert seen["deadline"] == hard - snapshots.SNAPSHOT_WORK_TAIL_S
@@ -351,6 +354,7 @@ def test_unreadable_signature_still_requests_fresh_copy(tmp_path, monkeypatch):
         return False
 
     monkeypatch.setattr(maintenance, "publish_snapshot", publish)
+    monkeypatch.setattr(snapshots, "SNAPSHOT_MIN_WINDOW_S", 0.0)
     deadline = time.monotonic() + 10
     assert maintenance.refresh_snapshot(str(tmp_path / "missing.db"), deadline=deadline) is None
     assert calls == [{"deadline": deadline}]
