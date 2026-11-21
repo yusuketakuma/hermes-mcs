@@ -399,13 +399,24 @@ def _measurement_source_page(db, page, kinds, refs, expected_model):
     return result
 
 
+def _note_post_day(m):
+    """投稿日(JST, ISO)。投稿がそれより後の測定を伝えることはない上限。"""
+    ts = m["posted_at_ts"]
+    if type(ts) not in (int, float):
+        return None
+    try:
+        return datetime.fromtimestamp(ts, JST).date().isoformat()
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
 def _posted_measurement_day(m, value):
     if not isinstance(value, str) or type(m["posted_at_ts"]) not in (int, float):
         return None
     try:
-        measured = date.fromisoformat(value)
-        posted = datetime.fromtimestamp(m["posted_at_ts"], JST).date()
-        return value if measured <= posted else None
+        date.fromisoformat(value)
+        posted = _note_post_day(m)
+        return value if posted is not None and value <= posted else None
     except (ValueError, OverflowError, OSError):
         return None
 
@@ -863,7 +874,7 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
             if noncurrent == "historical_unknown":
                 # Do not promote an earlier stated observation over a later posting,
                 # nor discard the source if its event time cannot be bound to the value.
-                vital_panels.append((None, {}))
+                vital_panels.append((None, _note_post_day(m), {}))
                 if bound_source:
                     report_count += 1
                     if len(measurement_reports) < MEASUREMENT_REPORT_LIMIT:
@@ -874,7 +885,8 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
                 pass  # Explicitly another person's measurement or an unperformed plan.
             elif vit:
                 grounded, day = _dated_vitals(m, vit, patient_name)
-                vital_panels.append((day if grounded else None, {"at": m["posted_at"], **vit}))
+                vital_panels.append((day if grounded else None, _note_post_day(m),
+                                     {"at": m["posted_at"], **vit}))
                 if grounded and bound_source:
                     report_count += 1
                     if len(measurement_reports) < MEASUREMENT_REPORT_LIMIT:
@@ -883,7 +895,7 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
                             "measured_on": day, "values": vit, "state": "reported"})
             elif _has_patient_vital(m["body_text"], patient_name):
                 # An extracted omission is not proof that a written reading is absent.
-                vital_panels.append((None, {}))
+                vital_panels.append((None, _note_post_day(m), {}))
             for lb in _dicts(lm.get("labs")):
                 if not isinstance(lb.get("name"), str) or not lb["name"].strip():
                     measurement_complete = False
@@ -1002,16 +1014,21 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
                                    "incomplete_sources": incomplete_sources, "unbound_sources": unbound_sources,
                                    "unparsed_sources": unparsed_sources,
                                    "attachment_count": attachments,
-                                   "undated_vital_panels": sum(day is None for day, _ in vital_panels),
+                                   "undated_vital_panels": sum(day is None for day, _, _ in vital_panels),
                                    "unverified_lab_reports": sum(report is None for reports in lab_reports.values()
                                                                  for report in reports)}
     out["measurement_reports"] = {"items": measurement_reports, "total": report_count,
                                   "truncated": report_count > len(measurement_reports)}
-    if measurement_complete and vital_panels and all(day is not None for day, _ in vital_panels):
-        latest_day = max(day for day, _ in vital_panels)
-        latest = [panel for day, panel in vital_panels if day == latest_day]
+    dated_panels = [(day, panel) for day, _, panel in vital_panels if day is not None]
+    if measurement_complete and dated_panels:
+        latest_day = max(day for day, _ in dated_panels)
+        # 未確認の読み値は投稿日より後の測定を伝えられない。投稿日が最新の測定日
+        # より前なら新しい可能性がないので「最新」の確定を保留させない。
+        withheld = any(day is None and (post_day or latest_day) >= latest_day
+                       for day, post_day, _ in vital_panels)
+        latest = [panel for day, panel in dated_panels if day == latest_day]
         values = [{key: value for key, value in panel.items() if key != "at"} for panel in latest]
-        if all(value == values[0] for value in values):
+        if not withheld and all(value == values[0] for value in values):
             out["latest_vitals"] = latest[0]
     latest_labs = []
     if measurement_complete:
