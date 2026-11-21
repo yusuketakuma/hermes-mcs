@@ -948,6 +948,10 @@ HISTORY_REFUSALS = frozenset({"repeat_success", "repeat_failed", "repeat_unsettl
 # The guard's final branch after the one validated result of the same request. Only
 # _classified sets verified_repeat, so a converted or foreign exception never carries it.
 REPEAT_REFUSALS = frozenset({"repeat_success", "repeat_failed", "repeat_unsettled"})
+# Owner decision 2026-11-21: the same logical request may be billed through settled
+# failures at most this many times, the first send included; the next verified repeat
+# refuses like any other. A constant, not a setting.
+SETTLED_FAILURE_BILLED_LIMIT = 3
 
 
 def _classified(error, refusal):
@@ -1033,8 +1037,13 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
     which paid requests local work may replace. A reservation already ended by a disposition,
     or whose result carries a discarded one, passes without a new row. A verified same request
     of this unit key (a settled repeat, or a result still missing past
-    :data:`RESULT_STALE_MARGIN_S`) is appended to the list instead of refusing. Everything else
-    refuses exactly as without it. Without ``local_fallback`` the clock is never read."""
+    :data:`RESULT_STALE_MARGIN_S`) is appended to the list instead of refusing. On the
+    send path (``local_fallback`` false) a proven same request whose verified results
+    are all settled failures may be sent again as a separate billed attempt, at most
+    :data:`SETTLED_FAILURE_BILLED_LIMIT` billed attempts in total; a provider-proven
+    refusal (``contract_error_detail``) is never resent or counted; local fallback
+    never passes a settled failure without a disposition. Everything else refuses exactly as
+    without it. Without ``local_fallback`` the clock is never read."""
     if supersede is not None and (type(supersede) is not list or not local_fallback
                                   or candidate.get('route') != 'patient_context'):
         raise ValueError('cloud_supersede_scope_invalid')
@@ -1044,6 +1053,7 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
     result_map = None
     disposition_ids = None
     candidate_occurrence, occurrence_checked = None, False
+    settled_failures = 0
     for row in rows:
         refusal = None
         guard_match = None
@@ -1153,17 +1163,25 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                     and result.get('error_kind') is None and _selection_differs(previous, candidate, current_body)):
                 continue
             # The one validated result of the same request: a proven success, a settled
-            # failure, or an unsettled one. A settled failure permits a resend (the unit
-            # stayed unanswered and fully accounted; the new send is a separate billed
-            # attempt); success and unknown outcomes still refuse duplicates.
+            # failure, or an unsettled one. A verified settled failure permits a resend on
+            # the send path only (the unit stayed unanswered and fully accounted; the new
+            # send is a separate billed attempt, capped at SETTLED_FAILURE_BILLED_LIMIT
+            # billed attempts). A provider-proven refusal detail is excluded: the provider
+            # already declined this content, so it refuses and is never counted. Local
+            # fallback never passes a settled failure without a disposition, and success,
+            # unproven and unknown outcomes still refuse duplicates.
             refusal = ('repeat_unsettled' if not settled else
                        'repeat_success' if (result.get('usage') is not None and result.get('http_class') == 'http_200'
                                             and result.get('error_kind') is None) else 'repeat_failed')
             if supersede is not None and prompt_verified and own_unit:
                 supersede.append(_accounting_meta(row['meta']))
                 continue
-            if refusal == 'repeat_failed':
-                continue
+            if (refusal == 'repeat_failed' and not local_fallback
+                    and prompt_verified
+                    and result.get('contract_error_detail') not in cloud_client.CONTRACT_ERROR_DETAILS):
+                settled_failures += 1
+                if settled_failures < SETTLED_FAILURE_BILLED_LIMIT:
+                    continue
             raise ValueError('already_sent_or_unknown')
         except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
             error = _classified(AnthropicError('budget_exceeded', 'cloud_unit_unresolved'),
@@ -2018,6 +2036,7 @@ def recover_response(ledger, *, route, project_id, message_id, unit_key, input_b
         observed = observation if route == 'reextract' and message_id is not None else None
         _observe_recovery(observed, 'unknown' if rows else 'no_exact_rows')
         saved = None
+        settled_failure = False
         for row in rows:
             reservation = _receipt_meta(row['meta'])
             maximum = _reserve_valid(reservation, row)
@@ -2044,9 +2063,15 @@ def recover_response(ledger, *, route, project_id, message_id, unit_key, input_b
             if dispositions:
                 raise ValueError(ended)
             result_meta = matches[0][0]
-            if (not settled or result_meta.get('http_class') != 'http_200'
-                    or result_meta.get('error_kind') or result_meta.get('disposition')):
+            if not settled or result_meta.get('disposition'):
                 raise ValueError('cloud_result_unsettled')
+            if (result_meta.get('http_class') != 'http_200'
+                    or result_meta.get('error_kind')):
+                # A settled failure is fully accounted and answered nothing: like a
+                # confirmed rejection it holds no answer to reuse. The reservation
+                # guard alone decides whether a new billed attempt is allowed.
+                settled_failure = True
+                continue
             evidence = reservation_evidence(ledger.db, row['artifact_id'])
             raw = ledger.db.execute("SELECT CASE WHEN typeof(content)='text' AND length(content)<=? "
                                    "THEN content END FROM artifacts WHERE artifact_id=?",
@@ -2058,7 +2083,8 @@ def recover_response(ledger, *, route, project_id, message_id, unit_key, input_b
             saved = (evidence, {'status': 200, **answer, 'model': reservation['model'],
                                 'usage': evidence['result']['usage']})
         if rows and saved is None:
-            _observe_recovery(observed, 'confirmed_rejection_only')
+            _observe_recovery(observed, 'settled_failure_only' if settled_failure
+                              else 'confirmed_rejection_only')
         return saved
 
 
@@ -2127,6 +2153,8 @@ def record_result(ledger, reservation, metadata, *, answer=None):
             result["anthropic_error_code"] = metadata["anthropic_error_code"]
         if "anthropic_400_diagnostic" in metadata:
             result["anthropic_400_diagnostic"] = metadata["anthropic_400_diagnostic"]
+        if "contract_error_detail" in metadata:
+            result["contract_error_detail"] = metadata["contract_error_detail"]
         if "answer_text_sha256_v1" in metadata:
             result["answer_text_sha256_v1"] = metadata["answer_text_sha256_v1"]
         if "answer_finish_reason_v1" in metadata:

@@ -1,0 +1,19 @@
+{
+ "category": "changed",
+ "title": "長いリリース本文のリンク先を版別詳細ファイルへ変更",
+ "summary": "上限を超えるRelease本文の「技術詳細」のリンク先を、1MBを超えるとGitHubが描画しないCHANGELOG.md本体ではなく、その版の節だけを写した docs/releases/vX.Y.Z/changelog-X.Y.Z.md へ変更しました。リンクは常に描画可能です。不具合修正を見出しだけに畳む第2段階では、セキュリティ項目の説明を残すようになりました。",
+ "upgrade": "リリース手順の変更はありません。build が版別詳細ファイルを自動生成します。",
+ "details": [
+  "GitHubは1MBを超えるテキストをMarkdownとして描画しない（mainのCHANGELOG.md 1.85MBは生表示を実測）。上限超過版のリンク先が描画不能になるため、claude1-387の指摘に基づき版別ファイルへ変更",
+  "build が docs/releases/vX.Y.Z/changelog-X.Y.Z.md（その版の見出しと節全体）を生成。release_body() のリンク先はこのファイルのタグ版固定URL。build・check の両方で1MB（DETAILS_FILE_LIMIT）未満を検査し、上限超過版でファイルが無ければ check は失敗する",
+  "_collapse_fixed() はタイトルが「**セキュリティ：」で始まる項目を複数行の説明ごと保持し、通常の修正だけを見出しに畳む（claude1-387 P3・claude1-388 P2-2）。箇条書きの全件数と拾った件数が違えば取りこぼしとして失敗する",
+  "build の版別ファイル組立てと1MB検査は CHANGELOG・README・archive の書込みより前に行い、超過時は何も書かずに止まる（claude1-388 P2-1）",
+  "上限内の版・過去版のexport結果は変わらない。1.1.2は上限内でリンク置換が起きない",
+  "検証: tests/release/test_release_notes.py にリンク先の版別ファイル形式・セキュリティ複数行保持・build生成と1MB検査・超過時の無書込み・取りこぼし拒否の5件を更新/追加。tests/release/ 全58件pass・ruff clean"
+ ],
+ "refs": [
+  "scripts/development/release_notes.py",
+  "tests/release/test_release_notes.py",
+  "docs/development/RELEASE_NOTES.md"
+ ]
+}
