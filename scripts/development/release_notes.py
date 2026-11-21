@@ -236,8 +236,10 @@ def check_changelog(text):
 def render(items, headline, summary):
     if not headline.strip() or not summary.strip() or len(headline) > 100:
         raise ValueError("headline・summaryは必須です。headlineは100文字以内です")
-    if any(x in headline + summary for x in ("\n", "\r", "<", ">")):
-        raise ValueError("headline・summaryはHTMLなしの1行で指定してください")
+    if any(x in headline for x in ("\n", "\r", "<", ">")):
+        raise ValueError("headlineはHTMLなしの1行で指定してください")
+    if any(x in summary for x in ("\r", "<", ">")):
+        raise ValueError("summaryはHTMLなしで指定してください")
     out = [f"**{headline}**", "", summary, ""]
     upgrades = list(dict.fromkeys(item["upgrade"] for item in items))
     critical = [item for item in items if item["category"] in ("security", "breaking")]
@@ -313,7 +315,8 @@ def main(argv=None):
     build.add_argument("--version", required=True)
     build.add_argument("--date", required=True)
     build.add_argument("--headline", required=True)
-    build.add_argument("--summary", required=True)
+    build.add_argument("--summary")
+    build.add_argument("--summary-file", type=Path)
     export = sub.add_parser("export")
     export.add_argument("--version", required=True)
     export.add_argument("--output", type=Path, required=True)
@@ -361,7 +364,11 @@ def main(argv=None):
             archive = args.root / "changes" / "archive" / args.version
             if archive.exists():
                 raise ValueError("archiveが既に存在します")
-            body = render([item for _, item in fragments], args.headline, args.summary)
+            if (args.summary is None) == (args.summary_file is None):
+                raise ValueError("--summary か --summary-file のどちらか一方が必要です")
+            summary = (args.summary if args.summary is not None
+                       else args.summary_file.read_text(encoding="utf-8").strip())
+            body = render([item for _, item in fragments], args.headline, summary)
             replacement = (f"## [Unreleased]\n\n## [{args.version}] — {args.date}\n\n"
                            + body.rstrip())
             new_text = text.replace("## [Unreleased]", replacement, 1)

@@ -148,6 +148,42 @@ class ReleaseNotesTest(unittest.TestCase):
                 notes.main(args)
             self.assertEqual(changelog.read_text(encoding="utf-8"), text)
 
+    def test_build_summary_file_with_table_and_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "changes").mkdir()
+            (root / "changes/001.json").write_text(json.dumps(self.item()), encoding="utf-8")
+            (root / "CHANGELOG.md").write_text(
+                "# Changelog\n\n## [Unreleased]\n\n## [1.0.7] — 2026-09-29\n\n"
+                + notes.render([self.item()], "旧版", "旧版の変更です。"), encoding="utf-8")
+            (root / "README.md").write_text("# intro\n<!-- BEGIN GENERATED:release -->\n"
+                                          "<!-- END GENERATED:release -->\n", encoding="utf-8")
+            summary = ("要約の段落です。\n\n| 変更 | 以前 | 今回 |\n|---|---|---|\n"
+                       "| 通知 | メニュー | ボタン |\n\n"
+                       "![説明図](https://github.com/yusuketakuma/hermes-mcs"
+                       "/releases/download/v1.0.8/fig.png)\n")
+            fig = root / "docs/releases/v1.0.8"
+            fig.mkdir(parents=True)
+            (fig / "fig.png").write_bytes(b"png")
+            sf = root / "summary.md"
+            sf.write_text(summary, encoding="utf-8")
+            args = ["--root", tmp, "build", "--version", "1.0.8", "--date", "2026-10-01",
+                    "--headline", "通知の改善", "--summary-file", str(sf)]
+            # --summary と --summary-file は排他
+            with self.assertRaises(SystemExit):
+                notes.main(args + ["--summary", "説明。"])
+            with self.assertRaises(SystemExit):
+                notes.main(args[:-2])
+            # HTMLを含む要約は拒否
+            sf.write_text("表 <table>", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                notes.main(args)
+            sf.write_text(summary, encoding="utf-8")
+            self.assertEqual(notes.main(args), 0)
+            sect = notes.section((root / "CHANGELOG.md").read_text(encoding="utf-8"), "1.0.8")
+            self.assertIn("| 通知 | メニュー | ボタン |", sect)
+            self.assertIn("![説明図](https://github.com", sect)
+
     def test_invalid_bump_leaves_pending_records_and_release_files_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
