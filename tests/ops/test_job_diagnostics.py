@@ -247,6 +247,60 @@ def test_error_metric_is_bound_but_exception_name_is_not_exposed(data):
     assert "synthetic_secret" not in json.dumps(result)
 
 
+def test_list_failed_survives_large_artifact_history_under_bounded_reader(tmp_path):
+    """Scanning every artifact kind must not exhaust the shared row budget."""
+    import cloud_cli
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    ledger = Ledger(str(data_dir / "ledger.db"))
+    ledger.ensure_patient(1)
+    ledger.db.execute("INSERT INTO messages(message_id,project_id,body_text,body_state) VALUES(42,1,?,?)",
+                      ("synthetic-source-never-return", "full"))
+    payload = {VERSION_KEY: CURRENT_VERSION, "generation": "synthetic-generation", "targets": [42]}
+    job = ledger.job_add("semantic", 1, 42, payload=payload)
+    ledger.db.execute("UPDATE fetch_jobs SET state='failed',attempts=3 WHERE job_id=?", (job,))
+    metric = {"job_id": job, "project_id": 1, "kind": "semantic", "generation": payload["generation"],
+              "payload_digest": payload_hash(payload), "attempts": 2, "status": "retry",
+              "retry_reason": "budget_short"}
+    ledger.artifact_add("semantic_drain_run", json.dumps({"job_metrics": [metric]}))
+    ledger.db.executemany("INSERT INTO artifacts(kind,content) VALUES('other_run','{}')",
+                          [()] * (cloud_cli.READ_ROWS + 10))
+    ledger.db.commit()
+    ledger.close()
+    cfg = {"semantic": {"mode": "assist", "project_ids": [1]}}
+    with cloud_cli._reader(root=tmp_path) as (db, _deadline):
+        report = diag.list_failed(db, cfg, now=1700000000)
+    assert report["jobs"][0]["reason_code"] == "budget_short"
+
+
+def test_list_failed_degrades_bounded_when_metric_content_exceeds_shared_budget(tmp_path):
+    """Large drain-run bodies must hit the scan's own cap, not crash the reader."""
+    import cloud_cli
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    ledger = Ledger(str(data_dir / "ledger.db"))
+    ledger.ensure_patient(1)
+    ledger.db.execute("INSERT INTO messages(message_id,project_id,body_text,body_state) VALUES(42,1,?,?)",
+                      ("synthetic-source-never-return", "full"))
+    payload = {VERSION_KEY: CURRENT_VERSION, "generation": "synthetic-generation", "targets": [42]}
+    job = ledger.job_add("semantic", 1, 42, payload=payload)
+    ledger.db.execute("UPDATE fetch_jobs SET state='failed',attempts=3 WHERE job_id=?", (job,))
+    metric = {"job_id": job, "project_id": 1, "kind": "semantic", "generation": payload["generation"],
+              "payload_digest": payload_hash(payload), "attempts": 2, "status": "retry",
+              "retry_reason": "budget_short"}
+    ledger.artifact_add("semantic_drain_run", json.dumps({"job_metrics": [metric]}))
+    pad = json.dumps({"job_metrics": [], "pad": "x" * 1000000})
+    ledger.db.executemany("INSERT INTO artifacts(kind,content) VALUES('semantic_drain_run',?)",
+                          [(pad,)] * 6)
+    ledger.db.commit()
+    ledger.close()
+    cfg = {"semantic": {"mode": "assist", "project_ids": [1]}}
+    with cloud_cli._reader(root=tmp_path) as (db, _deadline):
+        report = diag.list_failed(db, cfg, now=1700000000)
+    assert report["jobs"][0]["reason_code"] == "unknown"
+    assert "reason_unverified" in report["jobs"][0]["warnings"]
+
+
 def test_list_reads_bounded_metric_artifacts_once(data):
     ledger, job, payload, cfg = data
     _metric(ledger, job, payload)
