@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "独立実行へ切り替えた導入で、古い起動記録が通知取消を止め続ける問題を修正",
+  "summary": "Hermes から runtime_mode=standalone へ切り替えた導入で、Hermes 時代の起動記録が残っていると、配送ワーカーが停止済みでも notification_cancel apply が拒否されていました。通知設定が standalone を示す導入では、Slack・Discord の停止確認を送信scope lockの取得だけで行います。",
+  "upgrade": "追加操作は不要です。取消の前に独立実行のhostを止める手順は変わりません。flags/notify.json が読めない、形式が壊れている、symlink である、または standalone を示さない場合は、これまでどおり起動記録も確認します。Hermes gateway が切替え前から動き続けていて送信scope lockを保持している場合は、引き続き worker_not_stopped で拒否します。",
+  "details": [
+    "runtime_mode=standalone では Hermes plugin が通知ワーカーを起動しないため、残っている Slack・Discord の起動記録は停止の証拠として扱いません。トランザクション内の再確認でも同じ判定を使います。",
+    "Hermes モードの判定（起動記録の version・reason の検証とプロセス停止の確認）は変わりません。",
+    "拒否されていたのは、起動記録（data/worker_status/slack・discord各-*.json）が旧版の形式のとき、または記録された pid が別のプロセスに再利用されているときです。拒否の理由は worker_stop_unverified または worker_not_stopped でした。",
+    "有効な通知設定（data/flags/notify.json）が standalone を示す導入では、送信scope lockが空いていれば停止を確認済みとします。"
+  ],
+  "refs": [
+    "mcs/ops/notification_cancel.py",
+    "tests/ops/test_notification_cancel.py"
+  ]
+}

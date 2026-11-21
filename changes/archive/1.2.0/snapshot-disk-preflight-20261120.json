@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "ディスクの空きが足りないとき、スナップショット公開を延期する",
+  "summary": "スナップショットの公開を試みる前にディスクの空きを検査し、不足していれば延期（deferred）にします。コピー途中のディスク満杯や、公開失敗の記録を防ぎます。",
+  "upgrade": "この版への更新で有効になります。追加の操作は要りません。",
+  "details": [
+    "一時コピーには ledger 1個分と共有の下限（disk_floor_mb）の空きを要求する。",
+    "不足時は defer_reason=disk_low（free_mb と need_mb を記録）と snapshot_disk_deferred イベントを出し、deferred を返す。",
+    "空き容量の取得（stat）に失敗した場合は従来の経路で処理する。",
+    "検証: tests/core/test_snapshot_refresh_timing.py 14 passed。"
+  ],
+  "refs": [
+    "mcs/core/maintenance.py",
+    "tests/core/test_snapshot_refresh_timing.py"
+  ]
+}

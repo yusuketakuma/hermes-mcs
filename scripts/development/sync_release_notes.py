@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from release_notes import check_changelog, release_title, section
+from release_notes import check_changelog, release_body, release_title
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -86,7 +86,7 @@ def synchronize(text, request, apply=False, tag=None, release_id=None):
         if release_id is not None and release["id"] != release_id:
             raise ValueError("イベントとRelease IDが一致しません")
         seen.add(release_tag)
-        body = section(text, release_tag[1:])
+        body = release_body(text, release_tag[1:])
         desired = {"name": release_title(body, release_tag[1:]), "body": body}
         if any((release.get(k) or "") != v for k, v in desired.items()):
             plan.append((release, desired))
