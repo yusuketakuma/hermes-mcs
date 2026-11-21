@@ -603,6 +603,14 @@ def test_perf_tests_are_deselected_only_when_ci_asks(tmp_path):
     args = json.loads((output / "shard-1.args.json").read_text())
     assert args[args.index("-m") + 1] == "not perf"
     assert _runner(script, tmp_path / "bad", MCS_CI_SKIP_PERF="yes").returncode == 2
+    # unset or "0" keep the perf tests in the shard selection (the serial
+    # slice-1 step selects them itself)
+    for tag, value in (("unset", None), ("zero", "0")):
+        out = tmp_path / tag
+        env = {} if value is None else {"MCS_CI_SKIP_PERF": value}
+        assert _runner(script, out, "--shards", "1", **env).returncode == 0
+        args = json.loads((out / "shard-1.args.json").read_text())
+        assert "-m" not in args
 
 
 def test_docs_scope_passes_the_document_test_list_to_every_shard(tmp_path):

@@ -464,3 +464,11 @@ def test_perf_tests_are_collected_in_a_full_run_and_deselected_on_request():
     everything, perf, rest = collect(), collect("-m", "perf"), collect("-m", "not perf")
     assert perf and rest and perf | rest == everything and not perf & rest
     assert all("test_perf_" in nodeid for nodeid in perf)
+
+
+def test_perf_is_deselected_from_the_shard_pool_on_every_event():
+    block = _jobs()["pytest-linux"]
+    # Serial perf runs in its own slice-1 step (test_stab_ci_workflows.py
+    # pins the step's condition and ordering); the shard pool never carries
+    # wall-time budgets, whatever the event.
+    assert _field(block, "MCS_CI_SKIP_PERF", indent=6) == '"1"'

@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "負荷時に不安定だった通知性能ベンチの測定条件を修正",
+  "summary": "実時間の予算を持つ perf テストを通常テストの並列 shard から切り離し、Linux CI の slice 1 で直列実行にしました。件数・走査上限・公開成功だけを見る小規模テストは時間制限なしで全 run で実行します。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "通常テストはすべての event で perf marker を deselect し、タグ・週次・手動実行では pytest-linux slice 1 の shard 完了後に直列で実行します。",
+    "pull request では perf step を実行しません。",
+    "perf の失敗や0件収集は従来の lint-test ゲートを失敗にします。証跡は slice の diagnostics artifact に残ります。"
+  ],
+  "refs": ["tests/notify/test_perf_cards.py", ".github/workflows/ci.yml", "scripts/development/ci_local.sh"]
+}
