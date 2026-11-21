@@ -156,9 +156,13 @@ class CloudInferenceUnit:
                  changed=None):
         purpose = purpose or ("patient_context" if route == "patient_context" else "backlog")
         raw_cfg = copy.deepcopy(cfg)
-        resolved, errors = cloud_policy.resolve_profile(cfg, route=route, purpose=purpose, root=HOME)
-        if errors or resolved is None or selection is not None and dict(selection) != dict(resolved):
-            raise CloudFallback("cloud_profile_invalid")
+        if selection is not None:
+            resolved = selection
+        else:
+            resolved, _ = cloud_policy.resolve_profile(
+                cfg, route=route, purpose=purpose, root=HOME, ledger=ledger, ordered=True)
+            if resolved is None:
+                raise CloudFallback("cloud_profile_invalid")
         self.selection = resolved
         self.purpose = purpose
         self._profile_cfg = raw_cfg
@@ -235,15 +239,21 @@ class CloudInferenceUnit:
                     self._denial_proven = True
                     raise CloudFallback('cloud_unit_changed')
                 now = resolve_cloud_settings(live)
-                chosen, errors = cloud_policy.resolve_profile(live, route=route, purpose=purpose, root=HOME)
-                if errors or chosen is None:
-                    raise CloudObservationIncomplete('cloud_profile_unverified')
+                chosen, errors = cloud_policy.resolve_profile(
+                    live, route=route, purpose=purpose, root=HOME, ledger=ledger, ordered=True)
+                if chosen is None:
+                    chosen, errors = cloud_policy.resolve_profile(
+                        live, route=route, purpose=purpose, root=HOME)
+                    if errors or chosen is None:
+                        raise CloudObservationIncomplete('cloud_profile_unverified')
                 live_key = cloud_policy.selected_key(HOME, {"cloud_llm": now})
                 if not live_key:
                     raise CloudObservationIncomplete('cloud_key_unverified')
                 # The run window gates each new POST (retries included); a result that
                 # already arrived is still judged only by scope, not by the clock.
-                changed_scope = (dict(chosen) != dict(self.selection) or live_key != key
+                # Provider/model is the executor, not the generation: a resolved
+                # fallback provider is adopted below rather than denied.
+                changed_scope = (live_key != key
                                  or cloud_policy.scope_generation({"cloud_llm": now}) != scope
                                  # A paid result is kept while its scope holds, even if the send window closes.
                                  or not cloud_policy.in_scope(now, route, project_id))
@@ -255,6 +265,10 @@ class CloudInferenceUnit:
                             refuse('pre_send', self._blocked_code('scope', live))
                     except Exception:
                         pass   # naming the stop never changes the refusal
+                if not denied and dict(chosen) != dict(self.selection):
+                    self.selection = chosen
+                    self.model = chosen["model"]
+                    self.contract = cloud_provider_contract(selection=chosen)
                 if not denied and inference:
                     try:
                         waiting = (not cloud_backlog.owner_alive() or time.monotonic() >= deadline
@@ -569,14 +583,15 @@ def _client_class(selection):
     return provider_registry.PROVIDER_MODULES[selection['provider']].client_class()
 
 
-def _context_local_request(cfg, prompt, *, project_id, message_id, unit_key, owner):
+def _context_local_request(ledger, cfg, prompt, *, project_id, message_id, unit_key, owner):
     """The wire body the selected profile's client would send for this patient-context prompt, built on demand."""
     def request():
         from types import SimpleNamespace
         settings = resolve_cloud_settings(cfg)
         selection, errors = cloud_policy.resolve_profile(
-            cfg, route='patient_context', purpose='patient_context', root=HOME)
-        if errors or selection is None:
+            cfg, route='patient_context', purpose='patient_context', root=HOME,
+            ledger=ledger, ordered=True)
+        if selection is None:
             raise cloud_client.CloudError('budget_exceeded', 'cloud_unit_unresolved')
         tokens = selection['max_tokens'] if selection['max_tokens'] is not None else 1600
         body = _client_class(selection).body(
@@ -596,7 +611,7 @@ def guard_context_local(ledger, cfg, prompt, *, project_id, message_id, unit_key
     replaced, and returns those reservation ids; the check itself writes nothing."""
     return cloud_policy.guard_local_fallback(ledger, route='patient_context', project_id=project_id,
         message_id=message_id, unit_key=unit_key, allow_supersede=allow_supersede,
-        request_factory=_context_local_request(cfg, prompt, project_id=project_id,
+        request_factory=_context_local_request(ledger, cfg, prompt, project_id=project_id,
             message_id=message_id, unit_key=unit_key, owner=owner))
 
 
@@ -607,7 +622,7 @@ def supersede_context_local(ledger, cfg, prompt, *, project_id, message_id, unit
     the newly written disposition rows (see :func:`cloud_policy.supersede_local_tx`)."""
     return cloud_policy.supersede_local_tx(ledger, route='patient_context', project_id=project_id,
         message_id=message_id, unit_key=unit_key,
-        request_factory=_context_local_request(cfg, prompt, project_id=project_id,
+        request_factory=_context_local_request(ledger, cfg, prompt, project_id=project_id,
             message_id=message_id, unit_key=unit_key, owner=owner))
 
 
@@ -628,8 +643,8 @@ def guard_reextract_local(ledger, cfg, prompt, *, project_id, message_id, unit_k
             message_id=message_id, unit_key=unit_key)
         settings = resolve_cloud_settings(cfg)
         selection, errors = cloud_policy.resolve_profile(
-            cfg, route='reextract', purpose='backlog', root=HOME)
-        if errors or selection is None:
+            cfg, route='reextract', purpose='backlog', root=HOME, ledger=ledger, ordered=True)
+        if selection is None:
             raise cloud_client.CloudError('budget_exceeded', 'cloud_unit_unresolved')
         tokens = selection['max_tokens'] if selection['max_tokens'] is not None else 1600
         from types import SimpleNamespace

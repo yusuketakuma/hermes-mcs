@@ -130,6 +130,7 @@ def test_all_worker_exception_events_share_fixed_diagnostics_without_changing_ca
     monkeypatch.setattr(extract_llm_runner, '_settle_carry', extract_llm._settle_carry)
     monkeypatch.setattr(semantic_drain, "run_due", semantic)
     monkeypatch.setattr(backlog.time, "sleep", sleep)
+    monkeypatch.setattr(backlog.random, "uniform", lambda lo, hi: 1.0)
     # Open only this injected dormant pass; live closed-worker contracts stay separate.
     with legacy_cloud_routes():
         backlog.worker(991)

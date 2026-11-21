@@ -27,7 +27,7 @@ from mcs_util import HOME
 from safe_io import atomic_write, publish_tmp, read_regular_nofollow
 
 BACKUP_DIR = os.path.join(HOME, "data", "backups")
-BACKUP_KEEP = 7
+BACKUP_KEEP = 3
 BACKUP_OVERDUE_S = 2 * 86400
 # an apply publishes its preupdate backup, then waits up to 20min for the
 # run lock before recording backup_path in state; prune must not race it

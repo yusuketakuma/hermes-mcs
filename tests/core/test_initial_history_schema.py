@@ -40,10 +40,10 @@ def test_card_migration_preserves_all_children_ids_unknown_receipts_and_connecti
     children = [tuple(r) for r in db.execute("SELECT name,sql FROM sqlite_schema WHERE type='table' AND sql LIKE '%REFERENCES notification_cards%'")]
     ledger_schema.initialize(db, schema_version=ledger.SCHEMA_VERSION)
     assert tuple(row[1] for row in db.execute('PRAGMA table_info(notification_render_parts)')) == (
-        *part_columns, 'remote_file_id')
+        *part_columns, 'remote_file_id', 'prior_remote_id')
     # Every historical column and row stays intact; an old receipt proves no file ID.
     expected = {**before, 'notification_render_parts': [
-        (*row, None) for row in before['notification_render_parts']]}
+        (*row, None, None) for row in before['notification_render_parts']]}
     assert _rows(db) == expected
     assert [tuple(r) for r in db.execute("SELECT name,sql FROM sqlite_schema WHERE type IN ('index','trigger') AND tbl_name='notification_cards' ORDER BY name")] == objects
     assert [tuple(r) for r in db.execute("SELECT name,sql FROM sqlite_schema WHERE type='table' AND sql LIKE '%REFERENCES notification_cards%'")] == children

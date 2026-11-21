@@ -440,3 +440,37 @@ def test_slack_file_metadata_lookup_cancel_propagates_without_write(led):
         asyncio.run(w.worker._attachment_part(
             spec, part, {"thread_id": ROOT_TS, "history": replies, "consumed": set()}))
     assert writes(w) == before
+
+
+def _unavailable_file_prior_part(prior_kind=None):
+    part = {"kind": "attachment_part", "part_id": "attach:0001",
+            "unavailable": True, "caption": "📎 synthetic.bin — 取得失敗",
+            "prior_remote_id": "F_SYNTHETIC_0001"}
+    if prior_kind is not None:
+        part["prior_kind"] = prior_kind
+    return part
+
+
+def test_slack_unavailable_caption_with_file_prior_is_delivered_without_remote_calls(led):
+    """prior_kind='file': the bound prior is an uploaded file id — already
+    remote, and the unavailable caption has no editable message target."""
+    w, spec, _replies, _target, _part = setup(led)
+    part = _unavailable_file_prior_part("file")
+    before = list(w.client.calls)
+    out = asyncio.run(w.worker._attachment_part(
+        spec, part, {"thread_id": ROOT_TS, "history": None, "consumed": set()}))
+    assert out == {"result": "delivered", "remote_id": "F_SYNTHETIC_0001"}
+    assert w.client.calls == before
+
+
+@pytest.mark.parametrize("prior_kind", [None, "message"])
+def test_slack_unavailable_caption_with_message_prior_still_verifies_edit_target(led, prior_kind):
+    """Only a file-kind prior short-circuits: any other prior keeps the
+    scoped edit verification, which holds an unverifiable file id."""
+    w, spec, _replies, _target, _part = setup(led)
+    part = _unavailable_file_prior_part(prior_kind)
+    before = writes(w)
+    out = asyncio.run(w.worker._attachment_part(
+        spec, part, {"thread_id": ROOT_TS, "history": None, "consumed": set()}))
+    assert out == {"result": "unknown", "error_code": "edit_target_unverified"}
+    assert writes(w) == before
