@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "owner stateの未使用宣言を削除",
+  "summary": "利用者向けの実行時動作に変更はありません。v3 owner stateコードで、どこからも参照されない定数とprivate helperを削除しました。",
+  "upgrade": "追加操作は不要です。",
+  "details": ["INTENT_SCHEMA・MIGRATION_NAME・_ref_keyを削除。'mcs.start-intent.v3'はschema JSON側のconstが正本で、'release-migration-v3.json'はrelease_auto_migration.NAMEとstorage.pyの一覧が担います。"],
+  "refs": ["adapters/sdc/release_auto_state.py"]
+}

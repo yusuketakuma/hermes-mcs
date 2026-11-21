@@ -15,10 +15,8 @@ import json
 from . import release_auto_contract as contract
 
 SCHEMA = 'mcs.release-owner.v3'
-INTENT_SCHEMA = 'mcs.start-intent.v3'
 OWNER_NAME = 'release-owner.json'
 INTENT_NAME = 'release-start-intent.json'
-MIGRATION_NAME = 'release-migration-v3.json'
 MAX_OWNER_BYTES = 8 * 1024 * 1024
 MAX_INTENT_BYTES = 32 * 1024
 TERMINAL_STATES = ('VERIFIED', 'DEFERRED', 'CANCELLED_NO_EFFECT')
@@ -81,10 +79,6 @@ def _write(store, value):
     except BaseException:
         store._release_owner_uncertain = True
         raise
-
-
-def _ref_key(ref):
-    return (ref['code_seq'], ref['release_id'])
 
 
 def _ref_not_regressed(before, after):
