@@ -232,29 +232,9 @@ def validate_restart_record(kind, value, *, now_ms, allow_expired=False):
     return _validate(kind, value, now_ms, allow_expired)
 
 
-def validate_restart_intent(value, *, now_ms, allow_expired=False):
-    """Validate intent shape/time; authenticity and authority remain external."""
-    return validate_restart_record('intent', value, now_ms=now_ms, allow_expired=allow_expired)
-
-
 def validate_restart_approval(value, *, now_ms, allow_expired=False):
     """Validate approval shape/time; authenticity and authority remain external."""
     return validate_restart_record('approval', value, now_ms=now_ms, allow_expired=allow_expired)
-
-
-def validate_restart_preview(value, *, now_ms, allow_expired=False):
-    """Validate preview shape/time; authenticity and authority remain external."""
-    return validate_restart_record('preview', value, now_ms=now_ms, allow_expired=allow_expired)
-
-
-def validate_restart_operation(value, *, now_ms, allow_expired=False):
-    """Validate operation shape/time; authenticity and authority remain external."""
-    return validate_restart_record('operation', value, now_ms=now_ms, allow_expired=allow_expired)
-
-
-def validate_restart_grant(value, *, now_ms, allow_expired=False):
-    """Validate grant shape/time; authenticity and authority remain external."""
-    return validate_restart_record('grant', value, now_ms=now_ms, allow_expired=allow_expired)
 
 
 def validate_restart_registration(value, *, now_ms, allow_expired=False):
@@ -265,11 +245,6 @@ def validate_restart_registration(value, *, now_ms, allow_expired=False):
 def validate_restart_acceptance(value, *, now_ms, allow_expired=False):
     """Validate acceptance shape/time; authenticity and authority remain external."""
     return validate_restart_record('acceptance', value, now_ms=now_ms, allow_expired=allow_expired)
-
-
-def validate_restart_local_receipt(value, *, now_ms, allow_expired=False):
-    """Validate local receipt shape/time; authenticity and authority remain external."""
-    return validate_restart_record('local_receipt', value, now_ms=now_ms, allow_expired=allow_expired)
 
 
 def _intent_from(v):
