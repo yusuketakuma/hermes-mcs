@@ -143,9 +143,16 @@ def _has_condition(body, start, end, span=None):
     return False
 
 
-# A period ends a clause only when it closes a number, so 120/80. ends its
+# A period ends a clause only when it closes a value, so 120/80. ends its
 # sentence while 80.5, a.m. and ... stay inside the clause they belong to.
-_PERIOD_BREAK = r"(?<=\d)[.．](?!\d)"
+# 「昨日、1. 体温38.5℃」's 1. is a list number, not a value end: the digit run
+# before the period must not open right after a separator or the text start.
+# The run-length cases are enumerated because look-behind must be fixed width.
+_PERIOD_BREAK = (
+    r"(?<=[^\s　、,。:：;；！？!?\n\d]\d)[.．](?!\d)"
+    r"|(?<=[^\s　、,。:：;；！？!?\n\d]\d\d)[.．](?!\d)"
+    r"|(?<=\d\d\d)[.．](?!\d)"
+)
 _SCOPE_BREAK = re.compile(rf"[。！？!?;；\n、,]|{_PERIOD_BREAK}|しかし|ただし|だが|けれど(?:も)?|(?<![一-龥ぁ-んァ-ヶ])一方(?:で)?(?=$|[、, \t　])")
 
 _REASON_CUE = re.compile(r"至急|緊急|救急|搬送|急変|意識|反応|呼吸|SpO2|血圧|体温|発熱|高熱|疼痛|痛み|[胸腹頭背腰]痛|苦し|出血|転倒|死亡|逝去|心肺|酸素|けいれん|痙攣|脱水|嘔吐|吐血|血尿|冷汗|(?:BP|BS|Glu)\s*\d", re.I)
