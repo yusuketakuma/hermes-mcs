@@ -380,7 +380,7 @@ v1.2.0は、通知カードの確認・担当をボタンにし、処理状況�
   上限を超えるRelease本文の「技術詳細」のリンク先を、1MBを超えるとGitHubが描画しないCHANGELOG.md本体ではなく、その版の節だけを写した docs/releases/vX.Y.Z/changelog-X.Y.Z.md へ変更しました。リンクは常に描画可能です。不具合修正を見出しだけに畳む第2段階では、セキュリティ項目の説明を残すようになりました。
 
 - **GitHub Release本文の長さ上限対応（大きな版は要約＋CHANGELOGリンク）**
-  GitHub Release本文の上限（125,000字）を超える版は、技術詳細をタグ版CHANGELOGの該当版見出しへのリンクへ置き換え、それでも超える場合は不具合修正を見出しだけに畳んで、検査上限の12万字以内へ収めるようにしました。CHANGELOGは全文を保持し、公開用本文だけを縮めます。更新時の注意は省略しません。上限内の版・過去版のexport結果は変わりません。
+  GitHub Release本文の上限（125,000字）を超える版は、技術詳細を版別詳細ファイル（docs/releases/vX.Y.Z/changelog-X.Y.Z.md）へのリンクへ置き換え、それでも超える場合は不具合修正を見出しだけに畳んで、検査上限の12万字以内へ収めるようにしました。CHANGELOGは全文を保持し、公開用本文だけを縮めます。更新時の注意は省略しません。上限内の版・過去版のexport結果は変わりません。
 
 - **常駐抽出の記録にレーン・所要時間・保存できなかった件数を追加**
   常駐の抽出workerが出すパス・待機・意味処理の記録に、レーン番号、プロセスID、所要時間、パスの種類が入ります。保存待ちの結果を手放した件数と、ロックを取れず書けなかった失敗記録の件数も記録されます。抽出・保存・再試行の挙動は変わりません。
@@ -4435,7 +4435,7 @@ v1.2.0は、通知カードの確認・担当をボタンにし、処理状況�
 
 - ユーザー判断（2026-11-21「要約版＋CHANGELOGへのリンク」）に基づく。1.2.0のexport本文が約37.5万字でGitHub Release本文の上限125,000字を超え、release-notes.ymlの下書き作成が422で失敗する問題への対応
 - scripts/development/release_notes.py に BODY_LIMIT=120_000（余裕をもって12万字）と release_body() を追加。export と sync_release_notes.py の両方が同じ本文を正本にするため、下書き作成と既存Releaseの同期比較が一致する
-- 上限内の版はCHANGELOGの節をそのまま出力し、過去版（1.1.2など）のexport結果は変わらない。超える版は「技術詳細」節をタグ版CHANGELOG見出しへのリンクへ置き換え、さらに超える場合は「不具合修正」を見出し（太字タイトル）だけに畳む。いずれでも収まらない版はexport・同期を失敗させて公開しない
+- 上限内の版はCHANGELOGの節をそのまま出力し、過去版（1.1.2など）のexport結果は変わらない。超える版は「技術詳細」節を版別詳細ファイルへのリンクへ置き換え、さらに超える場合は「不具合修正」を見出し（太字タイトル）だけに畳む。いずれでも収まらない版はexport・同期を失敗させて公開しない
 - リンクのアンカーはGitHubの見出しslug化規則（小文字化・句読点除去・空白をハイフン化）で ## [X.Y.Z] — YYYY-MM-DD から生成する
 - 検証: tests/release/test_release_notes.py に上限内の同一性・技術詳細リンク置換・不具合修正の畳み込み・超過時のexport失敗・アンカー形式の5件を追加。tests/release/ 全56件pass。同期側は release_body 共有のため tests/release/test_sync_release_notes.py の既存検査（書込み集合・冪等・競合拒否）を維持
 - 根拠: scripts/development/release_notes.py、scripts/development/sync_release_notes.py、tests/release/test_release_notes.py、docs/development/RELEASE_NOTES.md、.github/workflows/release-notes.yml
