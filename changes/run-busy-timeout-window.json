@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "書込み競合が激しいときに定期チェック全体が失敗する問題を緩和",
+  "summary": "抽出やクラウド決済など常駐処理が書込みを取り合う間、定期チェックの書込みが30秒の待機上限を超えて途中で落ちることがありました。定期チェックが使う接続だけ待機上限を延ばし、競合下では失敗ではなく待機になるようにしました。",
+  "upgrade": "追加操作は不要です。定期チェックの再起動後に反映されます。常駐処理の待機上限は従来どおり30秒で、競合時は延期して再試行する動作も変わりません。",
+  "details": [
+    "mcs/core/ledger.py: Ledger の接続に busy_timeout_ms 引数を追加し、sqlite3 の timeout と PRAGMA busy_timeout の両方へ反映します。既定値は従来どおり30000です。",
+    "mcs/ingest/run_check.py: 定期チェック本体の接続だけ待機上限を120秒にします。commands-only の軽い経路は既定値のままです。",
+    "書込みを保持している側の処理時間そのものは変わりません。長いトランザクションの特定は intake_tx_hold の観測結果をもとに別途行います。"
+  ],
+  "refs": ["mcs/core/ledger.py", "mcs/ingest/run_check.py", "tests/core/test_karte_storage_atomicity.py"]
+}

@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "semantic評価履歴の一括取得でrun.lock保持を短縮",
+  "summary": "semanticドレインが対象メッセージごとに評価履歴を個別クエリしていたN+1を、対象全体を1クエリで取得する形へ変更し、run.lockを保持したまま走るローカル処理区間を短くします。",
+  "details": [
+    "semantic_store._assessment_history_rows() を新設し、kind=semantic評価・project内の対象message_id群を ORDER BY artifact_id DESC の1クエリで取得してメッセージごとにグループ化する。",
+    "_primary_assessment_history() は rows= 引数でプリフェッチ済み行を受け取れるようにした。rows=None のときは従来どおり個別クエリを実行し、逐メッセージの検証・ValueError送出順序・fail-closed 意味論はまったく同一。",
+    "semantic_job_processor の対象ループ直前に一括プリフェッチを挟み、ループ内ではプリフェッチ行だけを消費する。",
+    "本番DBで新旧経路を直接比較し、実fingerprint/policy・不一致ケース・エラー送出を含む400チェックで差分0を確認。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_store.py",
+    "mcs/semantic/semantic_job_processor.py",
+    "tests/semantic/test_jev_assessment_reuse.py"
+  ]
+}

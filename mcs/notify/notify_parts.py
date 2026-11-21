@@ -581,13 +581,27 @@ def _part_resolution_request(saved, receipt, row, *, part_state):
         # The original receipt omits expected_state. Its digest proves which
         # allowed request was approved; this never infers a delivery outcome.
         states = ('unknown',) if part_state == 'delivered' else ('unknown', 'pending', 'not_sent')
+        try:
+            prior = row["prior_remote_id"]
+        except (KeyError, IndexError):
+            prior = None
+        if prior is None:
+            from notify_recovery import _sealed_prior_remote_id
+            try:
+                prior = _sealed_prior_remote_id(row, row['part_id'])
+            except (KeyError, IndexError, TypeError, AttributeError, ValueError, RecursionError):
+                prior = None
         for expected in states:
             remotes = ({'remote_id': row['remote_id']},) if part_state == 'delivered' else ({}, {'remote_id': None})
             for remote in remotes:
                 req = {**base, 'expected_state': expected, **remote,
                        'result': 'mark_' + part_state}
-                if validate_card_part_resolve(req) is None and payload_hash(req) == saved['payload_hash']:
-                    return req
+                # Plans sealed before prior_remote_id existed hash without the
+                # key; newer plans always carry it, even as null.
+                for candidate in (req, {**req, 'prior_remote_id': prior}):
+                    if (validate_card_part_resolve(candidate) is None
+                            and payload_hash(candidate) == saved['payload_hash']):
+                        return candidate
     except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
         pass
     return None
@@ -717,7 +731,7 @@ def attachment_identity_witness(db, delivery_id):
         return None
     rows = db.execute("""SELECT p.kind,p.part_id,p.name,p.remote_id,p.payload_sha256,
         p.bytes AS part_bytes,p.attachment_id AS part_attachment_id,p.idx AS part_index,
-        p.error_code AS part_error,p.attempt_id AS part_attempt,r.*,
+        p.error_code AS part_error,p.attempt_id AS part_attempt,p.prior_remote_id,r.*,
         EXISTS(SELECT 1 FROM notification_render_parts g WHERE g.delivery_id=r.delivery_id
                AND g.kind='file_group') AS private_stage_render
         FROM notification_render_parts p JOIN notification_renders r ON r.delivery_id=p.delivery_id
@@ -757,7 +771,7 @@ def _same_thread_delivered_parts(db, card):
         return body, attachments, identities
     rows = db.execute("""SELECT p.kind,p.part_id,p.name,p.remote_id,p.payload_sha256,
         p.bytes AS part_bytes,p.attachment_id AS part_attachment_id,p.idx AS part_index,
-        p.error_code AS part_error,p.attempt_id AS part_attempt,r.*,
+        p.error_code AS part_error,p.attempt_id AS part_attempt,p.prior_remote_id,r.*,
         EXISTS(SELECT 1 FROM notification_render_parts g WHERE g.delivery_id=r.delivery_id
                AND g.kind='file_group') AS private_stage_render
         FROM notification_render_parts p JOIN notification_renders r ON r.delivery_id=p.delivery_id
@@ -1470,8 +1484,35 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
             elif a["attachment_id"] in prior_attachment_ids:
                 budget_hold = budget_hold or "attachment_upload_identity_unverified"
         if rid and a.get("unavailable") and entry.get("caption"):
-            # its 取得失敗 line is already in the thread — never repeat it
-            entry["prior_remote_id"] = rid
+            if card["transport"] != "slack":
+                # its 取得失敗 line is already in the thread — never repeat it
+                entry["prior_remote_id"] = rid
+            else:
+                proofs = attachment_identities.get(rid, [])
+                unavailable_only = (sha is None and proofs
+                    and len(proofs) == receipt_counts.get(rid)
+                    and all(proof is not None and proof[:4] == (entry["part_id"], a["attachment_id"], None, None)
+                            and proof[5] == "unavailable" for proof in proofs)
+                    and len({proof[4] for proof in proofs}) == 1
+                    and a["attachment_id"] not in prior_file_attachment_ids
+                    and not any(part_id == entry["part_id"] and valid_hash(previous_hash)
+                                for part_id, previous_hash in prior_remotes))
+                file_only = (proofs and len(proofs) == receipt_counts.get(rid)
+                    and all(proof is not None and proof[:2] == (entry["part_id"], a["attachment_id"])
+                            and proof[5] in ("file", "private_stage", "collected",
+                                             "operator_edit", "private_operator_edit", "operator_verified")
+                            for proof in proofs)
+                    and len({proof[4] for proof in proofs}) == 1)
+                if unavailable_only:
+                    # its 取得失敗 line is already in the thread — never repeat it
+                    entry["prior_remote_id"] = rid
+                elif file_only:
+                    # the prior remote is a file id, not the caption's message
+                    # ts — seal its kind so delivery never binds it as text
+                    entry["prior_remote_id"] = rid
+                    entry["prior_kind"] = "file"
+                else:
+                    budget_hold = budget_hold or "attachment_upload_identity_unverified"
         elif rid and a.get("sha256") and sha == a["sha256"]:
             # the same bytes are already in the thread — reuse, never
             # upload a second copy on every update render
@@ -1571,13 +1612,14 @@ def seed_parts(db, spec, now) -> None:
         db.execute(
             """INSERT INTO notification_render_parts(
                  delivery_id,part_id,kind,idx,payload_sha256,bytes,name,
-                 attachment_id,state,error_code,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                 attachment_id,state,error_code,updated_at,prior_remote_id)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
             (spec["delivery_id"], p["part_id"], p["kind"], p["index"],
              p.get("sha256"), p.get("bytes"), p.get("surface", p.get("name")),
              p.get("attachment_id"),
              "not_sent" if unavailable else "pending",
-             "attachment_unavailable" if unavailable else None, now))
+             "attachment_unavailable" if unavailable else None, now,
+             p.get("prior_remote_id")))
 
 
 def rollup_state(db, delivery_id) -> str:
