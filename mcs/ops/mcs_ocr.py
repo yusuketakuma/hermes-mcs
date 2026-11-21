@@ -230,13 +230,18 @@ def run(cfg=None, *, retry_errors=False):
                         result['reason'] = 'writer_blocked'
                     else:
                         import maintenance
+                        # "deferred"（公開ロック競合・窓不足）も失敗（None）と
+                        # 同じ snapshot_deferred として扱う
                         if maintenance.refresh_snapshot(DB, force=True,
-                                deadline=deadline) is None:
+                                deadline=deadline) in (None, "deferred"):
                             result['reason'] = 'snapshot_deferred'
                             failure = snapshots.last_failure()
+                            timing = snapshots.last_timing()
+                            if not failure and timing.get("defer_reason") \
+                                    == "publication_lock_busy":
+                                failure = {"reason": "snapshot_lock_busy"}
                             if failure:
                                 result['snapshot_failure'] = failure
-                            timing = snapshots.last_timing()
                             if timing:
                                 result['snapshot_timing'] = timing
                 finally:
