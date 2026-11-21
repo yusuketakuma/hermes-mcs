@@ -1,7 +1,7 @@
 {
  "category": "changed",
  "title": "課金済み失敗ユニットのクラウド再送信を許可（同一内容は最大3回まで）",
- "summary": "決済まで完了した失敗結果（repeat_failed: 課金記録あり・回答なし）を持つユニットを、新しい別課金の送信として再送できるようにルールを変更しました。同じ内容への課金は最初の送信を含めて最大3回までで、4回目以降は従来どおり拒否します。プロバイダが拒否を証明した応答（refusal）は再送対象外です。成功済み・未決着・結果不明・破棄済み・不整合の履歴は従来どおり再送を拒否します。",
+ "summary": "決済まで完了した失敗結果（repeat_failed: 課金記録あり・回答なし）を持つユニットを、新しい別課金の送信として再送できるようにルールを変更しました。同じ内容への課金は最初の送信を含めて最大3回までで、4回目以降は従来どおり拒否します。この版以降に記録された、プロバイダが拒否を証明した応答（refusal）は再送対象外です。成功済み・未決着・結果不明・破棄済み・不整合の履歴は従来どおり再送を拒否します。",
  "details": [
   "ユーザー承認（2026-11-20「今後も過去失敗分は再送可能とルールを変更」）に基づく契約変更。対象は cloud_unit_unresolved で恒久的に拒否され backlog の選択枠を消費し続けていた決済済み失敗ユニット",
   "mcs/llm/cloud_policy.py の再送ガードで、ガードが同一と判定した行（logical_request_fp一致またはlegacy_low証明）の決済済み失敗のみを数え、送信経路（local_fallbackでない）に限り repeat_failed のガード通過を許可。回数は定数 SETTLED_FAILURE_BILLED_LIMIT=3 で、設定項目ではない。確定拒否（not_sent・http_429等）と未決済は数えない",
@@ -9,12 +9,13 @@
   "guard_local_fallback（allow_supersede=False）は決済済み失敗をdisposition無しで通さなくなった。ローカル代替は supersede（superseded_local記録）経路でのみ置き換えられる",
   "再送は新規 reservation として独立に予約・課金され、元の領収は変更しない。再送した試行が未決着の間は result_missing で次の送信を拒否するため、同時多重送信は発生しない設計を維持",
   "HTTP 200 の refusal（プロバイダが内容を拒否した確定応答）は contract_error_detail='refusal' として結果行 meta に保存されるようになり、再送ガードはこれを repeat_failed の再送許可から除外する。拒否応答は3回の計数にも入らず、同一内容の履歴に1件でもあれば再送を拒否する。他の課金済み contract_error（detail 無し）は従来どおり再送対象",
+  "この修正より前に記録された refusal の結果行は contract_error_detail を持たず、他の課金済み contract_error と区別できない。そのため既存の refusal 履歴は、更新後も初回を含め最大3回まで再送され得る（1ユニットあたり追加2回まで）",
   "repeat_success（成功済み）・repeat_unsettled（結果不明）・result_missing・disposition・receipt_inconsistent・legacy_unproven の拒否契約は不変",
   "admission 層の history 判定（履歴拒否時はローカル処理へフォールバック）は変更なし。supersede によるローカル置換の記録・優先順位も不変",
   "リスク: 失敗した送信はプロバイダ側で課金済みのため、再送は追加課金になる。同一論理リクエストの決済済み失敗は最大3回（初回送信を含む）で打ち止めになり、それ以降は repeat_failed として拒否される",
   "検証: tests/llm/test_cloud_resend_guard.py（上限3回・混在拒否）・tests/llm/test_cloud_response_recovery.py（入口経路の再送）・tests/llm/test_cloud_supersede_local.py（local fallback非通過）に新契約を追加。本番適用後は cloud_unit_unresolved の内訳で repeat_failed の消失と、新規 reservation の増加を観測する"
  ],
- "upgrade": "適用後、止まっていた課金済み失敗ユニット(repeat_failed)が予算内で再送され追加課金になります。同じ内容への課金は最初の送信を含めて最大3回までです。成功済み・未決着・結果不明の履歴は従来どおり拒否されます",
+ "upgrade": "適用後、止まっていた課金済み失敗ユニット(repeat_failed)が予算内で再送され追加課金になります。同じ内容への課金は最初の送信を含めて最大3回までです。成功済み・未決着・結果不明の履歴は従来どおり拒否されます。更新前に記録された拒否応答は他の失敗と区別できないため、同じ内容を最大2回まで再送し追加課金することがあります。",
  "refs": [
   "mcs/llm/cloud_policy.py",
   "mcs/llm/cloud_inference.py",

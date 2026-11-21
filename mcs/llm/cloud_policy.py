@@ -1041,8 +1041,8 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
     send path (``local_fallback`` false) a proven same request whose verified results
     are all settled failures may be sent again as a separate billed attempt, at most
     :data:`SETTLED_FAILURE_BILLED_LIMIT` billed attempts in total; a provider-proven
-    refusal (``contract_error_detail``) is never resent or counted, local fallback
-    never passes it without a disposition. Everything else refuses exactly as
+    refusal (``contract_error_detail``) is never resent or counted; local fallback
+    never passes a settled failure without a disposition. Everything else refuses exactly as
     without it. Without ``local_fallback`` the clock is never read."""
     if supersede is not None and (type(supersede) is not list or not local_fallback
                                   or candidate.get('route') != 'patient_context'):
