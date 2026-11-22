@@ -18,7 +18,6 @@ _TOKEN = re.compile(r'^[a-z0-9][a-z0-9_.-]{0,63}$')
 _EVENT = re.compile(r'^[a-z0-9][a-z0-9_.-]{0,63}$')
 _HEALTH_VALUES = {'ok', 'degraded', 'failed', 'unknown'}
 _RUN_VALUES = {'ok', 'partial', 'failed', 'session_expired', 'unknown'}
-_LEVELS = {'debug', 'info', 'notice', 'warning', 'error', 'critical'}
 
 
 def _sysctl(name, *, timeout=2):
