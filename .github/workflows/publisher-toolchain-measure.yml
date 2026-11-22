@@ -6,8 +6,6 @@ name: publisher-toolchain-measure
 # lock を更新する。手動実行: Actions > publisher-toolchain-measure。
 on:
   workflow_dispatch:
-  push:
-    branches: [devin/release-publisher-prep]
 
 permissions:
   contents: read
