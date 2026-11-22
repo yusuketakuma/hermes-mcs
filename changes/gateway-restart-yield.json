@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "ゲートウェイ再起動要求中は未開始の定期処理が早く譲る",
+  "summary": "ゲートウェイの再起動ヘルパーが動いている間、まだロックを取得していない定期処理（添付OCR・患者コンテキスト更新など）は最大60秒の待機を待たずに早めに終了し、再起動を妨げません。実行中の処理は中断されません。",
+  "upgrade": "追加操作は不要です。再起動ヘルパーと定期処理の両方がこの版へ更新された環境で有効になります。",
+  "details": [
+    "再起動ヘルパーは起動時に data/gateway_restart_intent.json を発行し、終了時に自分のものだけ削除する。",
+    "ロック待ちの定期処理は、有効期限内・スキーマ一致・ヘルパープロセスの生存と起動時刻が一致する意図ファイルを検出すると restart_intent_active として待機を打ち切る。",
+    "添付OCRはこの場合 reason=restart_yield で終了コード0を返す。意図ファイルが無い・不正・期限切れのときは従来どおり最大60秒待機する。"
+  ],
+  "refs": ["deployment/recovery/mcs_recovery_gateway.py", "mcs/core/writer_lock.py", "mcs/ops/mcs_ocr.py", "mcs/patients/patient_context_refresh.py", "mcs/patients/patient_context_quality_controller.py"]
+}

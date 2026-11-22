@@ -744,3 +744,22 @@ def test_health_reader_drops_an_observation_breakdown_that_overcounts(tmp_path, 
     report = health_report.attachment_ocr_health(str(tmp_path), cfg, at + 1)
     assert report["local_deferred_reasons"] == {"unclassified": 1}
     assert "local_llm_defer_reasons" not in report
+
+
+def test_live_restart_intent_yields_before_opening_the_database(tmp_path, monkeypatch):
+    db = tmp_path / "chat.db"
+    db.touch()
+    cfg = {"attachment_ocr": {"enabled": True, "executable": "/synthetic/yomitoku"}}
+    monkeypatch.setattr(mcs_ocr, "DB", str(db))
+    monkeypatch.setattr(mcs_ocr, "DATA", str(tmp_path))
+    monkeypatch.setattr(mcs_ocr.writer_lock, "updater_state", lambda: (False, 1))
+    job_fd = mcs_ocr.os.open(str(tmp_path / "job.lock"), mcs_ocr.os.O_RDWR | mcs_ocr.os.O_CREAT)
+    monkeypatch.setattr(mcs_ocr, "acquire_run_lock",
+                        lambda path: job_fd if "attachment_ocr" in path else None)
+    monkeypatch.setattr(mcs_ocr.writer_lock, "wait_run_lock", lambda *a, **k: None)
+    monkeypatch.setattr(mcs_ocr.writer_lock, "restart_intent_active", lambda *a, **k: True)
+    class ForbiddenLedger:
+        def __init__(self, *a, **k):
+            raise AssertionError("db must not open")
+    monkeypatch.setattr(mcs_ocr, "Ledger", ForbiddenLedger)
+    assert mcs_ocr.run(cfg) == {"reason": "restart_yield"}

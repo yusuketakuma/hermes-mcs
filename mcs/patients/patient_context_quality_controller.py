@@ -14,6 +14,7 @@ import patient_context_scan as context_scan
 import patient_context_quality_receipts
 import patient_context_refresh_sources
 import patient_context_refresh_state
+import writer_lock
 
 
 def _quality_repair_candidate(ledger, pid, cfg, workday_id, doc, identity, claim, current,
@@ -476,7 +477,8 @@ def _source_quality_repair_step(ledger, pid, cfg, workday_id, captured, claim, c
                'receipt_sig':evidence['witness'], 'part':0,'parts':shard_count,'facts':[]}
     fd, waited = None, 0
     while (fd := patient_context_refresh_state.acquire_run_lock()) is None:
-        if waited >= 60 or patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline or not admit():
+        # A live gateway-restart intent ends the wait before the 60s cap.
+        if waited >= 60 or patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline or not admit() or writer_lock.restart_intent_active():
             return 'unknown', None
         patient_context_refresh_state.time.sleep(1)
         waited += 1

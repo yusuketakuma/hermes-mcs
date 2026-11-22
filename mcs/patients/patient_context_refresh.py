@@ -29,6 +29,7 @@ import patient_context_quality_receipts
 import patient_context_refresh_sources
 import patient_context_refresh_readiness
 import patient_context_quality_controller
+import writer_lock as writer_lock
 from patient_context_refresh_state import (
     CALL_SECONDS as CALL_SECONDS,
     CHUNK as CHUNK,
@@ -1804,7 +1805,9 @@ def _run_due_unit(ledger, cfg, *, deadline, admit, complete, local_admit, return
             completed_cfg = copy.deepcopy(cfg)
         # the cap, the unit deadline and a withdrawn
         # admission (updater, config, breaker, disk) all end the wait
-        if waited >= 60 or patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline or not admit():
+        # A live gateway-restart intent ends the wait early too, so the
+        # cron frees the session before its 60s cap.
+        if waited >= 60 or patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN >= deadline or not admit() or writer_lock.restart_intent_active():
             if (retainable and waited >= 60 and patient_context_refresh_state.time.monotonic() + patient_context_refresh_state.COMMIT_MARGIN < deadline
                     and admit()):
                 resume_cfg, resume_deadline, admit, complete = yield {

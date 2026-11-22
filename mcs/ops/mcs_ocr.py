@@ -66,6 +66,11 @@ def _drain_stages(ledger, cfg, generation, deadline, reasons, observed, *, live_
     local_blocked = False
     limited = False
     while any(active.values()) and time.monotonic() < deadline - 5:
+        if writer_lock.restart_intent_active(DATA):
+            # A live gateway-restart request ends the drain between items;
+            # the item in flight already finished and settled.
+            result['reason'] = 'restart_yield'
+            return result
         for stage in ('local', 'local', 'local', 'ocr'):
             if not active[stage] or time.monotonic() >= deadline - 5:
                 continue
@@ -200,7 +205,8 @@ def run(cfg=None, *, retry_errors=False):
                   expected_code_stamp=generation[1],
                   marker_path=os.path.join(DATA, writer_lock.UPDATE_MARKER_NAME)) if remaining > 0 else None)
         if fd is None:
-            return {'reason': 'writer_busy'}
+            return {'reason': ('restart_yield' if writer_lock.restart_intent_active(DATA)
+                               else 'writer_busy')}
         try:
             if writer_lock.updater_state() != generation:
                 return {'reason': 'writer_blocked'}
@@ -274,7 +280,7 @@ def main():
     # Owner 2026-11-13: deferrals beside saved progress are backlog, not a stall; a run with no progress still fails.
     progressed = bool(result.get("complete", 0) or result.get("local_done", 0))
     deferred = result.get("deferred", 0) or result.get("local_deferred", 0)
-    accepted = (None, "disabled", "writer_busy", "busy", "gateway_restart_pending") + (("memory_deferred",) if progressed else ())
+    accepted = (None, "disabled", "writer_busy", "busy", "gateway_restart_pending", "restart_yield") + (("memory_deferred",) if progressed else ())
     return 0 if (not result.get("failed", 0) and (progressed or not deferred)
                  and result.get("reason") in accepted) else 1
 

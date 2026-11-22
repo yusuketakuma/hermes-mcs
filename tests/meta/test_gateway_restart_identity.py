@@ -583,3 +583,42 @@ def test_pid_changed_before_first_restart_is_verified_without_restart(gateway, m
     assert not any(call[-1] == 'restart' for call in calls)
     report = json.loads((data / 'gateway_restart.json').read_text())
     assert report['previous_pid'] == 101 and report['pid'] == 303
+
+
+def test_restart_helper_publishes_and_clears_its_intent(gateway, monkeypatch):
+    rec, data, agents, _, _, _ = gateway
+    recorded = []
+    publish = rec.mcs_recovery_gateway._gateway_restart_intent_publish
+
+    def spy(data_dir, request_id, helper_started_at, not_after, expected_pid=None):
+        recorded.append({"request_id": request_id, "helper_started_at": helper_started_at,
+                         "not_after": not_after, "expected_pid": expected_pid})
+        return publish(data_dir, request_id, helper_started_at, not_after,
+                       expected_pid=expected_pid)
+
+    monkeypatch.setattr(rec.mcs_recovery_gateway, "_gateway_restart_intent_publish", spy)
+    assert rec._gateway_restart_run(str(data), str(agents), 501) == 0
+    assert len(recorded) == 1
+    intent = recorded[0]
+    assert intent["request_id"] is not None and len(intent["request_id"]) == 32
+    assert intent["not_after"] == intent["helper_started_at"] + 660
+    assert not (data / "gateway_restart_intent.json").exists()
+
+
+def test_intent_clear_keeps_a_newer_helpers_file(tmp_path):
+    rec = _load()
+    data = tmp_path / "data"
+    data.mkdir()
+    other = {"schema": "gateway-restart-intent/1", "request_id": "f" * 32,
+             "helper_pid": 1, "helper_started_at": 1, "not_after": 2}
+    (data / "gateway_restart_intent.json").write_text(rec.json.dumps(other))
+    rec.mcs_recovery_gateway._gateway_restart_intent_clear(str(data), "a" * 32)
+    assert (data / "gateway_restart_intent.json").exists()
+
+
+def test_frozen_program_carries_the_intent_helpers():
+    rec = _load()
+    program = rec.mcs_recovery_gateway._GATEWAY_RESTART_PROGRAM
+    assert "def _gateway_restart_intent_publish" in program
+    assert "def _gateway_restart_intent_clear" in program
+    assert "gateway-restart-intent/1" in program

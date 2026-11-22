@@ -91,6 +91,34 @@ def _adoption_resumed(data):
     return result.returncode == 0 and result.stdout.strip() == b'{"ok": true, "writers_resumed": true}'
 
 
+def _gateway_restart_intent_publish(data, request_id, helper_started_at,
+                                    not_after, expected_pid=None):
+    """Publish liveness evidence for the running restart helper.
+
+    Waiting MCS cron jobs verify helper_pid + helper_started_at + not_after
+    before yielding, so a stale or forged file never shortcuts their wait.
+    Also frozen into _GATEWAY_RESTART_PROGRAM."""
+    value = {"schema": "gateway-restart-intent/1", "request_id": request_id,
+             "helper_pid": os.getpid(), "helper_started_at": helper_started_at,
+             "not_after": not_after}
+    if expected_pid is not None:
+        value["expected_pid"] = expected_pid
+    _atomic_json(os.path.join(data, "gateway_restart_intent.json"), value,
+                 ".gateway-restart-intent.", suffix="")
+
+
+def _gateway_restart_intent_clear(data, request_id):
+    """Best-effort removal of our own intent; a newer helper's file stays."""
+    path = os.path.join(data, "gateway_restart_intent.json")
+    try:
+        row = json.loads(_read_regular_bytes(path, 4096).decode("utf-8"))
+        if type(row) is dict and row.get("schema") == "gateway-restart-intent/1" \
+                and row.get("request_id") == request_id:
+            os.unlink(path)
+    except (OSError, ValueError):
+        pass
+
+
 def _gateway_restart_report(data, status, request_id=None, **facts):
     """Keep restart requests separate from verified process replacement."""
     os.makedirs(data, exist_ok=True)
@@ -240,6 +268,17 @@ def _gateway_restart_run(data, agents, uid, request_id=None, expected_pid=None,
 
     # One normal collection run (480s), lock wait (150s), PID observation (30s).
     deadline = time.monotonic() + 660
+    helper_started_at = int(time.time())
+    intent_request_id = (request_id if type(request_id) is str
+                         and re.fullmatch(r"[0-9a-f]{32}", request_id)
+                         else os.urandom(16).hex())
+    try:
+        _gateway_restart_intent_publish(
+            data, intent_request_id, helper_started_at,
+            helper_started_at + 660, expected_pid=expected_pid if auto else None)
+    except (OSError, ValueError):
+        # A missing intent only means waiting crons cannot yield early.
+        pass
     label = "ai.hermes.gateway"
     expected = os.path.realpath(os.path.join(agents, label + ".plist"))
 
@@ -501,6 +540,8 @@ def _gateway_restart_run(data, agents, uid, request_id=None, expected_pid=None,
             else "gateway_restart_unverifiable"
         status = "unknown" if issued else "failed"
         report(status, error=code)
+    finally:
+        _gateway_restart_intent_clear(data, intent_request_id)
     return 1
 
 
@@ -511,6 +552,8 @@ _GATEWAY_RESTART_PROGRAM = (
     + "\n" + inspect.getsource(_read_local_json)
     + "\n" + inspect.getsource(_atomic_json)
     + "\n" + inspect.getsource(_adoption_resumed)
+    + "\n" + inspect.getsource(_gateway_restart_intent_publish)
+    + "\n" + inspect.getsource(_gateway_restart_intent_clear)
     + "\n" + inspect.getsource(_gateway_restart_report)
     + "\n" + inspect.getsource(_gateway_self_started_at)
     + "\n" + inspect.getsource(_gateway_helper_lock)

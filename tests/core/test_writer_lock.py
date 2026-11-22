@@ -153,3 +153,130 @@ def test_single_baseexception_identity_is_shared_by_callers():
     assert run_check.RunLockLost is writer_lock.RunLockLost
     assert issubclass(writer_lock.RunLockLost, BaseException)
     assert not issubclass(writer_lock.RunLockLost, Exception)
+
+
+def _restart_intent(tmp_path, **overrides):
+    import json as _json
+    started = int(__import__('time').time())
+    row = {"schema": "gateway-restart-intent/1",
+           "request_id": "a" * 32,
+           "helper_pid": 4242,
+           "helper_started_at": started,
+           "not_after": started + 660}
+    row.update(overrides)
+    (tmp_path / writer_lock.RESTART_INTENT_NAME).write_text(_json.dumps(row))
+    return row
+
+
+def _clear_intent_cache():
+    writer_lock._restart_helper_check.clear()
+
+
+def _fake_clock(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(writer_lock.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(writer_lock.time, "sleep",
+                        lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    return clock
+
+
+def test_wait_yields_early_for_a_live_restart_intent(tmp_path, monkeypatch):
+    _clear_intent_cache()
+    row = _restart_intent(tmp_path)
+    monkeypatch.setattr(writer_lock, "_helper_process_started_at",
+                        lambda pid, **kw: row["helper_started_at"])
+    _fake_clock(monkeypatch)
+    trials = []
+    monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda path: trials.append(path))
+    with writer_lock.capture_writer_refusal() as diagnostic:
+        assert writer_lock.wait_run_lock(str(tmp_path / "run.lock"), wait_s=10,
+            expected_code_stamp=1, marker_path=str(tmp_path / "marker")) is None
+    assert diagnostic == {"writer_reason": "restart_intent_active",
+                          "writer_stage": "write_lock"}
+    assert trials == []
+
+
+@pytest.mark.parametrize("fault", ["schema", "expired", "dead_pid", "started_at",
+                                   "request_id", "expected_pid", "absent"])
+def test_stale_or_forged_restart_intent_never_shortens_the_wait(tmp_path, monkeypatch, fault):
+    _clear_intent_cache()
+    if fault != "absent":
+        if fault == "schema":
+            _restart_intent(tmp_path, schema="other/0")
+        elif fault == "expired":
+            import time as _time
+            _restart_intent(tmp_path, helper_started_at=int(_time.time()) - 700,
+                            not_after=int(_time.time()) - 1)
+        elif fault == "request_id":
+            _restart_intent(tmp_path, request_id="not-a-request")
+        elif fault == "expected_pid":
+            _restart_intent(tmp_path, expected_pid=-1)
+    started = int(__import__('time').time())
+    if fault == "dead_pid":
+        _restart_intent(tmp_path, helper_started_at=started)
+        monkeypatch.setattr(writer_lock, "_helper_process_started_at", lambda pid, **kw: None)
+    elif fault == "started_at":
+        _restart_intent(tmp_path, helper_started_at=started)
+        monkeypatch.setattr(writer_lock, "_helper_process_started_at", lambda pid, **kw: started + 1)
+    else:
+        monkeypatch.setattr(writer_lock, "_helper_process_started_at", lambda pid, **kw: started)
+    _fake_clock(monkeypatch)
+    trials = []
+    monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda path: trials.append(path))
+    with writer_lock.capture_writer_refusal() as diagnostic:
+        assert writer_lock.wait_run_lock(str(tmp_path / "run.lock"), wait_s=1,
+            expected_code_stamp=1, marker_path=str(tmp_path / "marker")) is None
+    assert diagnostic == {"writer_reason": "run_lock_not_acquired",
+                          "writer_stage": "write_lock"}
+    assert trials
+
+
+def test_restart_intent_appearing_mid_wait_ends_it(tmp_path, monkeypatch):
+    _clear_intent_cache()
+    monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda path: None)
+    clock = _fake_clock(monkeypatch)
+    slept = [0]
+
+    def sleep(seconds):
+        slept[0] += 1
+        if slept[0] == 2:
+            _restart_intent(tmp_path)
+        clock[0] += seconds
+
+    monkeypatch.setattr(writer_lock.time, "sleep", sleep)
+    started = int(__import__('time').time())
+    monkeypatch.setattr(writer_lock, "_helper_process_started_at",
+                        lambda pid, **kw: started)
+    with writer_lock.capture_writer_refusal() as diagnostic:
+        assert writer_lock.wait_run_lock(str(tmp_path / "run.lock"), wait_s=10,
+            expected_code_stamp=1, marker_path=str(tmp_path / "marker")) is None
+    assert diagnostic["writer_reason"] == "restart_intent_active"
+    assert slept[0] == 2
+
+
+def test_lock_won_as_the_intent_appears_is_given_back(tmp_path, monkeypatch):
+    _clear_intent_cache()
+    monkeypatch.setattr(writer_lock, "code_stamp", lambda: 1)
+    row = _restart_intent(tmp_path)
+    monkeypatch.setattr(writer_lock, "_helper_process_started_at",
+                        lambda pid, **kw: row["helper_started_at"])
+    checked = [0]
+
+    def probe(path, limit, error, **kw):
+        checked[0] += 1
+        # First poll reads nothing yet; the second (post-acquire) finds it.
+        if checked[0] == 1:
+            raise OSError("no intent yet")
+        import json as _json
+        return _json.dumps(row).encode()
+
+    monkeypatch.setattr(writer_lock, "read_regular_nofollow", probe)
+    _fake_clock(monkeypatch)
+    fd = writer_lock.acquire_run_lock(str(tmp_path / "run.lock"))
+    monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda path: fd)
+    with writer_lock.capture_writer_refusal() as diagnostic:
+        assert writer_lock.wait_run_lock(str(tmp_path / "run.lock"), wait_s=10,
+            expected_code_stamp=1, marker_path=str(tmp_path / "marker")) is None
+    assert diagnostic["writer_reason"] == "restart_intent_active"
+    with pytest.raises(OSError):
+        os.fstat(fd)
