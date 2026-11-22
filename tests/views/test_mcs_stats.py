@@ -348,6 +348,16 @@ def test_until_clamped_below_since_is_bad_period(db):
         run(db, stat="overview", since="2026-10-01", until="2026-11-01")
 
 
+def test_until_clamped_to_as_of_keeps_freeze_point(db):
+    # until > as_of clamps to as_of: the clamped bound is the freeze point
+    # itself and must stay inclusive like the no-until path — a post in the
+    # exact as_of second belongs to the frozen stats.
+    _msg(db, 1, ts=SNAP_TS)
+    _msg(db, 2, ts=SNAP_TS + 1)  # after the freeze — never in scope
+    st = run(db, stat="overview", until="2999-01-01")["overview"]
+    assert st["posts_in_scope"] == 1
+
+
 def test_duplicate_current_artifacts_not_double_counted(db):
     _msg(db, 1, chash="h1")
     _extract(db, 1, "h1", [{"name": "薬A", "action": "start"}])
