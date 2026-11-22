@@ -1,0 +1,30 @@
+name: publisher-toolchain-measure
+# publisher-toolchain.lock の実測・照合ワークフロー。
+# lock の値は ubuntu-latest + setup-python 3.14 の runner 実測でのみ
+# 有効 (spec 01_GITHUB_PUBLICATION §3.3)。runner 更新で check が
+# TOOLCHAIN_MISMATCH になった場合は本ワークフローで実測値を取り直し、
+# lock を更新する。手動実行: Actions > publisher-toolchain-measure。
+on:
+  workflow_dispatch:
+  push:
+    branches: [devin/release-publisher-prep]
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: measure toolchain
+        run: python3 scripts/development/publisher_toolchain.py measure --output -
+      - name: check committed lock
+        run: |
+          test -f deployment/release-publisher/publisher-toolchain.lock
+          python3 scripts/development/publisher_toolchain.py check \
+            --lock deployment/release-publisher/publisher-toolchain.lock
+        if: hashFiles('deployment/release-publisher/publisher-toolchain.lock') != ''
