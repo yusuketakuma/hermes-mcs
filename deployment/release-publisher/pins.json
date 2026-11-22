@@ -1,0 +1,12 @@
+[
+  {
+    "kid": "81ac02bd91153896730463389719a5f544965ff829b700cec0ce2b6a698db2fc",
+    "purposes": [
+      "mcs-publication-plan-v3",
+      "mcs-release-acceptance-v3"
+    ],
+    "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAzJYDND6cE4rO-539abkJSSlYq5BXqEhKUpREv4-zwIqAl0DVOhWrJzGQxUTpOOZSf_DyBu7DaObXZiwAmSX0dz0QwhlHMT-STBNH7R21hdZr3G9FyCnRy18GG08tU90dBpiFjBHaTLXhkyK_2U0zuPxfLisg-FYBO5gDc2UxDTSLvY8skiwJFU0BGdzaJ_kPsFciTpMSaOXz18iM9osfSohjhnhPv8bBpQinizvGTkD27SzoimR2wszIdl2grpFu4dauLbg4LPUX5w23xrdBOktoQeAvkKBUNySFjKjjTMXDwyjUIH367ydMfkj2dQylKGPecXYuSgQJsBD-hoxIFg4xxRH-gAP_Nt4ZECtZ38ysZtYYRlJTvkCXO67DD7N_ARLwHjocYBXDfjlZEGKfIHD0DD44zf1KD0AIzjm-sUJ4KQ-x4mkXC-ax7Lih1eHYeU8MyP6jMNZj1hHJ7W_8DIHo3KwZRoFsPKq11F63dpwGtbHc4XAGm1_uGdh1wMgTAgMBAAE",
+    "not_before": 1795320000000,
+    "expires_at": 1858392000000
+  }
+]
