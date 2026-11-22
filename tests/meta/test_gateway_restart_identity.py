@@ -597,6 +597,7 @@ def test_restart_helper_publishes_and_clears_its_intent(gateway, monkeypatch):
                        expected_pid=expected_pid)
 
     monkeypatch.setattr(rec.mcs_recovery_gateway, "_gateway_restart_intent_publish", spy)
+    monkeypatch.setattr(rec.mcs_recovery_gateway, "_gateway_self_started_at", lambda: 1234.0)
     assert rec._gateway_restart_run(str(data), str(agents), 501) == 0
     assert len(recorded) == 1
     intent = recorded[0]
