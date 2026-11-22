@@ -439,7 +439,9 @@ def _publish_state(value, now):
     """(attempts, due, repaired) from stored retry bookkeeping; corrupt -> due now."""
     attempts = value.get("publish_attempts", 0)
     repaired = False
-    if type(attempts) is not int or attempts < 0:
+    # The reservation below writes attempts + 1, so a counter already at the
+    # SQLite INTEGER bound cannot store it — repair like any other corruption.
+    if type(attempts) is not int or attempts < 0 or attempts >= 2**63 - 1:
         if "publish_attempts" in value:
             repaired = True
         attempts = 0

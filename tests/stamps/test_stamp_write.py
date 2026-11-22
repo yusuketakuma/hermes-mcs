@@ -624,6 +624,25 @@ def test_unpublishable_results_rotate_behind_later_confirmed_results(scene):
     assert json.loads(row[0])["result_published"] is True
 
 
+def test_publish_retry_repairs_an_int_max_attempts_counter(scene):
+    request = _command(scene)
+    assert _apply(scene, request)["stamp_state"] == "queued"
+    assert _drain(scene)["confirmed"] == 1
+    ledger = scene[0]
+    # attempts + 1 would overflow SQLite's INTEGER bound on reservation;
+    # the counter is repaired instead of leaving the row unpublishable
+    ledger.db.execute("UPDATE artifacts SET content=json_remove(json_set(content,"
+                      "'$.result_published',json('false'),'$.publish_attempts',?),"
+                      "'$.publish_next_at') WHERE kind=?",
+                      (2**63 - 1, stamp_write.KIND))
+    ledger.db.commit()
+    out = _drain(scene)
+    assert out["publish_retry_repaired"] == 1
+    row = ledger.db.execute("SELECT content FROM artifacts WHERE kind=? AND json_extract(meta,'$.command_id')=?",
+                            (stamp_write.KIND, request["command_id"])).fetchone()
+    assert json.loads(row[0])["result_published"] is True
+
+
 def test_intent_ages_from_the_human_confirm_time(scene):
     stale = dict(_command(scene), confirmed_at=NOW - stamp_write.INTENT_MAX_AGE_S - 1)
     result = _apply(scene, stale)
