@@ -402,8 +402,14 @@ def standalone_host_reasons(home: str, now: float, cfg: dict, *, status=None):
         # a future stamp (clock rolled back) is not freshness evidence: the
         # process may be dead while its stamp still looks fresh
         if age is not None and age < -STANDALONE_CLOCK_SKEW_S:
-            return "failed", ["standalone_clock_unverified"], {
+            reasons, details = ["standalone_clock_unverified"], {
                 "standalone_clock_unverified": "記録の時刻が未来で、時計を確認できていません"}
+            # A missing pid is clock-independent evidence the host is gone,
+            # so the restart hint is still reported beside the clock warning.
+            if status is not None and not _pid_alive(status.get("pid")):
+                reasons.append("standalone_host_down")
+                details["standalone_host_down"] = "プロセスを確認できません"
+            return "failed", reasons, details
         return "failed", ["standalone_host_down"], (
             {"standalone_host_down": f"最終更新 {_hours(age)}前"} if age and age > 0 else {})
     unverified = []       # finite fields whose future time cannot be verified
@@ -451,6 +457,9 @@ def standalone_host_reasons(home: str, now: float, cfg: dict, *, status=None):
             reasons.append("standalone_check_stalled")
             details["standalone_check_stalled"] = (f"最終成功 {_hours(now - last_ok)}前"
                                                    if finite_number(last_ok) else "起動後の成功なし")
+        if finite_number(last_ok) and _future(status.get("started_at")):
+            # A recent success does not verify the boot time either.
+            unverified.append("started_at")
     if unverified:
         reasons.append("standalone_clock_unverified")
         details["standalone_clock_unverified"] = "、".join(unverified) + " の時刻が未来です"

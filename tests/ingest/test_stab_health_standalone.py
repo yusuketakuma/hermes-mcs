@@ -75,6 +75,15 @@ def test_future_heartbeat_is_not_freshness_evidence(tmp_path):
     assert health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG) == ("ok", [], {})
 
 
+def test_future_stamp_with_a_dead_pid_still_reports_host_down(tmp_path):
+    # A missing pid is clock-independent evidence: the restart hint must not
+    # be hidden by the unverifiable timestamp.
+    _status(tmp_path, updated_at=NOW + 2000, pid=2 ** 22 + 12345)
+    severity, reasons, details = health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)
+    assert (severity, reasons) == ("failed", ["standalone_clock_unverified",
+                                             "standalone_host_down"])
+
+
 def test_future_fields_are_unverified_not_ok_and_not_stalled(tmp_path):
     _status(tmp_path, started_at=NOW + 1900,
             exits={"mcs_check": {"last_exit": 0, "failures": 0, "last_ok_at": NOW + 1950}})
@@ -91,6 +100,16 @@ def test_future_fields_are_unverified_not_ok_and_not_stalled(tmp_path):
     assert (severity, reasons) == ("degraded", ["standalone_clock_unverified"])
     assert "standalone_connector_down" not in reasons
     assert "standalone_update_stuck" not in reasons
+
+
+def test_future_started_at_is_flagged_even_after_a_recent_success(tmp_path):
+    # A fresh last_ok_at is real evidence, but it cannot verify a boot time
+    # that still reads as future.
+    _status(tmp_path, started_at=NOW + 1900,
+            exits={"mcs_check": {"last_exit": 0, "failures": 0, "last_ok_at": NOW - 300}})
+    severity, reasons, details = health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)
+    assert (severity, reasons) == ("degraded", ["standalone_clock_unverified"])
+    assert "started_at" in details["standalone_clock_unverified"]
 
 
 def test_evaluate_merges_host_reasons_and_uses_standalone_hints(tmp_path):
