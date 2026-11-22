@@ -65,6 +65,53 @@ def test_crash_loop_connector_update_and_check_stall_are_reported(tmp_path):
     assert details["standalone_update_stuck"] == "3.0時間 journal_pending"
 
 
+def test_future_heartbeat_is_not_freshness_evidence(tmp_path):
+    _status(tmp_path, updated_at=NOW + 2000, started_at=NOW + 1900,
+            exits={"mcs_check": {"last_exit": 0, "failures": 0, "last_ok_at": NOW + 1950}})
+    severity, reasons, details = health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)
+    assert (severity, reasons) == ("failed", ["standalone_clock_unverified"])
+    assert "時間前" not in details["standalone_clock_unverified"]
+    _status(tmp_path, updated_at=NOW + 1)          # inside the accepted skew
+    assert health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG) == ("ok", [], {})
+
+
+def test_future_stamp_with_a_dead_pid_still_reports_host_down(tmp_path):
+    # A missing pid is clock-independent evidence: the restart hint must not
+    # be hidden by the unverifiable timestamp.
+    _status(tmp_path, updated_at=NOW + 2000, pid=2 ** 22 + 12345)
+    severity, reasons, details = health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)
+    assert (severity, reasons) == ("failed", ["standalone_clock_unverified",
+                                             "standalone_host_down"])
+
+
+def test_future_fields_are_unverified_not_ok_and_not_stalled(tmp_path):
+    _status(tmp_path, started_at=NOW + 1900,
+            exits={"mcs_check": {"last_exit": 0, "failures": 0, "last_ok_at": NOW + 1950}})
+    severity, reasons, details = health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)
+    assert (severity, reasons) == ("degraded", ["standalone_clock_unverified"])
+    assert "standalone_check_stalled" not in reasons
+    _status(tmp_path,
+            exits={"mcs_check": {"last_exit": 0, "failures": 0, "last_ok_at": NOW - 300}},
+            connector={"state": "waiting", "failures": 6, "failing_since": NOW + 3600,
+                       "last_error": None, "retry_at": None},
+            update_in_progress=True,
+            update_marker={"since": NOW + 3 * 3600, "state": "journal_pending"})
+    severity, reasons, details = health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)
+    assert (severity, reasons) == ("degraded", ["standalone_clock_unverified"])
+    assert "standalone_connector_down" not in reasons
+    assert "standalone_update_stuck" not in reasons
+
+
+def test_future_started_at_is_flagged_even_after_a_recent_success(tmp_path):
+    # A fresh last_ok_at is real evidence, but it cannot verify a boot time
+    # that still reads as future.
+    _status(tmp_path, started_at=NOW + 1900,
+            exits={"mcs_check": {"last_exit": 0, "failures": 0, "last_ok_at": NOW - 300}})
+    severity, reasons, details = health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)
+    assert (severity, reasons) == ("degraded", ["standalone_clock_unverified"])
+    assert "started_at" in details["standalone_clock_unverified"]
+
+
 def test_evaluate_merges_host_reasons_and_uses_standalone_hints(tmp_path):
     _health(tmp_path)
     _status(tmp_path, exits={"cmd": {"last_exit": 1, "failures": 3},
@@ -117,13 +164,13 @@ def test_future_stamps_are_not_freshness_evidence(tmp_path):
     _status(tmp_path, updated_at=NOW + 2000, started_at=NOW + 1900,
             exits={"mcs_check": {"last_exit": 0, "failures": 0, "last_ok_at": NOW + 1950}})
     severity, reasons, details = health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)
-    assert (severity, reasons) == ("failed", ["standalone_host_down"])
-    assert "未来" in details["standalone_host_down"]
+    assert (severity, reasons) == ("failed", ["standalone_clock_unverified"])
+    assert "未来" in details["standalone_clock_unverified"]
     _status(tmp_path, updated_at=NOW + 1)      # within the 2 s tolerance stays healthy
     assert health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)[0] == "ok"
     # current heartbeat but future last_ok_at / started_at
     _status(tmp_path, exits={"mcs_check": {"last_exit": 0, "failures": 0, "last_ok_at": NOW + 1950}})
     severity, reasons, details = health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)
-    assert (severity, reasons) == ("degraded", ["standalone_check_stalled"])
+    assert (severity, reasons) == ("degraded", ["standalone_clock_unverified"])
     _status(tmp_path, started_at=NOW + 1900, exits={})
-    assert health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)[1] == ["standalone_check_stalled"]
+    assert health_watch.standalone_host_reasons(str(tmp_path), NOW, CFG)[1] == ["standalone_clock_unverified"]
