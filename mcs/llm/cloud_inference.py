@@ -495,10 +495,13 @@ class CloudInferenceUnit:
                     return None
                 self.commit_guard()
                 try:
+                    body = self.client.body(prompt, tokens, prefix)
                     return cloud_policy.recover_response(self.ledger, route=self.route,
                         project_id=self.project_id, message_id=self.message_id, unit_key=self.unit_key,
                         input_binding=self._input_binding(),
-                        request_fp=mcs_util.payload_hash(self.client.body(prompt, tokens, prefix)),
+                        request_fp=mcs_util.payload_hash(body),
+                        logical_request_fp=cloud_policy._logical_request_fp(body),
+                        model=self.selection["model"], effort=self.selection.get("effort"),
                         owner=self.owner, scope=self.scope,
                         **({'observation': observation} if observation is not None else {}))
                 except cloud_client.CloudNotSent:
