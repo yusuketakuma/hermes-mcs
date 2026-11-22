@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "restart契約の未使用validateラッパーを削除",
+  "summary": "利用者向けの実行時動作に変更はありません。restart契約検証コードで、どこからも呼ばれない5つの公開ラッパー関数を削除しました。",
+  "upgrade": "追加操作は不要です。",
+  "details": ["validate_restart_intent・validate_restart_preview・validate_restart_operation・validate_restart_grant・validate_restart_local_receiptを削除。全kindの検証は既存のvalidate_restart_recordディスパッチが担い、利用中のapproval・registration・acceptanceラッパーは保持しました。"],
+  "refs": ["adapters/sdc/restart_contract.py"]
+}
