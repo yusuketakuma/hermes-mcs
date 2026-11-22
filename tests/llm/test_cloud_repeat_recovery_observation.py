@@ -93,16 +93,18 @@ def test_actual_refusal_observes_recovery_without_new_send(paid, capsys, change,
             # recovery and reaches the repeat guard's refusal.
             meta = json.loads(ledger.db.execute(
                 "SELECT meta FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()[0])
+            bound = next(v for v in cloud_usage_accounting.PROFILE_MAX_TOKENS
+                         if v != meta['max_tokens'])
             cost = str(cloud_usage_accounting._reservation_cost(
                 meta.get('input_bound', cloud_usage_accounting.INPUT_RESERVATION_BOUND),
-                256, legacy='input_bound' not in meta, model=meta['model'],
+                bound, legacy='input_bound' not in meta, model=meta['model'],
                 price_version=meta['price_version']))
             with ledger.db:
-                ledger.db.execute("UPDATE artifacts SET meta=json_remove(json_set(meta,'$.max_tokens',256,"
+                ledger.db.execute("UPDATE artifacts SET meta=json_remove(json_set(meta,'$.max_tokens',?,"
                                   "'$.max_cost_usd',?,"
                                   "'$.request_fp','0000000000000000000000000000000000000000000000000000000000000000'),"
                                   "'$.logical_request_fp') "
-                                  "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')", (cost,))
+                                  "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')", (bound, cost))
         before = [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
         with pytest.raises(cloud_client.CloudNotSent) as caught:
             _ask(provider)
@@ -129,15 +131,17 @@ def test_an_output_bound_change_recovers_the_settled_answer(paid, capsys):
         # the unit is never resent nor stuck on a fingerprint.
         meta = json.loads(ledger.db.execute(
             "SELECT meta FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()[0])
+        bound = next(v for v in cloud_usage_accounting.PROFILE_MAX_TOKENS
+                     if v != meta['max_tokens'])
         cost = str(cloud_usage_accounting._reservation_cost(
             meta.get('input_bound', cloud_usage_accounting.INPUT_RESERVATION_BOUND),
-            256, legacy='input_bound' not in meta, model=meta['model'],
+            bound, legacy='input_bound' not in meta, model=meta['model'],
             price_version=meta['price_version']))
         with ledger.db:
-            ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.max_tokens',256,"
+            ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.max_tokens',?,"
                               "'$.max_cost_usd',?,"
                               "'$.request_fp','0000000000000000000000000000000000000000000000000000000000000000') "
-                              "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')", (cost,))
+                              "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')", (bound, cost))
         before = [tuple(row) for row in ledger.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
         assert _ask(unit(ledger))['reused_response']
         assert len(calls) == 1
