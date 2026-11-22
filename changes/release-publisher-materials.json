@@ -1,0 +1,12 @@
+{
+  "category": "added",
+  "title": "自動公開の固定ポリシーとツール実行環境の実測記録を整備",
+  "summary": "GitHub Release への自動公開ワークフローが参照する公開ポリシー（リポジトリ・所有者・CIワークフローの実ID）と、公開実行環境のツールバージョン・ハッシュの実測記録を追加しました。公開はまだ実行されず、残りの資料と環境設定が揃うまでは安全側に停止します。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "deployment/release-publisher/policy.json にリポジトリ・所有者・CIワークフローの実IDを固定しました。",
+    "deployment/release-publisher/publisher-toolchain.lock に GitHub 実行環境（ubuntu-latest・Python 3.14）の git・gh・python の実測値を記録しました。",
+    "実測値を取り直す手動ワークフロー publisher-toolchain-measure を追加しました。"
+  ],
+  "refs": ["deployment/release-publisher/", ".github/workflows/publisher-toolchain-measure.yml"]
+}
