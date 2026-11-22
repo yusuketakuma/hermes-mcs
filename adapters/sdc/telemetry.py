@@ -55,11 +55,11 @@ def collect_hardware():
     memory = _int_text(_sysctl('hw.memsize') or '')
     if memory is not None:
         section['memory_bytes'] = memory
-    name, version, _machine = platform.mac_ver()
-    if name and len(name) <= 32:
+    release, _versioninfo, _machine = platform.mac_ver()
+    if isinstance(release, str) and release and len(release) <= 32:
         section['os_name'] = 'macOS'
-        if version and len(version) <= 64 and '\n' not in version and '\r' not in version:
-            section['os_version'] = version
+        if len(release) <= 64 and '\n' not in release and '\r' not in release:
+            section['os_version'] = release
     try:
         stats = os.statvfs('/')
         total = stats.f_blocks * stats.f_frsize

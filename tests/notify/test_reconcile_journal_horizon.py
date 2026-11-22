@@ -881,3 +881,124 @@ def test_beyond_horizon_part_keeps_recover_from_reissuing_the_whole_spec(world):
                              "WHERE delivery_id=? AND error_code=?",
                              (render["delivery_id"], notify_reconcile.BEYOND_HORIZON))
     assert notify_spool.recover(world.led, CFG, {})["republished"] == 1
+
+
+# ---------- attempt-tagged holds recorded beyond the journal horizon ----------
+
+
+def _attempt_hold(world, age_s):
+    """A restore that holds a granted attempt the journal never saw, on a
+    render already settled delivered with its parts recorded not_sent (so
+    no render-level hold shadows the attempt's own and no pending part is
+    marked unknown)."""
+    world.seed()
+    world.dispatch()
+    render = world.render()
+    aid = "syn-attempt-hold"
+    world.led.db.execute(
+        """INSERT INTO notification_delivery_attempts(
+             attempt_id,delivery_id,begin_command_id,state,
+             error_code,worker_id,created_at,finished_at)
+           VALUES(?,?,?,?,NULL,'w1',?,NULL)""",
+        (aid, render["delivery_id"], str(uuid.uuid4()), "granted", NOW))
+    world.led.db.execute(
+        "UPDATE notification_renders SET state='delivered' "
+        "WHERE delivery_id=?", (render["delivery_id"],))
+    world.led.db.execute(
+        "UPDATE notification_render_parts SET state='not_sent' "
+        "WHERE delivery_id=? AND state='pending'",
+        (render["delivery_id"],))
+    world.led.db.commit()
+    _restore_from(world, age_s)
+    notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW)
+    hold = next(h for h in world.holds() if h["attempt_id"] == aid)
+    return render, aid, hold
+
+
+def test_beyond_horizon_attempt_hold_rejects_a_journal_only_absence_proof(world):
+    """A hold recorded because journal coverage ran out cannot be released
+    by the same journal's silence — the rows that could witness its send
+    may be compacted away."""
+    render, aid, hold = _attempt_hold(
+        world, backup_names.JOURNAL_HORIZON_MAX_S + 86400)
+    assert hold["reason"] == "unknown_attempt:beyond_horizon"
+    receipt = _resolve(world, render["delivery_id"], "mark_not_sent",
+                       attempt_id=aid,
+                       evidence={"method": "synthetic", "ref": "journal",
+                                 "proof": "no_journal_started",
+                                 "worker_stopped": True})
+    assert (receipt["outcome"], receipt["error"]) == ("rejected", "journal_cannot_vouch")
+    assert world.holds()
+
+
+def test_beyond_horizon_attempt_hold_rebind_rejects_a_journal_only_absence_proof(world):
+    """The same gate applies when the restore also erased the attempt row
+    and the release rebinds on the hold's own record."""
+    render, aid, _ = _attempt_hold(
+        world, backup_names.JOURNAL_HORIZON_MAX_S + 86400)
+    with world.led.db:
+        world.led.db.execute(
+            "DELETE FROM notification_delivery_attempts WHERE attempt_id=?",
+            (aid,))
+    receipt = _resolve(world, render["delivery_id"], "mark_not_sent",
+                       attempt_id=aid,
+                       evidence={"method": "synthetic", "ref": "journal",
+                                 "proof": "no_journal_started",
+                                 "worker_stopped": True})
+    assert (receipt["outcome"], receipt["error"]) == ("rejected", "journal_cannot_vouch")
+    assert world.holds()
+
+
+@pytest.mark.parametrize("proof", ["api_rejected", "remote_absent"])
+def test_beyond_horizon_attempt_hold_releases_on_external_proof(world, proof):
+    """External evidence — the API refused it, or the remote side shows
+    no such message — is the release this hold accepts."""
+    render, aid, _ = _attempt_hold(
+        world, backup_names.JOURNAL_HORIZON_MAX_S + 86400)
+    receipt = _resolve(world, render["delivery_id"], "mark_not_sent",
+                       attempt_id=aid,
+                       evidence={"method": "synthetic", "ref": "channel-check",
+                                 "proof": proof, "worker_stopped": True})
+    assert receipt["outcome"] == "applied", receipt
+
+
+def test_beyond_horizon_attempt_hold_releases_on_delivery_proof(world):
+    """mark_delivered is unchanged: its own evidence path applies without
+    consulting journal absence."""
+    render, aid, _ = _attempt_hold(
+        world, backup_names.JOURNAL_HORIZON_MAX_S + 86400)
+    receipt = _resolve(world, render["delivery_id"], "mark_delivered",
+                       attempt_id=aid,
+                       message_id="synthetic-known-message",
+                       evidence={"method": "synthetic", "ref": "msg"})
+    assert receipt["outcome"] == "applied", receipt
+
+
+def test_in_horizon_attempt_hold_keeps_journal_absence_as_proof(world):
+    """Within the journal's horizon the recorded hold keeps reason
+    unknown_attempt and journal absence still proves not_sent."""
+    render, aid, hold = _attempt_hold(world, 10 * 86400)
+    assert hold["reason"] == "unknown_attempt"
+    receipt = _resolve(world, render["delivery_id"], "mark_not_sent",
+                       attempt_id=aid,
+                       evidence={"method": "synthetic", "ref": "journal",
+                                 "proof": "no_journal_started",
+                                 "worker_stopped": True})
+    assert receipt["outcome"] == "applied", receipt
+
+
+def test_rerun_keeps_an_older_holds_reason_and_proof_rule(world):
+    """A hold recorded before this gate keeps reason unknown_attempt and
+    stays releasable by journal absence — no migration rewrites it."""
+    render, aid, hold = _attempt_hold(world, 10 * 86400)
+    _restore_from(world, backup_names.JOURNAL_HORIZON_MAX_S + 86400,
+                  restored_at=NOW + 1)
+    notify_reconcile.reconcile_after_restore(world.led, CFG, now=NOW + 1)
+    hold = next(h for h in world.holds() if h["attempt_id"] == aid)
+    assert hold["reason"] == "unknown_attempt"
+    receipt = _resolve(world, render["delivery_id"], "mark_not_sent",
+                       attempt_id=aid,
+                       evidence={"method": "synthetic", "ref": "journal",
+                                 "proof": "no_journal_started",
+                                 "worker_stopped": True})
+    assert receipt["outcome"] == "applied", receipt

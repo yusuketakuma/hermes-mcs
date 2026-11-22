@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "macOS版テレメトリのos_versionを文字列で送信するよう修正",
+  "summary": "CSDCのmacOS版で、OS版番号としてmac_verのversioninfoタプルがそのまま入り、reportでJSON配列として送信されていました。release文字列を正しく選ぶよう修正し、契約どおり文字列のos_versionが送られます。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "platform.mac_ver()の第1要素releaseをos_name判定とos_versionに使います。",
+    "取得不可・非文字列の値は値として入れず、型・長さ・改行の既存条件を維持します。"
+  ],
+  "refs": ["adapters/sdc/telemetry.py"]
+}
