@@ -594,7 +594,7 @@ def worker(parent, *, index=None, context_only=False):
         def wait(code):
             _defer(waiting, code)
 
-        def settle_carry():
+        def settle_carry(trigger):
             deadline = time.monotonic() + 3.0
             held = len(carry)
             settled = extract_llm._settle_carry(
@@ -608,13 +608,13 @@ def worker(parent, *, index=None, context_only=False):
                            if key in _DEFER_REASONS and type(count) is int and count > 0}
                 _event("cloud_carry_settled", carried=held, kept=len(carry), done=settled["done"],
                        done_unit="messages", held_prior=settled["held_prior"],
-                       deferred=settled["deferred"], defer_reasons=reasons)
+                       deferred=settled["deferred"], defer_reasons=reasons, trigger=trigger)
 
         try:
             while os.getppid() == parent and writer_lock.updater_state() == initial and not initial[0]:
                 if carry:
                     try:
-                        settle_carry()
+                        settle_carry("loop")
                     except writer_lock.RunLockLost:
                         return
                     except Exception as error:
@@ -815,7 +815,7 @@ def worker(parent, *, index=None, context_only=False):
                     and writer_lock.updater_state() == initial
                     and extract_llm._writer_current(full=True)):
                 try:
-                    settle_carry()
+                    settle_carry("exit")
                 except Exception as error:
                     _event("cloud_carry_settle_error", **_exception_observation(error))
 
