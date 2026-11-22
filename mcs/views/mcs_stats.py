@@ -740,7 +740,8 @@ def st_transition_reconciliation(db, scope):
     # the ±14d window must not reach past the frozen window end either:
     # a med change posted after until/as_of did not exist yet
     if scope["until"] is not None:
-        w, p = w + " AND m.posted_at_ts < ?", [*p, scope["until"]]
+        op = "<=" if scope.get("until_clamped") else "<"
+        w, p = w + f" AND m.posted_at_ts {op} ?", [*p, scope["until"]]
     elif scope.get("as_of") is not None:
         w, p = w + " AND m.posted_at_ts <= ?", [*p, scope["as_of"]]
     grouped = transition_cooccurrences(
