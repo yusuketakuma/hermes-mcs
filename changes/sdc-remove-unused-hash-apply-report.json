@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "apply契約の未使用hash_apply_reportを削除",
+  "summary": "利用者向けの実行時動作に変更はありません。apply契約検証コードで、どこからも呼ばれない公開ハッシュ関数を削除しました。",
+  "upgrade": "追加操作は不要です。",
+  "details": ["hash_apply_reportを削除。hash_apply_intent・hash_apply_approval・hash_apply_payload・hash_apply_preview・hash_apply_local_receipt・hash_apply_state・hash_apply_change_bindingは既存の呼出元に利用されているため保持しました。"],
+  "refs": ["adapters/sdc/release_apply_contract.py"]
+}
