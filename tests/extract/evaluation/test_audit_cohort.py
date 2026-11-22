@@ -602,6 +602,23 @@ def test_compare_replays_the_pinned_scope_and_drops_row_content(data_root, monke
         ac.cmd_compare(args)
 
 
+def test_pinned_scope_preserves_until_clamped():
+    scope = {"since": None, "until": 200, "as_of": 200, "project_id": None,
+             "until_clamped": True}
+    pinned = ac.build_pin([row(1)], DEFINITION, CODES, scope,
+                          {"generation_id": "g", "generated_at": 200})
+    assert pinned["header"]["scope"]["until_clamped"] is True
+    replayed = ac._pinned_scope(pinned["header"])
+    assert replayed["until_clamped"] is True
+    plain = ac.build_pin([row(1)], DEFINITION, CODES,
+                         {k: scope[k] for k in ("since", "until", "as_of", "project_id")},
+                         {"generation_id": "g", "generated_at": 200})
+    assert "until_clamped" not in ac._pinned_scope(plain["header"])
+    bad = {"header": {"scope": {**scope, "until_clamped": "yes"}}}
+    with pytest.raises(ac.CohortError, match="pin_scope"):
+        ac._pinned_scope(bad["header"])
+
+
 @pytest.mark.parametrize("corrupt", [
     lambda r: r.pop("content_hash"),
     lambda r: r.update(extra="x"),
