@@ -32,6 +32,17 @@ MAX_FORM_POSTS = 20
 INTENT_MAX_AGE_S = 1200  # One 10-minute collection interval plus bounded collection time.
 TERMINAL = frozenset({"confirmed", "rejected"})
 _TOKEN = re.compile(r"[0-9a-f]{32}")
+# Bounded publish backoff: n-th failed publication waits 60s * 2**(n-1), capped.
+PUBLISH_BACKOFF_BASE_S = 60
+PUBLISH_BACKOFF_CAP_S = 3600
+# SQL mirror of _publish_state's due rule: rows predating retry bookkeeping are
+# due from creation; corrupt due values are due now rather than hidden forever.
+_PUBLISH_DUE = ("CASE WHEN json_type(content,'$.publish_next_at') IN ('integer','real') "
+                "AND json_extract(content,'$.publish_next_at') >= 0 "
+                "AND json_extract(content,'$.publish_next_at') <= ? "
+                "THEN json_extract(content,'$.publish_next_at') "
+                "WHEN json_extract(content,'$.publish_next_at') IS NULL THEN created_at "
+                "ELSE ? END")
 
 
 class StampRefused(ValueError):
@@ -351,8 +362,14 @@ def _approved(db, req):
 
 
 def _save_outcome(ledger, artifact_id, value, state, error=None):
+    settled = state in TERMINAL and value.get("state") != state
     value = {**value, "state": state, "error": error, "updated_at": time.time(),
              "result_published": False}
+    if settled:
+        # A newly settled result re-enters publication as a first attempt; the
+        # same state's replay keeps the retry slot it already had.
+        value["publish_attempts"] = 0
+        value["publish_next_at"] = value["updated_at"]
     req = value["request"]
     if not _approved(ledger.db, req):
         raise StampRefused("stamp_receipt_invalid")
@@ -416,6 +433,43 @@ def _publish_result(ledger, root, value):
         ledger.db.execute("UPDATE artifacts SET content=json_set(content,'$.result_published',json('true')) "
                           "WHERE kind=? AND json_extract(meta,'$.command_id')=?",
                           (KIND, req["command_id"]))
+
+
+def _publish_state(value, now):
+    """(attempts, due, repaired) from stored retry bookkeeping; corrupt -> due now."""
+    attempts = value.get("publish_attempts", 0)
+    repaired = False
+    if type(attempts) is not int or attempts < 0:
+        if "publish_attempts" in value:
+            repaired = True
+        attempts = 0
+    due = value.get("publish_next_at")
+    if due is None:
+        eligible = True                     # old rows are due from creation time
+    elif type(due) in (int, float) and math.isfinite(due) and 0 <= due <= now + PUBLISH_BACKOFF_CAP_S:
+        eligible = due <= now
+    else:
+        eligible, repaired = True, True
+    return attempts, eligible, repaired
+
+
+def _reserve_publish(ledger, artifact_id, attempts, now):
+    """Commit the retry slot for this attempt before the publication can fail."""
+    delay = min(PUBLISH_BACKOFF_BASE_S * 2 ** min(attempts, 6), PUBLISH_BACKOFF_CAP_S)
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET content=json_set(content,'$.publish_attempts',?,"
+                          "'$.publish_next_at',?) WHERE artifact_id=? AND kind=?",
+                          (attempts + 1, now + delay, artifact_id, KIND))
+
+
+def _publish_diagnostics(db, counts, now):
+    row = db.execute("SELECT COUNT(*),MIN(COALESCE(json_extract(content,'$.updated_at'),created_at)) "
+                     "FROM artifacts WHERE kind=? AND json_valid(content) "
+                     "AND json_extract(content,'$.state') IN ('confirmed','rejected') "
+                     "AND json_extract(content,'$.result_published') IS NOT 1", (KIND,)).fetchone()
+    counts["publish_pending"] = row[0]
+    counts["publish_oldest_wait_s"] = 0 if row[1] is None else max(0, int(now - row[1]))
+    return counts
 
 
 def _fresh_post(adapter, ledger, req):
@@ -586,25 +640,35 @@ def _move_behind(ledger, artifact_id):
 
 def drain(ledger, adapter, cfg, root, deadline):
     """Execute bounded queued work and reconcile unknowns; caller holds run.lock."""
-    counts = {"confirmed": 0, "unknown": 0, "rejected": 0, "held": 0}
+    counts = {"confirmed": 0, "unknown": 0, "rejected": 0, "held": 0,
+              "publish_pending": 0, "publish_oldest_wait_s": 0,
+              "publish_failed": 0, "publish_retry_repaired": 0}
     if not enabled(cfg):
         return counts
     # Distinct windows stop old unknowns starving newly approved other posts.
     seen = set()
     for state in ("queued", "unknown", "publish"):
-        condition = ("json_extract(content,'$.state') IN ('confirmed','rejected') "
-                     "AND json_extract(content,'$.result_published') IS NOT 1"
-                     if state == "publish" else "json_extract(content,'$.state')=?")
-        rows = ledger.db.execute("SELECT artifact_id,project_id,message_id,content FROM artifacts WHERE kind=? "
-                                 "AND json_valid(content) AND " + condition +
-                                 " ORDER BY COALESCE(json_extract(content,'$.updated_at'),created_at),artifact_id "
-                                 "LIMIT 4", (KIND,) if state == "publish" else (KIND, state)).fetchall()
+        if state == "publish":
+            now = time.time()           # settled during this drain -> due at once
+            rows = ledger.db.execute(
+                "SELECT artifact_id,project_id,message_id,content FROM ("
+                "SELECT artifact_id,project_id,message_id,content," + _PUBLISH_DUE +
+                " AS due_at FROM artifacts WHERE kind=? AND json_valid(content) "
+                "AND json_extract(content,'$.state') IN ('confirmed','rejected') "
+                "AND json_extract(content,'$.result_published') IS NOT 1) "
+                "WHERE due_at<=? ORDER BY due_at,artifact_id LIMIT 4",
+                (now + PUBLISH_BACKOFF_CAP_S, now, KIND, now)).fetchall()
+        else:
+            rows = ledger.db.execute("SELECT artifact_id,project_id,message_id,content FROM artifacts WHERE kind=? "
+                                     "AND json_valid(content) AND json_extract(content,'$.state')=? "
+                                     "ORDER BY COALESCE(json_extract(content,'$.updated_at'),created_at),artifact_id "
+                                     "LIMIT 4", (KIND, state)).fetchall()
         for row in rows:
             if row["artifact_id"] in seen:
                 continue
             seen.add(row["artifact_id"])
             if time.monotonic() + 5 >= deadline:
-                return counts
+                return _publish_diagnostics(ledger.db, counts, time.time())
             try:
                 if state != "publish":
                     counts[_execute(ledger, adapter, cfg, root, row, time.time(), deadline)] += 1
@@ -620,7 +684,18 @@ def drain(ledger, adapter, cfg, root, deadline):
             value = json.loads(ledger.db.execute(
                 "SELECT content FROM artifacts WHERE artifact_id=?", (row["artifact_id"],)).fetchone()[0])
             try:
+                attempts, eligible, repaired = _publish_state(value, time.time())
+                if not eligible:
+                    continue                        # publication backoff has not matured
+                counts["publish_retry_repaired"] += repaired
+                _reserve_publish(ledger, row["artifact_id"], attempts, time.time())
                 _publish_result(ledger, root, value)
+            except Exception:
+                # A failed publication already committed its next retry slot.
+                counts["held"] += 1
+                counts["publish_failed"] += 1
+                continue
+            try:
                 rerender = value.get("state") in {"confirmed", "unknown"}
                 if value.get("state") == "rejected":
                     refreshed = refresh_rejected(ledger, value["request"],
@@ -631,7 +706,8 @@ def drain(ledger, adapter, cfg, root, deadline):
                     notify_cards.rerender_message_cards(
                         ledger, cfg, value["request"]["project_id"], value["request"]["message_id"])
             except Exception:
-                # The durable outcome stays authoritative if followup/render publication fails.
+                # The durable outcome stays authoritative if followup/render publication fails;
+                # spool recovery owns rerender, so this is not a publication failure.
                 counts["held"] += 1
                 _move_behind(ledger, row["artifact_id"])    # a failing row must not pin the 4-row window
-    return counts
+    return _publish_diagnostics(ledger.db, counts, time.time())
