@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "復元照合の保留記録の残課題を修正",
+  "summary": "journal保持期間を超えた復元で保留された送信記録つきattemptを、journalの記録が無いだけの証拠で解除できなくなりました。`restore_reconcile.json`が再実行で解除待ちの保留を空欄にしなくなりました。",
+  "upgrade": "gatewayと常駐の抽出プロセスの再起動が必要です。既存の保留の理由は書き換えず（遡及適用なし）、保持期間内の復元で記録された`unknown_attempt`の保留は従来どおり`no_journal_started`で解除できます。既存の解除操作・証拠形式・通知判定は変わりません。",
+  "details": [
+    "保持期間を超えた復元で、送信記録が残るのにjournalに記録の無いattemptは`unknown_attempt:beyond_horizon`で保留され、`mark_not_sent`の`proof`は`remote_absent`か`api_rejected`に限られ、`no_journal_started`は`journal_cannot_vouch`で拒否されます。既存の`unknown_attempt`の保留は移行・書き換えせず、従来の解除経路のままです。",
+    "`restore_reconcile.json`に、解除されていない全保留の`active_holds`（hold_id・attempt_id・delivery_id・reason・card_id・scope）、保留が閉じ込めている送信待ちの合計`active_events_held`、破損した保存記録の有無を示す`active_holds_incomplete`を追加しました。再実行で新しい保留が無くても未解除の保留と件数は同じ値で報告されます。"
+  ],
+  "refs": [
+    "mcs/notify/notify_reconcile.py",
+    "mcs/notify/notify_recovery.py"
+  ]
+}
