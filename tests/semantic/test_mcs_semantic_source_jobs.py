@@ -402,6 +402,32 @@ def test_history_edit_merge_quiets_without_live_origin(tmp_path):
     db.close()
 
 
+def test_history_edit_merge_keeps_live_notice_via_target_origin(tmp_path):
+    """Issue #183: the stored origin event no longer proves liveness (its
+    outbox row is gone), but another unconsumed new_messages event still
+    covers a target — the per-target check must keep the job live."""
+    db = _ledger(tmp_path)
+    _patient(db)
+    now = time.time()
+    _cohort(db, now - 2 * 86400)
+    db.save_messages([_post(10, now - 3 * 86400, unread=False)],
+                     project_id=1, semantic=True)
+    db.save_messages([_post(30, now - 86400, parent=10)],
+                     project_id=1, notify={"source": "unread"}, semantic=True)
+    # point the stored origin at an event whose outbox row no longer exists
+    db.db.execute("UPDATE fetch_jobs SET payload=json_set(payload,'$.origin.event_id',-1) "
+                  "WHERE kind='semantic' AND message_id=10")
+    db.save_messages([_post(10, now - 3 * 86400, body="編集した過去本文",
+                            unread=False)],
+                     project_id=1, semantic=True)
+    pl = json.loads(db.db.execute(
+        "SELECT payload FROM fetch_jobs WHERE kind='semantic' "
+        "AND message_id=10").fetchone()["payload"])
+    assert pl.get("eligible") is True
+    assert pl.get("notification_free") is not True
+    db.close()
+
+
 def test_backfill_seeds_read_arrivals(tmp_path):
     """WP-02 coverage: the notify path must seed EVERY newly stored
     message — including posts that arrived already-read, which are
