@@ -1,0 +1,27 @@
+{
+ "artifacts": [
+  {
+   "path": "docs/releases/v1.2.1/notification-flow-v121.svg",
+   "sha256": "0c637849134eeb3120b9585791a507709541410867bd763d332c1e0112da0309"
+  },
+  {
+   "path": "docs/releases/v1.2.1/notification-flow-v121.png",
+   "sha256": "d2ea6b64a13cf1bb6d7cf9eba64556db8a2fed17378abb388b89d07b013ff149"
+  }
+ ],
+ "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
+ "notes": [
+  "図1点はv1.2.1の主要な修正（公開に失敗したスタンプ結果が後続の通知を詰まらせない仕組みと、過去投稿の編集が新着の通知を抑制しない分離）を説明する合成図。実画面・測定結果・患者データを含まない。",
+  "SVG原稿は手書きXML、PNGはChrome headlessで980x420@2xに描画（1960x840）。",
+  "GitHub Release への画像添付と外部表示は未実施。CHANGELOG・export本文では releases/download/v1.2.1/ 配下のURLを参照し、README生成時はリポジトリ内相対パスへ変換される。tag・asset未公開のため到達・表示は未確認。",
+  "図の直下に説明文を添え、『実画面や測定結果ではありません』の注記を図内にも記載。"
+ ],
+ "scope": "v1.2.1 の主要な修正の説明図1点。最終候補SHAの固定・受入証拠ではない。",
+ "source": "docs/releases/v1.2.1/notification-flow-v121.svg",
+ "status": "unpublished_preparation",
+ "visual_check": {
+  "checked": "2026-11-22、1960x840のPNGを1372x588相当へ縮小した表示で文字欠落・重なり・余白を確認。",
+  "narrow_width_ok": true,
+  "png_rendered": true
+ }
+}

@@ -1,0 +1,90 @@
+{
+  "version": "1.2.1",
+  "records": {
+    "258-perf-serial-ci": {
+      "title": "負荷時に不安定だった通知性能ベンチの測定条件を修正",
+      "path": "changes/archive/1.2.1/258-perf-serial-ci.json",
+      "sha256": "5d616feae631ab9318661b6cd62391af6d9ad23f21f3daa6a65d0a3424929a86"
+    },
+    "cloud-carry-settle-answer-reuse": {
+      "title": "未精算結果の処理場所を記録し、上限変更後の回答再利用にモデルと effort を照合する",
+      "path": "changes/archive/1.2.1/cloud-carry-settle-answer-reuse.json",
+      "sha256": "d02dfc26af59c75e3d117893a81a1246e28783f823442f576502a8a7a664f58d"
+    },
+    "gateway-restart-yield": {
+      "title": "ゲートウェイ再起動要求中は未開始の定期処理が早く譲る",
+      "path": "changes/archive/1.2.1/gateway-restart-yield.json",
+      "sha256": "8e885c303f3e2db1a1fa8a1221b459a6ecd562de40cf6ec55cadd38c93b843ab"
+    },
+    "issue-127-restore-reconcile": {
+      "title": "復元照合の保留記録の残課題を修正",
+      "path": "changes/archive/1.2.1/issue-127-restore-reconcile.json",
+      "sha256": "e58fdf81719df12de6674b0cf117090edaaf33820390bba46c1ea964f1adb7f8"
+    },
+    "issue-183-history-edit-quiet-merge": {
+      "title": "過去投稿の編集で同じスレッドの新着通知まで止まる問題を修正",
+      "path": "changes/archive/1.2.1/issue-183-history-edit-quiet-merge.json",
+      "sha256": "efb5ad9d6991ca6714418accec37aeec6d97adc0d8c78e49c4f524d610d15a6f"
+    },
+    "refstat-receipt-read-error-20261122": {
+      "title": "承認レシートの読み取り失敗が「未承認」と誤表示される問題を修正",
+      "path": "changes/archive/1.2.1/refstat-receipt-read-error-20261122.json",
+      "sha256": "39c8220c7fe3328db62a64178d3a29c0fe1cd2ac056ea4fdb85f2f3d90f0a300"
+    },
+    "release-publisher-materials": {
+      "title": "自動公開の固定ポリシー・署名ピン・ツール実測記録を整備",
+      "path": "changes/archive/1.2.1/release-publisher-materials.json",
+      "sha256": "bc5c69d4186a7ce65e0929099a4d12ca6d901e0db6d5fb4409e4c8041fce6653"
+    },
+    "sdc-dedup-parse-wire": {
+      "title": "wire parseの共通処理を一本化",
+      "path": "changes/archive/1.2.1/sdc-dedup-parse-wire.json",
+      "sha256": "efb0e2f959d1f1793599836271baca2060cf055f025400b9dab4ae3556b5b925"
+    },
+    "sdc-remove-unused-auto-contract-constants": {
+      "title": "auto契約の未使用定数を削除",
+      "path": "changes/archive/1.2.1/sdc-remove-unused-auto-contract-constants.json",
+      "sha256": "77471db455f284eab2ca38044a6ec7ae1cf8bd35a26df855853ccb470e242257"
+    },
+    "sdc-remove-unused-auto-state-decls": {
+      "title": "owner stateの未使用宣言を削除",
+      "path": "changes/archive/1.2.1/sdc-remove-unused-auto-state-decls.json",
+      "sha256": "1feebcc6b15d35704b6568bc45a80b3eb9fc09734ff976ec199d4ca073deab1d"
+    },
+    "sdc-remove-unused-hash-apply-report": {
+      "title": "apply契約の未使用hash_apply_reportを削除",
+      "path": "changes/archive/1.2.1/sdc-remove-unused-hash-apply-report.json",
+      "sha256": "05c0db464616eb7fca6017323d34ff7e2f00a4b9f4f2f8eaf6f9566c996c68b8"
+    },
+    "sdc-remove-unused-restart-wrappers": {
+      "title": "restart契約の未使用validateラッパーを削除",
+      "path": "changes/archive/1.2.1/sdc-remove-unused-restart-wrappers.json",
+      "sha256": "79b1311a96b013a84276ddbe10d92f67e2172b25766c3212a45eab64b2b76031"
+    },
+    "sdc-remove-unused-telemetry-levels": {
+      "title": "telemetryの未使用_LEVELSを削除",
+      "path": "changes/archive/1.2.1/sdc-remove-unused-telemetry-levels.json",
+      "sha256": "0a4b1d2d10e92c6e3f934778e432123485c3606026526210d00c80d9cfe36bcd"
+    },
+    "sdc-telemetry-macos-version": {
+      "title": "macOS版テレメトリのos_versionを文字列で送信するよう修正",
+      "path": "changes/archive/1.2.1/sdc-telemetry-macos-version.json",
+      "sha256": "7599099e87d4c4a1109295b97b9be473188f6899dd31c8b498f09c5ea4813c95"
+    },
+    "stamp-result-publish-retry": {
+      "title": "公開に失敗したスタンプ結果が後続の結果通知を詰まらせる問題を修正",
+      "path": "changes/archive/1.2.1/stamp-result-publish-retry.json",
+      "sha256": "a260cc94a705497ed70def0efd86b0a193f45e56e38cf11683bec7dadf3ac66c"
+    },
+    "standalone-clock-unverified": {
+      "title": "時計巻戻り後の未来heartbeatをhostの正常な生存証拠にしない",
+      "path": "changes/archive/1.2.1/standalone-clock-unverified.json",
+      "sha256": "eba24246451056653bbd595bbd8ac7d1756a095f803c64a5b12b6864ee78c5cc"
+    },
+    "stats-until-clamp-boundary-20261122": {
+      "title": "until を as_of に切り詰めたとき as_of ちょうどの投稿が集計から外れる問題を修正",
+      "path": "changes/archive/1.2.1/stats-until-clamp-boundary-20261122.json",
+      "sha256": "5930176f71da89ad2a3408b742e0c926c7d27099c9067570a9bf68e5b5ea0077"
+    }
+  }
+}
