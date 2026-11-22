@@ -1,0 +1,25 @@
+{
+  "gh_capabilities": {
+    "release_verify": true,
+    "release_verify_asset": true
+  },
+  "measured_at": 1795320025,
+  "schema_version": "mcs.publisher-toolchain.v1",
+  "tools": {
+    "gh": {
+      "path": "/usr/bin/gh",
+      "sha256": "fca7ac8a8386e3ad65c9a96a96cbf272d1dcc4f76de174dae91d54e50729e240",
+      "version": "gh version 2.104.0 (2026-11-12)"
+    },
+    "git": {
+      "path": "/usr/bin/git",
+      "sha256": "8fb7c4c2a0e5ec847626098c2a375ff01d6a9e5f81352e3ae56f30b41ec850cd",
+      "version": "git version 2.56.1"
+    },
+    "python": {
+      "path": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+      "sha256": "1b8e845458fa08ab0d75b05eba9d3468dc8bd5c0e9b8feab9eed52e11321bcbf",
+      "version": "Python 3.14.10"
+    }
+  }
+}
