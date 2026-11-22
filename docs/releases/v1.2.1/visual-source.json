@@ -2,11 +2,11 @@
  "artifacts": [
   {
    "path": "docs/releases/v1.2.1/notification-flow-v121.svg",
-   "sha256": "0c637849134eeb3120b9585791a507709541410867bd763d332c1e0112da0309"
+   "sha256": "56bacef439a273fec80b1f68fb8d6eb141e1a616aaea659d5dc6b6a8adc31a0e"
   },
   {
    "path": "docs/releases/v1.2.1/notification-flow-v121.png",
-   "sha256": "d2ea6b64a13cf1bb6d7cf9eba64556db8a2fed17378abb388b89d07b013ff149"
+   "sha256": "1802bae69267a2e015d9c0d639238e2cc39d9cf1b03ae1c6a8220feaa07afb06"
   }
  ],
  "kind": "synthetic explanation; not a screenshot, measured result or release acceptance",
