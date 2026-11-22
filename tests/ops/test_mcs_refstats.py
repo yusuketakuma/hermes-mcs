@@ -196,6 +196,25 @@ def test_approve_moves_file_and_writes_artifact(tmp_path):
     db.close()
 
 
+def test_verify_reports_receipt_lookup_failure(tmp_path, capsys):
+    # A broken snapshot (receipt table unreadable) must surface an explicit
+    # error — not "refstat_not_approved": missing ≠ unreadable.
+    db = _db(tmp_path)
+    db.save_messages([_msg()])
+    _capture(tmp_path)
+    requests.apply_command(db, _approve_req("base", _pending_hash(tmp_path)))
+    db.close()
+    snap = _snapshot(tmp_path)
+    conn = sqlite3.connect(str(snap))
+    conn.execute("ALTER TABLE command_receipts RENAME TO broken_receipts")
+    conn.commit()
+    conn.close()
+    assert _verify(tmp_path, snapshot=snap) == 1
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert out["ok"] is False
+    assert out["error"] == "OperationalError"
+
+
 def test_approve_rejects_hash_mismatch(tmp_path):
     db = _db(tmp_path)
     db.save_messages([_msg()])

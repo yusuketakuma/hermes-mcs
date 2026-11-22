@@ -97,13 +97,12 @@ def _receipt_applied(db, approval: dict, artifact_id: int) -> bool:
     if not isinstance(command_id, str):
         return False
     from mcs_requests import parse_command, payload_hash, validate
-    try:
-        row = db.execute(
-            "SELECT receipt_json,payload_hash,project_id FROM command_receipts "
-            "WHERE command_id=? AND outcome='applied'",
-            (command_id,)).fetchone()
-    except Exception:
-        return False
+    # A receipt lookup failure is NOT "no approval": let sqlite errors reach
+    # main()'s explicit error path instead of reporting refstat_not_approved.
+    row = db.execute(
+        "SELECT receipt_json,payload_hash,project_id FROM command_receipts "
+        "WHERE command_id=? AND outcome='applied'",
+        (command_id,)).fetchone()
     if row is None:
         return False
     try:
