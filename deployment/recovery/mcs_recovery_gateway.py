@@ -262,23 +262,31 @@ def _gateway_restart_run(data, agents, uid, request_id=None, expected_pid=None,
                 "pid_changed": journal["pid_changed"], "exited_at": time.time()})
             _gateway_restart_report(data, status, request_id=request_id, **facts)
         finally:
-            # Every exit after the lock goes through report; release the
-            # helper lock here so a retained frame cannot wedge a later helper.
+            # Clear our intent while the helper lock is still held: a next
+            # helper publishes its own intent only after acquiring it, so the
+            # read/check/unlink cannot remove a newer helper's file. Every exit
+            # after the lock goes through report; release the helper lock here
+            # so a retained frame cannot wedge a later helper.
+            _gateway_restart_intent_clear(data, intent_request_id)
             os.close(helper_lock)
 
     # One normal collection run (480s), lock wait (150s), PID observation (30s).
     deadline = time.monotonic() + 660
-    helper_started_at = int(time.time())
+    # Waiting crons verify helper_started_at against this process's ps lstart,
+    # so the birth time must come from the same probe — publication time differs.
+    helper_started_at = _gateway_self_started_at()
     intent_request_id = (request_id if type(request_id) is str
                          and re.fullmatch(r"[0-9a-f]{32}", request_id)
                          else os.urandom(16).hex())
-    try:
-        _gateway_restart_intent_publish(
-            data, intent_request_id, helper_started_at,
-            helper_started_at + 660, expected_pid=expected_pid if auto else None)
-    except (OSError, ValueError):
-        # A missing intent only means waiting crons cannot yield early.
-        pass
+    if helper_started_at is not None:
+        try:
+            _gateway_restart_intent_publish(
+                data, intent_request_id, helper_started_at,
+                int(helper_started_at) + 660,
+                expected_pid=expected_pid if auto else None)
+        except (OSError, ValueError):
+            # A missing intent only means waiting crons cannot yield early.
+            pass
     label = "ai.hermes.gateway"
     expected = os.path.realpath(os.path.join(agents, label + ".plist"))
 
