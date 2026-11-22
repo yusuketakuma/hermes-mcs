@@ -487,6 +487,7 @@ def test_auto_helper_intent_carries_the_request_id_and_expected_pid(gateway, mon
                        expected_pid=expected_pid)
 
     monkeypatch.setattr(rec.mcs_recovery_gateway, "_gateway_restart_intent_publish", spy)
+    monkeypatch.setattr(rec.mcs_recovery_gateway, "_gateway_self_started_at", lambda: 1234.0)
     running["pid"] = 303
     fd = _lock_fd(data)
     try:
