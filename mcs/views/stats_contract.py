@@ -51,8 +51,10 @@ def resolve_scope(args: dict, snapshot_ts: int) -> dict:
     as_of = parse_timestamp(args["as_of"]) if args.get("as_of") else snapshot_ts
     if as_of > snapshot_ts:
         raise ValueError("as_of_after_snapshot")
+    clamped = False
     if until is not None and until > as_of:
         until = as_of
+        clamped = True
         # clamping may invert the range — surface it, don't silently
         # return an empty success
         if since is not None and until <= since:
@@ -62,6 +64,7 @@ def resolve_scope(args: dict, snapshot_ts: int) -> dict:
     except (TypeError, ValueError, OverflowError):
         raise ValueError("bad_limit") from None
     return {"since": since, "until": until, "as_of": as_of,
+            "until_clamped": clamped,
             "project_id": args.get("project"), "limit": limit}
 
 
@@ -72,7 +75,9 @@ def message_scope_sql(scope: dict, col: str = "m.posted_at_ts") -> tuple[str, li
         sql += f" AND {col} >= ?"
         params.append(scope["since"])
     if scope["until"] is not None:
-        sql += f" AND {col} < ?"
+        # A clamped until IS the as_of freeze point — keep it inclusive
+        # like the no-until path so the frozen stats stay reproducible.
+        sql += f" AND {col} {'<=' if scope.get('until_clamped') else '<'} ?"
         params.append(scope["until"])
     elif scope.get("as_of") is not None:
         # as_of freezes the window even without --until (refstats pins
