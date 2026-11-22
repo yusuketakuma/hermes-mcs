@@ -88,3 +88,35 @@ def test_collect_hardware_and_operations_never_guess():
                                  'os_version', 'disk_total_bytes', 'disk_free_bytes'}
     section = collect_operations({'mode': 'unknown', 'mcs_process': 'unknown'}, {}, boot_time=None)
     assert section is None or set(section) <= {'schema_version', 'uptime_seconds', 'boot_id', 'services'}
+
+
+def _stub_hardware_inputs(monkeypatch, mac_ver):
+    monkeypatch.setattr('adapters.sdc.telemetry._sysctl', lambda *args, **kwargs: None)
+    monkeypatch.setattr('platform.mac_ver', lambda: mac_ver)
+
+
+def test_collect_hardware_macos_release_is_string(tmp_path, monkeypatch):
+    _stub_hardware_inputs(monkeypatch, ('15.3', ('', '', ''), 'arm64'))
+    hardware = collect_hardware()
+    assert hardware['os_name'] == 'macOS' and hardware['os_version'] == '15.3'
+    sections = collect_sections({'mode': 'standalone', 'mcs_process': 'running'}, {'state': 'active'},
+                                data_dir=str(tmp_path), clock=lambda: NOW)
+    assert isinstance(sections['hardware']['os_version'], str)
+    built = build_report(sections, sequence=1, clock=lambda: NOW)
+    assert built is not None
+    assert json.loads(built[1])['sections']['hardware']['os_version'] == '15.3'
+
+
+def test_collect_hardware_macos_release_missing_or_overlong(monkeypatch):
+    _stub_hardware_inputs(monkeypatch, ('', ('', '', ''), 'arm64'))
+    hardware = collect_hardware()
+    assert 'os_name' not in hardware and 'os_version' not in hardware
+    _stub_hardware_inputs(monkeypatch, ('x' * 33, ('', '', ''), 'arm64'))
+    hardware = collect_hardware()
+    assert 'os_name' not in hardware and 'os_version' not in hardware
+    _stub_hardware_inputs(monkeypatch, ('15.3\nextra', ('', '', ''), 'arm64'))
+    hardware = collect_hardware()
+    assert hardware['os_name'] == 'macOS' and 'os_version' not in hardware
+    _stub_hardware_inputs(monkeypatch, (('not', 'a', 'str'), ('', '', ''), 'arm64'))
+    hardware = collect_hardware()
+    assert 'os_name' not in hardware and 'os_version' not in hardware
