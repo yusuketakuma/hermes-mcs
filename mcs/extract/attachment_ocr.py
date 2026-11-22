@@ -701,6 +701,10 @@ def _settle(ledger, source, doc, root, generation, settings, deadline=None, *, r
             if fd is None:
                 if deadline is None:
                     return False
+                # A live restart intent ends the wait immediately; polling it
+                # again without a pause would spin until the helper finishes.
+                if writer_lock.restart_intent_active(str(root), deadline=deadline):
+                    time.sleep(min(1.0, max(deadline - time.monotonic() - 1, 0.0)))
                 continue
         if deadline is not None and deadline - time.monotonic() <= 1:
             os.close(fd)
