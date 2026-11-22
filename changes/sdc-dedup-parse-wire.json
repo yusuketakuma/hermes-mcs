@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "wire parseの共通処理を一本化",
+  "summary": "利用者向けの実行時動作に変更はありません。auto更新v3契約で、parse_typedとparse_documentに重複していたdecode・JSON parse・ENC01検査を共通helperに整理しました。",
+  "upgrade": "追加操作は不要です。",
+  "details": ["共通処理を_parse_and_scanへ集約し、parse_typed・parse_documentは上限検査とdefinition照合だけを担います。"],
+  "refs": ["adapters/sdc/release_auto_contract.py"]
+}
