@@ -431,8 +431,7 @@ class LedgerSemanticSourcesMixin:
                     preserve_live |= any(semantic_intake_hold.notification_allowed(self, old_pl, project_id, mid)
                                          for mid in old_targets)
                 if (notification_free and execution is None
-                        and origin.get('source') in {"initial_history",
-                                                     "history_import"}
+                        and origin.get('source') == "initial_history"
                         and existing['state'] == 'pending'
                         and old_eligible and not old_notification_free):
                     # A past-post edit seeded with the quiet history
