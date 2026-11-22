@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "Anthropic の profile 未設定時に用途別の出力上限を適用し、未精算結果の処理を記録する",
+  "summary": "Anthropic の用途別 profile を未設定の環境では、送信の最大出力が 1600 トークンに留まり用途別上限が適用されませんでした。背景抽出・意味解析は 8192、患者コンテキスト 16384、品質修復 32768 トークンを送るようになりました。モデル・料金版は従来どおりです。あわせて worker が定期処理の外で保存・解放した未精算結果を `cloud_carry_settled` イベントに記録するようにしました。",
+  "upgrade": "追加操作は不要です。送信 1 件あたりの予約上限が上がるため、日額・月額の上限に近い環境では上限到達が早まることがあります。用途別 profile を使う場合は、従来どおり設定で有効化してください（一つの設定ファイルの形式では cloud_llm.provider_profiles.anthropic）。",
+  "details": [
+    "profile を設定していない Anthropic の送信は、モデルと推論レベル（Haiku 5.5 low）は変えず、用途別の最大出力トークンだけを適用します。予約額と予算の判定にも同じ上限を使います。",
+    "`cloud_carry_settled` には `done`・`held_prior`・`deferred` の件数と、保留理由の固定コード（`defer_reasons`）、発生箇所（`trigger`: `loop` または `exit`）を記録します。メッセージ id などの個別情報は含みません。定期処理（run_pending）内で保存・解放された件数は従来どおり `cloud_backlog_pass.done` に含まれ、二重に数えません。",
+    "戻すときは、このコミットを revert します。上限を変えて送信した後に戻しても記録は読めますが、用途別 profile を有効化した後に戻す場合は、その送信の記録が無いときに限ってください。"
+  ],
+  "refs": [
+    "mcs/llm/cloud_policy.py",
+    "mcs/llm/cloud_backlog.py"
+  ]
+}
