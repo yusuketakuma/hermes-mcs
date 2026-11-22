@@ -10,12 +10,19 @@ Discord transport; synthetic rows and a temp ledger only. Records:
 The p95 budgets (30s delivery / 6s op-apply, non-contended) are
 asserted on this local pipeline. Delivery samples share the batch finish
 time; real Discord HTTP and SDK performance are outside this measurement.
+
+Wall-time budgets are only meaningful on a runner without competing test
+processes: the perf-marked tests are deselected from the CI shard pool on
+every event and run serially in a later step (slice 1; tag/schedule/manual
+runs). The unmarked contract tests below assert counts and limits without
+a wall-time budget, so they run everywhere, pull requests included.
 """
 from __future__ import annotations
 
 import notify_scope
 import asyncio
 import json
+import sqlite3
 import sys
 import time
 import types
@@ -443,19 +450,8 @@ def test_perf_operation_apply(tmp_path, monkeypatch):
     assert r["p95"] <= 6.0
 
 
-@pytest.mark.perf
-def test_perf_scale_stages(tmp_path, monkeypatch):
-    """RC20 — queue/lock/sweep/gc/snapshot breakdown at 10,000 cards.
-    Full-delivery is measured at 100/1,000 above; here the per-stage
-    costs are measured on a seeded 10k-card ledger."""
-    monkeypatch.setitem(sys.modules, "discord", _fake_discord())
-    led, data = _mk_ledger(tmp_path)
-    n = 10_000
-    with led.db:
-        for i in range(n):
-            _seed_patient(led, 1 + i)
-            _seed_msg(led, 10_000 + i, 1 + i)
-    # bulk-seed delivered cards+renders in settled steady state
+def _seed_settled_cards(led, n):
+    """Bulk-seed n delivered cards+renders in settled steady state."""
     with led.db:
         for i in range(n):
             cur = led.db.execute(
@@ -479,7 +475,7 @@ def test_perf_scale_stages(tmp_path, monkeypatch):
                  "mcs", "1", "7", "42", "h" * 32, f"c{i}",
                  "delivered", NOW, NOW))
     # settled = fingerprints already observed. A NULL baseline makes
-    # the first sweep re-issue every card (10k spec publishes), which
+    # the first sweep re-issue every card (n spec publishes), which
     # is not the scan this stage measures.
     with led.db:
         for (cid,) in led.db.execute(
@@ -491,6 +487,23 @@ def test_perf_scale_stages(tmp_path, monkeypatch):
                 " WHERE card_id=?",
                 (content["source_fp"], notify_cards.content_fingerprint(content),
                  cid))
+
+
+@pytest.mark.perf
+def test_perf_scale_stages(tmp_path, monkeypatch):
+    """RC20 — queue/lock/sweep/gc/snapshot breakdown at 10,000 cards.
+    Full-delivery is measured at 100/1,000 above; here the per-stage
+    costs are measured on a seeded 10k-card ledger."""
+    monkeypatch.setitem(sys.modules, "discord", _fake_discord())
+    led, data = _mk_ledger(tmp_path)
+    n = 10_000
+    t0 = time.perf_counter()
+    with led.db:
+        for i in range(n):
+            _seed_patient(led, 1 + i)
+            _seed_msg(led, 10_000 + i, 1 + i)
+    _seed_settled_cards(led, n)
+    t_prep = time.perf_counter() - t0
 
     res = {}
     t = time.perf_counter()
@@ -505,7 +518,7 @@ def test_perf_scale_stages(tmp_path, monkeypatch):
     snap = tmp_path / "snap"
     snap.mkdir()
     t = time.perf_counter()
-    _ledger.publish_snapshot(str(data / "ledger.db"), str(snap))
+    snap_dest = _ledger.publish_snapshot(str(data / "ledger.db"), str(snap))
     t_snap = time.perf_counter() - t
     # a drain batch over a large cmd_int backlog
     int_dir = data / "cmd_int"
@@ -520,6 +533,7 @@ def test_perf_scale_stages(tmp_path, monkeypatch):
     t_drain = time.perf_counter() - t
 
     print(f"\n== stage breakdown n={n} ==")
+    print(f"  fixture_prep (outside the budgets){'':<13} {t_prep:>8.4f}s")
     print(f"  sweep(scan={sweep_out['scanned']})"
           f"{'':<28} {t_sweep:>8.4f}s")
     print(f"  gc(tokens={gc_out['tokens']})"
@@ -527,8 +541,87 @@ def test_perf_scale_stages(tmp_path, monkeypatch):
     print(f"  recover{'':<39} {t_recover:>8.4f}s")
     print(f"  snapshot_publish{'':<30} {t_snap:>8.4f}s")
     print(f"  drain_batch(256){'':<29} {t_drain:>8.4f}s")
-    led.close()
     # a fast sweep proves nothing unless it scanned every card and
-    # found them settled
+    # found them settled; a fast snapshot proves nothing unless the
+    # copy was verified and published
     assert sweep_out == {"scanned": n, "updated": 0, "republished": 0}
-    assert t_sweep < 30.0 and t_snap < 30.0
+    assert snap_dest == str(snap / "ledger-snapshot.db")
+    led.close()
+    check = sqlite3.connect(f"file:{snap_dest}?mode=ro", uri=True)
+    try:
+        assert check.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        assert check.execute(
+            "SELECT COUNT(*) FROM notification_cards").fetchone()[0] == n
+    finally:
+        check.close()
+    assert t_sweep < 30.0, f"sweep took {t_sweep:.3f}s (budget 30s, non-contended)"
+    assert t_snap < 30.0, f"snapshot_publish took {t_snap:.3f}s (budget 30s, non-contended)"
+
+
+# ---------- small contract checks — no wall-time budget, run everywhere --
+
+
+def test_sweep_contract_settled_cards(tmp_path, monkeypatch):
+    """A settled sweep scans every live card once, changing nothing."""
+    monkeypatch.setitem(sys.modules, "discord", _fake_discord())
+    led, _data = _mk_ledger(tmp_path)
+    n = 5
+    with led.db:
+        for i in range(n):
+            _seed_patient(led, 1 + i)
+            _seed_msg(led, 10_000 + i, 1 + i)
+    _seed_settled_cards(led, n)
+    out = notify_cards.sweep(led, CFG, limit=n)
+    assert out == {"scanned": n, "updated": 0, "republished": 0}
+    led.close()
+
+
+def test_sweep_contract_limit_and_rotation(tmp_path, monkeypatch):
+    """One pass scans at most `limit` cards; scanned cards rotate to the
+    tail of the queue so the next pass covers the rest."""
+    monkeypatch.setitem(sys.modules, "discord", _fake_discord())
+    led, _data = _mk_ledger(tmp_path)
+    n = 6
+    with led.db:
+        for i in range(n):
+            _seed_patient(led, 1 + i)
+            _seed_msg(led, 10_000 + i, 1 + i)
+    _seed_settled_cards(led, n)
+    first, second = NOW + 5, NOW + 10
+    out = notify_cards.sweep(led, CFG, limit=3, now=first)
+    assert out == {"scanned": 3, "updated": 0, "republished": 0}
+    covered = {r["card_id"] for r in led.db.execute(
+        "SELECT card_id FROM notification_cards WHERE updated_at=?", (first,))}
+    out = notify_cards.sweep(led, CFG, limit=3, now=second)
+    assert out == {"scanned": 3, "updated": 0, "republished": 0}
+    covered |= {r["card_id"] for r in led.db.execute(
+        "SELECT card_id FROM notification_cards WHERE updated_at=?", (second,))}
+    every = {r["card_id"] for r in led.db.execute(
+        "SELECT card_id FROM notification_cards")}
+    assert covered == every
+    led.close()
+
+
+def test_snapshot_contract_publishes_verified_copy(tmp_path, monkeypatch):
+    """publish_snapshot returns the published path only after a verified
+    copy lands; the copy opens read-only and passes quick_check."""
+    monkeypatch.setitem(sys.modules, "discord", _fake_discord())
+    led, data = _mk_ledger(tmp_path)
+    n = 4
+    with led.db:
+        for i in range(n):
+            _seed_patient(led, 1 + i)
+            _seed_msg(led, 10_000 + i, 1 + i)
+    _seed_settled_cards(led, n)
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    dest = _ledger.publish_snapshot(str(data / "ledger.db"), str(snap))
+    led.close()
+    assert dest == str(snap / "ledger-snapshot.db")
+    check = sqlite3.connect(f"file:{dest}?mode=ro", uri=True)
+    try:
+        assert check.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        assert check.execute(
+            "SELECT COUNT(*) FROM notification_cards").fetchone()[0] == n
+    finally:
+        check.close()

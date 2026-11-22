@@ -311,3 +311,18 @@ def test_local_gates_wait_for_the_serial_pytest_run(tmp_path):
     assert rows["lint-test"][1] == "実行不能" and "pytest-linux が実行されていない" in rows["lint-test"][-1]
     assert rows["macos"][1] == "実行不能" and "pytest-macos が実行されていない" in rows["macos"][-1]
     assert rows["scope"][1] == "pass" and rows["scope"][-1].startswith("判定のみ")
+
+
+def test_runner_runs_perf_serially_after_the_slices_and_propagates():
+    body = RUNNER.read_text().split("job_pytest_linux() {\n", 1)[1].split("\n}\n", 1)[0]
+    loop = body.index("for MCS_CI_SLICE")
+    perf_at = body.index("run_tests.sh tests/notify/test_perf_cards.py -m perf")
+    assert loop < perf_at
+    serial = body[perf_at:]
+    # shards never carry perf: the file runs exactly once, serially
+    assert "MCS_CI_SKIP_PERF=1" in body[loop:perf_at]
+    assert body.count("test_perf_cards.py") == 1
+    # the pytest status must reach the job result through the tee pipeline
+    assert "pipefail" in body[loop:]
+    assert serial.splitlines()[0].rstrip().endswith("|| failed=1")
+    assert 'return "$failed"' in serial
