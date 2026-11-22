@@ -105,7 +105,8 @@ def build_pin(rows, definition: str, cue_codes, scope: dict, snapshot: dict) -> 
         pinned.append(kept)
     header = {"schema": SCHEMA, "definition": definition,
               "baseline_version": BASELINE_VERSION, "target_version": TARGET_VERSION,
-              "scope": {key: scope.get(key) for key in ("since", "until", "as_of", "project_id")},
+              "scope": {key: scope.get(key) for key in ("since", "until", "as_of", "project_id")}
+              | ({"until_clamped": True} if scope.get("until_clamped") else {}),
               "snapshot": {key: snapshot.get(key) for key in ("generation_id", "generated_at")}}
     return {"header": header, "rows": pinned}
 
@@ -421,7 +422,10 @@ def _cohort_definition(audit_definition):
 def _pinned_scope(header: dict) -> dict:
     """Replay the pinned population window, so another scope never becomes new posts."""
     scope = header.get("scope")
-    if not isinstance(scope, dict) or set(scope) != {"since", "until", "as_of", "project_id"}:
+    if (not isinstance(scope, dict)
+            or set(scope) not in ({"since", "until", "as_of", "project_id"},
+                                  {"since", "until", "as_of", "project_id", "until_clamped"})
+            or ("until_clamped" in scope and scope["until_clamped"] is not True)):
         raise CohortError("pin_scope")
     for key in ("since", "until", "as_of"):
         if scope[key] is not None and (type(scope[key]) not in (int, float) or scope[key] != scope[key]):
