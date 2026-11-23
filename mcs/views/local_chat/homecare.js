@@ -221,9 +221,21 @@ async function showSheet(patientId) {
   }
   const parts = Object.entries(data.modules).filter(([name]) => hc.modules[name]?.sheet).map(([name, part]) => {const box = el("section", null, "detail-section"); hc.modules[name].sheet(box, part); return box;});
   const mcs = el("section", null, "detail-section"); mcs.append(el("h3", "MCS のやりとり"));
-  if (data.mcs.project_id) {const open = el("button", `${data.mcs.patient_name} のタイムラインを開く`, "text-button"); open.onclick = () => openMcs(data.mcs.project_id); mcs.append(open);}
-  else mcs.append(el("p", "MCS の患者と対応付けていないか、閲覧範囲の外です。"));
+  if (data.mcs.project_id) {
+    const open = el("button", `${data.mcs.patient_name} のタイムラインを開く`, "text-button"); open.onclick = () => openMcs(data.mcs.project_id);
+    const brief = el("div", null, "sheet-brief"); brief.append(el("p", "MCS の記録を読み込んでいます。", "state-note"));
+    mcs.append(open, brief); sheetBrief(brief, patientId, data.mcs);
+  } else mcs.append(el("p", "MCS の患者と対応付けていないか、閲覧範囲の外です。"));
   hcMain("訪問時の情報", back, facts, team, visitBox, ...parts, mcs);
+}
+async function sheetBrief(box, patientId, link) {
+  // The MCS views as of the published snapshot; 前回から変わったこと counts from the last visit that took place.
+  const data = await api("brief", {project: link.project_id, since: link.since}).catch(() => null);
+  if (hc.patient !== patientId || !box.isConnected) return;
+  if (!data) {box.replaceChildren(el("p", "MCS の記録を読み込めませんでした。タイムラインから確認してください。", "state-note")); return;}
+  box.replaceChildren(el("p", data.since ? "「前回から変わったこと」は最後に実施した訪問からの変化です。" : "実施済みの訪問がないため、「前回から変わったこと」は直近7日の変化です。", "state-note"));
+  // Posts open from the timeline: the sheet does not carry the chat's selected patient.
+  for (const section of data.sections) box.append(renderPanel({...section, items: section.items.map(item => ({...item, message_id: null}))}));
 }
 async function showDay(date) {
   hc.patient = null; closeDetail();

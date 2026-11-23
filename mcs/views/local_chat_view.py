@@ -5,8 +5,6 @@ from stamp_format import stamp_counts, thread_stamp_line
 from structured_view import structured_lines
 from patient_context_view import SECTION_LABELS
 from patient_context import extract_context
-from mcs_queries import JST
-from datetime import datetime
 import notify_views
 
 # The patient views the chat cards open, minus the Slack-only measurement page.
@@ -127,6 +125,19 @@ def _message(view, row):
     return result
 
 
+DRUG_FIELDS = ("code", "code_system", "name", "generic_name", "unit")
+
+
+def drugs(query):
+    """Products in the approved medicine dictionary for a prescription line, and why there may be none."""
+    from mcs_util import load_config
+    import drug_catalog
+
+    cfg = load_config()
+    items = drug_catalog.search(cfg, query, limit=20)
+    return {"status": drug_catalog.status(cfg), "items": [{key: item[key] for key in DRUG_FIELDS} for item in items]}
+
+
 def sections():
     return {"items": [{"key": key, "label": label} for key, label in PANEL_LABELS.items()]}
 
@@ -164,28 +175,18 @@ def panel(view, allowed, project, section, *, page=0, role="", message_id=None):
         "items": items}}
 
 
-def _signals(view, project):
-    import mcs_signals
-    from notify_render import signal_evidence, signal_label
+def brief(view, allowed, project, *, since=None):
+    """The MCS part of a visit sheet: the patient's visit-time views and open signals since the last visit."""
+    from mcs_util import load_config
+    import patient_brief
 
-    found = mcs_signals.current_open(view.db, project_id=project, limit=50)
-    items = []
-    for signal in found["items"]:
-        message_id, _message = signal_evidence(view.db, signal)
-        at = signal.get("detected_at")
-        items.append({"project_id": project, "group": signal_label(signal)[1:-1],
-                      "text": signal.get("note") or "", "message_id": message_id,
-                      "source": datetime.fromtimestamp(at, JST).strftime("%m/%d %H:%M 検出")
-                      if isinstance(at, (int, float)) else "検出時刻未取得"})
-    notes = []
-    # Without a completed run (or with unreadable states) an empty list is not proof that nothing is open.
-    unconfirmed = found["pipeline_last_run_at"] is None or bool(found["errors"])
-    if found["pipeline_last_run_at"] is None:
-        notes.append("すべての種類の判定が終わったかを確認できません。表示は判定済みの分だけです。")
-    if found["truncated"]:
-        notes.append(f"新しい順に{found['returned']}件まで表示しています（全{found['total']}件）。")
-    if found["errors"]:
-        notes.append("一部のシグナルの状態を読み取れませんでした。")
-    return {"title": "未解消のシグナル", "head": [], "items": items, "notes": notes,
-            "empty": "判定済みの範囲に未解消のシグナルは見つかりませんでした。" if unconfirmed
-            else "未解消のシグナルはありません。"}
+    require_project(project, allowed)
+    result = patient_brief.visit_brief(view, project, cfg=load_config(), since=since)
+    return {"snapshot": result["snapshot"], "since": result["since"],
+            "sections": [*result["sections"], result["signals"]]}
+
+
+def _signals(view, project):
+    import patient_brief
+
+    return patient_brief.open_signals(view.db, project)

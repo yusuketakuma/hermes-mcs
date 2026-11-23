@@ -114,13 +114,16 @@ def sheet(db, patient_id, *, registry, mcs_patients, today=None):
     patient = records.get(db, "patient", patient_id)
     project = links.project_of(db, patient_id)
     scope = {row["project_id"]: row for row in mcs_patients()}
+    recent = visits.done(db, patient_id)
+    # 前回から変わったこと on the sheet means since the last visit that took place.
+    since = visits.started_at(recent[0]) if recent else None
     return {"patient": patient, "team": team.current(db, patient_id),
             "next_visits": visits.upcoming(db, patient_id, today or date.today().isoformat()),
-            "recent_visits": visits.done(db, patient_id),
+            "recent_visits": recent,
             "modules": {module.name: module.api.sheet(db, patient_id)
                         for module in registry.modules if module.api is not None},
-            "mcs": {"project_id": project, "patient_name": scope[project]["patient_name"]}
-            if project in scope else {"project_id": None, "patient_name": None}}
+            "mcs": {"project_id": project, "patient_name": scope[project]["patient_name"], "since": since}
+            if project in scope else {"project_id": None, "patient_name": None, "since": None}}
 
 
 def error_body(exc):

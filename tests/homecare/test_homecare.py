@@ -501,10 +501,11 @@ def test_visit_sheet_and_module_routes_go_through_the_core_api(db):
     assert [item["visit_date"] for item in sheet["next_visits"]] == ["2026-11-30", "2027-01-02", "2027-01-03"]
     assert sheet["recent_visits"][0]["visit_id"] == done["record"]["visit_id"]
     assert sheet["modules"]["pharmacy"]["prescriptions"][0]["lines"][0]["drug_name"] == "合成錠A"
-    assert sheet["mcs"] == {"project_id": 11, "patient_name": "合成 花子"}
+    # 2026-11-01 with no start time: from the start of that day in Japan.
+    assert sheet["mcs"] == {"project_id": 11, "patient_name": "合成 花子", "since": 1793458800}
     outside = homecare_api.read(db, "sheet", {"patient": str(row["patient_id"])}, registry=REGISTRY,
                                 mcs_patients=lambda: [])
-    assert outside["mcs"] == {"project_id": None, "patient_name": None}
+    assert outside["mcs"] == {"project_id": None, "patient_name": None, "since": None}
     listed = homecare_api.read(db, "pharmacy/prescriptions", {"patient": str(row["patient_id"])},
                                registry=REGISTRY, mcs_patients=scope)
     assert len(listed["items"]) == 1 and listed["more"] is False

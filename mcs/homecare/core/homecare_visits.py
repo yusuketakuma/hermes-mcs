@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import re
 import time
+from datetime import datetime, timedelta, timezone
 
 from homecare_records import InvalidFields, calendar_date, get, require_actor, text_field
 from homecare_store import Conflict, audit, transaction
 
 FIELDS = ("patient_id", "staff_id", "kind", "visit_date", "start_time", "status", "note")
 STATUSES = ("planned", "done", "cancelled")
+# Visit dates and times are wall-clock times at the site, which is in Japan.
+SITE_TIME = timezone(timedelta(hours=9))
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
@@ -111,6 +114,12 @@ def done(db, patient_id, *, limit=3):
     return [dict(row) for row in db.execute(
         _LISTED + "AND v.status='done' ORDER BY v.visit_date DESC, v.start_time IS NULL, v.start_time DESC, "
         "v.visit_id DESC LIMIT ?", (patient_id, limit))]
+
+
+def started_at(visit) -> int:
+    """When a visit began, as epoch seconds; a visit without a start time counts from the start of its day."""
+    return int(datetime.fromisoformat(f"{visit['visit_date']}T{visit['start_time'] or '00:00'}").replace(
+        tzinfo=SITE_TIME).timestamp())
 
 
 def for_day(db, visit_date):
