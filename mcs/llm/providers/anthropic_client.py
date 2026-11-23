@@ -133,6 +133,44 @@ VALID_MODEL_EFFORTS = frozenset({ORIGINAL_CONTRACT, *PROFILE_DEFINITIONS.values(
 # initial settings without measurements, and the unit deadline still caps every attempt.
 ATTEMPT_TIMEOUTS = MappingProxyType({
     ORIGINAL_CONTRACT: 120.0, (MODEL, "medium"): 300.0, (SONNET_MODEL, "high"): 600.0})
+DISPLAY_NAME = "Anthropic"
+# The request field that carries the output limit.
+MAX_TOKENS_FIELD = "max_tokens"
+# Models a configuration may name as its default; Sonnet is reached only through a profile.
+CONFIG_MODELS = frozenset({MODEL})
+# The input rate an estimate's upper bound uses.
+HIGH_INPUT_PRICE = "long_input"
+
+
+def original_contract_valid(model, effort):
+    """The original contract carries no effort; its model is checked by the caller
+    against the price definition (rotations included). A model that only a profile
+    may select (Sonnet) never stands without its profile."""
+    profile_only = {selected for selected, _ in PROFILE_DEFINITIONS.values()} - {ORIGINAL_CONTRACT[0]}
+    return effort is None and model not in profile_only
+
+
+def original_selection_valid(model, max_tokens, *, default_model, purpose_limits):
+    """A selection without a profile sends the current default model."""
+    return model == default_model
+
+
+def select_profile(purpose, chosen, configured_model):
+    """(profile, model, effort) for ``purpose``: the chosen profile, else the owner's default."""
+    profile = chosen.get(purpose, DEFAULT_PROFILES[purpose])
+    return (profile, *PROFILE_DEFINITIONS[profile]) if profile in PROFILE_DEFINITIONS else None
+
+
+def legacy_request_effort(previous, current_body):
+    """None: no older Anthropic request shape needs proving, as the original contract never changed on the wire."""
+    return None
+
+
+def request_contract_error(body, selection):
+    """The refusal code when ``body`` does not carry the selection's effort, else None."""
+    if selection is not None and body.get("output_config") != {"effort": selection["effort"] or "low"}:
+        return "cloud_profile_invalid"
+    return None
 
 
 def _haiku_snapshot(price_version, checked_on, valid_until):

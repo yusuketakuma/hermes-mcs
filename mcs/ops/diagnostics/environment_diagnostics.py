@@ -111,16 +111,17 @@ _KEY_REASONS = {
 def cloud_setting_warnings(cfg: dict, root) -> list[str]:
     """Explain, without values, why an external-AI key or setting keeps sending off or stopped."""
     import cloud_policy
+    import provider_registry
     out = []
-    for key, label in ((cloud_policy.anthropic_client.KEY_ENV, "Anthropic"),
-                       (cloud_policy.openai_client.KEY_ENV, "OpenAI"), ("TYPESAFE_API_KEY", "Jev")):
+    for key, label in (*((module.KEY_ENV, module.DISPLAY_NAME) for module in provider_registry.PROVIDER_MODULES.values()),
+                       ("TYPESAFE_API_KEY", "Jev")):
         reason = mcs_util.private_env_problem(key, root)
         if reason in _KEY_REASONS:   # present but rejected; plain absence is reported elsewhere
             out.append(f"{key}（{label}）を使えません: {_KEY_REASONS[reason]}。"
                        f"このキーは使われず、{label}への送信は行いません。エラーコード: {reason}")
     cloud, errors, held = (cloud_policy.resolve_selection(cfg, root) if cfg
                            else (*cloud_policy.cloud_config({}), None))
-    provider = {"anthropic": "Anthropic", "openai": "OpenAI"}.get(cloud.get("provider"), "外部AI")
+    provider = provider_registry.display_name(cloud.get("provider"), "外部AI")
     import external_transfer
     import semantic_policy
     if held:

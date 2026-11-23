@@ -251,8 +251,9 @@ def staged_rows(db, pid, source_key, repair_input_key, *, source_sig, binding, s
                 if reservation.get('profile') is not None:
                     raise _invalid()
                 effort = reservation.get('effort')
-                if 'effort' not in reservation and provider.get('backend') == 'openai':
-                    effort = 'low'
+                if 'effort' not in reservation:
+                    import provider_registry
+                    effort = provider_registry.original_effort(provider.get('backend'))
                 try:
                     actual = cloud_inference.cloud_provider_contract(selection={'provider':provider.get('backend'),
                         'model':reservation['model'], 'effort':effort})

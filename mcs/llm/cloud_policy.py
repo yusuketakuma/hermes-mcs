@@ -18,7 +18,7 @@ import anthropic_client
 import cloud_client
 from anthropic_client import AnthropicError, MODEL
 from anthropic_client import MAX_TOKENS as MAX_TOKENS, validate_usage as validate_usage
-import openai_client
+import openai_client  # noqa: F401  existing callers read cloud_policy.openai_client
 import provider_registry
 
 from cloud_usage_accounting import (
@@ -64,6 +64,7 @@ from cloud_usage_accounting import (
     _receipt_binding as _receipt_binding,
     _reserve_valid as _reserve_valid,
     PROFILE_MAX_TOKENS as PROFILE_MAX_TOKENS,
+    PURPOSE_MAX_TOKENS as PURPOSE_MAX_TOKENS,
     profile_contract_valid as profile_contract_valid,
     _stored_reservation as _stored_reservation,
     _matching_rows_many as _matching_rows_many,
@@ -114,7 +115,7 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
     """Normalize the optional cloud block, failing closed on every config error."""
     out = {"mode": "off", "routes": list(ROUTES), "project_ids": [],
            "exclude_project_ids": [], "model": MODEL, "daily_request_budget": None,
-           "provider": "auto", "provider_order": ["anthropic", "openai"], "provider_budgets": {},
+           "provider": "auto", "provider_order": list(provider_registry.CLOUD_PROVIDERS), "provider_budgets": {},
            "max_concurrency": 4, "daily_cost_limit_usd": DEFAULT_DAILY_COST_LIMIT_USD,
            "monthly_cost_limit_usd": DEFAULT_MONTHLY_COST_LIMIT_USD,
            "usd_jpy": None, "until": None,
@@ -150,7 +151,7 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
     provider = block.get("provider", "auto")
     if provider not in (*PROVIDERS, "auto"):
         errors.append("config: cloud_llm_provider_invalid")
-        provider = "anthropic"
+        provider = provider_registry.DEFAULT_PROVIDER
     else:
         out["provider"] = provider
     order = block.get("provider_order", out["provider_order"])
@@ -162,7 +163,7 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
     out["model"] = PROVIDERS.get(provider, PROVIDERS[out["provider_order"][0]])
     if "model" in block:
         candidate = block["model"]
-        allowed = {PROVIDERS["anthropic"], *openai_client.CURRENT_PRICE_VERSIONS}
+        allowed = {model for module in provider_registry.PROVIDER_MODULES.values() for model in module.CONFIG_MODELS}
         try:
             owner = _price_definition(candidate)["provider"] if candidate in allowed else None
         except (AnthropicError, TypeError):
@@ -171,12 +172,11 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
             errors.append("config: cloud_llm_model_invalid")
         else:
             out["model"] = candidate
+    legacy = provider_registry.LEGACY_PROFILES_PROVIDER
     if "profiles" in block:
         profiles = block["profiles"]
-        if (not isinstance(profiles, dict) or profiles.keys() - openai_client.PROFILE_PURPOSES
-                or any(not isinstance(role, str) or not isinstance(value, str)
-                       or value not in openai_client.PROFILE_DEFINITIONS for role, value in profiles.items())
-                or provider == "anthropic"):
+        if (not _profile_map_valid(provider_registry.PROVIDER_MODULES[legacy], profiles)
+                or provider not in (legacy, "auto")):
             errors.append("config: cloud_llm_profiles_invalid")
         else:
             out["profiles"] = dict(profiles)
@@ -185,8 +185,8 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
         if (not isinstance(value, dict) or value.keys() - provider_registry.PROVIDER_MODULES.keys()
                 or any(not _profile_map_valid(provider_registry.PROVIDER_MODULES[name], mapping)
                        for name, mapping in value.items())
-                or "openai" in value and "profiles" in block and value["openai"] != block["profiles"]):
-            # The old openai-only "profiles" may repeat provider_profiles.openai, never contradict it.
+                or legacy in value and "profiles" in block and value[legacy] != block["profiles"]):
+            # The older "profiles" may repeat its provider's provider_profiles entry, never contradict it.
             errors.append("config: cloud_llm_profiles_invalid")
         else:
             out["provider_profiles"] = {name: dict(mapping) for name, mapping in value.items()}
@@ -322,13 +322,26 @@ def scope_generation(cfg):
     return payload_hash({k: c[k] for k in ("mode", "routes", "project_ids", "exclude_project_ids", "model", "provider", "provider_order")})
 
 
+# The original contract's output limit, used when a selection carries none.
+ORIGINAL_MAX_TOKENS = 1600
+
+
+def selection_max_tokens(selection):
+    """Return the selection's output limit, or the original contract's when it has none."""
+    return selection["max_tokens"] if selection["max_tokens"] is not None else ORIGINAL_MAX_TOKENS
+
+
 def api_key(root=None):
     """Read only this MCS installation's dotenv, never process or Hermes keys."""
     return private_env_value(anthropic_client.KEY_ENV, root)
 
 
 def provider_key(provider, root=None):
-    return api_key(root) if provider == "anthropic" else private_env_value(openai_client.KEY_ENV, root) if provider == "openai" else None
+    module = provider_registry.provider_module(provider)
+    if module is None:
+        return None
+    # api_key stays the default provider's reader; existing callers and tests replace it.
+    return api_key(root) if provider == provider_registry.DEFAULT_PROVIDER else private_env_value(module.KEY_ENV, root)
 
 
 def resolve_settings(cfg, root=None, *, available_providers=None):
@@ -433,7 +446,7 @@ def resolve_profile(cfg, *, route, purpose, root=None, ledger=None, ordered=Fals
             continue
         if first is None:
             first = selection
-        limit = selection["max_tokens"] if selection["max_tokens"] is not None else 1600
+        limit = selection_max_tokens(selection)
         reason = ledger is not None and (
             global_block_reason(ledger, model=selection["model"])
             or budget_block_reason(ledger, settings, max_tokens=limit, selection=selection))
@@ -463,36 +476,20 @@ def profile_for_settings(cfg, settings, *, route, purpose, provider=None):
     by_provider = block.get("provider_profiles", {})
     if not isinstance(by_provider, dict):
         return None, ["config: cloud_llm_profiles_invalid"]
-    limit = {"backlog": 8192, "patient_context": 16384, "quality_repair": 32768}[purpose]
-    if provider == "anthropic":
-        # Purpose profiles; an unset provider or purpose takes the owner's default (same layout as OpenAI).
-        chosen = by_provider.get("anthropic", {})
-        if not _profile_map_valid(anthropic_client, chosen):
+    module = provider_registry.provider_module(provider)
+    if module is None:
+        return None, ["config: cloud_llm_provider_invalid"]
+    # An unset provider or purpose takes the provider's own default.
+    chosen = by_provider.get(provider, {})
+    if provider == provider_registry.LEGACY_PROFILES_PROVIDER and "profiles" in block:
+        if provider in by_provider and by_provider[provider] != block["profiles"]:
             return None, ["config: cloud_llm_profiles_invalid"]
-        profile = chosen.get(purpose, anthropic_client.DEFAULT_PROFILES[purpose])
-        model, effort = anthropic_client.PROFILE_DEFINITIONS[profile]
-        return MappingProxyType({"provider": provider, "model": model, "effort": effort,
-            "max_tokens": limit, "price_version": _price_definition(model)["price_version"],
-            "profile": profile}), []
-    if provider != "openai":
-        # The original contract (unchanged model and effort) keeps the
-        # purpose's output limit; a missing profiles block is not opt-in.
-        return MappingProxyType({"provider": provider, "model": settings["model"], "effort": None,
-            "max_tokens": limit, "price_version": _price_definition(settings["model"])["price_version"],
-            "profile": None}), []
-    profiles = block.get("profiles", by_provider.get("openai", {}))
-    if not isinstance(profiles, dict) or "openai" in by_provider and by_provider["openai"] != profiles:
+        chosen = block["profiles"]
+    selected = module.select_profile(purpose, chosen, block.get("model")) if _profile_map_valid(module, chosen) else None
+    if selected is None:
         return None, ["config: cloud_llm_profiles_invalid"]
-    profile = profiles.get(purpose)
-    if profile is None and block.get("model") == openai_client.MODEL:
-        model, effort = openai_client.MODEL, "low"
-    else:
-        profile = profile if profile is not None else (
-            "sol-medium" if block.get("model") == openai_client.SOL_MODEL
-            else openai_client.DEFAULT_PROFILES[purpose])
-        if profile not in openai_client.PROFILE_DEFINITIONS:
-            return None, ["config: cloud_llm_profiles_invalid"]
-        model, effort = openai_client.PROFILE_DEFINITIONS[profile]
+    profile, model, effort = selected
+    limit = PURPOSE_MAX_TOKENS[purpose]
     return MappingProxyType({"provider": provider, "model": model, "effort": effort,
         "max_tokens": limit, "price_version": _price_definition(model)["price_version"],
         "profile": profile}), []
@@ -531,8 +528,7 @@ def selected_key(root=None, cfg=None):
 def selected_key_problem(root, cfg):
     """None when the selected provider's key is usable, else the fixed reason it is not."""
     settings, _ = resolve_settings(cfg, root)
-    env = anthropic_client.KEY_ENV if settings["provider"] == "anthropic" else openai_client.KEY_ENV
-    return private_env_problem(env, root)
+    return private_env_problem(provider_registry.PROVIDER_MODULES[settings["provider"]].KEY_ENV, root)
 
 
 # The send-block codes refusal_code names more precisely; every other code is already final.
@@ -837,21 +833,11 @@ def _semantic_financial_identity(meta):
     return target, source, phase
 
 
-def _legacy_luna_low_proven(previous, current_body):
-    """Prove the old low-effort Responses envelope without persisting the prompt."""
-    if (previous.get('model') != openai_client.MODEL or 'effort' in previous or 'profile' in previous
-            or not isinstance(current_body, dict)
-            or set(current_body) != {'model', 'instructions', 'input', 'max_output_tokens', 'reasoning',
-                                     'store', 'service_tier', 'prompt_cache_options', 'tools'}
-            or current_body.get('model') not in openai_client.CURRENT_PRICE_VERSIONS
-            or current_body.get('instructions') != openai_client.SYSTEM
-            or not isinstance(current_body.get('input'), str)
-            or current_body.get('store') is not False or current_body.get('service_tier') != 'default'
-            or current_body.get('prompt_cache_options') != {'ttl': '30m'} or current_body.get('tools') != []):
-        return False
-    old_body = {**current_body, 'model': openai_client.MODEL,
-                'max_output_tokens': previous['max_tokens'], 'reasoning': {'effort': 'low'}}
-    return payload_hash(old_body) == previous.get('request_fp')
+def _legacy_request_effort(previous, current_body):
+    """The effort an older record without one was proven to have sent, else None.
+    The prompt is not persisted; each provider knows its own old request shape."""
+    return next((effort for module in provider_registry.PROVIDER_MODULES.values()
+                 if (effort := module.legacy_request_effort(previous, current_body)) is not None), None)
 
 
 def _selection_differs(previous, candidate, current_body):
@@ -861,8 +847,8 @@ def _selection_differs(previous, candidate, current_body):
     if not isinstance(new_effort, str):
         return False
     old_effort = previous.get('effort')
-    if old_effort is None and _legacy_luna_low_proven(previous, current_body):
-        old_effort = 'low'
+    if old_effort is None:
+        old_effort = _legacy_request_effort(previous, current_body)
     return isinstance(old_effort, str) and old_effort != new_effort
 
 
@@ -1085,7 +1071,7 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                     continue
                 prompt_verified = True
                 guard_match = 'logical_equal'
-            elif _legacy_luna_low_proven(previous, current_body):
+            elif _legacy_request_effort(previous, current_body) is not None:
                 prompt_verified = True
                 guard_match = 'legacy_low_verified'
             else:
@@ -1754,14 +1740,16 @@ def _selection_model(settings, selection, max_tokens):
     if (definition["provider"] != settings["provider"] or selection["price_version"] != definition["price_version"]
             or selection["max_tokens"] is not None and selection["max_tokens"] != max_tokens):
         raise AnthropicError("contract_error", "cloud_profile_invalid")
+    module = provider_registry.PROVIDER_MODULES[settings["provider"]]
     if (not profile_contract_valid(settings["provider"], model, effort, profile, selection["max_tokens"])
-            or settings["provider"] == "openai" and selection["max_tokens"] not in PROFILE_MAX_TOKENS
-            or settings["provider"] == "anthropic" and profile is None and model != PROVIDERS["anthropic"]):
+            or profile is None and not module.original_selection_valid(
+                model, selection["max_tokens"], default_model=PROVIDERS[settings["provider"]],
+                purpose_limits=PROFILE_MAX_TOKENS)):
         raise AnthropicError("contract_error", "cloud_profile_invalid")
     return model
 
 
-def budget_block_reason(ledger, cfg, *, max_tokens=1600, input_bound=INPUT_RESERVATION_MARGIN, selection=None):
+def budget_block_reason(ledger, cfg, *, max_tokens=ORIGINAL_MAX_TOKENS, input_bound=INPUT_RESERVATION_MARGIN, selection=None):
     """Read the exact current JST reservation totals without spending or changing state.
     ``input_bound`` is the next request's reserved input (the margin alone for a
     pre-check without a request)."""
@@ -1868,18 +1856,16 @@ def _request_identity(c, body, *, route, project_id, unit_key, message_id, owner
     # A reservation and a pre-send history check must identify the same input.
     if not isinstance(body, dict):
         raise AnthropicError("contract_error", "model_not_allowed")
-    body_tokens = body.get("max_output_tokens") if c["provider"] == "openai" else body.get("max_tokens")
+    # Unresolved settings ("auto") reserve under the default provider's request shape.
+    module = provider_registry.PROVIDER_MODULES.get(c["provider"],
+                                                    provider_registry.PROVIDER_MODULES[provider_registry.DEFAULT_PROVIDER])
+    body_tokens = body.get(module.MAX_TOKENS_FIELD)
     model = _selection_model(c, selection, body_tokens)
     if body.get("model") != model:
         raise AnthropicError("contract_error", "model_not_allowed")
-    if selection is not None and c["provider"] == "openai" and body.get("reasoning") != {"effort": selection["effort"]}:
-        raise AnthropicError("contract_error", "cloud_profile_invalid")
-    if (selection is not None and c["provider"] == "anthropic"
-            and body.get("output_config") != {"effort": selection["effort"] or "low"}):
-        raise AnthropicError("contract_error", "cloud_profile_invalid")
-    if c["provider"] == "openai" and (body.get("service_tier") != "default"
-            or body.get("store") is not False or body.get("prompt_cache_options") != {"ttl": "30m"}):
-        raise AnthropicError("contract_error", "openai_price_contract_invalid")
+    refusal = module.request_contract_error(body, selection)
+    if refusal is not None:
+        raise AnthropicError("contract_error", refusal)
     meta = {"route": route, "project_id": project_id, "message_id": message_id,
             "unit_key": str(unit_key), "model": model, "max_tokens": body_tokens,
             "request_fp": payload_hash(body), "logical_request_fp": _logical_request_fp(body),

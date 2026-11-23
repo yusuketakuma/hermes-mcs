@@ -1377,16 +1377,18 @@ def cmd_doctor(args) -> int:
             print("  復元後の保留: 状態を確認できません")
         import cloud_policy
         import external_transfer
+        import provider_registry
         for name, provider in providers.items():
             print(f"  {name}: mode={provider['mode']}、キー={'登録済み' if provider['key_present'] else '未登録'}、"
                   f"状態={provider['status']}")
             if provider.get("block_reason") == external_transfer.HOLD_CODE:
-                # the "anthropic" entry describes whichever cloud provider is selected
-                held = "Jev" if name == "jev" else {"anthropic": "Anthropic", "openai": "OpenAI"}.get(
+                # the cloud entry is named after the selected provider
+                held = "Jev" if name == "jev" else provider_registry.display_name(
                     cloud_policy.resolve_selection(cfg, HOME)[2], "外部AI")
                 print("    " + external_transfer.hold_message(held, external_transfer.status(HOME)))
             if provider.get("block_reason") == "no_api_key":
-                key_name = "MCS_OPENAI_API_KEY" if name == "openai" else "MCS_ANTHROPIC_API_KEY"
+                module = provider_registry.provider_module(name)
+                key_name = module.KEY_ENV if module is not None else "TYPESAFE_API_KEY"
                 print(f"    鍵が未登録のためローカルで処理中です。MCSの.envに{key_name}を権限0600で登録してください。")
             if provider.get("price_recheck_due") and provider["key_present"] and provider["mode"] != "off":
                 if provider.get("price_valid"):

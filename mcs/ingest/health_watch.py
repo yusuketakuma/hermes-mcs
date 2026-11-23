@@ -755,10 +755,11 @@ def _cloud_selection(cfg, root):
     if not isinstance(cfg, dict) or not cfg:
         return None
     import cloud_policy
+    import provider_registry
     try:
         settings, errors = cloud_policy.resolve_settings(cfg, root)
         provider = settings.get("provider")
-        if errors or settings.get("mode") not in ("on", "shadow") or provider not in ("anthropic", "openai"):
+        if errors or settings.get("mode") not in ("on", "shadow") or provider not in provider_registry.CLOUD_PROVIDERS:
             return None
         return {"provider": provider, "key_present": bool(cloud_policy.provider_key(provider, root))}
     except (OSError, ValueError, TypeError, KeyError):
@@ -1675,10 +1676,10 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             if base == "stage_errors":
                 guide = guidance(report.get("collection_diagnostics"))
         if base in _CLOUD_REASON_JA:
+            import provider_registry
             selection = report.get("cloud_selection")
-            if (isinstance(selection, dict) and selection.get("provider") in ("anthropic", "openai")
-                    and type(selection.get("key_present")) is bool):
-                provider = {"anthropic": "Anthropic", "openai": "OpenAI"}[selection["provider"]]
+            provider = provider_registry.display_name(selection.get("provider")) if isinstance(selection, dict) else None
+            if provider is not None and type(selection.get("key_present")) is bool:
                 key_status = "登録あり" if selection["key_present"] else "未登録"
                 action += f"（現在の利用先: {provider}、APIキー: {key_status}）"
         if guide:

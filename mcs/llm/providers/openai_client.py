@@ -44,6 +44,61 @@ VALID_MODEL_EFFORTS = frozenset({ORIGINAL_CONTRACT, *PROFILE_DEFINITIONS.values(
 ATTEMPT_TIMEOUTS = MappingProxyType({
     ORIGINAL_CONTRACT: 120.0, (MODEL, "medium"): 300.0, (SOL_MODEL, "medium"): 300.0,
     (SOL_MODEL, "high"): 600.0})
+DISPLAY_NAME = "OpenAI"
+# The request field that carries the output limit.
+MAX_TOKENS_FIELD = "max_output_tokens"
+# Models a configuration may name as its default.
+CONFIG_MODELS = frozenset(CURRENT_PRICE_VERSIONS)
+# The input rate an estimate's upper bound uses.
+HIGH_INPUT_PRICE = "reservation_input"
+
+
+def original_contract_valid(model, effort):
+    """The original contract is Luna at "low"."""
+    return (model, effort) == ORIGINAL_CONTRACT
+
+
+def original_selection_valid(model, max_tokens, *, default_model, purpose_limits):
+    """Every selection keeps its purpose's output limit, with or without a profile."""
+    return max_tokens in purpose_limits
+
+
+def select_profile(purpose, chosen, configured_model):
+    """(profile, model, effort) for ``purpose``. Without a chosen profile, a configured
+    Luna keeps the original contract and a configured Sol takes "sol-medium"."""
+    profile = chosen.get(purpose)
+    if profile is None and configured_model == MODEL:
+        return (None, *ORIGINAL_CONTRACT)
+    if profile is None:
+        profile = "sol-medium" if configured_model == SOL_MODEL else DEFAULT_PROFILES[purpose]
+    return (profile, *PROFILE_DEFINITIONS[profile]) if profile in PROFILE_DEFINITIONS else None
+
+
+def legacy_request_effort(previous, current_body):
+    """"low" when the record is proven to be the old low-effort Responses envelope, else None."""
+    if (previous.get('model') != MODEL or 'effort' in previous or 'profile' in previous
+            or not isinstance(current_body, dict)
+            or set(current_body) != {'model', 'instructions', 'input', 'max_output_tokens', 'reasoning',
+                                     'store', 'service_tier', 'prompt_cache_options', 'tools'}
+            or current_body.get('model') not in CURRENT_PRICE_VERSIONS
+            or current_body.get('instructions') != SYSTEM
+            or not isinstance(current_body.get('input'), str)
+            or current_body.get('store') is not False or current_body.get('service_tier') != 'default'
+            or current_body.get('prompt_cache_options') != {'ttl': '30m'} or current_body.get('tools') != []):
+        return None
+    old_body = {**current_body, 'model': MODEL,
+                'max_output_tokens': previous['max_tokens'], 'reasoning': {'effort': 'low'}}
+    return 'low' if payload_hash(old_body) == previous.get('request_fp') else None
+
+
+def request_contract_error(body, selection):
+    """The refusal code when ``body`` breaks the priced Responses contract, else None."""
+    if selection is not None and body.get("reasoning") != {"effort": selection["effort"]}:
+        return "cloud_profile_invalid"
+    if (body.get("service_tier") != "default" or body.get("store") is not False
+            or body.get("prompt_cache_options") != {"ttl": "30m"}):
+        return "openai_price_contract_invalid"
+    return None
 QUOTA_ERROR_CODES = frozenset({"insufficient_quota", "credit_balance_exhausted",
                                "organization_spend_limit_exceeded", "project_spend_limit_exceeded",
                                "organization_usage_limit_exceeded"})

@@ -5,11 +5,13 @@ import math
 import sqlite3
 
 import mcs_util
+import provider_registry
 from mcs_queries import FACT_KINDS_SQL, current_fact_pred
 from mcs_util import payload_hash, strict_json
 
-PROVIDERS = ("anthropic", "openai", "jev", "local")
-PROVIDER_NAMES = {"anthropic": "Anthropic", "openai": "OpenAI", "jev": "Jev", "local": "💻"}
+PROVIDERS = (*provider_registry.CLOUD_PROVIDERS, "jev", "local")
+PROVIDER_NAMES = {**{name: provider_registry.display_name(name) for name in provider_registry.CLOUD_PROVIDERS},
+                  "jev": "Jev", "local": "💻"}
 COMPACT_MARKS = {"done": "✓", "partial": "◐", "used": "●", "pending": "…", "failed": "!",
                  "incomplete": "…", "attention": "!", "unverified": "?"}
 COMPACT_STATUS_LABELS = {"解析未完了・要確認": "! 要確認", "状況不明": "? 状況未取得",
@@ -22,10 +24,9 @@ STATE_LABELS = {"done": "実行済み", "partial": "一部実行・一部省略"
 def visible_providers(root=None):
     """Return services whose private API keys are usable, plus Jev and local."""
     result = []
-    for provider, key in (("anthropic", "MCS_ANTHROPIC_API_KEY"),
-                          ("openai", "MCS_OPENAI_API_KEY")):
+    for provider, module in provider_registry.PROVIDER_MODULES.items():
         try:
-            if mcs_util.private_env_problem(key, root) is None:
+            if mcs_util.private_env_problem(module.KEY_ENV, root) is None:
                 result.append(provider)
         except Exception:
             pass
@@ -131,7 +132,7 @@ def cloud_followup(db, project_id, message_id, cfg):
     if settings["mode"] != "on" or not cloud_policy.eligible(settings, "reextract", project_id):
         return None
     provider = settings["provider"]
-    if provider not in ("anthropic", "openai"):
+    if provider not in provider_registry.CLOUD_PROVIDERS:
         return None
     try:
         row = db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=?",
@@ -249,7 +250,7 @@ def provider_states(db, project_id, message_id, cfg=None, *, bundle_cache=None, 
                 states["jev"] = proof["jev"]
         providers = proof.get("providers")
         if (not isinstance(providers, list)
-                or any(not isinstance(p, str) or p not in ("local", "anthropic", "openai") for p in providers)
+                or any(not isinstance(p, str) or p not in provider_registry.INFERENCE_PROVIDERS for p in providers)
                 or len(set(providers)) != len(providers) or (proof["complete"] and not providers)):
             if row["kind"] != "extract_llm":
                 states = dict.fromkeys(PROVIDERS, "unknown")
@@ -264,7 +265,7 @@ def provider_states(db, project_id, message_id, cfg=None, *, bundle_cache=None, 
                         or (providers[0] != "local" and
                             (route != "cloud" or meta.get("backend") != providers[0]))):
                     return result()
-            for provider in ("anthropic", "openai", "local"):
+            for provider in (*provider_registry.CLOUD_PROVIDERS, "local"):
                 # The adopted result does not prove that another provider
                 # was never attempted before a fallback or earlier stage.
                 states[provider] = "done" if provider in providers else "unknown"
