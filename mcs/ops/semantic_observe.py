@@ -385,10 +385,11 @@ def _jev_effect(c, days: int = 14, *, now=None) -> dict:
         return {str(key): n for key, n in c.execute(sql, (start,)).fetchall()}
 
     def latest(kind, where="1"):
-        # each message's newest record, counted when it falls in the window
-        return ("SELECT content FROM (SELECT content, created_at, ROW_NUMBER() OVER"
-                " (PARTITION BY message_id ORDER BY artifact_id DESC) AS rn FROM artifacts"
-                f" WHERE kind='{kind}' AND {where}) WHERE rn=1 AND created_at>=? AND json_valid(content)")
+        # each message's newest record in the window; "+message_id" keeps the
+        # planner on the kind+created_at index instead of scanning all history
+        return ("SELECT a.content FROM artifacts a JOIN (SELECT MAX(artifact_id) AS id"
+                f" FROM artifacts WHERE kind='{kind}' AND created_at>=? AND {where}"
+                " GROUP BY +message_id) n ON n.id=a.artifact_id WHERE json_valid(a.content)")
 
     assess = latest("semantic_assess",  # medication-detail rows carry a fact_id
                     "json_extract(CASE WHEN json_valid(meta) THEN meta END,'$.fact_id') IS NULL")
