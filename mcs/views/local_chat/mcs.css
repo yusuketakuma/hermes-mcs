@@ -5,7 +5,7 @@
 .patient .patient-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .patient .patient-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .patient .patient-top .chip { flex-shrink: 0; line-height: 1.5; }
-.patient .patient-sub { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 1px; }
+.patient .patient-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; min-width: 0; margin-top: 1px; white-space: normal; }
 .patient .patient-sub .chip { flex-shrink: 0; line-height: 1.5; }
 .patient .patient-disease { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .patient .count { min-width: 22px; padding: 0 6px; border-radius: 999px; background: var(--side-bg-3); text-align: center; opacity: 1; color: var(--side-muted); }
@@ -101,6 +101,7 @@
 .search-results .empty { padding: 8px 0; text-align: left; }
 .sender-matches { margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--line); }
 .sender-matches h3 { margin: 0 0 6px; font-size: var(--fs-sm); }
+.search-results .search-earlier { padding-left: 10px; }
 .registered .cards { margin-top: 8px; }
 .table-wrap { overflow-x: auto; }
 .registered .rows td, .registered .rows th { padding: 4px 8px; font-size: var(--fs-sm); }

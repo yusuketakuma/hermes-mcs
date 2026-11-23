@@ -425,6 +425,32 @@ async function checkMcsData() {
   sandbox.api = async () => {throw new Error("x");};
   await run("loadCounts()");
   assert.equal(texts(box.children), "未解消シグナル 取得できません|返答確認 取得できません");
+  // Reply checks on the list row: not_computed is 未集計, never 0; partial is 判定中.
+  const reply = replies => run("replyBadge")(replies)?.textContent ?? null;
+  assert.equal(reply({state: "observed", requests: 3, not_found: 0, unknown: 0}), null);
+  assert.equal(reply({state: "observed", requests: 3, not_found: 1, unknown: 1}), "返答確認 2");
+  assert.equal(reply({state: "partial", requests: 1, not_found: 0, unknown: 0}), "返答確認 判定中");
+  assert.equal(reply({state: "partial", requests: 2, not_found: 1, unknown: 0}), "返答確認 1+");
+  assert.equal(reply({state: "not_computed", requests: null, not_found: null, unknown: null}), "返答確認 未集計");
+  assert.equal(reply({state: "failed", requests: null}), "返答確認 不明"); assert.equal(reply({state: "synthetic_new", requests: 0}), "返答確認 不明");
+  run("state.patients = [{project_id: 3, heading: '合成 三', message_count: 1, replies: {state: 'not_computed', requests: null}, open_signals: {state: 'confirmed', count: 0}}]; state.openPatient = null; patientList()");
+  assert.match(content(byId("patients")), /返答確認 未集計/);
+  // Summary states: attention and unknown are warnings next to pending/failed, on the row and in the detail.
+  const summary = (value, label, detailed) => {const node = find(run("post")({message_id: 20, body_state: "full", body_complete: true, body_text: "合成", summary_state: value, summary_state_label: label}, detailed), node => node.textContent === label); return node && node.className;};
+  assert.equal(summary("attention", "要約 要確認"), "chip chip-warn"); assert.equal(summary("unknown", "要約 状況不明", true), "chip chip-warn");
+  assert.equal(summary("pending", "要約 処理待ち"), "chip chip-muted"); assert.equal(summary("failed", "要約 作成失敗", true), "chip chip-warn");
+  // Attachment chip: OCR failed / unprocessed turn it amber; unreadable OCR settings stay off the row.
+  const files = (groups, ocr) => {const node = run("attachmentChip")(groups, ocr); return node && `${node.className}|${node.textContent}`;};
+  assert.equal(files([{state: "downloaded", count: 2}], [{state: "failed", count: 1}, {state: "unprocessed", count: 1}]), "chip chip-warn|添付 2件（OCR失敗 1・OCR未作成 1）");
+  assert.equal(files([{state: "downloaded", count: 1}], [{state: "complete", count: 1}]), "chip chip-muted|添付 1件");
+  assert.equal(files([{state: "downloaded", count: 1}], null), "chip chip-muted|添付 1件");
+  assert.equal(files([{state: "downloaded", count: 1}]), "chip chip-muted|添付 1件");
+  sandbox.api = async kind => kind === "attachments" ? {items: [], next_cursor: null} : {message: {}};
+  run("state.detailRequest = 50; state.project = 101");
+  await run("showMessageInfo({project_id: 101, message_id: 21, attachments_ocr: null}, 50, false)");
+  assert.match(content(byId("message-info")), /OCR状態を読み取れません/);
+  await run("showMessageInfo({project_id: 101, message_id: 22, attachments_ocr: []}, 50, false)");
+  assert.doesNotMatch(content(byId("message-info")), /OCR状態/);
   // 7. 連携サマリー: the four states and a failed latest fetch.
   const karte = value => content(run("karteCard")(value));
   assert.match(karte({state: "present", comment: "合成の連携コメント", updated_at: "2026-11-01", updater_profession: "看護師"}), /あり[\s\S]*合成の連携コメント[\s\S]*MCS の更新 2026-11-01 · 更新した職種 看護師/);
@@ -437,9 +463,10 @@ async function checkMcsData() {
   run("state.project = 101; state.query = '合成'; state.panel = ''");
   const pages = [{state: "searched", title: "検索結果", head: [], items: [{source: "chat", text: "合成の本文", message_id: 1}, {source: "ocr", page: 2, text: "合成のOCR", message_id: 2}], notes: ["添付の一部は未処理です。"], next_cursor: "c1", range_complete: false},
     {state: "searched", items: [{source: "ocr", page: null, text: "合成の続き", message_id: 3}], notes: [], next_cursor: null, range_complete: true}];
-  const cursors = [];
-  const posts = {items: [{message_id: 8, body_state: "full", body_complete: true, body_text: "本文に語なし", sender_name: "合成 太郎"}, {message_id: 9, body_state: "full", body_complete: true, body_text: "合成の語を含む本文", sender_name: "別の人"}], next_cursor: null};
-  sandbox.api = async (kind, params) => {if (kind === "search") {assert.equal(params.q, "合成"); return posts;} assert.equal(kind, "sources"); cursors.push(params.cursor); return pages.shift();};
+  const cursors = [], senderCalls = [];
+  const posts = [{items: [{message_id: 8, body_state: "full", body_complete: true, body_text: "合成の送信者の投稿", sender_name: "合成 太郎"}], next_cursor: "s1"},
+    {items: [{message_id: 9, body_state: "full", body_complete: true, body_text: "合成の送信者の古い投稿", sender_name: "合成 太郎"}], next_cursor: null}];
+  sandbox.api = async (kind, params) => {if (kind === "senders") {assert.equal(params.q, "合成"); senderCalls.push(params.cursor); return posts.shift();} assert.equal(kind, "sources"); cursors.push(params.cursor); return pages.shift();};
   await run("loadSearch()");
   let view = content(byId("panel-view"));
   assert.match(view, /合成の本文[\s\S]*本文[\s\S]*合成のOCR[\s\S]*添付OCR 2ページ/); assert.match(view, /添付の一部は未処理です/);
@@ -447,32 +474,64 @@ async function checkMcsData() {
   await run("state.search.more.onclick()");
   assert.equal(cursors.join("|"), "|c1"); view = content(byId("panel-view"));
   assert.match(view, /合成のOCR[\s\S]*合成の続き\n\n添付OCR\n/); assert.equal(run("state.search.more").hidden, true);
-  // Sender matches come from the post search, filtered on the sender name only.
+  // Sender matches come from api/senders, with their own 続きを表示.
   const senders = find(byId("panel-view"), node => node.className === "sender-matches");
-  assert.match(content(senders), /投稿者名が一致する投稿[\s\S]*合成 太郎/); assert.doesNotMatch(content(senders), /別の人/);
-  assert.equal(cursors.length, 2, "the post search runs once, on the first page");
+  assert.match(content(senders), /投稿者名が一致する投稿[\s\S]*合成の送信者の投稿/);
+  const senderMore = find(senders, node => node.textContent === "続きを表示");
+  assert.equal(senderMore.hidden, false);
+  await senderMore.onclick();
+  assert.match(content(senders), /合成の送信者の投稿[\s\S]*合成の送信者の古い投稿/); assert.equal(senderMore.hidden, true);
+  assert.equal(senderCalls.join("|"), "|s1", "senders pages on its own cursor, not on 続きを検索");
+  // Notes of every range searched so far: a running skipped total, the latest notes, earlier notes kept.
+  const ranged = [{state: "searched", items: [], notes: ["まだ調べていない範囲があります。「続きを検索」で進めます。", "合成の前の範囲の注記"], skipped: {ocr_pending: 2, body_unavailable: 1, unclassified: 0}, next_cursor: "r1", range_complete: false},
+    {state: "searched", items: [], notes: ["まだ調べていない範囲があります。「続きを検索」で進めます。"], skipped: {ocr_pending: 1, body_unavailable: null, unclassified: 3}, next_cursor: "r2", range_complete: false},
+    {state: "searched", items: [], notes: ["合成の最後の注記"], skipped: null, next_cursor: null, range_complete: true}];
+  sandbox.api = async kind => kind === "senders" ? {items: [], next_cursor: null} : ranged.shift();
+  await run("loadSearch()");
+  await run("state.search.more.onclick()");
+  let notes = texts(run("state.search.notes").children);
+  assert.match(notes, /ここまでの範囲で: OCR未完了 3件 \/ 本文未取得 1件以上 \/ 未分類 3件/);
+  assert.match(notes, /合成の前の範囲の注記/); assert.equal((notes.match(/まだ調べていない範囲/g) || []).length, 1);
+  await run("state.search.more.onclick()");
+  notes = texts(run("state.search.notes").children);
+  assert.match(notes, /件数の報告がない範囲を除く/); assert.match(notes, /合成の最後の注記[\s\S]*合成の前の範囲の注記/);
+  assert.doesNotMatch(notes, /まだ調べていない範囲/, "only the latest range says a range is left");
+  // A query with no sender word skips the block; other failures say so.
+  sandbox.api = async kind => {if (kind === "senders") throw Object.assign(new Error("x"), {code: "bad_request"}); return {state: "searched", items: [], notes: [], next_cursor: null};};
+  await run("loadSearch()");
+  assert.equal(find(byId("panel-view"), node => node.className === "sender-matches"), null); assert.doesNotMatch(content(byId("panel-view")), /投稿者名での検索/);
   // 0 hits with a cursor, then hits: the empty line says "so far" and goes away when an item arrives.
   const later = [{state: "searched", items: [], notes: [], next_cursor: "c2", range_complete: false, empty: "合成の一致なし"},
     {state: "searched", items: [{source: "chat", text: "合成の後の一致", message_id: 4}], notes: [], next_cursor: null, range_complete: true}];
-  sandbox.api = async kind => kind === "search" ? {items: [], next_cursor: null} : later.shift();
+  sandbox.api = async kind => kind === "senders" ? {items: [], next_cursor: null} : later.shift();
   await run("loadSearch()");
   assert.match(content(byId("panel-view")), /ここまでに検索した範囲では見つかりませんでした/);
   assert.equal(find(byId("panel-view"), node => node.className === "sender-matches"), null);
   await run("state.search.more.onclick()");
   view = content(byId("panel-view"));
   assert.match(view, /合成の後の一致/); assert.doesNotMatch(view, /見つかりませんでした|合成の一致なし/); assert.equal(run("state.search.empty").hidden, true);
-  sandbox.api = async kind => kind === "search" ? {items: [], next_cursor: null} : {state: "searched", items: [], notes: [], next_cursor: null, range_complete: true, empty: "合成の一致なし。"};
+  sandbox.api = async kind => kind === "senders" ? {items: [], next_cursor: null} : {state: "searched", items: [], notes: [], next_cursor: null, range_complete: true, empty: "合成の一致なし。"};
   await run("loadSearch()");
   assert.match(content(byId("panel-view")), /合成の一致なし。見つからないことは、記録がないことを意味しません。/);
-  sandbox.api = async kind => {if (kind === "search") throw new Error("x"); return {state: "searched", items: [], notes: [], next_cursor: null};};
+  sandbox.api = async kind => {if (kind === "senders") throw Object.assign(new Error("x"), {code: "cursor_scope_or_generation_changed"}); return {state: "searched", items: [], notes: [], next_cursor: null};};
   await run("loadSearch()");
   assert.match(content(byId("panel-view")), /投稿者名での検索はできませんでした/);
-  sandbox.api = async kind => kind === "search" ? {items: [], next_cursor: null} : {state: "unavailable", items: [], notes: [], empty: "合成の検索していない理由"};
+  // Punctuation is a search word: it is searched, not refused.
+  run("state.query = '、。'");
+  sandbox.api = async (kind, params) => {assert.equal(params.q, "、。"); return kind === "senders" ? {items: [], next_cursor: null} : {state: "searched", items: [], notes: [], next_cursor: null, range_complete: true, empty: "合成の一致なし。"};};
+  await run("loadSearch()");
+  assert.match(content(byId("panel-view")), /合成の一致なし。/); assert.doesNotMatch(content(byId("panel-view")), /語句を入れてください/);
+  run("state.query = '合成'");
+  sandbox.api = async kind => kind === "senders" ? {items: [], next_cursor: null} : {state: "unavailable", items: [], notes: [], empty: "合成の検索していない理由"};
   await run("loadSearch()");
   assert.match(content(byId("panel-view")), /合成の検索していない理由/);
   assert.equal(run("errorTexts.bad_search_filter").includes("検索の条件"), true);
   assert.equal(run("errorTexts.search_cursor_invalid").includes("もう一度検索"), true);
   assert.equal(run("errorTexts.config_unreadable"), "設定を読み取れないため表示できません。");
+  sandbox.api = realApi;
+  sandbox.fetch = async () => ({ok: false, json: async () => ({error: "bad_request"})});
+  await assert.rejects(run("api")("senders"), error => error.code === "bad_request");
+  sandbox.fetch = () => new Promise(() => {});
   assert.match(run("errorTexts.search_query_empty"), /語句[\s\S]*資料: 分類: 開始: 終了:/);
   // 8. MCS登録データ: separate record, states, compact rows and 他N件.
   const registered = data => content(run("renderRegistered")(data));
@@ -480,6 +539,15 @@ async function checkMcsData() {
   assert.match(registered({state: "not_linked", collection_enabled: false, datasets: []}), /収集は設定で無効[\s\S]*取得していません/);
   const unreadable = registered({state: "not_linked", collection_enabled: null, config_state: "unreadable", datasets: []});
   assert.match(unreadable, /設定を読み取れません/); assert.doesNotMatch(unreadable, /無効/);
+  const missing = registered({state: "not_linked", collection_enabled: false, collection_reason: "config_missing", config_state: "missing", datasets: []});
+  assert.match(missing, /設定ファイルがないため、登録データは収集していません/); assert.doesNotMatch(missing, /無効/);
+  const pending = run("renderRegistered")({state: "listed", collection_enabled: true, datasets: [
+    {dataset: "observation_values", label: "観測値", state: "complete", state_label: "取得済み", item: {name: "合成値A", unit: "mg"}, rows: [{issued_at: "2026-01-01", scalar: 1}], rows_total: 1},
+    {dataset: "observation_values", label: "観測値", state: "unknown", state_label: "未取得・未確認", item: {name: "合成値B", unit: "mmHg", reference: {upper_reference_limit_scalar: 9}}, rows: [], rows_total: 0},
+    {dataset: "observation_values", label: "観測値", state: "unknown", state_label: "未取得・未確認", item: {name: "合成値C", unit: null, reference: {}}, rows: [], rows_total: 0}]});
+  const pendingText = content(pending);
+  assert.match(pendingText, /観測値（未取得の項目）[\s\S]*未取得 2項目[\s\S]*合成値B[\s\S]*mmHg[\s\S]*〜9[\s\S]*未取得[\s\S]*合成値C[\s\S]*未取得/);
+  assert.equal(find(pending, node => node.className === "cards").children.length, 2, "unfetched items share one card");
   const listed = run("renderRegistered")({state: "listed", collection_enabled: true, datasets: [
     {dataset: "medication_periods", label: "合成の服薬期間", state: "complete", state_label: "取得済み", rows: [{begin_date: "2026-01-01", end_date: null, medicines: ["合成薬A"]}], rows_total: 3},
     {dataset: "observation_values", label: "合成の測定値", state: "failed", state_label: "取得失敗", reason: "http_error", rows: [], rows_total: 0},

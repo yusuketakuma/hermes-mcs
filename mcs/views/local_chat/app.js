@@ -86,7 +86,7 @@ async function api(kind, values = {}) {
   catch {throw new Error("ローカルのサーバーに接続できませんでした。サーバーが動いているか確かめて「更新」してください。");}
   try {data = await reply.json();}
   catch {throw new Error("サーバーの応答を読み取れませんでした。「更新」で読み直してください。");}
-  if (!reply.ok) throw new Error(errorTexts[data.error] || "データを表示できません。公開スナップショットと閲覧範囲を確認してください。");
+  if (!reply.ok) throw Object.assign(new Error(errorTexts[data.error] || "データを表示できません。公開スナップショットと閲覧範囲を確認してください。"), {code: data.error});
   if (!data.snapshot) return data;
   if (state.generation && data.snapshot.generation_id !== state.generation) throw new Error("スナップショットが更新されました。「更新」で読み直してください。");
   state.generation = data.snapshot.generation_id; state.snapshotAt = data.snapshot.generated_at;
@@ -137,6 +137,22 @@ function signalBadge(signals) {
   badge.title = `${unreadable ? "一部のシグナルの状態を読み取れません" : "判定は終わっていません"}。判定済みの範囲で未解消のシグナル ${count} 件`;
   return badge;
 }
+function replyBadge(replies) {
+  // Reply checks on the list row: nothing open is no chip; partial is a lower bound; not built yet is 未集計, never 0.
+  if (!replies) return null;
+  const open = (replies.not_found || 0) + (replies.unknown || 0);
+  let badge;
+  if (replies.state === "observed" && replies.requests != null) {
+    if (!open) return null;
+    badge = chip(`返答確認 ${open}`, "warn");
+  } else if (replies.state === "partial" && replies.requests != null) badge = chip(open ? `返答確認 ${open}+` : "返答確認 判定中", open ? "warn" : "muted");
+  else if (replies.state === "not_computed") badge = chip("返答確認 未集計", "muted");
+  else badge = chip("返答確認 不明", "muted");
+  badge.title = replies.state === "not_computed" ? "返答確認はまだ集計していません。患者を開くと集計します。"
+    : replies.requests == null ? "返答確認を取得できません"
+      : `依頼 ${replies.requests} 件のうち、返答が見つからない ${replies.not_found ?? "?"} 件・確認できない ${replies.unknown ?? "?"} 件${replies.state === "partial" ? "（解析が終わっていない投稿があります）" : ""}`;
+  return badge;
+}
 function patientList() {
   let selected = null;
   $("patients").replaceChildren();
@@ -148,10 +164,10 @@ function patientList() {
     const label = el("span", null, "patient-label"), top = el("span", null, "patient-top");
     top.append(el("span", patientTitle(patient), "patient-title"));
     if (patient.is_archived) top.append(chip("アーカイブ", "muted"));
-    const badge = signalBadge(patient.open_signals);
+    const badges = [signalBadge(patient.open_signals), replyBadge(patient.replies)].filter(Boolean);
     label.append(top, el("small", [`ID ${patient.project_id}`, ...placeNames(patient), patient.latest_at != null && `最終投稿 ${shortDate(patient.latest_at)}`].filter(Boolean).join(" · ")));
-    // The disease and the open-signal badge share a line, so the name keeps the full width.
-    if (patient.disease || badge) {const sub = el("span", null, "patient-sub"); if (badge) sub.append(badge); if (patient.disease) sub.append(el("small", patient.disease, "patient-disease")); label.append(sub);}
+    // The disease and the signal/reply badges share a line, so the name keeps the full width.
+    if (patient.disease || badges.length) {const sub = el("span", null, "patient-sub"); sub.append(...badges); if (patient.disease) sub.append(el("small", patient.disease, "patient-disease")); label.append(sub);}
     const count = el("span", patient.message_count, "count"); count.title = `保存済み ${patient.message_count} 件`;
     button.append(label, count);
     button.onclick = () => selectPatient(patient);
@@ -344,13 +360,13 @@ function post(row, detailed = false) {
     const button = el("button", `詳細・返信${row.stored_replies ? ` ${row.stored_replies}件` : ""}`, "reply-link");
     button.onclick = () => openDetail(row);
     footer.append(button);
-    const files = attachmentChip(row.attachments);
+    const files = attachmentChip(row.attachments, row.attachments_ocr);
     if (files) footer.append(files);
     if (row.parent_id) footer.append(chip("返信の検索結果", "info"));
     const latest = lastReplyChip(row.last_reply);
     if (latest) footer.append(latest);
   }
-  if (row.summary_state_label) footer.append(chip(row.summary_state_label, row.summary_state === "failed" ? "warn" : "muted"));
+  if (row.summary_state_label) footer.append(chip(row.summary_state_label, ["failed", "attention", "unknown"].includes(row.summary_state) ? "warn" : "muted"));
   footer.append(...flagChips(row.flags), ...observedChanges(row));
   if (row.stamp_line) footer.append(chip(row.stamp_line, stampIncomplete.test(row.stamp_line) ? "warn" : "muted"));
   if (row.stamps?.self) footer.append(chip(`自分のスタンプ ${row.stamps.self}`, "info"));
@@ -430,11 +446,13 @@ function postBody(row) {
   if (row.body_text) return el("p", row.body_text, "post-body");
   return el("p", row.body_state === "full" ? "本文なし" : "本文未取得", "post-body post-body-missing");
 }
-function attachmentChip(groups = []) {
-  const count = state => groups.filter(item => state.includes(item.state)).reduce((sum, item) => sum + item.count, 0);
-  const total = count(groups.map(item => item.state)), failed = count(["failed"]), pending = count(["pending"]);
+function attachmentChip(groups = [], ocr = []) {
+  // File states, then OCR states that left text unread; unreadable OCR settings (null) are said in the detail only.
+  const sum = (list, states) => (list || []).filter(item => states.includes(item.state)).reduce((total, item) => total + item.count, 0);
+  const total = sum(groups, groups.map(item => item.state)), failed = sum(groups, ["failed"]), pending = sum(groups, ["pending"]);
   if (!total) return null;
-  const missing = [failed && `取得失敗 ${failed}`, pending && `未取得 ${pending}`].filter(Boolean);
+  const ocrFailed = sum(ocr, ["failed"]), ocrPending = sum(ocr, ["unprocessed"]);
+  const missing = [failed && `取得失敗 ${failed}`, pending && `未取得 ${pending}`, ocrFailed && `OCR失敗 ${ocrFailed}`, ocrPending && `OCR未作成 ${ocrPending}`].filter(Boolean);
   return chip(`添付 ${total}件${missing.length ? `（${missing.join("・")}）` : ""}`, missing.length ? "warn" : "muted");
 }
 const viewedReasons = {care_team_not_current: "ケアチーム情報が最新ではありません", reactors_not_current: "スタンプを押した人の情報が最新ではありません", care_team_profession_unknown: "職種の分からない担当者がいます"};
@@ -547,6 +565,7 @@ async function showMessageInfo(row, request, withContext = true) {
     more.onclick = async () => {more.disabled = true; try {const page = await api("attachments", {project: row.project_id, message: row.message_id, cursor}); if (request !== state.detailRequest || !files.isConnected) return; appendFiles(page.items); cursor = page.next_cursor; more.hidden = !cursor;} catch(error) {fail(error);} finally {more.disabled = false;}};
     files.append(more);
     if (!data.items.length) files.append(el("p", "保存済みの添付はありません。"));
+    if (row.attachments_ocr === null) files.append(el("p", "設定を読み取れないため、この投稿の添付のOCR状態を読み取れません。", "state-note"));
     if (row.parent_id) {files.append(el("h3", "この返信の状態")); for (const text of row.metadata_flags || []) files.append(el("p", text));}
     const replyMeds = [];
     if (row.parent_id) {
@@ -747,15 +766,16 @@ async function loadSearch(more = false) {
       next.onclick = () => loadSearch(true);
       box.append(el("h2", data.title || `「${query}」の検索結果`), ...(data.head || []).map(line => el("p", line, "panel-head")), list, empty, next, notes);
       if (senders) box.append(senders);
-      state.search = {list, empty, notes, more: next};
+      state.search = {list, empty, notes, more: next, ranges: []};
       view.replaceChildren(box); scroller().scrollTop = 0;
     }
-    const {list, empty, notes, more: next} = state.search;
+    const {list, empty, notes, more: next, ranges} = state.search;
     for (const item of data.items) list.append(searchItem(item));
     empty.textContent = list.children.length ? "" : data.next_cursor ? "ここまでに検索した範囲では見つかりませんでした。「続きを検索」で残りを検索できます。"
       : `${data.empty || "検索した範囲では見つかりませんでした。"}${data.state === "searched" ? "見つからないことは、記録がないことを意味しません。" : ""}`;
     empty.hidden = !empty.textContent;
-    notes.replaceChildren(...(data.notes || []).map(note => el("p", note, "state-note")));
+    ranges.push({notes: data.notes || [], skipped: data.skipped ?? null});
+    notes.replaceChildren(...searchNotes(ranges));
     if (data.state === "searched" && data.range_complete === false && !data.next_cursor) notes.append(el("p", "検索した範囲は記録の一部です。", "state-note"));
     state.search.cursor = data.next_cursor; next.hidden = !data.next_cursor;
   } catch (error) {
@@ -764,20 +784,46 @@ async function loadSearch(more = false) {
     fail(error);
   } finally {if (button && request === state.mainRequest) button.disabled = false;}
 }
-// The same width/case folding as the server's search, without spaces.
-const foldText = text => String(text || "").normalize("NFKC").toLowerCase().replace(/\s+/g, "");
+const skippedKinds = [["ocr_pending", "OCR未完了"], ["body_unavailable", "本文未取得"], ["unclassified", "未分類"]];
+// The server's own note that a range is left; it is true only for the latest range.
+const unsearchedNote = /まだ調べていない範囲/;
+function searchNotes(ranges) {
+  // What was not searched, over every range searched so far: a running total where the server reports it,
+  // the latest range's notes, and earlier ranges' notes that the latest one does not repeat.
+  const lines = [];
+  const reported = ranges.filter(range => range.skipped);
+  if (reported.length) {
+    const parts = skippedKinds.map(([key, label]) => {
+      const values = reported.map(range => range.skipped[key]);
+      const total = values.reduce((sum, value) => sum + (typeof value === "number" ? value : 0), 0);
+      return `${label} ${total}件${values.some(value => typeof value !== "number") ? "以上" : ""}`;
+    });
+    lines.push(el("p", `ここまでの範囲で: ${parts.join(" / ")}${reported.length < ranges.length ? "（件数の報告がない範囲を除く）" : ""}`, "state-note"));
+  }
+  const latest = ranges[ranges.length - 1].notes;
+  lines.push(...latest.map(note => el("p", note, "state-note")));
+  const earlier = [...new Set(ranges.slice(0, -1).flatMap(range => range.notes))].filter(note => !latest.includes(note) && !unsearchedNote.test(note));
+  if (earlier.length) lines.push(el("p", "これまでに検索した範囲の注記:", "state-note"), ...earlier.map(note => el("p", note, "state-note search-earlier")));
+  return lines;
+}
 async function senderMatches(project, query) {
-  // Sources search covers text only: posts whose sender name contains every search word come from the post search.
-  const terms = query.split(/\s+/).map(foldText).filter(Boolean);
-  if (!terms.length) return null;
-  let data;
-  try {data = await api("search", {project, q: query});}
-  catch {return el("p", "投稿者名での検索はできませんでした。", "state-note");}
-  const rows = data.items.filter(row => terms.every(term => foldText(row.sender_name).includes(term)));
-  if (!rows.length) return null;
-  const box = el("section", null, "sender-matches");
-  box.append(el("h3", "投稿者名が一致する投稿"), ...rows.map(row => post(row)));
-  if (data.next_cursor) box.append(el("p", "表示は一致した投稿の一部です。", "state-note"));
+  // Sources search covers text only: posts whose sender name contains every search word come from api/senders.
+  const box = el("section", null, "sender-matches"), list = el("div"), more = el("button", "続きを表示", "load-more");
+  let cursor = null;
+  const page = async () => {
+    const data = await api("senders", {project, q: query, cursor});
+    list.append(...data.items.map(row => post(row)));
+    cursor = data.next_cursor; more.hidden = !cursor;
+    return data.items.length;
+  };
+  try {if (!await page()) return null;}
+  catch (error) {return error.code === "bad_request" ? null : el("p", "投稿者名での検索はできませんでした。", "state-note");}
+  more.onclick = async () => {
+    const request = state.mainRequest;
+    more.disabled = true;
+    try {await page();} catch (error) {if (request === state.mainRequest) fail(error);} finally {more.disabled = false;}
+  };
+  box.append(el("h3", "投稿者名が一致する投稿"), list, more);
   return box;
 }
 function searchItem(item) {
@@ -804,7 +850,8 @@ function renderRegistered(data) {
   // MCS registered data is its own record, apart from chat: every dataset says whether it was obtained.
   const box = el("div", null, "panel registered");
   box.append(el("h2", "MCS登録データ"), el("p", "MCS の患者情報に登録されたデータです。チャットの投稿とは別の記録です。", "panel-head"));
-  if (data.collection_enabled === false) box.append(el("p", "登録データの収集は設定で無効になっています。表示は以前に取得した記録だけです。", "state-note"));
+  if (data.collection_enabled === false && data.collection_reason === "config_missing") box.append(el("p", "設定ファイルがないため、登録データは収集していません。表示は以前に取得した記録だけです。", "state-note"));
+  else if (data.collection_enabled === false) box.append(el("p", "登録データの収集は設定で無効になっています。表示は以前に取得した記録だけです。", "state-note"));
   else if (data.collection_enabled !== true) box.append(el("p", "登録データの収集の設定を読み取れません。表示は取得済みの記録だけです。", "state-note"));
   if (data.state === "unavailable") {box.append(el("p", "このスナップショットは古い形式のため、登録データを読み取れません。", "state-note")); return box;}
   if (data.state === "not_linked" || !data.datasets?.length) {
@@ -812,7 +859,10 @@ function renderRegistered(data) {
     return box;
   }
   const cards = el("div", null, "cards");
-  for (const dataset of data.datasets) cards.append(registeredCard(dataset));
+  // Observation items whose values were never fetched are one table of 未取得 rows, not a card each.
+  const unfetched = data.datasets.filter(dataset => dataset.dataset === "observation_values" && dataset.state === "unknown" && !dataset.rows?.length && dataset.item);
+  for (const dataset of data.datasets) if (!unfetched.includes(dataset)) cards.append(registeredCard(dataset));
+  if (unfetched.length) cards.append(unfetchedValues(unfetched));
   box.append(cards);
   return box;
 }
@@ -834,6 +884,16 @@ const registeredReasons = {
   association_unverified: "MCS の医療記録との対応付けを確認できません", cached_session_required: "ログイン情報がないため取得していません",
   definition_mapping_changed: "検査項目の定義が変わりました", run_lock_busy: "別の取得処理が実行中でした", restore_in_progress: "復元処理の実行中でした",
 };
+function unfetchedValues(datasets) {
+  const box = card("観測値（未取得の項目）", [], {wide: true, actions: [chip(`未取得 ${datasets.length}項目`, "warn")]});
+  box.append(el("p", "観測項目の一覧にありますが、値をまだ取得していません。", "panel-head"));
+  const table = el("table", null, "rows"), thead = el("thead"), head = el("tr"), body = el("tbody");
+  head.append(...["項目", "単位", "基準", "値"].map(title => el("th", title))); thead.append(head);
+  for (const {item} of datasets) {const tr = el("tr"); tr.append(el("td", item.name || "項目名未記録"), el("td", item.unit || ""), el("td", referenceText(item.reference)), el("td", "未取得")); body.append(tr);}
+  table.append(thead, body);
+  const wrap = el("div", null, "table-wrap"); wrap.append(table); box.append(wrap);
+  return box;
+}
 const registeredDate = value => typeof value === "number" ? postTime(value) : value || "日付未記録";
 function registeredCard(dataset) {
   const actions = [chip(dataset.state_label || "未確認", registeredTones[dataset.state] || "warn"), ...(dataset.historical ? [chip("過去の記録", "muted")] : [])];
