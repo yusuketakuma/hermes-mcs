@@ -15,6 +15,8 @@ import homecare_modules
 import homecare_records as records
 import homecare_store
 import homecare_team as team
+import homecare_visits as visits
+import pharmacy_prescriptions as prescriptions
 import mcs_local_chat as chat
 
 REGISTRY = homecare_catalog.registry(["pharmacy"])
@@ -69,7 +71,8 @@ def test_database_is_private_migrated_per_module_and_reopenable(tmp_path):
     homecare_store.connect(path, REGISTRY.modules).close()
     assert path.stat().st_mode & 0o777 == 0o600 and path.parent.stat().st_mode & 0o777 == 0o700
     again = homecare_store.connect(path, REGISTRY.modules)
-    assert [tuple(row) for row in again.execute("SELECT module, number FROM schema_migrations")] == [("core", 1)]
+    assert [tuple(row) for row in again.execute("SELECT module, number FROM schema_migrations")] == [
+        ("core", 1), ("core", 2), ("pharmacy", 1)]
     again.close()
 
 
@@ -78,8 +81,8 @@ def test_applied_migration_must_not_change_and_newer_database_is_refused(tmp_pat
     homecare_store.connect(path, REGISTRY.modules).close()
     edited = tmp_path / "edited"
     edited.mkdir()
-    original = homecare_store.migrations(homecare_modules.CORE.migrations)[0]
-    (edited / original[1]).write_text(original[2] + "\n-- edited\n")
+    for number, name, sql in homecare_store.migrations(homecare_modules.CORE.migrations):
+        (edited / name).write_text(sql + ("\n-- edited\n" if number == 1 else ""))
     with pytest.raises(RuntimeError, match="changed"):
         homecare_store.connect(path, [homecare_modules.Module("core", "共通", edited)])
     with pytest.raises(RuntimeError, match="newer"):
@@ -360,3 +363,84 @@ def test_register_script_is_served_and_never_builds_html():
     assert "innerHTML" not in js and "localStorage" not in js and "sessionStorage" not in js
     assert '"X-MCS-CSRF"' in js and 'credentials: "omit"' in js
     assert "pharmacist" not in js, "the core screen must read occupation codes from api/hc/meta"
+
+
+def visit_values(patient_id, **values):
+    return {"patient_id": patient_id, "kind": "pharmacy.home_visit", "visit_date": "2026-11-24", **values}
+
+
+def test_visits_are_validated_versioned_and_audited(db):
+    me = first_staff(db)
+    row = patient(db, me["staff_id"])
+    for bad, fields in (({"kind": "nursing.visit"}, ["kind"]), ({"visit_date": "2026-13-01"}, ["visit_date"]),
+                        ({"start_time": "25:00"}, ["start_time"]), ({"status": "done"}, ["staff_id"]),
+                        ({"patient_id": 999}, ["patient_id"]), ({"extra": 1}, ["extra"])):
+        with pytest.raises(records.InvalidFields) as error:
+            visits.create(db, REGISTRY, visit_values(row["patient_id"]) | bad, actor=me["staff_id"])
+        assert error.value.fields == fields
+    later = visits.create(db, REGISTRY, visit_values(row["patient_id"], start_time="14:00"), actor=me["staff_id"])
+    early = visits.create(db, REGISTRY, visit_values(row["patient_id"], start_time="09:30", staff_id=me["staff_id"]),
+                          actor=me["staff_id"])
+    assert [item["visit_id"] for item in visits.for_day(db, "2026-11-24")] == [early["visit_id"], later["visit_id"]]
+    done = visits.update(db, REGISTRY, early["visit_id"], {"status": "done", "note": "合成の記録"},
+                         expected_version=1, actor=me["staff_id"])
+    assert done["status"] == "done" and done["version"] == 2 and done["staff_name"] == "合成 薬剤師"
+    with pytest.raises(homecare_store.Conflict):
+        visits.update(db, REGISTRY, early["visit_id"], {"note": "x"}, expected_version=1, actor=me["staff_id"])
+    with pytest.raises(records.InvalidFields):
+        visits.update(db, REGISTRY, early["visit_id"], {"patient_id": 2}, expected_version=2, actor=me["staff_id"])
+    with pytest.raises(ValueError, match="actor_required"):
+        visits.create(db, REGISTRY, visit_values(row["patient_id"]), actor=None)
+    kinds = [r["kind"] for r in db.execute("SELECT kind FROM audit_events WHERE kind LIKE 'visit.%'")]
+    assert kinds == ["visit.create", "visit.create", "visit.update"]
+
+
+def test_prescriptions_keep_lines_in_order_with_an_optional_master_code(db):
+    me = first_staff(db)
+    row = patient(db, me["staff_id"])
+    values = {"patient_id": row["patient_id"], "issued_on": "2026-11-20", "institution": "合成クリニック",
+              "lines": [{"drug_name": "合成錠A", "code_system": "mhlw_medicine", "drug_code": "1234567F1020",
+                         "dose": "1錠", "usage": "朝食後", "days": 14}, {"drug_name": "合成散B"}]}
+    for line, field in (({"drug_name": ""}, "lines.1.drug_name"), ({"drug_name": "x", "drug_code": "1"},
+                        "lines.1.drug_code"), ({"drug_name": "x", "days": 0}, "lines.1.days")):
+        with pytest.raises(records.InvalidFields) as error:
+            prescriptions.create(db, values | {"lines": [line]}, actor=me["staff_id"])
+        assert error.value.fields == [field]
+    with pytest.raises(records.InvalidFields) as error:
+        prescriptions.create(db, values | {"lines": []}, actor=me["staff_id"])
+    assert error.value.fields == ["lines"]
+    created = prescriptions.create(db, values, actor=me["staff_id"])
+    assert [line["drug_name"] for line in created["lines"]] == ["合成錠A", "合成散B"]
+    updated = prescriptions.update(db, created["prescription_id"], {"lines": [{"drug_name": "合成散B"}]},
+                                   expected_version=1, actor=me["staff_id"])
+    assert updated["version"] == 2 and [line["drug_name"] for line in updated["lines"]] == ["合成散B"]
+    assert [item["prescription_id"] for item in prescriptions.for_patient(db, row["patient_id"])] == [
+        created["prescription_id"]]
+
+
+def test_visit_sheet_and_module_routes_go_through_the_core_api(db):
+    me = first_staff(db)
+    row = patient(db, me["staff_id"])
+    links.link(db, row["patient_id"], 11, actor=me["staff_id"])
+    scope = lambda: [{"project_id": 11, "patient_name": "合成 花子"}]  # noqa: E731
+    write = lambda op, body: homecare_api.write(db, op, {"actor": me["staff_id"], **body}, registry=REGISTRY,  # noqa: E731
+                                                allowed=None, mcs_patients=scope)
+    write("visit.create", {"values": visit_values(row["patient_id"], visit_date="2026-11-30")})
+    done = write("visit.create", {"values": visit_values(row["patient_id"], visit_date="2026-11-01",
+                                                         staff_id=me["staff_id"], status="done")})
+    write("pharmacy/prescription.create", {"values": {"patient_id": row["patient_id"], "issued_on": "2026-11-20",
+                                                      "lines": [{"drug_name": "合成錠A"}]}})
+    sheet = homecare_api.read(db, "sheet", {"patient": str(row["patient_id"])}, registry=REGISTRY, mcs_patients=scope)
+    assert [item["visit_date"] for item in sheet["next_visits"]] == ["2026-11-30"]
+    assert sheet["recent_visits"][0]["visit_id"] == done["record"]["visit_id"]
+    assert sheet["modules"]["pharmacy"]["prescriptions"][0]["lines"][0]["drug_name"] == "合成錠A"
+    assert sheet["mcs"] == {"project_id": 11, "patient_name": "合成 花子"}
+    outside = homecare_api.read(db, "sheet", {"patient": str(row["patient_id"])}, registry=REGISTRY,
+                                mcs_patients=lambda: [])
+    assert outside["mcs"] == {"project_id": None, "patient_name": None}
+    listed = homecare_api.read(db, "pharmacy/prescriptions", {"patient": str(row["patient_id"])},
+                               registry=REGISTRY, mcs_patients=scope)
+    assert len(listed["items"]) == 1
+    for route in ("nursing/visits", "core/visits", "pharmacy/unknown"):
+        with pytest.raises(ValueError, match="bad_request"):
+            homecare_api.read(db, route, {"patient": "1"}, registry=REGISTRY, mcs_patients=scope)

@@ -7,6 +7,8 @@ from __future__ import annotations
 import homecare_links as links
 import homecare_records as records
 import homecare_team as team
+import homecare_visits as visits
+from homecare_records import record_id as _id
 
 # Fixed, non-clinical codes the browser may see.
 ERRORS = frozenset({"version_conflict", "already_linked", "not_linked", "already_assigned", "actor_required",
@@ -16,6 +18,15 @@ ERRORS = frozenset({"version_conflict", "already_linked", "not_linked", "already
 
 def read(db, route, params, *, registry, mcs_patients):
     """GET api/hc/<route>; ``mcs_patients`` lists the MCS rooms inside the launch scope."""
+    module, _, sub_route = route.partition("/")
+    if sub_route:
+        return registry.module(module).api.read(db, sub_route, params)
+    if route == "visits":
+        if params.get("date"):
+            return {"items": visits.for_day(db, params["date"])}
+        return {"items": visits.for_patient(db, _id(params.get("patient")))}
+    if route == "sheet":
+        return sheet(db, _id(params.get("patient")), registry=registry, mcs_patients=mcs_patients)
     if route == "meta":
         return registry.describe()
     if route == "staff":
@@ -53,6 +64,14 @@ def write(db, op, body, *, registry, allowed, mcs_patients):
     if not isinstance(body, dict):
         raise ValueError("bad_request")
     actor = body.get("actor")
+    module, _, sub_op = op.partition("/")
+    if sub_op:
+        return registry.module(module).api.write(db, sub_op, body, actor=actor)
+    if op == "visit.create":
+        return {"record": visits.create(db, registry, body.get("values"), actor=actor)}
+    if op == "visit.update":
+        return {"record": visits.update(db, registry, _id(body.get("id")), body.get("values"),
+                                        expected_version=body.get("expected_version"), actor=actor)}
     if op in ("staff.create", "patient.create"):
         return {"record": records.create(db, op.split(".")[0], body.get("values"), actor=actor, registry=registry)}
     if op in ("staff.update", "patient.update"):
@@ -79,6 +98,23 @@ def write(db, op, body, *, registry, allowed, mcs_patients):
     raise ValueError("bad_request")
 
 
+def sheet(db, patient_id, *, registry, mcs_patients):
+    """What to have in hand on a visit: the record, care team, recent and next visits, each module's part and
+    the linked MCS room when it is inside the launch scope."""
+    patient = records.get(db, "patient", patient_id)
+    project = links.project_of(db, patient_id)
+    scope = {row["project_id"]: row for row in mcs_patients()}
+    history = visits.for_patient(db, patient_id, limit=50)
+    return {"patient": patient, "team": team.current(db, patient_id),
+            "next_visits": sorted((row for row in history if row["status"] == "planned"),
+                                  key=lambda row: (row["visit_date"], row["start_time"] or ""))[:3],
+            "recent_visits": [row for row in history if row["status"] == "done"][:3],
+            "modules": {module.name: module.api.sheet(db, patient_id)
+                        for module in registry.modules if module.api is not None},
+            "mcs": {"project_id": project, "patient_name": scope[project]["patient_name"]}
+            if project in scope else {"project_id": None, "patient_name": None}}
+
+
 def error_body(exc):
     """The browser-safe error for an exception a route raised."""
     if isinstance(exc, records.InvalidFields):
@@ -86,10 +122,3 @@ def error_body(exc):
     code = str(exc)
     return {"error": code if code in ERRORS else "bad_request"}
 
-
-def _id(value):
-    if isinstance(value, str) and value.isdigit():
-        value = int(value)
-    if type(value) is not int or value <= 0:
-        raise ValueError("bad_request")
-    return value

@@ -29,7 +29,8 @@ class InvalidFields(ValueError):
         self.fields = sorted(set(fields))
 
 
-def _text(values, bad, field, limit, *, required=False):
+def text_field(values, bad, field, limit, *, required=False):
+    """``values[field]`` stripped, or "" with ``field`` added to ``bad`` when it is not text within ``limit``."""
     value = values.get(field, "")
     if value is None:
         value = ""
@@ -42,7 +43,7 @@ def _text(values, bad, field, limit, *, required=False):
 def _clean_staff(values, registry, held):
     """``held`` keeps qualifications of a module that is not enabled right now from being refused."""
     bad = [key for key in values if key not in STAFF_FIELDS]
-    row = {"name": _text(values, bad, "name", 60, required=True), "kana": _text(values, bad, "kana", 60)}
+    row = {"name": text_field(values, bad, "name", 60, required=True), "kana": text_field(values, bad, "kana", 60)}
     login = values.get("tailscale_login")
     if login in (None, ""):
         row["tailscale_login"] = None
@@ -66,7 +67,7 @@ def _clean_staff(values, registry, held):
 
 def _clean_patient(values):
     bad = [key for key in values if key not in PATIENT_FIELDS]
-    row = {field: _text(values, bad, field, limit, required=field == "name")
+    row = {field: text_field(values, bad, field, limit, required=field == "name")
            for field, limit in PATIENT_FIELDS.items() if limit}
     for field in ("phone", "keyperson_phone", "contact_phone"):
         if not _PHONE.match(row[field]):
@@ -91,6 +92,15 @@ def _clean_patient(values):
     if bad:
         raise InvalidFields(bad)
     return row
+
+
+def record_id(value):
+    """A positive integer id from JSON or a query string; anything else is a bad request."""
+    if isinstance(value, str) and value.isdigit():
+        value = int(value)
+    if type(value) is not int or value <= 0:
+        raise ValueError("bad_request")
+    return value
 
 
 def require_actor(db, actor, *, admin=False):
