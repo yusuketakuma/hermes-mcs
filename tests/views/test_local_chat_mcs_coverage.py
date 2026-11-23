@@ -496,8 +496,6 @@ def _page_statements(snapshot, route, query, monkeypatch=None):
 
 
 def test_summary_state_follows_the_chat_card_rule(snapshot, monkeypatch):
-    import mcs_util
-    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
     monkeypatch.setattr(local_chat_view, "progress_state",
                         lambda db, mid, cfg: {"state": "attention", "completed": 1, "total": 2})
     message = _message(snapshot, 30, project=2)
@@ -507,13 +505,29 @@ def test_summary_state_follows_the_chat_card_rule(snapshot, monkeypatch):
     monkeypatch.setattr(local_chat_view, "progress_state", lambda db, mid, cfg: None)
     assert _message(snapshot, 30, project=2)["summary_state"] == "pending"
 
-    def unreadable():
-        raise mcs_util.ProviderSettingsUnreadable("provider_settings_unreadable")
-    monkeypatch.setattr(mcs_util, "load_config", unreadable)
-    message = _message(snapshot, 10)
-    # The rule cannot be read without the settings: unknown, never a quiet "done" or "pending".
-    assert (message["summary_state"], message["summary_state_label"]) == ("unknown", "要約 状況不明")
-    assert message["attachments_ocr"] is None
+
+
+@pytest.mark.parametrize("content", ["{", '{"extract": 1, "extract": 2}'])
+def test_unreadable_settings_leave_summary_state_and_ocr_unknown(snapshot, monkeypatch, tmp_path, content):
+    # A config.json that exists but cannot be parsed is not the defaults (load_config would read it as {}).
+    import attachment_ocr
+    import mcs_util
+    path = tmp_path / "config.json"
+    path.write_text(content, encoding="utf-8")
+    real = mcs_util.config_read_state
+    monkeypatch.setattr(mcs_util, "config_read_state", lambda: real(str(path)))
+    real_view = attachment_ocr.view
+    monkeypatch.setattr(attachment_ocr, "view", lambda *a, **k: pytest.fail("policy cannot be decided"))
+    for message in (_message(snapshot, 10),
+                    next(i for i in chat.response(snapshot, {1}, "timeline", "project=1")["items"]
+                         if i["message_id"] == 10)):
+        # the rule cannot be read without the settings: unknown, never a quiet "pending" or "failed" OCR
+        assert (message["summary_state"], message["summary_state_label"]) == ("unknown", "要約 状況不明")
+        assert message["attachments_ocr"] is None
+    # A missing file is the defaults, as for the collector.
+    monkeypatch.setattr(attachment_ocr, "view", real_view)
+    path.unlink()
+    assert _message(snapshot, 10)["summary_state"] in ("pending", "attention")
 
 
 def test_timeline_counts_attachment_ocr_states_per_post(snapshot, monkeypatch):
@@ -648,3 +662,48 @@ def test_sender_search_reaches_posts_past_the_body_matches(tmp_path):
         chat.response(snapshot, {1}, "senders", "project=2&q=ヤマダ")
     with pytest.raises(ValueError, match="^bad_query$"):
         chat.response(snapshot, {1}, "senders", "project=1&q=%20%E3%80%80")
+
+
+def test_reply_checks_follow_the_settings_the_tab_reads(snapshot, monkeypatch):
+    # Within one snapshot a settings change re-judges completeness: list, heading and the 連絡・返答の確認 tab agree.
+    import mcs_util
+    import patient_context_view
+    settings = {"extract": {"patient_context": {"enabled": False}}}
+    monkeypatch.setattr(mcs_util, "config_read_state", lambda: (settings, "read"))
+    monkeypatch.setattr(mcs_util, "load_config", lambda: settings)
+    real = patient_context_view.evidence
+
+    def evidence(db, pid, *, cfg=None):
+        ev = real(db, pid, cfg=cfg)
+        done = cfg["extract"]["patient_context"]["enabled"]        # a synthetic stand-in for the real judgment
+        return {**ev, "coverage": {**ev["coverage"], "inference": {
+            "complete": done, "status": "complete" if done else "pending", "sources": {}}}}
+    monkeypatch.setattr(patient_context_view, "evidence", evidence)
+
+    def readings():
+        listed = next(i for i in chat.response(snapshot, None, "patients", "")["items"] if i["project_id"] == 1)
+        heading = chat.response(snapshot, None, "counts", "project=1")["replies"]
+        tab = chat.response(snapshot, None, "panel", "project=1&section=replies")["panel"]
+        return listed["replies"]["state"], heading["state"], any(n.startswith("解析未完了") for n in tab["notes"])
+    assert readings() == ("partial", "partial", True)
+    settings = {"extract": {"patient_context": {"enabled": True}}}
+    assert readings() == ("observed", "observed", False)
+    # Unreadable settings cannot confirm anything.
+    monkeypatch.setattr(mcs_util, "config_read_state", lambda: ({}, "unreadable"))
+    assert chat.response(snapshot, None, "counts", "project=1")["replies"]["state"] == "partial"
+
+
+def test_a_single_post_reads_only_its_own_revisions(snapshot):
+    view = mcs_view.View(snapshot)
+    statements = []
+    view.db.set_trace_callback(statements.append)
+    try:
+        assert local_chat_view._PageReads(view, 1, []).revisions == {}
+        assert not any("message_revisions r" in s for s in statements)
+        row = view._message(1, 10)
+        reads = local_chat_view._PageReads(view, 1, [row])
+    finally:
+        view.close()
+    assert set(reads.revisions) == {10}
+    scan = [s for s in statements if "FROM message_revisions r" in s]
+    assert len(scan) == 1 and "r.message_id=" in scan[0]

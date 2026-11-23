@@ -1,6 +1,7 @@
 """Project authorized patient timelines from an existing published local snapshot."""
 import base64
 import binascii
+import hashlib
 import json
 import re
 import sqlite3
@@ -8,7 +9,7 @@ import threading
 
 from mcs_contract import project_url
 from mcs_queries import UNKNOWN_TIME, register_search_fold
-from mcs_util import ProviderSettingsUnreadable, search_fold
+from mcs_util import search_fold
 from message_metadata import mentions_self
 from notify_render import (PROCESSING_STATUS_LABELS, SUMMARY_EMPTY_LABELS, URGENCY_PLAIN, patient_heading,
                            progress_state, project_identity, summary_empty_state)
@@ -67,8 +68,8 @@ def patients(view, allowed, *, query="", cursor=None):
            f"FROM ({sql})) WHERE 1=1")
     page = view._page(sql, params, ["_activity", "_key"], ["local-chat-patients-by-activity", scope, query],
                       60, cursor, key_fields=("_activity", "_key"))
-    signals, budget = _signal_counts(view), [LIST_REPLY_BUILDS]
-    page["items"] = [_patient(view, row, signals, budget) for row in page["items"]]
+    signals, settings, budget = _signal_counts(view), _settings(), [LIST_REPLY_BUILDS]
+    page["items"] = [_patient(view, row, signals, settings, budget) for row in page["items"]]
     return {"snapshot": view.meta, **page}
 
 
@@ -77,7 +78,7 @@ def patients(view, allowed, *, query="", cursor=None):
 LIST_REPLY_BUILDS = 12
 
 
-def _patient(view, row, signals, budget):
+def _patient(view, row, signals, settings, budget):
     import initial_import_state
 
     db, pid = view.db, row["project_id"]
@@ -100,7 +101,7 @@ def _patient(view, row, signals, budget):
         if code == "other" else notify_views.fetch_reason_ja(code),
         last_complete_fetch=row["last_complete_fetch"] if type(row["last_complete_fetch"]) in (int, float) else None,
         initial_import=phase,
-        open_signals=_open_signals(signals, pid), replies=_replies(view, pid, budget))
+        open_signals=_open_signals(signals, pid), replies=_replies(view, pid, settings, budget))
     return result
 
 
@@ -279,7 +280,10 @@ class _PageReads:
         self.undated = {r[0] for r in db.execute(
             f"SELECT DISTINCT parent_id FROM messages WHERE project_id=? AND parent_id IN ({root_marks}) "
             "AND posted_at_ts IS NULL", [project, *roots])} if roots else set()
-        self.revisions = observed_revisions(db, project) if table_exists(db, "message_revisions") else {}
+        # observed_revisions reads one post or the whole room: a single post (the evidence route) reads its own
+        self.revisions = ({} if not ids or not table_exists(db, "message_revisions") else
+                          observed_revisions(db, project, message_id=ids[0]) if len(ids) == 1 else
+                          observed_revisions(db, project))
         try:
             self.actor_fetched = {r[0] for r in db.execute(
                 f"SELECT message_id FROM message_reaction_actor_fetch WHERE message_id IN ({marks})", ids)}
@@ -293,12 +297,8 @@ class _PageReads:
 
     def cfg(self):
         """The settings the chat cards read (None when unreadable), loaded on first need."""
-        from mcs_util import load_config
         if self._cfg is None:
-            try:
-                self._cfg = (load_config(),)
-            except ProviderSettingsUnreadable:
-                self._cfg = (None,)
+            self._cfg = _settings()
         return self._cfg[0]
 
 
@@ -502,29 +502,41 @@ def counts(view, allowed, project):
     """Heading counts of one patient: open signals and request replies, each with whether it is confirmed."""
     require_project(project, allowed)
     return {"snapshot": view.meta, "open_signals": _open_signals(_signal_counts(view), project),
-            "replies": _replies(view, project)}
+            "replies": _replies(view, project, _settings())}
 
 
-def _replies(view, project, budget=None):
-    """One patient's request-reply counts, built once per snapshot generation; with a ``budget`` (a one-item
-    list of builds left) an unbuilt patient past it reads "not_computed" instead of building now."""
+def _settings():
+    """``(settings, signature)`` the chat cards read: the defaults when config.json is missing, ``None`` when
+    it is unreadable; the signature tells one reading of the settings from another."""
+    from mcs_util import config_read_state
+
+    cfg, state = config_read_state()
+    if state == "unreadable":
+        return None, "unreadable"
+    return cfg, hashlib.sha256(json.dumps(cfg, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
+
+
+def _replies(view, project, settings, budget=None):
+    """One patient's request-reply counts, built once per snapshot generation and reading of the settings
+    (they decide whether the analysis is complete); with a ``budget`` (a one-item list of builds left) an
+    unbuilt patient past it reads "not_computed" instead of building now."""
     store = _generation_store(view)
-    key = ("replies", project)
+    key = ("replies", project, settings[1])
     if key in store:
         return store[key]
     if budget is not None:
         if budget[0] <= 0:
             return {"requests": None, "not_found": None, "unknown": None, "state": "not_computed"}
         budget[0] -= 1
-    replies, kept = _build_replies(view, project)
+    replies, kept = _build_replies(view, project, settings[0])
     if kept:
         store[key] = replies
     return replies
 
 
-def _build_replies(view, project):
-    """``(counts, whether every read succeeded)`` of the 連絡・返答の確認 card's requests."""
-    from mcs_util import load_config
+def _build_replies(view, project, cfg):
+    """``(counts, whether every read succeeded)`` of the 連絡・返答の確認 card's requests; without readable
+    settings (``cfg`` None) completeness cannot be judged and the counts stay a lower bound."""
     import patient_context_view as pcv
 
     try:
@@ -535,8 +547,9 @@ def _build_replies(view, project):
     # While analysis is unfinished a request may not be recognised yet: the counts are a lower bound,
     # as the 連絡・返答の確認 card says.
     try:
-        pending, kept = notify_views.analysis_incomplete(pcv.evidence(view.db, project, cfg=load_config())), True
-    except (sqlite3.Error, ValueError, TypeError, KeyError, RecursionError, ProviderSettingsUnreadable):
+        pending, kept = (True if cfg is None else
+                         notify_views.analysis_incomplete(pcv.evidence(view.db, project, cfg=cfg))), True
+    except (sqlite3.Error, ValueError, TypeError, KeyError, RecursionError):
         pending, kept = True, False
     return {"requests": len(talk["items"]), "not_found": len(waiting["unanswered"]),
             "unknown": len(waiting["reply_unknown"]), "state": "partial" if pending else "observed"}, kept
