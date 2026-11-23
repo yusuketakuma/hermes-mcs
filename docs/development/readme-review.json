@@ -106,7 +106,7 @@
     "mcs/patients/patient_context_refresh.py",
     "mcs/patients/patient_context_plan.py",
     "mcs/patients/measurement_sources.py",
-    "mcs/core/mcs_queries.py",
+    "mcs/core/ledger/mcs_queries.py",
     "mcs/notify/notify_scope.py",
     "changes/archive/1.1.1/extract-carry-backpressure.json",
     "changes/archive/1.1.1/patient-context-grounded-detail-prompt.json",
