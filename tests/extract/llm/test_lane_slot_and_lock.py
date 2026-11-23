@@ -75,13 +75,13 @@ def test_lock_lost_result_is_written_later_in_run(tmp_path, monkeypatch):
     release = []
     held = extract_llm.llm_extract
     def extract(body, **kw):
-        release.append(extract_llm_errors.time.monotonic() + 60.5)
+        release.append(state["clock"] + 60.5)  # synthetic waits only
         return held(body, **kw)
     monkeypatch.setattr(extract_llm, "llm_extract", extract)
     monkeypatch.setattr(extract_llm_runner, "llm_extract", extract)
     acquire = extract_llm.acquire_run_lock
     def timed_acquire():
-        if release and extract_llm_errors.time.monotonic() < release[0]:
+        if release and state["clock"] < release[0]:
             return None
         return acquire()
     monkeypatch.setattr(extract_llm_errors, "acquire_run_lock", timed_acquire)
