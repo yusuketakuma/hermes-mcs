@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from homecare_records import (InvalidFields, calendar_date, get, qualifications, require_actor, text_field,
                               unknown_fields)
@@ -14,6 +14,8 @@ STATUSES = ("planned", "done", "cancelled")
 # Visit dates and times are wall-clock times at the site, which is in Japan.
 SITE_TIME = timezone(timedelta(hours=9))
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+# Soonest first within a day: timed visits in time order, then untimed ones.
+_IN_DAY = "v.start_time IS NULL, v.start_time, v.visit_id"
 
 
 def _clean(db, registry, values, held_kind=None, held_staff=None):
@@ -125,8 +127,16 @@ def site_today():
 def upcoming(db, patient_id, today, *, limit=3):
     """The next planned visits from ``today`` on, soonest first; an overdue plan is not a next visit."""
     return [dict(row) for row in db.execute(
-        _LISTED + "AND v.status='planned' AND v.visit_date>=? "
-        "ORDER BY v.visit_date, v.start_time IS NULL, v.start_time, v.visit_id LIMIT ?", (patient_id, today, limit))]
+        _LISTED + f"AND v.status='planned' AND v.visit_date>=? ORDER BY v.visit_date, {_IN_DAY} LIMIT ?",
+        (patient_id, today, limit))]
+
+
+def next_planned(db, today):
+    """Each patient's next planned visit from ``today`` on, as ``{patient_id: {"visit_date", "start_time"}}``."""
+    return {row["patient_id"]: {"visit_date": row["visit_date"], "start_time": row["start_time"]} for row in db.execute(
+        "SELECT patient_id, visit_date, start_time FROM (SELECT v.patient_id, v.visit_date, v.start_time, "
+        f"ROW_NUMBER() OVER (PARTITION BY v.patient_id ORDER BY v.visit_date, {_IN_DAY}) AS n FROM visits v "
+        "WHERE v.status='planned' AND v.visit_date>=?) WHERE n=1", (today,))}
 
 
 def done(db, patient_id, *, limit=3):
@@ -142,11 +152,28 @@ def started_at(visit) -> int:
         tzinfo=SITE_TIME).timestamp())
 
 
-def for_day(db, visit_date):
-    """Every visit on one date, in time order, with the patient's name and address for planning the day."""
-    if not calendar_date(visit_date):
+def _day(value):
+    if not calendar_date(value):
         raise ValueError("bad_request")
+    return value
+
+
+def for_day(db, visit_date):
+    """Every visit on one date, in time order, with the patient's name, address and caution note for the day."""
     return [dict(row) for row in db.execute(
-        "SELECT v.*, s.name AS staff_name, p.name AS patient_name, p.address, p.residence FROM visits v "
-        "JOIN patients p USING(patient_id) LEFT JOIN staff s USING(staff_id) WHERE v.visit_date=? "
-        "ORDER BY v.start_time IS NULL, v.start_time, v.visit_id", (visit_date,))]
+        "SELECT v.*, s.name AS staff_name, p.name AS patient_name, p.address, p.residence, p.caution_note "
+        "FROM visits v JOIN patients p USING(patient_id) LEFT JOIN staff s USING(staff_id) WHERE v.visit_date=? "
+        f"ORDER BY {_IN_DAY}", (_day(visit_date),))]
+
+
+def week(db, first_day, *, days=7):
+    """How many visits are planned, done and cancelled on each of ``days`` dates from ``first_day``."""
+    start = date.fromisoformat(_day(first_day))
+    if (date.max - start).days < days - 1:
+        raise ValueError("bad_request")
+    dates = [(start + timedelta(days=n)).isoformat() for n in range(days)]
+    counts = {day: dict.fromkeys(STATUSES, 0) for day in dates}
+    for row in db.execute("SELECT visit_date, status, COUNT(*) AS n FROM visits WHERE visit_date BETWEEN ? AND ? "
+                          "GROUP BY visit_date, status", (dates[0], dates[-1])):
+        counts[row["visit_date"]][row["status"]] = row["n"]
+    return [{"date": day, **counts[day]} for day in dates]
