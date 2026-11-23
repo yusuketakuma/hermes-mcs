@@ -786,3 +786,21 @@ def test_route_fails_on_malformed_steps_and_keeps_the_day_bounded(db, tmp_path):
         route.plan(db, settings, "2026-11-24", actor=me["staff_id"],
                    fetch=lambda request: (_ for _ in ()).throw(OSError("offline")))
     assert db.execute("SELECT COUNT(*) FROM patient_locations").fetchone()[0] == 1  # the earlier success only
+
+
+def test_an_existing_ledger_moves_to_resident_mode_after_its_administrator_adds_a_login(server):
+    db = homecare_store.connect(server.homecare, REGISTRY.modules)
+    me = first_staff(db)  # registered in ordinary mode, with no Tailscale login yet
+    server.tailnet_host = TAILNET
+    # Switched too soon: nobody is staff by login, and the register is not empty, so nothing answers.
+    assert resident_request(server, "GET", "/", login="admin@example.invalid") == (403, chat.UNREGISTERED)
+    assert resident_request(server, "POST", "/api/hc/staff.create", BODY, login="admin@example.invalid")[0] == 403
+    # Recovery: back in ordinary mode the administrator adds their own login, then resident mode admits them.
+    server.tailnet_host = None
+    records.update(db, "staff", me["staff_id"], {"tailscale_login": "admin@example.invalid"}, expected_version=1,
+                   actor=me["staff_id"], registry=REGISTRY)
+    db.close()
+    server.tailnet_host = TAILNET
+    assert resident_request(server, "GET", "/", login="admin@example.invalid")[0] == 200
+    session = json.loads(resident_request(server, "GET", "/api/session", login="admin@example.invalid")[1])
+    assert session["user"] == {"staff_id": me["staff_id"], "name": me["name"]}
