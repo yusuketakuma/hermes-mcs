@@ -1,15 +1,16 @@
 {
   "category": "changed",
   "title": "抽出監査の指摘が残る投稿を、再抽出の再開期間中にクラウドで1回だけ再抽出",
-  "summary": "抽出監査の指摘がローカルの再抽出後も残る投稿を、再抽出の再開期間（cloud_llm.reextract_backlog_until）中だけ、直近60日に限りクラウドでもう1回再抽出します。本文に加えて監査が指摘した項目名・緊急度の指摘も送ります。送信条件は既存の再開期間と同じで、同じ本文へ2回以上は送りません。なお残る投稿は mcs view qc の確認候補に出ます。ローカルの再抽出を済ませた投稿は通常の再抽出としては送らなくなりました（人の ⚠ 報告と世代更新は従来どおり）。",
-  "upgrade": "既存の更新手順（mcs_update.py の再起動処理を含む）で、抽出worker・再抽出用のクラウドworker・Hermes gateway または独立 host へ反映されます。Git の差分だけを反映した場合は、これらを再起動するまで旧コードのままです。クラウドへ送るのは cloud_llm.reextract_backlog_until を設定した再開期間中だけで、設定していない環境では送信は増えません。抽出コードを変更したため、抽出コードの digest を含む意味チェック候補の識別子と添付ページの抽出契約が変わり、更新後に候補の再評価や添付ページのローカル再抽出が発生する場合があります。保存済みの抽出結果・設定の書換えはありません。既存の qc_fix の記録（回数の記録なし）はローカルの1回目として扱います。",
+  "summary": "抽出監査の指摘がローカルの再抽出後も残る投稿を、再抽出の再開期間（cloud_llm.reextract_backlog_until）中だけ、直近60日に限りクラウドでもう1回再抽出します。本文に加えて監査が指摘した項目名・緊急度の指摘も送ります。上限はAPI要求1回ではなく本文1つにつき1回（分割・修正の要求を含む）で、同じ本文へ2回目は送りません。なお残る投稿は mcs view qc の確認候補に出ます。ローカルの再抽出を済ませた投稿は通常の再抽出としては送りません（人の ⚠ 報告と世代更新は従来どおり）。",
+  "upgrade": "既存の更新手順（mcs_update.py の再起動処理を含む）で、抽出worker・再抽出用のクラウドworker・Hermes gateway または独立 host へ反映されます。Git の差分だけを反映した場合は、これらを再起動するまで旧コードのままです。クラウドへ送るのは cloud_llm.reextract_backlog_until を設定した再開期間中だけで、設定していない環境では送信は増えません。抽出コードを変更したため、抽出コードの digest を含む意味チェック候補の識別子と添付ページの抽出契約が変わり、更新後に候補の再評価や添付ページのローカル再抽出が発生する場合があります。保存済みの抽出結果・設定の書換えや移行はありません（1回の記録 extract_cloud_attempt_v1 は更新後の送信から作られます）。既存の qc_fix の記録（回数の記録なし）はローカルの1回目として扱います。",
   "details": [
     "送信条件は既存の再開期間と同じ（費用上限、cloud-llm stop、施設の確認、project_ids・exclude_project_ids の範囲、cloud-llm resume で記録した履歴の範囲、旧抽出の保留なし）。新しい設定項目や送信経路はなく、再開期間外には送らない。",
-    "同じ投稿の現在の本文にクラウドの再抽出の送信予約が一度でもあれば（通常の再抽出として送った場合や、クラウドの結果が保留・不採用になった場合を含む）、もう送らない。本文が変わった場合は新しい本文として扱う。",
+    "上限は API の要求1回ではなく、投稿の本文（content_hash）1つにつきクラウドの再抽出1回。長い本文の分割や応答の修正の要求も同じ1回に含まれ、どれも本文を送る。通常の再抽出として送った本文や、結果が失敗・保留になった本文には、投稿者名などだけの更新があっても再度は送らない。本文が変わった場合は新しい本文として扱う。",
     "クラウドの再抽出後も指摘が残る投稿と、すでにクラウドで再抽出した投稿は確認候補（needs_confirmation）、まだの投稿はクラウド再抽出待ち（followup_state）に表示し、確認候補はそれ以上自動では再抽出しない。チャットのカード表示は変わらない。",
     "現在の抽出世代で qc_fix の記録がある投稿を通常の再抽出として送らないのは、監査と再抽出を繰り返すたびに有料の送信が重なるおそれがあったため。",
-    "抽出の qc_fix に attempt を追加し、クラウドの2回目だけ attempt: 2 を記録する。成功時は applied: true、送信後の既知の失敗時はローカルで再実行せず元の抽出を applied: false で確定する。",
-    "選択は既存の reextract 経路（cloud_followup）に qc_cloud 列を加え、最新の監査が1回目の再抽出結果を指摘し続け、人の誤り報告がなく、現在の source に reextract の送信予約（cloud_usage_reserve）がない投稿だけを対象にする。送信予約は結果が保留・不採用でも残るため、保留が後の更新で解除されても再送しない。",
+    "抽出の qc_fix に attempt を追加し、採用したクラウドの2回目だけ attempt: 2 を記録する。送信後の既知の失敗ではローカルで再実行せず、抽出も書き直さないので、現在の監査がその抽出を指したまま確認候補に出る。",
+    "1回の記録として artifacts に新しい種類 extract_cloud_attempt_v1 を加える。2回目は最初の要求の前に開いた記録（監査された抽出と source の revision に束縛）を残し、採用・保留は抽出の書込みと同じ transaction で、送信後の既知の失敗は単独で閉じた記録を追記する。通常の再抽出も終了時に閉じた記録を残す。この記録は送信の会計記録（cloud_usage_*、62日で整理）と違って削除されない。記録を残さない送信に備え、本文の最初の開いた記録より前の reextract 送信予約も送信済みとみなす。",
+    "費用上限・停止による送信前の拒否で途中まで送った回は開いたまま残り、次の機会に保存済みの分割結果を再利用して残りだけを送る。送信済み・結果不明の要求は既存の会計の重複防止で送り直さない。",
     "claim 時もレーンの絞り込み（extract_llm_selection.cloud_lane_sql、QC の60日範囲と qc_fix 済みの除外を含む）と qc_cloud 列を再照合する。cloud-llm estimate も同じ絞り込みを使う。",
     "mcs view qc の一覧に qc_attempts（0・1・2）、needs_confirmation、followup_state（local_reextract_pending・cloud_reextract_pending・needs_confirmation）を追加し、集計に followup 別の件数を加えた。--needs-confirmation は --message-id と同時に指定できない。"
   ],
@@ -19,6 +20,8 @@
     "mcs/extract/llm/extract_llm_qc.py",
     "mcs/extract/llm/extract_llm_runner.py",
     "mcs/extract/llm/extract_llm_selection.py",
+    "mcs/extract/llm/extract_llm_source_contract.py",
+    "mcs/extract/llm/extract_llm_store.py",
     "mcs/ops/cloud_cli.py",
     "mcs/semantic/semantic_qc.py",
     "mcs/views/mcs_view.py"

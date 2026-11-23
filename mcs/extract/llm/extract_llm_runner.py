@@ -116,9 +116,19 @@ from extract_llm_source_contract import (
     _writer_current,
 )
 from extract_llm_store import (
+    _close_cloud_attempt,
+    _close_cloud_attempt_tx,
     _commit_extraction_atomic,
+    _open_cloud_attempt,
     _persist_chunks,
 )
+
+# A paid request of a cloud re-extraction failed with a known outcome: the
+# post's single attempt is over. Other fallbacks (a cap or stop refusal before
+# the next request, a stopped owner, a changed source) leave it to resume.
+_CLOUD_ATTEMPT_ENDING = frozenset({
+    "cloud_validation_failed", "cloud_invalid_response", "cloud_incomplete_response",
+    "cloud_repair_invalid", "cloud_unit_failed"})
 
 def _run_batch_call(tups, target, deadline: float,
                     vital_policy: dict | None) -> tuple:
@@ -232,9 +242,9 @@ def _rebuild_meta(r, extra):
     return {**(extra or {}), "local_rebuild": local_rebuild.tag(r["_local_rebuild"])}
 
 
-def _qc_fix(r, qc, applied):
-    """The qc_fix settle marker; the cloud second attempt records attempt 2 (a missing attempt reads as 1)."""
-    marker = {"qc": qc["qc"], "applied": applied}
+def _qc_fix(r, qc):
+    """The adopted qc_fix marker; an adopted cloud second attempt records attempt 2 (a missing attempt reads as 1)."""
+    marker = {"qc": qc["qc"], "applied": True}
     if r.get("qc_cloud") and r.get("_cloud_mode") == "on":
         marker["attempt"] = 2
     return marker
@@ -657,6 +667,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             _CALL_NOTES.defer_reason = local_rebuild.UNVERIFIED   # never build a cloud unit for it
             return _DEFERRED
         if r.get("_cloud_mode") == "on":
+            if r.get("qc_cloud") and not _owner_call(lambda: _open_cloud_attempt(ledger, r), result=True):
+                # The QC second attempt opens before any request, or the post stays unsent.
+                _CALL_NOTES.defer_reason = "cloud_scope_or_budget"
+                return _DEFERRED
             r["_cloud_lease"] = leases[index]
             provider = _owner_call(lambda: cloud_inference.CloudInferenceUnit(ledger, r["_cloud_config"], route="reextract",
                 project_id=r["project_id"], message_id=r["message_id"],
@@ -881,11 +895,14 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 key[1:]: d.get(key, 0) for key in ("_items_dropped", "_evidence_dropped")}}
         outcome = _commit_extraction_atomic(
             ledger, r, json.dumps(d, ensure_ascii=False), ctx, integrity,
-            _qc_fix(r, qc, True) if qc else None,
+            _qc_fix(r, qc) if qc else None,
             extra or None, used_keys,
             check_current=qc is None and not r["thin_src"] and not r["human_src"],
             expected_prior=r.get("_expected_prior"),
-            adoption_guard=r.get("_superseded_guard"))
+            adoption_guard=r.get("_superseded_guard"),
+            # An adopted or held cloud answer ends the body's one attempt with it.
+            before_replace_tx=((lambda: _close_cloud_attempt_tx(ledger.db, r))
+                               if r.get("_cloud_mode") == "on" else None))
         if outcome != "written":
             if outcome == "rejected":
                 r["_commit_hold"] = True
@@ -948,37 +965,15 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             transport = r.get("_transport")
             at = r.get("_transport_at")
 
-            def settle_qc():
-                # A QC-flagged row whose feedback re-extract failed keeps the
-                # audited artifact — re-mint it with qc_fix so the flag settles
-                # instead of burning an LLM call every cycle. True once written.
-                src = ledger.db.execute(
-                    "SELECT content FROM artifacts WHERE artifact_id=?",
-                    (qc["src"],)).fetchone()
-                prior = _prior_extract(ledger.db, r)
-                if (src is not None and prior is not None and prior["artifact_id"] == qc["src"]
-                        and prior["content"] == src["content"]):
-                    # these writes are never carried: a skipped one
-                    # re-selects the row for another paid call, so
-                    # wait out the tick (default 60 s), not write_wait_s
+            def cloud_retry():
+                if (r.get("_defer_reason") == "cloud_fallback"
+                        and r.get("_fallback_code") in _CLOUD_ATTEMPT_ENDING):
+                    # The body's one cloud attempt is over. Nothing is
+                    # re-stored, so the current audit keeps pointing at the
+                    # extraction; an unfinished attempt resumes instead.
                     with _settle_lock() as held:
                         if held:
-                            return _commit_extraction_atomic(
-                                ledger, r, src["content"], ctx, None,
-                                _qc_fix(r, qc, False), _rebuild_meta(r, None), (),
-                                check_current=False, mark_context=False,
-                                expected_prior=_prior_identity(prior),
-                                adoption_guard=_rebuild_guard(ledger, r)) == "written"
-                return False
-
-            def cloud_retry():
-                if (qc is not None and r.get("qc_cloud")
-                        and r.get("_defer_reason") == "cloud_fallback" and settle_qc()):
-                    # The QC second attempt was sent and failed with a known
-                    # outcome: it settles (attempt 2, not applied) and never
-                    # reruns locally or resends. An unwritten settle keeps the
-                    # retry backoff below, which also ends cloud selection.
-                    return
+                            _close_cloud_attempt(ledger, r)
                 # the paid cloud attempt failed and local produced nothing: the
                 # retry backoff keeps the next pass from re-sending the same body
                 with _settle_lock() as held:
@@ -1051,7 +1046,29 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             cloud_retry()
                         return
                 if qc is not None:
-                    settle_qc()
+                    # A QC-flagged row that failed its feedback re-
+                    # extract keeps the audited artifact — re-mint it
+                    # with qc_fix so the flag settles instead of
+                    # burning an LLM call every cycle. The cloud second
+                    # attempt never re-stores (cloud_retry).
+                    src = ledger.db.execute(
+                        "SELECT content FROM artifacts WHERE artifact_id=?",
+                        (qc["src"],)).fetchone()
+                    prior = _prior_extract(ledger.db, r)
+                    if (not r.get("qc_cloud") and src is not None and prior is not None
+                            and prior["artifact_id"] == qc["src"]
+                            and prior["content"] == src["content"]):
+                        # these writes are never carried: a skipped one
+                        # re-selects the row for another paid call, so
+                        # wait out the tick (default 60 s), not write_wait_s
+                        with _settle_lock() as held:
+                            if held:
+                                _commit_extraction_atomic(
+                                    ledger, r, src["content"], ctx, None,
+                                    {"qc": qc["qc"], "applied": False}, _rebuild_meta(r, None), (),
+                                    check_current=False, mark_context=False,
+                                    expected_prior=_prior_identity(prior),
+                                    adoption_guard=_rebuild_guard(ledger, r))
                     return
                 if r["human_src"]:
                     # A failed report re-extract settles like the thin

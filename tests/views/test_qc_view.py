@@ -392,6 +392,43 @@ def test_qc_view_marks_confirmation_candidates_after_both_automatic_attempts(tmp
         db.close()
 
 
+def test_qc_view_reads_the_durable_cloud_attempt_record_of_the_body(tmp_path):
+    import extract_llm
+    db = _seeded(tmp_path)
+    try:
+        db.save_messages([_message(mid) for mid in (7, 8, 9)])
+
+        def attempt(mid, state, **binding):
+            content_hash, source = db.db.execute(
+                "SELECT m.content_hash,(SELECT MAX(a.artifact_id) FROM artifacts a WHERE a.kind='extract_llm' "
+                "AND a.message_id=m.message_id) FROM messages m WHERE m.message_id=?", (mid,)).fetchone()
+            binding = {key: source if value == "own" else value for key, value in binding.items()}
+            with db.db:   # no accounting rows: maintenance pruned them long ago
+                db.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at)"
+                              " VALUES(?,1,?,?,'','{}',?)", (extract_llm.CLOUD_ATTEMPT_KIND, mid, json.dumps(
+                                  {"hash": content_hash, "purpose": "qc", "state": state, **binding}),
+                                  time.time() - 90 * 86400))
+        for mid in (7, 8, 9):
+            _v2(db, mid)
+            _qc(db, mid, _NO_MATCH)
+            _mark_fixed(db, mid, {"qc": 1, "applied": True})
+        attempt(7, "open", source_artifact_id="own", revision=0)
+        attempt(7, "closed")                                       # failed or held, nothing re-stored
+        attempt(8, "open", source_artifact_id="own", revision=0)   # unfinished: resumes
+        attempt(9, "open", source_artifact_id=-1, revision=0)      # an earlier extraction's attempt
+        view = _view(db, tmp_path)
+        try:
+            out = view.read("qc", project=1)
+        finally:
+            view.close()
+        rows = {i["message_id"]: (i["qc_attempts"], i["needs_confirmation"], i["followup_state"])
+                for i in out["items"] if i["message_id"] in (7, 8, 9)}
+        assert rows == {7: (1, True, "needs_confirmation"), 8: (1, False, "cloud_reextract_pending"),
+                        9: (1, True, "needs_confirmation")}
+    finally:
+        db.close()
+
+
 def test_qc_view_needs_confirmation_flag_reaches_the_cli(tmp_path, capsys):
     import ledger
     import mcs_view

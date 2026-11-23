@@ -206,7 +206,6 @@ def test_reaudited_local_fix_is_the_cloud_lanes_second_attempt_not_local_work(tm
     ({"qc_cloud": None, "_cloud_mode": "on"}, None),
     ({}, None),
 ])
-def test_only_the_cloud_second_attempt_records_attempt_two(row, attempt):
-    for applied in (True, False):
-        marker = extract_llm_runner._qc_fix(row, {"qc": 9}, applied)
-        assert marker == {"qc": 9, "applied": applied, **({"attempt": attempt} if attempt else {})}
+def test_only_the_adopted_cloud_second_attempt_records_attempt_two(row, attempt):
+    marker = extract_llm_runner._qc_fix(row, {"qc": 9})
+    assert marker == {"qc": 9, "applied": True, **({"attempt": attempt} if attempt else {})}

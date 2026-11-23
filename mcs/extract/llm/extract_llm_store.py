@@ -71,14 +71,17 @@ from extract_llm_provider import (
 from extract_llm_qc import (
     _commit_rejected,
     _current,
+    _qc_cloud_followup_sql,
     _prior_extract,
     _prior_matches,
     _protected_prior_current,
     _rerender_cards,
     _upgrade_contract,
     _verify_created_artifact_tx,
+    source_revision_sql,
 )
 from extract_llm_source_contract import (
+    CLOUD_ATTEMPT_KIND,
     EXTRACT_VERSION,
     KIND,
     PATIENT_CONTEXT_VERSION,
@@ -165,6 +168,51 @@ def _record_hold_tx(ledger, r, prior, reason, *, lost=None, lost_class=None, fee
                           (r["message_id"], r["project_id"]))
     _verify_atomic_witness(ledger.db, r, witnesses)
     return witnesses
+
+
+def _add_cloud_attempt_tx(db, r, state: str, **binding):
+    """Append one cloud attempt record of the row's body unless the identical record exists."""
+    content = json.dumps({"hash": r["content_hash"], "purpose": "qc" if r.get("qc_cloud") else "backlog",
+                          "state": state, **binding}, sort_keys=True)
+    if db.execute("SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND message_id=? AND content=? LIMIT 1",
+                  (CLOUD_ATTEMPT_KIND, r["project_id"], r["message_id"], content)).fetchone() is None:
+        db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+                   "VALUES(?,?,?,?,'','{}',?)",
+                   (CLOUD_ATTEMPT_KIND, r["project_id"], r["message_id"], content, time.time()))
+
+
+def _open_cloud_attempt(ledger, r) -> bool:
+    """Open the QC second attempt before its first cloud request; False when the post no longer qualifies.
+
+    The record binds the attempt to the flagged extraction and the source
+    revision, so only that unfinished attempt resumes (cloud_attempt_spent_sql)."""
+    if ledger.db.in_transaction or type(r.get("qc_cloud")) is not int:
+        return False
+    with ledger.db:
+        ledger.db.execute("BEGIN IMMEDIATE")
+        row = ledger.db.execute(
+            f"SELECT ({_qc_cloud_followup_sql()}), {source_revision_sql()} FROM messages m "
+            "WHERE m.message_id=? AND m.project_id=? AND m.content_hash=?",
+            (r["message_id"], r["project_id"], r["content_hash"])).fetchone()
+        if row is None or row[0] != r["qc_cloud"]:
+            return False
+        _add_cloud_attempt_tx(ledger.db, r, "open", source_artifact_id=row[0], revision=row[1])
+    return True
+
+
+def _close_cloud_attempt_tx(db, r):
+    """Record in the caller's transaction that a cloud re-extraction of the row's body ended."""
+    _add_cloud_attempt_tx(db, r, "closed")
+
+
+def _close_cloud_attempt(ledger, r) -> bool:
+    """Record, in its own transaction, that a paid cloud re-extraction of the row's body failed for good."""
+    if ledger.db.in_transaction:
+        return False
+    with ledger.db:
+        ledger.db.execute("BEGIN IMMEDIATE")
+        _close_cloud_attempt_tx(ledger.db, r)
+    return True
 
 
 def _replace_current(ledger, r, content: str, ctx: bool = False,

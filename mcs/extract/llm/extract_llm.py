@@ -16,7 +16,8 @@ extract_llm artifact (content_hash tracked in meta). run_check calls it
 with a time budget each tick so the backlog drains gradually. A row whose
 current artifact Jev QC flagged re-enters pending once for a feedback
 re-extract (meta.qc_fix settles the flag; a flag that survives it gets
-one cloud re-extract only inside the reopened stored-post window); vitals are anchored to the
+one cloud re-extraction attempt per post body, only inside the reopened
+stored-post window); vitals are anchored to the
 nearest measurement label in the body at validation time.
 
 Naming: comments here call this engine "the v3 pass" (the generation
@@ -178,6 +179,7 @@ from extract_llm_source_contract import (
     REVIVE_PER_INPUT as REVIVE_PER_INPUT,
     REVIVE_COOLDOWN_S as REVIVE_COOLDOWN_S,
     UPGRADE_KIND as UPGRADE_KIND,
+    CLOUD_ATTEMPT_KIND as CLOUD_ATTEMPT_KIND,
     _PREPARE_HOLD_S as _PREPARE_HOLD_S,
     _EXTRACT_LEASE_S as _EXTRACT_LEASE_S,
     _CARRY_MARGIN_S as _CARRY_MARGIN_S,
@@ -328,7 +330,8 @@ from extract_llm_qc import (
     qc_fix_attempt_sql as qc_fix_attempt_sql,
     _qc_fixed_sql as _qc_fixed_sql,
     _qc_cloud_followup_sql as _qc_cloud_followup_sql,
-    cloud_reextract_reserved_sql as cloud_reextract_reserved_sql,
+    cloud_attempt_spent_sql as cloud_attempt_spent_sql,
+    source_revision_sql as source_revision_sql,
     _qc_feedback as _qc_feedback,
     _qc_notes as _qc_notes,
     _compact_qc_feedback as _compact_qc_feedback,

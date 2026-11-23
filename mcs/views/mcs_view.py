@@ -420,9 +420,10 @@ class View:
         from_cloud = (f"EXISTS(SELECT 1 FROM json_each({json_or_null('s.meta')},"
                       "'$.provider_provenance.providers') pp WHERE pp.value IS NOT 'local')")
         flagged = f"(json_extract({content},'$.qc')='done' AND ({extract_llm.qc_actionable_sql('a')}))"
-        clouded = f"({from_cloud} OR {extract_llm.cloud_reextract_reserved_sql('m')})"
+        clouded = f"({from_cloud} OR {extract_llm.cloud_attempt_spent_sql('m', 's.artifact_id')})"
         # Still flagged after the bounded automatic re-extractions: the local one
-        # and the cloud one, or the cloud already re-extracted this source.
+        # and the post body's one cloud attempt (durable record, whatever its
+        # outcome), or the cloud already produced this extraction.
         confirm = f"({flagged} AND ({attempts}=2 OR ({attempts}=1 AND {clouded})))"
         followup = (f"CASE WHEN NOT {flagged} THEN NULL"
                     f" WHEN {attempts}=0 THEN 'local_reextract_pending'"
@@ -525,15 +526,16 @@ class View:
             "pending": "対象内の現行抽出に対するQC未実施件数（キュー済みを含む）",
             "out_of_scope": f"投稿時刻が{window_days}日より前または不明のため追加QC対象外の現行抽出件数。過去のQC注記は表示を維持する",
             "coverage": "検査済み・未検査の項目数。判定済みは全項目の確認を意味しない",
-            "qc_attempts": "抽出チェックの指摘を受けた自動の再抽出の回数"
-                           "（0=なし、1=ローカル1回、2=ローカル1回とクラウド1回。読めない記録は null）",
+            "qc_attempts": "抽出に記録された、抽出チェックの指摘を受けた自動の再抽出の回数"
+                           "（0=なし、1=ローカル1回、2=ローカル1回とクラウド1回の結果を採用。"
+                           "クラウドの再抽出が失敗・保留で終わった抽出は1のまま確認候補になる。読めない記録は null）",
             "needs_confirmation": "確認候補: 自動の再抽出（ローカル1回・クラウド1回）の後も、"
                                   "本文に裏付けが見つからない項目または緊急度の相違が残る抽出。"
                                   "誤りと確定したものではない",
             "followup_state": {
                 "local_reextract_pending": "ローカル再抽出待ち: 指摘を添えたローカルの再抽出をまだ行っていない抽出",
-                "cloud_reextract_pending": "クラウド再抽出待ち: ローカルの再抽出後も指摘が残り、クラウドの再抽出を"
-                                           "まだ行っていない抽出。再抽出の再開期間外・費用上限・停止・対象範囲外・"
+                "cloud_reextract_pending": "クラウド再抽出待ち: ローカルの再抽出後も指摘が残り、この本文のクラウドの再抽出を"
+                                           "まだ終えていない抽出。再抽出の再開期間外・費用上限・停止・対象範囲外・"
                                            "投稿日時が直近60日より前などの場合は送られない",
                 "needs_confirmation": "確認候補（needs_confirmation と同じ）"},
             "extract_feedback": "カードの ⚠ 抽出の誤り報告（新しい順、最大20件）。"

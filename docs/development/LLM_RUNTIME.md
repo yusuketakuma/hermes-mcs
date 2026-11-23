@@ -73,10 +73,16 @@ schemaの正本は[extract_schema](../../mcs/extract/llm/extract_schema.py)で�
 `semantic.extract_qc="annotate"`は抽出結果へ注記し、裏付け不足等の後続再抽出はローカル1回に制限します。
 その結果の再監査でも指摘が残る投稿は、保存済み投稿の再抽出の再開期間中だけ、既存の`reextract`経路と
 その送信条件（費用上限・停止・施設の確認・scope・履歴範囲・`held_prior`・QCの60日範囲）でクラウド1回を加えます。
-現在のsourceに`reextract`の送信予約（`cloud_usage_reserve`）が既にあれば、保留・不採用の結果や通常の再抽出を含めて送信済みとみなし再送しません（`cloud_reextract_reserved_sql`、claim時も`cloud_lane_sql`を再適用）。
+上限はAPI要求1回ではなく本文（`content_hash`）1つにつき1回で、分割chunkと修正要求も同じ1回に含まれます。
+2回目は最初の要求の前に`extract_cloud_attempt_v1`（`state:"open"`、監査された抽出のidとsource revisionを束縛）を記録し、
+採用・保留は抽出の書込みと同じtransactionで、送信後の既知の失敗（`cloud_validation_failed`等）は単独で`state:"closed"`を追記します。
+上限・停止による送信前の拒否で止まった回は開いたまま残り、保存済みchunkを再利用して続きだけを送ります（送信済み・結果不明の要求は会計側の重複防止で再送しません）。
+通常の再抽出も採用・保留・送信後の既知の失敗で`purpose:"backlog"`の閉じた記録を残します。記録は会計の保存期間（`CLOUD_USAGE_KEEP_S`）と無関係に削除されません。
+本文が同じ記録が1つでもあれば（開いた回は同じ抽出・同じrevisionのときだけ続行）、記録より前の`reextract`送信予約（記録を残さない送信）とともに送信済みとみなします（`cloud_attempt_spent_sql`、claim時も`cloud_lane_sql`を再適用）。
+投稿者名等だけのsource更新は本文を変えないので再送しません。
 現在の世代で`qc_fix`を持つ投稿は通常の再抽出として送りません。人の報告と世代更新の再抽出は対象外です。
-`meta.qc_fix.attempt`は2回目だけ`2`を記録し、記録のない既存の`qc_fix`は1回目として扱います。
-送信後の失敗はローカルで再実行せず`applied:false, attempt:2`で確定し、残った指摘は`mcs view qc`の確認候補に出します。
+`meta.qc_fix.attempt`は採用した2回目だけ`2`を記録し、記録のない既存の`qc_fix`は1回目として扱います。
+送信後の失敗はローカルで再実行せず、抽出を書き直さないので現在の監査がその抽出を指したまま残り、`mcs view qc`の確認候補に出します。
 モデルは`jev-1.13.0`へ固定し、応答モデル不一致を拒否します。
 429/5xx/transportのretryはjobの残予算内、401/403はretryしません。
 

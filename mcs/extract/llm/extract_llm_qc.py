@@ -22,6 +22,7 @@ from mcs_queries import (ELIGIBLE_MESSAGE, EXTRACT_FEEDBACK_KIND, V4_PROJECTION_
 from mcs_util import load_config, loads_dict
 
 from extract_llm_source_contract import (
+    CLOUD_ATTEMPT_KIND,
     EXTRACT_VERSION,
     KIND,
     PATIENT_CONTEXT_VERSION,
@@ -390,21 +391,51 @@ def _qc_flagged_sql(msg: str = "m", val: str = "a.artifact_id", *, version: int 
         ORDER BY q.artifact_id DESC LIMIT 1"""
 
 
-def cloud_reextract_reserved_sql(msg: str = "m") -> str:
-    """Whether a stored-post cloud re-extraction was already reserved for the message's current source.
+def source_revision_sql(msg: str = "m") -> str:
+    """The message's newest recorded source revision number (0 before any revision)."""
+    return f"COALESCE((SELECT MAX(rv.seq) FROM message_revisions rv WHERE rv.message_id={msg}.message_id),0)"
 
-    The paid-request reservations are the durable record of a cloud attempt:
-    they outlive a held or rejected answer and every replaced extraction. The
-    current source starts at the message's newest recorded revision (else its
-    first sighting), so only a changed source can earn another attempt. A
-    reservation whose route cannot be read counts as one."""
-    return f"""EXISTS (SELECT 1 FROM artifacts cr
+
+def _body_since_sql(msg: str) -> str:
+    """When the message's current body (content hash) was last first observed."""
+    return f"""COALESCE((SELECT MIN(rv.observed_at) FROM message_revisions rv
+            WHERE rv.message_id={msg}.message_id AND rv.content_hash={msg}.content_hash
+              AND rv.seq > COALESCE((SELECT MAX(rx.seq) FROM message_revisions rx
+                  WHERE rx.message_id={msg}.message_id AND rx.content_hash IS NOT {msg}.content_hash),0)),
+        {msg}.first_seen, 0)"""
+
+
+def cloud_attempt_spent_sql(msg: str = "m", src: str = "qf.artifact_id") -> str:
+    """Whether a stored-post cloud re-extraction already spent the message's current body.
+
+    The limit is one attempt per post body (content hash), not one request: an
+    attempt's chunks and repairs are its own requests. Every attempt record of
+    the body counts (``CLOUD_ATTEMPT_KIND``, never pruned), except a QC second
+    attempt still open for the flagged extraction ``src`` at the unchanged
+    source revision: that one resumes its unfinished requests, and the shared
+    accounting never re-sends a completed or unknown-outcome request. A
+    metadata-only revision keeps the body but ends such an open attempt. A
+    stored-post reservation for the body that precedes its first open record
+    (a send that left no attempt record) counts as well, and so does an
+    unreadable record or reservation."""
+    content = json_or_null("ca.content")
+    return f"""(EXISTS (SELECT 1 FROM artifacts ca
+        WHERE ca.kind='{CLOUD_ATTEMPT_KIND}' AND ca.message_id={msg}.message_id
+          AND (ca.project_id IS NULL OR ca.project_id={msg}.project_id)
+          AND (json_type({content}) IS NOT 'object'
+               OR json_extract({content},'$.hash')={msg}.content_hash
+                  AND NOT (json_extract({content},'$.state')='open'
+                           AND json_extract({content},'$.source_artifact_id')={src}
+                           AND json_extract({content},'$.revision')={source_revision_sql(msg)})))
+      OR EXISTS (SELECT 1 FROM artifacts cr
         WHERE cr.kind='{cloud_usage_accounting.KINDS[0]}' AND cr.message_id={msg}.message_id
           AND (cr.project_id IS NULL OR cr.project_id={msg}.project_id)
           AND COALESCE(json_extract({json_or_null('cr.meta')},'$.route'),'reextract')='reextract'
-          AND cr.created_at >= COALESCE((SELECT rv.observed_at FROM message_revisions rv
-                WHERE rv.message_id={msg}.message_id ORDER BY rv.seq DESC LIMIT 1),
-              {msg}.first_seen, 0))"""
+          AND cr.created_at >= {_body_since_sql(msg)}
+          AND cr.created_at < COALESCE((SELECT MIN(co.created_at) FROM artifacts co
+                WHERE co.kind='{CLOUD_ATTEMPT_KIND}' AND co.message_id={msg}.message_id
+                  AND json_extract({json_or_null('co.content')},'$.hash')={msg}.content_hash
+                  AND json_extract({json_or_null('co.content')},'$.state')='open'), 9e999)))"""
 
 
 def _qc_cloud_followup_sql(val: str = "qf.artifact_id") -> str:
@@ -414,14 +445,15 @@ def _qc_cloud_followup_sql(val: str = "qf.artifact_id") -> str:
     source (``_qc_flagged_sql``, which pins the newest current extraction and
     its newest current audit) must carry ``qc_fix`` from the first attempt, no
     human report may be pending on it, and no cloud re-extraction (plain
-    backlog or an earlier second attempt, whatever its outcome) may already be
-    reserved for the current source. A source not yet re-audited is not
-    flagged, and an attempt-2 marker ends the sequence."""
+    backlog or an earlier second attempt, whatever its outcome) may have spent
+    the current body (``cloud_attempt_spent_sql``); the open second attempt of
+    this very extraction resumes. A source not yet re-audited is not flagged,
+    and an attempt-2 marker ends the sequence."""
     return f"""SELECT {val} FROM artifacts qf
         WHERE qf.artifact_id=({_qc_flagged_sql()})
           AND {qc_fix_attempt_sql('qf.meta')}=1
           AND NOT EXISTS ({_human_flagged_sql(val="1")})
-          AND NOT {cloud_reextract_reserved_sql()}"""
+          AND NOT {cloud_attempt_spent_sql()}"""
 
 
 def _qc_feedback(ledger, src_artifact_id):

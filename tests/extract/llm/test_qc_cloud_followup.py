@@ -1,10 +1,12 @@
 """QC second attempt: one cloud re-extraction inside the reopened backlog window.
 
 A post whose newest Jev audit still flags the extraction its single local
-feedback re-extract produced gets exactly one cloud re-extraction, only
-through the existing stored-post lane and all of its gates. Synthetic
-fixtures, temp DB and a stubbed cloud transport only.
+feedback re-extract produced gets exactly one cloud re-extraction attempt per
+post body (its chunks resume; nothing is re-sent), only through the existing
+stored-post lane and all of its gates. Synthetic fixtures, temp DB and a
+stubbed cloud transport only.
 """
+import dataclasses
 import json
 import time
 
@@ -68,6 +70,25 @@ def _sent_text(body):
     return json.dumps(body, ensure_ascii=False)
 
 
+def _attempts(ledger):
+    """The body's cloud attempt records as (purpose, state)."""
+    return [(row['purpose'], row['state']) for row in
+            (json.loads(a['content']) for a in ledger.artifacts(worker.CLOUD_ATTEMPT_KIND))]
+
+
+def _prune_accounting(ledger):
+    """What maintenance does to cloud usage rows after CLOUD_USAGE_KEEP_S."""
+    with ledger.db:
+        ledger.db.execute("DELETE FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result',"
+                          "'cloud_usage_disposition')")
+
+
+def _still_flagged(ledger, artifact_id):
+    """The newest current audit still flags this extraction (no re-audit needed)."""
+    flagged = ledger.db.execute(f"SELECT ({worker._qc_flagged_sql()}) FROM messages m WHERE m.message_id=1")
+    return flagged.fetchone()[0] == artifact_id
+
+
 def test_still_flagged_local_fix_gets_one_cloud_attempt_with_audit_notes(qc_window):
     ledger, cfg, local_calls, cloud_calls, _answers = qc_window
     _locally_fixed(ledger)
@@ -78,6 +99,7 @@ def test_still_flagged_local_fix_gets_one_cloud_attempt_with_audit_notes(qc_wind
     current, meta = _current(ledger)
     assert meta["qc_fix"]["attempt"] == 2 and meta["qc_fix"]["applied"] is True
     assert meta['provider_provenance']['providers'] == ['anthropic']
+    assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')]
     # Still flagged after the cloud attempt: nothing selects it again, in either lane.
     _flag_current(ledger)
     assert _cloud_pass(ledger)['done'] == 0
@@ -87,7 +109,7 @@ def test_still_flagged_local_fix_gets_one_cloud_attempt_with_audit_notes(qc_wind
     assert _current(ledger)[0]['artifact_id'] == current['artifact_id']
 
 
-def test_failed_paid_second_attempt_settles_without_local_rerun(qc_window):
+def test_failed_paid_second_attempt_ends_without_restoring_or_resending(qc_window):
     ledger, cfg, local_calls, cloud_calls, answers = qc_window
     _locally_fixed(ledger)
     _flag_current(ledger)
@@ -97,13 +119,19 @@ def test_failed_paid_second_attempt_settles_without_local_rerun(qc_window):
     assert _cloud_pass(ledger)['done'] == 0
     assert cloud_calls and all(NOTE in _sent_text(body) for body in cloud_calls)
     sent = len(cloud_calls)
+    # Nothing is re-stored: the audited extraction and its flag stay current.
     current, meta = _current(ledger)
-    assert meta["qc_fix"]["attempt"] == 2 and meta["qc_fix"]["applied"] is False
-    assert current['content'] == before['content'] and current['artifact_id'] != before['artifact_id']
-    assert meta['provider_provenance']['providers'] == ['local']
-    _flag_current(ledger)
+    assert current['artifact_id'] == before['artifact_id'] and "attempt" not in meta["qc_fix"]
+    assert _still_flagged(ledger, before['artifact_id'])
+    assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')]
+    # The ended attempt outlives the accounting rows maintenance prunes.
+    _prune_accounting(ledger)
+    with ledger.db:
+        ledger.db.execute("DELETE FROM fetch_jobs WHERE kind='extract_claim'")
+    assert worker._select_pending(ledger, 5, None, None, False, cloud_only=True)[0] == []
     assert _cloud_pass(ledger)['done'] == 0 and len(cloud_calls) == sent
     assert _local_pass(ledger)['selected'] == 0 and len(local_calls) == 2
+    assert _current(ledger)[0]['artifact_id'] == before['artifact_id']
 
 
 def test_local_fix_without_a_new_audit_is_not_plain_backlog(qc_window):
@@ -221,6 +249,87 @@ def test_a_new_body_or_generation_restarts_the_sequence(qc_window):
     assert len(cloud_calls) == 1 and len(local_calls) == 6
 
 
+def _revise(ledger, message, receipt):
+    """Store a revised post as already-collected history inside the stored-post scope."""
+    ledger.save_messages([message])
+    with ledger.db:
+        ledger.db.execute('UPDATE message_revisions SET observed_at=?', (time.time() - 1200,))
+        cloud_policy.capture_history_tx(ledger.db, receipt, time.time())
+
+
+def _reflag_after_local_fix(ledger, cfg):
+    cfg['cloud_llm']['mode'] = 'off'
+    assert _local_pass(ledger)['done'] == 1
+    _flag_current(ledger)
+    assert _local_pass(ledger)['done'] == 1
+    _flag_current(ledger)
+    cfg['cloud_llm']['mode'] = 'on'
+
+
+def test_a_metadata_revision_earns_no_new_attempt_but_a_body_edit_does(qc_window):
+    ledger, cfg, _local_calls, cloud_calls, answers = qc_window
+    _locally_fixed(ledger)
+    _flag_current(ledger)
+    flagged, _meta = _current(ledger)
+    _open_window(cfg)
+    answers['cloud'] = ["完全合成の不正な形"]   # the paid attempt fails; the flag stays current
+    assert _cloud_pass(ledger)['done'] == 0
+    sent = len(cloud_calls)
+    answers['cloud'] = {'symptoms': []}
+    # A later source revision of the same body (metadata only) moves the
+    # revision boundary but not the body: the attempt stays spent.
+    with ledger.db:
+        ledger.db.execute("INSERT INTO message_revisions(message_id,seq,content_hash,prev_content_hash,"
+                          "body_state,observed_at) SELECT m.message_id,(SELECT COALESCE(MAX(seq),0)+1 "
+                          "FROM message_revisions),m.content_hash,m.content_hash,'full',? "
+                          "FROM messages m WHERE m.message_id=1", (time.time(),))
+        ledger.db.execute("DELETE FROM fetch_jobs WHERE kind='extract_claim'")
+    assert _still_flagged(ledger, flagged['artifact_id'])
+    assert worker._select_pending(ledger, 5, None, None, False, cloud_only=True)[0] == []
+    assert _cloud_pass(ledger)['done'] == 0 and len(cloud_calls) == sent, "same body, same single attempt"
+    with ledger.db:   # the earlier body's sends precede the (backdated) edit below
+        ledger.db.execute("UPDATE artifacts SET created_at=created_at-3600 WHERE kind LIKE 'cloud_usage_%'")
+    _revise(ledger, _message(body='完全合成の訂正後の経過記録です。'), 'synthetic-body-edit')
+    _reflag_after_local_fix(ledger, cfg)
+    assert _cloud_pass(ledger)['done'] == 1 and len(cloud_calls) == sent + 1, "a changed body earns its own attempt"
+    assert _current(ledger)[1]["qc_fix"]["attempt"] == 2
+
+
+def test_a_cap_blocked_chunk_resumes_the_same_attempt_without_resending(qc_window, monkeypatch):
+    ledger, cfg, _local_calls, cloud_calls, _answers = qc_window
+    body = "".join(f"完全合成の長い経過記録{i:03d}です。" for i in range(300))
+    assert len(body) > worker._CHUNK_SIZE
+    _revise(ledger, _message(body=body), 'synthetic-long-body')
+    _locally_fixed(ledger)
+    _flag_current(ledger)
+    before, _meta = _current(ledger)
+    _open_window(cfg)
+    real = cloud_policy.request_send_block_reason
+    cap = {"open": False}
+
+    def capped(*args, **kwargs):
+        # The first chunk fits under the cap; the next one is refused before it is sent.
+        return real(*args, **kwargs) if cap["open"] or not cloud_calls else "synthetic_daily_cap"
+    monkeypatch.setattr(cloud_policy, "request_send_block_reason", capped)
+    assert _cloud_pass(ledger)['done'] == 0
+    assert len(cloud_calls) == 1 and _reservations(ledger) == 1
+    assert _attempts(ledger) == [('qc', 'open')], "a cap refusal leaves the attempt to resume"
+    current, meta = _current(ledger)
+    assert current['artifact_id'] == before['artifact_id'] and "attempt" not in meta["qc_fix"]
+    assert _still_flagged(ledger, before['artifact_id'])
+    cap["open"] = True
+    with ledger.db:
+        ledger.db.execute("DELETE FROM fetch_jobs WHERE kind='extract_claim'")
+    assert _cloud_pass(ledger)['done'] == 1
+    sent = [_sent_text(call) for call in cloud_calls]
+    assert len(sent) >= 2 and len(set(sent)) == len(sent), "the saved first chunk is reused, not resent"
+    assert _reservations(ledger) == len(sent)
+    assert _current(ledger)[1]["qc_fix"]["attempt"] == 2
+    assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')]
+    _flag_current(ledger)
+    assert _cloud_pass(ledger)['done'] == 0 and len(cloud_calls) == len(sent)
+
+
 def test_claim_rereads_the_lane_filter_and_the_second_attempt(qc_window, monkeypatch):
     ledger, cfg, _local_calls, _cloud_calls, _answers = qc_window
     _locally_fixed(ledger)
@@ -299,9 +408,12 @@ def test_a_held_second_attempt_is_never_resent_after_its_hold_is_released(qc_win
     assert len(cloud_calls) == 1 and _reservations(ledger) == 1
     rows, _ = worker._select_pending(ledger, 5, None, None, False, cloud_only=True)
     assert rows == []
+    assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')]
+    _prune_accounting(ledger)
+    assert worker._select_pending(ledger, 5, None, None, False, cloud_only=True)[0] == []
 
 
-def test_a_rejected_commit_after_the_paid_answer_is_never_resent(qc_window, monkeypatch):
+def test_a_rejected_commit_resumes_with_the_paid_answer_and_never_resends(qc_window, monkeypatch):
     ledger, cfg, _local_calls, cloud_calls, _answers = qc_window
     _locally_fixed(ledger)
     _flag_current(ledger)
@@ -321,10 +433,15 @@ def test_a_rejected_commit_after_the_paid_answer_is_never_resent(qc_window, monk
     assert rejected == [1] and len(cloud_calls) == 1 and _reservations(ledger) == 1
     with ledger.db:   # the kept claim expires before the next passes
         ledger.db.execute("DELETE FROM fetch_jobs WHERE kind='extract_claim'")
-    for _ in range(2):
-        assert _cloud_pass(ledger)['done'] == 0
+    assert _attempts(ledger) == [('qc', 'open')], "the unfinished attempt stays open"
+    # The same attempt resumes and adopts the stored paid answer; nothing is sent again.
+    assert _cloud_pass(ledger)['done'] == 1
     assert len(cloud_calls) == 1 and _reservations(ledger) == 1
-    assert _current(ledger)[0]['artifact_id'] == before['artifact_id']
+    current, meta = _current(ledger)
+    assert current['artifact_id'] != before['artifact_id'] and meta["qc_fix"]["attempt"] == 2
+    assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')]
+    _flag_current(ledger)
+    assert _cloud_pass(ledger)['done'] == 0 and len(cloud_calls) == 1
 
 
 def test_a_source_already_reextracted_on_the_cloud_gets_no_qc_second_send(qc_window):
@@ -340,6 +457,8 @@ def test_a_source_already_reextracted_on_the_cloud_gets_no_qc_second_send(qc_win
     assert meta["qc_fix"]["applied"] is True and meta['provider_provenance']['providers'] == ['local']
     _flag_current(ledger)
     cfg['cloud_llm']['mode'] = 'on'
+    assert _attempts(ledger) == [('backlog', 'closed')]
+    _prune_accounting(ledger)
     assert _cloud_pass(ledger)['done'] == 0
     assert len(cloud_calls) == 1 and len(local_calls) == 2
 
@@ -363,31 +482,66 @@ def test_human_reports_and_generation_upgrades_still_reach_a_settled_qc_row(qc_w
     assert _current(ledger)[1]['provider_provenance']['providers'] == ['anthropic']
 
 
-def test_reservation_counts_only_for_the_current_source(tmp_path):
+def test_one_attempt_per_body_survives_metadata_revisions_and_restarts_on_a_body_edit(tmp_path):
     from extract_testkit import _ledger
     db = _ledger(tmp_path)
     try:
         db.save_messages([_message(body='完全合成の記録です。')])
-        sql = f"SELECT {worker.cloud_reextract_reserved_sql()} FROM messages m WHERE m.message_id=1"
+        spent = f"SELECT {worker.cloud_attempt_spent_sql('m', '?')} FROM messages m WHERE m.message_id=1"
         now = time.time()
 
-        def reserve(at, route='reextract', message_id=1):
+        def is_spent(src=7):
+            return db.db.execute(spent, (src,)).fetchone()[0]
+
+        def revision():
+            return db.db.execute(f"SELECT {worker.source_revision_sql()} FROM messages m").fetchone()[0]
+
+        def insert(kind, content, meta, at):
             with db.db:
                 db.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at)"
-                              " VALUES('cloud_usage_reserve',1,?,'{}','m',?,?)",
-                              (message_id, json.dumps({"route": route}), at))
+                              " VALUES(?,1,1,?,'m',?,?)", (kind, content, meta, at))
+
+        def reserve(at, route='reextract'):
+            insert('cloud_usage_reserve', '{}', json.dumps({"route": route}), at)
+
+        def attempt(state, at, **binding):
+            insert(worker.CLOUD_ATTEMPT_KIND, json.dumps({"hash": _hash(db), "purpose": "qc",
+                                                          "state": state, **binding}), '{}', at)
         with db.db:
             db.db.execute("UPDATE messages SET first_seen=? WHERE message_id=1", (now - 300,))
-        reserve(now - 400)                      # before this source was first seen
+        reserve(now - 400)                      # before this body was first seen
         reserve(now - 100, route='patient_context')
-        assert db.db.execute(sql).fetchone()[0] == 0
+        assert is_spent() == 0
         reserve(now - 100)
-        assert db.db.execute(sql).fetchone()[0] == 1
-        db.save_messages([_message(body='完全合成の訂正後の記録です。')])
-        assert db.db.execute(sql).fetchone()[0] == 0, "a changed source earns its own attempt"
+        assert is_spent() == 1, "a stored-post send that left no record spends the body"
+        # A metadata-only revision keeps the body and its spent attempt.
+        db.save_messages([dataclasses.replace(_message(body='完全合成の記録です。'),
+                                              sender_name='synthetic-renamed-sender')])
+        assert revision() >= 1 and is_spent() == 1
+        # An open second attempt resumes only for its own extraction and revision.
         with db.db:
-            db.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at)"
-                          " VALUES('cloud_usage_reserve',1,1,'{}','m','not json',?)", (time.time() + 1,))
-        assert db.db.execute(sql).fetchone()[0] == 1, "an unreadable reservation counts"
+            db.db.execute("DELETE FROM artifacts WHERE kind='cloud_usage_reserve'")
+        attempt('open', now - 50, source_artifact_id=7, revision=revision())
+        reserve(now - 40)                       # the open attempt's own first request
+        assert is_spent(7) == 0 and is_spent(8) == 1
+        db.save_messages([dataclasses.replace(_message(body='完全合成の記録です。'),
+                                              sender_name='synthetic-third-name')])
+        assert is_spent(7) == 1, "a metadata-only revision ends the open attempt"
+        attempt('open', now - 30, source_artifact_id=7, revision=revision())
+        assert is_spent(7) == 1, "the earlier open record of the same body still counts"
+        # A changed body earns its own attempt; a record of another body does not count.
+        db.save_messages([_message(body='完全合成の訂正後の記録です。')])
+        assert is_spent(7) == 0
+        attempt('closed', now - 10)
+        assert is_spent(7) == 1, "a closed attempt of the body spends it"
+        with db.db:
+            db.db.execute("DELETE FROM artifacts WHERE kind=?", (worker.CLOUD_ATTEMPT_KIND,))
+        insert(worker.CLOUD_ATTEMPT_KIND, 'not json', '{}', now)
+        assert is_spent(7) == 1, "an unreadable attempt record counts"
+        with db.db:
+            db.db.execute("DELETE FROM artifacts WHERE kind=?", (worker.CLOUD_ATTEMPT_KIND,))
+        assert is_spent(7) == 0
+        insert('cloud_usage_reserve', '{}', 'not json', time.time() + 1)
+        assert is_spent(7) == 1, "an unreadable reservation counts"
     finally:
         db.close()
