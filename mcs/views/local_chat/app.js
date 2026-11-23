@@ -249,7 +249,7 @@ function renderPanel(view, onPage) {
     else if (item.source) row.append(el("small", item.source));
     if (item.message_id) {
       const open = el("button", "投稿を開く", "text-button"), project = state.project;
-      open.onclick = async () => {const detail = state.detailRequest; try {const source = await api("evidence", {project, message: item.message_id}); if (project === state.project && detail === state.detailRequest) openDetail(source.message);} catch (error) {fail(error);}};
+      open.onclick = async () => {const detail = ++state.detailRequest; try {const source = await api("evidence", {project, message: item.message_id}); if (project === state.project && detail === state.detailRequest) openDetail(source.message);} catch (error) {if (detail === state.detailRequest) fail(error);}};
       row.append(open);
     }
     box.append(row);

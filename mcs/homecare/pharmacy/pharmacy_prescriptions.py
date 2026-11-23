@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import time
 
-from homecare_records import InvalidFields, calendar_date, get, require_actor, text_field
+from homecare_records import InvalidFields, calendar_date, get, require_actor, text_field, unknown_fields
 from homecare_store import Conflict, audit, transaction
 
 FIELDS = ("patient_id", "issued_on", "institution", "prescriber", "note", "lines")
@@ -15,7 +15,7 @@ _SYSTEM = re.compile(r"^[a-z][a-z0-9_]{0,19}$")
 
 
 def _clean(db, values):
-    bad = [key for key in values if key not in FIELDS]
+    bad = unknown_fields(values, FIELDS)
     row = {"institution": text_field(values, bad, "institution", 100),
            "prescriber": text_field(values, bad, "prescriber", 60), "note": text_field(values, bad, "note", 500)}
     row["patient_id"] = values.get("patient_id")

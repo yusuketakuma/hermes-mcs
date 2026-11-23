@@ -4,14 +4,13 @@ Module routes will live under api/hc/<module>/ and reach core records only throu
 """
 from __future__ import annotations
 
-from datetime import date
-
 import homecare_links as links
 import homecare_records as records
 import homecare_route as route
 import homecare_team as team
 import homecare_visits as visits
 from homecare_records import record_id as _id
+from homecare_store import read_snapshot
 
 # Fixed, non-clinical codes the browser may see.
 ERRORS = frozenset({"version_conflict", "already_linked", "not_linked", "already_assigned", "actor_required",
@@ -21,7 +20,12 @@ ERRORS = frozenset({"version_conflict", "already_linked", "not_linked", "already
 
 
 def read(db, route, params, *, registry, mcs_patients):
-    """GET api/hc/<route>; ``mcs_patients`` lists the MCS rooms inside the launch scope."""
+    """GET api/hc/<route> from one ledger snapshot; ``mcs_patients`` lists the MCS rooms inside the launch scope."""
+    with read_snapshot(db):
+        return _read(db, route, params, registry=registry, mcs_patients=mcs_patients)
+
+
+def _read(db, route, params, *, registry, mcs_patients):
     module, _, sub_route = route.partition("/")
     if sub_route:
         return registry.module(module).api.read(db, sub_route, params)
@@ -119,7 +123,7 @@ def sheet(db, patient_id, *, registry, mcs_patients, today=None):
     # 前回から変わったこと on the sheet means since the last visit that took place.
     since = visits.started_at(recent[0]) if recent else None
     return {"patient": patient, "team": team.current(db, patient_id),
-            "next_visits": visits.upcoming(db, patient_id, today or date.today().isoformat()),
+            "next_visits": visits.upcoming(db, patient_id, today or visits.site_today()),
             "recent_visits": recent,
             "modules": {module.name: module.api.sheet(db, patient_id)
                         for module in registry.modules if module.api is not None},

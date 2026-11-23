@@ -191,7 +191,7 @@ async function showHcPatient(patientId) {
 const visitLine = visit => `${visit.visit_date}${visit.start_time ? " " + visit.start_time : ""} · ${hc.meta.visit_kinds[visit.kind] || visit.kind} · ${VISIT_STATUS[visit.status]}${visit.staff_name ? " · " + visit.staff_name : ""}`;
 async function patientVisits(box, patientId) {
   const reload = () => patientVisits(box, patientId);
-  const data = await api("hc/visits", {patient: patientId}).catch(error => {if (box.childElementCount) throw error; if (hc.patient === patientId) fail(error); return null;});
+  const data = await api("hc/visits", {patient: patientId}).catch(error => {if (box.childElementCount) throw error; if (hc.patient === patientId && box.isConnected) fail(error); return null;});
   if (hc.patient !== patientId) return;
   box.replaceChildren(el("h3", "訪問"));
   if (!data) {box.append(el("p", "訪問の記録を読み込めませんでした。", "state-note")); return;}
@@ -216,9 +216,10 @@ function historyPages(list, first, render, fetchPage, label, current) {
     const button = el("button", label, "load-more"); button.type = "button";
     button.onclick = async () => {
       button.disabled = true;
-      const next = await fetchPage(shown).catch(error => {fail(error); return null;});
+      let failed = null;
+      const next = await fetchPage(shown).catch(error => {failed = error; return null;});
       if (!current() || !more.isConnected) return;
-      if (next) append(next); else {button.disabled = false; more.append(el("p", "以前の記録を読み込めませんでした。", "state-note"));}
+      if (next) append(next); else {button.disabled = false; more.append(el("p", "以前の記録を読み込めませんでした。", "state-note")); fail(failed);}
     };
     more.append(button);
   };
@@ -327,17 +328,22 @@ function mcsLink(link, patientId, data, refresh) {
     link.append(manual);
   }
 }
+async function refreshAfterWrite(reload, saved = true) {
+  // A change that was saved stays saved; a failed re-read says so instead of looking like a failed change.
+  try {await reload();} catch (error) {fail(saved ? {message: "保存しました。画面を読み直せませんでした。更新して確認してください。"} : error);}
+}
 function careTeam(box, patientId, members, reload) {
   box.replaceChildren(el("h3", "ケアチーム（この事業所の担当）"));
   for (const member of members) {
     const row = el("p", `${hc.meta.roles[member.role]?.label || member.role}: ${member.staff_name}`), stop = el("button", "担当を外す", "text-button");
-    stop.onclick = async () => {try {await hcPost("team.end", {assignment: member.assignment_id}); reload();} catch (error) {fail(error);}};
+    stop.onclick = async () => {try {await hcPost("team.end", {assignment: member.assignment_id});} catch (error) {fail(error); return;} await refreshAfterWrite(reload);};
     row.append(" ", stop); box.append(row);
   }
   if (!members.length) box.append(el("p", "担当者はまだいません。"));
   const roles = Object.entries(hc.meta.roles);
   if (!roles.length) return;
   const form = el("form", null, "hc-inline"), role = el("select"), person = el("select");
+  role.setAttribute("aria-label", "担当の役割"); person.setAttribute("aria-label", "担当にする職員");
   for (const [code, spec] of roles) {const option = el("option", spec.label); option.value = code; role.append(option);}
   const people = () => {
     const needs = hc.meta.roles[role.value].requires;
@@ -345,7 +351,12 @@ function careTeam(box, patientId, members, reload) {
   };
   role.onchange = people; people();
   form.append(role, person, el("button", "担当にする", "button"));
-  form.onsubmit = async event => {event.preventDefault(); try {const assignments = members.filter(m => m.role === role.value).map(m => m.assignment_id); await hcPost("team.assign", {patient: patientId, staff: Number(person.value), role: role.value, assignments}); reload();} catch (error) {fail(error); if (error.code === "team_changed") reload();}};
+  form.onsubmit = async event => {
+    event.preventDefault();
+    try {const assignments = members.filter(m => m.role === role.value).map(m => m.assignment_id); await hcPost("team.assign", {patient: patientId, staff: Number(person.value), role: role.value, assignments});}
+    catch (error) {fail(error); if (error.code === "team_changed") await refreshAfterWrite(reload, false); return;}
+    await refreshAfterWrite(reload);
+  };
   box.append(form);
 }
 async function openMcs(projectId) {
@@ -396,13 +407,14 @@ async function initHomecare() {
     const session = await api("session");
     hc.csrf = session.csrf; hc.enabled = session.homecare; hc.routes = session.routes; hc.resident = session.resident; hc.user = session.user; hc.login = session.login;
     if (!hc.enabled) return;
+    // The toolbar appears only once the modules and staff it relies on have loaded.
+    hc.meta = await api("hc/meta");
+    await loadStaff();
     $("hc-tools").hidden = false;
     $("hc-actor").onchange = () => {hc.actor = $("hc-actor").value ? Number($("hc-actor").value) : null;};
     for (const button of document.querySelectorAll("#hc-modes button")) button.onclick = () => setMode(button.dataset.mode);
     state.onSelect = showLinkedPharmacyPatient;
     state.onSearch = () => (hc.mode === "mcs" ? loadPatients() : loadHcPatients().catch(fail));
-    hc.meta = await api("hc/meta");
-    await loadStaff();
     if (!hc.staff.length) setMode("staff");
   } catch (error) {fail(error);}
 }

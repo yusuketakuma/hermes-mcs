@@ -28,6 +28,8 @@ MAX_BODY = 64 * 1024
 # Resident mode sits behind `tailscale serve`, which strips any copy a client sends and sets this for tailnet users.
 IDENTITY = "Tailscale-User-Login"
 UNREGISTERED = "このTailscaleのアカウントは職員として登録されていません。管理者に職員の登録を頼んでください。".encode()
+# What an unregistered login may reach while the register is empty: enough to register the first person.
+FIRST_ROUTES = frozenset({"api/session", "api/hc/meta", "api/hc/staff", "api/hc/staff.create"})
 FILES = {"": ("index.html", "text/html; charset=utf-8"),
          "app.js": ("app.js", "text/javascript; charset=utf-8"),
          "homecare.js": ("homecare.js", "text/javascript; charset=utf-8"),
@@ -217,8 +219,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                 return None
             # Before anyone is registered, only the page and the ledger's own routes answer, so the first person
             # can register; no MCS record is served to a login that is not staff.
-            if self.user is None and not (self.first and (route in FILES or route == "api/session"
-                                                          or route.startswith("api/hc/"))):
+            if self.user is None and not (self.first and (route in FILES or route in FIRST_ROUTES)):
                 self._send(403, UNREGISTERED)
                 return None
         return route, parts.query
@@ -239,6 +240,9 @@ class ChatHandler(BaseHTTPRequestHandler):
                              "routes": self.server.route_settings is not None,
                              "resident": bool(self.server.tailnet_host), "login": self.login,
                              "user": self.user and {"staff_id": self.user["staff_id"], "name": self.user["name"]}})
+        elif route == "api/hc/staff" and self.server.tailnet_host and self.user is None:
+            # The first registration sees an empty register; staff records are read only by registered staff.
+            self._json(200, {"items": []})
         elif route.startswith("api/hc/"):
             self._homecare("GET", route[7:], query)
         elif route.startswith("api/"):

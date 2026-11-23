@@ -20,6 +20,7 @@ body{flex-direction:column;height:auto;min-height:100dvh}
 .hc-modes button{font-size:12px;padding:9px 4px}
 .hc-actor select{font-size:16px}
 #patient-search{font-size:16px}
+.rx-line input{font-size:16px}
 #patients{max-height:42dvh}
 .patient{font-size:14px;padding:11px 8px}
 .patients-toggle{display:block;width:100%;font:inherit;font-size:13px;padding:9px;border-radius:7px;border:1px solid #4a3e53;background:#251e2b;color:#e3dce8}

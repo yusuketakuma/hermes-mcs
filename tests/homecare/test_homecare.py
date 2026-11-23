@@ -1,4 +1,5 @@
 """Synthetic-only home-care core: modules, migrations, validation, versions, care team, links, audit and writes."""
+import ast
 from email.message import Message
 from io import BytesIO
 import json
@@ -63,8 +64,10 @@ def test_modules_import_only_the_core():
     modules = {path.stem for path in base.glob("*/*.py")}
     core = {path.stem for path in (base / "core").glob("*.py")}
     for path in base.glob("*/*.py"):
-        imported = {line.split()[1].split(".")[0] for line in path.read_text().splitlines()
-                    if line.startswith(("import ", "from ")) and line.split()[1].split(".")[0] in modules}
+        tree = ast.parse(path.read_text())
+        names = [alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names] + [
+            node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module]
+        imported = {name.split(".")[0] for name in names} & modules  # function-level imports included
         owner = path.parent.name
         allowed = core if owner == "core" else core | {p.stem for p in path.parent.glob("*.py")}
         assert imported <= allowed, (path.name, imported - allowed)
@@ -160,7 +163,7 @@ def test_qualifications_of_a_disabled_module_survive_an_update(tmp_path):
     ({"phone": "", "preferred_contact": "patient"}, ["phone"]),
     ({"phone": "-", "preferred_contact": "patient"}, ["phone"]),
     ({"status": "deleted"}, ["status"]),
-    ({"primary_pharmacist_id": 1}, ["primary_pharmacist_id"]),
+    ({"primary_pharmacist_id": 1}, ["values"]),  # an unknown key is never echoed
     ({"address": "あ" * 201}, ["address"])])
 def test_patient_fields_are_validated_by_name(db, values, fields):
     me = first_staff(db)
@@ -206,7 +209,8 @@ def test_a_handover_seen_on_an_old_screen_is_refused_even_when_the_same_person_h
     assert [member["assignment_id"] for member in team.current(db, row["patient_id"])] == [again]
 
 
-@pytest.mark.parametrize("change", [{"active": False}, {"admin": False}])
+@pytest.mark.parametrize("change", [{"active": False}, {"admin": False}, {"tailscale_login": "two@example.invalid"},
+                                    {"tailscale_login": None}])
 def test_staff_cannot_lock_themselves_out_and_logins_are_unique(db, change):
     me = first_staff(db, tailscale_login="one@example.invalid")
     with pytest.raises(records.InvalidFields) as error:
@@ -345,6 +349,11 @@ def test_api_scopes_links_and_returns_browser_safe_errors(db):
     assert homecare_api.read(db, "meta", {}, registry=REGISTRY, mcs_patients=scope) == REGISTRY.describe()
     assert homecare_api.error_body(records.InvalidFields(["phone"])) == {"error": "invalid_fields", "fields": ["phone"]}
     assert homecare_api.error_body(ValueError("/private/path")) == {"error": "bad_request"}
+    # A key the form does not know is reported as the whole input, so request text is never echoed.
+    with pytest.raises(records.InvalidFields) as error:
+        records.create(db, "patient", {"name": "合成", "phone": "000-0000-0000", "合成の秘密": 1}, actor=me["staff_id"], registry=REGISTRY)
+    assert error.value.fields == ["values"]
+    assert not db.in_transaction  # each read is one snapshot that ends with the read
     for bad in ("0", "-1", "1.5", True, None):
         with pytest.raises(ValueError, match="bad_request"):
             homecare_api.read(db, "patient", {"patient": bad}, registry=REGISTRY, mcs_patients=scope)
@@ -435,6 +444,9 @@ def test_resident_mode_knows_each_request_by_its_tailscale_login(server):
     status, data = resident_request(server, "GET", "/api/session")
     assert status == 200 and json.loads(data)["user"] is None and json.loads(data)["resident"] is True
     assert resident_request(server, "GET", "/api/patients")[1] == chat.UNREGISTERED  # no MCS record before staff
+    # Before the first registration the register reads as empty and only registering answers.
+    assert json.loads(resident_request(server, "GET", "/api/hc/staff")[1]) == {"items": []}
+    assert resident_request(server, "GET", "/api/hc/patients")[1] == chat.UNREGISTERED
     # The first registration takes the requester's own login, whatever the page sent.
     status, data = resident_request(server, "POST", "/api/hc/staff.create", {
         "values": {"name": "合成 薬剤師", "qualifications": ["pharmacy.pharmacist"], "tailscale_login": "other@x"},
@@ -495,7 +507,7 @@ def test_visits_are_validated_versioned_and_audited(db):
     for bad, fields in (({"kind": "nursing.visit"}, ["kind"]), ({"visit_date": "2026-13-01"}, ["visit_date"]),
                         ({"visit_date": "2026-02-30"}, ["visit_date"]),
                         ({"start_time": "25:00"}, ["start_time"]), ({"status": "done"}, ["staff_id"]),
-                        ({"patient_id": 999}, ["patient_id"]), ({"extra": 1}, ["extra"])):
+                        ({"patient_id": 999}, ["patient_id"]), ({"extra": 1}, ["values"])):
         with pytest.raises(records.InvalidFields) as error:
             visits.create(db, REGISTRY, visit_values(row["patient_id"]) | bad, actor=me["staff_id"])
         assert error.value.fields == fields
@@ -708,3 +720,60 @@ def test_route_sends_addresses_only_caches_locations_and_lists_unlocated_visits(
 def test_route_transport_refuses_other_hosts():
     with pytest.raises(ValueError, match="route_failed"):
         route._fetch(urllib.request.Request("https://example.invalid/"))
+
+
+def test_route_settings_must_be_a_json_object(tmp_path):
+    path = tmp_path / "route.json"
+    for text in ("[]", "not json"):
+        path.write_text(text)
+        path.chmod(0o600)
+        with pytest.raises(SystemExit, match="JSON object"):
+            route.RouteSettings(path)
+
+
+@pytest.mark.parametrize("reply, expected", [
+    ([], None),  # no match: unlocated
+    ([{"geometry": {"coordinates": [139.7, 35.6]}}], (139.7, 35.6)),
+    ([{"geometry": {"coordinates": [10.0, 50.0]}}], None),  # outside Japan
+    # Each result lies within 300 m of the first, but the outer two are about 400 m apart.
+    ([{"geometry": {"coordinates": [139.7, 35.6]}}, {"geometry": {"coordinates": [139.7022, 35.6]}},
+      {"geometry": {"coordinates": [139.6978, 35.6]}}], None),
+])
+def test_geocode_keeps_unmatched_and_ambiguous_addresses_unlocated(reply, expected):
+    assert route.geocode("合成市1-1", fetch=lambda request: reply) == expected
+
+
+@pytest.mark.parametrize("reply", [{"unexpected": 1}, [{"geometry": {}}], [{"geometry": {"coordinates": ["a", 1]}}]])
+def test_geocode_reports_an_unusable_reply_as_a_failure(reply):
+    with pytest.raises(ValueError, match="route_failed"):
+        route.geocode("合成市1-1", fetch=lambda request: reply)
+
+
+def test_route_fails_on_malformed_steps_and_keeps_the_day_bounded(db, tmp_path):
+    me = first_staff(db)
+    path = tmp_path / "route.json"
+    path.write_text(json.dumps({"openrouteservice_key": "synthetic-key-0000", "origin_address": "合成市1-1"}))
+    path.chmod(0o600)
+    row = patient(db, me["staff_id"], address="合成市2-2")
+    visits.create(db, REGISTRY, visit_values(row["patient_id"], start_time="23:55"), actor=me["staff_id"])
+    sent = []
+
+    def services(steps):
+        def fetch(request):
+            if request.full_url.startswith(route.GEOCODE_URL):
+                return [{"geometry": {"coordinates": [139.7, 35.6]}}]
+            sent.append(json.loads(request.data))
+            return {"routes": [{"steps": steps}]}
+        return fetch
+
+    settings = route.RouteSettings(path)
+    for steps in ({"type": "job"}, ["job"]):
+        with pytest.raises(ValueError, match="route_failed"):
+            route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=services(steps))
+    assert sent[0]["vehicles"][0]["time_window"] == [9 * 3600, 86400]
+    assert sent[0]["jobs"][0]["time_windows"] == [[23 * 3600 + 40 * 60, 86400]]
+    # A failed search is not cached as a place: the next plan asks again.
+    with pytest.raises(ValueError, match="route_failed"):
+        route.plan(db, settings, "2026-11-24", actor=me["staff_id"],
+                   fetch=lambda request: (_ for _ in ()).throw(OSError("offline")))
+    assert db.execute("SELECT COUNT(*) FROM patient_locations").fetchone()[0] == 1  # the earlier success only

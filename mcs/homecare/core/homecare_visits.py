@@ -5,7 +5,8 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 
-from homecare_records import InvalidFields, calendar_date, get, qualifications, require_actor, text_field
+from homecare_records import (InvalidFields, calendar_date, get, qualifications, require_actor, text_field,
+                              unknown_fields)
 from homecare_store import Conflict, audit, transaction
 
 FIELDS = ("patient_id", "staff_id", "kind", "visit_date", "start_time", "status", "note")
@@ -18,7 +19,7 @@ _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 def _clean(db, registry, values, held_kind=None, held_staff=None):
     """``held_kind`` and ``held_staff`` keep an existing visit's disabled kind or since-retired staff member
     from being refused when they are left unchanged; a new choice must be enabled and active."""
-    bad = [key for key in values if key not in FIELDS]
+    bad = unknown_fields(values, FIELDS)
     row = {"note": text_field(values, bad, "note", 500)}
     for field in ("patient_id", "staff_id"):
         row[field] = values.get(field)
@@ -114,6 +115,11 @@ def for_patient(db, patient_id, *, limit=50, offset=0):
 
 
 _LISTED = "SELECT v.*, s.name AS staff_name FROM visits v LEFT JOIN staff s USING(staff_id) WHERE v.patient_id=? "
+
+
+def site_today():
+    """Today's date at the site, whatever time zone this Mac is set to."""
+    return datetime.now(SITE_TIME).date().isoformat()
 
 
 def upcoming(db, patient_id, today, *, limit=3):

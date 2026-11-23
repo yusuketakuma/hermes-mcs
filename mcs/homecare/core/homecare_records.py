@@ -41,6 +41,11 @@ class InvalidFields(ValueError):
         self.fields = sorted(set(fields))
 
 
+def unknown_fields(values, fields):
+    """``["values"]`` when ``values`` has a key outside ``fields``: an unknown key is never echoed back."""
+    return ["values"] if any(key not in fields for key in values) else []
+
+
 def text_field(values, bad, field, limit, *, required=False):
     """``values[field]`` stripped, or "" with ``field`` added to ``bad`` when it is not text within ``limit``."""
     value = values.get(field, "")
@@ -54,7 +59,7 @@ def text_field(values, bad, field, limit, *, required=False):
 
 def _clean_staff(values, registry, held):
     """``held`` keeps qualifications of a module that is not enabled right now from being refused."""
-    bad = [key for key in values if key not in STAFF_FIELDS]
+    bad = unknown_fields(values, STAFF_FIELDS)
     row = {"name": text_field(values, bad, "name", 60, required=True), "kana": text_field(values, bad, "kana", 60)}
     login = values.get("tailscale_login")
     if login in (None, ""):
@@ -78,7 +83,7 @@ def _clean_staff(values, registry, held):
 
 
 def _clean_patient(values):
-    bad = [key for key in values if key not in PATIENT_FIELDS]
+    bad = unknown_fields(values, PATIENT_FIELDS)
     row = {field: text_field(values, bad, field, limit, required=field == "name")
            for field, limit in PATIENT_FIELDS.items() if limit}
     for field in ("phone", "keyperson_phone", "contact_phone"):
@@ -200,9 +205,13 @@ def update(db, kind, record_id, values, *, expected_version, actor, registry):
                 "admin": bool(before["admin"]), "active": bool(before["active"])}
             row, codes = _clean_staff(current | values, registry, before["qualifications"])
             _unique_login(db, row, record_id)
-            if record_id == actor and not (row["active"] and row["admin"]):
-                # Nobody locks themselves out of the register.
-                raise InvalidFields([field for field in ("active", "admin") if not row[field]])
+            if record_id == actor:
+                # Nobody locks themselves out of the register, by role or by the login that identifies them.
+                locked = [field for field in ("active", "admin") if not row[field]]
+                if row["tailscale_login"] != before["tailscale_login"]:
+                    locked.append("tailscale_login")
+                if locked:
+                    raise InvalidFields(locked)
             _require_assignments_still_valid(db, registry, record_id, row["active"], codes)
             _set_qualifications(db, record_id, codes)
             table, key = "staff", "staff_id"

@@ -28,6 +28,7 @@ WINDOW_SECONDS = 15 * 60   # a booked visit is reached within 15 minutes either 
 SAME_PLACE_METRES = 300    # several search results count as one place only when they lie this close
 _CLOCK = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 MAX_STOPS = 40
+DAY_END = 24 * 3600        # the route, including the drive back, fits inside the visit day
 _TIMEOUT = 15
 
 
@@ -39,7 +40,12 @@ class RouteSettings:
         info = path.stat()
         if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
             raise SystemExit("route settings must be a regular file readable only by its owner (chmod 600)")
-        data = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            raise SystemExit("route settings must be a JSON object") from None
+        if not isinstance(data, dict):
+            raise SystemExit("route settings must be a JSON object")
         key, origin = data.get("openrouteservice_key"), data.get("origin_address")
         if not isinstance(key, str) or not 10 <= len(key) <= 200 or not isinstance(origin, str) \
                 or not 1 <= len(origin.strip()) <= 200:
@@ -69,20 +75,26 @@ def _fetch(request):
 
 
 def geocode(address, *, fetch=_fetch):
-    """(lon, lat) when the search names one place inside Japan; None when it finds none or several apart."""
+    """(lon, lat) when the search names one place inside Japan; None when it finds none or several apart.
+
+    A search that cannot be reached or answers in an unexpected shape is a failure, not an unlocated address.
+    """
     query = urllib.parse.urlencode({"q": address})
     try:
         found = fetch(urllib.request.Request(f"{GEOCODE_URL}?{query}", headers={"Accept": "application/json"}))
         points = [tuple(feature["geometry"]["coordinates"]) for feature in found]
     except (OSError, ValueError, KeyError, TypeError):
+        raise ValueError("route_failed") from None
+    if not all(len(point) == 2 and all(type(v) in (int, float) for v in point) for point in points):
+        raise ValueError("route_failed")
+    if not points or not all(122 <= lon <= 154 and 20 <= lat <= 46 for lon, lat in points):
         return None
-    if not points or not all(len(point) == 2 and all(isinstance(v, (int, float)) for v in point)
-                             and 122 <= point[0] <= 154 and 20 <= point[1] <= 46 for point in points):
-        return None
-    (lon, lat), scale = points[0], math.cos(math.radians(points[0][1]))
+    scale = math.cos(math.radians(points[0][1]))
     # A partial address ("中央区") matches several towns; guessing one would route to the wrong place.
-    if any(math.hypot((x - lon) * 111_320 * scale, (y - lat) * 110_540) > SAME_PLACE_METRES for x, y in points):
+    if any(math.hypot((x - u) * 111_320 * scale, (y - v) * 110_540) > SAME_PLACE_METRES
+           for i, (x, y) in enumerate(points) for u, v in points[i + 1:]):
         return None
+    lon, lat = points[0]
     return float(lon), float(lat)
 
 
@@ -131,12 +143,12 @@ def plan(db, settings, visit_date, *, actor, staff_id=None, fetch=_fetch):
         job = {"id": len(placed), "location": list(point), "service": SERVICE_SECONDS}
         if row["start_time"]:
             booked = _seconds(row["start_time"])
-            job["time_windows"] = [[max(0, booked - WINDOW_SECONDS), booked + WINDOW_SECONDS]]
+            job["time_windows"] = [[max(0, booked - WINDOW_SECONDS), min(DAY_END, booked + WINDOW_SECONDS)]]
         jobs.append(job)
     stops, unscheduled = [], []
     if jobs:
         vehicle = {"id": 1, "profile": "driving-car", "start": list(origin), "end": list(origin),
-                   "time_window": [settings.depart, 2 * 86400]}
+                   "time_window": [settings.depart, DAY_END]}
         body = json.dumps({"jobs": jobs, "vehicles": [vehicle]}).encode()
         request = urllib.request.Request(OPTIMIZE_URL, data=body, method="POST", headers={
             "Authorization": settings.key, "Content-Type": "application/json", "Accept": "application/json"})
@@ -145,6 +157,8 @@ def plan(db, settings, visit_date, *, actor, staff_id=None, fetch=_fetch):
             routes = result["routes"]
             # A successful answer with no route means no visit could be placed; they all count as unscheduled.
             steps = routes[0]["steps"] if routes else []
+            if not isinstance(steps, list) or not all(isinstance(step, dict) for step in steps):
+                raise ValueError("route_failed")
         except (OSError, ValueError, KeyError, IndexError, TypeError):
             raise ValueError("route_failed") from None
         for step in steps:

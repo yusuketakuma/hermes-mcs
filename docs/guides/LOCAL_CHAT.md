@@ -45,7 +45,7 @@ python3 mcs/ops/mcs_local_chat.py \
 ## 在宅ケアの患者台帳（任意）
 
 `--homecare-db` を付けて起動すると、MCS とは別に事業所の患者台帳と職員の名簿を同じ画面で扱えます。
-在宅業務の記録（旧 zaitaku-calender の機能）をこのMacへ移すための土台で、職種に共通の機能（コア）の上に職種別のモジュールを載せる作りです。今は薬局モジュールだけがあり、`--homecare-module pharmacy`（既定）で有効になります。指定しなければ、これまでどおり閲覧専用です。
+在宅業務の記録（旧 zaitaku-calender の機能）をこのMacへ移すための土台で、職種に共通の機能（コア）の上に職種別のモジュールを載せる作りです。今は薬局モジュールだけがあり、`--homecare-module pharmacy`（既定）で有効になります。`--homecare-db` を付けなければ、これまでどおり閲覧専用です。
 
 ```sh
 python3 mcs/ops/mcs_local_chat.py \
@@ -108,13 +108,13 @@ python3 mcs/ops/mcs_local_chat.py \
 
 ### 手で起動する
 
-Mac の名前（`<名前>.<tailnet>.ts.net`）を確かめてから、固定のポートで起動します。
+Mac の名前（`<名前>.<tailnet>.ts.net`）を確かめてから、固定のポートで起動します。例の `example-mac.example-tailnet.ts.net` は、この Mac の Tailscale の名前に置き換えてください。
 
 ```sh
 python3 mcs/ops/mcs_local_chat.py \
   --snapshot /path/to/mcs/data/snapshots/ledger-snapshot.db --all-patients \
   --homecare-db /path/to/mcs/data/homecare.db \
-  --port 8770 --tailnet-host <名前>.<tailnet>.ts.net
+  --port 8770 --tailnet-host example-mac.example-tailnet.ts.net
 ```
 
 サーバーは起動した端末で動き続けます。別の端末で次を一度だけ実行し、tailnet へ公開します（`--bg` の設定は Mac を再起動しても残ります）。
@@ -127,7 +127,8 @@ tailscale serve --bg http://127.0.0.1:8770
 - 職員はスマホのブラウザで `https://<名前>.<tailnet>.ts.net/` を開きます。秘密の URL はなく、Tailscale のログインで誰かを見分けます。
 - 職員として登録した Tailscale のログイン名（職員の画面の「Tailscale のログイン名」）と一致し、在籍中の職員だけが使えます。登録のないログインには、MCS の記録も台帳も表示しません。
 - 職員がまだ1人もいないときだけ、最初に開いた人が自分を登録できます。その人の Tailscale のログインが結び付き、管理者になります。続く職員は管理者が登録し、各自のログイン名を入れます。
-- 管理者が自分のログイン名を変えると、次から自分で開けなくなります。変えるときは、先に別の管理者を登録してください。
+- 管理者は自分のログイン名を変えたり消したりできません（次から自分で開けなくなるため）。変えるときは、別の管理者に頼んでください。
+- すでに職員を登録した台帳を常駐モードで開くときは、先に通常の起動で、在籍中の管理者に Tailscale のログイン名を登録しておきます。登録しないまま常駐モードにすると誰も使えないので、通常の起動に戻ってログイン名を登録してから、もう一度常駐モードにします。
 - tag を付けた端末からのアクセスには Tailscale がログインを付けないため、使えません。
 - 同じ Mac の別のプロセスはログインを偽れるので、Mac は単一ユーザーで運用してください。
 

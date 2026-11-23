@@ -135,6 +135,16 @@ def audit(db, actor, kind, entity_id, before, after):
 
 
 @contextmanager
+def read_snapshot(db):
+    """One read transaction, so a page of records and their lines come from the same ledger state."""
+    db.execute("BEGIN")
+    try:
+        yield db
+    finally:
+        db.execute("ROLLBACK")
+
+
+@contextmanager
 def transaction(db):
     """BEGIN IMMEDIATE … COMMIT, rolled back on any error."""
     db.execute("BEGIN IMMEDIATE")
