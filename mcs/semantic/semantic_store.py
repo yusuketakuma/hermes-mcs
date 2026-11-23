@@ -504,10 +504,10 @@ def _carried_primary_assessment(rows, mid, policy, scfg, jev_input):
         return None
     for stored in rows:
         content, meta = loads_dict(stored['content']), loads_dict(stored['meta'])
-        if (content is None or meta is None or meta.get('fact_id') is not None
+        if (meta is None or meta.get('fact_id') is not None
                 or meta.get('jev_input') != jev_input or meta.get('policy_fingerprint') != policy):
             continue
-        if (meta.get('technical_status') == 'complete' and content.get('verdicts')
+        if (content is not None and meta.get('technical_status') == 'complete' and content.get('verdicts')
                 and _valid_primary_assessment(content, meta, stored['model'], mid,
                                               meta.get('fingerprint'), policy, scfg)):
             return {'content': content, 'meta': meta}

@@ -136,7 +136,7 @@ def test_skip_row_names_its_request_so_a_carry_stops_at_it(tmp_path):
         db.close()
 
 
-@pytest.mark.parametrize("damage", ["invalidated", "stale", "retry_wait", "policy", "registry"])
+@pytest.mark.parametrize("damage", ["invalidated", "stale", "retry_wait", "policy", "registry", "malformed"])
 def test_carry_never_bypasses_the_newest_row_of_the_input(tmp_path, damage):
     db, _ = _thread(tmp_path)
     try:
@@ -162,7 +162,8 @@ def test_carry_never_bypasses_the_newest_row_of_the_input(tmp_path, damage):
         if damage == "policy":
             policy = "synthetic-other-policy"
         else:
-            db.artifact_add(semantic_drain.KIND_ASSESS, json.dumps(row["content"]), project_id=1,
+            content = "synthetic-not-json" if damage == "malformed" else json.dumps(row["content"])
+            db.artifact_add(semantic_drain.KIND_ASSESS, content, project_id=1,
                             message_id=1, model=jev.JEV_MODEL, meta=meta)
         assert carried() is None
     finally:
