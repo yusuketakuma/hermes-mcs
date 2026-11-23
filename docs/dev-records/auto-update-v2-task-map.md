@@ -33,7 +33,7 @@ FIELD_CATALOGは全70 $defsのfield一覧を持つが、**primitive $defs（`Uui
 |repo | worktree/場所 | 担当 |
 |---|---|---|
 | hermes-mcs | `~/.mcs-wt/auto-update-v2-20261110` | W01–W12, W14, W15（端末側・publisher・CI） |
-| csdc（SDC中央） | `/Users/yusuke/workspace/csdc` | W13（中央backend API・永続化・publisher OIDC面） |
+| csdc（SDC中央） | `~/workspace/csdc` | W13（中央backend API・永続化・publisher OIDC面） |
 
 csdc側の既存資産: `fleet/releases/{contracts,apply-wire,apply,signatures,registration}.js`（R5a/b契約・署名・登録）、`fleet/support/`（support/restart契約）、`src/security.js`（HttpError/strictJSON/exactFields）、`fleet/access.js`（JWKS/OIDC系）、`fleet/migrations/`+`migrations/`。W13は新規 `/v2/mcs/...` 面として追加し、既存device HMAC認証を拡張する。実backend repoはcsdcで確定（要Plans.md記録）。
 

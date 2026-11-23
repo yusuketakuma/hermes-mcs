@@ -16,12 +16,13 @@ complete reply history: exactly one match -> delivered, zero -> absent,
 multiple or part_owner_ambiguous -> unverified.
 
 Run with the hermes venv that has slack_sdk:
-    /Users/yusuke/.hermes/hermes-agent/venv/bin/python \
+    ~/.hermes/hermes-agent/venv/bin/python \
         scripts/diagnostics/notify_remote_verify.py [--emit] [--confirm-human]
 """
 import asyncio
 import json
 import os
+import pwd
 import sqlite3
 import sys
 import time
@@ -36,9 +37,7 @@ from adapters.slack.emoji_text import slack_emoji_pattern  # noqa: E402
 
 MAX_PARTS = 500
 HISTORY_LIMIT = 200
-ACTOR = "yusuke"
-REASON = ("remote-verified resend+replace of unknown notification parts "
-          "(devin session 2026-11-21, user directive)")
+REASON = "remote-verified resend+replace of unknown notification parts"
 
 
 def _env(path):
@@ -263,7 +262,7 @@ def main():
                 part, verdict, remote_id, attest=attest)
             if remote:
                 plan["remote_id"] = remote
-            req = {**plan, "command_id": str(uuid.uuid4()), "actor": ACTOR,
+            req = {**plan, "command_id": str(uuid.uuid4()), "actor": pwd.getpwuid(os.getuid()).pw_name,
                    "reason": REASON, "result": result, "evidence": evidence}
             if attest:
                 req["human_confirmed"] = True

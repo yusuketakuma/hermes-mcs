@@ -396,7 +396,7 @@ class LedgerSemanticSourcesMixin:
                                  else self._semantic_source_generation(project_id, root))
             if existing is not None:
                 existing = self.db.execute(
-                    'SELECT job_id,state,attempts,payload FROM fetch_jobs WHERE job_id=?',
+                    'SELECT job_id,state,attempts,next_try,payload FROM fetch_jobs WHERE job_id=?',
                     (existing['job_id'],)).fetchone()
                 old_pl = loads_dict(existing["payload"] or "{}") or {}
                 stored_targets = old_pl.get("targets")
@@ -478,8 +478,17 @@ class LedgerSemanticSourcesMixin:
                     # retained for provenance, but this seed must still be
                     # ineligible for notification generation.
                     pl["notification_free"] = True
-                source_changed = (old_targets != set(pl['targets'])
-                                  or pl.get('source_generation') != source_generation)
+                same_source = pl.get('source_generation') == source_generation
+                # The reprocess walk enumerates messages, so one thread's
+                # targets arrive across several slices. Adding a target of
+                # an unchanged thread to its pending replay is the same input:
+                # it keeps the job's attempts and backoff instead of minting a
+                # fresh budget on every slice.
+                target_growth = (execution is not None and same_source
+                                 and existing['state'] == 'pending'
+                                 and old_targets < set(pl['targets']))
+                source_changed = ((old_targets != set(pl['targets']) and not target_growth)
+                                  or not same_source)
                 # A done job without an execution marker (arrival and history
                 # seeds write none) was never bound to a generation. The
                 # reprocess pass replays one only when its assessment predates
@@ -504,7 +513,8 @@ class LedgerSemanticSourcesMixin:
                     pl['execution_contract'] = 1
                     if not preserve_live:
                         pl['reprocess_only'] = True
-                payload_changed = (input_changed
+                # A grown target set still fences a worker holding the old one.
+                payload_changed = (input_changed or target_growth
                                    or old_origin != pl.get("origin")
                                    or old_eligible != bool(pl.get("eligible"))
                                    or old_notification_free
@@ -518,6 +528,9 @@ class LedgerSemanticSourcesMixin:
                 pl["source_generation"] = source_generation
                 attempts = (0 if input_changed
                              else int(existing["attempts"] or 0))
+                next_try = now
+                if target_growth and not input_changed and type(existing['next_try']) in (int, float):
+                    next_try = max(now, existing['next_try'])
                 if input_changed:
                     self._invalidate_thread_projections(
                         project_id, root, invalidated_roots=invalidated_roots,
@@ -540,7 +553,7 @@ class LedgerSemanticSourcesMixin:
                     "UPDATE fetch_jobs SET state=?,payload=?,"
                     "attempts=?,next_try=?,updated_at=? WHERE job_id=?",
                     (state, json.dumps(pl, ensure_ascii=False, sort_keys=True),
-                     attempts, now, now, existing["job_id"]))
+                     attempts, next_try, now, existing["job_id"]))
             else:
                 payload = {"targets": sorted(set(ids)),
                            VERSION_KEY: CURRENT_VERSION,

@@ -505,12 +505,15 @@ def _repair_qc_snapshot_feedback(r, snapshot):
         return None
 
 
-_ERROR_ROWS_SQL = f"""FROM artifacts e WHERE e.message_id=m.message_id AND e.kind=?
+# KIND and EXTRACT_VERSION are inlined, not bound: artifacts has partial
+# indexes on kind, so a bound kind makes SQLite re-prepare the (very large)
+# selection statement on every execution.
+_ERROR_ROWS_SQL = f"""FROM artifacts e WHERE e.message_id=m.message_id AND e.kind='{KIND}'
         AND {inference.current_meta_pred("e.meta", target=_INFERENCE_VERSION)}
         AND CASE WHEN json_valid(e.meta)
                  THEN json_extract(e.meta,'$.error')=1
                   AND COALESCE(json_extract(e.meta,'$.invalidated'),0)=0
-                  AND COALESCE(json_extract(e.meta,'$.extract_version'),0)=?
+                  AND COALESCE(json_extract(e.meta,'$.extract_version'),0)={EXTRACT_VERSION}
                   AND json_extract(e.meta,'$.hash')=m.content_hash
                   AND (e.project_id IS NULL OR e.project_id=m.project_id)
                   AND m.body_state IS NOT 'deleted'
