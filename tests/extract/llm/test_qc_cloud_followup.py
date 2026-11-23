@@ -295,7 +295,8 @@ def test_a_metadata_revision_earns_no_new_attempt_but_a_body_edit_does(qc_window
     assert _current(ledger)[1]["qc_fix"]["attempt"] == 2
 
 
-def test_a_cap_blocked_chunk_resumes_the_same_attempt_without_resending(qc_window, monkeypatch):
+def _capped_after_the_first_chunk(qc_window, monkeypatch):
+    """A long flagged post whose second attempt sends chunk 1, then hits the cost cap -> cap switch."""
     ledger, cfg, _local_calls, cloud_calls, _answers = qc_window
     body = "".join(f"完全合成の長い経過記録{i:03d}です。" for i in range(300))
     assert len(body) > worker._CHUNK_SIZE
@@ -317,9 +318,20 @@ def test_a_cap_blocked_chunk_resumes_the_same_attempt_without_resending(qc_windo
     current, meta = _current(ledger)
     assert current['artifact_id'] == before['artifact_id'] and "attempt" not in meta["qc_fix"]
     assert _still_flagged(ledger, before['artifact_id'])
-    cap["open"] = True
     with ledger.db:
         ledger.db.execute("DELETE FROM fetch_jobs WHERE kind='extract_claim'")
+    return cap
+
+
+def _sonnet(cfg):
+    """The same configuration with the stored-post backlog profile switched to another model."""
+    return {**cfg, 'cloud_llm': {**cfg['cloud_llm'], 'provider_profiles': {'anthropic': {'backlog': 'sonnet-high'}}}}
+
+
+def test_a_cap_blocked_chunk_resumes_the_same_attempt_without_resending(qc_window, monkeypatch):
+    ledger, _cfg, _local_calls, cloud_calls, _answers = qc_window
+    cap = _capped_after_the_first_chunk(qc_window, monkeypatch)
+    cap["open"] = True
     assert _cloud_pass(ledger)['done'] == 1
     sent = [_sent_text(call) for call in cloud_calls]
     assert len(sent) >= 2 and len(set(sent)) == len(sent), "the saved first chunk is reused, not resent"
@@ -328,6 +340,37 @@ def test_a_cap_blocked_chunk_resumes_the_same_attempt_without_resending(qc_windo
     assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')]
     _flag_current(ledger)
     assert _cloud_pass(ledger)['done'] == 0 and len(cloud_calls) == len(sent)
+
+
+def test_a_capped_attempt_resumes_only_under_the_contract_it_started_with(qc_window, monkeypatch):
+    ledger, cfg, _local_calls, cloud_calls, _answers = qc_window
+    cap = _capped_after_the_first_chunk(qc_window, monkeypatch)
+    started = json.loads(ledger.artifacts(worker.CLOUD_ATTEMPT_KIND)[0]['content'])['contract']
+    assert started['model'] == cloud_calls[0]['model']
+    # The ordered provider choice now prefers another model (as when the first is over its cap).
+    real_resolve = cloud_policy.resolve_profile
+    monkeypatch.setattr(cloud_policy, "resolve_profile",
+                        lambda config, **kwargs: real_resolve(_sonnet(config), **kwargs))
+    assert cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog")[0]['model'] != started['model']
+    cap["open"] = True
+    assert _cloud_pass(ledger)['done'] == 1
+    sent = [_sent_text(call) for call in cloud_calls]
+    assert len(set(sent)) == len(sent) and _reservations(ledger) == len(sent), (
+        "no reservation for the chunk the first model already answered")
+    assert {call['model'] for call in cloud_calls} == {started['model']}
+    assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')]
+
+
+def test_a_capped_attempt_whose_contract_is_no_longer_offered_ends_without_sending(qc_window, monkeypatch):
+    ledger, cfg, _local_calls, cloud_calls, _answers = qc_window
+    cap = _capped_after_the_first_chunk(qc_window, monkeypatch)
+    cfg['cloud_llm'].update(_sonnet(cfg)['cloud_llm'])
+    cap["open"] = True
+    assert _cloud_pass(ledger)['done'] == 0
+    assert len(cloud_calls) == 1 and _reservations(ledger) == 1, "nothing is paid again on the new model"
+    assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')], "the attempt ends (確認候補)"
+    assert worker._select_pending(ledger, 5, None, None, False, cloud_only=True)[0] == []
+    assert _cloud_pass(ledger)['done'] == 0 and len(cloud_calls) == 1
 
 
 def test_claim_rereads_the_lane_filter_and_the_second_attempt(qc_window, monkeypatch):
@@ -351,6 +394,14 @@ def test_claim_rereads_the_lane_filter_and_the_second_attempt(qc_window, monkeyp
         assert worker._claim(ledger, dict(row)) is None
     assert not ledger.db.execute("SELECT 1 FROM fetch_jobs WHERE kind='extract_claim'").fetchone()
     assert type(worker._claim(ledger, dict(row))) is float
+    # ...and leaves it between claim and the first request: the attempt never opens.
+    import extract_llm_store
+    with monkeypatch.context() as aged:
+        aged.setattr(semantic_qc, "QC_REALTIME_MAX_AGE_S", 60)
+        assert extract_llm_store._open_cloud_attempt(ledger, row) is False
+    assert not ledger.artifacts(worker.CLOUD_ATTEMPT_KIND)
+    assert extract_llm_store._open_cloud_attempt(ledger, row) is True
+    assert _attempts(ledger) == [('qc', 'open')]
 
 
 def test_lane_filter_admits_only_a_reaudited_flag(qc_window):
@@ -529,6 +580,16 @@ def test_one_attempt_per_body_survives_metadata_revisions_and_restarts_on_a_body
         assert is_spent(7) == 1, "a metadata-only revision ends the open attempt"
         attempt('open', now - 30, source_artifact_id=7, revision=revision())
         assert is_spent(7) == 1, "the earlier open record of the same body still counts"
+        with db.db:
+            db.db.execute("DELETE FROM artifacts WHERE kind=?", (worker.CLOUD_ATTEMPT_KIND,))
+        attempt('open', now - 50, source_artifact_id=7, revision=revision())
+        assert is_spent(7) == 0
+        for broken in ({"source_artifact_id": 7}, {"source_artifact_id": 7, "revision": None},
+                       {"source_artifact_id": 7, "revision": "x"}, {"revision": revision()}):
+            with db.db:
+                db.db.execute("DELETE FROM artifacts WHERE kind=?", (worker.CLOUD_ATTEMPT_KIND,))
+            attempt('open', now - 50, **broken)
+            assert is_spent(7) == 1, f"an open record without a full binding never resumes: {broken}"
         # A changed body earns its own attempt; a record of another body does not count.
         db.save_messages([_message(body='完全合成の訂正後の記録です。')])
         assert is_spent(7) == 0

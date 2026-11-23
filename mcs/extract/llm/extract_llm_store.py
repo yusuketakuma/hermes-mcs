@@ -27,6 +27,7 @@ from clinical_chunking import PLAN_VERSION, plan_chunks
 import mcs_queries
 import mcs_util
 import extraction_context
+import semantic_qc
 from mcs_queries import (current_extract_pred)
 from mcs_util import HOME, load_config, loads_dict
 
@@ -71,6 +72,7 @@ from extract_llm_provider import (
 from extract_llm_qc import (
     _commit_rejected,
     _current,
+    _open_attempt_contracts,
     _qc_cloud_followup_sql,
     _prior_extract,
     _prior_matches,
@@ -182,21 +184,29 @@ def _add_cloud_attempt_tx(db, r, state: str, **binding):
 
 
 def _open_cloud_attempt(ledger, r) -> bool:
-    """Open the QC second attempt before its first cloud request; False when the post no longer qualifies.
+    """Open the QC second attempt before its first cloud request; False when the post no longer qualifies or left the QC window.
 
     The record binds the attempt to the flagged extraction and the source
-    revision, so only that unfinished attempt resumes (cloud_attempt_spent_sql)."""
-    if ledger.db.in_transaction or type(r.get("qc_cloud")) is not int:
+    revision, so only that unfinished attempt resumes (cloud_attempt_spent_sql),
+    and to the provider contract, so it resumes only under the contract its
+    saved chunks and paid answers belong to."""
+    contract = r.get("_provider_contract")
+    if ledger.db.in_transaction or type(r.get("qc_cloud")) is not int or not isinstance(contract, dict):
         return False
     with ledger.db:
         ledger.db.execute("BEGIN IMMEDIATE")
+        # The lane's QC window is re-read at the last step before a request.
+        scope, scope_params = semantic_qc.qc_scope_sql(time.time())
         row = ledger.db.execute(
             f"SELECT ({_qc_cloud_followup_sql()}), {source_revision_sql()} FROM messages m "
-            "WHERE m.message_id=? AND m.project_id=? AND m.content_hash=?",
-            (r["message_id"], r["project_id"], r["content_hash"])).fetchone()
+            f"WHERE m.message_id=? AND m.project_id=? AND m.content_hash=? AND {scope}",
+            (r["message_id"], r["project_id"], r["content_hash"], *scope_params)).fetchone()
         if row is None or row[0] != r["qc_cloud"]:
             return False
-        _add_cloud_attempt_tx(ledger.db, r, "open", source_artifact_id=row[0], revision=row[1])
+        if any(started != contract for started in _open_attempt_contracts(ledger.db, r)):
+            return False
+        _add_cloud_attempt_tx(ledger.db, r, "open", source_artifact_id=row[0], revision=row[1],
+                              contract=dict(contract))
     return True
 
 

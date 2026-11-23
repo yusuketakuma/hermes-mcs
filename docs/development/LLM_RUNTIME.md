@@ -77,6 +77,8 @@ schemaの正本は[extract_schema](../../mcs/extract/llm/extract_schema.py)で�
 2回目は最初の要求の前に`extract_cloud_attempt_v1`（`state:"open"`、監査された抽出のidとsource revisionを束縛）を記録し、
 採用・保留は抽出の書込みと同じtransactionで、送信後の既知の失敗（`cloud_validation_failed`等）は単独で`state:"closed"`を追記します。
 上限・停止による送信前の拒否で止まった回は開いたまま残り、保存済みchunkを再利用して続きだけを送ります（送信済み・結果不明の要求は会計側の重複防止で再送しません）。
+開いた記録は開始時の`provider_contract`（送信先・モデル・prompt）を持ち、再開はprepareでその契約のselectionを選び直し（`provider_order`の順位や予算による切替をしない）、`CloudInferenceUnit(pinned=True)`は送信前のguardでも別の送信先へ移りません。
+その送信先が上限の間は自分のモデルの送信判定で待ち、設定がその契約を提供しなくなったときはprepareで記録を閉じて確認候補にします（保存済みchunkと支払済み応答は契約に束縛されるため、別モデルでは再度支払うことになる）。
 通常の再抽出も採用・保留・送信後の既知の失敗で`purpose:"backlog"`の閉じた記録を残します。記録は会計の保存期間（`CLOUD_USAGE_KEEP_S`）と無関係に削除されません。
 本文が同じ記録が1つでもあれば（開いた回は同じ抽出・同じrevisionのときだけ続行）、記録より前の`reextract`送信予約（記録を残さない送信）とともに送信済みとみなします（`cloud_attempt_spent_sql`、claim時も`cloud_lane_sql`を再適用）。
 投稿者名等だけのsource更新は本文を変えないので再送しません。

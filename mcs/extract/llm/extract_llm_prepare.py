@@ -44,6 +44,7 @@ from extract_llm_provider import (
     _cloud_reextract,
 )
 from extract_llm_qc import (
+    _open_attempt_contracts,
     _qc_feedback,
     _prior_extract,
     _prior_identity,
@@ -67,8 +68,39 @@ from extract_llm_source_contract import (
     _source_writable,
 )
 from extract_llm_store import (
+    _close_cloud_attempt,
     _commit_extraction_atomic,
 )
+
+
+def _resume_selection(ledger, cfg, r, selection):
+    """The selection a QC second attempt continues under -> selection, or None to send nothing.
+
+    An open attempt keeps the provider contract it started with: its saved
+    chunks, recovered answers and repeat guard are bound to that contract, so
+    any other model would pay for finished chunks again. A capped or stopped
+    contract stays selected and send-time admission refuses it (the attempt
+    waits open). A configuration that no longer offers the contract ends the
+    attempt (closed, 確認候補) instead of waiting without bound."""
+    started = _open_attempt_contracts(ledger.db, r)
+    if not started:
+        return selection
+    settings, errors = cloud_policy.resolve_settings(cfg, HOME)
+    if errors:
+        return None
+    for provider in settings["provider_order"]:
+        candidate, problems = cloud_policy.profile_for_settings(
+            cfg, settings, route="reextract", purpose="backlog", provider=provider)
+        if problems or candidate is None:
+            continue
+        try:
+            contract = cloud_inference.cloud_provider_contract(selection=candidate)
+        except cloud_inference.CloudFallback:
+            continue
+        if all(contract == value for value in started):
+            return candidate
+    _close_cloud_attempt(ledger, r)
+    return None
 
 def _prefilter_enabled() -> bool:
     """config.json extract.prefilter, else the legacy MCS_EXTRACT_PREFILTER, else on."""
@@ -359,6 +391,8 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
             if selection is None:
                 selection, errors = cloud_policy.resolve_profile(
                     cfg, route="reextract", purpose="backlog", root=HOME)
+            if selection is not None and mode == "on" and r.get("qc_cloud"):
+                selection = _resume_selection(ledger, cfg, r, selection)
             if selection is None:
                 block("prepare_profile_unavailable")
                 continue

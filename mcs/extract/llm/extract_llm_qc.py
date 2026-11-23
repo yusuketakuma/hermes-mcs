@@ -414,7 +414,8 @@ def cloud_attempt_spent_sql(msg: str = "m", src: str = "qf.artifact_id") -> str:
     attempt still open for the flagged extraction ``src`` at the unchanged
     source revision: that one resumes its unfinished requests, and the shared
     accounting never re-sends a completed or unknown-outcome request. A
-    metadata-only revision keeps the body but ends such an open attempt. A
+    metadata-only revision keeps the body but ends such an open attempt; an
+    open record whose binding is missing or unreadable never resumes. A
     stored-post reservation for the body that precedes its first open record
     (a send that left no attempt record) counts as well, and so does an
     unreadable record or reservation."""
@@ -424,9 +425,9 @@ def cloud_attempt_spent_sql(msg: str = "m", src: str = "qf.artifact_id") -> str:
           AND (ca.project_id IS NULL OR ca.project_id={msg}.project_id)
           AND (json_type({content}) IS NOT 'object'
                OR json_extract({content},'$.hash')={msg}.content_hash
-                  AND NOT (json_extract({content},'$.state')='open'
+                  AND NOT COALESCE(json_extract({content},'$.state')='open'
                            AND json_extract({content},'$.source_artifact_id')={src}
-                           AND json_extract({content},'$.revision')={source_revision_sql(msg)})))
+                           AND json_extract({content},'$.revision')={source_revision_sql(msg)}, 0)))
       OR EXISTS (SELECT 1 FROM artifacts cr
         WHERE cr.kind='{cloud_usage_accounting.KINDS[0]}' AND cr.message_id={msg}.message_id
           AND (cr.project_id IS NULL OR cr.project_id={msg}.project_id)
@@ -436,6 +437,23 @@ def cloud_attempt_spent_sql(msg: str = "m", src: str = "qf.artifact_id") -> str:
                 WHERE co.kind='{CLOUD_ATTEMPT_KIND}' AND co.message_id={msg}.message_id
                   AND json_extract({json_or_null('co.content')},'$.hash')={msg}.content_hash
                   AND json_extract({json_or_null('co.content')},'$.state')='open'), 9e999)))"""
+
+
+def _open_attempt_contracts(db, r) -> list:
+    """Provider contracts of the row's resumable QC second attempt, oldest first (empty before it opens).
+
+    An open record without a readable contract reads as None."""
+    content = json_or_null("ca.content")
+    rows = db.execute(
+        f"""SELECT json_extract({content},'$.contract') FROM artifacts ca JOIN messages m ON m.message_id=ca.message_id
+            WHERE ca.kind=? AND ca.project_id=? AND ca.message_id=? AND m.content_hash=?
+              AND json_extract({content},'$.hash')=m.content_hash
+              AND json_extract({content},'$.state')='open'
+              AND json_extract({content},'$.source_artifact_id')=?
+              AND json_extract({content},'$.revision')={source_revision_sql()}
+            ORDER BY ca.artifact_id""",
+        (CLOUD_ATTEMPT_KIND, r["project_id"], r["message_id"], r["content_hash"], r.get("qc_cloud"))).fetchall()
+    return [loads_dict(row[0]) if isinstance(row[0], str) else None for row in rows]
 
 
 def _qc_cloud_followup_sql(val: str = "qf.artifact_id") -> str:

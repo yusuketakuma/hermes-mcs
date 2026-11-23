@@ -681,7 +681,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 dispatch_current=lambda: not r.get("_checkpoint_conflict"),
                 dispatch=_owner_call, owner={"lease": leases[index]}, selection=r["_cloud_selection"],
                 cache_heads=(_PROMPT_HEAD, _BATCH_HEAD), input_binding=_chunk_context(r, ctx, checkpoint=True),
-                changed=lambda: _source_provably_changed(ledger, r)))
+                changed=lambda: _source_provably_changed(ledger, r),
+                # The QC second attempt stays on the contract its record and saved chunks carry.
+                pinned=bool(r.get("qc_cloud"))))
         if provider is not None:
             try:
                 with cloud_slots:

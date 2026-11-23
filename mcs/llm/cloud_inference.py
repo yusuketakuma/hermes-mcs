@@ -156,7 +156,7 @@ class CloudInferenceUnit:
                  current, dispatch, message_id=None, owner=None, discard_reason=None,
                  max_attempts=None, on_reserved_tx=None, reserve_dispatch=None, transport=None,
                  purpose=None, selection=None, cache_heads=(), input_binding=None, dispatch_current=None,
-                 changed=None):
+                 changed=None, pinned=False):
         purpose = purpose or ("patient_context" if route == "patient_context" else "backlog")
         raw_cfg = copy.deepcopy(cfg)
         if selection is not None:
@@ -269,9 +269,20 @@ class CloudInferenceUnit:
                     except Exception:
                         pass   # naming the stop never changes the refusal
                 if not denied and dict(chosen) != dict(self.selection):
-                    self.selection = chosen
-                    self.model = chosen["model"]
-                    self.contract = cloud_provider_contract(selection=chosen)
+                    if pinned:
+                        # A pinned unit (a resumed attempt whose saved answers belong to its
+                        # contract) never moves to another provider or model: it keeps its own
+                        # selection while the live configuration still offers it, and its own
+                        # model's admission below decides whether it may send now.
+                        live_settings, live_errors = cloud_policy.resolve_settings(live, HOME)
+                        offered = None if live_errors else cloud_policy.profile_for_settings(
+                            live, live_settings, route=route, purpose=purpose,
+                            provider=self.selection["provider"])[0]
+                        denied = offered is None or dict(offered) != dict(self.selection)
+                    else:
+                        self.selection = chosen
+                        self.model = chosen["model"]
+                        self.contract = cloud_provider_contract(selection=chosen)
                 if not denied and inference:
                     try:
                         waiting = (not cloud_backlog.owner_alive() or time.monotonic() >= deadline
