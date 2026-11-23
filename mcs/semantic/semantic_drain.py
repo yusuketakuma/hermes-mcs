@@ -429,9 +429,13 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     # in transport vs. waiting to retake the run lock, and the window a
     # lost reacquire had — llm_s includes both (2026-10-10: losses landed
     # inside a tick's hold with ~30 s of the pass left).
+    # The cloud lane's due selection also runs unlocked (on its own
+    # read-only connection); it is a window like a model call, so its
+    # reacquire wait is never counted as a lock hold (2026-11-24).
     transport = out["transport"] = {
         "llm_transport_s": 0.0, "llm_reacquire_s": 0.0,
-        "jev_transport_s": 0.0, "jev_reacquire_s": 0.0}
+        "jev_transport_s": 0.0, "jev_reacquire_s": 0.0,
+        "select_transport_s": 0.0, "select_reacquire_s": 0.0}
     # Log-only totals belong to this pass output; only its explicit stage chain may add to them.
     shadow_stats = out["shadow_v2"] = {"calls": 0, "incomplete": 0, "s": 0.0}
 
@@ -532,9 +536,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     hold_lane = lane or 'combined'
     held_after = initial_sched.get('payload_hold_cursors', {}).get(hold_lane)
     def select_cloud(*args, **kwargs):
-        with unlocked_transport(ledger.db, run_lock_fd, wait_s=reacquire_s, deadline=deadline):
-            return _select_cloud_due(*args, **kwargs, deadline=deadline,
-                                     isolated=run_lock_fd is not None)
+        return _unlocked("select", _select_cloud_due, *args, **kwargs, deadline=deadline,
+                         isolated=run_lock_fd is not None)
     try:
         cursor_arg = {'held_after': held_after} if held_after is not None else {}
         selector = (select_cloud if cloud_only else
