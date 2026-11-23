@@ -2,8 +2,6 @@
    Built on the shared kit in style.css (chips, cards, kv, tabs, .rows tables). Phones are below 700px. */
 
 .hc-page { max-width: 1320px; }
-/* mcs.css caps .panel-view at the timeline width; the home-care screens use the full main area. */
-body:not([data-mode="mcs"]) .panel-view { max-width: none; }
 .hc-quiet { margin: 4px 0; font-size: var(--fs-sm); color: var(--muted); }
 .hc-note { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-sm); color: var(--ink-2); }
 .hc-page .empty.state-note { color: var(--warn-ink); }

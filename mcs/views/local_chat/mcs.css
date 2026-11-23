@@ -103,7 +103,7 @@
 .detail .text-button { padding: 2px 4px; }
 
 /* ---------- Section panels (記録のまとめ ほか、訪問時の情報の MCS 欄でも使う) ---------- */
-.panel-view { max-width: 920px; }
+body[data-mode="mcs"] .panel-view { max-width: 920px; }
 .panel h2 { margin: 0 0 6px; font-size: var(--fs-lg); }
 .panel h3 { margin: 14px 0 4px; padding-bottom: 2px; font-size: var(--fs-sm); color: var(--ink-2); border-bottom: 1px solid var(--line-strong); }
 .panel-head { margin: 2px 0; font-size: var(--fs-xs); color: var(--muted); }
