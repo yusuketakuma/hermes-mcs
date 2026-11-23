@@ -205,11 +205,14 @@ function adder(label, makeForm, open = false) {
   return {button, area, close};
 }
 // A register section: a wide card whose list redraws itself after a write; "＋ …" opens a new-record form above the list.
+// fill(body, reload) draws the history; reload re-reads it after an existing record is saved and leaves the add form
+// (and any draft in it) alone. add.form(added) builds the new-record form; `added` re-reads and then discards that form.
 function registerSection(title, fill, add = null) {
   const body = el("div", null, "hc-section-body");
   let addForm = null;
-  const reload = async () => {await fill(body, reload); addForm?.close();};
-  if (add) addForm = adder(add.label, () => add.form(reload));
+  const reload = () => fill(body, reload);
+  const added = async () => {await reload(); addForm.close();};
+  if (add) addForm = adder(add.label, () => add.form(added));
   fill(body, reload);
   return card(title, addForm ? [addForm.area, body] : [body], {wide: true, actions: addForm ? [addForm.button] : []});
 }
@@ -431,7 +434,7 @@ function registerView(patientId, data, current) {
   // A saved visit can change the patient's next visit, so the list's 「次 …」 chip is re-read too (it redraws only the list).
   const withList = reload => async () => {await reload(); if (current()) await loadHcPatients();};
   const visits = registerSection("訪問", (box, reload) => patientVisits(box, patientId, withList(reload), current),
-    {label: "＋ 訪問を予定する", form: reload => recordForm("visit", visitForm(), null, withList(reload), {fixed: {patient_id: patientId}})});
+    {label: "＋ 訪問を予定する", form: added => recordForm("visit", visitForm(), null, withList(added), {fixed: {patient_id: patientId}})});
   const enabled = name => hc.meta.modules.some(module => module.name === name);
   const parts = Object.entries(hc.modules).filter(([name, view]) => view.patient && enabled(name)).map(([, view]) => view.patient(patientId, current));
   const sections = [basic, card("ケアチーム（この事業所の担当）", [teamBody], {wide: true}), visits, ...parts, card("MCS の患者", [linkBody], {wide: true})];

@@ -112,7 +112,7 @@ hc.modules.pharmacy = {
         () => rxForm(patientId, rx, reload), 4);
       if (!data.items.length) body.append(emptyRow("処方の記録はまだありません。", 4));
       box.replaceChildren(table, historyPages(body, data, rxRow, offset => api("hc/pharmacy/prescriptions", {patient: patientId, offset}), "以前の処方を表示", current));
-    }, {label: "＋ 処方を登録する", form: reload => rxForm(patientId, null, reload)});
+    }, {label: "＋ 処方を登録する", form: added => rxForm(patientId, null, added)});
   },
   // The visit-sheet card: the latest prescriptions with their drugs as a table.
   sheet(part) {
