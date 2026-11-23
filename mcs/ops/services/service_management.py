@@ -28,7 +28,7 @@ import owned_process
 import update_launch
 import writer_lock
 import run_log_install
-from mcs_config import recovery_python_problem, validate_notify
+from mcs_config import recovery_python_problem, remote_access, validate_notify
 import scheduled_jobs
 
 
@@ -542,6 +542,36 @@ def desired_agents(subs, cfg, *, paths: ServicePaths) -> dict[str, str]:
         out[label] = contract.render_agent(Path(pdir, label + '.plist').read_text(encoding='utf-8'), subs)
     return out
 
+def _converge_agent(label, body, manifest, note, dry, *, paths: ServicePaths) -> int:
+    """Write one rendered agent and converge its loaded state; 1 when it could not be loaded."""
+    dst = os.path.join(paths.agents_dir, label + '.plist')
+    try:
+        cur = Path(dst).read_text(encoding='utf-8')
+    except OSError:
+        cur = None
+    changed = cur != body
+    if changed:
+        note(f'常駐処理{label}: {dst}に設定を保存します')
+        if not dry:
+            write_service_file(dst, body)
+    loaded = True
+    if changed or not agent_loaded(label, paths=paths):
+        loaded = agent_reconcile(label, dst, note, dry, paths=paths)
+    else:
+        note(f'常駐処理{label}: 読み込み済みです')
+    manifest['agents'].append({'label': label, 'sha256': contract.content_digest(body), 'loaded': loaded})
+    return 0 if loaded else 1
+
+def sync_remote_access(subs, cfg, manifest, note, dry, *, paths: ServicePaths) -> int:
+    """The resident patient workspace beside either runtime, only on a Mac `mcs setup remote` set up."""
+    label = contract.REMOTE_ACCESS_LABEL
+    if paths.platform != 'darwin':
+        return 0
+    if not remote_access(cfg):
+        return retire_agents({label}, note, dry, paths=paths)
+    template = Path(paths.checkout, 'deployment', 'launchagents', label + '.plist').read_text(encoding='utf-8')
+    return _converge_agent(label, contract.render_agent(template, subs), manifest, note, dry, paths=paths)
+
 def sync_agents(subs, manifest, note, dry, cfg=None, keep=frozenset(), *, paths: ServicePaths) -> int:
     """Stage 2: launchd agents (macOS only) — converge content AND
     loaded state; retire owned-but-undesired agents from our naming
@@ -549,27 +579,8 @@ def sync_agents(subs, manifest, note, dry, cfg=None, keep=frozenset(), *, paths:
     if paths.platform != 'darwin':
         note('macOS以外のため、launchdの常駐設定は行いません')
         return 0
-    problems = 0
     desired = desired_agents(subs, mcs_util.load_config() if cfg is None else cfg, paths=paths)
-    for label, body in desired.items():
-        dst = os.path.join(paths.agents_dir, label + '.plist')
-        try:
-            cur = Path(dst).read_text(encoding='utf-8')
-        except OSError:
-            cur = None
-        changed = cur != body
-        if changed:
-            note(f'常駐処理{label}: {dst}に設定を保存します')
-            if not dry:
-                write_service_file(dst, body)
-        if changed or not agent_loaded(label, paths=paths):
-            if not agent_reconcile(label, dst, note, dry, paths=paths):
-                problems += 1
-                manifest['agents'].append({'label': label, 'sha256': contract.content_digest(body), 'loaded': False})
-                continue
-        else:
-            note(f'常駐処理{label}: 読み込み済みです')
-        manifest['agents'].append({'label': label, 'sha256': contract.content_digest(body), 'loaded': True})
+    problems = sum(_converge_agent(label, body, manifest, note, dry, paths=paths) for label, body in desired.items())
     installed = {p[:-6] for p in os.listdir(paths.agents_dir) if p.endswith('.plist')} if os.path.isdir(paths.agents_dir) else set()
     return problems + retire_agents({label for label in installed if contract.owns_agent(label)} - set(desired) - set(keep), note, dry, paths=paths)
 
@@ -998,6 +1009,7 @@ def apply_services(cfg, *, paths: ServicePaths, dry_run=False, note):
         problems += sync_standalone_service(manifest, note, dry, paths=paths)
         if not problems:
             problems += sync_standalone_health(manifest, note, dry, paths=paths)
+        problems += sync_remote_access(subs, cfg, manifest, note, dry, paths=paths)
         record_llm_slots(manifest, note, paths=paths)
         if not dry and (not problems):
             try:
@@ -1008,7 +1020,8 @@ def apply_services(cfg, *, paths: ServicePaths, dry_run=False, note):
         return ServiceResult(1 if problems else 0, message)
     hermes = mcs_util.hermes_exe(cfg)
     cron_labels = frozenset((contract.cron_label(script) for _, _, script in scheduled_jobs.configured_cron_jobs(cfg)))
-    problems += sync_agents(subs, manifest, note, dry, cfg, cron_labels | {contract.STANDALONE_LABEL}, paths=paths)
+    problems += sync_agents(subs, manifest, note, dry, cfg, cron_labels | {contract.STANDALONE_LABEL, contract.REMOTE_ACCESS_LABEL}, paths=paths)
+    problems += sync_remote_access(subs, cfg, manifest, note, dry, paths=paths)
     flags_failed = False
     if not dry and isinstance(cfg.get('notify'), dict) and (not validate_notify(cfg['notify'])):
         try:

@@ -5,7 +5,6 @@ import hmac
 import json
 import os
 from pathlib import Path
-import re
 import secrets
 import sqlite3
 from socketserver import TCPServer
@@ -15,6 +14,7 @@ from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
+from mcs_config import REMOTE_ACCESS_PORT, TAILNET_HOST, remote_access
 from mcs_view import View
 import local_chat_view
 import homecare_api
@@ -27,8 +27,6 @@ ASSETS = Path(__file__).resolve().parents[1] / "views" / "local_chat"
 MAX_BODY = 64 * 1024
 # Resident mode sits behind `tailscale serve`, which strips any copy a client sends and sets this for tailnet users.
 IDENTITY = "Tailscale-User-Login"
-_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
-TAILNET_HOST = re.compile(rf"^{_LABEL}(?:\.{_LABEL})*\.ts\.net$")
 UNREGISTERED = "このTailscaleのアカウントは職員として登録されていません。管理者に職員の登録を頼んでください。".encode()
 FILES = {"": ("index.html", "text/html; charset=utf-8"),
          "app.js": ("app.js", "text/javascript; charset=utf-8"),
@@ -299,8 +297,30 @@ class ChatHandler(BaseHTTPRequestHandler):
             self._json(200, result)
 
 
+def resident_argv(cfg, root):
+    """The arguments of the resident workspace that `mcs setup remote` saved under ``remote_access``:
+    this Mac's published snapshot, all its patients and its ledger, behind its tailnet name."""
+    remote = remote_access(cfg)
+    if remote is None:
+        raise ValueError("remote_access_not_configured")
+    argv = ["--snapshot", str(Path(root) / "data" / "snapshots" / "ledger-snapshot.db"), "--all-patients",
+            "--homecare-db", str(homecare_store.default_path(root)),
+            "--port", str(remote.get("port", REMOTE_ACCESS_PORT)), "--tailnet-host", remote["tailnet_host"]]
+    return argv + (["--route-settings", remote["route_settings"]] if "route_settings" in remote else [])
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv == ["--resident"]:
+        # The LaunchAgent form: every setting comes from config.json, so the agent's plist stays fixed.
+        import mcs_util
+        cfg = mcs_util.load_config_checked()
+        try:
+            argv = resident_argv(cfg or {}, mcs_util.HOME)
+        except ValueError:
+            sys.exit("remote_access is not configured; run `mcs setup remote` first. No server started.")
+    parser = argparse.ArgumentParser(description=__doc__, epilog="--resident alone starts the resident workspace "
+                                     "saved by `mcs setup remote`.")
     parser.add_argument("--snapshot", type=Path, required=True,
                         help="Published ledger-snapshot.db only; never the live ledger")
     scope = parser.add_mutually_exclusive_group(required=True)

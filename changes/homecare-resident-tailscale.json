@@ -1,9 +1,11 @@
 {
   "category": "added",
   "title": "在宅ケアの患者画面を事業所のスマホから使える常駐モードを追加",
-  "summary": "mcs_local_chat.py を --tailnet-host 付きで起動し、tailscale serve で tailnet の中だけに公開すると、職員がスマホのブラウザから患者画面と在宅ケア台帳を使えます。誰が使っているかは Tailscale のログインで見分け、職員として登録したログインの人だけが使えます。書き込みの操作者はそのログインの職員になり、画面からは選べません。あわせて、訪問薬剤管理を「実施」にできるのは薬剤師だけになりました。事務員は台帳・訪問予定・処方の入力・訪問ルートを使えます。",
-  "upgrade": "通常の起動（秘密の URL でこの Mac だけから使う）は変わりません。スマホから使う場合だけ、Mac とスマホを同じ tailnet に入れ、--homecare-db・固定の --port・--tailnet-host （名前）.ts.net で起動し、tailscale serve --bg http://127.0.0.1:（ポート番号） で公開します（funnel は使わない）。各職員の「Tailscale のログイン名」を職員の画面で登録してください。既存の台帳で、薬剤師の資格のない職員が訪問薬剤管理を実施として記録していた場合、その訪問を訂正するときは薬剤師が行います。通知・収集・既読化・モデル・既定値は変わりません。",
+  "summary": "Mac mini 以外の端末（スマホなど）から使う Mac だけ、install.sh --with-tailscale で Tailscale を入れ、mcs setup remote で tailnet の中だけに公開し、患者画面と在宅ケア台帳を常駐させます。誰が使っているかは Tailscale のログインで見分け、職員として登録したログインの人だけが使えます。訪問薬剤管理の実施の記録・変更・中止は薬剤師だけです。",
+  "upgrade": "付けない場合の導入・更新と、通常の起動（秘密の URL でこの Mac だけから使う）は変わりません。スマホから使う Mac は install.sh --with-tailscale で再導入し、Tailscale にサインインしてから mcs setup remote を実行し、職員の画面で各職員の Tailscale のログイン名を登録します（funnel は使いません）。この選択を保存した後に古い版へ戻すと、古い導入ツールは選択を読めず再導入を止めます。薬剤師でない職員が実施と記録した既存の訪問は、薬剤師が訂正します。",
   "details": [
+    "install.sh --with-tailscale は段階1で Homebrew の tailscale-app を入れます（導入済みなら維持、--no-brew では導入済みであることを確認）。選択は install_args に保存し、省略した後の実行でも引き継ぎます。",
+    "mcs setup remote は Tailscale がサインイン済みで、この Mac の *.ts.net の名前が分かるときだけ remote_access に保存し、tailscale serve --bg で公開し、常駐サービス ai.mcs.local-chat を登録します。--off で設定を空にしてサービスを止めます。",
     "常駐モードは 127.0.0.1 にだけ待ち受け、Host は tailnet の名前、書き込みの Origin は https://（名前）.ts.net だけを受け付けます。",
     "要求ごとに Tailscale-User-Login が1つだけあり、在籍中の職員のログインと一致する必要があります。未登録のログインには MCS の記録も台帳も返しません。",
     "職員が1人もいない間だけ、最初の登録を受け付け、その人のログインを結び付けて管理者にします。",
@@ -11,9 +13,15 @@
     "スマホの幅では、左の一覧が上の見出しになり、患者や画面を開くと患者一覧をたたみます（「患者一覧」で開き直せます）。文字を大きくし、入力欄でスマホが拡大しないようにしました。投稿の詳細は全画面で開きます。"
   ],
   "refs": [
-    "mcs/ops/mcs_local_chat.py",
-    "mcs/homecare/core/homecare_visits.py",
+    "deployment/install/runtime.sh",
+    "deployment/launchagents/ai.mcs.local-chat.plist",
+    "install.sh",
+    "mcs/core/mcs_config.py",
     "mcs/homecare/core/homecare_modules.py",
-    "mcs/homecare/pharmacy/pharmacy_module.py"
+    "mcs/homecare/core/homecare_visits.py",
+    "mcs/homecare/pharmacy/pharmacy_module.py",
+    "mcs/ops/mcs_local_chat.py",
+    "mcs/ops/services/service_contract.py",
+    "mcs/ops/setup/remote_access_setup.py"
   ]
 }

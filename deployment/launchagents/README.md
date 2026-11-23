@@ -30,6 +30,7 @@ services所有のlaunchdは `mcs/ops/services/service_contract.py` の `AGENT_LA
 | ヘルス監視の予備 `health_watch.py` | 300秒間隔（hermes cron が詰まっても警報する。flock・重複抑止は cron 側と共有） | launchd `local.mcs-health` |
 | 抽出・semantic/QC 常駐drainer（レーン2） | KeepAlive・24時間・待機5〜30秒（次回実行時刻も考慮） | launchd `ai.mcs.extract-drainer` |
 | 抽出・semantic/QC 常駐drainer（レーン3） | KeepAlive・24時間・待機5〜30秒（次回実行時刻も考慮） | launchd `ai.mcs.extract-drainer-2` |
+| 患者画面の常駐（`mcs setup remote` を実行した Mac だけ・両方の接続方法） `mcs_local_chat.py --resident` | KeepAlive（設定は config.json の `remote_access`） | launchd `ai.mcs.local-chat` |
 
 MCSサーバーの負荷対策として、定期的なMCSアクセスを5分から10分間隔へ変更した。
 ヘルス監視はローカルの保管状態を確認するため5分間隔を維持する。

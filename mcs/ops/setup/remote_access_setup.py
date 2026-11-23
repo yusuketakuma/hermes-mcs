@@ -1,0 +1,131 @@
+"""Set up this Mac for other devices: save its Tailscale name, publish the patient workspace to the tailnet and run it resident."""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+
+from mcs_config import REMOTE_ACCESS_PORT, TAILNET_HOST, remote_access
+
+# The App Store and standalone app both ship the command inside the bundle; Homebrew's formula puts it on PATH.
+APP_CLI = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+TIMEOUT_S = 30
+
+
+def tailscale_cli():
+    found = shutil.which("tailscale")
+    if found:
+        return found
+    return APP_CLI if os.access(APP_CLI, os.X_OK) else None
+
+
+def _run(cli, *argv):
+    """The local tailscale command only; it talks to this Mac's own Tailscale service, never to MCS."""
+    try:
+        return subprocess.run([cli, *argv], capture_output=True, text=True, timeout=TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def this_mac(cli):
+    """This Mac's tailnet name when Tailscale is signed in and running, else the reason it is not usable."""
+    done = _run(cli, "status", "--json")
+    if done is None or done.returncode not in (0, 1):
+        return None, "Tailscale の状態を読み取れませんでした。Tailscale アプリが起動しているか確認してください。"
+    try:
+        status = json.loads(done.stdout)
+    except ValueError:
+        return None, "Tailscale の状態を読み取れませんでした。Tailscale を最新版に更新してから再実行してください。"
+    if not isinstance(status, dict) or status.get("BackendState") != "Running":
+        return None, "Tailscale にサインインしていません。Tailscale アプリを開いてサインインしてから再実行してください。"
+    name = (status.get("Self") or {}).get("DNSName") if isinstance(status.get("Self"), dict) else None
+    host = name.rstrip(".").lower() if isinstance(name, str) else ""
+    if not TAILNET_HOST.match(host):
+        return None, ("この Mac の Tailscale の名前（*.ts.net）を確認できません。Tailscale の管理画面で"
+                      "MagicDNS と HTTPS 証明書を有効にしてから再実行してください。")
+    return host, None
+
+
+def _route_settings(path):
+    if path is None:
+        return None, None
+    path = Path(path).expanduser().resolve()
+    try:
+        info = path.stat()
+    except OSError:
+        return None, f"訪問ルートの設定ファイルが見つかりません: {path}"
+    if info.st_mode & 0o077:
+        return None, f"訪問ルートの設定ファイルは所有者だけが読めるようにしてください（chmod 600 {path}）"
+    return str(path), None
+
+
+def command(args, *, services) -> int:
+    import config_edit
+    import mcs_util
+
+    cfg = mcs_util.load_config_checked()
+    if cfg is None:
+        print("設定を読み取れないため変更していません。mcs_setup.py check で確認してください。")
+        return 1
+    current = remote_access(cfg) or {}
+    if args.off:
+        changes = {f"remote_access.{key}": None for key in current}
+        if changes:
+            try:
+                _, errors = config_edit.apply(changes)
+            except (config_edit.ConfigConflict, OSError, ValueError):
+                errors = ["config"]
+            if errors:
+                print("設定を保存できなかったため、遠隔接続は止めていません。mcs_setup.py check で確認してください。")
+                return 1
+        print("遠隔接続をやめました。常駐サーバーを止めます。")
+        print("tailnet への公開も止めるには `tailscale serve status` で確認し、`tailscale serve reset` を実行してください。")
+        return services(args)
+    cli = tailscale_cli()
+    if cli is None:
+        print("Tailscale が見つかりません。install.sh --with-tailscale で導入するか、"
+              "https://tailscale.com/download から Tailscale を入れてから再実行してください。")
+        return 1
+    host, problem = this_mac(cli)
+    if problem:
+        print(problem)
+        return 1
+    port = args.port or current.get("port", REMOTE_ACCESS_PORT)
+    if not 1024 <= port <= 65535:
+        print("--port は1024から65535までの番号を指定してください。")
+        return 1
+    route, problem = _route_settings(args.route_settings)
+    if problem:
+        print(problem)
+        return 1
+    changes = {"remote_access.tailnet_host": host, "remote_access.port": port}
+    if route is not None:
+        changes["remote_access.route_settings"] = route
+    try:
+        _, errors = config_edit.apply(changes)
+    except (config_edit.ConfigConflict, OSError, ValueError):
+        errors = ["config"]
+    if errors:
+        print("設定を保存できなかったため、遠隔接続は設定していません。mcs_setup.py check で確認してください。")
+        return 1
+    # `serve` publishes to this tailnet only. `funnel` would publish to the internet and is never used.
+    served = _run(cli, "serve", "--bg", f"http://127.0.0.1:{port}")
+    if served is None or served.returncode != 0:
+        print("tailnet への公開を設定できませんでした。Tailscale の管理画面で HTTPS 証明書を有効にし、"
+              f"`tailscale serve --bg http://127.0.0.1:{port}` を実行してください。")
+        return 1
+    status = services(args)
+    if status == 0:
+        print(f"遠隔接続を設定しました。同じ tailnet の端末から https://{host}/ を開いてください。")
+        print("最初に開いた人のログインが最初の職員になります。ほかの職員は職員の画面で Tailscale のログイン名を登録してください。")
+    return status
+
+
+def add_parser(sub, services) -> None:
+    p = sub.add_parser("remote", help="Mac mini 以外の端末（スマホなど）から患者画面を使えるよう、Tailscale で tailnet に公開して常駐させます")
+    p.add_argument("--port", type=int, help=f"この Mac の中だけで待ち受ける番号（既定 {REMOTE_ACCESS_PORT}）")
+    p.add_argument("--route-settings", help="訪問ルートの設定ファイル（所有者だけが読めるJSON）")
+    p.add_argument("--off", action="store_true", help="遠隔接続をやめ、常駐サーバーを止めます")
+    p.set_defaults(fn=lambda args: command(args, services=services))

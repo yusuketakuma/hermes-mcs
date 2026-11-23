@@ -127,6 +127,33 @@ def recovery_python_problem(path, update_repo=None, *, checkout=REPO):
     return None
 
 
+_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+TAILNET_HOST = re.compile(rf"^{_LABEL}(?:\.{_LABEL})*\.ts\.net$")
+REMOTE_ACCESS_PORT = 8770
+
+
+def remote_access(cfg):
+    """The saved resident-workspace settings, or None when this Mac is not set up for other devices."""
+    value = cfg.get("remote_access") if isinstance(cfg, dict) else None
+    return value if isinstance(value, dict) and value and remote_access_problem(value) is None else None
+
+
+def remote_access_problem(v):
+    """``remote_access``: the resident patient workspace published to this Mac's tailnet with `tailscale serve`;
+    an empty object means it is off."""
+    if not isinstance(v, dict) or set(v) - {"tailnet_host", "port", "route_settings"}:
+        return "tailnet_host・port・route_settingsだけを持つJSONオブジェクトを指定してください"
+    if not v:
+        return None
+    if not isinstance(v.get("tailnet_host"), str) or not TAILNET_HOST.match(v["tailnet_host"]):
+        return "tailnet_host: このMacのTailscaleの名前（例: mac-mini.example.ts.net）を指定してください"
+    if "port" in v and not (type(v["port"]) is int and 1024 <= v["port"] <= 65535):
+        return "port: 1024から65535までの整数を指定してください"
+    if "route_settings" in v and not (isinstance(v["route_settings"], str) and os.path.isabs(v["route_settings"])):
+        return "route_settings: 訪問ルートの設定ファイルの絶対パスを指定してください"
+    return None
+
+
 def _urgency_escalation(v):
     """Reuse notify_urgent.settings(): on/shadow with a policy it would
     silently drop (no explicit room_cooldown_min, bad type) is an error."""
@@ -185,6 +212,7 @@ CONFIG_RULES = {
     "watchdog_grace_s":      (False, lambda v: None if type(v) is int and 0 <= v <= 3600
                              else "0から3600までの整数を指定してください"),
     "auto_recovery":         (False, _auto_recovery),
+    "remote_access":         (False, remote_access_problem),
 }
 
 

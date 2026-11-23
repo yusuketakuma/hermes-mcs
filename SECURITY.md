@@ -42,7 +42,7 @@
   そのため、ログイン可能な別のアカウントがあるMacでは、自動ログインはCDP付きChromeを起動せず、
   パスワードも入力せずに`manual_required:multi_user_host`で止まる。単一ユーザーのMacで運用する
 - ローカルLLM の推論経路は loopback 固定・proxy 無効
-- ローカル患者画面の常駐モード（`mcs_local_chat.py --tailnet-host <名前>.ts.net`、在宅ケア台帳と固定ポートが必須）は 127.0.0.1 にだけ待ち受け、
+- ローカル患者画面の常駐モード（`mcs_local_chat.py --tailnet-host <名前>.ts.net`、在宅ケア台帳と固定ポートが必須。`mcs setup remote` が設定した Mac だけ常駐サービス `ai.mcs.local-chat` として動く）は 127.0.0.1 にだけ待ち受け、
   `tailscale serve` が tailnet 内の端末へ HTTPS で公開する（Funnel で一般公開しない）。各要求の `Tailscale-User-Login`
   （serve が付け、端末から送られた同名ヘッダーは取り除く）が在籍中の職員に登録されたログインと一致する場合だけ応答し、
   書込みの操作者はこのログインの職員に置き換える。未登録のログインには MCS の記録も台帳も返さない（職員が1人もいない間の最初の登録だけを除く）。

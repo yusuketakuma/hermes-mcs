@@ -66,6 +66,17 @@ else
         (umask 022; brew install --cask google-chrome)
         _new="$_new google-chrome"
     fi
+    # Only for a Mac other devices reach (--with-tailscale): the tailnet carries the patient workspace.
+    if [ "$WITH_TAILSCALE" -eq 0 ]; then :
+    elif [ "$OS" != Darwin ]; then
+        skip "macOS ではないため Tailscale の導入を省略します。Tailscale を別途導入してください"
+    elif tailscale_installed; then
+        skip "Tailscale は導入済みです"
+    else
+        printf '  導入中: %s\n' "tailscale-app (cask)"
+        (umask 022; brew install --cask tailscale-app)
+        _new="$_new tailscale-app"
+    fi
     if [ -n "$_new" ]; then sum "1/6 基本ソフト:     導入済み:$_new"
     else sum "1/6 基本ソフト:     すべて導入済みです"; fi
 fi
@@ -920,6 +931,12 @@ printf '    3. 通知先の画面で、通知が届いたことを確認\n'
 if [ "$SKIP_SERVICES" -eq 1 ]; then
     printf '\n自動実行の登録を省略したため、初期設定後に次を実行してください。\n'
     printf '    %s %s services\n' "$PYQ" "$SETUPQ"
+fi
+if [ "$WITH_TAILSCALE" -eq 1 ]; then
+    printf '\nMac mini 以外の端末（スマホなど）から使う準備（詳しい説明: docs/guides/LOCAL_CHAT.md）:\n'
+    printf '    1. Tailscale アプリを開き、事業所の Tailscale アカウントでサインイン\n'
+    printf '    2. tailnet への公開と常駐サーバーを設定: %s setup remote\n' "$(shell_quote "$MCS_SHIM")"
+    printf '    3. スマホにも Tailscale を入れて同じアカウントでサインインし、表示された https://…ts.net/ を開く\n'
 fi
 if [ "$RUNTIME_MODE" = standalone ]; then
     printf '\n動作状況の確認: %s %s -m mcs_standalone status\n' "$INREPO" "$PYQ"

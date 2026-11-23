@@ -45,7 +45,7 @@ CANDIDATE_RUNTIME_ASSETS = (
     "evaluation/g6-criteria-v2.json",
 )
 # Self-contained copy of install_options_contract.OPTIONS (pinned by test).
-INSTALL_ARGS = ("--no-llm", "--no-brew", "--no-plugin", "--no-recovery", "--with-yomitoku")
+INSTALL_ARGS = ("--no-llm", "--no-brew", "--no-plugin", "--no-recovery", "--with-tailscale", "--with-yomitoku")
 COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 

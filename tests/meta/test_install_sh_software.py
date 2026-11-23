@@ -270,3 +270,41 @@ def test_missing_uv_stops_before_hermes_checkout_or_venv_changes(tmp_path, mode)
     assert "uv が必要" in result.stdout + result.stderr
     assert not (hermes_home / "hermes-agent").exists()
     assert not any(call.startswith("git clone") for call in _calls(stub))
+
+
+def test_tailscale_is_installed_only_for_a_mac_other_devices_reach(tmp_path):
+    import json
+
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    plain = _run(env, hermes_home)
+    assert plain.returncode == 0, plain.stderr
+    assert not any("tailscale" in c for c in _calls(stub_root)) and "setup remote" not in plain.stdout
+
+    home, hermes_home, stub_root, env = _world(tmp_path / "remote")
+    pre = _run(env, hermes_home, "--preflight", "--with-tailscale")
+    assert "Tailscale は未導入です。段階1で導入します" in pre.stdout
+    remote = _run(env, hermes_home, "--with-tailscale")
+    assert remote.returncode == 0, remote.stderr
+    assert "brew install --cask tailscale-app" in _calls(stub_root)
+    assert "setup remote" in remote.stdout
+    assert "--with-tailscale" in json.loads((home / ".mcs/config.json").read_text())["install_args"]
+    # A later run that omits the flag keeps the saved choice.
+    again = _run(env, hermes_home)
+    assert again.returncode == 0, again.stderr
+    assert "setup remote" in again.stdout
+
+
+def test_an_installed_tailscale_is_kept_and_no_brew_needs_one(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    tailscale = stub_root / "bin" / "tailscale"
+    tailscale.write_text('#!/bin/sh\necho "tailscale $*" >> "$STUB_LOG"\n')
+    tailscale.chmod(0o755)
+    kept = _run(env, hermes_home, "--with-tailscale")
+    assert kept.returncode == 0, kept.stderr
+    assert "Tailscale は導入済みです" in kept.stdout
+    assert not any(c.startswith("brew install --cask tailscale") for c in _calls(stub_root))
+    assert not any(c.startswith("tailscale ") for c in _calls(stub_root))  # serve waits for `mcs setup remote`
+    tailscale.unlink()
+    home, hermes_home, stub_root, env = _world(tmp_path / "nobrew")
+    missing = _run(env, hermes_home, "--no-brew", "--with-tailscale")
+    assert missing.returncode == 1 and "Tailscale" in missing.stderr
