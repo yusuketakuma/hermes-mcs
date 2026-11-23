@@ -107,15 +107,15 @@ def _clean_patient(values):
 
 
 def page(fetch, params, *, size):
-    """``{"items", "more"}`` for a newest-first history: ``params["limit"]`` grows by ``size`` as the screen asks
-    for older entries, up to 1000, so nothing stored is out of reach."""
-    limit = params.get("limit", size)
-    if isinstance(limit, str) and limit.isdigit():
-        limit = int(limit)
-    if type(limit) is not int or not 1 <= limit <= 1000:
+    """One page of a newest-first history as ``{"items", "more"}``; ``params["offset"]`` skips the entries the
+    screen already shows, so every stored entry stays in reach however long the history grows."""
+    offset = params.get("offset", 0)
+    if isinstance(offset, str) and offset.isdigit():
+        offset = int(offset)
+    if type(offset) is not int or not 0 <= offset <= 10**9:
         raise ValueError("bad_request")
-    rows = fetch(limit + 1)
-    return {"items": rows[:limit], "more": len(rows) > limit}
+    rows = fetch(size + 1, offset)
+    return {"items": rows[:size], "more": len(rows) > size}
 
 
 def record_id(value):
@@ -135,6 +135,19 @@ def require_actor(db, actor, *, admin=False):
         raise ValueError("actor_required")
     if admin and not row["admin"]:
         raise ValueError("admin_required")
+
+
+def staff_for_login(db, login):
+    """The active staff member a Tailscale login belongs to: ``{"staff_id", "name", "admin"}``, or None."""
+    if not isinstance(login, str) or not login.strip():
+        return None
+    row = db.execute("SELECT staff_id, name, admin FROM staff WHERE tailscale_login=? AND active=1",
+                     (login.strip().lower(),)).fetchone()
+    return None if row is None else {**dict(row), "admin": bool(row["admin"])}
+
+
+def any_staff(db):
+    return db.execute("SELECT 1 FROM staff").fetchone() is not None
 
 
 def get(db, kind, record_id):

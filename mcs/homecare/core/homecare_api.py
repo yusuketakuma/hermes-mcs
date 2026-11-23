@@ -15,7 +15,7 @@ from homecare_records import record_id as _id
 
 # Fixed, non-clinical codes the browser may see.
 ERRORS = frozenset({"version_conflict", "already_linked", "not_linked", "already_assigned", "actor_required",
-                    "admin_required", "not_qualified", "role_not_allowed", "still_assigned", "team_changed", "invalid_fields", "not_found",
+                    "admin_required", "not_qualified", "role_not_allowed", "still_assigned", "team_changed", "visit_not_qualified", "invalid_fields", "not_found",
                     "project_not_allowed", "route_unavailable", "route_failed",
                     "too_many_stops", "bad_request"})
 
@@ -29,7 +29,8 @@ def read(db, route, params, *, registry, mcs_patients):
         if params.get("date"):
             return {"items": visits.for_day(db, params["date"])}
         patient_id = _id(params.get("patient"))
-        return records.page(lambda limit: visits.for_patient(db, patient_id, limit=limit), params, size=50)
+        return records.page(lambda limit, offset: visits.for_patient(db, patient_id, limit=limit, offset=offset),
+                            params, size=50)
     if route == "sheet":
         return sheet(db, _id(params.get("patient")), registry=registry, mcs_patients=mcs_patients)
     if route == "meta":
@@ -114,13 +115,16 @@ def sheet(db, patient_id, *, registry, mcs_patients, today=None):
     patient = records.get(db, "patient", patient_id)
     project = links.project_of(db, patient_id)
     scope = {row["project_id"]: row for row in mcs_patients()}
+    recent = visits.done(db, patient_id)
+    # 前回から変わったこと on the sheet means since the last visit that took place.
+    since = visits.started_at(recent[0]) if recent else None
     return {"patient": patient, "team": team.current(db, patient_id),
             "next_visits": visits.upcoming(db, patient_id, today or date.today().isoformat()),
-            "recent_visits": visits.done(db, patient_id),
+            "recent_visits": recent,
             "modules": {module.name: module.api.sheet(db, patient_id)
                         for module in registry.modules if module.api is not None},
-            "mcs": {"project_id": project, "patient_name": scope[project]["patient_name"]}
-            if project in scope else {"project_id": None, "patient_name": None}}
+            "mcs": {"project_id": project, "patient_name": scope[project]["patient_name"], "since": since}
+            if project in scope else {"project_id": None, "patient_name": None, "since": None}}
 
 
 def error_body(exc):

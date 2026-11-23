@@ -158,7 +158,7 @@ def test_read_only_and_no_configuration_or_network(snapshot, monkeypatch):
 
 def handler(path, headers=None):
     obj = chat.ChatHandler.__new__(chat.ChatHandler)
-    obj.server = SimpleNamespace(server_port=8765, token="synthetic-capability", snapshot="unused", allowed={1})
+    obj.server = SimpleNamespace(server_port=8765, token="synthetic-capability", snapshot="unused", allowed={1}, tailnet_host=None)
     obj.path = path
     obj.headers = Message()
     for name, value in (headers if headers is not None else [("Host", "127.0.0.1:8765")]):
@@ -435,3 +435,55 @@ def test_empty_signal_list_is_definite_only_after_a_complete_readable_run(monkey
     view = local_chat_view._signals(SimpleNamespace(db=None), 1)
     assert (view["empty"] == "未解消のシグナルはありません。") is definite
     assert definite or "見つかりませんでした" in view["empty"]
+
+
+def test_drug_search_reads_only_the_approved_dictionary(monkeypatch, tmp_path):
+    import drug_catalog
+    import mcs_util
+    from medications_testkit import _source_document
+
+    document = _source_document()
+    document["entries"][0]["products"] = [{"medicine": "900000001", "name": "架空製品錠5mg", "unit": "錠", "form_code": "1"}]
+    raw = json.dumps(document, ensure_ascii=False).encode()
+    (tmp_path / "catalog.json").write_bytes(raw)
+    (tmp_path / "catalog.json").chmod(0o600)
+    cfg = {"drug_map": {"path": str(tmp_path / "catalog.json"), "sha256": hashlib.sha256(raw).hexdigest()}}
+    monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
+    data = chat.response("unused", {1}, "drugs", "q=架空製品")
+    assert data == {"status": "active", "items": [{"code": "900000001", "code_system": drug_catalog.CODE_SYSTEM,
+                                                   "name": "架空製品錠5mg", "generic_name": None, "unit": "錠"}]}
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    assert chat.response("unused", {1}, "drugs", "q=架空") == {"status": "unconfigured", "items": []}
+    for query in ("q=", "q=架空&project=1", "q=架空&cursor=x"):
+        with pytest.raises(ValueError):
+            chat.response("unused", {1}, "drugs", query)
+
+
+def test_visit_brief_route_is_scoped_and_takes_the_last_visit_time(snapshot, monkeypatch):
+    import mcs_util
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    data = chat.response(snapshot, {1}, "brief", "project=1&since=1793458800")
+    assert data["since"] == 1793458800 and data["snapshot"]["generation_id"]
+    assert [section["key"] for section in data["sections"]][-1] == "signals"
+    assert chat.response(snapshot, {1}, "brief", "project=1")["since"] is None
+    with pytest.raises(ValueError, match="project_not_allowed"):
+        chat.response(snapshot, {1}, "brief", "project=2")
+    for query in ("project=1&since=nan", "project=1&since=-1", "project=1&since=1.5", "project=1&message=1",
+                  "project=1&q=x", "since=1"):
+        with pytest.raises(ValueError):
+            chat.response(snapshot, {1}, "brief", query)
+    with pytest.raises(ValueError):
+        chat.response(snapshot, {1}, "timeline", "project=1&since=1")
+
+
+def test_context_panel_rows_keep_their_source_post_for_the_open_button(snapshot):
+    items = chat.response(snapshot, {1}, "panel", "project=1&section=background")["panel"]["items"]
+    assert 1 in {item["message_id"] for item in items}
+    import notify_views
+    view = mcs_view.View(snapshot)
+    try:
+        card = notify_views.patient_context_list(view.db, 1, "background", cfg={}, since=0,
+                                                 now=view.meta["generated_at"], first_view=True)
+    finally:
+        view.close()
+    assert all("message_id" not in item for item in card["items"])  # chat cards are unchanged

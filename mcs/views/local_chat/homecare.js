@@ -1,7 +1,7 @@
 "use strict";
 // Home-care core screens (staff, patient register, care team, MCS links). Shares $, el, api, fail and state with app.js.
 // Occupation modules add their own screens; the core only reads their declared qualifications and roles from api/hc/meta.
-const hc = {enabled: false, routes: false, csrf: "", actor: null, meta: {qualifications: {}, roles: {}, visit_kinds: {}}, staff: [], patients: [], patient: null, mode: "mcs", request: 0,
+const hc = {enabled: false, routes: false, csrf: "", actor: null, resident: false, user: null, meta: {qualifications: {}, roles: {}, visit_kinds: {}}, staff: [], patients: [], patient: null, mode: "mcs", request: 0, view: 0,
   // Occupation modules register their own patient sections and visit-sheet parts here (see pharmacy.js).
   modules: {}};
 const VISIT_STATUS = {planned: "予定", done: "実施", cancelled: "中止"};
@@ -24,6 +24,7 @@ const HC_ERRORS = {version_conflict: "ほかの人が先に更新しました。
   already_linked: "この患者か MCS の患者は、すでに別の相手と対応付けられています。", not_linked: "対応付けが見つかりません。読み直してください。",
   already_assigned: "この職員はすでにこの役割の担当です。", admin_required: "この操作は管理者だけができます。",
   not_qualified: "この役割に必要な資格を持つ在籍中の職員を選んでください。", role_not_allowed: "この役割は今は使えません。", still_assigned: "担当を持っています。先に担当を交代するか外してください。", team_changed: "ほかの人が先に担当を変えました。最新のケアチームを読み直しました。",
+  visit_not_qualified: "この種類の訪問を「実施」にできるのは、必要な資格（薬局なら薬剤師）を持つ職員だけです。記録する人と訪問した職員を確かめてください。",
   actor_required: "操作者を選んでください。", invalid_fields: "入力を確認してください。", not_found: "記録が見つかりません。",
   project_not_allowed: "この MCS の患者は閲覧範囲の外です。",
   route_unavailable: "訪問ルートは設定されていません。", route_failed: "地図サービスからルートを受け取れませんでした。時間をおいてやり直してください。",
@@ -108,8 +109,16 @@ async function loadStaff() {
   select.firstChild.value = "";
   for (const person of hc.staff.filter(s => s.active)) {const option = el("option", person.name); option.value = String(person.staff_id); select.append(option);}
   if (hc.actor && hc.staff.some(s => s.staff_id === hc.actor && s.active)) select.value = String(hc.actor); else hc.actor = null;
+  if (hc.resident) {
+    // On the tailnet the server knows who is writing from the Tailscale login; the choice is shown, not made.
+    hc.actor = hc.user?.staff_id ?? null; select.value = hc.actor == null ? "" : String(hc.actor); select.disabled = true;
+  }
 }
+// Each screen takes a turn when it starts; a screen whose answer comes back after another one started draws nothing.
+function hcScreen() {const turn = ++hc.view; return () => turn === hc.view;}
 function hcMain(title, ...nodes) {
+  // On a phone the patient list folds away once a screen opens; 患者一覧 brings it back.
+  document.body.classList.add("picked");
   ++state.mainRequest;
   $("panel-view").hidden = false;
   for (const id of ["coverage", "older", "timeline", "timeline-status"]) $(id).hidden = true;
@@ -117,7 +126,7 @@ function hcMain(title, ...nodes) {
   $("panel-view").replaceChildren(box);
 }
 async function showStaff() {
-  closeDetail();
+  hcScreen(); closeDetail();
   const list = el("div");
   for (const person of hc.staff) {
     const row = el("details", null, "hc-row");
@@ -125,8 +134,8 @@ async function showStaff() {
     row.append(recordForm("staff", STAFF_FORM, person, async () => {await loadStaff(); showStaff();}));
     list.append(row);
   }
-  const added = el("details", null, "hc-row"); added.append(el("summary", "職員を追加"), recordForm("staff", STAFF_FORM, null, async saved => {if (!hc.actor) hc.actor = saved.staff_id; await loadStaff(); showStaff();}));
-  hcMain("職員", ...(hc.staff.length ? [] : [el("p", "最初に自分を職員として登録してください。登録した人がそのまま操作者と管理者になります。", "state-note")]), list, added);
+  const added = el("details", null, "hc-row"); added.append(el("summary", "職員を追加"), recordForm("staff", STAFF_FORM, null, async saved => {if (hc.resident && !hc.user) {location.reload(); return;} if (!hc.actor) hc.actor = saved.staff_id; await loadStaff(); showStaff();}));
+  hcMain("職員", ...(hc.staff.length ? [] : [el("p", hc.resident ? `最初に自分を職員として登録してください。今の Tailscale のログイン（${hc.login}）がこの人に結び付き、管理者になります。` : "最初に自分を職員として登録してください。登録した人がそのまま操作者と管理者になります。", "state-note")]), list, added);
 }
 async function loadHcPatients() {
   const request = ++hc.request;
@@ -150,7 +159,7 @@ async function loadHcPatients() {
   $("more-patients").hidden = true;
 }
 async function showHcPatient(patientId) {
-  hc.patient = patientId; closeDetail();
+  const current = hcScreen(); hc.patient = patientId; closeDetail();
   for (const button of $("patients").querySelectorAll(".patient")) button.classList.toggle("selected", button.dataset.patient === String(patientId));
   if (patientId == null) {
     $("patient-name").textContent = "新しい患者"; $("patient-meta").textContent = "薬局の患者台帳";
@@ -158,7 +167,7 @@ async function showHcPatient(patientId) {
     return;
   }
   const data = await api("hc/patient", {patient: patientId});
-  if (hc.patient !== patientId) return;
+  if (!current()) return;
   const patient = data.patient;
   $("patient-name").textContent = patient.name;
   $("patient-meta").textContent = `薬局の患者台帳 · ${patient.kana || "フリガナ未登録"}`;
@@ -180,30 +189,46 @@ async function showHcPatient(patientId) {
   hcMain("基本情報", sheet, recordForm("patient", PATIENT_FORM, patient, async () => {await loadHcPatients(); await showHcPatient(patientId);}), team, visitBox, ...parts, link);
 }
 const visitLine = visit => `${visit.visit_date}${visit.start_time ? " " + visit.start_time : ""} · ${hc.meta.visit_kinds[visit.kind] || visit.kind} · ${VISIT_STATUS[visit.status]}${visit.staff_name ? " · " + visit.staff_name : ""}`;
-async function patientVisits(box, patientId, limit = 50) {
-  const reload = () => patientVisits(box, patientId, limit);
-  const data = await api("hc/visits", {patient: patientId, limit}).catch(error => {if (box.childElementCount) throw error; fail(error); return null;});
+async function patientVisits(box, patientId) {
+  const reload = () => patientVisits(box, patientId);
+  const data = await api("hc/visits", {patient: patientId}).catch(error => {if (box.childElementCount) throw error; fail(error); return null;});
   if (hc.patient !== patientId) return;
   box.replaceChildren(el("h3", "訪問"));
   if (!data) {box.append(el("p", "訪問の記録を読み込めませんでした。", "state-note")); return;}
-  for (const visit of data.items) {
+  const visitRow = visit => {
     const row = el("details", null, "hc-row"); row.append(el("summary", visitLine(visit)));
     if (visit.note) row.append(el("p", visit.note, "hc-note"));
-    row.append(recordForm("visit", visitForm(), visit, reload)); box.append(row);
-  }
-  if (!data.items.length) box.append(el("p", "訪問の記録はまだありません。"));
-  if (data.more) box.append(olderButton("以前の訪問を表示", () => patientVisits(box, patientId, limit + 50)));
+    row.append(recordForm("visit", visitForm(), visit, reload)); return row;
+  };
+  const list = el("div"); box.append(list);
+  if (!data.items.length) list.append(el("p", "訪問の記録はまだありません。"));
+  box.append(historyPages(list, data, visitRow, offset => api("hc/visits", {patient: patientId, offset}), "以前の訪問を表示", () => hc.patient === patientId));
   const add = el("details", null, "hc-row"); add.append(el("summary", "訪問を予定する"), recordForm("visit", visitForm(), null, reload, {patient_id: patientId}));
   box.append(add);
 }
-function olderButton(label, load) {
-  const button = el("button", label, "load-more"); button.type = "button"; button.onclick = () => {button.disabled = true; load();};
-  return button;
+function historyPages(list, first, render, fetchPage, label, current) {
+  // Older entries load a page at a time below the ones shown; the place they go is kept apart from the form below.
+  const more = el("div"); let shown = 0;
+  const append = page => {
+    for (const item of page.items) list.append(render(item));
+    shown += page.items.length; more.replaceChildren();
+    if (!page.more) return;
+    const button = el("button", label, "load-more"); button.type = "button";
+    button.onclick = async () => {
+      button.disabled = true;
+      const next = await fetchPage(shown).catch(error => {fail(error); return null;});
+      if (!current() || !more.isConnected) return;
+      if (next) append(next); else {button.disabled = false; more.append(el("p", "以前の記録を読み込めませんでした。", "state-note"));}
+    };
+    more.append(button);
+  };
+  append(first);
+  return more;
 }
 async function showSheet(patientId) {
-  hc.patient = patientId; closeDetail();
+  const current = hcScreen(); hc.patient = patientId; closeDetail();
   const data = await api("hc/sheet", {patient: patientId});
-  if (hc.patient !== patientId) return;
+  if (!current()) return;
   const patient = data.patient, back = el("button", "台帳に戻る", "text-button"); back.onclick = () => showHcPatient(patientId);
   $("patient-name").textContent = patient.name; $("patient-meta").textContent = "訪問時の情報";
   const facts = el("section", null, "detail-section"); facts.append(el("h3", "連絡と訪問先"));
@@ -221,17 +246,30 @@ async function showSheet(patientId) {
   }
   const parts = Object.entries(data.modules).filter(([name]) => hc.modules[name]?.sheet).map(([name, part]) => {const box = el("section", null, "detail-section"); hc.modules[name].sheet(box, part); return box;});
   const mcs = el("section", null, "detail-section"); mcs.append(el("h3", "MCS のやりとり"));
-  if (data.mcs.project_id) {const open = el("button", `${data.mcs.patient_name} のタイムラインを開く`, "text-button"); open.onclick = () => openMcs(data.mcs.project_id); mcs.append(open);}
-  else mcs.append(el("p", "MCS の患者と対応付けていないか、閲覧範囲の外です。"));
+  if (data.mcs.project_id) {
+    const open = el("button", `${data.mcs.patient_name} のタイムラインを開く`, "text-button"); open.onclick = () => openMcs(data.mcs.project_id);
+    const brief = el("div", null, "sheet-brief"); brief.append(el("p", "MCS の記録を読み込んでいます。", "state-note"));
+    mcs.append(open, brief); sheetBrief(brief, patientId, data.mcs);
+  } else mcs.append(el("p", "MCS の患者と対応付けていないか、閲覧範囲の外です。"));
   hcMain("訪問時の情報", back, facts, team, visitBox, ...parts, mcs);
 }
+async function sheetBrief(box, patientId, link) {
+  // The MCS views as of the published snapshot; 前回から変わったこと counts from the last visit that took place.
+  const data = await api("brief", {project: link.project_id, since: link.since}).catch(() => null);
+  if (hc.patient !== patientId || !box.isConnected) return;
+  if (!data) {box.replaceChildren(el("p", "MCS の記録を読み込めませんでした。タイムラインから確認してください。", "state-note")); return;}
+  box.replaceChildren(el("p", data.since ? "「前回から変わったこと」は最後に実施した訪問からの変化です。" : "実施済みの訪問がないため、「前回から変わったこと」は直近7日の変化です。", "state-note"));
+  // Posts open from the timeline: the sheet does not carry the chat's selected patient.
+  for (const section of data.sections) box.append(renderPanel({...section, items: section.items.map(item => ({...item, message_id: null}))}));
+}
 async function showDay(date) {
-  hc.patient = null; closeDetail();
+  const current = hcScreen(); hc.patient = null; closeDetail();
   $("patient-name").textContent = "訪問予定"; $("patient-meta").textContent = date;
   const picker = el("form", null, "hc-inline"), input = el("input"); input.type = "date"; input.value = date;
   picker.append(input, el("button", "この日を表示", "button")); picker.onsubmit = event => {event.preventDefault(); if (input.value) showDay(input.value);};
   const list = el("section", null, "detail-section"), routeBox = el("section", null, "detail-section");
   const data = await api("hc/visits", {date}).catch(error => {fail(error); return null;});
+  if (!current()) return;
   list.append(el("h3", "この日の訪問"));
   if (!data) list.append(el("p", "この日の訪問を読み込めませんでした。", "state-note"));
   for (const visit of data?.items || []) {
@@ -249,7 +287,7 @@ async function showDay(date) {
       try {
         const staff = form.querySelector('[name="staff"]').value, plan = await hcPost("route.plan", {date, staff: staff ? Number(staff) : null});
         result.replaceChildren();
-        plan.stops.forEach((stop, index) => result.append(el("p", `${index + 1}. ${stop.patient_name} · 到着の見込み ${stop.arrival}${stop.start_time ? `（予定 ${stop.start_time}）` : ""}`)));
+        plan.stops.forEach((stop, index) => result.append(el("p", `${index + 1}. ${stop.patient_name} · 訪問開始の見込み ${stop.arrival}${stop.start_time ? `（予定 ${stop.start_time}）` : ""}`)));
         if (!plan.stops.length) result.append(el("p", "ルートに入れられる予定の訪問がありません。"));
         if (plan.unscheduled.length) result.append(el("p", `予定の時刻の前後15分に着けない訪問が${plan.unscheduled.length}件あり、ルートに入れていません。時刻か担当を見直してください。`, "state-note"));
         if (plan.unlocated.length) result.append(el("p", `住所から場所を1か所に決められなかった訪問が${plan.unlocated.length}件あり、ルートに入れていません。台帳の住所を番地まで確かめてください。`, "state-note"));
@@ -311,7 +349,8 @@ async function openMcs(projectId) {
   if (patient) selectPatient(patient);
 }
 function setMode(mode) {
-  hc.mode = mode; hc.patient = null; ++state.patientRequest; ++hc.request; state.project = null; closeDetail();
+  document.body.classList.remove("picked");
+  hc.mode = mode; hc.patient = null; ++state.patientRequest; ++hc.request; hcScreen(); state.project = null; closeDetail();
   for (const button of document.querySelectorAll("#hc-modes button")) button.classList.toggle("selected", button.dataset.mode === mode);
   for (const id of ["patient-context", "read-only", "detail"]) $(id).hidden = mode !== "mcs";
   document.querySelector(".snapshot-bar").hidden = mode !== "mcs";
@@ -347,7 +386,7 @@ async function showLinkedPharmacyPatient(projectId) {
 async function initHomecare() {
   try {
     const session = await api("session");
-    hc.csrf = session.csrf; hc.enabled = session.homecare; hc.routes = session.routes;
+    hc.csrf = session.csrf; hc.enabled = session.homecare; hc.routes = session.routes; hc.resident = session.resident; hc.user = session.user; hc.login = session.login;
     if (!hc.enabled) return;
     $("hc-tools").hidden = false;
     $("hc-actor").onchange = () => {hc.actor = $("hc-actor").value ? Number($("hc-actor").value) : null;};

@@ -47,6 +47,7 @@ async function loadPatients(more = false) {
 }
 function closeDetail() {++state.detailRequest; $("detail").classList.remove("open"); $("close-detail").hidden = true; $("detail-content").replaceChildren(el("p", "投稿の「詳細・返信」から記録を確認できます。", "empty"));}
 function selectPatient(patient) {
+  document.body.classList.add("picked");
   state.project = patient.project_id; state.query = ""; $("message-search").value = ""; $("clear-search").hidden = true;
   $("patient-name").textContent = patient.patient_name || `患者 ${patient.project_id}`;
   $("patient-meta").textContent = `患者ID ${patient.project_id} · 保存済み ${patient.message_count} 件${patient.is_archived ? " · アーカイブ" : ""}`;
@@ -289,6 +290,7 @@ async function showMeds(target, message, request, page = 0) {
 }
 $("patient-form").onsubmit = event => {event.preventDefault(); (state.onSearch || loadPatients)();};
 $("more-patients").onclick = () => loadPatients(true);
+$("patients-toggle").onclick = () => document.body.classList.toggle("picked");
 $("message-form").onsubmit = event => {event.preventDefault(); state.query = $("message-search").value.trim(); $("clear-search").hidden = !state.query; state.panel = ""; $("view-select").value = ""; closeDetail(); loadMain();};
 $("view-select").onchange = () => {state.panel = $("view-select").value; state.panelPage = 0; closeDetail(); loadMain();};
 $("clear-search").onclick = () => {state.query = ""; $("message-search").value = ""; $("clear-search").hidden = true; closeDetail(); loadMain();};

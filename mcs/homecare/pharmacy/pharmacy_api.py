@@ -8,7 +8,8 @@ import pharmacy_prescriptions as prescriptions
 def read(db, route, params):
     if route == "prescriptions":
         patient_id = _id(params.get("patient"))
-        return page(lambda limit: prescriptions.for_patient(db, patient_id, limit=limit), params, size=20)
+        return page(lambda limit, offset: prescriptions.for_patient(db, patient_id, limit=limit, offset=offset),
+                    params, size=20)
     raise ValueError("bad_request")
 
 

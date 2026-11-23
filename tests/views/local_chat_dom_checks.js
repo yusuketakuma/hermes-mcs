@@ -2,7 +2,7 @@
 // Dependency-free DOM contract checks, run by the Python test when Node is available.
 const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
 class Element {
-  constructor(tag) {this.tagName = tag; this.children = []; this.className = ""; this.textContent = ""; this.hidden = false; this.value = ""; this.scrollTop = 0; this.scrollHeight = 0; this.isConnected = true; this.classList = {add(){}, remove(){}};}
+  constructor(tag) {this.tagName = tag; this.children = []; this.className = ""; this.textContent = ""; this.hidden = false; this.value = ""; this.scrollTop = 0; this.scrollHeight = 0; this.isConnected = true; this.classList = {add(){}, remove(){}, toggle(){}};}
   append(...nodes) {for (const node of nodes) {if (node.tagName === "fragment") this.append(...node.children); else {node.parentNode = this; this.children.push(node);}}}
   prepend(node) {const items = node.tagName === "fragment" ? node.children : [node]; for (const item of items) item.parentNode = this; this.children.unshift(...items);}
   replaceChildren(...nodes) {this.children = []; this.append(...nodes);}
@@ -12,7 +12,7 @@ class Element {
   setAttribute() {}
 }
 const nodes = new Map();
-const document = {getElementById(id) {if (!nodes.has(id)) nodes.set(id, new Element("div")); return nodes.get(id);}, createElement: tag => new Element(tag), createDocumentFragment: () => new Element("fragment")};
+const document = {body: new Element("body"), getElementById(id) {if (!nodes.has(id)) nodes.set(id, new Element("div")); return nodes.get(id);}, createElement: tag => new Element(tag), createDocumentFragment: () => new Element("fragment")};
 const sandbox = {document, URLSearchParams, location: {}, fetch: () => new Promise(() => {})};
 vm.createContext(sandbox);
 const source = fs.readFileSync(process.argv[2], "utf8").replace(/loadPatients\(\);\s*$/, "");
@@ -106,5 +106,18 @@ async function checkPanel() {
   const summary = vm.runInContext("renderPanel", sandbox)({title:"まとめ", body:"■ 未完了タスク: なし\n履歴取得: 未完了"});
   assert.deepEqual(summary.children.slice(1).map(child => child.className), ["panel-group", "panel-line"]);
 }
-async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); console.log("local chat DOM contracts passed");}
+async function checkMedsOutOfOrder() {
+  // Two presses on one panel: the first answer arriving last must not replace the second.
+  vm.runInContext("state.project = 101", sandbox);
+  const answers = {};
+  sandbox.api = (kind, params) => new Promise(resolve => {answers[params.message] = resolve;});
+  const target = new Element("div"), request = vm.runInContext("state.detailRequest", sandbox);
+  const showMeds = vm.runInContext("showMeds", sandbox);
+  const first = showMeds(target, 1, request), second = showMeds(target, 2, request);
+  answers[2]({panel: {title: "返信の薬剤", items: []}}); await second;
+  answers[1]({panel: {title: "元の投稿の薬剤", items: []}}); await first;
+  assert.match(content(target), /返信の薬剤/);
+  assert.doesNotMatch(content(target), /元の投稿の薬剤/);
+}
+async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); await checkMedsOutOfOrder(); console.log("local chat DOM contracts passed");}
 main().catch(error => {console.error(error); process.exitCode = 1;});

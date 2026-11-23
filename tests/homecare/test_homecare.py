@@ -356,7 +356,7 @@ def server(tmp_path):
     path = tmp_path / "homecare.db"
     homecare_store.connect(path, REGISTRY.modules).close()
     return SimpleNamespace(server_port=8765, token="synthetic-capability", csrf="synthetic-csrf", snapshot="unused",
-                           allowed={1}, homecare=path, homecare_registry=REGISTRY, route_settings=None)
+                           allowed={1}, homecare=path, homecare_registry=REGISTRY, route_settings=None, tailnet_host=None)
 
 
 BODY = {"values": {"name": "合成 薬剤師", "qualifications": ["pharmacy.pharmacist"]}, "actor": None}
@@ -394,6 +394,70 @@ def test_write_without_homecare_database_is_refused(server):
     server.homecare = None
     status, data, _mime = post(server, BODY)
     assert status == 400 and json.loads(data) == {"error": "bad_request"}
+
+
+TAILNET = "synthetic-mac.example-tail.ts.net"
+
+
+def resident_request(server, method, path, body=None, login="nurse@example.invalid", headers=None):
+    obj = chat.ChatHandler.__new__(chat.ChatHandler)
+    obj.server, obj.path, obj.headers = server, path, Message()
+    data = b"" if body is None else json.dumps(body).encode()
+    rows = headers if headers is not None else [
+        ("Host", TAILNET), ("Origin", "https://" + TAILNET), ("Sec-Fetch-Site", "same-origin"),
+        ("Content-Type", "application/json"), ("Content-Length", str(len(data))), ("X-MCS-CSRF", "synthetic-csrf")]
+    for name, value in rows + ([(chat.IDENTITY, login)] if login else []):
+        obj.headers[name] = value
+    obj.rfile = BytesIO(data)
+    results = []
+    obj._send = lambda *args: results.append(args)
+    obj.do_POST() if method == "POST" else obj.do_GET()
+    return results[0][0], (results[0][1:] or (b"",))[0]
+
+
+def test_resident_mode_knows_each_request_by_its_tailscale_login(server):
+    server.tailnet_host = TAILNET
+    assert resident_request(server, "GET", "/", login=None)[0] == 403  # no login: tailscale serve was bypassed
+    status, data = resident_request(server, "GET", "/api/session")
+    assert status == 200 and json.loads(data)["user"] is None and json.loads(data)["resident"] is True
+    assert resident_request(server, "GET", "/api/patients")[1] == chat.UNREGISTERED  # no MCS record before staff
+    # The first registration takes the requester's own login, whatever the page sent.
+    status, data = resident_request(server, "POST", "/api/hc/staff.create", {
+        "values": {"name": "合成 薬剤師", "qualifications": ["pharmacy.pharmacist"], "tailscale_login": "other@x"},
+        "actor": 999})
+    first = json.loads(data)["record"]
+    assert status == 200 and first["tailscale_login"] == "nurse@example.invalid" and first["admin"] == 1
+    session = json.loads(resident_request(server, "GET", "/api/session", login="NURSE@example.invalid")[1])
+    assert session["user"] == {"staff_id": first["staff_id"], "name": "合成 薬剤師"}
+    stranger = resident_request(server, "GET", "/", login="stranger@example.invalid")
+    assert stranger == (403, chat.UNREGISTERED)
+    assert resident_request(server, "POST", "/api/hc/staff.create", BODY, login="stranger@example.invalid")[0] == 403
+    # The actor is the login's staff member, not the one the body names.
+    status, data = resident_request(server, "POST", "/api/hc/patient.create", {
+        "values": {"name": "合成 花子", "phone": "000-0000-0000"}, "actor": 12345})
+    assert status == 200, data
+    db = homecare_store.connect(server.homecare, REGISTRY.modules)
+    assert db.execute("SELECT actor_staff_id FROM audit_events WHERE kind='patient.create'").fetchone()[0] == first["staff_id"]
+    db.close()
+
+
+@pytest.mark.parametrize("headers, path, status", [
+    ([("Host", "evil.invalid")], "/", 403),
+    ([("Host", TAILNET), ("Host", TAILNET)], "/", 403),
+    ([("Host", TAILNET), ("Origin", "http://127.0.0.1:8765")], "/", 403),
+    ([("Host", TAILNET), (chat.IDENTITY, "nurse@example.invalid")], "/", 403),  # two logins on one request
+    ([("Host", TAILNET)], "/synthetic-capability/", 403),  # no capability URL here; nothing for a non-staff login
+    ([("Host", "127.0.0.1:8765")], "/", 200)])
+def test_resident_mode_checks_host_origin_and_one_login(server, headers, path, status):
+    server.tailnet_host = TAILNET
+    assert resident_request(server, "GET", path, headers=headers)[0] == status
+
+
+@pytest.mark.parametrize("kwargs", [{"homecare": None, "port": 8765}, {"port": 0}, {"port": 8765, "host": "mac.local"}])
+def test_resident_mode_needs_a_ledger_a_fixed_port_and_a_tailnet_name(tmp_path, kwargs):
+    with pytest.raises(ValueError, match="resident mode"):
+        chat.ChatServer("unused", None, kwargs["port"], homecare=kwargs.get("homecare", tmp_path / "homecare.db"),
+                        tailnet_host=kwargs.get("host", TAILNET))
 
 
 def test_register_script_is_served_and_never_builds_html():
@@ -440,7 +504,7 @@ def test_visits_are_validated_versioned_and_audited(db):
 
 def test_a_done_visit_by_staff_who_since_left_can_still_be_corrected(db):
     me = first_staff(db)
-    left = staff(db, me["staff_id"], name="合成 退職者")
+    left = staff(db, me["staff_id"], name="合成 退職者", codes=("pharmacy.pharmacist",))
     row = patient(db, me["staff_id"])
     made = visits.create(db, REGISTRY, visit_values(row["patient_id"], staff_id=left["staff_id"], status="done"),
                          actor=me["staff_id"])
@@ -454,6 +518,27 @@ def test_a_done_visit_by_staff_who_since_left_can_still_be_corrected(db):
         visits.update(db, REGISTRY, other["visit_id"], {"staff_id": left["staff_id"]}, expected_version=1,
                       actor=me["staff_id"])
     assert error.value.fields == ["staff_id"]
+
+
+def test_only_pharmacists_record_a_home_visit_as_done_while_clerks_plan_deliver_and_enter_prescriptions(db):
+    me = first_staff(db)
+    clerk = staff(db, me["staff_id"])
+    row = patient(db, me["staff_id"])
+    planned = visits.create(db, REGISTRY, visit_values(row["patient_id"], staff_id=me["staff_id"]), actor=clerk["staff_id"])
+    for actor, staff_id in ((clerk, me), (me, clerk)):  # the writer and the visitor both need the qualification
+        with pytest.raises(ValueError, match="visit_not_qualified"):
+            visits.update(db, REGISTRY, planned["visit_id"], {"status": "done", "staff_id": staff_id["staff_id"]},
+                          expected_version=1, actor=actor["staff_id"])
+    done = visits.update(db, REGISTRY, planned["visit_id"], {"status": "done"}, expected_version=1, actor=me["staff_id"])
+    with pytest.raises(ValueError, match="visit_not_qualified"):  # a clerk does not rewrite the clinical record
+        visits.update(db, REGISTRY, done["visit_id"], {"note": "合成"}, expected_version=2, actor=clerk["staff_id"])
+    delivered = visits.create(db, REGISTRY, visit_values(row["patient_id"], kind="pharmacy.delivery", status="done",
+                                                         staff_id=clerk["staff_id"]), actor=clerk["staff_id"])
+    assert delivered["status"] == "done"
+    rx = prescriptions.create(db, {"patient_id": row["patient_id"], "issued_on": "2026-11-20",
+                                   "lines": [{"drug_name": "合成錠A"}]}, actor=clerk["staff_id"])
+    assert rx["lines"][0]["drug_name"] == "合成錠A"
+    assert REGISTRY.describe()["done_requires"] == {"pharmacy.home_visit": ["pharmacy.pharmacist"]}
 
 
 def test_prescriptions_keep_lines_in_order_with_an_optional_master_code(db):
@@ -501,21 +586,26 @@ def test_visit_sheet_and_module_routes_go_through_the_core_api(db):
     assert [item["visit_date"] for item in sheet["next_visits"]] == ["2026-11-30", "2027-01-02", "2027-01-03"]
     assert sheet["recent_visits"][0]["visit_id"] == done["record"]["visit_id"]
     assert sheet["modules"]["pharmacy"]["prescriptions"][0]["lines"][0]["drug_name"] == "合成錠A"
-    assert sheet["mcs"] == {"project_id": 11, "patient_name": "合成 花子"}
+    # 2026-11-01 with no start time: from the start of that day in Japan.
+    assert sheet["mcs"] == {"project_id": 11, "patient_name": "合成 花子", "since": 1793458800}
     outside = homecare_api.read(db, "sheet", {"patient": str(row["patient_id"])}, registry=REGISTRY,
                                 mcs_patients=lambda: [])
-    assert outside["mcs"] == {"project_id": None, "patient_name": None}
+    assert outside["mcs"] == {"project_id": None, "patient_name": None, "since": None}
     listed = homecare_api.read(db, "pharmacy/prescriptions", {"patient": str(row["patient_id"])},
                                registry=REGISTRY, mcs_patients=scope)
     assert len(listed["items"]) == 1 and listed["more"] is False
     first = homecare_api.read(db, "visits", {"patient": str(row["patient_id"])}, registry=REGISTRY, mcs_patients=scope)
     assert len(first["items"]) == 50 and first["more"] is True
-    whole = homecare_api.read(db, "visits", {"patient": str(row["patient_id"]), "limit": "100"}, registry=REGISTRY,
-                              mcs_patients=scope)
-    assert len(whole["items"]) == 63 and whole["more"] is False
-    for limit in ("0", "1001", "x"):
+    rest = homecare_api.read(db, "visits", {"patient": str(row["patient_id"]), "offset": "50"}, registry=REGISTRY,
+                             mcs_patients=scope)
+    # The next page carries on where the first stopped: no gap, no repeat, however long the history.
+    assert len(rest["items"]) == 13 and rest["more"] is False
+    assert {v["visit_id"] for v in first["items"]}.isdisjoint(v["visit_id"] for v in rest["items"])
+    assert homecare_api.read(db, "visits", {"patient": str(row["patient_id"]), "offset": "5000"}, registry=REGISTRY,
+                             mcs_patients=scope) == {"items": [], "more": False}
+    for offset in ("-1", "x", "1.5"):
         with pytest.raises(ValueError, match="bad_request"):
-            homecare_api.read(db, "visits", {"patient": str(row["patient_id"]), "limit": limit}, registry=REGISTRY,
+            homecare_api.read(db, "visits", {"patient": str(row["patient_id"]), "offset": offset}, registry=REGISTRY,
                               mcs_patients=scope)
     for path in ("nursing/visits", "core/visits", "pharmacy/unknown"):
         with pytest.raises(ValueError, match="bad_request"):
@@ -536,9 +626,13 @@ class FakeServices:
         body = json.loads(request.data)
         depart = body["vehicles"][0]["time_window"][0]
         # Ten minutes between stops; a window that closes before the first possible arrival cannot be met.
+        # An early arrival waits for the window to open, as openrouteservice reports with waiting_time.
         jobs = [job for job in reversed(body["jobs"]) if job.get("time_windows", [[0, 10**6]])[0][1] >= depart + 600]
+        if not jobs:
+            return {"routes": [], "unassigned": [{"id": job["id"]} for job in body["jobs"]]}
         return {"routes": [{"steps": [{"type": "start"}] + [
-            {"type": "job", "id": job["id"], "arrival": depart + 600 * n, "duration": 300 * n}
+            {"type": "job", "id": job["id"], "arrival": depart + 600 * n, "duration": 300 * n,
+             "waiting_time": max(0, job.get("time_windows", [[0]])[0][0] - depart - 600 * n)}
             for n, job in enumerate(jobs, 1)] + [{"type": "end"}]}]}
 
 
@@ -566,7 +660,7 @@ def test_route_sends_addresses_only_caches_locations_and_lists_unlocated_visits(
         route.plan(db, None, "2026-11-24", actor=me["staff_id"], fetch=fake)
     result = route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=fake)
     assert [stop["visit_id"] for stop in result["stops"]] == [ids[1], ids[0]]
-    assert [stop["arrival"] for stop in result["stops"]] == ["09:10", "09:20"]
+    assert [stop["arrival"] for stop in result["stops"]] == ["09:10", "09:45"]  # waits for the 10:00 window
     # No address, or an address matching places far apart, is never guessed; an 08:00 booking cannot be met.
     assert result["unlocated"] == [ids[2], ids[4]] and result["unscheduled"] == [ids[3]]
     optimised = json.loads([r for r in fake.sent if r.full_url == route.OPTIMIZE_URL][0].data)
@@ -580,6 +674,15 @@ def test_route_sends_addresses_only_caches_locations_and_lists_unlocated_visits(
     route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=fake)
     again = [r for r in fake.sent if r.full_url.startswith(route.GEOCODE_URL)]
     assert len(again) - len(geocoded) == 2  # the origin and the still-ambiguous address; found places are reused
+    # A day whose every visit misses its window is a plan with no stops, not a failure.
+    late = FakeServices({**fake.places})
+    late_settings = tmp_path / "late.json"
+    late_settings.write_text(json.dumps({"openrouteservice_key": "synthetic-key-0000", "origin_address": "合成市1-1",
+                                         "depart_time": "12:00"}))
+    late_settings.chmod(0o600)
+    visits.update(db, REGISTRY, ids[1], {"start_time": "10:00"}, expected_version=1, actor=me["staff_id"])
+    nothing = route.plan(db, route.RouteSettings(late_settings), "2026-11-24", actor=me["staff_id"], fetch=late)
+    assert nothing["stops"] == [] and nothing["unscheduled"] == [ids[3], ids[0], ids[1]]
     failing = lambda request: (_ for _ in ()).throw(OSError("offline"))  # noqa: E731
     with pytest.raises(ValueError, match="route_failed"):
         route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=failing)

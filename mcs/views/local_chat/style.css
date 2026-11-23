@@ -7,3 +7,30 @@
 .rx-line input { min-width: 0; flex: 1 1 8em; }
 .rx-line input[name="days"] { flex: 0 1 5em; }
 .detail-section h4 { margin: .6em 0 .2em; font-size: .9em; }
+.rx-choices { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; }
+.rx-line > .hc-note { margin: 4px 0 0; font-size: 11px; }
+/* Phones: the sidebar becomes a header; once a patient or screen is chosen, the list folds away behind a button. */
+.patients-toggle{display:none}
+@media(max-width:650px){
+body{flex-direction:column;height:auto;min-height:100dvh}
+.sidebar{width:auto;padding:10px 12px;gap:8px}
+.brand small,.local-badge,.sidebar-footer{display:none}
+.brand b{display:inline}
+.hc-tools{margin:0}
+.hc-modes button{font-size:12px;padding:9px 4px}
+.hc-actor select{font-size:16px}
+#patient-search{font-size:16px}
+#patients{max-height:42dvh}
+.patient{font-size:14px;padding:11px 8px}
+.patients-toggle{display:block;width:100%;font:inherit;font-size:13px;padding:9px;border-radius:7px;border:1px solid #4a3e53;background:#251e2b;color:#e3dce8}
+body.picked #patients,body.picked #patient-form,body.picked #more-patients,body.picked .sidebar-heading{display:none}
+.workspace{min-height:0}
+.content{display:block}
+main{overflow:visible;padding:12px 14px}
+.post-body,.panel-item p,.panel-item blockquote,.panel-line{font-size:14px}
+.sender{font-size:13px}
+.page-heading p,.breadcrumb{font-size:11px}
+.hc-row summary{font-size:14px;padding:8px 0}
+.text-button,.load-more{min-height:40px}
+.detail.open{position:fixed;inset:0;width:auto;z-index:3}
+}

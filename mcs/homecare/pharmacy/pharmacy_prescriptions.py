@@ -110,9 +110,9 @@ def update(db, prescription_id, values, *, expected_version, actor):
     return after
 
 
-def for_patient(db, patient_id, *, limit=20):
+def for_patient(db, patient_id, *, limit=20, offset=0):
     """A patient's prescriptions, newest first, with their lines."""
     get(db, "patient", patient_id)
     return [prescription(db, row["prescription_id"]) for row in db.execute(
         "SELECT prescription_id FROM pharmacy_prescriptions WHERE patient_id=? "
-        "ORDER BY issued_on DESC, prescription_id DESC LIMIT ?", (patient_id, limit))]
+        "ORDER BY issued_on DESC, prescription_id DESC LIMIT ? OFFSET ?", (patient_id, limit, offset))]
