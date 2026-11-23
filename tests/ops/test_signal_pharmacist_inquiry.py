@@ -38,6 +38,7 @@ def test_own_inquiry_without_reply_is_a_candidate(store):
 @pytest.mark.parametrize("reply", [
     {"prof": "看護師", "org": "合成訪看", "parent": 1},       # someone else answered in the thread
     {"prof": "医師", "org": "合成医院", "parent": None},       # a physician posted in the room
+    {"prof": "医師", "org": "合成薬局", "parent": 1},          # a physician sharing our organization
 ])
 def test_later_reply_suppresses(store, reply):
     _inquiry(store.db, 1)
@@ -59,7 +60,8 @@ def test_own_follow_up_or_unrelated_post_is_not_a_reply(store, reply):
 
 @pytest.mark.parametrize("kwargs", [
     {"org": "他の薬局"}, {"to": "薬剤師"}, {"to": "ケアマネ"},
-    {"action": "訪問日の調整"}, {"age": 1}, {"age": 200},
+    {"action": "訪問日の調整"}, {"action": "訪問日の変更"}, {"action": "次回訪問の提案"},
+    {"age": 1}, {"age": 200},
 ])
 def test_out_of_scope_inquiries_do_not_fire(store, kwargs):
     _inquiry(store.db, 1, **kwargs)

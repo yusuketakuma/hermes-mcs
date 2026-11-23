@@ -6,6 +6,7 @@ import pytest
 
 import drug_map
 import drug_patients
+import drug_timeline
 import extract_llm
 import ledger
 import mcs_view
@@ -114,7 +115,53 @@ def test_master_impact_and_formulary_map_to_dictionary_identities(tmp_path):
     assert drug_patients.master_identities(None, report) == set()
     with pytest.raises(ValueError):
         drug_patients.master_identities(active, {"items": []})
-    watch = {"inserts": [{"name": "架空製品錠5mg", "last": "changed", "aliases": []},
-                         {"name": "架空ブランド", "last": "unchanged"}]}
+    watch = {"inserts": [{"name": "架空製品錠5mg", "sha256": "a", "observed_sha256": "b",
+                          "last": "changed", "aliases": []},
+                         {"name": "架空ブランド", "sha256": "a", "observed_sha256": "a", "last": "unchanged"}]}
     codes, names = drug_patients.formulary_identities(active, watch)
     assert names == ["架空製品錠5mg"] and codes == {"mhlw:medicine:900000001"}
+
+
+def test_attachment_mentions_are_dated_by_their_parent_post(corpus, monkeypatch):
+    current(corpus, 1, 11, ["キラナ"], posted="2026-11-01T09:00:00+09:00")
+    current(corpus, 1, 12, [], posted="2026-11-05T09:00:00+09:00")
+
+    def pages(db, pid, mid, cfg):
+        if mid == 12:
+            row = {"message_id": 0, "parent_message_id": 12, "attachment_id": 7, "page": 1,
+                   "posted_at": None, "posted_at_ts": None, "body_state": "full"}
+            yield row, (99, "attachment_ocr"), [{"name": "キラナ", "action": "start"}], {}, {"ready": True}
+
+    monkeypatch.setattr(drug_timeline, "_attachment_mentions", pages)
+    report = drug_patients.find(view_of(corpus), name="キラナ", cfg={"attachment_ocr": {"enabled": True}})
+    latest = report["items"][0]["latest"]
+    assert latest["source"] == "attachment_ocr" and latest["parent_message_id"] == 12
+    assert latest["posted_at"] == "2026-11-05T09:00:00+09:00" and latest["posted_at_ts"] is not None
+
+
+def test_missing_replies_and_failed_jobs_are_reported(corpus):
+    current(corpus, 1, 11, ["キラナ"])
+    corpus.db.execute("UPDATE messages SET reply_count=2 WHERE message_id=11")
+    corpus.db.execute("INSERT INTO fetch_jobs(kind,project_id,message_id,state) VALUES('reply',2,21,'failed')")
+    corpus.db.commit()
+    report = drug_patients.find(view_of(corpus), name="キラナ")
+    assert report["coverage"]["incomplete_reply_roots"] == 1
+    assert report["coverage"]["failed_fetch_jobs"] == 1
+    assert "未取得あり" in report["explanation"] and "取得失敗あり" in report["explanation"]
+
+
+def test_revised_insert_names_match_exactly_without_a_dictionary(corpus):
+    current(corpus, 1, 11, ["架空製品錠5mg"])
+    current(corpus, 2, 21, ["別薬"])
+    report = drug_patients.find(view_of(corpus), identities=set(), names=["架空製品錠5mg"])
+    assert [item["project_id"] for item in report["items"]] == [1]
+    assert "品名の完全一致のみ" in report["explanation"]
+    with pytest.raises(ValueError):
+        drug_patients.find(view_of(corpus), name="a", names=["b"])
+
+
+def test_observed_revision_stays_after_a_failed_recheck():
+    watch = {"inserts": [{"name": "改訂後に失敗", "sha256": "a", "observed_sha256": "b", "last": "error"},
+                         {"name": "受入済み", "sha256": "a", "observed_sha256": "a", "last": "error"},
+                         {"name": "未観測", "sha256": "a", "last": "error"}]}
+    assert drug_patients.formulary_identities(None, watch) == (set(), ["改訂後に失敗"])

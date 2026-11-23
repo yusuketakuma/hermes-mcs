@@ -497,21 +497,23 @@ PHYSICIAN_TARGET_SQL = (f"json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%医%' "
                         f"OR json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%先生%' "
                         f"OR json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%ドクター%' "
                         f"OR json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%Dr%'")
+# A medication word is required: 変更・中止・提案・照会 alone also describe visit
+# scheduling and other non-medication requests.
 INQUIRY_ACTION_SQL = " OR ".join(
     f"json_extract({JSON_OBJECT_SQL},'$.action') LIKE '%{word}%'"
-    for word in ("処方", "薬", "内服", "疑義", "照会", "提案", "増量", "減量", "中止", "変更", "残薬", "一包化"))
+    for word in ("処方", "薬", "内服", "服用", "用量", "用法", "錠", "頓服", "疑義", "残薬", "一包化"))
 
 
 def _inquiry_replied(db, pid, mid, ts, orgs):
-    """A later post by someone outside the own organizations in the same
-    thread, or by a physician anywhere in the room."""
+    """A later post by a physician anywhere in the room (own organization
+    included), or by someone outside the own organizations in the same thread."""
     other = "".join(f" AND {_member_sql('reply.organization')}=0" for _ in orgs)
     return db.execute(
         "SELECT 1 FROM messages reply, messages m WHERE m.message_id=? "
         "AND reply.project_id=? AND reply.posted_at_ts>? "
         "AND reply.body_state IS NOT 'deleted' "
-        "AND (reply.parent_id=COALESCE(m.parent_id,m.message_id) "
-        "OR reply.profession LIKE '%医師%')" + other + " LIMIT 1",
+        "AND (reply.profession LIKE '%医師%' "
+        "OR (reply.parent_id=COALESCE(m.parent_id,m.message_id)" + other + ")) LIMIT 1",
         (mid, pid, ts, *orgs)).fetchone() is not None
 
 
