@@ -7,7 +7,7 @@ Everything provider-specific lives in that provider's one file
 ``PROFILE_DEFINITIONS``, ``PROFILE_PURPOSES``, ``DEFAULT_PROFILES``,
 ``VALID_MODEL_EFFORTS``, ``ATTEMPT_TIMEOUTS``, ``provider_contract``, ``reservation_cost``, ``usage_cost``,
 ``original_contract_valid``, ``original_selection_valid``, ``select_profile``,
-``request_contract_error`` and ``client_class``.
+``request_contract_error``, ``legacy_request_effort`` and ``client_class``.
 Shared code looks the provider up here instead of branching on its name. A provider
 name stays only where it is data: stored record fields, configuration keys and CLI flags.
 """
