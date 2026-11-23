@@ -14,11 +14,13 @@ CFG = {"self_professions": ["薬剤師"], "self_organizations": ["合成薬局"]
 store = ledger_fixture(name="store")
 
 
-def _inquiry(db, mid, *, pid=1, to="主治医", action="処方変更の提案", org="合成薬局", age=5, parent=None):
+def _inquiry(db, mid, *, pid=1, to="主治医", action="処方変更の提案", org="合成薬局", age=5, parent=None,
+             meds=()):
     _msg(db, mid, pid=pid, ts=NOW - age * DAY, chash=f"h{mid}", body="合成の照会です。",
          prof="薬剤師", org=org, parent=parent)
     db.execute("INSERT INTO artifacts(kind,message_id,content,meta) VALUES('extract_llm',?,?,?)",
-               (mid, json.dumps({"requests": [{"to": to, "action": action}]}),
+               (mid, json.dumps({"requests": [{"to": to, "action": action}],
+                                 "meds": [{"name": name} for name in meds]}),
                 json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": f"h{mid}"})))
     db.commit()
 
@@ -47,8 +49,14 @@ def test_later_reply_suppresses(store, reply):
     assert _run(store.db) == []
 
 
+def test_inquiry_naming_an_extracted_medicine_is_a_candidate(store):
+    _inquiry(store.db, 1, action="キラナの減量", meds=["キラナ"])
+    assert len(_run(store.db)) == 1
+
+
 @pytest.mark.parametrize("reply", [
     {"prof": "薬剤師", "org": "合成薬局", "parent": 1},        # only our own follow-up
+    {"prof": "歯科医師", "org": "合成薬局", "parent": None},   # a dentist is not a physician
     {"prof": "看護師", "org": "合成訪看", "parent": None},     # an unrelated post in the room
 ])
 def test_own_follow_up_or_unrelated_post_is_not_a_reply(store, reply):

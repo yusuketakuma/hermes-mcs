@@ -497,11 +497,15 @@ PHYSICIAN_TARGET_SQL = (f"json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%医%' "
                         f"OR json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%先生%' "
                         f"OR json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%ドクター%' "
                         f"OR json_extract({JSON_OBJECT_SQL},'$.to') LIKE '%Dr%'")
-# A medication word is required: 変更・中止・提案・照会 alone also describe visit
-# scheduling and other non-medication requests.
+# A medication word, or the name of a medicine extracted from the same post
+# (「インスリンの減量」), is required: 変更・中止・提案・照会 alone also
+# describe visit scheduling and other non-medication requests.
 INQUIRY_ACTION_SQL = " OR ".join(
     f"json_extract({JSON_OBJECT_SQL},'$.action') LIKE '%{word}%'"
-    for word in ("処方", "薬", "内服", "服用", "用量", "用法", "錠", "頓服", "疑義", "残薬", "一包化"))
+    for word in ("処方", "薬", "内服", "服用", "用量", "用法", "錠", "頓服", "疑義", "残薬", "一包化")
+) + (f" OR EXISTS (SELECT 1 FROM json_each({json_or_null('a.content')},'$.meds') md "
+     "WHERE md.type='object' AND length(json_extract(md.value,'$.name'))>0 "
+     f"AND instr(json_extract({JSON_OBJECT_SQL},'$.action'),json_extract(md.value,'$.name'))>0)")
 
 
 def _inquiry_replied(db, pid, mid, ts, orgs):
@@ -512,9 +516,10 @@ def _inquiry_replied(db, pid, mid, ts, orgs):
         "SELECT 1 FROM messages reply, messages m WHERE m.message_id=? "
         "AND reply.project_id=? AND reply.posted_at_ts>? "
         "AND reply.body_state IS NOT 'deleted' "
-        "AND (reply.profession LIKE '%医師%' "
+        # one profession element, so 歯科医師 is not a physician
+        f"AND ({_member_sql('reply.profession')}>0 "
         "OR (reply.parent_id=COALESCE(m.parent_id,m.message_id)" + other + ")) LIMIT 1",
-        (mid, pid, ts, *orgs)).fetchone() is not None
+        (mid, pid, ts, "医師", *orgs)).fetchone() is not None
 
 
 def _pharmacist_inquiry(db, now, th, sig_cfg):
