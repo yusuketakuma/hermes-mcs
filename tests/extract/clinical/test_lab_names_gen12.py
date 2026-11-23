@@ -1022,6 +1022,9 @@ def test_specimen_sections_are_read_in_linear_time(body):
     "今朝排便\nWBC 5200/μL", "発熱あり、血尿\nCRP 5.2mg/dL\nWBC 5200/μL", "軟便\nWBC 5200/μL",
     "トイレで排便\nWBC 5200/μL", "排尿：6回\n排便：1回\nWBC 5200/μL CRP 0.3mg/dL", "排尿・排便問題なし\nWBC 5200/μL",
     "尿：淡黄色\nWBC 5200/μL", "便はブリストル4\nWBC 5200/μL", "尿検査：蛋白(1+)\n\nWBC 5200/μL",
+    "発熱、血尿 CRP 5.2mg/dL WBC 5200/μL", "食事良好、便\nWBC 5200/μL",
+    # A heading in the middle of a line names the rest of that line only.
+    "発熱あり、尿検査：蛋白(1+)\nWBC 5200/μL",
 ])
 def test_a_nursing_word_with_a_specimen_word_does_not_hide_the_blood_item(body):
     assert _validated("WBC", "5200", "/μL", body)["normalized"]["confirmation"] == "quote_supported", body
@@ -1040,6 +1043,7 @@ def test_a_nursing_word_with_a_specimen_word_does_not_hide_the_blood_item(body):
     *(("カリウム", "4.0", unit, f"カリウム 4.0mEq/L {cr}") for unit in ("mEq/L", None)
       for cr in ("Cr:0.9", "Cr値 0.9", "Crは0.9", "Cr=0.9")),
     ("カルシウム", "9.0", None, "カルシウム 9.0 mg/dL Cr:0.9"),
+    ("カルシウム", "9.0", "mg/dL", "カルシウム 9.0 mg/dL Mg 2.0"),
     ("体重", "52.3", "kg", "体重 52.3kg PT 12.5秒"),
     ("カリウム", "4.0", None, "RBC 450x10^4/μL カリウム 4.0"),
     ("カリウム", "4.0", None, "RBC 450×10^4/μL カリウム 4.0"),
@@ -1066,3 +1070,14 @@ def test_a_unit_after_the_number_is_not_the_next_reading(name, value, body):
 @pytest.mark.parametrize("body", ["随時尿：WBC 30/μL", "早朝尿\nWBC 30/μL", "蓄尿検査：WBC 30/μL", "・中間尿 WBC 30/μL"])
 def test_a_urine_collection_heads_its_section(body):
     assert _validated("WBC", "30", "/μL", body)["normalized"]["confirmation"] == "unverified", body
+
+
+# A specimen word that heads nothing does not end the section above it either.
+def test_a_specimen_word_that_heads_nothing_does_not_end_a_section():
+    assert _validated("WBC", "30", "/μL", "尿検査\npH 6.0、便\nWBC 30/μL")["normalized"]["confirmation"] == "unverified"
+
+
+# Folding joins the words of a line: 淡黄色 白血球 is no single item after 尿：.
+def test_a_note_after_a_specimen_word_is_not_read_as_a_result():
+    body = "尿：淡黄色 白血球 5200/μL"
+    assert _validated("白血球", "5200", "/μL", body)["normalized"]["confirmation"] == "quote_supported"
