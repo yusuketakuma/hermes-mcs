@@ -39,47 +39,47 @@
 | モジュール | 概要 |
 |---|---|
 | `mcs/_mcs_path.py` | Flat-import bootstrap for the mcs/ package root. |
-| `mcs/core/access_log.py` | Append hash-chained records of who read or operated on patient data, never the data itself. |
-| `mcs/core/attachment_followups.py` | Queue attachment-only notification intents inside the caller's transaction. |
-| `mcs/core/backup_names.py` | Owner classes of data/backups file names and the delivery-journal restore horizon they bound. |
 | `mcs/core/bounded_http.py` | Bounded HTTP transport — one short-lived worker per request. |
 | `mcs/core/error_codes.py` | Fixed error-code registry for ``mcs_util.safe_error_code``. |
-| `mcs/core/external_transfer.py` | Hold the facility's recorded review that must name an external AI before patient data is sent to it. |
-| `mcs/core/health_policy.py` | Share pure health freshness and collection-stall observation policy. |
-| `mcs/core/host_clock.py` | Read this host's boot time and boot session through short, fixed, read-only OS queries. |
 | `mcs/core/inference_dependency_loss.py` | Retain compact negative-use dependencies before source or derivative destruction. |
 | `mcs/core/inference_version.py` | Shared public inference-version interpretation and currentness predicates. |
 | `mcs/core/initial_import_state.py` | Persist the first observed history cohort without changing delivery receipts. |
 | `mcs/core/install_options_contract.py` | 導入時に記録する省略項目の共通条件。 |
+| `mcs/core/ledger/attachment_followups.py` | Queue attachment-only notification intents inside the caller's transaction. |
+| `mcs/core/ledger/ledger_capture.py` | Persist captured patient messages, attachments and observations on the owning ledger connection. |
+| `mcs/core/ledger/ledger_semantic_sources.py` | Maintain source generations, invalidation and durable semantic intake on a borrowed ledger transaction. |
+| `mcs/core/ledger/message_observations.py` | Read captured post metadata and choose observation refresh work on borrowed connections. |
+| `mcs/core/ledger/project_metadata_contract.py` | Validate registered MCS datasets and resolve their scope from borrowed inventory reads. |
+| `mcs/core/ledger/snapshot_access.py` | Read snapshot identity from a borrowed connection without opening or closing it. |
 | `mcs/core/ledger.py` | SQLite ledger for MCS unread capture + history archive. |
 | `mcs/core/ledger_audit.py` | Bounded count-only integrity audit of an explicit static SQLite ledger. |
-| `mcs/core/ledger_capture.py` | Persist captured patient messages, attachments and observations on the owning ledger connection. |
 | `mcs/core/ledger_schema.py` | Own ledger schema, migrations and relation guards on a borrowed connection. |
-| `mcs/core/ledger_semantic_sources.py` | Maintain source generations, invalidation and durable semantic intake on a borrowed ledger transaction. |
 | `mcs/core/local_backup.py` | Local ledger backups: the verified daily rotation and pre-update rollback copies. |
 | `mcs/core/maintenance.py` | MCS housekeeping — log rotation, pruning, read-only snapshot publish, DB upkeep. |
-| `mcs/core/maintenance_errors.py` | Error type shared by housekeeping and local backup with a stable reason token. |
 | `mcs/core/mcs_config.py` | Validate shared MCS configuration without importing a CLI or probing services. |
 | `mcs/core/mcs_contract.py` | Stable MCS message values, identifiers and structured acquisition errors. |
 | `mcs/core/mcs_queries.py` | Shared ledger and extraction read contracts on borrowed connections. |
 | `mcs/core/mcs_runtime.py` | Resolve the explicitly selected Hermes or standalone runtime paths. |
 | `mcs/core/mcs_util.py` | Share dependency-light bootstrap, text, JSON and guarded-opener contracts. |
-| `mcs/core/message_observations.py` | Read captured post metadata and choose observation refresh work on borrowed connections. |
 | `mcs/core/original_source_keys.py` | Validate external original-source keys and bind their retained source occurrences. |
 | `mcs/core/patient_context_artifacts.py` | Read and verify sealed patient-context artifacts on the borrowed connection. |
 | `mcs/core/patient_read_scope.py` | Share patient availability checks for original-source reads and clinical processing. |
-| `mcs/core/project_metadata_contract.py` | Validate registered MCS datasets and resolve their scope from borrowed inventory reads. |
 | `mcs/core/provider_settings.py` | Read and compose provider-specific configuration without implicit migration. |
 | `mcs/core/quarantine_bootstrap.py` | quarantine子processの -I -S bootstrap (M6/W10)。 |
+| `mcs/core/records/access_log.py` | Append hash-chained records of who read or operated on patient data, never the data itself. |
+| `mcs/core/records/backup_names.py` | Owner classes of data/backups file names and the delivery-journal restore horizon they bound. |
+| `mcs/core/records/external_transfer.py` | Hold the facility's recorded review that must name an external AI before patient data is sent to it. |
+| `mcs/core/records/maintenance_errors.py` | Error type shared by housekeeping and local backup with a stable reason token. |
 | `mcs/core/run_log.py` | Serialize private runtime-log records, verified legacy imports and recoverable rotation. |
+| `mcs/core/runtime/health_policy.py` | Share pure health freshness and collection-stall observation policy. |
+| `mcs/core/runtime/host_clock.py` | Read this host's boot time and boot session through short, fixed, read-only OS queries. |
+| `mcs/core/runtime/worker_process.py` | Collect short-lived I/O workers without letting inherited pipes extend deadlines. |
 | `mcs/core/runtime_entry.py` | v3 runtime-entry bootstrap: hold Q(runtime-entry.lock) SH for the process lifetime. |
 | `mcs/core/safe_io.py` | Crash-safe file primitives shared by core, ingest, notify and ops modules. |
 | `mcs/core/scheduled_jobs.py` | Define shared scheduled jobs, calendar expansion and bounded job execution. |
 | `mcs/core/self_identity.py` | Who "we" are in MCS: the logged-in user and own-station roster. |
-| `mcs/core/snapshot_access.py` | Read snapshot identity from a borrowed connection without opening or closing it. |
 | `mcs/core/snapshots.py` | Publish verified snapshot files and own their temporary connections and validator process. |
 | `mcs/core/stats_math.py` | Small statistics helpers shared by the runtime views and offline evaluation. |
-| `mcs/core/worker_process.py` | Collect short-lived I/O workers without letting inherited pipes extend deadlines. |
 | `mcs/core/writer_lock.py` | Own writer-lock descriptors and reject stale generations after transport or waiting. |
 | `mcs/export/c1_contract.py` | Validate opt-in C1 values without choosing an envelope wire contract. |
 | `mcs/export/c1_envelopes.py` | Build and validate bounded /2 envelopes without storage or delivery effects. |

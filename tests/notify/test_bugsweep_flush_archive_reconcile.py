@@ -47,6 +47,42 @@ def test_publication_failure_after_commit_keeps_committed_suppression(led, monke
     assert led.db.execute("SELECT COUNT(*) FROM notification_renders WHERE spec_published=0").fetchone()[0] == 2
 
 
+def test_single_dispatch_publication_failure_after_commit_is_not_an_attempt(world, monkeypatch):
+    store, cfg, event, _ = _alert(world)
+    with store.db:
+        store.db.execute("UPDATE notify_outbox SET attempts=4,next_try=0 WHERE event_id=?", (event["event_id"],))
+
+    def fail(*args):
+        raise OSError("synthetic publication failure")
+
+    monkeypatch.setattr(spool, "publish_file", fail)
+    result = notify_flush.flush(store)
+    assert result["publish_failed"] == 1 and result["failed"] == 0
+    row = store.db.execute("SELECT state,attempts,progress FROM notify_outbox WHERE event_id=?",
+                           (event["event_id"],)).fetchone()
+    assert row["attempts"] == 4 and row["state"] != "failed"
+    assert "internal_failure" not in (row["progress"] or "")
+    unpublished = "SELECT COUNT(*) FROM notification_renders WHERE spec_published=0"
+    assert store.db.execute(unpublished).fetchone()[0] >= 1
+    monkeypatch.undo()
+    assert spool.recover(store, cfg, {})["republished"] >= 1
+    assert store.db.execute(unpublished).fetchone()[0] == 0
+
+
+def test_single_dispatch_failure_before_commit_still_counts(world, monkeypatch):
+    store, cfg, event, _ = _alert(world)
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("synthetic pre-commit failure")
+
+    monkeypatch.setattr(cards, "dispatch_intent", fail)
+    result = notify_flush.flush(store)
+    assert result["failed"] == 1 and result.get("publish_failed", 0) == 0
+    row = store.db.execute("SELECT state,attempts FROM notify_outbox WHERE event_id=?",
+                           (event["event_id"],)).fetchone()
+    assert row["state"] == "failed"
+
+
 def test_archived_urgent_notice_with_sending_render_is_held_not_suppressed(world):
     store, cfg, event, _ = _alert(world)
     assert cards.dispatch_intent(store, dict(event), cfg)["dispatched"]
