@@ -132,8 +132,13 @@ abspath() {
 # data/ that holds only a first install's hold (and the update lock) is still a
 # fresh install for choosing the runtime; fresh-resume verifies it exactly later.
 _data_is_fresh_hold() {
-    [ ! -L "$MCS_ROOT/data" ] && [ -f "$MCS_ROOT/data/.provider-bootstrap-fresh.json" ] \
-        && [ -z "$(ls -A "$MCS_ROOT/data" | grep -vx -e update.lock -e .provider-bootstrap-fresh.json)" ]
+    [ ! -L "$MCS_ROOT/data" ] && [ -f "$MCS_ROOT/data/.provider-bootstrap-fresh.json" ] || return 1
+    for _entry in "$MCS_ROOT/data"/* "$MCS_ROOT/data"/.[!.]* "$MCS_ROOT/data"/..?*; do
+        case "${_entry##*/}" in
+            update.lock|.provider-bootstrap-fresh.json) ;;
+            *) [ -e "$_entry" ] || [ -L "$_entry" ] || continue; return 1 ;;
+        esac
+    done
 }
 # physical path of an existing file or directory (symlinks resolved)
 physpath() {
