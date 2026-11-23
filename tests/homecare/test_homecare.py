@@ -455,7 +455,8 @@ def test_resident_mode_knows_each_request_by_its_tailscale_login(server):
     assert resident_request(server, "GET", "/api/patients")[1] == chat.UNREGISTERED  # no MCS record before staff
     # Before the first registration the register reads as empty and only registering answers.
     assert json.loads(resident_request(server, "GET", "/api/hc/staff")[1]) == {"items": []}
-    assert resident_request(server, "GET", "/api/hc/patients")[1] == chat.UNREGISTERED
+    for path in ("/api/hc/patients", "/api/hc/days?from=2026-11-24"):  # hc reads are not first-run routes
+        assert resident_request(server, "GET", path)[1] == chat.UNREGISTERED
     # The first registration takes the requester's own login, whatever the page sent.
     status, data = resident_request(server, "POST", "/api/hc/staff.create", {
         "values": {"name": "合成 薬剤師", "qualifications": ["pharmacy.pharmacist"], "tailscale_login": "other@x"},
@@ -466,6 +467,8 @@ def test_resident_mode_knows_each_request_by_its_tailscale_login(server):
     assert session["user"] == {"staff_id": first["staff_id"], "name": "合成 薬剤師"}
     stranger = resident_request(server, "GET", "/", login="stranger@example.invalid")
     assert stranger == (403, chat.UNREGISTERED)
+    assert resident_request(server, "GET", "/api/hc/days?from=2026-11-24", login="stranger@example.invalid") == (
+        403, chat.UNREGISTERED)
     assert resident_request(server, "POST", "/api/hc/staff.create", BODY, login="stranger@example.invalid")[0] == 403
     # The actor is the login's staff member, not the one the body names.
     status, data = resident_request(server, "POST", "/api/hc/patient.create", {
@@ -535,6 +538,61 @@ def test_visits_are_validated_versioned_and_audited(db):
         visits.create(db, REGISTRY, visit_values(row["patient_id"]), actor=None)
     kinds = [r["kind"] for r in db.execute("SELECT kind FROM audit_events WHERE kind LIKE 'visit.%'")]
     assert kinds == ["visit.create", "visit.create", "visit.update"]
+
+
+def test_days_count_a_week_of_visits_by_status_in_one_read(db, monkeypatch):
+    me = first_staff(db)
+    row = patient(db, me["staff_id"])
+    for day, status in (("2026-11-30", "planned"), ("2026-11-30", "planned"), ("2026-11-30", "cancelled"),
+                        ("2026-12-01", "done"), ("2026-12-06", "planned"), ("2026-12-07", "planned"),
+                        ("2026-11-29", "planned")):  # the last two fall outside the week
+        visits.create(db, REGISTRY, visit_values(row["patient_id"], visit_date=day, status=status,
+                                                 staff_id=me["staff_id"]), actor=me["staff_id"])
+    queries = []
+    db.set_trace_callback(queries.append)
+    week = homecare_api.read(db, "days", {"from": "2026-11-30"}, registry=REGISTRY, mcs_patients=lambda: [])
+    db.set_trace_callback(None)
+    assert len([q for q in queries if q.lstrip().upper().startswith("SELECT")]) == 1  # one grouped query
+    zero = {"planned": 0, "done": 0, "cancelled": 0}
+    assert week == {"days": [
+        {"date": "2026-11-30", **zero, "planned": 2, "cancelled": 1}, {"date": "2026-12-01", **zero, "done": 1},
+        *({"date": f"2026-12-0{n}", **zero} for n in range(2, 6)), {"date": "2026-12-06", **zero, "planned": 1}]}
+    for bad in ({}, {"from": "2026-02-30"}, {"from": "2026/11/30"}, {"from": ["2026-11-30"]},
+                {"from": "9999-12-30"}):  # a week running past the last representable day
+        with pytest.raises(ValueError, match="bad_request"):
+            homecare_api.read(db, "days", bad, registry=REGISTRY, mcs_patients=lambda: [])
+
+
+def test_patient_list_shows_each_patients_next_planned_visit_from_today(db, monkeypatch):
+    me = first_staff(db)
+    busy, idle, lapsed = (patient(db, me["staff_id"], name=name, kana=kana)
+                          for name, kana in (("合成 一郎", "ア"), ("合成 二郎", "イ"), ("合成 三郎", "ウ")))
+    plan = lambda row, day, **extra: visits.create(  # noqa: E731
+        db, REGISTRY, visit_values(row["patient_id"], visit_date=day, **extra), actor=me["staff_id"])
+    plan(busy, "2026-11-25", start_time="09:00")
+    plan(busy, "2026-11-24")                        # untimed comes after a timed visit on the same day
+    plan(busy, "2026-11-24", start_time="15:00")
+    plan(busy, "2026-11-24", start_time="11:00", status="cancelled")
+    plan(busy, "2026-11-20", start_time="08:00")    # overdue: not a next visit
+    plan(lapsed, "2026-11-23", status="done", staff_id=me["staff_id"])
+    plan(lapsed, "2026-11-22")
+    monkeypatch.setattr(visits, "site_today", lambda: "2026-11-24")
+    queries = []
+    db.set_trace_callback(queries.append)
+    rows = homecare_api.read(db, "patients", {}, registry=REGISTRY, mcs_patients=lambda: [])["items"]
+    db.set_trace_callback(None)
+    assert {row["patient_id"]: row["next_visit"] for row in rows} == {
+        busy["patient_id"]: {"visit_date": "2026-11-24", "start_time": "15:00"},
+        idle["patient_id"]: None, lapsed["patient_id"]: None}
+    assert len([q for q in queries if "FROM visits" in q]) == 1  # one query for every patient
+
+
+def test_a_days_visits_carry_the_patients_caution_note(db):
+    me = first_staff(db)
+    row = patient(db, me["staff_id"], caution_note="合成の注意")
+    visits.create(db, REGISTRY, visit_values(row["patient_id"]), actor=me["staff_id"])
+    items = homecare_api.read(db, "visits", {"date": "2026-11-24"}, registry=REGISTRY, mcs_patients=lambda: [])
+    assert [item["caution_note"] for item in items["items"]] == ["合成の注意"]
 
 
 def test_a_done_visit_by_staff_who_since_left_can_still_be_corrected(db):
@@ -705,6 +763,8 @@ def test_route_sends_addresses_only_caches_locations_and_lists_unlocated_visits(
     assert [job["id"] for job in optimised["jobs"]] == [1, 2, 3]  # positions, not ledger visit IDs
     assert [job.get("time_windows") for job in optimised["jobs"]] == [  # the day's order: 08:00, 10:00, untimed
         [[7 * 3600 + 45 * 60, 8 * 3600 + 15 * 60]], [[9 * 3600 + 45 * 60, 10 * 3600 + 15 * 60]], None]
+    # The day's rows carry the caution note for the screen; the route still sends only addresses out.
+    assert "秘密のメモ" in [row["caution_note"] for row in visits.for_day(db, "2026-11-24")]
     sent = " ".join(r.full_url + (r.data or b"").decode() for r in fake.sent)
     assert "合成 一郎" not in sent and "秘密のメモ" not in sent and str(one["patient_id"]) not in sent.split("q=")[0]
     assert all(r.get_header("Authorization") in (None, "synthetic-key-0000") for r in fake.sent)
