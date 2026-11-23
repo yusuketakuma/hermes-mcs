@@ -30,7 +30,7 @@ import mcs_util
 import extraction_context
 import semantic_qc
 from mcs_queries import (current_extract_pred, json_or_null)
-from mcs_util import HOME, load_config, loads_dict
+from mcs_util import HOME, load_config, load_config_checked, loads_dict
 
 from extract_llm_context import (
     _chunk_context,
@@ -93,9 +93,15 @@ from extract_llm_source_contract import (
     _INFERENCE_VERSION,
     _INTERNAL_LEAF_CLAIMS,
     _INTERNAL_REPAIR_PROOF,
+    _STALE_GC_BUDGET_S,
     _owns_current_source,
     _source_writable,
     _unsealed_source_pred,
+    _writer_current,
+)
+from extract_llm_selection import (
+    _StaleGCDeadline,
+    _stale_gc_transaction,
 )
 
 # Write transactions holding the SQLite writer lock past this are reported as
@@ -246,13 +252,8 @@ def _cloud_attempt_withdrawn(cfg, started) -> bool:
                                                                purpose="backlog", root=HOME).state == "gone")
 
 
-def _withdrawn_cloud_attempts(db, cfg) -> list:
-    """Rows (``_close_cloud_attempt`` shape) of open QC second attempts whose contract is gone for good.
-
-    Every extraction pass reads this, with the cloud on or off, and closes
-    what it returns under the write lock (extract_llm_runner), so an attempt
-    whose provider can no longer send still ends (確認候補) when no cloud
-    worker runs. It only reads; nothing here sends, reserves or writes."""
+def _open_cloud_attempts(db) -> list:
+    """Rows (``_close_cloud_attempt`` shape) of the open QC second attempts of current bodies; it only reads."""
     content = json_or_null("ca.content")
     rows = db.execute(
         f"""SELECT DISTINCT ca.project_id, ca.message_id, m.content_hash,
@@ -265,9 +266,42 @@ def _withdrawn_cloud_attempts(db, cfg) -> list:
                     AND json_extract({json_or_null('cc.content')},'$.state')='closed'
                     AND json_extract({json_or_null('cc.content')},'$.hash')=m.content_hash)""",
         (CLOUD_ATTEMPT_KIND,)).fetchall()
-    found = ({"project_id": project_id, "message_id": message_id, "content_hash": content_hash, "qc_cloud": source}
-             for project_id, message_id, content_hash, source in rows if type(source) is int)
-    return [r for r in found if _cloud_attempt_withdrawn(cfg, _open_attempt_contracts(db, r))]
+    return [{"project_id": project_id, "message_id": message_id, "content_hash": content_hash, "qc_cloud": source}
+            for project_id, message_id, content_hash, source in rows if type(source) is int]
+
+
+def _end_withdrawn_cloud_attempts(ledger, lock, per_write_lock: bool, *, deadline) -> int:
+    """Close each open QC second attempt whose contract is gone for good -> attempts closed.
+
+    Every extraction pass runs this, with the cloud on or off, so an attempt
+    whose provider can no longer send still ends (確認候補) when no cloud
+    worker runs. Contracts are judged only under verified settings
+    (``load_config_checked``): a pass without them closes nothing. The write
+    lock is taken only when one is found, and the lock, the SQLite writer
+    wait and the SQL are bounded like the stale GC's, so a busy database
+    never delays selection; the next pass retries. Nothing here sends or
+    reserves."""
+    candidates = [] if ledger.db.in_transaction else _open_cloud_attempts(ledger.db)
+    cfg = load_config_checked() if candidates else None
+    if cfg is None:
+        return 0
+    withdrawn = [r for r in candidates if _cloud_attempt_withdrawn(cfg, _open_attempt_contracts(ledger.db, r))]
+    if not withdrawn:
+        return 0
+    close_by = min(deadline, time.monotonic() + _STALE_GC_BUDGET_S)
+    closed = 0
+    try:
+        with lock(per_write_lock, deadline=close_by) as held:
+            if not held or not _writer_current():
+                return 0
+            with _stale_gc_transaction(ledger.db, close_by):
+                for r in withdrawn:
+                    if r in _open_cloud_attempts(ledger.db):   # still open under the writer lock
+                        _close_cloud_attempt_tx(ledger.db, r)
+                        closed += 1
+    except _StaleGCDeadline:
+        return 0   # rolled back whole; the next pass retries
+    return closed
 
 
 def _replace_current(ledger, r, content: str, ctx: bool = False,

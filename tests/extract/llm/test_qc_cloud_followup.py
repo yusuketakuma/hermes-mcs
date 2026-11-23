@@ -857,3 +857,232 @@ def test_a_qc_attempt_without_a_paid_request_is_never_closed(qc_window):
     assert not ledger.artifacts(worker.CLOUD_ATTEMPT_KIND), "nothing was spent: the post stays eligible"
     assert extract_llm_store._close_cloud_attempt(ledger, {**row, "qc_cloud": None}) is True
     assert _attempts(ledger) == [('backlog', 'closed')], "a plain backlog attempt still closes"
+
+
+def _write_split(root, raw):
+    """Write the legacy-shaped ``raw`` settings as private split provider settings under ``root``."""
+    import hashlib
+    import provider_settings
+    import semantic_jev
+    owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
+    common, providers = provider_settings.split_legacy(json.loads(json.dumps(raw)), owners,
+                                                       jev_model=semantic_jev.JEV_MODEL)
+
+    def private(path, value):
+        data = (json.dumps(value, ensure_ascii=False, sort_keys=True) + "\n").encode()
+        path.write_bytes(data)
+        path.chmod(0o600)
+        return hashlib.sha256(data).hexdigest()
+    root.chmod(0o700)
+    (root / "data" / "provider_settings").mkdir(mode=0o700, parents=True, exist_ok=True)
+    (root / "data").chmod(0o700)
+    private(root / "config.json", common)
+    hashes = {name: private(root / "data" / "provider_settings" / (name + ".json"), providers.get(name, {}))
+              for name in provider_settings.PROVIDERS}
+    private(root / "data" / ".provider-settings-authority.json", {
+        "version": 2, "state": "committed", "files": hashes,
+        "common_policy_sha256": provider_settings.common_policy_digest(common)})
+
+
+def _split_window(qc_window, monkeypatch, tmp_path, raw_update):
+    """The capped window served from split provider settings under a private root -> (openai_calls, raw, apply).
+
+    ``apply()`` rewrites the files from ``raw`` and serves their runtime view as
+    the workers' configuration, exactly as mcs_util composes it."""
+    import copy
+    import cloud_inference
+    import extract_llm_prepare
+    import extract_llm_store
+    import mcs_util
+    ledger, cfg, _local_calls, _cloud_calls, _answers = qc_window
+    openai_calls = _echo_providers(qc_window, monkeypatch)
+    root = tmp_path / "split-root"
+    root.mkdir()
+    for module in (extract_llm_prepare, extract_llm_store, cloud_inference):
+        monkeypatch.setattr(module, "HOME", str(root))
+    _long_flagged_post(ledger)
+    raw = copy.deepcopy(cfg)
+    raw['cloud_llm'].update(mode='on', **WINDOW)
+    _both_providers(raw)
+    # Split settings validate the common file alone, so the window carries its own period budget.
+    raw['cloud_llm'].update(window_start=time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - 3600)),
+                            window_budget_usd=100, daily_request_budget=1, **raw_update)
+
+    monkeypatch.setattr(extract_llm_store, "load_config_checked",
+                        lambda: mcs_util.load_config_checked(str(root / "config.json")))
+
+    def apply():
+        _write_split(root, raw)
+        view = mcs_util.load_config_checked(str(root / "config.json"))
+        assert view is not None
+        cfg.clear()
+        cfg.update(view)
+        with ledger.db:
+            ledger.db.execute("DELETE FROM fetch_jobs WHERE kind='extract_claim'")
+    apply()
+    return openai_calls, raw, apply
+
+
+def test_a_custom_profile_of_a_non_preferred_provider_survives_an_off_pass_and_resumes(qc_window, monkeypatch, tmp_path):
+    ledger, cfg, local_calls, cloud_calls, _answers = qc_window
+    # Both keys, the facility approves only OpenAI, Anthropic comes first: the attempt starts on OpenAI's own profile.
+    monkeypatch.setattr(external_transfer, "status", lambda root=None: _review("acknowledged", ["openai"]))
+    openai_calls, raw, apply = _split_window(qc_window, monkeypatch, tmp_path,
+                                             {"provider_profiles": {"openai": {"backlog": "sol-medium"}}})
+    assert _cloud_pass(ledger)['done'] == 0
+    assert [call['model'] for call in openai_calls] == ['gpt-6.1-sol'] and not cloud_calls
+    assert _attempts(ledger) == [('qc', 'open')]
+    raw['cloud_llm']['mode'] = 'off'
+    apply()
+    assert "openai" not in json.dumps(cfg['cloud_llm'].get('provider_profiles', {})), \
+        "the off view is composed for Anthropic and lacks OpenAI's profile"
+    calls = len(local_calls)
+    _local_pass(ledger)
+    assert _attempts(ledger) == [('qc', 'open')], "an off pass judges OpenAI's own profile: unchanged, so it waits"
+    assert len(local_calls) == calls and len(openai_calls) == 1 and not cloud_calls
+    raw['cloud_llm']['mode'] = 'on'
+    raw['cloud_llm'].pop('daily_request_budget')
+    apply()
+    assert _cloud_pass(ledger)['done'] == 1
+    sent = [_sent_text(call) for call in openai_calls]
+    assert len(sent) >= 2 and len(set(sent)) == len(sent), "the saved first chunk is reused, not resent"
+    assert {call['model'] for call in openai_calls} == {'gpt-6.1-sol'} and not cloud_calls
+    assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')]
+
+
+def test_a_send_from_an_earlier_interval_of_the_same_body_still_spends_it(tmp_path):
+    from extract_testkit import _ledger
+    db = _ledger(tmp_path)
+    try:
+        now = time.time()
+        for body in ('完全合成の記録Aです。', '完全合成の記録Bです。', '完全合成の記録Aです。'):
+            db.save_messages([_message(body=body)])
+        seqs = [row[0] for row in db.db.execute("SELECT seq FROM message_revisions WHERE message_id=1 ORDER BY seq")]
+        assert len(seqs) == 3
+        with db.db:
+            db.db.execute("UPDATE messages SET first_seen=? WHERE message_id=1", (now - 300,))
+            for seq, at in zip(seqs, (now - 300, now - 200, now - 100)):
+                db.db.execute("UPDATE message_revisions SET observed_at=? WHERE message_id=1 AND seq=?", (at, seq))
+        spent = f"SELECT {worker.cloud_attempt_spent_sql('m', '?')} FROM messages m WHERE m.message_id=1"
+
+        def reserve_only_at(at):
+            with db.db:
+                db.db.execute("DELETE FROM artifacts WHERE kind='cloud_usage_reserve'")
+                db.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at)"
+                              " VALUES('cloud_usage_reserve',1,1,'{}','m',?,?)",
+                              (json.dumps({"route": "reextract"}), at))
+            return db.db.execute(spent, (7,)).fetchone()[0]
+        assert reserve_only_at(now - 250) == 1, "a send that no record names, made while the body was A, spends A"
+        assert reserve_only_at(now - 150) == 0, "a send made while the body was B does not spend A"
+        assert reserve_only_at(now - 50) == 1
+        assert reserve_only_at(now - 400) == 0, "before the message was first seen"
+    finally:
+        db.close()
+
+
+def _valid_pin(qc_window, monkeypatch):
+    ledger, cfg, *_rest = qc_window
+    monkeypatch.setattr(cloud_policy, "provider_key", lambda name, root=None: "synthetic-key")
+    _open_window(cfg)
+    selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog")
+    assert selection is not None and not errors
+    pin = cloud_policy.route_contract(cfg, selection, route="reextract", purpose="backlog")
+    assert cloud_policy.resolve_contract(cfg, pin, route="reextract", purpose="backlog").state == "usable"
+    return cfg, pin
+
+
+@pytest.mark.parametrize("bad", [[], {}, 1, None, ["anthropic"]])
+def test_a_malformed_provider_is_an_invalid_contract_never_an_error(qc_window, monkeypatch, bad):
+    import copy
+    cfg, pin = _valid_pin(qc_window, monkeypatch)
+    broken = {name: {**contract, "provider": bad} for name, contract in pin.items()}
+    state = cloud_policy.resolve_contract(cfg, broken, route="reextract", purpose="backlog")
+    assert (state.state, state.reason) == ("gone", "contract_invalid")
+    assert cloud_policy.route_contract(cfg, {"provider": bad}, route="reextract", purpose="backlog") is None
+    configured = copy.deepcopy(cfg)
+    configured['cloud_llm']['provider'] = bad
+    assert cloud_policy.resolve_contract(configured, pin, route="reextract", purpose="backlog").state != "usable"
+
+
+@pytest.mark.parametrize("fallback", [{}, {"provider_unavailable": True, "cloud_llm": {"mode": "off"}}, None])
+def test_an_unreadable_configuration_keeps_a_contract_waiting(qc_window, monkeypatch, fallback):
+    _cfg, pin = _valid_pin(qc_window, monkeypatch)
+    state = cloud_policy.resolve_contract(fallback, pin, route="reextract", purpose="backlog")
+    assert (state.state, state.reason) == ("waiting", "config_unavailable")
+
+
+@pytest.mark.parametrize("fault", ["empty", "provider_unavailable"])
+def test_a_pass_without_verified_settings_never_ends_the_attempt_and_recovery_resumes(
+        qc_window, monkeypatch, tmp_path, fault):
+    import copy
+    import extract_llm_store
+    import mcs_util
+    ledger, cfg, _local_calls, cloud_calls, _answers = qc_window
+    if fault == "empty":
+        # A single config.json the runtime loader cannot read: it serves {} and the checked read fails.
+        cfg['cloud_llm']['provider_profiles'] = {"anthropic": {"backlog": "sonnet-high"}}
+        openai_calls, lift = _capped_after_the_first_chunk(qc_window, monkeypatch)
+        lift()
+        sent_before, good = cloud_calls, copy.deepcopy(cfg)
+        path = tmp_path / "config.json"
+        path.write_bytes(b"{")
+        served = mcs_util.load_config(str(path))
+        assert served == {} and mcs_util.load_config_checked(str(path)) is None
+
+        def recover():
+            cfg.clear()
+            cfg.update(good)
+            monkeypatch.setattr(extract_llm_store, "load_config_checked", lambda: cfg)
+    else:
+        # Split settings whose provider file no longer matches its authority: a synthesized, closed view.
+        monkeypatch.setattr(external_transfer, "status", lambda root=None: _review("acknowledged", ["openai"]))
+        openai_calls, raw, recover = _split_window(qc_window, monkeypatch, tmp_path,
+                                                   {"provider_profiles": {"openai": {"backlog": "sol-medium"}}})
+        assert _cloud_pass(ledger)['done'] == 0 and len(openai_calls) == 1
+        raw['cloud_llm'].pop('daily_request_budget')
+        sent_before = openai_calls
+        root = tmp_path / "split-root"
+        path = root / "config.json"
+        (root / "data" / "provider_settings" / "openai.json").write_bytes(b'{"profiles": {}}\n')
+        served = mcs_util.load_config(str(path))
+        assert served.get("provider_unavailable") and mcs_util.load_config_checked(str(path)) is None
+    calls = len(sent_before)
+    cfg.clear()
+    cfg.update(served)
+    monkeypatch.setattr(extract_llm_store, "load_config_checked", lambda: mcs_util.load_config_checked(str(path)))
+    _local_pass(ledger)
+    _cloud_pass(ledger)
+    assert _attempts(ledger) == [('qc', 'open')], "unverified settings never judge a contract gone"
+    assert len(sent_before) == calls and len(cloud_calls) + len(openai_calls) == calls
+    recover()
+    assert _cloud_pass(ledger)['done'] == 1
+    sent = [_sent_text(call) for call in sent_before]
+    assert len(sent) >= 2 and len(set(sent)) == len(sent), "the saved first chunk is reused, not resent"
+    assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')]
+
+
+def test_a_busy_database_bounds_the_close_write_like_the_stale_gc(qc_window, monkeypatch):
+    import functools
+    import sqlite3
+    import extract_llm_errors
+    import extract_llm_store
+    ledger, _cfg, _local_calls, cloud_calls, _answers = qc_window
+    _openai_calls, lift = _capped_after_the_first_chunk(qc_window, monkeypatch)
+    lift()
+    monkeypatch.setattr(external_transfer, "status", lambda root=None: _review("acknowledged", ["openai"]))
+    lock = functools.partial(extract_llm_errors._write_lock, wait_s=60)
+    path = ledger.db.execute("PRAGMA database_list").fetchone()[2]
+    other = sqlite3.connect(path, isolation_level=None)
+    try:
+        other.execute("BEGIN IMMEDIATE")   # another writer holds the database
+        started = time.monotonic()
+        assert extract_llm_store._end_withdrawn_cloud_attempts(
+            ledger, lock, False, deadline=time.monotonic() + 60) == 0
+        assert time.monotonic() - started < 2, "gave up within the short budget, not the 30 s busy timeout"
+        assert not ledger.db.in_transaction
+        other.execute("ROLLBACK")
+    finally:
+        other.close()
+    assert _attempts(ledger) == [('qc', 'open')]
+    assert extract_llm_store._end_withdrawn_cloud_attempts(ledger, lock, False, deadline=time.monotonic() + 60) == 1
+    assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')] and len(cloud_calls) == 1

@@ -80,7 +80,7 @@ def _qc_contract(ledger, cfg, r, selection):
     because its saved chunks, repairs and repeat guard belong to it. A
     contract that is not usable now (capped, stopped, outside its window,
     unverified, or gone) sends nothing; ending a gone one is the extraction
-    pass's job (_withdrawn_cloud_attempts), which runs with the cloud on
+    pass's job (_end_withdrawn_cloud_attempts), which runs with the cloud on
     or off. Before that first request this pass's selection is pinned."""
     started = _open_attempt_contracts(ledger.db, r)
     pin = started[0] if started else cloud_policy.route_contract(

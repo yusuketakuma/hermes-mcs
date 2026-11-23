@@ -396,13 +396,14 @@ def source_revision_sql(msg: str = "m") -> str:
     return f"COALESCE((SELECT MAX(rv.seq) FROM message_revisions rv WHERE rv.message_id={msg}.message_id),0)"
 
 
-def _body_since_sql(msg: str) -> str:
-    """When the message's current body (content hash) was last first observed."""
-    return f"""COALESCE((SELECT MIN(rv.observed_at) FROM message_revisions rv
-            WHERE rv.message_id={msg}.message_id AND rv.content_hash={msg}.content_hash
-              AND rv.seq > COALESCE((SELECT MAX(rx.seq) FROM message_revisions rx
-                  WHERE rx.message_id={msg}.message_id AND rx.content_hash IS NOT {msg}.content_hash),0)),
-        {msg}.first_seen, 0)"""
+def _body_at_sql(msg: str, at: str) -> str:
+    """The message's body (content hash) at time ``at``: its newest revision observed by then, else NULL.
+
+    A message without revisions had its current body from ``first_seen`` on."""
+    return f"""COALESCE((SELECT rv.content_hash FROM message_revisions rv
+            WHERE rv.message_id={msg}.message_id AND rv.observed_at <= {at} ORDER BY rv.seq DESC LIMIT 1),
+        CASE WHEN NOT EXISTS (SELECT 1 FROM message_revisions rv WHERE rv.message_id={msg}.message_id)
+                  AND {at} >= COALESCE({msg}.first_seen, 0) THEN {msg}.content_hash END)"""
 
 
 def cloud_attempt_spent_sql(msg: str = "m", src: str = "qf.artifact_id") -> str:
@@ -417,9 +418,10 @@ def cloud_attempt_spent_sql(msg: str = "m", src: str = "qf.artifact_id") -> str:
     metadata-only revision keeps the body but ends such an open attempt; an
     open record whose binding is missing or unreadable never resumes. A QC
     second attempt records each of its paid requests in the request's own
-    reservation transaction; any other stored-post reservation for the body
-    (a send no attempt record names) counts as well, and so does an
-    unreadable record or reservation."""
+    reservation transaction; any other stored-post reservation made while
+    the message had this body (a send no attempt record names; an earlier
+    interval of the same body counts after an edit and its revert) counts as
+    well, and so does an unreadable record or reservation."""
     content = json_or_null("ca.content")
     return f"""(EXISTS (SELECT 1 FROM artifacts ca
         WHERE ca.kind='{CLOUD_ATTEMPT_KIND}' AND ca.message_id={msg}.message_id
@@ -433,7 +435,7 @@ def cloud_attempt_spent_sql(msg: str = "m", src: str = "qf.artifact_id") -> str:
         WHERE cr.kind='{cloud_usage_accounting.KINDS[0]}' AND cr.message_id={msg}.message_id
           AND (cr.project_id IS NULL OR cr.project_id={msg}.project_id)
           AND COALESCE(json_extract({json_or_null('cr.meta')},'$.route'),'reextract')='reextract'
-          AND cr.created_at >= {_body_since_sql(msg)}
+          AND {_body_at_sql(msg, 'cr.created_at')}={msg}.content_hash
           AND NOT EXISTS (SELECT 1 FROM artifacts co
                 WHERE co.kind='{CLOUD_ATTEMPT_KIND}' AND co.message_id={msg}.message_id
                   AND json_extract({json_or_null('co.content')},'$.reservation_id')

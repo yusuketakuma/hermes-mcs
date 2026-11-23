@@ -520,23 +520,48 @@ def selection_contract(selection):
     return {key: selection[key] for key in CONTRACT_FIELDS}
 
 
-def route_contract(cfg, selection, *, route, purpose, root=None):
-    """The contract a unit pins when it starts under ``selection`` -> {purpose: contract}, or None.
+def _contract_config(cfg, provider, root=None):
+    """``cfg`` as the pinned ``provider`` reads it -> configuration, or None while unverified.
 
-    It holds the selection itself and, for each other purpose of the route
-    (its quality repair), the same provider's current profile, so the unit
-    and its repairs resume sending exactly what their paid answers belong to."""
+    The runtime view of split provider settings carries only the automatically
+    selected provider's model and profiles, so a contract is always judged
+    against its own provider's validated settings, read here; sending and
+    ending an attempt therefore share one reading. A single config.json
+    already holds every provider's settings. The empty fallback of an
+    unreadable configuration and a view the loader synthesized after a
+    provider read failed (``provider_unavailable``) are never used."""
+    if not isinstance(cfg, dict) or not cfg or cfg.get("provider_unavailable"):
+        return None   # the unreadable-config fallback ({}) or a synthesized view
+    import mcs_util
+    path = os.path.join(root if root is not None else mcs_util.HOME, "config.json")
+    try:
+        if not mcs_util._provider_config_active(path):
+            return cfg
+    except mcs_util.ProviderSettingsUnreadable:
+        return None
+    return mcs_util.load_config_checked(path, provider=provider)
+
+
+def route_contract(cfg, selection, *, route, purpose, root=None):
+    """The contract a unit pins when it starts on ``selection``'s provider -> {purpose: contract}, or None.
+
+    Every purpose of the route (the selection's and its quality repair) takes
+    that provider's own current profile (:func:`_contract_config`), so the
+    unit and its repairs resume sending exactly what their paid answers
+    belong to; the caller sends under :func:`resolve_contract`'s selection."""
     purposes = dict(_ROUTE_PURPOSES).get(route, ())
     provider = selection.get("provider") if isinstance(selection, Mapping) else None
-    if purpose not in purposes or provider not in PROVIDERS:
+    if purpose not in purposes or not isinstance(provider, str) or provider not in PROVIDERS:
+        return None
+    cfg = _contract_config(cfg, provider, root)
+    if cfg is None:
         return None
     settings, errors, _held = resolve_selection(cfg, root, pinned=provider)
     if errors:
         return None
     pin = {}
     for name in purposes:
-        chosen = selection if name == purpose else profile_for_settings(
-            cfg, settings, route=route, purpose=name, provider=provider)[0]
+        chosen = profile_for_settings(cfg, settings, route=route, purpose=name, provider=provider)[0]
         if chosen is None:
             return None
         pin[name] = selection_contract(chosen)
@@ -559,29 +584,36 @@ def resolve_contract(cfg, pin, *, route, purpose, root=None, ledger=None):
     returned selection (the pinned provider's live profile, equal in every
     contract field), that provider's settings and its key. ``waiting``: the
     contract is still offered but nothing may send now -- the configuration,
-    the review record or the key file is unverified (unreadable, or a review
-    still pending), the mode is not ``on``, or (with ``ledger``) the run
-    window, a stop, an open circuit, an unverified price or a spending cap
-    holds it. ``gone``: a readable configuration, review or key file no
-    longer offers it (another provider is named, it left ``provider_order``,
-    the recorded review leaves it out, its key is absent, or one of its
-    profiles changed). Which provider is preferred decides nothing here: a
-    contract never moves to another provider or model."""
+    the review record or the key file is unverified (unreadable, a synthesized
+    fallback view, or a review still pending), the mode is not ``on``, or
+    (with ``ledger``) the run window, a stop, an open circuit, an unverified
+    price or a spending cap holds it. ``gone``: a readable configuration,
+    review or key file no longer offers it (another provider is named, it
+    left ``provider_order``, the recorded review leaves it out, its key is
+    absent, or one of its profiles changed). Profiles are always the pinned
+    provider's own (:func:`_contract_config`). Which provider is preferred
+    decides nothing here: a contract never moves to another provider or model."""
     purposes = dict(_ROUTE_PURPOSES).get(route, ())
     provider = None
     if (purpose in purposes and isinstance(pin, Mapping) and set(pin) == set(purposes)
             and all(isinstance(pin[name], Mapping) and set(pin[name]) == set(CONTRACT_FIELDS)
                     for name in purposes)):
-        providers = {pin[name]["provider"] for name in purposes}
-        provider = providers.pop() if len(providers) == 1 else None
+        named = [pin[name]["provider"] for name in purposes]
+        # A malformed provider value (a list, an object, a number) is an invalid contract, never an error.
+        if all(isinstance(name, str) for name in named) and len(set(named)) == 1:
+            provider = named[0]
     if provider not in PROVIDERS:
         return ContractState("gone", "contract_invalid", None, None, None)
+    view = _contract_config(cfg, provider, root)
+    cfg = cfg if view is None else view
     _general, errors = resolve_settings(cfg, root)
     settings, pinned_errors, _held = resolve_selection(cfg, root, pinned=provider)
     key = provider_key(provider, root)
 
     def judged(state, reason, selection=None):
         return ContractState(state, reason, selection, settings, key)
+    if view is None:
+        return judged("waiting", "config_unavailable")
     if errors:
         return judged("waiting", "config_unverified")
     configured = cloud_config(cfg)[0]
