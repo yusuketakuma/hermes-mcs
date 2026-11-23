@@ -366,7 +366,12 @@ function post(row, detailed = false) {
     const latest = lastReplyChip(row.last_reply);
     if (latest) footer.append(latest);
   }
-  if (row.summary_state_label) footer.append(chip(row.summary_state_label, ["failed", "attention", "unknown"].includes(row.summary_state) ? "warn" : "muted"));
+  if (row.summary_state_label) {
+    const summary = chip(row.summary_state_label, ["failed", "attention", "unknown"].includes(row.summary_state) ? "warn" : "muted");
+    // unknown: the settings file exists but cannot be read, so whether the summary is due cannot be decided.
+    if (row.summary_state === "unknown") summary.title = "設定ファイルを読み取れないため、要約の状況を判定できません。";
+    footer.append(summary);
+  }
   footer.append(...flagChips(row.flags), ...observedChanges(row));
   if (row.stamp_line) footer.append(chip(row.stamp_line, stampIncomplete.test(row.stamp_line) ? "warn" : "muted"));
   if (row.stamps?.self) footer.append(chip(`自分のスタンプ ${row.stamps.self}`, "info"));
@@ -587,7 +592,8 @@ function attachmentEntry(file) {
   entry.open = !(ocr.pages || []).length;  // only long OCR text starts folded
   const states = el("div", null, "file-states");
   states.append(chip(`ファイル: ${fileStates[file.state] || "状態を確認できません"}`, ["failed", "pending"].includes(file.state) ? "warn" : "muted"),
-    chip(`文字記録: ${ocrStates[ocr.state] || "状態を確認できません"}`, ["failed", "rejected_by_policy", "unprocessed"].includes(ocr.state) ? "warn" : "muted"));
+    ocr.state === "unknown" && ocr.reason === "config_unreadable" ? chip("OCR 状態不明（設定を読み取れません）", "muted")
+      : chip(`文字記録: ${ocrStates[ocr.state] || "状態を確認できません"}`, ["failed", "rejected_by_policy", "unprocessed"].includes(ocr.state) ? "warn" : "muted"));
   if (stored && file.bytes > 0) states.append(chip(fileSize(file.bytes), "muted"));
   entry.append(states);
   if (file.state !== "downloaded" && file.error && file.error !== "not_recorded") entry.append(el("p", `理由: ${fileErrors[file.error] || `エラー（${file.error}）`}`, "state-note"));

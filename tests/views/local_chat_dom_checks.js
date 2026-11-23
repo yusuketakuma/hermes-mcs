@@ -445,6 +445,11 @@ async function checkMcsData() {
   assert.equal(files([{state: "downloaded", count: 1}], [{state: "complete", count: 1}]), "chip chip-muted|添付 1件");
   assert.equal(files([{state: "downloaded", count: 1}], null), "chip chip-muted|添付 1件");
   assert.equal(files([{state: "downloaded", count: 1}]), "chip chip-muted|添付 1件");
+  assert.equal(files([{state: "downloaded", count: 2}], [{state: "unknown", count: 2}]), "chip chip-muted|添付 2件", "unreadable settings are not an OCR failure");
+  const unknownOcr = content(run("attachmentEntry")({attachment_id: 30, state: "downloaded", bytes: 10, ocr: {state: "unknown", reason: "config_unreadable"}}));
+  assert.match(unknownOcr, /OCR 状態不明（設定を読み取れません）/); assert.doesNotMatch(unknownOcr, /失敗|未取得|未作成/);
+  const unknownSummary = find(run("post")({message_id: 23, body_state: "full", body_complete: true, body_text: "合成", summary_state: "unknown", summary_state_label: "要約 状況不明"}), node => node.textContent === "要約 状況不明");
+  assert.match(unknownSummary.title, /設定ファイルを読み取れない/);
   sandbox.api = async kind => kind === "attachments" ? {items: [], next_cursor: null} : {message: {}};
   run("state.detailRequest = 50; state.project = 101");
   await run("showMessageInfo({project_id: 101, message_id: 21, attachments_ocr: null}, 50, false)");
