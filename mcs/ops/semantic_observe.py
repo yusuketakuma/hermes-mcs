@@ -12,6 +12,8 @@ decide when assist/enforce is safe:
 Gates to watch (phase-j-record §7):
 - current audit completion/PASS rate; historical outcomes are labelled separately
 - jev_requests_today vs daily_request_budget (read from config)
+- jev_effect: what Jev was asked per operation and what it answered over
+  the window, to compare the requests spent with the results they change
 - pending drain rate vs new-arrival rate
 - failed job count staying at 0
 """
@@ -190,6 +192,7 @@ def _observe(c, cfg, days: int = 14, *, now: float | None = None,
     queue_ages, cohorts, scheduler = _queue_stats(c, oldest_msg, now=now)
     recent = _recent_runs(c, days, now=now, checkpoint=checkpoint)
     extract_recent = _extract_recent(c, checkpoint=checkpoint)
+    jev_effect = _jev_effect(c, days, now=now)
     return {
         "ts": int(now),
         "jobs": jobs,
@@ -211,6 +214,7 @@ def _observe(c, cfg, days: int = 14, *, now: float | None = None,
         "scheduler": scheduler,
         "recent_drain": recent,
         "extract_recent": extract_recent,
+        "jev_effect": jev_effect,
         "last_interrupt": interrupted_runs(c, now=now),
         "pipeline_progress": pipeline_progress(c, cfg, now=now, checkpoint=checkpoint,
                                                payload_checkpoint=payload_checkpoint),
@@ -364,6 +368,47 @@ def _extract_recent(c, *, checkpoint=lambda: None) -> dict:
     return recent
 
 
+def _jev_effect(c, days: int = 14, *, now=None) -> dict:
+    """Count what Jev was asked and answered over the last `days` days.
+
+    Counts only stored records: requests per operation, primary proposition
+    verdicts, extraction-QC item verdicts and urgency pairs, and patient
+    context quality receipts. A count says what was recorded, not whether
+    the answer changed a downstream result."""
+    since = (time.time() if now is None else now) - days * 86400
+
+    def counts(sql, params=()):
+        return {str(key): n for key, n in c.execute(sql, (since, *params)).fetchall()}
+
+    return {
+        "window_days": days,
+        "requests_by_operation": counts(
+            "SELECT COALESCE(json_extract(meta,'$.operation'),'semantic_drain'),"
+            " SUM(json_extract(meta,'$.jev_requests')) FROM artifacts"
+            " WHERE kind='semantic_usage' AND created_at>=? AND json_valid(meta)"
+            " GROUP BY 1"),
+        "primary_verdicts": counts(
+            "SELECT json_extract(v.value,'$.verdict'), COUNT(*) FROM artifacts a,"
+            " json_each(json_extract(a.content,'$.verdicts')) v"
+            " WHERE a.kind='semantic_assess' AND a.created_at>=? AND json_valid(a.content)"
+            " AND json_type(a.content,'$.verdicts')='object' GROUP BY 1"),
+        "extract_qc_items": counts(
+            "SELECT json_extract(i.value,'$.verdict'), COUNT(*) FROM artifacts a,"
+            " json_each(json_extract(a.content,'$.items')) i"
+            " WHERE a.kind='extract_qc' AND a.created_at>=? AND json_valid(a.content)"
+            " AND json_type(a.content,'$.items')='array' GROUP BY 1"),
+        # "extracted>jev" pairs: a differing pair is where Jev's urgency disagreed.
+        "extract_qc_urgency": counts(
+            "SELECT COALESCE(json_extract(content,'$.urgency.extracted'),'unknown') || '>'"
+            " || COALESCE(json_extract(content,'$.urgency.jev'),'unknown'), COUNT(*)"
+            " FROM artifacts WHERE kind='extract_qc' AND created_at>=? AND json_valid(content)"
+            " GROUP BY 1"),
+        "patient_quality": counts(
+            "SELECT kind, COUNT(*) FROM artifacts WHERE kind LIKE 'patient_context_%quality%'"
+            " AND created_at>=? GROUP BY kind"),
+    }
+
+
 def _incomplete(snap) -> bool:
     return (snap.get("status") == "unavailable"
             or snap.get("observation", {}).get("status") == "partial")
@@ -413,6 +458,12 @@ def main() -> int:
           f"{snap['jev_daily_budget']} | "
           f"legacy extraction predicate pending: {snap['extract_llm_left']} "
           "(admission/lease/retry not evaluated)")
+    effect = snap["jev_effect"]
+    print(f"jev last {effect['window_days']}d: requests={effect['requests_by_operation'] or 'none'} | "
+          f"primary={effect['primary_verdicts'] or 'none'} | "
+          f"extract_qc items={effect['extract_qc_items'] or 'none'} "
+          f"urgency(extracted>jev)={effect['extract_qc_urgency'] or 'none'} | "
+          f"patient quality={effect['patient_quality'] or 'none'}")
     ages = snap["queue_ages_s"]
     print("queue ages: " + ", ".join(
         f"{k}={f'{v:.0f}s' if v is not None else 'unknown'}"

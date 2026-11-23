@@ -189,6 +189,42 @@ def test_observation_reports_invalid_usage_as_unknown(tmp_path):
         db.close()
 
 
+def test_jev_effect_counts_requests_and_answers_in_window(tmp_path):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        now = time.time()
+        rows = [
+            ("semantic_usage", "{}", {"jev_requests": 1}, now),
+            ("semantic_usage", "{}", {"jev_requests": 1, "operation": "patient_source_quality"}, now),
+            ("semantic_usage", "{}", {"jev_requests": 5}, now - 20 * 86400),  # outside window
+            ("semantic_assess", {"verdicts": {"P01": {"noul": 0.9, "verdict": "MATCH"},
+                                              "P02": {"noul": 0.1, "verdict": "NO_MATCH"}}}, {}, now),
+            ("semantic_assess", {"verdicts": {}}, {"skipped": "prefilter_no_signal"}, now),
+            ("extract_qc", {"items": [{"verdict": "MATCH"}, {"verdict": "NO_MATCH"}],
+                            "urgency": {"extracted": "routine", "jev": "high"}}, {}, now),
+            ("extract_qc", "{broken", {}, now),
+            ("patient_context_source_quality_fail_v1", "{}", {}, now),
+        ]
+        with db.db:
+            for kind, content, meta, ts in rows:
+                db.db.execute(
+                    "INSERT INTO artifacts(kind,content,meta,created_at) VALUES(?,?,?,?)",
+                    (kind, content if isinstance(content, str) else json.dumps(content),
+                     json.dumps(meta), ts))
+
+        effect = semantic_observe.observe(str(tmp_path / "ledger.db"), days=14)["jev_effect"]
+        assert effect == {
+            "window_days": 14,
+            "requests_by_operation": {"semantic_drain": 1, "patient_source_quality": 1},
+            "primary_verdicts": {"MATCH": 1, "NO_MATCH": 1},
+            "extract_qc_items": {"MATCH": 1, "NO_MATCH": 1},
+            "extract_qc_urgency": {"routine>high": 1},
+            "patient_quality": {"patient_context_source_quality_fail_v1": 1},
+        }
+    finally:
+        db.close()
+
+
 def test_observation_skips_invalid_job_json(tmp_path):
     db = Ledger(str(tmp_path / "ledger.db"))
     try:
