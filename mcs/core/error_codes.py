@@ -1,9 +1,11 @@
 """Fixed error-code registry for ``mcs_util.safe_error_code``.
 
-Contains every code-shaped string literal that runtime code raises as the
-sole complete ``ValueError`` message (directly or via the ``_err``
-helper), extracted by AST so concatenation prefixes and dynamic
-messages are excluded. Audited fixed validation-return codes are also
+Contains every code-shaped string literal that runtime code (``mcs/``
+except ``*/eval``, ``adapters/``, ``hermes_plugin/``, ``mcs_standalone/``,
+``lineworks_adapter/``) raises as the sole complete ``ValueError`` message
+(directly or via the ``_err`` helper), extracted by AST so concatenation
+prefixes and dynamic messages are excluded;
+``tests/core/test_error_code_registry.py`` fails on an unregistered one. Audited fixed validation-return codes are also
 registered explicitly. ``safe_error_code`` echoes a message only on an
 exact match; anything else collapses to the exception type name so user
 text, paths, SQL and secrets can never reach logs or CLI output. Non-code
@@ -149,6 +151,18 @@ KNOWN_ERROR_CODES = frozenset({
     "unsupported_transport", "until_invalid", "until_needs_offset", "update_busy", "update_in_progress", "update_journal_unverified", "update_lock_missing", "wait_fn_invalid",
     "wait_s_invalid", "watchdog_grace_config_invalid", "witness_columns", "witness_inconsistent", "witness_limit", "witness_params", "witness_row", "witness_sql",
     "witness_value", "worker_not_stopped", "worker_reason_invalid", "worker_status_path_invalid", "worker_stop_unverified", "worker_transport_invalid",
+    # Raised literals found by tests/core/test_error_code_registry.py (2026-11-23).
+    "RELEASE_AUTO_REQUEST_INVALID", "RELEASE_HEALTH_INVALID", "RESERVED_OWNER_BYTES", "SDC_RUNTIME_ENTRY_LOCK_REENTRY", "SDC_TELEMETRY_CONNECTION_REQUIRED", "SDC_TELEMETRY_POLICY_INVALID", "SDC_TELEMETRY_RUNTIME_UNKNOWN", "STAGE_DIR",
+    "STAGE_TARGET", "actor_required", "admin_required", "anthropic_profile_invalid", "attachment_paid_scan_incomplete", "bad_arguments", "bad_identities", "bad_master_impact",
+    "bad_names", "bad_processing_header_quiet", "bad_reason", "bad_request", "bad_since", "configuration_unreadable", "context_role_invalid", "database_unverified",
+    "drug_catalog_code", "drug_catalog_limit", "drug_catalog_query", "extract_proof_prior_missing", "extract_scope_invalid", "extract_upgrade_scope_unverified", "fresh_resume_unverified", "historical_contracts_invalid",
+    "invalid_previsit_limit", "invalid_previsit_time", "local_rebuild_after_invalid", "local_rebuild_database_unverified", "local_rebuild_limit_invalid", "max_bytes_invalid", "not_found", "not_qualified",
+    "observation_input_invalid", "observation_timeout", "patient_context_role_invalid", "pending_context_superseded", "previsit_state_corrupt", "project_not_allowed", "prompt_contract", "provider_pending_invalid",
+    "provider_pending_missing", "provider_pending_not_committed", "provider_pending_readback_failed", "provider_profile_invalid", "queue_unverified", "receipt_inconsistent", "remote_access_not_configured", "reserve_fn_invalid",
+    "restart_unverified", "restore_time_invalid", "role_not_allowed", "route_failed", "route_unavailable", "semantic_prior_registry_config_invalid", "semantic_prior_registry_source_unverified", "semantic_prior_registry_state_unverified",
+    "semantic_prior_registry_unavailable", "slack_setup_client_unverified", "still_assigned", "tally_invalid", "too_many_stops", "unknown_module", "unknown_section", "upgrade_scope_kind_invalid",
+    "upgrade_scope_version_invalid", "visit_not_qualified",
+    "llm_admission_path_unset",
 })
 
 

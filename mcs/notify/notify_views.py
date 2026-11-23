@@ -19,7 +19,7 @@ from clinical_display import vital_line
 import drug_map
 from drug_map import candidate_note
 from rollup import current_cached_refs
-from mcs_queries import karte_summary_block
+from mcs_queries import karte_summary_block, karte_summary_bound
 from patient_context import DETAIL_LABELS, LABELS, context_items, extract_context, pharmacy_state_items
 import patient_context_status
 from mcs_contract import project_url
@@ -28,8 +28,8 @@ from mcs_util import fold_map, search_fold
 from stamp_format import stamp_counts
 import notify_render
 from notify_render import (
-    render_source_generation, posted_hhmm, inline_text, mmdd, patient_label, project_display_name,
-    source_fingerprint,
+    render_source_generation, posted_time_label, inline_text, mmdd, patient_label, project_display_name,
+    room_url, source_fingerprint,
     actor_label, card_reaction_lines,
     card_reactions, today_jst)
 
@@ -347,7 +347,7 @@ def _karte_summary_from_artifact(db, project_id) -> dict | None:
     """Newest karte_summary artifact in the rollup's block shape; None
     when the summary was never fetched or the newest one is unreadable —
     an older summary never stands in for it. A summary of another karte
-    than the patient's current one is not this patient's (read_model rule)."""
+    than the patient's current one is not this patient's (mcs_queries.karte_summary_bound)."""
     row = db.execute(
         "SELECT a.content,a.meta,p.karte_id FROM artifacts a "
         "LEFT JOIN patients p ON p.project_id=a.project_id WHERE a.kind='karte_summary' "
@@ -365,9 +365,7 @@ def _karte_summary_from_artifact(db, project_id) -> dict | None:
         meta = None
     if not isinstance(c, dict):
         return None
-    # patients.karte_id is never cleared once linked (COALESCE upsert); a NULL one is a pre-link legacy row
-    if row["karte_id"] is not None and not (isinstance(meta, dict) and type(meta.get("karte_id")) is int
-                                            and meta["karte_id"] == row["karte_id"]):
+    if not karte_summary_bound(meta, row["karte_id"]):
         return None
     return karte_summary_block(c)
 
@@ -712,13 +710,20 @@ def _question_term(query):
     return term, latest
 
 
+# Why a room's originals were not searched or opened (patient_search raises patient_scope_unavailable).
+_SCOPE_CLOSED = "この患者はアーカイブ済みか閲覧権限がないため、"
+SEARCH_SCOPE_UNAVAILABLE = _SCOPE_CLOSED + "原資料を検索していません。"
+SOURCE_SCOPE_UNAVAILABLE = _SCOPE_CLOSED + "原資料を表示していません。"
+
+
 def patient_search_view(db, project_id, query, *, cfg=None, cursor=None, keep_message_id=False,
                         room_link=True) -> dict:
     """Search all terms across patient originals with resumable, source-bound pages.
 
     ``keep_message_id`` adds the post to open (the post itself, or the post carrying the attachment),
     the source kind and the OCR page for a reader that links rows to posts; chat cards leave them out.
-    ``room_link=False`` leaves the patient's MCS room address out of the head line."""
+    The head line carries the room's MCS address only for a patient room (``room_url``);
+    ``room_link=False`` leaves it out for every room."""
     import patient_search
     patient_search.parse_query(query)
     question = _question_term(query)
@@ -735,11 +740,12 @@ def patient_search_view(db, project_id, query, *, cfg=None, cursor=None, keep_me
         items.append({"project_id": project_id, "source_ref": row['source_ref'],
                       **({"message_id": row['message_id'], "source": row['source'], "page": row['page']}
                          if keep_message_id else {}),
-                      "text": f"・{prefix}{mmdd(row['posted_at'])} {posted_hhmm(row['posted_at'])} {label}{availability} "
+                      "text": f"・{prefix}{posted_time_label(row['posted_at'])} {label}{availability} "
                               f"{inline_text(row['profession'], 20) or '職種不明'}: "
                               f"{_snippet(row['body_text'], terms[0], width=160)}"})
     count = f"表示{len(items)}件（続きあり）" if result['next_cursor'] else f"{len(items)}件"
-    head = [f"{count}（取得済み原資料・新しい投稿順）" + (f"— MCS: {project_url(project_id)}" if room_link else "")]
+    link = room_url(db, project_id) if room_link else None
+    head = [f"{count}（取得済み原資料・新しい投稿順）" + (f"— MCS: {link}" if link else "")]
     if question and question[0]:
         head.insert(0, f"「{inline_text(question[0], 40)}」を含む原資料を検索しました"
                     + ("（新しい投稿から順に確認）" if question[1] else ""))
@@ -759,12 +765,16 @@ def patient_search_view(db, project_id, query, *, cfg=None, cursor=None, keep_me
     return {"title": f"🔎 {name} — 「{inline_text(query, 40)}」の検索結果",
             "head": head, "items": items, "more": 0,
             "next_cursor": result['next_cursor'], "range_complete": result['range_complete'],
-            # an unscanned range keeps its scope wording: no match there is not no record
-            "empty": ("この範囲の解析が完了した原資料には、この分類で一致するものはありません。"
+            # this range's unsearched counts, for a reader that adds them up across 「続きを検索」 ranges
+            "skipped": {"ocr_pending": result['pending'], "body_unavailable": result['unavailable'],
+                        "unclassified": result['unclassified']},
+            # no match says what was searched: an unsearched, unfetched or unanalysed source is not no record
+            "empty": ("この範囲の解析済みの原資料には、この分類で一致する記載は見つかりませんでした。"
                       if result['unclassified'] and result['next_cursor'] else
-                      "解析が完了した原資料には、この分類で一致するものはありません。" if result['unclassified'] else
-                      "この範囲には一致する原資料がありません。" if result['next_cursor'] else
-                      "検索した取得済み原資料に一致するものはありません。"),
+                      "調べた範囲の解析済みの原資料には、この分類で一致する記載は見つかりませんでした。"
+                      if result['unclassified'] else
+                      "この範囲の取得済み原資料には、一致する記載は見つかりませんでした。" if result['next_cursor'] else
+                      "調べた範囲の取得済み原資料には、一致する記載は見つかりませんでした。"),
             "notes": notes}
 
 
@@ -958,8 +968,7 @@ def meds_view(db, project_id, message_id, *, can_report=False,
         unverified = [(text, ref if structured_view.dictionary_unmatched(ref) else current(ref))
                       for text, ref in unverified]
     refs = [ref for _, ref in meds + unverified if ref and not structured_view.dictionary_unmatched(ref)]
-    when = f"{mmdd(row['posted_at'])} {posted_hhmm(row['posted_at'])}"
-    head = [f"{'日時不明' if '?' in when else when} "
+    head = [f"{posted_time_label(row['posted_at'])} "
             f"{inline_text(row['profession'], 20) or '職種不明'}の投稿 — "
             f"{len(meds) + len(unverified)}件"]
     attachment_pending = False

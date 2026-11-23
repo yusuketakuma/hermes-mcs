@@ -314,6 +314,10 @@ def _broker(path: str | None = None):
     """Process-cached broker handle — one SQLite connection per path."""
     import llm_admission
     p = path or _admission_db_path()
+    if not p:
+        # "" means admission is off: Broker("") would open a throwaway database and a
+        # ".owner.lock" in the current directory instead of the configured store
+        raise ValueError("llm_admission_path_unset")
     b = _BROKERS.get(p)
     if b is not None and not getattr(b, "_closed", False):
         return b

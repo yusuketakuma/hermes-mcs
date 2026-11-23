@@ -40,7 +40,7 @@ import mcs_queries
 from stamp_read import reaction_actor_summary
 from mcs_queries import EXTRACT_FEEDBACK_KIND, JST, feedback_current
 from mcs_requests import payload_hash, positive
-from mcs_contract import valid_group_name, valid_id
+from mcs_contract import project_url, valid_group_name, valid_id
 from mcs_util import valid_hash
 from message_observations import get_message_metadata
 from message_metadata import is_self_sender, mentions_self
@@ -287,23 +287,34 @@ def project_display_name(db, pid, *, sqlite_id=False) -> str:
     return (identity["patient_name"] or "").strip()
 
 
+def room_url(db, pid) -> str | None:
+    """The MCS address of a patient room; None for a group room or unknown row, whose address is not
+    derived from the project ID."""
+    identity = project_identity(db, pid)
+    return None if identity is None or identity["group"] else project_url(pid)
+
+
 def patient_label(db, pid) -> str:
     """Display label capped at 30 characters, else ``project <pid>``."""
     return inline_text(project_display_name(db, pid), 30) or f"project {pid}"
 
 
+UNKNOWN_DATE = "日付不明"
+UNKNOWN_TIME = "時刻不明"
+
+
 def mmdd(posted_at) -> str:
-    # posted_at is ISO local text; keep its MM-DD without re-parsing zones
+    """MM-DD of ISO local text without re-parsing zones, or UNKNOWN_DATE — never a row of ?? placeholders."""
     if isinstance(posted_at, str) and len(posted_at) >= 10:
         return posted_at[5:10]
-    return "??-??"
+    return UNKNOWN_DATE
 
 
 def _deleted_line(posted_at, sender: str) -> str:
     """A deleted post's line: its time and sender when known, never a
-    row of ??-?? placeholders."""
-    when = f"{mmdd(posted_at)} {posted_hhmm(posted_at)}"
-    known = [x for x in (when if "?" not in when else "",
+    placeholder for an unknown time."""
+    when = posted_time_label(posted_at)
+    known = [x for x in (when if when not in ("日時未取得", "日時不明") else "",
                          sender if sender not in ("", "?") else "") if x]
     return " ".join(known + ["（削除された投稿）"])
 
@@ -311,13 +322,16 @@ def _deleted_line(posted_at, sender: str) -> str:
 def posted_hhmm(posted_at) -> str:
     if isinstance(posted_at, str) and len(posted_at) >= 16:
         return posted_at[11:16]
-    return "??:??"
+    return UNKNOWN_TIME
 
 
 def posted_time_label(posted_at) -> str:
-    """MM-DD HH:MM of a post, or a plain word when no time is stored —
-    never a row of question marks on a notification."""
-    return f"{mmdd(posted_at)} {posted_hhmm(posted_at)}" if posted_at else "日時未取得"
+    """MM-DD HH:MM of a post, or plain words when no time is stored (日時未取得) or it cannot be read
+    (日時不明); a known day without a time keeps the day."""
+    if not posted_at:
+        return "日時未取得"
+    day = mmdd(posted_at)
+    return "日時不明" if day == UNKNOWN_DATE else f"{day} {posted_hhmm(posted_at)}"
 
 
 def thread_stamp_row(db, mid, sender_id, *, observed_time=True) -> str:
@@ -526,11 +540,14 @@ def attachment_ocr_records(db, mid):
     return records
 
 
+# Every state attachment_ocr.view / current reports; an unknown one says so instead of a wrong word.
+OCR_STATE_LABELS = {"complete": "完了", "empty": "文字なし", "unprocessed": "未処理", "failed": "失敗",
+                    "unsupported": "対応していない形式", "unavailable": "原本なしのため作成できず",
+                    "rejected_by_policy": "表の読み取りが不確かなため除外"}
+
+
 def _ocr_label(record):
-    labels = {"complete": "完了", "empty": "文字なし", "failed": "失敗",
-              "unsupported": "対象外", "unavailable": "利用不可", "processing": "処理中",
-              "rejected_by_policy": "設定によりOCR対象外・表構造不整合・原本未評価"}
-    return labels.get(record["state"], "処理待ち")
+    return OCR_STATE_LABELS.get(record["state"], "状態不明")
 
 
 def _ocr_analysis_label(record, *, legacy=False):
@@ -988,7 +1005,7 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
             containers = [{"type": "heading", "text":
                            f"💬 {patient_heading(db, card['project_id'])}"}]
             meta = [URGENCY_PLAIN[u] for u in ("llm", "rule") if u in urgency][:1]
-            if "?" not in mmdd(first.get("posted_at")):
+            if mmdd(first.get("posted_at")) != UNKNOWN_DATE:
                 meta.append(f"{mmdd(first.get('posted_at'))}〜")
             if context:
                 meta.append(context)
@@ -1002,7 +1019,7 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
         else:
             containers = [{"type": "heading", "text":
                            f"💬 {patient_heading(db, card['project_id'])}"
-                           + ("" if "?" in mmdd(first.get("posted_at"))
+                           + ("" if mmdd(first.get("posted_at")) == UNKNOWN_DATE
                               else f" · 起点 {mmdd(first.get('posted_at'))}")
                            + (f" {tag}" if tag else "")}]
             if context:

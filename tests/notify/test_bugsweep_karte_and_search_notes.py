@@ -27,7 +27,7 @@ def test_a_category_search_counts_unanalysed_text_matches(led):
     view = notify_views.patient_search_view(led.db, 1, "残薬 分類:服薬管理")
     assert view["items"] == []
     assert "解析未完了のため分類を判定できない原資料が1件あります。" in view["notes"]
-    assert view["empty"] == "解析が完了した原資料には、この分類で一致するものはありません。"
+    assert view["empty"] == "調べた範囲の解析済みの原資料には、この分類で一致する記載は見つかりませんでした。"
 
 
 def test_a_search_without_category_needs_no_classification(led):
@@ -51,7 +51,7 @@ def test_an_unscanned_range_keeps_its_scope_wording_with_unclassified_matches(le
 
     monkeypatch.setattr(patient_search, "search", limited)
     view = notify_views.patient_search_view(led.db, 1, "残薬 分類:服薬管理")
-    assert view["empty"] == "この範囲の解析が完了した原資料には、この分類で一致するものはありません。"
+    assert view["empty"] == "この範囲の解析済みの原資料には、この分類で一致する記載は見つかりませんでした。"
 
 
 def test_summary_deadlines_are_judged_at_the_time_given():

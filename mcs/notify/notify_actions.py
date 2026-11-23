@@ -21,7 +21,8 @@ from mcs_util import loads_dict, safe_error_code
 from notify_render import (anchor_keys, card_body_text, card_content, own_post,
                            parts_text, source_fingerprint)
 from notify_scope import card_row, latest_signals, scope_matches
-from notify_views import (CONTEXT_SECTIONS, drug_search_available, drug_search_view, meds_view, my_tasks_view,
+from notify_views import (CONTEXT_SECTIONS, SEARCH_SCOPE_UNAVAILABLE, SOURCE_SCOPE_UNAVAILABLE,
+                          drug_search_available, drug_search_view, meds_view, my_tasks_view,
                           patient_search_view, patient_summary_text, unacked_view)
 
 # Live source text/prefill/navigation is never copied into durable receipts.
@@ -490,8 +491,7 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
 
 def _patient_search(db, base, card, inputs, params, cfg, now):
     import patient_search
-    from mcs_contract import project_url
-    from notify_render import inline_text, project_display_name, mmdd, posted_hhmm
+    from notify_render import inline_text, project_display_name, posted_time_label, room_url
     allowed = {'ephemeral', 'actor', 'origin_thread_id', 'query', 'cursor', 'source_ref', 'source_page'}
     if (set(params) - allowed or not positive(card['project_id'])
             or 'source_ref' in params and 'cursor' in params
@@ -505,9 +505,12 @@ def _patient_search(db, base, card, inputs, params, cfg, now):
         if inputs or type(page) is not int or page < 0:
             return {**base, 'outcome': 'rejected', 'error': 'action_not_applicable'}
         try:
-            source = patient_search.read_source(db, card['project_id'], params['source_ref'], cfg=cfg)
-        except ValueError:
-            source = None
+            source, missing = patient_search.read_source(db, card['project_id'], params['source_ref'], cfg=cfg), None
+        except ValueError as exc:
+            source, missing = None, str(exc)
+        if missing == 'patient_scope_unavailable':
+            return {**base, 'outcome': 'applied', 'action': 'body', 'title': '原資料を表示していません',
+                    'body': SOURCE_SCOPE_UNAVAILABLE}
         _private_button(db, base, card, now, navigation, token_ctx, 'search', '検索結果に戻る',
                         {'query': query} if query else {})
         if source is None:
@@ -526,7 +529,7 @@ def _patient_search(db, base, card, inputs, params, cfg, now):
                  f"投稿#{source['parent_message_id']}の添付OCR {source['page']}ページ")
         name = inline_text(project_display_name(db, card['project_id']), 30)
         label += (f" — {'添付元 ' if source['source'] != 'chat' else ''}"
-                  f"{mmdd(source.get('posted_at'))} {posted_hhmm(source.get('posted_at'))} "
+                  f"{posted_time_label(source.get('posted_at'))} "
                   f"{inline_text(source.get('profession'), 20) or '職種不明'}")
         title = f'👤 {name} — {label}' + (f'（{page + 1}/{total}）' if total > 1 else '')
         start = page * patient_search.SOURCE_PAGE_CHARS
@@ -534,14 +537,17 @@ def _patient_search(db, base, card, inputs, params, cfg, now):
                         if source.get('original_available') is False else '')
         return {**base, 'outcome': 'applied', 'action': 'body', 'title': title,
                 'body': source['body_text'][start:start + patient_search.SOURCE_PAGE_CHARS]
-                        + availability + '\n\nMCS: ' + project_url(card['project_id']),
+                        + availability + (f'\n\nMCS: {link}' if (link := room_url(db, card['project_id'])) else ''),
                 'navigation': navigation, 'token_ctx': token_ctx}
     if not query:
         return {**base, 'outcome': 'applied', 'action': 'search', 'modal': True,
                 'params': {}, 'form': {'patient_label': inline_text(project_display_name(db, card['project_id']), 60)}}
     try:
         view = patient_search_view(db, card['project_id'], query, cfg=cfg, cursor=params.get('cursor'))
-    except ValueError:
+    except ValueError as exc:
+        if str(exc) == 'patient_scope_unavailable':
+            return {**base, 'outcome': 'applied', 'action': 'body', 'title': '原資料を検索していません',
+                    'body': SEARCH_SCOPE_UNAVAILABLE}
         return {**base, 'outcome': 'applied', 'action': 'body', 'title': '検索条件を確認してください',
                 'body': '検索語を入力してください。絞込みは 資料:投稿 または 資料:添付、'
                         '開始:YYYY-MM-DD、終了:YYYY-MM-DD、分類:服薬管理 などを指定できます。'}

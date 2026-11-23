@@ -22,6 +22,29 @@ def field_counts(rows):
     return [{"key": key, "count": count} for key, count in sorted(counts.items())]
 
 
+def _with_unfetched_values(db, targets, now):
+    """Add an observation_values target for every item of the validated observation-item list that has no
+    stored values attempt, so an item the rotation has not reached reads 未取得 (state unknown, reason
+    not_fetched) instead of being missing; never a fact that the item has no values."""
+    from project_metadata_view import get_project_metadata
+
+    fetched = {(t["project_id"], t["item_id"]) for t in targets if t["dataset"] == "observation_values"}
+    added = []
+    for target in targets:
+        if target["dataset"] != "observation_items":
+            continue
+        target["_result"] = get_project_metadata(db, target["project_id"], "observation_items", now=now)
+        for row in target["_result"]["rows"]:
+            lab = row.get("lab_test_item") if isinstance(row, dict) else None
+            item_id = lab.get("id") if isinstance(lab, dict) else None
+            if type(item_id) is not int or item_id <= 0 or (target["project_id"], item_id) in fetched:
+                continue
+            fetched.add((target["project_id"], item_id))
+            added.append({"project_id": target["project_id"], "dataset": "observation_values",
+                          "item_id": item_id, "_item_row": row})
+    return sorted(targets + added, key=lambda t: (t["project_id"], t["dataset"], t["item_id"] or 0))
+
+
 def registered_data(db, scope, project_id, limit):
     """Read optional registered clinical data separately from chat and memo reports."""
     if not table_exists(db, "patients") or not {"project_type", "karte_id"} <= {
@@ -48,16 +71,18 @@ def registered_data(db, scope, project_id, limit):
           AND typeof(json_extract(a.content,'$.item_id'))='integer'
           AND json_extract(a.content,'$.item_id')>0 ELSE 0 END
         ) """
-    total = db.execute(sql + "SELECT COUNT(*) FROM targets", params).fetchone()[0]
-    query = sql + "SELECT * FROM targets ORDER BY project_id,dataset,item_id"
-    if limit is not None:
-        query += " LIMIT ?"
-        params = [*params, limit]
     now = snapshot_meta(db)["generated_at"]
+    targets = [dict(row) for row in db.execute(
+        sql + "SELECT * FROM targets ORDER BY project_id,dataset,item_id", params)]
+    targets = _with_unfetched_values(db, targets, now)
+    total = len(targets)
     records = []
-    for target in db.execute(query, params):
-        result = get_project_metadata(db, target["project_id"], target["dataset"],
-                                      item_id=target["item_id"], now=now)
+    for target in targets if limit is None else targets[:limit]:
+        result = target.pop("_result", None) or get_project_metadata(
+            db, target["project_id"], target["dataset"], item_id=target["item_id"], now=now)
+        if result["definition"] is None and target.get("_item_row") is not None:
+            # no values attempt carries a definition yet: the validated item list names the item
+            result = {**result, "definition": target["_item_row"]}
         record = {"project_id": target["project_id"], "dataset": target["dataset"],
                   "source": "mcs_structured", "state": result["state"],
                   "rows_total": len(result["rows"]),

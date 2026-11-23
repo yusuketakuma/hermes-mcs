@@ -194,7 +194,7 @@ def _ago(seconds) -> str:
 def _observed(meta) -> str:
     return (f"観測 {datetime.fromtimestamp(meta['reactions_observed_at'], JST):%m-%d %H:%M}"
             if meta["reactions"] is not None else
-            "スタンプ取得不正" if meta["reactions_status"] == "invalid"
+            "スタンプ記録を読み取れません" if meta["reactions_status"] == "invalid"
             else "スタンプ未取得")
 
 
@@ -245,7 +245,7 @@ def _response_state(db, r, self_id, as_of) -> tuple:
     stamp_state = observed["self_reaction"]["state"]
     mine = (bool(observed["self_reaction"]["types"])
             if stamp_state == "observed" else None)
-    stamp = ("本人スタンプ" + ("取得不正" if meta["reactions_status"] == "invalid"
+    stamp = ("本人スタンプ" + ("記録を読み取れません" if meta["reactions_status"] == "invalid"
                               else "再取得失敗" if stamp_state == "failed"
                               else "未取得") if mine is None
              else "本人スタンプあり" if mine else "本人スタンプ観測なし")
@@ -618,7 +618,7 @@ def _nonzero(parts) -> str:
 
 def _stamp_gaps(unfetched, invalid) -> str:
     return "・".join(t for t, n in ((f"スタンプ未取得 {unfetched}投稿", unfetched),
-                                    (f"取得不正 {invalid}投稿", invalid)) if n)
+                                    (f"スタンプ記録を読み取れない {invalid}投稿", invalid)) if n)
 
 
 _JOB_JA = {"extract_claim": "抽出準備", "extract_qc": "抽出監査",

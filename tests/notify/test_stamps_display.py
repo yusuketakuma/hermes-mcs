@@ -141,7 +141,7 @@ def test_unreacted_own_posts_section_only_when_published(led):
     assert "・project 1 2日経過・観測" in sec and "・project 1 7日経過" in sec
     for mid in (101, 102, 104, 105, 106, 107, 108, 109):
         assert f"message {mid} " not in sec
-    assert "スタンプ未取得 1投稿・取得不正 1" in sec
+    assert "スタンプ未取得 1投稿・スタンプ記録を読み取れない 1" in sec
     assert "合成同名" not in sec and "本文" not in sec
 
 
@@ -261,7 +261,7 @@ def test_self_mentioned_and_evidence_flags(led, tmp_path):
     _meta(led, 100, mentions=[{"type": "user", "id": SELF}], is_bookmarked=True)
     assert self_mentioned(led.db, 100) is None          # self ID unknown
     assert flag_lines(led.db, get_message_metadata(led.db, 100)) == [
-        "メンション: 本人判定不可（本人ID不明）", "しおり: あり", "ピン留め: 未取得"]
+        "@自分宛て: 自分のアカウントを特定できません", "ピン留め: 未取得", "ブックマーク: あり"]
     _self_known(led)
     assert self_mentioned(led.db, 100) is True
     _meta(led, 100, mentions=[{"type": "user", "id": OTHER}], is_pinned=False,
@@ -273,7 +273,7 @@ def test_self_mentioned_and_evidence_flags(led, tmp_path):
     try:
         message = view.read("evidence", project=1, message_id=100)["message"]
         assert message["metadata_flags"] == [
-            "メンション: 本人宛なし", "しおり: 取得不正", "ピン留め: なし"]
+            "@自分宛て: なし", "ピン留め: なし", "ブックマーク: 読み取れません"]
     finally:
         view.close()
 
@@ -287,7 +287,7 @@ def test_coverage_counts_stamp_gaps_in_window(led):
     _meta(led, 101, reactions=[])
     _meta(led, 102, reactions=["broken"])
     cov = _section(_digest(led), "取得状況")
-    assert "・スタンプ未取得 1投稿・取得不正 1" in cov
+    assert "・スタンプ未取得 1投稿・スタンプ記録を読み取れない 1" in cov
 
 
 def test_fit_parts_folds_list_rows_not_disclosures(led):
