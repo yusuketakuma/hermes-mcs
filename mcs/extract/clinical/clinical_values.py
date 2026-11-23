@@ -537,7 +537,8 @@ def _specimen_sections(quote: str, evidence, starts: list, ends: list,
         bare = bool(match["word"]) and not suffix and quote[start] not in "([【<"
         # A bare word (尿, 沈渣) must start a clause (after 、。・/; or a particle: 蛋白(1+)、沈渣 WBC);
         # glued to a word it heads nothing (排尿, 血尿, 軟便, 今朝排便).
-        dated = bare and bool(_DATE_BEFORE.search(quote, max(line_start, start - 12), start))   # 本日尿
+        # A date or time word may be glued before a bare word or a blood heading (本日尿, 本日血液検査).
+        dated = bool((bare or match["blood"]) and _DATE_BEFORE.search(quote, max(line_start, start - 12), start))
         if (bare or match["blood"]) and not (first or dated or _word_starts(quote, start, evidence, starts, ends)):
             continue
         # A bare word that ends its line is a heading only when it stands alone, after a space or
@@ -565,7 +566,9 @@ def _specimen_sections(quote: str, evidence, starts: list, ends: list,
                 _spaced(evidence, starts, ends, pos) for pos in range(end + 1, result.end(1))))
         if heading:
             at = end
-            open_ended = first or end in line_ends
+            # A heading that starts its line (after marks, a date or a time word: 11/20 尿検査：pH 6.0)
+            # or ends it names the following lines; one after prose names its own line only.
+            open_ended = end in line_ends or bool(_LINE_LEAD.fullmatch(quote, line_start, start))
             headings.append((start, end, None if open_ended else line_end, bool(match["word"])))
     blank = [at for at in lines if len((evidence[ends[at - 1]:starts[at]] + "x").splitlines()) > 2]
     opened, closed_at = [], []
@@ -575,13 +578,24 @@ def _specimen_sections(quote: str, evidence, starts: list, ends: list,
         stop = min(len(quote) if line_end is None else line_end,
                    headings[i + 1][0] if i + 1 < len(headings) else len(quote))
         # A blank line ends the section once one of its results has been read.
-        seen = _SECTION_RESULT.search(quote, end, stop)
-        after = bisect.bisect_right(blank, seen.start()) if seen else len(blank)
+        seen = _first_result(quote, end, stop, lines)
+        after = bisect.bisect_right(blank, seen) if seen is not None else len(blank)
         if after < len(blank):
             stop = min(stop, blank[after])
         opened.append(end)
         closed_at.append(stop)
     return glued, opened, closed_at
+
+
+def _first_result(quote: str, at: int, stop: int, lines: list[int]) -> int | None:
+    """Where the first result between ``at`` and ``stop`` starts, read line by line (folding
+    joins lines, and pH 6.0 / Mg 2.0mg/dL on two lines is no 6.0mg dose)."""
+    while at < stop:
+        line_end = min(stop, _line_span(quote, at, lines)[1])
+        if result := _SECTION_RESULT.search(quote, at, line_end):
+            return result.start()
+        at = line_end if line_end > at else at + 1
+    return None
 
 
 def _in_specimen_section(sections: tuple[set, list, list], at: int) -> bool:
@@ -653,10 +667,12 @@ _LAB_TAIL = re.compile(fold_surface(
 # result, or by a particle and a lab name (尿検査で白血球). After a bare word or a description (の性状, 所見, 検体, データ)
 # only a lab item with its value is a result: 尿：淡黄色 6回, 便の性状：泥状 3回 head nothing.
 # A section names every result, across line breaks and sentence ends, up to a blood heading
-# (血液検査, 採血, 血算, CBC, 末梢血, 血清, 生化学), another specimen heading, or a blank line
-# that follows a result of the section; a heading in the middle of a line that a result follows
-# names the rest of its line only. Statements (尿検査は異常なし) and other notes (再検査,
-# 本日測定, 【看護師より】) head nothing and end nothing.
+# (血液検査, 採血, 血算, CBC, 末梢血, 血清, 生化学, also after a date or time word: 本日血液検査),
+# another specimen heading, or a blank line that follows a result of the section (a dose or a
+# count such as 1錠 or 6回 is none). A heading that starts its line (after marks, a date or a
+# time word: 11/20 尿検査：pH 6.0) names the following lines; one after prose that a result
+# follows names the rest of its line only. Statements (尿検査は異常なし) and other notes
+# (再検査, 本日測定, 【看護師より】) head nothing and end nothing.
 _SPECIMEN_WORDS = ("カテ尿|導尿|採尿|自然尿|新鮮尿|部分尿|スポット尿|随時尿|早朝尿|中間尿|蓄尿|検尿|検便"
                    "|尿|沈渣|髄液|胸水|腹水|便|喀痰")
 _SPECIMEN_SUFFIX = ("(?:中|沈渣)?(?:の検査結果|の検査|検査の結果|検査結果|検査所見|検査データ|定性検査|一般検査"
@@ -678,12 +694,17 @@ _WHEN = (r"(?:(?:[0-9]{2,4}[/.年-])?[0-9]{1,2}[/.月][0-9]{1,2}日?"
 _DATE_BEFORE = re.compile(fold_surface(_WHEN + r"(?:にて|の|で|に|は|、)?$"))
 # Only marks, digits, brackets and a bracketed tag may stand before a bare specimen word on
 # its line (・尿, ①尿, A.尿, 【結果】尿).
-_BARE_HEADING_LINE = re.compile(r"(?:【[^【】]*】|[a-z][.)]|[^一-龥々ァ-ヺーa-z])*")
+_BARE_HEADING_LINE = re.compile(r"(?>【[^【】]*】|[a-z][.)]|[^一-龥々ァ-ヺーa-z])*+")
+# What may stand before a heading that starts its line: those, then a date or a time word.
+_LINE_LEAD = re.compile(_BARE_HEADING_LINE.pattern + fold_surface(rf"(?:{_WHEN}(?:にて|の|で|に|は|、)?)?"))
 _LINE_BULLETS = re.compile(fold_surface(r"(?:[・\-*•●○◦◆◇■□▪>]|[0-9]{1,2}[.)]|\([0-9]{1,2}\))*[(\[【<]?"))
 _LAB_NAME = re.compile(fold_surface(_LAB_SPELLINGS))
-# A result: an item word followed by a number or a qualitative mark (pH 6.0, 比重 1.015, 蛋白(1+)).
+# A result: an item word followed by a number, a qualitative mark or a closed qualitative word
+# (pH 6.0, 比重 1.015, 蛋白(1+), 白血球 陰性; not 陰性疑い). A dose or a count (1錠, 6回) is none.
 # Each word is tried from its first character only, so a long word costs its length once.
-_RESULT_NUMBER = fold_surface(r"(?:値|は|:|=)*\(?[0-9+±-]")
+_RESULT_NUMBER = fold_surface(
+    r"(?:値|は|:|=)*(?:\(?[+±-]|\(?[0-9]+(?:\.[0-9]+)?(?![0-9.]|錠|回|本|個|包|袋|滴|枚|カプセル|(?:mg|μg|mcg)(?!/)|日)"
+    r"|(?:陰性|陽性|正常|異常なし)(?!疑))")
 _SECTION_RESULT = re.compile(fold_surface(
     rf"({_LAB_SPELLINGS}|(?<![a-z0-9])[a-z][a-z0-9]*|(?<![ァ-ヺー])[ァ-ヺー]++|[一-龥]{{1,6}})") + _RESULT_NUMBER)
 # After a bare specimen word (尿 WBC 30) only a lab item is a result: 尿 量 500ml is a note.

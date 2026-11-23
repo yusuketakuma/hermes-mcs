@@ -905,8 +905,8 @@ def test_the_layout_grammars_still_accept_their_readings(grammar, text):
     assert getattr(clinical_values, grammar).fullmatch(clinical_values.fold_surface(text))
 
 
-# A specimen heading names every result of its section, up to a sentence end, a blank
-# line or another heading; a line break between results of the section does not end it.
+# A specimen heading names every result of its section, across line breaks and sentence ends,
+# up to another heading or a blank line after one of its results.
 _SPECIMEN_SECTIONS = (
     "{s}検査：{item}",
     "{s}検査\n{item}",
@@ -956,7 +956,7 @@ def test_a_specimen_heading_names_every_result_of_its_section(specimen, layout, 
 @pytest.mark.parametrize("specimen", _SPECIMEN_WORDS)
 @pytest.mark.parametrize("layout", _SECTION_ENDS)
 @pytest.mark.parametrize("name,value,unit", _SHARED_ITEMS)
-def test_a_sentence_end_a_blank_line_or_a_blood_heading_ends_the_specimen_section(specimen, layout, name,
+def test_a_statement_a_blank_line_after_a_result_or_a_blood_heading_ends_the_specimen_section(specimen, layout, name,
                                                                                    value, unit):
     body = layout.format(s=specimen, item=f"{name} {value}{unit}")
     assert _validated(name, value, unit, body)["normalized"]["confirmation"] == "quote_supported", body
@@ -1153,3 +1153,49 @@ def test_many_readings_on_one_line_are_cut_in_linear_time(name, body):
 ])
 def test_a_bare_specimen_word_that_starts_a_clause_heads_its_result(body):
     assert _validated("WBC", "30", "/μL", body)["normalized"]["confirmation"] == "unverified", body
+
+
+# A heading that only a date, a mark or a time word precedes on its line starts the line: its
+# section continues over the following lines; a heading after prose names its own line only.
+@pytest.mark.parametrize("body", [
+    "11/20 尿検査：pH 6.0\nWBC 30/μL", "※尿検査：pH 6.0\nWBC 30/μL", "・尿検査：pH 6.0\nWBC 30/μL",
+    "本日尿検査：pH 6.0\nWBC 30/μL", "【結果】尿検査：pH 6.0\nWBC 30/μL",
+    # A dose or a count is no result: the blank line below it does not end the section.
+    "尿検査\n抗菌薬 1錠内服\n\nWBC 30/μL", "尿検査\n排尿 6回\n\nWBC 30/μL",
+    # A qualitative result (陰性, 陽性) is a result after a heading.
+    "尿検査：白血球 陰性\nWBC 30/μL",
+])
+def test_a_specimen_section_after_a_line_lead_a_dose_or_a_qualitative_result(body):
+    assert _validated("WBC", "30", "/μL", body)["normalized"]["confirmation"] == "unverified", body
+
+
+def test_a_qualitative_result_under_a_specimen_heading_stays_a_candidate():
+    assert _validated("白血球", "陰性", None, "尿検査：白血球 陰性")["normalized"]["confirmation"] == "unverified"
+
+
+@pytest.mark.parametrize("body", [
+    "発熱あり、尿検査：蛋白(1+)\nWBC 5200/μL", "尿検査：白血球 陰性疑い\nWBC 5200/μL",
+    "尿検査\n蛋白 陰性\n\nWBC 5200/μL", "尿検査\n潜血 陽性\n\nWBC 5200/μL", "尿検査\npH 6.0\n\nWBC 5200/μL",
+    # A blood heading after a date or time word ends the specimen section.
+    "尿検査：pH 6.0\n本日血液検査：\nWBC 5200/μL", "尿検査：pH 6.0\n本日採血\nWBC 5200/μL",
+    "尿検査：pH 6.0\n入院時血液検査\nWBC 5200/μL", "尿検査：pH 6.0\n11/20血算 WBC 5200/μL",
+])
+def test_a_blood_result_after_a_specimen_section_stays_confirmable(body):
+    assert _validated("WBC", "5200", "/μL", body)["normalized"]["confirmation"] == "quote_supported", body
+
+
+@pytest.mark.parametrize("body", ["【" * 10000 + "WBC 30/μL", "（" * 10000 + "WBC 30/μL", "【結果】" * 2500 + "x WBC 30/μL",
+                                  "尿（" * 5000 + "WBC 30/μL", "尿検査（" + "a" * 10000 + "\nWBC 30/μL"])
+def test_bracket_runs_before_a_heading_are_read_in_linear_time(body):
+    import time
+    began = time.perf_counter()
+    clinical_values.lab_candidate("WBC", "30", "/μL", body)
+    assert time.perf_counter() - began < 1
+
+
+def test_a_line_prefix_of_bracketed_tags_is_read_once():
+    import time
+    began = time.perf_counter()
+    assert clinical_values._BARE_HEADING_LINE.fullmatch("【1】" * 40 + "a") is None
+    assert clinical_values._LINE_LEAD.fullmatch("【1】" * 40 + "a") is None
+    assert time.perf_counter() - began < 1
