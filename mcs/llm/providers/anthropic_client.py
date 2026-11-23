@@ -161,6 +161,11 @@ def select_profile(purpose, chosen, configured_model):
     return (profile, *PROFILE_DEFINITIONS[profile]) if profile in PROFILE_DEFINITIONS else None
 
 
+def legacy_request_effort(previous, current_body):
+    """None: no older Anthropic request shape needs proving, as the original contract never changed on the wire."""
+    return None
+
+
 def request_contract_error(body, selection):
     """The refusal code when ``body`` does not carry the selection's effort, else None."""
     if selection is not None and body.get("output_config") != {"effort": selection["effort"] or "low"}:
