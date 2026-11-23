@@ -354,13 +354,14 @@ def test_prior_run_journal_compact_record_shows_stage_notice(tmp_path):
     assert "残っています" in r.stdout
 
 
-def test_fresh_install_stop_keeps_hold_guidance_not_stage_claim(tmp_path):
-    """A fresh install stopped at brew keeps the approval hold message."""
+def test_fresh_install_stop_says_rerun_resumes_not_stage_claim(tmp_path):
+    """A fresh install stopped at brew before saving settings says a rerun resumes it."""
     home, hermes_home, _stub, env = _world(tmp_path, brew=False)
     r = _run(env, hermes_home)
     assert r.returncode != 0
-    assert "導入は保留中です" in r.stderr
-    assert "担当者に確認してください" in r.stderr
+    assert "設定はまだ保存していません" in r.stderr
+    assert "再実行すると初回導入を再開します" in r.stderr
+    assert "担当者に確認してください" not in r.stderr
 
 
 def test_unchanged_world_readable_repo_pointer_is_made_private(tmp_path):

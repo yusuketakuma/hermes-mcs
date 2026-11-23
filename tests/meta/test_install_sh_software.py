@@ -75,11 +75,27 @@ def test_checkout_with_venv_missing_python_is_rebuilt(tmp_path):
     assert any(c.startswith("uv pip install") for c in _calls(stub_root))
 
 
-def test_fresh_pip_failure_keeps_bootstrap_hold_on_rerun(tmp_path):
+def test_fresh_pip_failure_resumes_first_install_on_rerun(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     failed = _run({**env, "STUB_FAIL_PIP": "1"}, hermes_home)
     assert failed.returncode == 1 and "Hermes 導入に失敗" in failed.stderr
+    assert "再実行すると初回導入を再開します" in failed.stderr
     marker = home / ".mcs/data/.provider-bootstrap-fresh.json"
+    assert marker.exists() and not (home / ".mcs/config.json").exists()
+    retried = _run(env, hermes_home)
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+    assert "同じ初回導入として再開します" in retried.stdout
+    assert (home / ".mcs/config.json").exists() and not marker.exists()
+    assert sum(c.startswith("uv venv") for c in _calls(stub_root)) == 1
+
+
+def test_fresh_hold_with_other_data_is_not_resumed(tmp_path):
+    """Anything beyond the marker means the first install got further: keep the hold."""
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    failed = _run({**env, "STUB_FAIL_PIP": "1"}, hermes_home)
+    assert failed.returncode == 1
+    marker = home / ".mcs/data/.provider-bootstrap-fresh.json"
+    (home / ".mcs/data/synthetic-extra.json").write_text("{}")
     before, calls = marker.read_bytes(), _calls(stub_root)
     retried = _run(env, hermes_home)
     assert retried.returncode != 0 and "初回導入が中断された記録" in retried.stderr

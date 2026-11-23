@@ -1,7 +1,7 @@
 # P0 棚卸し — 更新経路・runtime/writer・lock DAG・baseline/移行物
 
 作業ID: P0 / 仕様: `~/dev/csdc-autoupdate-spec/hermes_csdc_autoupdate_devin_v3_1/04_IMPLEMENTATION_PLAN.md` §2
-実施: 2026-11-11 / Devin / repo: hermes-mcs `feat/mcs-autoupdate-v3-client`（worktree `/Users/yusuke/.mcs-wt/auto-update-v2-20261110`）
+実施: 2026-11-11 / Devin / repo: hermes-mcs `feat/mcs-autoupdate-v3-client`（worktree `~/.mcs-wt/auto-update-v2-20261110`）
 改訂: r47レビュー指摘を反映 — caller検索の非切詰め保存・A→M→O実証拠・C-FD借用・Store read/write caller対応・D-4記述修正
 調査方法: `git grep`/`git ls-files`の全caller列挙を `docs/dev-records/p0-auto-update-inventory/` のraw証拠fileへ非切詰め保存＋主要関数の実読。実機profile（`~/.mcs`）の稼働状態は本worktreeから未確認 — 「実機値」はdeployment雛形とコード既定からの記録であり、実機固有の差分は「未確認」と明記する。
 
