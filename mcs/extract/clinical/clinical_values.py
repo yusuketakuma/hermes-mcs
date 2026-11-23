@@ -510,7 +510,7 @@ def _unit_end(readings: list[tuple[int, str]], at: int, stop: int) -> int:
 
 
 def _word_starts(quote: str, at: int, evidence, starts: list, ends: list) -> bool:
-    """Whether folded position ``at`` starts a word: after a space, a mark, a digit or a particle (本日の尿)."""
+    """Whether folded position ``at`` starts a clause: after a space, a mark or punctuation, a digit or a particle."""
     if not at or _spaced(evidence, starts, ends, at):
         return True
     before = quote[at - 1]
@@ -535,22 +535,28 @@ def _specimen_sections(quote: str, evidence, starts: list, ends: list,
         # A bare word (尿, 便) must start a word: 排尿, 血尿, 軟便 head nothing. A suffixed
         # heading (尿検査, 尿所見) or a bracket is one wherever it starts (本日尿検査).
         bare = bool(match["word"]) and not suffix and quote[start] not in "([【<"
-        if bare and not (_BARE_HEADING_LINE.fullmatch(quote, line_start, start) or quote[start - 1] == ":"
-                         or _spaced(evidence, starts, ends, start)
-                         or _DATE_BEFORE.search(quote, max(line_start, start - 12), start)):
-            continue   # 排尿, 血尿, 軟便, 多量の便, 夜間に尿, 食事良好、便
-        if match["blood"] and not (first or _word_starts(quote, start, evidence, starts, ends)):
+        # A bare word (尿, 沈渣) must start a clause (after 、。・/; or a particle: 蛋白(1+)、沈渣 WBC);
+        # glued to a word it heads nothing (排尿, 血尿, 軟便, 今朝排便).
+        dated = bare and bool(_DATE_BEFORE.search(quote, max(line_start, start - 12), start))   # 本日尿
+        if (bare or match["blood"]) and not (first or dated or _word_starts(quote, start, evidence, starts, ends)):
             continue
+        # A bare word that ends its line is a heading only when it stands alone, after a space or
+        # a colon, or after a date or time word (11/20 尿, 本日、尿); after any other clause it
+        # describes (多量の便, 夜間に尿, 食事良好、便).
+        heading_line = not bare or bool(
+            dated or _BARE_HEADING_LINE.fullmatch(quote, line_start, start) or quote[start - 1] == ":"
+            or _spaced(evidence, starts, ends, start))
         spaced = _spaced(evidence, starts, ends, end)
         closed = match["close"] or match["desu"] or match["particle"] or match["delimiter"] or suffix
         if match["word"] and not (closed or spaced or end in line_ends) and _LAB_NAME.match(quote, end):
             glued.add(end)   # 尿TP, 尿中Ca
             continue
         if end in line_ends:
-            # A heading line (11/20 尿検査); a bare word only stands alone (11/20 尿, not 多量の便).
-            heading = True
+            heading = heading_line   # 11/20 尿検査, 11/20 尿; not 多量の便
         elif match["particle"]:
             heading = bool(_LAB_NAME.match(quote, end))   # 尿検査で白血球, not 尿検査は異常なし
+        elif bare and match["delimiter"] and match["delimiter"][0] in "、,":
+            heading = False   # a list of words (尿、便; 多量の便、WBC …), not a heading (尿：)
         else:
             # After a bare word or a description (尿：, 便の性状：) only a lab item is a result.
             result = (_LAB_RESULT if bare or suffix in _DESCRIPTIONS else _SECTION_RESULT).match(quote, end, line_end)
@@ -639,11 +645,12 @@ _LAB_TAIL = re.compile(fold_surface(
 # A specimen word (尿, カテ尿, 随時尿, 蓄尿, 髄液, 胸水, 腹水, 便, 喀痰) glued to an item names
 # that item only (尿TP, 尿中Ca). With a closed suffix (検査, 検査の結果, 定性, 一般, 生化学,
 # 穿刺, 所見, の性状, データ, 検体 ...) or a bracket it is a heading wherever it starts, even
-# glued to the word before it (本日尿検査); a bare word (尿, 便) must start a word (after a
-# space, a mark, a digit or a particle: 本日の尿, not 排尿, 血尿, 軟便). A heading ends its line
-# (a bare word then stands alone on it, after a bullet, a date or 本日/入院時: 11/20 尿, not
-# 多量の便), or is followed by a delimiter, a bracket or a space and a result, or by a particle
-# and a lab name (尿検査で白血球). After a bare word or a description (の性状, 所見, 検体, データ)
+# glued to the word before it (本日尿検査); a bare word (尿, 沈渣) must start a clause (after a
+# space, punctuation, a mark, a digit or a particle, or a date or time word: 蛋白(1+)、沈渣,
+# 本日尿; not 排尿, 血尿, 軟便). A heading ends its line (a bare word then stands alone on it,
+# after a bullet, a colon, a space or a date or time word: 11/20 尿, 本日、尿; not 多量の便), or
+# is followed by a delimiter (for a bare word not 、: 尿、便 is a list), a bracket or a space and a
+# result, or by a particle and a lab name (尿検査で白血球). After a bare word or a description (の性状, 所見, 検体, データ)
 # only a lab item with its value is a result: 尿：淡黄色 6回, 便の性状：泥状 3回 head nothing.
 # A section names every result, across line breaks and sentence ends, up to a blood heading
 # (血液検査, 採血, 血算, CBC, 末梢血, 血清, 生化学), another specimen heading, or a blank line
@@ -668,10 +675,10 @@ _DESCRIPTIONS = frozenset(fold_surface(d) for d in ("の性状", "性状", "所�
 _WHEN = (r"(?:(?:[0-9]{2,4}[/.年-])?[0-9]{1,2}[/.月][0-9]{1,2}日?"
          r"|本日|今日|昨日|今朝|今回|前回|先週|先月|入院時|外来|来院時|受診時|初診時|訪問時|退院時|術前|定期|至急|追加"
          r"|午前|午後|当院|他院|前医|当日|翌日|同日)")
-_DATE_BEFORE = re.compile(fold_surface(_WHEN + r"(?:にて|の|で|に|は)?$"))
+_DATE_BEFORE = re.compile(fold_surface(_WHEN + r"(?:にて|の|で|に|は|、)?$"))
 # Only marks, digits, brackets and a bracketed tag may stand before a bare specimen word on
 # its line (・尿, ①尿, A.尿, 【結果】尿).
-_BARE_HEADING_LINE = re.compile(r"(?:【[^【】]*】|[a-z][.)]|[^一-龥々ァ-ヺーa-z、,])*")
+_BARE_HEADING_LINE = re.compile(r"(?:【[^【】]*】|[a-z][.)]|[^一-龥々ァ-ヺーa-z])*")
 _LINE_BULLETS = re.compile(fold_surface(r"(?:[・\-*•●○◦◆◇■□▪>]|[0-9]{1,2}[.)]|\([0-9]{1,2}\))*[(\[【<]?"))
 _LAB_NAME = re.compile(fold_surface(_LAB_SPELLINGS))
 # A result: an item word followed by a number or a qualitative mark (pH 6.0, 比重 1.015, 蛋白(1+)).

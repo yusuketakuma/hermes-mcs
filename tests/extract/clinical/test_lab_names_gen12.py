@@ -1033,6 +1033,8 @@ def test_specimen_sections_are_read_in_linear_time(body):
     "便の性状：泥状 3回\nWBC 5200/μL", "便性状：普通 1回\nBT 36.5\nWBC 5200/μL", "尿の性状：淡黄色 6回\nWBC 5200/μL",
     "便所見：普通便 1回\nWBC 5200/μL", "便検体：提出 2本\nWBC 5200/μL", "尿検査：蛋白(1+)\n本日の採血 WBC 5200/μL",
     "尿検査：蛋白(1+)\n※採血 WBC 5200/μL", "便は普通 1回\nWBC 5200/μL",
+    # A bare word followed by 、 lists words (多量の便、…), it heads nothing.
+    "多量の便、WBC 5200/μL", "尿、便、WBC 5200/μL",
     # A bare specimen noun after a description ends a sentence, not a heading.
     "食事良好、便\nWBC 5200/μL", "多量の便\nBT 36.5\nWBC 5200/μL CRP 0.3mg/dL", "泥状の便\nWBC 5200/μL",
     "夜間に尿\nBT 36.5\nWBC 5200/μL", "白色の喀痰\nWBC 5200/μL", "エコーで腹水\nBT 36.5\nWBC 5200/μL",
@@ -1137,3 +1139,17 @@ def test_many_readings_on_one_line_are_cut_in_linear_time(name, body):
     began = time.perf_counter()
     clinical_values.lab_candidate(name, "4", None, body)
     assert time.perf_counter() - began < 1
+
+
+# A bare specimen word that starts a clause (after 、。，・/; or a particle) heads the result
+# that follows it on its line; at the end of a line it stays a description (多量の便).
+@pytest.mark.parametrize("body", [
+    "蛋白(1+)、沈渣 WBC 30/μL", "尿蛋白(1+)、尿沈渣 WBC 30/μL", "採血：CRP 0.3mg/dL、尿：WBC 30/μL",
+    "CRP 0.3mg/dL、尿 WBC 30/μL", "潜血(-)。尿沈渣：WBC 30/μL", "潜血(-)。尿：WBC 30/μL", "蛋白(1+)・尿沈渣WBC 30/μL",
+    "蛋白(1+)/尿沈渣 WBC 30/μL", "pH 6.0;尿沈渣 WBC 30/μL", "蛋白(1+)，尿中WBC 30/μL", "採血は正常、髄液 WBC 30/μL",
+    "CRP 0.3、胸水：WBC 30/μL", "本日、尿 WBC 30/μL", "11/20、尿：WBC 30/μL", "本日、尿\nWBC 30/μL",
+    "入院中の尿：WBC 30/μL", "結果は尿 WBC 30/μL",
+    "蛋白(1+)、尿検査 WBC 30/μL", "尿蛋白(1+) 尿沈渣 WBC 30/μL", "尿蛋白(1+)\n尿沈渣 WBC 30/μL", "、尿\nWBC 30/μL",
+])
+def test_a_bare_specimen_word_that_starts_a_clause_heads_its_result(body):
+    assert _validated("WBC", "30", "/μL", body)["normalized"]["confirmation"] == "unverified", body
