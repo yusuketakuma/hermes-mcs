@@ -328,11 +328,32 @@ function showView(key) {state.panel = key; state.panelPage = 0; closeDetail(); l
 function viewTabs() {
   const strip = tabs(state.sections, state.panel, showView), hadFocus = $("view-tabs").contains(document.activeElement);
   $("view-tabs").replaceChildren(strip);
-  // The chosen tab keeps keyboard focus across the rebuild and, on narrow screens, scrolls into view.
+  // The row scrolls sideways; a vertical wheel scrolls it too, and fades mark the sides with hidden tabs.
+  strip.onscroll = tabFades;
+  strip.onwheel = event => {
+    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX) || strip.scrollWidth <= strip.clientWidth) return;
+    strip.scrollLeft += event.deltaY; event.preventDefault();
+  };
+  // The chosen tab is scrolled into the row (never the page) and keeps keyboard focus across the rebuild.
   const selected = strip.children[state.sections.findIndex(([key]) => key === state.panel)];
-  selected?.scrollIntoView({block: "nearest", inline: "nearest"});
-  if (hadFocus) selected?.focus();
+  if (selected) revealTab(strip, selected);
+  tabFades();
+  if (hadFocus) selected?.focus({preventScroll: true});
 }
+const tabFadeWidth = 40;
+function revealTab(strip, tab) {
+  const start = tab.offsetLeft - tabFadeWidth, end = tab.offsetLeft + tab.offsetWidth + tabFadeWidth - strip.clientWidth;
+  if (strip.scrollLeft > start) strip.scrollLeft = Math.max(0, start);
+  else if (strip.scrollLeft < end) strip.scrollLeft = end;
+}
+function tabFades() {
+  const box = $("view-tabs"), strip = box.firstElementChild;
+  const hidden = strip ? strip.scrollWidth - strip.clientWidth : 0;
+  box.classList.toggle("fade-start", hidden > 1 && strip.scrollLeft > 1);
+  box.classList.toggle("fade-end", hidden > 1 && strip.scrollLeft < hidden - 1);
+}
+// Width changes (window, rail, returning to the MCS screens) change which tabs are hidden.
+if (globalThis.ResizeObserver) new ResizeObserver(tabFades).observe($("view-tabs"));
 function loadMain() {
   const timeline = !state.panel;
   viewTabs();

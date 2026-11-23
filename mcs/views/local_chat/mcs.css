@@ -31,10 +31,19 @@
 
 /* ---------- View tabs and post search ---------- */
 .view-bar { display: flex; align-items: center; gap: 12px; padding: 0 20px; border-bottom: 1px solid var(--line); }
-.view-tabs { flex: 1; min-width: 0; }
+/* One scrolling row of tabs. A fade (with › at the end) shows only on a side that has hidden tabs. */
+.view-tabs { position: relative; flex: 1; min-width: 0; }
+.view-tabs .tabs { scrollbar-width: none; }
+.view-tabs .tabs::-webkit-scrollbar { display: none; }
 .view-tabs .tab { padding: 9px 12px 8px; }
+.view-tabs::before, .view-tabs::after { content: ""; position: absolute; top: 0; bottom: 2px; z-index: 1; width: 40px; display: flex; align-items: center; opacity: 0; pointer-events: none; transition: opacity .15s; color: var(--muted); font-size: var(--fs-lg); }
+.view-tabs::before { left: 0; background: linear-gradient(to right, var(--bg) 35%, transparent); }
+.view-tabs::after { content: "›"; right: 0; justify-content: flex-end; background: linear-gradient(to left, var(--bg) 35%, transparent); }
+.view-tabs.fade-start::before, .view-tabs.fade-end::after { opacity: 1; }
+/* The post search stays compact beside the tabs and widens while in use. */
 #message-form { position: relative; display: flex; align-items: center; gap: 6px; padding: 5px 0; flex-shrink: 0; }
-#message-search { width: 240px; padding: 5px 10px; font-size: var(--fs-sm); background: var(--bg-soft); }
+#message-search { width: 170px; padding: 5px 10px; font-size: var(--fs-sm); background: var(--bg-soft); transition: width .15s; }
+#message-form:focus-within #message-search, #message-search:not(:placeholder-shown) { width: 260px; }
 
 /* ---------- Timeline ---------- */
 #timeline, #older { max-width: 920px; }
@@ -121,7 +130,8 @@
 @media (max-width: 1023px) {
   .patient-context, .view-bar { padding-left: 16px; padding-right: 16px; }
   .context-preview { gap: 0 14px; }
-  #message-search { width: 180px; }
+  #message-search { width: 150px; }
+  #message-form:focus-within #message-search, #message-search:not(:placeholder-shown) { width: 200px; }
 }
 @media (max-width: 899px) {
   .context-preview { grid-template-columns: repeat(2, minmax(0, 1fr)); }

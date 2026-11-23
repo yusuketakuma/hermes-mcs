@@ -261,5 +261,26 @@ async function checkReviewFixes() {
   await run("loadSideStatus()");
   assert.match(content(byId("side-status")), /合成の種類[\s\S]*合成の未解消/);
 }
-async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); await checkMedsOutOfOrder(); checkStateChips(); await checkPostNavigation(); await checkSideStatus(); await checkReviewFixes(); console.log("local chat DOM contracts passed");}
+function checkTabRow() {
+  // The tab row scrolls sideways: fades mark only the sides with hidden tabs, the chosen tab is scrolled in.
+  const run = code => vm.runInContext(code, sandbox), box = document.getElementById("view-tabs");
+  run("state.sections = [['', 'タイムライン'], ['a', '合成A'], ['b', '合成B'], ['c', '合成C']]; state.panel = ''; viewTabs()");
+  const strip = box.children[0];
+  Object.assign(strip, {scrollWidth: 500, clientWidth: 200, scrollLeft: 0});
+  const fades = () => ["fade-start", "fade-end"].filter(name => box.classList.contains(name)).join(" ");
+  strip.onscroll(); assert.equal(fades(), "fade-end");
+  strip.scrollLeft = 120; strip.onscroll(); assert.equal(fades(), "fade-start fade-end");
+  strip.scrollLeft = 300; strip.onscroll(); assert.equal(fades(), "fade-start");
+  strip.clientWidth = 500; strip.scrollLeft = 0; strip.onscroll(); assert.equal(fades(), "", "no fade when every tab fits");
+  // A vertical wheel scrolls the row only when it overflows.
+  strip.clientWidth = 200; let prevented = false;
+  strip.onwheel({deltaY: 60, deltaX: 0, preventDefault() {prevented = true;}});
+  assert.equal(strip.scrollLeft, 60); assert.ok(prevented);
+  // revealTab brings the chosen tab in clear of the fade, from either side.
+  const tab = {offsetLeft: 400, offsetWidth: 100};
+  strip.scrollLeft = 0; run("revealTab")(strip, tab); assert.equal(strip.scrollLeft, 340);
+  strip.scrollLeft = 450; run("revealTab")(strip, tab); assert.equal(strip.scrollLeft, 360);
+  run("state.sections = [['', 'タイムライン']]; state.panel = ''");
+}
+async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); await checkMedsOutOfOrder(); checkStateChips(); await checkPostNavigation(); await checkSideStatus(); await checkReviewFixes(); checkTabRow(); console.log("local chat DOM contracts passed");}
 main().catch(error => {console.error(error); process.exitCode = 1;});
