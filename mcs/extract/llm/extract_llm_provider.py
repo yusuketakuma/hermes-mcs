@@ -5,8 +5,7 @@ import sys
 import time
 import inference_version as inference
 import bounded_http
-import anthropic_client
-import openai_client
+import provider_registry
 import cloud_policy
 import cloud_inference
 import extract_schema
@@ -470,9 +469,8 @@ def _llm_call(prompt: str, deadline: float | None = None,
             raise cloud_inference.CloudFallback("cloud_invalid_response")
         if isinstance(provider, cloud_inference.CloudInferenceUnit):
             selection = getattr(provider, "selection", None)
-            _CALL_NOTES.provider_response = (selection.get("provider") if selection is not None else
-                "openai" if provider.model == openai_client.MODEL else
-                "anthropic" if provider.model == anthropic_client.MODEL else None)
+            _CALL_NOTES.provider_response = (selection.get("provider") if selection is not None
+                                             else provider_registry.provider_for_model(provider.model))
         return answer
     if deadline is not None \
             and deadline - time.monotonic() < (need_s or 0):

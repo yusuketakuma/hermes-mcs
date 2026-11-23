@@ -1177,8 +1177,7 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
             sequence = None
         if _provider_version == 4:
             header["provider_sequence"] = sequence
-        names = {"anthropic": "Anthropic", "openai": "OpenAI", "jev": "Jev", "local": "💻"}
-        order = " → ".join(names[key] for key in sequence) if sequence else "不明"
+        order = " → ".join(processing_route.PROVIDER_NAMES[key] for key in sequence) if sequence else "不明"
         if _provider_version == 4:
             header["text"] = ((prefix + " · " if prefix else "") + PROCESSING_STATUS_LABELS[status]
                               + " · 採用結果の処理順: " + order + " · "
