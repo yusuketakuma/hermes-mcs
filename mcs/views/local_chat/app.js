@@ -583,7 +583,9 @@ async function showMessageInfo(row, request, withContext = true) {
 }
 const fileStates = {downloaded: "取得済み", pending: "未取得", failed: "取得失敗", pruned: "原本保持期間終了"};
 const ocrStates = {complete: "作成済み", empty: "文字なし（読み取れる文字がありませんでした）", unprocessed: "未作成", failed: "作成に失敗", unsupported: "対応していない形式のため作成していません", unavailable: "原本がないため作成できません", rejected_by_policy: "表の読み取りが不確かなため除外しました"};
-const fileErrors = {download_failed: "ダウンロードに失敗", download_too_large: "サイズの上限を超えています", download_empty: "空のファイルでした", disk_full: "保存領域が不足しています", url_not_allowed: "許可されていない取得先です", deadline_exceeded: "時間内に終わりませんでした", network_error: "通信エラー", http_error: "MCS サーバーのエラー", session_expired: "ログインの期限切れ", no_token: "ログインしていません", forbidden: "閲覧が許可されていません", response_too_large: "応答が大きすぎます", db_write_failed: "保存に失敗"};
+const fileErrors = {download_failed: "ダウンロードに失敗", download_too_large: "サイズの上限を超えています", download_empty: "空のファイルでした", disk_full: "保存領域が不足しています", url_not_allowed: "許可されていない取得先です", deadline_exceeded: "時間内に終わりませんでした", network_error: "通信エラー", http_error: "MCS サーバーのエラー", session_expired: "ログインの期限切れ", no_token: "ログインしていません", forbidden: "閲覧が許可されていません", response_too_large: "応答が大きすぎます", db_write_failed: "保存に失敗", rate_limited: "MCS サーバーから時間をおくよう求められました"};
+// Collector error codes in Japanese; an HTTP status keeps its number, anything else is never shown raw.
+const fileErrorText = code => fileErrors[code] || (/^http_\d{3}$/.test(code) ? `MCS サーバーのエラー（HTTP ${code.slice(5)}）` : "理由を判別できません");
 function fileSize(bytes) {return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : bytes >= 1024 ? `${Math.round(bytes / 1024)} KB` : `${bytes} B`;}
 function attachmentEntry(file) {
   // Every recorded attachment fact: file state and reason, size, OCR state, OCR pages and what was found in them.
@@ -596,7 +598,7 @@ function attachmentEntry(file) {
       : chip(`文字記録: ${ocrStates[ocr.state] || "状態を確認できません"}`, ["failed", "rejected_by_policy", "unprocessed"].includes(ocr.state) ? "warn" : "muted"));
   if (stored && file.bytes > 0) states.append(chip(fileSize(file.bytes), "muted"));
   entry.append(states);
-  if (file.state !== "downloaded" && file.error && file.error !== "not_recorded") entry.append(el("p", `理由: ${fileErrors[file.error] || `エラー（${file.error}）`}`, "state-note"));
+  if (file.state !== "downloaded" && file.error && file.error !== "not_recorded") entry.append(el("p", `理由: ${fileErrorText(file.error)}`, "state-note"));
   if (ocr.state === "rejected_by_policy" && /^https:\/\//.test(ocr.original_project_url || "")) {
     const link = el("a", "MCS で原本を確認する", "text-button");
     link.href = ocr.original_project_url; link.target = "_blank"; link.rel = "noreferrer noopener";

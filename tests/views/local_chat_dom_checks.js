@@ -305,7 +305,10 @@ async function checkDisplayGaps() {
   assert.doesNotMatch(failed, /0 B/);
   assert.match(entry({attachment_id: 2, state: "downloaded", bytes: 2048, error: "not_recorded", ocr: {state: "failed"}}), /文字記録: 作成に失敗[\s\S]*2 KB/);
   assert.match(entry({attachment_id: 3, state: "downloaded", bytes: 10, ocr: {state: "unsupported"}}), /対応していない形式/);
-  assert.match(entry({attachment_id: 4, state: "failed", error: "something_new", ocr: {}}), /理由: エラー（something_new）[\s\S]*文字記録: 状態を確認できません|文字記録: 状態を確認できません[\s\S]*理由: エラー（something_new）/);
+  const unknownError = entry({attachment_id: 4, state: "failed", error: "something_new", ocr: {}});
+  assert.match(unknownError, /文字記録: 状態を確認できません/); assert.match(unknownError, /理由: 理由を判別できません/); assert.doesNotMatch(unknownError, /something_new/);
+  assert.match(entry({attachment_id: 8, state: "failed", error: "http_404", ocr: {}}), /理由: MCS サーバーのエラー（HTTP 404）/);
+  assert.match(entry({attachment_id: 9, state: "pending", error: "rate_limited", ocr: {}}), /理由: MCS サーバーから時間をおくよう求められました/);
   const rejected = run("attachmentEntry")({attachment_id: 5, state: "downloaded", bytes: 10, ocr: {state: "rejected_by_policy", original_project_url: "https://example.invalid/project/101"}});
   const link = find(rejected, node => node.tagName === "a");
   assert.equal(link.href, "https://example.invalid/project/101"); assert.equal(link.rel, "noreferrer noopener");
