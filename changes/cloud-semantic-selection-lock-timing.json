@@ -7,11 +7,13 @@
     "クラウド意味解析の対象選定（読取り専用の別接続で、ロックを手放して実行）を、モデル呼出しと同じ窓として扱う。所要時間は pass 記録の transport.select_transport_s、取り直しの待ちは select_reacquire_s に入り、lock_hold には含めない。",
     "選定の後でロックを取り直せなかったときは、job の通信窓でロックを失ったときと同じく、その回の残りを書込みなしで終える。pass 記録に reason=cloud_selection_run_lock_lost と run_lock_lost_detail.kind=select を残し、常駐処理は次の回へ進む（更新中なら従来どおり終了する）。従来は記録を出さずに常駐処理が終了していた。",
     "ロックの取り直しが時間切れになった後の終了処理の時間は、ロック保持時間に数えない。",
-    "health.json の run.stage_elapsed_s に、直近の収集の段ごとの経過秒数を載せる（ロックを手放したモデル呼出しの時間も含む）。収集の実行ログに加えて、health.json でも確認できる。"
+    "health.json の run.stage_elapsed_s に、直近の収集の段ごとの経過秒数を載せる（ロックを手放したモデル呼出しの時間も含む）。収集の実行ログに加えて、health.json でも確認できる。",
+    "mcs_view の qc で --needs-confirmation と --message-id を同時に指定したときのエラー応答は、従来の error=ValueError から error=bad_needs_confirmation になる（エラーコードの登録漏れを直した）。終了コードは従来どおり1。"
   ],
   "refs": [
     "mcs/semantic/semantic_drain.py",
     "mcs/llm/cloud_backlog.py",
-    "mcs/ingest/health_report.py"
+    "mcs/ingest/health_report.py",
+    "mcs/core/error_codes.py"
   ]
 }
