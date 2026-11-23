@@ -79,7 +79,8 @@ def _exception_observation(error):
     return record
 
 
-_TRANSPORT_SECONDS = ("llm_transport_s", "llm_reacquire_s", "jev_transport_s", "jev_reacquire_s")
+_TRANSPORT_SECONDS = ("llm_transport_s", "llm_reacquire_s", "jev_transport_s", "jev_reacquire_s",
+                      "select_transport_s", "select_reacquire_s")
 _LOCK_HOLD_KEYS = ("hold_max_s", "hold_sum_s", "hold_count")
 
 
@@ -95,7 +96,7 @@ def _pass_timing_observation(result):
               "request_slot_wait_s": None, "worker_rss_bytes": None,
               "run_lock_lost_detail": None}
     detail = result.get("run_lock_lost_detail")
-    if isinstance(detail, dict) and detail.get("kind") in ("llm", "jev"):
+    if isinstance(detail, dict) and detail.get("kind") in ("llm", "jev", "select"):
         record["run_lock_lost_detail"] = {
             "kind": detail["kind"], **{key: seconds(detail.get(key))
                 for key in ("transport_s", "reacquire_s", "window_s")}}
@@ -810,6 +811,7 @@ def worker(parent, *, index=None, context_only=False):
                             "reader_close_failed": "cloud_selection_reader_close_failed",
                             "memory": "cloud_selection_memory",
                             "selection_busy": "cloud_selection_busy",
+                            "run_lock_lost": "cloud_selection_run_lock_lost",
                         }.get(result.get("cloud_selection_reason"), "cloud_selection_incomplete")
                     elif phase % 2 and result.get("budget_exhausted") is True:
                         record["reason"] = "jev_backlog_budget_reserved"

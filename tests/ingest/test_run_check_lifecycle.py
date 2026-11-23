@@ -340,6 +340,8 @@ def test_overdue_tick_defers_later_stages_but_records_run_and_health(
     assert interruption["status"] == "recorded"
     assert interruption["count_24h"] == 0
     assert interruption["detected_at"] is None
+    stages = health["run"].pop("stage_elapsed_s")
+    assert stages["fetch"] == 481.0 and set(result["deferred_stages"]).isdisjoint(stages)
     assert health["run"] == {
         "elapsed_s": 481, "overshoot_s": 1, "slowest_stage": "fetch",
         "deferred_stages": result["deferred_stages"]}

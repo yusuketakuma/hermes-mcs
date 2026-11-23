@@ -310,12 +310,14 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     # at return. Only a borrowed fd makes the release/reacquire real;
     # fd-less passes (standalone, per-write extract) emit nothing.
     lock_hold = None
+    lock_released = [False]
     if run_lock_fd is not None:
         lock_hold = out["lock_hold"] = {"hold_max_s": 0.0, "hold_sum_s": 0.0,
                                         "hold_count": 0}
 
     def _hold_tail():
-        if lock_hold is not None:
+        # a timed-out reacquire left the lock with the other holder: no tail
+        if lock_hold is not None and not lock_released[0]:
             hold = time.monotonic() - held_since
             lock_hold["hold_sum_s"] += hold
             lock_hold["hold_max_s"] = max(lock_hold["hold_max_s"], hold)
@@ -429,9 +431,13 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     # in transport vs. waiting to retake the run lock, and the window a
     # lost reacquire had — llm_s includes both (2026-10-10: losses landed
     # inside a tick's hold with ~30 s of the pass left).
+    # The cloud lane's due selection also runs unlocked (on its own
+    # read-only connection); it is a window like a model call, so its
+    # reacquire wait is never counted as a lock hold (2026-11-24).
     transport = out["transport"] = {
         "llm_transport_s": 0.0, "llm_reacquire_s": 0.0,
-        "jev_transport_s": 0.0, "jev_reacquire_s": 0.0}
+        "jev_transport_s": 0.0, "jev_reacquire_s": 0.0,
+        "select_transport_s": 0.0, "select_reacquire_s": 0.0}
     # Log-only totals belong to this pass output; only its explicit stage chain may add to them.
     shadow_stats = out["shadow_v2"] = {"calls": 0, "incomplete": 0, "s": 0.0}
 
@@ -450,7 +456,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     return call(*args, **kwargs)
                 finally:
                     ended = time.monotonic()
-        except writer_lock.RunLockLost:
+        except writer_lock.RunLockLost as lost:
+            lock_released[0] = not lost.held
             if ended is not None:
                 wait = writer_lock.RUN_LOCK_REACQUIRE_S if reacquire_s is None \
                     else reacquire_s
@@ -532,9 +539,17 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     hold_lane = lane or 'combined'
     held_after = initial_sched.get('payload_hold_cursors', {}).get(hold_lane)
     def select_cloud(*args, **kwargs):
-        with unlocked_transport(ledger.db, run_lock_fd, wait_s=reacquire_s, deadline=deadline):
-            return _select_cloud_due(*args, **kwargs, deadline=deadline,
-                                     isolated=run_lock_fd is not None)
+        try:
+            return _unlocked("select", _select_cloud_due, *args, **kwargs, deadline=deadline,
+                             isolated=run_lock_fd is not None)
+        except writer_lock.RunLockLost as e:
+            # Same outcome as a loss in a job's transport window: no further
+            # writes, and the pass record (with run_lock_lost_detail) is still
+            # returned to the caller instead of ending the worker silently.
+            out["run_lock_lost"] = ("held" if e.held else "updated" if e.updated
+                                    else "timeout")
+            result["errors"].append("semantic: run_lock_lost")
+            raise _CloudSelectionIncomplete("run_lock_lost") from e
     try:
         cursor_arg = {'held_after': held_after} if held_after is not None else {}
         selector = (select_cloud if cloud_only else
@@ -1024,6 +1039,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 result["errors"].append("semantic: jev_payment_required")
                 out["jev_blocked"] = "payment_required"
                 break
+    if out.get("run_lock_lost"):
+        # a refill selection lost the run lock: nothing below may write
+        _hold_tail()
+        return out
     if held_after and not saw_held and sum(selected.values()):
         sched_mut.update(hold_cursor_changed=True, hold_cursor_lane=hold_lane, hold_cursor=None)
     if llm_health["fed"]:

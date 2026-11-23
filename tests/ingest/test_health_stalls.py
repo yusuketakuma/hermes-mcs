@@ -483,3 +483,15 @@ def test_worker_older_than_its_code_is_reported_without_a_delivery_stall(db, mon
     assert seen == [(SLACK, now)]
     monkeypatch.setattr(card_worker_status, "restart_overdue", lambda *args: False)
     assert "worker_restart_required" not in health_report.backlog_stalls(db.db, SLACK, now)
+
+
+def test_health_run_carries_each_stage_elapsed(db):
+    """health carries the latest tick's per-stage elapsed seconds next to
+    the run summary; non-finite or non-numeric entries are dropped."""
+    result = {"errors": [], "notify": {},
+              "run": {"elapsed_s": 143.0, "overshoot_s": 0, "slowest_stage": "derive"},
+              "stage_elapsed_s": {"fetch": 12.5, "derive": 98.25, "semantic": 0,
+                                  "bad": float("nan"), "text": "x"}}
+    health = health_report.build_health(db.db, result, "ok")
+    assert health["run"]["stage_elapsed_s"] == {"fetch": 12.5, "derive": 98.25, "semantic": 0}
+    assert health["run"]["slowest_stage"] == "derive"

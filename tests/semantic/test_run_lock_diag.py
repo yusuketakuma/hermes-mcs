@@ -15,7 +15,8 @@ import semantic_runtime as runtime
 from semantic_testkit import (_cfg, _FakeJev, _ledger, _llm, _llm_v2,
                               _message, _patient, _seeded)
 
-KEYS = {"llm_transport_s", "llm_reacquire_s", "jev_transport_s", "jev_reacquire_s"}
+KEYS = {"llm_transport_s", "llm_reacquire_s", "jev_transport_s", "jev_reacquire_s",
+        "select_transport_s", "select_reacquire_s"}
 
 
 @pytest.fixture
@@ -285,6 +286,81 @@ def test_lock_hold_survives_a_lost_reacquire(lock_env, monkeypatch):
         assert hold["hold_count"] >= 1 and hold["hold_sum_s"] >= 0 \
             and hold["hold_max_s"] >= 0 and hold["hold_max_s"] <= hold["hold_sum_s"] + 1e-9
         assert out["run_lock_lost_detail"]["kind"] == "llm"
+    finally:
+        for o in other:
+            if o is not None:
+                os.close(o)
+        db.close()
+
+
+def test_cloud_selection_window_is_not_counted_as_a_lock_hold(lock_env, monkeypatch):
+    """The cloud lane selects due jobs with the run lock released; that
+    window and its reacquire wait (a tick holding the lock) are selection
+    transport, not a held segment (2026-11-24: a 461 s "hold" with no
+    transport and no job was this window)."""
+    tmp_path, path, fd = lock_env
+    clock = [1000.0]
+    monkeypatch.setattr(semantic.time, "monotonic", lambda: clock[0])
+    seen = []
+
+    def select(ledger, lane, kinds, qc_active, max_jobs, long_defers=None, **kwargs):
+        seen.append((kwargs["isolated"], _lock_free(path)))
+        clock[0] += 300.0                    # selection, then a tick's hold
+        return [], [], [], [], {"turn": None}
+
+    monkeypatch.setattr(semantic_drain, "_select_cloud_due", select)
+    db = _seeded(tmp_path)
+    try:
+        out = semantic_drain.run_due(db, _cfg(), {"errors": []}, clock[0] + 1290,
+                                     jev_client=_FakeJev(), max_jobs=1, run_lock_fd=fd,
+                                     lane="backlog", cloud_only=True)
+        assert seen == [(True, True)]        # isolated reader, lock released
+        assert out["transport"]["select_transport_s"] == 300.0
+        assert out["lock_hold"]["hold_max_s"] == 0.0
+        assert out["lock_hold"]["hold_count"] == 2   # entry segment + tail
+    finally:
+        db.close()
+
+
+
+def _lock_free(path):
+    """True when another descriptor can take the run lock right now."""
+    import fcntl
+    other = os.open(path, os.O_RDWR)
+    try:
+        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except BlockingIOError:
+        return False
+    finally:
+        os.close(other)
+
+
+def test_cloud_selection_lock_loss_returns_the_pass_record(lock_env, monkeypatch):
+    """A reacquire lost after the unlocked selection ends the pass like a
+    loss in a model window: no writes, and the caller still gets a record
+    whose loss detail names the selection."""
+    tmp_path, path, fd = lock_env
+    monkeypatch.setattr(semantic_drain, "RUN_LOCK_REACQUIRE_S", 0.05)
+    monkeypatch.setattr(writer_lock, "RUN_LOCK_POLL_S", 0.01)
+    other = []
+
+    def select(*args, **kwargs):
+        other.append(writer_lock.acquire_run_lock(path))   # a tick takes it
+        return [], [], [], [], {"turn": None}
+
+    monkeypatch.setattr(semantic_drain, "_select_cloud_due", select)
+    db = _seeded(tmp_path)
+    try:
+        out = semantic_drain.run_due(db, _cfg(), {"errors": []}, time.monotonic() + 480,
+                                     jev_client=_FakeJev(), max_jobs=1, run_lock_fd=fd,
+                                     lane="backlog", cloud_only=True)
+        assert out["run_lock_lost"] == "timeout"
+        assert out["cloud_selection_reason"] == "run_lock_lost"
+        assert out["run_lock_lost_detail"]["kind"] == "select"
+        assert out["lock_hold"]["hold_count"] == 1   # no tail after the lock was lost
+        assert db.db.execute("SELECT COUNT(*) FROM artifacts "
+                             "WHERE kind='semantic_drain_run'").fetchone()[0] == 0
     finally:
         for o in other:
             if o is not None:
