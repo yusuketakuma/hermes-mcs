@@ -90,5 +90,21 @@ async function checkPatientContext() {
   await vm.runInContext("loadPatientContext(102)", sandbox);
   assert.match(content(document.getElementById("patient-context")), /まだ保存されていません/);
 }
-async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); console.log("local chat DOM contracts passed");}
+async function checkPanel() {
+  const view = {title:"合成 — 訪問前の確認ノート", head:["見出し"], items:[{group:"新しい報告", quotes:["<b>合成の引用</b>"], source:"11/16 看護師 #1", message_id:5}], notes:["履歴の取得は未完了"], page:0, pages:2};
+  const pages = [];
+  const node = vm.runInContext("renderPanel", sandbox)(view, page => pages.push(page));
+  const text = content(node);
+  assert.match(text, /新しい報告[\s\S]*<b>合成の引用<\/b>[\s\S]*11\/16 看護師 #1/);
+  assert.match(text, /投稿を開く/);
+  assert.match(text, /履歴の取得は未完了/);
+  const pager = node.children.find(child => child.className === "panel-pager");
+  pager.children.find(child => child.textContent === "次のページ").onclick();
+  assert.deepEqual(pages, [1]);
+  const empty = content(vm.runInContext("renderPanel", sandbox)({title:"合成", items:[], empty:"記録の有無は未確認です"}));
+  assert.match(empty, /記録の有無は未確認です/);
+  const summary = vm.runInContext("renderPanel", sandbox)({title:"まとめ", body:"■ 未完了タスク: なし\n履歴取得: 未完了"});
+  assert.deepEqual(summary.children.slice(1).map(child => child.className), ["panel-group", "panel-line"]);
+}
+async function main() {await checkReplyRecords(); await checkOrphanReply(); await checkDatePagination(); await checkPatientContext(); await checkPanel(); console.log("local chat DOM contracts passed");}
 main().catch(error => {console.error(error); process.exitCode = 1;});

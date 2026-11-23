@@ -1,6 +1,6 @@
 "use strict";
 const $ = id => document.getElementById(id);
-const state = {patients: [], patientCursor: null, project: null, cursor: null, query: "", generation: null, mainRequest: 0, detailRequest: 0, patientRequest: 0, contextRequest: 0};
+const state = {patients: [], patientCursor: null, project: null, cursor: null, query: "", panel: "", panelPage: 0, generation: null, mainRequest: 0, detailRequest: 0, patientRequest: 0, contextRequest: 0};
 const subjectLabels = {patient: "本人", family: "家族", other: "他者", unspecified: "対象未確認"};
 const fmt = (ts, options = {}) => ts == null ? "時刻未取得" : new Date(ts * 1000).toLocaleString("ja-JP", {timeZone: "Asia/Tokyo", ...options});
 function el(tag, text, cls) {const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node;}
@@ -11,6 +11,7 @@ async function api(kind, values = {}) {
   const reply = await fetch(`api/${kind}?${params}`, {cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer"});
   const data = await reply.json();
   if (!reply.ok) throw new Error(data.error === "cursor_scope_or_generation_changed" ? "スナップショットが更新されました。「更新」で読み直してください。" : "データを表示できません。公開スナップショットと閲覧範囲を確認してください。");
+  if (!data.snapshot) return data;
   if (state.generation && data.snapshot.generation_id !== state.generation) throw new Error("スナップショットが更新されました。「更新」で読み直してください。");
   state.generation = data.snapshot.generation_id;
   $("snapshot-time").textContent = `スナップショット ${fmt(data.snapshot.generated_at)} JST`;
@@ -52,7 +53,7 @@ function selectPatient(patient) {
   const fetchLabels = {pending: "未取得", complete: "取得済み", incomplete: "一部未取得", partial: "一部取得", failed: "取得失敗"};
   $("coverage").textContent = `取得状態: ${fetchLabels[patient.fetch_state] || "取得状況を要確認"} · ${patient.history_floor === -1 ? "履歴の終端までの取得記録あり" : "履歴全体の取得は未確認"}`;
   $("coverage").hidden = false;
-  closeDetail(); patientList(); loadPatientContext(patient.project_id); loadTimeline();
+  state.panelPage = 0; closeDetail(); patientList(); loadPatientContext(patient.project_id); loadMain();
 }
 async function loadPatientContext(project) {
   const request = ++state.contextRequest, panel = $("patient-context");
@@ -181,8 +182,11 @@ async function openDetail(row) {
     thread.append(older, list);
     if (!replies.items.length) thread.append(el("p", "保存済みの返信はありません。"));
     if (source.message.reply_count > source.message.stored_replies) thread.append(el("p", "未取得の返信があります。", "state-note"));
+    const meds = section("薬剤"), medsBody = el("div"), medsButton = el("button", "この投稿の薬剤を表示", "text-button");
+    medsButton.onclick = () => showMeds(medsBody, root, request);
+    meds.append(medsButton, medsBody);
     const info = el("div"); info.id = "message-info";
-    $("detail-content").replaceChildren(original, flags, context, thread, info);
+    $("detail-content").replaceChildren(original, flags, context, meds, thread, info);
     await showMessageInfo(row, request, row.message_id !== root);
   } catch (error) {if (request === state.detailRequest) {$("detail-content").replaceChildren(el("p", "詳細を取得できませんでした。", "empty")); fail(error);}}
 }
@@ -206,11 +210,77 @@ async function showMessageInfo(row, request, withContext = true) {
     $("message-info").replaceChildren(files, ...(withContext ? [contextSection(source.message)] : []));
   } catch (error) {if (request === state.detailRequest) fail(error);}
 }
+async function loadSections() {
+  try {
+    const data = await api("sections");
+    for (const item of data.items) {const option = el("option", item.label); option.value = item.key; $("view-select").append(option);}
+  } catch (error) {fail(error);}
+}
+function loadMain() {
+  const timeline = !state.panel;
+  for (const id of ["coverage", "older", "timeline", "timeline-status"]) if (!timeline) $(id).hidden = true;
+  $("panel-view").hidden = timeline;
+  if (timeline) {$("coverage").hidden = !state.project; $("timeline").hidden = false; loadTimeline();}
+  else loadPanel();
+}
+function renderPanel(view, onPage) {
+  const box = el("div", null, "panel");
+  box.append(el("h2", view.title || ""));
+  for (const line of view.head || []) box.append(el("p", line, "panel-head"));
+  if (view.body != null) for (const line of view.body.split("\n")) box.append(el("p", line, line.startsWith("■") ? "panel-group" : "panel-line"));
+  let group;
+  for (const item of view.items || []) {
+    if (item.group && item.group !== group) {group = item.group; box.append(el("h3", group));}
+    const row = el("div", null, "panel-item");
+    if (item.quotes?.length) for (const quote of item.quotes) row.append(el("blockquote", quote));
+    else row.append(el("p", item.text || ""));
+    if (item.quotes?.length && item.source) row.append(el("small", item.source));
+    else if (item.source) row.append(el("small", item.source));
+    if (item.message_id) {
+      const open = el("button", "投稿を開く", "text-button"), project = state.project;
+      open.onclick = async () => {try {const source = await api("evidence", {project, message: item.message_id}); if (project === state.project) openDetail(source.message);} catch (error) {fail(error);}};
+      row.append(open);
+    }
+    box.append(row);
+  }
+  if (!view.items?.length && view.body == null) box.append(el("p", view.empty || "表示できる記録はありません。", "empty"));
+  if (view.more) box.append(el("p", `他${view.more}件`, "panel-head"));
+  for (const note of view.notes || []) box.append(el("p", note, "state-note"));
+  if (onPage && view.pages > 1) {
+    const pager = el("div", null, "panel-pager");
+    if (view.page > 0) {const back = el("button", "前のページ", "text-button"); back.onclick = () => onPage(view.page - 1); pager.append(back);}
+    pager.append(el("span", `${view.page + 1} / ${view.pages}`));
+    if (view.page + 1 < view.pages) {const next = el("button", "次のページ", "text-button"); next.onclick = () => onPage(view.page + 1); pager.append(next);}
+    box.append(pager);
+  }
+  return box;
+}
+async function loadPanel() {
+  if (!state.project) return;
+  const request = ++state.mainRequest, project = state.project, section = state.panel;
+  $("error").hidden = true;
+  $("panel-view").replaceChildren(el("p", "読込中…", "empty"));
+  try {
+    const data = await api("panel", {project, section, page: state.panelPage || null});
+    if (request !== state.mainRequest) return;
+    $("panel-view").replaceChildren(renderPanel(data.panel, page => {state.panelPage = page; loadPanel();}));
+    $("timeline-panel").scrollTop = 0;
+  } catch (error) {if (request === state.mainRequest) {$("panel-view").replaceChildren(el("p", "表示できませんでした。", "empty")); fail(error);}}
+}
+async function showMeds(target, message, request) {
+  target.replaceChildren(el("p", "薬剤を読込中…", "empty"));
+  try {
+    const data = await api("panel", {project: state.project, section: "meds", message});
+    if (request === state.detailRequest) target.replaceChildren(renderPanel(data.panel));
+  } catch (error) {if (request === state.detailRequest) {target.replaceChildren(); fail(error);}}
+}
 $("patient-form").onsubmit = event => {event.preventDefault(); loadPatients();};
 $("more-patients").onclick = () => loadPatients(true);
-$("message-form").onsubmit = event => {event.preventDefault(); state.query = $("message-search").value.trim(); $("clear-search").hidden = !state.query; closeDetail(); loadTimeline();};
+$("message-form").onsubmit = event => {event.preventDefault(); state.query = $("message-search").value.trim(); $("clear-search").hidden = !state.query; state.panel = ""; $("view-select").value = ""; closeDetail(); loadMain();};
+$("view-select").onchange = () => {state.panel = $("view-select").value; state.panelPage = 0; closeDetail(); loadMain();};
 $("clear-search").onclick = () => {state.query = ""; $("message-search").value = ""; $("clear-search").hidden = true; closeDetail(); loadTimeline();};
 $("older").onclick = () => loadTimeline(true);
 $("close-detail").onclick = closeDetail;
 $("refresh").onclick = () => location.reload();
+loadSections();
 loadPatients();

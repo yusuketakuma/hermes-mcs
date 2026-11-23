@@ -38,8 +38,13 @@ def response(snapshot, allowed, route, query):
         raise ValueError("bad_query")
     project = _one(params, "project")
     message = _one(params, "message")
-    if params:
+    section = _one(params, "section")
+    page = int(_one(params, "page", "0"))
+    role = _one(params, "role", "")
+    if params or route != "panel" and (section is not None or page or role):
         raise ValueError("bad_arguments")
+    if route == "sections":
+        return local_chat_view.sections()
     if route != "patients":
         project = int(project or "")
         local_chat_view.require_project(project, allowed)
@@ -47,6 +52,11 @@ def response(snapshot, allowed, route, query):
     try:
         if route == "patients":
             return local_chat_view.patients(view, allowed, query=text, cursor=cursor)
+        if route == "panel":
+            if text or cursor:
+                raise ValueError("bad_arguments")
+            return local_chat_view.panel(view, allowed, project, section, page=page, role=role,
+                                         message_id=int(message) if message else None)
         return local_chat_view.read(view, allowed, route, project, query=text,
                                    cursor=cursor, message_id=int(message) if message else None)
     finally:

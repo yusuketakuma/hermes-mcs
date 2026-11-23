@@ -5,6 +5,14 @@ from stamp_format import stamp_counts, thread_stamp_line
 from structured_view import structured_lines
 from patient_context_view import SECTION_LABELS
 from patient_context import extract_context
+from mcs_queries import JST
+from datetime import datetime
+import notify_views
+
+# The patient views the chat cards open, minus the Slack-only measurement page.
+PANEL_LABELS = {"summary": "記録のまとめ", **{
+    key: label for key, label in notify_views.CONTEXT_SECTIONS.items() if key != "measurements"},
+    "signals": "未解消のシグナル"}
 
 
 def require_project(project, allowed):
@@ -111,3 +119,64 @@ def _message(view, row):
     if row.get("body_state") == "deleted":
         result.update(summary_lines=[], stamp_line="", patient_context=[], attachments=[])
     return result
+
+
+def sections():
+    return {"items": [{"key": key, "label": label} for key, label in PANEL_LABELS.items()]}
+
+
+def panel(view, allowed, project, section, *, page=0, role="", message_id=None):
+    """One patient view rendered by the same notify_views projection the chat cards use."""
+    from mcs_util import load_config
+    from patient_context_view import first_changes_baseline
+
+    require_project(project, allowed)
+    if type(page) is not int or not 0 <= page <= 100000 or role not in notify_views.CONTEXT_ROLES:
+        raise ValueError("bad_arguments")
+    if (section == "meds") != (message_id is not None):
+        raise ValueError("bad_arguments")
+    cfg, now = load_config(), view.meta["generated_at"]
+    if section == "meds":
+        view._require_message(project, message_id)
+        result = notify_views.meds_view(view.db, project, message_id, page=page, cfg=cfg)
+    elif section == "summary":
+        title, body = notify_views.patient_summary_text(view.db, project, cfg=cfg)
+        result = {"title": title, "body": body}
+    elif section == "signals":
+        result = _signals(view, project)
+    elif section in PANEL_LABELS:
+        # A local reader has no stored viewing checkpoint: changes compare against the first-view baseline.
+        result = notify_views.patient_context_list(
+            view.db, project, section, cfg=cfg, since=first_changes_baseline(now), now=now,
+            role=role, page=page, first_view=True)
+    else:
+        raise ValueError("unknown_view")
+    items = [{key: item.get(key) for key in ("group", "text", "quotes", "source", "message_id")}
+             for item in result.get("items") or [] if item.get("project_id", project) == project]
+    return {"snapshot": view.meta, "section": section, "panel": {
+        **{key: result.get(key) for key in ("title", "body", "head", "empty", "more", "notes", "page", "pages")},
+        "items": items}}
+
+
+def _signals(view, project):
+    import mcs_signals
+    from notify_render import signal_evidence, signal_label
+
+    found = mcs_signals.current_open(view.db, project_id=project, limit=50)
+    items = []
+    for signal in found["items"]:
+        message_id, _message = signal_evidence(view.db, signal)
+        at = signal.get("detected_at")
+        items.append({"project_id": project, "group": signal_label(signal)[1:-1],
+                      "text": signal.get("note") or "", "message_id": message_id,
+                      "source": datetime.fromtimestamp(at, JST).strftime("%m/%d %H:%M 検出")
+                      if isinstance(at, (int, float)) else "検出時刻未取得"})
+    notes = []
+    if found["pipeline_last_run_at"] is None:
+        notes.append("シグナルの判定はまだ実行されていません。")
+    if found["truncated"]:
+        notes.append(f"新しい順に{found['returned']}件まで表示しています（全{found['total']}件）。")
+    if found["errors"]:
+        notes.append("一部のシグナルの状態を読み取れませんでした。")
+    return {"title": "未解消のシグナル", "head": [], "items": items, "notes": notes,
+            "empty": "未解消のシグナルはありません。"}

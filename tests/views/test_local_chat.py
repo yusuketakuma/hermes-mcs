@@ -387,3 +387,41 @@ def test_orphan_reply_remains_readable_without_exposing_foreign_parent(tmp_path)
         assert chat.response(snapshot, {1}, "thread", "project=1&message=7")["items"] == []
     finally:
         store.close()
+
+
+def test_sections_list_every_card_view_except_slack_only_measurements():
+    keys = [item["key"] for item in chat.response("unused", {1}, "sections", "")["items"]]
+    assert keys[0] == "summary" and "previsit" in keys and "timeline" in keys and "signals" in keys
+    assert "measurements" not in keys and "meds" not in keys
+
+
+@pytest.mark.parametrize("section", [item["key"] for item in local_chat_view.sections()["items"]])
+def test_panel_reuses_card_views_scoped_and_readonly(snapshot, section):
+    before = hashlib.sha256(Path(snapshot).read_bytes()).digest()
+    data = chat.response(snapshot, {1}, "panel", f"project=1&section={section}")
+    assert data["section"] == section and data["panel"]["title"]
+    text = json.dumps(data, ensure_ascii=False)
+    assert "非対象" not in text and "合成疾患123" not in text
+    assert all(set(item) <= {"group", "text", "quotes", "source", "message_id"} for item in data["panel"]["items"])
+    with pytest.raises(ValueError, match="project_not_allowed"):
+        chat.response(snapshot, {1}, "panel", f"project=2&section={section}")
+    assert hashlib.sha256(Path(snapshot).read_bytes()).digest() == before
+
+
+def test_panel_medication_view_is_bound_to_one_post_of_the_patient(snapshot):
+    data = chat.response(snapshot, {1}, "panel", "project=1&section=meds&message=1")
+    assert data["panel"]["title"].endswith("選択した投稿の薬剤")
+    for query in ("project=1&section=meds", "project=1&section=meds&message=123",
+                  "project=1&section=summary&message=1"):
+        with pytest.raises(ValueError):
+            chat.response(snapshot, {1}, "panel", query)
+
+
+@pytest.mark.parametrize("route,query", [
+    ("panel", "project=1&section=unknown"), ("panel", "project=1&section=summary&page=-1"),
+    ("panel", "project=1&section=summary&page=x"), ("panel", "project=1&section=background&role=nope"),
+    ("panel", "project=1&section=summary&q=合成"), ("timeline", "project=1&section=summary"),
+    ("timeline", "project=1&page=1"), ("patients", "role=pharmacy")])
+def test_panel_arguments_are_strict(snapshot, route, query):
+    with pytest.raises(ValueError):
+        chat.response(snapshot, {1}, route, query)
