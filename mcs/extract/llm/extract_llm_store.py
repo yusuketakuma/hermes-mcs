@@ -299,28 +299,30 @@ def _end_withdrawn_cloud_attempts(ledger, lock, per_write_lock: bool, *, deadlin
     write lock is taken only when one is found, and the lock, the SQLite
     writer wait and the SQL are bounded like the stale GC's, so a busy
     database never delays selection. Once the run lock is held the settings,
-    review and audits are read and every candidate judged again, before any
-    write transaction: extraction writers are serialized by that lock, so a
-    provider re-approved while waiting keeps its attempt, and no settings or
-    review read happens while SQLite's writer lock is held. Each attempt then
-    closes in its own short transaction (only a still-open check and the
-    write), so a pass that runs out of time keeps the ones it closed.
+    review and audits are read again and each candidate is judged just
+    before its own write transaction: extraction writers are serialized by
+    that lock, so a provider re-approved while waiting keeps its attempt, and
+    no settings or review read happens while SQLite's writer lock is held.
+    Each attempt closes in its own short transaction (only a still-open check
+    and the write) right after it is judged, so a pass that runs out of time
+    keeps the ones it closed and the next pass continues.
     Nothing here sends or reserves."""
     if ledger.db.in_transaction:
         return 0
-
-    def judged():
-        cfg = load_config_checked(wait=False)
-        return [] if cfg is None else [r for r in _open_cloud_attempts(ledger.db)
-                                       if _cloud_attempt_withdrawn(ledger, cfg, r)]
-    if not _open_cloud_attempts(ledger.db) or not judged():
+    cfg = load_config_checked(wait=False)
+    if cfg is None or not any(_cloud_attempt_withdrawn(ledger, cfg, r) for r in _open_cloud_attempts(ledger.db)):
         return 0
     close_by = min(deadline, time.monotonic() + _STALE_GC_BUDGET_S)
     closed = 0
     with lock(per_write_lock, deadline=close_by) as held:
         if not held or not _writer_current():
             return 0
-        for r in judged():   # judged again under the run lock, outside any write transaction
+        cfg = load_config_checked(wait=False)
+        for r in [] if cfg is None else _open_cloud_attempts(ledger.db):
+            # judged again under the run lock, outside any write transaction, and closed at once,
+            # so the budget is spent on writes as it goes rather than on judging every candidate first
+            if not _cloud_attempt_withdrawn(ledger, cfg, r):
+                continue
             try:
                 with _stale_gc_transaction(ledger.db, close_by):
                     # this post only, so the re-check stays small however long the history

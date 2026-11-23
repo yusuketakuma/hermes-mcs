@@ -624,6 +624,8 @@ def resolve_contract(cfg, pin, *, route, purpose, root=None, ledger=None, wait=T
     if (configured["provider"] not in ("auto", provider)
             or configured["provider"] == "auto" and provider not in configured["provider_order"]):
         return judged("gone", "provider_not_offered")
+    if pinned_errors and all(error == COST_LIMIT_REQUIRED for error in pinned_errors):
+        return judged("waiting", "cost_limit_required")   # a missing cap holds sending; it changes no contract
     if pinned_errors:
         return judged("gone", "contract_invalid")
     if not key:

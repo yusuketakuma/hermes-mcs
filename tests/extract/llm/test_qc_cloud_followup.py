@@ -6,6 +6,7 @@ post body (its chunks resume; nothing is re-sent), only through the existing
 stored-post lane and all of its gates. Synthetic fixtures, temp DB and a
 stubbed cloud transport only.
 """
+import copy
 import dataclasses
 import json
 import time
@@ -828,7 +829,7 @@ def test_a_busy_write_lock_defers_ending_a_withdrawn_attempt_without_delaying_th
     assert len(cloud_calls) == 1 and _reservations(ledger) == 1
 
 
-@pytest.mark.parametrize("hold", ["unreadable", "pending", "stopped", "mode_off", "key_unreadable"])
+@pytest.mark.parametrize("hold", ["unreadable", "pending", "stopped", "mode_off", "key_unreadable", "no_cost_limit"])
 def test_a_temporary_stop_keeps_the_attempt_open_and_unsent(qc_window, monkeypatch, hold):
     ledger, cfg, _local_calls, cloud_calls, _answers = qc_window
     openai_calls, lift = _capped_after_the_first_chunk(qc_window, monkeypatch)
@@ -839,12 +840,25 @@ def test_a_temporary_stop_keeps_the_attempt_open_and_unsent(qc_window, monkeypat
         ledger.artifact_add("cloud_control", "stopped")
     elif hold == "mode_off":
         cfg['cloud_llm']['mode'] = 'off'
+    elif hold == "no_cost_limit":   # every cap and the window cleared at once: sending stops, the contract stays
+        restored = copy.deepcopy(cfg['cloud_llm'])
+        for key in ('mode', 'provider_budgets', 'reextract_backlog_until'):
+            cfg['cloud_llm'].pop(key, None)
+        cfg['cloud_llm'].update(daily_cost_limit_usd=None, monthly_cost_limit_usd=None, window_budget_usd=None)
+        _settings, errors, _held = cloud_policy.resolve_selection(cfg, None, pinned="anthropic")
+        assert errors == [cloud_policy.COST_LIMIT_REQUIRED]
     else:   # the key file cannot be read: not proof that the key was removed
         monkeypatch.setattr(cloud_policy, "provider_key", lambda name, root=None: None)
     _local_pass(ledger)
     _cloud_pass(ledger)
     assert _attempts(ledger) == [('qc', 'open')], "a stop that may be temporary keeps the attempt"
     assert len(cloud_calls) == 1 and _reservations(ledger) == 1 and not openai_calls
+    if hold == "no_cost_limit":   # the same contract under restored caps resumes from the saved chunk
+        cfg['cloud_llm'] = restored
+        assert _cloud_pass(ledger)['done'] == 1
+        sent = [_sent_text(call) for call in cloud_calls]
+        assert len(sent) >= 2 and len(set(sent)) == len(sent) and not openai_calls
+        assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')]
 
 
 def test_a_qc_attempt_without_a_paid_request_is_never_closed(qc_window):

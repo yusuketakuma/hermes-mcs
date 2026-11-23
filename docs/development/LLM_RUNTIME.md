@@ -83,7 +83,7 @@ schemaの正本は[extract_schema](../../mcs/extract/llm/extract_schema.py)で�
 設定自体の誤りは`cloud_config`だけで判定し、`auto`がいま選ぶ送信先（とそのmodelの適合）では判定しません。どちらもprofileを契約の送信先自身の設定から読みます（`_contract_config`: 分割したprovider設定では実行時の設定が自動選択した送信先のprofileしか持たないため、`load_config_checked(provider=...)`でその送信先の検証済み設定を組み立てます。読めない・代替の設定は`waiting`）。
 `usable`ならその送信先のsettings・key・selectionを返し、`CloudInferenceUnit(pin=...)`はclient作成・送信前guard・`request_send_block_reason`・予約のすべてでそれを使い、`provider_order`の順位や予算による切替をしません（修正要求のchildも同じ契約の`quality_repair`で送ります）。
 pinしたunitのscope（`scope_generation(cfg, pin)`）は送信先の選択の代わりに契約を含むので、優先順位を変えても保存済み応答の束縛は変わりません。
-`waiting`（設定・施設の確認記録・鍵fileの読取り不能、読めない設定の代わりの`{}`や`provider_unavailable`の設定（`config_unavailable`）、確認待ちの記録、mode、prepareでは期間・停止・circuit・価格・上限）では送らずに開いたまま待ちます。
+`waiting`（設定・施設の確認記録・鍵fileの読取り不能、読めない設定の代わりの`{}`や`provider_unavailable`の設定（`config_unavailable`）、確認待ちの記録、mode、送信先の誤りが費用上限の欠落（`cost_limit_required`）だけの設定、prepareでは期間・停止・circuit・価格・上限）では送らずに開いたまま待ちます。
 各記録は監査の指摘内容の digest（`notes`、`_qc_notes_digest`）も束縛します。保存済みの有料応答は送ったpromptで証明され、promptは指摘内容を含むので、新しい監査が指摘内容を変えた回は送らず（prepareと予約時のhookが拒否）、抽出のpassが閉じて確認候補にします。同じ指摘内容の再監査では続行します。
 `gone`は読み取れた設定・確認記録・鍵fileが契約を提供しなくなったとき（別の送信先の明示、`provider_order`からの除外、記録した施設の確認からの除外、鍵の削除、profileの変更）で、prepareは送らず、抽出のpassごと（cloudのon/offやcloud workerの有無に関係なく）`_end_withdrawn_cloud_attempts`が回を閉じて確認候補にします（検証できた設定`load_config_checked(wait=False)`でだけ判定し、読めない・更新中のpassでは待たずに閉じません。run lockを取った後、書込みtransactionの前に設定・確認記録・監査を読み直して判定し直し、各transactionの中ではまだ開いているかの確認と書込みだけを行います。見つけたときだけstale GCと同じ短い待ち時間でwrite lock・SQLiteの書込み待ち・SQLを区切り、取れなければ次のpassへ回します）（保存済みchunkと支払済み応答は契約に束縛されるため、別モデルでは再度支払うことになる）。
 pinしないunitの送信先の選択は従来どおりです。
