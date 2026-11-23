@@ -63,7 +63,7 @@ Keychain、ブラウザ profile、配送 journal、サービス設定も bundle 
 `patient-context-reset-*.db`（自動では削除しません）は `data/backups` にあります。
 鍵・policy・外部媒体は使いません。在宅記録の台帳（[ローカルのチャット表示](LOCAL_CHAT.md)の
 `--homecare-db`）が `data/homecare.db` にあるときは、その日次の `homecare-YYYYMMDD.db`（3世代）と
-更新前の `homecare-preupdate-*.db`（新しい3つ）も同じ場所にあります。台帳がほかの場所にあるときや
+更新前の `homecare-preupdate-YYYYMMDD-HHMMSS-<英数字>.db`（新しい3つ）も同じ場所にあります。この形でない名前の手作りのコピーは自動では削除せず、`restore` でも指定できません。台帳がほかの場所にあるときや
 まだ作っていないときは、台帳のバックアップは作りません。
 
 ```bash
@@ -119,7 +119,7 @@ sidecar 付き・壊れたファイルは拒否します。親ディレクトリ
   --backup homecare-YYYYMMDD.db --destination "$NEW_DIR"
 ```
 
-`homecare-YYYYMMDD.db`・`homecare-preupdate-*.db` を指定すると、完全検査と台帳の基盤 migration の
+`homecare-YYYYMMDD.db`・`homecare-preupdate-YYYYMMDD-HHMMSS-<英数字>.db` を指定すると、完全検査と台帳の基盤 migration の
 確認のあと、`NEW_DIR/homecare.db` だけを置きます。配送とは関係しないので同意待ちのマーカーは置かず、
 `mcs_restore.py` の承認も使いません。稼働中の `data/homecare.db` は置換・削除しません。
 
