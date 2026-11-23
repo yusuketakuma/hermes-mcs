@@ -1997,3 +1997,23 @@ def test_initial_history_edit_does_not_quiet_a_live_arrival_in_the_shared_job(st
 def test_initial_history_edit_alone_stays_quiet(store):
     _save(store, 10)
     assert _history_edit_seed(store, 10)['notification_free'] is True
+
+
+def test_reprocess_target_growth_keeps_attempts_backoff_and_fences_old_token(store):
+    """A later walk slice adding a reply of the same unchanged thread is the same input."""
+    _save(store, 1)
+    _save(store, 2, parent=1)
+    first = _replay(store, limit=1)
+    assert first['processed'] == 1
+    row = _job(store)
+    assert json.loads(row['payload'])['targets'] == [1]
+    later = time.time() + 3600
+    with store.db:
+        store.db.execute('UPDATE fetch_jobs SET attempts=2,next_try=? WHERE job_id=?', (later, row['job_id']))
+    token = runtime.JobToken.from_row(_job(store))
+    _replay(store, limit=1)
+    grown = _job(store)
+    assert json.loads(grown['payload'])['targets'] == [1, 2]
+    assert grown['state'] == 'pending' and grown['attempts'] == 2
+    assert grown['next_try'] == pytest.approx(later)
+    assert not runtime.job_matches(store, token)

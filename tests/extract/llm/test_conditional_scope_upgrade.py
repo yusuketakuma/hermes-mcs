@@ -70,7 +70,7 @@ def test_same_generation_version_nine_requeues_and_ignores_old_retry_budget(sour
         "extract_version": 9, "source_artifact_id": prior})
     now = time.time()
     selected = ledger.db.execute(llm._selection_sql(ledger.db, "DESC", "", None),
-        (llm.KIND, LLM_EXTRACT_VERSION, None, 1, 0, now, llm.KIND, LLM_EXTRACT_VERSION, now, 10)).fetchall()
+        (None, 1, 0, now, now, 10)).fetchall()
     assert len(selected) == 1 and selected[0]["message_id"] == 1
     assert selected[0]["attempts"] == 0 and selected[0]["qc_src"] is None
 

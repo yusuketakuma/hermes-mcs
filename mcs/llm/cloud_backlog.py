@@ -547,6 +547,25 @@ def _note_provider(seen, settings):
     seen["provider"] = provider
 
 
+# Each semantic lock try polls at the shared RUN_LOCK_POLL_S for this long
+# (three tries before yielding to the extract turn), so a cloud semantic job
+# competes for released windows on equal terms with the local lanes' polls.
+_SEMANTIC_LOCK_TRY_S = 10.0
+
+
+def _poll_run_lock(writer_lock, seconds, fence):
+    """Poll the run lock for up to ``seconds``; None once it expires or ``fence`` fails."""
+    until = time.monotonic() + seconds
+    while True:
+        fd = writer_lock.acquire_run_lock()
+        if fd is not None:
+            return fd
+        remaining = until - time.monotonic()
+        if remaining <= 0 or not fence():
+            return None
+        time.sleep(min(writer_lock.RUN_LOCK_POLL_S, remaining))
+
+
 def worker(parent, *, index=None, context_only=False):
     """Alternate guarded cloud extraction and semantic jobs with an independent ledger."""
     global _parent
@@ -702,7 +721,8 @@ def worker(parent, *, index=None, context_only=False):
                         if result.get("updated"):
                             allow_exit_settle = False
                     else:
-                        lock = writer_lock.acquire_run_lock()
+                        lock = _poll_run_lock(writer_lock, _SEMANTIC_LOCK_TRY_S, lambda: (
+                            os.getppid() == parent and writer_lock.updater_state() == initial))
                         if lock is None:
                             # Give a brief lock contention time to clear, but
                             # do not indefinitely starve the extract turn.

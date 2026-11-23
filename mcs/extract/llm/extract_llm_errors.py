@@ -296,22 +296,19 @@ def _write_lock(enabled: bool, wait_s: float = 60, *, deadline=None):
     source and generation guards. Taking the lock per row (up to 60 s
     each) while leases are held would stall the drainer for no proven gain."""
     fd = None
-    if enabled and deadline is not None:
-        until = min(deadline, time.monotonic() + max(0.0, wait_s))
-        while time.monotonic() < deadline:
+    if enabled and (deadline is None or time.monotonic() < deadline):
+        # Poll at the shared RUN_LOCK_POLL_S like every other run-lock
+        # waiter: a holder of a finished (often paid) result must not lose
+        # each released window to faster-polling waiters.
+        until = time.monotonic() + max(0.0, wait_s)
+        if deadline is not None:
+            until = min(until, deadline)
+        while True:
             fd = acquire_run_lock()
-            if fd is not None:
-                break
             remaining = until - time.monotonic()
-            if remaining <= 0:
+            if fd is not None or remaining <= 0:
                 break
-            time.sleep(min(1.0, remaining))
-    elif enabled:
-        for _ in range(max(1, int(wait_s))):
-            fd = acquire_run_lock()
-            if fd is not None:
-                break
-            time.sleep(1)
+            time.sleep(min(writer_lock.RUN_LOCK_POLL_S, remaining))
     try:
         if enabled and fd is None:
             writer_lock.record_writer_refusal("run_lock_not_acquired", "write_lock")
@@ -341,8 +338,7 @@ def _claim(ledger, r, lease_s: float = _EXTRACT_LEASE_S, *, lease_for=None) -> f
             current = ledger.db.execute(
                 _selection_sql(ledger.db, 'DESC', ' AND m.message_id=?',
                                cloud_followup=bool(r.get('_required_cloud_contract'))),
-                (KIND, EXTRACT_VERSION, r['message_id'], None, 1, 0, now,
-                 KIND, EXTRACT_VERSION, now, 1)).fetchone()
+                (r['message_id'], None, 1, 0, now, now, 1)).fetchone()
             if (r.get('_required_cloud_contract') and cloud_completion_any(ledger.db, r)[0] is not None):
                 ledger.db.commit()
                 return None

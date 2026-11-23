@@ -743,8 +743,7 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None,
             f"SELECT 1 FROM messages m WHERE {extract_llm.pending_pred(db)} "
             "AND COALESCE((SELECT MAX(COALESCE(json_extract(e.meta,"
             f"'$.attempts'),0)) {extract_llm._ERROR_ROWS_SQL}), 0) < 5 "
-            + scope_sql + " LIMIT 1", (extract_llm.KIND, extract_llm.EXTRACT_VERSION)
-        ).fetchone() is not None
+            + scope_sql + " LIMIT 1").fetchone() is not None
 
     # the LLM lane's own health record (llm_health.json): None means
     # unknown or healthy and never alerts
