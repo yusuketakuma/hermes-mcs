@@ -560,6 +560,7 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None, new_installati
     import semantic_policy
     from semantic_policy import semantic_config
     import cloud_policy
+    import provider_registry
 
     def shown(value):
         if value is None or value == "":
@@ -580,8 +581,8 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None, new_installati
     jev_held = semantic_policy.review_held(cfg.get("semantic"), jev_key, transfer_status)
     if key_presence is None:
         from mcs_util import private_env_problem
-        key_presence = {name: private_env_problem(key) is None for name, key in (
-            ("anthropic", "MCS_ANTHROPIC_API_KEY"), ("openai", "MCS_OPENAI_API_KEY"))}
+        key_presence = {name: private_env_problem(module.KEY_ENV) is None
+                        for name, module in provider_registry.PROVIDER_MODULES.items()}
     # The runtime's own choice (keys and facility review), so the preview names where data goes.
     cloud, _, cloud_held = cloud_policy.select_settings(
         cfg, lambda name: key_presence.get(name) is True, transfer_status)
@@ -622,7 +623,7 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None, new_installati
     print("  Jev設定: " + ", ".join(f"{key}={shown(semantic[key])}" for key in features)
           + f" / 1日の要求上限 {semantic['daily_request_budget']} / 対象 {project_scope}")
     print(f"  AI利用先: {cloud['provider']} / モデル {cloud['model']} / API別上限 {cloud['provider_budgets']}")
-    if provider == "openai":
+    if provider in provider_registry.CLOUD_PROVIDERS:
         for label, route, purpose in (("患者コンテキスト", "patient_context", "patient_context"),
                                       ("同じ患者コンテキストの品質修復", "patient_context", "quality_repair")):
             selection, profile_errors = cloud_policy.profile_for_settings(cfg, cloud, route=route, purpose=purpose)
@@ -633,12 +634,13 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None, new_installati
     cloud_scope = "全対象" if cloud["project_ids"] is None else shown(cloud["project_ids"])
     if cloud["mode"] in ("on", "shadow") and cloud_key:
         print(f"  外部AI追加処理: {cloud['mode']} / 対象 {cloud_scope}。患者コンテキストの作成・更新と同じコンテキストの品質修復で、"
-              f"患者名を含む投稿本文・参考文脈を匿名化せず選択した{'OpenAI' if provider == 'openai' else 'Anthropic'}のAPIへ送信します。通常のAPI保持条件が適用されます。"
+              f"患者名を含む投稿本文・参考文脈を匿名化せず選択した{provider_registry.display_name(provider)}のAPIへ送信します。通常のAPI保持条件が適用されます。"
               "キー登録だけではZDRやHIPAAに関する契約は確認できません。保持条件と契約を利用者側で確認してください。"
               "詳細: docs/guides/ANTHROPIC.md")
     elif cloud_held:
         print(f"  外部AI追加処理: {cloud['mode']}。"
-              + external_transfer.hold_message({"openai": "OpenAI"}.get(cloud_held, "Anthropic"),
+              + external_transfer.hold_message(provider_registry.display_name(
+                                                   cloud_held, provider_registry.display_name(provider_registry.DEFAULT_PROVIDER)),
                                                transfer_status()))
     else:
         print(f"  外部AI追加処理: {cloud['mode']} / キー未登録・off・dry_runの場合は外部送信しません。")

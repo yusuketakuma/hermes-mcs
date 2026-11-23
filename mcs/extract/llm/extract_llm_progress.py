@@ -2,6 +2,7 @@
 import json
 import sqlite3
 import cloud_inference
+import provider_registry
 import inference_version as inference
 import extract_validation
 import extract_quality
@@ -281,7 +282,7 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None, re
                         or proof.get("result_hash") != digest
                         or type(proof.get("complete")) is not bool
                         or not isinstance(proof.get("providers"), list)
-                        or any(name not in ("local", "anthropic", "openai")
+                        or any(name not in provider_registry.INFERENCE_PROVIDERS
                                for name in proof["providers"])
                         or len(set(proof["providers"])) != len(proof["providers"])
                         or (proof["complete"] and not proof["providers"])):

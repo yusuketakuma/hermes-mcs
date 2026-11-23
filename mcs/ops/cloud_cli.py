@@ -16,6 +16,7 @@ import uuid
 
 import cloud_policy as policy
 import mcs_util
+import provider_registry
 import semantic_jev as jev
 
 READ_SECONDS = 5.0
@@ -44,8 +45,8 @@ class _ReaderLimit(ValueError):
 def pending_key_presence(root=None):
     """Preview only booleans for keys that init will save, never their values."""
     return {"jev": bool(os.environ.get("TYPESAFE_API_KEY") or jev.api_key(root)),
-            "anthropic": bool(os.environ.get(policy.anthropic_client.KEY_ENV) or policy.api_key(root)),
-            "openai": bool(os.environ.get(policy.openai_client.KEY_ENV) or policy.provider_key("openai", root))}
+            **{name: bool(os.environ.get(module.KEY_ENV) or policy.provider_key(name, root))
+               for name, module in provider_registry.PROVIDER_MODULES.items()}}
 
 
 def _settings(cfg, root=None):
@@ -147,7 +148,7 @@ def _checkpoint(deadline, rows=0):
         raise ValueError("observation_budget_exceeded")
 
 
-def _dryrun_report(db, deadline, now, provider="anthropic"):
+def _dryrun_report(db, deadline, now, provider=provider_registry.DEFAULT_PROVIDER):
     fields = ("requests", "input_chars", "estimated_input_tokens", "estimated_output_tokens")
     start = now - 62 * 86400
     days = {}
@@ -184,6 +185,7 @@ def _dryrun_report(db, deadline, now, provider="anthropic"):
 def diagnostics(cfg, *, root=None, probe=False):
     """Return only effective modes, key presence, budgets and optional safe accounting."""
     cloud, errors, key, held = _selection(cfg, root)
+    status_key = cloud["provider"] if cloud["provider"] in provider_registry.CLOUD_PROVIDERS else provider_registry.DEFAULT_PROVIDER
     from semantic_policy import BACKLOG_BUDGET_RESERVE, runtime_config
     semantic, sem_errors = runtime_config(cfg, root=root)
     jev_key = bool(jev.api_key(root))
@@ -194,7 +196,8 @@ def diagnostics(cfg, *, root=None, probe=False):
                 "daily_request_budget": semantic["daily_request_budget"],
                 "scope": "all" if semantic["project_ids"] is None else "none" if not semantic["project_ids"] else "selected",
                 "backlog_budget": None},
-        "anthropic": {"mode": cloud["mode"], "key_present": key,
+        # The cloud entry is named after the selected provider ("auto" keeps the default's name).
+        status_key: {"mode": cloud["mode"], "key_present": key,
                 "status": "invalid" if policy.blocking_errors(errors) else "local" if not key or cloud["mode"] in ("off", "dry_run") else "configured",
                 "daily_request_budget": cloud["daily_request_budget"],
                 "daily_cost_limit_usd": cloud["daily_cost_limit_usd"],
@@ -207,17 +210,17 @@ def diagnostics(cfg, *, root=None, probe=False):
     import external_transfer
     from semantic_policy import runtime_review_held
     if held:
-        out["anthropic"]["block_reason"] = external_transfer.HOLD_CODE
+        out[status_key]["block_reason"] = external_transfer.HOLD_CODE
     if cfg and runtime_review_held(cfg, root=root):
         out["jev"]["block_reason"] = external_transfer.HOLD_CODE
     eligible_scope = cloud["project_ids"] is None or bool(set(cloud["project_ids"]) - set(cloud["exclude_project_ids"]))
     window_reason = policy.setting_block_reason(cloud) if not errors else None
     if key and cloud["mode"] in ("on", "shadow") and window_reason:
-        out["anthropic"].update(status="local", block_reason=window_reason)
+        out[status_key].update(status="local", block_reason=window_reason)
     if (not errors and not key and cloud["mode"] in ("on", "shadow")
             and cloud["routes"] and eligible_scope):
         # A plain doctor cannot observe the persisted pause without opening DB.
-        out["anthropic"].update(status="warning" if probe else "local", block_reason="no_api_key")
+        out[status_key].update(status="warning" if probe else "local", block_reason="no_api_key")
     if probe:
         unknown = {"state": "unknown", "used_today": None, "backlog_limit": None,
                    "realtime_reserve": None, "daily_remaining": None, "reason": None, "effect": None}
@@ -245,20 +248,18 @@ def diagnostics(cfg, *, root=None, probe=False):
         try:
             with _reader(root) as (db, deadline):
                 borrowed = SimpleNamespace(db=db)
-                out["anthropic"]["accounting"] = policy.usage_report(borrowed)
-                out["anthropic"]["dry_run"] = _dryrun_report(db, deadline, time.time(), cloud["provider"])
+                out[status_key]["accounting"] = policy.usage_report(borrowed)
+                out[status_key]["dry_run"] = _dryrun_report(db, deadline, time.time(), cloud["provider"])
                 reason = policy.global_block_reason(borrowed, model=cloud["model"]) or policy.budget_block_reason(borrowed, cloud)
                 if reason and held:
                     # the review hold stays the reason shown; the probe's own reason is kept beside it
-                    out["anthropic"]["also_block_reason"] = reason
+                    out[status_key]["also_block_reason"] = reason
                 elif reason == "paused":
-                    out["anthropic"].update(status="local", block_reason=reason)
+                    out[status_key].update(status="local", block_reason=reason)
                 elif reason:
-                    out["anthropic"].update(status="blocked", block_reason=reason)
+                    out[status_key].update(status="blocked", block_reason=reason)
         except (OSError, ValueError, sqlite3.Error):
-            out["anthropic"]["status"] = "unknown"
-    if cloud["provider"] == "openai":
-        out["openai"] = out.pop("anthropic")
+            out[status_key]["status"] = "unknown"
     return out
 
 
@@ -424,7 +425,7 @@ def _calibration(db, since):
 def _costs(item, ratio, fx=None, *, output_limit=policy.ORIGINAL_MAX_TOKENS, output_per_request=None, model=policy.MODEL):
     definition = policy._price_definition(model)
     prices = definition["prices"]
-    high_input = prices["reservation_input"] if definition["provider"] == "openai" else prices["long_input"]
+    high_input = prices[provider_registry.PROVIDER_MODULES[definition["provider"]].HIGH_INPUT_PRICE]
     tokens = int((Decimal(item["input_chars"]) * ratio).to_integral_value(rounding="ROUND_CEILING"))
     ceiling = item["requests_estimate"] * output_limit
     output = (min(ceiling, math.ceil(item["requests_estimate"] * output_per_request))
@@ -1206,10 +1207,11 @@ def providers_command(args):
                 changes["cloud_llm.provider_budgets"] = budgets
         block = cfg.get("cloud_llm", {})
         profile_maps = {name: dict(mapping) for name, mapping in block.get("provider_profiles", {}).items()}
+        legacy = provider_registry.LEGACY_PROFILES_PROVIDER
         if "profiles" in block:
-            profile_maps.setdefault("openai", {}).update(block["profiles"])
+            profile_maps.setdefault(legacy, {}).update(block["profiles"])
         profile_changes = {}
-        for name, module in (("openai", policy.openai_client), ("anthropic", policy.anthropic_client)):
+        for name, module in provider_registry.PROVIDER_MODULES.items():
             for purpose in sorted(module.PROFILE_PURPOSES):
                 value = getattr(args, f"{name}_{purpose}_profile", None)
                 if value is None:
@@ -1220,8 +1222,8 @@ def providers_command(args):
                 profile_changes.setdefault(name, {})[purpose] = value
         if profile_changes:
             changes["cloud_llm.provider_profiles"] = profile_maps
-            if "profiles" in block and "openai" in profile_changes:
-                changes["cloud_llm.profiles"] = profile_maps["openai"]
+            if "profiles" in block and legacy in profile_changes:
+                changes["cloud_llm.profiles"] = profile_maps[legacy]
         if changes:
             callback_args = {key: getattr(args, key) for key in ("admission", "on_saved")
                              if getattr(args, key, None) is not None}
@@ -1275,7 +1277,8 @@ def provider_dialog(root, *, admission=None, on_saved=None):
             raise ValueError("config_unreadable")
         values = {}
         print("空欄では現在のAPI別上限を維持します。新たに設定する場合は日額と月額の両方を入力してください。")
-        for name, label in (("anthropic", "Anthropic"), ("openai", "OpenAI")):
+        for name, module in provider_registry.PROVIDER_MODULES.items():
+            label = module.DISPLAY_NAME
             caps = settings["provider_budgets"].get(name, {})
             for suffix, period, key in (("_daily_usd", "1日", "daily_cost_limit_usd"),
                                         ("_monthly_usd", "1か月", "monthly_cost_limit_usd")):
@@ -1315,16 +1318,18 @@ def add_parsers(sub):
                    help="既定の上限（5秒・10万件）では確認しきれないとき、上限を広げて全件を確認（最長5分）")
     q.set_defaults(fn=command, cloud_action="outstanding")
     q = actions.add_parser("providers", help="AI利用先・優先順位・API別予算を表示・設定します")
-    q.add_argument("--provider", choices=("anthropic", "openai", "auto"))
-    q.add_argument("--priority", choices=("anthropic,openai", "openai,anthropic"))
+    q.add_argument("--provider", choices=(*provider_registry.CLOUD_PROVIDERS, "auto"))
+    q.add_argument("--priority", choices=(",".join(provider_registry.CLOUD_PROVIDERS),
+                                          ",".join(reversed(provider_registry.CLOUD_PROVIDERS))))
     for provider in policy.PROVIDERS:
         q.add_argument(f"--{provider}-daily-usd")
         q.add_argument(f"--{provider}-monthly-usd")
-    for provider, module in (("openai", policy.openai_client), ("anthropic", policy.anthropic_client)):
+    for provider, module in provider_registry.PROVIDER_MODULES.items():
         for purpose in sorted(module.PROFILE_PURPOSES):
             label = purpose.replace("_", "-")
-            flags = ([f"--{label}-profile", f"--openai-{label}-profile"] if provider == "openai"
-                     else [f"--anthropic-{label}-profile"])
+            # The older unprefixed flags keep naming the legacy profiles provider.
+            flags = ([f"--{label}-profile"] if provider == provider_registry.LEGACY_PROFILES_PROVIDER else []
+                     ) + [f"--{provider}-{label}-profile"]
             q.add_argument(*flags, dest=f"{provider}_{purpose}_profile",
                            choices=sorted(module.PROFILE_DEFINITIONS), help=f"{provider} の {purpose} 用profile")
     q.set_defaults(fn=providers_command, cloud_action="providers")

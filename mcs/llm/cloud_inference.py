@@ -11,7 +11,6 @@ import sys
 import time
 
 import anthropic_client
-import openai_client
 import provider_registry
 import cloud_backlog
 import cloud_client
@@ -400,10 +399,7 @@ class CloudInferenceUnit:
                 max_bytes=cloud_client.response_limit(body.get("max_tokens", body.get("max_output_tokens"))))
             client_args["wait_fn"] = lambda delay: transport(time.sleep, delay)
         client = provider_registry.PROVIDER_MODULES[resolved["provider"]].client_class()
-        if resolved["provider"] == "openai" or resolved["effort"] is not None:
-            # The original Haiku contract keeps its unchanged constructor call.
-            client_args.update(model=self.model, effort=resolved["effort"])
-        self.client = client(key, **client_args)
+        self.client = client(key, model=self.model, effort=resolved["effort"], **client_args)
 
     def _blocked_code(self, reason, cfg=None, *, settings=None):
         """A send-block code named for the classifier; ``cfg`` is the raw configuration the stop
@@ -738,13 +734,9 @@ def verify_cloud_repair_evidence(db, *, reservation_artifact_id, reservation_id,
                 or reservation["unit_key"] != unit_key or reservation["owner"] != owner
                 or reservation["logical_request_fp"] != expected_request
                 or cloud_provider_contract(selection=selected) != contract
-                or selected["provider"] == "openai" and profile is not None
-                and openai_client.PROFILE_DEFINITIONS.get(profile) != (selected["model"], selected["effort"])
-                or selected["provider"] == "anthropic" and not cloud_policy.profile_contract_valid(
-                    "anthropic", selected["model"], selected["effort"], profile, reservation["max_tokens"])
-                or profile is not None
-                and reservation["max_tokens"] != {"backlog": 8192, "patient_context": 16384,
-                                                   "quality_repair": 32768}[purpose]
+                or not cloud_policy.profile_contract_valid(
+                    selected["provider"], selected["model"], selected["effort"], profile, reservation["max_tokens"])
+                or profile is not None and reservation["max_tokens"] != cloud_policy.PURPOSE_MAX_TOKENS[purpose]
                 or result.get("answer_text_sha256_v1") != hashlib.sha256(encoded).hexdigest()
                 or result.get("answer_finish_reason_v1") != finish_reason):
             raise ValueError("cloud_repair_evidence_invalid")

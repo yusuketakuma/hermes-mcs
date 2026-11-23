@@ -21,9 +21,11 @@ Anthropic の公式資料（料金・effort・thinking・errors・versioning）�
 
 - 直した方がよい 3（日付の境目の全体停止）: `cloud_policy._circuit_on_pricing_error` が、試行開始時点で期限切れの料金表を回路を動かさない拒否として扱うため解消済みです。
 - 同 6（エラーの誤分類）: Anthropic の支出上限の 400 は `payment_required`、Retry-After の無い 429 は再試行しません（`anthropic_client.response_error`）。OpenAI の 429 は quota 系コードだけを止め、レート制限は従来どおり再試行します。
-- 同 7（重複）: 4a97288 では既定の出力上限 1600 が複数の呼出元に重複していました。PR #325 で `cloud_policy.ORIGINAL_MAX_TOKENS` と `selection_max_tokens` に集めます（再抽出は抽出側の `MAX_TOKENS` を使い続けます）。提供元名による分岐は `cloud_policy`・`cloud_inference` などに残っており、PR #325 で `provider_registry` の docstring をこの現状に合わせます。
+- 同 7（重複）: 4a97288 では既定の出力上限 1600 が複数の呼出元に重複し、提供元名による分岐も `cloud_policy`・`cloud_inference`・`provider_settings`・`cloud_cli`・抽出・意味解析・通知・設定画面に残っていました。PR #325 で、出力上限を `cloud_policy.ORIGINAL_MAX_TOKENS`・`selection_max_tokens`・`PURPOSE_MAX_TOKENS` に集め（再抽出は抽出側の `MAX_TOKENS` を使い続けます）、提供元ごとの違いを各提供元の定義ファイルへ移して `provider_registry` から引くようにします。提供元名が残るのは、保存済み記録の項目名・設定キー・CLI のフラグ・`bounded_http` の認証方式名など、名前がデータそのものの箇所です。
 - 「文書とコードの食い違い」2: `cloud_send_admission.tightened` の docstring は、未送信として0円で精算する実装に合っています。
-- 「あるとよい」: `reserve_fn` は必須になり、Retry-After が残り時間を超えるときは待たずに失敗し、回路の行の model は提供元に依らない値（`jev` か空）になりました。テストの本番 endpoint 遮断（`tests/conftest.py`）は未確認です。
+- 「文書とコードの食い違い」1・5・7: ANTHROPIC.md は 5xx・529 を待たずにローカルへ回すと書いており、料金期限の予告は `earliest_price_info` で profile が選ぶ全モデルを見ており、`bounded_http` の docstring は Anthropic・OpenAI を利用者に挙げているため、いずれも解消済みです。PR #325 で、ANTHROPIC.md の 429 の説明に再試行しない場合を足しました。
+- 「文書とコードの食い違い」4（キャッシュ）: 接頭辞を指定するのは過去分の再抽出だけです。PR #325 で ANTHROPIC.md をこの実装に合わせました。
+- 「あるとよい」: `reserve_fn` は必須になり、Retry-After が残り時間を超えるときは待たずに失敗し、回路の行の model は提供元に依らない値（`jev` か空）になりました。テストの本番 endpoint 遮断は `tests/conftest.py` が `bounded_http_request` の入口で Anthropic・OpenAI・Jev・ローカルLLM の本番 endpoint を拒否しており、確認済みです。
 
 ## 必ず直す
 
@@ -103,7 +105,7 @@ Anthropic の公式資料（料金・effort・thinking・errors・versioning）�
 3. **README の説明**: README は「個別投稿のクラウド再抽出は行わない」「意味解析はローカル」としている。実際は `*_backlog_until` の期間中、クラウドへ送る。
 4. **キャッシュ**: ANTHROPIC.md はシステムプロンプトをキャッシュの接頭辞にするとしているが、実際に使うのは再抽出の経路だけ。
 5. **料金期限の予告**: 実装は既定モデルの料金表だけを見ている。
-6. **`provider_registry` の docstring**: 「名前で分岐しない」としているが、実装と食い違う。
+6. **`provider_registry` の docstring**: 「名前で分岐しない」としているが、実装と食い違う。（2026-11-23 追記: PR #325 で分岐を移し、docstring も実装に合わせた）
 7. **`bounded_http` の docstring**: 主な有料経路（Anthropic/OpenAI）を利用者として書いていない。
 8. **医薬品情報の照会**: SECURITY.md は「TinyFish だけ」としているが、`drug_info.py` に呼出元のない Exa の経路が残っていた（後続の変更で、経路と `bounded_http` の公開MCP例外を削除済み）。
 9. **秘密値の一覧**: SECURITY.md の秘密値一覧に `MCS_ANTHROPIC_API_KEY`/`MCS_OPENAI_API_KEY` がない。
