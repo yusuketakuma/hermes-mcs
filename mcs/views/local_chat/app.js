@@ -1,8 +1,11 @@
 "use strict";
 const $ = id => document.getElementById(id);
-const state = {patients: [], patientCursor: null, project: null, sections: [["", "タイムライン"]], cursor: null, query: "", panel: "", panelPage: 0, generation: null, mainRequest: 0, detailRequest: 0, patientRequest: 0, contextRequest: 0, onSelect: null, onSearch: null};
+const state = {patients: [], patientCursor: null, project: null, sections: [["", "タイムライン"]], cursor: null, query: "", panel: "", panelPage: 0, generation: null, mainRequest: 0, detailRequest: 0, navRequest: 0, patientRequest: 0, contextRequest: 0, sideRequest: 0, sideProject: null, onSelect: null, onSearch: null};
 const subjectLabels = {patient: "本人", family: "家族", other: "他者", unspecified: "対象未確認"};
 const fmt = (ts, options = {}) => ts == null ? "時刻未取得" : new Date(ts * 1000).toLocaleString("ja-JP", {timeZone: "Asia/Tokyo", ...options});
+// A date without the year when it falls in the current JST year: 11/18, otherwise 2025/11/18.
+const jstYear = ms => new Date(ms + 9 * 3600e3).getUTCFullYear();
+const shortDate = ts => fmt(ts, jstYear(ts * 1000) === jstYear(Date.now()) ? {month: "numeric", day: "numeric"} : {year: "numeric", month: "numeric", day: "numeric"});
 function el(tag, text, cls) {const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node;}
 // Shared UI kit: every screen builds its chips, cards, key-value lists and tab strips from these.
 function chip(text, tone = "") {return el("span", text, tone ? `chip chip-${tone}` : "chip");}
@@ -76,10 +79,12 @@ function patientList() {
   for (const patient of state.patients) {
     const button = el("button", null, "patient" + (patient.project_id === state.project ? " selected" : ""));
     button.setAttribute("aria-current", patient.project_id === state.project ? "page" : "false");
-    button.append(el("span", "#", "hash"));
-    const label = el("span", patient.patient_name || `患者 ${patient.project_id}`, "patient-label");
-    label.append(el("small", `ID ${patient.project_id}${patient.is_archived ? " · アーカイブ" : ""}`));
-    button.append(label, el("span", patient.message_count, "count"));
+    const label = el("span", null, "patient-label"), top = el("span", null, "patient-top");
+    top.append(el("span", patient.patient_name || `患者 ${patient.project_id}`, "patient-title"));
+    if (patient.is_archived) top.append(chip("アーカイブ", "muted"));
+    label.append(top, el("small", [`ID ${patient.project_id}`, patient.latest_at != null && `最終投稿 ${shortDate(patient.latest_at)}`].filter(Boolean).join(" · ")));
+    const count = el("span", patient.message_count, "count"); count.title = `保存済み ${patient.message_count} 件`;
+    button.append(label, count);
     button.onclick = () => selectPatient(patient);
     $("patients").append(button);
   }
@@ -89,6 +94,7 @@ function patientList() {
 }
 async function loadPatients(more = false) {
   const request = ++state.patientRequest;
+  if (!state.project) loadSideStatus();
   try {
     const data = await api("patients", {q: $("patient-search").value.trim(), cursor: more ? state.patientCursor : null});
     if (request !== state.patientRequest) return;
@@ -103,27 +109,36 @@ function closeDetail() {++state.detailRequest; $("detail").classList.remove("ope
 function selectPatient(patient) {
   shell.openList(false);
   state.project = patient.project_id; state.query = ""; $("message-search").value = ""; $("clear-search").hidden = true;
-  shell.heading(patient.patient_name || `患者 ${patient.project_id}`, `ID ${patient.project_id} · 保存済み ${patient.message_count} 件`, patient.is_archived ? [chip("アーカイブ", "muted")] : []);
-  const fetchLabels = {pending: "未取得", complete: "取得済み", incomplete: "一部未取得", partial: "一部取得", failed: "取得失敗"};
-  $("coverage").textContent = `取得状態: ${fetchLabels[patient.fetch_state] || "取得状況を要確認"} · ${patient.history_floor === -1 ? "履歴の終端までの取得記録あり" : "履歴全体の取得は未確認"}`;
-  $("coverage").hidden = false;
-  state.panelPage = 0; closeDetail(); patientList(); loadPatientContext(patient.project_id); loadMain();
+  const meta = [`ID ${patient.project_id}`, `保存済み ${patient.message_count} 件`, patient.latest_at != null && `最終投稿 ${shortDate(patient.latest_at)}`];
+  shell.heading(patient.patient_name || `患者 ${patient.project_id}`, meta.filter(Boolean).join(" · "), [...(patient.is_archived ? [chip("アーカイブ", "muted")] : []), ...fetchChips(patient)]);
+  state.panelPage = 0; closeDetail(); patientList(); loadPatientContext(patient.project_id); loadSideStatus(); loadMain();
   state.onSelect?.(patient.project_id);
+}
+function fetchChips(patient) {
+  // Only an incomplete fetch is called out; a complete fetch with the history end on record shows nothing.
+  const labels = {pending: "未取得", incomplete: "一部未取得", partial: "一部取得", failed: "取得失敗"};
+  const chips = [];
+  if (patient.fetch_state !== "complete") chips.push(chip(labels[patient.fetch_state] || "取得状況を要確認", "warn"));
+  if (patient.history_floor !== -1) chips.push(chip("履歴全体の取得は未確認", "warn"));
+  for (const item of chips) item.title = `取得状態: ${item.textContent}`;
+  return chips;
 }
 async function loadPatientContext(project) {
   const request = ++state.contextRequest, panel = $("patient-context");
-  panel.replaceChildren(el("h2", "患者コンテキスト"), el("p", "背景情報を読込中…"));
+  panel.replaceChildren(el("h2", "患者コンテキスト"), el("p", "背景情報を読込中…", "context-empty"));
   try {
     const data = await api("context", {project});
     if (request !== state.contextRequest || project !== state.project) return;
     const groups = data.sections.filter(group => group.items.length);
     panel.replaceChildren(el("h2", "患者コンテキスト"));
-    if (!groups.length) {panel.append(el("p", "表示できる患者コンテキストはまだ保存されていません。")); return;}
+    if (!groups.length) {panel.append(el("p", "表示できる患者コンテキストはまだ保存されていません。", "context-empty")); return;}
     const preview = el("div", null, "context-preview");
     for (const group of groups.slice(0, 4)) {
-      const item = group.items[0], entry = el("div", null, "context-brief");
-      entry.append(el("b", group.label), el("span", `${subjectLabels[item.subject] || "対象未確認"}: ${item.text || item.evidence || ""}`), el("small", fmt(item.posted_at_ts, {year:"numeric", month:"numeric", day:"numeric"})));
-      if (item.scope_note) entry.append(el("small", item.scope_note, "context-scope"));
+      const item = group.items[0], entry = el("div", null, "context-brief"), label = el("div", null, "context-label");
+      const text = `${subjectLabels[item.subject] || "対象未確認"}: ${item.text || item.evidence || ""}`, line = el("span", text, "context-text");
+      line.title = text; label.append(el("b", group.label));
+      if (item.scope_note) label.append(el("small", item.scope_note, "context-scope"));
+      entry.append(label, line);
       preview.append(entry);
     }
     const details = el("details", null, "context-records");
@@ -140,7 +155,7 @@ async function loadPatientContext(project) {
     }
     panel.append(preview, details);
   } catch (error) {
-    if (request === state.contextRequest && project === state.project) panel.replaceChildren(el("h2", "患者コンテキスト"), el("p", "背景情報を取得できませんでした。「更新」で読み直してください。"));
+    if (request === state.contextRequest && project === state.project) panel.replaceChildren(el("h2", "患者コンテキスト"), el("p", "背景情報を取得できませんでした。「更新」で読み直してください。", "context-empty"));
   }
 }
 function post(row, detailed = false) {
@@ -148,20 +163,25 @@ function post(row, detailed = false) {
   const name = row.sender_name || "投稿者未取得";
   article.append(el("span", Array.from(name)[0], "avatar"));
   const content = el("div", null, "post-content"), heading = el("div", null, "post-heading");
-  heading.append(el("span", name, "sender"), el("time", fmt(row.posted_at_ts, {month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit"}), "timestamp"));
+  heading.append(el("span", name, "sender"));
+  if (row.profession || row.organization) heading.append(el("span", [row.profession, row.organization].filter(Boolean).join(" · "), "post-role"));
+  heading.append(el("time", fmt(row.posted_at_ts, {month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit"}), "timestamp"));
   content.append(heading, el("p", row.body_state === "deleted" ? "削除された投稿" : row.body_text || "本文未取得", "post-body"));
-  if (row.profession || row.organization) heading.append(el("span", [row.profession, row.organization].filter(Boolean).join(" · "), "timestamp"));
   if (row.summary_lines?.length) {const summary = el("details", null, "post-summary"); summary.append(el("summary", "記録の要約")); for (const line of row.summary_lines) summary.append(el("p", line)); content.append(summary);}
-  if (row.stamp_line) content.append(el("p", row.stamp_line, "state-note"));
-  if (!row.body_complete && row.body_state !== "deleted") content.append(el("p", "本文は一部未取得です", "state-note"));
-  const footer = el("div", null, "post-footer"), button = el("button", `詳細・返信${row.stored_replies ? ` ${row.stored_replies}件` : ""}`, "reply-link");
-  button.onclick = () => openDetail(row);
-  footer.append(button);
-  const files = (row.attachments || []).reduce((sum, item) => sum + item.count, 0);
-  if (files) footer.append(el("span", `添付 ${files}件`, "attachment-pill"));
-  if (row.parent_id) footer.append(el("span", "返信の検索結果"));
-  if (row.reply_count > row.stored_replies) content.append(el("p", "未取得の返信があります", "state-note"));
-  if (!detailed) content.append(footer);
+  // One footer row: the actions on the post, then its record states as chips (shown in the detail too).
+  const footer = el("div", null, "post-footer");
+  if (!detailed) {
+    const button = el("button", `詳細・返信${row.stored_replies ? ` ${row.stored_replies}件` : ""}`, "reply-link");
+    button.onclick = () => openDetail(row);
+    footer.append(button);
+    const files = (row.attachments || []).reduce((sum, item) => sum + item.count, 0);
+    if (files) footer.append(chip(`添付 ${files}件`, "muted"));
+    if (row.parent_id) footer.append(chip("返信の検索結果", "info"));
+  }
+  if (row.stamp_line) footer.append(chip(row.stamp_line, /未取得|失敗|古い/.test(row.stamp_line) ? "warn" : "muted"));
+  if (!row.body_complete && row.body_state !== "deleted") footer.append(chip("本文は一部未取得です", "warn"));
+  if (row.reply_count > row.stored_replies) footer.append(chip("未取得の返信があります", "warn"));
+  if (footer.children.length) content.append(footer);
   article.append(content); return article;
 }
 function chronological(rows) {return rows.slice().sort((a,b) => (a.posted_at_ts ?? -Infinity) - (b.posted_at_ts ?? -Infinity) || a.message_id - b.message_id);}
@@ -281,15 +301,19 @@ async function loadSections() {
     viewTabs();
   } catch (error) {fail(error);}
 }
+function showView(key) {state.panel = key; state.panelPage = 0; closeDetail(); loadMain();}
 function viewTabs() {
-  $("view-tabs").replaceChildren(tabs(state.sections, state.panel, key => {state.panel = key; state.panelPage = 0; closeDetail(); loadMain();}));
+  const strip = tabs(state.sections, state.panel, showView);
+  $("view-tabs").replaceChildren(strip);
+  // On narrow screens the chosen tab may sit past the edge of the scrolling strip.
+  strip.children[state.sections.findIndex(([key]) => key === state.panel)]?.scrollIntoView({block: "nearest", inline: "nearest"});
 }
 function loadMain() {
   const timeline = !state.panel;
   viewTabs();
-  for (const id of ["coverage", "older", "timeline", "timeline-status"]) if (!timeline) $(id).hidden = true;
+  for (const id of ["older", "timeline", "timeline-status"]) if (!timeline) $(id).hidden = true;
   $("panel-view").hidden = timeline;
-  if (timeline) {$("coverage").hidden = !state.project; $("timeline").hidden = false; loadTimeline();}
+  if (timeline) {$("timeline").hidden = false; loadTimeline();}
   else loadPanel();
 }
 function renderPanel(view, onPage) {
@@ -299,18 +323,8 @@ function renderPanel(view, onPage) {
   if (view.body != null) for (const line of view.body.split("\n")) box.append(el("p", line, line.startsWith("■") ? "panel-group" : "panel-line"));
   let group;
   for (const item of view.items || []) {
-    if (item.group && item.group !== group) {group = item.group; box.append(el("h3", group));}
-    const row = el("div", null, "panel-item");
-    if (item.quotes?.length) for (const quote of item.quotes) row.append(el("blockquote", quote));
-    else row.append(el("p", item.text || ""));
-    if (item.quotes?.length && item.source) row.append(el("small", item.source));
-    else if (item.source) row.append(el("small", item.source));
-    if (item.message_id) {
-      const open = el("button", "投稿を開く", "text-button"), project = state.project;
-      open.onclick = async () => {const detail = ++state.detailRequest; try {const source = await api("evidence", {project, message: item.message_id}); if (project === state.project && detail === state.detailRequest) openDetail(source.message);} catch (error) {if (detail === state.detailRequest) fail(error);}};
-      row.append(open);
-    }
-    box.append(row);
+    if (item.group && item.group !== group) {group = item.group; box.append(el("h3", group, "panel-group-head"));}
+    box.append(panelItem(item));
   }
   if (!view.items?.length && view.body == null) box.append(el("p", view.empty || "表示できる記録はありません。", "empty"));
   if (view.more) box.append(el("p", `他${view.more}件`, "panel-head"));
@@ -324,6 +338,56 @@ function renderPanel(view, onPage) {
   }
   return box;
 }
+function panelItem(item) {
+  const row = el("div", null, "panel-item");
+  if (item.quotes?.length) for (const quote of item.quotes) row.append(el("blockquote", quote));
+  else row.append(el("p", item.text || ""));
+  if (!item.source && !item.message_id) return row;
+  const meta = el("div", null, "panel-item-meta");
+  if (item.source) meta.append(el("small", item.source));
+  if (item.message_id) meta.append(openPostButton(item.message_id));
+  row.append(meta);
+  return row;
+}
+function openPostButton(message) {
+  // A navigation has its own token: the open detail (and its buttons) stays live until the post has
+  // loaded and openDetail replaces it. A close, another patient or a newer navigation drops the answer.
+  const open = el("button", "投稿を開く", "text-button"), project = state.project;
+  open.onclick = async () => {
+    const nav = ++state.navRequest, detail = state.detailRequest;
+    const current = () => nav === state.navRequest && detail === state.detailRequest && project === state.project;
+    try {const source = await api("evidence", {project, message}); if (current()) openDetail(source.message);}
+    catch (error) {if (current()) fail(error);}
+  };
+  return open;
+}
+// いまの状況: open signals and reply checks beside the timeline, only while the wide right column shows.
+const sideViews = [["signals", "未解消のシグナル"], ["replies", "連絡・返答の確認"]], sideLimit = 5;
+const wideRail = globalThis.matchMedia?.("(min-width: 1200px)");
+function loadSideStatus() {
+  const request = ++state.sideRequest, project = state.project, rail = $("side-status");
+  if (!project || (wideRail && !wideRail.matches)) {state.sideProject = null; rail.replaceChildren(); return Promise.resolve();}
+  state.sideProject = project;
+  const cards = sideViews.map(([key, title]) => sideCard(key, title, request, project));
+  rail.replaceChildren(el("h2", "いまの状況"), ...cards.map(([box]) => box));
+  return Promise.all(cards.map(([, loaded]) => loaded));
+}
+function sideCard(key, title, request, project) {
+  const all = el("button", "すべて見る", "text-button"), body = el("div", null, "side-body");
+  all.onclick = () => showView(key);
+  body.append(el("p", "読込中…", "side-note"));
+  const current = () => request === state.sideRequest && project === state.project;
+  const loaded = api("panel", {project, section: key}).then(data => {
+    if (!current()) return;
+    const view = data.panel, items = view.items || [];
+    body.replaceChildren(...items.slice(0, sideLimit).map(panelItem));
+    if (!items.length) body.append(el("p", view.empty || "表示できる記録はありません。", "side-note"));
+    if (items.length > sideLimit || view.more || view.pages > 1) body.append(el("p", "続きは「すべて見る」で表示します。", "side-note"));
+    for (const note of view.notes || []) body.append(el("p", note, "state-note"));
+  }, () => {if (current()) body.replaceChildren(el("p", "取得できませんでした。「すべて見る」か「更新」で読み直してください。", "state-note"));});
+  return [card(title, [body], {actions: [all]}), loaded];
+}
+wideRail?.addEventListener?.("change", () => {if (wideRail.matches && state.project && state.sideProject !== state.project) loadSideStatus();});
 async function loadPanel() {
   if (!state.project) return;
   const request = ++state.mainRequest, project = state.project, section = state.panel;
