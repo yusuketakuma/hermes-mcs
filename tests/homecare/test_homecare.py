@@ -175,6 +175,23 @@ def test_update_checks_version_merges_fields_and_audits(db):
     assert records.get(db, "patient", row["patient_id"])["caution_note"] == "合成の注意"
 
 
+def test_a_handover_seen_on_an_old_screen_is_refused_even_when_the_same_person_holds_the_role_again(db):
+    me = first_staff(db)
+    other = staff(db, me["staff_id"], name="合成 薬剤師二", codes=("pharmacy.pharmacist",))
+    third = staff(db, me["staff_id"], name="合成 薬剤師三", codes=("pharmacy.pharmacist",))
+    row, role = patient(db, me["staff_id"]), "pharmacy.primary_pharmacist"
+    first = team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], role, expected_assignments=[],
+                        actor=me["staff_id"])
+    second = team.assign(db, REGISTRY, row["patient_id"], other["staff_id"], role, expected_assignments=[first],
+                         actor=me["staff_id"])
+    again = team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], role, expected_assignments=[second],
+                        actor=me["staff_id"])
+    with pytest.raises(homecare_store.Conflict, match="team_changed"):  # the old screen still shows the first A
+        team.assign(db, REGISTRY, row["patient_id"], third["staff_id"], role, expected_assignments=[first],
+                    actor=me["staff_id"])
+    assert [member["assignment_id"] for member in team.current(db, row["patient_id"])] == [again]
+
+
 @pytest.mark.parametrize("change", [{"active": False}, {"admin": False}])
 def test_staff_cannot_lock_themselves_out_and_logins_are_unique(db, change):
     me = first_staff(db, tailscale_login="one@example.invalid")
@@ -193,17 +210,18 @@ def test_care_team_roles_need_the_declared_qualification_and_hand_over(db):
     row = patient(db, me["staff_id"])
     role = "pharmacy.primary_pharmacist"
     with pytest.raises(ValueError, match="not_qualified"):
-        team.assign(db, REGISTRY, row["patient_id"], clerk["staff_id"], role, expected_holders=[], actor=me["staff_id"])
+        team.assign(db, REGISTRY, row["patient_id"], clerk["staff_id"], role, expected_assignments=[], actor=me["staff_id"])
     with pytest.raises(ValueError, match="role_not_allowed"):
-        team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], "nursing.primary_nurse", expected_holders=[],
+        team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], "nursing.primary_nurse", expected_assignments=[],
                     actor=me["staff_id"])
-    team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], role, expected_holders=[], actor=me["staff_id"])
+    team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], role, expected_assignments=[], actor=me["staff_id"])
     with pytest.raises(homecare_store.Conflict, match="already_assigned"):
-        team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], role, expected_holders=[], actor=me["staff_id"])
+        team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], role, expected_assignments=[], actor=me["staff_id"])
     with pytest.raises(homecare_store.Conflict, match="team_changed"):
         # The client still shows the role as empty, so it must not silently end the current holder.
-        team.assign(db, REGISTRY, row["patient_id"], other["staff_id"], role, expected_holders=[], actor=clerk["staff_id"])
-    team.assign(db, REGISTRY, row["patient_id"], other["staff_id"], role, expected_holders=[me["staff_id"]],
+        team.assign(db, REGISTRY, row["patient_id"], other["staff_id"], role, expected_assignments=[], actor=clerk["staff_id"])
+    mine = [member["assignment_id"] for member in team.current(db, row["patient_id"])]
+    team.assign(db, REGISTRY, row["patient_id"], other["staff_id"], role, expected_assignments=mine,
                 actor=clerk["staff_id"])
     assert [member["staff_id"] for member in team.current(db, row["patient_id"])] == [other["staff_id"]]
     ended = db.execute("SELECT ended_by FROM care_team WHERE staff_id=?", (me["staff_id"],)).fetchone()
@@ -220,7 +238,7 @@ def test_staff_holding_a_role_must_hand_it_over_before_leaving_or_losing_its_qua
     other = staff(db, me["staff_id"], name="合成 薬剤師二", codes=("pharmacy.pharmacist",))
     row = patient(db, me["staff_id"])
     team.assign(db, REGISTRY, row["patient_id"], other["staff_id"], "pharmacy.primary_pharmacist",
-                expected_holders=[], actor=me["staff_id"])
+                expected_assignments=[], actor=me["staff_id"])
     with pytest.raises(ValueError, match="still_assigned"):
         records.update(db, "staff", other["staff_id"], change, expected_version=1, actor=me["staff_id"],
                        registry=REGISTRY)
@@ -295,7 +313,7 @@ def test_api_scopes_links_and_returns_browser_safe_errors(db):
     homecare_api.write(db, "link", {"patient": row["patient_id"], "project": 11, "actor": me["staff_id"]},
                        registry=REGISTRY, allowed={11}, mcs_patients=scope)
     homecare_api.write(db, "team.assign", {"patient": row["patient_id"], "staff": me["staff_id"],
-                                           "role": "pharmacy.primary_pharmacist", "holders": [],
+                                           "role": "pharmacy.primary_pharmacist", "assignments": [],
                                            "actor": me["staff_id"]},
                        registry=REGISTRY, allowed={11}, mcs_patients=scope)
     assert homecare_api.read(db, "linked", {"project": "11"}, registry=REGISTRY,

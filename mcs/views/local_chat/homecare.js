@@ -154,7 +154,7 @@ async function showHcPatient(patientId) {
   for (const button of $("patients").querySelectorAll(".patient")) button.classList.toggle("selected", button.dataset.patient === String(patientId));
   if (patientId == null) {
     $("patient-name").textContent = "新しい患者"; $("patient-meta").textContent = "薬局の患者台帳";
-    hcMain("患者の登録", recordForm("patient", PATIENT_FORM, null, async saved => {await loadHcPatients(); showHcPatient(saved.patient_id);}));
+    hcMain("患者の登録", recordForm("patient", PATIENT_FORM, null, async saved => {await loadHcPatients(); await showHcPatient(saved.patient_id);}));
     return;
   }
   const data = await api("hc/patient", {patient: patientId});
@@ -177,12 +177,12 @@ async function showHcPatient(patientId) {
   const visitBox = el("section", null, "detail-section"); patientVisits(visitBox, patientId);
   const enabled = name => hc.meta.modules.some(module => module.name === name);
   const parts = Object.entries(hc.modules).filter(([name, view]) => view.patient && enabled(name)).map(([, view]) => {const box = el("section", null, "detail-section"); view.patient(box, patientId); return box;});
-  hcMain("基本情報", sheet, recordForm("patient", PATIENT_FORM, patient, async () => {await loadHcPatients(); showHcPatient(patientId);}), team, visitBox, ...parts, link);
+  hcMain("基本情報", sheet, recordForm("patient", PATIENT_FORM, patient, async () => {await loadHcPatients(); await showHcPatient(patientId);}), team, visitBox, ...parts, link);
 }
 const visitLine = visit => `${visit.visit_date}${visit.start_time ? " " + visit.start_time : ""} · ${hc.meta.visit_kinds[visit.kind] || visit.kind} · ${VISIT_STATUS[visit.status]}${visit.staff_name ? " · " + visit.staff_name : ""}`;
 async function patientVisits(box, patientId, limit = 50) {
   const reload = () => patientVisits(box, patientId, limit);
-  const data = await api("hc/visits", {patient: patientId, limit}).catch(error => {fail(error); return null;});
+  const data = await api("hc/visits", {patient: patientId, limit}).catch(error => {if (box.childElementCount) throw error; fail(error); return null;});
   if (hc.patient !== patientId) return;
   box.replaceChildren(el("h3", "訪問"));
   if (!data) {box.append(el("p", "訪問の記録を読み込めませんでした。", "state-note")); return;}
@@ -299,7 +299,7 @@ function careTeam(box, patientId, members, reload) {
   };
   role.onchange = people; people();
   form.append(role, person, el("button", "担当にする", "button"));
-  form.onsubmit = async event => {event.preventDefault(); try {const holders = members.filter(m => m.role === role.value).map(m => m.staff_id); await hcPost("team.assign", {patient: patientId, staff: Number(person.value), role: role.value, holders}); reload();} catch (error) {fail(error); if (error.code === "team_changed") reload();}};
+  form.onsubmit = async event => {event.preventDefault(); try {const assignments = members.filter(m => m.role === role.value).map(m => m.assignment_id); await hcPost("team.assign", {patient: patientId, staff: Number(person.value), role: role.value, assignments}); reload();} catch (error) {fail(error); if (error.code === "team_changed") reload();}};
   box.append(form);
 }
 async function openMcs(projectId) {

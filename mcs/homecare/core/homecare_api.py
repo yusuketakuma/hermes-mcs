@@ -90,11 +90,11 @@ def write(db, op, body, *, registry, allowed, mcs_patients, route_settings=None)
                                          expected_version=body.get("expected_version"), actor=actor,
                                          registry=registry)}
     if op == "team.assign":
-        role, holders = body.get("role"), body.get("holders")
-        if not isinstance(role, str) or not isinstance(holders, list):
+        role, seen = body.get("role"), body.get("assignments")
+        if not isinstance(role, str) or not isinstance(seen, list):
             raise ValueError("bad_request")
         return {"assignment_id": team.assign(db, registry, _id(body.get("patient")), _id(body.get("staff")), role,
-                                             expected_holders=[_id(holder) for holder in holders], actor=actor)}
+                                             expected_assignments=[_id(item) for item in seen], actor=actor)}
     if op == "team.end":
         team.end(db, registry, _id(body.get("assignment")), actor=actor)
         return {"ok": True}

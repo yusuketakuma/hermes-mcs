@@ -65,7 +65,7 @@ function rxSummary(rx) {
 hc.modules.pharmacy = {
   async patient(box, patientId, limit = 20) {
     const reload = () => hc.modules.pharmacy.patient(box, patientId, limit);
-    const data = await api("hc/pharmacy/prescriptions", {patient: patientId, limit}).catch(error => {fail(error); return null;});
+    const data = await api("hc/pharmacy/prescriptions", {patient: patientId, limit}).catch(error => {if (box.childElementCount) throw error; fail(error); return null;});
     if (hc.patient !== patientId) return;
     box.replaceChildren(el("h3", "処方"));
     if (!data) {box.append(el("p", "処方の記録を読み込めませんでした。", "state-note")); return;}
