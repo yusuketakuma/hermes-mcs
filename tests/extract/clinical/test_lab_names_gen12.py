@@ -1199,3 +1199,26 @@ def test_a_line_prefix_of_bracketed_tags_is_read_once():
     assert clinical_values._BARE_HEADING_LINE.fullmatch("【1】" * 40 + "a") is None
     assert clinical_values._LINE_LEAD.fullmatch("【1】" * 40 + "a") is None
     assert time.perf_counter() - began < 1
+
+
+# A date written in any form leads a heading line (11月20日, 11/20の); a lab item after a result
+# is no dose unit (pH 6.0 Mg:2.0); cells per field (5個/HPF) and a sentence-final period
+# (pH 6.0.) are results; an undecided qualitative word (陰性か確認中) is none.
+@pytest.mark.parametrize("body", [
+    "11月20日 尿検査：pH 6.0\nWBC 30/μL", "11/20の尿検査：pH 6.0\nWBC 30/μL", "2026/11/20 尿検査：pH 6.0\nWBC 30/μL",
+    "尿検査：pH 6.0 Mg:2.0mg/dL\nWBC 30/μL", "尿検査：赤血球 5個/HPF\nWBC 30/μL", "尿検査：円柱 1個/LPF\nWBC 30/μL",
+    "尿検査：pH 6.0.\nWBC 30/μL", "尿検査\n潜血 陰性か確認中\n\nWBC 30/μL", "尿検査\n潜血 陰性かも\n\nWBC 30/μL",
+    "尿検査\n潜血 陰性だったかも\n\nWBC 30/μL",
+])
+def test_dates_cell_counts_periods_and_undecided_words_in_a_specimen_section(body):
+    assert _validated("WBC", "30", "/μL", body)["normalized"]["confirmation"] == "unverified", body
+
+
+@pytest.mark.parametrize("body", [
+    "尿検査\n赤血球 5個/HPF\n\nWBC 5200/μL", "尿検査\npH 6.0.\n\nWBC 5200/μL", "尿検査\n潜血 陰性です\n\nWBC 5200/μL",
+    "尿検査\n潜血 陰性。\n\nWBC 5200/μL", "尿検査\npH 6.0 Mg:2.0mg/dL\n\nWBC 5200/μL",
+    # A dose or a count stays no result, so no heading or blank line ends a section there.
+    "尿検査：抗菌薬 10 mg 2\nWBC 5200/μL", "尿検査：抗菌薬 1錠\nWBC 5200/μL",
+])
+def test_a_firm_result_ends_a_specimen_section_at_a_blank_line(body):
+    assert _validated("WBC", "5200", "/μL", body)["normalized"]["confirmation"] == "quote_supported", body

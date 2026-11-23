@@ -695,16 +695,21 @@ _DATE_BEFORE = re.compile(fold_surface(_WHEN + r"(?:にて|の|で|に|は|、)?
 # Only marks, digits, brackets and a bracketed tag may stand before a bare specimen word on
 # its line (・尿, ①尿, A.尿, 【結果】尿).
 _BARE_HEADING_LINE = re.compile(r"(?>【[^【】]*】|[a-z][.)]|[^一-龥々ァ-ヺーa-z])*+")
-# What may stand before a heading that starts its line: those, then a date or a time word.
-_LINE_LEAD = re.compile(_BARE_HEADING_LINE.pattern + fold_surface(rf"(?:{_WHEN}(?:にて|の|で|に|は|、)?)?"))
+# What may stand before a heading that starts its line: marks, bracketed tags, and dates or time
+# words in any form (11/20, 11月20日, 11/20の, 本日の), each read once.
+_LINE_LEAD = re.compile(
+    fold_surface(rf"(?>{_WHEN}(?:にて|の|で|に|は|、)?|") + r"【[^【】]*】|[a-z][.)]|[^一-龥々ァ-ヺーa-z])*+")
 _LINE_BULLETS = re.compile(fold_surface(r"(?:[・\-*•●○◦◆◇■□▪>]|[0-9]{1,2}[.)]|\([0-9]{1,2}\))*[(\[【<]?"))
 _LAB_NAME = re.compile(fold_surface(_LAB_SPELLINGS))
 # A result: an item word followed by a number, a qualitative mark or a closed qualitative word
-# (pH 6.0, 比重 1.015, 蛋白(1+), 白血球 陰性; not 陰性疑い). A dose or a count (1錠, 6回) is none.
-# Each word is tried from its first character only, so a long word costs its length once.
+# ending its statement (pH 6.0, pH 6.0., 比重 1.015, 蛋白(1+), 赤血球 5個/HPF, 白血球 陰性,
+# 潜血 陰性です; not 陰性疑い, 陰性か確認中). A dose or a count (1錠, 6回, 10 mg) is none; a
+# unit spelling followed by a separator is the next item (pH 6.0 Mg:2.0). Each word is tried
+# from its first character only, so a long word costs its length once.
 _RESULT_NUMBER = fold_surface(
-    r"(?:値|は|:|=)*(?:\(?[+±-]|\(?[0-9]+(?:\.[0-9]+)?(?![0-9.]|錠|回|本|個|包|袋|滴|枚|カプセル|(?:mg|μg|mcg)(?!/)|日)"
-    r"|(?:陰性|陽性|正常|異常なし)(?!疑))")
+    r"(?:値|は|:|=)*(?:\(?[+±-]|\(?[0-9]+(?:\.[0-9]+)?"
+    r"(?![0-9]|\.[0-9]|錠|回|本|個(?!/)|包|袋|滴|枚|カプセル|(?:mg|μg|mcg)(?![/:=値は])|日)"
+    r"|(?:陰性|陽性|正常|異常なし)(?=$|[、,。;:/)]|(?:です|でした|だった|である)(?:$|[、,。])))")
 _SECTION_RESULT = re.compile(fold_surface(
     rf"({_LAB_SPELLINGS}|(?<![a-z0-9])[a-z][a-z0-9]*|(?<![ァ-ヺー])[ァ-ヺー]++|[一-龥]{{1,6}})") + _RESULT_NUMBER)
 # After a bare specimen word (尿 WBC 30) only a lab item is a result: 尿 量 500ml is a note.
