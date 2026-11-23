@@ -178,6 +178,10 @@ esac
 if [ "$1" = "-I" ] && [ "$2" = "-B" ] && [ "$3" = "-c" ]; then
     exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/runtime-check.py" "$@"
 fi
+# the saved added-software choice (OCR, Tailscale) is read by a program on stdin with the repo's mcs/ first
+if [ "$1" = "-I" ] && [ "$2" = "-" ]; then
+    exec "$STUB_PARSE_PYTHON" "$@"
+fi
 # install.sh exports the physical root when ~/.mcs is a private link
 if [ "$1" = "-" ] && { [ "$2" = "$HOME/.mcs/config.json" ] || [ "$2" = "${MCS_ROOT:-}/config.json" ]; }; then
     exec "$STUB_PARSE_PYTHON" "$@"
@@ -230,6 +234,10 @@ case "$*" in
 esac
 if [ "$1" = "-I" ] && [ "$2" = "-B" ] && [ "$3" = "-c" ]; then
     exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/runtime-check.py" "$@"
+fi
+# the saved added-software choice (OCR, Tailscale) is read by a program on stdin with the repo's mcs/ first
+if [ "$1" = "-I" ] && [ "$2" = "-" ]; then
+    exec "$STUB_PARSE_PYTHON" "$@"
 fi
 if [ "$1" = "-" ] && [ "$2" = "$HOME/.mcs/config.json" ]; then
     exec "$STUB_PARSE_PYTHON" "$@"
@@ -468,6 +476,8 @@ exec(compile(code, '<installer-runtime-check>', 'exec'))
         # sha256 of the stub curl's model bytes ("stub-model-bytes\n")
         "MCS_MODEL_SHA256": STUB_MODEL_SHA256,
         "MCS_ALLOW_MODEL_SHA_OVERRIDE": "1",
+        # The host's own /Applications/Tailscale.app never counts: a test places the bundle here when it needs one.
+        "MCS_TAILSCALE_APP": str(stub_root / "Applications" / "Tailscale.app"),
     })
     return home, hermes_home, stub_root, env
 

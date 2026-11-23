@@ -628,9 +628,11 @@ py_ok() {
     "$1" -c "import sys; sys.exit(0 if (3, $2) <= sys.version_info[:2] < (3, $3) else 1)" \
         >/dev/null 2>&1
 }
-# the app bundle (Homebrew cask, App Store or tailscale.com) or Homebrew's command-line formula
+# the app bundle (Homebrew cask, App Store or tailscale.com) or Homebrew's command-line formula;
+# MCS_TAILSCALE_APP lets the tests point the bundle probe away from the host's own app
+TAILSCALE_APP="${MCS_TAILSCALE_APP:-/Applications/Tailscale.app}"
 tailscale_installed() {
-    [ -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ] || command -v tailscale >/dev/null 2>&1
+    [ -x "$TAILSCALE_APP/Contents/MacOS/Tailscale" ] || command -v tailscale >/dev/null 2>&1
 }
 # hermes-agent requires >=3.14,<3.15 — prefer an explicitly versioned
 # interpreter over a possibly-too-new python3
