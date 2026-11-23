@@ -2,11 +2,10 @@
 // Pharmacy module screens: prescription history in the patient register and on the visit sheet.
 // Uses the core's el, api, hcPost and hc from homecare.js; routes live under api/hc/pharmacy/.
 const RX_LINE = [["drug_name", "薬剤名（必須）"], ["dose", "用量"], ["usage", "用法"], ["days", "日数", "number"]];
-const rxLineText = line => [line.drug_name, line.dose, line.usage, line.days ? `${line.days}日分` : ""].filter(Boolean).join(" ");
 function rxLineRow(line = {}) {
   const row = el("div", null, "rx-line"), inputs = el("div", null, "hc-inline"), picked = el("p", null, "hc-note"), choices = el("div", null, "rx-choices");
   for (const [key, label, type] of RX_LINE) {
-    const input = el("input"); input.name = key; input.placeholder = label; input.type = type || "text"; input.autocomplete = "off";
+    const input = el("input"); input.name = key; input.placeholder = label; input.setAttribute("aria-label", label); input.type = type || "text"; input.autocomplete = "off";
     input.value = line[key] ?? ""; if (type === "number") {input.min = "1"; input.max = "365";}
     inputs.append(input);
   }
@@ -53,7 +52,7 @@ function rxForm(patientId, record, onSaved) {
   for (const [key, label, type] of [["issued_on", "処方日（必須）", "date"], ["institution", "医療機関"], ["prescriber", "処方医"], ["note", "メモ", "textarea"]]) form.append(field([key, label, type], record?.[key], "rx"));
   for (const line of record?.lines || [{}]) lines.append(rxLineRow(line));
   const more = el("button", "薬剤を追加", "text-button"); more.type = "button"; more.onclick = () => lines.append(rxLineRow());
-  const save = el("button", record ? "保存" : "登録", "button");
+  const save = el("button", record ? "保存" : "登録", "button button-primary");
   form.append(el("h4", "薬剤"), lines, more, save, message);
   let current = record;
   form.onsubmit = async event => {
@@ -80,32 +79,40 @@ function rxForm(patientId, record, onSaved) {
   };
   return form;
 }
+function rxTable(lines) {
+  const {table, body} = rowTable(RX_LINE.map(([, label]) => label.replace("（必須）", "")));
+  for (const line of lines) {
+    const row = el("tr");
+    for (const value of [line.drug_name, line.dose, line.usage, line.days ? `${line.days}日分` : ""]) row.append(el("td", value || "—", value ? null : "hc-none"));
+    body.append(row);
+  }
+  table.classList.add("rx-table");
+  return table;
+}
 function rxSummary(rx) {
-  const box = el("div");
-  box.append(el("p", `${rx.issued_on}${rx.institution ? " · " + rx.institution : ""}${rx.prescriber ? " · " + rx.prescriber : ""}`));
-  const list = el("ul"); for (const line of rx.lines) list.append(el("li", rxLineText(line))); box.append(list);
+  const box = el("div", null, "rx-summary"), head = el("div", null, "rx-head");
+  head.append(el("b", dayLabel(rx.issued_on)), el("span", [rx.institution, rx.prescriber].filter(Boolean).join(" · ") || "医療機関・処方医は未登録", "hc-quiet"));
+  box.append(head, rxTable(rx.lines));
   if (rx.note) box.append(el("p", rx.note, "hc-note"));
   return box;
 }
 hc.modules.pharmacy = {
-  async patient(box, patientId) {
-    const reload = () => hc.modules.pharmacy.patient(box, patientId);
-    const data = await api("hc/pharmacy/prescriptions", {patient: patientId}).catch(error => {if (box.childElementCount) throw error; fail(error); return null;});
-    if (hc.patient !== patientId) return;
-    box.replaceChildren(el("h3", "処方"));
-    if (!data) {box.append(el("p", "処方の記録を読み込めませんでした。", "state-note")); return;}
-    const rxRow = rx => {
-      const row = el("details", null, "hc-row"); row.append(el("summary", `${rx.issued_on} · ${rx.lines.map(line => line.drug_name).join("、")}`));
-      row.append(rxSummary(rx), rxForm(patientId, rx, reload)); return row;
-    };
-    const list = el("div"); box.append(list);
-    if (!data.items.length) list.append(el("p", "処方の記録はまだありません。"));
-    box.append(historyPages(list, data, rxRow, offset => api("hc/pharmacy/prescriptions", {patient: patientId, offset}), "以前の処方を表示", () => hc.patient === patientId));
-    const add = el("details", null, "hc-row"); add.append(el("summary", "処方を登録する"), rxForm(patientId, null, reload)); box.append(add);
+  // The register section: prescriptions as rows that open to their edit form, newest first.
+  patient(patientId, current) {
+    return registerSection("処方", async (box, reload) => {
+      const data = await api("hc/pharmacy/prescriptions", {patient: patientId}).catch(error => {if (box.childElementCount) throw error; return null;});
+      if (!current()) return;
+      if (!data) {box.replaceChildren(el("p", "処方の記録を読み込めませんでした。", "state-note")); return;}
+      const {table, body} = rowTable(["処方日", "医療機関", "処方医", "薬剤"]);
+      const rxRow = rx => expandRow([dayLabel(rx.issued_on), rx.institution, rx.prescriber, el("span", rx.lines.map(line => line.drug_name).join("、"), "hc-clip")],
+        () => rxForm(patientId, rx, reload), 4);
+      if (!data.items.length) body.append(emptyRow("処方の記録はまだありません。", 4));
+      box.replaceChildren(table, historyPages(body, data, rxRow, offset => api("hc/pharmacy/prescriptions", {patient: patientId, offset}), "以前の処方を表示", current));
+    }, {label: "＋ 処方を登録する", form: reload => rxForm(patientId, null, reload)});
   },
-  sheet(box, part) {
-    box.append(el("h3", part.label));
-    for (const rx of part.prescriptions) box.append(rxSummary(rx));
-    if (!part.prescriptions.length) box.append(el("p", "処方の記録はまだありません。"));
+  // The visit-sheet card: the latest prescriptions with their drugs as a table.
+  sheet(part) {
+    const nodes = part.prescriptions.map(rxSummary);
+    return card(part.label, nodes.length ? nodes : [el("p", "処方の記録はまだありません。", "hc-quiet")]);
   },
 };

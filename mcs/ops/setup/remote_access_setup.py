@@ -1,18 +1,26 @@
 """Set up this Mac for other devices: save its Tailscale name, publish the patient workspace to the tailnet and run it resident."""
 from __future__ import annotations
 
+import http.client
 import json
 import os
 from pathlib import Path
 import shutil
 import socket
 import subprocess
+import time
 
 from mcs_config import REMOTE_ACCESS_PORT, TAILNET_HOST, remote_access
 
 # The App Store and standalone app both ship the command inside the bundle; Homebrew's formula puts it on PATH.
 APP_CLI = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 TIMEOUT_S = 30
+# How long a just-(re)started workspace may take to answer before it is not published.
+POLL_S, POLLS = 0.5, 40
+# A path no page uses and a login no staff member has: the resident workspace refuses it with its own
+# unregistered-login answer, and only when the request names the tailnet host it was started with.
+PROBE_PATH = "/mcs-setup-probe"
+PROBE_LOGIN = "mcs-setup-probe"
 
 
 def tailscale_cli():
@@ -73,6 +81,39 @@ def port_in_use(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.settimeout(1)
         return probe.connect_ex(("127.0.0.1", port)) == 0
+
+
+def probe_headers(host):
+    from mcs_local_chat import IDENTITY
+    return {"Host": host, IDENTITY: PROBE_LOGIN}
+
+
+def is_workspace(status, body):
+    from mcs_local_chat import UNREGISTERED
+    return status == 403 and body == UNREGISTERED
+
+
+def workspace_answers(port, host, *, connection=http.client.HTTPConnection):
+    """Whether 127.0.0.1:port is the resident workspace for ``host``; a plain connection, never a proxy or redirect."""
+    from mcs_local_chat import UNREGISTERED
+    probe = connection("127.0.0.1", port, timeout=2)
+    try:
+        probe.request("GET", PROBE_PATH, headers=probe_headers(host))
+        answer = probe.getresponse()
+        return is_workspace(answer.status, answer.read(len(UNREGISTERED) + 1))
+    except (OSError, http.client.HTTPException):
+        return False
+    finally:
+        probe.close()
+
+
+def _workspace_listening(port, host):
+    for attempt in range(POLLS):
+        if workspace_answers(port, host):
+            return True
+        if attempt + 1 < POLLS:
+            time.sleep(POLL_S)
+    return False
 
 
 def _save(config_edit, changes):
@@ -137,6 +178,14 @@ def command(args, *, services) -> int:
     status = services(args)
     if status != 0:
         return status
+    # launchd listing the agent is not proof that it listens: another program may hold the port while the
+    # agent is down, or an earlier workspace may still be running with other settings. Publish only this one.
+    if not _workspace_listening(port, host):
+        print(f"常駐サーバーが {port} 番で応答していることを確認できなかったため、tailnet には公開していません。"
+              "mcs_setup.py check で常駐サービスの状態を確かめ、少し待ってから mcs setup remote をもう一度実行してください。"
+              "別のプログラムがこの番号を使っているときは、`tailscale serve status` で公開先を確かめ、"
+              "--port で空いている番号を指定してください。")
+        return 1
     # `serve` publishes to this tailnet only. `funnel` would publish to the internet and is never used.
     served = _run(cli, "serve", "--bg", f"http://127.0.0.1:{port}")
     if served is None or served.returncode != 0:
@@ -148,7 +197,7 @@ def command(args, *, services) -> int:
         if restored:
             # Publishing the new port by hand now would point the tailnet at a port nothing listens on.
             print(f"tailnet への公開を {port} 番に変更できなかったため、これまでの {current['port']} 番の公開に戻しました。"
-                  "Tailscale の状態を確かめてから、mcs setup remote --port をもう一度実行してください。")
+                  f"Tailscale の状態を確かめてから、mcs setup remote --port {port} をもう一度実行してください。")
         else:
             print("tailnet への公開を設定できませんでした。Tailscale の管理画面で HTTPS 証明書を有効にし、"
                   f"`tailscale serve --bg http://127.0.0.1:{port}` を実行してください。")

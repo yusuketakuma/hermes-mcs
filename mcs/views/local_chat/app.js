@@ -1,9 +1,79 @@
 "use strict";
 const $ = id => document.getElementById(id);
-const state = {patients: [], patientCursor: null, project: null, cursor: null, query: "", panel: "", panelPage: 0, generation: null, mainRequest: 0, detailRequest: 0, patientRequest: 0, contextRequest: 0, onSelect: null, onSearch: null};
+const state = {patients: [], patientCursor: null, project: null, sections: [["", "タイムライン"]], cursor: null, query: "", panel: "", panelPage: 0, generation: null, mainRequest: 0, detailRequest: 0, navRequest: 0, patientRequest: 0, contextRequest: 0, sideRequest: 0, sideProject: null, listOpener: null, detailOpener: null, onSelect: null, onSearch: null};
 const subjectLabels = {patient: "本人", family: "家族", other: "他者", unspecified: "対象未確認"};
 const fmt = (ts, options = {}) => ts == null ? "時刻未取得" : new Date(ts * 1000).toLocaleString("ja-JP", {timeZone: "Asia/Tokyo", ...options});
+// A date without the year when it falls in the current JST year: 11/18, otherwise 2025/11/18.
+const jstYear = ms => new Date(ms + 9 * 3600e3).getUTCFullYear();
+const shortDate = ts => fmt(ts, jstYear(ts * 1000) === jstYear(Date.now()) ? {month: "numeric", day: "numeric"} : {year: "numeric", month: "numeric", day: "numeric"});
 function el(tag, text, cls) {const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node;}
+// Shared UI kit: every screen builds its chips, cards, key-value lists and tab strips from these.
+function chip(text, tone = "") {return el("span", text, tone ? `chip chip-${tone}` : "chip");}
+function card(title, nodes = [], {wide = false, tone = "", actions = []} = {}) {
+  const box = el("section", null, ["card", wide && "card-wide", tone && `card-${tone}`].filter(Boolean).join(" "));
+  const head = el("div", null, "card-head");
+  head.append(el("h3", title));
+  if (actions.length) {const tools = el("div", null, "card-actions"); tools.append(...actions); head.append(tools);}
+  box.append(head, ...nodes);
+  return box;
+}
+function kv(pairs) {
+  const list = el("dl", null, "kv");
+  for (const [label, value] of pairs) {
+    if (value == null || value === "") continue;
+    const item = el("div");
+    const dd = el("dd");
+    if (typeof value === "object") dd.append(value); else dd.textContent = String(value);
+    item.append(el("dt", label), dd);
+    list.append(item);
+  }
+  return list;
+}
+function tabs(items, current, onPick) {
+  const strip = el("div", null, "tabs");
+  strip.setAttribute("role", "tablist");
+  for (const [key, label] of items) {
+    const tab = el("button", label, "tab");
+    tab.type = "button";
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", String(key === current));
+    tab.onclick = () => onPick(key);
+    strip.append(tab);
+  }
+  return strip;
+}
+// The page frame: mode, one-line heading, the main area and (on phones) the patient sheet.
+const shell = {
+  setMode(mode) {document.body.dataset.mode = mode;},
+  heading(title, meta = "", chips = [], actions = []) {
+    $("patient-name").textContent = title; $("patient-meta").textContent = meta;
+    $("patient-chips").replaceChildren(...chips); $("heading-actions").replaceChildren(...actions);
+  },
+  main(...nodes) {
+    // A screen that takes the main area ends any timeline load still on its way.
+    ++state.mainRequest;
+    for (const id of ["older", "timeline", "timeline-status"]) $(id).hidden = true;
+    $("panel-view").hidden = false; $("panel-view").replaceChildren(...nodes);
+    shell.openList(false);
+  },
+  openList(open = true) {
+    // The phone sheet is modal: the page behind is inert, focus moves into the sheet and back to the opener.
+    const wasOpen = document.body.classList.contains("list-open");
+    if (open === wasOpen) return;
+    if (open) state.listOpener = document.activeElement;
+    document.body.classList.toggle("list-open", open);
+    $("patients-toggle").setAttribute("aria-expanded", String(open));
+    $("workspace").inert = open;
+    if (open) $("patient-search").focus();
+    else if ($("sidebar").contains(document.activeElement) || !document.activeElement || document.activeElement === document.body) restoreFocus(state.listOpener, $("patients-toggle"));
+  },
+};
+function restoreFocus(opener, fallback) {(opener?.isConnected && !opener.hidden ? opener : fallback)?.focus({preventScroll: true});}
+// The element that scrolls the main column: the column itself, or the page on phones where the page scrolls.
+function scroller() {
+  const panel = $("timeline-panel"), style = globalThis.getComputedStyle?.(panel);
+  return !style || /auto|scroll/.test(style.overflowY) ? panel : document.scrollingElement || document.documentElement;
+}
 function fail(error) {$("error").textContent = error.message || "表示できませんでした。更新して再度お試しください。"; $("error").hidden = false;}
 async function api(kind, values = {}) {
   const params = new URLSearchParams();
@@ -22,10 +92,12 @@ function patientList() {
   for (const patient of state.patients) {
     const button = el("button", null, "patient" + (patient.project_id === state.project ? " selected" : ""));
     button.setAttribute("aria-current", patient.project_id === state.project ? "page" : "false");
-    button.append(el("span", "#", "hash"));
-    const label = el("span", patient.patient_name || `患者 ${patient.project_id}`, "patient-label");
-    label.append(el("small", `ID ${patient.project_id}${patient.is_archived ? " · アーカイブ" : ""}`));
-    button.append(label, el("span", patient.message_count, "count"));
+    const label = el("span", null, "patient-label"), top = el("span", null, "patient-top");
+    top.append(el("span", patient.patient_name || `患者 ${patient.project_id}`, "patient-title"));
+    if (patient.is_archived) top.append(chip("アーカイブ", "muted"));
+    label.append(top, el("small", [`ID ${patient.project_id}`, patient.latest_at != null && `最終投稿 ${shortDate(patient.latest_at)}`].filter(Boolean).join(" · ")));
+    const count = el("span", patient.message_count, "count"); count.title = `保存済み ${patient.message_count} 件`;
+    button.append(label, count);
     button.onclick = () => selectPatient(patient);
     $("patients").append(button);
   }
@@ -35,6 +107,7 @@ function patientList() {
 }
 async function loadPatients(more = false) {
   const request = ++state.patientRequest;
+  if (!state.project) loadSideStatus();
   try {
     const data = await api("patients", {q: $("patient-search").value.trim(), cursor: more ? state.patientCursor : null});
     if (request !== state.patientRequest) return;
@@ -42,34 +115,48 @@ async function loadPatients(more = false) {
     state.patientCursor = data.next_cursor;
     patientList();
     if (!state.project && state.patients.length) selectPatient(state.patients[0]);
-    if (!state.project && !state.patients.length) $("timeline-status").textContent = "閲覧範囲に保存済みの患者がいません。";
+    if (!state.project && !state.patients.length) {shell.heading("患者タイムライン"); $("timeline-status").textContent = "閲覧範囲に保存済みの患者がいません。";}
   } catch (error) {if (request === state.patientRequest) fail(error);}
 }
-function closeDetail() {++state.detailRequest; $("detail").classList.remove("open"); $("close-detail").hidden = true; $("detail-content").replaceChildren(el("p", "投稿の「詳細・返信」から記録を確認できます。", "empty"));}
+function closeDetail() {
+  ++state.detailRequest;
+  // Focus inside the closing detail goes back to whatever opened it.
+  const hadFocus = $("detail").contains(document.activeElement);
+  $("detail").classList.remove("open"); $("close-detail").hidden = true; $("detail-content").replaceChildren(el("p", "投稿の「詳細・返信」から記録を確認できます。", "empty"));
+  if (hadFocus) restoreFocus(state.detailOpener, $("timeline-panel"));
+}
 function selectPatient(patient) {
-  document.body.classList.add("picked");
+  shell.openList(false);
   state.project = patient.project_id; state.query = ""; $("message-search").value = ""; $("clear-search").hidden = true;
-  $("patient-name").textContent = patient.patient_name || `患者 ${patient.project_id}`;
-  $("patient-meta").textContent = `患者ID ${patient.project_id} · 保存済み ${patient.message_count} 件${patient.is_archived ? " · アーカイブ" : ""}`;
-  const fetchLabels = {pending: "未取得", complete: "取得済み", incomplete: "一部未取得", partial: "一部取得", failed: "取得失敗"};
-  $("coverage").textContent = `取得状態: ${fetchLabels[patient.fetch_state] || "取得状況を要確認"} · ${patient.history_floor === -1 ? "履歴の終端までの取得記録あり" : "履歴全体の取得は未確認"}`;
-  $("coverage").hidden = false;
-  state.panelPage = 0; closeDetail(); patientList(); loadPatientContext(patient.project_id); loadMain();
+  const meta = [`ID ${patient.project_id}`, `保存済み ${patient.message_count} 件`, patient.latest_at != null && `最終投稿 ${shortDate(patient.latest_at)}`];
+  shell.heading(patient.patient_name || `患者 ${patient.project_id}`, meta.filter(Boolean).join(" · "), [...(patient.is_archived ? [chip("アーカイブ", "muted")] : []), ...fetchChips(patient)]);
+  state.panelPage = 0; closeDetail(); patientList(); loadPatientContext(patient.project_id); loadSideStatus(); loadMain();
   state.onSelect?.(patient.project_id);
+}
+function fetchChips(patient) {
+  // Only an incomplete fetch is called out; a complete fetch with the history end on record shows nothing.
+  const labels = {pending: "未取得", incomplete: "一部未取得", partial: "一部取得", failed: "取得失敗"};
+  const chips = [];
+  if (patient.fetch_state !== "complete") chips.push(chip(labels[patient.fetch_state] || "取得状況を要確認", "warn"));
+  if (patient.history_floor !== -1) chips.push(chip("履歴全体の取得は未確認", "warn"));
+  for (const item of chips) item.title = `取得状態: ${item.textContent}`;
+  return chips;
 }
 async function loadPatientContext(project) {
   const request = ++state.contextRequest, panel = $("patient-context");
-  panel.replaceChildren(el("h2", "患者コンテキスト"), el("p", "背景情報を読込中…"));
+  panel.replaceChildren(el("h2", "患者コンテキスト"), el("p", "背景情報を読込中…", "context-empty"));
   try {
     const data = await api("context", {project});
     if (request !== state.contextRequest || project !== state.project) return;
     const groups = data.sections.filter(group => group.items.length);
     panel.replaceChildren(el("h2", "患者コンテキスト"));
-    if (!groups.length) {panel.append(el("p", "表示できる患者コンテキストはまだ保存されていません。")); return;}
+    if (!groups.length) {panel.append(el("p", "表示できる患者コンテキストはまだ保存されていません。", "context-empty")); return;}
     const preview = el("div", null, "context-preview");
     for (const group of groups.slice(0, 4)) {
-      const item = group.items[0], entry = el("div", null, "context-brief");
-      entry.append(el("b", group.label), el("span", `${subjectLabels[item.subject] || "対象未確認"}: ${item.text || item.evidence || ""}`), el("small", fmt(item.posted_at_ts, {year:"numeric", month:"numeric", day:"numeric"})));
+      const item = group.items[0], entry = el("div", null, "context-brief"), label = el("div", null, "context-label");
+      const text = `${subjectLabels[item.subject] || "対象未確認"}: ${item.text || item.evidence || ""}`, line = el("span", text, "context-text");
+      line.title = text; label.append(el("b", group.label), el("small", item.posted_at_ts == null ? "日付未取得" : shortDate(item.posted_at_ts), "context-date"));
+      entry.append(label, line);
       if (item.scope_note) entry.append(el("small", item.scope_note, "context-scope"));
       preview.append(entry);
     }
@@ -87,7 +174,7 @@ async function loadPatientContext(project) {
     }
     panel.append(preview, details);
   } catch (error) {
-    if (request === state.contextRequest && project === state.project) panel.replaceChildren(el("h2", "患者コンテキスト"), el("p", "背景情報を取得できませんでした。「更新」で読み直してください。"));
+    if (request === state.contextRequest && project === state.project) panel.replaceChildren(el("h2", "患者コンテキスト"), el("p", "背景情報を取得できませんでした。「更新」で読み直してください。", "context-empty"));
   }
 }
 function post(row, detailed = false) {
@@ -95,22 +182,29 @@ function post(row, detailed = false) {
   const name = row.sender_name || "投稿者未取得";
   article.append(el("span", Array.from(name)[0], "avatar"));
   const content = el("div", null, "post-content"), heading = el("div", null, "post-heading");
-  heading.append(el("span", name, "sender"), el("time", fmt(row.posted_at_ts, {month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit"}), "timestamp"));
+  heading.append(el("span", name, "sender"));
+  if (row.profession || row.organization) heading.append(el("span", [row.profession, row.organization].filter(Boolean).join(" · "), "post-role"));
+  heading.append(el("time", fmt(row.posted_at_ts, {month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit"}), "timestamp"));
   content.append(heading, el("p", row.body_state === "deleted" ? "削除された投稿" : row.body_text || "本文未取得", "post-body"));
-  if (row.profession || row.organization) heading.append(el("span", [row.profession, row.organization].filter(Boolean).join(" · "), "timestamp"));
   if (row.summary_lines?.length) {const summary = el("details", null, "post-summary"); summary.append(el("summary", "記録の要約")); for (const line of row.summary_lines) summary.append(el("p", line)); content.append(summary);}
-  if (row.stamp_line) content.append(el("p", row.stamp_line, "state-note"));
-  if (!row.body_complete && row.body_state !== "deleted") content.append(el("p", "本文は一部未取得です", "state-note"));
-  const footer = el("div", null, "post-footer"), button = el("button", `詳細・返信${row.stored_replies ? ` ${row.stored_replies}件` : ""}`, "reply-link");
-  button.onclick = () => openDetail(row);
-  footer.append(button);
-  const files = (row.attachments || []).reduce((sum, item) => sum + item.count, 0);
-  if (files) footer.append(el("span", `添付 ${files}件`, "attachment-pill"));
-  if (row.parent_id) footer.append(el("span", "返信の検索結果"));
-  if (row.reply_count > row.stored_replies) content.append(el("p", "未取得の返信があります", "state-note"));
-  if (!detailed) content.append(footer);
+  // One footer row: the actions on the post, then its record states as chips (shown in the detail too).
+  const footer = el("div", null, "post-footer");
+  if (!detailed) {
+    const button = el("button", `詳細・返信${row.stored_replies ? ` ${row.stored_replies}件` : ""}`, "reply-link");
+    button.onclick = () => openDetail(row);
+    footer.append(button);
+    const files = (row.attachments || []).reduce((sum, item) => sum + item.count, 0);
+    if (files) footer.append(chip(`添付 ${files}件`, "muted"));
+    if (row.parent_id) footer.append(chip("返信の検索結果", "info"));
+  }
+  if (row.stamp_line) footer.append(chip(row.stamp_line, stampIncomplete.test(row.stamp_line) ? "warn" : "muted"));
+  if (!row.body_complete && row.body_state !== "deleted") footer.append(chip("本文は一部未取得です", "warn"));
+  if (row.reply_count > row.stored_replies) footer.append(chip("未取得の返信があります", "warn"));
+  if (footer.children.length) content.append(footer);
   article.append(content); return article;
 }
+// Every non-complete wording of stamp_format.thread_stamp_line / actor_line (not actor names such as 氏名不明).
+const stampIncomplete = /^スタンプ 未取得|再取得失敗|押した人 (?:取得失敗|古い情報)|取得状態不明/;
 function chronological(rows) {return rows.slice().sort((a,b) => (a.posted_at_ts ?? -Infinity) - (b.posted_at_ts ?? -Infinity) || a.message_id - b.message_id);}
 async function loadTimeline(more = false) {
   if (!state.project) return;
@@ -127,7 +221,7 @@ async function loadTimeline(more = false) {
       if (day !== lastDay) {fragment.append(el("div", day, "date-divider")); lastDay = day;}
       fragment.append(post(row));
     }
-    const panel = $("timeline-panel"), height = panel.scrollHeight;
+    const panel = scroller(), height = panel.scrollHeight;
     if (more) {
       const first = $("timeline").firstElementChild;
       if (first?.className === "date-divider" && first.textContent === lastDay) first.remove();
@@ -166,7 +260,9 @@ function contextSection(row) {
 async function openDetail(row) {
   const request = ++state.detailRequest, project = state.project;
   const root = row.parent_id && row.parent_available !== false ? row.parent_id : row.message_id;
+  if (!$("detail").contains(document.activeElement)) state.detailOpener = document.activeElement;
   $("detail").classList.add("open"); $("close-detail").hidden = false; $("detail-content").replaceChildren(el("p", "詳細を読込中…", "empty"));
+  $("close-detail").focus({preventScroll: true});
   try {
     const [source, replies] = await Promise.all([api("evidence", {project, message: root}), api("thread", {project, message: root})]);
     if (request !== state.detailRequest) return;
@@ -224,14 +320,46 @@ async function showMessageInfo(row, request, withContext = true) {
 async function loadSections() {
   try {
     const data = await api("sections");
-    for (const item of data.items) {const option = el("option", item.label); option.value = item.key; $("view-select").append(option);}
+    state.sections = [["", "タイムライン"], ...data.items.map(item => [item.key, item.label])];
+    viewTabs();
   } catch (error) {fail(error);}
 }
+function showView(key) {state.panel = key; state.panelPage = 0; closeDetail(); loadMain();}
+function viewTabs() {
+  const strip = tabs(state.sections, state.panel, showView), hadFocus = $("view-tabs").contains(document.activeElement);
+  $("view-tabs").replaceChildren(strip);
+  // The row scrolls sideways; a vertical wheel scrolls it too, and fades mark the sides with hidden tabs.
+  strip.onscroll = tabFades;
+  strip.onwheel = event => {
+    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX) || strip.scrollWidth <= strip.clientWidth) return;
+    strip.scrollLeft += event.deltaY; event.preventDefault();
+  };
+  // The chosen tab is scrolled into the row (never the page) and keeps keyboard focus across the rebuild.
+  const selected = strip.children[state.sections.findIndex(([key]) => key === state.panel)];
+  if (selected) revealTab(strip, selected);
+  tabFades();
+  if (hadFocus) selected?.focus({preventScroll: true});
+}
+const tabFadeWidth = 40;
+function revealTab(strip, tab) {
+  const start = tab.offsetLeft - tabFadeWidth, end = tab.offsetLeft + tab.offsetWidth + tabFadeWidth - strip.clientWidth;
+  if (strip.scrollLeft > start) strip.scrollLeft = Math.max(0, start);
+  else if (strip.scrollLeft < end) strip.scrollLeft = end;
+}
+function tabFades() {
+  const box = $("view-tabs"), strip = box.firstElementChild;
+  const hidden = strip ? strip.scrollWidth - strip.clientWidth : 0;
+  box.classList.toggle("fade-start", hidden > 1 && strip.scrollLeft > 1);
+  box.classList.toggle("fade-end", hidden > 1 && strip.scrollLeft < hidden - 1);
+}
+// Width changes (window, rail, returning to the MCS screens) change which tabs are hidden.
+if (globalThis.ResizeObserver) new ResizeObserver(tabFades).observe($("view-tabs"));
 function loadMain() {
   const timeline = !state.panel;
-  for (const id of ["coverage", "older", "timeline", "timeline-status"]) if (!timeline) $(id).hidden = true;
+  viewTabs();
+  for (const id of ["older", "timeline", "timeline-status"]) if (!timeline) $(id).hidden = true;
   $("panel-view").hidden = timeline;
-  if (timeline) {$("coverage").hidden = !state.project; $("timeline").hidden = false; loadTimeline();}
+  if (timeline) {$("timeline").hidden = false; loadTimeline();}
   else loadPanel();
 }
 function renderPanel(view, onPage) {
@@ -241,18 +369,8 @@ function renderPanel(view, onPage) {
   if (view.body != null) for (const line of view.body.split("\n")) box.append(el("p", line, line.startsWith("■") ? "panel-group" : "panel-line"));
   let group;
   for (const item of view.items || []) {
-    if (item.group && item.group !== group) {group = item.group; box.append(el("h3", group));}
-    const row = el("div", null, "panel-item");
-    if (item.quotes?.length) for (const quote of item.quotes) row.append(el("blockquote", quote));
-    else row.append(el("p", item.text || ""));
-    if (item.quotes?.length && item.source) row.append(el("small", item.source));
-    else if (item.source) row.append(el("small", item.source));
-    if (item.message_id) {
-      const open = el("button", "投稿を開く", "text-button"), project = state.project;
-      open.onclick = async () => {const detail = ++state.detailRequest; try {const source = await api("evidence", {project, message: item.message_id}); if (project === state.project && detail === state.detailRequest) openDetail(source.message);} catch (error) {if (detail === state.detailRequest) fail(error);}};
-      row.append(open);
-    }
-    box.append(row);
+    if (item.group && item.group !== group) {group = item.group; box.append(el("h3", group, "panel-group-head"));}
+    box.append(panelItem(item));
   }
   if (!view.items?.length && view.body == null) box.append(el("p", view.empty || "表示できる記録はありません。", "empty"));
   if (view.more) box.append(el("p", `他${view.more}件`, "panel-head"));
@@ -266,6 +384,62 @@ function renderPanel(view, onPage) {
   }
   return box;
 }
+function panelItem(item) {
+  const row = el("div", null, "panel-item");
+  if (item.quotes?.length) for (const quote of item.quotes) row.append(el("blockquote", quote));
+  else row.append(el("p", item.text || ""));
+  if (!item.source && !item.message_id) return row;
+  const meta = el("div", null, "panel-item-meta");
+  if (item.source) meta.append(el("small", item.source));
+  if (item.message_id) meta.append(openPostButton(item.message_id));
+  row.append(meta);
+  return row;
+}
+function openPostButton(message) {
+  // A navigation has its own token: the open detail (and its buttons) stays live until the post has
+  // loaded and openDetail replaces it. A close, another patient or a newer navigation drops the answer.
+  const open = el("button", "投稿を開く", "text-button"), project = state.project;
+  open.onclick = async () => {
+    const nav = ++state.navRequest, detail = state.detailRequest;
+    const current = () => nav === state.navRequest && detail === state.detailRequest && project === state.project;
+    try {const source = await api("evidence", {project, message}); if (current()) openDetail(source.message);}
+    catch (error) {if (current()) fail(error);}
+  };
+  return open;
+}
+// いまの状況: open signals and reply checks beside the timeline, only while the wide right column shows.
+const sideViews = [["signals", "未解消のシグナル"], ["replies", "連絡・返答の確認"]], sideLimit = 5;
+const wideRail = globalThis.matchMedia?.("(min-width: 1200px)");
+function loadSideStatus() {
+  const request = ++state.sideRequest, project = state.project, rail = $("side-status");
+  if (!project || (wideRail && !wideRail.matches)) {state.sideProject = null; rail.replaceChildren(); return Promise.resolve();}
+  state.sideProject = project;
+  const cards = sideViews.map(([key, title]) => sideCard(key, title, request, project));
+  rail.replaceChildren(el("h2", "いまの状況"), ...cards.map(([box]) => box));
+  return Promise.all(cards.map(([, loaded]) => loaded));
+}
+function sideCard(key, title, request, project) {
+  const all = el("button", "すべて見る", "text-button"), body = el("div", null, "side-body");
+  all.onclick = () => showView(key);
+  body.append(el("p", "読込中…", "side-note"));
+  const current = () => request === state.sideRequest && project === state.project;
+  const loaded = api("panel", {project, section: key}).then(data => {
+    if (!current()) return;
+    const view = data.panel, items = view.items || [];
+    // Each item keeps its kind (the signal type or reply group) as a small heading.
+    let group;
+    body.replaceChildren();
+    for (const item of items.slice(0, sideLimit)) {
+      if (item.group && item.group !== group) {group = item.group; body.append(el("h4", group, "side-group"));}
+      body.append(panelItem(item));
+    }
+    if (!items.length) body.append(el("p", view.empty || "表示できる記録はありません。", "side-note"));
+    if (items.length > sideLimit || view.more || view.pages > 1) body.append(el("p", "続きは「すべて見る」で表示します。", "side-note"));
+    for (const note of view.notes || []) body.append(el("p", note, "state-note"));
+  }, () => {if (current()) body.replaceChildren(el("p", "取得できませんでした。「すべて見る」か「更新」で読み直してください。", "state-note"));});
+  return [card(title, [body], {actions: [all]}), loaded];
+}
+wideRail?.addEventListener?.("change", () => {if (wideRail.matches && state.project && state.sideProject !== state.project) loadSideStatus();});
 async function loadPanel() {
   if (!state.project) return;
   const request = ++state.mainRequest, project = state.project, section = state.panel;
@@ -275,7 +449,7 @@ async function loadPanel() {
     const data = await api("panel", {project, section, page: state.panelPage || null});
     if (request !== state.mainRequest) return;
     $("panel-view").replaceChildren(renderPanel(data.panel, page => {state.panelPage = page; loadPanel();}));
-    $("timeline-panel").scrollTop = 0;
+    scroller().scrollTop = 0;
   } catch (error) {if (request === state.mainRequest) {$("panel-view").replaceChildren(el("p", "表示できませんでした。", "empty")); fail(error);}}
 }
 async function showMeds(target, message, request, page = 0) {
@@ -290,12 +464,18 @@ async function showMeds(target, message, request, page = 0) {
 }
 $("patient-form").onsubmit = event => {event.preventDefault(); (state.onSearch || loadPatients)();};
 $("more-patients").onclick = () => loadPatients(true);
-$("patients-toggle").onclick = () => document.body.classList.toggle("picked");
-$("message-form").onsubmit = event => {event.preventDefault(); state.query = $("message-search").value.trim(); $("clear-search").hidden = !state.query; state.panel = ""; $("view-select").value = ""; closeDetail(); loadMain();};
-$("view-select").onchange = () => {state.panel = $("view-select").value; state.panelPage = 0; closeDetail(); loadMain();};
+$("patients-toggle").onclick = () => shell.openList(!document.body.classList.contains("list-open"));
+$("close-list").onclick = () => shell.openList(false);
+document.addEventListener("keydown", event => {
+  if (event.key !== "Escape") return;
+  if (document.body.classList.contains("list-open")) shell.openList(false);
+  else if ($("detail").classList.contains("open")) closeDetail();
+});
+$("message-form").onsubmit = event => {event.preventDefault(); state.query = $("message-search").value.trim(); $("clear-search").hidden = !state.query; state.panel = ""; closeDetail(); loadMain();};
 $("clear-search").onclick = () => {state.query = ""; $("message-search").value = ""; $("clear-search").hidden = true; closeDetail(); loadMain();};
 $("older").onclick = () => loadTimeline(true);
 $("close-detail").onclick = closeDetail;
 $("refresh").onclick = () => location.reload();
+viewTabs();
 loadSections();
 loadPatients();

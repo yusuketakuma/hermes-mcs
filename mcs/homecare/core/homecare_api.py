@@ -35,6 +35,8 @@ def _read(db, route, params, *, registry, mcs_patients):
         patient_id = _id(params.get("patient"))
         return records.page(lambda limit, offset: visits.for_patient(db, patient_id, limit=limit, offset=offset),
                             params, size=50)
+    if route == "days":
+        return {"days": visits.week(db, params.get("from"))}
     if route == "sheet":
         return sheet(db, _id(params.get("patient")), registry=registry, mcs_patients=mcs_patients)
     if route == "meta":
@@ -42,8 +44,8 @@ def _read(db, route, params, *, registry, mcs_patients):
     if route == "staff":
         return {"items": records.staff_list(db)}
     if route == "patients":
-        linked = links.current(db)
-        return {"items": [{**row, "project_id": linked.get(row["patient_id"])}
+        linked, upcoming = links.current(db), visits.next_planned(db, visits.site_today())
+        return {"items": [{**row, "project_id": linked.get(row["patient_id"]), "next_visit": upcoming.get(row["patient_id"])}
                           for row in records.patient_list(db, query=params.get("q", ""))]}
     if route == "patient":
         patient_id = _id(params.get("patient"))

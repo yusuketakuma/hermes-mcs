@@ -58,6 +58,11 @@ def test_services_install_and_retire_the_resident_agent_beside_either_runtime(mo
     monkeypatch.setattr(service_management, "agent_loaded", lambda label, *, paths: False)
     monkeypatch.setattr(service_management, "agent_reconcile",
                         lambda label, dst, note, dry, *, paths: converged.append(label) or True)
+    # The loaded job runs whatever the plist on disk says: these cases move both together.
+    monkeypatch.setattr(service_management, "loaded_remote_settings",
+                        lambda *, paths: (agents / "ai.mcs.local-chat.plist").exists() and plistlib.loads(
+                            (agents / "ai.mcs.local-chat.plist").read_bytes())["EnvironmentVariables"][
+                            "MCS_REMOTE_ACCESS_SETTINGS"] or None)
     retired = []
     monkeypatch.setattr(service_management, "retire_agents",
                         lambda labels, note, dry, *, paths: retired.append(set(labels)) or 0)
@@ -85,6 +90,52 @@ def test_services_install_and_retire_the_resident_agent_beside_either_runtime(mo
     assert service_management.sync_remote_access(subs, {"runtime_mode": mode, "remote_access": {}}, manifest,
                                                  lambda _m: None, False, paths=paths) == 0
     assert retired == [{"ai.mcs.local-chat"}]
+
+
+def test_a_reload_left_to_the_waiter_stays_pending_until_the_loaded_job_runs_the_saved_settings(tmp_path, monkeypatch):
+    import service_management
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    paths = SimpleNamespace(platform="darwin", agents_dir=str(agents), checkout=str(REPO), uid=501)
+    subs = {"PYTHON": "/venv/python3", "REPO": str(REPO), "DATA": str(tmp_path / "data"), "RUN_LOG_HELPER": "/h.py"}
+    reloads, notes = [], []
+    # The old job is still draining: launchd lists it with the settings it started with, and the reload is
+    # handed to a waiter that may time out.
+    monkeypatch.setattr(service_management, "agent_loaded", lambda label, *, paths: True)
+    monkeypatch.setattr(service_management, "loaded_remote_settings", lambda *, paths: "0ld5e771n95")
+    monkeypatch.setattr(service_management, "agent_reconcile",
+                        lambda label, dst, note, dry, *, paths: reloads.append(label) or True)
+    cfg = {"runtime_mode": "hermes", "remote_access": {"tailnet_host": HOST, "port": 9000}}
+    for _ in range(2):
+        manifest = {"agents": []}
+        assert service_management.sync_remote_access(subs, cfg, manifest, notes.append, False, paths=paths) == 0
+        assert manifest["agents"][-1]["loaded"] is False
+    # The second run's plist is already current, yet it reloads again because the loaded job is not.
+    assert reloads == ["ai.mcs.local-chat"] * 2
+    assert sum("読み込み直しを待っています" in note for note in notes) == 2
+    # Unknown (launchctl did not say) is not a mismatch: nothing reloads without a reason.
+    monkeypatch.setattr(service_management, "loaded_remote_settings", lambda *, paths: None)
+    manifest = {"agents": []}
+    assert service_management.sync_remote_access(subs, cfg, manifest, notes.append, False, paths=paths) == 0
+    assert reloads == ["ai.mcs.local-chat"] * 2 and manifest["agents"][-1]["loaded"] is True
+
+
+def test_the_loaded_settings_are_read_from_the_launchd_environment(monkeypatch):
+    import service_management
+
+    listing = ("gui/501/ai.mcs.local-chat = {\n\tstate = running\n\tenvironment = {\n"
+               "\t\tMCS_REMOTE_ACCESS_SETTINGS => 0123456789abcdef\n\t\tXPC_SERVICE_NAME => ai.mcs.local-chat\n\t}\n}\n")
+    answers = iter([SimpleNamespace(returncode=0, stdout=listing), SimpleNamespace(returncode=113, stdout=""),
+                    SimpleNamespace(returncode=0, stdout="state = running\n")])
+    calls = []
+    monkeypatch.setattr(service_management.lifecycle_io, "run_bounded",
+                        lambda argv, **kw: calls.append(argv) or next(answers))
+    paths = SimpleNamespace(uid=501)
+    assert service_management.loaded_remote_settings(paths=paths) == "0123456789abcdef"
+    assert calls[0] == ["launchctl", "print", "gui/501/ai.mcs.local-chat"]
+    assert service_management.loaded_remote_settings(paths=paths) is None
+    assert service_management.loaded_remote_settings(paths=paths) is None
 
 
 def test_the_agent_template_takes_every_setting_from_the_config():
@@ -134,6 +185,9 @@ def tailnet(monkeypatch):
     monkeypatch.setattr(remote, "tailscale_cli", lambda: "/stub/tailscale")
     monkeypatch.setattr(remote, "_run", run)
     monkeypatch.setattr(remote, "port_in_use", lambda port: port in state.busy)
+    state.answering = True
+    monkeypatch.setattr(remote, "workspace_answers", lambda port, host: state.answering)
+    monkeypatch.setattr(remote, "POLL_S", 0)
     monkeypatch.setattr(mcs_util, "load_config_checked", lambda *a, **k: state.cfg)
     monkeypatch.setattr(config_edit, "apply", lambda changes: (state.saved.append(changes), ({}, []))[1])
 
@@ -196,6 +250,81 @@ def test_setup_never_publishes_a_port_another_program_holds(tailnet, capsys):
     assert tailnet.run() == 0
 
 
+def test_setup_publishes_only_a_port_this_workspace_answers_on(tailnet, capsys):
+    # launchd listing the agent is not proof: another program may hold the saved port while the agent is down.
+    tailnet.cfg = {"remote_access": {"tailnet_host": HOST, "port": 8770}}
+    tailnet.answering = False
+    assert tailnet.run() == 1 and tailnet.services == 1
+    assert not any(c[:1] == ["serve"] for c in tailnet.calls)
+    out = capsys.readouterr().out
+    assert "8770 番で応答していることを確認できなかった" in out and "tailscale serve --bg" not in out
+    tailnet.answering = True
+    assert tailnet.run() == 0 and ["serve", "--bg", "http://127.0.0.1:8770"] in tailnet.calls
+
+
+def resident_answer(server, headers, path):
+    from email.message import Message
+
+    handler = mcs_local_chat.ChatHandler.__new__(mcs_local_chat.ChatHandler)
+    handler.server, handler.path, handler.headers = server, path, Message()
+    for name, value in headers.items():
+        handler.headers[name] = value
+    sent = []
+    handler._send = lambda *args: sent.append(args)
+    handler.do_GET()
+    return sent[0][0], (sent[0][1:] or (b"",))[0]
+
+
+def test_only_the_resident_workspace_of_this_name_passes_the_probe(tmp_path):
+    import homecare_catalog
+    import homecare_store
+
+    registry = homecare_catalog.registry(["pharmacy"])
+    homecare_store.connect(tmp_path / "homecare.db", registry.modules).close()
+    server = SimpleNamespace(server_port=8770, token="unused", csrf="unused", snapshot="unused", allowed=None,
+                             homecare=tmp_path / "homecare.db", homecare_registry=registry, route_settings=None,
+                             tailnet_host=HOST)
+    assert remote.is_workspace(*resident_answer(server, remote.probe_headers(HOST), remote.PROBE_PATH))
+    # A workspace still running with an earlier name answers, but not as the one just saved.
+    server.tailnet_host = "old-mac.example-tailnet.ts.net"
+    assert not remote.is_workspace(*resident_answer(server, remote.probe_headers(HOST), remote.PROBE_PATH))
+    assert not remote.is_workspace(200, b"<html>another program</html>")
+
+
+def test_the_probe_asks_this_mac_only_and_treats_no_answer_as_not_the_workspace():
+    import http.client
+
+    opened = []
+
+    class Connection:
+        def __init__(self, host, port, timeout):
+            opened.append((host, port))
+            self.answer = SimpleNamespace(status=403, read=lambda limit: mcs_local_chat.UNREGISTERED[:limit])
+
+        def request(self, method, path, headers):
+            opened.append((method, path, headers))
+
+        def getresponse(self):
+            return self.answer
+
+        def close(self):
+            opened.append("closed")
+
+    assert remote.workspace_answers(8770, HOST, connection=Connection)
+    assert opened == [("127.0.0.1", 8770), ("GET", remote.PROBE_PATH, remote.probe_headers(HOST)), "closed"]
+
+    class Refused(Connection):
+        def request(self, *args, **kwargs):
+            raise ConnectionRefusedError
+
+    class Garbled(Connection):
+        def getresponse(self):
+            raise http.client.BadStatusLine("x")
+
+    assert not remote.workspace_answers(8770, HOST, connection=Refused)
+    assert not remote.workspace_answers(8770, HOST, connection=Garbled)
+
+
 def test_the_workspace_starts_before_the_port_is_published(tailnet, monkeypatch):
     order, run = [], remote._run
     monkeypatch.setattr(remote, "_run", lambda cli, *argv: order.append(argv[0]) or run(cli, *argv))
@@ -224,3 +353,4 @@ def test_a_refused_port_change_returns_to_the_published_port(tailnet, capsys):
     # Publishing 9000 by hand would point the tailnet at a port the workspace has left.
     out = capsys.readouterr().out
     assert "8770 番の公開に戻しました" in out and "tailscale serve" not in out
+    assert "mcs setup remote --port 9000 を" in out  # the command to rerun, ready to copy

@@ -1,21 +1,25 @@
 "use strict";
-// Home-care core screens (staff, patient register, care team, MCS links). Shares $, el, api, fail and state with app.js.
-// Occupation modules add their own screens; the core only reads their declared qualifications and roles from api/hc/meta.
-const hc = {enabled: false, routes: false, csrf: "", actor: null, resident: false, user: null, meta: {qualifications: {}, roles: {}, visit_kinds: {}}, staff: [], patients: [], patient: null, mode: "mcs", request: 0, view: 0,
-  // Occupation modules register their own patient sections and visit-sheet parts here (see pharmacy.js).
+// Home-care core screens (staff, patient register, visit day board, MCS links). Shares $, el, api, fail, state and the UI kit with app.js.
+// Occupation modules add their own sections; the core only reads their declared qualifications, roles and visit kinds from api/hc/meta.
+const hc = {enabled: false, routes: false, csrf: "", actor: null, resident: false, user: null, meta: {qualifications: {}, roles: {}, visit_kinds: {}}, staff: [], patients: [], patient: null, day: null, mode: "mcs", request: 0, view: 0, linkRequest: 0,
+  // Occupation modules register their own register section and visit-sheet card here (see pharmacy.js).
   modules: {}};
 const VISIT_STATUS = {planned: "予定", done: "実施", cancelled: "中止"};
+const CONTACTS = {patient: "本人", keyperson: "キーパーソン", facility: "施設", other: "その他"};
+const PATIENT_STATUS = {active: "利用中", suspended: "休止", ended: "終了"};
 const visitForm = () => [["visit_date", "訪問日（必須）", "date"], ["start_time", "開始時刻", "time"],
   ["kind", "種類", "select", hc.meta.visit_kinds], ["staff_id", "訪問する職員", "staff"],
   ["status", "状態", "select", VISIT_STATUS], ["note", "記録・申し送り", "textarea"]];
-const PATIENT_FORM = [
-  ["name", "氏名（必須）"], ["kana", "フリガナ"], ["birth_date", "生年月日", "date"], ["postal_code", "郵便番号"],
-  ["address", "住所"], ["residence", "施設・部屋"], ["phone", "本人電話", "tel"],
-  ["keyperson_name", "キーパーソン氏名"], ["keyperson_relation", "続柄"], ["keyperson_phone", "キーパーソン電話", "tel"],
-  ["preferred_contact", "優先連絡先", "select", {patient: "本人", keyperson: "キーパーソン", facility: "施設", other: "その他"}],
-  ["contact_phone", "優先連絡先の電話（施設・その他）", "tel"], ["contact_note", "連絡しやすい時間など"],
-  ["access_note", "訪問先へのアクセス", "textarea"], ["caution_note", "注意事項", "textarea"],
-  ["status", "利用状態", "select", {active: "利用中", suspended: "休止", ended: "終了"}]];
+// The patient form is grouped by meaning; the flat spec is what is read back and sent.
+const PATIENT_GROUPS = [
+  ["本人", [["name", "氏名（必須）"], ["kana", "フリガナ"], ["birth_date", "生年月日", "date"]]],
+  ["連絡先", [["phone", "本人電話", "tel"], ["preferred_contact", "優先連絡先", "select", CONTACTS],
+    ["contact_phone", "優先連絡先の電話（施設・その他）", "tel"], ["keyperson_name", "キーパーソン氏名"], ["keyperson_relation", "続柄"],
+    ["keyperson_phone", "キーパーソン電話", "tel"], ["contact_note", "連絡しやすい時間など"]]],
+  ["訪問先", [["postal_code", "郵便番号"], ["address", "住所"], ["residence", "施設・部屋"],
+    ["access_note", "訪問先へのアクセス", "textarea"], ["caution_note", "注意事項", "textarea"]]],
+  ["利用状態", [["status", "利用状態", "select", PATIENT_STATUS]]]];
+const PATIENT_FORM = PATIENT_GROUPS.flatMap(([, fields]) => fields);
 const STAFF_FORM = [
   ["name", "氏名（必須）"], ["kana", "フリガナ"], ["qualifications", "資格（1つ以上）", "qualifications"],
   ["tailscale_login", "Tailscale のログイン名"], ["admin", "管理者（職員の登録・変更ができる）", "checkbox", false],
@@ -36,7 +40,43 @@ async function hcPost(op, body) {
   if (!reply.ok) {const error = new Error(HC_ERRORS[data.error] || "保存できませんでした。"); error.fields = data.fields || []; error.code = data.error; throw error;}
   return data;
 }
+
+// ---------- Labels and dates ----------
 const qualificationLabel = code => hc.meta.qualifications[code] || code;
+const kindLabel = kind => hc.meta.visit_kinds[kind] || kind;
+const roleLabel = role => hc.meta.roles[role]?.label || role;
+const visitChip = visit => chip(VISIT_STATUS[visit.status] || visit.status, visit.status in VISIT_STATUS ? visit.status : "");
+const WEEKDAYS = "日月火水木金土";
+const dayOf = date => new Date(`${date}T00:00:00Z`);
+// The office works in Japan time; dates are calendar days, so they are computed in UTC to avoid the browser's zone.
+const siteToday = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+const shiftDay = (date, days) => {const day = dayOf(date); day.setUTCDate(day.getUTCDate() + days); return day.toISOString().slice(0, 10);};
+const dayLabel = date => {const day = dayOf(date); return `${day.getUTCMonth() + 1}/${day.getUTCDate()}(${WEEKDAYS[day.getUTCDay()]})`;};
+const longDay = date => {const day = dayOf(date); return `${day.getUTCFullYear()}年${day.getUTCMonth() + 1}月${day.getUTCDate()}日(${WEEKDAYS[day.getUTCDay()]})`;};
+const visitWhen = visit => `${dayLabel(visit.visit_date)}${visit.start_time ? " " + visit.start_time : ""}`;
+function age(birth) {
+  const now = dayOf(siteToday()), born = dayOf(birth);
+  if (Number.isNaN(born.getTime())) return null;
+  const years = now.getUTCFullYear() - born.getUTCFullYear();
+  return now.getUTCMonth() * 100 + now.getUTCDate() < born.getUTCMonth() * 100 + born.getUTCDate() ? years - 1 : years;
+}
+// Only a value that is one plain number becomes a tel: link; free text (内線, two numbers, notes) stays text as entered.
+function telLink(phone) {
+  const digits = phone.replace(/\D/g, "");
+  const plain = /^\+?[\d\-()]+$/.test(phone.trim()) || /^\+[\d\-() ]+$/.test(phone.trim());
+  if (!plain || digits.length < 3 || digits.length > 15) return el("span", phone);
+  const link = el("a", phone, "tel"); link.href = `tel:${phone.trim().startsWith("+") ? "+" : ""}${digits}`;
+  return link;
+}
+// A label followed by its number, for the contact list on the visit sheet; a missing number reads 未登録.
+function withPhone(text, phone) {
+  const node = el("span", null, "hc-contact");
+  node.append(el("span", text), phone ? telLink(phone) : el("span", "電話未登録", "hc-quiet"));
+  return node;
+}
+const personText = (name, relation) => name ? `${name}${relation ? `（${relation}）` : ""}` : "";
+
+// ---------- Forms ----------
 function field([key, label, type, option], value, form) {
   if (type === "qualifications") {
     const set = el("fieldset", null, "hc-field hc-checks"), held = value || [];
@@ -59,7 +99,7 @@ function field([key, label, type, option], value, form) {
     for (const [choice, text] of Object.entries(option)) {const node = el("option", text); node.value = choice; input.append(node);}
     if (value != null) input.value = String(value);
   } else if (type === "textarea") {input = el("textarea"); input.value = value || "";}
-  else if (type === "checkbox") {input = el("input"); input.type = "checkbox"; input.checked = value == null ? option : Boolean(value);}
+  else if (type === "checkbox") {input = el("input"); input.type = "checkbox"; input.checked = value == null ? option : Boolean(value); wrap.classList.add("hc-check");}
   else {input = el("input"); input.type = type || "text"; input.value = value || ""; input.autocomplete = "off";}
   input.id = id; input.name = key; wrap.append(input);
   return wrap;
@@ -73,10 +113,15 @@ function formValues(form, spec) {
   }
   return values;
 }
-function recordForm(kind, spec, record, onSaved, fixed = {}) {
-  const form = el("form", null, "hc-form"), message = el("p", null, "state-note");
-  for (const item of spec) form.append(field(item, record?.[item[0]], kind));
-  const save = el("button", record ? "保存" : "登録", "button");
+function recordForm(kind, spec, record, onSaved, {fixed = {}, groups = null} = {}) {
+  const form = el("form", null, groups ? "hc-form hc-form-grouped" : "hc-form"), message = el("p", null, "state-note");
+  if (groups) for (const [title, fields] of groups) {
+    const set = el("fieldset", null, "hc-group"), grid = el("div", null, "hc-group-fields");
+    grid.append(...fields.map(item => field(item, record?.[item[0]], kind))); set.append(el("legend", title), grid);
+    form.append(set);
+  }
+  else for (const item of spec) form.append(field(item, record?.[item[0]], kind));
+  const save = el("button", record ? "保存" : "登録", "button button-primary");
   form.append(save, message);
   let current = record;
   form.onsubmit = async event => {
@@ -103,6 +148,93 @@ async function afterSave(save, message, refresh) {
   save.textContent = "保存"; save.disabled = false;
   try {await refresh();} catch {message.textContent = "保存しました。画面を読み直せませんでした。もう一度保存しても二重には登録されません。";}
 }
+async function refreshAfterWrite(reload, saved = true) {
+  // A change that was saved stays saved; a failed re-read says so instead of looking like a failed change.
+  try {await reload();} catch (error) {fail(saved ? {message: "保存しました。画面を読み直せませんでした。更新して確認してください。"} : error);}
+}
+
+// ---------- Shared layout: expandable record tables and "＋ …" forms ----------
+function rowTable(headers) {
+  const table = el("table", null, "rows hc-table"), head = el("tr"), body = el("tbody");
+  for (const text of headers) head.append(el("th", text));
+  const thead = el("thead"); thead.append(head); table.append(thead, body);
+  return {table, body};
+}
+const emptyRow = (text, span) => {const row = el("tr", null, "hc-empty"), cell = el("td", text); cell.colSpan = span; row.append(cell); return row;};
+// One record per row; opening it shows its edit form on the row below, built when first opened.
+function expandRow(cells, makeForm, span) {
+  const row = el("tr", null, "hc-open"), formRow = el("tr", null, "hc-form-row"), holder = el("td");
+  holder.colSpan = span; formRow.append(holder); formRow.hidden = true;
+  cells.forEach((value, index) => {
+    const cell = el("td", null, index === 0 ? "hc-key" : null);
+    const content = index === 0 ? el("button", null, "hc-toggle") : cell;
+    if (value instanceof Node) content.append(value); else content.textContent = value == null || value === "" ? "—" : String(value);
+    if (index === 0) {content.type = "button"; content.setAttribute("aria-expanded", "false"); cell.append(content);}
+    if (value === "" || value == null) cell.classList.add("hc-none");
+    row.append(cell);
+  });
+  const toggle = row.querySelector(".hc-toggle");
+  row.onclick = event => {
+    if (event.target.closest("a")) return;
+    const open = formRow.hidden;
+    if (open && !holder.firstChild) holder.append(makeForm());
+    formRow.hidden = !open; row.classList.toggle("open", open); toggle.setAttribute("aria-expanded", String(open));
+  };
+  const pair = document.createDocumentFragment(); pair.append(row, formRow);
+  return pair;
+}
+const clipped = text => text ? el("span", text.split("\n")[0], "hc-clip") : "";
+function adder(label, makeForm, open = false) {
+  const area = el("div", null, "hc-adder"), button = el("button", label, "button"); button.type = "button";
+  const set = show => {area.replaceChildren(...(show ? [makeForm()] : [])); area.hidden = !show; button.setAttribute("aria-expanded", String(show));};
+  button.onclick = () => set(area.hidden);
+  set(open);
+  return {button, area, close: () => set(false)};
+}
+// A register section: a wide card whose list redraws itself after a write; "＋ …" opens a new-record form above the list.
+function registerSection(title, fill, add = null) {
+  const body = el("div", null, "hc-section-body");
+  let addForm = null;
+  const reload = async () => {await fill(body, reload); addForm?.close();};
+  if (add) addForm = adder(add.label, () => add.form(reload));
+  fill(body, reload);
+  return card(title, addForm ? [addForm.area, body] : [body], {wide: true, actions: addForm ? [addForm.button] : []});
+}
+function historyPages(list, first, render, fetchPage, label, current) {
+  // Older entries load a page at a time below the ones shown; the place they go is kept apart from the form below.
+  const more = el("div", null, "hc-more"); let shown = 0;
+  const append = page => {
+    for (const item of page.items) list.append(render(item));
+    shown += page.items.length; more.replaceChildren();
+    if (!page.more) return;
+    const button = el("button", label, "load-more"); button.type = "button";
+    button.onclick = async () => {
+      button.disabled = true;
+      let failed = null;
+      const next = await fetchPage(shown).catch(error => {failed = error; return null;});
+      if (!current() || !more.isConnected) return;
+      if (next) {append(next); return;}
+      // A repeated failure replaces the note rather than stacking another one.
+      button.disabled = false; more.querySelector(".state-note")?.remove();
+      more.append(el("p", "以前の記録を読み込めませんでした。", "state-note")); fail(failed);
+    };
+    more.append(button);
+  };
+  append(first);
+  return more;
+}
+
+// ---------- Screens ----------
+// Each screen takes a turn when it starts; a screen whose answer comes back after another one started draws nothing,
+// and a save made on a screen refreshes or moves on only while that screen is still the one shown.
+function hcScreen() {const turn = ++hc.view; return () => turn === hc.view;}
+function hcMain(...nodes) {const page = el("div", null, "hc-page"); page.append(...nodes); shell.main(page);}
+function markPatient(patientId) {
+  for (const button of $("patients").querySelectorAll(".patient")) {
+    const picked = button.dataset.patient === String(patientId);
+    button.classList.toggle("selected", picked); button.setAttribute("aria-current", picked ? "page" : "false");
+  }
+}
 async function loadStaff() {
   hc.staff = (await api("hc/staff")).items;
   const select = $("hc-actor"); select.replaceChildren(el("option", "操作者を選択"));
@@ -114,28 +246,25 @@ async function loadStaff() {
     hc.actor = hc.user?.staff_id ?? null; select.value = hc.actor == null ? "" : String(hc.actor); select.disabled = true;
   }
 }
-// Each screen takes a turn when it starts; a screen whose answer comes back after another one started draws nothing.
-function hcScreen() {const turn = ++hc.view; return () => turn === hc.view;}
-function hcMain(title, ...nodes) {
-  // On a phone the patient list folds away once a screen opens; 患者一覧 brings it back.
-  document.body.classList.add("picked");
-  ++state.mainRequest;
-  $("panel-view").hidden = false;
-  for (const id of ["coverage", "older", "timeline", "timeline-status"]) $(id).hidden = true;
-  const box = el("div", null, "panel"); box.append(el("h2", title), ...nodes);
-  $("panel-view").replaceChildren(box);
-}
-async function showStaff() {
-  hcScreen(); closeDetail();
-  const list = el("div");
+function showStaff() {
+  const current = hcScreen(); hc.patient = null; closeDetail(); markPatient(null);
+  shell.heading("職員", "操作者と担当薬剤師の名簿");
+  const refresh = async () => {await loadStaff(); if (current()) showStaff();};
+  const firstRun = !hc.staff.length;
+  const add = adder("＋ 職員を追加", () => recordForm("staff", STAFF_FORM, null, async saved => {
+    if (hc.resident && !hc.user) {location.reload(); return;}
+    if (!hc.actor) hc.actor = saved.staff_id;
+    await refresh();
+  }), firstRun);
+  const {table, body} = rowTable(["氏名", "資格", "管理者", "Tailscale のログイン名", "在籍"]);
   for (const person of hc.staff) {
-    const row = el("details", null, "hc-row");
-    row.append(el("summary", `${person.name}${person.active ? "" : "（退職）"} · ${person.qualifications.map(qualificationLabel).join("・")}${person.admin ? " · 管理者" : ""}`));
-    row.append(recordForm("staff", STAFF_FORM, person, async () => {await loadStaff(); showStaff();}));
-    list.append(row);
+    const name = el("span", person.name); if (person.kana) name.append(el("small", person.kana));
+    const held = el("span", null, "chips"); held.append(...person.qualifications.map(code => chip(qualificationLabel(code), "info")));
+    body.append(expandRow([name, held, person.admin ? chip("管理者", "warn") : "", person.tailscale_login,
+      person.active ? chip("在籍", "done") : chip("退職", "muted")], () => recordForm("staff", STAFF_FORM, person, refresh), 5));
   }
-  const added = el("details", null, "hc-row"); added.append(el("summary", "職員を追加"), recordForm("staff", STAFF_FORM, null, async saved => {if (hc.resident && !hc.user) {location.reload(); return;} if (!hc.actor) hc.actor = saved.staff_id; await loadStaff(); showStaff();}));
-  hcMain("職員", ...(hc.staff.length ? [] : [el("p", hc.resident ? `最初に自分を職員として登録してください。今の Tailscale のログイン（${hc.login}）がこの人に結び付き、管理者になります。` : "最初に自分を職員として登録してください。登録した人がそのまま操作者と管理者になります。", "state-note")]), list, added);
+  const intro = firstRun ? [el("p", hc.resident ? `最初に自分を職員として登録してください。今の Tailscale のログイン（${hc.login}）がこの人に結び付き、管理者になります。` : "最初に自分を職員として登録してください。登録した人がそのまま操作者と管理者になります。", "state-note")] : [];
+  hcMain(card(`職員 ${hc.staff.length}人`, [...intro, add.area, ...(firstRun ? [] : [table])], {wide: true, actions: [add.button]}));
 }
 async function loadHcPatients() {
   const request = ++hc.request;
@@ -144,11 +273,17 @@ async function loadHcPatients() {
   hc.patients = data.items;
   $("patients").replaceChildren();
   for (const patient of hc.patients) {
-    const button = el("button", null, "patient" + (patient.patient_id === hc.patient ? " selected" : ""));
-    const label = el("span", patient.name, "patient-label");
-    const notes = [patient.kana, patient.project_id && "MCS あり", {suspended: "休止", ended: "終了"}[patient.status]];
-    label.append(el("small", notes.filter(Boolean).join(" · ")));
-    button.append(el("span", "●", "hash"), label);
+    const picked = patient.patient_id === hc.patient;
+    const button = el("button", null, "patient hc-patient" + (picked ? " selected" : ""));
+    button.setAttribute("aria-current", picked ? "page" : "false");
+    const label = el("span", null, "patient-label"), notes = el("span", null, "chips hc-side-chips");
+    label.append(patient.name);
+    if (patient.kana) label.append(el("small", patient.kana));
+    if (patient.next_visit) notes.append(chip(`次 ${dayLabel(patient.next_visit.visit_date)}`, "planned"));
+    if (patient.project_id) notes.append(chip("MCS あり", "info"));
+    if (patient.status !== "active" && PATIENT_STATUS[patient.status]) notes.append(chip(PATIENT_STATUS[patient.status], "muted"));
+    label.append(notes);
+    button.append(label);
     button.dataset.patient = String(patient.patient_id);
     button.onclick = () => showHcPatient(patient.patient_id);
     $("patients").append(button);
@@ -158,249 +293,393 @@ async function loadHcPatients() {
   $("patient-count").textContent = String(hc.patients.length);
   $("more-patients").hidden = true;
 }
-async function showHcPatient(patientId) {
-  const current = hcScreen(); hc.patient = patientId; closeDetail();
-  for (const button of $("patients").querySelectorAll(".patient")) button.classList.toggle("selected", button.dataset.patient === String(patientId));
-  if (patientId == null) {
-    $("patient-name").textContent = "新しい患者"; $("patient-meta").textContent = "薬局の患者台帳";
-    hcMain("患者の登録", recordForm("patient", PATIENT_FORM, null, async saved => {await loadHcPatients(); await showHcPatient(saved.patient_id);}));
-    return;
-  }
-  const data = await api("hc/patient", {patient: patientId});
+// A patient opens on the visit sheet (訪問時の情報); 台帳を編集 is the second tab. A new patient opens on the form.
+function showHcPatient(patientId, tab = "sheet") {
+  const current = hcScreen(); hc.patient = patientId; closeDetail(); markPatient(patientId);
+  if (patientId == null) return newPatient(current);
+  // Until this patient's record arrives the page shows only its name from the list, never the previous patient's record.
+  const name = hc.patients.find(row => row.patient_id === patientId)?.name || "患者";
+  shell.heading(name, "患者台帳"); hcMain(el("p", "読込中…", "empty"));
+  return drawPatient(patientId, tab, current).catch(() => {
+    if (!current()) return;
+    shell.heading(name, "患者台帳", [], [patientTabs(patientId, tab)]);
+    hcMain(el("p", tab === "sheet" ? "訪問時の情報を読み込めませんでした。「更新」で読み直してください。" : "台帳を読み込めませんでした。「更新」で読み直してください。", "empty state-note"));
+  });
+}
+const patientTabs = (patientId, tab) => tabs([["sheet", "訪問時の情報"], ["edit", "台帳を編集"]], tab, key => {if (key !== tab) showHcPatient(patientId, key);});
+function patientHeading(patient, tab) {
+  const years = patient.birth_date ? age(patient.birth_date) : null;
+  const meta = [patient.kana || "フリガナ未登録", patient.birth_date && `${patient.birth_date}生${years == null ? "" : `（${years}歳）`}`].filter(Boolean).join(" · ");
+  const chips = patient.status !== "active" && PATIENT_STATUS[patient.status] ? [chip(PATIENT_STATUS[patient.status], "muted")] : [];
+  shell.heading(patient.name, meta, chips, [patientTabs(patient.patient_id, tab)]);
+}
+// Draws one patient within the screen turn `current`; a failed read throws so the caller decides how to say so.
+async function drawPatient(patientId, tab, current) {
+  const data = await api(tab === "sheet" ? "hc/sheet" : "hc/patient", {patient: patientId});
   if (!current()) return;
-  const patient = data.patient;
-  $("patient-name").textContent = patient.name;
-  $("patient-meta").textContent = `薬局の患者台帳 · ${patient.kana || "フリガナ未登録"}`;
-  const team = el("section", null, "detail-section"), link = el("section", null, "detail-section");
-  // Team and link actions redraw only their own sections, so unsaved edits in the record form stay.
-  const refreshTeam = async () => {
-    const fresh = await api("hc/patient", {patient: patientId});
-    if (hc.patient === patientId) careTeam(team, patientId, fresh.team, refreshTeam);
-  };
-  const refreshLink = async () => {
-    const fresh = await api("hc/patient", {patient: patientId});
-    if (hc.patient === patientId) mcsLink(link, patientId, fresh, refreshLink);
-  };
-  careTeam(team, patientId, data.team, refreshTeam); mcsLink(link, patientId, data, refreshLink);
-  const sheet = el("button", "訪問時の情報を開く", "button"); sheet.onclick = () => showSheet(patientId);
-  const visitBox = el("section", null, "detail-section"); patientVisits(visitBox, patientId);
-  const enabled = name => hc.meta.modules.some(module => module.name === name);
-  const parts = Object.entries(hc.modules).filter(([name, view]) => view.patient && enabled(name)).map(([, view]) => {const box = el("section", null, "detail-section"); view.patient(box, patientId); return box;});
-  hcMain("基本情報", sheet, recordForm("patient", PATIENT_FORM, patient, async () => {await loadHcPatients(); await showHcPatient(patientId);}), team, visitBox, ...parts, link);
+  patientHeading(data.patient, tab);
+  hcMain(tab === "sheet" ? sheetView(data, current) : registerView(patientId, data, current));
 }
-const visitLine = visit => `${visit.visit_date}${visit.start_time ? " " + visit.start_time : ""} · ${hc.meta.visit_kinds[visit.kind] || visit.kind} · ${VISIT_STATUS[visit.status]}${visit.staff_name ? " · " + visit.staff_name : ""}`;
-async function patientVisits(box, patientId) {
-  const reload = () => patientVisits(box, patientId);
-  const data = await api("hc/visits", {patient: patientId}).catch(error => {if (box.childElementCount) throw error; if (hc.patient === patientId && box.isConnected) fail(error); return null;});
-  if (hc.patient !== patientId) return;
-  box.replaceChildren(el("h3", "訪問"));
-  if (!data) {box.append(el("p", "訪問の記録を読み込めませんでした。", "state-note")); return;}
-  const visitRow = visit => {
-    const row = el("details", null, "hc-row"); row.append(el("summary", visitLine(visit)));
-    if (visit.note) row.append(el("p", visit.note, "hc-note"));
-    row.append(recordForm("visit", visitForm(), visit, reload)); return row;
-  };
-  const list = el("div"); box.append(list);
-  if (!data.items.length) list.append(el("p", "訪問の記録はまだありません。"));
-  box.append(historyPages(list, data, visitRow, offset => api("hc/visits", {patient: patientId, offset}), "以前の訪問を表示", () => hc.patient === patientId));
-  const add = el("details", null, "hc-row"); add.append(el("summary", "訪問を予定する"), recordForm("visit", visitForm(), null, reload, {patient_id: patientId}));
-  box.append(add);
+function newPatient(current) {
+  shell.heading("新しい患者", "患者台帳");
+  hcMain(card("患者の登録", [recordForm("patient", PATIENT_FORM, null, async saved => {
+    if (!current()) return;
+    hc.patient = saved.patient_id; await loadHcPatients();
+    if (current()) await drawPatient(saved.patient_id, "edit", current);
+  }, {groups: PATIENT_GROUPS})], {wide: true}));
 }
-function historyPages(list, first, render, fetchPage, label, current) {
-  // Older entries load a page at a time below the ones shown; the place they go is kept apart from the form below.
-  const more = el("div"); let shown = 0;
-  const append = page => {
-    for (const item of page.items) list.append(render(item));
-    shown += page.items.length; more.replaceChildren();
-    if (!page.more) return;
-    const button = el("button", label, "load-more"); button.type = "button";
-    button.onclick = async () => {
-      button.disabled = true;
-      let failed = null;
-      const next = await fetchPage(shown).catch(error => {failed = error; return null;});
-      if (!current() || !more.isConnected) return;
-      if (next) append(next); else {button.disabled = false; more.append(el("p", "以前の記録を読み込めませんでした。", "state-note")); fail(failed);}
-    };
-    more.append(button);
-  };
-  append(first);
-  return more;
+
+// ---------- 訪問時の情報 ----------
+function contactPairs(patient) {
+  const preferred = patient.preferred_contact;
+  const keyperson = patient.keyperson_name || patient.keyperson_phone
+    ? withPhone(personText(patient.keyperson_name, patient.keyperson_relation) || "キーパーソン（氏名未登録）", patient.keyperson_phone) : null;
+  // The preferred contact is the entry it names, never another entry's number: 施設・その他 alone use contact_phone.
+  const reach = preferred === "patient" ? withPhone("本人", patient.phone)
+    : preferred === "keyperson" ? keyperson || el("span", "キーパーソン 未登録", "hc-quiet")
+    : CONTACTS[preferred] ? withPhone(CONTACTS[preferred], patient.contact_phone) : null;
+  const place = [patient.postal_code && `〒${patient.postal_code}`, patient.address].filter(Boolean).join(" ");
+  return [["住所", [place, patient.residence].filter(Boolean).join("\n")], ["優先連絡先", reach],
+    ["本人電話", preferred !== "patient" && patient.phone ? telLink(patient.phone) : null],
+    ["キーパーソン", preferred !== "keyperson" ? keyperson : null],
+    ["連絡しやすい時間", patient.contact_note], ["アクセス", patient.access_note]];
 }
-async function showSheet(patientId) {
-  const current = hcScreen(); hc.patient = patientId; closeDetail();
-  const data = await api("hc/sheet", {patient: patientId});
-  if (!current()) return;
-  const patient = data.patient, back = el("button", "台帳に戻る", "text-button"); back.onclick = () => showHcPatient(patientId);
-  $("patient-name").textContent = patient.name; $("patient-meta").textContent = "訪問時の情報";
-  const facts = el("section", null, "detail-section"); facts.append(el("h3", "連絡と訪問先"));
-  const contact = {patient: patient.phone, keyperson: `${patient.keyperson_name}（${patient.keyperson_relation}） ${patient.keyperson_phone}`}[patient.preferred_contact] ?? patient.contact_phone;
-  for (const [label, value] of [["住所", [patient.address, patient.residence].filter(Boolean).join(" ")], ["優先連絡先", contact], ["連絡のしやすい時間", patient.contact_note],
-                                ["訪問先へのアクセス", patient.access_note], ["注意事項", patient.caution_note]]) if (value) facts.append(el("p", `${label}: ${value}`));
-  const team = el("section", null, "detail-section"); team.append(el("h3", "ケアチーム"));
-  for (const member of data.team) team.append(el("p", `${hc.meta.roles[member.role]?.label || member.role}: ${member.staff_name}`));
-  if (!data.team.length) team.append(el("p", "担当者はまだいません。"));
-  const visitBox = el("section", null, "detail-section"); visitBox.append(el("h3", "訪問"));
-  for (const [label, rows] of [["次の予定", data.next_visits], ["最近の実施", data.recent_visits]]) {
-    visitBox.append(el("h4", label));
-    for (const visit of rows) {visitBox.append(el("p", visitLine(visit))); if (visit.note) visitBox.append(el("p", visit.note, "hc-note"));}
-    if (!rows.length) visitBox.append(el("p", "ありません。"));
-  }
-  const parts = Object.entries(data.modules).filter(([name]) => hc.modules[name]?.sheet).map(([name, part]) => {const box = el("section", null, "detail-section"); hc.modules[name].sheet(box, part); return box;});
-  const mcs = el("section", null, "detail-section"); mcs.append(el("h3", "MCS のやりとり"));
-  if (data.mcs.project_id) {
-    const open = el("button", `${data.mcs.patient_name} のタイムラインを開く`, "text-button"); open.onclick = () => openMcs(data.mcs.project_id);
-    const brief = el("div", null, "sheet-brief"); brief.append(el("p", "MCS の記録を読み込んでいます。", "state-note"));
-    mcs.append(open, brief); sheetBrief(brief, patientId, data.mcs);
-  } else mcs.append(el("p", "MCS の患者と対応付けていないか、閲覧範囲の外です。"));
-  hcMain("訪問時の情報", back, facts, team, visitBox, ...parts, mcs);
+function visitItem(visit, big = false) {
+  const item = el("div", null, big ? "sheet-visit sheet-visit-next" : "sheet-visit"), head = el("div", null, "sheet-visit-head");
+  head.append(el("span", big ? longDay(visit.visit_date) : dayLabel(visit.visit_date), "sheet-visit-date"));
+  if (visit.start_time) head.append(el("span", visit.start_time, "sheet-visit-time"));
+  head.append(visitChip(visit));
+  item.append(head, el("p", [kindLabel(visit.kind), visit.staff_name || "職員未定"].join(" · "), "hc-quiet"));
+  if (visit.note) item.append(el("p", visit.note, "hc-note"));
+  return item;
 }
-async function sheetBrief(box, patientId, link) {
+function sheetView(data, current) {
+  const patient = data.patient, grid = el("div", null, "cards hc-sheet");
+  if (patient.caution_note) grid.append(card("注意事項", [el("p", patient.caution_note, "hc-caution")], {wide: true, tone: "warn"}));
+  const contact = contactPairs(patient);
+  grid.append(card("連絡と訪問先", [contact.some(([, value]) => value) ? kv(contact) : el("p", "連絡先・訪問先は台帳に登録されていません。", "hc-quiet")]));
+  const visits = [el("h4", "次の予定")];
+  data.next_visits.forEach((visit, index) => visits.push(visitItem(visit, index === 0)));
+  if (!data.next_visits.length) visits.push(el("p", "登録されている予定はありません。", "hc-quiet"));
+  visits.push(el("h4", "最近の実施"));
+  for (const visit of data.recent_visits) visits.push(visitItem(visit));
+  if (!data.recent_visits.length) visits.push(el("p", "実施の記録はまだありません。", "hc-quiet"));
+  grid.append(card("訪問", visits));
+  grid.append(card("ケアチーム", [data.team.length ? kv(data.team.map(member => [roleLabel(member.role), member.staff_name])) : el("p", "担当者はまだ登録されていません。", "hc-quiet")]));
+  for (const [name, part] of Object.entries(data.modules)) if (hc.modules[name]?.sheet) grid.append(hc.modules[name].sheet(part));
+  grid.append(mcsCard(data.mcs, current));
+  return grid;
+}
+function mcsCard(link, current) {
+  if (!link.project_id) return card("MCS のやりとり", [el("p", "MCS の患者と対応付けていないか、閲覧範囲の外です。", "hc-quiet")], {wide: true});
+  const open = el("button", "タイムラインを開く", "button"); open.type = "button"; open.onclick = () => openMcs(link.project_id).catch(fail);
+  const brief = el("div", null, "sheet-brief"); brief.append(el("p", "MCS の記録を読み込んでいます。", "state-note"));
+  sheetBrief(brief, link, current);
+  return card(`MCS のやりとり · ${link.patient_name}`, [brief], {wide: true, actions: [open]});
+}
+async function sheetBrief(box, link, current) {
   // The MCS views as of the published snapshot; 前回から変わったこと counts from the last visit that took place.
   const data = await api("brief", {project: link.project_id, since: link.since}).catch(() => null);
-  if (hc.patient !== patientId || !box.isConnected) return;
+  if (!current() || !box.isConnected) return;
   if (!data) {box.replaceChildren(el("p", "MCS の記録を読み込めませんでした。タイムラインから確認してください。", "state-note")); return;}
-  box.replaceChildren(el("p", data.since ? "「前回から変わったこと」は最後に実施した訪問からの変化です。" : "実施済みの訪問がないため、「前回から変わったこと」は直近7日の変化です。", "state-note"));
+  const grid = el("div", null, "brief-grid");
+  box.replaceChildren(el("p", data.since ? "「前回から変わったこと」は最後に実施した訪問からの変化です。" : "実施済みの訪問がないため、「前回から変わったこと」は直近7日の変化です。", "hc-quiet"), grid);
   // Posts open from the timeline: the sheet does not carry the chat's selected patient.
   const unlinked = view => ({...view, items: view.items.map(item => ({...item, message_id: null}))});
   for (const section of data.sections) {
     // Later pages come from the same snapshot route, counted from the same last visit.
     const show = (target, view) => target.replaceChildren(renderPanel(unlinked(view), async page => {
-      const next = await api("panel", {project: link.project_id, section: section.key, page, since: data.since}).catch(error => {if (hc.patient === patientId) fail(error); return null;});
-      if (next && hc.patient === patientId && target.isConnected) show(target, {...next.panel, key: section.key});
+      const next = await api("panel", {project: link.project_id, section: section.key, page, since: data.since}).catch(error => {if (current()) fail(error); return null;});
+      if (next && current() && target.isConnected) show(target, {...next.panel, key: section.key});
     }));
-    const target = el("div"); show(target, section); box.append(target);
+    const target = el("div", null, "brief-item"); show(target, section); grid.append(target);
   }
 }
-async function showDay(date) {
-  const current = hcScreen(); hc.patient = null; closeDetail();
-  $("patient-name").textContent = "訪問予定"; $("patient-meta").textContent = date;
-  const picker = el("form", null, "hc-inline"), input = el("input"); input.type = "date"; input.value = date;
-  picker.append(input, el("button", "この日を表示", "button")); picker.onsubmit = event => {event.preventDefault(); if (input.value) showDay(input.value);};
-  const list = el("section", null, "detail-section"), routeBox = el("section", null, "detail-section");
-  const data = await api("hc/visits", {date}).catch(error => {if (current()) fail(error); return null;});
+
+// ---------- 台帳を編集 ----------
+function registerView(patientId, data, current) {
+  // Saving the basic form refreshes only the heading and the list, so open visit or prescription forms keep their input.
+  const basic = card("基本情報", [recordForm("patient", PATIENT_FORM, data.patient, async saved => {
+    if (!current()) return;
+    await loadHcPatients();
+    if (current()) patientHeading(saved, "edit");
+  }, {groups: PATIENT_GROUPS})], {wide: true});
+  // Team and link actions redraw only their own sections, so unsaved edits in the record form stay.
+  const teamBody = el("div"), linkBody = el("div");
+  const refreshTeam = async () => {
+    const fresh = await api("hc/patient", {patient: patientId});
+    if (current()) careTeam(teamBody, patientId, fresh.team, refreshTeam, current);
+  };
+  const refreshLink = async () => {
+    const fresh = await api("hc/patient", {patient: patientId});
+    if (current()) mcsLink(linkBody, patientId, fresh, refreshLink, current);
+  };
+  careTeam(teamBody, patientId, data.team, refreshTeam, current); mcsLink(linkBody, patientId, data, refreshLink, current);
+  const visits = registerSection("訪問", (box, reload) => patientVisits(box, patientId, reload, current),
+    {label: "＋ 訪問を予定する", form: reload => recordForm("visit", visitForm(), null, reload, {fixed: {patient_id: patientId}})});
+  const enabled = name => hc.meta.modules.some(module => module.name === name);
+  const parts = Object.entries(hc.modules).filter(([name, view]) => view.patient && enabled(name)).map(([, view]) => view.patient(patientId, current));
+  const sections = [basic, card("ケアチーム（この事業所の担当）", [teamBody], {wide: true}), visits, ...parts, card("MCS の患者", [linkBody], {wide: true})];
+  const jumps = el("nav", null, "hc-jumps"); jumps.setAttribute("aria-label", "台帳の節");
+  for (const section of sections) {
+    const go = el("button", section.querySelector("h3").textContent.replace(/（.*）$/, ""), "chip"); go.type = "button";
+    go.onclick = () => section.scrollIntoView({block: "start", behavior: "smooth"});
+    jumps.append(go);
+  }
+  const page = el("div", null, "hc-register"); page.append(jumps, ...sections);
+  return page;
+}
+async function patientVisits(box, patientId, reload, current) {
+  const data = await api("hc/visits", {patient: patientId}).catch(error => {if (box.childElementCount) throw error; return null;});
   if (!current()) return;
-  list.append(el("h3", "この日の訪問"));
-  if (!data) list.append(el("p", "この日の訪問を読み込めませんでした。", "state-note"));
-  for (const visit of data?.items || []) {
-    const row = el("button", `${visit.start_time || "時刻未定"} · ${visit.patient_name} · ${hc.meta.visit_kinds[visit.kind] || visit.kind} · ${VISIT_STATUS[visit.status]}${visit.staff_name ? " · " + visit.staff_name : ""}`, "text-button");
-    row.onclick = () => showSheet(visit.patient_id); list.append(row);
-  }
-  if (data && !data.items.length) list.append(el("p", "この日の訪問はありません。"));
-  routeBox.append(el("h3", "訪問ルート"));
-  if (!hc.routes) routeBox.append(el("p", "訪問ルートは設定されていません。設定すると、住所だけを地図サービスへ送って回る順番を作ります。"));
-  else {
-    const form = el("form", null, "hc-inline"), staffPick = field(["staff", "職員", "staff"], null, "route"), result = el("div");
-    form.append(staffPick, el("button", "ルートを作る（住所を地図サービスへ送ります）", "button"));
-    form.onsubmit = async event => {
-      event.preventDefault(); result.replaceChildren(el("p", "作成中…"));
-      try {
-        const staff = form.querySelector('[name="staff"]').value, plan = await hcPost("route.plan", {date, staff: staff ? Number(staff) : null});
-        result.replaceChildren();
-        plan.stops.forEach((stop, index) => result.append(el("p", `${index + 1}. ${stop.patient_name} · 訪問開始の見込み ${stop.arrival}${stop.start_time ? `（予定 ${stop.start_time}）` : ""}`)));
-        if (!plan.stops.length) result.append(el("p", "ルートに入れられる予定の訪問がありません。"));
-        if (plan.unscheduled.length) result.append(el("p", `予定の時刻の前後15分に着けない訪問が${plan.unscheduled.length}件あり、ルートに入れていません。時刻か担当を見直してください。`, "state-note"));
-        if (plan.unlocated.length) result.append(el("p", `住所から場所を1か所に決められなかった訪問が${plan.unlocated.length}件あり、ルートに入れていません。台帳の住所を番地まで確かめてください。`, "state-note"));
-      } catch (error) {result.replaceChildren(el("p", error.message, "state-note"));}
-    };
-    routeBox.append(form, result);
-  }
-  hcMain("訪問予定", picker, list, routeBox);
+  if (!data) {box.replaceChildren(el("p", "訪問の記録を読み込めませんでした。", "state-note")); return;}
+  const {table, body} = rowTable(["訪問日", "種類", "状態", "職員", "記録・申し送り"]);
+  const visitRow = visit => expandRow([visitWhen(visit), kindLabel(visit.kind), visitChip(visit), visit.staff_name || "未定", clipped(visit.note)],
+    () => recordForm("visit", visitForm(), visit, reload), 5);
+  if (!data.items.length) body.append(emptyRow("訪問の記録はまだありません。", 5));
+  box.replaceChildren(table, historyPages(body, data, visitRow, offset => api("hc/visits", {patient: patientId, offset}), "以前の訪問を表示", current));
 }
-function mcsLink(link, patientId, data, refresh) {
-  const relink = async (op, project) => {try {await hcPost(op, {patient: patientId, project}); await loadHcPatients(); await refresh();} catch (error) {fail(error);}};
-  link.replaceChildren(el("h3", "MCS の患者"));
+function mcsLink(link, patientId, data, refresh, current) {
+  // The pressed button stays disabled while its write is in flight, so a double tap sends once.
+  const relink = async (op, project, button) => {
+    if (!Number.isInteger(project) || project <= 0) return;
+    button.disabled = true;
+    try {await hcPost(op, {patient: patientId, project});} catch (error) {fail(error); button.disabled = false; return;}
+    await refreshAfterWrite(async () => {if (!current()) return; await loadHcPatients(); await refresh();});
+    button.disabled = false;
+  };
+  link.replaceChildren();
   if (data.mcs.project_id) {
     link.append(el("p", `${data.mcs.patient_name || "閲覧範囲外の患者"}（MCS ID ${data.mcs.project_id}）と対応付けています。`));
-    if (data.mcs.patient_name) {const open = el("button", "MCS のタイムラインを開く", "text-button"); open.onclick = () => openMcs(data.mcs.project_id); link.append(open);}
+    const tools = el("div", null, "hc-inline");
+    if (data.mcs.patient_name) {const open = el("button", "MCS のタイムラインを開く", "button"); open.onclick = () => openMcs(data.mcs.project_id).catch(fail); tools.append(open);}
     const undo = el("button", "対応付けを解除", "text-button");
-    undo.onclick = () => relink("unlink", data.mcs.project_id);
-    link.append(undo);
+    undo.onclick = () => relink("unlink", data.mcs.project_id, undo);
+    tools.append(undo); link.append(tools);
   } else {
-    link.append(el("p", "まだ MCS の患者と対応付けていません。氏名が同じでも自動では対応付けません。"));
+    link.append(el("p", "まだ MCS の患者と対応付けていません。氏名が同じでも自動では対応付けません。", "hc-quiet"));
     for (const candidate of data.candidates) {
       const pick = el("button", `${candidate.patient_name}（MCS ID ${candidate.project_id}）と対応付ける`, "text-button");
-      pick.onclick = () => relink("link", candidate.project_id);
+      pick.onclick = () => relink("link", candidate.project_id, pick);
       link.append(pick);
     }
     const manual = el("form", null, "hc-inline"), input = el("input"); input.placeholder = "MCS の患者ID"; input.inputMode = "numeric";
-    manual.append(input, el("button", "この ID と対応付ける", "button"));
-    manual.onsubmit = event => {event.preventDefault(); relink("link", Number(input.value));};
+    input.setAttribute("aria-label", "MCS の患者ID");
+    const submit = el("button", "この ID と対応付ける", "button");
+    manual.append(input, submit);
+    manual.onsubmit = event => {event.preventDefault(); relink("link", Number(input.value.trim()), submit);};
     link.append(manual);
   }
 }
-async function refreshAfterWrite(reload, saved = true) {
-  // A change that was saved stays saved; a failed re-read says so instead of looking like a failed change.
-  try {await reload();} catch (error) {fail(saved ? {message: "保存しました。画面を読み直せませんでした。更新して確認してください。"} : error);}
-}
-function careTeam(box, patientId, members, reload) {
-  box.replaceChildren(el("h3", "ケアチーム（この事業所の担当）"));
+function careTeam(box, patientId, members, reload, current) {
+  const refresh = () => refreshAfterWrite(async () => {if (current()) await reload();});
+  box.replaceChildren();
+  const list = el("div", null, "hc-team");
   for (const member of members) {
-    const row = el("p", `${hc.meta.roles[member.role]?.label || member.role}: ${member.staff_name}`), stop = el("button", "担当を外す", "text-button");
-    stop.onclick = async () => {try {await hcPost("team.end", {assignment: member.assignment_id});} catch (error) {fail(error); return;} await refreshAfterWrite(reload);};
-    row.append(" ", stop); box.append(row);
+    const row = el("div", null, "hc-team-row"), stop = el("button", "担当を外す", "text-button");
+    row.append(el("span", roleLabel(member.role), "hc-quiet"), el("b", member.staff_name), stop);
+    stop.onclick = async () => {
+      stop.disabled = true;
+      try {await hcPost("team.end", {assignment: member.assignment_id});} catch (error) {fail(error); stop.disabled = false; return;}
+      await refresh(); stop.disabled = false;
+    };
+    list.append(row);
   }
-  if (!members.length) box.append(el("p", "担当者はまだいません。"));
+  if (!members.length) list.append(el("p", "担当者はまだ登録されていません。", "hc-quiet"));
+  box.append(list);
   const roles = Object.entries(hc.meta.roles);
   if (!roles.length) return;
   const form = el("form", null, "hc-inline"), role = el("select"), person = el("select");
   role.setAttribute("aria-label", "担当の役割"); person.setAttribute("aria-label", "担当にする職員");
   for (const [code, spec] of roles) {const option = el("option", spec.label); option.value = code; role.append(option);}
+  const assign = el("button", "担当にする", "button");
   const people = () => {
     const needs = hc.meta.roles[role.value].requires;
     person.replaceChildren(...hc.staff.filter(s => s.active && s.qualifications.some(q => needs.includes(q))).map(s => {const option = el("option", s.name); option.value = String(s.staff_id); return option;}));
+    // With nobody qualified for the role there is no one to assign.
+    if (!person.options.length) {const none = el("option", "資格のある在籍職員がいません"); none.value = ""; person.append(none);}
+    assign.disabled = !person.value;
   };
   role.onchange = people; people();
-  form.append(role, person, el("button", "担当にする", "button"));
+  form.append(role, person, assign);
   form.onsubmit = async event => {
     event.preventDefault();
+    if (!person.value || assign.disabled) return;
+    assign.disabled = true;
     try {const assignments = members.filter(m => m.role === role.value).map(m => m.assignment_id); await hcPost("team.assign", {patient: patientId, staff: Number(person.value), role: role.value, assignments});}
-    catch (error) {fail(error); if (error.code === "team_changed") await refreshAfterWrite(reload, false); return;}
-    await refreshAfterWrite(reload);
+    catch (error) {fail(error); assign.disabled = false; if (error.code === "team_changed") await refreshAfterWrite(async () => {if (current()) await reload();}, false); return;}
+    await refresh(); assign.disabled = !person.value;
   };
   box.append(form);
 }
+
+// ---------- 訪問予定 ----------
+async function showDay(date) {
+  const current = hcScreen(); hc.patient = null; hc.day = date; closeDetail(); markPatient(null);
+  shell.heading("訪問予定", longDay(date), date === siteToday() ? [chip("今日", "info")] : []);
+  hcMain(dayNav(date), el("p", "読込中…", "empty"));
+  const [data, week] = await Promise.all([api("hc/visits", {date}).catch(() => null), api("hc/days", {from: date}).catch(() => null)]);
+  if (!current()) return;
+  hcMain(dayNav(date), weekStrip(date, week), dayBoard(date, data));
+}
+function dayNav(date) {
+  const bar = el("div", null, "day-nav"), step = (label, target, cls) => {const button = el("button", label, `button ${cls}`); button.type = "button"; button.onclick = () => showDay(target); return button;};
+  const input = el("input"); input.type = "date"; input.value = date; input.setAttribute("aria-label", "表示する日");
+  input.onchange = () => {if (input.value && input.value !== date) showDay(input.value);};
+  bar.append(step("◀ 前日", shiftDay(date, -1), "day-prev"), step("今日", siteToday(), "day-today"), step("翌日 ▶", shiftDay(date, 1), "day-next"), input);
+  return bar;
+}
+function weekStrip(date, week) {
+  if (!week) return el("p", "7日分の件数を読み込めませんでした。", "state-note");
+  const strip = el("div", null, "week-strip"), today = siteToday();
+  strip.setAttribute("aria-label", "7日分の訪問");
+  for (const day of week.days) {
+    const button = el("button", null, "week-day" + (day.date === today ? " today" : "")); button.type = "button";
+    button.setAttribute("aria-current", day.date === date ? "date" : "false");
+    // Each count carries its word (予定) and, for the compact phone strip, its first letter (予); zero stays muted.
+    const count = (word, n, tone) => {
+      const node = el("span", null, n ? tone : "week-zero");
+      node.append(el("span", word, "week-long"), el("span", word[0], "week-abbr"), el("b", String(n)));
+      return node;
+    };
+    const counts = el("span", null, "week-counts"), when = dayOf(day.date), compact = el("span", null, "week-compact");
+    counts.append(count("予定", day.planned, "week-planned"), count("実施", day.done, "week-done"));
+    if (day.cancelled) counts.append(count("中止", day.cancelled, "week-cancelled"));
+    compact.append(el("span", `${when.getUTCMonth() + 1}/${when.getUTCDate()}`, "week-md"), el("span", WEEKDAYS[when.getUTCDay()], "week-wd"));
+    button.setAttribute("aria-label", `${longDay(day.date)}${day.date === today ? "（今日）" : ""} 予定${day.planned}件 実施${day.done}件${day.cancelled ? ` 中止${day.cancelled}件` : ""}`);
+    button.append(el("span", dayLabel(day.date), "week-date"), compact, counts);
+    button.onclick = () => {if (day.date !== date) showDay(day.date);};
+    strip.append(button);
+  }
+  return strip;
+}
+function visitCard(visit) {
+  const box = el("button", null, `visit-card visit-${visit.status}`); box.type = "button";
+  const body = el("span", null, "visit-body"), top = el("span", null, "visit-top");
+  top.append(el("b", visit.patient_name, "visit-name"), el("span", kindLabel(visit.kind), "visit-kind"), visitChip(visit));
+  body.append(top, el("span", `担当 ${visit.staff_name || "未定"}`, "visit-line"));
+  const place = [visit.address, visit.residence].filter(Boolean).join("　");
+  if (place) body.append(el("span", place, "visit-line visit-place"));
+  if (visit.caution_note) body.append(el("span", `⚠ ${visit.caution_note.split("\n")[0]}`, "visit-caution"));
+  if (visit.note) body.append(el("span", visit.note.split("\n")[0], "visit-note"));
+  box.append(el("span", visit.start_time || "時刻未定", visit.start_time ? "visit-time" : "visit-time visit-time-none"), body);
+  box.onclick = () => openPatient(visit.patient_id);
+  return box;
+}
+function dayBoard(date, data) {
+  const board = el("div", null, "day-board"), list = el("section", null, "day-visits"), route = routeCard(date);
+  list.setAttribute("aria-label", "この日の訪問");
+  board.append(list, route.card);
+  if (!data) {list.append(el("p", "この日の訪問を読み込めませんでした。", "state-note")); return board;}
+  // Filtering by staff only narrows what is shown; the counts follow the filter.
+  let who = "all";
+  const staff = new Map(data.items.map(visit => [visit.staff_id ?? "none", visit.staff_name || "未定"]));
+  const draw = () => {
+    const shown = data.items.filter(visit => who === "all" || (visit.staff_id ?? "none") === who);
+    const bar = el("div", null, "day-filters"), counts = el("span", null, "chips"), people = el("span", null, "chips day-staff");
+    // 予定 and 実施 always show their count; 中止 only when there is one.
+    for (const status of Object.keys(VISIT_STATUS)) {
+      const count = shown.filter(visit => visit.status === status).length;
+      if (count || status !== "cancelled") counts.append(chip(`${VISIT_STATUS[status]} ${count}`, status));
+    }
+    if (staff.size > 1) for (const [key, name] of [["all", "全員"], ...staff]) {
+      const pick = el("button", name, "chip chip-filter"); pick.type = "button"; pick.setAttribute("aria-pressed", String(key === who));
+      pick.onclick = () => {who = key; route.pick(typeof key === "number" ? key : null); draw();};
+      people.append(pick);
+    }
+    if (data.items.length) bar.append(counts, people);
+    const cards = shown.map(visitCard);
+    list.replaceChildren(bar, ...(cards.length ? cards : [el("p", data.items.length ? "この職員の訪問はこの日に登録されていません。" : "この日の訪問は登録されていません。", "empty")]));
+  };
+  draw();
+  return board;
+}
+function routeCard(date) {
+  if (!hc.routes) return {card: card("訪問ルート", [el("p", "訪問ルートは設定されていません。設定すると、住所だけを地図サービスへ送って回る順番を作ります。", "hc-quiet")]), pick() {}};
+  const form = el("form", null, "hc-inline route-form"), staffPick = field(["staff", "職員", "staff"], null, "route"), result = el("div", null, "route-result");
+  form.append(staffPick, el("button", "ルートを作る（住所を地図サービスへ送ります）", "button button-primary"));
+  form.onsubmit = async event => {
+    event.preventDefault(); result.replaceChildren(el("p", "作成中…", "hc-quiet"));
+    try {
+      const staff = form.querySelector('[name="staff"]').value, plan = await hcPost("route.plan", {date, staff: staff ? Number(staff) : null});
+      result.replaceChildren();
+      if (plan.stops.length) {
+        const stops = el("ol", null, "route-list");
+        plan.stops.forEach((stop, index) => {
+          const item = el("li"), who = el("span", null, "route-stop");
+          who.append(el("b", stop.patient_name));
+          if (stop.start_time) who.append(el("small", `予定 ${stop.start_time}`));
+          item.append(el("span", String(index + 1), "route-num"), el("time", stop.arrival, "route-time"), who);
+          stops.append(item);
+        });
+        result.append(el("p", "左の時刻は訪問開始の見込みです。", "hc-quiet"), stops);
+      }
+      if (!plan.stops.length) result.append(el("p", "ルートに入れられる予定の訪問がありません。"));
+      if (plan.unscheduled.length) result.append(el("p", `予定の時刻の前後15分に着けない訪問が${plan.unscheduled.length}件あり、ルートに入れていません。時刻か担当を見直してください。`, "state-note"));
+      if (plan.unlocated.length) result.append(el("p", `住所から場所を1か所に決められなかった訪問が${plan.unlocated.length}件あり、ルートに入れていません。台帳の住所を番地まで確かめてください。`, "state-note"));
+    } catch (error) {result.replaceChildren(el("p", error.message, "state-note"));}
+  };
+  const select = staffPick.querySelector("select");
+  return {card: card("訪問ルート", [form, result]), pick(staffId) {if (staffId != null && [...select.options].some(option => option.value === String(staffId))) select.value = String(staffId);}};
+}
+
+// ---------- Modes ----------
 async function openMcs(projectId) {
   // The way back from a visit sheet always opens the timeline, not whichever view was last chosen.
-  $("patient-search").value = ""; state.panel = ""; $("view-select").value = "";
+  $("patient-search").value = ""; state.panel = "";
   await setMode("mcs");
   const patient = state.patients.find(row => row.project_id === projectId)
     || (await api("patients", {q: String(projectId)})).items.find(row => row.project_id === projectId);
   if (patient) selectPatient(patient);
 }
+// Opening a patient from elsewhere (the day board, the MCS heading) moves to the register with that patient selected.
+function openPatient(patientId) {
+  setMode("pharmacy");
+  return showHcPatient(patientId);
+}
+// The selected mode is shown by style and exposed to assistive technology.
+function markMode(mode) {
+  for (const button of document.querySelectorAll("#hc-modes button")) {
+    const picked = button.dataset.mode === mode;
+    button.classList.toggle("selected", picked); button.setAttribute("aria-pressed", String(picked));
+  }
+}
 function setMode(mode) {
-  document.body.classList.remove("picked");
   hc.mode = mode; hc.patient = null; ++state.patientRequest; ++hc.request; hcScreen(); state.project = null; closeDetail();
-  for (const button of document.querySelectorAll("#hc-modes button")) button.classList.toggle("selected", button.dataset.mode === mode);
-  for (const id of ["patient-context", "read-only", "detail"]) $(id).hidden = mode !== "mcs";
-  document.querySelector(".snapshot-bar").hidden = mode !== "mcs";
-  $("view-select").parentNode.hidden = mode !== "mcs";
+  markMode(mode);
+  shell.setMode(mode);
   if (mode === "mcs") {
-    $("patient-name").textContent = "患者を選んでください"; $("patient-meta").textContent = "";
-    ++state.contextRequest; ++state.mainRequest; $("patient-context").replaceChildren(); $("coverage").hidden = true; $("older").hidden = true;
+    shell.heading("患者を選んでください");
+    ++state.contextRequest; ++state.mainRequest; $("patient-context").replaceChildren(); $("older").hidden = true;
     $("timeline").replaceChildren(); $("panel-view").replaceChildren();
     $("timeline-status").textContent = "患者を選ぶと投稿を表示します。";
     $("panel-view").hidden = !state.panel; $("timeline").hidden = false; $("timeline-status").hidden = false;
     return loadPatients();
   }
   const listed = loadHcPatients().catch(fail);
-  if (mode === "day") {
-    const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
-    showDay(today);
-  } else if (mode === "staff") {
-    $("patient-name").textContent = "職員"; $("patient-meta").textContent = "操作者と担当薬剤師の名簿";
-    showStaff();
-  } else {
-    $("patient-name").textContent = "薬局の患者台帳"; $("patient-meta").textContent = "左の一覧から患者を選ぶか、登録してください";
-    hcMain("薬局の患者台帳", el("p", "左の一覧から患者を選ぶか、「＋ 患者を登録」から登録してください。", "state-note"));
+  if (mode === "day") showDay(hc.day || siteToday());
+  else if (mode === "staff") showStaff();
+  else {
+    shell.heading("患者台帳", "一覧から患者を選ぶか、登録してください");
+    const add = el("button", "＋ 患者を登録", "button button-primary"); add.type = "button"; add.onclick = () => showHcPatient(null);
+    const open = el("button", "患者の一覧を開く", "button hc-phone-only"); open.type = "button"; open.onclick = () => shell.openList(true);
+    const hint = el("div", null, "hc-start"); hint.append(el("p", "患者の一覧から選ぶと、訪問時の情報を表示します。", "hc-quiet"), open, add);
+    hcMain(hint);
   }
   return listed;
 }
 async function showLinkedPharmacyPatient(projectId) {
   if (!hc.enabled) return;
+  // Only the latest selection draws its chip, even when the same patient is selected twice in a row.
+  const request = ++hc.linkRequest;
   try {
     const data = await api("hc/linked", {project: projectId});
-    if (data.patient && state.project === projectId) $("patient-meta").textContent += ` · 薬局の台帳: ${data.patient.name}`;
-  } catch (error) {fail(error);}
+    if (request !== hc.linkRequest || !data.patient || state.project !== projectId) return;
+    const link = el("button", `台帳: ${data.patient.name}`, "chip chip-info hc-linked"); link.type = "button";
+    link.title = "患者台帳で開く"; link.onclick = () => openPatient(data.patient.patient_id);
+    $("patient-chips").querySelector(".hc-linked")?.remove();
+    $("patient-chips").append(link);
+  } catch (error) {if (request === hc.linkRequest) fail(error);}
 }
 async function initHomecare() {
   try {
@@ -410,7 +689,7 @@ async function initHomecare() {
     // The toolbar appears only once the modules and staff it relies on have loaded.
     hc.meta = await api("hc/meta");
     await loadStaff();
-    $("hc-tools").hidden = false;
+    $("hc-tools").hidden = false; markMode(hc.mode);
     $("hc-actor").onchange = () => {hc.actor = $("hc-actor").value ? Number($("hc-actor").value) : null;};
     for (const button of document.querySelectorAll("#hc-modes button")) button.onclick = () => setMode(button.dataset.mode);
     state.onSelect = showLinkedPharmacyPatient;

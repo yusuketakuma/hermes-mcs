@@ -1,0 +1,224 @@
+/* Home-care screens: patient register (訪問時の情報 / 台帳を編集), visit day board, staff and the pharmacy module.
+   Built on the shared kit in style.css (chips, cards, kv, tabs, .rows tables). Phones are below 700px. */
+
+.hc-page { max-width: 1320px; }
+.hc-quiet { margin: 4px 0; font-size: var(--fs-sm); color: var(--muted); }
+.hc-note { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-sm); color: var(--ink-2); }
+.hc-page .empty.state-note { color: var(--warn-ink); }
+.hc-phone-only { display: none; }
+.hc-start { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 24px 4px; }
+.hc-start .hc-quiet { flex-basis: 100%; margin: 0; }
+.card h4 { margin: 10px 0 4px; font-size: var(--fs-xs); font-weight: 550; color: var(--muted); }
+.card h4:first-of-type { margin-top: 0; }
+.card .card-actions .button { padding: 4px 12px; }
+a.tel { color: var(--accent-ink); font-weight: 550; white-space: nowrap; }
+.hc-contact { display: inline-flex; flex-wrap: wrap; gap: 0 10px; }
+
+/* ---------- Sidebar rows ---------- */
+.hc-patient { align-items: flex-start; }
+.hc-patient .patient-label { white-space: normal; }
+.hc-side-chips { display: flex; margin-top: 3px; }
+.hc-side-chips .chip { line-height: 1.55; }
+.patient:not(.selected) .hc-side-chips .chip { background: var(--side-bg-2); color: var(--side-ink); }
+.patient:not(.selected) .hc-side-chips .chip-planned { background: #3d4f6b; color: #dfe9fa; }
+.patient:not(.selected) .hc-side-chips .chip-info { background: #2f514e; color: #d6efeb; }
+
+/* ---------- 訪問時の情報 ---------- */
+/* Cards flow down balanced columns so short cards do not leave gaps; wide cards span every column. */
+.hc-sheet { display: block; columns: 3 300px; column-gap: 12px; }
+.hc-sheet > .card { break-inside: avoid; margin-bottom: 12px; }
+.hc-sheet > .card-wide { column-span: all; }
+.hc-caution { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs); font-weight: 550; color: var(--ink); }
+.sheet-visit { padding: 6px 0; border-top: 1px solid var(--line); }
+.card h4 + .sheet-visit, .card h4 + .hc-quiet { border-top: 0; }
+.sheet-visit p { margin: 2px 0; }
+.sheet-visit-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.sheet-visit-date { font-weight: 650; }
+.sheet-visit-next .sheet-visit-date { font-size: var(--fs-xl); }
+.sheet-visit-next .sheet-visit-time { font-size: var(--fs-lg); font-weight: 650; }
+.sheet-visit .hc-note { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.sheet-brief > .hc-quiet { margin-top: 0; }
+.brief-grid { display: grid; align-items: start; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-top: 6px; }
+.brief-item { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg-soft); }
+.brief-item .panel h2 { margin: 0 0 6px; font-size: var(--fs); }
+
+/* ---------- Pharmacy on the sheet ---------- */
+.rx-summary + .rx-summary { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.rx-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin-bottom: 4px; }
+.rx-table { font-size: var(--fs-sm); }
+.rx-table th, .rx-table td { padding: 4px 6px; }
+.rx-table td:first-child { font-weight: 550; }
+.rx-table td:last-child { white-space: nowrap; }
+
+/* ---------- 台帳を編集 ---------- */
+.hc-register { display: grid; gap: 12px; }
+.hc-register > .card { scroll-margin-top: 8px; }
+.hc-jumps { display: flex; flex-wrap: wrap; gap: 6px; }
+.hc-jumps .chip { padding: 2px 12px; font-size: var(--fs-sm); }
+.hc-adder { margin-bottom: 12px; padding: 12px; border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); background: var(--bg-soft); }
+.hc-more .load-more { margin: 10px 0 0; }
+.hc-team { display: grid; gap: 2px; }
+.hc-team-row { display: flex; align-items: baseline; gap: 12px; }
+.hc-team-row .hc-quiet { min-width: 7em; }
+
+/* Record tables: a row opens its edit form on the row below. */
+.hc-table td { vertical-align: middle; }
+.hc-table td.hc-none { color: var(--muted); }
+.hc-open { cursor: pointer; }
+.hc-open.open { background: var(--accent-soft); }
+.hc-open.open td { border-bottom-color: transparent; }
+.hc-toggle { display: flex; align-items: center; gap: 6px; padding: 0; text-align: left; font-weight: 600; }
+.hc-toggle::before { content: "▸"; width: 10px; font-size: var(--fs-xs); color: var(--muted); }
+.hc-toggle[aria-expanded="true"]::before { content: "▾"; }
+.hc-toggle small { font-weight: 400; font-size: var(--fs-xs); color: var(--muted); }
+.hc-key { white-space: nowrap; }
+.hc-clip { display: block; max-width: 28em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+.hc-form-row > td { padding: 4px 12px 16px 26px; background: var(--bg-soft); }
+.hc-form-row:hover { background: none; }
+.rows tbody tr.hc-form-row:hover, .rows tbody tr.hc-empty:hover { background: none; }
+.hc-empty td { color: var(--muted); }
+
+/* ---------- Record forms ---------- */
+.hc-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 16px; }
+.hc-field { display: grid; align-content: start; gap: 2px; font-size: var(--fs-xs); color: var(--muted); }
+.hc-field input, .hc-field select, .hc-field textarea { width: 100%; padding: 6px 10px; }
+.hc-field textarea { min-height: 68px; }
+.hc-field:has(textarea), .hc-checks { grid-column: 1 / -1; }
+.hc-check { grid-template-columns: auto 1fr; align-items: center; gap: 8px; font-size: var(--fs); color: var(--ink); }
+.hc-check span { order: 1; }
+.hc-field input[type="checkbox"] { width: 18px; height: 18px; }
+.hc-field.invalid input, .hc-field.invalid select, .hc-field.invalid textarea { border-color: #c4554a; background: #fff6f5; }
+.hc-field.invalid span, .hc-field.invalid legend { color: var(--danger); }
+.hc-form > .button { justify-self: start; grid-column: 1 / -1; padding: 7px 22px; }
+.hc-form > .state-note { grid-column: 1 / -1; margin: 0; color: var(--danger); }
+.hc-form > .state-note:empty { display: none; }
+.hc-form h4 { grid-column: 1 / -1; margin: 4px 0 0; }
+.hc-form > div, .hc-form > .text-button { grid-column: 1 / -1; }
+.hc-form > .text-button { justify-self: start; }
+/* The patient form: one group per meaning, three columns of fields in each. */
+.hc-form.hc-form-grouped { grid-template-columns: 1fr; gap: 14px; }
+.hc-group { margin: 0; padding: 0; border: 0; min-width: 0; }
+.hc-group legend { width: 100%; margin-bottom: 6px; padding: 0 0 4px; border-bottom: 1px solid var(--line); font-size: var(--fs-sm); font-weight: 650; color: var(--ink-2); }
+.hc-group-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 16px; }
+
+/* Checkbox groups */
+.hc-checks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 0; padding: 0; border: 0; }
+.hc-checks legend { width: 100%; margin-bottom: 4px; padding: 0; font-size: var(--fs-xs); color: var(--muted); }
+.hc-checks label { display: flex; align-items: center; gap: 6px; font-size: var(--fs); color: var(--ink); }
+
+/* Inline forms (care team, MCS link, route) */
+.hc-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.hc-inline input { width: 160px; }
+.hc-inline .hc-field { display: flex; align-items: center; gap: 8px; }
+.hc-inline .hc-field select { width: auto; min-width: 10em; }
+
+/* Prescription lines in the form */
+.rx-line { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.rx-line .hc-inline { margin-top: 0; }
+.rx-line input { flex: 1 1 8em; min-width: 0; }
+.rx-line input[name="days"] { flex: 0 1 5em; }
+.rx-line input.invalid { border-color: #c4554a; background: #fff6f5; }
+.rx-line > .hc-note { margin: 4px 0 0; font-size: var(--fs-xs); }
+.rx-choices { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; }
+.rx-choices:empty { display: none; }
+
+/* ---------- 訪問予定 ---------- */
+.day-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
+.day-nav input { width: 11em; padding: 5px 8px; font-size: var(--fs-sm); }
+.week-strip { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; margin-bottom: 14px; }
+.week-day { display: grid; gap: 2px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg); text-align: left; }
+.week-day:hover { background: var(--bg-hover); }
+.week-day[aria-current="date"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-soft); }
+.week-date { font-size: var(--fs-sm); font-weight: 650; }
+.week-day.today .week-date::after { content: "今日"; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--info-bg); color: var(--info-ink); font-size: var(--fs-xs); font-weight: 550; }
+.week-counts { display: flex; flex-wrap: wrap; gap: 0 8px; font-size: var(--fs-xs); }
+.week-counts b { margin-left: 3px; font-weight: inherit; }
+.week-compact, .week-abbr { display: none; }
+.week-planned { color: var(--planned-ink); font-weight: 600; }
+.week-done { color: var(--done-ink); font-weight: 600; }
+.week-cancelled { color: var(--cancelled-ink); }
+.week-zero { color: var(--muted); }
+
+.day-board { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 380px); gap: 16px; align-items: start; }
+.day-visits { display: grid; gap: 8px; min-width: 0; }
+.day-filters { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 16px; }
+.chip-filter { border: 1px solid var(--line-strong); background: var(--bg); color: var(--ink-2); }
+.chip-filter[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: #fff; }
+.visit-card { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 12px; width: 100%; padding: 10px 14px; border: 1px solid var(--line); border-left: 4px solid var(--planned-line); border-radius: var(--radius); background: var(--bg); text-align: left; }
+.visit-card:hover { background: var(--bg-soft); border-color: var(--line-strong); }
+.visit-done { border-left-color: var(--done-line); }
+.visit-cancelled { border-left-color: var(--cancelled-line); background: var(--bg-soft); }
+.visit-cancelled .visit-name { color: var(--muted); }
+.visit-time { font-size: 22px; font-weight: 650; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.visit-time-none { font-size: var(--fs-xs); font-weight: 550; color: var(--muted); padding-top: 4px; white-space: nowrap; }
+.visit-body { display: grid; gap: 1px; min-width: 0; }
+.visit-top { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
+.visit-name { font-size: var(--fs-lg); }
+.visit-kind { font-size: var(--fs-sm); color: var(--ink-2); }
+.visit-line { font-size: var(--fs-sm); color: var(--ink-2); }
+.visit-place, .visit-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.visit-caution { font-size: var(--fs-sm); font-weight: 600; color: var(--warn-ink); overflow-wrap: anywhere; }
+.visit-note { font-size: var(--fs-sm); color: var(--muted); }
+.route-form { margin-top: 0; }
+.route-form .button-primary { white-space: normal; text-align: left; }
+.route-result:empty { display: none; }
+.route-result { margin-top: 8px; }
+.route-list { margin: 4px 0 0; padding: 0; list-style: none; }
+.route-list li { display: grid; grid-template-columns: 24px 52px minmax(0, 1fr); align-items: baseline; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); }
+.route-num { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; font-size: var(--fs-xs); font-weight: 650; align-self: center; }
+.route-time { font-size: var(--fs-lg); font-weight: 650; font-variant-numeric: tabular-nums; }
+.route-stop small { display: inline; margin-left: 8px; font-size: var(--fs-xs); color: var(--muted); }
+
+/* ---------- Narrower screens ---------- */
+@media (max-width: 1199px) {
+  .hc-form, .hc-group-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .day-board { grid-template-columns: minmax(0, 1fr) 300px; }
+  .week-day.today .week-date::after { display: none; }
+  .week-day.today { border-style: dashed; border-color: var(--accent); }
+}
+@media (max-width: 1023px) {
+  .day-board { grid-template-columns: 1fr; }
+  .week-date { font-size: var(--fs-xs); }
+  .week-day { padding: 5px 6px; }
+}
+
+/* ---------- Phones ---------- */
+@media (max-width: 699px) {
+  .hc-phone-only { display: inline-block; }
+  .hc-form, .hc-group-fields { grid-template-columns: 1fr; }
+  .hc-inline input { flex: 1; width: auto; }
+  .hc-inline select { flex: 1 1 40%; }
+  .hc-team-row { flex-wrap: wrap; gap: 0 10px; }
+  .hc-team-row .hc-quiet { min-width: 0; flex-basis: 100%; }
+  .cards { grid-template-columns: minmax(0, 1fr); }
+
+  /* Record tables become stacked rows: the key on its own line, the other cells after it. */
+  .hc-table thead { display: none; }
+  .hc-table, .hc-table tbody { display: block; }
+  .hc-table tr { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; padding: 8px 4px; border-bottom: 1px solid var(--line); }
+  .hc-table td { display: block; min-width: 0; max-width: 100%; padding: 0; border: 0; font-size: var(--fs-sm); }
+  .hc-table td.hc-none { display: none; }
+  .hc-table .hc-key { flex-basis: 100%; }
+  .hc-toggle { min-height: 32px; font-size: var(--fs); }
+  .hc-clip { max-width: 100%; }
+  .hc-table tr.hc-form-row { display: block; padding: 0; }
+  .hc-table tr.hc-form-row[hidden] { display: none; }
+  .hc-form-row > td { padding: 8px 4px 16px; }
+  .rx-table tr { padding: 4px 0; }
+  .rx-table td.hc-none { display: none; }
+  .rx-table td:first-child { flex-basis: 100%; }
+
+  /* All seven days fit as equal columns: 11/23 over 月, then 予 and 実 counts (中止 stays in the label and the day's chips). */
+  .week-strip { gap: 3px; margin-bottom: 12px; }
+  .week-day { min-height: 44px; padding: 5px 1px; justify-items: center; gap: 0; text-align: center; line-height: 1.3; }
+  .week-date, .week-long, .week-cancelled { display: none; }
+  .week-compact { display: grid; justify-items: center; }
+  .week-md { font-size: var(--fs-xs); font-weight: 650; font-variant-numeric: tabular-nums; }
+  .week-wd { font-size: var(--fs-xs); color: var(--muted); }
+  .week-counts { display: grid; justify-items: center; gap: 0; margin-top: 2px; }
+  .week-abbr { display: inline; }
+  .week-counts b { margin-left: 1px; font-variant-numeric: tabular-nums; }
+  .visit-card { grid-template-columns: 58px minmax(0, 1fr); gap: 10px; padding: 10px 12px; }
+  .visit-time:not(.visit-time-none) { font-size: var(--fs-xl); }
+  .day-nav input { flex: 1; width: auto; font-size: var(--fs-lg); }
+}
