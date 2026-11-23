@@ -119,8 +119,8 @@ from extract_llm_store import (
     _close_cloud_attempt,
     _close_cloud_attempt_tx,
     _commit_extraction_atomic,
-    _open_cloud_attempt,
     _persist_chunks,
+    _record_cloud_attempt_tx,
 )
 
 # A paid request of a cloud re-extraction failed with a known outcome: the
@@ -667,10 +667,6 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             _CALL_NOTES.defer_reason = local_rebuild.UNVERIFIED   # never build a cloud unit for it
             return _DEFERRED
         if r.get("_cloud_mode") == "on":
-            if r.get("qc_cloud") and not _owner_call(lambda: _open_cloud_attempt(ledger, r), result=True):
-                # The QC second attempt opens before any request, or the post stays unsent.
-                _CALL_NOTES.defer_reason = "cloud_scope_or_budget"
-                return _DEFERRED
             r["_cloud_lease"] = leases[index]
             provider = _owner_call(lambda: cloud_inference.CloudInferenceUnit(ledger, r["_cloud_config"], route="reextract",
                 project_id=r["project_id"], message_id=r["message_id"],
@@ -682,8 +678,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 dispatch=_owner_call, owner={"lease": leases[index]}, selection=r["_cloud_selection"],
                 cache_heads=(_PROMPT_HEAD, _BATCH_HEAD), input_binding=_chunk_context(r, ctx, checkpoint=True),
                 changed=lambda: _source_provably_changed(ledger, r),
-                # The QC second attempt stays on the contract its record and saved chunks carry.
-                pinned=bool(r.get("qc_cloud"))))
+                # The QC second attempt sends only under its pinned contract and
+                # records each paid request with that request's reservation.
+                **({"pin": r.get("_cloud_pin"), "on_reserved_tx": lambda reserving, reservation, _artifact_id:
+                    _record_cloud_attempt_tx(reserving, r, reservation)} if r.get("qc_cloud") else {})))
         if provider is not None:
             try:
                 with cloud_slots:

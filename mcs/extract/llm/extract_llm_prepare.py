@@ -73,34 +73,25 @@ from extract_llm_store import (
 )
 
 
-def _resume_selection(ledger, cfg, r, selection):
-    """The selection a QC second attempt continues under -> selection, or None to send nothing.
+def _qc_contract(ledger, cfg, r, selection):
+    """The contract a QC second attempt sends under -> (pin, live selection), or None to send nothing now.
 
-    An open attempt keeps the provider contract it started with: its saved
-    chunks, recovered answers and repeat guard are bound to that contract, so
-    any other model would pay for finished chunks again. A capped or stopped
-    contract stays selected and send-time admission refuses it (the attempt
-    waits open). A configuration that no longer offers the contract ends the
-    attempt (closed, 確認候補) instead of waiting without bound."""
+    The attempt pins its contract (cloud_policy.route_contract) with its
+    first paid request: an open attempt resumes only under that contract,
+    because its saved chunks, repairs and repeat guard belong to it. A
+    waiting contract (capped, stopped, outside its window) sends nothing and
+    stays open; one the configuration no longer offers ends the attempt
+    (closed, 確認候補). Before that first request this pass's selection is pinned."""
     started = _open_attempt_contracts(ledger.db, r)
-    if not started:
-        return selection
-    settings, errors = cloud_policy.resolve_settings(cfg, HOME)
-    if errors:
+    pin = started[0] if started else cloud_policy.route_contract(
+        cfg, selection, route="reextract", purpose="backlog", root=HOME)
+    state = cloud_policy.resolve_contract(cfg, pin, route="reextract", purpose="backlog",
+                                          root=HOME, ledger=ledger)
+    if started and (state.state == "gone" or any(contract != pin for contract in started)):
+        _close_cloud_attempt(ledger, r)
         return None
-    for provider in settings["provider_order"]:
-        candidate, problems = cloud_policy.profile_for_settings(
-            cfg, settings, route="reextract", purpose="backlog", provider=provider)
-        if problems or candidate is None:
-            continue
-        try:
-            contract = cloud_inference.cloud_provider_contract(selection=candidate)
-        except cloud_inference.CloudFallback:
-            continue
-        if all(contract == value for value in started):
-            return candidate
-    _close_cloud_attempt(ledger, r)
-    return None
+    return (pin, state.selection) if state.state == "usable" else None
+
 
 def _prefilter_enabled() -> bool:
     """config.json extract.prefilter, else the legacy MCS_EXTRACT_PREFILTER, else on."""
@@ -392,7 +383,10 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
                 selection, errors = cloud_policy.resolve_profile(
                     cfg, route="reextract", purpose="backlog", root=HOME)
             if selection is not None and mode == "on" and r.get("qc_cloud"):
-                selection = _resume_selection(ledger, cfg, r, selection)
+                pinned = _qc_contract(ledger, cfg, r, selection)
+                selection = None if pinned is None else pinned[1]
+                if pinned is not None:
+                    r["_cloud_pin"] = pinned[0]
             if selection is None:
                 block("prepare_profile_unavailable")
                 continue

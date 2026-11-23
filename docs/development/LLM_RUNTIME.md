@@ -74,13 +74,17 @@ schemaの正本は[extract_schema](../../mcs/extract/llm/extract_schema.py)で�
 その結果の再監査でも指摘が残る投稿は、保存済み投稿の再抽出の再開期間中だけ、既存の`reextract`経路と
 その送信条件（費用上限・停止・施設の確認・scope・履歴範囲・`held_prior`・QCの60日範囲）でクラウド1回を加えます。
 上限はAPI要求1回ではなく本文（`content_hash`）1つにつき1回で、分割chunkと修正要求も同じ1回に含まれます。
-2回目は最初の要求の前に`extract_cloud_attempt_v1`（`state:"open"`、監査された抽出のidとsource revisionを束縛）を記録し、
-採用・保留は抽出の書込みと同じtransactionで、送信後の既知の失敗（`cloud_validation_failed`等）は単独で`state:"closed"`を追記します。
+2回目は有料の要求（chunk・修正要求）ごとに、その送信予約と同じtransaction（`usage_reserver`の`on_reserved_tx`）で`extract_cloud_attempt_v1`（`state:"open"`、監査された抽出のid・source revision・契約・`reservation_id`を束縛）を記録し、その記録を含めてレーンの条件（QCの60日範囲を含む）を満たさなければ予約ごと取り消します。
+最初の予約の前に上限等で止まった場合は記録が残らず、次の機会にはそのときの選択で始めます。
+採用・保留は抽出の書込みと同じtransactionで、送信後の既知の失敗（`cloud_validation_failed`等）は単独で`state:"closed"`を追記します（開いた記録がない2回目は閉じません）。
 上限・停止による送信前の拒否で止まった回は開いたまま残り、保存済みchunkを再利用して続きだけを送ります（送信済み・結果不明の要求は会計側の重複防止で再送しません）。
-開いた記録は開始時の`provider_contract`（送信先・モデル・prompt）を持ち、再開はprepareでその契約のselectionを選び直し（`provider_order`の順位や予算による切替をしない）、`CloudInferenceUnit(pinned=True)`は送信前のguardでも別の送信先へ移りません。
-その送信先が上限の間は自分のモデルの送信判定で待ち、設定がその契約を提供しなくなったときはprepareで記録を閉じて確認候補にします（保存済みchunkと支払済み応答は契約に束縛されるため、別モデルでは再度支払うことになる）。
+契約は`cloud_policy.route_contract`（送信先と、`backlog`・`quality_repair`の各profileのmodel・effort・profile・max_tokens）で、再開・送信の可否は`cloud_policy.resolve_contract`だけが決めます。
+`usable`ならその送信先のsettings・key・selectionを返し、`CloudInferenceUnit(pin=...)`はclient作成・送信前guard・`request_send_block_reason`・予約のすべてでそれを使い、`provider_order`の順位や予算による切替をしません（修正要求のchildも同じ契約の`quality_repair`で送ります）。
+pinしたunitのscope（`scope_generation(cfg, pin)`）は送信先の選択の代わりに契約を含むので、優先順位を変えても保存済み応答の束縛は変わりません。
+`waiting`（設定未確認・mode、prepareでは期間・停止・circuit・価格・上限）では送らずに開いたまま待ち、`gone`（別の送信先の明示、`provider_order`からの除外、鍵・施設の確認の喪失、profileの変更）ではprepareで記録を閉じて確認候補にします（保存済みchunkと支払済み応答は契約に束縛されるため、別モデルでは再度支払うことになる）。
+pinしないunitの送信先の選択は従来どおりです。
 通常の再抽出も採用・保留・送信後の既知の失敗で`purpose:"backlog"`の閉じた記録を残します。記録は会計の保存期間（`CLOUD_USAGE_KEEP_S`）と無関係に削除されません。
-本文が同じ記録が1つでもあれば（開いた回は同じ抽出・同じrevisionのときだけ続行）、記録より前の`reextract`送信予約（記録を残さない送信）とともに送信済みとみなします（`cloud_attempt_spent_sql`、claim時も`cloud_lane_sql`を再適用）。
+本文が同じ記録が1つでもあれば（開いた回は同じ抽出・同じrevisionのときだけ続行）、記録が`reservation_id`で指さない`reextract`送信予約（記録を残さない送信）とともに送信済みとみなします（`cloud_attempt_spent_sql`、claim時も`cloud_lane_sql`を再適用）。
 投稿者名等だけのsource更新は本文を変えないので再送しません。
 現在の世代で`qc_fix`を持つ投稿は通常の再抽出として送りません。人の報告と世代更新の再抽出は対象外です。
 `meta.qc_fix.attempt`は採用した2回目だけ`2`を記録し、記録のない既存の`qc_fix`は1回目として扱います。

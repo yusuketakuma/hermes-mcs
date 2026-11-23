@@ -415,9 +415,10 @@ def cloud_attempt_spent_sql(msg: str = "m", src: str = "qf.artifact_id") -> str:
     source revision: that one resumes its unfinished requests, and the shared
     accounting never re-sends a completed or unknown-outcome request. A
     metadata-only revision keeps the body but ends such an open attempt; an
-    open record whose binding is missing or unreadable never resumes. A
-    stored-post reservation for the body that precedes its first open record
-    (a send that left no attempt record) counts as well, and so does an
+    open record whose binding is missing or unreadable never resumes. A QC
+    second attempt records each of its paid requests in the request's own
+    reservation transaction; any other stored-post reservation for the body
+    (a send no attempt record names) counts as well, and so does an
     unreadable record or reservation."""
     content = json_or_null("ca.content")
     return f"""(EXISTS (SELECT 1 FROM artifacts ca
@@ -433,14 +434,14 @@ def cloud_attempt_spent_sql(msg: str = "m", src: str = "qf.artifact_id") -> str:
           AND (cr.project_id IS NULL OR cr.project_id={msg}.project_id)
           AND COALESCE(json_extract({json_or_null('cr.meta')},'$.route'),'reextract')='reextract'
           AND cr.created_at >= {_body_since_sql(msg)}
-          AND cr.created_at < COALESCE((SELECT MIN(co.created_at) FROM artifacts co
+          AND NOT EXISTS (SELECT 1 FROM artifacts co
                 WHERE co.kind='{CLOUD_ATTEMPT_KIND}' AND co.message_id={msg}.message_id
-                  AND json_extract({json_or_null('co.content')},'$.hash')={msg}.content_hash
-                  AND json_extract({json_or_null('co.content')},'$.state')='open'), 9e999)))"""
+                  AND json_extract({json_or_null('co.content')},'$.reservation_id')
+                      =json_extract({json_or_null('cr.meta')},'$.reservation_id'))))"""
 
 
 def _open_attempt_contracts(db, r) -> list:
-    """Provider contracts of the row's resumable QC second attempt, oldest first (empty before it opens).
+    """Pinned contracts of the row's resumable QC second attempt, one per paid request, oldest first (empty before its first).
 
     An open record without a readable contract reads as None."""
     content = json_or_null("ca.content")

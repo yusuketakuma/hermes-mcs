@@ -70,10 +70,14 @@ def _sent_text(body):
     return json.dumps(body, ensure_ascii=False)
 
 
+def _attempt_records(ledger):
+    return [json.loads(a['content']) for a in ledger.artifacts(worker.CLOUD_ATTEMPT_KIND)]
+
+
 def _attempts(ledger):
-    """The body's cloud attempt records as (purpose, state)."""
-    return [(row['purpose'], row['state']) for row in
-            (json.loads(a['content']) for a in ledger.artifacts(worker.CLOUD_ATTEMPT_KIND))]
+    """The body's cloud attempt as (purpose, state) steps; each paid request of an open attempt has its own record."""
+    steps = [(row['purpose'], row['state']) for row in _attempt_records(ledger)]
+    return [step for i, step in enumerate(steps) if i == 0 or step != steps[i - 1]]
 
 
 def _prune_accounting(ledger):
@@ -295,82 +299,191 @@ def test_a_metadata_revision_earns_no_new_attempt_but_a_body_edit_does(qc_window
     assert _current(ledger)[1]["qc_fix"]["attempt"] == 2
 
 
-def _capped_after_the_first_chunk(qc_window, monkeypatch):
-    """A long flagged post whose second attempt sends chunk 1, then hits the cost cap -> cap switch."""
-    ledger, cfg, _local_calls, cloud_calls, _answers = qc_window
+def _echo_providers(qc_window, monkeypatch):
+    """Both providers keyed and approved, each answering under the model it was asked for -> OpenAI request bodies."""
+    import openai_client
+    from test_anthropic_runtime import AnthropicClient
+    _ledger, _cfg, _local_calls, cloud_calls, answers = qc_window
+    monkeypatch.setattr(cloud_policy, "provider_key", lambda name, root=None: "synthetic-key")
+
+    def anthropic(self, method, body, timeout, **kwargs):
+        cloud_calls.append(body)
+        return 200, {}, json.dumps({'model': body['model'], 'stop_reason': 'end_turn',
+            'content': [{'type': 'text', 'text': json.dumps(answers['cloud'], ensure_ascii=False)}],
+            'usage': {'input_tokens': 10, 'output_tokens': 2}}).encode()
+    openai_calls = []
+
+    def openai(self, method, body, timeout, **kwargs):
+        openai_calls.append(body)
+        return 200, {}, json.dumps({'status': 'completed', 'model': body['model'], 'service_tier': 'default',
+            'output': [{'type': 'message', 'role': 'assistant', 'content': [
+                {'type': 'output_text', 'text': json.dumps(answers['cloud'], ensure_ascii=False)}]}],
+            'usage': {'input_tokens': 10, 'output_tokens': 2, 'total_tokens': 12,
+                      'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0}}}).encode()
+    monkeypatch.setattr(AnthropicClient, 'request', anthropic)
+    monkeypatch.setattr(openai_client.OpenAIClient, 'request', openai)
+    return openai_calls
+
+
+def _both_providers(cfg, order=("anthropic", "openai")):
+    """The window with automatic provider choice over both providers, each under its own caps."""
+    cfg['cloud_llm'].update(provider="auto", provider_order=list(order), provider_budgets={
+        name: {"daily_cost_limit_usd": 15, "monthly_cost_limit_usd": 150} for name in ("anthropic", "openai")})
+
+
+def _long_flagged_post(ledger):
     body = "".join(f"完全合成の長い経過記録{i:03d}です。" for i in range(300))
     assert len(body) > worker._CHUNK_SIZE
     _revise(ledger, _message(body=body), 'synthetic-long-body')
     _locally_fixed(ledger)
     _flag_current(ledger)
-    before, _meta = _current(ledger)
-    _open_window(cfg)
-    real = cloud_policy.request_send_block_reason
-    cap = {"open": False}
+    return _current(ledger)[0]
 
-    def capped(*args, **kwargs):
-        # The first chunk fits under the cap; the next one is refused before it is sent.
-        return real(*args, **kwargs) if cap["open"] or not cloud_calls else "synthetic_daily_cap"
-    monkeypatch.setattr(cloud_policy, "request_send_block_reason", capped)
+
+def _capped_after_the_first_chunk(qc_window, monkeypatch, *, providers=False):
+    """A long flagged post whose second attempt sends chunk 1, then meets the real daily request cap -> lift."""
+    ledger, cfg, _local_calls, cloud_calls, _answers = qc_window
+    openai_calls = _echo_providers(qc_window, monkeypatch)
+    before = _long_flagged_post(ledger)
+    _open_window(cfg)
+    if providers:
+        _both_providers(cfg)
+    cfg['cloud_llm']['daily_request_budget'] = 1   # the first chunk fits, the next one is refused before sending
     assert _cloud_pass(ledger)['done'] == 0
-    assert len(cloud_calls) == 1 and _reservations(ledger) == 1
+    assert len(cloud_calls) == 1 and _reservations(ledger) == 1 and not openai_calls
     assert _attempts(ledger) == [('qc', 'open')], "a cap refusal leaves the attempt to resume"
     current, meta = _current(ledger)
     assert current['artifact_id'] == before['artifact_id'] and "attempt" not in meta["qc_fix"]
     assert _still_flagged(ledger, before['artifact_id'])
     with ledger.db:
         ledger.db.execute("DELETE FROM fetch_jobs WHERE kind='extract_claim'")
-    return cap
+
+    def lift():
+        cfg['cloud_llm'].pop('daily_request_budget')
+        with ledger.db:
+            ledger.db.execute("DELETE FROM fetch_jobs WHERE kind='extract_claim'")
+    return openai_calls, lift
 
 
-def _sonnet(cfg):
-    """The same configuration with the stored-post backlog profile switched to another model."""
-    return {**cfg, 'cloud_llm': {**cfg['cloud_llm'], 'provider_profiles': {'anthropic': {'backlog': 'sonnet-high'}}}}
+def _request_fps(ledger):
+    return [json.loads(row['meta'])['request_fp'] for row in ledger.artifacts('cloud_usage_reserve')]
 
 
 def test_a_cap_blocked_chunk_resumes_the_same_attempt_without_resending(qc_window, monkeypatch):
     ledger, _cfg, _local_calls, cloud_calls, _answers = qc_window
-    cap = _capped_after_the_first_chunk(qc_window, monkeypatch)
-    cap["open"] = True
+    _openai_calls, lift = _capped_after_the_first_chunk(qc_window, monkeypatch)
+    assert _cloud_pass(ledger)['done'] == 0 and len(cloud_calls) == 1, "still capped: it waits, open"
+    assert _attempts(ledger) == [('qc', 'open')]
+    lift()
     assert _cloud_pass(ledger)['done'] == 1
     sent = [_sent_text(call) for call in cloud_calls]
     assert len(sent) >= 2 and len(set(sent)) == len(sent), "the saved first chunk is reused, not resent"
-    assert _reservations(ledger) == len(sent)
+    assert _reservations(ledger) == len(sent) == len(set(_request_fps(ledger)))
     assert _current(ledger)[1]["qc_fix"]["attempt"] == 2
     assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')]
+    assert sum(row['state'] == 'open' for row in _attempt_records(ledger)) == len(sent), "one record per paid request"
     _flag_current(ledger)
     assert _cloud_pass(ledger)['done'] == 0 and len(cloud_calls) == len(sent)
 
 
-def test_a_capped_attempt_resumes_only_under_the_contract_it_started_with(qc_window, monkeypatch):
+def test_a_flipped_provider_preference_resumes_on_the_original_provider_once_its_cap_clears(qc_window, monkeypatch):
     ledger, cfg, _local_calls, cloud_calls, _answers = qc_window
-    cap = _capped_after_the_first_chunk(qc_window, monkeypatch)
-    started = json.loads(ledger.artifacts(worker.CLOUD_ATTEMPT_KIND)[0]['content'])['contract']
-    assert started['model'] == cloud_calls[0]['model']
-    # The ordered provider choice now prefers another model (as when the first is over its cap).
-    real_resolve = cloud_policy.resolve_profile
-    monkeypatch.setattr(cloud_policy, "resolve_profile",
-                        lambda config, **kwargs: real_resolve(_sonnet(config), **kwargs))
-    assert cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog")[0]['model'] != started['model']
-    cap["open"] = True
+    openai_calls, lift = _capped_after_the_first_chunk(qc_window, monkeypatch, providers=True)
+    pin = json.loads(ledger.artifacts(worker.CLOUD_ATTEMPT_KIND)[0]['content'])['contract']
+    assert pin['backlog']['provider'] == 'anthropic' and cloud_calls[0]['model'] == pin['backlog']['model']
+    _both_providers(cfg, order=("openai", "anthropic"))
+    preferred = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog", root=worker.HOME,
+                                             ledger=ledger, ordered=True)[0]
+    assert preferred['provider'] == 'openai', "real ordered resolution now prefers the other provider"
+    assert _cloud_pass(ledger)['done'] == 0, "the pinned provider is still capped: it waits"
+    assert len(cloud_calls) == 1 and not openai_calls and _attempts(ledger) == [('qc', 'open')]
+    lift()
     assert _cloud_pass(ledger)['done'] == 1
-    sent = [_sent_text(call) for call in cloud_calls]
-    assert len(set(sent)) == len(sent) and _reservations(ledger) == len(sent), (
-        "no reservation for the chunk the first model already answered")
-    assert {call['model'] for call in cloud_calls} == {started['model']}
+    assert not openai_calls, "nothing moves to the preferred provider"
+    assert {call['model'] for call in cloud_calls} == {pin['backlog']['model']}
+    assert _reservations(ledger) == len(cloud_calls) == len(set(_request_fps(ledger))), (
+        "no chunk is reserved twice")
+    assert _current(ledger)[1]['provider_provenance']['providers'] == ['anthropic']
     assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')]
 
 
-def test_a_capped_attempt_whose_contract_is_no_longer_offered_ends_without_sending(qc_window, monkeypatch):
+def test_a_single_provider_pin_without_the_original_provider_ends_the_attempt_unsent(qc_window, monkeypatch):
     ledger, cfg, _local_calls, cloud_calls, _answers = qc_window
-    cap = _capped_after_the_first_chunk(qc_window, monkeypatch)
-    cfg['cloud_llm'].update(_sonnet(cfg)['cloud_llm'])
-    cap["open"] = True
+    openai_calls, lift = _capped_after_the_first_chunk(qc_window, monkeypatch, providers=True)
+    cfg['cloud_llm']['provider'] = 'openai'   # anthropic stays listed in provider_order
+    assert cfg['cloud_llm']['provider_order'] == ['anthropic', 'openai']
+    lift()
     assert _cloud_pass(ledger)['done'] == 0
-    assert len(cloud_calls) == 1 and _reservations(ledger) == 1, "nothing is paid again on the new model"
+    assert len(cloud_calls) == 1 and not openai_calls and _reservations(ledger) == 1, "nothing is sent"
     assert _attempts(ledger) == [('qc', 'open'), ('qc', 'closed')], "the attempt ends (確認候補)"
     assert worker._select_pending(ledger, 5, None, None, False, cloud_only=True)[0] == []
-    assert _cloud_pass(ledger)['done'] == 0 and len(cloud_calls) == 1
+    assert _cloud_pass(ledger)['done'] == 0 and len(cloud_calls) == 1 and not openai_calls
+
+
+def test_a_cap_refusal_before_the_first_request_leaves_the_post_eligible_under_a_new_model(qc_window, monkeypatch):
+    ledger, cfg, _local_calls, cloud_calls, _answers = qc_window
+    openai_calls = _echo_providers(qc_window, monkeypatch)
+    _locally_fixed(ledger)
+    _flag_current(ledger)
+    _open_window(cfg)
+    first = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog", root=worker.HOME)[0]
+    # The provider cap admits the profile's bare maximum (the prepare check) but not the real request.
+    bare = cloud_policy.max_cost(first['max_tokens'], input_bound=cloud_policy.INPUT_RESERVATION_MARGIN,
+                                 model=first['model'])
+    cfg['cloud_llm']['provider_budgets']['anthropic']['daily_cost_limit_usd'] = float(bare) * 1.01
+    assert _cloud_pass(ledger)['done'] == 0
+    assert not cloud_calls and not _financial_rows(ledger), "refused before any reservation"
+    assert not ledger.artifacts(worker.CLOUD_ATTEMPT_KIND), "and nothing records an attempt"
+    cfg['cloud_llm'].update(provider_profiles={'anthropic': {'backlog': 'sonnet-high'}})
+    cfg['cloud_llm']['provider_budgets']['anthropic']['daily_cost_limit_usd'] = 15
+    with ledger.db:
+        ledger.db.execute("DELETE FROM fetch_jobs WHERE kind='extract_claim'")
+    assert _cloud_pass(ledger)['done'] == 1
+    assert [call['model'] for call in cloud_calls] == ['claude-sonnet-5-5'] and not openai_calls
+    assert _reservations(ledger) == 1
+    records = _attempt_records(ledger)
+    assert [row['state'] for row in records] == ['open', 'closed']
+    assert records[0]['contract']['backlog']['model'] == 'claude-sonnet-5-5'
+    assert _current(ledger)[1]["qc_fix"]["attempt"] == 2
+
+
+def test_a_pinned_quality_repair_keeps_its_contract_and_is_never_paid_twice(qc_window, monkeypatch):
+    import cloud_inference
+    ledger, cfg, _local_calls, cloud_calls, _answers = qc_window
+    openai_calls = _echo_providers(qc_window, monkeypatch)
+    _open_window(cfg)
+    _both_providers(cfg)
+    selection = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog", root=worker.HOME,
+                                             ledger=ledger, ordered=True)[0]
+    pin = cloud_policy.route_contract(cfg, selection, route="reextract", purpose="backlog", root=worker.HOME)
+    assert pin['quality_repair']['provider'] == 'anthropic'
+
+    def repair(unit_pin=pin):
+        unit = cloud_inference.CloudInferenceUnit(ledger, cfg, route="reextract", project_id=1, message_id=1,
+            unit_key="1", deadline=time.monotonic() + 180, current=lambda: True,
+            dispatch=lambda fn, **kwargs: fn(), owner={}, selection=selection, input_binding="0" * 64,
+            pin=unit_pin)
+        return unit.spawn_quality_repair()
+    prompt = "完全合成の修復依頼です。"
+    first = repair()
+    assert cloud_policy.selection_contract(first.selection) == pin['quality_repair']
+    assert first(prompt, deadline=time.monotonic() + 60, max_tokens=64)['text']
+    assert len(cloud_calls) == 1 and _reservations(ledger) == 1
+    # The preference flips: an unpinned repair would now go to the other provider...
+    _both_providers(cfg, order=("openai", "anthropic"))
+    assert repair(None).selection['provider'] == 'openai'
+    # ...the pinned one keeps its contract and reuses its paid answer.
+    again = repair()
+    assert cloud_policy.selection_contract(again.selection) == pin['quality_repair']
+    assert again(prompt, deadline=time.monotonic() + 60, max_tokens=64)['reused_response'] is True
+    assert len(cloud_calls) == 1 and _reservations(ledger) == 1 and not openai_calls
+    # A changed repair profile no longer offers the contract, for the repair and the attempt it belongs to.
+    cfg['cloud_llm']['provider_profiles'] = {'anthropic': {'quality_repair': 'haiku-medium'}}
+    assert [cloud_policy.resolve_contract(cfg, pin, route="reextract", purpose=purpose, root=worker.HOME).state
+            for purpose in ("backlog", "quality_repair")] == ['gone', 'gone']
+    with pytest.raises(cloud_inference.CloudFallback):
+        repair()("完全合成の別の修復依頼です。", deadline=time.monotonic() + 60, max_tokens=64)
+    assert len(cloud_calls) == 1 and _reservations(ledger) == 1 and not openai_calls
 
 
 def test_claim_rereads_the_lane_filter_and_the_second_attempt(qc_window, monkeypatch):
@@ -394,14 +507,22 @@ def test_claim_rereads_the_lane_filter_and_the_second_attempt(qc_window, monkeyp
         assert worker._claim(ledger, dict(row)) is None
     assert not ledger.db.execute("SELECT 1 FROM fetch_jobs WHERE kind='extract_claim'").fetchone()
     assert type(worker._claim(ledger, dict(row))) is float
-    # ...and leaves it between claim and the first request: the attempt never opens.
+    # ...and leaves it before its first paid request: that request's reservation refuses it.
+    import cloud_client
     import extract_llm_store
+
+    def reserve():
+        with ledger.db:
+            ledger.db.execute("BEGIN IMMEDIATE")
+            return extract_llm_store._record_cloud_attempt_tx(ledger, row, {"reservation_id": "b" * 32})
     with monkeypatch.context() as aged:
         aged.setattr(semantic_qc, "QC_REALTIME_MAX_AGE_S", 60)
-        assert extract_llm_store._open_cloud_attempt(ledger, row) is False
+        with pytest.raises(cloud_client.CloudError):
+            reserve()
     assert not ledger.artifacts(worker.CLOUD_ATTEMPT_KIND)
-    assert extract_llm_store._open_cloud_attempt(ledger, row) is True
+    assert reserve() == 1
     assert _attempts(ledger) == [('qc', 'open')]
+    assert json.loads(ledger.artifacts(worker.CLOUD_ATTEMPT_KIND)[0]['content'])['contract'] == row['_cloud_pin']
 
 
 def test_lane_filter_admits_only_a_reaudited_flag(qc_window):
@@ -552,8 +673,8 @@ def test_one_attempt_per_body_survives_metadata_revisions_and_restarts_on_a_body
                 db.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at)"
                               " VALUES(?,1,1,?,'m',?,?)", (kind, content, meta, at))
 
-        def reserve(at, route='reextract'):
-            insert('cloud_usage_reserve', '{}', json.dumps({"route": route}), at)
+        def reserve(at, route='reextract', reservation_id=None):
+            insert('cloud_usage_reserve', '{}', json.dumps({"route": route, "reservation_id": reservation_id}), at)
 
         def attempt(state, at, **binding):
             insert(worker.CLOUD_ATTEMPT_KIND, json.dumps({"hash": _hash(db), "purpose": "qc",
@@ -572,9 +693,14 @@ def test_one_attempt_per_body_survives_metadata_revisions_and_restarts_on_a_body
         # An open second attempt resumes only for its own extraction and revision.
         with db.db:
             db.db.execute("DELETE FROM artifacts WHERE kind='cloud_usage_reserve'")
-        attempt('open', now - 50, source_artifact_id=7, revision=revision())
-        reserve(now - 40)                       # the open attempt's own first request
+        reserve(now - 50, reservation_id='a' * 32)   # the open attempt's own first request
+        attempt('open', now - 50, source_artifact_id=7, revision=revision(), reservation_id='a' * 32)
         assert is_spent(7) == 0 and is_spent(8) == 1
+        reserve(now - 45)
+        assert is_spent(7) == 1, "a request no attempt record names spends the body"
+        with db.db:
+            db.db.execute("DELETE FROM artifacts WHERE kind='cloud_usage_reserve' AND json_extract(meta,"
+                          "'$.reservation_id') IS NULL")
         db.save_messages([dataclasses.replace(_message(body='完全合成の記録です。'),
                                               sender_name='synthetic-third-name')])
         assert is_spent(7) == 1, "a metadata-only revision ends the open attempt"
@@ -582,6 +708,9 @@ def test_one_attempt_per_body_survives_metadata_revisions_and_restarts_on_a_body
         assert is_spent(7) == 1, "the earlier open record of the same body still counts"
         with db.db:
             db.db.execute("DELETE FROM artifacts WHERE kind=?", (worker.CLOUD_ATTEMPT_KIND,))
+        assert is_spent(7) == 1, "a request whose record is gone counts"
+        with db.db:
+            db.db.execute("DELETE FROM artifacts WHERE kind='cloud_usage_reserve'")
         attempt('open', now - 50, source_artifact_id=7, revision=revision())
         assert is_spent(7) == 0
         for broken in ({"source_artifact_id": 7}, {"source_artifact_id": 7, "revision": None},

@@ -8,6 +8,7 @@ import sqlite3
 import sys
 import time
 import inference_version as inference
+import cloud_client
 import cloud_policy
 import cloud_inference
 import provider_registry
@@ -183,31 +184,35 @@ def _add_cloud_attempt_tx(db, r, state: str, **binding):
                    (CLOUD_ATTEMPT_KIND, r["project_id"], r["message_id"], content, time.time()))
 
 
-def _open_cloud_attempt(ledger, r) -> bool:
-    """Open the QC second attempt before its first cloud request; False when the post no longer qualifies or left the QC window.
+def _record_cloud_attempt_tx(ledger, r, reservation) -> int:
+    """Record a paid request of the row's QC second attempt in its reservation transaction -> rows written.
 
-    The record binds the attempt to the flagged extraction and the source
-    revision, so only that unfinished attempt resumes (cloud_attempt_spent_sql),
-    and to the provider contract, so it resumes only under the contract its
-    saved chunks and paid answers belong to."""
-    contract = r.get("_provider_contract")
-    if ledger.db.in_transaction or type(r.get("qc_cloud")) is not int or not isinstance(contract, dict):
-        return False
-    with ledger.db:
-        ledger.db.execute("BEGIN IMMEDIATE")
-        # The lane's QC window is re-read at the last step before a request.
-        scope, scope_params = semantic_qc.qc_scope_sql(time.time())
-        row = ledger.db.execute(
-            f"SELECT ({_qc_cloud_followup_sql()}), {source_revision_sql()} FROM messages m "
-            f"WHERE m.message_id=? AND m.project_id=? AND m.content_hash=? AND {scope}",
-            (r["message_id"], r["project_id"], r["content_hash"], *scope_params)).fetchone()
-        if row is None or row[0] != r["qc_cloud"]:
-            return False
-        if any(started != contract for started in _open_attempt_contracts(ledger.db, r)):
-            return False
-        _add_cloud_attempt_tx(ledger.db, r, "open", source_artifact_id=row[0], revision=row[1],
-                              contract=dict(contract))
-    return True
+    The first one opens the attempt. Each record binds the request to the
+    flagged extraction, the source revision and the pinned contract
+    (``_cloud_pin``), so only that unfinished attempt resumes
+    (cloud_attempt_spent_sql) and only under that contract. A post that no
+    longer qualifies or left the QC window, or a contract other than the
+    attempt's, refuses the reservation: nothing is sent or recorded."""
+    db, pin = ledger.db, r.get("_cloud_pin")
+    refused = cloud_client.CloudError("budget_exceeded", "cloud_attempt_unavailable")
+    if (not db.in_transaction or type(r.get("qc_cloud")) is not int or not isinstance(pin, dict)
+            or not isinstance(reservation.get("reservation_id"), str)):
+        raise refused
+    before = db.total_changes
+    revision = db.execute(f"SELECT {source_revision_sql()} FROM messages m WHERE m.message_id=?",
+                          (r["message_id"],)).fetchone()
+    _add_cloud_attempt_tx(db, r, "open", source_artifact_id=r["qc_cloud"],
+                          revision=revision[0] if revision else None, contract=pin,
+                          reservation_id=reservation["reservation_id"])
+    # With this record written, the lane's own predicate (QC window included) must still admit the post.
+    scope, scope_params = semantic_qc.qc_scope_sql(time.time())
+    row = db.execute(
+        f"SELECT ({_qc_cloud_followup_sql()}) FROM messages m "
+        f"WHERE m.message_id=? AND m.project_id=? AND m.content_hash=? AND {scope}",
+        (r["message_id"], r["project_id"], r["content_hash"], *scope_params)).fetchone()
+    if row is None or row[0] != r["qc_cloud"] or any(started != pin for started in _open_attempt_contracts(db, r)):
+        raise refused
+    return db.total_changes - before
 
 
 def _close_cloud_attempt_tx(db, r):
@@ -216,11 +221,16 @@ def _close_cloud_attempt_tx(db, r):
 
 
 def _close_cloud_attempt(ledger, r) -> bool:
-    """Record, in its own transaction, that a paid cloud re-extraction of the row's body failed for good."""
+    """Record, in its own transaction, that a paid cloud re-extraction of the row's body ended for good.
+
+    A QC second attempt ends only once a paid request opened it: before that
+    nothing was spent, and the post stays eligible."""
     if ledger.db.in_transaction:
         return False
     with ledger.db:
         ledger.db.execute("BEGIN IMMEDIATE")
+        if r.get("qc_cloud") and not _open_attempt_contracts(ledger.db, r):
+            return False
         _close_cloud_attempt_tx(ledger.db, r)
     return True
 

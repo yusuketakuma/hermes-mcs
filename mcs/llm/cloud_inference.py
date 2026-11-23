@@ -156,27 +156,56 @@ class CloudInferenceUnit:
                  current, dispatch, message_id=None, owner=None, discard_reason=None,
                  max_attempts=None, on_reserved_tx=None, reserve_dispatch=None, transport=None,
                  purpose=None, selection=None, cache_heads=(), input_binding=None, dispatch_current=None,
-                 changed=None, pinned=False):
+                 changed=None, pin=None):
         purpose = purpose or ("patient_context" if route == "patient_context" else "backlog")
         raw_cfg = copy.deepcopy(cfg)
-        if selection is not None:
-            resolved = selection
+
+        def pinned(live):
+            # A pinned unit (cloud_policy.route_contract) sends only under its own contract:
+            # the settings, key and selection come from resolve_contract alone, never from
+            # whichever provider the configuration prefers now.
+            state = cloud_policy.resolve_contract(live, pin, route=route, purpose=purpose, root=HOME)
+            if state.state != "usable":
+                raise CloudObservationIncomplete(f"cloud_contract_{state.state}")
+            return state.settings, state.key, state.selection
+
+        def current_settings():
+            # every new attempt (retry, repair, next chunk) is judged under the settings in force now
+            if pin is None:
+                return _current_cloud_settings()
+            try:
+                live = load_config()
+                if not isinstance(live, dict) or not live:
+                    raise CloudObservationIncomplete("cloud_config_unverified")
+                return pinned(live)[0]
+            except CloudFallback:
+                raise
+            except Exception:
+                raise CloudObservationIncomplete("cloud_config_unverified") from None
+        self._current_settings = current_settings
+        if pin is not None:
+            state = cloud_policy.resolve_contract(cfg, pin, route=route, purpose=purpose, root=HOME)
+            # Not usable now: the guard refuses before any recovery or send.
+            settings, key, resolved = state.settings, state.key, state.selection or selection
         else:
-            resolved, _ = cloud_policy.resolve_profile(
-                cfg, route=route, purpose=purpose, root=HOME, ledger=ledger, ordered=True)
+            settings = resolve_cloud_settings(cfg)
+            key = cloud_policy.selected_key(HOME, {**cfg, "cloud_llm": settings})
+            resolved = selection
             if resolved is None:
-                raise CloudFallback("cloud_profile_invalid")
+                resolved, _ = cloud_policy.resolve_profile(
+                    cfg, route=route, purpose=purpose, root=HOME, ledger=ledger, ordered=True)
+        if resolved is None or settings is None:
+            raise CloudFallback("cloud_profile_invalid")
         self.selection = resolved
         self.purpose = purpose
         self._profile_cfg = raw_cfg
         self._cache_heads = cache_heads
-        cfg = {**cfg, "cloud_llm": resolve_cloud_settings(cfg)}
+        cfg = {**cfg, "cloud_llm": settings}
         self.model = resolved["model"]
         self.contract = cloud_provider_contract(cfg, route=route, purpose=purpose, selection=resolved)
         generation = cloud_policy.config_generation(cfg)
-        scope = cloud_policy.scope_generation(cfg)
+        scope = cloud_policy.scope_generation(cfg, pin)
         updater = writer_lock.updater_state()
-        key = cloud_policy.selected_key(HOME, cfg)
         self.dispatch = dispatch
         self.generation = generation
         self.scope = scope
@@ -241,23 +270,27 @@ class CloudInferenceUnit:
                     refuse('pre_send', 'mode_off')
                     self._denial_proven = True
                     raise CloudFallback('cloud_unit_changed')
-                now = resolve_cloud_settings(live)
-                chosen, errors = cloud_policy.resolve_profile(
-                    live, route=route, purpose=purpose, root=HOME, ledger=ledger, ordered=True)
-                if chosen is None:
+                if pin is not None:
+                    now, live_key, chosen = pinned(live)
+                else:
+                    now = resolve_cloud_settings(live)
                     chosen, errors = cloud_policy.resolve_profile(
-                        live, route=route, purpose=purpose, root=HOME)
-                    if errors or chosen is None:
-                        raise CloudObservationIncomplete('cloud_profile_unverified')
-                live_key = cloud_policy.selected_key(HOME, {"cloud_llm": now})
+                        live, route=route, purpose=purpose, root=HOME, ledger=ledger, ordered=True)
+                    if chosen is None:
+                        chosen, errors = cloud_policy.resolve_profile(
+                            live, route=route, purpose=purpose, root=HOME)
+                        if errors or chosen is None:
+                            raise CloudObservationIncomplete('cloud_profile_unverified')
+                    live_key = cloud_policy.selected_key(HOME, {"cloud_llm": now})
                 if not live_key:
                     raise CloudObservationIncomplete('cloud_key_unverified')
                 # The run window gates each new POST (retries included); a result that
                 # already arrived is still judged only by scope, not by the clock.
                 # Provider/model is the executor, not the generation: a resolved
-                # fallback provider is adopted below rather than denied.
+                # fallback provider is adopted below rather than denied (a pinned
+                # unit's live selection differs at most in its price table).
                 changed_scope = (live_key != key
-                                 or cloud_policy.scope_generation({"cloud_llm": now}) != scope
+                                 or cloud_policy.scope_generation({"cloud_llm": now}, pin) != scope
                                  # A paid result is kept while its scope holds, even if the send window closes.
                                  or not cloud_policy.in_scope(now, route, project_id))
                 denied = (changed_scope or writer_lock.updater_state() != updater
@@ -269,20 +302,9 @@ class CloudInferenceUnit:
                     except Exception:
                         pass   # naming the stop never changes the refusal
                 if not denied and dict(chosen) != dict(self.selection):
-                    if pinned:
-                        # A pinned unit (a resumed attempt whose saved answers belong to its
-                        # contract) never moves to another provider or model: it keeps its own
-                        # selection while the live configuration still offers it, and its own
-                        # model's admission below decides whether it may send now.
-                        live_settings, live_errors = cloud_policy.resolve_settings(live, HOME)
-                        offered = None if live_errors else cloud_policy.profile_for_settings(
-                            live, live_settings, route=route, purpose=purpose,
-                            provider=self.selection["provider"])[0]
-                        denied = offered is None or dict(offered) != dict(self.selection)
-                    else:
-                        self.selection = chosen
-                        self.model = chosen["model"]
-                        self.contract = cloud_provider_contract(selection=chosen)
+                    self.selection = chosen
+                    self.model = chosen["model"]
+                    self.contract = cloud_provider_contract(selection=chosen)
                 if not denied and inference:
                     try:
                         waiting = (not cloud_backlog.owner_alive() or time.monotonic() >= deadline
@@ -320,12 +342,14 @@ class CloudInferenceUnit:
             self._effect_started = True   # a started repair is work, even before its child sends
             if route != "reextract" or purpose != "backlog":
                 raise CloudFallback("cloud_repair_invalid")
+            # A pinned unit's repair keeps the same contract (its repair profile), and its
+            # paid requests are recorded like the unit's own.
             child = CloudInferenceUnit(ledger, raw_cfg, route=route, project_id=project_id,
                 unit_key=unit_key, deadline=deadline, current=current, dispatch=dispatch,
                 message_id=message_id, owner=owner, discard_reason=discard_reason,
                 max_attempts=max_attempts, reserve_dispatch=reserve_dispatch, transport=transport,
                 purpose="quality_repair", cache_heads=self._cache_heads, input_binding=self.input_binding,
-                dispatch_current=dispatch_current)
+                dispatch_current=dispatch_current, pin=pin, on_reserved_tx=on_reserved_tx)
             self._children.append(child)
             return child
         self.spawn_quality_repair = spawn_quality_repair
@@ -334,7 +358,7 @@ class CloudInferenceUnit:
             # every new attempt (retry, repair, next chunk) is judged against the
             # budget in force now, not the one the unit started under
             try:
-                current_cfg = {"cloud_llm": _current_cloud_settings()}
+                current_cfg = {"cloud_llm": current_settings()}
                 current_caps = cloud_send_admission.caps(current_cfg["cloud_llm"])
             except CloudFallback:
                 raise
@@ -543,7 +567,7 @@ class CloudInferenceUnit:
                     # envelopes and incomplete receipts use the reservation guard.
                     self.commit_guard()
                     try:
-                        judged["cloud_llm"] = _current_cloud_settings()
+                        judged["cloud_llm"] = self._current_settings()
                         return cloud_policy.request_send_block_reason(self.ledger,
                             {"cloud_llm": judged["cloud_llm"]}, self.client.body(prompt, tokens, prefix),
                             route=self.route, project_id=self.project_id, message_id=self.message_id,
@@ -566,7 +590,7 @@ class CloudInferenceUnit:
                     self.commit_guard()
                     _send_blocked(blocked)
                     raise CloudFallback("cloud_send_blocked")
-                capacity = _current_cloud_settings()["max_concurrency"]
+                capacity = self._current_settings()["max_concurrency"]
                 self._effect_started = True   # admission to new request work
                 with cloud_backlog.request_slot(HOME, capacity) as held:
                     if not held:
