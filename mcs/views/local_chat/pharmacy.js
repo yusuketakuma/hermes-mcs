@@ -80,10 +80,14 @@ function rxForm(patientId, record, onSaved) {
   return form;
 }
 function rxTable(lines) {
-  const {table, body} = rowTable(RX_LINE.map(([, label]) => label.replace("（必須）", "")));
+  const labels = RX_LINE.map(([, label]) => label.replace("（必須）", ""));
+  const {table, body} = rowTable(labels);
   for (const line of lines) {
     const row = el("tr");
-    for (const value of [line.drug_name, line.dose, line.usage, line.days ? `${line.days}日分` : ""]) row.append(el("td", value || "—", value ? null : "hc-none"));
+    // Each cell names its field, which phones show in place of the hidden column headings.
+    [line.drug_name, line.dose, line.usage, line.days ? `${line.days}日分` : ""].forEach((value, index) => {
+      const cell = el("td", value || "—", value ? null : "hc-none"); cell.dataset.label = labels[index]; row.append(cell);
+    });
     body.append(row);
   }
   table.classList.add("rx-table");

@@ -55,6 +55,7 @@ a.tel { color: var(--accent-ink); font-weight: 550; white-space: nowrap; }
 .hc-register > .card { scroll-margin-top: 8px; }
 .hc-jumps { display: flex; flex-wrap: wrap; gap: 6px; }
 .hc-jumps .chip { padding: 2px 12px; font-size: var(--fs-sm); }
+.hc-adder > .text-button { margin-top: 6px; }
 .hc-adder { margin-bottom: 12px; padding: 12px; border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); background: var(--bg-soft); }
 .hc-more .load-more { margin: 10px 0 0; }
 .hc-team { display: grid; gap: 2px; }
@@ -207,6 +208,7 @@ a.tel { color: var(--accent-ink); font-weight: 550; white-space: nowrap; }
   .rx-table tr { padding: 4px 0; }
   .rx-table td.hc-none { display: none; }
   .rx-table td:first-child { flex-basis: 100%; }
+  .rx-table td:not(:first-child)::before { content: attr(data-label); margin-right: 4px; font-size: var(--fs-xs); color: var(--muted); }
 
   /* All seven days fit as equal columns: 11/23 over 月, then 予 and 実 counts (中止 stays in the label and the day's chips). */
   .week-strip { gap: 3px; margin-bottom: 12px; }

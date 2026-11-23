@@ -51,7 +51,11 @@ const dayOf = date => new Date(`${date}T00:00:00Z`);
 // The office works in Japan time; dates are calendar days, so they are computed in UTC to avoid the browser's zone.
 const siteToday = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
 const shiftDay = (date, days) => {const day = dayOf(date); day.setUTCDate(day.getUTCDate() + days); return day.toISOString().slice(0, 10);};
-const dayLabel = date => {const day = dayOf(date); return `${day.getUTCMonth() + 1}/${day.getUTCDate()}(${WEEKDAYS[day.getUTCDay()]})`;};
+// Short dates name the year only when it is not this year (in Japan time), so older records are not ambiguous.
+const dayLabel = date => {
+  const day = dayOf(date), year = day.getUTCFullYear() === Number(siteToday().slice(0, 4)) ? "" : `${day.getUTCFullYear()}/`;
+  return `${year}${day.getUTCMonth() + 1}/${day.getUTCDate()}(${WEEKDAYS[day.getUTCDay()]})`;
+};
 const longDay = date => {const day = dayOf(date); return `${day.getUTCFullYear()}年${day.getUTCMonth() + 1}月${day.getUTCDate()}日(${WEEKDAYS[day.getUTCDay()]})`;};
 const visitWhen = visit => `${dayLabel(visit.visit_date)}${visit.start_time ? " " + visit.start_time : ""}`;
 function age(birth) {
@@ -184,12 +188,21 @@ function expandRow(cells, makeForm, span) {
   return pair;
 }
 const clipped = text => text ? el("span", text.split("\n")[0], "hc-clip") : "";
+// A "＋ …" button and its new-record form. The form is built on first open; collapsing only hides it, so a draft
+// survives; a successful save (close) or 「取り消す」 discards it.
 function adder(label, makeForm, open = false) {
   const area = el("div", null, "hc-adder"), button = el("button", label, "button"); button.type = "button";
-  const set = show => {area.replaceChildren(...(show ? [makeForm()] : [])); area.hidden = !show; button.setAttribute("aria-expanded", String(show));};
-  button.onclick = () => set(area.hidden);
-  set(open);
-  return {button, area, close: () => set(false)};
+  const show = visible => {
+    if (visible && !area.firstChild) {
+      const discard = el("button", "取り消す", "text-button"); discard.type = "button"; discard.onclick = () => close();
+      area.append(makeForm(), discard);
+    }
+    area.hidden = !visible; button.setAttribute("aria-expanded", String(visible));
+  };
+  const close = () => {area.replaceChildren(); show(false);};
+  button.onclick = () => show(area.hidden);
+  show(open);
+  return {button, area, close};
 }
 // A register section: a wide card whose list redraws itself after a write; "＋ …" opens a new-record form above the list.
 function registerSection(title, fill, add = null) {
@@ -415,8 +428,10 @@ function registerView(patientId, data, current) {
     if (current()) mcsLink(linkBody, patientId, fresh, refreshLink, current);
   };
   careTeam(teamBody, patientId, data.team, refreshTeam, current); mcsLink(linkBody, patientId, data, refreshLink, current);
-  const visits = registerSection("訪問", (box, reload) => patientVisits(box, patientId, reload, current),
-    {label: "＋ 訪問を予定する", form: reload => recordForm("visit", visitForm(), null, reload, {fixed: {patient_id: patientId}})});
+  // A saved visit can change the patient's next visit, so the list's 「次 …」 chip is re-read too (it redraws only the list).
+  const withList = reload => async () => {await reload(); if (current()) await loadHcPatients();};
+  const visits = registerSection("訪問", (box, reload) => patientVisits(box, patientId, withList(reload), current),
+    {label: "＋ 訪問を予定する", form: reload => recordForm("visit", visitForm(), null, withList(reload), {fixed: {patient_id: patientId}})});
   const enabled = name => hc.meta.modules.some(module => module.name === name);
   const parts = Object.entries(hc.modules).filter(([name, view]) => view.patient && enabled(name)).map(([, view]) => view.patient(patientId, current));
   const sections = [basic, card("ケアチーム（この事業所の担当）", [teamBody], {wide: true}), visits, ...parts, card("MCS の患者", [linkBody], {wide: true})];
@@ -584,7 +599,7 @@ function dayBoard(date, data) {
     }
     if (staff.size > 1) for (const [key, name] of [["all", "全員"], ...staff]) {
       const pick = el("button", name, "chip chip-filter"); pick.type = "button"; pick.setAttribute("aria-pressed", String(key === who));
-      pick.onclick = () => {who = key; route.pick(typeof key === "number" ? key : null); draw();};
+      pick.onclick = () => {who = key; route.pick(key); draw();};
       people.append(pick);
     }
     if (data.items.length) bar.append(counts, people);
@@ -596,7 +611,8 @@ function dayBoard(date, data) {
 }
 function routeCard(date) {
   if (!hc.routes) return {card: card("訪問ルート", [el("p", "訪問ルートは設定されていません。設定すると、住所だけを地図サービスへ送って回る順番を作ります。", "hc-quiet")]), pick() {}};
-  const form = el("form", null, "hc-inline route-form"), staffPick = field(["staff", "職員", "staff"], null, "route"), result = el("div", null, "route-result");
+  const form = el("form", null, "hc-inline route-form"), staffPick = field(["staff", "職員", "staff"], null, "route"), result = el("div", null, "route-result"), hint = el("p", null, "hc-quiet");
+  hint.hidden = true;
   form.append(staffPick, el("button", "ルートを作る（住所を地図サービスへ送ります）", "button button-primary"));
   form.onsubmit = async event => {
     event.preventDefault(); result.replaceChildren(el("p", "作成中…", "hc-quiet"));
@@ -620,7 +636,18 @@ function routeCard(date) {
     } catch (error) {result.replaceChildren(el("p", error.message, "state-note"));}
   };
   const select = staffPick.querySelector("select");
-  return {card: card("訪問ルート", [form, result]), pick(staffId) {if (staffId != null && [...select.options].some(option => option.value === String(staffId))) select.value = String(staffId);}};
+  select.options[0].textContent = "全員";  // no staff filter on a route means every visit of the day, not 未定
+  // A route belongs to the staff it was built for: any change of staff clears the shown result.
+  select.addEventListener("change", () => result.replaceChildren());
+  return {card: card("訪問ルート", [form, hint, result]), pick(key) {
+    // The day's staff filter carries over: 全員 → every visit, a staff member → that person; 未定 has no route of its own.
+    hint.hidden = key !== "none";
+    hint.textContent = key === "none" ? "担当未定の訪問だけのルートは作れません。ルートの職員は変えていません。" : "";
+    if (key === "none") return;
+    const value = key === "all" ? "" : String(key);
+    if (![...select.options].some(option => option.value === value) || select.value === value) return;
+    select.value = value; result.replaceChildren();
+  }};
 }
 
 // ---------- Modes ----------
