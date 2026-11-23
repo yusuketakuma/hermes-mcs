@@ -446,15 +446,16 @@ def test_rx_period_block_lists_open_ends_by_date(led):
              json.dumps({"key": key, "type": stype})))
     for pid in (1, 2, 3, 4):
         _patient(led, pid)
-    period("a", 1, "2026-10-05")
+    period("a", 1, "2026-10-04")
     period("b", 2, "2026-09-29", stype="rx_period_lapsed")
     period("c", 3, "2026-10-03", state="resolved")
     period("d", 4, "2026-10-20")
     led.db.commit()
     notify_digest.maybe_enqueue(led, {**ON, "signals": {"notify": True}}, now=T)
     text = _text(led)
-    block = text.split("■ 処方期限の記録（7日以内・期限後）\n", 1)[1].split("\n■", 1)[0]
-    assert block.splitlines()[:2] == ["・09/29 project 2（2日経過）", "・10/05 project 1（あと4日）"]
+    # the heading and filter follow the detector's horizon (expiry_ahead_days, default 3)
+    block = text.split("■ 処方期限の記録（3日以内・期限後）\n", 1)[1].split("\n■", 1)[0]
+    assert block.splitlines()[:2] == ["・09/29 project 2（2日経過）", "・10/04 project 1（あと3日）"]
     assert "原記録で確認" in block and "project 3" not in block and "project 4" not in block
 
 

@@ -104,10 +104,21 @@ def test_cli_patients_by_name_and_revised_inserts(corpus, tmp_path, monkeypatch,
     report = json.loads(capsys.readouterr().out)
     assert [item["project_id"] for item in report["items"]] == [1]
     assert report["items"][0]["current_use_confirmed"] is False
-    monkeypatch.setattr(drug_info, "load_watch", lambda: {"inserts": [{"name": "キラナ", "last": "changed"}]})
+    monkeypatch.setattr(drug_info, "load_watch", lambda: {"inserts": [
+        {"name": "キラナ", "sha256": "a", "observed_sha256": "b", "last": "error"}]})
     assert mcs_drug.main(["patients", "--formulary-changed", "--snapshot", snapshot]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["query"]["source"] == "formulary_changed"
     assert report["query"]["revised_inserts"] == ["キラナ"]
+    # the revised product name itself matches, with or without a dictionary identity
+    assert [item["project_id"] for item in report["items"]] == [1]
+    impact = tmp_path / "impact.json"
+    impact.write_text(json.dumps({"schema": "mcs-drug-master-impact/1", "items": [{"medicine": "900000002"}],
+                                  "total": 5, "returned": 1, "truncated": True}))
+    impact.chmod(0o600)
+    assert mcs_drug.main(["patients", "--master-impact", str(impact), "--snapshot", snapshot]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["query"]["master_impact_truncated"] is True
+    assert "全5件中1件のみ照合" in report["explanation"]
     with pytest.raises(SystemExit):
         mcs_drug.main(["patients", "--snapshot", snapshot])

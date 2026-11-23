@@ -303,14 +303,19 @@ def _patients(view, args):
     _state, _progress, active, _active_state = drug_timeline.dictionary_state(view.db, cfg)
     if args.master_impact is not None:
         import drug_alias
-        identities = drug_patients.master_identities(
-            active, drug_alias.private_json(args.master_impact, 16 * 1024 * 1024)[0])
+        impact = drug_alias.private_json(args.master_impact, 16 * 1024 * 1024)[0]
+        identities = drug_patients.master_identities(active, impact)
         report = drug_patients.find(view, identities=identities, **common)
-        report["query"]["source"] = "master_impact"
+        # A truncated diff lists only part of the changed codes; the search covers only those.
+        report["query"].update(source="master_impact", master_impact_truncated=impact.get("truncated") is True,
+                               master_impact_total=impact.get("total"), master_impact_returned=impact.get("returned"))
+        if impact.get("truncated") is True:
+            report["explanation"] = (report["explanation"].removesuffix("）")
+                                     + f"・マスター差分は全{impact.get('total')}件中{impact.get('returned')}件のみ照合）")
         return report
     import drug_info
     identities, names = drug_patients.formulary_identities(active, drug_info.load_watch())
-    report = drug_patients.find(view, identities=identities, **common)
+    report = drug_patients.find(view, identities=identities, names=names, **common)
     report["query"].update(source="formulary_changed", revised_inserts=names)
     return report
 

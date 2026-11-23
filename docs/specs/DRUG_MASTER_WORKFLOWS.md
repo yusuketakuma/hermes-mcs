@@ -94,7 +94,7 @@ python3 mcs/ops/mcs_drug.py reconcile --project 1 --limit 50 --json
 
 ```sh
 python3 mcs/ops/mcs_drug.py patients --name '架空製品錠5mg'
-python3 mcs/ops/mcs_drug.py master-impact --before OLD.zip --before-pin OLD.json --after NEW.zip --after-pin NEW.json --json > /private/path/impact.json
+(umask 077; python3 mcs/ops/mcs_drug.py master-impact --before OLD.zip --before-pin OLD.json --after NEW.zip --after-pin NEW.json --json > /private/path/impact.json)
 python3 mcs/ops/mcs_drug.py patients --master-impact /private/path/impact.json
 python3 mcs/ops/mcs_drug.py patients --formulary-changed
 ```
@@ -103,10 +103,11 @@ python3 mcs/ops/mcs_drug.py patients --formulary-changed
 [drug_patients.find](../../mcs/medications/drug_patients.py) は公開snapshotの全患者について、項目4のtimelineと同じ現在世代の言及（`drug_timeline.mention_sources`）・候補（`mention_candidate`）・名前照合（`matches`）を使う。追加取得・LLM呼出しは行わない。
 
 - `--name`: 表記の完全一致と、項目1の単一公式コードに属する別名・規格。
-- `--master-impact`: 項目3の出力（私有ファイル、owner-onlyの0600）に載った公式コードを採用辞書の項目へ対応させる。採用辞書に無いコードは探せない。
-- `--formulary-changed`: `formulary-check` で本文の変化を観測し、まだ `formulary-ack` していない添付文書の品名。
+- `--master-impact`: 項目3の出力（私有ファイル、owner-onlyの0600。上の例は `umask 077` で作る。既存のファイルは `chmod 600`）に載った公式コードを採用辞書の項目へ対応させる。採用辞書に無いコードは探せない。差分が打ち切られている（`truncated`）ときは、照合したのが載った分だけであることを `query.master_impact_truncated` と説明文に残す。
+- `--formulary-changed`: `formulary-check` で本文の変化を観測し、まだ `formulary-ack` していない添付文書の品名（改訂通知と同じく、後の再確認が失敗しても観測済みの改訂は対象に残す）。辞書の公式コードに加えて、改訂品名・別名そのものとの表記完全一致でも探すので、有効な辞書が無くても品名で見つかる。
 - 患者ごとに言及件数・投稿数・最新の言及（投稿日時・投稿ID・記載の種類）を返し、最新の言及が新しい順に並べる。アーカイブ済みの患者は `--include-archived` のときだけ含める。
-- 言及は服用中の確定ではない（`current_use_confirmed=false`）。未抽出・未取得・取得失敗の件数をcoverageと説明文に残し、一覧に無い患者を「その薬を使っていない」と扱わない。
+- 添付ファイル（OCR）の言及は、timelineと同じく元の投稿日時で最新を決める。
+- 言及は服用中の確定ではない（`current_use_confirmed=false`）。未抽出・未取得（返信の取得漏れを含む）・取得失敗（失敗した取得ジョブを含む）の件数をcoverageに残し、説明文には未抽出の投稿数と未取得・取得失敗の有無を示して、一覧に無い患者を「その薬を使っていない」と扱わない。
 
 ## 7. 他の機能から使う医薬品の共通入口
 
