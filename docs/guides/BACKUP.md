@@ -35,7 +35,7 @@ bundle作成とDB最終正常runの差です。過去bundleの検証は最新off
 
 | 保存物 | 内容と用途 | 限界 |
 |---|---|---|
-| ローカル日次 backup | [daily_backup](../../mcs/core/local_backup.py) が静的な `ledger-YYYYMMDD.db` を検証して保存。現行 `BACKUP_KEEP=7`。一覧・検査・保留付き復元は[ローカル日次 backup の確認と復元](#local) | 同じ端末の平文 DB。端末喪失の対策ではない |
+| ローカル日次 backup | [daily_backup](../../mcs/core/local_backup.py) が静的な `ledger-YYYYMMDD.db` を検証して保存。在宅記録の台帳 `data/homecare.db` があれば `homecare-YYYYMMDD.db` も同様に保存。現行 `BACKUP_KEEP=3`。一覧・検査・保留付き復元は[ローカル日次 backup の確認と復元](#local) | 同じ端末の平文 DB。端末喪失の対策ではない |
 | 暗号化 offsite | 静的 DB を gzip、固定 `/usr/bin/openssl`、encrypt-then-MAC で `.mcsb` へ。公開前の復号検証と公開後の SHA 照合を実施 | 明示したディレクトリへ書くのみ。mount・同期先への転送完了・媒体の存続は別確認 |
 | SHA receipt | `bundle`、全ファイル `sha256`、時刻、`policy_id`、最後の正常 run 時刻 | 暗号化媒体と独立に保管しなければ、媒体ごとの置換や古い正当な世代への差替えを検出できない |
 | 鍵 escrow | `keygen` が人の明示操作で表示する 64 桁の小文字 hex（32 バイト） | Keychain は端末と共に失われる。外部保管者・回復手段が必要 |
@@ -59,9 +59,12 @@ Keychain、ブラウザ profile、配送 journal、サービス設定も bundle 
 <a id="local"></a>
 ## ローカル日次 backup の確認と復元
 
-日次の `ledger-YYYYMMDD.db`（7世代）、更新前の `preupdate-*.db`、患者コンテキストの消去前の
+日次の `ledger-YYYYMMDD.db`（3世代）、更新前の `preupdate-*.db`、患者コンテキストの消去前の
 `patient-context-reset-*.db`（自動では削除しません）は `data/backups` にあります。
-鍵・policy・外部媒体は使いません。
+鍵・policy・外部媒体は使いません。在宅記録の台帳（[ローカルのチャット表示](LOCAL_CHAT.md)の
+`--homecare-db`）が `data/homecare.db` にあるときは、その日次の `homecare-YYYYMMDD.db`（3世代）と
+更新前の `homecare-preupdate-YYYYMMDD-HHMMSS-<英数字と_>.db`（新しい3つ）も同じ場所にあります。この形でない名前の手作りのコピーは自動では削除せず、`restore` でも指定できません。台帳がほかの場所にあるときや
+まだ作っていないときは、台帳のバックアップは作りません。
 
 ```bash
 "$PY" "$REPO/mcs/ops/mcs_local_backup.py" list            # 名前・大きさ・時刻・検証記録の一致だけ
@@ -70,6 +73,7 @@ Keychain、ブラウザ profile、配送 journal、サービス設定も bundle 
 
 `list` は DB を開きません。`--verify` は各世代に `integrity_check`・`foreign_key_check`・
 schema の照合を行い、`check`・`sha256`・`schema`・`last_successful_run` を返します。
+台帳の世代は `schema`・`last_successful_run` の代わりに、適用済みの migration 番号（`migrations`）を返します。
 1世代でも `check` が `ok` でなければ終了コード 1 です。患者名・本文・パスは出力しません。
 
 稼働中の DB が壊れた・誤って変わったときは、1世代を新しい私有ディレクトリへ戻します。
@@ -81,9 +85,10 @@ schema の照合を行い、`check`・`sha256`・`schema`・`last_successful_run
   --backup ledger-YYYYMMDD.db --destination "$NEW_DATA_DIR"
 ```
 
-受け付けるのは `ledger-YYYYMMDD.db`・`preupdate-*.db`・`patient-context-reset-*.db` の名前だけです。symlink・SQLite の
+受け付けるのは `ledger-YYYYMMDD.db`・`preupdate-*.db`・`patient-context-reset-*.db` と、[台帳の世代](#homecare-restore)の名前だけです。symlink・SQLite の
 sidecar 付き・壊れたファイルは拒否します。親ディレクトリ内の一時コピーで SHA-256 と完全検査を
-行ってから、同意待ちのマーカーと `restore.json` を DB より先に置き、`ledger.db` を排他的に配置します。
+行ってから、原本 DB の世代は同意待ちのマーカーと `restore.json` を DB より先に置き、`ledger.db` を排他的に配置します
+（台帳の世代はマーカーを置きません。[台帳を戻す](#homecare-restore)を参照）。
 稼働中の `data/ledger.db` と backup は置換・削除しません。サービスの停止・起動もしません。
 
 日次 backup の時点から後の投稿・タスク・操作履歴・配送記録は戻した DB にありません。
@@ -92,17 +97,44 @@ sidecar 付き・壊れたファイルは拒否します。親ディレクトリ
 承認は配置先の絶対パスに束縛され、承認後に移したディレクトリは再び保留になります。
 稼働中のデータディレクトリと入れ替える場合は、**承認の前に**最終の場所へ移します。
 
-1. 常駐サービスを人が止める。
+1. 常駐サービスを人が止める。在宅記録の台帳を使っているときは、`--homecare-db` 付きのチャット表示も止める。
 2. `$MCS_ROOT/data` を別名（例 `data.before-restore`）へ移す。手元の `backups/` もそこに残る。
 3. `NEW_DATA_DIR` を `$MCS_ROOT/data` へ移す（同じファイルシステム内の改名にするため、
-   `NEW_DATA_DIR` は `$MCS_ROOT` の直下に作る）。
+   `NEW_DATA_DIR` は `$MCS_ROOT` の直下に作る）。在宅記録の台帳を使っているときは、
+   `data.before-restore/homecare.db` と、あれば `homecare.db-wal`・`homecare.db-shm` も一緒に新しい `data/` へ移す
+   （台帳は原本 DB と別のファイルで、原本 DB を戻しても台帳は戻りません。`-wal` には確定済みの入力が残っていることがあります）。
 4. 結果の `sha256` を `BUNDLE_SHA`、`$MCS_ROOT/data` を `DEST` として、
    [同意・稼働再開の境界](#consent)の `mcs_restore.py plan → approve → resume` を行う。
 
 再開するのは収集だけで、配送は `hold_all` のままです。
 
-日次 backup が2日以上更新されていないと、健康状態は `backup_local_overdue` で要確認になります
-（収集の制限時間による見送りは従来どおり `backup_deferred_deadline`）。
+<a id="homecare-restore"></a>
+### 在宅記録の台帳を戻す
+
+台帳は手入力の記録で MCS から取り直せません。壊れた・誤って変えたときは、台帳の1世代を
+新しい私有ディレクトリへ戻します。条件は原本 DB と同じです。
+
+```bash
+"$PY" "$REPO/mcs/ops/mcs_local_backup.py" restore \
+  --backup homecare-YYYYMMDD.db --destination "$NEW_DIR"
+```
+
+`homecare-YYYYMMDD.db`・`homecare-preupdate-YYYYMMDD-HHMMSS-<英数字と_>.db` を指定すると、完全検査と台帳の基盤 migration の
+確認のあと、`NEW_DIR/homecare.db` だけを置きます。配送とは関係しないので同意待ちのマーカーは置かず、
+`mcs_restore.py` の承認も使いません。稼働中の `data/homecare.db` は置換・削除しません。
+
+1. `--homecare-db` 付きのチャット表示を人が止める。
+2. `data/homecare.db` と、あれば `homecare.db-wal`・`homecare.db-shm` を別名（例 `homecare.before-restore/`）へ移す。
+3. `NEW_DIR/homecare.db` を `data/homecare.db` へ移してから、チャット表示を起動し直す。
+
+戻した時点から後の入力は台帳にありません。新しい版で作られた世代は、古い版のコードでは開けません
+（古い版の世代は、開いたときに今の版へ進みます）。更新を戻したときは、その更新の前の
+`homecare-preupdate-*.db` を使います。
+
+原本 DB の日次 backup が2日以上更新されていないと、健康状態は `backup_local_overdue` で要確認になります
+（収集の制限時間による見送りは従来どおり `backup_deferred_deadline`）。台帳の日次 backup はこの判定に含みません。
+台帳のコピーの失敗は収集の実行記録のエラー（`homecare_backup: …`）、見送りは `homecare_backup_skipped` に残るので、
+`list` で台帳の世代の日付も確かめます。
 
 <a id="policy"></a>
 ## 2. オーナーが先に決めるもの
