@@ -189,6 +189,53 @@ def test_observation_reports_invalid_usage_as_unknown(tmp_path):
         db.close()
 
 
+def test_jev_effect_counts_requests_and_answers_in_window(tmp_path):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        now = time.time()
+        db.save_messages([_message(mid) for mid in (1, 2, 3, 4)])
+        with db.db:
+            qc_job = db.db.execute(
+                "INSERT INTO fetch_jobs(kind,project_id,message_id,state) "
+                "VALUES('extract_qc',1,3,'done')").lastrowid
+        rows = [
+            (None, "semantic_usage", "{}", {"jev_requests": 1}, now),
+            (None, "semantic_usage", "{}", {"jev_requests": 1, "job_id": qc_job}, now),
+            (None, "semantic_usage", "{}", {"jev_requests": 1, "operation": "patient_source_quality"}, now),
+            # outside the usage receipts' retention window, which may already be pruned
+            (None, "semantic_usage", "{}", {"jev_requests": 5}, now - 10 * 86400),
+            # a resumed assessment copies P01 into its completed row: counted once
+            (1, "semantic_assess", {"verdicts": {"P01": {"noul": 0.9, "verdict": "MATCH"}}}, {}, now - 60),
+            (1, "semantic_assess", {"verdicts": {"P01": {"noul": 0.9, "verdict": "MATCH"},
+                                                 "P02": {"noul": 0.1, "verdict": "NO_MATCH"}}}, {}, now),
+            (1, "semantic_assess", {"verdicts": {"detail": {"verdict": "MATCH"}}}, {"fact_id": 7}, now),
+            (2, "semantic_assess", {"verdicts": {}}, {"skipped": "prefilter_no_signal"}, now),
+            (3, "extract_qc", {"items": [{"verdict": "MATCH"}, {"verdict": "NO_MATCH"}],
+                               "urgency": {"extracted": "routine", "jev": "high"}}, {}, now),
+            (4, "extract_qc", "{broken", {}, now),
+            (None, "patient_context_source_quality_fail_v1", "{}", {}, now),
+        ]
+        with db.db:
+            for mid, kind, content, meta, ts in rows:
+                db.db.execute(
+                    "INSERT INTO artifacts(kind,message_id,content,meta,created_at) VALUES(?,?,?,?,?)",
+                    (kind, mid, content if isinstance(content, str) else json.dumps(content),
+                     json.dumps(meta), ts))
+
+        effect = semantic_observe.observe(str(tmp_path / "ledger.db"), days=14)["jev_effect"]
+        assert effect == {
+            "window_days": 14,
+            "requests_window_days": 7,
+            "requests_by_operation": {"unknown": 1, "extract_qc": 1, "patient_source_quality": 1},
+            "primary_verdicts": {"MATCH": 1, "NO_MATCH": 1},
+            "extract_qc_items": {"MATCH": 1, "NO_MATCH": 1},
+            "extract_qc_urgency": {"routine>high": 1},
+            "patient_quality": {"patient_context_source_quality_fail_v1": 1},
+        }
+    finally:
+        db.close()
+
+
 def test_observation_skips_invalid_job_json(tmp_path):
     db = Ledger(str(tmp_path / "ledger.db"))
     try:

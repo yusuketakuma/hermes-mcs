@@ -1,0 +1,14 @@
+{
+  "category": "added",
+  "title": "Jevへの要求と回答の内訳を処理状況の確認で表示",
+  "summary": "semantic_observe.py の出力に jev_effect を追加しました。指定期間（--days、既定14日）について、保存済みの記録から次の件数を表示します。Jev要求数（処理・ジョブ種別ごと。要求記録の保持期間7日の範囲）、投稿ごとの判定、抽出監査の判定と緊急度の組（投稿ごとに最新の記録）、患者コンテキスト品質確認の記録数。読み取り専用で、送信・設定・既読化は変わりません。",
+  "upgrade": "追加操作は不要です。`python3 mcs/ops/semantic_observe.py --json` の jev_effect で確認できます。",
+  "details": [
+    "保存済みの semantic_usage・semantic_assess・extract_qc・患者コンテキスト品質の記録を数えるだけで、Jevへ新しい要求は送りません。",
+    "通常の要求記録は7日で削除されるため、要求数は requests_window_days（最大7日）の範囲で数えます。",
+    "件数は記録された要求と回答の内訳で、回答が後続の結果を変えたかは判定しません。"
+  ],
+  "refs": [
+    "mcs/ops/semantic_observe.py"
+  ]
+}
