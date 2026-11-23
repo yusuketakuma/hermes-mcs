@@ -90,8 +90,26 @@ python3 mcs/ops/mcs_drug.py reconcile --project 1 --limit 50 --json
 - 薬歴未取得はunknown、古いcompleteはstale、失敗後の過去データはhistoricalのまま。薬名が欠けた薬歴がある場合、比較先なしを不一致へ断定しない。
 - coverageには未取得本文、未抽出、取得失敗、返信取得漏れ、履歴範囲、snapshot世代を保持する。比較は投稿の現在ページに限り、薬歴側にしかない薬を全投稿に存在しないと断定しない。
 
+## 6. 薬剤の言及がある患者を横断して探す
+
+```sh
+python3 mcs/ops/mcs_drug.py patients --name '架空製品錠5mg'
+python3 mcs/ops/mcs_drug.py master-impact --before OLD.zip --before-pin OLD.json --after NEW.zip --after-pin NEW.json --json > /private/path/impact.json
+python3 mcs/ops/mcs_drug.py patients --master-impact /private/path/impact.json
+python3 mcs/ops/mcs_drug.py patients --formulary-changed
+```
+
+出荷調整・回収・販売中止・添付文書の改訂を受けたとき、該当する薬の言及がある在宅患者を洗い出す。
+[drug_patients.find](../../mcs/medications/drug_patients.py) は公開snapshotの全患者について、項目4のtimelineと同じ現在世代の言及（`drug_timeline.mention_sources`）・候補（`mention_candidate`）・名前照合（`matches`）を使う。追加取得・LLM呼出しは行わない。
+
+- `--name`: 表記の完全一致と、項目1の単一公式コードに属する別名・規格。
+- `--master-impact`: 項目3の出力（私有ファイル、owner-onlyの0600）に載った公式コードを採用辞書の項目へ対応させる。採用辞書に無いコードは探せない。
+- `--formulary-changed`: `formulary-check` で本文の変化を観測し、まだ `formulary-ack` していない添付文書の品名。
+- 患者ごとに言及件数・投稿数・最新の言及（投稿日時・投稿ID・記載の種類）を返し、最新の言及が新しい順に並べる。アーカイブ済みの患者は `--include-archived` のときだけ含める。
+- 言及は服用中の確定ではない（`current_use_confirmed=false`）。未抽出・未取得・取得失敗の件数をcoverageと説明文に残し、一覧に無い患者を「その薬を使っていない」と扱わない。
+
 ## 検証と未検証事項
 
-[薬剤経緯テスト](../../tests/medications/test_drug_timeline.py) と [薬歴照合テスト](../../tests/medications/test_drug_reconciliation.py) は、予定/実施記載・本人/家族・過去/現在、世代差、コード候補検索、旧辞書の境界、規格差、未知の単位、薬歴日時、取得漏れ、ページング、読取り専用、CLIからの合成snapshot照合を検査する。
+[薬剤経緯テスト](../../tests/medications/test_drug_timeline.py) と [薬歴照合テスト](../../tests/medications/test_drug_reconciliation.py)・[患者横断テスト](../../tests/medications/test_drug_patients.py) は、予定/実施記載・本人/家族・過去/現在、世代差、コード候補検索、旧辞書の境界、規格差、未知の単位、薬歴日時、取得漏れ、ページング、読取り専用、CLIからの合成snapshot照合を検査する。
 
 合成テストは実患者の抽出精度、薬歴取得の網羅性、臨床判断の妥当性を証明しない。今回、実API・原本DB・実LLM・本番辞書の承認や切替・外部exportは実行していない。

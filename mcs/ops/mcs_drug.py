@@ -292,6 +292,29 @@ def _bundled_display(command, report):
     print("  python3 mcs/ops/mcs_setup.py init --set " + shlex.quote("drug_map=" + setting))
 
 
+def _patients(view, args):
+    """Cross-patient mentions of one name, a master-impact report's drugs, or revised inserts."""
+    import drug_patients
+    import drug_timeline
+    cfg = load_config()
+    common = {"cfg": cfg, "limit": args.limit, "include_archived": args.include_archived}
+    if args.name is not None:
+        return drug_patients.find(view, name=args.name, **common)
+    _state, _progress, active, _active_state = drug_timeline.dictionary_state(view.db, cfg)
+    if args.master_impact is not None:
+        import drug_alias
+        identities = drug_patients.master_identities(
+            active, drug_alias.private_json(args.master_impact, 16 * 1024 * 1024)[0])
+        report = drug_patients.find(view, identities=identities, **common)
+        report["query"]["source"] = "master_impact"
+        return report
+    import drug_info
+    identities, names = drug_patients.formulary_identities(active, drug_info.load_watch())
+    report = drug_patients.find(view, identities=identities, **common)
+    report["query"].update(source="formulary_changed", revised_inserts=names)
+    return report
+
+
 def _workflow(args):
     import drug_alias
     import drug_timeline
@@ -313,6 +336,8 @@ def _workflow(args):
                 if args.command == "timeline":
                     report = drug_timeline.timeline(view, args.project, name=args.name,
                         since=args.since, until=args.until, limit=args.limit, cursor=args.cursor, cfg=load_config())
+                elif args.command == "patients":
+                    report = _patients(view, args)
                 elif args.command == "reconcile":
                     import drug_reconciliation
                     report = drug_reconciliation.reconcile(view, args.project, since=args.since,
@@ -453,6 +478,17 @@ def main(argv=None) -> int:
         command.add_argument("--limit", type=_limit, default=50)
         command.add_argument("--snapshot", type=Path, default=SNAPSHOT)
         command.add_argument("--json", action="store_true")
+    command = sub.add_parser("patients", help="薬剤の言及がある在宅患者を横断して一覧にする（服用中の確定ではない）")
+    query = command.add_mutually_exclusive_group(required=True)
+    query.add_argument("--name", help="薬剤名（同じ公式コードの製品・一般名も対象）")
+    query.add_argument("--master-impact", type=Path,
+                       help="master-impact --json の出力（私有ファイル）に載った薬の患者を探す")
+    query.add_argument("--formulary-changed", action="store_true",
+                       help="添付文書の本文が変わり、まだ受け入れていない薬の患者を探す")
+    command.add_argument("--include-archived", action="store_true", help="アーカイブ済みの患者も含める")
+    command.add_argument("--limit", type=_listing_limit, default=50)
+    command.add_argument("--snapshot", type=Path, default=SNAPSHOT)
+    command.add_argument("--json", action="store_true")
     command = sub.add_parser("alias-propose", help="別名の辞書衝突と影響をプレビュー")
     command.add_argument("alias")
     command.add_argument("target")
@@ -523,7 +559,7 @@ def main(argv=None) -> int:
             return 1
         print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
         return 0
-    if args.command in ("timeline", "reconcile", "alias-propose", "alias-apply", "alias-rollback", "alias-receipt"):
+    if args.command in ("timeline", "patients", "reconcile", "alias-propose", "alias-apply", "alias-rollback", "alias-receipt"):
         return _workflow(args)
     if args.command in ("install-bundled", "status"):
         import import_drug_master as importer
