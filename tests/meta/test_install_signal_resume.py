@@ -19,9 +19,11 @@ def test_signal_keeps_authority_and_rerun_never_duplicates(tmp_path, sig, bounda
         _inject_before_config_persistence(stub, '''
 from pathlib import Path
 import time
-Path(os.environ['STUB_STATE'], 'signal-ready').touch()
-while True:
-    time.sleep(0.05)
+ready = Path(os.environ['STUB_STATE'], 'signal-ready')
+if not ready.exists():
+    ready.touch()
+    while True:
+        time.sleep(0.05)
 ''')
     else:
         runner = stub / "install-options-runner.py"
@@ -69,12 +71,14 @@ raise SystemExit(result)
         marker = home / ".mcs/data/.provider-bootstrap-fresh.json"
         saved = marker.read_bytes()
         calls = _calls(stub)
-        result = _run(env, hermes_home, "--no-llm", "--no-recovery")
-        assert result.returncode != 0
         assert marker.read_bytes() == saved and not config.exists()
-        software = ("brew install", "git clone", "uv ", "launchctl bootstrap")
-        assert [call for call in _calls(stub) if call.startswith(software)] == [
-            call for call in calls if call.startswith(software)]
+        # Nothing was saved yet, so the rerun resumes the same first install.
+        result = _run(env, hermes_home, "--no-llm", "--no-recovery")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "同じ初回導入として再開します" in result.stdout
+        assert config.exists() and not marker.exists()
+        assert sum(call.startswith("git clone") for call in _calls(stub)) == sum(
+            call.startswith("git clone") for call in calls)
     else:
         result = _run(env, hermes_home, "--no-llm", "--no-recovery")
         assert result.returncode == 0, result.stdout + result.stderr

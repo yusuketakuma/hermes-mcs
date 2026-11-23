@@ -48,6 +48,7 @@ MCS の医療・介護チャットを収集・解析するローカルシステ�
   `ci/gates.py` が持つ。許可を通常の adapter へ広げない。Hermes モードでは Slack/Discord の独自 Bot・認証情報・REST 接続を作らない。
   standalone のトークンは root 配下の私有JSON（優先）か `.env`（0600）だけから読み、SDK は関数内で import し、proxy 環境変数は起動時に除去する。
 - テストは一時DB+スタブのみ。実 MCS・Discord・Slack・LINE WORKS・Keychain・原本DB・ローカルLLM・Jev に一切アクセスしない。
+  例外は `fresh-install.yml` だけで、毎回作り直す GitHub の macOS ランナーのキーチェーンで合成の値を登録・読み取りしてよい（所有者 2026-11-23）。
 - 患者データ・秘密値を repo に入れない（`data/`・`.env`・`config.json` 等は ignore 済み）。ベンチ・few-shot・fixture は完全合成のみ（実投稿の匿名化も不可）。
 - 安全ゲートを壊さない。既読化は snapshot timestamp 必須、通信は no-redirect/no-proxy（例外は `SECURITY.md` の添付取得だけ）、人承認操作は `--confirm-human`+`reason`+receipt 経路だけ。
 - 「記録が見つからない」≠「対応がなかった」。未対応・未返信の候補は断定しない文言で区別し、未取得・取得失敗は明示する。

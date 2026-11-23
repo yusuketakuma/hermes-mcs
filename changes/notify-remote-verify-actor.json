@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "通知部品の遠隔確認スクリプトが、実行したユーザー名を操作者として記録",
+  "summary": "開発用の診断スクリプト scripts/diagnostics/notify_remote_verify.py が --emit で書く確認コマンドの操作者を、固定の名前ではなく実行した OS ユーザー名にしました。理由欄から特定の作業日時の記述を除きました。通常の収集・通知・既読化には影響しません。",
+  "upgrade": "追加操作は不要です。",
+  "details": [
+    "操作者はプロセスのユーザーIDからアカウント情報で引く（環境変数の LOGNAME などには左右されない）。",
+    "使い方の例のPythonの場所を ~/.hermes/hermes-agent/venv/bin/python に一般化した。"
+  ],
+  "refs": ["scripts/diagnostics/notify_remote_verify.py"]
+}
