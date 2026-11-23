@@ -1,0 +1,103 @@
+name: fresh-install
+
+# 新しい Mac への導入を、何も入っていない利用者のホームで最初から最後まで試す。
+# install.sh の事前確認 → 導入 → 非対話の初期設定（完全合成の値）→ 診断の順に進める。
+# 実 MCS・Slack・Discord・LINE WORKS・クラウド AI へは /etc/hosts で接続できなくしてから走らせる。
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - install.sh
+      - deployment/install/**
+      - deployment/launchagents/**
+      - deployment/scripts/**
+      - deployment/requirements-standalone.txt
+      - scripts/mcs
+      - scripts/install_local.py
+      - mcs/ops/**
+      - mcs/core/mcs_config.py
+      - .github/workflows/fresh-install.yml
+  schedule:
+    - cron: "41 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fresh-install-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [standalone, hermes]
+    env:
+      MODE: ${{ matrix.mode }}
+      LOG: ${{ runner.temp }}/fresh-install-${{ matrix.mode }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: block real services
+        run: |
+          # 合成の資格情報が本物のサービスへ届かないようにする
+          for host in medical-care.net www.medical-care.net \
+              discord.com gateway.discord.gg slack.com api.slack.com wss-primary.slack.com \
+              auth.worksmobile.com www.worksapis.com api.anthropic.com api.openai.com api.typesafe.ai; do
+            printf '127.0.0.1 %s\n::1 %s\n' "$host" "$host" | sudo tee -a /etc/hosts >/dev/null
+          done
+          sudo dscacheutil -flushcache
+          mkdir -p "$LOG"
+      - name: clean user state
+        run: |
+          # 既に入っている MCS・Hermes の痕跡がないことを確かめる（新規の Mac と同じ前提）
+          for path in ~/.mcs ~/.hermes ~/.mcs-recovery ~/.local/bin/mcs ~/.local/bin/hermes; do
+            if [ -e "$path" ]; then echo "unexpected: $path"; exit 1; fi
+          done
+          ls ~/Library/LaunchAgents 2>/dev/null || true
+      - name: preflight
+        run: ./install.sh --mode "$MODE" --preflight 2>&1 | tee "$LOG/preflight.txt"
+      - name: install
+        run: |
+          # ローカル AI（約5.7 GBのモデル）は取得しない。それ以外は既定どおり。
+          ./install.sh --mode "$MODE" --no-llm </dev/null 2>&1 | tee "$LOG/install.txt"
+          exit "${PIPESTATUS[0]}"
+      - name: install again (idempotent)
+        run: |
+          ./install.sh --mode "$MODE" --no-llm </dev/null 2>&1 | tee "$LOG/install-again.txt"
+          exit "${PIPESTATUS[0]}"
+      - name: initial setup (synthetic, non-interactive)
+        env:
+          MCS_SETUP_PASSWORD: synthetic-password
+          DISCORD_BOT_TOKEN: synthetic.discord.token
+        run: |
+          set -o pipefail
+          ~/.local/bin/mcs setup --yes --runtime-mode "$MODE" \
+            --login-id synthetic-user \
+            --notify-target discord:1000000000000000001 \
+            --set 'notify.interactive="discord"' \
+            --set 'notify.discord={"profile":"default","application_id":"1000000000000000002","guild_id":"1000000000000000003","channel_id":"1000000000000000001"}' \
+            --plugin-user-ids 1000000000000000004 \
+            --plugin-chat-ids 1000000000000000001 \
+            --plugin-project-ids 1 </dev/null 2>&1 | tee "$LOG/setup.txt"
+      - name: config check and doctor
+        if: always()
+        run: |
+          ~/.local/bin/mcs doctor </dev/null 2>&1 | tee "$LOG/doctor.txt" || true
+          if [ -x ~/.mcs/venv/bin/python3 ]; then PY=~/.mcs/venv/bin/python3; else PY=~/.hermes/hermes-agent/venv/bin/python; fi
+          "$PY" mcs/ops/mcs_setup.py check </dev/null 2>&1 | tee "$LOG/check.txt" || true
+          launchctl list | grep -E 'mcs|hermes' | tee "$LOG/launchctl.txt" || true
+          ls -la ~/.mcs ~/.mcs/data ~/Library/LaunchAgents > "$LOG/files.txt" 2>&1 || true
+      - name: upload logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: fresh-install-${{ matrix.mode }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fresh-install-${{ matrix.mode }}/
+          retention-days: 7
+          if-no-files-found: ignore
