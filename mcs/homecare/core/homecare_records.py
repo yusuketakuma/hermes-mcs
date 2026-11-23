@@ -208,7 +208,9 @@ def update(db, kind, record_id, values, *, expected_version, actor, registry):
             if record_id == actor:
                 # Nobody locks themselves out of the register, by role or by the login that identifies them.
                 locked = [field for field in ("active", "admin") if not row[field]]
-                if row["tailscale_login"] != before["tailscale_login"]:
+                # A first login may be added (that is how an existing administrator prepares for resident mode);
+                # one already set is changed by another administrator.
+                if before["tailscale_login"] and row["tailscale_login"] != before["tailscale_login"]:
                     locked.append("tailscale_login")
                 if locked:
                     raise InvalidFields(locked)

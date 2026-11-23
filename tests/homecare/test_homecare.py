@@ -221,6 +221,15 @@ def test_staff_cannot_lock_themselves_out_and_logins_are_unique(db, change):
     assert error.value.fields == ["tailscale_login"]
 
 
+def test_a_lone_administrator_adds_a_first_login_then_reaches_resident_mode(db):
+    me = first_staff(db)
+    assert me["tailscale_login"] is None
+    saved = records.update(db, "staff", me["staff_id"], {"tailscale_login": "Admin@example.invalid"},
+                           expected_version=1, actor=me["staff_id"], registry=REGISTRY)
+    assert saved["tailscale_login"] == "admin@example.invalid"
+    assert records.staff_for_login(db, "admin@example.invalid")["staff_id"] == me["staff_id"]
+
+
 def test_care_team_roles_need_the_declared_qualification_and_hand_over(db):
     me = first_staff(db)
     other = staff(db, me["staff_id"], name="合成 薬剤師二", codes=("pharmacy.pharmacist",))
