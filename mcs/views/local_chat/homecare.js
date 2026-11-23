@@ -536,10 +536,18 @@ function weekStrip(date, week) {
   for (const day of week.days) {
     const button = el("button", null, "week-day" + (day.date === today ? " today" : "")); button.type = "button";
     button.setAttribute("aria-current", day.date === date ? "date" : "false");
-    const counts = el("span", null, "week-counts");
-    counts.append(el("span", `予定 ${day.planned}`, day.planned ? "week-planned" : "week-zero"), el("span", `実施 ${day.done}`, day.done ? "week-done" : "week-zero"));
-    if (day.cancelled) counts.append(el("span", `中止 ${day.cancelled}`, "week-cancelled"));
-    button.append(el("span", dayLabel(day.date), "week-date"), counts);
+    // Each count carries its word (予定) and, for the compact phone strip, its first letter (予); zero stays muted.
+    const count = (word, n, tone) => {
+      const node = el("span", null, n ? tone : "week-zero");
+      node.append(el("span", word, "week-long"), el("span", word[0], "week-abbr"), el("b", String(n)));
+      return node;
+    };
+    const counts = el("span", null, "week-counts"), when = dayOf(day.date), compact = el("span", null, "week-compact");
+    counts.append(count("予定", day.planned, "week-planned"), count("実施", day.done, "week-done"));
+    if (day.cancelled) counts.append(count("中止", day.cancelled, "week-cancelled"));
+    compact.append(el("span", `${when.getUTCMonth() + 1}/${when.getUTCDate()}`, "week-md"), el("span", WEEKDAYS[when.getUTCDay()], "week-wd"));
+    button.setAttribute("aria-label", `${longDay(day.date)}${day.date === today ? "（今日）" : ""} 予定${day.planned}件 実施${day.done}件${day.cancelled ? ` 中止${day.cancelled}件` : ""}`);
+    button.append(el("span", dayLabel(day.date), "week-date"), compact, counts);
     button.onclick = () => {if (day.date !== date) showDay(day.date);};
     strip.append(button);
   }
