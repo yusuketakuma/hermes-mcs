@@ -15,7 +15,7 @@ def _old_counts(db):
         f"{extract_llm._ERROR_ROWS_SQL}), 0) <= ? AND NOT {extract_llm._FRESH_SQL} THEN 1 ELSE 0 END) "
         "FROM messages m JOIN patients p ON p.project_id=m.project_id "
         f"WHERE COALESCE(p.is_archived,0)=0 AND {extract_llm.pending_pred(db)} GROUP BY m.project_id",
-        (extract_llm.KIND, extract_llm.EXTRACT_VERSION, time.time())).fetchall()
+        (time.time(),)).fetchall()
     focus = sum(1 for row in rows if row[0])
     return {"active_patients": active, "extraction_complete": max(0, active - len(rows)),
             "focus_eligible": focus, "focus_targets": min(focus, extract_llm._FOCUS_PATIENTS)}

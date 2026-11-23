@@ -287,8 +287,12 @@ def test_run_record_names_silent_skips_and_the_preamble(tmp_path):
 
 
 def _reprocess_spy(monkeypatch, seen):
+    # A backlog pass runs the preamble maintenance once per interval per process.
+    monkeypatch.setattr(semantic_drain, "_invalidated_at", None)
+
     def stub(ledger, cfg, *, deadline=None, **kw):
         seen["deadline"] = deadline
+        seen["calls"] = seen.get("calls", 0) + 1
         return {"status": "off", "complete": False}
     monkeypatch.setattr(semantic_drain, "reprocess_step", stub)
 
@@ -889,3 +893,28 @@ def test_continuous_semantic_work_preserves_bounded_legacy_progress(
         assert 12 in seen[1:], f"archived eligible post did not progress: {seen!r}"
     finally:
         real_close()
+
+
+def test_backlog_lane_runs_the_reprocess_slice_once_per_maintenance_interval(tmp_path, monkeypatch):
+    """The backlog lane runs the reprocess slice with its invalidation throttle; the tick lane every pass."""
+    db = _seeded(tmp_path)
+    seen = {}
+    _reprocess_spy(monkeypatch, seen)
+    now = [1000.0]
+    monkeypatch.setattr(semantic_drain.time, "monotonic", lambda: now[0])
+    import semantic_publication
+    monkeypatch.setattr(semantic_publication, "invalidate_projections", lambda *a: 0)
+    try:
+        def run(lane):
+            semantic_drain.run_due(db, _cfg("shadow"), {"errors": []}, now[0] + 2,
+                                   jev_client=_FakeJev(), llm_fn=_llm, lane=lane, max_jobs=1)
+        run("backlog")
+        run("backlog")
+        assert seen["calls"] == 1
+        run("realtime")
+        assert seen["calls"] == 2
+        now[0] += semantic_drain._BACKLOG_INVALIDATE_S
+        run("backlog")
+        assert seen["calls"] == 3
+    finally:
+        db.close()

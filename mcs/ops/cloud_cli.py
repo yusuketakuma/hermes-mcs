@@ -331,8 +331,7 @@ def _route_counts(db, cfg, settings, deadline):
         params = (*params, *lane_params)
         query = extract._selection_sql(db, "DESC", scope, cloud_followup=True).replace(
             "m.body_text,", "length(m.body_text) AS body_length,")
-        rows = db.execute(query, (extract.KIND, extract.EXTRACT_VERSION, *params,
-            None, None, None, now, extract.KIND, extract.EXTRACT_VERSION, now, READ_ROWS + 1))
+        rows = db.execute(query, (*params, None, None, None, now, now, READ_ROWS + 1))
         with policy.history_selection_check(db) as receipt_check:
             for count, row in enumerate(rows, 1):
                 _checkpoint(deadline, count)

@@ -66,8 +66,7 @@ def _reference_selection(db, now, limit=10_000):
 def _new_selection(db, now, fresh, limit=10_000):
     return [r["message_id"] for r in db.db.execute(
         extract_llm._selection_sql(db.db, "DESC", "", fresh),
-        (KIND, EXTRACT_VERSION, None, 1, 0, now, KIND,
-         EXTRACT_VERSION, now, limit)).fetchall()]
+        (None, 1, 0, now, now, limit)).fetchall()]
 
 
 _LONG = "体温は37度です。" + "経過観察を継続します。" * 40   # >= 300 chars
@@ -191,12 +190,12 @@ def test_cloud_followup_reads_only_a_reaudited_first_qc_fix(tmp_path):
     try:
         rows = db.db.execute(
             extract_llm._selection_sql(db.db, "DESC", "", None, cloud_followup=True),
-            (KIND, EXTRACT_VERSION, None, 1, 0, now, KIND, EXTRACT_VERSION, now, 10_000)).fetchall()
+            (None, 1, 0, now, now, 10_000)).fetchall()
         followup = {r["message_id"] for r in rows if r["qc_cloud"] is not None}
         assert followup == {17, 26}
         assert all(r["qc_cloud"] == r["qc_src"] for r in rows if r["qc_cloud"] is not None)
         plain = db.db.execute(extract_llm._selection_sql(db.db, "DESC", "", None),
-                              (KIND, EXTRACT_VERSION, None, 1, 0, now, KIND, EXTRACT_VERSION, now, 10_000)).fetchall()
+                              (None, 1, 0, now, now, 10_000)).fetchall()
         assert all(r["qc_cloud"] is None for r in plain)
         attempts = dict(db.db.execute(
             "SELECT message_id, " + extract_llm.qc_fix_attempt_sql("meta") + " FROM artifacts "

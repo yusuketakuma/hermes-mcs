@@ -531,8 +531,8 @@ def test_lane_filter_admits_only_a_reaudited_flag(qc_window):
     _locally_fixed(ledger)
     lane, params = worker.cloud_lane_sql(time.time())
     query = worker._selection_sql(ledger.db, "DESC", lane, cloud_followup=True)
-    args = (worker.KIND, worker.EXTRACT_VERSION, *params, None, None, None, time.time(),
-            worker.KIND, worker.EXTRACT_VERSION, time.time(), 10)
+    now = time.time()
+    args = (*params, None, None, None, now, now, 10)
     assert ledger.db.execute(query, args).fetchall() == []
     _flag_current(ledger)
     assert [row["message_id"] for row in ledger.db.execute(query, args)] == [1]
