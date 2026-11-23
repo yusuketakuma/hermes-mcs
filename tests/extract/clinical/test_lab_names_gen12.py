@@ -916,14 +916,28 @@ _SPECIMEN_SECTIONS = (
     "【{s}】\npH 6.0\n比重 1.015\n{item}",
     "{s}検査：pH 6.0、{item}",
     "{s}：\n・pH 6.0\n・{item}",
+    # A blank line right after the heading does not end its section.
+    "{s}検査\n\n{item}\n蛋白 (1+)", "【{s}検査】\n\n{item}", "{s}検査：\n\n{item}", "{s}検査\n \n{item}", "{s}\n\n{item}",
+    # A sentence end inside the result list does not end it.
+    "{s}検査：pH 6.0。{item}", "{s}検査：pH 6.0。{item}。蛋白(1+)。", "{s}検査の結果です。\n{item}",
+    # Specimen compounds head the section too.
+    "{s}検査の結果：{item}", "{s}検査の結果、{item}", "{s}の検査結果：{item}", "{s}定性：{item}", "{s}一般：{item}",
+    "{s}生化学：{item}", "{s}穿刺 {item}", "{s}の性状：{item}", "{s}検査（外注検査）\n{item}",
+    # Words about the examination and other notes are no blood heading.
+    "{s}検査\npH 6.0 再検査\n{item}", "{s}検査\n検査値 {item}", "{s}検査\n本日測定 {item}",
+    "{s}検査\n【看護師より】\n{item}", "{s}検査\n合成薬A 1錠\n{item}",
+    # A bare specimen line heads what follows; a heading with a delimiter needs no result on its line.
+    "{s}\n蛋白(1+)\n{item}", "{s}検査：\n蛋白 1+\n{item}",
 )
 _SECTION_ENDS = (
     "{s}検査は異常なし。血液検査 {item}",
-    "{s}検査：pH 6.0。{item}",
     "{s}検査\npH 6.0\n\n{item}",
     "{s}検査\npH 6.0\n血液検査\n{item}",
     "【{s}検査】\npH 6.0\n【血液検査】\n{item}",
     "{s}検査：pH 6.0、血液検査 {item}",
+    "{s}検査：蛋白(1+)、血液検査では {item}",
+    "{s}検査：異常なし; 血算 {item}",
+    "{s}検査：蛋白(1+)\n採血\n{item}",
 )
 _SPECIMEN_WORDS = ("尿", "髄液", "胸水", "腹水", "便", "喀痰")
 _SHARED_ITEMS = (("WBC", "5200", "/μL"), ("白血球", "5200", "/μL"), ("TP", "6.5", "g/dL"),
@@ -1002,6 +1016,17 @@ def test_specimen_sections_are_read_in_linear_time(body):
     assert time.perf_counter() - began < 10
 
 
+# Ordinary nursing words that end in a specimen word, or a specimen word followed by
+# something other than a result, head nothing: the blood result below stays confirmable.
+@pytest.mark.parametrize("body", [
+    "今朝排便\nWBC 5200/μL", "発熱あり、血尿\nCRP 5.2mg/dL\nWBC 5200/μL", "軟便\nWBC 5200/μL",
+    "トイレで排便\nWBC 5200/μL", "排尿：6回\n排便：1回\nWBC 5200/μL CRP 0.3mg/dL", "排尿・排便問題なし\nWBC 5200/μL",
+    "尿：淡黄色\nWBC 5200/μL", "便はブリストル4\nWBC 5200/μL", "尿検査：蛋白(1+)\n\nWBC 5200/μL",
+])
+def test_a_nursing_word_with_a_specimen_word_does_not_hide_the_blood_item(body):
+    assert _validated("WBC", "5200", "/μL", body)["normalized"]["confirmation"] == "quote_supported", body
+
+
 # The unit ends where the next named reading starts, whatever separator follows its name.
 @pytest.mark.parametrize("name,value,unit,body", [
     ("Na", "140", "mEq/L", "Na:140mEq/L K:4.0mEq/L Cl:101mEq/L"),
@@ -1035,3 +1060,9 @@ def test_the_next_named_reading_ends_the_unit_whatever_its_separator(name, value
 def test_a_unit_after_the_number_is_not_the_next_reading(name, value, body):
     lab = _validated(name, value, None, body)
     assert lab["normalized"]["confirmation"] == "unverified", body
+
+
+# Urine collections named by a compound (随時尿, 早朝尿, 蓄尿) head their section too.
+@pytest.mark.parametrize("body", ["随時尿：WBC 30/μL", "早朝尿\nWBC 30/μL", "蓄尿検査：WBC 30/μL", "・中間尿 WBC 30/μL"])
+def test_a_urine_collection_heads_its_section(body):
+    assert _validated("WBC", "30", "/μL", body)["normalized"]["confirmation"] == "unverified", body

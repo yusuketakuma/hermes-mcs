@@ -376,7 +376,6 @@ _SALT_STEM = re.compile(r"(?:酸|水素|ヨウ素|塩化|酸化|ヨウ化|沃化
 # 10-19/HPF): those specimens and qualitative or ranged results (1+, 10-19) are not the
 # blood item. The previous items (尿Cr) keep their earlier reading.
 _SPECIMEN_SHARED_ITEMS = frozenset({"wbc", "total_protein", "total_bilirubin", "calcium", "magnesium"})
-_SPECIMEN_WORDS = r"尿中|尿|沈渣|髄液|胸水|腹水|便|喀痰"
 _QUALITATIVE_RESULT = re.compile(r"\+")
 # A number followed by a range mark and a digit is one end of a range (2〜4, 4.5から5.0),
 # not a single result of any item. The marks are folded forms: ～ and － fold to ~ and -.
@@ -508,24 +507,48 @@ def _unit_end(quote: str, at: int, stop: int, evidence, starts: list, ends: list
 def _specimen_sections(quote: str, evidence, starts: list, ends: list,
                        lines: list[int]) -> tuple[set, list, list]:
     """Folded positions a specimen word is glued to, and the spans its headings name."""
-    glued, headings = set(), []
+    glued, headings = set(), []   # headings: (start, end, line end or None for the rest of the quote)
     line_ends = {*lines, len(quote)}
     for match in _SECTION_HEADING.finditer(quote):
-        end = match.end()
-        bare = match.span() == match.span("word")
+        start, end = match.span()
+        line_start, line_end = _line_span(quote, start, lines)
+        end = min(end, line_end)   # folding joins a delimiter to the next line's bullet (尿：\n・pH)
+        first = bool(_LINE_BULLETS.fullmatch(quote, line_start, start))
+        if not (first or quote[start] in "([【<" or _WORD_BEFORE.match(quote, start - 1)
+                or _spaced(evidence, starts, ends, start)):
+            continue   # the end of another word (排尿, 血尿, 軟便)
         spaced = _spaced(evidence, starts, ends, end)
-        if bare and not spaced and end not in line_ends:
-            glued.add(end)
-        if (match["bracket"] or end in line_ends or _HEADING_DELIMITER.search(match[0])
-                or (_HEADED_RESULT.match(quote, end) and (spaced or not bare))):
-            headings.append((match.start(), end, bool(match["specimen"])))
-        # Otherwise a statement (尿検査は異常なし) or a word (尿酸, 便秘) heads nothing.
-    blank = (at for at in lines if len((evidence[ends[at - 1]:starts[at]] + "x").splitlines()) > 2)
-    # A section ends at the next heading, sentence end, blank line or the end of the quote.
-    stops = sorted({*blank, *(m.start() for m in re.finditer("。", quote)),
-                    *(start for start, _, _ in headings), len(quote)})
-    sections = [(end, stops[bisect.bisect_right(stops, start)]) for start, end, specimen in headings if specimen]
-    return glued, [start for start, _ in sections], [stop for _, stop in sections]
+        closed = match["close"] or match["desu"] or match["particle"] or match["delimiter"] \
+            or match["suffix"] not in (None, "", "中", "沈渣")
+        if match["word"] and not (closed or spaced or end in line_ends) and _LAB_NAME.match(quote, end):
+            glued.add(end)   # 尿TP, 尿中Ca
+            continue
+        if end in line_ends:
+            heading = first   # a heading line of its own
+        elif match["particle"]:
+            heading = bool(_LAB_NAME.match(quote, end))   # 尿検査で白血球, not 尿検査は異常なし
+        else:
+            result = _SECTION_RESULT.match(quote, end, line_end)
+            # The item word is one source word: folding joins 淡黄色 白血球 30 into one.
+            heading = bool((closed or spaced) and result and not any(
+                _spaced(evidence, starts, ends, at) for at in range(end + 1, result.end(1))))
+        if heading:
+            headings.append((start, end, None if first else line_end, bool(match["word"])))
+    blank = [at for at in lines if len((evidence[ends[at - 1]:starts[at]] + "x").splitlines()) > 2]
+    opened, closed_at = [], []
+    for i, (start, end, line_end, specimen) in enumerate(headings):
+        if not specimen:
+            continue
+        stop = min(len(quote) if line_end is None else line_end,
+                   headings[i + 1][0] if i + 1 < len(headings) else len(quote))
+        # A blank line ends the section once one of its results has been read.
+        seen = _SECTION_RESULT.search(quote, end, stop)
+        after = bisect.bisect_right(blank, seen.start()) if seen else len(blank)
+        if after < len(blank):
+            stop = min(stop, blank[after])
+        opened.append(end)
+        closed_at.append(stop)
+    return glued, opened, closed_at
 
 
 def _in_specimen_section(sections: tuple[set, list, list], at: int) -> bool:
@@ -567,12 +590,11 @@ _READING = (r"(?:" + _LAB_SPELLINGS
 # repeated here so the validator's decisions do not import the OCR module; a test keeps
 # them equal.
 LAB_SECTION_HEADINGS = ("検査結果", "検査所見", "検査データ", "バイタルサイン", "身体所見", "症状経過及び検査結果")
-_SECTION_HEADER = "|".join((
+_LAB_HEADER = "|".join((
     *map(re.escape, sorted(LAB_SECTION_HEADINGS, key=len, reverse=True)),
     r"(?:血液|生化学?|電解質|定期|本日|今日|今回)?(?:採血|検査|測定)(?:結果|値|データ|所見)?",
-    r"電解質|生化学?",
+    r"電解質|生化学?|緊急値|本日|今日|今回",
 ))
-_LAB_HEADER = _SECTION_HEADER + r"|緊急値|本日|今日|今回"
 # Each word of a layout is read once and kept (an atomic group, repeated possessively):
 # a reading such as cr1.0 is also a generic word, so a backtracking repeat would retry
 # every split of a run of readings that ends in an unknown word. Alternatives that
@@ -587,19 +609,28 @@ _LAB_TAIL = re.compile(fold_surface(
     r"|著変なし|変化なし|安定|再検査?|要?経過観察|推移|正常(?:範囲|値)?内?|異常なし|基準(?:値|範囲)?内"
     r"|報告(?:します|しました|あり)?|採血|検査|測定)"
     r"|でした|です|だった|である)*+"))
-# A specimen word glued to an item names that item (尿TP, 尿中Ca, 髄液TP). As a heading
-# (尿検査：, 【尿】, (尿), 尿検査\n, 尿 WBC: a heading word, a bracket, a delimiter, a space
-# or a line break follows the word, then a result or the line end) it names every result
-# of its section, across line breaks, up to a sentence end, a blank line or another
-# heading (血液検査, 【処方】, another specimen). 尿酸, 便秘 or 尿検査は異常なし head nothing.
-_HEADING_OPEN, _HEADING_CLOSE = r"[(\[【<]?", fold_surface(r"[)\]】>]?(?:にて|で|の|は)?[:・|=]*")
+# A specimen word (尿, 随時尿, 蓄尿, 髄液, 胸水, 腹水, 便, 喀痰) with one closed suffix (検査, 検査の結果, 定性,
+# 一般, 生化学, 穿刺, の性状, 中, 沈渣 ...) glued to an item names that item only (尿TP, 尿中Ca).
+# As a heading it starts a word (at a line start, after a bullet, a bracket, a delimiter or
+# a space) and is followed by the line end (when it starts its line), a delimiter, a bracket
+# or a space and then a result, or a particle and a lab name (尿検査で白血球). It names every
+# result of its section, across line breaks and sentence ends, up to a blood heading
+# (血液検査, 採血, 血算, 血清, 生化学), another specimen heading, or a blank line that follows a
+# result of the section. A heading in the middle of a line names the rest of its line only.
+# Words (排尿, 血尿, 尿酸, 便秘), statements (尿検査は異常なし) and other notes (尿：淡黄色,
+# 再検査, 本日測定, 【看護師より】) head nothing and end nothing.
 _SECTION_HEADING = re.compile(
-    rf"(?P<specimen>{_HEADING_OPEN}(?P<word>{fold_surface(_SPECIMEN_WORDS)})"
-    rf"(?:検査)?(?:結果|所見|データ)?{_HEADING_CLOSE})"
-    rf"|{_HEADING_OPEN}(?:{fold_surface(_SECTION_HEADER)}){_HEADING_CLOSE}"
-    rf"|(?P<bracket>【(?![^【】]*(?:{fold_surface(_SPECIMEN_WORDS)}))[^【】]*】)")
-_HEADING_DELIMITER = re.compile(fold_surface(r"[:・|=)\]】>]"))
-_HEADED_RESULT = re.compile(fold_surface(f"{_LAB_SPELLINGS}|{_READING}"))
+    rf"[(\[【<]?(?:(?P<word>{fold_surface('随時尿|早朝尿|中間尿|蓄尿|検尿|尿|沈渣|髄液|胸水|腹水|便|喀痰')})"
+    rf"(?P<suffix>{fold_surface('(?:中|沈渣)?(?:の検査結果|の検査|検査の結果|検査結果|検査所見|検査データ|定性検査|一般検査|生化学検査|検査|の結果|定性|一般|生化学|穿刺液?|の性状|性状)?')})"
+    rf"|(?P<blood>{fold_surface('(?:血液|生化学?|電解質|定期|本日|今日|今回)?採血(?:結果|データ)?|(?:血液|生化学?|電解質)(?:検査|測定)?(?:結果|値|データ|所見)?|血算|血清')}))"
+    rf"(?:\([^()]{{0,16}}\))?(?P<close>[)\]】>]?)(?P<desu>{fold_surface('(?:です|でした)。?')})?"
+    rf"(?P<particle>{fold_surface('にて|では|で|の|は')})?(?P<delimiter>[:・|=、,;]*)")
+_WORD_BEFORE = re.compile(fold_surface(r"[、,;:。・|=/()\[\]【】<>*•●○◦◆◇■□▪\-]"))
+_LINE_BULLETS = re.compile(fold_surface(r"(?:[・\-*•●○◦◆◇■□▪>]|[0-9]{1,2}[.)]|\([0-9]{1,2}\))*[(\[【<]?"))
+_LAB_NAME = re.compile(fold_surface(_LAB_SPELLINGS))
+# A result: an item word followed by a number or a qualitative mark (pH 6.0, 比重 1.015, 蛋白(1+)).
+_SECTION_RESULT = re.compile(fold_surface(
+    rf"({_LAB_SPELLINGS}|[a-z][a-z0-9]*|[ァ-ヺー]+|[一-龥]{{1,6}})(?:値|は|:|=)*\(?[0-9+±-]"))
 _LAB_TAIL_END = re.compile(fold_surface(r"[、。;]|,(?![0-9])|の?ため|により"))
 _LAYOUT_REACH = 256   # characters read on each side of a reading; longer lines are no layout
 _BP_DATE_LABEL = re.compile(r"(?:BP|血圧)", re.I)
