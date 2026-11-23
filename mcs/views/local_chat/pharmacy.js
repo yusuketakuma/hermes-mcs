@@ -5,7 +5,7 @@ const RX_LINE = [["drug_name", "薬剤名（必須）"], ["dose", "用量"], ["u
 function rxLineRow(line = {}) {
   const row = el("div", null, "rx-line"), inputs = el("div", null, "hc-inline"), picked = el("p", null, "hc-note"), choices = el("div", null, "rx-choices");
   for (const [key, label, type] of RX_LINE) {
-    const input = el("input"); input.name = key; input.placeholder = label; input.type = type || "text"; input.autocomplete = "off";
+    const input = el("input"); input.name = key; input.placeholder = label; input.setAttribute("aria-label", label); input.type = type || "text"; input.autocomplete = "off";
     input.value = line[key] ?? ""; if (type === "number") {input.min = "1"; input.max = "365";}
     inputs.append(input);
   }
