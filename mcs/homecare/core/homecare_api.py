@@ -13,7 +13,7 @@ from homecare_records import record_id as _id
 
 # Fixed, non-clinical codes the browser may see.
 ERRORS = frozenset({"version_conflict", "already_linked", "not_linked", "already_assigned", "actor_required",
-                    "admin_required", "not_qualified", "role_not_allowed", "still_assigned", "invalid_fields", "not_found",
+                    "admin_required", "not_qualified", "role_not_allowed", "still_assigned", "team_changed", "invalid_fields", "not_found",
                     "project_not_allowed", "route_unavailable", "route_failed",
                     "too_many_stops", "bad_request"})
 
@@ -87,11 +87,11 @@ def write(db, op, body, *, registry, allowed, mcs_patients, route_settings=None)
                                          expected_version=body.get("expected_version"), actor=actor,
                                          registry=registry)}
     if op == "team.assign":
-        role = body.get("role")
-        if not isinstance(role, str):
+        role, holders = body.get("role"), body.get("holders")
+        if not isinstance(role, str) or not isinstance(holders, list):
             raise ValueError("bad_request")
         return {"assignment_id": team.assign(db, registry, _id(body.get("patient")), _id(body.get("staff")), role,
-                                             actor=actor)}
+                                             expected_holders=[_id(holder) for holder in holders], actor=actor)}
     if op == "team.end":
         team.end(db, registry, _id(body.get("assignment")), actor=actor)
         return {"ok": True}

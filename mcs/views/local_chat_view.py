@@ -146,7 +146,7 @@ def panel(view, allowed, project, section, *, page=0, role="", message_id=None):
         view._require_message(project, message_id)
         result = notify_views.meds_view(view.db, project, message_id, page=page, cfg=cfg)
     elif section == "summary":
-        title, body = notify_views.patient_summary_text(view.db, project, cfg=cfg)
+        title, body = notify_views.patient_summary_text(view.db, project, cfg=cfg, now=now)
         result = {"title": title, "body": body}
     elif section == "signals":
         result = _signals(view, project)

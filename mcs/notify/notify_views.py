@@ -33,17 +33,18 @@ from notify_render import (
     actor_label, card_reaction_lines,
     card_reactions, today_jst)
 
-def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
+def patient_summary_text(db, project_id, *, cfg=None, now=None) -> tuple:
     """🧾 answer: current meds (with the dated period), latest vitals,
     next planned item from the stored patient_rollup, plus the open
     tasks from the requests ledger. Missing material is said plainly —
-    the text never implies completeness."""
+    the text never implies completeness. ``now`` dates the overdue marks
+    (a snapshot passes its own time; live cards use the clock)."""
     name = project_display_name(db, project_id) or f"project {project_id}"
     title = f"{name} — 患者の記録まとめ"
     lines = [_coverage_line(db, project_id)]
     from extraction_progress import summary_lines
     lines.extend(summary_lines(db, project_id, cfg=cfg))
-    lines.extend(_open_task_lines(db, project_id))
+    lines.extend(_open_task_lines(db, project_id, now))
     row = db.execute(
         "SELECT content,meta FROM artifacts WHERE kind='patient_rollup' "
         "AND project_id=? AND json_valid(content) "
@@ -109,7 +110,7 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
     return title, "\n".join(lines)
 
 
-def _open_task_lines(db, project_id) -> list[str]:
+def _open_task_lines(db, project_id, now=None) -> list[str]:
     """■ 未完了タスク — what needs action comes first in the summary;
     an overdue due date is marked."""
     tasks = db.execute(
@@ -117,7 +118,7 @@ def _open_task_lines(db, project_id) -> list[str]:
         "WHERE project_id=? AND status IN ('open','in_progress') "
         "ORDER BY due_date IS NULL, due_date, request_id LIMIT 10",
         (project_id,)).fetchall()
-    today = today_jst()
+    today = today_jst(now)
     lines = ["■ 未完了タスク" + ("" if tasks else ": なし")]
     lines.extend(f"・#{t['request_id']} {inline_text(t['title'], 60)}"
                  + (f" — 担当 {inline_text(t['assignee'], 40)}"

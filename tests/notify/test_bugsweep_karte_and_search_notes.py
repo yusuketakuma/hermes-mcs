@@ -52,3 +52,16 @@ def test_an_unscanned_range_keeps_its_scope_wording_with_unclassified_matches(le
     monkeypatch.setattr(patient_search, "search", limited)
     view = notify_views.patient_search_view(led.db, 1, "残薬 分類:服薬管理")
     assert view["empty"] == "この範囲の解析が完了した原資料には、この分類で一致するものはありません。"
+
+
+def test_summary_deadlines_are_judged_at_the_time_given():
+    # A snapshot read days later still marks deadlines as they stood when it was taken.
+    import sqlite3
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.execute("CREATE TABLE requests(request_id INTEGER, project_id INTEGER, title TEXT, assignee TEXT, "
+               "due_date TEXT, status TEXT)")
+    db.execute("INSERT INTO requests VALUES(1,1,'合成の確認',NULL,'2026-11-21','open')")
+    taken = 1795132800  # 2026-11-20 09:00 JST
+    assert "⚠期限切れ" not in "".join(notify_views._open_task_lines(db, 1, taken))
+    assert "⚠期限切れ" in "".join(notify_views._open_task_lines(db, 1, taken + 3 * 86400))

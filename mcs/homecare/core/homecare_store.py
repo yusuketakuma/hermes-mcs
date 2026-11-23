@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 _NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
+FOUNDATION = "0001_foundation.sql"
 
 
 class Conflict(ValueError):
@@ -56,9 +57,15 @@ def _require_homecare_file(path):
     probe = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
     try:
         tables = {row[0] for row in probe.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        # A table merely named schema_migrations is not enough: the core's first migration must be recorded.
+        founded = "schema_migrations" in tables and probe.execute(
+            "SELECT 1 FROM schema_migrations WHERE module='core' AND number=1 AND name=?",
+            (FOUNDATION,)).fetchone() is not None
+    except sqlite3.DatabaseError as error:
+        raise RuntimeError(f"not a homecare database: {path}") from error
     finally:
         probe.close()
-    if tables and "schema_migrations" not in tables:
+    if tables and not founded:
         raise RuntimeError(f"not a homecare database: {path}")
 
 

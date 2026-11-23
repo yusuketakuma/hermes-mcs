@@ -14,8 +14,8 @@ def current(db, patient_id):
         (patient_id,))]
 
 
-def assign(db, registry, patient_id, staff_id, role, *, actor):
-    """Give ``role`` to a qualified, active staff member; a single-holder role hands over from the last one."""
+def assign(db, registry, patient_id, staff_id, role, *, expected_holders, actor):
+    """Give ``role`` to a qualified, active staff member; a single-holder role hands over from the holders the client saw."""
     spec = registry.roles.get(role)
     if spec is None:
         raise ValueError("role_not_allowed")
@@ -27,6 +27,9 @@ def assign(db, registry, patient_id, staff_id, role, *, actor):
         holders = [row for row in current(db, patient_id) if row["role"] == role]
         if any(row["staff_id"] == staff_id for row in holders):
             raise Conflict("already_assigned")
+        if spec.single and sorted(row["staff_id"] for row in holders) != sorted(expected_holders):
+            # Someone else handed the role over since the client loaded the team; never end a holder it did not see.
+            raise Conflict("team_changed")
         now = time.time()
         for row in holders if spec.single else ():
             _end(db, row["assignment_id"], actor, now)

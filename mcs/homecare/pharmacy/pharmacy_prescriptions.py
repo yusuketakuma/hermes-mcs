@@ -4,13 +4,12 @@ from __future__ import annotations
 import re
 import time
 
-from homecare_records import InvalidFields, get, require_actor, text_field
+from homecare_records import InvalidFields, calendar_date, get, require_actor, text_field
 from homecare_store import Conflict, audit, transaction
 
 FIELDS = ("patient_id", "issued_on", "institution", "prescriber", "note", "lines")
 LINE_FIELDS = ("drug_name", "code_system", "drug_code", "dose", "usage", "days")
 MAX_LINES = 30
-_DATE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
 _CODE = re.compile(r"^[0-9A-Za-z]{1,20}$")
 _SYSTEM = re.compile(r"^[a-z][a-z0-9_]{0,19}$")
 
@@ -24,7 +23,7 @@ def _clean(db, values):
             "SELECT 1 FROM patients WHERE patient_id=?", (row["patient_id"],)).fetchone() is None:
         bad.append("patient_id")
     row["issued_on"] = values.get("issued_on")
-    if not isinstance(row["issued_on"], str) or not _DATE.match(row["issued_on"]):
+    if not calendar_date(row["issued_on"]):
         bad.append("issued_on")
     lines = values.get("lines", [])
     cleaned = []

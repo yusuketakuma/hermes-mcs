@@ -140,6 +140,7 @@ def test_qualifications_of_a_disabled_module_survive_an_update(tmp_path):
     ({"phone": "abc"}, ["phone"]),
     ({"postal_code": "1234"}, ["postal_code"]),
     ({"birth_date": "2026/01/01"}, ["birth_date"]),
+    ({"birth_date": "2026-02-31"}, ["birth_date"]),
     ({"preferred_contact": "keyperson"}, ["keyperson_name", "keyperson_phone", "keyperson_relation"]),
     ({"preferred_contact": "facility"}, ["contact_phone"]),
     ({"phone": "", "preferred_contact": "patient"}, ["phone"]),
@@ -153,6 +154,11 @@ def test_patient_fields_are_validated_by_name(db, values, fields):
         patient(db, me["staff_id"], **values)
     assert error.value.fields == fields
     assert db.execute("SELECT count(*) FROM patients").fetchone()[0] == 0
+
+
+def test_dates_must_name_a_real_day():
+    assert records.calendar_date("2028-02-29") and not records.calendar_date("2026-02-29")
+    assert not any(map(records.calendar_date, ("2026-04-31", "20260101", "2026-1-01", None, 20260101)))
 
 
 def test_update_checks_version_merges_fields_and_audits(db):
@@ -187,13 +193,18 @@ def test_care_team_roles_need_the_declared_qualification_and_hand_over(db):
     row = patient(db, me["staff_id"])
     role = "pharmacy.primary_pharmacist"
     with pytest.raises(ValueError, match="not_qualified"):
-        team.assign(db, REGISTRY, row["patient_id"], clerk["staff_id"], role, actor=me["staff_id"])
+        team.assign(db, REGISTRY, row["patient_id"], clerk["staff_id"], role, expected_holders=[], actor=me["staff_id"])
     with pytest.raises(ValueError, match="role_not_allowed"):
-        team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], "nursing.primary_nurse", actor=me["staff_id"])
-    team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], role, actor=me["staff_id"])
+        team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], "nursing.primary_nurse", expected_holders=[],
+                    actor=me["staff_id"])
+    team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], role, expected_holders=[], actor=me["staff_id"])
     with pytest.raises(homecare_store.Conflict, match="already_assigned"):
-        team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], role, actor=me["staff_id"])
-    team.assign(db, REGISTRY, row["patient_id"], other["staff_id"], role, actor=clerk["staff_id"])
+        team.assign(db, REGISTRY, row["patient_id"], me["staff_id"], role, expected_holders=[], actor=me["staff_id"])
+    with pytest.raises(homecare_store.Conflict, match="team_changed"):
+        # The client still shows the role as empty, so it must not silently end the current holder.
+        team.assign(db, REGISTRY, row["patient_id"], other["staff_id"], role, expected_holders=[], actor=clerk["staff_id"])
+    team.assign(db, REGISTRY, row["patient_id"], other["staff_id"], role, expected_holders=[me["staff_id"]],
+                actor=clerk["staff_id"])
     assert [member["staff_id"] for member in team.current(db, row["patient_id"])] == [other["staff_id"]]
     ended = db.execute("SELECT ended_by FROM care_team WHERE staff_id=?", (me["staff_id"],)).fetchone()
     assert ended["ended_by"] == clerk["staff_id"]
@@ -209,7 +220,7 @@ def test_staff_holding_a_role_must_hand_it_over_before_leaving_or_losing_its_qua
     other = staff(db, me["staff_id"], name="合成 薬剤師二", codes=("pharmacy.pharmacist",))
     row = patient(db, me["staff_id"])
     team.assign(db, REGISTRY, row["patient_id"], other["staff_id"], "pharmacy.primary_pharmacist",
-                actor=me["staff_id"])
+                expected_holders=[], actor=me["staff_id"])
     with pytest.raises(ValueError, match="still_assigned"):
         records.update(db, "staff", other["staff_id"], change, expected_version=1, actor=me["staff_id"],
                        registry=REGISTRY)
@@ -231,17 +242,23 @@ def test_an_existing_file_that_is_not_a_homecare_database_is_left_untouched(tmp_
         with pytest.raises(RuntimeError, match="not a homecare database"):
             homecare_store.connect(path, REGISTRY.modules)
     assert snapshot.read_bytes() == before and not (tmp_path / "snapshot.db-wal").exists()
-    lookalike = tmp_path / "lookalike.db"
-    with sqlite3.connect(lookalike) as other:
-        other.execute("CREATE TABLE schema_migrations(version TEXT)")
-    other.close()
-    before = lookalike.read_bytes()
-    with pytest.raises(sqlite3.Error):
-        homecare_store.connect(lookalike, REGISTRY.modules)
-    assert lookalike.read_bytes() == before
-    with sqlite3.connect(f"{lookalike.as_uri()}?mode=ro", uri=True) as other:
-        assert other.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
-    other.close()
+    # Another tool's migration table, and one shaped like ours but without the core's first migration.
+    for name, tables in (("other", ["CREATE TABLE schema_migrations(version TEXT)"]),
+                         ("shaped", ["CREATE TABLE schema_migrations(module TEXT, number INTEGER, name TEXT, "
+                                     "sha256 TEXT, applied_at REAL, PRIMARY KEY(module, number))",
+                                     "CREATE TABLE orders(order_id INTEGER)"])):
+        lookalike = tmp_path / f"{name}.db"
+        with sqlite3.connect(lookalike) as other:
+            for statement in tables:
+                other.execute(statement)
+        other.close()
+        before = lookalike.read_bytes()
+        with pytest.raises(RuntimeError, match="not a homecare database"):
+            homecare_store.connect(lookalike, REGISTRY.modules)
+        assert lookalike.read_bytes() == before
+        with sqlite3.connect(f"{lookalike.as_uri()}?mode=ro", uri=True) as other:
+            assert other.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        other.close()
 
 
 def test_links_are_one_to_one_append_only_and_suggested_only_on_exact_name(db):
@@ -278,7 +295,8 @@ def test_api_scopes_links_and_returns_browser_safe_errors(db):
     homecare_api.write(db, "link", {"patient": row["patient_id"], "project": 11, "actor": me["staff_id"]},
                        registry=REGISTRY, allowed={11}, mcs_patients=scope)
     homecare_api.write(db, "team.assign", {"patient": row["patient_id"], "staff": me["staff_id"],
-                                           "role": "pharmacy.primary_pharmacist", "actor": me["staff_id"]},
+                                           "role": "pharmacy.primary_pharmacist", "holders": [],
+                                           "actor": me["staff_id"]},
                        registry=REGISTRY, allowed={11}, mcs_patients=scope)
     assert homecare_api.read(db, "linked", {"project": "11"}, registry=REGISTRY,
                              mcs_patients=scope)["patient"]["patient_id"] == row["patient_id"]
@@ -379,6 +397,7 @@ def test_visits_are_validated_versioned_and_audited(db):
     me = first_staff(db)
     row = patient(db, me["staff_id"])
     for bad, fields in (({"kind": "nursing.visit"}, ["kind"]), ({"visit_date": "2026-13-01"}, ["visit_date"]),
+                        ({"visit_date": "2026-02-30"}, ["visit_date"]),
                         ({"start_time": "25:00"}, ["start_time"]), ({"status": "done"}, ["staff_id"]),
                         ({"patient_id": 999}, ["patient_id"]), ({"extra": 1}, ["extra"])):
         with pytest.raises(records.InvalidFields) as error:

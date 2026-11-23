@@ -4,12 +4,11 @@ from __future__ import annotations
 import re
 import time
 
-from homecare_records import InvalidFields, get, require_actor, text_field
+from homecare_records import InvalidFields, calendar_date, get, require_actor, text_field
 from homecare_store import Conflict, audit, transaction
 
 FIELDS = ("patient_id", "staff_id", "kind", "visit_date", "start_time", "status", "note")
 STATUSES = ("planned", "done", "cancelled")
-_DATE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
@@ -25,7 +24,7 @@ def _clean(db, registry, values, held_kind=None):
     if row["kind"] not in registry.visit_kinds and row["kind"] != held_kind:
         bad.append("kind")
     row["visit_date"] = values.get("visit_date")
-    if not isinstance(row["visit_date"], str) or not _DATE.match(row["visit_date"]):
+    if not calendar_date(row["visit_date"]):
         bad.append("visit_date")
     row["start_time"] = values.get("start_time") or None
     if row["start_time"] is not None and (not isinstance(row["start_time"], str) or not _TIME.match(row["start_time"])):
@@ -97,7 +96,7 @@ def for_patient(db, patient_id, *, limit=50):
 
 def for_day(db, visit_date):
     """Every visit on one date, in time order, with the patient's name and address for planning the day."""
-    if not isinstance(visit_date, str) or not _DATE.match(visit_date):
+    if not calendar_date(visit_date):
         raise ValueError("bad_request")
     return [dict(row) for row in db.execute(
         "SELECT v.*, s.name AS staff_name, p.name AS patient_name, p.address, p.residence FROM visits v "

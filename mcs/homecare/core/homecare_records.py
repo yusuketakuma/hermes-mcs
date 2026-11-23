@@ -1,6 +1,7 @@
 """Staff and patient register commands with field validation, version checks and an audit trail."""
 from __future__ import annotations
 
+from datetime import date
 import re
 import time
 
@@ -19,6 +20,17 @@ PATIENT_FIELDS = {
     "caution_note": 500, "status": None}
 CONTACTS = ("patient", "keyperson", "facility", "other")
 STATUSES = ("active", "suspended", "ended")
+
+
+def calendar_date(value):
+    """True for a ``YYYY-MM-DD`` string naming a real day (so 2026-02-31 is refused, 2028-02-29 kept)."""
+    if not isinstance(value, str) or not _DATE.match(value):
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
 
 
 class InvalidFields(ValueError):
@@ -75,7 +87,7 @@ def _clean_patient(values):
     if not _POSTAL.match(row["postal_code"]):
         bad.append("postal_code")
     birth = values.get("birth_date") or None
-    if birth is not None and (not isinstance(birth, str) or not _DATE.match(birth)):
+    if birth is not None and not calendar_date(birth):
         bad.append("birth_date")
     row["birth_date"] = birth
     row["preferred_contact"] = values.get("preferred_contact", "patient")

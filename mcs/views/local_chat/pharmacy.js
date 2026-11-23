@@ -30,15 +30,16 @@ function rxForm(patientId, record, onSaved) {
   const more = el("button", "薬剤を追加", "text-button"); more.type = "button"; more.onclick = () => lines.append(rxLineRow());
   const save = el("button", record ? "保存" : "登録", "button");
   form.append(el("h4", "薬剤"), lines, more, save, message);
+  let current = record;
   form.onsubmit = async event => {
     event.preventDefault(); save.disabled = true; message.textContent = "";
     for (const node of form.querySelectorAll(".invalid")) node.classList.remove("invalid");
     const values = {issued_on: form.querySelector('[name="issued_on"]').value, institution: form.querySelector('[name="institution"]').value,
                     prescriber: form.querySelector('[name="prescriber"]').value, note: form.querySelector('[name="note"]').value, lines: rxLines(form)};
+    let data;
     try {
-      if (record) await hcPost("pharmacy/prescription.update", {id: record.prescription_id, values, expected_version: record.version});
-      else await hcPost("pharmacy/prescription.create", {values: {...values, patient_id: patientId}});
-      await onSaved();
+      data = current ? await hcPost("pharmacy/prescription.update", {id: current.prescription_id, values, expected_version: current.version})
+                     : await hcPost("pharmacy/prescription.create", {values: {...values, patient_id: patientId}});
     } catch (error) {
       message.textContent = error.message;
       for (const name of error.fields || []) {
@@ -46,7 +47,11 @@ function rxForm(patientId, record, onSaved) {
         const target = top === "lines" && index ? lines.children[Number(index) - 1]?.querySelector(`[name="${key || "drug_name"}"]`) : form.querySelector(`[name="${top}"]`);
         (target?.closest(".hc-field") || target)?.classList.add("invalid");
       }
-    } finally {save.disabled = false;}
+      save.disabled = false;
+      return;
+    }
+    current = data.record;
+    await afterSave(save, message, onSaved);
   };
   return form;
 }

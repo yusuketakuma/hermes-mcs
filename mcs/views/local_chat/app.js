@@ -174,18 +174,21 @@ async function openDetail(row) {
     const flags = section("記録の状態");
     for (const text of source.message.metadata_flags || []) flags.append(el("p", text));
     const context = contextSection(source.message);
+    const meds = section("薬剤"), medsBody = el("div");
+    // Each post has its own medication view: the original, the selected reply and every listed reply.
+    const medsFor = (messageId, label) => {const button = el("button", label, "text-button"); button.onclick = () => {showMeds(medsBody, messageId, request); medsBody.scrollIntoView({block: "nearest"});}; return button;};
+    meds.append(medsFor(root, row.message_id === root ? "この投稿の薬剤を表示" : "元の投稿の薬剤を表示"));
+    if (row.message_id !== root) meds.append(" ", medsFor(row.message_id, "選択した返信の薬剤を表示"));
+    meds.append(medsBody);
     const thread = section("返信"), older = el("button", "以前の返信を表示", "load-more"), list = el("div");
     let cursor = replies.next_cursor;
-    const appendReplies = (data, prepend) => {const fragment = document.createDocumentFragment(); for (const reply of chronological(data.items)) {fragment.append(post(reply, true)); const files = el("button", "添付・記録の状態", "text-button"); files.onclick = () => showMessageInfo(reply, request); fragment.append(files);} prepend ? list.prepend(fragment) : list.append(fragment);};
+    const appendReplies = (data, prepend) => {const fragment = document.createDocumentFragment(); for (const reply of chronological(data.items)) {fragment.append(post(reply, true)); const files = el("button", "添付・記録の状態", "text-button"); files.onclick = () => showMessageInfo(reply, request); fragment.append(files, medsFor(reply.message_id, "この返信の薬剤"));} prepend ? list.prepend(fragment) : list.append(fragment);};
     appendReplies(replies, false);
     older.hidden = !cursor;
     older.onclick = async () => {older.disabled = true; try {const page = await api("thread", {project, message: root, cursor}); if (request !== state.detailRequest) return; appendReplies(page, true); cursor = page.next_cursor; older.hidden = !cursor;} catch(error) {if (request === state.detailRequest) fail(error);} finally {older.disabled = false;}};
     thread.append(older, list);
     if (!replies.items.length) thread.append(el("p", "保存済みの返信はありません。"));
     if (source.message.reply_count > source.message.stored_replies) thread.append(el("p", "未取得の返信があります。", "state-note"));
-    const meds = section("薬剤"), medsBody = el("div"), medsButton = el("button", "この投稿の薬剤を表示", "text-button");
-    medsButton.onclick = () => showMeds(medsBody, root, request);
-    meds.append(medsButton, medsBody);
     const info = el("div"); info.id = "message-info";
     $("detail-content").replaceChildren(original, flags, context, meds, thread, info);
     await showMessageInfo(row, request, row.message_id !== root);

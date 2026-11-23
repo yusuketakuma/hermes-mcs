@@ -23,7 +23,7 @@ const STAFF_FORM = [
 const HC_ERRORS = {version_conflict: "ほかの人が先に更新しました。入力は残しています。最新を読み直してから、もう一度保存してください。",
   already_linked: "この患者か MCS の患者は、すでに別の相手と対応付けられています。", not_linked: "対応付けが見つかりません。読み直してください。",
   already_assigned: "この職員はすでにこの役割の担当です。", admin_required: "この操作は管理者だけができます。",
-  not_qualified: "この役割に必要な資格を持つ在籍中の職員を選んでください。", role_not_allowed: "この役割は今は使えません。", still_assigned: "担当を持っています。先に担当を交代するか外してください。",
+  not_qualified: "この役割に必要な資格を持つ在籍中の職員を選んでください。", role_not_allowed: "この役割は今は使えません。", still_assigned: "担当を持っています。先に担当を交代するか外してください。", team_changed: "ほかの人が先に担当を変えました。最新のケアチームを読み直しました。",
   actor_required: "操作者を選んでください。", invalid_fields: "入力を確認してください。", not_found: "記録が見つかりません。",
   project_not_allowed: "この MCS の患者は閲覧範囲の外です。",
   route_unavailable: "訪問ルートは設定されていません。", route_failed: "地図サービスからルートを受け取れませんでした。時間をおいてやり直してください。",
@@ -77,20 +77,30 @@ function recordForm(kind, spec, record, onSaved, fixed = {}) {
   for (const item of spec) form.append(field(item, record?.[item[0]], kind));
   const save = el("button", record ? "保存" : "登録", "button");
   form.append(save, message);
+  let current = record;
   form.onsubmit = async event => {
     event.preventDefault(); save.disabled = true; message.textContent = "";
     for (const node of form.querySelectorAll(".invalid")) node.classList.remove("invalid");
+    let data;
     try {
-      const values = {...formValues(form, spec), ...(record ? {} : fixed)};
-      const data = record ? await hcPost(`${kind}.update`, {id: record[`${kind}_id`], values, expected_version: record.version})
-                          : await hcPost(`${kind}.create`, {values});
-      await onSaved(data.record);
+      const values = {...formValues(form, spec), ...(current ? {} : fixed)};
+      data = current ? await hcPost(`${kind}.update`, {id: current[`${kind}_id`], values, expected_version: current.version})
+                     : await hcPost(`${kind}.create`, {values});
     } catch (error) {
       message.textContent = error.message;
       for (const name of error.fields || []) form.querySelector(`[name="${name}"]`)?.closest(".hc-field")?.classList.add("invalid");
-    } finally {save.disabled = false;}
+      save.disabled = false;
+      return;
+    }
+    current = data.record;
+    await afterSave(save, message, () => onSaved(data.record));
   };
   return form;
+}
+async function afterSave(save, message, refresh) {
+  // From here the form edits the stored record, so a retry after a failed refresh never creates it twice.
+  save.textContent = "保存"; save.disabled = false;
+  try {await refresh();} catch {message.textContent = "保存しました。画面を読み直せませんでした。もう一度保存しても二重には登録されません。";}
 }
 async function loadStaff() {
   hc.staff = (await api("hc/staff")).items;
@@ -281,7 +291,7 @@ function careTeam(box, patientId, members, reload) {
   };
   role.onchange = people; people();
   form.append(role, person, el("button", "担当にする", "button"));
-  form.onsubmit = async event => {event.preventDefault(); try {await hcPost("team.assign", {patient: patientId, staff: Number(person.value), role: role.value}); reload();} catch (error) {fail(error);}};
+  form.onsubmit = async event => {event.preventDefault(); try {const holders = members.filter(m => m.role === role.value).map(m => m.staff_id); await hcPost("team.assign", {patient: patientId, staff: Number(person.value), role: role.value, holders}); reload();} catch (error) {fail(error); if (error.code === "team_changed") reload();}};
   box.append(form);
 }
 async function openMcs(projectId) {
@@ -292,7 +302,7 @@ async function openMcs(projectId) {
   if (patient) selectPatient(patient);
 }
 function setMode(mode) {
-  hc.mode = mode; hc.patient = null; ++state.patientRequest; state.project = null; closeDetail();
+  hc.mode = mode; hc.patient = null; ++state.patientRequest; ++hc.request; state.project = null; closeDetail();
   for (const button of document.querySelectorAll("#hc-modes button")) button.classList.toggle("selected", button.dataset.mode === mode);
   for (const id of ["patient-context", "read-only", "detail"]) $(id).hidden = mode !== "mcs";
   document.querySelector(".snapshot-bar").hidden = mode !== "mcs";
