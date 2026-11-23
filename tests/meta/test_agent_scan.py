@@ -190,6 +190,8 @@ def test_workflow_keeps_the_scanning_job_read_only():
     assert "contents: read\n      issues: read" in scan_job and "write" not in scan_job.split("jobs:")[1].split("steps:")[0]
     # Read-only tools: the result comes back as structured output, not as a file the model writes.
     assert '--allowedTools "Read,Glob,Grep"\n' in scan_job and "--json-schema" in scan_job
+    # A scan that stops after a few reads reports a clean tree it never looked at.
+    assert "15回より少ないうちに「指摘なし」と結論しない" in scan_job
     assert "steps.claude.outputs.structured_output" in scan_job
     assert 'plan=$(python3 ci/agent_scan.py plan' in scan_job and "if: steps.plan.outputs.areas != ''" in scan_job
     assert 'cron: "40 */2 * * *"' in scan_job and "fetch-depth: 300" in scan_job
