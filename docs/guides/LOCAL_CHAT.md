@@ -101,7 +101,7 @@ python3 mcs/ops/mcs_local_chat.py \
 
 1. 導入時に `install.sh --with-tailscale`（または `mcs install --with-tailscale`）を実行します。段階1で Tailscale アプリ（Homebrew の `tailscale-app`）を入れます。この選択は保存され、後の更新・再導入でも引き継ぎます。`--with-tailscale` を付けない Mac には入れません。
 2. Tailscale アプリを開き、事業所の Tailscale アカウントでサインインします。管理画面で MagicDNS と HTTPS 証明書を有効にします。
-3. `mcs setup remote` を実行します。この Mac の Tailscale の名前を確かめて設定に保存し、`tailscale serve --bg http://127.0.0.1:8770` で tailnet に公開し、患者画面を常駐サービス（`ai.mcs.local-chat`）として登録します。患者は公開スナップショットの全員、台帳は `data/homecare.db` です。待ち受けの番号は `--port`、訪問ルートの設定ファイルは `--route-settings` で指定できます。
+3. `mcs setup remote` を実行します。この Mac の Tailscale の名前を確かめて設定に保存し、`tailscale serve --bg http://127.0.0.1:8770` で tailnet に公開し、患者画面を常駐サービス（`ai.mcs.local-chat`）として登録します。患者は公開スナップショットの全員、台帳は `data/homecare.db` です。待ち受けの番号は `--port`、訪問ルートの設定ファイルは `--route-settings` で指定できます。公開スナップショットがまだ作られていない間は常駐サービスが起動に失敗し、30秒ごとに起動し直します。最初の収集が終わると開けるようになります。
 4. スマホにも Tailscale を入れて同じアカウントでサインインし、表示された `https://<名前>.<tailnet>.ts.net/` を開きます。
 
 やめるときは `mcs setup remote --off` で常駐サービスを止め、`tailscale serve status` を確かめてから `tailscale serve reset` で公開を止めます。

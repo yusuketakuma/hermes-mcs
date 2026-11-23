@@ -571,8 +571,16 @@ def sync_remote_access(subs, cfg, manifest, note, dry, *, paths: ServicePaths) -
     if not remote_access(cfg):
         return retire_agents({label}, note, dry, paths=paths)
     template = Path(paths.checkout, 'deployment', 'launchagents', label + '.plist').read_text(encoding='utf-8')
-    # The agent reads its settings only at start: their digest in the plist makes a change reload it.
-    settings = hashlib.sha256(json.dumps(remote_access(cfg), sort_keys=True).encode()).hexdigest()[:16]
+    # The agent reads its settings, and the route file's content, only at start: their digest in the plist
+    # makes a change to either reload it.
+    settings = remote_access(cfg)
+    digest = hashlib.sha256(json.dumps(settings, sort_keys=True).encode())
+    if settings.get('route_settings'):
+        try:
+            digest.update(Path(settings['route_settings']).read_bytes())
+        except OSError:
+            pass
+    settings = digest.hexdigest()[:16]
     return _converge_agent(label, contract.render_agent(template, subs | {'REMOTE_ACCESS': settings}), manifest,
                            note, dry, paths=paths)
 

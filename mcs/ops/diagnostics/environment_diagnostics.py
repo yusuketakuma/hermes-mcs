@@ -290,8 +290,8 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
         warnings.append("TYPESAFE_API_KEYは未設定です。"
                         "外部の意味解析を有効にする場合に必要です")
     warnings.extend(cloud_setting_warnings(cfg, paths.root))
-    labels = launch_agents_to_check(cfg)
-    if paths.platform == "darwin" and labels:
+    labels = launch_agents_to_check(cfg) if paths.platform == "darwin" else []
+    if labels:
         agents = agents_dir
         lw = service_contract.LINEWORKS_LABEL
         warnings.extend(

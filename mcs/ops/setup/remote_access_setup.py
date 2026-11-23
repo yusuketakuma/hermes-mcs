@@ -75,6 +75,14 @@ def port_in_use(port):
         return probe.connect_ex(("127.0.0.1", port)) == 0
 
 
+def _save(config_edit, changes):
+    try:
+        _, errors = config_edit.apply(changes)
+    except (config_edit.ConfigConflict, OSError, ValueError):
+        return False
+    return not errors
+
+
 def command(args, *, services) -> int:
     import config_edit
     import mcs_util
@@ -110,7 +118,8 @@ def command(args, *, services) -> int:
     if not 1024 <= port <= 65535:
         print("--port は1024から65535までの番号を指定してください。")
         return 1
-    route, problem = _route_settings(args.route_settings)
+    # A kept file is checked too: the restarted workspace reads it again and would not start without it.
+    route, problem = _route_settings(args.route_settings or current.get("route_settings"))
     if problem:
         print(problem)
         return 1
@@ -121,11 +130,7 @@ def command(args, *, services) -> int:
     changes = {"remote_access.tailnet_host": host, "remote_access.port": port}
     if route is not None:
         changes["remote_access.route_settings"] = route
-    try:
-        _, errors = config_edit.apply(changes)
-    except (config_edit.ConfigConflict, OSError, ValueError):
-        errors = ["config"]
-    if errors:
+    if not _save(config_edit, changes):
         print("設定を保存できなかったため、遠隔接続は設定していません。mcs_setup.py check で確認してください。")
         return 1
     # The workspace starts listening before the port is published, so the tailnet only ever reaches it.
@@ -137,6 +142,11 @@ def command(args, *, services) -> int:
     if served is None or served.returncode != 0:
         print("tailnet への公開を設定できませんでした。Tailscale の管理画面で HTTPS 証明書を有効にし、"
               f"`tailscale serve --bg http://127.0.0.1:{port}` を実行してください。")
+        if current.get("port") not in (None, port):
+            # The published address still points at the old port: put the workspace back there.
+            restore = {f"remote_access.{key}": current.get(key) for key in ("tailnet_host", "port", "route_settings")}
+            if _save(config_edit, restore) and services(args) == 0:
+                print(f"これまでの {current['port']} 番の公開に戻しました。")
         return 1
     if status == 0:
         print(f"遠隔接続を設定しました。同じ tailnet の端末から https://{host}/ を開いてください。")

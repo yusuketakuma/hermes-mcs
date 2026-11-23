@@ -74,6 +74,14 @@ def test_services_install_and_retire_the_resident_agent_beside_either_runtime(mo
     moved = {"runtime_mode": mode, "remote_access": {"tailnet_host": HOST, "port": 9000}}
     assert service_management.sync_remote_access(subs, moved, manifest, lambda _m: None, False, paths=paths) == 0
     assert converged == ["ai.mcs.local-chat"] * 2
+    # Editing the route file in place reloads it too: the agent reads the file only at start.
+    route = tmp_path / "route.json"
+    route.write_text('{"depart_time": "09:00"}')
+    routed = {"runtime_mode": mode, "remote_access": {"tailnet_host": HOST, "route_settings": str(route)}}
+    assert service_management.sync_remote_access(subs, routed, manifest, lambda _m: None, False, paths=paths) == 0
+    route.write_text('{"depart_time": "10:00"}')
+    assert service_management.sync_remote_access(subs, routed, manifest, lambda _m: None, False, paths=paths) == 0
+    assert converged == ["ai.mcs.local-chat"] * 4
     assert service_management.sync_remote_access(subs, {"runtime_mode": mode, "remote_access": {}}, manifest,
                                                  lambda _m: None, False, paths=paths) == 0
     assert retired == [{"ai.mcs.local-chat"}]
@@ -114,14 +122,14 @@ def tailnet(monkeypatch):
     import config_edit
     import mcs_util
 
-    state = SimpleNamespace(calls=[], saved=[], services=0, cfg={}, busy=set(), status={
+    state = SimpleNamespace(calls=[], saved=[], services=0, cfg={}, busy=set(), serve_rc=0, status={
         "BackendState": "Running", "Self": {"DNSName": HOST.upper() + "."}})
 
     def run(cli, *argv):
         state.calls.append(list(argv))
         if argv[:1] == ("status",):
             return SimpleNamespace(returncode=0, stdout=json.dumps(state.status))
-        return SimpleNamespace(returncode=0, stdout="")
+        return SimpleNamespace(returncode=state.serve_rc if argv[:1] == ("serve",) else 0, stdout="")
 
     monkeypatch.setattr(remote, "tailscale_cli", lambda: "/stub/tailscale")
     monkeypatch.setattr(remote, "_run", run)
@@ -198,3 +206,18 @@ def test_the_workspace_starts_before_the_port_is_published(tailnet, monkeypatch)
     order.clear()
     assert remote.command(args, services=lambda _args: order.append("services") or 1) == 1
     assert order == ["status", "services"]
+
+
+def test_a_kept_route_file_is_checked_before_the_workspace_restarts(tailnet, tmp_path):
+    tailnet.cfg = {"remote_access": {"tailnet_host": HOST, "port": 8770, "route_settings": str(tmp_path / "moved.json")}}
+    assert tailnet.run(port=9000) == 1 and tailnet.saved == [] and tailnet.services == 0
+
+
+def test_a_refused_port_change_returns_to_the_published_port(tailnet):
+    tailnet.cfg = {"remote_access": {"tailnet_host": HOST, "port": 8770}}
+    tailnet.serve_rc = 1
+    assert tailnet.run(port=9000) == 1
+    assert tailnet.saved[0]["remote_access.port"] == 9000
+    assert tailnet.saved[1] == {"remote_access.tailnet_host": HOST, "remote_access.port": 8770,
+                                "remote_access.route_settings": None}
+    assert tailnet.services == 2
