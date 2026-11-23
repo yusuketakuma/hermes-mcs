@@ -229,8 +229,10 @@ def test_an_existing_file_that_is_not_a_homecare_database_is_left_untouched(tmp_
     with sqlite3.connect(lookalike) as other:
         other.execute("CREATE TABLE schema_migrations(version TEXT)")
     other.close()
+    before = lookalike.read_bytes()
     with pytest.raises(sqlite3.Error):
         homecare_store.connect(lookalike, REGISTRY.modules)
+    assert lookalike.read_bytes() == before
     with sqlite3.connect(f"{lookalike.as_uri()}?mode=ro", uri=True) as other:
         assert other.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
     other.close()
