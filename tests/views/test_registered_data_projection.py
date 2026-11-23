@@ -325,17 +325,47 @@ def test_patient_index_reads_every_target_as_the_single_target_read(context_db, 
                 json.dumps({**alias, "entity_id": 10.0}), json.dumps({**alias, "dataset": 7})):
         store.artifact_add(ARTIFACT_KIND, raw, project_id=1)
     _metadata(store, "observation_values", [VALUE], pid=2, item_id=2, definition=items[1])
-    for now in (110, 200_000):                     # fresh, and every complete attempt stale
+    # Literal expectations, written from the fixture above (not computed by the code under test): per target
+    # (state, reason, attempted_at of the attempt chosen as newest, attempted_at of the complete attempt chosen,
+    # the scalars of the rows shown) at now=110 (fresh) and now=200_000 (every complete attempt past 86400 s).
+    # An alias row carries scalar 99 (and item 1's alias attempted_at 100), so choosing one changes a line.
+    not_fetched = ("unknown", "not_fetched", None, None, [])
+    expected = {
+        ("medication_periods", None): {110: ("failed", "fetch_error", 70, 60, []),      # failure after success
+                                       200_000: ("failed", "fetch_error", 70, 60, [])},
+        ("observation_items", None): {110: ("complete", None, 100, 100, [None] * 6),
+                                      200_000: ("stale", None, 100, 100, [None] * 6)},  # stale by age
+        # pinned to the replaced item list: stale by a changed definition, rows withheld
+        ("observation_values", 1): {110: ("stale", "definition_mapping_changed", 50, 50, []),
+                                    200_000: ("stale", "definition_mapping_changed", 50, 50, [])},
+        ("observation_values", 2): {110: ("complete", None, 100, 100, [None, 23]),       # success
+                                    200_000: ("stale", None, 100, 100, [None, 23])},
+        # failure after success: the older complete attempt's rows, the newer failed attempt's state
+        ("observation_values", 3): {110: ("failed", "fetch_error", 90, 40, [23]),
+                                    200_000: ("failed", "fetch_error", 90, 40, [23])},
+        ("observation_values", 4): {110: ("failed", "fetch_error", 100, None, []),       # never complete
+                                    200_000: ("failed", "fetch_error", 100, None, [])},
+        ("observation_values", 5): {110: ("complete", None, 10, 10, [23]),               # legacy, unpinned
+                                    200_000: ("stale", None, 10, 10, [23])},
+        ("observation_values", 6): {110: not_fetched, 200_000: not_fetched},             # listed, never attempted
+        ("observation_values", 7): {110: not_fetched, 200_000: not_fetched},             # unknown item
+        ("observation_values", 8): {110: not_fetched, 200_000: not_fetched},
+    }
+
+    def reading(result):
+        return (result["state"], result["reason"], result["attempted_at"], result["last_complete_at"],
+                [row.get("scalar") for row in result["rows"]])
+    for now in (110, 200_000):
         index = MetadataIndex(store.db, 1)
-        targets = [("medication_periods", None), ("observation_items", None),
-                   *(("observation_values", i) for i in range(1, 9))]     # 6: listed, never attempted; 7-8: unknown
-        for dataset, item in targets:
+        for (dataset, item), by_now in expected.items():
             single = get_project_metadata(store.db, 1, dataset, item_id=item, now=now)
+            assert reading(single) == by_now[now], (dataset, item, now)
             assert get_project_metadata(store.db, 1, dataset, item_id=item, now=now, index=index) == single
-        states = {i: get_project_metadata(store.db, 1, "observation_values", item_id=i, now=now, index=index)["state"]
-                  for i in range(1, 7)}
-        if now == 110:     # the fixture covers each state the batch must reproduce
-            assert set(states.values()) >= {"complete", "stale", "failed", "unknown"}
+    assert get_project_metadata(store.db, 1, "observation_values", item_id=5, now=110)["definition_binding"] \
+        == "legacy_unpinned"
+    # the other patient's attempt is not this patient's, and its room (a group) has no karte association
+    assert reading(get_project_metadata(store.db, 2, "observation_values", item_id=2, now=110)) == (
+        "unknown", "association_unverified", None, None, [])
     with pytest.raises(ValueError):
         get_project_metadata(store.db, 1, "observation_items", now=110, index=MetadataIndex(store.db, 2))
 
