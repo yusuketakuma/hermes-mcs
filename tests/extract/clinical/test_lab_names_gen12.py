@@ -1000,3 +1000,38 @@ def test_specimen_sections_are_read_in_linear_time(body):
     began = time.perf_counter()
     assert clinical_values.lab_candidate("WBC", "300", "/μL", body)["confirmation"] == "unverified"
     assert time.perf_counter() - began < 10
+
+
+# The unit ends where the next named reading starts, whatever separator follows its name.
+@pytest.mark.parametrize("name,value,unit,body", [
+    ("Na", "140", "mEq/L", "Na:140mEq/L K:4.0mEq/L Cl:101mEq/L"),
+    ("K", "4.0", "mEq/L", "K 4.0mEq/L Na:140mEq/L Cl:101"),
+    ("BUN", "15", "mg/dL", "BUN：15mg/dL　Cr：0.9mg/dL　eGFR：60"),
+    ("Cr", "0.9", "mg/dL", "BUN：15mg/dL　Cr：0.9mg/dL　eGFR：60"),
+    ("AST", "25", "U/L", "AST=25U/L ALT=30U/L"),
+    ("Hb", "9.8", "g/dL", "Hbは9.8g/dL PLTは15万/μL"),
+    ("Hb", "9.8", "g/dL", "Hb 9.8g/dL PT:12.5秒"),
+    ("WBC", "5200", "/μL", "WBC:5200/μL Hb:12.5g/dL PLT:20.5万/μL"),
+    *(("カリウム", "4.0", unit, f"カリウム 4.0mEq/L {cr}") for unit in ("mEq/L", None)
+      for cr in ("Cr:0.9", "Cr値 0.9", "Crは0.9", "Cr=0.9")),
+    ("カルシウム", "9.0", None, "カルシウム 9.0 mg/dL Cr:0.9"),
+    ("体重", "52.3", "kg", "体重 52.3kg PT 12.5秒"),
+    ("カリウム", "4.0", None, "RBC 450x10^4/μL カリウム 4.0"),
+    ("カリウム", "4.0", None, "RBC 450×10^4/μL カリウム 4.0"),
+    ("カリウム", "4.0", None, "カリウム 4.0 Glu 100"),
+])
+def test_the_next_named_reading_ends_the_unit_whatever_its_separator(name, value, unit, body):
+    assert _validated(name, value, unit, body)["normalized"]["confirmation"] == "quote_supported", body
+
+
+# A unit written right after the number is that number's unit, never the name of a next
+# reading: a dose (10 mg 2) keeps the in-band amount a candidate.
+@pytest.mark.parametrize("name,value,body", [
+    ("カルシウム", "10", "カルシウム 10 mg 2、朝夕"), ("カルシウム", "8", "カルシウム 8 mg 1"),
+    ("カリウム", "4", "カリウム 4 mg 2"), ("カリウム", "4.0", "カリウム 4.0 mg 2"), ("ナトリウム", "140", "ナトリウム 140 mg 3"),
+    ("カリウム", "4", "カリウム 4 Mg 2"), ("カリウム", "4", "カリウム 4 Mg 2.0"), ("カルシウム", "6", "カルシウム 6 Mg 2"),
+    ("カルシウム", "9", "カルシウム 9 Mg 2"),
+])
+def test_a_unit_after_the_number_is_not_the_next_reading(name, value, body):
+    lab = _validated(name, value, None, body)
+    assert lab["normalized"]["confirmation"] == "unverified", body

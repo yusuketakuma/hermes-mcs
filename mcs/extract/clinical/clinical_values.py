@@ -490,10 +490,19 @@ def _spaced(evidence, starts: list, ends: list, at: int) -> bool:
     return 0 < at < len(starts) and evidence[ends[at - 1]:starts[at]].isspace()
 
 
-def _next_reading(quote: str, at: int, stop: int, evidence, starts: list, ends: list) -> int:
-    """Where the first named reading set apart by a space after ``at`` starts, else ``stop``."""
-    return next((item.start() for item in _LAB_NEXT_NUMBER.finditer(quote, at, stop)
-                 if _spaced(evidence, starts, ends, item.start())), stop)
+# Lab and dose unit spellings (mg also spells Mg): written right after a number, they are its unit.
+_UNIT_SPELLINGS = frozenset({*_LAB_UNITS, "mg", "μg", "mcg", "ml"})
+
+
+def _unit_end(quote: str, at: int, stop: int, evidence, starts: list, ends: list) -> int:
+    """Where a quoted unit starting at ``at`` ends: before the first named reading set apart
+    by a space, whatever separator follows its name (Cr 0.9, Cr:0.9, Crは0.9)."""
+    for start in range(at, stop):
+        reading = _spaced(evidence, starts, ends, start) and _LAB_NEXT_NUMBER.match(quote, start)
+        # A unit spelling right after the number is its own unit (10 mg 2), never a next reading.
+        if reading and not (start == at and reading[1] in _UNIT_SPELLINGS):
+            return start
+    return stop
 
 
 def _specimen_sections(quote: str, evidence, starts: list, ends: list,
@@ -552,7 +561,7 @@ _MONTH_DAY = re.compile(r"(?<![\d/年-])(\d{1,2})[/月](\d{1,2})日?(?![\d/])")
 _READING_UNIT = "|".join(re.escape(u) for u in sorted(_LAB_UNITS, key=len, reverse=True))
 _LAB_SPELLINGS = _lab_name_pattern({n for spellings in _LAB_NAMES.values() for n in spellings})
 _READING = (r"(?:" + _LAB_SPELLINGS
-            + r"|[ァ-ヺー]++|[a-z][a-z0-9]*)(?:値|は|:|=)*[0-9]+(?:\.[0-9]+)?"
+            + rf"|[ァ-ヺー]++|[a-z]+(?:[0-9]+(?!{_READING_UNIT})[a-z]+)*[0-9]*)(?:値|は|:|=)*[0-9]+(?:\.[0-9]+)?"
             + rf"(?:{_READING_UNIT})?")
 # The lab section headings of medical_document._HEADINGS (labs_vitals, course_and_labs),
 # repeated here so the validator's decisions do not import the OCR module; a test keeps
@@ -739,7 +748,7 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
             _, line_end = _line_span(quote, match.start(), lines)
             result = _QUOTED_RESULT.match(quote, match.end(), line_end)
             if result and result[2]:
-                result = _QUOTED_RESULT.match(quote, match.end(), _next_reading(
+                result = _QUOTED_RESULT.match(quote, match.end(), _unit_end(
                     quote, result.start(2), result.end(), evidence, starts, ends))
             if result and normalized_quantity_number(result[1]) == number:
                 if (_RANGE_FOLLOWS.match(quote, result.end()) or (
