@@ -113,11 +113,25 @@ def test_skip_row_names_its_request_so_a_carry_stops_at_it(tmp_path):
         policy = semantic_policy.policy_fingerprint(scfg)
         bundle = semantic_store.thread_bundle(db.db, 1, 1, [1, 2, 3])
         jev_input = semantic_store.assessment_input(bundle, 1, scfg)
-        rows = semantic_store._assessment_history_rows(db.db, 1, [1]).get(1, ())
-        newest = json.loads(rows[0]["meta"])
+        def rows():
+            return semantic_store._assessment_history_rows(db.db, 1, [1]).get(1, ())
+
+        newest = json.loads(rows()[0]["meta"])
         assert newest["technical_status"] == "skipped" and newest["jev_input"] == jev_input
-        # a later complete row of this request under an older fingerprint is not reached
-        assert semantic_store._carried_primary_assessment(rows, 1, policy, scfg, jev_input) is None
+        # An older complete answer to the same request under another thread
+        # fingerprint must not be reached past the newer skip.
+        answered = next(r for r in rows() if json.loads(r["meta"])["technical_status"] == "complete")
+        meta = {**json.loads(answered["meta"]), "fingerprint": "synthetic-older", "jev_input": jev_input}
+        db.artifact_add(semantic_drain.KIND_ASSESS, answered["content"], project_id=1, message_id=1,
+                        model=jev.JEV_MODEL, meta=meta)
+        skip_id, older_id = (r[0] for r in db.db.execute(
+            "SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=1 "
+            "ORDER BY artifact_id DESC LIMIT 2", (semantic_drain.KIND_ASSESS,)).fetchall()[::-1])
+        with db.db:
+            for src, dst in ((skip_id, -1), (older_id, skip_id), (-1, older_id)):
+                db.db.execute("UPDATE artifacts SET artifact_id=? WHERE artifact_id=?", (dst, src))
+        assert json.loads(rows()[1]["meta"])["fingerprint"] == "synthetic-older"
+        assert semantic_store._carried_primary_assessment(rows(), 1, policy, scfg, jev_input) is None
     finally:
         db.close()
 
