@@ -88,6 +88,12 @@ def test_summary_card_and_read_model_agree_on_an_unlinked_karte(led):
     assert status["state"] == read_model._project_metadata(led.db, "detail", 1, None)["records"][0]["state"] == "unknown"
     assert status["line"] == "連携サマリー（MCS）: 未確認" and status["comment"] is None
     assert "■ 連携サマリー（MCS）: 未確認" in notify_views.patient_summary_text(led.db, 1)[1]
+    # a failed latest fetch on top: still nothing shown and no claim that the previous content is shown
+    led.db.execute("UPDATE patients SET karte_summary_failed_at=1793491200 WHERE project_id=1")
+    failed = notify_views.karte_summary_status(led.db, 1)
+    assert (failed["state"], failed["comment"], failed["line"]) == ("unknown", None, "連携サマリー（MCS）: 未確認")
+    assert "前回" not in notify_views.patient_summary_text(led.db, 1)[1]
+    led.db.execute("UPDATE patients SET karte_summary_failed_at=NULL WHERE project_id=1")
     led.db.execute("UPDATE patients SET karte_id=7 WHERE project_id=1")
     assert notify_views.karte_summary_status(led.db, 1)["state"] == "present"
     assert read_model._project_metadata(led.db, "detail", 1, None)["records"][0]["state"] == "reported"
@@ -132,6 +138,12 @@ def test_search_counts_unsearched_sources_from_the_stored_posts(led):
 def test_unreadable_settings_leave_the_ocr_side_unknown(led):
     _patient(led)
     _msg(led, 101)
-    notes = notify_views.patient_search_view(led.db, 1, "本文", settings_unreadable=True)["notes"]
+    view = notify_views.patient_search_view(led.db, 1, "本文", settings_unreadable=True)
+    notes = view["notes"]
     assert notify_views.OCR_SEARCH_SETTINGS_UNREADABLE in notes
     assert not any("設定で無効" in note for note in notes)
+    # attachments were not examined: no OCR count, and the chat text never states a 0 for it
+    assert view["skipped"] == {"ocr_pending": None, "body_unavailable": 0, "unclassified": 0}
+    assert not any("OCR未完了" in line for line in notes + view["head"])
+    readable = notify_views.patient_search_view(led.db, 1, "本文")
+    assert readable["skipped"]["ocr_pending"] == 0     # a readable setting keeps its observed count

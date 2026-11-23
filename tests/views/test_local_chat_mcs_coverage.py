@@ -809,3 +809,4 @@ def test_source_search_with_unreadable_settings_says_ocr_is_unknown(snapshot, mo
     assert data["state"] == "searched" and {item["message_id"] for item in data["items"]} == {30, 31}
     assert notify_views.OCR_SEARCH_SETTINGS_UNREADABLE in data["notes"]
     assert not any("設定で無効" in note for note in data["notes"])
+    assert data["skipped"]["ocr_pending"] is None     # not examined, never an observed 0

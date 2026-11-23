@@ -331,13 +331,16 @@ function karteCard(karte) {
   // MCS 患者連携サマリー: the whole comment when present, otherwise exactly which of 未取得 / 取得失敗 / 空 it is.
   if (!karte) return card("連携サマリー（MCS）", [el("p", "連携サマリーの状態を取得できませんでした。", "state-note")]);
   const box = card("連携サマリー（MCS）", [], {actions: [chip(karteStates[karte.state] || "状態不明", ["present", "empty"].includes(karte.state) ? "muted" : "warn")]});
-  const absent = {not_fetched: "MCS の連携サマリーはまだ取得していません。", failed: "MCS の連携サマリーを取得できませんでした。", empty: "MCS の連携サマリーは空でした。"};
+  const absent = {not_fetched: "MCS の連携サマリーはまだ取得していません。", failed: "MCS の連携サマリーを取得できませんでした。", empty: "MCS の連携サマリーは空でした。",
+    unknown: "保存済みの連携サマリーを確認できないため、表示できる内容はありません。"};
   if (karte.comment) box.append(el("p", karte.comment, "karte-comment"));
   else if (!(karte.state === "failed" && karte.failed_at != null)) box.append(el("p", absent[karte.state] || "連携サマリーの状態を確認できません。", "state-note"));
   const meta = [karte.updated_at && `MCS の更新 ${karte.updated_at}`, karte.updater_profession && `更新した職種 ${karte.updater_profession}`].filter(Boolean);
   if (meta.length) box.append(el("p", meta.join(" · "), "karte-meta"));
-  if (karte.failed_at != null) box.append(el("p", karte.state === "failed" ? `最新の取得に失敗しました（${postTime(karte.failed_at)}）。一度も取得できていません。`
-    : `最新の取得に失敗しました（${postTime(karte.failed_at)}）。前回取得した内容を表示しています。`, "state-note"));
+  // 「前回取得した内容」 only when the card shows what the last fetch obtained (its comment, or that it was empty).
+  const failed = karte.failed_at != null && `最新の取得に失敗しました（${postTime(karte.failed_at)}）。`;
+  if (failed) box.append(el("p", failed + (karte.state === "failed" ? "一度も取得できていません。"
+    : karte.comment || karte.state === "empty" ? "前回取得した内容を表示しています。" : ""), "state-note"));
   return box;
 }
 function post(row, detailed = false) {
@@ -798,16 +801,14 @@ const unsearchedNote = /まだ調べていない範囲/;
 function searchNotes(ranges) {
   // What was not searched, over every range searched so far: a running total where the server reports it,
   // the latest range's notes, and earlier ranges' notes that the latest one does not repeat.
+  // A count the server did not report (null: that source was not examined) is never read as 0: each kind sums the
+  // ranges that reported it, says when some did not, and is left out when none did.
   const lines = [];
-  const reported = ranges.filter(range => range.skipped);
-  if (reported.length) {
-    const parts = skippedKinds.map(([key, label]) => {
-      const values = reported.map(range => range.skipped[key]);
-      const total = values.reduce((sum, value) => sum + (typeof value === "number" ? value : 0), 0);
-      return `${label} ${total}件${values.some(value => typeof value !== "number") ? "以上" : ""}`;
-    });
-    lines.push(el("p", `ここまでの範囲で: ${parts.join(" / ")}${reported.length < ranges.length ? "（件数の報告がない範囲を除く）" : ""}`, "state-note"));
-  }
+  const parts = skippedKinds.flatMap(([key, label]) => {
+    const values = ranges.map(range => range.skipped?.[key]).filter(value => typeof value === "number");
+    return values.length ? [`${label} ${values.reduce((sum, value) => sum + value, 0)}件${values.length < ranges.length ? "（件数の報告がない範囲を除く）" : ""}`] : [];
+  });
+  if (parts.length) lines.push(el("p", `ここまでの範囲で: ${parts.join(" / ")}`, "state-note"));
   const latest = ranges[ranges.length - 1].notes;
   lines.push(...latest.map(note => el("p", note, "state-note")));
   const earlier = [...new Set(ranges.slice(0, -1).flatMap(range => range.notes))].filter(note => !latest.includes(note) && !unsearchedNote.test(note));

@@ -272,37 +272,43 @@ def _registered_clinical_lines(db, project_id) -> list[str]:
     if registered is None or not registered["total"]:
         return []
     names, states = REGISTERED_NAMES, REGISTERED_STATES
+    unfetched = registered["unfetched_omitted"]
+    # stored records past the bounded read: their state was not read, so they stay out of the totals
+    unread = registered["total"] - len(registered["records"]) - unfetched
     lines = ["■ MCS登録情報（チャットとは別の記録・抜粋）"]
     for dataset, name in names.items():
         records = [r for r in registered["records"] if r["dataset"] == dataset]
-        if not records:
+        values = dataset == "observation_values"
+        if not records and not (values and unfetched + unread):
             continue
-        counts = {}
+        counts = {"unknown": unfetched} if values and unfetched else {}
         for record in records:
             counts[record["state"]] = counts.get(record["state"], 0) + 1
-        if dataset != "observation_values":
+        if not values:
             record = records[0]
             suffix = (f"（{record['rows_total']}{'処方期間' if dataset == 'medication_periods' else '項目'}）"
                       if record.get("last_complete_at") is not None else "")
             lines.append(f"・{name}: {states.get(record['state'], '未確認')}{suffix}")
-        else:
-            lines.append(f"・{name}: " + "、".join(
-                f"{states.get(state, '未確認')} {count}項目" for state, count in sorted(counts.items())))
-        if dataset == "observation_values":
-            for record in records[:3]:
-                definition = record.get("definition") or {}
-                lab = definition.get("lab_test_item") or {}
-                rows = record.get("rows") or []
-                if not rows:
-                    continue
-                row = rows[0]
-                values = " / ".join(str(row[key]) for key in ("scalar", "max", "min", "left", "right")
-                                    if row.get(key) is not None)
-                if values:
-                    previous = "・以前取得した情報" if record.get("historical") else ""
-                    lines.append(f"  {inline_text(lab.get('name'), 35) or '観測項目'}: {values} "
-                                 f"{inline_text(lab.get('unit'), 20)}（記録日 "
-                                 f"{inline_text(row.get('observation_issued_at'), 35) or '不明'}{previous}）")
+            continue
+        lines.append(f"・{name}: " + "、".join(
+            f"{states.get(state, '未確認')} {count}項目" for state, count in sorted(counts.items())))
+        if unread:
+            lines.append(f"  他{unread}項目の取得状態は抜粋外（原記録で確認）")
+        shown = []
+        for record in records:
+            row = (record.get("rows") or [None])[0] or {}
+            text = " / ".join(str(row[key]) for key in ("scalar", "max", "min", "left", "right")
+                              if row.get(key) is not None)
+            if text:
+                shown.append((record, row, text))
+        for record, row, text in shown[:3]:
+            lab = (record.get("definition") or {}).get("lab_test_item") or {}
+            previous = "・以前取得した情報" if record.get("historical") else ""
+            lines.append(f"  {inline_text(lab.get('name'), 35) or '観測項目'}: {text} "
+                         f"{inline_text(lab.get('unit'), 20)}（記録日 "
+                         f"{inline_text(row.get('observation_issued_at'), 35) or '不明'}{previous}）")
+        if len(shown) > 3:
+            lines.append(f"  他{len(shown) - 3}項目の観測値は抜粋外（原記録で確認）")
     return lines
 
 
@@ -787,8 +793,10 @@ def patient_search_view(db, project_id, query, *, cfg=None, cursor=None, keep_me
     return {"title": f"🔎 {name} — 「{inline_text(query, 40)}」の検索結果",
             "head": head, "items": items, "more": 0,
             "next_cursor": result['next_cursor'], "range_complete": result['range_complete'],
-            # this range's unsearched counts, for a reader that adds them up across 「続きを検索」 ranges
-            "skipped": {"ocr_pending": result['pending'], "body_unavailable": result['unavailable'],
+            # this range's unsearched counts, for a reader that adds them up across 「続きを検索」 ranges;
+            # attachments left unexamined because the settings are unreadable have no count (None), not 0
+            "skipped": {"ocr_pending": None if settings_unreadable else result['pending'],
+                        "body_unavailable": result['unavailable'],
                         "unclassified": result['unclassified']},
             # no match says what was searched: an unsearched, unfetched or unanalysed source is not no record
             "empty": ("この範囲の解析済みの原資料には、この分類で一致する記載は見つかりませんでした。"

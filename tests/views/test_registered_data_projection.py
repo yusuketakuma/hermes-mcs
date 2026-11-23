@@ -220,3 +220,43 @@ def test_item_without_a_values_attempt_is_listed_as_not_fetched(context_db, monk
     assert [r["item_id"] for r in stored["records"] if r["dataset"] == "observation_values"] == [55]
     lines = "\n".join(notify_views._registered_clinical_lines(store.db, 1))
     assert "・観測値: " in lines and "未取得・未確認 1項目" in lines
+
+
+def test_summary_unfetched_items_do_not_take_the_stored_value_slots(context_db, monkeypatch):
+    import notify_views
+    store = context_db
+    _clinical(store, monkeypatch)
+
+    def item(i, name):
+        return {"lab_test_item": {**DEFINITION["lab_test_item"], "id": i, "name": name}}
+    stored = item(99, "合成の取得済み項目")
+    pin = _metadata(store, "observation_items", [*(item(i, f"合成の未取得{i}") for i in range(1, 7)), stored])
+    _metadata(store, "observation_values", [VALUE], item_id=99, definition=stored, pin=pin)
+    bounded = registered_data(store.db, "detail", 1, 8, unfetched_items=True)
+    values = [r for r in bounded["records"] if r["dataset"] == "observation_values"]
+    # the stored item is read first; the never-attempted ones past the bound are counted, not dropped
+    assert [r["item_id"] for r in values] == [1, 2, 3, 4, 5, 99]
+    assert (bounded["total"], bounded["unfetched_omitted"], bounded["truncated"]) == (9, 1, True)
+    lines = notify_views._registered_clinical_lines(store.db, 1)
+    assert "・観測値: 取得済み 1項目、未取得・未確認 6項目" in lines
+    assert any(line.startswith("  合成の取得済み項目: 23 ") for line in lines)
+    assert not any("抜粋外" in line for line in lines)
+
+
+def test_summary_says_which_stored_items_were_left_out(context_db, monkeypatch):
+    import notify_views
+    store = context_db
+    _clinical(store, monkeypatch)
+    items = [{"lab_test_item": {**DEFINITION["lab_test_item"], "id": i, "name": f"合成項目{i}"}} for i in range(1, 10)]
+    pin = _metadata(store, "observation_items", items)
+    for definition in items:
+        _metadata(store, "observation_values", [VALUE], item_id=definition["lab_test_item"]["id"],
+                  definition=definition, pin=pin)
+    lines = notify_views._registered_clinical_lines(store.db, 1)
+    # 8 slots: 2 datasets + 6 stored value items read; 3 stored items past the bound have an unread state
+    assert "・観測値: 取得済み 6項目" in lines
+    assert "  他3項目の取得状態は抜粋外（原記録で確認）" in lines
+    assert [line.split(":")[0].strip() for line in lines if ": 23 " in line] == ["合成項目1", "合成項目2", "合成項目3"]
+    assert "  他3項目の観測値は抜粋外（原記録で確認）" in lines
+    # default (stored-only) output is unchanged by the opt-in bookkeeping
+    assert "unfetched_omitted" not in registered_data(store.db, "detail", 1, 8)

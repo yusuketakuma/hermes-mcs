@@ -466,6 +466,12 @@ async function checkMcsData() {
   assert.match(karte({state: "not_fetched"}), /未取得[\s\S]*まだ取得していません/);
   assert.match(karte({state: "failed", failed_at: 1793491200}), /取得失敗[\s\S]*一度も取得できていません/);
   assert.match(karte({state: "empty"}), /空（MCS に記載がありません）[\s\S]*空でした/);
+  // A stored summary that cannot be confirmed for the current karte shows nothing, and a failed latest fetch
+  // never claims the previous content is shown.
+  const unconfirmed = karte({state: "unknown", comment: null, failed_at: 1793491200});
+  assert.match(unconfirmed, /未確認[\s\S]*確認できないため、表示できる内容はありません[\s\S]*最新の取得に失敗しました/);
+  assert.doesNotMatch(unconfirmed, /前回取得した内容/);
+  assert.match(karte({state: "empty", failed_at: 1793491200}), /空でした[\s\S]*前回取得した内容を表示しています/);
   assert.match(karte(null), /取得できませんでした/);
   // 9. Search: source and page, notes, empty, 続きを検索, unavailable.
   run("state.project = 101; state.query = '合成'; state.panel = ''");
@@ -498,11 +504,18 @@ async function checkMcsData() {
   await run("loadSearch()");
   await run("state.search.more.onclick()");
   let notes = texts(run("state.search.notes").children);
-  assert.match(notes, /ここまでの範囲で: OCR未完了 3件 \/ 本文未取得 1件以上 \/ 未分類 3件/);
+  assert.match(notes, /ここまでの範囲で: OCR未完了 3件 \/ 本文未取得 1件（件数の報告がない範囲を除く） \/ 未分類 3件(\||$)/);
   assert.match(notes, /合成の前の範囲の注記/); assert.equal((notes.match(/まだ調べていない範囲/g) || []).length, 1);
   await run("state.search.more.onclick()");
   notes = texts(run("state.search.notes").children);
   assert.match(notes, /件数の報告がない範囲を除く/); assert.match(notes, /合成の最後の注記[\s\S]*合成の前の範囲の注記/);
+  assert.doesNotMatch(notes, /以上/, "an unreported count is excluded, not a lower bound");
+  // OCR not examined (settings unreadable): null in every range never reads as 「OCR未完了 0件」.
+  const unexamined = [{state: "searched", items: [], notes: ["合成のOCR未確認の注記"], skipped: {ocr_pending: null, body_unavailable: 0, unclassified: 0}, next_cursor: null, range_complete: true}];
+  sandbox.api = async kind => kind === "senders" ? {items: [], next_cursor: null} : unexamined.shift();
+  await run("loadSearch()");
+  notes = texts(run("state.search.notes").children);
+  assert.match(notes, /ここまでの範囲で: 本文未取得 0件 \/ 未分類 0件(\||$)/); assert.doesNotMatch(notes, /OCR未完了/);
   assert.doesNotMatch(notes, /まだ調べていない範囲/, "only the latest range says a range is left");
   // A query with no sender word skips the block; other failures say so.
   sandbox.api = async kind => {if (kind === "senders") throw Object.assign(new Error("x"), {code: "bad_request"}); return {state: "searched", items: [], notes: [], next_cursor: null};};
