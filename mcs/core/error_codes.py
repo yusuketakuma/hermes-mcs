@@ -41,7 +41,7 @@ KNOWN_ERROR_CODES = frozenset({
     "bad_correlation", "bad_cross_list_scope", "bad_dataset", "bad_delivery", "bad_delivery_id", "bad_delivery_message_id", "bad_discord_file_group", "bad_discord_file_identity",
     "bad_drug_view_navigation", "bad_edit_only", "bad_event_ids", "bad_face_post", "bad_face_posts", "bad_footer", "bad_footer_item", "bad_intent_event_ids",
     "bad_interaction_privacy_policy", "bad_journal_budget", "bad_json", "bad_kind", "bad_limit", "bad_lineworks_scope", "bad_logical_intent_id", "bad_manifest",
-    "bad_max_age_s", "bad_mentions", "bad_message_id", "bad_name", "bad_op", "bad_operator_verified", "bad_page", "bad_part_caption",
+    "bad_max_age_s", "bad_mentions", "bad_message_id", "bad_name", "bad_needs_confirmation", "bad_op", "bad_operator_verified", "bad_page", "bad_part_caption",
     "bad_part_id", "bad_part_identity", "bad_part_index", "bad_part_keys", "bad_part_kind", "bad_part_sha256", "bad_parts", "bad_patient_history_parts",
     "bad_payload", "bad_period", "bad_phase", "bad_plan", "bad_post_action", "bad_post_action_id", "bad_post_actions", "bad_post_source",
     "bad_preview_text", "bad_prior_owner_message_id", "bad_prior_remote_id", "bad_processing_display", "bad_profession_map", "bad_project", "bad_project_scope", "bad_provider_states",

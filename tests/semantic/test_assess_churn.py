@@ -102,6 +102,26 @@ def test_new_reply_and_edit_still_ask_again(tmp_path):
         db.close()
 
 
+def test_skip_row_names_its_request_so_a_carry_stops_at_it(tmp_path):
+    db, _ = _thread(tmp_path)
+    try:
+        reply = _message(3, parent=1, body="合成の追加返信です。", posted_at=POSTED[2])
+        db.save_messages([reply], project_id=1, notify={"source": "history"}, semantic=True)
+        semantic_drain.run_due(db, CFG, {"errors": []}, time.monotonic() + 300, jev_client=None,
+                               llm_fn=lambda _: pytest.fail("must not call LLM"))
+        scfg = semantic_policy.runtime_config(CFG)[0]
+        policy = semantic_policy.policy_fingerprint(scfg)
+        bundle = semantic_store.thread_bundle(db.db, 1, 1, [1, 2, 3])
+        jev_input = semantic_store.assessment_input(bundle, 1, scfg)
+        rows = semantic_store._assessment_history_rows(db.db, 1, [1]).get(1, ())
+        newest = json.loads(rows[0]["meta"])
+        assert newest["technical_status"] == "skipped" and newest["jev_input"] == jev_input
+        # a later complete row of this request under an older fingerprint is not reached
+        assert semantic_store._carried_primary_assessment(rows, 1, policy, scfg, jev_input) is None
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize("damage", ["invalidated", "stale", "retry_wait", "policy", "registry"])
 def test_carry_never_bypasses_the_newest_row_of_the_input(tmp_path, damage):
     db, _ = _thread(tmp_path)

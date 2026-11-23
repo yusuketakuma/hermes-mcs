@@ -253,10 +253,12 @@ The Jev incremental-value experiment is a separate synthetic comparison; its rep
 - Primary assessment request identity: the thread-wide fingerprint also
   moves with stored fields Jev never receives (`reply_count`, attachment
   download state, sender display name and organization).
-  `semantic_store.assessment_input` hashes exactly what one primary
-  request sends (target, same-thread context, active questions, Jev
-  model) and is recorded as `meta.jev_input` on every primary
-  `semantic_assess` row. When a target has no row under the new
+  `semantic_store.assessment_input` hashes what one primary assessment
+  asks (target, same-thread context, active questions, Jev model) and is
+  recorded as `meta.jev_input` on every primary `semantic_assess` row,
+  skipped rows included. It names the whole assessment, not an HTTP
+  request: the client may split the questions and drops answered ones
+  on retry. When a target has no row under the new
   fingerprint and the newest row recorded for the same `jev_input` and
   policy is complete and valid, `semantic_job_processor._carry_assessment`
   writes its verdicts under the new fingerprint with `jev_requests: 0`

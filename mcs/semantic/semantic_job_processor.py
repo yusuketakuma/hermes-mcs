@@ -497,15 +497,16 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     def record_skipped_assessment(mid, previous, reason, partial=None):
         partial = partial or {}
         guard("assessment_skip")
+        meta = _assessment_meta(scfg, bundle, mid, fp, policy)
+        # A skip row names its request too, so a carry never reaches past it.
         if previous is None or (previous["meta"].get("technical_status") != "skipped"
                                 or previous["meta"].get("jev_skip_reason") != reason
+                                or previous["meta"].get("jev_input") != meta["jev_input"]
                                 or previous["content"].get("verdicts") != partial):
             ledger.artifact_add(
                 KIND_ASSESS, json.dumps({"target_message_id": mid, "verdicts": partial}, ensure_ascii=False),
                 project_id=pid, message_id=mid, model=jev.JEV_MODEL,
-                meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
-                      "schema": SCHEMA_VERSION, "model": jev.JEV_MODEL, "registry": jev.REGISTRY_VERSION,
-                      "technical_status": "skipped", "jev_skip_reason": reason})
+                meta={**meta, "technical_status": "skipped", "jev_skip_reason": reason})
 
     def activate_skip(reason):
         nonlocal jev_skip, jev_client
