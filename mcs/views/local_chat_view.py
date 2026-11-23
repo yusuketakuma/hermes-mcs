@@ -11,6 +11,7 @@ import notify_views
 PANEL_LABELS = {"summary": "記録のまとめ", **{
     key: label for key, label in notify_views.CONTEXT_SECTIONS.items() if key != "measurements"},
     "signals": "未解消のシグナル"}
+CONTEXT_PANELS = frozenset(PANEL_LABELS) - {"summary", "signals"}
 
 
 def require_project(project, allowed):
@@ -142,15 +143,17 @@ def sections():
     return {"items": [{"key": key, "label": label} for key, label in PANEL_LABELS.items()]}
 
 
-def panel(view, allowed, project, section, *, page=0, role="", message_id=None):
-    """One patient view rendered by the same notify_views projection the chat cards use."""
+def panel(view, allowed, project, section, *, page=0, role="", message_id=None, since=None):
+    """One patient view rendered by the same notify_views projection the chat cards use.
+
+    ``since`` (a visit sheet's last visit) is for the patient-context sections only."""
     from mcs_util import load_config
-    from patient_context_view import first_changes_baseline
+    import patient_brief
 
     require_project(project, allowed)
     if type(page) is not int or not 0 <= page <= 100000 or role not in notify_views.CONTEXT_ROLES:
         raise ValueError("bad_arguments")
-    if (section == "meds") != (message_id is not None):
+    if (section == "meds") != (message_id is not None) or since is not None and section not in CONTEXT_PANELS:
         raise ValueError("bad_arguments")
     cfg, now = load_config(), view.meta["generated_at"]
     if section == "meds":
@@ -161,14 +164,12 @@ def panel(view, allowed, project, section, *, page=0, role="", message_id=None):
         result = {"title": title, "body": body}
     elif section == "signals":
         result = _signals(view, project)
-    elif section in PANEL_LABELS:
-        # A local reader has no stored viewing checkpoint: changes compare against the first-view baseline.
-        result = notify_views.patient_context_list(
-            view.db, project, section, cfg=cfg, since=first_changes_baseline(now), now=now,
-            role=role, page=page, first_view=True, keep_message_id=True)
+    elif section in CONTEXT_PANELS:
+        # Without a visit to count from, changes compare against the first-view baseline.
+        result = patient_brief.section(view.db, project, section, cfg=cfg, now=now, since=since, role=role, page=page)
     else:
         raise ValueError("unknown_view")
-    items = [{key: item.get(key) for key in ("group", "text", "quotes", "source", "message_id")}
+    items = [{key: item.get(key) for key in patient_brief.ITEM_KEYS}
              for item in result.get("items") or [] if item.get("project_id", project) == project]
     return {"snapshot": view.meta, "section": section, "panel": {
         **{key: result.get(key) for key in ("title", "body", "head", "empty", "more", "notes", "page", "pages")},

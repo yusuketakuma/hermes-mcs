@@ -191,7 +191,7 @@ async function showHcPatient(patientId) {
 const visitLine = visit => `${visit.visit_date}${visit.start_time ? " " + visit.start_time : ""} · ${hc.meta.visit_kinds[visit.kind] || visit.kind} · ${VISIT_STATUS[visit.status]}${visit.staff_name ? " · " + visit.staff_name : ""}`;
 async function patientVisits(box, patientId) {
   const reload = () => patientVisits(box, patientId);
-  const data = await api("hc/visits", {patient: patientId}).catch(error => {if (box.childElementCount) throw error; fail(error); return null;});
+  const data = await api("hc/visits", {patient: patientId}).catch(error => {if (box.childElementCount) throw error; if (hc.patient === patientId) fail(error); return null;});
   if (hc.patient !== patientId) return;
   box.replaceChildren(el("h3", "訪問"));
   if (!data) {box.append(el("p", "訪問の記録を読み込めませんでした。", "state-note")); return;}
@@ -260,7 +260,15 @@ async function sheetBrief(box, patientId, link) {
   if (!data) {box.replaceChildren(el("p", "MCS の記録を読み込めませんでした。タイムラインから確認してください。", "state-note")); return;}
   box.replaceChildren(el("p", data.since ? "「前回から変わったこと」は最後に実施した訪問からの変化です。" : "実施済みの訪問がないため、「前回から変わったこと」は直近7日の変化です。", "state-note"));
   // Posts open from the timeline: the sheet does not carry the chat's selected patient.
-  for (const section of data.sections) box.append(renderPanel({...section, items: section.items.map(item => ({...item, message_id: null}))}));
+  const unlinked = view => ({...view, items: view.items.map(item => ({...item, message_id: null}))});
+  for (const section of data.sections) {
+    // Later pages come from the same snapshot route, counted from the same last visit.
+    const show = (target, view) => target.replaceChildren(renderPanel(unlinked(view), async page => {
+      const next = await api("panel", {project: link.project_id, section: section.key, page, since: data.since}).catch(error => {if (hc.patient === patientId) fail(error); return null;});
+      if (next && hc.patient === patientId && target.isConnected) show(target, {...next.panel, key: section.key});
+    }));
+    const target = el("div"); show(target, section); box.append(target);
+  }
 }
 async function showDay(date) {
   const current = hcScreen(); hc.patient = null; closeDetail();
@@ -268,7 +276,7 @@ async function showDay(date) {
   const picker = el("form", null, "hc-inline"), input = el("input"); input.type = "date"; input.value = date;
   picker.append(input, el("button", "この日を表示", "button")); picker.onsubmit = event => {event.preventDefault(); if (input.value) showDay(input.value);};
   const list = el("section", null, "detail-section"), routeBox = el("section", null, "detail-section");
-  const data = await api("hc/visits", {date}).catch(error => {fail(error); return null;});
+  const data = await api("hc/visits", {date}).catch(error => {if (current()) fail(error); return null;});
   if (!current()) return;
   list.append(el("h3", "この日の訪問"));
   if (!data) list.append(el("p", "この日の訪問を読み込めませんでした。", "state-note"));

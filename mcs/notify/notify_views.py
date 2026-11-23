@@ -1036,20 +1036,23 @@ def _bare_quote(text: str, category) -> str:
 
 def patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0, first_view=False,
                          intervention_history=False, intervention_cursor=None, measurement=None,
-                         keep_message_id=False):
-    """``keep_message_id`` keeps each row's source post id for a reader that links rows to posts; chat cards drop it."""
+                         keep_message_id=False, since_label="前回の表示依頼"):
+    """``keep_message_id`` keeps each row's source post id for a reader that links rows to posts; chat cards drop it.
+    ``since_label`` names what ``since`` is in the 前回から変わったこと header."""
     if section == "measurements":
         return _measurement_list(db, project_id, measurement)
     if section not in ("care_events", "background", "timeline", "previsit"):
         return _patient_context_list(db, project_id, section, cfg=cfg, since=since, now=now,
                                      role=role, page=page, first_view=first_view, intervention_history=intervention_history,
-                                     intervention_cursor=intervention_cursor, keep_message_id=keep_message_id)
+                                     intervention_cursor=intervention_cursor, keep_message_id=keep_message_id,
+                                     since_label=since_label)
     # Coverage, source references and the final rendered labels share the same snapshot.
     db.execute("SAVEPOINT care_event_notification")
     try:
         result = _patient_context_list(db, project_id, section, cfg=cfg, since=since, now=now,
                                        role=role, page=page, first_view=first_view, intervention_history=intervention_history,
-                                       intervention_cursor=intervention_cursor, keep_message_id=keep_message_id)
+                                       intervention_cursor=intervention_cursor, keep_message_id=keep_message_id,
+                                     since_label=since_label)
     except BaseException:
         try:
             db.execute("RELEASE care_event_notification")
@@ -1099,7 +1102,8 @@ def _measurement_list(db, project_id, measurement):
 
 
 def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0, first_view=False,
-                          intervention_history=False, intervention_cursor=None, keep_message_id=False):
+                          intervention_history=False, intervention_cursor=None, keep_message_id=False,
+                          since_label="前回の表示依頼"):
     """Private patient-context views as source-bound rows: each row keeps the original
     quotes and one compact source line (when · who · which post); consecutive items of
     one post in one group share that line. Every row carries project_id so the
@@ -1243,7 +1247,7 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         view = views.changes(db, ev, since)
         stamped = stamp_time(datetime.fromtimestamp(since, JST)) if since else None
         head.append("初回（直近7日）: " + stamped + "から" if first_view and stamped
-                    else "前回の表示依頼: " + (stamped or "初回"))
+                    else f"{since_label}: " + (stamped or "初回"))
         for key, label in DISCOVERY_LABELS:
             add(view["by_discovery"].get(key, []), label)
         # a deleted post shows only when its deletion was observed, never its old text

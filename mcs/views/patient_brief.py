@@ -21,8 +21,9 @@ def section(db, project_id, key, *, cfg, now, since=None, role="", page=0) -> di
     baseline = first_changes_baseline(now) if since is None else since
     result = notify_views.patient_context_list(
         db, project_id, key, cfg=cfg, since=baseline, now=now, role=role, page=page,
-        first_view=since is None, keep_message_id=True)
-    items = [{k: item.get(k) for k in ITEM_KEYS}
+        first_view=since is None, keep_message_id=True, since_label="前回の訪問")
+    # An attachment OCR record links to the post that carries the attachment.
+    items = [{**{k: item.get(k) for k in ITEM_KEYS}, "message_id": item.get("message_id") or item.get("parent_message_id")}
              for item in result.get("items") or [] if item.get("project_id", project_id) == project_id]
     return {"key": key, "label": notify_views.CONTEXT_SECTIONS[key],
             **{k: result.get(k) for k in ("title", "head", "empty", "more", "notes", "page", "pages")},

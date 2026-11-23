@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sqlite3
 from types import SimpleNamespace
+import time
 import urllib.request
 from urllib.parse import parse_qs, urlsplit
 
@@ -77,6 +78,19 @@ def test_database_is_private_migrated_per_module_and_reopenable(tmp_path):
     assert [tuple(row) for row in again.execute("SELECT module, number FROM schema_migrations")] == [
         ("core", 1), ("core", 2), ("core", 3), ("pharmacy", 1)]
     again.close()
+
+
+def test_opening_a_migrated_ledger_does_not_wait_for_a_writer(tmp_path):
+    path = tmp_path / "homecare.db"
+    writer = homecare_store.connect(path, REGISTRY.modules)
+    writer.execute("BEGIN IMMEDIATE")
+    try:
+        started = time.monotonic()
+        homecare_store.connect(path, REGISTRY.modules).close()
+        assert time.monotonic() - started < 5
+    finally:
+        writer.execute("ROLLBACK")
+        writer.close()
 
 
 def test_applied_migration_must_not_change_and_newer_database_is_refused(tmp_path):
@@ -532,6 +546,9 @@ def test_only_pharmacists_record_a_home_visit_as_done_while_clerks_plan_deliver_
     done = visits.update(db, REGISTRY, planned["visit_id"], {"status": "done"}, expected_version=1, actor=me["staff_id"])
     with pytest.raises(ValueError, match="visit_not_qualified"):  # a clerk does not rewrite the clinical record
         visits.update(db, REGISTRY, done["visit_id"], {"note": "合成"}, expected_version=2, actor=clerk["staff_id"])
+    with pytest.raises(ValueError, match="visit_not_qualified"):  # nor cancels a visit that took place
+        visits.update(db, REGISTRY, done["visit_id"], {"status": "cancelled"}, expected_version=2,
+                      actor=clerk["staff_id"])
     delivered = visits.create(db, REGISTRY, visit_values(row["patient_id"], kind="pharmacy.delivery", status="done",
                                                          staff_id=clerk["staff_id"]), actor=clerk["staff_id"])
     assert delivered["status"] == "done"

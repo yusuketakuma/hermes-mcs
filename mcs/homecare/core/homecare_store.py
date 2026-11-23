@@ -75,30 +75,43 @@ def _require_homecare_file(path):
 
 
 def _migrate(db, modules):
+    # An up-to-date ledger is only read: a request that opens it never queues behind a writer.
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").fetchone() \
+            and not _apply(db, modules, write=False):
+        return
     db.execute("BEGIN IMMEDIATE")
     try:
         db.execute("CREATE TABLE IF NOT EXISTS schema_migrations (module TEXT NOT NULL, number INTEGER NOT NULL, "
                    "name TEXT NOT NULL, sha256 TEXT NOT NULL, applied_at REAL NOT NULL, PRIMARY KEY(module, number))")
-        for module in modules:
-            applied = {row["number"]: row for row in db.execute(
-                "SELECT * FROM schema_migrations WHERE module=?", (module.name,))}
-            known = migrations(module.migrations)
-            if applied and max(applied) > len(known):
-                raise RuntimeError(f"homecare database is newer than this code: {module.name}")
-            for number, name, sql in known:
-                digest = hashlib.sha256(sql.encode()).hexdigest()
-                if number in applied:
-                    if applied[number]["sha256"] != digest:
-                        raise RuntimeError(f"applied homecare migration changed: {module.name}/{name}")
-                    continue
-                for statement in _statements(sql):
-                    db.execute(statement)
-                db.execute("INSERT INTO schema_migrations VALUES(?,?,?,?,?)",
-                           (module.name, number, name, digest, time.time()))
+        _apply(db, modules, write=True)
         db.execute("COMMIT")
     except BaseException:
         db.execute("ROLLBACK")
         raise
+
+
+def _apply(db, modules, *, write) -> int:
+    """Check every applied migration is unchanged; apply the missing ones when ``write``. Returns how many were missing."""
+    missing = 0
+    for module in modules:
+        applied = {row["number"]: row for row in db.execute(
+            "SELECT * FROM schema_migrations WHERE module=?", (module.name,))}
+        known = migrations(module.migrations)
+        if applied and max(applied) > len(known):
+            raise RuntimeError(f"homecare database is newer than this code: {module.name}")
+        for number, name, sql in known:
+            digest = hashlib.sha256(sql.encode()).hexdigest()
+            if number in applied:
+                if applied[number]["sha256"] != digest:
+                    raise RuntimeError(f"applied homecare migration changed: {module.name}/{name}")
+                continue
+            missing += 1
+            if write:
+                for statement in _statements(sql):
+                    db.execute(statement)
+                db.execute("INSERT INTO schema_migrations VALUES(?,?,?,?,?)",
+                           (module.name, number, name, digest, time.time()))
+    return missing
 
 
 def _statements(sql):

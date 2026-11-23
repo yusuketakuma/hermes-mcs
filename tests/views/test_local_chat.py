@@ -487,3 +487,23 @@ def test_context_panel_rows_keep_their_source_post_for_the_open_button(snapshot)
     finally:
         view.close()
     assert all("message_id" not in item for item in card["items"])  # chat cards are unchanged
+
+
+def test_attachment_ocr_rows_open_the_post_that_carries_the_attachment(snapshot, monkeypatch):
+    import notify_views
+    rows = [{"text": "添付の記録", "message_id": 0, "parent_message_id": 7},
+            {"text": "出所のない記録"}]
+    monkeypatch.setattr(notify_views, "patient_context_list", lambda *a, **k: {"items": rows})
+    items = chat.response(snapshot, {1}, "panel", "project=1&section=background")["panel"]["items"]
+    assert [item["message_id"] for item in items] == [7, None]
+
+
+def test_visit_sheet_pages_count_from_the_same_last_visit(snapshot):
+    sheet = chat.response(snapshot, {1}, "panel", "project=1&section=changes&since=1700000000&page=0")["panel"]
+    assert any(line.startswith("前回の訪問: ") for line in sheet["head"]), sheet["head"]
+    plain = chat.response(snapshot, {1}, "panel", "project=1&section=changes")["panel"]
+    assert any(line.startswith("初回（直近7日）") for line in plain["head"]), plain["head"]
+    for query in ("project=1&section=summary&since=1", "project=1&section=signals&since=1",
+                  "project=1&section=changes&since=-1", "project=1&since=1"):
+        with pytest.raises(ValueError):
+            chat.response(snapshot, {1}, "panel" if "section" in query else "timeline", query)
