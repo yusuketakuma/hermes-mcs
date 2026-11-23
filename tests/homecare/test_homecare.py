@@ -713,7 +713,8 @@ def test_route_sends_addresses_only_caches_locations_and_lists_unlocated_visits(
         [[7 * 3600 + 45 * 60, 8 * 3600 + 15 * 60]], [[9 * 3600 + 45 * 60, 10 * 3600 + 15 * 60]], None]
     sent = " ".join(r.full_url + (r.data or b"").decode() for r in fake.sent)
     assert "合成 一郎" not in sent and "秘密のメモ" not in sent and str(one["patient_id"]) not in sent.split("q=")[0]
-    assert all(r.get_header("Authorization") in (None, "synthetic-key-0000") for r in fake.sent)
+    assert {(r.full_url.startswith(route.GEOCODE_URL), r.get_header("Authorization")) for r in fake.sent} == {
+        (True, None), (False, "synthetic-key-0000")}  # the key goes to openrouteservice only, never to GSI
     geocoded = [r for r in fake.sent if r.full_url.startswith(route.GEOCODE_URL)]
     route.plan(db, settings, "2026-11-24", actor=me["staff_id"], fetch=fake)
     again = [r for r in fake.sent if r.full_url.startswith(route.GEOCODE_URL)]
