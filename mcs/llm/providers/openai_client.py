@@ -74,8 +74,8 @@ def select_profile(purpose, chosen, configured_model):
     return (profile, *PROFILE_DEFINITIONS[profile]) if profile in PROFILE_DEFINITIONS else None
 
 
-def legacy_request_proven(previous, current_body):
-    """Prove the old low-effort Responses envelope without persisting the prompt."""
+def legacy_request_effort(previous, current_body):
+    """"low" when the record is proven to be the old low-effort Responses envelope, else None."""
     if (previous.get('model') != MODEL or 'effort' in previous or 'profile' in previous
             or not isinstance(current_body, dict)
             or set(current_body) != {'model', 'instructions', 'input', 'max_output_tokens', 'reasoning',
@@ -85,10 +85,10 @@ def legacy_request_proven(previous, current_body):
             or not isinstance(current_body.get('input'), str)
             or current_body.get('store') is not False or current_body.get('service_tier') != 'default'
             or current_body.get('prompt_cache_options') != {'ttl': '30m'} or current_body.get('tools') != []):
-        return False
+        return None
     old_body = {**current_body, 'model': MODEL,
                 'max_output_tokens': previous['max_tokens'], 'reasoning': {'effort': 'low'}}
-    return payload_hash(old_body) == previous.get('request_fp')
+    return 'low' if payload_hash(old_body) == previous.get('request_fp') else None
 
 
 def request_contract_error(body, selection):

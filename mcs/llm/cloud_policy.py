@@ -833,10 +833,11 @@ def _semantic_financial_identity(meta):
     return target, source, phase
 
 
-def _legacy_request_proven(previous, current_body):
-    """Prove an older record's request without persisting the prompt; each provider knows its own old shape."""
-    return any(module.legacy_request_proven(previous, current_body)
-               for module in provider_registry.PROVIDER_MODULES.values())
+def _legacy_request_effort(previous, current_body):
+    """The effort an older record without one was proven to have sent, else None.
+    The prompt is not persisted; each provider knows its own old request shape."""
+    return next((effort for module in provider_registry.PROVIDER_MODULES.values()
+                 if (effort := module.legacy_request_effort(previous, current_body)) is not None), None)
 
 
 def _selection_differs(previous, candidate, current_body):
@@ -846,8 +847,8 @@ def _selection_differs(previous, candidate, current_body):
     if not isinstance(new_effort, str):
         return False
     old_effort = previous.get('effort')
-    if old_effort is None and _legacy_request_proven(previous, current_body):
-        old_effort = 'low'
+    if old_effort is None:
+        old_effort = _legacy_request_effort(previous, current_body)
     return isinstance(old_effort, str) and old_effort != new_effort
 
 
@@ -1070,7 +1071,7 @@ def _guard_repeated_request(ledger, candidate, *, current_body=None, local_fallb
                     continue
                 prompt_verified = True
                 guard_match = 'logical_equal'
-            elif _legacy_request_proven(previous, current_body):
+            elif _legacy_request_effort(previous, current_body) is not None:
                 prompt_verified = True
                 guard_match = 'legacy_low_verified'
             else:

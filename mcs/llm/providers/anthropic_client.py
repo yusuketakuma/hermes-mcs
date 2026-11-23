@@ -161,9 +161,9 @@ def select_profile(purpose, chosen, configured_model):
     return (profile, *PROFILE_DEFINITIONS[profile]) if profile in PROFILE_DEFINITIONS else None
 
 
-def legacy_request_proven(previous, current_body):
-    """No older Anthropic request shape needs proving: the original contract never changed on the wire."""
-    return False
+def legacy_request_effort(previous, current_body):
+    """None: no older Anthropic request shape needs proving, as the original contract never changed on the wire."""
+    return None
 
 
 def request_contract_error(body, selection):
