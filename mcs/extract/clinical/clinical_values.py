@@ -489,6 +489,17 @@ def _part_of_drug_name(name: str, before: str) -> bool:
             or bool(_SALT_STEM.search(fold_surface(re.split(r"\s", before)[-1]))))
 
 
+def _spaced(evidence, starts: list, ends: list, at: int) -> bool:
+    """Whether a space or a line break dropped by folding precedes folded position ``at``."""
+    return 0 < at < len(starts) and evidence[ends[at - 1]:starts[at]].isspace()
+
+
+def _next_reading(quote: str, at: int, stop: int, evidence, starts: list, ends: list) -> int:
+    """Where the first named reading set apart by a space after ``at`` starts, else ``stop``."""
+    return next((item.start() for item in _LAB_NEXT_NUMBER.finditer(quote, at, stop)
+                 if _spaced(evidence, starts, ends, item.start())), stop)
+
+
 def _other_reading(analyte: str | None, quote: str, match: re.Match,
                    evidence: str, starts: list, lines: list[int]) -> bool:
     """A name match that belongs to a drug, another specimen or another sense of the spelling."""
@@ -680,8 +691,13 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
             continue
         # Positions, not slices: each match costs only its own surroundings.
         if number is not None:
-            # The number and its unit end with their source line (カリウム 4.0\nCr 0.9).
-            result = _QUOTED_RESULT.match(quote, match.end(), _line_span(quote, match.start(), lines)[1])
+            # The number and its unit end with their source line (カリウム 4.0\nCr 0.9) or where
+            # the next named reading starts after a space (カリウム 4.0mEq/L Cr 0.9).
+            _, line_end = _line_span(quote, match.start(), lines)
+            result = _QUOTED_RESULT.match(quote, match.end(), line_end)
+            if result and result[2]:
+                result = _QUOTED_RESULT.match(quote, match.end(), _next_reading(
+                    quote, result.start(2), result.end(), evidence, starts, ends))
             if result and normalized_quantity_number(result[1]) == number:
                 if (_RANGE_FOLLOWS.match(quote, result.end()) or (
                         analyte in _SPECIMEN_SHARED_ITEMS and _QUALITATIVE_RESULT.match(quote, result.end()))):
@@ -692,20 +708,18 @@ def lab_candidate(name: str, value: str | int | float, unit: str | None,
                     continue
                 unit_matches = ((_LAB_UNITS.get(quoted, quoted) == normalized_unit) if unit_key
                                 else not quoted or quoted in allowed_units)
-                _, line_end = _line_span(quote, match.start(), lines)
                 if result.end() > row_end:
                     tail_end = _LAB_RESULT_END.search(quote, result.end(), line_end)
                     row_end = tail_end.start() if tail_end else line_end
                 if unit_matches and _LAB_NUMBER_CLOSED_TAIL.fullmatch(quote, result.end(), row_end):
                     readings.append((match, row_end))
-                elif unit_matches or (unit_key and quoted.startswith(unit_key)):
+                elif unit_matches:
                     # Folding drops column whitespace. Verify the boundary in the original text.
-                    unit_end = result.end() if unit_matches else result.start(2) + len(unit_key)
+                    unit_end = result.end()
                     if (unit_end < line_end and _LAB_NEXT_NUMBER.match(quote, unit_end)
-                            and evidence[ends[unit_end - 1]:starts[unit_end]].isspace()):
-                        repeats = any(
-                            item[1] in names and evidence[ends[item.start() - 1]:starts[item.start()]].isspace()
-                            for item in _LAB_NEXT_NUMBER.finditer(quote, unit_end, row_end))
+                            and _spaced(evidence, starts, ends, unit_end)):
+                        repeats = any(item[1] in names and _spaced(evidence, starts, ends, item.start())
+                                      for item in _LAB_NEXT_NUMBER.finditer(quote, unit_end, row_end))
                         if repeats:
                             ambiguous = True
                             break

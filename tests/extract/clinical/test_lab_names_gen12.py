@@ -902,3 +902,27 @@ def test_a_long_panel_with_an_unmatched_word_is_read_in_bounded_time(count, body
 ])
 def test_the_layout_grammars_still_accept_their_readings(grammar, text):
     assert getattr(clinical_values, grammar).fullmatch(clinical_values.fold_surface(text))
+
+
+# A following Latin-labelled reading is not the unit of the reading before it.
+@pytest.mark.parametrize("name,value,unit,body", [
+    *((n, v, None, f"{n} {v} {label}") for n, v in (("カリウム", "4.0"), ("ナトリウム", "140"), ("カルシウム", "9.0"))
+      for label in ("Cr 0.9", "BUN 15", "eGFR 60", "CRP 0.1", "HbA1c 6.5%")),
+    *((n, v, u, f"{n} {v}{u} {label}") for n, v, u in (("K", "4.0", "mEq/L"), ("カリウム", "4.0", "mEq/L"),
+                                                       ("Na", "140", "mEq/L"), ("ナトリウム", "140", "mmol/L"),
+                                                       ("Ca", "9.0", "mg/dL"), ("カルシウム", "9.0", "mg/dL"))
+      for label in ("Cr 0.9", "BUN 15", "eGFR 60", "CRP 0.1", "HbA1c 6.5%")),
+    *((n, v, None, f"{n} {v}{u} {label}") for n, v, u in (("カリウム", "4.0", "mEq/L"), ("ナトリウム", "140", "mmol/L"),
+                                                          ("カルシウム", "9.0", "mg/dL"))
+      for label in ("Cr 0.9", "BUN 15", "eGFR 60", "CRP 0.1", "HbA1c 6.5%")),
+])
+def test_a_following_latin_labelled_reading_is_not_the_unit(name, value, unit, body):
+    lab = _validated(name, value, unit, body)
+    assert lab["normalized"]["confirmation"] == "quote_supported", body
+    assert lab["value"] == value
+
+
+# A unit glued to the next label without a space is still not read as this item's unit.
+@pytest.mark.parametrize("body", ["カリウム 4.0mEq/LCr 0.9", "カリウム 4.0Cr 0.9", "カリウム 4.0 錠Cr 0.9"])
+def test_a_unit_glued_to_another_word_keeps_the_reading_a_candidate(body):
+    assert _confirmation("カリウム", "4.0", body) == "unverified"
