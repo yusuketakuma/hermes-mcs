@@ -4,6 +4,7 @@ Covers: summary counts (evaluated/unevaluated/verdicts/pending), the
 flagged list (non-MATCH items, urgency mismatch, unevaluated), and the
 per-message detail with staleness marking.
 """
+import json
 import time
 
 import pytest
@@ -324,3 +325,121 @@ def test_qc_view_separates_age_scope_from_unfinished_work(tmp_path, monkeypatch)
             view.close()
     finally:
         db.close()
+
+
+def _mark_fixed(db, mid, qc_fix, providers=None):
+    """Synthetic settle marker (and provider record) on the audited extraction."""
+    with db.db:
+        db.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.qc_fix',json(?)) WHERE artifact_id=("
+                      "SELECT MAX(artifact_id) FROM artifacts WHERE kind='extract_llm' AND message_id=?)",
+                      (json.dumps(qc_fix), mid))
+        if providers is not None:
+            db.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.provider_provenance',json(?)) "
+                          "WHERE artifact_id=(SELECT MAX(artifact_id) FROM artifacts "
+                          "WHERE kind='extract_llm' AND message_id=?)",
+                          (json.dumps({"providers": providers}), mid))
+
+
+_NO_MATCH = {"qc": "done", "items": [{"section": "symptoms", "index": 0, "item": {"text": "C"},
+                                      "verdict": "NO_MATCH", "noul": 0.1}]}
+
+
+def test_qc_view_marks_confirmation_candidates_after_both_automatic_attempts(tmp_path):
+    db = _seeded(tmp_path)
+    try:
+        _mark_fixed(db, 1, {"qc": 1, "applied": True, "attempt": 2})          # local + cloud, still flagged
+        _mark_fixed(db, 2, {"qc": 1, "applied": True})                        # local only so far
+        _mark_fixed(db, 3, {"qc": 1, "applied": False}, providers=["anthropic"])  # kept a cloud result
+        _mark_fixed(db, 4, {"qc": 1, "applied": False, "attempt": 2})         # only undetermined now
+        for mid in (1, 2):
+            _qc(db, mid, _NO_MATCH)
+        _qc(db, 3, {"qc": "done", "items": [], "urgency": {"extracted": "routine", "jev": "high"}})
+        _qc(db, 4, {"qc": "done", "items": [{"section": "meds", "index": 0, "item": {"name": "A"},
+                                             "verdict": "UNDETERMINED"}]})
+        db.save_messages([_message(5), _message(6)])
+        for mid in (5, 6):
+            _v2(db, mid)
+            _qc(db, mid, _NO_MATCH)
+        _mark_fixed(db, 5, {"qc": 1, "applied": True})       # local fix, then a plain cloud send of this source
+        with db.db:
+            db.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at)"
+                          " VALUES('cloud_usage_reserve',1,5,'{}','m',?,?)",
+                          (json.dumps({"route": "reextract"}), time.time() + 1))
+        view = _view(db, tmp_path)
+        try:
+            out = view.read("qc", project=1)
+            only = view.read("qc", project=1, needs_confirmation=True)
+            with pytest.raises(ValueError, match="bad_needs_confirmation"):
+                view.read("status", needs_confirmation=True)
+            with pytest.raises(ValueError, match="bad_needs_confirmation"):
+                view.read("qc", project=1, message_id=1, needs_confirmation=True)
+        finally:
+            view.close()
+        rows = {i["message_id"]: (i["qc_attempts"], i["needs_confirmation"], i["followup_state"])
+                for i in out["items"]}
+        assert rows == {1: (2, True, "needs_confirmation"), 2: (1, False, "cloud_reextract_pending"),
+                        3: (1, True, "needs_confirmation"), 4: (2, False, None),
+                        5: (1, True, "needs_confirmation"), 6: (0, False, "local_reextract_pending")}
+        assert [i["message_id"] for i in only["items"]] == [5, 3, 1]
+        assert out["summary"]["needs_confirmation"] == only["summary"]["needs_confirmation"] == 3
+        assert out["summary"]["followup"] == {"local_reextract_pending": 1, "cloud_reextract_pending": 1,
+                                              "needs_confirmation": 3}
+        assert out["legend"]["followup_state"]["cloud_reextract_pending"].startswith("クラウド再抽出待ち")
+        assert out["legend"]["needs_confirmation"] == (
+            "確認候補: 自動の再抽出（ローカル1回・クラウド1回）の後も、本文に裏付けが見つからない項目"
+            "または緊急度の相違が残る抽出。誤りと確定したものではない")
+    finally:
+        db.close()
+
+
+def test_qc_view_reads_the_durable_cloud_attempt_record_of_the_body(tmp_path):
+    import extract_llm
+    db = _seeded(tmp_path)
+    try:
+        db.save_messages([_message(mid) for mid in (7, 8, 9)])
+
+        def attempt(mid, state, **binding):
+            content_hash, source = db.db.execute(
+                "SELECT m.content_hash,(SELECT MAX(a.artifact_id) FROM artifacts a WHERE a.kind='extract_llm' "
+                "AND a.message_id=m.message_id) FROM messages m WHERE m.message_id=?", (mid,)).fetchone()
+            binding = {key: source if value == "own" else value for key, value in binding.items()}
+            with db.db:   # no accounting rows: maintenance pruned them long ago
+                db.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at)"
+                              " VALUES(?,1,?,?,'','{}',?)", (extract_llm.CLOUD_ATTEMPT_KIND, mid, json.dumps(
+                                  {"hash": content_hash, "purpose": "qc", "state": state, **binding}),
+                                  time.time() - 90 * 86400))
+        for mid in (7, 8, 9):
+            _v2(db, mid)
+            _qc(db, mid, _NO_MATCH)
+            _mark_fixed(db, mid, {"qc": 1, "applied": True})
+        attempt(7, "open", source_artifact_id="own", revision=0)
+        attempt(7, "closed")                                       # failed or held, nothing re-stored
+        attempt(8, "open", source_artifact_id="own", revision=0)   # unfinished: resumes
+        attempt(9, "open", source_artifact_id=-1, revision=0)      # an earlier extraction's attempt
+        view = _view(db, tmp_path)
+        try:
+            out = view.read("qc", project=1)
+        finally:
+            view.close()
+        rows = {i["message_id"]: (i["qc_attempts"], i["needs_confirmation"], i["followup_state"])
+                for i in out["items"] if i["message_id"] in (7, 8, 9)}
+        assert rows == {7: (1, True, "needs_confirmation"), 8: (1, False, "cloud_reextract_pending"),
+                        9: (1, True, "needs_confirmation")}
+    finally:
+        db.close()
+
+
+def test_qc_view_needs_confirmation_flag_reaches_the_cli(tmp_path, capsys):
+    import ledger
+    import mcs_view
+    db = _seeded(tmp_path)
+    try:
+        _mark_fixed(db, 1, {"qc": 1, "applied": True, "attempt": 2})
+        _qc(db, 1, _NO_MATCH)
+        _qc(db, 2, _NO_MATCH)
+        snap = ledger.publish_snapshot(str(tmp_path / "ledger.db"), str(tmp_path / "snap"))
+    finally:
+        db.close()
+    assert mcs_view.main(["--snapshot", snap, "qc", "--project", "1", "--needs-confirmation"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert [i["message_id"] for i in out["items"]] == [1] and out["items"][0]["needs_confirmation"] is True

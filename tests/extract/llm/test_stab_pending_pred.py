@@ -124,6 +124,16 @@ def _corpus(tmp_path):
         "qc": "done", "items": [{"section": "symptoms", "verdict": "NO_MATCH",
                                  "item": {"text": "a"}}]},
          meta={"source_artifact_id": src, "qc": "done"})
+    src = _add(db, 25, {"qc_fix": {"qc": 1, "applied": True, "attempt": 2}})
+    _add(db, 25, kind="extract_qc", content={                # still flagged after the cloud attempt
+        "qc": "done", "items": [{"section": "symptoms", "verdict": "NO_MATCH",
+                                 "item": {"text": "a"}}]},
+         meta={"source_artifact_id": src, "qc": "done"})
+    src = _add(db, 26, {"qc_fix": {"qc": 1, "applied": False, "attempt": 1}})
+    _add(db, 26, kind="extract_qc", content={                # explicit first attempt, flagged
+        "qc": "done", "items": [], "urgency": {"jev": "high", "extracted": "routine"}},
+         meta={"source_artifact_id": src, "qc": "done"})
+    _add(db, 27, {"qc_fix": {"qc": 1, "applied": True}})     # local fix not re-audited yet
     cur = _add(db, 18)                                       # human report
     _add(db, 18, kind="extract_feedback_v1", content={"artifact_id": cur})
     _add(db, 19, raw_meta="{not json")                       # bad meta
@@ -151,7 +161,7 @@ def test_guarded_pending_pred_matches_reference(tmp_path):
         assert new == ref
         # the fixture exercises each branch, not an empty corpus
         assert {1, 6, 7, 10, 15, 18, 21}.issubset(ref)
-        assert not {5, 11, 12, 14, 16, 17, 20, 40} & ref
+        assert not {5, 11, 12, 14, 16, 17, 20, 25, 26, 27, 40} & ref
     finally:
         db.close()
 
@@ -170,6 +180,27 @@ def test_two_pass_selection_equals_grouped_query(tmp_path):
                                   "SELECT 1 FROM artifacts WHERE kind=? AND message_id=?",
                                   (KIND, m)).fetchone()}
         assert 9 not in ref and 8 not in ref and 23 not in ref and 19 in ref
+    finally:
+        db.close()
+
+
+def test_cloud_followup_reads_only_a_reaudited_first_qc_fix(tmp_path):
+    """qc_cloud names the flagged source of a first (local) QC fix; booleans above are unchanged."""
+    db, now = _corpus(tmp_path)
+    try:
+        rows = db.db.execute(
+            extract_llm._selection_sql(db.db, "DESC", "", None, cloud_followup=True),
+            (None, 1, 0, now, now, 10_000)).fetchall()
+        followup = {r["message_id"] for r in rows if r["qc_cloud"] is not None}
+        assert followup == {17, 26}
+        assert all(r["qc_cloud"] == r["qc_src"] for r in rows if r["qc_cloud"] is not None)
+        plain = db.db.execute(extract_llm._selection_sql(db.db, "DESC", "", None),
+                              (None, 1, 0, now, now, 10_000)).fetchall()
+        assert all(r["qc_cloud"] is None for r in plain)
+        attempts = dict(db.db.execute(
+            "SELECT message_id, " + extract_llm.qc_fix_attempt_sql("meta") + " FROM artifacts "
+            "WHERE kind=? AND message_id IN (5, 17, 25, 26, 27)", (KIND,)).fetchall())
+        assert attempts == {5: 0, 17: 1, 25: 2, 26: 1, 27: 1}
     finally:
         db.close()
 
