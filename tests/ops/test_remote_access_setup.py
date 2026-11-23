@@ -40,6 +40,12 @@ def test_doctor_expects_the_resident_agent_only_on_a_mac_set_up_for_other_device
         assert service_contract.REMOTE_ACCESS_LABEL in service_contract.diagnosed_agent_labels(configured)
     assert service_contract.owns_agent(service_contract.REMOTE_ACCESS_LABEL)
 
+    import environment_diagnostics
+    standalone = {"runtime_mode": "standalone", "sdc": {"enabled": False}}
+    assert environment_diagnostics.launch_agents_to_check(standalone) == []
+    assert environment_diagnostics.launch_agents_to_check(standalone | {"remote_access": {"tailnet_host": HOST}}) == [
+        service_contract.REMOTE_ACCESS_LABEL]
+
 
 @pytest.mark.parametrize("mode", ["standalone", "hermes"])
 def test_services_install_and_retire_the_resident_agent_beside_either_runtime(mode, tmp_path, monkeypatch):
@@ -61,6 +67,13 @@ def test_services_install_and_retire_the_resident_agent_beside_either_runtime(mo
     assert service_management.sync_remote_access(subs, cfg, manifest, lambda _m: None, False, paths=paths) == 0
     assert (agents / "ai.mcs.local-chat.plist").exists() and converged == ["ai.mcs.local-chat"]
     assert manifest["agents"][0]["label"] == "ai.mcs.local-chat" and manifest["agents"][0]["loaded"] is True
+    # The agent reads its settings only at start, so a changed port reloads it; unchanged settings do not.
+    monkeypatch.setattr(service_management, "agent_loaded", lambda label, *, paths: True)
+    assert service_management.sync_remote_access(subs, cfg, manifest, lambda _m: None, False, paths=paths) == 0
+    assert converged == ["ai.mcs.local-chat"]
+    moved = {"runtime_mode": mode, "remote_access": {"tailnet_host": HOST, "port": 9000}}
+    assert service_management.sync_remote_access(subs, moved, manifest, lambda _m: None, False, paths=paths) == 0
+    assert converged == ["ai.mcs.local-chat"] * 2
     assert service_management.sync_remote_access(subs, {"runtime_mode": mode, "remote_access": {}}, manifest,
                                                  lambda _m: None, False, paths=paths) == 0
     assert retired == [{"ai.mcs.local-chat"}]
@@ -69,10 +82,11 @@ def test_services_install_and_retire_the_resident_agent_beside_either_runtime(mo
 def test_the_agent_template_takes_every_setting_from_the_config():
     text = (REPO / "deployment/launchagents" / f"{service_contract.REMOTE_ACCESS_LABEL}.plist").read_text()
     rendered = service_contract.render_agent(text, {"PYTHON": "/venv/python3", "REPO": "/repo", "DATA": "/root/data",
-                                                    "RUN_LOG_HELPER": "/root/helper.py"})
+                                                    "RUN_LOG_HELPER": "/root/helper.py", "REMOTE_ACCESS": "0123"})
     agent = plistlib.loads(rendered.encode())
     assert agent["Label"] == service_contract.REMOTE_ACCESS_LABEL and agent["KeepAlive"] is True
     assert agent["ProgramArguments"][-3:] == ["/venv/python3", "/repo/mcs/ops/mcs_local_chat.py", "--resident"]
+    assert agent["EnvironmentVariables"] == {"MCS_REMOTE_ACCESS_SETTINGS": "0123"} and "__" not in rendered
 
 
 def test_resident_arguments_come_from_the_saved_settings(tmp_path):
@@ -100,7 +114,7 @@ def tailnet(monkeypatch):
     import config_edit
     import mcs_util
 
-    state = SimpleNamespace(calls=[], saved=[], services=0, cfg={}, status={
+    state = SimpleNamespace(calls=[], saved=[], services=0, cfg={}, busy=set(), status={
         "BackendState": "Running", "Self": {"DNSName": HOST.upper() + "."}})
 
     def run(cli, *argv):
@@ -111,6 +125,7 @@ def tailnet(monkeypatch):
 
     monkeypatch.setattr(remote, "tailscale_cli", lambda: "/stub/tailscale")
     monkeypatch.setattr(remote, "_run", run)
+    monkeypatch.setattr(remote, "port_in_use", lambda port: port in state.busy)
     monkeypatch.setattr(mcs_util, "load_config_checked", lambda *a, **k: state.cfg)
     monkeypatch.setattr(config_edit, "apply", lambda changes: (state.saved.append(changes), ({}, []))[1])
 
@@ -151,6 +166,8 @@ def test_route_settings_must_be_private(tailnet, tmp_path):
     settings.chmod(0o644)
     assert tailnet.run(route_settings=str(settings)) == 1 and tailnet.saved == []
     settings.chmod(0o600)
+    assert tailnet.run(route_settings=str(settings)) == 1 and tailnet.saved == []  # the server would refuse it
+    settings.write_text(json.dumps({"openrouteservice_key": "synthetic-key-0000", "origin_address": "合成市1-1"}))
     assert tailnet.run(route_settings=str(settings)) == 0
     assert tailnet.saved[-1]["remote_access.route_settings"] == str(settings.resolve())
 
@@ -160,3 +177,24 @@ def test_off_clears_the_settings_and_retires_the_agent(tailnet):
     assert tailnet.run(off=True) == 0
     assert tailnet.saved == [{"remote_access.tailnet_host": None, "remote_access.port": None}]
     assert tailnet.services == 1 and tailnet.calls == []
+
+
+def test_setup_never_publishes_a_port_another_program_holds(tailnet, capsys):
+    tailnet.busy = {8770}
+    assert tailnet.run() == 1 and tailnet.saved == [] and not any(c[:1] == ["serve"] for c in tailnet.calls)
+    assert "--port" in capsys.readouterr().out
+    # Re-running on the port the workspace already uses is fine: that listener is the workspace itself.
+    tailnet.cfg = {"remote_access": {"tailnet_host": HOST, "port": 8770}}
+    assert tailnet.run() == 0
+
+
+def test_the_workspace_starts_before_the_port_is_published(tailnet, monkeypatch):
+    order, run = [], remote._run
+    monkeypatch.setattr(remote, "_run", lambda cli, *argv: order.append(argv[0]) or run(cli, *argv))
+    args = SimpleNamespace(port=None, route_settings=None, off=False)
+    assert remote.command(args, services=lambda _args: order.append("services") or 0) == 0
+    assert order == ["status", "services", "serve"]
+    # A workspace that cannot start is never published.
+    order.clear()
+    assert remote.command(args, services=lambda _args: order.append("services") or 1) == 1
+    assert order == ["status", "services"]

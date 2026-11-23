@@ -18,6 +18,12 @@
     <string>--resident</string>
   </array>
   <key>WorkingDirectory</key><string>__REPO__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- Not read by the program: a digest of the remote_access settings, so a changed port or route file
+         changes this file and `services` reloads the agent, which reads its settings only at start. -->
+    <key>MCS_REMOTE_ACCESS_SETTINGS</key><string>__REMOTE_ACCESS__</string>
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>30</integer>

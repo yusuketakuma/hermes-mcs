@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 
 from mcs_config import REMOTE_ACCESS_PORT, TAILNET_HOST, remote_access
@@ -58,7 +59,20 @@ def _route_settings(path):
         return None, f"訪問ルートの設定ファイルが見つかりません: {path}"
     if info.st_mode & 0o077:
         return None, f"訪問ルートの設定ファイルは所有者だけが読めるようにしてください（chmod 600 {path}）"
+    import homecare_route
+    try:
+        # The same check the resident server makes at start, so a bad file never stops the whole workspace.
+        homecare_route.RouteSettings(path)
+    except (OSError, SystemExit) as exc:
+        return None, f"訪問ルートの設定ファイルを使えません: {exc}"
     return str(path), None
+
+
+def port_in_use(port):
+    """Whether something on this Mac already answers on 127.0.0.1:port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(1)
+        return probe.connect_ex(("127.0.0.1", port)) == 0
 
 
 def command(args, *, services) -> int:
@@ -100,6 +114,10 @@ def command(args, *, services) -> int:
     if problem:
         print(problem)
         return 1
+    if port != current.get("port") and port_in_use(port):
+        # Publishing would hand that other program to the tailnet, outside the workspace's staff check.
+        print(f"この Mac の {port} 番は別のプログラムが使っています。--port で空いている番号を指定してください。")
+        return 1
     changes = {"remote_access.tailnet_host": host, "remote_access.port": port}
     if route is not None:
         changes["remote_access.route_settings"] = route
@@ -110,13 +128,16 @@ def command(args, *, services) -> int:
     if errors:
         print("設定を保存できなかったため、遠隔接続は設定していません。mcs_setup.py check で確認してください。")
         return 1
+    # The workspace starts listening before the port is published, so the tailnet only ever reaches it.
+    status = services(args)
+    if status != 0:
+        return status
     # `serve` publishes to this tailnet only. `funnel` would publish to the internet and is never used.
     served = _run(cli, "serve", "--bg", f"http://127.0.0.1:{port}")
     if served is None or served.returncode != 0:
         print("tailnet への公開を設定できませんでした。Tailscale の管理画面で HTTPS 証明書を有効にし、"
               f"`tailscale serve --bg http://127.0.0.1:{port}` を実行してください。")
         return 1
-    status = services(args)
     if status == 0:
         print(f"遠隔接続を設定しました。同じ tailnet の端末から https://{host}/ を開いてください。")
         print("最初に開いた人のログインが最初の職員になります。ほかの職員は職員の画面で Tailscale のログイン名を登録してください。")

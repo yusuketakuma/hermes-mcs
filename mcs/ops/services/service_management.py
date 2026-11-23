@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import fcntl
 import glob
 from html import escape as xml_escape
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -570,7 +571,10 @@ def sync_remote_access(subs, cfg, manifest, note, dry, *, paths: ServicePaths) -
     if not remote_access(cfg):
         return retire_agents({label}, note, dry, paths=paths)
     template = Path(paths.checkout, 'deployment', 'launchagents', label + '.plist').read_text(encoding='utf-8')
-    return _converge_agent(label, contract.render_agent(template, subs), manifest, note, dry, paths=paths)
+    # The agent reads its settings only at start: their digest in the plist makes a change reload it.
+    settings = hashlib.sha256(json.dumps(remote_access(cfg), sort_keys=True).encode()).hexdigest()[:16]
+    return _converge_agent(label, contract.render_agent(template, subs | {'REMOTE_ACCESS': settings}), manifest,
+                           note, dry, paths=paths)
 
 def sync_agents(subs, manifest, note, dry, cfg=None, keep=frozenset(), *, paths: ServicePaths) -> int:
     """Stage 2: launchd agents (macOS only) — converge content AND
