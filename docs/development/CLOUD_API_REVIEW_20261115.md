@@ -21,7 +21,7 @@ Anthropic の公式資料（料金・effort・thinking・errors・versioning）�
 
 - 直した方がよい 3（日付の境目の全体停止）: `cloud_policy._circuit_on_pricing_error` が、試行開始時点で期限切れの料金表を回路を動かさない拒否として扱うため解消済みです。
 - 同 6（エラーの誤分類）: Anthropic の支出上限の 400 は `payment_required`、Retry-After の無い 429 は再試行しません（`anthropic_client.response_error`）。OpenAI の 429 は quota 系コードだけを止め、レート制限は従来どおり再試行します。
-- 同 7（重複）: 4a97288 では既定の出力上限 1600 が複数の呼出元に重複し、提供元名による分岐も `cloud_policy`・`cloud_inference`・`provider_settings`・`cloud_cli`・抽出・意味解析・通知・設定画面に残っていました。PR #325 で、出力上限を `cloud_policy.ORIGINAL_MAX_TOKENS`・`selection_max_tokens`・`PURPOSE_MAX_TOKENS` に集め（再抽出は抽出側の `MAX_TOKENS` を使い続けます）、提供元ごとの違いを各提供元の定義ファイルへ移して `provider_registry` から引くようにします。提供元名が残るのは、保存済み記録の項目名・設定キー・CLI のフラグ・`bounded_http` の認証方式名など、名前がデータそのものの箇所です。
+- 同 7（重複）: 4a97288 では既定の出力上限 1600 が複数の呼出元に重複し、提供元名による分岐も `cloud_policy`・`cloud_inference`・`provider_settings`・`cloud_cli`・抽出・意味解析・通知・設定画面に残っていました。PR #325 で、出力上限を `cloud_policy.ORIGINAL_MAX_TOKENS`・`selection_max_tokens` と、`cloud_usage_accounting.PURPOSE_MAX_TOKENS`（`cloud_policy` から再公開）に集め（再抽出は抽出側の `MAX_TOKENS` を使い続けます）、提供元ごとの違い（旧 Luna の要求を証明する検査を含む）を各提供元の定義ファイルへ移して `provider_registry` から引くようにします。提供元名が残るのは、保存済み記録の項目名・設定キー・CLI のフラグ・`bounded_http` の認証方式名など、名前がデータそのものの箇所です。
 - 「文書とコードの食い違い」2: `cloud_send_admission.tightened` の docstring は、未送信として0円で精算する実装に合っています。
 - 「文書とコードの食い違い」1・5・7: ANTHROPIC.md は 5xx・529 を待たずにローカルへ回すと書いており、料金期限の予告は `earliest_price_info` で profile が選ぶ全モデルを見ており、`bounded_http` の docstring は Anthropic・OpenAI を利用者に挙げているため、いずれも解消済みです。PR #325 で、ANTHROPIC.md の 429 の説明に再試行しない場合を足しました。
 - 「文書とコードの食い違い」4（キャッシュ）: 接頭辞を指定するのは過去分の再抽出だけです。PR #325 で ANTHROPIC.md をこの実装に合わせました。

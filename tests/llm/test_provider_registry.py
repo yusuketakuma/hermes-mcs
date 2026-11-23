@@ -13,7 +13,8 @@ def test_every_provider_module_defines_the_shared_names():
              "ORIGINAL_CONTRACT", "CURRENT_PRICE_VERSIONS", "PRICE_SNAPSHOTS", "PROFILE_DEFINITIONS",
              "PROFILE_PURPOSES", "DEFAULT_PROFILES", "VALID_MODEL_EFFORTS", "ATTEMPT_TIMEOUTS",
              "provider_contract", "reservation_cost", "usage_cost", "original_contract_valid",
-             "original_selection_valid", "select_profile", "request_contract_error", "client_class")
+             "original_selection_valid", "select_profile", "request_contract_error", "legacy_request_effort",
+             "client_class")
     for module in provider_registry.PROVIDER_MODULES.values():
         assert [name for name in names if not hasattr(module, name)] == []
 
