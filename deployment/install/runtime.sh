@@ -271,6 +271,14 @@ py_ok "$VENV_PY" 14 15 \
 ok "Hermes 用 Python 環境: $VENV_PY"
 MCS_PY="$VENV_PY"
 hermes_cli() { (unset PYTHONPATH PYTHONHOME; exec "$VENV_HERMES" "$@"); }
+# A new Hermes home spends its first command on one-time preparation (bundled
+# skills, default tools) that can take minutes. Finish it here, unbounded, so
+# the later bounded schedule inventory sees a Hermes that answers in time.
+if [ "$_fresh_authorized" -eq 1 ]; then
+    printf '  Hermes の初回準備を確認しています（数分かかることがあります）\n'
+    hermes_cli cron list --all </dev/null >/dev/null 2>&1 \
+        || warn "Hermes の初回準備を確認できませんでした。このまま導入を続けます"
+fi
 
 # shim: published by rename, so an existing symlink is replaced rather
 # than written through (which would overwrite its target)

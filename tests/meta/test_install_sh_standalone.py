@@ -137,6 +137,22 @@ def test_sdk_install_without_verified_pins_keeps_fresh_hold_and_incomplete_marke
     assert not any('mcs_setup.py services' in call for call in _calls(stub))
 
 
+def test_resumed_default_standalone_first_install_stays_standalone(tmp_path):
+    """A first install that chose standalone by default and stopped before saving
+    settings resumes as standalone, not as Hermes because data/ now exists."""
+    home, _, stub, env = _world(tmp_path)
+    flags = ('--no-brew', '--no-llm', '--no-recovery')
+    failed = _run({**env, 'STUB_SDK_POST_FAULT': 'missing:slack-bolt'}, None, *flags)
+    assert failed.returncode != 0
+    assert (home / '.mcs/data/.provider-bootstrap-fresh.json').is_file()
+    retried = _run(env, None, *flags)
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+    assert '同じ初回導入として再開します' in retried.stdout
+    assert json.loads((home / '.mcs/config.json').read_text())['runtime_mode'] == 'standalone'
+    assert not (home / '.hermes').exists()
+    assert not any(call.startswith('git clone') for call in _calls(stub))
+
+
 def test_failed_sdk_repair_retains_marker_and_retries_without_services(tmp_path):
     home, _, stub, env = _world(tmp_path)
     flags = ('--mode', 'standalone', '--no-brew', '--no-llm', '--no-recovery')

@@ -129,6 +129,17 @@ abspath() {
     while [ "${#_p}" -gt 1 ] && [ "${_p%/}" != "$_p" ]; do _p="${_p%/}"; done
     printf '%s\n' "$_p"
 }
+# data/ that holds only a first install's hold (and the update lock) is still a
+# fresh install for choosing the runtime; fresh-resume verifies it exactly later.
+_data_is_fresh_hold() {
+    [ ! -L "$MCS_ROOT/data" ] && [ -f "$MCS_ROOT/data/.provider-bootstrap-fresh.json" ] || return 1
+    for _entry in "$MCS_ROOT/data"/* "$MCS_ROOT/data"/.[!.]* "$MCS_ROOT/data"/..?*; do
+        case "${_entry##*/}" in
+            update.lock|.provider-bootstrap-fresh.json) ;;
+            *) [ -e "$_entry" ] || [ -L "$_entry" ] || continue; return 1 ;;
+        esac
+    done
+}
 # physical path of an existing file or directory (symlinks resolved)
 physpath() {
     if [ -d "$1" ]; then (CDPATH='' cd -- "$1" && pwd -P)
@@ -152,7 +163,7 @@ if [ -n "$ARG_HOME" ]; then ARG_HOME="$(abspath "$ARG_HOME")"; fi
 REPO="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 # Read-only bootstrap modes do not require checkout companions.
 INSTALL_RUNTIME_STAGE="$REPO/deployment/install/runtime.sh"
-INSTALL_RUNTIME_SHA256="68a3de05807b2159ea4b32b14f0fcf810f263574587e76f3b1567698ea5c6112"
+INSTALL_RUNTIME_SHA256="18a986d6219db74822b55e29bca0ef9dbd8250f5f45c45961e3ca90acce55333"
 _install_stage_private_dir=""
 # shellcheck disable=SC2317,SC2329  # Invoked by EXIT after the sourced stage exits.
 _install_stage_cleanup() {
@@ -492,7 +503,8 @@ PYMODE
     case "$RUNTIME_MODE" in hermes|standalone) ;; *) die "接続方法を読み取れません。--mode hermes または --mode standalone を指定してください" ;; esac
 else
     CONFIG_ABSENT=1
-    if [ "$RUNTIME_EXPLICIT" -eq 0 ] && { [ -e "$MCS_ROOT/data" ] || [ -L "$MCS_ROOT/data" ]; }; then
+    if [ "$RUNTIME_EXPLICIT" -eq 0 ] && { [ -e "$MCS_ROOT/data" ] || [ -L "$MCS_ROOT/data" ]; } \
+            && ! _data_is_fresh_hold; then
         RUNTIME_MODE=hermes
     fi
 fi
@@ -511,7 +523,7 @@ if [ "$MODE" = install ] && [ "$CONFIG_ABSENT" -eq 0 ] \
 fi
 # Only a fresh install without saved authority may acquire a new default.
 if [ "$RUNTIME_EXPLICIT" -eq 0 ] && { { [ "$CONFIG_ABSENT" -eq 1 ] \
-        && [ ! -e "$MCS_ROOT/data" ] && [ ! -L "$MCS_ROOT/data" ]; } || { [ "$CONFIG_EMPTY" -eq 1 ] \
+        && { { [ ! -e "$MCS_ROOT/data" ] && [ ! -L "$MCS_ROOT/data" ]; } || _data_is_fresh_hold; }; } || { [ "$CONFIG_EMPTY" -eq 1 ] \
         && [ ! -e "$MCS_ROOT/data/.provider-settings-authority.json" ] \
         && [ ! -L "$MCS_ROOT/data/.provider-settings-authority.json" ] \
         && [ ! -e "$MCS_ROOT/data/install_options.json" ] \
@@ -1162,8 +1174,22 @@ fi
 _fresh_marker="$MCS_DATA/.provider-bootstrap-fresh.json"
 _fresh_authorized=0
 _legacy_uninitialized=0
+_fresh_resumed=0
 if [ -e "$_fresh_marker" ] || [ -L "$_fresh_marker" ]; then
-    die "初回導入が中断された記録があります。設定と記録を保持し、担当者に確認してください"
+    # A first install stopped before it saved any settings (network, Homebrew
+    # or Ctrl-C during software preparation) resumes as the same fresh install.
+    _resume_py="${MODE_PY:-}"
+    [ -n "$_resume_py" ] || _resume_py="$(find_py || command -v python3 || true)"
+    [ -n "$_resume_py" ] || die "初回導入の続きを確かめる Python がありません。brew install python@3.14 を実行してから、同じコマンドを再実行してください"
+    if [ "$CONFIG_ABSENT" -eq 1 ] && [ -z "$_fresh_data_info" ] && [ -n "$_resume_py" ] \
+            && "$_resume_py" -B "$REPO/mcs/ops/install_options.py" fresh-resume "$MCS_ROOT/config.json" \
+                "$MCS_DATA/install_options.json" - "$MCS_INSTALL_UPDATE_LOCK_FD"; then
+        _fresh_data_info="$(_lock_info "$MCS_DATA")" || die "初回導入の保存先を確認できません"
+        _fresh_resumed=1
+        printf '前回の初回導入は設定の保存前に止まっていました。同じ初回導入として再開します。\n'
+    else
+        die "初回導入が中断された記録があります。設定と記録を保持し、担当者に確認してください"
+    fi
 fi
 _fresh_complete="$MCS_DATA/.provider-bootstrap-complete.json"
 if [ -e "$_fresh_complete" ] || [ -L "$_fresh_complete" ]; then
@@ -1232,7 +1258,9 @@ EOF
     if ! { [ "$_fr_uid" = "$_lock_uid" ] && [ "$_fd_uid" = "$_lock_uid" ] && [ "$_fd_mode" = 700 ]; }; then
         die "初回導入の保存先を確認できません"
     fi
-    (set -C; printf '{"version":1,"root":[%s,%s,%s,%s],"data":[%s,%s,%s,%s],"config":null}\n' \
+    # A resumed install keeps the marker fresh-resume has just verified.
+    [ "$_fresh_resumed" -eq 1 ] \
+        || (set -C; printf '{"version":1,"root":[%s,%s,%s,%s],"data":[%s,%s,%s,%s],"config":null}\n' \
         "$_fr_dev" "$_fr_ino" "$_fr_uid" "$((0$_fr_mode))" \
         "$_fd_dev" "$_fd_ino" "$_fd_uid" "$((0$_fd_mode))" > "$_fresh_marker") \
         || die "初回導入の記録を保存できません。データを保持してください"
@@ -1352,7 +1380,13 @@ fi
 # every non-zero exit from here on is a stopped install, not a usage error
 # _ip_cur_* is this run's last stage marker (runtime.sh), journal-independent.
 trap 'if [ "$?" -ne 0 ]; then
-    if [ -e "$MCS_DATA/.provider-bootstrap-fresh.json" ] || [ -L "$MCS_DATA/.provider-bootstrap-fresh.json" ] \
+    if { [ -e "$MCS_DATA/.provider-bootstrap-fresh.json" ] || [ -L "$MCS_DATA/.provider-bootstrap-fresh.json" ]; } \
+            && [ ! -e "$MCS_ROOT/config.json" ] && [ ! -L "$MCS_ROOT/config.json" ] \
+            && [ ! -e "$MCS_DATA/.provider-settings-pending.json" ] && [ ! -L "$MCS_DATA/.provider-settings-pending.json" ]; then
+        printf "%s\n" "エラー: 初回導入を中断しました。設定はまだ保存していません。表示された原因を解消し、同じコマンドを再実行すると初回導入を再開します。" >&2
+        command -v python3.14 >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1 \
+            || printf "%s\n" "再実行の前に brew install python@3.14 を実行してください。" >&2
+    elif [ -e "$MCS_DATA/.provider-bootstrap-fresh.json" ] || [ -L "$MCS_DATA/.provider-bootstrap-fresh.json" ] \
             || [ -e "$MCS_DATA/.provider-settings-pending.json" ] || [ -L "$MCS_DATA/.provider-settings-pending.json" ]; then
         printf "%s\n" "エラー: 導入は保留中です。設定と記録を保持し、担当者に確認してください。" >&2
     elif [ "${_ip_cur_status:-}" = running ]; then
