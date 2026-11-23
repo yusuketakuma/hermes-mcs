@@ -108,6 +108,14 @@ python3 mcs/ops/mcs_drug.py patients --formulary-changed
 - 患者ごとに言及件数・投稿数・最新の言及（投稿日時・投稿ID・記載の種類）を返し、最新の言及が新しい順に並べる。アーカイブ済みの患者は `--include-archived` のときだけ含める。
 - 言及は服用中の確定ではない（`current_use_confirmed=false`）。未抽出・未取得・取得失敗の件数をcoverageと説明文に残し、一覧に無い患者を「その薬を使っていない」と扱わない。
 
+## 7. 他の機能から使う医薬品の共通入口
+
+[drug_catalog](../../mcs/medications/drug_catalog.py) は、在宅記録（処方歴など）が `drug_map` の内部を知らずに医薬品を検索・照会するための読取り専用の入口。
+
+- `search(cfg, query, *, limit=20)` は名称・別名・公式コードの部分一致で製品を返し、`lookup(cfg, code)` は公式の医薬品コード1件を返す。各項目は `code`・`code_system`（`mhlw_medicine`）・`name`・`generic_name`・`unit`・`form_code`・`source_edition`（辞書のid・SHA256・版）。
+- 設定で固定した承認済みの辞書（`drug_map`）だけを使う。未設定・未承認・不正のときは推測せず空（`lookup` は `None`）を返し、理由は `status(cfg)` で分かる。チャット投稿の照合世代（`active_dictionary`）とは独立している。
+- 呼出し側は `code`・`code_system`・入力時の名称を保存し、マスター更新後も古い記録を読めるようにする。
+
 ## 検証と未検証事項
 
 [薬剤経緯テスト](../../tests/medications/test_drug_timeline.py) と [薬歴照合テスト](../../tests/medications/test_drug_reconciliation.py)・[患者横断テスト](../../tests/medications/test_drug_patients.py) は、予定/実施記載・本人/家族・過去/現在、世代差、コード候補検索、旧辞書の境界、規格差、未知の単位、薬歴日時、取得漏れ、ページング、読取り専用、CLIからの合成snapshot照合を検査する。
