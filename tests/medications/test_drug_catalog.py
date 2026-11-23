@@ -42,6 +42,18 @@ def test_search_returns_official_codes_with_edition(tmp_path):
     assert drug_catalog.status(cfg) == "active"
 
 
+def test_alias_matches_are_not_capped_by_the_reference_search(tmp_path, monkeypatch):
+    import drug_map
+    cfg = _cfg(tmp_path, _with_products())
+    expected = drug_catalog.search(cfg, "架空")
+
+    def capped(self, query, *, limit=20):
+        raise AssertionError("the 200-item reference search must not bound the catalog")
+
+    monkeypatch.setattr(drug_map.DrugMap, "search", capped)
+    assert drug_catalog.search(cfg, "架空") == expected
+
+
 def test_lookup_by_code_and_unknown(tmp_path):
     cfg = _cfg(tmp_path, _with_products())
     assert drug_catalog.lookup(cfg, "900000001")["name"] == "架空製品錠5mg"

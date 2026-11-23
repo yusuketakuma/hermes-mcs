@@ -118,7 +118,7 @@ def test_master_impact_and_formulary_map_to_dictionary_identities(tmp_path):
     watch = {"inserts": [{"name": "架空製品錠5mg", "sha256": "a", "observed_sha256": "b",
                           "last": "changed", "aliases": []},
                          {"name": "架空ブランド", "sha256": "a", "observed_sha256": "a", "last": "unchanged"}]}
-    codes, names = drug_patients.formulary_identities(active, watch)
+    codes, names, _limits = drug_patients.formulary_identities(active, watch)
     assert names == ["架空製品錠5mg"] and codes == {"mhlw:medicine:900000001"}
 
 
@@ -164,4 +164,13 @@ def test_observed_revision_stays_after_a_failed_recheck():
     watch = {"inserts": [{"name": "改訂後に失敗", "sha256": "a", "observed_sha256": "b", "last": "error"},
                          {"name": "受入済み", "sha256": "a", "observed_sha256": "a", "last": "error"},
                          {"name": "未観測", "sha256": "a", "last": "error"}]}
-    assert drug_patients.formulary_identities(None, watch) == (set(), ["改訂後に失敗"])
+    assert drug_patients.formulary_identities(None, watch)[:2] == (set(), ["改訂後に失敗"])
+
+
+def test_overlong_revised_names_are_counted_not_raised(corpus):
+    long_name = "架" * 121
+    watch = {"inserts": [{"name": long_name, "sha256": "a", "observed_sha256": "b"},
+                         {"name": "架空製品錠5mg", "sha256": "a", "observed_sha256": "b"}]}
+    codes, names, limits = drug_patients.formulary_identities(None, watch)
+    assert names == ["架空製品錠5mg"] and limits == {"names_not_matched": 1, "identities_truncated": False}
+    drug_patients.find(view_of(corpus), identities=codes, names=names)

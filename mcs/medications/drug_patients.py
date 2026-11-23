@@ -5,6 +5,7 @@ import drug_timeline
 from mcs_queries import incomplete_reply_roots
 
 MAX_IDENTITIES = 1000
+MAX_NAME = 120
 
 
 def _latest(found, row, med, change, source):
@@ -32,11 +33,11 @@ def find(view, *, name=None, identities=None, names=(), cfg=None, limit=50, incl
     when no dictionary identity covers them."""
     if (name is None) == (identities is None) or (name is not None and names):
         raise ValueError("bad_query")
-    if name is not None and (not isinstance(name, str) or not 1 <= len(name) <= 120):
+    if name is not None and (not isinstance(name, str) or not 1 <= len(name) <= MAX_NAME):
         raise ValueError("bad_name")
     if identities is not None and not _strings(identities):
         raise ValueError("bad_identities")
-    if not _strings(names, max_len=120):
+    if not _strings(names, max_len=MAX_NAME):
         raise ValueError("bad_names")
     if type(limit) is not int or not 1 <= limit <= 500:
         raise ValueError("bad_limit")
@@ -133,9 +134,10 @@ def master_identities(active, report):
 
 
 def formulary_identities(active, watch):
-    """Identities of watched inserts whose observed text differs from the accepted one.
+    """Identities and exact names of watched inserts whose observed text differs from the accepted one.
 
-    Same rule as the revision notice: a later failed re-check keeps the observed revision."""
+    Same rule as the revision notice: a later failed re-check keeps the observed revision.
+    Names find() cannot take (over 120 characters, or beyond its bounds) are counted, not raised."""
     names = set()
     for item in watch.get("inserts", []):
         observed = item.get("observed_sha256") if isinstance(item, dict) else None
@@ -144,4 +146,6 @@ def formulary_identities(active, watch):
     codes = set()
     for name in sorted(names):
         codes |= drug_timeline.query_identities(active, name)
-    return codes, sorted(names)
+    usable = sorted(n for n in names if len(n) <= MAX_NAME)[:MAX_IDENTITIES]
+    return set(sorted(codes)[:MAX_IDENTITIES]), usable, {
+        "names_not_matched": len(names) - len(usable), "identities_truncated": len(codes) > MAX_IDENTITIES}

@@ -25,7 +25,8 @@ def test_brief_has_every_visit_section_scoped_to_the_patient(snapshot):
     assert all(s["title"] for s in brief["sections"])
     assert all(set(item) <= set(patient_brief.ITEM_KEYS) for s in brief["sections"] for item in s["items"])
     assert brief["signals"]["key"] == "signals" and brief["read_only"] is True
-    assert "非対象" not in json.dumps(brief, ensure_ascii=False)
+    text = json.dumps(brief, ensure_ascii=False)
+    assert "非対象" not in text and "合成疾患123" not in text  # another patient's facts never leak
     assert hashlib.sha256(Path(snapshot).read_bytes()).digest() == before
 
 

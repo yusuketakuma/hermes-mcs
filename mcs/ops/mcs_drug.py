@@ -314,9 +314,11 @@ def _patients(view, args):
                                      + f"・マスター差分は全{impact.get('total')}件中{impact.get('returned')}件のみ照合）")
         return report
     import drug_info
-    identities, names = drug_patients.formulary_identities(active, drug_info.load_watch())
+    identities, names, limits = drug_patients.formulary_identities(active, drug_info.load_watch())
     report = drug_patients.find(view, identities=identities, names=names, **common)
-    report["query"].update(source="formulary_changed", revised_inserts=names)
+    report["query"].update(source="formulary_changed", revised_inserts=names, **limits)
+    if limits["names_not_matched"] or limits["identities_truncated"]:
+        report["explanation"] = report["explanation"].removesuffix("）") + "・改訂品名の一部は照合していません）"
     return report
 
 

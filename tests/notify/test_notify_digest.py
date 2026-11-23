@@ -459,9 +459,16 @@ def test_rx_period_block_lists_open_ends_by_date(led):
     assert "原記録で確認" in block and "project 3" not in block and "project 4" not in block
 
 
-def test_rx_period_block_needs_signals_notify(led):
+@pytest.mark.parametrize("signals_notify", [False, True])
+def test_rx_period_block_needs_signals_notify(led, signals_notify):
     _patient(led, 1)
-    _signal_row(led, "a", stype="rx_period_expiry")
+    led.db.execute(
+        "INSERT INTO artifacts(kind,project_id,content,model,meta,created_at) "
+        "VALUES('signal_v1',1,?,'test',?,0)",
+        (json.dumps({"type": "rx_period_expiry", "state": "open", "project_id": 1, "note": "n",
+                     "evidence": {"message_id": 1, "end": "2026-10-04"}}),
+         json.dumps({"key": "a", "type": "rx_period_expiry"})))
     led.db.commit()
-    notify_digest.maybe_enqueue(led, ON, now=T)
-    assert "処方期限の記録" not in _text(led)
+    cfg = {**ON, "signals": {"notify": True}} if signals_notify else ON
+    notify_digest.maybe_enqueue(led, cfg, now=T)
+    assert ("処方期限の記録" in _text(led)) is signals_notify
