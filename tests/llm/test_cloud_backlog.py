@@ -1406,6 +1406,14 @@ def test_timing_observation_does_not_fabricate_unmeasured_seconds(value):
     assert "synthetic-private-detail" not in json.dumps(record, allow_nan=False)
 
 
+def test_timing_observation_forwards_a_selection_lock_loss():
+    detail = {"kind": "select", "transport_s": 41.0, "reacquire_s": 619.0,
+              "window_s": 619.0, "job_id": "synthetic-private-detail"}
+    record = backlog._pass_timing_observation({"run_lock_lost_detail": detail})
+    assert record["run_lock_lost_detail"] == {
+        "kind": "select", "transport_s": 41.0, "reacquire_s": 619.0, "window_s": 619.0}
+
+
 @pytest.mark.parametrize("detail", [None, [], True, {"kind": "synthetic-private-detail"},
                                    {"kind": ["llm"]}, {"kind": {"private": "detail"}}])
 def test_timing_observation_filters_unknown_lock_loss_kind(detail):
@@ -1447,7 +1455,7 @@ def test_worker_forwards_measured_semantic_timings_without_payload(carry_worker,
     import extract_llm
     import semantic_drain
     state, _ = carry_worker
-    measured = dict(zip(backlog._TRANSPORT_SECONDS, (12.125, 7.5, 4, 0)))
+    measured = dict(zip(backlog._TRANSPORT_SECONDS, (12.125, 7.5, 4, 0, 1.5, 0)))
     detail = {"kind": "jev", "transport_s": 3.25, "reacquire_s": 5, "window_s": 6}
     monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: {"done": 1})
     monkeypatch.setattr(extract_llm_resident, 'run_pending', extract_llm.run_pending)
