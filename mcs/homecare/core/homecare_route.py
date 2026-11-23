@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
+import re
 from pathlib import Path
 import stat
 import time
@@ -22,12 +24,15 @@ import homecare_visits as visits
 GEOCODE_URL = "https://msearch.gsi.go.jp/address-search/AddressSearch"
 OPTIMIZE_URL = "https://api.openrouteservice.org/optimization"
 SERVICE_SECONDS = 20 * 60
+WINDOW_SECONDS = 15 * 60   # a booked visit is reached within 15 minutes either side of its time
+SAME_PLACE_METRES = 300    # several search results count as one place only when they lie this close
+_CLOCK = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 MAX_STOPS = 40
 _TIMEOUT = 15
 
 
 class RouteSettings:
-    """``{"openrouteservice_key": ..., "origin_address": ...}`` from a file only its owner can read."""
+    """``{"openrouteservice_key", "origin_address", "depart_time"?}`` from a file only its owner can read."""
 
     def __init__(self, path):
         path = Path(path)
@@ -39,7 +44,19 @@ class RouteSettings:
         if not isinstance(key, str) or not 10 <= len(key) <= 200 or not isinstance(origin, str) \
                 or not 1 <= len(origin.strip()) <= 200:
             raise SystemExit("route settings need openrouteservice_key and origin_address")
-        self.key, self.origin = key, origin.strip()
+        depart = data.get("depart_time", "09:00")
+        if not isinstance(depart, str) or not _CLOCK.match(depart):
+            raise SystemExit("route settings depart_time must be HH:MM")
+        self.key, self.origin, self.depart = key, origin.strip(), _seconds(depart)
+
+
+def _seconds(clock):
+    hours, minutes = clock.split(":")
+    return int(hours) * 3600 + int(minutes) * 60
+
+
+def _clock(seconds):
+    return f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}"
 
 
 def _fetch(request):
@@ -52,14 +69,19 @@ def _fetch(request):
 
 
 def geocode(address, *, fetch=_fetch):
-    """(lon, lat) of the first match inside Japan, or None."""
+    """(lon, lat) when the search names one place inside Japan; None when it finds none or several apart."""
     query = urllib.parse.urlencode({"q": address})
     try:
         found = fetch(urllib.request.Request(f"{GEOCODE_URL}?{query}", headers={"Accept": "application/json"}))
-        lon, lat = found[0]["geometry"]["coordinates"]
-    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        points = [tuple(feature["geometry"]["coordinates"]) for feature in found]
+    except (OSError, ValueError, KeyError, TypeError):
         return None
-    if not (isinstance(lon, (int, float)) and isinstance(lat, (int, float)) and 122 <= lon <= 154 and 20 <= lat <= 46):
+    if not points or not all(len(point) == 2 and all(isinstance(v, (int, float)) for v in point)
+                             and 122 <= point[0] <= 154 and 20 <= point[1] <= 46 for point in points):
+        return None
+    (lon, lat), scale = points[0], math.cos(math.radians(points[0][1]))
+    # A partial address ("中央区") matches several towns; guessing one would route to the wrong place.
+    if any(math.hypot((x - lon) * 111_320 * scale, (y - lat) * 110_540) > SAME_PLACE_METRES for x, y in points):
         return None
     return float(lon), float(lat)
 
@@ -84,7 +106,8 @@ def _located(db, patient, *, fetch):
 def plan(db, settings, visit_date, *, actor, staff_id=None, fetch=_fetch):
     """The day's planned visits in driving order from the starting address and back, with arrival estimates.
 
-    Visits without a usable address are listed apart, never guessed into the route.
+    A booked time is a window the route must meet. Visits without a usable address, and visits the route cannot
+    reach in their window, are listed apart, never guessed into the route. Jobs carry positions, not ledger IDs.
     """
     if settings is None:
         raise ValueError("route_unavailable")
@@ -98,17 +121,23 @@ def plan(db, settings, visit_date, *, actor, staff_id=None, fetch=_fetch):
     origin = geocode(settings.origin, fetch=fetch)
     if origin is None:
         raise ValueError("route_failed")
-    jobs, unlocated = [], []
+    jobs, unlocated, placed = [], [], []
     for row in day:
         point = _located(db, {"patient_id": row["patient_id"], "address": row["address"]}, fetch=fetch)
         if point is None:
             unlocated.append(row["visit_id"])
-        else:
-            jobs.append({"id": row["visit_id"], "location": list(point), "service": SERVICE_SECONDS})
-    stops = []
+            continue
+        placed.append(row)
+        job = {"id": len(placed), "location": list(point), "service": SERVICE_SECONDS}
+        if row["start_time"]:
+            booked = _seconds(row["start_time"])
+            job["time_windows"] = [[max(0, booked - WINDOW_SECONDS), booked + WINDOW_SECONDS]]
+        jobs.append(job)
+    stops, unscheduled = [], []
     if jobs:
-        body = json.dumps({"jobs": jobs, "vehicles": [{"id": 1, "profile": "driving-car",
-                                                       "start": list(origin), "end": list(origin)}]}).encode()
+        vehicle = {"id": 1, "profile": "driving-car", "start": list(origin), "end": list(origin),
+                   "time_window": [settings.depart, 2 * 86400]}
+        body = json.dumps({"jobs": jobs, "vehicles": [vehicle]}).encode()
         request = urllib.request.Request(OPTIMIZE_URL, data=body, method="POST", headers={
             "Authorization": settings.key, "Content-Type": "application/json", "Accept": "application/json"})
         try:
@@ -116,10 +145,14 @@ def plan(db, settings, visit_date, *, actor, staff_id=None, fetch=_fetch):
             steps = result["routes"][0]["steps"]
         except (OSError, ValueError, KeyError, IndexError, TypeError):
             raise ValueError("route_failed") from None
-        by_id = {row["visit_id"]: row for row in day}
-        stops = [{"visit_id": step["id"], "patient_name": by_id[step["id"]]["patient_name"],
-                  "start_time": by_id[step["id"]]["start_time"], "arrival_offset": step.get("arrival"),
-                  "travel_seconds": step.get("duration")}
-                 for step in steps if step.get("type") == "job" and step.get("id") in by_id]
-        unlocated.extend(job["id"] for job in jobs if job["id"] not in {stop["visit_id"] for stop in stops})
-    return {"date": visit_date, "stops": stops, "unlocated": unlocated}
+        for step in steps:
+            position = step.get("id") if step.get("type") == "job" else None
+            if type(position) is not int or not 1 <= position <= len(placed) or type(step.get("arrival")) is not int:
+                continue
+            row = placed[position - 1]
+            stops.append({"visit_id": row["visit_id"], "patient_name": row["patient_name"],
+                          "start_time": row["start_time"], "arrival": _clock(step["arrival"]),
+                          "travel_seconds": step.get("duration")})
+        routed = {stop["visit_id"] for stop in stops}
+        unscheduled = [row["visit_id"] for row in placed if row["visit_id"] not in routed]
+    return {"date": visit_date, "stops": stops, "unlocated": unlocated, "unscheduled": unscheduled}

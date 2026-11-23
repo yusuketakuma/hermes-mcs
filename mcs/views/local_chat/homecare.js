@@ -180,19 +180,25 @@ async function showHcPatient(patientId) {
   hcMain("基本情報", sheet, recordForm("patient", PATIENT_FORM, patient, async () => {await loadHcPatients(); showHcPatient(patientId);}), team, visitBox, ...parts, link);
 }
 const visitLine = visit => `${visit.visit_date}${visit.start_time ? " " + visit.start_time : ""} · ${hc.meta.visit_kinds[visit.kind] || visit.kind} · ${VISIT_STATUS[visit.status]}${visit.staff_name ? " · " + visit.staff_name : ""}`;
-async function patientVisits(box, patientId) {
-  const reload = () => patientVisits(box, patientId);
-  const data = await api("hc/visits", {patient: patientId}).catch(error => {fail(error); return {items: []};});
+async function patientVisits(box, patientId, limit = 50) {
+  const reload = () => patientVisits(box, patientId, limit);
+  const data = await api("hc/visits", {patient: patientId, limit}).catch(error => {fail(error); return null;});
   if (hc.patient !== patientId) return;
   box.replaceChildren(el("h3", "訪問"));
+  if (!data) {box.append(el("p", "訪問の記録を読み込めませんでした。", "state-note")); return;}
   for (const visit of data.items) {
     const row = el("details", null, "hc-row"); row.append(el("summary", visitLine(visit)));
     if (visit.note) row.append(el("p", visit.note, "hc-note"));
     row.append(recordForm("visit", visitForm(), visit, reload)); box.append(row);
   }
   if (!data.items.length) box.append(el("p", "訪問の記録はまだありません。"));
+  if (data.more) box.append(olderButton("以前の訪問を表示", () => patientVisits(box, patientId, limit + 50)));
   const add = el("details", null, "hc-row"); add.append(el("summary", "訪問を予定する"), recordForm("visit", visitForm(), null, reload, {patient_id: patientId}));
   box.append(add);
+}
+function olderButton(label, load) {
+  const button = el("button", label, "load-more"); button.type = "button"; button.onclick = () => {button.disabled = true; load();};
+  return button;
 }
 async function showSheet(patientId) {
   hc.patient = patientId; closeDetail();
@@ -225,13 +231,14 @@ async function showDay(date) {
   const picker = el("form", null, "hc-inline"), input = el("input"); input.type = "date"; input.value = date;
   picker.append(input, el("button", "この日を表示", "button")); picker.onsubmit = event => {event.preventDefault(); if (input.value) showDay(input.value);};
   const list = el("section", null, "detail-section"), routeBox = el("section", null, "detail-section");
-  const data = await api("hc/visits", {date}).catch(error => {fail(error); return {items: []};});
+  const data = await api("hc/visits", {date}).catch(error => {fail(error); return null;});
   list.append(el("h3", "この日の訪問"));
-  for (const visit of data.items) {
+  if (!data) list.append(el("p", "この日の訪問を読み込めませんでした。", "state-note"));
+  for (const visit of data?.items || []) {
     const row = el("button", `${visit.start_time || "時刻未定"} · ${visit.patient_name} · ${hc.meta.visit_kinds[visit.kind] || visit.kind} · ${VISIT_STATUS[visit.status]}${visit.staff_name ? " · " + visit.staff_name : ""}`, "text-button");
     row.onclick = () => showSheet(visit.patient_id); list.append(row);
   }
-  if (!data.items.length) list.append(el("p", "この日の訪問はありません。"));
+  if (data && !data.items.length) list.append(el("p", "この日の訪問はありません。"));
   routeBox.append(el("h3", "訪問ルート"));
   if (!hc.routes) routeBox.append(el("p", "訪問ルートは設定されていません。設定すると、住所だけを地図サービスへ送って回る順番を作ります。"));
   else {
@@ -242,9 +249,10 @@ async function showDay(date) {
       try {
         const staff = form.querySelector('[name="staff"]').value, plan = await hcPost("route.plan", {date, staff: staff ? Number(staff) : null});
         result.replaceChildren();
-        plan.stops.forEach((stop, index) => result.append(el("p", `${index + 1}. ${stop.patient_name}${stop.start_time ? `（予定 ${stop.start_time}）` : ""} · 出発から約${Math.round((stop.arrival_offset || 0) / 60)}分`)));
+        plan.stops.forEach((stop, index) => result.append(el("p", `${index + 1}. ${stop.patient_name} · 到着の見込み ${stop.arrival}${stop.start_time ? `（予定 ${stop.start_time}）` : ""}`)));
         if (!plan.stops.length) result.append(el("p", "ルートに入れられる予定の訪問がありません。"));
-        if (plan.unlocated.length) result.append(el("p", `住所から場所が分からなかった訪問が${plan.unlocated.length}件あります。台帳の住所を確かめてください。`, "state-note"));
+        if (plan.unscheduled.length) result.append(el("p", `予定の時刻の前後15分に着けない訪問が${plan.unscheduled.length}件あり、ルートに入れていません。時刻か担当を見直してください。`, "state-note"));
+        if (plan.unlocated.length) result.append(el("p", `住所から場所を1か所に決められなかった訪問が${plan.unlocated.length}件あり、ルートに入れていません。台帳の住所を番地まで確かめてください。`, "state-note"));
       } catch (error) {result.replaceChildren(el("p", error.message, "state-note"));}
     };
     routeBox.append(form, result);
@@ -295,7 +303,8 @@ function careTeam(box, patientId, members, reload) {
   box.append(form);
 }
 async function openMcs(projectId) {
-  $("patient-search").value = "";
+  // The way back from a visit sheet always opens the timeline, not whichever view was last chosen.
+  $("patient-search").value = ""; state.panel = ""; $("view-select").value = "";
   await setMode("mcs");
   const patient = state.patients.find(row => row.project_id === projectId)
     || (await api("patients", {q: String(projectId)})).items.find(row => row.project_id === projectId);

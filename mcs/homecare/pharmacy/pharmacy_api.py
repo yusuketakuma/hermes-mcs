@@ -1,13 +1,14 @@
 """The pharmacy module's routes under api/hc/pharmacy/, reached through the core's dispatcher."""
 from __future__ import annotations
 
-from homecare_records import record_id as _id
+from homecare_records import page, record_id as _id
 import pharmacy_prescriptions as prescriptions
 
 
 def read(db, route, params):
     if route == "prescriptions":
-        return {"items": prescriptions.for_patient(db, _id(params.get("patient")))}
+        patient_id = _id(params.get("patient"))
+        return page(lambda limit: prescriptions.for_patient(db, patient_id, limit=limit), params, size=20)
     raise ValueError("bad_request")
 
 

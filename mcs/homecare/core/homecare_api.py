@@ -4,6 +4,8 @@ Module routes will live under api/hc/<module>/ and reach core records only throu
 """
 from __future__ import annotations
 
+from datetime import date
+
 import homecare_links as links
 import homecare_records as records
 import homecare_route as route
@@ -26,7 +28,8 @@ def read(db, route, params, *, registry, mcs_patients):
     if route == "visits":
         if params.get("date"):
             return {"items": visits.for_day(db, params["date"])}
-        return {"items": visits.for_patient(db, _id(params.get("patient")))}
+        patient_id = _id(params.get("patient"))
+        return records.page(lambda limit: visits.for_patient(db, patient_id, limit=limit), params, size=50)
     if route == "sheet":
         return sheet(db, _id(params.get("patient")), registry=registry, mcs_patients=mcs_patients)
     if route == "meta":
@@ -105,17 +108,15 @@ def write(db, op, body, *, registry, allowed, mcs_patients, route_settings=None)
     raise ValueError("bad_request")
 
 
-def sheet(db, patient_id, *, registry, mcs_patients):
+def sheet(db, patient_id, *, registry, mcs_patients, today=None):
     """What to have in hand on a visit: the record, care team, recent and next visits, each module's part and
     the linked MCS room when it is inside the launch scope."""
     patient = records.get(db, "patient", patient_id)
     project = links.project_of(db, patient_id)
     scope = {row["project_id"]: row for row in mcs_patients()}
-    history = visits.for_patient(db, patient_id, limit=50)
     return {"patient": patient, "team": team.current(db, patient_id),
-            "next_visits": sorted((row for row in history if row["status"] == "planned"),
-                                  key=lambda row: (row["visit_date"], row["start_time"] or ""))[:3],
-            "recent_visits": [row for row in history if row["status"] == "done"][:3],
+            "next_visits": visits.upcoming(db, patient_id, today or date.today().isoformat()),
+            "recent_visits": visits.done(db, patient_id),
             "modules": {module.name: module.api.sheet(db, patient_id)
                         for module in registry.modules if module.api is not None},
             "mcs": {"project_id": project, "patient_name": scope[project]["patient_name"]}
