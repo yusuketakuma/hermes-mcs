@@ -367,6 +367,8 @@ _SPLIT_LEDGER_WRITERS = {
     "ops/update_restore.py": {"_reconcile_restored"},
 }
 _SPLIT_SQLITE_WRITERS = {
+    # The home-care records database is separate from the ledger and its snapshots; only its opener writes.
+    "homecare/core/homecare_store.py": {"connect"},
     "ops/ocr_failure_ack.py": {"apply"},
     "ops/update_restore.py": {"_cancel_unsent_notices", "_replace_database"},
 }

@@ -425,3 +425,13 @@ def test_panel_medication_view_is_bound_to_one_post_of_the_patient(snapshot):
 def test_panel_arguments_are_strict(snapshot, route, query):
     with pytest.raises(ValueError):
         chat.response(snapshot, {1}, route, query)
+
+
+@pytest.mark.parametrize("last_run, errors, definite", [(None, [], False), (1.0, ["synthetic"], False), (1.0, [], True)])
+def test_empty_signal_list_is_definite_only_after_a_complete_readable_run(monkeypatch, last_run, errors, definite):
+    import mcs_signals
+    monkeypatch.setattr(mcs_signals, "current_open", lambda *_args, **_kw: {
+        "items": [], "pipeline_last_run_at": last_run, "truncated": False, "returned": 0, "total": 0, "errors": errors})
+    view = local_chat_view._signals(SimpleNamespace(db=None), 1)
+    assert (view["empty"] == "未解消のシグナルはありません。") is definite
+    assert definite or "見つかりませんでした" in view["empty"]
