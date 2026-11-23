@@ -67,7 +67,7 @@ jobs:
           done
           ls ~/Library/LaunchAgents 2>/dev/null || true
       - name: preflight
-        run: ./install.sh --mode "$MODE" --preflight 2>&1 | tee "$LOG/preflight.txt"
+        run: ./install.sh --mode "$MODE" --no-llm --preflight 2>&1 | tee "$LOG/preflight.txt"
       - name: install
         run: |
           # ローカル AI（約5.7 GBのモデル）は取得しない。それ以外は既定どおり。
