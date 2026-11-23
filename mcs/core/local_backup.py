@@ -22,7 +22,7 @@ from pathlib import Path
 from time import monotonic
 
 from backup_names import BACKUP_CLASSES, backup_class
-from homecare_store import FOUNDATION as HOMECARE_FOUNDATION
+from homecare_store import FOUNDATION as HOMECARE_FOUNDATION, default_path as homecare_default_path
 from ledger import valid_mcs_db
 from llm_availability import disk_floor_mb
 from maintenance_errors import MaintenanceError
@@ -30,7 +30,7 @@ from mcs_util import HOME
 from safe_io import atomic_write, publish_tmp, read_regular_nofollow
 
 BACKUP_DIR = os.path.join(HOME, "data", "backups")
-HOMECARE_DB = os.path.join(HOME, "data", "homecare.db")
+HOMECARE_DB = str(homecare_default_path(HOME))
 BACKUP_KEEP = 3
 BACKUP_OVERDUE_S = 2 * 86400
 # an apply publishes its preupdate backup, then waits up to 20min for the
