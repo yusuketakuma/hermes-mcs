@@ -117,13 +117,8 @@ async function loadStaff() {
 // Each screen takes a turn when it starts; a screen whose answer comes back after another one started draws nothing.
 function hcScreen() {const turn = ++hc.view; return () => turn === hc.view;}
 function hcMain(title, ...nodes) {
-  // On a phone the patient list folds away once a screen opens; 患者一覧 brings it back.
-  document.body.classList.add("picked");
-  ++state.mainRequest;
-  $("panel-view").hidden = false;
-  for (const id of ["coverage", "older", "timeline", "timeline-status"]) $(id).hidden = true;
   const box = el("div", null, "panel"); box.append(el("h2", title), ...nodes);
-  $("panel-view").replaceChildren(box);
+  shell.main(box);
 }
 async function showStaff() {
   hcScreen(); closeDetail();
@@ -162,15 +157,14 @@ async function showHcPatient(patientId) {
   const current = hcScreen(); hc.patient = patientId; closeDetail();
   for (const button of $("patients").querySelectorAll(".patient")) button.classList.toggle("selected", button.dataset.patient === String(patientId));
   if (patientId == null) {
-    $("patient-name").textContent = "新しい患者"; $("patient-meta").textContent = "薬局の患者台帳";
+    shell.heading("新しい患者", "患者台帳");
     hcMain("患者の登録", recordForm("patient", PATIENT_FORM, null, async saved => {await loadHcPatients(); await showHcPatient(saved.patient_id);}));
     return;
   }
   const data = await api("hc/patient", {patient: patientId});
   if (!current()) return;
   const patient = data.patient;
-  $("patient-name").textContent = patient.name;
-  $("patient-meta").textContent = `薬局の患者台帳 · ${patient.kana || "フリガナ未登録"}`;
+  shell.heading(patient.name, `患者台帳 · ${patient.kana || "フリガナ未登録"}`);
   const team = el("section", null, "detail-section"), link = el("section", null, "detail-section");
   // Team and link actions redraw only their own sections, so unsaved edits in the record form stay.
   const refreshTeam = async () => {
@@ -231,7 +225,7 @@ async function showSheet(patientId) {
   const data = await api("hc/sheet", {patient: patientId});
   if (!current()) return;
   const patient = data.patient, back = el("button", "台帳に戻る", "text-button"); back.onclick = () => showHcPatient(patientId);
-  $("patient-name").textContent = patient.name; $("patient-meta").textContent = "訪問時の情報";
+  shell.heading(patient.name, "訪問時の情報");
   const facts = el("section", null, "detail-section"); facts.append(el("h3", "連絡と訪問先"));
   const contact = {patient: patient.phone, keyperson: `${patient.keyperson_name}（${patient.keyperson_relation}） ${patient.keyperson_phone}`}[patient.preferred_contact] ?? patient.contact_phone;
   for (const [label, value] of [["住所", [patient.address, patient.residence].filter(Boolean).join(" ")], ["優先連絡先", contact], ["連絡のしやすい時間", patient.contact_note],
@@ -273,7 +267,7 @@ async function sheetBrief(box, patientId, link) {
 }
 async function showDay(date) {
   const current = hcScreen(); hc.patient = null; closeDetail();
-  $("patient-name").textContent = "訪問予定"; $("patient-meta").textContent = date;
+  shell.heading("訪問予定", date);
   const picker = el("form", null, "hc-inline"), input = el("input"); input.type = "date"; input.value = date;
   picker.append(input, el("button", "この日を表示", "button")); picker.onsubmit = event => {event.preventDefault(); if (input.value) showDay(input.value);};
   const list = el("section", null, "detail-section"), routeBox = el("section", null, "detail-section");
@@ -361,21 +355,18 @@ function careTeam(box, patientId, members, reload) {
 }
 async function openMcs(projectId) {
   // The way back from a visit sheet always opens the timeline, not whichever view was last chosen.
-  $("patient-search").value = ""; state.panel = ""; $("view-select").value = "";
+  $("patient-search").value = ""; state.panel = "";
   await setMode("mcs");
   const patient = state.patients.find(row => row.project_id === projectId)
     || (await api("patients", {q: String(projectId)})).items.find(row => row.project_id === projectId);
   if (patient) selectPatient(patient);
 }
 function setMode(mode) {
-  document.body.classList.remove("picked");
   hc.mode = mode; hc.patient = null; ++state.patientRequest; ++hc.request; hcScreen(); state.project = null; closeDetail();
   for (const button of document.querySelectorAll("#hc-modes button")) button.classList.toggle("selected", button.dataset.mode === mode);
-  for (const id of ["patient-context", "read-only", "detail"]) $(id).hidden = mode !== "mcs";
-  document.querySelector(".snapshot-bar").hidden = mode !== "mcs";
-  $("view-select").parentNode.hidden = mode !== "mcs";
+  shell.setMode(mode);
   if (mode === "mcs") {
-    $("patient-name").textContent = "患者を選んでください"; $("patient-meta").textContent = "";
+    shell.heading("患者を選んでください");
     ++state.contextRequest; ++state.mainRequest; $("patient-context").replaceChildren(); $("coverage").hidden = true; $("older").hidden = true;
     $("timeline").replaceChildren(); $("panel-view").replaceChildren();
     $("timeline-status").textContent = "患者を選ぶと投稿を表示します。";
@@ -387,11 +378,11 @@ function setMode(mode) {
     const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
     showDay(today);
   } else if (mode === "staff") {
-    $("patient-name").textContent = "職員"; $("patient-meta").textContent = "操作者と担当薬剤師の名簿";
+    shell.heading("職員", "操作者と担当薬剤師の名簿");
     showStaff();
   } else {
-    $("patient-name").textContent = "薬局の患者台帳"; $("patient-meta").textContent = "左の一覧から患者を選ぶか、登録してください";
-    hcMain("薬局の患者台帳", el("p", "左の一覧から患者を選ぶか、「＋ 患者を登録」から登録してください。", "state-note"));
+    shell.heading("患者台帳", "一覧から患者を選ぶか、登録してください");
+    hcMain("患者台帳", el("p", "患者の一覧から選ぶか、「＋ 患者を登録」から登録してください。", "state-note"));
   }
   return listed;
 }
@@ -399,7 +390,7 @@ async function showLinkedPharmacyPatient(projectId) {
   if (!hc.enabled) return;
   try {
     const data = await api("hc/linked", {project: projectId});
-    if (data.patient && state.project === projectId) $("patient-meta").textContent += ` · 薬局の台帳: ${data.patient.name}`;
+    if (data.patient && state.project === projectId) $("patient-chips").append(chip(`台帳: ${data.patient.name}`, "info"));
   } catch (error) {fail(error);}
 }
 async function initHomecare() {

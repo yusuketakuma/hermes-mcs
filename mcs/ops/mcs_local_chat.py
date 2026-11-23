@@ -34,7 +34,9 @@ FILES = {"": ("index.html", "text/html; charset=utf-8"),
          "app.js": ("app.js", "text/javascript; charset=utf-8"),
          "homecare.js": ("homecare.js", "text/javascript; charset=utf-8"),
          "pharmacy.js": ("pharmacy.js", "text/javascript; charset=utf-8"),
-         "style.css": ("style.css", "text/css; charset=utf-8")}
+         "style.css": ("style.css", "text/css; charset=utf-8"),
+         "mcs.css": ("mcs.css", "text/css; charset=utf-8"),
+         "homecare.css": ("homecare.css", "text/css; charset=utf-8")}
 
 
 def _one(params, name, default=None):
