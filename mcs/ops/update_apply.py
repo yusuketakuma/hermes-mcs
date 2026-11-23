@@ -614,6 +614,12 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 bpath = local_backup.preupdate_backup(LEDGER, **before_args)
             except local_backup.MaintenanceError as e:
                 return bail(str(e))
+            try:
+                # Restoring the home-care records stays manual. After a rollback the
+                # older code refuses a database the new version migrated; this is its copy.
+                local_backup.preupdate_homecare_backup(**before_args)
+            except local_backup.MaintenanceError as e:
+                return bail(f"homecare_{e}")
             snap = _read_manifest_snapshot(**before_args)
             state["baseline_check"] = _baseline_check(cfg, **before_args)
             journal_store.save_state(STATE_PATH, state)

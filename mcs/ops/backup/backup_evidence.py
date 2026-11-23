@@ -91,6 +91,7 @@ FAILURE_CODES = frozenset({
     "backup_trusted_receipt_required", "backup_periodic_state_unverified",
     "backup_periodic_capacity", "backup_periodic_hold",
     "backup_local_name_invalid", "backup_restore_copy_mismatch", "backup_restore_disk_low",
+    "backup_homecare_schema_invalid",
 })
 
 
