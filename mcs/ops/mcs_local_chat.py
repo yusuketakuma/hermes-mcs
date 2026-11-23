@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serve an explicitly scoped, read-only patient chat on this computer only."""
+"""Serve an explicitly scoped patient chat on this computer only, reading MCS data and writing only the home-care records under api/hc/."""
 import argparse
 import hmac
 import json
@@ -51,7 +51,7 @@ def response(snapshot, allowed, route, query):
     params = parse_qs(query, keep_blank_values=True, max_num_fields=10)
     cursor = _one(params, "cursor") or None
     text = _one(params, "q", "")
-    if len(text) > 500:
+    if len(text) > local_chat_view.QUERY_LIMIT:
         raise ValueError("bad_query")
     project = _one(params, "project")
     message = _one(params, "message")

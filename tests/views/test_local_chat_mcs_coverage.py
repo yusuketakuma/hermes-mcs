@@ -19,9 +19,9 @@ SUMMARY = "合成の連携サマリー本文。" * 12   # longer than the 80 cha
 
 @pytest.fixture(autouse=True)
 def _no_cached_signals():
-    local_chat_view._SIGNALS.clear()
+    local_chat_view._CACHE.clear()
     yield
-    local_chat_view._SIGNALS.clear()
+    local_chat_view._CACHE.clear()
 
 
 def _attempt(dataset, *, complete, rows=(), reason=None, status=None):
@@ -167,7 +167,7 @@ def test_signal_counts_are_confirmed_only_after_a_complete_readable_run(snapshot
     monkeypatch.setattr(mcs_signals, "current_open", current_open)
 
     def both(reason_state):
-        local_chat_view._SIGNALS.clear()
+        local_chat_view._CACHE.clear()
         counts = chat.response(snapshot, None, "counts", "project=1")["open_signals"]
         listed = next(i for i in chat.response(snapshot, None, "patients", "")["items"] if i["project_id"] == 1)
         assert counts == listed["open_signals"] == reason_state
@@ -189,9 +189,49 @@ def test_signal_map_is_read_once_per_snapshot_generation(snapshot, monkeypatch):
     chat.response(snapshot, None, "counts", "project=1")
     chat.response(snapshot, None, "counts", "project=2")
     assert len(calls) == 1
-    local_chat_view._SIGNALS["other-generation"] = local_chat_view._SIGNALS.popitem()[1]
-    chat.response(snapshot, None, "counts", "project=1")     # a new generation reads again
+    view = mcs_view.View(snapshot)
+    try:
+        view.meta["generation_id"] = "another-synthetic-generation"
+        local_chat_view.counts(view, None, 1)                # a new generation reads again
+    finally:
+        view.close()
     assert len(calls) == 2
+
+
+def test_counts_are_built_once_per_patient_and_generation(snapshot, monkeypatch):
+    import patient_context_view
+    builds = []
+    real = patient_context_view.replies
+    monkeypatch.setattr(patient_context_view, "replies", lambda db, pid: builds.append(pid) or real(db, pid))
+    first = chat.response(snapshot, {1, 2}, "counts", "project=1")
+    assert chat.response(snapshot, {1, 2}, "counts", "project=1") == first and builds == [1]
+    chat.response(snapshot, {1, 2}, "counts", "project=2")
+    assert builds == [1, 2]
+    # A failed read is not kept: the next selection tries again.
+    monkeypatch.setattr(patient_context_view, "replies", lambda *a: builds.append("x") or (_ for _ in ()).throw(
+        KeyError("x")))
+    local_chat_view._CACHE.clear()
+    for _ in range(2):
+        assert chat.response(snapshot, {1}, "counts", "project=1")["replies"]["state"] == "failed"
+    assert builds[-2:] == ["x", "x"]
+
+
+def test_patient_list_carries_reply_checks_within_a_build_budget(snapshot, monkeypatch):
+    import patient_context_view
+    builds = []
+    real = patient_context_view.replies
+    monkeypatch.setattr(patient_context_view, "replies", lambda db, pid: builds.append(pid) or real(db, pid))
+    monkeypatch.setattr(local_chat_view, "LIST_REPLY_BUILDS", 2)
+    items = chat.response(snapshot, None, "patients", "")["items"]
+    by = {item["project_id"]: item["replies"] for item in items}
+    assert [item["project_id"] for item in items] == [2, 1, 4, 3] and builds == [2, 1]
+    assert by[1] == chat.response(snapshot, None, "counts", "project=1")["replies"]     # the same reading
+    assert by[1]["state"] == "partial" and by[1]["requests"] == 0
+    unbuilt = {"requests": None, "not_found": None, "unknown": None, "state": "not_computed"}
+    assert by[4] == by[3] == unbuilt
+    chat.response(snapshot, None, "counts", "project=3")       # a selected patient's heading fills its row
+    again = {item["project_id"]: item["replies"] for item in chat.response(snapshot, None, "patients", "")["items"]}
+    assert builds == [2, 1, 3, 4] and again[3]["state"] != "not_computed" and again[4]["state"] != "not_computed"
 
 
 def test_reply_counts_and_their_failed_state(snapshot, monkeypatch):
@@ -201,6 +241,7 @@ def test_reply_counts_and_their_failed_state(snapshot, monkeypatch):
     # The fixture's analysis is unfinished (message 20 failed): the counts are a lower bound.
     assert data["replies"]["state"] == "partial" and data["replies"]["requests"] == 0
     seen = []
+    local_chat_view._CACHE.clear()
     monkeypatch.setattr(notify_views, "analysis_incomplete", lambda ev: seen.append(ev["coverage"]) or False)
     monkeypatch.setattr(patient_context_view, "replies", lambda *a: {"items": [
         {"reply_state": None, "unverified": False, "reply_evaluation": None},
@@ -209,6 +250,7 @@ def test_reply_counts_and_their_failed_state(snapshot, monkeypatch):
     assert chat.response(snapshot, {1}, "counts", "project=1")["replies"] == {
         "requests": 3, "not_found": 1, "unknown": 1, "state": "observed"}
     assert seen and all("inference" in coverage for coverage in seen)   # the context card's own reading
+    local_chat_view._CACHE.clear()
     monkeypatch.setattr(patient_context_view, "evidence", lambda *a, **k: (_ for _ in ()).throw(ValueError("x")))
     assert chat.response(snapshot, {1}, "counts", "project=1")["replies"]["state"] == "partial"
     monkeypatch.setattr(patient_context_view, "replies", lambda *a: (_ for _ in ()).throw(KeyError("x")))
@@ -247,10 +289,11 @@ def test_last_reply_is_incomplete_while_replies_are_missing(snapshot):
     view = mcs_view.View(snapshot)
     try:
         row = view._message(1, 10)
+        reads = local_chat_view._PageReads(view, 1, [row])
         row["reply_count"] = 5
-        assert local_chat_view._last_reply(view, row)["complete"] is False
+        assert local_chat_view._last_reply(view, row, reads)["complete"] is False
         row["reply_count"] = None
-        assert local_chat_view._last_reply(view, row)["complete"] is False
+        assert local_chat_view._last_reply(view, row, reads)["complete"] is False
     finally:
         view.close()
 
@@ -357,11 +400,13 @@ def test_registered_data_states_rows_without_mcs_ids(snapshot, monkeypatch):
     assert group["state"] == "not_linked" and group["datasets"] == []
     monkeypatch.setattr(mcs_util, "config_read_state", lambda: ({}, "read"))
     assert chat.response(snapshot, {1}, "registered", "project=1")["collection_enabled"] is False
-    # Defaults standing in for a missing or unreadable file say nothing about the setting.
-    for state in ("missing", "unreadable"):
+    # Without a config.json the collector runs on the defaults, collection off; an unreadable one says nothing.
+    for state, enabled, reason in (("missing", False, "config_missing"), ("unreadable", None, None),
+                                   ("read", False, None)):
         monkeypatch.setattr(mcs_util, "config_read_state", lambda state=state: ({}, state))
         data = chat.response(snapshot, {1}, "registered", "project=1")
-        assert (data["collection_enabled"], data["config_state"]) == (None, state)
+        assert (data["collection_enabled"], data["collection_reason"], data["config_state"]) == (
+            enabled, reason, state)
     assert hashlib.sha256(Path(snapshot).read_bytes()).digest() == before
     with pytest.raises(ValueError, match="project_not_allowed"):
         chat.response(snapshot, {1}, "registered", "project=2")
@@ -435,3 +480,171 @@ def test_configuration_state_tells_missing_and_unreadable_from_read(tmp_path):
     assert config_read_state(str(path)) == ({}, "unreadable")
     path.write_text('{"clinical_metadata": true}', encoding="utf-8")
     assert config_read_state(str(path)) == ({"clinical_metadata": True}, "read")
+
+
+def _page_statements(snapshot, route, query, monkeypatch=None):
+    """The SQL one workspace read runs, in order."""
+    statements = []
+    view = mcs_view.View(snapshot)
+    view.db.set_trace_callback(statements.append)
+    try:
+        project = int(dict(part.split("=") for part in query.split("&"))["project"])
+        result = local_chat_view.read(view, None, route, project)
+    finally:
+        view.close()
+    return result, statements
+
+
+def test_summary_state_follows_the_chat_card_rule(snapshot, monkeypatch):
+    import mcs_util
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    monkeypatch.setattr(local_chat_view, "progress_state",
+                        lambda db, mid, cfg: {"state": "attention", "completed": 1, "total": 2})
+    message = _message(snapshot, 30, project=2)
+    assert (message["summary_state"], message["summary_state_label"]) == ("attention", "要約 要確認")
+    # an exhausted extraction is still a failure, whatever the progress reads
+    assert _message(snapshot, 20)["summary_state"] == "failed"
+    monkeypatch.setattr(local_chat_view, "progress_state", lambda db, mid, cfg: None)
+    assert _message(snapshot, 30, project=2)["summary_state"] == "pending"
+
+    def unreadable():
+        raise mcs_util.ProviderSettingsUnreadable("provider_settings_unreadable")
+    monkeypatch.setattr(mcs_util, "load_config", unreadable)
+    message = _message(snapshot, 10)
+    # The rule cannot be read without the settings: unknown, never a quiet "done" or "pending".
+    assert (message["summary_state"], message["summary_state_label"]) == ("unknown", "要約 状況不明")
+    assert message["attachments_ocr"] is None
+
+
+def test_timeline_counts_attachment_ocr_states_per_post(snapshot, monkeypatch):
+    import attachment_ocr
+    import mcs_util
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    states = iter(["failed"])
+    real = attachment_ocr.view
+    monkeypatch.setattr(attachment_ocr, "view", lambda db, aid, project_id=None, include_text=False, *, cfg=None:
+                        {**real(db, aid, project_id=project_id, cfg=cfg), "state": next(states)})
+    items = {item["message_id"]: item for item in chat.response(snapshot, {1}, "timeline", "project=1")["items"]}
+    assert items[10]["attachments_ocr"] == [{"state": "failed", "count": 1}]
+    assert items[20]["attachments_ocr"] == []
+    monkeypatch.setattr(attachment_ocr, "view", real)
+    state = _message(snapshot, 10)["attachments_ocr"][0]["state"]
+    assert state in ("complete", "empty", "unprocessed", "failed", "unsupported", "unavailable", "rejected_by_policy")
+    assert _message(snapshot, 12)["attachments_ocr"] == []             # deleted
+
+
+def test_timeline_reads_each_post_detail_once_per_page(snapshot, monkeypatch):
+    import mcs_util
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    result, statements = _page_statements(snapshot, "timeline", "project=1")
+    assert len(result["items"]) == 2
+    once = ("FROM message_revisions r", "FROM message_reaction_actor_fetch WHERE message_id IN",
+            "ROW_NUMBER() OVER (PARTITION BY parent_id", "SELECT message_id,profession,organization FROM messages",
+            "SELECT parent_id,count(*) FROM messages", "SELECT message_id,state,count(*) AS count FROM attachments")
+    for text in once:
+        assert sum(text in statement for statement in statements) == 1, text
+    assert not any("WHERE message_id=?" in s and "profession,organization" in s for s in statements)
+
+
+def test_unfetched_actor_reading_is_the_stamp_reader_s_own(snapshot):
+    from stamp_read import reaction_actor_summary
+    view = mcs_view.View(snapshot)
+    try:
+        assert local_chat_view._actors_not_fetched() == reaction_actor_summary(view.db, 999, now=NOW)
+    finally:
+        view.close()
+
+
+def test_only_a_query_without_search_words_is_an_empty_search(snapshot, monkeypatch):
+    import mcs_util
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    view = mcs_view.View(snapshot)
+    try:
+        for query, code in (("", "search_query_empty"), ("　 ", "search_query_empty"),
+                            ("source:chat", "search_query_empty"), ("語" * 501, "bad_query"), (None, "bad_query")):
+            with pytest.raises(ValueError, match=f"^{code}$"):
+                local_chat_view.source_search(view, {2}, 2, query)
+    finally:
+        view.close()
+
+
+def test_source_search_returns_each_range_s_unsearched_counts(snapshot, monkeypatch):
+    import mcs_util
+    import notify_views
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
+    assert chat.response(snapshot, {2}, "sources", "project=2&q=合成")["skipped"] is None    # not reported yet
+    real = notify_views.patient_search_view
+    monkeypatch.setattr(notify_views, "patient_search_view", lambda *a, **k: {
+        **real(*a, **k), "skipped": {"ocr_pending": 2, "body_unavailable": 1, "unclassified": 0, "other": 9}})
+    data = chat.response(snapshot, {2}, "sources", "project=2&q=合成")
+    assert data["skipped"] == {"ocr_pending": 2, "body_unavailable": 1, "unclassified": 0}
+
+
+def _metadata(dataset, *, item_id=None, complete=True, rows=(), definition=None):
+    content = {"contract": "project-metadata/1", "dataset": dataset, "scope": "karte", "entity_id": 501,
+               "item_id": item_id, "complete": complete, "attempted_at": time.time(), "reason": None,
+               "http_status": None, "rows": list(rows)}
+    if definition is not None:
+        content["definition"] = definition
+    return json.dumps(content, ensure_ascii=False)
+
+
+def test_registered_lists_every_defined_item_with_unfetched_values(tmp_path, monkeypatch):
+    import mcs_util
+    monkeypatch.setattr(mcs_util, "config_read_state", lambda: ({"clinical_metadata": True}, "read"))
+    path = tmp_path / "ledger.db"
+    store = ledger.Ledger(str(path))
+    a = {"id": 11, "name": "合成検査A", "unit": "mg/dL"}
+    b = {"id": 12, "name": "合成検査B", "unit": "%"}
+    try:
+        with store.db:
+            store.db.execute("INSERT INTO patients(project_id,patient_name,project_type,karte_id) "
+                             "VALUES(1,'合成 花子','medical',501)")
+            store.artifact_add_tx("project_metadata_v1", _metadata("observation_items", rows=[
+                {"lab_test_item": a, "upper_reference_limit_scalar": 1.2}, {"lab_test_item": b}]), project_id=1)
+            store.artifact_add_tx("project_metadata_v1", _metadata(
+                "observation_values", item_id=11, rows=[{"observation_issued_at": "2026-11-01", "scalar": 0.9}],
+                definition={"lab_test_item": a}), project_id=1)
+        snapshot = ledger.publish_snapshot(str(path), str(tmp_path / "snapshots"))
+    finally:
+        store.close()
+    values = [d for d in chat.response(snapshot, {1}, "registered", "project=1")["datasets"]
+              if d["dataset"] == "observation_values"]
+    assert [d["item"]["name"] for d in values] == ["合成検査A", "合成検査B"]
+    fetched, unfetched = values
+    assert fetched["state"] == "complete" and fetched["rows"] == [
+        {"issued_at": "2026-11-01", "scalar": 0.9, "max": None, "min": None, "left": None, "right": None}]
+    assert (unfetched["state"], unfetched["state_label"], unfetched["rows"]) == ("unknown", "未取得・未確認", [])
+    assert unfetched["item"] == {"name": "合成検査B", "unit": "%", "reference": {}}
+    assert "12" not in json.dumps([d.get("item") for d in values])
+
+
+def test_sender_search_reaches_posts_past_the_body_matches(tmp_path):
+    path = tmp_path / "ledger.db"
+    store = ledger.Ledger(str(path))
+    try:
+        with store.db:
+            store.db.executemany("INSERT INTO patients(project_id,patient_name) VALUES(?,?)",
+                                 [(1, "合成 花子"), (2, "合成 次郎")])
+            rows = [(100 + i, 1, "合成 看護師", 10_000 - i, "ヤマダ さんへ連絡") for i in range(60)]
+            rows += [(1, 1, "ﾔﾏﾀﾞ 薬剤師", 10, "合成の古い記録"), (2, 2, "ヤマダ 医師", 20, "別の患者")]
+            store.db.executemany("INSERT INTO messages(message_id,project_id,sender_name,posted_at_ts,body_text,"
+                                 "body_state,content_hash) VALUES(?,?,?,?,?,'full',printf('%064x',?))",
+                                 [(*row, row[0]) for row in rows])
+        snapshot = ledger.publish_snapshot(str(path), str(tmp_path / "snapshots"))
+    finally:
+        store.close()
+    body = chat.response(snapshot, {1}, "search", "project=1&q=ヤマダ")
+    assert len(body["items"]) == 50 and 1 not in {item["message_id"] for item in body["items"]}
+    senders = chat.response(snapshot, {1}, "senders", "project=1&q=ヤマダ")     # ﾔﾏﾀﾞ folds like search
+    assert [item["message_id"] for item in senders["items"]] == [1] and senders["next_cursor"] is None
+    timeline = chat.response(snapshot, {1}, "timeline", "project=1")["items"]
+    assert set(senders["items"][0]) == set(timeline[0])           # the timeline's message shape
+    with pytest.raises(ValueError, match="cursor_scope_or_generation_changed"):
+        chat.response(snapshot, {1}, "senders", "project=1&q=ヤマダ&cursor=" + body["next_cursor"])
+    with pytest.raises(ValueError):
+        chat.response(snapshot, {1}, "senders", "project=1&q=ヤマダ&cursor=not-a-cursor")
+    with pytest.raises(ValueError, match="project_not_allowed"):
+        chat.response(snapshot, {1}, "senders", "project=2&q=ヤマダ")
+    with pytest.raises(ValueError, match="^bad_query$"):
+        chat.response(snapshot, {1}, "senders", "project=1&q=%20%E3%80%80")

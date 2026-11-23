@@ -172,16 +172,15 @@ class View:
                                              self_identity.own_sender_ids(self.db))
         return cached
 
-    def _evidence(self, row):
+    def _evidence(self, row, page=None):
+        """Decorate one message row; ``page`` is ``_page_counts`` of the rows it belongs to."""
         pid, mid = row["project_id"], row["message_id"]
         # Only return the known project URL, never an upstream signed URL or guessed deep link.
         if row.get("source_url") != project_url(pid):
             row["source_url"] = None
-        row["stored_replies"] = self.db.execute(
-            "SELECT count(*) FROM messages WHERE project_id=? AND parent_id=?", (pid, mid)).fetchone()[0]
-        row["attachments"] = [dict(r) for r in self.db.execute("""
-          SELECT state,count(*) AS count FROM attachments WHERE message_id=? GROUP BY state
-        """, (mid,))]
+        replies, files = page or self._page_counts(pid, [mid])
+        row["stored_replies"] = replies.get(mid, 0)
+        row["attachments"] = files.get(mid, [])
         row["body_complete"] = row["body_state"] == "full"
         sender_id = row.pop("sender_id", None)
         self_id, own = self._identity()
@@ -193,8 +192,8 @@ class View:
         row["metadata_shadow"] = get_metadata_shadow_status(
             self.db, mid, as_of=self.meta["generated_at"])
         row["patient_context"] = message_patient_context(self.db, row)
-        # 22-F: actor counts by profession × type for own posts only, no
-        # names or actor IDs (#22-D2); 'stale'/'failed' are past sets
+        # 22-F: who pressed each stamp on one's own posts (names since #22-D2, no actor IDs);
+        # 'stale'/'failed' are past sets
         row["reaction_actors"] = (reaction_actor_summary(
             self.db, mid, now=self.meta["generated_at"])
             if row["is_self_sender"] else None)
@@ -203,6 +202,21 @@ class View:
             self.db, pid, mid, now=self.meta["generated_at"])
             if row["is_self_sender"] else None)
         return row
+
+    def _page_counts(self, pid, mids):
+        """({message_id: stored replies}, {message_id: [{state, count}] of its attachments}) for these posts."""
+        if not mids:
+            return {}, {}
+        marks = ",".join("?" * len(mids))
+        replies = dict(self.db.execute(
+            f"SELECT parent_id,count(*) FROM messages WHERE project_id=? AND parent_id IN ({marks}) "
+            "GROUP BY parent_id", [pid, *mids]).fetchall())
+        files = {}
+        for r in self.db.execute(f"SELECT message_id,state,count(*) AS count FROM attachments "
+                                 f"WHERE message_id IN ({marks}) GROUP BY message_id,state "
+                                 "ORDER BY message_id,state", mids):
+            files.setdefault(r["message_id"], []).append({"state": r["state"], "count": r["count"]})
+        return replies, files
 
     def _messages(self, kind, pid, limit, cursor, query, message_id, since, until):
         params = [pid]
@@ -216,6 +230,15 @@ class View:
             self._require_message(pid, message_id)
             sql += " AND m.parent_id=?"
             params.append(message_id)
+        if kind == "senders":
+            # the poster's name only, with the same folding as search
+            terms = list(filter(None, map(search_fold, query.split()))) if isinstance(query, str) else []
+            if not terms or len(query) > 500:
+                raise ValueError("bad_query")
+            register_search_fold(self.db)
+            for term in terms:
+                sql += " AND instr(mcs_fold(m.sender_name),?)>0"
+                params.append(term)
         if kind == "search":
             if not isinstance(query, str) or not query.strip() or len(query) > 500:
                 raise ValueError("bad_query")
@@ -237,8 +260,9 @@ class View:
         page = self._page(sql, params, [f"COALESCE(m.posted_at_ts,{UNKNOWN_TIME})", "m.message_id"],
                           [kind, pid, query, message_id, since, until], limit, cursor)
         page["scope"] = "roots_only" if kind == "timeline" else "stored_messages"
+        counts = self._page_counts(pid, [row["message_id"] for row in page["items"]])
         for row in page["items"]:
-            self._evidence(row)
+            self._evidence(row, counts)
             if kind == "candidates":
                 row["candidates"] = requests.candidates(self.db, row)
         return page
@@ -875,7 +899,7 @@ class View:
             return {"snapshot": self.meta, "warnings": WARNINGS,
                     **self._patient_context(project, view, since, query, role, cursor)}
         handlers = {
-            **dict.fromkeys(("search", "timeline", "thread", "candidates"),
+            **dict.fromkeys(("search", "senders", "timeline", "thread", "candidates"),
                             lambda: self._messages(kind, project, limit, cursor, query, message_id, since, until)),
             "status": lambda: self._status(project, limit, cursor),
             "evidence": lambda: {"message": self._message(project, message_id)},

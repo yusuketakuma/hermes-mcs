@@ -146,16 +146,15 @@ def test_live_ledger_and_missing_snapshot_are_rejected(tmp_path):
     assert error.value.code == 2
 
 
-def test_reads_write_nothing_and_only_attachments_load_configuration(snapshot, monkeypatch):
+def test_reads_write_nothing_to_the_snapshot(snapshot, monkeypatch):
+    # The summary state, reply checks and OCR states read configuration as the chat cards do; nothing is written.
     import mcs_util
-    monkeypatch.setattr(mcs_util, "load_config", lambda: pytest.fail("must not load local configuration"))
+    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
     path = Path(snapshot)
     before = hashlib.sha256(path.read_bytes()).digest()
-    for kind, query in (("patients", ""), ("timeline", "project=1"), ("evidence", "project=1&message=1")):
+    for kind, query in (("patients", ""), ("timeline", "project=1"), ("evidence", "project=1&message=1"),
+                        ("counts", "project=1"), ("attachments", "project=1&message=1")):
         chat.response(snapshot, {1}, kind, query)
-    # Attachments read the OCR exclusion policy from configuration, and still write nothing.
-    monkeypatch.setattr(mcs_util, "load_config", lambda: {})
-    chat.response(snapshot, {1}, "attachments", "project=1&message=1")
     assert hashlib.sha256(path.read_bytes()).digest() == before
 
 
